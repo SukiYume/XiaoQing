@@ -607,7 +607,7 @@ XiaoQing 主进程
 - 任务完成后通过 `context.send_action()` 主动发送文字和图片结果，底层仍走统一 OneBot 发送链路
 - 会话索引保存在 `data/codex/sessions.json`，每个标签的记录、图片和任务 artifacts 保存在 `data/codex/session/<label>/`，删除会话时旧目录会归档到 `data/codex/deleted_sessions/`
 
-`arxiv_filter` 的每日摘要就是这个模式的业务化用法：筛选插件先返回论文列表，再通过后台侧路把所有 positive arXiv 链接投递到 Codex `astro-ph` 会话。`astro-ph` 首次没有 Codex thread 时会先执行静默初始化任务，之后摘要任务复用同一 thread 和工作目录中的 `arxiv-summary-methodology.md`。
+`arxiv_filter` 的每日摘要就是这个模式的业务化用法：筛选插件先返回论文列表，再通过后台侧路把所有 positive arXiv 链接投递到 Codex `astro-ph` 会话。`astro-ph` 首次没有 Codex thread 时会先执行静默初始化任务，之后摘要任务复用同一 thread 和工作目录中的 `arxiv-summary-methodology.md`。历史结果和在途任务只有在 arXiv 源列表日期及规范化论文集合都相同时才会复用。
 
 这种方式适合耗时较长但不应占用 bot 多轮会话的后台工作。
 

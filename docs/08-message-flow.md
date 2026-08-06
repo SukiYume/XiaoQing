@@ -370,7 +370,7 @@ async def handle_session(text: str, event: dict, context, session) -> List[dict]
 
 `codex` 插件使用独立业务会话：`/codex create main` 只创建 Codex 标签和工作目录，后续必须显式发送 `/codex main <任务>`。任务进入插件自己的队列后，当前 handler 立即返回；完成结果通过 `context.send_action()` 主动发送，图片结果会以 QQ image 段随文字回发，因此不会影响用户继续发其他命令或闲聊。
 
-`arxiv_filter` 触发 Codex 摘要时也遵循同一消息流：`/arxiv` 的 handler 先返回论文列表，随后后台侧路把链接投递给 `astro-ph`。Codex 摘要完成后再主动发送第二条消息；如果摘要失败，失败消息也在这条后台链路里发送，不会回滚或阻塞第一条论文列表。
+`arxiv_filter` 触发 Codex 摘要时也遵循同一消息流：`/arxiv` 的 handler 先返回带 arXiv 源列表日期的论文列表，随后后台侧路把链接投递给 `astro-ph`。侧路用源列表日期和规范化论文集合共同识别任务，避免同日列表更新后重发旧摘要。Codex 摘要完成后再主动发送第二条消息；如果摘要失败，失败消息也在这条后台链路里发送，不会回滚或阻塞第一条论文列表。
 
 ---
 

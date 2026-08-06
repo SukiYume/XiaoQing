@@ -403,17 +403,17 @@ Codex 插件不占用框架的多轮 session。先创建一个带标签的 Codex
 
 ### Shell 路径测试
 
-Shell 插件直接执行管理员启用的命令，不经过系统 shell。启用列表不负责安装程序；`/shell list` 会显示哪些入口能由 Bot 当前 PATH 解析。Windows 下 `copy`、`del` 这类内建命令不能直接执行，可显式通过 `cmd /c copy`。
+Shell 插件默认直接执行管理员启用的程序，也可在 `config.plugins.shell.terminal` 显式选择 Git Bash。启用列表不负责安装程序；`/shell list` 会按当前终端显示可执行入口。Windows 使用 `direct` 时，`copy`、`del` 这类内建命令需显式通过 `cmd /c`；使用 Git Bash 时可直接执行 `ls`、`pwd` 等命令。
 
 ```text
 你: /shell list
-机器人: [分别列出当前 PATH 可执行和未找到的启用入口...]
+机器人: [按当前终端分别列出可执行和未找到的启用入口...]
 
-你: /shell cmd /c dir
-机器人: [目录列表...]
+你: /shell ls -la
+机器人: [Git Bash 目录列表...]
 
-你: /shell cmd /c copy C:/workspace/a.txt C:/workspace/b.txt
-机器人: [执行结果...]
+你: /shell pwd
+机器人: [Git Bash 当前目录...]
 ```
 
 ### SSH 远程控制测试（qingssh）

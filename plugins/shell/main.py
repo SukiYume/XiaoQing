@@ -19,6 +19,7 @@ import signal
 import subprocess
 import sys
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
 from core.interfaces import PluginSettingsSnapshot
@@ -47,6 +48,18 @@ _MAX_CAPTURE_BYTES = max(64 * 1024, MAX_OUTPUT_LENGTH * 4)
 _PROCESS_STOP_TIMEOUT = 5.0
 _EXIT_TIMEOUT = -1
 _EXIT_OUTPUT_LIMIT = -2
+_TERMINAL_DIRECT = "direct"
+_TERMINAL_GIT_BASH = "git-bash"
+_TERMINAL_QUERY_TIMEOUT = 10.0
+
+
+@dataclass(frozen=True, slots=True)
+class TerminalSettings:
+    """Validated public terminal configuration for one command generation."""
+
+    backend: str
+    executable: str | None = None
+    error: str | None = None
 
 
 class ShellContext(Protocol):
@@ -90,6 +103,66 @@ def _get_config(context: ShellContext) -> Mapping[str, Any]:
     """从当前原子设置代取得插件密钥配置。"""
 
     return context.get_settings_snapshot().plugin_secrets("shell")
+
+
+def _get_public_config(context: ShellContext) -> Mapping[str, Any]:
+    """从当前原子设置代取得插件公开配置。"""
+
+    return context.get_settings_snapshot().plugin_config("shell")
+
+
+def _get_terminal_settings(context: ShellContext) -> TerminalSettings:
+    """解析公开终端配置；缺省保持直接执行。"""
+
+    raw = _get_public_config(context).get("terminal")
+    if raw is None:
+        return TerminalSettings(backend=_TERMINAL_DIRECT)
+    if not isinstance(raw, Mapping):
+        return TerminalSettings(
+            backend=_TERMINAL_DIRECT,
+            error="config.plugins.shell.terminal 必须是对象",
+        )
+
+    backend = raw.get("backend", _TERMINAL_DIRECT)
+    if not isinstance(backend, str) or not backend.strip():
+        return TerminalSettings(
+            backend=_TERMINAL_DIRECT,
+            error="terminal.backend 必须是 direct 或 git-bash",
+        )
+    normalized_backend = backend.strip().casefold()
+    if normalized_backend == _TERMINAL_DIRECT:
+        return TerminalSettings(backend=_TERMINAL_DIRECT)
+    if normalized_backend != _TERMINAL_GIT_BASH:
+        return TerminalSettings(
+            backend=normalized_backend,
+            error="terminal.backend 必须是 direct 或 git-bash",
+        )
+
+    executable = raw.get("executable")
+    if not isinstance(executable, str) or not executable.strip():
+        return TerminalSettings(
+            backend=_TERMINAL_GIT_BASH,
+            error="Git Bash 终端需要非空 terminal.executable",
+        )
+    return TerminalSettings(
+        backend=_TERMINAL_GIT_BASH,
+        executable=executable.strip(),
+    )
+
+
+def _terminal_label(settings: TerminalSettings) -> str:
+    if settings.backend == _TERMINAL_GIT_BASH:
+        return "Git Bash"
+    if settings.backend == _TERMINAL_DIRECT:
+        return "直接执行"
+    return settings.backend
+
+
+def _terminal_error_message(reason: str) -> str:
+    return (
+        f"❌ Shell 终端配置不可用: {reason}\n"
+        "请检查 config.json 的 plugins.shell.terminal 配置。"
+    )
 
 
 def _normalize_command_name(value: str) -> str:
@@ -269,6 +342,33 @@ def _command_available(command: str) -> bool:
         return shutil.which(command) is not None
     except (OSError, ValueError):
         return False
+
+
+def _resolve_terminal_executable(settings: TerminalSettings) -> str | None:
+    if settings.backend != _TERMINAL_GIT_BASH or not settings.executable:
+        return None
+    try:
+        return shutil.which(settings.executable)
+    except (OSError, ValueError):
+        return None
+
+
+def _prepare_execution_args(
+    cmd_line: str,
+    cmd_args: list[str],
+    settings: TerminalSettings,
+) -> tuple[list[str] | None, str | None]:
+    """按配置选择直接执行或无 profile 的 Git Bash 单命令执行。"""
+
+    if settings.error:
+        return None, settings.error
+    if settings.backend == _TERMINAL_DIRECT:
+        return cmd_args, None
+
+    executable = _resolve_terminal_executable(settings)
+    if executable is None:
+        return None, "找不到配置的 Git Bash 可执行文件"
+    return [executable, "--noprofile", "--norc", "-c", cmd_line], None
 
 
 def _command_not_found_message(command: str) -> str:
@@ -498,18 +598,31 @@ async def handle(
         if first in {"list", "列表", "-l", "--list"}:
             if len(cmd_args) != 1:
                 return segments("❌ 用法: /shell list")
-            return _list_whitelist(context)
+            return await _list_whitelist(context)
 
         error = _validate_command(cmd_line, context, parsed_args=cmd_args)
         if error:
             return segments(f"❌ 拒绝执行: {error}")
 
+        terminal = _get_terminal_settings(context)
+        execution_args, terminal_error = _prepare_execution_args(
+            cmd_line,
+            cmd_args,
+            terminal,
+        )
+        if execution_args is None:
+            return segments(_terminal_error_message(terminal_error or "未知配置错误"))
+
         _log_command_audit(context, cmd_line, status="started")
         timeout = _get_timeout(context)
         try:
-            code, stdout, stderr = await _execute_command(cmd_args, timeout)
+            code, stdout, stderr = await _execute_command(execution_args, timeout)
         except FileNotFoundError:
             _log_command_audit(context, cmd_line, status="unavailable")
+            if terminal.backend == _TERMINAL_GIT_BASH:
+                return segments(
+                    _terminal_error_message("配置的 Git Bash 可执行文件已不可用")
+                )
             return segments(_command_not_found_message(cmd_args[0]))
 
         streams = [("📤 stdout", stdout), ("⚠️ stderr", stderr)]
@@ -554,7 +667,18 @@ def _show_help(context: ShellContext) -> str:
 
     whitelist_status = "已禁用" if _is_whitelist_disabled(context) else "已启用"
     timeout = _get_timeout(context)
-    if sys.platform == "win32":
+    terminal = _get_terminal_settings(context)
+    terminal_status = _terminal_label(terminal)
+    if terminal.error:
+        terminal_status = f"配置错误（{terminal.error}）"
+    if terminal.backend == _TERMINAL_GIT_BASH:
+        examples = (
+            "   /shell ls -la\n"
+            "   /shell pwd\n"
+            "   /shell python --version\n"
+            "   /shell ping -c 3 127.0.0.1\n"
+        )
+    elif sys.platform == "win32":
         examples = (
             "   /shell cmd /c dir\n"
             "   /shell cmd /c cd\n"
@@ -580,6 +704,7 @@ def _show_help(context: ShellContext) -> str:
         "3️⃣ /shell list\n"
         "   查看管理员启用的命令入口及当前 PATH 可用性\n\n"
         "🔧 管理员执行设置:\n"
+        f"   • 默认终端: {terminal_status}\n"
         f"   • 命令启用/防误触列表: {whitelist_status}\n"
         f"   • 执行超时: {timeout:g}秒\n"
         f"   • 输出限制: {MAX_OUTPUT_LENGTH}字符\n"
@@ -588,34 +713,87 @@ def _show_help(context: ShellContext) -> str:
         f"{examples}\n"
         "📁 路径格式:\n"
         "   • QQ 中建议统一使用 / 斜杠，例如 C:/workspace/example.py\n"
-        "   • 插件会按 bot 所在系统转换为本机路径格式\n"
+        "   • 直接执行按 Bot 系统转换；Git Bash 保留原始命令文本\n"
         "   • 路径包含空格时请加引号\n\n"
         "⚠️ 注意: 此插件仅管理员可用；启用列表不是安全沙箱，解释器和通用工具仍具有管理员授予的完整能力\n"
         "═══════════════════════"
     )
 
 
-def _list_whitelist(context: ShellContext) -> MessageSegments:
+async def _git_bash_available_commands(
+    settings: TerminalSettings,
+    whitelist: list[str],
+    timeout: float,
+) -> tuple[set[str], str | None]:
+    """在一次无 profile Git Bash 进程中查询全部入口。"""
+
+    executable = _resolve_terminal_executable(settings)
+    if executable is None:
+        return set(), "找不到配置的 Git Bash 可执行文件"
+    script = (
+        'for name in "$@"; do '
+        'command -v -- "$name" >/dev/null 2>&1 && printf "%s\\n" "$name"; '
+        "done"
+    )
+    try:
+        code, stdout, _stderr = await _execute_command(
+            [
+                executable,
+                "--noprofile",
+                "--norc",
+                "-c",
+                script,
+                "xiaoqing-shell-list",
+                *whitelist,
+            ],
+            min(timeout, _TERMINAL_QUERY_TIMEOUT),
+        )
+    except FileNotFoundError:
+        return set(), "配置的 Git Bash 可执行文件已不可用"
+    if code != 0:
+        return set(), "Git Bash 命令可用性查询失败"
+    allowed = set(whitelist)
+    return {name for name in stdout.splitlines() if name in allowed}, None
+
+
+async def _list_whitelist(context: ShellContext) -> MessageSegments:
     """列出当前生效的管理员命令入口及其 PATH 可用性。"""
+
+    terminal = _get_terminal_settings(context)
+    if terminal.error:
+        return segments(_terminal_error_message(terminal.error))
 
     if _is_whitelist_disabled(context):
         return segments(
             "⚠️ 管理员命令启用列表已禁用；权限边界仍是 admin_only。\n"
-            "当前允许任意入口，因此无法枚举完整命令；实际执行仍要求程序存在于 Bot 的 PATH。"
+            f"当前允许任意入口，因此无法枚举完整命令；实际执行使用{_terminal_label(terminal)}。"
         )
 
     whitelist = sorted(_get_whitelist(context))
-    available = [name for name in whitelist if _command_available(name)]
+    terminal_error: str | None = None
+    if terminal.backend == _TERMINAL_GIT_BASH:
+        available_set, terminal_error = await _git_bash_available_commands(
+            terminal,
+            whitelist,
+            _get_timeout(context),
+        )
+        available = [name for name in whitelist if name in available_set]
+        scope = "Git Bash"
+    else:
+        available = [name for name in whitelist if _command_available(name)]
+        scope = "Bot PATH"
     available_set = set(available)
     unavailable = [name for name in whitelist if name not in available_set]
     lines = ["管理员已启用的命令入口（防误触，不是安全沙箱）:"]
+    if terminal_error:
+        lines.append(f"\n⚠️ Shell 终端可用性查询失败: {terminal_error}")
     lines.extend(
         (
-            f"\n✅ 当前 Bot PATH 可执行（{len(available)}）:",
+            f"\n✅ 当前 {scope} 可执行（{len(available)}）:",
             ", ".join(available) if available else "（无）",
-            f"\n⚠️ 当前 Bot PATH 未找到（{len(unavailable)}）:",
+            f"\n⚠️ 当前 {scope} 未找到（{len(unavailable)}）:",
             ", ".join(unavailable) if unavailable else "（无）",
-            "\n启用列表不负责安装程序；实际执行以 Bot 进程的 PATH 为准。",
+            f"\n启用列表不负责安装程序；实际执行使用{_terminal_label(terminal)}。",
         )
     )
     return segments("\n".join(lines))

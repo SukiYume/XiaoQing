@@ -82,6 +82,23 @@ def _normalize_arxiv_links(links: Any) -> tuple[list[str], str | None]:
     return normalized, None
 
 
+def _summary_identity_matches(
+    metadata: Mapping[str, Any],
+    *,
+    date: str,
+    links: list[str],
+) -> bool:
+    """同一摘要必须同时匹配源日期和规范化后的论文集合。"""
+
+    if not is_arxiv_summary_metadata(metadata) or metadata.get("date") != date:
+        return False
+    stored_links, error = _normalize_arxiv_links(metadata.get("links"))
+    if error is not None:
+        # 旧历史若没有记录链接身份，不能仅凭日期复用。
+        return False
+    return frozenset(stored_links) == frozenset(links)
+
+
 async def enqueue_or_replay_arxiv_summary(
     context: Any,
     *,
@@ -187,7 +204,7 @@ class ArxivSummaryAddon:
             needs_init = (
                 session.thread_id is None and self._find_inflight_init_locked(label) is None
             )
-            inflight = self._find_inflight_job_locked(label, date)
+            inflight = self._find_inflight_job_locked(label, date, normalized_links)
             if inflight is not None:
                 inflight_message = (
                     f"[codex:{label} #{inflight.job_id}] {date} arXiv 总结任务"
@@ -198,6 +215,7 @@ class ArxivSummaryAddon:
                     self._latest_successful_summary,
                     label,
                     date,
+                    normalized_links,
                 )
                 if latest_success is not None:
                     job_id = latest_success.get("job_id", "?")
@@ -299,9 +317,13 @@ class ArxivSummaryAddon:
                     action[ACTION_BYPASS_SINK_KEY] = True
                     await context.send_action(action)
 
-    def _is_summary_job(self, job: Any, date: str) -> bool:
+    def _is_summary_job(self, job: Any, date: str, links: list[str]) -> bool:
         metadata = job.metadata or {}
-        return is_arxiv_summary_metadata(metadata) and metadata.get("date") == date
+        return isinstance(metadata, Mapping) and _summary_identity_matches(
+            metadata,
+            date=date,
+            links=links,
+        )
 
     def _is_init_job(self, job: Any) -> bool:
         metadata = job.metadata or {}
@@ -310,12 +332,17 @@ class ArxivSummaryAddon:
             and metadata.get("kind") == ARXIV_SUMMARY_INIT_KIND
         )
 
-    def _find_inflight_job_locked(self, label: str, date: str) -> Any | None:
+    def _find_inflight_job_locked(
+        self,
+        label: str,
+        date: str,
+        links: list[str],
+    ) -> Any | None:
         running = self.manager.running.get(label)
-        if running and self._is_summary_job(running, date):
+        if running and self._is_summary_job(running, date, links):
             return running
         for queued in self.manager.queues.get(label, ()):
-            if self._is_summary_job(queued, date):
+            if self._is_summary_job(queued, date, links):
                 return queued
         return None
 
@@ -356,15 +383,23 @@ class ArxivSummaryAddon:
             return []
         return events
 
-    def _latest_successful_summary(self, label: str, date: str) -> dict[str, Any] | None:
+    def _latest_successful_summary(
+        self,
+        label: str,
+        date: str,
+        links: list[str],
+    ) -> dict[str, Any] | None:
         latest: dict[str, Any] | None = None
         for event in self._conversation_events(label):
             metadata = event.get("metadata")
             if (
                 event.get("role") != "assistant"
                 or not isinstance(metadata, Mapping)
-                or not is_arxiv_summary_metadata(metadata)
-                or metadata.get("date") != date
+                or not _summary_identity_matches(
+                    metadata,
+                    date=date,
+                    links=links,
+                )
             ):
                 continue
             if event.get("cancelled") or event.get("timed_out"):

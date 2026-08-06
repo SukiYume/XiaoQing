@@ -132,12 +132,24 @@ async def _cached_inference(
     inference: Any,
     model_path: str,
     config_fingerprint: str,
+    source_date: str | None,
 ) -> str:
-    business_date = _business_now(context).date().isoformat()
     artifact_fingerprint = await _cached_model_artifact_fingerprint(model_path)
-    key = (business_date, artifact_fingerprint, config_fingerprint, inference)
-    # 日期是缓存语义的一部分，跨日结果不再保留，避免常驻进程无限增长。
-    for stale_key in [candidate for candidate in _FILTER_CACHE if candidate[0] != business_date]:
+    if source_date is None:
+        result = await run_sync(
+            lambda: inference(
+                model_path=model_path,
+                artifact_fingerprint=artifact_fingerprint,
+            )
+        )
+        if not isinstance(result, str):
+            raise TypeError("arXiv inference must return text")
+        return result
+
+    key = (source_date, artifact_fingerprint, config_fingerprint, inference)
+    # arXiv 源列表日期是缓存语义的一部分。这样当天更新前读到的昨日列表不会污染
+    # 更新后的同一业务日结果，同时也避免常驻进程无限保留旧列表。
+    for stale_key in [candidate for candidate in _FILTER_CACHE if candidate[0] != source_date]:
         _FILTER_CACHE.pop(stale_key, None)
     cached = _FILTER_CACHE.get(key)
     if cached is not None:
@@ -166,6 +178,40 @@ async def _cached_inference(
             async with _FILTER_LOCK:
                 if _FILTER_INFLIGHT.get(key) is task:
                     _FILTER_INFLIGHT.pop(key, None)
+
+
+def _normalize_source_date(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    try:
+        parsed = datetime.date.fromisoformat(cleaned)
+    except ValueError:
+        return None
+    return cleaned if parsed.isoformat() == cleaned else None
+
+
+async def _latest_arxiv_source_date(context: Any) -> str | None:
+    """读取 arXiv 当前列表的真实发布日期；失败时禁止用本地日期冒充。"""
+
+    try:
+        raw_date = await run_sync(
+            lambda: importlib.import_module(
+                f"{__package__}.arxiv_today"
+            ).check_arxiv_update_date()
+        )
+    except Exception as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=logger,
+            component="arxiv_filter.source_date",
+        )
+        return None
+    source_date = _normalize_source_date(raw_date)
+    if raw_date is not None and source_date is None:
+        logger.warning("忽略无效的 arXiv 源列表日期")
+    return source_date
 
 
 def _load_inference(context: Any | None = None):
@@ -256,9 +302,11 @@ async def handle(command: str, args: str, event: dict[str, Any], context) -> Any
             )
             return segments(f"未知命令: {unknown}\n输入 /arxiv help 查看帮助")
 
+        source_date = await _latest_arxiv_source_date(context)
         return await _run_filter(
             context,
             allow_codex_sidecar=_is_admin_user(context, event.get("user_id")),
+            source_date=source_date,
         )
 
     except Exception as exc:
@@ -270,7 +318,12 @@ async def scheduled(context) -> Any:
     if _scheduled_without_delivery_targets(context):
         logger.info("skip scheduled arXiv filter: no explicit delivery targets")
         return []
-    return await _run_filter(context, allow_codex_sidecar=True)
+    source_date = await _latest_arxiv_source_date(context)
+    return await _run_filter(
+        context,
+        allow_codex_sidecar=True,
+        source_date=source_date,
+    )
 
 
 async def shutdown(context) -> None:
@@ -323,6 +376,7 @@ async def _run_filter(
     context,
     *,
     allow_codex_sidecar: bool = False,
+    source_date: str | None = None,
 ) -> Any:
     """
     执行论文筛选
@@ -333,6 +387,12 @@ async def _run_filter(
     Returns:
         消息段列表
     """
+    if source_date is not None:
+        normalized_source_date = _normalize_source_date(source_date)
+        if normalized_source_date is None:
+            raise ValueError("source_date must be an ISO calendar date")
+        source_date = normalized_source_date
+
     # 加载配置
     config = load_plugin_config()
     model_config = config.get("model", {})
@@ -365,6 +425,7 @@ async def _run_filter(
             inference,
             configured_model_path,
             _configuration_fingerprint(config),
+            source_date,
         )
         elapsed = time.perf_counter() - start_time
         logger.info(
@@ -390,8 +451,16 @@ async def _run_filter(
         if "No positive predictions" in arxiv_text:
             logger.info("今日没有符合条件的论文")
             today = _business_now(context).date()
+            if source_date is None:
+                list_description = "arXiv 当前最新列表（日期未能确认）"
+            elif source_date == today.isoformat():
+                list_description = f"今天是 {today}"
+            else:
+                list_description = (
+                    f"今天是 {today}，arXiv 当前最新列表日期为 {source_date}"
+                )
             return _filter_result(
-                f"📚 今天是 {today}，暂时没有发现感兴趣的论文。",
+                f"📚 {list_description}，暂时没有发现感兴趣的论文。",
                 succeeded=True,
                 outcome="no_positive_predictions",
             )
@@ -460,21 +529,32 @@ async def _run_filter(
 
     # 格式化输出
     today = _business_now(context).date()
-    header = f"📚 今天是 {today}，以下是你可能感兴趣的论文：\n"
+    if source_date is None:
+        list_description = "arXiv 当前最新列表（日期未能确认）"
+    elif source_date == today.isoformat():
+        list_description = f"今天是 {today}"
+    else:
+        list_description = f"今天是 {today}，arXiv 当前最新列表日期为 {source_date}"
+    header = f"📚 {list_description}，以下是你可能感兴趣的论文：\n"
     if allow_codex_sidecar:
-        try:
-            schedule_codex_summary_from_filter_result(
-                context,
-                date=today.isoformat(),
-                filter_text=arxiv_text,
+        if source_date is None:
+            logger.warning(
+                "skip Codex arXiv summary: source list date could not be confirmed"
             )
-        except Exception as exc:
-            public_error_message(
-                context,
-                exc,
-                logger=logger,
-                component="arxiv_filter.codex_sidecar",
-            )
+        else:
+            try:
+                schedule_codex_summary_from_filter_result(
+                    context,
+                    date=source_date,
+                    filter_text=arxiv_text,
+                )
+            except Exception as exc:
+                public_error_message(
+                    context,
+                    exc,
+                    logger=logger,
+                    component="arxiv_filter.codex_sidecar",
+                )
     return _filter_result(header + arxiv_text, succeeded=True, outcome="papers")
 
 
@@ -660,7 +740,11 @@ async def _check_arxiv_update(context, is_final_check: bool = False) -> Any:
     if arxiv_date == today:
         logger.info("检测到 arXiv 已更新到 %s，开始筛选论文...", today)
         try:
-            result = await _run_filter(context, allow_codex_sidecar=True)
+            result = await _run_filter(
+                context,
+                allow_codex_sidecar=True,
+                source_date=arxiv_date,
+            )
         except asyncio.CancelledError:
             await run_sync(_release_claim, data_dir, today)
             raise

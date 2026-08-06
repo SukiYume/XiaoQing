@@ -184,6 +184,65 @@ async def test_system_arxiv_summary_fans_out_once_and_never_uses_old_session_own
 
 
 @pytest.mark.asyncio
+async def test_same_date_replays_only_when_canonical_link_set_matches(
+    tmp_path: Path,
+) -> None:
+    context = FakeContext(tmp_path)
+    first_link = "https://arxiv.org/abs/2608.00001"
+    second_link = "https://arxiv.org/abs/2608.00002"
+    runner = FakeRunner(
+        result_text=_valid_arxiv_summary(
+            "2026-08-06",
+            first_link,
+            "first listing summary",
+        )
+    )
+    manager = _install_fake_manager(context, runner)
+
+    await _arxiv_addon(manager).enqueue_or_replay(
+        date="2026-08-06",
+        links=[first_link],
+        user_id=1,
+        group_id=2,
+        context=context,
+    )
+    await manager.wait_idle()
+    assert len(runner.calls) == 2  # 初始化 + 第一份摘要
+
+    context.actions.clear()
+    replay = await _arxiv_addon(manager).enqueue_or_replay(
+        date="2026-08-06",
+        links=["http://arxiv.org/pdf/2608.00001v3.pdf?download=1"],
+        user_id=1,
+        group_id=2,
+        context=context,
+    )
+    assert "已重发" in replay
+    assert len(runner.calls) == 2
+
+    runner.result_text = _valid_arxiv_summary(
+        "2026-08-06",
+        second_link,
+        "updated listing summary",
+    )
+    context.actions.clear()
+    updated = await _arxiv_addon(manager).enqueue_or_replay(
+        date="2026-08-06",
+        links=[second_link],
+        user_id=1,
+        group_id=2,
+        context=context,
+    )
+    await manager.wait_idle()
+
+    assert "已投递" in updated
+    assert len(runner.calls) == 3
+    assert second_link in runner.calls[-1][1]
+    assert first_link not in runner.calls[-1][1]
+    assert "updated listing summary" in str(context.actions)
+
+
+@pytest.mark.asyncio
 async def test_arxiv_summary_public_entrypoint_rejects_unprivileged_or_wrong_context(
     tmp_path: Path,
 ):
