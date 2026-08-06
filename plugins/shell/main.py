@@ -14,6 +14,7 @@ import ntpath
 import os
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -261,6 +262,29 @@ def _validate_command(
     return None
 
 
+def _command_available(command: str) -> bool:
+    """Return whether ``command`` can currently be resolved from the Bot environment."""
+
+    try:
+        return shutil.which(command) is not None
+    except (OSError, ValueError):
+        return False
+
+
+def _command_not_found_message(command: str) -> str:
+    """Build a stable, actionable response for a missing executable."""
+
+    name = _normalize_command_name(command) or "(unknown)"
+    lines = [
+        f"❌ 找不到可执行命令 '{name}'",
+        "管理员启用列表只控制允许执行的入口，不代表当前系统已经安装该程序。",
+        "请安装该程序并加入 Bot 进程的 PATH，或改用当前系统已有的命令。",
+    ]
+    if sys.platform == "win32":
+        lines.append("Windows 查看目录可使用 /shell cmd /c dir（需管理员启用 cmd）。")
+    return "\n".join(lines)
+
+
 def _smart_decode(data: bytes) -> str:
     """优先保留 UTF-8；Windows 本地命令再回退到 GBK。"""
 
@@ -482,7 +506,11 @@ async def handle(
 
         _log_command_audit(context, cmd_line, status="started")
         timeout = _get_timeout(context)
-        code, stdout, stderr = await _execute_command(cmd_args, timeout)
+        try:
+            code, stdout, stderr = await _execute_command(cmd_args, timeout)
+        except FileNotFoundError:
+            _log_command_audit(context, cmd_line, status="unavailable")
+            return segments(_command_not_found_message(cmd_args[0]))
 
         streams = [("📤 stdout", stdout), ("⚠️ stderr", stderr)]
         populated_streams = [(label, text) for label, text in streams if text]
@@ -526,6 +554,20 @@ def _show_help(context: ShellContext) -> str:
 
     whitelist_status = "已禁用" if _is_whitelist_disabled(context) else "已启用"
     timeout = _get_timeout(context)
+    if sys.platform == "win32":
+        examples = (
+            "   /shell cmd /c dir\n"
+            "   /shell cmd /c cd\n"
+            "   /shell python --version\n"
+            "   /shell ping 127.0.0.1\n"
+        )
+    else:
+        examples = (
+            "   /shell ls -la\n"
+            "   /shell pwd\n"
+            "   /shell python --version\n"
+            "   /shell ping -c 3 127.0.0.1\n"
+        )
 
     return (
         "💻 Shell 命令执行插件\n"
@@ -536,17 +578,14 @@ def _show_help(context: ShellContext) -> str:
         "2️⃣ /shell help\n"
         "   显示此帮助信息\n\n"
         "3️⃣ /shell list\n"
-        "   查看管理员启用的命令入口\n\n"
+        "   查看管理员启用的命令入口及当前 PATH 可用性\n\n"
         "🔧 管理员执行设置:\n"
         f"   • 命令启用/防误触列表: {whitelist_status}\n"
         f"   • 执行超时: {timeout:g}秒\n"
         f"   • 输出限制: {MAX_OUTPUT_LENGTH}字符\n"
         "   • 命令链接符: 已禁用\n\n"
         "💡 示例:\n"
-        "   /shell ls -la\n"
-        "   /shell pwd\n"
-        "   /shell python --version\n"
-        "   /shell ping -c 3 google.com\n\n"
+        f"{examples}\n"
         "📁 路径格式:\n"
         "   • QQ 中建议统一使用 / 斜杠，例如 C:/workspace/example.py\n"
         "   • 插件会按 bot 所在系统转换为本机路径格式\n"
@@ -557,12 +596,26 @@ def _show_help(context: ShellContext) -> str:
 
 
 def _list_whitelist(context: ShellContext) -> MessageSegments:
-    """列出当前生效的管理员命令入口。"""
+    """列出当前生效的管理员命令入口及其 PATH 可用性。"""
 
     if _is_whitelist_disabled(context):
-        return segments("⚠️ 管理员命令启用列表已禁用；权限边界仍是 admin_only")
+        return segments(
+            "⚠️ 管理员命令启用列表已禁用；权限边界仍是 admin_only。\n"
+            "当前允许任意入口，因此无法枚举完整命令；实际执行仍要求程序存在于 Bot 的 PATH。"
+        )
 
     whitelist = sorted(_get_whitelist(context))
+    available = [name for name in whitelist if _command_available(name)]
+    available_set = set(available)
+    unavailable = [name for name in whitelist if name not in available_set]
     lines = ["管理员已启用的命令入口（防误触，不是安全沙箱）:"]
-    lines.append(", ".join(whitelist))
+    lines.extend(
+        (
+            f"\n✅ 当前 Bot PATH 可执行（{len(available)}）:",
+            ", ".join(available) if available else "（无）",
+            f"\n⚠️ 当前 Bot PATH 未找到（{len(unavailable)}）:",
+            ", ".join(unavailable) if unavailable else "（无）",
+            "\n启用列表不负责安装程序；实际执行以 Bot 进程的 PATH 为准。",
+        )
+    )
     return segments("\n".join(lines))

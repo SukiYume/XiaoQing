@@ -1,7 +1,7 @@
 {
     "name": "shell",
-    "version": "2.0.0",
-    "description": "管理员本地命令执行插件 - 支持命令启用列表、超时和输出限制",
+    "version": "2.0.1",
+    "description": "管理员本地命令执行插件 - 支持命令启用列表、PATH 可用性、超时和输出限制",
     "entry": "main.py",
     "capabilities": ["admin_sessions", "execution_timeout_exempt"],
     "commands": [
@@ -23,7 +23,7 @@
                 {
                     "name": "list",
                     "aliases": ["列表", "-l", "--list"],
-                    "help": "查看管理员启用的本地命令入口",
+                    "help": "查看管理员启用的本地命令入口及当前 PATH 可用性",
                     "usage": "/shell list",
                     "match": "exact",
                     "examples": ["/shell list"],
