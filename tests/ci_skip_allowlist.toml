@@ -131,6 +131,11 @@ reason = "POSIX process-group integration test"
 platforms = ["windows"]
 
 [[allow]]
+nodeid = "tests/test_run_bot_monitor_script.py::test_log_failure_terminates_posix_descendant_process_group"
+reason = "POSIX process groups are not available on Windows"
+platforms = ["windows"]
+
+[[allow]]
 nodeid = "tests/test_operational_truth.py::test_clean_pycache_is_anchored_to_script_repository"
 reason = "POSIX bash is unavailable"
 platforms = ["windows"]
