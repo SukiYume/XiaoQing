@@ -21,6 +21,21 @@ nodeid = "tests/plugins/test_arxiv_training_utils.py::test_bert_loader_shuffles_
 reason = "could not import *"
 platforms = ["all"]
 
+[[allow]]
+nodeid = "tests/plugins/test_arxiv_training_utils.py::test_bert_training_bootstrap_builds_shared_resources_once"
+reason = "could not import *"
+platforms = ["all"]
+
+[[allow]]
+nodeid = "tests/plugins/test_arxiv_training_utils.py::test_knn_config_follows_custom_output_directory"
+reason = "could not import *"
+platforms = ["all"]
+
+[[allow]]
+nodeid = "tests/plugins/test_arxiv_training_utils.py::test_knn_training_reuses_known_embedding_dimension_and_saves_max_len"
+reason = "could not import *"
+platforms = ["all"]
+
 # Filesystem link capabilities differ by host policy even on supported runners.
 [[allow]]
 nodeid = "tests/test_plugin_manager_import_safety.py::test_runtime_rejects_entry_symlink_without_executing_its_target"
@@ -79,6 +94,11 @@ reason = "Pillow has no WebP support"
 platforms = ["all"]
 
 # POSIX runners cannot execute Windows-only process and Windows PowerShell branches.
+[[allow]]
+nodeid = "tests/test_run_bot_monitor_script.py::test_vbs_launcher_parses_and_reports_a_missing_monitor"
+reason = "Windows Script Host is Windows-specific"
+platforms = ["posix"]
+
 [[allow]]
 nodeid = "tests/plugins/test_codex_process_tree.py::test_real_windows_parent_child_and_grandchild_are_reaped"
 reason = "Windows process-tree integration test"
