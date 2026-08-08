@@ -134,7 +134,7 @@ class VectorStore:
         scores = self._matrix @ q
         if scores.size == 0:
             return []
-        candidate_idxs = np.asarray(
+        candidate_idxs: NDArray[np.int64] = np.asarray(
             [index for index, doc in enumerate(self._docs) if predicate is None or predicate(doc)],
             dtype=np.int64,
         )
