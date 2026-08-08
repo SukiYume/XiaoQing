@@ -25,6 +25,13 @@ def _load_data_prep_module(name: str, monkeypatch: pytest.MonkeyPatch) -> Module
     return importlib.import_module(f"plugins.arxiv_filter.train_model.data_prep.{name}")
 
 
+def _load_knn_training_module() -> ModuleType:
+    """仅在本地 ML 依赖完整时加载 KNN 训练入口。"""
+
+    pytest.importorskip("torch")
+    return importlib.import_module("plugins.arxiv_filter.train_model.interest_model.knn_arxiv")
+
+
 def test_arxiv_runtime_keeps_only_the_used_fetch_and_knn_scoring_entrypoints() -> None:
     fetch_tree = ast.parse(
         (ROOT / "plugins" / "arxiv_filter" / "arxiv_today.py").read_text(encoding="utf-8")
@@ -273,7 +280,7 @@ def test_data_prep_rejects_invalid_dataset_before_overwriting_output(
 
 
 def test_knn_config_follows_custom_output_directory(tmp_path: Path) -> None:
-    module = importlib.import_module("plugins.arxiv_filter.train_model.interest_model.knn_arxiv")
+    module = _load_knn_training_module()
     output_dir = tmp_path / "model"
 
     default_cache = module.KNNConfig(output_dir=output_dir)
@@ -290,7 +297,7 @@ def test_knn_training_reuses_known_embedding_dimension_and_saves_max_len(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    module = importlib.import_module("plugins.arxiv_filter.train_model.interest_model.knn_arxiv")
+    module = _load_knn_training_module()
     load_calls = 0
 
     def load_encoder() -> object:

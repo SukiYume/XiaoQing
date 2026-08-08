@@ -30,6 +30,7 @@
 - `python main.py` 实际启动验证加载 29 个插件，Pendo Web 正常监听并完成优雅关闭；WebSocket 与 HTTP 命令矩阵、Core 压测、compileall、Ruff、Mypy、pytest 和双 diff 门禁均通过。
 - 完整 UAT 最终结果为 5978 passed、2 skipped，覆盖率 80.69%；配置与 secrets 哈希保持一致，端口 12000/12001 正常释放，隔离数据、锁文件和子进程全部完成清理。发布前按 GitHub Actions 参数复测同为 5978 passed、2 skipped，覆盖率 80.68%。
 - CI 文档格式门禁覆盖 Markdown 中的 Python 示例；Windows smoke 将 POSIX 进程组专属用例登记为精确的平台预期项，skip 策略继续联合校验节点、原因和运行平台；向量检索候选索引使用显式 NumPy `int64` 数组类型，兼容干净安装中的新版类型定义。
+- 可选 Torch 训练用例按节点登记依赖条件，基础安装保持轻量；发行资源门禁使用 NUL 分隔且关闭 Git 路径转义，中文文件名在 Windows 与 Linux 上采用同一真实路径语义。
 
 ### 生产代码与 arXiv 模型一体同步
 
