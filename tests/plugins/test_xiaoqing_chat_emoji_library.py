@@ -397,8 +397,7 @@ def test_media_llm_max_tokens_expands_for_thinking_models():
 
 
 def test_media_candidates_follow_core_vision_route_order(mock_context):
-    runtime = _make_media_runtime()
-    candidates = _resolve_media_llm_secret_candidates(mock_context, runtime)
+    candidates = _resolve_media_llm_secret_candidates(mock_context)
 
     assert [item["_profile"] for item in candidates] == [
         "glm-4.6v-flash",
@@ -426,21 +425,21 @@ def test_vision_candidates_never_materialize_plugin_credentials(mock_context):
             }
         }
     }
-    candidates = _resolve_media_llm_secret_candidates(mock_context, _make_media_runtime())
+    candidates = _resolve_media_llm_secret_candidates(mock_context)
     assert candidates[0]["model"] == "glm-4.6v-flash"
     assert all("api_key" not in item and "api_base" not in item for item in candidates)
 
 
 def test_malformed_legacy_vision_secrets_cannot_change_core_candidates(mock_context):
     mock_context.secrets = {"plugins": {"xiaoqing_chat": {"vision": ["invalid"]}}}
-    candidates = _resolve_media_llm_secret_candidates(mock_context, _make_media_runtime())
+    candidates = _resolve_media_llm_secret_candidates(mock_context)
     assert candidates[0]["_profile"] == "glm-4.6v-flash"
     assert len(candidates) == 4
 
 
 def test_vision_candidates_report_unavailable_without_ai_capability(mock_context):
     mock_context.capabilities = PluginCapabilities()
-    candidates = _resolve_media_llm_secret_candidates(mock_context, _make_media_runtime())
+    candidates = _resolve_media_llm_secret_candidates(mock_context)
     assert len(candidates) == 1
     assert candidates[0]["_vision_enabled"] is False
     assert candidates[0]["_ai"] is None
@@ -452,7 +451,6 @@ def test_media_candidates_do_not_forward_legacy_request_payload(mock_context):
     }
     candidate = _resolve_media_llm_secret_candidates(
         mock_context,
-        _make_media_runtime(),
     )[0]
     assert "_extra_payload" not in candidate
 

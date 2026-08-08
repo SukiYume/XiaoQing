@@ -12,10 +12,8 @@ from pathlib import Path
 from typing import Any, Literal, NamedTuple, cast
 
 from core.args import tokenize
-from core.plugin_base import (
-    has_control_characters as _contains_control_characters,
-)
-from core.plugin_base import run_sync, segments
+from core.interfaces import PluginContextProtocol
+from core.plugin_base import has_control_characters, run_sync, segments
 from core.public_errors import public_error_message, public_error_response
 
 MAX_ARGUMENT_CHARS = 512
@@ -39,24 +37,22 @@ _CHINESE_PATTERN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U000200
 Messages = list[dict[str, Any]]
 QueryDirection = Literal["chinese_to_english", "english_to_chinese"]
 
-HELP_TEXT = """
-📖 **天文学词典**
+HELP_TEXT = """📖 天文学词典
 
 查询中国天文学会天文学名词审定委员会发布的中英天文学名词。
 
-**用法：**
-• /dict <词汇> - 模糊查询；多词按“全部包含”匹配
-• /dict -e <词汇> - 精确匹配
-• /dict -n <1-100> <词汇> - 指定最多显示条数
-• /dict -- <以连字符开头的词汇> - 停止解析选项
-• /dict help - 显示帮助
+用法
+/dict <词汇>  模糊查询；多词按“全部包含”匹配
+/dict -e <词汇>  精确匹配
+/dict -n <1-100> <词汇>  指定最多显示条数
+/dict -- <以连字符开头的词汇>  停止解析选项
+/dict help  显示帮助
 
-**示例：**
-• /dict galaxy
-• /dict 星系
-• /dict -e "fast radio burst"
-• /dict -n 20 star
-""".strip()
+示例
+/dict galaxy
+/dict 星系
+/dict -e "fast radio burst"
+/dict -n 20 star"""
 
 
 class DictionaryDataError(RuntimeError):
@@ -101,7 +97,7 @@ def _clean_query(value: object) -> str:
         raise ValueError("请提供要查询的词汇")
     if len(cleaned) > MAX_QUERY_CHARS:
         raise ValueError(f"查询词不能超过 {MAX_QUERY_CHARS} 个字符")
-    if _contains_control_characters(cleaned):
+    if has_control_characters(cleaned):
         raise ValueError("查询词不能包含控制字符")
     return cleaned
 
@@ -122,7 +118,7 @@ def _tokenize_request(args: object) -> list[str]:
         raise TypeError("dict arguments must be a string")
     if len(args) > MAX_ARGUMENT_CHARS:
         raise ValueError(f"命令参数不能超过 {MAX_ARGUMENT_CHARS} 个字符")
-    if _contains_control_characters(args):
+    if has_control_characters(args):
         raise ValueError("命令参数不能包含控制字符")
     try:
         tokens = tokenize(args, strict=True)
@@ -215,7 +211,7 @@ def _resource_spec(manifest: dict[str, Any], direction: QueryDirection) -> Resou
         and 0 < len(filename) <= 64
         and "/" not in filename
         and "\\" not in filename
-        and not _contains_control_characters(filename)
+        and not has_control_characters(filename)
         and filename.endswith(".txt")
     )
     if (
@@ -244,7 +240,7 @@ def _load_dictionary(
 ) -> tuple[DictionaryEntry, ...]:
     """一次读取、校验并解析词典；缓存最多保留四代有界词库。"""
 
-    _ = fingerprint
+    del fingerprint  # 文件指纹只参与缓存代次，解析仍以内容哈希作为真实性依据。
     try:
         payload = dict_file.read_bytes()
     except OSError as exc:
@@ -274,8 +270,8 @@ def _load_dictionary(
             or destination != destination.strip()
             or len(source) > MAX_SOURCE_CHARS
             or len(destination) > MAX_DESTINATION_CHARS
-            or _contains_control_characters(source)
-            or _contains_control_characters(destination)
+            or has_control_characters(source)
+            or has_control_characters(destination)
         ):
             raise DictionaryDataError(f"天文学词典数据校验失败: {spec.filename}")
         pair = (source, destination)
@@ -353,7 +349,7 @@ def _query_astrodict_sync(
 
 async def query_astrodict(
     query: object,
-    context: Any,
+    context: PluginContextProtocol,
     exact_match: bool = False,
     max_results: int = DEFAULT_RESULTS,
 ) -> str:
@@ -396,7 +392,7 @@ async def handle(
     command: str,
     args: str,
     event: dict[str, Any],
-    context: Any,
+    context: PluginContextProtocol,
 ) -> Messages:
     """解析一条词典命令，并返回稳定的公开消息。"""
 

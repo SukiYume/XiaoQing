@@ -112,7 +112,7 @@
           ]
         },
         {
-          "name":"help","aliases":["帮助","h","?"],"help":"显示完整宠物命令目录，可附帮助类别","usage":"/宠物 help [basic|advanced|item|social|gameplay|management]","examples":["/宠物 help", "/宠物 help social"],"invalid_examples":["/宠物 help unknown"],
+          "name":"help","aliases":["帮助","h","?"],"help":"显示宠物命令分类，可附帮助类别","usage":"/宠物 help [basic|advanced|item|social|gameplay|management]","examples":["/宠物 help", "/宠物 help social"],"invalid_examples":["/宠物 help unknown"],
           "subcommands":[
             {"name":"basic","aliases":["基础","base"],"help":"筛选基础照料命令帮助","usage":"/宠物 help basic","match":"exact","examples":["/宠物 help basic"],"invalid_examples":["/宠物 help basic extra"]},
             {"name":"advanced","aliases":["进阶","adv"],"help":"筛选进阶成长命令帮助","usage":"/宠物 help advanced","match":"exact","examples":["/宠物 help advanced"],"invalid_examples":["/宠物 help advanced extra"]},

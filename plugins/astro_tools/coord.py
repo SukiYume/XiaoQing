@@ -4,7 +4,7 @@
 
 import math
 
-from core.plugin_base import run_sync
+from core.plugin_base import PluginContextProtocol, run_sync
 from core.public_errors import public_error_message
 
 
@@ -17,7 +17,7 @@ def _finite_degrees(*values: str) -> tuple[float, ...]:
     return parsed
 
 
-def _handle_coord_sync(args: str, context) -> str:
+def _handle_coord_sync(args: str, context: PluginContextProtocol) -> str:
     """处理坐标转换命令"""
     args = args.strip()
     if not args:
@@ -134,7 +134,7 @@ def _handle_coord_sync(args: str, context) -> str:
         )
 
 
-async def handle_coord(args: str, context) -> str:
+async def handle_coord(args: str, context: PluginContextProtocol) -> str:
     """在线程 bulkhead 中执行 astropy 坐标计算。"""
 
     return await run_sync(_handle_coord_sync, args, context)

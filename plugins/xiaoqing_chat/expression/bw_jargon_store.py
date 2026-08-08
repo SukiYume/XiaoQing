@@ -1,3 +1,5 @@
+"""按会话或全局范围持久化黑话记录，并合并并发增量更新。"""
+
 from __future__ import annotations
 
 import time
@@ -9,11 +11,37 @@ from typing import Any, cast
 
 from core.atomic_store import keyed_path_lock
 
-from ..store_base import StoreBase
+from ..store_base import StoreBase, coerce_finite_float, coerce_int, coerce_json_bool
+
+
+def _string_list(value: Any) -> list[str]:
+    """只接收真正的 JSON 数组，避免字符串被拆成单字符列表。"""
+
+    if not isinstance(value, list):
+        return []
+    return [text for item in value if isinstance(item, str) and (text := item.strip())]
+
+
+def _chat_count_list(value: Any) -> list[list[Any]]:
+    """规范化 ``[chat_id, count]`` 对，忽略空会话和畸形成员。"""
+
+    if not isinstance(value, list):
+        return []
+    normalized: list[list[Any]] = []
+    for item in value:
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            continue
+        chat_id = str(item[0] or "").strip()
+        if not chat_id:
+            continue
+        normalized.append([chat_id, coerce_int(item[1], default=0, minimum=0)])
+    return normalized
 
 
 @dataclass
 class JargonRecord:
+    """一个黑话条目及其按会话累计的观察统计。"""
+
     content: str
     scope_chat_id: str = ""
     meaning: str = ""
@@ -28,6 +56,8 @@ class JargonRecord:
 
 
 class JargonStore(StoreBase):
+    """在原子 JSON 文件上维护可并发合并的黑话快照。"""
+
     def __init__(self) -> None:
         super().__init__()
         self._cache: dict[str, JargonRecord] | None = None
@@ -50,43 +80,38 @@ class JargonStore(StoreBase):
         return f"{scope}\x1f{term}" if scope else term
 
     def _read_records(self) -> dict[str, JargonRecord]:
-        try:
-            raw = self._load_json_from_path_parts("bw_learner", "jargon.json", default=[])
-            if not isinstance(raw, list):
-                return {}
-            out: dict[str, JargonRecord] = {}
-            for item in raw:
-                if not isinstance(item, dict):
-                    continue
-                content = str(item.get("content", "") or "").strip()
-                if not content:
-                    continue
-                chat_counts_raw = item.get("chat_id_counts")
-                chat_id_counts = cast(
-                    list[list[Any]],
-                    chat_counts_raw if isinstance(chat_counts_raw, list) else [],
-                )
-                rec = JargonRecord(
-                    content=content,
-                    scope_chat_id=str(item.get("scope_chat_id", "") or "").strip(),
-                    meaning=str(item.get("meaning", "") or "").strip(),
-                    raw_content=[
-                        str(x).strip()
-                        for x in (item.get("raw_content", []) or [])
-                        if isinstance(x, str) and str(x).strip()
-                    ],
-                    chat_id_counts=chat_id_counts,
-                    is_global=bool(item.get("is_global", False)),
-                    count=int(item.get("count", 0) or 0),
-                    is_jargon=bool(item.get("is_jargon", True)),
-                    is_complete=bool(item.get("is_complete", False)),
-                    last_inference_count=int(item.get("last_inference_count", 0) or 0),
-                    updated_at=float(item.get("updated_at", time.time()) or time.time()),
-                )
-                out[self.key_for(content, "" if rec.is_global else rec.scope_chat_id)] = rec
-            return out
-        except Exception:
+        raw = self._load_json_from_path_parts("bw_learner", "jargon.json", default=[])
+        if not isinstance(raw, list):
             return {}
+
+        out: dict[str, JargonRecord] = {}
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            content = str(item.get("content", "") or "").strip()
+            if not content:
+                continue
+            rec = JargonRecord(
+                content=content,
+                scope_chat_id=str(item.get("scope_chat_id", "") or "").strip(),
+                meaning=str(item.get("meaning", "") or "").strip(),
+                raw_content=_string_list(item.get("raw_content")),
+                chat_id_counts=_chat_count_list(item.get("chat_id_counts")),
+                is_global=coerce_json_bool(item.get("is_global"), default=False),
+                count=coerce_int(item.get("count"), default=0, minimum=0),
+                is_jargon=coerce_json_bool(item.get("is_jargon"), default=True),
+                is_complete=coerce_json_bool(item.get("is_complete"), default=False),
+                last_inference_count=coerce_int(
+                    item.get("last_inference_count"), default=0, minimum=0
+                ),
+                updated_at=coerce_finite_float(
+                    item.get("updated_at"),
+                    default=time.time(),
+                    minimum=0.0,
+                ),
+            )
+            out[self.key_for(content, "" if rec.is_global else rec.scope_chat_id)] = rec
+        return out
 
     def load(self) -> dict[str, JargonRecord]:
         path = self._path()
@@ -118,12 +143,12 @@ class JargonStore(StoreBase):
                         for item in kept.chat_id_counts
                         if not item or str(item[0] or "").strip() != target
                     ]
-                remaining[self.key_for(kept.content, "" if kept.is_global else kept.scope_chat_id)] = kept
+                remaining[
+                    self.key_for(kept.content, "" if kept.is_global else kept.scope_chat_id)
+                ] = kept
             if remaining != latest:
                 payload = [asdict(item) for item in remaining.values()]
-                if not self._save_json_to_path_parts(
-                    "bw_learner", "jargon.json", data=payload
-                ):
+                if not self._save_json_to_path_parts("bw_learner", "jargon.json", data=payload):
                     return
             self._cache = deepcopy(remaining)
             self._baseline = deepcopy(remaining)

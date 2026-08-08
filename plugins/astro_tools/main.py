@@ -5,9 +5,11 @@
 """
 
 import logging
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from core.args import parse
-from core.plugin_base import Segments, bounded_external_text, segments
+from core.plugin_base import PluginContextProtocol, Segments, bounded_external_text, segments
 from core.public_errors import public_error_response
 
 from . import const
@@ -20,7 +22,9 @@ from . import time as astro_time
 
 logger = logging.getLogger(__name__)
 
-_COMMAND_HANDLERS = {
+AstroHandler = Callable[[str, PluginContextProtocol], Awaitable[str]]
+
+_COMMAND_HANDLERS: dict[str, AstroHandler] = {
     "time": astro_time.handle_time,
     "coord": coord.handle_coord,
     "convert": convert.handle_convert,
@@ -32,10 +36,7 @@ _COMMAND_HANDLERS = {
 
 _SUBCOMMAND_HELP = {
     "time": "用法: /astro time [now|jd <值>|mjd <值>|unix <值>|时间值]",
-    "coord": (
-        "用法: /astro coord <RA> <Dec>\n"
-        "或: /astro coord <galactic|ecliptic> <经度> <纬度>"
-    ),
+    "coord": ("用法: /astro coord <RA> <Dec>\n或: /astro coord <galactic|ecliptic> <经度> <纬度>"),
     "convert": "用法: /astro convert <数值> <源单位> <目标单位>",
     "redshift": "用法: /astro redshift <红移值>（范围 0 到 1100）",
     "formula": "用法: /astro formula [公式名|list|calc <类型> <质量>]",
@@ -44,8 +45,15 @@ _SUBCOMMAND_HELP = {
 }
 
 
-async def handle(command: str, args: str, event: dict, context) -> Segments:
+async def handle(
+    command: str,
+    args: str,
+    event: dict[str, Any],
+    context: PluginContextProtocol,
+) -> Segments:
     """命令处理入口"""
+    # command/event 属于统一插件入口契约；本插件只由参数文本决定计算内容。
+    del command, event
     try:
         parsed = parse(args)
 

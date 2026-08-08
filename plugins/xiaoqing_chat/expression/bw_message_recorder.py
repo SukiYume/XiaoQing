@@ -233,7 +233,6 @@ async def extract_and_learn(
             _log_step(context, None, chat_id=chat_id, step="bw.jargon.mine.start")
             changed += int(
                 await mine_jargon(
-                    http_session=context.http_session,
                     secrets=secrets,
                     store=jargon_store,
                     chat_id=chat_id,

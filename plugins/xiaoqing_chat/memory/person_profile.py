@@ -1,3 +1,5 @@
+"""按会话和主体保存人物资料，并同步长期记忆索引。"""
+
 from __future__ import annotations
 
 import time
@@ -7,6 +9,7 @@ from pathlib import Path
 
 from core.plugin_base import load_json, write_json
 
+from ..store_base import coerce_finite_float
 from .memory_db import MemoryDB
 
 
@@ -30,23 +33,25 @@ def load_profile(data_dir: Path, *, chat_id: str, subject_id: int) -> PersonProf
         return None
     try:
         raw = load_json(path, default=None)
-        if not isinstance(raw, dict):
-            return None
-        name = str(raw.get("subject_name", "")).strip()
-        updated_at = float(raw.get("updated_at", 0.0) or 0.0)
-        facts = raw.get("facts", [])
-        if not isinstance(facts, list):
-            facts = []
-        fact_list = [str(x).strip() for x in facts if isinstance(x, str) and str(x).strip()]
-        return PersonProfile(
-            chat_id=chat_id,
-            subject_id=subject_id,
-            subject_name=name or str(subject_id),
-            facts=fact_list,
-            updated_at=updated_at,
-        )
-    except Exception:
+    except OSError:
         return None
+    if not isinstance(raw, dict):
+        return None
+
+    name = str(raw.get("subject_name", "")).strip()
+    facts = raw.get("facts", [])
+    fact_list = (
+        [value.strip() for value in facts if isinstance(value, str) and value.strip()]
+        if isinstance(facts, list)
+        else []
+    )
+    return PersonProfile(
+        chat_id=chat_id,
+        subject_id=subject_id,
+        subject_name=name or str(subject_id),
+        facts=fact_list,
+        updated_at=coerce_finite_float(raw.get("updated_at"), default=0.0, minimum=0.0),
+    )
 
 
 def save_profile(data_dir: Path, profile: PersonProfile) -> None:

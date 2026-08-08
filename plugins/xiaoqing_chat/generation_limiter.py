@@ -1,3 +1,5 @@
+"""按全局、会话、用户和日配额限制并发生成请求。"""
+
 from __future__ import annotations
 
 import asyncio

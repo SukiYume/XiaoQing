@@ -20,6 +20,7 @@ from tests.helpers.app_test_support import (
     patch,
     pytest,
 )
+from tests.helpers.config_test_support import _last_notified_revision
 
 mock_dependencies = _fixture_support.mock_dependencies
 temp_app_root = _fixture_support.temp_app_root
@@ -92,7 +93,7 @@ async def test_failed_reload_revokes_auth_and_admin_before_blocked_callbacks(
 
     callback_release.set()
     for _ in range(20):
-        if app.config_manager.last_notified_revision == app.config_manager.revision:
+        if _last_notified_revision(app.config_manager) == app.config_manager.revision:
             break
         await asyncio.sleep(0)
     await asyncio.gather(*tuple(app._config_apply_tasks), return_exceptions=True)
@@ -129,7 +130,7 @@ async def test_real_failed_reload_stops_old_ws_and_valid_recovery_restarts_trust
     async def drain_config_publications() -> None:
         for _ in range(50):
             if (
-                app.config_manager.last_notified_revision == app.config_manager.revision
+                _last_notified_revision(app.config_manager) == app.config_manager.revision
                 and not app._config_apply_tasks
             ):
                 return
@@ -1231,9 +1232,7 @@ def test_app_apply_config_validates_scalars_before_publishing_side_effects(
     invalid_config["session_timeout"] = "5m"
 
     with pytest.raises(ValueError, match="session_timeout"):
-        app._apply_config(
-            ConfigSnapshot(config=invalid_config, secrets=app.secrets, revision=1)
-        )
+        app._apply_config(ConfigSnapshot(config=invalid_config, secrets=app.secrets, revision=1))
 
     app.dispatcher.refresh_prefix_cache.assert_not_called()
     app._configure_plugin_execution.assert_not_called()

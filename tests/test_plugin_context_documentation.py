@@ -33,23 +33,22 @@ def test_context_docs_use_real_mute_and_expiry_units() -> None:
 
     assert "剩余静音时间（分钟）" in api
     assert "剩余静音时间（秒）" not in api
-    assert "只有插件再次调用 `create_session()` 才会创建新会话" in api
+    assert "后续插件可再次调用 `create_session()` 建立新会话" in api
     assert "context.update_session(callback)" in api
     assert "context.app.plugin_manager" not in advanced
 
 
-def test_public_docs_state_that_plugins_are_trusted_not_sandboxed() -> None:
+def test_public_docs_state_the_trusted_plugin_model_and_review_boundary() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    plugin_guide = (ROOT / "docs" / "03-plugin-development.md").read_text(
-        encoding="utf-8"
-    )
+    plugin_guide = (ROOT / "docs" / "03-plugin-development.md").read_text(encoding="utf-8")
 
-    assert "不要安装未经审查的第三方插件" in readme
-    assert "不是安全沙箱" in readme
-    assert "只暴露当前插件的配置与 secret 命名空间" in readme
+    assert "请安装经过审查的第一方插件或可信插件" in readme
+    assert "与 Bot 共享 Python 进程和操作系统权限" in readme
+    assert "独立 Manifest、配置命名空间、数据目录和生命周期" in readme
     assert "| 插件执行隔离 |" not in readme
-    assert "不是进程安全边界" in plugin_guide
-    assert "不要向用户承诺可以安全安装或运行陌生第三方插件" in plugin_guide
+    assert "同进程、同操作系统权限运行的受信任 Python 扩展" in plugin_guide
+    assert "部署者负责插件来源与代码审查" in plugin_guide
+    assert "限定在当前插件命名空间" in plugin_guide
 
 
 async def _type_checked_context_example(context: PluginContextProtocol) -> bool:
@@ -69,3 +68,9 @@ async def _type_checked_context_example(context: PluginContextProtocol) -> bool:
 
 def test_documented_context_example_is_executable() -> None:
     assert callable(_type_checked_context_example)
+
+
+def test_protocol_declares_every_request_scoped_attribute_used_by_the_guide() -> None:
+    annotations = PluginContextProtocol.__annotations__
+
+    assert {"metrics", "request_id", "command_invocation"} <= annotations.keys()

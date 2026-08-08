@@ -4,21 +4,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ENDPOINT = "http://127.0.0.1:12000/event"
 DEFAULT_SECRETS = PROJECT_ROOT / "config" / "secrets.json"
-CHAT_DATA_DIR = PROJECT_ROOT / "plugins" / "xiaoqing_chat" / "data"
+DEFAULT_CHAT_DATA_DIR = PROJECT_ROOT / "data" / "xiaoqing_chat"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class QualityCase:
     """一条独立的真实对话质量用例。"""
 
@@ -26,7 +27,20 @@ class QualityCase:
     message: str
 
 
-CASES = (
+class ProbeResult(TypedDict):
+    """一次 HTTP 事件请求的稳定观测结构。"""
+
+    status: int | None
+    latency_ms: float
+    error: str | None
+    payload: dict[str, Any]
+
+
+class JsonDataError(ValueError):
+    """JSON 文本语法错误或含重复键。"""
+
+
+CASES: tuple[QualityCase, ...] = (
     QualityCase(
         "direct_without_question",
         "小青，我刚把拖了三天的报告交掉，整个人像被放生了。直接接一句，别反问我。",
@@ -54,11 +68,44 @@ CASES = (
 )
 
 
+def _decode_json_value(text: str) -> Any:
+    """严格读取 JSON 值，避免重复键把前一个字段静默覆盖。"""
+
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise JsonDataError(f"重复 JSON 键: {key}")
+            result[key] = value
+        return result
+
+    try:
+        return json.loads(text, object_pairs_hook=reject_duplicate_keys)
+    except json.JSONDecodeError as exc:
+        raise JsonDataError(f"JSON 语法错误: {exc.msg}") from exc
+
+
+def _decode_json_object(text: str) -> dict[str, Any]:
+    """在严格 JSON 基础上进一步要求根节点为对象。"""
+
+    payload = _decode_json_value(text)
+    if not isinstance(payload, dict):
+        raise JsonDataError("JSON 根节点必须是对象")
+    return payload
+
+
 def _load_auth(path: Path) -> tuple[str, int]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise RuntimeError(f"无法读取鉴权配置 {path}: {type(exc).__name__}") from exc
+    try:
+        payload = _decode_json_object(text)
+    except JsonDataError as exc:
+        raise RuntimeError(f"鉴权配置无效 {path}: {exc}") from exc
     token = payload.get("inbound_token")
     admins = payload.get("admin_user_ids")
-    if not isinstance(token, str) or not token:
+    if not isinstance(token, str) or not token.strip():
         raise RuntimeError("config/secrets.json 缺少 inbound_token")
     if not isinstance(admins, list) or not admins or type(admins[0]) is not int:
         raise RuntimeError("config/secrets.json 缺少管理员 ID")
@@ -75,13 +122,14 @@ class EventProbe:
         token: str,
         admin_id: int,
         timeout: float,
+        message_id_seed: int,
     ) -> None:
         self.endpoint = endpoint
         self.token = token
         self.admin_id = admin_id
         self.timeout = timeout
+        self.message_id_seed = message_id_seed
         self._sequence = 0
-        self._seed = time.time_ns() // 1_000
 
     def send(
         self,
@@ -91,7 +139,7 @@ class EventProbe:
         group_id: int,
         event_time: float | None = None,
         admin: bool = False,
-    ) -> dict[str, Any]:
+    ) -> ProbeResult:
         self._sequence += 1
         actor_id = self.admin_id if admin else user_id
         payload = {
@@ -99,7 +147,7 @@ class EventProbe:
             "post_type": "message",
             "message_type": "group",
             "sub_type": "normal",
-            "message_id": self._seed + self._sequence,
+            "message_id": self.message_id_seed + self._sequence,
             "user_id": actor_id,
             "group_id": group_id,
             "message": message,
@@ -122,6 +170,7 @@ class EventProbe:
             method="POST",
         )
         started = time.perf_counter()
+        request_error: str | None = None
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 body = response.read()
@@ -129,7 +178,8 @@ class EventProbe:
         except urllib.error.HTTPError as exc:
             body = exc.read()
             status = exc.code
-        except Exception as exc:
+            request_error = f"HTTPError: {exc.code} {exc.reason}"
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
             return {
                 "status": None,
                 "latency_ms": round((time.perf_counter() - started) * 1_000, 2),
@@ -137,18 +187,20 @@ class EventProbe:
                 "payload": {},
             }
         try:
-            response_payload = json.loads(body.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
+            response_payload = _decode_json_object(body.decode("utf-8"))
+        except (UnicodeDecodeError, JsonDataError) as exc:
             response_payload = {}
+            if request_error is None:
+                request_error = f"响应解析失败: {type(exc).__name__}: {exc}"
         return {
             "status": status,
             "latency_ms": round((time.perf_counter() - started) * 1_000, 2),
-            "error": None,
+            "error": request_error,
             "payload": response_payload,
         }
 
 
-def _reply_text(result: dict[str, Any]) -> str:
+def _reply_text(result: ProbeResult) -> str:
     payload = result.get("payload")
     actions = payload.get("actions") if isinstance(payload, dict) else None
     if not isinstance(actions, list):
@@ -207,6 +259,8 @@ def _automatic_checks(case_id: str, reply: str) -> dict[str, bool]:
 
 
 def _cleanup(probe: EventProbe, *, user_id: int, group_id: int) -> dict[str, Any]:
+    """通过真实管理命令清理测试会话，并把清理失败纳入报告。"""
+
     result = probe.send(
         "/xc reset confirm",
         user_id=user_id,
@@ -216,16 +270,24 @@ def _cleanup(probe: EventProbe, *, user_id: int, group_id: int) -> dict[str, Any
     return {
         "status": result["status"],
         "reply": _reply_text(result),
+        "error": result["error"],
+        "ok": result["status"] == 200 and result["error"] is None,
     }
 
 
-def _wait_for_store(group_id: int, timeout: float = 5.0) -> list[dict[str, Any]]:
-    path = CHAT_DATA_DIR / f"g{group_id}.json"
+def _wait_for_store(
+    data_dir: Path,
+    group_id: int,
+    timeout: float = 5.0,
+) -> list[dict[str, Any]]:
+    """等待 Core 权威 data_dir 中的会话快照原子发布完成。"""
+
+    path = data_dir / f"g{group_id}.json"
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            payload = _decode_json_value(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, JsonDataError):
             time.sleep(0.1)
             continue
         if isinstance(payload, list):
@@ -234,11 +296,16 @@ def _wait_for_store(group_id: int, timeout: float = 5.0) -> list[dict[str, Any]]
     return []
 
 
-def _run_stale_topic_case(probe: EventProbe, base_group: int) -> dict[str, Any]:
-    """找到一次未插话的旧消息，再用当前新话题验证不追旧话题。"""
+def _run_stale_topic_case(
+    probe: EventProbe,
+    base_group: int,
+    data_dir: Path,
+) -> dict[str, Any]:
+    """找到一次成功观测但未插话的旧消息，再验证当前回复不追旧话题。"""
 
     old_message = "这包烟叼着确实挺有格调"
     current_message = "小青，这个KIMI怎么蛤里蛤气的？只说当前这张图的话题。"
+    attempts: list[dict[str, Any]] = []
     for attempt in range(1, 9):
         group_id = base_group + attempt
         user_id = 880_054_000 + attempt
@@ -249,8 +316,23 @@ def _run_stale_topic_case(probe: EventProbe, base_group: int) -> dict[str, Any]:
             event_time=time.time() - 3 * 86400,
         )
         old_reply = _reply_text(old_result)
-        if old_reply:
-            cleanup = _cleanup(probe, user_id=user_id, group_id=group_id)
+        attempt_result: dict[str, Any] = {
+            "attempt": attempt,
+            "group_id": group_id,
+            "old_status": old_result["status"],
+            "old_error": old_result["error"],
+            "old_reply": old_reply,
+        }
+
+        # 网络/协议失败不是“模型选择不插话”，必须单独留下证据并让门禁失败。
+        old_request_ok = old_result["status"] == 200 and old_result["error"] is None
+        if not old_request_ok or old_reply:
+            attempt_result["cleanup"] = _cleanup(
+                probe,
+                user_id=user_id,
+                group_id=group_id,
+            )
+            attempts.append(attempt_result)
             continue
 
         current_result = probe.send(
@@ -259,10 +341,14 @@ def _run_stale_topic_case(probe: EventProbe, base_group: int) -> dict[str, Any]:
             group_id=group_id,
         )
         current_reply = _reply_text(current_result)
-        stored = _wait_for_store(group_id)
+        stored = _wait_for_store(data_dir, group_id)
         serialized = json.dumps(stored, ensure_ascii=False)
         checks = {
+            "old_request_ok": old_request_ok,
             "old_turn_was_observed_without_reply": not old_reply,
+            "current_request_ok": (
+                current_result["status"] == 200 and current_result["error"] is None
+            ),
             "current_turn_has_reply": bool(current_reply),
             "reply_does_not_return_to_smoke": not any(
                 marker in current_reply for marker in ("烟", "叼着", "格调")
@@ -274,39 +360,49 @@ def _run_stale_topic_case(probe: EventProbe, base_group: int) -> dict[str, Any]:
             "full_store_keeps_current_turn": "KIMI" in serialized,
         }
         cleanup = _cleanup(probe, user_id=user_id, group_id=group_id)
+        attempt_result.update(
+            {
+                "current_status": current_result["status"],
+                "current_error": current_result["error"],
+                "current_reply": current_reply,
+                "cleanup": cleanup,
+            }
+        )
+        attempts.append(attempt_result)
         return {
             "attempt": attempt,
             "group_id": group_id,
             "old_reply": old_reply,
             "current_reply": current_reply,
             "status": current_result["status"],
+            "error": current_result["error"],
             "latency_ms": current_result["latency_ms"],
             "checks": checks,
             "cleanup": cleanup,
+            "attempts": attempts,
+            "all_requests_ok": all(
+                row["old_status"] == 200 and row["old_error"] is None for row in attempts
+            )
+            and current_result["status"] == 200
+            and current_result["error"] is None,
+            "all_cleanups_ok": all(row["cleanup"]["ok"] for row in attempts),
         }
     return {
         "attempt": None,
         "checks": {"found_non_reply_seed": False},
         "cleanup": {},
+        "attempts": attempts,
+        "all_requests_ok": all(
+            row["old_status"] == 200 and row["old_error"] is None for row in attempts
+        ),
+        "all_cleanups_ok": all(row["cleanup"]["ok"] for row in attempts),
     }
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
-    parser.add_argument("--secrets", type=Path, default=DEFAULT_SECRETS)
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--timeout", type=float, default=60.0)
-    args = parser.parse_args()
+def _run_forced_cases(probe: EventProbe) -> list[dict[str, Any]]:
+    """执行必须回复的人设用例，并逐组清理会话。"""
 
-    token, admin_id = _load_auth(args.secrets.resolve())
-    probe = EventProbe(
-        endpoint=args.endpoint,
-        token=token,
-        admin_id=admin_id,
-        timeout=args.timeout,
-    )
-    results = []
+    results: list[dict[str, Any]] = []
     for index, case in enumerate(CASES, 1):
         group_id = 972_232_000 + index
         user_id = 880_053_000 + index
@@ -317,14 +413,20 @@ def main() -> int:
             "message": case.message,
             "reply": reply,
             "status": response["status"],
+            "error": response["error"],
             "latency_ms": response["latency_ms"],
             "checks": _automatic_checks(case.case_id, reply),
             "cleanup": _cleanup(probe, user_id=user_id, group_id=group_id),
         }
         results.append(result)
         print(f"{case.case_id}: {reply or '<NO_REPLY>'}")
+    return results
 
-    participation_attempts = []
+
+def _run_participation_case(probe: EventProbe) -> dict[str, Any]:
+    """最多发送三条低风险群聊线索，验证小青能否自主参与。"""
+
+    attempts: list[dict[str, Any]] = []
     participation_reply = ""
     for attempt in range(1, 4):
         group_id = 972_233_000 + attempt
@@ -335,11 +437,12 @@ def main() -> int:
             group_id=group_id,
         )
         reply = _reply_text(response)
-        participation_attempts.append(
+        attempts.append(
             {
                 "attempt": attempt,
                 "reply": reply,
                 "status": response["status"],
+                "error": response["error"],
                 "latency_ms": response["latency_ms"],
                 "cleanup": _cleanup(probe, user_id=user_id, group_id=group_id),
             }
@@ -347,41 +450,126 @@ def main() -> int:
         if reply:
             participation_reply = reply
             break
+    return {
+        "attempts": attempts,
+        "replied_within_three_cues": bool(participation_reply),
+        "reply": participation_reply,
+        "all_requests_ok": all(row["status"] == 200 and row["error"] is None for row in attempts),
+        "all_cleanups_ok": all(row["cleanup"]["ok"] for row in attempts),
+    }
 
-    stale_topic = _run_stale_topic_case(probe, 972_234_000)
+
+def _run_quality_suite(probe: EventProbe, data_dir: Path) -> dict[str, Any]:
+    """按固定顺序执行质量用例并生成可审计报告。"""
+
+    started_at = datetime.now(UTC).isoformat()
+    results = _run_forced_cases(probe)
+    participation = _run_participation_case(probe)
+    stale_topic = _run_stale_topic_case(probe, 972_234_000, data_dir)
+
     question_endings = sum(
         result["reply"].rstrip().endswith(("?", "？")) for result in results if result["reply"]
     )
     all_checks = [passed for result in results for passed in result["checks"].values()]
     all_checks.extend(stale_topic.get("checks", {}).values())
-    report = {
-        "schema_version": 1,
-        "generated_at": datetime.now(UTC).isoformat(),
+    forced_requests_ok = all(
+        result["status"] == 200 and result["error"] is None for result in results
+    )
+    forced_cleanups_ok = all(result["cleanup"]["ok"] for result in results)
+    all_requests_ok = (
+        forced_requests_ok and participation["all_requests_ok"] and stale_topic["all_requests_ok"]
+    )
+    all_cleanups_ok = (
+        forced_cleanups_ok and participation["all_cleanups_ok"] and stale_topic["all_cleanups_ok"]
+    )
+    forced_replies = sum(bool(result["reply"]) for result in results)
+    all_machine_checks_passed = all(all_checks)
+    gate_passed = (
+        forced_replies == len(results)
+        and all_machine_checks_passed
+        and participation["replied_within_three_cues"]
+        and all_requests_ok
+        and all_cleanups_ok
+    )
+    finished_at = datetime.now(UTC).isoformat()
+    return {
+        "schema_version": 2,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "generated_at": finished_at,
+        "endpoint": probe.endpoint,
+        "chat_data_dir": str(data_dir),
+        "timeout_seconds": probe.timeout,
+        "message_id_seed": probe.message_id_seed,
         "cases": results,
-        "participation": {
-            "attempts": participation_attempts,
-            "replied_within_three_cues": bool(participation_reply),
-            "reply": participation_reply,
-        },
+        "participation": participation,
         "stale_topic": stale_topic,
         "aggregate": {
-            "forced_replies": sum(bool(result["reply"]) for result in results),
+            "forced_replies": forced_replies,
             "forced_cases": len(results),
             "question_endings": question_endings,
-            "all_machine_checks_passed": all(all_checks),
+            "all_machine_checks_passed": all_machine_checks_passed,
+            "all_requests_ok": all_requests_ok,
+            "all_cleanups_ok": all_cleanups_ok,
         },
+        "gate_passed": gate_passed,
     }
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """构造可被测试和统一 UAT 复用的命令行契约。"""
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
+    parser.add_argument("--secrets", type=Path, default=DEFAULT_SECRETS)
+    parser.add_argument(
+        "--chat-data-dir",
+        type=Path,
+        default=DEFAULT_CHAT_DATA_DIR,
+        help="xiaoqing_chat 的 Core 权威 data_dir；默认 data/xiaoqing_chat",
     )
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--timeout", type=float, default=60.0)
+    parser.add_argument(
+        "--message-id-seed",
+        type=int,
+        help="固定 OneBot message_id 起点以复现实验；默认使用当前微秒时间",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
+        parser.error("--timeout 必须是正数")
+    if args.message_id_seed is not None and args.message_id_seed <= 0:
+        parser.error("--message-id-seed 必须是正整数")
+    if args.output.exists():
+        parser.error(f"--output 已存在，拒绝覆盖: {args.output}")
+
+    data_dir = args.chat_data_dir.resolve()
+    if not data_dir.is_dir():
+        parser.error(f"--chat-data-dir 不存在或不是目录: {data_dir}")
+    try:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        parser.error(f"无法创建报告目录: {type(exc).__name__}: {exc}")
+
+    token, admin_id = _load_auth(args.secrets.resolve())
+    message_id_seed = args.message_id_seed or time.time_ns() // 1_000
+    probe = EventProbe(
+        endpoint=args.endpoint,
+        token=token,
+        admin_id=admin_id,
+        timeout=args.timeout,
+        message_id_seed=message_id_seed,
+    )
+    report = _run_quality_suite(probe, data_dir)
+    with args.output.open("x", encoding="utf-8") as report_file:
+        report_file.write(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     print(f"report={args.output.resolve()}")
-    gate_passed = (
-        report["aggregate"]["forced_replies"] == len(results)
-        and report["aggregate"]["all_machine_checks_passed"]
-        and report["participation"]["replied_within_three_cues"]
-    )
+    gate_passed = bool(report["gate_passed"])
     print(f"gate_passed={gate_passed}")
     return 0 if gate_passed else 1
 

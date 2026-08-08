@@ -93,10 +93,9 @@ def test_username_validator_rejects_ambiguous_values(username: str) -> None:
 
 
 class TestQingsshRuntimeContract:
-    """Use imported runtime objects for the public SSH contract."""
+    """使用真实导入对象验证 SSH 插件公开契约。"""
 
     def test_entrypoints_and_help(self):
-        assert qingssh_main.init() is None
         assert callable(qingssh_main.handle)
         assert callable(qingssh_main.handle_session)
         assert callable(qingssh_main.cleanup)

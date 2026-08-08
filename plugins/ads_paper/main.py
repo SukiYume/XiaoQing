@@ -1,7 +1,4 @@
-"""
-论文与文献管理插件
-提供论文搜索、笔记管理、AI摘要等功能
-"""
+"""ADS Paper 插件入口：解析命令并把职责分派到本地存储或远程 ADS 服务。"""
 
 import logging
 from collections.abc import Awaitable, Callable
@@ -17,13 +14,16 @@ from .storage import PaperStorage
 logger = logging.getLogger(__name__)
 
 
-def init(context=None) -> None:
-    """插件初始化"""
+def init(context: PluginContextProtocol | None = None) -> None:
+    """记录插件代际初始化；当前插件没有需要预热的独占资源。"""
+
+    # 保留 context 参数是插件生命周期契约的一部分，资源由每次命令按需取得。
+    del context
     logger.info("ADS Paper 插件已初始化")
 
 
 def _get_ads_token(context: PluginContextProtocol) -> str:
-    """获取ADS Token"""
+    """从当前不可变配置快照读取插件私有 ADS Token。"""
     token = context.get_settings_snapshot().plugin_secrets("ads_paper").get("ads_token", "")
     if isinstance(token, str) and token:
         logger.debug("成功获取 ADS Token，长度: %s", len(token))
@@ -44,16 +44,15 @@ def _require_user_id(event: dict[str, Any]) -> int:
     return user_id
 
 
-def _get_storage(context) -> PaperStorage:
-    state = getattr(context, "state", None)
-    if isinstance(state, dict):
-        storage = state.get("paper_storage")
-        if isinstance(storage, PaperStorage):
-            return storage
-        storage = PaperStorage(context.data_dir)
-        state["paper_storage"] = storage
+def _get_storage(context: PluginContextProtocol) -> PaperStorage:
+    """在当前插件代际内复用存储实例及其目录级锁。"""
+
+    storage = context.state.get("paper_storage")
+    if isinstance(storage, PaperStorage):
         return storage
-    return PaperStorage(context.data_dir)
+    storage = PaperStorage(context.data_dir)
+    context.state["paper_storage"] = storage
+    return storage
 
 
 async def handle(
@@ -62,7 +61,7 @@ async def handle(
     event: dict[str, Any],
     context: PluginContextProtocol,
 ) -> Segments:
-    """命令处理入口"""
+    """处理 ``/paper`` 命令；本地功能不依赖 ADS Token。"""
     try:
         logger.info("收到 ADS Paper 命令: %s %s", command, args)
         command_parts = args.strip().split(maxsplit=1)
@@ -82,16 +81,18 @@ async def handle(
         storage = _get_storage(context)
         user_id = _require_user_id(event)
         logger.debug("用户 ID: %s", user_id)
+
+        # 本地命令只访问按用户隔离的文件，不应因 ADS 未配置而失效。
+        if subcommand == "refs":
+            if subcommand_args.strip():
+                return segments("❌ 用法: /paper refs")
+            return await ai_commands.cmd_refs(storage, context, user_id)
+
         local_commands: dict[str, Callable[[], Awaitable[Segments]]] = {
             "note": lambda: note_commands.cmd_note(storage, subcommand_args, user_id),
             "writing": lambda: note_commands.cmd_writing(storage, subcommand_args, user_id),
             "topics": lambda: note_commands.cmd_topics(storage, subcommand_args, user_id),
             "deadline": lambda: note_commands.cmd_deadline(storage, subcommand_args, user_id),
-            "refs": lambda: (
-                ai_commands.cmd_refs(storage, context, user_id)
-                if not subcommand_args.strip()
-                else _invalid_no_arg_command("/paper refs")
-            ),
         }
         local_handler = local_commands.get(subcommand)
         if local_handler is not None:
@@ -147,12 +148,6 @@ async def handle(
             logger=logger,
             component="ads_paper.handle",
         )
-
-
-async def _invalid_no_arg_command(usage: str) -> Segments:
-    """让无参数命令在通用异步路由表中返回一致的语法错误。"""
-
-    return segments(f"❌ 用法: {usage}")
 
 
 def _show_help() -> Segments:

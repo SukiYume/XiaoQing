@@ -76,11 +76,14 @@ def _fetch_value(path: Path, sql: str) -> object:
     try:
         return connection.execute(sql).fetchone()[0]
     finally:
-            connection.close()
+        connection.close()
 
 
 def test_timezone_migration_cli_default_matches_runtime_data_directory() -> None:
-    assert _default_database_path() == Path(__file__).resolve().parents[2] / "data" / "pendo" / "pendo.db"
+    assert (
+        _default_database_path()
+        == Path(__file__).resolve().parents[2] / "data" / "pendo" / "pendo.db"
+    )
 
 
 def test_timezone_migration_dry_run_reports_four_forms_without_writing(tmp_path: Path) -> None:

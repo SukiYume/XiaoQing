@@ -117,8 +117,7 @@ def _queue_success(
     )
 
 
-def test_init_and_help_describe_current_contract() -> None:
-    assert signin.init() is None
+def test_help_describes_current_contract() -> None:
     help_text = signin._HELP_TEXT
     assert "/signin yingshi" in help_text
     assert "plugins.signin.yingshijufeng" in help_text

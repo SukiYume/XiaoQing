@@ -42,8 +42,8 @@ try:
     PARAMIKO_AVAILABLE = True
 except ImportError:
     PARAMIKO_AVAILABLE = False
-    paramiko = None  # type: ignore
-    SSHConfig = None  # type: ignore
+    paramiko = cast(Any, None)
+    SSHConfig = cast(Any, None)
 
 logger = logging.getLogger(__name__)
 _CURRENT_REQUEST_CONTEXT: ContextVar[Any | None] = ContextVar(
@@ -339,7 +339,7 @@ class SSHManager:
 
     @property
     def context(self) -> Any | None:
-        """Return the request context bound to this task, or the lifecycle base."""
+        """返回当前任务绑定的请求上下文，否则回退到生命周期上下文。"""
 
         return _CURRENT_REQUEST_CONTEXT.get() or self._base_context
 
@@ -416,6 +416,8 @@ class SSHManager:
                     "warning",
                     f"SSH known_hosts load status=failed error_type={audit_error_type(exc)}",
                 )
+
+    # ──────────────────── 初始化与持久化配置 ────────────────────
 
     async def initialize(self) -> None:
         """仅初始化一次，避免并发入口重复加载并覆盖配置。"""
@@ -551,6 +553,8 @@ class SSHManager:
                 "warning",
                 f"SSH config load status=failed error_type={audit_error_type(exc)}",
             )
+
+    # ──────────────────── OpenSSH config 导入 ────────────────────
 
     def get_ssh_config_hosts(self) -> list[str]:
         """获取 ~/.ssh/config 中的所有 Host 名称"""
@@ -806,6 +810,8 @@ class SSHManager:
         """返回全部配置的防御性副本。"""
 
         return deepcopy(self.servers)
+
+    # ──────────────────── 连接索引与资源回收 ────────────────────
 
     @staticmethod
     def build_connection_key(user_id: object, group_id: object | None, name: str) -> str:
@@ -1293,6 +1299,8 @@ class SSHManager:
             )
         return active_list
 
+    # ──────────────────── 远端命令执行与终止 ────────────────────
+
     async def stop_command(
         self,
         user_id: str,
@@ -1630,6 +1638,8 @@ class SSHManager:
                 component="qingssh.execute",
             )
 
+    # ──────────────────── SFTP 文件读取 ────────────────────
+
     async def download_file(
         self,
         user_id: str,
@@ -1746,6 +1756,8 @@ class SSHManager:
                         f"SFTP close status=failed error_type={audit_error_type(exc)}",
                     )
 
+    # ──────────────────── 生命周期关闭 ────────────────────
+
     def close_all(self) -> None:
         """关闭全部连接和命令通道，供卸载或重启流程调用。"""
 
@@ -1766,8 +1778,8 @@ class SSHManager:
 async def get_manager(context: Any) -> SSHManager:
     """获取上下文共享的管理器，并在并发初始化前先发布唯一实例。"""
 
-    # ContextVar follows the current event-loop task, so a long-running command
-    # keeps its initiating request ID even when another request reuses this manager.
+    # ContextVar 跟随当前事件循环任务，因此长命令会持续保留其发起请求 ID；
+    # 其他请求复用同一管理器时不会覆盖该审计上下文。
     _CURRENT_REQUEST_CONTEXT.set(context)
 
     state = getattr(context, "state", None)

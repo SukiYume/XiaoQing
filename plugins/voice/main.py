@@ -1,13 +1,11 @@
-"""通过 Azure Speech 提供有界的文字转语音和内部语音识别能力。"""
+"""通过 Azure Speech 提供有界的文字转语音能力。"""
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
-import io
 import logging
 import re
-import wave
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,10 +21,8 @@ from core.bounded_file_cache import BoundedFileCache, FileCacheLimits
 from core.bounded_http import (
     BodyLimits,
     HttpStatusError,
-    JsonLimits,
     MimePolicy,
     aiohttp_request_bounded,
-    parse_bounded_json,
 )
 from core.interfaces import PluginSettingsSnapshot
 from core.plugin_base import has_control_characters as _has_control_chars
@@ -61,9 +57,7 @@ DEFAULT_STYLE = "cheerful"
 DEFAULT_ROLE = "Girl"
 
 MAX_TTS_TEXT_LENGTH = 500
-MAX_STT_RESULT_LENGTH = 3_000
 MAX_AUDIO_BYTES = 10 * 1024 * 1024
-MAX_AUDIO_SECONDS = 120
 MAX_CACHE_BYTES = 256 * 1024 * 1024
 MAX_PROXY_LENGTH = 2_048
 
@@ -72,12 +66,7 @@ _REGION_PATTERN = re.compile(r"[a-z0-9-]{1,32}\Z")
 _VOICE_NAME_PATTERN = re.compile(r"[A-Za-z0-9-]{1,128}\Z")
 _VOICE_OPTION_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
 _HELP_ALIASES = frozenset({"help", "帮助"})
-_HELP_TEXT = (
-    "🔊 语音功能使用方法：\n\n"
-    "文字转语音：/语音 <文本>、/念 <文本> 或 /tts <文本>\n"
-    "示例：/语音 你好，我是小青\n\n"
-    "当前只公开文字转语音命令；speech_to_text() 仅供插件内部调用。"
-)
+_HELP_TEXT = "🔊 文字转语音\n用法：/语音 <文本>\n别名：/念、/tts\n示例：/语音 你好，我是小青"
 
 _VOICE_SEMAPHORE = asyncio.Semaphore(2)
 _TTS_LOCKS = AsyncKeyedLockPool(max_keys=4_096)
@@ -94,15 +83,6 @@ _TTS_MIME = MimePolicy(
     exact=frozenset({"application/octet-stream"}),
     type_prefixes=frozenset({"audio/"}),
 )
-_STT_BODY_LIMITS = BodyLimits(
-    max_wire_bytes=1024 * 1024,
-    max_decoded_bytes=2 * 1024 * 1024,
-)
-_STT_JSON_LIMITS = JsonLimits(max_bytes=_STT_BODY_LIMITS.max_decoded_bytes)
-_STT_JSON_MIME = MimePolicy(
-    exact=frozenset({"application/json"}),
-    structured_suffixes=frozenset({"+json"}),
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,11 +97,9 @@ class _VoiceSettings:
     proxy: str | None
 
 
-def init(context: Context | None = None) -> None:
-    """记录插件加载完成。"""
-
-    del context
-    logger.info("语音功能插件已加载")
+# ---------------------------------------------------------------------------
+# 配置读取与输入收窄
+# ---------------------------------------------------------------------------
 
 
 def _get_config(context: Context) -> Mapping[str, object]:
@@ -182,7 +160,7 @@ def _get_proxy(config: Mapping[str, object]) -> str | None:
 
 
 def _get_settings(context: Context) -> _VoiceSettings | None:
-    """构造 TTS/STT 共用配置；缺少订阅密钥时明确返回 ``None``。"""
+    """构造 TTS 配置；缺少订阅密钥时明确返回 ``None``。"""
 
     config = _get_config(context)
     subscription_key = _clean_config_text(
@@ -222,6 +200,11 @@ def _get_settings(context: Context) -> _VoiceSettings | None:
     )
 
 
+# ---------------------------------------------------------------------------
+# 音频缓存与 Azure TTS 请求
+# ---------------------------------------------------------------------------
+
+
 def _looks_like_mp3(payload: bytes) -> bool:
     """检查常见 ID3 或 MPEG 音频帧头，拒绝 HTML/JSON 等伪音频响应。"""
 
@@ -251,41 +234,6 @@ def _get_cached_audio(cache: BoundedFileCache, filename: str) -> Path | None:
     except OSError:
         logger.warning("无法移除损坏的 TTS 缓存文件")
     return None
-
-
-def _read_valid_wav(path: Path) -> bytes | None:
-    """一次性有界读取并验证 Azure STT 声明所要求的 PCM WAV。"""
-
-    try:
-        if path.is_symlink() or not path.is_file():
-            return None
-        with path.open("rb") as stream:
-            payload_buffer = bytearray(MAX_AUDIO_BYTES + 1)
-            payload_size = stream.readinto(payload_buffer)
-            payload = bytes(payload_buffer[:payload_size])
-    except OSError:
-        return None
-    if not payload or len(payload) > MAX_AUDIO_BYTES:
-        return None
-
-    try:
-        with wave.open(io.BytesIO(payload), "rb") as wav:
-            frame_count = wav.getnframes()
-            frame_rate = wav.getframerate()
-            valid_format = (
-                wav.getcomptype() == "NONE"
-                and wav.getnchannels() == 1
-                and wav.getsampwidth() == 2
-                and frame_rate == 16_000
-            )
-            if not valid_format or frame_count <= 0 or frame_count / frame_rate > MAX_AUDIO_SECONDS:
-                return None
-            # wave 头声明的帧数必须与实际 PCM 数据一致，避免上传截断文件。
-            if len(wav.readframes(frame_count)) != frame_count * 2:
-                return None
-    except (EOFError, OSError, wave.Error):
-        return None
-    return payload
 
 
 def _tts_cache_key(text: str, settings: _VoiceSettings) -> str:
@@ -383,89 +331,9 @@ async def text_to_speech(text: str, context: Context) -> str | None:
         return None
 
 
-async def speech_to_text(audio_path: str, context: Context) -> tuple[str, str] | None:
-    """识别有限的 16 kHz、单声道、16 位 PCM WAV，供其他插件内部调用。"""
-
-    settings = _get_settings(context)
-    if settings is None:
-        logger.warning("Azure STT 未配置 subscription_key")
-        return None
-
-    try:
-        path = Path(audio_path)
-        audio_data = await asyncio.to_thread(_read_valid_wav, path)
-        if audio_data is None:
-            logger.warning("Azure STT 拒绝了无效或超限的 PCM WAV")
-            return None
-
-        url = (
-            f"https://{settings.region}.stt.speech.microsoft.com/"
-            "speech/recognition/conversation/cognitiveservices/v1"
-            "?language=zh-CN&format=detailed"
-        )
-        headers = {
-            "Ocp-Apim-Subscription-Key": settings.subscription_key,
-            "Content-Type": "audio/wav; codecs=audio/pcm; samplerate=16000",
-            "Accept": "application/json",
-        }
-        request_kwargs: dict[str, Any] = {
-            "data": audio_data,
-            "timeout": _AZURE_API_TIMEOUT,
-        }
-        if settings.proxy is not None:
-            request_kwargs["proxy"] = settings.proxy
-
-        async with _VOICE_SEMAPHORE:
-            try:
-                response = await aiohttp_request_bounded(
-                    context.http_session,
-                    "POST",
-                    url,
-                    limits=_STT_BODY_LIMITS,
-                    mime_policy=_STT_JSON_MIME,
-                    headers=headers,
-                    request_kwargs=request_kwargs,
-                )
-            except HttpStatusError as exc:
-                logger.error("Azure STT API 返回非成功状态：%s", exc.status)
-                return None
-
-        data = parse_bounded_json(response, limits=_STT_JSON_LIMITS)
-        if not isinstance(data, dict):
-            raise ValueError("Azure STT 响应不是 JSON 对象")
-        candidates = data.get("NBest")
-        if (
-            not isinstance(candidates, list)
-            or not candidates
-            or not isinstance(candidates[0], dict)
-        ):
-            logger.warning("Azure STT 未识别到语音内容")
-            return None
-
-        lexical = candidates[0].get("Lexical")
-        display = candidates[0].get("Display")
-        if not isinstance(lexical, str) or not isinstance(display, str):
-            logger.warning("Azure STT 返回了无效的识别字段")
-            return None
-        lexical = lexical.strip()
-        display = display.strip()
-        if (
-            not lexical
-            or not display
-            or len(lexical) > MAX_STT_RESULT_LENGTH
-            or len(display) > MAX_STT_RESULT_LENGTH
-        ):
-            logger.warning("Azure STT 识别文本为空或超过长度上限")
-            return None
-        logger.info(
-            "Azure STT 识别完成：lexical_length=%d display_length=%d",
-            len(lexical),
-            len(display),
-        )
-        return lexical, display
-    except Exception as exc:
-        public_error_message(context, exc, logger=logger, component="voice.stt")
-        return None
+# ---------------------------------------------------------------------------
+# 聊天命令与插件服务
+# ---------------------------------------------------------------------------
 
 
 async def handle(

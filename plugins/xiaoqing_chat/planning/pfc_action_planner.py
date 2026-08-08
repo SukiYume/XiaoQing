@@ -36,6 +36,19 @@ _ALLOWED_PLANNER_ACTIONS = frozenset(
     }
 )
 
+
+def _log_planner_step(fields: dict[str, Any]) -> None:
+    """规划不依赖日志可用性；日志边界失败时只跳过本条观测。"""
+
+    try:
+        _logger.info(
+            "xiaoqing_chat step=%s",
+            json.dumps(fields, ensure_ascii=False),
+        )
+    except Exception:
+        return
+
+
 PROMPT_INITIAL_REPLY_COMPACT = """{persona_text}。你在QQ{channel}闲聊。
 
 目标：
@@ -298,55 +311,34 @@ async def plan_next_action(
             max_retry=int(max_retry),
             retry_interval_seconds=float(retry_interval_seconds),
         )
-        try:
-            _logger.info(
-                "xiaoqing_chat step=%s",
-                json.dumps(
-                    {
-                        "step": "pfc.planner.ok",
-                        "elapsed_s": round(time.monotonic() - t0, 3),
-                        "model": model,
-                        "endpoint": _path,
-                        "prompt_chars": len(prompt),
-                    },
-                    ensure_ascii=False,
-                ),
-            )
-        except Exception:
-            pass
+        _log_planner_step(
+            {
+                "step": "pfc.planner.ok",
+                "elapsed_s": round(time.monotonic() - t0, 3),
+                "model": model,
+                "endpoint": _path,
+                "prompt_chars": len(prompt),
+            }
+        )
     except TimeoutError:
-        try:
-            _logger.info(
-                "xiaoqing_chat step=%s",
-                json.dumps(
-                    {
-                        "step": "pfc.planner.timeout",
-                        "timeout_s": float(timeout_seconds),
-                        "model": model,
-                        "prompt_chars": len(prompt),
-                    },
-                    ensure_ascii=False,
-                ),
-            )
-        except Exception:
-            pass
+        _log_planner_step(
+            {
+                "step": "pfc.planner.timeout",
+                "timeout_s": float(timeout_seconds),
+                "model": model,
+                "prompt_chars": len(prompt),
+            }
+        )
         return PFCPlan(action=fallback_action, reason="planner_timeout")
     except Exception as exc:
-        try:
-            _logger.info(
-                "xiaoqing_chat step=%s",
-                json.dumps(
-                    {
-                        "step": "pfc.planner.error",
-                        "error_type": type(exc).__name__,
-                        "timeout_s": float(timeout_seconds),
-                        "model": model,
-                    },
-                    ensure_ascii=False,
-                ),
-            )
-        except Exception:
-            pass
+        _log_planner_step(
+            {
+                "step": "pfc.planner.error",
+                "error_type": type(exc).__name__,
+                "timeout_s": float(timeout_seconds),
+                "model": model,
+            }
+        )
         return PFCPlan(action=fallback_action, reason="planner_failed")
     content = (((resp.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
     ok, obj = get_items_from_json(

@@ -50,9 +50,7 @@ async def test_download_url_bytes_rejects_oversized_stream(mock_context):
 
 
 def test_media_candidates_use_registry_without_legacy_vision_selection(mock_context):
-    runtime = _make_media_runtime()
-
-    secrets = _resolve_media_llm_secret_candidates(mock_context, runtime)[0]
+    secrets = _resolve_media_llm_secret_candidates(mock_context)[0]
 
     assert secrets["model"] == "glm-4.6v-flash"
     assert secrets["_vision_enabled"] is True

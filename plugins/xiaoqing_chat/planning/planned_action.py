@@ -1,3 +1,5 @@
+"""定义一次回复规划产生的不可变动作数据。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

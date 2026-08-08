@@ -251,11 +251,6 @@ class PluginRuntimeMixin:
 
         return sorted(self._plugin_runtime_names())
 
-    def is_quarantined(self, name: str) -> bool:
-        """Return whether automatic lifecycle operations are blocked for a plugin."""
-
-        return name in self._quarantined_plugins
-
     def _quarantine_undrained_gate(
         self,
         name: str,

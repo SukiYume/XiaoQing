@@ -46,8 +46,8 @@ def test_ruff_enforces_project_complexity_ceiling() -> None:
     assert ruff["mccabe"]["max-complexity"] == 30
 
 
-def test_mypy_checks_runtime_trees_and_caps_core_debt_by_lines() -> None:
-    """Core 豁免按真实物理行数设上限，不能用小文件数掩盖大面积盲区。"""
+def test_mypy_checks_runtime_trees_without_core_exclusions() -> None:
+    """Core 已完成类型迁移，任何新增的文件级豁免都必须被门禁拒绝。"""
 
     config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     mypy = config["tool"]["mypy"]
@@ -67,8 +67,7 @@ def test_mypy_checks_runtime_trees_and_caps_core_debt_by_lines() -> None:
         "core/logging_config.py",
         "core/safe_http.py",
     }.isdisjoint(core_debt)
-    # Ratchet: core type debt may only shrink; never raise this ceiling to admit growth.
-    assert sum(core_debt.values()) <= 8_140
+    assert core_debt == {}
 
 
 def test_gitattributes_define_cross_platform_text_policy() -> None:

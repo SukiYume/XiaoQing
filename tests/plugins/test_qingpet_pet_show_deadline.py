@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from plugins.qingpet import main as qingpet_main
-from plugins.qingpet.services import database as database_module
+from plugins.qingpet.services import database_clock
 from plugins.qingpet.services.database import Database
 from plugins.qingpet.services.pet_service import PetService
 from plugins.qingpet.services.user_service import UserService
@@ -25,7 +25,7 @@ TARGET_ID = "target"
 @pytest.fixture
 def show_context(monkeypatch):
     current_time = [BASE_TIME]
-    monkeypatch.setattr(database_module, "utc_now", lambda: current_time[0])
+    monkeypatch.setattr(database_clock, "now", lambda: current_time[0])
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as file:
         db_path = file.name
     database = Database(db_path)

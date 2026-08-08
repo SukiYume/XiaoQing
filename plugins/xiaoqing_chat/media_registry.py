@@ -14,7 +14,7 @@ import time
 from collections.abc import Sequence
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from core.atomic_store import keyed_path_lock
 
@@ -35,10 +35,7 @@ def _clean_text(value: Any) -> str:
 
 
 def _clean_text_list(values: Any) -> list[str]:
-    if isinstance(values, (list, tuple, set)):
-        items = values
-    else:
-        items = [values]
+    items = values if isinstance(values, (list, tuple, set)) else [values]
     cleaned: list[str] = []
     for item in items:
         text = _clean_text(item)
@@ -421,19 +418,19 @@ def rebuild_message_content(
 
     matches = list(_MEDIA_MARKER_RE.finditer(text))
     if matches:
-        parts: list[str] = []
+        marker_parts: list[str] = []
         cursor = 0
         marker_index = 0
         for match in matches:
-            parts.append(text[cursor : match.start()])
+            marker_parts.append(text[cursor : match.start()])
             if marker_index < len(markers):
-                parts.append(markers[marker_index])
+                marker_parts.append(markers[marker_index])
                 marker_index += 1
             else:
-                parts.append(match.group(0))
+                marker_parts.append(match.group(0))
             cursor = match.end()
-        parts.append(text[cursor:])
-        rebuilt = "".join(parts).strip()
+        marker_parts.append(text[cursor:])
+        rebuilt = "".join(marker_parts).strip()
     else:
         rebuilt = text
 
@@ -496,7 +493,7 @@ class MediaRegistryStore(LockedDirtyStateMixin, StoreBase):
             self._revision += 1
 
     def _index_path(self) -> Path | None:
-        return self._resolve_path("media", "index.json")
+        return cast(Path | None, self._resolve_path("media", "index.json"))
 
     @staticmethod
     def _entries_from_payload(payload: Any) -> dict[str, dict[str, Any]]:

@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from core.plugin_base import has_control_characters
 from plugins.dict import main as dict_plugin
 from tests.helpers.assertions import text_segments_text
 
@@ -267,7 +268,7 @@ def test_manifest_and_every_packaged_row_are_consistent() -> None:
             assert destination == destination.strip()
             assert len(source) <= dict_plugin.MAX_SOURCE_CHARS
             assert len(destination) <= dict_plugin.MAX_DESTINATION_CHARS
-            assert not dict_plugin._contains_control_characters(source + destination)
+            assert not has_control_characters(source + destination)
             assert (source, destination) not in pairs
             pairs.add((source, destination))
 

@@ -822,68 +822,6 @@ class TestRemoveJob:
 
 
 # ============================================================
-# clear_prefix 测试
-# ============================================================
-
-
-class TestClearPrefix:
-    """clear_prefix 方法测试"""
-
-    @pytest.mark.asyncio
-    async def test_clear_prefix_removes_matching_jobs(self, scheduler: SchedulerManager):
-        """测试清除指定前缀的任务"""
-
-        def dummy():
-            pass
-
-        scheduler.add_job("plugin1.job1", dummy, {"second": "*/1"})
-        scheduler.add_job("plugin1.job2", dummy, {"second": "*/1"})
-        scheduler.add_job("plugin2.job1", dummy, {"second": "*/1"})
-        scheduler.add_job("standalone", dummy, {"second": "*/1"})
-
-        scheduler.clear_prefix("plugin1.")
-
-        jobs = scheduler.scheduler.get_jobs()
-        job_ids = [job.id for job in jobs]
-
-        assert "plugin1.job1" not in job_ids
-        assert "plugin1.job2" not in job_ids
-        assert "plugin2.job1" in job_ids
-        assert "standalone" in job_ids
-
-    @pytest.mark.asyncio
-    async def test_clear_prefix_removes_all_with_prefix(self, scheduler: SchedulerManager):
-        """测试清除所有带前缀的任务"""
-
-        def dummy():
-            pass
-
-        for i in range(5):
-            scheduler.add_job(f"prefix.job{i}", dummy, {"second": "*/1"})
-
-        scheduler.clear_prefix("prefix.")
-
-        job_ids = [job.id for job in scheduler.scheduler.get_jobs()]
-        assert not any(id.startswith("prefix.") for id in job_ids)
-
-    @pytest.mark.asyncio
-    async def test_clear_prefix_empty_prefix(self, scheduler: SchedulerManager):
-        """测试空前缀（应该移除所有任务）"""
-
-        def dummy():
-            pass
-
-        scheduler.add_job("job1", dummy, {"second": "*/1"})
-        scheduler.add_job("job2", dummy, {"second": "*/1"})
-
-        scheduler.clear_prefix("")
-
-        # 空前缀意味着所有任务都匹配
-        job_ids = [job.id for job in scheduler.scheduler.get_jobs()]
-        assert len(job_ids) == 0
-
-
-# ============================================================
 # 任务执行测试
 # ============================================================
 

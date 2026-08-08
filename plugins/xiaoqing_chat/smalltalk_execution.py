@@ -1,8 +1,11 @@
+"""执行小聊生成结果，并在投递确认后原子提交相关状态。"""
+
 from __future__ import annotations
 
 import asyncio
 import random
 import time
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -20,7 +23,12 @@ from .planning.planned_action import PlannedAction
 from .task_scheduler import _create_task_safely
 
 if TYPE_CHECKING:
-    from .runtime_state import _ChatRuntime
+    from .handler_context import HandlerContext
+    from .runtime_state import ChatRuntimeState, _ChatRuntime
+    from .smalltalk_models import _GeneratedSmalltalkTurn, _PreparedSmalltalkTurn
+
+
+# 人性化延迟与批次文本估算
 
 
 def _fallback_idle_reply(runtime: _ChatRuntime) -> str:
@@ -49,13 +57,13 @@ def _compute_typing_delay(
 ) -> float:
     """读消息 + 打字的总延迟，单位秒。返回 0 表示禁用。"""
     cfg = runtime.cfg.humanize
-    if not cfg.enable_typing_delay:
+    if not bool(cfg.enable_typing_delay):
         return 0.0
-    read_base = cfg.read_base_seconds
-    read_per = cfg.read_per_char_seconds
-    type_per = cfg.type_per_char_seconds
-    jitter = cfg.jitter_ratio
-    cap = cfg.max_total_delay_seconds
+    read_base = float(cfg.read_base_seconds)
+    read_per = float(cfg.read_per_char_seconds)
+    type_per = float(cfg.type_per_char_seconds)
+    jitter = float(cfg.jitter_ratio)
+    cap = float(cfg.max_total_delay_seconds)
     in_len = len(str(input_text or ""))
     out_len = len(str(output_text or ""))
     raw = (read_base + read_per * in_len) + (type_per * out_len)
@@ -67,17 +75,17 @@ def _compute_typing_delay(
 
 def _compute_interbubble_delay(runtime: _ChatRuntime) -> float:
     cfg = runtime.cfg.humanize
-    if not cfg.enable_typing_delay:
+    if not bool(cfg.enable_typing_delay):
         return 0.0
-    lo = max(0.0, cfg.interbubble_min_seconds)
-    hi = max(lo, cfg.interbubble_max_seconds)
+    lo = max(0.0, float(cfg.interbubble_min_seconds))
+    hi = max(lo, float(cfg.interbubble_max_seconds))
     if hi <= 0:
         return 0.0
     return random.uniform(lo, hi)
 
 
 def _humanize_apply_to_forced(runtime: _ChatRuntime) -> bool:
-    return runtime.cfg.humanize.apply_to_forced
+    return bool(runtime.cfg.humanize.apply_to_forced)
 
 
 def _batch_text_length(batch: Any) -> int:
@@ -101,11 +109,11 @@ def _batch_text_length(batch: Any) -> int:
 class _SmalltalkFinalization:
     """单次收尾生命周期使用的受限输入与注入操作。"""
 
-    prepared: Any
-    generated: Any
+    prepared: _PreparedSmalltalkTurn
+    generated: _GeneratedSmalltalkTurn
     event: dict[str, Any]
     context: Any
-    hctx: Any
+    hctx: HandlerContext
     started_at: float
     get_lock: Any
     most_recent_user_local_id: Any
@@ -125,20 +133,20 @@ class _SmalltalkFinalization:
     log_step: Any
 
     @property
-    def runtime(self):
+    def runtime(self) -> _ChatRuntime:
         return self.hctx.runtime
 
     @property
-    def state(self):
+    def state(self) -> ChatRuntimeState:
         return self.hctx.state
 
     @property
-    def chat_id(self):
-        return self.hctx.chat_id
+    def chat_id(self) -> str:
+        return str(self.hctx.chat_id)
 
     @property
-    def bot_name(self):
-        return self.hctx.bot_name
+    def bot_name(self) -> str:
+        return str(self.hctx.bot_name)
 
 
 async def _execute_planner_wait(result: PFCRunResult) -> None:
@@ -152,12 +160,12 @@ async def _execute_planner_wait(result: PFCRunResult) -> None:
 
 
 async def generate_smalltalk_turn_impl(
-    prepared,
+    prepared: _PreparedSmalltalkTurn,
     event: dict[str, Any],
-    context,
-    hctx,
+    context: Any,
+    hctx: HandlerContext,
     *,
-    generated_turn_factory,
+    generated_turn_factory: Callable[[], _GeneratedSmalltalkTurn],
     ensure_user_message_recorded,
     get_lock,
     generate_reply_result,
@@ -169,7 +177,7 @@ async def generate_smalltalk_turn_impl(
     clear_store_entry,
     log_step,
     build_text_message_parts,
-):
+) -> _GeneratedSmalltalkTurn:
     runtime, state, chat_id = hctx.runtime, hctx.state, hctx.chat_id
     bot_name, secrets, data_dir = hctx.bot_name, hctx.secrets, hctx.data_dir
     generated = generated_turn_factory()
@@ -408,6 +416,9 @@ async def generate_smalltalk_turn_impl(
         raise
 
 
+# 投递前准备与状态提交
+
+
 def _drop_stale_generated_turn(
     finalization: _SmalltalkFinalization,
     *,
@@ -569,34 +580,37 @@ async def _record_delivered_reply(
         generated.local_id,
     )
     if prepared.forced:
-        return await finalization.record_bot_reply(
-            *common_args,
-            forced=True,
-            action_str="reply",
-            reasoning=f"forced_direct:{prepared.force_reason or 'forced'}",
-            detail={
-                "source": "forced",
-                "force_reason": prepared.force_reason,
-                **finalization.media_action_detail(generated.media_marker, reply_parts),
-            },
-            parts=reply_parts,
-        )
-
-    assert generated.pfc_result is not None
-    pfc_reasoning = str(generated.pfc_result.action or "").strip()
-    if generated.pfc_result.reason:
-        pfc_reasoning += f":{generated.pfc_result.reason}"
-    return await finalization.record_bot_reply(
-        *common_args,
-        forced=False,
-        action_str=str(generated.pfc_result.action or "reply").strip() or "reply",
-        reasoning=pfc_reasoning,
-        detail={
+        forced = True
+        action_str = "reply"
+        reasoning = f"forced_direct:{prepared.force_reason or 'forced'}"
+        detail = {
+            "source": "forced",
+            "force_reason": prepared.force_reason,
+            **finalization.media_action_detail(generated.media_marker, reply_parts),
+        }
+    else:
+        assert generated.pfc_result is not None
+        forced = False
+        action_str = str(generated.pfc_result.action or "reply").strip() or "reply"
+        reasoning = str(generated.pfc_result.action or "").strip()
+        if generated.pfc_result.reason:
+            reasoning += f":{generated.pfc_result.reason}"
+        detail = {
             "source": generated.reply_source,
             **finalization.media_action_detail(generated.media_marker, reply_parts),
-        },
+        }
+
+    history = await finalization.record_bot_reply(
+        *common_args,
+        forced=forced,
+        action_str=action_str,
+        reasoning=reasoning,
+        detail=detail,
         parts=reply_parts,
     )
+    if not isinstance(history, list):
+        raise TypeError("recorded memory history must be a list")
+    return history
 
 
 async def _commit_smalltalk_delivery(
@@ -728,7 +742,7 @@ def _smalltalk_interbubble_delay(runtime: _ChatRuntime, batch: Any) -> float:
     batch_chars = _batch_text_length(batch)
     if not batch_chars:
         return gap
-    type_per = runtime.cfg.humanize.type_per_char_seconds
+    type_per = float(runtime.cfg.humanize.type_per_char_seconds)
     return gap + min(1.2, type_per * batch_chars * 0.6)
 
 
@@ -765,11 +779,11 @@ async def _send_smalltalk_intermediate_batches(
 
 
 async def finalize_smalltalk_turn_impl(
-    prepared,
-    generated,
+    prepared: _PreparedSmalltalkTurn,
+    generated: _GeneratedSmalltalkTurn,
     event: dict[str, Any],
-    context,
-    hctx,
+    context: Any,
+    hctx: HandlerContext,
     *,
     started_at: float,
     get_lock,
@@ -788,7 +802,7 @@ async def finalize_smalltalk_turn_impl(
     display_reply_text,
     mark_reply_media_used,
     log_step,
-):
+) -> list[dict[str, Any]]:
     """完成生成轮次，并把状态提交绑定到投递确认。"""
 
     finalization = _SmalltalkFinalization(

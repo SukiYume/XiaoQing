@@ -12,9 +12,12 @@ from tests.helpers.server_test_support import (
     Mock,
     SimpleNamespace,
     _InboundEventDispatcher,
+    _inflight_count,
+    _lane_count,
     _make_request_with_auth,
     _MockRequest,
     _onebot_message_payload,
+    _pending_for_key,
     asyncio,
     json,
     patch,
@@ -58,25 +61,25 @@ async def test_http_admission_capacity_and_queued_cancellation_are_bounded():
     await entered.wait()
     queued = asyncio.create_task(server.post_event(request("queued")))
     for _ in range(20):
-        if server._event_dispatcher.pending_for_key("user:10001") == 2:
+        if _pending_for_key(server._event_dispatcher, "user:10001") == 2:
             break
         await asyncio.sleep(0)
 
     overloaded = await server.post_event(request("N+1"))
     assert overloaded.status == 503
     assert "overloaded" in overloaded.text
-    assert server._event_dispatcher.inflight_count == 2
+    assert _inflight_count(server._event_dispatcher) == 2
 
     queued.cancel()
     await asyncio.gather(queued, return_exceptions=True)
     await asyncio.sleep(0)
-    assert server._event_dispatcher.pending_for_key("user:10001") == 1
-    assert server._event_dispatcher.inflight_count == 1
+    assert _pending_for_key(server._event_dispatcher, "user:10001") == 1
+    assert _inflight_count(server._event_dispatcher) == 1
 
     release.set()
     assert (await first).status == 200
-    assert server._event_dispatcher.inflight_count == 0
-    assert server._event_dispatcher.lane_count == 0
+    assert _inflight_count(server._event_dispatcher) == 0
+    assert _lane_count(server._event_dispatcher) == 0
     await server.stop()
 
 
@@ -101,22 +104,22 @@ async def test_queued_cancellation_storm_returns_dispatcher_to_exact_baseline():
         for index in range(50)
     ]
     for _ in range(20):
-        if dispatcher.inflight_count == 51:
+        if _inflight_count(dispatcher) == 51:
             break
         await asyncio.sleep(0)
-    assert dispatcher.inflight_count == 51
+    assert _inflight_count(dispatcher) == 51
 
     for task in queued:
         task.cancel()
     await asyncio.gather(*queued, return_exceptions=True)
     await asyncio.sleep(0)
-    assert dispatcher.inflight_count == 1
-    assert dispatcher.pending_for_key("user:1") == 1
+    assert _inflight_count(dispatcher) == 1
+    assert _pending_for_key(dispatcher, "user:1") == 1
 
     release.set()
     await running
-    assert dispatcher.inflight_count == 0
-    assert dispatcher.lane_count == 0
+    assert _inflight_count(dispatcher) == 0
+    assert _lane_count(dispatcher) == 0
     assert all(task.done() for task in queued)
     await dispatcher.stop()
 
@@ -149,7 +152,7 @@ async def test_queued_and_running_old_auth_events_fail_closed_without_poisoning_
     await entered.wait()
     queued = asyncio.create_task(server.post_event(request("queued")))
     for _ in range(20):
-        if server._event_dispatcher.inflight_count == 2:
+        if _inflight_count(server._event_dispatcher) == 2:
             break
         await asyncio.sleep(0)
 
@@ -160,8 +163,8 @@ async def test_queued_and_running_old_auth_events_fail_closed_without_poisoning_
     assert running_response.status == 401
     assert queued_response.status == 401
     assert seen == ["running"]
-    assert server._event_dispatcher.inflight_count == 0
-    assert server._event_dispatcher.lane_count == 0
+    assert _inflight_count(server._event_dispatcher) == 0
+    assert _lane_count(server._event_dispatcher) == 0
     await server.stop()
 
 
@@ -199,8 +202,8 @@ async def test_handler_failures_are_task_safe_and_next_same_key_runs(failure_kin
     healthy_request.json = AsyncMock(return_value=_onebot_message_payload("good"))
     succeeded = await asyncio.wait_for(server.post_event(healthy_request), timeout=1)
     assert succeeded.status == 200
-    assert server._event_dispatcher.inflight_count == 0
-    assert server._event_dispatcher.lane_count == 0
+    assert _inflight_count(server._event_dispatcher) == 0
+    assert _lane_count(server._event_dispatcher) == 0
     await server.stop()
 
 
@@ -237,8 +240,8 @@ async def test_hot_lane_yields_to_cold_lane_without_breaking_same_key_fifo():
     release.set()
     await asyncio.gather(*waiters)
     assert calls == ["hot-0", "cold", "hot-1", "hot-2", "hot-3", "hot-4"]
-    assert dispatcher.inflight_count == 0
-    assert dispatcher.lane_count == 0
+    assert _inflight_count(dispatcher) == 0
+    assert _lane_count(dispatcher) == 0
     await dispatcher.stop()
 
 
@@ -259,8 +262,8 @@ async def test_long_same_key_lane_does_not_spawn_worker_per_event():
 
     assert calls == 1_000
     assert dispatcher._worker_starts == 1
-    assert dispatcher.inflight_count == 0
-    assert dispatcher.lane_count == 0
+    assert _inflight_count(dispatcher) == 0
+    assert _lane_count(dispatcher) == 0
     await dispatcher.stop()
 
 
@@ -289,8 +292,8 @@ async def test_ws_send_failure_is_bounded_and_does_not_poison_same_key(send_fail
             close=AsyncMock(),
         )
     await asyncio.wait_for(server._handle_ws_event(failed_ws, {"user_id": 7}), timeout=1)
-    assert server._event_dispatcher.inflight_count == 0
-    assert server._event_dispatcher.lane_count == 0
+    assert _inflight_count(server._event_dispatcher) == 0
+    assert _lane_count(server._event_dispatcher) == 0
 
     healthy_ws = MagicMock(send_str=AsyncMock(), close=AsyncMock())
     await asyncio.wait_for(server._handle_ws_event(healthy_ws, {"user_id": 7}), timeout=1)
@@ -342,8 +345,8 @@ async def test_ws_frame_after_stop_gate_never_reaches_dispatcher():
         assert await task is ws
 
     handler.assert_not_awaited()
-    assert server._event_dispatcher.inflight_count == 0
-    assert server._event_dispatcher.lane_count == 0
+    assert _inflight_count(server._event_dispatcher) == 0
+    assert _lane_count(server._event_dispatcher) == 0
     await server.stop()
 
 
@@ -361,8 +364,8 @@ async def test_stop_discards_ws_queue_ticket_without_orphan_handler():
 
     handler.assert_not_awaited()
     assert ticket.result.cancelled()
-    assert server._event_dispatcher.inflight_count == 0
-    assert server._event_dispatcher.lane_count == 0
+    assert _inflight_count(server._event_dispatcher) == 0
+    assert _lane_count(server._event_dispatcher) == 0
     assert queue.empty()
 
 
@@ -403,7 +406,7 @@ async def test_dispatcher_stop_timeout_and_retry_leave_no_event_wait_tasks():
     release.set()
     await asyncio.gather(waiter, return_exceptions=True)
     for _ in range(20):
-        if dispatcher.inflight_count == 0:
+        if _inflight_count(dispatcher) == 0:
             break
         await asyncio.sleep(0)
     await dispatcher.stop()

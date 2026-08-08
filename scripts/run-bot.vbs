@@ -1,6 +1,6 @@
-' XiaoQing Bot launcher.
-' The monitor owns the single-instance lock; this wrapper only keeps the
-' original double-click/hidden-window startup experience.
+' XiaoQing Windows 双击启动入口。
+' 单实例判断、参数读取和进程看护全部由 PowerShell 监控器负责；本文件仅保留
+' 生产环境需要的相对路径和隐藏窗口启动体验，不内置 QQ、Python 或 Conda 路径。
 Option Explicit
 
 Dim ws, fso, scriptDir, monitorScript

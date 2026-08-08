@@ -9,6 +9,7 @@ from plugins.xiaoqing_chat.experiments.anthropomorphic_group import score_turn
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.memory.memory_db import RetrievedItem
 from plugins.xiaoqing_chat.memory.memory_retrieval import _query_direct_memory_items
+from plugins.xiaoqing_chat.planning.heartflow import HeartflowEngine, HeartflowState
 from plugins.xiaoqing_chat.planning.pfc_action_planner import plan_next_action
 from plugins.xiaoqing_chat.planning.pfc_engine import PFCRunResult
 from plugins.xiaoqing_chat.planning.pfc_utils import get_items_from_json
@@ -17,6 +18,33 @@ from plugins.xiaoqing_chat.utils.json_parsing import (
     parse_first_json_array,
     parse_first_json_object,
 )
+
+
+@pytest.mark.asyncio
+async def test_heartflow_uses_only_current_explicit_score_contract() -> None:
+    engine = HeartflowEngine()
+    engine._cache["g1"] = HeartflowState(no_reply_streak=3)
+
+    score = await engine.score_async(
+        chat_id="g1",
+        text="这是问题吗？",
+        goal="回答用户问题",
+        seconds_since_last_reply=300.0,
+        base=0.2,
+    )
+
+    assert score == pytest.approx(0.51)
+    assert not hasattr(engine, "score")
+    obsolete_call = {
+        "chat_id": "g1",
+        "text": "问题？",
+        "goal": "",
+        "seconds_since_last_reply": 0.0,
+        "base": 0.2,
+        "threshold": 0.5,
+    }
+    with pytest.raises(TypeError, match="threshold"):
+        await engine.score_async(**obsolete_call)
 
 
 @pytest.mark.parametrize("last_action", [None, "direct_reply"])

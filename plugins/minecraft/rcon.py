@@ -8,8 +8,6 @@ import struct
 from dataclasses import dataclass
 from enum import Enum, IntEnum
 
-from core.sensitive_audit import SensitiveAuditSummary, summarize_sensitive
-
 from .audit import audit_error_type
 
 logger = logging.getLogger(__name__)
@@ -205,38 +203,14 @@ class RconClient:
             )
             await self._authenticate()
             self._connected = True
-            self._log_connect(status="success")
             return RconConnectResult(success=True)
         except asyncio.CancelledError:
             await self._disconnect_locked()
             raise
         except Exception as exc:
             kind, message = self._classify_error(exc)
-            self._log_connect(status="failed", error_kind=kind, exc=exc)
             await self._disconnect_locked()
             return RconConnectResult(False, error_kind=kind, error_message=message)
-
-    def _log_connect(
-        self,
-        *,
-        status: str,
-        error_kind: RconErrorKind | None = None,
-        exc: BaseException | None = None,
-    ) -> None:
-        target_audit = summarize_sensitive(f"{self.host}\0{self.port}")
-        logger.log(
-            logging.INFO if status == "success" else logging.ERROR,
-            "sensitive_audit operation=minecraft.rcon_connect status=%s error_kind=%s "
-            "error_type=%s payload_kind=%s payload_length=%d payload_bytes=%d "
-            "payload_fingerprint=%s",
-            status,
-            error_kind.value if error_kind is not None else "-",
-            audit_error_type(exc),
-            target_audit.kind,
-            target_audit.length,
-            target_audit.byte_length,
-            target_audit.fingerprint,
-        )
 
     async def disconnect(self) -> None:
         """串行关闭连接；重复调用不会重复操作旧 writer。"""
@@ -274,7 +248,6 @@ class RconClient:
                 error_message=input_error,
             )
 
-        command_audit = summarize_sensitive(cmd)
         async with self._operation_lock:
             if not self.connected:
                 connection = await self._connect_locked()
@@ -286,7 +259,6 @@ class RconClient:
                     )
             try:
                 response = await self._send_command(cmd)
-                self._log_command(command_audit, response=response.payload)
                 return RconCommandResult(
                     success=True,
                     response=response.payload,
@@ -297,7 +269,6 @@ class RconClient:
                 raise
             except Exception as exc:
                 kind, message = self._classify_error(exc)
-                self._log_command(command_audit, error_kind=kind, exc=exc)
                 await self._disconnect_locked()
                 return RconCommandResult(False, error_kind=kind, error_message=message)
 
@@ -310,44 +281,6 @@ class RconClient:
         if len(cmd.encode("utf-8")) > RCON_MAX_OUTBOUND_PAYLOAD_BYTES:
             return "RCON 命令超过 4096 字节安全上限"
         return ""
-
-    @staticmethod
-    def _log_command(
-        command_audit: SensitiveAuditSummary,
-        *,
-        response: str | None = None,
-        error_kind: RconErrorKind | None = None,
-        exc: BaseException | None = None,
-    ) -> None:
-        command = command_audit
-        if response is not None:
-            response_audit = summarize_sensitive(response)
-            logger.info(
-                "sensitive_audit operation=minecraft.rcon_command status=success "
-                "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s "
-                "response_kind=%s response_length=%d response_bytes=%d "
-                "response_fingerprint=%s",
-                command.kind,
-                command.length,
-                command.byte_length,
-                command.fingerprint,
-                response_audit.kind,
-                response_audit.length,
-                response_audit.byte_length,
-                response_audit.fingerprint,
-            )
-            return
-        logger.error(
-            "sensitive_audit operation=minecraft.rcon_command status=failed "
-            "error_kind=%s error_type=%s payload_kind=%s payload_length=%d "
-            "payload_bytes=%d payload_fingerprint=%s",
-            error_kind.value if error_kind is not None else "internal",
-            audit_error_type(exc),
-            command.kind,
-            command.length,
-            command.byte_length,
-            command.fingerprint,
-        )
 
     async def _write_packet(self, packet: RconPacket) -> None:
         if self._writer is None or self._reader is None:

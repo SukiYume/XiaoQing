@@ -61,7 +61,8 @@ class TestChimeRuntimeContract:
         assert callable(chime.scheduled_check)
         assert "CHIME" in chime.HELP_TEXT
         assert chime.MAX_DISPLAY_FRBS == 5
-        assert chime.PULSE_DATE_PATTERN == r"\d{6}"
+        assert "**" not in chime.HELP_TEXT
+        assert not hasattr(chime, "PULSE_DATE_PATTERN")
 
     def test_data_model_fails_closed_for_empty_payload(self) -> None:
         frb = chime.FRBData("FRB-test", {})
@@ -279,6 +280,7 @@ class TestChimeParsingAndHistory:
         )
 
         assert message.startswith("🔔")
+        assert "**" not in message
         assert "FRB-N5" not in message
         assert "FRB-P5" not in message
         assert message.count("... 还有 1 个") == 2
@@ -354,6 +356,39 @@ async def test_catalog_cache_avoids_repeated_manual_downloads(
 
 
 @pytest.mark.asyncio
+async def test_catalog_cache_coalesces_concurrent_cold_requests(
+    monkeypatch: pytest.MonkeyPatch,
+    chime_context: SimpleNamespace,
+) -> None:
+    chime_context.state = {}
+    monkeypatch.setattr(chime, "_CATALOG_FETCH_LOCK", asyncio.Lock())
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    request_count = 0
+
+    async def request(*_args, **_kwargs):
+        nonlocal request_count
+        request_count += 1
+        entered.set()
+        await release.wait()
+        return object()
+
+    data = _payload()
+    monkeypatch.setattr(chime, "aiohttp_request_bounded", request)
+    monkeypatch.setattr(chime, "parse_bounded_json", Mock(return_value=data))
+
+    first = asyncio.create_task(chime.fetch_chime_repeaters(chime_context))
+    await entered.wait()
+    second = asyncio.create_task(chime.fetch_chime_repeaters(chime_context))
+    await asyncio.sleep(0)
+
+    assert request_count == 1
+    release.set()
+    assert await asyncio.gather(first, second) == [data, data]
+    assert request_count == 1
+
+
+@pytest.mark.asyncio
 async def test_specific_frb_query_is_case_insensitive(
     monkeypatch: pytest.MonkeyPatch,
     chime_context: SimpleNamespace,
@@ -404,7 +439,9 @@ async def test_help_command_is_local(
     fetch = AsyncMock()
     monkeypatch.setattr(chime, "fetch_chime_repeaters", fetch)
 
-    assert "基本用法" in str(await chime.handle("chime", "帮助", {}, chime_context))
+    help_response = str(await chime.handle("chime", "帮助", {}, chime_context))
+    assert "用法" in help_response
+    assert "**" not in help_response
     fetch.assert_not_awaited()
 
 

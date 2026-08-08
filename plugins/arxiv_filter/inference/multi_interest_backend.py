@@ -12,7 +12,7 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import joblib
 import numpy as np
@@ -152,7 +152,8 @@ class MultiInterestInferenceModel:
                 emb = self.encoder.encode(texts, **kw)
         else:
             emb = self.encoder.encode(texts, **kw)
-        return emb.astype(np.float32)
+        # sentence-transformers 是动态导入，运行时已要求 convert_to_numpy=True。
+        return cast(np.ndarray, emb.astype(np.float32))
 
     def _build_features(self, embeddings: np.ndarray) -> np.ndarray:
         a = self.artifacts
@@ -177,26 +178,29 @@ class MultiInterestInferenceModel:
             else np.zeros(len(embeddings), dtype=np.float32)
         )
 
-        return np.column_stack(
-            [
-                sims,
-                sims.max(axis=1),
-                sims.mean(axis=1),
-                sims.std(axis=1),
-                sims.min(axis=1),
-                sorted_sims[:, -1] - top2,
-                entropy,
-                probs.max(axis=1),
-                sim_pos,
-                sim_neg,
-                sim_pos - sim_neg,  # contrast_pos_neg: 离正样本重心比负样本重心近多少
-            ]
-        ).astype(np.float32)
+        return cast(
+            np.ndarray,
+            np.column_stack(
+                [
+                    sims,
+                    sims.max(axis=1),
+                    sims.mean(axis=1),
+                    sims.std(axis=1),
+                    sims.min(axis=1),
+                    sorted_sims[:, -1] - top2,
+                    entropy,
+                    probs.max(axis=1),
+                    sim_pos,
+                    sim_neg,
+                    sim_pos - sim_neg,  # 离正样本重心比负样本重心近多少
+                ]
+            ).astype(np.float32),
+        )
 
     def predict_proba(self, df: pd.DataFrame, input_mode: str = "title_abstract") -> np.ndarray:
         """返回每篇论文的正类概率 (1-d array)。"""
         if len(df) == 0:
-            return np.array([], dtype=np.float32)
+            return cast(np.ndarray, np.array([], dtype=np.float32))
         if input_mode not in {"title_only", "title_abstract"}:
             raise ValueError("unsupported input_mode")
 
@@ -216,7 +220,8 @@ class MultiInterestInferenceModel:
         texts = build_paper_texts(df, title_col, abstract_col)
         embeddings = self.encode_texts(texts)
         X = self._build_features(embeddings)
-        return self.artifacts.classifier.predict_proba(X)[:, 1]
+        # sklearn 的运行时返回是 ndarray，但其泛型在当前 stubs 中退化为 Any。
+        return cast(np.ndarray, self.artifacts.classifier.predict_proba(X)[:, 1])
 
 
 # =============================================================================

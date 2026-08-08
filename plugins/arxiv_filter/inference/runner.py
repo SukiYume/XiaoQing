@@ -109,24 +109,19 @@ def run_inference_for_dataframe(
     artifact_fingerprint: str | None = None,
 ) -> tuple[pd.DataFrame, float] | tuple[None, str]:
     """对给定的 DataFrame 执行推理，返回 (带 Probability/Prediction 列的 df, threshold) 或 (None, error_msg)。"""
-    params = (
-        resolve_params(model_path, threshold, batch_size, max_len)
-        if artifact_fingerprint is None
-        else resolve_params(
-            model_path,
-            threshold,
-            batch_size,
-            max_len,
-            artifact_fingerprint=artifact_fingerprint,
-        )
+    params = resolve_params(
+        model_path,
+        threshold,
+        batch_size,
+        max_len,
+        artifact_fingerprint=artifact_fingerprint,
     )
 
     if data.empty:
         return None, "No papers found."
 
-    # This is an internal API without a request context.  Unexpected backend
-    # failures must retain their traceback so the public plugin boundary can
-    # produce one redacted, request-scoped response.
+    # 这里是没有请求上下文的内部 API。后端异常必须保留原始 traceback，交给
+    # 插件公开边界统一生成脱敏且带 request_id 的错误响应。
     probs, preds = _dispatch_inference(params, data)
 
     output = data.copy()
@@ -146,16 +141,12 @@ def run_single_paper_inference(
     artifact_fingerprint: str | None = None,
 ) -> tuple[list[float], list[int], InferenceParams]:
     """对单篇论文执行推理，返回 (probs, preds, params)。"""
-    params = (
-        resolve_params(model_path, threshold, batch_size, max_len)
-        if artifact_fingerprint is None
-        else resolve_params(
-            model_path,
-            threshold,
-            batch_size,
-            max_len,
-            artifact_fingerprint=artifact_fingerprint,
-        )
+    params = resolve_params(
+        model_path,
+        threshold,
+        batch_size,
+        max_len,
+        artifact_fingerprint=artifact_fingerprint,
     )
     sample = pd.DataFrame([{"Title": title, "Abstract": abstract}])
     probs, preds = _dispatch_inference(params, sample)
@@ -175,8 +166,6 @@ def run_inference_for_today(
 
     data = get_today_arxiv()
 
-    if artifact_fingerprint is None:
-        return run_inference_for_dataframe(data, model_path, threshold, batch_size, max_len)
     return run_inference_for_dataframe(
         data,
         model_path,
@@ -196,21 +185,13 @@ def get_positive_arxiv_today_as_string(
     artifact_fingerprint: str | None = None,
 ) -> str:
     """获取今日正预测论文的格式化字符串。被 main.py 调用。"""
-    if artifact_fingerprint is None:
-        data, result = run_inference_for_today(
-            model_path,
-            threshold,
-            batch_size,
-            max_len,
-        )
-    else:
-        data, result = run_inference_for_today(
-            model_path,
-            threshold,
-            batch_size,
-            max_len,
-            artifact_fingerprint=artifact_fingerprint,
-        )
+    data, result = run_inference_for_today(
+        model_path,
+        threshold,
+        batch_size,
+        max_len,
+        artifact_fingerprint=artifact_fingerprint,
+    )
     if data is None:
         return str(result)
     positives = select_positives(data)

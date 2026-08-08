@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from plugins.qingpet import main as qingpet_main
-from plugins.qingpet.services import database as database_module
+from plugins.qingpet.services import database_clock
 from plugins.qingpet.services.database import Database
 from plugins.qingpet.services.user_service import UserService
 
@@ -24,7 +24,7 @@ FROZEN_NOW = datetime(2026, 7, 13, 12, 0, tzinfo=timezone.utc)
 
 @pytest.fixture
 def trade_db(monkeypatch):
-    monkeypatch.setattr(database_module, "utc_now", lambda: FROZEN_NOW)
+    monkeypatch.setattr(database_clock, "now", lambda: FROZEN_NOW)
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as file:
         db_path = file.name
     database = Database(db_path)

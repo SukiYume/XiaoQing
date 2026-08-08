@@ -16,6 +16,7 @@ import pytest
 from plugins.pendo.config import PendoConfig
 from plugins.pendo.services.db import Database
 from plugins.pendo.web.services.transfer_bundle import ParsedBundle
+from tests.helpers.pendo_test_support import reset_pendo_runtime_config
 
 try:
     from plugins.pendo.web.auth import AuthError, create_web_session, issue_login_code
@@ -32,10 +33,10 @@ ROOT = Path(__file__).resolve().parents[2]
 def reset_pendo_config_state() -> Iterator[None]:
     """隔离每个用例修改的 Web 配置和进程内演示限流状态。"""
 
-    PendoConfig.reset_runtime_config()
+    reset_pendo_runtime_config()
     demo_space_module._DEMO_REQUESTS.clear()
     yield
-    PendoConfig.reset_runtime_config()
+    reset_pendo_runtime_config()
     demo_space_module._DEMO_REQUESTS.clear()
 
 
@@ -94,6 +95,9 @@ def test_login_code_exchange_is_single_use_and_creates_httponly_session(
     cookie = exchange.headers["set-cookie"].lower()
     assert "httponly" in cookie
     assert "samesite=strict" in cookie
+    max_age = re.search(r"(?:^|;)\s*max-age=(\d+)", cookie)
+    assert max_age is not None
+    assert 7 * 24 * 60 * 60 - 2 <= int(max_age.group(1)) <= 7 * 24 * 60 * 60
     assert client.get("/api/auth/session").json()["data"]["owner_id"] == "private-owner"
 
     reused = client.post("/api/auth/exchange", json={"code": code})
@@ -493,7 +497,7 @@ def test_demo_template_loader_rejects_invalid_runtime_contracts(
 
 
 def test_purge_demo_owner_deletes_every_owner_scoped_table(temp_db: Database) -> None:
-    """演示回收应覆盖条目附属表、集合、调度、审计和导入幂等记录。"""
+    """演示回收应覆盖业务、审计、导入和 Web 认证记录。"""
 
     owner_id = "demo_web_cleanup01"
     regular_owner = "regular-owner"
@@ -514,6 +518,18 @@ def test_purge_demo_owner_deletes_every_owner_scoped_table(temp_db: Database) ->
                 "updated_at": "2030-01-01T12:00:00",
             }
         )
+
+    temp_db.register_login_code("a" * 64, owner_id, issued_at=1, expires_at=2)
+    temp_db.register_web_session(
+        "b" * 64,
+        "demo-device",
+        owner_id,
+        "demo-csrf",
+        created_at=1,
+        expires_at=2,
+        demo=True,
+    )
+    temp_db.register_widget_token("demo-widget", owner_id, issued_at=1, expires_at=2)
 
     conn = temp_db.get_connection()
     with conn:
@@ -568,6 +584,9 @@ def test_purge_demo_owner_deletes_every_owner_scoped_table(temp_db: Database) ->
         ("operation_logs", "user_id"),
         ("transfer_logs", "owner_id"),
         ("imported_bundles", "owner_id"),
+        ("login_code_registry", "owner_id"),
+        ("web_session_registry", "owner_id"),
+        ("widget_token_registry", "owner_id"),
     )
     for table, column in owner_queries:
         count = conn.execute(

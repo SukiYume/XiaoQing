@@ -141,21 +141,6 @@ class TestConfigManagerUpdateSecret:
         assert config_manager.secrets == original
 
 
-class TestConfigManagerSaveSecrets:
-    """ConfigManager.save_secrets 测试"""
-
-    def test_save_secrets_writes_file(self, config_manager: ConfigManager, secrets_file: Path):
-        """测试保存密钥到文件"""
-        # save_secrets persists the manager's current detached candidate.
-        config_manager._replace_snapshot(config_manager.config, {"test": "value"})
-
-        config_manager.save_secrets()
-
-        with open(secrets_file, encoding="utf-8") as f:
-            data = json.load(f)
-        assert data == {"test": "value"}
-
-
 class TestConfigManagerSecretTransactions:
     """Content-CAS, revocation, retry, and canonicalization regressions."""
 
@@ -253,27 +238,6 @@ class TestConfigManagerSecretTransactions:
         disk = json.loads(secrets_file.read_text(encoding="utf-8"))
         assert disk["plugins"]["external"]["version"] == 2
         assert disk["plugins"]["qingssh"]["passwords"]["ref-1"] == "third"
-
-    def test_save_secrets_rejects_stale_candidate_and_publishes_external_source(
-        self,
-        config_manager: ConfigManager,
-        secrets_file: Path,
-    ):
-        candidate = config_manager.snapshot().mutable_secrets()
-        candidate["local_only"] = True
-        config_manager._replace_snapshot(config_manager.config, candidate)
-        external = {"admin_user_ids": [], "plugins": {"external": {"kept": True}}}
-        secrets_file.write_text(json.dumps(external), encoding="utf-8")
-
-        with pytest.raises(ConfigLoadError, match="changed on disk"):
-            config_manager.save_secrets()
-
-        assert json.loads(secrets_file.read_text(encoding="utf-8")) == external
-        assert config_manager.snapshot().secrets_status is ConfigSourceStatus.INCONSISTENT
-        assert config_manager.snapshot().mutable_secrets() == {}
-        confirmed = config_manager.reload()
-        assert confirmed.secrets_status is ConfigSourceStatus.VALID
-        assert confirmed.mutable_secrets() == external
 
     @pytest.mark.parametrize("non_finite", [float("nan"), float("inf"), float("-inf")])
     def test_non_finite_mutation_never_changes_live_or_disk(

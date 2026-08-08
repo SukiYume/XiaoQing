@@ -1,4 +1,4 @@
-"""Shared runtime and epoch helpers for the BERT training entrypoints.
+"""两个 BERT 训练入口共用的装配、运行时与 epoch 助手。
 
 两个 BERT 训练入口必须共用同一套随机种子、动态补齐、AMP 和 epoch 更新顺序，避免
 标题模型与标题+摘要模型产生不可解释的训练差异。训练加载器可打乱或使用加权采样器，
@@ -7,11 +7,16 @@
 
 from __future__ import annotations
 
+import os
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import torch
 from sklearn.model_selection import train_test_split
+from sklearn.utils.class_weight import compute_class_weight
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm.auto import tqdm
 
@@ -21,6 +26,23 @@ from ..training_common import (
     seed_python_numpy,
     timestamp_log,
 )
+
+
+@dataclass(slots=True)
+class ClassifierTrainingRuntime:
+    """一次训练运行已经装配好的共享资源。"""
+
+    runtime: dict[str, Any]
+    frame: pd.DataFrame
+    train_frame: pd.DataFrame
+    validation_frame: pd.DataFrame
+    tokenizer: Any
+    model: Any
+    train_loader: DataLoader[Any]
+    validation_loader: DataLoader[Any]
+    optimizer: Any
+    scheduler: Any
+    loss_fn: Any
 
 
 def seed_everything(seed: int) -> None:
@@ -274,7 +296,120 @@ def build_weighted_sampler(
     )
 
 
+def prepare_classifier_training(
+    config: Any,
+    *,
+    device: torch.device,
+    classifier_name: str,
+    prepare_frame: Callable[[pd.DataFrame], pd.DataFrame],
+    create_loader: Callable[..., DataLoader[Any]],
+    tokenizer_factory: Any,
+    model_factory: Any,
+    scheduler_factory: Callable[..., Any],
+) -> ClassifierTrainingRuntime:
+    """装配两个 BERT 分类器完全相同的训练启动流程。
+
+    数据集类、验证指标、最佳模型判定和保存元数据仍由各入口负责；这里只集中
+    随机种子、数据切分、类别平衡、加载器以及优化器/调度器，防止两套训练入口漂移。
+    """
+
+    seed_everything(config.random_seed)
+    timestamp_log(f"Using device: {device}")
+    runtime = get_runtime_settings(device)
+
+    # arXiv ID 可能含前导零，所有入口都必须经字符串 CSV 读取器进入预处理。
+    frame = prepare_frame(read_training_csv(config.data_path))
+    train_frame, validation_frame = split_train_validation_frame(
+        frame,
+        validation_size=config.validation_size,
+        random_seed=config.random_seed,
+    )
+
+    class_weights = compute_class_weight(
+        class_weight="balanced",
+        classes=np.unique(train_frame.loc[:, "label"]),
+        y=train_frame.loc[:, "label"],
+    )
+    class_weights_tensor = torch.tensor(class_weights, dtype=torch.float, device=device)
+    loss_fn = torch.nn.CrossEntropyLoss(weight=class_weights_tensor)
+    sampler = build_weighted_sampler(
+        train_frame.loc[:, "label"].tolist(),
+        class_weights_tensor,
+    )
+
+    negative_count = int((train_frame.loc[:, "label"] == 0).sum())
+    positive_count = int((train_frame.loc[:, "label"] == 1).sum())
+    for line in build_classifier_config_log_lines(
+        config,
+        classifier_name=classifier_name,
+        device=str(device),
+        sample_count=len(frame),
+        train_count=len(train_frame),
+        val_count=len(validation_frame),
+        negative_count=negative_count,
+        positive_count=positive_count,
+    ):
+        timestamp_log(line)
+
+    num_workers = (
+        config.num_workers if config.num_workers is not None else min(8, os.cpu_count() or 4)
+    )
+    timestamp_log("  Loading tokenizer...")
+    tokenizer = tokenizer_factory.from_pretrained(config.model_name)
+    train_loader = create_loader(
+        train_frame,
+        tokenizer,
+        config.max_len,
+        config.batch_size,
+        sampler=sampler,
+        num_workers=num_workers,
+        pin_memory=runtime["pin_memory"],
+        random_seed=config.random_seed,
+    )
+    validation_loader = create_loader(
+        validation_frame,
+        tokenizer,
+        config.max_len,
+        config.batch_size,
+        num_workers=num_workers,
+        pin_memory=runtime["pin_memory"],
+        random_seed=config.random_seed,
+        shuffle=False,
+    )
+
+    timestamp_log(f"  Loading model {config.model_name.split('/')[-1]}...")
+    model = model_factory.from_pretrained(config.model_name, num_labels=2)
+    model.to(device)
+    optimizer = create_optimizer(
+        model.parameters(),
+        learning_rate=config.learning_rate,
+        use_fused=runtime["use_fused"],
+    )
+    total_steps = len(train_loader) * config.num_epochs
+    scheduler = scheduler_factory(
+        optimizer,
+        num_warmup_steps=int(config.warmup_proportion * total_steps),
+        num_training_steps=total_steps,
+    )
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+
+    return ClassifierTrainingRuntime(
+        runtime=runtime,
+        frame=frame,
+        train_frame=train_frame,
+        validation_frame=validation_frame,
+        tokenizer=tokenizer,
+        model=model,
+        train_loader=train_loader,
+        validation_loader=validation_loader,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        loss_fn=loss_fn,
+    )
+
+
 __all__ = [
+    "ClassifierTrainingRuntime",
     "build_classifier_config_log_lines",
     "build_loader_kwargs",
     "build_weighted_sampler",
@@ -286,6 +421,7 @@ __all__ = [
     "get_runtime_settings",
     "log_epoch_header",
     "move_batch_to_device",
+    "prepare_classifier_training",
     "read_training_csv",
     "seed_everything",
     "seed_worker",

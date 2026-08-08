@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import threading
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 from typing import Any, ClassVar
@@ -27,23 +28,26 @@ def _owned_by(record: Any, user_id: int) -> bool:
     if not isinstance(record, dict) or type(user_id) is not int or user_id <= 0:
         return False
     owner = record.get("user")
-    if isinstance(owner, bool):
+    if type(owner) is int:
+        return owner == user_id
+    if not isinstance(owner, str) or not owner.strip():
         return False
     try:
-        return int(owner) == user_id
-    except (TypeError, ValueError):
+        return int(owner.strip()) == user_id
+    except ValueError:
         return False
 
 
 class PaperStorageCorruptionError(RuntimeError):
-    """The original document is preserved and must be explicitly repaired."""
+    """存储文档损坏；原文件已保留，必须由管理员显式修复。"""
 
 
 class PaperStorage:
+    # 同一数据目录的多个临时实例必须共用锁，否则读改写会彼此覆盖。
     _locks_guard: ClassVar[Any] = threading.Lock()
     _locks: ClassVar[WeakValueDictionary[str, Any]] = WeakValueDictionary()
 
-    def __init__(self, data_dir: Path):
+    def __init__(self, data_dir: Path) -> None:
         self.data_dir = data_dir
         self.notes_file = data_dir / "paper_notes.json"
         self.writing_file = data_dir / "writing_ideas.json"
@@ -56,6 +60,7 @@ class PaperStorage:
     def _validate_document(self, path: Path, value: dict[str, Any]) -> None:
         """验证后续读写依赖的嵌套容器，避免覆盖结构已损坏的原文件。"""
 
+        collections: Iterable[Any]
         if path in {self.notes_file, self.writing_file}:
             collections = value.values()
         elif path == self.topics_file:
@@ -71,7 +76,7 @@ class PaperStorage:
                 raise ValueError("paper storage contains an invalid record collection")
 
     def _load_json(self, path: Path) -> dict[str, Any]:
-        """Load an object document or fail closed after making a quarantine copy."""
+        """读取对象文档；损坏时生成隔离副本并拒绝继续覆盖。"""
         with self._lock:
             if not path.exists():
                 return {}
@@ -112,10 +117,10 @@ class PaperStorage:
                 raise
 
     def _save_json(self, path: Path, data: dict[str, Any]) -> bool:
-        """Save data to JSON file with error handling.
+        """原子保存 JSON 对象。
 
         Returns:
-            True if successful, False otherwise
+            成功时返回 ``True``；编码或落盘失败时记录错误并返回 ``False``。
         """
         with self._lock:
             try:
@@ -128,6 +133,8 @@ class PaperStorage:
                     type(exc).__name__,
                 )
                 return False
+
+    # 论文笔记 ---------------------------------------------------------
 
     def add_paper_note(self, paper_id: str, content: str, user_id: int) -> bool:
         with self._lock:
@@ -164,6 +171,8 @@ class PaperStorage:
                 del data[paper_id]
 
             return self._save_json(self.notes_file, data)
+
+    # 写作灵感 ---------------------------------------------------------
 
     def add_writing_idea(self, section: str, content: str, user_id: int) -> bool:
         with self._lock:
@@ -209,6 +218,8 @@ class PaperStorage:
                 del data[section]
 
             return self._save_json(self.writing_file, data)
+
+    # 研究主题 ---------------------------------------------------------
 
     def add_topic(self, keyword: str, user_id: int) -> bool:
         with self._lock:
@@ -267,6 +278,8 @@ class PaperStorage:
             ]
             return self._save_json(self.topics_file, data)
 
+    # 个人 BibTeX 文献库 ----------------------------------------------
+
     def add_reference(self, user_id: int, bibcode: str, bibtex: str) -> bool:
         path = self.data_dir / f"references_{int(user_id)}.bib"
         with self._lock:
@@ -291,6 +304,8 @@ class PaperStorage:
         path = self.data_dir / f"references_{int(user_id)}.bib"
         with self._lock:
             return path.read_text(encoding="utf-8") if path.exists() else ""
+
+    # 截稿日期 ---------------------------------------------------------
 
     def add_deadline(self, name: str, date: str, user_id: int) -> bool:
         with self._lock:

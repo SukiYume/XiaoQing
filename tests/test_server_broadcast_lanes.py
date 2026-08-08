@@ -12,8 +12,10 @@ from tests.helpers.server_test_support import (
     InboundServer,
     MagicMock,
     Mock,
+    _lane_count,
     _make_request_with_auth,
     _onebot_message_payload,
+    _pending_for_key,
     asyncio,
     json,
     patch,
@@ -275,13 +277,13 @@ async def test_inbound_lanes_serialize_same_key_and_are_released(sample_server):
     await asyncio.sleep(0)
 
     assert probe.maximum_active == 1
-    assert sample_server._event_dispatcher.pending_for_key("user:12345") == 2
+    assert _pending_for_key(sample_server._event_dispatcher, "user:12345") == 2
 
     release.set()
     await asyncio.gather(first, second)
 
     assert probe.maximum_active == 1
-    assert sample_server._event_dispatcher.lane_count == 0
+    assert _lane_count(sample_server._event_dispatcher) == 0
 
 
 @pytest.mark.asyncio
@@ -312,7 +314,7 @@ async def test_inbound_lanes_allow_different_keys_in_parallel(sample_server):
     assert max_active == 2
     release.set()
     await asyncio.gather(first, second)
-    assert sample_server._event_dispatcher.lane_count == 0
+    assert _lane_count(sample_server._event_dispatcher) == 0
 
 
 @pytest.mark.asyncio
@@ -336,11 +338,11 @@ async def test_inbound_lane_ticket_cancellation_releases_capacity(sample_server)
 
     waiting.cancel()
     await asyncio.gather(waiting, return_exceptions=True)
-    assert sample_server._event_dispatcher.pending_for_key("user:12345") == 1
+    assert _pending_for_key(sample_server._event_dispatcher, "user:12345") == 1
 
     release.set()
     await first
-    assert sample_server._event_dispatcher.lane_count == 0
+    assert _lane_count(sample_server._event_dispatcher) == 0
 
 
 @pytest.mark.asyncio
@@ -353,7 +355,7 @@ async def test_inbound_lane_pool_does_not_grow_for_high_cardinality_keys(sample_
     for user_id in range(1_000):
         await sample_server._handle_ws_event(ws, {"user_id": user_id})
 
-    assert sample_server._event_dispatcher.lane_count == 0
+    assert _lane_count(sample_server._event_dispatcher) == 0
 
 
 @pytest.mark.unit

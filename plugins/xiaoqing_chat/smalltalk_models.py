@@ -1,3 +1,5 @@
+"""定义小聊准备、生成和投递阶段共享的数据结构。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

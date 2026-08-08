@@ -509,9 +509,9 @@ class PluginManifest(BaseModel):
             raise ValueError("plugin commands must not contain duplicate stable names")
 
         command_count = 0
-        stack: list[
-            tuple[PluginCommandManifest | PluginCommandNodeManifest, int]
-        ] = [(command, 1) for command in self.commands]
+        stack: list[tuple[PluginCommandManifest | PluginCommandNodeManifest, int]] = [
+            (command, 1) for command in self.commands
+        ]
         while stack:
             command, depth = stack.pop()
             command_count += 1

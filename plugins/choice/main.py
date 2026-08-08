@@ -6,6 +6,7 @@ import random
 from typing import Any
 
 from core.args import tokenize
+from core.interfaces import PluginContextProtocol
 from core.plugin_base import Segments, segments
 from core.public_errors import public_error_response
 
@@ -22,21 +23,21 @@ _HELP_WORDS = frozenset({"help", "帮助"})
 _RNG = random.SystemRandom()
 
 HELP_TEXT = """
-🎲 **随机选择助手**
+🎲 随机选择助手
 
-**用法:**
-• /选择 <问题> <选项1> <选项2> ...
-• /选择 <问题> <选项1> <选项2> -n 3
-• /选择 <问题> <选项1> <选项2> -u
+用法
+/选择 <问题> <选项1> <选项2> ...
+/选择 <问题> <选项1> <选项2> -n 3
+/选择 <问题> <选项1> <选项2> -u
 
 问题或选项含空格时请使用引号，例如：
-• /选择 "今天吃什么" "ice cream" 火锅
+/选择 "今天吃什么" "ice cream" 火锅
 
-**抽样规则:**
-• 默认有放回抽样；重复选项会增加该文本被抽中的权重
-• -u / --unique 按文本去重后不放回抽样
-• -n 只能指定一次，数量为 1–10 的 ASCII 整数
-• 使用 -- 后，-n、-u 等文本会被当作普通选项
+规则
+• 默认有放回；重复选项会增加该文本的权重
+• -u / --unique：按文本去重后不放回抽样
+• -n：只能指定一次，数量为 1–10 的 ASCII 整数
+• --：其后的 -n、-u 等文本会被当作普通选项
 
 问题最长 100 字，单个选项最长 200 字，支持 2–50 个选项。
 """.strip()
@@ -104,7 +105,7 @@ def parse_choice_args(args: object) -> tuple[str | None, list[str], int, bool]:
 
     positional, choice_count, unique = _parse_choice_tokens(tokens)
     if not positional:
-        return None, [], DEFAULT_CHOICES, False
+        raise ChoiceArgumentError("请提供问题和至少两个选项")
     question = positional[0]
     if not _is_bounded_text(question, MAX_QUESTION_CHARS):
         raise ChoiceArgumentError(f"问题必须为 1–{MAX_QUESTION_CHARS} 个可显示字符")
@@ -144,16 +145,21 @@ def format_choice_result(question: str, choices: list[str], total_options: int) 
     """把已验证的抽样结果格式化为一段消息。"""
     emoji = _RNG.choice(CHOICE_EMOJIS)
     if len(choices) == 1:
-        return f"{emoji} {question}：**{choices[0]}**"
+        return f"{emoji} {question}：{choices[0]}"
 
     lines = [f"{emoji} {question}："]
-    lines.extend(f"  {index}. **{choice}**" for index, choice in enumerate(choices, 1))
+    lines.extend(f"  {index}. {choice}" for index, choice in enumerate(choices, 1))
     lines.append(f"\n已从 {total_options} 个选项中选择 {len(choices)} 个")
     return "\n".join(lines)
 
 
-async def handle(command: str, args: str, event: dict[str, Any], context: Any) -> Segments:
-    """插件命令入口；只在最终消息中回显经过边界校验的问题和选项。"""
+async def handle(
+    command: str,
+    args: str,
+    event: dict[str, Any],
+    context: PluginContextProtocol,
+) -> Segments:
+    """插件命令入口；统一入口形参保留，正文只回显已验证的文本。"""
     try:
         question, options, choice_count, unique = parse_choice_args(args)
         if question is None:

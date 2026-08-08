@@ -16,6 +16,7 @@ from tests.helpers.codex_test_support import (
     _install_fake_manager,
     _persisted_session,
     _valid_arxiv_summary,
+    _wait_manager_idle,
     _wait_until,
     asyncio,
     codex_main,
@@ -56,7 +57,7 @@ async def test_arxiv_summary_duplicate_inflight_reports_status(tmp_path: Path):
     assert "已在队列或运行中" in result
     assert "已在运行中" in str(context.actions)
     runner.release.set()
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
 
 @pytest.mark.asyncio
@@ -86,7 +87,7 @@ async def test_same_date_different_link_set_does_not_reuse_inflight_job(tmp_path
     assert len(manager.queues["astro-ph"]) == 1
     assert "2608.00002" in manager.queues["astro-ph"][0].prompt
     runner.release.set()
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
 
 @pytest.mark.asyncio
@@ -102,7 +103,7 @@ async def test_arxiv_summary_failed_history_is_retried(tmp_path: Path):
         group_id=2,
         context=context,
     )
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
     assert "2026-05-21 arXiv 总结失败" in str(context.actions)
 
     retry_runner = FakeRunner(
@@ -120,7 +121,7 @@ async def test_arxiv_summary_failed_history_is_retried(tmp_path: Path):
         group_id=2,
         context=context,
     )
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     assert len(retry_runner.calls) == 1
     assert "retry summary" in str(context.actions)
@@ -160,7 +161,7 @@ async def test_arxiv_summary_queue_full_reuses_manager_limit(tmp_path: Path):
     assert "已投递" in queued
     assert "已达到队列上限 1" in full
     runner.release.set()
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
 
 @pytest.mark.asyncio
@@ -257,7 +258,7 @@ async def test_recreated_astro_ph_does_not_replay_archived_summary(tmp_path: Pat
         group_id=2,
         context=context,
     )
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
     context.actions.clear()
 
     await codex_main.handle(
@@ -282,7 +283,7 @@ async def test_recreated_astro_ph_does_not_replay_archived_summary(tmp_path: Pat
         group_id=2,
         context=context,
     )
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     assert "已投递" in result
     assert len(retry_runner.calls) == 2

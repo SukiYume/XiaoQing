@@ -325,10 +325,6 @@ class SessionManager:
     def active_count(self) -> int:
         return len(self._sessions)
 
-    @property
-    def active_key_lock_count(self) -> int:
-        return int(self._key_lock_pool.active_key_count)
-
     def set_default_timeout(self, timeout: float) -> None:
         self._default_timeout = _normalize_timeout(timeout)
 
@@ -745,17 +741,6 @@ class SessionManager:
 
         async with self._lock:
             return len(self._sessions)
-
-    async def list_user_sessions(self, user_id: int) -> list[Session]:
-        """Return detached active snapshots for one normalized user id."""
-
-        normalized_user = int(_normalize_id(user_id, field_name="user_id"))
-        async with self._lock:
-            return [
-                self._clone(session)
-                for key, session in self._sessions.items()
-                if key[0] == normalized_user and not session.is_expired()
-            ]
 
     async def clear_plugin_sessions(self, plugin_name: str) -> int:
         """Delete every session belonging to one plugin."""

@@ -20,6 +20,7 @@ from tests.helpers.codex_test_support import (
     _patch_race_termination,
     _RaceProcess,
     _valid_arxiv_summary,
+    _wait_manager_idle,
     _wait_until,
     asyncio,
     codex_main,
@@ -236,7 +237,7 @@ async def test_enqueue_measures_disk_outside_event_loop_and_manager_lock(
 
     monkeypatch.setattr(manager, "_disk_usage_bytes", measure_disk)
     await manager.enqueue("aaa", "first", user_id=1, group_id=None, context=context)
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     assert len(observations) == 1
     assert observations[0][0] != event_loop_thread
@@ -276,7 +277,7 @@ async def test_enqueue_history_failure_rolls_back_without_orphan_job(
 
     monkeypatch.setattr(manager, "_append_history", original_append_history)
     await manager.enqueue("aaa", "second", user_id=1, group_id=None, context=context)
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     assert [prompt for _, prompt, _ in runner.calls] == ["second"]
     assert manager.sessions["aaa"].total_jobs == 1
@@ -330,7 +331,7 @@ async def test_same_label_queue_runs_serially_and_sends_results(tmp_path: Path):
     assert "前面还有 1 个任务" in str(second)
 
     runner.release.set()
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     assert [call[1] for call in runner.calls] == ["block first", "second"]
     sent_text = str(context.actions)
@@ -348,7 +349,7 @@ async def test_private_job_result_stays_private_when_session_created_in_group(tm
     await codex_main.handle(
         "codex", "aaa hello", {"message_type": "private", "user_id": 1}, context
     )
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     assert len(context.actions) == 1
     action = context.actions[0]
@@ -373,7 +374,7 @@ async def test_different_labels_can_run_in_parallel(tmp_path: Path):
     assert set(runner.started) == {"aaa", "bbb"}
 
     runner.release.set()
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
     assert len(context.actions) == 2
 
 
@@ -394,13 +395,13 @@ async def test_refresh_failure_after_permit_acquire_releases_capacity(tmp_path: 
 
     manager.refresh_from_settings_reader = refresh  # type: ignore[method-assign]
     await manager.enqueue("aaa", "first", user_id=1, group_id=None, context=context)
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     assert not manager.global_sem.locked()
     assert "private refresh detail" not in str(context.actions)
 
     await manager.enqueue("aaa", "second", user_id=1, group_id=None, context=context)
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     assert runner.started == ["aaa"]
 
@@ -422,7 +423,7 @@ async def test_artifact_directory_failure_cannot_leave_claimed_job_running(
 
     await manager.enqueue("aaa", "first", user_id=1, group_id=None, context=context)
     job = manager.queues["aaa"][0]
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     assert manager.running == {}
     assert job.status == "failed"
@@ -442,7 +443,7 @@ async def test_delivery_failure_does_not_stop_same_label_queue(tmp_path: Path) -
 
     await manager.enqueue("aaa", "first", user_id=1, group_id=None, context=context)
     await manager.enqueue("aaa", "second", user_id=1, group_id=None, context=context)
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     assert [prompt for _, prompt, _ in runner.calls] == ["first", "second"]
     assert context.send_action.await_count == 2
@@ -474,7 +475,7 @@ async def test_cancel_while_waiting_for_global_slot_never_spawns(
         job = manager.running["race"]
 
         response = await asyncio.wait_for(manager.cancel("race", job.job_id), timeout=2)
-        await manager.wait_idle()
+        await _wait_manager_idle(manager)
     finally:
         for _ in range(manager.config.max_parallel_jobs):
             manager.global_sem.release()
@@ -518,7 +519,7 @@ async def test_cancel_during_spawn_waits_for_handoff_and_never_sends_prompt(
 
     allow_spawn.set()
     response = await asyncio.wait_for(cancel_task, timeout=2)
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     assert "已取消" in response
     assert not any(process.stdin_inputs)
@@ -578,7 +579,7 @@ async def test_cancel_after_process_registration_but_before_prompt_commit(
     await _wait_until(lambda: job.cancel_requested)
     allow_prompt.set()
     response = await asyncio.wait_for(cancel_task, timeout=2)
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     assert "已取消" in response
     assert not any(process.stdin_inputs)
@@ -608,7 +609,7 @@ async def test_cancel_after_prompt_commit_terminates_and_finishes_cancelled(
     assert job.prompt_started is True
 
     response = await asyncio.wait_for(manager.cancel("race", job.job_id), timeout=2)
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     assert "已取消" in response
     assert len([payload for payload in process.stdin_inputs if payload]) == 1
@@ -639,7 +640,7 @@ async def test_spawn_failure_completes_handoff_and_terminal_state(
     await spawn_started.wait()
     job = manager.running["race"]
     fail_spawn.set()
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     assert job.status == "failed"
     assert job.result is not None and "OSError" in job.result.final_text
@@ -707,7 +708,7 @@ async def test_spawn_timeout_is_bounded_and_finalizes_job(
     await _wait_until(lambda: "race" in manager.running)
     job = manager.running["race"]
 
-    await asyncio.wait_for(manager.wait_idle(), timeout=2)
+    await asyncio.wait_for(_wait_manager_idle(manager), timeout=2)
 
     assert job.status == "failed"
     assert job.result is not None and "RuntimeError" in job.result.final_text
@@ -725,7 +726,7 @@ async def test_result_is_not_truncated_by_plugin(tmp_path: Path):
 
     await codex_main.handle("codex", "create aaa", {"user_id": 1, "group_id": 2}, context)
     await codex_main.handle("codex", "aaa long answer", {"user_id": 1, "group_id": 2}, context)
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     sent_text = "".join(
         seg["data"]["text"]
@@ -745,7 +746,7 @@ async def test_conversation_history_is_saved_per_session(tmp_path: Path):
 
     await codex_main.handle("codex", "create aaa", {"user_id": 1, "group_id": 2}, context)
     await codex_main.handle("codex", "aaa user prompt", {"user_id": 1, "group_id": 2}, context)
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     history_path = context.data_dir / "session" / "aaa" / "conversation.jsonl"
     events = [json.loads(line) for line in history_path.read_text(encoding="utf-8").splitlines()]
@@ -771,7 +772,7 @@ async def test_markdown_image_result_is_copied_and_sent(tmp_path: Path):
 
     await codex_main.handle("codex", "create aaa", {"user_id": 1, "group_id": 2}, context)
     await codex_main.handle("codex", "aaa draw a plot", {"user_id": 1, "group_id": 2}, context)
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     message = context.actions[-1]["params"]["message"]
     image_segments = [seg for seg in message if seg.get("type") == "image"]
@@ -794,7 +795,7 @@ async def test_artifact_directory_images_are_sent_without_text_marker(tmp_path: 
 
     await codex_main.handle("codex", "create aaa", {"user_id": 1, "group_id": 2}, context)
     await codex_main.handle("codex", "aaa draw a chart", {"user_id": 1, "group_id": 2}, context)
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     message = context.actions[-1]["params"]["message"]
     assert any(seg.get("type") == "image" for seg in message)
@@ -832,7 +833,7 @@ async def test_generated_images_dir_is_not_guessed_without_explicit_path(
 
     await codex_main.handle("codex", "create img", {"user_id": 1, "group_id": 2}, context)
     await codex_main.handle("codex", "img $imagegen draw", {"user_id": 1, "group_id": 2}, context)
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     message = context.actions[-1]["params"]["message"]
     assert not any(seg.get("type") == "image" for seg in message)
@@ -852,7 +853,7 @@ async def test_long_text_with_image_is_split_before_image(tmp_path: Path):
 
     await codex_main.handle("codex", "create aaa", {"user_id": 1, "group_id": 2}, context)
     await codex_main.handle("codex", "aaa draw long report", {"user_id": 1, "group_id": 2}, context)
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     assert len(context.actions) >= 2
     assert all(seg.get("type") == "text" for seg in context.actions[0]["params"]["message"])
@@ -877,7 +878,7 @@ async def test_arxiv_summary_auto_creates_astro_ph_and_runs(tmp_path: Path):
         group_id=2,
         context=context,
     )
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     assert "已投递" in result
     assert "astro-ph" in manager.sessions

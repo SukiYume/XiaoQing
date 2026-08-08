@@ -1,9 +1,8 @@
-"""Run one process while keeping both output streams in bounded log files.
+"""运行一个子进程，并把 stdout/stderr 分别写入有界轮转日志。
 
-The monitor uses this helper instead of asking ``Start-Process`` to redirect to
-live files.  On Windows an inherited redirection handle prevents a monitor
-from renaming the active file.  Here the thread that owns each file explicitly
-closes it before rotation and immediately reopens it afterwards.
+监控器不让 ``Start-Process`` 直接重定向活动日志：Windows 的继承句柄会阻止监控器
+重命名正在写入的文件。本模块为两条流各分配一个泵线程，由文件唯一所有者在轮转前
+显式关闭句柄，轮转后立即重开。
 
 每条输出流只由一个泵线程读取并写入自己的日志，因此轮转不需要跨线程文件锁。日志
 写入一旦失败，泵线程仍要继续排空管道并通知主线程终止整棵子进程树，避免子进程因
@@ -13,9 +12,10 @@ closes it before rotation and immediately reopens it afterwards.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
+import signal
 import subprocess
-import sys
 import threading
 import time
 from collections.abc import Sequence
@@ -27,8 +27,11 @@ _COPY_SIZE = 1024 * 1024
 _SHUTDOWN_TIMEOUT_SECONDS = 5.0
 
 
+# 日志文件所有权与轮转 ---------------------------------------------------------
+
+
 class BoundedRotatingLog:
-    """Append bytes to a log without exceeding its size or backup limits."""
+    """按字节追加日志，并严格限制单文件大小和备份数量。"""
 
     def __init__(self, path: Path, *, maximum_bytes: int, backup_count: int) -> None:
         if maximum_bytes <= 0:
@@ -114,11 +117,11 @@ class BoundedRotatingLog:
         if not path.is_file() or path.stat().st_size <= self.maximum_bytes:
             return
 
-        temporary = path.with_name(f".{path.name}.{os.getpid()}.trim")
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.trim")
         try:
             with path.open("rb") as source:
                 source.seek(-self.maximum_bytes, os.SEEK_END)
-                with temporary.open("wb") as target:
+                with temporary.open("xb") as target:
                     remaining = self.maximum_bytes
                     while remaining:
                         chunk = source.read(min(_COPY_SIZE, remaining))
@@ -133,6 +136,9 @@ class BoundedRotatingLog:
             temporary.unlink(missing_ok=True)
 
 
+# 管道泵线程 -------------------------------------------------------------------
+
+
 def _pump_stream(
     stream: BinaryIO,
     *,
@@ -143,7 +149,7 @@ def _pump_stream(
     failed: threading.Event,
     stopping: threading.Event,
 ) -> None:
-    """Report log failure immediately while continuing to drain the pipe."""
+    """日志失败立即通知主线程，但继续排空管道直到子进程停止。"""
 
     log: BoundedRotatingLog | None = None
     logging_failed = False
@@ -155,7 +161,9 @@ def _pump_stream(
                 backup_count=backup_count,
             )
             log.__enter__()
-        except Exception as exc:  # keep draining until the main thread stops the child
+        # 日志对象可能来自测试替身或平台文件层；任意失败都必须转成停机信号，
+        # 但泵线程不能退出，否则子进程可能先阻塞在写满的管道上。
+        except Exception as exc:  # noqa: BLE001
             errors.append(exc)
             failed.set()
             logging_failed = True
@@ -168,11 +176,12 @@ def _pump_stream(
                     continue
                 try:
                     log.write(chunk)
-                except Exception as exc:  # drain while termination propagates
+                except Exception as exc:  # noqa: BLE001
                     errors.append(exc)
                     failed.set()
                     logging_failed = True
-        except Exception as exc:
+        # 二进制管道实现的异常类型并不统一，资源边界必须报告后继续收口。
+        except Exception as exc:  # noqa: BLE001
             if not stopping.is_set():
                 errors.append(exc)
                 failed.set()
@@ -180,28 +189,55 @@ def _pump_stream(
         if log is not None:
             try:
                 log.close()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
                 failed.set()
         try:
             stream.close()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             if not stopping.is_set():
                 errors.append(exc)
                 failed.set()
 
 
+# 跨平台进程树回收 -------------------------------------------------------------
+
+
+def _send_posix_group_signal(process_id: int, signal_number: int) -> bool:
+    """向独立 POSIX 进程组发信号；组已消失时返回 ``False``。"""
+
+    kill_process_group = getattr(os, "killpg", None)
+    if not callable(kill_process_group):
+        return False
+    try:
+        kill_process_group(process_id, signal_number)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _wait_for_posix_group_exit(process_id: int, timeout: float) -> bool:
+    """用信号 0 有界等待 POSIX 进程组全部消失。"""
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _send_posix_group_signal(process_id, 0):
+            return True
+        time.sleep(0.05)
+    return not _send_posix_group_signal(process_id, 0)
+
+
 def _terminate_process_tree(
     process: subprocess.Popen[bytes],
 ) -> tuple[int, Exception | None]:
-    """Stop the process created by this helper, including Windows descendants."""
-
-    if process.poll() is not None:
-        return process.returncode, None
+    """停止本包装器创建的进程树，并返回主进程退出码与清理异常。"""
 
     tree_error: Exception | None = None
+    group_signaled = False
     if os.name == "nt":
-        system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+        if process.poll() is not None:
+            return process.returncode, None
+        system_root = Path(os.environ.get("SYSTEMROOT", r"C:\Windows"))
         taskkill = system_root / "System32" / "taskkill.exe"
         try:
             completed = subprocess.run(
@@ -222,23 +258,28 @@ def _terminate_process_tree(
             tree_error = RuntimeError(f"taskkill failed for process tree {process.pid}: {exc}")
     else:
         try:
-            process.terminate()
-        except ProcessLookupError:
-            pass
+            group_signaled = _send_posix_group_signal(process.pid, signal.SIGTERM)
+        except OSError as exc:
+            group_signaled = False
+            tree_error = RuntimeError(f"process group termination failed for {process.pid}: {exc}")
+        if not group_signaled and process.poll() is None:
+            with contextlib.suppress(ProcessLookupError):
+                process.terminate()
 
     if process.poll() is None and tree_error is not None:
-        try:
+        with contextlib.suppress(ProcessLookupError):
             process.terminate()
-        except ProcessLookupError:
-            pass
     try:
-        return process.wait(timeout=_SHUTDOWN_TIMEOUT_SECONDS), tree_error
+        return_code = process.wait(timeout=_SHUTDOWN_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         timeout_error = RuntimeError(f"process {process.pid} did not stop before forced kill")
-        try:
+        if os.name != "nt":
+            sigkill = getattr(signal, "SIGKILL", None)
+            if sigkill is not None:
+                with contextlib.suppress(OSError):
+                    _send_posix_group_signal(process.pid, sigkill)
+        with contextlib.suppress(ProcessLookupError):
             process.kill()
-        except ProcessLookupError:
-            pass
         try:
             return (
                 process.wait(timeout=_SHUTDOWN_TIMEOUT_SECONDS),
@@ -246,6 +287,25 @@ def _terminate_process_tree(
             )
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(f"process {process.pid} could not be reaped after kill") from exc
+
+    if os.name != "nt" and group_signaled:
+        try:
+            group_exited = _wait_for_posix_group_exit(
+                process.pid,
+                _SHUTDOWN_TIMEOUT_SECONDS,
+            )
+        except OSError as exc:
+            return return_code, tree_error or RuntimeError(
+                f"process group exit check failed for {process.pid}: {exc}"
+            )
+        if not group_exited:
+            timeout_error = RuntimeError(f"process group {process.pid} did not stop before kill")
+            sigkill = getattr(signal, "SIGKILL", None)
+            if sigkill is not None:
+                with contextlib.suppress(OSError):
+                    _send_posix_group_signal(process.pid, sigkill)
+            tree_error = tree_error or timeout_error
+    return return_code, tree_error
 
 
 def _join_pump_threads(
@@ -265,7 +325,8 @@ def _join_pump_threads(
         _, cleanup_error = _terminate_process_tree(process)
         if cleanup_error is not None:
             errors.append(cleanup_error)
-    except Exception as exc:
+    # 清理阶段必须聚合所有资源错误，继续关闭管道并尝试回收泵线程。
+    except Exception as exc:  # noqa: BLE001
         errors.append(exc)
     _close_process_pipes(process, errors)
     for thread in alive:
@@ -283,7 +344,7 @@ def _close_process_pipes(
         if stream is not None:
             try:
                 stream.close()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
 
 
@@ -296,10 +357,13 @@ def _cleanup_owned_process(
         _, cleanup_error = _terminate_process_tree(process)
         if cleanup_error is not None:
             errors.append(cleanup_error)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         errors.append(exc)
     _close_process_pipes(process, errors)
     _join_pump_threads(threads, process, errors)
+
+
+# 子进程编排与命令行 -----------------------------------------------------------
 
 
 def run_process(
@@ -311,10 +375,16 @@ def run_process(
     maximum_bytes: int,
     backup_count: int,
 ) -> int:
-    """Run ``command`` and synchronously drain both output streams."""
+    """启动命令并同步排空两条输出流，返回被包装进程的退出码。"""
 
     if not command:
         raise ValueError("command must not be empty")
+    if not working_directory.is_dir():
+        raise ValueError("working_directory must be an existing directory")
+    if maximum_bytes <= 0:
+        raise ValueError("maximum_bytes must be positive")
+    if backup_count <= 0:
+        raise ValueError("backup_count must be positive")
     if stdout_log.resolve() == stderr_log.resolve():
         raise ValueError("stdout and stderr logs must be different files")
 
@@ -341,8 +411,11 @@ def run_process(
             bufsize=0,
             creationflags=creation_flags,
             startupinfo=startup_info,
+            # POSIX 使用独立会话，清理时才能按进程组终止所有后代；Windows
+            # 保持既有 taskkill /T 语义，不改变生产监控链。
+            start_new_session=os.name != "nt",
         )
-        if process.stdout is None or process.stderr is None:  # pragma: no cover - Popen contract
+        if process.stdout is None or process.stderr is None:  # pragma: no cover - Popen 契约
             raise RuntimeError("failed to create output pipes")
 
         failed = threading.Event()
@@ -404,7 +477,10 @@ def run_process(
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--stdout-log", required=True, type=Path)
     parser.add_argument("--stderr-log", required=True, type=Path)
     parser.add_argument("--max-bytes", required=True, type=int)
@@ -420,6 +496,16 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--max-bytes must be between 65536 and 10737418240")
     if not 1 <= arguments.backup_count <= 100:
         parser.error("--backup-count must be between 1 and 100")
+    if not arguments.cwd.is_dir():
+        parser.error("--cwd must be an existing directory")
+    if arguments.stdout_log.resolve() == arguments.stderr_log.resolve():
+        parser.error("--stdout-log and --stderr-log must be different files")
+    for option, path in (
+        ("--stdout-log", arguments.stdout_log),
+        ("--stderr-log", arguments.stderr_log),
+    ):
+        if path.exists() and not path.is_file():
+            parser.error(f"{option} must be a file path")
     return arguments
 
 
@@ -436,4 +522,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

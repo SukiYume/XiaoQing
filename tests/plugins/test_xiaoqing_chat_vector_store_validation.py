@@ -137,3 +137,21 @@ def test_vector_store_write_persists_matching_digest(tmp_path):
 
     with np.load(tmp_path / "memory.vecs.npz", allow_pickle=False) as cache:
         assert str(np.asarray(cache["docs_digest"]).item()) == _docs_content_digest(docs)
+
+
+def test_vector_store_load_keeps_unique_document_ids(tmp_path):
+    (tmp_path / "memory.docs.json").write_text(
+        json.dumps(
+            [
+                {"doc_id": "same", "text": "old", "meta": {"version": 1}},
+                {"doc_id": "same", "text": "new", "meta": {"version": 2}},
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    store = VectorStore(dim=4)
+
+    store.load(tmp_path, name="memory")
+
+    assert store.all_docs() == [VectorDoc(doc_id="same", text="new", meta={"version": 2})]

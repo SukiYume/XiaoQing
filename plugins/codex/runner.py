@@ -26,7 +26,6 @@ _T = TypeVar("_T")
 _USAGE_KEYS = ("input_tokens", "cached_input_tokens", "output_tokens")
 _MAX_THREAD_ID_CHARS = 512
 _MAX_EVENT_COUNTER = 2**63 - 1
-_DEFAULT_EVENT_MESSAGE_BYTES = 8 * 1024 * 1024
 
 
 @dataclass
@@ -345,7 +344,7 @@ async def _settle_owned_task(task: asyncio.Task[_T]) -> _OwnedTaskOutcome[_T]:
             cancellation = cancellation or exc
     try:
         result = task.result()
-    except BaseException as exc:  # task failure is returned for ordered cleanup handling.
+    except BaseException as exc:  # 把任务失败交给调用方按资源顺序统一处理。
         return _OwnedTaskOutcome(error=exc, cancellation=cancellation)
     return _OwnedTaskOutcome(result=result, cancellation=cancellation)
 
@@ -890,7 +889,7 @@ async def _drain_process_after_termination(
             process.communicate(),
             timeout=max(0.01, timeout_seconds),
         )
-    except Exception as exc:  # noqa: BLE001 - cleanup must close every pipe on read failure.
+    except Exception as exc:  # noqa: BLE001 - 即使读取失败，清理路径也必须关闭全部管道。
         logger.warning(
             "Codex process pipe drain failed: pid=%s error_type=%s",
             getattr(process, "pid", None),
@@ -905,7 +904,7 @@ async def _terminate_and_drain_process(
 ) -> tuple[ProcessTreeTerminationResult, bytes, bytes]:
     try:
         termination = await terminate_process_tree(process)
-    except Exception as exc:  # noqa: BLE001 - final ownership fallback must still reap.
+    except Exception as exc:  # noqa: BLE001 - 最终所有权兜底仍必须回收父进程。
         logger.error(
             "Codex process-tree helper failed; using parent fallback: pid=%s error_type=%s",
             getattr(process, "pid", None),
@@ -938,7 +937,9 @@ async def _terminate_and_drain_process(
     return termination, stdout, stderr
 
 
-def _consume_task_exception(task: asyncio.Task[Any], *, name: str) -> BaseException | None:
+def _consume_task_exception(task: asyncio.Task[Any]) -> BaseException | None:
+    """读取已完成任务的异常；任务自身取消不视为流处理失败。"""
+
     if task.cancelled():
         return None
     try:
@@ -974,7 +975,7 @@ async def _settle_stream_tasks(
 
     failures: list[tuple[str, BaseException]] = []
     for name, task in tasks.items():
-        error = _consume_task_exception(task, name=name)
+        error = _consume_task_exception(task)
         if error is not None:
             failures.append((name, error))
     return failures
@@ -1036,7 +1037,7 @@ def _completed_stream_failure(
         task = tasks[name]
         if task not in done:
             continue
-        error = _consume_task_exception(task, name=name)
+        error = _consume_task_exception(task)
         if error is None:
             continue
         if isinstance(error, OutputBudgetExceeded):

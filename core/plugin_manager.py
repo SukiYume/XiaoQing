@@ -240,7 +240,7 @@ class PluginManager(
             package_path = os.path.abspath(self.plugins_dir)
             lease_keys.append(_acquire_process_import_path(paths, package_path))
             with _PLUGIN_IMPORT_LOCK:
-                _install_namespace_tombstone_locked("*")
+                _install_namespace_tombstone_locked()
         except BaseException:
             _release_process_import_paths(tuple(lease_keys))
             raise
@@ -276,7 +276,7 @@ class PluginManager(
             # Claim and deny ordinary import fallback in one critical section.
             # The tombstone remains authoritative until a frozen generation
             # finder atomically replaces it.
-            _install_namespace_tombstone_locked(plugin_name)
+            _install_namespace_tombstone_locked()
             _PLUGIN_NAMESPACE_OWNERS[plugin_name] = self._namespace_owner_token
             self._owned_plugin_modules.setdefault(plugin_name, {})
             return True
@@ -509,7 +509,7 @@ class PluginManager(
             # Replace the inactive generation finder before dropping ownership;
             # there is never a list position where PathFinder can rediscover
             # source from ``plugins.__path__``.
-            _install_namespace_tombstone_locked(plugin_name, replace=finder)
+            _install_namespace_tombstone_locked(replace=finder)
             self._source_finders.pop(plugin_name, None)
             _PLUGIN_NAMESPACE_OWNERS.pop(plugin_name, None)
             self._owned_plugin_modules.pop(plugin_name, None)

@@ -225,7 +225,7 @@ def create_event_collection(
             key=lambda value: TimezoneHelper.parse(value, event_timezone),
         )
 
-        db.create_event_collection_with_children(
+        db.create_event_collection(
             {
                 "id": collection_id,
                 "owner_id": owner_id,

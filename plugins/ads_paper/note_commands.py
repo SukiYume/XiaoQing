@@ -1,23 +1,28 @@
 """个人论文笔记、写作灵感、研究主题与截稿日期命令。"""
 
 import asyncio
-import logging
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any
+from typing import ParamSpec, TypeVar
 
-from core.plugin_base import segments
+from core.plugin_base import Segments, segments
 
 from .constants import DATE_FORMAT
 from .storage import PaperStorage
 
-logger = logging.getLogger(__name__)
+P = ParamSpec("P")
+R = TypeVar("R")
 
 
-async def _run_storage(func, *args):
-    return await asyncio.to_thread(func, *args)
+async def _run_storage(func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:
+    """把同步文件事务移出事件循环，并保留被调函数的参数与返回类型。"""
+
+    return await asyncio.to_thread(func, *args, **kwargs)
 
 
-async def cmd_note(storage: PaperStorage, args: str, user_id: int) -> list[dict[str, Any]]:
+async def cmd_note(storage: PaperStorage, args: str, user_id: int) -> Segments:
+    """添加、查看或删除当前用户的论文笔记。"""
+
     raw_args = args.strip()
     parts = raw_args.split(maxsplit=1)
 
@@ -69,7 +74,9 @@ async def cmd_note(storage: PaperStorage, args: str, user_id: int) -> list[dict[
     return segments("❌ 添加笔记失败")
 
 
-async def cmd_writing(storage: PaperStorage, args: str, user_id: int) -> list[dict[str, Any]]:
+async def cmd_writing(storage: PaperStorage, args: str, user_id: int) -> Segments:
+    """添加、查看或删除按章节归档的写作灵感。"""
+
     raw_args = args.strip()
     parts = raw_args.split(maxsplit=1)
 
@@ -134,7 +141,9 @@ async def cmd_topics(
     storage: PaperStorage,
     args: str,
     user_id: int,
-) -> list[dict[str, Any]]:
+) -> Segments:
+    """维护每日论文推荐使用的个人研究主题。"""
+
     parts = args.strip().split(maxsplit=1)
 
     if not parts:
@@ -176,7 +185,9 @@ async def cmd_topics(
     return segments("❌ 未知命令\n用法: /paper topics [add/remove/clear] [关键词]")
 
 
-async def cmd_deadline(storage: PaperStorage, args: str, user_id: int) -> list[dict[str, Any]]:
+async def cmd_deadline(storage: PaperStorage, args: str, user_id: int) -> Segments:
+    """添加、查看或删除个人截稿日期。"""
+
     parts = args.strip().split(maxsplit=1)
 
     if not parts:
@@ -204,7 +215,7 @@ async def cmd_deadline(storage: PaperStorage, args: str, user_id: int) -> list[d
         except ValueError:
             return segments("❌ 用法: /paper deadline add <名称> <日期 (YYYY-MM-DD)>")
 
-        # Validate date format
+        # 存储层只负责原子读写，命令层先拒绝不稳定的自由格式日期。
         try:
             datetime.strptime(date, DATE_FORMAT)
         except ValueError:

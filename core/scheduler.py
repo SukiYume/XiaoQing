@@ -515,11 +515,3 @@ class SchedulerManager:
                 self.scheduler.remove_job(job_id)
             except JobLookupError:
                 return
-
-    def clear_prefix(self, prefix: str) -> None:
-        if not self.scheduler:
-            return
-        with self._job_mutation_lock:
-            for job in self.scheduler.get_jobs():
-                if job.id.startswith(prefix):
-                    self.scheduler.remove_job(job.id)

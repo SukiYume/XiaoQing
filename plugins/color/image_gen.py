@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from core.bounded_file_cache import BoundedFileCache, FileCacheLimits
+from core.interfaces import PluginContextProtocol
 from core.plugin_base import has_control_characters, run_sync
 from core.public_errors import public_error_message
 
@@ -103,7 +104,7 @@ async def generate_color_image(
     name: str,
     rgb: list[int],
     output_dir: Path,
-    context: Any,
+    context: PluginContextProtocol,
 ) -> str | None:
     """生成内容寻址色卡；依赖缺失或生成失败时返回 ``None``。"""
 

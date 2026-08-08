@@ -1,3 +1,5 @@
+"""从模型返回值中保守提取结构化规划列表。"""
+
 from __future__ import annotations
 
 from typing import Any

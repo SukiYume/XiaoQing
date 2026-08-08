@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from core.constants import MAX_MESSAGE_TEXT_LENGTH
+from core.interfaces import PluginContextProtocol
 from core.plugin_base import Segments, has_control_characters, segments
 from core.public_errors import public_error_response
 
@@ -16,15 +17,14 @@ _HELLO_ALIASES = frozenset({"hello", "你好"})
 _MAX_USER_ID_DIGITS = 19
 _MAX_USER_ID = 2**63 - 1
 
-HELP_TEXT = """
-📢 **Echo 插件**
+HELP_TEXT = """📢 Echo 插件
 
-**用法：**
-• /echo <文本> - 原样回显去除首尾空白后的文本
-• /hello - 使用当前 QQ 号打招呼
+用法
+/echo <文本>  原样回显去除首尾空白后的文本
+/hello  使用当前 QQ 号打招呼
 
 回显文本最多 3000 个字符；允许换行和制表符，不接受其他控制字符。
-""".strip()
+"""
 
 
 def _display_user_id(event: dict[str, Any]) -> str:
@@ -49,7 +49,7 @@ async def handle(
     command: str,
     args: str,
     event: dict[str, Any],
-    context: object,
+    context: PluginContextProtocol,
 ) -> Segments:
     """按清单别名分发两个简单命令，并在边界处限制公开文本。"""
 

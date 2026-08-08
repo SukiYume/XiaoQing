@@ -879,9 +879,10 @@ async def test_handle_internal_reset_clears_goal_heartflow_and_action_history(
     assert [item.expression_id for item in state.bw_tracker_store.get_trackers("g-other")] == [
         "expr-other"
     ]
-    assert state.media_store.resolve_media_items([{"media_key": "shared-media"}])[0][
-        "description"
-    ] == "共享图片"
+    assert (
+        state.media_store.resolve_media_items([{"media_key": "shared-media"}])[0]["description"]
+        == "共享图片"
+    )
 
 
 @pytest.mark.asyncio

@@ -12,6 +12,7 @@ from plugins.pendo.models.item import TaskStatus
 from plugins.pendo.services import db as db_module
 from plugins.pendo.services.db import Database
 from plugins.pendo.services.reminder import ReminderService
+from tests.helpers.pendo_test_support import _read_scheduled_delivery
 
 
 def test_initial_reminder_outside_check_window_is_not_backfilled():
@@ -117,7 +118,9 @@ def test_owner_mismatch_cannot_delete_item_auxiliary_rows(db):
 
     assert db.get_item(item_id, "u-owner") is not None
     assert len(db.get_reminder_logs(item_id)) == 1
-    assert [item.id for item in db.search_items("u-owner", "所有者隔离测试")] == [item_id]
+    results, total = db.search_items_page("u-owner", "所有者隔离测试")
+    assert total == 1
+    assert [item.id for item in results] == [item_id]
 
 
 def test_row_decoder_restores_declared_json_containers_and_task_status(db):
@@ -187,7 +190,9 @@ def test_literal_search_and_tag_filters_do_not_expand_like_wildcards(db):
             }
         )
 
-    assert [item.id for item in db.search_items("u-like-literal", "%")] == ["literal-percent"]
+    results, total = db.search_items_page("u-like-literal", "%")
+    assert total == 1
+    assert [item.id for item in results] == ["literal-percent"]
     assert [
         item.id for item in db.get_items("u-like-literal", filters={"keyword": "under_score"})
     ] == ["literal-underscore"]
@@ -336,7 +341,8 @@ def test_scheduled_delivery_validates_time_lease_and_normalizes_identity(db):
     assert db.complete_scheduled_delivery(
         "briefing", "u1", "2030-01-01", claim["claim_token"], now=aware_now
     )
-    assert db.get_scheduled_delivery(" briefing ", "u1", "2030-01-01")["state"] == "sent"
+    delivery = _read_scheduled_delivery(db, " briefing ", "u1", "2030-01-01")
+    assert delivery is not None and delivery["state"] == "sent"
 
 
 def test_reminder_release_respects_next_attempt_time(db):
@@ -441,7 +447,7 @@ def test_scheduled_delivery_outbox_is_cross_instance_atomic_and_recoverable(tmp_
         )
         is None
     )
-    row = first_db.get_scheduled_delivery("daily_briefing", "1001", "2030-01-01")
+    row = _read_scheduled_delivery(first_db, "daily_briefing", "1001", "2030-01-01")
     assert row is not None
     assert row["state"] == "sent"
     assert row["failure_count"] == 1
@@ -592,7 +598,7 @@ def test_daily_briefing_outbox_prevents_duplicate_after_marker_failure(tmp_path,
     assert sent[0]["echo"] == Database.scheduled_delivery_key(
         "daily_briefing", "1001", "2030-01-01"
     )
-    row = first_db.get_scheduled_delivery("daily_briefing", "1001", "2030-01-01")
+    row = _read_scheduled_delivery(first_db, "daily_briefing", "1001", "2030-01-01")
     assert row is not None and row["state"] == "sent"
 
     first_db.cleanup()

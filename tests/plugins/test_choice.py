@@ -30,6 +30,7 @@ class TestChoicePackageContract:
         assert choice.MAX_OPTIONS == 50
         assert choice.MAX_CHOICES == 10
         assert "随机选择" in choice.HELP_TEXT
+        assert "**" not in choice.HELP_TEXT
 
     def test_manifest_matches_runtime_entrypoints(self) -> None:
         manifest = json.loads(
@@ -66,9 +67,14 @@ class TestParseChoiceArgs:
             True,
         )
 
-    @pytest.mark.parametrize("args", ["", "   ", "help", "帮助", "-u"])
+    @pytest.mark.parametrize("args", ["", "   ", "help", "帮助"])
     def test_empty_or_help_arguments_return_empty_request(self, args: str) -> None:
         assert choice.parse_choice_args(args) == (None, [], 1, False)
+
+    @pytest.mark.parametrize("args", ["-u", "-n 2", "--", "-u -n 2"])
+    def test_flags_without_question_are_rejected(self, args: str) -> None:
+        with pytest.raises(choice.ChoiceArgumentError, match="问题"):
+            choice.parse_choice_args(args)
 
     @pytest.mark.parametrize("alias", ["help", "HELP", "帮助"])
     def test_help_with_extra_text_is_not_an_exact_help_request(self, alias: str) -> None:
@@ -184,7 +190,7 @@ class TestFormatChoiceResult:
         rng.choice.return_value = "🎲"
         monkeypatch.setattr(choice, "_RNG", rng)
 
-        assert choice.format_choice_result("午饭", ["火锅"], 3) == "🎲 午饭：**火锅**"
+        assert choice.format_choice_result("午饭", ["火锅"], 3) == "🎲 午饭：火锅"
 
     def test_multiple_results_include_order_and_statistics(
         self,
@@ -196,7 +202,7 @@ class TestFormatChoiceResult:
 
         result = choice.format_choice_result("午饭", ["火锅", "日料"], 3)
 
-        assert result == "🎯 午饭：\n  1. **火锅**\n  2. **日料**\n\n已从 3 个选项中选择 2 个"
+        assert result == "🎯 午饭：\n  1. 火锅\n  2. 日料\n\n已从 3 个选项中选择 2 个"
 
 
 class TestChoiceCommand:
@@ -220,7 +226,7 @@ class TestChoiceCommand:
 
         result = await choice.handle("choice", "午饭 火锅 火锅 日料", {}, context)
 
-        assert "🎲 午饭：**火锅**" in str(result)
+        assert "🎲 午饭：火锅" in str(result)
         rng.choices.assert_called_once_with(["火锅", "火锅", "日料"], k=1)
         logged = "\n".join(str(call) for call in context.logger.mock_calls)
         assert "午饭" not in logged
@@ -261,6 +267,7 @@ class TestChoiceCommand:
     @pytest.mark.parametrize(
         ("args", "message"),
         [
+            ("-u", "问题"),
             ("问题 A", "至少需要"),
             ("问题 A A -n 2 -u", "不同选项数量"),
             ("问题 A B -n nope", "ASCII"),

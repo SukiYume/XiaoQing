@@ -81,9 +81,7 @@ def _coerce_runtime_number(
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"invalid numeric configuration field {key!r}: {value!r}") from exc
     if not math.isfinite(float(parsed)) or parsed < minimum or parsed > maximum:
-        raise ValueError(
-            f"configuration field {key!r} must be between {minimum} and {maximum}"
-        )
+        raise ValueError(f"configuration field {key!r} must be between {minimum} and {maximum}")
     return parsed
 
 
@@ -150,9 +148,7 @@ def _parse_positive_ids(raw_ids: object, *, field_name: str) -> tuple[int, ...]:
         elif type(raw_id) is str and raw_id and raw_id.isascii() and raw_id.isdecimal():
             user_id = int(raw_id)
         else:
-            raise TypeError(
-                f"{field_name} entries must be integers or decimal strings"
-            )
+            raise TypeError(f"{field_name} entries must be integers or decimal strings")
         if user_id <= 0:
             raise ValueError(f"{field_name} entries must be positive")
         parsed.append(user_id)

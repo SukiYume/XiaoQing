@@ -297,17 +297,6 @@ class TestSessionManager:
         assert await session_manager.count() == 1
 
     @pytest.mark.asyncio
-    async def test_list_user_sessions(self, session_manager: SessionManager):
-        """测试列出用户所有会话"""
-        await session_manager.create(12345, None, "private")
-        await session_manager.create(12345, 100, "group1")
-        await session_manager.create(12345, 200, "group2")
-        await session_manager.create(99999, None, "other_user")
-
-        sessions = await session_manager.list_user_sessions(12345)
-        assert len(sessions) == 3
-
-    @pytest.mark.asyncio
     async def test_cleanup_expired(self, session_manager: SessionManager):
         """测试清理过期会话"""
         import time
@@ -481,7 +470,7 @@ class TestSessionTimeout:
         await asyncio.gather(*(manager.peek(user_id, user_id) for user_id in range(2000, 3000)))
 
         assert manager.active_count == 0
-        assert manager.active_key_lock_count == 0
+        assert manager._key_lock_pool.active_key_count == 0
 
 
 class TestSessionTransactions:
@@ -506,10 +495,8 @@ class TestSessionTransactions:
         assert second.data == {"nested": {"values": [1]}}
         assert second.session_id == created.session_id
 
-        listed = await manager.list_user_sessions(1)
         all_sessions = await manager.get_all_sessions("test")
-        listed[0].data["nested"]["values"].append(5)
-        all_sessions[0].data["nested"]["values"].append(6)
+        all_sessions[0].data["nested"]["values"].append(5)
         assert (await manager.peek(1, None)).data == {"nested": {"values": [1]}}
 
     @pytest.mark.asyncio
@@ -543,7 +530,7 @@ class TestSessionTransactions:
         with pytest.raises(TypeError, match="session data values"):
             await manager.create(1, None, "test", {"bad": CannotCopy()})
         assert await manager.exists(1, None) is False
-        assert manager.active_key_lock_count == 0
+        assert manager._key_lock_pool.active_key_count == 0
 
     @pytest.mark.asyncio
     async def test_exception_and_base_exception_roll_back_value_and_metadata(self):
@@ -828,7 +815,7 @@ class TestSessionTransactions:
         assert await manager.peek(1, 10) == originals[0]
         assert await manager.peek(2, 20) == originals[1]
         assert manager._transactions == {}
-        assert manager.active_key_lock_count == 0
+        assert manager._key_lock_pool.active_key_count == 0
 
     @pytest.mark.asyncio
     async def test_precreated_task_is_reclaimed_and_never_becomes_transaction_owner(self):
@@ -872,7 +859,7 @@ class TestSessionTransactions:
 
         assert await manager.peek(1, 2) == original
         assert manager._transactions == {}
-        assert manager.active_key_lock_count == 0
+        assert manager._key_lock_pool.active_key_count == 0
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("callback_kind", ["sync", "async"])
@@ -896,7 +883,7 @@ class TestSessionTransactions:
 
         assert await manager.peek(1, 2) == original
         assert manager._transactions == {}
-        assert manager.active_key_lock_count == 0
+        assert manager._key_lock_pool.active_key_count == 0
 
     @pytest.mark.asyncio
     async def test_child_task_does_not_inherit_transaction_and_waits_for_commit(self):
@@ -942,7 +929,7 @@ class TestSessionTransactions:
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(task, timeout=1)
         assert manager._transactions == {}
-        assert manager.active_key_lock_count == 0
+        assert manager._key_lock_pool.active_key_count == 0
         committed = await manager.peek(1, 2)
         assert committed is not None and committed.data["value"] == 1
 

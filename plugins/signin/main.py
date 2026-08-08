@@ -16,18 +16,11 @@ _HELP_ALIASES = {"help", "帮助", "?"}
 _YINGSHI_ALIASES = {"yingshi", "yingshijufeng", "y"}
 _HELP_TEXT = (
     "📝 影视飓风远端签到\n"
-    "━━━━━━━━━━━━━━━━━━\n"
-    "/signin yingshi - 立即签到\n"
-    "/signin y - 立即签到（简写）\n"
-    "/signin help - 显示帮助\n\n"
-    "凭据配置路径: plugins.signin.yingshijufeng"
+    "• /signin yingshi\n"
+    "  立即签到（简写：/signin y）\n"
+    "• /signin help\n"
+    "凭据：plugins.signin.yingshijufeng"
 )
-
-
-def init(context: Context | None = None) -> None:
-    """记录插件初始化完成。"""
-
-    logger.info("Signin plugin initialized")
 
 
 async def handle(
@@ -72,10 +65,10 @@ async def handle(
 
 
 async def scheduled_yingshi(context: Context) -> MessageSegments:
-    """Execute the manifest-targeted daily sign-in.
+    """执行 manifest 指定的每日签到。
 
-    The core scheduler supplies delivery targets from the schedule entry; this
-    handler returns content only and must not invent a target in the payload.
+    Core 调度器根据计划项补充投递目标；本处理器只返回内容，不能在载荷中自行
+    构造群号或用户号。
     """
 
     return await yingshi.yingshi_sign(context)

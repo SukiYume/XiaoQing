@@ -1,3 +1,5 @@
+"""按人物边界、对话历史和当前媒体构建回复提示消息。"""
+
 from __future__ import annotations
 
 import json
@@ -95,7 +97,7 @@ _CURRENT_MEDIA_MARKER_RE = re.compile(r"\[(图片|表情包|QQ表情)：([^\]\n]
 def _format_message_time(ts: float) -> str:
     try:
         return time.strftime("%H:%M", time.localtime(float(ts)))
-    except Exception:
+    except (TypeError, ValueError, OverflowError, OSError):
         return time.strftime("%H:%M", time.localtime())
 
 
@@ -389,8 +391,8 @@ def build_prompt_messages(
     history: Sequence[StoredMessage],
     current_text: str,
     personality: PersonalityConfig,
-    keyword_rules: list[Any],
-    regex_rules: list[Any],
+    keyword_rules: Sequence[Any],
+    regex_rules: Sequence[Any],
     current_parts: Sequence[dict[str, Any]] | None = None,
     memory_block: str = "",
     expression_habits_block: str = "",

@@ -1,10 +1,12 @@
+"""定义 XiaoQing Chat 的行为配置模型、交叉约束和文件加载顺序。"""
+
 from __future__ import annotations
 
 import json
 import re
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Any, Literal, Self, cast
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -32,6 +34,11 @@ _MAX_REGEX_LENGTH = 512
 _NESTED_UNBOUNDED_REPEAT_RE = re.compile(
     r"\((?:[^()\\]|\\.)*[+*](?:[^()\\]|\\.)*\)\s*(?:[+*]|\{\d*,?\d*\})"
 )
+
+
+# ---------------------------------------------------------------------------
+# 共享字段类型与安全校验
+# ---------------------------------------------------------------------------
 
 
 def _validated_regex_pattern(value: str) -> str:
@@ -345,6 +352,11 @@ class MediaConfig(BaseModel):
     meme_cultural_hint_timeout_seconds: PositiveTimeoutSeconds = 8.0
 
 
+# ---------------------------------------------------------------------------
+# 根配置与跨字段约束
+# ---------------------------------------------------------------------------
+
+
 class XiaoQingChatConfig(BaseModel):
     enable_smalltalk: bool = True
     reply_probability_base: Probability = 0.55
@@ -433,6 +445,11 @@ class XiaoQingChatConfig(BaseModel):
         return self
 
 
+# ---------------------------------------------------------------------------
+# 行为配置文件加载
+# ---------------------------------------------------------------------------
+
+
 def _read_json(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
         data = json.load(f)
@@ -477,4 +494,4 @@ def load_xiaoqing_chat_config(
     elif file_path.exists():
         data = _merge_config_mappings(data, _read_json(file_path))
 
-    return XiaoQingChatConfig.model_validate(data)
+    return cast(XiaoQingChatConfig, XiaoQingChatConfig.model_validate(data))

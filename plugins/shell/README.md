@@ -1,60 +1,45 @@
-# Shell 插件
+# 💻 Shell
 
-仅供 Bot 管理员在私聊中于 Bot 所在主机执行单条本地命令。插件默认直接创建外部进程；也可由公开配置显式选择
-Git Bash 作为终端。每次调用彼此独立，不保存工作目录或环境状态。
+`shell` 让 Bot 管理员通过 QQ 私聊在 Bot 主机执行单条本地命令。每次调用创建独立进程，工作目录和环境状态按调用重新建立。
 
-管理员身份、manifest 私聊场景和入站认证共同构成权限边界。命令启用列表、受限模式、超时和输出预算用于减少误触与资源失控，
-**不是安全沙箱**；`python`、`cmd`、`powershell` 等解释器仍具有管理员授予的完整本机能力。
+---
 
-## 命令
+## 🔐 权限与主机边界
+
+Manifest 将命令标记为 `admin_only: true`，并将场景限定为私聊。子进程继承 Bot 账户的文件、网络和进程权限。命令启用列表用于降低误触概率；操作系统低权限账户、容器或专用执行服务负责安全隔离。
+
+入站鉴权、Bot 管理员列表、私聊场景、终端配置和启用列表共同构成部署边界。生产环境建议采用专用低权限 Bot 账户和最小 `replace` 列表。
+
+---
+
+## ⌨️ 命令
 
 ```text
 /shell <命令>
-/shell help
 /shell list
+/shell help
 ```
 
-清单注册的三个等价入口为 `/shell`、`/sh` 和 `/exec`，均受同一 `admin_only` 与 `contexts: ["private"]` 约束。
-`/shell list` 会按当前终端分别显示可执行和未找到的入口。启用只代表允许尝试，不负责安装程序，也不会替部署者修改 PATH。
+Manifest 等价入口为 `/shell`、`/sh` 和 `/exec`。`list` 显示当前启用入口及其在所选终端中的可用状态。
 
-Windows 常用示例：
-
-```text
-/shell python --version
-/shell git status --short
-/shell cmd /c dir
-/shell cmd /c cd
-/shell cmd /c copy C:/workspace/a.txt C:/workspace/b.txt
-```
-
-Linux/macOS 常用示例：
+Git Bash 示例：
 
 ```text
-/shell ls -la
 /shell pwd
-/shell cp /srv/a.txt /srv/b.txt
+/shell ls -la
+/shell git status --short
+/shell python --version
 ```
 
-`cd`、`copy`、`dir`、`type` 等依赖命令解释器的内建语义，不能作为首个程序直接执行。确实需要时可显式
-调用 `cmd /c ...` 或相应解释器；这样做也意味着后续参数由该解释器解释，启用列表不再限制其内部行为。
+解释器内建命令需要显式解释器，例如 Windows direct 后端可使用 `/shell cmd /c dir`。启用通用解释器会同时授予该解释器可表达的主机能力。
 
-## 终端配置
+---
 
-公开终端配置位于 `config/config.json` 的 `plugins.shell`。未配置时使用 `direct`：
+## ⚙️ 终端配置
 
-```json
-{
-  "plugins": {
-    "shell": {
-      "terminal": {
-        "backend": "direct"
-      }
-    }
-  }
-}
-```
+终端选项位于 `config/config.json` 的 `plugins.shell.terminal`。
 
-Windows 上可显式指定 Git Bash。路径由部署者配置，项目不会猜测安装目录：
+### Git Bash
 
 ```json
 {
@@ -69,19 +54,36 @@ Windows 上可显式指定 Git Bash。路径由部署者配置，项目不会猜
 }
 ```
 
-Git Bash 使用 `--noprofile --norc -c` 启动，不加载用户 profile/rc。原始命令仍会先经过危险模式和首入口启用列表校验，
-随后才交给 Bash；启用 `python`、`bash` 等通用解释器仍等价于授予其完整能力。
+Git Bash 使用 `--noprofile --norc -c` 启动。部署者在配置中填写实际可执行文件路径。
 
-## 命令启用配置
-
-命令启用列表和超时位于 `config/secrets.json` 的 `plugins.shell`：
+### Direct
 
 ```json
 {
   "plugins": {
     "shell": {
-      "whitelist": ["ls", "pwd", "git"],
-      "whitelist_mode": "extend",
+      "terminal": {
+        "backend": "direct"
+      }
+    }
+  }
+}
+```
+
+Direct 后端将首个 token 解析为 Bot 进程 PATH 中的外部程序或明确路径，并通过 `create_subprocess_exec` 启动。
+
+---
+
+## ⌨️ 命令启用与超时
+
+敏感设置位于 `config/secrets.json`：
+
+```json
+{
+  "plugins": {
+    "shell": {
+      "whitelist": ["ls", "pwd", "git", "python"],
+      "whitelist_mode": "replace",
       "timeout": 30,
       "disable_whitelist": false
     }
@@ -89,38 +91,72 @@ Git Bash 使用 `--noprofile --norc -c` 启动，不加载用户 profile/rc。�
 }
 ```
 
-- 未提供 `whitelist` 时使用默认启用列表。
-- `whitelist_mode = "replace"` 只启用自定义项；显式空列表会禁用全部命令入口。
-- `whitelist_mode = "extend"` 在默认列表上增加自定义项。
-- 非序列白名单和非字符串成员会被忽略，不会被拆成字符或隐式转换。
-- `timeout` 必须是有限正数；无效值回退为 30 秒。
-- 只有 JSON 布尔值 `true` 会关闭启用列表；字符串 `"true"` 或 `"false"` 不会改变权限。
+| 字段 | 规则 |
+| --- | --- |
+| `whitelist` | 命令首入口字符串列表 |
+| `whitelist_mode=replace` | 使用自定义列表作为完整启用集合 |
+| `whitelist_mode=extend` | 将自定义项加入项目默认集合 |
+| `timeout` | 有限正数秒，默认 30 |
+| `disable_whitelist` | JSON 布尔值 `true` 开启全部首入口 |
 
-## 执行与资源边界
+空的 `replace` 列表会关闭全部命令入口。配置项按严格类型解析。
 
-- 明显的命令链接、管道、替换、多行输入及若干高风险误触形式始终被拒绝。
-- `direct` 后端要求首个程序能由 Bot 进程 PATH 或明确路径解析；Git Bash 后端按其自身命令环境解析。
-- 配置的 Git Bash 路径失效时会在执行前返回可操作提示，不会静默改用 WSL Bash 或 direct。
-- 子进程标准输入固定连接到空设备；插件不支持交互式提示、编辑器或密码输入。
-- 每条命令在独立进程组中启动；超时、输出溢出或任务取消会回收整棵子进程树。
-- stdout 与 stderr 的原始捕获共享 64 KiB 硬上限，QQ 回复中的输出正文共享 4000 字符首尾预算。
-- 审计日志只记录请求 ID、状态、返回码、长度和进程内指纹，不记录原始命令。
+---
 
-这些规则不能阻止已启用解释器执行任意代码，也不能限制普通程序自身的文件、网络或子进程能力。
+## 🔐 执行边界
 
-## 路径格式
+- 命令链接、管道、命令替换、多行输入、追加重定向和预定义高风险模式会在启动前被拒绝；
+- 原始命令先经过模式检查和首入口检查，再交给所选终端；
+- 标准输入连接空设备，适合单次非交互命令；
+- 子进程在独立进程组中启动；
+- 超时、任务取消和输出溢出会触发整棵子进程树回收；
+- stdout 与 stderr 共享至少 64 KiB 原始捕获预算；
+- QQ 回复正文共享 4000 字符首尾预算；
+- 进程返回码、stdout 和 stderr 分区展示。
 
-QQ 消息中建议统一使用 `/` 斜杠；插件会按 Bot 所在系统规范化看起来像本地路径的参数：
+已启用解释器和程序可按自身能力访问文件、网络和子进程。管理员应把启用列表与主机权限一起审查。
 
-- Windows 可输入 `C:/workspace/a.txt`。
-- Linux/macOS 可输入 `/home/user/a.txt`、`~/a.txt`、`./file` 或 `../file`。
-- `key=value` 中的路径值也会规范化，URL 不会被改写。
-- Windows 选项 `/c`、`/Y` 等不会被误判成路径。
-- 路径含空格时必须使用引号。
+---
 
-## 运维建议
+## 🔄 路径规则
 
-- 仅在受控管理员入口启用该插件，并定期检查管理员名单和入站认证。
-- 生产环境优先使用最小化的 `replace` 列表，不要长期设置 `disable_whitelist = true`。
-- 由部署者在启动 Bot 前配置程序和 PATH；若选择 Git Bash，其可执行文件路径只写在部署配置中，不写死在插件代码里。
-- 不要把启用列表当作权限隔离；需要真正隔离时，应在操作系统层使用低权限账户、容器或专用执行服务。
+QQ 输入建议使用 `/`：
+
+- Windows：`C:/workspace/a.txt`；
+- Linux 和 macOS：`/home/user/a.txt`、`~/a.txt`、`./file`；
+- `key=value` 中的路径值参与规范化；
+- URL 保持原文；
+- Windows 选项 `/c`、`/Y` 保持参数语义；
+- 含空格路径使用引号。
+
+---
+
+## 💾 审计
+
+敏感审计记录请求 ID、状态、返回码、命令长度和进程内单向指纹。原始命令、stdout、stderr 和配置 secret 保留在普通日志边界之外。
+
+---
+
+## 🩺 排障
+
+| 现象 | 检查项 |
+| --- | --- |
+| 终端配置异常 | 核对 `backend` 和 Git Bash `executable` |
+| 命令入口被拒绝 | 核对 `whitelist` 与 `whitelist_mode` |
+| 程序解析失败 | 在所选终端中检查 PATH，或使用明确程序路径 |
+| Shell 内建命令提示 | 显式调用对应解释器 |
+| 命令超时 | 调整 `timeout`，或改用后台服务管理长任务 |
+| 输出达到预算 | 缩小命令输出或将结果写入受控文件后再查询摘要 |
+
+---
+
+## ✅ 开发验证
+
+在仓库根目录运行：
+
+```bash
+python -m ruff check plugins/shell tests/plugins/test_shell_plugin.py
+python -m mypy plugins/shell
+python -m pytest -q tests/plugins/test_shell_plugin.py \
+  tests/plugins/test_shell_jupyter_log_privacy.py -n 2
+```

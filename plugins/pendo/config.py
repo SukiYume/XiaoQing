@@ -87,9 +87,11 @@ class PendoConfig:
     SESSION_TYPE_LEDGER_ADD = "ledger_add"
 
     # Web UI
+    # 认证期限统一使用秒。登录 Code 与浏览器会话均为 7 天，Widget
+    # Bearer Token 为 365 天；认证方式不同，但到期计算共享同一时间单位。
     WEB_LOGIN_CODE_EXPIRE_SECONDS = 7 * 24 * 60 * 60
-    WEB_SESSION_EXPIRE_SECONDS = 8 * 60 * 60
-    WEB_WIDGET_TOKEN_EXPIRE_HOURS = 24 * 365
+    WEB_SESSION_EXPIRE_SECONDS = WEB_LOGIN_CODE_EXPIRE_SECONDS
+    WEB_WIDGET_TOKEN_EXPIRE_SECONDS = 365 * 24 * 60 * 60
     WEB_DEMO_EXPIRE_HOURS = 6
     WEB_DEMO_MAX_ACTIVE_SESSIONS = 20
     WEB_DEMO_REQUESTS_PER_HOUR = 3
@@ -115,15 +117,10 @@ class PendoConfig:
             raise ValueError("REMINDER_STALE_AFTER_SECONDS must exceed the repeat interval")
         if cls.WEB_LOGIN_CODE_EXPIRE_SECONDS <= 0:
             raise ValueError("WEB_LOGIN_CODE_EXPIRE_SECONDS must be positive")
-        if cls.WEB_WIDGET_TOKEN_EXPIRE_HOURS <= 0:
-            raise ValueError("WEB_WIDGET_TOKEN_EXPIRE_HOURS must be positive")
-
-    @classmethod
-    def reset_runtime_config(cls) -> None:
-        """重置运行期可覆盖配置，避免热更新和测试间串值。"""
-        with cls._runtime_lock:
-            cls._runtime_settings = cls._RUNTIME_DEFAULTS
-            cls._runtime_revision = None
+        if cls.WEB_SESSION_EXPIRE_SECONDS <= 0:
+            raise ValueError("WEB_SESSION_EXPIRE_SECONDS must be positive")
+        if cls.WEB_WIDGET_TOKEN_EXPIRE_SECONDS <= 0:
+            raise ValueError("WEB_WIDGET_TOKEN_EXPIRE_SECONDS must be positive")
 
     @classmethod
     def runtime(cls) -> PendoRuntimeSettings:

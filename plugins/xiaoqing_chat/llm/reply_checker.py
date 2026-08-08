@@ -1,3 +1,5 @@
+"""用确定性规则和可选语义审查阻止不安全或失真的回复。"""
+
 from __future__ import annotations
 
 import difflib
@@ -101,8 +103,7 @@ def _normalize_text(s: str) -> str:
     # 中文省略号也承担分句作用。先归一化，避免人物事实藏在“……”后绕过
     # 只从句首扫描的确定性门禁。
     t = re.sub(r"…+", "。", t)
-    t = re.sub(r"\s+", " ", t)
-    return t
+    return re.sub(r"\s+", " ", t)
 
 
 def _heuristic_check(
@@ -750,9 +751,9 @@ def _requires_llm_semantic_check(
         )
     ):
         return True
-    if _CURRENT_MEDIA_MARKER_RE.search(current) or _CURRENT_MEDIA_MARKER_RE.search(candidate):
-        return True
-    return False
+    return bool(
+        _CURRENT_MEDIA_MARKER_RE.search(current) or _CURRENT_MEDIA_MARKER_RE.search(candidate)
+    )
 
 
 def _explicit_communication_constraint_check(

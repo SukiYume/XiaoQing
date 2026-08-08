@@ -6,15 +6,12 @@ import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone, tzinfo
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import Any, Final, Protocol, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from core.plugin_base import run_sync
 
 from ..config import PendoConfig
-
-if TYPE_CHECKING:
-    from ..services.db import Database
 
 logger = logging.getLogger(__name__)
 
@@ -38,13 +35,22 @@ _ALL_STORAGE_DATETIME_FIELDS: Final = frozenset(
 )
 
 
+class UserTimezoneSettingsReader(Protocol):
+    """时区解析只依赖用户设置读取能力，不耦合完整数据库实现。"""
+
+    def get_user_settings(self, user_id: str) -> dict[str, Any]: ...
+
+
 class TimezoneHelper:
     """集中处理 Pendo 持久化和展示使用的时区规则。"""
 
     DEFAULT_TZ = ZoneInfo(PendoConfig.DEFAULT_TIMEZONE)
 
     @staticmethod
-    def get_user_timezone(user_id: str, db: Database | None = None) -> ZoneInfo:
+    def get_user_timezone(
+        user_id: str,
+        db: UserTimezoneSettingsReader | None = None,
+    ) -> ZoneInfo:
         """获取用户时区"""
         if db:
             try:
@@ -85,7 +91,10 @@ class TimezoneHelper:
         return dt.astimezone(timezone.utc).isoformat()
 
 
-def now_in_timezone(user_id: str | None = None, db: Database | None = None) -> datetime:
+def now_in_timezone(
+    user_id: str | None = None,
+    db: UserTimezoneSettingsReader | None = None,
+) -> datetime:
     """获取用户时区的当前时间"""
     if user_id and db:
         tz = TimezoneHelper.get_user_timezone(user_id, db)
@@ -260,7 +269,10 @@ def normalize_event_collection_datetimes_for_storage(
     return normalized
 
 
-async def get_user_local_wall_time(user_id: str, db: Database) -> datetime:
+async def get_user_local_wall_time(
+    user_id: str,
+    db: UserTimezoneSettingsReader,
+) -> datetime:
     """在线程池读取用户时区，并返回供日期规则使用的朴素墙钟时间。"""
 
     current = cast(datetime, await run_sync(now_in_timezone, user_id, db))
@@ -278,7 +290,9 @@ def get_user_now_from_settings(settings: dict[str, Any], current_utc: datetime) 
 
 
 def parse_and_localize(
-    dt_str: str, user_id: str | None = None, db: Database | None = None
+    dt_str: str,
+    user_id: str | None = None,
+    db: UserTimezoneSettingsReader | None = None,
 ) -> datetime:
     """解析时间字符串并本地化"""
     if user_id and db:

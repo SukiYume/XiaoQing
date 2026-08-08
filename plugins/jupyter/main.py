@@ -70,34 +70,32 @@ _TIMEOUT_TOKEN = re.compile(
     re.IGNORECASE | re.ASCII,
 )
 
-HELP_TEXT = """
-📓 **Jupyter 代码执行器**
+HELP_TEXT = """📓 Jupyter 代码执行器
 
-**执行与 REPL：**
-• /py <代码> - 在当前隔离内核执行代码
-• /py -t 60 <代码> - 设置 0.1–600 秒超时
-• /py repl - 启动 10 分钟代码缓冲会话
-• /py help - 显示帮助
+执行与 REPL
+/py <代码>  在当前隔离内核执行代码
+/py -t 60 <代码>  设置 0.1–600 秒超时
+/py repl  启动 10 分钟代码缓冲会话
+/py help  显示帮助
 
-**内核管理：**
-• /kernel status - 查看内核状态
-• /kernel start - 启动内核
-• /kernel restart - 重启并清除变量
-• /kernel shutdown - 关闭内核
+内核管理
+/kernel status  查看内核状态
+/kernel start  启动内核
+/kernel restart  重启并清除变量
+/kernel shutdown  关闭内核
 
 代码最多 16000 字/32 KiB；输出和图片另有独立硬预算。内核空闲约 5 分钟后关闭。
-""".strip()
+"""
 
-KERNEL_HELP_TEXT = """
-🔧 **Jupyter 内核管理**
+KERNEL_HELP_TEXT = """🔧 Jupyter 内核管理
 
-• /kernel status - 查看状态
-• /kernel start - 启动内核
-• /kernel restart - 重启并清除变量
-• /kernel shutdown - 关闭内核
+/kernel status  查看状态
+/kernel start  启动内核
+/kernel restart  重启并清除变量
+/kernel shutdown  关闭内核
 
 内核按用户与群聊/私聊隔离，空闲约 5 分钟后自动关闭。
-""".strip()
+"""
 
 REPL_HELP_TEXT = """
 📝 Jupyter REPL 帮助

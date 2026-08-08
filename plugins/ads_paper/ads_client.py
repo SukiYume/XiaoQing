@@ -1,7 +1,8 @@
 """NASA ADS 的有界异步客户端与论文字段格式化。"""
 
 import logging
-from typing import Any
+from collections.abc import Sequence
+from typing import Any, Literal
 
 import aiohttp
 
@@ -53,6 +54,10 @@ _ADS_BIBTEX_MIME_POLICY = MimePolicy(
     # 这里只放宽 MIME；正文仍受字节、深度、节点和字符串长度限制并严格解析 JSON。
     allow_missing=True,
 )
+
+# 关系查询只允许 ADS 明确定义的两个操作符，避免调用方把任意文本拼进查询语法。
+_ADSRelation = Literal["citations", "references"]
+_RELATION_FIELDS = ("bibcode", "title", "author", "year", "citation_count")
 
 
 def _escape_ads_term(value: str) -> str:
@@ -128,7 +133,7 @@ class ADSClient:
         self,
         query: str,
         *,
-        fields: list[str],
+        fields: Sequence[str],
         max_results: int,
         sort: str,
         component: str,
@@ -257,28 +262,40 @@ class ADSClient:
         )
         return docs[0] if docs else None
 
+    async def _get_relation(
+        self,
+        relation: _ADSRelation,
+        bibcode: str,
+        *,
+        max_results: int,
+    ) -> list[dict[str, Any]]:
+        """查询一篇论文的引用关系，并在拼接 ADS 语法前统一校验 bibcode。"""
+
+        validated_bibcode = _validate_bibcode(bibcode)
+        return await self._search_docs(
+            f"{relation}(bibcode:{_escape_ads_term(validated_bibcode)})",
+            fields=_RELATION_FIELDS,
+            max_results=max_results,
+            sort="citation_count desc",
+            component=f"ads_paper.{relation}",
+        )
+
     async def get_citations(
         self, bibcode: str, max_results: int = DEFAULT_MAX_CITATIONS
     ) -> list[dict[str, Any]]:
-        bibcode = _validate_bibcode(bibcode)
-        return await self._search_docs(
-            f"citations(bibcode:{_escape_ads_term(bibcode)})",
-            fields=["bibcode", "title", "author", "year", "citation_count"],
+        return await self._get_relation(
+            "citations",
+            bibcode,
             max_results=max_results,
-            sort="citation_count desc",
-            component="ads_paper.citations",
         )
 
     async def get_references(
         self, bibcode: str, max_results: int = DEFAULT_MAX_REFERENCES
     ) -> list[dict[str, Any]]:
-        bibcode = _validate_bibcode(bibcode)
-        return await self._search_docs(
-            f"references(bibcode:{_escape_ads_term(bibcode)})",
-            fields=["bibcode", "title", "author", "year", "citation_count"],
+        return await self._get_relation(
+            "references",
+            bibcode,
             max_results=max_results,
-            sort="citation_count desc",
-            component="ads_paper.references",
         )
 
     async def search_by_author(

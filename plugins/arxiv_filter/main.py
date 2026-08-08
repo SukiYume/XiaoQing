@@ -9,44 +9,41 @@ import logging
 import os
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from core.args import parse
 from core.delivery import DeliveryReceipt, DeliverySegments
+from core.plugin_base import (
+    PluginContextProtocol,
+    Segments,
+    atomic_write_text,
+    bounded_external_text,
+    run_sync,
+    segments,
+)
 from core.public_errors import public_error_message, public_error_response
 
 from .codex_summary import schedule_codex_summary_from_filter_result
 from .utils import load_plugin_config
 
-plugin_base = importlib.import_module("core.plugin_base")
-args_module = importlib.import_module("core.args")
-
-segments = plugin_base.segments
-run_sync = plugin_base.run_sync
-atomic_write_text = plugin_base.atomic_write_text
-parse = args_module.parse
-
-
 logger = logging.getLogger(__name__)
-
-_FILTER_ERROR_MARKERS = (
-    "无法加载AI模型",
-    "论文获取失败",
-    "模型文件不完整",
-    "系统依赖不完整",
-    "论文筛选服务暂时不可用",
-)
 
 
 # ============================================================
 # 模块加载
 # ============================================================
 
-_inference_func = None
-_FILTER_CACHE: dict[tuple[str, str, str, Any], str] = {}
-_FILTER_INFLIGHT: dict[tuple[str, str, str, Any], asyncio.Task[str]] = {}
+InferenceFunction = Callable[..., str]
+
+_inference_func: InferenceFunction | None = None
+_FILTER_CACHE: dict[tuple[str, str, str, InferenceFunction], str] = {}
+_FILTER_INFLIGHT: dict[
+    tuple[str, str, str, InferenceFunction],
+    asyncio.Task[str],
+] = {}
 _FILTER_LOCK = asyncio.Lock()
 _STATUS_LOCK = threading.Lock()
 _MODEL_FINGERPRINT_REFRESH_SECONDS = 60.0
@@ -55,11 +52,11 @@ _MODEL_FINGERPRINT_LOCK = asyncio.Lock()
 
 
 class FilterResult(list[dict[str, Any]]):
-    """Message segments plus an explicit filter outcome for scheduled retries."""
+    """携带显式筛选结果的消息段，供定时投递决定提交还是重试。"""
 
     def __init__(
         self,
-        values: list[dict[str, Any]],
+        values: Segments,
         *,
         succeeded: bool,
         outcome: str,
@@ -82,7 +79,7 @@ def _configuration_fingerprint(config: Mapping[str, Any]) -> str:
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
-def _business_now(context: Any | None = None) -> datetime.datetime:
+def _business_now(context: PluginContextProtocol | None = None) -> datetime.datetime:
     timezone_name = "Asia/Shanghai"
     if context is not None:
         configured = context.get_settings_snapshot().config.get("timezone")
@@ -128,8 +125,7 @@ async def _cached_model_artifact_fingerprint(model_path: str) -> str:
 
 
 async def _cached_inference(
-    context: Any,
-    inference: Any,
+    inference: InferenceFunction,
     model_path: str,
     config_fingerprint: str,
     source_date: str | None,
@@ -191,14 +187,12 @@ def _normalize_source_date(value: Any) -> str | None:
     return cleaned if parsed.isoformat() == cleaned else None
 
 
-async def _latest_arxiv_source_date(context: Any) -> str | None:
+async def _latest_arxiv_source_date(context: PluginContextProtocol) -> str | None:
     """读取 arXiv 当前列表的真实发布日期；失败时禁止用本地日期冒充。"""
 
     try:
         raw_date = await run_sync(
-            lambda: importlib.import_module(
-                f"{__package__}.arxiv_today"
-            ).check_arxiv_update_date()
+            lambda: importlib.import_module(f"{__package__}.arxiv_today").check_arxiv_update_date()
         )
     except Exception as exc:
         public_error_message(
@@ -214,7 +208,9 @@ async def _latest_arxiv_source_date(context: Any) -> str | None:
     return source_date
 
 
-def _load_inference(context: Any | None = None):
+def _load_inference(
+    context: PluginContextProtocol | None = None,
+) -> InferenceFunction | None:
     """
     动态加载推理模块
 
@@ -263,7 +259,7 @@ def _load_inference(context: Any | None = None):
         return None
 
 
-def init(context=None) -> None:
+def init(context: PluginContextProtocol | None = None) -> None:
     """
     插件初始化
 
@@ -273,6 +269,8 @@ def init(context=None) -> None:
     Args:
         context: 插件上下文（可选）
     """
+    # 保留 context 参数是插件生命周期契约的一部分；初始化只清理进程内缓存。
+    del context
     global _inference_func
     _inference_func = None
     _FILTER_CACHE.clear()
@@ -285,8 +283,14 @@ def init(context=None) -> None:
 # ============================================================
 
 
-async def handle(command: str, args: str, event: dict[str, Any], context) -> Any:
+async def handle(
+    command: str,
+    args: str,
+    event: dict[str, Any],
+    context: PluginContextProtocol,
+) -> Segments:
     """命令处理入口"""
+    del command
     try:
         parsed = parse(args)
 
@@ -294,7 +298,7 @@ async def handle(command: str, args: str, event: dict[str, Any], context) -> Any
         if parsed and parsed.first:
             if len(parsed) == 1 and parsed.first.lower() in {"help", "帮助"}:
                 return segments(_show_help())
-            unknown = plugin_base.bounded_external_text(
+            unknown = bounded_external_text(
                 parsed.first,
                 max_chars=32,
                 max_bytes=128,
@@ -313,20 +317,7 @@ async def handle(command: str, args: str, event: dict[str, Any], context) -> Any
         return public_error_response(context, exc, logger=logger, component="arxiv_filter.handle")
 
 
-async def scheduled(context) -> Any:
-    """定时任务入口"""
-    if _scheduled_without_delivery_targets(context):
-        logger.info("skip scheduled arXiv filter: no explicit delivery targets")
-        return []
-    source_date = await _latest_arxiv_source_date(context)
-    return await _run_filter(
-        context,
-        allow_codex_sidecar=True,
-        source_date=source_date,
-    )
-
-
-async def shutdown(context) -> None:
+async def shutdown(context: PluginContextProtocol) -> None:
     tasks = list(_FILTER_INFLIGHT.values())
     state = getattr(context, "state", None)
     if isinstance(state, dict):
@@ -340,7 +331,7 @@ async def shutdown(context) -> None:
     _MODEL_FINGERPRINT_CACHE.clear()
 
 
-def _is_admin_user(context: Any, user_id: Any) -> bool:
+def _is_admin_user(context: PluginContextProtocol, user_id: object) -> bool:
     is_global_admin = getattr(context, "is_global_admin", None)
     if callable(is_global_admin):
         return bool(is_global_admin(user_id))
@@ -353,7 +344,7 @@ def _is_admin_user(context: Any, user_id: Any) -> bool:
     return principal.user_id == user_id
 
 
-def _scheduled_without_delivery_targets(context: Any) -> bool:
+def _scheduled_without_delivery_targets(context: PluginContextProtocol) -> bool:
     principal = getattr(context, "principal", None)
     return bool(
         principal is not None
@@ -362,22 +353,22 @@ def _scheduled_without_delivery_targets(context: Any) -> bool:
     )
 
 
-async def scheduled_check(context) -> Any:
+async def scheduled_check(context: PluginContextProtocol) -> Segments:
     """定时检查 arXiv 是否更新"""
     return await _check_arxiv_update(context, is_final_check=False)
 
 
-async def scheduled_final_check(context) -> Any:
+async def scheduled_final_check(context: PluginContextProtocol) -> Segments:
     """最后一次检查（12点），如果仍未更新则发送停更通知"""
     return await _check_arxiv_update(context, is_final_check=True)
 
 
 async def _run_filter(
-    context,
+    context: PluginContextProtocol,
     *,
     allow_codex_sidecar: bool = False,
     source_date: str | None = None,
-) -> Any:
+) -> FilterResult:
     """
     执行论文筛选
 
@@ -421,7 +412,6 @@ async def _run_filter(
         )
         start_time = time.perf_counter()
         arxiv_text = await _cached_inference(
-            context,
             inference,
             configured_model_path,
             _configuration_fingerprint(config),
@@ -456,18 +446,14 @@ async def _run_filter(
             elif source_date == today.isoformat():
                 list_description = f"今天是 {today}"
             else:
-                list_description = (
-                    f"今天是 {today}，arXiv 当前最新列表日期为 {source_date}"
-                )
+                list_description = f"今天是 {today}，arXiv 当前最新列表日期为 {source_date}"
             return _filter_result(
                 f"📚 {list_description}，暂时没有发现感兴趣的论文。",
                 succeeded=True,
                 outcome="no_positive_predictions",
             )
 
-        if "No papers found" in arxiv_text or any(
-            marker in arxiv_text for marker in _FILTER_ERROR_MARKERS
-        ):
+        if "No papers found" in arxiv_text:
             return _filter_result(
                 public_error_response(
                     context,
@@ -538,9 +524,7 @@ async def _run_filter(
     header = f"📚 {list_description}，以下是你可能感兴趣的论文：\n"
     if allow_codex_sidecar:
         if source_date is None:
-            logger.warning(
-                "skip Codex arXiv summary: source list date could not be confirmed"
-            )
+            logger.warning("skip Codex arXiv summary: source list date could not be confirmed")
         else:
             try:
                 schedule_codex_summary_from_filter_result(
@@ -590,22 +574,48 @@ def _get_status_file_path(data_dir: str | Path) -> Path:
     return path / "update_status.json"
 
 
-def _load_update_status(data_dir: str | Path) -> dict[str, object]:
-    """加载今日更新状态"""
-    status_file = _get_status_file_path(data_dir)
-    if status_file.exists():
+class _StatusFileError(RuntimeError):
+    """持久投递状态不可可信读取，调用方必须停止自动广播。"""
+
+
+def _validate_update_status(payload: object) -> dict[str, object]:
+    if not isinstance(payload, dict):
+        raise _StatusFileError("arXiv 状态文件根节点必须是 JSON 对象")
+
+    last_sent_date = payload.get("last_sent_date")
+    if last_sent_date is not None:
+        if not isinstance(last_sent_date, str):
+            raise _StatusFileError("arXiv 状态中的 last_sent_date 必须是字符串")
         try:
-            with status_file.open(encoding="utf-8") as f:
-                payload = json.load(f)
-            if isinstance(payload, dict):
-                return payload
-            logger.warning("忽略非对象格式的 arXiv 状态文件")
-        except Exception as exc:
-            logger.warning(
-                "加载状态文件失败: error_type=%s",
-                type(exc).__name__,
-            )
-    return {}
+            datetime.date.fromisoformat(last_sent_date)
+        except ValueError as exc:
+            raise _StatusFileError("arXiv 状态中的 last_sent_date 不是 ISO 日期") from exc
+
+    last_sent_time = payload.get("last_sent_time")
+    if last_sent_time is not None:
+        if not isinstance(last_sent_time, str):
+            raise _StatusFileError("arXiv 状态中的 last_sent_time 必须是字符串")
+        try:
+            datetime.datetime.fromisoformat(last_sent_time)
+        except ValueError as exc:
+            raise _StatusFileError("arXiv 状态中的 last_sent_time 不是 ISO 时间") from exc
+    return payload
+
+
+def _load_update_status(data_dir: str | Path) -> dict[str, object]:
+    """加载并校验投递状态；损坏状态不能被误判成“尚未发送”。"""
+
+    status_file = _get_status_file_path(data_dir)
+    if not status_file.exists():
+        return {}
+    try:
+        with status_file.open(encoding="utf-8") as stream:
+            payload = json.load(stream)
+        return _validate_update_status(payload)
+    except _StatusFileError:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise _StatusFileError(f"无法读取 arXiv 投递状态: {type(exc).__name__}") from exc
 
 
 def _save_update_status(data_dir: str | Path, status: Mapping[str, object]) -> None:
@@ -697,7 +707,10 @@ def _track_delivery(
 # ============================================================
 
 
-async def _check_arxiv_update(context, is_final_check: bool = False) -> Any:
+async def _check_arxiv_update(
+    context: PluginContextProtocol,
+    is_final_check: bool = False,
+) -> Segments:
     """
     检查 arXiv 是否更新
 
@@ -717,7 +730,18 @@ async def _check_arxiv_update(context, is_final_check: bool = False) -> Any:
     today = _business_now(context).date().isoformat()
 
     # 通过原子 claim 保证同一业务日期只有一个检查者进入发送路径。
-    if not await run_sync(_claim_send_today, data_dir, today):
+    try:
+        claimed = await run_sync(_claim_send_today, data_dir, today)
+    except Exception as exc:
+        # 状态不可信时采用 fail-closed：宁可漏掉一次自动播报，也不能重复群发。
+        public_error_message(
+            context,
+            exc,
+            logger=logger,
+            component="arxiv_filter.claim_delivery",
+        )
+        return []
+    if not claimed:
         logger.info("今天已经发送过 arXiv 更新，跳过此次检查")
         return []
 

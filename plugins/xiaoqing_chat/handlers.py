@@ -11,7 +11,7 @@ import random
 import re
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from core.interfaces import ACTION_RESULT_MESSAGE_ID_KEY
 from core.message import extract_text
@@ -28,7 +28,7 @@ from .expression.bw_expression_reflector import maybe_ask_for_reflection
 from .expression.bw_reflect_tracker import tick_reflect_tracker
 from .frequency_control import _freq_record, _should_reply
 from .generation_limiter import GenerationLimitExceeded
-from .handler_context import HandlerContext, handle_errors
+from .handler_context import HandlerContext, handle_errors, validate_action_list
 from .handlers_helper import _spawn_post_reply_bg_tasks
 from .handlers_internal import (
     get_bound_state as _get_bound_state_impl,
@@ -105,9 +105,17 @@ from .task_scheduler import (
     _spawn_bg_task,
 )
 
+# 会话状态、重置与长空档判定
+
+
+def _validated_actions(value: object, *, source: str) -> list[dict[str, Any]]:
+    """恢复由共享边界校验器确认过的动作列表类型。"""
+
+    return cast(list[dict[str, Any]], validate_action_list(value, source=source))
+
 
 def _refresh_mood_state(runtime, state, chat_id: str) -> str:
-    """挑选/复用 personality state.
+    """挑选或复用人格情绪状态。
 
     规则：
     - 已有未过期 mood，且最近活跃过 → 直接沿用，不再随机重摇。
@@ -117,7 +125,7 @@ def _refresh_mood_state(runtime, state, chat_id: str) -> str:
       命中后随机一个时长（在 [min,max] 之间），写入 state 缓存。
     """
     cfg = runtime.cfg.personality
-    states = list(cfg.states)
+    states = [str(item) for item in cfg.states]
     if not states:
         return ""
 
@@ -127,7 +135,8 @@ def _refresh_mood_state(runtime, state, chat_id: str) -> str:
     last_active = max(last_observe, last_reply)
     idle_threshold = max(0.0, cfg.state_force_refresh_after_idle_seconds)
 
-    current = state.get_mood_state(chat_id)
+    current_value = state.get_mood_state(chat_id)
+    current = current_value if isinstance(current_value, str) else ""
     if current and idle_threshold > 0 and last_active and (now - last_active) > idle_threshold:
         # 静默太久，强制让下面的逻辑走"重新决定"
         current = ""
@@ -190,7 +199,7 @@ def _coerce_int_or_none(value: Any) -> int | None:
         return None
     try:
         return int(value)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -347,9 +356,11 @@ async def _maybe_reset_idle_conversation(
     history = await pending_history
     if not isinstance(history, (list, tuple)):
         return 0.0
-    idle_gap = idle_gap_before_turn(
-        history,
-        current_local_id=str(event.get("_xc_user_recorded_local_id") or ""),
+    idle_gap = float(
+        idle_gap_before_turn(
+            history,
+            current_local_id=str(event.get("_xc_user_recorded_local_id") or ""),
+        )
     )
     if idle_gap <= threshold:
         return 0.0
@@ -366,6 +377,9 @@ async def _maybe_reset_idle_conversation(
         },
     )
     return idle_gap
+
+
+# 入站聊天与外部出站动作观察
 
 
 async def handle_smalltalk(clean_text: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
@@ -390,7 +404,11 @@ async def handle_smalltalk(clean_text: str, event: dict[str, Any], context) -> l
         runtime = _load_runtime(context)
         max_replan = max(0, runtime.cfg.reply_check.max_replan)
         hctx = HandlerContext.from_event(event, context, runtime=runtime)
-    except Exception:
+    except Exception as exc:
+        context.logger.debug(
+            "xiaoqing_chat failed to prepare handler context error_type=%s",
+            type(exc).__name__,
+        )
         hctx = None
     total_attempts = max_replan + 1
 
@@ -414,8 +432,11 @@ async def handle_smalltalk(clean_text: str, event: dict[str, Any], context) -> l
                 )
                 if hctx is not None:
                     _schedule_action_history_flush(context, hctx.runtime, chat_id=chat_id)
-            except Exception:
-                pass
+            except Exception as history_exc:
+                context.logger.debug(
+                    "xiaoqing_chat failed to record rejected reply error_type=%s",
+                    type(history_exc).__name__,
+                )
             if exc.need_replan and attempt < max_replan:
                 context.logger.info(
                     "XiaoQing Chat 回复被拒绝，触发重规划重试 rejection_type=%s",
@@ -494,9 +515,18 @@ async def observe_message(clean_text: str, event: dict[str, Any], context) -> li
     return []
 
 
+def _outgoing_action_params(action: dict[str, Any]) -> dict[str, Any]:
+    """提取 OneBot 动作参数；畸形参数统一按空对象处理。"""
+
+    raw_params = action.get("params")
+    if not isinstance(raw_params, dict):
+        return {}
+    return cast(dict[str, Any], raw_params)
+
+
 def _outgoing_action_chat_event(action: dict[str, Any]) -> dict[str, Any] | None:
     act = str(action.get("action", "") or "").strip()
-    params = action.get("params") if isinstance(action.get("params"), dict) else {}
+    params = _outgoing_action_params(action)
     if act == "send_group_msg":
         group_id = params.get("group_id")
         if group_id in (None, ""):
@@ -511,7 +541,7 @@ def _outgoing_action_chat_event(action: dict[str, Any]) -> dict[str, Any] | None
 
 
 def _outgoing_action_text(action: dict[str, Any]) -> str:
-    params = action.get("params") if isinstance(action.get("params"), dict) else {}
+    params = _outgoing_action_params(action)
     message = params.get("message")
     return extract_text(message).strip()
 
@@ -604,6 +634,9 @@ async def observe_outgoing_action(
     return []
 
 
+# 单轮生成、记忆提交与投递编排
+
+
 async def _ensure_user_message_recorded(
     text: str,
     event: dict[str, Any],
@@ -635,7 +668,10 @@ async def _ensure_user_message_recorded(
         event["_xc_user_recorded_local_id"] = existing_local_id
         return existing_local_id
 
-    local_id = _next_local_id(chat_id)
+    local_id_value = _next_local_id(chat_id)
+    if not isinstance(local_id_value, str) or not local_id_value:
+        raise TypeError("next local message id must be a non-empty string")
+    local_id = local_id_value
     cached_effective_parts = normalize_message_parts(event.get("_xc_effective_user_parts"))
     if cached_effective_parts:
         message_parts = _sync_message_parts_to_registry(
@@ -716,6 +752,8 @@ async def _record_bot_reply(
         fields={"local_id": assistant_local_id},
     )
     history_snapshot = await state.memory_store.get_async(chat_id)
+    if not isinstance(history_snapshot, list):
+        raise TypeError("memory store history must be a list")
     _freq_record(chat_id, runtime, state, forced=forced)
     await state.heartflow.on_bot_reply_async(chat_id=chat_id)
     state.inc_stats(chat_id, "replies")
@@ -911,30 +949,28 @@ async def _prepare_smalltalk_turn(
         elif preserve_existing_goal:
             _log_step(context, runtime, chat_id=chat_id, step="smalltalk.goal.keep", fields={})
 
-    if not forced:
-        if not reply_gate_allowed:
-            gate_fields = _last_reply_gate_log_fields(state, chat_id)
-            gate_fields.update({"text": text})
-            if "reason" not in gate_fields:
-                gate_fields["reason"] = "reply_gate"
-            _log_step(
-                context,
-                runtime,
-                chat_id=chat_id,
-                step="smalltalk.no_reply",
-                fields=gate_fields,
-            )
-            maybe_coro = state.heartflow.on_no_reply_async(chat_id=chat_id)
-            if asyncio.iscoroutine(maybe_coro):
-                await maybe_coro
-            return None
+    if not forced and not reply_gate_allowed:
+        gate_fields = _last_reply_gate_log_fields(state, chat_id)
+        gate_fields.update({"text": text})
+        if "reason" not in gate_fields:
+            gate_fields["reason"] = "reply_gate"
+        _log_step(
+            context,
+            runtime,
+            chat_id=chat_id,
+            step="smalltalk.no_reply",
+            fields=gate_fields,
+        )
+        maybe_coro = state.heartflow.on_no_reply_async(chat_id=chat_id)
+        if asyncio.iscoroutine(maybe_coro):
+            await maybe_coro
+        return None
 
     if runtime.cfg.reflection.enable_expression_reflection:
         bg = _resolve_llm_config(runtime.cfg, foreground=False)
 
         async def _run_reflection() -> None:
             await tick_reflect_tracker(
-                context=context,
                 operator_chat_id=chat_id,
                 memory_store=state.memory_store,
                 expr_store=state.bw_expr_store,
@@ -1005,7 +1041,7 @@ async def _finalize_smalltalk_turn(
     *,
     started_at: float,
 ) -> list[dict[str, Any]]:
-    return await finalize_smalltalk_turn_impl(
+    actions = await finalize_smalltalk_turn_impl(
         prepared,
         generated,
         event,
@@ -1029,6 +1065,7 @@ async def _finalize_smalltalk_turn(
         mark_reply_media_used=_mark_reply_media_used,
         log_step=_log_step,
     )
+    return _validated_actions(actions, source="finalize_smalltalk_turn_impl")
 
 
 async def _maybe_reply_smalltalk(
@@ -1106,8 +1143,13 @@ async def call_bot_name_only_internal(context) -> list[dict[str, Any]]:
         ]
         if configured:
             replies = configured
-    except Exception:
-        pass
+    except Exception as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=getattr(context, "logger", None),
+            component="xiaoqing_chat.bot_name_only.config",
+        )
     chat_id, user_id = _context_chat_and_user_id(context)
     if chat_id:
         _state().set_pending_bot_name_call(
@@ -1128,68 +1170,89 @@ async def call_bot_name_only_internal(context) -> list[dict[str, Any]]:
     return segments(random.choice(replies))
 
 
+# manifest 子命令到内部实现的薄适配层
+
+
 @handle_errors
 async def handle_internal(
     command: str, args: str, event: dict[str, Any], context
 ) -> list[dict[str, Any]]:
-    return await handle_internal_impl(
-        command,
-        args,
-        event,
-        context,
-        handler_context_from_event=HandlerContext.from_event,
-        get_lock=_get_lock,
-        reset_chat_session=_reset_chat_session,
-        cancel_pending_task=_cancel_pending_task,
-        is_admin_operator_fn=_is_admin_operator,
+    return _validated_actions(
+        await handle_internal_impl(
+            command,
+            args,
+            event,
+            context,
+            handler_context_from_event=HandlerContext.from_event,
+            get_lock=_get_lock,
+            reset_chat_session=_reset_chat_session,
+            cancel_pending_task=_cancel_pending_task,
+            is_admin_operator_fn=_is_admin_operator,
+        ),
+        source="handle_internal_impl",
     )
 
 
 @handle_errors
 async def handle_config(_args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
-    return await handle_config_impl(
-        event,
-        context,
-        handler_context_from_event=HandlerContext.from_event,
+    return _validated_actions(
+        await handle_config_impl(
+            event,
+            context,
+            handler_context_from_event=HandlerContext.from_event,
+        ),
+        source="handle_config_impl",
     )
 
 
 @handle_errors
 async def handle_memory(args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
-    return await handle_memory_impl(
-        args,
-        event,
-        context,
-        handler_context_from_event=HandlerContext.from_event,
+    return _validated_actions(
+        await handle_memory_impl(
+            args,
+            event,
+            context,
+            handler_context_from_event=HandlerContext.from_event,
+        ),
+        source="handle_memory_impl",
     )
 
 
 @handle_errors
 async def handle_expression(_args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
-    return await handle_expression_impl(
-        event,
-        context,
-        handler_context_from_event=HandlerContext.from_event,
+    return _validated_actions(
+        await handle_expression_impl(
+            event,
+            context,
+            handler_context_from_event=HandlerContext.from_event,
+        ),
+        source="handle_expression_impl",
     )
 
 
 @handle_errors
 async def handle_jargon(_args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
-    return await handle_jargon_impl(
-        event,
-        context,
-        handler_context_from_event=HandlerContext.from_event,
+    return _validated_actions(
+        await handle_jargon_impl(
+            event,
+            context,
+            handler_context_from_event=HandlerContext.from_event,
+        ),
+        source="handle_jargon_impl",
     )
 
 
 @handle_errors
 async def handle_review(args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
-    return await handle_review_impl(
-        args,
-        event,
-        context,
-        handler_context_from_event=HandlerContext.from_event,
-        is_admin_operator_fn=_is_admin_operator,
+    return _validated_actions(
+        await handle_review_impl(
+            args,
+            event,
+            context,
+            handler_context_from_event=HandlerContext.from_event,
+            is_admin_operator_fn=_is_admin_operator,
+        ),
+        source="handle_review_impl",
     )
 
 
@@ -1203,12 +1266,15 @@ def _get_bound_state(context):
 
 @handle_errors
 async def handle_provider(args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
-    return await handle_provider_impl(
-        args,
-        event,
-        context,
-        state_getter=_state,
-        chat_id_from_event=_chat_id,
-        is_admin_operator_fn=_is_admin_operator,
-        is_global_admin_operator_fn=_is_global_admin_operator,
+    return _validated_actions(
+        await handle_provider_impl(
+            args,
+            event,
+            context,
+            state_getter=_state,
+            chat_id_from_event=_chat_id,
+            is_admin_operator_fn=_is_admin_operator,
+            is_global_admin_operator_fn=_is_global_admin_operator,
+        ),
+        source="handle_provider_impl",
     )

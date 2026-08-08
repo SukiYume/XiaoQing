@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import secrets
-from pathlib import Path
 from typing import Annotated, Final
 
 from fastapi import Header, HTTPException, Request
 
 from ..services.db import Database
 from ..utils.db_ops import set_database_singleton
-from .auth import AuthError, WebSession, configure_auth_storage, get_web_session, verify_token
+from .auth import AuthError, WebSession, configure_auth_database, get_web_session, verify_token
 
 SESSION_COOKIE_NAME: Final = "pendo_web_session"
 CSRF_HEADER_NAME: Final = "X-CSRF-Token"
@@ -28,7 +27,7 @@ def set_db(db: Database) -> None:
     global _db_instance
     _db_instance = db
     set_database_singleton(db)
-    configure_auth_storage(Path(db.db_path).parent)
+    configure_auth_database(db)
 
 
 def get_db() -> Database:

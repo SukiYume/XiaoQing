@@ -540,7 +540,6 @@ async def test_tick_reflect_tracker_uses_async_memory_read(mock_context):
 
     with patch("plugins.xiaoqing_chat.expression.bw_reflect_tracker.time.time", return_value=10.0):
         result = await tick_reflect_tracker(
-            context=mock_context,
             operator_chat_id="g1",
             memory_store=memory_store,
             expr_store=expr_store,

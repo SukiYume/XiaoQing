@@ -1,3 +1,5 @@
+"""维护长期记忆文档、人物资料和对应的向量检索索引。"""
+
 from __future__ import annotations
 
 import hashlib
@@ -136,10 +138,7 @@ class MemoryDB(LockedDirtyStateMixin):
                 docs = self._store.all_docs()
                 dim = int(self._store.dim)
                 mat = self._store._matrix
-                if mat is None:
-                    mat = np.zeros((0, dim), dtype=np.float32)
-                else:
-                    mat = mat.copy()
+                mat = np.zeros((0, dim), dtype=np.float32) if mat is None else mat.copy()
                 save_version = self._dirty_version
             vdb_dir = loaded_dir / "vdb"
             try:

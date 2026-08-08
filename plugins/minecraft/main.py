@@ -41,7 +41,7 @@ MC_MAX_RESPONSE_BYTES = 12 * 1024
 MC_MAX_EVENT_FIELD_CHARS = 600
 MC_MAX_EVENT_FIELD_BYTES = 2400
 
-_PROFILE_PATTERN = re.compile(r"[\w.-]{1,64}\Z")
+_PROFILE_PATTERN = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,12 +85,6 @@ _delivery_cursor = 0
 _schedule_lock = asyncio.Lock()
 
 
-def init(_context: PluginContextProtocol | None = None) -> None:
-    """初始化由模块级轻量状态完成，此钩子只记录生命周期。"""
-
-    logger.info("Minecraft plugin initialized")
-
-
 async def shutdown(_context: PluginContextProtocol | None) -> None:
     """关闭所有 RCON 连接并清空仅在进程内有效的限流状态。"""
 
@@ -105,23 +99,16 @@ async def shutdown(_context: PluginContextProtocol | None) -> None:
 def _show_help() -> str:
     return (
         "🎮 Minecraft RCON 插件\n"
-        "═══════════════════════\n\n"
-        "1️⃣ /mc help\n"
-        "   显示此帮助信息\n\n"
-        "2️⃣ /mc connect <配置名>\n"
-        "   读取本地服务器配置和 config/secrets.json 中的密钥\n\n"
-        "3️⃣ /mc disconnect\n"
-        "   断开当前私聊的连接\n\n"
-        "4️⃣ /mc status\n"
-        "   查看当前连接和日志监控状态\n\n"
-        "5️⃣ /mc <服务器命令>\n"
-        "   连接后执行 RCON 命令，例如 /mc list\n\n"
-        "6️⃣ /mc say <消息>\n"
-        "   向所有在线玩家广播，例如 /mc say 大家好\n\n"
-        "7️⃣ /mc tell <玩家名> <消息>\n"
-        "   向指定玩家发送私信\n\n"
-        "💬 日志监控启用后，玩家聊天、加入和离开等事件会转发到当前 QQ 私聊。\n\n"
-        "═══════════════════════"
+        "\n"
+        "/mc connect <配置名>  连接本地配置的服务器\n"
+        "/mc disconnect  断开当前私聊连接\n"
+        "/mc status  查看连接和日志监控状态\n"
+        "/mc <服务器命令>  执行命令，例如 /mc list\n"
+        "/mc say <消息>  广播，例如 /mc say 大家好\n"
+        "/mc tell <玩家名> <消息>  向玩家发送私信\n"
+        "/mc help  显示帮助\n"
+        "\n"
+        "日志监控启用后，玩家聊天、加入和离开等事件会转发到当前 QQ 私聊。"
     )
 
 
@@ -221,9 +208,7 @@ def _load_server_config(context: PluginContextProtocol, profile: str) -> _Server
         raise _MinecraftConfigError("Minecraft 密钥配置当前不可用，请检查 config/secrets.json")
     password = settings.plugin_secrets("minecraft").get(profile)
     if password is None:
-        raise _MinecraftConfigError(
-            "未找到 config/secrets.json 中的 Minecraft 服务器密钥"
-        )
+        raise _MinecraftConfigError("未找到 config/secrets.json 中的 Minecraft 服务器密钥")
     return _validate_server_config({**server, "_resolved_password": password})
 
 
@@ -485,9 +470,7 @@ async def _handle_mc_command(
     )
     if not result.response:
         return segments("✅ 命令执行成功（空响应）")
-    truncation_warning = (
-        "\n⚠️ 响应可能不完整（续包等待超时）" if result.truncated else ""
-    )
+    truncation_warning = "\n⚠️ 响应可能不完整（续包等待超时）" if result.truncated else ""
     response = bounded_external_text(
         result.response,
         max_chars=max(1, MC_MAX_RESPONSE_CHARS - len(truncation_warning)),
@@ -731,4 +714,4 @@ async def scheduled(context: PluginContextProtocol) -> None:
         await _run_scheduled(context)
 
 
-__all__ = ["handle", "init", "scheduled", "shutdown"]
+__all__ = ["handle", "scheduled", "shutdown"]

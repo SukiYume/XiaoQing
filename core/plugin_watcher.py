@@ -147,7 +147,11 @@ class PluginWatcherMixin:
         """Revalidate authorization and source fingerprint immediately before publish."""
         try:
             current = self._load_definition(plugin_dir)
-            if not isinstance(current, PluginDefinition) or not current.enabled or current != definition:
+            if (
+                not isinstance(current, PluginDefinition)
+                or not current.enabled
+                or current != definition
+            ):
                 return False
             current_entry = resolve_plugin_entry(
                 self.plugins_dir,

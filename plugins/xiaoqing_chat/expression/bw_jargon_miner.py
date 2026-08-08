@@ -1,3 +1,5 @@
+"""从群聊样本中挖掘黑话，并在证据充分时补全本地释义。"""
+
 from __future__ import annotations
 
 import json
@@ -49,7 +51,14 @@ is_global 只表示上下文明确证明它跨会话通用，不能根据常识�
 }}"""
 
 
+# ---------------------------------------------------------------------------
+# 计数与脱敏审计
+# ---------------------------------------------------------------------------
+
+
 def _bump_chat_count(chat_counts: list[list[Any]], chat_id: str) -> list[list[Any]]:
+    """递增当前会话计数，并只保留最常见的三十个会话。"""
+
     out: list[list[Any]] = []
     found = False
     for item in chat_counts:
@@ -86,12 +95,17 @@ def _log_jargon_step(
         else:
             _logger.info(message, encoded)
     except Exception:
-        pass
+        # 审计日志不能反向中断黑话学习任务。
+        return
+
+
+# ---------------------------------------------------------------------------
+# 抽取、推断与持久化
+# ---------------------------------------------------------------------------
 
 
 async def mine_jargon(
     *,
-    http_session,
     secrets: dict[str, Any],
     store: JargonStore,
     chat_id: str,
@@ -104,6 +118,8 @@ async def mine_jargon(
     retry_interval_seconds: float,
     infer_threshold: int = 3,
 ) -> int:
+    """抽取一批黑话并返回实际变更数；AI 不可用时保持原库不变。"""
+
     model = secrets.get("model", "")
     if "_ai" in secrets and secrets.get("_ai") is None:
         return 0
@@ -179,7 +195,7 @@ async def mine_jargon(
         changed += 1
 
     to_infer: list[tuple[str, JargonRecord]] = []
-    for _record_key, rec in db.items():
+    for rec in db.values():
         if rec.is_global or rec.scope_chat_id != chat_id:
             continue
         if rec.is_complete:

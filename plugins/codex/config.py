@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from core.interfaces import PluginSettingsSnapshot
+from core.interfaces import PluginContextProtocol, PluginSettingsSnapshot
 
 DEFAULT_ARXIV_SUMMARY_LABEL = "astro-ph"
 DEFAULT_ARXIV_SUMMARY_METHODOLOGY = "arxiv-summary-methodology.md"
@@ -141,7 +141,7 @@ def load_plugin_config_snapshot(
     *,
     data_dir: Any,
 ) -> CodexPluginConfig:
-    """Validate one already-acquired atomic settings generation."""
+    """校验一次已经原子取得的配置快照。"""
 
     raw = _merged_plugin_config(settings)
     default_cwd = _clean_string(raw.get("default_cwd"), "") or _default_workspace_dir(data_dir)
@@ -247,8 +247,8 @@ def load_plugin_config_snapshot(
     )
 
 
-def load_plugin_config(context: Any) -> CodexPluginConfig:
-    """Read and validate the current atomic settings generation."""
+def load_plugin_config(context: PluginContextProtocol) -> CodexPluginConfig:
+    """读取并校验当前原子配置快照。"""
 
     settings = context.get_settings_snapshot()
     return load_plugin_config_snapshot(settings, data_dir=context.data_dir)

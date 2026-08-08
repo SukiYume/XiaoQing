@@ -163,7 +163,7 @@ async def test_ai_capability_reads_one_fresh_snapshot_per_call(temp_app_root: Pa
         )
 
     with patch(
-        "core.app.complete_configured_route",
+        "core.app_plugin_context.complete_configured_route",
         new=AsyncMock(side_effect=fake_complete_configured_route),
     ):
         await service.complete("chat", [{"role": "user", "content": "first"}])

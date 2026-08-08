@@ -17,7 +17,7 @@ import re
 import time
 import weakref
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import unquote_to_bytes, urlparse
 
 from core.atomic_store import keyed_path_lock
@@ -310,11 +310,7 @@ def _resolve_media_source_path(value: str, *, context: Any | None = None) -> Pat
         return None
     if _looks_like_base64_source(value) or _looks_like_data_url(value) or _looks_like_url(value):
         return None
-    path: Path | None
-    if value.startswith("file://"):
-        path = _parse_file_uri(value)
-    else:
-        path = Path(value)
+    path: Path | None = _parse_file_uri(value) if value.startswith("file://") else Path(value)
     if path is None:
         return None
     try:
@@ -560,7 +556,7 @@ async def _resolve_segment_media(
         max_bytes=max_bytes,
         event=event,
     )
-    return await _run_media_blocking(
+    materialized = await _run_media_blocking(
         _materialize_resolved_media,
         payload,
         segment_type=str(segment.get("type", "") or ""),
@@ -572,6 +568,7 @@ async def _resolve_segment_media(
         disk_quota_bytes=disk_quota_bytes,
         cache_ttl_seconds=cache_ttl_seconds,
     )
+    return materialized if isinstance(materialized, ResolvedMedia) else None
 
 
 def _materialize_resolved_media(
@@ -594,7 +591,6 @@ def _materialize_resolved_media(
 
     info = _inspect_image_payload_details(payload, fallback_suffix=suffix)
     _validate_image_resource_limits(
-        payload,
         width=info.width,
         height=info.height,
         max_pixels=max_pixels,
@@ -615,7 +611,7 @@ def _materialize_resolved_media(
         )
         if not already_cached:
             atomic_write_bytes(cached_path, payload)
-    resolved = ResolvedMedia(
+    return ResolvedMedia(
         media_hash=media_hash,
         segment_type=segment_type,
         source_name=source_name,
@@ -625,11 +621,9 @@ def _materialize_resolved_media(
         height=info.height,
         is_animated=info.is_animated,
     )
-    return resolved
 
 
 def _validate_image_resource_limits(
-    payload: bytes,
     *,
     width: int,
     height: int,
@@ -639,7 +633,6 @@ def _validate_image_resource_limits(
 ) -> None:
     """按解码像素数和动画帧数拒绝解压炸弹。"""
 
-    del payload  # 探测器已经验证完整编码流；此处只检查它返回的资源元数据。
     if width <= 0 or height <= 0:
         raise ValueError("image dimensions unavailable")
     if max_pixels > 0 and width * height > max_pixels:
@@ -699,7 +692,7 @@ async def _render_resolved_media(
     prefer_emoji: bool,
     summary_hint: str = "",
 ) -> RenderedMedia:
-    """Single-flight identical media within one event loop, then use the render cache."""
+    """同一事件循环内合并相同媒体的并发渲染，并复用持久缓存。"""
 
     loop = asyncio.get_running_loop()
     locks = _MEDIA_RENDER_LOCKS_BY_LOOP.setdefault(loop, weakref.WeakValueDictionary())
@@ -751,7 +744,6 @@ async def _render_resolved_media_locked(
             summary_hint=summary_hint,
             resolved=resolved,
             context=context,
-            runtime=runtime,
         ):
             _media_log(
                 context,
@@ -887,7 +879,6 @@ def _resolved_local_media(
     payload = _read_file_bounded(path, max_bytes=max_bytes)
     info = _inspect_image_payload_details(payload, fallback_suffix=path.suffix or ".png")
     _validate_image_resource_limits(
-        payload,
         width=info.width,
         height=info.height,
         max_pixels=max_pixels,
@@ -939,7 +930,7 @@ def _render_summary_only_media(
 
 
 def _segment_failure_summary_hint(segment: dict[str, Any]) -> str:
-    """Keep explicit semantic summaries, but never treat a filename as image content."""
+    """保留显式语义摘要，但绝不把文件名当作图片内容。"""
 
     data = segment.get("data", {}) or {}
     for key in ("summary", "text"):
@@ -956,7 +947,7 @@ def _render_face_segment(segment: dict[str, Any]) -> RenderedMedia:
     data = segment.get("data", {}) or {}
     face_id = str(data.get("id", "") or "").strip()
     label = describe_face_segment(segment)
-    emotion_tags = ()
+    emotion_tags: tuple[str, ...] = ()
     if not label.startswith("id=") and "系统表情" not in label:
         emotion_tags = _normalize_emotion_tags(label)
     if face_id:
@@ -1162,13 +1153,19 @@ def _compose_effective_user_parts(
 
     segments = list(iter_message_segments(event))
     if not segments:
-        return build_text_message_parts((clean_text or "").strip())
+        return cast(
+            tuple[dict[str, Any], ...],
+            build_text_message_parts((clean_text or "").strip()),
+        )
 
     has_media = any(
         str(segment.get("type", "") or "") in _SUPPORTED_MEDIA_TYPES for segment in segments
     )
     if not has_media:
-        return build_text_message_parts((clean_text or "").strip())
+        return cast(
+            tuple[dict[str, Any], ...],
+            build_text_message_parts((clean_text or "").strip()),
+        )
 
     text_parts = [
         str((segment.get("data", {}) or {}).get("text", ""))
@@ -1201,8 +1198,11 @@ def _compose_effective_user_parts(
         ordered_parts.append({"kind": "text", "text": flushed})
 
     if ordered_parts:
-        return normalize_message_parts(ordered_parts)
-    return build_text_message_parts((clean_text or "").strip())
+        return cast(tuple[dict[str, Any], ...], normalize_message_parts(ordered_parts))
+    return cast(
+        tuple[dict[str, Any], ...],
+        build_text_message_parts((clean_text or "").strip()),
+    )
 
 
 async def render_event_media(event: dict[str, Any], *, context, runtime) -> list[RenderedMedia]:
@@ -1251,8 +1251,15 @@ async def render_event_media(event: dict[str, Any], *, context, runtime) -> list
                     face_id=face_data.get("id"),
                     label=rendered_face.description,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                # 内置表情观察索引属于附属能力，失败不能阻断当前消息渲染。
+                _media_log(
+                    context,
+                    runtime,
+                    step="media.face_observation.fail",
+                    fields={"error_type": type(exc).__name__},
+                    level="warning",
+                )
             continue
 
         try:

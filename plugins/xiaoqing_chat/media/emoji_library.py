@@ -12,6 +12,7 @@ import shutil
 import threading
 import time
 from collections import OrderedDict
+from contextlib import suppress
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -156,7 +157,8 @@ def _store_library_cache(
 
 
 def _load_index(context) -> dict[str, Any]:
-    payload = load_json(_emoji_index_path(context), default={"entries": {}})
+    loaded: object = load_json(_emoji_index_path(context), default={"entries": {}})
+    payload = loaded if isinstance(loaded, dict) else {"entries": {}}
     entries = payload.get("entries")
     if not isinstance(entries, dict):
         payload["entries"] = {}
@@ -274,11 +276,11 @@ def _is_pending_library_file(context, file_path: Path) -> bool:
 
 
 def _average_hash(path: Path) -> str:
-    """Extract a perceptual feature from a file accepted by the media boundary."""
+    """从已经通过媒体边界的文件中提取感知特征。"""
 
     try:
         from PIL import Image, ImageOps
-    except Exception:
+    except ImportError:
         return ""
 
     try:
@@ -343,7 +345,7 @@ def _read_library_snapshot(
     max_pixels: int,
     max_frames: int,
 ) -> tuple[dict[str, Any], dict[str, Any], list[_ScannedEmojiFile]]:
-    """Read and fingerprint one library snapshot in a bounded worker thread."""
+    """在有界工作线程中读取表情库快照并计算文件指纹。"""
 
     payload = _load_index(context)
     original_payload = deepcopy(payload)
@@ -498,10 +500,9 @@ def _remove_library_file(context, record: dict[str, Any]) -> None:
     if not _is_path_within_roots(file_path, allowed_roots):
         return
     if file_path.exists():
-        try:
+        # 自动清理是配额维护，单个文件正被占用时保留索引并在下轮重试。
+        with suppress(OSError):
             file_path.unlink()
-        except OSError:
-            pass
 
 
 def _safe_target_file_path(
@@ -524,11 +525,10 @@ def _safe_target_file_path(
 
 
 def _copy_into_library_if_needed(source_path: Path, target_path: Path) -> None:
-    try:
+    # ``samefile`` 在任一路径刚被删除时可能失败，此时按普通复制路径继续。
+    with suppress(OSError):
         if target_path.exists() and source_path.samefile(target_path):
             return
-    except OSError:
-        pass
     ensure_dir(target_path.parent)
     shutil.copyfile(source_path, target_path)
 
@@ -645,9 +645,7 @@ def _is_usable_library_metadata(
         return False
     if _looks_like_structured_media_text(desc) or _looks_like_structured_media_text(mark):
         return False
-    if any(_looks_like_structured_media_text(tag) for tag in tags):
-        return False
-    return True
+    return not any(_looks_like_structured_media_text(tag) for tag in tags)
 
 
 def collect_emoji_candidate(

@@ -1,1 +1,1 @@
-# Minecraft 服务器通信插件
+"""Minecraft RCON 与日志转发插件。"""

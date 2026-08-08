@@ -1,3 +1,5 @@
+"""提供聊天身份、配置快照、模型路由和消息判定的共享助手。"""
+
 from __future__ import annotations
 
 import re
@@ -224,10 +226,7 @@ def _should_ignore_text(text: str, runtime: _ChatRuntime) -> bool:
     for w in runtime.cfg.ban_words:
         if w and w in s:
             return True
-    for r in runtime.compiled_ban_regex:
-        if r.search(s):
-            return True
-    return False
+    return any(regex.search(s) for regex in runtime.compiled_ban_regex)
 
 
 def _next_local_id(chat_id: str) -> str:

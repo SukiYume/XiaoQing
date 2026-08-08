@@ -73,6 +73,13 @@ def config_manager(config_file: Path, secrets_file: Path) -> ConfigManager:
     return ConfigManager(config_file, secrets_file)
 
 
+def _last_notified_revision(manager: ConfigManager) -> int:
+    """加锁读取通知进度，避免为测试等待逻辑扩张生产接口。"""
+
+    with manager._lock:
+        return manager._last_notified_revision
+
+
 __all__ = (
     "Any",
     "ConfigLoadError",
@@ -85,6 +92,7 @@ __all__ = (
     "_MAX_CONFIG_TREE_DEPTH",
     "_MAX_CONFIG_TREE_NODES",
     "_check_secrets_file_permissions",
+    "_last_notified_revision",
     "_validate_runtime_config",
     "asyncio",
     "config_file",

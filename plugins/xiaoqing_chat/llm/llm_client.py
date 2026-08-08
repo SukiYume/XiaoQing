@@ -19,6 +19,8 @@ from .gateway import (
 
 
 def extract_response_choice(data: dict[str, Any]) -> dict[str, Any]:
+    """提取第一项 choice，畸形响应返回空对象。"""
+
     choices = data.get("choices") or []
     if not isinstance(choices, list) or not choices:
         return {}
@@ -27,10 +29,15 @@ def extract_response_choice(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def extract_response_content(data: dict[str, Any]) -> str:
-    return normalize_response_content(data)
+    """提取并规范化第一段助手文本。"""
+
+    content = normalize_response_content(data)
+    return content if isinstance(content, str) else ""
 
 
 def extract_response_finish_reason(data: dict[str, Any]) -> str:
+    """提取有限的结束原因文本，缺失时返回空串。"""
+
     value = extract_response_choice(data).get("finish_reason")
     return str(value or "").strip()
 

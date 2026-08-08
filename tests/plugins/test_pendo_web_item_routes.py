@@ -935,7 +935,7 @@ def test_generic_event_delete_removes_empty_multi_node_collection(db: Database) 
     """通用删除入口也必须维护多节点日程图，不能留下空集合头。"""
 
     owner_id = "owner-generic-event-delete"
-    collection_id = db.create_event_collection_with_children(
+    collection_id = db.create_event_collection(
         {
             "id": "generic-collection",
             "owner_id": owner_id,

@@ -1,3 +1,5 @@
+"""从对话原话中提取带主体证据的人物事实，并写入隔离索引。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -23,6 +25,8 @@ from .person_profile import update_profile_and_index
 
 @dataclass(frozen=True)
 class PersonFact:
+    """模型候选事实；持久化前还必须绑定到当前历史中的可信主体。"""
+
     subject_id: int | None
     subject_name: str
     fact: str
@@ -108,16 +112,16 @@ def _bind_facts_to_history_subjects(
 
     bound: list[PersonFact] = []
     for fact in facts:
-        subject_id = fact.subject_id
-        if subject_id not in trusted_names:
+        resolved_id = fact.subject_id
+        if resolved_id is None or resolved_id not in trusted_names:
             matches = ids_by_name.get(fact.subject_name.casefold(), set())
-            subject_id = next(iter(matches)) if len(matches) == 1 else None
-        if subject_id is None or subject_id not in trusted_names:
+            resolved_id = next(iter(matches)) if len(matches) == 1 else None
+        if resolved_id is None or resolved_id not in trusted_names:
             continue
         bound.append(
             PersonFact(
-                subject_id=subject_id,
-                subject_name=trusted_names[subject_id],
+                subject_id=resolved_id,
+                subject_name=trusted_names[resolved_id],
                 fact=fact.fact,
                 evidence=fact.evidence,
             )
@@ -174,7 +178,6 @@ def _persist_person_facts(
 async def maybe_extract_person_facts(
     *,
     data_dir: Path,
-    http_session,
     secrets: dict[str, Any],
     memory_db: MemoryDB,
     chat_id: str,
@@ -186,6 +189,8 @@ async def maybe_extract_person_facts(
     max_retry: int,
     retry_interval_seconds: float,
 ) -> None:
+    """每观察到二十条新消息时尝试抽取一次人物事实。"""
+
     try:
         scoped_chat_id = normalize_memory_chat_id(chat_id)
     except ValueError:
@@ -204,8 +209,7 @@ async def maybe_extract_person_facts(
     observed_until = latest_message_ts(history)
     if observed_until <= last_observed_ts:
         return
-    # Advance before the remote call. A failed or malformed model response must not
-    # turn the throttle into a per-message retry loop.
+    # 远程调用前先推进检查点；模型失败或格式错误不能退化成逐消息重试循环。
     await asyncio.to_thread(
         save_last_observed_ts,
         data_dir,

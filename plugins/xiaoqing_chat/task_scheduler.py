@@ -1,3 +1,5 @@
+"""统一登记后台任务，并对各类持久化写入做防抖和收尾。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -47,6 +49,21 @@ def _create_task_safely(coro: Any) -> asyncio.Task[Any] | None:
     except BaseException:
         _close_awaitable(coro)
         raise
+
+
+def _cancel_pending_task(context: Any, task: asyncio.Task[Any] | None, *, kind: str) -> None:
+    """尽力取消旧防抖任务；异常只记录类型，不能阻止新任务接管。"""
+
+    if task is None or task.done():
+        return
+    try:
+        task.cancel()
+    except Exception as exc:
+        context.logger.debug(
+            "xiaoqing_chat failed to cancel task kind=%s error_type=%s",
+            kind,
+            type(exc).__name__,
+        )
 
 
 def _track_bg_task(
@@ -102,14 +119,7 @@ def _spawn_bg_task(context: Any, coro, *, name: str) -> None:
 def _schedule_memory_persist(context: Any, runtime: _ChatRuntime, *, chat_id: str) -> None:
     delay = max(0.0, runtime.cfg.io_persist_debounce_seconds)
     old = _state().get_persist_task(chat_id)
-    if old is not None and not old.done():
-        try:
-            old.cancel()
-        except Exception as exc:
-            context.logger.debug(
-                "xiaoqing_chat failed to cancel persist task error_type=%s",
-                type(exc).__name__,
-            )
+    _cancel_pending_task(context, old, kind="memory_persist")
 
     async def _run() -> None:
         if delay:
@@ -133,14 +143,7 @@ def _schedule_memory_persist(context: Any, runtime: _ChatRuntime, *, chat_id: st
 def _schedule_memory_db_save(context: Any, runtime: _ChatRuntime) -> None:
     delay = max(0.0, runtime.cfg.memory_db_save_debounce_seconds)
     old = _state().get_vdb_save_task()
-    if old is not None and not old.done():
-        try:
-            old.cancel()
-        except Exception as exc:
-            context.logger.debug(
-                "xiaoqing_chat failed to cancel vdb save task error_type=%s",
-                type(exc).__name__,
-            )
+    _cancel_pending_task(context, old, kind="memory_db_save")
 
     async def _run() -> None:
         if delay:
@@ -173,11 +176,7 @@ def _schedule_debounced_flush(
     """调度防抖刷盘任务的内部公共实现。"""
     delay = max(0.0, runtime.cfg.io_persist_debounce_seconds)
     old = task_registry.get(chat_id)
-    if old is not None and not old.done():
-        try:
-            _ = old.cancel()
-        except Exception:
-            pass
+    _cancel_pending_task(context, old, kind=name_prefix)
 
     async def _run() -> None:
         if delay:
@@ -227,11 +226,7 @@ def _schedule_media_registry_flush(context: Any, runtime: _ChatRuntime) -> None:
 
     delay = max(0.0, runtime.cfg.io_persist_debounce_seconds)
     old = _media_registry_flush_task
-    if old is not None and not old.done():
-        try:
-            old.cancel()
-        except Exception:
-            pass
+    _cancel_pending_task(context, old, kind="media_registry_flush")
 
     async def _run() -> None:
         if delay:

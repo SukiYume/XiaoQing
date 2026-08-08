@@ -147,6 +147,23 @@ class TestStatusManagement:
         assert loaded["last_sent_date"] == "2026-02-04"
         assert loaded["last_sent_time"] == "2026-02-04T10:00:00"
 
+    @pytest.mark.parametrize(
+        "payload",
+        ["{broken", "[]", '{"last_sent_date": 123}', '{"last_sent_date": "not-a-date"}'],
+    )
+    def test_corrupt_status_fails_closed(self, temp_data_dir, payload):
+        """损坏状态不能退化为“今天尚未发送”，否则定时任务可能重复群发。"""
+
+        status_path = arxiv_filter._get_status_file_path(temp_data_dir)
+        status_path.write_text(payload, encoding="utf-8")
+        business_date = "2026-08-06"
+
+        with pytest.raises(arxiv_filter._StatusFileError):
+            arxiv_filter._load_update_status(temp_data_dir)
+        with pytest.raises(arxiv_filter._StatusFileError):
+            arxiv_filter._claim_send_today(temp_data_dir, business_date)
+        assert not arxiv_filter._claim_path(temp_data_dir, business_date).exists()
+
     def test_should_send_today_new_day(self, temp_data_dir):
         """测试检查是否应该发送（新的一天）"""
         status = {"last_sent_date": "2026-01-01"}
@@ -221,13 +238,18 @@ class TestHandle:
     @pytest.mark.asyncio
     async def test_handle_default_calls_run_filter(self, mock_context, mock_event):
         """测试默认命令调用 _run_filter"""
-        with patch.object(
-            arxiv_filter,
-            "_latest_arxiv_source_date",
-            new=AsyncMock(return_value="2026-08-06"),
-        ), patch.object(
-            arxiv_filter, "_run_filter", new=AsyncMock(return_value=arxiv_filter.segments("test"))
-        ) as mock_run:
+        with (
+            patch.object(
+                arxiv_filter,
+                "_latest_arxiv_source_date",
+                new=AsyncMock(return_value="2026-08-06"),
+            ),
+            patch.object(
+                arxiv_filter,
+                "_run_filter",
+                new=AsyncMock(return_value=arxiv_filter.segments("test")),
+            ) as mock_run,
+        ):
             result = await arxiv_filter.handle("arxiv", "", mock_event, mock_context)
             assert result is not None
             mock_run.assert_awaited_once_with(
@@ -244,15 +266,18 @@ class TestHandle:
     ):
         mock_context.principal = PluginPrincipal(kind="user", user_id=12345, group_id=100000001)
         mock_context.capabilities = PluginCapabilities(is_bot_admin=True)
-        with patch.object(
-            arxiv_filter,
-            "_latest_arxiv_source_date",
-            new=AsyncMock(return_value="2026-08-06"),
-        ), patch.object(
-            arxiv_filter,
-            "_run_filter",
-            new=AsyncMock(return_value=arxiv_filter.segments("test")),
-        ) as mock_run:
+        with (
+            patch.object(
+                arxiv_filter,
+                "_latest_arxiv_source_date",
+                new=AsyncMock(return_value="2026-08-06"),
+            ),
+            patch.object(
+                arxiv_filter,
+                "_run_filter",
+                new=AsyncMock(return_value=arxiv_filter.segments("test")),
+            ) as mock_run,
+        ):
             await arxiv_filter.handle("arxiv", "", mock_event, mock_context)
 
         assert mock_run.await_args.kwargs == {
@@ -261,15 +286,18 @@ class TestHandle:
         }
 
         mock_event["user_id"] = 99999
-        with patch.object(
-            arxiv_filter,
-            "_latest_arxiv_source_date",
-            new=AsyncMock(return_value="2026-08-06"),
-        ), patch.object(
-            arxiv_filter,
-            "_run_filter",
-            new=AsyncMock(return_value=arxiv_filter.segments("test")),
-        ) as mock_run:
+        with (
+            patch.object(
+                arxiv_filter,
+                "_latest_arxiv_source_date",
+                new=AsyncMock(return_value="2026-08-06"),
+            ),
+            patch.object(
+                arxiv_filter,
+                "_run_filter",
+                new=AsyncMock(return_value=arxiv_filter.segments("test")),
+            ) as mock_run,
+        ):
             await arxiv_filter.handle("arxiv", "", mock_event, mock_context)
 
         assert mock_run.await_args.kwargs["allow_codex_sidecar"] is False
@@ -284,12 +312,15 @@ class TestHandle:
     @pytest.mark.asyncio
     async def test_handle_exception(self, mock_context, mock_event):
         """测试处理异常"""
-        with patch.object(
-            arxiv_filter,
-            "_latest_arxiv_source_date",
-            new=AsyncMock(return_value="2026-08-06"),
-        ), patch.object(
-            arxiv_filter, "_run_filter", new=AsyncMock(side_effect=Exception("Test error"))
+        with (
+            patch.object(
+                arxiv_filter,
+                "_latest_arxiv_source_date",
+                new=AsyncMock(return_value="2026-08-06"),
+            ),
+            patch.object(
+                arxiv_filter, "_run_filter", new=AsyncMock(side_effect=Exception("Test error"))
+            ),
         ):
             result = await arxiv_filter.handle("arxiv", "", mock_event, mock_context)
             assert result is not None
@@ -510,15 +541,21 @@ class TestCheckArxivUpdate:
                 result = await arxiv_filter._check_arxiv_update(mock_context, is_final_check=False)
                 # 应该调用 _run_filter
                 assert result is not None
-        assert arxiv_filter._should_send_today(
-            mock_context.data_dir,
-            today,
-        ) is True
+        assert (
+            arxiv_filter._should_send_today(
+                mock_context.data_dir,
+                today,
+            )
+            is True
+        )
         await result.delivery_receipt.record(True)
-        assert arxiv_filter._should_send_today(
-            mock_context.data_dir,
-            today,
-        ) is False
+        assert (
+            arxiv_filter._should_send_today(
+                mock_context.data_dir,
+                today,
+            )
+            is False
+        )
 
     @pytest.mark.asyncio
     async def test_check_arxiv_update_failure_does_not_mark_sent(self, mock_context):
@@ -535,10 +572,13 @@ class TestCheckArxivUpdate:
                 result = await arxiv_filter._check_arxiv_update(mock_context, is_final_check=False)
 
         assert "暂时不可用" in str(result)
-        assert arxiv_filter._should_send_today(
-            mock_context.data_dir,
-            today,
-        ) is True
+        assert (
+            arxiv_filter._should_send_today(
+                mock_context.data_dir,
+                today,
+            )
+            is True
+        )
 
     @pytest.mark.asyncio
     async def test_check_arxiv_update_not_updated_yet(self, mock_context):
@@ -565,6 +605,7 @@ class TestCheckArxivUpdate:
     @pytest.mark.asyncio
     async def test_check_arxiv_update_error(self, mock_context):
         """测试检查更新时出错"""
+
         async def run_sync_for_test(function, *args, **kwargs):
             if function is arxiv_filter._claim_send_today:
                 return function(*args, **kwargs)
@@ -584,26 +625,6 @@ class TestCheckArxivUpdate:
 
 class TestScheduledTasks:
     """测试定时任务"""
-
-    @pytest.mark.asyncio
-    async def test_scheduled(self, mock_context):
-        """测试定时任务入口"""
-        with patch.object(
-            arxiv_filter,
-            "_latest_arxiv_source_date",
-            new=AsyncMock(return_value="2026-08-06"),
-        ), patch.object(
-            arxiv_filter,
-            "_run_filter",
-            new=AsyncMock(return_value=arxiv_filter.segments("scheduled")),
-        ) as mock_run:
-            result = await arxiv_filter.scheduled(mock_context)
-            assert result is not None
-            mock_run.assert_awaited_once_with(
-                mock_context,
-                allow_codex_sidecar=True,
-                source_date="2026-08-06",
-            )
 
     @pytest.mark.asyncio
     async def test_scheduled_check(self, mock_context):
@@ -770,14 +791,17 @@ Title      : First Paper Title
 Link       : https://arxiv.org/abs/2605.16917
 Probability: 0.9000
 """
-        with patch.object(
-            arxiv_filter,
-            "_load_inference",
-            return_value=lambda **kwargs: mock_result,
-        ), patch.object(
-            arxiv_filter,
-            "schedule_codex_summary_from_filter_result",
-        ) as schedule_mock:
+        with (
+            patch.object(
+                arxiv_filter,
+                "_load_inference",
+                return_value=lambda **kwargs: mock_result,
+            ),
+            patch.object(
+                arxiv_filter,
+                "schedule_codex_summary_from_filter_result",
+            ) as schedule_mock,
+        ):
             result = await arxiv_filter._run_filter(
                 mock_context,
                 allow_codex_sidecar=True,
@@ -881,7 +905,6 @@ Probability: 0.9000
         ):
             assert await arxiv_filter.scheduled_check(mock_context) == []
             assert await arxiv_filter.scheduled_final_check(mock_context) == []
-            assert await arxiv_filter.scheduled(mock_context) == []
 
     @pytest.mark.asyncio
     async def test_filter_inference_is_singleflight_and_cached_per_source_date(self, mock_context):

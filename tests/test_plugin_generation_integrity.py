@@ -442,9 +442,9 @@ async def test_async_init_cache_removal_cannot_create_two_live_generations(
         tracker.release.set()
         await asyncio.wait_for(first.wait_inits(), timeout=1)
 
-        assert first.is_quarantined(name)
+        assert name in first._quarantined_plugins
         assert first._execution_gates[name].closed is True
-        assert first.get(name) is None or first.is_quarantined(name)
+        assert first.get(name) is None or name in first._quarantined_plugins
         assert sys.modules[canonical_entry] is foreign
 
         await first.unload_plugin(name)
@@ -950,7 +950,7 @@ async def test_reload_restore_collision_preserves_foreign_objects_and_quarantine
         assert tracker.candidate_inits == 1
         assert tracker.old_inits == 1
         assert manager.get(name) is old_plugin
-        assert manager.is_quarantined(name)
+        assert name in manager._quarantined_plugins
         assert name in manager._restart_required_plugins
         assert manager._execution_gates[name].closed is True
         assert sys.modules[package_name] is foreign_package

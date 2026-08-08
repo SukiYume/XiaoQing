@@ -1,3 +1,5 @@
+"""维护会话目标，并从当前消息和历史上下文派生目标。"""
+
 from __future__ import annotations
 
 import asyncio

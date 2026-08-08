@@ -257,12 +257,15 @@ def test_image_selection_prefers_apod_image_path(mock_context) -> None:
         '<img src="/static/logo.png"><img src="image/apod260201.jpg">',
         "html.parser",
     )
-    assert apod._find_image_url(
-        soup,
-        apod.DEFAULT_APOD_URL,
-        mock_context,
-        {"apod.nasa.gov"},
-    ) == "https://apod.nasa.gov/apod/image/apod260201.jpg"
+    assert (
+        apod._find_image_url(
+            soup,
+            apod.DEFAULT_APOD_URL,
+            mock_context,
+            {"apod.nasa.gov"},
+        )
+        == "https://apod.nasa.gov/apod/image/apod260201.jpg"
+    )
 
 
 def test_image_selection_rejects_ambiguous_allowed_images(mock_context) -> None:

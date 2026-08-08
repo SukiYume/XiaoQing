@@ -4,8 +4,9 @@
 
 import math
 import re
+from typing import Any
 
-from core.plugin_base import run_sync
+from core.plugin_base import PluginContextProtocol, run_sync
 from core.public_errors import public_error_message
 
 UNIX_TIMESTAMP_MIN_ABS = 100_000_000
@@ -13,7 +14,7 @@ _JD_MIN_ABS = 2_400_000
 _NUMERIC_TIME = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\Z")
 
 
-def _build_time_response(label: str, t) -> str:
+def _build_time_response(label: str, t: Any) -> str:
     return (
         f"🕐 {label} 转换结果\n"
         f"UTC: {t.iso}\n"
@@ -24,7 +25,7 @@ def _build_time_response(label: str, t) -> str:
     )
 
 
-def _parse_numeric_time(value: float, Time):
+def _parse_numeric_time(value: float, Time: Any) -> tuple[Any, str]:
     """按数量级区分无显式前缀的 Unix、JD 与 MJD 数值。"""
 
     abs_value = abs(value)
@@ -44,7 +45,7 @@ def _finite_float(value: str) -> float:
     return result
 
 
-def _handle_time_sync(args: str, context) -> str:
+def _handle_time_sync(args: str, context: PluginContextProtocol) -> str:
     """处理时间转换命令"""
     args = args.strip()
 
@@ -108,7 +109,7 @@ def _handle_time_sync(args: str, context) -> str:
         )
 
 
-async def handle_time(args: str, context) -> str:
+async def handle_time(args: str, context: PluginContextProtocol) -> str:
     """在线程 bulkhead 中执行 astropy 时间计算。"""
 
     return await run_sync(_handle_time_sync, args, context)

@@ -1,126 +1,180 @@
-# arXiv Filter 插件
+# 📡 arXiv Filter
 
-自动筛选每日 arXiv 天体物理论文。运行时根据模型目录中的
-`training_config.json` 自动选择 Transformer、k-NN 或多兴趣后端。
+arXiv Filter 获取 `astro-ph/new` 源列表，使用本地兴趣模型筛选论文，发送推荐列表，并将 positive 论文交给 Codex `astro-ph` 会话生成中文 Markdown 摘要。
 
-## 功能
+---
 
-- 每日定时从 arXiv `astro-ph/new` 页面获取最新论文
-- 支持标题模型、标题+摘要模型、k-NN 兴趣库和多兴趣聚类模型
-- 支持定时检查 arXiv 更新，自动推送筛选结果
-- 筛选出 positive 论文后，自动把全部 arXiv 链接交给 Codex `astro-ph` 会话生成中文 Markdown 摘要
+## 🔐 使用条件
 
-## 使用方法
+- 命令支持群聊与私聊。
+- 页面抓取与本地推理依赖按 Manifest 标记为可选模块。
+- 完整推理需要可信模型目录。
+- Codex 摘要需要已加载 `codex` 插件和 `codex.enqueue_arxiv_summary` 服务。
 
+安装本地推理依赖：
+
+```bash
+python -m pip install ".[arxiv-ml]"
 ```
-/arxiv       # 获取 arXiv 当前最新列表的筛选结果
-/arxiv help  # 显示帮助信息
+
+---
+
+## ⌨️ 命令
+
+| 命令 | 功能 |
+|---|---|
+| `/arxiv` | 获取源站当前列表并执行筛选 |
+| `/arxiv help` | 插件帮助 |
+
+别名为 `/论文`。完整参数与错误样例可通过 `/help arxiv_filter` 查看。
+
+---
+
+## 📌 源列表与 Codex 摘要
+
+回复显示 arXiv 源站列表的实际发布日期。推理缓存按源日期隔离。
+
+Codex 摘要任务使用以下复合身份：
+
+```text
+源列表日期 + 规范化论文链接集合
 ```
 
-## 定时任务
+相同身份可复用成功摘要或运行中任务；同日论文集合变化会创建新任务。源日期校验异常时，论文列表路径继续返回结果，摘要侧路进入跳过状态并记录日志。
 
-在 `plugin.json` 中配置的定时任务：
+论文列表与摘要使用独立消息链路：列表先发送，Codex 在后台完成摘要并单独回传。摘要会话、工作目录和方法文件由 `config.plugins.codex.arxiv_summary` 配置，默认会话为 `astro-ph`，默认方法文件为 `arxiv-summary-methodology.md`。
+
+---
+
+## ⏰ 定时任务
 
 | 时间 | 行为 |
-|------|------|
-| 周一~周五 10:00 / 10:30 / 11:00 / 11:30 | 检查 arXiv 是否更新到当天，更新则执行筛选并推送 |
-| 周一~周五 12:00 | 最后一次检查，若仍未更新则发送停更通知 |
+|---|---|
+| 工作日 10:00、10:30、11:00、11:30 | 检查源站列表日期，发现当日列表后筛选并推送 |
+| 工作日 12:00 | 最终检查与源站状态通知 |
 
-每天只推送一次（通过 `data/update_status.json` 去重）。
-`plugin.json` 不写死群号，定时任务使用部署配置中的 `default_group_ids`；未配置投递目标时会安全跳过。
+`data/arxiv_filter/update_status.json` 记录每日投递状态。调度目标来自 `default_group_ids`，生产推送请配置至少一个目标群。
 
-论文列表推送和 Codex 摘要是两条独立消息链路：arXiv Filter 会先发送筛选出的论文列表，然后在后台把所有 positive 论文链接交给 Codex 插件；Codex 完成后再单独回发摘要。如果 Codex 总结失败，失败消息由 Codex 插件单独发送，不会阻止论文列表消息。
+---
 
-如果运行环境中 Codex 摘要模块不可用或加载失败，arXiv Filter 仍会正常筛选并发送论文列表；摘要侧路只记录日志并跳过，不影响 `/arxiv` 和定时任务。
+## ⚙️ 插件配置
 
-手动 `/arxiv` 会读取并显示 arXiv 源站当前最新列表的发布日期。每天源站更新前，返回上一发布日的列表属于正常行为；更新后，推理缓存会按新的源列表日期失效，不会把更新前结果继续当成当天结果。
-
-Codex 摘要的复用身份由“源列表日期 + 规范化后的论文链接集合”共同组成。只有两者都相同才会重发历史摘要或复用队列中任务；同一日期的列表内容发生变化时会重新投递。若无法确认源列表日期，论文列表仍可返回，但不会用本地日期猜测并投递 Codex 摘要。
-
-摘要会话、工作目录和方法论文件名由 `plugins.codex.arxiv_summary` 配置控制，默认使用 `astro-ph` 会话和 `arxiv-summary-methodology.md`。
-
-## 配置
-
-插件自带 `config.json`：
+`plugins/arxiv_filter/config.json`：
 
 ```json
 {
-    "model": {
-        "path": "best_model",
-        "threshold": 0.3826,
-        "batch_size": 256,
-        "max_len": 512
-    },
-    "arxiv": {
-        "url": "https://arxiv.org/list/astro-ph/new",
-        "proxy": null,
-        "use_ssl_verify": true,
-        "timeout": 30
-    }
+  "model": {
+    "path": "best_model",
+    "threshold": 0.3826,
+    "batch_size": 256,
+    "max_len": 512
+  },
+  "arxiv": {
+    "url": "https://arxiv.org/list/astro-ph/new",
+    "proxy": null,
+    "use_ssl_verify": true,
+    "timeout": 30
+  }
 }
 ```
 
-### 配置项说明
-
 | 分组 | 字段 | 说明 |
-|------|------|------|
-| model | `path` | 模型目录（相对于插件目录） |
-| model | `threshold` | 模型目录未提供 `optimal_threshold` 时的后备阈值；显式调用参数优先级最高 |
-| model | `batch_size` | 推理批大小 |
-| model | `max_len` | 最大 token 长度 |
-| arxiv | `url` | arXiv 列表页 URL |
-| arxiv | `proxy` | HTTP/HTTPS 代理（也可通过 `ARXIV_PROXY` 环境变量设置） |
-| arxiv | `use_ssl_verify` | 是否验证 SSL 证书 |
-| arxiv | `timeout` | 请求超时（秒） |
+|---|---|---|
+| `model` | `path` | 插件相对路径或绝对模型目录 |
+| `model` | `threshold` | 模型配置缺省阈值的后备值 |
+| `model` | `batch_size` | 推理批大小 |
+| `model` | `max_len` | 最大 token 长度 |
+| `arxiv` | `url` | arXiv 列表页 |
+| `arxiv` | `proxy` | HTTP/HTTPS 代理 |
+| `arxiv` | `use_ssl_verify` | TLS 证书校验开关 |
+| `arxiv` | `timeout` | 请求秒数预算 |
 
-模型权重属于外部运行资产，不包含在 PyPI 的 wheel 或 sdist 中。干净的
-`pip install xiaoqing[arxiv-ml]` 只安装推理代码和依赖，部署时还必须提供一个
-完整模型目录。推荐把模型放在包目录之外，并设置绝对路径：
+`ARXIV_PROXY` 可提供代理地址。
+
+---
+
+## 💾 模型资产
+
+模型路径优先级：
+
+1. 推理 CLI 的 `--model-path`
+2. `ARXIV_MODEL_PATH`
+3. `plugins/arxiv_filter/config.json` 的 `model.path`
+
+生产环境可使用外置绝对路径：
 
 ```bash
 export ARXIV_MODEL_PATH=/srv/xiaoqing-models/arxiv
 ```
 
-Windows PowerShell 可使用
-`$env:ARXIV_MODEL_PATH = 'D:\models\xiaoqing-arxiv'`。环境变量优先于
-`config.json` 的 `model.path`；仓库工具
-`python scripts/arxiv_inference_cli.py --model-path <目录>` 的命令行参数优先级最高。
-显式参数或环境变量一旦设置即为权威路径：路径不存在时推理会明确失败，不会静默
-回退到另一套模型。模型目录必须来自可信来源；部分后端会读取可执行的序列化模型
-文件。Python 发布门禁只验证推理代码，不验证外部模型权重的来源或完整性。
+源码部署也可使用 `plugins/arxiv_filter/best_model/`。`scripts/sync_to_remote.sh` 将该目录列为生产发布资源，并在同步前后校验配置、权重、tokenizer 与 SHA-256。
 
-## 项目结构
-
-```
-arxiv_filter/
-├── main.py                   # 插件入口（命令处理、定时任务）
-├── codex_summary.py          # Codex 摘要侧路投递
-├── arxiv_inference.py        # 对外兼容 facade
-├── arxiv_today.py            # arXiv 数据获取（网页爬取 + API）
-├── numerics.py               # 稳定数值计算
-├── utils.py                  # 公共工具（配置加载）
-├── inference/                # 参数解析、后端分发和三种推理后端
-├── config.json               # 插件配置
-├── plugin.json               # 插件元数据
-└── train_model/              # 仅仓库开发使用，不进入 PyPI 产物
-    ├── training_common.py    # 各训练入口共享的轻量工具
-    ├── bert_model/           # 标题、标题+摘要 Transformer 训练
-    ├── interest_model/       # k-NN 与多兴趣模型训练
-    └── data_prep/            # 三步数据构建脚本及月度缓存
-```
-
-## AI 模型
+支持的后端：
 
 | `model_type` | 运行资产 | 输出 |
 |---|---|---|
-| `transformers`（默认） | Hugging Face 分类模型与 tokenizer | 正类概率 |
-| `knn` | 编码器、正/负样本 embedding 与 `meta.json` | k 近邻推荐分数 |
-| `multi_interest` | 编码器与可信的 `artifacts.joblib` | 逻辑回归正类概率 |
+| `transformers` | Hugging Face 分类模型与 tokenizer | 正类概率 |
+| `knn` | 编码器、正负样本 embedding 与 `meta.json` | k 近邻推荐分数 |
+| `multi_interest` | 编码器与 `artifacts.joblib` | 逻辑回归正类概率 |
 
-模型权重不随 Python 包发布，必须通过 `ARXIV_MODEL_PATH` 或 `model.path`
-指向外部目录。`artifacts.joblib` 只能从可信来源加载。
+模型目录来自可信来源。`artifacts.joblib` 属于可执行序列化资产，部署时应复核来源与哈希。
 
-## 依赖
+---
 
-仓库的基础环境使用 `python -m pip install -r requirements.txt`。本地模型推理是
-可选功能，还需执行 `python -m pip install ".[arxiv-ml]"` 并提供模型文件。
+## 🧠 推理 CLI
+
+```bash
+python scripts/arxiv_inference_cli.py \
+  --model-path /srv/xiaoqing-models/arxiv \
+  --input papers.csv \
+  --output predictions.csv
+```
+
+输出 CSV 使用原子写入。目标文件替换通过 `--force` 显式授权。单篇冒烟可使用 `--test-positive`。
+
+---
+
+## 💾 数据目录
+
+```text
+data/arxiv_filter/
+├── update_status.json       # 调度投递状态
+└── ...                      # 源列表与推理缓存
+```
+
+模型资产位于配置路径，运行状态位于插件数据目录，两类文件采用独立备份与部署流程。
+
+---
+
+## 🛠️ 代码结构
+
+```text
+plugins/arxiv_filter/
+├── main.py                  # 命令与调度
+├── codex_summary.py         # Codex 服务调用
+├── arxiv_today.py           # astro-ph/new 抓取
+├── arxiv_inference.py       # 推理 facade
+├── inference/               # 后端分发与实现
+├── train_model/             # 训练与数据准备
+├── config.json              # 插件配置
+└── best_model/              # 源码部署模型资产
+```
+
+---
+
+## 🩺 排障
+
+1. 使用 `/arxiv` 检查源列表日期和论文数量。
+2. 使用推理 CLI 的 `--test-positive` 检查模型加载。
+3. 核对模型路径、`training_config.json`、权重和 tokenizer。
+4. 通过 `/codex status astro-ph` 查看摘要任务。
+5. 检查日志中的源日期、论文集合摘要、模型后端和 Codex job ID。
+
+---
+
+## ✅ 开发验证
+
+```bash
+python -m pytest tests/plugins/test_arxiv_filter.py tests/plugins/test_arxiv_model_path.py -q
+python -m ruff check plugins/arxiv_filter scripts/arxiv_inference_cli.py
+```

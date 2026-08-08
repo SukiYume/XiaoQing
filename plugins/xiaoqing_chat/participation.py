@@ -1,3 +1,5 @@
+"""识别群聊中低信息消息和面向所有成员的参与邀请。"""
+
 from __future__ import annotations
 
 import re
@@ -38,7 +40,7 @@ def is_group_turn_directed_to_other(text: str) -> bool:
 
 
 def classify_group_participation_cue(text: str) -> str:
-    """Classify a high-confidence message that openly invites group participation."""
+    """识别高置信度、明确邀请群成员参与的消息。"""
 
     value = re.sub(r"\s+", " ", str(text or "")).strip()
     if len(value) < 4 or is_group_turn_directed_to_other(value):

@@ -1,3 +1,5 @@
+"""按聊天标点和空行拆分模型回复，避免产生空消息。"""
+
 from __future__ import annotations
 
 

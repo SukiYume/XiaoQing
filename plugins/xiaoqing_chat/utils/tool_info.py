@@ -1,3 +1,5 @@
+"""把已加载插件目录整理为可注入提示词的工具能力摘要。"""
+
 from __future__ import annotations
 
 import time
