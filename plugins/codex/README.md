@@ -167,7 +167,7 @@ Windows 路径建议使用 `/`，例如 `C:/workspace/project`。Linux 和 macOS
 在仓库根目录运行：
 
 ```bash
-python -m pytest -q tests/plugins/test_codex_*.py
+python -m pytest -q tests/plugins/codex/test_codex_*.py
 python -m ruff check plugins/codex
 python -m mypy plugins/codex
 ```

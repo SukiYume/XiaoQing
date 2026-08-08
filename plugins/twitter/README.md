@@ -115,8 +115,8 @@ data/twitter/posted.txt
 在仓库根目录运行：
 
 ```bash
-python -m ruff check plugins/twitter tests/plugins/test_twitter.py
+python -m ruff check plugins/twitter tests/plugins/twitter/test_twitter.py
 python -m mypy plugins/twitter
-python -m pytest -q tests/plugins/test_twitter.py \
-  tests/plugins/test_twitter_voice_resource_bounds.py -n 2
+python -m pytest -q tests/plugins/twitter/test_twitter.py \
+  tests/plugins/contracts/test_twitter_voice_resource_bounds.py -n 2
 ```

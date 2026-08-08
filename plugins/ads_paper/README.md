@@ -107,6 +107,6 @@ JSON 使用原子写入。解析异常会保留源文件，并生成带内容摘
 ## ✅ 开发验证
 
 ```bash
-python -m pytest tests/plugins/test_ads_paper.py -q
+python -m pytest tests/plugins/ads_paper/test_ads_paper.py -q
 python -m ruff check plugins/ads_paper
 ```

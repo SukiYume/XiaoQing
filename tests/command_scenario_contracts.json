@@ -4,7 +4,7 @@
     "adnmb": {
       "state_model": "dynamic_resource",
       "reason": "浏览命令只读，但订阅添加、列表和删除共享合成用户的外部匿名 UUID 状态",
-      "test_files": ["tests/plugins/test_adnmb.py"],
+      "test_files": ["tests/plugins/adnmb/test_adnmb.py"],
       "dynamic_codes": [
         "adnmb.adnmb.-d",
         "adnmb.adnmb.-a",
@@ -15,7 +15,7 @@
     "ads_paper": {
       "state_model": "dynamic_resource",
       "reason": "论文笔记、写作灵感、主题、截稿和引用库都依赖同一用户的持久状态",
-      "test_files": ["tests/plugins/test_ads_paper.py", "tests/plugins/test_ads_storage_daily_bibtex.py"],
+      "test_files": ["tests/plugins/ads_paper/test_ads_paper.py", "tests/plugins/ads_paper/test_ads_storage_daily_bibtex.py"],
       "dynamic_codes": [
         "ads_paper.paper.note",
         "ads_paper.paper.note.del",
@@ -36,28 +36,28 @@
     "apod": {
       "state_model": "external_read_only",
       "reason": "只读取 NASA APOD",
-      "test_files": ["tests/plugins/test_apod.py"],
+      "test_files": ["tests/plugins/apod/test_apod.py"],
       "dynamic_codes": [],
       "regression_codes": []
     },
     "arxiv_filter": {
       "state_model": "external_read_only",
       "reason": "用户命令只读取当天 arXiv 结果，训练和定时任务不属于主动命令",
-      "test_files": ["tests/plugins/test_arxiv_filter.py", "tests/plugins/test_arxiv_model_path.py"],
+      "test_files": ["tests/plugins/arxiv_filter/test_arxiv_filter.py", "tests/plugins/arxiv_filter/test_arxiv_model_path.py"],
       "dynamic_codes": [],
       "regression_codes": []
     },
     "astro_tools": {
       "state_model": "stateless",
       "reason": "时间、坐标、常数和公式命令都是纯计算或只读查询",
-      "test_files": ["tests/plugins/test_astro_tools.py"],
+      "test_files": ["tests/plugins/astro_tools/test_astro_tools.py"],
       "dynamic_codes": [],
       "regression_codes": []
     },
     "bot_core": {
       "state_model": "reversible_config",
       "reason": "静音、重载和密钥操作会修改 Core 运行态或配置",
-      "test_files": ["tests/plugins/test_bot_core.py"],
+      "test_files": ["tests/plugins/bot_core/test_bot_core.py"],
       "dynamic_codes": [
         "bot_core.reload",
         "bot_core.闭嘴",
@@ -70,21 +70,21 @@
     "chat": {
       "state_model": "external_read_only",
       "reason": "单轮模型调用没有可复用的用户对象 ID",
-      "test_files": ["tests/plugins/test_chat.py"],
+      "test_files": ["tests/plugins/chat/test_chat.py"],
       "dynamic_codes": [],
       "regression_codes": []
     },
     "chime": {
       "state_model": "external_read_only",
       "reason": "用户命令只查询钟声信息",
-      "test_files": ["tests/plugins/test_chime.py"],
+      "test_files": ["tests/plugins/chime/test_chime.py"],
       "dynamic_codes": [],
       "regression_codes": []
     },
     "choice": {
       "state_model": "stateless",
       "reason": "随机选择不持久化用户状态",
-      "test_files": ["tests/plugins/test_choice.py"],
+      "test_files": ["tests/plugins/choice/test_choice.py"],
       "dynamic_codes": [],
       "regression_codes": []
     },
@@ -92,10 +92,10 @@
       "state_model": "async_job",
       "reason": "会话名和任务句柄贯穿创建、执行、状态、取消、清理与删除",
       "test_files": [
-        "tests/plugins/test_codex_queue.py",
-        "tests/plugins/test_codex_arxiv_manager.py",
-        "tests/plugins/test_codex_history_runner.py",
-        "tests/plugins/test_codex_temp_lifecycle.py"
+        "tests/plugins/codex/test_codex_queue.py",
+        "tests/plugins/codex/test_codex_arxiv_manager.py",
+        "tests/plugins/codex/test_codex_history_runner.py",
+        "tests/plugins/codex/test_codex_temp_lifecycle.py"
       ],
       "dynamic_codes": [
         "codex.codex",
@@ -115,42 +115,42 @@
     "color": {
       "state_model": "dynamic_resource",
       "reason": "颜色换算只读，但自定义颜色写入、查询和删除共享管理员作用域的持久文件",
-      "test_files": ["tests/plugins/test_color_plugin.py"],
+      "test_files": ["tests/plugins/color/test_color_plugin.py"],
       "dynamic_codes": ["color.color.-w", "color.color.-d"],
       "regression_codes": []
     },
     "dict": {
       "state_model": "external_read_only",
       "reason": "词典命令只读本地词库或外部词典",
-      "test_files": ["tests/plugins/test_dict.py"],
+      "test_files": ["tests/plugins/dict/test_dict.py"],
       "dynamic_codes": [],
       "regression_codes": []
     },
     "earthquake": {
       "state_model": "external_read_only",
       "reason": "只读取地震目录",
-      "test_files": ["tests/plugins/test_earthquake.py"],
+      "test_files": ["tests/plugins/earthquake/test_earthquake.py"],
       "dynamic_codes": [],
       "regression_codes": []
     },
     "echo": {
       "state_model": "stateless",
       "reason": "回显和问候不写状态",
-      "test_files": ["tests/plugins/test_echo.py"],
+      "test_files": ["tests/plugins/echo/test_echo.py"],
       "dynamic_codes": [],
       "regression_codes": []
     },
     "github": {
       "state_model": "external_read_only",
       "reason": "只读取 GitHub 活动摘要",
-      "test_files": ["tests/plugins/test_github.py"],
+      "test_files": ["tests/plugins/github/test_github.py"],
       "dynamic_codes": [],
       "regression_codes": []
     },
     "guess_number": {
       "state_model": "session",
       "reason": "难度、动态范围、次数和猜测历史保存在同一会话",
-      "test_files": ["tests/plugins/test_guess_number.py"],
+      "test_files": ["tests/plugins/guess_number/test_guess_number.py"],
       "dynamic_codes": [
         "guess_number.猜数字",
         "guess_number.猜数字.easy",
@@ -170,7 +170,7 @@
     "jupyter": {
       "state_model": "external_session",
       "reason": "内核和 REPL 会话跨命令存在，并可能执行任意本地代码",
-      "test_files": ["tests/plugins/test_jupyter.py", "tests/plugins/test_jupyter_lifecycle.py"],
+      "test_files": ["tests/plugins/jupyter/test_jupyter.py", "tests/plugins/jupyter/test_jupyter_lifecycle.py"],
       "dynamic_codes": [
         "jupyter.jupyter",
         "jupyter.jupyter.repl",
@@ -185,7 +185,7 @@
     "minecraft": {
       "state_model": "external_session",
       "reason": "RCON 连接和远程服务器状态跨命令存在",
-      "test_files": ["tests/plugins/test_minecraft.py", "tests/plugins/test_minecraft_rcon_results.py"],
+      "test_files": ["tests/plugins/minecraft/test_minecraft.py", "tests/plugins/minecraft/test_minecraft_rcon_results.py"],
       "dynamic_codes": [
         "minecraft.mc",
         "minecraft.mc.connect",
@@ -200,14 +200,14 @@
       "state_model": "dynamic_resource",
       "reason": "条目、集合、提醒、设置、导入导出和 Web 服务均需要动态 ID 或前置状态",
       "test_files": [
-        "tests/plugins/test_pendo_command_lifecycles.py",
-        "tests/plugins/test_pendo_event_graph.py",
-        "tests/plugins/test_pendo_transactions_sessions.py",
-        "tests/plugins/test_pendo_ledger_daily_tasks.py",
-        "tests/plugins/test_pendo_notes_tasks.py",
-        "tests/plugins/test_pendo_diary_search_views.py",
-        "tests/plugins/test_pendo_web_database.py",
-        "tests/plugins/test_pendo_event_diary_runtime.py"
+        "tests/plugins/pendo/test_pendo_command_lifecycles.py",
+        "tests/plugins/pendo/test_pendo_event_graph.py",
+        "tests/plugins/pendo/test_pendo_transactions_sessions.py",
+        "tests/plugins/pendo/test_pendo_ledger_daily_tasks.py",
+        "tests/plugins/pendo/test_pendo_notes_tasks.py",
+        "tests/plugins/pendo/test_pendo_diary_search_views.py",
+        "tests/plugins/pendo/test_pendo_web_database.py",
+        "tests/plugins/pendo/test_pendo_event_diary_runtime.py"
       ],
       "dynamic_codes": [
         "pendo.pendo.confirm",
@@ -299,11 +299,11 @@
       "state_model": "dynamic_resource",
       "reason": "宠物、道具、经济、社交、交易、展示、任务、活动和管理动作共享群状态",
       "test_files": [
-        "tests/plugins/test_qingpet.py",
-        "tests/plugins/test_qingpet_command_lifecycle.py",
-        "tests/plugins/test_qingpet_command_validation.py",
-        "tests/plugins/test_qingpet_regressions.py",
-        "tests/plugins/test_qingpet_new_features.py"
+        "tests/plugins/qingpet/test_qingpet.py",
+        "tests/plugins/qingpet/test_qingpet_command_lifecycle.py",
+        "tests/plugins/qingpet/test_qingpet_command_validation.py",
+        "tests/plugins/qingpet/test_qingpet_schema_command_boundaries.py",
+        "tests/plugins/qingpet/test_qingpet_help_dress_runtime.py"
       ],
       "dynamic_codes": [
         "qingpet.qingpet.adopt",
@@ -433,11 +433,11 @@
       "state_model": "external_session",
       "reason": "服务器配置、凭据、连接和远程命令会话跨请求存在",
       "test_files": [
-        "tests/plugins/test_qingssh_contracts.py",
-        "tests/plugins/test_qingssh_jobs.py",
-        "tests/plugins/test_qingssh_connections.py",
-        "tests/plugins/test_qingssh_termination_config.py",
-        "tests/plugins/test_qingssh_output_relay.py"
+        "tests/plugins/qingssh/test_qingssh_contracts.py",
+        "tests/plugins/qingssh/test_qingssh_jobs.py",
+        "tests/plugins/qingssh/test_qingssh_connections.py",
+        "tests/plugins/qingssh/test_qingssh_termination_config.py",
+        "tests/plugins/qingssh/test_qingssh_output_relay.py"
       ],
       "dynamic_codes": [
         "qingssh.ssh",
@@ -474,49 +474,49 @@
     "shell": {
       "state_model": "async_job",
       "reason": "命令会启动本地子进程，虽无持久对象仍需进程生命周期回归",
-      "test_files": ["tests/plugins/test_shell_plugin.py"],
+      "test_files": ["tests/plugins/shell/test_shell_plugin.py"],
       "dynamic_codes": ["shell.shell"],
       "regression_codes": ["shell.shell"]
     },
     "signin": {
       "state_model": "external_session",
       "reason": "签到会修改真实外部账户的每日状态且不可由测试回滚",
-      "test_files": ["tests/plugins/test_signin.py"],
+      "test_files": ["tests/plugins/signin/test_signin.py"],
       "dynamic_codes": ["signin.signin", "signin.signin.yingshi"],
       "regression_codes": ["signin.signin", "signin.signin.yingshi"]
     },
     "smalltalk": {
       "state_model": "dynamic_resource",
       "reason": "管理员创建、查询和删除同一作用域的问答记录",
-      "test_files": ["tests/plugins/test_smalltalk.py"],
+      "test_files": ["tests/plugins/smalltalk/test_smalltalk.py"],
       "dynamic_codes": ["smalltalk.qa", "smalltalk.qa_list", "smalltalk.qa_remove"],
       "regression_codes": []
     },
     "twitter": {
       "state_model": "async_job",
       "reason": "抓取任务、图片缓存和已发送集合跨请求存在",
-      "test_files": ["tests/plugins/test_twitter.py"],
+      "test_files": ["tests/plugins/twitter/test_twitter.py"],
       "dynamic_codes": ["twitter.twimg", "twitter.tw_fetch"],
       "regression_codes": ["twitter.twimg", "twitter.tw_fetch"]
     },
     "url_parser": {
       "state_model": "external_read_only",
       "reason": "被动 URL 观察器没有用户主动命令和可串联对象",
-      "test_files": ["tests/plugins/test_url_parser.py"],
+      "test_files": ["tests/plugins/url_parser/test_url_parser.py"],
       "dynamic_codes": [],
       "regression_codes": []
     },
     "voice": {
       "state_model": "external_read_only",
       "reason": "语音文件是单次返回并由处理器负责临时文件清理",
-      "test_files": ["tests/plugins/test_voice.py"],
+      "test_files": ["tests/plugins/voice/test_voice.py"],
       "dynamic_codes": [],
       "regression_codes": []
     },
     "wolframalpha": {
       "state_model": "external_read_only",
       "reason": "纯文本查询不维护本地用户对象",
-      "test_files": ["tests/plugins/test_wolframalpha.py"],
+      "test_files": ["tests/plugins/wolframalpha/test_wolframalpha.py"],
       "dynamic_codes": [],
       "regression_codes": []
     },
@@ -524,17 +524,17 @@
       "state_model": "external_session",
       "reason": "群聊记忆、脑内状态、复盘会话、模型覆盖和重置均跨消息存在",
       "test_files": [
-        "tests/plugins/test_xiaoqing_chat_commands.py",
-        "tests/plugins/test_xiaoqing_chat_reply_gate.py",
-        "tests/plugins/test_xiaoqing_chat_memory_observation.py",
-        "tests/plugins/test_xiaoqing_chat_planning_participation.py",
-        "tests/plugins/test_xiaoqing_chat_turn_lifecycle.py",
-        "tests/plugins/test_xiaoqing_chat_provider_scope.py",
-        "tests/plugins/test_xiaoqing_chat_goal_reset.py",
-        "tests/plugins/test_xiaoqing_chat_reply_generation.py",
-        "tests/plugins/test_xiaoqing_chat_review_lifecycle.py",
-        "tests/plugins/test_xiaoqing_chat_review_store.py",
-        "tests/plugins/test_xiaoqing_chat_anthropomorphic_experiment.py"
+        "tests/plugins/xiaoqing_chat/test_xiaoqing_chat_commands.py",
+        "tests/plugins/xiaoqing_chat/test_xiaoqing_chat_reply_gate.py",
+        "tests/plugins/xiaoqing_chat/test_xiaoqing_chat_memory_observation.py",
+        "tests/plugins/xiaoqing_chat/test_xiaoqing_chat_planning_participation.py",
+        "tests/plugins/xiaoqing_chat/test_xiaoqing_chat_turn_lifecycle.py",
+        "tests/plugins/xiaoqing_chat/test_xiaoqing_chat_provider_scope.py",
+        "tests/plugins/xiaoqing_chat/test_xiaoqing_chat_goal_reset.py",
+        "tests/plugins/xiaoqing_chat/test_xiaoqing_chat_reply_generation.py",
+        "tests/plugins/xiaoqing_chat/test_xiaoqing_chat_review_lifecycle.py",
+        "tests/plugins/xiaoqing_chat/test_xiaoqing_chat_review_store.py",
+        "tests/plugins/xiaoqing_chat/test_xiaoqing_chat_anthropomorphic_experiment.py"
       ],
       "dynamic_codes": [
         "xiaoqing_chat.xc",

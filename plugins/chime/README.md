@@ -91,9 +91,9 @@ https://catalog.chime-frb.ca/repeaters
 在仓库根目录运行：
 
 ```bash
-python -m ruff check plugins/chime tests/plugins/test_chime.py
+python -m ruff check plugins/chime tests/plugins/chime/test_chime.py
 python -m mypy plugins/chime
-python -m pytest -q tests/plugins/test_chime.py \
-  tests/plugins/test_durable_plugin_notifications.py \
-  tests/plugins/test_fixed_origin_http_clients.py
+python -m pytest -q tests/plugins/chime/test_chime.py \
+  tests/plugins/contracts/test_durable_plugin_notifications.py \
+  tests/plugins/contracts/test_fixed_origin_http_clients.py
 ```

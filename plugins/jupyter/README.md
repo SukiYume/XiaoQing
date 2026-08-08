@@ -105,11 +105,11 @@ pip install "xiaoqing[jupyter]"
 在仓库根目录运行：
 
 ```bash
-python -m pytest -q tests/plugins/test_jupyter.py \
-  tests/plugins/test_jupyter_contracts.py \
-  tests/plugins/test_jupyter_lifecycle.py \
-  tests/plugins/test_jupyter_manager_contracts.py \
-  tests/plugins/test_shell_jupyter_log_privacy.py
+python -m pytest -q tests/plugins/jupyter/test_jupyter.py \
+  tests/plugins/jupyter/test_jupyter_contracts.py \
+  tests/plugins/jupyter/test_jupyter_lifecycle.py \
+  tests/plugins/jupyter/test_jupyter_manager_contracts.py \
+  tests/plugins/contracts/test_shell_jupyter_log_privacy.py
 python -m ruff check plugins/jupyter
 python -m mypy plugins/jupyter
 ```

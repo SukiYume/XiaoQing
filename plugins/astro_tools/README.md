@@ -64,6 +64,6 @@ SIMBAD 请求采用客户端 timeout 与总 deadline。输入数值、坐标、�
 ## ✅ 开发验证
 
 ```bash
-python -m pytest tests/plugins/test_astro_tools.py -q
-python -m ruff check plugins/astro_tools tests/plugins/test_astro_tools.py
+python -m pytest tests/plugins/astro_tools/test_astro_tools.py -q
+python -m ruff check plugins/astro_tools tests/plugins/astro_tools/test_astro_tools.py
 ```

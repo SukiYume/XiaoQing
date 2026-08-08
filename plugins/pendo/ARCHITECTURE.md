@@ -314,10 +314,10 @@ API 返回统一 `ok`、`message`、`error_code` 结构。安全头包括 CSP、
 
 ## ✅ 验证
 
-Pendo 回归测试位于 `tests/plugins/test_pendo*.py`，覆盖聊天命令、Session、数据库、提醒租约、Web 认证、API、Bundle、Demo、时区和生命周期。
+Pendo 回归测试位于 `tests/plugins/pendo/`，覆盖聊天命令、Session、数据库、提醒租约、Web 认证、API、Bundle、Demo、时区和生命周期。
 
 ```bash
-python -m pytest -q tests/plugins/test_pendo*.py
+python -m pytest -q tests/plugins/pendo
 python -m ruff check plugins/pendo
 python -m mypy plugins/pendo
 ```

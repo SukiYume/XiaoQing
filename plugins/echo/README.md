@@ -46,7 +46,7 @@
 在仓库根目录运行：
 
 ```bash
-python -m pytest -q tests/plugins/test_echo.py
+python -m pytest -q tests/plugins/echo/test_echo.py
 python -m ruff check plugins/echo
 python -m mypy plugins/echo
 ```

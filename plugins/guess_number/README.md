@@ -76,7 +76,7 @@ Session 保存目标、动态上下界、已用次数、猜测历史和规范难
 在仓库根目录运行：
 
 ```bash
-python -m pytest -q tests/plugins/test_guess_number.py
+python -m pytest -q tests/plugins/guess_number/test_guess_number.py
 python -m ruff check plugins/guess_number
 python -m mypy plugins/guess_number
 ```

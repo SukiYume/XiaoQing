@@ -18,13 +18,14 @@ from plugins.xiaoqing_chat import main as xiaoqing_chat
 from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
 from plugins.xiaoqing_chat.handler_context import HandlerContext, handle_errors
 from plugins.xiaoqing_chat.message_parts import message_parts_to_legacy
+from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.payloads import text_reply_draft as _reply_draft
 from tests.helpers.settings_snapshot import with_settings_reader
 
 _MISSING_TEST_CONFIG = object()
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = REPOSITORY_ROOT
 
 
 def _explicit_test_attribute(target, name: str):

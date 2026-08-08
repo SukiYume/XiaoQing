@@ -269,7 +269,7 @@ JSON 状态通过 Core 原子存储协议发布，并在字段边界完成类型
 
 ```bash
 python -m compileall -q plugins/xiaoqing_chat
-python -m pytest -q tests/plugins/test_xiaoqing*.py tests/plugins/test_*reply_checker*.py
+python -m pytest -q tests/plugins/xiaoqing_chat
 ```
 
 拟人大群实验：

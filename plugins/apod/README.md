@@ -68,6 +68,6 @@ APOD 插件抓取 NASA Astronomy Picture of the Day 当前页面，返回图片�
 ## ✅ 开发验证
 
 ```bash
-python -m pytest tests/plugins/test_apod.py -q
-python -m ruff check plugins/apod tests/plugins/test_apod.py
+python -m pytest tests/plugins/apod/test_apod.py -q
+python -m ruff check plugins/apod tests/plugins/apod/test_apod.py
 ```

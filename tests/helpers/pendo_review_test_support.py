@@ -26,8 +26,9 @@ from plugins.pendo.services.ai_parser import AIParser
 from plugins.pendo.services.db import Database
 from plugins.pendo.services.reminder import ReminderService
 from plugins.pendo.utils.db_ops import DbOpsMixin
+from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = REPOSITORY_ROOT
 
 
 class _PendoSessionTestContext:

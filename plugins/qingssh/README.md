@@ -199,7 +199,7 @@ showimg *.png
 在仓库根目录运行：
 
 ```bash
-python -m ruff check plugins/qingssh tests/plugins/test_qingssh*.py
+python -m ruff check plugins/qingssh tests/plugins/qingssh/test_qingssh*.py
 python -m mypy plugins/qingssh
 python -m pytest -q tests/plugins -k qingssh -n 2
 ```

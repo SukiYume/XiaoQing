@@ -29,9 +29,10 @@ from tests.helpers.ci_skip_policy import (
     load_skip_allowances,
     unexpected_skips,
 )
+from tests.helpers.paths import REPOSITORY_ROOT
 
 # Add project root to path
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = REPOSITORY_ROOT
 sys.path.insert(0, str(ROOT))
 
 # Suppress logging during tests unless explicitly enabled
@@ -134,17 +135,6 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "asyncio: Asyncio tests")
     config.addinivalue_line("markers", "plugin: Plugin tests")
     config.addinivalue_line("markers", "core: Core module tests")
-
-
-def pytest_pyfunc_call(pyfuncitem):
-    if pyfuncitem.config.pluginmanager.hasplugin("asyncio"):
-        return None
-    if not asyncio.iscoroutinefunction(pyfuncitem.obj):
-        return None
-
-    funcargs = {name: pyfuncitem.funcargs[name] for name in pyfuncitem._fixtureinfo.argnames}
-    asyncio.run(pyfuncitem.obj(**funcargs))
-    return True
 
 
 # ============================================================

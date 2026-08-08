@@ -116,7 +116,7 @@ data/smalltalk/QA_audit.json
 在仓库根目录运行：
 
 ```bash
-python -m ruff check plugins/smalltalk tests/plugins/test_smalltalk.py
+python -m ruff check plugins/smalltalk tests/plugins/smalltalk/test_smalltalk.py
 python -m mypy plugins/smalltalk
-python -m pytest -q tests/plugins/test_smalltalk.py -n 2
+python -m pytest -q tests/plugins/smalltalk/test_smalltalk.py -n 2
 ```

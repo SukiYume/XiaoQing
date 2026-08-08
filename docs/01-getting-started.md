@@ -201,6 +201,14 @@ scripts/run-bot.vbs
 
 该启动链从当前 `PATH` 调用 Python，并从 `config/config.json` 读取 NapCat 账号与可选 MKL threading 配置。
 
+Windows 生产环境重启流程：
+
+1. 双击 `scripts/stop-bot.vbs`。
+2. 等待监控器、Bot 与 NapCat 已停止的完成提示。
+3. 双击 `scripts/run-bot.vbs` 启动新进程。
+
+停服入口使用仓库级互斥量和绝对命令路径识别当前部署，只收口该仓库的 PowerShell 监控器、Python 日志泵、`main.py` 与指定 NapCat 进程树。重复双击会返回同一完成结果。
+
 ---
 
 ## ✅ 5. 首次验证

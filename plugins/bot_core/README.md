@@ -162,9 +162,9 @@ Bot Core 使用 Core 配置、指标和静音服务。插件自身拥有轻量�
 
 ```bash
 python -m pytest -q \
-  tests/plugins/test_bot_core.py \
-  tests/plugins/test_internal_log_redaction.py \
-  tests/plugins/test_public_error_redaction.py
-python -m ruff check plugins/bot_core tests/plugins/test_bot_core.py
+  tests/plugins/bot_core/test_bot_core.py \
+  tests/plugins/contracts/test_internal_log_redaction.py \
+  tests/plugins/contracts/test_public_error_redaction.py
+python -m ruff check plugins/bot_core tests/plugins/bot_core/test_bot_core.py
 python -m mypy plugins/bot_core
 ```
