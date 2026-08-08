@@ -160,9 +160,9 @@ OneBot 明确确认发送后，插件提交对应游标。发送异常、超时�
 在仓库根目录运行：
 
 ```bash
-python -m pytest -q tests/plugins/test_minecraft.py \
-  tests/plugins/test_minecraft_flood.py \
-  tests/plugins/test_minecraft_rcon_results.py
+python -m pytest -q tests/plugins/minecraft/test_minecraft.py \
+  tests/plugins/minecraft/test_minecraft_flood.py \
+  tests/plugins/minecraft/test_minecraft_rcon_results.py
 python -m ruff check plugins/minecraft
 python -m mypy plugins/minecraft
 ```

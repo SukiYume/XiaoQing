@@ -100,6 +100,8 @@ Inbound 的接纳容量为 `inbound_ws_max_workers + ws_queue_size`。同一私�
 
 `scripts/run-bot-monitor.ps1` 在创建子进程前读取这些字段。启动链调用当前 `PATH` 中的 Python，并保持部署环境对解释器和依赖的所有权。字段修改在下次启动监控链时生效。
 
+`scripts/stop-bot.vbs` 是 Windows 双击停服入口。它调用监控器的 `-Stop` 模式，通过仓库级互斥量阻止停服期间产生新实例，并按当前仓库脚本路径与 NapCat 可执行文件路径回收进程树。停服完成后可双击 `scripts/run-bot.vbs` 重新启动。
+
 ---
 
 ## ⚙️ 插件执行配置

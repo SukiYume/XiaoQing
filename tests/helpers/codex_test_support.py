@@ -29,7 +29,8 @@ from plugins.codex.config import load_plugin_config
 from plugins.codex.manager import CodexQueueManager
 from plugins.codex.paths import CwdError, normalize_cwd
 from plugins.codex.runner import CodexRunner, CodexRunResult, ProcessTreeTerminationResult
-from tests.codex_fakes import CallbackStreamingProcess
+from tests.helpers.codex_fakes import CallbackStreamingProcess
+from tests.helpers.paths import REPOSITORY_ROOT
 
 PNG_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
@@ -49,7 +50,7 @@ def _valid_arxiv_summary(date: str, link: str, text: str = "summary") -> str:
 class FakeContext:
     def __init__(self, tmp_path: Path, *, max_parallel_jobs: int = 2) -> None:
         self.data_dir = tmp_path / "plugin-data"
-        self.plugin_dir = Path(__file__).resolve().parents[2] / "plugins" / "codex"
+        self.plugin_dir = REPOSITORY_ROOT / "plugins" / "codex"
         self.current_user_id = None
         self.current_group_id = None
         self.plugin_name = "codex"

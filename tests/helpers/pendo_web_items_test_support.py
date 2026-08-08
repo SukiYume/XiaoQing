@@ -22,8 +22,9 @@ from plugins.pendo.utils.validators import (
 from plugins.pendo.web.analytics import ledger_insights as ledger_insights_module
 from plugins.pendo.web.analytics.ledger_insights import build_ledger_insights
 from plugins.pendo.web.api import items as items_api
+from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = REPOSITORY_ROOT
 
 
 __all__ = (

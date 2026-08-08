@@ -50,5 +50,7 @@ jobs:
       - name: Windows process and monitor tests
         run: >-
           python -m pytest -q -n 2
-          tests/plugins/test_codex_process_tree.py
-          tests/test_run_bot_monitor_script.py
+          tests/plugins/codex/test_codex_process_tree.py
+          tests/scripts/test_run_bot_monitor_script.py
+          tests/scripts/test_rotating_log_runner.py
+          tests/scripts/test_bot_monitor_powershell.py

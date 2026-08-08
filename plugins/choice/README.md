@@ -80,9 +80,9 @@
 在仓库根目录运行：
 
 ```bash
-python -m ruff check plugins/choice tests/plugins/test_choice.py
+python -m ruff check plugins/choice tests/plugins/choice/test_choice.py
 python -m mypy plugins/choice
-python -m pytest -q tests/plugins/test_choice.py \
-  tests/plugins/test_plugin_documentation_contracts.py \
-  tests/plugins/test_public_error_redaction.py
+python -m pytest -q tests/plugins/choice/test_choice.py \
+  tests/plugins/contracts/test_plugin_documentation_contracts.py \
+  tests/plugins/contracts/test_public_error_redaction.py
 ```

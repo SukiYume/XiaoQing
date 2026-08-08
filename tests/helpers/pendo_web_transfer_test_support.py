@@ -20,6 +20,7 @@ import pytest
 
 from plugins.pendo.models.item import DiaryItem, EventItem, LedgerItem, NoteItem, TaskItem
 from plugins.pendo.services.db import Database, DuplicateBundleImportError
+from tests.helpers.paths import REPOSITORY_ROOT
 
 try:
     from plugins.pendo.web.auth import issue_login_code
@@ -38,7 +39,7 @@ from plugins.pendo.web.services.transfer_bundle import (
     write_bundle,
 )
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = REPOSITORY_ROOT
 
 
 OWNER_ID = "u-transfer"

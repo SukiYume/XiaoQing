@@ -93,7 +93,7 @@ data/github/history/trending_<range>_<YYYY-MM-DD>.json
 在仓库根目录运行：
 
 ```bash
-python -m pytest -q tests/plugins/test_github.py
+python -m pytest -q tests/plugins/github/test_github.py
 python -m ruff check plugins/github
 python -m mypy plugins/github
 ```

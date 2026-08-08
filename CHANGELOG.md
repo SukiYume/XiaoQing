@@ -4,6 +4,20 @@
 
 ## 下一版本
 
+### 测试套件分层与维护门禁
+
+- 314 个测试模块按 `core`、`transport`、`scripts`、`tooling`、29 个插件和跨插件契约重新分层；插件测试、fixture 与辅助代码归入明确的领域目录，测试路径统一通过稳定根目录常量解析。
+- 清理自建 asyncio fallback、失真的兼容测试、Pendo 历史脚本专用断言和 aiohttp 旧适配层；Codex fake、HTTP response/session double、Pendo 数据库生命周期及 monitor/reply checker 公共支撑统一进入 `tests/helpers/`。
+- 历史 review/fixes/regressions 测试桶按实际行为域重新命名；10 个超过 1200 行的测试模块完成职责拆分，当前单文件上限由质量门禁固定为 1200 行。
+- 测试质量门禁禁止根目录扁平测试、插件根目录散落测试、仓库深度路径推导、历史桶命名和未登记的平台 skip；CI、命令场景、README 验证路径与新目录保持一致。
+
+### Windows 双击安全停服
+
+- 新增 `scripts/stop-bot.vbs` 双击入口，停服完成后显示结果；再次双击 `scripts/run-bot.vbs` 即可启动新进程。
+- `scripts/run-bot-monitor.ps1 -Stop` 复用仓库级互斥量与 PID 状态，先结束自动拉起监控器，再按绝对命令路径回收 Bot 日志泵、`main.py`、NapCat 日志泵和指定 NapCat 进程树。
+- 停服流程仅匹配当前仓库与指定 NapCat 路径，支持已停止状态下重复执行；隔离 Windows 进程树测试确认无关 Python 进程持续运行。
+- `scripts/sync_to_remote.sh` 将停服入口纳入生产关键文件完整性与 SHA-256 复核。
+
 ### 读者文档统一与移动端版式
 
 - 47 份发布范围 Markdown 统一采用面向新用户、部署者或维护者的当前状态说明。根 README 提供单一路径，`docs/` 按概览、上手、架构、开发、API、配置、高级主题、消息流和插件目录分工。

@@ -155,8 +155,8 @@ QQ 输入建议使用 `/`：
 在仓库根目录运行：
 
 ```bash
-python -m ruff check plugins/shell tests/plugins/test_shell_plugin.py
+python -m ruff check plugins/shell tests/plugins/shell/test_shell_plugin.py
 python -m mypy plugins/shell
-python -m pytest -q tests/plugins/test_shell_plugin.py \
-  tests/plugins/test_shell_jupyter_log_privacy.py -n 2
+python -m pytest -q tests/plugins/shell/test_shell_plugin.py \
+  tests/plugins/contracts/test_shell_jupyter_log_privacy.py -n 2
 ```

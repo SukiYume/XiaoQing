@@ -62,6 +62,6 @@ data/adnmb/images/
 ## ✅ 开发验证
 
 ```bash
-python -m pytest tests/plugins/test_adnmb.py -q
-python -m ruff check plugins/adnmb tests/plugins/test_adnmb.py
+python -m pytest tests/plugins/adnmb/test_adnmb.py -q
+python -m ruff check plugins/adnmb tests/plugins/adnmb/test_adnmb.py
 ```

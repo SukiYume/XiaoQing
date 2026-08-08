@@ -108,8 +108,8 @@ data/voice/audio/
 在仓库根目录运行：
 
 ```bash
-python -m pytest -q tests/plugins/test_voice.py \
-  tests/test_app_plugin_capabilities.py
-python -m ruff check plugins/voice tests/plugins/test_voice.py
+python -m pytest -q tests/plugins/voice/test_voice.py \
+  tests/core/test_app_plugin_capabilities.py
+python -m ruff check plugins/voice tests/plugins/voice/test_voice.py
 python -m mypy plugins/voice
 ```
