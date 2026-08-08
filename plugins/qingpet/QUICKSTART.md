@@ -147,7 +147,7 @@ data/qingpet/qingpet/qingpet.db
 ## 📌 9. 自动化回归
 
 ```bash
-python -m ruff check plugins/qingpet tests/plugins/test_qingpet*.py
+python -m ruff check plugins/qingpet tests/plugins/qingpet
 python -m mypy plugins/qingpet
 python -m pytest -q tests/plugins -k qingpet -n 2
 ```

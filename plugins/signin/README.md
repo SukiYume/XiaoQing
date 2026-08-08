@@ -73,7 +73,7 @@ Manifest 每天 00:30 按调度器时区运行 `scheduled_yingshi`。插件并�
 在仓库根目录运行：
 
 ```bash
-python -m ruff check plugins/signin tests/plugins/test_signin.py
+python -m ruff check plugins/signin tests/plugins/signin/test_signin.py
 python -m mypy plugins/signin
-python -m pytest -q tests/plugins/test_signin.py -n 2
+python -m pytest -q tests/plugins/signin/test_signin.py -n 2
 ```

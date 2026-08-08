@@ -88,7 +88,7 @@ App ID 接受 1～128 个字母、数字、连字符或下划线。该值保存�
 在仓库根目录运行：
 
 ```bash
-python -m pytest -q tests/plugins/test_wolframalpha.py
-python -m ruff check plugins/wolframalpha tests/plugins/test_wolframalpha.py
+python -m pytest -q tests/plugins/wolframalpha/test_wolframalpha.py
+python -m ruff check plugins/wolframalpha tests/plugins/wolframalpha/test_wolframalpha.py
 python -m mypy plugins/wolframalpha
 ```

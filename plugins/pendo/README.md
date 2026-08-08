@@ -307,7 +307,7 @@ Web 签名 secret 可通过环境变量 `PENDO_WEB_TOKEN_SECRET` 提供。AI 分
 在仓库根目录运行：
 
 ```bash
-python -m pytest -q tests/plugins/test_pendo*.py
+python -m pytest -q tests/plugins/pendo
 python -m ruff check plugins/pendo
 python -m mypy plugins/pendo
 ```

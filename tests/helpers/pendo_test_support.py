@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,8 +10,22 @@ from typing import Any, ClassVar
 
 from core.interfaces import PluginCapabilities
 from plugins.pendo.config import PendoConfig
+from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT = Path(__file__).resolve().parent.parent.parent
+ROOT = REPOSITORY_ROOT
+
+
+@contextmanager
+def managed_pendo_database(tmp_path: Path):
+    """创建独立 Pendo 数据库，并确保连接在测试结束时关闭。"""
+
+    from plugins.pendo.services.db import Database
+
+    database = Database(str(tmp_path / "pendo.db"))
+    try:
+        yield database
+    finally:
+        database.cleanup()
 
 
 def reset_pendo_runtime_config() -> None:
@@ -182,6 +197,7 @@ __all__ = (
     "asyncio",
     "datetime",
     "json",
+    "managed_pendo_database",
     "reset_pendo_runtime_config",
     "timezone",
 )

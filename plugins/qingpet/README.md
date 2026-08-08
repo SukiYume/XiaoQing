@@ -243,7 +243,7 @@ data/qingpet/qingpet/qingpet.db
 在仓库根目录运行：
 
 ```bash
-python -m ruff check plugins/qingpet tests/plugins/test_qingpet*.py
+python -m ruff check plugins/qingpet tests/plugins/qingpet
 python -m mypy plugins/qingpet
 python -m pytest -q tests/plugins -k qingpet -n 2
 ```

@@ -28,6 +28,7 @@ readonly -a REMOTE_REQUIRED_FILES=(
     "main.py"
     "pyproject.toml"
     "scripts/run-bot.vbs"
+    "scripts/stop-bot.vbs"
     "scripts/run-bot-monitor.ps1"
     "scripts/run_process_with_rotating_logs.py"
     "${ARXIV_MODEL_FILES[@]}"

@@ -50,8 +50,8 @@ test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/
 ```bash
 python -m compileall -q plugins/xiaoqing_chat
 python -m pytest -q \
-  tests/plugins/test_xiaoqing*.py \
-  tests/plugins/test_*reply_checker*.py
+  tests/plugins/xiaoqing_chat \
+  tests/plugins/xiaoqing_chat/test_*reply_checker*.py
 ```
 
 这组测试覆盖命令、召唤、参与、规划、回复生成、媒体、记忆、租户范围、原子存储、后台任务和关闭流程。

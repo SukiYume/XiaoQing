@@ -107,11 +107,11 @@ data/chat/chat_quota.json
 在仓库根目录运行：
 
 ```bash
-python -m ruff check plugins/chat tests/plugins/test_chat.py
+python -m ruff check plugins/chat tests/plugins/chat/test_chat.py
 python -m mypy plugins/chat
-python -m pytest -q tests/plugins/test_chat.py \
-  tests/plugins/test_public_error_redaction.py \
-  tests/plugins/test_configured_http_clients.py \
-  tests/plugins/test_plugin_resource_lifecycle.py \
-  tests/test_bounded_http_adoption.py
+python -m pytest -q tests/plugins/chat/test_chat.py \
+  tests/plugins/contracts/test_public_error_redaction.py \
+  tests/plugins/contracts/test_configured_http_clients.py \
+  tests/plugins/contracts/test_plugin_resource_lifecycle.py \
+  tests/tooling/test_bounded_http_adoption.py
 ```

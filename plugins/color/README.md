@@ -104,8 +104,8 @@ data/color/custom_colors_private_<用户号>.json
 在仓库根目录运行：
 
 ```bash
-python -m pytest -q tests/plugins/test_color_plugin.py \
-  tests/plugins/test_dict_color_contracts.py
+python -m pytest -q tests/plugins/color/test_color_plugin.py \
+  tests/plugins/contracts/test_dict_color_contracts.py
 python -m ruff check plugins/color
 python -m mypy plugins/color
 ```

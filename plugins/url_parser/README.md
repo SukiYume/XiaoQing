@@ -87,7 +87,7 @@ data/url_parser/url_previews/
 在仓库根目录运行：
 
 ```bash
-python -m ruff check plugins/url_parser tests/plugins/test_url_parser.py
+python -m ruff check plugins/url_parser tests/plugins/url_parser/test_url_parser.py
 python -m mypy plugins/url_parser
-python -m pytest -q tests/plugins/test_url_parser.py -n 2
+python -m pytest -q tests/plugins/url_parser/test_url_parser.py -n 2
 ```

@@ -93,7 +93,7 @@ Manifest 每 5 分钟运行一次 `scheduled`：
 在仓库根目录运行：
 
 ```bash
-python -m pytest -q tests/plugins/test_earthquake.py
+python -m pytest -q tests/plugins/earthquake/test_earthquake.py
 python -m ruff check plugins/earthquake
 python -m mypy plugins/earthquake
 ```

@@ -246,7 +246,7 @@ XiaoQing/
 
 普通配置采用 last-known-good 快照。敏感配置采用 fail-closed 快照。保存完整的 `secrets.json` 后执行 `/reload`，Core 会发布同一 revision 的配置与凭据，并在后台重载插件。
 
-生产启动链为 `scripts/run-bot.vbs → scripts/run-bot-monitor.ps1 → scripts/run_process_with_rotating_logs.py`。同步脚本、启动参数和生产目录说明位于 `scripts/` 对应文件的注释与帮助输出中。
+Windows 生产启动链为 `scripts/run-bot.vbs → scripts/run-bot-monitor.ps1 → scripts/run_process_with_rotating_logs.py`。双击 `scripts/stop-bot.vbs` 可安全停止同一仓库的监控器、Bot 与 NapCat，完成提示出现后可再次双击 `scripts/run-bot.vbs` 启动。同步脚本、启动参数和生产目录说明位于 `scripts/` 对应文件的注释与帮助输出中。
 
 ---
 

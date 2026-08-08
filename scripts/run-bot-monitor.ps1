@@ -1,10 +1,11 @@
 ﻿<#
 .SYNOPSIS
-    在 Windows 上看护 XiaoQing 与本机 NapCat 进程。
+    在 Windows 上启动、看护或停止 XiaoQing 与本机 NapCat 进程。
 
 监控器使用仓库级互斥量和 PID 文件保证单实例，通过有上限的退避重启异常退出
 的子进程，并把 stdout/stderr 轮转交给 Python 日志泵。NapCat QQ 账号和可选
-Bot 进程设置来自 config/config.json；脚本不内置生产环境专属值。
+Bot 进程设置来自 config/config.json；-Stop 模式通过相同的进程身份和互斥量
+安全收口本仓库的进程树。脚本不内置生产环境专属值。
 #>
 
 [CmdletBinding()]
@@ -13,6 +14,7 @@ param(
     [string]$BotRoot = "",
     [AllowEmptyString()]
     [string]$NapCatPath = "",
+    [switch]$Stop,
     [switch]$DisableNapCat,
     [string[]]$BotArguments = @(),
     [string[]]$NapCatArguments = @(),
@@ -105,13 +107,17 @@ function Read-LauncherConfig {
 # 所有部署路径在这里集中解析。默认值必须等参数绑定完成后再计算，因为 Windows
 # PowerShell 5.1 在 param() 默认表达式中可能把 $PSScriptRoot 留空。
 $ScriptDirectory = $PSScriptRoot
+$MonitorScript = $MyInvocation.MyCommand.Path
 if ([string]::IsNullOrWhiteSpace($ScriptDirectory)) {
-    $ScriptPath = $MyInvocation.MyCommand.Path
-    if ([string]::IsNullOrWhiteSpace($ScriptPath)) {
+    if ([string]::IsNullOrWhiteSpace($MonitorScript)) {
         throw "Unable to resolve XiaoQing monitor script directory"
     }
-    $ScriptDirectory = Split-Path -Parent $ScriptPath
+    $ScriptDirectory = Split-Path -Parent $MonitorScript
 }
+if ([string]::IsNullOrWhiteSpace($MonitorScript)) {
+    $MonitorScript = Join-Path $ScriptDirectory "run-bot-monitor.ps1"
+}
+$MonitorScript = [IO.Path]::GetFullPath($MonitorScript)
 if ([string]::IsNullOrWhiteSpace($BotRoot)) {
     $BotRoot = Split-Path -Parent $ScriptDirectory
 }
@@ -137,30 +143,35 @@ $LogPumpScript = Join-Path $BotRoot "scripts\run_process_with_rotating_logs.py"
 $ConfigFile = Join-Path $BotRoot "config\config.json"
 $LogDirectory = Join-Path $BotRoot "logs"
 $PidFile = Join-Path $LogDirectory "xiaoqing-bot.pid.json"
+$MonitorPidFile = Join-Path $LogDirectory "xiaoqing-monitor.pid.json"
 $BotLog = Join-Path $LogDirectory "bot-monitor.log"
 $BotErrorLog = Join-Path $LogDirectory "bot-monitor-error.log"
 $NapCatLog = Join-Path $LogDirectory "napcat-monitor.log"
 $NapCatErrorLog = Join-Path $LogDirectory "napcat-monitor-error.log"
 
-if (-not (Test-Path -LiteralPath $MainScript -PathType Leaf)) {
-    throw "XiaoQing entry point not found: $MainScript"
+$NapCatAccount = ""
+$MklThreadingLayer = ""
+if (-not $Stop) {
+    if (-not (Test-Path -LiteralPath $MainScript -PathType Leaf)) {
+        throw "XiaoQing entry point not found: $MainScript"
+    }
+    if (-not (Test-Path -LiteralPath $LogPumpScript -PathType Leaf)) {
+        throw "Rotating log helper not found: $LogPumpScript"
+    }
+    if (-not (Test-Path -LiteralPath $ConfigFile -PathType Leaf)) {
+        throw "XiaoQing config not found: $ConfigFile"
+    }
+    if ($null -eq (Get-Command python -CommandType Application -ErrorAction SilentlyContinue)) {
+        throw "Python command not found in PATH"
+    }
+    if (-not $DisableNapCat -and -not (Test-Path -LiteralPath $NapCatPath -PathType Leaf)) {
+        throw "NapCat executable not found: $NapCatPath (use -DisableNapCat only when an external adapter is intentional)"
+    }
+    $LauncherConfig = Read-LauncherConfig -Path $ConfigFile
+    $NapCatAccount = $LauncherConfig.NapCatAccount
+    $MklThreadingLayer = $LauncherConfig.MklThreadingLayer
+    New-Item -ItemType Directory -Force -Path $LogDirectory | Out-Null
 }
-if (-not (Test-Path -LiteralPath $LogPumpScript -PathType Leaf)) {
-    throw "Rotating log helper not found: $LogPumpScript"
-}
-if (-not (Test-Path -LiteralPath $ConfigFile -PathType Leaf)) {
-    throw "XiaoQing config not found: $ConfigFile"
-}
-if ($null -eq (Get-Command python -CommandType Application -ErrorAction SilentlyContinue)) {
-    throw "Python command not found in PATH"
-}
-if (-not $DisableNapCat -and -not (Test-Path -LiteralPath $NapCatPath -PathType Leaf)) {
-    throw "NapCat executable not found: $NapCatPath (use -DisableNapCat only when an external adapter is intentional)"
-}
-$LauncherConfig = Read-LauncherConfig -Path $ConfigFile
-$NapCatAccount = $LauncherConfig.NapCatAccount
-$MklThreadingLayer = $LauncherConfig.MklThreadingLayer
-New-Item -ItemType Directory -Force -Path $LogDirectory | Out-Null
 
 # ---------- 单实例标识与原子状态文件 ----------
 
@@ -202,6 +213,18 @@ function Write-Utf8NoBomAtomically {
             [IO.File]::Delete($temporaryPath)
         }
     }
+}
+
+function Write-ProcessIdFile {
+    param(
+        [string]$Path,
+        [int]$ProcessId
+    )
+
+    $record = [pscustomobject]@{
+        process_id = $ProcessId
+    } | ConvertTo-Json -Compress
+    Write-Utf8NoBomAtomically -Path $Path -Content "$record`n"
 }
 
 function ConvertTo-NativeArgument {
@@ -284,18 +307,24 @@ function Test-CommandLineContains {
         $CommandLine.IndexOf($ExpectedPath, [StringComparison]::OrdinalIgnoreCase) -ge 0
 }
 
-# ---------- 已启动 Bot 的识别与回收 ----------
+# ---------- 已登记进程的识别与回收 ----------
 
-function Get-TrackedBotProcess {
-    if (-not (Test-Path -LiteralPath $PidFile -PathType Leaf)) {
+function Get-TrackedProcessFromFile {
+    param(
+        [string]$Path,
+        [string]$Description,
+        [string[]]$ExpectedPaths
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         return $null
     }
 
-    # 文件系统读取失败不是“旧 PID”，不能吞掉后继续启动第二份 Bot。
+    # 文件系统读取失败不是“旧 PID”，不能吞掉后继续操作未验证的进程身份。
     try {
-        $savedText = [IO.File]::ReadAllText($PidFile, [Text.Encoding]::UTF8)
+        $savedText = [IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8)
     } catch {
-        throw "Unable to read tracked Bot PID file: $PidFile ($($_.Exception.Message))"
+        throw "Unable to read tracked $Description PID file: $Path ($($_.Exception.Message))"
     }
 
     # 只有畸形/中断写入的 PID 内容可以按陈旧状态恢复。严格拒绝字符串和小数，
@@ -314,31 +343,63 @@ function Get-TrackedBotProcess {
         }
         $processId = [int]$processIdValue
     } catch {
-        Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
         return $null
     }
 
-    # CIM 查询错误或无法读取命令行时无法证明 PID 已陈旧，必须失败关闭，防止
-    # 临时 WMI/权限故障导致同一个仓库重复拉起 Bot。
+    # CIM 查询错误或无法读取命令行时无法证明 PID 已陈旧，必须失败关闭，避免
+    # 临时 WMI/权限故障导致同一个仓库重复拉起或误停进程。
     $process = Get-CimInstance `
         -ClassName Win32_Process `
         -Filter "ProcessId = $processId" `
         -ErrorAction Stop
     if ($null -eq $process) {
-        Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
         return $null
     }
     if ([string]::IsNullOrWhiteSpace([string]$process.CommandLine)) {
-        throw "Unable to verify command line for tracked Bot process $processId"
+        throw "Unable to verify command line for tracked $Description process $processId"
     }
-    if ((Test-CommandLineContains $process.CommandLine $LogPumpScript) -and
-        (Test-CommandLineContains $process.CommandLine $MainScript)) {
+    $identityMatches = $true
+    foreach ($expectedPath in $ExpectedPaths) {
+        if (-not (Test-CommandLineContains $process.CommandLine $expectedPath)) {
+            $identityMatches = $false
+            break
+        }
+    }
+    if ($identityMatches) {
         return $process
     }
 
-    # PID 已被其他程序复用时删除旧记录，让监控循环创建新的受管 Bot。
-    Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
+    # PID 已被其他程序复用时删除旧记录，调用方随后按当前运行状态恢复。
+    Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
     return $null
+}
+
+function Get-TrackedBotProcess {
+    return Get-TrackedProcessFromFile `
+        -Path $PidFile `
+        -Description "Bot" `
+        -ExpectedPaths @($LogPumpScript, $MainScript)
+}
+
+function Get-TrackedMonitorProcess {
+    $process = Get-TrackedProcessFromFile `
+        -Path $MonitorPidFile `
+        -Description "monitor" `
+        -ExpectedPaths @($MonitorScript)
+    if ($null -eq $process) {
+        return $null
+    }
+
+    # 停服实例也执行同一个脚本。旧 PID 恰好被本次停服进程复用时，绝不能
+    # 把当前控制进程当作待停止的监控器。
+    if ([int]$process.ProcessId -eq $PID -or
+        [string]$process.CommandLine -match '(?i)(?:^|\s)-Stop(?:\s|$)') {
+        Remove-Item -LiteralPath $MonitorPidFile -Force -ErrorAction SilentlyContinue
+        return $null
+    }
+    return $process
 }
 
 function Invoke-TaskKill {
@@ -414,6 +475,208 @@ function Stop-OwnedProcessTree {
     }
 }
 
+# ---------- 精确身份停服 ----------
+
+function Test-ProcessMatchesCommandIdentity {
+    param(
+        [object]$Process,
+        [string[]]$ProcessNames,
+        [string[]]$ExpectedPaths,
+        [switch]$ExcludeStopInvocation
+    )
+
+    if ([int]$Process.ProcessId -eq $PID) {
+        return $false
+    }
+    if ($ProcessNames.Count -gt 0 -and
+        $ProcessNames -notcontains [string]$Process.Name) {
+        return $false
+    }
+
+    $commandLine = [string]$Process.CommandLine
+    if ([string]::IsNullOrWhiteSpace($commandLine)) {
+        return $false
+    }
+    foreach ($expectedPath in $ExpectedPaths) {
+        if (-not (Test-CommandLineContains $commandLine $expectedPath)) {
+            return $false
+        }
+    }
+    if ($ExcludeStopInvocation -and
+        $commandLine -match '(?i)(?:^|\s)-Stop(?:\s|$)') {
+        return $false
+    }
+    return $true
+}
+
+function Get-CommandIdentityProcesses {
+    param(
+        [string[]]$ProcessNames,
+        [string[]]$ExpectedPaths,
+        [switch]$ExcludeStopInvocation,
+        [AllowNull()]
+        [AllowEmptyCollection()]
+        [object[]]$ProcessSnapshot = $null
+    )
+
+    if ($null -eq $ProcessSnapshot) {
+        $processes = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
+    } else {
+        $processes = @($ProcessSnapshot)
+    }
+    foreach ($process in $processes) {
+        if (Test-ProcessMatchesCommandIdentity `
+            -Process $process `
+            -ProcessNames $ProcessNames `
+            -ExpectedPaths $ExpectedPaths `
+            -ExcludeStopInvocation:$ExcludeStopInvocation) {
+            Write-Output $process
+        }
+    }
+}
+
+function Stop-VerifiedCommandProcess {
+    param(
+        [object]$Process,
+        [string]$Description,
+        [string[]]$ProcessNames,
+        [string[]]$ExpectedPaths,
+        [switch]$ExcludeStopInvocation
+    )
+
+    $processId = [int]$Process.ProcessId
+    $current = Get-CimInstance `
+        -ClassName Win32_Process `
+        -Filter "ProcessId = $processId" `
+        -ErrorAction Stop
+    if ($null -eq $current) {
+        return
+    }
+    if (-not (Test-ProcessMatchesCommandIdentity `
+        -Process $current `
+        -ProcessNames $ProcessNames `
+        -ExpectedPaths $ExpectedPaths `
+        -ExcludeStopInvocation:$ExcludeStopInvocation)) {
+        throw "$Description process $processId changed identity before it could be stopped"
+    }
+
+    try {
+        Invoke-TaskKill -ProcessId $processId
+    } catch {
+        $cleanupError = $_
+        $remaining = Get-CimInstance `
+            -ClassName Win32_Process `
+            -Filter "ProcessId = $processId" `
+            -ErrorAction Stop
+        if ($null -ne $remaining) {
+            throw $cleanupError
+        }
+    }
+}
+
+function Stop-AllCommandIdentityProcesses {
+    param(
+        [string]$Description,
+        [string[]]$ProcessNames,
+        [string[]]$ExpectedPaths,
+        [switch]$ExcludeStopInvocation,
+        [AllowNull()]
+        [AllowEmptyCollection()]
+        [object[]]$ProcessSnapshot = $null
+    )
+
+    $matches = @(Get-CommandIdentityProcesses `
+        -ProcessNames $ProcessNames `
+        -ExpectedPaths $ExpectedPaths `
+        -ExcludeStopInvocation:$ExcludeStopInvocation `
+        -ProcessSnapshot $ProcessSnapshot)
+    foreach ($process in $matches) {
+        Stop-VerifiedCommandProcess `
+            -Process $process `
+            -Description $Description `
+            -ProcessNames $ProcessNames `
+            -ExpectedPaths $ExpectedPaths `
+            -ExcludeStopInvocation:$ExcludeStopInvocation
+    }
+}
+
+function Stop-XiaoQingService {
+    $mutexName = Get-MutexName $BotRoot
+    [bool]$createdNew = $false
+    $stopMutex = [Threading.Mutex]::new($true, $mutexName, [ref]$createdNew)
+    $ownsMutex = $createdNew
+    $powerShellNames = @("powershell.exe", "pwsh.exe")
+    $pythonNames = @("python.exe", "pythonw.exe")
+
+    try {
+        if (-not $ownsMutex) {
+            # 优先使用监控器自己登记的 PID；旧版本没有该文件时，再按脚本绝对
+            # 路径扫描。两条路径都会在 taskkill 前重新校验命令行身份。
+            $trackedMonitor = Get-TrackedMonitorProcess
+            if ($null -ne $trackedMonitor) {
+                Stop-VerifiedCommandProcess `
+                    -Process $trackedMonitor `
+                    -Description "XiaoQing monitor" `
+                    -ProcessNames $powerShellNames `
+                    -ExpectedPaths @($MonitorScript) `
+                    -ExcludeStopInvocation
+            }
+            Stop-AllCommandIdentityProcesses `
+                -Description "XiaoQing monitor" `
+                -ProcessNames $powerShellNames `
+                -ExpectedPaths @($MonitorScript) `
+                -ExcludeStopInvocation
+
+            try {
+                $ownsMutex = $stopMutex.WaitOne(30000)
+            } catch [Threading.AbandonedMutexException] {
+                # taskkill 终止持有者后，等待方已取得这个 abandoned mutex。
+                $ownsMutex = $true
+            }
+            if (-not $ownsMutex) {
+                throw "Timed out waiting for the XiaoQing monitor to stop"
+            }
+        }
+
+        # 持有同一互斥量期间，新监控器会直接退出，因此以下两轮复核不会与自动
+        # 重启竞争。第一轮回收日志泵根进程，第二轮清理异常遗留的直接子进程。
+        for ($pass = 0; $pass -lt 2; $pass++) {
+            $processSnapshot = @(
+                Get-CimInstance -ClassName Win32_Process -ErrorAction Stop
+            )
+            Stop-AllCommandIdentityProcesses `
+                -Description "XiaoQing Bot log pump" `
+                -ProcessNames $pythonNames `
+                -ExpectedPaths @($LogPumpScript, $MainScript) `
+                -ProcessSnapshot $processSnapshot
+            Stop-AllCommandIdentityProcesses `
+                -Description "NapCat log pump" `
+                -ProcessNames $pythonNames `
+                -ExpectedPaths @($LogPumpScript, $NapCatPath) `
+                -ProcessSnapshot $processSnapshot
+            Stop-AllCommandIdentityProcesses `
+                -Description "XiaoQing Bot" `
+                -ProcessNames $pythonNames `
+                -ExpectedPaths @($MainScript) `
+                -ProcessSnapshot $processSnapshot
+            Stop-AllCommandIdentityProcesses `
+                -Description "NapCat" `
+                -ProcessNames @([IO.Path]::GetFileName($NapCatPath)) `
+                -ExpectedPaths @($NapCatPath) `
+                -ProcessSnapshot $processSnapshot
+        }
+
+        Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $MonitorPidFile -Force -ErrorAction SilentlyContinue
+        Write-Output "XiaoQing monitor, Bot, and NapCat are stopped."
+    } finally {
+        if ($ownsMutex) {
+            $stopMutex.ReleaseMutex()
+        }
+        $stopMutex.Dispose()
+    }
+}
+
 # ---------- Bot 与 NapCat 启动 ----------
 
 function Start-TrackedBot {
@@ -453,10 +716,7 @@ function Start-TrackedBot {
         }
     }
     try {
-        $record = [pscustomobject]@{
-            process_id = $process.Id
-        } | ConvertTo-Json -Compress
-        Write-Utf8NoBomAtomically -Path $PidFile -Content "$record`n"
+        Write-ProcessIdFile -Path $PidFile -ProcessId $process.Id
     } catch {
         $pidCommitError = $_
         try {
@@ -508,7 +768,12 @@ function Start-NapCat {
         -StandardErrorLog $NapCatErrorLog | Out-Null
 }
 
-# ---------- 单实例监控循环 ----------
+# ---------- 停服入口与单实例监控循环 ----------
+
+if ($Stop) {
+    Stop-XiaoQingService
+    exit 0
+}
 
 [bool]$createdNew = $false
 $mutex = [Threading.Mutex]::new($true, (Get-MutexName $BotRoot), [ref]$createdNew)
@@ -518,6 +783,7 @@ if (-not $createdNew) {
 }
 
 try {
+    Write-ProcessIdFile -Path $MonitorPidFile -ProcessId $PID
     $restartDelaySeconds = $InitialRestartDelaySeconds
     $trackedProcess = Get-TrackedBotProcess
     $startedAt = if ($trackedProcess) { Get-Date } else { $null }
@@ -547,6 +813,8 @@ try {
         Start-Sleep -Seconds $MonitorIntervalSeconds
     }
 } finally {
+    # 互斥量仍在当前进程手中，此时不会有新监控器覆盖该状态文件。
+    Remove-Item -LiteralPath $MonitorPidFile -Force -ErrorAction SilentlyContinue
     $mutex.ReleaseMutex()
     $mutex.Dispose()
 }

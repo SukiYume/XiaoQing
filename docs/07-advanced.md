@@ -323,8 +323,8 @@ SQLite 插件推荐：
 ### 定点测试
 
 ```bash
-python -m pytest tests/plugins/test_<plugin>.py -q
-python -m ruff check plugins/<plugin> tests/plugins/test_<plugin>.py
+python -m pytest tests/plugins/<plugin> -q
+python -m ruff check plugins/<plugin> tests/plugins/<plugin>
 python -m mypy plugins/<plugin>
 ```
 
@@ -346,6 +346,8 @@ scripts/run-bot.vbs
   → scripts/run-bot-monitor.ps1
   → scripts/run_process_with_rotating_logs.py
 ```
+
+双击 `scripts/stop-bot.vbs` 可停止该启动链管理的监控器、Bot 和 NapCat。停服模式持有同一仓库级互斥量，并在结束进程前复核 PID、进程名与绝对命令路径；完成提示出现后可双击 `scripts/run-bot.vbs` 重启。
 
 ### systemd
 

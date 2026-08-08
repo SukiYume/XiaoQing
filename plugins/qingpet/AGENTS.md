@@ -14,7 +14,7 @@
 4. `models/`：领域数据结构；
 5. `services/`：事务、仓储和业务规则；
 6. `utils/constants.py`：冷却、次数、成长、商品和活动常量；
-7. `tests/plugins/test_qingpet*.py`：行为与回归契约。
+7. `tests/plugins/qingpet/`：行为与回归契约。
 
 文档描述当前代码和 Manifest。新增能力时，在同一个变更中同步命令元数据、帮助、用户文档与测试。
 
@@ -147,9 +147,9 @@ Repository 拆分保持一个 `Database` 组合对象和一个 SQLite 文件。
 先运行与修改模块直接相关的测试，再运行 QingPet 全集：
 
 ```bash
-python -m ruff check plugins/qingpet tests/plugins/test_qingpet*.py
+python -m ruff check plugins/qingpet tests/plugins/qingpet
 python -m mypy plugins/qingpet
-python -m pytest -q tests/plugins -k qingpet -n 2
+python -m pytest -q tests/plugins/qingpet -n 2
 ```
 
 高风险改动还需要覆盖：

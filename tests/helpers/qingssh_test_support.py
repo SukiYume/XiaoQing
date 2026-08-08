@@ -23,8 +23,9 @@ from plugins.qingssh.validators import (
     validate_server_name,
     validate_username,
 )
+from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT = Path(__file__).resolve().parent.parent.parent
+ROOT = REPOSITORY_ROOT
 
 
 def _command_parent(command: str, context: Any, manager: Any):

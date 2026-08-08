@@ -175,6 +175,6 @@ plugins/arxiv_filter/
 ## ✅ 开发验证
 
 ```bash
-python -m pytest tests/plugins/test_arxiv_filter.py tests/plugins/test_arxiv_model_path.py -q
+python -m pytest tests/plugins/arxiv_filter/test_arxiv_filter.py tests/plugins/arxiv_filter/test_arxiv_model_path.py -q
 python -m ruff check plugins/arxiv_filter scripts/arxiv_inference_cli.py
 ```
