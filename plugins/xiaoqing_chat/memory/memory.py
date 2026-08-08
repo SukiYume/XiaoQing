@@ -1,3 +1,5 @@
+"""定义聊天消息记录，并提供按会话持久化的近期记忆存储。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -12,7 +14,7 @@ from typing import Any
 from core.plugin_base import load_json, write_json
 
 from ..message_parts import build_message_parts, message_parts_to_legacy, normalize_message_parts
-from ..store_base import delete_json_artifacts
+from ..store_base import coerce_finite_float, coerce_optional_int, delete_json_artifacts
 
 MAX_CACHED_MESSAGES_PER_CHAT = 200
 
@@ -398,51 +400,32 @@ class MemoryStore:
             return None
         try:
             raw = load_json(path, default=None)
-            if not isinstance(raw, list):
-                return None
-            out: list[StoredMessage] = []
-            for item in raw:
-                if not isinstance(item, dict):
-                    continue
-                role = str(item.get("role", ""))
-                name = str(item.get("name", ""))
-                content = str(item.get("content", ""))
-                user_id_raw = item.get("user_id", None)
-                user_id: int | None = None
-                if user_id_raw is not None:
-                    try:
-                        user_id = int(user_id_raw)
-                    except (TypeError, ValueError):
-                        user_id = None
-                message_id_raw = item.get("message_id", None)
-                message_id: int | None = None
-                if message_id_raw is not None:
-                    try:
-                        message_id = int(message_id_raw)
-                    except (TypeError, ValueError):
-                        message_id = None
-                local_id = str(item.get("local_id", "") or "")
-                media_items = _normalize_media_items(item.get("media_items", []))
-                parts = normalize_message_parts(item.get("parts", []))
-                ts_val = item.get("ts", time.time())
-                try:
-                    ts = float(ts_val)
-                except (TypeError, ValueError):
-                    ts = time.time()
-                if role and (content or media_items or parts):
-                    out.append(
-                        StoredMessage(
-                            role=role,
-                            name=name,
-                            user_id=user_id,
-                            message_id=message_id,
-                            local_id=local_id,
-                            parts=parts,
-                            content=content,
-                            media_items=media_items,
-                            ts=ts,
-                        )
-                    )
-            return out
-        except Exception:
+        except OSError:
             return None
+        if not isinstance(raw, list):
+            return None
+
+        out: list[StoredMessage] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role", ""))
+            name = str(item.get("name", ""))
+            content = str(item.get("content", ""))
+            media_items = _normalize_media_items(item.get("media_items", []))
+            parts = normalize_message_parts(item.get("parts", []))
+            if role and (content or media_items or parts):
+                out.append(
+                    StoredMessage(
+                        role=role,
+                        name=name,
+                        user_id=coerce_optional_int(item.get("user_id")),
+                        message_id=coerce_optional_int(item.get("message_id")),
+                        local_id=str(item.get("local_id", "") or ""),
+                        parts=parts,
+                        content=content,
+                        media_items=media_items,
+                        ts=coerce_finite_float(item.get("ts"), default=time.time(), minimum=0.0),
+                    )
+                )
+        return out

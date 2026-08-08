@@ -136,7 +136,7 @@ async def test_generate_reply_checker_timeout_allows_non_forced_reply(mock_conte
         stack.enter_context(
             patch(
                 "plugins.xiaoqing_chat.reply_generator.chat_completions_with_fallback_paths",
-                new=AsyncMock(return_value=({"content": "这条回复需要检查"}, "")),
+                new=AsyncMock(return_value=("这条回复需要检查", "")),
             )
         )
         stack.enter_context(

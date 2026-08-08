@@ -1,3 +1,5 @@
+"""把 OneBot QQ 表情段解析为稳定、可读的文本描述。"""
+
 from __future__ import annotations
 
 import re
@@ -52,7 +54,7 @@ def _clean_face_text(value: Any) -> str:
     if text.lower() in _GENERIC_FACE_LABELS:
         return ""
     text = re.sub(r"\s+", " ", text)
-    if text.startswith("http://") or text.startswith("https://"):
+    if text.startswith(("http://", "https://")):
         return ""
     return text[:32]
 

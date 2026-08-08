@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import secrets
+import sqlite3
 import threading
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import jwt
 
@@ -27,17 +29,17 @@ _WIDGET_KIND: Final = "widget"
 _WIDGET_SCOPE: Final = "widget:read"
 _MIN_SECRET_BYTES: Final = 32
 _MAX_OWNER_ID_CHARS: Final = 256
-_RESERVED_TOKEN_CLAIMS: Final = frozenset({"exp", "iat", "iss", "owner_id", "sub", "typ"})
+_LOGIN_CODE_DIGEST_DOMAIN: Final = b"pendo-login-code\0"
+_WEB_SESSION_DIGEST_DOMAIN: Final = b"pendo-web-session\0"
 _SECRET_FILE: Path | None = None
 _SECRET_CACHE: str | None = None
+_AUTH_DATABASE: Database | None = None
 _AUTH_LOCK = threading.Lock()
 _SECRET_LOCK = threading.Lock()
-_LOGIN_CODES: dict[str, LoginCode] = {}
-_SESSIONS: dict[str, WebSession] = {}
 
 
 def configure_auth_storage(data_dir: Path) -> None:
-    """Bind signing-key persistence to Core's writable plugin data directory."""
+    """把签名密钥绑定到 Core 分配的插件可写数据目录。"""
 
     global _SECRET_CACHE, _SECRET_FILE
     directory = Path(data_dir)
@@ -47,6 +49,28 @@ def configure_auth_storage(data_dir: Path) -> None:
         if _SECRET_FILE != secret_file:
             _SECRET_FILE = secret_file
             _SECRET_CACHE = None
+
+
+def configure_auth_database(db: Database) -> None:
+    """把登录码和浏览器会话绑定到 Pendo 已有数据库。"""
+
+    global _AUTH_DATABASE
+    configure_auth_storage(Path(db.db_path).parent)
+    with _AUTH_LOCK:
+        _AUTH_DATABASE = db
+
+
+def _resolve_auth_database(db: Database | None = None) -> Database:
+    """取得显式传入或应用启动时绑定的认证仓储。"""
+
+    if db is not None:
+        configure_auth_database(db)
+        return db
+    with _AUTH_LOCK:
+        configured = _AUTH_DATABASE
+    if configured is None:
+        raise RuntimeError("Pendo auth database is not configured")
+    return configured
 
 
 class AuthError(Exception):
@@ -59,24 +83,33 @@ class AuthError(Exception):
 
 
 @dataclass(frozen=True)
-class LoginCode:
-    """绑定用户且只能消费一次的短期交换码。"""
-
-    owner_id: str
-    expires_at: float
-
-
-@dataclass(frozen=True)
 class WebSession:
-    """保存在服务端内存中的可撤销浏览器会话。"""
+    """由服务端持久化、可按设备撤销的浏览器会话。"""
 
     session_id: str
     device_id: str
     owner_id: str
     csrf_token: str
-    created_at: float
-    expires_at: float
+    created_at: int
+    expires_at: int
     demo: bool = False
+
+
+@dataclass(frozen=True)
+class WebSessionInfo:
+    """不含浏览器 Bearer 凭据的会话设备记录。"""
+
+    device_id: str
+    owner_id: str
+    created_at: int
+    expires_at: int
+    demo: bool = False
+
+
+def _credential_digest(domain: bytes, credential: str) -> str:
+    """持久化高熵凭据前按用途分域计算摘要，不保存原始值。"""
+
+    return hashlib.sha256(domain + credential.encode("utf-8")).hexdigest()
 
 
 def _normalize_owner_id(owner_id: str) -> str:
@@ -94,10 +127,16 @@ def _normalize_owner_id(owner_id: str) -> str:
 
 
 def _positive_lifetime_seconds(value: int) -> int:
-    """校验登录码和浏览器会话的正整数有效期。"""
+    """校验需要保持一段时间的凭据使用正整数秒。"""
     if type(value) is not int or value < 1:
         raise ValueError("expires_seconds must be a positive integer")
     return value
+
+
+def _expiry_timestamp(issued_at: int, expires_seconds: int) -> int:
+    """所有 Pendo Web 凭据统一按正整数秒计算到期时间。"""
+
+    return issued_at + _positive_lifetime_seconds(expires_seconds)
 
 
 def _validated_secret(secret: str, source: str) -> str:
@@ -107,119 +146,167 @@ def _validated_secret(secret: str, source: str) -> str:
     return secret
 
 
-def _prune_expired(now: float) -> None:
-    """清理过期登录码和会话；调用方必须持有认证锁。"""
-    for code, grant in list(_LOGIN_CODES.items()):
-        if grant.expires_at <= now:
-            _LOGIN_CODES.pop(code, None)
-    for session_id, session in list(_SESSIONS.items()):
-        if session.expires_at <= now:
-            _SESSIONS.pop(session_id, None)
-
-
 def issue_login_code(
     owner_id: str,
     expires_seconds: int = PendoConfig.WEB_LOGIN_CODE_EXPIRE_SECONDS,
+    *,
+    db: Database | None = None,
 ) -> str:
-    """签发绑定用户、限时有效且只能消费一次的登录交换码。"""
+    """签发可跨进程重启、绑定用户且只能消费一次的登录交换码。"""
+
+    registry = _resolve_auth_database(db)
     normalized_owner = _normalize_owner_id(owner_id)
-    lifetime = _positive_lifetime_seconds(expires_seconds)
-    code = secrets.token_urlsafe(32)
-    now = time.time()
-    with _AUTH_LOCK:
-        _prune_expired(now)
-        _LOGIN_CODES[code] = LoginCode(owner_id=normalized_owner, expires_at=now + lifetime)
-    return code
+    now = int(time.time())
+    expires_at = _expiry_timestamp(now, expires_seconds)
+    for _attempt in range(3):
+        code = secrets.token_urlsafe(32)
+        code_digest = _credential_digest(_LOGIN_CODE_DIGEST_DOMAIN, code)
+        try:
+            registry.register_login_code(
+                code_digest,
+                normalized_owner,
+                issued_at=now,
+                expires_at=expires_at,
+            )
+            return code
+        except sqlite3.IntegrityError:
+            continue
+    raise RuntimeError("Unable to allocate a unique Pendo login code")
 
 
-def consume_login_code(code: str) -> str:
+def consume_login_code(code: str, *, db: Database | None = None) -> str:
     """原子消费登录码并返回其绑定用户。"""
 
     if not isinstance(code, str) or not code.strip():
         raise AuthError("Missing login code")
-    now = time.time()
-    with _AUTH_LOCK:
-        _prune_expired(now)
-        grant = _LOGIN_CODES.pop(code.strip(), None)
-    if grant is None:
+    code_digest = _credential_digest(_LOGIN_CODE_DIGEST_DOMAIN, code.strip())
+    now = int(time.time())
+    owner_id = _resolve_auth_database(db).consume_login_code(code_digest, now=now)
+    if owner_id is None:
         raise AuthError("Login code is invalid, expired, or already used")
-    return grant.owner_id
+    return str(owner_id)
 
 
 def create_web_session(
     owner_id: str,
     *,
-    expires_seconds: int = 8 * 60 * 60,
+    expires_seconds: int = PendoConfig.WEB_SESSION_EXPIRE_SECONDS,
     demo: bool = False,
+    db: Database | None = None,
 ) -> WebSession:
-    """创建含 CSRF 令牌、可按设备撤销的服务端浏览器会话。"""
+    """创建含 CSRF 令牌、可跨重启并可按设备撤销的浏览器会话。"""
+
     normalized_owner = _normalize_owner_id(owner_id)
-    lifetime = _positive_lifetime_seconds(expires_seconds)
+    registry = _resolve_auth_database(db)
     if type(demo) is not bool:
         raise ValueError("demo must be a boolean")
-    now = time.time()
-    session = WebSession(
-        session_id=secrets.token_urlsafe(32),
-        device_id=secrets.token_urlsafe(12),
-        owner_id=normalized_owner,
-        csrf_token=secrets.token_urlsafe(32),
-        created_at=now,
-        expires_at=now + lifetime,
-        demo=demo,
-    )
-    with _AUTH_LOCK:
-        _prune_expired(now)
-        _SESSIONS[session.session_id] = session
-    return session
-
-
-def get_web_session(session_id: str | None) -> WebSession:
-    """读取未过期会话；缺失、撤销或过期均按认证失败处理。"""
-    if not session_id:
-        raise AuthError("Missing web session")
-    now = time.time()
-    with _AUTH_LOCK:
-        _prune_expired(now)
-        session = _SESSIONS.get(session_id)
-    if session is None:
-        raise AuthError("Web session is invalid or expired")
-    return session
-
-
-def revoke_web_session(session_id: str | None) -> None:
-    """幂等撤销指定浏览器会话。"""
-    if not session_id:
-        return
-    with _AUTH_LOCK:
-        _SESSIONS.pop(session_id, None)
-
-
-def list_web_sessions(owner_id: str) -> list[WebSession]:
-    """按最新优先列出用户的内部会话记录，供设备视图脱敏展示。"""
-    normalized_owner = _normalize_owner_id(owner_id)
-    now = time.time()
-    with _AUTH_LOCK:
-        _prune_expired(now)
-        return sorted(
-            (session for session in _SESSIONS.values() if session.owner_id == normalized_owner),
-            key=lambda session: (session.created_at, session.session_id),
-            reverse=True,
+    now = int(time.time())
+    expires_at = _expiry_timestamp(now, expires_seconds)
+    for _attempt in range(3):
+        session = WebSession(
+            session_id=secrets.token_urlsafe(32),
+            device_id=secrets.token_urlsafe(12),
+            owner_id=normalized_owner,
+            csrf_token=secrets.token_urlsafe(32),
+            created_at=now,
+            expires_at=expires_at,
+            demo=demo,
         )
+        session_digest = _credential_digest(_WEB_SESSION_DIGEST_DOMAIN, session.session_id)
+        try:
+            registry.register_web_session(
+                session_digest,
+                session.device_id,
+                session.owner_id,
+                session.csrf_token,
+                created_at=session.created_at,
+                expires_at=session.expires_at,
+                demo=session.demo,
+            )
+            return session
+        except sqlite3.IntegrityError:
+            continue
+    raise RuntimeError("Unable to allocate a unique Pendo web session")
 
 
-def revoke_web_session_device(owner_id: str, device_id: str) -> bool:
+def _session_from_row(session_id: str, row: Mapping[str, object]) -> WebSession:
+    """从数据库行重建已认证会话，同时不向上层暴露持久化摘要。"""
+
+    return WebSession(
+        session_id=session_id,
+        device_id=str(row["device_id"]),
+        owner_id=str(row["owner_id"]),
+        csrf_token=str(row["csrf_token"]),
+        created_at=cast(int, row["created_at"]),
+        expires_at=cast(int, row["expires_at"]),
+        demo=bool(row["demo"]),
+    )
+
+
+def _session_info_from_row(row: Mapping[str, object]) -> WebSessionInfo:
+    """把会话行转换为不含 Bearer 凭据的设备列表项。"""
+
+    return WebSessionInfo(
+        device_id=str(row["device_id"]),
+        owner_id=str(row["owner_id"]),
+        created_at=cast(int, row["created_at"]),
+        expires_at=cast(int, row["expires_at"]),
+        demo=bool(row["demo"]),
+    )
+
+
+def get_web_session(session_id: str | None, *, db: Database | None = None) -> WebSession:
+    """读取未过期会话；缺失、撤销或过期均按认证失败处理。"""
+
+    if not isinstance(session_id, str) or not session_id.strip():
+        raise AuthError("Missing web session")
+    normalized_session_id = session_id.strip()
+    session_digest = _credential_digest(_WEB_SESSION_DIGEST_DOMAIN, normalized_session_id)
+    now = int(time.time())
+    row = _resolve_auth_database(db).get_web_session_record(session_digest, now=now)
+    if row is None:
+        raise AuthError("Web session is invalid or expired")
+    return _session_from_row(normalized_session_id, row)
+
+
+def revoke_web_session(session_id: str | None, *, db: Database | None = None) -> None:
+    """幂等撤销指定浏览器会话。"""
+
+    if not isinstance(session_id, str) or not session_id.strip():
+        return
+    session_digest = _credential_digest(_WEB_SESSION_DIGEST_DOMAIN, session_id.strip())
+    _resolve_auth_database(db).revoke_web_session(session_digest)
+
+
+def list_web_sessions(owner_id: str, *, db: Database | None = None) -> list[WebSessionInfo]:
+    """按最新优先列出用户的内部会话记录，供设备视图脱敏展示。"""
+
+    normalized_owner = _normalize_owner_id(owner_id)
+    now = int(time.time())
+    rows = _resolve_auth_database(db).list_web_session_records(normalized_owner, now=now)
+    return [_session_info_from_row(row) for row in rows]
+
+
+def revoke_web_session_device(
+    owner_id: str,
+    device_id: str,
+    *,
+    db: Database | None = None,
+) -> bool:
     """按非秘密设备标识撤销用户自己的一个会话。"""
+
     normalized_owner = _normalize_owner_id(owner_id)
     normalized_device = str(device_id or "").strip()
     if not normalized_device:
         return False
-    with _AUTH_LOCK:
-        _prune_expired(time.time())
-        for session_id, session in list(_SESSIONS.items()):
-            if session.owner_id == normalized_owner and session.device_id == normalized_device:
-                _SESSIONS.pop(session_id, None)
-                return True
-    return False
+    now = int(time.time())
+    return bool(
+        _resolve_auth_database(db).revoke_web_session_device(
+            normalized_owner,
+            normalized_device,
+            now=now,
+        )
+    )
 
 
 def _get_secret_key() -> str:
@@ -258,35 +345,27 @@ def _get_secret_key() -> str:
         return _SECRET_CACHE
 
 
-def _encode_token(
+def _encode_widget_token(
     owner_id: str,
-    expires_hours: int,
-    extra_claims: Mapping[str, Any] | None,
+    expires_seconds: int,
+    token_id: str,
 ) -> tuple[str, dict[str, Any]]:
-    """Validate claims and return both the encoded JWT and its exact payload."""
+    """签发固定声明的只读 Widget JWT，并返回实际载荷供仓储登记。"""
 
     normalized_owner = _normalize_owner_id(owner_id)
-    if type(expires_hours) is not int or expires_hours < 0:
-        raise ValueError("expires_hours must be a non-negative integer")
-    if extra_claims is not None and not isinstance(extra_claims, Mapping):
-        raise ValueError("extra_claims must be a mapping")
-    claims = dict(extra_claims or {})
-    if any(not isinstance(key, str) or not key for key in claims):
-        raise ValueError("extra_claims keys must be non-empty strings")
-    conflicting_claims = sorted(_RESERVED_TOKEN_CLAIMS.intersection(claims))
-    if conflicting_claims:
-        raise ValueError(f"extra_claims contains reserved fields: {', '.join(conflicting_claims)}")
-
     now = int(time.time())
+    expires_at = _expiry_timestamp(now, expires_seconds)
     payload: dict[str, Any] = {
         "owner_id": normalized_owner,
         "sub": normalized_owner,
         "typ": _TOKEN_TYPE,
         "iss": _TOKEN_ISSUER,
-        "exp": now + expires_hours * 3600,
+        "exp": expires_at,
         "iat": now,
+        "kind": _WIDGET_KIND,
+        "scope": _WIDGET_SCOPE,
+        "jti": token_id,
     }
-    payload.update(claims)
     encoded = jwt.encode(payload, _get_secret_key(), algorithm=_ALGORITHM)
     if isinstance(encoded, bytes):
         return encoded.decode("ascii"), payload
@@ -295,34 +374,20 @@ def _encode_token(
     return encoded, payload
 
 
-def generate_token(
-    owner_id: str,
-    expires_hours: int = 24,
-    extra_claims: Mapping[str, Any] | None = None,
-) -> str:
-    """为用户签发 JWT；扩展声明不得覆盖身份与有效期保留字段。"""
-    encoded, _payload = _encode_token(owner_id, expires_hours, extra_claims)
-    return encoded
-
-
 def generate_widget_token(
     owner_id: str,
-    expires_hours: int = PendoConfig.WEB_WIDGET_TOKEN_EXPIRE_HOURS,
+    expires_seconds: int = PendoConfig.WEB_WIDGET_TOKEN_EXPIRE_SECONDS,
     *,
     db: Database,
 ) -> str:
     """Register and sign a revocable, read-only Widget credential."""
 
-    configure_auth_storage(Path(db.db_path).parent)
+    configure_auth_database(db)
     token_id = secrets.token_urlsafe(24)
-    encoded, payload = _encode_token(
+    encoded, payload = _encode_widget_token(
         owner_id,
-        expires_hours,
-        {
-            "kind": _WIDGET_KIND,
-            "scope": _WIDGET_SCOPE,
-            "jti": token_id,
-        },
+        expires_seconds,
+        token_id,
     )
     db.register_widget_token(
         token_id,
@@ -357,16 +422,17 @@ def verify_token(token: str, *, db: Database | None = None) -> dict[str, Any]:
             raise AuthError("Token subject does not match owner_id")
         if payload.get("typ") != _TOKEN_TYPE:
             raise AuthError("Token has invalid type")
-        if payload.get("kind") == _WIDGET_KIND and payload.get("scope") != _WIDGET_SCOPE:
+        if payload.get("kind") != _WIDGET_KIND:
+            raise AuthError("Token has invalid kind")
+        if payload.get("scope") != _WIDGET_SCOPE:
             raise AuthError("Widget token has invalid scope")
-        if payload.get("kind") == _WIDGET_KIND:
-            token_id = payload.get("jti")
-            if not isinstance(token_id, str) or not token_id:
-                raise AuthError("Widget token is missing jti")
-            if db is None:
-                raise AuthError("Widget token registry is unavailable")
-            if not db.is_widget_token_active(token_id, owner_id, now=int(time.time())):
-                raise AuthError("Widget token has been revoked")
+        token_id = payload.get("jti")
+        if not isinstance(token_id, str) or not token_id:
+            raise AuthError("Widget token is missing jti")
+        if db is None:
+            raise AuthError("Widget token registry is unavailable")
+        if not db.is_widget_token_active(token_id, owner_id, now=int(time.time())):
+            raise AuthError("Widget token has been revoked")
         return payload
     except jwt.ExpiredSignatureError as exc:
         raise AuthError("Token has expired") from exc

@@ -1,27 +1,35 @@
-# Wolfram|Alpha 插件
+# 🧮 Wolfram|Alpha
 
-管理员可以通过固定的 Wolfram|Alpha HTTPS API 执行数学、物理、化学、单位换算和公开数据查询。插件不会抓取任意 URL，也不会把 App ID 放进 URL、回复或日志。
+`wolframalpha` 通过固定 Wolfram|Alpha HTTPS API 执行数学、物理、化学、单位换算和公开数据查询。Manifest 将命令限定为 Bot 管理员入口。
 
-## 命令
+---
+
+## ⌨️ 命令
 
 ```text
 /alpha 1+1
 /wa sin(pi/4)
 /alpha --mode=step integrate x^2
 /alpha --mode=complete population of China
+/alpha help
 ```
 
-支持 `/alpha`、`/wolfram`、`/wa`、`/计算` 四个触发词，命令仅限 Bot 管理员。查询模式必须显式指定：
+触发词为 `/alpha`、`/wolfram`、`/wa` 和 `/计算`。
 
-- 默认或 `--mode=simple`：调用快速文本结果端点。
-- `--mode=step`：读取步骤解答 XML。
-- `--mode=complete`：读取 Result pod 的 JSON；`--mode=cp` 是兼容别名。
+| 模式 | 接口与结果 |
+| --- | --- |
+| `simple` | 快速文本结果端点；默认模式 |
+| `step` | XML 步骤解答 |
+| `complete` | JSON Result pod |
+| `cp` | `complete` 的短别名 |
 
-自然问题末尾的 `step` 或 `cp` 始终属于问题正文，不再被解释成模式。查询最多 500 个字符，空查询显示帮助。
+模式通过开头的 `--mode=<值>` 显式指定。问题正文末尾的 `step` 或 `cp` 作为普通查询文本。查询长度上限为 500 个字符。
 
-## 配置
+---
 
-只从 `config/secrets.json` 的 `plugins.wolframalpha.appid` 读取 App ID：
+## ⚙️ App ID
+
+在 `config/secrets.json` 中配置：
 
 ```json
 {
@@ -33,12 +41,54 @@
 }
 ```
 
-App ID 必须是最多 128 个字符的字母、数字、连字符或下划线组合。不要把它写入公开 `config.json`、文档或聊天消息。
+App ID 接受 1～128 个字母、数字、连字符或下划线。该值保存在公开配置、聊天回复和普通日志边界之外。
 
-## 运行边界
+---
 
-- 三种模式都按官方接口约定使用 GET、30 秒总超时、固定 API 域名和禁止重定向的有界客户端；App ID 仅作为查询参数交给客户端，插件日志不会记录请求 URL 或参数。
-- 线上的压缩前后响应均最多 1 MiB；XML/JSON 还受深度、节点数、属性和字符串预算约束。
-- 全插件最多同时发出 2 个 Wolfram 请求。
-- 最多读取 20 个结果项，最终 API 文本最多 2400 个字符，确保连同问题和提示仍处于 QQ 单条消息预算内。
-- HTTP、超时、网络、格式和未知错误分别返回稳定公开提示；日志不记录 App ID 或完整查询结果。
+## 🌐 请求流程
+
+- `simple` 请求 `https://api.wolframalpha.com/v1/result`；
+- `step` 与 `complete` 请求 `https://api.wolframalpha.com/v2/query`；
+- 三种模式均使用 GET、固定域名、30 秒总超时和有界客户端；
+- App ID 作为请求参数传给客户端；
+- 全插件最多同时执行 2 个 Wolfram 请求。
+
+请求 URL 与参数保留在普通日志边界之外，日志记录模式、状态、响应长度和错误类别。
+
+---
+
+## 🔐 响应边界
+
+| 项目 | 当前预算 |
+| --- | ---: |
+| 线上与解码响应 | 各 1 MiB |
+| XML/JSON | 深度、节点、属性和字符串限制 |
+| 结果项 | 最多 20 个 |
+| API 文本 | 最多 2400 个字符 |
+| 查询 | 最多 500 个字符 |
+
+最终文本会保留完整结果项边界，并适配 QQ 单条消息预算。HTTP、网络、超时、格式与内部异常分别映射为稳定公开提示。
+
+---
+
+## 🩺 排障
+
+| 现象 | 检查项 |
+| --- | --- |
+| 提示 App ID 配置异常 | 核对 secret 层级和允许字符 |
+| 返回查询结果为空 | 尝试 `simple`、`step` 或 `complete` 的适用模式 |
+| 请求超时 | 检查 Wolfram|Alpha 服务和网络连接 |
+| XML 或 JSON 校验失败 | 检查官方接口结构变化与响应预算 |
+| 结果显示省略号 | 缩小查询范围，或拆分为多个问题 |
+
+---
+
+## ✅ 开发验证
+
+在仓库根目录运行：
+
+```bash
+python -m pytest -q tests/plugins/test_wolframalpha.py
+python -m ruff check plugins/wolframalpha tests/plugins/test_wolframalpha.py
+python -m mypy plugins/wolframalpha
+```

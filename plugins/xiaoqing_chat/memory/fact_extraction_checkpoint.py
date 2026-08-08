@@ -1,3 +1,5 @@
+"""维护人物事实提取水位，避免对同一批消息重复调用模型。"""
+
 from __future__ import annotations
 
 import hashlib
@@ -12,7 +14,7 @@ from ..store_base import delete_json_artifacts
 
 
 def _checkpoint_path(data_dir: Path, chat_id: str) -> Path:
-    """Return a traversal-safe, stable checkpoint path for one chat."""
+    """返回一个防目录穿越、按会话稳定映射的检查点路径。"""
 
     scope = str(chat_id or "").strip()
     digest = hashlib.sha256(scope.encode("utf-8")).hexdigest()

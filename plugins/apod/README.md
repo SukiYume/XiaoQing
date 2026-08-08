@@ -1,23 +1,39 @@
-# NASA Astronomy Picture of the Day
+# 🌌 APOD 每日天文图
 
-`/apod` 抓取 NASA `https://apod.nasa.gov/apod/astropix.html` 的当天页面，返回图片或视频链接、标题和说明。当前版本不支持日期参数，也不使用 UCL mirror 或 API key。
+APOD 插件抓取 NASA Astronomy Picture of the Day 当前页面，返回图片或视频链接、标题和说明。
 
-## 命令
+---
 
-- `/apod`：获取当天 APOD
-- `/apod help`：帮助
+## 🔐 使用条件
+
+- 命令支持群聊与私聊。
+- 运行依赖为 Beautiful Soup 与 Pillow。
+- 网络需要访问 `apod.nasa.gov` 及页面引用的媒体地址。
+
+---
+
+## ⌨️ 命令
+
+| 命令 | 功能 |
+|---|---|
+| `/apod` | 获取当前 APOD |
+| `/apod help` | 插件帮助 |
+
+`/apod` 使用空参数调用，目标固定为 NASA 当前 APOD 页面 `apod.nasa.gov/apod/astropix.html`。
 
 <!-- manifest-command-aliases:start -->
-| 功能 | 推荐入口 | manifest 等价别名 |
-| --- | --- | --- |
-| 获取当天 APOD | `/apod` | `/每日一天文图` |
+| 功能 | 推荐入口 | Manifest 等价别名 |
+|---|---|---|
+| 获取当前 APOD | `/apod` | `/每日一天文图` |
 <!-- manifest-command-aliases:end -->
 
-表中的等价别名由 dispatcher 直接识别；参数和权限语义与推荐入口完全相同。
+完整参数与错误样例可通过 `/help apod` 查看。
 
-每天 13:30 的 schedule 使用部署侧 `default_group_ids`；干净安装没有目标群时不会发送。
+---
 
-## 可选公开配置
+## ⚙️ 配置与调度
+
+可选公开配置：
 
 ```json
 {
@@ -30,4 +46,28 @@
 }
 ```
 
-页面和图片只允许 HTTPS；每次重定向都会重新校验公网 DNS 和 `allowed_hosts`。HTML、图片字节数、MIME 和解码像素均有限制，缓存名使用最终 URL 的 SHA-256。
+每日 13:30 任务将结果发送到 `default_group_ids`。生产调度请配置至少一个目标群。
+
+---
+
+## 🔐 数据与网络边界
+
+缓存位于 `data/apod/`。页面与媒体请求使用 HTTPS，重定向会重新校验公网 DNS 与 `allowed_hosts`。HTML、图片字节、MIME、尺寸和像素均使用有界校验，缓存名根据最终 URL 的 SHA-256 生成。
+
+---
+
+## 🩺 排障
+
+1. 使用 `/apod` 验证页面抓取。
+2. 检查 `allowed_hosts` 与最终媒体主机。
+3. 检查日志中的 HTTP 状态、重定向、MIME 和图片解码结果。
+4. 检查 `data/apod/` 写入权限与缓存容量。
+
+---
+
+## ✅ 开发验证
+
+```bash
+python -m pytest tests/plugins/test_apod.py -q
+python -m ruff check plugins/apod tests/plugins/test_apod.py
+```

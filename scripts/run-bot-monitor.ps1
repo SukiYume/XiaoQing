@@ -1,12 +1,10 @@
-<#
+﻿<#
 .SYNOPSIS
-    Monitors XiaoQing and a local NapCat process on Windows.
+    在 Windows 上看护 XiaoQing 与本机 NapCat 进程。
 
-The monitor uses a repository-scoped mutex and PID file, restarts failed
-children with bounded backoff, and delegates stdout/stderr rotation to the
-Python log-pump helper. NapCat's QQ account and optional Bot process settings
-come from config/config.json; deployment-specific values are never embedded
-in this script.
+监控器使用仓库级互斥量和 PID 文件保证单实例，通过有上限的退避重启异常退出
+的子进程，并把 stdout/stderr 轮转交给 Python 日志泵。NapCat QQ 账号和可选
+Bot 进程设置来自 config/config.json；脚本不内置生产环境专属值。
 #>
 
 [CmdletBinding()]
@@ -35,6 +33,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# ---------- 配置读取与路径规范化 ----------
+
 function Get-NormalizedDirectoryPath {
     param([string]$Path)
 
@@ -60,7 +60,9 @@ function Read-LauncherConfig {
     param([string]$Path)
 
     try {
-        $config = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+        # Windows PowerShell 5.1 对无 BOM 文件的默认编码不是 UTF-8；这里显式
+        # 指定编码，避免配置中其他中文字段被错误解码后连带破坏 JSON 解析。
+        $config = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
     } catch {
         throw "Unable to read XiaoQing config: $Path ($($_.Exception.Message))"
     }
@@ -98,9 +100,10 @@ function Read-LauncherConfig {
     }
 }
 
-# Resolve all deployment settings in one place. Defaults are evaluated after
-# parameter binding because Windows PowerShell 5.1 may leave $PSScriptRoot empty
-# inside param() default expressions.
+# ---------- 部署路径解析与启动前门禁 ----------
+
+# 所有部署路径在这里集中解析。默认值必须等参数绑定完成后再计算，因为 Windows
+# PowerShell 5.1 在 param() 默认表达式中可能把 $PSScriptRoot 留空。
 $ScriptDirectory = $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($ScriptDirectory)) {
     $ScriptPath = $MyInvocation.MyCommand.Path
@@ -159,6 +162,8 @@ $NapCatAccount = $LauncherConfig.NapCatAccount
 $MklThreadingLayer = $LauncherConfig.MklThreadingLayer
 New-Item -ItemType Directory -Force -Path $LogDirectory | Out-Null
 
+# ---------- 单实例标识与原子状态文件 ----------
+
 function Get-MutexName {
     param([string]$Path)
 
@@ -206,8 +211,8 @@ function ConvertTo-NativeArgument {
         return $Value
     }
 
-    # Follow CommandLineToArgvW/CRT quoting rules so paths, quotes and trailing
-    # backslashes survive PowerShell 5.1's string-only Start-Process API.
+    # 遵循 CommandLineToArgvW/CRT 引号规则，使路径、引号和末尾反斜杠经过
+    # PowerShell 5.1 只能接收字符串的 Start-Process API 后仍能原样到达子进程。
     $builder = [Text.StringBuilder]::new()
     [void]$builder.Append('"')
     $backslashes = 0
@@ -240,6 +245,8 @@ function Join-NativeArguments {
 
     return (($Values | ForEach-Object { ConvertTo-NativeArgument $_ }) -join " ")
 }
+
+# ---------- 日志泵与原生进程参数 ----------
 
 function Start-LogPumpedProcess {
     param(
@@ -277,25 +284,59 @@ function Test-CommandLineContains {
         $CommandLine.IndexOf($ExpectedPath, [StringComparison]::OrdinalIgnoreCase) -ge 0
 }
 
+# ---------- 已启动 Bot 的识别与回收 ----------
+
 function Get-TrackedBotProcess {
     if (-not (Test-Path -LiteralPath $PidFile -PathType Leaf)) {
         return $null
     }
+
+    # 文件系统读取失败不是“旧 PID”，不能吞掉后继续启动第二份 Bot。
     try {
-        $saved = Get-Content -LiteralPath $PidFile -Raw | ConvertFrom-Json
-        $processId = [int]$saved.process_id
-        if ($processId -le 0) {
+        $savedText = [IO.File]::ReadAllText($PidFile, [Text.Encoding]::UTF8)
+    } catch {
+        throw "Unable to read tracked Bot PID file: $PidFile ($($_.Exception.Message))"
+    }
+
+    # 只有畸形/中断写入的 PID 内容可以按陈旧状态恢复。严格拒绝字符串和小数，
+    # 避免 PowerShell 的宽松强制转换把错误值映射到另一个真实进程。
+    try {
+        $saved = $savedText | ConvertFrom-Json
+        $processIdProperty = $saved.PSObject.Properties["process_id"]
+        if ($null -eq $processIdProperty -or
+            ($processIdProperty.Value -isnot [int] -and
+                $processIdProperty.Value -isnot [long])) {
+            throw "Tracked process ID must be an integer"
+        }
+        $processIdValue = [long]$processIdProperty.Value
+        if ($processIdValue -le 0 -or $processIdValue -gt [int]::MaxValue) {
             throw "Invalid tracked process ID"
         }
-        $process = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $processId"
-        if ($null -ne $process -and
-            (Test-CommandLineContains $process.CommandLine $LogPumpScript) -and
-            (Test-CommandLineContains $process.CommandLine $MainScript)) {
-            return $process
-        }
+        $processId = [int]$processIdValue
     } catch {
-        # A partially written/stale PID file must not block recovery.
+        Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
+        return $null
     }
+
+    # CIM 查询错误或无法读取命令行时无法证明 PID 已陈旧，必须失败关闭，防止
+    # 临时 WMI/权限故障导致同一个仓库重复拉起 Bot。
+    $process = Get-CimInstance `
+        -ClassName Win32_Process `
+        -Filter "ProcessId = $processId" `
+        -ErrorAction Stop
+    if ($null -eq $process) {
+        Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
+        return $null
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$process.CommandLine)) {
+        throw "Unable to verify command line for tracked Bot process $processId"
+    }
+    if ((Test-CommandLineContains $process.CommandLine $LogPumpScript) -and
+        (Test-CommandLineContains $process.CommandLine $MainScript)) {
+        return $process
+    }
+
+    # PID 已被其他程序复用时删除旧记录，让监控循环创建新的受管 Bot。
     Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
     return $null
 }
@@ -330,7 +371,7 @@ function Invoke-TaskKill {
                     $killer.Kill()
                 }
             } catch {
-                # Preserve the primary tree-cleanup result.
+                # finally 中的兜底失败不能覆盖前面更准确的进程树清理结果。
             }
             $killer.Dispose()
         }
@@ -345,7 +386,7 @@ function Stop-OwnedProcessTree {
             return
         }
     } catch {
-        # It still belongs to this start attempt; continue with cleanup.
+        # 该句柄仍属于本次启动尝试；无法读取状态时继续执行回收。
     }
 
     $treeCleanupError = $null
@@ -373,6 +414,8 @@ function Stop-OwnedProcessTree {
     }
 }
 
+# ---------- Bot 与 NapCat 启动 ----------
+
 function Start-TrackedBot {
     Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
     $botCommand = @(
@@ -380,10 +423,9 @@ function Start-TrackedBot {
         $MainScript
     ) + $BotArguments
 
-    # Start-Process in Windows PowerShell 5.1 has no per-process environment
-    # parameter. Temporarily update the monitor environment so only this new
-    # log-pump tree inherits the configured MKL threading layer, then restore
-    # the operator's original value before the monitor loop continues.
+    # Windows PowerShell 5.1 的 Start-Process 没有进程级环境参数。这里只在
+    # 创建 Bot 日志泵进程树时临时注入 MKL 层，随后立即恢复监控器原环境，
+    # 因而后面启动的 NapCat 不会意外继承该设置。
     $previousMklThreadingLayer = [Environment]::GetEnvironmentVariable(
         "MKL_THREADING_LAYER",
         [EnvironmentVariableTarget]::Process
@@ -413,7 +455,6 @@ function Start-TrackedBot {
     try {
         $record = [pscustomobject]@{
             process_id = $process.Id
-            started_at = (Get-Date).ToUniversalTime().ToString("o")
         } | ConvertTo-Json -Compress
         Write-Utf8NoBomAtomically -Path $PidFile -Content "$record`n"
     } catch {
@@ -435,10 +476,23 @@ function Test-NapCatRunning {
         throw "NapCat executable disappeared while monitoring: $NapCatPath"
     }
     $expectedName = [IO.Path]::GetFileName($NapCatPath).Replace("'", "''")
-    return @(
-        Get-CimInstance -ClassName Win32_Process -Filter "Name = '$expectedName'" -ErrorAction SilentlyContinue |
-            Where-Object { Test-CommandLineContains $_.CommandLine $NapCatPath }
-    ).Count -gt 0
+    $processes = @(
+        Get-CimInstance `
+            -ClassName Win32_Process `
+            -Filter "Name = '$expectedName'" `
+            -ErrorAction Stop
+    )
+    foreach ($process in $processes) {
+        # 同名进程存在但命令行不可读时，无法排除它就是目标 NapCat；失败关闭
+        # 比继续启动第二份登录实例更安全。
+        if ([string]::IsNullOrWhiteSpace([string]$process.CommandLine)) {
+            throw "Unable to verify command line for a running $expectedName process"
+        }
+        if (Test-CommandLineContains $process.CommandLine $NapCatPath) {
+            return $true
+        }
+    }
+    return $false
 }
 
 function Start-NapCat {
@@ -453,6 +507,8 @@ function Start-NapCat {
         -StandardOutputLog $NapCatLog `
         -StandardErrorLog $NapCatErrorLog | Out-Null
 }
+
+# ---------- 单实例监控循环 ----------
 
 [bool]$createdNew = $false
 $mutex = [Threading.Mutex]::new($true, (Get-MutexName $BotRoot), [ref]$createdNew)

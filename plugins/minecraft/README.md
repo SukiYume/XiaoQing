@@ -1,42 +1,40 @@
-# Minecraft 插件
+# ⛏️ Minecraft
 
-管理员通过 XiaoQing 私聊连接一个或多个 Minecraft Java Edition RCON 服务，并可选择把本机可读的
-服务器日志事件转发到发起连接的私聊。插件不负责启动 Java 进程，也不提供独立的
-`start`、`stop` 或自动重启服务；如需停止服务器，应在连接后执行 Minecraft 自身支持的 RCON
-命令，并自行管理服务进程。
+`minecraft` 让 Bot 管理员通过 QQ 私聊连接 Minecraft Java Edition RCON，并把本机可读的服务器日志事件转发到发起连接的私聊。Java 服务进程由部署工具负责管理。
 
-## 命令
+---
 
-```text
-/mc help                    # 查看帮助
-/mc connect <配置名>        # 读取本地 config.json 并连接
-/mc status                  # 查看当前私聊的连接状态
-/mc <服务器命令>            # 执行 RCON 命令，例如 /mc list
-/mc say <消息>              # 向所有在线玩家广播消息
-/mc tell <玩家名> <消息>    # 向指定玩家发送私信
-/mc disconnect              # 关闭当前私聊的连接
-```
+## 🔐 权限与命令
+
+三个 Manifest 命令均为管理员私聊入口。
 
 <!-- manifest-command-aliases:start -->
-| 功能 | 推荐入口 | manifest 等价别名 |
+| 功能 | 推荐入口 | Manifest 等价别名 |
 | --- | --- | --- |
 | Minecraft 管理 | `/mc` | `/minecraft` |
-| 直接进入连接流程 | `/mcconnect` | `/mc连接` |
-| 直接断开当前连接 | `/mcdisconnect` | `/mc断开` |
+| 直接连接 | `/mcconnect` | `/mc连接` |
+| 直接断开 | `/mcdisconnect` | `/mc断开` |
 <!-- manifest-command-aliases:end -->
 
-`/mcconnect default` 等价于 `/mc connect default`；`/mcdisconnect` 等价于
-`/mc disconnect`。所有入口均由 manifest 标记为管理员专用且仅允许私聊。
+| 用法 | 说明 |
+| --- | --- |
+| `/mc help` | 显示本地帮助 |
+| `/mc connect <配置名>` | 读取本地 profile 并连接 |
+| `/mc status` | 查看当前私聊的连接和日志监控状态 |
+| `/mc <服务器命令>` | 执行完整 RCON 命令 |
+| `/mc say <消息>` | 向全部在线玩家广播 |
+| `/mc tell <玩家名> <消息>` | 向指定玩家发送私信 |
+| `/mc disconnect` | 关闭当前私聊的连接 |
+| `/mcconnect <配置名>` | 等价于 `/mc connect <配置名>` |
+| `/mcdisconnect` | 等价于 `/mc disconnect` |
 
-`say`、`tell` 和 `tellraw` 是 Minecraft 自身的服务器命令，插件会把 `/mc` 后面的完整内容
-通过 RCON 发送。例如 `/mc say 大家好` 会向所有在线玩家广播；不能省略 `say` 直接写
-`/mc 大家好`，否则 Minecraft 会把“大家好”当成未知服务器命令。日志监控启用后，玩家在
-游戏内的普通聊天、加入、离开、死亡和进度事件会转发到发起连接的 QQ 私聊。
+`say`、`tell` 和 `tellraw` 属于 Minecraft 服务端命令。插件会把 `/mc` 后的完整内容通过 RCON 发送。
 
-## 配置
+---
 
-在被 `.gitignore` 排除的 `plugins/minecraft/config.json` 中只保存非敏感 profile。不要把主机、
-路径或密码作为聊天参数发送：
+## ⚙️ 配置
+
+在 `plugins/minecraft/config.json` 中保存连接 profile：
 
 ```json
 {
@@ -53,65 +51,118 @@
 }
 ```
 
-- 在 `config/secrets.json` 的 `plugins.minecraft` 下，以同名 profile 保存 RCON 密码：
+在 `config/secrets.json` 中用同名 profile 保存 RCON 密码：
 
 ```json
 {
   "plugins": {
     "minecraft": {
-      "default": "请替换为强密码",
-      "staging": "请替换为另一条强密码"
+      "default": "replace-with-a-strong-password",
+      "staging": "replace-with-another-strong-password"
     }
   }
 }
 ```
 
-- profile 名最长 64 字，只接受字母、数字、下划线、点和连字符。
-- `host` 必须是无空白和控制字符的主机名或 IP；`port` 必须在 1–65535。
-- 密码只从同一 profile 的 `config/secrets.json` 密钥读取；非空、不能含 NUL，
-  UTF-8 编码后最多 4096 字节。公开 `config.json` 中出现 `password` 会被拒绝。
-- `log_file` 可留空。相对路径以 `plugins/minecraft/` 为基准；绝对路径按原路径读取。
-- `config.json` 最大 64 KiB。配置错误只返回固定诊断，不回显密码或底层异常。
-- 日志路径不可用时仍会保留已成功建立的 RCON 连接，只停用日志转发。
+| 字段 | 规则 |
+| --- | --- |
+| profile 名 | 1～64 个字母、数字、下划线、点或连字符 |
+| `host` | 结构完整的主机名或 IP，最长 253 个字符 |
+| `port` | 1～65535 的整数，默认 25575 |
+| RCON 密码 | 来自 `config/secrets.json` 的同名项，UTF-8 上限 4096 字节 |
+| `log_file` | 空字符串关闭日志转发；相对路径以 `plugins/minecraft/` 为基准 |
 
-Minecraft 服务端需要启用 RCON，并使这里的端口与密码和服务端配置一致。Source RCON 本身不加密，
-密码和命令会在网络上明文传输；优先让服务端只监听 `127.0.0.1`，跨主机访问时通过 SSH
-本地端口转发或其他受保护隧道连接，并用防火墙限制 RCON 端口，禁止暴露到不可信网络。
-协议格式可参阅 [Valve Source RCON Protocol](https://developer.valvesoftware.com/wiki/Source_RCON_Protocol)。
+profile 文件上限为 64 KiB。日志路径读取异常时，RCON 连接继续用于服务器命令。
 
-## 连接与命令边界
+---
 
-- 每名私聊管理员拥有独立连接；同一目标重新连接时先原子发布新连接，再关闭旧连接。
-- RCON 建连、认证、命令和关闭在单连接内串行执行，避免并发命令互相覆盖流对象。
-- 命令最多 4096 UTF-8 字节，禁止嵌入 NUL。
-- 客户端严格校验小端长度、请求 ID、包类型、双 NUL、UTF-8 和累计响应上限。
-- Minecraft 的 4096 字符分包同时按 UTF-8 字节和 Java UTF-16 单元识别；整块响应没有额外终止包时，
-  短暂无后续数据会结束本次收集，并在 QQ 回复中标明“响应可能不完整”。
-- 单条 RCON 响应最多在内存中累计 1 MiB；发回 QQ 前清除 ANSI/C0/C1 控制序列，并截到
-  4000 字和 12 KiB。
-- 普通日志只记录命令、响应和连接目标的类型、长度、字节数与进程内不可逆指纹，不记录原文。
+## 🔐 RCON 安全
 
-## 日志监控与投递确认
+Minecraft 服务端需要启用 RCON，并使用与 profile 一致的端口和密码。Source RCON 以明文传输密码与命令，建议采用以下网络边界：
 
-配置 `log_file` 后，插件每 5 秒检查一次 Minecraft `INFO` 日志，识别聊天、加入、离开、死亡和
-进度事件。
+- 服务端监听回环地址；
+- 跨主机连接通过 SSH 本地端口转发或受保护隧道；
+- 防火墙只放行 Bot 主机；
+- RCON 使用独立强密码。
 
-- 初次启用且没有历史游标时从文件末尾开始，不回放整份旧日志。
-- 游标保存在插件运行数据目录的 `log_cursors/`；只有 OneBot 明确返回 `True` 后才提交。
-- 发送失败、超时或本轮未选中的批次不会推进游标，下轮继续读取；损坏游标从当前末尾安全恢复。
-- 文件轮换、截断和未写完的最后一行会被识别；读取和 `fstat` 固定使用同一文件句柄。
-- 每次最多读取最新 1 MiB，并保留最近 1000 个匹配事件；更早内容以精确字节数和可用行数汇总。
-- 每个目标每轮最多转发 12 个事件，跨轮 token bucket 容量为 24、每秒补充 0.5 个 token。
-- 每轮全局最多发送 5 个 action，并轮转起点保证多目标公平；不会把其他私聊的溢出统计发给
-  某一个目标。
-- 每条日志 action 同时受 1800 字和 6000 UTF-8 字节上限约束，过量事件合并为丢弃摘要。
+协议格式参阅 [Valve Source RCON Protocol](https://developer.valvesoftware.com/wiki/Source_RCON_Protocol)。
 
-## 运行要求与排障
+---
 
-- 纯 RCON 模式只要求 XiaoQing 能访问服务器 TCP 端口，不要求 Minecraft 与 XiaoQing 位于同一台
-  主机。
-- 日志转发要求 `log_file` 在 XiaoQing 运行主机上是可读普通文件；远程服务器日志不会自动下载。
-- `status` 显示“日志监控未启用”时，先检查 `log_file` 是否为空、相对路径基准是否正确，以及运行
-  XiaoQing 的账户是否有读取权限。
-- 认证失败、网络不可用、超时、协议错误和响应超限会分别返回固定提示；失败连接会被重置，避免
-  把错误显示成“空响应成功”。
+## 🔐 连接与响应边界
+
+- 每名私聊管理员拥有独立连接；重连会原子发布新连接并关闭旧连接；
+- 单连接内的建连、认证、命令和关闭按顺序执行；
+- 命令长度上限为 4096 UTF-8 字节；
+- 协议校验覆盖小端长度、请求 ID、包类型、双 NUL、UTF-8 和累计响应；
+- 单次响应内存上限为 1 MiB；
+- QQ 文本上限为 4000 字符和 12 KiB，并清理 ANSI、C0 与 C1 控制序列；
+- 分包边界同时按 UTF-8 字节和 Java UTF-16 单元识别；
+- 日志记录命令、响应和目标的类型、长度、字节数与单向指纹。
+
+---
+
+## 💾 日志转发
+
+配置 `log_file` 后，Manifest 每 5 秒检查一次 Minecraft `INFO` 日志。识别事件包括：
+
+- 玩家聊天；
+- 玩家加入与离开；
+- 玩家死亡；
+- 玩家进度。
+
+消息发送到发起连接的 QQ 私聊。初次启用从文件末尾建立游标，后续进度保存在：
+
+```text
+data/minecraft/log_cursors/
+```
+
+OneBot 明确确认发送后，插件提交对应游标。发送异常、超时和待处理批次会保留游标供下一轮继续。日志轮换、截断和末尾半行由监视器识别。
+
+---
+
+## 📌 转发预算
+
+| 项目 | 当前预算 |
+| --- | ---: |
+| 单次文件读取 | 最新 1 MiB |
+| 单次保留匹配事件 | 1000 个 |
+| 单连接单轮事件 | 12 个 |
+| 全局单轮 action | 5 个 |
+| 单条 action | 1800 字符、6000 UTF-8 字节 |
+| Token bucket | 容量 24，每秒补充 0.5 |
+
+调度器轮转连接起点，让多个目标获得公平投递机会。超过展示预算的事件会汇总为统计摘要。
+
+---
+
+## ⏰ 生命周期
+
+每个连接拥有独立 RCON 锁，5 秒调度任务使用全局锁串行轮询。卸载、重载或 Bot 关闭时，`shutdown()` 摘除并关闭全部 RCON 连接，同时清理进程内限流状态。日志游标保留在数据目录供重启恢复。
+
+---
+
+## 🩺 排障
+
+| 现象 | 检查项 |
+| --- | --- |
+| RCON 认证失败 | 核对服务端配置、profile 名和 secret 密码 |
+| RCON 连接失败 | 检查监听地址、端口、防火墙和隧道 |
+| `/mc say` 执行异常 | 先用 `/mc list` 验证连接，再核对服务端命令权限 |
+| QQ 收到玩家登录消息 | 说明日志转发与游标提交链路正常 |
+| QQ 收取日志异常 | 核对 `log_file`、Bot 账户读取权限和 `/mc status` |
+| 响应显示截取提示 | 缩小服务器命令结果，或在服务端控制台查看完整输出 |
+
+---
+
+## ✅ 开发验证
+
+在仓库根目录运行：
+
+```bash
+python -m pytest -q tests/plugins/test_minecraft.py \
+  tests/plugins/test_minecraft_flood.py \
+  tests/plugins/test_minecraft_rcon_results.py
+python -m ruff check plugins/minecraft
+python -m mypy plugins/minecraft
+```

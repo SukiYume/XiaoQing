@@ -990,11 +990,13 @@ class OneBotWsClient:
         if reconnect_wakeup is None:
             await self._reconnect_sleep(delay)
             return False
-        sleep_task = asyncio.create_task(self._reconnect_sleep(delay))
+        # 重连等待器允许测试注入 Future；ensure_future 同时接收协程和一般 Awaitable。
+        sleep_task: asyncio.Future[None] = asyncio.ensure_future(self._reconnect_sleep(delay))
         wake_task = asyncio.create_task(reconnect_wakeup.wait())
+        waiters: set[asyncio.Future[Any]] = {sleep_task, wake_task}
         try:
             done, _ = await asyncio.wait(
-                {sleep_task, wake_task},
+                waiters,
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if sleep_task in done:

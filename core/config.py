@@ -207,7 +207,11 @@ class _RuntimeConfigSchema(BaseModel):
 
 def _validate_runtime_config(config: dict[str, Any]) -> dict[str, Any]:
     try:
-        return _RuntimeConfigSchema.model_validate(config).model_dump(exclude_none=True)
+        # Pydantic 的插件当前把 model_dump 标成 Any；运行时模型已保证键为字符串。
+        return cast(
+            dict[str, Any],
+            _RuntimeConfigSchema.model_validate(config).model_dump(exclude_none=True),
+        )
     except ValidationError as exc:
         raise ConfigLoadError(f"Invalid runtime configuration: {exc}") from exc
 
@@ -563,7 +567,7 @@ class ConfigManager:
             else:
                 self._paired_config_signature = config_read.signature
         if notification is not None:
-            self._dispatch_notification(notification)
+            self._start_notification_consumer()
         self._log_source_problem("config", config_read)
         self._log_source_problem("secrets", published_secrets)
         logger.info("Config reloaded")
@@ -695,97 +699,6 @@ class ConfigManager:
         notification = self._enqueue_notification_locked(snapshot) if notify else None
         return snapshot, notification, True
 
-    def save_secrets(self) -> None:
-        """Persist the current internal candidate only if the source is unchanged."""
-
-        notification: _ConfigNotification | None = None
-        failure: BaseException | None = None
-        try:
-            with self._lock:
-                candidate = copy.deepcopy(self._secrets)
-                with keyed_path_lock(self.secrets_path):
-                    current = self._read_source_unlocked(self.secrets_path)
-                    if current.status is not ConfigSourceStatus.VALID:
-                        _snapshot, notification, _changed = self._apply_source_reads_locked(
-                            self._config_source,
-                            current,
-                            force=False,
-                            bump_revision=True,
-                            notify=True,
-                        )
-                        self._mark_sources_paired_locked(self._config_source, current)
-                        failure = self._secret_source_error(current)
-                    elif (
-                        self._secrets_source.status is not ConfigSourceStatus.VALID
-                        or current.etag != self._secrets_source.etag
-                    ):
-                        guarded = self._guard_unconfirmed_secrets_locked(
-                            self._config_source,
-                            current,
-                        )
-                        _snapshot, notification, _changed = self._apply_source_reads_locked(
-                            self._config_source,
-                            guarded,
-                            force=False,
-                            bump_revision=True,
-                            notify=True,
-                        )
-                        failure = ConfigLoadError(
-                            "secrets changed on disk; reload the latest source before saving"
-                        )
-                    else:
-                        try:
-                            committed = (
-                                current
-                                if candidate == current.value
-                                else self._write_secrets_unlocked(
-                                    candidate,
-                                    expected_etag=current.etag,
-                                )
-                            )
-                        except BaseException as exc:
-                            observed = self._read_source_unlocked(self.secrets_path)
-                            guarded = self._guard_unconfirmed_secrets_locked(
-                                self._config_source,
-                                observed,
-                            )
-                            _snapshot, notification, _changed = self._apply_source_reads_locked(
-                                self._config_source,
-                                guarded,
-                                force=False,
-                                bump_revision=True,
-                                notify=True,
-                            )
-                            if observed.status is not ConfigSourceStatus.VALID:
-                                self._mark_sources_paired_locked(self._config_source, observed)
-                            failure = exc
-                        else:
-                            published, paired = self._prepare_confirmed_secrets_locked(
-                                self._config_source,
-                                committed,
-                                confirm_config=False,
-                            )
-                            _snapshot, notification, _changed = self._apply_source_reads_locked(
-                                self._config_source,
-                                published,
-                                force=False,
-                                bump_revision=True,
-                                notify=True,
-                            )
-                            if paired:
-                                self._mark_sources_paired_locked(
-                                    self._config_source,
-                                    committed,
-                                )
-            if notification is not None:
-                self._dispatch_notification(notification)
-            if failure is not None:
-                raise failure
-            logger.info("Secrets saved to %s", self.secrets_path)
-        except Exception as exc:
-            logger.error("Failed to save secrets: %s", exc)
-            raise
-
     def _commit_secrets_mutation(
         self,
         mutate: Callable[[dict[str, Any]], tuple[bool, T]],
@@ -873,7 +786,7 @@ class ConfigManager:
                         if paired:
                             self._mark_sources_paired_locked(self._config_source, committed)
         if notification is not None:
-            self._dispatch_notification(notification)
+            self._start_notification_consumer()
         if failure is not None:
             raise failure
         logger.info("Secrets transaction committed at revision %d", snapshot.revision)
@@ -1071,11 +984,6 @@ class ConfigManager:
         with self._lock:
             return self._revision
 
-    @property
-    def last_notified_revision(self) -> int:
-        with self._lock:
-            return self._last_notified_revision
-
     async def watch(self, interval: float = 2.0) -> None:
         """Poll strict content outcomes; worker threads never publish state."""
 
@@ -1172,7 +1080,7 @@ class ConfigManager:
         self._log_source_problem("config", published_config)
         self._log_source_problem("secrets", published_secrets)
         if notification is not None:
-            self._dispatch_notification(notification)
+            self._start_notification_consumer()
         if published_secrets.status is ConfigSourceStatus.VALID:
             _check_secrets_file_permissions(self.secrets_path)
 
@@ -1225,10 +1133,10 @@ class ConfigManager:
         if changed:
             self._log_source_problem("secrets", unavailable)
             if notification is not None:
-                self._dispatch_notification(notification)
+                self._start_notification_consumer()
 
-    def _dispatch_notification(self, notification: _ConfigNotification) -> None:
-        """Start one ordered callback consumer without holding the data lock."""
+    def _start_notification_consumer(self) -> None:
+        """启动唯一有序消费者；通知已先入队，内容只从 `_next_notification` 读取。"""
 
         try:
             running_loop = asyncio.get_running_loop()

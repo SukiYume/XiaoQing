@@ -23,9 +23,10 @@ from core.interfaces import (
 )
 from plugins.codex import arxiv_summary as codex_arxiv_summary
 from plugins.codex import main as codex_main
+from plugins.codex import manager as codex_manager_module
 from plugins.codex.artifacts import CodexImageArtifact
 from plugins.codex.config import load_plugin_config
-from plugins.codex.manager import CodexQueueManager, reset_manager_for_tests
+from plugins.codex.manager import CodexQueueManager
 from plugins.codex.paths import CwdError, normalize_cwd
 from plugins.codex.runner import CodexRunner, CodexRunResult, ProcessTreeTerminationResult
 from tests.codex_fakes import CallbackStreamingProcess
@@ -199,6 +200,24 @@ async def _wait_until(predicate, timeout: float = 1.0) -> None:
         await asyncio.sleep(0.01)
 
 
+async def _wait_manager_idle(manager: CodexQueueManager) -> None:
+    """等待测试 manager 的当前 worker 收敛，不扩张生产 Manager 接口。"""
+
+    while True:
+        async with manager.lock:
+            tasks = [task for task in manager.workers.values() if not task.done()]
+        if not tasks:
+            return
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def _reset_manager_state() -> None:
+    """隔离测试之间的模块级单例和事件循环锁。"""
+
+    codex_manager_module._MANAGER = None
+    codex_manager_module._MANAGER_LOCK = None
+
+
 def _install_fake_manager(context: FakeContext, runner: FakeRunner) -> CodexQueueManager:
     import plugins.codex.manager as manager_module
 
@@ -245,9 +264,9 @@ def _arxiv_addon(manager: CodexQueueManager) -> codex_arxiv_summary.ArxivSummary
 
 @pytest.fixture(autouse=True)
 def reset_codex_manager():
-    reset_manager_for_tests()
+    _reset_manager_state()
     yield
-    reset_manager_for_tests()
+    _reset_manager_state()
 
 
 def _persisted_session(label: str, cwd: Path, **updates: Any) -> dict[str, Any]:
@@ -295,6 +314,7 @@ __all__ = (
     "_patch_race_termination",
     "_persisted_session",
     "_valid_arxiv_summary",
+    "_wait_manager_idle",
     "_wait_until",
     "asyncio",
     "base64",
@@ -306,6 +326,5 @@ __all__ = (
     "os",
     "pytest",
     "reset_codex_manager",
-    "reset_manager_for_tests",
     "time",
 )

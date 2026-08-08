@@ -1,3 +1,5 @@
+"""把运行时拥有的全部持久化存储绑定到同一插件数据目录。"""
+
 from __future__ import annotations
 
 from pathlib import Path

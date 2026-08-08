@@ -16,6 +16,7 @@ from core.bounded_http import (
     JSON_MIME_POLICY,
     XML_MIME_POLICY,
     BodyLimits,
+    BoundedHttpResponse,
     HttpStatusError,
     JsonLimits,
     MimePolicy,
@@ -45,11 +46,6 @@ class Context(Protocol):
     def get_settings_snapshot(self) -> PluginSettingsSnapshot: ...
 
 
-class _BoundedResponse(Protocol):
-    body: bytes
-    charset: str | None
-
-
 segments = cast(Callable[[object], MessageSegments], _core_segments)
 public_error_response = cast(Callable[..., MessageSegments], _core_public_error_response)
 
@@ -64,7 +60,7 @@ MAX_RESPONSE_BYTES = 1024 * 1024
 MAX_RESULT_ITEMS = 20
 MAX_RESULT_TEXT_LENGTH = 2_400
 
-_APPID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
+_APPID_PATTERN = re.compile(rf"[A-Za-z0-9_-]{{1,{MAX_APPID_LENGTH}}}\Z")
 _HELP_ALIASES = frozenset({"help", "帮助"})
 _EXACT_HELP_ARGUMENTS = frozenset({*_HELP_ALIASES, "-h", "--help"})
 _SUPPORTED_OPTIONS = frozenset({"h", "help", "mode"})
@@ -74,21 +70,18 @@ _MODE_ALIASES: dict[str, QueryMode] = {
     "complete": "complete",
     "cp": "complete",
 }
-_HELP_TEXT = """🧮 Wolfram|Alpha 万能计算器
+_HELP_TEXT = """🧮 Wolfram|Alpha
+用法：/alpha [模式] <问题>
 
-基本用法：
-• /alpha <问题> - 快速查询
-• /alpha help - 显示此帮助
+模式
+默认 / --mode=simple：快速结果
+--mode=step：步骤解答
+--mode=complete：完整结果
+--mode=cp：complete 的别名
 
-显式模式：
-• --mode=step - 显示步骤解答
-• --mode=complete - 仅查询完整结果（cp 是兼容别名）
-
-示例：
-• /alpha 1+1
-• /alpha sin(pi/4)
-• /alpha --mode=step integrate x^2
-• /alpha --mode=complete population of China"""
+示例
+/alpha 1+1
+/alpha --mode=step integrate x^2"""
 
 _WA_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=10, sock_read=25)
 _WA_SEMAPHORE = asyncio.Semaphore(2)
@@ -114,11 +107,9 @@ _XML_LIMITS = XmlLimits(
 )
 
 
-def init(context: Context | None = None) -> None:
-    """记录插件加载完成。"""
-
-    del context
-    logger.info("Wolfram|Alpha 插件已加载")
+# ---------------------------------------------------------------------------
+# 配置与响应文本收窄
+# ---------------------------------------------------------------------------
 
 
 def _get_appid(context: Context) -> str:
@@ -144,7 +135,7 @@ def _bound_result_text(value: object, *, empty_message: str) -> str:
     return f"{text[: MAX_RESULT_TEXT_LENGTH - 1].rstrip()}…"
 
 
-def _decode_text_response(response: _BoundedResponse) -> str:
+def _decode_text_response(response: BoundedHttpResponse) -> str:
     """仅按受支持的无歧义字符集解码快速查询响应。"""
 
     charset = (response.charset or "utf-8").casefold().replace("_", "-")
@@ -156,55 +147,9 @@ def _decode_text_response(response: _BoundedResponse) -> str:
         raise ResponseFormatError("invalid WolframAlpha text response") from exc
 
 
-async def handle(
-    command: str,
-    args: str,
-    event: OneBotEvent,
-    context: Context,
-) -> MessageSegments:
-    """解析管理员查询命令并选择显式查询模式。"""
-
-    del event
-    try:
-        if command != "alpha":
-            return segments("未知命令")
-
-        parsed = parse(args)
-        if not parsed or args.strip().casefold() in _EXACT_HELP_ARGUMENTS:
-            return segments(_HELP_TEXT)
-        if parsed.has("h") or parsed.has("help"):
-            return segments("❌ 帮助选项不接受额外参数")
-        if unsupported := set(parsed.options) - _SUPPORTED_OPTIONS:
-            names = "、".join(f"--{name}" for name in sorted(unsupported))
-            return segments(f"❌ 不支持的选项：{names}")
-
-        mode = _MODE_ALIASES.get(parsed.opt("mode", "simple").strip().casefold())
-        if mode is None:
-            return segments("❌ mode 仅支持 simple、step、complete 或 cp")
-
-        # 模式必须通过选项指定；普通问题末尾的 step/cp 始终属于正文。
-        question = parsed.rest().strip()
-        if not question:
-            return segments("请输入问题\n输入 /alpha help 查看帮助")
-        if len(question) > MAX_QUERY_LENGTH:
-            return segments(f"❌ 查询过长，最多 {MAX_QUERY_LENGTH} 字符")
-        if _has_control_chars(question):
-            return segments("❌ 查询包含不支持的控制字符")
-
-        appid = _get_appid(context)
-        if not appid:
-            return segments(
-                "❌ Wolfram|Alpha 未配置有效 appid\n"
-                "请在 config/secrets.json 的 plugins.wolframalpha.appid 中配置"
-            )
-        return await _get_answer(question, appid, context, mode=mode)
-    except Exception as exc:
-        return public_error_response(
-            context,
-            exc,
-            logger=logger,
-            component="wolframalpha.handle",
-        )
+# ---------------------------------------------------------------------------
+# Wolfram API 查询与结果解析
+# ---------------------------------------------------------------------------
 
 
 async def _get_answer(
@@ -349,7 +294,7 @@ async def _request_wolfram(
     *,
     params: dict[str, str],
     mime_policy: MimePolicy,
-) -> _BoundedResponse:
+) -> BoundedHttpResponse:
     """按 Wolfram API 的 GET 约定发送有界请求。"""
 
     async with _WA_SEMAPHORE:
@@ -361,4 +306,60 @@ async def _request_wolfram(
             mime_policy=mime_policy,
             request_kwargs={"params": params, "timeout": _WA_TIMEOUT},
         )
-    return cast(_BoundedResponse, response)
+    return response
+
+
+# ---------------------------------------------------------------------------
+# 聊天命令入口
+# ---------------------------------------------------------------------------
+
+
+async def handle(
+    command: str,
+    args: str,
+    event: OneBotEvent,
+    context: Context,
+) -> MessageSegments:
+    """解析管理员查询命令并选择显式查询模式。"""
+
+    del event
+    try:
+        if command != "alpha":
+            return segments("未知命令")
+
+        parsed = parse(args)
+        if not parsed or args.strip().casefold() in _EXACT_HELP_ARGUMENTS:
+            return segments(_HELP_TEXT)
+        if parsed.has("h") or parsed.has("help"):
+            return segments("❌ 帮助选项不接受额外参数")
+        if unsupported := set(parsed.options) - _SUPPORTED_OPTIONS:
+            names = "、".join(f"--{name}" for name in sorted(unsupported))
+            return segments(f"❌ 不支持的选项：{names}")
+
+        mode = _MODE_ALIASES.get(parsed.opt("mode", "simple").strip().casefold())
+        if mode is None:
+            return segments("❌ mode 仅支持 simple、step、complete 或 cp")
+
+        # 模式必须通过选项指定；普通问题末尾的 step/cp 始终属于正文。
+        question = parsed.rest().strip()
+        if not question:
+            return segments("请输入问题\n输入 /alpha help 查看帮助")
+        if len(question) > MAX_QUERY_LENGTH:
+            return segments(f"❌ 查询过长，最多 {MAX_QUERY_LENGTH} 字符")
+        if _has_control_chars(question):
+            return segments("❌ 查询包含不支持的控制字符")
+
+        appid = _get_appid(context)
+        if not appid:
+            return segments(
+                "❌ Wolfram|Alpha 未配置有效 appid\n"
+                "请在 config/secrets.json 的 plugins.wolframalpha.appid 中配置"
+            )
+        return await _get_answer(question, appid, context, mode=mode)
+    except Exception as exc:
+        return public_error_response(
+            context,
+            exc,
+            logger=logger,
+            component="wolframalpha.handle",
+        )

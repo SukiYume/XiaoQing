@@ -74,7 +74,7 @@ class TrainingConfig:
     val_size: float = 0.15
     # beta 影响阈值选取方向：
     #   beta=2.0 → 严重偏向 Recall，threshold 极低 → 推的数量过多（原始问题）
-    #   beta=1.0 → F1，Precision/Recall 对等（当前默认）
+    #   beta=1.0 → F1，Precision/Recall 对等（可用于更克制的推荐实验）
     #   beta=0.5 → 偏向 Precision，threshold 较高 → 推的更少但更准
     beta: float = 2.0
     # min_threshold：F-beta 优化后的阈值下限，防止极端不平衡数据集上阈值被压得过低

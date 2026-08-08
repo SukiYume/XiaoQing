@@ -9,6 +9,7 @@ import pytest
 
 from plugins.pendo.services import db as db_module
 from plugins.pendo.services.db import Database
+from tests.helpers.pendo_test_support import _read_scheduled_delivery
 
 
 @pytest.mark.parametrize(
@@ -106,7 +107,7 @@ def test_collection_producer_guards_reject_headers_and_children_before_commit(
         "start_time": "2030-01-01T09:00:00",
     }
     with pytest.raises(ValueError, match="start_time must use UTC"):
-        db.create_event_collection_with_children(
+        db.create_event_collection(
             {
                 "id": "guarded-family",
                 "owner_id": "guard-owner",
@@ -124,7 +125,7 @@ def test_direct_event_reminder_update_rejects_a_skipped_normalizer(
     db: Database,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    db.create_event_collection_with_children(
+    db.create_event_collection(
         {
             "id": "guarded-update-family",
             "owner_id": "guard-owner",
@@ -264,7 +265,7 @@ def test_reminder_and_outbox_lifecycle_timestamps_use_canonical_precision(db: Da
     assert reminder_row["claim_expires_at"] == "2030-01-01T00:00:30+00:00"
 
     assert db.claim_scheduled_delivery("daily", owner_id, "2030-01-01", now=now)
-    outbox = db.get_scheduled_delivery("daily", owner_id, "2030-01-01")
+    outbox = _read_scheduled_delivery(db, "daily", owner_id, "2030-01-01")
     assert outbox is not None
     assert outbox["created_at"] == "2030-01-01T00:00:00+00:00"
     assert outbox["claim_expires_at"] == "2030-01-01T00:02:00+00:00"

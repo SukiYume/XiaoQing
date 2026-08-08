@@ -4,16 +4,27 @@ from __future__ import annotations
 
 import json
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from core.sensitive_audit import summarize_sensitive
 
 from .config.config import XiaoQingChatConfig
 
 if TYPE_CHECKING:
-    from core.plugin_base import Context
-
     from .runtime_state import _ChatRuntime
+
+
+class _InfoLogger(Protocol):
+    """日志边界只要求支持参数化 info 调用。"""
+
+    def info(self, message: object, *args: object, **kwargs: object) -> object: ...
+
+
+class _LogContext(Protocol):
+    """结构化步骤日志实际读取的最小上下文。"""
+
+    logger: _InfoLogger
+
 
 _SENSITIVE_LOG_KEY_PARTS = (
     "text",
@@ -144,9 +155,11 @@ def sanitize_log_fields(fields: dict[str, Any]) -> dict[str, Any]:
             safe[key] = sanitize_log_fields(value)
         elif isinstance(value, (list, tuple)):
             safe[key] = f"[items={len(value)}]"
-        elif "error" in lowered or "exception" in lowered:
-            safe[key] = _redacted_value(value)
-        elif any(part in lowered for part in _SENSITIVE_LOG_KEY_PARTS):
+        elif (
+            "error" in lowered
+            or "exception" in lowered
+            or any(part in lowered for part in _SENSITIVE_LOG_KEY_PARTS)
+        ):
             safe[key] = _redacted_value(value)
         elif isinstance(value, str):
             # 未知自由文本默认拒绝记录；新增可观测字段必须先在上方明确分类，
@@ -158,7 +171,7 @@ def sanitize_log_fields(fields: dict[str, Any]) -> dict[str, Any]:
 
 
 def _log_step(
-    context: Context,
+    context: _LogContext,
     runtime: _ChatRuntime | XiaoQingChatConfig | None,
     *,
     chat_id: str,

@@ -10,6 +10,7 @@ from ...services.db import Database
 from ..auth import (
     AuthError,
     WebSession,
+    WebSessionInfo,
     consume_login_code,
     create_web_session,
     list_web_sessions,
@@ -40,14 +41,14 @@ def _session_payload(session: WebSession) -> dict[str, object]:
     }
 
 
-def _device_payload(session: WebSession, current_session: WebSession) -> dict[str, object]:
+def _device_payload(session: WebSessionInfo, current_session: WebSession) -> dict[str, object]:
     """序列化设备列表项，并标记当前浏览器会话。"""
 
     return {
         "device_id": session.device_id,
         "created_at": int(session.created_at),
         "expires_at": int(session.expires_at),
-        "current": session.session_id == current_session.session_id,
+        "current": session.device_id == current_session.device_id,
     }
 
 
@@ -72,7 +73,7 @@ def _create_cookie_session(
     expires_seconds: int,
     demo: bool = False,
 ) -> WebSession:
-    """原子建立服务端会话和 Cookie；Cookie 失败时撤销内存会话。"""
+    """原子建立服务端会话和 Cookie；Cookie 写入失败时撤销持久会话。"""
 
     session = create_web_session(
         owner_id,

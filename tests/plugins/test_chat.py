@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -88,6 +89,7 @@ class TestChatPlugin:
         context.data_dir = tmp_path / "data"
         context.config = {"timezone": "Asia/Shanghai", "plugins": {"chat": {}}}
         context.state = {}
+        context.now.return_value = datetime(2026, 7, 14, 12, tzinfo=timezone.utc)
         context.http_session = _BoundedJsonSession(
             _completed_chat_payload(),
             _answer_messages_payload(),
@@ -120,11 +122,17 @@ class TestChatPlugin:
         assert chat._actor_identity("bad\nactor") == (chat._ANONYMOUS_ACTOR, None)
         assert chat._actor_identity("x" * 129) == (chat._ANONYMOUS_ACTOR, None)
 
-    def test_business_date_falls_back_for_unknown_timezone(self):
-        result = chat._business_date({"timezone": "Invalid/Timezone"})
+    def test_business_date_uses_core_configured_clock(self):
+        context = SimpleNamespace(
+            now=MagicMock(return_value=datetime(2026, 7, 14, 23, tzinfo=timezone.utc))
+        )
 
-        assert len(result) == 10
-        assert result.count("-") == 2
+        assert chat._business_date(context) == "2026-07-14"
+
+    def test_business_date_rejects_naive_or_non_datetime_clock_values(self):
+        for value in (datetime(2026, 7, 14), "2026-07-14"):
+            with pytest.raises(chat.ChatQuotaStateError):
+                chat._business_date(SimpleNamespace(now=MagicMock(return_value=value)))
 
     @pytest.mark.parametrize(
         "payload",
@@ -154,7 +162,6 @@ class TestChatPlugin:
             actor="user",
             per_user_limit=1,
             global_limit=1,
-            settings_config={},
         )
         reservation.commit()
         with pytest.raises(chat.ChatQuotaExceeded):
@@ -163,7 +170,6 @@ class TestChatPlugin:
                 actor="user",
                 per_user_limit=1,
                 global_limit=1,
-                settings_config={},
             )
 
     @pytest.mark.asyncio
@@ -178,15 +184,12 @@ class TestChatPlugin:
                 actor="user",
                 per_user_limit=10,
                 global_limit=10,
-                settings_config={},
             )
 
     @pytest.mark.asyncio
     async def test_quota_rollback_ignores_replaced_window(self, tmp_path):
         path = tmp_path / "chat_quota.json"
-        chat.AtomicJsonStore(path).write(
-            {"window": "2026-07-15", "users": {"user": 1}, "total": 1}
-        )
+        chat.AtomicJsonStore(path).write({"window": "2026-07-15", "users": {"user": 1}, "total": 1})
         reservation = chat._QuotaReservation(path, "2026-07-14", "user")
 
         await reservation.rollback()
@@ -209,13 +212,6 @@ class TestChatPlugin:
         )
         assert manifest["commands"][0]["admin_only"] is True
 
-    def test_get_config_valid(self, mock_context):
-        """测试获取有效配置"""
-        config = chat.get_config(mock_context)
-        assert config is not None
-        assert config.get("token") == "test_token_123"
-        assert config.get("bot_id") == "test_bot_456"
-
     @pytest.mark.asyncio
     async def test_frozen_snapshot_config_supports_complete_call_chain(self, mock_context):
         from core.config import ConfigSnapshot
@@ -233,22 +229,12 @@ class TestChatPlugin:
         )
         mock_context.secrets = snapshot.secrets
 
-        config = chat.get_config(mock_context)
-        assert not isinstance(config, dict)
-        assert chat.validate_config(config) == (True, None)
-        assert await chat.call_coze_api("冻结配置", config, mock_context) == {
-            "messages": [{"type": "answer", "content": "测试回答"}]
-        }
+        result = await chat.handle("chat", "冻结配置", {"user_id": 1}, mock_context)
 
-    def test_get_config_empty(self):
-        """测试空配置"""
-        context = MagicMock()
-        context.secrets = {}
-        context.logger = MagicMock()
-        with_settings_reader(context)
+        assert "测试回答" in str(result)
 
-        config = chat.get_config(context)
-        assert config == {}
+    def test_test_only_config_reader_is_removed(self):
+        assert not hasattr(chat, "get_config")
 
     def test_validate_config_valid(self):
         """测试有效配置验证"""
@@ -765,6 +751,7 @@ class TestChatPlugin:
         assert help_text is not None
         assert "AI" in help_text or "对话" in help_text
         assert "/chat" in help_text
+        assert "**" not in help_text
 
     def test_constants(self):
         """测试常量定义"""

@@ -173,7 +173,6 @@ async def test_media_count_and_resource_limits_are_hard(tmp_path: Path):
 
     with pytest.raises(ValueError, match="pixel limit"):
         _validate_image_resource_limits(
-            _PNG,
             width=2000,
             height=2000,
             max_pixels=1_000_000,

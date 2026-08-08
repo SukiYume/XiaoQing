@@ -1,3 +1,5 @@
+"""依据上下文、频率和活跃度控制群聊中的主动回复概率。"""
+
 from __future__ import annotations
 
 import random

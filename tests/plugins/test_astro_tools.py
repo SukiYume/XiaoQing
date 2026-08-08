@@ -317,6 +317,22 @@ class TestAstroToolsErrorHandling:
         assert called is False
 
     @pytest.mark.asyncio
+    async def test_builtin_sun_needs_neither_astropy_nor_network(
+        self,
+        mock_context,
+        monkeypatch,
+    ):
+        async def forbidden_thread(*_args, **_kwargs):
+            raise AssertionError("built-in solar-system data must stay local")
+
+        monkeypatch.setattr(astro_obj.asyncio, "to_thread", forbidden_thread)
+
+        result = await astro_obj.handle_obj("sun", mock_context)
+
+        assert result.startswith("☀️ 太阳")
+        assert "1.988e+30 kg" in result
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "name",
         [
@@ -368,8 +384,27 @@ class TestAstroToolsErrorHandling:
         assert row.otype == "Galaxy type"
         assert row.sp_type == "G2V"
 
+    def test_simbad_v_magnitude_is_optional(self):
+        payload = {
+            "metadata": [
+                {"name": "ra"},
+                {"name": "dec"},
+                {"name": "otype"},
+                {"name": "V"},
+                {"name": "sp_type"},
+            ],
+            "data": [[10.0, 20.0, "Galaxy", None, None]],
+        }
+
+        row = astro_obj._validate_simbad_payload(payload)
+
+        assert row is not None
+        assert row.v_magnitude is None
+        assert "V星等" not in astro_obj._render_simbad_result("M31", row)
+
     def test_static_solar_system_text_has_no_one_line_function_shells(self):
-        assert "moon" in astro_obj.SOLAR_SYSTEM_INFO
+        assert {"sun", "moon"} <= astro_obj.SOLAR_SYSTEM_INFO.keys()
+        assert not hasattr(astro_obj, "_get_sun_info")
         assert not hasattr(astro_obj, "_get_moon_info")
 
     def test_obj_query_builder_is_pure_local(self, monkeypatch):

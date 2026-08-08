@@ -1,60 +1,64 @@
-# QingSSH 插件
+# 🔐 QingSSH
 
-仅供 Bot 管理员在私聊中使用的 SSH 远程控制插件，支持保存服务器配置、从 `~/.ssh/config` 导入、交互式命令执行和远程图片查看。
+QingSSH 为 Bot 管理员提供私聊 SSH 远程控制，支持保存服务器、导入 `~/.ssh/config`、持久会话、流式命令输出、远端命令终止和图片查看。
 
-## 常用命令
+---
+
+## 🔐 权限与依赖
+
+全部 Manifest 入口均为管理员私聊命令。安装 SSH 后端：
+
+```bash
+pip install paramiko
+```
+
+远端命令继承目标 SSH 账号权限。服务器配置、私钥、密码 secret 与 Bot 管理员列表共同构成运行安全边界。
+
+---
+
+## ⌨️ 命令
+
+<!-- manifest-command-aliases:start -->
+| 功能 | 推荐入口 | Manifest 等价别名 |
+| --- | --- | --- |
+| SSH 管理与连接 | `/ssh` | `/SSH` `/远程` `/ssh连接` `/sshconnect` |
+| 断开连接 | `/ssh断开` | `/sshdisconnect` `/ssh退出` |
+| 服务器列表 | `/ssh列表` | `/sshlist` `/ssh服务器` |
+| 添加服务器 | `/ssh添加` | `/sshadd` |
+| 删除服务器 | `/ssh删除` | `/sshremove` `/sshdel` |
+| 导入 SSH config | `/ssh导入` | `/sshimport` |
+| 查看 SSH config | `/sshconfig` | `/ssh配置` |
+| 活跃连接状态 | `/ssh状态` | `/sshstatus` `/ssh连接数` `/sshactive` |
+<!-- manifest-command-aliases:end -->
+
+规范入口集中在 `/ssh`：
 
 ```text
 /ssh help
+/ssh list
+/ssh add [名称 主机 [端口] [用户名]]
+/ssh remove <服务器名>
+/ssh import [Host名|all]
+/ssh config
+/ssh status
+/ssh disconnect [服务器名]
 /ssh <服务器名>
 /ssh <用户名>@<服务器名>
-/ssh添加 <名称> <主机> [端口] [用户名]
-/ssh列表
-/ssh状态
-/ssh断开
-/ssh导入 <Host名>|all
-/sshconfig
 ```
 
-<!-- manifest-command-aliases:start -->
-| 功能 | 推荐入口 | manifest 等价别名 |
-| --- | --- | --- |
-| SSH 主入口 | `/ssh` | `/SSH`、`/远程`、`/ssh连接`、`/sshconnect` |
-| 断开连接 | `/ssh断开` | `/sshdisconnect`、`/ssh退出` |
-| 服务器列表 | `/ssh列表` | `/sshlist`、`/ssh服务器` |
-| 添加服务器 | `/ssh添加` | `/sshadd` |
-| 删除服务器 | `/ssh删除` | `/sshremove`、`/sshdel` |
-| 导入 SSH config | `/ssh导入` | `/sshimport` |
-| 查看 SSH config | `/sshconfig` | `/ssh配置` |
-| 活跃连接状态 | `/ssh状态` | `/sshstatus`、`/ssh连接数`、`/sshactive` |
-<!-- manifest-command-aliases:end -->
+独立入口与相应 `/ssh` 子命令共享相同权限、参数和连接策略。
 
-表内 alias 都由 manifest 注册并受相同管理员与私聊场景约束。英文短名和旧连接入口仅为
-兼容既有命令习惯保留，不提供额外权限或不同的连接策略。
+---
 
-连接建立后，直接发送命令即可执行；发送 `停止` 会优先向该命令的远端进程组发送 `TERM`，必要时升级为 `KILL`，并始终清理本地命令通道。若停止发生在远端 PID 标记返回前，Bot 会明确提示“远端状态未知”，不会把本地通道关闭误报成远端进程已退出。发送 `退出` / `取消` 可结束会话。
+## ⚙️ 服务器配置
 
-远端命令本身不受 allowlist 或内容截断限制。为避免高输出命令淹没 OneBot 私聊，QQ 侧只投影有界的开头与末尾，并限制单条命令的 action 数、累计文字量、发送频率和单次发送等待时间；超出 QQ 预算时，完整输出会保存到仅本机可访问的 `data/command_outputs/ssh-output-*.txt`。归档也有独立磁盘硬上限，超过时明确保留受控首尾。取消任务会先回收远端命令，再删除未提交的临时归档。
+保存的 profile 位于：
 
-## 会话与隔离
+```text
+data/qingssh/servers.json
+```
 
-- 连接按 `私聊用户 + 服务器` 隔离。
-- 不同用户即使连接同一台服务器，也拥有独立会话环境。
-- 每条后台命令使用唯一 `job_id`；命令只会在启动它的会话事务提交后连接 SSH。
-- 命令结束时通过 `job_id` 原子更新目录和状态；会话已退出、回滚或被替换时，旧任务不会复活或覆盖新会话。
-
-## 安全行为
-
-- 默认严格校验 `~/.ssh/known_hosts` 中的 Host Key。
-- 未知主机或 Host Key 变更不会自动放行，需要先修复 `known_hosts`。
-- 导入 `~/.ssh/config` 时支持单跳 `ProxyJump` 和安全的 `ssh -W` 跳板形式。
-- 其他会在本地执行命令的 `ProxyCommand` 会被拒绝。
-- 推荐优先使用私钥认证，而不是密码认证。
-- 只有 `~/.ssh/config` 中明确声明、且不含通配符的 `Host` 才能直接连接或导入。
-
-## 服务器配置
-
-服务器配置保存在插件数据目录的 `servers.json`。密钥认证示例：
+私钥认证示例：
 
 ```json
 {
@@ -68,27 +72,61 @@
 }
 ```
 
-认证方式由 `auth_type` 明确指定，可选 `agent`、`key` 或 `password`。密码只允许在管理员私聊的引导式 `/ssh添加` 中输入，明文不会进入会话状态或 `servers.json`；配置文件只保存由插件生成的 `password_ref`，实际密码由 core 密钥存储管理。旧配置中的明文 `password` 会在启动时事务式迁移，写盘失败则回滚新建密钥。不要手工把 `password` 字段写入服务器配置。
+`auth_type` 接受 `agent`、`key` 和 `password`。密码通过管理员私聊的 `/ssh add` 引导输入，由 Core 密钥存储保存；`servers.json` 记录插件生成的 `password_ref`。配置写入和 secret 写入采用补偿式事务，任一步异常都会收敛已创建资源。
 
-## 远程图片
+主机名、端口、用户名、服务器别名和路径均执行长度、字符与范围校验。
+
+---
+
+## 📅 SSH config 导入
+
+`/ssh config` 列出 `~/.ssh/config` 中具有明确 Host 名的条目。`/ssh import <Host>` 和 `/ssh import all` 将可用条目复制到 `servers.json`。
+
+支持的跳板形式：
+
+- 单跳 `ProxyJump`；
+- 结构可验证的 `ssh -W` ProxyCommand。
+
+Host Key 始终通过 `~/.ssh/known_hosts` 严格验证。新主机与指纹变化需要管理员先核对指纹并更新 `known_hosts`。本地命令型 ProxyCommand 会在配置解析边界被拒绝。
+
+---
+
+## 💬 会话操作
+
+连接成功后，私聊进入 Core Session。直接发送文本即可执行远端命令：
 
 ```text
-showimg plot.png
-showimg *.png
+pwd
+cd /srv/app
+git status
+help
+停止
+退出
 ```
 
-`showimg` 只能在已连接的 SSH 会话中使用，会从当前远端工作目录选择最多五张、每张不超过 10 MiB 的图片。临时下载文件在 OneBot 接收动作后立即删除，失败或取消时也会清理。
+| 会话输入 | 行为 |
+| --- | --- |
+| 普通文本 | 在当前远端目录执行 POSIX Shell 命令 |
+| `cd <路径>` | 更新会话工作目录 |
+| `help` | 显示会话内命令 |
+| `停止` | 终止当前远端命令进程组 |
+| `退出`、`取消`、`exit`、`quit`、`q` | 关闭会话与 SSH 连接 |
 
-## 注意事项
+会话按“私聊用户 + 服务器”隔离，空闲期为 10 分钟。每个后台命令具有唯一 `job_id`，会话事务提交后才启动 SSH 通道。任务完成时按 `job_id` 原子更新状态。
 
-- 仅 Bot 管理员私聊可用。
-- 会话空闲 10 分钟后会自动断开。
-- 远端命令控制依赖 POSIX `sh`、`setsid` 和 `kill`；不具备这些工具的目标系统不在支持范围内。
-- 远程命令具有高权限，请谨慎开放服务器配置和导入来源。
+`停止` 先向远端进程组发送 `TERM`，随后按需要发送 `KILL`，并清理本地通道。远端 PID 已确认时返回终止状态；PID 握手进行期间返回远端状态待确认提示。
 
-## 输出与超时配置
+目标系统需要提供 POSIX `sh`、`setsid` 和 `kill`。
 
-以下选项位于全局配置的 `plugins.qingssh`；`command_timeout_seconds = 0` 明确表示不设置命令时限，适合可信管理员的长任务。QQ 与归档预算只保护 Bot/消息通道，不会修改或提前截断远端命令。
+---
+
+## 📌 输出预算
+
+远端命令内容会完整交给 SSH Shell。QQ 侧采用有界投影，长输出归档到：
+
+```text
+data/qingssh/command_outputs/ssh-output-*.txt
+```
 
 ```json
 {
@@ -109,4 +147,59 @@ showimg *.png
     }
   }
 }
+```
+
+`command_timeout_seconds=0` 表示由管理员主动终止长任务。QQ 预算控制 action 数、累计文字、单条消息、首尾保留、发送频率与等待时间。归档预算控制单文件字节、尾部保留和文件数量；达到归档预算时保存受控首尾。
+
+任务取消会先收敛远端进程，再清理临时归档。完成的长输出归档只向 QQ 展示文件名，完整本机路径进入内部日志。
+
+---
+
+## 🎨 远程图片
+
+会话内使用：
+
+```text
+showimg plot.png
+showimg *.png
+```
+
+图片从当前远端工作目录选择，单次最多 5 张，每张上限为 10 MiB。SFTP 下载到临时文件，经 OneBot action 接收后清理；发送异常与任务取消也会进入清理路径。
+
+---
+
+## ⏰ 生命周期
+
+插件首次使用时创建 `SSHManager`。每分钟的 `cleanup_orphans` 对比 Core Session 与活动连接，回收失去会话所有者的连接。卸载、重载或 Bot 关闭时，`shutdown()` 收敛活动命令、SSH 连接、跳板连接、SFTP 和临时归档。
+
+---
+
+## 💾 日志与审计
+
+普通日志记录操作类型、状态、长度、计数、错误类别和单向摘要。远端命令、输出、密码、私钥内容、主机凭据与用户文本保留在日志边界之外。
+
+---
+
+## 🩺 排障
+
+| 现象 | 检查项 |
+| --- | --- |
+| 提示 Paramiko 缺失 | 安装 `paramiko`，随后重载插件 |
+| Host Key 校验失败 | 核对服务器指纹并维护 `~/.ssh/known_hosts` |
+| 认证失败 | 核对 `auth_type`、私钥、agent 或 Core secret |
+| 跳板连接失败 | 检查 `ProxyJump`、`ssh -W` 参数和跳板 Host Key |
+| 命令超时 | 调整 `command_timeout_seconds`，或在会话中发送 `停止` |
+| QQ 输出显示归档文件 | 到 Bot 主机的 `data/qingssh/command_outputs/` 查看对应文件 |
+| Session 已结束 | 重新发送 `/ssh <服务器名>` |
+
+---
+
+## ✅ 开发验证
+
+在仓库根目录运行：
+
+```bash
+python -m ruff check plugins/qingssh tests/plugins/test_qingssh*.py
+python -m mypy plugins/qingssh
+python -m pytest -q tests/plugins -k qingssh -n 2
 ```

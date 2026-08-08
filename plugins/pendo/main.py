@@ -21,7 +21,7 @@ import time
 from collections.abc import Callable, Mapping
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from core.interfaces import PluginContextProtocol
 from core.models import PluginManifest
@@ -112,15 +112,19 @@ def _get_runtime_service(context: PluginContextProtocol | None) -> PendoRuntimeS
 def _apply_runtime_config(context: PluginContextProtocol) -> bool:
     settings = context.get_settings_snapshot()
     PendoConfig.validate()
-    return PendoConfig.configure(
-        settings.plugin_config("pendo"),
-        settings_revision=settings.revision,
+    return bool(
+        PendoConfig.configure(
+            settings.plugin_config("pendo"),
+            settings_revision=settings.revision,
+        )
     )
 
 
 def _register_config_reload_hook(context: PluginContextProtocol | None) -> None:
-    capabilities = getattr(context, "capabilities", None) if context is not None else None
-    subscription = getattr(capabilities, "config_subscription", None)
+    # 无上下文时没有可订阅的配置能力；先收窄类型，避免回调闭包捕获 Optional。
+    if context is None:
+        return
+    subscription = context.capabilities.config_subscription
     if subscription is None:
         return
 
@@ -189,11 +193,11 @@ def init(context: PluginContextProtocol) -> None:
 
 def _start_web_server(db: Database) -> bool:
     """Start the Pendo Web UI, replacing an existing in-process server if needed."""
-    return _runtime_service.start_web(db)
+    return bool(_runtime_service.start_web(db))
 
 
 def _stop_web_server() -> bool:
-    return _runtime_service.stop_web()
+    return bool(_runtime_service.stop_web())
 
 
 def _reconfigure_web_server(
@@ -360,7 +364,7 @@ async def _has_active_session(context, plugin_name: str | None = None) -> bool:
     if session is None:
         return False
     if plugin_name is not None:
-        return session.plugin_name == plugin_name
+        return bool(session.plugin_name == plugin_name)
     return True
 
 
@@ -665,6 +669,12 @@ def _format_result(result: Any) -> list[dict[str, Any]]:
     return segments(message)
 
 
+def _success_message(message: str) -> dict[str, Any]:
+    """收窄跨模块成功响应的动态类型，供本入口的命令闭包复用。"""
+
+    return cast(dict[str, Any], success_result(message))
+
+
 # ============================================================
 # 命令处理
 # ============================================================
@@ -710,9 +720,12 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
 
     async def _export_cmd(user_id: str, args: str, ctx: Any) -> dict[str, Any]:
         if not args or not args.strip():
-            return success_result(_show_help("export"))
+            return _success_message(_show_help("export"))
 
-        result = await run_sync(exporter.export_markdown, user_id, args, {})
+        result = cast(
+            dict[str, Any],
+            await run_sync(exporter.export_markdown, user_id, args, {}),
+        )
         if result.get("status") != "success":
             return result
 
@@ -754,20 +767,20 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
 
     async def _search_cmd(user_id: str, args: str, ctx: Any) -> dict[str, Any]:
         if not args or not args.strip():
-            return success_result(_show_help("search"))
-        return await search_handler.search(user_id, args, ctx)
+            return _success_message(_show_help("search"))
+        return cast(dict[str, Any], await search_handler.search(user_id, args, ctx))
 
     async def _import_cmd(user_id: str, args: str, ctx: Any) -> dict[str, Any]:
         requested = args.strip()
         if requested.lower() in {"help", "h", "?"}:
-            return success_result(_show_help("import"))
+            return _success_message(_show_help("import"))
         if requested:
             return {
                 "status": "error",
                 "message": "❌ /pendo import 不接收文件路径或其他参数\n用法: /pendo import",
             }
         runtime = PendoConfig.runtime()
-        return success_result(
+        return _success_message(
             "\n".join(
                 [
                     "📥 **导入 (Import)**",
@@ -787,24 +800,30 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
 
     async def _settings_cmd(user_id: str, args: str, ctx: Any) -> dict[str, Any]:
         message = await handle_settings(user_id, args, db)
-        return success_result(message)
+        return _success_message(message)
 
     async def _confirm_cmd(user_id: str, args: str, ctx: Any) -> dict[str, Any]:
         # confirm 返回结构化状态，直接透传，不能从展示文本前缀推断成功与否。
-        return await handle_confirm(user_id, args, reminder_service, db)
+        return cast(
+            dict[str, Any],
+            await handle_confirm(user_id, args, reminder_service, db),
+        )
 
     async def _snooze_cmd(user_id: str, args: str, ctx: Any) -> dict[str, Any]:
-        return await handle_snooze(user_id, args, reminder_service)
+        return cast(
+            dict[str, Any],
+            await handle_snooze(user_id, args, reminder_service),
+        )
 
     async def _undo_cmd(user_id: str, args: str, ctx: Any) -> dict[str, Any]:
-        return await handle_undo(user_id, args, db)
+        return cast(dict[str, Any], await handle_undo(user_id, args, db))
 
     def _help_or_exec(handler_method, help_key):
         """Helper to return help if args is empty, otherwise execute handler"""
 
         async def _wrapper(user_id, args, ctx):
             if not args or not args.strip():
-                return success_result(_show_help(help_key))
+                return _success_message(_show_help(help_key))
             return await handler_method(user_id, args, ctx, group_id=group_id)
 
         return _wrapper
@@ -1059,22 +1078,6 @@ HELP_MAP = {
     ],
 }
 
-HELP_SECTION_ORDER = [
-    "quick",
-    "event",
-    "todo",
-    "note",
-    "diary",
-    "ledger",
-    "search",
-    "reminder",
-    "common",
-    "export",
-    "import",
-    "settings",
-    "web",
-]
-
 
 def _render_help_section(key: str) -> list[str]:
     section = HELP_MAP[key]
@@ -1144,7 +1147,7 @@ def _show_help(subcommand: str = "") -> str:
 
 def _get_logger(context: PluginContextProtocol | None) -> logging.Logger:
     if context is not None:
-        return context.logger
+        return cast(logging.Logger, context.logger)
     return logger
 
 

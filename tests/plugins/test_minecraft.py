@@ -138,7 +138,6 @@ def _connection(
 
 class TestMinecraftMetadata:
     def test_entrypoints_and_help_match_rcon_scope(self) -> None:
-        assert mc_main.init() is None
         assert callable(mc_main.handle)
         assert callable(mc_main.scheduled)
         help_text = mc_main._show_help()
@@ -202,10 +201,15 @@ class TestMinecraftConfiguration:
         assert "用法: /mc connect <配置名>" in result[0]["data"]["text"]
 
     @pytest.mark.asyncio
-    async def test_chat_cannot_override_log_path(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("profile", ["default C:/sensitive.log", "服务器"])
+    async def test_invalid_profile_name_is_rejected(
+        self,
+        tmp_path: Path,
+        profile: str,
+    ) -> None:
         _write_config(tmp_path, _server_config())
         result = await mc_main._handle_connect(
-            "default C:/sensitive.log",
+            profile,
             PRIVATE_TARGET,
             _context(tmp_path),
         )

@@ -76,8 +76,6 @@ TYPE_NAMES = {
 
 TAG_NAME_PATTERN = r"[\w\u4e00-\u9fa5-]+"
 TAG_TOKEN_RE = re.compile(rf"(?<!\S)#({TAG_NAME_PATTERN})(?=\s|$)")
-CATEGORY_TOKEN_RE = re.compile(r"(?<!\S)cat:(\S+)")
-PRIORITY_TOKEN_RE = re.compile(r"(?<!\S)p:([1-5])(?=\s|$)")
 
 
 def extract_tags(text: str | None) -> list[str]:
@@ -86,13 +84,6 @@ def extract_tags(text: str | None) -> list[str]:
 
 def is_tag_token(text: str | None) -> bool:
     return re.fullmatch(rf"#{TAG_NAME_PATTERN}", text or "") is not None
-
-
-def _remove_token(text: str, match: re.Match[str]) -> str:
-    """删除一个参数令牌，只规范令牌两侧产生的空白接缝。"""
-    before = text[: match.start()].rstrip()
-    after = text[match.end() :].lstrip()
-    return " ".join(part for part in (before, after) if part)
 
 
 class ItemFormatter:
@@ -273,38 +264,6 @@ class MessageBuilder:
     def build(self) -> str:
         """构建最终消息"""
         return "\n".join(self.lines)
-
-
-def extract_metadata(text: str, *, with_priority: bool = False) -> dict[str, Any]:
-    """从文本中提取 cat:xxx、#tag、p:N 等元数据，返回提取结果和剩余文本。
-
-    Args:
-        text: 原始文本
-        with_priority: 是否提取 p:1-5 优先级（仅 task 需要）
-
-    Returns:
-        {'category': str|None, 'tags': list[str], 'priority': int|None, 'text': str}
-    """
-    result: dict[str, Any] = {"category": None, "tags": [], "priority": None}
-
-    cat_match = CATEGORY_TOKEN_RE.search(text)
-    if cat_match:
-        result["category"] = cat_match.group(1)
-        text = _remove_token(text, cat_match)
-
-    if with_priority:
-        p_match = PRIORITY_TOKEN_RE.search(text)
-        if p_match:
-            result["priority"] = int(p_match.group(1))
-            text = _remove_token(text, p_match)
-
-    tags = extract_tags(text)
-    if tags:
-        result["tags"] = tags
-        text = TAG_TOKEN_RE.sub("", text).strip()
-
-    result["text"] = text
-    return result
 
 
 def paginate(

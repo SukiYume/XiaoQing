@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import importlib
 import json
-import os
 import sys
 from dataclasses import dataclass, field
 from functools import partial
@@ -34,7 +33,6 @@ from sklearn.metrics import (
     classification_report,
     confusion_matrix,
 )
-from sklearn.utils.class_weight import compute_class_weight
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from tqdm.auto import tqdm
 
@@ -45,17 +43,10 @@ else:
     from . import training_utils as _training
 
 _log = _training.timestamp_log
-seed_everything = _training.seed_everything
-get_runtime_settings = _training.get_runtime_settings
-create_optimizer = _training.create_optimizer
-build_loader_kwargs = _training.build_loader_kwargs
-move_batch_to_device = _training.move_batch_to_device
 forward_logits = _training.forward_logits
 log_epoch_header = _training.log_epoch_header
-split_train_validation_frame = _training.split_train_validation_frame
 dynamic_pad_collate = _training.dynamic_pad_collate
 train_epoch = _training.train_epoch
-build_weighted_sampler = _training.build_weighted_sampler
 
 # 动态导入 transformers 库，避免静态依赖问题
 transformers = importlib.import_module("transformers")
@@ -273,91 +264,26 @@ def save_training_config(
 
 
 def main(config: TrainingConfig = CONFIG) -> None:
-    seed_everything(config.random_seed)
-    _log(f"Using device: {DEVICE}")
-    runtime = get_runtime_settings(DEVICE)
-
-    # 1. 加载并预处理数据
-    # 即使标题模型不使用 ID，也保持所有训练入口的 CSV 读取语义一致。
-    df = prepare_training_frame(_training.read_training_csv(config.data_path))
-    train_df, val_df = split_train_validation_frame(
-        df,
-        validation_size=config.validation_size,
-        random_seed=config.random_seed,
-    )
-
-    # 2. 计算类别权重（用于加权损失函数和采样器）
-    class_weights = compute_class_weight(
-        class_weight="balanced",
-        classes=np.unique(train_df.loc[:, "label"]),
-        y=train_df.loc[:, "label"],
-    )
-    class_weights_tensor = torch.tensor(class_weights, dtype=torch.float, device=DEVICE)
-
-    # 3. 创建加权损失函数和采样器
-    loss_fn = torch.nn.CrossEntropyLoss(weight=class_weights_tensor)
-    sampler = build_weighted_sampler(train_df.loc[:, "label"].tolist(), class_weights_tensor)
-
-    negative_count = int((train_df.loc[:, "label"] == 0).sum())
-    positive_count = int((train_df.loc[:, "label"] == 1).sum())
-
-    for line in _training.build_classifier_config_log_lines(
+    training = _training.prepare_classifier_training(
         config,
+        device=DEVICE,
         classifier_name="arXiv Title Classifier",
-        device=str(DEVICE),
-        sample_count=len(df),
-        train_count=len(train_df),
-        val_count=len(val_df),
-        negative_count=negative_count,
-        positive_count=positive_count,
-    ):
-        _log(line)
-
-    num_workers = (
-        config.num_workers if config.num_workers is not None else min(8, os.cpu_count() or 4)
+        prepare_frame=prepare_training_frame,
+        create_loader=create_data_loader,
+        tokenizer_factory=AutoTokenizer,
+        model_factory=AutoModelForSequenceClassification,
+        scheduler_factory=get_linear_schedule_with_warmup,
     )
-
-    _log("  Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(config.model_name)
-    train_loader = create_data_loader(
-        train_df,
-        tokenizer,
-        config.max_len,
-        config.batch_size,
-        sampler=sampler,
-        num_workers=num_workers,
-        pin_memory=runtime["pin_memory"],
-        random_seed=config.random_seed,
-    )
-    val_loader = create_data_loader(
-        val_df,
-        tokenizer,
-        config.max_len,
-        config.batch_size,
-        num_workers=num_workers,
-        pin_memory=runtime["pin_memory"],
-        random_seed=config.random_seed,
-        shuffle=False,
-    )
-
-    _log(f"  Loading model {config.model_name.split('/')[-1]}...")
-    model = AutoModelForSequenceClassification.from_pretrained(config.model_name, num_labels=2)
-    model.to(DEVICE)
-
-    optimizer = create_optimizer(
-        model.parameters(),
-        learning_rate=config.learning_rate,
-        use_fused=runtime["use_fused"],
-    )
-    total_steps = len(train_loader) * config.num_epochs
-    scheduler = get_linear_schedule_with_warmup(
-        optimizer,
-        num_warmup_steps=int(config.warmup_proportion * total_steps),
-        num_training_steps=total_steps,
-    )
+    runtime = training.runtime
+    tokenizer = training.tokenizer
+    model = training.model
+    train_loader = training.train_loader
+    val_loader = training.validation_loader
+    optimizer = training.optimizer
+    scheduler = training.scheduler
+    loss_fn = training.loss_fn
 
     best_accuracy = 0.0
-    config.output_dir.mkdir(parents=True, exist_ok=True)
 
     for epoch in range(1, config.num_epochs + 1):
         log_epoch_header(epoch, config.num_epochs, optimizer.param_groups[-1]["lr"])

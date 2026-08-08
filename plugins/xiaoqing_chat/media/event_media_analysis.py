@@ -76,11 +76,11 @@ def _media_detail_base_max_tokens_for_reason(reason: str) -> int:
 
 def _emoji_refine_timeout_seconds(runtime) -> float:
     cfg = _media_cfg(runtime)
-    return max(0.0, cfg.emoji_refine_timeout_seconds)
+    return max(0.0, float(cfg.emoji_refine_timeout_seconds))
 
 
 def _enable_emoji_refine_background(runtime) -> bool:
-    return _media_cfg(runtime).enable_emoji_refine_background
+    return bool(_media_cfg(runtime).enable_emoji_refine_background)
 
 
 @dataclass(frozen=True)
@@ -154,11 +154,11 @@ def _log_media_provider_fallback(
     )
 
 
-def _explicit_media_llm_requested(context, runtime) -> bool:
-    return bool(_resolve_media_llm_secret_candidates(context, runtime)[0].get("_vision_enabled"))
+def _explicit_media_llm_requested(context) -> bool:
+    return bool(_resolve_media_llm_secret_candidates(context)[0].get("_vision_enabled"))
 
 
-def _resolve_media_llm_secret_candidates(context, runtime) -> list[dict[str, Any]]:
+def _resolve_media_llm_secret_candidates(context) -> list[dict[str, Any]]:
     """从 core route 解析只含公开元数据的有序视觉模型链。"""
 
     empty: dict[str, Any] = {
@@ -198,8 +198,8 @@ def _resolve_media_llm_secret_candidates(context, runtime) -> list[dict[str, Any
     return candidates or [empty]
 
 
-def _has_media_llm_capability(context, runtime) -> bool:
-    return _explicit_media_llm_requested(context, runtime)
+def _has_media_llm_capability(context) -> bool:
+    return _explicit_media_llm_requested(context)
 
 
 def _looks_like_source_placeholder(
@@ -213,8 +213,10 @@ def _looks_like_source_placeholder(
     full_source_label = _normalize_source_label(summary_hint or resolved.source_name)
     if not full_source_label:
         return False
-    return rendered.description == full_source_label and rendered.marker == _build_marker(
-        rendered.kind, rendered.description, rendered.emotion_tags
+    return bool(
+        rendered.description == full_source_label
+        and rendered.marker
+        == _build_marker(rendered.kind, rendered.description, rendered.emotion_tags)
     )
 
 
@@ -228,11 +230,10 @@ def _should_refresh_cached_render(
     summary_hint: str,
     resolved: ResolvedMedia,
     context,
-    runtime,
 ) -> bool:
     """判断缓存条目是否早于当前提示词或质量约束。"""
 
-    if not _has_media_llm_capability(context, runtime):
+    if not _has_media_llm_capability(context):
         return False
 
     normalized_source = str(cached_source or "").strip().lower()
@@ -243,9 +244,7 @@ def _should_refresh_cached_render(
             resolved=resolved,
         ):
             return True
-        if cached_prompt_version < _MEDIA_ANALYSIS_PROMPT_VERSION:
-            return True
-        return False
+        return cached_prompt_version < _MEDIA_ANALYSIS_PROMPT_VERSION
     if normalized_source == "fallback":
         return True
     return _same_rendered_media(
@@ -299,8 +298,6 @@ def _prepare_media_for_llm(
 
             with Image.open(io.BytesIO(payload)) as image:
                 if getattr(image, "mode", "") not in {"RGB", "RGBA"}:
-                    image = image.convert("RGBA")
-                elif image.mode == "P":
                     image = image.convert("RGBA")
                 buffer = io.BytesIO()
                 image.save(buffer, format="PNG")
@@ -359,14 +356,13 @@ async def _call_media_llm(
 ) -> tuple[str, dict[str, Any]]:
     """调用统一视觉 route；传输错误的有序 fallback 由 core 完成。"""
 
-    candidates = _resolve_media_llm_secret_candidates(context, runtime)
+    candidates = _resolve_media_llm_secret_candidates(context)
     if not candidates:
         return "", {}
 
     route_context = dict(candidates[0])
     route_context["_pinned_model"] = None
     result = await _call_media_llm_once(
-        context=context,
         runtime=runtime,
         secrets=route_context,
         messages=messages,
@@ -379,7 +375,6 @@ async def _call_media_llm(
 
 async def _call_media_llm_once(
     *,
-    context,
     runtime,
     secrets: Mapping[str, Any],
     messages: list[dict[str, Any]],
@@ -595,7 +590,7 @@ async def _refine_emoji_analysis_with_llm(
         "emotion_tags": list(draft.emotion_tags),
         "source_hint": resolved.source_name,
     }
-    messages = [
+    messages: list[dict[str, Any]] = [
         {"role": "system", "content": "你是表情包标签提炼器，只输出 JSON。"},
         {
             "role": "user",
@@ -794,7 +789,7 @@ def _resolve_media_analysis_candidates(
     """验证媒体配置，并按优先级返回不含凭据的模型 profile。"""
 
     cfg = _media_cfg(runtime)
-    candidates = _resolve_media_llm_secret_candidates(context, runtime)
+    candidates = _resolve_media_llm_secret_candidates(context)
     primary_secrets = candidates[0] if candidates else {}
     if not any(bool(secrets.get("_vision_enabled")) for secrets in candidates):
         _media_log(
@@ -895,7 +890,7 @@ async def _prepare_media_analysis_request(
         return None
 
     prompt = _build_media_analysis_prompt(prepared, prefer_emoji=prefer_emoji)
-    messages = [
+    messages: list[dict[str, Any]] = [
         {"role": "system", "content": "你是聊天图片解析器，只输出 JSON。"},
         {
             "role": "user",
@@ -999,7 +994,6 @@ async def _run_media_analysis_attempt(
         attempt_base_max_tokens=attempt_base_max_tokens,
     )
     llm_result = await _call_media_llm_once(
-        context=context,
         runtime=runtime,
         secrets=provider_secrets,
         messages=request.messages,

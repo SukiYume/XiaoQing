@@ -52,6 +52,9 @@ class _RunSync(Protocol):
     ) -> T: ...
 
 
+# ──────────────────── Core 边界与资源上限 ────────────────────
+
+
 segments = cast(Callable[[object], MessageSegments], _core_segments)
 image_segment = cast(Callable[[str], MessageSegment], _core_image)
 run_sync = cast(_RunSync, _core_run_sync)
@@ -85,16 +88,13 @@ _USER_AGENT = (
 _PREVIEW_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_PREVIEWS)
 
 
-def init(context: Context | None = None) -> None:
-    """记录插件加载完成。"""
-
-    logger.info("URL 解析插件已加载")
-
-
 def _preview_cache(context: Context) -> BoundedFileCache:
     """返回固定在插件数据目录内的有限预览缓存。"""
 
     return BoundedFileCache(Path(context.data_dir) / "url_previews", PREVIEW_CACHE_LIMITS)
+
+
+# ──────────────────── HTML 元数据解析 ────────────────────
 
 
 def _compact_text(value: object, max_chars: int) -> str:
@@ -184,6 +184,9 @@ def _detect_image_extension(payload: bytes) -> str:
         else:
             message = "preview response is not a valid image"
         raise ValueError(message) from exc
+
+
+# ──────────────────── 预览图校验与缓存 ────────────────────
 
 
 def _validated_cached_preview(
@@ -304,6 +307,9 @@ async def _build_preview(url: str, context: Context) -> MessageSegments:
         len(title),
     )
     return response
+
+
+# ──────────────────── Dispatcher 与插件入口 ────────────────────
 
 
 async def handle_url(url: str, event: OneBotEvent, context: Context) -> MessageSegments:

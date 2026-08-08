@@ -1,3 +1,5 @@
+"""集中定义聊天、记忆、规划和媒体链共享的稳定边界。"""
+
 from __future__ import annotations
 
 # ── 公共疑问句识别 ──

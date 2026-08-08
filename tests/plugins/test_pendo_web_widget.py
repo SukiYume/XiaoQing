@@ -14,7 +14,7 @@ import pytest
 from plugins.pendo.services.db import Database
 
 try:
-    from plugins.pendo.web.auth import generate_token, generate_widget_token
+    from plugins.pendo.web.auth import generate_widget_token
 except ModuleNotFoundError:
     pytest.skip("pendo web widget requires PyJWT", allow_module_level=True)
 from plugins.pendo.web.api import widget as widget_api
@@ -640,15 +640,3 @@ def test_web_handler_never_inlines_widget_token_when_private_delivery_is_unavail
     assert result["status"] == "error"
     assert "无法通过私聊安全发送凭据" in result["message"]
     assert "mock-widget-token" not in result["message"]
-
-
-def test_regular_web_bearer_token_cannot_access_browser_api(client: Any, temp_db: Database) -> None:
-    """普通 Web Bearer token 不能绕过浏览器会话认证。"""
-
-    owner_id = "u-widget-normal"
-    _seed_widget_data(temp_db, owner_id)
-    token = generate_token(owner_id)
-
-    res = client.get("/api/dashboard", headers=_headers(token))
-
-    assert res.status_code == 401

@@ -18,6 +18,13 @@ from plugins.arxiv_filter.train_model.interest_model import training_utils as in
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def _load_data_prep_module(name: str, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+    """数据准备脚本把 feedparser 作为可选离线依赖，测试只注入最小替身。"""
+
+    monkeypatch.setitem(sys.modules, "feedparser", SimpleNamespace())
+    return importlib.import_module(f"plugins.arxiv_filter.train_model.data_prep.{name}")
+
+
 def test_arxiv_runtime_keeps_only_the_used_fetch_and_knn_scoring_entrypoints() -> None:
     fetch_tree = ast.parse(
         (ROOT / "plugins" / "arxiv_filter" / "arxiv_today.py").read_text(encoding="utf-8")
@@ -116,6 +123,205 @@ def test_bert_loader_shuffles_training_but_not_validation() -> None:
     assert isinstance(validation.sampler, torch.utils.data.SequentialSampler)
 
 
+def test_bert_training_bootstrap_builds_shared_resources_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    torch = pytest.importorskip("torch")
+    training_utils = importlib.import_module(
+        "plugins.arxiv_filter.train_model.bert_model.training_utils"
+    )
+    frame = pd.DataFrame({"title": ["a", "b", "c", "d"], "label": [0, 1, 0, 1]})
+    train_frame = frame.iloc[:2].copy()
+    validation_frame = frame.iloc[2:].copy()
+    logs: list[str] = []
+    loader_calls: list[dict[str, object]] = []
+    sampler = object()
+    optimizer = object()
+
+    monkeypatch.setattr(training_utils, "seed_everything", lambda _seed: None)
+    monkeypatch.setattr(training_utils, "timestamp_log", logs.append)
+    monkeypatch.setattr(training_utils, "read_training_csv", lambda _path: frame.copy())
+    monkeypatch.setattr(
+        training_utils,
+        "split_train_validation_frame",
+        lambda *_args, **_kwargs: (train_frame, validation_frame),
+    )
+    monkeypatch.setattr(
+        training_utils,
+        "compute_class_weight",
+        lambda **_kwargs: np.array([1.0, 1.0]),
+    )
+    monkeypatch.setattr(training_utils, "build_weighted_sampler", lambda *_args: sampler)
+    monkeypatch.setattr(
+        training_utils,
+        "get_runtime_settings",
+        lambda _device: {
+            "use_amp": False,
+            "pin_memory": False,
+            "use_fused": False,
+            "amp_dtype": torch.float32,
+        },
+    )
+    monkeypatch.setattr(training_utils, "create_optimizer", lambda *_args, **_kwargs: optimizer)
+
+    class TokenizerFactory:
+        @staticmethod
+        def from_pretrained(model_name: str) -> object:
+            assert model_name == "model/demo"
+            return object()
+
+    class Model:
+        def __init__(self) -> None:
+            self.device = None
+
+        def to(self, device: object) -> None:
+            self.device = device
+
+        @staticmethod
+        def parameters() -> list[object]:
+            return []
+
+    model = Model()
+
+    class ModelFactory:
+        @staticmethod
+        def from_pretrained(model_name: str, *, num_labels: int) -> Model:
+            assert (model_name, num_labels) == ("model/demo", 2)
+            return model
+
+    def create_loader(*_args: object, **kwargs: object) -> list[object]:
+        loader_calls.append(kwargs)
+        return [object(), object()]
+
+    scheduler_calls: list[dict[str, int]] = []
+
+    def create_scheduler(_optimizer: object, **kwargs: int) -> object:
+        scheduler_calls.append(kwargs)
+        return object()
+
+    config = SimpleNamespace(
+        random_seed=17,
+        data_path=tmp_path / "training.csv",
+        validation_size=0.5,
+        model_name="model/demo",
+        max_len=64,
+        batch_size=2,
+        num_workers=0,
+        learning_rate=2e-5,
+        num_epochs=3,
+        warmup_proportion=0.5,
+        output_dir=tmp_path / "model",
+    )
+
+    runtime = training_utils.prepare_classifier_training(
+        config,
+        device=torch.device("cpu"),
+        classifier_name="test classifier",
+        prepare_frame=lambda value: value,
+        create_loader=create_loader,
+        tokenizer_factory=TokenizerFactory,
+        model_factory=ModelFactory,
+        scheduler_factory=create_scheduler,
+    )
+
+    assert runtime.frame.equals(frame)
+    assert runtime.train_frame.equals(train_frame)
+    assert runtime.validation_frame.equals(validation_frame)
+    assert runtime.optimizer is optimizer
+    assert model.device == torch.device("cpu")
+    assert loader_calls[0]["sampler"] is sampler
+    assert loader_calls[1]["shuffle"] is False
+    assert scheduler_calls == [{"num_warmup_steps": 3, "num_training_steps": 6}]
+    assert config.output_dir.is_dir()
+    assert any("test classifier" in line for line in logs)
+
+
+def test_data_prep_month_ranges_preserve_inclusive_day_bounds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    step2 = _load_data_prep_module("step2_fetch_all_astro_ph", monkeypatch)
+
+    assert step2.generate_monthly_ranges("2026-07-15", "2026-08-06") == [
+        ("202607150000", "202607312359", 2607),
+        ("202608010000", "202608062359", 2608),
+    ]
+    assert step2.generate_monthly_ranges("2026-08-06", "2026-08-06") == [
+        ("202608060000", "202608062359", 2608)
+    ]
+    with pytest.raises(ValueError, match="start must not be after end"):
+        step2.generate_monthly_ranges("2026-08-07", "2026-08-06")
+
+
+def test_data_prep_rejects_invalid_dataset_before_overwriting_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    step3 = _load_data_prep_module("step3_build_dataset", monkeypatch)
+    output_path = tmp_path / "training.csv"
+    output_path.write_text("existing\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="为空"):
+        step3._write_final_dataset(
+            pd.DataFrame(columns=["arXiv ID", "Title", "Abstract", "label"]),
+            output_path,
+        )
+    with pytest.raises(ValueError, match="缺少列"):
+        step3._write_final_dataset(pd.DataFrame({"arXiv ID": ["2608.00001"]}), output_path)
+
+    assert output_path.read_text(encoding="utf-8") == "existing\n"
+
+
+def test_knn_config_follows_custom_output_directory(tmp_path: Path) -> None:
+    module = importlib.import_module("plugins.arxiv_filter.train_model.interest_model.knn_arxiv")
+    output_dir = tmp_path / "model"
+
+    default_cache = module.KNNConfig(output_dir=output_dir)
+    explicit_cache = module.KNNConfig(
+        output_dir=output_dir,
+        emb_cache_dir=tmp_path / "shared-cache",
+    )
+
+    assert default_cache.resolved_emb_cache_dir == output_dir / "emb_cache"
+    assert explicit_cache.resolved_emb_cache_dir == tmp_path / "shared-cache"
+
+
+def test_knn_training_reuses_known_embedding_dimension_and_saves_max_len(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = importlib.import_module("plugins.arxiv_filter.train_model.interest_model.knn_arxiv")
+    load_calls = 0
+
+    def load_encoder() -> object:
+        nonlocal load_calls
+        load_calls += 1
+        raise AssertionError("precomputed training must not load the encoder")
+
+    monkeypatch.setattr(module._training, "load_sentence_transformer_class", load_encoder)
+    model = module.KNNInterestModel(
+        embedding_dim=2,
+        max_len=128,
+        neg_sample_size=2,
+    )
+    frame = pd.DataFrame(
+        {
+            "Title": ["positive", "negative"],
+            "Abstract": ["wanted", "ignored"],
+            "label": [1, 0],
+        }
+    )
+    model.fit(
+        frame,
+        precomputed_embeddings=np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+    )
+    model.save(tmp_path)
+
+    config = (tmp_path / "training_config.json").read_text(encoding="utf-8")
+    assert load_calls == 0
+    assert '"max_len": 128' in config
+
+
 def test_stable_softmax_is_finite_normalized_and_shift_invariant() -> None:
     values = np.array([[1000.0, 1001.0], [-1000.0, -999.0]])
 
@@ -199,7 +405,7 @@ def test_inference_runner_copies_input_and_publishes_backend_results(
         max_len=32,
         model_type="knn",
     )
-    monkeypatch.setattr(runner, "resolve_params", lambda *_args: params)
+    monkeypatch.setattr(runner, "resolve_params", lambda *_args, **_kwargs: params)
     monkeypatch.setattr(runner, "_dispatch_inference", lambda *_args: ([0.8, 0.2], [1, 0]))
     source = pd.DataFrame({"Title": ["first", "second"]})
 

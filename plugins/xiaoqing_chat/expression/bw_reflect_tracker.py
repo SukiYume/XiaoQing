@@ -1,3 +1,5 @@
+"""持久化表达反思队列，并消费操作者的后续判断。"""
+
 from __future__ import annotations
 
 import threading
@@ -210,7 +212,6 @@ def _find_expression(
 
 async def _tick_reflect_tracker_once(
     *,
-    context,
     operator_chat_id: str,
     tracker: ReflectTrackerState,
     memory_store: MemoryStore,
@@ -322,7 +323,6 @@ async def _tick_reflect_tracker_once(
 
 async def tick_reflect_tracker(
     *,
-    context,
     operator_chat_id: str,
     memory_store: MemoryStore,
     expr_store: ExpressionStore,
@@ -337,7 +337,6 @@ async def tick_reflect_tracker(
     """检查待反思队列，且一条用户回复最多消费一道题。"""
     for tracker in tracker_store.get_trackers(operator_chat_id):
         changed = await _tick_reflect_tracker_once(
-            context=context,
             operator_chat_id=operator_chat_id,
             tracker=tracker,
             memory_store=memory_store,

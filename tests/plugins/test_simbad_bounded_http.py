@@ -283,7 +283,7 @@ def test_simbad_adql_builder_limits_rows_and_escapes_quotes() -> None:
     assert 'allfluxes."V" AS "V"' in query
     assert 'basic."sp_type" AS "sp_type"' in query
     assert 'JOIN ident ON basic."oid" = ident."oidref"' in query
-    assert 'JOIN allfluxes ON basic."oid" = allfluxes."oidref"' in query
+    assert 'LEFT JOIN allfluxes ON basic."oid" = allfluxes."oidref"' in query
 
 
 def test_simbad_adql_builder_is_pure_local_and_deterministic(

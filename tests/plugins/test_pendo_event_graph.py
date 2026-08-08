@@ -361,7 +361,7 @@ def test_atomic_collection_create_rolls_back_header_and_children_on_failure(tmp_
     }
     try:
         try:
-            db.create_event_collection_with_children(
+            db.create_event_collection(
                 {
                     "id": collection_id,
                     "owner_id": "u1",

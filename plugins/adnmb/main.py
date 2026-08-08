@@ -28,6 +28,7 @@ import uuid as uuidlib
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, cast
 
 from core.args import FLAG_VALUE, ParsedArgs, parse, parse_int
 from core.plugin_base import (
@@ -42,7 +43,7 @@ from core.plugin_base import (
 from core.public_errors import public_error_response
 
 # 使用相对导入
-from .adapi import AdnmbClient
+from .adapi import AdnmbClient, Post, Thread
 
 logger = logging.getLogger(__name__)
 
@@ -56,14 +57,22 @@ class _ClientEntry:
     last_used: float
 
 
-def _get_plugin_runtime_state(context, *, create: bool = True) -> dict:
-    if context is not None and hasattr(context, "state") and isinstance(context.state, dict):
-        runtime_state = context.state.get("adnmb_runtime")
+def _get_plugin_runtime_state(
+    context: PluginContextProtocol | None,
+    *,
+    create: bool = True,
+) -> dict[str, Any]:
+    """取得当前插件代际的缓存根；不把客户端状态泄漏到全局模块。"""
+
+    state = getattr(context, "state", None)
+    if isinstance(state, dict):
+        runtime_state = state.get("adnmb_runtime")
         if isinstance(runtime_state, dict):
-            return runtime_state
+            return cast(dict[str, Any], runtime_state)
         if create:
-            context.state["adnmb_runtime"] = {}
-            return context.state["adnmb_runtime"]
+            created: dict[str, Any] = {}
+            state["adnmb_runtime"] = created
+            return created
     return {}
 
 
@@ -74,17 +83,17 @@ def _close_client(client: object) -> None:
         close()
 
 
-def _client_registry(runtime_state: dict) -> OrderedDict[str, _ClientEntry]:
-    registry = runtime_state.get("clients")
-    if isinstance(registry, OrderedDict):
-        return registry
+def _client_registry(runtime_state: dict[str, Any]) -> OrderedDict[str, _ClientEntry]:
+    raw_registry = runtime_state.get("clients")
+    if isinstance(raw_registry, OrderedDict):
+        return cast(OrderedDict[str, _ClientEntry], raw_registry)
 
     # Discard clients created by the legacy unbounded flat-key registry.
     for key, value in tuple(runtime_state.items()):
         if isinstance(key, str) and key.startswith("client"):
             _close_client(value)
             runtime_state.pop(key, None)
-    registry = OrderedDict()
+    registry: OrderedDict[str, _ClientEntry] = OrderedDict()
     runtime_state["clients"] = registry
     return registry
 
@@ -102,7 +111,11 @@ def _prune_clients(registry: OrderedDict[str, _ClientEntry], now: float) -> None
         _close_client(entry.client)
 
 
-def _get_client(context, cache_dir: Path, user_id: str | None = None) -> AdnmbClient:
+def _get_client(
+    context: PluginContextProtocol,
+    cache_dir: Path,
+    user_id: str | None = None,
+) -> AdnmbClient:
     runtime_state = _get_plugin_runtime_state(context)
     owner_key = str(user_id or getattr(context, "current_user_id", "") or "")
     cache_key = f"client:{owner_key}" if owner_key else "client"
@@ -152,12 +165,12 @@ def _get_client(context, cache_dir: Path, user_id: str | None = None) -> AdnmbCl
 # ============================================================
 
 
-def init(context=None) -> None:
+def init(context: PluginContextProtocol | None = None) -> None:
     """插件初始化"""
     logger.info("ADnmb 插件已初始化")
 
 
-async def shutdown(context=None) -> None:
+async def shutdown(context: PluginContextProtocol | None = None) -> None:
     """Release all cached client wrappers during plugin shutdown/reload."""
     runtime_state = _get_plugin_runtime_state(context, create=False)
     registry = runtime_state.get("clients")
@@ -177,7 +190,7 @@ async def shutdown(context=None) -> None:
 
 
 async def format_posts(
-    posts: list,
+    posts: list[Post],
     client: AdnmbClient,
     max_items: int = 10,
     download_images: bool = True,
@@ -198,7 +211,7 @@ async def format_posts(
         return segments("暂无内容")
 
     selected_posts = posts[:max_items]
-    image_paths: list[object | None] = [None] * len(selected_posts)
+    image_paths: list[Path | None] = [None] * len(selected_posts)
 
     async def download_image(index: int, post: object) -> None:
         image_path = getattr(post, "img", "")
@@ -228,7 +241,7 @@ async def format_posts(
 
 
 async def format_threads(
-    threads: list,
+    threads: list[Thread],
     client: AdnmbClient,
     max_items: int = 10,
     show_replies: bool = True,
@@ -405,7 +418,7 @@ def _request_error(parsed: ParsedArgs) -> tuple[str | None, str | None]:
 async def handle(
     command: str,
     args: str,
-    event: dict,
+    event: dict[str, Any],
     context: PluginContextProtocol,
 ) -> Segments:
     """命令处理入口"""

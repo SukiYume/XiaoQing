@@ -10,7 +10,8 @@
     bash scripts/run_full_uat.sh
     bash scripts/run_full_uat.sh --plan-only
     bash scripts/run_full_uat.sh --include-chat-quality
-    bash scripts/run_full_uat.sh --include-external --scenario-fixtures tests/command_scenario_fixtures.local.json
+    bash scripts/run_full_uat.sh --include-external \
+        --scenario-fixtures tests/command_scenario_fixtures.local.json
 
 中途被强制终止且配置未恢复时，先确认没有 XiaoQing 服务仍在运行，再执行：
 
@@ -20,12 +21,15 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
+import math
 import os
 import shlex
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import time
@@ -55,7 +59,6 @@ DEFAULT_PHASES = (
     "diff",
 )
 PHASE_CHOICES = frozenset((*DEFAULT_PHASES, "chat-quality"))
-SERVICE_PHASES = frozenset({"ws-matrix", "http-matrix", "core-pressure", "chat-quality"})
 MATRIX_PHASES = frozenset({"ws-matrix", "http-matrix"})
 
 
@@ -94,6 +97,14 @@ class LifecycleResult:
     detail: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class _LegacyDataMove:
+    """UAT 期间临时隐藏的一份源码树旧数据目录。"""
+
+    source: Path
+    hidden: Path
+
+
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -119,14 +130,32 @@ def _atomic_write(path: Path, payload: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _decode_json_object(text: str, *, label: str, source: Path) -> dict[str, Any]:
+    """解析无重复键的 JSON 对象，供配置、密钥和恢复锁共用。"""
+
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise UATError(f"{label}含重复 JSON 键 {key}: {source}")
+            result[key] = value
+        return result
+
+    try:
+        payload = json.loads(text, object_pairs_hook=reject_duplicate_keys)
+    except json.JSONDecodeError as exc:
+        raise UATError(f"{label}不是有效 JSON: {source}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise UATError(f"{label}必须是 JSON 对象: {source}")
+    return payload
+
+
 def _read_json_object(path: Path, *, label: str) -> dict[str, Any]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise UATError(f"无法读取{label}: {path}: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise UATError(f"{label}必须是 JSON 对象: {path}")
-    return payload
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise UATError(f"无法读取{label}: {path}: {type(exc).__name__}: {exc}") from exc
+    return _decode_json_object(text, label=label, source=path)
 
 
 def _load_inbound_token() -> str:
@@ -149,7 +178,7 @@ def _derive_ws_endpoint(endpoint: str) -> str:
         raise UATError(f"--endpoint 必须是 http(s) URL: {endpoint}")
     path = parsed.path
     if path.endswith("/event"):
-        path = f"{path[:-len('/event')]}/ws"
+        path = f"{path[: -len('/event')]}/ws"
     elif not path or path == "/":
         path = "/ws"
     else:
@@ -163,7 +192,7 @@ def _health_endpoint(endpoint: str) -> str:
         raise UATError(f"--endpoint 必须是 http(s) URL: {endpoint}")
     path = parsed.path
     if path.endswith("/event"):
-        path = f"{path[:-len('/event')]}/health"
+        path = f"{path[: -len('/event')]}/health"
     elif not path or path == "/":
         path = "/health"
     else:
@@ -206,9 +235,7 @@ def _selected_phases(raw: str | None, *, include_chat_quality: bool) -> tuple[st
         selected.insert(3, "chat-quality")
     unknown = set(selected) - PHASE_CHOICES
     if not selected or unknown:
-        raise UATError(
-            f"--phases 必须从 {sorted(PHASE_CHOICES)} 中选择，未知值: {sorted(unknown)}"
-        )
+        raise UATError(f"--phases 必须从 {sorted(PHASE_CHOICES)} 中选择，未知值: {sorted(unknown)}")
     if len(selected) != len(set(selected)):
         raise UATError("--phases 不能含重复阶段")
     order = (*DEFAULT_PHASES[:3], "chat-quality", *DEFAULT_PHASES[3:])
@@ -320,6 +347,8 @@ def _build_phase_specs(args: argparse.Namespace, output_dir: Path) -> tuple[Phas
                         str(PROJECT_ROOT / "scripts" / "run_xiaoqing_chat_quality.py"),
                         "--endpoint",
                         args.endpoint,
+                        "--chat-data-dir",
+                        str(output_dir / "data" / "xiaoqing_chat"),
                         "--output",
                         str(output_dir / "reports" / "xiaoqing-chat-quality.json"),
                     ),
@@ -331,7 +360,16 @@ def _build_phase_specs(args: argparse.Namespace, output_dir: Path) -> tuple[Phas
             specs.append(
                 PhaseSpec(
                     "compileall",
-                    (PYTHON_COMMAND, "-m", "compileall", "-q", "core", "plugins", "scripts", "main.py"),
+                    (
+                        PYTHON_COMMAND,
+                        "-m",
+                        "compileall",
+                        "-q",
+                        "core",
+                        "plugins",
+                        "scripts",
+                        "main.py",
+                    ),
                     False,
                     "生产 Python 源码编译检查",
                 )
@@ -393,32 +431,184 @@ def _build_phase_specs(args: argparse.Namespace, output_dir: Path) -> tuple[Phas
     return tuple(specs)
 
 
+def _is_link_like(metadata: os.stat_result) -> bool:
+    """识别符号链接和 Windows 重解析点，避免重命名不透明目标。"""
+
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    attributes = int(getattr(metadata, "st_file_attributes", 0))
+    return stat.S_ISLNK(metadata.st_mode) or bool(attributes & reparse_flag)
+
+
+def _discover_legacy_data_moves(token: str) -> tuple[_LegacyDataMove, ...]:
+    """列出 UAT 启动前必须临时隐藏的旧版插件数据目录。"""
+
+    plugins_dir = PROJECT_ROOT / "plugins"
+    try:
+        plugin_entries = sorted(plugins_dir.iterdir(), key=lambda path: path.name)
+    except OSError as exc:
+        raise UATError(f"无法枚举插件目录: {type(exc).__name__}: {exc}") from exc
+
+    moves: list[_LegacyDataMove] = []
+    for plugin_dir in plugin_entries:
+        try:
+            plugin_metadata = plugin_dir.lstat()
+        except OSError as exc:
+            raise UATError(f"无法检查插件目录 {plugin_dir}: {type(exc).__name__}") from exc
+        if _is_link_like(plugin_metadata) or not stat.S_ISDIR(plugin_metadata.st_mode):
+            continue
+        try:
+            manifest_metadata = (plugin_dir / "plugin.json").lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise UATError(f"无法检查插件清单 {plugin_dir}: {type(exc).__name__}") from exc
+        if _is_link_like(manifest_metadata) or not stat.S_ISREG(manifest_metadata.st_mode):
+            continue
+
+        source = plugin_dir / "data"
+        try:
+            source_metadata = source.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise UATError(f"无法检查旧插件数据 {source}: {type(exc).__name__}") from exc
+        if _is_link_like(source_metadata) or not stat.S_ISDIR(source_metadata.st_mode):
+            raise UATError(f"旧插件数据不是普通目录，拒绝临时移动: {source}")
+
+        hidden = plugin_dir / f".uat-hidden-data-{token}"
+        try:
+            hidden.lstat()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise UATError(f"无法检查 UAT 隐藏路径 {hidden}: {type(exc).__name__}") from exc
+        else:
+            raise UATError(f"UAT 隐藏路径已存在，拒绝覆盖: {hidden}")
+        moves.append(_LegacyDataMove(source=source.resolve(), hidden=hidden.resolve()))
+    return tuple(moves)
+
+
+def _hide_legacy_data(moves: tuple[_LegacyDataMove, ...]) -> None:
+    """用同目录原子重命名隐藏旧数据，避免隔离启动触发真实迁移。"""
+
+    try:
+        for move in moves:
+            move.source.rename(move.hidden)
+    except OSError as exc:
+        raise UATError(
+            f"无法临时隐藏旧插件数据 {move.source}: {type(exc).__name__}: {exc}"
+        ) from exc
+
+
+def _ordinary_directory_exists(path: Path) -> bool:
+    """返回目录是否存在；链接、文件和无法检查的路径一律拒绝。"""
+
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise UATError(f"无法检查旧插件数据路径 {path}: {type(exc).__name__}") from exc
+    if _is_link_like(metadata) or not stat.S_ISDIR(metadata.st_mode):
+        raise UATError(f"旧插件数据路径不是普通目录: {path}")
+    return True
+
+
+def _restore_legacy_data(moves: tuple[_LegacyDataMove, ...]) -> None:
+    """尽最大努力逐项恢复 UAT 隐藏目录；任何冲突都保留锁并失败关闭。"""
+
+    errors: list[str] = []
+    for move in reversed(moves):
+        # 每项隔离才能在一个目录损坏时继续恢复其余目录，避免扩大中断面。
+        try:
+            source_exists = _ordinary_directory_exists(move.source)
+            hidden_exists = _ordinary_directory_exists(move.hidden)
+            if source_exists and hidden_exists:
+                errors.append(f"源与隐藏目录同时存在: {move.source}")
+            elif hidden_exists:
+                move.hidden.rename(move.source)
+            elif not source_exists:
+                errors.append(f"源与隐藏目录均不存在: {move.source}")
+        except (OSError, UATError) as exc:  # noqa: PERF203
+            errors.append(f"{move.source}: {type(exc).__name__}: {exc}")
+    if errors:
+        raise UATError("恢复旧插件数据失败: " + "; ".join(errors))
+
+
+def _legacy_moves_from_lock(lock: dict[str, Any]) -> tuple[_LegacyDataMove, ...]:
+    """从恢复锁读取并约束移动目标，禁止锁文件指向仓库外路径。"""
+
+    raw_moves = lock.get("legacy_data_moves", [])
+    if not isinstance(raw_moves, list):
+        raise UATError("UAT 恢复锁的 legacy_data_moves 必须是数组")
+    try:
+        plugins_dir = (PROJECT_ROOT / "plugins").resolve(strict=True)
+    except OSError as exc:
+        raise UATError("无法解析当前插件目录") from exc
+
+    moves: list[_LegacyDataMove] = []
+    seen_sources: set[Path] = set()
+    for raw in raw_moves:
+        if not isinstance(raw, dict):
+            raise UATError("UAT 恢复锁含无效旧数据移动记录")
+        source_text = raw.get("source")
+        hidden_text = raw.get("hidden")
+        if not isinstance(source_text, str) or not isinstance(hidden_text, str):
+            raise UATError("UAT 恢复锁的旧数据路径必须是字符串")
+        source = Path(source_text)
+        hidden = Path(hidden_text)
+        try:
+            plugin_dir = source.parent.resolve(strict=True)
+            hidden_parent = hidden.parent.resolve(strict=True)
+        except OSError as exc:
+            raise UATError("UAT 恢复锁指向不存在的插件目录") from exc
+        if (
+            source.name != "data"
+            or plugin_dir.parent != plugins_dir
+            or hidden_parent != plugin_dir
+            or not hidden.name.startswith(".uat-hidden-data-")
+        ):
+            raise UATError(f"UAT 恢复锁指向意外旧数据路径: {source}")
+        normalized_source = plugin_dir / "data"
+        normalized_hidden = plugin_dir / hidden.name
+        if normalized_source in seen_sources:
+            raise UATError(f"UAT 恢复锁重复登记旧数据路径: {normalized_source}")
+        seen_sources.add(normalized_source)
+        moves.append(_LegacyDataMove(source=normalized_source, hidden=normalized_hidden))
+    return tuple(moves)
+
+
 class RuntimeIsolation:
-    """在可恢复锁保护下临时重定向插件数据并关闭仓库文件日志。"""
+    """隔离数据与运行入口，并在退出时逐字节恢复生产配置。"""
 
     def __init__(self, output_dir: Path) -> None:
         self.output_dir = output_dir
         self.backup_path = output_dir / "config.original.json"
         self.original_bytes = b""
         self.original_hash = ""
+        self.legacy_data_moves: tuple[_LegacyDataMove, ...] = ()
         self.restored = False
 
     def __enter__(self) -> RuntimeIsolation:
         if LOCK_PATH.exists():
-            raise UATError(
-                f"发现未收口的 UAT 锁: {LOCK_PATH}；确认服务已停止后运行 --recover"
-            )
+            raise UATError(f"发现未收口的 UAT 锁: {LOCK_PATH}；确认服务已停止后运行 --recover")
         self.original_bytes = CONFIG_PATH.read_bytes()
         self.original_hash = _sha256_bytes(self.original_bytes)
         _atomic_write(self.backup_path, self.original_bytes)
+        move_token = f"{os.getpid()}-{time.time_ns()}"
+        self.legacy_data_moves = _discover_legacy_data_moves(move_token)
         lock_payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "pid": os.getpid(),
             "created_at": _now_iso(),
             "project_root": str(PROJECT_ROOT),
             "config_path": str(CONFIG_PATH),
             "backup_path": str(self.backup_path),
             "original_sha256": self.original_hash,
+            "legacy_data_moves": [
+                {"source": str(move.source), "hidden": str(move.hidden)}
+                for move in self.legacy_data_moves
+            ],
         }
         LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -431,21 +621,39 @@ class RuntimeIsolation:
             os.fsync(handle.fileno())
 
         try:
-            config = json.loads(self.original_bytes.decode("utf-8"))
-            if not isinstance(config, dict):
-                raise UATError("config/config.json 必须是 JSON 对象")
+            _hide_legacy_data(self.legacy_data_moves)
+            try:
+                config_text = self.original_bytes.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise UATError("config/config.json 不是有效 UTF-8") from exc
+            config = _decode_json_object(
+                config_text,
+                label="config/config.json",
+                source=CONFIG_PATH,
+            )
             data_root = (self.output_dir / "data").resolve()
             data_root.mkdir(parents=True, exist_ok=True)
             config["data_root"] = str(data_root)
             config["log_to_file"] = False
+            # 命令矩阵需要本地入站端口；UAT 不连接生产 NapCat，也不在测试
+            # 期间监听源码变化。三项设置都只存在于恢复锁保护的临时配置中。
+            config["enable_inbound_server"] = True
+            config["enable_ws_client"] = False
+            config["enable_plugin_watcher"] = False
             temporary = (json.dumps(config, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
             _atomic_write(CONFIG_PATH, temporary)
+        # Ctrl+C/SystemExit 也不能跳过真实数据和配置回位。
         except BaseException:
             self._restore()
             raise
         return self
 
     def _restore(self) -> None:
+        if self.restored:
+            return
+        # 先恢复数据目录，再发布原配置；这样恢复失败时，服务仍指向隔离目录，
+        # 不会在真实数据暂时隐藏的窗口被误启动。
+        _restore_legacy_data(self.legacy_data_moves)
         if self.original_bytes:
             _atomic_write(CONFIG_PATH, self.original_bytes)
             if _sha256_file(CONFIG_PATH) != self.original_hash:
@@ -465,22 +673,42 @@ def _recover_interrupted_run(endpoint: str) -> int:
     if _port_is_open(host, port):
         raise UATError(f"{host}:{port} 仍有服务监听；先停止服务，再恢复配置")
     lock = _read_json_object(LOCK_PATH, label="UAT 恢复锁")
+    root_text = lock.get("project_root")
+    config_text = lock.get("config_path")
+    backup_text = lock.get("backup_path")
+    if (
+        not isinstance(root_text, str)
+        or not root_text
+        or not isinstance(config_text, str)
+        or not config_text
+        or not isinstance(backup_text, str)
+        or not backup_text
+    ):
+        raise UATError("UAT 恢复锁缺少项目、配置或备份路径")
+    locked_root = Path(root_text).resolve()
+    if locked_root != PROJECT_ROOT.resolve():
+        raise UATError(f"恢复锁指向意外项目目录: {locked_root}")
     expected_config = CONFIG_PATH.resolve()
-    locked_config = Path(str(lock.get("config_path", ""))).resolve()
+    locked_config = Path(config_text).resolve()
     if locked_config != expected_config:
         raise UATError(f"恢复锁指向意外配置文件: {locked_config}")
-    backup = Path(str(lock.get("backup_path", ""))).resolve()
+    backup = Path(backup_text).resolve()
     original_hash = str(lock.get("original_sha256", ""))
     if not backup.is_file():
         raise UATError(f"恢复备份不存在: {backup}")
     payload = backup.read_bytes()
     if not original_hash or _sha256_bytes(payload) != original_hash:
         raise UATError("恢复备份哈希与锁记录不一致，拒绝覆盖")
+    legacy_data_moves = _legacy_moves_from_lock(lock)
+    # 与正常退出保持相同顺序：真实数据全部回位后，才恢复会指向真实目录的配置。
+    _restore_legacy_data(legacy_data_moves)
     _atomic_write(CONFIG_PATH, payload)
     if _sha256_file(CONFIG_PATH) != original_hash:
         raise UATError("恢复后的 config/config.json 哈希不一致")
     LOCK_PATH.unlink()
     print(f"已逐字节恢复配置: {CONFIG_PATH}")
+    if legacy_data_moves:
+        print(f"已恢复 {len(legacy_data_moves)} 个旧插件数据目录")
     return 0
 
 
@@ -497,10 +725,13 @@ def _terminate_process_tree(process: subprocess.Popen[Any]) -> None:
             timeout=10,
         )
     else:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        # Windows 类型存根不暴露 POSIX 专属 API；运行时探测既保持跨平台，也避免
+        # 为解释器或操作系统增加人为版本限制。
+        kill_process_group = getattr(os, "killpg", None)
+        sigkill = getattr(signal, "SIGKILL", None)
+        if callable(kill_process_group) and sigkill is not None:
+            with contextlib.suppress(ProcessLookupError):
+                kill_process_group(process.pid, sigkill)
     if process.poll() is None:
         process.kill()
     try:
@@ -542,6 +773,7 @@ def _run_logged_phase(spec: PhaseSpec, output_dir: Path, *, timeout: float) -> P
             detail = f"超过阶段超时 {timeout:.0f}s，已回收进程树"
             _terminate_process_tree(process)
             exit_code = process.returncode
+        # 任何退出路径都先回收当前 runner 创建的子进程树，再把异常继续抛出。
         except BaseException:
             _terminate_process_tree(process)
             raise
@@ -689,7 +921,8 @@ class ServiceController:
             except subprocess.TimeoutExpired:
                 timed_out = True
                 _terminate_process_tree(self.process)
-            except Exception as exc:
+            # 平台信号 API 的失败类型不统一；此边界必须无条件转入进程树强制回收。
+            except Exception as exc:  # noqa: BLE001
                 signal_error = f"{type(exc).__name__}: {exc}"
                 _terminate_process_tree(self.process)
         exit_code = self.process.returncode
@@ -773,6 +1006,22 @@ def _mark_runner_failure(spec: PhaseSpec, detail: str) -> PhaseResult:
     )
 
 
+def _run_static_phase(
+    spec: PhaseSpec,
+    output_dir: Path,
+    *,
+    timeout: float,
+) -> tuple[PhaseResult, str | None]:
+    """运行一个静态门禁，并把 runner 自身异常转成明确失败结果。"""
+
+    try:
+        return _run_logged_phase(spec, output_dir, timeout=timeout), None
+    # 静态 runner 的职责是把任意内部失败写进最终报告，而不是让报告本身丢失。
+    except Exception as exc:  # noqa: BLE001
+        detail = f"{spec.name}: {type(exc).__name__}: {exc}"
+        return _mark_runner_failure(spec, "阶段 runner 异常"), detail
+
+
 def _execute_service_phases(
     specs: tuple[PhaseSpec, ...],
     controller: ServiceController,
@@ -791,9 +1040,7 @@ def _execute_service_phases(
     try:
         for index, spec in enumerate(specs):
             if controller.process is None or controller.process.poll() is not None:
-                phases.extend(
-                    _mark_skipped(item, "服务在阶段前意外退出") for item in specs[index:]
-                )
+                phases.extend(_mark_skipped(item, "服务在阶段前意外退出") for item in specs[index:])
                 break
             try:
                 phases.append(_run_logged_phase(spec, output_dir, timeout=phase_timeout))
@@ -801,26 +1048,23 @@ def _execute_service_phases(
                 phases.append(_mark_runner_failure(spec, "用户中断"))
                 phases.extend(_mark_skipped(item, "用户中断") for item in specs[index + 1 :])
                 break
-            except Exception as exc:
-                phases.append(
-                    _mark_runner_failure(spec, f"{type(exc).__name__}: {exc}")
-                )
+            # 单阶段 runner 失败应留痕，外层 finally 仍负责停止本次创建的服务。
+            except Exception as exc:  # noqa: BLE001
+                phases.append(_mark_runner_failure(spec, f"{type(exc).__name__}: {exc}"))
             has_more = index + 1 < len(specs)
             if spec.name in {"websocket-matrix", "http-matrix"} and has_more:
                 stopped = controller.stop()
                 lifecycle.append(stopped)
                 if stopped.status != "passed":
                     phases.extend(
-                        _mark_skipped(item, "矩阵后优雅重启失败")
-                        for item in specs[index + 1 :]
+                        _mark_skipped(item, "矩阵后优雅重启失败") for item in specs[index + 1 :]
                     )
                     break
                 restarted = controller.start()
                 lifecycle.append(restarted)
                 if restarted.status != "passed":
                     phases.extend(
-                        _mark_skipped(item, "矩阵后服务重启失败")
-                        for item in specs[index + 1 :]
+                        _mark_skipped(item, "矩阵后服务重启失败") for item in specs[index + 1 :]
                     )
                     break
     finally:
@@ -856,7 +1100,10 @@ def _report_markdown(report: dict[str, Any]) -> str:
             "",
             f"- 开始/结束：`{report['started_at']}` / `{report['finished_at']}`",
             f"- Python：`{report['python']['command']}`（仅记录版本，不按版本卡口）",
-            f"- Git HEAD：`{report['repository']['head']}`；运行前 dirty entries：{report['repository']['dirty_entries']}",
+            (
+                f"- Git HEAD：`{report['repository']['head']}`；"
+                f"运行前 dirty entries：{report['repository']['dirty_entries']}"
+            ),
             "",
             "## 阶段",
             "",
@@ -877,8 +1124,14 @@ def _report_markdown(report: dict[str, Any]) -> str:
             "",
             f"- 外部依赖场景：{notes['external']}。",
             f"- 小青真实模型质量：{notes['chat_quality']}。",
-            "- 有状态/高权限命令只由带前置条件、动态 ID 和 cleanup 的业务场景执行；通用矩阵不会把静态样例冒充 CRUD 通过。",
-            "- WebSocket 与 HTTP 矩阵之间优雅重启，清空内存会话，避免 Jupyter/QingSSH 等交互态串扰。",
+            (
+                "- 有状态/高权限命令只由带前置条件、动态 ID 和 cleanup 的业务场景执行；"
+                "通用矩阵不会把静态样例冒充 CRUD 通过。"
+            ),
+            (
+                "- WebSocket 与 HTTP 矩阵之间优雅重启，清空内存会话，"
+                "避免 Jupyter/QingSSH 等交互态串扰。"
+            ),
             "",
             "## 复跑",
             "",
@@ -913,7 +1166,7 @@ def _plan_only(specs: tuple[PhaseSpec, ...], args: argparse.Namespace, output_di
         "python_version_gate": False,
         "isolated_data_root": str(output_dir / "data"),
         "include_external": args.include_external,
-        "include_chat_quality": args.include_chat_quality,
+        "include_chat_quality": any(spec.name == "chat-quality" for spec in specs),
         "phases": [
             {
                 "name": spec.name,
@@ -1002,7 +1255,8 @@ def _execute(args: argparse.Namespace) -> int:
                 lifecycle_results.extend(lifecycle)
         except KeyboardInterrupt:
             fatal_errors.append("用户中断")
-        except Exception as exc:
+        # 服务编排的最外层故障必须进入报告；with/finally 已先完成数据和进程回收。
+        except Exception as exc:  # noqa: BLE001
             fatal_errors.append(f"{type(exc).__name__}: {exc}")
             covered = {row.name for row in phase_results}
             phase_results.extend(
@@ -1016,21 +1270,26 @@ def _execute(args: argparse.Namespace) -> int:
         fatal_errors.append("config/config.json 未恢复到运行前哈希")
 
     if config_restored:
-        for spec in static_specs:
-            try:
-                phase_results.append(
-                    _run_logged_phase(spec, output_dir, timeout=args.phase_timeout)
+        completed_static = 0
+        try:
+            for spec in static_specs:
+                result, runner_error = _run_static_phase(
+                    spec,
+                    output_dir,
+                    timeout=args.phase_timeout,
                 )
-            except KeyboardInterrupt:
-                fatal_errors.append("用户在静态阶段中断")
-                remaining = static_specs[static_specs.index(spec) :]
-                phase_results.extend(_mark_skipped(item, "用户中断") for item in remaining)
-                break
-            except Exception as exc:
-                fatal_errors.append(f"{spec.name}: {type(exc).__name__}: {exc}")
-                phase_results.append(_mark_skipped(spec, "阶段 runner 异常"))
+                phase_results.append(result)
+                completed_static += 1
+                if runner_error:
+                    fatal_errors.append(runner_error)
+        except KeyboardInterrupt:
+            fatal_errors.append("用户在静态阶段中断")
+            remaining = static_specs[completed_static:]
+            phase_results.extend(_mark_skipped(item, "用户中断") for item in remaining)
     else:
-        phase_results.extend(_mark_skipped(spec, "配置未恢复，停止后续门禁") for spec in static_specs)
+        phase_results.extend(
+            _mark_skipped(spec, "配置未恢复，停止后续门禁") for spec in static_specs
+        )
 
     host, port = _endpoint_host_port(args.endpoint)
     integrity = {
@@ -1072,7 +1331,9 @@ def _execute(args: argparse.Namespace) -> int:
         "coverage_boundary": {
             "external": "included" if args.include_external else "not executed (opt-in)",
             "chat_quality": (
-                "included" if any(row.name == "chat-quality" for row in phase_results) else "not executed (opt-in)"
+                "included"
+                if any(row.name == "chat-quality" for row in phase_results)
+                else "not executed (opt-in)"
             ),
         },
     }
@@ -1111,7 +1372,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if min(args.start_timeout, args.stop_timeout, args.phase_timeout) <= 0:
+    timeouts = (args.start_timeout, args.stop_timeout, args.phase_timeout)
+    if any(not math.isfinite(value) or value <= 0 for value in timeouts):
         parser.error("超时参数必须为正数")
     try:
         if args.recover:

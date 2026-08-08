@@ -300,9 +300,16 @@ def test_database_search_items_matches_additional_text_fields(db: Database) -> N
         }
     )
 
-    by_location = db.search_items(owner_id, "图书馆", limit=10)
-    by_weather = db.search_items(owner_id, "风声", filters={"type": "diary"}, limit=10)
+    by_location, location_total = db.search_items_page(owner_id, "图书馆", limit=10)
+    by_weather, weather_total = db.search_items_page(
+        owner_id,
+        "风声",
+        filters={"type": "diary"},
+        limit=10,
+    )
 
+    assert location_total == 1
+    assert weather_total == 1
     assert [item.id for item in by_location] == ["ev1"]
     assert [item.id for item in by_weather] == ["dy1"]
 
@@ -335,8 +342,14 @@ def test_database_search_preserves_fts_rank_before_newer_like_only_rows(
     )
     monkeypatch.setattr(db, "_search_fts_ids", lambda *_args, **_kwargs: ["fts-first"])
 
-    results = db.search_items(owner_id, "alpha", filters={"type": "note"}, limit=10)
+    results, total = db.search_items_page(
+        owner_id,
+        "alpha",
+        filters={"type": "note"},
+        limit=10,
+    )
 
+    assert total == 2
     assert [item.id for item in results] == ["fts-first", "like-newer"]
 
 
@@ -383,13 +396,13 @@ def test_database_search_items_supports_ledger_category_filter(db: Database) -> 
         }
     )
 
-    results = db.search_items(
+    results, result_total = db.search_items_page(
         owner_id,
         "消费",
         filters={"type": "ledger", "ledger_category": "餐饮"},
         limit=10,
     )
-    transfer_results = db.search_items(
+    transfer_results, transfer_total = db.search_items_page(
         owner_id,
         "还款",
         filters={"type": "ledger", "account_name": "招行信用卡"},
@@ -404,6 +417,8 @@ def test_database_search_items_supports_ledger_category_filter(db: Database) -> 
     )
     route_data = cast(dict[str, Any], route_response["data"])
 
+    assert result_total == 1
+    assert transfer_total == 1
     assert [item.id for item in results] == ["ld1"]
     assert [item.id for item in transfer_results] == ["ld3"]
     assert [item["id"] for item in cast(list[dict[str, Any]], route_data["items"])] == ["ld1"]
@@ -441,8 +456,14 @@ def test_database_search_items_matches_event_collection_text(db: Database) -> No
         }
     )
 
-    results = db.search_items(owner_id, "FRB2026", filters={"type": "event"}, limit=10)
+    results, total = db.search_items_page(
+        owner_id,
+        "FRB2026",
+        filters={"type": "event"},
+        limit=10,
+    )
 
+    assert total == 1
     assert [item.id for item in results] == ["col-frb_m01"]
 
 

@@ -1,3 +1,5 @@
+"""收窄并修复模型返回的单一 JSON 根值。"""
+
 from __future__ import annotations
 
 import json
@@ -8,6 +10,8 @@ _JSON_BLOCK_RE = re.compile(r"^\s*```json[ \t]*\r?\n([\s\S]*?)\r?\n```\s*$", re.
 
 
 def normalize_llm_text(text: str) -> str:
+    """去除首尾空白；仅在整个响应都是 JSON 围栏时拆除围栏。"""
+
     if not text:
         return ""
     s = str(text).strip()
@@ -18,6 +22,8 @@ def normalize_llm_text(text: str) -> str:
 
 
 def normalize_response_content(data: dict[str, Any]) -> str:
+    """从常见 Chat Completions 响应中提取第一段文本。"""
+
     choices = data.get("choices") or []
     if not isinstance(choices, list) or not choices:
         return ""
@@ -30,19 +36,17 @@ def normalize_response_content(data: dict[str, Any]) -> str:
     return normalize_llm_text(content) if isinstance(content, str) else ""
 
 
-def extract_first_json_object_text(text: str) -> str:
+def _extract_json_root_text(text: str, *, opening: str, closing: str) -> str:
+    """扫描一个完整根值；字符串中的转义符和分隔符不参与深度计算。"""
+
     s = normalize_llm_text(text)
-    if not s:
+    if not s or not s.startswith(opening):
         return ""
-    if not s.startswith("{"):
-        return ""
-    start = 0
 
     depth = 0
     in_string = False
     escaped = False
-    for i in range(start, len(s)):
-        ch = s[i]
+    for index, ch in enumerate(s):
         if in_string:
             if escaped:
                 escaped = False
@@ -54,48 +58,28 @@ def extract_first_json_object_text(text: str) -> str:
         if ch == '"':
             in_string = True
             continue
-        if ch == "{":
+        if ch == opening:
             depth += 1
             continue
-        if ch == "}":
+        if ch == closing:
             depth -= 1
             if depth == 0:
-                return s if not s[i + 1 :].strip() else ""
+                return s if not s[index + 1 :].strip() else ""
+            if depth < 0:
+                return ""
     return ""
+
+
+def extract_first_json_object_text(text: str) -> str:
+    """返回完整的对象根文本；前后混入解释文字时拒绝。"""
+
+    return _extract_json_root_text(text, opening="{", closing="}")
 
 
 def extract_first_json_array_text(text: str) -> str:
-    s = normalize_llm_text(text)
-    if not s:
-        return ""
-    if not s.startswith("["):
-        return ""
-    start = 0
+    """返回完整的数组根文本；前后混入解释文字时拒绝。"""
 
-    depth = 0
-    in_string = False
-    escaped = False
-    for i in range(start, len(s)):
-        ch = s[i]
-        if in_string:
-            if escaped:
-                escaped = False
-            elif ch == "\\":
-                escaped = True
-            elif ch == '"':
-                in_string = False
-            continue
-        if ch == '"':
-            in_string = True
-            continue
-        if ch == "[":
-            depth += 1
-            continue
-        if ch == "]":
-            depth -= 1
-            if depth == 0:
-                return s if not s[i + 1 :].strip() else ""
-    return ""
+    return _extract_json_root_text(text, opening="[", closing="]")
 
 
 def _remove_trailing_commas(text: str) -> str:
@@ -134,8 +118,7 @@ def repair_json_text(text: str) -> str:
     s = normalize_llm_text(text)
     s = s.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
     s = _remove_trailing_commas(s)
-    s = _quote_unquoted_keys(s)
-    return s
+    return _quote_unquoted_keys(s)
 
 
 def parse_first_json_object(text: str) -> dict[str, Any] | None:
@@ -155,7 +138,7 @@ def parse_first_json_object_with_status(text: str) -> tuple[dict[str, Any], bool
         seen.add(candidate)
         try:
             parsed = json.loads(candidate)
-        except Exception:
+        except json.JSONDecodeError:
             continue
         if isinstance(parsed, dict):
             return parsed, True
@@ -174,7 +157,7 @@ def parse_first_json_array(text: str) -> list[dict[str, Any]]:
         seen.add(candidate)
         try:
             parsed = json.loads(candidate)
-        except Exception:
+        except json.JSONDecodeError:
             continue
         if isinstance(parsed, list):
             return [it for it in parsed if isinstance(it, dict)]

@@ -1,16 +1,33 @@
-# Azure Voice
+# 🎙️ Azure Voice
 
-`voice` 通过 Azure Speech 提供管理员专用的文字转语音命令，并向已声明的插件提供 `voice.synthesize_text` 服务。`speech_to_text()` 是内部工具函数，不会注册独立聊天命令。
+`voice` 通过 Azure Speech 提供管理员文字转语音命令，并向 Manifest 授权的插件发布 `voice.synthesize_text` 服务。
 
-## 命令与服务
+---
 
-- `/语音 <文本>`、`/念 <文本>`、`/tts <文本>`：合成 MP3 语音，文本最多 500 个字符。
-- `/语音 help`：查看命令帮助。
-- `voice.synthesize_text`：把文本转换为 OneBot `record` 消息段，当前允许调用方为 `smalltalk`。
+## ⌨️ 命令与服务
 
-## 配置
+```text
+/语音 <文本>
+/念 <文本>
+/tts <文本>
+/语音 help
+```
 
-只从 `config/secrets.json` 的 `plugins.voice` 读取配置：
+命令文本长度范围为 1～500 个字符，返回 OneBot `record` 消息段。Manifest 将命令标记为 Bot 管理员入口。
+
+服务契约：
+
+| 服务 | 回调 | 当前调用方 |
+| --- | --- | --- |
+| `voice.synthesize_text` | `convert_text_to_voice` | `smalltalk` |
+
+Core 根据服务调用者白名单签发能力，调用方收到与命令相同格式的语音消息段。
+
+---
+
+## ⚙️ 凭据与音色
+
+在 `config/secrets.json` 中配置：
 
 ```json
 {
@@ -27,12 +44,72 @@
 }
 ```
 
-`subscription_key` 必填；其余语音字段使用上面的安全默认值。`proxy` 留空表示直连，非空时必须是结构完整的 HTTP(S) 代理 URL。不要把订阅密钥写入公开配置、文档或聊天消息。
+| 字段 | 规则 |
+| --- | --- |
+| `subscription_key` | 必填 Azure Speech 订阅密钥 |
+| `region` | Azure 区域，默认 `southeastasia` |
+| `voice_name` | 音色名，默认 `zh-CN-XiaomoNeural` |
+| `style` | SSML 风格，默认 `cheerful` |
+| `role` | SSML 角色，默认 `Girl` |
+| `proxy` | 可选 HTTP 或 HTTPS 代理 URL |
 
-## 边界与缓存
+字段会经过类型、长度和字符模式校验。订阅密钥与代理凭据保存在聊天、公开配置和普通日志边界之外。
 
-- TTS 响应经过状态、MIME、压缩后字节数和 MP3 文件头校验，单个响应最多 10 MiB。
-- 缓存键包含文本、区域和全部音色设置；缓存最多 2048 项、256 MiB，条目保留 7 天。损坏的历史缓存会被删除后重新生成。
-- 内部 STT 只接受最多 10 MiB、最长 120 秒的 16 kHz、单声道、16 位未压缩 PCM WAV；损坏、截断或格式不符的文件不会上传。
-- TTS 与 STT 共用最多 2 个并发 Azure 请求；网络响应与识别文本均有显式上限。
-- 日志只记录状态、字节数和文本长度，不记录订阅密钥、代理凭据或识别正文。
+---
+
+## 🔄 合成流程
+
+1. 规范化文本并读取原子 secret 快照；
+2. 以文本、区域和全部音色设置计算缓存身份；
+3. 命中有效 MP3 缓存时直接返回；
+4. 生成经过 XML 转义的 SSML；
+5. 请求 Azure Speech MP3 输出；
+6. 校验响应并原子写入缓存；
+7. 返回 OneBot 语音消息段。
+
+同一缓存身份由 keyed lock 合并并发生成，Azure 请求最多同时执行 2 个。
+
+---
+
+## 🔐 响应与缓存边界
+
+| 项目 | 当前预算 |
+| --- | ---: |
+| 文本 | 500 个字符 |
+| Azure 总超时 | 60 秒 |
+| 单个音频 | 10 MiB |
+| 缓存 | 2048 项、256 MiB、7 天 |
+
+响应需要通过 HTTP 状态、MIME、解码字节和 MP3 文件头校验。缓存文件位于：
+
+```text
+data/voice/audio/
+```
+
+缓存键包含全部影响音频的输入。缓存读取会校验普通文件、大小与 MP3 头，异常条目进入清理和重新生成路径。
+
+---
+
+## 🩺 排障
+
+| 现象 | 检查项 |
+| --- | --- |
+| 提示订阅密钥缺失 | 核对 `plugins.voice.subscription_key` |
+| Azure 返回认证错误 | 核对密钥与 `region` |
+| SSML 音色错误 | 核对 `voice_name`、`style` 和 `role` 是否受该音色支持 |
+| 代理连接失败 | 核对代理 URL 与网络权限 |
+| 语音服务调用被拒绝 | 核对 Manifest 服务调用者白名单 |
+| 缓存写入失败 | 检查 `data/voice/audio/` 权限与磁盘空间 |
+
+---
+
+## ✅ 开发验证
+
+在仓库根目录运行：
+
+```bash
+python -m pytest -q tests/plugins/test_voice.py \
+  tests/test_app_plugin_capabilities.py
+python -m ruff check plugins/voice tests/plugins/test_voice.py
+python -m mypy plugins/voice
+```

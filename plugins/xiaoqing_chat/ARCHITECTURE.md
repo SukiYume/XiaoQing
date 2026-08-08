@@ -1,316 +1,293 @@
-# xiaoqing_chat 架构与代码结构
+# 🏗️ xiaoqing_chat 架构
 
-`xiaoqing_chat` 是一个插件内聊天运行时。它挂在 XiaoQing 的命令系统和 smalltalk_provider 机制下，回复决策、上下文构建、行为规划、主 LLM 调用、多模态 marker 解析、记忆写入和 reply checker 都在插件内部完成。这个边界让小青的聊天行为可以快速迭代，同时不把拟人聊天规则塞回核心框架。
+本文面向插件维护者，说明 `xiaoqing_chat` 的服务边界、主数据流、状态提交规则和扩展位置。用户入口、配置与排障见 [README.md](README.md)。
 
-README 面向使用者说明启用和调参方式。本文件面向维护者说明代码结构、主链路和扩展边界。
+---
 
-## 架构目标
+## 🏗️ 架构职责
 
-插件围绕四个目标设计。
+插件在 XiaoQing Core 提供的命令、闲聊、AI、存储和 OneBot 能力上构建聊天运行时，负责以下领域：
 
-1. 拟人参与：在群聊里区分“别人叫小青”和“群友自己聊”，尽量少像客服机器人。
-2. 上下文连续：主回复 LLM 能看到近期历史、相关长期记忆、目标状态、人物资料和媒体上下文。
-3. 多模态自然：入站文本、图片、QQ face、NapCat mface、reply 引用都进入同一条上下文链；出站通过自然语言 marker 触发表情、图片和 QQ face。
-4. 可控退化：LLM、视觉模型、planner、reply checker 或媒体解析失败时安全降级，不阻塞基础文本聊天。
+1. 判断消息与小青的关系及参与时机。
+2. 构建连续会话、长期记忆、人物资料、目标和媒体上下文。
+3. 规划回复、观察、等待和目标调整动作。
+4. 调用聊天、推理、检查和视觉 route。
+5. 将文本与媒体意图转换为 OneBot 批次。
+6. 在投递确认后提交记忆、规划和学习状态。
 
-## 目录结构
+Core 负责配置快照、权限主体、AI 凭据与传输、插件数据目录、消息投递和生命周期控制。插件通过 `PluginContext` 与 capability 接口使用这些服务。
+
+---
+
+## 🏗️ 分层结构
+
+```text
+XiaoQing Core
+  ├─ command router ──────────────── /xc
+  ├─ smalltalk dispatcher ───────── observe_message / handle_smalltalk
+  ├─ AI capability ──────────────── chat / reasoning / checker / vision
+  ├─ OneBot delivery ────────────── ordered batches + acknowledgement
+  └─ PluginContext ──────────────── config / principal / data_dir / logger
+                    │
+                    ▼
+xiaoqing_chat
+  ├─ entry and command handlers
+  ├─ attention and participation
+  ├─ planning and generation
+  ├─ reply checking and media rendering
+  └─ scoped stores and background learning
+```
+
+---
+
+## 🏗️ 目录与所有权
 
 ```text
 plugins/xiaoqing_chat/
-├── plugin.json                     # 插件元数据、并发策略、命令与热加载文件
-├── main.py                         # 框架入口和 /xc 子命令路由
-├── handlers.py                     # smalltalk 主控、观察入口和回复记录
-├── handlers_internal.py            # 配置、记忆、审查、模型等命令实现
-├── handlers_helper.py              # 回复成功后的后台任务编排
-├── handler_context.py              # 单次请求的配置、状态、AI route 和数据目录快照
-├── attention_gate.py               # @、名字、reply-to-bot 和上下文共指判定
-├── frequency_control.py            # 普通群聊参与门与硬频控
-├── brain_chat.py                   # 私聊深度对话参数选择
-├── generation_limiter.py           # 全局、会话和用户级生成配额
-├── smalltalk_models.py             # 准备、生成和外发阶段的数据结构
-├── smalltalk_execution.py          # 生成、投递确认、提交与回滚
-├── smalltalk_media_helpers.py      # smalltalk 媒体同步与使用记录
-├── reply_generator.py              # 回复草稿、上下文组装、重生成与检查
-├── reply_payload.py                # 文本/媒体回复到 OneBot 批次的转换
-├── reply_splitter.py               # 长回复拆分
-├── message_parts.py                # 结构化文本和媒体片段
-├── media_registry.py               # 稳定媒体引用、压缩正文和持久化元数据
-├── context_builder.py              # 记忆、画像、表达和知识上下文
-├── runtime_state.py                # per-chat 状态、后台任务和模型覆盖项
-├── task_scheduler.py               # 防抖刷盘和后台任务生命周期
-├── store_base.py                   # JSON 存储公共能力
-├── store_binding.py                # 所有状态存储的数据目录绑定
-├── helper_utils.py                 # 事件标识、配置热加载和 AI route 上下文
-├── logging_utils.py                # 结构化日志与默认脱敏
-├── constants.py                    # 跨模块常量和疑问句判断
-├── config/
-│   ├── config.py                   # Pydantic 配置模型和加载器
-│   └── xiaoqing_config.json        # 插件行为配置
-├── llm/
-│   ├── gateway.py                  # 插件到 core AI capability 的薄适配层
-│   ├── llm_client.py               # 响应提取和稳定的内部兼容导入名
-│   ├── llm_config.py               # 单次模型调用参数
-│   ├── prompt_builder.py           # prompt 组装
-│   ├── postprocess.py              # 回复后处理
-│   ├── reply_checker.py            # 回复检查器
-│   └── summarizer.py               # 话题摘要
-├── media/
-│   ├── event_media.py              # 入站来源授权、落盘与消息顺序重建
-│   ├── event_media_analysis.py     # 视觉提示、语义校验和 profile 链编排
-│   ├── event_media_common.py       # 读取、编解码、缓存和 marker 公共逻辑
-│   ├── marker_resolver.py          # 出站 [想发...] marker 解析
-│   ├── emoji_library.py            # 会话隔离、索引校验的本地表情库
-│   ├── qq_face.py                  # QQ face 描述规范化
-│   ├── qq_face_catalog.py          # QQ face catalog 与使用记录
-│   └── qq_face_builtin_catalog.json
-├── memory/
-│   ├── memory.py                   # 短期对话记忆与原子持久化
-│   ├── memory_db.py                # 租户隔离的长期记忆和知识文档
-│   ├── vector_store.py             # 文档向量检索
-│   ├── memory_retrieval.py         # 记忆查询规划与工具循环
-│   ├── person_profile.py           # 人物资料
-│   ├── topic_summary_cache.py      # 话题摘要缓存
-│   ├── thinking_back.py            # thinking back 缓存
-│   ├── review_sessions.py          # 目标/表达人工复盘会话
-│   ├── knowledge_base.py           # 管理员知识文件的原子索引
-│   └── knowledge_extract.py        # 回复后人物事实提取
-├── planning/
-│   ├── pfc_engine.py               # PFC 引擎
-│   ├── pfc_action_planner.py       # 行动规划
-│   ├── pfc_goal_analyzer.py        # 目标识别
-│   ├── pfc_utils.py                # 规划响应解析工具
-│   ├── pfc_state.py                # PFC 状态
-│   ├── planned_action.py           # 规划动作数据结构
-│   ├── goal_state.py               # goal 状态
-│   ├── heartflow.py                # 普通参与软评分
-│   └── action_history.py           # 回复/观察 action 记录
-├── expression/
-│   ├── bw_message_recorder.py      # 群聊表达样本记录
-│   ├── bw_expression_learner.py    # 表达学习
-│   ├── bw_expression_store.py      # 表达存储
-│   ├── bw_expression_reflector.py  # 人工表达复盘提问
-│   ├── bw_reflect_tracker.py       # 复盘进度与结论跟踪
-│   ├── bw_jargon_miner.py          # 黑话挖掘
-│   ├── bw_jargon_store.py          # 会话/全局黑话存储
-│   └── expr_utils.py               # 共享解析与对话渲染
-├── experiments/
-│   └── anthropomorphic_group.py    # 拟人大群实验 runner
-├── utils/
-│   ├── json_parsing.py             # JSON 提取和严格语义转换
-│   └── tool_info.py                # 可用工具提示块
-├── README.md                       # 使用与运维手册
-├── ARCHITECTURE.md                 # 本文档
-└── xiaoqing_chat测试.md             # 独立完整测试任务说明
+├── plugin.json                  # Manifest、命令、能力与热加载文件
+├── main.py                      # 框架入口和命令路由
+├── handlers.py                  # 闲聊主控与投递后提交
+├── handlers_internal.py         # 管理命令实现
+├── handlers_helper.py           # 投递后后台任务编排
+├── handler_context.py           # 单轮配置、状态、route 和路径快照
+├── attention_gate.py            # 明确召唤与上下文共指
+├── participation.py             # 普通群聊参与线索
+├── frequency_control.py         # 回复间隔、速率、冷却与概率
+├── generation_limiter.py        # 全局、会话和用户生成配额
+├── brain_chat.py                # 私聊深度对话参数
+├── smalltalk_models.py          # 准备、生成、外发阶段模型
+├── smalltalk_execution.py       # 生成、投递、提交与回滚
+├── smalltalk_media_helpers.py   # 媒体同步与使用记录
+├── reply_generator.py           # 上下文组装、草稿、重生成和检查
+├── reply_payload.py             # 回复到 OneBot 批次的转换
+├── reply_splitter.py            # 长回复拆分
+├── message_parts.py             # 结构化文本与媒体片段
+├── context_builder.py           # 记忆、画像、表达与知识上下文
+├── runtime_state.py             # 运行状态、后台任务和模型覆盖
+├── task_scheduler.py            # 防抖刷盘与后台任务生命周期
+├── store_base.py                # JSON store 公共协议
+├── store_binding.py             # Store 与 data_dir 绑定
+├── media_registry.py            # 媒体引用和持久化元数据
+├── helper_utils.py              # 标识、热加载与 route 上下文
+├── logging_utils.py             # 结构化日志与脱敏
+├── constants.py                 # 跨模块常量
+├── config/                      # 行为配置模型与 JSON
+├── llm/                         # AI gateway、prompt、后处理与检查器
+├── media/                       # 入站分析、素材库与出站 marker
+├── memory/                      # 记忆、画像、向量、摘要与审查
+├── planning/                    # PFC、Goal、Heartflow 与行动历史
+├── expression/                  # 表达、黑话、反思与样本记录
+├── experiments/                 # 拟人大群实验 runner
+└── utils/                       # JSON 解析与工具信息
 ```
 
-## 入口层
+每个模块维护单一领域语义。`handlers.py` 编排流程，领域判断保留在对应模块中，持久化由 store 层统一完成。
 
-`main.py` 暴露给 XiaoQing 框架的入口如下。
+---
 
-- `init(context)`: 初始化插件并记录启动状态。
-- `handle(command, args, event, context)`: 处理 `/xc` 命令。
-- `call_bot_name_only(context)`: 用户只喊 bot name 时的短回复。
-- `observe_message(clean_text, event, context)`: 观察消息但不一定回复。
-- `observe_outgoing_action(action, context)`: 观察其它插件或机器人出站行为。
-- `shutdown(context)`: 限时等待或取消后台任务，并兜底刷盘所有脏存储。
+## ⌨️ 框架入口
 
-`handlers.py` 是插件主控层。显式命令和 smalltalk 都会进入这里，然后再分发到配置、记忆、表达、模型切换、深度对话或普通聊天链路。
+`main.py` 暴露以下入口：
 
-## smalltalk 主流程
+| 入口 | 调用方 | 职责 |
+|---|---|---|
+| `init(context)` | PluginManager | 开放后台任务、绑定 store、加载媒体注册表 |
+| `handle(command, args, event, context)` | Router | 处理 `/xc` 命令 |
+| `call_bot_name_only(context)` | Dispatcher | 响应单独 Bot 名称 |
+| `observe_message(clean_text, event, context)` | Dispatcher | 记录入站消息与原始 segment |
+| `handle_smalltalk(clean_text, event, context)` | Dispatcher | 执行闲聊决策与回复链路 |
+| `observe_outgoing_action(action, context)` | Core service | 记录其它插件和 Bot 的出站动作 |
+| `shutdown(context)` | PluginManager | 停止任务并刷盘脏状态 |
 
-当 `smalltalk_provider = xiaoqing_chat` 时，框架把群聊消息交给 `handle_smalltalk(clean_text, event, context)`。主流程可以概括为以下步骤。
+Manifest 声明 `onebot_media` capability，并向 Core 提供 `core.observe_outgoing_action` 服务回调。
+
+---
+
+## 💾 单轮数据流
 
 ```text
-handle_smalltalk()
-  |
-  v
-_prepare_smalltalk_turn()
-  - rebuild effective input from message segments
-  - decide_attention()
-  - ordinary participation gate: _should_reply()
-  - prepare goal / reflection / mood state
-  |
-  v
-GenerationLimiter
-  - global / chat / user inflight limits
-  - per-user daily generation budget
-  |
-  v
-_generate_smalltalk_turn()
-  - ensure the user turn is recorded exactly once
-  - forced: direct generation
-  - ordinary: PFC planner or configured direct fallback
-  - build context, call the main LLM, resolve media intent
-  - run reply checker / bounded regeneration
-  |
-  v
-_finalize_smalltalk_turn()
-  - drop stale generated turns
-  - build and send ordered OneBot batches
-  - commit bot memory / PFC / goal / action history only after delivery acknowledgement
-  - launch post-reply learning tasks only after commit
+OneBot event
+  │
+  ▼
+observe_message
+  ├─ preserve raw segments
+  ├─ normalize effective input
+  └─ append scoped user memory once
+  │
+  ▼
+prepare turn
+  ├─ refresh idle conversation state
+  ├─ decide attention
+  ├─ evaluate ordinary participation
+  ├─ apply generation limits
+  └─ snapshot runtime and routes
+  │
+  ▼
+generate turn
+  ├─ PFC action for ordinary participation
+  ├─ build context
+  ├─ call chat or reasoning route
+  ├─ post-process and resolve media intent
+  └─ deterministic + semantic reply check
+  │
+  ▼
+finalize turn
+  ├─ reject stale candidate
+  ├─ send ordered OneBot batches
+  ├─ receive delivery acknowledgement
+  ├─ commit assistant memory and planning state
+  └─ schedule summary, profile and expression tasks
 ```
 
-forced 场景会跳过普通插话概率；普通群聊才进入 `_should_reply()` 和 PFC planner。即使最终不回复，`observe_message()` 仍可更新上下文，让后续回复看到完整历史。
+`_PreparedSmalltalkTurn`、`_GeneratedSmalltalkTurn` 和 `_ReplyEnvelope` 明确划分准备、生成与外发阶段。阶段模型减少跨函数共享的松散字典。
 
-## Attention Gate
+---
 
-`attention_gate.py` 负责判断消息是否指向小青。核心返回值是 `AttentionDecision`。
+## 📌 召唤与普通参与
 
-- `forced`: 是否跳过普通概率门。
-- `reason`: 触发原因。
-- `direct_mentioned`: 是否直接点名或 `@`。
-- `coreference_mentioned`: 是否通过上下文共指触发。
-- `reply_to_bot`: 是否引用小青上一条消息。
+`attention_gate.py` 返回 `AttentionDecision`：
 
-判定包括以下因素。
+- `forced`：直接进入回复生成。
+- `reason`：召唤来源。
+- `direct_mentioned`：名称或 `@` 命中。
+- `coreference_mentioned`：上下文共指命中。
+- `reply_to_bot`：reply 指向 Bot 历史消息。
 
-- 命令和私聊。
-- 群聊 `@`。
-- bot name 文本匹配。
-- 只喊 bot name 后的同一用户短时间追问。
-- reply segment 的 message_id 是否指向小青历史回复。
-- 最近历史存在小青锚点时，`她/他/ta` 等共指召唤。
+私聊、显式命令、群聊 `@`、Bot 名称、名称续问、reply-to-bot 和带锚点的共指属于明确召唤。
 
-共指触发是启发式加上下文锚点。没有小青锚点的普通代词不会触发 forced，以减少误回。
+普通群聊由 `participation.py` 提取开放话题、目标对象、活跃话题和低信息信号；`frequency_control.py` 应用间隔、速率、冷却与参与概率；`planning/heartflow.py` 计算软评分；PFC 选择回复、观察、等待或目标调整。
 
-## Frequency Control 与 Heartflow
+`generation_limiter.py` 在模型调用前获取全局、会话和用户配额，并记录用户日用量。释放动作位于统一生命周期边界。
 
-`frequency_control.py` 控制普通群聊插话，不处理 directed attention 的语义。它主要负责以下限制。
+---
 
-- `min_reply_interval_seconds`: 最小回复间隔。
-- `max_replies_per_minute`: 每分钟回复上限。
-- `continuous_reply_limit` 和 `continuous_cooldown_seconds`: 连续回复冷却。
-- `reply_probability_base`: 普通参与基础概率。
-- `active_topic_reply_probability` 和 `active_topic_min_reply_interval`: 基于上一轮目标的活跃话题参与率和间隔。
-- 连续未回复补偿。
+## 🧠 规划与生成
 
-`planning/heartflow.py` 是普通参与的软评分模块，输入文本、目标状态和近期互动信号，输出一个参与倾向。它不再重复判断“是否被点名”“是否私聊”“是否超频”；这些由 attention gate 和硬频控负责。
+PFC 子系统维护四类信息：
 
-## Planner 与 Goal
+- `goal_state.py`：当前会话目标与活跃话题。
+- `pfc_state.py`：规划器观察和阶段状态。
+- `planned_action.py`：本轮行动模型。
+- `action_history.py`：已确认行动记录。
 
-PFC planner 面向普通群聊。它会决定回复时机，并维护行为意图。
+普通参与进入 PFC。明确召唤直接进入回复生成。开放群聊邀请在通过硬频控后可进入直接生成路径。
 
-- 当前话题目标。
-- 是否继续追问。
-- 是否只是观察。
-- 是否结束话题。
-- 是否需要根据上下文调整回复风格。
+`reply_generator.py` 依次完成：
 
-forced 场景通常不需要 planner 才能回复，因为用户已经明确叫小青。普通群聊里 planner 能让小青更像群友：在有话题时接一句，在噪音或刷屏时沉默。
+1. 从 `context_builder.py` 获取记忆、画像、表达、知识和媒体块。
+2. 从 `llm/prompt_builder.py` 生成模型输入。
+3. 通过 `llm/gateway.py` 调用绑定当前插件的 AI capability。
+4. 由 `llm/postprocess.py` 清理和拆分文本。
+5. 解析媒体 marker。
+6. 执行回复检查与有界重生成。
 
-回复门控先读取上一轮 goal，再根据本轮观察更新 goal，因此消息不会把自己提前变成活跃话题。纯“乐/哈哈/草/噔噔咚”等低信息反应保留已有目标，不单独创建新目标。PFC 返回 `wait` 后不会再被短句长度规则改写；群聊规划失败也按 `wait` 保守降级。
+`llm/llm_client.py` 维护响应提取接口。凭据、HTTP、超时、重试与 profile fallback 位于 Core AI capability。
 
-## 主回复 LLM
+---
 
-主回复 LLM 由 `reply_generator.py`、`context_builder.py`、`llm/prompt_builder.py` 和 `llm/gateway.py` 协作完成。`llm/llm_client.py` 只负责解析响应和兼容现有内部导入，不再建立 HTTP 请求。模型传输、凭据、重试和跨 profile fallback 统一由 `core.ai` 执行。主回复能看到以下上下文。
+## 🧠 AI route
 
-- 当前有效用户输入。
-- 当前 chat 最近一次长空档后的连续历史；完整原始历史仍保留给显式记忆检索。
-- 相关长期记忆和人物资料。
-- goal state 和 PFC planner 结果。
-- expression store 中经过人工审核、且管理员主动启用的单条表达习惯；默认只学习不注入。
-- 入站媒体 marker 和视觉描述。
-- 媒体回复 marker 协议说明。
+插件声明四条用途明确的模型链：
 
-主 LLM 的输出先形成 `ReplyDraft`，再进入 postprocess、媒体 marker 解析和 reply checker。
+| Route | 调用场景 |
+|---|---|
+| `chat` | 日常回复 |
+| `reasoning` | PFC、科学关系、摘要和后台分析 |
+| `checker` | 独立语义审查 |
+| `vision` | 图片与表情语义分析 |
 
-## 远程数据边界
+`handler_context.py` 为单轮创建配置与 route 快照。`/xc model` 修改运行时聊天模型覆盖项，覆盖范围分为 chat 和 global。`chat` route 接受覆盖项，其余 route 保持各自配置链。
 
-聊天和视觉 provider 是管理员在项目级统一注册表中配置的 OpenAI-compatible 第三方服务。公开连接与模型 profile 位于 `config.ai`，API Key 位于 `secrets.ai.providers`。本插件声明 `chat`、`reasoning`、`checker` 和 `vision` 四条 route：普通闲聊优先低延迟模型，数值/科学关系和回复复核使用高质量文本模型，图片理解使用视觉模型。插件上下文拿不到统一密钥，只能通过绑定了插件名的 `context.capabilities.ai` 调用自己的 route。
+每次调用只向 provider 传递该功能所需的输入。日志边界使用长度、指纹、profile 与错误类别表达运行状态。
 
-插件处理消息时会把当前输入及生成回复所需的历史、记忆、人物资料、规划结果和媒体上下文发送给最终命中的 provider；回复后的摘要、表达学习和人物事实提取也会按各自功能开关调用远程模型。部署者负责确认所选服务的用途、保留、训练和删除政策。普通日志只记录长度、指纹、错误类别和脱敏 profile，不写完整 prompt、响应、URL 或凭据。
+---
 
-## 多模态管线
+## 🧠 多模态管线
 
 ### 入站
 
-`media/event_media.py` 读取 OneBot 原始 segment，按顺序生成上下文文本。
+`media/event_media.py` 验证来源并按原始顺序重建 `text`、`at`、`reply`、`face`、`mface` 和 `image`。`event_media_analysis.py` 调用视觉 route，`event_media_common.py` 负责读取、编解码、缓存和 marker 公共逻辑。
 
-- `face` 显示为 QQ face marker。
-- `mface` 显示为表情包 marker。
-- `image` 根据配置调用视觉模型或保守 marker。
-- 文本和媒体保持原始顺序。
-
-入站图片如果被识别为表情包，会被复制到本地 library，后续出站可复用。
+图片分析受到字节数、像素、动画帧数、超时和重试配置约束。表情包素材进入按会话授权的本地库；媒体注册表为上下文保留稳定引用。
 
 ### 出站
 
-`media/marker_resolver.py` 解析主 LLM 输出中的 `[想发...]` marker。
+`media/marker_resolver.py` 解析三种意图：
 
-- 先解析 marker 类型和 hint。
-- 从表情包库、图片库、历史媒体和 QQ face catalog 收集候选。
-- 按 hint 匹配候选。
-- 转换为 OneBot image 或 face segment。
-- 清理文本中的 marker 残留。
+- `[想发表情:hint]`
+- `[想发QQ表情:hint]`
+- `[想发图片:hint]`
 
-如果解析失败，回复仍以纯文本发送。
+解析器从表情库、图片库、历史媒体与 QQ face catalog 选择候选。`reply_payload.py` 将文本与媒体转换为有序 OneBot 批次，`smalltalk_media_helpers.py` 在投递确认后记录素材使用情况。
 
-## Reply Checker
+---
 
-`llm/reply_checker.py` 做两层检查，并把拒绝分为 hard 和 soft。
+## ✅ 回复检查与提交
 
-- 启发式检查：重复、过长、连续回复、明显空泛或格式异常。
-- 独立 LLM route 检查：分别判断上下文、说话人、人物声明是否属于既定事实或允许的低风险日常创作、事实可行性和模板化程度。
+`llm/reply_checker.py` 组合两类门禁：
 
-上下文错位、说话人混淆、人物创作越界为精确身份/重大经历/现实承诺、事实/数量级/因果错误和媒体错位属于 hard，重生成耗尽后仍不能发送；符合稳定人设的普通低风险日常小片段可以没有历史证据。轻微措辞或口癖问题属于 soft，强制回复场景可在重生成耗尽后采用最后一个结构安全候选。
+- 确定性检查：重复、连续回复、结构、长度和媒体一致性。
+- 语义检查：上下文、说话人、人物声明、外部事实、交流约束和模板化程度。
 
-## 状态和存储
+检查结果区分 hard 与 soft，并携带重生成或重规划建议。主动参与候选在耗尽预算后采用安静结果；明确召唤候选采用结构安全的承接结果。
 
-`runtime_state.py` 管理 per-chat runtime。核心状态包括以下内容。
+投递确认是状态提交点。确认后依次提交助手记忆、PFC、Goal、Heartflow、行动历史和回复后学习任务。投递拒绝、发送异常与过期候选进入回滚路径。
 
-- recent messages。
-- pending bot-name call。
-- last reply metadata。
-- reply gate logs。
+---
 
-`memory.conversation_idle_gap_seconds` 建立即时会话边界。相邻消息超过阈值后，
-插件保留 `MemoryStore` 原始记录，只清除 goal、PFC、action history、thinking-back
-和 topic summary 等旧话题临时状态；回复生成、PFC 和动态思考级别统一使用空档后的后缀。
-- background media refine tasks。
-- PFC state、goal state、action history、heartflow。
+## 💾 状态与持久化
 
-长期存储分布在 memory、expression、media library 和各自 store 中。状态应按 chat_id 隔离，避免不同群或私聊串台。
+`runtime_state.py` 管理进程内状态：
 
-## 配置读取
+- 每个 chat 的统计、锁和当前回复元数据。
+- Bot 名称续问状态。
+- 模型覆盖项。
+- 媒体细化与后台学习任务。
+- 防抖刷盘任务。
 
-插件相关配置分三层。
+持久化状态分布在 `memory/`、`planning/`、`expression/` 与 `media/`。所有 store 通过 `store_binding.py` 绑定 `context.data_dir`，通过 `store_base.py` 与 Core 原子存储协议完成发布。读取边界校验对象根、整数、有限浮点数、布尔值和集合元素。
 
-- `plugins/xiaoqing_chat/config/xiaoqing_config.json`: 行为配置，包括频控、planner、memory、reply checker、media、personality、postprocess、debug；不含 provider 字段。
-- `config/config.json`: `ai.providers`、`ai.models` 以及 `plugins.xiaoqing_chat.ai.routes`；聊天和视觉 route 都是有序 profile 列表。
-- `config/secrets.json`: 只在 `ai.providers.<name>.api_key` 保存统一 provider 密钥。
+`memory.conversation_idle_gap_seconds` 定义连续会话边界。到达边界时，短期原始记录继续留存，Goal、PFC、行动历史、Thinking Back 与话题摘要切换到新会话片段。
 
-每次模型调用读取一份新的 core 原子配置快照。运行时通过 `/xc 配置` 查看行为摘要，通过 `/xc 模型` 查看 profile、严格固定聊天模型或用 `默认` 恢复自动 fallback。
+`task_scheduler.py` 管理防抖保存、任务登记、异常记录与关闭等待。`shutdown()` 先停止接收任务，再等待限时任务，最后刷盘所有脏 store。
 
-## 实验和测试
+---
 
-自动化测试主要覆盖以下内容。
+## ⚙️ 配置生命周期
 
-- 命令和 smalltalk 主路径。
-- attention gate 和 coreference。
-- media segment 接收、marker 解析、图片/表情/QQ face 出站。
-- reply checker。
-- memory、planner、state reset。
+配置来源如下：
 
-常用命令如下。
+| 来源 | 内容 |
+|---|---|
+| `plugins/xiaoqing_chat/config/xiaoqing_config.json` | 行为、频控、规划、记忆、媒体、人格和调试 |
+| `config/config.json` | AI provider、model profile、route 与 alias |
+| `config/secrets.json` | Provider API Key |
 
-```powershell
-python -m pytest tests/plugins -k "xiaoqing_chat or reply_checker" -q
-```
+`config/config.py` 使用 Pydantic 校验字段范围、交叉约束和正则表达式。`helper_utils.py` 读取 Core 原子快照并维护文件热加载缓存。单轮处理只使用自己的快照，下一轮获得最新有效配置。
 
-`experiments/anthropomorphic_group.py` 是拟人大群实验 runner。它支持 matrix、dry-run 和 real 模式，real 模式走真实 `observe_message()` 和 `handle_smalltalk()`，但不发送到 live OneBot。
+---
 
-## 扩展边界
+## 🔐 错误与日志边界
 
-扩展能力时优先遵守以下边界。
+模块内纯解析、类型转换和文件操作捕获具体异常。AI provider、动态 capability、媒体解码、后台任务和生命周期属于隔离边界，统一记录脱敏错误类别并返回受控降级结果。
 
-- 新触发条件放在 `attention_gate.py`，不要塞进 `_should_reply()`。
-- 普通群聊插话概率和硬频控放在 `frequency_control.py`。
-- 主回复 prompt 相关内容放在 `context_builder.py` 或 `llm/prompt_builder.py`。
-- 入站媒体解析放在 `media/event_media.py`。
-- 出站媒体 marker 解析放在 `media/marker_resolver.py`。
-- 长期记忆能力放在 `memory/`。
-- 表达学习放在 `expression/`。
-- planner 行为放在 `planning/`。
+`logging_utils.py` 为 chat、user、group、URL、profile 和自由文本提供脱敏表达。常规日志用于定位步骤、耗时、长度、决策原因与错误类别。
 
-这能避免触发、频控、规划、生成和媒体处理互相重复，也便于针对单一模块写回归测试。
+---
+
+## 🛠️ 扩展规则
+
+新增行为按领域放置：
+
+- 召唤条件：`attention_gate.py`。
+- 普通参与线索：`participation.py`。
+- 速率与概率：`frequency_control.py`。
+- 行为规划：`planning/`。
+- 生成上下文：`context_builder.py` 与 `llm/prompt_builder.py`。
+- 入站媒体：`media/event_media*.py`。
+- 出站媒体：`media/marker_resolver.py` 与 `reply_payload.py`。
+- 长期记忆和画像：`memory/`。
+- 表达与黑话：`expression/`。
+- 持久化公共能力：`store_base.py`。
+
+每个新增领域入口配套单元测试；跨层流程配套 `handle_smalltalk()` 或 OneBot UAT；持久化变更配套损坏输入、并发和重启测试。完整门禁见 [xiaoqing_chat测试.md](xiaoqing_chat%E6%B5%8B%E8%AF%95.md)。

@@ -128,7 +128,13 @@ def generate_monthly_ranges(start_str: str, end_str: str) -> list[tuple[str, str
         yymm: 月份标识（如 2012 = 2020-12）
     """
     start = datetime.strptime(start_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    end = datetime.strptime(end_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    end_day = datetime.strptime(end_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    if start > end_day:
+        raise ValueError("date range start must not be after end")
+
+    # 输入是自然日范围。arXiv API 使用分钟精度，因此末日必须扩展到 23:59；
+    # 首月则从真实起始日开始，不能为了按月缓存而混入更早的负样本。
+    end = end_day + timedelta(days=1) - timedelta(minutes=1)
 
     ranges = []
     current = datetime(start.year, start.month, 1, tzinfo=timezone.utc)
@@ -139,12 +145,13 @@ def generate_monthly_ranges(start_str: str, end_str: str) -> list[tuple[str, str
         else:
             next_month = datetime(current.year, current.month + 1, 1, tzinfo=timezone.utc)
 
-        month_end = next_month - timedelta(seconds=1)
+        month_start = max(current, start)
+        month_end = next_month - timedelta(minutes=1)
         if month_end > end:
             month_end = end
 
         yymm = (current.year - 2000) * 100 + current.month
-        api_start = current.strftime("%Y%m%d%H%M")
+        api_start = month_start.strftime("%Y%m%d%H%M")
         api_end = month_end.strftime("%Y%m%d%H%M")
 
         ranges.append((api_start, api_end, yymm))

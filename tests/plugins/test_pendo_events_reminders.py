@@ -325,10 +325,8 @@ class TestRecurringEventRegression:
         inserted_items = []
 
         db = MagicMock()
-        db.create_event_collection_with_children.side_effect = (
-            lambda _collection, children, *, operation_action: (
-                inserted_items.extend(item for _item_id, item in children) or _collection["id"]
-            )
+        db.create_event_collection.side_effect = lambda _collection, children, *, operation_action: (
+            inserted_items.extend(item for _item_id, item in children) or _collection["id"]
         )
 
         handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())

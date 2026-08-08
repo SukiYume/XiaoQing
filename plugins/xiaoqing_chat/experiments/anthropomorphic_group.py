@@ -13,6 +13,7 @@ import json
 import random
 import re
 import statistics
+import sys
 import time
 from collections import Counter
 from collections.abc import Callable, Iterable
@@ -510,9 +511,7 @@ async def run_real_experiment(
                 clean_text = str(turn.get("raw_message") or "")
                 await xiaoqing_chat.observe_message(clean_text, event, context)
                 reply_segments = await xiaoqing_chat.handle_smalltalk(clean_text, event, context)
-            except (
-                Exception
-            ) as exc:  # pragma: no cover - real mode depends on local config/provider.
+            except Exception as exc:  # pragma: no cover - 真实模式依赖本机配置和服务商。
                 error = f"{type(exc).__name__}: {exc}"
             score = score_turn(turn, reply_segments, elapsed_s=time.time() - started, error=error)
             rows.append(
@@ -564,8 +563,14 @@ async def run_real_experiment(
                 request_id=f"{run_id}-shutdown",
             )
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        print(
+            json.dumps(
+                {"step": "experiment.shutdown.error", "error_type": type(exc).__name__},
+                ensure_ascii=False,
+            ),
+            file=sys.stderr,
+        )
 
     return rows
 
@@ -1219,20 +1224,22 @@ def _make_context(
     from core.interfaces import PluginCapabilities
 
     class Logger:
+        """实验上下文需要日志接口，但离线矩阵不产生运行日志。"""
+
         def debug(self, *_args, **_kwargs):
-            pass
+            return None
 
         def info(self, *_args, **_kwargs):
-            pass
+            return None
 
         def warning(self, *_args, **_kwargs):
-            pass
+            return None
 
         def error(self, *_args, **_kwargs):
-            pass
+            return None
 
         def exception(self, *_args, **_kwargs):
-            pass
+            return None
 
     async def send_action(_action):
         return []
@@ -1275,8 +1282,8 @@ def _make_context(
         request_id=request_id,
         admin_ids=[],
         state={},
-        is_admin=lambda uid, gid=None: False,
-        check_permission=lambda uid, perm: False,
+        is_admin=lambda _uid, _gid=None: False,
+        check_permission=lambda _uid, _perm: False,
     )
 
 

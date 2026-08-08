@@ -30,6 +30,19 @@ if TYPE_CHECKING:
 _MEDIA_PART_KINDS = ("emoji", "qq_face", "image")
 
 
+def _log_media_bookkeeping_failure(context: Any, operation: str, exc: Exception) -> None:
+    """媒体旁路统计失败只记类型，不泄露路径或消息内容。"""
+
+    logger = getattr(context, "logger", None)
+    debug = getattr(logger, "debug", None)
+    if callable(debug):
+        debug(
+            "xiaoqing_chat media bookkeeping failed operation=%s error_type=%s",
+            operation,
+            type(exc).__name__,
+        )
+
+
 def _first_media_part(
     parts: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None,
 ) -> dict[str, Any] | None:
@@ -120,7 +133,8 @@ async def _event_media_items_for_memory(
         )
     try:
         rendered_items = await render_event_media(event, context=context, runtime=runtime)
-    except Exception:
+    except Exception as exc:
+        _log_media_bookkeeping_failure(context, "render_for_memory", exc)
         return []
     return _serialize_rendered_media_items(rendered_items)
 
@@ -152,8 +166,8 @@ def _sync_message_parts_to_registry(
         # 刷盘属于旁路维护；调度失败不能让已经生成的回复消失。
         try:
             schedule_media_registry_flush(context, runtime)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_media_bookkeeping_failure(context, "schedule_registry_flush", exc)
     return cast(
         tuple[dict[str, Any], ...],
         replace_message_media_parts(
@@ -231,22 +245,22 @@ def _mark_reply_media_used(context, generated: _GeneratedSmalltalkTurn) -> None:
     if marker is not None and marker_kind == "emoji":
         try:
             mark_emoji_used(context, marker.entry)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_media_bookkeeping_failure(context, "mark_emoji_entry", exc)
     elif marker_kind != "emoji":
         for part in reply_parts:
             if str(part.get("kind", "") or "").strip() != "emoji":
                 continue
             try:
                 mark_emoji_used_by_hash(context, str(part.get("media_hash", "") or ""))
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_media_bookkeeping_failure(context, "mark_emoji_hash", exc)
 
     if marker is not None and marker_kind == "qq_face":
         try:
             mark_qq_face_used(context, marker.entry)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_media_bookkeeping_failure(context, "mark_qq_face_entry", exc)
     elif marker_kind != "qq_face":
         for part in reply_parts:
             if str(part.get("kind", "") or "").strip() != "qq_face":
@@ -257,5 +271,5 @@ def _mark_reply_media_used(context, generated: _GeneratedSmalltalkTurn) -> None:
                     str(part.get("face_id", "") or ""),
                     label=str(part.get("label", "") or ""),
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_media_bookkeeping_failure(context, "mark_qq_face_id", exc)

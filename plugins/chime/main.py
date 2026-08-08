@@ -29,6 +29,7 @@ from core.durable_fanout import (
     load_pending,
     mark_delivered,
 )
+from core.interfaces import PluginContextProtocol
 from core.plugin_base import (
     Segments,
     bounded_external_text,
@@ -41,10 +42,9 @@ from core.public_errors import public_error_message, public_error_response
 
 # 官方公共目录重建期间，这个旧 JSON 端点可能暂时不可用；目前没有等价的实时归档接口。
 CHIME_API_URL = "https://catalog.chime-frb.ca/repeaters"
-PULSE_DATE_PATTERN = r"\d{6}"
 MAX_DISPLAY_FRBS = 5
 
-_PULSE_DATE_RE = re.compile(PULSE_DATE_PATTERN, re.ASCII)
+_PULSE_DATE_RE = re.compile(r"\d{6}", re.ASCII)
 _FRB_NAME_RE = re.compile(r"FRB[A-Z0-9.+-]{1,60}", re.IGNORECASE | re.ASCII)
 _TIMESTAMP_RE = re.compile(
     r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}"
@@ -72,16 +72,21 @@ _CHIME_JSON_LIMITS = JsonLimits(
 )
 _CHIME_CACHE_KEY = "chime_catalog_cache"
 _CHIME_CACHE_TTL_SECONDS = 5 * 60
+_CATALOG_FETCH_LOCK = asyncio.Lock()
 _DELIVERY_LOCK = asyncio.Lock()
 
 HELP_TEXT = """
-📡 **CHIME FRB 重复暴监测**
+📡 CHIME FRB 重复暴监测
 
-**基本用法:**
-• /chime - 预览相对上次成功通知后的更新
-• /chime list - 列出最近更新的 5 个 FRB
-• /chime <FRB名称> - 查询指定 FRB
-• /chime help - 显示帮助信息
+用法
+/chime
+  预览上次成功通知后的更新
+/chime list
+  列出最近更新的 5 个 FRB
+/chime <FRB名称>
+  查询指定 FRB
+/chime help
+  显示本帮助
 
 定时任务每天 9:00 和 21:00 检查；只有全部目标群确认收到通知后，才会推进本地历史记录。
 """.strip()
@@ -191,59 +196,87 @@ class FRBData:
         )
 
 
+def _cached_catalog(
+    runtime_state: dict[str, Any] | None,
+    now: float,
+) -> dict[str, Any] | None:
+    """只返回结构完整且仍在有效期内的当前插件代缓存。"""
+
+    if runtime_state is None:
+        return None
+    cached = runtime_state.get(_CHIME_CACHE_KEY)
+    if not isinstance(cached, dict):
+        return None
+    data = cached.get("data")
+    if not isinstance(data, dict):
+        return None
+    expires_at = cached.get("expires_at")
+    if (
+        isinstance(expires_at, bool)
+        or not isinstance(expires_at, (int, float))
+        or expires_at <= now
+    ):
+        return None
+    return data
+
+
 async def fetch_chime_repeaters(
-    context: Any,
+    context: PluginContextProtocol,
     *,
     force_refresh: bool = False,
 ) -> dict[str, Any] | None:
-    """通过旧版官方 JSON 端点读取重复暴目录，失败时不返回部分结果。"""
+    """通过旧版官方 JSON 端点读取目录，并合并并发的冷缓存请求。"""
+
     runtime_state = getattr(context, "state", None)
-    now = asyncio.get_running_loop().time()
-    if not force_refresh and isinstance(runtime_state, dict):
-        cached = runtime_state.get(_CHIME_CACHE_KEY)
-        if (
-            isinstance(cached, dict)
-            and isinstance(cached.get("data"), dict)
-            and isinstance(cached.get("expires_at"), (int, float))
-            and cached["expires_at"] > now
-        ):
-            return cached["data"]
-    try:
-        context.logger.info("正在请求 CHIME 重复暴目录")
-        response = await aiohttp_request_bounded(
-            context.http_session,
-            "POST",
-            CHIME_API_URL,
-            limits=_CHIME_BODY_LIMITS,
-            mime_policy=JSON_MIME_POLICY,
-            request_kwargs={"json": {}, "timeout": 30},
-        )
-        data = parse_bounded_json(response, limits=_CHIME_JSON_LIMITS)
-        if not isinstance(data, dict):
-            context.logger.error("CHIME 目录响应格式错误：顶层不是对象")
-            return None
-        if isinstance(runtime_state, dict):
-            runtime_state[_CHIME_CACHE_KEY] = {
-                "data": data,
-                "expires_at": now + _CHIME_CACHE_TTL_SECONDS,
-            }
-        context.logger.info("成功获取 CHIME 数据，共 %d 个重复暴条目", len(data))
-        return data
-    except HttpStatusError as exc:
-        context.logger.warning("CHIME 目录请求失败：HTTP %s", exc.status)
-    except asyncio.TimeoutError:
-        context.logger.warning("CHIME 目录请求超时")
-    except Exception as exc:
-        public_error_message(
-            context,
-            exc,
-            logger=context.logger,
-            component="chime.fetch",
-        )
-    return None
+    state = runtime_state if isinstance(runtime_state, dict) else None
+    loop = asyncio.get_running_loop()
+    if not force_refresh and (cached := _cached_catalog(state, loop.time())) is not None:
+        return cached
+
+    # 插件默认并行执行；锁内再次检查缓存，避免冷启动时同时下载多份大型目录。
+    async with _CATALOG_FETCH_LOCK:
+        if not force_refresh and (cached := _cached_catalog(state, loop.time())) is not None:
+            return cached
+        try:
+            context.logger.info("正在请求 CHIME 重复暴目录")
+            response = await aiohttp_request_bounded(
+                context.http_session,
+                "POST",
+                CHIME_API_URL,
+                limits=_CHIME_BODY_LIMITS,
+                mime_policy=JSON_MIME_POLICY,
+                request_kwargs={"json": {}, "timeout": 30},
+            )
+            data = parse_bounded_json(response, limits=_CHIME_JSON_LIMITS)
+            if not isinstance(data, dict):
+                context.logger.error("CHIME 目录响应格式错误：顶层不是对象")
+                return None
+            if state is not None:
+                state[_CHIME_CACHE_KEY] = {
+                    "data": data,
+                    # 从请求成功时起计算完整 TTL，慢请求不会吞掉缓存寿命。
+                    "expires_at": loop.time() + _CHIME_CACHE_TTL_SECONDS,
+                }
+            context.logger.info("成功获取 CHIME 数据，共 %d 个重复暴条目", len(data))
+            return data
+        except HttpStatusError as exc:
+            context.logger.warning("CHIME 目录请求失败：HTTP %s", exc.status)
+        except asyncio.TimeoutError:
+            context.logger.warning("CHIME 目录请求超时")
+        except Exception as exc:
+            public_error_message(
+                context,
+                exc,
+                logger=context.logger,
+                component="chime.fetch",
+            )
+        return None
 
 
-def parse_frb_data(data: dict[str, Any], context: Any) -> list[FRBData]:
+def parse_frb_data(
+    data: dict[str, Any],
+    context: PluginContextProtocol,
+) -> list[FRBData]:
     """一次性解析整个响应；规范化名称冲突时拒绝整批数据。"""
     if len(data) > _MAX_FRB_RECORDS:
         context.logger.error("CHIME 目录条目数超过安全上限")
@@ -287,21 +320,21 @@ def _validate_history(value: object) -> dict[str, str]:
     return history
 
 
-def _history_path(context: Any) -> Path:
+def _history_path(context: PluginContextProtocol) -> Path:
     return Path(context.data_dir) / _HISTORY_FILENAME
 
 
-def _fanout_path(context: Any) -> Path:
+def _fanout_path(context: PluginContextProtocol) -> Path:
     return Path(context.data_dir) / _FANOUT_FILENAME
 
 
-def load_history(context: Any) -> dict[str, str]:
+def load_history(context: PluginContextProtocol) -> dict[str, str]:
     """严格加载已确认通知的最新时间；文件缺失表示尚无基线。"""
-    value = load_json(_history_path(context), {}, raise_on_error=True)
+    value: object = load_json(_history_path(context), {}, raise_on_error=True)
     return _validate_history(value)
 
 
-def save_history(context: Any, mapping: object) -> bool:
+def save_history(context: PluginContextProtocol, mapping: object) -> bool:
     """原子保存通过完整校验的通知基线。"""
     try:
         history = _validate_history(mapping)
@@ -321,7 +354,7 @@ def save_history(context: Any, mapping: object) -> bool:
 def find_updates(
     frb_list: list[FRBData],
     old_mapping: dict[str, str],
-    context: Any,
+    context: PluginContextProtocol,
 ) -> tuple[list[FRBData], list[FRBData]]:
     """只把新增源或严格晚于基线的观测视为更新。"""
     new_repeaters: list[FRBData] = []
@@ -372,17 +405,17 @@ def format_update_message(
     is_scheduled: bool = False,
 ) -> str:
     """把增量结果压缩为最多各五条的通知文本。"""
-    lines = ["🔔 **CHIME FRB 更新通知**", ""] if is_scheduled else []
+    lines = ["🔔 CHIME FRB 更新通知", ""] if is_scheduled else []
 
     if new_repeaters:
-        lines.append("🆕 **新发现的重复暴:**")
+        lines.append("🆕 新发现的重复暴")
         for frb in new_repeaters[:MAX_DISPLAY_FRBS]:
             lines.extend((frb.format_info(), ""))
         if len(new_repeaters) > MAX_DISPLAY_FRBS:
             lines.extend((f"... 还有 {len(new_repeaters) - MAX_DISPLAY_FRBS} 个", ""))
 
     if new_pulses:
-        lines.append("📡 **检测到新脉冲:**")
+        lines.append("📡 检测到新脉冲")
         for frb in new_pulses[:MAX_DISPLAY_FRBS]:
             lines.extend((frb.format_info(), ""))
         if len(new_pulses) > MAX_DISPLAY_FRBS:
@@ -440,8 +473,13 @@ def _render_direct_query(
     return segments(frb.format_info())
 
 
-async def handle(command: str, args: str, event: dict[str, Any], context: Any) -> Segments:
-    """处理列表、单源查询和增量预览；手动查询不会推进通知基线。"""
+async def handle(
+    command: str,
+    args: str,
+    event: dict[str, Any],
+    context: PluginContextProtocol,
+) -> Segments:
+    """处理列表、单源查询和增量预览；入口形参遵循统一插件契约。"""
     try:
         request = _parse_request(args)
         if request is None:
@@ -488,7 +526,10 @@ async def handle(command: str, args: str, event: dict[str, Any], context: Any) -
         )
 
 
-async def _deliver_pending(context: Any, pending: PendingFanout) -> bool:
+async def _deliver_pending(
+    context: PluginContextProtocol,
+    pending: PendingFanout,
+) -> bool:
     """逐目标投递并持久确认；确认状态落盘失败时停止后续投递。"""
     path = _fanout_path(context)
     for target in pending.pending_targets():
@@ -546,7 +587,7 @@ async def _deliver_pending(context: Any, pending: PendingFanout) -> bool:
     return True
 
 
-async def scheduled_check(context: Any) -> Segments:
+async def scheduled_check(context: PluginContextProtocol) -> Segments:
     """串行执行定时检查，避免并发任务重复创建同一通知。"""
     async with _DELIVERY_LOCK:
         try:
@@ -561,7 +602,7 @@ async def scheduled_check(context: Any) -> Segments:
             return []
 
 
-async def _scheduled_check_locked(context: Any) -> Segments:
+async def _scheduled_check_locked(context: PluginContextProtocol) -> Segments:
     context.logger.info("CHIME 定时检查开始")
 
     # 有未完成 outbox 时只重试投递，不重新请求目录或生成另一份通知。

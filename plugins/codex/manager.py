@@ -18,7 +18,7 @@ from typing import Any, cast
 from core.atomic_store import AtomicJsonStore
 from core.clock import now_in_configured_timezone
 from core.dispatcher import AdjustableSemaphore
-from core.interfaces import ACTION_BYPASS_SINK_KEY, DeliveryTarget
+from core.interfaces import ACTION_BYPASS_SINK_KEY, DeliveryTarget, PluginContextProtocol
 from core.plugin_base import (
     build_action,
     image,
@@ -116,7 +116,9 @@ def _optional_positive_id(value: Any, name: str) -> int | None:
     return value
 
 
-def _load_config_generation(context: Any) -> tuple[CodexPluginConfig, int | None]:
+def _load_config_generation(
+    context: PluginContextProtocol,
+) -> tuple[CodexPluginConfig, int | None]:
     """同时读取配置及生成 config/secrets 两棵设置树的版本号。"""
     settings = context.get_settings_snapshot()
     revision = getattr(settings, "revision", None)
@@ -147,7 +149,7 @@ class RuntimeJob:
     prompt: str
     user_id: int | None
     group_id: int | None
-    context: Any
+    context: PluginContextProtocol
     delivery_targets: tuple[DeliveryTarget, ...] | None = None
     status: str = "queued"
     created_at: float = field(default_factory=time.time)
@@ -178,7 +180,7 @@ class _JobStart:
 class CodexQueueManager:
     def __init__(
         self,
-        context: Any,
+        context: PluginContextProtocol,
         *,
         config: CodexPluginConfig | None = None,
         runner: CodexRunner | None = None,
@@ -209,7 +211,7 @@ class CodexQueueManager:
 
     async def reconfigure(
         self,
-        context: Any,
+        context: PluginContextProtocol,
         config: CodexPluginConfig,
         *,
         settings_revision: int | None = None,
@@ -594,10 +596,10 @@ class CodexQueueManager:
                 self._remove_owned_path(child, root)
 
     def _append_history(self, label: str, payload: dict[str, Any]) -> None:
-        """Append one bounded event while preserving the manager transaction order.
+        """追加一条有界事件，并保持 manager 事务中的事件顺序。
 
-        Callers hold ``self.lock`` when event order matters; this is a short local append,
-        so keeping it synchronous avoids handing transaction fragments to an executor.
+        顺序敏感的调用方已经持有 ``self.lock``；这里仅做很短的本地追加，保持同步
+        可以避免把同一事务拆散后交给线程执行器。
         """
 
         event = {"ts": time.time(), **payload}
@@ -647,7 +649,7 @@ class CodexQueueManager:
         *,
         user_id: int | None,
         group_id: int | None,
-        context: Any,
+        context: PluginContextProtocol,
         metadata: dict[str, Any] | None = None,
         delivery_targets: tuple[DeliveryTarget, ...] | None = None,
         disk_usage_bytes: int,
@@ -789,7 +791,7 @@ class CodexQueueManager:
         *,
         user_id: int | None,
         group_id: int | None,
-        context: Any,
+        context: PluginContextProtocol,
         metadata: dict[str, Any] | None = None,
     ) -> str:
         prompt = prompt.strip()
@@ -1600,8 +1602,8 @@ class CodexQueueManager:
             try:
                 await asyncio.wait_for(asyncio.shield(worker), timeout=10)
             except (asyncio.TimeoutError, asyncio.CancelledError):
-                # shield keeps wait_for from cancelling the worker; the timeout path
-                # must therefore cancel it explicitly before waiting for cleanup.
+                # shield 会阻止 wait_for 自动取消 worker，因此超时分支必须显式取消，
+                # 再等待 worker 完成自己的资源收尾。
                 worker.cancel()
                 await asyncio.gather(worker, return_exceptions=True)
 
@@ -1654,14 +1656,6 @@ class CodexQueueManager:
             self.running.clear()
             self._save()
 
-    async def wait_idle(self) -> None:
-        while True:
-            async with self.lock:
-                tasks = [task for task in self.workers.values() if not task.done()]
-            if not tasks:
-                return
-            await asyncio.gather(*tasks, return_exceptions=True)
-
 
 _MANAGER: CodexQueueManager | None = None
 _MANAGER_LOCK: asyncio.Lock | None = None
@@ -1674,7 +1668,7 @@ def _manager_lock() -> asyncio.Lock:
     return _MANAGER_LOCK
 
 
-async def get_manager(context: Any) -> CodexQueueManager:
+async def get_manager(context: PluginContextProtocol) -> CodexQueueManager:
     global _MANAGER
     data_dir = Path(getattr(context, "data_dir", Path("data") / "codex")).resolve()
     async with _manager_lock():
@@ -1721,9 +1715,3 @@ async def shutdown_existing_manager() -> bool:
         if _MANAGER is manager:
             _MANAGER = None
         return True
-
-
-def reset_manager_for_tests() -> None:
-    global _MANAGER, _MANAGER_LOCK
-    _MANAGER = None
-    _MANAGER_LOCK = None

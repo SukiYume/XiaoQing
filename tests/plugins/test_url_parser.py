@@ -76,12 +76,6 @@ def network(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     return SimpleNamespace(page=page, image=image, validator=validator)
 
 
-def test_init_records_plugin_load(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level("INFO", logger=url_parser.__name__):
-        assert url_parser.init() is None
-    assert "已加载" in caplog.text
-
-
 def test_text_compaction_normalizes_whitespace_and_enforces_budget() -> None:
     assert url_parser._compact_text("  alpha\n beta  ", 20) == "alpha beta"
     assert url_parser._compact_text(None, 20) == ""

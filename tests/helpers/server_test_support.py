@@ -69,6 +69,27 @@ def _onebot_message_payload(text: str = "/help") -> dict[str, Any]:
     }
 
 
+def _pending_for_key(dispatcher: _InboundEventDispatcher, key: str) -> int:
+    """读取测试关注的通道占用数，不把测试探针暴露为生产接口。"""
+
+    lane = dispatcher._lanes.get(key)
+    if lane is None:
+        return 0
+    return len(lane.pending) + int(lane.running is not None)
+
+
+def _inflight_count(dispatcher: _InboundEventDispatcher) -> int:
+    """读取测试关注的已准入事件数。"""
+
+    return dispatcher._inflight
+
+
+def _lane_count(dispatcher: _InboundEventDispatcher) -> int:
+    """读取测试关注的当前通道数。"""
+
+    return len(dispatcher._lanes)
+
+
 @pytest.fixture
 def mock_handler():
     """Mock event handler"""
@@ -126,10 +147,13 @@ __all__ = (
     "WSServerHandshakeError",
     "_InboundEventDispatcher",
     "_MockRequest",
+    "_inflight_count",
+    "_lane_count",
     "_make_request_with_auth",
     "_make_request_without_auth",
     "_make_server",
     "_onebot_message_payload",
+    "_pending_for_key",
     "_parse_http_base",
     "_parse_non_negative_int",
     "_parse_positive_int",

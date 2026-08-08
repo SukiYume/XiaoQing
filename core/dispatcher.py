@@ -17,12 +17,14 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import math
 import re
 import time
 import uuid
 from collections import deque
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -34,6 +36,7 @@ from .interfaces import (
     AdminCheck,
     ConfigProvider,
     ContextFactory,
+    PluginGroupRole,
     PluginPrincipal,
     PluginRegistry,
 )
@@ -153,6 +156,39 @@ class AdjustableSemaphore:
 
 class _SessionGenerationChanged(Exception):
     """Abort a no-longer-current session transaction without publishing it."""
+
+
+def _build_failed_session_transactions(
+    session_manager: SessionManager,
+    *,
+    user_id: int,
+    group_id: int | None,
+    expected_generation: tuple[str, str],
+    close_callback: Callable[[Session], Awaitable[None]],
+) -> tuple[
+    Callable[[], Awaitable[bool | None]],
+    Callable[[], Awaitable[bool | None]],
+]:
+    """为一次失败会话冻结代际，并构造带/不带插件钩子的清理事务。"""
+
+    async def cleanup(session: Session) -> bool:
+        if (session.plugin_name, session.session_id) != expected_generation:
+            raise _SessionGenerationChanged
+        await close_callback(session)
+        return await session_manager.delete(user_id, group_id)
+
+    async def delete_without_hook(session: Session) -> bool:
+        if (session.plugin_name, session.session_id) != expected_generation:
+            raise _SessionGenerationChanged
+        return await session_manager.delete(user_id, group_id)
+
+    async def run_cleanup() -> bool | None:
+        return await session_manager.update(user_id, group_id, cleanup)
+
+    async def run_delete_without_hook() -> bool | None:
+        return await session_manager.update(user_id, group_id, delete_without_hook)
+
+    return run_cleanup, run_delete_without_hook
 
 
 # ============================================================
@@ -376,7 +412,7 @@ class Dispatcher:
         except ValidationError as exc:
             logger.warning("Invalid OneBot event: %s", exc)
             return None
-        return validated.model_dump()
+        return ValidatedInboundEvent(validated.model_dump())
 
     # ============================================================
     # 静音控制
@@ -602,15 +638,28 @@ class Dispatcher:
     # ============================================================
 
     def _principal_for_event(self, ctx: MessageContext) -> PluginPrincipal:
-        issuer = getattr(self.admin_check, "issue_user_principal", None)
+        # getattr_static 防止 Mock/动态代理凭空制造一个看似可调用的签发器属性。
+        declared_issuer = inspect.getattr_static(
+            self.admin_check,
+            "issue_user_principal",
+            None,
+        )
+        issuer = (
+            getattr(self.admin_check, "issue_user_principal", None)
+            if declared_issuer is not None
+            else None
+        )
         if callable(issuer):
-            return issuer(
+            principal = issuer(
                 ctx.event,
                 user_id=ctx.user_id,
                 group_id=ctx.group_id,
                 is_private=ctx.is_private,
             )
-        role = "unknown"
+            if not isinstance(principal, PluginPrincipal):
+                raise TypeError("issue_user_principal must return PluginPrincipal")
+            return principal
+        role: PluginGroupRole = "unknown"
         sender = ctx.event.get("sender")
         if ctx.group_id is not None and isinstance(sender, dict):
             sender_user_id = sender.get("user_id")
@@ -623,8 +672,13 @@ class Dispatcher:
             except (TypeError, ValueError):
                 sender_matches = False
             candidate_role = str(sender.get("role", "") or "").strip().lower()
-            if sender_matches and candidate_role in {"owner", "admin", "member"}:
-                role = candidate_role
+            if sender_matches:
+                if candidate_role == "owner":
+                    role = "owner"
+                elif candidate_role == "admin":
+                    role = "admin"
+                elif candidate_role == "member":
+                    role = "member"
         return PluginPrincipal(
             kind="user" if ctx.user_id is not None else "lifecycle",
             user_id=ctx.user_id,
@@ -742,6 +796,7 @@ class Dispatcher:
             return None
 
         user_id = ctx.user_id
+
         # A session can be replaced between this routing snapshot and the
         # transaction. Retry once instead of invoking it through a stale gate.
         for _attempt in range(2):
@@ -889,37 +944,13 @@ class Dispatcher:
                     component=f"dispatcher.session.{expected_plugin_name}",
                 )
 
-                async def cleanup_failed_session(
-                    session: Session,
-                    _expected_plugin_name: str = expected_plugin_name,
-                    _expected_session_id: str = expected_session_id,
-                ) -> bool:
-                    if (
-                        session.plugin_name != _expected_plugin_name
-                        or session.session_id != _expected_session_id
-                    ):
-                        raise _SessionGenerationChanged
-                    await close_plugin_session(session)
-                    return await session_manager.delete(user_id, ctx.group_id)
-
-                async def delete_failed_session_without_hook(
-                    session: Session,
-                    _expected_plugin_name: str = expected_plugin_name,
-                    _expected_session_id: str = expected_session_id,
-                ) -> bool:
-                    if (
-                        session.plugin_name != _expected_plugin_name
-                        or session.session_id != _expected_session_id
-                    ):
-                        raise _SessionGenerationChanged
-                    return await session_manager.delete(user_id, ctx.group_id)
-
-                async def run_cleanup() -> bool | None:
-                    return await session_manager.update(
-                        user_id,
-                        ctx.group_id,
-                        cleanup_failed_session,
-                    )
+                run_cleanup, run_delete_without_hook = _build_failed_session_transactions(
+                    session_manager,
+                    user_id=user_id,
+                    group_id=ctx.group_id,
+                    expected_generation=(expected_plugin_name, expected_session_id),
+                    close_callback=close_plugin_session,
+                )
 
                 try:
                     if plugin is not None:
@@ -936,11 +967,7 @@ class Dispatcher:
                     # A closed/poisoned plugin gate cannot run its close hook,
                     # but the same-generation session still must be removed.
                     try:
-                        await session_manager.update(
-                            user_id,
-                            ctx.group_id,
-                            delete_failed_session_without_hook,
-                        )
+                        await run_delete_without_hook()
                     except _SessionGenerationChanged:
                         pass
                 return response
@@ -1138,7 +1165,10 @@ class Dispatcher:
     def _get_smalltalk_provider(self) -> str:
         """获取配置的闲聊提供者"""
         plugins_config = self.config_provider.config.get("plugins", {})
-        return plugins_config.get("smalltalk_provider", "smalltalk")
+        if not isinstance(plugins_config, Mapping):
+            return "smalltalk"
+        provider = plugins_config.get("smalltalk_provider", "smalltalk")
+        return provider if isinstance(provider, str) and provider else "smalltalk"
 
     def _allow_plain_group_smalltalk(self, ctx: MessageContext) -> bool:
         if ctx.is_private or ctx.has_prefix or ctx.is_only_bot_name:

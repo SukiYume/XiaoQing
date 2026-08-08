@@ -1,3 +1,5 @@
+"""集中拥有插件级存储、会话状态、后台任务和生成配额。"""
+
 from __future__ import annotations
 
 import asyncio

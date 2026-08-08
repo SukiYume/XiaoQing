@@ -1,3 +1,5 @@
+"""把模型文本规范化为有界、可分段发送的聊天回复。"""
+
 from __future__ import annotations
 
 import re

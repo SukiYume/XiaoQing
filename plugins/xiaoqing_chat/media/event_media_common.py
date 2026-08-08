@@ -1,3 +1,5 @@
+"""集中处理媒体读取、解码预算、渲染缓存和降级描述。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -254,9 +256,10 @@ def _load_render_cache(
             continue
         except OSError:
             return {"items": {}}
-    payload = load_json(cache_path, default={"items": {}})
-    if not isinstance(payload, dict):
+    loaded: object = load_json(cache_path, default={"items": {}})
+    if not isinstance(loaded, dict):
         return {"items": {}}
+    payload = loaded
     items = payload.get("items")
     if not isinstance(items, dict):
         payload["items"] = {}
@@ -375,7 +378,7 @@ def _parse_file_uri(value: str) -> Path | None:
 
 
 def _looks_like_url(value: str) -> bool:
-    return value.startswith("http://") or value.startswith("https://")
+    return value.startswith(("http://", "https://"))
 
 
 def _looks_like_base64_source(value: str) -> bool:
@@ -407,9 +410,9 @@ def _looks_like_unusable_source_label(value: str) -> bool:
         return True
     if re.fullmatch(r"[0-9a-f]{24,64}", compact):
         return True
-    if re.fullmatch(r"[a-z0-9_-]{28,64}", lowered) and sum(ch.isdigit() for ch in compact) >= 6:
-        return True
-    return False
+    return bool(
+        re.fullmatch(r"[a-z0-9_-]{28,64}", lowered) and sum(ch.isdigit() for ch in compact) >= 6
+    )
 
 
 def _normalize_source_label(value: str) -> str:
@@ -439,7 +442,7 @@ def _guess_mime_type(path: Path) -> str:
 def _image_validation_limits(
     *, max_bytes: int, max_pixels: int, max_frames: int
 ) -> ImageValidationLimits:
-    """Build the shared image boundary from the plugin's media budgets."""
+    """从插件媒体预算构造统一的图片校验边界。"""
 
     return ImageValidationLimits(
         max_bytes=int(max_bytes),
@@ -502,7 +505,7 @@ def _animation_sample_indexes(frame_count: int) -> list[int]:
 
 
 def _render_animation_contact_sheet(payload: bytes) -> tuple[bytes, int]:
-    """Convert already-validated animation bytes into a bounded contact sheet."""
+    """把已验证的动画字节转换为有界联系表。"""
 
     from PIL import Image
 
@@ -663,8 +666,7 @@ def _normalize_media_label(value: str) -> str:
     if text.startswith("[") and text.endswith("]"):
         text = text[1:-1].strip()
     text = re.sub(r"^(QQ表情|表情包|图片)\s*[：:]", "", text)
-    text = re.sub(r"\s+", "", text)
-    return text
+    return re.sub(r"\s+", "", text)
 
 
 def _is_generic_media_label(value: str) -> bool:
@@ -717,7 +719,7 @@ def _looks_like_structured_media_text(value: str) -> bool:
         )
     ):
         return True
-    if any(
+    return any(
         phrase in text
         for phrase in (
             "用户给的例子",
@@ -726,9 +728,7 @@ def _looks_like_structured_media_text(value: str) -> bool:
             "只输出 JSON",
             "只输出JSON",
         )
-    ):
-        return True
-    return False
+    )
 
 
 def _can_use_raw_media_description(value: str) -> bool:
@@ -770,13 +770,11 @@ def _is_low_quality_rendered_media(
     ):
         return True
     source_label = _normalize_media_label(resolved.source_name)
-    if (
+    return bool(
         source_label
         and source_label == _normalize_media_label(rendered.description)
         and _is_generic_media_label(resolved.source_name)
-    ):
-        return True
-    return False
+    )
 
 
 def _build_fallback_render(
@@ -800,9 +798,8 @@ def _build_fallback_render(
         description = label or "一张聊天表情包"
     else:
         emotion_tags = ()
-        # A filename or transport summary is not visual evidence.  When the
-        # vision route fails, tell the reply model that the pixels were not
-        # understood instead of inviting it to guess from the source label.
+        # 文件名和传输摘要都不是视觉证据。视觉路由失败时明确标记未理解像素，
+        # 避免回复模型根据来源标签猜测图片内容。
         description = "图片内容暂时无法识别"
     marker = _build_marker(kind, description, emotion_tags)
     return RenderedMedia(

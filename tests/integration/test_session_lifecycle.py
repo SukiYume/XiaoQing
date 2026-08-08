@@ -233,29 +233,6 @@ class TestSessionLifecycle:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_list_user_sessions(self):
-        """Test listing all sessions for a user"""
-        manager = SessionManager()
-
-        # Create multiple sessions for same user
-        await manager.create(10001, None, "private")
-        await manager.create(10001, 100, "group1")
-        await manager.create(10001, 200, "group2")
-        await manager.create(10001, 300, "group3")
-        # Create sessions for other users
-        await manager.create(10002, None, "other_private")
-        await manager.create(10002, 100, "other_group")
-
-        # List user's sessions
-        user_sessions = await manager.list_user_sessions(10001)
-        assert len(user_sessions) == 4
-
-        # Verify each session
-        plugin_names = {s.plugin_name for s in user_sessions}
-        assert plugin_names == {"private", "group1", "group2", "group3"}
-
-    @pytest.mark.asyncio
-    @pytest.mark.integration
     async def test_bulk_cleanup_expired_sessions(self):
         """Test cleaning up multiple expired sessions"""
         manager = SessionManager(default_timeout=0.2)

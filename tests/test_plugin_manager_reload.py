@@ -1014,7 +1014,7 @@ async def test_recovery_init_that_resists_cancellation_keeps_exact_generation_ow
         assert recovery_gate is not old_gate
         assert recovery_gate.closed is True
         assert recovery_gate.drained is False
-        assert manager.is_quarantined("demo")
+        assert "demo" in manager._quarantined_plugins
         assert "demo" in manager._restart_required_plugins
         assert sys.modules["plugins.demo.main"] is old_module
         assert old_module in manager._owned_plugin_modules["demo"].values()

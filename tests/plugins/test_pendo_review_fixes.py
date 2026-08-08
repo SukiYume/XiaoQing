@@ -15,6 +15,7 @@ from tests.helpers.pendo_test_support import (
     _StubSimpleHandler,
     _StubTaskHandler,
     asyncio,
+    reset_pendo_runtime_config,
 )
 
 
@@ -39,7 +40,7 @@ class TestPendoReviewFixes:
     ):
         from plugins.pendo.config import PendoConfig, PendoRuntimeSettings
 
-        PendoConfig.reset_runtime_config()
+        reset_pendo_runtime_config()
         expected = PendoRuntimeSettings(
             web_enabled=False,
             web_host="localhost",
@@ -67,7 +68,7 @@ class TestPendoReviewFixes:
     def test_runtime_config_rejects_stale_and_conflicting_revisions(self):
         from plugins.pendo.config import PendoConfig
 
-        PendoConfig.reset_runtime_config()
+        reset_pendo_runtime_config()
         assert PendoConfig.configure({"web_port": 12_010}, settings_revision=10)
 
         assert not PendoConfig.configure({"web_port": 12_009}, settings_revision=9)
@@ -150,7 +151,7 @@ class TestPendoReviewFixes:
             lambda db, before, after: reconfigurations.append((db, before, after)),
         )
         monkeypatch.setattr(pendo_main, "cleanup_reminder_singleton", lambda: None)
-        PendoConfig.reset_runtime_config()
+        reset_pendo_runtime_config()
 
         pendo_main.init(context)
 
@@ -558,7 +559,9 @@ class TestPendoReviewFixes:
             assert Path(db.db_path) == context.data_dir / PendoConfig.DB_FILENAME
             assert context.data_dir.is_dir()
         finally:
-            db_ops.cleanup_db_singleton()
+            database = db_ops.detach_database_singleton()
+            if database is not None:
+                database.cleanup()
 
     def test_cached_empty_values_do_not_fall_through_to_sql(self, monkeypatch):
         from plugins.pendo.services.db import Database

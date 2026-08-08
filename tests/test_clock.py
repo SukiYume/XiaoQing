@@ -27,6 +27,7 @@ def test_now_in_configured_timezone_uses_settings_snapshot() -> None:
     assert value.tzinfo is not None
     assert value.utcoffset().total_seconds() == 0
 
+
 # ============================================================
 # IClock Protocol Tests
 # ============================================================

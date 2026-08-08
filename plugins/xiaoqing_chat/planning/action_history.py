@@ -1,3 +1,5 @@
+"""按会话持久化规划动作及其执行结果，供后续决策复盘。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -9,7 +11,7 @@ from typing import Any
 
 from core.plugin_base import load_json, write_json
 
-from ..store_base import delete_json_artifacts
+from ..store_base import coerce_finite_float, coerce_json_bool, delete_json_artifacts
 
 
 @dataclass(frozen=True)
@@ -115,29 +117,25 @@ class ActionHistoryStore:
             return None
         try:
             raw = load_json(path, default=None)
-            if not isinstance(raw, list):
-                return None
-            out: list[ActionRecord] = []
-            for item in raw:
-                if not isinstance(item, dict):
-                    continue
-                ts_val = item.get("ts", time.time())
-                try:
-                    ts = float(ts_val)
-                except (TypeError, ValueError):
-                    ts = time.time()
-                detail_raw = item.get("detail")
-                detail: dict[str, Any] = detail_raw if isinstance(detail_raw, dict) else {}
-                out.append(
-                    ActionRecord(
-                        ts=ts,
-                        local_target=str(item.get("local_target", "") or ""),
-                        action=str(item.get("action", "") or ""),
-                        reasoning=str(item.get("reasoning", "") or ""),
-                        detail=detail,
-                        executed=bool(item.get("executed", False)),
-                    )
-                )
-            return out
-        except Exception:
+        except OSError:
             return None
+        if not isinstance(raw, list):
+            return None
+
+        out: list[ActionRecord] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            detail_raw = item.get("detail")
+            detail: dict[str, Any] = detail_raw if isinstance(detail_raw, dict) else {}
+            out.append(
+                ActionRecord(
+                    ts=coerce_finite_float(item.get("ts"), default=time.time(), minimum=0.0),
+                    local_target=str(item.get("local_target", "") or ""),
+                    action=str(item.get("action", "") or ""),
+                    reasoning=str(item.get("reasoning", "") or ""),
+                    detail=detail,
+                    executed=coerce_json_bool(item.get("executed"), default=False),
+                )
+            )
+        return out

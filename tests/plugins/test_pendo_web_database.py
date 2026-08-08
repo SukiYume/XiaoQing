@@ -497,7 +497,7 @@ def test_rebuild_fts_index_repairs_missing_and_stale_rows():
 
 
 def test_schema_add_column_migration_only_suppresses_its_exact_duplicate():
-    from plugins.pendo.services.db import _execute_add_column_migration
+    from plugins.pendo.services.db_schema import _execute_add_column_migration
 
     conn = sqlite3.connect(":memory:")
     try:
@@ -559,10 +559,11 @@ def test_database_initialization_helpers_share_one_rollback_boundary(
     tmp_path: Path,
 ) -> None:
     from plugins.pendo.services import db as db_module
+    from plugins.pendo.services import db_schema as db_schema_module
 
     db_path = tmp_path / "pendo-init-rollback.db"
     db = db_module.Database(str(db_path))
-    original_create_event_schema = db_module._create_event_schema
+    original_create_event_schema = db_schema_module._create_event_schema
     helper_connection_ids: list[int] = []
 
     def fail_after_event_schema(cursor: sqlite3.Cursor) -> None:
@@ -576,7 +577,7 @@ def test_database_initialization_helpers_share_one_rollback_boundary(
         )
         raise RuntimeError("injected initialization failure")
 
-    monkeypatch.setattr(db_module, "_create_event_schema", fail_after_event_schema)
+    monkeypatch.setattr(db_schema_module, "_create_event_schema", fail_after_event_schema)
     try:
         with pytest.raises(RuntimeError, match="injected initialization failure"):
             db._init_database()

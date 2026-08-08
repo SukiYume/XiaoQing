@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from core import atomic_store
-from core.atomic_store import AtomicJsonStore, active_keyed_lock_count
+from core.atomic_store import AtomicJsonStore
 
 
 def test_atomic_json_store_recovers_last_valid_backup(tmp_path: Path) -> None:
@@ -46,7 +46,9 @@ def test_atomic_json_store_concurrent_writes_remain_complete(tmp_path: Path) -> 
         list(pool.map(write_value, range(200)))
 
     assert store.read({})["count"] in range(200)
-    assert active_keyed_lock_count() == 0
+    # 锁池是实现细节；回归测试直接检查私有状态，不为测试扩张生产 API。
+    with atomic_store._POOL_GUARD:
+        assert atomic_store._PATH_LOCKS == {}
 
 
 def test_atomic_json_store_write_with_backup_publishes_same_generation(tmp_path: Path) -> None:

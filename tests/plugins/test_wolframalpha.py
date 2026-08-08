@@ -94,8 +94,7 @@ class _Session:
         return _RawResponse(self.responses.pop(0))
 
 
-def test_init_and_manifest_contract() -> None:
-    assert wolframalpha.init() is None
+def test_manifest_contract() -> None:
     assert "--mode=step" in wolframalpha._HELP_TEXT
 
     manifest = json.loads(
@@ -115,6 +114,8 @@ def test_init_and_manifest_contract() -> None:
 def test_get_appid_reads_only_valid_secret_hierarchy() -> None:
     context = _context(" APP_123-xyz ")
     assert wolframalpha._get_appid(context) == "APP_123-xyz"
+    boundary_value = "x" * wolframalpha.MAX_APPID_LENGTH
+    assert wolframalpha._get_appid(_context(boundary_value)) == boundary_value
 
     for secrets in (None, [], {"plugins": []}, {"plugins": {"wolframalpha": []}}):
         context.secrets = secrets
@@ -123,7 +124,15 @@ def test_get_appid_reads_only_valid_secret_hierarchy() -> None:
 
 @pytest.mark.parametrize(
     "appid",
-    [None, 123, "", "with space", "bad\nvalue", "!invalid", "x" * 129],
+    [
+        None,
+        123,
+        "",
+        "with space",
+        "bad\nvalue",
+        "!invalid",
+        "x" * (wolframalpha.MAX_APPID_LENGTH + 1),
+    ],
     ids=["none", "non-string", "empty", "space", "control", "punctuation", "too-long"],
 )
 def test_get_appid_rejects_invalid_values(appid: object) -> None:
@@ -168,8 +177,8 @@ def test_text_response_rejects_ambiguous_or_invalid_encoding(response) -> None:
 async def test_handle_help_unknown_and_validation_errors() -> None:
     context = _context()
     assert "未知命令" in str(await wolframalpha.handle("other", "1+1", {}, context))
-    assert "万能计算器" in str(await wolframalpha.handle("alpha", "", {}, context))
-    assert "万能计算器" in str(await wolframalpha.handle("alpha", "--help", {}, context))
+    assert "Wolfram|Alpha" in str(await wolframalpha.handle("alpha", "", {}, context))
+    assert "Wolfram|Alpha" in str(await wolframalpha.handle("alpha", "--help", {}, context))
     assert "不接受额外参数" in str(await wolframalpha.handle("alpha", "--help extra", {}, context))
     assert "不支持的选项" in str(await wolframalpha.handle("alpha", "--z=1 --a=2 1+1", {}, context))
     assert "mode 仅支持" in str(

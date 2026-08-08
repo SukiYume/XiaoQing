@@ -36,16 +36,13 @@ def _request(
 
 
 @pytest.fixture(autouse=True)
-def _reset_browser_sessions() -> Iterator[None]:
+def _reset_browser_sessions(db: Database) -> Iterator[None]:
     from plugins.pendo.web import auth
 
-    with auth._AUTH_LOCK:
-        auth._LOGIN_CODES.clear()
-        auth._SESSIONS.clear()
+    auth.configure_auth_database(db)
     yield
     with auth._AUTH_LOCK:
-        auth._LOGIN_CODES.clear()
-        auth._SESSIONS.clear()
+        auth._AUTH_DATABASE = None
 
 
 @pytest.fixture
@@ -205,6 +202,6 @@ def test_demo_access_is_checked_once_per_user_resolution(
     session = create_web_session("demo-owner", demo=True)
     request = _request(cookies={deps.SESSION_COOKIE_NAME: session.session_id})
 
-    assert deps.get_current_session(request) is session
+    assert deps.get_current_session(request) == session
     assert deps.get_current_user(request, None) == "demo-owner"
     assert checked == [(pendo_db, "demo-owner")]

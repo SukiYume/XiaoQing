@@ -297,7 +297,7 @@ def _export_record_warning(record: JsonObject) -> str | None:
     if not normalizer:
         return None
     try:
-        normalizer(record, partial=True)
+        normalizer(record, True)
         return None
     except (ValueError, TypeError, KeyError):
         return f"{item_type}/{record.get('id', '?')}: 记录字段校验失败"

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Preview or synchronize the current XiaoQing working tree to production.
+# 预览或同步当前 XiaoQing 工作树到生产环境。
 
-set -euo pipefail
+set -Eeuo pipefail
 IFS=$'\n\t'
 
 readonly SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly REPO_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd -P)"
 
-# Production target. Edit these values here; they are intentionally not CLI or
-# environment parameters. REMOTE_HOST may be changed between secondary-production-host and production-host.
+# 生产目标集中写在这里，按用户习惯直接在脚本中切换 secondary-production-host / production-host；
+# 不把主机名、Python 或 Conda 环境变成额外命令行参数。
 readonly REMOTE_HOST="secondary-production-host"
 readonly REMOTE_DIR="/c/Users/testuser/Desktop/XiaoQing/XiaoQing_V3"
 
@@ -35,17 +35,16 @@ readonly -a REMOTE_REQUIRED_FILES=(
 
 usage() {
     cat <<'USAGE'
-Usage:
+用法：
   ./scripts/sync_to_remote.sh [--dry-run]
   ./scripts/sync_to_remote.sh --apply --confirm-delete
 
-The default is a dry run. Apply synchronizes the current working tree and
-the required arXiv runtime model, and deletes stale remote source files.
+默认只预览。--apply 会同步当前工作树和 arXiv 运行权重，并删除远端过期源码。
 
-Production config, secrets, Minecraft connection config, logs and runtime data
-are preserved. The script does not stop or start the production processes.
+生产配置、密钥、Minecraft 连接配置、日志和运行数据始终保留。
+脚本不会停止或启动生产进程。
 
-Edit REMOTE_HOST and REMOTE_DIR near the top of this file to change the target.
+如需切换目标，请直接修改脚本顶部的 REMOTE_HOST 和 REMOTE_DIR。
 USAGE
 }
 
@@ -53,6 +52,32 @@ die() {
     printf 'sync_to_remote.sh: %s\n' "$*" >&2
     exit 1
 }
+
+# Git Bash/Linux 通常提供 sha256sum，macOS 默认提供 shasum；OpenSSL 作为
+# 最后回退。统一只输出小写摘要，供同步后的远端逐文件校验使用。
+sha256_file() {
+    local digest output
+    local file_path="$1"
+
+    if command -v sha256sum >/dev/null 2>&1; then
+        output="$(sha256sum "$file_path")" || return
+        digest="${output%% *}"
+    elif command -v shasum >/dev/null 2>&1; then
+        output="$(shasum -a 256 "$file_path")" || return
+        digest="${output%% *}"
+    elif command -v openssl >/dev/null 2>&1; then
+        output="$(openssl dgst -sha256 "$file_path")" || return
+        digest="${output##* }"
+    else
+        return 127
+    fi
+
+    [[ "$digest" =~ ^[[:xdigit:]]{64}$ ]] || return 1
+    printf '%s' "$digest" | tr '[:upper:]' '[:lower:]'
+    printf '\n'
+}
+
+# ---------- 参数解析与本地门禁 ----------
 
 mode="dry-run"
 confirm_delete="false"
@@ -77,7 +102,8 @@ fi
 [[ "$(<"$REPO_DIR/$SENTINEL_NAME")" == "$SENTINEL_VALUE" ]] \
     || die "repository sentinel has an unexpected value"
 [[ -f "$REPO_DIR/.gitignore" ]] || die "repository .gitignore is missing"
-[[ "$REMOTE_HOST" =~ ^[A-Za-z0-9_.@:-]+$ ]] || die "unsafe remote host"
+[[ "$REMOTE_HOST" != -* && "$REMOTE_HOST" =~ ^[A-Za-z0-9_.@:-]+$ ]] \
+    || die "unsafe remote host"
 [[ "$REMOTE_DIR" =~ ^/[A-Za-z0-9._/-]+$ && "$REMOTE_DIR" != "/" ]] \
     || die "remote directory must be a safe non-root absolute path"
 [[ "$ARXIV_MODEL_DIR" =~ ^[A-Za-z0-9._/-]+$ \
@@ -87,10 +113,19 @@ fi
 command -v "$SSH_BIN" >/dev/null || die "ssh is required"
 command -v "$RSYNC_BIN" >/dev/null || die "rsync is required"
 
+required_checksums=()
 for required_file in "${REMOTE_REQUIRED_FILES[@]}"; do
-    [[ -s "$REPO_DIR/$required_file" ]] \
-        || die "required release file is missing or empty: $required_file"
+    local_file="$REPO_DIR/$required_file"
+    [[ -f "$local_file" && ! -L "$local_file" && -s "$local_file" ]] \
+        || die "required release file must be a non-empty regular file: $required_file"
+    if [[ "$mode" == "apply" ]]; then
+        checksum="$(sha256_file "$local_file")" \
+            || die "cannot calculate SHA-256 for required release file: $required_file"
+        required_checksums+=("$required_file" "$checksum")
+    fi
 done
+
+# ---------- 远端根目录门禁 ----------
 
 remote_root="$($SSH_BIN "$REMOTE_HOST" sh -s -- "$REMOTE_DIR" "$SENTINEL_NAME" "$SENTINEL_VALUE" <<'REMOTE'
 set -eu
@@ -103,6 +138,11 @@ REMOTE
 [[ "$remote_root" =~ ^/[A-Za-z0-9._/-]+$ && "$remote_root" != "/" ]] \
     || die "remote target validation failed"
 
+# ---------- rsync 规则与执行 ----------
+
+# `P` 只保护接收端删除，不能阻止同名本地文件上传。这里使用 `-` 排除规则，
+# 在未启用 --delete-excluded 时同时做到“发送端不上传、接收端不删除”。显式
+# 规则放在 .gitignore 之前，确保生产运行态目录不受本地忽略文件变化影响。
 rsync_args=(
     -a
     --checksum
@@ -111,23 +151,20 @@ rsync_args=(
     --delete-delay
     --delay-updates
     --partial
-    --filter='P /.git/***'
-    --filter='P /config/config.json'
-    --filter='P /config/secrets.json'
-    --filter='P /plugins/minecraft/config.json'
-    --filter='P /logs/***'
-    --filter='P /test_reports/runs/***'
-    --filter='P /data/***'
-    --filter='P /plugins/*/data/***'
-    --filter='P /plugins/*/cache/***'
-    --filter='P /plugins/*/backups/***'
-    --filter='P /plugins/*/exports/***'
+    --filter='- /.git/***'
+    --filter='- /config/config.json'
+    --filter='- /config/secrets.json'
+    --filter='- /plugins/minecraft/config.json'
+    --filter='- /logs/***'
+    --filter='- /test_reports/runs/***'
+    --filter='- /data/***'
+    --filter='- /plugins/*/data/***'
+    --filter='- /plugins/*/cache/***'
+    --filter='- /plugins/*/backups/***'
+    --filter='- /plugins/*/exports/***'
     --include='/.env.example'
     --include='/.env.*.example'
     --include="/$ARXIV_MODEL_DIR/***"
-    --exclude='/.git/'
-    --exclude='/plugins/*/backups/'
-    --exclude='/plugins/*/exports/'
     --exclude-from="$REPO_DIR/.gitignore"
 )
 
@@ -148,19 +185,62 @@ if [[ "$mode" == "dry-run" ]]; then
     exit 0
 fi
 
+# ---------- 同步后完整性校验 ----------
+
 "$SSH_BIN" "$REMOTE_HOST" sh -s -- \
-    "$remote_root" "${REMOTE_REQUIRED_FILES[@]}" <<'REMOTE'
+    "$remote_root" "${required_checksums[@]}" <<'REMOTE'
 set -eu
 target=$1
 shift
 cd "$target"
-for required_file do
-    if ! test -s "$required_file"; then
-        printf 'remote release file is missing or empty: %s\n' "$required_file" >&2
+
+sha256_file() {
+    file_path=$1
+    if command -v sha256sum >/dev/null 2>&1; then
+        output=$(sha256sum "$file_path") || return
+        digest=${output%% *}
+    elif command -v shasum >/dev/null 2>&1; then
+        output=$(shasum -a 256 "$file_path") || return
+        digest=${output%% *}
+    elif command -v openssl >/dev/null 2>&1; then
+        output=$(openssl dgst -sha256 "$file_path") || return
+        digest=${output##* }
+    else
+        return 127
+    fi
+    printf '%s' "$digest" | tr '[:upper:]' '[:lower:]'
+    printf '\n'
+}
+
+while test "$#" -gt 0; do
+    test "$#" -ge 2 || {
+        printf 'invalid remote verification arguments\n' >&2
+        exit 1
+    }
+    required_file=$1
+    expected_checksum=$2
+    shift 2
+
+    case "$required_file" in
+        /*|*..*)
+            printf 'unsafe remote release path: %s\n' "$required_file" >&2
+            exit 1
+            ;;
+    esac
+    if ! test -f "$required_file" || test -L "$required_file" || ! test -s "$required_file"; then
+        printf 'remote release file is not a non-empty regular file: %s\n' "$required_file" >&2
+        exit 1
+    fi
+    actual_checksum=$(sha256_file "$required_file") || {
+        printf 'cannot calculate remote SHA-256: %s\n' "$required_file" >&2
+        exit 1
+    }
+    if test "$actual_checksum" != "$expected_checksum"; then
+        printf 'remote release checksum mismatch: %s\n' "$required_file" >&2
         exit 1
     fi
 done
 REMOTE
 
-printf 'Sync complete; required remote code and arXiv model files are present.\n'
+printf 'Sync complete; required remote code and arXiv model SHA-256 checks passed.\n'
 printf 'Production processes were not stopped or started.\n'

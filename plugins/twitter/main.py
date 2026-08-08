@@ -146,18 +146,20 @@ _TRANSPORT_MANAGED_HEADERS = frozenset(
 _HELP_ALIASES = frozenset({"help", "帮助", "?"})
 _TWIMG_HELP = (
     "🎨 推特图片命令\n"
-    "━━━━━━━━━━━━━━━━━━\n"
-    "/twimg - 只读取本地缓存并随机发送一张图片\n"
-    "/twitter、/推特 - 同一命令的别名\n"
-    "/twimg help - 显示帮助\n\n"
+    "• /twimg\n"
+    "  只读取本地缓存并随机发送一张图\n"
+    "• /twitter、/推特\n"
+    "  /twimg 的别名\n"
+    "• /twimg help\n"
     "随机发送不会临时联网抓取；新图片由管理员手动抓取或每日定时任务补充。"
 )
 _TW_FETCH_HELP = (
     "🔄 抓取推特图片\n"
-    "━━━━━━━━━━━━━━━━━━\n"
-    "/tw_fetch - 在后台从配置账号抓取新图片\n"
-    "/抓取推特 - 同一命令的别名\n"
-    "/tw_fetch help - 显示帮助\n\n"
+    "• /tw_fetch\n"
+    "  后台抓取配置账号的新图片\n"
+    "• /抓取推特\n"
+    "  /tw_fetch 的别名\n"
+    "• /tw_fetch help\n"
     "此命令仅限管理员，提交后会立即返回，完成时另行通知；"
     "插件也会在每天 03:00 自动后台抓取。"
 )
@@ -211,18 +213,14 @@ _TIMELINE_FIELD_TOGGLES = {"withArticlePlainText": False}
 # 发送状态与整轮抓取分别串行化；普通随机取图仍可与抓取并行。
 _POSTED_LOCK = asyncio.Lock()
 _FETCH_LOCK = asyncio.Lock()
-# These handles are module-generation resources, not user data: shutdown() cancels
-# them before the generation is unloaded, while context.state remains for state
-# that must be shared by ordinary plugin events or persisted explicitly.
+# 这些句柄属于当前模块代次，不是用户数据：卸载代次前由 shutdown() 取消；
+# 只有普通插件事件需要共享或必须持久化的状态才应放入 context.state。
 _FETCH_TASK: asyncio.Task[_FetchOutcome] | None = None
 _MANUAL_NOTIFICATION_TASK: asyncio.Task[None] | None = None
 _POSTED_RESERVATIONS: dict[str, set[str]] = {}
 
 
-def init(context: Context | None = None) -> None:
-    """记录插件加载完成。"""
-
-    logger.info("Twitter 图片抓取插件已加载")
+# ──────────────────── 生命周期与配置 ────────────────────
 
 
 async def shutdown(context: Context | None = None) -> None:
@@ -242,6 +240,8 @@ async def shutdown(context: Context | None = None) -> None:
         await asyncio.gather(*tasks, return_exceptions=True)
     _FETCH_TASK = None
     _MANUAL_NOTIFICATION_TASK = None
+    async with _POSTED_LOCK:
+        _POSTED_RESERVATIONS.clear()
 
 
 def _get_config(context: Context) -> Mapping[str, object]:
@@ -365,6 +365,9 @@ def _get_max_pages(context: Context) -> int:
     if not isinstance(value, int) or isinstance(value, bool):
         return MAX_PAGES_TO_CHECK
     return max(1, min(value, MAX_PAGES_TO_CHECK))
+
+
+# ──────────────────── 时间线与媒体下载 ────────────────────
 
 
 def _is_allowed_media_url(url: str) -> bool:
@@ -666,6 +669,9 @@ async def _fetch_twitter_images(context: Context) -> int:
         return total_new
 
 
+# ──────────────────── 后台抓取任务 ────────────────────
+
+
 async def _run_background_fetch(context: Context) -> _FetchOutcome:
     """执行一轮抓取并把异常转换成可安全通知的结果。"""
 
@@ -790,6 +796,9 @@ def _start_manual_notification(
     )
     _MANUAL_NOTIFICATION_TASK = task
     task.add_done_callback(_clear_manual_notification)
+
+
+# ──────────────────── 本地缓存与发送回执 ────────────────────
 
 
 def _list_cached_image_names(save_dir: Path) -> list[str]:
@@ -942,6 +951,9 @@ async def _get_random_image(context: Context) -> DeliverySegments | None:
             unknown=commit_selection,
         )
         return DeliverySegments([image(str(selected_path))], receipt)
+
+
+# ──────────────────── 命令与调度入口 ────────────────────
 
 
 async def handle(

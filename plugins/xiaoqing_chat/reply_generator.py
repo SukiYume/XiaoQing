@@ -1,3 +1,5 @@
+"""构建、生成并审查一轮小青回复候选。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -111,6 +113,21 @@ _NO_QUESTION_REQUEST_RE = re.compile(
 )
 
 
+@dataclass(frozen=True)
+class ReplyDraft:
+    """已规范化、可进入审查和媒体合并阶段的回复草稿。"""
+
+    text: str
+    text_parts: tuple[str, ...]
+    parts: tuple[dict[str, Any], ...]
+    raw_text: str = ""
+    rewritten_text: str = ""
+    media_marker: ResolvedMarker | None = None
+
+
+# 路由、人物边界与确定性文本修复
+
+
 def _needs_reasoning_route(text: str) -> bool:
     """数值、单位和科学关系优先交给推理模型，普通闲聊继续使用低延迟 route。"""
 
@@ -176,7 +193,7 @@ def _current_opinion_fallback(text: str) -> str:
 
 
 def _concise_public_identity(identity: str) -> str:
-    """Return the public-facing lead of a persona, never its policy instructions."""
+    """只提取可公开的人物简介开头，绝不带出内部策略说明。"""
 
     lead = re.split(r"[；;\n]", str(identity or "").strip(), maxsplit=1)[0].strip()
     if len(lead) <= _PUBLIC_IDENTITY_FALLBACK_MAX_CHARS:
@@ -222,19 +239,13 @@ def _is_turn_stale(chat_id: str, event: dict[str, Any]) -> bool:
     if not local_id:
         return False
     try:
-        return _most_recent_user_local_id(chat_id) != local_id
+        latest_local_id = str(_most_recent_user_local_id(chat_id) or "")
+        return latest_local_id != local_id
     except Exception:
         return False
 
 
-@dataclass(frozen=True)
-class ReplyDraft:
-    text: str
-    text_parts: tuple[str, ...]
-    parts: tuple[dict[str, Any], ...]
-    raw_text: str = ""
-    rewritten_text: str = ""
-    media_marker: ResolvedMarker | None = None
+# 草稿规范化、媒体合并与审查输入
 
 
 def _log_prompt_audit_metadata(
@@ -423,6 +434,9 @@ class _RejectedCandidate:
     allow_after_regen_exhausted: bool = False
 
 
+# 上下文准备与单次候选请求
+
+
 def _load_reply_context_blocks(
     *,
     runtime: _ChatRuntime,
@@ -433,7 +447,7 @@ def _load_reply_context_blocks(
     text: str,
     unknown_words: list[str],
 ) -> tuple[str, str, str, str, str]:
-    """Build synchronous store-backed prompt blocks outside the event loop."""
+    """在事件循环外构建需要同步读取存储的提示词上下文块。"""
 
     profile_block = _build_profile_block(state, data_dir, chat_id, event)
     state.review_store.bind(data_dir)
@@ -456,15 +470,14 @@ def _load_reply_context_blocks(
 def _select_reaction_rules(
     runtime: _ChatRuntime, text: str
 ) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
-    keyword_rules: list[Any] = []
+    keyword_rules = [
+        rule
+        for rule in runtime.cfg.keyword_reaction.keyword_rules
+        if rule.keyword
+        and rule.keyword in text
+        and random.random() < max(0.0, min(1.0, rule.probability))
+    ]
     regex_rules: list[Any] = []
-    for rule in runtime.cfg.keyword_reaction.keyword_rules:
-        if (
-            rule.keyword
-            and rule.keyword in text
-            and random.random() < max(0.0, min(1.0, rule.probability))
-        ):
-            keyword_rules.append(rule)
     for rule in runtime.cfg.keyword_reaction.regex_rules:
         try:
             if (
@@ -736,6 +749,8 @@ async def _request_reply_candidate(
         max_tokens=request_max_tokens,
         **foreground.to_dict(),
     )
+    if not isinstance(raw, str):
+        raise TypeError("reply completion content must be a string")
     if _is_turn_stale(plan.chat_id, plan.event):
         _log_step(
             plan.context,

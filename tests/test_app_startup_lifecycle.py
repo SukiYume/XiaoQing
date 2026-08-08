@@ -592,7 +592,7 @@ async def test_startup_factory_reentrant_security_update_revokes_provisional_can
     session = MagicMock(close=AsyncMock())
     with (
         patch.object(app.config_manager, "snapshot", return_value=old_snapshot),
-        patch("core.app.aiohttp.ClientSession", return_value=session),
+        patch("core.app_lifecycle.aiohttp.ClientSession", return_value=session),
         patch("core.app_ingress.InboundManager.from_config", side_effect=build_candidate),
     ):
         await app.start()
@@ -629,13 +629,13 @@ async def test_startup_ownership_retry_is_bounded_and_rolls_back(
     app.plugin_manager.list_runtime_plugins = Mock(return_value=[])
     app._claim_or_reuse_startup_owner = Mock(return_value=None)
     session = MagicMock(close=AsyncMock())
-    caplog.set_level("ERROR", logger="core.app")
+    caplog.set_level("ERROR", logger="core.app_lifecycle")
 
     with (
-        patch("core.app.aiohttp.ClientSession", return_value=session),
-        patch("core.app._STARTUP_OWNERSHIP_MAX_ATTEMPTS", max_attempts),
-        patch("core.app._STARTUP_OWNERSHIP_TIMEOUT_SECONDS", timeout_seconds),
-        patch("core.app._STARTUP_OWNERSHIP_RETRY_BASE_DELAY_SECONDS", 0.0),
+        patch("core.app_lifecycle.aiohttp.ClientSession", return_value=session),
+        patch("core.app_lifecycle._STARTUP_OWNERSHIP_MAX_ATTEMPTS", max_attempts),
+        patch("core.app_lifecycle._STARTUP_OWNERSHIP_TIMEOUT_SECONDS", timeout_seconds),
+        patch("core.app_lifecycle._STARTUP_OWNERSHIP_RETRY_BASE_DELAY_SECONDS", 0.0),
     ):
         with pytest.raises(
             RuntimeError,
@@ -671,7 +671,9 @@ async def test_app_start_failure_rolls_back_every_resource_and_allows_retry(
     healthy_manager.stop = AsyncMock()
 
     with (
-        patch("core.app.aiohttp.ClientSession", side_effect=[first_session, second_session]),
+        patch(
+            "core.app_lifecycle.aiohttp.ClientSession", side_effect=[first_session, second_session]
+        ),
         patch(
             "core.app_ingress.InboundManager.from_config",
             side_effect=[failed_manager, healthy_manager],
@@ -723,7 +725,9 @@ async def test_timezone_reload_after_clean_start_rollback_is_used_on_retry(
     healthy_manager = MagicMock(start=AsyncMock(), stop=AsyncMock())
 
     with (
-        patch("core.app.aiohttp.ClientSession", side_effect=[first_session, second_session]),
+        patch(
+            "core.app_lifecycle.aiohttp.ClientSession", side_effect=[first_session, second_session]
+        ),
         patch(
             "core.app_ingress.InboundManager.from_config",
             side_effect=[failed_manager, healthy_manager],
@@ -777,7 +781,7 @@ async def test_start_rollback_cleanup_failure_retains_ownership_and_blocks_retry
     manager.stop = AsyncMock(side_effect=[RuntimeError("stop failed"), None])
 
     with (
-        patch("core.app.aiohttp.ClientSession", return_value=session),
+        patch("core.app_lifecycle.aiohttp.ClientSession", return_value=session),
         patch("core.app_ingress.InboundManager.from_config", return_value=manager),
     ):
         with pytest.raises(OSError, match="bind failed"):
@@ -816,7 +820,7 @@ async def test_concurrent_and_repeated_start_calls_create_one_runtime(temp_app_r
     session = MagicMock(close=AsyncMock())
 
     with (
-        patch("core.app.aiohttp.ClientSession", return_value=session) as session_cls,
+        patch("core.app_lifecycle.aiohttp.ClientSession", return_value=session) as session_cls,
         patch("core.app_ingress.InboundManager.from_config", return_value=None),
     ):
         first = asyncio.create_task(app.start())
@@ -857,7 +861,9 @@ async def test_start_cancellation_finishes_rollback_before_propagating(temp_app_
     second_session = MagicMock(close=AsyncMock())
 
     with (
-        patch("core.app.aiohttp.ClientSession", side_effect=[first_session, second_session]),
+        patch(
+            "core.app_lifecycle.aiohttp.ClientSession", side_effect=[first_session, second_session]
+        ),
         patch("core.app_ingress.InboundManager.from_config", return_value=None),
     ):
         task = asyncio.create_task(app.start())
@@ -891,7 +897,7 @@ async def test_start_fatal_is_task_safe_and_rolls_back(temp_app_root: Path):
     session = MagicMock(close=AsyncMock())
 
     with (
-        patch("core.app.aiohttp.ClientSession", return_value=session),
+        patch("core.app_lifecycle.aiohttp.ClientSession", return_value=session),
         patch("core.app_ingress.InboundManager.from_config", return_value=None),
     ):
         task = asyncio.create_task(app.start())
@@ -914,7 +920,7 @@ async def test_lifecycle_wrapper_immediate_cancel_does_not_leak_inner_coroutine(
     import gc
     import warnings
 
-    from core.app import _run_background_operation, _run_owned_operation
+    from core.app_lifecycle import _run_background_operation, _run_owned_operation
 
     factory_called = False
 
@@ -978,7 +984,7 @@ async def test_start_after_terminal_stop_is_rejected_and_stop_is_idempotent(
     session = MagicMock(close=AsyncMock())
 
     with (
-        patch("core.app.aiohttp.ClientSession", return_value=session),
+        patch("core.app_lifecycle.aiohttp.ClientSession", return_value=session),
         patch("core.app_ingress.InboundManager.from_config", return_value=None),
     ):
         await app.start()
@@ -1093,8 +1099,8 @@ async def test_start_failure_at_each_phase_rolls_back_and_allows_retry(
         inbound_side_effect = [None, None]
 
     with (
-        patch("core.app.aiohttp.ClientSession", side_effect=session_side_effect),
-        patch("core.app.OneBotHttpSender", side_effect=sender_side_effect),
+        patch("core.app_lifecycle.aiohttp.ClientSession", side_effect=session_side_effect),
+        patch("core.app_lifecycle.OneBotHttpSender", side_effect=sender_side_effect),
         patch("core.app_ingress.OneBotWsClient", side_effect=ws_side_effect),
         patch("core.app_ingress.InboundManager.from_config", side_effect=inbound_side_effect),
     ):
@@ -1139,7 +1145,7 @@ async def test_app_start_creates_shared_http_session_with_default_timeout(temp_a
         captured.update(kwargs)
         return mock_session
 
-    with patch("core.app.aiohttp.ClientSession", side_effect=_fake_client_session):
+    with patch("core.app_lifecycle.aiohttp.ClientSession", side_effect=_fake_client_session):
         await app.start()
         await app.stop()
 

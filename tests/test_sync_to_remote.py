@@ -71,7 +71,7 @@ def test_sync_defaults_to_preview_and_requires_explicit_delete_confirmation() ->
     assert "--apply requires --confirm-delete" in result.stderr
 
 
-def test_sync_validates_both_roots_and_protects_runtime_data() -> None:
+def test_sync_validates_both_roots_and_excludes_runtime_data_from_transfer() -> None:
     source = SCRIPT.read_text(encoding="utf-8")
 
     assert SENTINEL.read_text(encoding="utf-8") == "xiaoqing-sync-root-v1\n"
@@ -81,6 +81,7 @@ def test_sync_validates_both_roots_and_protects_runtime_data() -> None:
     assert 'test "$(cat -- "$target/$2")" = "$3"' in source
     assert "remote directory must be a safe non-root absolute path" in source
     for protected in (
+        "/.git/***",
         "/config/config.json",
         "/config/secrets.json",
         "/plugins/minecraft/config.json",
@@ -92,7 +93,9 @@ def test_sync_validates_both_roots_and_protects_runtime_data() -> None:
         "/plugins/*/backups/***",
         "/plugins/*/exports/***",
     ):
-        assert f"--filter='P {protected}'" in source
+        assert f"--filter='- {protected}'" in source
+    assert "--filter='P " not in source
+    assert not any(line.strip().startswith("--delete-excluded") for line in source.splitlines())
 
 
 def test_sync_target_is_edited_in_script_instead_of_passed_as_environment() -> None:
@@ -118,9 +121,23 @@ def test_sync_treats_the_arxiv_runtime_model_as_a_required_release_asset() -> No
         assert f'"$ARXIV_MODEL_DIR/{artifact}"' in source
     assert '--include="/$ARXIV_MODEL_DIR/***"' in source
     assert "--exclude='/plugins/arxiv_filter/best_model*'" not in source
-    assert "required release file is missing or empty" in source
-    assert "remote release file is missing or empty" in source
+    assert "required release file must be a non-empty regular file" in source
+    assert "remote release file is not a non-empty regular file" in source
+    assert '[[ -f "$local_file" && ! -L "$local_file" && -s "$local_file" ]]' in source
+    assert 'test -L "$required_file"' in source
     assert "--checksum" in source
+
+
+def test_sync_verifies_required_files_by_sha256_after_apply() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    assert "sha256sum" in source
+    assert "shasum -a 256" in source
+    assert "openssl dgst -sha256" in source
+    assert 'required_checksums+=("$required_file" "$checksum")' in source
+    assert '"$remote_root" "${required_checksums[@]}"' in source
+    assert "remote release checksum mismatch" in source
+    assert "SHA-256 checks passed" in source
 
 
 def test_sync_reuses_gitignore_without_dropping_its_include_exceptions() -> None:

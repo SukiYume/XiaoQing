@@ -114,9 +114,7 @@ class AppSchedulingMixin:
                 exc,
             )
             return
-        delivery_targets = tuple(
-            DeliveryTarget("group", value) for value in parsed_target_groups
-        )
+        delivery_targets = tuple(DeliveryTarget("group", value) for value in parsed_target_groups)
         principal = self.identity_service.issue(
             kind="scheduled_system",
             is_private=False,

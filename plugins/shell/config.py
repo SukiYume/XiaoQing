@@ -325,6 +325,6 @@ DANGEROUS_PATTERNS: tuple[str, ...] = (
     r"(?:^|\s)rm\s+-[^\s]*r[^\s]*f",
     r"(?:^|\s)mkfs(?:\.[^\s]+)?(?:\s|$)",
     r"(?:^|\s)dd\s+if=",
-    r":\(\)\{",  # Fork bomb
+    r":\(\)\{",  # Fork bomb（进程递归炸弹）
     r"(?:^|\s)chmod\s+777(?:\s|$)",
 )

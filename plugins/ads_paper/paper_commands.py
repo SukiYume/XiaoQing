@@ -1,14 +1,33 @@
 """ADS 论文搜索、引用、关系网络与相关论文命令。"""
 
-import logging
 from typing import Any
 
-from core.plugin_base import segments
+from core.plugin_base import Segments, segments
 
 from .ads_client import ADSClient, _validate_bibcode, paper_title
 from .constants import MAX_TITLE_DISPLAY_LENGTH
 
-logger = logging.getLogger(__name__)
+
+def _short_title(paper: dict[str, Any]) -> str:
+    """按移动端消息宽度截断标题，只在确实截断时添加省略号。"""
+
+    title = paper_title(paper, default="")
+    if len(title) <= MAX_TITLE_DISPLAY_LENGTH:
+        return title
+    return f"{title[:MAX_TITLE_DISPLAY_LENGTH]}…"
+
+
+def _relation_preview(papers: list[dict[str, Any]], heading: str) -> list[str]:
+    """格式化引用关系列表，统一标题和作者的显示边界。"""
+
+    if not papers:
+        return []
+    lines = [heading]
+    for index, paper in enumerate(papers, 1):
+        authors = ADSClient.format_authors(paper.get("author", []), max_authors=2)
+        year = paper.get("year", "")
+        lines.append(f"  {index}. {_short_title(paper)} - {authors} {year}")
+    return lines
 
 
 async def resolve_paper_id_to_bibcode(client: ADSClient, paper_id: str) -> str | None:
@@ -29,11 +48,16 @@ async def resolve_paper_id_to_bibcode(client: ADSClient, paper_id: str) -> str |
     # 使用 normalize 处理 URL，extract 处理纯 ID
     normalized_id = ADSClient._normalize_arxiv_id(paper_id)
     if normalized_id != paper_id or ADSClient.extract_arxiv_id(paper_id):
-        # 是 arXiv 相关的输入
         paper = await client.search_by_arxiv_id(paper_id)
-        if paper:
-            return paper.get("bibcode")
-        return None
+        if not paper:
+            return None
+        bibcode = paper.get("bibcode")
+        if not isinstance(bibcode, str):
+            return None
+        try:
+            return _validate_bibcode(bibcode)
+        except ValueError:
+            return None
 
     # Only valid ADS bibcodes may be embedded in ADS query syntax.
     try:
@@ -42,7 +66,7 @@ async def resolve_paper_id_to_bibcode(client: ADSClient, paper_id: str) -> str |
         return None
 
 
-async def cmd_search(client: ADSClient, args: str) -> list[dict[str, Any]]:
+async def cmd_search(client: ADSClient, args: str) -> Segments:
     if not args.strip():
         return segments("❌ 请提供搜索关键词\n用法: /paper search <关键词>")
 
@@ -58,7 +82,7 @@ async def cmd_search(client: ADSClient, args: str) -> list[dict[str, Any]]:
     return segments("\n".join(lines))
 
 
-async def cmd_author(client: ADSClient, args: str) -> list[dict[str, Any]]:
+async def cmd_author(client: ADSClient, args: str) -> Segments:
     if not args.strip():
         return segments("❌ 请提供作者姓名\n用法: /paper author <作者姓名>")
 
@@ -74,7 +98,7 @@ async def cmd_author(client: ADSClient, args: str) -> list[dict[str, Any]]:
     return segments("\n".join(lines))
 
 
-async def cmd_cite(client: ADSClient, args: str) -> list[dict[str, Any]]:
+async def cmd_cite(client: ADSClient, args: str) -> Segments:
     if not args.strip():
         return segments("❌ 请提供论文标识符\n用法: /paper cite <arXiv ID / arXiv链接 / Bibcode>")
 
@@ -92,7 +116,7 @@ async def cmd_cite(client: ADSClient, args: str) -> list[dict[str, Any]]:
     return segments("\n".join(lines))
 
 
-async def cmd_cite_network(client: ADSClient, args: str) -> list[dict[str, Any]]:
+async def cmd_cite_network(client: ADSClient, args: str) -> Segments:
     if not args.strip():
         return segments(
             "❌ 请提供论文标识符\n用法: /paper cite-network <arXiv ID / arXiv链接 / Bibcode>"
@@ -121,31 +145,17 @@ async def cmd_cite_network(client: ADSClient, args: str) -> list[dict[str, Any]]
         f"📚 引用论文数: {len(references)}\n",
     ]
 
-    if citations:
-        lines.append("🔗 被以下论文引用 (前5篇):")
-        for i, cit in enumerate(citations, 1):
-            cit_title = paper_title(cit, default="")
-            cit_authors = ADSClient.format_authors(cit.get("author", []), max_authors=2)
-            cit_year = cit.get("year", "")
-            lines.append(
-                f"  {i}. {cit_title[:MAX_TITLE_DISPLAY_LENGTH]}... - {cit_authors} {cit_year}"
-            )
+    citation_lines = _relation_preview(citations, "🔗 被以下论文引用 (前5篇):")
+    if citation_lines:
+        lines.extend(citation_lines)
         lines.append("")
 
-    if references:
-        lines.append("📖 引用了以下论文 (前5篇):")
-        for i, ref in enumerate(references, 1):
-            ref_title = paper_title(ref, default="")
-            ref_authors = ADSClient.format_authors(ref.get("author", []), max_authors=2)
-            ref_year = ref.get("year", "")
-            lines.append(
-                f"  {i}. {ref_title[:MAX_TITLE_DISPLAY_LENGTH]}... - {ref_authors} {ref_year}"
-            )
+    lines.extend(_relation_preview(references, "📖 引用了以下论文 (前5篇):"))
 
     return segments("\n".join(lines))
 
 
-async def cmd_related(client: ADSClient, args: str) -> list[dict[str, Any]]:
+async def cmd_related(client: ADSClient, args: str) -> Segments:
     if not args.strip():
         return segments(
             "❌ 请提供论文标识符\n用法: /paper related <arXiv ID / arXiv链接 / Bibcode>"
@@ -171,7 +181,7 @@ async def cmd_related(client: ADSClient, args: str) -> list[dict[str, Any]]:
     if not related:
         return segments("🔍 未找到相关论文")
 
-    lines = [f"🔗 与 '{title[:MAX_TITLE_DISPLAY_LENGTH]}...' 相关的论文:\n"]
+    lines = [f"🔗 与 '{_short_title(paper)}' 相关的论文:\n"]
     for i, p in enumerate(related, 1):
         lines.append(f"{i}. {client.format_paper_info(p)}\n")
 

@@ -12,6 +12,7 @@ import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any, Protocol
 
 from aiohttp import ContentTypeError, web
@@ -295,20 +296,6 @@ class _InboundEventDispatcher:
 
         return self._inflight == 0 and not any(not task.done() for task in self._workers)
 
-    @property
-    def inflight_count(self) -> int:
-        return self._inflight
-
-    @property
-    def lane_count(self) -> int:
-        return len(self._lanes)
-
-    def pending_for_key(self, key: str) -> int:
-        lane = self._lanes.get(key)
-        if lane is None:
-            return 0
-        return len(lane.pending) + int(lane.running is not None)
-
     async def start(self) -> None:
         loop = asyncio.get_running_loop()
         if self._accepting:
@@ -379,9 +366,7 @@ class _InboundEventDispatcher:
         self._inflight += 1
         assert self._drained is not None
         self._drained.clear()
-        result.add_done_callback(
-            lambda done, admitted=ticket: self._cancel_if_result_cancelled(admitted, done)
-        )
+        result.add_done_callback(partial(self._cancel_if_result_cancelled, ticket))
         self._schedule_lane(key, lane)
         return ticket
 
@@ -996,14 +981,14 @@ class InboundServer:
             self._schedule_ws_close(ws, reason=b"inbound response failed")
             return False
         if outcome.error is not None:
-            exc = outcome.error
-            if isinstance(exc, Exception):
-                logger.warning("WebSocket inbound response failed: %s", exc)
+            outcome_error = outcome.error
+            if isinstance(outcome_error, Exception):
+                logger.warning("WebSocket inbound response failed: %s", outcome_error)
             else:
                 logger.critical(
                     "Fatal WebSocket response failure was isolated: %s: %s",
-                    type(exc).__name__,
-                    exc,
+                    type(outcome_error).__name__,
+                    outcome_error,
                 )
             self._schedule_ws_close(ws, reason=b"inbound response failed")
             return False
@@ -1363,7 +1348,7 @@ class InboundServer:
                     try:
                         ticket = self._event_dispatcher.admit(
                             normalized,
-                            auth_guard=lambda state=connection_auth: self._auth_is_current(state),
+                            auth_guard=partial(self._auth_is_current, connection_auth),
                         )
                     except InboundEventOverloaded:
                         if not await self._send_ws_json_bounded(
@@ -1882,9 +1867,7 @@ class InboundServer:
             self._active_handler_tasks.add(task)
         try:
             guard = (
-                None
-                if auth_generation is None
-                else lambda state=auth_generation: self._auth_is_current(state)
+                None if auth_generation is None else partial(self._auth_is_current, auth_generation)
             )
             return await self._event_dispatcher.dispatch(payload, auth_guard=guard)
         finally:

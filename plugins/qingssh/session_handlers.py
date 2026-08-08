@@ -106,7 +106,7 @@ def _parse_export_environment(
     text: str,
     env_vars: dict[str, str],
 ) -> tuple[dict[str, str] | None, str | None]:
-    """Parse one export assignment and enforce the session environment budget."""
+    """解析一条 export 赋值，并执行会话环境变量数量与长度预算。"""
 
     export_match = _EXPORT_RE.fullmatch(text)
     if export_match is None:
@@ -613,8 +613,8 @@ async def _handle_connected_session(
             return segments("⚠️ 命令通道清理失败，且远端进程状态未知，请登录服务器确认")
         return segments("⏳ 有命令正在运行中...\n发送「停止」可强制结束，或等待命令完成。")
 
-    # Dispatcher strips the leading command prefix before handing input to an
-    # active session, so a user-facing ``/help`` arrives here as ``help``.
+    # Dispatcher 在把输入交给活跃会话前会移除命令前缀，因此用户发送的
+    # ``/help`` 到这里时已经是 ``help``。
     if text.casefold() in {"help", "/help", "ssh帮助", "插件帮助", "帮助"}:
         return segments(
             "🖥️ SSH 会话帮助\n"

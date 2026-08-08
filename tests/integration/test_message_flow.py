@@ -521,7 +521,7 @@ class TestMessageFlow:
 
         assert command_result is True
         assert session_result is None
-        assert session_manager.active_key_lock_count == 0
+        assert session_manager._key_lock_pool.active_key_count == 0
 
 
 class TestDispatcherIntegration:

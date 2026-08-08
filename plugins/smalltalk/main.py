@@ -51,6 +51,9 @@ class Context(Protocol):
     def get_settings_snapshot(self) -> PluginSettingsSnapshot: ...
 
 
+# ──────────────────── Core 边界与运行常量 ────────────────────
+
+
 segments = cast(Callable[[object], MessageSegments], _core_segments)
 _ensure_dir = cast(Callable[[Path], None], _core_ensure_dir)
 _load_json = cast(Callable[[Path, object], object], _core_load_json)
@@ -130,10 +133,7 @@ def _audit_snapshot(path_text: str) -> _AuditSnapshot:
     return _AuditSnapshot(Path(path_text))
 
 
-def init(context: Context | None = None) -> None:
-    """记录插件初始化完成。"""
-
-    logger.info("Smalltalk plugin initialized")
+# ──────────────────── 只喊名字的短回复 ────────────────────
 
 
 def _normalize_responses(value: object) -> list[str]:
@@ -190,19 +190,20 @@ def _positive_id(value: object) -> int | None:
 
 
 def _qa_scope(context: Context) -> str:
+    """返回群聊或私聊的独立 QA 作用域；缺失 actor 时失败关闭。"""
+
     group_id = _positive_id(getattr(context, "current_group_id", None))
     if group_id is not None:
         return f"group_{group_id}"
     user_id = _positive_id(getattr(context, "current_user_id", None))
     if user_id is not None:
         return f"private_{user_id}"
-    return "legacy"
+    raise ValueError("Smalltalk QA requires a positive user or group ID")
 
 
 def _qa_file(context: Context) -> Path:
     scope = _qa_scope(context)
-    filename = "QA.json" if scope == "legacy" else f"QA_{scope}.json"
-    return context.data_dir / filename
+    return context.data_dir / f"QA_{scope}.json"
 
 
 def _normalize_answers(value: object) -> list[str]:
@@ -332,6 +333,9 @@ async def get_qa_answer(context: Context, question: str) -> str | None:
     async with snapshot.lock:
         answers = (await _qa_data_locked(snapshot)).get(question)
         return random.choice(answers) if answers else None
+
+
+# ──────────────────── 管理员 QA 命令 ────────────────────
 
 
 def _bounded_lines(header: str, lines: Sequence[str]) -> str:
@@ -467,6 +471,9 @@ async def handle(
             logger=logger,
             component="smalltalk.handle",
         )
+
+
+# ──────────────────── Chat 与 Voice provider ────────────────────
 
 
 def _voice_probability(context: Context) -> float:

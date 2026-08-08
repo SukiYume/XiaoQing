@@ -75,13 +75,6 @@ def get_database(context: Any) -> Database:
     return _db_singleton
 
 
-def cleanup_db_singleton() -> None:
-    """关闭并清空数据库单例，即使关闭动作本身失败也不保留失效引用。"""
-    db = detach_database_singleton()
-    if db is not None:
-        db.cleanup()
-
-
 async def get_user_settings_bundle_map(
     user_ids: list[str], db: Database
 ) -> dict[str, dict[str, Any]]:
