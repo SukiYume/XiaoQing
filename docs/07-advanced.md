@@ -222,8 +222,7 @@ URL Parser 在 Dispatcher 的 URL 阶段接收单 URL 消息。处理流程：
 `plugins.smalltalk_provider` 选择全局闲聊插件。Provider 实现：
 
 ```python
-async def handle_smalltalk(text, event, context):
-    ...
+async def handle_smalltalk(text, event, context): ...
 ```
 
 Provider 可组合以下阶段：

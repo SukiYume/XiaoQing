@@ -280,8 +280,7 @@ Scheduler 在插件发布时校验 handler、cron、任务 ID 和投递目标。
 命令路由命中后调用：
 
 ```python
-async def handle(command, args, event, context):
-    ...
+async def handle(command, args, event, context): ...
 ```
 
 - `command`：Manifest 顶层稳定命令名。
@@ -318,8 +317,7 @@ words = tokenize(args, strict=True)
 当前会话键存在活动 Session 时调用：
 
 ```python
-async def handle_session(text, event, context, session):
-    ...
+async def handle_session(text, event, context, session): ...
 ```
 
 处理函数读取传入快照，并通过 `context.update_session()` 提交持久修改。
@@ -329,8 +327,7 @@ async def handle_session(text, event, context, session):
 插件作为 `smalltalk_provider` 时调用：
 
 ```python
-async def handle_smalltalk(text, event, context):
-    ...
+async def handle_smalltalk(text, event, context): ...
 ```
 
 ### `handle_url()`
@@ -338,8 +335,7 @@ async def handle_smalltalk(text, event, context):
 `url_parser` 类插件可提供：
 
 ```python
-async def handle_url(url, event, context):
-    ...
+async def handle_url(url, event, context): ...
 ```
 
 ### `call_bot_name_only()`
@@ -366,12 +362,10 @@ async def call_bot_name_only(context):
 ### 生命周期
 
 ```python
-async def init(context):
-    ...
+async def init(context): ...
 
 
-async def shutdown(context):
-    ...
+async def shutdown(context): ...
 ```
 
 `init()` 创建插件所有资源。`shutdown()` 按创建顺序的逆序关闭任务、连接、数据库和 Web 服务。插件代际发布会在初始化成功后提交入口。

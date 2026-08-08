@@ -412,13 +412,13 @@ from core.args import parse, parse_int, tokenize
 ```python
 args = parse('alpha "two words" --limit 5 -v')
 
-args.tokens       # ["alpha", "two words"]
-args.first        # "alpha"
-args.second       # "two words"
-args.get(0)       # "alpha"
-args.rest(1)      # "two words"
-args.opt("limit") # "5"
-args.has("v")    # True
+args.tokens  # ["alpha", "two words"]
+args.first  # "alpha"
+args.second  # "two words"
+args.get(0)  # "alpha"
+args.rest(1)  # "two words"
+args.opt("limit")  # "5"
+args.has("v")  # True
 ```
 
 支持单字母短选项、ASCII 长选项、`--key=value` 和 `--` 选项终止符。
@@ -445,8 +445,7 @@ async def handle(
     args: str,
     event: Event,
     context: PluginContextProtocol,
-) -> Segments | list[dict[str, Any]] | str | None:
-    ...
+) -> Segments | list[dict[str, Any]] | str | None: ...
 ```
 
 ### 会话
@@ -457,8 +456,7 @@ async def handle_session(
     event: Event,
     context: PluginContextProtocol,
     session: Session,
-) -> Segments | list[dict[str, Any]] | str | None:
-    ...
+) -> Segments | list[dict[str, Any]] | str | None: ...
 ```
 
 ### 闲聊
@@ -468,8 +466,7 @@ async def handle_smalltalk(
     text: str,
     event: Event,
     context: PluginContextProtocol,
-) -> Segments | list[dict[str, Any]] | str | None:
-    ...
+) -> Segments | list[dict[str, Any]] | str | None: ...
 ```
 
 ### URL
@@ -479,19 +476,16 @@ async def handle_url(
     url: str,
     event: Event,
     context: PluginContextProtocol,
-) -> Segments | list[dict[str, Any]] | str | None:
-    ...
+) -> Segments | list[dict[str, Any]] | str | None: ...
 ```
 
 ### 生命周期
 
 ```python
-async def init(context: PluginContextProtocol) -> None:
-    ...
+async def init(context: PluginContextProtocol) -> None: ...
 
 
-async def shutdown(context: PluginContextProtocol) -> None:
-    ...
+async def shutdown(context: PluginContextProtocol) -> None: ...
 ```
 
 ### 调度
@@ -499,8 +493,7 @@ async def shutdown(context: PluginContextProtocol) -> None:
 ```python
 async def scheduled_handler(
     context: PluginContextProtocol,
-) -> Segments | list[dict[str, Any]] | str | None:
-    ...
+) -> Segments | list[dict[str, Any]] | str | None: ...
 ```
 
 ---
