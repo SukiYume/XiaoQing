@@ -172,13 +172,15 @@ class TestPendoConfig:
 
         sys.path.insert(0, str(ROOT))
 
-        from plugins.pendo.main import HELP_SECTION_ORDER, _show_help
+        from plugins.pendo.main import HELP_MAP, _show_help
 
         overview = _show_help()
         assert "🧭 **可用命令**" in overview
         assert "/pendo export <文件名> [范围] [类型]" not in overview
 
-        help_text = "\n".join(_show_help(section) for section in HELP_SECTION_ORDER)
+        # 直接遍历生产帮助注册表的插入顺序，避免测试专用常量与真实章节
+        # 漂移；header 是标题文本，不是可单独渲染的帮助章节。
+        help_text = "\n".join(_show_help(section) for section in HELP_MAP if section != "header")
 
         expected_fragments = [
             # event
@@ -299,7 +301,7 @@ class TestPendoDocumentation:
                 "scheduled_delivery_outbox",
                 "pendo_prune_operation_logs",
                 '"web_session_cookie_secure": true',
-                "/pendo settings ai_consent on/off",
+                "/pendo settings ai_consent on|off",
                 "section=tasks|ledger|notes|all|auto",
                 "一次性登录码",
             ):

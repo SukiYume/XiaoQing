@@ -9,6 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, cast
 
+from core.interfaces import PluginContextProtocol
 from core.plugin_base import has_control_characters, image, segments, text
 from core.public_errors import public_error_response
 
@@ -93,7 +94,7 @@ def _load_stellar_rows_cached(
     )
 
 
-def load_stellar_colors(context: Any) -> tuple[StellarColor, ...]:
+def load_stellar_colors(context: PluginContextProtocol) -> tuple[StellarColor, ...]:
     plugin_dir = getattr(context, "plugin_dir", None)
     if not isinstance(plugin_dir, Path):
         raise ValueError("color plugin_dir must be a Path")
@@ -117,7 +118,7 @@ def _clean_spectral_term(value: str, *, allow_empty: bool) -> str:
 
 async def query_stellar_color(
     spec_type: str,
-    context: Any,
+    context: PluginContextProtocol,
     image_dir: Path,
 ) -> Messages:
     """查询光谱型；重复类型保持论文表顺序并采用第一条温度采样。"""
@@ -166,7 +167,7 @@ async def query_stellar_color(
         )
 
 
-def list_spectral_types(prefix: str, context: Any) -> Messages:
+def list_spectral_types(prefix: str, context: PluginContextProtocol) -> Messages:
     """按字面子串筛选并列出不重复的光谱型。"""
 
     try:

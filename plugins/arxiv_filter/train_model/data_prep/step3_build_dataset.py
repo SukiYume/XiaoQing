@@ -148,6 +148,22 @@ def ensure_positive_coverage(df_output: pd.DataFrame, positive_ids: set[str]) ->
     return coverage
 
 
+def _write_final_dataset(df_output: pd.DataFrame, output_path: Path) -> int:
+    """校验最终数据集后再发布，避免失败任务覆盖已有训练数据。"""
+
+    total = len(df_output)
+    if total == 0:
+        raise RuntimeError("过滤后训练数据集为空，拒绝写出无效文件")
+    required_columns = {"arXiv ID", "Title", "Abstract", "label"}
+    missing_columns = required_columns - set(df_output.columns)
+    if missing_columns:
+        missing = ", ".join(sorted(missing_columns))
+        raise ValueError(f"最终训练数据集缺少列: {missing}")
+
+    df_output.to_csv(output_path, index=False)
+    return total
+
+
 # ============================================================
 # arXiv API（用于补充获取缺失的正样本）
 # ============================================================
@@ -254,6 +270,8 @@ def main() -> None:
     df_pos = pd.read_csv(POSITIVE_IDS_CSV, dtype={"arXiv ID": str})
     df_pos["arXiv ID"] = df_pos["arXiv ID"].apply(clean_arxiv_id)
     positive_ids = set(df_pos["arXiv ID"])
+    if not positive_ids:
+        raise RuntimeError("正样本列表为空，拒绝构建只有负样本的训练数据集")
     print(f"正样本: {len(positive_ids)} 个唯一 ID")
 
     # ── 2. 从月度缓存读取论文 ─────────────────────────────────
@@ -397,14 +415,10 @@ def main() -> None:
         )
     )
 
-    # 保存
-    df_output.to_csv(OUTPUT_CSV, index=False)
-
+    # 所有数据质量检查通过后才覆盖最终 CSV。
+    total = _write_final_dataset(df_output, OUTPUT_CSV)
     n_pos = (df_output["label"] == 1).sum()
     n_neg = (df_output["label"] == 0).sum()
-    total = len(df_output)
-    if total == 0:
-        raise RuntimeError("过滤后训练数据集为空，拒绝写出无效文件")
 
     print(f"\n最终数据集: {total} 条")
     print(f"  正样本: {n_pos} ({n_pos / total * 100:.2f}%)")

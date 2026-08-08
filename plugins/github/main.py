@@ -94,18 +94,17 @@ _GITHUB_PROXY_REDIRECTS = RedirectPolicy(
 )
 _HISTORY_LOCK = threading.RLock()
 
-HELP_TEXT = """
-📈 **GitHub Trending**
+HELP_TEXT = """📈 GitHub Trending
 
-**用法：**
-• /github - 查看每日趋势
-• /github daily - 查看每日趋势
-• /github weekly - 查看每周趋势
-• /github monthly - 查看每月趋势
-• /github help - 显示帮助
+用法
+/github  查看每日趋势
+/github daily  查看每日趋势
+/github weekly  查看每周趋势
+/github monthly  查看每月趋势
+/github help  显示帮助
 
 每天 08:30 按调度器时区自动运行每日趋势任务。
-""".strip()
+"""
 
 
 class _GitHubContext(Protocol):
@@ -245,10 +244,12 @@ async def _download_trending_html(context: _GitHubContext, time_range: TimeRange
         )
         if fetched is None:
             return None
+        body = fetched.body
+        charset = fetched.charset
     else:
         if context.http_session is None:
             raise RuntimeError("GitHub proxy requires an HTTP session")
-        fetched = await aiohttp_request_bounded(
+        response = await aiohttp_request_bounded(
             context.http_session,
             "GET",
             url,
@@ -258,7 +259,9 @@ async def _download_trending_html(context: _GitHubContext, time_range: TimeRange
             headers=_REQUEST_HEADERS,
             request_kwargs={"proxy": proxy, "timeout": 15},
         )
-    return _decode_html(fetched.body, fetched.charset)
+        body = response.body
+        charset = response.charset
+    return _decode_html(body, charset)
 
 
 async def _fetch_trending(time_range: str, context: _GitHubContext) -> Segments:

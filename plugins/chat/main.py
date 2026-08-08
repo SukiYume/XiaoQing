@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from core.async_keyed_lock import AsyncKeyedLockPool
 from core.atomic_store import AtomicJsonStore, keyed_path_lock
@@ -62,15 +61,19 @@ _QUOTA_FILENAME = "chat_quota.json"
 _QUOTA_LOCK_KEY = "chat-quota"
 
 HELP_TEXT = """
-💬 **AI 对话助手**
+💬 AI 对话助手
 
 与 Coze 智能体进行单轮对话。
 
-**使用方法:**
-• /chat <问题> - 向 AI 提问
-• /gpt <问题> - 等价别名
-• /ai <问题> - 等价别名
-• /chat help - 显示帮助信息
+用法
+/chat <问题>
+
+别名
+/gpt <问题>
+/ai <问题>
+
+帮助
+/chat help
 
 每位用户和全局调用量均受每日额度限制；远端失败不会消耗额度。
 """.strip()
@@ -121,14 +124,13 @@ def _actor_identity(value: Any) -> tuple[str, str | int | None]:
     return _ANONYMOUS_ACTOR, None
 
 
-def _business_date(config: Mapping[str, Any]) -> str:
-    configured_timezone = config.get("timezone") if isinstance(config, Mapping) else None
-    timezone_name = configured_timezone if isinstance(configured_timezone, str) else "Asia/Shanghai"
-    try:
-        timezone = ZoneInfo(timezone_name)
-    except ZoneInfoNotFoundError:
-        timezone = ZoneInfo("Asia/Shanghai")
-    return datetime.now(timezone).date().isoformat()
+def _business_date(context: PluginContextProtocol) -> str:
+    """从 Core 的配置时钟读取业务日期，避免插件再次解析全局时区。"""
+
+    current = context.now()
+    if not isinstance(current, datetime) or current.utcoffset() is None:
+        raise ChatQuotaStateError("configured clock did not return an aware datetime")
+    return current.date().isoformat()
 
 
 @dataclass(slots=True)
@@ -157,7 +159,7 @@ class _QuotaReservation:
                 self.active = False
 
 
-def _quota_path(context: Any) -> Path:
+def _quota_path(context: PluginContextProtocol) -> Path:
     data_dir = getattr(context, "data_dir", None)
     if not isinstance(data_dir, (str, Path)):
         raise ChatQuotaStateError("chat quota data directory is unavailable")
@@ -214,8 +216,7 @@ def _rollback_quota_file(path: Path, window: str, actor: str) -> None:
     with keyed_path_lock(path):
         store = AtomicJsonStore(path)
         usage = _validated_usage(store.read(None, raise_on_error=True), window)
-        if usage["window"] != window:
-            return
+        # `_validated_usage` 已把其他日期映射为空的当前窗口；这里只需按计数决定是否回滚。
         users = usage["users"]
         actor_count = users.get(actor, 0)
         if actor_count <= 0 or usage["total"] <= 0:
@@ -229,14 +230,13 @@ def _rollback_quota_file(path: Path, window: str, actor: str) -> None:
 
 
 async def _reserve_quota(
-    context,
+    context: PluginContextProtocol,
     *,
     actor: str,
     per_user_limit: int,
     global_limit: int,
-    settings_config: Mapping[str, Any],
 ) -> _QuotaReservation:
-    window = _business_date(settings_config)
+    window = _business_date(context)
     path = _quota_path(context)
     async with _QUOTA_LOCKS.hold(_QUOTA_LOCK_KEY):
         try:
@@ -253,19 +253,6 @@ async def _reserve_quota(
         except (OSError, TypeError, ValueError, ChatQuotaStateError) as exc:
             raise ChatQuotaStateError("chat quota state cannot be read or written") from exc
     return _QuotaReservation(path, window, actor)
-
-
-# ============================================================
-# 配置管理
-# ============================================================
-
-
-def get_config(context: PluginContextProtocol) -> Mapping[str, Any]:
-    """读取当前插件可见的 Coze 密钥配置。"""
-
-    config = context.get_settings_snapshot().plugin_secrets("chat")
-
-    return config
 
 
 def validate_config(config: Mapping[str, Any]) -> tuple[bool, str | None]:
@@ -293,7 +280,7 @@ def validate_config(config: Mapping[str, Any]) -> tuple[bool, str | None]:
 
 
 async def _request_coze_json(
-    context,
+    context: PluginContextProtocol,
     method: str,
     url: str,
     *,
@@ -329,7 +316,7 @@ async def _request_coze_json(
 
 
 async def _request_coze_json_before_deadline(
-    context,
+    context: PluginContextProtocol,
     method: str,
     url: str,
     *,
@@ -389,7 +376,7 @@ def _chat_state(payload: Mapping[str, Any]) -> tuple[str, str, str] | None:
 
 
 async def _cancel_chat(
-    context,
+    context: PluginContextProtocol,
     *,
     chat_id: str,
     conversation_id: str,
@@ -423,7 +410,7 @@ async def _cancel_chat(
 
 
 async def _poll_coze_chat(
-    context,
+    context: PluginContextProtocol,
     state: tuple[str, str, str],
     *,
     headers: dict[str, str],
@@ -461,7 +448,7 @@ async def _poll_coze_chat(
 
 
 async def _fetch_coze_messages(
-    context,
+    context: PluginContextProtocol,
     *,
     chat_id: str,
     conversation_id: str,
@@ -494,7 +481,7 @@ async def _fetch_coze_messages(
 async def call_coze_api(
     query: str,
     config: Mapping[str, Any],
-    context,
+    context: PluginContextProtocol,
     actor_id: Any = None,
 ) -> dict[str, Any] | None:
     """通过 Coze v3 创建对话、轮询完成状态并读取回答消息。"""
@@ -601,7 +588,7 @@ async def call_coze_api(
         return None
 
 
-def extract_answer(data: Mapping[str, Any], context) -> str | None:
+def extract_answer(data: object, context: PluginContextProtocol) -> str | None:
     """返回第一条非空文本答案；忽略畸形或非答案消息。"""
 
     if not isinstance(data, Mapping):
@@ -634,12 +621,11 @@ def extract_answer(data: Mapping[str, Any], context) -> str | None:
 async def _answer_query(
     query: str,
     event: Mapping[str, Any],
-    context,
+    context: PluginContextProtocol,
     config: Mapping[str, Any],
     *,
     per_user_limit: int,
     global_limit: int,
-    settings_config: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
     """预留额度、调用远端并在任何失败路径回滚额度。"""
 
@@ -650,7 +636,6 @@ async def _answer_query(
             actor=actor,
             per_user_limit=per_user_limit,
             global_limit=global_limit,
-            settings_config=settings_config,
         )
     except ChatQuotaExceeded:
         return segments("❌ 今日 AI 对话额度已用完")
@@ -677,9 +662,9 @@ async def _answer_query(
 async def _run_chat_query(
     query: str,
     event: Mapping[str, Any],
-    context,
+    context: PluginContextProtocol,
 ) -> list[dict[str, Any]]:
-    """Validate one query and reserve its durable daily quota."""
+    """验证查询与配置，并在持久额度事务中调用远端。"""
 
     settings = context.get_settings_snapshot()
     config = settings.plugin_secrets("chat")
@@ -712,12 +697,16 @@ async def _run_chat_query(
         config,
         per_user_limit=per_user_limit,
         global_limit=global_limit,
-        settings_config=settings.config,
     )
 
 
-async def handle(command: str, args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
-    """命令处理入口"""
+async def handle(
+    command: str,
+    args: str,
+    event: dict[str, Any],
+    context: PluginContextProtocol,
+) -> list[dict[str, Any]]:
+    """处理框架命令；`command` 保留为统一插件入口契约。"""
     try:
         query = args.strip()
         if not query:
@@ -751,7 +740,7 @@ async def handle(command: str, args: str, event: dict[str, Any], context) -> lis
 async def reply(
     text: str,
     event: dict[str, Any],
-    context,
+    context: PluginContextProtocol,
 ) -> list[dict[str, Any]]:
     """供 smalltalk 声明调用的最小服务入口，不暴露命令或任意回调名。"""
 

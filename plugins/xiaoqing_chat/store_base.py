@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager
 from pathlib import Path
@@ -16,6 +17,54 @@ from core.atomic_store import AtomicJsonStore, keyed_path_lock
 from core.plugin_base import load_json, write_json
 
 T = TypeVar("T")
+
+
+def coerce_int(value: Any, *, default: int, minimum: int | None = None) -> int:
+    """读取 JSON 整数；布尔值和畸形值回退，必要时执行下界约束。"""
+
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, parsed) if minimum is not None else parsed
+
+
+def coerce_optional_int(value: Any) -> int | None:
+    """读取可空 JSON 整数；``null``、布尔值和畸形值均返回空。"""
+
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def coerce_finite_float(
+    value: Any,
+    *,
+    default: float,
+    minimum: float | None = None,
+) -> float:
+    """读取有限 JSON 浮点数；拒绝布尔值、非数和无穷值。"""
+
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(parsed) or (minimum is not None and parsed < minimum):
+        return default
+    return parsed
+
+
+def coerce_json_bool(value: Any, *, default: bool) -> bool:
+    """只接受真正的 JSON 布尔值，避免字符串 ``"false"`` 被当成真。"""
+
+    return value if isinstance(value, bool) else default
 
 
 class LockedDirtyStateMixin:
@@ -130,11 +179,11 @@ class AsyncKeyedStore(StoreBase, Generic[T], ABC):
     """统一把按会话键读写的同步存储桥接到异步调用方。"""
 
     @abstractmethod
-    def get(self, chat_id: str) -> T:
+    def get(self, _chat_id: str) -> T:
         """同步读取一个会话状态。"""
 
     @abstractmethod
-    def clear(self, chat_id: str) -> None:
+    def clear(self, _chat_id: str) -> None:
         """同步清除一个会话状态。"""
 
     async def get_async(self, chat_id: str) -> T:

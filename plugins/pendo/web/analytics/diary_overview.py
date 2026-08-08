@@ -191,9 +191,10 @@ def build_diary_overview(
     if today is None:
         today_day = now_in_timezone(owner_id, db).date()
     else:
-        today_day = _parse_day(today)
-        if today_day is None:
+        parsed_today = _parse_day(today)
+        if parsed_today is None:
             raise ValueError("today must be a valid YYYY-MM-DD string")
+        today_day = parsed_today
 
     queried_items = db.query_items_by_date_range(
         owner_id,

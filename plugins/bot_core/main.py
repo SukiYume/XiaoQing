@@ -9,9 +9,10 @@ import math
 import re
 import unicodedata
 from collections.abc import Mapping
-from typing import Any, NoReturn
+from typing import Any, NoReturn, cast
 
 from core.args import parse_int
+from core.interfaces import PluginContextProtocol, SecretAdminCapability
 from core.plugin_base import run_sync, segments
 from core.public_errors import public_error_response
 from core.router import CommandCatalogNode
@@ -50,7 +51,7 @@ _DURATION_PATTERN = re.compile(
 
 
 # ============================================================
-# 主处理函数
+# 通用数据保护与指标格式化
 # ============================================================
 
 
@@ -81,7 +82,9 @@ def mask_secret(value: Any) -> str:
         return "[error]"
 
 
-def _secret_admin_capability(context):
+def _secret_admin_capability(
+    context: PluginContextProtocol,
+) -> SecretAdminCapability | None:
     """仅为可信 Bot 管理员私聊返回全局密钥管理能力。"""
 
     principal = getattr(context, "principal", None)
@@ -94,7 +97,8 @@ def _secret_admin_capability(context):
         or capability is None
     ):
         return None
-    return capability
+    # 兼容测试替身和旧插件上下文的结构探测；通过上述门禁后只按窄能力协议使用。
+    return cast(SecretAdminCapability, capability)
 
 
 def _reject_json_constant(constant: str) -> NoReturn:
@@ -111,7 +115,7 @@ def _metric_number(
 ) -> float | None:
     """从指标映射读取有限非负数；损坏字段显示为未知而非零。"""
 
-    value = values.get(key, 0)
+    value = values.get(key)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     number = float(value)
@@ -124,7 +128,17 @@ def _format_metric(value: float | None, spec: str, suffix: str = "") -> str:
     return "n/a" if value is None else f"{format(value, spec)}{suffix}"
 
 
-async def handle(command: str, args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
+# ============================================================
+# 命令分发入口
+# ============================================================
+
+
+async def handle(
+    command: str,
+    args: str,
+    event: dict[str, Any],
+    context: PluginContextProtocol,
+) -> list[dict[str, Any]]:
     """命令处理入口
 
     Args:
@@ -187,7 +201,10 @@ async def handle(command: str, args: str, event: dict[str, Any], context) -> lis
 # ============================================================
 
 
-def _handle_help(keyword: str, context) -> list[dict[str, Any]]:
+def _handle_help(
+    keyword: str,
+    context: PluginContextProtocol,
+) -> list[dict[str, Any]]:
     """从 Core 的结构化快照查询、分页或导出完整命令目录。"""
 
     try:
@@ -279,8 +296,7 @@ def _parse_help_request(raw: str) -> tuple[str, str, int]:
     page = 1
     if tokens and tokens[0].casefold() in {"page", "list", "all", "页", "全部"}:
         action = tokens.pop(0).casefold()
-        # list/all are intentional aliases for the paged catalog view, so a
-        # following number is a page rather than a search term.
+        # list/all 是分页目录的兼容别名；其后的单个数字表示页码，而不是搜索词。
         implicit_page = parse_int(tokens[0], minimum=1) if len(tokens) == 1 else None
         if action == "page" or implicit_page is not None:
             if tokens:
@@ -761,33 +777,6 @@ def _format_search_results(
     return "\n".join(lines).rstrip()
 
 
-def _format_catalog_text(
-    nodes: tuple[CommandCatalogNode, ...],
-    *,
-    query: str,
-    page: int,
-    total_pages: int,
-    total_nodes: int,
-    plugin_count: int,
-) -> str:
-    """兼容旧的内部调用点；人类文本统一使用紧凑搜索结果格式。"""
-
-    del plugin_count
-    return _format_search_results(
-        nodes,
-        query=query,
-        page=page,
-        total_pages=total_pages,
-        total_nodes=total_nodes,
-    )
-
-
-def _format_catalog_node(node: CommandCatalogNode, *, detailed: bool) -> list[str]:
-    """兼容旧的内部调用点，并避免重新引入密集元数据列表。"""
-
-    return _format_command_detail(node).splitlines() if detailed else _format_menu_entries((node,))
-
-
 def _format_catalog_json(
     nodes: tuple[CommandCatalogNode, ...],
     query: str,
@@ -808,7 +797,7 @@ def _format_catalog_json(
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
-async def _handle_reload(context) -> list[dict[str, Any]]:
+async def _handle_reload(context: PluginContextProtocol) -> list[dict[str, Any]]:
     """重载配置，并在后台启动全量插件重载。
 
     Args:
@@ -840,7 +829,7 @@ async def _handle_reload(context) -> list[dict[str, Any]]:
         )
 
 
-def _handle_plugins(context) -> list[dict[str, Any]]:
+def _handle_plugins(context: PluginContextProtocol) -> list[dict[str, Any]]:
     """列出已加载的插件
 
     Args:
@@ -868,7 +857,11 @@ def _handle_plugins(context) -> list[dict[str, Any]]:
         )
 
 
-def _handle_mute(args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
+def _handle_mute(
+    args: str,
+    event: dict[str, Any],
+    context: PluginContextProtocol,
+) -> list[dict[str, Any]]:
     """处理闭嘴命令
 
     用法:
@@ -929,7 +922,10 @@ def _handle_mute(args: str, event: dict[str, Any], context) -> list[dict[str, An
         )
 
 
-def _handle_unmute(event: dict[str, Any], context) -> list[dict[str, Any]]:
+def _handle_unmute(
+    event: dict[str, Any],
+    context: PluginContextProtocol,
+) -> list[dict[str, Any]]:
     """处理说话命令
 
     Args:
@@ -966,7 +962,10 @@ def _handle_unmute(event: dict[str, Any], context) -> list[dict[str, Any]]:
         )
 
 
-async def _handle_set_secret(args: str, context) -> list[dict[str, Any]]:
+async def _handle_set_secret(
+    args: str,
+    context: PluginContextProtocol,
+) -> list[dict[str, Any]]:
     """设置 secrets 中的某个值
 
     用法:
@@ -1034,7 +1033,10 @@ async def _handle_set_secret(args: str, context) -> list[dict[str, Any]]:
         )
 
 
-def _handle_get_secret(args: str, context) -> list[dict[str, Any]]:
+def _handle_get_secret(
+    args: str,
+    context: PluginContextProtocol,
+) -> list[dict[str, Any]]:
     """查看 secrets 中的某个值
 
     用法:
@@ -1101,7 +1103,7 @@ def _handle_get_secret(args: str, context) -> list[dict[str, Any]]:
         )
 
 
-async def _handle_metrics(context) -> list[dict[str, Any]]:
+async def _handle_metrics(context: PluginContextProtocol) -> list[dict[str, Any]]:
     """查看运行指标
 
     Args:

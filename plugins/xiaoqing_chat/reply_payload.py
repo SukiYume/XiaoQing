@@ -1,3 +1,5 @@
+"""把规范化消息部件编排为展示文本和可投递批次。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

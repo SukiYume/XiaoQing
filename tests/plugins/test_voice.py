@@ -1,9 +1,8 @@
-"""验证 Voice 插件的配置、音频边界、缓存和命令契约。"""
+"""验证 Voice 插件的配置、TTS 音频边界、缓存和命令契约。"""
 
 from __future__ import annotations
 
 import json
-import wave
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -12,7 +11,6 @@ import pytest
 
 from core.bounded_http import BoundedHttpResponse, HttpStatusError
 from plugins.voice import main as voice
-from tests.aiohttp_fakes import bounded_json_response
 from tests.helpers.settings_snapshot import with_settings_reader
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -66,25 +64,7 @@ def _install_response(
     return calls
 
 
-def _write_wav(
-    path: Path,
-    *,
-    channels: int = 1,
-    sample_width: int = 2,
-    frame_rate: int = 16_000,
-    frame_count: int = 160,
-) -> None:
-    """写入参数可控的未压缩 WAV。"""
-
-    with wave.open(str(path), "wb") as wav:
-        wav.setnchannels(channels)
-        wav.setsampwidth(sample_width)
-        wav.setframerate(frame_rate)
-        wav.writeframes(b"\0" * channels * sample_width * frame_count)
-
-
-def test_init_and_static_metadata() -> None:
-    assert voice.init() is None
+def test_static_metadata() -> None:
     assert "语音" in voice._HELP_TEXT
 
     manifest = json.loads((ROOT / "plugins" / "voice" / "plugin.json").read_text(encoding="utf-8"))
@@ -308,141 +288,6 @@ async def test_tts_handles_transport_failures(
     assert await voice.text_to_speech("hello", _context(tmp_path)) is None
 
 
-def test_valid_wav_is_read_once_and_returned(tmp_path: Path) -> None:
-    path = tmp_path / "valid.wav"
-    _write_wav(path)
-    assert voice._read_valid_wav(path) == path.read_bytes()
-
-
-@pytest.mark.parametrize(
-    "wav_options",
-    [
-        {"channels": 2},
-        {"sample_width": 1},
-        {"frame_rate": 8_000},
-        {"frame_count": 0},
-        {"frame_count": voice.MAX_AUDIO_SECONDS * 16_000 + 1},
-    ],
-)
-def test_wav_reader_rejects_unsupported_format(tmp_path: Path, wav_options: dict) -> None:
-    path = tmp_path / "unsupported.wav"
-    _write_wav(path, **wav_options)
-    assert voice._read_valid_wav(path) is None
-
-
-def test_wav_reader_rejects_missing_corrupt_truncated_and_oversized_files(tmp_path: Path) -> None:
-    assert voice._read_valid_wav(tmp_path / "missing.wav") is None
-
-    empty = tmp_path / "empty.wav"
-    empty.write_bytes(b"")
-    assert voice._read_valid_wav(empty) is None
-
-    corrupt = tmp_path / "corrupt.wav"
-    corrupt.write_bytes(b"not-a-wave")
-    assert voice._read_valid_wav(corrupt) is None
-
-    truncated = tmp_path / "truncated.wav"
-    _write_wav(truncated)
-    truncated.write_bytes(truncated.read_bytes()[:-1])
-    assert voice._read_valid_wav(truncated) is None
-
-    oversized = tmp_path / "oversized.wav"
-    oversized.write_bytes(b"x" * (voice.MAX_AUDIO_BYTES + 1))
-    assert voice._read_valid_wav(oversized) is None
-
-
-def test_wav_reader_handles_symlink_and_open_failure() -> None:
-    symlink = MagicMock()
-    symlink.is_symlink.return_value = True
-    assert voice._read_valid_wav(symlink) is None
-
-    unreadable = MagicMock()
-    unreadable.is_symlink.return_value = False
-    unreadable.is_file.return_value = True
-    unreadable.open.side_effect = OSError("unreadable")
-    assert voice._read_valid_wav(unreadable) is None
-
-
-@pytest.mark.asyncio
-async def test_stt_validates_wav_and_parses_bounded_result(monkeypatch, tmp_path: Path) -> None:
-    context = _context(
-        tmp_path,
-        {**VALID_CONFIG, "region": "eastasia", "proxy": "http://proxy.test:8080"},
-    )
-    audio = tmp_path / "input.wav"
-    _write_wav(audio)
-    calls = _install_response(
-        monkeypatch,
-        bounded_json_response(
-            {"NBest": [{"Lexical": " local speech ", "Display": " Local speech. "}]},
-            url="https://voice.test/",
-        ),
-    )
-
-    result = await voice.speech_to_text(str(audio), context)
-
-    assert result == ("local speech", "Local speech.")
-    _, method, url, kwargs = calls[0]
-    assert method == "POST"
-    assert url.startswith("https://eastasia.stt.speech.microsoft.com/")
-    assert kwargs["limits"] is voice._STT_BODY_LIMITS
-    assert kwargs["mime_policy"] is voice._STT_JSON_MIME
-    assert kwargs["request_kwargs"]["proxy"] == "http://proxy.test:8080"
-    assert kwargs["request_kwargs"]["timeout"] is voice._AZURE_API_TIMEOUT
-    assert kwargs["request_kwargs"]["data"] == audio.read_bytes()
-
-
-@pytest.mark.asyncio
-async def test_stt_rejects_missing_key_and_bad_wav_before_http(monkeypatch, tmp_path: Path) -> None:
-    request = AsyncMock()
-    monkeypatch.setattr(voice, "aiohttp_request_bounded", request)
-    invalid = tmp_path / "invalid.wav"
-    invalid.write_bytes(b"bad")
-
-    assert await voice.speech_to_text(str(invalid), _context(tmp_path, {})) is None
-    assert await voice.speech_to_text(str(invalid), _context(tmp_path)) is None
-    request.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "payload",
-    [
-        [],
-        {"NBest": []},
-        {"NBest": [1]},
-        {"NBest": [{"Lexical": 1, "Display": "text"}]},
-        {"NBest": [{"Lexical": "", "Display": "text"}]},
-        {"NBest": [{"Lexical": "x" * (voice.MAX_STT_RESULT_LENGTH + 1), "Display": "x"}]},
-    ],
-)
-async def test_stt_rejects_malformed_or_unbounded_results(
-    monkeypatch,
-    tmp_path: Path,
-    payload: object,
-) -> None:
-    monkeypatch.setattr(voice, "_read_valid_wav", lambda _path: b"wav")
-    _install_response(
-        monkeypatch,
-        bounded_json_response(payload, url="https://voice.test/"),
-    )
-    assert await voice.speech_to_text("input.wav", _context(tmp_path)) is None
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("exception", [HttpStatusError(503), RuntimeError("network failed")])
-async def test_stt_handles_transport_failures(
-    monkeypatch, tmp_path: Path, exception: Exception
-) -> None:
-    monkeypatch.setattr(voice, "_read_valid_wav", lambda _path: b"wav")
-
-    async def fail(*_args, **_kwargs):
-        raise exception
-
-    monkeypatch.setattr(voice, "aiohttp_request_bounded", fail)
-    assert await voice.speech_to_text("input.wav", _context(tmp_path)) is None
-
-
 @pytest.mark.asyncio
 async def test_handle_covers_help_empty_unknown_success_and_failure(
     monkeypatch, tmp_path: Path
@@ -452,7 +297,7 @@ async def test_handle_covers_help_empty_unknown_success_and_failure(
     audio = tmp_path / "answer.mp3"
     audio.write_bytes(b"ID3audio")
 
-    assert "语音功能" in str(await voice.handle("tts", "帮助", event, context))
+    assert "文字转语音" in str(await voice.handle("tts", "帮助", event, context))
     assert "请输入" in str(await voice.handle("tts", "", event, context))
     assert "未知" in str(await voice.handle("other", "x", event, context))
 

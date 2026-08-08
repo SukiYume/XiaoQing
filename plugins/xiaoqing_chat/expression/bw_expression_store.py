@@ -1,3 +1,5 @@
+"""原子持久化已学习表达，并合并多实例的增量更新。"""
+
 from __future__ import annotations
 
 import time
@@ -8,7 +10,7 @@ from pathlib import Path
 
 from core.atomic_store import keyed_path_lock
 
-from ..store_base import StoreBase
+from ..store_base import StoreBase, coerce_finite_float, coerce_int, coerce_json_bool
 
 
 @dataclass
@@ -44,47 +46,45 @@ class ExpressionStore(StoreBase):
     def _read_records(self) -> list[ExpressionRecord]:
         try:
             raw = self._load_json_from_path_parts("bw_learner", "expressions.json", default=[])
-            if not isinstance(raw, list):
-                return []
-            out: list[ExpressionRecord] = []
-            for item in raw:
-                if not isinstance(item, dict):
-                    continue
-                eid = str(item.get("expression_id", "") or "").strip()
-                chat_id = str(item.get("chat_id", "") or "").strip()
-                situation = str(item.get("situation", "") or "").strip()
-                style = str(item.get("style", "") or "").strip()
-                if not eid or not chat_id or not situation or not style:
-                    continue
-                content_list = item.get("content_list", [])
-                if not isinstance(content_list, list):
-                    content_list = []
-                count = int(item.get("count", 1) or 1)
-                last_active_time = float(item.get("last_active_time", 0.0) or 0.0)
-                checked = bool(item.get("checked", False))
-                rejected = bool(item.get("rejected", False))
-                modified_by = str(item.get("modified_by", "ai") or "ai")
-                out.append(
-                    ExpressionRecord(
-                        expression_id=eid,
-                        chat_id=chat_id,
-                        situation=situation,
-                        style=style,
-                        content_list=[
-                            str(x).strip()
-                            for x in content_list
-                            if isinstance(x, str) and str(x).strip()
-                        ],
-                        count=count,
-                        last_active_time=last_active_time,
-                        checked=checked,
-                        rejected=rejected,
-                        modified_by=modified_by,
-                    )
-                )
-            return out
-        except Exception:
+        except OSError:
             return []
+        if not isinstance(raw, list):
+            return []
+
+        out: list[ExpressionRecord] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            eid = str(item.get("expression_id", "") or "").strip()
+            chat_id = str(item.get("chat_id", "") or "").strip()
+            situation = str(item.get("situation", "") or "").strip()
+            style = str(item.get("style", "") or "").strip()
+            if not eid or not chat_id or not situation or not style:
+                continue
+            content_list = item.get("content_list", [])
+            if not isinstance(content_list, list):
+                content_list = []
+            out.append(
+                ExpressionRecord(
+                    expression_id=eid,
+                    chat_id=chat_id,
+                    situation=situation,
+                    style=style,
+                    content_list=[
+                        str(value).strip()
+                        for value in content_list
+                        if isinstance(value, str) and value.strip()
+                    ],
+                    count=coerce_int(item.get("count"), default=1, minimum=0),
+                    last_active_time=coerce_finite_float(
+                        item.get("last_active_time"), default=0.0, minimum=0.0
+                    ),
+                    checked=coerce_json_bool(item.get("checked"), default=False),
+                    rejected=coerce_json_bool(item.get("rejected"), default=False),
+                    modified_by=str(item.get("modified_by", "ai") or "ai"),
+                )
+            )
+        return out
 
     def load(self) -> list[ExpressionRecord]:
         path = self._path()

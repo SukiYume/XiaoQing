@@ -289,11 +289,13 @@ _PLUGIN_NAMESPACE_GUARD = _PluginNamespaceTombstone()
 
 
 def _install_namespace_tombstone_locked(
-    plugin_name: str,
-    *,
-    replace: object | None = None,
+    *, replace: object | None = None
 ) -> _PluginNamespaceTombstone:
-    """Install the aggregate deny finder before removing a generation finder."""
+    """安装覆盖整个 ``plugins`` 命名空间的拒绝查找器。
+
+    调用方必须持有插件导入锁。``replace`` 指向即将失效的代际查找器；先装聚合墓碑
+    再移除它，确保两步之间不存在可被普通 ``PathFinder`` 越过的导入窗口。
+    """
 
     if _meta_path_identity_index(_PLUGIN_NAMESPACE_GUARD) is None:
         sys.meta_path.insert(0, _PLUGIN_NAMESPACE_GUARD)

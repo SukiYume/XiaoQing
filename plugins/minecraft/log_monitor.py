@@ -106,7 +106,7 @@ class LogMonitor:
         if self.state_path is None or not self.state_path.is_file():
             return None
         try:
-            state = AtomicJsonStore(self.state_path).read({}, raise_on_error=True)
+            state: object = AtomicJsonStore(self.state_path).read({}, raise_on_error=True)
             if not isinstance(state, dict) or state.get("version") != 1:
                 raise ValueError("Minecraft cursor state version is invalid")
             position = state.get("position")

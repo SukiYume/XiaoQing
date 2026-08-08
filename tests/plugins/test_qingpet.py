@@ -4,7 +4,8 @@ from datetime import datetime, timedelta
 import pytest
 
 from plugins.qingpet.services.admin_service import AdminService
-from plugins.qingpet.services.database import Database, MinigameOutcome
+from plugins.qingpet.services.database import MinigameOutcome
+from plugins.qingpet.services.database_schema import _safe_add_column
 from plugins.qingpet.services.economy_service import EconomyService
 from plugins.qingpet.services.item_service import ItemService
 from plugins.qingpet.services.pet_service import PetService
@@ -314,7 +315,7 @@ def test_safe_add_column_rejects_invalid_identifiers_without_executing_sql():
             self.called = True
 
     cursor = _DummyCursor()
-    Database._safe_add_column(cursor, "users;DROP TABLE users", "hacked", "INTEGER DEFAULT 0")
+    _safe_add_column(cursor, "users;DROP TABLE users", "hacked", "INTEGER DEFAULT 0")
     assert cursor.called is False
 
 

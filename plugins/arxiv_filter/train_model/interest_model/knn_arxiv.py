@@ -20,8 +20,8 @@ arXiv k-NN 兴趣模型训练脚本
 
 from __future__ import annotations  # noqa: I001 - torch must load before NumPy on Windows
 
-import json
 import hashlib
+import json
 import math
 import re
 import sys
@@ -73,9 +73,8 @@ class KNNConfig:
     # 训练产物固定写入运行时加载器所使用的 best_model_knn 目录。
     output_dir: Path = _PLUGIN_DIR / "best_model_knn"
 
-    # ★ 新增：embedding 缓存目录（与 CSV 同目录，按 encoder 短名区分）
-    #   不同 encoder 不会互相覆盖；CSV 行数变化时自动失效
-    emb_cache_dir: Path = output_dir / "emb_cache"
+    # 默认跟随 output_dir；显式指定时可把大体积缓存放到其他磁盘。
+    emb_cache_dir: Path | None = None
 
     encoder_name: str = "sentence-transformers/all-mpnet-base-v2"
 
@@ -108,6 +107,8 @@ class KNNConfig:
     def __post_init__(self) -> None:
         """在耗时编码开始前校验全部训练超参数。"""
 
+        if self.emb_cache_dir is None:
+            object.__setattr__(self, "emb_cache_dir", self.output_dir / "emb_cache")
         if not isinstance(self.encoder_name, str) or not self.encoder_name.strip():
             raise ValueError("encoder_name must be a non-empty string")
         for name in ("k", "neg_k", "neg_sample_size", "batch_size", "max_len"):
@@ -131,6 +132,15 @@ class KNNConfig:
             raise ValueError("min_threshold must be finite")
         if self.split_mode not in {"random", "time"}:
             raise ValueError("split_mode must be 'random' or 'time'")
+
+    @property
+    def resolved_emb_cache_dir(self) -> Path:
+        """返回 `__post_init__` 已解析完成的缓存目录。"""
+
+        cache_dir = self.emb_cache_dir
+        if cache_dir is None:  # 仅防御绕过 dataclass 构造器的异常对象。
+            raise RuntimeError("embedding cache directory was not initialized")
+        return cache_dir
 
 
 CONFIG = KNNConfig()
@@ -478,6 +488,8 @@ class KNNInterestModel:
         batch_size: int = 256,
         threshold_beta: float = 1.0,
         random_state: int = 42,
+        max_len: int = 512,
+        embedding_dim: int | None = None,
     ):
         if not isinstance(encoder_name, str) or not encoder_name.strip():
             raise ValueError("encoder_name must be a non-empty string")
@@ -486,6 +498,7 @@ class KNNInterestModel:
             ("neg_k", neg_k, 0),
             ("neg_sample_size", neg_sample_size, 1),
             ("batch_size", batch_size, 1),
+            ("max_len", max_len, 1),
         ):
             if type(value) is not int or value < minimum:
                 raise ValueError(f"{name} must be an integer >= {minimum}")
@@ -511,16 +524,18 @@ class KNNInterestModel:
         self.batch_size = batch_size
         self.threshold_beta = threshold_beta
         self.random_state = random_state
+        self.max_len = max_len
 
-        _log(f"Loading encoder: {encoder_name}")
-        SentenceTransformer = _training.load_sentence_transformer_class()
-        self.encoder = SentenceTransformer(encoder_name)
-        self.embed_dim = int(self.encoder.get_sentence_embedding_dimension())
-        if self.embed_dim <= 0:
-            raise ValueError("encoder returned an invalid embedding dimension")
+        if embedding_dim is not None and (type(embedding_dim) is not int or embedding_dim <= 0):
+            raise ValueError("embedding_dim must be a positive integer or None")
+        self.encoder: Any | None = None
+        self.embed_dim = embedding_dim
         self._fp16 = torch.cuda.is_available()
-        if self._fp16:
-            _log("Enabled fp16 encoding (CUDA detected)")
+
+        # 普通调用保持原有的立即加载语义；训练主流程已经持有全量 embedding，
+        # 只传入维数即可避免把同一个大模型无意义地载入第二遍。
+        if self.embed_dim is None:
+            self._load_encoder()
 
         # 训练后填充
         self.pos_embeddings: np.ndarray | None = None  # (n_pos, D)
@@ -532,9 +547,38 @@ class KNNInterestModel:
     # Encoding（用于在没有外部缓存时进行按需编码）
     # ------------------------------------------------------------------
 
+    def _load_encoder(self) -> Any:
+        if self.encoder is not None:
+            return self.encoder
+
+        _log(f"Loading encoder: {self.encoder_name}")
+        encoder_class = _training.load_sentence_transformer_class()
+        encoder = encoder_class(self.encoder_name)
+        actual_dim = int(encoder.get_sentence_embedding_dimension())
+        if actual_dim <= 0:
+            raise ValueError("encoder returned an invalid embedding dimension")
+        if self.embed_dim is not None and self.embed_dim != actual_dim:
+            raise ValueError(
+                f"encoder dimension changed: expected {self.embed_dim}, received {actual_dim}"
+            )
+        self.encoder = encoder
+        self.embed_dim = actual_dim
+        if self._fp16:
+            _log("Enabled fp16 encoding (CUDA detected)")
+        return encoder
+
+    def _embedding_dim(self) -> int:
+        if self.embed_dim is None:
+            self._load_encoder()
+        if self.embed_dim is None:  # 帮助静态检查器理解上面的初始化保证。
+            raise RuntimeError("encoder did not expose an embedding dimension")
+        return self.embed_dim
+
     def encode(self, texts: list[str]) -> np.ndarray:
+        embed_dim = self._embedding_dim()
         if not texts:
-            return np.zeros((0, self.embed_dim), dtype=np.float32)
+            return np.zeros((0, embed_dim), dtype=np.float32)
+        encoder = self._load_encoder()
         kw: dict[str, Any] = {
             "batch_size": self.batch_size,
             "show_progress_bar": True,
@@ -543,13 +587,13 @@ class KNNInterestModel:
         }
         if self._fp16:
             with torch.amp.autocast("cuda"):
-                emb = self.encoder.encode(texts, **kw)
+                emb = encoder.encode(texts, **kw)
         else:
-            emb = self.encoder.encode(texts, **kw)
+            emb = encoder.encode(texts, **kw)
         return _training.validate_embedding_matrix(
             emb,
             expected_rows=len(texts),
-            expected_dim=self.embed_dim,
+            expected_dim=embed_dim,
             name="encoded embeddings",
         )
 
@@ -572,7 +616,7 @@ class KNNInterestModel:
         query_emb = _training.validate_embedding_matrix(
             query_emb,
             expected_rows=len(query_emb),
-            expected_dim=self.embed_dim,
+            expected_dim=self._embedding_dim(),
             name="query embeddings",
         )
 
@@ -627,6 +671,8 @@ class KNNInterestModel:
                 expected_dim=self.embed_dim,
                 name="precomputed embeddings",
             )
+            if self.embed_dim is None:
+                self.embed_dim = int(all_emb.shape[1])
         else:
             _log("Encoding training texts…")
             all_emb = self.encode(_training.build_title_abstract_texts(df, title_col, abstract_col))
@@ -707,7 +753,7 @@ class KNNInterestModel:
             emb = _training.validate_embedding_matrix(
                 precomputed_embeddings,
                 expected_rows=len(df),
-                expected_dim=self.embed_dim,
+                expected_dim=self._embedding_dim(),
                 name="precomputed embeddings",
             )
         return self._score_from_embeddings(emb)
@@ -778,7 +824,7 @@ class KNNInterestModel:
         # 元数据
         meta = {
             "encoder_name": self.encoder_name,
-            "embed_dim": self.embed_dim,
+            "embed_dim": self._embedding_dim(),
             "n_pos": int(len(self.pos_embeddings)),
             "n_neg_stored": int(len(self.neg_embeddings)) if self.neg_embeddings is not None else 0,
             "k": self.k,
@@ -797,7 +843,7 @@ class KNNInterestModel:
             "model_type": "knn",
             "runtime_model_path": ".",
             "model_name": self.encoder_name,
-            "max_len": 512,
+            "max_len": self.max_len,
             "optimal_threshold": self.threshold,
             "input_mode": "title_abstract",
             "k": self.k,
@@ -865,7 +911,7 @@ def main(config: KNNConfig = CONFIG) -> None:
         f"  neg_sample_size={config.neg_sample_size}  beta={config.beta}"
     )
     _log(f"输出目录: {config.output_dir}")
-    _log(f"Embedding 缓存目录: {config.emb_cache_dir}")
+    _log(f"Embedding 缓存目录: {config.resolved_emb_cache_dir}")
     _log("─" * 72)
 
     # ── ★ 预计算全量 embedding（带缓存）────────────────────────────────────
@@ -875,7 +921,7 @@ def main(config: KNNConfig = CONFIG) -> None:
         title_col=title_col,
         abstract_col=abstract_col,
         encoder_name=config.encoder_name,
-        cache_dir=config.emb_cache_dir,
+        cache_dir=config.resolved_emb_cache_dir,
         batch_size=config.batch_size,
     )
 
@@ -900,6 +946,8 @@ def main(config: KNNConfig = CONFIG) -> None:
         batch_size=config.batch_size,
         threshold_beta=config.beta,
         random_state=config.random_seed,
+        max_len=config.max_len,
+        embedding_dim=int(all_emb.shape[1]),
     )
 
     # ── 训练（存储兴趣库）────────────────────────────────────────────────────

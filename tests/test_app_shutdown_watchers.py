@@ -1104,7 +1104,7 @@ def test_app_ignores_config_and_schedule_updates_while_stopping(temp_app_root: P
     app = XiaoQingApp(temp_app_root)
     app._stopping = True
     app.dispatcher.refresh_prefix_cache = Mock()
-    app.scheduler.clear_prefix = Mock()
+    app.scheduler.replace_prefix = Mock()
     app.config_manager.reload = Mock()
 
     snapshot = ConfigSnapshot(config=app.config, secrets=app.secrets)
@@ -1114,4 +1114,4 @@ def test_app_ignores_config_and_schedule_updates_while_stopping(temp_app_root: P
 
     app.dispatcher.refresh_prefix_cache.assert_not_called()
     app.config_manager.reload.assert_not_called()
-    app.scheduler.clear_prefix.assert_not_called()
+    app.scheduler.replace_prefix.assert_not_called()

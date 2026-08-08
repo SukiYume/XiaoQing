@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from core.args import FLAG_VALUE, ParsedArgs, parse
+from core.interfaces import PluginContextProtocol
 from core.plugin_base import has_control_characters, image, segments, text
 from core.public_errors import public_error_response
 
@@ -56,27 +57,23 @@ _PICTURE_ACTIONS = frozenset({"name", "rgb", "hex", "cmyk"})
 _REST_ACTIONS = frozenset({"rgb", "cmyk", "write"})
 _ASCII_INTEGER = re.compile(r"-?[0-9]+")
 
-HELP_TEXT = """
-🎨 **中国传统色彩查询**
+HELP_TEXT = """🎨 中国传统色彩查询
 
-**基础查询:**
-• /color -n <名称> [-p] - 按名称查询，可选色卡
-• /color -r <R,G,B> [-p] - 按 RGB 查询
-• /color -x <HEX> [-p] - 按 HEX 查询
-• /color -c <C,M,Y,K> [-p] - 按 CMYK 查询
-• /color -a <关键词> - 按名称子串搜索
+基础查询
+/color -n <名称> [-p]  按名称查询，可选色卡
+/color -r <R,G,B> [-p]  按 RGB 查询
+/color -x <HEX> [-p]  按 HEX 查询
+/color -c <C,M,Y,K> [-p]  按 CMYK 查询
+/color -a <关键词>  按名称子串搜索
 
-**自定义颜色（仅 Bot 全局管理员）:**
-• /color -w <名称> <R> <G> <B>
-• /color -w <名称> <#HEX>
-• /color -d <名称>
+自定义颜色（仅 Bot 全局管理员）
+/color -w <名称> <R> <G> <B>
+/color -w <名称> <#HEX>
+/color -d <名称>
 
-**恒星颜色:**
-• /color -s <光谱型> - 查询恒星颜色
-• /color -t [前缀] - 列出不重复的光谱型
-
-输入 /color help 查看此帮助
-""".strip()
+恒星颜色
+/color -s <光谱型>  查询恒星颜色
+/color -t [前缀]  列出不重复的光谱型"""
 
 
 class ColorInputError(ValueError):
@@ -183,7 +180,10 @@ def _parse_request(args: str) -> ColorRequest:
     return _request_from_option(parsed, action_option, picture=picture)
 
 
-def _can_manage_custom_colors(event: Mapping[str, Any], context: Any) -> bool:
+def _can_manage_custom_colors(
+    event: Mapping[str, Any],
+    context: PluginContextProtocol,
+) -> bool:
     user_id = event.get("user_id")
     if type(user_id) is not int or user_id <= 0:
         return False
@@ -196,7 +196,7 @@ def _can_manage_custom_colors(event: Mapping[str, Any], context: Any) -> bool:
         return False
 
 
-def _image_dir(context: Any) -> Path:
+def _image_dir(context: PluginContextProtocol) -> Path:
     data_dir = getattr(context, "data_dir", None)
     if not isinstance(data_dir, Path):
         raise ValueError("color data_dir must be a Path")
@@ -207,7 +207,7 @@ async def _found_color_response(
     color: ColorRecord,
     *,
     picture: bool,
-    context: Any,
+    context: PluginContextProtocol,
 ) -> Messages:
     result = [text(data_manager.format_color_info(color))]
     if picture:
@@ -237,7 +237,7 @@ def _parse_channels(value: str, *, label: str, count: int, maximum: int) -> list
 async def _handle_name(
     request: ColorRequest,
     colors: Sequence[ColorRecord],
-    context: Any,
+    context: PluginContextProtocol,
 ) -> Messages:
     color = query.find_by_name(colors, request.value)
     logger.info("颜色名称查询: found=%s", color is not None)
@@ -249,7 +249,7 @@ async def _handle_name(
 async def _handle_rgb(
     request: ColorRequest,
     colors: Sequence[ColorRecord],
-    context: Any,
+    context: PluginContextProtocol,
 ) -> Messages:
     rgb = _parse_channels(request.value, label="RGB", count=3, maximum=convert.RGB_MAX)
     color = query.find_by_rgb(colors, rgb)
@@ -271,7 +271,7 @@ async def _handle_rgb(
 async def _handle_hex(
     request: ColorRequest,
     colors: Sequence[ColorRecord],
-    context: Any,
+    context: PluginContextProtocol,
 ) -> Messages:
     try:
         rgb = convert.hex_to_rgb(request.value)
@@ -288,7 +288,7 @@ async def _handle_hex(
 async def _handle_cmyk(
     request: ColorRequest,
     colors: Sequence[ColorRecord],
-    context: Any,
+    context: PluginContextProtocol,
 ) -> Messages:
     cmyk = _parse_channels(request.value, label="CMYK", count=4, maximum=convert.CMYK_MAX)
     color = query.find_by_cmyk(colors, cmyk)
@@ -339,7 +339,7 @@ def _parse_custom_color(definition: str) -> ColorRecord:
 async def _add_custom_color(
     definition: str,
     colors: Sequence[ColorRecord],
-    context: Any,
+    context: PluginContextProtocol,
 ) -> Messages:
     new_color = _parse_custom_color(definition)
     name = new_color["name"]
@@ -373,7 +373,7 @@ async def _add_custom_color(
     return result
 
 
-async def _delete_custom_color(name: str, context: Any) -> Messages:
+async def _delete_custom_color(name: str, context: PluginContextProtocol) -> Messages:
     def remove(colors: list[ColorRecord]) -> bool:
         original_count = len(colors)
         colors[:] = [color for color in colors if color["name"] != name]
@@ -389,7 +389,7 @@ async def _handle_palette_request(
     request: ColorRequest,
     colors: Sequence[ColorRecord],
     event: Mapping[str, Any],
-    context: Any,
+    context: PluginContextProtocol,
 ) -> Messages:
     if request.action == "name":
         return await _handle_name(request, colors, context)
@@ -414,7 +414,7 @@ async def handle(
     _command: str,
     args: str,
     event: dict[str, Any],
-    context: Any,
+    context: PluginContextProtocol,
 ) -> Messages:
     """解析一次命令，并只加载当前操作真正需要的数据。"""
 

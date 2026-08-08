@@ -162,9 +162,8 @@ _WEIBO_USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/120.0.0.0 Safari/537.36"
 )
-# These fields come from the current Weibo visitor endpoint contract rather than
-# from user configuration. If the endpoint changes them, bootstrap failures are
-# escalated after a few consecutive attempts instead of being silently repeated.
+# 这些字段来自当前微博访客端点契约，不接受用户配置覆盖。若端点变更，连续失败会在
+# 达到阈值后升级日志等级，避免长期静默重试。
 _WEIBO_VISITOR_VERSION = "20250916"
 _WEIBO_VISITOR_RID = "01Cn_5z8ew6CZHvNiTdPeyK2Qf740"
 _BOOTSTRAP_FAILURE_ESCALATION = 3
@@ -182,21 +181,19 @@ _PENDING_EVENT_IDS_KEY = "earthquake_pending_event_ids"
 _DELIVERY_LOCK = asyncio.Lock()
 _WEIBO_SESSION_LOCK = threading.Lock()
 
-HELP_TEXT = """
-🌏 **地震快讯**
+HELP_TEXT = """🌏 地震快讯
 
 从“中国地震台网速报”微博获取最近一条地震快讯。
 
-**命令：**
-• /earthquake 或 /地震 - 获取最近快讯
-• /earthquake latest - 获取最近快讯
-• /earthquake help - 显示帮助
+命令
+/earthquake 或 /地震  获取最近快讯
+/earthquake latest  获取最近快讯
+/earthquake help  显示帮助
 
-**说明：**
-• 手动查询不限震级，也不会推进定时任务游标
-• 定时任务每 5 分钟检查一次，仅投递 4.0 级及以上快讯
-• 微博访客接口属于尽力而为的数据源，临时不可用时会在下次轮询重试
-""".strip()
+说明
+手动查询不限震级，也不会推进定时任务游标。
+定时任务每 5 分钟检查一次，仅投递 4.0 级及以上快讯。
+微博访客接口临时不可用时，会在下次轮询重试。"""
 
 
 class _EarthquakeContext(Protocol):

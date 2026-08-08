@@ -6,7 +6,7 @@ import functools
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from core.public_errors import public_error_response
 
@@ -14,6 +14,16 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .runtime_state import ChatRuntimeState, _ChatRuntime
+
+ActionList = list[dict[str, Any]]
+
+
+def validate_action_list(value: object, *, source: str) -> ActionList:
+    """校验动态处理器返回值，阻止畸形动作进入 Core 投递链。"""
+
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise TypeError(f"{source} must return a list of action dictionaries")
+    return cast(ActionList, value)
 
 
 @dataclass(frozen=True)

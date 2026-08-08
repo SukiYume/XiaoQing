@@ -19,6 +19,7 @@ from tests.helpers.codex_test_support import (
     _arxiv_addon,
     _install_fake_manager,
     _valid_arxiv_summary,
+    _wait_manager_idle,
     _wait_until,
     asyncio,
     codex_arxiv_summary,
@@ -74,7 +75,7 @@ async def test_arxiv_summary_validates_date_links_and_canonicalizes_pdf_urls(
         group_id=2,
         context=context,
     )
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     assert "已投递" in queued
     assert canonical in runner.calls[-1][1]
@@ -114,7 +115,7 @@ async def test_arxiv_summary_public_entrypoint_uses_addon(
         user_id=1,
         group_id=2,
     )
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     assert "已投递" in result
     assert len(runner.calls) == 2
@@ -148,7 +149,7 @@ async def test_system_arxiv_summary_fans_out_once_and_never_uses_old_session_own
         context=context,
         delivery_targets=targets,
     )
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     assert "已投递" in result
     assert len(runner.calls) == 1
@@ -178,7 +179,7 @@ async def test_system_arxiv_summary_fans_out_once_and_never_uses_old_session_own
         context=context,
         delivery_targets=(),
     )
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
     assert len(runner.calls) == 2
     assert context.actions == []
 
@@ -206,7 +207,7 @@ async def test_same_date_replays_only_when_canonical_link_set_matches(
         group_id=2,
         context=context,
     )
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
     assert len(runner.calls) == 2  # 初始化 + 第一份摘要
 
     context.actions.clear()
@@ -233,7 +234,7 @@ async def test_same_date_replays_only_when_canonical_link_set_matches(
         group_id=2,
         context=context,
     )
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     assert "已投递" in updated
     assert len(runner.calls) == 3
@@ -696,7 +697,7 @@ async def test_queued_codex_job_refreshes_public_policy_without_new_message(
     # the scoped settings reader when it advances on its own.  The raw
     # ConfigManager is intentionally unavailable to plugins.
     release_first.set()
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     assert [call["prompt"] for call in calls] == ["block active", "queued after reload"]
     assert calls[0]["sandbox"] == "workspace-write"
@@ -780,7 +781,7 @@ async def test_codex_limit_shrink_requeues_old_limit_permit_before_start(tmp_pat
     assert runner.started == ["active"]
 
     runner.release.set()
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
 
     assert runner.started == ["active", "waiting"]
     assert reads >= 5
@@ -805,7 +806,7 @@ async def test_arxiv_summary_replays_existing_success_without_rerun(tmp_path: Pa
         group_id=2,
         context=context,
     )
-    await manager.wait_idle()
+    await _wait_manager_idle(manager)
     context.actions.clear()
 
     result = await _arxiv_addon(manager).enqueue_or_replay(

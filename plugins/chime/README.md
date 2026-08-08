@@ -1,54 +1,99 @@
-# CHIME FRB 插件
+# 📡 CHIME/FRB
 
-查询 CHIME/FRB 重复暴目录，并按本地已确认的通知基线检查新增重复暴和新脉冲。
+`chime` 查询 CHIME/FRB 重复暴目录，并按本地通知基线发现新增重复暴和新脉冲。
 
-## 命令
+---
+
+## ⌨️ 命令
 
 <!-- manifest-command-aliases:start -->
-| 功能 | 推荐入口 | 等价别名 |
+| 功能 | 推荐入口 | Manifest 等价别名 |
 | --- | --- | --- |
 | 查询与检查重复暴 | `/chime` | `/frb` |
 <!-- manifest-command-aliases:end -->
 
-- `/chime`：预览相对上次成功通知后的更新，不修改通知基线。
-- `/chime list`：按观测时间列出最近更新的 5 个 FRB。
-- `/chime FRB20180916B`：查询指定 FRB 的时间、DM、RA、DEC 和 SNR。
-- `/chime help`：显示本地帮助。
+| 用法 | 结果 |
+| --- | --- |
+| `/chime` | 预览上次成功通知以来的目录更新 |
+| `/chime list` | 按观测时间列出最近更新的 5 个 FRB |
+| `/chime FRB20180916B` | 查询指定 FRB 的时间、DM、RA、DEC 和 SNR |
+| `/chime help` | 显示本地帮助 |
 
-命令只接受一个子命令或 FRB 名称；多余参数、选项和畸形名称会被拒绝。
+命令接受一个子命令或一个规范 FRB 名称。`列表` 和 `帮助` 分别是 `list` 和 `help` 的中文别名。
 
-## 定时通知
+---
 
-清单配置为每天 09:00 和 21:00 检查。目标群来自机器人运行上下文中的默认群列表：
+## ⏰ 定时通知
 
-1. 先重试尚未完成的 `chime_delivery.json`，有 outbox 时不会再次请求目录。
-2. 新通知按目标群逐个发送，并在每个目标确认成功后原子记录进度。
-3. 只有全部目标成功后才写入 `chime_history.json`，随后清空 outbox。
-4. 发送失败、没有目标群或本地状态损坏时不推进基线，以免静默漏报。
+清单在每天 09:00 和 21:00 运行 `scheduled_check`，通知目标来自 Core 提供的默认群列表。一次检查按以下顺序执行：
 
-这个流程提供崩溃后的断点续发，但网络发送与本地确认之间仍是“至少一次”语义：极端断电可能造成单个目标收到一次重复通知。
+1. 读取 `chime_delivery.json`，优先续发已有待办通知；
+2. 获取并校验远端目录；
+3. 计算相对通知基线的新增记录；
+4. 按目标群发送消息，并逐个原子记录确认状态；
+5. 全部目标确认后更新 `chime_history.json`，随后清理待办通知。
 
-## 本地文件
+该流程支持进程重启后的断点续发。网络发送与本地确认之间采用至少一次投递语义，极端断电场景可能使单个目标再次收到同一条通知。
 
-- `data/chime_history.json`：每个 FRB 最近一次已确认通知的时间戳，不是完整目录缓存。
-- `data/chime_delivery.json`：待完成通知及各目标确认状态，由插件自动创建和清理。
+手动查询复用 5 分钟目录缓存，并发冷启动共享同一次下载。定时检查每次获取新目录。
 
-不要手工删除或改写这些运行状态。历史文件会严格校验；损坏内容不会被当成空历史，从而避免全量重复通知。目录的部分响应或时间倒退也不会删除、回退已有基线。
+---
 
-## 数据来源与可用性
+## 💾 数据来源
 
-运行时兼容接口：`https://catalog.chime-frb.ca/repeaters`。
+运行时目录接口：
 
-CHIME/FRB 官方公共站目前说明目录站正在新基础设施上重建，并引导用户使用永久归档：
+```text
+https://catalog.chime-frb.ca/repeaters
+```
 
-- 官方公共目录页：<https://www.chime-frb.ca/catalog>
-- CHIME/FRB Open Data：<https://chime-frb-open-data.github.io/>
+发布数据集可从以下官方入口获取：
 
-永久归档适合下载已发布数据集，但不提供与旧接口等价的实时重复暴 JSON 响应。因此插件不会用静态归档冒充增量数据；旧接口不可达、超时或返回畸形内容时会失败关闭并等待下次检查。
+- [CHIME/FRB Catalog](https://www.chime-frb.ca/catalog)
+- [CHIME/FRB Open Data](https://chime-frb-open-data.github.io/)
 
-## 数据边界
+---
 
-- 只接受完整的 6 位脉冲日期键和规范 FRB 名称。
-- 观测时间必须是带日期与秒的 ISO 风格时间，可使用空格或 `T` 分隔并可带时区。
-- 外部名称和字段有长度、类型与控制字符限制，不会原样写入日志。
-- 每次响应、JSON 深度、节点数和正文大小都有上限。
+## 💾 本地状态
+
+| 文件 | 内容 |
+| --- | --- |
+| `data/chime/chime_history.json` | 每个 FRB 最近一次已确认通知的时间戳 |
+| `data/chime/chime_delivery.json` | 待办通知、目标群和逐目标确认状态 |
+
+插件会严格校验两个文件的结构、记录数量、名称和时间戳。目录异常、状态文件异常、发送异常和空目标列表都会保留现有通知基线，供维护者修复后继续处理。
+
+---
+
+## 🔐 输入与网络边界
+
+- 脉冲日期键采用完整 6 位日期；
+- FRB 名称经过格式、长度与控制字符校验；
+- 观测时间采用包含日期和秒的 ISO 风格字符串；
+- 外部响应执行正文大小、JSON 深度、节点数与字段类型限制；
+- 日志使用经过边界处理的名称和错误码。
+
+---
+
+## 🩺 排障
+
+| 现象 | 检查项 |
+| --- | --- |
+| 目录暂时可用性异常 | 检查远端接口、网络连接和运行日志 |
+| 定时消息持续待办 | 检查目标群配置、发送权限与 `chime_delivery.json` |
+| 状态文件校验失败 | 从备份恢复对应 JSON，或由维护者确认基线后重建 |
+| 查询结果为空 | 核对 FRB 名称与目录响应时间 |
+
+---
+
+## ✅ 开发验证
+
+在仓库根目录运行：
+
+```bash
+python -m ruff check plugins/chime tests/plugins/test_chime.py
+python -m mypy plugins/chime
+python -m pytest -q tests/plugins/test_chime.py \
+  tests/plugins/test_durable_plugin_notifications.py \
+  tests/plugins/test_fixed_origin_http_clients.py
+```

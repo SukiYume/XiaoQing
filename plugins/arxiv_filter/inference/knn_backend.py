@@ -16,7 +16,7 @@ import logging
 import math
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -51,7 +51,7 @@ def _load_embedding_matrix(
         )
     if not np.issubdtype(matrix.dtype, np.number) or not np.isfinite(matrix).all():
         raise ValueError(f"{name} must contain only finite numeric values")
-    return matrix.astype(np.float32, copy=False)
+    return cast(np.ndarray, matrix.astype(np.float32, copy=False))
 
 
 # =============================================================================
@@ -173,7 +173,8 @@ class KNNInferenceModel:
                 emb = self.encoder.encode(texts, **kw)
         else:
             emb = self.encoder.encode(texts, **kw)
-        return emb.astype(np.float32)
+        # sentence-transformers 是动态导入，运行时已要求 convert_to_numpy=True。
+        return cast(np.ndarray, emb.astype(np.float32))
 
     # ------------------------------------------------------------------
     # 得分计算
@@ -192,7 +193,7 @@ class KNNInferenceModel:
         if not np.issubdtype(query.dtype, np.number) or not np.isfinite(query).all():
             raise ValueError("query embeddings must contain only finite numeric values")
         if len(query) == 0:
-            return np.array([], dtype=np.float32)
+            return cast(np.ndarray, np.array([], dtype=np.float32))
 
         # 正样本相似度
         pos_sims = query @ self.pos_embeddings.T  # (n, n_pos)
@@ -204,9 +205,12 @@ class KNNInferenceModel:
             neg_sims = query @ self.neg_embeddings.T  # (n, n_neg)
             nk = min(self.neg_k, neg_sims.shape[1])
             top_k_neg = np.sort(neg_sims, axis=1)[:, -nk:].mean(axis=1)
-            return (top_k_pos - self.neg_weight * top_k_neg).astype(np.float32)
+            return cast(
+                np.ndarray,
+                (top_k_pos - self.neg_weight * top_k_neg).astype(np.float32),
+            )
 
-        return top_k_pos.astype(np.float32)
+        return cast(np.ndarray, top_k_pos.astype(np.float32))
 
     # ------------------------------------------------------------------
     # 对外接口
@@ -215,7 +219,7 @@ class KNNInferenceModel:
     def predict_proba(self, df: pd.DataFrame, input_mode: str = "title_abstract") -> np.ndarray:
         """返回每篇论文的推荐得分 (1-d float32 array)。"""
         if len(df) == 0:
-            return np.array([], dtype=np.float32)
+            return cast(np.ndarray, np.array([], dtype=np.float32))
         if input_mode not in {"title_only", "title_abstract"}:
             raise ValueError("unsupported input_mode")
 

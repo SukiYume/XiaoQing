@@ -1,9 +1,4 @@
-"""
-ads_paper 插件单元测试
-
-测试 NASA ADS 论文管理插件的主要功能。
-由于 ads_paper 插件使用相对导入，我们只测试文件结构和配置。
-"""
+"""ADS Paper 的命令入口、ADS 客户端、按用户存储及错误边界测试。"""
 
 import asyncio
 import json
@@ -21,7 +16,7 @@ from plugins.ads_paper.storage import PaperStorage
 from tests.helpers.assertions import text_segments_text
 from tests.helpers.settings_snapshot import with_settings_reader
 
-# 添加项目根目录到路径
+# 测试 manifest 时从仓库根目录构造稳定路径。
 ROOT = Path(__file__).resolve().parent.parent.parent
 
 
@@ -392,6 +387,25 @@ class TestPaperStorageBehavior:
         deadlines = storage.get_deadlines(10001)
         assert len(deadlines) == 1
         assert deadlines[0]["name"] == "submit"
+
+    def test_storage_owner_accepts_only_integer_or_legacy_numeric_string(self, tmp_path):
+        payload = {
+            "paper-1": [
+                {"content": "integer", "user": 1},
+                {"content": "legacy-string", "user": "1"},
+                {"content": "boolean", "user": True},
+                {"content": "float", "user": 1.0},
+                {"content": "malformed", "user": "owner-1"},
+            ]
+        }
+        (tmp_path / "paper_notes.json").write_text(
+            json.dumps(payload),
+            encoding="utf-8",
+        )
+
+        notes = PaperStorage(tmp_path).get_paper_notes("paper-1", 1)
+
+        assert [note["content"] for note in notes] == ["integer", "legacy-string"]
 
     def test_storage_filters_notes_and_deadlines_by_user_and_delete_uses_visible_order(
         self, tmp_path

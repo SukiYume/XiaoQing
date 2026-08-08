@@ -3,7 +3,6 @@ from __future__ import annotations
 import ast
 import gzip
 import json
-import wave
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -186,16 +185,6 @@ def _voice_context(tmp_path: Path, session: _Session) -> SimpleNamespace:
     )
 
 
-def _write_pcm_wav(path: Path) -> None:
-    """写入 Voice STT 声明支持的最小 PCM WAV。"""
-
-    with wave.open(str(path), "wb") as wav:
-        wav.setnchannels(1)
-        wav.setsampwidth(2)
-        wav.setframerate(16_000)
-        wav.writeframes(b"\0\0" * 160)
-
-
 @pytest.mark.asyncio
 async def test_ads_llm_accepts_private_base_and_chunked_gzip() -> None:
     session = _Session(
@@ -339,27 +328,6 @@ async def test_voice_tts_uses_identity_existing_cap_and_proxy(tmp_path: Path) ->
     assert kwargs["timeout"] is voice._AZURE_API_TIMEOUT
     assert voice._TTS_BODY_LIMITS.max_wire_bytes == voice.MAX_AUDIO_BYTES
     assert voice._TTS_BODY_LIMITS.max_decoded_bytes == voice.MAX_AUDIO_BYTES
-
-
-@pytest.mark.asyncio
-async def test_voice_stt_parses_bounded_chunked_gzip_json(tmp_path: Path) -> None:
-    session = _Session(
-        _json_response(
-            {"NBest": [{"Lexical": "local speech", "Display": "Local speech."}]},
-            compressed=True,
-        )
-    )
-    context = _voice_context(tmp_path, session)
-    audio = tmp_path / "input.wav"
-    _write_pcm_wav(audio)
-
-    result = await voice.speech_to_text(str(audio), context)
-
-    assert result == ("local speech", "Local speech.")
-    _, _, kwargs = session.calls[0]
-    assert kwargs["headers"]["Accept-Encoding"] == "gzip, deflate"
-    assert kwargs["proxy"] == "http://127.0.0.1:7890"
-    assert kwargs["timeout"] is voice._AZURE_API_TIMEOUT
 
 
 @pytest.mark.asyncio

@@ -50,11 +50,6 @@ _LEGACY_ROUTES: dict[str, CommandHandler] = {
 }
 
 
-def init(context: Context | None = None) -> None:
-    """插件初始化"""
-    logger.info("QingSSH plugin initialized")
-
-
 async def handle(command: str, args: str, event: OneBotEvent, context: Context) -> MessageSegments:
     """把统一 ``/ssh`` 子命令和旧独立命令分派到同一组处理器。"""
 
@@ -92,46 +87,36 @@ async def handle(command: str, args: str, event: OneBotEvent, context: Context) 
 
 
 def _show_help() -> str:
-    """显示帮助信息"""
+    """显示适合手机私聊阅读的管理与会话帮助。"""
     return """
-🖥️ **SSH 远程控制**
+🖥️ SSH 远程控制
 
-**基本命令:**
-• /ssh - 显示已保存的服务器和帮助
-• /ssh help - 显示此帮助
-• /ssh <服务器名> - 连接到服务器
-• /ssh <用户名>@<服务器名> - 以指定用户连接
+连接
+• /ssh
+  查看服务器与快速用法
+• /ssh <服务器名>
+• /ssh <用户名>@<服务器名>
 
-**服务器管理:**
-• /ssh list - 查看已保存的服务器列表
-• /ssh add - 添加服务器（引导式）
-• /ssh add <名称> <主机> [端口] [用户名] - 快速添加
-• /ssh remove <名称> - 删除服务器
-• /ssh import - 从 ~/.ssh/config 导入配置
-• /ssh config - 查看 ~/.ssh/config 中的 Host
+服务器
+• /ssh list
+• /ssh add [名称 主机 [端口] [用户名]]
+• /ssh remove <名称>
+• /ssh import [Host名|all]
+• /ssh config
 
-**连接管理:**
-• /ssh status - 查看当前连接状态
-• /ssh disconnect - 断开当前连接
-• /ssh disconnect <服务器名> - 断开指定连接
+连接状态
+• /ssh status
+• /ssh disconnect [服务器名]
 
-**SSH 会话中:**
-• 直接输入命令 - 执行 Shell 命令
-• cd <目录> - 切换工作目录
-• help / 帮助 - 查看会话中的命令
-• 输入「退出」/「取消」- 结束会话
+会话内
+• 直接输入 Shell 命令
+• cd <目录>：切换目录
+• help / 帮助：会话帮助
+• 停止：中断当前命令
+• 退出 / 取消：结束会话
 
-**特性:**
-• 支持多服务器管理
-• 支持密钥和密码认证
-• 命令历史记录
-• 自动补全工作目录
-• 10 分钟无操作自动断开
-
-**安全提示:**
-• 建议使用 SSH 密钥而非密码
-• 密码只写入插件密钥存储，不写入服务器配置文件
-• 命令默认 30 秒超时，可在插件配置中调整；设为 0 可不限制
+安全：优先使用密钥；密码只进入插件密钥存储。
+默认命令超时 30 秒，会话空闲超时 10 分钟。
 """.strip()
 
 

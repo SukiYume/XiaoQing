@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import urllib.error
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -27,12 +28,14 @@ from scripts.run_command_matrix import (
     EventClient,
     EventResponse,
     MatrixCase,
+    MatrixError,
     WebSocketEventClient,
     _probe_health,
     build_matrix,
     evaluate_response,
     fetch_runtime_catalog,
     load_policy,
+    validate_test_id_isolation,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -54,6 +57,65 @@ def test_event_clients_reserve_disjoint_message_id_ranges() -> None:
     second = EventClient(**common)
 
     assert second._message_seed - first._message_seed >= 1_000_000
+
+
+def test_command_matrix_policy_rejects_duplicate_json_keys(tmp_path: Path) -> None:
+    policy_path = tmp_path / "policy.json"
+    policy_path.write_text(
+        '{"schema_version":1,"schema_version":1,"default":{},"plugins":{},"commands":{}}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(MatrixError, match="重复 JSON 键: schema_version"):
+        load_policy(policy_path)
+
+
+def test_command_matrix_requires_non_admin_and_isolated_scenario_ids() -> None:
+    with pytest.raises(MatrixError, match="不能使用 Bot 管理员 ID"):
+        validate_test_id_isolation(
+            user_id=10,
+            group_id=20,
+            scenario_user_id=30,
+            scenario_group_id=40,
+            admin_ids=(10,),
+        )
+    with pytest.raises(MatrixError, match="必须使用独立"):
+        validate_test_id_isolation(
+            user_id=10,
+            group_id=20,
+            scenario_user_id=10,
+            scenario_group_id=20,
+            admin_ids=(99,),
+        )
+
+
+def test_http_event_client_converts_network_failure_but_not_programming_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = EventClient(
+        endpoint="http://127.0.0.1:12000/event",
+        token="test-token",
+        admin_id=1,
+        user_id=2,
+        group_id=3,
+        timeout=1.0,
+    )
+
+    def fail_network(*_args: object, **_kwargs: object) -> object:
+        raise urllib.error.URLError("offline")
+
+    monkeypatch.setattr("scripts.run_command_matrix.urllib.request.urlopen", fail_network)
+    response = client.send("/echo ping", scope="private", actor="user")
+    assert response.status is None
+    assert response.transport_error is not None
+    assert response.transport_error.startswith("URLError:")
+
+    def fail_programming(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("bad test adapter")
+
+    monkeypatch.setattr("scripts.run_command_matrix.urllib.request.urlopen", fail_programming)
+    with pytest.raises(RuntimeError, match="bad test adapter"):
+        client.send("/echo ping", scope="private", actor="user")
 
 
 def test_websocket_event_client_uses_real_bearer_transport_and_collects_actions(

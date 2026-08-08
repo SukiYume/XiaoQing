@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 if TYPE_CHECKING:
     from .ai import AICompletionResult, AIModelInfo
     from .config import ConfigSnapshot
-    from .router import CommandCatalogNode
+    from .router import CommandCatalogNode, CommandInvocation
     from .session import Session
 
 
@@ -30,6 +30,8 @@ class ConfigProvider(Protocol):
 
 class PluginRegistry(Protocol):
     def get(self, name: str) -> Any: ...
+
+    def has_capability(self, plugin_name: str, capability: str) -> bool: ...
 
 
 class MuteControl(Protocol):
@@ -56,8 +58,6 @@ class ConfigManagerLike(Protocol):
     def reload(self, *, notify: bool = False) -> ConfigSnapshot: ...
 
     def snapshot(self) -> ConfigSnapshot: ...
-
-    def save_secrets(self) -> None: ...
 
     def on_reload(
         self,
@@ -140,6 +140,9 @@ class DeliveryTarget:
         return self.target_id if self.kind == "group" else None
 
 
+PluginGroupRole = Literal["owner", "admin", "member", "unknown"]
+
+
 @dataclass(frozen=True, eq=False)
 class PluginPrincipal:
     """Core-issued identity snapshot propagated across plugin calls.
@@ -153,7 +156,7 @@ class PluginPrincipal:
     group_id: int | None = None
     is_bot_admin: bool = False
     is_private: bool = False
-    group_role: Literal["owner", "admin", "member", "unknown"] = "unknown"
+    group_role: PluginGroupRole = "unknown"
     delivery_targets: tuple[DeliveryTarget, ...] = ()
 
     def __post_init__(self) -> None:
@@ -295,6 +298,8 @@ class PluginConfig(Protocol):
 
 
 class PluginRuntime(Protocol):
+    # 应用拥有并在插件上下文间共享会话；插件只可借用，不能主动关闭。
+    http_session: Any
     send_action: SendAction
     reload_config: Callable[[], Any]
     reload_plugins: Callable[[], Any]
@@ -329,6 +334,9 @@ class PluginContextProtocol(PluginConfig, PluginRuntime, SessionAccess, Protocol
     plugin_dir: Path
     data_dir: Path
     logger: Any
+    metrics: Any
+    request_id: str | None
+    command_invocation: CommandInvocation | None
     # One dictionary is shared by events for the current plugin generation;
     # unload/reload or process restart discards it.
     state: dict[str, Any]

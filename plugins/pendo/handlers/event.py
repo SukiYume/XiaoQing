@@ -1,12 +1,10 @@
 """日程命令处理器，负责创建、查看、编辑、删除和提醒管理。"""
 
-import logging
 import re
 import uuid
 from datetime import datetime
 from itertools import islice
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast
-from zoneinfo import ZoneInfo
 
 from core.plugin_base import run_sync
 
@@ -29,7 +27,6 @@ from ..utils.time_utils import (
     now_in_timezone,
     parse_event_time_range,
     parse_remind_times,
-    resolve_source_wall_time,
     utc_now_iso,
 )
 from ..utils.validators import (
@@ -38,6 +35,7 @@ from ..utils.validators import (
     normalize_event_fields,
     with_start_time_reminder_rule,
 )
+from .event_editing import EventEditingMixin
 from .event_support import (
     ensure_event_reminder_rules,
     ensure_event_reminders,
@@ -52,8 +50,7 @@ from .event_support import (
     get_remind_status_label,
     recalculate_event_reminders,
 )
-
-logger = logging.getLogger(__name__)
+from .event_views import EventDetailViewMixin
 
 if TYPE_CHECKING:
     from ..services.db import Database
@@ -85,30 +82,8 @@ class ReminderServiceProtocol(Protocol):
     ) -> list[dict[str, Any]]: ...
 
 
-class EventHandler(DbOpsMixin):
+class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
     """日程处理器"""
-
-    _TITLE_SCAFFOLD_MARKERS = ("[编辑现有日程]", "原标题", "原时间", "用户修改指令")
-    _TITLE_RENAME_RE = re.compile(r"(改名|重命名|标题|名称|叫做|名字)")
-    _TITLE_SCHEDULE_RE = re.compile(
-        r"(提醒|提前|分钟|小时|天|周|今天|明天|后天|上午|中午|下午|晚上|\d{1,2}[点时:：])"
-    )
-    _CATEGORY_EDIT_RE = re.compile(r"(分类|归类|类别|类目)")
-    _CONTENT_EDIT_RE = re.compile(r"(内容|描述|详情|补充|说明)")
-    _LOCATION_EDIT_RE = re.compile(
-        r"(@|地点|位置|场地|地址|(?:会场|会议地点)\s*(?:改为|改成|改到|在|[:：]))"
-    )
-    _NOTES_EDIT_RE = re.compile(r"(?:备注|说明)\s*(?:改为|改成|设为|设置为|为|成|[:：])?\s*(.+)")
-    _EDIT_VALUE_STOP_CHARS = " ，,。；;\n\t"
-    _AI_EDIT_FIELDS = (
-        "title",
-        "content",
-        "start_time",
-        "end_time",
-        "location",
-        "category",
-        "tags",
-    )
 
     db: "Database"
     ai_parser: EventAIParserProtocol
@@ -531,7 +506,7 @@ class EventHandler(DbOpsMixin):
             instance_item.id = instance_id
             children.append((instance_id, instance_item))
         await run_sync(
-            self.db.create_event_collection_with_children,
+            self.db.create_event_collection,
             collection_payload,
             children,
             operation_action="create_recurring",
@@ -649,7 +624,7 @@ class EventHandler(DbOpsMixin):
             children.append((node_id, node))
 
         await run_sync(
-            self.db.create_event_collection_with_children,
+            self.db.create_event_collection,
             collection_payload,
             children,
             operation_action="create_multi_node",
@@ -699,145 +674,6 @@ class EventHandler(DbOpsMixin):
             EventFamily,
             await run_sync(self.event_graph.load_by_id, user_id, event_or_collection_id),
         )
-
-    def _format_event_family_detail(self, family: EventFamily, query_id: str) -> CommandMessage:
-        if family.collection and family.leaf is None:
-            return self._format_collection_detail(family.collection, family.children)
-
-        if family.leaf is None:
-            return {"status": "error", "message": f"❌ 找不到日程 {query_id}"}
-        return self._format_leaf_detail(family)
-
-    @staticmethod
-    def _format_collection_detail(
-        collection: dict[str, Any], children: list[EventItem]
-    ) -> CommandMessage:
-        """格式化日程集合及其节点摘要。"""
-        kind_label = "多时间节点事件" if collection.get("kind") == "multi_node" else "重复日程"
-        lines = [
-            f"📋 **{collection.get('title') or '无标题'}**",
-            "",
-            f"🗺️ {kind_label} ({len(children)}个节点)",
-        ]
-        if collection.get("start_time"):
-            lines.append(
-                f"⏰ {EventHandler._format_full_time_range(collection['start_time'], collection.get('end_time'), collection)}"
-            )
-        if collection.get("category"):
-            lines.append(f"📂 分类: {collection['category']}")
-        if collection.get("content"):
-            lines.append(f"📄 内容: {collection['content']}")
-        if collection.get("location"):
-            lines.append(f"📍 {collection['location']}")
-        if collection.get("notes"):
-            lines.append(f"📝 {collection['notes']}")
-        if collection.get("tags"):
-            lines.append(f"🏷️ {', '.join(collection['tags'])}")
-        lines.append("")
-        for child in children:
-            child_time = EventHandler._format_full_time_range(
-                child.start_time, child.end_time, child
-            )
-            lines.append(f"  📌 {child_time} {child.title or '无标题'} `{child.id}`")
-        lines.extend(
-            [
-                "",
-                f"`{collection['id']}`",
-                f"💡 /pendo event edit {collection['id']} <内容> 编辑标题/元信息",
-            ]
-        )
-        return {"status": "success", "message": "\n".join(lines)}
-
-    def _format_leaf_detail(self, family: EventFamily) -> CommandMessage:
-        """格式化单次日程或集合中的一个节点。"""
-        event = family.leaf
-        if event is None:
-            return {"status": "error", "message": "❌ 找不到日程"}
-
-        collection = family.collection
-        title = event.title or "无标题"
-        remind_times = parse_remind_times(event.remind_times)
-        lines = [f"📋 **{title}**", ""]
-
-        if collection:
-            lines.append(f"🗓️ 所属: {collection.get('title') or '无标题'}")
-            lines.append("📌 节点日程" if collection.get("kind") == "multi_node" else "🔄 重复实例")
-        else:
-            lines.append("📆 单次事件")
-        lines.append(f"⏰ {self._format_full_time_range(event.start_time, event.end_time, event)}")
-
-        self._append_event_metadata(lines, event)
-        self._append_reminder_preview(lines, remind_times, event)
-        self._append_sibling_summary(lines, event, family.children if collection else [])
-
-        lines.append(f"\n`{event.id}`")
-        lines.append(f"💡 /pendo event reminders {event.id} | /pendo event edit {event.id} <内容>")
-        return {"status": "success", "message": "\n".join(lines)}
-
-    @staticmethod
-    def _append_event_metadata(lines: list[str], event: EventItem) -> None:
-        """追加分类、内容、地点、备注和标签。"""
-        if event.category:
-            lines.append(f"📂 分类: {event.category}")
-        if event.content:
-            lines.append(f"📄 内容: {event.content}")
-        if event.location:
-            lines.append(f"📍 {event.location}")
-        if event.notes:
-            lines.append(f"📝 {event.notes}")
-        if event.tags:
-            lines.append(f"🏷️ {', '.join(event.tags)}")
-
-    @staticmethod
-    def _format_full_time_range(
-        start_time: str | None,
-        end_time: str | None,
-        timezone_source: EventItem | dict[str, Any] | None = None,
-    ) -> str:
-        """格式化详情页时间，始终保留年份和完整日期。"""
-        if not start_time:
-            return "未设置时间"
-        display_timezone = event_display_timezone(timezone_source or {})
-        start = ItemFormatter.format_datetime(start_time, tz=display_timezone)
-        if not end_time:
-            return start
-        return f"{start} - {ItemFormatter.format_datetime(end_time, tz=display_timezone)}"
-
-    @staticmethod
-    def _append_reminder_preview(
-        lines: list[str],
-        remind_times: list[str],
-        timezone_source: EventItem | dict[str, Any],
-    ) -> None:
-        """追加最多五条提醒预览。"""
-        lines.append("")
-        if not remind_times:
-            lines.append("🔔 未设置提醒")
-            return
-        lines.append(f"🔔 提醒 ({len(remind_times)}个):")
-        display_timezone = event_display_timezone(timezone_source)
-        for remind_time in remind_times[:5]:
-            formatted = ItemFormatter.format_datetime(
-                remind_time, "%m月%d日 %H:%M", tz=display_timezone
-            )
-            lines.append(f"  ⏰ {formatted}")
-        if len(remind_times) > 5:
-            lines.append(f"  … 共{len(remind_times)}个提醒")
-
-    @staticmethod
-    def _append_sibling_summary(
-        lines: list[str], event: EventItem, children: list[EventItem]
-    ) -> None:
-        """追加同集合其他节点的简要索引。"""
-        siblings = [child for child in children if child.id != event.id]
-        if not siblings:
-            return
-        lines.extend(["", "同组其他节点:"])
-        for sibling in siblings:
-            sibling_time = EventHandler._format_full_time_range(
-                sibling.start_time, sibling.end_time, sibling
-            )
-            lines.append(f"  • {sibling_time} {sibling.title or '无标题'} `{sibling.id}`")
 
     _CN_WEEKDAYS: ClassVar[tuple[str, ...]] = (
         "周一",
@@ -957,7 +793,10 @@ class EventHandler(DbOpsMixin):
     def _event_sort_key(event: EventItem, current_dt: datetime) -> datetime:
         """把日程开始时间统一到用户时区后排序。"""
         try:
-            return TimezoneHelper.parse(event.start_time or "", current_dt.tzinfo)
+            return cast(
+                datetime,
+                TimezoneHelper.parse(event.start_time or "", current_dt.tzinfo),
+            )
         except (TypeError, ValueError):
             return datetime.max.replace(tzinfo=current_dt.tzinfo)
 
@@ -1474,7 +1313,7 @@ class EventHandler(DbOpsMixin):
     def _select_reminders_for_confirmation(
         event: EventItem, selector: str, now: datetime
     ) -> list[str]:
-        remind_times = parse_remind_times(event.remind_times)
+        remind_times = cast(list[str], parse_remind_times(event.remind_times))
         lowered = (selector or "future").strip().lower()
 
         if lowered == "all":
@@ -1505,7 +1344,7 @@ class EventHandler(DbOpsMixin):
     def _normalize_remind_time(remind_time: str, reference: datetime) -> datetime | None:
         """把提醒时间统一到当前用户时区。"""
         try:
-            return TimezoneHelper.parse(remind_time, reference.tzinfo)
+            return cast(datetime, TimezoneHelper.parse(remind_time, reference.tzinfo))
         except (TypeError, ValueError):
             return None
 
@@ -1885,11 +1724,15 @@ class EventHandler(DbOpsMixin):
         if not event.start_time:
             return False
         try:
-            event_start = TimezoneHelper.parse(event.start_time, reference.tzinfo).replace(
-                tzinfo=None
-            )
+            event_start = cast(
+                datetime,
+                TimezoneHelper.parse(event.start_time, reference.tzinfo),
+            ).replace(tzinfo=None)
             event_end = (
-                TimezoneHelper.parse(event.end_time, reference.tzinfo).replace(tzinfo=None)
+                cast(
+                    datetime,
+                    TimezoneHelper.parse(event.end_time, reference.tzinfo),
+                ).replace(tzinfo=None)
                 if event.end_time
                 else None
             )
@@ -1898,317 +1741,6 @@ class EventHandler(DbOpsMixin):
         if event_end is not None:
             return event_start <= end_dt and event_end >= start_dt
         return start_dt <= event_start <= end_dt
-
-    async def _parse_updates(self, changes: str, current_event: EventItem) -> dict[str, Any]:
-        """解析更新内容
-
-        尝试使用AI解析，失败时降级到规则解析。
-        通过 prompt 指示 AI 不要随意修改标题，避免把编辑指令误设为标题。
-        """
-        explicit_updates = self._parse_explicit_edit_updates(changes, current_event)
-        parsed = await self._parse_ai_edit_updates(changes, current_event)
-        updates = self._merge_ai_edit_updates(
-            changes,
-            current_event,
-            parsed,
-            explicit_updates,
-        )
-
-        if parsed.get("remind_times") and not explicit_updates:
-            updates["remind_times"] = parsed["remind_times"]
-
-        if (
-            not explicit_updates
-            and parsed.get("notes") is not None
-            and parsed.get("notes") != getattr(current_event, "notes", None)
-        ):
-            updates["notes"] = parsed["notes"]
-
-        heuristic_notes = self._extract_notes_update(changes)
-        if heuristic_notes is not None and heuristic_notes != getattr(current_event, "notes", None):
-            updates["notes"] = heuristic_notes
-
-        return updates
-
-    async def _parse_ai_edit_updates(
-        self, changes: str, current_event: EventItem
-    ) -> dict[str, Any]:
-        """请 AI 只返回用户明确要修改的字段，失败时回退规则解析。"""
-        current_title = getattr(current_event, "title", "") or ""
-        current_start = getattr(current_event, "start_time", "") or ""
-        edit_prompt = (
-            f"[编辑现有日程] 原标题：{current_title}，原时间：{current_start}。"
-            f"用户修改指令：{changes}。"
-            f"请只返回需要修改的字段，未提及的字段不要更改。"
-            f'若用户未明确要求修改标题（如使用"改名""重命名""标题改为"等词），'
-            f"则不要返回title字段。"
-        )
-
-        try:
-            parsed = await self.ai_parser.parse_event_with_ai(
-                edit_prompt,
-                current_event.owner_id,
-                partial=True,
-                fallback_text=changes,
-            )
-        except Exception as exc:
-            logger.warning(
-                "AI解析失败，降级到规则解析 error_type=%s",
-                type(exc).__name__,
-            )
-            parsed = self.ai_parser.parse_natural_language(changes, current_event.owner_id)
-        return parsed
-
-    def _merge_ai_edit_updates(
-        self,
-        changes: str,
-        current_event: EventItem,
-        parsed: dict[str, Any],
-        explicit_updates: dict[str, Any],
-    ) -> dict[str, Any]:
-        """在显式规则结果上补入通过语义校验的 AI 字段。"""
-        updates = dict(explicit_updates)
-        explicit_only_fields = {"title", "content", "location", "category", "tags"}
-        for key in self._AI_EDIT_FIELDS:
-            if key in updates:
-                continue
-            if explicit_updates and key in explicit_only_fields:
-                continue
-            candidate = parsed.get(key)
-            current_val = getattr(current_event, key, None)
-            if candidate in (None, "", [], {}) or candidate == current_val:
-                continue
-            if not self._should_apply_ai_edit_field(key, changes, current_event, candidate):
-                continue
-            updates[key] = candidate
-        return updates
-
-    @classmethod
-    def _should_apply_ai_edit_field(
-        cls,
-        key: str,
-        changes: str,
-        current_event: EventItem,
-        candidate: Any,
-    ) -> bool:
-        """对 AI 候选值应用字段级语义门禁。"""
-        if key == "title":
-            return cls._should_apply_title_update(changes, current_event, candidate)
-        if key == "content":
-            return cls._should_apply_content_update(changes, candidate)
-        if key == "category":
-            return cls._should_apply_category_update(changes, candidate)
-        if key == "location":
-            return cls._should_apply_location_update(changes, candidate)
-        return True
-
-    @classmethod
-    def _parse_explicit_edit_updates(cls, changes: str, current_event: EventItem) -> dict[str, Any]:
-        updates: dict[str, Any] = {}
-
-        title = cls._extract_edit_value(
-            changes,
-            (
-                r"(?:标题|名字|名称)\s*(?:改为|改成|改到|设为|设置为|重命名为|:|：)\s*([^，,。；;\n]+)",
-                r"(?:改名|重命名)\s*(?:为|成)?\s*([^，,。；;\n]+)",
-            ),
-        )
-        if title is not None and title != getattr(current_event, "title", None):
-            updates["title"] = title
-
-        location = cls._extract_edit_value(
-            changes,
-            (
-                r"(?:地点|位置|场地|地址|会场|会议地点)\s*(?:改为|改成|改到|设为|设置为|在|到|:|：)\s*([^，,。；;\n]+)",
-                r"@([^\s，,。；;\n]+)",
-            ),
-        )
-        if location is not None and location != getattr(current_event, "location", None):
-            updates["location"] = location
-
-        category = cls._extract_edit_value(
-            changes,
-            (
-                r"(?:分类|归类|类别|类目)\s*(?:改为|改成|设为|设置为|为|成|到|:|：)\s*([^，,。；;\n]+)",
-            ),
-        )
-        if category is not None and category != getattr(current_event, "category", None):
-            updates["category"] = category
-
-        content = cls._extract_edit_value(
-            changes,
-            (r"(?:内容|描述|详情)\s*(?:改为|改成|设为|设置为|为|成|:|：)\s*(.+)",),
-        )
-        if content is not None and content != getattr(current_event, "content", None):
-            updates["content"] = content
-
-        notes = cls._extract_notes_update(changes)
-        if notes is not None and notes != getattr(current_event, "notes", None):
-            updates["notes"] = notes
-
-        if not any(key in updates for key in ("title", "location", "category", "content", "notes")):
-            start_time = cls._extract_start_time_update(changes, current_event)
-            if start_time is not None and start_time != getattr(current_event, "start_time", None):
-                updates["start_time"] = start_time
-
-        return updates
-
-    @classmethod
-    def _extract_edit_value(cls, changes: str, patterns: tuple[str, ...]) -> str | None:
-        for pattern in patterns:
-            match = re.search(pattern, changes, re.IGNORECASE)
-            if not match:
-                continue
-            value = (match.group(1) or "").strip(cls._EDIT_VALUE_STOP_CHARS)
-            return value or None
-        return None
-
-    @classmethod
-    def _extract_start_time_update(cls, changes: str, current_event: EventItem) -> str | None:
-        text = changes.strip()
-        match = re.search(
-            r"(?:开始时间|时间)\s*(?:改为|改成|改到|设为|设置为|调整到|调整为|到|:|：)\s*(.+)",
-            text,
-        )
-        if not match:
-            match = re.match(r"\s*(?:改到|改为|改成|调整到|调整为)\s*(.+)", text)
-        if not match:
-            return None
-
-        candidate = match.group(1).strip(cls._EDIT_VALUE_STOP_CHARS)
-        candidate = cls._normalize_datetime_candidate(candidate, current_event)
-        if candidate is None:
-            return None
-        try:
-            normalized = normalize_event_fields({"start_time": candidate}, partial=True).get(
-                "start_time"
-            )
-            return normalized if isinstance(normalized, str) else None
-        except ValueError:
-            return None
-
-    @staticmethod
-    def _normalize_datetime_candidate(candidate: str, current_event: EventItem) -> str | None:
-        current_start = getattr(current_event, "start_time", None)
-        event_timezone = event_display_timezone(current_event)
-        try:
-            current_dt = (
-                TimezoneHelper.parse(current_start, event_timezone) if current_start else None
-            )
-        except (TypeError, ValueError):
-            current_dt = None
-
-        match = re.fullmatch(
-            r"(\d{4}-\d{2}-\d{2})(?:[T\s]+)(\d{1,2}):(\d{2})(?::(\d{2}))?",
-            candidate,
-        )
-        if match:
-            hour = int(match.group(2))
-            minute = match.group(3)
-            second = match.group(4) or "00"
-            wall_time = f"{match.group(1)}T{hour:02d}:{minute}:{second}"
-            return EventHandler._attach_event_timezone(wall_time, event_timezone)
-
-        match = re.fullmatch(r"(\d{1,2}):(\d{2})(?::(\d{2}))?", candidate)
-        if match and current_dt is not None:
-            hour = int(match.group(1))
-            minute = match.group(2)
-            second = match.group(3) or "00"
-            wall_time = f"{current_dt.date().isoformat()}T{hour:02d}:{minute}:{second}"
-            return EventHandler._attach_event_timezone(wall_time, event_timezone)
-
-        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", candidate):
-            time_part = "00:00:00"
-            if current_dt is not None:
-                time_part = current_dt.time().isoformat(timespec="seconds")
-            return EventHandler._attach_event_timezone(
-                f"{candidate}T{time_part}",
-                event_timezone,
-            )
-
-        return candidate or None
-
-    @staticmethod
-    def _attach_event_timezone(wall_time: str, event_timezone: ZoneInfo) -> str | None:
-        """Resolve one event wall time to an instant, rejecting DST gaps and folds."""
-        try:
-            normalized = normalize_event_fields(
-                {"start_time": wall_time},
-                partial=True,
-            )["start_time"]
-            parsed = datetime.fromisoformat(normalized)
-            return resolve_source_wall_time(parsed, "start_time", event_timezone).isoformat(
-                timespec="seconds"
-            )
-        except (KeyError, TypeError, ValueError):
-            return None
-
-    @classmethod
-    def _should_apply_title_update(
-        cls, changes: str, current_event: EventItem, candidate: Any
-    ) -> bool:
-        if not isinstance(candidate, str):
-            return False
-        title = candidate.strip()
-        if not title or title in ("未命名事件", "无标题"):
-            return False
-        if any(marker in title for marker in cls._TITLE_SCAFFOLD_MARKERS):
-            return False
-
-        current_title = (getattr(current_event, "title", "") or "").strip()
-        if title == current_title:
-            return False
-
-        normalized_changes = changes.strip()
-        if cls._TITLE_RENAME_RE.search(normalized_changes):
-            return True
-
-        if title == normalized_changes:
-            return cls._TITLE_SCHEDULE_RE.search(normalized_changes) is None
-
-        # 没有明确改名指令时，不接受 AI 从时间、地点或备注编辑中补写的新标题。
-        return False
-
-    @classmethod
-    def _should_apply_category_update(cls, changes: str, candidate: Any) -> bool:
-        if not isinstance(candidate, str):
-            return False
-        category = candidate.strip()
-        if not category or category == "未分类":
-            return False
-        return cls._CATEGORY_EDIT_RE.search(changes) is not None
-
-    @classmethod
-    def _should_apply_content_update(cls, changes: str, candidate: Any) -> bool:
-        if not isinstance(candidate, str):
-            return False
-        content = candidate.strip()
-        if not content:
-            return False
-        if any(marker in content for marker in cls._TITLE_SCAFFOLD_MARKERS):
-            return False
-        return cls._CONTENT_EDIT_RE.search(changes) is not None
-
-    @classmethod
-    def _should_apply_location_update(cls, changes: str, candidate: Any) -> bool:
-        if not isinstance(candidate, str):
-            return False
-        location = candidate.strip()
-        if not location:
-            return False
-        # AI 可能从“备注从北京南坐 G123 去会场”推断出地点；
-        # 除非用户明确要求改地点，否则只应作为备注。
-        has_note_directive = cls._NOTES_EDIT_RE.search(changes) is not None
-        has_location_directive = cls._LOCATION_EDIT_RE.search(changes) is not None
-        return has_location_directive or not has_note_directive
-
-    @classmethod
-    def _extract_notes_update(cls, changes: str) -> str | None:
-        match = cls._NOTES_EDIT_RE.search(changes)
-        if not match:
-            return None
-        notes = match.group(1).strip(cls._EDIT_VALUE_STOP_CHARS)
-        return notes or None
 
     def _looks_like_id(self, text: str) -> bool:
         """判断是否像ID（collection id、recurring occurrence id 或 node id）"""

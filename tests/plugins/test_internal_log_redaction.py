@@ -233,7 +233,6 @@ async def test_xiaoqing_jargon_fallback_logs_only_type(
 
     with caplog.at_level(logging.WARNING):
         result = await bw_jargon_miner.mine_jargon(
-            http_session=object(),
             secrets={"api_base": "https://example.test", "api_key": "key", "model": "m"},
             store=Mock(),
             chat_id="chat-1",

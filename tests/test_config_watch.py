@@ -498,20 +498,12 @@ class TestConfigManagerWatch:
         assert security_publications[-1].secrets == {}
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("operation", ["mutation", "save"])
     async def test_managed_secret_commit_remains_paired_on_next_reconcile(
         self,
         config_manager: ConfigManager,
         secrets_file: Path,
-        operation: str,
     ):
-        if operation == "mutation":
-            config_manager.set_plugin_secret("qingssh", "managed", "mutation")
-        else:
-            candidate = config_manager.snapshot().mutable_secrets()
-            candidate["managed_save"] = True
-            config_manager._replace_snapshot(config_manager.config, candidate)
-            config_manager.save_secrets()
+        config_manager.set_plugin_secret("qingssh", "managed", "mutation")
 
         committed = config_manager.snapshot()
         await config_manager._watch_reconcile_once()

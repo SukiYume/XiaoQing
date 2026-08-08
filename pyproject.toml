@@ -86,7 +86,6 @@ dev = [
     "pytest-xdist>=3.3.0",
     "aioresponses>=0.7.4",
     "httpx>=0.27.0",
-    "black>=23.0.0",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
     "pip-audit>=2.9.0",
@@ -258,21 +257,6 @@ exclude_lines = [
     "if __name__ == .__main__.:",
 ]
 
-[tool.black]
-line-length = 100
-target-version = ["py310", "py311", "py312", "py313"]
-include = '\.pyi?$'
-exclude = '''
-/(
-    \.git
-    | \.mypy_cache
-    | \.pytest_cache
-    | __pycache__
-    | \.venv
-    | logs
-)/
-'''
-
 [tool.ruff]
 line-length = 100
 target-version = "py310"
@@ -294,7 +278,7 @@ select = [
     "UP",     # pyupgrade
 ]
 ignore = [
-    "E501",   # line too long (handled by black)
+    "E501",   # 行宽由 Ruff formatter 统一处理
     "B008",   # do not perform function calls in argument defaults
 ]
 exclude = [
@@ -313,10 +297,9 @@ warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
 check_untyped_defs = true
-# 默认检查全部生产代码；下面的逐文件排除清单是可量化的既有类型债务。
-# 插件树仍在迁移期间使用 skip，避免一次性把动态插件导入债务伪装成绿灯；core
-# 在下方 override 中恢复 normal，只有五个已登记的 core 债务模块继续显式 skip。
-# 新增运行时代码会自动进入门禁，不能再因未手工加入小样本列表而漏检。
+# 默认检查全部生产代码；下面的逐文件排除清单只登记尚未清零的插件类型债务。
+# 插件树迁移期间使用 skip，避免把动态插件导入债务伪装成绿灯；core 在下方
+# override 中完整恢复 normal。新增 Core 代码会自动进入门禁。
 follow_imports = "skip"
 files = [
     "core",
@@ -325,63 +308,8 @@ files = [
 exclude = [
     "^tests/",
     "^build/",
-    "^core/bounded_http\\.py$",
-    "^core/config\\.py$",
-    "^core/dispatcher\\.py$",
-    "^core/onebot\\.py$",
-    "^core/server\\.py$",
-    "^plugins/adnmb/main\\.py$",
-    "^plugins/ads_paper/ai_commands\\.py$",
-    "^plugins/ads_paper/main\\.py$",
-    "^plugins/ads_paper/storage\\.py$",
-    "^plugins/apod/main\\.py$",
-    "^plugins/arxiv_filter/arxiv_inference\\.py$",
-    "^plugins/arxiv_filter/inference/knn_backend\\.py$",
-    "^plugins/arxiv_filter/inference/multi_interest_backend\\.py$",
-    "^plugins/arxiv_filter/numerics\\.py$",
-    "^plugins/chime/main\\.py$",
-    "^plugins/github/main\\.py$",
-    "^plugins/minecraft/log_monitor\\.py$",
-    "^plugins/pendo/commands/scheduled\\.py$",
-    "^plugins/pendo/core/runtime\\.py$",
-    "^plugins/pendo/main\\.py$",
-    "^plugins/pendo/services/ai_parser\\.py$",
-    "^plugins/pendo/services/db\\.py$",
-    "^plugins/pendo/web/analytics/diary_overview\\.py$",
-    "^plugins/pendo/web/api/config_routes\\.py$",
-    "^plugins/pendo/web/api/events\\.py$",
-    "^plugins/pendo/web/api/transfer\\.py$",
-    "^plugins/wolframalpha/main\\.py$",
-    "^plugins/xiaoqing_chat/brain_chat\\.py$",
-    "^plugins/xiaoqing_chat/config/config\\.py$",
-    "^plugins/xiaoqing_chat/handlers_helper\\.py$",
-    "^plugins/xiaoqing_chat/handlers_internal\\.py$",
-    "^plugins/xiaoqing_chat/handlers\\.py$",
-    "^plugins/xiaoqing_chat/llm/llm_client\\.py$",
-    "^plugins/xiaoqing_chat/logging_utils\\.py$",
-    "^plugins/xiaoqing_chat/main\\.py$",
-    "^plugins/xiaoqing_chat/media_registry\\.py$",
-    "^plugins/xiaoqing_chat/media/emoji_library\\.py$",
-    "^plugins/xiaoqing_chat/media/event_media_analysis\\.py$",
-    "^plugins/xiaoqing_chat/media/event_media_common\\.py$",
-    "^plugins/xiaoqing_chat/media/event_media\\.py$",
-    "^plugins/xiaoqing_chat/memory/knowledge_extract\\.py$",
-    "^plugins/xiaoqing_chat/memory/vector_store\\.py$",
-    "^plugins/xiaoqing_chat/planning/pfc_engine\\.py$",
-    "^plugins/xiaoqing_chat/reply_generator\\.py$",
-    "^plugins/xiaoqing_chat/smalltalk_execution\\.py$",
 ]
 
 [[tool.mypy.overrides]]
 module = ["core", "core.*"]
 follow_imports = "normal"
-
-[[tool.mypy.overrides]]
-module = [
-    "core.bounded_http",
-    "core.config",
-    "core.dispatcher",
-    "core.onebot",
-    "core.server",
-]
-follow_imports = "skip"

@@ -790,6 +790,8 @@ class TestMetricsCommand:
         result = await bot_core.handle("metrics", "", {}, SimpleNamespace(metrics=metrics))
 
         assert "最慢插件" not in str(result)
+        assert "运行时间: n/a" in str(result)
+        assert "总调用: n/a" in str(result)
 
 
 # ============================================================
@@ -929,6 +931,10 @@ class TestCommandAliases:
 
 
 class TestStructuredCommandCatalog:
+    def test_legacy_help_format_wrappers_are_removed(self):
+        assert not hasattr(bot_core, "_format_catalog_text")
+        assert not hasattr(bot_core, "_format_catalog_node")
+
     def test_plugin_overview_paginates_plugins_instead_of_command_nodes(self):
         roots = tuple(
             _catalog_node(

@@ -641,6 +641,27 @@ def test_task_inline_parser_supports_quotes_clearing_and_stable_tag_deduplicatio
     )
     assert quoted_apostrophe_title["title"] == "Review O'Reilly guide"
 
+    # 字段和标签必须是完整 token；URL 片段、单词内部的 # 和相似字段名均属于标题。
+    boundary_text = "scat:工作 reportp:2 notype=event"
+    boundary = handler._parse_task_text(
+        boundary_text,
+        "task-parser-user",
+        apply_defaults=False,
+    )
+    assert boundary["title"] == boundary_text
+    assert boundary["category"] == "未分类"
+    assert boundary["priority"] == 3
+    assert boundary["tags"] == []
+
+    inline_text = "链接 https://example.test/page#fragment 和 inline#tag 不是标签"
+    inline = handler._parse_task_text(
+        inline_text,
+        "task-parser-user",
+        apply_defaults=False,
+    )
+    assert inline["title"] == inline_text
+    assert inline["tags"] == []
+
 
 @pytest.mark.parametrize(
     "args",

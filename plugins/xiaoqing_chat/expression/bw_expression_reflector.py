@@ -1,3 +1,5 @@
+"""从待审表达中抽样，并向指定操作者发起反思确认。"""
+
 from __future__ import annotations
 
 import random
@@ -24,7 +26,7 @@ def _load_state(data_dir: Path) -> dict[str, Any]:
     try:
         obj = load_json(path, default=None)
         return obj if isinstance(obj, dict) else {"last_sent_ts": 0.0}
-    except Exception:
+    except OSError:
         return {"last_sent_ts": 0.0}
 
 

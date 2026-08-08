@@ -1,33 +1,21 @@
+"""维护每个会话的回复节奏，并计算参与意愿的软评分。"""
+
 from __future__ import annotations
 
 import asyncio
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import cast
 
 from ..constants import is_question
 from ..store_base import AsyncKeyedStore, delete_json_artifacts
 
-_LEGACY_SCORE_KWARGS = (
-    "threshold",
-    "enable_random",
-    "mentioned",
-    "weight_mentioned",
-    "is_private",
-    "replies_last_minute",
-    "max_replies_per_minute",
-    "cooldown_left_seconds",
-    "min_reply_interval_seconds",
-    "weight_private",
-    "weight_rate_limit",
-    "weight_cooldown",
-    "weight_interval",
-)
-
 
 @dataclass
 class HeartflowState:
+    """一个会话用于调节回复频率的最小持久状态。"""
+
     last_user_ts: float = 0.0
     last_bot_ts: float = 0.0
     reply_streak: int = 0
@@ -35,12 +23,14 @@ class HeartflowState:
 
 
 class HeartflowEngine(AsyncKeyedStore[HeartflowState]):
+    """按会话隔离 Heartflow 状态，并提供异步更新和评分入口。"""
+
     def __init__(self) -> None:
         super().__init__()
         self._cache: dict[str, HeartflowState] = {}
 
     def _path(self, chat_id: str) -> Path | None:
-        return self._resolve_path("heartflow", f"{chat_id}.json")
+        return cast(Path | None, self._resolve_path("heartflow", f"{chat_id}.json"))
 
     def get(self, chat_id: str) -> HeartflowState:
         if chat_id in self._cache:
@@ -76,7 +66,7 @@ class HeartflowEngine(AsyncKeyedStore[HeartflowState]):
         cached = self._cache.get(chat_id)
         if cached is not None:
             return cached
-        return await super().get_async(chat_id)
+        return cast(HeartflowState, await super().get_async(chat_id))
 
     async def on_user_message_async(self, *, chat_id: str) -> HeartflowState:
         st = await self.get_async(chat_id)
@@ -105,6 +95,7 @@ class HeartflowEngine(AsyncKeyedStore[HeartflowState]):
         if path:
             delete_json_artifacts(path)
 
+    # 评分只接收当前频率控制仍会提供的参数；删除旧参数后，调用错误会立即暴露。
     @staticmethod
     def _calculate_score(
         st: HeartflowState,
@@ -134,18 +125,32 @@ class HeartflowEngine(AsyncKeyedStore[HeartflowState]):
             s += weight_long_silence
         return max(0.0, min(1.0, s))
 
-    def score(self, *, chat_id: str, **kwargs: Any) -> float:
-        st = self.get(chat_id)
-        # 丢弃已经移到 heartflow 之前处理的旧门控参数。
-        _drop_legacy_score_kwargs(kwargs)
-        return self._calculate_score(st, **kwargs)
+    async def score_async(
+        self,
+        *,
+        chat_id: str,
+        text: str,
+        goal: str,
+        seconds_since_last_reply: float,
+        base: float,
+        weight_question: float = 0.12,
+        weight_goal_match: float = 0.06,
+        weight_short_text: float = -0.08,
+        weight_no_reply_streak: float = 0.05,
+        weight_long_silence: float = 0.08,
+    ) -> float:
+        """读取当前会话状态并计算归一化软评分。"""
 
-    async def score_async(self, *, chat_id: str, **kwargs: Any) -> float:
         st = await self.get_async(chat_id)
-        _drop_legacy_score_kwargs(kwargs)
-        return self._calculate_score(st, **kwargs)
-
-
-def _drop_legacy_score_kwargs(kwargs: dict[str, Any]) -> None:
-    for name in _LEGACY_SCORE_KWARGS:
-        kwargs.pop(name, None)
+        return self._calculate_score(
+            st,
+            text=text,
+            goal=goal,
+            seconds_since_last_reply=seconds_since_last_reply,
+            base=base,
+            weight_question=weight_question,
+            weight_goal_match=weight_goal_match,
+            weight_short_text=weight_short_text,
+            weight_no_reply_streak=weight_no_reply_streak,
+            weight_long_silence=weight_long_silence,
+        )

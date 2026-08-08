@@ -36,9 +36,8 @@ _JSON_LIMITS = JsonLimits(
 _SUCCESS_STATUSES = range(200, 300)
 _FIELD_CHAR_LIMIT = 256
 _MAX_REWARD_LINES = 20
-# These values mirror the current official WeChat client request observed for
-# the YouZan endpoint.  If the endpoint starts rejecting otherwise valid
-# credentials, update this pair together with the upstream client contract.
+# 这两个值对应当前观测到的有赞微信客户端请求；若上游开始拒绝原本有效的凭据，
+# 应把二者作为同一份客户端契约一起核对和更新。
 _CLIENT_VERSION = "2.210.8.101"
 _UUID_PREFIX = "xncgEoy8XBh9siy"
 

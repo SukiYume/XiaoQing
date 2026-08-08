@@ -8,8 +8,17 @@ from types import SimpleNamespace
 from typing import Any, ClassVar
 
 from core.interfaces import PluginCapabilities
+from plugins.pendo.config import PendoConfig
 
 ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+def reset_pendo_runtime_config() -> None:
+    """复位测试修改的进程内配置，不给生产配置类增加测试入口。"""
+
+    with PendoConfig._runtime_lock:
+        PendoConfig._runtime_settings = PendoConfig._RUNTIME_DEFAULTS
+        PendoConfig._runtime_revision = None
 
 
 class _ReminderMessageService:
@@ -52,6 +61,28 @@ def _with_scheduled_delivery_contract(db: Any) -> Any:
     db.complete_scheduled_delivery = lambda *_args: True
     db.release_scheduled_delivery = lambda *_args: True
     return db
+
+
+def _read_scheduled_delivery(
+    db: Any,
+    task_name: str,
+    owner_id: str,
+    period_key: str,
+) -> dict[str, Any] | None:
+    """测试侧直接读取调度 Outbox，不为只读断言扩张生产仓储接口。"""
+
+    row = (
+        db.get_connection()
+        .execute(
+            """
+        SELECT * FROM scheduled_delivery_outbox
+        WHERE task_name = ? AND owner_id = ? AND period_key = ?
+        """,
+            (str(task_name).strip(), str(owner_id).strip(), str(period_key).strip()),
+        )
+        .fetchone()
+    )
+    return dict(row) if row is not None else None
 
 
 class _StubSimpleHandler:
@@ -146,9 +177,11 @@ __all__ = (
     "_StubTaskHandler",
     "_build_task",
     "_single_user_shanghai_settings",
+    "_read_scheduled_delivery",
     "_with_scheduled_delivery_contract",
     "asyncio",
     "datetime",
     "json",
+    "reset_pendo_runtime_config",
     "timezone",
 )

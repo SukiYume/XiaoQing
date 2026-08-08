@@ -5,7 +5,6 @@ import tempfile
 
 import pytest
 
-from core.router import format_command_catalog
 from plugins.qingpet import main as qingpet_main
 from plugins.qingpet.commands.new_commands import (
     _dress_buy,
@@ -33,12 +32,42 @@ def temp_db():
 
 def test_help_menu_categories():
     root = qingpet_main._local_catalog_root()
-    help_text = format_command_catalog(root, title="宠物系统命令目录")
+    help_text = qingpet_main._format_help_overview(root)
 
-    assert "qingpet.qingpet.basic" in help_text
-    assert "qingpet.qingpet.advanced" in help_text
-    assert "qingpet.qingpet.visit" in help_text
-    assert "qingpet.qingpet.dress.shop" in help_text
+    assert "/宠物 help basic" in help_text
+    assert "/宠物 help advanced" in help_text
+    assert "/宠物 help social" in help_text
+    assert "/宠物 visit" not in help_text
+
+
+def test_category_help_only_expands_selected_manifest_commands():
+    root = qingpet_main._local_catalog_root()
+
+    help_text = qingpet_main._format_category_help(root, "social")
+
+    assert "社交互动" in help_text
+    assert "/宠物 visit <@QQ号>" in help_text
+    assert "/宠物 trade sell" in help_text
+    assert "/宠物 feed" not in help_text
+
+
+def test_help_categories_cover_each_business_command_once():
+    root = qingpet_main._local_catalog_root()
+    category_helpers = set(qingpet_main._HELP_CATEGORIES)
+    business_commands = {
+        child.name for child in root.children if child.name not in {"help", *category_helpers}
+    }
+    grouped_commands = [
+        command_name
+        for _title, command_names in qingpet_main._HELP_CATEGORIES.values()
+        for command_name in command_names
+    ]
+    help_node = root.resolve_child("help")
+
+    assert help_node is not None
+    assert {child.name for child in help_node.children} == category_helpers
+    assert len(grouped_commands) == len(set(grouped_commands))
+    assert set(grouped_commands) == business_commands
 
 
 def test_dress_shop_display():

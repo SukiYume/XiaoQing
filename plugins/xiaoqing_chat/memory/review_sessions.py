@@ -1,3 +1,5 @@
+"""持久化人工复盘会话，并把审核结论转为后续回复策略。"""
+
 from __future__ import annotations
 
 import hashlib
@@ -679,8 +681,7 @@ def build_policy_block(store: ReviewStore, chat_id: str) -> str:
     if pol.avoid_patterns:
         recent = pol.avoid_patterns[-6:]
         lines.append("- 长期规避：")
-        for x in recent:
-            lines.append(f"  - {x.strip()}")
+        lines.extend(f"  - {item.strip()}" for item in recent)
     if pol.goal_override.strip() and pol.goal_lock_until > now:
         lines.append(f"- 目标覆写：{pol.goal_override.strip()}")
     if not lines:

@@ -1,3 +1,5 @@
+"""结合消息指向、上下文锚点和回复关系决定群聊注意力。"""
+
 from __future__ import annotations
 
 import asyncio

@@ -9,12 +9,15 @@ import re
 import stat
 from collections.abc import Mapping
 from datetime import date as calendar_date
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from core.interfaces import ACTION_BYPASS_SINK_KEY, DeliveryTarget
+from core.interfaces import ACTION_BYPASS_SINK_KEY, DeliveryTarget, PluginContextProtocol
 from core.plugin_base import build_action, segments, split_message_segments
 
 from .paths import normalize_cwd
+
+if TYPE_CHECKING:
+    from .manager import CodexQueueManager, CodexSession, RuntimeJob
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +103,7 @@ def _summary_identity_matches(
 
 
 async def enqueue_or_replay_arxiv_summary(
-    context: Any,
+    context: PluginContextProtocol,
     *,
     date: str,
     links: list[str],
@@ -158,7 +161,7 @@ def _targets_from_ids(
 
 
 class ArxivSummaryAddon:
-    def __init__(self, manager: Any) -> None:
+    def __init__(self, manager: CodexQueueManager) -> None:
         self.manager = manager
 
     async def enqueue_or_replay(
@@ -168,7 +171,7 @@ class ArxivSummaryAddon:
         links: list[str],
         user_id: int | None,
         group_id: int | None,
-        context: Any,
+        context: PluginContextProtocol,
         delivery_targets: tuple[DeliveryTarget, ...] | None = None,
     ) -> str:
         normalized_date = _normalize_date(date)
@@ -302,7 +305,7 @@ class ArxivSummaryAddon:
         *,
         user_id: int | None,
         group_id: int | None,
-        context: Any,
+        context: PluginContextProtocol,
         delivery_targets: tuple[DeliveryTarget, ...] | None = None,
     ) -> None:
         targets = (
@@ -317,7 +320,7 @@ class ArxivSummaryAddon:
                     action[ACTION_BYPASS_SINK_KEY] = True
                     await context.send_action(action)
 
-    def _is_summary_job(self, job: Any, date: str, links: list[str]) -> bool:
+    def _is_summary_job(self, job: RuntimeJob, date: str, links: list[str]) -> bool:
         metadata = job.metadata or {}
         return isinstance(metadata, Mapping) and _summary_identity_matches(
             metadata,
@@ -325,7 +328,7 @@ class ArxivSummaryAddon:
             links=links,
         )
 
-    def _is_init_job(self, job: Any) -> bool:
+    def _is_init_job(self, job: RuntimeJob) -> bool:
         metadata = job.metadata or {}
         return (
             metadata.get("source") == ARXIV_SUMMARY_SOURCE
@@ -337,7 +340,7 @@ class ArxivSummaryAddon:
         label: str,
         date: str,
         links: list[str],
-    ) -> Any | None:
+    ) -> RuntimeJob | None:
         running = self.manager.running.get(label)
         if running and self._is_summary_job(running, date, links):
             return running
@@ -346,7 +349,7 @@ class ArxivSummaryAddon:
                 return queued
         return None
 
-    def _find_inflight_init_locked(self, label: str) -> Any | None:
+    def _find_inflight_init_locked(self, label: str) -> RuntimeJob | None:
         running = self.manager.running.get(label)
         if running and self._is_init_job(running):
             return running
@@ -433,7 +436,12 @@ class ArxivSummaryAddon:
             "这条消息只用于初始化会话规则，请简短确认。"
         )
 
-    def _ensure_session_locked(self, *, user_id: int | None, group_id: int | None) -> Any:
+    def _ensure_session_locked(
+        self,
+        *,
+        user_id: int | None,
+        group_id: int | None,
+    ) -> CodexSession:
         label = self.manager.config.arxiv_summary_label
         session = self.manager.sessions.get(label)
         if session is not None:

@@ -1,23 +1,23 @@
-"""
-小青智能对话插件
-提供 AI 对话、上下文记忆、表达学习等高级功能
-"""
+"""小青智能对话插件的生命周期、命令路由与 Core 观察入口。"""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from collections.abc import Awaitable, Callable
+from typing import Any, cast
 
 from core.plugin_base import segments
 from core.public_errors import public_error_message, public_error_response
 from core.router import (
     CommandCatalogNode,
+    CommandInvocation,
     format_command_catalog,
     get_context_command_root,
     resolve_context_command_invocation,
 )
 
+from .handler_context import validate_action_list
 from .handlers import (
     call_bot_name_only_internal,
     handle_config,
@@ -39,7 +39,12 @@ from .runtime_state import get_state as _state
 
 logger = logging.getLogger(__name__)
 
-_HANDLERS: dict[str, Any] = {
+CommandResponse = list[dict[str, Any]]
+CommandHandler = Callable[[str, dict[str, Any], Any], Awaitable[CommandResponse]]
+
+
+# 子命令只在这里绑定业务处理器；名称、别名、权限和帮助仍以 manifest 目录为准。
+_HANDLERS: dict[str, CommandHandler] = {
     "reset": lambda rest, ev, ctx: handle_internal("重置", rest, ev, ctx),
     "stats": lambda rest, ev, ctx: handle_internal("统计", rest, ev, ctx),
     "brain": lambda rest, ev, ctx: handle_internal("深度对话", rest, ev, ctx),
@@ -52,13 +57,19 @@ _HANDLERS: dict[str, Any] = {
 }
 
 
+def _validated_actions(value: object, *, source: str) -> CommandResponse:
+    """跨模块调用在当前渐进类型配置下需要恢复已校验的具体类型。"""
+
+    return cast(CommandResponse, validate_action_list(value, source=source))
+
+
 def _catalog_root(context: Any) -> CommandCatalogNode | None:
     """优先复用 Dispatcher 注入的快照，直接调用时再查同一 Core 目录。"""
 
     return get_context_command_root(context, "xiaoqing_chat.xc")
 
 
-def _resolve_invocation(args: str, context: Any):
+def _resolve_invocation(args: str, context: Any) -> CommandInvocation | None:
     return resolve_context_command_invocation(context, "xiaoqing_chat.xc", args)
 
 
@@ -70,7 +81,7 @@ def _help_text(context: Any) -> str:
 
 
 async def init(context=None) -> None:
-    """插件初始化"""
+    """启动后台任务接收，并绑定、加载需要持久化的插件存储。"""
     state = _state()
     state.start_accepting_background_tasks()
     if context is not None:
@@ -90,6 +101,7 @@ async def handle(
     context,
 ) -> list[dict[str, Any]]:
     """命令处理入口；``command`` 由插件协议传入，实际子命令从 ``args`` 解析。"""
+    del command  # 保留框架按关键字调用的公开参数名；子命令事实源是 Core 解析后的 args。
     try:
         raw_args = str(args or "").strip()
         raw_parts = raw_args.split(maxsplit=1)
@@ -124,18 +136,21 @@ async def handle(
 
         if not action and root is not None:
             parts = raw_parts
-            candidate = root.resolve_child(parts[0]) if parts else None
+            candidate_node = root.resolve_child(parts[0]) if parts else None
             if (
-                candidate is not None
-                and candidate.name != "help"
-                and candidate.match_mode == "exact"
+                candidate_node is not None
+                and candidate_node.name != "help"
+                and candidate_node.match_mode == "exact"
                 and len(parts) > 1
             ):
-                return segments(f"❌ 用法: {candidate.usage}")
+                return segments(f"❌ 用法: {candidate_node.usage}")
 
         handler = _HANDLERS.get(action)
-        if handler:
-            return await handler(rest, event, context)
+        if handler is not None:
+            return _validated_actions(
+                await handler(rest, event, context),
+                source=f"command:{action}",
+            )
 
         # 未匹配子命令 → 当作聊天内容（使用 args 而非 raw_message，避免带上 /xc 前缀）
         text = raw_args
@@ -143,7 +158,10 @@ async def handle(
             return []
         # 显式 /xc 命令 → 标记强制回复，跳过概率判断
         event["_xc_command_forced"] = True
-        return await handle_smalltalk(text, event, context)
+        return _validated_actions(
+            await handle_smalltalk(text, event, context),
+            source="handle_smalltalk",
+        )
 
     except Exception as exc:
         log = getattr(context, "logger", logger)
@@ -161,11 +179,17 @@ async def call_bot_name_only(context) -> list[dict[str, Any]]:
 
     注意：此函数由 dispatcher 调用，作为 smalltalk provider 的一部分
     """
-    return await call_bot_name_only_internal(context)
+    return _validated_actions(
+        await call_bot_name_only_internal(context),
+        source="call_bot_name_only_internal",
+    )
 
 
 async def observe_message(clean_text: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
-    return await observe_message_internal(clean_text, event, context)
+    return _validated_actions(
+        await observe_message_internal(clean_text, event, context),
+        source="observe_message_internal",
+    )
 
 
 async def observe_outgoing_action(
@@ -174,10 +198,13 @@ async def observe_outgoing_action(
     *,
     source_plugin: str = "",
 ) -> list[dict[str, Any]]:
-    return await observe_outgoing_action_internal(
-        action,
-        context,
-        source_plugin=source_plugin,
+    return _validated_actions(
+        await observe_outgoing_action_internal(
+            action,
+            context,
+            source_plugin=source_plugin,
+        ),
+        source="observe_outgoing_action_internal",
     )
 
 

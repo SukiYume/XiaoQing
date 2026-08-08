@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from typing import Any
 
+from core.interfaces import PluginContextProtocol
 from core.public_errors import public_error_message
 
 logger = logging.getLogger(__name__)
@@ -22,11 +22,11 @@ def extract_arxiv_links(text: str) -> list[str]:
 
 
 def schedule_codex_summary_from_filter_result(
-    context: Any,
+    context: PluginContextProtocol,
     *,
     date: str,
     filter_text: str,
-) -> asyncio.Task | None:
+) -> asyncio.Task[None] | None:
     links = extract_arxiv_links(filter_text)
     logger.info(
         "arXiv Codex summary sidecar extracted %d links for %s",
@@ -41,11 +41,11 @@ def schedule_codex_summary_from_filter_result(
 
 
 def schedule_codex_summary(
-    context: Any,
+    context: PluginContextProtocol,
     *,
     date: str,
     links: list[str],
-) -> asyncio.Task | None:
+) -> asyncio.Task[None] | None:
     if not links:
         logger.info("skip Codex arXiv summary enqueue for %s: no links", date)
         return None
@@ -85,6 +85,8 @@ def schedule_codex_summary(
 
     try:
         task = asyncio.create_task(_runner())
+        # 真实插件上下文会提供代际 state；轻量测试替身或旧嵌入方没有该字段时，
+        # 任务仍可执行，只是不登记到卸载期可见的后台任务集合。
         state = getattr(context, "state", None)
         if isinstance(state, dict):
             tasks = state.setdefault("arxiv_background_tasks", set())

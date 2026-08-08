@@ -363,9 +363,7 @@ class TestShellHandle:
         assert "/shell ls -la" not in rendered
 
     @pytest.mark.asyncio
-    async def test_handle_help_uses_posix_examples(
-        self, monkeypatch, mock_context, mock_event
-    ):
+    async def test_handle_help_uses_posix_examples(self, monkeypatch, mock_context, mock_event):
         monkeypatch.setattr(shell_main.sys, "platform", "linux")
 
         result = await shell_main.handle("shell", "help", mock_event, mock_context)
@@ -430,9 +428,7 @@ class TestShellHandle:
         assert "启用列表不负责安装程序" in rendered
 
     @pytest.mark.asyncio
-    async def test_handle_list_queries_git_bash_once(
-        self, monkeypatch, mock_context, mock_event
-    ):
+    async def test_handle_list_queries_git_bash_once(self, monkeypatch, mock_context, mock_event):
         mock_context.config = {
             "plugins": {
                 "shell": {

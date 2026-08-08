@@ -1,3 +1,5 @@
+"""读取、清理并迁移按会话保存的话题摘要缓存。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -49,16 +51,24 @@ def load_topic_summary_entries(data_dir: Path, chat_id: str) -> list[TopicSummar
 
         keywords_raw = item_dict.get("keywords", [])
         key_points_raw = item_dict.get("key_points", [])
-        keywords: list[str] = []
-        key_points: list[str] = []
-        if isinstance(keywords_raw, list):
-            for raw_keyword in cast(list[object], keywords_raw):
-                if isinstance(raw_keyword, str) and raw_keyword.strip():
-                    keywords.append(raw_keyword.strip())
-        if isinstance(key_points_raw, list):
-            for raw_point in cast(list[object], key_points_raw):
-                if isinstance(raw_point, str) and raw_point.strip():
-                    key_points.append(raw_point.strip())
+        keywords = (
+            [
+                item.strip()
+                for item in cast(list[object], keywords_raw)
+                if isinstance(item, str) and item.strip()
+            ]
+            if isinstance(keywords_raw, list)
+            else []
+        )
+        key_points = (
+            [
+                item.strip()
+                for item in cast(list[object], key_points_raw)
+                if isinstance(item, str) and item.strip()
+            ]
+            if isinstance(key_points_raw, list)
+            else []
+        )
         updated_at_raw = item_dict.get("updated_at", 0.0)
         updated_at = 0.0
         if isinstance(updated_at_raw, (int, float)):

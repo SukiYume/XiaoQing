@@ -5,7 +5,7 @@
 import math
 import sys
 
-from core.plugin_base import run_sync
+from core.plugin_base import PluginContextProtocol, run_sync
 from core.public_errors import public_error_message
 
 # 公式定义常量
@@ -81,7 +81,7 @@ def _parse_positive_mass(value: str) -> float | None:
     return mass if math.isfinite(mass) and mass > 0 else None
 
 
-def _handle_formula_sync(args: str, context) -> str:
+def _handle_formula_sync(args: str, context: PluginContextProtocol) -> str:
     """处理公式速查和计算命令"""
     args = args.strip().casefold()
     if not args or args in {"list", "help", "帮助"}:
@@ -114,13 +114,13 @@ def _handle_formula_sync(args: str, context) -> str:
     return f"未找到公式: {args}\n\n可用公式: {', '.join(FORMULAS)}\n\n输入 /astro formula 查看列表"
 
 
-async def handle_formula(args: str, context) -> str:
+async def handle_formula(args: str, context: PluginContextProtocol) -> str:
     """在线程 bulkhead 中执行公式和 astropy 计算。"""
 
     return await run_sync(_handle_formula_sync, args, context)
 
 
-def _handle_calculation(args: str, context) -> str:
+def _handle_calculation(args: str, context: PluginContextProtocol) -> str:
     """处理公式计算"""
     parts = args.strip().split(None, 1)
     if not parts:

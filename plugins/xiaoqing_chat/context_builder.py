@@ -1,3 +1,5 @@
+"""为回复生成组装记忆、资料、知识、表达和工具上下文。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -154,8 +156,7 @@ def _build_knowledge_block(runtime: _ChatRuntime, state, text: str) -> str:
     kb_lines = [f"- {it.text.strip()}" for it in kb_items if it.text.strip()]
     if not kb_lines:
         return ""
-    kb_block = "你掌握的相关知识：\n" + "\n".join(kb_lines) + "\n"
-    return kb_block
+    return "你掌握的相关知识：\n" + "\n".join(kb_lines) + "\n"
 
 
 def _build_jargon_explanation(state, data_dir, chat_id: str, unknown_words: list[str]) -> str:

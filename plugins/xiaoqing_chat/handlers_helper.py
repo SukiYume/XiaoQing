@@ -1,3 +1,5 @@
+"""调度回复成功后的摘要、学习、复盘和事实提取任务。"""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
@@ -37,7 +39,6 @@ async def _spawn_post_reply_bg_tasks(
             await maybe_update_topic_summary(
                 data_dir=context.data_dir,
                 memory_db=state.memory_db,
-                http_session=context.http_session,
                 secrets=secrets,
                 bot_name=bot_name,
                 chat_id=chat_id,
@@ -113,7 +114,6 @@ async def _spawn_post_reply_bg_tasks(
     async def _run_fact_extract() -> None:
         await maybe_extract_person_facts(
             data_dir=context.data_dir,
-            http_session=context.http_session,
             secrets=secrets,
             memory_db=state.memory_db,
             chat_id=chat_id,

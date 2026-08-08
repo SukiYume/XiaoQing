@@ -157,12 +157,6 @@ def install_media_fetch(monkeypatch: pytest.MonkeyPatch):
     return install
 
 
-def test_init_records_plugin_load(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level("INFO", logger=twitter.__name__):
-        assert twitter.init() is None
-    assert "已加载" in caplog.text
-
-
 @pytest.mark.parametrize(
     "secrets",
     [None, [], {"plugins": []}, {"plugins": {"twitter": []}}],
@@ -1057,6 +1051,7 @@ async def test_shutdown_cancels_owned_background_fetch(
     monkeypatch.setattr(twitter, "_fetch_twitter_images", never_finishes)
     monkeypatch.setattr(twitter, "_FETCH_TASK", None)
     monkeypatch.setattr(twitter, "_MANUAL_NOTIFICATION_TASK", None)
+    monkeypatch.setattr(twitter, "_POSTED_RESERVATIONS", {"pending": {"image.jpg"}})
 
     assert await twitter.scheduled_fetch(context) == []
     await asyncio.wait_for(started.wait(), timeout=1.0)
@@ -1068,6 +1063,7 @@ async def test_shutdown_cancels_owned_background_fetch(
     assert task.cancelled()
     assert twitter._FETCH_TASK is None
     assert twitter._MANUAL_NOTIFICATION_TASK is None
+    assert twitter._POSTED_RESERVATIONS == {}
 
 
 def test_manifest_and_docs_describe_the_same_bounded_behavior() -> None:
@@ -1092,7 +1088,7 @@ def test_manifest_and_docs_describe_the_same_bounded_behavior() -> None:
             "help"
         ]
     )
-    assert "立即返回并在完成后通知" in readme
+    assert "提交后台抓取，并在完成后私聊通知结果" in readme
     for command in manifest["commands"]:
         for trigger in command["triggers"]:
             assert f"/{trigger}" in readme

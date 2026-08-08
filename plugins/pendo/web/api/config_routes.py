@@ -1,5 +1,7 @@
 """提供记账分类、日记模板和情绪元数据等只读配置快照。"""
 
+from collections.abc import Mapping
+
 from fastapi import APIRouter
 
 from ...config import (
@@ -11,6 +13,14 @@ from ...config import (
 )
 
 router = APIRouter()
+
+
+def _copy_text_mapping(value: object) -> dict[str, str]:
+    """在配置/API 边界校验并复制字符串映射，避免返回进程级可变对象。"""
+
+    if not isinstance(value, Mapping):
+        return {}
+    return {str(key): str(label) for key, label in value.items()}
 
 
 @router.get("/config/categories")
@@ -50,8 +60,8 @@ def get_diary_moods() -> dict[str, object]:
     return {
         "ok": True,
         "data": {
-            "mood_emojis": dict(MOOD_ANALYSIS_CONFIG.get("mood_emojis", {})),
-            "mood_labels": dict(MOOD_ANALYSIS_CONFIG.get("mood_labels", {})),
+            "mood_emojis": _copy_text_mapping(MOOD_ANALYSIS_CONFIG.get("mood_emojis")),
+            "mood_labels": _copy_text_mapping(MOOD_ANALYSIS_CONFIG.get("mood_labels")),
             "moods": [dict(mood) for mood in DIARY_MOODS],
         },
         "message": "",

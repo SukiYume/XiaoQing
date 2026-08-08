@@ -1,3 +1,5 @@
+"""根据可见对话和行动历史更新 PFC 的短期会话目标。"""
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -12,7 +14,6 @@ from .pfc_utils import get_items_from_json
 
 async def analyze_goals(
     *,
-    http_session,
     secrets: dict[str, Any],
     bot_name: str,
     personality: PersonalityConfig,
@@ -26,6 +27,8 @@ async def analyze_goals(
     max_retry: int,
     retry_interval_seconds: float,
 ) -> list[dict[str, Any]]:
+    """返回最多五个有当前对话证据的目标；失败时保留原目标。"""
+
     if "_ai" in secrets and secrets.get("_ai") is None:
         return list(current_goal_list)
 

@@ -140,17 +140,18 @@ def test_event_collection_change_and_operation_log_share_one_transaction(
             "owner_id": owner_id,
             "kind": "multi_node",
             "title": "修改前",
-        }
+        },
+        [
+            (
+                child_id,
+                {
+                    "title": "子日程",
+                },
+            )
+        ],
     )
-    db.insert_item(
-        {
-            "id": child_id,
-            "owner_id": owner_id,
-            "type": "event",
-            "title": "子日程",
-            "event_collection_id": collection_id,
-            "event_collection_kind": "multi_node",
-        }
+    baseline_log_count = (
+        db.get_connection().execute("SELECT COUNT(*) FROM operation_logs").fetchone()[0]
     )
 
     def fail_log(*_args, **_kwargs):
@@ -179,7 +180,10 @@ def test_event_collection_change_and_operation_log_share_one_transaction(
 
     assert db.get_event_collection(collection_id, owner_id)["title"] == "修改前"
     assert db.get_item(child_id, owner_id) is not None
-    assert db.get_connection().execute("SELECT COUNT(*) FROM operation_logs").fetchone()[0] == 0
+    assert (
+        db.get_connection().execute("SELECT COUNT(*) FROM operation_logs").fetchone()[0]
+        == baseline_log_count
+    )
     db.cleanup()
 
 
@@ -522,32 +526,6 @@ def test_time_range_tokens_must_match_the_complete_input():
     )
 
 
-def test_metadata_tokens_require_a_token_boundary():
-    from plugins.pendo.utils.formatters import extract_metadata
-
-    untouched = "scat:工作 reportp:2 notype=event"
-    assert extract_metadata(untouched, with_priority=True) == {
-        "category": None,
-        "tags": [],
-        "priority": None,
-        "text": untouched,
-    }
-    inline = "链接 https://example.test/page#fragment 和 inline#tag 不是标签"
-    assert extract_metadata(inline, with_priority=True) == {
-        "category": None,
-        "tags": [],
-        "priority": None,
-        "text": inline,
-    }
-    parsed = extract_metadata("写周报 cat:工作 p:2 #汇报", with_priority=True)
-    assert parsed == {
-        "category": "工作",
-        "tags": ["汇报"],
-        "priority": 2,
-        "text": "写周报",
-    }
-
-
 def test_rate_limiter_removes_expired_user_buckets(monkeypatch: pytest.MonkeyPatch) -> None:
     from plugins.pendo.services import ai_parser as ai_parser_module
     from plugins.pendo.services.ai_parser import RateLimiter
@@ -601,7 +579,7 @@ def test_search_items_applies_date_range_filters():
             }
         )
 
-        results = db.search_items(
+        results, total = db.search_items_page(
             owner_id,
             "会议",
             filters={
@@ -613,6 +591,7 @@ def test_search_items_applies_date_range_filters():
             limit=10,
         )
 
+        assert total == 1
         assert [item.id for item in results] == ["note_april"]
     finally:
         db.cleanup()

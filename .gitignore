@@ -102,6 +102,9 @@ plugins/*/cache/
 /tests/command_scenario_fixtures.local.json
 plugins/pendo/test_tools/
 plugins/xiaoqing_chat/figures/
+/docs/code*
+/docs/markdown-audit-*.md
+/docs/remote-sync.md
 
 # Large local model / training artifacts
 plugins/arxiv_filter/best_model*/

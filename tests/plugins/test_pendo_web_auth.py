@@ -14,6 +14,7 @@ import pytest
 from fastapi import HTTPException, Request, Response
 
 from plugins.pendo.config import PendoConfig
+from tests.helpers.pendo_test_support import reset_pendo_runtime_config
 
 try:
     from plugins.pendo.web import auth as auth_module
@@ -23,7 +24,6 @@ try:
         WebSession,
         consume_login_code,
         create_web_session,
-        generate_token,
         generate_widget_token,
         get_web_session,
         issue_login_code,
@@ -40,22 +40,25 @@ except ModuleNotFoundError as exc:
 
 
 @pytest.fixture(autouse=True)
-def _reset_ephemeral_auth_state(
+def _reset_persistent_auth_state(
     monkeypatch: pytest.MonkeyPatch,
     temp_data_dir: Path,
 ) -> Iterator[None]:
-    """防止登录码和内存会话跨用例污染。"""
+    """让每个用例使用独立的 Pendo 认证表和签名密钥。"""
+
+    from plugins.pendo.services.db import Database
+
+    auth_db = Database(str(temp_data_dir / "pendo.db"))
     monkeypatch.delenv("PENDO_WEB_TOKEN_SECRET", raising=False)
-    auth_module.configure_auth_storage(temp_data_dir)
-    PendoConfig.reset_runtime_config()
-    with auth_module._AUTH_LOCK:
-        auth_module._LOGIN_CODES.clear()
-        auth_module._SESSIONS.clear()
-    yield
-    PendoConfig.reset_runtime_config()
-    with auth_module._AUTH_LOCK:
-        auth_module._LOGIN_CODES.clear()
-        auth_module._SESSIONS.clear()
+    auth_module.configure_auth_database(auth_db)
+    reset_pendo_runtime_config()
+    try:
+        yield
+    finally:
+        reset_pendo_runtime_config()
+        with auth_module._AUTH_LOCK:
+            auth_module._AUTH_DATABASE = None
+        auth_db.cleanup()
 
 
 @pytest.fixture
@@ -68,39 +71,37 @@ def isolated_secret_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Pat
     return secret_file
 
 
-def test_generated_token_contains_expected_web_claims(isolated_secret_file: Path) -> None:
-    """普通 Web Token 应绑定规范化主体、发行方、类型和整数期限。"""
-
-    token = generate_token(" user-case ")
-    payload = verify_token(token)
-
-    assert isinstance(token, str) and token
-    assert payload["owner_id"] == "user-case"
-    assert payload["sub"] == "user-case"
-    assert payload["iss"] == "pendo-web"
-    assert payload["typ"] == "pendo-web"
-    assert isinstance(payload["exp"], int)
-    assert isolated_secret_file.exists()
-
-
 def test_generated_widget_token_contains_read_only_claims(
     isolated_secret_file: Path,
     temp_db,
 ) -> None:
-    """Widget Token 应明确携带只读种类和 scope。"""
+    """Widget Token 应绑定规范化主体、固定只读权限和整数期限。"""
 
     issued_at = int(time.time())
-    payload = verify_token(
-        generate_widget_token("widget-user", db=temp_db),
-        db=temp_db,
-    )
+    token = generate_widget_token(" widget-user ", db=temp_db)
+    payload = verify_token(token, db=temp_db)
 
+    assert isinstance(token, str) and token
     assert payload["owner_id"] == "widget-user"
+    assert payload["sub"] == "widget-user"
+    assert payload["iss"] == "pendo-web"
+    assert payload["typ"] == "pendo-web"
     assert payload["kind"] == "widget"
     assert payload["scope"] == "widget:read"
     assert isinstance(payload["jti"], str) and payload["jti"]
+    assert isinstance(payload["exp"], int)
     lifetime = payload["exp"] - issued_at
     assert 364 * 24 * 60 * 60 <= lifetime <= 366 * 24 * 60 * 60
+    assert isolated_secret_file.exists()
+
+
+def test_authentication_lifetimes_use_seconds_with_distinct_durations() -> None:
+    """登录 Code/会话同为 7 天，Widget Token 为 365 天，均使用秒。"""
+
+    day = 24 * 60 * 60
+    assert PendoConfig.WEB_LOGIN_CODE_EXPIRE_SECONDS == 7 * day
+    assert PendoConfig.WEB_SESSION_EXPIRE_SECONDS == 7 * day
+    assert PendoConfig.WEB_WIDGET_TOKEN_EXPIRE_SECONDS == 365 * day
 
 
 def test_widget_token_revocation_is_persistent(tmp_path: Path) -> None:
@@ -126,17 +127,18 @@ def test_widget_token_revocation_is_persistent(tmp_path: Path) -> None:
 def test_token_remains_valid_after_secret_cache_reset(
     monkeypatch: pytest.MonkeyPatch,
     isolated_secret_file: Path,
+    temp_db,
 ) -> None:
     """清空进程缓存后应复用持久密钥，旧 Token 仍可验证。"""
 
-    token = generate_token("persist-user")
+    token = generate_widget_token("persist-user", db=temp_db)
     first_secret = isolated_secret_file.read_text(encoding="utf-8").strip()
 
     monkeypatch.setattr(auth_module, "_SECRET_CACHE", None)
     second_secret = auth_module._get_secret_key()
 
     assert second_secret == first_secret
-    assert verify_token(token)["owner_id"] == "persist-user"
+    assert verify_token(token, db=temp_db)["owner_id"] == "persist-user"
 
 
 def test_secret_initialization_is_thread_safe(
@@ -203,53 +205,78 @@ def test_environment_secret_takes_precedence_without_writing_file(
     assert not secret_file.exists()
 
 
-@pytest.mark.parametrize("claim", ["owner_id", "sub", "typ", "iss", "exp", "iat"])
-def test_extra_claims_cannot_override_reserved_identity_fields(claim: str) -> None:
-    """调用方扩展声明不得覆盖主体、发行方和时间保留字段。"""
+def _sign_invalid_widget_token(
+    owner_id: str,
+    *,
+    db,
+    expires_at: int,
+    scope: str | None = "widget:read",
+    token_id: str | None = "test-widget-token",
+) -> str:
+    """只为验证拒绝路径签发不进入生产注册表的畸形 Widget JWT。"""
 
-    with pytest.raises(ValueError, match="reserved fields"):
-        generate_token("owner-a", extra_claims={claim: "attacker-controlled"})
+    # 验证端会按数据库目录重新绑定密钥；签发测试样本前使用同一真实绑定路径。
+    auth_module.configure_auth_database(db)
+    issued_at = int(time.time())
+    payload = {
+        "owner_id": owner_id,
+        "sub": owner_id,
+        "typ": "pendo-web",
+        "iss": "pendo-web",
+        "exp": expires_at,
+        "iat": issued_at,
+        "kind": "widget",
+    }
+    if scope is not None:
+        payload["scope"] = scope
+    if token_id is not None:
+        payload["jti"] = token_id
+    return auth_module.jwt.encode(payload, auth_module._get_secret_key(), algorithm="HS256")
 
 
-@pytest.mark.parametrize("extra_claims", [[("kind", "widget")], {1: "invalid-key"}])
-def test_extra_claims_require_a_string_key_mapping(extra_claims: object) -> None:
-    """扩展声明必须是字符串键映射，不能宽松接收序列或非字符串键。"""
-
-    with pytest.raises(ValueError, match="extra_claims"):
-        generate_token("owner-a", extra_claims=extra_claims)
-
-
-def test_widget_token_without_read_scope_is_rejected() -> None:
+def test_widget_token_without_read_scope_is_rejected(temp_db) -> None:
     """仅伪装 Widget 种类而缺少只读 scope 的 Token 必须失败。"""
 
-    token = generate_token("widget-user", extra_claims={"kind": "widget"})
+    token = _sign_invalid_widget_token(
+        "widget-user",
+        db=temp_db,
+        expires_at=int(time.time()) + 60,
+        scope=None,
+    )
 
     with pytest.raises(AuthError, match="invalid scope"):
-        verify_token(token)
+        verify_token(token, db=temp_db)
 
 
 def test_legacy_widget_token_without_jti_is_rejected(temp_db) -> None:
     auth_module.configure_auth_storage(Path(temp_db.db_path).parent)
-    token = generate_token(
+    token = _sign_invalid_widget_token(
         "widget-user",
-        extra_claims={"kind": "widget", "scope": "widget:read"},
+        db=temp_db,
+        expires_at=int(time.time()) + 60,
+        token_id=None,
     )
 
     with pytest.raises(AuthError, match="missing jti"):
         verify_token(token, db=temp_db)
 
 
-def test_expired_invalid_and_tampered_tokens_are_rejected() -> None:
+def test_expired_invalid_and_tampered_tokens_are_rejected(temp_db) -> None:
     """过期、畸形和签名被篡改的 Token 应映射为受控认证错误。"""
 
+    expired = _sign_invalid_widget_token(
+        "expired-user",
+        db=temp_db,
+        expires_at=int(time.time()) - 1,
+    )
     with pytest.raises(AuthError, match="expired"):
-        verify_token(generate_token("expired-user", expires_hours=0))
+        verify_token(expired, db=temp_db)
     with pytest.raises(AuthError, match="Invalid token"):
-        verify_token("invalid.token.string")
+        verify_token("invalid.token.string", db=temp_db)
 
-    token = generate_token("tampered-user")
+    token = generate_widget_token("tampered-user", db=temp_db)
     with pytest.raises(AuthError, match="Invalid token"):
-        verify_token(f"{token[:-5]}XXXXX")
+        verify_token(f"{token[:-5]}XXXXX", db=temp_db)
 
 
 @pytest.mark.parametrize(
@@ -264,7 +291,7 @@ def test_authentication_subject_rejects_invalid_owner_ids(owner_id: str) -> None
     with pytest.raises(ValueError):
         create_web_session(owner_id)
     with pytest.raises(ValueError):
-        generate_token(owner_id)
+        generate_widget_token(owner_id, db=auth_module._resolve_auth_database())
 
 
 @pytest.mark.parametrize("expires_seconds", [0, -1, True, 1.5])
@@ -301,6 +328,49 @@ def test_login_code_is_owner_bound_single_use_and_expires(
     now = 1_001.0
     with pytest.raises(AuthError, match="expired"):
         consume_login_code(expiring_code)
+
+
+def test_login_code_and_browser_session_survive_auth_storage_reopen(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """未消费 Code 与浏览器会话应跨 Bot/Pendo Web 重启继续有效。"""
+
+    from plugins.pendo.services.db import Database
+
+    now = 1_500
+    monkeypatch.setattr(time, "time", lambda: float(now))
+    db_path = tmp_path / "persistent-pendo.db"
+    first = Database(str(db_path))
+    try:
+        code = issue_login_code("persistent-owner", db=first)
+        session = create_web_session("persistent-owner", db=first)
+        code_row = (
+            first.get_connection().execute("SELECT code_digest FROM login_code_registry").fetchone()
+        )
+        session_row = (
+            first.get_connection()
+            .execute("SELECT session_digest FROM web_session_registry")
+            .fetchone()
+        )
+    finally:
+        first.cleanup()
+    assert code_row is not None and code not in str(code_row[0])
+    assert session_row is not None and session.session_id not in str(session_row[0])
+
+    with auth_module._AUTH_LOCK:
+        auth_module._AUTH_DATABASE = None
+    second = Database(str(db_path))
+    try:
+        auth_module.configure_auth_database(second)
+        restored = get_web_session(session.session_id, db=second)
+        assert restored.owner_id == "persistent-owner"
+        assert restored.device_id == session.device_id
+        assert restored.expires_at - restored.created_at == 7 * 24 * 60 * 60
+        assert consume_login_code(code, db=second) == "persistent-owner"
+    finally:
+        second.cleanup()
+    assert not (tmp_path / "web_auth.db").exists()
 
 
 def test_web_session_is_revocable_and_expires(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -429,7 +499,7 @@ def test_revoke_unknown_session_device_returns_404_without_revoking_current() ->
         )
 
     assert exc_info.value.status_code == 404
-    assert get_web_session(session.session_id) is session
+    assert get_web_session(session.session_id) == session
 
 
 def test_demo_route_caps_browser_session_at_demo_lifetime(
@@ -449,7 +519,7 @@ def test_demo_route_caps_browser_session_at_demo_lifetime(
     )
     create_session = Mock(return_value=session)
     PendoConfig.configure({"web_demo_enabled": True})
-    monkeypatch.setattr(PendoConfig, "WEB_SESSION_EXPIRE_SECONDS", 8 * 60 * 60)
+    monkeypatch.setattr(PendoConfig, "WEB_SESSION_EXPIRE_SECONDS", 7 * 24 * 60 * 60)
     monkeypatch.setattr(PendoConfig, "WEB_DEMO_EXPIRE_HOURS", 6)
     monkeypatch.setattr(
         auth_routes_module,
@@ -497,7 +567,7 @@ def test_demo_route_purges_owner_when_browser_session_creation_fails(
 def test_demo_route_revokes_session_and_purges_owner_when_cookie_write_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Cookie 写入失败时应同时撤销内存会话并清理演示数据。"""
+    """Cookie 写入失败时应同时撤销持久会话并清理演示数据。"""
 
     now = time.time()
     session = WebSession(

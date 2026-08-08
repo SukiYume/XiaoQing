@@ -790,7 +790,6 @@ async def test_topic_summarizer_refreshes_from_observed_traffic_not_only_exact_m
         await maybe_update_topic_summary(
             data_dir=data_dir,
             memory_db=memory_db,
-            http_session=AsyncMock(),
             secrets={"api_base": "http://test", "api_key": "k", "model": "m"},
             bot_name="小青",
             chat_id=chat_id,
@@ -828,7 +827,6 @@ async def test_topic_summarizer_does_not_repeat_when_capped_length_divides_inter
     common = {
         "data_dir": tmp_path,
         "memory_db": memory_db,
-        "http_session": AsyncMock(),
         "secrets": {"api_base": "http://test", "api_key": "k", "model": "m"},
         "bot_name": "小青",
         "chat_id": chat_id,

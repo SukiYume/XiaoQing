@@ -1,3 +1,5 @@
+"""保存短期回想结果，供相近问题在有效期内复用。"""
+
 from __future__ import annotations
 
 import json
@@ -24,7 +26,7 @@ def _load_recent(path: Path, *, max_lines: int) -> list[dict[str, Any]]:
         return []
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
-    except Exception:
+    except (OSError, UnicodeError):
         return []
     if max_lines > 0 and len(lines) > max_lines:
         lines = lines[-max_lines:]
@@ -35,7 +37,7 @@ def _load_recent(path: Path, *, max_lines: int) -> list[dict[str, Any]]:
             continue
         try:
             obj = json.loads(line)
-        except Exception:
+        except json.JSONDecodeError:
             continue
         if isinstance(obj, dict):
             out.append(obj)
@@ -61,7 +63,7 @@ def get_cached_answer(
         ts_val = obj.get("ts", 0.0)
         try:
             ts = float(ts_val)
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             ts = 0.0
         if window_seconds > 0 and ts and now - ts > window_seconds:
             continue

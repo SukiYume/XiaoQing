@@ -22,6 +22,8 @@ class _LoginCodeIssuer(Protocol):
         self,
         owner_id: str,
         expires_seconds: int = PendoConfig.WEB_LOGIN_CODE_EXPIRE_SECONDS,
+        *,
+        db: Database | None = None,
     ) -> str:
         """为用户签发限时、单次使用的登录码。"""
         ...
@@ -33,7 +35,7 @@ class _WidgetTokenGenerator(Protocol):
     def __call__(
         self,
         owner_id: str,
-        expires_hours: int = PendoConfig.WEB_WIDGET_TOKEN_EXPIRE_HOURS,
+        expires_seconds: int = PendoConfig.WEB_WIDGET_TOKEN_EXPIRE_SECONDS,
         *,
         db: Database,
     ) -> str:
@@ -169,15 +171,19 @@ class WebHandler:
         code = issuer(
             user_id,
             expires_seconds=PendoConfig.WEB_LOGIN_CODE_EXPIRE_SECONDS,
+            db=self.db,
         )
-        expiry_days = PendoConfig.WEB_LOGIN_CODE_EXPIRE_SECONDS // (24 * 60 * 60)
+        code_days = PendoConfig.WEB_LOGIN_CODE_EXPIRE_SECONDS // (24 * 60 * 60)
+        session_days = PendoConfig.WEB_SESSION_EXPIRE_SECONDS // (24 * 60 * 60)
         token_sent = await self._send_private_text(context, user_id, code)
 
         return self._build_token_result(
             token_sent=token_sent,
             header="🌐 Pendo Web",
             success_line="✅ 已生成一次性登录 Code",
-            expiry_text=f"{expiry_days} 天，仅可使用一次",
+            expiry_text=(
+                f"Code {code_days} 天内可兑换一次；登录后浏览器会话保持 {session_days} 天"
+            ),
             private_hint="🔒 登录 Code 已单独私聊发送",
             private_copy_hint="💡 复制私聊中的 Code，在 Pendo Web 登录页粘贴使用。",
         )
@@ -192,10 +198,10 @@ class WebHandler:
         token = await run_sync(
             generator,
             user_id,
-            expires_hours=PendoConfig.WEB_WIDGET_TOKEN_EXPIRE_HOURS,
+            expires_seconds=PendoConfig.WEB_WIDGET_TOKEN_EXPIRE_SECONDS,
             db=self.db,
         )
-        expiry_days = PendoConfig.WEB_WIDGET_TOKEN_EXPIRE_HOURS // 24
+        expiry_days = PendoConfig.WEB_WIDGET_TOKEN_EXPIRE_SECONDS // (24 * 60 * 60)
         token_sent = await self._send_private_text(
             context,
             user_id,

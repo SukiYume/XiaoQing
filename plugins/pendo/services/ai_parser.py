@@ -391,13 +391,14 @@ class AIParser:
                 return analyze_diary_mood_rule(text)
 
             mood = str(parsed.get("mood") or "").strip().lower()
-            allowed_moods = set(MOOD_ANALYSIS_CONFIG.get("allowed_moods", [])) or {
-                "happy",
-                "sad",
-                "calm",
-                "excited",
-                "angry",
-            }
+            raw_allowed_moods = MOOD_ANALYSIS_CONFIG.get("allowed_moods", [])
+            allowed_moods = (
+                {str(value) for value in raw_allowed_moods}
+                if isinstance(raw_allowed_moods, list)
+                else set()
+            )
+            if not allowed_moods:
+                allowed_moods = {"happy", "sad", "calm", "excited", "angry"}
             if mood not in allowed_moods:
                 return analyze_diary_mood_rule(text)
 

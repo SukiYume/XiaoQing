@@ -161,9 +161,7 @@ async def test_reconcile_keeps_live_generation_when_required_dependency_is_trans
     )
     manager._plugins["demo"] = plugin
     manager._execution_gates["demo"] = gate
-    manager._load_definition = Mock(
-        return_value=_ManifestRejection("dependency")
-    )
+    manager._load_definition = Mock(return_value=_ManifestRejection("dependency"))
     manager._unload_plugin_once = AsyncMock()
 
     await manager._reconcile_plugin_path(plugin_dir)

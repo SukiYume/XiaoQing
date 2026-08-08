@@ -42,7 +42,7 @@ def _daily_topic_query(topics: list[str], day: date) -> str:
     return f"({topic_query}) AND entdate:[{day.isoformat()} TO NOW]"
 
 
-def _summary_messages(title: str, abstract: str) -> list[dict[str, str]]:
+def _summary_messages(title: str, abstract: str) -> list[dict[str, Any]]:
     """构造论文摘要任务；模型、凭据和 fallback 由 core route 负责。"""
 
     prompt = f"""请用中文总结以下论文的要点，包括：
@@ -65,6 +65,8 @@ async def cmd_summarize(
     args: str,
     context: PluginContextProtocol,
 ) -> Segments:
+    """通过 Core 的 ``summary`` route 生成摘要，不读取插件私有 AI 凭据。"""
+
     if not args.strip():
         return segments(
             "❌ 请提供论文标识符\n用法: /paper summarize <arXiv ID / arXiv链接 / Bibcode>"
@@ -87,7 +89,7 @@ async def cmd_summarize(
     if not abstract:
         return segments(f"⚠️ 论文 '{title}' 没有摘要")
 
-    ai = getattr(getattr(context, "capabilities", None), "ai", None)
+    ai = context.capabilities.ai
     if ai is None:
         lines = [
             f"📄 论文: {title}\n",
@@ -124,6 +126,7 @@ async def cmd_daily(
     storage: PaperStorage,
     user_id: int,
 ) -> Segments:
+    """按用户主题查询并严格保留 UTC 当天进入 ADS 的论文。"""
 
     topics = await asyncio.to_thread(storage.get_topics, user_id)
     if not topics:
@@ -168,6 +171,8 @@ async def cmd_ref_add(
     context: PluginContextProtocol,
     user_id: int,
 ) -> Segments:
+    """获取一篇论文的 BibTeX，并原子加入当前用户的文献库。"""
+
     if not args.strip():
         return segments(
             "❌ 请提供论文标识符\n用法: /paper ref_add <arXiv ID / arXiv链接 / Bibcode>"
@@ -203,6 +208,8 @@ async def cmd_refs(
     context: PluginContextProtocol,
     user_id: int,
 ) -> Segments:
+    """读取并结构化展示当前用户的 BibTeX 文献库。"""
+
     try:
         content = await asyncio.to_thread(storage.get_references, user_id)
         if not content:

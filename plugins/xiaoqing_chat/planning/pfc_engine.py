@@ -1,3 +1,5 @@
+"""编排 PFC 会话准备、动作规划、等待、重想和状态提交。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -369,7 +371,6 @@ async def _rethink_pfc_goal(session: _PFCSession) -> PFCPlan:
         fields={},
     )
     session.state.goal_list = await analyze_goals(
-        http_session=session.context.http_session,
         secrets=session.secrets,
         bot_name=session.bot_name,
         personality=session.runtime_cfg.personality,
@@ -618,8 +619,7 @@ async def run_pfc_once(
     finally:
         should_save = session.dirty if session is not None else dirty
         if should_save and persist_state:
-            # The planner mutates the object returned by ``get_async`` in place.
-            # Re-register it before saving so concurrent cache pressure cannot
-            # turn the write into a silent cache miss.
+            # 规划器会原地修改 ``get_async`` 返回的对象；保存前重新登记，避免并发缓存
+            # 淘汰让这次写入悄悄变成未命中。
             pfc_state_store.set_state(chat_id, state)
             await pfc_state_store.save_async(chat_id)

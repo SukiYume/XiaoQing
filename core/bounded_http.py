@@ -331,10 +331,6 @@ class _BoundedDecoder:
     def wire_bytes(self) -> int:
         return self._wire_bytes
 
-    @property
-    def decoded_bytes(self) -> int:
-        return len(self._decoded)
-
     def feed(self, chunk: bytes | bytearray | memoryview) -> None:
         if not isinstance(chunk, (bytes, bytearray, memoryview)):
             raise ResponseFormatError("response stream yielded a non-bytes chunk")

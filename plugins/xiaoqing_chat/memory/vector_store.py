@@ -1,24 +1,31 @@
+"""提供本地哈希向量索引，以及文档与矩阵的一致性缓存。"""
+
 from __future__ import annotations
 
 import hashlib
 import io
 import json
 import re
+import zipfile
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeAlias, cast
 
 import numpy as np
+from numpy.typing import NDArray
 
 from core.atomic_store import atomic_write_bytes
 from core.plugin_base import load_json, write_json
 
 _RE_WS = re.compile(r"\s+")
+FloatArray: TypeAlias = NDArray[np.float32]
 
 
 @dataclass(frozen=True)
 class VectorDoc:
+    """向量索引中的稳定文档记录。"""
+
     doc_id: str
     text: str
     meta: dict[str, Any]
@@ -36,11 +43,11 @@ def _docs_content_digest(docs: Sequence[VectorDoc]) -> str:
 
 
 def _validate_cached_matrix(
-    matrix: Any,
+    matrix: object,
     *,
     expected_rows: int,
     expected_dim: int,
-) -> np.ndarray | None:
+) -> FloatArray | None:
     if not isinstance(matrix, np.ndarray):
         return None
     if matrix.ndim != 2 or matrix.shape != (expected_rows, expected_dim):
@@ -50,17 +57,19 @@ def _validate_cached_matrix(
     if np.issubdtype(matrix.dtype, np.complexfloating):
         return None
     with np.errstate(over="ignore", invalid="ignore"):
-        normalized = matrix.astype(np.float32, copy=False)
+        normalized = cast(FloatArray, matrix.astype(np.float32, copy=False))
     if not np.isfinite(normalized).all():
         return None
     return normalized
 
 
 class VectorStore:
+    """维护唯一文档 ID，并在首次查询时惰性构建归一化矩阵。"""
+
     def __init__(self, *, dim: int = 2048) -> None:
         self._dim = dim
         self._docs: list[VectorDoc] = []
-        self._matrix: np.ndarray | None = None
+        self._matrix: FloatArray | None = None
         self._id_to_idx: dict[str, int] = {}
 
     @property
@@ -101,7 +110,7 @@ class VectorStore:
         if not self._docs:
             self._matrix = np.zeros((0, self._dim), dtype=np.float32)
             return
-        mat = np.zeros((len(self._docs), self._dim), dtype=np.float32)
+        mat: FloatArray = np.zeros((len(self._docs), self._dim), dtype=np.float32)
         for i, d in enumerate(self._docs):
             mat[i, :] = _embed(d.text, dim=self._dim)
         mat = _l2_normalize(mat)
@@ -120,7 +129,7 @@ class VectorStore:
         self.build()
         if self._matrix is None or self._matrix.shape[0] == 0:
             return []
-        q = _embed(text, dim=self._dim).astype(np.float32)
+        q: FloatArray = _embed(text, dim=self._dim)
         q = _l2_normalize(q.reshape(1, -1))[0]
         scores = self._matrix @ q
         if scores.size == 0:
@@ -144,7 +153,7 @@ class VectorStore:
 
     def save(self, dir_path: Path, *, name: str) -> None:
         self.build()
-        mat = (
+        mat: FloatArray = (
             self._matrix if self._matrix is not None else np.zeros((0, self._dim), dtype=np.float32)
         )
         write_vector_store_files(
@@ -160,7 +169,7 @@ class VectorStore:
 
         if docs_path.exists():
             try:
-                raw = load_json(docs_path, default=[])
+                raw: object = load_json(docs_path, default=[])
                 if isinstance(raw, list):
                     for item in raw:
                         if not isinstance(item, dict):
@@ -171,9 +180,15 @@ class VectorStore:
                         if doc_id and text:
                             if not isinstance(meta, dict):
                                 meta = {}
-                            self._id_to_idx[doc_id] = len(self._docs)
-                            self._docs.append(VectorDoc(doc_id=doc_id, text=text, meta=meta))
-            except Exception:
+                            # 加载也必须遵守运行时的唯一 ID 语义；重复项以后出现者为准。
+                            self.upsert(
+                                VectorDoc(
+                                    doc_id=doc_id,
+                                    text=text,
+                                    meta={str(key): value for key, value in meta.items()},
+                                )
+                            )
+            except OSError:
                 # 文档加载失败时没有可用数据。
                 self._docs = []
                 self._id_to_idx = {}
@@ -200,7 +215,16 @@ class VectorStore:
                         expected_rows=len(self._docs),
                         expected_dim=self._dim,
                     )
-            except Exception:
+            except (
+                OSError,
+                EOFError,
+                ValueError,
+                TypeError,
+                KeyError,
+                OverflowError,
+                zipfile.BadZipFile,
+            ):
+                # 向量矩阵只是可再生成缓存；缓存损坏时让后续查询按文档重建。
                 self._matrix = None
 
     def _reindex(self) -> None:
@@ -213,7 +237,7 @@ def write_vector_store_files(
     name: str,
     docs: Sequence[VectorDoc],
     dim: int,
-    matrix: np.ndarray,
+    matrix: FloatArray,
 ) -> None:
     dir_path.mkdir(parents=True, exist_ok=True)
     docs_path = dir_path / f"{name}.docs.json"
@@ -262,8 +286,7 @@ def _char_ngrams(tokens: Sequence[str]) -> list[str]:
             out.append(t)
             continue
         if all("\u4e00" <= c <= "\u9fff" for c in t) and len(t) >= 2:
-            for i in range(len(t) - 1):
-                out.append(t[i : i + 2])
+            out.extend(t[i : i + 2] for i in range(len(t) - 1))
         else:
             out.append(t)
     return out
@@ -277,24 +300,23 @@ def _hash32(s: str) -> int:
     return h
 
 
-def _embed(text: str, *, dim: int) -> np.ndarray:
+def _embed(text: str, *, dim: int) -> FloatArray:
     tokens = _char_ngrams(_tokenize(text))
-    vec = np.zeros((dim,), dtype=np.float32)
+    vec: FloatArray = np.zeros((dim,), dtype=np.float32)
     if not tokens:
         return vec
     for t in tokens:
         idx = _hash32(t) % dim
         vec[idx] += 1.0
-    vec = np.log1p(vec)
-    return vec
+    return cast(FloatArray, np.log1p(vec))
 
 
-def _l2_normalize(mat: np.ndarray) -> np.ndarray:
+def _l2_normalize(mat: FloatArray) -> FloatArray:
     if mat.size == 0:
-        return mat.astype(np.float32, copy=False)
+        return cast(FloatArray, mat.astype(np.float32, copy=False))
     if mat.ndim == 1:
         denom = float(np.linalg.norm(mat)) or 1.0
-        return (mat / denom).astype(np.float32, copy=False)
+        return cast(FloatArray, (mat / denom).astype(np.float32, copy=False))
     norms = np.linalg.norm(mat, axis=1, keepdims=True)
     norms[norms == 0] = 1.0
-    return (mat / norms).astype(np.float32, copy=False)
+    return cast(FloatArray, (mat / norms).astype(np.float32, copy=False))

@@ -1,3 +1,5 @@
+"""把群聊历史压缩为可检索、可增量更新的话题摘要。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -19,12 +21,19 @@ from .prompt_builder import ChatMessage, build_dialogue_prompt
 
 @dataclass
 class TopicSummary:
+    """一条写入缓存和向量索引的话题摘要。"""
+
     topic_id: str
     topic: str
     keywords: list[str]
     summary: str
     key_points: list[str]
     updated_at: float
+
+
+# ---------------------------------------------------------------------------
+# 摘要缓存与索引写入
+# ---------------------------------------------------------------------------
 
 
 def _load_cache(data_dir: Path, chat_id: str) -> list[TopicSummary]:
@@ -49,18 +58,17 @@ def _load_cache(data_dir: Path, chat_id: str) -> list[TopicSummary]:
 def _save_cache(data_dir: Path, chat_id: str, topics: Sequence[TopicSummary]) -> None:
     path = topic_summary_cache_path(data_dir, chat_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload: list[dict[str, Any]] = []
-    for t in topics:
-        payload.append(
-            {
-                "topic_id": t.topic_id,
-                "topic": t.topic,
-                "keywords": t.keywords,
-                "summary": t.summary,
-                "key_points": t.key_points,
-                "updated_at": t.updated_at,
-            }
-        )
+    payload: list[dict[str, Any]] = [
+        {
+            "topic_id": topic.topic_id,
+            "topic": topic.topic,
+            "keywords": topic.keywords,
+            "summary": topic.summary,
+            "key_points": topic.key_points,
+            "updated_at": topic.updated_at,
+        }
+        for topic in topics
+    ]
     write_json(path, payload)
 
 
@@ -117,7 +125,6 @@ async def maybe_update_topic_summary(
     *,
     data_dir: Path,
     memory_db: MemoryDB,
-    http_session,
     secrets: dict[str, Any],
     bot_name: str,
     chat_id: str,
@@ -131,6 +138,8 @@ async def maybe_update_topic_summary(
     max_retry: int,
     retry_interval_seconds: float,
 ) -> None:
+    """达到增量阈值时生成一次摘要，并原子更新缓存和检索索引。"""
+
     if min_messages_per_update <= 0:
         return
     if len(history) < min_messages_per_update:

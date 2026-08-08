@@ -1,3 +1,5 @@
+"""按会话持久化 PFC 规划器状态，并安全处理并发写入。"""
+
 from __future__ import annotations
 
 import asyncio

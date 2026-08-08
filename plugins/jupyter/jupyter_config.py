@@ -24,6 +24,5 @@ MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_TOTAL_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_PIXELS = 20_000_000
 
-# Each isolated kernel is a separate process. Keep the process set bounded
-# while normal idle shutdown catches inactive conversations.
+# 每个隔离内核都是独立进程；实例总数必须有硬上限，常规空闲回收再负责关闭不活跃会话。
 MAX_KERNEL_INSTANCES = 64

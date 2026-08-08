@@ -141,7 +141,6 @@ async def test_identical_person_fact_has_independent_chat_scoped_ids_and_deletio
     db.bind(tmp_path)
     common = {
         "data_dir": tmp_path,
-        "http_session": None,
         "secrets": {"api_base": "https://example.com", "api_key": "k", "model": "m"},
         "memory_db": db,
         "history": history,

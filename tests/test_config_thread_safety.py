@@ -8,6 +8,7 @@ from tests.helpers.config_test_support import (
     ConfigManager,
     ConfigSnapshot,
     Path,
+    _last_notified_revision,
     asyncio,
     json,
     pytest,
@@ -266,7 +267,7 @@ class TestConfigManagerThreadSafety:
 
         assert revisions == sorted(revisions)
         assert len(revisions) == 2
-        assert config_manager.last_notified_revision == revisions[-1]
+        assert _last_notified_revision(config_manager) == revisions[-1]
 
     def test_callback_can_join_raw_mutation_thread_without_deadlock(
         self,
@@ -297,7 +298,7 @@ class TestConfigManagerThreadSafety:
         assert nested_errors == []
         assert revisions == sorted(revisions)
         assert len(revisions) == 2
-        assert config_manager.last_notified_revision == revisions[-1]
+        assert _last_notified_revision(config_manager) == revisions[-1]
         assert config_manager.get_plugin_secret("qingssh", "raw_thread") == "committed"
 
     def test_callback_reentry_queues_next_revision_without_recursion(

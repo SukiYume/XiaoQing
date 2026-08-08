@@ -17,6 +17,7 @@ from core.bounded_http import (
     parse_bounded_json,
     requests_request_bounded,
 )
+from core.plugin_base import PluginContextProtocol
 from core.public_errors import public_error_message
 
 SIMBAD_TAP_SYNC_URL = "https://simbad.cds.unistra.fr/simbad/sim-tap/sync"
@@ -78,7 +79,7 @@ def _build_simbad_query(name: str) -> str:
         'basic."otype" AS "otype", allfluxes."V" AS "V", '
         'basic."sp_type" AS "sp_type" FROM basic '
         'JOIN ident ON basic."oid" = ident."oidref" '
-        'JOIN allfluxes ON basic."oid" = allfluxes."oidref" '
+        'LEFT JOIN allfluxes ON basic."oid" = allfluxes."oidref" '
         f"""WHERE ident."id" = '{escaped_name}'"""
     )
     if len(query) > _SIMBAD_MAX_QUERY_CHARS:
@@ -193,21 +194,47 @@ def _query_simbad_object(name: str) -> SimbadRow | None:
     return _validate_simbad_payload(parse_bounded_json(response, limits=_SIMBAD_JSON_LIMITS))
 
 
-def _get_sun_info() -> str:
-    """获取太阳信息"""
-    from astropy import constants as const
+def _render_simbad_result(name: str, result: SimbadRow) -> str:
+    """在工作线程内完成 Astropy 坐标构造与文本渲染。"""
+
     from astropy import units as u
+    from astropy.coordinates import SkyCoord
 
-    mass = const.M_sun.to(u.kg)
-    radius = const.R_sun.to(u.km)
-    luminosity = const.L_sun.to(u.W)
+    coord = SkyCoord(ra=result.ra_deg * u.deg, dec=result.dec_deg * u.deg, frame="icrs")
+    ra_hms = coord.ra.to_string(unit=u.hour, sep=":", pad=True, precision=2)
+    dec_dms = coord.dec.to_string(unit=u.deg, sep=":", pad=True, precision=1, alwayssign=True)
+    result_lines = [
+        f"🌟 {name}",
+        "",
+        "**坐标 (ICRS):**",
+        f"RA: {ra_hms} ({coord.ra.deg:.6f}°)",
+        f"Dec: {dec_dms} ({coord.dec.deg:.6f}°)",
+        "",
+    ]
+    if result.otype:
+        result_lines.append(f"类型: {result.otype}")
+    if result.v_magnitude is not None:
+        result_lines.append(f"V星等: {result.v_magnitude:.2f}")
+    if result.sp_type:
+        result_lines.append(f"光谱型: {result.sp_type}")
+    return "\n".join(result_lines).rstrip()
 
-    return (
+
+def _query_and_render_simbad(name: str) -> str | None:
+    """同步完成受限查询与坐标渲染，供唯一的线程边界调用。"""
+
+    result = _query_simbad_object(name)
+    return None if result is None else _render_simbad_result(name, result)
+
+
+# 太阳系内置资料不依赖 Astropy 或网络，保证可选依赖缺失时仍能直接查询。
+SOLAR_SYSTEM_INFO: dict[str, str] = {
+    "sun": (
         "☀️ 太阳 (Sun)\n\n"
         "**基本参数:**\n"
-        f"质量: {mass.value:.3e} kg (1 M☉)\n"
-        f"半径: {radius.value:,.0f} km (109 R⊕)\n"
-        f"光度: {luminosity.value:.3e} W (1 L☉)\n"
+        "质量: 1.988e+30 kg (1 M☉)\n"
+        "半径: 695,700 km (109 R⊕)\n"
+        "光度: 3.828e+26 W (1 L☉)\n"
         "有效温度: 5778 K\n"
         "光谱型: G2V\n"
         "年龄: ~4.6 Gyr\n\n"
@@ -218,12 +245,7 @@ def _get_sun_info() -> str:
         "氢: ~73%\n"
         "氦: ~25%\n"
         "其他元素: ~2%"
-    )
-
-
-# 其余太阳系对象都是静态说明，直接存文本，避免九个只返回常量的单行函数。
-# 卫星总数会随新发现变化，因此只保留定性描述，避免硬编码迅速过期的数字。
-SOLAR_SYSTEM_INFO: dict[str, str] = {
+    ),
     "moon": (
         "🌙 月球 (Moon)\n\n"
         "**基本参数:**\n"
@@ -395,7 +417,7 @@ SOLAR_SYSTEM_INFO: dict[str, str] = {
 }
 
 
-async def handle_obj(args: str, context) -> str:
+async def handle_obj(args: str, context: PluginContextProtocol) -> str:
     """处理天文对象查询命令。"""
 
     args = args.strip()
@@ -410,44 +432,22 @@ async def handle_obj(args: str, context) -> str:
         return f"不接受额外参数\n用法: /astro obj {parts[0]}"
 
     obj_name = args.casefold()
-    if obj_name == "sun":
-        return _get_sun_info()
     solar_system_info = SOLAR_SYSTEM_INFO.get(obj_name)
     if solar_system_info is not None:
         return solar_system_info
     if len(args) > SIMBAD_MAX_OBJECT_NAME_CHARS:
         return f"天体名称过长，最多允许 {SIMBAD_MAX_OBJECT_NAME_CHARS} 个字符"
 
-    # 从 SIMBAD 查询其他天体；查询构造纯本地，实际网络只发生在受限 TAP POST 中。
+    # 从 SIMBAD 查询其他天体；受限 TAP POST 与 Astropy 坐标渲染共用一个工作线程，
+    # 避免同步网络或首次导入科学计算库阻塞 Bot 的事件循环。
     try:
-        from astropy import units as u
-        from astropy.coordinates import SkyCoord
-
-        result = await asyncio.wait_for(
-            asyncio.to_thread(_query_simbad_object, args),
+        rendered = await asyncio.wait_for(
+            asyncio.to_thread(_query_and_render_simbad, args),
             timeout=SIMBAD_TOTAL_TIMEOUT_SECONDS,
         )
-        if result is None:
+        if rendered is None:
             return f"未找到天体: {args}\n\n提示: 可以尝试使用英文名称，如 'Crab Nebula', 'Betelgeuse' 等"
-
-        coord = SkyCoord(ra=result.ra_deg * u.deg, dec=result.dec_deg * u.deg, frame="icrs")
-        ra_hms = coord.ra.to_string(unit=u.hour, sep=":", pad=True, precision=2)
-        dec_dms = coord.dec.to_string(unit=u.deg, sep=":", pad=True, precision=1, alwayssign=True)
-        result_lines = [
-            f"🌟 {args}",
-            "",
-            "**坐标 (ICRS):**",
-            f"RA: {ra_hms} ({coord.ra.deg:.6f}°)",
-            f"Dec: {dec_dms} ({coord.dec.deg:.6f}°)",
-            "",
-        ]
-        if result.otype:
-            result_lines.append(f"类型: {result.otype}")
-        if result.v_magnitude is not None:
-            result_lines.append(f"V星等: {result.v_magnitude:.2f}")
-        if result.sp_type:
-            result_lines.append(f"光谱型: {result.sp_type}")
-        return "\n".join(result_lines).rstrip()
+        return rendered
     except asyncio.TimeoutError:
         return "SIMBAD 查询超时，请稍后再试。"
     except Exception as exc:

@@ -493,9 +493,7 @@ async def test_reflection_reply_is_consumed_by_only_one_pending_question(
         "chat_completions_raw_with_fallback_paths",
         approve,
     )
-    context = SimpleNamespace(http_session=object())
     request = {
-        "context": context,
         "operator_chat_id": "g1",
         "memory_store": memory_store,
         "expr_store": expression_store,
@@ -535,7 +533,6 @@ async def test_expired_reflection_removes_only_that_queue_entry(
     )
 
     changed = await tick_reflect_tracker(
-        context=SimpleNamespace(http_session=object()),
         operator_chat_id="g1",
         memory_store=SimpleNamespace(get_async=AsyncMock()),
         expr_store=ExpressionStore(),

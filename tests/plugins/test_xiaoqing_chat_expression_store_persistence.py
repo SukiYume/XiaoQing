@@ -38,6 +38,39 @@ def test_expression_store_load_save_roundtrip(tmp_path):
     assert items[0].modified_by == "user"
 
 
+def test_expression_store_keeps_record_with_malformed_scalar_fields(tmp_path):
+    path = tmp_path / "bw_learner" / "expressions.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            [
+                {
+                    "expression_id": "exp-bad-fields",
+                    "chat_id": "chat-1",
+                    "situation": "situation",
+                    "style": "style",
+                    "content_list": ["example"],
+                    "count": "not-an-int",
+                    "last_active_time": "nan",
+                    "checked": "false",
+                    "rejected": 1,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    store = ExpressionStore()
+    store.bind(tmp_path)
+
+    record = store.load()[0]
+
+    assert record.expression_id == "exp-bad-fields"
+    assert record.count == 1
+    assert record.last_active_time == 0.0
+    assert record.checked is False
+    assert record.rejected is False
+
+
 def test_jargon_store_load_save_roundtrip(tmp_path):
     store = JargonStore()
     store.bind(tmp_path)
@@ -69,6 +102,43 @@ def test_jargon_store_load_save_roundtrip(tmp_path):
     assert rec.chat_id_counts == [["chat-1", 2]]
     assert rec.is_global is True
     assert rec.is_complete is True
+
+
+def test_jargon_store_normalizes_malformed_record_fields(tmp_path):
+    path = tmp_path / "bw_learner" / "jargon.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            [
+                {
+                    "content": "坏字段也保留条目",
+                    "raw_content": "不能拆成字符",
+                    "chat_id_counts": ["bad", ["chat-1", "2"], ["", 9]],
+                    "is_global": "false",
+                    "count": "not-an-int",
+                    "is_jargon": "false",
+                    "is_complete": 1,
+                    "last_inference_count": -3,
+                    "updated_at": "not-a-time",
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    store = JargonStore()
+    store.bind(tmp_path)
+
+    record = store.load()[JargonStore.key_for("坏字段也保留条目")]
+
+    assert record.raw_content == []
+    assert record.chat_id_counts == [["chat-1", 2]]
+    assert record.is_global is False
+    assert record.count == 0
+    assert record.is_jargon is True
+    assert record.is_complete is False
+    assert record.last_inference_count == 0
+    assert record.updated_at > 0
 
 
 def test_jargon_store_merges_concurrent_incremental_updates(tmp_path):

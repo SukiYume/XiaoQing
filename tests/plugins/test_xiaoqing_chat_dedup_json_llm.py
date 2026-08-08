@@ -41,6 +41,56 @@ def test_json_parsing_helper_rejects_think_prefix() -> None:
     assert parse_first_json_object(text) is None
 
 
+@pytest.mark.parametrize(
+    ("payload", "extractor_name"),
+    [
+        ('{"text":"右括号 } 与转义引号 \\"","nested":{"items":[{"k":1}]}}', "object"),
+        ('[{"text":"右方括号 ] 与转义引号 \\"","nested":[[1],2]}]', "array"),
+    ],
+)
+def test_json_root_scanner_handles_nested_values_and_escaped_delimiters(
+    payload: str,
+    extractor_name: str,
+) -> None:
+    from plugins.xiaoqing_chat.utils.json_parsing import (
+        extract_first_json_array_text,
+        extract_first_json_object_text,
+    )
+
+    extractor = (
+        extract_first_json_object_text
+        if extractor_name == "object"
+        else extract_first_json_array_text
+    )
+    assert extractor(payload) == payload
+
+
+@pytest.mark.parametrize(
+    ("payload", "extractor_name"),
+    [
+        ('{"ok":true} trailing', "object"),
+        ('{"text":"unterminated}', "object"),
+        ('[{"ok":true}] trailing', "array"),
+        ('[{"text":"unterminated}]', "array"),
+    ],
+)
+def test_json_root_scanner_rejects_trailing_or_unterminated_input(
+    payload: str,
+    extractor_name: str,
+) -> None:
+    from plugins.xiaoqing_chat.utils.json_parsing import (
+        extract_first_json_array_text,
+        extract_first_json_object_text,
+    )
+
+    extractor = (
+        extract_first_json_object_text
+        if extractor_name == "object"
+        else extract_first_json_array_text
+    )
+    assert extractor(payload) == ""
+
+
 def test_llm_content_extractor_preserves_untrusted_think_prefix() -> None:
     from plugins.xiaoqing_chat.llm.llm_client import extract_response_content
 
@@ -211,7 +261,6 @@ async def test_person_fact_extract_skips_empty_llm_response(
 
     await maybe_extract_person_facts(
         data_dir=tmp_path,
-        http_session=None,
         secrets={"api_base": "https://example.com", "api_key": "k", "model": "m"},
         memory_db=memory_db,
         chat_id="g1",
@@ -250,7 +299,6 @@ async def test_person_fact_extract_throttle_survives_capped_history(
 
     common = {
         "data_dir": tmp_path,
-        "http_session": None,
         "secrets": {"api_base": "https://example.com", "api_key": "k", "model": "m"},
         "memory_db": MagicMock(),
         "chat_id": "g-capped",

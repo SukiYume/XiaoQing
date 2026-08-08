@@ -69,10 +69,7 @@ def _set_voice_probability(context: _Context, value: object) -> None:
     context.config = {"plugins": {"smalltalk": {"voice_probability": value}}}
 
 
-def test_init_and_manifest_contract(context: _Context) -> None:
-    assert smalltalk.init() is None
-    assert smalltalk.init(context) is None
-
+def test_manifest_contract() -> None:
     plugin_dir = ROOT / "plugins" / "smalltalk"
     manifest = json.loads((plugin_dir / "plugin.json").read_text(encoding="utf-8"))
     commands = {command["name"]: command for command in manifest["commands"]}
@@ -99,13 +96,16 @@ def test_readme_and_global_docs_match_runtime_contract() -> None:
         "/删除对话",
         "chat.reply",
         "voice.synthesize_text",
-        "不存在笑话命令",
         "精确匹配",
     ):
         assert marker in readme
-    smalltalk_section = global_docs.split("### smalltalk - 闲聊插件", 1)[1].split("### chat", 1)[0]
-    assert smalltalk_section.count("| ✅ |") == 3
-    assert "精确查询" in smalltalk_section
+    assert "笑话" not in readme
+    smalltalk_section = global_docs.split("### `smalltalk`：基础闲聊与分域问答", 1)[1].split(
+        "### `chat`：Coze 单轮对话", 1
+    )[0]
+    for marker in ("/记忆", "/记住", "/学习", "/对话", "/删除对话"):
+        assert marker in smalltalk_section
+    assert "精确 QA 命中" in smalltalk_section
 
 
 def test_default_responses_are_returned_as_a_copy(context: _Context) -> None:
@@ -195,10 +195,11 @@ def test_positive_id_validation(value: object, expected: int | None) -> None:
     assert smalltalk._positive_id(value) == expected
 
 
-def test_qa_scope_prefers_group_then_private_then_legacy(tmp_path: Path) -> None:
+def test_qa_scope_prefers_group_then_private_and_rejects_missing_actor(tmp_path: Path) -> None:
     assert smalltalk._qa_scope(_Context(tmp_path, user_id="12", group_id="34")) == "group_34"
     assert smalltalk._qa_scope(_Context(tmp_path, user_id="12")) == "private_12"
-    assert smalltalk._qa_scope(_Context(tmp_path, user_id=True, group_id="bad")) == "legacy"
+    with pytest.raises(ValueError, match="positive user or group ID"):
+        smalltalk._qa_scope(_Context(tmp_path, user_id=True, group_id="bad"))
 
 
 def test_qa_normalization_removes_invalid_duplicates_and_oversized_values() -> None:

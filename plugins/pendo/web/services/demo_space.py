@@ -119,6 +119,9 @@ def purge_demo_owner(db: Database, owner_id: str) -> None:
         cursor.execute("DELETE FROM operation_logs WHERE user_id = ?", (owner_id,))
         cursor.execute("DELETE FROM transfer_logs WHERE owner_id = ?", (owner_id,))
         cursor.execute("DELETE FROM imported_bundles WHERE owner_id = ?", (owner_id,))
+        cursor.execute("DELETE FROM login_code_registry WHERE owner_id = ?", (owner_id,))
+        cursor.execute("DELETE FROM web_session_registry WHERE owner_id = ?", (owner_id,))
+        cursor.execute("DELETE FROM widget_token_registry WHERE owner_id = ?", (owner_id,))
     db.cache_clear()
 
 

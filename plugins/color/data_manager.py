@@ -11,6 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, TypedDict, TypeVar, cast
 
+from core.interfaces import PluginContextProtocol
 from core.plugin_base import ensure_dir, has_control_characters, load_json, run_sync, write_json
 from core.public_errors import public_error_message
 
@@ -44,7 +45,7 @@ def _positive_scope_id(value: Any, *, label: str) -> int | None:
     return value
 
 
-def _custom_file(context: Any) -> Path:
+def _custom_file(context: PluginContextProtocol) -> Path:
     """只从核心已认证的当前身份派生固定文件名，不回退到共享 legacy 文件。"""
 
     data_dir = getattr(context, "data_dir", None)
@@ -148,7 +149,7 @@ def _load_builtin_colors_cached(
     return tuple(_normalize_color_list(data, max_items=MAX_BUILTIN_COLORS))
 
 
-def _load_builtin_colors(context: Any) -> tuple[ColorRecord, ...]:
+def _load_builtin_colors(context: PluginContextProtocol) -> tuple[ColorRecord, ...]:
     plugin_dir = getattr(context, "plugin_dir", None)
     if not isinstance(plugin_dir, Path):
         raise ValueError("color plugin_dir must be a Path")
@@ -162,7 +163,7 @@ def _read_custom_colors(custom_file: Path) -> list[ColorRecord]:
     return _normalize_color_list(data, max_items=MAX_CUSTOM_COLORS_PER_SCOPE)
 
 
-def load_colors(context: Any) -> list[ColorRecord]:
+def load_colors(context: PluginContextProtocol) -> list[ColorRecord]:
     """加载内置库，并在当前身份作用域可用时追加自定义颜色。"""
 
     colors: list[ColorRecord] = []
@@ -182,13 +183,13 @@ def load_colors(context: Any) -> list[ColorRecord]:
     return colors
 
 
-async def load_colors_async(context: Any) -> list[ColorRecord]:
+async def load_colors_async(context: PluginContextProtocol) -> list[ColorRecord]:
     """通过当前插件的有界执行池加载内置库和作用域自定义颜色。"""
 
     return cast(list[ColorRecord], await run_sync(load_colors, context))
 
 
-def load_custom_colors(context: Any) -> list[ColorRecord]:
+def load_custom_colors(context: PluginContextProtocol) -> list[ColorRecord]:
     """在进程内锁保护下加载当前会话或私聊作用域的自定义颜色。"""
 
     custom_file = _custom_file(context)
@@ -197,7 +198,7 @@ def load_custom_colors(context: Any) -> list[ColorRecord]:
 
 
 def mutate_custom_colors(
-    context: Any,
+    context: PluginContextProtocol,
     callback: Callable[[list[ColorRecord]], _MutationResult],
 ) -> _MutationResult:
     """原子读取、修改并仅在内容变化时写回当前作用域颜色库。"""
@@ -216,7 +217,7 @@ def mutate_custom_colors(
 
 
 async def mutate_custom_colors_async(
-    context: Any,
+    context: PluginContextProtocol,
     callback: Callable[[list[ColorRecord]], _MutationResult],
 ) -> _MutationResult:
     """在有界工作线程中保持完整的读取、修改、验证和写回事务。"""

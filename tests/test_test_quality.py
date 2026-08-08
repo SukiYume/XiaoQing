@@ -21,6 +21,20 @@ REMOVED_QINGPET_APIS = {
     "grant_daily_reward",
     "vote_pet_show",
 }
+# 这些名字曾经只被测试调用。测试若需要观察内部状态，应把探针留在
+# ``tests/helpers``，不能再次扩大生产模块的维护契约。
+REMOVED_DEAD_OR_TEST_ONLY_RUNTIME_APIS = {
+    "core/bounded_http.py": {"decoded_bytes"},
+    "core/atomic_store.py": {"active_keyed_lock_count"},
+    "core/config.py": {"last_notified_revision", "save_secrets"},
+    "core/plugin_runtime.py": {"is_quarantined"},
+    "core/scheduler.py": {"clear_prefix"},
+    "core/server.py": {"inflight_count", "lane_count", "pending_for_key"},
+    "core/session.py": {"active_key_lock_count", "list_user_sessions"},
+    "plugins/codex/manager.py": {"reset_manager_for_tests", "wait_idle"},
+    "plugins/pendo/config.py": {"reset_runtime_config"},
+    "plugins/pendo/utils/db_ops.py": {"cleanup_db_singleton"},
+}
 CRITICAL_COORDINATORS = {
     ("plugins/xiaoqing_chat/reply_generator.py", "_generate_reply_draft"): 140,
     ("plugins/codex/runner.py", "run"): 120,
@@ -194,7 +208,7 @@ ALLOWED_PROJECT_SOURCE_READERS = {
     ),
     (
         "test_tooling_config.py",
-        "test_mypy_checks_runtime_trees_and_caps_core_debt_by_lines",
+        "test_mypy_checks_runtime_trees_without_core_exclusions",
     ),
 }
 TRANSPORT_CONTRACT_TESTS = {
@@ -481,6 +495,26 @@ def test_runtime_code_does_not_call_removed_qingpet_database_apis() -> None:
                 )
 
     assert violations == [], "removed QingPet API calls:\n" + "\n".join(violations)
+
+
+def test_removed_dead_or_test_only_runtime_apis_stay_removed() -> None:
+    """阻止死接口或测试便利函数重新进入生产模块。"""
+
+    violations: list[str] = []
+    for relative_path, removed_names in sorted(REMOVED_DEAD_OR_TEST_ONLY_RUNTIME_APIS.items()):
+        path = PROJECT_ROOT / relative_path
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        definitions = {
+            node.name: node.lineno
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        violations.extend(
+            f"{relative_path}:{definitions[name]} {name}"
+            for name in sorted(removed_names & definitions.keys())
+        )
+
+    assert violations == [], "test-only runtime APIs restored:\n" + "\n".join(violations)
 
 
 def test_runtime_sources_have_no_personal_absolute_paths() -> None:

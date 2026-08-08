@@ -6,6 +6,7 @@ import re
 from typing import Any, cast
 
 from core.args import FLAG_VALUE, ParsedArgs, parse
+from core.interfaces import PluginContextProtocol
 from core.plugin_base import segments
 
 from .arxiv_summary import enqueue_or_replay_arxiv_summary
@@ -40,12 +41,12 @@ def _message(text: str) -> list[dict[str, Any]]:
     return cast(list[dict[str, Any]], segments(text))
 
 
-async def shutdown(_context: Any = None) -> None:
+async def shutdown(_context: PluginContextProtocol | None = None) -> None:
     await shutdown_existing_manager()
 
 
 async def enqueue_arxiv_summary(
-    context: Any,
+    context: PluginContextProtocol,
     *,
     date: str,
     links: list[str],
@@ -67,7 +68,7 @@ async def enqueue_arxiv_summary_service(
     links: list[str],
     user_id: int | None,
     group_id: int | None,
-    context: Any,
+    context: PluginContextProtocol,
 ) -> str:
     """适配 manifest 声明的 context-last 通用服务契约。"""
 
@@ -84,7 +85,10 @@ def _positive_id(value: Any) -> int | None:
     return value if type(value) is int and value > 0 else None
 
 
-def _event_user_group(event: dict[str, Any], context: Any) -> tuple[int | None, int | None]:
+def _event_user_group(
+    event: dict[str, Any],
+    context: PluginContextProtocol,
+) -> tuple[int | None, int | None]:
     """优先使用本次事件身份；畸形字段回退到 core 已校验的上下文身份。"""
 
     user_id = _positive_id(event.get("user_id")) or _positive_id(
@@ -209,10 +213,12 @@ async def _handle_delete(manager: CodexQueueManager, parsed: ParsedArgs) -> str:
 
 
 async def handle(
-    command: str, args: str, event: dict[str, Any], context: Any
+    command: str,
+    args: str,
+    event: dict[str, Any],
+    context: PluginContextProtocol,
 ) -> list[dict[str, Any]]:
-    # Unexpected failures intentionally reach dispatcher.public_error_response,
-    # which owns the shared redaction contract for plugin command errors.
+    # 未预期异常统一交给 Dispatcher 生成脱敏公开错误，插件入口不重复包装。
     del command
     raw = (args or "").strip()
     if not raw or raw.lower() in {"help", "帮助", "?"}:

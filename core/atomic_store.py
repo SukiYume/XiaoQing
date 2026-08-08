@@ -1,4 +1,4 @@
-"""Crash-safe local persistence primitives shared by core and plugins."""
+"""Core 与插件共用的崩溃安全本地持久化原语。"""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ def _canonical_path(path: Path) -> Path:
 
 @contextmanager
 def keyed_path_lock(path: Path) -> Iterator[None]:
-    """Lock one canonical path and remove idle lock entries after use."""
+    """锁定规范化路径，并在最后一个使用者退出后回收锁条目。"""
     key = _canonical_path(path)
     with _POOL_GUARD:
         entry = _PATH_LOCKS.get(key)
@@ -52,14 +52,8 @@ def keyed_path_lock(path: Path) -> Iterator[None]:
                 _PATH_LOCKS.pop(key, None)
 
 
-def active_keyed_lock_count() -> int:
-    """Expose pool size for leak regression tests and diagnostics."""
-    with _POOL_GUARD:
-        return len(_PATH_LOCKS)
-
-
 def atomic_write_bytes(path: Path, payload: bytes) -> None:
-    """Write bytes with same-directory temp, fsync and atomic replace."""
+    """通过同目录临时文件、fsync 和原子替换写入字节。"""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")

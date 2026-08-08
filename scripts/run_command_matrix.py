@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import math
 import re
 import sys
 import time
@@ -19,6 +20,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import aiohttp
+from pydantic import ValidationError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 # 允许从仓库根目录直接执行 ``python scripts/run_command_matrix.py``；
@@ -109,7 +111,7 @@ class MatrixCase:
 
 @dataclass(frozen=True, slots=True)
 class EventResponse:
-    """一次 HTTP ``/event`` 请求的最小观测面。"""
+    """一次 HTTP 或 WebSocket 入站请求的最小观测面。"""
 
     status: int | None
     payload: Any
@@ -178,14 +180,25 @@ class BusinessScenario:
 
 
 class EventSender(Protocol):
-    """目录抓取只依赖这个最小接口，便于无网络回归测试。"""
+    """目录、通用矩阵和业务场景共用的最小发送接口。"""
 
     def send(self, message: str, *, scope: str, actor: str) -> EventResponse: ...
 
 
 def _read_json_object(path: Path, *, label: str) -> dict[str, Any]:
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise MatrixError(f"{label}含重复 JSON 键: {key}: {path}")
+            result[key] = value
+        return result
+
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=reject_duplicate_keys,
+        )
     except (OSError, json.JSONDecodeError) as exc:
         raise MatrixError(f"无法读取{label}: {path}: {exc}") from exc
     if not isinstance(payload, dict):
@@ -207,6 +220,22 @@ def load_runtime_auth(path: Path) -> tuple[str, int, tuple[int, ...]]:
     if not valid_admins:
         raise MatrixError("至少需要一个正整数管理员 ID")
     return token, valid_admins[0], valid_admins
+
+
+def validate_test_id_isolation(
+    *,
+    user_id: int,
+    group_id: int,
+    scenario_user_id: int,
+    scenario_group_id: int,
+    admin_ids: tuple[int, ...],
+) -> None:
+    """确保普通主体不会继承管理员权限，业务场景也不会复用矩阵会话。"""
+
+    if user_id in admin_ids or scenario_user_id in admin_ids:
+        raise MatrixError("普通矩阵用户和业务场景用户不能使用 Bot 管理员 ID")
+    if user_id == scenario_user_id or group_id == scenario_group_id:
+        raise MatrixError("动态业务场景必须使用独立的用户 ID 和群 ID")
 
 
 def load_policy(path: Path) -> dict[str, Any]:
@@ -253,15 +282,12 @@ def _validate_policy_record(
     unknown = set(record) - allowed
     if unknown:
         raise MatrixError(f"{label} 含未知策略字段: {sorted(unknown)}")
-    if not partial or "risk" in record:
-        if record.get("risk") not in RISKS:
-            raise MatrixError(f"{label}.risk 必须是 {sorted(RISKS)} 之一")
-    if not partial or "dependency" in record:
-        if record.get("dependency") not in DEPENDENCIES:
-            raise MatrixError(f"{label}.dependency 必须是 {sorted(DEPENDENCIES)} 之一")
-    if not partial or "sensitive" in record:
-        if type(record.get("sensitive")) is not bool:
-            raise MatrixError(f"{label}.sensitive 必须是布尔值")
+    if (not partial or "risk" in record) and record.get("risk") not in RISKS:
+        raise MatrixError(f"{label}.risk 必须是 {sorted(RISKS)} 之一")
+    if (not partial or "dependency" in record) and record.get("dependency") not in DEPENDENCIES:
+        raise MatrixError(f"{label}.dependency 必须是 {sorted(DEPENDENCIES)} 之一")
+    if (not partial or "sensitive" in record) and type(record.get("sensitive")) is not bool:
+        raise MatrixError(f"{label}.sensitive 必须是布尔值")
     if "reason" in record and (
         not isinstance(record["reason"], str) or not record["reason"].strip()
     ):
@@ -627,35 +653,34 @@ def build_business_scenarios(
                 f"{sorted(reserved_fixtures)}"
             )
         available_values = {*SCENARIO_BUILTIN_VALUES, *fixtures}
-        steps: list[ScenarioStep] = []
         step_ids: set[str] = set()
-        for raw_step in raw_steps:
-            steps.append(
-                _build_scenario_step(
-                    raw_step,
-                    scenario_id=scenario_id,
-                    covers=covers,
-                    available_values=available_values,
-                    step_ids=step_ids,
-                )
+        steps = [
+            _build_scenario_step(
+                raw_step,
+                scenario_id=scenario_id,
+                covers=covers,
+                available_values=available_values,
+                step_ids=step_ids,
             )
+            for raw_step in raw_steps
+        ]
 
         _validate_scenario_step_coverage(scenario_id, covers, steps)
         _validate_scenario_cleanup(scenario_id, str(raw["risk"]), steps)
         scenarios.append(
             BusinessScenario(
-                scenario_id,
-                str(plugin),
-                description.strip(),
-                str(raw["risk"]),
-                str(raw["dependency"]),
-                str(raw["scope"]),
-                str(raw["actor"]),
-                bool(raw["sensitive"]),
-                fixtures,
-                covers,
-                tuple(steps),
-                step_delay_ms,
+                scenario_id=scenario_id,
+                plugin=str(plugin),
+                description=description.strip(),
+                risk=str(raw["risk"]),
+                dependency=str(raw["dependency"]),
+                scope=str(raw["scope"]),
+                actor=str(raw["actor"]),
+                sensitive=bool(raw["sensitive"]),
+                required_fixtures=fixtures,
+                covers=covers,
+                steps=tuple(steps),
+                step_delay_ms=step_delay_ms,
             )
         )
 
@@ -800,7 +825,7 @@ class EventClient:
             except (UnicodeDecodeError, json.JSONDecodeError):
                 payload = {"raw": raw.decode("utf-8", errors="replace")}
             return EventResponse(exc.code, payload, (time.perf_counter() - started) * 1_000)
-        except Exception as exc:
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
             return EventResponse(
                 None,
                 None,
@@ -820,52 +845,54 @@ class WebSocketEventClient(EventClient):
             sock_read=self.timeout,
         )
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.ws_connect(
+            async with (
+                aiohttp.ClientSession(timeout=timeout) as session,
+                session.ws_connect(
                     self.endpoint,
                     headers={"Authorization": f"Bearer {self.token}"},
                     timeout=self.timeout,
-                ) as websocket:
-                    await websocket.send_json(event)
-                    actions: list[dict[str, Any]] = []
-                    while True:
-                        wait_seconds = self.timeout if not actions else WS_ACTION_SETTLE_SECONDS
-                        try:
-                            message = await websocket.receive(timeout=wait_seconds)
-                        except TimeoutError:
-                            if actions:
-                                break
-                            raise
-                        if message.type is aiohttp.WSMsgType.TEXT:
-                            try:
-                                payload = json.loads(message.data)
-                            except json.JSONDecodeError:
-                                return EventResponse(
-                                    200,
-                                    {"actions": actions, "ws_error": "invalid JSON response"},
-                                    (time.perf_counter() - started) * 1_000,
-                                )
-                            if isinstance(payload, dict) and "error" in payload:
-                                return EventResponse(
-                                    200,
-                                    {"actions": actions, "ws_error": payload["error"]},
-                                    (time.perf_counter() - started) * 1_000,
-                                )
-                            if isinstance(payload, dict):
-                                actions.append(payload)
-                            continue
-                        if message.type in {
-                            aiohttp.WSMsgType.CLOSE,
-                            aiohttp.WSMsgType.CLOSED,
-                            aiohttp.WSMsgType.ERROR,
-                        }:
+                ) as websocket,
+            ):
+                await websocket.send_json(event)
+                actions: list[dict[str, Any]] = []
+                while True:
+                    wait_seconds = self.timeout if not actions else WS_ACTION_SETTLE_SECONDS
+                    try:
+                        message = await websocket.receive(timeout=wait_seconds)
+                    except TimeoutError:
+                        if actions:
                             break
-                    return EventResponse(
-                        200,
-                        {"actions": actions},
-                        (time.perf_counter() - started) * 1_000,
-                    )
-        except Exception as exc:
+                        raise
+                    if message.type is aiohttp.WSMsgType.TEXT:
+                        try:
+                            payload = json.loads(message.data)
+                        except json.JSONDecodeError:
+                            return EventResponse(
+                                200,
+                                {"actions": actions, "ws_error": "invalid JSON response"},
+                                (time.perf_counter() - started) * 1_000,
+                            )
+                        if isinstance(payload, dict) and "error" in payload:
+                            return EventResponse(
+                                200,
+                                {"actions": actions, "ws_error": payload["error"]},
+                                (time.perf_counter() - started) * 1_000,
+                            )
+                        if isinstance(payload, dict):
+                            actions.append(payload)
+                        continue
+                    if message.type in {
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSED,
+                        aiohttp.WSMsgType.ERROR,
+                    }:
+                        break
+                return EventResponse(
+                    200,
+                    {"actions": actions},
+                    (time.perf_counter() - started) * 1_000,
+                )
+        except (aiohttp.ClientError, TimeoutError, OSError, ValueError) as exc:
             return EventResponse(
                 None,
                 None,
@@ -934,7 +961,7 @@ def load_source_catalog() -> list[dict[str, Any]]:
         payload = _read_json_object(path, label="插件 manifest")
         try:
             manifest = PluginManifest.model_validate(payload)
-        except Exception as exc:
+        except ValidationError as exc:
             raise MatrixError(f"插件 manifest 校验失败: {path}: {exc}") from exc
         for command in manifest.commands:
             root = build_command_catalog_node(
@@ -1016,27 +1043,27 @@ def build_matrix(
             for index, example in enumerate(examples, 1):
                 if not isinstance(example, str) or not example.strip():
                     raise MatrixError(f"{code} 含空 {field}")
-                for scope in contexts:
-                    cases.append(
-                        MatrixCase(
-                            _case_id(code, kind, scope, index, example),
-                            plugin,
-                            code,
-                            kind,
-                            index,
-                            example,
-                            scope,
-                            _actor_for(permission, scope),
-                            permission,
-                            decision.risk,
-                            decision.dependency,
-                            decision.sensitive,
-                            decision.reason,
-                            expectation,
-                            decision.invalid_expect_any,
-                            decision.invalid_reject_any,
-                        )
+                cases.extend(
+                    MatrixCase(
+                        case_id=_case_id(code, kind, scope, index, example),
+                        plugin=plugin,
+                        code=code,
+                        kind=kind,
+                        example_index=index,
+                        message=example,
+                        scope=scope,
+                        actor=_actor_for(permission, scope),
+                        permission=permission,
+                        risk=decision.risk,
+                        dependency=decision.dependency,
+                        sensitive=decision.sensitive,
+                        policy_reason=decision.reason,
+                        semantic_expectation=expectation,
+                        invalid_expect_any=decision.invalid_expect_any,
+                        invalid_reject_any=decision.invalid_reject_any,
                     )
+                    for scope in contexts
+                )
 
         aliases = record.get("aliases")
         if not isinstance(aliases, list):
@@ -1045,67 +1072,73 @@ def build_matrix(
             if not isinstance(alias, str) or not alias:
                 raise MatrixError(f"{code} 含空别名")
             message = _alias_message(record, alias)
-            for scope in contexts:
-                cases.append(
-                    MatrixCase(
-                        _case_id(code, "alias", scope, index, message),
-                        plugin,
-                        code,
-                        "alias",
-                        index,
-                        message,
-                        scope,
-                        _actor_for(permission, scope),
-                        permission,
-                        decision.risk,
-                        decision.dependency,
-                        decision.sensitive,
-                        decision.reason,
-                        "alias_reaches_same_command_path",
-                        decision.invalid_expect_any,
-                        decision.invalid_reject_any,
-                    )
+            cases.extend(
+                MatrixCase(
+                    case_id=_case_id(code, "alias", scope, index, message),
+                    plugin=plugin,
+                    code=code,
+                    kind="alias",
+                    example_index=index,
+                    message=message,
+                    scope=scope,
+                    actor=_actor_for(permission, scope),
+                    permission=permission,
+                    risk=decision.risk,
+                    dependency=decision.dependency,
+                    sensitive=decision.sensitive,
+                    policy_reason=decision.reason,
+                    semantic_expectation="alias_reaches_same_command_path",
+                    invalid_expect_any=decision.invalid_expect_any,
+                    invalid_reject_any=decision.invalid_reject_any,
                 )
+                for scope in contexts
+            )
 
         first_example = str(record["examples"][0])
         if permission != "public":
             for index, scope in enumerate(contexts, 1):
                 cases.append(
                     MatrixCase(
-                        _case_id(code, "permission_denied", scope, index, first_example),
-                        plugin,
-                        code,
-                        "permission_denied",
-                        index,
-                        first_example,
-                        scope,
-                        "user",
-                        permission,
-                        "read_only",
-                        "local",
-                        False,
-                        "Core 必须在插件处理器之前拒绝未授权主体",
-                        "permission_denied_by_core",
+                        case_id=_case_id(
+                            code,
+                            "permission_denied",
+                            scope,
+                            index,
+                            first_example,
+                        ),
+                        plugin=plugin,
+                        code=code,
+                        kind="permission_denied",
+                        example_index=index,
+                        message=first_example,
+                        scope=scope,
+                        actor="user",
+                        permission=permission,
+                        risk="read_only",
+                        dependency="local",
+                        sensitive=False,
+                        policy_reason="Core 必须在插件处理器之前拒绝未授权主体",
+                        semantic_expectation="permission_denied_by_core",
                     )
                 )
         denied_contexts = [scope for scope in SCOPES if scope not in contexts]
         for index, scope in enumerate(denied_contexts, 1):
             cases.append(
                 MatrixCase(
-                    _case_id(code, "context_denied", scope, index, first_example),
-                    plugin,
-                    code,
-                    "context_denied",
-                    index,
-                    first_example,
-                    scope,
-                    "bot_admin",
-                    permission,
-                    "read_only",
-                    "local",
-                    False,
-                    "Core 必须在插件处理器之前拒绝错误会话场景",
-                    "context_denied_by_core",
+                    case_id=_case_id(code, "context_denied", scope, index, first_example),
+                    plugin=plugin,
+                    code=code,
+                    kind="context_denied",
+                    example_index=index,
+                    message=first_example,
+                    scope=scope,
+                    actor="bot_admin",
+                    permission=permission,
+                    risk="read_only",
+                    dependency="local",
+                    sensitive=False,
+                    policy_reason="Core 必须在插件处理器之前拒绝错误会话场景",
+                    semantic_expectation="context_denied_by_core",
                 )
             )
 
@@ -1172,7 +1205,7 @@ def evaluate_response(
 
 
 def execute_matrix(
-    client: EventClient,
+    client: EventSender,
     cases: list[MatrixCase],
     *,
     risks: frozenset[str],
@@ -1502,7 +1535,7 @@ def _probe_health(endpoint: str, token: str, *, timeout: float) -> dict[str, Any
             "duration_ms": round((time.perf_counter() - started) * 1_000, 2),
             "payload": payload,
         }
-    except Exception as exc:
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
         return {
             "status": None,
             "duration_ms": round((time.perf_counter() - started) * 1_000, 2),
@@ -1713,20 +1746,39 @@ def render_report(summary: dict[str, Any]) -> str:
             f"- 与当前源码目录一致：{catalog['matches_source']}",
             f"- 命令插件/节点：{catalog['plugins_with_commands']}/{catalog['nodes']}",
             f"- 正常/错误样例：{catalog['normal_examples']}/{catalog['invalid_examples']}",
-            f"- 自动生成用例：{planned['cases']}；所有节点均有正反例：{planned['all_nodes_have_normal_and_invalid']}",
+            (
+                f"- 自动生成用例：{planned['cases']}；"
+                f"所有节点均有正反例：{planned['all_nodes_have_normal_and_invalid']}"
+            ),
             f"- 用例类型：`{json.dumps(planned['by_kind'], ensure_ascii=False, sort_keys=True)}`",
-            f"- 动态业务场景/步骤：{business['planned_scenarios']}/{business['planned_steps']}；覆盖命令码：{business['covered_codes']}",
+            (
+                f"- 动态业务场景/步骤：{business['planned_scenarios']}/"
+                f"{business['planned_steps']}；覆盖命令码：{business['covered_codes']}"
+            ),
             "",
             "## 实际执行",
             "",
             f"- 执行/未执行：{execution['executed']}/{execution['not_executed']}",
-            f"- 运行态契约通过/失败：{execution['passed_runtime_contract']}/{execution['failed_runtime_contract']}",
+            (
+                f"- 运行态契约通过/失败：{execution['passed_runtime_contract']}/"
+                f"{execution['failed_runtime_contract']}"
+            ),
             f"- Core 严格语义断言：{execution['strict_core_assertions_passed']}",
             f"- 错误命令严格拒绝断言：{execution['strict_invalid_assertions_passed']}",
             f"- 仅证明有可观测业务返回：{execution['observable_reply_only']}",
-            f"- 严格业务场景步骤通过/失败/未执行：{business['passed_business_or_cleanup']}/{business['failed_steps']}/{business['not_executed_steps']}",
-            f"- 延迟 p50/p95/p99：{execution['latency_ms']['p50']}/{execution['latency_ms']['p95']}/{execution['latency_ms']['p99']} ms",
-            f"- 跳过原因：`{json.dumps(execution['skip_reasons'], ensure_ascii=False, sort_keys=True)}`",
+            (
+                "- 严格业务场景步骤通过/失败/未执行："
+                f"{business['passed_business_or_cleanup']}/{business['failed_steps']}/"
+                f"{business['not_executed_steps']}"
+            ),
+            (
+                f"- 延迟 p50/p95/p99：{execution['latency_ms']['p50']}/"
+                f"{execution['latency_ms']['p95']}/{execution['latency_ms']['p99']} ms"
+            ),
+            (
+                "- 跳过原因：`"
+                f"{json.dumps(execution['skip_reasons'], ensure_ascii=False, sort_keys=True)}`"
+            ),
             f"- 压前/压后健康门禁：{health['gate_passed']}",
             "",
             "## 失败明细",
@@ -1742,17 +1794,35 @@ def render_report(summary: dict[str, Any]) -> str:
             "",
             "## 结果口径",
             "",
-            "- 正常、错误和别名用例的通用 Runner 只断言所选入站传输/OneBot 契约、非空回复及无未捕获插件异常；它不凭传输成功猜测业务语义。",
+            (
+                "- 正常、错误和别名用例的通用 Runner 只断言所选入站传输/OneBot "
+                "契约、非空回复及无未捕获插件异常；它不凭传输成功猜测业务语义。"
+            ),
             "- 权限拒绝和场景拒绝由 Core 统一返回固定语义，因此可以自动作严格断言。",
-            "- 写状态、外部依赖和高权限用例未被选择时明确记为未执行；外部服务不可用不得算插件业务通过。",
-            "- 动态业务场景使用真实 HTTP 或 WebSocket 入站、捕获并复用运行时 ID、逐步 include/exclude 断言，并在业务失败后继续尽力清理。",
-            "- 仅列入插件回归证据、但没有可安全运行 fixture 的外部/高权限命令，不会被动态场景冒充为运行态业务通过。",
+            (
+                "- 写状态、外部依赖和高权限用例未被选择时明确记为未执行；"
+                "外部服务不可用不得算插件业务通过。"
+            ),
+            (
+                "- 动态业务场景使用真实 HTTP 或 WebSocket 入站、捕获并复用运行时 ID、"
+                "逐步 include/exclude 断言，并在业务失败后继续尽力清理。"
+            ),
+            (
+                "- 仅列入插件回归证据、但没有可安全运行 fixture 的外部/高权限命令，"
+                "不会被动态场景冒充为运行态业务通过。"
+            ),
             "",
             "## 清理",
             "",
             f"- 是否需要清理：{cleanup['required']}；清理状态：`{cleanup['status']}`。",
-            f"- 清理命令通过：{cleanup['command_steps_passed']}/{cleanup['command_steps']}。命令回执仍不等于数据库/文件残留为零。",
-            "- 只要执行过 isolated_state 用例，项目总报告仍必须附上按合成用户/群号核对为零的清理产物，不能仅写‘清理命令已成功’。",
+            (
+                f"- 清理命令通过：{cleanup['command_steps_passed']}/"
+                f"{cleanup['command_steps']}。命令回执仍不等于数据库/文件残留为零。"
+            ),
+            (
+                "- 只要执行过 isolated_state 用例，项目总报告仍必须附上按合成用户/群号"
+                "核对为零的清理产物，不能仅写‘清理命令已成功’。"
+            ),
             "",
         )
     )
@@ -1889,11 +1959,19 @@ def run(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
         or scenario_user_id <= 0
         or scenario_group_id <= 0
         or args.delay_ms < 0
+        or not math.isfinite(args.timeout)
         or args.timeout <= 0
     ):
         raise MatrixError("测试 ID、超时和 delay-ms 参数非法")
 
     token, admin_id, all_admins = load_runtime_auth(args.secrets.resolve())
+    validate_test_id_isolation(
+        user_id=args.user_id,
+        group_id=args.group_id,
+        scenario_user_id=scenario_user_id,
+        scenario_group_id=scenario_group_id,
+        admin_ids=all_admins,
+    )
     policy = load_policy(args.policy.resolve())
     scenario_contract = load_scenario_contract(args.scenarios.resolve())
     fixture_values = load_scenario_fixtures(

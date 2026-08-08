@@ -1,6 +1,4 @@
-"""
-Jupyter 内核管理器
-"""
+"""管理隔离 Jupyter 内核、输出预算、取消恢复和资源回收。"""
 
 from __future__ import annotations
 
@@ -58,7 +56,7 @@ _IMPORT_LOCK = threading.Lock()
 
 
 def validate_png_bytes(image_data: object) -> bool:
-    """Fully decode one bounded, non-animated PNG through the shared image boundary."""
+    """通过共享图片边界完整解码一张有界、非动画 PNG。"""
 
     try:
         validate_image_bytes(
@@ -336,7 +334,7 @@ class JupyterKernelManager:
         def run() -> None:
             try:
                 result.append(asyncio.run(await_value()))
-            except BaseException as exc:  # noqa: BLE001 - propagate from helper thread.
+            except BaseException as exc:  # noqa: BLE001 - 把辅助线程异常原样交还调用方。
                 errors.append(exc)
 
         worker = threading.Thread(target=run, name="jupyter-cleanup-awaitable", daemon=True)
@@ -381,7 +379,7 @@ class JupyterKernelManager:
             return None
         try:
             return bool(cls._resolve_awaitable(is_alive()))
-        except BaseException as exc:  # noqa: BLE001 - cleanup must continue.
+        except BaseException as exc:  # noqa: BLE001 - 单步失败后仍需继续后续清理。
             if report is not None:
                 report.record_error(f"{stage}.is_alive", exc)
             return None
@@ -426,7 +424,7 @@ class JupyterKernelManager:
             try:
                 cls._invoke_cleanup(callback, **kwargs)
                 report.fallback_succeeded = True
-            except BaseException as exc:  # noqa: BLE001 - try the next fallback.
+            except BaseException as exc:  # noqa: BLE001 - 失败后继续尝试下一个兜底。
                 report.record_error(name, exc)
                 continue
             alive = cls._wait_for_kernel_exit(km, report, stage=name)
@@ -449,7 +447,7 @@ class JupyterKernelManager:
         try:
             cls._invoke_cleanup(stop_channels)
             report.channels_stopped = True
-        except BaseException as exc:  # noqa: BLE001 - kernel cleanup must continue.
+        except BaseException as exc:  # noqa: BLE001 - 关闭 channels 失败后仍需回收内核。
             report.channels_stopped = False
             report.record_error("stop_channels", exc)
 
@@ -463,7 +461,7 @@ class JupyterKernelManager:
         try:
             cls._invoke_cleanup(shutdown, now=True)
             report.shutdown_succeeded = True
-        except BaseException as exc:  # noqa: BLE001 - fallback kill must continue.
+        except BaseException as exc:  # noqa: BLE001 - 正常关闭失败后仍要进入强杀兜底。
             report.shutdown_succeeded = False
             report.record_error("shutdown_kernel", exc)
 
@@ -482,7 +480,7 @@ class JupyterKernelManager:
         try:
             cls._invoke_cleanup(cleanup_resources, restart=False)
             report.resources_cleaned = True
-        except BaseException as exc:  # noqa: BLE001 - termination proof is separate.
+        except BaseException as exc:  # noqa: BLE001 - 资源清理和退出确认分别记录。
             report.resources_cleaned = False
             report.record_error(stage, exc)
         return cleanup_resources

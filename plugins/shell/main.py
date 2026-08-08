@@ -55,7 +55,7 @@ _TERMINAL_QUERY_TIMEOUT = 10.0
 
 @dataclass(frozen=True, slots=True)
 class TerminalSettings:
-    """Validated public terminal configuration for one command generation."""
+    """单次命令代次使用的已校验公开终端配置。"""
 
     backend: str
     executable: str | None = None
@@ -68,10 +68,7 @@ class ShellContext(Protocol):
     def get_settings_snapshot(self) -> PluginSettingsSnapshot: ...
 
 
-def init(context: object | None = None) -> None:
-    """记录插件初始化完成。"""
-
-    logger.info("Shell plugin initialized")
+# ──────────────────── 配置与审计 ────────────────────
 
 
 def _audit_request_id(context: object) -> str:
@@ -159,10 +156,7 @@ def _terminal_label(settings: TerminalSettings) -> str:
 
 
 def _terminal_error_message(reason: str) -> str:
-    return (
-        f"❌ Shell 终端配置不可用: {reason}\n"
-        "请检查 config.json 的 plugins.shell.terminal 配置。"
-    )
+    return f"❌ Shell 终端配置不可用: {reason}\n请检查 config.json 的 plugins.shell.terminal 配置。"
 
 
 def _normalize_command_name(value: str) -> str:
@@ -219,6 +213,9 @@ def _is_whitelist_disabled(context: ShellContext) -> bool:
     """仅把 JSON 布尔值 true 视为显式关闭启用列表。"""
 
     return _get_config(context).get("disable_whitelist") is True
+
+
+# ──────────────────── 参数与路径解析 ────────────────────
 
 
 def _strip_outer_quotes(token: str) -> str:
@@ -336,7 +333,7 @@ def _validate_command(
 
 
 def _command_available(command: str) -> bool:
-    """Return whether ``command`` can currently be resolved from the Bot environment."""
+    """判断 Bot 当前进程环境能否解析指定可执行入口。"""
 
     try:
         return shutil.which(command) is not None
@@ -372,7 +369,7 @@ def _prepare_execution_args(
 
 
 def _command_not_found_message(command: str) -> str:
-    """Build a stable, actionable response for a missing executable."""
+    """为缺失的可执行文件生成稳定且可操作的提示。"""
 
     name = _normalize_command_name(command) or "(unknown)"
     lines = [
@@ -399,6 +396,9 @@ def _smart_decode(data: bytes) -> str:
             continue
 
     return data.decode("latin-1")
+
+
+# ──────────────────── 子进程执行与回收 ────────────────────
 
 
 def _subprocess_group_kwargs() -> dict[str, Any]:
@@ -571,6 +571,9 @@ def _truncate(text: str, max_len: int = MAX_OUTPUT_LENGTH) -> str:
     return head_tail_preview(text, max_len, marker=marker)
 
 
+# ──────────────────── 命令入口与展示 ────────────────────
+
+
 async def handle(
     command: str,
     args: str,
@@ -620,9 +623,7 @@ async def handle(
         except FileNotFoundError:
             _log_command_audit(context, cmd_line, status="unavailable")
             if terminal.backend == _TERMINAL_GIT_BASH:
-                return segments(
-                    _terminal_error_message("配置的 Git Bash 可执行文件已不可用")
-                )
+                return segments(_terminal_error_message("配置的 Git Bash 可执行文件已不可用"))
             return segments(_command_not_found_message(cmd_args[0]))
 
         streams = [("📤 stdout", stdout), ("⚠️ stderr", stderr)]
@@ -663,7 +664,7 @@ async def handle(
 
 
 def _show_help(context: ShellContext) -> str:
-    """根据当前配置生成帮助。"""
+    """根据当前配置生成适合手机私聊阅读的短行帮助。"""
 
     whitelist_status = "已禁用" if _is_whitelist_disabled(context) else "已启用"
     timeout = _get_timeout(context)
@@ -695,28 +696,27 @@ def _show_help(context: ShellContext) -> str:
 
     return (
         "💻 Shell 命令执行插件\n"
-        "═══════════════════════\n\n"
-        "📌 基本用法:\n\n"
-        "1️⃣ /shell <命令>\n"
-        "   执行终端命令\n\n"
-        "2️⃣ /shell help\n"
-        "   显示此帮助信息\n\n"
-        "3️⃣ /shell list\n"
-        "   查看管理员启用的命令入口及当前 PATH 可用性\n\n"
-        "🔧 管理员执行设置:\n"
-        f"   • 默认终端: {terminal_status}\n"
-        f"   • 命令启用/防误触列表: {whitelist_status}\n"
-        f"   • 执行超时: {timeout:g}秒\n"
-        f"   • 输出限制: {MAX_OUTPUT_LENGTH}字符\n"
-        "   • 命令链接符: 已禁用\n\n"
-        "💡 示例:\n"
+        "\n"
+        "命令\n"
+        "• /shell <命令>\n"
+        "• /shell list\n"
+        "  查看启用入口及当前可用性\n"
+        "• /shell help\n"
+        "\n"
+        "当前配置\n"
+        f"• 默认终端: {terminal_status}\n"
+        f"• 防误触列表: {whitelist_status}\n"
+        f"• 超时: {timeout:g} 秒\n"
+        f"• 输出: 最多 {MAX_OUTPUT_LENGTH} 字符\n"
+        "• 命令链接、管道和多行输入: 禁用\n"
+        "\n"
+        "示例\n"
         f"{examples}\n"
-        "📁 路径格式:\n"
-        "   • QQ 中建议统一使用 / 斜杠，例如 C:/workspace/example.py\n"
-        "   • 直接执行按 Bot 系统转换；Git Bash 保留原始命令文本\n"
-        "   • 路径包含空格时请加引号\n\n"
-        "⚠️ 注意: 此插件仅管理员可用；启用列表不是安全沙箱，解释器和通用工具仍具有管理员授予的完整能力\n"
-        "═══════════════════════"
+        "路径\n"
+        "• QQ 中建议使用 /，例如 C:/workspace/example.py\n"
+        "• 含空格的路径必须加引号\n"
+        "\n"
+        "⚠️ 仅限管理员私聊；启用列表不是安全沙箱。"
     )
 
 
@@ -731,9 +731,7 @@ async def _git_bash_available_commands(
     if executable is None:
         return set(), "找不到配置的 Git Bash 可执行文件"
     script = (
-        'for name in "$@"; do '
-        'command -v -- "$name" >/dev/null 2>&1 && printf "%s\\n" "$name"; '
-        "done"
+        'for name in "$@"; do command -v -- "$name" >/dev/null 2>&1 && printf "%s\\n" "$name"; done'
     )
     try:
         code, stdout, _stderr = await _execute_command(

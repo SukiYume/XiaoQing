@@ -208,7 +208,9 @@ def test_update_date_uses_explicit_english_month_mapping(
 ) -> None:
     module = load_with_feedparser(_ARXIV_TODAY, lambda _body: None)
     html = _VALID_HTML.replace(b"11 July 2026", b"4 February 2026")
-    monkeypatch.setattr(module, "_fetch_arxiv_page", lambda *_args: module.BeautifulSoup(html, "html.parser"))
+    monkeypatch.setattr(
+        module, "_fetch_arxiv_page", lambda *_args: module.BeautifulSoup(html, "html.parser")
+    )
 
     assert module.check_arxiv_update_date() == "2026-02-04"
 

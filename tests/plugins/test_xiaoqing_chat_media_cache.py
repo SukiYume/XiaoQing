@@ -145,7 +145,6 @@ def test_image_probe_rejects_decompression_bomb_warning_and_unknown_frames():
 
     with pytest.raises(ValueError, match="frame count unavailable"):
         _validate_image_resource_limits(
-            _PNG_BYTES,
             width=1,
             height=1,
             max_pixels=16_000_000,

@@ -755,8 +755,8 @@ class TestPendoWebHandler:
 
         issuance = {}
 
-        def issue_code(owner_id, *, expires_seconds):
-            issuance.update(owner_id=owner_id, expires_seconds=expires_seconds)
+        def issue_code(owner_id, *, expires_seconds, db):
+            issuance.update(owner_id=owner_id, expires_seconds=expires_seconds, db=db)
             return "mock-code"
 
         monkeypatch.setattr(web_module, "issue_login_code", issue_code)
@@ -776,9 +776,14 @@ class TestPendoWebHandler:
 
         assert result["status"] == "success"
         assert "登录 Code 已单独私聊发送" in result["message"]
-        assert "7 天，仅可使用一次" in result["message"]
+        assert "Code 7 天内可兑换一次" in result["message"]
+        assert "浏览器会话保持 7 天" in result["message"]
         assert "mock-code" not in result["message"]
-        assert issuance == {"owner_id": "1001", "expires_seconds": 7 * 24 * 60 * 60}
+        assert issuance == {
+            "owner_id": "1001",
+            "expires_seconds": 7 * 24 * 60 * 60,
+            "db": None,
+        }
         assert len(actions) == 1
         assert actions[0]["action"] == "send_private_msg"
         assert actions[0]["params"]["user_id"] == 1001
@@ -923,8 +928,8 @@ class TestPendoWebHandler:
         web_module = importlib.import_module("plugins.pendo.handlers.web")
         issuance = {}
 
-        def issue_widget(owner_id, *, expires_hours, db):
-            issuance.update(owner_id=owner_id, expires_hours=expires_hours, db=db)
+        def issue_widget(owner_id, *, expires_seconds, db):
+            issuance.update(owner_id=owner_id, expires_seconds=expires_seconds, db=db)
             return "widget-token"
 
         monkeypatch.setattr(web_module, "generate_widget_token", issue_widget)
@@ -944,7 +949,11 @@ class TestPendoWebHandler:
         assert "Widget Token 已单独私聊发送" in result["message"]
         assert "365 天" in result["message"]
         assert "widget-token" not in result["message"]
-        assert issuance == {"owner_id": "1001", "expires_hours": 24 * 365, "db": None}
+        assert issuance == {
+            "owner_id": "1001",
+            "expires_seconds": 365 * 24 * 60 * 60,
+            "db": None,
+        }
         assert len(actions) == 1
         token_text = actions[0]["params"]["message"][0]["data"]["text"]
         assert "Pendo Web Widget Token" in token_text
@@ -1185,7 +1194,7 @@ class TestPendoRedesignRegression:
                 }
             )
 
-            rows = db.search_items(
+            rows, _total = db.search_items_page(
                 owner_id,
                 "学术会议",
                 {"type": "event", "category": "工作"},

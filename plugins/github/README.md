@@ -1,54 +1,99 @@
-# GitHub Trending 插件
+# 🐙 GitHub Trending
 
-抓取 [GitHub 官方 Trending 页面](https://github.com/trending)，展示每日、每周或每月热门仓库。实现读取官方 HTML，而不是调用承诺稳定结构的公开 API；GitHub 改版时可能需要同步更新解析规则。
+`github` 读取 [GitHub 官方 Trending 页面](https://github.com/trending)，展示每日、每周和每月热门仓库。
 
-## 命令
+---
+
+## ⌨️ 命令
 
 <!-- manifest-command-aliases:start -->
-| 命令别名 | 功能 |
-| --- | --- |
-| `/github`、`/gh`、`/trending` | 查询 GitHub Trending |
+| 功能 | 推荐入口 | Manifest 等价别名 |
+| --- | --- | --- |
+| GitHub Trending | `/github` | `/gh` `/trending` |
 <!-- manifest-command-aliases:end -->
 
+| 用法 | 说明 |
+| --- | --- |
+| `/github` | 查看每日趋势 |
+| `/github daily` | 查看每日趋势 |
+| `/github weekly` | 查看每周趋势 |
+| `/github monthly` | 查看每月趋势 |
+| `/github help` | 显示本地帮助 |
+
+`h` 和 `帮助` 是 `help` 的别名。命令接受一个完整的时间范围参数。
+
+---
+
+## 📌 抓取与输出
+
+插件解析 GitHub 官方 HTML，并执行以下边界：
+
+- 直连目标限定为 `https://github.com`；
+- 响应经过 MIME、同源重定向、压缩比例和 2 MiB 解码预算校验；
+- 文本编码接受 UTF-8 与 ASCII；
+- 单次最多解析 50 个文章节点；
+- 仓库链接采用 GitHub 的两段仓库路径；
+- 描述、语言、计数字段和控制字符分别经过规范化；
+- QQ 消息最多展示 10 个完整仓库块，并受 Core 单条文本长度保护。
+
+Trending 页面结构变化时，维护者需要同步更新解析规则和测试夹具。
+
+---
+
+## ⏰ 定时任务与历史
+
+Manifest 每天 08:30 按调度器时区运行 `scheduled`，Core 负责把结果投递到默认群。成功抓取后会写入：
+
 ```text
-/github
-/github daily
-/github weekly
-/github monthly
-/github help
+data/github/trending_<range>_latest.json
+data/github/history/trending_<range>_<YYYY-MM-DD>.json
 ```
 
-空参数等同 `daily`。命令只接受一个完整参数；未知范围、多余参数、控制字符、超长输入和未闭合引号会被拒绝，不会静默回退为每日趋势。
-当前不提供语言过滤参数，查询范围只由 `daily`、`weekly` 或 `monthly` 决定。
+`latest` 提供当前指针，日期文件提供历史快照。每个时间范围最多保留 90 份常规历史文件。写入和保留策略由进程内锁按顺序保护。
 
-## 抓取与输出边界
+---
 
-- 无代理路径使用 XiaoQing 的公网 DNS 固定抓取器，只允许 `https://github.com`。
-- HTML 响应必须通过 MIME、重定向、压缩比例及 2 MiB 解码预算；只接受 UTF-8/ASCII。
-- 代理路径同样限制为 GitHub HTTPS 同源重定向和 2 MiB，代理 secret 只接受结构正确的 HTTP(S) URL，且不会写入日志。
-- 解析最多 50 个文章节点，仓库链接必须是 GitHub 的两段仓库路径；脚本、样式、控制字符、重复仓库和畸形文章会被清理或跳过。
-- 描述和语言有独立长度上限；star/fork 使用规范化计数，并识别 `today`、`this week`、`this month` 三种周期新增 star。
-- 最多展示前 10 个仓库；接近 3000 字 QQ 单条文本上限时停止追加完整仓库块，不截断到半条。
+## 📌 可选代理
 
-## 定时任务与历史
+插件凭据字段只有可选代理。在 `config/secrets.json` 中配置：
 
-清单在每天 08:30（调度器时区）运行 `daily`。框架会把返回消息投递到部署配置的默认群组。
-
-成功抓取后原子写入：
-
-- `data/trending_<range>_latest.json`：该范围最近一次成功结果；
-- `data/history/trending_<range>_<YYYY-MM-DD>.json`：按日期保存的快照。
-
-`latest` 与同一天历史文件内容相同是有意的“当前指针 + 历史快照”设计；这两类文件是历史快照，不是跳过网络请求的响应缓存。每个时间范围最多保留 90 份常规历史文件；链接和无关文件不会被跟随或删除。
-
-## 配置
-
-插件不需要 GitHub token。旧部署可在 secret 中设置：
-
-```yaml
-plugins:
-  github:
-    proxy: "http://proxy.example.com:8080"
+```json
+{
+  "plugins": {
+    "github": {
+      "proxy": "http://proxy.example.com:8080"
+    }
+  }
+}
 ```
 
-代理负责目标 DNS 连接，因此属于管理员信任边界；未配置代理时使用安全性更强的本地 DNS 固定路径。
+代理地址接受结构完整的 HTTP 或 HTTPS URL。代理负责目标 DNS 连接，属于管理员信任边界。日志会保留代理凭据之外的请求状态信息。
+
+---
+
+## ⏰ 生命周期
+
+每次命令和定时任务执行一次完整抓取事务。直连请求使用 Core 的安全公网抓取器；代理请求复用 Core 管理的 HTTP 会话。插件运行状态由历史文件和当前事务组成。
+
+---
+
+## 🩺 排障
+
+| 现象 | 检查项 |
+| --- | --- |
+| 页面抓取失败 | 检查 GitHub 连通性、代理配置和运行日志 |
+| 返回空列表 | 检查 Trending 页面结构与 `article.Box-row` 解析规则 |
+| 历史写入失败 | 检查 `data/github/` 权限和磁盘空间 |
+| 时间范围错误 | 使用 `daily`、`weekly` 或 `monthly` |
+
+---
+
+## ✅ 开发验证
+
+在仓库根目录运行：
+
+```bash
+python -m pytest -q tests/plugins/test_github.py
+python -m ruff check plugins/github
+python -m mypy plugins/github
+```

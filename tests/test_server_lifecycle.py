@@ -12,6 +12,8 @@ from tests.helpers.server_test_support import (
     MagicMock,
     Mock,
     WSServerHandshakeError,
+    _inflight_count,
+    _lane_count,
     _make_server,
     _onebot_message_payload,
     _parse_http_base,
@@ -278,7 +280,7 @@ async def test_inbound_server_stop_bounds_cancellation_resistant_tasks(
         assert cancelled.is_set()
         if task_kind == "handler":
             assert task.cancelled()
-            assert server._event_dispatcher.inflight_count == 1
+            assert _inflight_count(server._event_dispatcher) == 1
         elif task_kind == "close":
             assert not task.done()
             assert task in server._ws_close_tasks
@@ -291,7 +293,7 @@ async def test_inbound_server_stop_bounds_cancellation_resistant_tasks(
         release.set()
         await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=1)
         for _ in range(20):
-            if server._event_dispatcher.inflight_count == 0:
+            if _inflight_count(server._event_dispatcher) == 0:
                 break
             await asyncio.sleep(0)
         await server.stop()
@@ -471,7 +473,7 @@ async def test_server_stop_with_workers(mock_handler, unused_tcp_port):
     # Tasks should be cancelled
     assert mock_task1.cancelled()
     assert mock_task2.cancelled()
-    assert server._event_dispatcher.lane_count == 0
+    assert _lane_count(server._event_dispatcher) == 0
 
 
 @pytest.mark.asyncio

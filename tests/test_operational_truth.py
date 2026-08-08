@@ -54,7 +54,15 @@ def test_clean_pycache_is_anchored_to_script_repository(tmp_path: Path) -> None:
     repository_cache.mkdir(parents=True)
     (repository_cache / "module.pyc").write_bytes(b"cache")
     protected_markers = []
-    for protected_root in (".local_archive", ".venv", "venv"):
+    for protected_root in (
+        ".local_archive",
+        ".venv",
+        "venv",
+        "data",
+        "logs",
+        "plugins/demo/data",
+        "plugins/demo/cache",
+    ):
         protected_cache = repository / protected_root / "snapshot" / "__pycache__"
         protected_cache.mkdir(parents=True)
         protected_marker = protected_cache / "keep.pyc"
@@ -152,7 +160,10 @@ def test_python_functions_contain_no_misplaced_string_expressions() -> None:
 def test_message_flow_documents_the_strict_bounded_queue_contract() -> None:
     documentation = (ROOT / "docs" / "08-message-flow.md").read_text(encoding="utf-8")
 
-    assert "配置范围 `1..10000`" in documentation
-    assert "配置值必须为 `1..10000`" in documentation
+    assert "`inbound_ws_max_workers` 配置范围为 `1..128`" in documentation
+    assert "`ws_queue_size` 配置范围为 `1..10000`" in documentation
+    assert "总接纳容量为 worker 与 backlog 之和" in documentation
+    assert "有界调度器" in documentation
+    assert "inbound_queue_maxsize" not in documentation
     assert "0 表示无限" not in documentation
     assert "0 means unlimited" not in documentation.lower()

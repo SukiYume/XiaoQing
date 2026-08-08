@@ -23,7 +23,6 @@ from core.router import (
     CommandCatalogNode,
     CommandInvocation,
     build_command_catalog_node,
-    format_command_catalog,
     get_context_command_root,
     resolve_catalog_invocation,
     resolve_context_command_invocation,
@@ -149,6 +148,32 @@ _ADMIN_HANDLERS = {
     "stats": handle_manage_stats,
     "announce": handle_manage_announce,
     "activity": handle_manage_activity,
+}
+
+# manifest 负责保存每条命令的用法和说明；这里只维护展示分组，避免帮助文本在
+# Python 与 JSON 中各写一份后逐渐漂移。每个业务命令只归入一个类别。
+_HELP_CATEGORIES: dict[str, tuple[str, tuple[str, ...]]] = {
+    "basic": (
+        "基础照料",
+        ("adopt", "status", "feed", "clean", "play", "sleep", "wake"),
+    ),
+    "advanced": (
+        "进阶成长",
+        ("train", "explore", "treat", "rename", "recall"),
+    ),
+    "item": (
+        "道具与装扮",
+        ("backpack", "shop", "buy", "use", "dress"),
+    ),
+    "social": (
+        "社交互动",
+        ("gift", "visit", "view", "like", "message", "ranking", "trade", "show"),
+    ),
+    "gameplay": (
+        "任务与玩法",
+        ("game", "task", "group_task", "title", "activity"),
+    ),
+    "management": ("群管理", ("admin",)),
 }
 
 
@@ -303,7 +328,7 @@ def _is_group_rate_limited(group_id: int) -> bool:
         group_id, GROUP_RATE_LIMIT["window_seconds"]
     )
 
-    return recent_count >= GROUP_RATE_LIMIT["max_responses"]
+    return recent_count >= int(GROUP_RATE_LIMIT["max_responses"])
 
 
 def _record_command(user_id: str, group_id: int) -> None:
@@ -378,6 +403,40 @@ def _catalog_root(context: Any) -> CommandCatalogNode:
     return get_context_command_root(context, "qingpet.qingpet") or _local_catalog_root()
 
 
+def _format_help_overview(root: CommandCatalogNode) -> str:
+    """生成适合手机阅读的分类总览，不在首屏展开全部命令。"""
+
+    lines = ["🐾 宠物系统帮助", "发送 /宠物 help <类别> 查看详细命令", ""]
+    help_node = root.resolve_child("help")
+    if help_node is None:
+        return "\n".join(lines)
+
+    for category_node in help_node.children:
+        category = _HELP_CATEGORIES.get(category_node.name)
+        if category is None:
+            continue
+        title, command_names = category
+        lines.append(f"• {title}（{len(command_names)} 项）：/宠物 help {category_node.name}")
+    lines.extend(("", "类别也可直接使用，例如：/宠物 social"))
+    return "\n".join(lines)
+
+
+def _format_category_help(root: CommandCatalogNode, category_name: str) -> str:
+    """按 manifest 中的真实节点渲染一个分类，包含其嵌套子命令。"""
+
+    title, command_names = _HELP_CATEGORIES[category_name]
+    nodes = [node for name in command_names if (node := root.resolve_child(name)) is not None]
+    lines = [f"🐾 {title}命令", ""]
+    for top_level_node in nodes:
+        for node in top_level_node.walk():
+            depth = len(node.path) - len(top_level_node.path)
+            indent = "  " * depth
+            lines.append(f"{indent}• {node.usage}")
+            lines.append(f"{indent}  {node.help_text}")
+    lines.extend(("", "返回分类：/宠物 help"))
+    return "\n".join(lines)
+
+
 def _get_router(context: Any = None) -> CommandRouter:
     global _router
     if _router is not None:
@@ -386,22 +445,23 @@ def _get_router(context: Any = None) -> CommandRouter:
     root = _catalog_root(context)
 
     def _wrap_help(fixed_category: str = ""):
-        """帮助内容也从目录生成；固定类别入口拒绝多余参数。"""
+        """帮助内容从目录生成；固定类别入口拒绝多余参数。"""
 
         def wrapper(user_id, group_id, args, db, **kwargs):
             requested = args.strip()
             if fixed_category and requested:
                 return False, f"用法: /宠物 {fixed_category}"
+            category_name = fixed_category
             if not fixed_category and requested:
                 help_node = root.resolve_child("help")
                 parts = requested.split(maxsplit=1)
                 category = help_node.resolve_child(parts[0]) if help_node is not None else None
                 if category is None or len(parts) > 1:
-                    return False, "未知帮助类别；请使用 /宠物 help 查看完整目录"
-            return True, format_command_catalog(
-                root,
-                title="🐾 宠物系统完整命令目录",
-            )
+                    return False, "未知帮助类别；请使用 /宠物 help 查看分类"
+                category_name = category.name
+            if category_name:
+                return True, _format_category_help(root, category_name)
+            return True, _format_help_overview(root)
 
         return wrapper
 
@@ -611,10 +671,7 @@ def _execute_qingpet_command(
 
     parsed = _parse_requested_action(args, context)
     if parsed is None:
-        return format_command_catalog(
-            _catalog_root(context),
-            title="🐾 宠物系统完整命令目录",
-        )
+        return _format_help_overview(_catalog_root(context))
     action, rest_args, invocation = parsed
     router = _get_router(context)
     canonical_action = router.resolve_command(action)
@@ -776,7 +833,8 @@ def _handle_admin_command(
 
     handler = _ADMIN_HANDLERS.get(action)
     if handler is not None:
-        return handler(user_id, group_id, rest_args, db, is_admin)
+        success, message = handler(user_id, group_id, rest_args, db, is_admin)
+        return bool(success), str(message)
 
     return (
         False,
