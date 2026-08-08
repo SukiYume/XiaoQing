@@ -26,8 +26,16 @@ def _tracked_plugin_assets() -> set[str]:
 
     return {
         path
-        for path in run_git(ROOT, "ls-files", "--", "plugins").splitlines()
-        if Path(path).suffix.lower() not in _SOURCE_OR_DOCUMENT_SUFFIXES
+        for path in run_git(
+            ROOT,
+            "-c",
+            "core.quotePath=false",
+            "ls-files",
+            "-z",
+            "--",
+            "plugins",
+        ).split("\0")
+        if path and Path(path).suffix.lower() not in _SOURCE_OR_DOCUMENT_SUFFIXES
     }
 
 
