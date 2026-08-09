@@ -3,17 +3,23 @@
 提供 Bot 的基础管理功能
 """
 
+import asyncio
 import json
 import logging
 import math
 import re
+import time
 import unicodedata
 from collections.abc import Mapping
 from typing import Any, NoReturn, cast
 
 from core.args import parse_int
-from core.interfaces import PluginContextProtocol, SecretAdminCapability
-from core.plugin_base import run_sync, segments
+from core.interfaces import (
+    ACTION_BYPASS_SINK_KEY,
+    PluginContextProtocol,
+    SecretAdminCapability,
+)
+from core.plugin_base import build_action, run_sync, segments
 from core.public_errors import public_error_response
 from core.router import CommandCatalogNode
 
@@ -36,6 +42,7 @@ MAX_HELP_QUERY_LENGTH = 128
 MAX_PLUGIN_OVERVIEW_SUMMARY_LENGTH = 32
 MAX_HELP_MENU_SUMMARY_LENGTH = 32
 HELP_MOBILE_LINE_WIDTH = 34
+_RELOAD_NOTIFICATION_MARKER = "_xiaoqing_bot_core_reload_notification_registered"
 _NO_ARGUMENT_USAGE = {
     "reload": "/reload",
     "plugins": "/plugins",
@@ -797,6 +804,116 @@ def _format_catalog_json(
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
+async def _deliver_reload_completion(
+    context: PluginContextProtocol,
+    *,
+    succeeded: bool,
+    elapsed_seconds: float,
+    user_id: int | None,
+    group_id: int | None,
+) -> None:
+    """向发起重载的管理员会话发送一次最终结果。"""
+
+    if succeeded:
+        message = f"✅ 插件重载完成\n⏱️ 耗时 {elapsed_seconds:.1f} 秒"
+    else:
+        message = (
+            "❌ 插件重载失败或中止\n"
+            f"⏱️ 耗时 {elapsed_seconds:.1f} 秒\n"
+            "💡 部分插件可能仍在使用旧版本，请检查日志或重启服务。"
+        )
+
+    action = build_action(segments(message), user_id, group_id)
+    if action is None:
+        logger.error("插件重载结果无法投递：缺少有效会话目标")
+        return
+
+    # 完成回调继承了原事件的 ContextVar。显式绕过事件收集器，确保后台结果
+    # 直接进入 OneBot 发送链，而不会落入已经结束的首条回复缓存。
+    action[ACTION_BYPASS_SINK_KEY] = True
+    try:
+        delivered = await context.send_action(action)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.error("插件重载结果发送失败: error_type=%s", type(exc).__name__)
+        return
+
+    if delivered is False:
+        logger.warning("插件重载结果未被 OneBot 确认")
+    elif delivered is None:
+        logger.warning("插件重载结果已提交，但最终投递回执未知")
+
+
+def _consume_reload_delivery_task(task: asyncio.Task[None]) -> None:
+    """消费短生命周期发送任务的结果，避免后台异常无人读取。"""
+
+    if task.cancelled():
+        return
+    try:
+        task.result()
+    except Exception as exc:  # 防御：普通发送异常已在协程内记录。
+        logger.error("插件重载通知任务异常退出: error_type=%s", type(exc).__name__)
+
+
+def _register_reload_completion_notification(
+    reload_task: Any,
+    *,
+    context: PluginContextProtocol,
+    started_at: float,
+) -> bool:
+    """为一个 Core 重载任务登记至多一个跨插件代完成通知。"""
+
+    if not isinstance(reload_task, asyncio.Future):
+        logger.error("插件重载任务不支持完成通知: type=%s", type(reload_task).__name__)
+        return False
+    if getattr(reload_task, _RELOAD_NOTIFICATION_MARKER, False):
+        return True
+
+    try:
+        setattr(reload_task, _RELOAD_NOTIFICATION_MARKER, True)
+    except Exception as exc:
+        logger.error("插件重载任务无法登记完成通知: error_type=%s", type(exc).__name__)
+        return False
+
+    principal = context.principal
+    user_id = principal.user_id if principal.kind == "user" else None
+    group_id = principal.group_id if principal.kind == "user" else None
+
+    def on_reload_done(done_task: asyncio.Future[Any]) -> None:
+        if done_task.cancelled():
+            logger.info("插件重载任务已取消，不发送完成通知")
+            return
+        try:
+            # Core 当前返回 bool；把旧式 None 视为成功以保持窄兼容边界。
+            succeeded = done_task.result() is not False
+        except BaseException as exc:
+            succeeded = False
+            logger.error("插件重载任务异常结束: error_type=%s", type(exc).__name__)
+
+        elapsed_seconds = max(0.0, time.monotonic() - started_at)
+        delivery = _deliver_reload_completion(
+            context,
+            succeeded=succeeded,
+            elapsed_seconds=elapsed_seconds,
+            user_id=user_id,
+            group_id=group_id,
+        )
+        try:
+            delivery_task = done_task.get_loop().create_task(
+                delivery,
+                name="bot-core-reload-completion-delivery",
+            )
+        except (RuntimeError, TypeError) as exc:
+            delivery.close()
+            logger.error("无法创建插件重载通知任务: error_type=%s", type(exc).__name__)
+            return
+        delivery_task.add_done_callback(_consume_reload_delivery_task)
+
+    reload_task.add_done_callback(on_reload_done)
+    return True
+
+
 async def _handle_reload(context: PluginContextProtocol) -> list[dict[str, Any]]:
     """重载配置，并在后台启动全量插件重载。
 
@@ -813,10 +930,20 @@ async def _handle_reload(context: PluginContextProtocol) -> list[dict[str, Any]]
         # reload_plugins() 的契约是创建并返回后台任务。这里不能等待该任务：
         # 当前命令仍占用 bot_core 的执行门，而全量重载需要先排空同一执行门；
         # 若在此 await，就会形成“处理器等重载、重载等处理器”的自锁。
+        started_at = time.monotonic()
         reload_task = context.reload_plugins()
         if reload_task is None:
             logger.warning("配置已重载，但插件后台重载未启动")
             return segments("⚠️ 配置已重载，但插件重载未启动")
+
+        notification_ready = _register_reload_completion_notification(
+            reload_task,
+            context=context,
+            started_at=started_at,
+        )
+        if not notification_ready:
+            logger.warning("配置已重载，但插件重载完成通知未登记")
+            return segments("⚠️ 配置已重载，插件正在后台重载，但完成通知不可用")
 
         logger.info("配置已重载，插件后台重载已启动")
         return segments("✅ 配置已重载，插件正在后台重载")

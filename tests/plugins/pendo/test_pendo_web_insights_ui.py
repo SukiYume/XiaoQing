@@ -459,6 +459,27 @@ def test_app_and_global_styles_define_one_back_to_top_component() -> None:
     assert "color-mix(in srgb, var(--btt-accent) 16%, transparent);" in css_src
 
 
+def test_mobile_modal_actions_wrap_and_back_to_top_yields_to_dialogs() -> None:
+    """手机详情底栏必须两列换行，弹窗打开时浮动按钮必须退出交互层。"""
+
+    css_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "css" / "app.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert "max-height: 100dvh;" in css_src
+    assert re.search(
+        r"\.modal-footer \{\s*display: grid;\s*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);",
+        css_src,
+    )
+    assert ".modal-footer > .btn {" in css_src
+    assert "min-height: 44px;" in css_src
+    assert "body.modal-open #back-to-top {" in css_src
+    assert re.search(
+        r"body\.modal-open #back-to-top \{[\s\S]*?visibility: hidden;[\s\S]*?pointer-events: none;",
+        css_src,
+    )
+
+
 def test_app_source_extracts_one_time_login_code_from_pasted_message() -> None:
     """登录入口应从完整链接或聊天文本中提取一次性登录码。"""
 

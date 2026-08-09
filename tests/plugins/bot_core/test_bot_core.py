@@ -129,6 +129,7 @@ def mock_context():
                 is_bot_admin=True,
                 secret_admin=secret_admin,
             )
+            self.send_action = AsyncMock(return_value=True)
             self.mute_group = MagicMock()
             self.unmute_group = MagicMock(return_value=True)
             self.get_mute_remaining = MagicMock(return_value=0)
@@ -339,6 +340,54 @@ class TestReloadCommand:
             mock_context.reload_plugins.assert_called_once_with()
         finally:
             pending_reload.cancel()
+
+    @pytest.mark.asyncio
+    async def test_reload_sends_one_completion_notification_for_reused_task(self, mock_context):
+        """同一后台任务被重复请求时，只向首次发起会话发送一次完成通知。"""
+
+        pending_reload = asyncio.get_running_loop().create_future()
+        mock_context.reload_config = MagicMock()
+        mock_context.reload_plugins = MagicMock(return_value=pending_reload)
+
+        first = await bot_core.handle("reload", "", {}, mock_context)
+        second = await bot_core.handle("reload", "", {}, mock_context)
+        assert "插件正在后台重载" in str(first)
+        assert "插件正在后台重载" in str(second)
+
+        pending_reload.set_result(True)
+        for _ in range(10):
+            if mock_context.send_action.await_count:
+                break
+            await asyncio.sleep(0)
+
+        mock_context.send_action.assert_awaited_once()
+        action = mock_context.send_action.await_args.args[0]
+        assert action["action"] == "send_private_msg"
+        assert action["params"]["user_id"] == 12345
+        assert action["_bypass_sink"] is True
+        message = action["params"]["message"][0]["data"]["text"]
+        assert "插件重载完成" in message
+        assert "耗时" in message
+        assert "秒" in message
+
+    @pytest.mark.asyncio
+    async def test_reload_failure_sends_final_failure_notification(self, mock_context):
+        pending_reload = asyncio.get_running_loop().create_future()
+        mock_context.reload_config = MagicMock()
+        mock_context.reload_plugins = MagicMock(return_value=pending_reload)
+
+        await bot_core.handle("reload", "", {}, mock_context)
+        pending_reload.set_result(False)
+        for _ in range(10):
+            if mock_context.send_action.await_count:
+                break
+            await asyncio.sleep(0)
+
+        mock_context.send_action.assert_awaited_once()
+        action = mock_context.send_action.await_args.args[0]
+        message = action["params"]["message"][0]["data"]["text"]
+        assert "插件重载失败或中止" in message
+        assert "检查日志或重启服务" in message
 
     @pytest.mark.asyncio
     async def test_reload_with_error(self):
