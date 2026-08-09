@@ -1158,6 +1158,37 @@ function ensureStyles() {
         .ledger-row-actions button:focus-visible {
             outline: 3px solid rgba(239,68,68,0.28); outline-offset: 2px;
         }
+        ${mediaMax(
+            BREAKPOINTS.MOBILE,
+            `
+            /* 手机端把分类和行内操作放到第二行，正文与金额各自拥有稳定宽度。 */
+            .ledger-row {
+                display: grid;
+                grid-template-columns: 28px minmax(0, 1fr) auto;
+                grid-template-areas:
+                    "direction main amount"
+                    "direction category actions";
+                align-items: center;
+                column-gap: 8px;
+                row-gap: 7px;
+                padding: 12px 0;
+            }
+            .ledger-dir-icon { grid-area: direction; align-self: start; width: 28px; padding-top: 2px; }
+            .ledger-row-main { grid-area: main; }
+            .ledger-row-title { font-size: 13px; }
+            .ledger-row-meta { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+            .ledger-category-badge {
+                grid-area: category;
+                justify-self: start;
+                max-width: 100%;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .ledger-row-amount { grid-area: amount; min-width: 0; font-size: 14px; }
+            .ledger-row-actions { grid-area: actions; justify-content: flex-end; }
+        `,
+        )}
     `,
     );
 }

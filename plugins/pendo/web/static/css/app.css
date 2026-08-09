@@ -1581,6 +1581,7 @@ select:hover:not(:disabled) {
     .modal-content {
         margin: 0;
         max-height: 100vh;
+        max-height: 100dvh;
         border-radius: var(--radius) var(--radius) 0 0;
         position: fixed;
         bottom: 0;
@@ -1592,6 +1593,31 @@ select:hover:not(:disabled) {
     .modal-overlay {
         align-items: flex-end;
         padding: 0;
+    }
+
+    /* 手机端操作栏固定为两列，四个操作会自然排成 2 × 2，避免横向溢出。 */
+    .modal-footer {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        align-items: stretch;
+        gap: 10px;
+        padding: 12px calc(16px + env(safe-area-inset-right))
+            calc(12px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
+    }
+
+    .modal-footer > .btn {
+        width: 100%;
+        min-width: 0;
+        min-height: 44px;
+        height: auto;
+        margin: 0 !important;
+        padding: 9px 10px;
+        line-height: 1.35;
+        white-space: normal;
+    }
+
+    .modal-footer > .btn:only-child {
+        grid-column: 1 / -1;
     }
 }
 
@@ -1692,6 +1718,14 @@ body.modal-open {
     opacity: 1;
     transform: translateY(0) scale(1);
     pointer-events: auto;
+}
+
+/* 详情弹窗打开时让出底部操作区，避免浮动按钮遮挡关闭、编辑和删除操作。 */
+body.modal-open #back-to-top {
+    visibility: hidden;
+    opacity: 0;
+    transform: translateY(10px) scale(0.92);
+    pointer-events: none;
 }
 
 #back-to-top:hover {

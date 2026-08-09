@@ -35,7 +35,7 @@ async def test_app_reload_plugins_async(temp_app_root: Path):
     app.plugin_manager.reload_all_plugins = AsyncMock(return_value=True)
     app.session_manager.clear_plugin_sessions = AsyncMock()
 
-    await app._reload_plugins_async_with_logging()
+    assert await app._reload_plugins_async_with_logging() is True
 
     app.plugin_manager.reload_all_plugins.assert_awaited_once_with(
         before_reload=app.session_manager.clear_plugin_sessions,
@@ -49,11 +49,23 @@ async def test_app_reload_stops_when_a_plugin_enters_quarantine(temp_app_root: P
     app.plugin_manager.reload_all_plugins = AsyncMock(return_value=False)
     app.session_manager.clear_plugin_sessions = AsyncMock()
 
-    await app._reload_plugins_async_with_logging()
+    assert await app._reload_plugins_async_with_logging() is False
 
     app.plugin_manager.reload_all_plugins.assert_awaited_once_with(
         before_reload=app.session_manager.clear_plugin_sessions,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_app_reload_failure_returns_false(temp_app_root: Path):
+    """普通重载异常写入日志，并通过任务结果通知管理命令失败。"""
+
+    app = XiaoQingApp(temp_app_root)
+    app.plugin_manager.reload_all_plugins = AsyncMock(side_effect=RuntimeError("reload failed"))
+    app.session_manager.clear_plugin_sessions = AsyncMock()
+
+    assert await app._reload_plugins_async_with_logging() is False
 
 
 @pytest.mark.asyncio

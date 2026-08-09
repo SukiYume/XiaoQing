@@ -185,6 +185,7 @@ export {
     groupByDate,
     handleDelete as __handleDelete,
     handleQuickAdd as __handleQuickAdd,
+    ensureStyles as __ensureStyles,
     loadAndRender as __loadAndRender,
     normalizeLedgerItem,
     normalizeSummary,
@@ -401,6 +402,25 @@ def test_ledger_renderers_escape_values_and_use_native_controls() -> None:
         assert.ok(!body.includes('style="'));
         assert.ok(!body.includes('<script>'));
         assert.ok(options.footer.includes('type="button"'));
+        """
+    )
+
+
+def test_ledger_mobile_rows_move_category_and_actions_to_a_second_line() -> None:
+    """手机账目行应为正文、金额、分类和操作分配独立网格区域。"""
+
+    _run_ledger_client(
+        r"""
+        client.__ensureStyles();
+        const css = __styleCalls.at(-1)[1];
+
+        assert.match(css, /\.ledger-row \{[\s\S]*?display: grid;[\s\S]*?grid-template-areas:/);
+        assert.ok(css.includes('"direction main amount"'));
+        assert.ok(css.includes('"direction category actions"'));
+        assert.ok(css.includes('.ledger-row-main { grid-area: main; }'));
+        assert.match(css, /\.ledger-category-badge \{[\s\S]*?grid-area: category;/);
+        assert.ok(css.includes('.ledger-row-amount { grid-area: amount; min-width: 0;'));
+        assert.ok(css.includes('.ledger-row-actions { grid-area: actions;'));
         """
     )
 
