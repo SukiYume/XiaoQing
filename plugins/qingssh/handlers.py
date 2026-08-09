@@ -51,6 +51,7 @@ def _show_ssh_help(manager: SSHManager) -> MessageSegments:
             "  /ssh <用户名>@<名称> - 以指定用户连接",
             "  /ssh导入 - 从 ~/.ssh/config 导入",
             "  /ssh列表 - 查看详细列表",
+            "  连接后输入 showimg <路径或通配符> [--page N] - 分页发送图片",
         ]
     )
 
