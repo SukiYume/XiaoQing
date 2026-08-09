@@ -6,6 +6,7 @@
 
 import asyncio
 import logging
+import posixpath
 import re
 import shlex
 import uuid
@@ -15,9 +16,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypedDict, cast
 
+from core.args import parse_int
 from core.bounded_file_cache import BoundedFileCache, FileCacheLimits
 from core.interfaces import ACTION_BYPASS_SINK_KEY
 from core.plugin_base import build_action, image
+from core.plugin_base import text as text_segment
 from core.sensitive_audit import summarize_sensitive
 
 from .audit import audit_error_type, audit_id, audit_request_id
@@ -77,6 +80,10 @@ _IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp",
 _MAX_SHOWIMG_FILES = 5
 _MAX_SHOWIMG_BYTES = 10 * 1024 * 1024
 _MAX_SHOWIMG_PATTERN_CHARS = 512
+_SHOWIMG_USAGE = (
+    "用法: showimg <路径或通配符> [--page N]\n"
+    "示例: showimg ./*.png 或 showimg ./plots/*.jpg --page 2"
+)
 _MAX_ENV_VARS = 64
 _MAX_ENV_VALUE_CHARS = 4096
 _MAX_ENV_TOTAL_CHARS = 32_768
@@ -100,6 +107,75 @@ _SENSITIVE_HISTORY_HEADER_RE = re.compile(
     r"(?i)(?:^|[\s'\"])(?:authorization|proxy-authorization|x-api-key)\s*:"
 )
 _URL_CREDENTIAL_RE = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@")
+_SHOWIMG_PAGE_SUFFIX_RE = re.compile(r"\s+--page(?:\s+|=)(?P<page>\S+)\s*\Z", re.ASCII)
+_SHOWIMG_PAGE_TOKEN_RE = re.compile(r"(?:^|\s)--page(?:\s|=|\Z)", re.ASCII)
+
+
+@dataclass(frozen=True, slots=True)
+class _ShowImageRequest:
+    """一条已验证的图片匹配与分页请求。"""
+
+    pattern: str
+    page: int
+
+
+class _ShowImageInputError(ValueError):
+    """用户可修正的 showimg 参数错误。"""
+
+
+def _is_showimg_command(value: str) -> bool:
+    """识别保留的会话内图片命令，并接受空格或制表符分隔参数。"""
+
+    parts = value.split(maxsplit=1)
+    return bool(parts) and parts[0].casefold() == "showimg"
+
+
+def _parse_showimg_request(value: str) -> _ShowImageRequest:
+    """解析末尾 ``--page N``，同时保留路径中可见的空格。"""
+
+    parts = value.strip().split(None, 1)
+    if len(parts) < 2:
+        raise _ShowImageInputError("缺少图片路径或通配符")
+
+    raw_arguments = parts[1].strip()
+    page = 1
+    page_match = _SHOWIMG_PAGE_SUFFIX_RE.search(raw_arguments)
+    if page_match is not None:
+        parsed_page = parse_int(page_match.group("page"), minimum=1)
+        if parsed_page is None:
+            raise _ShowImageInputError("--page 页码必须是正整数")
+        page = parsed_page
+        file_pattern = raw_arguments[: page_match.start()].rstrip()
+    else:
+        if _SHOWIMG_PAGE_TOKEN_RE.search(raw_arguments) is not None:
+            raise _ShowImageInputError("--page N 必须位于命令末尾")
+        file_pattern = raw_arguments
+
+    if not file_pattern or "\0" in file_pattern:
+        raise _ShowImageInputError("图片路径或通配符不能为空")
+    if len(file_pattern) > _MAX_SHOWIMG_PATTERN_CHARS:
+        raise _ShowImageInputError(f"图片匹配表达式过长（最大 {_MAX_SHOWIMG_PATTERN_CHARS} 字符）")
+    return _ShowImageRequest(pattern=file_pattern, page=page)
+
+
+def _resolve_showimg_listing(pattern: str, cwd: str | None) -> tuple[str, str]:
+    """把远端路径拆为明确目录和最后一级文件名通配符。"""
+
+    directory, filename_pattern = posixpath.split(pattern)
+    if not filename_pattern:
+        filename_pattern = "*"
+    if any(marker in directory for marker in ("*", "?", "[")):
+        raise _ShowImageInputError("目录部分需要明确路径，通配符请放在最后一级文件名中")
+
+    if not directory:
+        return cwd or ".", filename_pattern
+    if posixpath.isabs(directory):
+        remote_dir = posixpath.normpath(directory)
+    elif cwd:
+        remote_dir = posixpath.normpath(posixpath.join(cwd, directory))
+    else:
+        remote_dir = posixpath.normpath(directory)
+    return remote_dir or "/", filename_pattern
 
 
 def _parse_export_environment(
@@ -624,7 +700,8 @@ async def _handle_connected_session(
             "💡 输入「状态」查看当前目录\n"
             "💡 输入「历史」查看命令历史\n"
             "💡 输入「!!」重复上一条命令\n"
-            "💡 输入「showimg <文件名>」显示图片\n"
+            "💡 showimg <路径或通配符> [--page N]：顺序发送图片\n"
+            "💡 通配符支持 *、?、[]；每页 5 张，用 --page 查看后续\n"
             "💡 输入「退出」/「取消」结束会话\n"
             "💡 输入「停止」中断运行中的命令\n"
             "━━━━━━━━━━━━━━━━━━\n"
@@ -670,7 +747,7 @@ async def _handle_connected_session(
         else:
             return segments("❌ 没有历史命令可重复")
 
-    if text.casefold().startswith("showimg "):
+    if _is_showimg_command(text):
         return await _handle_showimg_command(text, context, session, manager)
 
     is_valid, error_msg = validate_command(text)
@@ -973,19 +1050,12 @@ async def _run_background_command(
 async def _handle_showimg_command(
     text: str, context: Context, session: Session, manager: SSHManager
 ) -> MessageSegments:
-    """下载最多五张受大小限制的远端图片并发送。"""
+    """按远端路径匹配图片，并按每页五张下载发送。"""
 
-    parts = text.strip().split(None, 1)
-    if len(parts) < 2:
-        return segments(
-            "❌ 用法: showimg <文件名或通配符>\n示例: showimg image.png 或 showimg *.jpg"
-        )
-
-    file_pattern = parts[1].strip()
-    if not file_pattern or "\0" in file_pattern:
-        return segments("❌ 图片文件名或通配符不能为空")
-    if len(file_pattern) > _MAX_SHOWIMG_PATTERN_CHARS:
-        return segments(f"❌ 图片匹配表达式过长（最大 {_MAX_SHOWIMG_PATTERN_CHARS} 字符）")
+    try:
+        request = _parse_showimg_request(text)
+    except _ShowImageInputError as exc:
+        return segments(f"❌ {exc}\n{_SHOWIMG_USAGE}")
 
     server_name = session.get(SessionKeys.SERVER_NAME)
     if not isinstance(server_name, str) or not server_name:
@@ -1007,23 +1077,33 @@ async def _handle_showimg_command(
         if success and resolved_pwd.startswith("/"):
             cwd = resolved_pwd
 
-    remote_dir = cwd or "."
+    try:
+        remote_dir, filename_pattern = _resolve_showimg_listing(request.pattern, cwd)
+    except _ShowImageInputError as exc:
+        return segments(f"❌ {exc}\n{_SHOWIMG_USAGE}")
 
     success, files = await manager.list_files(
-        user_id, group_id, server_name, remote_dir, file_pattern
+        user_id, group_id, server_name, remote_dir, filename_pattern
     )
 
     if not success or not files:
-        return segments(f"❌ 未找到匹配的文件: {file_pattern}\n当前目录: {remote_dir}")
+        return segments(f"❌ 未找到匹配的文件: {request.pattern}\n搜索目录: {remote_dir}")
 
-    image_files = [
+    image_files = sorted(
         filename for filename in files if Path(filename).suffix.lower() in _IMAGE_EXTENSIONS
-    ]
+    )
 
     if not image_files:
         return segments(f"❌ 未找到图片文件\n匹配的文件: {', '.join(files)}")
 
-    image_files = image_files[:_MAX_SHOWIMG_FILES]
+    matched_image_count = len(image_files)
+    total_pages = (matched_image_count + _MAX_SHOWIMG_FILES - 1) // _MAX_SHOWIMG_FILES
+    if request.page > total_pages:
+        return segments(
+            f"❌ 页码超出范围：共 {total_pages} 页、{matched_image_count} 张图片\n{_SHOWIMG_USAGE}"
+        )
+    page_start = (request.page - 1) * _MAX_SHOWIMG_FILES
+    page_files = image_files[page_start : page_start + _MAX_SHOWIMG_FILES]
 
     configured_data_dir = getattr(context, "data_dir", None)
     data_dir = (
@@ -1034,12 +1114,12 @@ async def _handle_showimg_command(
     images_dir = data_dir / "images"
     await asyncio.to_thread(BoundedFileCache(images_dir, _IMAGE_CACHE_LIMITS).prune)
 
-    downloaded_files: list[tuple[str, Path]] = []
+    downloaded_files: list[tuple[int, str, Path]] = []
     local_paths: list[Path] = []
     errors: list[str] = []
     try:
-        for filename in image_files:
-            remote_path = resolve_remote_path(filename, cwd)
+        for global_index, filename in enumerate(page_files, page_start + 1):
+            remote_path = resolve_remote_path(filename, remote_dir)
             local_path = images_dir / f"{uuid.uuid4().hex}{Path(filename).suffix}"
             local_paths.append(local_path)
             success, message = await manager.download_file(
@@ -1051,32 +1131,46 @@ async def _handle_showimg_command(
                 max_bytes=_MAX_SHOWIMG_BYTES,
             )
             if success:
-                downloaded_files.append((filename, local_path))
+                downloaded_files.append((global_index, filename, local_path))
             else:
                 errors.append(f"{filename}: {message}")
 
         message_parts: list[str] = []
         if downloaded_files:
-            message_parts.append(f"📷 已下载 {len(downloaded_files)} 张图片\n")
-            for _filename, local_path in downloaded_files:
+            sent_count = len(downloaded_files)
+            for global_index, filename, local_path in downloaded_files:
                 action = build_action(
-                    [image(str(local_path))],
+                    [
+                        text_segment(f"📷 {global_index}/{matched_image_count}\n{filename}\n"),
+                        image(str(local_path)),
+                    ],
                     context.current_user_id,
                     context.current_group_id,
                 )
                 if action:
                     action[ACTION_BYPASS_SINK_KEY] = True
                     await context.send_action(action)
+            message_parts.append(
+                f"✅ 第 {request.page}/{total_pages} 页已按文件名顺序发送 {sent_count} 张图片"
+            )
+
+        navigation: list[str] = []
+        if request.page > 1:
+            navigation.append(f"⬅️ 上一页：showimg {request.pattern} --page {request.page - 1}")
+        if request.page < total_pages:
+            navigation.append(f"➡️ 下一页：showimg {request.pattern} --page {request.page + 1}")
+        if navigation:
+            message_parts.append(f"📄 共 {matched_image_count} 张图片\n" + "\n".join(navigation))
 
         if errors:
-            error_msg = f"\n❌ 下载失败 ({len(errors)} 个):\n" + "\n".join(
+            error_msg = f"❌ 下载失败 ({len(errors)} 个):\n" + "\n".join(
                 f"  • {error}" for error in errors[:5]
             )
             if len(errors) > 5:
                 error_msg += f"\n  ... 及其他 {len(errors) - 5} 个"
             message_parts.append(error_msg)
 
-        return segments("".join(message_parts))
+        return segments("\n\n".join(message_parts))
     finally:
         # OneBot 已确认接收动作后即可删除临时文件；异常和取消路径同样必须清理。
         for local_path in local_paths:

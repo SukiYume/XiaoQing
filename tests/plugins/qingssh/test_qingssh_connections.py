@@ -626,8 +626,280 @@ async def test_connected_session_help_aliases_do_not_start_remote_commands(alias
     )
 
     assert "SSH 会话帮助" in result[0]["data"]["text"]
+    assert "showimg <路径或通配符> [--page N]" in result[0]["data"]["text"]
+    assert "*、?、[]" in result[0]["data"]["text"]
+    assert "每页 5 张" in result[0]["data"]["text"]
     assert session.get(SessionKeys.STATE) == "connected"
     assert not ssh_session_handlers._COMMAND_JOBS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command", ["showimg", "SHOWIMG", "showimg\t"])
+async def test_showimg_without_pattern_returns_usage_instead_of_running_remote_command(
+    command: str,
+):
+    context = Mock(current_user_id=10001, current_group_id=20001)
+    context.end_session = AsyncMock()
+    session = _connected_session()
+    manager = MagicMock()
+    manager.is_connected.return_value = True
+    manager.list_files = AsyncMock()
+
+    result = await ssh_session_handlers._handle_connected_session(
+        command,
+        context,
+        session,
+        manager,
+    )
+
+    assert "用法: showimg <路径或通配符> [--page N]" in result[0]["data"]["text"]
+    manager.list_files.assert_not_awaited()
+    assert session.get(SessionKeys.STATE) == "connected"
+    assert not ssh_session_handlers._COMMAND_JOBS
+
+
+@pytest.mark.parametrize(
+    ("command", "expected_pattern", "expected_page"),
+    [
+        ("showimg ./*", "./*", 1),
+        ("showimg ./* --page 2", "./*", 2),
+        ("showimg ./plots with spaces/*.png --page=3", "./plots with spaces/*.png", 3),
+    ],
+)
+def test_showimg_request_parser_supports_paths_and_explicit_pages(
+    command: str,
+    expected_pattern: str,
+    expected_page: int,
+):
+    request = ssh_session_handlers._parse_showimg_request(command)
+
+    assert request.pattern == expected_pattern
+    assert request.page == expected_page
+
+
+@pytest.mark.parametrize(
+    ("pattern", "cwd", "expected"),
+    [
+        ("./*", "/remote", ("/remote", "*")),
+        ("./plots/*.png", "/remote", ("/remote/plots", "*.png")),
+        ("../charts/plot-?.jpg", "/remote/work", ("/remote/charts", "plot-?.jpg")),
+        ("/srv/charts/*.webp", "/remote", ("/srv/charts", "*.webp")),
+    ],
+)
+def test_showimg_listing_resolves_explicit_relative_and_absolute_directories(
+    pattern: str,
+    cwd: str | None,
+    expected: tuple[str, str],
+):
+    assert ssh_session_handlers._resolve_showimg_listing(pattern, cwd) == expected
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "showimg ./* --page 0",
+        "showimg ./* --page nope",
+        "showimg ./* --page",
+        "showimg --page 2 ./*",
+    ],
+)
+def test_showimg_request_parser_rejects_invalid_page_options(command: str):
+    with pytest.raises(ssh_session_handlers._ShowImageInputError):
+        ssh_session_handlers._parse_showimg_request(command)
+
+
+def test_showimg_listing_rejects_wildcards_in_directory_component():
+    with pytest.raises(
+        ssh_session_handlers._ShowImageInputError,
+        match="目录部分需要明确路径",
+    ):
+        ssh_session_handlers._resolve_showimg_listing("./run-*/plot.png", "/remote")
+
+
+@pytest.mark.asyncio
+async def test_list_files_applies_wildcard_and_returns_stable_filename_order(tmp_path: Path):
+    class SFTP:
+        def __init__(self):
+            self.closed = False
+
+        @staticmethod
+        def listdir(_remote_dir):
+            return ["plot-2.png", "notes.txt", "PLOT-0.png", "plot-10.png", "plot-1.png"]
+
+        def close(self):
+            self.closed = True
+
+    class Client:
+        def __init__(self, sftp):
+            self.sftp = sftp
+
+        def open_sftp(self):
+            return self.sftp
+
+    manager = ssh_manager_module.SSHManager(tmp_path)
+    sftp = SFTP()
+    key = manager.build_connection_key("10001", "20001", "srv")
+    manager.connections[key] = cast(Any, Client(sftp))
+    manager.is_connected = Mock(return_value=True)
+
+    success, files = await manager.list_files(
+        "10001",
+        "20001",
+        "srv",
+        "/remote",
+        "plot-*.png",
+    )
+
+    assert success is True
+    assert files == ["plot-1.png", "plot-10.png", "plot-2.png"]
+    assert sftp.closed is True
+
+
+@pytest.mark.asyncio
+async def test_list_files_keeps_matches_beyond_historical_first_hundred(tmp_path: Path):
+    filenames = [f"plot-{index:03}.png" for index in range(125, 0, -1)]
+
+    class SFTP:
+        @staticmethod
+        def listdir(_remote_dir):
+            return filenames
+
+        @staticmethod
+        def close():
+            return None
+
+    class Client:
+        @staticmethod
+        def open_sftp():
+            return SFTP()
+
+    manager = ssh_manager_module.SSHManager(tmp_path)
+    key = manager.build_connection_key("10001", "20001", "srv")
+    manager.connections[key] = cast(Any, Client())
+    manager.is_connected = Mock(return_value=True)
+
+    success, files = await manager.list_files(
+        "10001",
+        "20001",
+        "srv",
+        "/remote",
+        "plot-*.png",
+    )
+
+    assert success is True
+    assert len(files) == 125
+    assert files[0] == "plot-001.png"
+    assert files[-1] == "plot-125.png"
+
+
+@pytest.mark.asyncio
+async def test_showimg_path_wildcard_sends_requested_page_with_global_positions(tmp_path: Path):
+    context = Mock(
+        current_user_id=10001,
+        current_group_id=20001,
+        plugin_dir=tmp_path,
+    )
+    context.end_session = AsyncMock()
+    context.send_action = AsyncMock()
+    session = _SessionStub(
+        {
+            SessionKeys.SERVER_NAME: "srv",
+            SessionKeys.CWD: "/remote",
+        }
+    )
+    manager = MagicMock()
+    manager.is_connected.return_value = True
+    manager.list_files = AsyncMock(
+        return_value=(
+            True,
+            [
+                "notes.txt",
+                *[f"plot-{index:02}.png" for index in range(12, 0, -1)],
+            ],
+        )
+    )
+
+    downloaded_remote_paths: list[str] = []
+
+    async def download(_user, _group, _server, remote, local, **_kwargs):
+        downloaded_remote_paths.append(remote)
+        Path(local).write_bytes(b"image")
+        return True, "ok"
+
+    manager.download_file = AsyncMock(side_effect=download)
+
+    result = await ssh_session_handlers._handle_showimg_command(
+        "showimg ./plots/plot-* --page 2",
+        context,
+        session,
+        manager,
+    )
+
+    expected_filenames = [
+        "plot-06.png",
+        "plot-07.png",
+        "plot-08.png",
+        "plot-09.png",
+        "plot-10.png",
+    ]
+    manager.list_files.assert_awaited_once_with(
+        "10001",
+        "20001",
+        "srv",
+        "/remote/plots",
+        "plot-*",
+    )
+    assert downloaded_remote_paths == [f"/remote/plots/{name}" for name in expected_filenames]
+    assert context.send_action.await_count == len(expected_filenames)
+
+    for global_index, (expected_filename, action_call) in enumerate(
+        zip(expected_filenames, context.send_action.await_args_list, strict=True),
+        6,
+    ):
+        action = action_call.args[0]
+        message = action["params"]["message"]
+        assert [segment["type"] for segment in message] == ["text", "image"]
+        assert message[0]["data"]["text"] == f"📷 {global_index}/12\n{expected_filename}\n"
+
+    response_text = result[0]["data"]["text"]
+    assert "第 2/3 页已按文件名顺序发送 5 张图片" in response_text
+    assert "上一页：showimg ./plots/plot-* --page 1" in response_text
+    assert "下一页：showimg ./plots/plot-* --page 3" in response_text
+    assert list((tmp_path / "data" / "images").iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_showimg_rejects_page_beyond_matching_images_before_download(tmp_path: Path):
+    context = Mock(
+        current_user_id=10001,
+        current_group_id=20001,
+        plugin_dir=tmp_path,
+    )
+    context.end_session = AsyncMock()
+    context.send_action = AsyncMock()
+    session = _SessionStub(
+        {
+            SessionKeys.SERVER_NAME: "srv",
+            SessionKeys.CWD: "/remote",
+        }
+    )
+    manager = MagicMock()
+    manager.is_connected.return_value = True
+    manager.list_files = AsyncMock(
+        return_value=(True, [f"plot-{index}.png" for index in range(1, 7)])
+    )
+    manager.download_file = AsyncMock()
+
+    result = await ssh_session_handlers._handle_showimg_command(
+        "showimg ./*.png --page 3",
+        context,
+        session,
+        manager,
+    )
+
+    assert "页码超出范围：共 2 页、6 张图片" in result[0]["data"]["text"]
+    manager.download_file.assert_not_awaited()
+    context.send_action.assert_not_awaited()
 
 
 @pytest.mark.asyncio
