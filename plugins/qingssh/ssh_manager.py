@@ -1715,7 +1715,7 @@ class SSHManager:
         remote_dir: str,
         pattern: str = "*",
     ) -> tuple[bool, list[str]]:
-        """列出远端目录中最多一百个、区分大小写的匹配文件名。"""
+        """列出远端目录中全部区分大小写的匹配文件名。"""
 
         if not self.is_connected(user_id, group_id, name):
             return False, []
@@ -1736,7 +1736,10 @@ class SSHManager:
                 for filename in all_files
                 if isinstance(filename, str) and fnmatch.fnmatchcase(filename, pattern)
             )
-            return True, files[:100]
+            # SFTP ``listdir`` 已经一次性取得完整目录，随后 ``sorted`` 也已
+            # 构造完整匹配列表；在这里截断不会降低读取或峰值内存，只会让
+            # showimg 的后续页永久不可达。下载和 QQ 发送仍由上层按每页五张控制。
+            return True, files
         except Exception as exc:
             self._log_sensitive(
                 "error",

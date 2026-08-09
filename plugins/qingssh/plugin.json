@@ -1,14 +1,14 @@
 {
     "name": "qingssh",
-    "version": "2.0.0",
-    "description": "SSH远程控制插件 - 通过多轮对话管理SSH连接和执行命令，支持 ~/.ssh/config，统一子命令系统",
+    "version": "2.1.0",
+    "description": "SSH远程控制插件 - 通过多轮对话管理SSH连接和执行命令，支持 ~/.ssh/config 与 showimg 远端图片批量查看",
     "entry": "main.py",
     "capabilities": ["admin_sessions", "execution_timeout_exempt"],
     "commands": [
         {
             "name": "ssh",
             "triggers": ["ssh", "SSH", "远程", "ssh连接", "sshconnect"],
-            "help": "连接服务器并管理 SSH 配置、连接和状态；会话内 Shell 输入不是独立命令",
+            "help": "SSH 连接、showimg 远端图片与服务器管理；showimg 和 Shell 输入在连接会话内使用",
             "admin_only": true,
             "contexts": ["private"],
             "usage": "/ssh [help|list|add|remove|import|config|status|disconnect|服务器名] [参数]",
@@ -18,7 +18,7 @@
                 {
                     "name": "help",
                     "aliases": ["帮助", "?"],
-                    "help": "显示全部 SSH 管理命令和会话说明",
+                    "help": "显示 SSH 管理命令，以及 showimg 路径通配符和分页等会话操作",
                     "usage": "/ssh help",
                     "match": "exact",
                     "examples": ["/ssh help"],

@@ -405,7 +405,7 @@ QingSSH 为 Bot 管理员提供私聊 SSH profile、`~/.ssh/config` 导入、持
 /ssh <服务器名>
 ```
 
-连接会话中直接发送 POSIX Shell 命令；`cd` 更新工作目录，`停止` 终止当前远端进程组，`showimg` 下载远端图片，`退出` 关闭连接。会话按私聊用户与服务器隔离，空闲期为 10 分钟。
+连接会话中直接发送 POSIX Shell 命令；`cd` 更新工作目录，`停止` 终止当前远端进程组，`showimg <路径或通配符> [--page N]` 下载远端图片，`退出` 关闭连接。`showimg` 支持 `./`、相对/绝对目录，以及最后一级文件名中的 `*`、`?`、`[]`；全部匹配图片按文件名字典序每页发送 5 张，回复提供前后页命令，并在每张图片前显示全局序号和远端文件名。会话按私聊用户与服务器隔离，空闲期为 10 分钟。
 
 Profile 位于 `data/qingssh/servers.json`，密码通过 Core secret 引用保存。Host Key 使用 `known_hosts` 严格验证，支持单跳 `ProxyJump` 和结构化 `ssh -W`。长输出归档到 `data/qingssh/command_outputs/`。[QingSSH README](../plugins/qingssh/README.md) 提供认证、输出与生命周期预算。
 

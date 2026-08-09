@@ -162,9 +162,18 @@ data/qingssh/command_outputs/ssh-output-*.txt
 ```text
 showimg plot.png
 showimg *.png
+showimg plot-??.jpg
+showimg ./*
+showimg ./plots/*.png
+showimg ./* --page 2
+showimg /srv/charts/*.jpg --page 3
 ```
 
-图片从当前远端工作目录选择，单次最多 5 张，每张上限为 10 MiB。SFTP 下载到临时文件，经 OneBot action 接收后清理；发送异常与任务取消也会进入清理路径。
+路径支持 `./`、相对目录和绝对目录。目录部分使用明确路径，最后一级文件名支持 `*`、`?` 和 `[]`；例如 `./plots/*.png` 会在当前工作目录的 `plots` 子目录中匹配图片。
+
+结果按文件名字典序分页，每页 5 张。第一页省略 `--page`，后续页使用 `--page N`，回复会给出上一页和下一页命令；分页覆盖当前目录中的全部匹配图片。每张消息依次显示全局序号、匹配总数、远端文件名和图片，每张图片上限为 10 MiB。
+
+SFTP 下载到临时文件，经 OneBot action 接收后清理；发送异常与任务取消也会进入清理路径。
 
 ---
 

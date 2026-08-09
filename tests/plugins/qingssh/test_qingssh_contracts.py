@@ -104,6 +104,8 @@ class TestQingsshRuntimeContract:
         help_text = qingssh_main._show_help()
         assert "SSH 远程控制" in help_text
         assert "/ssh disconnect" in help_text
+        assert "showimg <路径或通配符> [--page N]" in help_text
+        assert "每页 5 张" in help_text
 
     def test_runtime_manager_and_config_contract(self):
         assert ssh_manager_module.SSHManager is not None
@@ -158,6 +160,11 @@ class TestQingsshPluginJson:
         assert "ssh" in ssh_cmd["triggers"]
         assert "admin_only" in ssh_cmd
         assert ssh_cmd["admin_only"] is True
+        assert "showimg" in ssh_cmd["help"]
+        help_command = next(
+            subcommand for subcommand in ssh_cmd["subcommands"] if subcommand["name"] == "help"
+        )
+        assert "showimg" in help_command["help"]
 
     def test_legacy_commands(self):
         """测试旧命令存在"""
