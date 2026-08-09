@@ -142,17 +142,8 @@ def install_media_fetch(monkeypatch: pytest.MonkeyPatch):
         *,
         error: Exception | None = None,
     ) -> AsyncMock:
-        response = None
-        if payload is not None:
-            response = SafeHttpResponse(
-                url="https://pbs.twimg.com/media/final",
-                status=200,
-                body=payload,
-                charset=None,
-                headers={"Content-Type": "image/png"},
-            )
-        fetch = AsyncMock(return_value=response, side_effect=error)
-        monkeypatch.setattr(twitter, "fetch_public_bytes", fetch)
+        fetch = AsyncMock(return_value=payload, side_effect=error)
+        monkeypatch.setattr(twitter, "_fetch_media_bytes", fetch)
         return fetch
 
     return install
@@ -489,14 +480,7 @@ async def test_download_validates_and_commits_by_content_hash(
     assert fetch.await_args.args[0] == (
         "https://pbs.twimg.com/media/unsafe-name?format=jpg&name=large"
     )
-    options = fetch.await_args.kwargs
-    assert options["allowed_hosts"] == twitter._ALLOWED_TWITTER_MEDIA_HOSTS
-    assert options["allowed_schemes"] == ("https",)
-    assert options["max_bytes"] == twitter.MAX_IMAGE_BYTES
-    media_headers = {key.casefold(): value for key, value in options["headers"].items()}
-    assert "authorization" not in media_headers
-    assert "cookie" not in media_headers
-    assert media_headers["accept-encoding"] == "identity"
+    assert fetch.await_args.args[1] is context
 
     install_media_fetch(payload)
     assert not await twitter._download_image(
@@ -505,6 +489,61 @@ async def test_download_validates_and_commits_by_content_hash(
         context,
     )
     assert [path.name for path in save_dir.glob("*.png")] == [expected.name]
+
+
+@pytest.mark.asyncio
+async def test_media_fetch_uses_safe_direct_transport_without_proxy(
+    context: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context.secrets["plugins"]["twitter"]["proxy"] = ""
+    payload = _image_bytes()
+    public_fetch = AsyncMock(
+        return_value=SafeHttpResponse(
+            url="https://pbs.twimg.com/media/final",
+            status=200,
+            body=payload,
+            charset=None,
+            headers={"Content-Type": "image/png"},
+        )
+    )
+    monkeypatch.setattr(twitter, "fetch_public_bytes", public_fetch)
+
+    url = "https://pbs.twimg.com/media/a.png"
+    assert await twitter._fetch_media_bytes(url, context) == payload
+    options = public_fetch.await_args.kwargs
+    assert options["allowed_hosts"] == twitter._ALLOWED_TWITTER_MEDIA_HOSTS
+    assert options["allowed_schemes"] == ("https",)
+    assert options["max_bytes"] == twitter.MAX_IMAGE_BYTES
+    media_headers = {key.casefold(): value for key, value in options["headers"].items()}
+    assert "authorization" not in media_headers
+    assert "cookie" not in media_headers
+    assert media_headers["accept-encoding"] == "identity"
+
+
+@pytest.mark.asyncio
+async def test_media_fetch_uses_configured_proxy_with_bounded_reader(
+    context: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _image_bytes()
+    context.http_session = _Session(_Response(payload, content_type="image/png"))
+    public_fetch = AsyncMock()
+    monkeypatch.setattr(twitter, "fetch_public_bytes", public_fetch)
+
+    url = "https://pbs.twimg.com/media/a.png"
+    assert await twitter._fetch_media_bytes(url, context) == payload
+    method, requested_url, options = context.http_session.calls[0]
+    assert (method, requested_url) == ("GET", url)
+    assert options["proxy"] == "http://proxy.example.com:8080"
+    assert options["timeout"] == twitter.REQUEST_TIMEOUT_SECONDS
+    assert options["allow_redirects"] is False
+    assert options["auto_decompress"] is False
+    media_headers = {key.casefold(): value for key, value in options["headers"].items()}
+    assert "authorization" not in media_headers
+    assert "cookie" not in media_headers
+    assert media_headers["accept-encoding"] == "identity"
+    public_fetch.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -600,9 +639,33 @@ async def test_fetch_stops_after_two_pages_without_new_images(
     monkeypatch.setattr(twitter, "_fetch_timeline", fetch_page)
     monkeypatch.setattr(twitter, "_download_image", AsyncMock(return_value=False))
     monkeypatch.setattr(twitter, "_FETCH_LOCK", asyncio.Lock())
+    twitter._write_backfill_state(
+        context.data_dir / twitter.BACKFILL_STATE_FILENAME,
+        twitter._get_user_id(context),
+    )
 
     assert await twitter._fetch_twitter_images(context) == 0
     assert calls == [None, "c1"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_reports_when_every_media_download_fails(
+    context: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    urls = ["https://pbs.twimg.com/media/a.jpg", "https://pbs.twimg.com/media/b.jpg"]
+    monkeypatch.setattr(
+        twitter,
+        "_fetch_timeline",
+        AsyncMock(return_value=([_tweet(*urls)], None, False)),
+    )
+    monkeypatch.setattr(twitter, "_download_image", AsyncMock(return_value=None))
+    monkeypatch.setattr(twitter, "_FETCH_LOCK", asyncio.Lock())
+
+    with pytest.raises(twitter.TwitterMediaFetchError) as raised:
+        await twitter._fetch_twitter_images(context)
+    assert raised.value.attempted == 2
+    assert not (context.data_dir / twitter.BACKFILL_STATE_FILENAME).exists()
 
 
 @pytest.mark.asyncio
@@ -625,7 +688,7 @@ async def test_fetch_stops_on_empty_timeline_and_repeated_cursor(
 
 
 @pytest.mark.asyncio
-async def test_fetch_limits_each_run_to_one_hundred_images(
+async def test_initial_backfill_downloads_all_media_and_records_completion(
     context: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -633,14 +696,24 @@ async def test_fetch_limits_each_run_to_one_hundred_images(
     monkeypatch.setattr(
         twitter,
         "_fetch_timeline",
-        AsyncMock(return_value=([_tweet(*urls)], "unused", True)),
+        AsyncMock(
+            side_effect=[
+                ([_tweet("https://pbs.twimg.com/media/old-a.jpg")], "a", True),
+                ([_tweet("https://pbs.twimg.com/media/old-b.jpg")], "b", True),
+                ([_tweet(*urls)], None, False),
+            ]
+        ),
     )
-    download = AsyncMock(return_value=True)
+    download = AsyncMock(side_effect=[False, False, *([True] * len(urls))])
     monkeypatch.setattr(twitter, "_download_image", download)
     monkeypatch.setattr(twitter, "_FETCH_LOCK", asyncio.Lock())
 
-    assert await twitter._fetch_twitter_images(context) == twitter.MAX_IMAGES_PER_FETCH
-    assert download.await_count == twitter.MAX_IMAGES_PER_FETCH
+    assert await twitter._fetch_twitter_images(context) == len(urls)
+    assert download.await_count == len(urls) + 2
+    assert twitter._backfill_is_complete(
+        context.data_dir / twitter.BACKFILL_STATE_FILENAME,
+        twitter._get_user_id(context),
+    )
 
 
 @pytest.mark.asyncio
@@ -971,6 +1044,25 @@ async def test_manual_fetch_reports_remote_http_failure(
 
 
 @pytest.mark.asyncio
+async def test_background_fetch_reports_media_transport_failure(
+    context: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        twitter,
+        "_fetch_twitter_images",
+        AsyncMock(side_effect=twitter.TwitterMediaFetchError(attempted=3)),
+    )
+
+    outcome = await twitter._run_background_fetch(context)
+
+    assert outcome.succeeded is False
+    assert outcome.count == 0
+    assert "图片下载全部失败" in outcome.message
+    assert "代理" in outcome.message
+
+
+@pytest.mark.asyncio
 async def test_random_and_unknown_commands_have_explicit_routes(
     context: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
@@ -989,7 +1081,8 @@ async def test_random_and_unknown_commands_have_explicit_routes(
 
     monkeypatch.setattr(twitter, "_get_random_image", AsyncMock(return_value=None))
     result = await twitter.handle("twimg", "", {}, context)
-    assert "无法获取" in result[0]["data"]["text"]
+    assert "缓存为空" in result[0]["data"]["text"]
+    assert "/tw_fetch" in result[0]["data"]["text"]
 
     result = await twitter.handle("not-twitter", "", {}, context)
     assert "未知 Twitter 命令" in result[0]["data"]["text"]
@@ -1026,7 +1119,10 @@ async def test_scheduled_fetch_is_silent_and_contains_failures(
     assert await twitter.scheduled_fetch(context) == []
     second = twitter._FETCH_TASK
     assert second is not None
-    assert (await asyncio.wait_for(second, timeout=1.0)).count == 0
+    empty_outcome = await asyncio.wait_for(second, timeout=1.0)
+    assert empty_outcome.count == 0
+    assert empty_outcome.succeeded is False
+    assert "缓存仍为空" in empty_outcome.message
 
     fetch.side_effect = RuntimeError("private scheduled failure")
     assert await twitter.scheduled_fetch(context) == []
@@ -1093,5 +1189,6 @@ def test_manifest_and_docs_describe_the_same_bounded_behavior() -> None:
     for command in manifest["commands"]:
         for trigger in command["triggers"]:
             assert f"/{trigger}" in readme
-    for marker in ("5000", "512 MiB", "90", "10 MiB", "4000 万", "1 MiB", "03:00"):
+    assert twitter.MAX_IMAGE_CACHE_BYTES == 2 * 1024 * 1024 * 1024
+    for marker in ("5000", "2 GiB", "90", "10 MiB", "4000 万", "1 MiB", "03:00"):
         assert marker in readme

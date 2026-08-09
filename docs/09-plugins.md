@@ -502,7 +502,7 @@ Twitter 插件从指定账号抓取图片到本地缓存，并随机发送当前
 
 随机发送面向全部用户，抓取入口使用 Bot 管理员权限。每天 03:00 运行后台抓取；手动与定时调用共享同一个任务。
 
-`secrets.plugins.twitter` 保存 `user_id`、GraphQL headers、cookies、proxy 和 `max_pages`。单轮最多新增 100 张，最多并发下载 4 张；缓存上限为 5000 项、512 MiB、90 天。图片位于 `data/twitter/images/`，已确认轮次位于 `data/twitter/posted.txt`。[Twitter README](../plugins/twitter/README.md) 提供认证字段和媒体域名预算。
+`secrets.plugins.twitter` 保存 `user_id`、GraphQL headers、cookies、proxy 和 `max_pages`。首次抓取遍历时间线，后续抓取连续两页没有新增图片时停止，最多并发下载 4 张；缓存上限为 5000 项、2 GiB、90 天。图片位于 `data/twitter/images/`，已确认轮次位于 `data/twitter/posted.txt`。[Twitter README](../plugins/twitter/README.md) 提供认证字段和媒体域名预算。
 
 ### `signin`：影视飓风远端签到
 

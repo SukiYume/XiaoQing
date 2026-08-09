@@ -28,6 +28,8 @@ from core.bounded_http import (
     BodyLimits,
     HttpStatusError,
     JsonLimits,
+    MimePolicy,
+    RedirectPolicy,
     ResponseFormatError,
     aiohttp_request_bounded,
     parse_bounded_json,
@@ -87,6 +89,17 @@ class TwitterFetchError(RuntimeError):
         return "❌ Twitter 图片抓取失败：远端接口暂时不可用，请稍后重试"
 
 
+class TwitterMediaFetchError(RuntimeError):
+    """时间线已读取，但本轮所有媒体下载均失败。"""
+
+    def __init__(self, attempted: int) -> None:
+        self.attempted = attempted
+        super().__init__("all Twitter media downloads failed")
+
+    def user_message(self) -> str:
+        return "❌ Twitter 图片抓取失败：时间线读取成功，但图片下载全部失败，请检查代理或稍后重试"
+
+
 @dataclass(frozen=True)
 class _FetchOutcome:
     """后台抓取结果；只保存可以直接发给用户的脱敏消息。"""
@@ -110,18 +123,20 @@ logger = logging.getLogger(__name__)
 DEFAULT_USER_ID = "123456789012345678"
 MAX_PAGES_WITHOUT_NEW_IMAGES = 2
 MAX_PAGES_TO_CHECK = 50
-MAX_IMAGES_PER_FETCH = 100
 MAX_CONCURRENT_IMAGE_DOWNLOADS = 4
 REQUEST_TIMEOUT_SECONDS = 30
 MAX_API_BYTES = 5 * 1024 * 1024
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_PIXELS = 40_000_000
 MAX_IMAGE_FRAMES = 120
-MAX_IMAGE_CACHE_BYTES = 512 * 1024 * 1024
+MAX_IMAGE_CACHE_BYTES = 2 * 1024 * 1024 * 1024
 MAX_POSTED_STATE_BYTES = 1024 * 1024
+MAX_BACKFILL_STATE_BYTES = 1024
 MAX_MEDIA_URL_CHARS = 4096
 MAX_USER_ID_CHARS = 128
 MAX_CURSOR_CHARS = 4096
+BACKFILL_STATE_FILENAME = "backfill_complete.json"
+BACKFILL_STATE_VERSION = 1
 
 IMAGE_CACHE_LIMITS = FileCacheLimits(
     max_entries=5_000,
@@ -151,7 +166,8 @@ _TWIMG_HELP = (
     "• /twitter、/推特\n"
     "  /twimg 的别名\n"
     "• /twimg help\n"
-    "随机发送不会临时联网抓取；新图片由管理员手动抓取或每日定时任务补充。"
+    "随机发送不会临时联网抓取；缓存为空时请由管理员执行 /tw_fetch，"
+    "新图片也会由每日定时任务补充。"
 )
 _TW_FETCH_HELP = (
     "🔄 抓取推特图片\n"
@@ -161,7 +177,8 @@ _TW_FETCH_HELP = (
     "  /tw_fetch 的别名\n"
     "• /tw_fetch help\n"
     "此命令仅限管理员，提交后会立即返回，完成时另行通知；"
-    "插件也会在每天 03:00 自动后台抓取。"
+    "首次运行会回填允许分页内的全部图片，完成后只检查新图，"
+    "连续两页无新增即停止；插件也会在每天 03:00 自动后台抓取。"
 )
 
 _API_BODY_LIMITS = BodyLimits(
@@ -174,6 +191,20 @@ _API_JSON_LIMITS = JsonLimits(
     max_depth=48,
     max_nodes=100_000,
     max_string_chars=2 * 1024 * 1024,
+)
+_MEDIA_BODY_LIMITS = BodyLimits(
+    max_wire_bytes=MAX_IMAGE_BYTES,
+    max_decoded_bytes=MAX_IMAGE_BYTES,
+    max_decompression_ratio=2,
+    ratio_grace_bytes=64 * 1024,
+    chunk_bytes=64 * 1024,
+)
+_MEDIA_MIME_POLICY = MimePolicy(type_prefixes=frozenset({"image/"}))
+_MEDIA_REDIRECT_POLICY = RedirectPolicy(
+    max_hops=3,
+    allowed_schemes=frozenset({"https"}),
+    allowed_origins=frozenset(f"https://{host}" for host in _ALLOWED_TWITTER_MEDIA_HOSTS),
+    same_origin_only=False,
 )
 _TIMELINE_FEATURES = {
     "responsive_web_enhance_cards_enabled": True,
@@ -365,6 +396,40 @@ def _get_max_pages(context: Context) -> int:
     if not isinstance(value, int) or isinstance(value, bool):
         return MAX_PAGES_TO_CHECK
     return max(1, min(value, MAX_PAGES_TO_CHECK))
+
+
+def _backfill_is_complete(path: Path, user_id: str) -> bool:
+    """仅接纳当前账号的小型全量回填标记；畸形状态会安全触发重新回填。"""
+
+    try:
+        if (
+            path.is_symlink()
+            or not path.is_file()
+            or path.stat().st_size > MAX_BACKFILL_STATE_BYTES
+        ):
+            return False
+        payload = path.read_bytes()
+        if len(payload) > MAX_BACKFILL_STATE_BYTES:
+            return False
+        state = json.loads(payload.decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(state, Mapping)
+        and state.get("version") == BACKFILL_STATE_VERSION
+        and state.get("user_id") == user_id
+    )
+
+
+def _write_backfill_state(path: Path, user_id: str) -> None:
+    """原子记录当前账号已经完成首次全量回填。"""
+
+    payload = json.dumps(
+        {"version": BACKFILL_STATE_VERSION, "user_id": user_id},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    atomic_write_text(path, f"{payload}\n")
 
 
 # ──────────────────── 时间线与媒体下载 ────────────────────
@@ -574,17 +639,15 @@ def _validate_cached_image(path: Path) -> None:
     )
 
 
-async def _download_image(url: str, save_dir: Path, context: Context) -> bool:
-    """下载并原子写入一张通过校验的图片；已存在的内容返回 ``False``。"""
+async def _fetch_media_bytes(url: str, context: Context) -> bytes | None:
+    """获取受信媒体字节；显式代理与时间线请求使用同一配置。"""
 
     if not _is_allowed_media_url(url):
-        logger.warning("拒绝下载非 Twitter 媒体地址")
-        return False
-    original_url = _original_media_url(url)
-
-    try:
+        return None
+    proxy = _get_proxy(context)
+    if proxy is None:
         fetched = await fetch_public_bytes(
-            original_url,
+            url,
             headers=_get_media_headers(),
             timeout_seconds=REQUEST_TIMEOUT_SECONDS,
             max_bytes=MAX_IMAGE_BYTES,
@@ -592,10 +655,40 @@ async def _download_image(url: str, save_dir: Path, context: Context) -> bool:
             allowed_hosts=_ALLOWED_TWITTER_MEDIA_HOSTS,
             allowed_schemes=("https",),
         )
-        if fetched is None:
+        return None if fetched is None else fetched.body
+
+    # URL 在进入此函数前已经限制为 Twitter 的三个 HTTPS 媒体源。代理路径仍使用
+    # 有界读取和显式跳转白名单，同时不携带 GraphQL 的认证头或 Cookie。
+    response = await aiohttp_request_bounded(
+        context.http_session,
+        "GET",
+        url,
+        limits=_MEDIA_BODY_LIMITS,
+        mime_policy=_MEDIA_MIME_POLICY,
+        redirect_policy=_MEDIA_REDIRECT_POLICY,
+        headers=_get_media_headers(),
+        request_kwargs={
+            "proxy": proxy,
+            "timeout": REQUEST_TIMEOUT_SECONDS,
+        },
+        accept_encoding="identity",
+    )
+    return response.body
+
+
+async def _download_image(url: str, save_dir: Path, context: Context) -> bool | None:
+    """下载并原子写入图片；新增、已存在、失败分别返回真、假、空。"""
+
+    if not _is_allowed_media_url(url):
+        logger.warning("拒绝下载非 Twitter 媒体地址")
+        return None
+    original_url = _original_media_url(url)
+
+    try:
+        content = await _fetch_media_bytes(original_url, context)
+        if content is None:
             logger.warning("Twitter 媒体请求未返回成功响应")
-            return False
-        content = fetched.body
+            return None
         if not isinstance(content, bytes) or not content:
             raise ValueError("Twitter image response is empty")
         if len(content) > MAX_IMAGE_BYTES:
@@ -616,21 +709,27 @@ async def _download_image(url: str, save_dir: Path, context: Context) -> bool:
             logger=logger,
             component="twitter.download_image",
         )
-        return False
+        return None
 
 
 async def _fetch_twitter_images(context: Context) -> int:
-    """串行执行一轮有限分页抓取，并在页内并发下载不同图片。"""
+    """首次完整回填允许分页，之后连续两页无新增即结束增量抓取。"""
 
     async with _FETCH_LOCK:
         save_dir = context.data_dir / "images"
         ensure_dir(save_dir)
         await asyncio.to_thread(BoundedFileCache(save_dir, IMAGE_CACHE_LIMITS).prune)
+        user_id = _get_user_id(context)
+        backfill_state = context.data_dir / BACKFILL_STATE_FILENAME
+        incremental = await asyncio.to_thread(_backfill_is_complete, backfill_state, user_id)
+        logger.info("Twitter: 开始%s抓取", "增量" if incremental else "首次全量")
 
         cursor: str | None = None
         seen_cursors: set[str] = set()
         seen_urls: set[str] = set()
         total_new = 0
+        total_attempted = 0
+        total_failed = 0
         consecutive_empty = 0
 
         for page_number in range(1, _get_max_pages(context) + 1):
@@ -646,18 +745,18 @@ async def _fetch_twitter_images(context: Context) -> int:
                         seen_urls.add(url)
                         page_urls.append(url)
 
-            remaining = MAX_IMAGES_PER_FETCH - total_new
-            if remaining <= 0:
-                break
             outcomes = await gather_bounded(
-                (_download_image(url, save_dir, context) for url in page_urls[:remaining]),
+                (_download_image(url, save_dir, context) for url in page_urls),
                 limit=MAX_CONCURRENT_IMAGE_DOWNLOADS,
             )
-            new_count = sum(outcomes)
+            total_attempted += len(outcomes)
+            failed_count = sum(outcome is None for outcome in outcomes)
+            total_failed += failed_count
+            new_count = sum(outcome is True for outcome in outcomes)
             total_new += new_count
             consecutive_empty = 0 if new_count else consecutive_empty + 1
 
-            if consecutive_empty >= MAX_PAGES_WITHOUT_NEW_IMAGES:
+            if incremental and consecutive_empty >= MAX_PAGES_WITHOUT_NEW_IMAGES:
                 logger.info("连续 %s 页没有新图片，停止抓取", consecutive_empty)
                 break
             if not has_next or not next_cursor or next_cursor in seen_cursors:
@@ -665,6 +764,17 @@ async def _fetch_twitter_images(context: Context) -> int:
             seen_cursors.add(next_cursor)
             cursor = next_cursor
 
+        if total_attempted and total_failed == total_attempted:
+            raise TwitterMediaFetchError(total_attempted)
+        if total_failed:
+            logger.warning(
+                "Twitter: %s/%s 个媒体下载失败",
+                total_failed,
+                total_attempted,
+            )
+        if not incremental and total_failed == 0:
+            await asyncio.to_thread(_write_backfill_state, backfill_state, user_id)
+            logger.info("Twitter: 首次全量回填完成")
         logger.info("Twitter: 共下载 %s 张新图片", total_new)
         return total_new
 
@@ -679,12 +789,17 @@ async def _run_background_fetch(context: Context) -> _FetchOutcome:
         count = await _fetch_twitter_images(context)
     except asyncio.CancelledError:
         raise
-    except TwitterFetchError as exc:
+    except (TwitterFetchError, TwitterMediaFetchError) as exc:
+        component = (
+            "twitter.fetch_media"
+            if isinstance(exc, TwitterMediaFetchError)
+            else "twitter.fetch_timeline"
+        )
         public_error_message(
             context,
             exc,
             logger=logger,
-            component="twitter.fetch_timeline",
+            component=component,
         )
         return _FetchOutcome(count=0, message=exc.user_message(), succeeded=False)
     except Exception as exc:
@@ -697,6 +812,18 @@ async def _run_background_fetch(context: Context) -> _FetchOutcome:
         return _FetchOutcome(count=0, message=message, succeeded=False)
 
     logger.info("Twitter 后台抓取完成: 新下载 %s 张图片", count)
+    if count == 0:
+        save_dir = context.data_dir / "images"
+        ensure_dir(save_dir)
+        cached_names = await asyncio.to_thread(_list_cached_image_names, save_dir)
+        if not cached_names:
+            return _FetchOutcome(
+                count=0,
+                message=(
+                    "⚠️ Twitter 抓取已完成，但本地图片缓存仍为空；请检查目标账号是否有可抓取图片"
+                ),
+                succeeded=False,
+            )
     return _FetchOutcome(
         count=count,
         message=f"✅ Twitter 图片抓取完成，新下载 {count} 张图片",
@@ -999,7 +1126,9 @@ async def handle(
             image_result = await _get_random_image(context)
             if image_result is not None:
                 return image_result
-            return segments("无法获取 Twitter 图片，请稍后再试")
+            return segments(
+                "📭 Twitter 本地图片缓存为空，请由管理员执行 /tw_fetch，等待抓取完成后再试"
+            )
 
         return segments(f"❓ 未知 Twitter 命令: {command}")
     except Exception as exc:

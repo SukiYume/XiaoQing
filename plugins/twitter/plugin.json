@@ -1,6 +1,6 @@
 {
     "name": "twitter",
-    "version": "2.0.0",
+    "version": "2.0.3",
     "description": "Twitter 图片抓取与随机发送 - 自动抓取、随机推送、智能去重",
     "entry": "main.py",
     "concurrency": "parallel",
