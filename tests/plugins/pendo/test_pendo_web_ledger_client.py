@@ -406,21 +406,20 @@ def test_ledger_renderers_escape_values_and_use_native_controls() -> None:
     )
 
 
-def test_ledger_mobile_rows_move_category_and_actions_to_a_second_line() -> None:
-    """手机账目行应为正文、金额、分类和操作分配独立网格区域。"""
+def test_ledger_mobile_rows_keep_compact_flow_and_lower_category_badge() -> None:
+    """手机账目行应保持紧凑横排，并把分类下移到账户信息高度。"""
 
     _run_ledger_client(
         r"""
         client.__ensureStyles();
         const css = __styleCalls.at(-1)[1];
 
-        assert.match(css, /\.ledger-row \{[\s\S]*?display: grid;[\s\S]*?grid-template-areas:/);
-        assert.ok(css.includes('"direction main amount"'));
-        assert.ok(css.includes('"direction category actions"'));
-        assert.ok(css.includes('.ledger-row-main { grid-area: main; }'));
-        assert.match(css, /\.ledger-category-badge \{[\s\S]*?grid-area: category;/);
-        assert.ok(css.includes('.ledger-row-amount { grid-area: amount; min-width: 0;'));
-        assert.ok(css.includes('.ledger-row-actions { grid-area: actions;'));
+        assert.match(css, /\.ledger-row \{\s*display: flex;/);
+        assert.match(css, /\.ledger-row-main \{[\s\S]*?min-width: 0;[\s\S]*?overflow: hidden;/);
+        assert.match(css, /\.ledger-row-title \{[\s\S]*?max-width: 100%;[\s\S]*?text-overflow: ellipsis;/);
+        assert.ok(css.includes('.ledger-row { gap: 8px; padding: 9px 0; }'));
+        assert.match(css, /\.ledger-category-badge \{[\s\S]*?transform: translateY\(8px\);/);
+        assert.ok(!css.includes('grid-template-areas:'));
         """
     )
 
