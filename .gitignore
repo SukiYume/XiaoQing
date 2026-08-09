@@ -105,6 +105,7 @@ plugins/xiaoqing_chat/figures/
 /docs/code*
 /docs/markdown-audit-*.md
 /docs/remote-sync.md
+/tools/
 
 # Large local model / training artifacts
 plugins/arxiv_filter/best_model*/
