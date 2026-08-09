@@ -222,7 +222,7 @@ Scriptable 脚本位于 `plugins/pendo/web/scriptable/pendo_widget.js`，配置�
 | Settings | 用户设置和登录设备 |
 | Transfer | Bundle 导入导出、预览、冲突策略和日志 |
 
-手机端页面保持单列内容流。Events 与 Diary 月历使用七列紧凑视图；Ledger 明细将摘要、金额、分类和操作分行排列；详情弹窗的操作栏按两列换行，并在底部安全区内完整显示。
+手机端页面保持单列内容流。Events 与 Diary 月历使用七列紧凑视图；Ledger 明细保持横向紧凑排列，分类标签与账户信息对齐；详情弹窗的操作栏按两列换行，并在底部安全区内完整显示。
 
 Web 后端使用 FastAPI 与 uvicorn，API 前缀为 `/api`，静态前端位于 `plugins/pendo/web/static/`。
 
