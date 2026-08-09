@@ -187,7 +187,7 @@ class XiaoQingApp(
 
         self._session_cleanup_task: asyncio.Task[None] | None = None
         self._reload_lock = _LazyAsyncLock()
-        self._reload_task: asyncio.Task[None] | None = None
+        self._reload_task: asyncio.Task[bool] | None = None
         self._ws_client_task: asyncio.Task[None] | None = None
         self._ws_client_stop_task: asyncio.Task[Any] | None = None
         self._config_watch_task: asyncio.Task[None] | None = None
@@ -294,7 +294,7 @@ class XiaoQingApp(
     # 生命周期
     # ============================================================
 
-    def _reload_plugins(self) -> asyncio.Task[None] | None:
+    def _reload_plugins(self) -> asyncio.Task[bool] | None:
         """
         重载所有插件（非阻塞，创建后台任务）
 
@@ -319,22 +319,24 @@ class XiaoQingApp(
         )
         return self._reload_task
 
-    async def _reload_plugins_async_with_logging(self) -> None:
-        """执行插件重载并记录结果"""
+    async def _reload_plugins_async_with_logging(self) -> bool:
+        """执行插件重载并返回可供管理命令通知用户的最终结果。"""
         try:
             async with self._reload_lock.get():
                 if self._stopping:
-                    return
+                    return False
                 logger.info("Starting plugin reload...")
                 completed = await self.plugin_manager.reload_all_plugins(
                     before_reload=self.session_manager.clear_plugin_sessions,
                 )
                 if not completed:
                     logger.error("Plugin reload stopped because a generation is quarantined")
-                    return
+                    return False
                 logger.info("Plugin reload completed successfully")
+                return True
         except Exception as exc:
             logger.exception("Plugin reload failed: %s", exc)
+            return False
 
     # ============================================================
     # 配置热更新

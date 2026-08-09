@@ -1,6 +1,6 @@
 {
   "name": "bot_core",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "XiaoQing Bot 核心管理插件：提供帮助、热重载、插件管理、群消息控制、配置管理和性能监控等核心功能",
   "author": "XiaoQing Bot Team",
   "entry": "main.py",
@@ -44,7 +44,7 @@
     {
       "name": "reload",
       "triggers": ["reload", "重载"],
-      "help": "热重载配置和插件",
+      "help": "热重载配置和插件，并在后台任务结束后通知结果",
       "admin_only": true,
       "usage": "/reload",
       "examples": ["/reload"],
