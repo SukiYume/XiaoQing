@@ -82,6 +82,16 @@ def tokenize(text: str, *, strict: bool = False) -> list[str]:
         return text.split()
 
 
+def quote_token(value: str) -> str:
+    """把一个值编码为可由 :func:`tokenize` 无损还原的单个可读 token。"""
+
+    if not isinstance(value, str):
+        raise TypeError("token value must be a string")
+    if value and not any(character.isspace() or character in "'\"\\" for character in value):
+        return value
+    return shlex.quote(value)
+
+
 def parse_int(
     text: str,
     *,
@@ -172,4 +182,4 @@ def _parse_tokens(tokens_list: list[str]) -> tuple[list[str], dict[str, str]]:
     return args, options
 
 
-__all__ = ["FLAG_VALUE", "ParsedArgs", "parse", "parse_int", "tokenize"]
+__all__ = ["FLAG_VALUE", "ParsedArgs", "parse", "parse_int", "quote_token", "tokenize"]

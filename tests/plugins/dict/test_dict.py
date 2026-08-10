@@ -25,7 +25,7 @@ def context() -> SimpleNamespace:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("args", ["", "help", "H", "帮助"])
+@pytest.mark.parametrize("args", ["", "help", "帮助"])
 async def test_help_does_not_load_dictionary(
     args: str,
     context: SimpleNamespace,
@@ -40,6 +40,21 @@ async def test_help_does_not_load_dictionary(
     response = await dict_plugin.handle("dict", args, {}, context)
 
     assert text_segments_text(response) == dict_plugin.HELP_TEXT
+
+
+def test_help_prioritizes_direct_queries_and_readable_long_options() -> None:
+    assert "/dict <词汇>  直接查询" in dict_plugin.HELP_TEXT
+    assert "/dict <词汇> --exact" in dict_plugin.HELP_TEXT
+    assert "/dict <词汇> --page <页码>" in dict_plugin.HELP_TEXT
+    assert "/dict <词汇> --size <1-100>" in dict_plugin.HELP_TEXT
+
+
+def test_common_dictionary_terms_are_not_reserved_as_help_aliases() -> None:
+    for query in ("H", "h", "list", "l"):
+        request = dict_plugin._parse_request(query)
+
+        assert request.action == "query"
+        assert request.query == query
 
 
 @pytest.mark.asyncio
@@ -64,18 +79,33 @@ async def test_real_assets_support_both_directions_and_current_terms(
 
 
 @pytest.mark.asyncio
-async def test_fuzzy_query_counts_all_matches_but_respects_display_limit(
+async def test_fuzzy_query_counts_all_matches_and_offers_next_page(
     context: SimpleNamespace,
 ) -> None:
-    response = await dict_plugin.handle("dict", "-n 1 galaxy", {}, context)
+    response = await dict_plugin.handle("dict", "galaxy --size 1", {}, context)
     rendered = text_segments_text(response)
 
-    assert "仅显示前 1 条" in rendered
+    assert rendered.startswith("📖 “galaxy”｜英译中\n\n1. galaxy → 星系")
+    assert "共找到 351 条结果｜第 1/351 页｜每页 1 条" in rendered
+    assert "下一页：/dict galaxy --size 1 --page 2" in rendered
     assert rendered.count(" → ") == 1
 
 
 @pytest.mark.asyncio
-async def test_exact_and_limit_options_preserve_the_complete_query(
+async def test_exact_miss_offers_ranked_fuzzy_suggestions_and_command(
+    context: SimpleNamespace,
+) -> None:
+    response = await dict_plugin.handle("dict", "fast radio --exact", {}, context)
+    rendered = text_segments_text(response)
+
+    assert rendered.startswith("❌ 没有完全匹配“fast radio”的词条（英译中）")
+    assert "相近词条（模糊匹配共 1 条）" in rendered
+    assert "1. fast radio burst → 缩写：FRB。快速射电暴" in rendered
+    assert "查看全部：/dict 'fast radio'" in rendered
+
+
+@pytest.mark.asyncio
+async def test_exact_limit_and_page_options_preserve_the_complete_query(
     context: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -86,11 +116,13 @@ async def test_exact_and_limit_options_preserve_the_complete_query(
         _context: object,
         exact_match: bool = False,
         max_results: int = 10,
+        page: int = 1,
     ) -> str:
         captured.update(
             query=query,
             exact_match=exact_match,
             max_results=max_results,
+            page=page,
         )
         return "ok"
 
@@ -98,7 +130,7 @@ async def test_exact_and_limit_options_preserve_the_complete_query(
 
     response = await dict_plugin.handle(
         "dict",
-        '-n 20 "fast radio burst" --exact',
+        '"fast radio burst" --size 20 --exact --page 3',
         {},
         context,
     )
@@ -108,7 +140,16 @@ async def test_exact_and_limit_options_preserve_the_complete_query(
         "query": "fast radio burst",
         "exact_match": True,
         "max_results": 20,
+        "page": 3,
     }
+
+
+def test_page_size_alias_remains_available() -> None:
+    assert dict_plugin._parse_request("star --page-size 25") == dict_plugin.DictionaryRequest(
+        "query",
+        query="star",
+        max_results=25,
+    )
 
 
 @pytest.mark.asyncio
@@ -128,7 +169,55 @@ async def test_option_terminator_allows_option_like_query(
     response = await dict_plugin.handle("dict", "-e -- --nova", {}, context)
 
     assert text_segments_text(response) == "ok"
-    assert captured == {"query": "--nova", "exact_match": True, "max_results": 10}
+    assert captured == {
+        "query": "--nova",
+        "exact_match": True,
+        "max_results": 10,
+        "page": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_second_page_uses_global_numbering_and_bidirectional_navigation(
+    context: SimpleNamespace,
+) -> None:
+    response = await dict_plugin.handle("dict", "galaxy -p 2 -n 3", {}, context)
+    rendered = text_segments_text(response)
+
+    assert rendered.startswith("📖 “galaxy”｜英译中\n\n4. galaxy bar")
+    assert "共找到 351 条结果｜第 2/117 页｜每页 3 条" in rendered
+    assert "上一页：/dict galaxy --size 3 --page 1" in rendered
+    assert "下一页：/dict galaxy --size 3 --page 3" in rendered
+    assert rendered.count(" → ") == 3
+
+
+@pytest.mark.asyncio
+async def test_page_beyond_matches_reports_the_real_range(context: SimpleNamespace) -> None:
+    response = await dict_plugin.handle("dict", "-p 37 galaxy", {}, context)
+
+    assert text_segments_text(response) == (
+        "❌ 第 37 页超出范围（共 36 页）\n最后一页：/dict galaxy --page 36"
+    )
+
+
+def test_generated_navigation_command_round_trips_option_like_quoted_query() -> None:
+    command = dict_plugin._page_command(
+        '-nova\'s "field"',
+        exact_match=True,
+        max_results=20,
+        page=2,
+    )
+
+    assert command == "/dict --exact --size 20 --page 2 -- '-nova'\"'\"'s \"field\"'"
+    assert dict_plugin._parse_request(
+        command.removeprefix("/dict ")
+    ) == dict_plugin.DictionaryRequest(
+        "query",
+        query='-nova\'s "field"',
+        exact_match=True,
+        max_results=20,
+        page=2,
+    )
 
 
 @pytest.mark.asyncio
@@ -137,11 +226,17 @@ async def test_option_terminator_allows_option_like_query(
     [
         ("--unknown galaxy", "未知选项"),
         ("-e --exact galaxy", "精确匹配选项不能重复"),
-        ("-n 2 --num 3 galaxy", "显示数量选项不能重复"),
-        ("-n", "显示数量选项缺少数值"),
+        ("-n 2 --num 3 galaxy", "每页条数选项不能重复"),
+        ("--size 2 --page-size 3 galaxy", "每页条数选项不能重复"),
+        ("-n", "每页条数选项缺少数值"),
         ("-n 0 galaxy", "1 到 100"),
         ("-n 101 galaxy", "1 到 100"),
         ("-n ２０ galaxy", "ASCII 整数"),
+        ("-p 2 --page 3 galaxy", "页码选项不能重复"),
+        ("-p", "页码选项缺少数值"),
+        ("-p 0 galaxy", "ASCII 整数"),
+        (f"-p {dict_plugin.MAX_PAGE + 1} galaxy", f"1 到 {dict_plugin.MAX_PAGE}"),
+        ("-p ２ galaxy", "ASCII 整数"),
         ('"galaxy', "引号没有闭合"),
         ("help extra", "不接受额外参数"),
         ("galaxy\nstar", "控制字符"),
@@ -173,25 +268,31 @@ def test_parser_rejects_non_string_arguments() -> None:
 async def test_existing_200_character_query_remains_valid(context: SimpleNamespace) -> None:
     response = await dict_plugin.handle("dict", "a" * 200, {}, context)
 
-    assert text_segments_text(response) == "在天文学词典（英译中）中未找到相关词条"
+    assert text_segments_text(response) == (
+        f"❌ 没有找到与“{'a' * 200}”相关的词条（英译中）\n"
+        "试试缩短查询词或检查拼写；帮助：/dict help"
+    )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("query", "exact_match", "max_results", "expected"),
+    ("query", "exact_match", "max_results", "page", "expected"),
     [
-        (True, False, 10, "查询词必须是字符串"),
-        (" ", False, 10, "请提供要查询的词汇"),
-        ("galaxy\x00", False, 10, "查询词不能包含控制字符"),
-        ("galaxy", 1, 10, "精确匹配参数必须是布尔值"),
-        ("galaxy", False, True, "显示数量必须是 1 到 100 的整数"),
-        ("galaxy", False, 101, "显示数量必须是 1 到 100 的整数"),
+        (True, False, 10, 1, "查询词必须是字符串"),
+        (" ", False, 10, 1, "请提供要查询的词汇"),
+        ("galaxy\x00", False, 10, 1, "查询词不能包含控制字符"),
+        ("galaxy", 1, 10, 1, "精确匹配参数必须是布尔值"),
+        ("galaxy", False, True, 1, "每页条数必须是 1 到 100 的整数"),
+        ("galaxy", False, 101, 1, "每页条数必须是 1 到 100 的整数"),
+        ("galaxy", False, 10, True, "页码必须是"),
+        ("galaxy", False, 10, dict_plugin.MAX_PAGE + 1, "页码必须是"),
     ],
 )
 async def test_public_query_api_validates_exact_types(
     query: object,
     exact_match: object,
     max_results: object,
+    page: object,
     expected: str,
     context: SimpleNamespace,
 ) -> None:
@@ -200,6 +301,7 @@ async def test_public_query_api_validates_exact_types(
         context,
         exact_match=exact_match,  # type: ignore[arg-type]
         max_results=max_results,  # type: ignore[arg-type]
+        page=page,  # type: ignore[arg-type]
     )
 
     assert expected in result
@@ -224,9 +326,10 @@ async def test_logs_do_not_include_query_text(context: SimpleNamespace) -> None:
 
     assert canary not in repr(context.logger.mock_calls)
     context.logger.info.assert_called_once_with(
-        "天文词典查询: query_chars=%d exact=%s max=%d",
+        "天文词典查询: query_chars=%d exact=%s page=%d page_size=%d",
         len(canary),
         False,
+        1,
         10,
     )
 

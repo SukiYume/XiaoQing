@@ -173,6 +173,7 @@ def load_colors(context: PluginContextProtocol) -> list[ColorRecord]:
         context.logger.debug("加载内置颜色库: count=%d", len(builtin))
     except Exception as exc:
         public_error_message(context, exc, logger=context.logger, component="color.load_builtin")
+        return []
 
     try:
         custom = load_custom_colors(context)
@@ -228,11 +229,14 @@ async def mutate_custom_colors_async(
 def format_color_info(color: ColorRecord) -> str:
     """按稳定字段顺序生成用户可读的颜色信息。"""
 
-    return "\n".join(
+    lines = [f"名称：{color['name']}"]
+    if pinyin := color.get("pinyin", ""):
+        lines.append(f"拼音：{pinyin}")
+    lines.extend(
         (
-            f"name: {color['name']}",
-            f"RGB: {color['RGB']}",
-            f"hex: {color['hex']}",
-            f"CMYK: {color['CMYK']}",
+            f"RGB：{', '.join(str(channel) for channel in color['RGB'])}",
+            f"HEX：{color['hex']}",
+            f"CMYK：{', '.join(str(channel) for channel in color['CMYK'])}",
         )
     )
+    return "\n".join(lines)

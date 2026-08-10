@@ -165,7 +165,7 @@ def test_mutating_adnmb_and_color_commands_have_cleanup_scenarios() -> None:
     color = by_id["color-custom-lifecycle"]
     assert color.actor == "bot_admin"
     assert color.scope == "group"
-    assert {"color.color.-w", "color.color.-d"} <= set(color.covers)
+    assert {"color.color.add", "color.color.delete"} <= set(color.covers)
     assert any(step.cleanup for step in color.steps)
 
 
