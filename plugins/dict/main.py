@@ -11,7 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, NamedTuple, cast
 
-from core.args import tokenize
+from core.args import quote_token, tokenize
 from core.interfaces import PluginContextProtocol
 from core.plugin_base import has_control_characters, run_sync, segments
 from core.public_errors import public_error_message, public_error_response
@@ -23,15 +23,18 @@ DEFAULT_RESULTS = 10
 MAX_MANIFEST_BYTES = 32 * 1024
 MAX_DICTIONARY_BYTES = 4 * 1024 * 1024
 MAX_DICTIONARY_ENTRIES = 50_000
+MAX_PAGE = MAX_DICTIONARY_ENTRIES
 MAX_DICTIONARY_LINE_CHARS = 2_048
 MAX_SOURCE_CHARS = 256
 MAX_DESTINATION_CHARS = 1_024
 
-_HELP_ALIASES = frozenset({"help", "h", "list", "l", "帮助"})
+_HELP_ALIASES = frozenset({"help", "帮助"})
 _EXACT_OPTIONS = frozenset({"-e", "--exact"})
-_LIMIT_OPTIONS = frozenset({"-n", "--num"})
+_LIMIT_OPTIONS = frozenset({"-n", "--num", "--size", "--page-size"})
+_PAGE_OPTIONS = frozenset({"-p", "--page"})
 _SHA256_PATTERN = re.compile(r"[0-9a-fA-F]{64}\Z")
-_POSITIVE_INTEGER_PATTERN = re.compile(r"[1-9][0-9]{0,2}\Z")
+_LIMIT_PATTERN = re.compile(r"[1-9][0-9]{0,2}\Z")
+_PAGE_PATTERN = re.compile(r"[1-9][0-9]{0,4}\Z")
 _CHINESE_PATTERN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0002fa1f]")
 
 Messages = list[dict[str, Any]]
@@ -42,17 +45,21 @@ HELP_TEXT = """📖 天文学词典
 查询中国天文学会天文学名词审定委员会发布的中英天文学名词。
 
 用法
-/dict <词汇>  模糊查询；多词按“全部包含”匹配
-/dict -e <词汇>  精确匹配
-/dict -n <1-100> <词汇>  指定最多显示条数
-/dict -- <以连字符开头的词汇>  停止解析选项
-/dict help  显示帮助
+/dict <词汇>  直接查询；最相关词条优先
+/dict <词汇> --exact  只看完整匹配
+/dict <词汇> --page <页码>  查看指定页
+/dict <词汇> --size <1-100>  指定每页条数
+/dict help  显示完整帮助
 
 示例
 /dict galaxy
 /dict 星系
-/dict -e "fast radio burst"
-/dict -n 20 star"""
+/dict "fast radio burst" --exact
+/dict galaxy --page 2
+/dict star --size 20 --page 3
+
+直接查询会自动判断中英方向；多词按“全部包含”匹配。
+结果末尾会给出可直接复制的上一页、下一页命令。"""
 
 
 class DictionaryDataError(RuntimeError):
@@ -85,6 +92,7 @@ class DictionaryRequest:
     query: str = ""
     exact_match: bool = False
     max_results: int = DEFAULT_RESULTS
+    page: int = 1
 
 
 def _clean_query(value: object) -> str:
@@ -103,11 +111,20 @@ def _clean_query(value: object) -> str:
 
 
 def _parse_limit(value: str) -> int:
-    if _POSITIVE_INTEGER_PATTERN.fullmatch(value) is None:
-        raise ValueError("显示数量必须是 1 到 100 的 ASCII 整数")
+    if _LIMIT_PATTERN.fullmatch(value) is None:
+        raise ValueError("每页条数必须是 1 到 100 的 ASCII 整数")
     parsed = int(value)
     if parsed > MAX_RESULTS:
-        raise ValueError("显示数量必须是 1 到 100 的 ASCII 整数")
+        raise ValueError("每页条数必须是 1 到 100 的 ASCII 整数")
+    return parsed
+
+
+def _parse_page(value: str) -> int:
+    if _PAGE_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"页码必须是 1 到 {MAX_PAGE} 的 ASCII 整数")
+    parsed = int(value)
+    if parsed > MAX_PAGE:
+        raise ValueError(f"页码必须是 1 到 {MAX_PAGE} 的 ASCII 整数")
     return parsed
 
 
@@ -140,7 +157,9 @@ def _parse_request(args: object) -> DictionaryRequest:
 
     exact_match = False
     limit_seen = False
+    page_seen = False
     max_results = DEFAULT_RESULTS
+    page = 1
     query_tokens: list[str] = []
     options_enabled = True
     index = 0
@@ -154,12 +173,20 @@ def _parse_request(args: object) -> DictionaryRequest:
             exact_match = True
         elif options_enabled and token in _LIMIT_OPTIONS:
             if limit_seen:
-                raise ValueError("显示数量选项不能重复")
+                raise ValueError("每页条数选项不能重复")
             index += 1
             if index >= len(tokens):
-                raise ValueError("显示数量选项缺少数值")
+                raise ValueError("每页条数选项缺少数值")
             max_results = _parse_limit(tokens[index])
             limit_seen = True
+        elif options_enabled and token in _PAGE_OPTIONS:
+            if page_seen:
+                raise ValueError("页码选项不能重复")
+            index += 1
+            if index >= len(tokens):
+                raise ValueError("页码选项缺少数值")
+            page = _parse_page(tokens[index])
+            page_seen = True
         elif options_enabled and token.startswith("-") and token != "-":
             raise ValueError(f"未知选项：{token}")
         else:
@@ -171,6 +198,51 @@ def _parse_request(args: object) -> DictionaryRequest:
         query=_clean_query(" ".join(query_tokens)),
         exact_match=exact_match,
         max_results=max_results,
+        page=page,
+    )
+
+
+def _query_command(
+    query: str,
+    *,
+    exact_match: bool,
+    max_results: int,
+    page: int | None = None,
+) -> str:
+    """构造查询词优先、可复制执行且无歧义的规范命令。"""
+
+    parts = ["/dict"]
+    options: list[str] = []
+    if exact_match:
+        options.append("--exact")
+    if max_results != DEFAULT_RESULTS:
+        options.extend(("--size", str(max_results)))
+    if page is not None:
+        options.extend(("--page", str(page)))
+    if query.startswith("-"):
+        parts.extend(options)
+        parts.append("--")
+        parts.append(quote_token(query))
+    else:
+        parts.append(quote_token(query))
+        parts.extend(options)
+    return " ".join(parts)
+
+
+def _page_command(
+    query: str,
+    *,
+    exact_match: bool,
+    max_results: int,
+    page: int,
+) -> str:
+    """构造无状态、可复制执行的规范翻页命令。"""
+
+    return _query_command(
+        query,
+        exact_match=exact_match,
+        max_results=max_results,
+        page=page,
     )
 
 
@@ -302,11 +374,96 @@ def _load_direction(plugin_dir: Path, direction: QueryDirection) -> tuple[Dictio
     return _load_dictionary(dict_file, spec, fingerprint)
 
 
+def _contains_at_word_boundary(source: str, value: str) -> bool:
+    """判断子串是否从字符串开头或非字母数字字符之后开始。"""
+
+    start = 0
+    while True:
+        position = source.find(value, start)
+        if position < 0:
+            return False
+        if position == 0 or not source[position - 1].isalnum():
+            return True
+        start = position + 1
+
+
+def _relevance_key(
+    entry: DictionaryEntry,
+    query: str,
+    folded: str,
+    keywords: list[str],
+) -> tuple[int, int]:
+    """把原样精确、忽略大小写精确、前缀和词边界匹配依次前置。"""
+
+    source = entry.source_folded
+    if entry.source == query:
+        rank = 0
+    elif source == folded:
+        rank = 1
+    elif entry.source.startswith(query):
+        rank = 2
+    elif source.startswith(folded):
+        rank = 3
+    elif _contains_at_word_boundary(source, folded):
+        rank = 4
+    elif folded in source:
+        rank = 5
+    elif all(_contains_at_word_boundary(source, keyword) for keyword in keywords):
+        rank = 6
+    else:
+        rank = 7
+    return rank, len(entry.source)
+
+
+def _sorted_fuzzy_matches(
+    entries: tuple[DictionaryEntry, ...],
+    query: str,
+    folded: str,
+    keywords: list[str],
+) -> list[DictionaryEntry]:
+    """返回满足全部关键词的词条，并按用户感知的相关度稳定排序。"""
+
+    matches = [
+        entry for entry in entries if all(keyword in entry.source_folded for keyword in keywords)
+    ]
+    matches.sort(key=lambda entry: _relevance_key(entry, query, folded, keywords))
+    return matches
+
+
+def _exact_miss_message(
+    query: str,
+    direction_label: str,
+    suggestions: list[DictionaryEntry],
+) -> str:
+    """为没有完整匹配的查询提供少量模糊结果和可复制命令。"""
+
+    lines = [f"❌ 没有完全匹配“{query}”的词条（{direction_label}）"]
+    if not suggestions:
+        lines.append("试试去掉 --exact、缩短查询词或检查拼写")
+        return "\n".join(lines)
+
+    shown = suggestions[:5]
+    lines.extend(("", f"相近词条（模糊匹配共 {len(suggestions)} 条）"))
+    lines.extend(
+        f"{index}. {entry.source} → {entry.destination}" for index, entry in enumerate(shown, 1)
+    )
+    lines.append(
+        "\n查看全部："
+        + _query_command(
+            query,
+            exact_match=False,
+            max_results=DEFAULT_RESULTS,
+        )
+    )
+    return "\n".join(lines)
+
+
 def _query_astrodict_sync(
     query: str,
     plugin_dir: Path,
     exact_match: bool,
     max_results: int,
+    page: int = 1,
 ) -> str:
     """在已校验的内置词条中执行确定性的精确或多关键词查询。"""
 
@@ -323,27 +480,65 @@ def _query_astrodict_sync(
 
     folded = query.casefold()
     keywords = folded.split()
-    matches: list[DictionaryEntry] = []
-    total_found = 0
-    for entry in entries:
-        matched = (
-            entry.source_folded == folded
-            if exact_match
-            else all(keyword in entry.source_folded for keyword in keywords)
-        )
-        if not matched:
-            continue
-        total_found += 1
-        if len(matches) < max_results:
-            matches.append(entry)
-    if not matches:
-        return f"在天文学词典（{direction_label}）中未找到相关词条"
+    if exact_match:
+        all_matches = [entry for entry in entries if entry.source_folded == folded]
+        all_matches.sort(key=lambda entry: _relevance_key(entry, query, folded, keywords))
+        if not all_matches:
+            suggestions = _sorted_fuzzy_matches(entries, query, folded, keywords)
+            return _exact_miss_message(query, direction_label, suggestions)
+    else:
+        all_matches = _sorted_fuzzy_matches(entries, query, folded, keywords)
+        if not all_matches:
+            return (
+                f"❌ 没有找到与“{query}”相关的词条（{direction_label}）\n"
+                "试试缩短查询词或检查拼写；帮助：/dict help"
+            )
 
-    lines = [
-        f"{index}. {entry.source} → {entry.destination}" for index, entry in enumerate(matches, 1)
-    ]
-    suffix = f"，仅显示前 {max_results} 条" if total_found > max_results else ""
-    lines.append(f"\n共找到 {total_found} 条结果{suffix}")
+    total_found = len(all_matches)
+
+    total_pages = (total_found + max_results - 1) // max_results
+    if page > total_pages:
+        return f"❌ 第 {page} 页超出范围（共 {total_pages} 页）\n最后一页：" + _page_command(
+            query,
+            exact_match=exact_match,
+            max_results=max_results,
+            page=total_pages,
+        )
+
+    page_start = (page - 1) * max_results
+    page_end = page_start + max_results
+    matches = all_matches[page_start:page_end]
+    mode = "｜精确匹配" if exact_match else ""
+    lines = [f"📖 “{query}”｜{direction_label}{mode}", ""]
+    lines.extend(
+        f"{index}. {entry.source} → {entry.destination}"
+        for index, entry in enumerate(matches, page_start + 1)
+    )
+    lines.append(
+        f"\n共找到 {total_found} 条结果｜第 {page}/{total_pages} 页｜每页 {max_results} 条"
+    )
+    navigation: list[str] = []
+    if page > 1:
+        navigation.append(
+            "上一页："
+            + _page_command(
+                query,
+                exact_match=exact_match,
+                max_results=max_results,
+                page=page - 1,
+            )
+        )
+    if page < total_pages:
+        navigation.append(
+            "下一页："
+            + _page_command(
+                query,
+                exact_match=exact_match,
+                max_results=max_results,
+                page=page + 1,
+            )
+        )
+    lines.extend(navigation)
     return "\n".join(lines)
 
 
@@ -352,6 +547,7 @@ async def query_astrodict(
     context: PluginContextProtocol,
     exact_match: bool = False,
     max_results: int = DEFAULT_RESULTS,
+    page: int = 1,
 ) -> str:
     """校验公开调用参数，并在线程池中完成文件读取与词条扫描。"""
 
@@ -360,7 +556,9 @@ async def query_astrodict(
         if type(exact_match) is not bool:
             raise ValueError("精确匹配参数必须是布尔值")
         if type(max_results) is not int or not 1 <= max_results <= MAX_RESULTS:
-            raise ValueError("显示数量必须是 1 到 100 的整数")
+            raise ValueError("每页条数必须是 1 到 100 的整数")
+        if type(page) is not int or not 1 <= page <= MAX_PAGE:
+            raise ValueError(f"页码必须是 1 到 {MAX_PAGE} 的整数")
         plugin_dir = getattr(context, "plugin_dir", None)
         if not isinstance(plugin_dir, Path):
             raise RuntimeError("dictionary plugin directory is unavailable")
@@ -372,6 +570,7 @@ async def query_astrodict(
                 plugin_dir,
                 exact_match,
                 max_results,
+                page,
             ),
         )
     except ValueError as exc:
@@ -402,9 +601,10 @@ async def handle(
         if request.action == "help":
             return segments(HELP_TEXT)
         context.logger.info(
-            "天文词典查询: query_chars=%d exact=%s max=%d",
+            "天文词典查询: query_chars=%d exact=%s page=%d page_size=%d",
             len(request.query),
             request.exact_match,
+            request.page,
             request.max_results,
         )
         result = await query_astrodict(
@@ -412,6 +612,7 @@ async def handle(
             context,
             exact_match=request.exact_match,
             max_results=request.max_results,
+            page=request.page,
         )
         return segments(result)
     except ValueError as exc:

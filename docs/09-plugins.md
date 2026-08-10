@@ -328,12 +328,13 @@ Dict 使用发行版内的 `r241020` 数据完成中英双向精确或模糊查�
 ```text
 /dict galaxy
 /dict 星系
-/dict -e "fast radio burst"
-/dict -n 20 star
+/dict "fast radio burst" --exact
+/dict galaxy --page 2
+/dict star --size 20 --page 3
 /dict -- -example
 ```
 
-`-e`/`--exact` 开启完整源词匹配，`-n`/`--num` 设置 1～100 条结果，`--` 结束参数解析。含中日韩统一表意文字的输入走中译英数据，其余输入走英译中数据。
+直接查询按原样完整匹配、忽略大小写完整匹配、前缀、词边界和普通包含依次排序，同等级中短词优先。`--exact` 只保留完整源词，并在缺少完整匹配时给出最多 5 条建议。`--page` 指定页码，`--size` 指定每页 1～100 条；回复包含总数、页码和无状态翻页命令。`-e`、`-p`、`-n`、`--num` 与 `--page-size` 也是有效入口，`--` 结束参数解析。含中日韩统一表意文字的输入走中译英数据，其余输入走英译中数据。
 
 发行资产为 `astrodict_ec.txt`、`astrodict_ce.txt` 和 `assets/manifest.json`。首次查询会校验字节数、行数、SHA-256、UTF-8、列结构和重复记录，随后按文件身份缓存解析结果。[Dict README](../plugins/dict/README.md) 提供数据来源与使用约定。
 
@@ -558,18 +559,19 @@ Choice 提供有界随机抽样，支持重复项加权、有放回多选和唯�
 Color 查询 526 种中国传统色、恒星光谱色和当前聊天作用域的管理员自定义色，并可生成 PNG 色卡。
 
 ```text
-/color -n <名称> [-p]
-/color -r <R,G,B> [-p]
-/color -x <HEX> [-p]
-/color -c <C,M,Y,K> [-p]
-/color -a <关键词>
-/color -s <光谱型>
-/color -t [前缀]
-/color -w <名称> <RGB或HEX>
-/color -d <名称>
+/color <名称|拼音|HEX|RGB|CMYK> [--picture]
+/color list [页码]
+/color search <关键词> [--page 页码]
+/color random [--picture]
+/color star <光谱型>
+/color stars [筛选词] [--page 页码]
+/color add <名称> <RGB或HEX>
+/color delete <名称>
 ```
 
-查询支持群聊和私聊，自定义色写入与删除使用 Bot 全局管理员权限。群聊按群号保存，私聊按用户保存，每个作用域上限为 200 条、256 KiB。
+直接查询自动识别名称、无声调拼音、HEX、三通道 RGB、四通道 CMYK 和主序星光谱型。目录与名称/拼音搜索每页显示 20 种颜色，光谱型目录每页显示 30 个；回复提供可复制的翻页命令。RGB、HEX 与 CMYK 缺少精确记录时，插件把输入转换到 D65 CIE L\*a\*b\*，按 CIE76 色差返回最接近的收录色。语义子命令与 `-n/-r/-x/-c/-a/-s/-t/-w/-d` 选项均可使用。
+
+查询支持群聊和私聊，自定义色写入与删除使用 Bot 全局管理员权限。颜色名可包含空格，群聊按群号保存，私聊按用户保存，每个作用域上限为 200 条、256 KiB。
 
 发行资产为 `color.json` 和 `stellar_colors.txt`，加载时校验数量、唯一性与字段。色卡缓存位于 `data/color/images/`，上限为 256 项、32 MiB、30 天。[Color README](../plugins/color/README.md) 提供转换格式和数据来源。
 

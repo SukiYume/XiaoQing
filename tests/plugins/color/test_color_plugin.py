@@ -64,6 +64,9 @@ class TestColorConvert:
         assert len(result) == 4
         assert all(isinstance(x, (int, float)) for x in result)
 
+    def test_cmyk_to_rgb(self):
+        assert color_convert.cmyk_to_rgb([0, 100, 100, 0]) == [255, 0, 0]
+
     def test_validate_rgb_valid(self):
         """测试有效 RGB 验证"""
         is_valid, error = color_convert.validate_rgb([255, 128, 0])
@@ -170,6 +173,53 @@ class TestColorQuery:
         assert len(results) >= 1
         assert "海棠红" in [r["name"] for r in results]
 
+    def test_keyword_search_supports_pinyin_and_relevance_order(self):
+        colors = [
+            {
+                "name": "中灰",
+                "pinyin": "zhonghui",
+                "RGB": [1, 1, 1],
+                "CMYK": [0, 0, 0, 99],
+                "hex": "#010101",
+            },
+            {
+                "name": "红汞红",
+                "pinyin": "honggonghong",
+                "RGB": [2, 2, 2],
+                "CMYK": [0, 0, 0, 98],
+                "hex": "#020202",
+            },
+        ]
+
+        assert [color["name"] for color in color_query.find_by_keyword(colors, "hong")] == [
+            "红汞红",
+            "中灰",
+        ]
+
+    def test_nearest_rgb_uses_perceptual_distance_and_stable_ties(self):
+        colors = [
+            {
+                "name": "黑",
+                "pinyin": "hei",
+                "RGB": [0, 0, 0],
+                "CMYK": [0, 0, 0, 100],
+                "hex": "#000000",
+            },
+            {
+                "name": "白",
+                "pinyin": "bai",
+                "RGB": [255, 255, 255],
+                "CMYK": [0, 0, 0, 0],
+                "hex": "#ffffff",
+            },
+        ]
+
+        match = color_query.find_nearest_by_rgb(colors, [10, 10, 10])
+
+        assert match is not None
+        assert match[0]["name"] == "黑"
+        assert match[1] > 0
+
 
 # ============================================================
 # data_manager 模块测试
@@ -239,6 +289,37 @@ class TestColorDataManager:
         assert len({color["name"] for color in colors}) == 526
         assert all(color_convert.hex_to_rgb(color["hex"]) == color["RGB"] for color in colors)
 
+    def test_builtin_load_failure_does_not_masquerade_as_custom_only_palette(
+        self, monkeypatch, tmp_path
+    ):
+        context = SimpleNamespace(
+            plugin_dir=ROOT / "plugins" / "color",
+            data_dir=tmp_path,
+            current_group_id=1001,
+            current_user_id=42,
+            logger=MagicMock(),
+        )
+        custom = MagicMock(
+            return_value=[
+                {
+                    "name": "自定义色",
+                    "pinyin": "",
+                    "RGB": [1, 2, 3],
+                    "hex": "#010203",
+                    "CMYK": [67, 33, 0, 99],
+                }
+            ]
+        )
+        monkeypatch.setattr(
+            color_data_manager,
+            "_load_builtin_colors",
+            MagicMock(side_effect=ValueError("broken builtin")),
+        )
+        monkeypatch.setattr(color_data_manager, "load_custom_colors", custom)
+
+        assert color_data_manager.load_colors(context) == []
+        custom.assert_not_called()
+
     def test_custom_scope_fails_closed_without_authenticated_identity(self, tmp_path):
         context = SimpleNamespace(
             data_dir=tmp_path,
@@ -306,8 +387,9 @@ class TestColorHandleFixes:
 
         called = {}
 
-        def _fake_list(prefix, _context):
+        def _fake_list(prefix, _context, *, page=1):
             called["prefix"] = prefix
+            called["page"] = page
             return [{"type": "text", "data": {"text": "ok"}}]
 
         monkeypatch.setattr(color_main.stellar, "list_spectral_types", _fake_list)
@@ -315,6 +397,7 @@ class TestColorHandleFixes:
 
         assert result == [{"type": "text", "data": {"text": "ok"}}]
         assert called["prefix"] == ""
+        assert called["page"] == 1
 
     @staticmethod
     def _context(tmp_path, *, admin=False):
@@ -335,7 +418,8 @@ class TestColorHandleFixes:
 
         result = await color_main.handle("color", "", {}, context)
 
-        assert "中国传统色彩查询" in text_segments_text(result)
+        assert "颜色工具｜526 种中国传统色" in text_segments_text(result)
+        assert "/color list" in text_segments_text(result)
         load_colors.assert_not_called()
         assert not (tmp_path / "images").exists()
 
@@ -348,8 +432,8 @@ class TestColorHandleFixes:
         plain = await color_main.handle("color", "-r 1 2 3", {}, context)
         pictured = await color_main.handle("color", "-r 1 2 3 -p", {}, context)
 
-        assert "RGB: [1, 2, 3]" in text_segments_text(plain)
-        assert "RGB: [1, 2, 3]" in text_segments_text(pictured)
+        assert "输入：RGB 1, 2, 3" in text_segments_text(plain)
+        assert "最接近的收录色" in text_segments_text(pictured)
         generate.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -361,7 +445,10 @@ class TestColorHandleFixes:
             "-n 胭脂 -r 1 2 3",
             "-n",
             "-p",
-            "-a 红 extra",
+            "search",
+            "list 0",
+            "search 红 --page zero",
+            '"乳白',
             "-n 胭脂 --picture=yes",
             "-r １２ 2 3",
         ],
@@ -408,14 +495,93 @@ class TestColorHandleFixes:
         ("args", "expected"),
         [
             ("-n 乳白", "#f9f4dc"),
-            ("-x F9F4DC", "name: 乳白"),
-            ("-c 4 5 18 0", "name: 乳白"),
+            ("-x F9F4DC", "名称：乳白"),
+            ("-c 4 5 18 0", "名称：乳白"),
             ("-a 乳", "乳白"),
         ],
     )
     async def test_read_query_matrix(self, tmp_path, args, expected):
         result = await color_main.handle("color", args, {"user_id": 42}, self._context(tmp_path))
         assert expected in text_segments_text(result)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("args", "expected"),
+        [
+            ("乳白", "名称：乳白"),
+            ("rubai", "名称：乳白"),
+            ("#f9f4dc", "名称：乳白"),
+            ("249 244 220", "名称：乳白"),
+            ("name 乳白", "名称：乳白"),
+            ("hex f9f4dc", "名称：乳白"),
+        ],
+    )
+    async def test_direct_and_readable_queries_need_no_legacy_flags(self, tmp_path, args, expected):
+        result = await color_main.handle("color", args, {"user_id": 42}, self._context(tmp_path))
+
+        assert expected in text_segments_text(result)
+
+    @pytest.mark.asyncio
+    async def test_catalog_is_discoverable_paginated_and_keeps_legacy_list_alias(self, tmp_path):
+        context = self._context(tmp_path)
+
+        first = text_segments_text(await color_main.handle("color", "list", {}, context))
+        second = text_segments_text(await color_main.handle("color", "-l 2", {}, context))
+
+        assert first.startswith("🎨 颜色目录")
+        assert "1. 乳白（rubai） · #f9f4dc" in first
+        assert "第 1/27 页｜共 526 种" in first
+        assert "下一页：/color list 2" in first
+        assert "21. 蛋壳黄" in second
+        assert "上一页：/color list 1" in second
+        assert "下一页：/color list 3" in second
+
+    @pytest.mark.asyncio
+    async def test_name_and_pinyin_search_are_paginated_with_replayable_commands(self, tmp_path):
+        context = self._context(tmp_path)
+
+        names = text_segments_text(await color_main.handle("color", "search 红", {}, context))
+        pinyin = text_segments_text(
+            await color_main.handle("color", "search hong --page 2", {}, context)
+        )
+
+        assert "第 1/7 页｜共 124 种" in names
+        assert "下一页：/color search 红 --page 2" in names
+        assert "第 2/7 页｜共 127 种" in pinyin
+        assert "上一页：/color search hong --page 1" in pinyin
+
+    @pytest.mark.asyncio
+    async def test_non_exact_values_return_a_labeled_nearest_palette_color(self, tmp_path):
+        context = self._context(tmp_path)
+
+        by_hex = text_segments_text(await color_main.handle("color", "#f9f4dd", {}, context))
+        by_cmyk = text_segments_text(await color_main.handle("color", "4 5 18 1", {}, context))
+
+        assert "最接近的收录色（近似匹配）" in by_hex
+        assert "输入：HEX #f9f4dd" in by_hex
+        assert "名称：乳白" in by_hex
+        assert "输入：CMYK 4, 5, 18, 1" in by_cmyk
+        assert "CIE76 色差" in by_cmyk
+
+    @pytest.mark.asyncio
+    async def test_random_color_is_bounded_to_loaded_palette(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            color_main.secrets, "randbelow", lambda upper: 0 if upper == 526 else -1
+        )
+
+        result = await color_main.handle("color", "random", {}, self._context(tmp_path))
+
+        assert "名称：乳白" in text_segments_text(result)
+
+    @pytest.mark.asyncio
+    async def test_direct_spectral_type_routes_to_stellar_query(self, monkeypatch, tmp_path):
+        query_stellar = AsyncMock(return_value=[{"type": "text", "data": {"text": "star-ok"}}])
+        monkeypatch.setattr(color_main.stellar, "query_stellar_color", query_stellar)
+
+        result = await color_main.handle("color", "G2V", {}, self._context(tmp_path))
+
+        assert text_segments_text(result) == "star-ok"
+        query_stellar.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_custom_color_can_be_added_queried_and_deleted(self, monkeypatch, tmp_path):
@@ -449,6 +615,35 @@ class TestColorHandleFixes:
         assert "#010203" in text_segments_text(queried)
         assert "已删除" in text_segments_text(deleted)
         assert color_data_manager.load_custom_colors(context) == []
+
+    @pytest.mark.asyncio
+    async def test_readable_admin_commands_support_quoted_multiword_names(
+        self, monkeypatch, tmp_path
+    ):
+        context = self._context(tmp_path, admin=True)
+        monkeypatch.setattr(
+            color_main.image_gen,
+            "generate_color_image",
+            AsyncMock(return_value=None),
+        )
+
+        added = await color_main.handle(
+            "color",
+            'add "品牌 蓝" #3366ff',
+            {"user_id": 42},
+            context,
+        )
+        queried = await color_main.handle("color", '"品牌 蓝"', {"user_id": 42}, context)
+        deleted = await color_main.handle(
+            "color",
+            'delete "品牌 蓝"',
+            {"user_id": 42},
+            context,
+        )
+
+        assert "添加成功" in text_segments_text(added)
+        assert "名称：品牌 蓝" in text_segments_text(queried)
+        assert "已删除" in text_segments_text(deleted)
 
     @pytest.mark.asyncio
     async def test_custom_palette_io_runs_off_event_loop(self, monkeypatch, tmp_path):
@@ -515,6 +710,22 @@ class TestStellarColorData:
 
         assert "共 74 个" in rendered
         assert rendered.count("M6V") == 1
+        assert "第 1/3 页" in rendered
+        assert "下一页：/color stars --page 2" in rendered
+
+    def test_spectral_type_list_supports_later_pages_and_bounds(self, tmp_path):
+        context = SimpleNamespace(
+            plugin_dir=ROOT / "plugins" / "color",
+            data_dir=tmp_path,
+            logger=MagicMock(),
+        )
+
+        second = text_segments_text(color_stellar.list_spectral_types("", context, page=2))
+        beyond = text_segments_text(color_stellar.list_spectral_types("G", context, page=2))
+
+        assert "G8V" in second
+        assert "上一页：/color stars --page 1" in second
+        assert beyond == "❌ 第 2 页超出范围（共 1 页）"
 
     @pytest.mark.asyncio
     async def test_duplicate_spectral_type_reports_source_grid(self, monkeypatch, tmp_path):
@@ -528,7 +739,7 @@ class TestStellarColorData:
         result = await color_stellar.query_stellar_color("m6v", context, tmp_path / "images")
         rendered = text_segments_text(result)
 
-        assert "光谱型: M6V" in rendered
+        assert "光谱型：M6V" in rendered
         assert "2,800-2,900 K" in rendered
         assert "#ffa548" in rendered
 

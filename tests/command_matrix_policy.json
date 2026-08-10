@@ -94,13 +94,13 @@
       "reason": "help 后的多余参数必须本地拒绝，不能作为聊天内容调用模型",
       "invalid_expect_any": ["用法", "请输入", "参数错误", "多余参数"]
     },
-    "color.color.-w": {
+    "color.color.add": {
       "risk": "privileged",
       "dependency": "local",
       "sensitive": false,
       "reason": "会持久化管理员作用域的自定义颜色，必须使用唯一名称并在结尾删除"
     },
-    "color.color.-d": {
+    "color.color.delete": {
       "risk": "privileged",
       "dependency": "local",
       "sensitive": false,

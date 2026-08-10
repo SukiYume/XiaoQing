@@ -1,31 +1,33 @@
 {
     "name": "dict",
-    "version": "0.3.0",
-    "description": "内置官方 r241020 数据与完整校验清单的离线天文学中英词典",
+    "version": "0.5.0",
+    "description": "内置官方 r241020 数据、相关度排序、查询建议与无状态分页的离线天文学中英词典",
     "entry": "main.py",
     "commands": [
         {
             "name": "dict",
             "triggers": ["dict", "词典", "字典"],
-            "help": "天文学中英词典 | /dict [-e] [-n 1-100] <词汇>",
+            "help": "天文学中英词典 | /dict <词汇> [--exact] [--page 页码] [--size 每页条数]",
             "admin_only": false,
-            "usage": "/dict [-e|--exact] [-n|--num 1-100] [--] <词汇>",
+            "usage": "/dict <词汇> [--exact] [--page 页码] [--size 1-100]",
             "examples": [
                 "/dict galaxy",
                 "/dict 星系",
-                "/dict -e \"fast radio burst\"",
-                "/dict -n 20 star"
+                "/dict \"fast radio burst\" --exact",
+                "/dict galaxy --page 2",
+                "/dict star --size 20 --page 3"
             ],
             "invalid_examples": [
                 "/dict",
                 "/dict -n 0 star",
+                "/dict -p 0 star",
                 "/dict --unknown star"
             ],
             "subcommands": [
                 {
                     "name": "help",
-                    "aliases": ["h", "list", "l", "帮助"],
-                    "help": "显示词典查询、精确匹配和结果数量选项",
+                    "aliases": ["帮助"],
+                    "help": "显示直接查询、精确匹配、分页和每页条数选项",
                     "usage": "/dict help",
                     "match": "exact",
                     "examples": ["/dict help"],
