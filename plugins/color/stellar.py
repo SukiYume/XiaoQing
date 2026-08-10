@@ -9,6 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, cast
 
+from core.args import quote_token
 from core.interfaces import PluginContextProtocol
 from core.plugin_base import has_control_characters, image, segments, text
 from core.public_errors import public_error_response
@@ -116,6 +117,14 @@ def _clean_spectral_term(value: str, *, allow_empty: bool) -> str:
     return cleaned
 
 
+def is_spectral_type(value: str) -> bool:
+    """判断直接查询是否是一个完整、受支持形态的主序星光谱型。"""
+
+    if not isinstance(value, str):
+        return False
+    return _SPECTRAL_TYPE_PATTERN.fullmatch(value.strip()) is not None
+
+
 async def query_stellar_color(
     spec_type: str,
     context: PluginContextProtocol,
@@ -131,7 +140,7 @@ async def query_stellar_color(
                 Messages,
                 segments(
                     f"❌ 没有找到光谱型「{normalized}」的恒星颜色\n\n"
-                    "提示：使用 /color -t 查看可用的光谱型"
+                    "提示：使用 /color stars 查看可用的光谱型"
                 ),
             )
 
@@ -140,15 +149,15 @@ async def query_stellar_color(
         sample_note = ""
         if len(matches) > 1:
             sample_note = (
-                f"\n温度采样: {matches[0].temperature_k:,}-"
+                f"\n温度采样：{matches[0].temperature_k:,}-"
                 f"{matches[-1].temperature_k:,} K（展示第一条）"
             )
         info = (
             "🌟 恒星光谱颜色\n\n"
-            f"光谱型: {selected.spectral_type}\n"
-            f"有效温度: {selected.temperature_k:,} K\n"
-            f"HEX: {selected.hex_value}\n"
-            f"RGB: {rgb}{sample_note}"
+            f"光谱型：{selected.spectral_type}\n"
+            f"有效温度：{selected.temperature_k:,} K\n"
+            f"HEX：{selected.hex_value}\n"
+            f"RGB：{', '.join(str(channel) for channel in rgb)}{sample_note}"
         )
         image_path = await generate_color_image(selected.spectral_type, rgb, image_dir, context)
         context.logger.info("查询恒星颜色: matches=%d", len(matches))
@@ -167,10 +176,17 @@ async def query_stellar_color(
         )
 
 
-def list_spectral_types(prefix: str, context: PluginContextProtocol) -> Messages:
+def list_spectral_types(
+    prefix: str,
+    context: PluginContextProtocol,
+    *,
+    page: int = 1,
+) -> Messages:
     """按字面子串筛选并列出不重复的光谱型。"""
 
     try:
+        if type(page) is not int or page < 1:
+            raise ValueError("光谱型页码必须是正整数")
         normalized_prefix = _clean_spectral_term(prefix, allow_empty=True)
         unique_types = list(
             dict.fromkeys(row.spectral_type for row in load_stellar_colors(context))
@@ -189,15 +205,24 @@ def list_spectral_types(prefix: str, context: PluginContextProtocol) -> Messages
             if normalized_prefix
             else f"所有光谱型（共 {len(matches)} 个）："
         )
-        displayed = matches[:MAX_SPECTRAL_TYPES]
-        suffix = (
-            f"\n\n... 还有 {len(matches) - MAX_SPECTRAL_TYPES} 个"
-            if len(matches) > MAX_SPECTRAL_TYPES
-            else ""
-        )
+        total_pages = (len(matches) + MAX_SPECTRAL_TYPES - 1) // MAX_SPECTRAL_TYPES
+        if page > total_pages:
+            return cast(Messages, segments(f"❌ 第 {page} 页超出范围（共 {total_pages} 页）"))
+        start = (page - 1) * MAX_SPECTRAL_TYPES
+        displayed = matches[start : start + MAX_SPECTRAL_TYPES]
+        query_part = f" {quote_token(normalized_prefix)}" if normalized_prefix else ""
+        navigation: list[str] = []
+        if page > 1:
+            navigation.append(f"上一页：/color stars{query_part} --page {page - 1}")
+        if page < total_pages:
+            navigation.append(f"下一页：/color stars{query_part} --page {page + 1}")
+        suffix = f"\n\n第 {page}/{total_pages} 页"
+        if navigation:
+            suffix += "\n" + "\n".join(navigation)
         context.logger.info(
-            "列出光谱型: prefix_chars=%d count=%d",
+            "列出光谱型: prefix_chars=%d page=%d count=%d",
             len(normalized_prefix),
+            page,
             len(matches),
         )
         return cast(Messages, segments(f"{title}\n{', '.join(displayed)}{suffix}"))

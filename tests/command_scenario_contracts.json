@@ -116,7 +116,7 @@
       "state_model": "dynamic_resource",
       "reason": "颜色换算只读，但自定义颜色写入、查询和删除共享管理员作用域的持久文件",
       "test_files": ["tests/plugins/color/test_color_plugin.py"],
-      "dynamic_codes": ["color.color.-w", "color.color.-d"],
+      "dynamic_codes": ["color.color.add", "color.color.delete"],
       "regression_codes": []
     },
     "dict": {
@@ -610,14 +610,14 @@
       "actor": "bot_admin",
       "sensitive": false,
       "required_fixtures": [],
-      "covers": ["color.color.-w", "color.color.-n", "color.color.-d"],
+      "covers": ["color.color.add", "color.color.name", "color.color.delete"],
       "steps": [
-        {"id":"invalid_add","code":"color.color.-w","message":"/color -w MATRIX-{{run_id}}","expect_any":["格式错误","请使用"]},
-        {"id":"add","code":"color.color.-w","message":"/color -w MATRIX-{{run_id}} #3366FF","expect_all":["MATRIX-{{run_id}}","添加成功","#3366ff"]},
-        {"id":"view","code":"color.color.-n","message":"/color -n MATRIX-{{run_id}}","expect_all":["MATRIX-{{run_id}}","#3366ff"]},
-        {"id":"duplicate_alias","code":"color.color.-w","message":"/color --write MATRIX-{{run_id}} #3366FF","expect_any":["已经定义","已存在"]},
-        {"id":"delete_alias","code":"color.color.-d","message":"/color --delete MATRIX-{{run_id}}","expect_all":["已删除"],"cleanup":true},
-        {"id":"absent","code":"color.color.-n","message":"/color -n MATRIX-{{run_id}}","expect_any":["没有收录","没有"],"reject_any":["#3366ff","XQ-PLUGIN-UNEXPECTED"],"cleanup":true}
+        {"id":"invalid_add","code":"color.color.add","message":"/color -w MATRIX-{{run_id}}","expect_any":["格式错误","请使用"]},
+        {"id":"add","code":"color.color.add","message":"/color -w MATRIX-{{run_id}} #3366FF","expect_all":["MATRIX-{{run_id}}","添加成功","#3366ff"]},
+        {"id":"view","code":"color.color.name","message":"/color -n MATRIX-{{run_id}}","expect_all":["MATRIX-{{run_id}}","#3366ff"]},
+        {"id":"duplicate_alias","code":"color.color.add","message":"/color --write MATRIX-{{run_id}} #3366FF","expect_any":["已经定义","已存在"]},
+        {"id":"delete_alias","code":"color.color.delete","message":"/color --delete MATRIX-{{run_id}}","expect_all":["已删除"],"cleanup":true},
+        {"id":"absent","code":"color.color.name","message":"/color -n MATRIX-{{run_id}}","expect_any":["没有收录","没有"],"reject_any":["#3366ff","XQ-PLUGIN-UNEXPECTED"],"cleanup":true}
       ]
     },
     {

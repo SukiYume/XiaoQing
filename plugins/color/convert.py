@@ -83,6 +83,19 @@ def rgb_to_cmyk(rgb: Sequence[object]) -> list[int]:
     ]
 
 
+def cmyk_to_rgb(cmyk: Sequence[object]) -> list[int]:
+    """按标准设备无关近似把 0-100 CMYK 转成整数 sRGB。"""
+
+    valid, error = validate_cmyk(cmyk)
+    if not valid:
+        raise ValueError(error or "CMYK 颜色值无效")
+    cyan, magenta, yellow, black = cast(tuple[int, int, int, int], tuple(cmyk))
+    return [
+        round(RGB_MAX * (1 - channel / CMYK_MAX) * (1 - black / CMYK_MAX))
+        for channel in (cyan, magenta, yellow)
+    ]
+
+
 def hex_to_rgb(hex_value: str) -> list[int]:
     """解析一个可带单个 ``#`` 的三位或六位 ASCII HEX 值。"""
 

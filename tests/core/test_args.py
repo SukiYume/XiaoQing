@@ -2,7 +2,7 @@
 
 import pytest
 
-from core.args import parse, parse_int, tokenize
+from core.args import parse, parse_int, quote_token, tokenize
 
 
 @pytest.mark.parametrize(
@@ -110,6 +110,17 @@ class TestTokenize:
         """测试 Unicode 字符"""
         result = tokenize("你好 世界 测试")
         assert result == ["你好", "世界", "测试"]
+
+    @pytest.mark.parametrize(
+        "value",
+        ["", "乳白", "fast radio burst", "Barnard's", 'a "quoted" value', r"a\b"],
+    )
+    def test_quote_token_round_trips_one_value(self, value):
+        assert tokenize(quote_token(value), strict=True) == [value]
+
+    def test_quote_token_rejects_non_string_values(self):
+        with pytest.raises(TypeError, match="must be a string"):
+            quote_token(1)
 
 
 # ============================================================

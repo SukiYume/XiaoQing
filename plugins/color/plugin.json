@@ -1,7 +1,7 @@
 {
     "name": "color",
-    "version": "0.4.0",
-    "description": "中国传统色、恒星光谱色与管理员会话颜色库查询工具（内置 526 色）",
+    "version": "0.5.0",
+    "description": "支持直接查询、拼音搜索、分页浏览和感知近似匹配的颜色工具（内置 526 种中国传统色）",
     "author": "XiaoQing Bot",
     "entry": "main.py",
     "commands": [
@@ -12,90 +12,106 @@
                 "颜色",
                 "色彩"
             ],
-            "help": "颜色查询与转换 | -n 名称 / -r RGB / -x HEX / -s 光谱型 / -h 帮助",
+            "help": "颜色查询与浏览 | 直接输入名称/拼音/HEX/RGB，或使用 list/search/random",
             "admin_only": false,
-            "usage": "/color <-n|-r|-x|-c|-a|-s|-t|-w|-d> [参数] [-p]",
-            "examples": ["/color -n 天青", "/color -x 66CCFF -p", "/color -t G"],
-            "invalid_examples": ["/color -p", "/color -n 天青 -x 66CCFF", "/color --unknown"],
+            "usage": "/color <名称|拼音|HEX|RGB> [-p] | /color <list|search|random|star|stars|add|delete> [参数]",
+            "examples": ["/color 乳白", "/color rubai", "/color list", "/color search 红", "/color #66CCFF --picture"],
+            "invalid_examples": ["/color -p", "/color list 0", "/color search", "/color --unknown"],
             "subcommands": [
                 {
-                    "name": "-n",
-                    "aliases": ["--name"],
-                    "help": "按中国传统色名称查询；可用 -p/--picture 生成色卡",
-                    "usage": "/color -n <名称> [-p|--picture]",
-                    "examples": ["/color -n 天青", "/color --name 天青 --picture"],
-                    "invalid_examples": ["/color -n", "/color -n 天青 extra"]
+                    "name": "name",
+                    "aliases": ["名称", "-n", "--name"],
+                    "help": "按完整名称查询；直接输入名称时也会自动识别",
+                    "usage": "/color [name|-n|--name] <名称> [-p|--picture]",
+                    "examples": ["/color name 乳白", "/color -n 乳白 -p"],
+                    "invalid_examples": ["/color -n"]
                 },
                 {
-                    "name": "-r",
-                    "aliases": ["--rgb"],
-                    "help": "按 RGB 三元组查询最接近的传统色",
-                    "usage": "/color -r <R,G,B|R G B> [-p|--picture]",
-                    "examples": ["/color -r 102,204,255", "/color --rgb 102 204 255 -p"],
-                    "invalid_examples": ["/color -r", "/color -r 999,0,0"]
+                    "name": "rgb",
+                    "aliases": ["-r", "--rgb"],
+                    "help": "按 RGB 查询精确或最接近的传统色",
+                    "usage": "/color [rgb|-r|--rgb] <R,G,B|R G B> [-p|--picture]",
+                    "examples": ["/color rgb 102 204 255", "/color -r 102,204,255 -p"],
+                    "invalid_examples": ["/color rgb", "/color rgb 999 0 0"]
                 },
                 {
-                    "name": "-x",
-                    "aliases": ["--hex"],
+                    "name": "hex",
+                    "aliases": ["-x", "--hex"],
                     "help": "按十六进制颜色查询最接近的传统色",
-                    "usage": "/color -x <HEX> [-p|--picture]",
-                    "examples": ["/color -x 66CCFF", "/color --hex #66CCFF -p"],
-                    "invalid_examples": ["/color -x", "/color -x ZZZZZZ"]
+                    "usage": "/color [hex|-x|--hex] <HEX> [-p|--picture]",
+                    "examples": ["/color hex 66CCFF", "/color -x 66CCFF -p"],
+                    "invalid_examples": ["/color hex", "/color hex ZZZZZZ"]
                 },
                 {
-                    "name": "-c",
-                    "aliases": ["--cmyk"],
+                    "name": "cmyk",
+                    "aliases": ["-c", "--cmyk"],
                     "help": "按 CMYK 四元组查询最接近的传统色",
-                    "usage": "/color -c <C,M,Y,K|C M Y K> [-p|--picture]",
-                    "examples": ["/color -c 50,20,0,0"],
-                    "invalid_examples": ["/color -c", "/color -c 10,20,30"]
+                    "usage": "/color [cmyk|-c|--cmyk] <C,M,Y,K|C M Y K> [-p|--picture]",
+                    "examples": ["/color cmyk 50 20 0 0", "/color -c 50,20,0,0"],
+                    "invalid_examples": ["/color cmyk", "/color cmyk 10 20 30"]
                 },
                 {
-                    "name": "-a",
-                    "aliases": ["--accord"],
-                    "help": "按名称关键词搜索传统色",
-                    "usage": "/color -a <关键词>",
-                    "examples": ["/color -a 青"],
-                    "invalid_examples": ["/color -a", "/color -a 青 -p"]
+                    "name": "list",
+                    "aliases": ["ls", "列表", "色表", "-l", "--list"],
+                    "help": "分页浏览全部颜色名称、拼音和 HEX",
+                    "usage": "/color list [页码]",
+                    "examples": ["/color list", "/color list 2", "/color -l 3"],
+                    "invalid_examples": ["/color list 0", "/color list two"]
                 },
                 {
-                    "name": "-s",
-                    "aliases": ["--stellar"],
+                    "name": "search",
+                    "aliases": ["find", "搜索", "-q", "--search", "-a", "--accord"],
+                    "help": "按名称或拼音搜索，并分页显示结果",
+                    "usage": "/color search <关键词> [--page 页码]",
+                    "examples": ["/color search 红", "/color search hong --page 2", "/color -a 青"],
+                    "invalid_examples": ["/color search", "/color search 红 --page 0"]
+                },
+                {
+                    "name": "random",
+                    "aliases": ["rand", "随机"],
+                    "help": "从当前可用颜色库随机选择一种颜色",
+                    "usage": "/color random [-p|--picture]",
+                    "examples": ["/color random", "/color random -p"],
+                    "invalid_examples": ["/color random extra"]
+                },
+                {
+                    "name": "star",
+                    "aliases": ["stellar", "恒星", "-s", "--stellar"],
                     "help": "查询恒星光谱型对应的近似颜色",
-                    "usage": "/color -s <光谱型>",
-                    "examples": ["/color -s G2V"],
-                    "invalid_examples": ["/color -s", "/color -s G2V -p"]
+                    "usage": "/color star <光谱型>",
+                    "examples": ["/color star G2V", "/color -s G2V"],
+                    "invalid_examples": ["/color star"]
                 },
                 {
-                    "name": "-t",
-                    "aliases": ["--spectype"],
-                    "help": "列出光谱型，可按前缀筛选",
-                    "usage": "/color -t [前缀]",
-                    "examples": ["/color -t", "/color --spectype G"],
-                    "invalid_examples": ["/color -t G extra", "/color -t -p"]
+                    "name": "stars",
+                    "aliases": ["types", "光谱型", "-t", "--spectype"],
+                    "help": "分页列出光谱型，可按字面内容筛选",
+                    "usage": "/color stars [筛选词] [--page 页码]",
+                    "examples": ["/color stars", "/color stars G", "/color -t G"],
+                    "invalid_examples": ["/color stars G -p"]
                 },
                 {
-                    "name": "-w",
-                    "aliases": ["--write"],
+                    "name": "add",
+                    "aliases": ["write", "添加", "-w", "--write"],
                     "help": "向当前作用域写入自定义颜色",
-                    "usage": "/color -w <名称> <R> <G> <B> | /color -w <名称> <#HEX>",
+                    "usage": "/color add <名称> <R> <G> <B> | /color add <名称> <#HEX>",
                     "permission": "bot_admin",
-                    "examples": ["/color -w 测试蓝 #3366FF"],
-                    "invalid_examples": ["/color -w 测试蓝", "/color -w 测试蓝 999 0 0"]
+                    "examples": ["/color add 测试蓝 #3366FF", "/color add \"品牌 蓝\" 51 102 255"],
+                    "invalid_examples": ["/color add 测试蓝", "/color add 测试蓝 999 0 0"]
                 },
                 {
-                    "name": "-d",
-                    "aliases": ["--delete"],
+                    "name": "delete",
+                    "aliases": ["del", "remove", "删除", "-d", "--delete"],
                     "help": "删除当前作用域的自定义颜色",
-                    "usage": "/color -d <名称>",
+                    "usage": "/color delete <名称>",
                     "permission": "bot_admin",
-                    "examples": ["/color -d 测试蓝"],
-                    "invalid_examples": ["/color -d", "/color -d 测试蓝 extra"]
+                    "examples": ["/color delete 测试蓝", "/color delete \"品牌 蓝\""],
+                    "invalid_examples": ["/color delete"]
                 },
                 {
                     "name": "help",
-                    "aliases": ["h", "list", "l", "帮助", "-h", "--help", "-l", "--list"],
-                    "help": "显示全部颜色查询、恒星色和管理员操作",
+                    "aliases": ["h", "帮助", "-h", "--help"],
+                    "help": "显示直接查询、浏览、搜索、恒星色和管理员操作",
                     "usage": "/color help",
                     "match": "exact",
                     "examples": ["/color help", "/color -h"],
