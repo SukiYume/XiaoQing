@@ -261,7 +261,7 @@ Web 后端使用 FastAPI 与 uvicorn，API 前缀为 `/api`，静态前端位于
 | `web_session_registry` | 浏览器会话摘要、设备和期限 |
 | `widget_token_registry` | Widget Token 身份、期限与撤销状态 |
 
-所有业务查询按 `user_id` 隔离。数据库使用 WAL、外键、busy timeout、事务和 schema migration。时间戳按 UTC 保存，展示时按用户 IANA 时区转换。
+所有业务查询按 `user_id` 隔离。数据库使用 WAL、外键、busy timeout、事务和 schema migration。自然语言中的日程钟点先按用户或日程 IANA 时区解释，时间戳按 UTC 保存，展示时转换回对应 IANA 时区。
 
 ---
 
