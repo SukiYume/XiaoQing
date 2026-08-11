@@ -179,7 +179,7 @@ sequenceDiagram
 
 ### 时间与金额
 
-完整时刻采用规范 UTC 字符串；`plan_date`、`diary_date` 和 `ledger_date` 使用日期值。API 与命令边界通过 `TimezoneHelper` 转换用户本地时间。
+完整时刻采用规范 UTC 字符串；`plan_date`、`diary_date` 和 `ledger_date` 使用日期值。API 与命令边界通过 `TimezoneHelper` 转换用户本地时间。自然语言解析结果中的年月日和钟点属于本地墙钟字段，AI 输出进入业务模型时清除自行附加的时区偏移，再由用户或日程 IANA 时区解析为唯一时刻。
 
 账本以 `amount_cents` 作为整数统计字段。`amount` 保留展示兼容值，导入与迁移会规范化两者。
 

@@ -108,9 +108,9 @@ class TestAIParserMilestones:
                 "remind_offsets": ["提前1天", "提前1小时"],
                 "rrule": None,
                 "milestones": [
-                    {"name": "注册截止", "time": "2030-04-06T00:00:00"},
-                    {"name": "会议开始", "time": "2030-04-22T10:30:00"},
-                    {"name": "会议结束", "time": "2030-04-26T12:00:00"},
+                    {"name": "注册截止", "time": "2030-04-06T00:00:00Z"},
+                    {"name": "会议开始", "time": "2030-04-22T10:30:00+00:00"},
+                    {"name": "会议结束", "time": "2030-04-26T12:00:00+08:00"},
                 ],
                 "notes": "https://example.com",
             }
@@ -123,9 +123,41 @@ class TestAIParserMilestones:
         result = asyncio.run(run())
         assert result["milestones"][0]["name"] == "注册截止"
         assert result["start_time"] == "2030-04-06T00:00:00"
+        assert result["milestones"][1]["time"] == "2030-04-22T10:30:00"
         assert result["end_time"] == "2030-04-26T12:00:00"
         assert result["notes"] == "https://example.com"
         assert len(result["remind_times"]) == 6  # 3 milestones × 2 offsets
+
+    def test_parse_event_with_ai_treats_timezone_suffix_as_local_wall_time(self):
+        """模型擅自添加的 UTC 后缀不能改变用户说出的本地钟点。"""
+        import asyncio
+        import json
+        from unittest.mock import AsyncMock, patch
+
+        parser = self._make_parser()
+        mock_response = json.dumps(
+            {
+                "parse_source": "rule",
+                "title": "心理咨询",
+                "start_time": "2030-08-19T18:00:00+00:00",
+                "end_time": "2030-08-19T19:00:00Z",
+                "location": None,
+                "category": "健康",
+                "remind_offsets": [],
+                "rrule": None,
+                "milestones": [],
+                "notes": None,
+            }
+        )
+
+        async def run():
+            with patch.object(parser, "_call_llm", new=AsyncMock(return_value=mock_response)):
+                return await parser.parse_event_with_ai("下周三晚上六点心理咨询", "user1")
+
+        result = asyncio.run(run())
+        assert result["parse_source"] == "ai"
+        assert result["start_time"] == "2030-08-19T18:00:00"
+        assert result["end_time"] == "2030-08-19T19:00:00"
 
     def test_parse_event_with_ai_recovers_single_milestone_as_start_time(self):
         """LLM 把单次日程误放进一个 milestone 时，应按单次日程整理。"""
@@ -480,6 +512,87 @@ class TestReminderRegression:
             "start_time": "2026-04-07T14:00:00",
             "remind_times": ["2026-04-06T14:00:00", "2026-04-07T13:00:00"],
         }
+
+    def test_ai_edit_stores_model_utc_suffix_as_shanghai_wall_time(self, tmp_path):
+        """回归：模型返回 18:00+00:00 时，日程仍应显示为北京时间 18:00。"""
+        import json
+        import sys
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from zoneinfo import ZoneInfo
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.event import EventHandler
+        from plugins.pendo.models.item import EventItem
+        from plugins.pendo.services.ai_parser import AIParser
+        from plugins.pendo.services.db import Database
+        from plugins.pendo.utils.formatters import ItemFormatter
+
+        owner_id = "u-ai-offset-edit"
+        db = Database(str(tmp_path / "pendo.db"))
+
+        try:
+            assert db.update_user_settings(owner_id, {"timezone": "Asia/Shanghai"})
+            event = EventItem(
+                owner_id=owner_id,
+                title="心理咨询",
+                category="健康",
+                start_time="2026-08-12T18:00:00",
+                timezone="Asia/Shanghai",
+                reminder_rules=[
+                    {"offset_seconds": 86400},
+                    {"offset_seconds": 3600},
+                    {"offset_seconds": 0},
+                ],
+                remind_times=[
+                    "2026-08-11T18:00:00",
+                    "2026-08-12T17:00:00",
+                    "2026-08-12T18:00:00",
+                ],
+                created_at="2026-08-06T14:03:09",
+                updated_at="2026-08-06T14:03:09",
+            )
+            db.insert_item(event, "06f123e5")
+
+            parser = AIParser(context=None, db=db)
+            handler = EventHandler(db=db, ai_parser=parser, reminder_service=MagicMock())
+            mock_response = json.dumps(
+                {
+                    "start_time": "2026-08-19T18:00:00+00:00",
+                    "end_time": None,
+                    "remind_offsets": [],
+                    "milestones": [],
+                }
+            )
+
+            async def run_edit():
+                with patch.object(parser, "_call_llm", new=AsyncMock(return_value=mock_response)):
+                    return await handler._edit_single_instance(
+                        owner_id,
+                        "06f123e5",
+                        "改到下周三晚上六点",
+                    )
+
+            result = asyncio.run(run_edit())
+            assert result["status"] == "success"
+
+            updated = db.get_item("06f123e5", owner_id)
+            assert updated is not None
+            assert updated.start_time == "2026-08-19T10:00:00+00:00"
+            assert updated.remind_times == [
+                "2026-08-18T10:00:00+00:00",
+                "2026-08-19T09:00:00+00:00",
+                "2026-08-19T10:00:00+00:00",
+            ]
+            assert (
+                ItemFormatter.format_datetime(
+                    updated.start_time,
+                    tz=ZoneInfo("Asia/Shanghai"),
+                )
+                == "2026-08-19 18:00"
+            )
+        finally:
+            db.cleanup()
 
     def test_parse_updates_does_not_take_location_from_note_text(self):
         import sys
