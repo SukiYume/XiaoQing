@@ -175,20 +175,21 @@ class AIParser:
 返回JSON:
 {{
   "title": "简洁标题",
-  "start_time": "YYYY-MM-DDTHH:MM:SS或null（多节点milestones时留null）",
-  "end_time": "YYYY-MM-DDTHH:MM:SS或null（多节点milestones时留null）",
+  "start_time": "YYYY-MM-DDTHH:MM:SS或null（用户本地墙钟时间，不带时区；多节点milestones时留null）",
+  "end_time": "YYYY-MM-DDTHH:MM:SS或null（用户本地墙钟时间，不带时区；多节点milestones时留null）",
   "location": "地点或null",
   "category": "工作|学习|生活|健康|财务|社交",
   "remind_offsets": ["提前1天", "提前1小时"],
   "rrule": "RFC5545格式或null",
   "milestones": [
-    {{"name": "节点名称", "time": "YYYY-MM-DDTHH:MM:SS"}}
+    {{"name": "节点名称", "time": "YYYY-MM-DDTHH:MM:SS（用户本地墙钟时间，不带时区）"}}
   ],
   "notes": "备注内容或null"
 }}
 
 规则:
 - 相对时间转绝对时间(明天→具体日期)
+- 所有时间都表示用户本地墙钟时间，严禁添加Z、UTC或+/-HH:MM时区后缀
 - 无时间则默认09:00
 - milestones 只用于两个及以上独立时间节点；系统会把每个 milestone 创建成可独立删除、修改、查询的日程节点，并用 title 作为整体日程标题
 - 若用户描述两个及以上具名时间点(如注册截止、会议开始、会议结束等事件节点)，填milestones列表，start_time/end_time留null
@@ -350,6 +351,9 @@ class AIParser:
             if parsed is None:
                 return self._fallback_event_result(source_text, user_id, partial=partial)
 
+            # 来源由实际执行路径决定，不能接受模型自行声明为规则解析结果。
+            parsed["parse_source"] = "ai"
+
             logger.info("AI event parse completed: user=%s fields=%s", user_id, sorted(parsed))
 
             return self._build_event_result(parsed, source_text, user_id, partial=partial)
@@ -477,16 +481,35 @@ class AIParser:
         return result
 
     @staticmethod
-    def _normalize_event_datetimes(parsed: dict[str, Any]) -> dict[str, str]:
-        """把 LLM 返回的起止时间规范成 ISO 字符串。"""
+    def _normalize_parser_datetime(value: Any, *, ai_wall_time: bool) -> str | None:
+        """规范解析器时间，并把 AI 输出固定为无时区的本地墙钟时间。
+
+        AI 提示词没有提供时区字段，模型偶尔仍会给本地钟点附上 ``Z`` 或
+        ``+00:00``。这些后缀不是用户表达的时区意图；若保留，持久化层会把
+        本地钟点误当成 UTC 绝对时刻。规则解析器的偏移由程序确定，继续保留。
+        """
+
+        try:
+            parsed = cast(datetime, parser.parse(str(value)))
+        except (ValueError, TypeError, OverflowError):
+            return None
+        if ai_wall_time:
+            parsed = parsed.replace(tzinfo=None)
+        return parsed.isoformat(timespec="seconds")
+
+    @classmethod
+    def _normalize_event_datetimes(cls, parsed: dict[str, Any]) -> dict[str, str]:
+        """把解析器返回的起止时间规范成 ISO 字符串。"""
         normalized: dict[str, str] = {}
+        ai_wall_time = parsed.get("parse_source") != "rule"
         for field in ("start_time", "end_time"):
             if parsed.get(field):
-                try:
-                    dt = parser.parse(str(parsed[field]))
-                    normalized[field] = dt.isoformat()
-                except (ValueError, TypeError):
-                    continue
+                value = cls._normalize_parser_datetime(
+                    parsed[field],
+                    ai_wall_time=ai_wall_time,
+                )
+                if value is not None:
+                    normalized[field] = value
         return normalized
 
     @staticmethod
@@ -496,8 +519,8 @@ class AIParser:
             return []
         return [text for raw in value if (text := str(raw or "").strip())]
 
-    @staticmethod
-    def _normalize_milestones(value: Any) -> list[dict[str, str]]:
+    @classmethod
+    def _normalize_milestones(cls, value: Any) -> list[dict[str, str]]:
         """过滤缺字段或时间无效的多节点事件。"""
         if not isinstance(value, list):
             return []
@@ -509,9 +532,8 @@ class AIParser:
             raw_time = raw.get("time")
             if not name or not raw_time:
                 continue
-            try:
-                milestone_time = parser.parse(str(raw_time)).isoformat()
-            except (ValueError, TypeError):
+            milestone_time = cls._normalize_parser_datetime(raw_time, ai_wall_time=True)
+            if milestone_time is None:
                 continue
             milestones.append({"name": name, "time": milestone_time})
         return milestones
