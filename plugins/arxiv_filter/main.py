@@ -682,15 +682,17 @@ def _track_delivery(
     data_dir: str | Path,
     business_date: str,
 ) -> DeliverySegments:
+    # 传输回执会在插件 handler 返回后到达，此时插件执行作用域已经关闭。
+    # 状态落盘只依赖线程安全的文件操作，因此使用独立线程，不再借用插件 bulkhead。
     async def commit() -> None:
         try:
-            await run_sync(_mark_sent_today, data_dir, business_date)
+            await asyncio.to_thread(_mark_sent_today, data_dir, business_date)
         except Exception:
-            await run_sync(_release_claim, data_dir, business_date)
+            await asyncio.to_thread(_release_claim, data_dir, business_date)
             raise
 
     async def rollback() -> None:
-        await run_sync(_release_claim, data_dir, business_date)
+        await asyncio.to_thread(_release_claim, data_dir, business_date)
 
     receipt = DeliveryReceipt(
         expected_actions=1,

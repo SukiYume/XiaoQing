@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from core.interfaces import PluginCapabilities, PluginPrincipal
+from core.plugin_execution import PluginExecutionClosed
 from tests.helpers.settings_snapshot import with_settings_reader
 
 arxiv_filter = importlib.import_module("plugins.arxiv_filter.main")
@@ -177,6 +178,32 @@ async def test_status_write_failure_does_not_commit_or_hold_claim(
     assert tracked.delivery_receipt.committed is False
     assert isinstance(tracked.delivery_receipt.callback_error, OSError)
     assert arxiv_filter._should_send_today(context.data_dir, today) is True
+    assert not Path(arxiv_filter._claim_path(context.data_dir, today)).exists()
+
+
+@pytest.mark.asyncio
+async def test_delivery_ack_commits_after_plugin_execution_scope_closes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """发送回执晚于插件 handler 返回时仍须可靠提交当天状态。"""
+
+    context = _context(tmp_path)
+    today = arxiv_filter._business_now(context).date().isoformat()
+    assert arxiv_filter._claim_send_today(context.data_dir, today) is True
+    result = arxiv_filter._filter_result("papers", succeeded=True, outcome="papers")
+    tracked = arxiv_filter._track_delivery(result, context.data_dir, today)
+
+    async def closed_run_sync(*_args, **_kwargs):
+        raise PluginExecutionClosed("plugin execution scope is no longer active")
+
+    # 生产回执到达时，插件 bulkhead 已关闭；回执提交不能再依赖 run_sync。
+    monkeypatch.setattr(arxiv_filter, "run_sync", closed_run_sync)
+    await tracked.delivery_receipt.record(True)
+
+    assert tracked.delivery_receipt.committed is True
+    assert tracked.delivery_receipt.callback_error is None
+    assert arxiv_filter._should_send_today(context.data_dir, today) is False
     assert not Path(arxiv_filter._claim_path(context.data_dir, today)).exists()
 
 
