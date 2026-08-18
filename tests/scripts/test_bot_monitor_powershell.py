@@ -141,6 +141,12 @@ $script:BotRoot = 'C:\repo with spaces'
 $script:NapCatPath = 'C:\NapCat Shell\NapCatWinBootMain.exe'
 $script:MockExitCode = 0
 $script:Disposed = $false
+function Test-Path {
+    param($LiteralPath, $PathType)
+    # 本测试隔离验证 UAC 子进程参数与退出码传播；PowerShell 宿主的真实路径
+    # 属于 Windows 运行环境门禁，在 Ubuntu CI 的 pwsh 中没有 .exe 后缀。
+    return $true
+}
 function Start-Process {
     param(
         $FilePath,
