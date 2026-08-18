@@ -28,7 +28,7 @@
 
 ### 发布验证
 
-- CI 等价发布前测试通过：`6090 passed, 2 skipped`。
+- Windows 本地发布前全量测试通过：`6090 passed, 2 skipped`。
 - Ruff formatter、Ruff lint、Mypy 367 个生产模块、compileall 和 `git diff --check` 全部通过。
 
 ### Pendo Web 日程提醒开关
