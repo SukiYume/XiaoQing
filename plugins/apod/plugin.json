@@ -1,6 +1,6 @@
 {
     "name": "apod",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "每日一天文图 (Astronomy Picture of the Day)",
     "entry": "main.py",
     "commands": [

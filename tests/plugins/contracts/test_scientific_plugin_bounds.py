@@ -167,6 +167,7 @@ async def test_apod_image_fetch_uses_only_pinned_bounded_client(
     assert path.read_bytes() == PNG_BYTES
     assert captured["timeout_seconds"] == apod.IMAGE_TIMEOUT_SECONDS
     assert captured["max_bytes"] == apod.MAX_IMAGE_BYTES
+    assert captured["allow_transparent_proxy_fake_dns"] is True
     assert "proxy" not in captured
 
 

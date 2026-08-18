@@ -84,10 +84,12 @@ async def test_failed_reload_revokes_auth_and_admin_before_blocked_callbacks(
     with patch("core.onebot.aiohttp_request_bounded", new_callable=AsyncMock) as request:
         assert await app.http_sender.request_action({"action": "get_status", "params": {}}) is None
     request.assert_not_awaited()
-    with patch("websockets.connect") as connect:
+    # 凭据门禁位于可选 WebSocket 模块加载之前；直接钉住该边界，避免测试为
+    # 验证“未连接”而触发一次与 xdist 导入顺序有关的第三方模块解析。
+    with patch("core.onebot._load_websockets_module") as load_websockets:
         with pytest.raises(RuntimeError, match="credential source is unavailable"):
             await app.ws_client._connect_once(AsyncMock())
-    connect.assert_not_called()
+    load_websockets.assert_not_called()
 
     callback_release.set()
     for _ in range(20):

@@ -173,7 +173,7 @@ python main.py
 
 ## ⚙️ 行为配置
 
-当前发行配置中的常用项如下：
+常用配置项如下：
 
 ```json
 {
@@ -245,7 +245,7 @@ python main.py
 
 `model_aliases` 为 `/xc model` 提供管理员可选名称。每条 route 按 `models` 顺序执行回退。Core AI capability 负责凭据、传输、超时、重试和 profile 切换。
 
-远程 provider 会接收当前输入以及本次功能所需的历史、记忆、人物资料、规划结果和媒体上下文。部署者按 provider 条款管理数据用途、保留与删除。运行日志记录长度、指纹、profile 和脱敏错误类别。
+远程 provider 会接收当前输入以及对应功能所需的历史、记忆、人物资料、规划结果和媒体上下文。部署者按 provider 条款管理数据用途、保留与删除。运行日志记录长度、指纹、profile 和脱敏错误类别。
 
 ---
 

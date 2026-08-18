@@ -55,7 +55,7 @@ Bot Core 提供分层帮助、插件列表、配置与插件重载、群静音�
 
 ### `pendo`：个人时间与信息管理
 
-Pendo 在私聊中统一管理日程、待办、笔记、日记、账本、提醒、搜索、设置、Web 控制台、Scriptable 小组件和数据迁移。所有业务数据按 QQ 用户隔离。
+Pendo 在私聊中统一管理日程、待办、笔记、日记、账本、提醒、搜索、设置、Web 控制台、Scriptable 小组件和数据导入导出。所有业务数据按 QQ 用户隔离。
 
 **快速入口**
 
@@ -122,6 +122,10 @@ Pendo 在私聊中统一管理日程、待办、笔记、日记、账本、提�
 
 操作快照保留 5 分钟。`ai_consent` 管理日记正文的外部 AI 分析授权。
 
+日程与待办提醒始终私聊条目所有者。提醒 claim 按 OneBot 回执完成或释放。条目写入与编辑同步维护提醒队列，调度查询使用规范的秒级 UTC 触发时刻。
+
+Web 控制台的日程详情可逐条提前确认未到期提醒，确认后可在原位置重新开启；提醒到期后操作按钮自动禁用。状态切换仅作用于当前用户、当前日程和指定提醒点。
+
 **Web 与数据**
 
 ```text
@@ -134,6 +138,8 @@ Pendo 在私聊中统一管理日程、待办、笔记、日记、账本、提�
 ```
 
 一次性登录码有效期为 7 天，兑换后的 HttpOnly 浏览器会话有效期为 7 天。Widget Bearer Token 有效期为 365 天，权限范围限定为 `/api/widget/*`。登录凭据摘要、浏览器会话、Widget 登记和全部业务表位于 `data/pendo/pendo.db`。
+
+Scriptable 主屏摘要最多展示 5 条日程；脚本顶部配置 Web 地址和 Widget Token。直接运行脚本时，独立日历接口返回成功日游标至未来 30 天的完整窗口。首次运行额外回看 30 天，后续运行补齐两次成功同步之间的日程，并采用一次接口查询、一次目标日历查询和按 Pendo 条目 ID 的仅新增写入。
 
 提醒、每日简报与日记提示每分钟检查各用户设置；待办顺延每天 00:05 执行，操作日志每天 00:15 清理，财务周报每周日 21:00 生成，财务月报在每月最后一天 21:00 生成，Demo 数据每 6 小时的第 15 分钟清理。`scheduled_delivery_outbox` 按目标记录投递确认。[Pendo README](../plugins/pendo/README.md)、[Pendo 架构](../plugins/pendo/ARCHITECTURE.md) 和 [Scriptable 指南](pendo-scriptable-widget.md) 提供完整字段与页面说明。
 
@@ -457,7 +463,7 @@ https://example.com/article
 
 标题来自 `<title>`，描述来自标准 description、Open Graph 或 Twitter Card，图片来自 `og:image` 或 `twitter:image`。页面和图片使用独立无凭据公网客户端，每次请求与重定向都重新校验 URL、DNS 和目标地址。
 
-HTML 上限为 2 MiB，图片上限为 5 MiB、2000 万像素和 120 帧，并发网页预览上限为 4。图片缓存位于 `data/url_parser/url_previews/`，上限为 128 项、128 MiB、7 天。[URL Parser README](../plugins/url_parser/README.md) 提供元数据优先级与网站兼容性。
+HTML 上限为 2 MiB，图片上限为 5 MiB、2000 万像素和 120 帧，并发网页预览上限为 4。图片缓存位于 `data/url_parser/url_previews/`，上限为 128 项、128 MiB、7 天。[URL Parser README](../plugins/url_parser/README.md) 提供元数据优先级与站点适配说明。
 
 ### `github`：GitHub Trending
 
@@ -552,7 +558,7 @@ Choice 提供有界随机抽样，支持重复项加权、有放回多选和唯�
 /选择 "今天吃什么" "ice cream" 火锅
 ```
 
-别名为 `/choice`、`/决定` 和 `/抽奖`。默认模式保留重复项权重，`-u`/`--unique` 先按文本去重，`--` 结束参数解析。候选位置范围为 2～50，插件使用系统随机源并在内存中完成本轮选择。[Choice README](../plugins/choice/README.md) 提供全部长度边界。
+别名为 `/choice`、`/决定` 和 `/抽奖`。默认模式保留重复项权重，`-u`/`--unique` 先按文本去重，`--` 结束参数解析。候选位置范围为 2～50，插件使用系统随机源并在内存中完成单次选择。[Choice README](../plugins/choice/README.md) 提供全部长度边界。
 
 ### `color`：传统色与恒星色
 

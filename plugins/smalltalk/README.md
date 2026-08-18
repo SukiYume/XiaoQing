@@ -93,7 +93,7 @@ data/smalltalk/QA_audit.json
 
 ## 🔐 并发与隐私
 
-插件 Manifest 使用 `parallel`。QA 文件写入由各文件锁串行化，远端 Chat 调用沿用 `chat` 插件的并发与额度边界。
+插件 Manifest 使用 `parallel`。QA 文件写入由各文件锁串行化，远端 Chat 调用共享 `chat` 插件的并发与额度边界。
 
 日志记录操作、长度、数量、状态和错误类别。QA 回答、闲聊正文、语音文本和 actor 标识保留在普通日志边界之外。
 

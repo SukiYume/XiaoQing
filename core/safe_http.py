@@ -42,6 +42,10 @@ REQUEST_TIMEOUT_SECONDS = 10
 _CROSS_ORIGIN_HEADER_ALLOWLIST = frozenset(
     {"accept", "accept-encoding", "accept-language", "range", "user-agent"}
 )
+_TRANSPARENT_PROXY_FAKE_DNS_NETWORKS = (
+    ipaddress.ip_network("198.18.0.0/15"),
+    ipaddress.ip_network("fdfe:dcba:9876::/48"),
+)
 
 
 class UnsafeUrlError(ValueError):
@@ -105,6 +109,16 @@ def _is_public_ip(address: str) -> bool:
         return False
 
 
+def _is_transparent_proxy_fake_ip(address: str) -> bool:
+    """识别 Clash 等透明代理默认使用的保留地址段。"""
+
+    try:
+        resolved = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return any(resolved in network for network in _TRANSPARENT_PROXY_FAKE_DNS_NETWORKS)
+
+
 def _looks_like_noncanonical_ipv4(host: str) -> bool:
     """Reject integer, octal and hexadecimal IPv4 spellings before DNS.
 
@@ -161,8 +175,16 @@ def validate_public_url(url: str) -> SplitResult:
     return parsed
 
 
-async def resolve_public_host(host: str, port: int) -> tuple[str, ...]:
-    """Resolve every A/AAAA address and reject the whole result if one is private."""
+async def resolve_public_host(
+    host: str,
+    port: int,
+    *,
+    allow_transparent_proxy_fake_dns: bool = False,
+) -> tuple[str, ...]:
+    """Resolve every address and reject private results outside an explicit fake-DNS opt-in."""
+
+    if type(allow_transparent_proxy_fake_dns) is not bool:
+        raise TypeError("allow_transparent_proxy_fake_dns must be a boolean")
 
     loop = asyncio.get_running_loop()
     try:
@@ -182,17 +204,27 @@ async def resolve_public_host(host: str, port: int) -> tuple[str, ...]:
             raise UnsafeUrlError("hostname has an invalid DNS result")
         resolved.append(address)
     addresses = tuple(dict.fromkeys(resolved))
-    if not addresses or any(not _is_public_ip(address) for address in addresses):
+    if not addresses or any(
+        not _is_public_ip(address)
+        and not (allow_transparent_proxy_fake_dns and _is_transparent_proxy_fake_ip(address))
+        for address in addresses
+    ):
         raise UnsafeUrlError("hostname has a non-public DNS result")
     return addresses
 
 
-async def validate_public_fetch_target(url: str) -> tuple[SplitResult, tuple[str, ...]]:
+async def validate_public_fetch_target(
+    url: str,
+    *,
+    allow_transparent_proxy_fake_dns: bool = False,
+) -> tuple[SplitResult, tuple[str, ...]]:
     """Validate URL and DNS records before an untrusted resource is used."""
 
     parsed = validate_public_url(url)
     addresses = await resolve_public_host(
-        parsed.hostname or "", parsed.port or DEFAULT_PORTS[parsed.scheme.lower()]
+        parsed.hostname or "",
+        parsed.port or DEFAULT_PORTS[parsed.scheme.lower()],
+        allow_transparent_proxy_fake_dns=allow_transparent_proxy_fake_dns,
     )
     return parsed, addresses
 
@@ -316,6 +348,7 @@ async def fetch_public_html(
     headers: Mapping[str, str] | None = None,
     timeout_seconds: float = REQUEST_TIMEOUT_SECONDS,
     allowed_hosts: Collection[str] | None = None,
+    allow_transparent_proxy_fake_dns: bool = False,
 ) -> SafeHttpResponse | None:
     """Fetch HTML within one deadline covering DNS and every redirect hop."""
 
@@ -326,6 +359,7 @@ async def fetch_public_html(
             headers=headers,
             timeout_seconds=timeout,
             allowed_hosts=allowed_hosts,
+            allow_transparent_proxy_fake_dns=allow_transparent_proxy_fake_dns,
         ),
         timeout=timeout,
     )
@@ -349,6 +383,7 @@ async def _fetch_public_html(
     headers: Mapping[str, str] | None = None,
     timeout_seconds: float = REQUEST_TIMEOUT_SECONDS,
     allowed_hosts: Collection[str] | None = None,
+    allow_transparent_proxy_fake_dns: bool = False,
 ) -> SafeHttpResponse | None:
     """Fetch one public HTML document with DNS pinning and checked redirects."""
 
@@ -375,6 +410,7 @@ async def _fetch_public_html(
         timeout_seconds=timeout_seconds,
         allowed_hosts=allowed_hosts,
         allowed_schemes=None,
+        allow_transparent_proxy_fake_dns=allow_transparent_proxy_fake_dns,
         read_response=read_html_response,
     )
 
@@ -387,6 +423,7 @@ async def _fetch_with_pinned_redirects(
     timeout_seconds: float,
     allowed_hosts: Collection[str] | None,
     allowed_schemes: Collection[str] | None,
+    allow_transparent_proxy_fake_dns: bool,
     read_response: _ResponseReader,
 ) -> SafeHttpResponse | None:
     """Run the shared validate-pin-request-redirect lifecycle for one fetch.
@@ -410,11 +447,33 @@ async def _fetch_with_pinned_redirects(
     normalized_schemes = (
         {scheme.casefold() for scheme in allowed_schemes} if allowed_schemes is not None else None
     )
+    if type(allow_transparent_proxy_fake_dns) is not bool:
+        raise TypeError("allow_transparent_proxy_fake_dns must be a boolean")
+    if allow_transparent_proxy_fake_dns and normalized_hosts is None:
+        raise ValueError("transparent proxy fake DNS requires an explicit host allowlist")
+    fake_dns_hostname: str | None = None
+    if allow_transparent_proxy_fake_dns:
+        initial_target = validate_public_url(url)
+        if initial_target.scheme.casefold() != "https":
+            raise UnsafeUrlError("transparent proxy fake DNS requires HTTPS")
+        fake_dns_hostname = (initial_target.hostname or "").rstrip(".").casefold()
 
     for _ in range(MAX_REDIRECTS + 1):
         # 不能复用上一跳的解析结果：每个重定向目标都必须重新解析并固定地址，
         # 否则攻击者可借下一跳或 DNS 重绑定绕过首次校验。
-        parsed, addresses = await validate_public_fetch_target(current_url)
+        current_hostname = None
+        if fake_dns_hostname is not None:
+            current_target = validate_public_url(current_url)
+            if current_target.scheme.casefold() != "https":
+                raise UnsafeUrlError("transparent proxy fake DNS requires HTTPS")
+            current_hostname = (current_target.hostname or "").rstrip(".").casefold()
+        if current_hostname == fake_dns_hostname and fake_dns_hostname is not None:
+            parsed, addresses = await validate_public_fetch_target(
+                current_url,
+                allow_transparent_proxy_fake_dns=True,
+            )
+        else:
+            parsed, addresses = await validate_public_fetch_target(current_url)
         if normalized_schemes is not None and parsed.scheme.casefold() not in normalized_schemes:
             raise UnsafeUrlError("URL scheme is not allowed")
         host = (parsed.hostname or "").rstrip(".").casefold()
@@ -502,6 +561,7 @@ async def fetch_public_bytes(
     allowed_content_types: Collection[str] | None = None,
     allowed_hosts: Collection[str] | None = None,
     allowed_schemes: Collection[str] | None = None,
+    allow_transparent_proxy_fake_dns: bool = False,
 ) -> SafeHttpResponse | None:
     """Fetch bytes within one deadline covering DNS and every redirect hop."""
 
@@ -516,6 +576,7 @@ async def fetch_public_bytes(
             allowed_content_types=allowed_content_types,
             allowed_hosts=allowed_hosts,
             allowed_schemes=allowed_schemes,
+            allow_transparent_proxy_fake_dns=allow_transparent_proxy_fake_dns,
         ),
         timeout=timeout,
     )
@@ -531,6 +592,7 @@ async def _fetch_public_bytes(
     allowed_content_types: Collection[str] | None = None,
     allowed_hosts: Collection[str] | None = None,
     allowed_schemes: Collection[str] | None = None,
+    allow_transparent_proxy_fake_dns: bool = False,
 ) -> SafeHttpResponse | None:
     """Fetch bounded bytes from a public URL with DNS pinning on every hop."""
     if max_bytes <= 0:
@@ -569,5 +631,6 @@ async def _fetch_public_bytes(
         timeout_seconds=timeout_seconds,
         allowed_hosts=allowed_hosts,
         allowed_schemes=allowed_schemes,
+        allow_transparent_proxy_fake_dns=allow_transparent_proxy_fake_dns,
         read_response=read_binary_response,
     )

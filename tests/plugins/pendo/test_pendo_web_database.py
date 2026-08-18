@@ -529,7 +529,9 @@ def test_schema_add_column_migration_only_suppresses_its_exact_duplicate():
         conn.close()
 
 
-def test_schema_add_column_migrations_are_versioned_and_idempotent():
+def test_schema_migrations_are_versioned_and_idempotent():
+    from plugins.pendo.services import db_schema
+
     temp_dir, db = _make_temp_db("pendo_review_schema_migrations")
     try:
         rows_before = (
@@ -538,9 +540,12 @@ def test_schema_add_column_migrations_are_versioned_and_idempotent():
             .fetchall()
         )
         assert rows_before
-        assert [row["version"] for row in rows_before] == list(range(1, len(rows_before) + 1))
-        assert all(row["name"].startswith("add-column-") for row in rows_before)
-        assert all("ADD COLUMN" in row["sql"] for row in rows_before)
+        add_column_count = len(db_schema._ADD_COLUMN_MIGRATIONS)
+        add_column_rows = rows_before[:add_column_count]
+        assert [row["version"] for row in add_column_rows] == list(range(1, add_column_count + 1))
+        assert all(row["name"].startswith("add-column-") for row in add_column_rows)
+        assert all("ADD COLUMN" in row["sql"] for row in add_column_rows)
+        assert len(rows_before) == add_column_count
 
         db._init_database()
         rows_after = (
@@ -552,6 +557,48 @@ def test_schema_add_column_migrations_are_versioned_and_idempotent():
     finally:
         db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_database_reinitialization_does_not_rewrite_reminder_data():
+    temp_dir, db = _make_temp_db("pendo_schema_keeps_reminder_data")
+    try:
+        conn = db.get_connection()
+        conn.execute(
+            """
+            INSERT INTO reminder_logs
+                (item_id, remind_time, sent_at, state, repeat_count, failure_count)
+            VALUES ('manual-row', '2030-01-01T00:00:00+00:00',
+                    '2030-01-01T00:00:01+00:00', 'pending', 1, 0)
+            """
+        )
+        conn.commit()
+
+        db._init_database()
+
+        row = conn.execute(
+            "SELECT state, sent_at FROM reminder_logs WHERE item_id = 'manual-row'"
+        ).fetchone()
+        assert tuple(row) == ("pending", "2030-01-01T00:00:01+00:00")
+    finally:
+        db.cleanup()
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_event_range_query_clamps_its_sql_prefilter_at_datetime_limits(tmp_path: Path):
+    from plugins.pendo.services.db import Database
+
+    db = Database(str(tmp_path / "pendo-range-limits.db"))
+    try:
+        assert (
+            db.get_events_for_range("u-range-limits", "0001-01-01T00:00:00", "0001-01-02T00:00:00")
+            == []
+        )
+        assert (
+            db.get_events_for_range("u-range-limits", "9999-12-30T00:00:00", "9999-12-31T23:59:59")
+            == []
+        )
+    finally:
+        db.cleanup()
 
 
 def test_database_initialization_helpers_share_one_rollback_boundary(

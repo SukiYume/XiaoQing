@@ -64,7 +64,7 @@ def _operation_rows(db: Database, owner_id: str, action: str) -> list[dict[str, 
 
 
 def test_event_router_registers_only_the_expected_collection_and_detail_paths() -> None:
-    """路由模块应保持七个职责明确的日程入口。"""
+    """路由模块应保持职责明确的日程入口。"""
 
     registered = {
         (route.path, frozenset(getattr(route, "methods", set())))
@@ -79,7 +79,114 @@ def test_event_router_registers_only_the_expected_collection_and_detail_paths() 
         ("/events/collections/{collection_id}", frozenset({"PUT"})),
         ("/events/collections/{collection_id}", frozenset({"DELETE"})),
         ("/events/{event_id}/detail", frozenset({"GET"})),
+        ("/events/{event_id}/reminders/confirmation", frozenset({"PUT"})),
     }
+
+
+def test_event_reminder_confirmation_route_toggles_only_owned_future_reminder(
+    db: Database,
+) -> None:
+    """Web 只能提前确认并重新开启当前用户日程中的指定未来提醒。"""
+
+    owner_id = "owner-web-reminder-toggle"
+    event_id = "future-web-reminder"
+    remind_time = "2099-01-01T08:00:00+00:00"
+    db.insert_item(
+        {
+            "id": event_id,
+            "owner_id": owner_id,
+            "type": "event",
+            "title": "未来提醒",
+            "start_time": "2099-01-01T09:00:00+00:00",
+            "remind_times": [remind_time],
+        }
+    )
+
+    confirmed = events_api.set_event_reminder_confirmation(
+        event_id,
+        body=events_api.EventReminderConfirmationUpdate(
+            remind_time=remind_time,
+            confirmed=True,
+        ),
+        owner_id=owner_id,
+        db=db,
+    )
+    assert confirmed["message"] == "提醒已提前确认"
+    assert cast(dict[str, Any], confirmed["data"])["reminder"]["status"] == "confirmed"
+
+    reopened = events_api.set_event_reminder_confirmation(
+        event_id,
+        body=events_api.EventReminderConfirmationUpdate(
+            remind_time=remind_time,
+            confirmed=False,
+        ),
+        owner_id=owner_id,
+        db=db,
+    )
+    assert reopened["message"] == "提醒已重新开启"
+    reminder = cast(dict[str, Any], reopened["data"])["reminder"]
+    assert reminder["status"] == "pending"
+    assert reminder["confirmed_at"] is None
+
+    for request_owner, request_time in (
+        ("another-owner", remind_time),
+        (owner_id, "2099-01-01T07:00:00+00:00"),
+    ):
+        with pytest.raises(HTTPException) as missing:
+            events_api.set_event_reminder_confirmation(
+                event_id,
+                body=events_api.EventReminderConfirmationUpdate(
+                    remind_time=request_time,
+                    confirmed=True,
+                ),
+                owner_id=request_owner,
+                db=db,
+            )
+        assert missing.value.status_code == 404
+
+
+def test_event_reminder_confirmation_route_rejects_expired_or_invalid_time(
+    db: Database,
+) -> None:
+    """到期提醒和非规范时间不能通过 Web 改写确认状态。"""
+
+    owner_id = "owner-expired-web-reminder"
+    event_id = "expired-web-reminder"
+    remind_time = "2000-01-01T08:00:00+00:00"
+    db.insert_item(
+        {
+            "id": event_id,
+            "owner_id": owner_id,
+            "type": "event",
+            "title": "已到期提醒",
+            "start_time": "2000-01-01T09:00:00+00:00",
+            "remind_times": [remind_time],
+        }
+    )
+
+    with pytest.raises(HTTPException) as expired:
+        events_api.set_event_reminder_confirmation(
+            event_id,
+            body=events_api.EventReminderConfirmationUpdate(
+                remind_time=remind_time,
+                confirmed=True,
+            ),
+            owner_id=owner_id,
+            db=db,
+        )
+    assert expired.value.status_code == 409
+
+    with pytest.raises(HTTPException) as invalid:
+        events_api.set_event_reminder_confirmation(
+            event_id,
+            body=events_api.EventReminderConfirmationUpdate(
+                remind_time="2000-01-01T08:00:00",
+                confirmed=True,
+            ),
+            owner_id=owner_id,
+            db=db,
+        )
+    assert invalid.value.status_code == 422
 
 
 def test_collection_create_models_do_not_share_mutable_tag_defaults() -> None:
