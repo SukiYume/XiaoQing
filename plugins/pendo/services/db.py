@@ -11,7 +11,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, ClassVar, cast
 from zoneinfo import ZoneInfo
 
@@ -2907,8 +2907,14 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         # ISO 文本可能混合无偏移和带偏移值，字典序不等于绝对时间。
         # 全球合法偏移最多可相差 26 小时，因此 SQL 用前后各两天的日期前缀
         # 缩小候选集；最终重叠判定仍在 Python 完成。
-        lower_date = (range_start - timedelta(days=2)).date().isoformat()
-        upper_date = (range_end + timedelta(days=2)).date().isoformat()
+        start_day = range_start.date()
+        end_day = range_end.date()
+        minimum_expanded_day = date.min + timedelta(days=2)
+        maximum_expanded_day = date.max - timedelta(days=2)
+        lower_day = date.min if start_day < minimum_expanded_day else start_day - timedelta(days=2)
+        upper_day = date.max if end_day > maximum_expanded_day else end_day + timedelta(days=2)
+        lower_date = lower_day.isoformat()
+        upper_date = upper_day.isoformat()
         conn = self.get_connection()
         rows = conn.execute(
             f"""

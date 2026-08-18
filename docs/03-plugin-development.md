@@ -197,7 +197,7 @@ Core 在导入插件前检查 `dependencies` 中的模块可用性。部署环�
 | `triggers` | string[] | 必填 | 非空且唯一的顶层触发词；匹配区分大小写 |
 | `help` | string | 必填 | 功能摘要 |
 | `usage` | string | `/<首个 trigger>` | 完整用法 |
-| `admin_only` | boolean | `false` | 顶层 Bot 管理员兼容开关；`true` 归一化为 `bot_admin` |
+| `admin_only` | boolean | `false` | 顶层 Bot 管理员快捷声明；`true` 归一化为 `bot_admin` |
 | `permission` | `public` / `bot_admin` / `group_admin` | `public` | 权限级别 |
 | `contexts` | `private` / `group` 数组 | 两者 | 使用场景 |
 | `priority` | integer | `0` | 顶层路由优先级，数值较大者先匹配 |
@@ -519,7 +519,7 @@ plain = segments("完成")
 - 字符串
 - OneBot 消息段列表
 - Action 列表
-- `None`，表示本轮空回复
+- `None`，表示该调用不返回消息
 
 长文本使用 `split_message_segments()` 按消息段边界拆分。出站文件与远程媒体遵循 Core 的类型、大小、路径和网络预算。
 

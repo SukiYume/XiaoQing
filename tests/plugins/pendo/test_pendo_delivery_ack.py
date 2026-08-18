@@ -48,6 +48,52 @@ async def test_claimed_reminder_distinguishes_rejection_from_unknown_outcome(
 
 
 @pytest.mark.asyncio
+async def test_reminder_delivery_always_targets_owner_private_chat(monkeypatch) -> None:
+    """提醒来源即使带群上下文，投递目标也固定为条目所有者私聊。"""
+
+    class ReminderService:
+        def check_and_send_reminders(self, context=None):
+            return {
+                "messages": [
+                    {
+                        "user_id": "1001",
+                        "message": "private due",
+                        "item_id": "evt-private",
+                        "remind_time": "2030-01-01T00:00:00+00:00",
+                        "claim_token": "lease-private",
+                    }
+                ]
+            }
+
+    completed: list[tuple] = []
+    sent_actions: list[dict] = []
+    db = SimpleNamespace(
+        complete_reminder_claim=lambda *args: completed.append(args) or True,
+    )
+
+    async def send_action(action):
+        sent_actions.append(action)
+        return True
+
+    context = SimpleNamespace(
+        event={"message_type": "group", "group_id": 2002, "user_id": 1001},
+        send_action=send_action,
+    )
+    monkeypatch.setattr(scheduled, "get_database", lambda _context: db)
+    monkeypatch.setattr(scheduled, "_reminder_service_singleton", ReminderService())
+
+    assert await scheduled.check_reminders(context) == []
+    assert len(sent_actions) == 1
+    assert sent_actions[0]["action"] == "send_private_msg"
+    assert sent_actions[0]["params"] == {
+        "user_id": 1001,
+        "message": [{"type": "text", "data": {"text": "private due"}}],
+    }
+    assert "group_id" not in sent_actions[0]["params"]
+    assert completed == [("evt-private", "2030-01-01T00:00:00+00:00", "lease-private")]
+
+
+@pytest.mark.asyncio
 async def test_daily_marker_is_written_only_after_confirmed_delivery(monkeypatch) -> None:
     class FixedDateTime(datetime):
         @classmethod

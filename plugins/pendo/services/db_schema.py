@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
-from ..config import PendoConfig
 from ..models.item import ItemType
 from ..utils.time_utils import TimezoneHelper, utc_now_iso
 
@@ -99,6 +98,7 @@ _ADD_COLUMN_MIGRATIONS = (
     "ALTER TABLE operation_logs ADD COLUMN undo_log_id INTEGER",
     "ALTER TABLE reminder_logs ADD COLUMN fire_at_utc TEXT",
 )
+
 _ITEM_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_owner_type ON items(owner_id, type, deleted)",
     f"CREATE INDEX IF NOT EXISTS idx_start_time ON items(start_time) WHERE type='{ItemType.EVENT.value}'",
@@ -333,80 +333,13 @@ def reminder_fire_at_utc(remind_time: str, timezone_name: str) -> str | None:
         user_timezone = ZoneInfo(timezone_name)
         parsed = cast(datetime, TimezoneHelper.parse(remind_time, user_timezone))
     except (KeyError, TypeError, ValueError):
-        logger.warning("Invalid reminder schedule while materializing queue")
+        logger.warning("Invalid reminder schedule")
         return None
     return parsed.astimezone(timezone.utc).isoformat()
 
 
-def _materialize_existing_reminder_schedules(cursor: sqlite3.Cursor) -> None:
-    """启动时为旧库当前仍有效的提醒补齐待处理队列行。"""
-
-    rows = cursor.execute(
-        """
-        SELECT i.id AS item_id, CAST(reminder.value AS TEXT) AS remind_time,
-               COALESCE(NULLIF(us.timezone, ''), ?) AS timezone_name
-        FROM items AS i
-        LEFT JOIN user_settings AS us ON us.user_id = i.owner_id
-        JOIN json_each(
-          CASE WHEN json_valid(i.remind_times) THEN i.remind_times ELSE '[]' END
-        ) AS reminder
-        WHERE i.deleted = 0 AND i.type IN ('event', 'task')
-          AND (i.type != 'task' OR COALESCE(i.status, 'open') = 'open')
-          AND reminder.type = 'text' AND TRIM(CAST(reminder.value AS TEXT)) != ''
-        """,
-        (PendoConfig.DEFAULT_TIMEZONE,),
-    ).fetchall()
-    for row in rows:
-        remind_time = str(row["remind_time"])
-        fire_at_utc = reminder_fire_at_utc(remind_time, str(row["timezone_name"]))
-        if fire_at_utc is None:
-            continue
-        cursor.execute(
-            """
-            INSERT INTO reminder_logs
-                (item_id, remind_time, fire_at_utc, state, repeat_count, failure_count)
-            VALUES (?, ?, ?, 'pending', 0, 0)
-            ON CONFLICT(item_id, remind_time) DO UPDATE SET
-                fire_at_utc = excluded.fire_at_utc
-            WHERE reminder_logs.sent_at IS NULL AND reminder_logs.confirmed_at IS NULL
-            """,
-            (str(row["item_id"]), remind_time, fire_at_utc),
-        )
-
-
-def _migrate_reminder_logs(cursor: sqlite3.Cursor) -> None:
-    """合并历史重复提醒记录，并补齐领取状态。"""
-
-    cursor.execute("""
-        SELECT item_id, remind_time, COUNT(*) as cnt
-        FROM reminder_logs GROUP BY item_id, remind_time HAVING cnt > 1
-    """)
-    if cursor.fetchone() is not None:
-        cursor.execute("""
-            CREATE TEMP TABLE _rl_merged AS
-            SELECT
-                MIN(id) AS id,
-                item_id,
-                remind_time,
-                MIN(sent_at) AS sent_at,
-                MAX(confirmed_at) AS confirmed_at,
-                COALESCE(
-                    MAX(CASE WHEN confirmed_at IS NOT NULL THEN user_action END),
-                    MAX(user_action)
-                ) AS user_action,
-                COUNT(CASE WHEN sent_at IS NOT NULL THEN 1 END) AS repeat_count,
-                MAX(sent_at) AS last_sent_at
-            FROM reminder_logs
-            GROUP BY item_id, remind_time
-        """)
-        cursor.execute("DELETE FROM reminder_logs")
-        cursor.execute("""
-            INSERT INTO reminder_logs
-                (id, item_id, remind_time, sent_at, confirmed_at, user_action, repeat_count, last_sent_at)
-            SELECT id, item_id, remind_time, sent_at, confirmed_at, user_action, repeat_count, last_sent_at
-            FROM _rl_merged
-        """)
-        cursor.execute("DROP TABLE _rl_merged")
+def _create_reminder_indexes(cursor: sqlite3.Cursor) -> None:
+    """创建提醒领取、到期查询和保留清理所需的索引。"""
 
     cursor.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_reminder_logs_unique
@@ -416,13 +349,6 @@ def _migrate_reminder_logs(cursor: sqlite3.Cursor) -> None:
         "CREATE INDEX IF NOT EXISTS idx_reminder_logs_claim "
         "ON reminder_logs(state, claim_expires_at, next_attempt_at)"
     )
-    cursor.execute(
-        "UPDATE reminder_logs SET state = CASE "
-        "WHEN confirmed_at IS NOT NULL THEN 'confirmed' "
-        "WHEN sent_at IS NOT NULL THEN 'sent' ELSE 'pending' END "
-        "WHERE state IS NULL OR state = 'pending'"
-    )
-    _materialize_existing_reminder_schedules(cursor)
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_reminder_logs_pending_fire "
         "ON reminder_logs(fire_at_utc) "
@@ -593,6 +519,6 @@ def initialize_schema(cursor: sqlite3.Cursor) -> None:
     _create_audit_indexes(cursor)
     _create_event_schema(cursor)
     _create_search_schema(cursor)
-    _migrate_reminder_logs(cursor)
+    _create_reminder_indexes(cursor)
     _create_scheduled_delivery_schema(cursor)
     _create_web_auth_schema(cursor)

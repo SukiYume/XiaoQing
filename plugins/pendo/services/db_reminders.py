@@ -447,6 +447,125 @@ class ReminderRepositoryMixin:
 
         return {"status": "success", "message": f"已记录: {user_action}"}
 
+    def set_future_reminder_confirmation(
+        self,
+        item_id: str,
+        remind_time: str,
+        owner_id: str,
+        *,
+        confirmed: bool,
+        now: datetime | None = None,
+    ) -> dict[str, Any] | None:
+        """提前确认或重新开启一条仍未到期的日程提醒。
+
+        返回 ``None`` 表示当前用户没有这条日程提醒；``outcome=expired``
+        表示提醒已经到期。检查与写入共用即时事务，避免提醒调度器在状态切换
+        过程中同时领取同一行。
+        """
+
+        require_canonical_utc_timestamp(remind_time, "remind_time")
+        normalized_owner = str(owner_id).strip()
+        if not normalized_owner:
+            raise ValueError("owner_id is required")
+
+        with self.transaction(immediate=True) as conn:
+            item_row = conn.execute(
+                """
+                SELECT remind_times
+                FROM items
+                WHERE id = ? AND owner_id = ? AND type = 'event' AND deleted = 0
+                """,
+                (item_id, normalized_owner),
+            ).fetchone()
+            if item_row is None:
+                return None
+
+            try:
+                raw_times: object = json.loads(str(item_row["remind_times"] or "[]"))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                return None
+            if not isinstance(raw_times, list) or remind_time not in {
+                value for value in raw_times if isinstance(value, str)
+            }:
+                return None
+
+            current = self._as_utc(
+                now or datetime.now(timezone.utc),
+                "future reminder confirmation time",
+            )
+            target = datetime.fromisoformat(remind_time).astimezone(timezone.utc)
+            if target <= current:
+                return {"outcome": "expired", "time": remind_time}
+
+            now_text = current.isoformat(timespec="seconds")
+            # 正常写入流程已经物化提醒行；补充 INSERT 让旧库或异常恢复后的
+            # 合法日程也能通过同一状态机处理，无需启动时扫描业务数据。
+            conn.execute(
+                """
+                INSERT INTO reminder_logs
+                    (item_id, remind_time, fire_at_utc, state, repeat_count, failure_count)
+                VALUES (?, ?, ?, 'pending', 0, 0)
+                ON CONFLICT(item_id, remind_time) DO UPDATE SET
+                    fire_at_utc = COALESCE(reminder_logs.fire_at_utc, excluded.fire_at_utc)
+                """,
+                (item_id, remind_time, remind_time),
+            )
+
+            if confirmed:
+                conn.execute(
+                    """
+                    UPDATE reminder_logs
+                    SET confirmed_at = COALESCE(confirmed_at, ?),
+                        user_action = CASE
+                            WHEN confirmed_at IS NULL THEN 'preconfirmed'
+                            ELSE user_action
+                        END,
+                        state = 'confirmed', claim_token = NULL,
+                        claim_expires_at = NULL, next_attempt_at = NULL
+                    WHERE item_id = ? AND remind_time = ?
+                    """,
+                    (now_text, item_id, remind_time),
+                )
+            else:
+                # 未来提醒尚未发生，重新开启时恢复为一条全新的待发送行。
+                conn.execute(
+                    """
+                    UPDATE reminder_logs
+                    SET sent_at = NULL, confirmed_at = NULL, user_action = NULL,
+                        repeat_count = 0, last_sent_at = NULL, state = 'pending',
+                        claim_token = NULL, claim_expires_at = NULL,
+                        next_attempt_at = NULL, failure_count = 0
+                    WHERE item_id = ? AND remind_time = ?
+                    """,
+                    (item_id, remind_time),
+                )
+
+            updated = conn.execute(
+                """
+                SELECT remind_time, sent_at, confirmed_at, repeat_count
+                FROM reminder_logs
+                WHERE item_id = ? AND remind_time = ?
+                """,
+                (item_id, remind_time),
+            ).fetchone()
+
+        if updated is None:
+            return None
+        return {
+            "outcome": "updated",
+            "time": str(updated["remind_time"]),
+            "status": (
+                "confirmed"
+                if updated["confirmed_at"]
+                else "sent"
+                if updated["sent_at"]
+                else "pending"
+            ),
+            "sent_at": updated["sent_at"],
+            "confirmed_at": updated["confirmed_at"],
+            "repeat_count": int(updated["repeat_count"] or 0),
+        }
+
     def _insert_confirm_for_unsent(
         self,
         cursor: sqlite3.Cursor,

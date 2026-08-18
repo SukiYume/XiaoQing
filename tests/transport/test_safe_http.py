@@ -102,6 +102,37 @@ async def test_rejects_dns_result_when_any_address_is_not_public(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_transparent_proxy_fake_dns_requires_explicit_opt_in(monkeypatch):
+    fake_addresses = ["198.18.0.68", "fdfe:dcba:9876::30"]
+    monkeypatch.setattr(
+        safe_http.asyncio,
+        "get_running_loop",
+        lambda: _FakeLoop(fake_addresses),
+    )
+
+    with pytest.raises(safe_http.UnsafeUrlError, match="non-public DNS"):
+        await safe_http.resolve_public_host("apod.nasa.gov", 443)
+
+    assert await safe_http.resolve_public_host(
+        "apod.nasa.gov",
+        443,
+        allow_transparent_proxy_fake_dns=True,
+    ) == tuple(fake_addresses)
+
+    monkeypatch.setattr(
+        safe_http.asyncio,
+        "get_running_loop",
+        lambda: _FakeLoop(["198.18.0.68", "127.0.0.1"]),
+    )
+    with pytest.raises(safe_http.UnsafeUrlError, match="non-public DNS"):
+        await safe_http.resolve_public_host(
+            "apod.nasa.gov",
+            443,
+            allow_transparent_proxy_fake_dns=True,
+        )
+
+
+@pytest.mark.asyncio
 async def test_pinned_resolver_only_returns_prevalidated_addresses():
     resolver = safe_http._PinnedResolver("example.com", ("8.8.8.8", "2001:4860:4860::8888"))
     records = await resolver.resolve("example.com", 443)
@@ -132,6 +163,92 @@ async def test_each_redirect_target_is_validated_before_a_connection(monkeypatch
     with pytest.raises(safe_http.UnsafeUrlError, match="non-public redirect"):
         await safe_http.fetch_public_html("https://example.com/redirect")
     assert requested_urls == ["https://example.com/redirect"]
+
+
+@pytest.mark.asyncio
+async def test_fake_dns_opt_in_does_not_follow_cross_host_redirect(monkeypatch):
+    responses = [
+        _Response(302, headers={"Location": "https://cdn.nasa.gov/apod.html"}),
+        _Response(200, chunks=[b"<html/>\n"]),
+    ]
+    requested_urls: list[str] = []
+    fake_dns_flags: list[bool] = []
+
+    async def validate(url, *, allow_transparent_proxy_fake_dns=False):
+        fake_dns_flags.append(allow_transparent_proxy_fake_dns)
+        return urlsplit(url), ("198.18.0.68" if allow_transparent_proxy_fake_dns else "8.8.8.8",)
+
+    monkeypatch.setattr(safe_http, "validate_public_fetch_target", validate)
+    monkeypatch.setattr(
+        safe_http.aiohttp,
+        "ClientSession",
+        lambda **kwargs: _Session(responses, requested_urls, **kwargs),
+    )
+
+    response = await safe_http.fetch_public_html(
+        "https://apod.nasa.gov/apod/astropix.html",
+        allowed_hosts={"apod.nasa.gov", "cdn.nasa.gov"},
+        allow_transparent_proxy_fake_dns=True,
+    )
+
+    assert response is not None
+    assert fake_dns_flags == [True, False]
+    assert requested_urls == [
+        "https://apod.nasa.gov/apod/astropix.html",
+        "https://cdn.nasa.gov/apod.html",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fake_dns_opt_in_rejects_same_host_https_downgrade(monkeypatch):
+    responses = [_Response(302, headers={"Location": "http://apod.nasa.gov/plain"})]
+    requested_urls: list[str] = []
+
+    async def validate(url, *, allow_transparent_proxy_fake_dns=False):
+        assert allow_transparent_proxy_fake_dns is True
+        return urlsplit(url), ("198.18.0.68",)
+
+    monkeypatch.setattr(safe_http, "validate_public_fetch_target", validate)
+    monkeypatch.setattr(
+        safe_http.aiohttp,
+        "ClientSession",
+        lambda **kwargs: _Session(responses, requested_urls, **kwargs),
+    )
+
+    with pytest.raises(safe_http.UnsafeUrlError, match="requires HTTPS"):
+        await safe_http.fetch_public_html(
+            "https://apod.nasa.gov/apod/astropix.html",
+            allowed_hosts={"apod.nasa.gov"},
+            allow_transparent_proxy_fake_dns=True,
+        )
+    assert requested_urls == ["https://apod.nasa.gov/apod/astropix.html"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fetcher",
+    [safe_http.fetch_public_html, safe_http.fetch_public_bytes],
+)
+async def test_fake_dns_opt_in_requires_an_explicit_host_allowlist(fetcher):
+    with pytest.raises(ValueError, match="explicit host allowlist"):
+        await fetcher(
+            "https://apod.nasa.gov/apod/astropix.html",
+            allow_transparent_proxy_fake_dns=True,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fetcher",
+    [safe_http.fetch_public_html, safe_http.fetch_public_bytes],
+)
+async def test_fake_dns_opt_in_requires_https(fetcher):
+    with pytest.raises(safe_http.UnsafeUrlError, match="requires HTTPS"):
+        await fetcher(
+            "http://apod.nasa.gov/apod/astropix.html",
+            allowed_hosts={"apod.nasa.gov"},
+            allow_transparent_proxy_fake_dns=True,
+        )
 
 
 @pytest.mark.asyncio

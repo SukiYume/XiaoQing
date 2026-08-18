@@ -87,7 +87,7 @@ Dispatcher 从事件构建 `MessageContext`。关键字段：
 | `is_at_me` | @Bot 标记 |
 | `is_reply_to_bot` | 引用 Bot 消息标记 |
 | `principal` | 用户、群角色和管理员能力 |
-| `request_id` | 本轮追踪 ID |
+| `request_id` | 请求追踪 ID |
 
 Bot 名称和命令前缀按配置顺序处理。例如：
 

@@ -93,6 +93,52 @@ function normalizedReminderStatus(value) {
     return REMINDER_STATUSES.has(value) ? value : 'pending';
 }
 
+function canToggleReminder(value, nowMs = Date.now()) {
+    const remindAt = parseDate(value)?.getTime();
+    return Number.isFinite(remindAt) && remindAt > nowMs;
+}
+
+function watchReminderExpiry(content) {
+    let timerId = null;
+    const refresh = () => {
+        timerId = null;
+        const nowMs = Date.now();
+        let nearestFuture = Number.POSITIVE_INFINITY;
+        const buttons = content?.querySelectorAll?.('[data-toggle-reminder]') ?? [];
+        for (const button of buttons) {
+            const remindAt = parseDate(button.dataset.reminderTime)?.getTime();
+            if (!Number.isFinite(remindAt) || remindAt <= nowMs) {
+                button.disabled = true;
+                continue;
+            }
+            nearestFuture = Math.min(nearestFuture, remindAt);
+        }
+        if (Number.isFinite(nearestFuture)) {
+            const delay = Math.min(Math.max(nearestFuture - nowMs + 50, 50), 2_147_000_000);
+            timerId = setTimeout(refresh, delay);
+        }
+    };
+
+    refresh();
+    return () => {
+        if (timerId !== null) clearTimeout(timerId);
+    };
+}
+
+function reminderStatusLabel(status) {
+    if (status === 'confirmed') return '已确认';
+    if (status === 'sent') return '已发送';
+    return '待发送';
+}
+
+function reminderMetaLabel(status, repeatCount, wasSent = false) {
+    if (status === 'confirmed') {
+        return wasSent ? '已发送并确认' : '已提前确认，本次不会发送';
+    }
+    if (status === 'sent') return repeatCount ? `已重复 ${repeatCount} 次` : '已发送，等待确认';
+    return '等待发送';
+}
+
 function hasInvalidDatePrefix(value) {
     const text = typeof value === 'string' ? value.trim() : '';
     return /^\d{4}-\d{2}-\d{2}/.test(text) && !isValidDateInput(text.slice(0, 10));
@@ -398,6 +444,11 @@ function ensureStyles() {
         .events-detail-row-title { font-weight: 700; color: var(--color-text); }
         .events-detail-row-meta { margin-top: 4px; font-size: 12px; color: var(--color-text-secondary); }
         .events-detail-empty { font-size: 13px; color: var(--color-text-secondary); }
+        .events-detail-reminder-actions {
+            display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap;
+        }
+        .events-reminder-toggle { min-width: 76px; }
+        .events-reminder-toggle:disabled { opacity: 0.42; cursor: not-allowed; box-shadow: none; }
         .events-status {
             padding: 5px 8px; border-radius: 999px; font-size: 11px; font-weight: 800;
             background: rgba(148,163,184,0.08); color: var(--color-text-secondary);
@@ -450,6 +501,7 @@ function ensureStyles() {
         .events-calendar-head:focus-visible,
         .events-calendar-chip:focus-visible,
         .events-timeline-card:focus-visible,
+        .events-reminder-toggle:focus-visible,
         .events-editor-mode button:focus-visible,
         .events-editor-row button:focus-visible,
         .events-editor-add:focus-visible {
@@ -500,6 +552,8 @@ function ensureStyles() {
             .events-timeline-item { grid-template-columns: 52px 14px minmax(0, 1fr); gap: 8px; }
             .events-timeline-time { padding-top: 8px; font-size: 11px; }
             .events-timeline-card { padding: 9px 10px; }
+            .events-detail-row { align-items: flex-start; }
+            .events-detail-reminder-actions { flex: 0 0 auto; }
         `,
         )}
         ${mediaMax(
@@ -1422,15 +1476,25 @@ function renderDetailBody(detail) {
                             .map((row) => {
                                 const status = normalizedReminderStatus(row.status);
                                 const repeatCount = finiteCount(row.repeat_count);
-                                const statusLabel =
-                                    status === 'confirmed' ? '已确认' : status === 'sent' ? '已发送' : '待发送';
+                                const canToggle = canToggleReminder(row.time);
+                                const isConfirmed = status === 'confirmed';
                                 return `
                             <div class="events-detail-row">
                                 <div>
                                     <div class="events-detail-row-title">${escapeHtml(formatEventDateTime(row.time))}</div>
-                                    <div class="events-detail-row-meta">${repeatCount ? `已重复 ${repeatCount} 次` : '等待发送或确认'}</div>
+                                    <div class="events-detail-row-meta" data-reminder-meta>${escapeHtml(reminderMetaLabel(status, repeatCount, Boolean(row.sent_at)))}</div>
                                 </div>
-                                <span class="events-status ${status}">${statusLabel}</span>
+                                <div class="events-detail-reminder-actions">
+                                    <button
+                                        type="button"
+                                        class="btn btn-secondary btn-sm events-reminder-toggle"
+                                        data-toggle-reminder
+                                        data-reminder-time="${escapeHtml(row.time)}"
+                                        data-reminder-confirmed="${isConfirmed ? 'true' : 'false'}"
+                                        ${canToggle ? '' : 'disabled'}
+                                    >${isConfirmed ? '重新开启' : '提前确认'}</button>
+                                    <span class="events-status ${status}" data-reminder-status>${reminderStatusLabel(status)}</span>
+                                </div>
                             </div>
                         `;
                             })
@@ -1488,6 +1552,7 @@ export async function openEventDetail(eventId) {
         const actionNoun = detailActionNoun(event);
         const canMutate = Boolean(String(event.id ?? ''));
         const hasCollection = Boolean(String(event.collection?.id ?? ''));
+        let stopReminderExpiryWatcher = () => {};
         const content = showModal('日程详情', safeHtml(renderDetailBody(detail)), {
             footer: safeHtml(`
                 <button type="button" class="btn btn-secondary" id="events-detail-close">关闭</button>
@@ -1495,7 +1560,9 @@ export async function openEventDetail(eventId) {
                 <button type="button" class="btn btn-primary" id="events-detail-edit" ${canMutate ? '' : 'disabled'}>编辑${actionNoun}</button>
                 <button type="button" class="btn btn-danger" id="events-detail-delete" ${canMutate ? '' : 'disabled'}>删除${actionNoun}</button>
             `),
+            onClose: () => stopReminderExpiryWatcher(),
         });
+        stopReminderExpiryWatcher = watchReminderExpiry(content);
         content.querySelector('#events-detail-close').onclick = closeModal;
         const groupButton = content.querySelector('#events-detail-group');
         if (groupButton) {
@@ -1516,8 +1583,57 @@ export async function openEventDetail(eventId) {
                 showToast(`删除失败：${err?.message || '未知错误'}`, 'error');
             }
         };
-        content.addEventListener('click', async (event) => {
-            const trigger = event.target.closest('[data-open-collection]');
+        content.addEventListener('click', async (clickEvent) => {
+            const reminderButton = clickEvent.target.closest('[data-toggle-reminder]');
+            if (reminderButton) {
+                const remindTime = String(reminderButton.dataset.reminderTime ?? '');
+                if (!canToggleReminder(remindTime)) {
+                    reminderButton.disabled = true;
+                    showToast('提醒时间已到，不能再修改确认状态', 'error');
+                    return;
+                }
+
+                const shouldConfirm = reminderButton.dataset.reminderConfirmed !== 'true';
+                reminderButton.disabled = true;
+                try {
+                    const response = await api.put(
+                        `/events/${encodeURIComponent(normalizedId)}/reminders/confirmation`,
+                        { remind_time: remindTime, confirmed: shouldConfirm },
+                    );
+                    const reminder = response?.data?.reminder;
+                    const status = normalizedReminderStatus(reminder?.status);
+                    const repeatCount = finiteCount(reminder?.repeat_count);
+                    const row = reminderButton.closest('.events-detail-row');
+                    const statusElement = row?.querySelector('[data-reminder-status]');
+                    const metaElement = row?.querySelector('[data-reminder-meta]');
+
+                    reminderButton.dataset.reminderConfirmed = status === 'confirmed' ? 'true' : 'false';
+                    reminderButton.textContent = status === 'confirmed' ? '重新开启' : '提前确认';
+                    reminderButton.disabled = !canToggleReminder(remindTime);
+                    if (statusElement) {
+                        statusElement.className = `events-status ${status}`;
+                        statusElement.textContent = reminderStatusLabel(status);
+                    }
+                    if (metaElement) {
+                        metaElement.textContent = reminderMetaLabel(
+                            status,
+                            repeatCount,
+                            Boolean(reminder?.sent_at),
+                        );
+                    }
+
+                    window.dispatchEvent(new CustomEvent('pendo-data-changed', { detail: { type: 'event' } }));
+                    showToast(shouldConfirm ? '已提前确认，本次提醒不会发送' : '提醒已重新开启', 'success');
+                } catch (err) {
+                    const message = err?.message || '未知错误';
+                    const expired = String(message).includes('提醒时间已到');
+                    reminderButton.disabled = expired || !canToggleReminder(remindTime);
+                    showToast(`操作失败：${message}`, 'error');
+                }
+                return;
+            }
+
+            const trigger = clickEvent.target.closest('[data-open-collection]');
             if (trigger?.dataset.openCollection) {
                 closeModal();
                 await openCollectionDetail(trigger.dataset.openCollection);

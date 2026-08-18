@@ -41,8 +41,7 @@ flowchart TD
 | `models/` | 条目数据类、枚举和序列化模型 |
 | `services/` | 存储、提醒、日程图、导出、AI 解析和生命周期资源；`services/runtime.py` 提供 `PendoRuntimeService` |
 | `utils/` | 校验、格式化、时区、设置与数据库辅助函数 |
-| `web/` | FastAPI 路由、认证、分析、迁移服务和静态 SPA |
-| `scripts/` | 显式数据迁移工具 |
+| `web/` | FastAPI 路由、认证、分析、Bundle 传输、Demo 服务和静态 SPA |
 
 ---
 
@@ -169,7 +168,7 @@ sequenceDiagram
 | `scheduled_delivery_outbox` | 定时消息与逐目标确认 |
 | `operation_logs` | 操作审计和撤销快照 |
 | `user_settings` | 每用户设置与版本号 |
-| `transfer_logs`、`imported_bundles` | 迁移审计与 Bundle 身份 |
+| `transfer_logs`、`imported_bundles` | Bundle 导入审计与身份 |
 | `login_code_registry` | 一次性 Code 摘要 |
 | `web_session_registry` | 浏览器会话摘要与设备信息 |
 | `widget_token_registry` | Widget Token ID 与撤销状态 |
@@ -181,7 +180,7 @@ sequenceDiagram
 
 完整时刻采用规范 UTC 字符串；`plan_date`、`diary_date` 和 `ledger_date` 使用日期值。API 与命令边界通过 `TimezoneHelper` 转换用户本地时间。自然语言解析结果中的年月日和钟点属于本地墙钟字段，AI 输出进入业务模型时清除自行附加的时区偏移，再由用户或日程 IANA 时区解析为唯一时刻。
 
-账本以 `amount_cents` 作为整数统计字段。`amount` 保留展示兼容值，导入与迁移会规范化两者。
+账本以 `amount_cents` 作为整数统计字段，`amount` 用于展示。导入流程会规范化两个字段。
 
 ---
 
@@ -199,14 +198,14 @@ sequenceDiagram
 
 1. 查询到期提醒；
 2. 在 `reminder_logs` 中取得有期限的 claim；
-3. 创建或读取 `scheduled_delivery_outbox`；
-4. 通过 Core 发送目标逐个投递；
-5. 根据回执提交目标状态；
-6. 全部目标完成后提交提醒状态并清理 outbox。
+3. 按条目所有者构造 `send_private_msg`，目标固定为数值 QQ 用户；
+4. 根据 OneBot 回执完成或释放 claim。
 
-claim 记录 token、到期时刻、下一次尝试时刻和失败次数。该模型支持多个调度 tick、进程重启和部分目标重试。
+claim 记录 token、到期时刻、下一次尝试时刻和失败次数。条目写入边界通过 `_sync_reminder_logs` 同步 `items.remind_times` 与 `reminder_logs`，并写入规范 `fire_at_utc`。Schema 初始化负责表、列与查询索引，调度查询严格使用秒级 UTC。该模型支持多个调度 tick 与进程重启。
 
-`commands/scheduled.py` 编排每日简报、日记提醒、待办顺延、日志清理、财务周报、财务月报和 Demo 数据回收。Manifest 的 `pendo_prune_operation_logs` 绑定 `scheduled_prune_operation_logs`，每日清理过期操作日志与撤销快照。
+Web 日程详情通过单条提醒确认端点切换未到期提醒。`ReminderRepositoryMixin` 在即时事务中同时校验所有者、日程类型、提醒归属和触发时刻；提前确认写入 `preconfirmed` 状态并清理 claim，重新开启恢复同一提醒行为 `pending`。到期时刻由服务端 UTC 判断，浏览器按钮同步进入禁用状态。
+
+每日简报、日记提示和财务摘要等周期消息使用 `scheduled_delivery_outbox` 保存周期 claim 与回执状态，投递目标同样为用户私聊。`commands/scheduled.py` 还编排待办顺延、日志清理和 Demo 数据回收。Manifest 的 `pendo_prune_operation_logs` 绑定 `scheduled_prune_operation_logs`，每日清理过期操作日志与撤销快照。
 
 ---
 
@@ -220,7 +219,7 @@ FastAPI 应用按以下层次组织：
 | --- | --- |
 | `web/api/` | 请求模型、认证依赖和 HTTP 路由 |
 | `web/analytics/` | Dashboard 与统计查询组合 |
-| `web/services/` | Bundle、Demo 空间和迁移用例 |
+| `web/services/` | Bundle 导入导出与 Demo 空间用例 |
 | `web/static/` | 原生 JavaScript SPA |
 | `web/deps.py` | 数据库与会话依赖 |
 | `web/auth.py` | Code、Cookie Session 和 Widget JWT |
@@ -249,11 +248,13 @@ API 返回统一 `ok`、`message`、`error_code` 结构。安全头包括 CSP、
 4. `/api/widget/*` 同时校验 JWT 签名、scope、期限和注册表状态；
 5. 撤销操作更新当前 owner 的有效记录。
 
+`/api/widget/summary` 提供最多 5 条日程和主屏面板；`/api/widget/calendar` 提供最长 3660 天闭区间内的完整日程。Scriptable 在源码顶部读取 Web 地址与 Widget Token，在 Keychain 保存上次成功运行日。日历同步从该日查询到未来 30 天，首次运行回看 30 天；每次读取一个服务端窗口和一个 iOS 目标日历窗口，以 Pendo 条目 ID 新增缺失事件，并在全部写入成功后推进游标。
+
 两类凭据使用相同的秒级期限计算约定，并拥有独立的认证依赖和权限范围。
 
 ---
 
-## 📌 Bundle 迁移
+## 📌 Bundle 导入与导出
 
 `web/services/transfer_bundle.py` 负责导出版本化 `.pendo.zip`，`bundle_import.py` 负责检查、样例预览和事务执行。导入过程包括：
 
@@ -266,10 +267,6 @@ API 返回统一 `ok`、`message`、`error_code` 结构。安全头包括 CSP、
 7. 记录 `transfer_logs`。
 
 聊天端 `ExporterService` 生成 Markdown 档案，并通过 Core 文件发送能力投递。
-
-`scripts/migration_utils.py` 提供 SQLite 备份、连接、表结构检查、JSON 字段和 UTC 时间规范化能力，三个显式迁移入口共享这些原语。
-
----
 
 ## 🔐 并发边界
 
@@ -285,7 +282,7 @@ API 返回统一 `ok`、`message`、`error_code` 结构。安全头包括 CSP、
 
 ## 🔄 扩展流程
 
-### 新增业务命令
+### 扩展业务命令
 
 1. 在 `plugin.json` 增加命令目录节点；
 2. 在对应 handler 实现参数解析与业务用例；
@@ -294,15 +291,15 @@ API 返回统一 `ok`、`message`、`error_code` 结构。安全头包括 CSP、
 5. 更新 README 的用户命令；
 6. 添加正常、边界、权限、错误和并发测试。
 
-### 新增字段
+### 扩展数据字段
 
 1. 更新 `models/item.py`；
 2. 在 `services/db_schema.py` 增加版本化 migration；
 3. 更新数据库序列化与反序列化；
 4. 更新命令、Web API、搜索与 Bundle；
-5. 增加旧库迁移、往返序列化和并发更新测试。
+5. 覆盖 schema migration、往返序列化和并发更新测试。
 
-### 新增 Web 能力
+### 扩展 Web 能力
 
 1. 在 `web/api/` 定义严格请求模型与路由；
 2. 从 `web/deps.py` 取得数据库和认证会话；

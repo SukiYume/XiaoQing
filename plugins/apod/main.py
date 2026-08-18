@@ -37,6 +37,7 @@ HEADERS = {
 }
 
 DEFAULT_APOD_URL = "https://apod.nasa.gov/apod/astropix.html"
+DEFAULT_APOD_HOST = "apod.nasa.gov"
 HTML_TIMEOUT_SECONDS = 15
 IMAGE_TIMEOUT_SECONDS = 20
 MAX_IMAGE_BYTES = 12 * 1024 * 1024
@@ -86,7 +87,7 @@ def _allowed_hosts(context: PluginContextProtocol) -> set[str]:
     """合并 NASA 默认域名与管理员显式允许的附加域名。"""
 
     configured = _get_config(context).get("allowed_hosts", [])
-    hosts = {"apod.nasa.gov"}
+    hosts = {DEFAULT_APOD_HOST}
     if isinstance(configured, Sequence) and not isinstance(configured, (str, bytes, bytearray)):
         hosts.update(
             host.strip().rstrip(".").lower()
@@ -94,6 +95,16 @@ def _allowed_hosts(context: PluginContextProtocol) -> set[str]:
             if isinstance(host, str) and host.strip().rstrip(".")
         )
     return hosts
+
+
+def _allow_transparent_proxy_fake_dns(url: str) -> bool:
+    """仅为 NASA 固定 HTTPS 源启用透明代理 fake-IP 兼容。"""
+
+    parsed = urlsplit(url)
+    return (
+        parsed.scheme.casefold() == "https"
+        and (parsed.hostname or "").rstrip(".").casefold() == DEFAULT_APOD_HOST
+    )
 
 
 def _require_allowed_url(
@@ -132,6 +143,7 @@ async def _safe_download_image(
         max_bytes=MAX_IMAGE_BYTES,
         allowed_content_type_prefixes=("image/",),
         allowed_hosts=allowed_hosts,
+        allow_transparent_proxy_fake_dns=_allow_transparent_proxy_fake_dns(url),
     )
     if fetched is None:
         return None
@@ -408,6 +420,7 @@ async def handle(
             headers={**HEADERS, "accept-encoding": "identity"},
             timeout_seconds=HTML_TIMEOUT_SECONDS,
             allowed_hosts=allowed_hosts,
+            allow_transparent_proxy_fake_dns=_allow_transparent_proxy_fake_dns(page_url),
         )
         if response is None or not response.body:
             error_msg = "❌ 获取失败: 网络错误"
@@ -424,6 +437,9 @@ async def handle(
             context=context,
         )
 
+    except UnsafeUrlError as exc:
+        logger.warning("APOD 请求被网络安全策略拒绝: %s", exc)
+        return segments("❌ APOD 网络安全检查失败，请检查 DNS、代理或 allowed_hosts 配置")
     except Exception as exc:
         return public_error_response(context, exc, logger=logger, component="apod.handle")
 

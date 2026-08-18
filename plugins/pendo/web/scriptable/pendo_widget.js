@@ -2,15 +2,19 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: deep-purple; icon-glyph: magic;
 
-// 使用前只需填写 Pendo Web 地址。首次在 Scriptable App 内直接运行时，
-// 脚本会通过安全输入框接收 Widget Token，并把它存入 iOS Keychain。
+// 使用前填写 Pendo Web 地址和 `/pendo web widget-token` 返回的只读令牌。
 const BASE_URL = normalizeBaseUrl('https://example.com/pendo');
-const TOKEN_KEYCHAIN_KEY = `pendo.widget-token:${BASE_URL}`;
+const TOKEN = 'PASTE_WIDGET_TOKEN_HERE';
 const DEFAULT_MEDIUM_SECTION = 'auto';
 // 日历同步：在 Scriptable 内直接运行脚本时，将 Pendo 日程同步到 iOS 日历。
 // 设为空字符串（""）可禁用同步功能。
 const SYNC_CALENDAR_NAME = 'Pendo';
 const SYNC_MARKER = '[由 Pendo Widget 同步]';
+const CALENDAR_SYNC_INITIAL_LOOKBACK_DAYS = 30;
+const CALENDAR_SYNC_LOOKAHEAD_DAYS = 30;
+const CALENDAR_SYNC_MAX_RANGE_DAYS = 3660;
+const CALENDAR_SYNC_CURSOR_KEY = `pendo.calendar-last-success:${BASE_URL}:${SYNC_CALENDAR_NAME}`;
+const CALENDAR_EVENT_ID_PREFIX = 'Pendo-ID: ';
 const PANEL_SECTIONS = new Set(['tasks', 'ledger', 'notes']);
 
 // ---------- 主题（日夜自动切换） ----------
@@ -315,6 +319,22 @@ function normalizePanel(value) {
     };
 }
 
+function normalizeAgendaItems(value, limit = null) {
+    if (!Array.isArray(value)) return [];
+    const records = value.filter(isRecord);
+    const selected = Number.isInteger(limit) && limit >= 0 ? records.slice(0, limit) : records;
+    return selected.map((item) => ({
+        id: textValue(item.id, '', 160).replace(/[\r\n]/g, '').trim(),
+        title: textValue(item.title, '无标题', 160),
+        subtitle: textValue(item.subtitle, '', 160),
+        meta: textValue(item.meta, '', 160),
+        day: parseDateKey(item.day)?.key || '',
+        start_time: textValue(item.start_time, '', 64),
+        end_time: textValue(item.end_time, '', 64),
+        location: textValue(item.location, '', 160),
+    }));
+}
+
 function normalizeWidgetData(value) {
     if (!isRecord(value) || !isRecord(value.agenda)) {
         throw new Error('小组件摘要结构无效');
@@ -324,20 +344,7 @@ function normalizeWidgetData(value) {
     const rawLinks = isRecord(value.links) ? value.links : {};
     const rawPanels = isRecord(value.panels) ? value.panels : {};
     const calendarDay = nonNegativeInteger(rawDate.day);
-    const agendaItems = Array.isArray(rawAgenda.items)
-        ? rawAgenda.items
-              .filter(isRecord)
-              .slice(0, 5)
-              .map((item) => ({
-                  title: textValue(item.title, '无标题', 160),
-                  subtitle: textValue(item.subtitle, '', 160),
-                  meta: textValue(item.meta, '', 160),
-                  day: parseDateKey(item.day)?.key || '',
-                  start_time: textValue(item.start_time, '', 64),
-                  end_time: textValue(item.end_time, '', 64),
-                  location: textValue(item.location, '', 160),
-              }))
-        : [];
+    const agendaItems = normalizeAgendaItems(rawAgenda.items, 5);
     return {
         generated_at: textValue(value.generated_at, '', 64),
         agenda: {
@@ -477,32 +484,12 @@ function resolveWidgetSection(familyValue = family, parameter = args.widgetParam
     return section === 'auto' || PANEL_SECTIONS.has(section) ? section : DEFAULT_MEDIUM_SECTION;
 }
 
-async function loadWidgetToken() {
-    if (Keychain.contains(TOKEN_KEYCHAIN_KEY)) {
-        const stored = textValue(Keychain.get(TOKEN_KEYCHAIN_KEY), '', 4096);
-        if (stored) return stored;
-        Keychain.remove(TOKEN_KEYCHAIN_KEY);
-    }
-    if (config.runsInWidget) {
-        throw new Error('尚未配置 Widget Token；请先在 Scriptable App 内直接运行一次本脚本');
-    }
-
-    const prompt = new Alert();
-    prompt.title = '配置 Pendo Widget Token';
-    prompt.message = '请粘贴 /pendo web widget-token 私聊发送的只读令牌。令牌将保存到 iOS Keychain，不写入脚本源码。';
-    prompt.addSecureTextField('Widget Token', '');
-    prompt.addAction('存入 Keychain');
-    prompt.addCancelAction('取消');
-    const action = await prompt.presentAlert();
-    if (action < 0) throw new Error('未配置 Widget Token');
-    const token = textValue(prompt.textFieldValue(0), '', 4096);
-    if (!token) throw new Error('Widget Token 不能为空');
-    Keychain.set(TOKEN_KEYCHAIN_KEY, token);
-    return token;
-}
-
 async function fetchData(section, token) {
     const url = `${BASE_URL}/api/widget/summary?section=${encodeURIComponent(section)}`;
+    return normalizeWidgetData(await fetchWidgetApi(url, token));
+}
+
+async function fetchWidgetApi(url, token) {
     const request = new Request(url);
     request.method = 'GET';
     request.headers = { Authorization: `Bearer ${textValue(token, '', 4096)}` };
@@ -517,15 +504,14 @@ async function fetchData(section, token) {
         const statusText = hasStatus ? `HTTP ${status}: ` : '';
         throw new Error(`${statusText}接口未返回 JSON。请检查 BASE_URL 只填 Pendo Web 根地址，不要带 #/dashboard。`);
     }
-    if (hasStatus && status === 401 && Keychain.contains(TOKEN_KEYCHAIN_KEY)) {
-        Keychain.remove(TOKEN_KEYCHAIN_KEY);
-        throw new Error('Widget Token 已失效或被吊销；请在 Scriptable App 内重新运行脚本并录入新令牌');
+    if (hasStatus && status === 401) {
+        throw new Error('Widget Token 已失效或被吊销；请更新脚本顶部的 TOKEN');
     }
     if (!isRecord(result) || result.ok !== true || (hasStatus && (status < 200 || status >= 300))) {
         const statusText = hasStatus ? `HTTP ${status}: ` : '';
         throw new Error(textValue(result?.message) || textValue(result?.detail) || `${statusText}Widget 请求失败`);
     }
-    return normalizeWidgetData(result.data);
+    return result.data;
 }
 
 // ---------- 渲染组件 ----------
@@ -1013,24 +999,87 @@ function computeNextRefresh(data, currentTime = new Date()) {
 
 // ---------- 日历同步 ----------
 // 仅在 app 内直接运行脚本时触发；widget 渲染时不执行同步。
-// 同步逻辑：
-//  1. 复用本次 Widget 请求返回的最多 5 条近期日程，不重复请求接口
-//  2. 在 iOS 日历中查找可写的 SYNC_CALENDAR_NAME 日历
-//  3. 读取该日历今天起 30 天内的已有事件
-//  4. 按 title + startTime 去重，只新增，不拿摘要结果推断远端删除
-// 摘要并不是完整日程清单，因此这里绝不能删除“摘要中没出现”的本地事件。
-async function syncAgendaToCalendar(data, currentTime = new Date()) {
-    if (!SYNC_CALENDAR_NAME) return '同步已禁用（SYNC_CALENDAR_NAME 为空）';
+// Keychain 游标记录“上次成功运行日”。首次运行回看 30 天并覆盖未来 30 天，
+// 后续从上次运行日续传到新的未来 30 天。平时窗口仍约一个月，间隔期间已经
+// 过去或新建的日程也能补齐。
+// 每次只查询一次这个窗口，不遍历或删除窗口外的日历事件。
+function localDateKey(value) {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, '0');
+    const day = String(value.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
 
-    const items = data?.agenda?.items || [];
-    if (!items.length) return '没有需要同步的日程';
+function addLocalDays(value, days) {
+    const result = new Date(value);
+    result.setDate(result.getDate() + days);
+    return result;
+}
 
+function buildCalendarSyncWindow(currentTime = new Date()) {
     const now =
         currentTime instanceof Date && !Number.isNaN(currentTime.getTime()) ? new Date(currentTime) : new Date();
-    const rangeStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const rangeEnd = new Date(rangeStart);
-    rangeEnd.setDate(rangeEnd.getDate() + 30);
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const plannedEnd = addLocalDays(today, CALENDAR_SYNC_LOOKAHEAD_DAYS);
+    let lastSuccess = null;
+    if (Keychain.contains(CALENDAR_SYNC_CURSOR_KEY)) {
+        lastSuccess = parseDateKey(Keychain.get(CALENDAR_SYNC_CURSOR_KEY));
+        if (!lastSuccess) Keychain.remove(CALENDAR_SYNC_CURSOR_KEY);
+    }
 
+    // 系统时间回拨时不把成功游标写回更早日期，同时从当前日安全重查。
+    const storedIsLater = lastSuccess && lastSuccess.date > today;
+    const initialStart = addLocalDays(today, -CALENDAR_SYNC_INITIAL_LOOKBACK_DAYS);
+    const requestedStart = storedIsLater ? new Date(today) : new Date(lastSuccess?.date || initialStart);
+    const earliestAllowedStart = addLocalDays(plannedEnd, -(CALENDAR_SYNC_MAX_RANGE_DAYS - 1));
+    const rangeStart = requestedStart < earliestAllowedStart ? earliestAllowedStart : requestedStart;
+    const nextCursor = storedIsLater ? new Date(lastSuccess.date) : new Date(today);
+    return {
+        startDate: rangeStart,
+        endDate: new Date(plannedEnd),
+        startKey: localDateKey(rangeStart),
+        endKey: localDateKey(plannedEnd),
+        nextCursorKey: localDateKey(nextCursor),
+    };
+}
+
+function normalizeCalendarSyncData(value, window) {
+    if (!isRecord(value) || !Array.isArray(value.items)) {
+        throw new Error('日历同步响应结构无效');
+    }
+    const startKey = parseDateKey(value.start_date)?.key || '';
+    const endKey = parseDateKey(value.end_date)?.key || '';
+    if (startKey !== window.startKey || endKey !== window.endKey) {
+        throw new Error('日历同步响应窗口与请求不一致');
+    }
+    return {
+        startKey,
+        endKey,
+        items: normalizeAgendaItems(value.items),
+    };
+}
+
+async function fetchCalendarSyncData(window, token) {
+    const query = `start_date=${encodeURIComponent(window.startKey)}&end_date=${encodeURIComponent(window.endKey)}`;
+    const value = await fetchWidgetApi(`${BASE_URL}/api/widget/calendar?${query}`, token);
+    return normalizeCalendarSyncData(value, window);
+}
+
+function calendarLegacyKey(title, startDate) {
+    return `${textValue(title, '无标题', 160)}|${startDate.getTime()}`;
+}
+
+function calendarEventIdFromNotes(notes) {
+    const text = textValue(notes, '', 4096);
+    if (!text.includes(SYNC_MARKER)) return '';
+    const line = text
+        .split(/\r?\n/)
+        .find((candidate) => candidate.startsWith(CALENDAR_EVENT_ID_PREFIX));
+    return line ? textValue(line.slice(CALENDAR_EVENT_ID_PREFIX.length), '', 160).trim() : '';
+}
+
+async function applyAgendaItemsToCalendar(items, rangeStart, rangeEnd) {
+    if (!items.length) return { completed: true, message: '没有需要同步的日程' };
     const parsedItems = [];
     for (const item of items) {
         const startDate = parseItemStartDate(item, { allowDateOnly: true });
@@ -1056,6 +1105,7 @@ async function syncAgendaToCalendar(data, currentTime = new Date()) {
         }
 
         parsedItems.push({
+            id: textValue(item.id, '', 160).replace(/[\r\n]/g, '').trim(),
             title: textValue(item.title, '无标题', 160),
             startDate,
             endDate,
@@ -1063,7 +1113,7 @@ async function syncAgendaToCalendar(data, currentTime = new Date()) {
             location: textValue(item.location, '', 160),
         });
     }
-    if (!parsedItems.length) return '没有可同步的有效日程';
+    if (!parsedItems.length) return { completed: true, message: '没有可同步的有效日程' };
 
     let targetCal;
     try {
@@ -1079,21 +1129,34 @@ async function syncAgendaToCalendar(data, currentTime = new Date()) {
         });
     }
     if (!targetCal) {
-        return `未找到名为「${SYNC_CALENDAR_NAME}」的日历，请先在系统日历 App 中创建`;
+        return {
+            completed: false,
+            message: `未找到名为「${SYNC_CALENDAR_NAME}」的日历，请先在系统日历 App 中创建`,
+        };
     }
 
     const existing = await CalendarEvent.between(rangeStart, rangeEnd, [targetCal]);
-    const existingKeys = new Set(
-        (Array.isArray(existing) ? existing : [])
-            .filter((event) => event?.startDate instanceof Date && !Number.isNaN(event.startDate.getTime()))
-            .map((event) => `${textValue(event.title, '无标题', 160)}|${event.startDate.getTime()}`),
-    );
+    const existingIds = new Set();
+    const existingLegacyKeys = new Set();
+    for (const event of Array.isArray(existing) ? existing : []) {
+        if (!(event?.startDate instanceof Date) || Number.isNaN(event.startDate.getTime())) continue;
+        const eventId = calendarEventIdFromNotes(event.notes);
+        if (eventId) existingIds.add(eventId);
+        else existingLegacyKeys.add(calendarLegacyKey(event.title, event.startDate));
+    }
 
     let created = 0;
     let skipped = 0;
     for (const item of parsedItems) {
-        const key = `${item.title}|${item.startDate.getTime()}`;
-        if (existingKeys.has(key)) {
+        const legacyKey = calendarLegacyKey(item.title, item.startDate);
+        if ((item.id && existingIds.has(item.id)) || (!item.id && existingLegacyKeys.has(legacyKey))) {
+            skipped++;
+            continue;
+        }
+        // 未写入 Pendo ID 的现有日历事件使用“标题 + 开始时间”键识别。
+        if (item.id && existingLegacyKeys.has(legacyKey)) {
+            existingLegacyKeys.delete(legacyKey);
+            existingIds.add(item.id);
             skipped++;
             continue;
         }
@@ -1104,15 +1167,31 @@ async function syncAgendaToCalendar(data, currentTime = new Date()) {
         event.isAllDay = item.isAllDay;
         event.calendar = targetCal;
         if (item.location) event.location = item.location;
-        event.notes = SYNC_MARKER;
-        event.save();
-        existingKeys.add(key);
+        event.notes = item.id ? `${SYNC_MARKER}\n${CALENDAR_EVENT_ID_PREFIX}${item.id}` : SYNC_MARKER;
+        const saved = event.save();
+        if (saved && typeof saved.then === 'function') await saved;
+        if (item.id) existingIds.add(item.id);
+        else existingLegacyKeys.add(legacyKey);
         created++;
     }
 
     const parts = [`新增 ${created}`];
     if (skipped) parts.push(`跳过 ${skipped}`);
-    return `同步完成：${parts.join('，')}`;
+    return { completed: true, message: `同步完成：${parts.join('，')}` };
+}
+
+async function syncCalendarFromServer(token, currentTime = new Date()) {
+    if (!SYNC_CALENDAR_NAME) return '同步已禁用（SYNC_CALENDAR_NAME 为空）';
+
+    const window = buildCalendarSyncWindow(currentTime);
+    const data = await fetchCalendarSyncData(window, token);
+    // 服务端窗口按自然日闭区间定义，Scriptable 的 between 使用右开区间。
+    const rangeEnd = addLocalDays(window.endDate, 1);
+    const result = await applyAgendaItemsToCalendar(data.items, window.startDate, rangeEnd);
+    if (result.completed) {
+        Keychain.set(CALENDAR_SYNC_CURSOR_KEY, window.nextCursorKey);
+    }
+    return result.message;
 }
 
 // ---------- 主流程 ----------
@@ -1153,11 +1232,14 @@ function createErrorWidget(error) {
 
 let widget;
 let widgetData = null;
+const widgetToken = textValue(TOKEN, '', 4096);
 try {
     if (!/^https?:\/\/[^\s/]+/i.test(BASE_URL) || BASE_URL.includes('example.com')) {
         throw new Error('请先把脚本里的 BASE_URL 改成你自己的 Pendo Web 地址');
     }
-    const widgetToken = await loadWidgetToken();
+    if (!widgetToken || widgetToken === 'PASTE_WIDGET_TOKEN_HERE') {
+        throw new Error('请先把脚本顶部的 TOKEN 改成 /pendo web widget-token 返回的令牌');
+    }
     widgetData = await fetchData(resolveWidgetSection(), widgetToken);
     widget = createWidget(widgetData);
 } catch (error) {
@@ -1167,7 +1249,7 @@ try {
 // 在 Scriptable App 内直接运行时（而非 Widget 渲染），自动执行日历同步
 if (!config.runsInWidget && widgetData) {
     try {
-        const result = await syncAgendaToCalendar(widgetData);
+        const result = await syncCalendarFromServer(widgetToken);
         const note = new Notification();
         note.title = 'Pendo 日历同步';
         note.body = result;
