@@ -9,6 +9,7 @@ from tests.helpers.config_test_support import (
     ConfigSnapshot,
     ConfigSourceStatus,
     Path,
+    PendingSecretsChange,
     asyncio,
     json,
     os,
@@ -328,7 +329,9 @@ class TestConfigManagerWatch:
         secrets_file: Path,
     ):
         snapshots: asyncio.Queue[ConfigSnapshot] = asyncio.Queue()
+        pending_notices: list[PendingSecretsChange] = []
         config_manager.on_reload(snapshots.put_nowait)
+        config_manager.on_pending_secrets_change(pending_notices.append)
         watch_task = asyncio.create_task(config_manager.watch(interval=0.01))
         await asyncio.sleep(0)
         secrets_file.write_bytes(b"\xff\xfe")
@@ -349,6 +352,7 @@ class TestConfigManagerWatch:
             assert recovered.secrets == {}
             assert recovered.revision == invalid.revision + 1
             assert not watch_task.done()
+            assert pending_notices == []
 
             confirmed = config_manager.reload()
             assert confirmed.secrets_status is ConfigSourceStatus.VALID
@@ -522,6 +526,10 @@ class TestConfigManagerWatch:
     ):
         original = config_manager.snapshot()
         original_identity = config_manager._secrets_source.identity
+        security_publications: list[ConfigSnapshot] = []
+        pending_notices: list[PendingSecretsChange] = []
+        config_manager.on_security_update(security_publications.append)
+        config_manager.on_pending_secrets_change(pending_notices.append)
         replacement = secrets_file.with_name("replacement-secrets.json")
         replacement.write_bytes(secrets_file.read_bytes())
         os.replace(replacement, secrets_file)
@@ -529,14 +537,26 @@ class TestConfigManagerWatch:
         await config_manager._watch_reconcile_once()
 
         pending = config_manager.snapshot()
-        assert config_manager._secrets_source.identity != original_identity
-        assert pending.revision == original.revision + 1
-        assert pending.secrets_status is ConfigSourceStatus.INCONSISTENT
-        assert pending.secrets == {}
+        assert config_manager._secrets_source.identity == original_identity
+        assert config_manager._pending_secrets_source is not None
+        assert config_manager._pending_secrets_source.identity != original_identity
+        assert pending.revision == original.revision
+        assert pending.secrets_status is ConfigSourceStatus.VALID
+        assert pending.mutable_secrets() == original.mutable_secrets()
+        assert security_publications == []
+        assert len(pending_notices) == 1
+        assert pending_notices[0].added_count == 0
+        assert pending_notices[0].removed_count == 0
+        assert pending_notices[0].changed_count == 0
+
+        # 相同候选继续停留在磁盘时，不重复发布通知。
+        await config_manager._watch_reconcile_once()
+        assert len(pending_notices) == 1
 
         confirmed = config_manager.reload()
         assert confirmed.secrets_status is ConfigSourceStatus.VALID
         assert confirmed.mutable_secrets() == original.mutable_secrets()
+        assert config_manager._pending_secrets_source is None
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -555,6 +575,7 @@ class TestConfigManagerWatch:
             "admin_user_ids": [9090],
             "plugins": {"echo": {"api_key": "explicitly-confirmed-only"}},
         }
+        original = config_manager.snapshot()
         security_publications: list[ConfigSnapshot] = []
         config_manager.on_security_update(security_publications.append)
 
@@ -569,9 +590,16 @@ class TestConfigManagerWatch:
 
             await config_manager._watch_reconcile_once()
             pending = config_manager.snapshot()
-            assert pending.secrets_status is ConfigSourceStatus.INCONSISTENT
-            assert pending.secrets == {}
-            assert all(snapshot.secrets == {} for snapshot in security_publications)
+            if external_steps == ("secrets",):
+                assert pending.revision == original.revision
+                assert pending.secrets_status is ConfigSourceStatus.VALID
+                assert pending.mutable_secrets() == original.mutable_secrets()
+                assert security_publications == []
+                assert config_manager._pending_secrets_source is not None
+            else:
+                assert pending.secrets_status is ConfigSourceStatus.INCONSISTENT
+                assert pending.secrets == {}
+                assert all(snapshot.secrets == {} for snapshot in security_publications)
 
         confirmed = config_manager.reload()
         assert confirmed.secrets_status is ConfigSourceStatus.VALID
@@ -579,6 +607,37 @@ class TestConfigManagerWatch:
             assert confirmed.mutable_secrets() == rotated
         else:
             assert confirmed.secrets["plugins"]["echo"]["api_key"] == "test_key"
+
+    @pytest.mark.asyncio
+    async def test_valid_external_secret_notice_lists_paths_without_values(
+        self,
+        config_manager: ConfigManager,
+        secrets_file: Path,
+    ):
+        notices: list[PendingSecretsChange] = []
+        config_manager.on_pending_secrets_change(notices.append)
+        candidate = {
+            "admin_user_ids": [12345],
+            "plugins": {
+                "echo": {"api_key": "must-never-appear-in-notice"},
+                "new_plugin": {"token": "also-secret"},
+            },
+        }
+        secrets_file.write_text(json.dumps(candidate), encoding="utf-8")
+
+        await config_manager._watch_reconcile_once()
+
+        assert len(notices) == 1
+        notice = notices[0]
+        assert notice.added_paths == ("plugins.new_plugin",)
+        assert notice.removed_paths == ("plugins.choice",)
+        assert notice.changed_paths == (
+            "admin_user_ids",
+            "plugins.echo.api_key",
+        )
+        rendered = repr(notice)
+        assert "must-never-appear-in-notice" not in rendered
+        assert "also-secret" not in rendered
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

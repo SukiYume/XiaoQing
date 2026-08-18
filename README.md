@@ -251,7 +251,7 @@ XiaoQing/
 /reload
 ```
 
-普通配置采用 last-known-good 快照，敏感配置采用 fail-closed 快照。运行中的管理员可通过 `/set_secret` 更新 `secrets.json` 已有路径；Core 在同一事务中保存文件并发布新 revision。部署工具直接替换 `config.json` 或 `secrets.json` 时，先停止 Bot、写入完整文件，再重新启动，使两个来源在启动阶段组成已确认 revision。独立受保护的 Inbound 仍可用时，也可通过该通道执行 `/reload` 确认稳定来源。
+普通配置采用 last-known-good 快照，敏感配置采用 fail-closed 快照。运行中的管理员可通过 `/set_secret` 更新 `secrets.json` 已有路径；Core 在同一事务中保存文件并发布新 revision。外部工具保存完整、有效的 `secrets.json` 且 `config.json` 与当前已确认版本一致时，watcher 暂存新候选，当前管理员、网络连接和插件凭据继续使用已确认快照；Core 私聊管理员报告文件有效性以及新增、删除、修改的字段路径，通知内容仅包含路径。管理员核对后发送 `/reload` 确认并应用候选。`config.json` 变更或两个来源一起替换安排在停服窗口内，独立受保护的 Inbound 也可用于执行 `/reload`。
 
 Windows 生产启动链为 `scripts/run-bot.vbs → scripts/run-bot-monitor.ps1 → scripts/run_process_with_rotating_logs.py`。双击 `scripts/stop-bot.vbs` 可安全停止同一仓库的监控器、Bot 与 NapCat；由提升权限的 SSH、计划任务或管理员终端启动进程时，停服入口会显示一次 UAC 确认。完成提示出现后可再次双击 `scripts/run-bot.vbs` 启动。同步脚本、启动参数和生产目录说明位于 `scripts/` 对应文件的注释与帮助输出中。
 
@@ -309,7 +309,8 @@ bash scripts/run_full_uat.sh
 2. 确认 Inbound URL 或主动 WebSocket URI 与双方配置一致。
 3. 确认 OneBot secret 与 `inbound_token` 一致。
 4. 查看日志中的连接状态、错误码和 request ID。
-5. 日志出现 `secrets source is inconsistent` 与 `WebSocket client stopped` 时，按停服、保存完整配置来源、重新启动的顺序恢复已确认凭据 revision。
+5. 收到 `secrets.json` 待确认私聊时，核对字段路径并发送 `/reload` 应用有效候选。
+6. 日志出现 `secrets source is inconsistent` 与 `WebSocket client stopped` 时，检查来源是否缺失、损坏或与 `config.json` 同时变化；随后按停服、保存完整配置来源、重新启动的顺序恢复已确认凭据 revision。
 
 ### 群聊缺少普通聊天回复
 

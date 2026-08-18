@@ -4,13 +4,20 @@
 
 ## 下一版本
 
+### Secrets 待确认热更新
+
+- 完整有效的 `secrets.json` 单文件外部变更进入待确认候选，当前已确认凭据、管理员视图和 OneBot 控制通道持续工作；候选在 `/reload` 前保持与插件和认证视图隔离。
+- Core 使用当前可信代私聊全部管理员，按字段路径报告新增、删除和修改，通知内容仅包含字段路径；相同候选只通知一次。
+- `/reload` 重新读取稳定磁盘来源并原子确认候选；缺失、损坏、不可读来源以及公开配置同时变化继续执行 fail-closed 策略。
+- 配置事务、watcher、接口和 OneBot 应用边界回归覆盖候选隔离、通知脱敏、重复抑制、管理员权限与连接不轮换。
+
 ### Flickr 公共摄影浏览
 
 - 新增 Flickr 公共只读插件，提供今日精选、关键词与标签搜索、Flickr Commons、用户公开照片、公开相册、连续浏览和照片详情。
 - 搜索默认覆盖全部公开许可类型，并提供 CC 与公共领域筛选；每条回复展示作者、许可、拍摄日期、标签和 Flickr 原图页。
 - API 请求固定使用 Flickr 官方 HTTPS REST 端点，图片限定为 Flickr 静态域名，并落实 JSON、MIME、字节、像素、尺寸、帧数、会话和缓存预算。
 - 浏览会话按私聊用户或“群号 + 用户”隔离并保留 15 分钟；图片缓存位于 `data/flickr/images/`，API Key 由 `secrets.plugins.flickr.api_key` 管理。
-- 已有 Flickr secret 路径可通过管理员私聊事务更新；整体配置来源替换采用停服、原子保存和重新启动流程，避免 fail-closed 撤权中断唯一的主动 WebSocket 控制通道。
+- 已有 Flickr secret 路径可通过管理员私聊事务更新；新增路径可通过 secrets 单文件待确认候选和 `/reload` 在线应用。
 
 ### 发布隐私与部署配置
 
@@ -28,8 +35,13 @@
 
 ### 发布验证
 
-- Windows 本地发布前全量测试通过：`6090 passed, 2 skipped`。
+- Windows 本地发布前全量测试通过：`6092 passed, 2 skipped`。
 - Ruff formatter、Ruff lint、Mypy 367 个生产模块、compileall 和 `git diff --check` 全部通过。
+
+### 代码与文档质量
+
+- 精简配置候选状态、Flickr 客户端创建与站点校验、词典翻页命令构造中的重复实现，保持各插件公开命令与响应契约稳定。
+- 复核根 README、项目手册和插件文档的现行机制表述，并统一近期代码注释的职责边界与叙述方式。
 
 ### Pendo Web 日程提醒开关
 

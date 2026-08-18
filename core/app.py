@@ -244,6 +244,7 @@ class XiaoQingApp(
         security_updates = getattr(self.config_manager, "on_security_update", None)
         if callable(security_updates):
             security_updates(self._apply_security_snapshot)
+        self.config_manager.on_pending_secrets_change(self._notify_pending_secrets_change)
         self.config_manager.on_reload(self._apply_config)
 
     def _unregister_inbound_candidate(self, manager: InboundManager) -> None:

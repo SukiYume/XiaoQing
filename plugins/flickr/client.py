@@ -149,7 +149,7 @@ def _content_text(value: object, *, limit: int) -> str:
     return _visible_text(value, limit=limit)
 
 
-def _positive_int(value: object, *, default: int) -> int:
+def _nonnegative_int(value: object, *, default: int) -> int:
     if isinstance(value, bool) or not isinstance(value, (str, int)):
         return default
     try:
@@ -297,9 +297,9 @@ def _parse_photo_page(
     )
     return FlickrPage(
         photos=photos,
-        page=_positive_int(container.get("page"), default=1),
-        pages=_positive_int(container.get("pages"), default=1),
-        total=_positive_int(container.get("total"), default=len(photos)),
+        page=_nonnegative_int(container.get("page"), default=1),
+        pages=_nonnegative_int(container.get("pages"), default=1),
+        total=_nonnegative_int(container.get("total"), default=len(photos)),
     )
 
 

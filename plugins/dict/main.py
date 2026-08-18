@@ -229,23 +229,6 @@ def _query_command(
     return " ".join(parts)
 
 
-def _page_command(
-    query: str,
-    *,
-    exact_match: bool,
-    max_results: int,
-    page: int,
-) -> str:
-    """构造无状态、可复制执行的规范翻页命令。"""
-
-    return _query_command(
-        query,
-        exact_match=exact_match,
-        max_results=max_results,
-        page=page,
-    )
-
-
 def _read_manifest(path: Path) -> dict[str, Any]:
     """读取小型 JSON 清单；链接、非常规文件和越界文件均失败关闭。"""
 
@@ -498,7 +481,7 @@ def _query_astrodict_sync(
 
     total_pages = (total_found + max_results - 1) // max_results
     if page > total_pages:
-        return f"❌ 第 {page} 页超出范围（共 {total_pages} 页）\n最后一页：" + _page_command(
+        return f"❌ 第 {page} 页超出范围（共 {total_pages} 页）\n最后一页：" + _query_command(
             query,
             exact_match=exact_match,
             max_results=max_results,
@@ -521,7 +504,7 @@ def _query_astrodict_sync(
     if page > 1:
         navigation.append(
             "上一页："
-            + _page_command(
+            + _query_command(
                 query,
                 exact_match=exact_match,
                 max_results=max_results,
@@ -531,7 +514,7 @@ def _query_astrodict_sync(
     if page < total_pages:
         navigation.append(
             "下一页："
-            + _page_command(
+            + _query_command(
                 query,
                 exact_match=exact_match,
                 max_results=max_results,

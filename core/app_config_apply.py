@@ -16,9 +16,10 @@ from .app_support import (
     _require_onebot_holder_credentials,
     _trusted_secrets,
 )
-from .config import ConfigSnapshot, ConfigSourceStatus
+from .config import ConfigSnapshot, ConfigSourceStatus, PendingSecretsChange
 from .constants import DEFAULT_MAX_CONCURRENCY, DEFAULT_SESSION_TIMEOUT_SEC
 from .dispatcher import AdjustableSemaphore
+from .interfaces import ACTION_BYPASS_SINK_KEY
 from .onebot import OneBotHttpSender
 from .server import InboundManager
 
@@ -30,6 +31,37 @@ if TYPE_CHECKING:
     from .session import SessionManager
 
 logger = logging.getLogger(__name__)
+
+
+def _format_pending_secrets_notice(change: PendingSecretsChange) -> str:
+    """生成只含字段路径、不含任何凭据值的管理员通知。"""
+
+    lines = [
+        "🔐 检测到 secrets.json 外部修改",
+        "✅ 文件完整且格式有效",
+        "",
+        "待确认变更：",
+    ]
+    labels = (
+        ("新增", change.added_paths),
+        ("删除", change.removed_paths),
+        ("修改", change.changed_paths),
+    )
+    if change.added_count + change.removed_count + change.changed_count == 0:
+        lines.append("• 字段内容相同，文件版本已更新")
+    else:
+        for label, paths in labels:
+            lines.extend(f"• {label} {path}" for path in paths)
+        if change.omitted_count:
+            lines.append(f"• 另有 {change.omitted_count} 个字段变更")
+    lines.extend(
+        (
+            "",
+            "当前运行继续使用已确认的旧凭据。",
+            "发送 /reload 确认并应用。",
+        )
+    )
+    return "\n".join(lines)
 
 
 class AppConfigApplyMixin:
@@ -63,6 +95,37 @@ class AppConfigApplyMixin:
     _dispatcher_concurrency: int
     _inbound_cleanup_pending: list[InboundManager]
     _stopping: bool
+
+    async def _notify_pending_secrets_change(self, change: PendingSecretsChange) -> None:
+        """使用当前可信 OneBot 通道把外部候选摘要私聊给管理员。"""
+
+        admin_ids = tuple(sorted(self.identity_service.admin_ids))
+        if not admin_ids:
+            logger.warning("Valid external secrets candidate detected, but no active admin exists")
+            return
+        message = [{"type": "text", "data": {"text": _format_pending_secrets_notice(change)}}]
+        for admin_id in admin_ids:
+            action = {
+                "action": "send_private_msg",
+                "params": {"user_id": admin_id, "message": message},
+                ACTION_BYPASS_SINK_KEY: True,
+            }
+            try:
+                sent = await self._send_action(action)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "Could not notify admin %d about pending secrets: %s",
+                    admin_id,
+                    exc,
+                )
+                continue
+            if sent is not True:
+                logger.warning(
+                    "Pending secrets notification to admin %d was not confirmed",
+                    admin_id,
+                )
 
     def _apply_security_snapshot(self, snapshot: ConfigSnapshot) -> None:
         with self._runtime_auth_lock:
