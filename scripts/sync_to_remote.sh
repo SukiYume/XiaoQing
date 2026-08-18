@@ -7,10 +7,16 @@ IFS=$'\n\t'
 readonly SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly REPO_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd -P)"
 
-# 生产目标集中写在这里，按用户习惯直接在脚本中切换 secondary-production-host / production-host；
-# 不把主机名、Python 或 Conda 环境变成额外命令行参数。
-readonly REMOTE_HOST="production-host"
-readonly REMOTE_DIR="/c/Users/testuser/Desktop/XiaoQing/XiaoQing_V3"
+# 生产目标保存在本机专用脚本中，仍可直接编辑，不需要增加命令行参数。
+# 该文件由 Git 与 Docker 忽略，避免把主机名、账号和部署路径发布到仓库。
+readonly LOCAL_CONFIG_FILE="$SCRIPT_DIR/sync_to_remote.local.sh"
+REMOTE_HOST=""
+REMOTE_DIR=""
+if [[ -f "$LOCAL_CONFIG_FILE" ]]; then
+    # shellcheck source=/dev/null
+    source "$LOCAL_CONFIG_FILE"
+fi
+readonly REMOTE_HOST REMOTE_DIR
 
 readonly SSH_BIN="ssh"
 readonly RSYNC_BIN="rsync"
@@ -45,7 +51,11 @@ usage() {
 生产配置、密钥、Minecraft 连接配置、日志和运行数据始终保留。
 脚本不会停止或启动生产进程。
 
-如需切换目标，请直接修改脚本顶部的 REMOTE_HOST 和 REMOTE_DIR。
+首次使用时创建 scripts/sync_to_remote.local.sh，并在其中设置：
+  REMOTE_HOST="production-host"
+  REMOTE_DIR="/absolute/path/to/XiaoQing"
+
+此后可直接修改该本机文件切换目标；它不会进入 Git 或 Docker 构建上下文。
 USAGE
 }
 
@@ -103,6 +113,8 @@ fi
 [[ "$(<"$REPO_DIR/$SENTINEL_NAME")" == "$SENTINEL_VALUE" ]] \
     || die "repository sentinel has an unexpected value"
 [[ -f "$REPO_DIR/.gitignore" ]] || die "repository .gitignore is missing"
+[[ -n "$REMOTE_HOST" ]] || die "REMOTE_HOST is missing in $LOCAL_CONFIG_FILE"
+[[ -n "$REMOTE_DIR" ]] || die "REMOTE_DIR is missing in $LOCAL_CONFIG_FILE"
 [[ "$REMOTE_HOST" != -* && "$REMOTE_HOST" =~ ^[A-Za-z0-9_.@:-]+$ ]] \
     || die "unsafe remote host"
 [[ "$REMOTE_DIR" =~ ^/[A-Za-z0-9._/-]+$ && "$REMOTE_DIR" != "/" ]] \

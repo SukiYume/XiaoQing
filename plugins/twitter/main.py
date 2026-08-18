@@ -89,6 +89,16 @@ class TwitterFetchError(RuntimeError):
         return "❌ Twitter 图片抓取失败：远端接口暂时不可用，请稍后重试"
 
 
+class TwitterConfigurationError(RuntimeError):
+    """抓取目标缺少有效用户 ID。"""
+
+    def __init__(self) -> None:
+        super().__init__("Twitter user_id is missing or invalid")
+
+    def user_message(self) -> str:
+        return "❌ Twitter 图片抓取失败：请先在 config/secrets.json 配置目标 user_id"
+
+
 class TwitterMediaFetchError(RuntimeError):
     """时间线已读取，但本轮所有媒体下载均失败。"""
 
@@ -120,7 +130,6 @@ public_error_response = cast(Callable[..., MessageSegments], _core_public_error_
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_USER_ID = "123456789012345678"
 MAX_PAGES_WITHOUT_NEW_IMAGES = 2
 MAX_PAGES_TO_CHECK = 50
 MAX_CONCURRENT_IMAGE_DOWNLOADS = 4
@@ -352,7 +361,7 @@ def _get_proxy(context: Context) -> str | None:
 
 
 def _get_user_id(context: Context) -> str:
-    """读取目标用户 ID，并兼容配置快照中的正整数。"""
+    """读取显式配置的目标用户 ID，并兼容正整数。"""
 
     value = _get_config(context).get("user_id")
     if isinstance(value, int) and not isinstance(value, bool) and value > 0:
@@ -361,7 +370,7 @@ def _get_user_id(context: Context) -> str:
         user_id = value.strip()
         if user_id and len(user_id) <= MAX_USER_ID_CHARS and not _has_control_chars(user_id):
             return user_id
-    return DEFAULT_USER_ID
+    raise TwitterConfigurationError
 
 
 def _get_cookies(context: Context) -> dict[str, str]:
@@ -789,12 +798,13 @@ async def _run_background_fetch(context: Context) -> _FetchOutcome:
         count = await _fetch_twitter_images(context)
     except asyncio.CancelledError:
         raise
-    except (TwitterFetchError, TwitterMediaFetchError) as exc:
-        component = (
-            "twitter.fetch_media"
-            if isinstance(exc, TwitterMediaFetchError)
-            else "twitter.fetch_timeline"
-        )
+    except (TwitterConfigurationError, TwitterFetchError, TwitterMediaFetchError) as exc:
+        if isinstance(exc, TwitterConfigurationError):
+            component = "twitter.config"
+        elif isinstance(exc, TwitterMediaFetchError):
+            component = "twitter.fetch_media"
+        else:
+            component = "twitter.fetch_timeline"
         public_error_message(
             context,
             exc,

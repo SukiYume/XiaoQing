@@ -164,7 +164,7 @@ async def test_twitter_downloads_are_globally_bounded_and_cache_commit_is_atomic
         SimpleNamespace(
             data_dir=tmp_path,
             logger=MagicMock(),
-            secrets={"plugins": {"twitter": {"max_pages": 1}}},
+            secrets={"plugins": {"twitter": {"user_id": "123456789", "max_pages": 1}}},
         )
     )
 

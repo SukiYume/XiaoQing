@@ -4,6 +4,13 @@
 
 ## 下一版本
 
+### 发布隐私与部署配置
+
+- 生产同步目标改由 Git 忽略的 `scripts/sync_to_remote.local.sh` 保存，发布仓库只保留可复制的通用配置示例。
+- Twitter 抓取目标改为必填配置，示例、测试和默认值仅使用虚构标识；缺少目标时返回明确的配置提示。
+- 清理发布历史中的运行数据、真实运行标识和部署环境信息，并轮换受影响的服务凭据。
+- GitHub 仓库启用 Secret Scanning 与 Push Protection，发布前检查覆盖当前树、完整 Git 历史和在线文档。
+
 ### 在线文档与文档契约
 
 - 根 README 的状态栏和文档导航加入在线项目手册入口 `https://paris.escape.ac.cn/note/XiaoQing/`，GitHub About Website 使用同一地址。
@@ -13,7 +20,7 @@
 
 ### 发布验证
 
-- CI 等价发布前测试通过：`6049 passed, 2 skipped`，覆盖率 `80.69%`。
+- CI 等价发布前测试通过：`6050 passed, 2 skipped`，覆盖率 `80.70%`。
 - Ruff formatter、Ruff lint、Mypy 364 个生产模块、compileall 和 `git diff --check` 全部通过。
 
 ### Pendo Web 日程提醒开关
@@ -126,7 +133,7 @@
 ### 生产代码与 arXiv 模型一体同步
 
 - `scripts/sync_to_remote.sh` 将 `plugins/arxiv_filter/best_model/` 作为生产发布资源，同步前检查模型配置、权重、tokenizer 和训练配置，同步后复核完整性。
-- 远端主机和目标目录集中位于脚本顶部，默认值为 `secondary-production-host:/c/Users/testuser/Desktop/XiaoQing/XiaoQing_V3`；生产主机可直接配置为 `production-host`。
+- 远端主机和目标目录集中保存在 Git 忽略的 `scripts/sync_to_remote.local.sh`，部署者可直接编辑本机配置。
 - 同步复用 `.gitignore` 处理本地缓存和训练产物，并通过 rsync 排除规则保护生产配置、Minecraft 连接配置、日志、数据库、插件缓存、备份和导出。
 - 增加 checksum 比对、延迟替换和断点保留；正式同步前校验常规文件，完成同步后逐文件核对关键代码、启动链和 arXiv 运行权重的 SHA-256。
 - 脚本默认执行 dry-run，实际写入要求 `--apply --confirm-delete`。进程停服与启动由部署者控制，脚本帮助提供预览、应用和校验顺序。

@@ -41,7 +41,7 @@
 
 | 字段 | 规则 |
 | --- | --- |
-| `user_id` | 非空字符串或正整数；默认值为 `123456789012345678` |
+| `user_id` | 必填；目标账号的非空字符串或正整数 ID |
 | `headers` | 有界字符串键值映射，用于 GraphQL API |
 | `cookies` | 有界字符串键值映射，用于 GraphQL API |
 | `proxy` | 可选 HTTP 或 HTTPS 代理 URL，同时用于 GraphQL API 与媒体下载 |

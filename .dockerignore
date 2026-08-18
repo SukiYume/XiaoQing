@@ -14,6 +14,7 @@ logs
 test_reports/runs
 config/config.json
 config/secrets.json
+scripts/sync_to_remote.local.sh
 plugins/*/data
 data
 plugins/*/cache

@@ -100,11 +100,14 @@ def test_sync_validates_both_roots_and_excludes_runtime_data_from_transfer() -> 
     assert not any(line.strip().startswith("--delete-excluded") for line in source.splitlines())
 
 
-def test_sync_target_is_edited_in_script_instead_of_passed_as_environment() -> None:
+def test_sync_target_is_kept_in_ignored_local_script_instead_of_passed_as_environment() -> None:
     source = SCRIPT.read_text(encoding="utf-8")
 
-    assert 'readonly REMOTE_HOST="production-host"' in source
-    assert 'readonly REMOTE_DIR="/c/Users/testuser/Desktop/XiaoQing/XiaoQing_V3"' in source
+    assert 'readonly LOCAL_CONFIG_FILE="$SCRIPT_DIR/sync_to_remote.local.sh"' in source
+    assert 'source "$LOCAL_CONFIG_FILE"' in source
+    assert 'REMOTE_HOST="production-host"' in source
+    assert 'REMOTE_DIR="/absolute/path/to/XiaoQing"' in source
+    assert "scripts/sync_to_remote.local.sh" in (ROOT / ".gitignore").read_text(encoding="utf-8")
     assert "XIAOQING_SYNC_HOST" not in source
     assert "XIAOQING_SYNC_DIR" not in source
 

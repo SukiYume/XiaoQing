@@ -721,7 +721,7 @@ async def test_observe_outgoing_action_skips_sensitive_external_plugin_output(mo
     action = {
         "action": "send_private_msg",
         "params": {
-            "user_id": 1000000001,
+            "user_id": 123456789,
             "message": [
                 {
                     "type": "text",

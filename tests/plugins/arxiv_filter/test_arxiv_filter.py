@@ -78,7 +78,7 @@ def mock_context(temp_plugin_dir):
 @pytest.fixture
 def mock_event():
     """模拟事件"""
-    return {"user_id": 12345, "group_id": 100000001, "message_type": "group"}
+    return {"user_id": 12345, "group_id": 123456789, "message_type": "group"}
 
 
 # ============================================================
@@ -265,7 +265,7 @@ class TestHandle:
         mock_context,
         mock_event,
     ):
-        mock_context.principal = PluginPrincipal(kind="user", user_id=12345, group_id=100000001)
+        mock_context.principal = PluginPrincipal(kind="user", user_id=12345, group_id=123456789)
         mock_context.capabilities = PluginCapabilities(is_bot_admin=True)
         with (
             patch.object(
