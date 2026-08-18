@@ -206,6 +206,12 @@ Pendo 通过统一数据模型管理日程、待办、笔记、日记、账本�
 - [Codex 插件](plugins/codex/README.md)
 - [arXiv Filter 插件](plugins/arxiv_filter/README.md)
 
+### Flickr
+
+`flickr` 通过 Flickr 官方 REST API 浏览今日精选、关键词与标签搜索、Flickr Commons、用户公开照片和公开相册。搜索可按许可、排序与拍摄日期筛选；回复保留作者、许可条件和 Flickr 照片页，一次查询可用 `/flickr more` 连续浏览。
+
+- [Flickr 插件](plugins/flickr/README.md)
+
 ---
 
 ## 💾 插件与数据目录
@@ -245,9 +251,9 @@ XiaoQing/
 /reload
 ```
 
-普通配置采用 last-known-good 快照。敏感配置采用 fail-closed 快照。保存完整的 `secrets.json` 后执行 `/reload`，Core 会发布同一 revision 的配置与凭据，并在后台重载插件。
+普通配置采用 last-known-good 快照，敏感配置采用 fail-closed 快照。运行中的管理员可通过 `/set_secret` 更新 `secrets.json` 已有路径；Core 在同一事务中保存文件并发布新 revision。部署工具直接替换 `config.json` 或 `secrets.json` 时，先停止 Bot、写入完整文件，再重新启动，使两个来源在启动阶段组成已确认 revision。独立受保护的 Inbound 仍可用时，也可通过该通道执行 `/reload` 确认稳定来源。
 
-Windows 生产启动链为 `scripts/run-bot.vbs → scripts/run-bot-monitor.ps1 → scripts/run_process_with_rotating_logs.py`。双击 `scripts/stop-bot.vbs` 可安全停止同一仓库的监控器、Bot 与 NapCat，完成提示出现后可再次双击 `scripts/run-bot.vbs` 启动。同步脚本、启动参数和生产目录说明位于 `scripts/` 对应文件的注释与帮助输出中。
+Windows 生产启动链为 `scripts/run-bot.vbs → scripts/run-bot-monitor.ps1 → scripts/run_process_with_rotating_logs.py`。双击 `scripts/stop-bot.vbs` 可安全停止同一仓库的监控器、Bot 与 NapCat；由提升权限的 SSH、计划任务或管理员终端启动进程时，停服入口会显示一次 UAC 确认。完成提示出现后可再次双击 `scripts/run-bot.vbs` 启动。同步脚本、启动参数和生产目录说明位于 `scripts/` 对应文件的注释与帮助输出中。
 
 ---
 
@@ -303,6 +309,7 @@ bash scripts/run_full_uat.sh
 2. 确认 Inbound URL 或主动 WebSocket URI 与双方配置一致。
 3. 确认 OneBot secret 与 `inbound_token` 一致。
 4. 查看日志中的连接状态、错误码和 request ID。
+5. 日志出现 `secrets source is inconsistent` 与 `WebSocket client stopped` 时，按停服、保存完整配置来源、重新启动的顺序恢复已确认凭据 revision。
 
 ### 群聊缺少普通聊天回复
 

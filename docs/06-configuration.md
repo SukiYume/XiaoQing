@@ -100,7 +100,7 @@ Inbound 的接纳容量为 `inbound_ws_max_workers + ws_queue_size`。同一私�
 
 `scripts/run-bot-monitor.ps1` 在创建子进程前读取这些字段。启动链调用当前 `PATH` 中的 Python，并保持部署环境对解释器和依赖的所有权。字段修改在下次启动监控链时生效。
 
-`scripts/stop-bot.vbs` 是 Windows 双击停服入口。它调用监控器的 `-Stop` 模式，通过仓库级互斥量阻止停服期间产生新实例，并按当前仓库脚本路径与 NapCat 可执行文件路径回收进程树。停服完成后可双击 `scripts/run-bot.vbs` 重新启动。
+`scripts/stop-bot.vbs` 是 Windows 双击停服入口。它调用监控器的 `-Stop` 模式，通过仓库级互斥量阻止停服期间产生新实例，并按当前仓库脚本路径与 NapCat 可执行文件路径回收进程树。CIM 命令行读取采用三次有界重试；提升权限的 SSH、计划任务或管理员终端创建进程时，普通桌面入口显示一次 UAC，提升后的停止实例重新校验 PID、进程名和绝对命令路径。停服完成后可双击 `scripts/run-bot.vbs` 重新启动。
 
 ---
 
@@ -373,7 +373,7 @@ Pendo 的五个 Web 字段按配置 revision 原子发布，监听地址变化�
 | `plugins.shell.terminal.executable` | Git Bash 绝对路径 | `git-bash` 后端的解释器路径 |
 | `plugins.smalltalk.voice_probability` | `0` | 纯文本闲聊转语音概率，范围 `0..1` |
 
-Shell 命令启用列表、工作目录与审计开关位于 `secrets.plugins.shell`；[Shell 配置](../plugins/shell/README.md#终端配置) 说明两种后端。[插件使用手册](09-plugins.md) 说明全部 29 个插件的配置入口与数据位置。
+Shell 命令启用列表、工作目录与审计开关位于 `secrets.plugins.shell`；[Shell 配置](../plugins/shell/README.md#终端配置) 说明两种后端。[插件使用手册](09-plugins.md) 说明全部 30 个插件的配置入口与数据位置。
 
 ---
 
@@ -396,6 +396,7 @@ Core 顶层敏感字段：
 | 命名空间 | 字段 | 用途 |
 |---|---|---|
 | `plugins.arxiv_filter` | `feishu_webhook` | 飞书推送 Webhook |
+| `plugins.flickr` | `api_key` | Flickr App Garden 公共只读 API Key |
 | `plugins.wolframalpha` | `appid` | Wolfram\|Alpha App ID |
 | `plugins.voice` | `subscription_key`、`region`、`voice_name`、`style`、`role`、`proxy` | Azure Speech 凭据、音色与代理 |
 | `plugins.chat` | `token`、`bot_id`、`proxy` | Coze API 凭据与代理 |
@@ -428,19 +429,19 @@ QingSSH、Shell 与 Codex 的管理员命令会维护各自 secret 命名空间�
 | 配置类别 | 生效方式 |
 |---|---|
 | Bot 名称、前缀、默认群、Session、并发、时区 | `/reload` 或配置 watcher |
-| OneBot 地址、开关、队列与 token | `/reload` 或配置 watcher，新连接使用新 revision |
-| Inbound 地址、开关、worker、队列与 token | `/reload` 或配置 watcher，候选 Listener 通过后切换代次 |
+| OneBot 地址、开关、队列与 token | 已确认 revision 发布后重建连接 |
+| Inbound 地址、开关、worker、队列与 token | 已确认 revision 发布后由候选 Listener 切换代次 |
 | `plugin_execution` 与插件 watcher 策略 | `/reload` 或配置 watcher |
-| AI Provider、profile、route 与 API Key | `/reload` 或配置 watcher，下一次 AI 调用读取新快照 |
-| 插件公开配置与私有凭据 | `/reload` 或配置 watcher，插件按 revision 读取 |
+| AI Provider、profile、route 与 API Key | 已确认 revision 发布后由下一次 AI 调用读取 |
+| 插件公开配置与私有凭据 | 已确认 revision 发布后由插件读取 |
 | `data_root`、日志字段、`napcat_account`、`mkl_threading_layer` | 重启主进程或生产启动链 |
 | 插件源码、Manifest 与 `watch_files` | `/reload`、插件 watcher 或 restart-only 环境的进程重启 |
 
-普通配置校验异常时继续使用 last-known-good 快照。敏感来源异常时立即进入 fail-closed 状态，撤销网络凭据与运行时管理员视图。保存完整 secrets 文件后执行 `/reload` 发布恢复 revision，并启动插件后台重载。
+普通配置校验异常时继续使用 last-known-good 快照。敏感来源异常或来源配对尚未确认时立即进入 fail-closed 状态，撤销网络凭据与运行时管理员视图。管理员私聊中的 `/set_secret` 适用于已有 secret 路径，由 Core 完成持锁写入和 revision 发布。
 
-配置 watcher 将分别保存的新文件代视为独立来源事件。新公开配置可先发布；新 secrets 进入 `INCONSISTENT` 撤权状态。两个文件保存完成后执行 `/reload`，Core 连续读取稳定内容并发布成对授权 revision。
+配置 watcher 将分别保存的新文件代视为独立来源事件。新公开配置可先发布；与该来源尚未确认配对的 secrets 进入 `INCONSISTENT` 撤权状态。主动 WebSocket 是唯一控制通道的部署采用“停止服务 → 原子保存两个完整文件 → 启动服务”，启动读取会确认新的来源对。保留独立受保护 Inbound 的实例可在文件稳定后通过该通道执行 `/reload`。
 
-单个配置文件上限为 8 MiB，JSON 树深度上限为 64，节点上限为 100000。Core 拒绝非有限数字、重复不稳定读取和超出预算的来源。部署脚本可先写临时文件并原子替换，再执行 `/reload`。
+单个配置文件上限为 8 MiB，JSON 树深度上限为 64，节点上限为 100000。Core 拒绝非有限数字、重复不稳定读取和超出预算的来源。部署脚本在停服窗口内先写临时文件并原子替换，再启动服务。
 
 网络地址或 token 变化会唤醒主动 WebSocket 任务，并通过候选 Listener 提交 Inbound 新代。同一时间只有已提交代接纳新事件。
 
@@ -454,6 +455,7 @@ QingSSH、Shell 与 Codex 的管理员命令会维护各自 secret 命名空间�
 - 反向代理负责 TLS、来源策略和速率限制。
 - `admin_user_ids` 只包含当前管理员。
 - AI Key 与插件凭据位于 secrets。
+- 外部配置文件替换安排在停服窗口内；运行时单项 secret 更新使用受控管理员命令。
 - `data_root`、日志目录和备份目录具有明确所有权。
 - `plugin_execution` 为长任务插件配置合适预算。
 - Pendo Web Cookie Secure 与 HTTPS 部署保持一致。

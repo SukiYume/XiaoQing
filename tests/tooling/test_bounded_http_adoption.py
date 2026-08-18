@@ -20,6 +20,7 @@ BOUNDED_RUNTIME_FILES = (
     "plugins/chat/main.py",
     "plugins/chime/main.py",
     "plugins/earthquake/main.py",
+    "plugins/flickr/client.py",
     "plugins/github/main.py",
     "plugins/signin/yingshi.py",
     "plugins/twitter/main.py",

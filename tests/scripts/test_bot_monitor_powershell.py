@@ -113,6 +113,90 @@ def test_monitor_parses_in_windows_powershell_and_pwsh() -> None:
         assert result.returncode == 0, result.stderr
 
 
+def test_elevated_stop_preserves_scoped_paths_and_reports_child_failure() -> None:
+    executable = _powershell_executable()
+    if executable is None:
+        pytest.skip("PowerShell is not installed")
+    environment = {**os.environ, "XIAOQING_MONITOR_AST_PATH": str(MONITOR)}
+    probe = r"""
+$tokens = $null
+$errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $env:XIAOQING_MONITOR_AST_PATH, [ref]$tokens, [ref]$errors)
+$definitions = $ast.FindAll({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -in @(
+            'ConvertTo-NativeArgument',
+            'Join-NativeArguments',
+            'Invoke-ElevatedStop'
+        )
+}, $true)
+foreach ($definition in $definitions) {
+    Invoke-Expression $definition.Extent.Text
+}
+
+$script:MonitorScript = 'C:\repo with spaces\scripts\run-bot-monitor.ps1'
+$script:BotRoot = 'C:\repo with spaces'
+$script:NapCatPath = 'C:\NapCat Shell\NapCatWinBootMain.exe'
+$script:MockExitCode = 0
+$script:Disposed = $false
+function Start-Process {
+    param(
+        $FilePath,
+        $ArgumentList,
+        $WorkingDirectory,
+        $WindowStyle,
+        $Verb,
+        [switch]$Wait,
+        [switch]$PassThru,
+        $ErrorAction
+    )
+    $script:ObservedFilePath = $FilePath
+    $script:ObservedArguments = $ArgumentList
+    $script:ObservedWorkingDirectory = $WorkingDirectory
+    $script:ObservedVerb = $Verb
+    $result = [pscustomobject]@{ ExitCode = $script:MockExitCode }
+    $result | Add-Member -MemberType ScriptMethod -Name Dispose -Value {
+        $script:Disposed = $true
+    }
+    return $result
+}
+
+Invoke-ElevatedStop
+if ($script:ObservedVerb -ne 'RunAs') { exit 71 }
+if ($script:ObservedWorkingDirectory -ne $script:BotRoot) { exit 72 }
+foreach ($fragment in @(
+    '-Stop',
+    '-ElevationAttempted',
+    $script:MonitorScript,
+    $script:BotRoot,
+    $script:NapCatPath
+)) {
+    if ($script:ObservedArguments.IndexOf(
+        $fragment,
+        [StringComparison]::OrdinalIgnoreCase
+    ) -lt 0) { exit 73 }
+}
+if (-not $script:Disposed) { exit 74 }
+
+$script:MockExitCode = 17
+$script:Disposed = $false
+try {
+    Invoke-ElevatedStop
+    exit 75
+} catch {
+    if ($_.Exception.Message -notlike '*elevated stop exited with code 17*') { exit 76 }
+}
+if (-not $script:Disposed) { exit 77 }
+exit 0
+"""
+
+    result = _run_powershell(executable, "-Command", probe, env=environment)
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_mutex_identity_normalizes_trailing_separators_without_damaging_roots(
     tmp_path: Path,
 ) -> None:

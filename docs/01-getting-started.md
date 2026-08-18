@@ -29,7 +29,7 @@ python -m pip install -r requirements.txt
 
 - Jupyter 插件需要可用的 Jupyter kernel。
 - arXiv Filter 的本地推理需要 `plugins/arxiv_filter/best_model/` 模型资产。
-- 外部 API 插件需要对应服务凭据。
+- Flickr、Wolfram|Alpha、语音和其他外部 API 插件需要对应服务凭据。
 
 ---
 
@@ -74,6 +74,8 @@ cp config/secrets.json.example config/secrets.json
 ```
 
 将 `config/secrets.json` 保存在部署主机，并为文件设置与 Bot 进程相匹配的读取权限。项目的 Git 忽略规则覆盖正式 secrets 文件。
+
+首次部署在启动前写入完整配置。服务运行期间可在管理员私聊中用 `/set_secret <已有路径> <值>` 提交单项敏感配置。需要新增路径或整体替换 `config.json`、`secrets.json` 时，先停止服务，保存两个完整文件，再启动新进程。
 
 ### AI 插件配置
 
@@ -207,7 +209,7 @@ Windows 生产环境重启流程：
 2. 等待监控器、Bot 与 NapCat 已停止的完成提示。
 3. 双击 `scripts/run-bot.vbs` 启动新进程。
 
-停服入口使用仓库级互斥量和绝对命令路径识别当前部署，只收口该仓库的 PowerShell 监控器、Python 日志泵、`main.py` 与指定 NapCat 进程树。重复双击会返回同一完成结果。
+停服入口使用仓库级互斥量和绝对命令路径识别当前部署，只收口该仓库的 PowerShell 监控器、Python 日志泵、`main.py` 与指定 NapCat 进程树。重复双击会返回同一完成结果。监控器由提升权限的 SSH、计划任务或管理员终端启动时，停服入口在身份读取连续失败后显示一次 UAC；提升后的进程重新完成全部身份校验再收口进程树。
 
 ---
 
@@ -271,6 +273,7 @@ UAT 运行真实服务，覆盖 HTTP/WS 命令矩阵、插件业务场景、Core
 2. 核对 Inbound URL 或主动 WebSocket URI。
 3. 核对 OneBot secret 与 `inbound_token`。
 4. 在日志中查找连接状态、错误码和 request ID。
+5. 日志同时出现 `secrets source is inconsistent` 和 `WebSocket client stopped` 时，停止服务，确认两个配置文件完整，再重新启动。
 
 ### 群聊命令响应排查
 

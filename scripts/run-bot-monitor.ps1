@@ -15,6 +15,7 @@ param(
     [AllowEmptyString()]
     [string]$NapCatPath = "",
     [switch]$Stop,
+    [switch]$ElevationAttempted,
     [switch]$DisableNapCat,
     [string[]]$BotArguments = @(),
     [string[]]$NapCatArguments = @(),
@@ -307,6 +308,49 @@ function Test-CommandLineContains {
         $CommandLine.IndexOf($ExpectedPath, [StringComparison]::OrdinalIgnoreCase) -ge 0
 }
 
+function Get-CimProcessWithReadableCommandLine {
+    param(
+        [int]$ProcessId,
+        [string]$Description,
+        [ValidateRange(1, 10)]
+        [int]$MaximumAttempts = 3,
+        [ValidateRange(0, 5000)]
+        [int]$RetryDelayMilliseconds = 200
+    )
+
+    # Win32_Process 偶尔会先返回进程对象，再把 CommandLine 暂时留空。停止
+    # 流程必须等待这一瞬时状态恢复，同时不能在身份始终不可读时仅凭 PID 强杀。
+    for ($attempt = 1; $attempt -le $MaximumAttempts; $attempt++) {
+        try {
+            $process = Get-CimInstance `
+                -ClassName Win32_Process `
+                -Filter "ProcessId = $ProcessId" `
+                -ErrorAction Stop
+        } catch {
+            if ($attempt -ge $MaximumAttempts) {
+                throw
+            }
+            if ($RetryDelayMilliseconds -gt 0) {
+                Start-Sleep -Milliseconds $RetryDelayMilliseconds
+            }
+            continue
+        }
+
+        if ($null -eq $process) {
+            return $null
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$process.CommandLine)) {
+            return $process
+        }
+        if ($attempt -lt $MaximumAttempts -and $RetryDelayMilliseconds -gt 0) {
+            Start-Sleep -Milliseconds $RetryDelayMilliseconds
+        }
+    }
+
+    $message = "Unable to verify command line for $Description process $ProcessId after $MaximumAttempts attempts. Run the stop command as the same Windows account that started XiaoQing, or as an administrator."
+    throw ([UnauthorizedAccessException]::new($message))
+}
+
 # ---------- 已登记进程的识别与回收 ----------
 
 function Get-TrackedProcessFromFile {
@@ -347,18 +391,14 @@ function Get-TrackedProcessFromFile {
         return $null
     }
 
-    # CIM 查询错误或无法读取命令行时无法证明 PID 已陈旧，必须失败关闭，避免
-    # 临时 WMI/权限故障导致同一个仓库重复拉起或误停进程。
-    $process = Get-CimInstance `
-        -ClassName Win32_Process `
-        -Filter "ProcessId = $processId" `
-        -ErrorAction Stop
+    # 先吸收短暂的 CIM/WMI 空值；持续查询失败或命令行不可读时仍失败关闭，
+    # 避免把权限问题当成旧 PID，也避免误停复用该 PID 的其他进程。
+    $process = Get-CimProcessWithReadableCommandLine `
+        -ProcessId $processId `
+        -Description "tracked $Description"
     if ($null -eq $process) {
         Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
         return $null
-    }
-    if ([string]::IsNullOrWhiteSpace([string]$process.CommandLine)) {
-        throw "Unable to verify command line for tracked $Description process $processId"
     }
     $identityMatches = $true
     foreach ($expectedPath in $ExpectedPaths) {
@@ -545,10 +585,9 @@ function Stop-VerifiedCommandProcess {
     )
 
     $processId = [int]$Process.ProcessId
-    $current = Get-CimInstance `
-        -ClassName Win32_Process `
-        -Filter "ProcessId = $processId" `
-        -ErrorAction Stop
+    $current = Get-CimProcessWithReadableCommandLine `
+        -ProcessId $processId `
+        -Description $Description
     if ($null -eq $current) {
         return
     }
@@ -770,8 +809,75 @@ function Start-NapCat {
 
 # ---------- 停服入口与单实例监控循环 ----------
 
+function Test-IsAdministrator {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    try {
+        $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+        return $principal.IsInRole(
+            [Security.Principal.WindowsBuiltInRole]::Administrator
+        )
+    } finally {
+        $identity.Dispose()
+    }
+}
+
+function Invoke-ElevatedStop {
+    $executableName = if ($PSVersionTable.PSEdition -eq "Core") {
+        "pwsh.exe"
+    } else {
+        "powershell.exe"
+    }
+    $powerShellExecutable = Join-Path $PSHOME $executableName
+    if (-not (Test-Path -LiteralPath $powerShellExecutable -PathType Leaf)) {
+        throw "Unable to locate the current PowerShell executable: $powerShellExecutable"
+    }
+
+    $arguments = @(
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-WindowStyle", "Hidden",
+        "-File", $MonitorScript,
+        "-Stop",
+        "-ElevationAttempted",
+        "-BotRoot", $BotRoot,
+        "-NapCatPath", $NapCatPath
+    )
+
+    $elevated = $null
+    try {
+        # ShellExecute 的 runas 动词会显示系统 UAC；提升后的脚本仍会重新读取
+        # PID、校验命令行和排除本次 -Stop 调用，不会把提升当作身份凭据。
+        $elevated = Start-Process `
+            -FilePath $powerShellExecutable `
+            -ArgumentList (Join-NativeArguments $arguments) `
+            -WorkingDirectory $BotRoot `
+            -WindowStyle Hidden `
+            -Verb RunAs `
+            -Wait `
+            -PassThru `
+            -ErrorAction Stop
+        if ($elevated.ExitCode -ne 0) {
+            throw "elevated stop exited with code $($elevated.ExitCode)"
+        }
+    } catch {
+        throw "Unable to complete the elevated XiaoQing stop: $($_.Exception.Message)"
+    } finally {
+        if ($null -ne $elevated) {
+            $elevated.Dispose()
+        }
+    }
+}
+
 if ($Stop) {
-    Stop-XiaoQingService
+    try {
+        Stop-XiaoQingService
+    } catch [UnauthorizedAccessException] {
+        if ($ElevationAttempted -or (Test-IsAdministrator)) {
+            throw
+        }
+        Invoke-ElevatedStop
+    }
     exit 0
 }
 
