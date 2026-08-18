@@ -157,6 +157,7 @@ packages = [
     "plugins.dict",
     "plugins.earthquake",
     "plugins.echo",
+    "plugins.flickr",
     "plugins.github",
     "plugins.guess_number",
     "plugins.jupyter",

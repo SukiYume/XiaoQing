@@ -1,0 +1,85 @@
+{
+    "schema_version": 1,
+    "name": "flickr",
+    "version": "1.0.0",
+    "description": "Flickr 公共摄影发现、搜索与浏览",
+    "entry": "main.py",
+    "concurrency": "parallel",
+    "commands": [
+        {
+            "name": "flickr",
+            "triggers": ["flickr", "flicker", "弗里克"],
+            "help": "📷 Flickr 公共摄影精选、搜索、用户与相册浏览",
+            "admin_only": false,
+            "usage": "/flickr [search|commons|user|album|more|info|help]",
+            "examples": ["/flickr"],
+            "invalid_examples": ["/flickr unknown"],
+            "subcommands": [
+                {
+                    "name": "search",
+                    "aliases": ["搜索"],
+                    "help": "按关键词、标签、排序、许可和拍摄日期搜索公开照片",
+                    "usage": "/flickr search <关键词> [--tags a,b] [--sort relevance|interesting|new|old] [--license any|cc|public-domain] [--date YYYY-MM|YYYY-MM-DD]",
+                    "examples": ["/flickr search aurora --sort interesting", "/flickr 搜索 星云 --license any"],
+                    "invalid_examples": ["/flickr search", "/flickr search aurora --sort random"]
+                },
+                {
+                    "name": "commons",
+                    "aliases": ["典藏", "公共典藏"],
+                    "help": "搜索 Flickr Commons 公共典藏",
+                    "usage": "/flickr commons <关键词> [搜索选项]",
+                    "examples": ["/flickr commons astronomy"],
+                    "invalid_examples": ["/flickr commons"]
+                },
+                {
+                    "name": "user",
+                    "aliases": ["作者", "用户"],
+                    "help": "浏览指定 Flickr 用户的公开照片",
+                    "usage": "/flickr user <用户名或个人页 URL>",
+                    "examples": ["/flickr user NASA on The Commons"],
+                    "invalid_examples": ["/flickr user"]
+                },
+                {
+                    "name": "album",
+                    "aliases": ["相册"],
+                    "help": "浏览 Flickr 公开相册",
+                    "usage": "/flickr album <相册 URL> 或 /flickr album <用户> <相册ID>",
+                    "examples": ["/flickr album https://www.flickr.com/photos/example/albums/72100000000000000"],
+                    "invalid_examples": ["/flickr album 72100000000000000"]
+                },
+                {
+                    "name": "more",
+                    "aliases": ["更多", "下一张"],
+                    "help": "继续当前 Flickr 结果，可一次发送 1 到 5 张",
+                    "usage": "/flickr more [1-5]",
+                    "examples": ["/flickr more", "/flickr more 3"],
+                    "invalid_examples": ["/flickr more 0", "/flickr more 6"]
+                },
+                {
+                    "name": "info",
+                    "aliases": ["详情", "信息"],
+                    "help": "查看当前照片或指定 Flickr 照片的详细信息",
+                    "usage": "/flickr info [照片ID或 URL]",
+                    "examples": ["/flickr info", "/flickr info 123456789"],
+                    "invalid_examples": ["/flickr info one two"]
+                },
+                {
+                    "name": "help",
+                    "aliases": ["帮助", "?"],
+                    "help": "显示 Flickr 命令说明",
+                    "usage": "/flickr help",
+                    "match": "exact",
+                    "examples": ["/flickr help"],
+                    "invalid_examples": ["/flickr help extra"]
+                }
+            ]
+        }
+    ],
+    "dependencies": [
+        {
+            "name": "PIL",
+            "required": true,
+            "description": "用于验证 Flickr 图片内容与资源预算"
+        }
+    ]
+}

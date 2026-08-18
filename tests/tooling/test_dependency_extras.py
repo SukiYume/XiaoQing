@@ -23,6 +23,7 @@ _REQUIRED_PLUGIN_DEPENDENCIES = {
     "ads_paper": {"aiohttp"},
     "apod": {"PIL", "bs4"},
     "earthquake": {"PIL", "bs4", "requests"},
+    "flickr": {"PIL"},
     "github": {"bs4"},
     "pendo": {"dateutil", "fastapi", "jwt", "pydantic", "starlette", "uvicorn"},
     "twitter": {"PIL"},

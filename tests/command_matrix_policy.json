@@ -21,6 +21,7 @@
     "dict": {"risk": "read_only", "dependency": "external", "sensitive": false},
     "earthquake": {"risk": "read_only", "dependency": "external", "sensitive": false},
     "echo": {"risk": "read_only", "dependency": "local", "sensitive": false},
+    "flickr": {"risk": "isolated_state", "dependency": "external", "sensitive": false},
     "github": {"risk": "read_only", "dependency": "external", "sensitive": false},
     "guess_number": {"risk": "isolated_state", "dependency": "local", "sensitive": false},
     "jupyter": {"risk": "privileged", "dependency": "local", "sensitive": true},

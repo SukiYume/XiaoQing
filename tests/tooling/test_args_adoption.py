@@ -18,6 +18,7 @@ ROOT = REPOSITORY_ROOT
         ("plugins/guess_number/main.py", "tokenize"),
         ("plugins/adnmb/main.py", "parse"),
         ("plugins/color/main.py", "parse"),
+        ("plugins/flickr/main.py", "parse"),
         ("plugins/qingssh/handlers.py", "tokenize"),
     ],
 )

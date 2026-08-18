@@ -24,6 +24,14 @@ def test_adnmb_docs_match_read_and_feed_capabilities() -> None:
     assert "allowed_users" not in readme
 
 
+def test_flickr_docs_describe_all_license_mode_and_attribution() -> None:
+    readme = _read("flickr")
+
+    assert "license=any" in readme
+    assert "作者、许可" in readme
+    assert "data/flickr/images/" in readme
+
+
 def test_ads_paper_docs_use_current_command_and_secret_keys() -> None:
     readme = _read("ads_paper")
     for marker in (

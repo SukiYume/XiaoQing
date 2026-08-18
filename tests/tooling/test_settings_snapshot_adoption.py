@@ -17,6 +17,7 @@ REVIEWED_RUNTIME_FILES = {
     "plugins/chat/main.py",
     "plugins/codex/config.py",
     "plugins/codex/manager.py",
+    "plugins/flickr/client.py",
     "plugins/github/main.py",
     "plugins/pendo/main.py",
     "plugins/qingssh/output_relay.py",
