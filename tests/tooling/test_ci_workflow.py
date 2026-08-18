@@ -99,7 +99,11 @@ def test_dockerfile_uses_the_same_requirements_file() -> None:
 
 
 def test_only_runtime_and_maintenance_utility_scripts_remain() -> None:
-    scripts = {path.name for path in (ROOT / "scripts").iterdir() if path.is_file()}
+    scripts = {
+        path.name
+        for path in (ROOT / "scripts").iterdir()
+        if path.is_file() and path.name != "sync_to_remote.local.sh"
+    }
 
     assert scripts == {
         "arxiv_inference_cli.py",

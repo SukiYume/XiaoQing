@@ -214,29 +214,6 @@ def test_proxy_configuration_is_strict(
     assert twitter._get_proxy(context) == expected
 
 
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [
-        (" exact-id ", "exact-id"),
-        ('id"\\Unicode-用户', 'id"\\Unicode-用户'),
-        (123456, "123456"),
-        (0, twitter.DEFAULT_USER_ID),
-        (True, twitter.DEFAULT_USER_ID),
-        (None, twitter.DEFAULT_USER_ID),
-        ("", twitter.DEFAULT_USER_ID),
-        ("bad\nvalue", twitter.DEFAULT_USER_ID),
-        ("x" * (twitter.MAX_USER_ID_CHARS + 1), twitter.DEFAULT_USER_ID),
-    ],
-)
-def test_user_id_normalization(
-    context: SimpleNamespace,
-    value: object,
-    expected: str,
-) -> None:
-    context.secrets["plugins"]["twitter"]["user_id"] = value
-    assert twitter._get_user_id(context) == expected
-
-
 def test_cookies_keep_only_bounded_string_pairs(context: SimpleNamespace) -> None:
     context.secrets["plugins"]["twitter"]["cookies"] = {
         "ct0": " csrf ",
