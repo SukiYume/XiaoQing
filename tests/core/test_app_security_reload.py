@@ -26,6 +26,80 @@ temp_app_root = _fixture_support.temp_app_root
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_valid_external_plugin_secret_change_keeps_control_channel_until_reload(
+    temp_app_root: Path,
+):
+    from core.onebot import OneBotWsClient
+
+    config_path = temp_app_root / "config" / "config.json"
+    secrets_path = temp_app_root / "config" / "secrets.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config.update(
+        {
+            "enable_ws_client": True,
+            "onebot_ws_uri": "ws://127.0.0.1:6700",
+        }
+    )
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    active_secrets = {
+        "admin_user_ids": [12345, 67890],
+        "onebot_token": "stable-onebot",
+        "inbound_token": "",
+        "plugins": {"demo": {"api_key": "old-plugin-secret"}},
+    }
+    secrets_path.write_text(json.dumps(active_secrets), encoding="utf-8")
+
+    app = XiaoQingApp(temp_app_root)
+    ws_client = OneBotWsClient("ws://127.0.0.1:6700", "stable-onebot")
+    app.ws_client = ws_client
+    app._send_action = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    before = app.config_manager.snapshot()
+    candidate = json.loads(json.dumps(active_secrets))
+    candidate["plugins"]["demo"]["api_key"] = "new-plugin-secret"
+    secrets_path.write_text(json.dumps(candidate), encoding="utf-8")
+
+    with patch.object(ws_client, "_request_auth_rotation") as request_rotation:
+        await app.config_manager._watch_reconcile_once()
+
+        pending = app.config_manager.snapshot()
+        assert pending.revision == before.revision
+        assert pending.secrets_status.value == "valid"
+        assert pending.secrets["plugins"]["demo"]["api_key"] == "old-plugin-secret"
+        assert app.is_admin(12345) is True
+        assert app._runtime_onebot_token == "stable-onebot"
+        assert app._runtime_onebot_credentials_trusted is True
+        assert ws_client.auth_token == "stable-onebot"
+        assert ws_client.credentials_trusted is True
+        request_rotation.assert_not_called()
+
+        assert app._send_action.await_count == 2
+        first_action = app._send_action.await_args_list[0].args[0]
+        notice_text = first_action["params"]["message"][0]["data"]["text"]
+        assert first_action["action"] == "send_private_msg"
+        assert first_action["params"]["user_id"] == 12345
+        assert "✅ 文件完整且格式有效" in notice_text
+        assert "plugins.demo.api_key" in notice_text
+        assert "发送 /reload 确认并应用" in notice_text
+        assert "old-plugin-secret" not in notice_text
+        assert "new-plugin-secret" not in notice_text
+
+        app.reload_config()
+        if app._config_apply_tasks:
+            await asyncio.gather(*tuple(app._config_apply_tasks))
+
+        confirmed = app.config_manager.snapshot()
+        assert confirmed.secrets["plugins"]["demo"]["api_key"] == "new-plugin-secret"
+        assert app.config_manager._pending_secrets_source is None
+        assert app.is_admin(12345) is True
+        assert ws_client.auth_token == "stable-onebot"
+        assert ws_client.credentials_trusted is True
+        request_rotation.assert_not_called()
+
+    app.scheduler.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_failed_reload_revokes_auth_and_admin_before_blocked_callbacks(
     temp_app_root: Path,
 ):

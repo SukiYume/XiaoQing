@@ -349,7 +349,7 @@ scripts/run-bot.vbs
 
 双击 `scripts/stop-bot.vbs` 可停止该启动链管理的监控器、Bot 和 NapCat。停服模式持有同一仓库级互斥量，并在结束进程前复核 PID、进程名与绝对命令路径。CIM 身份读取经过三次短重试；提升权限创建的进程由一次 UAC 提升后的停止实例重新验证并回收。完成提示出现后可双击 `scripts/run-bot.vbs` 重启。
 
-生产配置来源整体替换安排在停服窗口内。运行实例通过 `/set_secret` 管理已有 secret 路径；部署文件更新完成后重新启动，使公开配置与 secrets 在启动阶段组成已确认 revision。
+生产运行实例通过 `/set_secret` 管理已有 secret 路径。完整有效的 secrets 单文件外部变更由 watcher 暂存，当前管理员收到字段路径摘要后使用 `/reload` 确认。公开配置变更和双来源整体替换安排在停服窗口内；部署文件更新完成后重新启动，使公开配置与 secrets 在启动阶段组成已确认 revision。
 
 ### systemd
 

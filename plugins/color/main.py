@@ -95,7 +95,7 @@ HELP_TEXT = """🎨 颜色工具｜526 种中国传统色
 
 查询后加 --picture 可生成色卡，例如 /color 乳白 --picture
 管理员可用 /color add 和 /color delete 管理当前聊天的自定义色。
-旧版短选项（包括 -p 图片）仍可使用。"""
+短选项同样可用，包括用于生成色卡的 -p。"""
 
 
 class ColorInputError(ValueError):

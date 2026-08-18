@@ -272,6 +272,7 @@ def test_config_manager_like_declares_atomic_reload_and_snapshot_contract() -> N
         assert notify.default is False
         assert hasattr(owner, "snapshot")
         assert hasattr(owner, "on_security_update")
+        assert hasattr(owner, "on_pending_secrets_change")
 
 
 # ============================================================

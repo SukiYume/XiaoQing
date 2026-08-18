@@ -434,12 +434,15 @@ QingSSH、Shell 与 Codex 的管理员命令会维护各自 secret 命名空间�
 | `plugin_execution` 与插件 watcher 策略 | `/reload` 或配置 watcher |
 | AI Provider、profile、route 与 API Key | 已确认 revision 发布后由下一次 AI 调用读取 |
 | 插件公开配置与私有凭据 | 已确认 revision 发布后由插件读取 |
+| 有效的外部 `secrets.json` 单文件候选 | 管理员核对私聊字段摘要后执行 `/reload` |
 | `data_root`、日志字段、`napcat_account`、`mkl_threading_layer` | 重启主进程或生产启动链 |
 | 插件源码、Manifest 与 `watch_files` | `/reload`、插件 watcher 或 restart-only 环境的进程重启 |
 
-普通配置校验异常时继续使用 last-known-good 快照。敏感来源异常或来源配对尚未确认时立即进入 fail-closed 状态，撤销网络凭据与运行时管理员视图。管理员私聊中的 `/set_secret` 适用于已有 secret 路径，由 Core 完成持锁写入和 revision 发布。
+普通配置校验异常时继续使用 last-known-good 快照。敏感来源缺失、损坏、不可读或与新公开配置尚未确认配对时立即进入 fail-closed 状态，撤销网络凭据与运行时管理员视图。管理员私聊中的 `/set_secret` 适用于已有 secret 路径，由 Core 完成持锁写入和 revision 发布。
 
-配置 watcher 将分别保存的新文件代视为独立来源事件。新公开配置可先发布；与该来源尚未确认配对的 secrets 进入 `INCONSISTENT` 撤权状态。主动 WebSocket 是唯一控制通道的部署采用“停止服务 → 原子保存两个完整文件 → 启动服务”，启动读取会确认新的来源对。保留独立受保护 Inbound 的实例可在文件稳定后通过该通道执行 `/reload`。
+配置 watcher 将分别保存的新文件代视为独立来源事件。当前公开配置签名与已确认版本一致、当前来源对可信且外部 secrets 文件完整有效时，新文件代作为待确认候选保存；运行时继续使用已确认 secrets，revision 与凭据代保持当前值。Core 使用当前可信 OneBot 通道私聊全部当前管理员，通知包含文件有效状态及新增、删除、修改的字段路径，所有字段值保持隐藏。`/reload` 会重新读取稳定磁盘来源并原子发布候选。
+
+新公开配置可先发布；与该来源尚未确认配对的 secrets 进入 `INCONSISTENT` 撤权状态。主动 WebSocket 是唯一控制通道的部署采用“停止服务 → 原子保存两个完整文件 → 启动服务”，启动读取会确认新的来源对。保留独立受保护 Inbound 的实例可在文件稳定后通过该通道执行 `/reload`。
 
 单个配置文件上限为 8 MiB，JSON 树深度上限为 64，节点上限为 100000。Core 拒绝非有限数字、重复不稳定读取和超出预算的来源。部署脚本在停服窗口内先写临时文件并原子替换，再启动服务。
 
@@ -455,7 +458,7 @@ QingSSH、Shell 与 Codex 的管理员命令会维护各自 secret 命名空间�
 - 反向代理负责 TLS、来源策略和速率限制。
 - `admin_user_ids` 只包含当前管理员。
 - AI Key 与插件凭据位于 secrets。
-- 外部配置文件替换安排在停服窗口内；运行时单项 secret 更新使用受控管理员命令。
+- 有效的 secrets 单文件替换由管理员核对字段摘要并执行 `/reload`；公开配置变更与双来源替换安排在停服窗口内。
 - `data_root`、日志目录和备份目录具有明确所有权。
 - `plugin_execution` 为长任务插件配置合适预算。
 - Pendo Web Cookie Secure 与 HTTPS 部署保持一致。

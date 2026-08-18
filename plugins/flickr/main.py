@@ -44,6 +44,7 @@ MAX_SESSIONS = 512
 MAX_MORE_COUNT = 5
 MAX_IMAGE_BYTES = 12 * 1024 * 1024
 _STATIC_IMAGE_HOSTS = frozenset({"live.staticflickr.com"})
+_FLICKR_PAGE_HOSTS = frozenset({"flickr.com", "www.flickr.com", "m.flickr.com"})
 _IMAGE_EXTENSIONS = (".jpg", ".png", ".webp", ".gif")
 _IMAGE_LIMITS = ImageValidationLimits(
     max_bytes=MAX_IMAGE_BYTES,
@@ -292,7 +293,7 @@ def _parse_album_reference(tokens: list[str]) -> tuple[str, str]:
     host = (parsed.hostname or "").rstrip(".").casefold()
     if (
         parsed.scheme.casefold() not in {"http", "https"}
-        or host not in {"flickr.com", "www.flickr.com", "m.flickr.com"}
+        or host not in _FLICKR_PAGE_HOSTS
         or parsed.username is not None
         or parsed.password is not None
         or port not in {None, 80, 443}
@@ -346,9 +347,8 @@ def _parse_photo_reference(value: str) -> str:
     parts = [part for part in parsed.path.split("/") if part]
     if host == "flic.kr" and len(parts) == 2 and parts[0] == "p":
         return _decode_short_photo_id(parts[1])
-    if host in {"flickr.com", "www.flickr.com", "m.flickr.com"}:
-        if len(parts) >= 3 and parts[0].casefold() == "photos":
-            return _opaque_id(parts[2], label="照片 ID")
+    if host in _FLICKR_PAGE_HOSTS and len(parts) >= 3 and parts[0].casefold() == "photos":
+        return _opaque_id(parts[2], label="照片 ID")
     raise FlickrUsageError("请提供 Flickr 照片 ID 或照片页 URL")
 
 
@@ -538,10 +538,6 @@ async def _last_photo(
         return session.photos[session.last_index]
 
 
-def _make_client(context: PluginContextProtocol) -> FlickrClient:
-    return FlickrClient(context)
-
-
 async def _dispatch(
     parsed: ParsedArgs,
     event: dict[str, Any],
@@ -556,13 +552,13 @@ async def _dispatch(
     if action == "interesting":
         if parsed.tokens or parsed.options:
             raise FlickrUsageError("用法：/flickr")
-        client = _make_client(context)
+        client = FlickrClient(context)
         page = await client.interesting()
         return await _open_page(page, summary="今日精选", event=event, context=context)
 
     if action in {"search", "commons"}:
         request = _parse_search(parsed, token_start=1)
-        client = _make_client(context)
+        client = FlickrClient(context)
         page = await client.search(
             query=request.query,
             tags=request.tags,
@@ -580,7 +576,7 @@ async def _dispatch(
         reference = " ".join(parsed.tokens[1:]).strip()
         if not reference:
             raise FlickrUsageError("用法：/flickr user <用户名或个人页 URL>")
-        client = _make_client(context)
+        client = FlickrClient(context)
         user_id = await client.resolve_user(reference)
         page = await client.public_photos(user_id)
         return await _open_page(page, summary=f"用户 {reference}", event=event, context=context)
@@ -588,7 +584,7 @@ async def _dispatch(
     if action == "album":
         _require_option_values(parsed, set())
         owner_reference, album_id = _parse_album_reference(parsed.tokens[1:])
-        client = _make_client(context)
+        client = FlickrClient(context)
         user_id = await client.resolve_user(owner_reference)
         page = await client.album_photos(user_id=user_id, album_id=album_id)
         return await _open_page(page, summary=f"相册 {album_id}", event=event, context=context)
@@ -612,7 +608,7 @@ async def _dispatch(
             raise FlickrUsageError("用法：/flickr info [照片ID或 URL]")
         photo: FlickrPhoto | None
         if len(parsed.tokens) == 2:
-            client = _make_client(context)
+            client = FlickrClient(context)
             photo = await client.photo_info(_parse_photo_reference(parsed.tokens[1]))
         else:
             photo = await _last_photo(event=event, context=context)
