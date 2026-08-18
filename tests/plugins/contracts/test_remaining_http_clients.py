@@ -314,6 +314,7 @@ async def test_apod_always_uses_pinned_public_fetch_for_configured_url(
     assert "https://video.example/v" in str(result)
     fetch.assert_awaited_once()
     assert fetch.await_args.kwargs["allowed_hosts"] == {"apod.nasa.gov", "images.example"}
+    assert fetch.await_args.kwargs["allow_transparent_proxy_fake_dns"] is True
 
 
 @pytest.mark.parametrize(

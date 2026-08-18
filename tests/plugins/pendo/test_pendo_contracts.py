@@ -322,7 +322,6 @@ class TestPendoDocumentation:
             content = f.read()
             assert len(content) > 100
             for current_contract in (
-                "migration_utils.py",
                 "services/runtime.py",
                 "PendoRuntimeService",
                 "scheduled_delivery_outbox",

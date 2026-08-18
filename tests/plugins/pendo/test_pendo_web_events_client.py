@@ -349,6 +349,144 @@ def test_events_renderers_escape_values_and_use_native_controls() -> None:
     )
 
 
+def test_event_detail_renders_future_reminder_toggle_and_disables_expired_rows() -> None:
+    """未来提醒可提前确认或重开，到期提醒保留状态展示并禁用按钮。"""
+
+    _run_events_client(
+        r"""
+        const detail = client.renderDetailBody({
+            event: {
+                title: '提醒按钮',
+                start_time: '2099-01-02T09:00:00+00:00',
+                reminders: [
+                    { time: '2099-01-02T08:00:00+00:00', status: 'pending' },
+                    { time: '2099-01-02T08:30:00+00:00', status: 'confirmed' },
+                    { time: '2000-01-02T08:00:00+00:00', status: 'sent', repeat_count: 2 },
+                ],
+            },
+        });
+
+        assert.match(
+            detail,
+            /data-reminder-time="2099-01-02T08:00:00\+00:00"\s+data-reminder-confirmed="false"\s*>提前确认<\/button>/,
+        );
+        assert.match(
+            detail,
+            /data-reminder-time="2099-01-02T08:30:00\+00:00"\s+data-reminder-confirmed="true"\s*>重新开启<\/button>/,
+        );
+        assert.match(
+            detail,
+            /data-reminder-time="2000-01-02T08:00:00\+00:00"\s+data-reminder-confirmed="false"\s+disabled\s*>提前确认<\/button>/,
+        );
+        assert.ok(detail.includes('已提前确认，本次不会发送'));
+        assert.ok(detail.includes('已重复 2 次'));
+        """
+    )
+
+
+def test_event_detail_reminder_toggle_updates_only_the_selected_row() -> None:
+    """详情按钮调用单条接口，成功后原位更新状态并允许反向切换。"""
+
+    _run_events_client(
+        r"""
+        const closeButton = { onclick: null };
+        const editButton = { onclick: null };
+        const deleteButton = { onclick: null };
+        const statusElement = { className: 'events-status pending', textContent: '待发送' };
+        const metaElement = { textContent: '等待发送' };
+        const row = {
+            querySelector(selector) {
+                if (selector === '[data-reminder-status]') return statusElement;
+                if (selector === '[data-reminder-meta]') return metaElement;
+                return null;
+            },
+        };
+        const reminderButton = {
+            dataset: {
+                reminderTime: '2099-01-02T08:00:00+00:00',
+                reminderConfirmed: 'false',
+            },
+            disabled: false,
+            textContent: '提前确认',
+            closest(selector) {
+                return selector === '.events-detail-row' ? row : null;
+            },
+        };
+        let clickHandler = null;
+        __modalContent = {
+            querySelector(selector) {
+                if (selector === '#events-detail-close') return closeButton;
+                if (selector === '#events-detail-edit') return editButton;
+                if (selector === '#events-detail-delete') return deleteButton;
+                return null;
+            },
+            addEventListener(type, handler) {
+                if (type === 'click') clickHandler = handler;
+            },
+        };
+
+        __api.get = async () => ({
+            data: {
+                event: {
+                    id: 'event/a b', title: '提醒按钮',
+                    start_time: '2099-01-02T09:00:00+00:00',
+                    reminders: [{
+                        time: reminderButton.dataset.reminderTime,
+                        status: 'pending', repeat_count: 0,
+                    }],
+                },
+                related_instances: [],
+            },
+        });
+        const putCalls = [];
+        __api.put = async (path, body) => {
+            putCalls.push([path, body]);
+            return {
+                data: {
+                    reminder: {
+                        time: body.remind_time,
+                        status: body.confirmed ? 'confirmed' : 'pending',
+                        repeat_count: 0,
+                    },
+                },
+            };
+        };
+
+        await client.openEventDetail('event/a b');
+        assert.equal(typeof clickHandler, 'function');
+        const clickEvent = {
+            target: {
+                closest(selector) {
+                    return selector === '[data-toggle-reminder]' ? reminderButton : null;
+                },
+            },
+        };
+
+        await clickHandler(clickEvent);
+        assert.deepEqual(putCalls[0], [
+            '/events/event%2Fa%20b/reminders/confirmation',
+            { remind_time: '2099-01-02T08:00:00+00:00', confirmed: true },
+        ]);
+        assert.equal(reminderButton.disabled, false);
+        assert.equal(reminderButton.dataset.reminderConfirmed, 'true');
+        assert.equal(reminderButton.textContent, '重新开启');
+        assert.equal(statusElement.className, 'events-status confirmed');
+        assert.equal(statusElement.textContent, '已确认');
+        assert.equal(metaElement.textContent, '已提前确认，本次不会发送');
+
+        await clickHandler(clickEvent);
+        assert.deepEqual(putCalls[1][1], {
+            remind_time: '2099-01-02T08:00:00+00:00', confirmed: false,
+        });
+        assert.equal(reminderButton.dataset.reminderConfirmed, 'false');
+        assert.equal(reminderButton.textContent, '提前确认');
+        assert.equal(statusElement.className, 'events-status pending');
+        assert.equal(metaElement.textContent, '等待发送');
+        assert.equal(__dispatchedEvents.length, 2);
+        """
+    )
+
+
 def test_events_filter_handlers_restrict_values_before_request() -> None:
     """筛选控件值必须在进入概览请求前收敛到接口白名单。"""
 

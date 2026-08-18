@@ -162,6 +162,133 @@ def test_widget_summary_returns_agenda_and_task_panel(client: Any, temp_db: Data
     assert data["links"]["tasks"] == "#/tasks"
 
 
+def test_widget_calendar_sync_returns_gap_and_full_unbounded_item_list(
+    client: Any,
+    temp_db: Database,
+) -> None:
+    """日历同步窗口包含两次运行间的历史缺口，且不受五条摘要上限约束。"""
+
+    owner_id = "u-widget-calendar-gap"
+    for index, day in enumerate(
+        ["2026-08-01", "2026-08-03", "2026-08-05", "2026-08-07", "2026-08-09", "2026-08-11"],
+        start=1,
+    ):
+        temp_db.insert_item(
+            {
+                "id": f"calendar-gap-{index}",
+                "owner_id": owner_id,
+                "type": "event",
+                "title": f"补齐日程 {index}",
+                "start_time": f"{day}T10:00:00",
+                "end_time": f"{day}T11:00:00",
+            }
+        )
+    temp_db.insert_item(
+        {
+            "id": "calendar-outside",
+            "owner_id": owner_id,
+            "type": "event",
+            "title": "窗口外日程",
+            "start_time": "2026-09-16T10:00:00",
+        }
+    )
+    temp_db.insert_item(
+        {
+            "id": "calendar-other-owner",
+            "owner_id": "u-widget-calendar-other",
+            "type": "event",
+            "title": "其他用户日程",
+            "start_time": "2026-08-05T12:00:00",
+        }
+    )
+
+    response = client.get(
+        "/api/widget/calendar",
+        params={"start_date": "2026-07-31", "end_date": "2026-09-14"},
+        headers=_headers(generate_widget_token(owner_id, db=temp_db)),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["start_date"] == "2026-07-31"
+    assert data["end_date"] == "2026-09-14"
+    assert [item["title"] for item in data["items"]] == [
+        f"补齐日程 {index}" for index in range(1, 7)
+    ]
+    assert [item["id"] for item in data["items"]] == [
+        f"calendar-gap-{index}" for index in range(1, 7)
+    ]
+
+
+def test_widget_calendar_sync_uses_item_identity_instead_of_title_and_time(
+    client: Any,
+    temp_db: Database,
+) -> None:
+    """同名同刻条目全部返回，同一跨天条目只返回一次。"""
+
+    owner_id = "u-widget-calendar-identity"
+    for event_id, location in (("same-time-a", "A 楼"), ("same-time-b", "B 楼")):
+        temp_db.insert_item(
+            {
+                "id": event_id,
+                "owner_id": owner_id,
+                "type": "event",
+                "title": "同步会议",
+                "start_time": "2026-08-10T10:00:00",
+                "end_time": "2026-08-10T11:00:00",
+                "location": location,
+            }
+        )
+    temp_db.insert_item(
+        {
+            "id": "cross-day",
+            "owner_id": owner_id,
+            "type": "event",
+            "title": "跨天出差",
+            "start_time": "2026-08-11T10:00:00",
+            "end_time": "2026-08-13T18:00:00",
+        }
+    )
+
+    response = client.get(
+        "/api/widget/calendar",
+        params={"start_date": "2026-08-10", "end_date": "2026-08-13"},
+        headers=_headers(generate_widget_token(owner_id, db=temp_db)),
+    )
+
+    assert response.status_code == 200
+    items = response.json()["data"]["items"]
+    assert [(item["id"], item["location"]) for item in items] == [
+        ("same-time-a", "A 楼"),
+        ("same-time-b", "B 楼"),
+        ("cross-day", ""),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("start_date", "end_date"),
+    [
+        ("not-a-date", "2026-09-14"),
+        ("2026-07-31", "2026-02-30"),
+        ("2026-09-14", "2026-07-31"),
+        ("0001-01-01", "9999-12-31"),
+    ],
+)
+def test_widget_calendar_sync_rejects_invalid_ranges(
+    client: Any,
+    temp_db: Database,
+    start_date: str,
+    end_date: str,
+) -> None:
+    response = client.get(
+        "/api/widget/calendar",
+        params={"start_date": start_date, "end_date": end_date},
+        headers=_headers(generate_widget_token("u-widget-calendar-invalid", db=temp_db)),
+    )
+
+    assert response.status_code == 422
+
+
 def test_build_widget_summary_returns_expected_panels_directly(temp_db: Database) -> None:
     """直接调用真实模块时仍返回与 HTTP 路由一致的板块结构。"""
 

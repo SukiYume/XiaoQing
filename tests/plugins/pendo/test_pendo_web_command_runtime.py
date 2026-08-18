@@ -389,36 +389,6 @@ class TestPendoRedesignRegression:
         finally:
             db.cleanup()
 
-    def test_sqlite_backup_includes_uncheckpointed_wal_pages(self, tmp_path):
-        import sqlite3
-        import sys
-
-        sys.path.insert(0, str(ROOT))
-
-        from plugins.pendo.scripts.migrate_pendo_redesign import backup_sqlite_database
-
-        db_path = tmp_path / "wal-source.db"
-        backup_path = tmp_path / "wal-backup.db"
-        conn = sqlite3.connect(db_path)
-        try:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("CREATE TABLE demo (id INTEGER PRIMARY KEY, value TEXT)")
-            conn.commit()
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            conn.execute("INSERT INTO demo (value) VALUES (?)", ("from-wal",))
-            conn.commit()
-
-            backup_sqlite_database(db_path, backup_path)
-
-            backup = sqlite3.connect(backup_path)
-            try:
-                rows = backup.execute("SELECT value FROM demo").fetchall()
-            finally:
-                backup.close()
-            assert rows == [("from-wal",)]
-        finally:
-            conn.close()
-
     def test_export_range_includes_event_spanning_into_window(self):
         import sys
         from datetime import date

@@ -103,7 +103,7 @@ def test_sync_validates_both_roots_and_excludes_runtime_data_from_transfer() -> 
 def test_sync_target_is_edited_in_script_instead_of_passed_as_environment() -> None:
     source = SCRIPT.read_text(encoding="utf-8")
 
-    assert 'readonly REMOTE_HOST="secondary-production-host"' in source
+    assert 'readonly REMOTE_HOST="production-host"' in source
     assert 'readonly REMOTE_DIR="/c/Users/testuser/Desktop/XiaoQing/XiaoQing_V3"' in source
     assert "XIAOQING_SYNC_HOST" not in source
     assert "XIAOQING_SYNC_DIR" not in source

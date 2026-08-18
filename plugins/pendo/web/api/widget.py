@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Annotated, Any, Final, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -21,6 +21,7 @@ from ..utils import parse_iso_date
 router = APIRouter()
 
 JsonObject = dict[str, Any]
+MAX_CALENDAR_SYNC_RANGE_DAYS: Final = 3660
 PanelSection = Literal["tasks", "ledger", "notes"]
 WidgetSection = Literal["tasks", "ledger", "notes", "all"]
 PanelBuilder = Callable[[Database, str, datetime], JsonObject]
@@ -107,6 +108,22 @@ def _format_event_meta(entry: JsonObject) -> str:
     return " · ".join(parts)
 
 
+def _event_item_payload(entry: JsonObject) -> JsonObject:
+    """把展开后的日程行收敛为 Widget 与日历同步共用的公开字段。"""
+
+    return {
+        "id": str(entry.get("id") or "").strip(),
+        "title": str(entry["title"] or "无标题").strip() or "无标题",
+        "subtitle": entry["subtitle"],
+        "meta": _format_event_meta(entry),
+        "day": entry["day"],
+        "start_time": str(entry.get("start_time") or ""),
+        "end_time": str(entry.get("end_time") or ""),
+        "location": str(entry.get("location") or ""),
+        "path": _LINKS["events"],
+    }
+
+
 def _format_task_meta(
     task: JsonObject,
     today_key: str,
@@ -175,6 +192,7 @@ def _flatten_event_entries(
                     entry_title = f"{collection.get('title') or '多节点日程'} · {entry_title}"
                 rows.append(
                     {
+                        "id": str(getattr(event, "id", "") or "").strip(),
                         "day": day,
                         "title": entry_title,
                         "subtitle": row.get("subtitle") or "",
@@ -216,20 +234,76 @@ def _build_agenda(db: Database, owner_id: str, now: datetime) -> dict[str, Any]:
         },
         "today_count": sum(1 for row in rows if row["day"] == today_key),
         "tomorrow_count": sum(1 for row in rows if row["day"] == tomorrow_key),
-        "items": [
-            {
-                "title": str(item["title"] or "无标题").strip() or "无标题",
-                "subtitle": item["subtitle"],
-                "meta": _format_event_meta(item),
-                "day": item["day"],
-                "start_time": str(item.get("start_time") or ""),
-                "end_time": str(item.get("end_time") or ""),
-                "location": str(item.get("location") or ""),
-                "path": _LINKS["events"],
-            }
-            for item in upcoming
-        ],
+        "items": [_event_item_payload(item) for item in upcoming],
         "empty_text": "最近没有安排",
+    }
+
+
+def _parse_calendar_sync_date(value: str, field_name: str) -> date:
+    """解析日历同步自然日，并对调用方返回明确的 422。"""
+
+    parsed = parse_iso_date(value)
+    if parsed is None or len(str(value).strip()) != 10:
+        raise HTTPException(status_code=422, detail=f"{field_name} must be a valid ISO date")
+    return parsed
+
+
+def build_widget_calendar(
+    db: Database,
+    owner_id: str,
+    *,
+    start_date: str,
+    end_date: str,
+) -> JsonObject:
+    """返回一个闭区间内的完整日程集合，供 Scriptable 增量补齐日历。"""
+
+    start_day = _parse_calendar_sync_date(start_date, "start_date")
+    end_day = _parse_calendar_sync_date(end_date, "end_date")
+    if end_day < start_day:
+        raise HTTPException(status_code=422, detail="end_date must not precede start_date")
+    range_days = (end_day - start_day).days + 1
+    if range_days > MAX_CALENDAR_SYNC_RANGE_DAYS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"calendar sync range must not exceed {MAX_CALENDAR_SYNC_RANGE_DAYS} days",
+        )
+
+    range_start = datetime.combine(start_day, datetime.min.time())
+    range_end = datetime.combine(end_day, datetime.max.time()).replace(microsecond=0)
+    raw_events = db.get_events_for_range(
+        owner_id,
+        range_start.isoformat(timespec="seconds"),
+        range_end.isoformat(timespec="seconds"),
+    )
+    rows = _flatten_event_entries(db, owner_id, raw_events, range_start, range_end)
+
+    # 跨天日程会为页面生成多个自然日展示行。日历同步按 Pendo 条目 ID
+    # 收敛同一条日程的跨天行，同时保留同名、同开始时刻的不同条目。
+    unique_rows: list[JsonObject] = []
+    seen: set[tuple[str, ...]] = set()
+    for row in rows:
+        payload = _event_item_payload(row)
+        event_id = str(payload["id"])
+        identity = (
+            ("id", event_id)
+            if event_id
+            else (
+                "fields",
+                str(payload["title"]),
+                str(payload["start_time"] or payload["day"]),
+                str(payload["end_time"]),
+                str(payload["location"]),
+            )
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
+        unique_rows.append(payload)
+
+    return {
+        "start_date": start_day.isoformat(),
+        "end_date": end_day.isoformat(),
+        "items": unique_rows,
     }
 
 
@@ -410,5 +484,26 @@ def get_widget_summary(
     return {
         "ok": True,
         "data": build_widget_summary(db=db, owner_id=owner_id, section=section, now=now),
+        "message": "",
+    }
+
+
+@router.get("/widget/calendar")  # type: ignore[untyped-decorator]
+def get_widget_calendar(
+    start_date: Annotated[str, Query(min_length=10, max_length=10)],
+    end_date: Annotated[str, Query(min_length=10, max_length=10)],
+    owner_id: str = Depends(get_current_user),
+    db: Database = Depends(get_db),
+) -> JsonObject:
+    """返回 Scriptable 覆盖游标指定窗口内的完整日程。"""
+
+    return {
+        "ok": True,
+        "data": build_widget_calendar(
+            db,
+            owner_id,
+            start_date=start_date,
+            end_date=end_date,
+        ),
         "message": "",
     }

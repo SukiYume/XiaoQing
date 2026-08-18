@@ -68,6 +68,13 @@ class EventCollectionUpdate(BaseModel):  # type: ignore[misc]
     reminder_rules: list[dict[str, Any]] | None = None
 
 
+class EventReminderConfirmationUpdate(BaseModel):  # type: ignore[misc]
+    """切换单条未来日程提醒确认状态的请求体。"""
+
+    remind_time: str = Field(min_length=1)
+    confirmed: bool
+
+
 @router.get("/events/overview")
 def get_events_overview(
     start_date: str,
@@ -378,3 +385,34 @@ def get_event_detail(
     if not detail:
         raise HTTPException(status_code=404, detail="Event not found")
     return {"ok": True, "data": detail, "message": ""}
+
+
+@router.put("/events/{event_id}/reminders/confirmation")
+def set_event_reminder_confirmation(
+    event_id: str,
+    body: EventReminderConfirmationUpdate,
+    owner_id: str = Depends(get_current_user),
+    db: Database = Depends(get_db),
+) -> dict[str, object]:
+    """提前确认或重新开启当前用户的一条未到期日程提醒。"""
+
+    try:
+        reminder = db.set_future_reminder_confirmation(
+            event_id,
+            body.remind_time,
+            owner_id,
+            confirmed=body.confirmed,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if reminder is None:
+        raise HTTPException(status_code=404, detail="Event reminder not found")
+    if reminder.get("outcome") == "expired":
+        raise HTTPException(status_code=409, detail="提醒时间已到，不能再修改确认状态")
+
+    return {
+        "ok": True,
+        "data": {"reminder": reminder},
+        "message": "提醒已提前确认" if body.confirmed else "提醒已重新开启",
+    }

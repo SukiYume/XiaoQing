@@ -1,6 +1,6 @@
 # 📅 Pendo
 
-Pendo 是 XiaoQing 的个人时间与信息管理插件，统一管理日程、待办、笔记、日记、账本、提醒、搜索和数据迁移。聊天命令适合快速记录与查询，Web 控制台适合集中编辑、统计和迁移，Scriptable 小组件适合展示 iPhone 主屏摘要。
+Pendo 是 XiaoQing 的个人时间与信息管理插件，统一管理日程、待办、笔记、日记、账本、提醒、搜索和数据导入导出。聊天命令适合快速记录与查询，Web 控制台适合集中编辑、统计和批量传输，Scriptable 小组件适合展示 iPhone 主屏摘要。
 
 全部 Pendo 命令限定为私聊场景。
 
@@ -13,7 +13,7 @@ Pendo 是 XiaoQing 的个人时间与信息管理插件，统一管理日程、�
 /pendo help event
 /pendo event add 明天9点组会，提前30分钟提醒
 /pendo todo add 写周报 plan:2030-05-01 cat:工作 p:2
-/pendo note add title:会议纪要 content 讨论迁移方案 cat:工作 #复盘
+/pendo note add title:会议纪要 content 讨论部署方案 cat:工作 #复盘
 /pendo diary add 今天完成了项目复盘 mood:happy score:8
 /pendo ledger quick 35.5 午饭 cat:餐饮 account:微信
 /pendo search 组会 type=event range=last30d
@@ -143,6 +143,10 @@ Manifest 还提供 `/日程`、`/待办` 和 `/日记` 三个私聊快捷入口�
 
 `config` 和 `setting` 是 `settings` 的别名。操作快照保留 5 分钟，`undo` 可将查询窗口缩小到 1～5 分钟。`ai_consent` 控制日记正文向已配置外部 AI 的发送授权，默认值为 `off`；本地规则始终可用。
 
+日程与待办提醒通过 OneBot 私聊发送给条目所有者。条目写入与编辑会同步生成以 `fire_at_utc` 查询的提醒队列行，提醒键使用秒级 UTC。
+
+Web 控制台的日程详情按提醒点提供“提前确认”和“重新开启”操作。按钮仅在提醒触发前可用；提前确认会停止该提醒的首次与重复投递，重新开启会恢复原触发时刻的待发送状态。
+
 ---
 
 ## 🌐 Web 控制台
@@ -202,17 +206,18 @@ Widget 接口：
 
 ```text
 GET /api/widget/summary?section=tasks|ledger|notes|all|auto
+GET /api/widget/calendar?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
 Authorization: Bearer <widget_token>
 ```
 
-Scriptable 脚本位于 `plugins/pendo/web/scriptable/pendo_widget.js`，配置方式见 [Scriptable 小组件指南](../../docs/pendo-scriptable-widget.md)。
+摘要接口返回最多 5 条近期日程。日历接口返回最长 3660 天闭区间内的完整日程，供 Scriptable 通过上次成功运行日增量补齐 iOS 日历。脚本按 Pendo 条目 ID 新增缺失事件，在 Keychain 中保存同步游标，并在源码顶部读取 Web 地址与 Widget Token。Scriptable 脚本位于 `plugins/pendo/web/scriptable/pendo_widget.js`，配置方式见 [Scriptable 小组件指南](../../docs/pendo-scriptable-widget.md)。
 
 ### 页面
 
 | 页面 | 主要功能 |
 | --- | --- |
 | Dashboard | 核心摘要 |
-| Events | 日程、集合与提醒 |
+| Events | 日程、集合、提醒及未到期提醒的确认开关 |
 | Tasks | 待办看板、筛选和状态切换 |
 | Ledger | 记账、账户、筛选和统计 |
 | Notes | 笔记、分类、标签和关联 |
@@ -255,7 +260,7 @@ Web 后端使用 FastAPI 与 uvicorn，API 前缀为 `/api`，静态前端位于
 | `scheduled_delivery_outbox` | 定时消息待办与逐目标确认 |
 | `operation_logs` | 编辑、删除与撤销快照 |
 | `user_settings` | 时区、静默时段、简报和 AI 授权 |
-| `transfer_logs` | Bundle 迁移日志 |
+| `transfer_logs` | Bundle 导入日志 |
 | `imported_bundles` | 已执行 Bundle 身份 |
 | `login_code_registry` | 一次性登录 Code 摘要和期限 |
 | `web_session_registry` | 浏览器会话摘要、设备和期限 |

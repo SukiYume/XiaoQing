@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from core.safe_http import SafeHttpError
+from core.safe_http import SafeHttpError, UnsafeUrlError
 from plugins.apod import main as apod
 from tests.helpers.settings_snapshot import with_settings_reader
 
@@ -617,6 +617,29 @@ class TestHandleCommands:
                 "data": {"text": "❌ 获取失败: 网络错误"},
             }
         ]
+
+    @pytest.mark.asyncio
+    async def test_handle_dns_safety_rejection_is_actionable(
+        self,
+        mock_context,
+        mock_event,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(
+            apod,
+            "fetch_public_html",
+            AsyncMock(side_effect=UnsafeUrlError("hostname has a non-public DNS result")),
+        )
+
+        result = await apod.handle("apod", "", mock_event, mock_context)
+
+        assert result == [
+            {
+                "type": "text",
+                "data": {"text": "❌ APOD 网络安全检查失败，请检查 DNS、代理或 allowed_hosts 配置"},
+            }
+        ]
+        assert "XQ-PLUGIN-UNEXPECTED" not in str(result)
 
     @pytest.mark.asyncio
     async def test_handle_http_error(self, mock_context, mock_event):

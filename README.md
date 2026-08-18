@@ -7,6 +7,7 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 [![OneBot](https://img.shields.io/badge/OneBot-v11-black?style=flat-square)](https://onebot.dev/)
+[![Documentation](https://img.shields.io/badge/Documentation-online-2ea44f?style=flat-square)](https://paris.escape.ac.cn/note/XiaoQing/)
 
 `QQ / OneBot 事件 → XiaoQing Core → 插件路由与会话 → OneBot 消息回复`
 
@@ -278,6 +279,7 @@ bash scripts/run_full_uat.sh
 
 | 文档 | 内容 |
 |---|---|
+| [在线文档](https://paris.escape.ac.cn/note/XiaoQing/) | 适合浏览器阅读的项目手册 |
 | [文档目录](docs/README.md) | 阅读路线和主题索引 |
 | [项目概览](docs/00-overview.md) | 能力、概念和目录结构 |
 | [快速开始](docs/01-getting-started.md) | 安装、配置、接入和首次验证 |

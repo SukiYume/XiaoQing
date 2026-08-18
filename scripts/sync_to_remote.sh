@@ -9,7 +9,7 @@ readonly REPO_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd -P)"
 
 # 生产目标集中写在这里，按用户习惯直接在脚本中切换 secondary-production-host / production-host；
 # 不把主机名、Python 或 Conda 环境变成额外命令行参数。
-readonly REMOTE_HOST="secondary-production-host"
+readonly REMOTE_HOST="production-host"
 readonly REMOTE_DIR="/c/Users/testuser/Desktop/XiaoQing/XiaoQing_V3"
 
 readonly SSH_BIN="ssh"

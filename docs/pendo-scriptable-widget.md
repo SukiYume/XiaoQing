@@ -9,6 +9,7 @@ Pendo 提供 iPhone Scriptable 只读摘要，将近期日程、待办、财务�
 | 项目 | 值 |
 |---|---|
 | 摘要接口 | `GET /api/widget/summary` |
+| 日历增量接口 | `GET /api/widget/calendar?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD` |
 | 模块参数 | `section=tasks|ledger|notes|all|auto` |
 | 鉴权 | `Authorization: Bearer <widget_token>` |
 | 权限范围 | `GET /api/widget/*` |
@@ -46,10 +47,11 @@ Pendo 提供 iPhone Scriptable 只读摘要，将近期日程、待办、财务�
 plugins/pendo/web/scriptable/pendo_widget.js
 ```
 
-设置自己的 Pendo Web 地址：
+在脚本顶部填写 Pendo Web 地址和 Widget Token：
 
 ```javascript
 const BASE_URL = normalizeBaseUrl('https://example.com/pendo');
+const TOKEN = 'PASTE_WIDGET_TOKEN_HERE';
 ```
 
 常见地址：
@@ -57,9 +59,7 @@ const BASE_URL = normalizeBaseUrl('https://example.com/pendo');
 - 本机：`http://127.0.0.1:12001`
 - 反向代理子路径：`https://example.com/pendo`
 
-首次在 Scriptable App 中运行时，脚本显示安全输入框。粘贴 `/pendo web widget-token` 返回的 Token 后，脚本将其写入 iOS Keychain。401 响应会触发 Keychain 条目清理，下一次 App 内运行会再次显示输入框。
-
-脚本源码只保存 `BASE_URL`，Token 保存在 Keychain。
+`TOKEN` 填写 `/pendo web widget-token` 返回的完整值。接口返回 401 时，在 QQ 私聊生成新 Token，并替换脚本顶部的 `TOKEN`。
 
 ---
 
@@ -80,10 +80,10 @@ const BASE_URL = normalizeBaseUrl('https://example.com/pendo');
 ## 📌 iPhone 设置
 
 1. 安装 Scriptable。
-2. 新建脚本并粘贴 `pendo_widget.js`。
-3. 设置 `BASE_URL`。
-4. 在 QQ 私聊执行 `/pendo web widget-token`。
-5. 在 Scriptable App 内运行脚本，并将 Token 存入 Keychain。
+2. 在 QQ 私聊执行 `/pendo web widget-token`。
+3. 新建脚本并粘贴完整的 `pendo_widget.js`。
+4. 设置脚本顶部的 `BASE_URL` 和 `TOKEN`。
+5. 在 Scriptable App 内运行脚本，确认摘要能够加载。
 6. 在 iPhone 主屏添加 Scriptable 小组件。
 7. 选择 Pendo 脚本。
 8. 使用中号组件时，在组件参数中填写 `tasks`、`ledger`、`notes` 或 `auto`。
@@ -102,12 +102,22 @@ const SYNC_CALENDAR_NAME = 'Pendo';
 
 在系统日历 App 中创建同名且可写的日历，并允许 Scriptable 访问日历。将 `SYNC_CALENDAR_NAME` 设为空字符串可关闭同步。
 
-同步仅在 Scriptable App 内直接运行脚本时执行，主屏组件刷新只读取摘要。脚本复用本次接口返回的最多 5 条日程，在当天起 30 天范围内按“标题 + 开始时间”识别已有事件，并采用仅新增策略：
+同步仅在 Scriptable App 内直接运行脚本时执行，主屏组件刷新只读取最多 5 条的摘要。直接运行会通过日历增量接口取得完整窗口。带 `Pendo-ID` 标记的事件按条目 ID 识别，其余现有日历事件按“标题 + 开始时间”识别。
+
+同步窗口由 Keychain 中的成功日游标控制：
+
+- 首次成功运行查询过去 30 天到未来 30 天，建立完整的近期日历窗口。
+- 后续运行从上次成功运行日查询到脚本运行日之后 30 天；日常使用保持约一个月窗口，间隔期间的日程随下次成功运行补齐。
+- 单次接口窗口最多 3660 天；保存时间更早的游标从该上限覆盖的日期开始查询。
+- 接口查询与 iOS 目标日历查询各执行一次；游标在接口读取和全部日历写入成功后推进。
+- 目标日历缺失、接口失败或事件保存失败时保留原游标，下一次运行继续处理同一窗口。
+
+日历写入采用仅新增策略：
 
 - 有明确时间的日程默认持续 1 小时；有效结束时间优先使用接口值。
 - 仅含日期的日程写为持续 1 天的全天事件。
-- 地点写入 Calendar 事件，备注写入 `[由 Pendo Widget 同步]` 标记。
-- 已有同键事件、摘要范围外事件和日历中的其他事件保持原状。
+- 地点写入 Calendar 事件，备注写入 `[由 Pendo Widget 同步]` 和 `Pendo-ID` 标记。
+- 已有同键事件、增量窗口外事件和日历中的其他事件保持原状。
 
 直接运行结束后，Scriptable 通过通知和控制台输出新增数与跳过数。目标日历缺失时，通知提示需要创建的日历名称。
 
@@ -126,6 +136,7 @@ const SYNC_CALENDAR_NAME = 'Pendo';
 
 - 使用 HTTPS 反向代理访问公网 Pendo Web。
 - 将 Widget Token 视为个人只读数据凭据。
+- Scriptable 脚本源码包含 Widget Token；脚本副本与导出文件需要按个人凭据管理。
 - 手机转移、丢失或凭据暴露后执行 `/pendo web widget-revoke`。
 - 通过 Pendo 日志检查用户、`jti`、到期时间和吊销结果。
 

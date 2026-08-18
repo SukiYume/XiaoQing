@@ -328,6 +328,69 @@ def test_confirm_unsent_reminder_creates_confirmed_state(db):
     assert row["state"] == "confirmed"
 
 
+def test_future_reminder_confirmation_can_be_reopened_until_target_time(db):
+    """提前确认只关闭指定提醒，重新开启后恢复全新的待发送状态。"""
+
+    remind_time = "2030-01-01T12:00:00+00:00"
+    item_id = db.insert_item(
+        {
+            "id": "future-confirmation-toggle",
+            "type": "event",
+            "owner_id": "u-future-confirmation-toggle",
+            "title": "未来提醒",
+            "start_time": "2030-01-01T13:00:00+00:00",
+            "remind_times": [remind_time, "2030-01-01T12:30:00+00:00"],
+        }
+    )
+    current = datetime(2030, 1, 1, 11, 0, tzinfo=timezone.utc)
+
+    confirmed = db.set_future_reminder_confirmation(
+        item_id,
+        remind_time,
+        "u-future-confirmation-toggle",
+        confirmed=True,
+        now=current,
+    )
+    assert confirmed is not None and confirmed["status"] == "confirmed"
+    logs = {row["remind_time"]: row for row in db.get_reminder_logs(item_id)}
+    assert logs[remind_time]["user_action"] == "preconfirmed"
+    assert logs["2030-01-01T12:30:00+00:00"]["confirmed_at"] is None
+
+    reopened = db.set_future_reminder_confirmation(
+        item_id,
+        remind_time,
+        "u-future-confirmation-toggle",
+        confirmed=False,
+        now=current,
+    )
+    assert reopened is not None and reopened["status"] == "pending"
+    reopened_log = next(
+        row for row in db.get_reminder_logs(item_id) if row["remind_time"] == remind_time
+    )
+    assert reopened_log["confirmed_at"] is None
+    assert reopened_log["user_action"] is None
+    assert reopened_log["repeat_count"] == 0
+
+    expired = db.set_future_reminder_confirmation(
+        item_id,
+        remind_time,
+        "u-future-confirmation-toggle",
+        confirmed=True,
+        now=datetime(2030, 1, 1, 12, 0, tzinfo=timezone.utc),
+    )
+    assert expired == {"outcome": "expired", "time": remind_time}
+    assert (
+        db.set_future_reminder_confirmation(
+            item_id,
+            remind_time,
+            "another-owner",
+            confirmed=True,
+            now=current,
+        )
+        is None
+    )
+
+
 def test_scheduled_delivery_validates_time_lease_and_normalizes_identity(db):
     aware_now = datetime(2030, 1, 1, tzinfo=timezone.utc)
     with pytest.raises(ValueError, match="timezone-aware"):
