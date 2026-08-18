@@ -396,7 +396,7 @@ class ReminderRepositoryMixin:
         remind_time: str | None = None,
         allow_future: bool = False,
     ) -> dict[str, Any]:
-        """确认提醒——直接 UPDATE 该 item 所有未确认行"""
+        """确认指定条目的未确认提醒，并在需要时物化确认记录。"""
         if remind_time is not None:
             require_canonical_utc_timestamp(remind_time, "remind_time")
         conn = self.get_connection()
@@ -498,8 +498,8 @@ class ReminderRepositoryMixin:
                 return {"outcome": "expired", "time": remind_time}
 
             now_text = current.isoformat(timespec="seconds")
-            # 正常写入流程已经物化提醒行；补充 INSERT 让旧库或异常恢复后的
-            # 合法日程也能通过同一状态机处理，无需启动时扫描业务数据。
+            # 正常写入流程会物化提醒行；导入或异常恢复留下的合法日程也通过
+            # 同一条幂等写入进入提醒状态机，无需启动时扫描业务数据。
             conn.execute(
                 """
                 INSERT INTO reminder_logs

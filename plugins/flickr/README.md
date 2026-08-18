@@ -52,7 +52,7 @@ Flickr 插件通过官方 REST API 读取公开照片。默认入口展示今日
 /set_secret plugins.flickr.api_key <你的 API Key>
 ```
 
-整体替换 `config/secrets.json` 时，先停止 Bot，写入完整文件，再重新启动，使 Flickr Key 与公开配置在启动阶段组成已确认 revision。
+运行实例需要新增 Flickr 路径时，可写入完整有效的 `config/secrets.json`。公开配置保持当前版本时，watcher 暂存候选并私聊管理员显示 `plugins.flickr.api_key` 已新增；核对后发送 `/reload` 应用。通知与日志仅记录字段路径，API Key 保留在 secrets 来源中。
 
 ---
 

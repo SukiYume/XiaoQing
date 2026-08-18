@@ -75,7 +75,7 @@ cp config/secrets.json.example config/secrets.json
 
 将 `config/secrets.json` 保存在部署主机，并为文件设置与 Bot 进程相匹配的读取权限。项目的 Git 忽略规则覆盖正式 secrets 文件。
 
-首次部署在启动前写入完整配置。服务运行期间可在管理员私聊中用 `/set_secret <已有路径> <值>` 提交单项敏感配置。需要新增路径或整体替换 `config.json`、`secrets.json` 时，先停止服务，保存两个完整文件，再启动新进程。
+首次部署在启动前写入完整配置。服务运行期间可在管理员私聊中用 `/set_secret <已有路径> <值>` 提交单项敏感配置。新增路径可直接写入完整、有效的 `secrets.json`；当 `config.json` 保持当前已确认版本时，watcher 暂存候选并私聊当前管理员列出字段增删改，凭据值始终隐藏。核对通知后发送 `/reload` 确认并应用。修改 `config.json` 或同时替换两个来源时，先停止服务，保存完整文件，再启动新进程。
 
 ### AI 插件配置
 
@@ -273,7 +273,8 @@ UAT 运行真实服务，覆盖 HTTP/WS 命令矩阵、插件业务场景、Core
 2. 核对 Inbound URL 或主动 WebSocket URI。
 3. 核对 OneBot secret 与 `inbound_token`。
 4. 在日志中查找连接状态、错误码和 request ID。
-5. 日志同时出现 `secrets source is inconsistent` 和 `WebSocket client stopped` 时，停止服务，确认两个配置文件完整，再重新启动。
+5. 收到 secret 待确认通知时，核对字段路径并发送 `/reload`。
+6. 日志同时出现 `secrets source is inconsistent` 和 `WebSocket client stopped` 时，停止服务，确认两个配置文件完整，再重新启动。
 
 ### 群聊命令响应排查
 

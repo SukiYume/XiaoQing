@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 if TYPE_CHECKING:
     from .ai import AICompletionResult, AIModelInfo
-    from .config import ConfigSnapshot
+    from .config import ConfigSnapshot, PendingSecretsChange
     from .router import CommandCatalogNode, CommandInvocation
     from .session import Session
 
@@ -67,6 +67,11 @@ class ConfigManagerLike(Protocol):
     def on_security_update(
         self,
         callback: Callable[[ConfigSnapshot], None],
+    ) -> Callable[[], None]: ...
+
+    def on_pending_secrets_change(
+        self,
+        callback: Callable[[PendingSecretsChange], Any],
     ) -> Callable[[], None]: ...
 
     @property

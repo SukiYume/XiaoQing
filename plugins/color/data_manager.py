@@ -46,7 +46,7 @@ def _positive_scope_id(value: Any, *, label: str) -> int | None:
 
 
 def _custom_file(context: PluginContextProtocol) -> Path:
-    """只从核心已认证的当前身份派生固定文件名，不回退到共享 legacy 文件。"""
+    """从核心已认证的当前身份派生独立的会话作用域文件名。"""
 
     data_dir = getattr(context, "data_dir", None)
     if not isinstance(data_dir, Path):

@@ -18,7 +18,7 @@ import stat
 import threading
 from collections import deque
 from collections.abc import Callable, Mapping
-from contextlib import ExitStack
+from contextlib import ExitStack, suppress
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -55,6 +55,7 @@ _MAX_WATCH_STABILITY_RETRIES = 3
 _REQUIRED_STABLE_SOURCE_READS = 3
 _MAX_STABLE_SOURCE_READS = 6
 _CONFIG_CALLBACK_TIMEOUT_SECONDS = 5.0
+_MAX_PENDING_SECRET_CHANGE_PATHS = 30
 
 logger = logging.getLogger(__name__)
 
@@ -391,6 +392,76 @@ class ConfigSnapshot(tuple[Any, ...]):
 
 
 @dataclass(frozen=True, slots=True)
+class PendingSecretsChange:
+    """不携带凭据值的待确认 ``secrets.json`` 变更摘要。"""
+
+    added_paths: tuple[str, ...]
+    removed_paths: tuple[str, ...]
+    changed_paths: tuple[str, ...]
+    added_count: int
+    removed_count: int
+    changed_count: int
+
+    @property
+    def omitted_count(self) -> int:
+        shown = len(self.added_paths) + len(self.removed_paths) + len(self.changed_paths)
+        return self.added_count + self.removed_count + self.changed_count - shown
+
+
+PendingSecretsCallback = Callable[[PendingSecretsChange], Any]
+
+
+def _secret_change_path(parent: str, key: str) -> str:
+    """使用易读且无歧义的形式展示 secret 字段路径。"""
+
+    if re.fullmatch(r"[A-Za-z0-9_-]+", key):
+        return f"{parent}.{key}" if parent else key
+    encoded = json.dumps(key, ensure_ascii=False)
+    return f"{parent}[{encoded}]" if parent else f"[{encoded}]"
+
+
+def _summarize_secret_changes(
+    active: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+) -> PendingSecretsChange:
+    """比较字段结构和值，只保留路径和计数，避免通知泄露凭据。"""
+
+    samples: dict[str, list[str]] = {"added": [], "removed": [], "changed": []}
+    counts = {"added": 0, "removed": 0, "changed": 0}
+
+    def record(kind: str, path: str) -> None:
+        counts[kind] += 1
+        shown = sum(len(paths) for paths in samples.values())
+        if shown < _MAX_PENDING_SECRET_CHANGE_PATHS:
+            samples[kind].append(path or "<root>")
+
+    def walk(current: Any, replacement: Any, parent: str = "") -> None:
+        if current == replacement:
+            return
+        if isinstance(current, Mapping) and isinstance(replacement, Mapping):
+            for key in sorted(set(current) | set(replacement)):
+                path = _secret_change_path(parent, key)
+                if key not in current:
+                    record("added", path)
+                elif key not in replacement:
+                    record("removed", path)
+                else:
+                    walk(current[key], replacement[key], path)
+            return
+        record("changed", parent)
+
+    walk(active, candidate)
+    return PendingSecretsChange(
+        added_paths=tuple(samples["added"]),
+        removed_paths=tuple(samples["removed"]),
+        changed_paths=tuple(samples["changed"]),
+        added_count=counts["added"],
+        removed_count=counts["removed"],
+        changed_count=counts["changed"],
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class _SourceRead:
     status: ConfigSourceStatus
     etag: str
@@ -469,9 +540,12 @@ class ConfigManager:
         self._secrets_source = _SourceRead(ConfigSourceStatus.MISSING, MISSING_ETAG)
         self._paired_config_signature = self._config_source.signature
         self._paired_secrets_signature = self._secrets_source.signature
+        self._pending_secrets_source: _SourceRead | None = None
+        self._pending_notice_signature: tuple[ConfigSourceStatus, str, str] | None = None
         self._source_generation = 0
         self._callbacks: list[ConfigCallback] = []
         self._security_callbacks: list[SecurityConfigCallback] = []
+        self._pending_secrets_callbacks: list[PendingSecretsCallback] = []
         self._revision = 0
         # Claim the first revision before scheduling its consumer so a second
         # synchronous reload cannot overwrite it before the event loop runs.
@@ -555,6 +629,7 @@ class ConfigManager:
                 secrets_read,
                 confirm_config=True,
             )
+            self._clear_pending_sources_locked(bump_generation=True)
             snapshot, notification, _changed = self._apply_source_reads_locked(
                 config_read,
                 published_secrets,
@@ -587,6 +662,76 @@ class ConfigManager:
     ) -> None:
         self._paired_config_signature = config_read.signature
         self._paired_secrets_signature = secrets_read.signature
+
+    def _pending_read_hint_locked(self) -> tuple[_SourceRead, _SourceRead]:
+        """返回最新磁盘候选，减少等待确认期间的重复解析。"""
+
+        secrets_read = self._pending_secrets_source or self._secrets_source
+        return self._config_source, secrets_read
+
+    def _clear_pending_sources_locked(self, *, bump_generation: bool = False) -> None:
+        """清除待确认候选，并按需使并发中的旧 watcher 读失效。"""
+
+        had_pending_source = self._pending_secrets_source is not None
+        self._pending_secrets_source = None
+        self._pending_notice_signature = None
+        if had_pending_source and bump_generation:
+            self._source_generation += 1
+
+    def _pending_secrets_notice_locked(self) -> PendingSecretsChange | None:
+        """为当前尚未通知的合法候选生成不含值的字段摘要。"""
+
+        secrets_read = self._pending_secrets_source
+        if (
+            secrets_read is None
+            or secrets_read.status is not ConfigSourceStatus.VALID
+            or secrets_read.value is None
+        ):
+            return None
+        signature = secrets_read.signature
+        if signature == self._pending_notice_signature:
+            return None
+        self._pending_notice_signature = signature
+        return _summarize_secret_changes(self._secrets, secrets_read.value)
+
+    def _stage_unconfirmed_secret_change_locked(
+        self,
+        config_read: _SourceRead,
+        secrets_read: _SourceRead,
+    ) -> tuple[bool, bool]:
+        """暂存合法的 secrets-only 外部改动，同时保留当前可信代。
+
+        仅当磁盘配置仍与当前已确认配置完全一致时保留旧凭据。这样 QQ
+        WebSocket 可以继续接收 ``/reload``，而候选 secrets 在显式确认前
+        不会进入插件、管理员或网络认证视图。配置来源也发生变化时继续走
+        原有 fail-closed 路径，避免把旧 token 绑定到新的网络端点。
+        """
+
+        active_generation_is_trusted = (
+            self._config_source.status is ConfigSourceStatus.VALID
+            and self._secrets_source.status is ConfigSourceStatus.VALID
+            and self._config_source.signature == self._paired_config_signature
+            and self._secrets_source.signature == self._paired_secrets_signature
+        )
+        is_secrets_only_candidate = (
+            config_read.status is ConfigSourceStatus.VALID
+            and secrets_read.status is ConfigSourceStatus.VALID
+            and config_read.signature == self._config_source.signature
+            and secrets_read.signature != self._secrets_source.signature
+        )
+        if not active_generation_is_trusted or not is_secrets_only_candidate:
+            return False, False
+
+        changed = (
+            self._pending_secrets_source is None
+            or secrets_read.signature != self._pending_secrets_source.signature
+        )
+        self._pending_secrets_source = secrets_read
+        if changed:
+            # 使已经离开锁、仍在读取旧候选的 watcher 失效；当前可信快照和
+            # revision 保持不变，不触发任何授权回调或网络轮换。
+            self._source_generation += 1
+        return True, changed
 
     def _guard_unconfirmed_secrets_locked(
         self,
@@ -712,6 +857,7 @@ class ConfigManager:
             with keyed_path_lock(self.secrets_path):
                 current = self._read_source_unlocked(self.secrets_path)
                 if current.status is not ConfigSourceStatus.VALID or current.value is None:
+                    self._clear_pending_sources_locked(bump_generation=True)
                     snapshot, notification, _changed = self._apply_source_reads_locked(
                         self._config_source,
                         current,
@@ -725,17 +871,25 @@ class ConfigManager:
                     self._secrets_source.status is not ConfigSourceStatus.VALID
                     or current.etag != self._secrets_source.etag
                 ):
-                    guarded = self._guard_unconfirmed_secrets_locked(
+                    staged, _pending_changed = self._stage_unconfirmed_secret_change_locked(
                         self._config_source,
                         current,
                     )
-                    snapshot, notification, _changed = self._apply_source_reads_locked(
-                        self._config_source,
-                        guarded,
-                        force=False,
-                        bump_revision=True,
-                        notify=True,
-                    )
+                    if staged:
+                        snapshot = self._snapshot_locked()
+                    else:
+                        self._clear_pending_sources_locked(bump_generation=True)
+                        guarded = self._guard_unconfirmed_secrets_locked(
+                            self._config_source,
+                            current,
+                        )
+                        snapshot, notification, _changed = self._apply_source_reads_locked(
+                            self._config_source,
+                            guarded,
+                            force=False,
+                            bump_revision=True,
+                            notify=True,
+                        )
                     failure = ConfigLoadError(
                         "secrets changed on disk; reload the latest source and retry the mutation"
                     )
@@ -756,19 +910,27 @@ class ConfigManager:
                         # Reconcile it before propagating so live auth never keeps
                         # credentials contradicted by the observed disk state.
                         observed = self._read_source_unlocked(self.secrets_path)
-                        guarded = self._guard_unconfirmed_secrets_locked(
+                        staged, _pending_changed = self._stage_unconfirmed_secret_change_locked(
                             self._config_source,
                             observed,
                         )
-                        snapshot, notification, _published = self._apply_source_reads_locked(
-                            self._config_source,
-                            guarded,
-                            force=False,
-                            bump_revision=True,
-                            notify=True,
-                        )
-                        if observed.status is not ConfigSourceStatus.VALID:
-                            self._mark_sources_paired_locked(self._config_source, observed)
+                        if staged:
+                            snapshot = self._snapshot_locked()
+                        else:
+                            self._clear_pending_sources_locked(bump_generation=True)
+                            guarded = self._guard_unconfirmed_secrets_locked(
+                                self._config_source,
+                                observed,
+                            )
+                            snapshot, notification, _published = self._apply_source_reads_locked(
+                                self._config_source,
+                                guarded,
+                                force=False,
+                                bump_revision=True,
+                                notify=True,
+                            )
+                            if observed.status is not ConfigSourceStatus.VALID:
+                                self._mark_sources_paired_locked(self._config_source, observed)
                         failure = exc
                     else:
                         published, paired = self._prepare_confirmed_secrets_locked(
@@ -785,6 +947,7 @@ class ConfigManager:
                         )
                         if paired:
                             self._mark_sources_paired_locked(self._config_source, committed)
+                        self._clear_pending_sources_locked(bump_generation=True)
         if notification is not None:
             self._start_notification_consumer()
         if failure is not None:
@@ -916,10 +1079,8 @@ class ConfigManager:
                 if not active:
                     return
                 active = False
-                try:
+                with suppress(ValueError):
                     self._callbacks.remove(guarded)
-                except ValueError:
-                    pass
 
         return unsubscribe
 
@@ -953,10 +1114,39 @@ class ConfigManager:
                 if not active:
                     return
                 active = False
-                try:
+                with suppress(ValueError):
                     self._security_callbacks.remove(guarded)
-                except ValueError:
-                    pass
+
+        return unsubscribe
+
+    def on_pending_secrets_change(
+        self,
+        callback: PendingSecretsCallback,
+    ) -> Callable[[], None]:
+        """订阅合法外部 secret 候选，回调只接收不含凭据值的字段摘要。"""
+
+        if not callable(callback):
+            raise TypeError("pending secrets callback must be callable")
+        active = True
+
+        def guarded(change: PendingSecretsChange) -> Any:
+            with self._lock:
+                enabled = active
+            if not enabled:
+                return None
+            return callback(change)
+
+        with self._lock:
+            self._pending_secrets_callbacks.append(guarded)
+
+        def unsubscribe() -> None:
+            nonlocal active
+            with self._lock:
+                if not active:
+                    return
+                active = False
+                with suppress(ValueError):
+                    self._pending_secrets_callbacks.remove(guarded)
 
         return unsubscribe
 
@@ -974,6 +1164,26 @@ class ConfigManager:
                     raise TypeError("security config callback must be synchronous")
             except BaseException as exc:
                 logger.exception("Security config callback failed: %s", exc)
+
+    async def _dispatch_pending_secrets_change(self, change: PendingSecretsChange) -> None:
+        """通知控制面合法候选；慢通知受与普通配置回调相同的时限约束。"""
+
+        with self._lock:
+            callbacks = tuple(self._pending_secrets_callbacks)
+        for callback in callbacks:
+            try:
+                result = callback(change)
+                if inspect.isawaitable(result):
+                    await asyncio.wait_for(
+                        result,
+                        timeout=self._callback_timeout_seconds,
+                    )
+            except asyncio.TimeoutError:
+                logger.warning("Pending secrets callback timed out")
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exc:
+                logger.exception("Pending secrets callback failed: %s", exc)
 
     def snapshot(self) -> ConfigSnapshot:
         with self._lock:
@@ -1010,6 +1220,9 @@ class ConfigManager:
     async def _watch_reconcile_once(self) -> None:
         notification: _ConfigNotification | None = None
         changed = False
+        pending_external_change = False
+        pending_candidate_changed = False
+        pending_notice: PendingSecretsChange | None = None
         published_config: _SourceRead | None = None
         published_secrets: _SourceRead | None = None
         read_hint: tuple[_SourceRead, _SourceRead] | None = None
@@ -1017,7 +1230,7 @@ class ConfigManager:
             with self._lock:
                 generation = self._source_generation
                 if read_hint is None:
-                    read_hint = (self._config_source, self._secrets_source)
+                    read_hint = self._pending_read_hint_locked()
             candidate = await asyncio.to_thread(
                 self._read_sources,
                 read_hint,
@@ -1056,6 +1269,15 @@ class ConfigManager:
                 ):
                     read_hint = final
                     continue
+                config_read, secrets_read = final
+                staged, pending_candidate_changed = self._stage_unconfirmed_secret_change_locked(
+                    config_read, secrets_read
+                )
+                if staged:
+                    pending_external_change = True
+                    pending_notice = self._pending_secrets_notice_locked()
+                    break
+                self._clear_pending_sources_locked(bump_generation=True)
                 config_read, secrets_read, paired = self._prepare_watched_sources_locked(*final)
                 _snapshot, notification, changed = self._apply_source_reads_locked(
                     config_read,
@@ -1073,6 +1295,17 @@ class ConfigManager:
             self._fail_closed_watch_error(
                 RuntimeError("configuration sources did not stabilize before publication")
             )
+            return
+
+        if pending_external_change:
+            if pending_candidate_changed:
+                logger.warning(
+                    "External secrets change is pending explicit reload confirmation; "
+                    "the active trusted credentials remain in service"
+                )
+            if pending_notice is not None:
+                await self._dispatch_pending_secrets_change(pending_notice)
+            _check_secrets_file_permissions(self.secrets_path)
             return
 
         if not changed or published_config is None or published_secrets is None:
@@ -1123,6 +1356,7 @@ class ConfigManager:
             error=error,
         )
         with self._lock:
+            self._clear_pending_sources_locked(bump_generation=True)
             _snapshot, notification, changed = self._apply_source_reads_locked(
                 self._config_source,
                 unavailable,

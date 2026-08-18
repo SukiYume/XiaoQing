@@ -43,7 +43,7 @@ def _sqlite_local_date(value: Any, timezone_name: Any) -> str:
 
 
 def _sqlite_utc_epoch(value: Any, timezone_name: Any) -> float | None:
-    """按显式时区把历史墙钟时间转换为绝对排序键。"""
+    """按显式时区把存储的墙钟时间转换为绝对排序键。"""
 
     text = str(value or "").strip()
     zone_name = str(timezone_name or "").strip()
@@ -248,7 +248,7 @@ def _create_core_schema(cursor: sqlite3.Cursor) -> None:
 
 
 def _apply_schema_migrations(cursor: sqlite3.Cursor) -> None:
-    """保证每条历史 ADD COLUMN 迁移只执行一次。"""
+    """按版本记录逐条执行尚未应用的 ADD COLUMN 迁移。"""
 
     applied_versions = {
         int(row[0]) for row in cursor.execute("SELECT version FROM schema_migrations").fetchall()
@@ -512,7 +512,7 @@ def initialize_schema(cursor: sqlite3.Cursor) -> None:
     """按依赖顺序在调用方事务内创建表、执行迁移并补齐索引。"""
 
     _create_core_schema(cursor)
-    # 审计表必须先存在，历史版本化 ADD COLUMN 才有明确目标。
+    # 审计表必须先存在，后续版本化 ADD COLUMN 才有明确目标。
     _create_audit_schema(cursor)
     _apply_schema_migrations(cursor)
     _create_item_indexes(cursor)

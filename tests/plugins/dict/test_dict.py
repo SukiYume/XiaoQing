@@ -201,7 +201,7 @@ async def test_page_beyond_matches_reports_the_real_range(context: SimpleNamespa
 
 
 def test_generated_navigation_command_round_trips_option_like_quoted_query() -> None:
-    command = dict_plugin._page_command(
+    command = dict_plugin._query_command(
         '-nova\'s "field"',
         exact_match=True,
         max_results=20,

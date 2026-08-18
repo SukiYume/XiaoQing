@@ -77,7 +77,7 @@ def _client(monkeypatch: pytest.MonkeyPatch, **methods: object) -> SimpleNamespa
     }
     values.update(methods)
     client = SimpleNamespace(**values)
-    monkeypatch.setattr(flickr, "_make_client", lambda _context: client)
+    monkeypatch.setattr(flickr, "FlickrClient", lambda _context: client)
     return client
 
 

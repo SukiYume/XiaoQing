@@ -66,7 +66,7 @@ Bot Core 提供命令帮助、运行时重载、插件列表、群静音、敏�
 
 `/reload` 先发布配置 revision，再请求 Core 创建插件后台重载任务。首条消息确认配置已发布且插件开始后台重载。后台任务等待当前 `bot_core` 调用释放执行 gate，随后扫描、校验和发布插件代；结束后向原管理员会话发送一次成功或失败结果及耗时。重复命令复用同一后台任务时只登记一条完成通知。
 
-外部工具整体替换配置来源时，fail-closed 快照会立即撤销尚未确认配对的网络凭据。主动 WebSocket 是唯一控制通道的部署在停服窗口内保存完整 `config.json` 与 `secrets.json`，随后重新启动。保留独立受保护 Inbound 的实例可在文件稳定后通过该通道执行 `/reload`。
+外部工具保存完整有效的 `secrets.json` 且公开配置与当前已确认版本一致时，watcher 保留现有可信运行代并暂存候选。Core 私聊当前管理员列出新增、删除和修改的字段路径，消息内容仅包含路径；`/reload` 重新读取磁盘并确认候选。公开配置变更和双来源整体替换在停服窗口内完成，保留独立受保护 Inbound 的实例也可在文件稳定后通过该通道执行 `/reload`。
 
 ---
 
@@ -102,7 +102,7 @@ admin_user_ids
 
 `set_secret` 更新 secrets 树中的已有路径。实际写入由 `SecretAdminService` 与 `ConfigManager` 完成，成功提交后发布新 revision。
 
-该命令适合服务运行期间更新现有 API Key、token 和插件凭据。新增 secret 路径通过发行示例或停服后的完整文件配置提供。
+该命令适合服务运行期间更新现有 API Key、token 和插件凭据。新增 secret 路径可写入完整有效的 `secrets.json`，核对管理员收到的字段摘要后通过 `/reload` 确认。
 
 ### 值
 

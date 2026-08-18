@@ -174,14 +174,17 @@ class TestConfigManagerSecretTransactions:
                 "external": {"preserve": True},
             },
         }
+        original = config_manager.snapshot()
         secrets_file.write_text(json.dumps(external), encoding="utf-8")
 
         with pytest.raises(ConfigLoadError, match="changed on disk"):
             config_manager.set_plugin_secret("qingssh", "passwords.ref-1", "new")
 
         assert json.loads(secrets_file.read_text(encoding="utf-8")) == external
-        assert config_manager.snapshot().secrets_status is ConfigSourceStatus.INCONSISTENT
-        assert config_manager.snapshot().mutable_secrets() == {}
+        assert config_manager.snapshot().secrets_status is ConfigSourceStatus.VALID
+        assert config_manager.snapshot().mutable_secrets() == original.mutable_secrets()
+        assert config_manager._pending_secrets_source is not None
+        assert config_manager._pending_secrets_source.value == external
 
         confirmed = config_manager.reload()
         assert confirmed.secrets_status is ConfigSourceStatus.VALID
@@ -194,20 +197,22 @@ class TestConfigManagerSecretTransactions:
         assert disk["plugins"]["qingssh"]["passwords"]["ref-1"] == "new"
         assert config_manager.snapshot().mutable_secrets() == disk
 
-    def test_external_revocation_is_published_before_update_reports_conflict(
+    def test_external_valid_removal_stays_pending_before_update_reports_conflict(
         self,
         config_manager: ConfigManager,
         secrets_file: Path,
     ):
         revoked = {"admin_user_ids": [], "plugins": {"echo": {}}}
+        original = config_manager.snapshot()
         secrets_file.write_text(json.dumps(revoked), encoding="utf-8")
 
         with pytest.raises(ConfigLoadError, match="changed on disk"):
             config_manager.update_secret("plugins.echo.api_key", "stale-writer")
 
-        assert config_manager.snapshot().secrets_status is ConfigSourceStatus.INCONSISTENT
-        assert config_manager.secrets == {}
-        assert config_manager.get_plugin_secret("echo", "api_key") is None
+        assert config_manager.snapshot().secrets_status is ConfigSourceStatus.VALID
+        assert config_manager.snapshot().mutable_secrets() == original.mutable_secrets()
+        assert config_manager.get_plugin_secret("echo", "api_key") == "test_key"
+        assert config_manager._pending_secrets_source is not None
         assert json.loads(secrets_file.read_text(encoding="utf-8")) == revoked
 
         confirmed = config_manager.reload()
@@ -317,6 +322,7 @@ class TestConfigManagerSecretTransactions:
             "plugins": {"external": {"interference": interference}},
         }
         external_payload = json.dumps(external).encode("utf-8")
+        before = config_manager.snapshot()
 
         def interfere(handle: Any, payload: bytes) -> None:
             if interference == "replace":
@@ -339,12 +345,15 @@ class TestConfigManagerSecretTransactions:
             config_manager.update_secret("admin_user_ids", [999])
 
         snapshot = config_manager.snapshot()
-        assert snapshot.secrets == {}
         if interference == "delete":
+            assert snapshot.secrets == {}
             assert snapshot.secrets_status is ConfigSourceStatus.MISSING
             assert not secrets_file.exists()
         else:
-            assert snapshot.secrets_status is ConfigSourceStatus.INCONSISTENT
+            assert snapshot.secrets_status is ConfigSourceStatus.VALID
+            assert snapshot.mutable_secrets() == before.mutable_secrets()
+            assert config_manager._pending_secrets_source is not None
+            assert config_manager._pending_secrets_source.value == external
             assert json.loads(secrets_file.read_text(encoding="utf-8")) == external
         assert snapshot.mutable_secrets() != {"admin_user_ids": [999]}
 
