@@ -49,7 +49,7 @@ def test_scenario_contract_audits_every_plugin_and_closes_dynamic_coverage() -> 
     )
 
     assert set(contract["plugins"]) == set(policy["plugins"])
-    assert len(contract["plugins"]) == 29
+    assert len(contract["plugins"]) == 30
     assert len(scenarios) >= 17
     assert sum(len(scenario.steps) for scenario in scenarios) >= 150
     assert len({code for scenario in scenarios for code in scenario.covers}) >= 80

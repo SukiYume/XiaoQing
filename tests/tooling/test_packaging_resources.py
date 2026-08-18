@@ -68,7 +68,7 @@ def test_all_active_plugins_have_publishable_manifests() -> None:
         if not path.parent.name.endswith("_deprecated")
     )
 
-    assert len(active_manifests) == 29
+    assert len(active_manifests) == 30
     assert _pyproject()["tool"]["setuptools"]["package-data"]["*"] == ["plugin.json"]
 
 

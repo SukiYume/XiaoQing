@@ -66,7 +66,7 @@ Core 采用单进程异步架构。插件是受信任 Python 扩展，共享进�
 4. 重协商 Inbound 和主动 WebSocket 连接。
 5. 发布调度与插件相关运行参数。
 
-普通配置使用 last-known-good 快照；配置 watcher 会自动发布通过校验的公开配置变更。敏感配置使用 fail-closed 快照：删除、损坏或不可读的 secrets 会立即撤销相关授权；新写入且校验通过的 secrets 保持撤权状态，管理员执行 `/reload` 后与公开配置组成完整 revision 并恢复授权，同时启动插件后台重载。
+普通配置使用 last-known-good 快照；配置 watcher 会发布通过校验的公开配置来源。敏感配置使用 fail-closed 快照：删除、损坏、不可读或尚未与当前公开配置确认配对的 secrets 会立即撤销网络凭据与管理员视图。`ConfigManager` 管理的 secret 事务在持锁写入后直接发布已确认 revision。部署工具整体替换来源文件时，停服后的下一次启动负责确认新来源；保留独立可信 Inbound 的运行实例也可由管理员执行 `/reload` 完成确认与插件后台重载。
 
 ---
 

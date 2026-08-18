@@ -128,6 +128,12 @@ def test_monitor_stop_mode_uses_exact_scoped_process_identities() -> None:
     assert "[switch]$Stop" in source
     assert "Stop-XiaoQingService" in source
     assert "Get-TrackedMonitorProcess" in source
+    assert "Get-CimProcessWithReadableCommandLine" in source
+    assert "Test-IsAdministrator" in source
+    assert "Invoke-ElevatedStop" in source
+    assert "-Verb RunAs" in source
+    assert '"-ElevationAttempted"' in source
+    assert "catch [UnauthorizedAccessException]" in source
     assert "Test-ProcessMatchesCommandIdentity" in source
     assert "Stop-VerifiedCommandProcess" in source
     assert "@($LogPumpScript, $MainScript)" in source

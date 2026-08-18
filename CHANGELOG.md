@@ -4,6 +4,14 @@
 
 ## 下一版本
 
+### Flickr 公共摄影浏览
+
+- 新增 Flickr 公共只读插件，提供今日精选、关键词与标签搜索、Flickr Commons、用户公开照片、公开相册、连续浏览和照片详情。
+- 搜索默认覆盖全部公开许可类型，并提供 CC 与公共领域筛选；每条回复展示作者、许可、拍摄日期、标签和 Flickr 原图页。
+- API 请求固定使用 Flickr 官方 HTTPS REST 端点，图片限定为 Flickr 静态域名，并落实 JSON、MIME、字节、像素、尺寸、帧数、会话和缓存预算。
+- 浏览会话按私聊用户或“群号 + 用户”隔离并保留 15 分钟；图片缓存位于 `data/flickr/images/`，API Key 由 `secrets.plugins.flickr.api_key` 管理。
+- 已有 Flickr secret 路径可通过管理员私聊事务更新；整体配置来源替换采用停服、原子保存和重新启动流程，避免 fail-closed 撤权中断唯一的主动 WebSocket 控制通道。
+
 ### 发布隐私与部署配置
 
 - 生产同步目标改由 Git 忽略的 `scripts/sync_to_remote.local.sh` 保存，发布仓库只保留可复制的通用配置示例。
@@ -14,14 +22,14 @@
 ### 在线文档与文档契约
 
 - 根 README 的状态栏和文档导航加入在线项目手册入口 `https://paris.escape.ac.cn/note/XiaoQing/`，GitHub About Website 使用同一地址。
-- 逐份复核 29 个插件 README、`docs/` 下 12 份手册和 Pendo 架构文档，统一使用直接描述现行功能、配置、边界和扩展流程的独立文档结构。
+- 逐份复核 30 个插件 README、`docs/` 下 12 份手册和 Pendo 架构文档，统一使用直接描述现行功能、配置、边界和扩展流程的独立文档结构。
 - Pendo 面向用户的数据功能统一表述为导入导出与 Bundle 传输；数据库 schema migration 保留为现行存储机制，已移除的一次性迁移脚本不再出现在架构说明中。
 - 文档契约、Manifest 一致性、相对链接、标题层级、代码围栏和历史叙事扫描通过验证。
 
 ### 发布验证
 
-- CI 等价发布前测试通过：`6050 passed, 2 skipped`，覆盖率 `80.70%`。
-- Ruff formatter、Ruff lint、Mypy 364 个生产模块、compileall 和 `git diff --check` 全部通过。
+- CI 等价发布前测试通过：`6090 passed, 2 skipped`。
+- Ruff formatter、Ruff lint、Mypy 367 个生产模块、compileall 和 `git diff --check` 全部通过。
 
 ### Pendo Web 日程提醒开关
 
@@ -100,6 +108,8 @@
 - 新增 `scripts/stop-bot.vbs` 双击入口，停服完成后显示结果；再次双击 `scripts/run-bot.vbs` 即可启动新进程。
 - `scripts/run-bot-monitor.ps1 -Stop` 复用仓库级互斥量与 PID 状态，先结束自动拉起监控器，再按绝对命令路径回收 Bot 日志泵、`main.py`、NapCat 日志泵和指定 NapCat 进程树。
 - 停服流程仅匹配当前仓库与指定 NapCat 路径，支持已停止状态下重复执行；隔离 Windows 进程树测试确认无关 Python 进程持续运行。
+- CIM/WMI 命令行身份读取增加三次有界重试；持续不可读且当前桌面令牌未提升时请求一次 UAC，提升后的停止实例重新校验全部路径与进程身份。
+- 内部提升标记阻止递归 UAC；取消授权、提升子进程失败或提升后身份仍不可读时保持失败关闭，进程停止始终要求经过命令路径身份验证。
 - `scripts/sync_to_remote.sh` 将停服入口纳入生产关键文件完整性与 SHA-256 复核。
 
 ### 读者文档统一与移动端版式

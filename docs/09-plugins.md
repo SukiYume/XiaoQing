@@ -1,6 +1,6 @@
 # 📦 09 - 插件使用手册
 
-本章完整介绍 XiaoQing 内置的 29 个插件，覆盖用途、主要命令、权限、配置、数据和运行方式。运行时 `/help` 提供当前 Manifest 的递归命令目录，各插件 README 提供专项边界与维护细节。
+本章完整介绍 XiaoQing 内置的 30 个插件，覆盖用途、主要命令、权限、配置、数据和运行方式。运行时 `/help` 提供当前 Manifest 的递归命令目录，各插件 README 提供专项边界与维护细节。
 
 ---
 
@@ -494,6 +494,25 @@ Earthquake 从中国地震台网速报微博读取近期记录。手动命令显
 每 5 分钟扫描微博卡片，先续发待办，再处理新事件并逐个确认默认群投递。`data/earthquake/` 保存微博游标、恢复检查点、待办事件和图片缓存。结构异常状态会进入 `*.corrupt-*` 取证副本，并从有效检查点恢复。
 
 图片来源限定为新浪图片 HTTPS 域名，微博响应、正文与图片均采用有界解析。快讯用于消息提醒，应急判断需结合权威官方渠道。[Earthquake README](../plugins/earthquake/README.md) 提供游标与网络细节。
+
+### `flickr`：公共摄影发现与浏览
+
+Flickr 插件通过官方 REST API 浏览今日精选、公共搜索、Flickr Commons、用户公开照片与公开相册。
+
+```text
+/flickr
+/flickr search aurora --sort interesting
+/flickr search --tags nebula,telescope --license any --date 2026-08
+/flickr commons astronomy
+/flickr user <用户名或个人页 URL>
+/flickr album <相册 URL>
+/flickr more [1-5]
+/flickr info [照片ID或 URL]
+```
+
+搜索支持 `relevance`、`interesting`、`new`、`old` 四种排序，拍摄日期可使用 `YYYY-MM` 或 `YYYY-MM-DD`。许可筛选提供 `any`、`cc` 和 `public-domain`；默认 `any` 会覆盖全部公开许可类型。每条回复保留作者、许可名称、许可链接和 Flickr 原图页，图片使用遵循对应照片页面的权利条件。
+
+浏览状态按私聊用户或“群号 + 用户”隔离，保留 15 分钟；`/flickr more` 一次继续 1–5 张。API Key 位于 `secrets.plugins.flickr.api_key`。图片仅从 `live.staticflickr.com` 下载，并经过 HTTPS 域名、MIME、字节、像素、尺寸和帧数校验。缓存位于 `data/flickr/images/`，上限为 256 项、256 MiB、1 小时。[Flickr README](../plugins/flickr/README.md) 提供完整命令、申请入口、许可和排障说明。
 
 ### `twitter`：X/Twitter 图片缓存
 

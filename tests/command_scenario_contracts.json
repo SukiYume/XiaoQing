@@ -140,6 +140,16 @@
       "dynamic_codes": [],
       "regression_codes": []
     },
+    "flickr": {
+      "state_model": "session",
+      "reason": "搜索结果和当前位置在同一用户会话中保留十五分钟",
+      "test_files": [
+        "tests/plugins/flickr/test_flickr.py",
+        "tests/plugins/flickr/test_flickr_client.py"
+      ],
+      "dynamic_codes": ["flickr.flickr.more", "flickr.flickr.info"],
+      "regression_codes": ["flickr.flickr.more", "flickr.flickr.info"]
+    },
     "github": {
       "state_model": "external_read_only",
       "reason": "只读取 GitHub 活动摘要",
@@ -618,6 +628,43 @@
         {"id":"duplicate_alias","code":"color.color.add","message":"/color --write MATRIX-{{run_id}} #3366FF","expect_any":["已经定义","已存在"]},
         {"id":"delete_alias","code":"color.color.delete","message":"/color --delete MATRIX-{{run_id}}","expect_all":["已删除"],"cleanup":true},
         {"id":"absent","code":"color.color.name","message":"/color -n MATRIX-{{run_id}}","expect_any":["没有收录","没有"],"reject_any":["#3366ff","XQ-PLUGIN-UNEXPECTED"],"cleanup":true}
+      ]
+    },
+    {
+      "id": "flickr-public-browsing-session",
+      "plugin": "flickr",
+      "description": "通过公开 Flickr 数据串联验证精选、搜索、连续浏览、详情、Commons、用户、相册、中文别名和错误输入",
+      "risk": "read_only",
+      "dependency": "external",
+      "scope": "private",
+      "actor": "user",
+      "sensitive": false,
+      "required_fixtures": [],
+      "covers": [
+        "flickr.flickr",
+        "flickr.flickr.search",
+        "flickr.flickr.commons",
+        "flickr.flickr.user",
+        "flickr.flickr.album",
+        "flickr.flickr.more",
+        "flickr.flickr.info",
+        "flickr.flickr.help"
+      ],
+      "steps": [
+        {"id":"interesting","code":"flickr.flickr","message":"/flickr","expect_all":["📷","第 1/","https://www.flickr.com/photos/"],"reject_any":["暂时不可用","XQ-PLUGIN-UNEXPECTED"]},
+        {"id":"more_two","code":"flickr.flickr.more","message":"/flickr more 2","expect_all":["第 2/","第 3/"],"reject_any":["当前没有","XQ-PLUGIN-UNEXPECTED"]},
+        {"id":"current_info","code":"flickr.flickr.info","message":"/flickr info","expect_all":["📷","https://www.flickr.com/photos/"],"reject_any":["当前没有","XQ-PLUGIN-UNEXPECTED"]},
+        {"id":"search_any_license","code":"flickr.flickr.search","message":"/flickr search astronomy --sort interesting --license any","expect_all":["📷","第 1/"],"reject_any":["暂时不可用","XQ-PLUGIN-UNEXPECTED"]},
+        {"id":"search_alias_cc","code":"flickr.flickr.search","message":"/弗里克 搜索 星云 --license cc","expect_all":["📷","第 1/"],"reject_any":["暂时不可用","XQ-PLUGIN-UNEXPECTED"]},
+        {"id":"commons","code":"flickr.flickr.commons","message":"/flickr commons astronomy","expect_all":["📷","第 1/"],"reject_any":["暂时不可用","XQ-PLUGIN-UNEXPECTED"]},
+        {"id":"public_user","code":"flickr.flickr.user","message":"/flickr user 34419668@N08","expect_all":["📷","第 1/"],"reject_any":["未找到","暂时不可用","XQ-PLUGIN-UNEXPECTED"]},
+        {"id":"public_album","code":"flickr.flickr.album","message":"/flickr album 34419668@N08 72177720315281797","expect_all":["📷","第 1/"],"reject_any":["未找到","暂时不可用","XQ-PLUGIN-UNEXPECTED"]},
+        {"id":"help_alias","code":"flickr.flickr.help","message":"/flicker help","expect_all":["Flickr 公共摄影","/flickr search","license any|cc|public-domain"]},
+        {"id":"invalid_search","code":"flickr.flickr.search","message":"/flickr search","expect_all":["请提供搜索关键词"]},
+        {"id":"invalid_more_low","code":"flickr.flickr.more","message":"/flickr more 0","expect_all":["1 到 5"]},
+        {"id":"invalid_more_high","code":"flickr.flickr.more","message":"/flickr 更多 6","expect_all":["1 到 5"]},
+        {"id":"invalid_info","code":"flickr.flickr.info","message":"/flickr info one two","expect_all":["用法"]},
+        {"id":"unknown_command","code":"flickr.flickr","message":"/flickr unknown","expect_all":["未知 Flickr 命令"]}
       ]
     },
     {

@@ -516,6 +516,7 @@ $definitions = $ast.FindAll({
     $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
         $node.Name -in @(
             'Test-CommandLineContains',
+            'Get-CimProcessWithReadableCommandLine',
             'Get-TrackedProcessFromFile',
             'Get-TrackedBotProcess'
         )
@@ -527,23 +528,48 @@ $script:PidFile = $env:XIAOQING_TEST_PID_FILE
 $script:LogPumpScript = 'C:\repo\scripts\run_process_with_rotating_logs.py'
 $script:MainScript = 'C:\repo\main.py'
 
-function Get-CimInstance { throw 'simulated CIM failure' }
+function Start-Sleep {}
+function Get-CimInstance {
+    $script:CimAttempts++
+    throw 'simulated CIM failure'
+}
+$script:CimAttempts = 0
 try {
     Get-TrackedBotProcess | Out-Null
     exit 51
 } catch {
     if ($_.Exception.Message -notlike '*simulated CIM failure*') { exit 52 }
 }
+if ($script:CimAttempts -ne 3) { exit 59 }
 if (-not (Test-Path -LiteralPath $script:PidFile -PathType Leaf)) { exit 53 }
 
-function Get-CimInstance { return [pscustomobject]@{ CommandLine = $null } }
+function Get-CimInstance {
+    $script:CimAttempts++
+    return [pscustomobject]@{ CommandLine = $null }
+}
+$script:CimAttempts = 0
 try {
     Get-TrackedBotProcess | Out-Null
     exit 54
 } catch {
     if ($_.Exception.Message -notlike '*Unable to verify command line*') { exit 55 }
+    if ($_.Exception -isnot [UnauthorizedAccessException]) { exit 62 }
 }
+if ($script:CimAttempts -ne 3) { exit 60 }
 if (-not (Test-Path -LiteralPath $script:PidFile -PathType Leaf)) { exit 56 }
+
+function Get-CimInstance {
+    $script:CimAttempts++
+    if ($script:CimAttempts -lt 3) {
+        return [pscustomobject]@{ CommandLine = $null }
+    }
+    return [pscustomobject]@{
+        CommandLine = 'python C:\repo\scripts\run_process_with_rotating_logs.py C:\repo\main.py'
+    }
+}
+$script:CimAttempts = 0
+$recovered = Get-TrackedBotProcess
+if ($null -eq $recovered -or $script:CimAttempts -ne 3) { exit 61 }
 
 [IO.File]::WriteAllText($script:PidFile, '{', [Text.Encoding]::UTF8)
 $script:CimWasCalled = $false

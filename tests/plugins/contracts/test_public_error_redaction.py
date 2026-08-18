@@ -28,6 +28,7 @@ from plugins.color import main as color
 from plugins.dict import main as dictionary
 from plugins.earthquake import main as earthquake
 from plugins.echo import main as echo
+from plugins.flickr import main as flickr
 from plugins.github import main as github
 from plugins.guess_number import main as guess_number
 from plugins.pendo import main as pendo
@@ -69,6 +70,7 @@ _PUBLIC_ERROR_PLUGIN_DIRS = (
     "dict",
     "earthquake",
     "echo",
+    "flickr",
     "github",
     "guess_number",
     "pendo",
@@ -139,6 +141,7 @@ class _PublicContext:
         pytest.param(dictionary, "_parse_request", id="dict"),
         pytest.param(earthquake, "_parse_action", id="earthquake"),
         pytest.param(echo, "segments", id="echo"),
+        pytest.param(flickr, "parse", id="flickr"),
         pytest.param(github, "_parse_action", id="github"),
         pytest.param(guess_number, "_parse_request", id="guess"),
         pytest.param(twitter, "parse", id="twitter"),
