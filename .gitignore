@@ -92,6 +92,7 @@ logs/
 config/config.json
 config/secrets.json
 plugins/minecraft/config.json
+scripts/sync_to_remote.local.sh
 
 # Plugin runtime data, caches and generated reports
 /data/

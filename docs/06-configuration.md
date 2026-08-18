@@ -95,7 +95,7 @@ Inbound 的接纳容量为 `inbound_ws_max_workers + ws_queue_size`。同一私�
 
 | 字段 | 示例 | 约束 | 说明 |
 |---|---|---|---|
-| `napcat_account` | `"1000000001"` | 空字符串或 5～20 位十进制数字 | NapCat 启动位置参数 |
+| `napcat_account` | `"1234567890"` | 空字符串或 5～20 位十进制数字 | NapCat 启动位置参数 |
 | `mkl_threading_layer` | `"TBB"` | 空字符串或最长 64 字符的字母、数字、点、下划线和连字符 | Bot 子进程的 `MKL_THREADING_LAYER` |
 
 `scripts/run-bot-monitor.ps1` 在创建子进程前读取这些字段。启动链调用当前 `PATH` 中的 Python，并保持部署环境对解释器和依赖的所有权。字段修改在下次启动监控链时生效。

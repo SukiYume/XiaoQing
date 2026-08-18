@@ -29,7 +29,7 @@ async def test_twitter_uses_get_and_rejects_wrong_json_mime() -> None:
     context = with_settings_reader(
         SimpleNamespace(
             http_session=session,
-            secrets={"plugins": {"twitter": {}}},
+            secrets={"plugins": {"twitter": {"user_id": "123456789"}}},
             logger=MagicMock(),
         )
     )

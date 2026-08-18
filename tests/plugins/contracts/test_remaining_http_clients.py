@@ -193,7 +193,7 @@ async def test_twitter_non_success_does_not_read_body(tmp_path: Path) -> None:
         SimpleNamespace(
             http_session=_Session(response),
             data_dir=tmp_path,
-            secrets={"plugins": {"twitter": {}}},
+            secrets={"plugins": {"twitter": {"user_id": "123456789"}}},
         )
     )
 

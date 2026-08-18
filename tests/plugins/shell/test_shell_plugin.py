@@ -260,23 +260,25 @@ class TestCommandSplit:
 
     def test_split_windows_backslash_path_not_mangled(self):
         """Windows 反斜杠路径不应被 shlex 当转义吞掉"""
-        result = shell_main._split_command(r"echo C:/Users/user\Desktop\a.py")
+        result = shell_main._split_command(r"echo C:\Users\user\Desktop\a.py")
         if shell_main.sys.platform == "win32":
-            assert result == ["echo", r"C:/Users/user\Desktop\a.py"]
+            assert result == ["echo", r"C:\Users\user\Desktop\a.py"]
         else:
-            assert result == ["echo", "C:UserstorchDesktopa.py"]
+            assert result == ["echo", "C:UserstestuserDesktopa.py"]
 
     def test_forward_slash_path_normalized_for_current_platform(self):
         """用户统一输入 / 路径，后端按当前系统规范化"""
         result = shell_main._split_command("echo C:/Users/user/Desktop/a.py")
         if shell_main.sys.platform == "win32":
-            assert result == ["echo", r"C:/Users/user\Desktop\a.py"]
+            assert result == ["echo", r"C:\Users\user\Desktop\a.py"]
         else:
             assert result == ["echo", "C:/Users/user/Desktop/a.py"]
 
     def test_windows_options_are_not_paths(self):
         """cmd /c copy /Y 中的 /c 和 /Y 不是路径"""
-        result = shell_main._split_command("cmd /c copy /Y C:/Users/user/a.py C:/Users/user/b.py")
+        result = shell_main._split_command(
+            "cmd /c copy /Y C:/Users/user/a.py C:/Users/user/b.py"
+        )
         assert result[1] == "/c"
         assert result[3] == "/Y"
 
@@ -288,7 +290,7 @@ class TestCommandSplit:
     def test_key_value_path_is_normalized(self):
         result = shell_main._split_command("echo output=C:/Users/user/a.txt")
         if shell_main.sys.platform == "win32":
-            assert result == ["echo", r"output=C:/Users/user\a.txt"]
+            assert result == ["echo", r"output=C:\Users\user\a.txt"]
         else:
             assert result == ["echo", "output=C:/Users/user/a.txt"]
 
