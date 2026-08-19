@@ -8,7 +8,7 @@
 
 插件在 XiaoQing Core 提供的命令、闲聊、AI、存储和 OneBot 能力上构建聊天运行时，负责以下领域：
 
-1. 判断消息与小青的关系及参与时机。
+1. 判断消息与配置的机器人角色之间的关系及参与时机。
 2. 构建连续会话、长期记忆、人物资料、目标和媒体上下文。
 3. 规划回复、观察、等待和目标调整动作。
 4. 调用聊天、推理、检查和视觉 route。
@@ -55,6 +55,7 @@ plugins/xiaoqing_chat/
 ├── frequency_control.py         # 回复间隔、速率、冷却与概率
 ├── generation_limiter.py        # 全局、会话和用户生成配额
 ├── brain_chat.py                # 私聊深度对话参数
+├── persona.py                   # 运行时名称解析与人格组合
 ├── smalltalk_models.py          # 准备、生成、外发阶段模型
 ├── smalltalk_execution.py       # 生成、投递、提交与回滚
 ├── smalltalk_media_helpers.py   # 媒体同步与使用记录
@@ -260,10 +261,12 @@ PFC 子系统维护四类信息：
 | 来源 | 内容 |
 |---|---|
 | `plugins/xiaoqing_chat/config/xiaoqing_config.json` | 行为、频控、规划、记忆、媒体、人格和调试 |
-| `config/config.json` | AI provider、model profile、route 与 alias |
+| `config/config.json` | Bot 名称、AI provider、model profile、route 与 alias |
 | `config/secrets.json` | Provider API Key |
 
 `config/config.py` 使用 Pydantic 校验字段范围、交叉约束和正则表达式。`helper_utils.py` 读取 Core 原子快照并维护文件热加载缓存。单轮处理只使用自己的快照，下一轮获得最新有效配置。
+
+`persona.py` 将 Core 快照中的 `bot_name` 注入规划、生成、检查和学习链路。人物配置只保存与名称无关的角色特征，历史中的助手消息按 `assistant` 角色识别并以当前名称渲染。
 
 ---
 

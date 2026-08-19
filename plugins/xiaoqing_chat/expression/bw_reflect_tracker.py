@@ -221,6 +221,7 @@ async def _tick_reflect_tracker_once(
     timeout_seconds: float,
     max_retry: int,
     retry_interval_seconds: float,
+    bot_name: str,
     max_duration_seconds: float = 15 * 60,
     max_message_count: int = 30,
 ) -> bool:
@@ -260,7 +261,8 @@ async def _tick_reflect_tracker_once(
             for message in history
             if float(message.ts or 0.0) >= tracker.created_time
             and float(message.ts or 0.0) > tracker.last_consumed_time
-        ]
+        ],
+        bot_name=bot_name,
     )
     if not context_block:
         return False
@@ -331,6 +333,7 @@ async def tick_reflect_tracker(
     timeout_seconds: float,
     max_retry: int,
     retry_interval_seconds: float,
+    bot_name: str,
     max_duration_seconds: float = 15 * 60,
     max_message_count: int = 30,
 ) -> bool:
@@ -348,6 +351,7 @@ async def tick_reflect_tracker(
             retry_interval_seconds=retry_interval_seconds,
             max_duration_seconds=max_duration_seconds,
             max_message_count=max_message_count,
+            bot_name=bot_name,
         )
         if changed:
             return True

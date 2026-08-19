@@ -1,5 +1,5 @@
 """
-小青智能对话处理器
+拟人智能对话处理器
 包含聊天处理、内部命令等核心功能
 """
 
@@ -976,6 +976,7 @@ async def _prepare_smalltalk_turn(
                 expr_store=state.bw_expr_store,
                 tracker_store=state.bw_tracker_store,
                 secrets=secrets,
+                bot_name=hctx.bot_name,
                 **bg.to_dict(),
             )
             await maybe_ask_for_reflection(

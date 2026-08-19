@@ -17,6 +17,7 @@ from ..message_parts import (
     render_message_parts,
     render_stored_message,
 )
+from ..persona import resolve_bot_name
 
 
 @dataclass(frozen=True)
@@ -405,6 +406,7 @@ def build_prompt_messages(
     request_id: str,
     goal: str = "",
 ) -> list[ChatMessage]:
+    bot_name = resolve_bot_name(bot_name)
     sender = sender_name.strip() if sender_name else "用户"
     now = time.strftime("%Y-%m-%d %H:%M", time.localtime())
 

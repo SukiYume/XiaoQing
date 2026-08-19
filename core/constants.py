@@ -21,6 +21,7 @@ SECONDS_PER_DAY = 86400
 
 # 会话交互
 EXIT_COMMANDS_SET = frozenset({"退出", "取消", "exit", "quit", "q"})
+DEFAULT_BOT_NAME = "小青"
 DEFAULT_BOT_NAME_RESPONSES_LIST = ["叫我干嘛", "嗯？", "在的~", "有事吗？"]
 
 # 插件安全边界

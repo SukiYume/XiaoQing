@@ -13,6 +13,7 @@ from core.ai import AIError as LLMError
 
 from ..memory.memory import StoredMessage
 from ..message_parts import render_stored_message
+from ..persona import persona_subject_pattern, replace_persona_name, resolve_bot_name
 from ..utils.json_parsing import parse_first_json_object, strict_json_bool
 from . import llm_client
 from .gateway import chat_completions_raw_with_fallback_paths
@@ -81,13 +82,10 @@ class ReplyRejected(RuntimeError):
         self.need_replan = need_replan
 
 
-def _last_bot_messages(history: Sequence[StoredMessage], *, bot_name: str, limit: int) -> list[str]:
+def _last_bot_messages(history: Sequence[StoredMessage], *, limit: int) -> list[str]:
     out: list[str] = []
     for msg in reversed(history[-200:]):
         if msg.role != "assistant":
-            continue
-        name = (msg.name or "").strip()
-        if name and bot_name and name != bot_name:
             continue
         text = render_stored_message(msg)
         if not text:
@@ -110,7 +108,6 @@ def _heuristic_check(
     *,
     reply: str,
     history: Sequence[StoredMessage],
-    bot_name: str,
     max_repeat_compare: int,
     similarity_threshold: float,
     max_assistant_in_row: int,
@@ -120,7 +117,7 @@ def _heuristic_check(
         return ReplyCheckResult(False, "回复为空", True)
 
     max_look_back = max(4, int(max_repeat_compare))
-    bot_msgs = _last_bot_messages(history, bot_name=bot_name, limit=max_look_back)
+    bot_msgs = _last_bot_messages(history, limit=max_look_back)
 
     if bot_msgs and max_repeat_compare > 0:
         for prev_msg in bot_msgs[: int(max_repeat_compare)]:
@@ -217,11 +214,11 @@ _OMITTED_TIME_ANCHORED_STATE_RE = re.compile(
 )
 
 
-def _normalize_evidence_text(text: str) -> str:
+def _normalize_evidence_text(text: str, *, bot_name: str) -> str:
     """去掉表面格式，便于判断同一段经历是否真的出现在受控资料中。"""
 
     normalized = re.sub(r"[\s，。！？；;：:'\"“”‘’（）()【】\[\]]+", "", str(text or ""))
-    return normalized.replace("小青", "我")
+    return replace_persona_name(normalized, bot_name)
 
 
 def _grounded_self_history_check(
@@ -472,6 +469,7 @@ def _validate_evidence_contract(
     missing_reason: str,
     invalid_reason: str,
     preserve_modality: bool,
+    bot_name: str,
     allow_missing_evidence: bool = False,
 ) -> tuple[ReplyCheckResult | None, bool, int]:
     """统一验证声明协议。
@@ -486,8 +484,8 @@ def _validate_evidence_contract(
     if not isinstance(claims, list):
         return rejection_factory(missing_reason), False, 0
 
-    normalized_reply = _normalize_evidence_text(reply)
-    normalized_source = _normalize_evidence_text(evidence_source)
+    normalized_reply = _normalize_evidence_text(reply, bot_name=bot_name)
+    normalized_source = _normalize_evidence_text(evidence_source, bot_name=bot_name)
     unsupported = False
     claim_count = 0
     for item in claims:
@@ -498,8 +496,8 @@ def _validate_evidence_contract(
         if not claim:
             continue
         claim_count += 1
-        normalized_claim = _normalize_evidence_text(claim)
-        normalized_evidence = _normalize_evidence_text(evidence)
+        normalized_claim = _normalize_evidence_text(claim, bot_name=bot_name)
+        normalized_evidence = _normalize_evidence_text(evidence, bot_name=bot_name)
         claim_is_verbatim = bool(normalized_claim) and normalized_claim in normalized_reply
         directly_supported = claim_is_verbatim and allow_missing_evidence and not evidence
         if not directly_supported:
@@ -598,14 +596,14 @@ _NO_QUESTION_CONSTRAINT_RE = re.compile(
     r"(?:别|不要|不用|不必|不许|请勿)(?:再|总是|一直)?"
     r"(?:反问|追问|提问|问(?:我|问题)?|用问题(?:来)?收尾|以问题收尾)"
 )
-_DURABLE_PERSONA_QUESTION_RE = re.compile(
-    rf"(?:你|小青)[^，。！？；;\n]{{0,24}}"
+_DURABLE_PERSONA_QUESTION_TAIL = (
+    rf"[^，。！？；;\n]{{0,24}}"
     rf"(?:{_RELATIONSHIP_NOUN}|以前|之前|曾经|小时候|去过|做过|学过|当过|"
     r"认识过|住过|工作过|家住|来自|毕业|学校|大学|城市|老家|哪里人|"
     r"住哪|在哪读|专业|职业|生日|年龄|多大|几岁)"
 )
-_UNSET_PRECISE_PERSONA_QUERY_RE = re.compile(
-    r"(?:你|小青)[^，。！？；;\n]{0,30}"
+_UNSET_PRECISE_PERSONA_QUERY_TAIL = (
+    r"[^，。！？；;\n]{0,30}"
     r"(?:哪所(?:学校|大学|学院)|哪个城市|哪里人|老家|住哪|具体住址|"
     r"什么专业|哪个专业|专业方向|生日|家庭|父母|家人|对象|伴侣)"
 )
@@ -654,8 +652,9 @@ _CURRENT_GROUP_DEIXIS_RE = re.compile(r"(?:群里|这个群|本群|咱们群|你
 _GROUP_QUANTIFIER_RE = re.compile(r"(?:都|全都|没几个|几乎没|大多数|多数|不少|很多|一个个)")
 _OPEN_GROUP_INVITATION_START_RE = re.compile(r"^(?:大家|各位|你们|有没有人|有人|谁|群里有人)")
 _GROUP_INFERENCE_QUESTION_RE = re.compile(r"(?:是不是|为什么|怎么回事|都在|状态|情况|原因)")
-_STABLE_PERSONA_REPLY_RE = re.compile(
-    r"(?:^|[，。！？；;\n])\s*(?:我|小青)[^，。！？；;\n]{0,18}"
+_STABLE_PERSONA_REPLY_PREFIX = r"(?:^|[，。！？；;\n])\s*"
+_STABLE_PERSONA_REPLY_TAIL = (
+    r"[^，。！？；;\n]{0,18}"
     r"(?:一直|平时|经常|通常|总是|从来|习惯|家住|来自|毕业|学校|大学|"
     r"城市|老家|住址|专业|职业|生日|年龄)"
 )
@@ -668,11 +667,19 @@ def _is_open_group_invitation(text: str) -> bool:
     )
 
 
-def _requires_configured_profile_boundary(current_text: str, grounding_text: str) -> bool:
+def _requires_configured_profile_boundary(
+    current_text: str,
+    grounding_text: str,
+    *,
+    bot_name: str,
+) -> bool:
     """判断用户是否追问了当前人设明确保留为空的可核验资料。"""
 
     return bool(
-        _UNSET_PRECISE_PERSONA_QUERY_RE.search(_normalize_text(current_text))
+        re.search(
+            persona_subject_pattern(bot_name) + _UNSET_PRECISE_PERSONA_QUERY_TAIL,
+            _normalize_text(current_text),
+        )
         and _UNSET_PERSONA_POLICY_RE.search(str(grounding_text or ""))
     )
 
@@ -703,7 +710,7 @@ def _requires_llm_semantic_check(
     *,
     reply: str,
     current_text: str,
-    bot_name: str = "",
+    bot_name: str,
     proactive_persona_scan: bool = False,
 ) -> bool:
     """只把需要语义判断的高风险社交陈述交给远程检查器。
@@ -717,7 +724,10 @@ def _requires_llm_semantic_check(
     candidate = _normalize_text(reply)
     if _EXPLICIT_COMMUNICATION_CONSTRAINT_RE.search(current):
         return True
-    if _DURABLE_PERSONA_QUESTION_RE.search(current):
+    if re.search(
+        persona_subject_pattern(bot_name) + _DURABLE_PERSONA_QUESTION_TAIL,
+        current,
+    ):
         return True
     # 主动插话中的第一人称陈述很容易把观点写成现实经历或日程。确定性门禁
     # 负责常见句法，语义检查再区分低风险观点与事实性自述。
@@ -747,7 +757,11 @@ def _requires_llm_semantic_check(
             _FIRST_PERSON_EXPERIENTIAL_BACKING_RE,
             _FIRST_PERSON_CURRENT_ACTIVITY_RE,
             _FIRST_PERSON_TIME_ANCHORED_STATE_RE,
-            _STABLE_PERSONA_REPLY_RE,
+            re.compile(
+                _STABLE_PERSONA_REPLY_PREFIX
+                + persona_subject_pattern(bot_name, include_first_person=True)
+                + _STABLE_PERSONA_REPLY_TAIL
+            ),
         )
     ):
         return True
@@ -868,6 +882,7 @@ def _interpret_checker_response(
     current_text: str,
     history_text: str,
     grounding_text: str,
+    bot_name: str,
     allow_low_stakes_persona_fiction: bool,
 ) -> ReplyCheckResult:
     """把远端 JSON 协议转换为本地结论，且在缺字段时保持 fail-safe 语义。"""
@@ -920,6 +935,7 @@ def _interpret_checker_response(
             missing_reason="reply_checker 缺少人物陈述清单",
             invalid_reason="reply_checker 人物陈述格式无效",
             preserve_modality=True,
+            bot_name=bot_name,
             allow_missing_evidence=allow_low_stakes_persona_fiction,
         )
     )
@@ -944,6 +960,7 @@ def _interpret_checker_response(
             missing_reason="reply_checker 缺少对话事实清单",
             invalid_reason="reply_checker 对话事实格式无效",
             preserve_modality=True,
+            bot_name=bot_name,
         )
     )
     if context_protocol_error is not None:
@@ -1146,6 +1163,7 @@ async def _llm_check(
         current_text=_current,
         history_text=_hist,
         grounding_text=_grounding,
+        bot_name=check_input.bot_name,
         allow_low_stakes_persona_fiction=check_input.allow_low_stakes_persona_fiction,
     )
 
@@ -1175,11 +1193,11 @@ async def check_reply(
     check_omitted_persona_episode: bool = False,
     allow_low_stakes_persona_fiction: bool = False,
 ) -> ReplyCheckResult:
+    bot_name = resolve_bot_name(bot_name)
     heuristic_source = str(heuristic_reply or reply or "").strip()
     h = _heuristic_check(
         reply=heuristic_source,
         history=history,
-        bot_name=bot_name,
         max_repeat_compare=max_repeat_compare,
         similarity_threshold=similarity_threshold,
         max_assistant_in_row=max_assistant_in_row,
@@ -1201,7 +1219,11 @@ async def check_reply(
     )
     if communication_h:
         return communication_h
-    if _requires_configured_profile_boundary(current_text, grounding_text):
+    if _requires_configured_profile_boundary(
+        current_text,
+        grounding_text,
+        bot_name=bot_name,
+    ):
         return ReplyCheckResult(
             suitable=False,
             reason="用户询问了当前人设明确未设定的精确现实资料，必须使用稳定边界回答",

@@ -910,7 +910,13 @@ async def test_group_reset_requires_admin_confirmation_and_writes_audit_log(mock
     state.pop_persist_task.return_value = None
     state.inc_stats = Mock()
     data_dir = Path("test-data")
-    hctx = SimpleNamespace(chat_id="g67890", runtime=MagicMock(), state=state, data_dir=data_dir)
+    hctx = SimpleNamespace(
+        chat_id="g67890",
+        bot_name="小青",
+        runtime=MagicMock(),
+        state=state,
+        data_dir=data_dir,
+    )
     reset_chat_session = AsyncMock()
     event = {"message_type": "group", "group_id": 67890, "user_id": 12345}
 

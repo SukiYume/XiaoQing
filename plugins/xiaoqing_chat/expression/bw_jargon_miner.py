@@ -116,6 +116,7 @@ async def mine_jargon(
     timeout_seconds: float,
     max_retry: int,
     retry_interval_seconds: float,
+    bot_name: str,
     infer_threshold: int = 3,
 ) -> int:
     """抽取一批黑话并返回实际变更数；AI 不可用时保持原库不变。"""
@@ -124,7 +125,7 @@ async def mine_jargon(
     if "_ai" in secrets and secrets.get("_ai") is None:
         return 0
 
-    dialogue = render_dialogue(messages)
+    dialogue = render_dialogue(messages, bot_name=bot_name)
     if not dialogue:
         return 0
 

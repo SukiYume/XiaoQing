@@ -137,7 +137,7 @@ async def handle_internal_impl(
                 )
             if confirmation not in {"确认", "confirm"}:
                 return segments(
-                    "⚠️ 此操作会清空本群的小青共享上下文、目标、学习状态和行动记录。\n"
+                    f"⚠️ 此操作会清空本群中与{hctx.bot_name}相关的共享上下文、目标、学习状态和行动记录。\n"
                     "确认无误后请发送：/xc 重置 确认"
                 )
 
@@ -310,7 +310,7 @@ async def handle_expression_impl(
 
     if not expressions:
         return segments(
-            "💬 **表达学习**\n\n还没有学到任何表达方式\n\n继续聊天，小青会从对话中学习表达风格"
+            f"💬 **表达学习**\n\n还没有学到任何表达方式\n\n继续聊天，{hctx.bot_name}会从对话中学习表达风格"
         )
 
     expressions.sort(key=lambda x: (x.count, x.last_active_time), reverse=True)
@@ -334,7 +334,7 @@ async def handle_jargon_impl(
     jargons = jargon_store.load()
     if not jargons:
         return segments(
-            "🏴‍☠️ **黑话学习**\n\n还没有学到任何黑话\n\n继续聊天，小青会从对话中学习独特的词汇"
+            f"🏴‍☠️ **黑话学习**\n\n还没有学到任何黑话\n\n继续聊天，{hctx.bot_name}会从对话中学习独特的词汇"
         )
 
     jargon_list = sorted(

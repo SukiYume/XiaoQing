@@ -545,6 +545,7 @@ async def test_tick_reflect_tracker_uses_async_memory_read(mock_context):
             expr_store=expr_store,
             tracker_store=tracker_store,
             secrets={},
+            bot_name="小青",
             timeout_seconds=1.0,
             max_retry=0,
             retry_interval_seconds=0.0,
