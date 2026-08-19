@@ -64,6 +64,7 @@
         {
             "id": "daily",
             "handler": "scheduled",
+            "delivery": "broadcast",
             "cron": {
                 "hour": 8,
                 "minute": 30

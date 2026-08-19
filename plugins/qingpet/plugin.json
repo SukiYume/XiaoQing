@@ -134,10 +134,10 @@
   "dependencies": [],
   "entry": "main.py",
   "schedule": [
-    {"id":"qingpet_decay","handler":"scheduled_decay","cron":{"minute":"*"},"description":"每分钟衰减宠物状态"},
-    {"id":"qingpet_daily_reset","handler":"scheduled_daily_reset","cron":{"hour":0,"minute":0},"description":"每天 00:00 重置每日状态"},
-    {"id":"qingpet_trade_expiry","handler":"scheduled_trade_expiry","cron":{"minute":"*/5"},"description":"每 5 分钟结算到期交易挂单"},
-    {"id":"qingpet_pet_show_settlement","handler":"scheduled_pet_show_settlement","cron":{"minute":"*"},"description":"每分钟结算到期展示会"},
-    {"id":"qingpet_weekly_activity","handler":"scheduled_weekly_activity","cron":{"day_of_week":"mon","hour":10,"minute":0},"description":"每周一 10:00 结算周活动"}
+    {"id":"qingpet_decay","handler":"scheduled_decay","delivery":"targeted","cron":{"minute":"*"},"description":"每分钟衰减宠物状态"},
+    {"id":"qingpet_daily_reset","handler":"scheduled_daily_reset","delivery":"silent","cron":{"hour":0,"minute":0},"description":"每天 00:00 重置每日状态"},
+    {"id":"qingpet_trade_expiry","handler":"scheduled_trade_expiry","delivery":"silent","cron":{"minute":"*/5"},"description":"每 5 分钟结算到期交易挂单"},
+    {"id":"qingpet_pet_show_settlement","handler":"scheduled_pet_show_settlement","delivery":"targeted","cron":{"minute":"*"},"description":"每分钟结算到期展示会"},
+    {"id":"qingpet_weekly_activity","handler":"scheduled_weekly_activity","delivery":"targeted","cron":{"day_of_week":"mon","hour":10,"minute":0},"description":"每周一 10:00 结算周活动"}
   ]
 }

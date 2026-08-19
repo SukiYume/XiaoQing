@@ -9,7 +9,12 @@ from unittest.mock import MagicMock
 import pytest
 
 from core.context import PluginContext
-from core.interfaces import PluginCapabilities, PluginPrincipal, PluginSettingsSnapshot
+from core.interfaces import (
+    DeliveryTarget,
+    PluginCapabilities,
+    PluginPrincipal,
+    PluginSettingsSnapshot,
+)
 from core.router import CommandCatalogNode
 from core.session import SessionManager
 
@@ -167,6 +172,35 @@ class TestPluginContextAccess:
         """测试配置访问"""
         assert sample_context.config["bot_name"] == "测试机器人"
         assert sample_context.config["command_prefixes"] == ("/",)
+
+    @pytest.mark.parametrize(
+        ("delivery_targets", "expected"),
+        [
+            (
+                (
+                    DeliveryTarget("group", 123),
+                    DeliveryTarget("group", 456),
+                ),
+                [123, 456],
+            ),
+            ((), []),
+        ],
+    )
+    def test_scheduled_default_groups_use_core_resolved_targets(
+        self,
+        sample_context: PluginContext,
+        delivery_targets: tuple[DeliveryTarget, ...],
+        expected: list[int],
+    ) -> None:
+        """定时插件读取 Core 已解析的清单目标，显式空列表也不会回退。"""
+
+        sample_context.config = {"default_group_ids": (999,)}
+        sample_context.principal = PluginPrincipal(
+            kind="scheduled_system",
+            delivery_targets=delivery_targets,
+        )
+
+        assert sample_context.default_groups() == expected
 
     def test_secrets_access(self, sample_context: PluginContext):
         """构造器也必须裁剪全局与其他插件密钥，并冻结当前插件视图。"""

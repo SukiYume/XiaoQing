@@ -472,6 +472,7 @@ def test_manifest_and_readme_match_runtime_contract() -> None:
         "id": "yingshi",
         "handler": "scheduled_yingshi",
         "cron": {"hour": 0, "minute": 30},
+        "delivery": "broadcast",
     }
     assert callable(getattr(signin, schedule["handler"]))
     for trigger in command["triggers"]:

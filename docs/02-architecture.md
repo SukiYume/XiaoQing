@@ -185,7 +185,7 @@ Session 适合用户驱动的短交互。Codex 等长任务使用插件内部队
 
 ## 💾 调度与持久投递
 
-`SchedulerManager` 从 Manifest `schedule` 读取 cron 任务，按插件代注册 handler。`durable_fanout.py` 为多目标通知记录持久进度，进程重启后从检查点继续。
+`SchedulerManager` 从 Manifest `schedule` 读取 cron、投递模式和群目标，按插件代注册 handler。`app_scheduling.py` 执行 `broadcast`、`targeted` 与 `silent` 契约，统一校验目标并进入 OneBot 投递边界。`durable_fanout.py` 为多目标通知记录持久进度，进程重启后从检查点继续。
 
 插件排程发布与插件代绑定。卸载或重载时，旧代排程先停止触发，再进入资源排空。
 

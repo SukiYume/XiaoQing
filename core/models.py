@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .interfaces import ScheduleDeliveryMode
 from .message import normalize_inbound_message, validate_message_segments
 from .plugin_execution import PluginConcurrency
 
@@ -348,6 +349,7 @@ class PluginScheduleManifest(BaseModel):
     handler: str
     cron: dict[str, Any]
     id: str | None = None
+    delivery: ScheduleDeliveryMode = "broadcast"
     group_ids: list[int] | None = None
     description: str | None = None
     enabled: bool = True
@@ -369,6 +371,12 @@ class PluginScheduleManifest(BaseModel):
         if len(value) != len(set(value)):
             raise ValueError("schedule group_ids must not contain duplicates")
         return value
+
+    @model_validator(mode="after")
+    def _validate_delivery_contract(self) -> "PluginScheduleManifest":
+        if self.delivery == "silent" and self.group_ids is not None:
+            raise ValueError("silent schedules must not declare group_ids")
+        return self
 
 
 class PluginDependencyManifest(BaseModel):

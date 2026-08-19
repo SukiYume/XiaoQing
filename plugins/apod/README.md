@@ -46,7 +46,7 @@ APOD 插件抓取 NASA Astronomy Picture of the Day 当前页面，返回图片�
 }
 ```
 
-每日 13:30 任务将结果发送到 `default_group_ids`。生产调度请配置至少一个目标群。
+每日 13:30 任务采用 Core `broadcast` 模式，将结果发送到该 schedule 的 `group_ids`；字段省略时使用 `default_group_ids`。生产调度请配置至少一个目标群。
 
 ---
 

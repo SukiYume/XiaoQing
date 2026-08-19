@@ -272,18 +272,18 @@ Web 后端使用 FastAPI 与 uvicorn，API 前缀为 `/api`，静态前端位于
 
 ## ⏰ 定时任务
 
-| Manifest ID | 时间 | 任务 |
-| --- | --- | --- |
-| `pendo_reminder_check` | 每分钟 | 日程与待办提醒 |
-| `pendo_daily_briefing` | 每分钟 | 检查用户本地每日简报时间 |
-| `pendo_diary_reminder` | 每分钟 | 检查用户本地日记提醒时间 |
-| `pendo_rollover_tasks` | 每天 00:05 | 顺延昨日 open 计划待办 |
-| `pendo_prune_operation_logs` | 每天 00:15 | 清理过期操作日志与撤销快照 |
-| `pendo_weekly_report` | 每周日 21:00 | 财务周报 |
-| `pendo_monthly_report` | 每月最后一天 21:00 | 财务月报 |
-| `pendo_cleanup_demo` | 每 6 小时 | 清理过期 Demo 数据 |
+| Manifest ID | 时间 | Core 投递 | 任务 |
+| --- | --- | --- | --- |
+| `pendo_reminders` | 每分钟 | `targeted` 私聊 | 日程与待办提醒 |
+| `pendo_daily_briefing` | 每分钟 | `targeted` 私聊 | 检查用户本地每日简报时间 |
+| `pendo_diary_reminder` | 每分钟 | `targeted` 私聊 | 检查用户本地日记提醒时间 |
+| `pendo_migrate_todos` | 每天 00:05 | `targeted` 私聊 | 顺延昨日 open 计划待办并通知所有者 |
+| `pendo_prune_operation_logs` | 每天 00:15 | `silent` | 清理过期操作日志与撤销快照 |
+| `pendo_weekly_finance_summary` | 每周日 21:00 | `targeted` 私聊 | 财务周报 |
+| `pendo_month_end_finance_summary` | 每月最后一天 21:00 | `targeted` 私聊 | 财务月报 |
+| `pendo_cleanup_demo_data` | 每 6 小时 | `silent` | 清理过期 Demo 数据 |
 
-定时消息通过 `scheduled_delivery_outbox` 保存待办状态，并按目标确认结果推进投递。
+定时消息通过 `scheduled_delivery_outbox` 保存待办状态，并按目标确认结果推进投递。静默任务由 Core 保持零消息投递。
 
 ---
 

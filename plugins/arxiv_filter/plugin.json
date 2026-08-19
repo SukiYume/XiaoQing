@@ -85,6 +85,7 @@
 		{
 			"id": "check_10_00",
 			"handler": "scheduled_check",
+			"delivery": "broadcast",
 			"cron": {
 				"day_of_week": "mon-fri",
 				"hour": 10,
@@ -94,6 +95,7 @@
 		{
 			"id": "check_10_30",
 			"handler": "scheduled_check",
+			"delivery": "broadcast",
 			"cron": {
 				"day_of_week": "mon-fri",
 				"hour": 10,
@@ -103,6 +105,7 @@
 		{
 			"id": "check_11_00",
 			"handler": "scheduled_check",
+			"delivery": "broadcast",
 			"cron": {
 				"day_of_week": "mon-fri",
 				"hour": 11,
@@ -112,6 +115,7 @@
 		{
 			"id": "check_11_30",
 			"handler": "scheduled_check",
+			"delivery": "broadcast",
 			"cron": {
 				"day_of_week": "mon-fri",
 				"hour": 11,
@@ -121,6 +125,7 @@
 		{
 			"id": "final_check_12_00",
 			"handler": "scheduled_final_check",
+			"delivery": "broadcast",
 			"cron": {
 				"day_of_week": "mon-fri",
 				"hour": 12,

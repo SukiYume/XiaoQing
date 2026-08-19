@@ -57,6 +57,7 @@
         {
             "id": "poll",
             "handler": "scheduled",
+            "delivery": "targeted",
             "cron": {
                 "minute": "*/5"
             }

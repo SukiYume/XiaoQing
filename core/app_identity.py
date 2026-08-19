@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from .app_support import _parse_admin_user_ids, _PrincipalAuthority
-from .interfaces import DeliveryTarget, PluginPrincipal
+from .interfaces import DeliveryTarget, PluginPrincipal, ScheduleDeliveryMode
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +85,7 @@ class AppIdentityService:
         is_private: bool = False,
         group_role: str = "unknown",
         delivery_targets: tuple[DeliveryTarget, ...] | None = None,
+        schedule_delivery: ScheduleDeliveryMode | None = None,
     ) -> PluginPrincipal:
         return self._authority.issue(
             kind=kind,
@@ -94,6 +95,7 @@ class AppIdentityService:
             is_private=is_private,
             group_role=group_role,
             delivery_targets=delivery_targets,
+            schedule_delivery=schedule_delivery,
         )
 
     def owns(self, principal: PluginPrincipal) -> bool:

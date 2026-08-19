@@ -191,6 +191,20 @@ class PluginContext:
         )
 
     def default_groups(self) -> list[int]:
+        """返回当前调用应使用的群发目标。
+
+        定时任务的目标已经由 Core 根据 ``schedule.group_ids`` 解析完成：字段存在时
+        使用清单值，字段缺失时使用全局 ``default_group_ids``。这里必须保留解析后的
+        结果（包括显式空列表），让需要自行确认投递结果的插件与 Core 的统一发送路径
+        遵循同一份 Schedule Manifest。
+        """
+
+        if self.principal.kind == "scheduled_system":
+            return [
+                target.target_id
+                for target in self.principal.delivery_targets
+                if target.kind == "group"
+            ]
         groups = self.config.get("default_group_ids", ())
         if not isinstance(groups, Sequence) or isinstance(groups, (str, bytes, bytearray)):
             return []

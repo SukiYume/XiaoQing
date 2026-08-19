@@ -205,7 +205,7 @@ claim 记录 token、到期时刻、下一次尝试时刻和失败次数。条�
 
 Web 日程详情通过单条提醒确认端点切换未到期提醒。`ReminderRepositoryMixin` 在即时事务中同时校验所有者、日程类型、提醒归属和触发时刻；提前确认写入 `preconfirmed` 状态并清理 claim，重新开启恢复同一提醒行为 `pending`。到期时刻由服务端 UTC 判断，浏览器按钮同步进入禁用状态。
 
-每日简报、日记提示和财务摘要等周期消息使用 `scheduled_delivery_outbox` 保存周期 claim 与回执状态，投递目标同样为用户私聊。`commands/scheduled.py` 还编排待办顺延、日志清理和 Demo 数据回收。Manifest 的 `pendo_prune_operation_logs` 绑定 `scheduled_prune_operation_logs`，每日清理过期操作日志与撤销快照。
+每日简报、日记提示和财务摘要等周期消息使用 `scheduled_delivery_outbox` 保存周期 claim 与回执状态，并在 Core `targeted` 模式下投递用户私聊。`commands/scheduled.py` 还编排待办顺延、日志清理和 Demo 数据回收；日志与 Demo 清理使用 Core `silent` 模式。Manifest 的 `pendo_prune_operation_logs` 绑定 `scheduled_prune_operation_logs`，每日清理过期操作日志与撤销快照。
 
 ---
 

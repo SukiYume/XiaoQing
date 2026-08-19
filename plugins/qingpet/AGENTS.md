@@ -101,13 +101,13 @@ data/qingpet/qingpet/qingpet.db
 
 调度入口保持轻量，实际结算由 `database_scheduler.py` 和领域 service 完成：
 
-| 入口 | 数据动作 |
-| --- | --- |
-| `scheduled_decay` | 属性衰减、旅行状态与限频清理 |
-| `scheduled_daily_reset` | 每日计数、年龄与日期边界 |
-| `scheduled_trade_expiry` | 到期订单与托管库存 |
-| `scheduled_pet_show_settlement` | 展示会截止与奖励 |
-| `scheduled_weekly_activity` | 周排行、奖励和称号 |
+| 入口 | Core 投递 | 数据动作 |
+| --- | --- | --- |
+| `scheduled_decay` | `targeted` | 属性衰减、旅行状态、限频清理和阈值提醒 |
+| `scheduled_daily_reset` | `silent` | 每日计数、年龄与日期边界 |
+| `scheduled_trade_expiry` | `silent` | 到期订单与托管库存 |
+| `scheduled_pet_show_settlement` | `targeted` | 展示会截止、奖励和群结算结果 |
+| `scheduled_weekly_activity` | `targeted` | 周排行、奖励、称号和群结算结果 |
 
 调度实现应支持重复 tick、跨重启恢复、单实例重入和多事务竞争。截止时间在事务内重新读取。
 

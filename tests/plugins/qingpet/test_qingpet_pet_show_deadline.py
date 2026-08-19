@@ -205,11 +205,13 @@ def test_pet_show_deadline_has_independent_scheduled_handler(monkeypatch):
     monkeypatch.setattr(qingpet_main, "_db_instance", FakeDatabase())
     monkeypatch.setattr(qingpet_main, "_social_service", FakeSocialService())
 
-    assert asyncio.run(qingpet_main.scheduled_pet_show_settlement(None)) == [
-        {"group_id": 2, "message": "已结算"}
-    ]
+    deliveries = asyncio.run(qingpet_main.scheduled_pet_show_settlement(None))
+    assert len(deliveries) == 1
+    assert deliveries[0].target.group_id == 2
+    assert deliveries[0].message == ({"type": "text", "data": {"text": "已结算"}},)
     assert calls == [(1, False), (2, False)]
     root = REPOSITORY_ROOT
     manifest = json.loads((root / "plugins/qingpet/plugin.json").read_text(encoding="utf-8"))
     jobs = {job["id"]: job for job in manifest["schedule"]}
     assert jobs["qingpet_pet_show_settlement"]["handler"] == ("scheduled_pet_show_settlement")
+    assert jobs["qingpet_pet_show_settlement"]["delivery"] == "targeted"

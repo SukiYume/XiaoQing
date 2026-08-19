@@ -79,8 +79,8 @@ def test_sync_validates_both_roots_and_excludes_runtime_data_from_transfer() -> 
     assert SENTINEL.read_text(encoding="utf-8") == "xiaoqing-sync-root-v1\n"
     assert 'mode="dry-run"' in source
     assert 'remote_root="$($SSH_BIN' in source
-    assert 'test -f "$target/$2"' in source
-    assert 'test "$(cat -- "$target/$2")" = "$3"' in source
+    assert 'test -f "$target/$sentinel_name"' in source
+    assert 'test "$(cat -- "$target/$sentinel_name")" = "$sentinel_value"' in source
     assert "remote directory must be a safe non-root absolute path" in source
     for protected in (
         "/.git/***",
@@ -110,6 +110,17 @@ def test_sync_target_is_kept_in_ignored_local_script_instead_of_passed_as_enviro
     assert "scripts/sync_to_remote.local.sh" in (ROOT / ".gitignore").read_text(encoding="utf-8")
     assert "XIAOQING_SYNC_HOST" not in source
     assert "XIAOQING_SYNC_DIR" not in source
+
+
+def test_sync_supports_local_only_remote_file_preservation() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    assert "PRESERVE_REMOTE_FILES=()" in source
+    assert "readonly -a PRESERVE_REMOTE_FILES" in source
+    assert 'for preserved_file in "${PRESERVE_REMOTE_FILES[@]}"' in source
+    assert 'rsync_args+=(--filter="- /$preserved_file")' in source
+    assert "preserved remote file is missing or unsafe" in source
+    assert "preserved file must be a safe repository-relative file path" in source
 
 
 def test_sync_treats_the_arxiv_runtime_model_as_a_required_release_asset() -> None:

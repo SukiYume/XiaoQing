@@ -179,7 +179,7 @@ SFTP 下载到临时文件，经 OneBot action 接收后清理；发送异常与
 
 ## ⏰ 生命周期
 
-插件首次使用时创建 `SSHManager`。每分钟的 `cleanup_orphans` 对比 Core Session 与活动连接，回收失去会话所有者的连接。卸载、重载或 Bot 关闭时，`shutdown()` 收敛活动命令、SSH 连接、跳板连接、SFTP 和临时归档。
+插件首次使用时创建 `SSHManager`。每分钟的 `cleanup_orphans` 以 Core `silent` 模式对比 Core Session 与活动连接，回收失去会话所有者的连接。卸载、重载或 Bot 关闭时，`shutdown()` 收敛活动命令、SSH 连接、跳板连接、SFTP 和临时归档。
 
 ---
 

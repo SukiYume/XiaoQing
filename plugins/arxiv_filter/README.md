@@ -53,7 +53,7 @@ Codex 摘要任务使用以下复合身份：
 | 工作日 10:00、10:30、11:00、11:30 | 检查源站列表日期，发现当日列表后筛选并推送 |
 | 工作日 12:00 | 最终检查与源站状态通知 |
 
-`data/arxiv_filter/update_status.json` 记录每日投递状态。调度目标来自 `default_group_ids`，生产推送请配置至少一个目标群。
+`data/arxiv_filter/update_status.json` 记录每日投递状态。五个任务采用 Core `broadcast` 模式，目标来自各 schedule 的 `group_ids`，字段省略时使用 `default_group_ids`。生产推送请配置至少一个目标群。
 
 ---
 

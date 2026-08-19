@@ -586,6 +586,7 @@
         {
             "id": "pendo_reminders",
             "handler": "scheduled",
+            "delivery": "targeted",
             "cron": {
                 "minute": "*"
             },
@@ -594,6 +595,7 @@
         {
             "id": "pendo_daily_briefing",
             "handler": "scheduled_daily_briefing",
+            "delivery": "targeted",
             "cron": {
                 "minute": "*"
             },
@@ -602,6 +604,7 @@
         {
             "id": "pendo_diary_reminder",
             "handler": "scheduled_diary_reminder",
+            "delivery": "targeted",
             "cron": {
                 "minute": "*"
             },
@@ -610,6 +613,7 @@
         {
             "id": "pendo_migrate_todos",
             "handler": "scheduled_migrate_todos",
+            "delivery": "targeted",
             "cron": {
                 "hour": 0,
                 "minute": 5
@@ -619,6 +623,7 @@
         {
             "id": "pendo_prune_operation_logs",
             "handler": "scheduled_prune_operation_logs",
+            "delivery": "silent",
             "cron": {
                 "hour": 0,
                 "minute": 15
@@ -628,6 +633,7 @@
         {
             "id": "pendo_weekly_finance_summary",
             "handler": "scheduled_weekly_finance_summary",
+            "delivery": "targeted",
             "cron": {
                 "day_of_week": "sun",
                 "hour": 21,
@@ -638,6 +644,7 @@
         {
             "id": "pendo_month_end_finance_summary",
             "handler": "scheduled_month_end_finance_summary",
+            "delivery": "targeted",
             "cron": {
                 "day": "last",
                 "hour": 21,
@@ -648,6 +655,7 @@
         {
             "id": "pendo_cleanup_demo_data",
             "handler": "scheduled_cleanup_demo_data",
+            "delivery": "silent",
             "cron": {
                 "hour": "*/6",
                 "minute": 15

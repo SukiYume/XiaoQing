@@ -44,6 +44,7 @@
         {
             "id": "apod_daily",
             "handler": "scheduled",
+            "delivery": "broadcast",
             "cron": {
                 "hour": 13,
                 "minute": 30

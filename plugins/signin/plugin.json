@@ -41,6 +41,7 @@
         {
             "id": "yingshi",
             "handler": "scheduled_yingshi",
+            "delivery": "broadcast",
             "cron": {
                 "hour": 0,
                 "minute": 30
