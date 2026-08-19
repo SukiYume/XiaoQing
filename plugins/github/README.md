@@ -42,7 +42,7 @@ Trending 页面结构变化时，维护者需要同步更新解析规则和测�
 
 ## ⏰ 定时任务与历史
 
-Manifest 每天 08:30 按调度器时区运行 `scheduled`，Core 负责把结果投递到默认群。成功抓取后会写入：
+Manifest 每天 08:30 按调度器时区以 Core `broadcast` 模式运行 `scheduled`，Core 负责把结果投递到该 schedule 的目标群。成功抓取后会写入：
 
 ```text
 data/github/trending_<range>_latest.json

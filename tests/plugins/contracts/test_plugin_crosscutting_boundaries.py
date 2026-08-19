@@ -26,6 +26,19 @@ from tests.helpers.paths import REPOSITORY_ROOT
 ROOT = REPOSITORY_ROOT
 
 
+def test_every_schedule_declares_core_delivery_mode() -> None:
+    allowed = {"broadcast", "targeted", "silent"}
+    schedules = []
+    for manifest_path in sorted((ROOT / "plugins").glob("*/plugin.json")):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        for schedule in manifest.get("schedule", []):
+            schedules.append((manifest_path.parent.name, schedule))
+            assert schedule.get("delivery") in allowed
+            if schedule["delivery"] == "silent":
+                assert "group_ids" not in schedule
+    assert schedules
+
+
 class _ScopedContext:
     def __init__(self, data_dir: Path, *, user_id: int = 1, group_id: int | None = None):
         self.data_dir = data_dir
@@ -74,17 +87,11 @@ async def test_smalltalk_qa_is_scoped_bounded_and_audited(tmp_path: Path) -> Non
     assert audit["entries"][-1]["scope"] == "group_100"
 
 
-def test_qa_commands_are_admin_only_and_schedules_have_no_embedded_groups() -> None:
+def test_qa_commands_are_admin_only() -> None:
     smalltalk_manifest = json.loads(
         (ROOT / "plugins" / "smalltalk" / "plugin.json").read_text(encoding="utf-8")
     )
     assert all(command["admin_only"] for command in smalltalk_manifest["commands"])
-
-    for plugin_name in ("apod", "earthquake", "github"):
-        manifest = json.loads(
-            (ROOT / "plugins" / plugin_name / "plugin.json").read_text(encoding="utf-8")
-        )
-        assert all("group_ids" not in schedule for schedule in manifest["schedule"])
 
 
 def _png_bytes() -> bytes:

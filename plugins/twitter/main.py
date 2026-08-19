@@ -1150,7 +1150,7 @@ async def handle(
         )
 
 
-async def scheduled_fetch(context: Context) -> MessageSegments:
+async def scheduled_fetch(context: Context) -> None:
     """启动每日后台抓取；定时回调立即返回，也不主动向群聊发消息。"""
 
     _task, started = _get_or_start_fetch(context)
@@ -1158,4 +1158,3 @@ async def scheduled_fetch(context: Context) -> MessageSegments:
         logger.info("Twitter 定时后台抓取已启动")
     else:
         logger.info("Twitter 已有抓取任务运行，跳过重复定时启动")
-    return []

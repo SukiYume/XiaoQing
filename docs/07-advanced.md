@@ -101,6 +101,7 @@ Manifest 声明 cron：
       "id": "example.daily",
       "handler": "scheduled_daily",
       "cron": {"hour": 8, "minute": 0},
+      "delivery": "broadcast",
       "group_ids": [123456789],
       "description": "每日摘要",
       "enabled": true
@@ -115,6 +116,8 @@ Manifest 声明 cron：
 async def scheduled_daily(context):
     return segments("今日摘要")
 ```
+
+Core 在任务到期时解析每个 schedule 的投递模式与目标群。`broadcast` 将统一结果发送到全部目标群，`targeted` 校验并发送 `ScheduledDelivery` 目标结果，`silent` 只运行任务。`group_ids` 列表按声明顺序生效；字段省略或为 `null` 时使用全局 `default_group_ids`。需要逐目标管理回执的处理器可通过 `context.default_groups()` 读取同一解析结果。
 
 常用 CronTrigger 字段：
 

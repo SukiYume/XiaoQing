@@ -205,6 +205,7 @@ Context 返回的快照已限定到当前插件可见范围。插件在一次业
 | `is_private` | `bool` | 用户主体来自私聊 |
 | `group_role` | `Literal["owner", "admin", "member", "unknown"]` | 当前群角色 |
 | `delivery_targets` | `tuple[DeliveryTarget, ...]` | Core 校验后的主动投递目标 |
+| `schedule_delivery` | `ScheduleDeliveryMode | None` | 调度主体的 Core 投递模式 |
 
 `DeliveryTarget.kind` 为 `private` 或 `group`，`target_id` 为正整数。`principal.is_system` 标识调度主体，`principal.can_manage_group(group_id)` 校验当前用户是否可管理指定群。
 
@@ -493,8 +494,19 @@ async def shutdown(context: PluginContextProtocol) -> None: ...
 ```python
 async def scheduled_handler(
     context: PluginContextProtocol,
-) -> Segments | list[dict[str, Any]] | str | None: ...
+) -> Segments | ScheduledDelivery | list[ScheduledDelivery] | str | None: ...
 ```
+
+返回类型由 Manifest 的 `delivery` 决定：`broadcast` 使用普通消息段或字符串，`targeted` 使用一个或多个 `ScheduledDelivery`，`silent` 返回 `None`。Core 负责目标校验、OneBot Action 构建与最终发送。
+
+`targeted` 处理器通过 Core 类型构造目标消息：
+
+```python
+ScheduledDelivery.group(group_id, message_segments, receipt=None)
+ScheduledDelivery.private(user_id, message_segments, receipt=None)
+```
+
+群目标必须属于当前 schedule 经 Core 解析后的 `group_ids`；私聊目标必须是正整数 QQ 号。`receipt` 可选，用于在 OneBot 投递结果确定后提交业务状态。
 
 ---
 

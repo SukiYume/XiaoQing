@@ -82,6 +82,7 @@ class ConfigManagerLike(Protocol):
 
 
 SendAction = Callable[[dict[str, Any]], Awaitable[bool | None]]
+ScheduleDeliveryMode = Literal["broadcast", "targeted", "silent"]
 
 # Action metadata is an in-process Core/plugin contract, not a OneBot field.
 # Keep the names here so producers and consumers cannot drift on magic keys.
@@ -163,6 +164,7 @@ class PluginPrincipal:
     is_private: bool = False
     group_role: PluginGroupRole = "unknown"
     delivery_targets: tuple[DeliveryTarget, ...] = ()
+    schedule_delivery: ScheduleDeliveryMode | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in {"user", "scheduled_system", "lifecycle"}:
@@ -193,6 +195,11 @@ class PluginPrincipal:
             not isinstance(target, DeliveryTarget) for target in self.delivery_targets
         ):
             raise TypeError("delivery_targets must be a tuple of DeliveryTarget values")
+        if self.kind == "scheduled_system":
+            if self.schedule_delivery not in {"broadcast", "targeted", "silent", None}:
+                raise ValueError("scheduled principal delivery mode is invalid")
+        elif self.schedule_delivery is not None:
+            raise ValueError("only scheduled principals may carry a delivery mode")
 
     @property
     def is_system(self) -> bool:

@@ -11,10 +11,13 @@ from typing import Any
 from .app_support import _parse_group_ids
 from .delivery import (
     DeliveryReceipt,
+    ScheduledDelivery,
     attach_receipt,
 )
 from .interfaces import (
     DeliveryTarget,
+    PluginPrincipal,
+    ScheduleDeliveryMode,
 )
 from .models import PluginScheduleManifest
 from .plugin_base import build_action, segments
@@ -77,6 +80,7 @@ class AppSchedulingMixin:
                                 handler,
                                 loaded.definition.name,
                                 group_ids,
+                                delivery=entry.delivery,
                                 loaded_plugin=loaded,
                             ),
                             cron=entry.cron,
@@ -96,29 +100,35 @@ class AppSchedulingMixin:
         plugin_name: str,
         group_ids: tuple[int, ...] | list[int] | None = None,
         *,
+        delivery: ScheduleDeliveryMode = "broadcast",
         loaded_plugin: Any | None = None,
     ) -> None:
-        """执行定时任务"""
+        """Execute one schedule under the Core-owned delivery contract."""
         if self._stopping:
             logger.debug("Scheduled job skipped while stopping: %s", plugin_name)
             return
-        raw_target_groups = (
-            group_ids if group_ids is not None else list(self.config.get("default_group_ids", []))
-        )
-        try:
-            parsed_target_groups = _parse_group_ids(raw_target_groups)
-        except (TypeError, ValueError) as exc:
-            logger.error(
-                "Scheduled job skipped for %s because group IDs are invalid: %s",
-                plugin_name,
-                exc,
+        parsed_target_groups: tuple[int, ...] = ()
+        if delivery != "silent":
+            raw_target_groups = (
+                group_ids
+                if group_ids is not None
+                else list(self.config.get("default_group_ids", []))
             )
-            return
+            try:
+                parsed_target_groups = _parse_group_ids(raw_target_groups)
+            except (TypeError, ValueError) as exc:
+                logger.error(
+                    "Scheduled job skipped for %s because group IDs are invalid: %s",
+                    plugin_name,
+                    exc,
+                )
+                return
         delivery_targets = tuple(DeliveryTarget("group", value) for value in parsed_target_groups)
         principal = self.identity_service.issue(
             kind="scheduled_system",
             is_private=False,
             delivery_targets=delivery_targets,
+            schedule_delivery=delivery,
         )
         context = self.plugin_manager.build_context(
             plugin_name,
@@ -135,6 +145,21 @@ class AppSchedulingMixin:
             result = await invoke_loaded_plugin(loaded, run_job_handler)
 
             receipt = getattr(result, "delivery_receipt", None)
+            if delivery == "silent":
+                if result not in (None, []):
+                    logger.warning(
+                        "Silent schedule result ignored: plugin=%s result_type=%s",
+                        plugin_name,
+                        type(result).__name__,
+                    )
+                if isinstance(receipt, DeliveryReceipt):
+                    await receipt.record(False)
+                return
+
+            if delivery == "targeted":
+                await self._deliver_targeted_schedule_result(result, plugin_name, principal)
+                return
+
             segs = segments(result)
             if not segs:
                 if isinstance(receipt, DeliveryReceipt):
@@ -166,3 +191,53 @@ class AppSchedulingMixin:
             logger.debug("Scheduled job skipped during plugin unload: %s", plugin_name)
         except Exception as exc:
             logger.exception("Scheduled job failed: %s", exc)
+
+    async def _deliver_targeted_schedule_result(
+        self,
+        result: Any,
+        plugin_name: str,
+        principal: PluginPrincipal,
+    ) -> None:
+        """Validate and send target-specific results produced by one schedule."""
+
+        if result is None or result == []:
+            return
+        if isinstance(result, ScheduledDelivery):
+            deliveries = (result,)
+        elif isinstance(result, (list, tuple)) and all(
+            isinstance(item, ScheduledDelivery) for item in result
+        ):
+            deliveries = tuple(result)
+        else:
+            logger.error(
+                "Targeted schedule returned an invalid result: plugin=%s result_type=%s",
+                plugin_name,
+                type(result).__name__,
+            )
+            return
+
+        allowed_groups = {
+            target.target_id for target in principal.delivery_targets if target.kind == "group"
+        }
+        for delivery in deliveries:
+            if delivery.target.kind == "group" and delivery.target.target_id not in allowed_groups:
+                logger.warning(
+                    "Targeted schedule group rejected by manifest policy: plugin=%s",
+                    plugin_name,
+                )
+                if delivery.receipt is not None:
+                    await delivery.receipt.record(False)
+                continue
+            action = build_action(
+                list(delivery.message),
+                delivery.target.user_id,
+                delivery.target.group_id,
+            )
+            if action is None:
+                if delivery.receipt is not None:
+                    await delivery.receipt.record(False)
+                continue
+            action = self._tag_action_source(action, plugin_name)
+            if delivery.receipt is not None:
+                action = attach_receipt(action, delivery.receipt)
+            await self._send_action(action)

@@ -163,8 +163,9 @@ def test_weekly_failure_is_retryable_and_announcement_uses_actual_ledger_grant(
         _drop_trigger(database, "fail_weekly_ledger")
         messages = asyncio.run(qingpet_main.scheduled_weekly_activity(_Context()))
         assert len(messages) == 1
-        assert "+2金币" in messages[0]["message"]
-        assert "+100金币" not in messages[0]["message"]
+        rendered = messages[0].message[0]["data"]["text"]
+        assert "+2金币" in rendered
+        assert "+100金币" not in rendered
         ledger = conn.execute(
             "SELECT delta FROM asset_ledger WHERE reason = 'weekly_ranking'"
         ).fetchone()

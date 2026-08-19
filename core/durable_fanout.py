@@ -43,7 +43,7 @@ class FanoutTarget:
 
 
 def default_group_targets(context: object) -> tuple[FanoutTarget, ...]:
-    """规范化插件上下文中的默认群发目标。
+    """规范化插件上下文中当前调用的有效群发目标。
 
     只接受正整数或纯 ASCII 十进制字符串；忽略无效值和重复值，并保持配置顺序。
     """

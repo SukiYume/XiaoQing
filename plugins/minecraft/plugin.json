@@ -94,6 +94,7 @@
         {
             "id": "check_log",
             "handler": "scheduled",
+            "delivery": "targeted",
             "cron": {
                 "second": "*/5"
             },

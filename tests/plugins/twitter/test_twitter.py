@@ -1086,14 +1086,14 @@ async def test_scheduled_fetch_is_silent_and_contains_failures(
     monkeypatch.setattr(twitter, "_fetch_twitter_images", fetch)
     monkeypatch.setattr(twitter, "_FETCH_TASK", None)
     monkeypatch.setattr(twitter, "_MANUAL_NOTIFICATION_TASK", None)
-    assert await twitter.scheduled_fetch(context) == []
+    assert await twitter.scheduled_fetch(context) is None
     first = twitter._FETCH_TASK
     assert first is not None
     assert (await asyncio.wait_for(first, timeout=1.0)).count == 2
     fetch.assert_awaited_once_with(context)
 
     fetch.return_value = 0
-    assert await twitter.scheduled_fetch(context) == []
+    assert await twitter.scheduled_fetch(context) is None
     second = twitter._FETCH_TASK
     assert second is not None
     empty_outcome = await asyncio.wait_for(second, timeout=1.0)
@@ -1102,7 +1102,7 @@ async def test_scheduled_fetch_is_silent_and_contains_failures(
     assert "缓存仍为空" in empty_outcome.message
 
     fetch.side_effect = RuntimeError("private scheduled failure")
-    assert await twitter.scheduled_fetch(context) == []
+    assert await twitter.scheduled_fetch(context) is None
     third = twitter._FETCH_TASK
     assert third is not None
     outcome = await asyncio.wait_for(third, timeout=1.0)
@@ -1127,7 +1127,7 @@ async def test_shutdown_cancels_owned_background_fetch(
     monkeypatch.setattr(twitter, "_MANUAL_NOTIFICATION_TASK", None)
     monkeypatch.setattr(twitter, "_POSTED_RESERVATIONS", {"pending": {"image.jpg"}})
 
-    assert await twitter.scheduled_fetch(context) == []
+    assert await twitter.scheduled_fetch(context) is None
     await asyncio.wait_for(started.wait(), timeout=1.0)
     task = twitter._FETCH_TASK
     assert task is not None

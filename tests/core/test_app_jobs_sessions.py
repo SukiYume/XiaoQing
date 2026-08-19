@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tests.helpers.app_test_support as _fixture_support
+from core.delivery import ScheduledDelivery
 from tests.helpers.app_test_support import (
     AsyncMock,
     BlockingConcurrencyProbe,
@@ -15,6 +16,7 @@ from tests.helpers.app_test_support import (
     PluginDefinition,
     SimpleNamespace,
     XiaoQingApp,
+    _plugin_context_for,
     _set_app_config,
     asyncio,
     current_action_sink,
@@ -130,6 +132,61 @@ async def test_app_run_job(temp_app_root: Path):
     call = app.plugin_manager.build_context.call_args
     assert call.args == ("test_plugin",)
     assert call.kwargs["principal"].kind == "scheduled_system"
+    assert call.kwargs["principal"].schedule_delivery == "broadcast"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("manifest_groups", "expected_groups"),
+    [
+        ([101, 202], [101, 202]),
+        (None, [303]),
+        ([], []),
+    ],
+)
+async def test_app_run_job_exposes_core_resolved_groups_to_self_delivering_plugins(
+    temp_app_root: Path,
+    manifest_groups: list[int] | None,
+    expected_groups: list[int],
+) -> None:
+    """自行确认投递结果的插件也只能使用 Core 解析后的调度目标。"""
+
+    app = XiaoQingApp(temp_app_root)
+    _set_app_config(app, default_group_ids=[303])
+    app._send_action = AsyncMock(return_value=True)
+
+    def build_context(plugin_name: str, *, principal):
+        return _plugin_context_for(
+            app,
+            plugin_name,
+            principal=principal,
+        )
+
+    app.plugin_manager.build_context = Mock(side_effect=build_context)
+
+    async def self_delivering_handler(context):
+        for group_id in context.default_groups():
+            await context.send_action(
+                {
+                    "action": "send_group_msg",
+                    "params": {"group_id": group_id, "message": []},
+                }
+            )
+        return []
+
+    await app._run_job(
+        self_delivering_handler,
+        "test_plugin",
+        manifest_groups,
+        loaded_plugin=SimpleNamespace(execution_gate=None),
+    )
+
+    sent_groups = [call.args[0]["params"]["group_id"] for call in app._send_action.await_args_list]
+    assert sent_groups == expected_groups
+
+    principal = app.plugin_manager.build_context.call_args.kwargs["principal"]
+    assert [target.group_id for target in principal.delivery_targets] == expected_groups
 
 
 @pytest.mark.asyncio
@@ -144,6 +201,98 @@ async def test_app_run_job_rejects_invalid_group_ids_before_plugin_execution(tem
 
     handler.assert_not_awaited()
     app.plugin_manager.build_context.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_silent_schedule_runs_without_any_delivery_capability(temp_app_root: Path):
+    app = XiaoQingApp(temp_app_root)
+    _set_app_config(app, default_group_ids=[123, "invalid"])
+    app._send_action = AsyncMock(return_value=True)
+    observed: dict[str, object] = {}
+
+    def build_context(plugin_name: str, *, principal):
+        observed["principal"] = principal
+        return _plugin_context_for(app, plugin_name, principal=principal)
+
+    app.plugin_manager.build_context = Mock(side_effect=build_context)
+
+    async def handler(context):
+        observed["active_send"] = await context.send_action(
+            {
+                "action": "send_group_msg",
+                "params": {"group_id": 123, "message": []},
+            }
+        )
+        return [{"type": "text", "data": {"text": "must stay silent"}}]
+
+    await app._run_job(
+        handler,
+        "silent_plugin",
+        delivery="silent",
+        loaded_plugin=SimpleNamespace(execution_gate=None),
+    )
+
+    principal = observed["principal"]
+    assert principal.schedule_delivery == "silent"
+    assert principal.delivery_targets == ()
+    assert observed["active_send"] is False
+    app._send_action.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_targeted_schedule_validates_returned_and_active_targets(temp_app_root: Path):
+    app = XiaoQingApp(temp_app_root)
+    app._send_action = AsyncMock(return_value=True)
+
+    def build_context(plugin_name: str, *, principal):
+        return _plugin_context_for(app, plugin_name, principal=principal)
+
+    app.plugin_manager.build_context = Mock(side_effect=build_context)
+    active_outcomes: list[bool | None] = []
+
+    async def handler(context):
+        for action in (
+            {"action": "send_group_msg", "params": {"group_id": 101, "message": []}},
+            {"action": "send_group_msg", "params": {"group_id": 999, "message": []}},
+            {"action": "send_private_msg", "params": {"user_id": 42, "message": []}},
+        ):
+            active_outcomes.append(await context.send_action(action))
+        return [
+            ScheduledDelivery.group(
+                101,
+                [{"type": "text", "data": {"text": "allowed group"}}],
+            ),
+            ScheduledDelivery.group(
+                999,
+                [{"type": "text", "data": {"text": "blocked group"}}],
+            ),
+            ScheduledDelivery.private(
+                42,
+                [{"type": "text", "data": {"text": "allowed private"}}],
+            ),
+        ]
+
+    await app._run_job(
+        handler,
+        "targeted_plugin",
+        [101],
+        delivery="targeted",
+        loaded_plugin=SimpleNamespace(execution_gate=None),
+    )
+
+    assert active_outcomes == [True, False, True]
+    actions = [call.args[0] for call in app._send_action.await_args_list]
+    assert [
+        (action["action"], action["params"].get("group_id"), action["params"].get("user_id"))
+        for action in actions
+    ] == [
+        ("send_group_msg", 101, None),
+        ("send_private_msg", None, 42),
+        ("send_group_msg", 101, None),
+        ("send_private_msg", None, 42),
+    ]
 
 
 @pytest.mark.asyncio
@@ -413,6 +562,59 @@ def test_app_reschedule_preserves_manifest_schedule_description(temp_app_root: P
     assert len(jobs) == 1
     assert jobs[0].job_id == "plugin.test_plugin.enabled"
     assert jobs[0].description == "visible scheduler metadata"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_manifest_schedule_group_ids_reach_plugin_context(temp_app_root: Path) -> None:
+    """Manifest 目标由 Core 解析，并传入实际到期执行的插件上下文。"""
+
+    app = XiaoQingApp(temp_app_root)
+    _set_app_config(app, default_group_ids=[303])
+    observed_groups: list[int] = []
+
+    async def scheduled(context):
+        observed_groups.extend(context.default_groups())
+        return []
+
+    definition = PluginDefinition(
+        name="test_plugin",
+        version="1.0.0",
+        entry="main.py",
+        commands=[],
+        schedule=[
+            {
+                "id": "targeted",
+                "handler": "scheduled",
+                "cron": {"minute": "*"},
+                "delivery": "targeted",
+                "group_ids": [101, 202],
+            }
+        ],
+        concurrency="parallel",
+    )
+    loaded = LoadedPlugin(
+        definition=definition,
+        module=SimpleNamespace(scheduled=scheduled),
+        mtime=0.0,
+    )
+    app.scheduler.replace_prefix = Mock()
+    app.plugin_manager.schedule_definitions = Mock(return_value=[loaded])
+    app.plugin_manager.build_context = Mock(
+        side_effect=lambda plugin_name, *, principal: _plugin_context_for(
+            app,
+            plugin_name,
+            principal=principal,
+        )
+    )
+
+    app._reschedule("startup")
+    _prefix, jobs = app.scheduler.replace_prefix.call_args.args
+    await jobs[0].func()
+
+    assert observed_groups == [101, 202]
+    principal = app.plugin_manager.build_context.call_args.kwargs["principal"]
+    assert principal.schedule_delivery == "targeted"
 
 
 @pytest.mark.unit

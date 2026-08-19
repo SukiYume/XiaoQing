@@ -141,7 +141,7 @@ Web 控制台的日程详情可逐条提前确认未到期提醒，确认后可�
 
 Scriptable 主屏摘要最多展示 5 条日程；脚本顶部配置 Web 地址和 Widget Token。直接运行脚本时，独立日历接口返回成功日游标至未来 30 天的完整窗口。首次运行额外回看 30 天，后续运行补齐两次成功同步之间的日程，并采用一次接口查询、一次目标日历查询和按 Pendo 条目 ID 的仅新增写入。
 
-提醒、每日简报与日记提示每分钟检查各用户设置；待办顺延每天 00:05 执行，操作日志每天 00:15 清理，财务周报每周日 21:00 生成，财务月报在每月最后一天 21:00 生成，Demo 数据每 6 小时的第 15 分钟清理。`scheduled_delivery_outbox` 按目标记录投递确认。[Pendo README](../plugins/pendo/README.md)、[Pendo 架构](../plugins/pendo/ARCHITECTURE.md) 和 [Scriptable 指南](pendo-scriptable-widget.md) 提供完整字段与页面说明。
+提醒、每日简报、日记提示、待办顺延和财务摘要采用 Core `targeted` 模式私聊所属用户；操作日志与 Demo 数据清理采用 `silent` 模式。`scheduled_delivery_outbox` 按目标记录投递确认。[Pendo README](../plugins/pendo/README.md)、[Pendo 架构](../plugins/pendo/ARCHITECTURE.md) 和 [Scriptable 指南](pendo-scriptable-widget.md) 提供完整时间和字段说明。
 
 ---
 
@@ -355,7 +355,7 @@ CHIME 插件查询重复暴目录，并相对本地通知基线发现新增重�
 /chime help
 ```
 
-默认查询显示上次成功通知以来的更新，`list` 展示最近 5 个 FRB，规范 FRB 名称查询时间、DM、RA、DEC 和 SNR。每天 09:00 与 21:00 检查目录，并向默认群逐个确认投递。
+默认查询显示上次成功通知以来的更新，`list` 展示最近 5 个 FRB，规范 FRB 名称查询时间、DM、RA、DEC 和 SNR。每天 09:00 与 21:00 检查目录，并向该 schedule 的目标群逐个确认投递。
 
 `data/chime/chime_history.json` 保存通知基线，`data/chime/chime_delivery.json` 保存待办与逐目标状态。手动查询使用 5 分钟缓存，定时检查读取新目录。[CHIME README](../plugins/chime/README.md) 提供目录来源和至少一次投递语义。
 
@@ -491,7 +491,7 @@ Earthquake 从中国地震台网速报微博读取近期记录。手动命令显
 /earthquake help
 ```
 
-每 5 分钟扫描微博卡片，先续发待办，再处理新事件并逐个确认默认群投递。`data/earthquake/` 保存微博游标、恢复检查点、待办事件和图片缓存。结构异常状态会进入 `*.corrupt-*` 取证副本，并从有效检查点恢复。
+每 5 分钟扫描微博卡片，先续发待办，再处理新事件并逐个确认该 schedule 的目标群投递。`data/earthquake/` 保存微博游标、恢复检查点、待办事件和图片缓存。结构异常状态会进入 `*.corrupt-*` 取证副本，并从有效检查点恢复。
 
 图片来源限定为新浪图片 HTTPS 域名，微博响应、正文与图片均采用有界解析。快讯用于消息提醒，应急判断需结合权威官方渠道。[Earthquake README](../plugins/earthquake/README.md) 提供游标与网络细节。
 
@@ -526,7 +526,7 @@ Twitter 插件从指定账号抓取图片到本地缓存，并随机发送当前
 /抓取推特
 ```
 
-随机发送面向全部用户，抓取入口使用 Bot 管理员权限。每天 03:00 运行后台抓取；手动与定时调用共享同一个任务。
+随机发送面向全部用户，抓取入口使用 Bot 管理员权限。每天 03:00 以 Core `silent` 模式运行后台抓取；手动与定时调用共享同一个任务。
 
 `secrets.plugins.twitter` 保存 `user_id`、GraphQL headers、cookies、proxy 和 `max_pages`。首次抓取遍历时间线，后续抓取连续两页没有新增图片时停止，最多并发下载 4 张；缓存上限为 5000 项、2 GiB、90 天。图片位于 `data/twitter/images/`，已确认轮次位于 `data/twitter/posted.txt`。[Twitter README](../plugins/twitter/README.md) 提供认证字段和媒体域名预算。
 
@@ -681,7 +681,7 @@ QingPet 按 QQ 群隔离宠物、用户、背包、经济、社交、活动和�
 /宠物 管理 公告 <展示会|结束展示会> ...
 ```
 
-交易、治疗、奖励、任务、活动和展示结算使用事务或幂等标识。金币与友情点由 `users` 表持有，资产变化同步进入 `asset_ledger`。状态每分钟衰减；每日、每周、挂单到期和展示会结算由调度任务处理。
+交易、治疗、奖励、任务、活动和展示结算使用事务或幂等标识。金币与友情点由 `users` 表持有，资产变化同步进入 `asset_ledger`。状态衰减、展示会和周活动使用 Core `targeted` 模式按群发布结果；每日重置与挂单到期使用 `silent` 模式。
 
 SQLite 位于 `data/qingpet/qingpet/qingpet.db`。私聊可在账号只有一只宠物时自动定位群，多个群宠物场景可在参数前加入群号。[QingPet README](../plugins/qingpet/README.md) 和 [快速开始](../plugins/qingpet/QUICKSTART.md) 提供成长门槛、群配置和部署验收。
 

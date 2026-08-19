@@ -64,6 +64,7 @@
         {
             "id": "twitter_fetch",
             "handler": "scheduled_fetch",
+            "delivery": "silent",
             "cron": {
                 "hour": 3,
                 "minute": 0

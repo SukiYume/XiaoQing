@@ -6,7 +6,11 @@ import inspect
 import logging
 import threading
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from typing import Any
+
+from .interfaces import DeliveryTarget
+from .message import validate_message_segments
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +138,47 @@ class DeliverySegments(list[dict[str, Any]]):
     def __init__(self, values: Sequence[dict[str, Any]], receipt: DeliveryReceipt) -> None:
         super().__init__(values)
         self.delivery_receipt = receipt
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduledDelivery:
+    """One target-specific scheduled message that Core validates and sends."""
+
+    target: DeliveryTarget
+    message: tuple[dict[str, Any], ...]
+    receipt: DeliveryReceipt | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.target, DeliveryTarget):
+            raise TypeError("scheduled delivery target must be a DeliveryTarget")
+        normalized = validate_message_segments(list(self.message))
+        if not normalized:
+            raise ValueError("scheduled delivery message must not be empty")
+        object.__setattr__(self, "message", tuple(normalized))
+
+    @classmethod
+    def group(
+        cls,
+        group_id: int,
+        message: Sequence[dict[str, Any]],
+        *,
+        receipt: DeliveryReceipt | None = None,
+    ) -> ScheduledDelivery:
+        """Build a group delivery without exposing OneBot action construction."""
+
+        return cls(DeliveryTarget("group", group_id), tuple(message), receipt)
+
+    @classmethod
+    def private(
+        cls,
+        user_id: int,
+        message: Sequence[dict[str, Any]],
+        *,
+        receipt: DeliveryReceipt | None = None,
+    ) -> ScheduledDelivery:
+        """Build a private delivery without exposing OneBot action construction."""
+
+        return cls(DeliveryTarget("private", user_id), tuple(message), receipt)
 
 
 def receipt_from_action(action: dict[str, Any]) -> DeliveryReceipt | None:

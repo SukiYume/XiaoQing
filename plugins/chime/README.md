@@ -25,7 +25,7 @@
 
 ## ⏰ 定时通知
 
-清单在每天 09:00 和 21:00 运行 `scheduled_check`，通知目标来自 Core 提供的默认群列表。一次检查按以下顺序执行：
+清单在每天 09:00 和 21:00 以 Core `targeted` 模式运行 `scheduled_check`，通知目标来自 Core 为该 schedule 解析出的群列表。一次检查按以下顺序执行：
 
 1. 读取 `chime_delivery.json`，优先续发已有待办通知；
 2. 获取并校验远端目录；

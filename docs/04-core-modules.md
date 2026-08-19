@@ -83,11 +83,11 @@ Context 由当前插件名、用户、群、request ID 和 principal 共同确�
 | `session.py` | Session 快照、会话键、串行锁、超时和原子更新 |
 | `scheduler.py` | APScheduler 装配、Manifest cron 注册和目标投递 |
 | `scheduler_compat.py` | APScheduler 版本适配边界 |
-| `delivery.py` | 进程内发送回执和 commit-after-ack |
+| `delivery.py` | 进程内发送回执、目标化调度结果和 commit-after-ack |
 | `durable_fanout.py` | 多目标通知的持久进度和恢复 |
 | `async_keyed_lock.py` | 按业务键串行的异步锁 |
 
-Session 管理用户驱动的多轮交互。Scheduler 管理时间驱动任务。Delivery 与 Durable Fanout 管理业务状态提交和主动消息投递进度。
+Session 管理用户驱动的多轮交互。Scheduler 管理时间驱动任务及其广播、目标化或静默投递模式。Delivery 与 Durable Fanout 管理业务状态提交和主动消息投递进度。
 
 ---
 
