@@ -453,8 +453,7 @@ def test_finish_persona_grounding_uses_configured_persona_fallbacks(
     )
 
     configured_identity = (
-        "你叫小青，是一名海边书店店员，喜欢旧唱片；"
-        "具体学校、专业、城市没有设定，不主动补成真实资料。"
+        "是一名海边书店店员，喜欢旧唱片；具体学校、专业、城市没有设定，不主动补成真实资料。"
     )
     plan = SimpleNamespace(
         forced=True,
@@ -575,6 +574,7 @@ def test_persona_grounding_rejection_gets_one_targeted_regeneration(mock_context
 
     plan = SimpleNamespace(
         forced=True,
+        bot_name="小青",
         context=mock_context,
         chat_id="group:1",
         runtime=SimpleNamespace(

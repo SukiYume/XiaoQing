@@ -243,6 +243,7 @@ async def extract_and_learn(
                     timeout_seconds=timeout_seconds,
                     max_retry=max_retry,
                     retry_interval_seconds=retry_interval_seconds,
+                    bot_name=bot_name,
                 )
             )
             _log_step(

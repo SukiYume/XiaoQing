@@ -27,7 +27,6 @@ class TestHeuristicCheckRepeatedQuestion:
         result = _heuristic_check(
             reply="那石景山路到底有啥特别的",
             history=history,
-            bot_name="小青",
             max_repeat_compare=2,
             similarity_threshold=0.9,
             max_assistant_in_row=3,
@@ -54,7 +53,6 @@ class TestGeneralRepetitionHeuristic:
         result = _heuristic_check(
             reply=reply,
             history=history,
-            bot_name="小青",
             max_repeat_compare=2,
             similarity_threshold=0.9,
             max_assistant_in_row=3,

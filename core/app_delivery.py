@@ -13,6 +13,7 @@ from typing import Any, cast
 from .app_identity import AppIdentityService
 from .app_support import _parse_group_ids, current_action_sink
 from .constants import (
+    DEFAULT_BOT_NAME,
     INBOUND_EVENT_DEDUP_TTL_SECONDS,
     MAX_INBOUND_EVENT_DEDUP_KEYS,
     MESSAGE_SPLIT_DELAY,
@@ -98,7 +99,12 @@ class AppDeliveryMixin:
             return
 
         # 发送上线通知（可通过 config 配置）
-        connect_msg = self.config.get("connect_notification", "🟢 小青已上线~")
+        connect_msg = self.config.get("connect_notification")
+        if connect_msg is None:
+            bot_name = (
+                str(self.config.get("bot_name") or DEFAULT_BOT_NAME).strip() or DEFAULT_BOT_NAME
+            )
+            connect_msg = f"🟢 {bot_name}已上线~"
         if not connect_msg:
             return
         now = time.monotonic()

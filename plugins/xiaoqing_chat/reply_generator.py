@@ -66,6 +66,7 @@ from .message_parts import (
     merge_reply_media_parts,
     normalize_message_parts,
 )
+from .persona import persona_subject_pattern
 from .planning.planned_action import PlannedAction
 from .reply_payload import build_reply_payload_from_parts
 
@@ -79,8 +80,8 @@ _QUESTION_FORM_RE = re.compile(
     r"[?？]|(?:吗|呢|么|嘛)$|(?:什么|哪|谁|多少|怎么|如何|为何|是不是|有没有|是否|还是)"
 )
 _KNOWN_NAME_QUERY_RE = re.compile(r"你(?:到底|究竟)?(?:是)?(?:谁|哪位)")
-_PERSONA_INTRO_QUERY_RE = re.compile(
-    r"(?:你|小青)[^，。！？；;\n]{0,24}"
+_PERSONA_INTRO_QUERY_TAIL = (
+    r"[^，。！？；;\n]{0,24}"
     r"(?:什么样的人|介绍(?:一下)?自己|自我介绍|说说你自己|你的性格)"
 )
 _SELF_PROFILE_QUERY_RE = re.compile(
@@ -96,6 +97,17 @@ _PERSONA_GROUNDING_FALLBACKS = (
     "以前这段我真说不准，别让我现编啦。聊现在倒可以。",
     "这个个人经历我说不准，咱们就事论事吧。",
 )
+
+
+def _is_persona_intro_query(text: str, *, bot_name: str) -> bool:
+    return bool(
+        re.search(
+            persona_subject_pattern(bot_name) + _PERSONA_INTRO_QUERY_TAIL,
+            str(text or ""),
+        )
+    )
+
+
 _CONTEXT_GROUNDING_FALLBACKS = (
     "这证据链也太薄了，我可不替人下结论。",
     "光凭眼前这点就开判，容易冤枉人。",
@@ -691,7 +703,11 @@ def _build_attempt_messages(
         expression_habits_block=plan.expression_block,
         jargon_explanation=plan.jargon_explanation,
         tool_info_block=plan.tool_info_block,
-        planner_reasoning=_replace_local_ids_with_text(plan.chat_id, plan.merged_reasoning),
+        planner_reasoning=_replace_local_ids_with_text(
+            plan.chat_id,
+            plan.merged_reasoning,
+            bot_name=plan.bot_name,
+        ),
         identity_block=plan.effective_identity,
         reply_style_override=plan.effective_style,
         state_override=plan.state_text,
@@ -793,7 +809,6 @@ def _precheck_candidate(
     result = _heuristic_check(
         reply=raw_draft.text,
         history=trimmed_history,
-        bot_name=plan.bot_name,
         max_repeat_compare=plan.runtime.cfg.reply_check.max_repeat_compare,
         similarity_threshold=plan.runtime.cfg.reply_check.similarity_threshold,
         max_assistant_in_row=plan.runtime.cfg.reply_check.max_assistant_in_row,
@@ -1045,7 +1060,6 @@ async def _check_candidate_draft(
     structural_rejection = _heuristic_check(
         reply=heuristic_reply_text,
         history=trimmed_history,
-        bot_name=plan.bot_name,
         max_repeat_compare=plan.runtime.cfg.reply_check.max_repeat_compare,
         similarity_threshold=plan.runtime.cfg.reply_check.similarity_threshold,
         max_assistant_in_row=plan.runtime.cfg.reply_check.max_assistant_in_row,
@@ -1077,6 +1091,7 @@ def _queue_reply_regeneration(
         _requires_configured_profile_boundary(
             str(getattr(plan, "text", "") or ""),
             str(getattr(plan, "effective_identity", "") or ""),
+            bot_name=plan.bot_name,
         )
     ):
         # 精确资料在配置中明确留空，重问主模型只会增加再次补写细节的机会。
@@ -1160,27 +1175,21 @@ def _finish_rejected_candidate(
     fallback_step = "reply.check.exhausted.forced_fallback"
     if plan.forced and rejected.result.failure_code == "persona_grounding":
         bot_name = str(getattr(plan, "bot_name", "") or "").strip()
-        identity = str(getattr(plan, "effective_identity", "") or "").strip()
-        if identity:
-            identity_prefix = f"你叫{bot_name}" if bot_name else ""
-            if identity_prefix and identity.startswith(identity_prefix):
-                identity = f"我叫{bot_name}{identity[len(identity_prefix) :]}"
-            elif identity.startswith("你是"):
-                identity = f"我是{identity[2:]}"
-            identity = identity.rstrip("。")
+        identity = str(getattr(plan, "effective_identity", "") or "").strip().rstrip("。")
         public_identity = _concise_public_identity(identity)
         if bot_name and _KNOWN_NAME_QUERY_RE.search(str(plan.text or "")):
             fallback_texts = (f"我叫{bot_name}。",)
         elif _requires_configured_profile_boundary(
             str(getattr(plan, "text", "") or ""),
             str(getattr(plan, "effective_identity", "") or ""),
+            bot_name=bot_name,
         ):
             fallback_texts = (
                 (f"具体到现实资料我就不展开啦；按公开人设来说，{public_identity}。")
                 if public_identity
                 else "具体人设以当前配置为准，我不补写现实资料。",
             )
-        elif _PERSONA_INTRO_QUERY_RE.search(str(plan.text or "")):
+        elif _is_persona_intro_query(str(plan.text or ""), bot_name=bot_name):
             fallback_texts = (
                 (f"按公开人设来说，{public_identity}。别真把我当简历看就行。")
                 if public_identity
@@ -1218,14 +1227,12 @@ def _finish_rejected_candidate(
         for fallback_text in fallback_texts:
             runtime = getattr(plan, "runtime", None)
             history = getattr(plan, "history", ())
-            bot_name = str(getattr(plan, "bot_name", "") or "")
             reply_check_cfg = getattr(getattr(runtime, "cfg", None), "reply_check", None)
             structural_rejection = None
             if reply_check_cfg is not None:
                 structural_rejection = _heuristic_check(
                     reply=fallback_text,
                     history=history,
-                    bot_name=bot_name,
                     max_repeat_compare=reply_check_cfg.max_repeat_compare,
                     similarity_threshold=reply_check_cfg.similarity_threshold,
                     max_assistant_in_row=reply_check_cfg.max_assistant_in_row,

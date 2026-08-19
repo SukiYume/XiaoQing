@@ -835,6 +835,27 @@ async def test_app_on_ws_connected_rejects_invalid_group_ids(temp_app_root: Path
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_app_on_ws_connected_uses_configured_name_in_default_message(
+    temp_app_root: Path,
+):
+    app = XiaoQingApp(temp_app_root)
+    _set_app_config(
+        app,
+        bot_name="阿澄",
+        default_group_ids=[123],
+        connect_notification=None,
+    )
+    app.ws_client = MagicMock()
+
+    with patch.object(app, "_send_action", new=AsyncMock()) as mock_send:
+        await app._on_ws_connected()
+
+    action = mock_send.await_args.args[0]
+    assert action["params"]["message"][0]["data"]["text"] == "🟢 阿澄已上线~"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_app_on_ws_connected_throttles_reconnect_notifications(temp_app_root: Path):
     """Test _on_ws_connected suppresses repeated reconnect notifications"""
     app = XiaoQingApp(temp_app_root)

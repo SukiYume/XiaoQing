@@ -1,4 +1,4 @@
-"""小青智能对话插件的生命周期、命令路由与 Core 观察入口。"""
+"""拟人智能对话插件的生命周期、命令路由与 Core 观察入口。"""
 
 from __future__ import annotations
 
@@ -35,6 +35,7 @@ from .handlers import (
 from .handlers import (
     observe_outgoing_action as observe_outgoing_action_internal,
 )
+from .helper_utils import _get_bot_name
 from .runtime_state import get_state as _state
 
 logger = logging.getLogger(__name__)
@@ -75,9 +76,10 @@ def _resolve_invocation(args: str, context: Any) -> CommandInvocation | None:
 
 def _help_text(context: Any) -> str:
     root = _catalog_root(context)
+    title = f"💬 {_get_bot_name(context)}智能对话"
     if root is None:
-        return "💬 小青智能对话\n\n完整命令目录暂不可用，请使用 /help xiaoqing_chat"
-    return format_command_catalog(root, title="💬 小青智能对话 · 完整命令目录")
+        return f"{title}\n\n完整命令目录暂不可用，请使用 /help xiaoqing_chat"
+    return format_command_catalog(root, title=f"{title} · 完整命令目录")
 
 
 async def init(context=None) -> None:
