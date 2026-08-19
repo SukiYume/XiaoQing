@@ -32,7 +32,7 @@ Core 将两个文件组合成带 revision 的只读设置快照。插件通过�
 
 | 字段 | 类型 | 示例值 | 说明 |
 |---|---|---|---|
-| `bot_name` | string | `"小青"` | Bot 名称、名称召唤和群聊名称门控 |
+| `bot_name` | string | `"小青"` | Bot 的唯一运行时名称，用于名称召唤、群聊门控、聊天人格、历史角色标签和默认上线通知 |
 | `command_prefixes` | string[] | `["/"]` | 命令前缀列表 |
 | `require_bot_name_in_group` | boolean | `true` | 群聊普通文本的 Bot 名称门控 |
 | `default_group_ids` | positive integer[] | `[123456789]` | `broadcast` / `targeted` schedule 未指定 `group_ids` 时的群目标 |

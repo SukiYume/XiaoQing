@@ -23,6 +23,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal
 
+from core.constants import DEFAULT_BOT_NAME
+
+from ..persona import resolve_bot_name
 from ..store_base import load_json_file
 
 Action = Literal["reply", "silence", "optional_reply"]
@@ -62,7 +65,7 @@ GENERIC_DEFLECTION_PATTERNS = (
     "这事说不好",
 )
 UNBOUNDED_PERSONA_FACT_RE = re.compile(
-    r"(?:我|小青)[^，。！？；;\n]{0,32}"
+    r"我[^，。！？；;\n]{0,32}"
     r"(?:具体(?:学校|大学|城市|住址|专业)|在[\u4e00-\u9fff]{2,16}(?:大学|学院)"
     r"|家住|老家在|身份证|手机号|真实姓名|生日是|父母|对象|确诊|欠债|坐牢)"
 )
@@ -94,7 +97,7 @@ class ExperimentConfig:
     min_users: int = 12
     max_users: int = 30
     rounds_per_group: int = 150
-    bot_name: str = "小青"
+    bot_name: str = DEFAULT_BOT_NAME
     self_id: int = 11111
     group_id_start: int = 930001
 
@@ -152,7 +155,7 @@ def generate_matrix(config: ExperimentConfig) -> dict[str, Any]:
     for group_offset in range(config.groups):
         group_id = config.group_id_start + group_offset
         user_count = rng.randint(config.min_users, config.max_users)
-        personas = _build_personas(group_id, user_count, rng)
+        personas = _build_personas(group_id, user_count, rng, bot_name=config.bot_name)
         turns = _build_turns_for_group(config, group_id, group_offset, personas)
         groups.append(
             GroupScript(
@@ -477,7 +480,10 @@ async def run_real_experiment(
     data_dir = output_dir / "isolated_data_dir" / "anthropomorphic"
     data_dir.mkdir(parents=True, exist_ok=True)
     fixture_image = _ensure_fixture_image(data_dir)
-    config = load_json_file(Path("config/config.json"), default={"bot_name": "小青"})
+    config = load_json_file(
+        Path("config/config.json"),
+        default={"bot_name": DEFAULT_BOT_NAME},
+    )
     secrets = load_json_file(Path("config/secrets.json"), default={})
 
     reset_global_state()
@@ -637,11 +643,17 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _build_personas(group_id: int, user_count: int, rng: random.Random) -> list[Persona]:
+def _build_personas(
+    group_id: int,
+    user_count: int,
+    rng: random.Random,
+    *,
+    bot_name: str,
+) -> list[Persona]:
     styles = [
         "爱开玩笑",
         "经常发表情包",
-        "喜欢@小青",
+        f"喜欢@{resolve_bot_name(bot_name)}",
         "轻度阴阳怪气",
         "认真提问",
         "沉默但偶尔插话",
@@ -700,7 +712,7 @@ def _build_turns_for_group(
         user = personas[(round_index - 1 + group_offset) % len(personas)]
         message_id = group_id * 100000 + round_index
         segments = _segments_from_template(template, config.self_id, message_id - 1)
-        raw_message = _raw_from_segments(segments)
+        raw_message = _raw_from_segments(segments, bot_name=config.bot_name)
         turns.append(
             GeneratedTurn(
                 case_id=f"ANTH-G{group_offset + 1:02d}-R{round_index:04d}",
@@ -929,7 +941,7 @@ def _segments_from_template(
     return segments
 
 
-def _raw_from_segments(segments: list[dict[str, Any]]) -> str:
+def _raw_from_segments(segments: list[dict[str, Any]], *, bot_name: str) -> str:
     parts = []
     for segment in segments:
         typ = str(segment.get("type") or "")
@@ -937,7 +949,7 @@ def _raw_from_segments(segments: list[dict[str, Any]]) -> str:
         if typ == "text":
             parts.append(str(data.get("text") or ""))
         elif typ == "at":
-            parts.append("[@小青]")
+            parts.append(f"[@{resolve_bot_name(bot_name)}]")
         else:
             parts.append(f"[{typ}]")
     return " ".join(part for part in parts if part).strip()
@@ -989,6 +1001,7 @@ def _write_transcripts(
     result_rows: list[dict[str, Any]],
 ) -> None:
     by_case = {row["case_id"]: row for row in result_rows}
+    bot_name = resolve_bot_name((matrix.get("config") or {}).get("bot_name"))
     for group in matrix.get("groups", []):
         group_id = group["group_id"]
         jsonl_path = transcript_dir / f"group_{group_id}.jsonl"
@@ -1009,7 +1022,7 @@ def _write_transcripts(
                 )
                 reply_text = ((result.get("score") or {}).get("reply_text") or "").strip()
                 if reply_text:
-                    md_lines.append(f"小青: {reply_text}")
+                    md_lines.append(f"{bot_name}: {reply_text}")
                 failures = (result.get("score") or {}).get("failure_tags") or []
                 if failures:
                     md_lines.append(f"failures: {', '.join(failures)}")

@@ -19,6 +19,7 @@ from ..llm.llm_client import chat_completions_raw_with_fallback_paths
 from ..llm.prompt_builder import build_dialogue_prompt
 from ..memory.memory import StoredMessage
 from ..participation import classify_group_participation_cue as _group_participation_cue
+from ..persona import compose_persona_identity
 from .pfc_utils import get_items_from_json
 
 _logger = logging.getLogger("plugin.xiaoqing_chat")
@@ -155,14 +156,7 @@ class PFCPlan:
 
 
 def _build_persona_text(bot_name: str, personality: PersonalityConfig) -> str:
-    identity = (personality.identity or "").strip()
-    if identity:
-        return (
-            identity.replace("你是", f"你的名字是{bot_name}，你是", 1)
-            if identity.startswith("你是")
-            else f"你的名字是{bot_name}，{identity}"
-        )
-    return f"你的名字是{bot_name}"
+    return compose_persona_identity(personality.identity, bot_name)
 
 
 def _goals_to_text(goal_list: Sequence[dict[str, Any]]) -> str:

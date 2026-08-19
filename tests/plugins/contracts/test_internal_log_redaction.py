@@ -238,6 +238,7 @@ async def test_xiaoqing_jargon_fallback_logs_only_type(
             store=Mock(),
             chat_id="chat-1",
             messages=history,
+            bot_name="小青",
             temperature=0.2,
             top_p=0.8,
             max_tokens=500,

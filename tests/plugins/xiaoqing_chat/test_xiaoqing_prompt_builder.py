@@ -74,6 +74,8 @@ def test_default_personality_states_only_describe_current_conversation_style() -
     assert cfg.fallback_idle_replies == ["我在听", "你接着说", "我想一下"]
     assert "不为了显得深入而强行升华" in cfg.brain_chat.brain_identity
     assert cfg.personality.allow_low_stakes_persona_fiction is True
+    assert "小青" not in cfg.personality.identity
+    assert "小青" not in cfg.brain_chat.brain_identity
     assert "住校的大二理工科女生" in cfg.personality.identity
     assert "天文、电脑和新鲜小玩意" in cfg.personality.identity
     assert "适度调侃" in cfg.personality.reply_style
@@ -84,7 +86,7 @@ def test_default_personality_states_only_describe_current_conversation_style() -
 def test_prompt_builder_discourages_repetitive_clarifying_questions() -> None:
     personality = PersonalityConfig(
         polite_guardrail=True,
-        identity="你叫小青。",
+        identity="住校的理工科学生。",
         states=[],
         state_probability=0.0,
         reply_style="口语化",
@@ -124,7 +126,7 @@ def test_prompt_builder_discourages_repetitive_clarifying_questions() -> None:
 
 def test_prompt_builder_can_disable_persona_story_creation() -> None:
     personality = PersonalityConfig(
-        identity="你叫小青。",
+        identity="住校的理工科学生。",
         allow_low_stakes_persona_fiction=False,
         states=[],
     )
@@ -164,7 +166,7 @@ def test_brain_chat_keeps_base_persona_and_adds_mode_rules() -> None:
 def test_prompt_builder_does_not_include_user_id_in_name() -> None:
     personality = PersonalityConfig(
         polite_guardrail=True,
-        identity="你叫小青。",
+        identity="住校的理工科学生。",
         states=[],
         state_probability=0.0,
         reply_style="口语化",
@@ -198,7 +200,7 @@ def test_prompt_builder_does_not_include_user_id_in_name() -> None:
 def test_prompt_builder_treats_media_markers_as_real_content() -> None:
     personality = PersonalityConfig(
         polite_guardrail=True,
-        identity="你叫小青。",
+        identity="住校的理工科学生。",
         states=[],
         state_probability=0.0,
         reply_style="口语化",
@@ -228,7 +230,7 @@ def test_prompt_builder_treats_media_markers_as_real_content() -> None:
 def test_prompt_builder_rehydrates_media_marker_from_registry(tmp_path) -> None:
     personality = PersonalityConfig(
         polite_guardrail=True,
-        identity="你叫小青。",
+        identity="住校的理工科学生。",
         states=[],
         state_probability=0.0,
         reply_style="口语化",
@@ -284,7 +286,7 @@ def test_prompt_builder_rehydrates_media_marker_from_registry(tmp_path) -> None:
 def test_prompt_builder_prefers_canonical_parts_when_legacy_fields_are_stale(tmp_path) -> None:
     personality = PersonalityConfig(
         polite_guardrail=True,
-        identity="你叫小青。",
+        identity="住校的理工科学生。",
         states=[],
         state_probability=0.0,
         reply_style="口语化",
@@ -338,7 +340,7 @@ def test_prompt_builder_prefers_canonical_parts_when_legacy_fields_are_stale(tmp
 def test_prompt_builder_uses_media_only_reply_target_block_for_current_parts() -> None:
     personality = PersonalityConfig(
         polite_guardrail=True,
-        identity="你叫小青。",
+        identity="住校的理工科学生。",
         states=[],
         state_probability=0.0,
         reply_style="口语化",
@@ -372,7 +374,7 @@ def test_prompt_builder_uses_media_only_reply_target_block_for_current_parts() -
 def test_prompt_builder_treats_media_only_emoji_text_as_user_speech() -> None:
     personality = PersonalityConfig(
         polite_guardrail=True,
-        identity="你叫小青。",
+        identity="住校的理工科学生。",
         states=[],
         state_probability=0.0,
         reply_style="口语化",
@@ -411,7 +413,7 @@ def test_prompt_builder_treats_media_only_emoji_text_as_user_speech() -> None:
 def test_prompt_builder_treats_media_only_qq_face_as_tone() -> None:
     personality = PersonalityConfig(
         polite_guardrail=True,
-        identity="你叫小青。",
+        identity="住校的理工科学生。",
         states=[],
         state_probability=0.0,
         reply_style="口语化",
@@ -445,7 +447,7 @@ def test_prompt_builder_treats_media_only_qq_face_as_tone() -> None:
 def test_prompt_builder_uses_mixed_reply_target_block_for_current_parts() -> None:
     personality = PersonalityConfig(
         polite_guardrail=True,
-        identity="你叫小青。",
+        identity="住校的理工科学生。",
         states=[],
         state_probability=0.0,
         reply_style="口语化",
@@ -479,7 +481,7 @@ def test_prompt_builder_uses_mixed_reply_target_block_for_current_parts() -> Non
 def test_prompt_builder_does_not_duplicate_current_turn_when_history_already_contains_it() -> None:
     personality = PersonalityConfig(
         polite_guardrail=True,
-        identity="你叫小青。",
+        identity="住校的理工科学生。",
         states=[],
         state_probability=0.0,
         reply_style="口语化",

@@ -63,7 +63,7 @@ async def test_xiaoqing_chat_handle_help_command(mock_context, sample_group_even
     )
 
     assert len(result) > 0
-    assert "小青智能对话" in result[0]["data"]["text"]
+    assert "智能对话" in result[0]["data"]["text"]
 
 
 @pytest.mark.plugin
@@ -180,7 +180,7 @@ async def test_xiaoqing_chat_handle_empty_args(mock_context, sample_group_event)
 
     assert len(result) > 0
     text = result[0]["data"]["text"]
-    assert "小青智能对话" in text or "可用命令" in text
+    assert "智能对话" in text or "可用命令" in text
 
 
 @pytest.mark.plugin
@@ -264,10 +264,14 @@ def test_xiaoqing_chat_show_help():
 
     root = _build_xiaoqing_catalog()
     help_text = _help_text(
-        SimpleNamespace(command_invocation=None, get_command_catalog=lambda: (root,))
+        SimpleNamespace(
+            command_invocation=None,
+            get_command_catalog=lambda: (root,),
+            get_settings_snapshot=lambda: SimpleNamespace(config={"bot_name": "小青"}),
+        )
     )
 
-    assert "小青智能对话" in help_text
+    assert "智能对话" in help_text
     assert "/xc" in help_text
     assert "清空" in help_text
     assert "统计" in help_text
@@ -281,7 +285,11 @@ def test_xiaoqing_chat_show_help_contains_all_sections():
 
     root = _build_xiaoqing_catalog()
     help_text = _help_text(
-        SimpleNamespace(command_invocation=None, get_command_catalog=lambda: (root,))
+        SimpleNamespace(
+            command_invocation=None,
+            get_command_catalog=lambda: (root,),
+            get_settings_snapshot=lambda: SimpleNamespace(config={"bot_name": "小青"}),
+        )
     )
 
     assert all(node.code in help_text for node in root.walk())
@@ -592,7 +600,7 @@ async def test_handle_with_empty_raw_message(mock_context, sample_group_event):
 
     # Should return help text when no args provided
     assert len(result) > 0
-    assert "小青智能对话" in result[0]["data"]["text"]
+    assert "智能对话" in result[0]["data"]["text"]
 
 
 @pytest.mark.plugin

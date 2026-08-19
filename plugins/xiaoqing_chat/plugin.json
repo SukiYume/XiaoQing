@@ -1,7 +1,7 @@
 {
   "name": "xiaoqing_chat",
   "version": "0.2.0",
-  "description": "小青拟人聊天（纯对话 + 可选图片上下文/表情包回复）",
+  "description": "拟人聊天（纯对话 + 可选图片上下文/表情包回复）",
   "entry": "main.py",
   "concurrency": "parallel",
   "capabilities": ["onebot_media"],
@@ -20,7 +20,7 @@
     {
       "name": "xc",
       "triggers": ["xc"],
-      "help": "小青聊天、会话状态、长期记忆、表达学习、模型和审查管理",
+      "help": "拟人聊天、会话状态、长期记忆、表达学习、模型和审查管理",
       "admin_only": false,
       "priority": 5,
       "usage": "/xc <聊天内容> | /xc <子命令> [参数]",
@@ -30,7 +30,7 @@
         {
           "name": "help",
           "aliases": ["帮助", "?"],
-          "help": "显示小青聊天的完整结构化命令目录",
+          "help": "显示拟人聊天的完整结构化命令目录",
           "usage": "/xc help",
           "match": "exact",
           "examples": ["/xc help"],

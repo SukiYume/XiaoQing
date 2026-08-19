@@ -12,6 +12,7 @@ from core.message import contains_bot_name, extract_text, has_at_mention
 from .config.config import XiaoQingChatConfig, load_xiaoqing_chat_config
 from .constants import FIND_BY_LOCAL_ID_LIMIT
 from .llm.llm_config import LLMCallConfig
+from .persona import resolve_bot_name
 from .runtime_state import _ChatRuntime
 from .runtime_state import get_state as _state
 
@@ -33,8 +34,8 @@ def _chat_id(event: dict[str, Any]) -> str:
 
 
 def _get_bot_name(context: Any) -> str:
-    """读取机器人名称，未配置时使用“小青”。"""
-    return context.get_settings_snapshot().config.get("bot_name", "") or "小青"
+    """读取并规范化当前机器人名称。"""
+    return resolve_bot_name(context.get_settings_snapshot().config.get("bot_name"))
 
 
 def _extract_sender_name(event: dict[str, Any]) -> str:
@@ -250,7 +251,7 @@ def _most_recent_user_local_id(chat_id: str) -> str:
     return ""
 
 
-def _replace_local_ids_with_text(chat_id: str, text: str) -> str:
+def _replace_local_ids_with_text(chat_id: str, text: str, *, bot_name: str) -> str:
     """用位置感知的正则替换，把本地消息 ID（如 m123）转换为可读引用。"""
     if not text:
         return ""
@@ -259,7 +260,7 @@ def _replace_local_ids_with_text(chat_id: str, text: str) -> str:
         local_id = match.group(0)
         msg = _find_by_local_id(chat_id, local_id)
         if msg:
-            role_text = "对方" if msg.role == "user" else "小青"
+            role_text = "对方" if msg.role == "user" else resolve_bot_name(bot_name)
             return f"{role_text}说过"
         return local_id
 
