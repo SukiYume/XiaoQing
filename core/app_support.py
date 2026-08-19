@@ -14,6 +14,7 @@ from .config import ConfigSnapshot, ConfigSourceStatus
 from .interfaces import (
     DeliveryTarget,
     PluginPrincipal,
+    ScheduleDeliveryMode,
 )
 
 logger = logging.getLogger(__name__)
@@ -249,6 +250,7 @@ class _PrincipalAuthority:
         is_private: bool = False,
         group_role: str = "unknown",
         delivery_targets: tuple[DeliveryTarget, ...] | None = None,
+        schedule_delivery: ScheduleDeliveryMode | None = None,
     ) -> PluginPrincipal:
         if delivery_targets is None:
             if kind == "user" and group_id is not None:
@@ -265,6 +267,7 @@ class _PrincipalAuthority:
             is_private=is_private,
             group_role=group_role,  # type: ignore[arg-type]
             delivery_targets=delivery_targets,
+            schedule_delivery=schedule_delivery,
         )
         self._issued[principal] = kind
         return principal

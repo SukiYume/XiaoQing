@@ -42,11 +42,11 @@
     {
       "id": "chime_check",
       "handler": "scheduled_check",
+      "delivery": "targeted",
       "cron": {
         "hour": "9,21",
         "minute": 0
       },
-      "group_ids": [],
       "description": "每天 09:00 和 21:00 检查 CHIME/FRB 重复暴目录"
     }
   ],

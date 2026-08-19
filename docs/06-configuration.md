@@ -35,7 +35,7 @@ Core 将两个文件组合成带 revision 的只读设置快照。插件通过�
 | `bot_name` | string | `"小青"` | Bot 名称、名称召唤和群聊名称门控 |
 | `command_prefixes` | string[] | `["/"]` | 命令前缀列表 |
 | `require_bot_name_in_group` | boolean | `true` | 群聊普通文本的 Bot 名称门控 |
-| `default_group_ids` | positive integer[] | `[123456789]` | Manifest 未指定 `group_ids` 时的调度投递目标 |
+| `default_group_ids` | positive integer[] | `[123456789]` | `broadcast` / `targeted` schedule 未指定 `group_ids` 时的群目标 |
 | `timezone` | IANA timezone | `"Asia/Shanghai"` | Scheduler、`context.now()` 和业务日期时区 |
 
 `command_prefixes` 可配置多个前缀。Manifest `triggers` 保存纯命令词，Router 在消息解析阶段处理前缀。这五项通过 `/reload` 发布到新 revision，并触发插件后台重载。

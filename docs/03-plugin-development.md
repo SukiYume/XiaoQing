@@ -254,6 +254,7 @@ Core 为上述叶节点生成稳定 code `example.todo.add`。插件通过 `cont
   "handler": "scheduled_daily",
   "id": "hello.daily",
   "cron": {"hour": 8, "minute": 0},
+  "delivery": "broadcast",
   "group_ids": [123456789],
   "description": "每日问候",
   "enabled": true
@@ -265,11 +266,18 @@ Core 为上述叶节点生成稳定 code `example.todo.add`。插件通过 `cont
 | `handler` | string | 必填 | 入口模块中的公开异步函数名 |
 | `cron` | object | 必填 | APScheduler `CronTrigger` 参数 |
 | `id` | string / `null` | `null` | 全局任务 ID；省略时由 Core 生成稳定 ID |
+| `delivery` | `broadcast` / `targeted` / `silent` | `broadcast` | Core 执行的投递模式 |
 | `group_ids` | positive integer[] / `null` | `null` | 投递群；省略时使用 `default_group_ids` |
 | `description` | string / `null` | `null` | 任务说明 |
 | `enabled` | boolean | `true` | 任务启用状态 |
 
-Scheduler 在插件发布时校验 handler、cron、任务 ID 和投递目标。插件重载会替换该插件拥有的调度任务。
+Scheduler 在插件发布时校验 handler、cron、任务 ID、投递模式和目标。任务到期时，Core 按以下模式处理：
+
+- `broadcast`：把 handler 返回的消息段投递给该 schedule 的全部目标群；
+- `targeted`：接收 `ScheduledDelivery` 目标消息，校验群目标属于该 schedule 的群列表，并支持受控私聊目标；
+- `silent`：执行 handler 并保持零投递目标，忽略返回载荷，同时拒绝该调度上下文的主动发送。
+
+`broadcast` 与 `targeted` 使用条目中的 `group_ids`；字段省略或为 `null` 时使用全局 `default_group_ids`。`silent` 不声明 `group_ids`。插件重载会替换该插件拥有的调度任务。
 
 ---
 
@@ -377,7 +385,20 @@ async def scheduled_daily(context):
     return segments("早上好")
 ```
 
-调度 Context 使用 system principal 和声明的发送目标。返回消息段会由 Scheduler 投递到目标群。
+`broadcast` 调度 Context 使用 system principal 和声明的发送目标，返回消息段由 Scheduler 投递到全部目标群。各群内容需要独立生成时使用 `targeted`：
+
+```python
+from core.delivery import ScheduledDelivery
+
+
+async def scheduled_group_status(context):
+    return [
+        ScheduledDelivery.group(group_id, segments(f"群 {group_id} 状态正常"))
+        for group_id in context.default_groups()
+    ]
+```
+
+纯维护任务使用 `silent`，handler 完成数据清理、缓存刷新或资源回收后返回 `None`。
 
 ---
 
@@ -415,12 +436,14 @@ revision = settings.revision
 
 `settings.config` 包含安全共享字段与当前插件公开命名空间，`settings.secrets` 限定在当前插件命名空间，其中只保留敏感业务映射。`plugin_config()` 与 `plugin_secrets()` 直接取得业务映射。Core capability 承担管理员 secret、OneBot 媒体和配置订阅等特权操作。
 
-时间与默认投递目标来自同一配置代：
+时间与当前调用的有效投递目标来自同一 Core 上下文：
 
 ```python
 now = context.now()
 group_ids = context.default_groups()
 ```
+
+在 `broadcast` 与 `targeted` 定时任务中，`context.default_groups()` 返回该 schedule 经 Core 解析后的目标群；`silent` 定时任务返回空列表。命令与生命周期调用返回全局 `default_group_ids`。
 
 ### 日志与指标
 

@@ -56,6 +56,15 @@ def test_plugin_principal_validates_identity_and_group_authority() -> None:
         PluginPrincipal(kind="user", user_id=1, group_id=2, is_private=True)
     with pytest.raises(ValueError, match="must not carry user scope"):
         PluginPrincipal(kind="lifecycle", user_id=1)
+    scheduled = PluginPrincipal(kind="scheduled_system", schedule_delivery="silent")
+    assert scheduled.schedule_delivery == "silent"
+    with pytest.raises(ValueError, match="only scheduled principals"):
+        PluginPrincipal(kind="lifecycle", schedule_delivery="silent")
+    with pytest.raises(ValueError, match="delivery mode"):
+        PluginPrincipal(
+            kind="scheduled_system",
+            schedule_delivery="plugin",  # type: ignore[arg-type]
+        )
 
 
 # ============================================================

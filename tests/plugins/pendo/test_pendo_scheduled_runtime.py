@@ -459,34 +459,52 @@ class TestScheduledRegression:
         assert manifest.name == "pendo"
 
         expected = {
-            "pendo_reminders": ("scheduled", {"minute": "*"}),
-            "pendo_daily_briefing": ("scheduled_daily_briefing", {"minute": "*"}),
-            "pendo_diary_reminder": ("scheduled_diary_reminder", {"minute": "*"}),
-            "pendo_migrate_todos": ("scheduled_migrate_todos", {"hour": 0, "minute": 5}),
+            "pendo_reminders": ("scheduled", "targeted", {"minute": "*"}),
+            "pendo_daily_briefing": (
+                "scheduled_daily_briefing",
+                "targeted",
+                {"minute": "*"},
+            ),
+            "pendo_diary_reminder": (
+                "scheduled_diary_reminder",
+                "targeted",
+                {"minute": "*"},
+            ),
+            "pendo_migrate_todos": (
+                "scheduled_migrate_todos",
+                "targeted",
+                {"hour": 0, "minute": 5},
+            ),
             "pendo_prune_operation_logs": (
                 "scheduled_prune_operation_logs",
+                "silent",
                 {"hour": 0, "minute": 15},
             ),
             "pendo_weekly_finance_summary": (
                 "scheduled_weekly_finance_summary",
+                "targeted",
                 {"day_of_week": "sun", "hour": 21, "minute": 0},
             ),
             "pendo_month_end_finance_summary": (
                 "scheduled_month_end_finance_summary",
+                "targeted",
                 {"day": "last", "hour": 21, "minute": 0},
             ),
             "pendo_cleanup_demo_data": (
                 "scheduled_cleanup_demo_data",
+                "silent",
                 {"hour": "*/6", "minute": 15},
             ),
         }
         schedule = config.get("schedule", [])
         assert len(schedule) == len(expected)
-        assert {entry["id"]: (entry["handler"], entry["cron"]) for entry in schedule} == expected
+        assert {
+            entry["id"]: (entry["handler"], entry["delivery"], entry["cron"]) for entry in schedule
+        } == expected
 
         from plugins.pendo import main as pendo_main
 
-        assert all(hasattr(pendo_main, handler) for handler, _cron in expected.values())
+        assert all(hasattr(pendo_main, handler) for handler, _delivery, _cron in expected.values())
 
     def test_cleanup_expired_demo_data_runs_periodic_purge(self, monkeypatch):
         import sys
@@ -530,6 +548,6 @@ class TestScheduledRegression:
 
         result = asyncio.run(pendo_main.scheduled_cleanup_demo_data(context))
 
-        assert result == [{"type": "text", "data": {"text": "done"}}]
+        assert result is None
         assert calls[0][0:3] == ("run", context, "cleanup_demo_data")
         assert calls[1] == ("cleanup", context, database)

@@ -200,6 +200,7 @@ class TestPluginScheduleManifest:
         assert manifest.handler == "daily_job"
         assert manifest.cron == {"hour": "9", "minute": "0"}
         assert manifest.id == "daily_9am"
+        assert manifest.delivery == "broadcast"
         assert manifest.group_ids == [123, 456]
 
     def test_default_values(self):
@@ -209,8 +210,32 @@ class TestPluginScheduleManifest:
             cron={"hour": "*"},
         )
         assert manifest.id is None
+        assert manifest.delivery == "broadcast"
         assert manifest.group_ids is None
         assert manifest.enabled is True
+
+    def test_schedule_delivery_modes_and_silent_target_contract(self):
+        for delivery in ("broadcast", "targeted", "silent"):
+            manifest = PluginScheduleManifest(
+                handler="job",
+                cron={"hour": "*"},
+                delivery=delivery,
+            )
+            assert manifest.delivery == delivery
+
+        with pytest.raises(ValidationError, match="delivery"):
+            PluginScheduleManifest(
+                handler="job",
+                cron={"hour": "*"},
+                delivery="plugin",
+            )
+        with pytest.raises(ValidationError, match="silent schedules"):
+            PluginScheduleManifest(
+                handler="job",
+                cron={"hour": "*"},
+                delivery="silent",
+                group_ids=[],
+            )
 
     def test_schedule_rejects_unknown_fields(self):
         with pytest.raises(ValidationError):

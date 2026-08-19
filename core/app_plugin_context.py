@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import logging
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -29,6 +30,33 @@ from .interfaces import (
     PluginSettingsSnapshot,
 )
 from .plugin_execution import call_plugin_callback, invoke_loaded_plugin
+
+logger = logging.getLogger(__name__)
+
+
+def _scheduled_action_allowed(principal: PluginPrincipal, action: Mapping[str, Any]) -> bool:
+    """Enforce the schedule delivery mode before a plugin reaches OneBot."""
+
+    mode = principal.schedule_delivery or "broadcast"
+    if mode == "silent":
+        return False
+    action_name = action.get("action")
+    params = action.get("params")
+    if not isinstance(params, Mapping):
+        return False
+    if action_name == "send_group_msg":
+        group_id = params.get("group_id")
+        if type(group_id) is not int or group_id <= 0:
+            return False
+        return any(
+            target.kind == "group" and target.target_id == group_id
+            for target in principal.delivery_targets
+        )
+    if action_name == "send_private_msg":
+        user_id = params.get("user_id")
+        return mode == "targeted" and type(user_id) is int and user_id > 0
+    return False
+
 
 if TYPE_CHECKING:
     import asyncio
@@ -146,6 +174,17 @@ class AppPluginContextMixin:
                 raise PermissionError("plugin context identifiers do not match its principal")
 
         async def send_action(action: dict[str, Any]) -> bool | None:
+            if principal.kind == "scheduled_system" and not _scheduled_action_allowed(
+                principal, action
+            ):
+                logger.warning(
+                    "Scheduled plugin action rejected by Core delivery policy: "
+                    "plugin=%s mode=%s action=%s",
+                    plugin_name,
+                    principal.schedule_delivery or "broadcast",
+                    action.get("action") if isinstance(action, Mapping) else None,
+                )
+                return False
             return await self._send_action(
                 self._tag_action_source(action, plugin_name),
                 wait_ws_seconds=2.0,

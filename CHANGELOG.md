@@ -4,6 +4,16 @@
 
 ## 下一版本
 
+### Core 定时任务投递
+
+- Core 为每个 schedule 独立解析 `group_ids`：字段为列表时使用该列表，字段省略或为 `null` 时使用全局 `default_group_ids`，显式空列表表示该任务没有群投递目标。
+- Schedule Manifest 提供 `broadcast`、`targeted` 和 `silent` 三种投递模式，由 Core 统一解释、校验和执行；现有 26 个任务均显式声明模式。
+- `scheduled_system` 插件上下文通过 `context.default_groups()` 暴露同一解析结果；Core 拒绝静默任务主动发送，并将目标化群消息限制在该 schedule 的目标群内。
+- 新增 `ScheduledDelivery` 目标结果，QingPet 的状态提醒、展示会和周活动结算通过 Core 按群投递；每日重置与到期交易结算保持静默。
+- CHIME 清单继承全局默认群，使其逐目标可靠投递与同一 Core 解析结果保持一致。
+- 调度、上下文、目标化结果和 Earthquake 可靠投递回归覆盖 Manifest 目标、全局回退、显式空列表和静默发送拒绝。
+- 验证：`pytest -q -n 2` 全量通过（6103 passed、2 skipped），Ruff formatter、Ruff lint、367 个生产模块的 Mypy 检查和 `git diff --check` 均通过。
+
 ### Secrets 待确认热更新
 
 - 完整有效的 `secrets.json` 单文件外部变更进入待确认候选，当前已确认凭据、管理员视图和 OneBot 控制通道持续工作；候选在 `/reload` 前保持与插件和认证视图隔离。
@@ -35,7 +45,7 @@
 
 ### 发布验证
 
-- Windows 本地发布前全量测试通过：`6092 passed, 2 skipped`。
+- Windows 本地发布前全量测试通过：`6103 passed, 2 skipped`。
 - Ruff formatter、Ruff lint、Mypy 367 个生产模块、compileall 和 `git diff --check` 全部通过。
 
 ### 代码与文档质量

@@ -564,11 +564,11 @@ async def scheduled_migrate_todos(context) -> list[dict[str, Any]]:
     return result
 
 
-async def scheduled_prune_operation_logs(context) -> list[dict[str, Any]]:
+async def scheduled_prune_operation_logs(context) -> None:
     """Daily operation-log privacy retention task."""
     log = _get_logger(context)
     db = _get_database(context)
-    return await _run_scheduled_task(
+    await _run_scheduled_task(
         context, "prune_operation_logs", lambda: prune_operation_logs(context, db), log
     )
 
@@ -601,18 +601,17 @@ async def scheduled_month_end_finance_summary(context) -> list[dict[str, Any]]:
     return result
 
 
-async def scheduled_cleanup_demo_data(context) -> list[dict[str, Any]]:
+async def scheduled_cleanup_demo_data(context) -> None:
     """Pendo Web demo 数据清理定时任务。"""
     log = _get_logger(context)
     db = _get_database(context)
 
-    result = await _run_scheduled_task(
+    await _run_scheduled_task(
         context,
         "cleanup_demo_data",
         lambda: cleanup_expired_demo_data(context, db),
         log,
     )
-    return result
 
 
 async def _run_scheduled_task(

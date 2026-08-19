@@ -191,13 +191,15 @@ QingPet 是按 QQ 群隔离数据的宠物养成插件。群成员可以领养�
 
 ## ⏰ 定时任务
 
-| 任务 | 周期 | 职责 |
-| --- | --- | --- |
-| `qingpet_decay` | 每分钟 | 应用状态衰减并清理旧限频记录 |
-| `qingpet_pet_show_settlement` | 每分钟 | 原子结算到期展示会 |
-| `qingpet_trade_expiry` | 每 5 分钟 | 退还到期挂单中的托管道具 |
-| `qingpet_daily_reset` | 每天 00:00 | 重置每日计数并增加宠物年龄 |
-| `qingpet_weekly_activity` | 每周一 10:00 | 结算周排行奖励和“本周之星”称号 |
+| 任务 | 周期 | Core 投递 | 职责 |
+| --- | --- | --- | --- |
+| `qingpet_decay` | 每分钟 | `targeted` | 应用状态衰减，并把阈值提醒交给 Core 按群投递 |
+| `qingpet_pet_show_settlement` | 每分钟 | `targeted` | 原子结算到期展示会，并把结算结果交给 Core 按群投递 |
+| `qingpet_trade_expiry` | 每 5 分钟 | `silent` | 退还到期挂单中的托管道具 |
+| `qingpet_daily_reset` | 每天 00:00 | `silent` | 重置每日计数并增加宠物年龄 |
+| `qingpet_weekly_activity` | 每周一 10:00 | `targeted` | 结算周排行奖励和“本周之星”称号，并发布群结果 |
+
+目标化任务返回 `ScheduledDelivery`，Core 依据该 schedule 的 `group_ids` 或全局默认群校验每个群目标并执行发送。静默任务只更新业务状态。
 
 ---
 

@@ -16,6 +16,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, cast
 
+from core.delivery import ScheduledDelivery
 from core.models import PluginManifest
 from core.plugin_base import run_sync, segments
 from core.public_errors import public_error_message, public_error_response
@@ -845,7 +846,7 @@ def _handle_admin_command(
 # ──────────────────── 定时任务 ────────────────────
 
 
-async def scheduled_decay(context) -> list[dict[str, Any]]:
+async def scheduled_decay(context) -> list[ScheduledDelivery]:
     """
     定时衰减任务（每分钟执行）。
     复用初始化阶段的 PetService，确保定时任务与命令共享同一数据库状态。
@@ -857,8 +858,8 @@ async def scheduled_decay(context) -> list[dict[str, Any]]:
     db = _db_instance
     pet_service = _pet_service
 
-    def _run_job() -> list[dict[str, Any]]:
-        messages: list[dict[str, Any]] = []
+    def _run_job() -> list[ScheduledDelivery]:
+        messages: list[ScheduledDelivery] = []
         enabled_group_decay = db.get_enabled_group_decay_map()
         if not enabled_group_decay:
             db.cleanup_old_timestamps()
@@ -877,7 +878,7 @@ async def scheduled_decay(context) -> list[dict[str, Any]]:
                 is_trustee_override=(pet.user_id, pet.group_id) in trustee_keys,
             )
             if alert_msg:
-                messages.append({"group_id": pet.group_id, "message": alert_msg})
+                messages.append(ScheduledDelivery.group(pet.group_id, segments(alert_msg)))
 
         log.info("Decay applied to %s pets", len(pets))
         db.cleanup_old_timestamps()
@@ -895,11 +896,11 @@ async def scheduled_decay(context) -> list[dict[str, Any]]:
         return []
 
 
-async def scheduled_trade_expiry(context) -> list[dict[str, Any]]:
+async def scheduled_trade_expiry(context) -> None:
     """独立结算已到期交易托管；数据库 claim 使重复/并发执行保持幂等。"""
     log = _get_logger(context)
     if _db_instance is None:
-        return []
+        return
 
     try:
         settled = await asyncio.to_thread(_db_instance.settle_expired_trade_listings)
@@ -912,10 +913,10 @@ async def scheduled_trade_expiry(context) -> list[dict[str, Any]]:
             logger=log,
             component="qingpet.schedule.trade_expiry",
         )
-    return []
+    return
 
 
-async def scheduled_pet_show_settlement(context) -> list[dict[str, Any]]:
+async def scheduled_pet_show_settlement(context) -> list[ScheduledDelivery]:
     """在展示会截止后结算有效票；事务 claim 保证并发调度只奖励一次。"""
     log = _get_logger(context)
     if _db_instance is None or _social_service is None:
@@ -923,12 +924,12 @@ async def scheduled_pet_show_settlement(context) -> list[dict[str, Any]]:
     db = _db_instance
     social_service = _social_service
 
-    def _run_job() -> list[dict[str, Any]]:
-        messages: list[dict[str, Any]] = []
+    def _run_job() -> list[ScheduledDelivery]:
+        messages: list[ScheduledDelivery] = []
         for group_id in db.get_all_group_ids():
             result = social_service.settle_pet_show(group_id, force=False)
             if result:
-                messages.append({"group_id": group_id, "message": result})
+                messages.append(ScheduledDelivery.group(group_id, segments(result)))
         return messages
 
     try:
@@ -943,7 +944,7 @@ async def scheduled_pet_show_settlement(context) -> list[dict[str, Any]]:
         return []
 
 
-async def scheduled_daily_reset(context) -> list[dict[str, Any]]:
+async def scheduled_daily_reset(context) -> None:
     """
     每日重置（每天00:00）。
     按群原子重置每日状态、递增宠物年龄并登记调度完成状态。
@@ -951,7 +952,7 @@ async def scheduled_daily_reset(context) -> list[dict[str, Any]]:
     log = _get_logger(context)
 
     if _db_instance is None:
-        return []
+        return
     db = _db_instance
 
     def _run_job() -> None:
@@ -971,7 +972,6 @@ async def scheduled_daily_reset(context) -> list[dict[str, Any]]:
 
     try:
         await asyncio.to_thread(_run_job)
-        return []
     except Exception as exc:
         public_error_message(
             context,
@@ -979,10 +979,10 @@ async def scheduled_daily_reset(context) -> list[dict[str, Any]]:
             logger=log,
             component="qingpet.schedule.daily_reset",
         )
-        return []
+    return
 
 
-async def scheduled_weekly_activity(context) -> list[dict[str, Any]]:
+async def scheduled_weekly_activity(context) -> list[ScheduledDelivery]:
     """
     每周活动结算。
     数据库事务负责排行奖励和称号；展示会由独立调度任务结算。
@@ -993,8 +993,8 @@ async def scheduled_weekly_activity(context) -> list[dict[str, Any]]:
         return []
     db = _db_instance
 
-    def _run_job() -> list[dict[str, Any]]:
-        messages: list[dict[str, Any]] = []
+    def _run_job() -> list[ScheduledDelivery]:
+        messages: list[ScheduledDelivery] = []
         group_ids = db.get_enabled_group_ids(require_activity=True)
         period = business_week()
         settled_groups = 0
@@ -1019,7 +1019,7 @@ async def scheduled_weekly_activity(context) -> list[dict[str, Any]]:
                         line += " 🏅本周之星"
                     lines.append(line)
 
-                messages.append({"group_id": group_id, "message": "\n".join(lines)})
+                messages.append(ScheduledDelivery.group(group_id, segments("\n".join(lines))))
 
         log.info("Weekly activity settled groups=%s", settled_groups)
         return messages

@@ -15,7 +15,7 @@
 
 `yingshi`、`yingshijufeng` 和 `y` 指向同一签到流程。`帮助` 和 `?` 是 `help` 的别名。
 
-Manifest 每天 00:30 按调度器时区运行 `scheduled_yingshi`。插件并发模式为 `sequential`，同一组共享凭据按调用顺序访问远端服务。
+Manifest 每天 00:30 按调度器时区以 Core `broadcast` 模式运行 `scheduled_yingshi`。插件并发模式为 `sequential`，同一组共享凭据按调用顺序访问远端服务。
 
 ---
 

@@ -225,10 +225,11 @@ def test_trade_expiry_has_independent_scheduled_handler(monkeypatch):
 
     monkeypatch.setattr(qingpet_main, "_db_instance", FakeDatabase())
 
-    assert asyncio.run(qingpet_main.scheduled_trade_expiry(None)) == []
+    assert asyncio.run(qingpet_main.scheduled_trade_expiry(None)) is None
     assert calls == 1
     root = REPOSITORY_ROOT
     manifest = json.loads((root / "plugins/qingpet/plugin.json").read_text(encoding="utf-8"))
     jobs = {job["id"]: job for job in manifest["schedule"]}
     assert jobs["qingpet_trade_expiry"]["handler"] == "scheduled_trade_expiry"
+    assert jobs["qingpet_trade_expiry"]["delivery"] == "silent"
     assert jobs["qingpet_trade_expiry"]["cron"] == {"minute": "*/5"}
