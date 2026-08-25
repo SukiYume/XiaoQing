@@ -119,7 +119,7 @@ class TestPendoConfig:
         assert "━━ 🗓️ **日程管理 (Event)**" in help_text
         assert "先用 view 集合ID 查看节点ID，再编辑具体节点" in help_text
         assert "集合ID只编辑整体标题、分类、地点、备注，不修改某个节点时间" in help_text
-        assert "/pendo event edit 80efbef6_m03 改到4月22日12:43" in help_text
+        assert "/pendo event edit a1b2c3d4 改到4月22日12:43" in help_text
         assert "/pendo event edit 80efbef6 标题改为FAST会议行程" in help_text
         assert "多节点事件可直接写“节点名 + 改成/改到 + 新时间”" not in help_text
         assert "/pendo event reminders delete <id> <all|today|future|提醒时间>" in help_text
@@ -263,14 +263,14 @@ class TestPendoConfig:
             "/pendo ledger quick 35.5 午饭",
             "/pendo event add 3月8日下午两点，国自然截止，提前一周和一天提醒",
             "/pendo event add 每月18号上午十点，公积金提取，重复7个月",
-            "/pendo event edit 80efbef6_m03 改到4月22日12:43",
+            "/pendo event edit a1b2c3d4 改到4月22日12:43",
             "/pendo ledger list 2026-03 type:expense",
             "/pendo search 组会 type=event",
             "/pendo settings timezone Asia/Shanghai",
             '/pendo export "三月 账本" 2026-03 ledger',
             "/pendo import",
-            "/pendo event edit 80efbef6_m03 备注为从北京南坐G123去会场",
-            "/pendo event edit 80efbef6_m03 地点改到北京南",
+            "/pendo event edit a1b2c3d4 备注为从北京南坐G123去会场",
+            "/pendo event edit a1b2c3d4 地点改到北京南",
         ]
         for example in beginner_examples:
             assert example in help_text

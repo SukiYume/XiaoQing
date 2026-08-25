@@ -9,6 +9,7 @@ import pytest
 
 from plugins.pendo.models.item import get_item_type_value
 from plugins.pendo.services.db import Database
+from plugins.pendo.utils.identifiers import is_canonical_internal_id
 from plugins.pendo.utils.validators import normalize_item_fields
 from plugins.pendo.web.api import items as items_api
 from tests.helpers.assertions import assert_http_error as _assert_http_error
@@ -629,6 +630,8 @@ def test_create_dispatches_all_five_types_and_audits_atomically(db: Database) ->
         data = cast(dict[str, Any], response["data"])
         item = db.get_item(str(data["id"]), owner_id=owner_id)
         assert item is not None
+        assert is_canonical_internal_id(data["id"])
+        assert data["display_id"] == str(data["id"])[:8]
         created_types.append(get_item_type_value(item.type, default=""))
 
     audit_rows = (

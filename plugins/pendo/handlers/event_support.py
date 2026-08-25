@@ -8,6 +8,7 @@ from typing import Any, Final
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..utils.formatters import ItemFormatter, MessageBuilder
+from ..utils.identifiers import public_id
 from ..utils.time_utils import TimezoneHelper, parse_remind_times
 from ..utils.validators import (
     build_remind_times_from_rules,
@@ -172,6 +173,7 @@ def recalculate_event_reminders(event: Any, updates: dict[str, Any]) -> list[str
 def format_recurring_event_created(
     title: str, instance_count: int, remind_count: int, collection_id: str
 ) -> str:
+    display_id = public_id(collection_id)
     lines = [
         "✅ 已创建日程",
         "",
@@ -180,8 +182,8 @@ def format_recurring_event_created(
     ]
     if remind_count:
         lines.append(f"⏰ 每项已设置 {remind_count} 个提醒")
-    lines.append(f"\n`{collection_id}`")
-    lines.append(f"\n💡 用 /pendo event reminders {collection_id} 查看所有实例提醒")
+    lines.append(f"\n`{display_id}`")
+    lines.append(f"\n💡 用 /pendo event reminders {display_id} 查看所有实例提醒")
     return "\n".join(lines)
 
 
@@ -214,8 +216,9 @@ def format_milestone_event_created(event: dict[str, Any]) -> str:
     if remind_count:
         lines.append(f"🔔 已设置 {remind_count} 个提醒")
 
-    lines.append(f"\n`{event['id']}`")
-    lines.append(f"\n💡 用 /pendo event reminders {event['id']} 查看提醒")
+    display_id = public_id(event["id"])
+    lines.append(f"\n`{display_id}`")
+    lines.append(f"\n💡 用 /pendo event reminders {display_id} 查看提醒")
     return "\n".join(lines)
 
 
@@ -238,8 +241,9 @@ def format_event_created(event: dict[str, Any]) -> str:
         lines.append(f"📝 {event['notes']}")
     if remind_count:
         lines.append(f"🔔 已设置 {remind_count} 个提醒")
-    lines.append(f"\n`{event['id']}`")
-    lines.append(f"\n💡 用 /pendo event reminders {event['id']} 查看提醒")
+    display_id = public_id(event["id"])
+    lines.append(f"\n`{display_id}`")
+    lines.append(f"\n💡 用 /pendo event reminders {display_id} 查看提醒")
     return "\n".join(lines)
 
 

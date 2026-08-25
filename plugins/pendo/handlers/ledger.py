@@ -20,6 +20,7 @@ from ..models.item import ItemType, LedgerItem
 from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import handle_command_errors
 from ..utils.formatters import ItemFormatter, paginate
+from ..utils.identifiers import public_id
 from ..utils.session_utils import safe_create_session, safe_end_session
 from ..utils.time_utils import (
     TimezoneHelper,
@@ -632,7 +633,7 @@ class LedgerHandler(DbOpsMixin):
             f"📝 摘要：{normalized.get('title', '')}\n"
             f"{'🏷️ 商户：' + merchant + chr(10) if merchant else ''}"
             f"📅 日期：{normalized['ledger_date']}\n"
-            f"🔖 ID：`{item_id}`"
+            f"🔖 ID：`{public_id(item_id)}`"
         )
 
         return {"status": "success", "message": message, "item_id": item_id}
@@ -876,7 +877,8 @@ class LedgerHandler(DbOpsMixin):
             f"• {_transaction_type_icon(transaction_type)} "
             f"{_transaction_sign(transaction_type)}¥{_format_cents(item.amount_cents)}  "
             f"{_get_category_icon(item.ledger_category)}{item.ledger_category}{title_text}\n"
-            f"  📅 {item.ledger_date or ''} | 🏦 {account_text}{merchant_text} | ID `{item.id}`"
+            f"  📅 {item.ledger_date or ''} | 🏦 {account_text}{merchant_text} | "
+            f"ID `{item.display_id}`"
         )
 
     @staticmethod
@@ -1024,7 +1026,7 @@ class LedgerHandler(DbOpsMixin):
             f"🏦 账户：{account_text}\n"
             f"📝 描述：{item.title or '无'}\n"
             f"📅 日期：{item.ledger_date or '未知'}\n"
-            f"🔖 ID：`{item.id}`\n"
+            f"🔖 ID：`{item.display_id}`\n"
             f"⏰ 创建：{ItemFormatter.format_datetime(item.created_at, tz=display_timezone)}"
         )
 
@@ -1165,7 +1167,9 @@ class LedgerHandler(DbOpsMixin):
         changes = "\n".join(f"  • {label}" for label in field_labels)
         return {
             "status": "success",
-            "message": f"✅ 已更新账目 `{item_id}`\n\n{changes}\n\n💡 /pendo undo 可撤销编辑",
+            "message": (
+                f"✅ 已更新账目 `{item.display_id}`\n\n{changes}\n\n💡 /pendo undo 可撤销编辑"
+            ),
         }
 
     # 删除

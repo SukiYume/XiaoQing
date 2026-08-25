@@ -348,11 +348,12 @@ async def test_far_future_event_reminder_and_corrupt_time_are_handled_safely(
         db.cleanup()
 
 
-def test_event_id_detection_accepts_uppercase_uuid_forms() -> None:
+def test_event_id_detection_accepts_only_current_uuid_forms() -> None:
     handler = EventHandler(SimpleNamespace(), SimpleNamespace(), SimpleNamespace())
 
     assert handler._looks_like_id("ABCDEF12")
-    assert handler._looks_like_id("ABCDEF12ABCDEF12ABCDEF12ABCDEF12_M01")
+    assert handler._looks_like_id("ABCDEF12ABCDEF12ABCDEF12ABCDEF12")
+    assert not handler._looks_like_id("ABCDEF12ABCDEF12ABCDEF12ABCDEF12_M01")
 
 
 def test_event_time_edit_rejects_ai_hallucinated_title() -> None:
@@ -827,11 +828,19 @@ def test_web_data_helpers_normalize_public_shapes(caplog: pytest.LogCaptureFixtu
         "category": "工作",
         "location": "线上",
         "notes": "备注",
+        "display_id": "collection-1",
     }
 
     source = {"id": "item-1", 2: "numeric-key"}
-    assert item_to_dict(source) == {"id": "item-1", "2": "numeric-key"}
-    assert item_to_dict(SimpleNamespace(to_dict=lambda: {"id": "item-2"})) == {"id": "item-2"}
+    assert item_to_dict(source) == {
+        "id": "item-1",
+        "2": "numeric-key",
+        "display_id": "item-1",
+    }
+    assert item_to_dict(SimpleNamespace(to_dict=lambda: {"id": "item-2"})) == {
+        "id": "item-2",
+        "display_id": "item-2",
+    }
     assert item_to_dict(SimpleNamespace(to_dict="not-callable")) == {}
     assert item_to_dict(SimpleNamespace(to_dict=lambda: ["not", "a", "mapping"])) == {}
     assert [record.getMessage() for record in caplog.records] == [

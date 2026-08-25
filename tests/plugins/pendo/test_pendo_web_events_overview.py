@@ -67,6 +67,7 @@ def test_overview_and_detail_only_publish_fields_used_by_the_page(db: Database) 
     assert overview["events"] == [
         {
             "id": "minimal-event",
+            "display_id": "minimal-event",
             "title": "发布复盘",
             "category": "工作",
             "kind": "single",
@@ -79,6 +80,7 @@ def test_overview_and_detail_only_publish_fields_used_by_the_page(db: Database) 
     assert set(detail) == {"event", "related_instances"}
     assert set(detail["event"]) == {
         "id",
+        "display_id",
         "title",
         "category",
         "start_time",

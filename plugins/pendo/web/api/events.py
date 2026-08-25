@@ -1,6 +1,5 @@
 """提供日程概览、集合图增删改查和单个日程详情端点。"""
 
-import uuid
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
@@ -10,6 +9,7 @@ from pydantic import BaseModel, Field
 from ...config import PendoConfig
 from ...core.exceptions import ItemNotFoundException
 from ...services.db import Database
+from ...utils.identifiers import new_internal_id, public_id
 from ...utils.settings_utils import resolve_default_category
 from ...utils.time_utils import TimezoneHelper, now_in_timezone
 from ...utils.validators import (
@@ -181,7 +181,7 @@ def create_event_collection(
         rules = normalize_reminder_rules(
             body.reminder_rules if body.reminder_rules is not None else [{"offset_seconds": 0}]
         )
-        collection_id = uuid.uuid4().hex
+        collection_id = new_internal_id()
         local_now = now_in_timezone(owner_id, db)
         default_timezone = str(
             getattr(local_now.tzinfo, "key", None) or PendoConfig.DEFAULT_TIMEZONE
@@ -218,7 +218,7 @@ def create_event_collection(
                 },
                 partial=False,
             )
-            child_rows.append((f"{collection_id}_{node_key}", normalized))
+            child_rows.append((new_internal_id(), normalized))
 
         # 有偏移和无偏移时间统一映射到集合时区后比较，避免 ISO 字符串字典序误判。
         shared_fields = child_rows[0][1]
@@ -259,7 +259,12 @@ def create_event_collection(
 
     return {
         "ok": True,
-        "data": {"id": collection_id, "child_ids": child_ids},
+        "data": {
+            "id": collection_id,
+            "display_id": public_id(collection_id),
+            "child_ids": child_ids,
+            "child_display_ids": [public_id(child_id) for child_id in child_ids],
+        },
         "message": "创建成功",
     }
 
@@ -306,7 +311,7 @@ def update_collection(
             "user_id": owner_id,
             "action": "update_event_collection",
             "item_type": "event",
-            "item_id": collection_id,
+            "item_id": str(collection["id"]),
             "details": {"updates": audit_updates},
         }
 
@@ -344,7 +349,14 @@ def update_collection(
             else "Event collection changed; reload and retry"
         )
         raise HTTPException(status_code=status_code, detail=detail) from exc
-    return {"ok": True, "data": {"id": collection_id}, "message": "更新成功"}
+    return {
+        "ok": True,
+        "data": {
+            "id": str(collection["id"]),
+            "display_id": public_id(collection["id"]),
+        },
+        "message": "更新成功",
+    }
 
 
 @router.delete("/events/collections/{collection_id}")
@@ -355,22 +367,33 @@ def delete_collection(
 ) -> dict[str, object]:
     """在一个事务内软删除集合、叶子日程和提醒，并写入删除审计。"""
 
-    child_ids = [child.id for child in db.get_collection_events(collection_id, owner_id)]
+    collection = db.get_event_collection(collection_id, owner_id)
+    if collection is None:
+        raise HTTPException(status_code=404, detail="Event collection not found")
+    resolved_collection_id = str(collection["id"])
+    child_ids = [child.id for child in db.get_collection_events(resolved_collection_id, owner_id)]
     success = db.delete_event_collection(
-        collection_id,
+        resolved_collection_id,
         owner_id,
         cascade=True,
         operation_log={
             "user_id": owner_id,
             "action": "delete_event_collection",
             "item_type": "event",
-            "item_id": collection_id,
+            "item_id": resolved_collection_id,
             "details": {"child_ids": child_ids},
         },
     )
     if not success:
         raise HTTPException(status_code=404, detail="Event collection not found")
-    return {"ok": True, "data": {"id": collection_id}, "message": "已删除"}
+    return {
+        "ok": True,
+        "data": {
+            "id": resolved_collection_id,
+            "display_id": public_id(resolved_collection_id),
+        },
+        "message": "已删除",
+    }
 
 
 @router.get("/events/{event_id}/detail")

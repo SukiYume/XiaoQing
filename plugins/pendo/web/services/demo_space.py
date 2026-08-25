@@ -12,6 +12,7 @@ from typing import Any, Final
 
 from ...config import PendoConfig
 from ...services.db import Database
+from ...utils.identifiers import new_internal_id
 from ..auth import AuthError
 from .bundle_import import inspect_bundle_bytes
 
@@ -271,9 +272,7 @@ def _seed_demo_items(db: Database, owner_id: str, now: datetime) -> None:
 
     records = _load_demo_template_records()
     delta_days = (now.date() - _DEMO_TEMPLATE_ANCHOR).days
-    id_map = {
-        str(record["id"]): f"{owner_id}_{record['id']}" for record in records if record.get("id")
-    }
+    id_map = {str(record["id"]): new_internal_id() for record in records if record.get("id")}
     operations = [
         ("insert", _transform_demo_record(record, id_map, delta_days)) for record in records
     ]

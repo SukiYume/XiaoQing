@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from plugins.pendo.services.db import Database
+from plugins.pendo.utils.identifiers import is_canonical_internal_id
 from plugins.pendo.web.analytics.event_schedule import ensure_datetime
 from plugins.pendo.web.analytics.events_overview import build_event_detail, build_events_overview
 from tests.helpers.paths import REPOSITORY_ROOT
@@ -481,7 +482,11 @@ def test_events_collection_api_creates_updates_and_deletes_graph():
 
         collection_id = created["data"]["id"]
         child_ids = created["data"]["child_ids"]
-        assert child_ids == [f"{collection_id}_m01", f"{collection_id}_m02"]
+        assert is_canonical_internal_id(collection_id)
+        assert created["data"]["display_id"] == collection_id[:8]
+        assert len(set(child_ids)) == 2
+        assert all(is_canonical_internal_id(child_id) for child_id in child_ids)
+        assert created["data"]["child_display_ids"] == [child_id[:8] for child_id in child_ids]
         assert db.get_item(child_ids[0], owner_id).remind_times == [
             "2030-05-01T01:00:00+00:00",
             "2030-05-01T02:00:00+00:00",

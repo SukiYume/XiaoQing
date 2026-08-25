@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from ...models.item import get_item_type_value
 from ...services.db import Database
+from ...utils.identifiers import public_id
 from ...utils.settings_utils import resolve_default_category
 from ...utils.time_utils import now_in_timezone
 from ...utils.validators import (
@@ -280,16 +281,25 @@ def _resolve_note_reference_payload(
         payload["related_items"] = []
         return payload
 
-    targets = db.get_items_by_ids(owner_id, ids)
-    missing_ids = [ref_id for ref_id in ids if ref_id not in targets]
+    canonical_ids: list[str] = []
+    missing_ids: list[str] = []
+    seen_canonical: set[str] = set()
+    for ref_id in ids:
+        resolved_id = db.resolve_item_id(owner_id, ref_id)
+        if resolved_id is None:
+            missing_ids.append(ref_id)
+        elif resolved_id not in seen_canonical:
+            seen_canonical.add(resolved_id)
+            canonical_ids.append(resolved_id)
     if missing_ids:
         raise HTTPException(
             status_code=422,
             detail=f"Referenced item not found: {missing_ids[0]}",
         )
+    targets = db.get_items_by_ids(owner_id, canonical_ids)
 
     references: list[dict[str, str]] = []
-    for ref_id in ids:
+    for ref_id in canonical_ids:
         target = targets[ref_id]
         item_type = get_item_type_value(getattr(target, "type", None), default="item")
         references.append(
@@ -302,7 +312,7 @@ def _resolve_note_reference_payload(
         )
 
     payload["references"] = references
-    payload["related_items"] = ids
+    payload["related_items"] = canonical_ids
     return payload
 
 
@@ -861,7 +871,11 @@ def create_item(
         },
     )
 
-    return {"ok": True, "data": {"id": item_id}, "message": "创建成功"}
+    return {
+        "ok": True,
+        "data": {"id": item_id, "display_id": public_id(item_id)},
+        "message": "创建成功",
+    }
 
 
 @router.put("/items/{item_id}")
@@ -895,7 +909,7 @@ def update_item(
             status_code=422,
             detail=f"Fields are not valid for {item_type}: {', '.join(sorted(invalid_fields))}",
         )
-    current = item_to_dict(item)
+    current = {str(key): value for key, value in item.to_dict().items()}
     current_version = int(current.get("version") or 0)
     if body.version is not None and body.version != current_version:
         raise HTTPException(
@@ -919,7 +933,11 @@ def update_item(
     if not updates:
         return {
             "ok": True,
-            "data": {"id": item_id, "version": current_version},
+            "data": {
+                "id": str(item.id),
+                "display_id": item.display_id,
+                "version": current_version,
+            },
             "message": "无变化",
         }
 
@@ -940,7 +958,11 @@ def update_item(
 
     return {
         "ok": True,
-        "data": {"id": item_id, "version": current_version + 1},
+        "data": {
+            "id": str(item.id),
+            "display_id": item.display_id,
+            "version": current_version + 1,
+        },
         "message": "更新成功",
     }
 
@@ -977,4 +999,8 @@ def delete_item(
             detail="Item changed by another request; refresh and retry",
         )
 
-    return {"ok": True, "data": {"id": item_id}, "message": "已删除"}
+    return {
+        "ok": True,
+        "data": {"id": str(item.id), "display_id": item.display_id},
+        "message": "已删除",
+    }

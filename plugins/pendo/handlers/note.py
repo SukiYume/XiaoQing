@@ -22,6 +22,7 @@ from ..utils.formatters import (
     extract_tags,
     paginate,
 )
+from ..utils.identifiers import public_id
 from ..utils.settings_utils import resolve_default_category
 from ..utils.time_utils import (
     TimezoneHelper,
@@ -281,8 +282,9 @@ class NoteHandler(DbOpsMixin):
         message += f"📂 分类: {normalized['category']}\n"
         if tags_str:
             message += f"🏷️ 标签: {tags_str}\n"
-        message += f"`{item_id}`\n\n"
-        message += f"💡 用 /pendo note view {item_id} 查看详情"
+        display_id = public_id(item_id)
+        message += f"`{display_id}`\n\n"
+        message += f"💡 用 /pendo note view {display_id} 查看详情"
 
         return {"status": "success", "message": message, "item_id": item_id}
 
@@ -328,19 +330,22 @@ class NoteHandler(DbOpsMixin):
         seen: set[str] = set()
         for raw_id in ref_ids:
             ref_id = str(raw_id or "").strip()
-            if not ref_id or ref_id in seen:
+            if not ref_id:
                 continue
-            if source_note_id and ref_id == source_note_id:
-                raise ValueError("笔记不能关联自身")
-            seen.add(ref_id)
             target = await self._db_get_item(ref_id, user_id)
             if target is None:
                 raise ValueError(f"关联条目不存在: {ref_id}")
+            resolved_ref_id = str(target.id)
+            if source_note_id and resolved_ref_id == source_note_id:
+                raise ValueError("笔记不能关联自身")
+            if resolved_ref_id in seen:
+                continue
+            seen.add(resolved_ref_id)
             item_type = get_item_type_value(target.type, default="item")
             references.append(
                 {
                     "kind": "item",
-                    "id": ref_id,
+                    "id": resolved_ref_id,
                     "type": item_type,
                     "title": target.title or "无标题",
                 }
@@ -738,7 +743,7 @@ class NoteHandler(DbOpsMixin):
             metadata = f"📂 {note.category or '未分类'}"
             if tags:
                 metadata += f" | 🏷️ {tags}"
-            lines.extend((f"{index}. {title}", f"   {metadata}", f"   `{note.id or ''}`", ""))
+            lines.extend((f"{index}. {title}", f"   {metadata}", f"   `{note.display_id}`", ""))
         if has_more:
             lines.append(f"... (使用 'all' 显示全部或 'page:{filters.page + 1}' 查看下一页)")
         return "\n".join(lines).rstrip()
@@ -844,13 +849,13 @@ class NoteHandler(DbOpsMixin):
                 ref_id = ref.get("id", "")
                 ref_type = self._type_label(str(ref.get("type") or ""))
                 ref_title = ref.get("title") or "无标题"
-                message += f"• {ref_type}: {ref_title} `{ref_id}`\n"
+                message += f"• {ref_type}: {ref_title} `{public_id(ref_id)}`\n"
 
         backlinks = await self._find_note_backlinks(user_id, note_id)
         if backlinks:
             message += "\n↩️ **被这些笔记引用**\n"
             for backlink in backlinks:
-                message += f"• {backlink.title or '无标题'} `{backlink.id}`\n"
+                message += f"• {backlink.title or '无标题'} `{backlink.display_id}`\n"
 
         return {"status": "success", "message": message}
 
@@ -921,7 +926,7 @@ class NoteHandler(DbOpsMixin):
             return {"status": "error", "message": f"❌ {exc}"}
 
         try:
-            normalized_updates = await self._build_edit_updates(user_id, note_id, note, parsed)
+            normalized_updates = await self._build_edit_updates(user_id, str(note.id), note, parsed)
         except ValueError as exc:
             return {"status": "error", "message": f"❌ {exc}"}
         if normalized_updates is None:
@@ -938,7 +943,7 @@ class NoteHandler(DbOpsMixin):
         display_title = str(normalized_updates.get("title") or note.title or "无标题笔记")
         return {
             "status": "success",
-            "message": f"✅ 已更新笔记\n\n📝 {display_title}\n\n💡 /pendo note view {note_id} 查看详情 | /pendo undo 撤销编辑",
+            "message": f"✅ 已更新笔记\n\n📝 {display_title}\n\n💡 /pendo note view {note.display_id} 查看详情 | /pendo undo 撤销编辑",
         }
 
     async def append_note(self, user_id: str, args: str, context: PendoContext) -> CommandMessage:
@@ -976,7 +981,7 @@ class NoteHandler(DbOpsMixin):
         )
         return {
             "status": "success",
-            "message": f"✅ 已追加到笔记\n\n📝 {note.title or '无标题'}\n\n💡 /pendo note view {note_id} 查看详情 | /pendo undo 撤销",
+            "message": f"✅ 已追加到笔记\n\n📝 {note.title or '无标题'}\n\n💡 /pendo note view {note.display_id} 查看详情 | /pendo undo 撤销",
         }
 
     @staticmethod
@@ -1135,7 +1140,10 @@ class NoteHandler(DbOpsMixin):
         ref = new_refs[0]
         return {
             "status": "success",
-            "message": f"✅ 已关联 {self._type_label(str(ref.get('type') or ''))}: {ref.get('title') or '无标题'} `{target_id}`",
+            "message": (
+                f"✅ 已关联 {self._type_label(str(ref.get('type') or ''))}: "
+                f"{ref.get('title') or '无标题'} `{public_id(ref.get('id'))}`"
+            ),
         }
 
     async def delete_note(self, user_id: str, args: str, context: PendoContext) -> CommandMessage:
