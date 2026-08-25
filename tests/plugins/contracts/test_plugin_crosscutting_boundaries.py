@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import io
 import json
-import time
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -150,16 +150,24 @@ async def test_simbad_total_deadline_returns_without_global_lock(
     from astropy import units as _units  # noqa: F401
     from astropy.coordinates import SkyCoord as _SkyCoord  # noqa: F401
 
+    release_query = threading.Event()
+    query_finished = threading.Event()
+
     def slow_query(_name: str):
-        time.sleep(0.05)
+        release_query.wait(timeout=1.0)
+        query_finished.set()
         return None
 
     monkeypatch.setattr(astro_obj, "_query_simbad_object", slow_query)
     monkeypatch.setattr(astro_obj, "SIMBAD_TOTAL_TIMEOUT_SECONDS", 0.005)
-    started = time.monotonic()
-    result = await astro_obj.handle_obj("M31", MagicMock())
-    assert "超时" in result
-    assert time.monotonic() - started < 0.04
+    try:
+        result = await astro_obj.handle_obj("M31", MagicMock())
+        assert "超时" in result
+        assert not query_finished.is_set()
+    finally:
+        release_query.set()
+
+    assert query_finished.wait(timeout=1.0)
 
 
 def test_custom_colors_are_scoped_and_atomic(tmp_path: Path) -> None:

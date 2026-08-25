@@ -1,10 +1,11 @@
 """数据库读写共享的条目数据模型。"""
 
-import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
+
+from ..utils.identifiers import new_internal_id, public_id
 
 
 class ItemType(Enum):
@@ -30,7 +31,7 @@ class Item:
     """统一的条目基类"""
 
     # 通用字段
-    id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    id: str = field(default_factory=new_internal_id)
     type: ItemType = ItemType.NOTE
     title: str = ""
     content: str = ""
@@ -50,6 +51,12 @@ class Item:
     deleted: bool = False  # 软删除标记
     deleted_at: str | None = None  # 软删除时间戳
     version: int = 0  # optimistic-concurrency revision
+
+    @property
+    def display_id(self) -> str:
+        """返回可安全用于聊天展示和命令输入的短标识。"""
+
+        return public_id(self.id)
 
     def to_dict(self) -> dict[str, Any]:
         """转换为字典"""

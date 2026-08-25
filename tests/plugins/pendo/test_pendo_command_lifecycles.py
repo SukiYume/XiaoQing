@@ -15,6 +15,7 @@ from plugins.pendo.handlers.ledger import LedgerHandler
 from plugins.pendo.handlers.note import NoteHandler
 from plugins.pendo.handlers.task import TaskHandler
 from plugins.pendo.models.item import TaskStatus
+from plugins.pendo.utils.identifiers import is_canonical_internal_id
 
 
 class _EventParser:
@@ -87,7 +88,8 @@ async def test_todo_same_id_covers_all_fields_statuses_invalid_input_and_delete(
 
     viewed = await handler.handle(owner, f"view {task_id}", {})
     assert viewed["status"] == "success"
-    assert task_id in viewed["message"]
+    assert task_id[:8] in viewed["message"]
+    assert task_id not in viewed["message"]
     assert "初始待办" in viewed["message"]
 
     before_invalid = _snapshot(task)
@@ -249,7 +251,8 @@ async def test_diary_same_id_covers_all_command_fields_and_rejects_invalid_boole
         assert "完整日记" in viewed["message"]
     listed = await handler.handle(owner, "list 2035-03 mood:happy #工作", {})
     assert listed["status"] == "success"
-    assert diary_id in listed["message"]
+    assert diary_id[:8] in listed["message"]
+    assert diary_id not in listed["message"]
 
     deleted = await handler.handle(owner, f"delete {diary_id}", {})
     assert deleted["status"] == "success"
@@ -325,7 +328,8 @@ async def test_ledger_same_id_covers_every_edit_field_and_all_transaction_types(
     assert "99.99" in viewed["message"]
     listed = await handler.handle(owner, "list 2035-04 type:income account:银行卡", {})
     assert listed["status"] == "success"
-    assert ledger_id in listed["message"]
+    assert ledger_id[:8] in listed["message"]
+    assert ledger_id not in listed["message"]
     summary = await handler.handle(owner, "summary 2035-04", {})
     assert summary["status"] == "success"
 
@@ -505,7 +509,9 @@ async def test_event_collection_types_cover_collection_and_child_crud(
 
     children = db.get_collection_events(collection_id, owner)
     child_ids = tuple(child.id for child in children)
-    assert child_ids == tuple(f"{collection_id}_{suffix}" for suffix in child_suffixes)
+    assert len(set(child_ids)) == 3
+    assert all(is_canonical_internal_id(child_id) for child_id in child_ids)
+    assert [child.event_node_key for child in children] == list(child_suffixes)
     assert len(children) == 3
     assert [child.event_index for child in children] == [1, 2, 3]
     assert all(child.event_collection_id == collection_id for child in children)
@@ -524,7 +530,8 @@ async def test_event_collection_types_cover_collection_and_child_crud(
     collection_view = await handler.view_event(owner, collection_id, {})
     child_view = await handler.view_event(owner, child_ids[1], {})
     assert collection_view["status"] == child_view["status"] == "success"
-    assert collection_id in child_view["message"]
+    assert collection_id[:8] in child_view["message"]
+    assert collection_id not in child_view["message"]
     for expected in (
         payload["content"],
         f"分类: {payload['category']}",

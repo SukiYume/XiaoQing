@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..config import PendoConfig
+from ..core.exceptions import AmbiguousIdentifierException, PendoException
 from ..services.db import Database
 from .api import create_api_router
 from .deps import set_db
@@ -86,6 +87,18 @@ def create_app(db: Database) -> FastAPI:
                 "message": "请求参数校验失败",
                 "error_code": "validation_error",
                 "errors": errors,
+            },
+        )
+
+    @app.exception_handler(PendoException)
+    async def pendo_exception_handler(request, exc):
+        status_code = 409 if isinstance(exc, AmbiguousIdentifierException) else 400
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "ok": False,
+                "message": exc.get_user_message(),
+                "error_code": exc.error_code,
             },
         )
 

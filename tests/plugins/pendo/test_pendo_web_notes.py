@@ -65,6 +65,7 @@ def test_build_notes_overview_tracks_categories_tags_and_creation_cadence(
     assert len(result["cadence"]) == 14
     assert result["recent_notes"][0] == {
         "id": "n2",
+        "display_id": "n2",
         "title": "阅读摘录",
         "content": "第二条笔记更长一些",
         "category": "学习",

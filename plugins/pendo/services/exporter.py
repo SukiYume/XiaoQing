@@ -17,6 +17,7 @@ from typing import Any, ClassVar, Protocol
 
 from ..models.item import get_item_type_value
 from ..utils.error_handlers import error_result, success_result
+from ..utils.identifiers import public_id
 from ..utils.time_utils import parse_search_date_range
 
 logger = logging.getLogger(__name__)
@@ -776,7 +777,7 @@ class ExporterService:
             ref_type = str(ref.get("type") or ref.get("kind") or "item").strip()
             label = labels.get(ref_type, labels.get(str(ref.get("kind") or ""), "条目"))
             title = self._value_or_dash(ref.get("title"))
-            lines.append(f"- {label}: {title} (`{ref_id}`)")
+            lines.append(f"- {label}: {title} (`{public_id(ref_id)}`)")
         return lines
 
     def _format_template_answers(self, answers: Any) -> list[str]:

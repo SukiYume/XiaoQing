@@ -1,7 +1,6 @@
 """日程命令处理器，负责创建、查看、编辑、删除和提醒管理。"""
 
 import re
-import uuid
 from datetime import datetime
 from itertools import islice
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast
@@ -20,6 +19,7 @@ from ..utils.formatters import (
     MessageBuilder,
     is_tag_token,
 )
+from ..utils.identifiers import new_internal_id, public_id
 from ..utils.session_utils import safe_create_session
 from ..utils.settings_utils import resolve_default_category
 from ..utils.time_utils import (
@@ -452,7 +452,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
                 if conflict:
                     return conflict
 
-        collection_id = uuid.uuid4().hex
+        collection_id = new_internal_id()
         collection_payload = {
             "id": collection_id,
             "owner_id": user_id,
@@ -502,7 +502,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
                 updated_at=created_at,
             )
 
-            instance_id = f"{collection_id}_{instance_dt.strftime('%Y%m%d')}"
+            instance_id = new_internal_id()
             instance_item.id = instance_id
             children.append((instance_id, instance_item))
         await run_sync(
@@ -572,7 +572,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         if not reminder_rules:
             reminder_rules = ensure_event_reminder_rules(parsed_data, remind_times)
 
-        collection_id = uuid.uuid4().hex
+        collection_id = new_internal_id()
         collection_payload = {
             "id": collection_id,
             "owner_id": user_id,
@@ -619,7 +619,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
                 created_at=created_at,
                 updated_at=created_at,
             )
-            node_id = f"{collection_id}_{node_key}"
+            node_id = new_internal_id()
             node.id = node_id
             children.append((node_id, node))
 
@@ -736,7 +736,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         text = f"• {time_str} {event.title or '无标题'}"
         if event.location:
             text += f" @ {ItemFormatter.truncate_content(event.location, 15)}"
-        text += f" `{event.id}`\n"
+        text += f" `{event.display_id}`\n"
         return date_str, text
 
     @staticmethod
@@ -759,7 +759,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         text = f"• {time_str} {collection_title} · {event.title or '无标题'} {marker}"
         if event.location:
             text += f" @ {ItemFormatter.truncate_content(event.location, 15)}"
-        text += f" `{event.id}`\n"
+        text += f" `{event.display_id}`\n"
         return date_str, text
 
     @staticmethod
@@ -1048,7 +1048,10 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
 
         return {
             "status": "success",
-            "message": f"✅ 已更新日程: {updates.get('title', title)}\n\n💡 /pendo event reminders {instance_id} 查看提醒 | /pendo undo 撤销编辑",
+            "message": (
+                f"✅ 已更新日程: {updates.get('title', title)}\n\n"
+                f"💡 /pendo event reminders {event.display_id} 查看提醒 | /pendo undo 撤销编辑"
+            ),
         }
 
     # ==================== 删除日程 ====================
@@ -1134,9 +1137,10 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         # 顶层命令误放到 reminders 下（如 /pendo event reminders snooze xxx）
         if parts and parts[0].lower() == "snooze":
             item_id = parts[1].split()[0] if len(parts) > 1 else "<id>"
+            display_id = public_id(item_id)
             return {
                 "status": "error",
-                "message": f"❌ 正确用法:\n\n/pendo snooze {item_id} <时间>",
+                "message": f"❌ 正确用法:\n\n/pendo snooze {display_id} <时间>",
             }
         return await self.list_reminders(user_id, args, context)
 
@@ -1215,11 +1219,12 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
                     expected_version=event_versions[event_id],
                 )
 
+        display_target_id = public_id(collection_id) if collection_id else events[0].display_id
         return {
             "status": "success",
             "message": (
                 f"🗑️ 已删除 {deleted_count} 个提醒\n"
-                f"💡 用 /pendo event reminders {query_id} 查看当前提醒"
+                f"💡 用 /pendo event reminders {display_target_id} 查看当前提醒"
             ),
         }
 
@@ -1239,7 +1244,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
 
         query_id = parts[0].strip()
         selector = parts[1].strip() if len(parts) > 1 else "future"
-        events, _collection_id, error = await self._resolve_events_for_reminder_command(
+        events, collection_id, error = await self._resolve_events_for_reminder_command(
             user_id, query_id
         )
         if error:
@@ -1280,12 +1285,13 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
 
         subject = events[0].title or "无标题"
         scope = "系列" if len(events) > 1 else "日程"
+        display_target_id = public_id(collection_id) if collection_id else events[0].display_id
         return {
             "status": "success",
             "message": (
                 f"✅ 已确认 {confirmed_count} 个提醒\n"
                 f"🗓️ {scope}: {subject}\n"
-                f"💡 用 /pendo event reminders {query_id} 查看当前状态"
+                f"💡 用 /pendo event reminders {display_target_id} 查看当前状态"
             ),
         }
 
@@ -1440,7 +1446,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             lines.append(
                 f"  ⏰ {ItemFormatter.format_datetime(t, '%m月%d日 %H:%M', tz=display_timezone)}"
             )
-        lines.append(f"\n💡 用 /pendo event reminders {event_id} 查看详情")
+        lines.append(f"\n💡 用 /pendo event reminders {event.display_id} 查看详情")
         return {"status": "success", "message": "\n".join(lines)}
 
     async def _set_collection_reminders(
@@ -1576,7 +1582,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
                 collection = collection_map.get(cast(str, event.event_collection_id))
                 if collection:
                     display_title = f"{collection.get('title') or '无标题'} · {display_title}"
-            message += f"\n🗓️ {time_str} {display_title} `{event.id}`\n"
+            message += f"\n🗓️ {time_str} {display_title} `{event.display_id}`\n"
             for t in remind_times:
                 t_str = ItemFormatter.format_datetime(t, "%m-%d %H:%M", tz=display_timezone)
                 status = get_remind_status(log_map.get(t))
@@ -1698,7 +1704,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
                     )
                     status = get_remind_status(log_map.get(remind_time))
                     builder.add_line(f"     ⏰ {formatted_time} {status}")
-            builder.add_line(f"     🆔 `{child.id}`")
+            builder.add_line(f"     🆔 `{child.display_id}`")
         return {"status": "success", "message": builder.build()}
 
     # ==================== 辅助方法 ====================
@@ -1743,18 +1749,10 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         return start_dt <= event_start <= end_dt
 
     def _looks_like_id(self, text: str) -> bool:
-        """判断是否像ID（collection id、recurring occurrence id 或 node id）"""
+        """判断是否像完整 UUID 或 8 位用户标识。"""
         if not text:
             return False
-        # 新集合使用完整 UUID 十六进制字符串；同时兼容历史 8 位 ID。
-        collection_id_pattern = r"[0-9a-f]{8}(?:[0-9a-f]{24})?"
-        if "_" in text:
-            parts = text.rsplit("_", 1)
-            return (
-                re.fullmatch(collection_id_pattern, parts[0], re.IGNORECASE) is not None
-                and re.fullmatch(r"(?:\d{8}|m\d{2,})", parts[1], re.IGNORECASE) is not None
-            )
-        return re.fullmatch(collection_id_pattern, text, re.IGNORECASE) is not None
+        return re.fullmatch(r"(?:[0-9a-f]{8}|[0-9a-f]{32})", text, re.IGNORECASE) is not None
 
     async def _resolve_single_event_id_or_message(
         self, user_id: str, event_id: str
@@ -1766,4 +1764,4 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             return None, None, {"status": "error", "message": f"❌ 找不到日程 {event_id}"}
         if not isinstance(item, EventItem):
             return None, None, self._build_wrong_type_message(event_id, "日程", item)
-        return event_id, item, None
+        return str(item.id), item, None

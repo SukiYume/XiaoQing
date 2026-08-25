@@ -6,7 +6,6 @@ import io
 import json
 import logging
 import sqlite3
-import uuid
 from contextlib import AbstractAsyncContextManager
 from datetime import date, datetime, timedelta
 from typing import Annotated, Any, Final, Literal, cast
@@ -20,6 +19,7 @@ from starlette.concurrency import run_in_threadpool
 from core.async_keyed_lock import AsyncKeyedLockPool
 
 from ...services.db import Database, DuplicateBundleImportError
+from ...utils.identifiers import new_internal_id
 from ...utils.validators import get_item_normalizer
 from ..deps import get_current_user, get_db
 from ..services.bundle_import import inspect_bundle_bytes
@@ -517,7 +517,7 @@ def _get_item_identity(db: Database, item_id: str | None) -> dict[str, Any] | No
 
 def _new_import_item_id(db: Database) -> str:
     while True:
-        candidate = uuid.uuid4().hex
+        candidate = new_internal_id()
         if _get_item_identity(db, candidate) is None:
             return candidate
 
@@ -649,7 +649,7 @@ def _new_import_collection_id(db: Database) -> str:
     """生成未被全局集合主键占用的内部 ID。"""
 
     while True:
-        candidate = uuid.uuid4().hex[:16]
+        candidate = new_internal_id()
         if _get_event_collection_identity(db, candidate) is None:
             return candidate
 

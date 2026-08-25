@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, cast
 from ..config import PendoConfig
 from ..models.item import get_item_type_value
 from ..utils.formatters import ItemFormatter
+from ..utils.identifiers import public_id
 from ..utils.settings_utils import parse_custom_settings
 from ..utils.time_utils import (
     TimezoneHelper,
@@ -465,8 +466,9 @@ class ReminderService:
         if repeat_count is None and is_recurring:
             lines.append("🔄 重复日程")
 
-        lines.append(f"\n/pendo confirm {item.id}")
-        lines.append(f"/pendo snooze {item.id} 10m")
+        display_id = public_id(getattr(item, "id", ""))
+        lines.append(f"\n/pendo confirm {display_id}")
+        lines.append(f"/pendo snooze {display_id} 10m")
 
         return "\n".join(lines)
 

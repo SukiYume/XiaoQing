@@ -7,6 +7,7 @@ from plugins.pendo.handlers.event import EventHandler
 from plugins.pendo.models.item import EventItem
 from plugins.pendo.services.db import Database
 from plugins.pendo.services.reminder import ReminderService
+from plugins.pendo.utils.identifiers import is_canonical_internal_id
 from plugins.pendo.utils.validators import (
     build_remind_times_from_rules,
     derive_reminder_rules,
@@ -326,10 +327,10 @@ def test_create_multi_node_event_writes_collection_and_leaf_events(tmp_path: Pat
         assert collection["end_time"] == "2030-04-03T01:00:00+00:00"
 
         children = db.get_collection_events(collection_id, "u1")
-        assert [child.id for child in children] == [
-            f"{collection_id}_m01",
-            f"{collection_id}_m02",
-        ]
+        assert len({child.id for child in children}) == 2
+        assert all(is_canonical_internal_id(child.id) for child in children)
+        assert collection_id not in {child.id for child in children}
+        assert [child.event_node_key for child in children] == ["m01", "m02"]
         assert [child.title for child in children] == ["注册截止", "会议开始"]
         assert children[0].event_role == "multi_node_child"
         assert children[0].event_collection_id == collection_id
@@ -415,6 +416,9 @@ def test_create_recurring_event_writes_collection_and_occurrence_leaves(tmp_path
         assert collection["rrule"] == "FREQ=DAILY;COUNT=2"
 
         children = db.get_collection_events(collection_id, "u1")
+        assert len({child.id for child in children}) == 2
+        assert all(is_canonical_internal_id(child.id) for child in children)
+        assert [child.event_node_key for child in children] == ["20300101", "20300102"]
         assert [child.event_role for child in children] == [
             "recurring_occurrence",
             "recurring_occurrence",
@@ -462,28 +466,32 @@ def test_cli_view_edit_delete_and_reminders_support_event_graph(tmp_path: Path):
             )
         )
         collection_id = create["item_id"]
-        first_id = f"{collection_id}_m01"
-        second_id = f"{collection_id}_m02"
+        children = db.get_collection_events(collection_id, "u1")
+        first_id, second_id = (child.id for child in children)
+        first_display_id, second_display_id = (child.display_id for child in children)
 
-        leaf_view = asyncio.run(handler.view_event("u1", first_id, {}))
+        leaf_view = asyncio.run(handler.view_event("u1", first_display_id, {}))
         assert leaf_view["status"] == "success"
         assert "所属: 项目发布" in leaf_view["message"]
         assert "提审" in leaf_view["message"]
-        assert second_id in leaf_view["message"]
+        assert second_display_id in leaf_view["message"]
+        assert second_id not in leaf_view["message"]
 
-        collection_view = asyncio.run(handler.view_event("u1", collection_id, {}))
+        collection_view = asyncio.run(handler.view_event("u1", collection_id[:8], {}))
         assert collection_view["status"] == "success"
         assert "项目发布" in collection_view["message"]
-        assert first_id in collection_view["message"]
-        assert second_id in collection_view["message"]
+        assert first_display_id in collection_view["message"]
+        assert second_display_id in collection_view["message"]
 
-        reminders = asyncio.run(handler.list_reminders("u1", collection_id, {}))
+        reminders = asyncio.run(handler.list_reminders("u1", collection_id[:8], {}))
         assert reminders["status"] == "success"
         assert "项目发布" in reminders["message"]
-        assert first_id in reminders["message"]
-        assert second_id in reminders["message"]
+        assert first_display_id in reminders["message"]
+        assert second_display_id in reminders["message"]
 
-        set_result = asyncio.run(handler.set_reminders("u1", f"{collection_id} 提前1小时提醒", {}))
+        set_result = asyncio.run(
+            handler.set_reminders("u1", f"{collection_id[:8]} 提前1小时提醒", {})
+        )
         assert set_result["status"] == "success"
         assert db.get_item(first_id, "u1").remind_times == [
             "2030-05-01T01:00:00+00:00",
@@ -494,18 +502,18 @@ def test_cli_view_edit_delete_and_reminders_support_event_graph(tmp_path: Path):
             return {"title": "提审截止"}
 
         handler._parse_updates = fake_parse_updates
-        edit_leaf = asyncio.run(handler.edit_event("u1", f"{first_id} 改名", {}))
+        edit_leaf = asyncio.run(handler.edit_event("u1", f"{first_display_id} 改名", {}))
         assert edit_leaf["status"] == "success"
         assert db.get_item(first_id, "u1").title == "提审截止"
         assert db.get_item(second_id, "u1").title == "上线"
 
-        delete_leaf = asyncio.run(handler.delete_event("u1", first_id, {}))
+        delete_leaf = asyncio.run(handler.delete_event("u1", first_display_id, {}))
         assert delete_leaf["status"] == "success"
         assert db.get_item(first_id, "u1") is None
         assert db.get_item(second_id, "u1") is not None
         assert db.get_event_collection(collection_id, "u1") is not None
 
-        delete_collection = asyncio.run(handler.delete_event("u1", collection_id, {}))
+        delete_collection = asyncio.run(handler.delete_event("u1", collection_id[:8], {}))
         assert delete_collection["status"] == "success"
         assert db.get_item(second_id, "u1") is None
         assert db.get_event_collection(collection_id, "u1") is None

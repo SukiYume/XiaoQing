@@ -19,6 +19,7 @@ from ..models.item import ItemType, TaskItem, TaskStatus
 from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import handle_command_errors
 from ..utils.formatters import UNSAFE_CONTROL_RE, ItemFormatter, paginate, single_line_text
+from ..utils.identifiers import public_id
 from ..utils.session_utils import safe_create_session, safe_end_session
 from ..utils.time_utils import (
     TimezoneHelper,
@@ -519,7 +520,8 @@ class TaskHandler(DbOpsMixin):
             lines.append(f"⚡ 优先级: {ItemFormatter.format_priority(priority)}")
         if tags:
             lines.append(f"🏷️ 标签: {ItemFormatter.format_tags(tags)}")
-        lines.extend((f"`{item_id}`", "", f"💡 用 /pendo todo done {item_id} 完成"))
+        display_id = public_id(item_id)
+        lines.extend((f"`{display_id}`", "", f"💡 用 /pendo todo done {display_id} 完成"))
         return {"status": "success", "message": "\n".join(lines), "item_id": item_id}
 
     async def _step_task_title(
@@ -1007,7 +1009,7 @@ class TaskHandler(DbOpsMixin):
                 )
                 schedule += f"  ⏰ {deadline}"
             lines.append(f"{indent}   {schedule}")
-        lines.append(f"{indent}   `{task.id or ''}`")
+        lines.append(f"{indent}   `{public_id(getattr(task, 'id', ''))}`")
         return lines
 
     def _format_flat_task_list(
@@ -1124,11 +1126,12 @@ class TaskHandler(DbOpsMixin):
         lines.append("")
         if task.content:
             lines.extend((task.content, ""))
+        display_id = public_id(getattr(task, "id", ""))
         lines.extend(
             (
-                f"`{task_id}`",
-                f"💡 /pendo todo done {task_id} | /pendo todo cancel {task_id} | "
-                f"/pendo todo edit {task_id} <内容>",
+                f"`{display_id}`",
+                f"💡 /pendo todo done {display_id} | /pendo todo cancel {display_id} | "
+                f"/pendo todo edit {display_id} <内容>",
             )
         )
         return "\n".join(lines)
@@ -1238,7 +1241,7 @@ class TaskHandler(DbOpsMixin):
         assert task is not None
         return {
             "status": "success",
-            "message": f"🚫 已取消: {single_line_text(task.title) or '无标题'}\n\n💡 用 /pendo todo undone {task_id} 可重新打开",
+            "message": f"🚫 已取消: {single_line_text(task.title) or '无标题'}\n\n💡 用 /pendo todo undone {public_id(task.id)} 可重新打开",
         }
 
     async def mark_undone(
@@ -1253,7 +1256,11 @@ class TaskHandler(DbOpsMixin):
         assert task is not None
         return {
             "status": "success",
-            "message": f"↩️ 已重新打开: {single_line_text(task.title) or '无标题'}\n\n💡 用 /pendo todo done {task_id} 完成 | /pendo todo cancel {task_id} 取消",
+            "message": (
+                f"↩️ 已重新打开: {single_line_text(task.title) or '无标题'}\n\n"
+                f"💡 用 /pendo todo done {public_id(task.id)} 完成 | "
+                f"/pendo todo cancel {public_id(task.id)} 取消"
+            ),
         }
 
     async def delete_task(self, user_id: str, args: str, context: PendoContext) -> CommandMessage:
@@ -1391,7 +1398,11 @@ class TaskHandler(DbOpsMixin):
         display_title = single_line_text(updates.get("title") or task.title) or "无标题待办"
         return {
             "status": "success",
-            "message": f"✅ 已更新待办: {display_title}\n\n💡 /pendo todo done {task_id} 完成 | /pendo todo cancel {task_id} 取消 | /pendo undo 撤销编辑",
+            "message": (
+                f"✅ 已更新待办: {display_title}\n\n"
+                f"💡 /pendo todo done {public_id(task.id)} 完成 | "
+                f"/pendo todo cancel {public_id(task.id)} 取消 | /pendo undo 撤销编辑"
+            ),
         }
 
     @staticmethod

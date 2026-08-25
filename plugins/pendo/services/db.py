@@ -6,7 +6,6 @@ import re
 import sqlite3
 import threading
 import time
-import uuid
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
@@ -16,7 +15,7 @@ from typing import Any, ClassVar, cast
 from zoneinfo import ZoneInfo
 
 from ..config import PendoConfig
-from ..core.exceptions import ItemNotFoundException
+from ..core.exceptions import AmbiguousIdentifierException, ItemNotFoundException
 from ..models.item import (
     ITEM_TYPE_CLASS_MAP,
     EventItem,
@@ -25,6 +24,7 @@ from ..models.item import (
     TaskItem,
     TaskStatus,
 )
+from ..utils.identifiers import is_public_id_reference, new_internal_id, public_id_matches
 from ..utils.settings_utils import normalize_settings_json
 from ..utils.time_utils import (
     TimezoneHelper,
@@ -379,7 +379,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         if custom_id:
             item_dict["id"] = custom_id
         elif "id" not in item_dict:
-            item_dict["id"] = uuid.uuid4().hex
+            item_dict["id"] = new_internal_id()
 
         item_dict.setdefault("created_at", utc_now_iso())
         item_dict.setdefault("updated_at", utc_now_iso())
@@ -432,6 +432,11 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         touch: bool = True,
     ) -> bool:
         """更新条目，支持 dict 或 Item dataclass 实例。"""
+        if owner_id:
+            resolved_id = self.resolve_item_id(owner_id, item_id)
+            if resolved_id is None:
+                return False
+            item_id = resolved_id
         conn = self.get_connection()
         cursor = conn.cursor()
 
@@ -749,7 +754,6 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 collection = self._prepare_new_event_collection(
                     collection,
                     now=now,
-                    id_length=16,
                 )
                 collection = normalize_event_collection_datetimes_for_storage(
                     collection,
@@ -899,13 +903,11 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         payload: dict[str, Any],
         *,
         now: str,
-        id_length: int | None = None,
     ) -> dict[str, Any]:
         """补齐新集合的存储默认值，并统一校验身份和必填字段。"""
         collection = dict(payload)
         if not collection.get("id"):
-            generated_id = uuid.uuid4().hex
-            collection["id"] = generated_id[:id_length] if id_length else generated_id
+            collection["id"] = new_internal_id()
         collection.setdefault("content", "")
         collection.setdefault("category", PendoConfig.DEFAULT_CATEGORY)
         collection.setdefault("location", "")
@@ -1012,7 +1014,12 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
     def get_event_collection(
         self, collection_id: str, owner_id: str | None = None
     ) -> dict[str, Any] | None:
-        cache_key = self._cache_key("event_collection", collection_id, owner_id or "*")
+        resolved_id = (
+            self.resolve_event_collection_id(owner_id, collection_id) if owner_id else collection_id
+        )
+        if resolved_id is None:
+            return None
+        cache_key = self._cache_key("event_collection", resolved_id, owner_id or "*")
         cached = self._cache_get_or_miss(cache_key)
         if cached is not _CACHE_MISS:
             return cast(dict[str, Any] | None, cached)
@@ -1024,12 +1031,12 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 SELECT * FROM event_collections
                 WHERE id = ? AND owner_id = ? AND deleted = 0
                 """,
-                (collection_id, owner_id),
+                (resolved_id, owner_id),
             ).fetchone()
         else:
             row = conn.execute(
                 "SELECT * FROM event_collections WHERE id = ? AND deleted = 0",
-                (collection_id,),
+                (resolved_id,),
             ).fetchone()
         collection = self._row_to_event_collection(row)
         if collection is not None:
@@ -1073,6 +1080,10 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         *,
         operation_log: dict[str, Any] | None = None,
     ) -> bool:
+        resolved_id = self.resolve_event_collection_id(owner_id, collection_id)
+        if resolved_id is None:
+            return False
+        collection_id = resolved_id
         clean_updates = {
             key: value
             for key, value in updates.items()
@@ -1134,6 +1145,11 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         operation_log: dict[str, Any] | None = None,
     ) -> int:
         """原子更新集合字段、全部节点提醒及对应审计记录。"""
+
+        resolved_id = self.resolve_event_collection_id(owner_id, collection_id)
+        if resolved_id is None:
+            raise ItemNotFoundException(collection_id)
+        collection_id = resolved_id
 
         ordered_updates = {
             str(item_id): (list(remind_times), list(reminder_rules))
@@ -1263,6 +1279,10 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         return len(item_ids)
 
     def get_collection_events(self, collection_id: str, owner_id: str) -> list[EventItem]:
+        resolved_id = self.resolve_event_collection_id(owner_id, collection_id)
+        if resolved_id is None:
+            return []
+        collection_id = resolved_id
         conn = self.get_connection()
         rows = conn.execute(
             """
@@ -1276,6 +1296,10 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
 
     def delete_event_instance(self, item_id: str, owner_id: str) -> tuple[str, bool] | None:
         """原子删除单个日程；最后一个多节点日程同时删除空集合头。"""
+        resolved_id = self.resolve_item_id(owner_id, item_id)
+        if resolved_id is None:
+            return None
+        item_id = resolved_id
         now = utc_now_iso()
         collection_id: str | None = None
         collection_deleted = False
@@ -1370,6 +1394,10 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         cascade: bool = True,
         operation_log: dict[str, Any] | None = None,
     ) -> bool:
+        resolved_id = self.resolve_event_collection_id(owner_id, collection_id)
+        if resolved_id is None:
+            return False
+        collection_id = resolved_id
         # 操作日志和现有撤销查询仍沿用本地 ISO 时间；这里保持相同格式，确保
         # 刚写入的集合删除日志能与其子日程按同一时间基准排序。
         now = utc_now_iso()
@@ -1419,9 +1447,64 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             self.cache_invalidate(f"event_collections|{owner_id}")
         return affected > 0
 
+    def _resolve_public_identifier(
+        self,
+        table: str,
+        reference: str,
+        owner_id: str,
+    ) -> str | None:
+        """把用户可见短标识解析为当前用户命名空间内的完整主键。"""
+
+        if table not in {"items", "event_collections"}:
+            raise ValueError("unsupported identifier table")
+        query = str(reference or "").strip()
+        if not query:
+            return None
+
+        conn = self.get_connection()
+        exact_rows = conn.execute(
+            f"SELECT id FROM {table} "
+            "WHERE owner_id = ? AND deleted = 0 AND id = ? COLLATE NOCASE LIMIT 2",
+            (owner_id, query),
+        ).fetchall()
+        if len(exact_rows) == 1:
+            return str(exact_rows[0]["id"])
+        if len(exact_rows) > 1:
+            raise AmbiguousIdentifierException(query, [str(row["id"]) for row in exact_rows])
+
+        if not is_public_id_reference(query):
+            return None
+
+        prefix = query.casefold()
+        rows = conn.execute(
+            f"SELECT id FROM {table} "
+            "WHERE owner_id = ? AND deleted = 0 AND lower(id) LIKE ? "
+            "ORDER BY id",
+            (owner_id, f"{prefix}%"),
+        ).fetchall()
+        matches = [str(row["id"]) for row in rows if public_id_matches(str(row["id"]), query)]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise AmbiguousIdentifierException(query, matches)
+        return None
+
+    def resolve_item_id(self, owner_id: str, reference: str) -> str | None:
+        """解析条目完整 UUID 或当前 8 位短标识。"""
+
+        return self._resolve_public_identifier("items", reference, owner_id)
+
+    def resolve_event_collection_id(self, owner_id: str, reference: str) -> str | None:
+        """解析日程集合完整 UUID 或当前 8 位短标识。"""
+
+        return self._resolve_public_identifier("event_collections", reference, owner_id)
+
     def get_item(self, item_id: str, owner_id: str | None = None) -> Item | None:
-        """获取单个条目，返回Item dataclass实例"""
-        cache_key = self._cache_key("item", item_id, owner_id or "*")
+        """获取单个条目；有所有者时同时接受无歧义的用户短标识。"""
+        resolved_id = self.resolve_item_id(owner_id, item_id) if owner_id else item_id
+        if resolved_id is None:
+            return None
+        cache_key = self._cache_key("item", resolved_id, owner_id or "*")
         cached = self._cache_get_or_miss(cache_key)
         if cached is not _CACHE_MISS:
             # 该命名空间只缓存 Item；在动态缓存边界集中收窄一次类型。
@@ -1433,10 +1516,10 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         if owner_id:
             cursor.execute(
                 "SELECT * FROM items WHERE id = ? AND owner_id = ? AND deleted = 0",
-                (item_id, owner_id),
+                (resolved_id, owner_id),
             )
         else:
-            cursor.execute("SELECT * FROM items WHERE id = ? AND deleted = 0", (item_id,))
+            cursor.execute("SELECT * FROM items WHERE id = ? AND deleted = 0", (resolved_id,))
 
         row = cursor.fetchone()
         if row:
@@ -1941,6 +2024,10 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         operation_log: dict[str, Any] | None = None,
     ) -> bool:
         """删除一个匹配用户的条目；未匹配时不得触碰其附属数据。"""
+        resolved_id = self.resolve_item_id(owner_id, item_id)
+        if resolved_id is None:
+            return False
+        item_id = resolved_id
         conn = self.get_connection()
         cursor = conn.cursor()
         params = [item_id, owner_id]

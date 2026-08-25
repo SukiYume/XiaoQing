@@ -471,7 +471,7 @@ class SearchHandler:
         lines = [self._format_item_heading(item, title)]
         if details := self._format_item_details(item, query, display_timezone):
             lines.append(f"  {' | '.join(details)}")
-        lines.append(f"  ID: `{item.id or ''}`")
+        lines.append(f"  ID: `{item.display_id}`")
         return "\n".join(lines)
 
     def _get_content_preview(self, item: SearchItem, query: str) -> str:
