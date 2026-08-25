@@ -643,7 +643,14 @@ class TestOperationAndExportRegression:
             created_at="2026-03-11T08:00:00",
             updated_at="2026-03-11T08:30:00",
             content="正文",
-            references=[{"kind": "item", "id": "task1", "type": "task", "title": "整理卡片"}],
+            references=[
+                {
+                    "kind": "item",
+                    "id": "1234abcd" + "0" * 24,
+                    "type": "task",
+                    "title": "整理卡片",
+                }
+            ],
         )
 
         class _Repo:
@@ -659,7 +666,8 @@ class TestOperationAndExportRegression:
         assert result["status"] == "success"
         exported = (tmp_path / "u1" / "笔记档案.md").read_text(encoding="utf-8")
         assert "**关联条目**" in exported
-        assert "- 待办: 整理卡片 (`task1`)" in exported
+        assert "- 待办: 整理卡片 (`1234abcd`)" in exported
+        assert "1234abcd" + "0" * 24 not in exported
 
     def test_export_markdown_requires_filename(self, tmp_path):
         import sys

@@ -9,7 +9,6 @@ from tests.helpers.pendo_web_transfer_test_support import (
     Any,
     Database,
     DuplicateBundleImportError,
-    SimpleNamespace,
     ZoneInfo,
     _build_sample_bundle_bytes,
     _simple_task_bundle,
@@ -326,8 +325,8 @@ def test_item_identity_generation_and_source_index_ignore_unsafe_metadata(
         ("task", "source-valid"): collision_id
     }
 
-    generated = iter([SimpleNamespace(hex=collision_id), SimpleNamespace(hex="b" * 32)])
-    monkeypatch.setattr(transfer_api.uuid, "uuid4", lambda: next(generated))
+    generated = iter([collision_id, "b" * 32])
+    monkeypatch.setattr(transfer_api, "new_internal_id", lambda: next(generated))
     assert transfer_api._new_import_item_id(temp_db) == "b" * 32
 
 
@@ -338,7 +337,7 @@ def test_collection_identity_generation_and_source_index_ignore_unsafe_metadata(
     """集合 ID 也做全局查重，且只索引可覆盖的非隔离来源。"""
 
     assert transfer_api._get_event_collection_identity(temp_db, None) is None
-    collision_id = "c" * 16
+    collision_id = "c" * 32
     collection_contexts = {
         collision_id: {"import": {"source_id": "collection-source", "policy": "skip"}},
         "collection-isolated": {
@@ -369,14 +368,9 @@ def test_collection_identity_generation_and_source_index_ignore_unsafe_metadata(
         "collection-source": collision_id
     }
 
-    generated = iter(
-        [
-            SimpleNamespace(hex=collision_id + "0" * 16),
-            SimpleNamespace(hex="d" * 32),
-        ]
-    )
-    monkeypatch.setattr(transfer_api.uuid, "uuid4", lambda: next(generated))
-    assert transfer_api._new_import_collection_id(temp_db) == "d" * 16
+    generated = iter([collision_id, "d" * 32])
+    monkeypatch.setattr(transfer_api, "new_internal_id", lambda: next(generated))
+    assert transfer_api._new_import_collection_id(temp_db) == "d" * 32
 
 
 def test_collection_import_planner_skips_existing_source_and_rejects_duplicates(

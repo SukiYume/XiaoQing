@@ -16,6 +16,7 @@ from ..services.ai_parser import analyze_diary_mood_rule
 from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import handle_command_errors
 from ..utils.formatters import TAG_TOKEN_RE, ItemFormatter
+from ..utils.identifiers import public_id
 from ..utils.session_utils import safe_create_session, safe_end_session
 from ..utils.time_utils import get_user_local_wall_time, parse_date_optional, parse_diary_range
 from ..utils.validators import normalize_diary_fields, normalize_diary_mood
@@ -281,7 +282,7 @@ class DiaryHandler(DbOpsMixin):
             message += f"🌤️ 天气: {diary_item.weather}\n"
         if diary_item.location:
             message += f"📍 地点: {diary_item.location}\n"
-        message += f"`{item_id}`\n\n"
+        message += f"`{public_id(item_id)}`\n\n"
         message += f"💡 用 /pendo diary view {diary_date} 查看当天所有记录"
 
         return {"status": "success", "message": message, "item_id": item_id}
@@ -420,7 +421,7 @@ class DiaryHandler(DbOpsMixin):
                     f"{_MOOD_EMOJIS.get(diary.mood or '', '📝')} "
                     f"**{diary.diary_date or ''} {self._format_entry_time(diary)}**",
                     f"  _{content_preview}_",
-                    f"  `{diary.id}`",
+                    f"  `{diary.display_id}`",
                     "",
                 )
             )
@@ -447,7 +448,9 @@ class DiaryHandler(DbOpsMixin):
                     preview = ItemFormatter.truncate_content(
                         entry.content or "", PendoConfig.SEARCH_CONTENT_PREVIEW_LENGTH
                     )
-                    lines.append(f"• `{entry.id}` {self._format_entry_time(entry)} {preview}")
+                    lines.append(
+                        f"• `{entry.display_id}` {self._format_entry_time(entry)} {preview}"
+                    )
                 return {"status": "error", "message": "\n".join(lines)}
             dated_diary = entries[0]
             await self._db_soft_delete_with_log(
@@ -717,7 +720,7 @@ class DiaryHandler(DbOpsMixin):
             lines.append("⭐ 收藏")
         if diary.template_answers:
             lines.append(f"📋 模板: {diary.template_id or '未命名模板'}")
-        lines.append(f"`{diary.id}`")
+        lines.append(f"`{diary.display_id}`")
         lines.append("")
         lines.append(diary.content or "")
         return "\n".join(lines)

@@ -8,6 +8,7 @@ from typing import Any
 
 from ...models.item import TaskItem, TaskStatus
 from ...services.db import Database
+from ...utils.identifiers import public_id
 from ...utils.time_utils import TimezoneHelper, now_in_timezone
 from ..utils import parse_iso_date
 
@@ -50,6 +51,7 @@ class _TaskRecord:
 
         return {
             "id": self.id,
+            "display_id": public_id(self.id),
             "title": self.title,
             "content": self.content,
             "category": self.category,

@@ -45,6 +45,9 @@ def _pendo_web_test_dependencies():
 def client(temp_db):
     """创建并关闭 Pendo FastAPI 测试客户端。"""
 
+    from plugins.pendo.utils import db_ops
+    from plugins.pendo.web import auth, deps
+
     try:
         test_client_class, create_app = _pendo_web_test_dependencies()
     except ModuleNotFoundError:
@@ -54,8 +57,18 @@ def client(temp_db):
             raise
         pytest.skip("httpx is not installed in this environment")
 
-    with test_client_class(create_app(temp_db)) as test_client:
-        yield test_client
+    previous_singleton = db_ops._db_singleton
+    previous_web_db = deps._db_instance
+    with auth._AUTH_LOCK:
+        previous_auth_db = auth._AUTH_DATABASE
+    try:
+        with test_client_class(create_app(temp_db)) as test_client:
+            yield test_client
+    finally:
+        db_ops.set_database_singleton(previous_singleton)
+        deps._db_instance = previous_web_db
+        with auth._AUTH_LOCK:
+            auth._AUTH_DATABASE = previous_auth_db
 
 
 @pytest.fixture(autouse=True)

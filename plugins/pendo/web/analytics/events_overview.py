@@ -11,6 +11,7 @@ from ...config import PendoConfig
 from ...models.item import EventItem
 from ...services.db import Database
 from ...services.event_graph import EventGraphService
+from ...utils.identifiers import public_id
 from ...utils.time_utils import TimezoneHelper
 from ..utils import collection_payload
 from .event_schedule import build_event_schedule, daterange, ensure_datetime, event_kind
@@ -332,6 +333,7 @@ def _build_calendar_views(
             timeline_days[day].extend(
                 {
                     "event_id": event.id,
+                    "event_display_id": public_id(event.id),
                     "collection": event.collection,
                     "kind": row["kind"],
                     "day": day,
@@ -409,6 +411,7 @@ def build_events_overview(  # noqa: PLR0913 - 参数对应稳定的 HTTP 查询�
         "events": [
             {
                 "id": event.id,
+                "display_id": public_id(event.id),
                 "title": event.title,
                 "category": event.category,
                 "kind": event.kind,
@@ -439,6 +442,7 @@ def build_event_detail(db: Database, owner_id: str, event_id: str) -> JsonObject
         related_instances = [
             {
                 "id": child.id,
+                "display_id": child.display_id,
                 "title": child.title,
                 "start_time": child.start_time,
                 "end_time": child.end_time,
@@ -450,6 +454,7 @@ def build_event_detail(db: Database, owner_id: str, event_id: str) -> JsonObject
         # 详情只公开展示与单条编辑器实际使用的叶子字段。
         "event": {
             "id": event.id,
+            "display_id": event.display_id,
             "title": event.title or "",
             "category": event.category or "",
             "start_time": event.start_time,
@@ -483,6 +488,7 @@ def build_event_collection_detail(
         "children": [
             {
                 "id": child.id,
+                "display_id": child.display_id,
                 "title": child.title,
                 "start_time": child.start_time,
             }

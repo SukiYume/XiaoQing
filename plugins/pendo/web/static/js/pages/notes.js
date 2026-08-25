@@ -108,6 +108,7 @@ function normalizeReference(value) {
     if (!id) return null;
     return {
         id,
+        display_id: textValue(value.display_id, id).trim() || id,
         kind: textValue(value.kind, 'item').trim() || 'item',
         type: textValue(value.type).trim(),
         title: textValue(value.title).trim(),
@@ -297,7 +298,7 @@ function renderNoteReferences(note) {
                         const type = ref.type || ref.kind || 'item';
                         const label = REFERENCE_LABELS[type] || REFERENCE_LABELS[ref.kind] || '条目';
                         const title = ref.title || ref.id;
-                        return `<div class="note-reference-row"><span>${escapeHtml(label)}</span><strong>${escapeHtml(title)}</strong><code>${escapeHtml(ref.id)}</code></div>`;
+                        return `<div class="note-reference-row"><span>${escapeHtml(label)}</span><strong>${escapeHtml(title)}</strong><code>${escapeHtml(ref.display_id || ref.id)}</code></div>`;
                     })
                     .join('')}
             </div>

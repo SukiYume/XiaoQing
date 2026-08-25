@@ -14,6 +14,7 @@ from ..models.item import EventItem, Item, TaskItem, get_item_type_value
 from ..services.db import Database
 from ..services.reminder import ReminderService
 from ..utils.error_handlers import error_result, success_result
+from ..utils.identifiers import public_id
 from ..utils.time_utils import TimezoneHelper, now_in_timezone, parse_delay_time
 
 JsonObject = dict[str, Any]
@@ -73,7 +74,7 @@ def _confirmed_item_message(item: Item, item_id: str, now: datetime) -> str:
     reminder_note = f"后续还有 {future_count} 个提醒" if future_count else "没有更多提醒了"
     return (
         f"✅ 已确认{icon} {item.title or '无标题'}\n\n"
-        f"`{item_id}`\n\n💡 此次提醒已确认，{reminder_note}"
+        f"`{public_id(item_id)}`\n\n💡 此次提醒已确认，{reminder_note}"
     )
 
 
@@ -87,18 +88,19 @@ async def handle_confirm(
 
     parsed = parse(args)
     if len(parsed) != 1 or parsed.options:
-        return _error_result("❌ 请指定一个要确认的条目ID\n\n例如: /pendo confirm 3F2A")
+        return _error_result("❌ 请指定一个要确认的条目ID\n\n例如: /pendo confirm 3f2a91c4")
     item_id = parsed.first
     database = db or reminder_service.db
     item = cast(Item | None, await run_sync(database.get_item, item_id, user_id))
     if item is None:
         return _error_result(f"❌ 未找到条目: {item_id}")
+    resolved_id = str(item.id)
 
     target_remind_time = cast(
         str | None,
         await run_sync(
             database.get_last_unconfirmed_remind_time,
-            item_id,
+            resolved_id,
         ),
     )
     if target_remind_time is None:
@@ -107,7 +109,7 @@ async def handle_confirm(
         JsonObject,
         await run_sync(
             reminder_service.confirm_reminder,
-            item_id,
+            resolved_id,
             "confirmed",
             user_id,
             target_remind_time,
@@ -119,7 +121,7 @@ async def handle_confirm(
     return _success_result(
         _confirmed_item_message(
             item,
-            item_id,
+            resolved_id,
             cast(datetime, now_in_timezone(user_id, database)),
         )
     )
@@ -197,10 +199,10 @@ async def handle_snooze(
     parsed = parse(args)
     if not parsed:
         return _error_result(
-            "请指定要延后的条目ID和时间，例如: /pendo snooze 3F2A 10m 或 /pendo snooze 3F2A 19:00"
+            "请指定要延后的条目ID和时间，例如: /pendo snooze 3f2a91c4 10m 或 /pendo snooze 3f2a91c4 19:00"
         )
     if len(parsed) != 2 or parsed.options:
-        return _error_result("请指定一个条目ID和延后时间，例如: 3F2A 10m")
+        return _error_result("请指定一个条目ID和延后时间，例如: 3f2a91c4 10m")
     item_id = parsed.first
     time_arg = parsed.second
 
@@ -240,7 +242,7 @@ async def _undo_delete(user_id: str, minutes: int, db: Database) -> CommandResul
         get_item_type_value(item.type, default=""),
         "条目",
     )
-    return _success_result(f"✅ 已恢复{type_name}: {item.title or '无标题'} ({item.id})")
+    return _success_result(f"✅ 已恢复{type_name}: {item.title or '无标题'} ({item.display_id})")
 
 
 async def _undo_edit(user_id: str, minutes: int, db: Database) -> CommandResult:

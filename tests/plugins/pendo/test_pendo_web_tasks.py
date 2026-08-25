@@ -94,6 +94,7 @@ def test_build_task_overview_groups_widget_tasks_and_returns_minimal_payload(
     assert len(result["all_tasks"]) == 5
     assert set(cancelled) == {
         "id",
+        "display_id",
         "title",
         "content",
         "category",

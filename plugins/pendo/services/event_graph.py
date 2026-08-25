@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from ..core.exceptions import AmbiguousIdentifierException
 from ..models.item import EventItem
 
 if TYPE_CHECKING:
@@ -32,7 +33,21 @@ class EventGraphService:
         self.db = db
 
     def load_by_id(self, owner_id: str, event_or_collection_id: str) -> EventFamily:
-        item = self.db.get_item(event_or_collection_id, owner_id=owner_id)
+        query = str(event_or_collection_id or "").strip()
+        item_id = self.db.resolve_item_id(owner_id, query)
+        collection_id = self.db.resolve_event_collection_id(owner_id, query)
+        if item_id and collection_id:
+            item_exact = item_id.casefold() == query.casefold()
+            collection_exact = collection_id.casefold() == query.casefold()
+            if item_exact != collection_exact:
+                if item_exact:
+                    collection_id = None
+                else:
+                    item_id = None
+            else:
+                raise AmbiguousIdentifierException(query, [item_id, collection_id])
+
+        item = self.db.get_item(item_id, owner_id=owner_id) if item_id else None
         if isinstance(item, EventItem):
             collection = None
             children: list[EventItem] = []
@@ -46,9 +61,12 @@ class EventGraphService:
                     kind = item.event_collection_kind or "single"
             return EventFamily(kind=kind, collection=collection, leaf=item, children=children)
 
-        collection = self.db.get_event_collection(event_or_collection_id, owner_id)
+        collection = (
+            self.db.get_event_collection(collection_id, owner_id) if collection_id else None
+        )
         if collection:
-            children = self.db.get_collection_events(event_or_collection_id, owner_id)
+            resolved_collection_id = str(collection["id"])
+            children = self.db.get_collection_events(resolved_collection_id, owner_id)
             return EventFamily(
                 kind=str(collection.get("kind") or "single"),
                 collection=collection,

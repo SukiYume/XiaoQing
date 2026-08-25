@@ -15,6 +15,7 @@ from ..core.exceptions import (
     ItemVersionConflictException,
 )
 from ..models.item import Item, ItemType, get_item_type_value
+from .identifiers import public_id
 
 if TYPE_CHECKING:
     from ..services.db import Database
@@ -143,6 +144,14 @@ class DbOpsMixin:
         """获取单个条目"""
         return await run_sync(self.db.get_item, item_id, owner_id)
 
+    async def _db_resolve_item_id(self, item_id: str, owner_id: str) -> str:
+        """把命令短标识规范为完整主键；不存在时沿用统一业务异常。"""
+
+        resolved = await run_sync(self.db.resolve_item_id, owner_id, item_id)
+        if resolved is None:
+            raise ItemNotFoundException(item_id)
+        return cast(str, resolved)
+
     async def _db_update_item(
         self,
         item_id: str,
@@ -154,6 +163,8 @@ class DbOpsMixin:
         touch: bool = True,
     ) -> None:
         """更新条目"""
+        if owner_id:
+            item_id = await self._db_resolve_item_id(item_id, owner_id)
         updated = await run_sync(
             self.db.update_item,
             item_id,
@@ -193,6 +204,7 @@ class DbOpsMixin:
         operation_log: dict[str, Any] | None = None,
     ) -> Any:
         """删除条目"""
+        item_id = await self._db_resolve_item_id(item_id, owner_id)
         return await run_sync(
             self.db.delete_item,
             item_id,
@@ -235,7 +247,7 @@ class DbOpsMixin:
 
     @staticmethod
     def _build_view_hint_for_item(item: Any) -> str:
-        item_id = getattr(item, "id", "")
+        item_id = public_id(getattr(item, "id", ""))
         item_type = get_item_type_value(getattr(item, "type", None), default="item")
 
         if item_type == ItemType.DIARY.value:
@@ -295,6 +307,8 @@ class DbOpsMixin:
             action: 操作类型（如 'update_event', 'complete_task'）
             details: 额外的日志详情
         """
+        item_id = await self._db_resolve_item_id(item_id, owner_id)
+
         # 处理 updates 可能是 Item 对象的情况
         if isinstance(updates, Item):
             log_updates = updates.to_dict()
@@ -345,6 +359,7 @@ class DbOpsMixin:
             owner_id: 所有者ID
             item_type: 条目类型（用于日志）
         """
+        item_id = await self._db_resolve_item_id(item_id, owner_id)
         await self._db_delete_item(
             item_id,
             soft=True,

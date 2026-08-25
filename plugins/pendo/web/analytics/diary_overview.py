@@ -8,6 +8,7 @@ from typing import Any
 
 from ...models.item import DiaryItem, ItemType
 from ...services.db import Database
+from ...utils.identifiers import public_id
 from ...utils.time_utils import now_in_timezone
 
 _ALLOWED_CADENCE_GRANULARITIES = frozenset({"day", "week", "month", "year", "auto"})
@@ -268,6 +269,7 @@ def build_diary_overview(
     recent_entries = [
         {
             "id": item.id,
+            "display_id": public_id(item.id),
             "title": item.title,
             "diary_date": item.diary_date,
             "entry_time": item.entry_time,

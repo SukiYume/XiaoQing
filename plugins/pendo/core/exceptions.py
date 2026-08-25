@@ -36,6 +36,20 @@ class ItemAlreadyDeletedException(PendoException):
         super().__init__(f"Item already deleted: {item_id}", f"❌ ID为 {item_id} 的条目已被删除")
 
 
+class AmbiguousIdentifierException(PendoException):
+    """用户提供的短标识匹配到多个内部实体。"""
+
+    def __init__(self, reference: str, matched_ids: list[str]) -> None:
+        candidates = "、".join(f"`{item_id}`" for item_id in matched_ids[:5])
+        suffix = f"\n\n候选完整 ID：{candidates}" if candidates else ""
+        super().__init__(
+            f"Ambiguous identifier {reference}: {matched_ids}",
+            f"⚠️ 短标识 `{reference}` 匹配到多个条目，请使用完整 ID{suffix}",
+        )
+        self.reference = reference
+        self.matched_ids = matched_ids
+
+
 class ItemVersionConflictException(PendoException):
     """条目在读取后已被其他请求修改。"""
 

@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ...services.db import Database
 from ...utils.formatters import ledger_amount_yuan
+from ...utils.identifiers import public_id
 from ...utils.time_utils import TimezoneHelper, now_in_timezone
 from ..analytics.event_schedule import build_event_schedule, ensure_datetime
 from ..analytics.ledger_insights import build_ledger_insights
@@ -113,6 +114,7 @@ def _event_item_payload(entry: JsonObject) -> JsonObject:
 
     return {
         "id": str(entry.get("id") or "").strip(),
+        "display_id": public_id(entry.get("id")),
         "title": str(entry["title"] or "无标题").strip() or "无标题",
         "subtitle": entry["subtitle"],
         "meta": _format_event_meta(entry),
@@ -193,6 +195,7 @@ def _flatten_event_entries(
                 rows.append(
                     {
                         "id": str(getattr(event, "id", "") or "").strip(),
+                        "display_id": public_id(getattr(event, "id", "")),
                         "day": day,
                         "title": entry_title,
                         "subtitle": row.get("subtitle") or "",

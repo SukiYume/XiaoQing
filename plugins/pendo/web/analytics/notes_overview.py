@@ -8,6 +8,7 @@ from datetime import date, timedelta
 from typing import Any, Literal, cast
 
 from ...services.db import Database
+from ...utils.identifiers import public_id
 from ...utils.time_utils import TimezoneHelper, now_in_timezone
 from ..utils import parse_iso_date
 
@@ -298,7 +299,7 @@ def build_notes_overview(
         period.granularity,
     )
     recent_notes = [
-        dict(row)
+        {**dict(row), "display_id": public_id(row["id"])}
         for row in conn.execute(
             f"""
             SELECT i.id, i.title, i.content, {_NOTE_CATEGORY_SQL} AS category,
@@ -376,7 +377,7 @@ def build_notes_widget_overview(
         },
     ).fetchone()
     recent_notes = [
-        dict(row)
+        {**dict(row), "display_id": public_id(row["id"])}
         for row in conn.execute(
             f"""
             SELECT i.id, i.title, i.content, {_NOTE_CATEGORY_SQL} AS category

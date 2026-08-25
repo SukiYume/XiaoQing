@@ -15,6 +15,7 @@ import pytest
 
 from plugins.pendo.config import PendoConfig
 from plugins.pendo.services.db import Database
+from plugins.pendo.utils.identifiers import is_canonical_internal_id
 from plugins.pendo.web.services.transfer_bundle import ParsedBundle
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.pendo_test_support import reset_pendo_runtime_config
@@ -243,12 +244,16 @@ def test_create_demo_session_seeds_items_without_fastapi(temp_db: Database) -> N
     ledger = temp_db.get_items(owner_id, filters={"type": "ledger"}, limit=30)
     notes = temp_db.get_items(owner_id, filters={"type": "note"}, limit=20)
     diaries = temp_db.get_items(owner_id, filters={"type": "diary"}, limit=20)
+    seeded_items = [*events, *tasks, *ledger, *notes, *diaries]
 
     assert len(events) >= 6
     assert len(tasks) >= 6
     assert len(ledger) >= 12
     assert len(notes) >= 5
     assert len(diaries) >= 4
+    assert len({item.id for item in seeded_items}) == len(seeded_items)
+    assert all(is_canonical_internal_id(item.id) for item in seeded_items)
+    assert all(item.display_id == item.id[:8] for item in seeded_items)
     ledger_days = sorted({item.ledger_date for item in ledger})
     assert ledger_days[0].startswith("2025-")
     assert ledger_days[-1].startswith("2026-")

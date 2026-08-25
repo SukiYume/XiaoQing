@@ -51,6 +51,11 @@ class ReminderRepositoryMixin:
 
         raise NotImplementedError
 
+    def resolve_item_id(self, owner_id: str, reference: str) -> str | None:
+        """由最终的 Database 解析用户命名空间内的公开短标识。"""
+
+        raise NotImplementedError
+
     # ==================== 提醒相关 ====================
 
     @staticmethod
@@ -399,6 +404,11 @@ class ReminderRepositoryMixin:
         """确认指定条目的未确认提醒，并在需要时物化确认记录。"""
         if remind_time is not None:
             require_canonical_utc_timestamp(remind_time, "remind_time")
+        if owner_id is not None:
+            resolved_id = self.resolve_item_id(owner_id, item_id)
+            if resolved_id is None:
+                return {"status": "success", "message": f"已记录: {user_action}"}
+            item_id = resolved_id
         conn = self.get_connection()
         cursor = conn.cursor()
         now = utc_now_iso()
@@ -467,6 +477,10 @@ class ReminderRepositoryMixin:
         normalized_owner = str(owner_id).strip()
         if not normalized_owner:
             raise ValueError("owner_id is required")
+        resolved_id = self.resolve_item_id(normalized_owner, item_id)
+        if resolved_id is None:
+            return None
+        item_id = resolved_id
 
         with self.transaction(immediate=True) as conn:
             item_row = conn.execute(
