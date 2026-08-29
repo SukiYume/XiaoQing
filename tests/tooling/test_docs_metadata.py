@@ -26,6 +26,46 @@ from core.models import (
 ROOT = REPOSITORY_ROOT
 
 
+def test_readmes_describe_current_state_instead_of_release_history() -> None:
+    ignored_parts = {".git", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".venv", "node_modules"}
+    readmes = sorted(
+        path
+        for path in ROOT.rglob("README*.md")
+        if not ignored_parts.intersection(path.relative_to(ROOT).parts)
+    )
+    docs_index = (ROOT / "docs" / "README.md").read_text(encoding="utf-8")
+    release_history_heading = re.compile(
+        r"^#{1,6}\s*(?:更新记录|更新日志|变更记录|版本历史|版本记录|发布记录|"
+        r"changelog|release notes|what(?:'|’)s new)\s*$",
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    version_or_date_heading = re.compile(
+        r"^#{1,6}\s*(?:v?\d+\.\d+(?:\.\d+)?|"
+        r"20\d{2}[-/.]\d{1,2}(?:[-/.]\d{1,2})?)\s*$",
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    release_narrative = re.compile(
+        r"(?:本次|此次|本轮|本版本|上一版本|最近一次)(?:更新|变更|发布|迁移)"
+    )
+
+    assert readmes
+    assert ROOT / "README.md" in readmes
+    assert ROOT / "docs" / "README.md" in readmes
+    assert "所有 README 只描述当前能力、使用方法和运行契约" in docs_index
+    for path in readmes:
+        text = path.read_text(encoding="utf-8")
+        relative = path.relative_to(ROOT)
+        for pattern in (
+            release_history_heading,
+            version_or_date_heading,
+            release_narrative,
+        ):
+            assert pattern.search(text) is None, (
+                f"{relative} should describe the current contract; "
+                "put release history in CHANGELOG.md"
+            )
+
+
 def test_project_urls_match_the_configured_origin() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
 
@@ -308,6 +348,7 @@ def test_plugin_manual_covers_current_commands_defaults_and_data_paths() -> None
 
 def test_pendo_scriptable_guide_matches_client_layout_and_calendar_contract() -> None:
     guide = (ROOT / "docs" / "pendo-scriptable-widget.md").read_text(encoding="utf-8")
+    readme = (ROOT / "plugins" / "pendo" / "README.md").read_text(encoding="utf-8")
 
     for marker in (
         "section=tasks|ledger|notes|all|auto",
@@ -318,6 +359,14 @@ def test_pendo_scriptable_guide_matches_client_layout_and_calendar_contract() ->
         "const SYNC_CALENDAR_NAME = 'Pendo';",
         "同步仅在 Scriptable App 内直接运行脚本时执行",
         "标题 + 开始时间",
-        "采用仅新增策略",
+        "采用按 Pendo-ID 对账策略",
     ):
         assert marker in guide
+
+    for marker in (
+        "至少回看过去 30 天",
+        "按 Pendo 条目 ID 原地新增、更新和清理托管事件",
+    ):
+        assert marker in readme
+    assert "增量补齐 iOS 日历" not in readme
+    assert "新增缺失事件" not in readme
