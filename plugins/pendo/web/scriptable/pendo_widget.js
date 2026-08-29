@@ -999,10 +999,9 @@ function computeNextRefresh(data, currentTime = new Date()) {
 
 // ---------- 日历同步 ----------
 // 仅在 app 内直接运行脚本时触发；widget 渲染时不执行同步。
-// Keychain 游标记录“上次成功运行日”。首次运行回看 30 天并覆盖未来 30 天，
-// 后续从上次运行日续传到新的未来 30 天。平时窗口仍约一个月，间隔期间已经
-// 过去或新建的日程也能补齐。
-// 每次只查询一次这个窗口，不遍历或删除窗口外的日历事件。
+// Keychain 游标记录“上次成功运行日”。每次至少回看 30 天并覆盖未来 30 天；
+// 游标更早时从游标续传，既补齐间隔，也重新对账近期修改和删除。
+// 每次只查询一次这个完整窗口，不遍历或删除窗口外的日历事件。
 function localDateKey(value) {
     const year = value.getFullYear();
     const month = String(value.getMonth() + 1).padStart(2, '0');
@@ -1027,10 +1026,13 @@ function buildCalendarSyncWindow(currentTime = new Date()) {
         if (!lastSuccess) Keychain.remove(CALENDAR_SYNC_CURSOR_KEY);
     }
 
-    // 系统时间回拨时不把成功游标写回更早日期，同时从当前日安全重查。
+    // 始终回看最近一段时间，确保已同步日程的修改和删除也能被重新对账；
+    // 若上次成功运行更早，则仍从旧游标开始补齐完整缺口。
     const storedIsLater = lastSuccess && lastSuccess.date > today;
     const initialStart = addLocalDays(today, -CALENDAR_SYNC_INITIAL_LOOKBACK_DAYS);
-    const requestedStart = storedIsLater ? new Date(today) : new Date(lastSuccess?.date || initialStart);
+    const requestedStart = new Date(
+        lastSuccess && lastSuccess.date < initialStart ? lastSuccess.date : initialStart,
+    );
     const earliestAllowedStart = addLocalDays(plannedEnd, -(CALENDAR_SYNC_MAX_RANGE_DAYS - 1));
     const rangeStart = requestedStart < earliestAllowedStart ? earliestAllowedStart : requestedStart;
     const nextCursor = storedIsLater ? new Date(lastSuccess.date) : new Date(today);
@@ -1069,115 +1071,255 @@ function calendarLegacyKey(title, startDate) {
     return `${textValue(title, '无标题', 160)}|${startDate.getTime()}`;
 }
 
-function calendarEventIdFromNotes(notes) {
+function calendarSyncMetadata(notes) {
     const text = textValue(notes, '', 4096);
-    if (!text.includes(SYNC_MARKER)) return '';
-    const line = text
-        .split(/\r?\n/)
-        .find((candidate) => candidate.startsWith(CALENDAR_EVENT_ID_PREFIX));
-    return line ? textValue(line.slice(CALENDAR_EVENT_ID_PREFIX.length), '', 160).trim() : '';
+    const lines = text ? text.split(/\r?\n/) : [];
+    const managed = lines.includes(SYNC_MARKER);
+    if (!managed) return { managed: false, id: '' };
+    const idLine = lines.find((line) => line.startsWith(CALENDAR_EVENT_ID_PREFIX));
+    const id = idLine
+        ? textValue(idLine.slice(CALENDAR_EVENT_ID_PREFIX.length), '', 160).trim()
+        : '';
+    return { managed: true, id };
+}
+
+function calendarSyncNotes(notes, eventId) {
+    const currentNotes = textValue(notes, '', 4096);
+    const extraLines = currentNotes
+        ? currentNotes
+              .split(/\r?\n/)
+              .filter((line) => line !== SYNC_MARKER && !line.startsWith(CALENDAR_EVENT_ID_PREFIX))
+        : [];
+    const markerLines = [SYNC_MARKER];
+    if (eventId) markerLines.push(`${CALENDAR_EVENT_ID_PREFIX}${eventId}`);
+    return [...markerLines, ...extraLines].join('\n');
+}
+
+function calendarDatesEqual(actual, expected) {
+    return (
+        actual instanceof Date &&
+        !Number.isNaN(actual.getTime()) &&
+        actual.getTime() === expected.getTime()
+    );
+}
+
+function updateCalendarEventFields(event, item, replacementNotes = null) {
+    let changed = false;
+    if (String(event.title || '') !== item.title) {
+        event.title = item.title;
+        changed = true;
+    }
+    if (!calendarDatesEqual(event.startDate, item.startDate)) {
+        event.startDate = item.startDate;
+        changed = true;
+    }
+    if (!calendarDatesEqual(event.endDate, item.endDate)) {
+        event.endDate = item.endDate;
+        changed = true;
+    }
+    if (Boolean(event.isAllDay) !== item.isAllDay) {
+        event.isAllDay = item.isAllDay;
+        changed = true;
+    }
+    if (String(event.location || '') !== item.location) {
+        event.location = item.location;
+        changed = true;
+    }
+    if (replacementNotes !== null && String(event.notes || '') !== replacementNotes) {
+        event.notes = replacementNotes;
+        changed = true;
+    }
+    return changed;
+}
+
+function addIndexedCalendarEvent(index, key, event) {
+    const matches = index.get(key) || [];
+    matches.push(event);
+    index.set(key, matches);
+}
+
+function takeIndexedCalendarEvent(index, key) {
+    const matches = index.get(key);
+    if (!matches?.length) return null;
+    return matches.shift() || null;
+}
+
+function parseCalendarSyncItem(item, rangeStart, rangeEnd) {
+    if (!isRecord(item)) throw new Error('日历同步响应包含无效日程');
+    const id = textValue(item.id, '', 160).replace(/[\r\n]/g, '').trim();
+    const startDate = parseItemStartDate(item, { allowDateOnly: true });
+    if (!startDate) throw new Error('日历同步响应包含无效日程');
+
+    const hasTime = Boolean(
+        textValue(item.start_time) ||
+        /^([01]\d|2[0-3]):[0-5]\d/.test(firstMetaPart(item.meta || item.subtitle || '')),
+    );
+
+    let endDate = null;
+    const endRaw = textValue(item.end_time, '', 64);
+    if (endRaw.length >= 16) {
+        const parsedEnd = new Date(endRaw);
+        if (!Number.isNaN(parsedEnd.getTime()) && parsedEnd > startDate) endDate = parsedEnd;
+    }
+    if (!endDate) {
+        endDate = new Date(startDate);
+        if (hasTime) endDate.setHours(endDate.getHours() + 1);
+        else endDate.setDate(endDate.getDate() + 1);
+    }
+    // 跨天日程可以从窗口之前开始，只要仍与本次完整窗口相交。
+    if (startDate >= rangeEnd || endDate <= rangeStart) {
+        throw new Error('日历同步响应包含窗口外的日程');
+    }
+
+    return {
+        id,
+        title: textValue(item.title, '无标题', 160),
+        startDate,
+        endDate,
+        isAllDay: !hasTime,
+        location: textValue(item.location, '', 160),
+    };
+}
+
+function prepareCalendarSyncItems(items, rangeStart, rangeEnd) {
+    if (!Array.isArray(items)) throw new Error('日历同步响应结构无效');
+    const prepared = [];
+    const identities = new Set();
+    for (const rawItem of items) {
+        const item = parseCalendarSyncItem(rawItem, rangeStart, rangeEnd);
+        const identity = item.id
+            ? `id:${item.id}`
+            : `fields:${calendarLegacyKey(item.title, item.startDate)}`;
+        if (identities.has(identity)) continue;
+        identities.add(identity);
+        prepared.push(item);
+    }
+    return prepared;
+}
+
+async function findWritableSyncCalendar() {
+    let targetCalendar = null;
+    try {
+        targetCalendar = await Calendar.forEventsByTitle(SYNC_CALENDAR_NAME);
+    } catch {
+        // 兼容不支持按标题读取的 Scriptable 版本，回退到完整日历列表。
+    }
+    if (targetCalendar && targetCalendar.allowsContentModifications !== false) {
+        return targetCalendar;
+    }
+
+    const calendars = await Calendar.forEvents();
+    return (
+        (Array.isArray(calendars) ? calendars : []).find((calendar) => {
+            return (
+                calendar.title === SYNC_CALENDAR_NAME &&
+                calendar.allowsContentModifications !== false
+            );
+        }) || null
+    );
+}
+
+function indexExistingCalendarEvents(existing) {
+    const index = {
+        managedById: new Map(),
+        managedLegacyByKey: new Map(),
+        unmanagedByLegacyKey: new Map(),
+    };
+    for (const event of Array.isArray(existing) ? existing : []) {
+        if (!(event?.startDate instanceof Date) || Number.isNaN(event.startDate.getTime())) continue;
+        const metadata = calendarSyncMetadata(event.notes);
+        if (metadata.id) {
+            addIndexedCalendarEvent(index.managedById, metadata.id, event);
+            continue;
+        }
+        const legacyKey = calendarLegacyKey(event.title, event.startDate);
+        const targetIndex = metadata.managed
+            ? index.managedLegacyByKey
+            : index.unmanagedByLegacyKey;
+        addIndexedCalendarEvent(targetIndex, legacyKey, event);
+    }
+    return index;
+}
+
+async function reconcileCalendarItem(item, index, targetCalendar, retainedEvents) {
+    const legacyKey = calendarLegacyKey(item.title, item.startDate);
+    let event = item.id ? (index.managedById.get(item.id) || [])[0] || null : null;
+    let replacementNotes = null;
+    if (!event) {
+        event = takeIndexedCalendarEvent(index.managedLegacyByKey, legacyKey);
+        if (event && item.id) replacementNotes = calendarSyncNotes(event.notes, item.id);
+    }
+    if (event) {
+        retainedEvents.add(event);
+        if (updateCalendarEventFields(event, item, replacementNotes)) {
+            await event.save();
+            return 'updated';
+        }
+        return 'unchanged';
+    }
+
+    // 不接管用户自行创建的事件；同名同刻只消费一个旧式匹配，其他 Pendo ID
+    // 仍分别写入，避免把不同条目错误合并。
+    if (takeIndexedCalendarEvent(index.unmanagedByLegacyKey, legacyKey)) return 'skipped';
+
+    event = new CalendarEvent();
+    event.title = item.title;
+    event.startDate = item.startDate;
+    event.endDate = item.endDate;
+    event.isAllDay = item.isAllDay;
+    event.calendar = targetCalendar;
+    event.location = item.location;
+    event.notes = calendarSyncNotes('', item.id);
+    await event.save();
+    return 'created';
+}
+
+async function removeUnretainedManagedEvents(managedById, retainedEvents) {
+    let removed = 0;
+    for (const matches of managedById.values()) {
+        for (const event of matches) {
+            if (retainedEvents.has(event)) continue;
+            await event.remove();
+            removed++;
+        }
+    }
+    return removed;
+}
+
+function formatCalendarSyncCounts(counts) {
+    const parts = [`新增 ${counts.created}`];
+    for (const [key, label] of [
+        ['updated', '更新'],
+        ['removed', '删除'],
+        ['unchanged', '未变化'],
+        ['skipped', '跳过'],
+    ]) {
+        if (counts[key]) parts.push(`${label} ${counts[key]}`);
+    }
+    return `同步完成：${parts.join('，')}`;
 }
 
 async function applyAgendaItemsToCalendar(items, rangeStart, rangeEnd) {
-    if (!items.length) return { completed: true, message: '没有需要同步的日程' };
-    const parsedItems = [];
-    for (const item of items) {
-        const startDate = parseItemStartDate(item, { allowDateOnly: true });
-        if (!startDate || startDate < rangeStart || startDate >= rangeEnd) continue;
-
-        const hasTime = Boolean(
-            textValue(item.start_time) ||
-            /^([01]\d|2[0-3]):[0-5]\d/.test(firstMetaPart(item.meta || item.subtitle || '')),
-        );
-
-        let endDate = null;
-        const endRaw = textValue(item.end_time, '', 64);
-        if (endRaw.length >= 16) {
-            const parsedEnd = new Date(endRaw);
-            if (!Number.isNaN(parsedEnd.getTime()) && parsedEnd > startDate) {
-                endDate = parsedEnd;
-            }
-        }
-        if (!endDate) {
-            endDate = new Date(startDate);
-            if (hasTime) endDate.setHours(endDate.getHours() + 1);
-            else endDate.setDate(endDate.getDate() + 1);
-        }
-
-        parsedItems.push({
-            id: textValue(item.id, '', 160).replace(/[\r\n]/g, '').trim(),
-            title: textValue(item.title, '无标题', 160),
-            startDate,
-            endDate,
-            isAllDay: !hasTime,
-            location: textValue(item.location, '', 160),
-        });
-    }
-    if (!parsedItems.length) return { completed: true, message: '没有可同步的有效日程' };
-
-    let targetCal;
-    try {
-        targetCal = await Calendar.forEventsByTitle(SYNC_CALENDAR_NAME);
-    } catch {
-        targetCal = null;
-    }
-    if (targetCal?.allowsContentModifications === false) targetCal = null;
-    if (!targetCal) {
-        const allCals = await Calendar.forEvents();
-        targetCal = allCals.find((calendar) => {
-            return calendar.title === SYNC_CALENDAR_NAME && calendar.allowsContentModifications;
-        });
-    }
-    if (!targetCal) {
+    const preparedItems = prepareCalendarSyncItems(items, rangeStart, rangeEnd);
+    const targetCalendar = await findWritableSyncCalendar();
+    if (!targetCalendar) {
         return {
             completed: false,
             message: `未找到名为「${SYNC_CALENDAR_NAME}」的日历，请先在系统日历 App 中创建`,
         };
     }
 
-    const existing = await CalendarEvent.between(rangeStart, rangeEnd, [targetCal]);
-    const existingIds = new Set();
-    const existingLegacyKeys = new Set();
-    for (const event of Array.isArray(existing) ? existing : []) {
-        if (!(event?.startDate instanceof Date) || Number.isNaN(event.startDate.getTime())) continue;
-        const eventId = calendarEventIdFromNotes(event.notes);
-        if (eventId) existingIds.add(eventId);
-        else existingLegacyKeys.add(calendarLegacyKey(event.title, event.startDate));
+    const existing = await CalendarEvent.between(rangeStart, rangeEnd, [targetCalendar]);
+    const index = indexExistingCalendarEvents(existing);
+    const retainedEvents = new Set();
+    const counts = { created: 0, updated: 0, removed: 0, unchanged: 0, skipped: 0 };
+    for (const item of preparedItems) {
+        const action = await reconcileCalendarItem(item, index, targetCalendar, retainedEvents);
+        counts[action]++;
     }
+    counts.removed = await removeUnretainedManagedEvents(index.managedById, retainedEvents);
 
-    let created = 0;
-    let skipped = 0;
-    for (const item of parsedItems) {
-        const legacyKey = calendarLegacyKey(item.title, item.startDate);
-        if ((item.id && existingIds.has(item.id)) || (!item.id && existingLegacyKeys.has(legacyKey))) {
-            skipped++;
-            continue;
-        }
-        // 未写入 Pendo ID 的现有日历事件使用“标题 + 开始时间”键识别。
-        if (item.id && existingLegacyKeys.has(legacyKey)) {
-            existingLegacyKeys.delete(legacyKey);
-            existingIds.add(item.id);
-            skipped++;
-            continue;
-        }
-        const event = new CalendarEvent();
-        event.title = item.title;
-        event.startDate = item.startDate;
-        event.endDate = item.endDate;
-        event.isAllDay = item.isAllDay;
-        event.calendar = targetCal;
-        if (item.location) event.location = item.location;
-        event.notes = item.id ? `${SYNC_MARKER}\n${CALENDAR_EVENT_ID_PREFIX}${item.id}` : SYNC_MARKER;
-        const saved = event.save();
-        if (saved && typeof saved.then === 'function') await saved;
-        if (item.id) existingIds.add(item.id);
-        else existingLegacyKeys.add(legacyKey);
-        created++;
-    }
-
-    const parts = [`新增 ${created}`];
-    if (skipped) parts.push(`跳过 ${skipped}`);
-    return { completed: true, message: `同步完成：${parts.join('，')}` };
+    return { completed: true, message: formatCalendarSyncCounts(counts) };
 }
 
 async function syncCalendarFromServer(token, currentTime = new Date()) {

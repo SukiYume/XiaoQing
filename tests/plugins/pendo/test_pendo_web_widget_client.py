@@ -312,22 +312,81 @@ def test_scriptable_renders_all_widget_families_with_normalized_data() -> None:
     )
 
 
-def test_scriptable_calendar_sync_is_add_only() -> None:
-    """同步窗口只新增缺失日程，并保留窗口中的其他日历事件。"""
+def test_scriptable_calendar_sync_reconciles_managed_events() -> None:
+    """同步窗口新增、更新和清理托管日程，但不接管用户事件。"""
 
     _run_widget_client(
         r"""
-        const duplicateStart = new Date('2026-05-01T10:00:00');
         const targetCalendar = { title: 'Pendo', allowsContentModifications: true };
         let removed = 0;
+        let updated = 0;
+        const editedEvent = {
+            title: '会议旧标题',
+            startDate: new Date('2026-05-01T09:00:00'),
+            endDate: new Date('2026-05-01T10:00:00'),
+            isAllDay: false,
+            location: '旧会议室',
+            notes: '[由 Pendo Widget 同步]\nPendo-ID: edited-meeting\n保留这行备注',
+            save() { updated += 1; },
+            remove() { removed += 1; },
+        };
+        const unchangedEvent = {
+            title: '没有修改的会议',
+            startDate: new Date('2026-05-03T10:00:00'),
+            endDate: new Date('2026-05-03T11:00:00'),
+            isAllDay: false,
+            location: '会议室 B',
+            notes: '[由 Pendo Widget 同步]\nPendo-ID: unchanged-meeting',
+            save() { updated += 1; },
+            remove() { removed += 1; },
+        };
+        const staleEvent = {
+            title: '已删除的 Pendo 日程',
+            startDate: new Date('2026-05-04T10:00:00'),
+            endDate: new Date('2026-05-04T11:00:00'),
+            isAllDay: false,
+            location: '',
+            notes: '[由 Pendo Widget 同步]\nPendo-ID: stale-meeting',
+            save() { updated += 1; },
+            remove() { removed += 1; },
+        };
+        const duplicateManagedEvent = {
+            title: '没有修改的会议',
+            startDate: new Date('2026-05-03T10:00:00'),
+            endDate: new Date('2026-05-03T11:00:00'),
+            isAllDay: false,
+            location: '会议室 B',
+            notes: '[由 Pendo Widget 同步]\nPendo-ID: unchanged-meeting',
+            save() { updated += 1; },
+            remove() { removed += 1; },
+        };
+        const userEvent = {
+            title: '用户自己的会议',
+            startDate: new Date('2026-05-05T10:00:00'),
+            endDate: new Date('2026-05-05T11:00:00'),
+            isAllDay: false,
+            location: '',
+            notes: '私人日程',
+            save() { throw new Error('must not update user event'); },
+            remove() { throw new Error('must not remove user event'); },
+        };
+        const markerMentionEvent = {
+            title: '只在正文提到同步标记',
+            startDate: new Date('2026-05-06T10:00:00'),
+            endDate: new Date('2026-05-06T11:00:00'),
+            isAllDay: false,
+            location: '',
+            notes: '普通说明中提到 [由 Pendo Widget 同步]\nPendo-ID: not-managed',
+            save() { throw new Error('must not update marker mention'); },
+            remove() { throw new Error('must not remove marker mention'); },
+        };
         const existing = [
-            { title: '已有会议', startDate: duplicateStart },
-            {
-                title: '摘要未覆盖但仍有效的日程',
-                startDate: new Date('2026-05-20T09:00:00'),
-                notes: '[由 Pendo Widget 同步]',
-                remove() { removed += 1; },
-            },
+            editedEvent,
+            unchangedEvent,
+            duplicateManagedEvent,
+            staleEvent,
+            userEvent,
+            markerMentionEvent,
         ];
         globalThis.Calendar = {
             forEventsByTitle: async () => targetCalendar,
@@ -346,8 +405,14 @@ def test_scriptable_calendar_sync_is_add_only() -> None:
                 date: {}, today_count: 0, tomorrow_count: 0,
                 items: [
                     {
-                        id: 'existing-meeting', title: '已有会议', day: '2026-05-01',
+                        id: 'edited-meeting', title: '会议新标题', day: '2026-05-01',
                         start_time: '2026-05-01T10:00:00',
+                        end_time: '2026-05-01T12:00:00', location: '',
+                    },
+                    {
+                        id: 'unchanged-meeting', title: '没有修改的会议', day: '2026-05-03',
+                        start_time: '2026-05-03T10:00:00',
+                        end_time: '2026-05-03T11:00:00', location: '会议室 B',
                     },
                     {
                         id: 'new-meeting', title: '新会议', day: '2026-05-01',
@@ -355,6 +420,10 @@ def test_scriptable_calendar_sync_is_add_only() -> None:
                         location: '会议室',
                     },
                     { id: 'all-day', title: '全天事项', day: '2026-05-02' },
+                    {
+                        id: 'manual-collision', title: '用户自己的会议', day: '2026-05-05',
+                        start_time: '2026-05-05T10:00:00',
+                    },
                 ],
             },
         });
@@ -365,9 +434,15 @@ def test_scriptable_calendar_sync_is_add_only() -> None:
             rangeStart,
             rangeEnd,
         );
-        assert.equal(result.message, '同步完成：新增 2，跳过 1');
+        assert.equal(result.message, '同步完成：新增 2，更新 1，删除 2，未变化 1，跳过 1');
         assert.equal(__createdEvents.length, 2);
-        assert.equal(removed, 0);
+        assert.equal(updated, 1);
+        assert.equal(removed, 2);
+        assert.equal(editedEvent.title, '会议新标题');
+        assert.equal(editedEvent.startDate.getTime(), new Date('2026-05-01T10:00:00').getTime());
+        assert.equal(editedEvent.endDate.getTime(), new Date('2026-05-01T12:00:00').getTime());
+        assert.equal(editedEvent.location, '');
+        assert.match(editedEvent.notes, /保留这行备注/);
         assert.equal(__createdEvents[0].saved, true);
         assert.match(__createdEvents[0].notes, /Pendo-ID: new-meeting/);
         assert.equal(__createdEvents[0].endDate.getTime() > __createdEvents[0].startDate.getTime(), true);
@@ -401,12 +476,19 @@ def test_scriptable_calendar_sync_preserves_distinct_same_time_items() -> None:
                     {
                         title: '同步会议',
                         startDate: start,
+                        endDate: new Date('2026-05-01T11:00:00'),
+                        isAllDay: false,
+                        location: '',
                         notes: '[由 Pendo Widget 同步]\nPendo-ID: already-synced',
                     },
                     {
                         title: '旧键会议',
                         startDate: legacyStart,
+                        endDate: new Date('2026-05-01T12:00:00'),
+                        isAllDay: false,
+                        location: '',
                         notes: '[由 Pendo Widget 同步]',
+                        save() { this.saved = true; },
                     },
                 ];
             }
@@ -426,7 +508,7 @@ def test_scriptable_calendar_sync_preserves_distinct_same_time_items() -> None:
             new Date('2026-05-02T00:00:00'),
         );
 
-        assert.equal(result.message, '同步完成：新增 3，跳过 2');
+        assert.equal(result.message, '同步完成：新增 3，更新 1，未变化 1');
         assert.equal(__createdEvents.length, 3);
         assert.match(__createdEvents[0].notes, /Pendo-ID: distinct-a/);
         assert.match(__createdEvents[1].notes, /Pendo-ID: distinct-b/);
@@ -435,24 +517,81 @@ def test_scriptable_calendar_sync_preserves_distinct_same_time_items() -> None:
     )
 
 
-def test_scriptable_calendar_sync_handles_disabled_empty_and_missing_calendar() -> None:
-    """没有摘要或没有可写日历时应稳定返回，不创建任何事件。"""
+def test_scriptable_calendar_sync_accepts_events_overlapping_window() -> None:
+    """跨天日程开始在窗口外时，仍按完整起止时间写入。"""
 
     _run_widget_client(
         r"""
+        const targetCalendar = { title: 'Pendo', allowsContentModifications: true };
         globalThis.Calendar = {
-            forEventsByTitle: async () => null,
-            forEvents: async () => [],
+            forEventsByTitle: async () => targetCalendar,
+            forEvents: async () => [targetCalendar],
         };
-        globalThis.CalendarEvent = class CalendarEvent {};
+        globalThis.__createdEvents = [];
+        globalThis.CalendarEvent = class CalendarEvent {
+            constructor() { __createdEvents.push(this); }
+            static async between() { return []; }
+            save() { this.saved = true; }
+        };
+
+        const result = await client.__applyAgendaItemsToCalendar(
+            [{
+                id: 'cross-window',
+                title: '跨窗口日程',
+                start_time: '2026-04-30T22:00:00',
+                end_time: '2026-05-01T02:00:00',
+            }],
+            new Date('2026-05-01T00:00:00'),
+            new Date('2026-05-02T00:00:00'),
+        );
+
+        assert.equal(result.message, '同步完成：新增 1');
+        assert.equal(__createdEvents.length, 1);
+        assert.equal(
+            __createdEvents[0].startDate.getTime(),
+            new Date('2026-04-30T22:00:00').getTime(),
+        );
+        assert.equal(
+            __createdEvents[0].endDate.getTime(),
+            new Date('2026-05-01T02:00:00').getTime(),
+        );
+        """
+    )
+
+
+def test_scriptable_calendar_sync_handles_empty_and_missing_calendar() -> None:
+    """空响应仍清理托管旧事件，目标日历缺失时不宣告成功。"""
+
+    _run_widget_client(
+        r"""
+        const targetCalendar = { title: 'Pendo', allowsContentModifications: true };
+        let calendarAvailable = true;
+        let removed = 0;
+        globalThis.Calendar = {
+            forEventsByTitle: async () => calendarAvailable ? targetCalendar : null,
+            forEvents: async () => calendarAvailable ? [targetCalendar] : [],
+        };
+        globalThis.CalendarEvent = class CalendarEvent {
+            static async between() {
+                return [{
+                    title: '服务端已删除',
+                    startDate: new Date('2026-05-01T10:00:00'),
+                    notes: '[由 Pendo Widget 同步]\nPendo-ID: deleted-on-server',
+                    remove() { removed += 1; },
+                }];
+            }
+        };
         assert.equal(
             (await client.__applyAgendaItemsToCalendar(
                 [],
                 new Date('2026-05-01T00:00:00'),
                 new Date('2026-05-31T00:00:00'),
             )).message,
-            '没有需要同步的日程',
+            '同步完成：新增 0，删除 1',
         );
+        assert.equal(removed, 1);
+
+        calendarAvailable = false;
         assert.equal(
             (await client.__applyAgendaItemsToCalendar(
                 [{ title: '会议', day: '2026-05-01' }],
@@ -479,6 +618,11 @@ def test_scriptable_calendar_cursor_fills_gap_and_advances_after_success() -> No
         const resumed = client.__buildCalendarSyncWindow(new Date('2026-08-15T08:00:00'));
         assert.equal(resumed.startKey, '2026-07-01');
         assert.equal(resumed.endKey, '2026-09-14');
+
+        Keychain.set(cursorKey, '2026-08-15');
+        const rolling = client.__buildCalendarSyncWindow(new Date('2026-08-15T08:00:00'));
+        assert.equal(rolling.startKey, '2026-07-16');
+        assert.equal(rolling.endKey, '2026-09-14');
 
         Keychain.set(cursorKey, '2010-01-01');
         const bounded = client.__buildCalendarSyncWindow(new Date('2026-08-15T08:00:00'));
@@ -574,6 +718,58 @@ def test_scriptable_calendar_cursor_does_not_advance_when_target_is_missing() ->
             new Date('2026-08-15T08:00:00'),
         );
         assert.match(result, /未找到名为/);
+        assert.equal(Keychain.get(cursorKey), '2026-07-01');
+        """
+    )
+
+
+def test_scriptable_calendar_cursor_does_not_advance_when_update_fails() -> None:
+    """已有事件更新失败时保留旧成功日，避免跳过尚未完成的对账。"""
+
+    _run_widget_client(
+        r"""
+        const cursorKey = 'pendo.calendar-last-success:https://example.com/pendo:Pendo';
+        Keychain.set(cursorKey, '2026-07-01');
+        globalThis.Request = class Request {
+            constructor() { this.response = { statusCode: 200 }; }
+            async loadString() {
+                return JSON.stringify({
+                    ok: true,
+                    data: {
+                        start_date: '2026-07-01', end_date: '2026-09-14',
+                        items: [{
+                            id: 'edited-event',
+                            title: '修改后的日程',
+                            start_time: '2026-08-10T11:00:00',
+                            end_time: '2026-08-10T12:00:00',
+                        }],
+                    },
+                });
+            }
+        };
+        const targetCalendar = { title: 'Pendo', allowsContentModifications: true };
+        globalThis.Calendar = {
+            forEventsByTitle: async () => targetCalendar,
+            forEvents: async () => [targetCalendar],
+        };
+        globalThis.CalendarEvent = class CalendarEvent {
+            static async between() {
+                return [{
+                    title: '修改前的日程',
+                    startDate: new Date('2026-08-10T09:00:00'),
+                    endDate: new Date('2026-08-10T10:00:00'),
+                    isAllDay: false,
+                    location: '',
+                    notes: '[由 Pendo Widget 同步]\nPendo-ID: edited-event',
+                    save() { throw new Error('calendar update failed'); },
+                }];
+            }
+        };
+
+        await assert.rejects(
+            client.__syncCalendarFromServer('widget-token', new Date('2026-08-15T08:00:00')),
+            /calendar update failed/,
+        );
         assert.equal(Keychain.get(cursorKey), '2026-07-01');
         """
     )

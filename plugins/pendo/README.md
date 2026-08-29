@@ -210,7 +210,7 @@ GET /api/widget/calendar?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
 Authorization: Bearer <widget_token>
 ```
 
-摘要接口返回最多 5 条近期日程。日历接口返回最长 3660 天闭区间内的完整日程，供 Scriptable 通过上次成功运行日增量补齐 iOS 日历。脚本按 Pendo 条目 ID 新增缺失事件，在 Keychain 中保存同步游标，并在源码顶部读取 Web 地址与 Widget Token。Scriptable 脚本位于 `plugins/pendo/web/scriptable/pendo_widget.js`，配置方式见 [Scriptable 小组件指南](../../docs/pendo-scriptable-widget.md)。
+摘要接口返回最多 5 条近期日程。日历接口返回最长 3660 天闭区间内的完整日程；Scriptable 每次至少回看过去 30 天，并在成功游标更早时补齐间隔。脚本按 Pendo 条目 ID 原地新增、更新和清理托管事件，在 Keychain 中保存同步游标，并在源码顶部读取 Web 地址与 Widget Token。Scriptable 脚本位于 `plugins/pendo/web/scriptable/pendo_widget.js`，配置方式见 [Scriptable 小组件指南](../../docs/pendo-scriptable-widget.md)。
 
 ### 页面
 
