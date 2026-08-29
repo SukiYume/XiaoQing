@@ -258,7 +258,7 @@ def build_widget_calendar(
     start_date: str,
     end_date: str,
 ) -> JsonObject:
-    """返回一个闭区间内的完整日程集合，供 Scriptable 增量补齐日历。"""
+    """返回一个闭区间内的完整日程集合，供 Scriptable 对账 iOS 日历。"""
 
     start_day = _parse_calendar_sync_date(start_date, "start_date")
     end_day = _parse_calendar_sync_date(end_date, "end_date")

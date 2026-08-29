@@ -248,7 +248,7 @@ API 返回统一 `ok`、`message`、`error_code` 结构。安全头包括 CSP、
 4. `/api/widget/*` 同时校验 JWT 签名、scope、期限和注册表状态；
 5. 撤销操作更新当前 owner 的有效记录。
 
-`/api/widget/summary` 提供最多 5 条日程和主屏面板；`/api/widget/calendar` 提供最长 3660 天闭区间内的完整日程。Scriptable 在源码顶部读取 Web 地址与 Widget Token，在 Keychain 保存上次成功运行日。日历同步从该日查询到未来 30 天，首次运行回看 30 天；每次读取一个服务端窗口和一个 iOS 目标日历窗口，以 Pendo 条目 ID 新增缺失事件，并在全部写入成功后推进游标。
+`/api/widget/summary` 提供最多 5 条日程和主屏面板；`/api/widget/calendar` 提供最长 3660 天闭区间内的完整日程。Scriptable 在源码顶部读取 Web 地址与 Widget Token，在 Keychain 保存上次成功运行日。日历同步始终至少回看过去 30 天并查询到未来 30 天，游标更早时同时补齐间隔；每次读取一个服务端窗口和一个 iOS 目标日历窗口，以 Pendo 条目 ID 原地新增、更新和清理带同步标记的托管事件，并在全部对账成功后推进游标。
 
 两类凭据使用相同的秒级期限计算约定，并拥有独立的认证依赖和权限范围。
 
