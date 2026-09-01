@@ -114,6 +114,7 @@ def test_event_edit_explicit_fields_do_not_become_title_without_ai():
             handler.edit_event(owner_id, "evloc001 地点改到北京南", SimpleNamespace())
         )
         assert result["status"] == "success"
+        assert "📍 地点: 上海 → 北京南" in result["message"]
         event = db.get_item("evloc001", owner_id)
         assert event.title == "原始日程"
         assert event.location == "北京南"
@@ -125,6 +126,7 @@ def test_event_edit_explicit_fields_do_not_become_title_without_ai():
             handler.edit_event(owner_id, "evnote01 备注为从北京南坐G123去会场", SimpleNamespace())
         )
         assert result["status"] == "success"
+        assert "📝 备注: 原备注 → 从北京南坐G123去会场" in result["message"]
         event = db.get_item("evnote01", owner_id)
         assert event.title == "原始日程"
         assert event.location == "上海"
@@ -136,6 +138,7 @@ def test_event_edit_explicit_fields_do_not_become_title_without_ai():
             handler.edit_event(owner_id, "evtitle1 标题改为FAST会议行程", SimpleNamespace())
         )
         assert result["status"] == "success"
+        assert "🗓️ 标题: 原始日程 → FAST会议行程" in result["message"]
         event = db.get_item("evtitle1", owner_id)
         assert event.title == "FAST会议行程"
         assert event.location == "上海"
@@ -152,6 +155,69 @@ def test_event_edit_explicit_fields_do_not_become_title_without_ai():
         assert event.location == "上海"
         assert event.notes == "原备注"
         assert event.start_time == "2026-05-04T16:00:00+00:00"
+    finally:
+        db.cleanup()
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_event_edit_success_message_reports_final_time_timezone_and_reminders():
+    temp_dir, db = _make_temp_db("pendo_event_edit_result_summary")
+    owner_id = "u-event-edit-result-summary"
+    event_id = "1353ab2115ca41ed8d5c00934bcac3c8"
+
+    try:
+        db.insert_item(
+            {
+                "id": event_id,
+                "owner_id": owner_id,
+                "type": "event",
+                "title": "KSP讨论",
+                "category": "工作",
+                "timezone": "Asia/Shanghai",
+                "start_time": "2026-09-02T20:00:00",
+                "remind_times": [
+                    "2026-09-01T20:00:00",
+                    "2026-09-02T19:00:00",
+                    "2026-09-02T20:00:00",
+                ],
+                "reminder_rules": [
+                    {"offset_seconds": 86400},
+                    {"offset_seconds": 3600},
+                    {"offset_seconds": 0},
+                ],
+                "created_at": "2026-09-01T08:00:00",
+                "updated_at": "2026-09-01T08:00:00",
+            }
+        )
+        handler = EventHandler(db, SimpleNamespace(), ReminderService(db))
+
+        async def parse_updates(_changes, _event):
+            return {"start_time": "2026-09-09T20:00:00"}
+
+        handler._parse_updates = parse_updates
+        result = asyncio.run(
+            handler.edit_event(
+                owner_id,
+                f"{event_id[:8]} 改到下周三晚上8点",
+                SimpleNamespace(),
+            )
+        )
+
+        assert result["status"] == "success"
+        assert ("⏰ 开始: 2026年09月02日 周三 20:00 → 2026年09月09日 周三 20:00") in result[
+            "message"
+        ]
+        assert "🌐 时区: Asia/Shanghai" in result["message"]
+        assert "🔔 提醒: 已同步调整 3 个" in result["message"]
+        assert f"/pendo event reminders {event_id[:8]}" in result["message"]
+
+        updated = db.get_item(event_id, owner_id)
+        assert updated.start_time == "2026-09-09T12:00:00+00:00"
+        assert updated.remind_times == [
+            "2026-09-08T12:00:00+00:00",
+            "2026-09-09T11:00:00+00:00",
+            "2026-09-09T12:00:00+00:00",
+        ]
     finally:
         db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
