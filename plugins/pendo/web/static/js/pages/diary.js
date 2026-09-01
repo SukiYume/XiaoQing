@@ -13,9 +13,15 @@ import {
     parseDate,
     previewText,
     records,
-    todayStr,
 } from '../utils/format.js';
-import { fetchUserTimeZone, zonedDateTimeToInput, zonedInputToUtcIso } from '../utils/timezone.js';
+import {
+    fetchUserTimeZone,
+    todayInUserTimeZone,
+    zonedDateKey,
+    zonedDateParts,
+    zonedDateTimeToInput,
+    zonedInputToUtcIso,
+} from '../utils/timezone.js';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss, subscribeDataChanges } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-diary-redesign-styles';
@@ -195,7 +201,7 @@ function parseDiaryTimestamp(value) {
     if (!text) return null;
     const datePrefix = text.match(/^(\d{4}-\d{2}-\d{2})/)?.[1];
     if (datePrefix && !parseDate(datePrefix)) return null;
-    return parseDate(text);
+    return zonedDateParts(text);
 }
 
 function formatEntryTime(item, { timeOnly = false } = {}) {
@@ -203,18 +209,18 @@ function formatEntryTime(item, { timeOnly = false } = {}) {
     const text = String(raw).trim();
     const timestamp = parseDiaryTimestamp(text);
     const explicitTime = /[T ]\d{2}:\d{2}/.test(text);
-    const time = timestamp && explicitTime ? `${pad2(timestamp.getHours())}:${pad2(timestamp.getMinutes())}` : '';
+    const time = timestamp && explicitTime ? `${pad2(timestamp.hour)}:${pad2(timestamp.minute)}` : '';
     if (timeOnly) return time || '全天';
 
     const diaryDate = parseDate(item?.diary_date);
-    const date = diaryDate ? isoDate(diaryDate) : timestamp ? isoDate(timestamp) : '未知日期';
+    const date = diaryDate ? isoDate(diaryDate) : timestamp ? zonedDateKey(text) : '未知日期';
     return time ? `${date} ${time}` : date;
 }
 
 function defaultEntryTime(dateStr, userTimeZone) {
     const date = parseDate(dateStr);
     const nowInput = zonedDateTimeToInput(new Date().toISOString(), userTimeZone);
-    return `${date ? isoDate(date) : todayStr()}T${nowInput.slice(11, 16)}`;
+    return `${date ? isoDate(date) : todayInUserTimeZone()}T${nowInput.slice(11, 16)}`;
 }
 
 function compactDiaryCellLabel(entry, maxChars = 8) {
@@ -270,7 +276,7 @@ function ensureSelectedDate() {
             .map((item) => item.diary_date)
             .filter((value) => typeof value === 'string' && value.startsWith(monthPrefix)),
     );
-    const today = todayStr();
+    const today = todayInUserTimeZone();
     const inCurrentMonth = monthPrefix === today.slice(0, 7);
     if (_selectedDate && _selectedDate.startsWith(monthPrefix)) return;
     if (inCurrentMonth) {
@@ -369,7 +375,7 @@ async function fetchOverview(year, month) {
     const res = await api.get('/stats/diary/overview', {
         year,
         month,
-        today: todayStr(),
+        today: todayInUserTimeZone(),
     });
     return normalizeDiaryOverview(res?.data);
 }
@@ -444,7 +450,7 @@ function buildCalendarDays(year, month) {
     const first = new Date(year, month - 1, 1);
     const offset = (first.getDay() + 6) % 7;
     const start = new Date(year, month - 1, 1 - offset);
-    const today = todayStr();
+    const today = todayInUserTimeZone();
     const days = [];
     for (let index = 0; index < 42; index += 1) {
         const current = new Date(start);
@@ -902,7 +908,7 @@ function renderRecentPanel() {
                             .map(
                                 (item) => `
                             <button type="button" class="diary-recent-item" data-id="${escapeHtml(String(item.id))}" data-date="${escapeHtml(String(item.diary_date || ''))}">
-                                <span class="diary-recent-top"><strong>${escapeHtml(moodEmoji(item.mood) || '📖')} ${escapeHtml(item.title || item.diary_date)}</strong><span>${escapeHtml(item.entry_label || formatEntryTime(item))}</span></span>
+                                <span class="diary-recent-top"><strong>${escapeHtml(moodEmoji(item.mood) || '📖')} ${escapeHtml(item.title || item.diary_date)}</strong><span>${escapeHtml(formatEntryTime(item, { timeOnly: true }))}</span></span>
                                 <span class="diary-recent-preview">${escapeHtml(item.content_preview || '点击查看详情')}</span>
                             </button>`,
                             )
@@ -1177,7 +1183,7 @@ async function openDiaryFormModal(existing = null, presetDate = null) {
         ensureStyles();
         const diary = isRecord(existing) ? existing : null;
         const isEdit = diary !== null;
-        const formDate = diary?.diary_date || presetDate || _selectedDate || todayStr();
+        const formDate = diary?.diary_date || presetDate || _selectedDate || todayInUserTimeZone();
         const fields = DIARY_FIELDS.map((field) => {
             let value = '';
             if (diary) value = diary[field.name] ?? '';
@@ -1374,7 +1380,7 @@ function attachListeners() {
         const button = _container.querySelector(selector);
         if (button) {
             button.onclick = () => {
-                void openDiaryFormModal(null, _selectedDate || todayStr());
+                void openDiaryFormModal(null, _selectedDate || todayInUserTimeZone());
             };
         }
     }
@@ -1510,7 +1516,7 @@ export function render(container) {
     _overview = null;
     _loading = false;
     _selectedDate = '';
-    const now = new Date();
+    const now = parseDate(todayInUserTimeZone());
     _year = now.getFullYear();
     _month = now.getMonth() + 1;
     ensureStyles();

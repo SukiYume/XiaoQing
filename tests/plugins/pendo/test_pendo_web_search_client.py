@@ -6,10 +6,14 @@ from typing import Final
 
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
+from tests.helpers.pendo_web_timezone_test_support import inline_timezone_runtime
 
 ROOT: Final = REPOSITORY_ROOT
 SEARCH_CLIENT: Final = ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "search.js"
 FORMAT_CLIENT: Final = ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "utils" / "format.js"
+TIMEZONE_CLIENT: Final = (
+    ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "utils" / "timezone.js"
+)
 
 SEARCH_SETUP: Final = r"""
     globalThis.__api = { get: async () => ({ data: {} }) };
@@ -63,12 +67,12 @@ def _search_source_for_test() -> str:
     """替换浏览器相邻依赖，并嵌入真实共享格式函数。"""
 
     source = SEARCH_CLIENT.read_text(encoding="utf-8")
+    timezone_runtime = inline_timezone_runtime(TIMEZONE_CLIENT)
     format_source = FORMAT_CLIENT.read_text(encoding="utf-8").replace("export ", "")
     format_runtime = f"""
 const {{
     errorMessage,
     finiteNumber,
-    formatDateTime,
     isRecord,
     nonNegativeInteger,
     previewText,
@@ -78,7 +82,6 @@ const {{
     return {{
         errorMessage,
         finiteNumber,
-        formatDateTime,
         isRecord,
         nonNegativeInteger,
         previewText,
@@ -100,13 +103,16 @@ const {{
             """import {
     errorMessage,
     finiteNumber,
-    formatDateTime,
     isRecord,
     nonNegativeInteger,
     previewText,
     textValue,
 } from '../utils/format.js';""",
             format_runtime,
+        ),
+        (
+            "import { formatZonedDateTime } from '../utils/timezone.js';",
+            timezone_runtime,
         ),
         (
             "import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss, "
@@ -242,6 +248,17 @@ def test_search_normalizes_boundaries_and_renders_safe_native_cards() -> None:
         assert.equal(item.amount, null);
         assert.ok(!client.itemMeta(item).join(' ').includes('Infinity'));
         assert.ok(!client.itemMeta(item).join(' ').includes('NaN'));
+
+        const task = client.normalizeSearchItem({
+            id: 'task/1', type: 'task', plan_date: '2026-05-20',
+        });
+        assert.ok(client.itemMeta(task).includes('计划 2026-05-20'));
+        assert.ok(!client.itemMeta(task).join(' ').includes('00:00'));
+
+        const zonedEvent = client.normalizeSearchItem({
+            id: 'event/zoned', type: 'event', start_time: '2026-05-01T16:30:00+00:00',
+        });
+        assert.ok(client.itemMeta(zonedEvent).includes('2026-05-02 00:30'));
 
         const event = client.normalizeSearchItem({
             id: 'event/1',

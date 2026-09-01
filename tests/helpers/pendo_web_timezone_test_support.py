@@ -14,13 +14,39 @@ def inline_timezone_runtime(source_path: Path) -> str:
     )
     source = source.replace("export function ", "function ")
     return f"""
-const {{ zonedDateTimeToInput, zonedInputToUtcIso }} = (() => {{
+process.env.TZ = 'America/Los_Angeles';
+const {{
+    setUserTimeZone,
+    getUserTimeZone,
+    formatZonedDateTime,
+    formatZonedMonthDay,
+    formatZonedTime,
+    todayInUserTimeZone,
+    zonedDateKey,
+    zonedDateParts,
+    zonedDateTimeToInput,
+    zonedInputToUtcIso,
+    zonedInstantEpoch,
+}} = (() => {{
 {source}
-    return {{ zonedDateTimeToInput, zonedInputToUtcIso }};
+    return {{
+        setUserTimeZone,
+        getUserTimeZone,
+        formatZonedDateTime,
+        formatZonedMonthDay,
+        formatZonedTime,
+        todayInUserTimeZone,
+        zonedDateKey,
+        zonedDateParts,
+        zonedDateTimeToInput,
+        zonedInputToUtcIso,
+        zonedInstantEpoch,
+    }};
 }})();
+setUserTimeZone(globalThis.__userTimeZone || 'Asia/Shanghai');
 const fetchUserTimeZone = async () => {{
     if (globalThis.__userTimeZoneError) throw globalThis.__userTimeZoneError;
-    return globalThis.__userTimeZone || 'Asia/Shanghai';
+    return setUserTimeZone(globalThis.__userTimeZone || 'Asia/Shanghai');
 }};
 """
 

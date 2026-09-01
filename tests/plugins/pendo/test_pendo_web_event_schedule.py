@@ -1,6 +1,6 @@
 """Pendo Web 共享日程时间轴的边界回归。"""
 
-from datetime import date
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -78,6 +78,12 @@ def test_build_event_schedule_expands_multi_day_event_once_per_day() -> None:
     assert result["day_entries"]["2026-03-10"][0]["time_label"] == "09:00"
     assert result["day_entries"]["2026-03-11"][0]["time_label"] == "跨天"
     assert result["day_entries"]["2026-03-12"][0]["time_label"] == "至 03:00"
+    assert result["start_epoch_ms"] == round(
+        datetime(2026, 3, 10, 9, tzinfo=ZoneInfo("Asia/Shanghai")).timestamp() * 1000
+    )
+    assert result["end_epoch_ms"] == round(
+        datetime(2026, 3, 12, 3, tzinfo=ZoneInfo("Asia/Shanghai")).timestamp() * 1000
+    )
 
 
 def test_build_event_schedule_handles_missing_start_time() -> None:
@@ -95,4 +101,6 @@ def test_build_event_schedule_handles_missing_start_time() -> None:
         "display_days": [],
         "day_entries": {},
         "time_summary": "未设置时间",
+        "start_epoch_ms": None,
+        "end_epoch_ms": None,
     }

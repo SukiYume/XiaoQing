@@ -1,6 +1,7 @@
-/** 列表与统计页面共享的本地日期范围推导和数据首尾边界查询。 */
+/** 列表与统计页面共享的用户时区自然日期范围和数据首尾边界查询。 */
 
-import { isoDate, todayStr } from './format.js';
+import { isoDate } from './format.js';
+import { todayInUserTimeZone } from './timezone.js';
 
 export const RANGE_PRESET_OPTIONS = [
     { key: 'week', label: '本周' },
@@ -13,7 +14,7 @@ export const RANGE_PRESET_OPTIONS = [
 ];
 
 /** 保留范围层的语义化名称，但不再增加一次无意义函数调用。 */
-export { todayStr as todayRangeKey };
+export { todayInUserTimeZone as todayRangeKey };
 
 function normalizeDateKey(value) {
     if (typeof value !== 'string') return '';
@@ -25,7 +26,8 @@ function normalizeDateKey(value) {
 }
 
 function resolveToday(today) {
-    const fallback = normalizeDateKey(todayStr()) || isoDate(new Date());
+    const fallback = normalizeDateKey(todayInUserTimeZone());
+    if (!fallback) throw new RangeError('用户时区当天日期无效');
     const key = normalizeDateKey(today) || fallback;
     return { date: new Date(`${key}T00:00:00`), key };
 }
@@ -33,7 +35,7 @@ function resolveToday(today) {
 export function derivePresetRange(
     preset,
     {
-        today = todayStr(),
+        today = todayInUserTimeZone(),
         customStart = '',
         customEnd = '',
         customFallback = 'month',
@@ -100,7 +102,14 @@ export function derivePresetRange(
 /** 各取最早和最晚一条记录，得到“全部”筛选所需的稳定日期边界。 */
 export async function fetchItemRangeBounds(
     apiClient,
-    { type, sortField, startField = sortField, endField = startField, fallbackEnd = todayStr(), minimumEnd = '' },
+    {
+        type,
+        sortField,
+        startField = sortField,
+        endField = startField,
+        fallbackEnd = todayInUserTimeZone(),
+        minimumEnd = '',
+    },
 ) {
     const [earliestRes, latestRes] = await Promise.all([
         apiClient.get('/items', {

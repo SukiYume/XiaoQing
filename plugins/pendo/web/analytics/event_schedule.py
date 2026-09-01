@@ -10,6 +10,29 @@ from ...models.item import EventItem
 JsonObject = dict[str, Any]
 
 
+def _resolve_datetime(
+    value: str | None,
+    timezone_info: tzinfo,
+    *,
+    is_end: bool = False,
+) -> tuple[datetime, int] | None:
+    """返回用户墙钟和对应的真实时间轴毫秒值。"""
+
+    if value is None or not value.strip():
+        return None
+    text = value.strip()
+    if len(text) == 10:
+        text = f"{text}{'T23:59:59' if is_end else 'T00:00:00'}"
+    parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        local = parsed
+        instant = parsed.replace(tzinfo=timezone_info)
+    else:
+        instant = parsed
+        local = parsed.astimezone(timezone_info).replace(tzinfo=None)
+    return local, round(instant.timestamp() * 1000)
+
+
 def ensure_datetime(
     value: str | None,
     timezone_info: tzinfo,
@@ -18,15 +41,8 @@ def ensure_datetime(
 ) -> datetime | None:
     """解析 ISO 日期/时间，并转换为调用方明确指定的墙钟时间。"""
 
-    if value is None or not value.strip():
-        return None
-    text = value.strip()
-    if len(text) == 10:
-        text = f"{text}{'T23:59:59' if is_end else 'T00:00:00'}"
-    parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    if parsed.tzinfo is not None:
-        return parsed.astimezone(timezone_info).replace(tzinfo=None)
-    return parsed
+    resolved = _resolve_datetime(value, timezone_info, is_end=is_end)
+    return resolved[0] if resolved is not None else None
 
 
 def daterange(start_day: date, end_day: date) -> list[str]:
@@ -56,15 +72,19 @@ def build_event_schedule(
     """把单个日程展开为范围内每天可直接渲染的时间轴条目。"""
 
     kind = event_kind(event)
-    start_dt = ensure_datetime(event.start_time, timezone_info)
-    end_dt = ensure_datetime(event.end_time, timezone_info, is_end=True)
-    if start_dt is None:
+    start_resolved = _resolve_datetime(event.start_time, timezone_info)
+    end_resolved = _resolve_datetime(event.end_time, timezone_info, is_end=True)
+    if start_resolved is None:
         return {
             "kind": kind,
             "display_days": [],
             "day_entries": {},
             "time_summary": "未设置时间",
+            "start_epoch_ms": None,
+            "end_epoch_ms": None,
         }
+    start_dt, start_epoch_ms = start_resolved
+    end_dt, end_epoch_ms = end_resolved if end_resolved is not None else (None, None)
 
     display_start = max(start_dt.date(), range_start_day)
     display_end = min((end_dt or start_dt).date(), range_end_day)
@@ -98,6 +118,8 @@ def build_event_schedule(
                 "time_label": time_label,
                 "start_time": start_time,
                 "end_time": end_time,
+                "start_epoch_ms": start_epoch_ms,
+                "end_epoch_ms": end_epoch_ms,
                 "location": event.location or "",
                 "category": event.category or "",
             }
@@ -108,4 +130,6 @@ def build_event_schedule(
         "display_days": display_days,
         "day_entries": day_entries,
         "time_summary": time_summary,
+        "start_epoch_ms": start_epoch_ms,
+        "end_epoch_ms": end_epoch_ms,
     }

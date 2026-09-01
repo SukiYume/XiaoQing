@@ -3,8 +3,14 @@ import { showToast } from '../components/toast.js';
 import { showModal, closeModal, showConfirmModal, safeHtml } from '../components/modal.js';
 import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
 import { derivePresetRange, fetchItemRangeBounds, RANGE_PRESET_OPTIONS, todayRangeKey } from '../utils/date_ranges.js';
-import { formatDateTime as formatSharedDateTime, isoDate, isValidDateInput, pad2, parseDate } from '../utils/format.js';
-import { fetchUserTimeZone, zonedDateTimeToInput, zonedInputToUtcIso } from '../utils/timezone.js';
+import { isoDate, isValidDateInput, pad2, parseDate } from '../utils/format.js';
+import {
+    fetchUserTimeZone,
+    formatZonedDateTime,
+    zonedDateTimeToInput,
+    zonedInputToUtcIso,
+    zonedInstantEpoch,
+} from '../utils/timezone.js';
 import {
     bindEnterAction,
     bindFormSubmit,
@@ -29,8 +35,8 @@ let _unsubscribeDataChanges = null;
 let _loadVersion = 0;
 let _state = {
     viewMode: 'calendar',
-    monthCursor: firstDayOfMonth(new Date()),
-    selectedDate: isoDate(new Date()),
+    monthCursor: firstDayOfMonth(parseDate('1970-01-01')),
+    selectedDate: '',
     listRange: 'month',
     customStart: '',
     customEnd: '',
@@ -94,7 +100,7 @@ function normalizedReminderStatus(value) {
 }
 
 function canToggleReminder(value, nowMs = Date.now()) {
-    const remindAt = parseDate(value)?.getTime();
+    const remindAt = zonedInstantEpoch(value);
     return Number.isFinite(remindAt) && remindAt > nowMs;
 }
 
@@ -106,7 +112,7 @@ function watchReminderExpiry(content) {
         let nearestFuture = Number.POSITIVE_INFINITY;
         const buttons = content?.querySelectorAll?.('[data-toggle-reminder]') ?? [];
         for (const button of buttons) {
-            const remindAt = parseDate(button.dataset.reminderTime)?.getTime();
+            const remindAt = zonedInstantEpoch(button.dataset.reminderTime);
             if (!Number.isFinite(remindAt) || remindAt <= nowMs) {
                 button.disabled = true;
                 continue;
@@ -145,7 +151,7 @@ function hasInvalidDatePrefix(value) {
 }
 
 function formatEventDateTime(value) {
-    return hasInvalidDatePrefix(value) ? '未知时间' : formatSharedDateTime(value);
+    return hasInvalidDatePrefix(value) ? '未知时间' : formatZonedDateTime(value);
 }
 
 /** 把接口日期转成用户设置时区的 YYYY-MM-DDTHH:mm，非法值不进入表单。 */
@@ -160,11 +166,11 @@ function inputToIso(value, userTimeZone) {
 }
 
 function reminderRulesFromTimes(startTime, remindTimes) {
-    const start = parseDate(startTime)?.getTime();
+    const start = zonedInstantEpoch(startTime);
     if (!Number.isFinite(start)) return [];
     const offsets = new Set();
     for (const value of Array.isArray(remindTimes) ? remindTimes : []) {
-        const remind = parseDate(value)?.getTime();
+        const remind = zonedInstantEpoch(value);
         if (!Number.isFinite(remind)) continue;
         const offset = Math.round((start - remind) / 1000);
         if (offset >= 0) offsets.add(offset);
@@ -700,7 +706,7 @@ function renderCalendarPanel() {
     const totalCells = Math.ceil((offset + daysInThisMonth) / 7) * 7;
     const cells = [];
     const currentMonth = _state.monthCursor.getMonth();
-    const today = isoDate(new Date());
+    const today = todayRangeKey();
 
     for (let index = 0; index < totalCells; index += 1) {
         const dayNumber = index - offset + 1;
@@ -937,7 +943,7 @@ async function loadOverview(options = {}) {
             _state.listRange === 'all' &&
             (!_state.allRangeStart || !_state.allRangeEnd)
         ) {
-            const today = isoDate(new Date());
+            const today = todayRangeKey();
             const bounds = await fetchItemRangeBounds(api, {
                 type: 'event',
                 sortField: 'start_time',
@@ -1764,11 +1770,12 @@ export function render(container) {
     _unsubscribeDataChanges?.();
     _unsubscribeDataChanges = null;
     _container = container;
-    const today = new Date();
+    const todayKey = todayRangeKey();
+    const today = parseDate(todayKey);
     _state = {
         viewMode: 'calendar',
         monthCursor: firstDayOfMonth(today),
-        selectedDate: isoDate(today),
+        selectedDate: todayKey,
         listRange: 'month',
         customStart: '',
         customEnd: '',

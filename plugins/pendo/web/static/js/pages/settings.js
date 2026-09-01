@@ -2,6 +2,7 @@ import { api, logout } from '../api.js';
 import { showToast } from '../components/toast.js';
 import { navigate } from '../router.js';
 import { errorMessage, isRecord, nonEmptyTextValue as textValue } from '../utils/format.js';
+import { setUserTimeZone } from '../utils/timezone.js';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-settings-redesign-styles';
@@ -417,6 +418,7 @@ async function handleSave() {
         const response = await api.put('/settings', payload);
         if (!isCurrentLifecycle(container, version)) return;
         _settings = mergeSavedSettings(response?.data, payload);
+        setUserTimeZone(_settings.timezone);
         showToast('设置已更新', 'success');
     } catch (error) {
         if (isCurrentLifecycle(container, version)) {
@@ -467,6 +469,7 @@ async function loadAndRender(container, version) {
         const response = await api.get('/settings');
         if (!isCurrentLifecycle(container, version)) return;
         _settings = normalizeSettings(response?.data);
+        setUserTimeZone(_settings.timezone);
     } catch (error) {
         if (!isCurrentLifecycle(container, version)) return;
         _settings = normalizeSettings(null);

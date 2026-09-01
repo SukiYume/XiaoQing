@@ -1,4 +1,4 @@
-/** Pendo Web 共享的数据边界、本地日期、文本预览和人民币金额格式化工具。 */
+/** Pendo Web 共享的数据边界、纯日期、文本预览和人民币金额格式化工具。 */
 
 const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -59,10 +59,6 @@ export function isoDate(date) {
     return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
 }
 
-export function todayStr() {
-    return isoDate(new Date());
-}
-
 export function parseDate(value) {
     let date;
     let text = '';
@@ -75,7 +71,7 @@ export function parseDate(value) {
     } else if (typeof value === 'string') {
         text = value.trim();
         if (!text) return null;
-        // 纯日期按本地午夜解析，避免浏览器把 YYYY-MM-DD 当作 UTC。
+        // 纯日期按墙钟午夜解析，避免浏览器把 YYYY-MM-DD 当作 UTC 后换日。
         date = new Date(DATE_KEY_PATTERN.test(text) ? `${text}T00:00:00` : text);
     } else {
         return null;
@@ -89,17 +85,6 @@ export function parseDate(value) {
 export function isValidDateInput(value) {
     const text = String(value ?? '').trim();
     return DATE_KEY_PATTERN.test(text) && parseDate(text) !== null;
-}
-
-export function formatMonthDay(value, fallback = '未知时间') {
-    const date = parseDate(value);
-    return date ? `${date.getMonth() + 1}/${date.getDate()}` : fallback;
-}
-
-export function formatDateTime(value, fallback = '未知时间') {
-    const date = parseDate(value);
-    if (!date) return fallback;
-    return `${isoDate(date)} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
 }
 
 export function previewText(value, maxLength = 100) {

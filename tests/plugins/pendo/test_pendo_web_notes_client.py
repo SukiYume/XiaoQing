@@ -6,10 +6,14 @@ from typing import Final
 
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
+from tests.helpers.pendo_web_timezone_test_support import inline_timezone_runtime
 
 ROOT: Final = REPOSITORY_ROOT
 NOTES_CLIENT: Final = ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "notes.js"
 FORMAT_CLIENT: Final = ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "utils" / "format.js"
+TIMEZONE_CLIENT: Final = (
+    ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "utils" / "timezone.js"
+)
 
 NOTES_SETUP: Final = r"""
     globalThis.__api = {
@@ -78,13 +82,12 @@ def _notes_source_for_test() -> str:
     """替换浏览器相邻依赖，并嵌入真实共享日期格式实现。"""
 
     source = NOTES_CLIENT.read_text(encoding="utf-8")
+    timezone_runtime = inline_timezone_runtime(TIMEZONE_CLIENT)
     format_source = FORMAT_CLIENT.read_text(encoding="utf-8").replace("export ", "")
     format_runtime = f"""
 const {{
     errorMessage,
     finiteNumber,
-    formatDateTime,
-    formatMonthDay,
     noteCadenceSubtitle,
     nonNegativeInteger,
     previewText,
@@ -94,8 +97,6 @@ const {{
     return {{
         errorMessage,
         finiteNumber,
-        formatDateTime,
-        formatMonthDay,
         noteCadenceSubtitle,
         nonNegativeInteger,
         previewText,
@@ -149,14 +150,16 @@ const initCustomSelects = (_root, handlers) => {
             """import {
     errorMessage,
     finiteNumber,
-    formatDateTime,
-    formatMonthDay,
     noteCadenceSubtitle,
     nonNegativeInteger,
     previewText,
     textValue,
 } from '../utils/format.js';""",
             format_runtime,
+        ),
+        (
+            "import { formatZonedDateTime, formatZonedMonthDay } from '../utils/timezone.js';",
+            timezone_runtime,
         ),
         (
             "import { derivePresetRange, fetchItemRangeBounds, RANGE_PRESET_OPTIONS, "

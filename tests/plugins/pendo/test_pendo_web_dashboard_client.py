@@ -7,12 +7,16 @@ from typing import Final
 
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
+from tests.helpers.pendo_web_timezone_test_support import inline_timezone_runtime
 
 ROOT: Final = REPOSITORY_ROOT
 DASHBOARD_CLIENT: Final = (
     ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "dashboard.js"
 )
 FORMAT_CLIENT: Final = ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "utils" / "format.js"
+TIMEZONE_CLIENT: Final = (
+    ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "utils" / "timezone.js"
+)
 
 DASHBOARD_SETUP: Final = r"""
     globalThis.__api = {
@@ -39,6 +43,7 @@ def _dashboard_source_for_test() -> str:
     """替换浏览器相邻依赖，并复用真实共享格式化实现。"""
 
     source = DASHBOARD_CLIENT.read_text(encoding="utf-8")
+    timezone_runtime = inline_timezone_runtime(TIMEZONE_CLIENT)
     format_source = FORMAT_CLIENT.read_text(encoding="utf-8").replace("export ", "")
     format_runtime = f"""
 const {{
@@ -75,6 +80,7 @@ const {{
             "const showToast = (...args) => globalThis.__showToast(...args);",
         ),
         ("../utils/format.js", format_runtime),
+        ("../utils/timezone.js", timezone_runtime),
         (
             "../utils/ui.js",
             """const BREAKPOINTS = { XL: '1200px', MOBILE: '720px' };
@@ -170,8 +176,10 @@ def test_dashboard_markup_normalizes_response_and_uses_accessible_navigation() -
                 diary_month: 4,
             },
             events_agenda: [{
-                start_time: '2099-03-05T09:00:00',
-                end_time: '2099-03-05T10:00:00',
+                start_time: '2099-03-05T09:00:00+00:00',
+                end_time: '2099-03-05T10:00:00+00:00',
+                start_epoch_ms: Date.parse('2099-03-05T09:00:00Z'),
+                end_epoch_ms: Date.parse('2099-03-05T10:00:00Z'),
                 title: '<img src=x onerror=alert(1)>',
                 location: '<script>place</script>',
             }],
@@ -200,6 +208,7 @@ def test_dashboard_markup_normalizes_response_and_uses_accessible_navigation() -
         assert.ok(markup.includes('&lt;img src=x onerror=alert(1)&gt;'));
         assert.ok(markup.includes('&lt;svg onload=alert(1)&gt;'));
         assert.ok(markup.includes('&lt;script&gt;ledger&lt;/script&gt;'));
+        assert.ok(markup.includes('17:00 - 18:00'));
         assert.ok(markup.includes('未知日期'));
         assert.ok(markup.includes('dashboard-finance-value negative">-¥8.00'));
         assert.ok(!markup.includes('<script>'));

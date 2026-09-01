@@ -115,6 +115,7 @@ def test_build_diary_overview_tracks_fill_rate_streaks_and_moods(
     assert result["cadence"][20]["count"] == 1
     assert result["cadence"][22]["count"] == 1
     assert result["recent_entries"][0]["id"] == "d3"
+    assert result["recent_entries"][0]["entry_label"] == "22:00"
 
 
 def test_build_diary_overview_supports_range_based_weekly_cadence(db: Database) -> None:

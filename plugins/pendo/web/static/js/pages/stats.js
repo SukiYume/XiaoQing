@@ -11,7 +11,6 @@ import {
     noteCadenceSubtitle,
     pad2,
     records as safeRecords,
-    todayStr as sharedTodayStr,
 } from '../utils/format.js';
 import { derivePresetRange, fetchItemRangeBounds, RANGE_PRESET_OPTIONS, todayRangeKey } from '../utils/date_ranges.js';
 import { bindEnterAction, BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
@@ -81,8 +80,8 @@ function responseData(response) {
     return isRecord(response?.data) ? response.data : {};
 }
 
-function todayStr() {
-    return todayRangeKey() || sharedTodayStr();
+function userTodayKey() {
+    return todayRangeKey();
 }
 
 function formatCount(value) {
@@ -156,7 +155,7 @@ function deriveRangeDates({
     rangeKey = _range,
     customStart = _customStart,
     customEnd = _customEnd,
-    today = todayStr(),
+    today = userTodayKey(),
 } = {}) {
     return derivePresetRange(rangeKey, {
         today,
@@ -168,7 +167,7 @@ function deriveRangeDates({
 
 function currentRangeRequest() {
     const rangeKey = RANGE_KEYS.has(_range) ? _range : 'month';
-    const today = todayStr();
+    const today = userTodayKey();
     const range = deriveRangeDates({
         rangeKey,
         customStart: _customStart,
@@ -187,7 +186,7 @@ function isCurrentLoad(container, version) {
     return _container === container && _loadVersion === version;
 }
 
-function overviewReferenceDay(range, today = todayStr()) {
+function overviewReferenceDay(range, today = userTodayKey()) {
     if (range?.start && range?.end && range.start <= today && today <= range.end) {
         return today;
     }
@@ -196,7 +195,9 @@ function overviewReferenceDay(range, today = todayStr()) {
 
 function resolveHeatmapYear(range = deriveRangeDates()) {
     const endDate = new Date(`${range.end}T00:00:00`);
-    return Number.isNaN(endDate.getTime()) ? new Date().getFullYear() : endDate.getFullYear();
+    return Number.isNaN(endDate.getTime())
+        ? Number(userTodayKey().slice(0, 4))
+        : endDate.getFullYear();
 }
 
 function clampRangeToYear(range, year) {

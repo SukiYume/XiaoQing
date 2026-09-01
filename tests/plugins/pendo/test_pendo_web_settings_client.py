@@ -22,6 +22,7 @@ SETTINGS_SETUP: Final = r"""
     globalThis.__toastCalls = [];
     globalThis.__navigateCalls = [];
     globalThis.__styleCalls = [];
+    globalThis.__userTimeZone = '';
     globalThis.__reloadCount = 0;
     globalThis.window = {
         location: { reload() { __reloadCount += 1; } },
@@ -86,6 +87,10 @@ const textValue = (value, fallback = '') => {
     return normalized || fallback;
 };
 const errorMessage = (error, fallback = '未知错误') => textValue(error?.message, fallback);""",
+        ),
+        (
+            "import { setUserTimeZone } from '../utils/timezone.js';",
+            "const setUserTimeZone = (value) => { globalThis.__userTimeZone = value; return value; };",
         ),
         (
             "import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } "
@@ -299,6 +304,7 @@ def test_settings_collects_before_render_and_preserves_extension_keys() -> None:
         assert.equal(state.saving, false);
         assert.equal(state.settings.settings_json.reminder_enabled, false);
         assert.deepEqual(state.settings.settings_json.extension_flag, { nested: true });
+        assert.equal(__userTimeZone, 'Europe/Paris');
         assert.deepEqual(__toastCalls, [['设置已更新', 'success']]);
         """
     )
@@ -357,6 +363,7 @@ def test_settings_latest_load_wins_and_current_load_failure_uses_defaults() -> N
         await newRender;
         const latestHtml = newRoot.innerHTML;
         assert.ok(latestHtml.includes('Etc/UTC'));
+        assert.equal(__userTimeZone, 'Etc/UTC');
 
         oldRequest.resolve({ data: { timezone: 'Asia/Tokyo' } });
         await oldRender;

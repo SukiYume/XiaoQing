@@ -67,7 +67,6 @@ const {{
     parseDate,
     previewText,
     records,
-    todayStr,
 }} = (() => {{
 {format_source}
     return {{
@@ -80,7 +79,6 @@ const {{
         parseDate,
         previewText,
         records,
-        todayStr,
     }};
 }})();
 """
@@ -125,7 +123,6 @@ const initCustomSelects = () => {};""",
     parseDate,
     previewText,
     records,
-    todayStr,
 } from '../utils/format.js';""",
             format_runtime,
         ),
@@ -145,8 +142,14 @@ const pageShellCss = () => '';
 const subscribeDataChanges = (...args) => globalThis.__subscribeDataChanges(...args);""",
         ),
         (
-            "import { fetchUserTimeZone, zonedDateTimeToInput, zonedInputToUtcIso } "
-            "from '../utils/timezone.js';",
+            """import {
+    fetchUserTimeZone,
+    todayInUserTimeZone,
+    zonedDateKey,
+    zonedDateParts,
+    zonedDateTimeToInput,
+    zonedInputToUtcIso,
+} from '../utils/timezone.js';""",
             timezone_runtime,
         ),
     )
@@ -219,6 +222,10 @@ def test_diary_helpers_normalize_unicode_dates_metrics_and_template_rows() -> No
                 diary_date: '2026-03-02', entry_time: '2026-03-02T08:05:00',
             }),
             '2026-03-02 08:05',
+        );
+        assert.equal(
+            client.formatEntryTime({ created_at: '2026-05-01T16:30:00+00:00' }),
+            '2026-05-02 00:30',
         );
 
         const overview = client.normalizeDiaryOverview({

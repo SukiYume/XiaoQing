@@ -20,7 +20,11 @@ def _run_timezone_client(script: str) -> None:
         source,
         script,
         cwd=ROOT,
-        setup="globalThis.__api = { get: async () => ({ data: { timezone: 'Asia/Shanghai' } }) };",
+        setup=(
+            "process.env.TZ = 'America/Los_Angeles';\n"
+            "globalThis.__api = { get: async () => "
+            "({ data: { timezone: 'Asia/Shanghai' } }) };"
+        ),
     )
 
 
@@ -43,6 +47,28 @@ def test_timezone_client_round_trips_in_configured_zone_not_browser_zone() -> No
         );
         assert.equal(client.zonedInputToUtcIso('2026-02-30T18:00', 'Asia/Shanghai'), '');
         assert.equal(await client.fetchUserTimeZone(), 'Asia/Shanghai');
+        assert.equal(client.getUserTimeZone(), 'Asia/Shanghai');
+        assert.equal(
+            client.formatZonedDateTime('2026-05-01T10:00:00+00:00'),
+            '2026-05-01 18:00',
+        );
+        assert.equal(
+            client.formatZonedDateTime('2026-05-01T18:00:00'),
+            '2026-05-01 18:00',
+        );
+        assert.equal(client.formatZonedDateTime('2026-05-01'), '2026-05-01');
+        assert.equal(
+            client.todayInUserTimeZone(new Date('2026-05-01T16:30:00Z')),
+            '2026-05-02',
+        );
+        assert.equal(
+            client.zonedInstantEpoch('2026-05-01T18:00:00'),
+            Date.parse('2026-05-01T10:00:00Z'),
+        );
+        assert.equal(
+            client.zonedInstantEpoch('2026-05-01T18:00:00.123456'),
+            Date.parse('2026-05-01T10:00:00.123Z'),
+        );
         """
     )
 

@@ -40,8 +40,6 @@ def test_format_client_parses_local_dates_without_accepting_impossible_days() ->
     _run_format_client(
         r"""
         assert.equal(client.pad2(3), '03');
-        assert.equal(client.todayStr(), '2024-02-29');
-
         const leapDay = client.parseDate(' 2024-02-29 ');
         assert.ok(leapDay instanceof Date);
         assert.deepEqual(
@@ -71,16 +69,14 @@ def test_format_client_parses_local_dates_without_accepting_impossible_days() ->
     )
 
 
-def test_format_client_uses_stable_fallbacks_and_unicode_safe_previews() -> None:
-    """展示格式应复用规范日期，并避免在 UTF-16 代理对中间截断文本。"""
+def test_format_client_keeps_timestamp_display_out_and_unicode_previews_safe() -> None:
+    """通用格式模块不提供浏览器时区展示接口，预览文本保持 Unicode 完整。"""
 
     _run_format_client(
         r"""
-        assert.equal(client.formatMonthDay('2024-02-29'), '2/29');
-        assert.equal(client.formatMonthDay('2024-02-30'), '未知时间');
-        assert.equal(client.formatMonthDay('', '暂无'), '暂无');
-        assert.equal(client.formatDateTime('2024-02-29T09:07:00'), '2024-02-29 09:07');
-        assert.equal(client.formatDateTime('bad', '无效'), '无效');
+        assert.equal('todayStr' in client, false);
+        assert.equal('formatMonthDay' in client, false);
+        assert.equal('formatDateTime' in client, false);
 
         assert.equal(client.previewText('  简短内容  ', 10), '简短内容');
         assert.equal(client.previewText('😀甲乙', 2), '😀甲...');
