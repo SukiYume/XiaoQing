@@ -37,6 +37,7 @@ from ..utils.validators import (
 )
 from .event_editing import EventEditingMixin
 from .event_support import (
+    CN_WEEKDAYS,
     ensure_event_reminder_rules,
     ensure_event_reminders,
     ensure_start_time_reminder,
@@ -44,6 +45,7 @@ from .event_support import (
     format_conflicts,
     format_event_created,
     format_event_reminders,
+    format_event_updated,
     format_milestone_event_created,
     format_recurring_event_created,
     get_remind_status,
@@ -675,15 +677,6 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             await run_sync(self.event_graph.load_by_id, user_id, event_or_collection_id),
         )
 
-    _CN_WEEKDAYS: ClassVar[tuple[str, ...]] = (
-        "周一",
-        "周二",
-        "周三",
-        "周四",
-        "周五",
-        "周六",
-        "周日",
-    )
     _RANGE_LABELS: ClassVar[dict[str, str]] = {
         "today": "今日",
         "今天": "今日",
@@ -715,7 +708,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
 
     @classmethod
     def _format_day_header(cls, target_dt: datetime, current_dt: datetime) -> str:
-        weekday = cls._CN_WEEKDAYS[target_dt.weekday()]
+        weekday = CN_WEEKDAYS[target_dt.weekday()]
         return f"**{target_dt.strftime('%m月%d日')} {weekday}** - {cls._format_day_delta(target_dt, current_dt)}"
 
     @staticmethod
@@ -1029,7 +1022,6 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         if not updates:
             return {"status": "warning", "message": "⚠️ 未识别到有效的修改内容"}
 
-        title = event.title
         if "start_time" in updates and "remind_times" not in updates:
             updates["remind_times"] = recalculate_event_reminders(event, updates)
         elif "remind_times" in updates:
@@ -1037,6 +1029,8 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
                 updates["remind_times"],
                 updates.get("start_time") or event.start_time,
             )
+
+        changed_fields = set(updates)
 
         await self._db_update_with_log(
             instance_id,
@@ -1046,12 +1040,11 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             expected_version=event.version,
         )
 
+        updated_event = cast(EventItem, await self._db_get_and_check(instance_id, user_id))
+
         return {
             "status": "success",
-            "message": (
-                f"✅ 已更新日程: {updates.get('title', title)}\n\n"
-                f"💡 /pendo event reminders {event.display_id} 查看提醒 | /pendo undo 撤销编辑"
-            ),
+            "message": format_event_updated(event, updated_event, changed_fields),
         }
 
     # ==================== 删除日程 ====================

@@ -27,6 +27,15 @@ _REMINDER_STATUS_LABELS: Final[dict[str, str]] = {
     "📩": "📩 已发送未确认",
     "⏳": "⏳ 待发送",
 }
+CN_WEEKDAYS: Final[tuple[str, ...]] = (
+    "周一",
+    "周二",
+    "周三",
+    "周四",
+    "周五",
+    "周六",
+    "周日",
+)
 
 
 def event_display_timezone(event: Any) -> ZoneInfo:
@@ -36,6 +45,96 @@ def event_display_timezone(event: Any) -> ZoneInfo:
         return ZoneInfo(str(raw or TimezoneHelper.DEFAULT_TZ.key))
     except (ZoneInfoNotFoundError, ValueError):
         return TimezoneHelper.DEFAULT_TZ
+
+
+def _format_event_edit_datetime(value: Any, display_timezone: ZoneInfo) -> str:
+    if not value:
+        return "未设置"
+    try:
+        parsed = TimezoneHelper.parse(str(value), display_timezone)
+    except (TypeError, ValueError):
+        return str(value)
+    weekday = CN_WEEKDAYS[parsed.weekday()]
+    return f"{parsed.strftime('%Y年%m月%d日')} {weekday} {parsed.strftime('%H:%M')}"
+
+
+def _format_event_edit_value(value: Any, *, tags: bool = False) -> str:
+    if value in (None, "", []):
+        return "未设置"
+    if tags and isinstance(value, list):
+        return " ".join(f"#{tag}" for tag in value) or "未设置"
+    compact = " ".join(str(value).split())
+    return ItemFormatter.truncate_content(compact, 60)
+
+
+def format_event_updated(before: Any, after: Any, changed_fields: set[str]) -> str:
+    """展示数据库最终状态中的日程编辑差异。"""
+    title = _format_event_edit_value(getattr(after, "title", None))
+    display_id = public_id(getattr(after, "id", ""))
+    display_timezone = event_display_timezone(after)
+    lines = [f"✅ 已更新日程: {title}", ""]
+
+    scalar_fields = (
+        ("title", "🗓️ 标题"),
+        ("location", "📍 地点"),
+        ("category", "📁 分类"),
+        ("tags", "🏷️ 标签"),
+        ("content", "📄 内容"),
+        ("notes", "📝 备注"),
+    )
+    for field_name, label in scalar_fields:
+        if field_name not in changed_fields:
+            continue
+        old_value = getattr(before, field_name, None)
+        new_value = getattr(after, field_name, None)
+        if old_value == new_value:
+            continue
+        format_tags = field_name == "tags"
+        lines.append(
+            f"{label}: {_format_event_edit_value(old_value, tags=format_tags)}"
+            f" → {_format_event_edit_value(new_value, tags=format_tags)}"
+        )
+
+    time_changed = False
+    for field_name, label in (("start_time", "⏰ 开始"), ("end_time", "🏁 结束")):
+        if field_name not in changed_fields:
+            continue
+        old_value = getattr(before, field_name, None)
+        new_value = getattr(after, field_name, None)
+        if old_value == new_value:
+            continue
+        time_changed = True
+        lines.append(
+            f"{label}: {_format_event_edit_datetime(old_value, event_display_timezone(before))}"
+            f" → {_format_event_edit_datetime(new_value, display_timezone)}"
+        )
+
+    if time_changed:
+        before_timezone = event_display_timezone(before).key
+        after_timezone = display_timezone.key
+        if before_timezone == after_timezone:
+            lines.append(f"🌐 时区: {after_timezone}")
+        else:
+            lines.append(f"🌐 时区: {before_timezone} → {after_timezone}")
+
+    if "remind_times" in changed_fields:
+        old_reminders = parse_remind_times(getattr(before, "remind_times", []))
+        new_reminders = parse_remind_times(getattr(after, "remind_times", []))
+        if old_reminders != new_reminders:
+            if not new_reminders:
+                lines.append("🔔 提醒: 已清空")
+            elif len(old_reminders) == len(new_reminders):
+                lines.append(f"🔔 提醒: 已同步调整 {len(new_reminders)} 个")
+            else:
+                lines.append(f"🔔 提醒: {len(old_reminders)} 个 → {len(new_reminders)} 个")
+
+    lines.extend(
+        [
+            "",
+            f"💡 /pendo event reminders {display_id} 查看提醒 | /pendo undo 撤销编辑",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def has_time(remind_times: list[str], target: str) -> bool:
