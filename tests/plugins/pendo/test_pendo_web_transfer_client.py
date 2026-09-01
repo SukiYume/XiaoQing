@@ -6,10 +6,14 @@ from typing import Final
 
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
+from tests.helpers.pendo_web_timezone_test_support import inline_timezone_runtime
 
 ROOT: Final = REPOSITORY_ROOT
 TRANSFER_CLIENT: Final = (
     ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "transfer.js"
+)
+TIMEZONE_CLIENT: Final = (
+    ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "utils" / "timezone.js"
 )
 
 TRANSFER_SETUP: Final = r"""
@@ -88,6 +92,7 @@ def _transfer_source_for_test() -> str:
     """替换相邻浏览器依赖，并仅为测试暴露迁移页内部契约。"""
 
     source = TRANSFER_CLIENT.read_text(encoding="utf-8")
+    timezone_runtime = inline_timezone_runtime(TIMEZONE_CLIENT)
     replacements = (
         (
             "import { api, apiDownload, apiUpload } from '../api.js';",
@@ -105,7 +110,6 @@ def _transfer_source_for_test() -> str:
     isRecord,
     isValidDateInput,
     nonNegativeInteger,
-    parseDate,
     trimmedTextValue as textValue,
 } from '../utils/format.js';""",
             r"""const isRecord = (value) => value !== null
@@ -136,6 +140,10 @@ const parseDate = (value) => {
 };
 const isValidDateInput = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value ?? '').trim())
     && parseDate(String(value).trim()) !== null;""",
+        ),
+        (
+            "import { formatZonedDateTime, getUserTimeZone } from '../utils/timezone.js';",
+            timezone_runtime,
         ),
         (
             "import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } "
@@ -316,7 +324,7 @@ def test_transfer_normalizes_inspect_results_and_logs_before_rendering() -> None
         assert.equal(logs.length, 1);
         assert.equal(logs[0].record_count, 5);
         assert.deepEqual(logs[0].types, ['task']);
-        assert.equal(logs[0].created_at instanceof Date, true);
+        assert.equal(logs[0].created_at, '2026-05-20T10:00:00');
         """
     )
 

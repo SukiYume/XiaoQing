@@ -7,14 +7,13 @@ import { renderCustomSelect, initCustomSelects } from '../components/custom_sele
 import {
     errorMessage,
     finiteNumber,
-    formatDateTime,
-    formatMonthDay,
     noteCadenceSubtitle,
     nonNegativeInteger,
     previewText,
     textValue,
 } from '../utils/format.js';
 import { derivePresetRange, fetchItemRangeBounds, RANGE_PRESET_OPTIONS, todayRangeKey } from '../utils/date_ranges.js';
+import { formatZonedDateTime, formatZonedMonthDay } from '../utils/timezone.js';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss, subscribeDataChanges } from '../utils/ui.js';
 
 const PAGE_SIZE = 18;
@@ -1006,7 +1005,7 @@ function renderSpotlight(note) {
             <span class="notes-spotlight-side">
                 <span class="notes-spotlight-stat">
                     <span class="notes-spotlight-stat-label">更新日期</span>
-                    <span class="notes-spotlight-stat-value">${escapeHtml(formatMonthDay(note.updated_at || note.created_at))}</span>
+                    <span class="notes-spotlight-stat-value">${escapeHtml(formatZonedMonthDay(note.updated_at || note.created_at))}</span>
                 </span>
                 <span class="notes-spotlight-stat">
                     <span class="notes-spotlight-stat-label">内容长度</span>
@@ -1020,7 +1019,7 @@ function renderSpotlight(note) {
 function renderNoteRow(note, index) {
     const tags = uniqueTextList(note.tags, { caseInsensitive: true });
     const preview = previewText(note.content, 96);
-    const date = formatMonthDay(note.updated_at || note.created_at);
+    const date = formatZonedMonthDay(note.updated_at || note.created_at);
     const wordCount = noteWordCount(note);
     const title = note.title || '(无标题)';
     return `
@@ -1242,7 +1241,7 @@ export function openNoteViewModal(rawNote) {
         <div class="note-view-meta">
             <span class="note-card-category">${escapeHtml(note.category || '未分类')}</span>
             ${tags.map((tag) => `<span class="note-tag">#${escapeHtml(tag)}</span>`).join('')}
-            <span class="note-view-secondary">更新于 ${escapeHtml(formatDateTime(note.updated_at || note.created_at))}</span>
+            <span class="note-view-secondary">更新于 ${escapeHtml(formatZonedDateTime(note.updated_at || note.created_at))}</span>
         </div>
         <div class="note-view-content">${renderMarkdown(note.content || '')}</div>
         ${renderNoteReferences(note)}

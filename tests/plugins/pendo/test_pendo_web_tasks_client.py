@@ -15,7 +15,7 @@ TIMEZONE_CLIENT: Final = (
 )
 
 TASKS_SETUP: Final = r"""
-    globalThis.__now = new Date('2026-05-20T12:00:00');
+    globalThis.__now = new Date('2026-05-20T04:00:00Z');
     globalThis.__apiCalls = [];
     globalThis.__apiHandlers = {
         get: async () => ({ data: { all_tasks: [] } }),
@@ -164,11 +164,24 @@ const subscribeDataChanges = (type, refresh) => {
 };""",
         ),
         (
-            "import { fetchUserTimeZone, zonedDateTimeToInput, zonedInputToUtcIso } "
-            "from '../utils/timezone.js';",
+            """import {
+    fetchUserTimeZone,
+    todayInUserTimeZone,
+    zonedDateKey,
+    zonedDateParts,
+    zonedDateTimeToInput,
+    zonedInputToUtcIso,
+} from '../utils/timezone.js';""",
             timezone_runtime,
         ),
-        ("const TODAY = () => new Date();", "const TODAY = () => new Date(globalThis.__now);"),
+        (
+            "const TODAY = () => parseDate(todayInUserTimeZone());",
+            "const TODAY = () => parseDate(todayInUserTimeZone(globalThis.__now));",
+        ),
+        (
+            "function defaultTaskPlanDateValue(now = new Date())",
+            "function defaultTaskPlanDateValue(now = globalThis.__now)",
+        ),
     )
     for original, replacement in replacements:
         assert original in source
@@ -305,6 +318,11 @@ def test_tasks_filters_against_supplied_anchor_and_derives_used_model_only() -> 
         assert.equal(client.__planDateMatches(mondayTask, 'custom', '2024-01-03', 'bad', '2024-01-01'), false);
         assert.equal(client.__planDateMatches(mondayTask, 'custom', '2024-01-03', '2024-01-03', '2023-12-31'), true);
         assert.equal(client.__planDateMatches(mondayTask, 'unknown', '2024-01-03'), false);
+        assert.equal(client.__planDateMatches(
+            { deadline_at: '2026-05-19T16:30:00+00:00', status: 'open' },
+            'today',
+            '2026-05-20',
+        ), true);
 
         const tasks = client.__normalizeOverview({ all_tasks: [
             { id: 'late', title: '滞后', status: 'open', plan_date: '2026-05-19', priority: 2, category: '工作' },

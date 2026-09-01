@@ -77,6 +77,8 @@ def _event_entries(
                         "collection": event_collection,
                         "start_time": row["start_time"],
                         "end_time": row["end_time"],
+                        "start_epoch_ms": row["start_epoch_ms"],
+                        "end_epoch_ms": row["end_epoch_ms"],
                         "location": display["location"],
                         "category": display["category"],
                         "entry_kind": row["kind"],
@@ -276,7 +278,7 @@ def build_dashboard_overview(
     def completed_sort_key(item: object) -> float:
         value = getattr(item, "completed_at", "") or getattr(item, "updated_at", "") or ""
         try:
-            return TimezoneHelper.parse(str(value), user_timezone).timestamp()
+            return cast(datetime, TimezoneHelper.parse(str(value), user_timezone)).timestamp()
         except (OverflowError, TypeError, ValueError):
             return float("-inf")
 

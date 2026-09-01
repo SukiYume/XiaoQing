@@ -10,11 +10,18 @@ import {
     parseDate,
     trimmedTextValue as textValue,
 } from '../utils/format.js';
-import { fetchUserTimeZone, zonedDateTimeToInput, zonedInputToUtcIso } from '../utils/timezone.js';
+import {
+    fetchUserTimeZone,
+    todayInUserTimeZone,
+    zonedDateKey,
+    zonedDateParts,
+    zonedDateTimeToInput,
+    zonedInputToUtcIso,
+} from '../utils/timezone.js';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss, subscribeDataChanges } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-tasks-redesign-styles';
-const TODAY = () => new Date();
+const TODAY = () => parseDate(todayInUserTimeZone());
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TASK_STATUSES = new Set(['open', 'done', 'cancelled']);
 const VIEW_MODES = new Set(['list', 'board']);
@@ -93,7 +100,7 @@ function idValue(value) {
     return value === null || value === undefined ? '' : String(value).trim();
 }
 
-// 所有日期桶都按本地自然日计算，避免纯日期被浏览器解释成 UTC 后跨天。
+// 所有日期桶都按用户时区自然日计算，纯日期保持原有日期语义。
 function startOfDay(value) {
     const day = parseDate(value);
     if (!day) return null;
@@ -148,8 +155,7 @@ function taskTextCategory(task) {
 function taskPlanDateKey(task) {
     const plan = String(task?.plan_date || '').trim();
     if (isIsoDate(plan)) return plan;
-    const deadline = parseDate(task?.deadline_at);
-    return deadline ? dateKey(deadline) : '';
+    return zonedDateKey(task?.deadline_at);
 }
 
 function taskPrimaryStatus(task) {
@@ -214,14 +220,15 @@ function planDateMatches(task, filterValue, todayKey = dateKey(TODAY()), customS
 }
 
 function formatShortDate(value) {
-    const date = parseDate(value);
-    if (!date) return '未安排日期';
-    return `${date.getMonth() + 1}/${date.getDate()} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+    const parts = zonedDateParts(value);
+    if (!parts) return '未安排日期';
+    return `${parts.month}/${parts.day} ${pad2(parts.hour)}:${pad2(parts.minute)}`;
 }
 
-function defaultTaskPlanDateValue(now = TODAY()) {
-    const target = parseDate(now) || TODAY();
-    if (target.getHours() >= 20) {
+function defaultTaskPlanDateValue(now = new Date()) {
+    const parts = zonedDateParts(now);
+    const target = parseDate(zonedDateKey(now)) || TODAY();
+    if ((parts?.hour ?? 0) >= 20) {
         target.setDate(target.getDate() + 1);
     }
     return dateKey(target);
@@ -406,7 +413,7 @@ function deriveDisplayModel(tasks) {
         const day = new Date(today);
         day.setDate(day.getDate() - (6 - index));
         const key = dateKey(day);
-        const count = done.filter((task) => dateKey(task.completed_at || task.updated_at) === key).length;
+        const count = done.filter((task) => zonedDateKey(task.completed_at || task.updated_at) === key).length;
         return { date: key, label: `${day.getMonth() + 1}/${day.getDate()}`, count };
     });
 

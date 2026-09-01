@@ -125,7 +125,7 @@ def _get_import_lock(
 
 
 def _resolve_timezone(timezone: str | None) -> ZoneInfo:
-    """解析 IANA 时区；空白值使用系统默认时区。"""
+    """解析 IANA 时区；空白值使用 Pendo 默认时区。"""
 
     name = str(timezone or "").strip() or DEFAULT_TIMEZONE
     if len(name) > 128:

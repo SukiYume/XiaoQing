@@ -12,7 +12,7 @@ from ...models.item import get_item_type_value
 from ...services.db import Database
 from ...utils.identifiers import public_id
 from ...utils.settings_utils import resolve_default_category
-from ...utils.time_utils import now_in_timezone
+from ...utils.time_utils import TimezoneHelper, now_in_timezone
 from ...utils.validators import (
     LEDGER_TRANSACTION_TYPES,
     TASK_STATUSES,
@@ -54,7 +54,7 @@ ALLOWED_SORT_FIELDS: Final = frozenset(Database._ALLOWED_SORT_FIELDS)
 
 
 def _entry_time_for_diary_date(now_iso: str, diary_date: str | None) -> str:
-    """把当前本地时间的时分秒附到用户选择的日记日期。"""
+    """把用户时区当前时间的时分秒附到用户选择的日记日期。"""
 
     date_part = str(diary_date or "").strip()
     if not date_part:
@@ -859,7 +859,8 @@ def create_item(
         item_data = _resolve_note_reference_payload(db, owner_id, item_data)
     if item_type == "diary" and not str(item_data.get("title") or "").strip():
         entry_time = str(item_data["entry_time"])
-        entry_label = entry_time[11:16] if len(entry_time) >= 16 else ""
+        user_timezone = TimezoneHelper.get_user_timezone(owner_id, db)
+        entry_label = TimezoneHelper.parse(entry_time, user_timezone).strftime("%H:%M")
         item_data["title"] = f"{item_data['diary_date']} {entry_label} 日记".strip()
 
     item_id = db.insert_item(

@@ -64,10 +64,9 @@ def _events_source_for_test() -> str:
     timezone_runtime = inline_timezone_runtime(TIMEZONE_CLIENT)
     format_source = FORMAT_CLIENT.read_text(encoding="utf-8").replace("export ", "")
     format_runtime = f"""
-const {{ formatSharedDateTime, isoDate, isValidDateInput, pad2, parseDate }} = (() => {{
+const {{ isoDate, isValidDateInput, pad2, parseDate }} = (() => {{
 {format_source}
     return {{
-        formatSharedDateTime: formatDateTime,
         isoDate,
         isValidDateInput,
         pad2,
@@ -115,13 +114,17 @@ const fetchItemRangeBounds = (...args) => globalThis.__fetchItemRangeBounds(...a
 const todayRangeKey = () => '2026-03-15';""",
         ),
         (
-            "import { formatDateTime as formatSharedDateTime, isoDate, "
-            "isValidDateInput, pad2, parseDate } from '../utils/format.js';",
+            "import { isoDate, isValidDateInput, pad2, parseDate } from '../utils/format.js';",
             format_runtime,
         ),
         (
-            "import { fetchUserTimeZone, zonedDateTimeToInput, zonedInputToUtcIso } "
-            "from '../utils/timezone.js';",
+            """import {
+    fetchUserTimeZone,
+    formatZonedDateTime,
+    zonedDateTimeToInput,
+    zonedInputToUtcIso,
+    zonedInstantEpoch,
+} from '../utils/timezone.js';""",
             timezone_runtime,
         ),
         (
@@ -228,6 +231,10 @@ def test_events_dates_rules_and_overview_normalization() -> None:
         assert.equal(client.toInputDateTime('2026-02-30T09:05:00', 'Asia/Shanghai'), '');
         assert.equal(client.toInputDateTime('2026-03-02T01:05:00+00:00', 'Asia/Shanghai'), '2026-03-02T09:05');
         assert.equal(client.formatEventDateTime('2026-02-30T09:05:00'), '未知时间');
+        assert.equal(
+            client.formatEventDateTime('2026-05-01T16:30:00+00:00'),
+            '2026-05-02 00:30',
+        );
         assert.deepEqual(
             client.reminderRulesFromTimes(
                 '2026-03-02T09:00:00',

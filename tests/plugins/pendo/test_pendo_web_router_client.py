@@ -32,6 +32,11 @@ ROUTER_SETUP: Final = r"""
         .replaceAll('>', '&gt;')
         .replaceAll('"', '&quot;')
         .replaceAll("'", '&#039;');
+    globalThis.__timeZoneLoads = 0;
+    globalThis.__fetchUserTimeZone = async () => {
+        __timeZoneLoads += 1;
+        return 'Asia/Shanghai';
+    };
 """
 
 
@@ -39,9 +44,17 @@ def _router_source_for_test() -> str:
     """仅替换 UI 转义依赖，保留真实路由实现。"""
 
     source = ROUTER_CLIENT.read_text(encoding="utf-8")
-    import_line = "import { escapeHtml } from './utils/ui.js';"
-    assert import_line in source
-    return source.replace(import_line, "const escapeHtml = globalThis.__escapeHtml;")
+    ui_import = "import { escapeHtml } from './utils/ui.js';"
+    timezone_import = "import { fetchUserTimeZone } from './utils/timezone.js';"
+    assert ui_import in source
+    assert timezone_import in source
+    return source.replace(
+        ui_import,
+        "const escapeHtml = globalThis.__escapeHtml;",
+    ).replace(
+        timezone_import,
+        "const fetchUserTimeZone = globalThis.__fetchUserTimeZone;",
+    )
 
 
 def _run_router_client(script: str) -> None:
@@ -125,6 +138,7 @@ def test_router_uses_one_hash_listener_and_isolates_subscriber_failures() -> Non
         await client.init(secondContainer);
         assert.equal(secondContainer.innerHTML, 'dashboard');
         assert.equal(__state.listenerCounts.hashchange, 1);
+        assert.equal(__timeZoneLoads, 4);
         """
     )
 

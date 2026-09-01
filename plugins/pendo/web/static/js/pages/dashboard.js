@@ -12,6 +12,12 @@ import {
     parseDate,
     records,
 } from '../utils/format.js';
+import {
+    formatZonedTime,
+    zonedDateKey,
+    zonedDateParts,
+    zonedInstantEpoch,
+} from '../utils/timezone.js';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss, subscribeDataChanges } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-dashboard-styles';
@@ -246,18 +252,16 @@ function ensureStyles() {
 // ---------- 接口边界与展示格式 ----------
 
 function formatTime(value) {
-    const date = parseDate(value);
-    return date ? `${pad2(date.getHours())}:${pad2(date.getMinutes())}` : '--:--';
+    return formatZonedTime(value, '--:--');
 }
 
 function formatMonthDayParts(value) {
-    const date = parseDate(value);
-    return date ? { month: `${date.getMonth() + 1}月`, day: pad2(date.getDate()) } : { month: '--', day: '--' };
+    const parts = zonedDateParts(value);
+    return parts ? { month: `${parts.month}月`, day: pad2(parts.day) } : { month: '--', day: '--' };
 }
 
 function formatDateOnly(value) {
-    const date = parseDate(value);
-    return date ? isoDate(date) : '未知日期';
+    return zonedDateKey(value) || '未知日期';
 }
 
 /** 支出坐标只接受有限正数，并始终保留零点和至少一个有效上界。 */
@@ -417,14 +421,21 @@ function renderEventSection(title, items, emptyTitle, emptyText) {
 }
 
 function renderMonthlyAgenda(events) {
-    const now = new Date();
+    const now = Date.now();
     const timedEvents = events
         .map((event) => {
-            const start = parseDate(event.start_time);
-            return start ? { event, start, end: parseDate(event.end_time) || start } : null;
+            const start = Number.isFinite(event.start_epoch_ms)
+                ? event.start_epoch_ms
+                : zonedInstantEpoch(event.start_time);
+            const end = Number.isFinite(event.end_epoch_ms)
+                ? event.end_epoch_ms
+                : event.end_time
+                  ? zonedInstantEpoch(event.end_time)
+                  : start;
+            return Number.isFinite(start) && Number.isFinite(end) ? { event, start, end } : null;
         })
         .filter((entry) => entry !== null)
-        .sort((left, right) => left.start.getTime() - right.start.getTime());
+        .sort((left, right) => left.start - right.start);
     const upcoming = timedEvents
         .filter(({ end }) => end >= now)
         .slice(0, 4)
