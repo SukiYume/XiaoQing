@@ -5,9 +5,9 @@ import {
     isRecord,
     isValidDateInput,
     nonNegativeInteger,
-    parseDate,
     trimmedTextValue as textValue,
 } from '../utils/format.js';
+import { formatZonedDateTime, getUserTimeZone } from '../utils/timezone.js';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-transfer-page-styles';
@@ -246,7 +246,7 @@ function normalizeLogs(value) {
                 updated: nonNegativeInteger(summary.updated),
                 skipped: nonNegativeInteger(summary.skipped),
             },
-            created_at: parseDate(rawLog.created_at),
+            created_at: textValue(rawLog.created_at),
         });
         return logs;
     }, []);
@@ -344,12 +344,7 @@ function exportSelection() {
         end = customEnd;
     }
 
-    let timezone = 'Asia/Shanghai';
-    try {
-        timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || timezone;
-    } catch {
-        // 极少数受限浏览器不暴露时区时，使用后端支持的稳定回退值。
-    }
+    const timezone = getUserTimeZone();
     const payload = { types, preset, start, end, timezone };
     return { error: '', payload, signature: JSON.stringify(payload) };
 }
@@ -591,7 +586,7 @@ function renderExportTab() {
             <aside class="transfer-sidecard">
                 <h3>格式说明</h3>
                 <p>导出文件内部包含 <code>manifest.json</code> 和按类型分开的 <code>ndjson</code> 数据文件，后续可以按全部类别或部分类别重新导入。</p>
-                <div class="transfer-note">时间范围按各模块主业务时间字段筛选：日程按开始时间，待办按截止时间或创建时间，记账按账目日期，笔记按创建时间，日记按日记日期。时间以你浏览器的时区为准。</div>
+                <div class="transfer-note">时间范围按各模块主业务时间字段筛选：日程按开始时间，待办按截止时间或创建时间，记账按账目日期，笔记按创建时间，日记按日记日期。时间以设置页保存的用户时区为准。</div>
             </aside>
         </section>
     `;
@@ -1135,14 +1130,7 @@ function renderLogRow(log) {
     if (isImport && log.has_result_counts) {
         detail = `新增 ${summary.inserted}，更新 ${summary.updated || 0}，跳过 ${summary.skipped || 0}`;
     }
-    const time = log.created_at
-        ? log.created_at.toLocaleString('zh-CN', {
-              month: '2-digit',
-              day: '2-digit',
-              hour: '2-digit',
-              minute: '2-digit',
-          })
-        : '';
+    const time = log.created_at ? formatZonedDateTime(log.created_at, '') : '';
     const filename = log.filename ? escapeHtml(log.filename) : '';
     return `
         <div class="transfer-log-row">

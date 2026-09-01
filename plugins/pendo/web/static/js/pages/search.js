@@ -4,12 +4,12 @@ import { renderPagination } from '../components/pagination.js';
 import {
     errorMessage,
     finiteNumber,
-    formatDateTime,
     isRecord,
     nonNegativeInteger,
     previewText,
     textValue,
 } from '../utils/format.js';
+import { formatZonedDateTime } from '../utils/timezone.js';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss, subscribeDataChanges } from '../utils/ui.js';
 import { openEventDetail } from './events.js';
 import { openTaskModal } from './tasks.js';
@@ -151,7 +151,7 @@ function itemPreview(item) {
 function itemMeta(item) {
     if (item.type === 'event') {
         return [
-            item.start_time ? formatDateTime(item.start_time, '') : '',
+            item.start_time ? formatZonedDateTime(item.start_time, '') : '',
             item.location || item.collection?.location ? `📍 ${item.location || item.collection.location}` : '',
             item.category || item.collection?.category || '',
         ].filter(Boolean);
@@ -160,8 +160,8 @@ function itemMeta(item) {
         return [
             item.status || '',
             item.priority != null ? `优先级 ${item.priority}` : '',
-            item.plan_date ? `计划 ${formatDateTime(item.plan_date, '')}` : '',
-            item.deadline_at ? `截止 ${formatDateTime(item.deadline_at, '')}` : '',
+            item.plan_date ? `计划 ${formatZonedDateTime(item.plan_date, '')}` : '',
+            item.deadline_at ? `截止 ${formatZonedDateTime(item.deadline_at, '')}` : '',
             item.category || '',
         ].filter(Boolean);
     }
@@ -178,7 +178,7 @@ function itemMeta(item) {
         );
     }
     if (item.type === 'diary') {
-        const entryTime = item.entry_time ? formatDateTime(item.entry_time, '') : '';
+        const entryTime = item.entry_time ? formatZonedDateTime(item.entry_time, '') : '';
         return [
             entryTime || item.diary_date || '',
             item.weather || '',
@@ -189,7 +189,9 @@ function itemMeta(item) {
     }
     return [
         item.category || '',
-        item.updated_at || item.created_at ? formatDateTime(item.updated_at || item.created_at, '') : '',
+        item.updated_at || item.created_at
+            ? formatZonedDateTime(item.updated_at || item.created_at, '')
+            : '',
     ].filter(Boolean);
 }
 

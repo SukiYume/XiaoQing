@@ -74,7 +74,6 @@ def _stats_source_for_test() -> str:
     noteCadenceSubtitle,
     pad2,
     records as safeRecords,
-    todayStr as sharedTodayStr,
 } from '../utils/format.js';""",
             r"""const safeArray = (value) => Array.isArray(value) ? value : [];
 const isRecord = (value) => value !== null
@@ -105,7 +104,7 @@ const noteCadenceSubtitle = (granularity, rangeLabel) => {
     if (granularity === 'week') return `按${rangeLabel}查看每周新增笔记数量。`;
     return `按${rangeLabel}查看每天的笔记输入频率。`;
 };
-const sharedTodayStr = () => '2026-05-20';""",
+""",
         ),
         (
             "import { derivePresetRange, fetchItemRangeBounds, RANGE_PRESET_OPTIONS, "

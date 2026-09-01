@@ -659,7 +659,7 @@ def test_create_preserves_explicit_diary_time_and_resolves_note_references(db: D
             type="diary",
             content="带明确记录时间",
             diary_date="2030-08-01",
-            entry_time="2030-08-01T21:30:00",
+            entry_time="2030-08-01T13:30:00+00:00",
         ),
         owner_id=owner_id,
         db=db,
@@ -679,6 +679,7 @@ def test_create_preserves_explicit_diary_time_and_resolves_note_references(db: D
     diary = db.get_item(diary_id, owner_id=owner_id)
     note = db.get_item(note_id, owner_id=owner_id)
     assert diary is not None and diary.entry_time == "2030-08-01T13:30:00+00:00"
+    assert diary.title == "2030-08-01 21:30 日记"
     assert note is not None and note.related_items == [target_id]
     assert note.references == [
         {

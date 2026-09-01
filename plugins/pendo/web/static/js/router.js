@@ -1,6 +1,7 @@
 /** Pendo Web 的 hash 路由注册、页面生命周期和路由订阅边界。 */
 
 import { escapeHtml } from './utils/ui.js';
+import { fetchUserTimeZone } from './utils/timezone.js';
 
 const routes = new Map();
 const routeChangeCallbacks = new Set();
@@ -54,6 +55,8 @@ async function loadRoute({ path, params }, navigationId) {
 
     let lifecycle = null;
     try {
+        await fetchUserTimeZone();
+        if (navigationId !== requestedNavigation) return;
         const page = await loader();
         if (navigationId !== requestedNavigation) return;
 

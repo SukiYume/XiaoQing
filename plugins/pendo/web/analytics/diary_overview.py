@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from calendar import monthrange
-from datetime import date, timedelta
-from typing import Any
+from datetime import date, datetime, timedelta, tzinfo
+from typing import Any, cast
 
 from ...models.item import DiaryItem, ItemType
 from ...services.db import Database
 from ...utils.identifiers import public_id
-from ...utils.time_utils import now_in_timezone
+from ...utils.time_utils import TimezoneHelper, now_in_timezone
 
 _ALLOWED_CADENCE_GRANULARITIES = frozenset({"day", "week", "month", "year", "auto"})
 
@@ -77,11 +77,16 @@ def _entry_sort_key(item: DiaryItem) -> str:
     return item.entry_time or item.created_at or item.updated_at or item.diary_date or ""
 
 
-def _entry_label(item: DiaryItem) -> str:
+def _entry_label(item: DiaryItem, user_timezone: tzinfo) -> str:
     """提取列表使用的 HH:MM 标签；没有具体时间的条目标记为全天。"""
 
     raw = _entry_sort_key(item)
-    return raw[11:16] if "T" in raw and len(raw) >= 16 else "全天"
+    if len(raw) < 16 or raw[10] not in {"T", " "}:
+        return "全天"
+    try:
+        return cast(datetime, TimezoneHelper.parse(raw, user_timezone)).strftime("%H:%M")
+    except (OverflowError, TypeError, ValueError):
+        return "全天"
 
 
 def _current_streak(days: set[date], today: date) -> int:
@@ -209,6 +214,7 @@ def build_diary_overview(
         key=_entry_sort_key,
         reverse=True,
     )
+    user_timezone = TimezoneHelper.get_user_timezone(owner_id, db)
 
     day_counts: dict[str, int] = {}
     day_words: dict[str, int] = {}
@@ -273,7 +279,9 @@ def build_diary_overview(
             "title": item.title,
             "diary_date": item.diary_date,
             "entry_time": item.entry_time,
-            "entry_label": _entry_label(item),
+            "created_at": item.created_at,
+            "updated_at": item.updated_at,
+            "entry_label": _entry_label(item, user_timezone),
             "mood": item.mood,
             "mood_score": item.mood_score,
             "weather": item.weather,

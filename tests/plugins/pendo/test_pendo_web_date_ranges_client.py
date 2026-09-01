@@ -15,7 +15,7 @@ DATE_RANGES_CLIENT: Final = (
 DATE_RANGES_SETUP: Final = r"""
     const pad2 = (value) => String(value).padStart(2, '0');
     globalThis.__format = {
-        todayStr: () => '2024-02-29',
+        todayInUserTimeZone: () => '2024-02-29',
         isoDate: (date) => (
             `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
         ),
@@ -27,11 +27,16 @@ def _date_ranges_source_for_test() -> str:
     """只替换相邻格式化依赖，保留真实日期范围实现。"""
 
     source = DATE_RANGES_CLIENT.read_text(encoding="utf-8")
-    import_line = "import { isoDate, todayStr } from './format.js';"
-    assert import_line in source
+    format_import = "import { isoDate } from './format.js';"
+    timezone_import = "import { todayInUserTimeZone } from './timezone.js';"
+    assert format_import in source
+    assert timezone_import in source
     return source.replace(
-        import_line,
-        "const { isoDate, todayStr } = globalThis.__format;",
+        format_import,
+        "const { isoDate } = globalThis.__format;",
+    ).replace(
+        timezone_import,
+        "const { todayInUserTimeZone } = globalThis.__format;",
     )
 
 
