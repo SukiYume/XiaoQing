@@ -68,7 +68,6 @@ let _items                  = [];
 let _total                  = 0;
 let _page                   = 1;
 let _dateFilter             = 'month';
-let _currency               = 'CNY';
 let _transactionTypeFilter  = '';
 let _categoryFilter         = '';
 let _accountFilter          = '';
@@ -88,7 +87,7 @@ let _unsubscribeDataChanges = null;
 
 // ── 数据边界与筛选参数 ───────────────────────────────────────────────────────
 
-function formatAmount(value, currency = _summaryData.currency || _currency) {
+function formatAmount(value, currency = _summaryData.currency || 'CNY') {
     return baseFormatAmount(value, currency);
 }
 
@@ -151,7 +150,7 @@ function normalizeLedgerItem(value) {
 function normalizeSummary(value) {
     const raw = value && typeof value === 'object' ? value : {};
     return {
-        currency: String(raw.currency || _currency),
+        currency: String(raw.currency || 'CNY'),
         income: Math.max(0, finiteNumber(raw.income)),
         expense: Math.max(0, finiteNumber(raw.expense)),
         transfer: Math.max(0, finiteNumber(raw.transfer)),
@@ -161,7 +160,7 @@ function normalizeSummary(value) {
 }
 
 function currentFilterParams() {
-    const params = { ...dateRangeForFilter(_dateFilter), currency: _currency };
+    const params = { ...dateRangeForFilter(_dateFilter), currency: 'CNY' };
     if (_transactionTypeFilter) params.transaction_type = _transactionTypeFilter;
     if (_categoryFilter) params.category = _categoryFilter;
     if (_accountFilter) params.account_name = _accountFilter;
@@ -1290,7 +1289,6 @@ function renderFilterBar() {
 
     return `
         <div class="ledger-filter-bar" id="ledger-filter-bar">
-            <div class="ledger-filter-item"><label for="filter-currency">币种：</label><input id="filter-currency" value="${escapeHtml(_currency)}" maxlength="3" size="4" placeholder="CNY" aria-label="账本币种代码"></div>
             <div class="ledger-filter-item ledger-filter-item--date${_dateFilter === 'custom' ? ' is-custom' : ''}">
                 <label id="filter-date-label">时段：</label>
                 <div class="ledger-filter-controls">
@@ -1487,15 +1485,6 @@ function attachListeners() {
     if (!_container) return;
     const root = _container;
 
-    const currencyInput = root.querySelector('#filter-currency');
-    if (currencyInput) currencyInput.onchange = async () => {
-        const currency = currencyInput.value.trim().toUpperCase();
-        if (!/^[A-Z]{3}$/.test(currency)) { showToast('请输入三位币种代码，如 CNY、USD', 'error'); return; }
-        _currency = currency;
-        _page = 1;
-        await loadAndRender();
-    };
-
     const qaSubmit = root.querySelector('#qa-submit');
     if (qaSubmit) qaSubmit.addEventListener('click', handleQuickAdd);
 
@@ -1689,7 +1678,7 @@ async function handleQuickAdd() {
             account_name: account,
             counter_account_name: counter,
             merchant,
-            currency: _currency,
+            currency: 'CNY',
         });
         showToast('记录已添加', 'success');
         amountInput.value = '';
