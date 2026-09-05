@@ -74,18 +74,16 @@ class TestOneBotWebSocketQueues:
         queue: asyncio.Queue[_QueuedOneBotEvent] = asyncio.Queue()
         client._message_queues[key]              = queue
         handled: list[dict[str, Any]]            = []
-        real_wait_for                            = asyncio.wait_for
+        real_get                                 = queue.get
         wait_calls                               = 0
 
         async def handler(event: dict[str, Any]) -> None:
             handled.append(event)
 
-        async def fake_wait_for(awaitable, timeout):
+        async def get_with_timeout_race():
             nonlocal wait_calls
             wait_calls += 1
             if wait_calls == 1:
-                if hasattr(awaitable, "close"):
-                    awaitable.close()
                 queue.put_nowait(
                     _QueuedOneBotEvent(
                         event      = {"user_id": 1},
@@ -93,15 +91,16 @@ class TestOneBotWebSocketQueues:
                     )
                 )
                 raise asyncio.TimeoutError()
-            return await real_wait_for(awaitable, timeout)
+            return await real_get()
 
         task                     = asyncio.create_task(client._drain_queue(key, handler))
         client._queue_tasks[key] = task
 
-        with patch("core.onebot.asyncio.wait_for", side_effect=fake_wait_for):
+        # 在队列边界注入超时与新事件的同轮竞态，保留退出后重新调度的行为断言。
+        with patch.object(queue, "get", side_effect=get_with_timeout_race):
             await task
             restarted = client._queue_tasks[key]
-            await real_wait_for(restarted, timeout=2.0)
+            await asyncio.wait_for(restarted, timeout=2.0)
 
         assert handled == [{"user_id": 1}]
 

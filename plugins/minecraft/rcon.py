@@ -197,10 +197,9 @@ class RconClient:
         if self.connected:
             return RconConnectResult(success=True)
         try:
-            self._reader, self._writer = await asyncio.wait_for(
-                asyncio.open_connection(self.host, self.port),
-                timeout=self.timeout,
-            )
+            # 同任务超时边界保留外部取消，避免旧版 wait_for 的完成/取消竞态。
+            async with asyncio.timeout(self.timeout):
+                self._reader, self._writer = await asyncio.open_connection(self.host, self.port)
             await self._authenticate()
             self._connected = True
             return RconConnectResult(success=True)
@@ -226,7 +225,8 @@ class RconClient:
         if writer is not None:
             try:
                 writer.close()
-                await asyncio.wait_for(writer.wait_closed(), timeout=self.timeout)
+                async with asyncio.timeout(self.timeout):
+                    await writer.wait_closed()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -286,13 +286,15 @@ class RconClient:
         if self._writer is None or self._reader is None:
             raise ConnectionError("RCON connection is not open")
         self._writer.write(packet.encode())
-        await asyncio.wait_for(self._writer.drain(), timeout=self.timeout)
+        async with asyncio.timeout(self.timeout):
+            await self._writer.drain()
 
     async def _read_packet(self, timeout: float) -> RconPacket:
         if self._reader is None:
             raise ConnectionError("RCON connection is not open")
         try:
-            header = await asyncio.wait_for(self._reader.readexactly(4), timeout=timeout)
+            async with asyncio.timeout(timeout):
+                header = await self._reader.readexactly(4)
         except asyncio.IncompleteReadError as exc:
             if not exc.partial:
                 raise ConnectionError("RCON peer closed the connection") from exc
@@ -301,10 +303,8 @@ class RconClient:
         if packet_length < 10 or packet_length > self.MAX_PACKET_BYTES:
             raise RconProtocolError(f"invalid RCON packet length: {packet_length}")
         try:
-            body = await asyncio.wait_for(
-                self._reader.readexactly(packet_length),
-                timeout=timeout,
-            )
+            async with asyncio.timeout(timeout):
+                body = await self._reader.readexactly(packet_length)
         except asyncio.IncompleteReadError as exc:
             raise RconProtocolError("RCON packet body was truncated") from exc
         except TimeoutError as exc:

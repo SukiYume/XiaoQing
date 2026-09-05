@@ -1471,10 +1471,10 @@ class SSHManager:
         try:
             if effective_timeout == 0:
                 return await operation
-            return await asyncio.wait_for(
-                operation,
-                timeout=effective_timeout,
-            )
+            # 同任务执行使反复取消继续经过建通道线程的所有权收尾。
+            # wait_for 的独立子任务在旧版 asyncio 上可能被第二次取消提前脱离。
+            async with asyncio.timeout(effective_timeout):
+                return await operation
         except TimeoutError:
             key         = self.build_connection_key(user_id, group_id, name)
             termination = await self._terminate_active_command(key)
