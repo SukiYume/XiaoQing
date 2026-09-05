@@ -144,7 +144,7 @@ def main() -> int:
     if args.paths:
         paths = sorted(
             {
-                path
+                path.resolve()
                 for target in args.paths
                 for path in (target.rglob("*") if target.is_dir() else [target])
                 if path.suffix in SOURCE_SUFFIXES
@@ -178,7 +178,8 @@ def main() -> int:
                 continue
             changed += 1
             if args.check:
-                print(f"需要格式化：{path.relative_to(ROOT)}")
+                display = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path
+                print(f"需要格式化：{display}")
             else:
                 path.write_text(formatted, encoding="utf-8", newline="\n")
     print(f"检查 {len(paths)} 个代码文件，{'待调整' if args.check else '已调整'} {changed} 个。")
