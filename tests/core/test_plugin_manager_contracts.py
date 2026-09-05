@@ -565,7 +565,12 @@ async def test_execution_broker_closes_only_after_runtimes_and_rebuilds_lazily(
 
 
 @pytest.mark.asyncio
-async def test_unload_reuses_one_deadline_for_both_generation_drains(tmp_path: Path):
+async def test_unload_reuses_one_deadline_for_both_generation_drains(tmp_path: Path, monkeypatch):
+    # 只控制卸载器的时钟，验证剩余预算递减，避免平台计时精度影响 5ms 等待。
+    elapsed = 0.0
+    clock   = Mock(spec=["monotonic"], monotonic=lambda: elapsed)
+    monkeypatch.setattr("core.plugin_generation.time", clock)
+    monkeypatch.setattr("core.plugin_runtime.time", clock)
     manager                  = _build_manager(tmp_path)
     definition               = _build_definition("demo")
     module                   = ModuleType("plugins.demo.main")
@@ -579,9 +584,11 @@ async def test_unload_reuses_one_deadline_for_both_generation_drains(tmp_path: P
     observed_timeouts: list[float] = []
 
     async def close_gate(*, timeout_seconds: float | None = None):
+        nonlocal elapsed
         assert timeout_seconds is not None
         observed_timeouts.append(timeout_seconds)
-        await asyncio.sleep(0.005)
+        elapsed += 0.005
+        await asyncio.sleep(0)
         return PluginExecutionDrainResult(True, 0, 0, 0.005)
 
     gate.close = close_gate  # type: ignore[method-assign]
@@ -589,6 +596,7 @@ async def test_unload_reuses_one_deadline_for_both_generation_drains(tmp_path: P
     await manager.unload_plugin("demo", drain_timeout_seconds=0.05)
 
     assert len(observed_timeouts) == 2
+    assert observed_timeouts == pytest.approx([0.05, 0.045])
     assert 0 <= observed_timeouts[1] < observed_timeouts[0] <= 0.05
     await manager.close_execution_broker(timeout_seconds=0.1)
 
