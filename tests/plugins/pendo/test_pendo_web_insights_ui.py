@@ -18,7 +18,7 @@ from tests.helpers.pendo_web_items_test_support import (
 def test_build_ledger_insights_uses_filtered_ledger_category_and_builds_svg_data():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_ledger_insights_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
+    db       = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-insights"
 
     try:
@@ -76,11 +76,11 @@ def test_build_ledger_insights_uses_filtered_ledger_category_and_builds_svg_data
         )
 
         result = build_ledger_insights(
-            db=db,
-            owner_id=owner_id,
-            category="餐饮",
-            start_date="2026-03-20",
-            end_date="2026-03-21",
+            db         = db,
+            owner_id   = owner_id,
+            category   = "餐饮",
+            start_date = "2026-03-20",
+            end_date   = "2026-03-21",
         )
 
         assert result["summary"]["expense_total"] == 36
@@ -104,7 +104,7 @@ def test_build_ledger_insights_uses_filtered_ledger_category_and_builds_svg_data
 def test_build_ledger_insights_switches_focus_with_income_filter():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_ledger_income_insights_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
+    db       = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-income-insights"
 
     try:
@@ -146,11 +146,11 @@ def test_build_ledger_insights_switches_focus_with_income_filter():
             db.insert_item(item)
 
         result = build_ledger_insights(
-            db=db,
-            owner_id=owner_id,
-            transaction_type="income",
-            start_date="2026-03-01",
-            end_date="2026-03-31",
+            db               = db,
+            owner_id         = owner_id,
+            transaction_type = "income",
+            start_date       = "2026-03-01",
+            end_date         = "2026-03-31",
         )
 
         assert result["summary"]["focus_transaction_type"] == "income"
@@ -172,7 +172,7 @@ def test_build_ledger_insights_switches_focus_with_income_filter():
 def test_build_ledger_insights_year_mode_compares_against_last_year_to_date():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_ledger_year_compare_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
+    db       = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-year-compare"
 
     try:
@@ -230,11 +230,11 @@ def test_build_ledger_insights_year_mode_compares_against_last_year_to_date():
         )
 
         result = build_ledger_insights(
-            db=db,
-            owner_id=owner_id,
-            start_date="2026-01-01",
-            end_date="2026-03-25",
-            compare_mode="previous_year_to_date",
+            db           = db,
+            owner_id     = owner_id,
+            start_date   = "2026-01-01",
+            end_date     = "2026-03-25",
+            compare_mode = "previous_year_to_date",
         )
 
         assert result["summary"]["expense_total"] == 150
@@ -248,7 +248,7 @@ def test_build_ledger_insights_year_mode_compares_against_last_year_to_date():
 def test_build_ledger_insights_month_bucket_orders_candles_by_ledger_date_not_created_at():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_ledger_month_candles_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
+    db       = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-month-candles"
 
     try:
@@ -290,10 +290,10 @@ def test_build_ledger_insights_month_bucket_orders_candles_by_ledger_date_not_cr
             db.insert_item(item)
 
         result = build_ledger_insights(
-            db=db,
-            owner_id=owner_id,
-            start_date="2026-01-01",
-            end_date="2026-03-31",
+            db         = db,
+            owner_id   = owner_id,
+            start_date = "2026-01-01",
+            end_date   = "2026-03-31",
         )
 
         assert result["summary"]["bucket_mode"] == "month"
@@ -314,7 +314,7 @@ def test_build_ledger_insights_clips_current_period_visuals_to_user_today(
 ) -> None:
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_ledger_current_period_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
+    db       = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-current-period"
 
     def user_now(user_id: str, database: Database) -> datetime:
@@ -356,10 +356,10 @@ def test_build_ledger_insights_clips_current_period_visuals_to_user_today(
             db.insert_item(item)
 
         result = build_ledger_insights(
-            db=db,
-            owner_id=owner_id,
-            start_date="2026-04-01",
-            end_date="2026-04-30",
+            db         = db,
+            owner_id   = owner_id,
+            start_date = "2026-04-01",
+            end_date   = "2026-04-30",
         )
 
         assert result["summary"]["focus_total"] == 76
@@ -375,10 +375,10 @@ def test_build_ledger_insights_clips_current_period_visuals_to_user_today(
 
 def test_build_ledger_insights_keeps_empty_range_peak_blank(db: Database) -> None:
     result = build_ledger_insights(
-        db=db,
-        owner_id="u-empty-insights",
-        start_date="2026-01-01",
-        end_date="2026-01-02",
+        db         = db,
+        owner_id   = "u-empty-insights",
+        start_date = "2026-01-01",
+        end_date   = "2026-01-02",
     )
 
     assert [point["count"] for point in result["expense_timeline"]] == [0, 0]

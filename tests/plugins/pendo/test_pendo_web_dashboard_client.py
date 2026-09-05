@@ -9,7 +9,7 @@ from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.pendo_web_timezone_test_support import inline_timezone_runtime
 
-ROOT: Final = REPOSITORY_ROOT
+ROOT: Final             = REPOSITORY_ROOT
 DASHBOARD_CLIENT: Final = (
     ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "dashboard.js"
 )
@@ -118,8 +118,8 @@ def _run_dashboard_client(script: str) -> None:
     assert_node_esm_contract(
         _dashboard_source_for_test(),
         script,
-        cwd=ROOT,
-        setup=DASHBOARD_SETUP,
+        cwd   = ROOT,
+        setup = DASHBOARD_SETUP,
     )
 
 

@@ -49,14 +49,14 @@ def _valid_arxiv_summary(date: str, link: str, text: str = "summary") -> str:
 
 class FakeContext:
     def __init__(self, tmp_path: Path, *, max_parallel_jobs: int = 2) -> None:
-        self.data_dir = tmp_path / "plugin-data"
-        self.plugin_dir = REPOSITORY_ROOT / "plugins" / "codex"
-        self.current_user_id = None
-        self.current_group_id = None
-        self.plugin_name = "codex"
+        self.data_dir                      = tmp_path / "plugin-data"
+        self.plugin_dir                    = REPOSITORY_ROOT / "plugins" / "codex"
+        self.current_user_id               = None
+        self.current_group_id              = None
+        self.plugin_name                   = "codex"
         self.actions: list[dict[str, Any]] = []
-        self.default_cwd = tmp_path / "default-cwd"
-        self.config = {
+        self.default_cwd                   = tmp_path / "default-cwd"
+        self.config                        = {
             "plugins": {
                 "codex": {
                     "default_cwd": str(self.default_cwd),
@@ -67,15 +67,15 @@ class FakeContext:
             }
         }
         self.secrets: dict[str, Any] = {}
-        self.settings_revision = 0
+        self.settings_revision       = 0
         self.principal = PluginPrincipal(kind="lifecycle")
         self.capabilities = PluginCapabilities()
 
     def get_settings_snapshot(self) -> PluginSettingsSnapshot:
         return PluginSettingsSnapshot(
-            config=self.config,
-            secrets=self.secrets,
-            revision=self.settings_revision,
+            config   = self.config,
+            secrets  = self.secrets,
+            revision = self.settings_revision,
         )
 
     async def send_action(self, action: dict[str, Any]) -> None:
@@ -86,20 +86,20 @@ class FakeRunner:
     def __init__(
         self,
         *,
-        result_text: str | None = None,
-        exit_code: int = 0,
-        artifact_name: str | None = None,
+        result_text: str | None          = None,
+        exit_code: int                   = 0,
+        artifact_name: str | None        = None,
         generated_image_name: str | None = None,
-        block_summary: bool = False,
+        block_summary: bool              = False,
     ) -> None:
         self.calls: list[tuple[str, str, str | None]] = []
-        self.started: list[str] = []
-        self.release = asyncio.Event()
-        self.result_text = result_text
-        self.exit_code = exit_code
-        self.artifact_name = artifact_name
-        self.generated_image_name = generated_image_name
-        self.block_summary = block_summary
+        self.started: list[str]                       = []
+        self.release                                  = asyncio.Event()
+        self.result_text                              = result_text
+        self.exit_code                                = exit_code
+        self.artifact_name                            = artifact_name
+        self.generated_image_name                     = generated_image_name
+        self.block_summary                            = block_summary
 
     async def run(
         self,
@@ -109,32 +109,32 @@ class FakeRunner:
         thread_id: str | None,
         job: Any,
         artifact_dir: Path | None = None,
-        process_handoff=None,
-        prompt_handoff=None,
+        process_handoff           = None,
+        prompt_handoff            = None,
     ) -> CodexRunResult:
         self.calls.append((job.label, prompt, thread_id))
         self.started.append(job.label)
         if process_handoff is not None and not await process_handoff(None):
             return CodexRunResult(
-                exit_code=None,
-                thread_id=thread_id,
-                final_text="cancelled before fake runner start",
-                stdout_tail="",
-                stderr_tail="",
-                cancelled=True,
+                exit_code   = None,
+                thread_id   = thread_id,
+                final_text  = "cancelled before fake runner start",
+                stdout_tail = "",
+                stderr_tail = "",
+                cancelled   = True,
             )
         if prompt_handoff is not None and not await prompt_handoff():
             return CodexRunResult(
-                exit_code=None,
-                thread_id=thread_id,
-                final_text="cancelled before fake prompt",
-                stdout_tail="",
-                stderr_tail="",
-                cancelled=True,
+                exit_code   = None,
+                thread_id   = thread_id,
+                final_text  = "cancelled before fake prompt",
+                stdout_tail = "",
+                stderr_tail = "",
+                cancelled   = True,
             )
         if "block" in prompt or (self.block_summary and "本次要总结的 arXiv 链接" in prompt):
             release_task = asyncio.create_task(self.release.wait())
-            cancel_task = asyncio.create_task(job.cancel_event.wait())
+            cancel_task  = asyncio.create_task(job.cancel_event.wait())
             await asyncio.wait(
                 {release_task, cancel_task},
                 return_when=asyncio.FIRST_COMPLETED,
@@ -145,12 +145,12 @@ class FakeRunner:
             await asyncio.gather(release_task, cancel_task, return_exceptions=True)
             if job.cancel_requested:
                 return CodexRunResult(
-                    exit_code=None,
-                    thread_id=thread_id,
-                    final_text="cancelled fake runner",
-                    stdout_tail="",
-                    stderr_tail="",
-                    cancelled=True,
+                    exit_code   = None,
+                    thread_id   = thread_id,
+                    final_text  = "cancelled fake runner",
+                    stdout_tail = "",
+                    stderr_tail = "",
+                    cancelled   = True,
                 )
         await asyncio.sleep(0)
         if self.artifact_name and artifact_dir is not None:
@@ -163,19 +163,19 @@ class FakeRunner:
             generated_dir.mkdir(parents=True, exist_ok=True)
             (generated_dir / self.generated_image_name).write_bytes(PNG_BYTES)
         return CodexRunResult(
-            exit_code=self.exit_code,
-            thread_id=thread_id or f"thread-{job.label}",
-            final_text=self.result_text if self.result_text is not None else f"done: {prompt}",
-            stdout_tail="",
-            stderr_tail="",
+            exit_code   = self.exit_code,
+            thread_id   = thread_id or f"thread-{job.label}",
+            final_text  = self.result_text if self.result_text is not None else f"done: {prompt}",
+            stdout_tail = "",
+            stderr_tail = "",
         )
 
 
 class _RaceProcess(CallbackStreamingProcess):
     def __init__(self, pid: int = 43210) -> None:
         self.stdin_inputs: list[bytes] = []
-        self.prompt_sent = asyncio.Event()
-        self.terminated = asyncio.Event()
+        self.prompt_sent               = asyncio.Event()
+        self.terminated                = asyncio.Event()
 
         async def exchange(payload: bytes) -> tuple[bytes, bytes]:
             self.stdin_inputs.append(payload)
@@ -215,7 +215,7 @@ async def _wait_manager_idle(manager: CodexQueueManager) -> None:
 def _reset_manager_state() -> None:
     """隔离测试之间的模块级单例和事件循环锁。"""
 
-    codex_manager_module._MANAGER = None
+    codex_manager_module._MANAGER      = None
     codex_manager_module._MANAGER_LOCK = None
 
 
@@ -224,8 +224,8 @@ def _install_fake_manager(context: FakeContext, runner: FakeRunner) -> CodexQueu
 
     manager = CodexQueueManager(
         context,
-        config=load_plugin_config(context),
-        runner=runner,  # type: ignore[arg-type]
+        config = load_plugin_config(context),
+        runner = runner,  # type: ignore[arg-type]
     )
     manager_module._MANAGER = manager
     return manager
@@ -234,11 +234,11 @@ def _install_fake_manager(context: FakeContext, runner: FakeRunner) -> CodexQueu
 def _install_actual_runner_manager(context: FakeContext) -> CodexQueueManager:
     import plugins.codex.manager as manager_module
 
-    config = load_plugin_config(context)
+    config  = load_plugin_config(context)
     manager = CodexQueueManager(
         context,
-        config=config,
-        runner=CodexRunner(config, context.data_dir / "outputs"),
+        config = config,
+        runner = CodexRunner(config, context.data_dir / "outputs"),
     )
     manager_module._MANAGER = manager
     return manager

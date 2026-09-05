@@ -1,3 +1,4 @@
+# 验证 Pendo AI 请求在用户授权范围内选取数据。
 import asyncio
 
 from plugins.pendo.services.ai_parser import AIParser

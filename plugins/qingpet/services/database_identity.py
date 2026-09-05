@@ -42,44 +42,47 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
     @classmethod
     def _row_to_pet(cls, row: sqlite3.Row) -> Pet:
         keys = row.keys()
-        pet = Pet(
-            id=row["id"],
-            user_id=row["user_id"],
-            group_id=row["group_id"],
-            name=row["name"],
-            stage=PetStage(row["stage"]),
-            form=row["form"],
-            hunger=row["hunger"],
-            mood=row["mood"],
-            clean=row["clean"],
-            energy=row["energy"],
-            health=row["health"],
-            age=row["age"],
-            experience=row["experience"],
-            intimacy=row["intimacy"],
-            personality=cls._parse_personality(row["personality"]),
-            favorite_food=row["favorite_food"],
-            status=cls._parse_status(row["status"]),
-            status_expire_time=datetime.fromisoformat(row["status_expire_time"])
+        pet  = Pet(
+            id                 = row["id"],
+            user_id            = row["user_id"],
+            group_id           = row["group_id"],
+            name               = row["name"],
+            stage              = PetStage(row["stage"]),
+            form               = row["form"],
+            hunger             = row["hunger"],
+            mood               = row["mood"],
+            clean              = row["clean"],
+            energy             = row["energy"],
+            health             = row["health"],
+            age                = row["age"],
+            experience         = row["experience"],
+            intimacy           = row["intimacy"],
+            personality        = cls._parse_personality(row["personality"]),
+            favorite_food      = row["favorite_food"],
+            status             = cls._parse_status(row["status"]),
+            status_expire_time = datetime.fromisoformat(row["status_expire_time"])
             if row["status_expire_time"]
             else None,
-            dress_hat=row["dress_hat"] if "dress_hat" in keys else None,
-            dress_clothes=row["dress_clothes"] if "dress_clothes" in keys else None,
-            dress_accessory=row["dress_accessory"] if "dress_accessory" in keys else None,
-            dress_background=row["dress_background"] if "dress_background" in keys else None,
-            last_update=datetime.fromisoformat(row["last_update"])
+            dress_hat        = row["dress_hat"] if "dress_hat" in keys else None,
+            dress_clothes    = row["dress_clothes"] if "dress_clothes" in keys else None,
+            dress_accessory  = row["dress_accessory"] if "dress_accessory" in keys else None,
+            dress_background = row["dress_background"] if "dress_background" in keys else None,
+            last_update      = datetime.fromisoformat(row["last_update"])
             if row["last_update"]
             else database_clock.now(),
-            last_feed=datetime.fromisoformat(row["last_feed"]) if row["last_feed"] else None,
-            last_clean=datetime.fromisoformat(row["last_clean"]) if row["last_clean"] else None,
-            last_play=datetime.fromisoformat(row["last_play"]) if row["last_play"] else None,
-            last_train=datetime.fromisoformat(row["last_train"]) if row["last_train"] else None,
-            last_explore=datetime.fromisoformat(row["last_explore"])
+            decay_remainders=json.loads(row["decay_remainders"])
+            if "decay_remainders" in keys
+            else {},
+            last_feed    = datetime.fromisoformat(row["last_feed"]) if row["last_feed"] else None,
+            last_clean   = datetime.fromisoformat(row["last_clean"]) if row["last_clean"] else None,
+            last_play    = datetime.fromisoformat(row["last_play"]) if row["last_play"] else None,
+            last_train   = datetime.fromisoformat(row["last_train"]) if row["last_train"] else None,
+            last_explore = datetime.fromisoformat(row["last_explore"])
             if row["last_explore"]
             else None,
-            likes=row["likes"] if "likes" in keys else 0,
-            version=int(row["version"]) if "version" in keys else 0,
-            created_at=datetime.fromisoformat(row["created_at"])
+            likes      = row["likes"] if "likes" in keys else 0,
+            version    = int(row["version"]) if "version" in keys else 0,
+            created_at = datetime.fromisoformat(row["created_at"])
             if row["created_at"]
             else database_clock.now(),
         )
@@ -91,19 +94,19 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
         """从兼容新旧字段集合的数据库行构造用户对象。"""
         keys = row.keys()
         user = User(
-            user_id=row["user_id"],
-            group_id=row["group_id"],
-            coins=row["coins"],
-            friendship_points=row["friendship_points"],
-            today_coins_earned=row["today_coins_earned"],
-            today_feed_count=row["today_feed_count"],
-            today_clean_count=row["today_clean_count"],
-            today_play_count=row["today_play_count"],
-            today_train_count=row["today_train_count"],
-            today_explore_count=row["today_explore_count"],
-            today_visit_count=row["today_visit_count"],
-            today_gift_count=row["today_gift_count"],
-            today_free_feed_count=row["today_free_feed_count"]
+            user_id               = row["user_id"],
+            group_id              = row["group_id"],
+            coins                 = row["coins"],
+            friendship_points     = row["friendship_points"],
+            today_coins_earned    = row["today_coins_earned"],
+            today_feed_count      = row["today_feed_count"],
+            today_clean_count     = row["today_clean_count"],
+            today_play_count      = row["today_play_count"],
+            today_train_count     = row["today_train_count"],
+            today_explore_count   = row["today_explore_count"],
+            today_visit_count     = row["today_visit_count"],
+            today_gift_count      = row["today_gift_count"],
+            today_free_feed_count = row["today_free_feed_count"]
             if "today_free_feed_count" in keys
             else 0,
             today_message_count=row["today_message_count"] if "today_message_count" in keys else 0,
@@ -128,9 +131,9 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
             trustee_until=datetime.fromisoformat(row["trustee_until"])
             if row["trustee_until"]
             else None,
-            is_banned=bool(row["is_banned"]),
-            ban_until=datetime.fromisoformat(row["ban_until"]) if row["ban_until"] else None,
-            created_at=datetime.fromisoformat(row["created_at"])
+            is_banned  = bool(row["is_banned"]),
+            ban_until  = datetime.fromisoformat(row["ban_until"]) if row["ban_until"] else None,
+            created_at = datetime.fromisoformat(row["created_at"])
             if row["created_at"]
             else database_clock.now(),
             last_active=datetime.fromisoformat(row["last_active"])
@@ -151,7 +154,7 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
                status = ?, status_expire_time = ?,
                dress_hat = ?, dress_clothes = ?, dress_accessory = ?, dress_background = ?,
                last_update = ?, last_feed = ?, last_clean = ?, last_play = ?,
-               last_train = ?, last_explore = ?, likes = ?, version = version + 1
+               last_train = ?, last_explore = ?, likes = ?, decay_remainders = ?, version = version + 1
                WHERE id = ? AND version = ?""",
             (
                 pet.name,
@@ -180,6 +183,7 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
                 pet.last_train.isoformat() if pet.last_train else None,
                 pet.last_explore.isoformat() if pet.last_explore else None,
                 pet.likes,
+                json.dumps(pet.decay_remainders, separators=(",", ":")),
                 pet.id,
                 pet.version,
             ),
@@ -324,12 +328,12 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
             if created:
                 self._record_asset_delta(
                     conn,
-                    user_id=user.user_id,
-                    group_id=user.group_id,
-                    asset_type="coins",
-                    delta=int(user.coins),
-                    reason="account_opening",
-                    reference_id=f"account-opening:{user.group_id}:{user.user_id}",
+                    user_id      = user.user_id,
+                    group_id     = user.group_id,
+                    asset_type   = "coins",
+                    delta        = int(user.coins),
+                    reason       = "account_opening",
+                    reference_id = f"account-opening:{user.group_id}:{user.user_id}",
                 )
             conn.commit()
             if created:
@@ -343,7 +347,7 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
 
     def get_user(self, user_id: str, group_id: int) -> User | None:
         try:
-            conn = self._get_connection()
+            conn   = self._get_connection()
             cursor = conn.execute(
                 "SELECT * FROM users WHERE user_id = ? AND group_id = ?", (user_id, group_id)
             )
@@ -426,11 +430,11 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
             )
             self._record_asset_delta(
                 conn,
-                user_id=merged.user_id,
-                group_id=merged.group_id,
-                asset_type="coins",
-                delta=stored_coins - int(row["coins"]),
-                reason="user_update",
+                user_id    = merged.user_id,
+                group_id   = merged.group_id,
+                asset_type = "coins",
+                delta      = stored_coins - int(row["coins"]),
+                reason     = "user_update",
             )
             conn.commit()
             merged.coins = stored_coins
@@ -447,7 +451,7 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
 
     def create_pet(self, pet: Pet) -> bool:
         try:
-            conn = self._get_connection()
+            conn   = self._get_connection()
             cursor = conn.execute(
                 """
                 INSERT INTO pets (
@@ -456,8 +460,8 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
                     age, experience, intimacy, personality, favorite_food,
                     status, status_expire_time,
                     dress_hat, dress_clothes, dress_accessory, dress_background,
-                    last_update, likes, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    last_update, likes, created_at, decay_remainders
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     pet.user_id,
@@ -484,13 +488,14 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
                     pet.last_update.isoformat(),
                     0,
                     pet.created_at.isoformat(),
+                    json.dumps(pet.decay_remainders, separators=(",", ":")),
                 ),
             )
             pet_id = cursor.lastrowid
             if pet_id is None:
                 raise RuntimeError("宠物写入后未返回主键")
             conn.commit()
-            pet.id = pet_id
+            pet.id      = pet_id
             pet.version = 0
             pet.mark_persisted()
             return True
@@ -501,7 +506,7 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
 
     def get_pet(self, user_id: str, group_id: int) -> Pet | None:
         try:
-            conn = self._get_connection()
+            conn   = self._get_connection()
             cursor = conn.execute(
                 "SELECT * FROM pets WHERE user_id = ? AND group_id = ?", (user_id, group_id)
             )
@@ -539,7 +544,7 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
 
     def get_all_pets(self) -> list[Pet]:
         try:
-            conn = self._get_connection()
+            conn   = self._get_connection()
             cursor = conn.execute("SELECT * FROM pets")
             return [self._row_to_pet(row) for row in cursor.fetchall()]
         except Exception as exc:
@@ -548,7 +553,7 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
 
     def get_enabled_group_decay_map(self) -> dict[int, float]:
         try:
-            conn = self._get_connection()
+            conn   = self._get_connection()
             cursor = conn.execute(
                 "SELECT group_id, decay_multiplier FROM group_configs WHERE enabled = 1"
             )
@@ -561,7 +566,7 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
 
     def get_pets_by_user(self, user_id: str) -> list[Pet]:
         try:
-            conn = self._get_connection()
+            conn   = self._get_connection()
             cursor = conn.execute(
                 "SELECT * FROM pets WHERE user_id = ? ORDER BY group_id",
                 (user_id,),
@@ -576,19 +581,19 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
     def get_or_create_inventory(self, user_id: str, group_id: int) -> Inventory:
         conn: sqlite3.Connection | None = None
         try:
-            conn = self._get_connection()
+            conn   = self._get_connection()
             cursor = conn.execute(
                 "SELECT items, version FROM inventories WHERE user_id = ? AND group_id = ?",
                 (user_id, group_id),
             )
             row = cursor.fetchone()
             if row:
-                items = json.loads(row["items"]) if row["items"] else {}
+                items     = json.loads(row["items"]) if row["items"] else {}
                 inventory = Inventory(
-                    user_id=user_id,
-                    group_id=group_id,
-                    items=items,
-                    version=int(row["version"]),
+                    user_id  = user_id,
+                    group_id = group_id,
+                    items    = items,
+                    version  = int(row["version"]),
                 )
                 inventory.mark_persisted()
                 return inventory
@@ -640,9 +645,9 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
     def get_group_config(self, group_id: int) -> GroupConfig:
         conn: sqlite3.Connection | None = None
         try:
-            conn = self._get_connection()
+            conn   = self._get_connection()
             cursor = conn.execute("SELECT * FROM group_configs WHERE group_id = ?", (group_id,))
-            row = cursor.fetchone()
+            row    = cursor.fetchone()
             if row:
                 return self._parse_group_config_row(row, group_id)
             default = GroupConfig(group_id=group_id)
@@ -700,7 +705,7 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
             boolean_values[column] = bool(value)
 
         economy_multiplier = float(row["economy_multiplier"])
-        decay_multiplier = float(row["decay_multiplier"])
+        decay_multiplier   = float(row["decay_multiplier"])
         for name, value in (
             ("economy_multiplier", economy_multiplier),
             ("decay_multiplier", decay_multiplier),
@@ -719,14 +724,14 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
             raise ValueError("invalid group sensitive words")
 
         return GroupConfig(
-            group_id=expected_group_id,
-            enabled=boolean_values["enabled"],
-            economy_multiplier=economy_multiplier,
-            decay_multiplier=decay_multiplier,
-            trade_enabled=boolean_values["trade_enabled"],
-            natural_trigger_enabled=boolean_values["natural_trigger_enabled"],
-            activity_enabled=boolean_values["activity_enabled"],
-            sensitive_words=sensitive_words,
+            group_id                = expected_group_id,
+            enabled                 = boolean_values["enabled"],
+            economy_multiplier      = economy_multiplier,
+            decay_multiplier        = decay_multiplier,
+            trade_enabled           = boolean_values["trade_enabled"],
+            natural_trigger_enabled = boolean_values["natural_trigger_enabled"],
+            activity_enabled        = boolean_values["activity_enabled"],
+            sensitive_words         = sensitive_words,
         )
 
     def update_group_config(self, config: GroupConfig) -> bool:

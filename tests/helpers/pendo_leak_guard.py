@@ -1,3 +1,4 @@
+# 数据库泄漏防护：跟踪测试创建的 Pendo 实例并验证连接回收。
 """Fail-closed tracking helpers for Pendo Database test instances."""
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ def pendo_test_origin() -> str:
 
 
 def _connection_thread_ids(database: Any) -> tuple[int, ...]:
-    lock = getattr(database, "_lock", None)
+    lock     = getattr(database, "_lock", None)
     registry = getattr(database, "_all_connections", None)
     if lock is None or not isinstance(registry, dict):
         raise RuntimeError("Database lifecycle registry is unavailable or malformed")
@@ -47,7 +48,7 @@ def _connection_thread_ids(database: Any) -> tuple[int, ...]:
 def enforce_pendo_database_cleanup(records: list[PendoDatabaseRecord]) -> None:
     """Raise a leak failure and emergency-clean without masking that failure."""
     leaked: list[tuple[PendoDatabaseRecord, tuple[int, ...], str | None]] = []
-    seen: set[int] = set()
+    seen: set[int]                                                        = set()
     for record in records:
         identity = id(record.database)
         if identity in seen:
@@ -65,7 +66,7 @@ def enforce_pendo_database_cleanup(records: list[PendoDatabaseRecord]) -> None:
         return
 
     slot_count = sum(len(thread_ids) for _record, thread_ids, _error in leaked)
-    details = []
+    details    = []
     for record, thread_ids, inspection_error in leaked:
         detail = (
             f"origin={record.origin} db_path={record.db_path!r} "
@@ -90,7 +91,7 @@ def enforce_pendo_database_cleanup(records: list[PendoDatabaseRecord]) -> None:
                 cleanup_errors.append(f"origin={record.origin} error={type(exc).__name__}: {exc}")
         active_failure = sys.exc_info()[1]
         if cleanup_errors and active_failure is not None:
-            note = "Emergency Pendo cleanup also failed: " + "; ".join(cleanup_errors)
+            note     = "Emergency Pendo cleanup also failed: " + "; ".join(cleanup_errors)
             add_note = getattr(active_failure, "add_note", None)
             if callable(add_note):
                 try:
@@ -106,14 +107,14 @@ class PendoDatabaseTracker:
 
     def __init__(self) -> None:
         self.records: list[PendoDatabaseRecord] = []
-        self._lock = threading.Lock()
+        self._lock                              = threading.Lock()
 
     def record(self, database: Any, db_path: object, origin: str) -> None:
         with self._lock:
             self.records.append(
                 PendoDatabaseRecord(
-                    database=database,
-                    db_path=str(db_path),
-                    origin=origin,
+                    database = database,
+                    db_path  = str(db_path),
+                    origin   = origin,
                 )
             )

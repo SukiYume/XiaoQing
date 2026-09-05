@@ -1,3 +1,4 @@
+# 验证同步工具限制目标路径并保留部署文件边界。
 """Safety contracts for the lightweight rsync helper."""
 
 from __future__ import annotations
@@ -11,10 +12,10 @@ import pytest
 
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT = REPOSITORY_ROOT
-SCRIPT = ROOT / "scripts" / "sync_to_remote.sh"
+ROOT           = REPOSITORY_ROOT
+SCRIPT         = ROOT / "scripts" / "sync_to_remote.sh"
 SCRIPT_COMMAND = SCRIPT.relative_to(ROOT).as_posix()
-SENTINEL = ROOT / ".xiaoqing-sync-root"
+SENTINEL       = ROOT / ".xiaoqing-sync-root"
 
 
 def _bash() -> str:
@@ -29,26 +30,26 @@ def _bash() -> str:
 
 
 def test_sync_script_has_valid_bash_syntax_and_help() -> None:
-    bash = _bash()
+    bash   = _bash()
     syntax = subprocess.run(
         [bash, "-n", SCRIPT_COMMAND],
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=10,
-        cwd=ROOT,
+        check          = False,
+        capture_output = True,
+        text           = True,
+        encoding       = "utf-8",
+        errors         = "replace",
+        timeout        = 10,
+        cwd            = ROOT,
     )
     help_result = subprocess.run(
         [bash, SCRIPT_COMMAND, "--help"],
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=10,
-        cwd=ROOT,
+        check          = False,
+        capture_output = True,
+        text           = True,
+        encoding       = "utf-8",
+        errors         = "replace",
+        timeout        = 10,
+        cwd            = ROOT,
     )
 
     assert syntax.returncode == 0, syntax.stderr
@@ -57,16 +58,16 @@ def test_sync_script_has_valid_bash_syntax_and_help() -> None:
 
 
 def test_sync_defaults_to_preview_and_requires_explicit_delete_confirmation() -> None:
-    bash = _bash()
+    bash   = _bash()
     result = subprocess.run(
         [bash, SCRIPT_COMMAND, "--apply"],
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=10,
-        cwd=ROOT,
+        check          = False,
+        capture_output = True,
+        text           = True,
+        encoding       = "utf-8",
+        errors         = "replace",
+        timeout        = 10,
+        cwd            = ROOT,
     )
 
     assert result.returncode != 0

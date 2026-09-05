@@ -28,9 +28,9 @@ from tests.helpers.settings_snapshot import with_settings_reader
 
 ROOT = REPOSITORY_ROOT
 
-arxiv_filter = importlib.import_module("plugins.arxiv_filter.main")
+arxiv_filter        = importlib.import_module("plugins.arxiv_filter.main")
 arxiv_codex_summary = importlib.import_module("plugins.arxiv_filter.codex_summary")
-arxiv_filter_utils = importlib.import_module("plugins.arxiv_filter.utils")
+arxiv_filter_utils  = importlib.import_module("plugins.arxiv_filter.utils")
 
 
 # ============================================================
@@ -65,7 +65,7 @@ def mock_context(temp_plugin_dir):
     class MockContext:
         def __init__(self, plugin_dir):
             self.plugin_dir = plugin_dir
-            self.data_dir = plugin_dir / "data"
+            self.data_dir   = plugin_dir / "data"
             self.data_dir.mkdir(parents=True, exist_ok=True)
             self.config = {}
             self.logger = MagicMock()
@@ -131,7 +131,7 @@ class TestStatusManagement:
     def test_get_status_file_path(self, temp_data_dir):
         """测试获取状态文件路径"""
         status_path = arxiv_filter._get_status_file_path(temp_data_dir)
-        expected = temp_data_dir / "update_status.json"
+        expected    = temp_data_dir / "update_status.json"
         assert status_path == expected
 
     def test_load_status_creates_default(self, temp_data_dir):
@@ -179,7 +179,7 @@ class TestStatusManagement:
 
     def test_should_send_today_already_sent(self, temp_data_dir):
         """测试今天已经发送过"""
-        today = arxiv_filter._business_now().date().isoformat()
+        today  = arxiv_filter._business_now().date().isoformat()
         status = {"last_sent_date": today}
         arxiv_filter._save_update_status(temp_data_dir, status)
 
@@ -196,7 +196,7 @@ class TestStatusManagement:
             arxiv_filter._business_now().date().isoformat(),
         )
 
-        today = arxiv_filter._business_now().date().isoformat()
+        today  = arxiv_filter._business_now().date().isoformat()
         status = arxiv_filter._load_update_status(temp_data_dir)
         assert status["last_sent_date"] == today
         assert "last_sent_time" in status
@@ -255,8 +255,8 @@ class TestHandle:
             assert result is not None
             mock_run.assert_awaited_once_with(
                 mock_context,
-                allow_codex_sidecar=False,
-                source_date="2026-08-06",
+                allow_codex_sidecar = False,
+                source_date         = "2026-08-06",
             )
 
     @pytest.mark.asyncio
@@ -360,7 +360,7 @@ class TestRunFilter:
         #     因此这里直接验证推理输出协议，而不是目录存在性。
         with patch.object(arxiv_filter, "_load_inference", return_value=lambda **kwargs: "result"):
             mock_context.plugin_dir = empty_dir
-            result = await arxiv_filter._run_filter(mock_context)
+            result                  = await arxiv_filter._run_filter(mock_context)
             assert result is not None
             assert result.succeeded is False
             assert result.outcome == "unknown_result"
@@ -533,8 +533,8 @@ class TestCheckArxivUpdate:
             new=AsyncMock(
                 return_value=arxiv_filter._filter_result(
                     "Papers found",
-                    succeeded=True,
-                    outcome="papers",
+                    succeeded = True,
+                    outcome   = "papers",
                 )
             ),
         ):
@@ -746,15 +746,15 @@ Probability: 0.7500
             ) as schedule_mock:
                 result = await arxiv_filter._run_filter(
                     mock_context,
-                    allow_codex_sidecar=True,
-                    source_date="2026-05-19",
+                    allow_codex_sidecar = True,
+                    source_date         = "2026-05-19",
                 )
 
         assert "First Paper Title" in str(result)
         schedule_mock.assert_called_once_with(
             mock_context,
-            date="2026-05-19",
-            filter_text=mock_result,
+            date        = "2026-05-19",
+            filter_text = mock_result,
         )
 
     @pytest.mark.asyncio
@@ -775,8 +775,8 @@ Probability: 0.9000
             ):
                 result = await arxiv_filter._run_filter(
                     mock_context,
-                    allow_codex_sidecar=True,
-                    source_date="2026-05-19",
+                    allow_codex_sidecar = True,
+                    source_date         = "2026-05-19",
                 )
 
         assert "First Paper Title" in str(result)
@@ -805,8 +805,8 @@ Probability: 0.9000
         ):
             result = await arxiv_filter._run_filter(
                 mock_context,
-                allow_codex_sidecar=True,
-                source_date=None,
+                allow_codex_sidecar = True,
+                source_date         = None,
             )
 
         assert "日期未能确认" in str(result)
@@ -815,13 +815,13 @@ Probability: 0.9000
     @pytest.mark.asyncio
     async def test_codex_summary_missing_codex_does_not_raise(self, mock_context):
         mock_context.send_action = AsyncMock()
-        service = Mock()
+        service                  = Mock()
         service.enqueue_or_replay = AsyncMock(side_effect=RuntimeError("codex unavailable"))
         mock_context.capabilities = PluginCapabilities(codex_arxiv_summary=service)
         task = arxiv_codex_summary.schedule_codex_summary(
             mock_context,
-            date="2026-05-19",
-            links=["https://arxiv.org/abs/2605.16917"],
+            date  = "2026-05-19",
+            links = ["https://arxiv.org/abs/2605.16917"],
         )
 
         assert task is not None
@@ -834,30 +834,30 @@ Probability: 0.9000
         [
             pytest.param(
                 PluginPrincipal(
-                    kind="user",
-                    user_id=123,
-                    is_bot_admin=True,
-                    is_private=True,
-                    delivery_targets=(DeliveryTarget("private", 123),),
+                    kind             = "user",
+                    user_id          = 123,
+                    is_bot_admin     = True,
+                    is_private       = True,
+                    delivery_targets = (DeliveryTarget("private", 123),),
                 ),
                 False,
                 id="private-chat",
             ),
             pytest.param(
                 PluginPrincipal(
-                    kind="user",
-                    user_id=123,
-                    group_id=456,
-                    is_bot_admin=True,
-                    delivery_targets=(DeliveryTarget("group", 456),),
+                    kind             = "user",
+                    user_id          = 123,
+                    group_id         = 456,
+                    is_bot_admin     = True,
+                    delivery_targets = (DeliveryTarget("group", 456),),
                 ),
                 False,
                 id="group-chat",
             ),
             pytest.param(
                 PluginPrincipal(
-                    kind="scheduled_system",
-                    delivery_targets=(DeliveryTarget("group", 789),),
+                    kind             = "scheduled_system",
+                    delivery_targets = (DeliveryTarget("group", 789),),
                 ),
                 True,
                 id="scheduler-signed-group",
@@ -871,24 +871,24 @@ Probability: 0.9000
         is_system,
     ):
         mock_context.send_action = AsyncMock()
-        service = Mock()
+        service                  = Mock()
         service.enqueue_or_replay = AsyncMock(return_value="queued")
-        mock_context.principal = principal
+        mock_context.principal    = principal
         mock_context.capabilities = PluginCapabilities(
-            is_system=is_system,
-            codex_arxiv_summary=service,
+            is_system           = is_system,
+            codex_arxiv_summary = service,
         )
         task = arxiv_codex_summary.schedule_codex_summary(
             mock_context,
-            date="2026-07-10",
-            links=["https://arxiv.org/abs/2607.00001"],
+            date  = "2026-07-10",
+            links = ["https://arxiv.org/abs/2607.00001"],
         )
         assert task is not None
         await task
 
         service.enqueue_or_replay.assert_awaited_once_with(
-            date="2026-07-10",
-            links=["https://arxiv.org/abs/2607.00001"],
+            date  = "2026-07-10",
+            links = ["https://arxiv.org/abs/2607.00001"],
         )
 
     @pytest.mark.asyncio
@@ -910,7 +910,7 @@ Probability: 0.9000
     @pytest.mark.asyncio
     async def test_filter_inference_is_singleflight_and_cached_per_source_date(self, mock_context):
         calls = 0
-        gate = threading.Event()
+        gate  = threading.Event()
 
         def inference(**_kwargs):
             nonlocal calls
@@ -950,10 +950,10 @@ def test_arxiv_training_cache_publishes_only_completed_results(monkeypatch, tmp_
         )
     monkeypatch.setattr(module, "MONTHLY_DIR", tmp_path)
     result = module.FetchResult(
-        papers=[{"arxiv_id": "2607.00001", "title": "t", "abstract": "a"}],
-        completed=False,
-        next_offset=2000,
-        total_results=4000,
+        papers        = [{"arxiv_id": "2607.00001", "title": "t", "abstract": "a"}],
+        completed     = False,
+        next_offset   = 2000,
+        total_results = 4000,
     )
 
     module.save_checkpoint(2607, result)
@@ -968,7 +968,7 @@ def test_arxiv_training_cache_publishes_only_completed_results(monkeypatch, tmp_
 
 
 def test_arxiv_run_all_uses_script_directory_and_current_python(monkeypatch):
-    module = importlib.import_module("plugins.arxiv_filter.train_model.data_prep.run_all")
+    module   = importlib.import_module("plugins.arxiv_filter.train_model.data_prep.run_all")
     captured = {}
 
     def fake_run(args, **kwargs):
@@ -1037,7 +1037,7 @@ class TestInferenceBackendCaching:
         )
 
         device = backend.torch.device("cpu")
-        first = backend.load_model_and_tokenizer(str(tmp_path), device)
+        first  = backend.load_model_and_tokenizer(str(tmp_path), device)
         second = backend.load_model_and_tokenizer(str(tmp_path), device)
         artifact.write_text('{"version": 2}', encoding="utf-8")
         third = backend.load_model_and_tokenizer(str(tmp_path), device)
@@ -1049,9 +1049,9 @@ class TestInferenceBackendCaching:
 
     def test_knn_backend_caches_runtime_model(self, monkeypatch, tmp_path):
         pytest.importorskip("torch")
-        pd = pytest.importorskip("pandas")
+        pd      = pytest.importorskip("pandas")
         backend = importlib.import_module("plugins.arxiv_filter.inference.knn_backend")
-        shared = importlib.import_module("plugins.arxiv_filter.inference.shared")
+        shared  = importlib.import_module("plugins.arxiv_filter.inference.shared")
         backend._MODEL_CACHE.clear()
         artifact = tmp_path / "artifact.json"
         artifact.write_text('{"version": 1}', encoding="utf-8")
@@ -1064,12 +1064,12 @@ class TestInferenceBackendCaching:
         monkeypatch.setattr(backend, "KNNInferenceModel", constructor)
 
         params = shared.InferenceParams(
-            model_path=str(tmp_path),
-            threshold=0.5,
-            batch_size=32,
-            max_len=64,
-            input_mode="title_only",
-            model_type="knn",
+            model_path = str(tmp_path),
+            threshold  = 0.5,
+            batch_size = 32,
+            max_len    = 64,
+            input_mode = "title_only",
+            model_type = "knn",
         )
         data = pd.DataFrame([{"Title": "Paper"}])
 
@@ -1082,9 +1082,9 @@ class TestInferenceBackendCaching:
 
     def test_multi_interest_backend_caches_runtime_model(self, monkeypatch, tmp_path):
         pytest.importorskip("torch")
-        pd = pytest.importorskip("pandas")
+        pd      = pytest.importorskip("pandas")
         backend = importlib.import_module("plugins.arxiv_filter.inference.multi_interest_backend")
-        shared = importlib.import_module("plugins.arxiv_filter.inference.shared")
+        shared  = importlib.import_module("plugins.arxiv_filter.inference.shared")
         backend._MODEL_CACHE.clear()
         artifact = tmp_path / "artifact.json"
         artifact.write_text('{"version": 1}', encoding="utf-8")
@@ -1097,12 +1097,12 @@ class TestInferenceBackendCaching:
         monkeypatch.setattr(backend, "MultiInterestInferenceModel", constructor)
 
         params = shared.InferenceParams(
-            model_path=str(tmp_path),
-            threshold=0.5,
-            batch_size=32,
-            max_len=64,
-            input_mode="title_only",
-            model_type="multi_interest",
+            model_path = str(tmp_path),
+            threshold  = 0.5,
+            batch_size = 32,
+            max_len    = 64,
+            input_mode = "title_only",
+            model_type = "multi_interest",
         )
         data = pd.DataFrame([{"Title": "Paper"}])
 

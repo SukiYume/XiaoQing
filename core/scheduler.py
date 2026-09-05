@@ -23,7 +23,7 @@ from .scheduler_compat import (
     probe_asyncio_scheduler_drain,
 )
 
-logger = logging.getLogger(__name__)
+logger                  = logging.getLogger(__name__)
 _REAL_ASYNCIO_SCHEDULER = AsyncIOScheduler
 
 
@@ -62,15 +62,15 @@ class _JobSnapshot:
 
 class SchedulerManager:
     def __init__(self, timezone: str = "Asia/Shanghai") -> None:
-        self.timezone = timezone
-        self.scheduler: AsyncIOScheduler | None = None
-        self._started = False
-        self._shutdown_timeout_seconds = 5.0
-        self._scheduler_drain: AsyncIOSchedulerDrain | None = None
-        self._public_shutdown_owner: AsyncIOScheduler | None = None
+        self.timezone                                                = timezone
+        self.scheduler: AsyncIOScheduler | None                      = None
+        self._started                                                = False
+        self._shutdown_timeout_seconds                               = 5.0
+        self._scheduler_drain: AsyncIOSchedulerDrain | None          = None
+        self._public_shutdown_owner: AsyncIOScheduler | None         = None
         self._last_drain_capability: SchedulerDrainCapability | None = None
-        self._public_fallback_logged = False
-        self._job_mutation_lock = threading.RLock()
+        self._public_fallback_logged                                 = False
+        self._job_mutation_lock                                      = threading.RLock()
         # 只有当前线程已有事件循环时才立即初始化，否则延迟到首次使用。
         try:
             asyncio.get_running_loop()
@@ -88,7 +88,7 @@ class SchedulerManager:
             # one so application rollback can still shut it down.
             if bool(getattr(candidate, "running", False)):
                 self.scheduler = candidate
-                self._started = True
+                self._started  = True
             raise
         return candidate
 
@@ -108,9 +108,9 @@ class SchedulerManager:
             # An unstarted candidate owns no scheduler resources and must not
             # poison every later retry.
             self.scheduler = None
-        candidate = self._create_started_scheduler(self.timezone)
+        candidate      = self._create_started_scheduler(self.timezone)
         self.scheduler = candidate
-        self._started = True
+        self._started  = True
 
     def ensure_started(self) -> None:
         """Ensure scheduler is initialized and started (requires event loop)"""
@@ -122,7 +122,7 @@ class SchedulerManager:
         # Do not publish a new timezone while the old generation is still
         # running.  A failed shutdown retains ownership of that scheduler and
         # must abort the reset so callers can retry cleanup explicitly.
-        target_timezone = timezone or self.timezone
+        target_timezone   = timezone or self.timezone
         previous_timezone = self.timezone
         self.shutdown()
         try:
@@ -133,12 +133,12 @@ class SchedulerManager:
             self.timezone = previous_timezone
             raise
         self.scheduler = candidate
-        self._started = True
-        self.timezone = target_timezone
+        self._started  = True
+        self.timezone  = target_timezone
 
     async def reset_async(self, timezone: str | None = None) -> None:
         """Asynchronously stop the old event-loop generation before replacement."""
-        target_timezone = timezone or self.timezone
+        target_timezone   = timezone or self.timezone
         previous_timezone = self.timezone
         await self.shutdown_async()
         try:
@@ -147,8 +147,8 @@ class SchedulerManager:
             self.timezone = previous_timezone
             raise
         self.scheduler = candidate
-        self._started = True
-        self.timezone = target_timezone
+        self._started  = True
+        self.timezone  = target_timezone
 
     def _private_drain_for(
         self,
@@ -159,7 +159,7 @@ class SchedulerManager:
             if current.scheduler is not scheduler:
                 raise RuntimeError("scheduler cleanup ownership changed unexpectedly")
             return current
-        capability = probe_asyncio_scheduler_drain(scheduler)
+        capability                  = probe_asyncio_scheduler_drain(scheduler)
         self._last_drain_capability = capability
         if not capability.available:
             if not self._public_fallback_logged:
@@ -179,10 +179,10 @@ class SchedulerManager:
         return current
 
     def _complete_shutdown(self) -> None:
-        self._scheduler_drain = None
+        self._scheduler_drain       = None
         self._public_shutdown_owner = None
-        self.scheduler = None
-        self._started = False
+        self.scheduler              = None
+        self._started               = False
 
     async def _shutdown_public_async(
         self,
@@ -198,24 +198,24 @@ class SchedulerManager:
                     self._complete_shutdown()
                     return
                 self.scheduler = scheduler
-                self._started = True
+                self._started  = True
                 raise
             except BaseException:
                 self.scheduler = scheduler
-                self._started = bool(getattr(scheduler, "running", self._started))
+                self._started  = bool(getattr(scheduler, "running", self._started))
                 raise
             self._public_shutdown_owner = scheduler
-            self._started = False
+            self._started               = False
         elif self._public_shutdown_owner is not scheduler:
             raise RuntimeError("scheduler public shutdown ownership changed unexpectedly")
 
-        loop = asyncio.get_running_loop()
+        loop     = asyncio.get_running_loop()
         deadline = loop.time() + self._shutdown_timeout_seconds
         while bool(getattr(scheduler, "running", False)) and loop.time() < deadline:
             await asyncio.sleep(0.01)
         if bool(getattr(scheduler, "running", False)):
             self.scheduler = scheduler
-            self._started = False
+            self._started  = False
             raise RuntimeError(
                 f"scheduler did not stop within {self._shutdown_timeout_seconds:.3f}s"
             )
@@ -297,18 +297,18 @@ class SchedulerManager:
                 self._complete_shutdown()
                 return
             self.scheduler = scheduler
-            self._started = True
+            self._started  = True
             raise
         except BaseException:
             self.scheduler = scheduler
-            self._started = bool(getattr(scheduler, "running", self._started))
+            self._started  = bool(getattr(scheduler, "running", self._started))
             raise
 
         if isinstance(scheduler, _REAL_ASYNCIO_SCHEDULER) and bool(
             getattr(scheduler, "running", False)
         ):
             self._public_shutdown_owner = scheduler
-            self._started = False
+            self._started               = False
             raise RuntimeError(
                 "APScheduler public shutdown is asynchronous; "
                 "use shutdown_async() to await completion"
@@ -332,7 +332,7 @@ class SchedulerManager:
             ScheduledJobSpec(job_id, func, cron, description),
         )
         with self._job_mutation_lock:
-            previous = scheduler.get_job(job_id)
+            previous          = scheduler.get_job(job_id)
             previous_snapshot = self._snapshot_job(previous) if previous is not None else None
             try:
                 self._add_prepared_job(scheduler, prepared)
@@ -372,8 +372,8 @@ class SchedulerManager:
         if scheduler is None:
             raise RuntimeError("scheduler failed to start")
 
-        specs = tuple(jobs)
-        prepared = tuple(self._prepare_job(scheduler, spec) for spec in specs)
+        specs       = tuple(jobs)
+        prepared    = tuple(self._prepare_job(scheduler, spec) for spec in specs)
         desired_ids = {job.job_id for job in prepared}
         if len(desired_ids) != len(prepared):
             raise ValueError(f"duplicate scheduled job id under prefix {prefix!r}")
@@ -441,46 +441,46 @@ class SchedulerManager:
     def _add_prepared_job(scheduler: AsyncIOScheduler, job: _PreparedJob) -> None:
         scheduler.add_job(
             job.func,
-            trigger=job.trigger,
-            id=job.job_id,
-            coalesce=True,
-            max_instances=1,
-            misfire_grace_time=60,
-            name=job.description or job.job_id,
-            replace_existing=True,
+            trigger            = job.trigger,
+            id                 = job.job_id,
+            coalesce           = True,
+            max_instances      = 1,
+            misfire_grace_time = 60,
+            name               = job.description or job.job_id,
+            replace_existing   = True,
         )
 
     @staticmethod
     def _snapshot_job(job: Any) -> _JobSnapshot:
         return _JobSnapshot(
-            job_id=job.id,
-            func=job.func,
-            trigger=job.trigger,
-            args=tuple(job.args),
-            kwargs=dict(job.kwargs),
-            name=job.name,
-            misfire_grace_time=job.misfire_grace_time,
-            coalesce=job.coalesce,
-            max_instances=job.max_instances,
-            next_run_time=job.next_run_time,
-            executor=job.executor,
+            job_id             = job.id,
+            func               = job.func,
+            trigger            = job.trigger,
+            args               = tuple(job.args),
+            kwargs             = dict(job.kwargs),
+            name               = job.name,
+            misfire_grace_time = job.misfire_grace_time,
+            coalesce           = job.coalesce,
+            max_instances      = job.max_instances,
+            next_run_time      = job.next_run_time,
+            executor           = job.executor,
         )
 
     @staticmethod
     def _restore_job(scheduler: AsyncIOScheduler, snapshot: _JobSnapshot) -> None:
         scheduler.add_job(
             snapshot.func,
-            trigger=snapshot.trigger,
-            args=snapshot.args,
-            kwargs=snapshot.kwargs,
-            id=snapshot.job_id,
-            name=snapshot.name,
-            misfire_grace_time=snapshot.misfire_grace_time,
-            coalesce=snapshot.coalesce,
-            max_instances=snapshot.max_instances,
-            next_run_time=snapshot.next_run_time,
-            executor=snapshot.executor,
-            replace_existing=True,
+            trigger            = snapshot.trigger,
+            args               = snapshot.args,
+            kwargs             = snapshot.kwargs,
+            id                 = snapshot.job_id,
+            name               = snapshot.name,
+            misfire_grace_time = snapshot.misfire_grace_time,
+            coalesce           = snapshot.coalesce,
+            max_instances      = snapshot.max_instances,
+            next_run_time      = snapshot.next_run_time,
+            executor           = snapshot.executor,
+            replace_existing   = True,
         )
 
     def _rollback_prefix(

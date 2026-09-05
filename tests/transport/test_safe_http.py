@@ -1,3 +1,4 @@
+# 验证不可信 URL 的地址解析、重定向和内网访问限制。
 """Regression tests for the fail-closed untrusted URL HTTP client."""
 
 from __future__ import annotations
@@ -46,11 +47,11 @@ class _Content:
 
 class _Response:
     def __init__(self, status: int, *, headers=None, chunks=None) -> None:
-        self.status = status
-        self.headers = headers or {"Content-Type": "text/html"}
-        self.content = _Content(chunks or [])
+        self.status         = status
+        self.headers        = headers or {"Content-Type": "text/html"}
+        self.content        = _Content(chunks or [])
         self.content_length = sum(len(chunk) for chunk in (chunks or []))
-        self.charset = "utf-8"
+        self.charset        = "utf-8"
 
     async def __aenter__(self):
         return self
@@ -61,9 +62,9 @@ class _Response:
 
 class _Session:
     def __init__(self, responses, requested_urls, **kwargs) -> None:
-        self._responses = responses
+        self._responses      = responses
         self._requested_urls = requested_urls
-        self.kwargs = kwargs
+        self.kwargs          = kwargs
 
     async def __aenter__(self):
         return self
@@ -135,7 +136,7 @@ async def test_transparent_proxy_fake_dns_requires_explicit_opt_in(monkeypatch):
 @pytest.mark.asyncio
 async def test_pinned_resolver_only_returns_prevalidated_addresses():
     resolver = safe_http._PinnedResolver("example.com", ("8.8.8.8", "2001:4860:4860::8888"))
-    records = await resolver.resolve("example.com", 443)
+    records  = await resolver.resolve("example.com", 443)
     assert {record["host"] for record in records} == {"8.8.8.8", "2001:4860:4860::8888"}
     with pytest.raises(OSError, match="hostname mismatch"):
         await resolver.resolve("rebound.example", 443)
@@ -171,7 +172,7 @@ async def test_fake_dns_opt_in_does_not_follow_cross_host_redirect(monkeypatch):
         _Response(302, headers={"Location": "https://cdn.nasa.gov/apod.html"}),
         _Response(200, chunks=[b"<html/>\n"]),
     ]
-    requested_urls: list[str] = []
+    requested_urls: list[str]  = []
     fake_dns_flags: list[bool] = []
 
     async def validate(url, *, allow_transparent_proxy_fake_dns=False):
@@ -187,8 +188,8 @@ async def test_fake_dns_opt_in_does_not_follow_cross_host_redirect(monkeypatch):
 
     response = await safe_http.fetch_public_html(
         "https://apod.nasa.gov/apod/astropix.html",
-        allowed_hosts={"apod.nasa.gov", "cdn.nasa.gov"},
-        allow_transparent_proxy_fake_dns=True,
+        allowed_hosts                    = {"apod.nasa.gov", "cdn.nasa.gov"},
+        allow_transparent_proxy_fake_dns = True,
     )
 
     assert response is not None
@@ -218,8 +219,8 @@ async def test_fake_dns_opt_in_rejects_same_host_https_downgrade(monkeypatch):
     with pytest.raises(safe_http.UnsafeUrlError, match="requires HTTPS"):
         await safe_http.fetch_public_html(
             "https://apod.nasa.gov/apod/astropix.html",
-            allowed_hosts={"apod.nasa.gov"},
-            allow_transparent_proxy_fake_dns=True,
+            allowed_hosts                    = {"apod.nasa.gov"},
+            allow_transparent_proxy_fake_dns = True,
         )
     assert requested_urls == ["https://apod.nasa.gov/apod/astropix.html"]
 
@@ -246,8 +247,8 @@ async def test_fake_dns_opt_in_requires_https(fetcher):
     with pytest.raises(safe_http.UnsafeUrlError, match="requires HTTPS"):
         await fetcher(
             "http://apod.nasa.gov/apod/astropix.html",
-            allowed_hosts={"apod.nasa.gov"},
-            allow_transparent_proxy_fake_dns=True,
+            allowed_hosts                    = {"apod.nasa.gov"},
+            allow_transparent_proxy_fake_dns = True,
         )
 
 
@@ -352,8 +353,8 @@ async def test_binary_fetch_allows_only_declared_redirect_hosts(monkeypatch):
 
     response = await safe_http.fetch_public_bytes(
         "https://pbs.twimg.com/start",
-        allowed_hosts={"pbs.twimg.com", "ton.twitter.com"},
-        allowed_schemes={"https"},
+        allowed_hosts   = {"pbs.twimg.com", "ton.twitter.com"},
+        allowed_schemes = {"https"},
     )
 
     assert response is not None and response.body == b"png"
@@ -392,8 +393,8 @@ async def test_binary_fetch_rejects_host_or_https_downgrade_before_next_request(
     with pytest.raises(safe_http.UnsafeUrlError, match=match):
         await safe_http.fetch_public_bytes(
             "https://pbs.twimg.com/start",
-            allowed_hosts={"pbs.twimg.com", "ton.twitter.com"},
-            allowed_schemes={"https"},
+            allowed_hosts   = {"pbs.twimg.com", "ton.twitter.com"},
+            allowed_schemes = {"https"},
         )
     assert requested_urls == ["https://pbs.twimg.com/start"]
 
@@ -441,8 +442,8 @@ async def test_binary_fetch_enforces_mime_encoding_and_actual_byte_limit(monkeyp
 
     encoded = _Response(
         200,
-        headers={"Content-Type": "image/png", "Content-Encoding": "gzip"},
-        chunks=[b"compressed"],
+        headers = {"Content-Type": "image/png", "Content-Encoding": "gzip"},
+        chunks  = [b"compressed"],
     )
     responses.append(encoded)
     with pytest.raises(safe_http.SafeHttpError, match="encoded binary"):
@@ -462,7 +463,7 @@ async def test_binary_fetch_exact_mime_rejects_spoof_before_body_read(monkeypatc
             raise AssertionError("invalid exact MIME body must not be read")
 
     response = _Response(200, headers={"Content-Type": "image/jpeg-malformed"})
-    response.content = NeverReadContent()
+    response.content          = NeverReadContent()
     requested_urls: list[str] = []
 
     async def validate(url):
@@ -489,7 +490,7 @@ async def test_redirects_are_manual_and_timeout_is_bounded(monkeypatch):
         _Response(307, headers={"Location": "/next"}),
         _Response(200, chunks=[b"<html><title>ok</title></html>"]),
     ]
-    requested_urls: list[str] = []
+    requested_urls: list[str]   = []
     session_options: list[dict] = []
 
     async def validate(url):
@@ -544,7 +545,7 @@ async def test_redirects_share_one_total_deadline(monkeypatch):
         _Response(200, chunks=[b"<html/>"]),
     ]
     requested_urls: list[str] = []
-    validation_count = 0
+    validation_count          = 0
 
     async def slow_validate(url):
         nonlocal validation_count
@@ -571,12 +572,12 @@ async def test_redirects_share_one_total_deadline(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_rejects_compressed_response_bomb():
-    payload = b"x" * (safe_http.MAX_RESPONSE_BYTES + 1)
+    payload    = b"x" * (safe_http.MAX_RESPONSE_BYTES + 1)
     compressed = gzip.compress(payload)
-    response = _Response(
+    response   = _Response(
         200,
-        headers={"Content-Encoding": "gzip", "Content-Type": "text/html"},
-        chunks=[compressed],
+        headers = {"Content-Encoding": "gzip", "Content-Type": "text/html"},
+        chunks  = [compressed],
     )
     with pytest.raises(
         safe_http.SafeHttpError,
@@ -588,10 +589,10 @@ async def test_rejects_compressed_response_bomb():
 @pytest.mark.asyncio
 async def test_rejects_excessive_decompression_ratio_before_response_limit():
     compressed = gzip.compress(b"x" * (128 * 1024))
-    response = _Response(
+    response   = _Response(
         200,
-        headers={"Content-Encoding": "gzip", "Content-Type": "text/html"},
-        chunks=[compressed],
+        headers = {"Content-Encoding": "gzip", "Content-Type": "text/html"},
+        chunks  = [compressed],
     )
     with pytest.raises(safe_http.SafeHttpError, match="decompression ratio"):
         await safe_http._read_limited_body(response)
@@ -608,10 +609,10 @@ async def test_public_html_rejects_spoofed_html_mime(monkeypatch):
 
     response = _Response(
         200,
-        headers={"Content-Type": "text/htmlx"},
-        chunks=[b"<html>spoof</html>"],
+        headers = {"Content-Type": "text/htmlx"},
+        chunks  = [b"<html>spoof</html>"],
     )
-    response.content = NeverReadContent()
+    response.content          = NeverReadContent()
     requested_urls: list[str] = []
     monkeypatch.setattr(safe_http, "validate_public_fetch_target", validate)
     monkeypatch.setattr(
@@ -630,7 +631,7 @@ async def test_cross_origin_redirect_strips_caller_secrets(monkeypatch):
         _Response(302, headers={"Location": "https://cdn.example.com/final"}),
         _Response(200, headers={"Content-Type": "text/html"}, chunks=[b"<html/>"]),
     ]
-    requested_urls: list[str] = []
+    requested_urls: list[str]               = []
     requested_headers: list[dict[str, str]] = []
 
     async def validate(url):

@@ -22,7 +22,7 @@ class EventFamily:
 
     kind: str
     collection: dict[str, Any] | None = None
-    leaf: EventItem | None = None
+    leaf: EventItem | None            = None
     children: list[EventItem] = field(default_factory=list)
 
 
@@ -33,11 +33,11 @@ class EventGraphService:
         self.db = db
 
     def load_by_id(self, owner_id: str, event_or_collection_id: str) -> EventFamily:
-        query = str(event_or_collection_id or "").strip()
-        item_id = self.db.resolve_item_id(owner_id, query)
+        query         = str(event_or_collection_id or "").strip()
+        item_id       = self.db.resolve_item_id(owner_id, query)
         collection_id = self.db.resolve_event_collection_id(owner_id, query)
         if item_id and collection_id:
-            item_exact = item_id.casefold() == query.casefold()
+            item_exact       = item_id.casefold() == query.casefold()
             collection_exact = collection_id.casefold() == query.casefold()
             if item_exact != collection_exact:
                 if item_exact:
@@ -49,13 +49,13 @@ class EventGraphService:
 
         item = self.db.get_item(item_id, owner_id=owner_id) if item_id else None
         if isinstance(item, EventItem):
-            collection = None
+            collection                = None
             children: list[EventItem] = []
-            kind = "single"
+            kind                      = "single"
             if item.event_collection_id:
                 collection = self.db.get_event_collection(item.event_collection_id, owner_id)
                 if collection:
-                    kind = str(collection.get("kind") or item.event_collection_kind or "single")
+                    kind     = str(collection.get("kind") or item.event_collection_kind or "single")
                     children = self.db.get_collection_events(item.event_collection_id, owner_id)
                 else:
                     kind = item.event_collection_kind or "single"
@@ -66,12 +66,12 @@ class EventGraphService:
         )
         if collection:
             resolved_collection_id = str(collection["id"])
-            children = self.db.get_collection_events(resolved_collection_id, owner_id)
+            children               = self.db.get_collection_events(resolved_collection_id, owner_id)
             return EventFamily(
-                kind=str(collection.get("kind") or "single"),
-                collection=collection,
-                leaf=None,
-                children=children,
+                kind       = str(collection.get("kind") or "single"),
+                collection = collection,
+                leaf       = None,
+                children   = children,
             )
 
         return EventFamily(kind="missing")

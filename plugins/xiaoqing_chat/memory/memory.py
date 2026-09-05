@@ -24,9 +24,9 @@ class StoredMessage:
     role: str
     name: str
     ts: float
-    user_id: int | None = None
+    user_id: int | None    = None
     message_id: int | None = None
-    local_id: str = ""
+    local_id: str          = ""
     parts: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     content: str = ""
     media_items: tuple[dict[str, Any], ...] = field(default_factory=tuple)
@@ -64,12 +64,12 @@ def active_conversation_suffix(
     因而用户明确追溯旧事时仍可走持久记忆检索。
     """
 
-    items = list(history)
+    items     = list(history)
     threshold = max(0.0, float(idle_gap_seconds or 0.0))
     if len(items) < 2 or threshold <= 0:
         return items
     for index in range(len(items) - 1, 0, -1):
-        current_ts = _valid_message_ts(getattr(items[index], "ts", 0.0))
+        current_ts  = _valid_message_ts(getattr(items[index], "ts", 0.0))
         previous_ts = _valid_message_ts(getattr(items[index - 1], "ts", 0.0))
         if current_ts and previous_ts and current_ts - previous_ts > threshold:
             return items[index:]
@@ -80,7 +80,7 @@ def idle_gap_before_turn(
     history: list[StoredMessage] | tuple[StoredMessage, ...],
     *,
     current_local_id: str = "",
-    now: float | None = None,
+    now: float | None     = None,
 ) -> float:
     """计算本轮消息与上一条消息之间的空档；没有可靠时间时返回零。"""
 
@@ -95,14 +95,14 @@ def idle_gap_before_turn(
                 continue
             if index == 0:
                 return 0.0
-            current_ts = _valid_message_ts(getattr(items[index], "ts", 0.0))
+            current_ts  = _valid_message_ts(getattr(items[index], "ts", 0.0))
             previous_ts = _valid_message_ts(getattr(items[index - 1], "ts", 0.0))
             if not current_ts or not previous_ts:
                 return 0.0
             return max(0.0, current_ts - previous_ts)
 
     previous_ts = _valid_message_ts(getattr(items[-1], "ts", 0.0))
-    current_ts = _valid_message_ts(time.time() if now is None else now)
+    current_ts  = _valid_message_ts(time.time() if now is None else now)
     if not current_ts or not previous_ts:
         return 0.0
     return max(0.0, current_ts - previous_ts)
@@ -138,7 +138,7 @@ def _normalize_media_items(values: Any) -> tuple[dict[str, Any], ...]:
 
 
 def _serialize_message(message: StoredMessage) -> dict[str, Any]:
-    parts = normalize_message_parts(message.parts)
+    parts                   = normalize_message_parts(message.parts)
     payload: dict[str, Any] = {
         "role": str(message.role or ""),
         "name": str(message.name or ""),
@@ -162,17 +162,17 @@ class MemoryStore:
     """
 
     def __init__(self, data_dir: Path | None = None) -> None:
-        self._data_dir = data_dir
+        self._data_dir                                 = data_dir
         self._messages: dict[str, list[StoredMessage]] = {}
         # 同步快照锁：仅用于极短的字典读写，不做 I/O
-        self._sync_lock = threading.Lock()
+        self._sync_lock                                                  = threading.Lock()
         self._load_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
             weakref.WeakValueDictionary()
         )
         self._write_locks: dict[str, threading.Lock] = {}
-        self._generations: dict[str, int] = {}
-        self._tombstones: set[str] = set()
-        self._dirty: set[str] = set()
+        self._generations: dict[str, int]            = {}
+        self._tombstones: set[str]                   = set()
+        self._dirty: set[str]                        = set()
 
     def bind_data_dir(self, data_dir: Path) -> None:
         with self._sync_lock:
@@ -227,7 +227,7 @@ class MemoryStore:
         cls, loaded: list[StoredMessage], current: list[StoredMessage]
     ) -> list[StoredMessage]:
         merged: list[StoredMessage] = []
-        seen: set[tuple[Any, ...]] = set()
+        seen: set[tuple[Any, ...]]  = set()
         for message in [*loaded, *current]:
             identity = cls._message_identity(message)
             if identity in seen:
@@ -243,29 +243,29 @@ class MemoryStore:
         *,
         role: str,
         name: str,
-        user_id: int | None = None,
+        user_id: int | None    = None,
         message_id: int | None = None,
-        local_id: str = "",
-        content: str = "",
-        media_items: Any = None,
-        parts: Any = None,
-        ts: float | None = None,
+        local_id: str          = "",
+        content: str           = "",
+        media_items: Any       = None,
+        parts: Any             = None,
+        ts: float | None       = None,
     ) -> None:
         msg = StoredMessage(
-            role=role,
-            name=name,
-            user_id=user_id,
-            message_id=message_id,
-            local_id=local_id or "",
-            content=str(content or ""),
-            media_items=media_items,
-            parts=normalize_message_parts(parts),
-            ts=ts if ts is not None else time.time(),
+            role        = role,
+            name        = name,
+            user_id     = user_id,
+            message_id  = message_id,
+            local_id    = local_id or "",
+            content     = str(content or ""),
+            media_items = media_items,
+            parts       = normalize_message_parts(parts),
+            ts          = ts if ts is not None else time.time(),
         )
         with self._sync_lock:
             self._tombstones.discard(chat_id)
             self._generations[chat_id] = self._generations.get(chat_id, 0) + 1
-            history = self._messages.setdefault(chat_id, [])
+            history                    = self._messages.setdefault(chat_id, [])
             history.append(msg)
             self._dirty.add(chat_id)
             if len(history) > MAX_CACHED_MESSAGES_PER_CHAT:
@@ -283,13 +283,13 @@ class MemoryStore:
                 if message.role != "assistant" or message.message_id is not None:
                     continue
                 history[index] = StoredMessage(
-                    role=message.role,
-                    name=message.name,
-                    ts=message.ts,
-                    user_id=message.user_id,
-                    message_id=normalized_id,
-                    local_id=message.local_id,
-                    parts=message.parts,
+                    role       = message.role,
+                    name       = message.name,
+                    ts         = message.ts,
+                    user_id    = message.user_id,
+                    message_id = normalized_id,
+                    local_id   = message.local_id,
+                    parts      = message.parts,
                 )
                 self._generations[chat_id] = self._generations.get(chat_id, 0) + 1
                 self._dirty.add(chat_id)
@@ -298,7 +298,7 @@ class MemoryStore:
 
     def get(self, chat_id: str) -> list[StoredMessage]:
         with self._sync_lock:
-            cached = self._messages.get(chat_id)
+            cached     = self._messages.get(chat_id)
             generation = self._generations.get(chat_id, 0)
             tombstoned = chat_id in self._tombstones
         if tombstoned:
@@ -319,14 +319,14 @@ class MemoryStore:
         with self._sync_lock:
             lock = self._load_locks.get(chat_id)
             if lock is None:
-                lock = asyncio.Lock()
+                lock                      = asyncio.Lock()
                 self._load_locks[chat_id] = lock
             return lock
 
     async def get_async(self, chat_id: str) -> list[StoredMessage]:
         async with self._async_load_lock(chat_id):
             with self._sync_lock:
-                cached = self._messages.get(chat_id)
+                cached     = self._messages.get(chat_id)
                 generation = self._generations.get(chat_id, 0)
                 tombstoned = chat_id in self._tombstones
             if tombstoned:
@@ -358,14 +358,14 @@ class MemoryStore:
             write_lock = self._write_locks.setdefault(chat_id, threading.Lock())
         with write_lock:
             with self._sync_lock:
-                data_dir = self._data_dir
-                history = self._messages.get(chat_id)
+                data_dir   = self._data_dir
+                history    = self._messages.get(chat_id)
                 generation = self._generations.get(chat_id, 0)
                 if not data_dir or history is None or chat_id in self._tombstones:
                     return
                 snapshot = list(history[-200:])
             data_dir.mkdir(parents=True, exist_ok=True)
-            path = data_dir / f"{chat_id}.json"
+            path    = data_dir / f"{chat_id}.json"
             payload = [_serialize_message(message) for message in snapshot]
             with self._sync_lock:
                 if (
@@ -409,22 +409,22 @@ class MemoryStore:
         for item in raw:
             if not isinstance(item, dict):
                 continue
-            role = str(item.get("role", ""))
-            name = str(item.get("name", ""))
-            content = str(item.get("content", ""))
+            role        = str(item.get("role", ""))
+            name        = str(item.get("name", ""))
+            content     = str(item.get("content", ""))
             media_items = _normalize_media_items(item.get("media_items", []))
-            parts = normalize_message_parts(item.get("parts", []))
+            parts       = normalize_message_parts(item.get("parts", []))
             if role and (content or media_items or parts):
                 out.append(
                     StoredMessage(
-                        role=role,
-                        name=name,
-                        user_id=coerce_optional_int(item.get("user_id")),
-                        message_id=coerce_optional_int(item.get("message_id")),
-                        local_id=str(item.get("local_id", "") or ""),
-                        parts=parts,
-                        content=content,
-                        media_items=media_items,
+                        role        = role,
+                        name        = name,
+                        user_id     = coerce_optional_int(item.get("user_id")),
+                        message_id  = coerce_optional_int(item.get("message_id")),
+                        local_id    = str(item.get("local_id", "") or ""),
+                        parts       = parts,
+                        content     = content,
+                        media_items = media_items,
                         ts=coerce_finite_float(item.get("ts"), default=time.time(), minimum=0.0),
                     )
                 )

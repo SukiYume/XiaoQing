@@ -33,11 +33,11 @@ def find_by_cmyk(colors: Sequence[ColorRecord], cmyk: list[int]) -> ColorRecord 
 def find_by_keyword(colors: Sequence[ColorRecord], keyword: str) -> list[ColorRecord]:
     """按名称或拼音搜索，并以精确、前缀、子串的顺序稳定排序。"""
 
-    normalized = keyword.casefold()
+    normalized                                 = keyword.casefold()
     ranked: list[tuple[int, int, ColorRecord]] = []
     for index, color in enumerate(colors):
-        name = color["name"]
-        folded_name = name.casefold()
+        name          = color["name"]
+        folded_name   = name.casefold()
         folded_pinyin = color.get("pinyin", "").casefold()
         if folded_name == normalized:
             rank = 0
@@ -91,12 +91,12 @@ def find_nearest_by_rgb(
 
     if not colors:
         return None
-    target_lab = _rgb_to_lab(rgb)
-    best_color = colors[0]
+    target_lab    = _rgb_to_lab(rgb)
+    best_color    = colors[0]
     best_distance = math.dist(target_lab, _rgb_to_lab(best_color["RGB"]))
     for color in colors[1:]:
         distance = math.dist(target_lab, _rgb_to_lab(color["RGB"]))
         if distance < best_distance:
-            best_color = color
+            best_color    = color
             best_distance = distance
     return best_color, best_distance

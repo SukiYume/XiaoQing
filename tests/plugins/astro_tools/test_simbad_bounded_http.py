@@ -1,3 +1,4 @@
+# 验证 SIMBAD 查询的网络预算与异常响应处理。
 from __future__ import annotations
 
 import json
@@ -19,15 +20,15 @@ from core.bounded_http import (
 from plugins.astro_tools import obj
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT = REPOSITORY_ROOT
+ROOT          = REPOSITORY_ROOT
 _COLUMN_NAMES = ("ra", "dec", "otype", "V", "sp_type")
-_VALID_ROW = (10.6847083, 41.26875, "Galaxy", 3.44, "SA(s)b")
+_VALID_ROW    = (10.6847083, 41.26875, "Galaxy", 3.44, "SA(s)b")
 
 
 class _RawBody:
     def __init__(self, chunks: tuple[bytes, ...]) -> None:
-        self.chunks = chunks
-        self.stream_calls = 0
+        self.chunks                      = chunks
+        self.stream_calls                = 0
         self.decode_content: bool | None = None
 
     def stream(self, _chunk_size: int, *, decode_content: bool) -> Iterator[bytes]:
@@ -54,15 +55,15 @@ class _Response:
         self,
         body: bytes,
         *,
-        content_type: str = "application/json; charset=utf-8",
+        content_type: str          = "application/json; charset=utf-8",
         content_length: int | None = None,
     ) -> None:
         self.status_code = 200
-        self.url = obj.SIMBAD_TAP_SYNC_URL
-        self.headers = {"Content-Type": content_type}
+        self.url         = obj.SIMBAD_TAP_SYNC_URL
+        self.headers     = {"Content-Type": content_type}
         if content_length is not None:
             self.headers["Content-Length"] = str(content_length)
-        self.raw = _RawBody((body,))
+        self.raw    = _RawBody((body,))
         self.closed = False
 
     def close(self) -> None:
@@ -71,7 +72,7 @@ class _Response:
 
 def _table_payload(
     *,
-    names: tuple[str, ...] = _COLUMN_NAMES,
+    names: tuple[str, ...]               = _COLUMN_NAMES,
     rows: tuple[tuple[object, ...], ...] = (_VALID_ROW,),
 ) -> dict[str, object]:
     return {
@@ -87,7 +88,7 @@ def _encoded_payload(**kwargs: Any) -> bytes:
 def test_simbad_tap_post_is_streamed_bounded_and_explicit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    response = _Response(_encoded_payload())
+    response                 = _Response(_encoded_payload())
     captured: dict[str, Any] = {}
 
     def request(method: str, url: str, **kwargs: Any) -> _Response:
@@ -100,11 +101,11 @@ def test_simbad_tap_post_is_streamed_bounded_and_explicit(
     result = obj._query_simbad_object("M31")
 
     assert result == obj.SimbadRow(
-        ra_deg=10.6847083,
-        dec_deg=41.26875,
-        otype="Galaxy",
-        v_magnitude=3.44,
-        sp_type="SA(s)b",
+        ra_deg      = 10.6847083,
+        dec_deg     = 41.26875,
+        otype       = "Galaxy",
+        v_magnitude = 3.44,
+        sp_type     = "SA(s)b",
     )
     assert captured["method"] == "POST"
     assert captured["url"] == obj.SIMBAD_TAP_SYNC_URL
@@ -132,20 +133,20 @@ def test_simbad_tap_post_is_streamed_bounded_and_explicit(
 def test_simbad_passes_total_deadline_shorter_than_outer_wait(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    body = _encoded_payload()
+    body                     = _encoded_payload()
     captured: dict[str, Any] = {}
 
     def bounded_request(*_args: Any, **kwargs: Any) -> BoundedHttpResponse:
         captured.update(kwargs)
         return BoundedHttpResponse(
-            url=obj.SIMBAD_TAP_SYNC_URL,
-            status=200,
-            body=body,
-            media_type="application/json",
-            charset="utf-8",
-            headers={"Content-Type": "application/json"},
-            wire_bytes=len(body),
-            decoded_bytes=len(body),
+            url           = obj.SIMBAD_TAP_SYNC_URL,
+            status        = 200,
+            body          = body,
+            media_type    = "application/json",
+            charset       = "utf-8",
+            headers       = {"Content-Type": "application/json"},
+            wire_bytes    = len(body),
+            decoded_bytes = len(body),
         )
 
     monkeypatch.setattr(obj, "_build_simbad_query", lambda _name: "SELECT TOP 1 ra")
@@ -159,8 +160,8 @@ def test_simbad_passes_total_deadline_shorter_than_outer_wait(
 def test_simbad_slow_drip_hits_transport_total_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    clock = [0.0]
-    response = _Response(b"")
+    clock        = [0.0]
+    response     = _Response(b"")
     response.raw = _ClockedRawBody((b"{", b"}"), clock)
     monkeypatch.setattr(obj, "_build_simbad_query", lambda _name: "SELECT TOP 1 ra")
     monkeypatch.setattr(requests, "request", lambda *_args, **_kwargs: response)
@@ -294,7 +295,7 @@ def test_simbad_adql_builder_is_pure_local_and_deterministic(
 
     monkeypatch.setattr(obj, "_build_simbad_client", forbidden_client, raising=False)
 
-    first = obj._build_simbad_query("  M 31  ")
+    first  = obj._build_simbad_query("  M 31  ")
     second = obj._build_simbad_query("M 31")
 
     assert first == second
@@ -323,16 +324,16 @@ async def test_simbad_transport_error_is_public_and_does_not_log_raw_details(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     raw_endpoint = "https://private.example.invalid/secret-path"
-    raw_secret = "SIMBAD_RAW_ERROR_SECRET"
+    raw_secret   = "SIMBAD_RAW_ERROR_SECRET"
 
     def fail(_name: str) -> None:
         raise requests.ConnectTimeout(f"request to {raw_endpoint} api_key={raw_secret}")
 
-    logger = logging.getLogger("test.cr221.simbad")
+    logger  = logging.getLogger("test.cr221.simbad")
     context = SimpleNamespace(
-        logger=logger,
-        request_id="simbad-request",
-        secrets={"plugins": {"astro_tools": {"api_key": raw_secret}}},
+        logger     = logger,
+        request_id = "simbad-request",
+        secrets    = {"plugins": {"astro_tools": {"api_key": raw_secret}}},
     )
     monkeypatch.setattr(obj, "_query_simbad_object", fail)
 

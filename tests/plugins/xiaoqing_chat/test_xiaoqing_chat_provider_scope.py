@@ -20,7 +20,7 @@ from tests.helpers.xiaoqing_chat_test_support import (
     pytest,
 )
 
-mock_context = _fixture_support.mock_context
+mock_context       = _fixture_support.mock_context
 sample_group_event = _fixture_support.sample_group_event
 
 
@@ -30,10 +30,10 @@ async def test_handle_provider_list_mode_remains_public(mock_context, sample_gro
     from plugins.xiaoqing_chat.handlers import handle_provider
     from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
-    state = ChatRuntimeState()
+    state                = ChatRuntimeState()
     mock_context.secrets = ConfigSnapshot(
-        config={},
-        secrets={},
+        config  = {},
+        secrets = {},
     ).secrets
     _set_context_principal(mock_context, sample_group_event, group_role="member")
 
@@ -54,7 +54,7 @@ async def test_handle_provider_group_admin_switch_is_scoped_to_current_group(
     from plugins.xiaoqing_chat.helper_utils import _get_ai_route_context
     from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
-    state = ChatRuntimeState()
+    state                = ChatRuntimeState()
     mock_context.secrets = {}
     _set_context_principal(mock_context, sample_group_event, group_role="admin")
 
@@ -79,7 +79,7 @@ async def test_handle_provider_global_scope_requires_bot_admin(mock_context, sam
     from plugins.xiaoqing_chat.helper_utils import _get_ai_route_context
     from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
-    state = ChatRuntimeState()
+    state                = ChatRuntimeState()
     mock_context.secrets = {}
     _set_context_principal(mock_context, sample_group_event, group_role="owner")
 
@@ -91,8 +91,8 @@ async def test_handle_provider_global_scope_requires_bot_admin(mock_context, sam
         _set_context_principal(
             mock_context,
             sample_group_event,
-            group_role="member",
-            is_bot_admin=True,
+            group_role   = "member",
+            is_bot_admin = True,
         )
         allowed = await handle_provider("global glm", sample_group_event, mock_context)
         other_group = _get_ai_route_context(mock_context, chat_id="g99999")
@@ -120,7 +120,7 @@ async def test_handle_provider_private_chat_requires_bot_admin(
     from plugins.xiaoqing_chat.handlers import handle_provider
     from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
-    state = ChatRuntimeState()
+    state                = ChatRuntimeState()
     mock_context.secrets = {}
     _set_context_principal(mock_context, sample_private_event)
 
@@ -163,14 +163,14 @@ async def test_handle_provider_rejects_private_principal_in_group_scope(
     from plugins.xiaoqing_chat.handlers import handle_provider
     from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
-    state = ChatRuntimeState()
-    mock_context.secrets = {}
+    state                  = ChatRuntimeState()
+    mock_context.secrets   = {}
     mock_context.principal = SimpleNamespace(
-        kind="user",
-        user_id=sample_group_event["user_id"],
-        group_id=sample_group_event["group_id"],
-        is_private=True,
-        group_role="owner",
+        kind       = "user",
+        user_id    = sample_group_event["user_id"],
+        group_id   = sample_group_event["group_id"],
+        is_private = True,
+        group_role = "owner",
     )
     mock_context.capabilities = PluginCapabilities(ai=_provider_test_ai())
 
@@ -186,7 +186,7 @@ async def test_handle_provider_concurrent_groups_do_not_overwrite_each_other():
     from plugins.xiaoqing_chat.handlers import handle_provider
     from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
-    state = ChatRuntimeState()
+    state  = ChatRuntimeState()
     config = {
         "plugins": {
             "xiaoqing_chat": {
@@ -200,26 +200,26 @@ async def test_handle_provider_concurrent_groups_do_not_overwrite_each_other():
             }
         }
     }
-    event_a = {"user_id": 1, "group_id": 10}
-    event_b = {"user_id": 2, "group_id": 20}
+    event_a   = {"user_id": 1, "group_id": 10}
+    event_b   = {"user_id": 2, "group_id": 20}
     context_a = with_settings_reader(
         SimpleNamespace(
-            secrets={},
-            config=config,
+            secrets = {},
+            config  = config,
             principal=PluginPrincipal(kind="user", user_id=1, group_id=10, group_role="admin"),
             capabilities=PluginCapabilities(ai=_provider_test_ai()),
-            logger=MagicMock(),
-            request_id="provider-a",
+            logger     = MagicMock(),
+            request_id = "provider-a",
         )
     )
     context_b = with_settings_reader(
         SimpleNamespace(
-            secrets={},
-            config=config,
+            secrets = {},
+            config  = config,
             principal=PluginPrincipal(kind="user", user_id=2, group_id=20, group_role="owner"),
             capabilities=PluginCapabilities(ai=_provider_test_ai()),
-            logger=MagicMock(),
-            request_id="provider-b",
+            logger     = MagicMock(),
+            request_id = "provider-b",
         )
     )
 
@@ -259,12 +259,12 @@ async def test_ensure_user_message_recorded_uses_passed_bound_state(
 ):
     from plugins.xiaoqing_chat.handlers import _ensure_user_message_recorded
 
-    state = MagicMock()
+    state                              = MagicMock()
     state.review_store.cleanup_expired = Mock()
     state.memory_store.get_async = AsyncMock(return_value=[])
-    state.memory_store.append = Mock()
+    state.memory_store.append             = Mock()
     state.heartflow.on_user_message_async = AsyncMock()
-    state.set_last_observe_ts = Mock()
+    state.set_last_observe_ts             = Mock()
 
     runtime = MagicMock()
 
@@ -295,7 +295,7 @@ def test_next_local_id_atomic():
     """fetch_and_increment_local_id should be atomic read-and-bump."""
     from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
-    state = ChatRuntimeState()
+    state  = ChatRuntimeState()
     result = state.fetch_and_increment_local_id("test_chat")
     assert result == 1
     result2 = state.fetch_and_increment_local_id("test_chat")
@@ -315,28 +315,28 @@ async def test_smalltalk_new_user_turn_clears_sticky_pfc_ended_before_planner_ru
 ):
     from plugins.xiaoqing_chat.handlers import _maybe_reply_smalltalk
 
-    lock = asyncio.Lock()
-    state = MagicMock()
+    lock                              = asyncio.Lock()
+    state                             = MagicMock()
     state.get_mood_state.return_value = ""
     state.memory_store.get_async = AsyncMock(return_value=[])
     state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.memory_store.append = Mock()
+    state.memory_store.append             = Mock()
     state.heartflow.on_user_message_async = AsyncMock()
-    state.heartflow.on_bot_reply_async = AsyncMock()
-    state.heartflow.on_no_reply_async = AsyncMock()
-    state.inc_stats = Mock()
-    state.action_history.append = Mock()
-    state.pfc_state_store.get_async = AsyncMock(
+    state.heartflow.on_bot_reply_async    = AsyncMock()
+    state.heartflow.on_no_reply_async     = AsyncMock()
+    state.inc_stats                       = Mock()
+    state.action_history.append           = Mock()
+    state.pfc_state_store.get_async       = AsyncMock(
         return_value=SimpleNamespace(
-            chat_id="g67890",
-            ignore_until_ts=0.0,
-            ended=True,
-            last_successful_reply_action="say_goodbye",
-            goal_list=[],
-            knowledge_list=[],
-            planner_fail_ts=[],
-            planner_skip_until=0.0,
-            updated_at=0.0,
+            chat_id                      = "g67890",
+            ignore_until_ts              = 0.0,
+            ended                        = True,
+            last_successful_reply_action = "say_goodbye",
+            goal_list                    = [],
+            knowledge_list               = [],
+            planner_fail_ts              = [],
+            planner_skip_until           = 0.0,
+            updated_at                   = 0.0,
         )
     )
     state.pfc_state_store.set_state = Mock()

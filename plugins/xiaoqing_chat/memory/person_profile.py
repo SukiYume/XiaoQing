@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.atomic_store import atomic_write_text, keyed_path_lock
 from core.plugin_base import load_json, write_json
 
 from ..store_base import coerce_finite_float
@@ -27,6 +28,37 @@ def _profile_path(data_dir: Path, chat_id: str, subject_id: int) -> Path:
     return data_dir / "person_profiles" / safe_chat_id / f"{subject_id}.json"
 
 
+def profile_generation_path(data_dir: Path, chat_id: str) -> Path:
+    """代际标记与人物档案共用会话路径锁，阻止重置前提取结果重新落盘。"""
+    root   = (data_dir / "person_profiles").resolve()
+    target = (_profile_path(data_dir, chat_id, 0).parent / ".generation").resolve()
+    if not target.is_relative_to(root):
+        raise ValueError("invalid profile chat_id")
+    return target
+
+
+def get_profile_generation(data_dir: Path, chat_id: str) -> str:
+    try:
+        return profile_generation_path(data_dir, chat_id).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+
+
+def clear_profiles_and_memory(data_dir: Path, chat_id: str, memory_db: MemoryDB | None) -> None:
+    """重置档案、备份与向量记录，并使所有旧提取任务失效。"""
+    generation_path = profile_generation_path(data_dir, chat_id)
+    with keyed_path_lock(generation_path):
+        atomic_write_text(generation_path, str(time.time_ns()))
+        for path in generation_path.parent.iterdir():
+            if path.name.endswith((".json", ".json.bak")) and path.is_file():
+                path.unlink()
+        delete_chat = getattr(memory_db, "delete_chat", None)
+        if callable(delete_chat) and delete_chat(chat_id):
+            save = getattr(memory_db, "save", None)
+            if callable(save):
+                save()
+
+
 def load_profile(data_dir: Path, *, chat_id: str, subject_id: int) -> PersonProfile | None:
     path = _profile_path(data_dir, chat_id, subject_id)
     if not path.exists():
@@ -38,18 +70,18 @@ def load_profile(data_dir: Path, *, chat_id: str, subject_id: int) -> PersonProf
     if not isinstance(raw, dict):
         return None
 
-    name = str(raw.get("subject_name", "")).strip()
-    facts = raw.get("facts", [])
+    name      = str(raw.get("subject_name", "")).strip()
+    facts     = raw.get("facts", [])
     fact_list = (
         [value.strip() for value in facts if isinstance(value, str) and value.strip()]
         if isinstance(facts, list)
         else []
     )
     return PersonProfile(
-        chat_id=chat_id,
-        subject_id=subject_id,
-        subject_name=name or str(subject_id),
-        facts=fact_list,
+        chat_id      = chat_id,
+        subject_id   = subject_id,
+        subject_name = name or str(subject_id),
+        facts        = fact_list,
         updated_at=coerce_finite_float(raw.get("updated_at"), default=0.0, minimum=0.0),
     )
 
@@ -84,11 +116,11 @@ def update_profile_and_index(
         return
     now = time.time()
     existing = load_profile(data_dir, chat_id=chat_id, subject_id=subject_id) or PersonProfile(
-        chat_id=chat_id,
-        subject_id=subject_id,
-        subject_name=subject_name or str(subject_id),
-        facts=[],
-        updated_at=0.0,
+        chat_id      = chat_id,
+        subject_id   = subject_id,
+        subject_name = subject_name or str(subject_id),
+        facts        = [],
+        updated_at   = 0.0,
     )
     if subject_name and (not existing.subject_name or existing.subject_name == str(subject_id)):
         existing.subject_name = subject_name
@@ -112,9 +144,9 @@ def update_profile_and_index(
     ).strip()
     memory_db.bind(data_dir)
     memory_db.upsert_text(
-        doc_id=f"profile:{chat_id}:{subject_id}",
-        text=profile_text,
-        meta={
+        doc_id = f"profile:{chat_id}:{subject_id}",
+        text   = profile_text,
+        meta   = {
             "type": "person_profile",
             "chat_id": chat_id,
             "subject_id": subject_id,

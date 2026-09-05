@@ -5,13 +5,13 @@ from __future__ import annotations
 # ── 公共疑问句识别 ──
 # 由 frequency_control、heartflow、goal_state 和 reply_checker 共用。
 
-_QUESTION_ENDINGS = ("吗", "嘛", "啊", "呢", "吧", "诶")
+_QUESTION_ENDINGS  = ("吗", "嘛", "啊", "呢", "吧", "诶")
 _QUESTION_KEYWORDS = frozenset(
     {"啥", "谁", "咋", "为啥", "为什么", "什么", "哪", "哪里", "哪个", "多少", "几", "吗", "嘛"}
 )
-_COLLOQUIAL_MEI_MAX_CHARS = 24
+_COLLOQUIAL_MEI_MAX_CHARS       = 24
 _COLLOQUIAL_MEI_ASPECT_SUFFIXES = ("了", "过", "完", "好", "到", "上", "下", "成", "在", "着")
-_COLLOQUIAL_MEI_ACTION_MARKERS = frozenset(
+_COLLOQUIAL_MEI_ACTION_MARKERS  = frozenset(
     {
         "吃",
         "喝",

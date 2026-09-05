@@ -81,12 +81,12 @@ class ConfigManagerLike(Protocol):
     def secrets(self) -> Mapping[str, Any]: ...
 
 
-SendAction = Callable[[dict[str, Any]], Awaitable[bool | None]]
+SendAction           = Callable[[dict[str, Any]], Awaitable[bool | None]]
 ScheduleDeliveryMode = Literal["broadcast", "targeted", "silent"]
 
 # Action metadata is an in-process Core/plugin contract, not a OneBot field.
 # Keep the names here so producers and consumers cannot drift on magic keys.
-ACTION_BYPASS_SINK_KEY = "_bypass_sink"
+ACTION_BYPASS_SINK_KEY       = "_bypass_sink"
 ACTION_RESULT_MESSAGE_ID_KEY = "_result_message_id"
 
 
@@ -97,7 +97,7 @@ class PluginSettingsSnapshot:
     config: Mapping[str, Any]
     secrets: Mapping[str, Any]
     revision: int
-    config_status: str = "valid"
+    config_status: str  = "valid"
     secrets_status: str = "valid"
 
     @staticmethod
@@ -158,12 +158,12 @@ class PluginPrincipal:
     """
 
     kind: Literal["user", "scheduled_system", "lifecycle"]
-    user_id: int | None = None
-    group_id: int | None = None
-    is_bot_admin: bool = False
-    is_private: bool = False
-    group_role: PluginGroupRole = "unknown"
-    delivery_targets: tuple[DeliveryTarget, ...] = ()
+    user_id: int | None                            = None
+    group_id: int | None                           = None
+    is_bot_admin: bool                             = False
+    is_private: bool                               = False
+    group_role: PluginGroupRole                    = "unknown"
+    delivery_targets: tuple[DeliveryTarget, ...]   = ()
     schedule_delivery: ScheduleDeliveryMode | None = None
 
     def __post_init__(self) -> None:
@@ -229,7 +229,7 @@ class OneBotMediaCapability(Protocol):
         self,
         *,
         file_id: str | None = None,
-        file: str | None = None,
+        file: str | None    = None,
     ) -> dict[str, Any]: ...
 
 
@@ -269,17 +269,17 @@ class AICapability(Protocol):
         route: str,
         messages: list[dict[str, Any]],
         *,
-        required_modalities: tuple[str, ...] = ("text",),
-        pinned_model: str | None = None,
-        temperature: float | None = None,
-        top_p: float | None = None,
-        max_tokens: int | None = None,
-        timeout_seconds: float | None = None,
-        total_timeout_seconds: float | None = None,
-        max_retry: int | None = None,
-        retry_interval_seconds: float | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        tool_choice: Any = None,
+        required_modalities: tuple[str, ...]    = ("text",),
+        pinned_model: str | None                = None,
+        temperature: float | None               = None,
+        top_p: float | None                     = None,
+        max_tokens: int | None                  = None,
+        timeout_seconds: float | None           = None,
+        total_timeout_seconds: float | None     = None,
+        max_retry: int | None                   = None,
+        retry_interval_seconds: float | None    = None,
+        tools: list[dict[str, Any]] | None      = None,
+        tool_choice: Any                        = None,
         extra_payload: Mapping[str, Any] | None = None,
     ) -> AICompletionResult: ...
 
@@ -293,15 +293,15 @@ class AICapability(Protocol):
 
 @dataclass(frozen=True)
 class PluginCapabilities:
-    is_bot_admin: bool = False
-    is_system: bool = False
-    secret_admin: SecretAdminCapability | None = None
-    onebot_media: OneBotMediaCapability | None = None
-    config_subscription: PluginConfigSubscription | None = None
+    is_bot_admin: bool                                      = False
+    is_system: bool                                         = False
+    secret_admin: SecretAdminCapability | None              = None
+    onebot_media: OneBotMediaCapability | None              = None
+    config_subscription: PluginConfigSubscription | None    = None
     codex_arxiv_summary: CodexArxivSummaryCapability | None = None
-    voice_synthesis: VoiceSynthesisCapability | None = None
-    chat_reply: ChatReplyCapability | None = None
-    ai: AICapability | None = None
+    voice_synthesis: VoiceSynthesisCapability | None        = None
+    chat_reply: ChatReplyCapability | None                  = None
+    ai: AICapability | None                                 = None
 
 
 class PluginConfig(Protocol):
@@ -327,7 +327,7 @@ class SessionAccess(Protocol):
     async def create_session(
         self,
         initial_data: dict[str, Any] | None = None,
-        timeout: float | None = None,
+        timeout: float | None               = None,
     ) -> Session: ...
 
     async def get_session(self) -> Session | None: ...
@@ -380,8 +380,8 @@ class ContextFactory(Protocol):
     def __call__(
         self,
         plugin_name: str,
-        user_id: int | None = None,
-        group_id: int | None = None,
-        request_id: str | None = None,
+        user_id: int | None               = None,
+        group_id: int | None              = None,
+        request_id: str | None            = None,
         principal: PluginPrincipal | None = None,
     ) -> Any: ...

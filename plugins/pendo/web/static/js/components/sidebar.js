@@ -153,7 +153,7 @@ export function renderSidebar(container) {
     sidebar.appendChild(navigation);
     container.replaceChildren(backdrop, sidebar);
 
-    const mobileMedia = window.matchMedia(MOBILE_QUERY);
+    const mobileMedia   = window.matchMedia(MOBILE_QUERY);
     const setMobileOpen = (open) => {
         const shouldOpen = mobileMedia.matches && Boolean(open);
         sidebar.classList.toggle('mobile-open', shouldOpen);

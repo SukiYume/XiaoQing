@@ -19,7 +19,7 @@ from tests.helpers.xiaoqing_chat_test_support import (
     xiaoqing_chat,
 )
 
-mock_context = _fixture_support.mock_context
+mock_context       = _fixture_support.mock_context
 sample_group_event = _fixture_support.sample_group_event
 
 
@@ -42,10 +42,10 @@ async def test_xiaoqing_chat_handle_chat_command(mock_context, sample_group_even
         "plugins.xiaoqing_chat.main.handle_smalltalk", new=AsyncMock(return_value=[])
     ) as mock_smalltalk:
         await handle(
-            command="xc",
-            args="你好",
-            event=sample_group_event,
-            context=mock_context,
+            command = "xc",
+            args    = "你好",
+            event   = sample_group_event,
+            context = mock_context,
         )
 
         mock_smalltalk.assert_called_once()
@@ -56,10 +56,10 @@ async def test_xiaoqing_chat_handle_chat_command(mock_context, sample_group_even
 async def test_xiaoqing_chat_handle_help_command(mock_context, sample_group_event):
     """Test handle with help subcommand"""
     result = await xiaoqing_chat.handle(
-        command="xc",
-        args="help",
-        event=sample_group_event,
-        context=mock_context,
+        command = "xc",
+        args    = "help",
+        event   = sample_group_event,
+        context = mock_context,
     )
 
     assert len(result) > 0
@@ -75,10 +75,10 @@ async def test_xiaoqing_chat_help_with_extra_arg_does_not_fall_through_to_chat(
         "plugins.xiaoqing_chat.main.handle_smalltalk", new=AsyncMock(return_value=[])
     ) as mock_smalltalk:
         result = await xiaoqing_chat.handle(
-            command="xc",
-            args="help extra",
-            event=sample_group_event,
-            context=mock_context,
+            command = "xc",
+            args    = "help extra",
+            event   = sample_group_event,
+            context = mock_context,
         )
 
     assert "不接受额外参数" in result[0]["data"]["text"]
@@ -96,10 +96,10 @@ async def test_xiaoqing_chat_handle_reset_command(mock_context, sample_group_eve
         "plugins.xiaoqing_chat.main.handle_internal", new=AsyncMock(return_value=[])
     ) as mock_internal:
         await handle(
-            command="xc",
-            args="reset",
-            event=sample_group_event,
-            context=mock_context,
+            command = "xc",
+            args    = "reset",
+            event   = sample_group_event,
+            context = mock_context,
         )
 
         mock_internal.assert_called_once()
@@ -115,10 +115,10 @@ async def test_xiaoqing_chat_handle_stats_command(mock_context, sample_group_eve
         "plugins.xiaoqing_chat.main.handle_internal", new=AsyncMock(return_value=[])
     ) as mock_internal:
         await handle(
-            command="xc",
-            args="stats",
-            event=sample_group_event,
-            context=mock_context,
+            command = "xc",
+            args    = "stats",
+            event   = sample_group_event,
+            context = mock_context,
         )
 
         mock_internal.assert_called_once()
@@ -134,10 +134,10 @@ async def test_xiaoqing_chat_handle_brain_command(mock_context, sample_group_eve
         "plugins.xiaoqing_chat.main.handle_internal", new=AsyncMock(return_value=[])
     ) as mock_internal:
         await handle(
-            command="xc",
-            args="brain",
-            event=sample_group_event,
-            context=mock_context,
+            command = "xc",
+            args    = "brain",
+            event   = sample_group_event,
+            context = mock_context,
         )
 
         mock_internal.assert_called_once()
@@ -154,10 +154,10 @@ async def test_xiaoqing_chat_handle_unknown_command(mock_context, sample_group_e
         new=AsyncMock(return_value=[{"type": "text", "data": {"text": "mock_response"}}]),
     ) as mock_smalltalk:
         result = await handle(
-            command="xc",
-            args="unknown_subcommand",
-            event=sample_group_event,
-            context=mock_context,
+            command = "xc",
+            args    = "unknown_subcommand",
+            event   = sample_group_event,
+            context = mock_context,
         )
 
         # Should be treated as smalltalk
@@ -172,10 +172,10 @@ async def test_xiaoqing_chat_handle_empty_args(mock_context, sample_group_event)
     from plugins.xiaoqing_chat.main import handle
 
     result = await handle(
-        command="xc",
-        args="",
-        event=sample_group_event,
-        context=mock_context,
+        command = "xc",
+        args    = "",
+        event   = sample_group_event,
+        context = mock_context,
     )
 
     assert len(result) > 0
@@ -194,10 +194,10 @@ async def test_xiaoqing_chat_handle_exception(mock_context, sample_group_event):
         side_effect=Exception("Test error"),
     ):
         result = await handle(
-            command="xc",
-            args="test",
-            event=sample_group_event,
-            context=mock_context,
+            command = "xc",
+            args    = "test",
+            event   = sample_group_event,
+            context = mock_context,
         )
 
         # Should return error message
@@ -211,10 +211,10 @@ async def test_xiaoqing_chat_handle_config_command(mock_context, sample_group_ev
     from plugins.xiaoqing_chat.main import handle
 
     result = await handle(
-        command="xc",
-        args="配置",
-        event=sample_group_event,
-        context=mock_context,
+        command = "xc",
+        args    = "配置",
+        event   = sample_group_event,
+        context = mock_context,
     )
 
     assert len(result) > 0
@@ -228,10 +228,10 @@ async def test_xiaoqing_chat_handle_memory_command(mock_context, sample_group_ev
     from plugins.xiaoqing_chat.main import handle
 
     result = await handle(
-        command="xc",
-        args="记忆",
-        event=sample_group_event,
-        context=mock_context,
+        command = "xc",
+        args    = "记忆",
+        event   = sample_group_event,
+        context = mock_context,
     )
 
     assert len(result) > 0
@@ -247,10 +247,10 @@ async def test_xiaoqing_chat_handle_expression_command(mock_context, sample_grou
     from plugins.xiaoqing_chat.main import handle
 
     result = await handle(
-        command="xc",
-        args="表达",
-        event=sample_group_event,
-        context=mock_context,
+        command = "xc",
+        args    = "表达",
+        event   = sample_group_event,
+        context = mock_context,
     )
 
     assert len(result) > 0
@@ -262,11 +262,11 @@ def test_xiaoqing_chat_show_help():
     """帮助直接由 Core 命令目录生成。"""
     from plugins.xiaoqing_chat.main import _help_text
 
-    root = _build_xiaoqing_catalog()
+    root      = _build_xiaoqing_catalog()
     help_text = _help_text(
         SimpleNamespace(
-            command_invocation=None,
-            get_command_catalog=lambda: (root,),
+            command_invocation  = None,
+            get_command_catalog = lambda: (root,),
             get_settings_snapshot=lambda: SimpleNamespace(config={"bot_name": "小青"}),
         )
     )
@@ -283,11 +283,11 @@ def test_xiaoqing_chat_show_help_contains_all_sections():
     """帮助包含全部结构化子命令码。"""
     from plugins.xiaoqing_chat.main import _help_text
 
-    root = _build_xiaoqing_catalog()
+    root      = _build_xiaoqing_catalog()
     help_text = _help_text(
         SimpleNamespace(
-            command_invocation=None,
-            get_command_catalog=lambda: (root,),
+            command_invocation  = None,
+            get_command_catalog = lambda: (root,),
             get_settings_snapshot=lambda: SimpleNamespace(config={"bot_name": "小青"}),
         )
     )
@@ -363,9 +363,9 @@ async def test_call_bot_name_only_internal_marks_followup_pending(mock_context):
 async def test_pending_bot_name_followup_bypasses_reply_gate(mock_context, sample_group_event):
     from plugins.xiaoqing_chat.handlers import _prepare_smalltalk_turn
 
-    event = dict(sample_group_event)
+    event                = dict(sample_group_event)
     event["raw_message"] = "起床了没"
-    event["message"] = [{"type": "text", "data": {"text": "起床了没"}}]
+    event["message"]     = [{"type": "text", "data": {"text": "起床了没"}}]
 
     state = MagicMock()
     state.consume_pending_bot_name_call = Mock(return_value=True)
@@ -418,7 +418,7 @@ async def test_shutdown_flushes_media_store(mock_context):
     state = MagicMock()
     state.background_tasks = Mock(return_value=set())
     state.action_history.flush = Mock()
-    state.media_store.flush = Mock()
+    state.media_store.flush    = Mock()
     state.memory_db.is_dirty = Mock(return_value=False)
 
     with patch("plugins.xiaoqing_chat.main._state", return_value=state):
@@ -438,10 +438,10 @@ async def test_handle_with_all_chat_command_variants(mock_context, sample_group_
         "plugins.xiaoqing_chat.main.handle_smalltalk", new=AsyncMock(return_value=[])
     ) as mock_smalltalk:
         await handle(
-            command="xc",
-            args="test",
-            event=sample_group_event,
-            context=mock_context,
+            command = "xc",
+            args    = "test",
+            event   = sample_group_event,
+            context = mock_context,
         )
 
         assert mock_smalltalk.call_count == 1
@@ -460,10 +460,10 @@ async def test_handle_with_all_reset_command_variants(mock_context, sample_group
     ) as mock_internal:
         for sub in subcommands:
             await handle(
-                command="xc",
-                args=sub,
-                event=sample_group_event,
-                context=mock_context,
+                command = "xc",
+                args    = sub,
+                event   = sample_group_event,
+                context = mock_context,
             )
 
         assert mock_internal.call_count == len(subcommands)
@@ -482,10 +482,10 @@ async def test_handle_with_all_stats_command_variants(mock_context, sample_group
     ) as mock_internal:
         for sub in subcommands:
             await handle(
-                command="xc",
-                args=sub,
-                event=sample_group_event,
-                context=mock_context,
+                command = "xc",
+                args    = sub,
+                event   = sample_group_event,
+                context = mock_context,
             )
 
         assert mock_internal.call_count == len(subcommands)
@@ -504,10 +504,10 @@ async def test_handle_with_all_brain_command_variants(mock_context, sample_group
     ) as mock_internal:
         for sub in subcommands:
             await handle(
-                command="xc",
-                args=sub,
-                event=sample_group_event,
-                context=mock_context,
+                command = "xc",
+                args    = sub,
+                event   = sample_group_event,
+                context = mock_context,
             )
 
         assert mock_internal.call_count == len(subcommands)
@@ -525,10 +525,10 @@ async def test_handle_smalltalk_called_with_correct_params(mock_context, sample_
         "plugins.xiaoqing_chat.main.handle_smalltalk", new=AsyncMock(return_value=[])
     ) as mock_smalltalk:
         await handle(
-            command="xc",
-            args="测试消息",
-            event=sample_group_event,
-            context=mock_context,
+            command = "xc",
+            args    = "测试消息",
+            event   = sample_group_event,
+            context = mock_context,
         )
 
         # Verify handle_smalltalk was called with args (not raw_message)
@@ -548,10 +548,10 @@ async def test_handle_internal_called_with_correct_params(mock_context, sample_g
         "plugins.xiaoqing_chat.main.handle_internal", new=AsyncMock(return_value=[])
     ) as mock_internal:
         await handle(
-            command="xc",
-            args="reset",
-            event=sample_group_event,
-            context=mock_context,
+            command = "xc",
+            args    = "reset",
+            event   = sample_group_event,
+            context = mock_context,
         )
 
         # Verify handle_internal was called
@@ -571,10 +571,10 @@ async def test_handle_with_no_raw_message(mock_context):
         "plugins.xiaoqing_chat.main.handle_smalltalk", new=AsyncMock(return_value=[])
     ) as mock_st:
         result = await handle(
-            command="xc",
-            args="test",
-            event=event,
-            context=mock_context,
+            command = "xc",
+            args    = "test",
+            event   = event,
+            context = mock_context,
         )
 
         # Should route to handle_smalltalk with forced flag
@@ -592,10 +592,10 @@ async def test_handle_with_empty_raw_message(mock_context, sample_group_event):
     sample_group_event["raw_message"] = ""
 
     result = await handle(
-        command="xc",
-        args="",
-        event=sample_group_event,
-        context=mock_context,
+        command = "xc",
+        args    = "",
+        event   = sample_group_event,
+        context = mock_context,
     )
 
     # Should return help text when no args provided
@@ -613,10 +613,10 @@ async def test_handle_with_whitespace_args(mock_context, sample_group_event):
         mock_parse.return_value = MagicMock(first=None, rest=Mock(return_value=""))
 
         result = await handle(
-            command="xc",
-            args="   ",
-            event=sample_group_event,
-            context=mock_context,
+            command = "xc",
+            args    = "   ",
+            event   = sample_group_event,
+            context = mock_context,
         )
 
         # Should handle gracefully and return help
@@ -627,9 +627,9 @@ async def test_handle_with_whitespace_args(mock_context, sample_group_event):
 async def test_runtime_cleanup_eviction_also_cleans_locks_and_persist_tasks():
     from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
-    old_limit = ChatRuntimeState._MAX_TRACKED_CHATS
+    old_limit                           = ChatRuntimeState._MAX_TRACKED_CHATS
     ChatRuntimeState._MAX_TRACKED_CHATS = 2
-    state = ChatRuntimeState()
+    state                               = ChatRuntimeState()
     try:
         loop = asyncio.get_running_loop()
         for i in range(5):
@@ -652,9 +652,9 @@ async def test_runtime_cleanup_eviction_also_cleans_locks_and_persist_tasks():
 async def test_runtime_cleanup_stale_prefers_recent_observe_activity():
     from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
-    old_limit = ChatRuntimeState._MAX_TRACKED_CHATS
+    old_limit                           = ChatRuntimeState._MAX_TRACKED_CHATS
     ChatRuntimeState._MAX_TRACKED_CHATS = 1
-    state = ChatRuntimeState()
+    state                               = ChatRuntimeState()
     try:
         state.get_lock("g_observe")
         state.get_lock("g_reply")

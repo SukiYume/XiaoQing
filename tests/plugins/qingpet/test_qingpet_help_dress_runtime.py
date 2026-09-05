@@ -33,7 +33,7 @@ def temp_db():
 
 
 def test_help_menu_categories():
-    root = qingpet_main._local_catalog_root()
+    root      = qingpet_main._local_catalog_root()
     help_text = qingpet_main._format_help_overview(root)
 
     assert "/宠物 help basic" in help_text
@@ -54,8 +54,8 @@ def test_category_help_only_expands_selected_manifest_commands():
 
 
 def test_help_categories_cover_each_business_command_once():
-    root = qingpet_main._local_catalog_root()
-    category_helpers = set(qingpet_main._HELP_CATEGORIES)
+    root              = qingpet_main._local_catalog_root()
+    category_helpers  = set(qingpet_main._HELP_CATEGORIES)
     business_commands = {
         child.name for child in root.children if child.name not in {"help", *category_helpers}
     }
@@ -83,13 +83,13 @@ def test_dress_shop_display():
 
 
 def test_dress_buy_with_friendship_points(temp_db):
-    user_id = "test_fp_user"
+    user_id  = "test_fp_user"
     group_id = 1001
 
-    user_service = UserService(temp_db)
-    user = user_service.get_or_create_user(user_id, group_id)
+    user_service           = UserService(temp_db)
+    user                   = user_service.get_or_create_user(user_id, group_id)
     user.friendship_points = 300
-    user.coins = 0
+    user.coins             = 0
     temp_db.update_user(user)
 
     success, msg = _dress_buy(user_id, group_id, "halo", temp_db)
@@ -104,11 +104,11 @@ def test_dress_buy_with_friendship_points(temp_db):
 
 
 def test_dress_buy_insufficient_friendship_points(temp_db):
-    user_id = "test_poor_fp_user"
+    user_id  = "test_poor_fp_user"
     group_id = 1002
 
-    user_service = UserService(temp_db)
-    user = user_service.get_or_create_user(user_id, group_id)
+    user_service           = UserService(temp_db)
+    user                   = user_service.get_or_create_user(user_id, group_id)
     user.friendship_points = 50
     temp_db.update_user(user)
 
@@ -118,18 +118,18 @@ def test_dress_buy_insufficient_friendship_points(temp_db):
 
 
 def test_pet_card_with_dress(temp_db):
-    user_id = "test_dress_user"
+    user_id  = "test_dress_user"
     group_id = 1003
 
     user_service = UserService(temp_db)
-    user = user_service.get_or_create_user(user_id, group_id)
-    pet_service = PetService(temp_db)
+    user         = user_service.get_or_create_user(user_id, group_id)
+    pet_service  = PetService(temp_db)
     pet_service.adopt_pet(user_id, group_id, "FashionPet")
 
     assert temp_db.purchase_dress_atomic(user_id, group_id, "halo", "coins", 0)[0]
     _dress_equip(user_id, group_id, "halo", temp_db)
 
-    pet = temp_db.get_pet(user_id, group_id)
+    pet  = temp_db.get_pet(user_id, group_id)
     card = format_pet_card(pet, user)
 
     assert "🎩 帽子: 天使光环" in card
@@ -139,7 +139,7 @@ def test_pet_card_with_dress(temp_db):
 
 
 def test_dress_equip_reports_persistence_failure(temp_db, monkeypatch):
-    user_id = "failed_dress_user"
+    user_id  = "failed_dress_user"
     group_id = 1004
     PetService(temp_db).adopt_pet(user_id, group_id, "试衣宝")
     assert temp_db.purchase_dress_atomic(user_id, group_id, "halo", "coins", 0)[0]
@@ -153,7 +153,7 @@ def test_dress_equip_reports_persistence_failure(temp_db, monkeypatch):
 
 
 def test_dress_unequip_reports_persistence_failure(temp_db, monkeypatch):
-    user_id = "failed_unequip_user"
+    user_id  = "failed_unequip_user"
     group_id = 1005
     PetService(temp_db).adopt_pet(user_id, group_id, "换装宝")
     assert temp_db.purchase_dress_atomic(user_id, group_id, "halo", "coins", 0)[0]
@@ -169,7 +169,7 @@ def test_dress_unequip_reports_persistence_failure(temp_db, monkeypatch):
 
 
 def test_trade_sell_rejects_trailing_arguments_without_consuming_inventory(temp_db):
-    user_id = "invalid_trade_user"
+    user_id  = "invalid_trade_user"
     group_id = 1006
     UserService(temp_db).get_or_create_user(user_id, group_id)
     assert temp_db.purchase_item_atomic(user_id, group_id, "apple", 2, 0)[0]
@@ -223,7 +223,7 @@ def test_qingpet_help_subcategory_routed_from_args(monkeypatch):
     monkeypatch.setattr(qingpet_main, "_db_instance", _FakeDB())
     monkeypatch.setattr(qingpet_main, "_router", None)
 
-    event = {"user_id": 10001, "group_id": 20001}
+    event  = {"user_id": 10001, "group_id": 20001}
     result = asyncio.run(qingpet_main.handle("qingpet", "help social", event, None))
 
     assert isinstance(result, list)
@@ -241,7 +241,7 @@ def test_qingpet_handle_uses_bounded_worker_for_command_path(monkeypatch):
     monkeypatch.setattr(qingpet_main, "_router", None)
     monkeypatch.setattr(qingpet_main, "run_sync", _fake_run_sync)
 
-    event = {"user_id": 10001, "group_id": 20001}
+    event  = {"user_id": 10001, "group_id": 20001}
     result = asyncio.run(qingpet_main.handle("qingpet", "help social", event, None))
 
     assert calls["count"] == 1
@@ -261,7 +261,7 @@ async def test_qingpet_handle_does_not_create_nested_event_loop(monkeypatch):
     monkeypatch.setattr(qingpet_main, "_router", None)
     monkeypatch.setattr(qingpet_main.asyncio, "run", reject_nested_run)
 
-    event = {"user_id": 10001, "group_id": 20001}
+    event  = {"user_id": 10001, "group_id": 20001}
     result = await qingpet_main.handle("qingpet", "help social", event, None)
 
     assert isinstance(result, list)

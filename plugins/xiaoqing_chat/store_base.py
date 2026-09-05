@@ -85,7 +85,7 @@ def delete_json_artifacts(path: Path) -> None:
     甚至可能在后续恢复流程中重新出现。两个文件都尝试删除后再报告首个错误，避免
     因主文件删除失败而跳过备份清理。
     """
-    store = AtomicJsonStore(path)
+    store                       = AtomicJsonStore(path)
     first_error: OSError | None = None
     with keyed_path_lock(path):
         for candidate in (store.path, store.backup_path):

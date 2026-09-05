@@ -43,15 +43,15 @@ def load_topic_summary_entries(data_dir: Path, chat_id: str) -> list[TopicSummar
         if not isinstance(item, dict):
             continue
         item_dict = cast(dict[str, object], item)
-        topic_id = str(item_dict.get("topic_id", "") or "").strip()
-        topic = str(item_dict.get("topic", "") or "").strip()
-        summary = str(item_dict.get("summary", "") or "").strip()
+        topic_id  = str(item_dict.get("topic_id", "") or "").strip()
+        topic     = str(item_dict.get("topic", "") or "").strip()
+        summary   = str(item_dict.get("summary", "") or "").strip()
         if not topic_id and not topic and not summary:
             continue
 
-        keywords_raw = item_dict.get("keywords", [])
+        keywords_raw   = item_dict.get("keywords", [])
         key_points_raw = item_dict.get("key_points", [])
-        keywords = (
+        keywords       = (
             [
                 item.strip()
                 for item in cast(list[object], keywords_raw)
@@ -70,7 +70,7 @@ def load_topic_summary_entries(data_dir: Path, chat_id: str) -> list[TopicSummar
             else []
         )
         updated_at_raw = item_dict.get("updated_at", 0.0)
-        updated_at = 0.0
+        updated_at     = 0.0
         if isinstance(updated_at_raw, (int, float)):
             updated_at = float(updated_at_raw)
         elif isinstance(updated_at_raw, str):
@@ -81,12 +81,12 @@ def load_topic_summary_entries(data_dir: Path, chat_id: str) -> list[TopicSummar
 
         entries.append(
             TopicSummaryCacheEntry(
-                topic_id=topic_id,
-                topic=topic,
-                summary=summary,
-                keywords=keywords,
-                key_points=key_points,
-                updated_at=updated_at,
+                topic_id   = topic_id,
+                topic      = topic,
+                summary    = summary,
+                keywords   = keywords,
+                key_points = key_points,
+                updated_at = updated_at,
             )
         )
     return entries

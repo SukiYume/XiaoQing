@@ -20,7 +20,7 @@ import {
 } from '../utils/timezone.js';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss, subscribeDataChanges } from '../utils/ui.js';
 
-const CSS_ID = 'pendo-dashboard-styles';
+const CSS_ID          = 'pendo-dashboard-styles';
 const PRIORITY_LABELS = Object.freeze({
     1: '紧急',
     2: '高优先',
@@ -29,9 +29,9 @@ const PRIORITY_LABELS = Object.freeze({
     5: '最低',
 });
 
-let _container = null;
+let _container              = null;
 let _unsubscribeDataChanges = null;
-let _loadVersion = 0;
+let _loadVersion            = 0;
 
 // 页面样式集中注入一次，后续数据刷新只替换内容区域。
 function ensureStyles() {
@@ -275,11 +275,11 @@ function buildSpendingAxisTicks(values) {
 
 /** 在唯一的接口边界收敛损坏或缺失字段，后续渲染只处理稳定结构。 */
 function normalizeDashboardData(payload) {
-    const data = isRecord(payload) ? payload : {};
-    const summary = isRecord(data.summary) ? data.summary : {};
-    const taskBuckets = isRecord(data.tasks) ? data.tasks : {};
+    const data         = isRecord(payload) ? payload : {};
+    const summary      = isRecord(data.summary) ? data.summary : {};
+    const taskBuckets  = isRecord(data.tasks) ? data.tasks : {};
     const monthSummary = isRecord(data.month_summary) ? data.month_summary : {};
-    const eventsMonth = records(data.events_month);
+    const eventsMonth  = records(data.events_month);
 
     return {
         summary: {
@@ -296,6 +296,7 @@ function normalizeDashboardData(payload) {
         },
         spendingTrend: records(data.spending_trend),
         monthSummary: {
+            byCurrency: isRecord(data.ledger_by_currency) ? data.ledger_by_currency : {},
             income: Math.max(0, finiteNumber(monthSummary.income)),
             expense: Math.max(0, finiteNumber(monthSummary.expense)),
             balance: finiteNumber(monthSummary.balance),
@@ -421,7 +422,7 @@ function renderEventSection(title, items, emptyTitle, emptyText) {
 }
 
 function renderMonthlyAgenda(events) {
-    const now = Date.now();
+    const now         = Date.now();
     const timedEvents = events
         .map((event) => {
             const start = Number.isFinite(event.start_epoch_ms)
@@ -465,7 +466,7 @@ function renderMonthlyAgenda(events) {
 }
 
 function renderActiveTaskItem(task) {
-    const taskId = typeof task.id === 'string' ? task.id.trim() : '';
+    const taskId   = typeof task.id === 'string' ? task.id.trim() : '';
     const schedule = task.deadline_at
         ? `截止 ${formatDateOnly(task.deadline_at)} ${formatTime(task.deadline_at)}`
         : task.plan_date
@@ -543,15 +544,15 @@ function renderSpendingChart(spendingTrend) {
     const trend = records(spendingTrend);
     if (!trend.length) return '';
 
-    const values = trend.map((point) => Math.max(0, finiteNumber(point.amount)));
+    const values    = trend.map((point) => Math.max(0, finiteNumber(point.amount)));
     const axisTicks = buildSpendingAxisTicks(values);
-    const axisMax = axisTicks[axisTicks.length - 1] || 1;
+    const axisMax   = axisTicks[axisTicks.length - 1] || 1;
     const lastIndex = trend.length - 1;
-    const points = trend.map((point, index) => {
-        const x = lastIndex ? (index / lastIndex) * 100 : 50;
+    const points    = trend.map((point, index) => {
+        const x     = lastIndex ? (index / lastIndex) * 100 : 50;
         const value = values[index];
-        const y = 100 - (value / axisMax) * 100;
-        const date = parseDate(point.date);
+        const y     = 100 - (value / axisMax) * 100;
+        const date  = parseDate(point.date);
         const label = date ? `${pad2(date.getMonth() + 1)}/${pad2(date.getDate())}` : '未知日期';
         return { x, y, value, label };
     });
@@ -597,7 +598,7 @@ function renderRecentLedger(recentLedger) {
                         ? item.transaction_type
                         : 'expense';
                     const prefix = transactionType === 'transfer' ? '' : transactionType === 'income' ? '+' : '-';
-                    const amount = `${prefix}${formatAmount(Math.abs(finiteNumber(item.amount)))}`;
+                    const amount = `${prefix}${formatAmount(Math.abs(finiteNumber(item.amount)), item.currency)}`;
                     return `
                     <article class="dashboard-ledger-item">
                         <div>
@@ -618,7 +619,7 @@ function renderFinancePanel(spendingTrend, monthSummary, recentLedger) {
             <div class="dashboard-panel-header">
                 <div>
                     <h3 class="dashboard-panel-title ledger">💰 本月财务</h3>
-                    <p>查看最近的收支变化和账目记录。</p>
+                    <p>人民币走势与各币种独立汇总。</p>
                 </div>
                 <a class="dashboard-link" href="#/ledger">查看账本 →</a>
             </div>
@@ -637,6 +638,7 @@ function renderFinancePanel(spendingTrend, monthSummary, recentLedger) {
                         <strong class="dashboard-finance-value ${balance >= 0 ? 'positive' : 'negative'}">${formatAmount(balance)}</strong>
                     </div>
                 </div>
+                ${Object.entries(monthSummary.byCurrency || {}).filter(([code]) => code !== 'CNY').map(([code, totals]) => `<p>${escapeHtml(code)} · 收入 ${formatAmount(totals.income, code)} · 支出 ${formatAmount(totals.expense, code)} · 结余 ${formatAmount(totals.balance, code)}</p>`).join('')}
                 <a class="dashboard-chart-card" href="#/stats">
                     <div class="dashboard-chart-head">
                         <strong>支出走势</strong>

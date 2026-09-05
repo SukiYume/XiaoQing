@@ -25,17 +25,17 @@ from typing import Any, cast
 from urllib.parse import urljoin, urlsplit
 from xml.parsers import expat
 
-_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+_REDIRECT_STATUSES        = frozenset({301, 302, 303, 307, 308})
 _DEFAULT_SUCCESS_STATUSES = frozenset({200})
-_RESERVED_AIOHTTP_KWARGS = frozenset(
+_RESERVED_AIOHTTP_KWARGS  = frozenset(
     {"allow_redirects", "auto_decompress", "headers", "method", "url"}
 )
-_RESERVED_REQUESTS_KWARGS = frozenset({"allow_redirects", "stream", "headers", "method", "url"})
+_RESERVED_REQUESTS_KWARGS   = frozenset({"allow_redirects", "stream", "headers", "method", "url"})
 _SENSITIVE_REDIRECT_HEADERS = frozenset({"authorization", "cookie", "proxy-authorization"})
-_TOKEN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+\Z")
-_CHARSET = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
-_JSON_DELIMITERS = frozenset(" \t\r\n,]}:")
-_HEX = frozenset("0123456789abcdefABCDEF")
+_TOKEN                      = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+\Z")
+_CHARSET                    = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
+_JSON_DELIMITERS            = frozenset(" \t\r\n,]}:")
+_HEX                        = frozenset("0123456789abcdefABCDEF")
 
 
 class BoundedHttpError(RuntimeError):
@@ -68,11 +68,11 @@ class RedirectPolicyError(BoundedHttpError):
 
 @dataclass(frozen=True, slots=True)
 class BodyLimits:
-    max_wire_bytes: int = 2 * 1024 * 1024
-    max_decoded_bytes: int = 4 * 1024 * 1024
+    max_wire_bytes: int          = 2 * 1024 * 1024
+    max_decoded_bytes: int       = 4 * 1024 * 1024
     max_decompression_ratio: int = 20
-    ratio_grace_bytes: int = 64 * 1024
-    chunk_bytes: int = 64 * 1024
+    ratio_grace_bytes: int       = 64 * 1024
+    chunk_bytes: int             = 64 * 1024
 
     def __post_init__(self) -> None:
         for name in (
@@ -88,10 +88,10 @@ class BodyLimits:
 
 @dataclass(frozen=True, slots=True)
 class MimePolicy:
-    exact: frozenset[str] = frozenset()
-    type_prefixes: frozenset[str] = frozenset()
+    exact: frozenset[str]               = frozenset()
+    type_prefixes: frozenset[str]       = frozenset()
     structured_suffixes: frozenset[str] = frozenset()
-    allow_missing: bool = False
+    allow_missing: bool                 = False
 
     def __post_init__(self) -> None:
         for media_type in self.exact:
@@ -118,11 +118,11 @@ class MimePolicy:
 
 @dataclass(frozen=True, slots=True)
 class RedirectPolicy:
-    max_hops: int = 0
-    allowed_schemes: frozenset[str] = frozenset({"https"})
+    max_hops: int                          = 0
+    allowed_schemes: frozenset[str]        = frozenset({"https"})
     allowed_origins: frozenset[str] | None = None
-    same_origin_only: bool = True
-    allow_https_upgrade_same_host: bool = False
+    same_origin_only: bool                 = True
+    allow_https_upgrade_same_host: bool    = False
 
     def __post_init__(self) -> None:
         if self.max_hops < 0:
@@ -139,9 +139,9 @@ class RedirectPolicy:
 
 @dataclass(frozen=True, slots=True)
 class JsonLimits:
-    max_bytes: int = 4 * 1024 * 1024
-    max_depth: int = 32
-    max_nodes: int = 20_000
+    max_bytes: int        = 4 * 1024 * 1024
+    max_depth: int        = 32
+    max_nodes: int        = 20_000
     max_string_chars: int = 256_000
     max_number_chars: int = 4_096
 
@@ -159,13 +159,13 @@ class JsonLimits:
 
 @dataclass(frozen=True, slots=True)
 class XmlLimits:
-    max_bytes: int = 8 * 1024 * 1024
-    max_depth: int = 64
-    max_nodes: int = 50_000
-    max_attributes: int = 100_000
+    max_bytes: int           = 8 * 1024 * 1024
+    max_depth: int           = 64
+    max_nodes: int           = 50_000
+    max_attributes: int      = 100_000
     max_attribute_chars: int = 1_000_000
-    max_name_chars: int = 512
-    max_text_chars: int = 1_000_000
+    max_name_chars: int      = 512
+    max_text_chars: int      = 1_000_000
 
     def __post_init__(self) -> None:
         for name in (
@@ -208,8 +208,8 @@ def _validate_media_type_pattern(value: str, *, prefix: bool) -> None:
 
 
 JSON_MIME_POLICY = MimePolicy(
-    exact=frozenset({"application/json"}),
-    structured_suffixes=frozenset({"+json"}),
+    exact               = frozenset({"application/json"}),
+    structured_suffixes = frozenset({"+json"}),
 )
 HTML_MIME_POLICY = MimePolicy(
     exact=frozenset({"text/html", "application/xhtml+xml"}),
@@ -251,7 +251,7 @@ def _parse_content_type(headers: Mapping[str, Any]) -> tuple[str | None, str | N
         return None, None
     if not isinstance(raw_value, str) or len(raw_value) > 512:
         raise ResponseFormatError("invalid Content-Type header")
-    parts = [part.strip() for part in raw_value.split(";")]
+    parts      = [part.strip() for part in raw_value.split(";")]
     media_type = parts[0].casefold()
     try:
         _validate_media_type_pattern(media_type, prefix=False)
@@ -274,8 +274,8 @@ def _parse_content_type(headers: Mapping[str, Any]) -> tuple[str | None, str | N
 
 def _content_length(response: Any) -> int | None:
     headers = getattr(response, "headers", {})
-    raw = _single_header(headers, "Content-Length")
-    value = raw if raw not in (None, "") else getattr(response, "content_length", None)
+    raw     = _single_header(headers, "Content-Length")
+    value   = raw if raw not in (None, "") else getattr(response, "content_length", None)
     if value is None:
         return None
     try:
@@ -315,9 +315,9 @@ class _BoundedDecoder:
             and declared_wire_bytes > limits.max_decoded_bytes
         ):
             raise ResponseLimitError("declared decoded body is too large")
-        self._limits = limits
+        self._limits     = limits
         self._wire_bytes = 0
-        self._decoded = bytearray()
+        self._decoded    = bytearray()
         if encoding == "identity":
             self._decompressor: zlib._Decompress | None = None
         elif encoding == "gzip":
@@ -385,12 +385,12 @@ class _BoundedDecoder:
 
     def _remaining_output_budget(self) -> int:
         absolute_remaining = self._limits.max_decoded_bytes - len(self._decoded)
-        ratio_total = max(
+        ratio_total        = max(
             self._limits.ratio_grace_bytes,
             self._wire_bytes * self._limits.max_decompression_ratio,
         )
         ratio_remaining = ratio_total - len(self._decoded)
-        remaining = min(absolute_remaining, ratio_remaining)
+        remaining       = min(absolute_remaining, ratio_remaining)
         if remaining < 0:
             raise ResponseLimitError("decoded response body is too large")
         return remaining
@@ -401,15 +401,15 @@ def decode_limited_chunks(
     *,
     encoding: str,
     limits: BodyLimits,
-    declared_wire_bytes: int | None = None,
+    declared_wire_bytes: int | None  = None,
     deadline_monotonic: float | None = None,
 ) -> tuple[bytes, int]:
     """Decode a synchronous wire-chunk iterable with shared hard limits."""
 
     decoder = _BoundedDecoder(
-        encoding=encoding,
-        limits=limits,
-        declared_wire_bytes=declared_wire_bytes,
+        encoding            = encoding,
+        limits              = limits,
+        declared_wire_bytes = declared_wire_bytes,
     )
     iterator = iter(chunks)
     while True:
@@ -442,12 +442,12 @@ async def read_aiohttp_response(
     if mime_policy is not None and not mime_policy.accepts(media_type):
         raise ResponseFormatError("response content type is not allowed")
     encoding = _content_encoding(headers)
-    decoder = _BoundedDecoder(
-        encoding=encoding,
-        limits=limits,
-        declared_wire_bytes=_content_length(response),
+    decoder  = _BoundedDecoder(
+        encoding            = encoding,
+        limits              = limits,
+        declared_wire_bytes = _content_length(response),
     )
-    content = getattr(response, "content", None)
+    content  = getattr(response, "content", None)
     iterator = getattr(content, "iter_chunked", None)
     if not callable(iterator):
         raise ResponseFormatError("aiohttp response has no bounded byte stream")
@@ -461,10 +461,10 @@ async def read_aiohttp_response(
     body = decoder.finish()
     return _build_response(
         response,
-        body=body,
-        media_type=media_type,
-        charset=charset,
-        wire_bytes=decoder.wire_bytes,
+        body       = body,
+        media_type = media_type,
+        charset    = charset,
+        wire_bytes = decoder.wire_bytes,
     )
 
 
@@ -472,7 +472,7 @@ def read_requests_response(
     response: Any,
     *,
     limits: BodyLimits,
-    mime_policy: MimePolicy | None = None,
+    mime_policy: MimePolicy | None   = None,
     deadline_monotonic: float | None = None,
 ) -> BoundedHttpResponse:
     """Read a streamed requests response without transparent decompression."""
@@ -482,8 +482,8 @@ def read_requests_response(
     if mime_policy is not None and not mime_policy.accepts(media_type):
         raise ResponseFormatError("response content type is not allowed")
     encoding = _content_encoding(headers)
-    raw = getattr(response, "raw", None)
-    stream = getattr(raw, "stream", None)
+    raw      = getattr(response, "raw", None)
+    stream   = getattr(raw, "stream", None)
     if not callable(stream):
         raise ResponseFormatError("requests response has no bounded raw stream")
     try:
@@ -493,10 +493,10 @@ def read_requests_response(
     try:
         body, wire_bytes = decode_limited_chunks(
             stream(limits.chunk_bytes, decode_content=False),
-            encoding=encoding,
-            limits=limits,
-            declared_wire_bytes=_content_length(response),
-            deadline_monotonic=deadline_monotonic,
+            encoding            = encoding,
+            limits              = limits,
+            declared_wire_bytes = _content_length(response),
+            deadline_monotonic  = deadline_monotonic,
         )
     except BoundedHttpError:
         raise
@@ -504,10 +504,10 @@ def read_requests_response(
         raise ResponseTransportError("response body transport failed") from exc
     return _build_response(
         response,
-        body=body,
-        media_type=media_type,
-        charset=charset,
-        wire_bytes=wire_bytes,
+        body       = body,
+        media_type = media_type,
+        charset    = charset,
+        wire_bytes = wire_bytes,
     )
 
 
@@ -520,29 +520,29 @@ def _build_response(
     wire_bytes: int,
 ) -> BoundedHttpResponse:
     response_url = getattr(response, "url", "")
-    headers = {
+    headers      = {
         str(key): str(value) for key, value in dict(getattr(response, "headers", {})).items()
     }
     return BoundedHttpResponse(
-        url=str(response_url),
-        status=int(getattr(response, "status", getattr(response, "status_code", 0))),
-        body=body,
-        media_type=media_type,
-        charset=charset,
-        headers=MappingProxyType(headers),
-        wire_bytes=wire_bytes,
-        decoded_bytes=len(body),
+        url           = str(response_url),
+        status        = int(getattr(response, "status", getattr(response, "status_code", 0))),
+        body          = body,
+        media_type    = media_type,
+        charset       = charset,
+        headers       = MappingProxyType(headers),
+        wire_bytes    = wire_bytes,
+        decoded_bytes = len(body),
     )
 
 
 def _origin_from_url(url: str) -> tuple[str, str, int]:
     try:
         parsed = urlsplit(url)
-        port = parsed.port
+        port   = parsed.port
     except (TypeError, ValueError) as exc:
         raise RedirectPolicyError("invalid request URL") from exc
     scheme = parsed.scheme.casefold()
-    host = (parsed.hostname or "").rstrip(".").casefold()
+    host   = (parsed.hostname or "").rstrip(".").casefold()
     if scheme not in {"http", "https"} or not host:
         raise RedirectPolicyError("request URL must be absolute HTTP(S)")
     if parsed.username is not None or parsed.password is not None:
@@ -556,14 +556,14 @@ def _redirect_target(
     location: str,
     policy: RedirectPolicy,
 ) -> tuple[str, bool]:
-    target_url = urljoin(current_url, location)
+    target_url     = urljoin(current_url, location)
     current_origin = _origin_from_url(current_url)
-    target_origin = _origin_from_url(target_url)
+    target_origin  = _origin_from_url(target_url)
     if current_origin[0] == "https" and target_origin[0] != "https":
         raise RedirectPolicyError("HTTPS redirect downgrade is not allowed")
     if target_origin[0] not in {scheme.casefold() for scheme in policy.allowed_schemes}:
         raise RedirectPolicyError("redirect scheme is not allowed")
-    same_origin = target_origin == current_origin
+    same_origin        = target_origin == current_origin
     upgraded_same_host = (
         policy.allow_https_upgrade_same_host
         and current_origin[0] == "http"
@@ -608,12 +608,12 @@ async def aiohttp_request_bounded(
     url: str,
     *,
     limits: BodyLimits,
-    mime_policy: MimePolicy | None = None,
-    redirect_policy: RedirectPolicy = NO_REDIRECTS,
-    success_statuses: Collection[int] = _DEFAULT_SUCCESS_STATUSES,
-    headers: Mapping[str, str] | None = None,
+    mime_policy: MimePolicy | None           = None,
+    redirect_policy: RedirectPolicy          = NO_REDIRECTS,
+    success_statuses: Collection[int]        = _DEFAULT_SUCCESS_STATUSES,
+    headers: Mapping[str, str] | None        = None,
     request_kwargs: Mapping[str, Any] | None = None,
-    accept_encoding: str = "gzip, deflate",
+    accept_encoding: str                     = "gzip, deflate",
 ) -> BoundedHttpResponse:
     """Issue a bounded aiohttp request with explicit manual redirects."""
 
@@ -622,7 +622,7 @@ async def aiohttp_request_bounded(
     current_url = url
     current_headers = _request_headers(headers, accept_encoding=accept_encoding)
     base_kwargs = dict(request_kwargs or {})
-    forbidden = _RESERVED_AIOHTTP_KWARGS & base_kwargs.keys()
+    forbidden   = _RESERVED_AIOHTTP_KWARGS & base_kwargs.keys()
     if forbidden:
         raise ValueError("bounded aiohttp request options cannot override transport guards")
 
@@ -633,9 +633,9 @@ async def aiohttp_request_bounded(
         request = session.request(
             normalized_method,
             current_url,
-            headers=current_headers,
-            allow_redirects=False,
-            auto_decompress=False,
+            headers         = current_headers,
+            allow_redirects = False,
+            auto_decompress = False,
             **kwargs,
         )
         async with request as response:
@@ -652,9 +652,9 @@ async def aiohttp_request_bounded(
                     _close_response(response)
                     raise RedirectPolicyError("redirect has no Location header")
                 next_url, same_origin = _redirect_target(
-                    current_url=str(getattr(response, "url", current_url)),
-                    location=location,
-                    policy=redirect_policy,
+                    current_url = str(getattr(response, "url", current_url)),
+                    location    = location,
+                    policy      = redirect_policy,
                 )
                 # Authorization/Cookie 只能留在原始源；显式允许的跨源跳转也不能继承。
                 if not same_origin:
@@ -667,8 +667,8 @@ async def aiohttp_request_bounded(
                 raise HttpStatusError(status)
             return await read_aiohttp_response(
                 response,
-                limits=limits,
-                mime_policy=mime_policy,
+                limits      = limits,
+                mime_policy = mime_policy,
             )
     raise RedirectPolicyError("too many redirects")
 
@@ -678,14 +678,14 @@ def requests_request_bounded(
     url: str,
     *,
     limits: BodyLimits,
-    mime_policy: MimePolicy | None = None,
-    redirect_policy: RedirectPolicy = NO_REDIRECTS,
-    success_statuses: Collection[int] = _DEFAULT_SUCCESS_STATUSES,
-    headers: Mapping[str, str] | None = None,
+    mime_policy: MimePolicy | None           = None,
+    redirect_policy: RedirectPolicy          = NO_REDIRECTS,
+    success_statuses: Collection[int]        = _DEFAULT_SUCCESS_STATUSES,
+    headers: Mapping[str, str] | None        = None,
     request_kwargs: Mapping[str, Any] | None = None,
-    session: Any = None,
-    accept_encoding: str = "gzip, deflate",
-    total_timeout_seconds: float | None = None,
+    session: Any                             = None,
+    accept_encoding: str                     = "gzip, deflate",
+    total_timeout_seconds: float | None      = None,
 ) -> BoundedHttpResponse:
     """Issue a bounded requests request with explicit manual redirects."""
 
@@ -694,7 +694,7 @@ def requests_request_bounded(
     current_url = url
     current_headers = _request_headers(headers, accept_encoding=accept_encoding)
     base_kwargs = dict(request_kwargs or {})
-    forbidden = _RESERVED_REQUESTS_KWARGS & base_kwargs.keys()
+    forbidden   = _RESERVED_REQUESTS_KWARGS & base_kwargs.keys()
     if forbidden:
         raise ValueError("bounded requests options cannot override transport guards")
     base_kwargs.setdefault("timeout", 30.0)
@@ -713,7 +713,7 @@ def requests_request_bounded(
 
     for hop in range(redirect_policy.max_hops + 1):
         remaining_seconds = _remaining_before_deadline(deadline_monotonic)
-        kwargs = dict(base_kwargs)
+        kwargs            = dict(base_kwargs)
         kwargs["timeout"] = _requests_deadline_timeout(
             base_kwargs["timeout"],
             remaining_seconds=remaining_seconds,
@@ -723,9 +723,9 @@ def requests_request_bounded(
         response = request_fn(
             normalized_method,
             current_url,
-            headers=current_headers,
-            allow_redirects=False,
-            stream=True,
+            headers         = current_headers,
+            allow_redirects = False,
+            stream          = True,
             **kwargs,
         )
         try:
@@ -740,9 +740,9 @@ def requests_request_bounded(
                 if not location:
                     raise RedirectPolicyError("redirect has no Location header")
                 next_url, same_origin = _redirect_target(
-                    current_url=str(getattr(response, "url", current_url)),
-                    location=location,
-                    policy=redirect_policy,
+                    current_url = str(getattr(response, "url", current_url)),
+                    location    = location,
+                    policy      = redirect_policy,
                 )
                 if not same_origin:
                     current_headers = _without_sensitive_headers(current_headers)
@@ -752,9 +752,9 @@ def requests_request_bounded(
                 raise HttpStatusError(status)
             return read_requests_response(
                 response,
-                limits=limits,
-                mime_policy=mime_policy,
-                deadline_monotonic=deadline_monotonic,
+                limits             = limits,
+                mime_policy        = mime_policy,
+                deadline_monotonic = deadline_monotonic,
             )
         finally:
             _close_response(response)
@@ -800,9 +800,9 @@ def _requests_deadline_timeout(configured: Any, *, remaining_seconds: float) -> 
         return min(seconds, remaining_seconds)
 
     return TimeoutSauce(
-        total=remaining_seconds,
-        connect=capped(connect),
-        read=capped(read),
+        total   = remaining_seconds,
+        connect = capped(connect),
+        read    = capped(read),
     )
 
 
@@ -883,9 +883,9 @@ def parse_bounded_json(
     try:
         value = json.loads(
             text,
-            parse_constant=reject_constant,
-            parse_float=parse_finite_float,
-            object_pairs_hook=object_pairs,
+            parse_constant    = reject_constant,
+            parse_float       = parse_finite_float,
+            object_pairs_hook = object_pairs,
         )
     except BoundedHttpError:
         raise
@@ -897,10 +897,10 @@ def parse_bounded_json(
 
 def _preflight_json(text: str, limits: JsonLimits) -> None:
     stack: list[str] = []
-    nodes = 0
-    string_chars = 0
-    index = 0
-    size = len(text)
+    nodes            = 0
+    string_chars     = 0
+    index            = 0
+    size             = len(text)
 
     def add_node() -> None:
         nonlocal nodes
@@ -975,8 +975,8 @@ def _preflight_json(text: str, limits: JsonLimits) -> None:
 
 def _validate_json_value(value: Any, limits: JsonLimits) -> None:
     stack: list[tuple[Any, int]] = [(value, 1)]
-    nodes = 0
-    string_chars = 0
+    nodes                        = 0
+    string_chars                 = 0
     while stack:
         current, depth = stack.pop()
         if depth > limits.max_depth:
@@ -1019,12 +1019,12 @@ def validate_bounded_xml(
 
     if tuple(expat.version_info) < (2, 7, 2):
         raise ResponseFormatError("XML parser version is not safe for external input")
-    parser = expat.ParserCreate()
-    depth = 0
-    nodes = 0
-    attributes = 0
+    parser          = expat.ParserCreate()
+    depth           = 0
+    nodes           = 0
+    attributes      = 0
     attribute_chars = 0
-    text_chars = 0
+    text_chars      = 0
 
     def account_node() -> None:
         nonlocal nodes
@@ -1076,14 +1076,14 @@ def validate_bounded_xml(
     def reject_external_entity(*_args: Any) -> int:
         raise ResponseFormatError("external XML entities are not allowed")
 
-    parser.StartElementHandler = start_element
-    parser.EndElementHandler = end_element
-    parser.CharacterDataHandler = character_data
-    parser.CommentHandler = comment
+    parser.StartElementHandler          = start_element
+    parser.EndElementHandler            = end_element
+    parser.CharacterDataHandler         = character_data
+    parser.CommentHandler               = comment
     parser.ProcessingInstructionHandler = processing_instruction
-    parser.StartDoctypeDeclHandler = reject_declaration
-    parser.EntityDeclHandler = reject_declaration
-    parser.ExternalEntityRefHandler = reject_external_entity
+    parser.StartDoctypeDeclHandler      = reject_declaration
+    parser.EntityDeclHandler            = reject_declaration
+    parser.ExternalEntityRefHandler     = reject_external_entity
     parser.SetParamEntityParsing(expat.XML_PARAM_ENTITY_PARSING_NEVER)
     try:
         parser.Parse(body, True)

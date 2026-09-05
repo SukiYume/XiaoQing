@@ -1,3 +1,4 @@
+# 验证 Pendo 运行期服务对状态和资源的唯一所有权。
 """Contract tests for Pendo's state-owning runtime service boundary."""
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from plugins.pendo.utils import db_ops
 
 class _DummyDatabase:
     def __init__(self, path: str = ":memory:") -> None:
-        self.db_path = path
+        self.db_path       = path
         self.cleanup_count = 0
 
     def cleanup(self) -> None:
@@ -37,7 +38,7 @@ def test_runtime_owns_database_path_and_closes_shared_object_once(tmp_path) -> N
 
 
 def test_runtime_never_overwrites_another_database_generation(tmp_path) -> None:
-    existing = _DummyDatabase("existing")
+    existing                         = _DummyDatabase("existing")
     candidates: list[_DummyDatabase] = []
     db_ops.set_database_singleton(existing)
     service = PendoRuntimeService()
@@ -60,7 +61,7 @@ def test_runtime_never_overwrites_another_database_generation(tmp_path) -> None:
 
 
 def test_runtime_unsubscribes_once_even_when_unsubscribe_fails() -> None:
-    service = PendoRuntimeService()
+    service          = PendoRuntimeService()
     calls: list[str] = []
 
     def unsubscribe() -> None:
@@ -79,7 +80,7 @@ def test_runtime_unsubscribes_once_even_when_unsubscribe_fails() -> None:
 
 def test_runtime_reconfigures_web_endpoint_without_dual_start() -> None:
     calls: list[object] = []
-    state = {"running": True}
+    state               = {"running": True}
 
     class _WebBackend:
         @staticmethod

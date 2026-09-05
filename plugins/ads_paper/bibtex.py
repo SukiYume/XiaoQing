@@ -21,19 +21,19 @@ class BibTeXEntry:
         return extract_bibtex_field(self.text, "title")
 
 
-_ENTRY_HEADER = re.compile(r"@\s*([A-Za-z]+)\s*([({])")
-_FIELD_START = re.compile(r"([A-Za-z][A-Za-z0-9_:-]*)\s*=\s*")
+_ENTRY_HEADER       = re.compile(r"@\s*([A-Za-z]+)\s*([({])")
+_FIELD_START        = re.compile(r"([A-Za-z][A-Za-z0-9_:-]*)\s*=\s*")
 _NON_CITATION_TYPES = frozenset({"comment", "preamble", "string"})
 
 
 def _find_entry_end(text: str, opening_index: int) -> int:
-    opening = text[opening_index]
-    closing = "}" if opening == "{" else ")"
-    depth = 1
-    quoted = False
-    escaped = False
+    opening     = text[opening_index]
+    closing     = "}" if opening == "{" else ")"
+    depth       = 1
+    quoted      = False
+    escaped     = False
     brace_depth = 0
-    index = opening_index + 1
+    index       = opening_index + 1
     while index < len(text):
         char = text[index]
         if escaped:
@@ -82,9 +82,9 @@ def _citation_key(entry_text: str, opening_index: int, entry_type: str) -> str:
 def parse_bibtex_entries(text: str) -> list[BibTeXEntry]:
     """Parse entry boundaries without splitting on ``@`` inside field values."""
 
-    document = str(text or "")
+    document                   = str(text or "")
     entries: list[BibTeXEntry] = []
-    position = 0
+    position                   = 0
     while True:
         marker = document.find("@", position)
         if marker < 0:
@@ -93,16 +93,16 @@ def parse_bibtex_entries(text: str) -> list[BibTeXEntry]:
         if header is None:
             position = marker + 1
             continue
-        entry_type = header.group(1).lower()
+        entry_type    = header.group(1).lower()
         opening_index = header.end() - 1
-        end = _find_entry_end(document, opening_index)
-        entry_text = document[marker:end]
+        end           = _find_entry_end(document, opening_index)
+        entry_text    = document[marker:end]
         local_opening = opening_index - marker
         entries.append(
             BibTeXEntry(
-                entry_type=entry_type,
-                citation_key=_citation_key(entry_text, local_opening, entry_type),
-                text=entry_text,
+                entry_type   = entry_type,
+                citation_key = _citation_key(entry_text, local_opening, entry_type),
+                text         = entry_text,
             )
         )
         position = end
@@ -148,7 +148,7 @@ def extract_bibtex_field(entry_text: str, field_name: str) -> str:
         if match.group(1).lower() != target:
             continue
         start = match.end()
-        end = _value_end(entry_text, start)
+        end   = _value_end(entry_text, start)
         value = entry_text[start:end].strip()
         if len(value) >= 2 and (
             (value[0] == "{" and value[-1] == "}") or (value[0] == '"' and value[-1] == '"')

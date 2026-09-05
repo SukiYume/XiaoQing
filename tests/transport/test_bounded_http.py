@@ -1,3 +1,4 @@
+# 验证 HTTP 请求的连接、读取、解压和总响应预算。
 from __future__ import annotations
 
 import gzip
@@ -31,7 +32,7 @@ from core.bounded_http import (
 
 class AsyncContent:
     def __init__(self, chunks: list[bytes]) -> None:
-        self.chunks = chunks
+        self.chunks                           = chunks
         self.requested_chunk_sizes: list[int] = []
 
     async def iter_chunked(self, size: int):
@@ -54,11 +55,11 @@ class NeverReadAsyncContent:
 @dataclass
 class AsyncResponse:
     status: int = 200
-    url: str = "https://example.test/data"
+    url: str    = "https://example.test/data"
     headers: dict[str, str] = field(default_factory=lambda: {"Content-Type": "application/json"})
     chunks: list[bytes] = field(default_factory=lambda: [b"{}"])
     content_length: int | None = None
-    closed: bool = False
+    closed: bool               = False
 
     def __post_init__(self) -> None:
         self.content = AsyncContent(self.chunks)
@@ -80,7 +81,7 @@ class AsyncRequestContext:
 
 class AsyncSession:
     def __init__(self, responses: list[AsyncResponse]) -> None:
-        self.responses = list(responses)
+        self.responses                                    = list(responses)
         self.calls: list[tuple[str, str, dict[str, Any]]] = []
 
     def request(self, method: str, url: str, **kwargs: Any) -> AsyncRequestContext:
@@ -90,9 +91,9 @@ class AsyncSession:
 
 class RawStream:
     def __init__(self, chunks: list[bytes], *, fail_if_read: bool = False) -> None:
-        self.chunks = chunks
-        self.fail_if_read = fail_if_read
-        self.decode_content: bool | None = None
+        self.chunks                        = chunks
+        self.fail_if_read                  = fail_if_read
+        self.decode_content: bool | None   = None
         self.calls: list[tuple[int, bool]] = []
 
     def stream(self, size: int, *, decode_content: bool):
@@ -127,11 +128,11 @@ class SlowDripRawStream:
 @dataclass
 class SyncResponse:
     status_code: int = 200
-    url: str = "https://example.test/data"
+    url: str         = "https://example.test/data"
     headers: dict[str, str] = field(default_factory=lambda: {"Content-Type": "application/json"})
     chunks: list[bytes] = field(default_factory=lambda: [b"{}"])
     fail_if_read: bool = False
-    closed: bool = False
+    closed: bool       = False
 
     def __post_init__(self) -> None:
         self.raw = RawStream(self.chunks, fail_if_read=self.fail_if_read)
@@ -142,7 +143,7 @@ class SyncResponse:
 
 class SyncSession:
     def __init__(self, responses: list[SyncResponse]) -> None:
-        self.responses = list(responses)
+        self.responses                                    = list(responses)
         self.calls: list[tuple[str, str, dict[str, Any]]] = []
 
     def request(self, method: str, url: str, **kwargs: Any) -> SyncResponse:
@@ -151,11 +152,11 @@ class SyncSession:
 
 
 SMALL_LIMITS = BodyLimits(
-    max_wire_bytes=128,
-    max_decoded_bytes=256,
-    max_decompression_ratio=20,
-    ratio_grace_bytes=64,
-    chunk_bytes=17,
+    max_wire_bytes          = 128,
+    max_decoded_bytes       = 256,
+    max_decompression_ratio = 20,
+    ratio_grace_bytes       = 64,
+    chunk_bytes             = 17,
 )
 
 
@@ -185,11 +186,11 @@ def test_body_limits_require_positive_values(field: str) -> None:
 
 def test_identity_body_accepts_exact_boundary_and_rejects_next_byte() -> None:
     limits = BodyLimits(
-        max_wire_bytes=4,
-        max_decoded_bytes=4,
-        max_decompression_ratio=1,
-        ratio_grace_bytes=1,
-        chunk_bytes=2,
+        max_wire_bytes          = 4,
+        max_decoded_bytes       = 4,
+        max_decompression_ratio = 1,
+        ratio_grace_bytes       = 1,
+        chunk_bytes             = 2,
     )
 
     assert decode_limited_chunks([b"ab", b"cd"], encoding="identity", limits=limits) == (
@@ -202,8 +203,8 @@ def test_identity_body_accepts_exact_boundary_and_rejects_next_byte() -> None:
 
 def test_false_small_content_length_cannot_bypass_stream_limit() -> None:
     response = SyncResponse(
-        headers={"Content-Type": "application/json", "Content-Length": "1"},
-        chunks=[b"x" * 129],
+        headers = {"Content-Type": "application/json", "Content-Length": "1"},
+        chunks  = [b"x" * 129],
     )
 
     with pytest.raises(ResponseLimitError, match="wire body"):
@@ -212,8 +213,8 @@ def test_false_small_content_length_cannot_bypass_stream_limit() -> None:
 
 def test_declared_oversize_is_rejected_before_reading() -> None:
     response = SyncResponse(
-        headers={"Content-Type": "application/json", "Content-Length": "129"},
-        fail_if_read=True,
+        headers      = {"Content-Type": "application/json", "Content-Length": "129"},
+        fail_if_read = True,
     )
 
     with pytest.raises(ResponseLimitError, match="declared response body"):
@@ -234,13 +235,13 @@ async def test_async_and_sync_gzip_readers_share_wire_decoded_contract() -> None
 
     async_result = await read_aiohttp_response(
         async_response,
-        limits=SMALL_LIMITS,
-        mime_policy=bounded_http.JSON_MIME_POLICY,
+        limits      = SMALL_LIMITS,
+        mime_policy = bounded_http.JSON_MIME_POLICY,
     )
     sync_result = read_requests_response(
         sync_response,
-        limits=SMALL_LIMITS,
-        mime_policy=bounded_http.JSON_MIME_POLICY,
+        limits      = SMALL_LIMITS,
+        mime_policy = bounded_http.JSON_MIME_POLICY,
     )
 
     assert async_result.body == sync_result.body == payload
@@ -268,11 +269,11 @@ async def test_async_and_sync_gzip_readers_share_wire_decoded_contract() -> None
 )
 def test_compressed_body_limits_and_integrity(wire: bytes, expected: str) -> None:
     limits = BodyLimits(
-        max_wire_bytes=512,
-        max_decoded_bytes=128,
-        max_decompression_ratio=100,
-        ratio_grace_bytes=128,
-        chunk_bytes=64,
+        max_wire_bytes          = 512,
+        max_decoded_bytes       = 128,
+        max_decompression_ratio = 100,
+        ratio_grace_bytes       = 128,
+        chunk_bytes             = 64,
     )
 
     with pytest.raises((ResponseLimitError, ResponseFormatError), match=expected):
@@ -282,11 +283,11 @@ def test_compressed_body_limits_and_integrity(wire: bytes, expected: str) -> Non
 def test_decompression_ratio_is_bounded_during_decode() -> None:
     wire = gzip.compress(b"x" * 512, mtime=0)
     limits = BodyLimits(
-        max_wire_bytes=512,
-        max_decoded_bytes=1_024,
-        max_decompression_ratio=2,
-        ratio_grace_bytes=8,
-        chunk_bytes=64,
+        max_wire_bytes          = 512,
+        max_decoded_bytes       = 1_024,
+        max_decompression_ratio = 2,
+        ratio_grace_bytes       = 8,
+        chunk_bytes             = 64,
     )
 
     with pytest.raises(ResponseLimitError, match="decoded response body|decompression ratio"):
@@ -355,8 +356,8 @@ def test_mime_policy_is_checked_before_body_read(
         assert (
             read_requests_response(
                 response,
-                limits=SMALL_LIMITS,
-                mime_policy=bounded_http.JSON_MIME_POLICY,
+                limits      = SMALL_LIMITS,
+                mime_policy = bounded_http.JSON_MIME_POLICY,
             ).body
             == b"{}"
         )
@@ -364,8 +365,8 @@ def test_mime_policy_is_checked_before_body_read(
         with pytest.raises(ResponseFormatError, match="Content-Type|content type"):
             read_requests_response(
                 response,
-                limits=SMALL_LIMITS,
-                mime_policy=bounded_http.JSON_MIME_POLICY,
+                limits      = SMALL_LIMITS,
+                mime_policy = bounded_http.JSON_MIME_POLICY,
             )
         assert response.raw.calls == []
 
@@ -387,8 +388,8 @@ def test_sync_wrapper_never_reads_error_body_and_always_closes() -> None:
         requests_request_bounded(
             "GET",
             "https://example.test/data",
-            limits=SMALL_LIMITS,
-            session=session,
+            limits  = SMALL_LIMITS,
+            session = session,
         )
 
     assert caught.value.status == 500
@@ -399,14 +400,14 @@ def test_sync_wrapper_never_reads_error_body_and_always_closes() -> None:
 def test_sync_midstream_transport_failure_is_normalized_and_closed() -> None:
     response = SyncResponse(headers={"Content-Type": "application/json"})
     response.raw = FailingRawStream()
-    session = SyncSession([response])
+    session      = SyncSession([response])
 
     with pytest.raises(ResponseTransportError, match="response body transport failed") as caught:
         requests_request_bounded(
             "GET",
             "https://example.test/data",
-            limits=SMALL_LIMITS,
-            session=session,
+            limits  = SMALL_LIMITS,
+            session = session,
         )
 
     assert "canary" not in str(caught.value)
@@ -425,9 +426,9 @@ def test_sync_slow_drip_is_stopped_by_total_deadline(
         requests_request_bounded(
             "GET",
             "https://example.test/data",
-            limits=SMALL_LIMITS,
-            session=SyncSession([response]),
-            request_kwargs={"timeout": 3},
+            limits         = SMALL_LIMITS,
+            session        = SyncSession([response]),
+            request_kwargs = {"timeout": 3},
         )
 
     assert response.closed is True
@@ -439,10 +440,10 @@ def test_sync_redirects_receive_only_the_remaining_total_timeout(
     clock = [10.0]
     monkeypatch.setattr(bounded_http.time, "monotonic", lambda: clock[0])
     redirect = SyncResponse(
-        status_code=302,
-        url="https://example.test/start",
-        headers={"Location": "/final"},
-        fail_if_read=True,
+        status_code  = 302,
+        url          = "https://example.test/start",
+        headers      = {"Location": "/final"},
+        fail_if_read = True,
     )
     final = SyncResponse(url="https://example.test/final")
 
@@ -453,18 +454,18 @@ def test_sync_redirects_receive_only_the_remaining_total_timeout(
             return response
 
     session = AdvancingSession([redirect, final])
-    result = requests_request_bounded(
+    result  = requests_request_bounded(
         "GET",
         "https://example.test/start",
         limits=SMALL_LIMITS,
         redirect_policy=RedirectPolicy(max_hops=1),
-        session=session,
-        request_kwargs={"timeout": 20},
-        total_timeout_seconds=5,
+        session               = session,
+        request_kwargs        = {"timeout": 20},
+        total_timeout_seconds = 5,
     )
 
     assert result.body == b"{}"
-    first_timeout = session.calls[0][2]["timeout"]
+    first_timeout      = session.calls[0][2]["timeout"]
     redirected_timeout = session.calls[1][2]["timeout"]
     assert first_timeout.total == pytest.approx(5)
     assert redirected_timeout.total == pytest.approx(3.75)
@@ -476,7 +477,7 @@ def test_sync_redirects_receive_only_the_remaining_total_timeout(
 async def test_async_midstream_transport_failure_is_normalized_and_closed() -> None:
     response = AsyncResponse(headers={"Content-Type": "application/json"})
     response.content = FailingAsyncContent()
-    session = AsyncSession([response])
+    session          = AsyncSession([response])
 
     with pytest.raises(ResponseTransportError, match="response body transport failed") as caught:
         await aiohttp_request_bounded(
@@ -493,15 +494,15 @@ async def test_async_midstream_transport_failure_is_normalized_and_closed() -> N
 @pytest.mark.asyncio
 async def test_async_wrapper_forces_transport_guards() -> None:
     response = AsyncResponse()
-    session = AsyncSession([response])
+    session  = AsyncSession([response])
 
     result = await aiohttp_request_bounded(
         session,
         "get",
         "https://example.test/data",
-        limits=SMALL_LIMITS,
-        mime_policy=bounded_http.JSON_MIME_POLICY,
-        request_kwargs={"timeout": 3},
+        limits         = SMALL_LIMITS,
+        mime_policy    = bounded_http.JSON_MIME_POLICY,
+        request_kwargs = {"timeout": 3},
     )
 
     assert result.body == b"{}"
@@ -515,14 +516,14 @@ async def test_async_wrapper_forces_transport_guards() -> None:
 
 def test_sync_wrapper_forces_transport_guards_and_raw_wire_mode() -> None:
     response = SyncResponse()
-    session = SyncSession([response])
+    session  = SyncSession([response])
 
     result = requests_request_bounded(
         "get",
         "https://example.test/data",
-        limits=SMALL_LIMITS,
-        session=session,
-        request_kwargs={"timeout": 3},
+        limits         = SMALL_LIMITS,
+        session        = session,
+        request_kwargs = {"timeout": 3},
     )
 
     assert result.body == b"{}"
@@ -554,26 +555,26 @@ async def test_transport_guards_cannot_be_overridden(wrapper: str, reserved: str
                 AsyncSession([]),
                 "GET",
                 "https://example.test/data",
-                limits=SMALL_LIMITS,
-                request_kwargs={reserved: True},
+                limits         = SMALL_LIMITS,
+                request_kwargs = {reserved: True},
             )
     else:
         with pytest.raises(ValueError, match="transport guards"):
             requests_request_bounded(
                 "GET",
                 "https://example.test/data",
-                limits=SMALL_LIMITS,
-                session=SyncSession([]),
-                request_kwargs={reserved: True},
+                limits         = SMALL_LIMITS,
+                session        = SyncSession([]),
+                request_kwargs = {reserved: True},
             )
 
 
 def test_relative_same_origin_redirect_is_explicit_and_bounded() -> None:
     redirect = SyncResponse(
-        status_code=302,
-        url="https://example.test/start",
-        headers={"Location": "/final"},
-        fail_if_read=True,
+        status_code  = 302,
+        url          = "https://example.test/start",
+        headers      = {"Location": "/final"},
+        fail_if_read = True,
     )
     final = SyncResponse(url="https://example.test/final")
     session = SyncSession([redirect, final])
@@ -608,10 +609,10 @@ def test_redirect_policy_rejects_cross_origin_downgrade_and_non_http(
     message: str,
 ) -> None:
     redirect = SyncResponse(
-        status_code=302,
-        url="https://example.test/start",
-        headers={"Location": location},
-        fail_if_read=True,
+        status_code  = 302,
+        url          = "https://example.test/start",
+        headers      = {"Location": location},
+        fail_if_read = True,
     )
 
     with pytest.raises(RedirectPolicyError, match=message):
@@ -627,10 +628,10 @@ def test_redirect_policy_rejects_cross_origin_downgrade_and_non_http(
 
 def test_cross_origin_redirect_strips_credentials_when_explicitly_allowed() -> None:
     redirect = SyncResponse(
-        status_code=307,
-        url="https://example.test/start",
-        headers={"Location": "https://cdn.test/final"},
-        fail_if_read=True,
+        status_code  = 307,
+        url          = "https://example.test/start",
+        headers      = {"Location": "https://cdn.test/final"},
+        fail_if_read = True,
     )
     final = SyncResponse(url="https://cdn.test/final")
     session = SyncSession([redirect, final])
@@ -656,9 +657,9 @@ def test_cross_origin_redirect_strips_credentials_when_explicitly_allowed() -> N
 
 def test_post_redirect_is_rejected_without_rewriting_method() -> None:
     redirect = SyncResponse(
-        status_code=303,
-        headers={"Location": "/final"},
-        fail_if_read=True,
+        status_code  = 303,
+        headers      = {"Location": "/final"},
+        fail_if_read = True,
     )
     with pytest.raises(RedirectPolicyError, match="method"):
         requests_request_bounded(
@@ -672,16 +673,16 @@ def test_post_redirect_is_rejected_without_rewriting_method() -> None:
 
 def test_redirect_hop_limit_is_enforced() -> None:
     redirect = SyncResponse(
-        status_code=302,
-        headers={"Location": "/again"},
-        fail_if_read=True,
+        status_code  = 302,
+        headers      = {"Location": "/again"},
+        fail_if_read = True,
     )
     with pytest.raises(RedirectPolicyError, match="too many"):
         requests_request_bounded(
             "GET",
             "https://example.test/start",
-            limits=SMALL_LIMITS,
-            session=SyncSession([redirect]),
+            limits  = SMALL_LIMITS,
+            session = SyncSession([redirect]),
         )
 
 

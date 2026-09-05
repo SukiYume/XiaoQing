@@ -6,7 +6,7 @@ import json
 import threading
 import uuid
 from collections import deque
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
 
@@ -16,14 +16,14 @@ from ...utils.identifiers import new_internal_id
 from ..auth import AuthError
 from .bundle_import import inspect_bundle_bytes
 
-_DEMO_PREFIX: Final = "demo_web_"
-_DEMO_TEMPLATE_PATH: Final = Path(__file__).resolve().parent / "assets" / "demo_bundle.pendo.zip"
+_DEMO_PREFIX: Final          = "demo_web_"
+_DEMO_TEMPLATE_PATH: Final   = Path(__file__).resolve().parent / "assets" / "demo_bundle.pendo.zip"
 _DEMO_TEMPLATE_ANCHOR: Final = date(2026, 4, 8)
-_DEMO_SEED_VERSION: Final = 2
-_DEMO_ITEM_TYPES: Final = ("event", "task", "ledger", "note", "diary")
+_DEMO_SEED_VERSION: Final    = 2
+_DEMO_ITEM_TYPES: Final      = ("event", "task", "ledger", "note", "diary")
 _MAX_CLIENT_KEY_CHARS: Final = 128
-_DATE_FIELDS: Final = ("ledger_date", "diary_date", "plan_date")
-_DATETIME_FIELDS: Final = (
+_DATE_FIELDS: Final          = ("ledger_date", "diary_date", "plan_date")
+_DATETIME_FIELDS: Final      = (
     "created_at",
     "updated_at",
     "start_time",
@@ -34,7 +34,7 @@ _DATETIME_FIELDS: Final = (
     "last_viewed",
     "deleted_at",
 )
-_DEMO_CREATE_LOCK = threading.Lock()
+_DEMO_CREATE_LOCK                          = threading.Lock()
 _DEMO_REQUESTS: dict[str, deque[datetime]] = {}
 
 
@@ -75,10 +75,10 @@ def _is_expired(expires_at: datetime | None, now: datetime) -> bool:
         return True
     try:
         expires_offset = expires_at.utcoffset()
-        now_offset = now.utcoffset()
+        now_offset     = now.utcoffset()
         if (expires_offset is None) == (now_offset is None):
             return expires_at <= now
-        return expires_at.astimezone(timezone.utc) <= now.astimezone(timezone.utc)
+        return expires_at.astimezone(UTC) <= now.astimezone(UTC)
     except (OSError, OverflowError, TypeError, ValueError):
         return True
 
@@ -101,7 +101,7 @@ def purge_demo_owner(db: Database, owner_id: str) -> None:
     if not _is_demo_owner(owner_id):
         return
 
-    conn = db.get_connection()
+    conn   = db.get_connection()
     cursor = conn.cursor()
     with conn:
         # 先按所有者子查询清除无外键约束的条目附属数据，避免动态占位符上限。
@@ -129,8 +129,8 @@ def purge_demo_owner(db: Database, owner_id: str) -> None:
 def purge_expired_demo_users(db: Database, now: datetime | None = None) -> int:
     """回收过期或设置损坏的演示用户，避免其永久占用容量。"""
 
-    now = now or datetime.now()
-    conn = db.get_connection()
+    now    = now or datetime.now()
+    conn   = db.get_connection()
     cursor = conn.cursor()
     cursor.execute(
         "SELECT user_id, settings_json FROM user_settings WHERE user_id LIKE ?",
@@ -163,9 +163,9 @@ def ensure_demo_access(db: Database, owner_id: str, now: datetime | None = None)
     if not _is_demo_owner(owner_id):
         return
 
-    now = now or datetime.now()
+    now      = now or datetime.now()
     settings = db.get_user_settings(owner_id)
-    custom = settings.get("settings_json") or {}
+    custom   = settings.get("settings_json") or {}
     if not isinstance(custom, dict) or custom.get("demo_mode") is not True:
         purge_demo_owner(db, owner_id)
         raise AuthError("Demo session is unavailable")
@@ -270,9 +270,9 @@ def _transform_demo_record(
 def _seed_demo_items(db: Database, owner_id: str, now: datetime) -> None:
     """为一个新演示所有者批量写入经平移和隔离后的模板条目。"""
 
-    records = _load_demo_template_records()
+    records    = _load_demo_template_records()
     delta_days = (now.date() - _DEMO_TEMPLATE_ANCHOR).days
-    id_map = {str(record["id"]): new_internal_id() for record in records if record.get("id")}
+    id_map     = {str(record["id"]): new_internal_id() for record in records if record.get("id")}
     operations = [
         ("insert", _transform_demo_record(record, id_map, delta_days)) for record in records
     ]
@@ -311,7 +311,7 @@ def create_demo_session(
         normalized_client, request_times = _recent_demo_requests(client_key, now)
         if len(request_times) >= PendoConfig.WEB_DEMO_REQUESTS_PER_HOUR:
             raise DemoCapacityError("Demo creation rate limit exceeded; please try again later")
-        conn = db.get_connection()
+        conn   = db.get_connection()
         active = conn.execute(
             "SELECT COUNT(*) FROM user_settings WHERE user_id LIKE ?",
             (f"{_DEMO_PREFIX}%",),

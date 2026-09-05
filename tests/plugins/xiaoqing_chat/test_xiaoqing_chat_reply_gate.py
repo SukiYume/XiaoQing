@@ -14,7 +14,7 @@ from tests.helpers.xiaoqing_chat_test_support import (
     time,
 )
 
-mock_context = _fixture_support.mock_context
+mock_context       = _fixture_support.mock_context
 sample_group_event = _fixture_support.sample_group_event
 
 
@@ -23,26 +23,26 @@ class TestReplyGate:
     async def test_heartflow_low_score_does_not_reduce_group_base_probability(self):
         from unittest.mock import MagicMock, patch
 
-        runtime = MagicMock()
-        runtime.cfg.reply_probability_base = 0.6
-        runtime.cfg.min_reply_interval_seconds = 0.0
-        runtime.cfg.max_replies_per_minute = 100
-        runtime.cfg.continuous_reply_limit = 0
-        runtime.cfg.continuous_cooldown_seconds = 0.0
-        runtime.cfg.heartflow.enable_heartflow = True
-        runtime.cfg.heartflow.base_score = 0.2
-        runtime.cfg.heartflow.weight_question = 0.12
-        runtime.cfg.heartflow.weight_goal_match = 0.06
-        runtime.cfg.heartflow.weight_short_text = -0.08
-        runtime.cfg.heartflow.weight_no_reply_streak = 0.05
-        runtime.cfg.heartflow.weight_long_silence = 0.08
+        runtime                                          = MagicMock()
+        runtime.cfg.reply_probability_base               = 0.6
+        runtime.cfg.min_reply_interval_seconds           = 0.0
+        runtime.cfg.max_replies_per_minute               = 100
+        runtime.cfg.continuous_reply_limit               = 0
+        runtime.cfg.continuous_cooldown_seconds          = 0.0
+        runtime.cfg.heartflow.enable_heartflow           = True
+        runtime.cfg.heartflow.base_score                 = 0.2
+        runtime.cfg.heartflow.weight_question            = 0.12
+        runtime.cfg.heartflow.weight_goal_match          = 0.06
+        runtime.cfg.heartflow.weight_short_text          = -0.08
+        runtime.cfg.heartflow.weight_no_reply_streak     = 0.05
+        runtime.cfg.heartflow.weight_long_silence        = 0.08
         runtime.cfg.brain_chat.enable_private_brain_chat = False
-        runtime.cfg.goal.enable_goal = False
+        runtime.cfg.goal.enable_goal                     = False
 
-        state = MagicMock()
-        state.get_last_reply_ts.return_value = 0.0
+        state                                            = MagicMock()
+        state.get_last_reply_ts.return_value             = 0.0
         state.get_continuous_cooldown_until.return_value = 0.0
-        state.get_reply_timestamps.return_value = []
+        state.get_reply_timestamps.return_value          = []
         state.goal_store.get_async = AsyncMock(return_value=SimpleNamespace(goal=""))
         state.heartflow.score_async = AsyncMock(return_value=0.2)
         state.heartflow.get_async = AsyncMock(return_value=SimpleNamespace(no_reply_streak=0))
@@ -59,18 +59,18 @@ class TestReplyGate:
     async def test_reply_gate_records_random_skip_reason(self):
         from plugins.xiaoqing_chat.frequency_control import _should_reply
 
-        runtime = MagicMock()
-        runtime.cfg.reply_probability_base = 0.6
-        runtime.cfg.min_reply_interval_seconds = 0.0
-        runtime.cfg.max_replies_per_minute = 100
-        runtime.cfg.heartflow.enable_heartflow = False
+        runtime                                          = MagicMock()
+        runtime.cfg.reply_probability_base               = 0.6
+        runtime.cfg.min_reply_interval_seconds           = 0.0
+        runtime.cfg.max_replies_per_minute               = 100
+        runtime.cfg.heartflow.enable_heartflow           = False
         runtime.cfg.brain_chat.enable_private_brain_chat = False
-        runtime.cfg.goal.enable_goal = False
+        runtime.cfg.goal.enable_goal                     = False
 
-        state = MagicMock()
-        state.get_last_reply_ts.return_value = 0.0
+        state                                            = MagicMock()
+        state.get_last_reply_ts.return_value             = 0.0
         state.get_continuous_cooldown_until.return_value = 0.0
-        state.get_reply_timestamps.return_value = []
+        state.get_reply_timestamps.return_value          = []
         state.goal_store.get_async = AsyncMock(return_value=None)
         state.heartflow.get_async = AsyncMock(return_value=SimpleNamespace(no_reply_streak=0))
         state.set_reply_gate_decision = Mock()
@@ -88,18 +88,18 @@ class TestReplyGate:
     async def test_reply_gate_skips_standalone_protocol_face_without_planning(self):
         from plugins.xiaoqing_chat.frequency_control import _should_reply
 
-        runtime = MagicMock()
-        runtime.cfg.reply_probability_base = 1.0
+        runtime                                = MagicMock()
+        runtime.cfg.reply_probability_base     = 1.0
         runtime.cfg.min_reply_interval_seconds = 0.0
-        runtime.cfg.max_replies_per_minute = 100
+        runtime.cfg.max_replies_per_minute     = 100
         runtime.cfg.heartflow.enable_heartflow = True
-        runtime.cfg.goal.enable_goal = False
+        runtime.cfg.goal.enable_goal           = False
 
-        state = MagicMock()
-        state.get_last_reply_ts.return_value = 0.0
+        state                                            = MagicMock()
+        state.get_last_reply_ts.return_value             = 0.0
         state.get_continuous_cooldown_until.return_value = 0.0
-        state.get_reply_timestamps.return_value = []
-        state.set_reply_gate_decision = Mock()
+        state.get_reply_timestamps.return_value          = []
+        state.set_reply_gate_decision                    = Mock()
 
         result = await _should_reply(
             runtime,
@@ -119,18 +119,18 @@ class TestReplyGate:
     async def test_reply_gate_skips_turn_explicitly_addressed_to_another_member(self):
         from plugins.xiaoqing_chat.frequency_control import _should_reply
 
-        runtime = MagicMock()
-        runtime.cfg.reply_probability_base = 1.0
+        runtime                                = MagicMock()
+        runtime.cfg.reply_probability_base     = 1.0
         runtime.cfg.min_reply_interval_seconds = 0.0
-        runtime.cfg.max_replies_per_minute = 100
+        runtime.cfg.max_replies_per_minute     = 100
         runtime.cfg.heartflow.enable_heartflow = True
-        runtime.cfg.goal.enable_goal = False
+        runtime.cfg.goal.enable_goal           = False
 
-        state = MagicMock()
-        state.get_last_reply_ts.return_value = 0.0
+        state                                            = MagicMock()
+        state.get_last_reply_ts.return_value             = 0.0
         state.get_continuous_cooldown_until.return_value = 0.0
-        state.get_reply_timestamps.return_value = []
-        state.set_reply_gate_decision = Mock()
+        state.get_reply_timestamps.return_value          = []
+        state.set_reply_gate_decision                    = Mock()
 
         result = await _should_reply(
             runtime,
@@ -150,18 +150,18 @@ class TestReplyGate:
     async def test_clear_group_participation_cue_uses_higher_probability(self):
         from plugins.xiaoqing_chat.frequency_control import _should_reply
 
-        runtime = MagicMock()
-        runtime.cfg.reply_probability_base = 0.45
+        runtime                                         = MagicMock()
+        runtime.cfg.reply_probability_base              = 0.45
         runtime.cfg.participation_cue_reply_probability = 0.8
-        runtime.cfg.min_reply_interval_seconds = 0.0
-        runtime.cfg.max_replies_per_minute = 100
-        runtime.cfg.heartflow.enable_heartflow = False
-        runtime.cfg.goal.enable_goal = False
+        runtime.cfg.min_reply_interval_seconds          = 0.0
+        runtime.cfg.max_replies_per_minute              = 100
+        runtime.cfg.heartflow.enable_heartflow          = False
+        runtime.cfg.goal.enable_goal                    = False
 
-        state = MagicMock()
-        state.get_last_reply_ts.return_value = 0.0
+        state                                            = MagicMock()
+        state.get_last_reply_ts.return_value             = 0.0
         state.get_continuous_cooldown_until.return_value = 0.0
-        state.get_reply_timestamps.return_value = []
+        state.get_reply_timestamps.return_value          = []
         state.goal_store.get_async = AsyncMock(return_value=None)
         state.heartflow.get_async = AsyncMock(return_value=SimpleNamespace(no_reply_streak=0))
         state.set_reply_gate_decision = Mock()
@@ -185,18 +185,18 @@ class TestReplyGate:
     async def test_message_directed_to_other_is_rejected_before_probability_roll(self):
         from plugins.xiaoqing_chat.frequency_control import _should_reply
 
-        runtime = MagicMock()
-        runtime.cfg.reply_probability_base = 0.45
+        runtime                                         = MagicMock()
+        runtime.cfg.reply_probability_base              = 0.45
         runtime.cfg.participation_cue_reply_probability = 0.8
-        runtime.cfg.min_reply_interval_seconds = 0.0
-        runtime.cfg.max_replies_per_minute = 100
-        runtime.cfg.heartflow.enable_heartflow = False
-        runtime.cfg.goal.enable_goal = False
+        runtime.cfg.min_reply_interval_seconds          = 0.0
+        runtime.cfg.max_replies_per_minute              = 100
+        runtime.cfg.heartflow.enable_heartflow          = False
+        runtime.cfg.goal.enable_goal                    = False
 
-        state = MagicMock()
-        state.get_last_reply_ts.return_value = 0.0
+        state                                            = MagicMock()
+        state.get_last_reply_ts.return_value             = 0.0
         state.get_continuous_cooldown_until.return_value = 0.0
-        state.get_reply_timestamps.return_value = []
+        state.get_reply_timestamps.return_value          = []
         state.goal_store.get_async = AsyncMock(return_value=None)
         state.heartflow.get_async = AsyncMock(return_value=SimpleNamespace(no_reply_streak=0))
         state.set_reply_gate_decision = Mock()
@@ -222,18 +222,18 @@ class TestReplyGate:
     async def test_reply_gate_records_min_interval_skip_reason(self):
         from plugins.xiaoqing_chat.frequency_control import _should_reply
 
-        runtime = MagicMock()
-        runtime.cfg.reply_probability_base = 0.6
-        runtime.cfg.min_reply_interval_seconds = 10.0
-        runtime.cfg.max_replies_per_minute = 100
-        runtime.cfg.heartflow.enable_heartflow = False
+        runtime                                          = MagicMock()
+        runtime.cfg.reply_probability_base               = 0.6
+        runtime.cfg.min_reply_interval_seconds           = 10.0
+        runtime.cfg.max_replies_per_minute               = 100
+        runtime.cfg.heartflow.enable_heartflow           = False
         runtime.cfg.brain_chat.enable_private_brain_chat = False
-        runtime.cfg.goal.enable_goal = False
+        runtime.cfg.goal.enable_goal                     = False
 
-        state = MagicMock()
-        state.get_last_reply_ts.return_value = 95.0
+        state                                            = MagicMock()
+        state.get_last_reply_ts.return_value             = 95.0
         state.get_continuous_cooldown_until.return_value = 0.0
-        state.get_reply_timestamps.return_value = []
+        state.get_reply_timestamps.return_value          = []
         state.goal_store.get_async = AsyncMock(return_value=None)
         state.heartflow.get_async = AsyncMock(return_value=SimpleNamespace(no_reply_streak=0))
         state.set_reply_gate_decision = Mock()
@@ -251,24 +251,24 @@ class TestReplyGate:
     async def test_active_topic_min_interval_uses_configured_value(self):
         from plugins.xiaoqing_chat.frequency_control import _should_reply
 
-        runtime = MagicMock()
-        runtime.cfg.reply_probability_base = 0.6
-        runtime.cfg.min_reply_interval_seconds = 10.0
-        runtime.cfg.active_topic_min_reply_interval = 4.0
+        runtime                                              = MagicMock()
+        runtime.cfg.reply_probability_base                   = 0.6
+        runtime.cfg.min_reply_interval_seconds               = 10.0
+        runtime.cfg.active_topic_min_reply_interval          = 4.0
         runtime.cfg.active_topic_question_min_reply_interval = 2.0
-        runtime.cfg.participation_cue_reply_probability = 0.8
-        runtime.cfg.active_topic_reply_probability = 0.6
-        runtime.cfg.active_topic_question_reply_probability = 0.9
-        runtime.cfg.max_replies_per_minute = 100
-        runtime.cfg.heartflow.enable_heartflow = False
-        runtime.cfg.brain_chat.enable_private_brain_chat = False
-        runtime.cfg.goal.enable_goal = True
+        runtime.cfg.participation_cue_reply_probability      = 0.8
+        runtime.cfg.active_topic_reply_probability           = 0.6
+        runtime.cfg.active_topic_question_reply_probability  = 0.9
+        runtime.cfg.max_replies_per_minute                   = 100
+        runtime.cfg.heartflow.enable_heartflow               = False
+        runtime.cfg.brain_chat.enable_private_brain_chat     = False
+        runtime.cfg.goal.enable_goal                         = True
 
-        state = MagicMock()
-        state.get_last_reply_ts.return_value = 97.0
+        state                                            = MagicMock()
+        state.get_last_reply_ts.return_value             = 97.0
         state.get_continuous_cooldown_until.return_value = 0.0
-        state.get_reply_timestamps.return_value = []
-        state.goal_store.get_async = AsyncMock(
+        state.get_reply_timestamps.return_value          = []
+        state.goal_store.get_async                       = AsyncMock(
             return_value=SimpleNamespace(goal="自然聊天", ts=95.0)
         )
         state.heartflow.get_async = AsyncMock(return_value=SimpleNamespace(no_reply_streak=0))
@@ -297,22 +297,22 @@ class TestReplyGate:
     async def test_active_topic_uses_explicit_probability_without_aggressive_boost(self):
         from plugins.xiaoqing_chat.frequency_control import _should_reply
 
-        runtime = MagicMock()
-        runtime.cfg.reply_probability_base = 0.45
-        runtime.cfg.active_topic_reply_probability = 0.6
-        runtime.cfg.min_reply_interval_seconds = 0.0
-        runtime.cfg.active_topic_min_reply_interval = 0.0
+        runtime                                              = MagicMock()
+        runtime.cfg.reply_probability_base                   = 0.45
+        runtime.cfg.active_topic_reply_probability           = 0.6
+        runtime.cfg.min_reply_interval_seconds               = 0.0
+        runtime.cfg.active_topic_min_reply_interval          = 0.0
         runtime.cfg.active_topic_question_min_reply_interval = 0.0
-        runtime.cfg.participation_cue_reply_probability = 0.8
-        runtime.cfg.max_replies_per_minute = 100
-        runtime.cfg.heartflow.enable_heartflow = False
-        runtime.cfg.goal.enable_goal = True
+        runtime.cfg.participation_cue_reply_probability      = 0.8
+        runtime.cfg.max_replies_per_minute                   = 100
+        runtime.cfg.heartflow.enable_heartflow               = False
+        runtime.cfg.goal.enable_goal                         = True
 
-        state = MagicMock()
-        state.get_last_reply_ts.return_value = 90.0
+        state                                            = MagicMock()
+        state.get_last_reply_ts.return_value             = 90.0
         state.get_continuous_cooldown_until.return_value = 0.0
-        state.get_reply_timestamps.return_value = []
-        state.goal_store.get_async = AsyncMock(
+        state.get_reply_timestamps.return_value          = []
+        state.goal_store.get_async                       = AsyncMock(
             return_value=SimpleNamespace(goal="已有话题", ts=80.0)
         )
         state.heartflow.get_async = AsyncMock(return_value=SimpleNamespace(no_reply_streak=0))
@@ -344,26 +344,26 @@ class TestReplyGate:
     async def test_group_heartflow_bonus_stays_soft(self):
         from unittest.mock import MagicMock, patch
 
-        runtime = MagicMock()
-        runtime.cfg.reply_probability_base = 0.6
-        runtime.cfg.min_reply_interval_seconds = 0.0
-        runtime.cfg.max_replies_per_minute = 100
-        runtime.cfg.continuous_reply_limit = 0
-        runtime.cfg.continuous_cooldown_seconds = 0.0
-        runtime.cfg.heartflow.enable_heartflow = True
-        runtime.cfg.heartflow.base_score = 0.2
-        runtime.cfg.heartflow.weight_question = 0.12
-        runtime.cfg.heartflow.weight_goal_match = 0.06
-        runtime.cfg.heartflow.weight_short_text = -0.08
-        runtime.cfg.heartflow.weight_no_reply_streak = 0.05
-        runtime.cfg.heartflow.weight_long_silence = 0.08
+        runtime                                          = MagicMock()
+        runtime.cfg.reply_probability_base               = 0.6
+        runtime.cfg.min_reply_interval_seconds           = 0.0
+        runtime.cfg.max_replies_per_minute               = 100
+        runtime.cfg.continuous_reply_limit               = 0
+        runtime.cfg.continuous_cooldown_seconds          = 0.0
+        runtime.cfg.heartflow.enable_heartflow           = True
+        runtime.cfg.heartflow.base_score                 = 0.2
+        runtime.cfg.heartflow.weight_question            = 0.12
+        runtime.cfg.heartflow.weight_goal_match          = 0.06
+        runtime.cfg.heartflow.weight_short_text          = -0.08
+        runtime.cfg.heartflow.weight_no_reply_streak     = 0.05
+        runtime.cfg.heartflow.weight_long_silence        = 0.08
         runtime.cfg.brain_chat.enable_private_brain_chat = False
-        runtime.cfg.goal.enable_goal = False
+        runtime.cfg.goal.enable_goal                     = False
 
-        state = MagicMock()
-        state.get_last_reply_ts.return_value = 0.0
+        state                                            = MagicMock()
+        state.get_last_reply_ts.return_value             = 0.0
         state.get_continuous_cooldown_until.return_value = 0.0
-        state.get_reply_timestamps.return_value = []
+        state.get_reply_timestamps.return_value          = []
         state.goal_store.get_async = AsyncMock(return_value=SimpleNamespace(goal=""))
         state.heartflow.score_async = AsyncMock(return_value=0.32)
         state.heartflow.get_async = AsyncMock(return_value=SimpleNamespace(no_reply_streak=0))
@@ -380,20 +380,20 @@ class TestReplyGate:
     async def test_long_no_reply_streak_can_break_through_low_interest_group_chatter(self):
         from unittest.mock import MagicMock, patch
 
-        runtime = MagicMock()
-        runtime.cfg.reply_probability_base = 0.5
-        runtime.cfg.min_reply_interval_seconds = 0.0
-        runtime.cfg.max_replies_per_minute = 100
-        runtime.cfg.continuous_reply_limit = 0
-        runtime.cfg.continuous_cooldown_seconds = 0.0
-        runtime.cfg.heartflow.enable_heartflow = False
+        runtime                                          = MagicMock()
+        runtime.cfg.reply_probability_base               = 0.5
+        runtime.cfg.min_reply_interval_seconds           = 0.0
+        runtime.cfg.max_replies_per_minute               = 100
+        runtime.cfg.continuous_reply_limit               = 0
+        runtime.cfg.continuous_cooldown_seconds          = 0.0
+        runtime.cfg.heartflow.enable_heartflow           = False
         runtime.cfg.brain_chat.enable_private_brain_chat = False
-        runtime.cfg.goal.enable_goal = False
+        runtime.cfg.goal.enable_goal                     = False
 
-        state = MagicMock()
-        state.get_last_reply_ts.return_value = 0.0
+        state                                            = MagicMock()
+        state.get_last_reply_ts.return_value             = 0.0
         state.get_continuous_cooldown_until.return_value = 0.0
-        state.get_reply_timestamps.return_value = []
+        state.get_reply_timestamps.return_value          = []
         state.goal_store.get_async = AsyncMock(return_value=SimpleNamespace(goal=""))
         state.heartflow.score_async = AsyncMock(return_value=1.0)
         state.heartflow.get_async = AsyncMock(return_value=SimpleNamespace(no_reply_streak=12))
@@ -415,17 +415,17 @@ def test_group_wait_plan_is_preserved_before_first_reply(tmp_path):
     from plugins.xiaoqing_chat.planning.pfc_engine import run_pfc_once
     from plugins.xiaoqing_chat.planning.pfc_state import PFCStateStore
 
-    chat_id = "group-1"
-    cfg = XiaoQingChatConfig()
-    context = MagicMock()
-    context.data_dir = tmp_path
+    chat_id              = "group-1"
+    cfg                  = XiaoQingChatConfig()
+    context              = MagicMock()
+    context.data_dir     = tmp_path
     context.http_session = AsyncMock()
 
     memory_store = MemoryStore()
     memory_store.append(chat_id, role="user", name="Tester", content="有人在聊火锅")
 
-    action_history = ActionHistoryStore()
-    memory_db = MagicMock()
+    action_history  = ActionHistoryStore()
+    memory_db       = MagicMock()
     pfc_state_store = PFCStateStore()
     generate_reply = AsyncMock(return_value="我也想吃火锅")
 
@@ -468,21 +468,21 @@ def test_group_wait_plan_is_preserved_after_bot_already_replied(tmp_path):
     from plugins.xiaoqing_chat.planning.pfc_engine import run_pfc_once
     from plugins.xiaoqing_chat.planning.pfc_state import PFCStateStore
 
-    chat_id = "group-2"
-    cfg = XiaoQingChatConfig()
-    context = MagicMock()
-    context.data_dir = tmp_path
+    chat_id              = "group-2"
+    cfg                  = XiaoQingChatConfig()
+    context              = MagicMock()
+    context.data_dir     = tmp_path
     context.http_session = AsyncMock()
 
     memory_store = MemoryStore()
     memory_store.append(chat_id, role="assistant", name="小青", content="刚刚说过了")
     memory_store.append(chat_id, role="user", name="Tester", content="收到")
 
-    action_history = ActionHistoryStore()
-    memory_db = MagicMock()
+    action_history  = ActionHistoryStore()
+    memory_db       = MagicMock()
     pfc_state_store = PFCStateStore()
     pfc_state_store.bind(tmp_path)
-    st = pfc_state_store.get(chat_id)
+    st                              = pfc_state_store.get(chat_id)
     st.last_successful_reply_action = "direct_reply"
     pfc_state_store.save(chat_id)
     generate_reply = AsyncMock(return_value="不该发送")
@@ -525,23 +525,23 @@ async def test_run_pfc_once_drops_stale_followup_reply_action(tmp_path):
     from plugins.xiaoqing_chat.planning.pfc_engine import run_pfc_once
     from plugins.xiaoqing_chat.planning.pfc_state import PFCStateStore
 
-    now = time.time()
-    chat_id = "stale-followup-action"
-    cfg = XiaoQingChatConfig()
+    now                                    = time.time()
+    chat_id                                = "stale-followup-action"
+    cfg                                    = XiaoQingChatConfig()
     cfg.pfc_followup_action_window_seconds = 120.0
-    context = MagicMock()
-    context.data_dir = tmp_path
-    context.http_session = AsyncMock()
+    context                                = MagicMock()
+    context.data_dir                       = tmp_path
+    context.http_session                   = AsyncMock()
 
     memory_store = MemoryStore()
     memory_store.append(chat_id, role="assistant", name="小青", content="很久前说过", ts=now - 3600)
     memory_store.append(chat_id, role="user", name="Tester", content="新图来了", ts=now - 1)
 
-    action_history = ActionHistoryStore()
-    memory_db = MagicMock()
+    action_history  = ActionHistoryStore()
+    memory_db       = MagicMock()
     pfc_state_store = PFCStateStore()
     pfc_state_store.bind(tmp_path)
-    st = pfc_state_store.get(chat_id)
+    st                              = pfc_state_store.get(chat_id)
     st.last_successful_reply_action = "direct_reply"
     pfc_state_store.save(chat_id)
     generate_reply = AsyncMock(return_value="不该发送")
@@ -556,18 +556,18 @@ async def test_run_pfc_once_drops_stale_followup_reply_action(tmp_path):
         new=fake_plan_next_action,
     ):
         result = await run_pfc_once(
-            context=context,
-            runtime_cfg=cfg,
-            secrets={"api_base": "http://test", "api_key": "key", "model": "test-model"},
-            bot_name="小青",
-            is_private=False,
-            chat_id=chat_id,
-            current_text="新图来了",
-            memory_store=memory_store,
-            action_history=action_history,
-            memory_db=memory_db,
-            pfc_state_store=pfc_state_store,
-            generate_reply=generate_reply,
+            context         = context,
+            runtime_cfg     = cfg,
+            secrets         = {"api_base": "http://test", "api_key": "key", "model": "test-model"},
+            bot_name        = "小青",
+            is_private      = False,
+            chat_id         = chat_id,
+            current_text    = "新图来了",
+            memory_store    = memory_store,
+            action_history  = action_history,
+            memory_db       = memory_db,
+            pfc_state_store = pfc_state_store,
+            generate_reply  = generate_reply,
         )
 
     assert captured["last_successful_reply_action"] == ""
@@ -585,23 +585,23 @@ async def test_run_pfc_once_keeps_recent_followup_reply_action(tmp_path):
     from plugins.xiaoqing_chat.planning.pfc_engine import run_pfc_once
     from plugins.xiaoqing_chat.planning.pfc_state import PFCStateStore
 
-    now = time.time()
-    chat_id = "recent-followup-action"
-    cfg = XiaoQingChatConfig()
+    now                                    = time.time()
+    chat_id                                = "recent-followup-action"
+    cfg                                    = XiaoQingChatConfig()
     cfg.pfc_followup_action_window_seconds = 120.0
-    context = MagicMock()
-    context.data_dir = tmp_path
-    context.http_session = AsyncMock()
+    context                                = MagicMock()
+    context.data_dir                       = tmp_path
+    context.http_session                   = AsyncMock()
 
     memory_store = MemoryStore()
     memory_store.append(chat_id, role="assistant", name="小青", content="刚说过", ts=now - 30)
     memory_store.append(chat_id, role="user", name="Tester", content="接一句", ts=now - 1)
 
-    action_history = ActionHistoryStore()
-    memory_db = MagicMock()
+    action_history  = ActionHistoryStore()
+    memory_db       = MagicMock()
     pfc_state_store = PFCStateStore()
     pfc_state_store.bind(tmp_path)
-    st = pfc_state_store.get(chat_id)
+    st                              = pfc_state_store.get(chat_id)
     st.last_successful_reply_action = "direct_reply"
     pfc_state_store.save(chat_id)
     generate_reply = AsyncMock(return_value="")
@@ -616,18 +616,18 @@ async def test_run_pfc_once_keeps_recent_followup_reply_action(tmp_path):
         new=fake_plan_next_action,
     ):
         result = await run_pfc_once(
-            context=context,
-            runtime_cfg=cfg,
-            secrets={"api_base": "http://test", "api_key": "key", "model": "test-model"},
-            bot_name="小青",
-            is_private=False,
-            chat_id=chat_id,
-            current_text="接一句",
-            memory_store=memory_store,
-            action_history=action_history,
-            memory_db=memory_db,
-            pfc_state_store=pfc_state_store,
-            generate_reply=generate_reply,
+            context         = context,
+            runtime_cfg     = cfg,
+            secrets         = {"api_base": "http://test", "api_key": "key", "model": "test-model"},
+            bot_name        = "小青",
+            is_private      = False,
+            chat_id         = chat_id,
+            current_text    = "接一句",
+            memory_store    = memory_store,
+            action_history  = action_history,
+            memory_db       = memory_db,
+            pfc_state_store = pfc_state_store,
+            generate_reply  = generate_reply,
         )
 
     assert captured["last_successful_reply_action"] == "direct_reply"
@@ -643,11 +643,11 @@ async def test_run_pfc_once_preserves_group_wait_plan_for_live_short_followups(t
     from plugins.xiaoqing_chat.planning.pfc_engine import run_pfc_once
     from plugins.xiaoqing_chat.planning.pfc_state import PFCStateStore
 
-    now = time.time()
-    chat_id = "group-live-short-followups"
-    cfg = XiaoQingChatConfig()
-    context = MagicMock()
-    context.data_dir = tmp_path
+    now                  = time.time()
+    chat_id              = "group-live-short-followups"
+    cfg                  = XiaoQingChatConfig()
+    context              = MagicMock()
+    context.data_dir     = tmp_path
     context.http_session = AsyncMock()
 
     memory_store = MemoryStore()
@@ -655,11 +655,11 @@ async def test_run_pfc_once_preserves_group_wait_plan_for_live_short_followups(t
     memory_store.append(chat_id, role="user", name="Tester", content="乐", ts=now - 5)
     memory_store.append(chat_id, role="user", name="Tester", content="今儿碰见了", ts=now - 1)
 
-    action_history = ActionHistoryStore()
-    memory_db = MagicMock()
+    action_history  = ActionHistoryStore()
+    memory_db       = MagicMock()
     pfc_state_store = PFCStateStore()
     pfc_state_store.bind(tmp_path)
-    st = pfc_state_store.get(chat_id)
+    st                              = pfc_state_store.get(chat_id)
     st.last_successful_reply_action = "direct_reply"
     pfc_state_store.save(chat_id)
     generate_reply = AsyncMock(return_value="细说，碰见谁了")
@@ -668,26 +668,26 @@ async def test_run_pfc_once_preserves_group_wait_plan_for_live_short_followups(t
         "plugins.xiaoqing_chat.planning.pfc_engine.plan_next_action",
         new=AsyncMock(
             return_value=PFCPlan(
-                action="wait",
-                reason="没有人在跟我直接对话，先等等",
-                thinking="群里在接话，但不是明确问我",
-                wait_seconds=20,
+                action       = "wait",
+                reason       = "没有人在跟我直接对话，先等等",
+                thinking     = "群里在接话，但不是明确问我",
+                wait_seconds = 20,
             )
         ),
     ):
         result = await run_pfc_once(
-            context=context,
-            runtime_cfg=cfg,
-            secrets={"api_base": "http://test", "api_key": "key", "model": "test-model"},
-            bot_name="小青",
-            is_private=False,
-            chat_id=chat_id,
-            current_text="今儿碰见了",
-            memory_store=memory_store,
-            action_history=action_history,
-            memory_db=memory_db,
-            pfc_state_store=pfc_state_store,
-            generate_reply=generate_reply,
+            context         = context,
+            runtime_cfg     = cfg,
+            secrets         = {"api_base": "http://test", "api_key": "key", "model": "test-model"},
+            bot_name        = "小青",
+            is_private      = False,
+            chat_id         = chat_id,
+            current_text    = "今儿碰见了",
+            memory_store    = memory_store,
+            action_history  = action_history,
+            memory_db       = memory_db,
+            pfc_state_store = pfc_state_store,
+            generate_reply  = generate_reply,
         )
 
     assert result.action == "wait"
@@ -700,7 +700,7 @@ async def test_memory_store_get_async_loads_via_to_thread(tmp_path):
     from plugins.xiaoqing_chat.memory.memory import MemoryStore
 
     chat_id = "threaded-load"
-    store = MemoryStore(tmp_path)
+    store   = MemoryStore(tmp_path)
     store.persist(chat_id)
     (tmp_path / f"{chat_id}.json").write_text(
         '[{"role":"user","name":"Tester","content":"hello","ts":1.0}]',

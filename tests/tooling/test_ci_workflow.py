@@ -1,3 +1,4 @@
+# 验证 CI 环境、依赖安装和检查命令与项目契约一致。
 """Keep CI and dependency installation aligned with the simplified repository."""
 
 from __future__ import annotations
@@ -9,7 +10,7 @@ import pytest
 from tests.helpers import node_esm
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT = REPOSITORY_ROOT
+ROOT     = REPOSITORY_ROOT
 WORKFLOW = ROOT / ".github" / "workflows" / "tests.yml"
 
 
@@ -108,6 +109,7 @@ def test_only_runtime_and_maintenance_utility_scripts_remain() -> None:
     assert scripts == {
         "arxiv_inference_cli.py",
         "clean_pycache.sh",
+        "format_code.py",
         "run_command_matrix.py",
         "run_core_pressure.py",
         "run_full_uat.py",

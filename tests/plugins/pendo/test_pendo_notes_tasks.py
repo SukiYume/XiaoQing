@@ -195,7 +195,7 @@ def test_event_edit_success_message_reports_final_time_timezone_and_reminders():
             return {"start_time": "2026-09-09T20:00:00"}
 
         handler._parse_updates = parse_updates
-        result = asyncio.run(
+        result                 = asyncio.run(
             handler.edit_event(
                 owner_id,
                 f"{event_id[:8]} 改到下周三晚上8点",
@@ -290,7 +290,7 @@ def test_note_list_uses_user_clock_and_counts_all_rows(
         "plugins.pendo.utils.time_utils.now_in_timezone",
         lambda _user_id, _db: fixed_now,
     )
-    db = Database(str(tmp_path / "pendo-note-list-clock.db"))
+    db       = Database(str(tmp_path / "pendo-note-list-clock.db"))
     owner_id = "note-list-clock"
 
     try:
@@ -310,10 +310,10 @@ def test_note_list_uses_user_clock_and_counts_all_rows(
                 }
             )
 
-        handler = NoteHandler(db)
-        overview = asyncio.run(handler.list_notes(owner_id, "", SimpleNamespace()))
+        handler    = NoteHandler(db)
+        overview   = asyncio.run(handler.list_notes(owner_id, "", SimpleNamespace()))
         first_page = asyncio.run(handler.list_notes(owner_id, "page:1", SimpleNamespace()))
-        monthly = asyncio.run(handler.list_notes(owner_id, "month #focus", SimpleNamespace()))
+        monthly    = asyncio.run(handler.list_notes(owner_id, "month #focus", SimpleNamespace()))
 
         assert overview["status"] == "success"
         assert "(共55项)" in overview["message"]
@@ -338,7 +338,7 @@ def test_note_create_and_view_timestamps_use_user_clock(
         "plugins.pendo.utils.time_utils.now_in_timezone",
         lambda _user_id, _db: fixed_now,
     )
-    db = Database(str(tmp_path / "pendo-note-write-clock.db"))
+    db       = Database(str(tmp_path / "pendo-note-write-clock.db"))
     owner_id = "note-write-clock"
 
     try:
@@ -365,11 +365,11 @@ def test_note_create_and_view_timestamps_use_user_clock(
 
 
 def test_note_parser_supports_quoted_fields_and_rejects_malformed_metadata(tmp_path: Path) -> None:
-    db = Database(str(tmp_path / "pendo-note-parser.db"))
+    db       = Database(str(tmp_path / "pendo-note-parser.db"))
     owner_id = "note-parser"
 
     try:
-        handler = NoteHandler(db)
+        handler  = NoteHandler(db)
         prefixed = handler._parse_note_text("title:“中文 标题” content 正文 cat:'工作 空间' #标签")
         assert prefixed["title"] == "中文 标题"
         assert prefixed["content"] == "正文"
@@ -408,7 +408,7 @@ def test_note_parser_supports_quoted_fields_and_rejects_malformed_metadata(tmp_p
 
 
 def test_note_noop_mutations_and_link_arguments_do_not_write(tmp_path: Path) -> None:
-    db = Database(str(tmp_path / "pendo-note-noop.db"))
+    db       = Database(str(tmp_path / "pendo-note-noop.db"))
     owner_id = "note-noop"
 
     try:
@@ -452,7 +452,7 @@ def test_note_noop_mutations_and_link_arguments_do_not_write(tmp_path: Path) -> 
                 }
             )
 
-        handler = NoteHandler(db)
+        handler       = NoteHandler(db)
         duplicate_tag = asyncio.run(
             handler.tag_note(owner_id, "note-source #已有", SimpleNamespace())
         )
@@ -510,8 +510,8 @@ def test_note_noop_mutations_and_link_arguments_do_not_write(tmp_path: Path) -> 
 
 
 def test_note_link_enforces_reference_limit_before_writing(tmp_path: Path) -> None:
-    db = Database(str(tmp_path / "pendo-note-reference-limit.db"))
-    owner_id = "note-reference-limit"
+    db         = Database(str(tmp_path / "pendo-note-reference-limit.db"))
+    owner_id   = "note-reference-limit"
     references = [
         {"kind": "item", "id": f"old-{index:03d}", "type": "note", "title": "旧引用"}
         for index in range(100)
@@ -562,7 +562,7 @@ def test_note_link_enforces_reference_limit_before_writing(tmp_path: Path) -> No
 def test_note_backlinks_are_newest_first_and_limited(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    db = Database(str(tmp_path / "pendo-note-backlinks.db"))
+    db       = Database(str(tmp_path / "pendo-note-backlinks.db"))
     owner_id = "note-backlinks"
 
     try:
@@ -709,7 +709,7 @@ def test_task_inline_parser_supports_quotes_clearing_and_stable_tag_deduplicatio
 
     # 字段和标签必须是完整 token；URL 片段、单词内部的 # 和相似字段名均属于标题。
     boundary_text = "scat:工作 reportp:2 notype=event"
-    boundary = handler._parse_task_text(
+    boundary      = handler._parse_task_text(
         boundary_text,
         "task-parser-user",
         apply_defaults=False,
@@ -720,7 +720,7 @@ def test_task_inline_parser_supports_quotes_clearing_and_stable_tag_deduplicatio
     assert boundary["tags"] == []
 
     inline_text = "链接 https://example.test/page#fragment 和 inline#tag 不是标签"
-    inline = handler._parse_task_text(
+    inline      = handler._parse_task_text(
         inline_text,
         "task-parser-user",
         apply_defaults=False,
@@ -753,7 +753,7 @@ def test_task_inline_parser_rejects_ambiguous_or_unsafe_input(args: str) -> None
 
 
 def test_task_add_rejects_metadata_only_input_without_creating_placeholder_title(tmp_path: Path):
-    db = Database(str(tmp_path / "pendo-task-title-required.db"))
+    db       = Database(str(tmp_path / "pendo-task-title-required.db"))
     owner_id = "task-title-required"
     try:
         result = asyncio.run(
@@ -797,9 +797,9 @@ def test_task_list_rejects_duplicate_or_conflicting_controls(filter_str: str) ->
 def test_task_list_uses_exact_total_and_rejects_out_of_range_page(tmp_path: Path):
     from plugins.pendo.config import PendoConfig
 
-    db = Database(str(tmp_path / "pendo-task-exact-list.db"))
+    db       = Database(str(tmp_path / "pendo-task-exact-list.db"))
     owner_id = "task-exact-list"
-    total = PendoConfig.LIST_PAGE_SIZE * 2 + 1
+    total    = PendoConfig.LIST_PAGE_SIZE * 2 + 1
     try:
         for index in range(total):
             db.insert_item(
@@ -816,10 +816,10 @@ def test_task_list_uses_exact_total_and_rejects_out_of_range_page(tmp_path: Path
                 }
             )
 
-        handler = TaskHandler(db)
+        handler    = TaskHandler(db)
         first_page = asyncio.run(handler.list_tasks(owner_id, "open", SimpleNamespace()))
-        last_page = asyncio.run(handler.list_tasks(owner_id, "open page:3", SimpleNamespace()))
-        past_end = asyncio.run(handler.list_tasks(owner_id, "open page:4", SimpleNamespace()))
+        last_page  = asyncio.run(handler.list_tasks(owner_id, "open page:3", SimpleNamespace()))
+        past_end   = asyncio.run(handler.list_tasks(owner_id, "open page:4", SimpleNamespace()))
 
         assert first_page["status"] == "success"
         assert f"共{total}项" in first_page["message"]
@@ -834,7 +834,7 @@ def test_task_time_shortcuts_accept_offset_aware_legacy_deadline(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    db = Database(str(tmp_path / "pendo-task-aware-deadline.db"))
+    db       = Database(str(tmp_path / "pendo-task-aware-deadline.db"))
     owner_id = "task-aware-deadline"
     try:
         db.insert_item(
@@ -863,7 +863,7 @@ def test_task_time_shortcuts_accept_offset_aware_legacy_deadline(
 
 
 def test_task_edit_can_clear_schedule_and_skips_identical_second_write(tmp_path: Path):
-    db = Database(str(tmp_path / "pendo-task-clear-noop.db"))
+    db       = Database(str(tmp_path / "pendo-task-clear-noop.db"))
     owner_id = "task-clear-noop"
     try:
         db.insert_item(
@@ -898,7 +898,7 @@ def test_task_edit_can_clear_schedule_and_skips_identical_second_write(tmp_path:
                 SimpleNamespace(),
             )
         )
-        task = db.get_item("task-clear-fields", owner_id)
+        task      = db.get_item("task-clear-fields", owner_id)
         edit_logs = (
             db.get_connection()
             .execute(
@@ -920,7 +920,7 @@ def test_task_edit_can_clear_schedule_and_skips_identical_second_write(tmp_path:
 
 
 def test_task_status_transitions_are_idempotent_and_require_one_id(tmp_path: Path):
-    db = Database(str(tmp_path / "pendo-task-status-idempotent.db"))
+    db       = Database(str(tmp_path / "pendo-task-status-idempotent.db"))
     owner_id = "task-status-idempotent"
     try:
         db.insert_item(
@@ -978,7 +978,7 @@ def test_task_status_transitions_are_idempotent_and_require_one_id(tmp_path: Pat
 
 
 def test_task_category_delete_requires_one_exact_target(tmp_path: Path):
-    db = Database(str(tmp_path / "pendo-task-delete-exact.db"))
+    db       = Database(str(tmp_path / "pendo-task-delete-exact.db"))
     owner_id = "task-delete-exact"
     try:
         db.insert_item(

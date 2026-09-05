@@ -16,7 +16,7 @@ from ..store_base import delete_json_artifacts
 def _checkpoint_path(data_dir: Path, chat_id: str) -> Path:
     """返回一个防目录穿越、按会话稳定映射的检查点路径。"""
 
-    scope = str(chat_id or "").strip()
+    scope  = str(chat_id or "").strip()
     digest = hashlib.sha256(scope.encode("utf-8")).hexdigest()
     return Path(data_dir) / "fact_extraction" / f"{digest}.json"
 

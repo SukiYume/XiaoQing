@@ -16,10 +16,10 @@ from plugins.minecraft.log_monitor import LogBatch, LogEvent, LogEventType, LogM
 
 def _chime_context(tmp_path: Path, groups: list[int]) -> SimpleNamespace:
     return SimpleNamespace(
-        data_dir=tmp_path,
-        logger=MagicMock(),
-        default_groups=lambda: groups,
-        send_action=AsyncMock(),
+        data_dir       = tmp_path,
+        logger         = MagicMock(),
+        default_groups = lambda: groups,
+        send_action    = AsyncMock(),
     )
 
 
@@ -65,7 +65,7 @@ def test_default_group_targets_normalizes_invalid_and_duplicate_values() -> None
 def test_chime_placeholder_timestamp_is_not_a_valid_event() -> None:
     for placeholder in ("N/A", "unknown", "null", "-"):
         data = _chime_payload(placeholder)
-        frb = chime.FRBData("FRB20260714A", data["FRB20260714A"])
+        frb  = chime.FRBData("FRB20260714A", data["FRB20260714A"])
         assert frb.is_valid() is False
 
 
@@ -125,7 +125,7 @@ async def test_chime_commit_before_outbox_clear_does_not_resend(
     fetch = AsyncMock(return_value=_chime_payload())
     monkeypatch.setattr(chime, "fetch_chime_repeaters", fetch)
     original_clear = chime.clear_pending
-    clear_calls = 0
+    clear_calls    = 0
 
     def interrupt_first_clear(path: Path) -> None:
         nonlocal clear_calls
@@ -151,12 +151,12 @@ async def test_chime_commit_before_outbox_clear_does_not_resend(
 
 def _earthquake_context(tmp_path: Path, groups: list[int]) -> SimpleNamespace:
     return SimpleNamespace(
-        data_dir=tmp_path,
-        state={},
-        secrets={},
-        request_id="cr275-earthquake",
-        default_groups=lambda: groups,
-        send_action=AsyncMock(),
+        data_dir       = tmp_path,
+        state          = {},
+        secrets        = {},
+        request_id     = "cr275-earthquake",
+        default_groups = lambda: groups,
+        send_action    = AsyncMock(),
     )
 
 
@@ -196,24 +196,24 @@ async def test_earthquake_partial_fanout_retries_only_unacknowledged_group(
 
 def _mc_event(index: int = 1) -> LogEvent:
     return LogEvent(
-        event_type=LogEventType.CHAT,
-        player=f"Player{index}",
-        message=f"message-{index}",
+        event_type = LogEventType.CHAT,
+        player     = f"Player{index}",
+        message    = f"message-{index}",
     )
 
 
 def test_minecraft_log_cursor_requires_commit_and_survives_restart(tmp_path: Path) -> None:
-    log_path = tmp_path / "latest.log"
+    log_path   = tmp_path / "latest.log"
     state_path = tmp_path / "cursor.json"
     log_path.write_text(
         "[12:00:00] [Server thread/INFO]: <Player1> first\n",
         encoding="utf-8",
     )
     monitor = LogMonitor(str(log_path), state_path=state_path)
-    monitor._initialized = True
+    monitor._initialized   = True
     monitor._last_position = 0
 
-    first = monitor.check_updates()
+    first   = monitor.check_updates()
     retried = monitor.check_updates()
 
     assert [event.message for event in first.events] == ["first"]
@@ -232,10 +232,10 @@ def test_minecraft_log_cursor_requires_commit_and_survives_restart(tmp_path: Pat
 
 def test_minecraft_cursor_waits_for_complete_trailing_line(tmp_path: Path) -> None:
     log_path = tmp_path / "latest.log"
-    prefix = "[12:00:00] [Server thread/INFO]: <Player1> partial"
+    prefix   = "[12:00:00] [Server thread/INFO]: <Player1> partial"
     log_path.write_text(prefix, encoding="utf-8")
-    monitor = LogMonitor(str(log_path))
-    monitor._initialized = True
+    monitor                = LogMonitor(str(log_path))
+    monitor._initialized   = True
     monitor._last_position = 0
 
     incomplete = monitor.check_updates()
@@ -269,16 +269,16 @@ async def test_minecraft_failed_send_replays_same_uncommitted_batch(
         "[12:00:00] [Server thread/INFO]: <Player1> once\n",
         encoding="utf-8",
     )
-    monitor = LogMonitor(str(log_path))
-    monitor._initialized = True
+    monitor                = LogMonitor(str(log_path))
+    monitor._initialized   = True
     monitor._last_position = 0
-    manager = minecraft.ConnectionManager()
+    manager                = minecraft.ConnectionManager()
     await manager.replace_connection(
         minecraft.McConnection(
-            host="mc.example",
-            port=25575,
-            target=DeliveryTarget("private", 505),
-            log_monitor=monitor,
+            host        = "mc.example",
+            port        = 25575,
+            target      = DeliveryTarget("private", 505),
+            log_monitor = monitor,
         )
     )
     monkeypatch.setattr(minecraft, "_manager", manager)
@@ -299,11 +299,11 @@ async def test_minecraft_failed_send_replays_same_uncommitted_batch(
 class _TransactionalMonitor:
     def __init__(self, index: int) -> None:
         self.batch = LogBatch(
-            events=[_mc_event(index)],
-            matched_total=1,
-            cursor_before=0,
-            cursor_after=1,
-            file_identity=f"test:{index}",
+            events        = [_mc_event(index)],
+            matched_total = 1,
+            cursor_before = 0,
+            cursor_after  = 1,
+            file_identity = f"test:{index}",
         )
         self.commits = 0
 
@@ -320,17 +320,17 @@ class _TransactionalMonitor:
 async def test_minecraft_tick_overflow_keeps_unselected_batches_uncommitted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager = minecraft.ConnectionManager()
+    manager                               = minecraft.ConnectionManager()
     monitors: list[_TransactionalMonitor] = []
     for index in range(10):
         monitor = _TransactionalMonitor(index)
         monitors.append(monitor)
         await manager.replace_connection(
             minecraft.McConnection(
-                host="mc.example",
-                port=25575 + index,
-                target=DeliveryTarget("private", 600 + index),
-                log_monitor=monitor,
+                host        = "mc.example",
+                port        = 25575 + index,
+                target      = DeliveryTarget("private", 600 + index),
+                log_monitor = monitor,
             )
         )
     monkeypatch.setattr(minecraft, "_manager", manager)

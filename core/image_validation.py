@@ -1,3 +1,4 @@
+# 图片输入边界：统一验证不可信图片字节和本地文件。
 """Shared validation for untrusted image bytes and local image files."""
 
 from __future__ import annotations
@@ -30,9 +31,9 @@ DEFAULT_IMAGE_FORMAT_SUFFIXES: Final[Mapping[str, frozenset[str]]] = {
     "WEBP": frozenset({".webp"}),
 }
 
-_PNG_TRAILER: Final = b"\x00\x00\x00\x00IEND\xaeB`\x82"
-_PNG_SIGNATURE: Final = b"\x89PNG\r\n\x1a\n"
-_MAX_PNG_CHUNKS: Final = 4_096
+_PNG_TRAILER: Final                             = b"\x00\x00\x00\x00IEND\xaeB`\x82"
+_PNG_SIGNATURE: Final                           = b"\x89PNG\r\n\x1a\n"
+_MAX_PNG_CHUNKS: Final                          = 4_096
 _MODE_BYTES_PER_PIXEL: Final[Mapping[str, int]] = {
     "1": 1,
     "L": 1,
@@ -59,8 +60,8 @@ class ImageValidationLimits:
 
     max_bytes: int
     max_pixels: int
-    max_frames: int = 120
-    max_dimension: int | None = None
+    max_frames: int               = 120
+    max_dimension: int | None     = None
     max_decoded_bytes: int | None = None
 
     def __post_init__(self) -> None:
@@ -95,15 +96,15 @@ def _reject(reason: str, message: str) -> NoReturn:
 def _validate_png_container(payload: bytes) -> None:
     if not payload.startswith(_PNG_SIGNATURE):
         _reject("invalid_container", "PNG signature is invalid")
-    offset = len(_PNG_SIGNATURE)
-    chunk_count = 0
-    seen_header = False
+    offset          = len(_PNG_SIGNATURE)
+    chunk_count     = 0
+    seen_header     = False
     seen_image_data = False
     while offset < len(payload):
         if chunk_count >= _MAX_PNG_CHUNKS or offset + 12 > len(payload):
             _reject("invalid_container", "PNG chunk boundary is invalid")
         length = struct.unpack(">I", payload[offset : offset + 4])[0]
-        end = offset + 12 + length
+        end    = offset + 12 + length
         if end > len(payload):
             _reject("invalid_container", "PNG chunk is truncated")
         chunk_type = payload[offset + 4 : offset + 8]
@@ -111,9 +112,9 @@ def _validate_png_container(payload: bytes) -> None:
             65 <= byte <= 90 or 97 <= byte <= 122 for byte in chunk_type
         ):
             _reject("invalid_container", "PNG chunk type is invalid")
-        chunk_data = payload[offset + 8 : offset + 8 + length]
+        chunk_data   = payload[offset + 8 : offset + 8 + length]
         expected_crc = struct.unpack(">I", payload[offset + 8 + length : end])[0]
-        actual_crc = zlib.crc32(chunk_data, zlib.crc32(chunk_type)) & 0xFFFFFFFF
+        actual_crc   = zlib.crc32(chunk_data, zlib.crc32(chunk_type)) & 0xFFFFFFFF
         if expected_crc != actual_crc:
             _reject("invalid_container", "PNG chunk CRC is invalid")
 
@@ -189,10 +190,10 @@ def _decode_all_frames(
     allowed_modes: Mapping[str, Collection[str]] | None,
     allow_animation: bool,
 ) -> tuple[int, int, int, str]:
-    frame_count = 0
-    first_width = 0
+    frame_count  = 0
+    first_width  = 0
     first_height = 0
-    first_mode = ""
+    first_mode   = ""
     while True:
         if frame_count and not allow_animation:
             _reject("animation_not_allowed", "animated images are not allowed")
@@ -200,16 +201,16 @@ def _decode_all_frames(
             _reject("frame_limit", "image frame count limit exceeded")
         width, height, mode = _validate_frame(
             image,
-            limits=limits,
-            image_format=image_format,
-            allowed_modes=allowed_modes,
+            limits        = limits,
+            image_format  = image_format,
+            allowed_modes = allowed_modes,
         )
         image.load()
         _validate_frame(
             image,
-            limits=limits,
-            image_format=image_format,
-            allowed_modes=allowed_modes,
+            limits        = limits,
+            image_format  = image_format,
+            allowed_modes = allowed_modes,
         )
         if frame_count == 0:
             first_width, first_height, first_mode = width, height, mode
@@ -224,10 +225,10 @@ def validate_image_bytes(
     payload: object,
     *,
     limits: ImageValidationLimits,
-    format_extensions: Mapping[str, str] = DEFAULT_IMAGE_FORMAT_EXTENSIONS,
-    expected_format: str | None = None,
+    format_extensions: Mapping[str, str]                = DEFAULT_IMAGE_FORMAT_EXTENSIONS,
+    expected_format: str | None                         = None,
     allowed_modes: Mapping[str, Collection[str]] | None = None,
-    allow_animation: bool = True,
+    allow_animation: bool                               = True,
 ) -> ValidatedImage:
     """Validate container integrity and fully decode every bounded image frame.
 
@@ -252,16 +253,16 @@ def validate_image_bytes(
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with Image.open(io.BytesIO(payload_bytes)) as candidate:
                 image_format = str(candidate.format or "").upper()
-                extension = format_extensions.get(image_format)
+                extension    = format_extensions.get(image_format)
                 if extension is None:
                     _reject("unsupported_format", "image format is not supported")
                 if normalized_expected is not None and image_format != normalized_expected:
                     _reject("format_mismatch", "declared image type does not match its content")
                 _validate_frame(
                     candidate,
-                    limits=limits,
-                    image_format=image_format,
-                    allowed_modes=allowed_modes,
+                    limits        = limits,
+                    image_format  = image_format,
+                    allowed_modes = allowed_modes,
                 )
                 candidate.verify()
 
@@ -271,10 +272,10 @@ def validate_image_bytes(
                     _reject("format_changed", "image format changed between validation passes")
                 width, height, frames, mode = _decode_all_frames(
                     decoded,
-                    limits=limits,
-                    image_format=image_format,
-                    allowed_modes=allowed_modes,
-                    allow_animation=allow_animation,
+                    limits          = limits,
+                    image_format    = image_format,
+                    allowed_modes   = allowed_modes,
+                    allow_animation = allow_animation,
                 )
     except ImageValidationError:
         raise
@@ -287,12 +288,12 @@ def validate_image_bytes(
         raise ImageValidationError("invalid_image", "image is invalid or undecodable") from exc
 
     return ValidatedImage(
-        format=image_format,
-        extension=extension,
-        width=width,
-        height=height,
-        frames=frames,
-        mode=mode,
+        format    = image_format,
+        extension = extension,
+        width     = width,
+        height    = height,
+        frames    = frames,
+        mode      = mode,
     )
 
 
@@ -300,11 +301,11 @@ def validate_image_fd(
     fd: int,
     *,
     limits: ImageValidationLimits,
-    expected_suffix: str | None = None,
-    format_extensions: Mapping[str, str] = DEFAULT_IMAGE_FORMAT_EXTENSIONS,
-    format_suffixes: Mapping[str, Collection[str]] = DEFAULT_IMAGE_FORMAT_SUFFIXES,
+    expected_suffix: str | None                         = None,
+    format_extensions: Mapping[str, str]                = DEFAULT_IMAGE_FORMAT_EXTENSIONS,
+    format_suffixes: Mapping[str, Collection[str]]      = DEFAULT_IMAGE_FORMAT_SUFFIXES,
     allowed_modes: Mapping[str, Collection[str]] | None = None,
-    allow_animation: bool = True,
+    allow_animation: bool                               = True,
 ) -> ValidatedImage:
     """Read at most one byte beyond budget from an already-open file descriptor."""
 
@@ -334,10 +335,10 @@ def validate_image_fd(
 
     validated = validate_image_bytes(
         payload,
-        limits=limits,
-        format_extensions=format_extensions,
-        allowed_modes=allowed_modes,
-        allow_animation=allow_animation,
+        limits            = limits,
+        format_extensions = format_extensions,
+        allowed_modes     = allowed_modes,
+        allow_animation   = allow_animation,
     )
     suffix = str(expected_suffix or "").casefold()
     if suffix and suffix not in {
@@ -361,11 +362,11 @@ def validate_image_path(
     path: Path,
     *,
     limits: ImageValidationLimits,
-    require_matching_suffix: bool = True,
-    format_extensions: Mapping[str, str] = DEFAULT_IMAGE_FORMAT_EXTENSIONS,
-    format_suffixes: Mapping[str, Collection[str]] = DEFAULT_IMAGE_FORMAT_SUFFIXES,
+    require_matching_suffix: bool                       = True,
+    format_extensions: Mapping[str, str]                = DEFAULT_IMAGE_FORMAT_EXTENSIONS,
+    format_suffixes: Mapping[str, Collection[str]]      = DEFAULT_IMAGE_FORMAT_SUFFIXES,
     allowed_modes: Mapping[str, Collection[str]] | None = None,
-    allow_animation: bool = True,
+    allow_animation: bool                               = True,
 ) -> ValidatedImage:
     """Safely open and validate a local image without trusting a prior path check."""
 
@@ -390,8 +391,8 @@ def validate_image_path(
     except OSError as exc:
         raise ImageValidationError("source_open_error", "image file could not be opened") from exc
     try:
-        opened = os.fstat(fd)
-        current = os.lstat(source)
+        opened            = os.fstat(fd)
+        current           = os.lstat(source)
         expected_identity = stat_identity(before)
         if (
             not stat.S_ISREG(opened.st_mode)
@@ -403,14 +404,14 @@ def validate_image_path(
             _reject("source_changed", "image source changed while opening")
         validated = validate_image_fd(
             fd,
-            limits=limits,
-            expected_suffix=source.suffix if require_matching_suffix else None,
-            format_extensions=format_extensions,
-            format_suffixes=format_suffixes,
-            allowed_modes=allowed_modes,
-            allow_animation=allow_animation,
+            limits            = limits,
+            expected_suffix   = source.suffix if require_matching_suffix else None,
+            format_extensions = format_extensions,
+            format_suffixes   = format_suffixes,
+            allowed_modes     = allowed_modes,
+            allow_animation   = allow_animation,
         )
-        after_fd = os.fstat(fd)
+        after_fd   = os.fstat(fd)
         after_path = os.lstat(source)
         if (
             after_fd.st_nlink != 1

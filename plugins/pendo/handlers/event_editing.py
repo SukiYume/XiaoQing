@@ -24,7 +24,7 @@ class EventEditAIParserProtocol(Protocol):
         text: str,
         user_id: str,
         *,
-        partial: bool = False,
+        partial: bool             = False,
         fallback_text: str | None = None,
     ) -> dict[str, Any]: ...
 
@@ -35,18 +35,18 @@ class EventEditingMixin:
     """把编辑解析与命令分发、持久化生命周期分离。"""
 
     _TITLE_SCAFFOLD_MARKERS = ("[编辑现有日程]", "原标题", "原时间", "用户修改指令")
-    _TITLE_RENAME_RE = re.compile(r"(改名|重命名|标题|名称|叫做|名字)")
-    _TITLE_SCHEDULE_RE = re.compile(
+    _TITLE_RENAME_RE        = re.compile(r"(改名|重命名|标题|名称|叫做|名字)")
+    _TITLE_SCHEDULE_RE      = re.compile(
         r"(提醒|提前|分钟|小时|天|周|今天|明天|后天|上午|中午|下午|晚上|\d{1,2}[点时:：])"
     )
     _CATEGORY_EDIT_RE = re.compile(r"(分类|归类|类别|类目)")
-    _CONTENT_EDIT_RE = re.compile(r"(内容|描述|详情|补充|说明)")
+    _CONTENT_EDIT_RE  = re.compile(r"(内容|描述|详情|补充|说明)")
     _LOCATION_EDIT_RE = re.compile(
         r"(@|地点|位置|场地|地址|(?:会场|会议地点)\s*(?:改为|改成|改到|在|[:：]))"
     )
-    _NOTES_EDIT_RE = re.compile(r"(?:备注|说明)\s*(?:改为|改成|设为|设置为|为|成|[:：])?\s*(.+)")
+    _NOTES_EDIT_RE         = re.compile(r"(?:备注|说明)\s*(?:改为|改成|设为|设置为|为|成|[:：])?\s*(.+)")
     _EDIT_VALUE_STOP_CHARS = " ，,。；;\n\t"
-    _AI_EDIT_FIELDS = (
+    _AI_EDIT_FIELDS        = (
         "title",
         "content",
         "start_time",
@@ -64,8 +64,8 @@ class EventEditingMixin:
         通过 prompt 指示 AI 不要随意修改标题，避免把编辑指令误设为标题。
         """
         explicit_updates = self._parse_explicit_edit_updates(changes, current_event)
-        parsed = await self._parse_ai_edit_updates(changes, current_event)
-        updates = self._merge_ai_edit_updates(
+        parsed           = await self._parse_ai_edit_updates(changes, current_event)
+        updates          = self._merge_ai_edit_updates(
             changes,
             current_event,
             parsed,
@@ -94,7 +94,7 @@ class EventEditingMixin:
         """请 AI 只返回用户明确要修改的字段，失败时回退规则解析。"""
         current_title = getattr(current_event, "title", "") or ""
         current_start = getattr(current_event, "start_time", "") or ""
-        edit_prompt = (
+        edit_prompt   = (
             f"[编辑现有日程] 原标题：{current_title}，原时间：{current_start}。"
             f"用户修改指令：{changes}。"
             f"请只返回需要修改的字段，未提及的字段不要更改。"
@@ -106,8 +106,8 @@ class EventEditingMixin:
             parsed = await self.ai_parser.parse_event_with_ai(
                 edit_prompt,
                 current_event.owner_id,
-                partial=True,
-                fallback_text=changes,
+                partial       = True,
+                fallback_text = changes,
             )
         except Exception as exc:
             logger.warning(
@@ -125,14 +125,14 @@ class EventEditingMixin:
         explicit_updates: dict[str, Any],
     ) -> dict[str, Any]:
         """在显式规则结果上补入通过语义校验的 AI 字段。"""
-        updates = dict(explicit_updates)
+        updates              = dict(explicit_updates)
         explicit_only_fields = {"title", "content", "location", "category", "tags"}
         for key in self._AI_EDIT_FIELDS:
             if key in updates:
                 continue
             if explicit_updates and key in explicit_only_fields:
                 continue
-            candidate = parsed.get(key)
+            candidate   = parsed.get(key)
             current_val = getattr(current_event, key, None)
             if candidate in (None, "", [], {}) or candidate == current_val:
                 continue
@@ -223,7 +223,7 @@ class EventEditingMixin:
 
     @classmethod
     def _extract_start_time_update(cls, changes: str, current_event: EventItem) -> str | None:
-        text = changes.strip()
+        text  = changes.strip()
         match = re.search(
             r"(?:开始时间|时间)\s*(?:改为|改成|改到|设为|设置为|调整到|调整为|到|:|：)\s*(.+)",
             text,
@@ -247,7 +247,7 @@ class EventEditingMixin:
 
     @staticmethod
     def _normalize_datetime_candidate(candidate: str, current_event: EventItem) -> str | None:
-        current_start = getattr(current_event, "start_time", None)
+        current_start  = getattr(current_event, "start_time", None)
         event_timezone = event_display_timezone(current_event)
         try:
             current_dt = (
@@ -261,17 +261,17 @@ class EventEditingMixin:
             candidate,
         )
         if match:
-            hour = int(match.group(2))
-            minute = match.group(3)
-            second = match.group(4) or "00"
+            hour      = int(match.group(2))
+            minute    = match.group(3)
+            second    = match.group(4) or "00"
             wall_time = f"{match.group(1)}T{hour:02d}:{minute}:{second}"
             return EventEditingMixin._attach_event_timezone(wall_time, event_timezone)
 
         match = re.fullmatch(r"(\d{1,2}):(\d{2})(?::(\d{2}))?", candidate)
         if match and current_dt is not None:
-            hour = int(match.group(1))
-            minute = match.group(2)
-            second = match.group(3) or "00"
+            hour      = int(match.group(1))
+            minute    = match.group(2)
+            second    = match.group(3) or "00"
             wall_time = f"{current_dt.date().isoformat()}T{hour:02d}:{minute}:{second}"
             return EventEditingMixin._attach_event_timezone(wall_time, event_timezone)
 
@@ -296,7 +296,7 @@ class EventEditingMixin:
                     partial=True,
                 )["start_time"]
             )
-            parsed = datetime.fromisoformat(normalized)
+            parsed   = datetime.fromisoformat(normalized)
             resolved = cast(
                 datetime,
                 resolve_source_wall_time(parsed, "start_time", event_timezone),
@@ -360,7 +360,7 @@ class EventEditingMixin:
             return False
         # AI 可能从“备注从北京南坐 G123 去会场”推断出地点；
         # 除非用户明确要求改地点，否则只应作为备注。
-        has_note_directive = cls._NOTES_EDIT_RE.search(changes) is not None
+        has_note_directive     = cls._NOTES_EDIT_RE.search(changes) is not None
         has_location_directive = cls._LOCATION_EDIT_RE.search(changes) is not None
         return has_location_directive or not has_note_directive
 

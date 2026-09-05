@@ -18,15 +18,15 @@ arxiv_filter = importlib.import_module("plugins.arxiv_filter.main")
 
 def _context(tmp_path: Path) -> SimpleNamespace:
     plugin_dir = tmp_path / "plugin-code"
-    data_dir = tmp_path / "persistent-data"
+    data_dir   = tmp_path / "persistent-data"
     plugin_dir.mkdir(exist_ok=True)
     data_dir.mkdir(exist_ok=True)
     return with_settings_reader(
         SimpleNamespace(
-            plugin_dir=plugin_dir,
-            data_dir=data_dir,
-            config={},
-            logger=MagicMock(),
+            plugin_dir = plugin_dir,
+            data_dir   = data_dir,
+            config     = {},
+            logger     = MagicMock(),
             principal=PluginPrincipal(kind="lifecycle"),
             capabilities=PluginCapabilities(),
         )
@@ -61,7 +61,7 @@ async def test_unknown_or_unstructured_filter_results_never_mark_sent(
     filter_result,
 ) -> None:
     context = _context(tmp_path)
-    today = arxiv_filter._business_now(context).date().isoformat()
+    today   = arxiv_filter._business_now(context).date().isoformat()
     monkeypatch.setattr(arxiv_filter, "run_sync", _status_aware_run_sync(today))
     monkeypatch.setattr(arxiv_filter, "_run_filter", AsyncMock(return_value=filter_result))
 
@@ -77,7 +77,7 @@ async def test_filter_exception_releases_claim_for_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context = _context(tmp_path)
-    today = arxiv_filter._business_now(context).date().isoformat()
+    today   = arxiv_filter._business_now(context).date().isoformat()
     monkeypatch.setattr(arxiv_filter, "run_sync", _status_aware_run_sync(today))
     monkeypatch.setattr(
         arxiv_filter,
@@ -98,12 +98,12 @@ async def test_status_commits_only_after_true_delivery_ack(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context = _context(tmp_path)
-    today = arxiv_filter._business_now(context).date().isoformat()
+    today   = arxiv_filter._business_now(context).date().isoformat()
     monkeypatch.setattr(arxiv_filter, "run_sync", _status_aware_run_sync(today))
     successful = arxiv_filter._filter_result(
         "papers",
-        succeeded=True,
-        outcome="papers",
+        succeeded = True,
+        outcome   = "papers",
     )
     monkeypatch.setattr(arxiv_filter, "_run_filter", AsyncMock(return_value=successful))
 
@@ -127,7 +127,7 @@ async def test_unknown_delivery_uses_at_most_once_daily_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context = _context(tmp_path)
-    today = arxiv_filter._business_now(context).date().isoformat()
+    today   = arxiv_filter._business_now(context).date().isoformat()
     monkeypatch.setattr(arxiv_filter, "run_sync", _status_aware_run_sync(today))
     successful = arxiv_filter._filter_result("papers", succeeded=True, outcome="papers")
     monkeypatch.setattr(arxiv_filter, "_run_filter", AsyncMock(return_value=successful))
@@ -147,7 +147,7 @@ async def test_final_no_update_notice_also_waits_for_delivery_ack(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context = _context(tmp_path)
-    today = arxiv_filter._business_now(context).date().isoformat()
+    today   = arxiv_filter._business_now(context).date().isoformat()
     monkeypatch.setattr(arxiv_filter, "run_sync", _status_aware_run_sync("2000-01-01"))
 
     result = await arxiv_filter._check_arxiv_update(context, is_final_check=True)
@@ -163,7 +163,7 @@ async def test_status_write_failure_does_not_commit_or_hold_claim(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context = _context(tmp_path)
-    today = arxiv_filter._business_now(context).date().isoformat()
+    today   = arxiv_filter._business_now(context).date().isoformat()
     assert arxiv_filter._claim_send_today(context.data_dir, today) is True
     result = arxiv_filter._filter_result("papers", succeeded=True, outcome="papers")
     tracked = arxiv_filter._track_delivery(result, context.data_dir, today)
@@ -189,7 +189,7 @@ async def test_delivery_ack_commits_after_plugin_execution_scope_closes(
     """发送回执晚于插件 handler 返回时仍须可靠提交当天状态。"""
 
     context = _context(tmp_path)
-    today = arxiv_filter._business_now(context).date().isoformat()
+    today   = arxiv_filter._business_now(context).date().isoformat()
     assert arxiv_filter._claim_send_today(context.data_dir, today) is True
     result = arxiv_filter._filter_result("papers", succeeded=True, outcome="papers")
     tracked = arxiv_filter._track_delivery(result, context.data_dir, today)
@@ -212,7 +212,7 @@ async def test_daily_filter_cache_changes_with_plugin_configuration(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    context = _context(tmp_path)
+    context   = _context(tmp_path)
     model_dir = tmp_path / "model"
     model_dir.mkdir()
     (model_dir / "training_config.json").write_text("{}", encoding="utf-8")
@@ -246,7 +246,7 @@ async def test_filter_cache_changes_when_arxiv_source_listing_date_changes(
 ) -> None:
     """更新前的昨日列表不能污染同一业务日稍后发布的新列表。"""
 
-    context = _context(tmp_path)
+    context   = _context(tmp_path)
     model_dir = tmp_path / "model"
     model_dir.mkdir()
     (model_dir / "training_config.json").write_text("{}", encoding="utf-8")
@@ -280,7 +280,7 @@ async def test_daily_cache_reuses_one_model_tree_fingerprint(
 ) -> None:
     """同一模型的缓存命令不能再次递归扫描、stat 或 hash 整棵目录。"""
 
-    context = _context(tmp_path)
+    context   = _context(tmp_path)
     model_dir = tmp_path / "model"
     model_dir.mkdir()
     (model_dir / "training_config.json").write_text("{}", encoding="utf-8")
@@ -325,13 +325,13 @@ async def test_model_fingerprint_refresh_detects_live_artifact_replacement(
 ) -> None:
     """刷新窗口到期后，模型替换必须生成新缓存键并重新推理。"""
 
-    context = _context(tmp_path)
+    context   = _context(tmp_path)
     model_dir = tmp_path / "model"
     model_dir.mkdir()
     artifact = model_dir / "meta.json"
     artifact.write_text('{"version": 1}', encoding="utf-8")
     current_monotonic = {"value": 0.0}
-    inference_calls = 0
+    inference_calls   = 0
 
     def inference(**_kwargs) -> str:
         nonlocal inference_calls
@@ -369,11 +369,11 @@ def test_precomputed_artifact_fingerprint_avoids_backend_rescan(
 
     shared = importlib.import_module("plugins.arxiv_filter.inference.shared")
     params = shared.InferenceParams(
-        model_path="model",
-        threshold=0.5,
-        batch_size=2,
-        max_len=32,
-        artifact_fingerprint="stable-artifact-identity",
+        model_path           = "model",
+        threshold            = 0.5,
+        batch_size           = 2,
+        max_len              = 32,
+        artifact_fingerprint = "stable-artifact-identity",
     )
     monkeypatch.setattr(
         shared,
@@ -387,7 +387,7 @@ def test_precomputed_artifact_fingerprint_avoids_backend_rescan(
 
 
 def test_model_fingerprint_changes_for_same_path_content_replacement(tmp_path: Path) -> None:
-    shared = importlib.import_module("plugins.arxiv_filter.inference.shared")
+    shared   = importlib.import_module("plugins.arxiv_filter.inference.shared")
     artifact = tmp_path / "meta.json"
     artifact.write_text('{"version": 1}', encoding="utf-8")
     first = shared.model_artifact_fingerprint(str(tmp_path))
@@ -423,7 +423,7 @@ def test_interrupted_abstract_cache_write_preserves_previous_json(
     module = importlib.import_module(
         "plugins.arxiv_filter.train_model.data_prep.step3_build_dataset"
     )
-    cache_path = tmp_path / "abstract_cache.json"
+    cache_path  = tmp_path / "abstract_cache.json"
     old_payload = {"old": {"title": "old", "abstract": "kept"}}
     cache_path.write_text(json.dumps(old_payload), encoding="utf-8")
     monkeypatch.setattr(module, "ABSTRACT_CACHE_FILE", cache_path)

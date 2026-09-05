@@ -25,7 +25,7 @@ class UserService:
         if user is None:
             return []
 
-        pet = self.db.get_pet(user_id, group_id)
+        pet             = self.db.get_pet(user_id, group_id)
         eligible_titles = (
             ("新手铲屎官", pet is not None),
             ("勤劳养育员", user.total_feed_count >= 100),
@@ -61,7 +61,7 @@ class UserService:
         lines = ["🏅 **我的称号**", ""]
         for title in titles:
             title_config = TITLES.get(title)
-            description = title_config["description"] if title_config is not None else ""
-            suffix = f" — {description}" if description else ""
+            description  = title_config["description"] if title_config is not None else ""
+            suffix       = f" — {description}" if description else ""
             lines.append(f"• {title}{suffix}")
         return "\n".join(lines) + "\n"

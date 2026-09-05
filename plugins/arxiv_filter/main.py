@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from core.args import parse
 from core.delivery import DeliveryReceipt, DeliverySegments
+from core.lifecycle import DeferredCancellation, await_owned_task
 from core.plugin_base import (
     PluginContextProtocol,
     Segments,
@@ -38,17 +39,17 @@ logger = logging.getLogger(__name__)
 
 InferenceFunction = Callable[..., str]
 
-_inference_func: InferenceFunction | None = None
+_inference_func: InferenceFunction | None                         = None
 _FILTER_CACHE: dict[tuple[str, str, str, InferenceFunction], str] = {}
 _FILTER_INFLIGHT: dict[
     tuple[str, str, str, InferenceFunction],
     asyncio.Task[str],
 ] = {}
-_FILTER_LOCK = asyncio.Lock()
-_STATUS_LOCK = threading.Lock()
-_MODEL_FINGERPRINT_REFRESH_SECONDS = 60.0
+_FILTER_LOCK                                           = asyncio.Lock()
+_STATUS_LOCK                                           = threading.Lock()
+_MODEL_FINGERPRINT_REFRESH_SECONDS                     = 60.0
 _MODEL_FINGERPRINT_CACHE: dict[str, tuple[float, str]] = {}
-_MODEL_FINGERPRINT_LOCK = asyncio.Lock()
+_MODEL_FINGERPRINT_LOCK                                = asyncio.Lock()
 
 
 class FilterResult(list[dict[str, Any]]):
@@ -67,7 +68,7 @@ class FilterResult(list[dict[str, Any]]):
             raise ValueError("outcome must be a non-empty string")
         super().__init__(values)
         self.succeeded = succeeded
-        self.outcome = outcome
+        self.outcome   = outcome
 
 
 def _filter_result(payload: Any, *, succeeded: bool, outcome: str) -> FilterResult:
@@ -103,13 +104,13 @@ async def _cached_model_artifact_fingerprint(model_path: str) -> str:
     from .inference.shared import model_artifact_fingerprint, resolve_model_path
 
     resolved_path = str(Path(resolve_model_path(str(model_path))).resolve())
-    now = time.monotonic()
-    cached = _MODEL_FINGERPRINT_CACHE.get(resolved_path)
+    now           = time.monotonic()
+    cached        = _MODEL_FINGERPRINT_CACHE.get(resolved_path)
     if cached is not None and cached[0] > now:
         return cached[1]
 
     async with _MODEL_FINGERPRINT_LOCK:
-        now = time.monotonic()
+        now    = time.monotonic()
         cached = _MODEL_FINGERPRINT_CACHE.get(resolved_path)
         if cached is not None and cached[0] > now:
             return cached[1]
@@ -134,8 +135,8 @@ async def _cached_inference(
     if source_date is None:
         result = await run_sync(
             lambda: inference(
-                model_path=model_path,
-                artifact_fingerprint=artifact_fingerprint,
+                model_path           = model_path,
+                artifact_fingerprint = artifact_fingerprint,
             )
         )
         if not isinstance(result, str):
@@ -156,8 +157,8 @@ async def _cached_inference(
             task = asyncio.create_task(
                 run_sync(
                     lambda: inference(
-                        model_path=model_path,
-                        artifact_fingerprint=artifact_fingerprint,
+                        model_path           = model_path,
+                        artifact_fingerprint = artifact_fingerprint,
                     )
                 )
             )
@@ -198,8 +199,8 @@ async def _latest_arxiv_source_date(context: PluginContextProtocol) -> str | Non
         public_error_message(
             context,
             exc,
-            logger=logger,
-            component="arxiv_filter.source_date",
+            logger    = logger,
+            component = "arxiv_filter.source_date",
         )
         return None
     source_date = _normalize_source_date(raw_date)
@@ -236,8 +237,8 @@ def _load_inference(
             public_error_message(
                 context,
                 exc,
-                logger=logger,
-                component="arxiv_filter.load_inference",
+                logger    = logger,
+                component = "arxiv_filter.load_inference",
             )
         else:
             logger.error("导入 arxiv_inference 模块失败: error_type=ImportError")
@@ -248,8 +249,8 @@ def _load_inference(
             public_error_message(
                 context,
                 exc,
-                logger=logger,
-                component="arxiv_filter.load_inference",
+                logger    = logger,
+                component = "arxiv_filter.load_inference",
             )
         else:
             logger.error(
@@ -300,17 +301,17 @@ async def handle(
                 return segments(_show_help())
             unknown = bounded_external_text(
                 parsed.first,
-                max_chars=32,
-                max_bytes=128,
-                suffix="…",
+                max_chars = 32,
+                max_bytes = 128,
+                suffix    = "…",
             )
             return segments(f"未知命令: {unknown}\n输入 /arxiv help 查看帮助")
 
         source_date = await _latest_arxiv_source_date(context)
         return await _run_filter(
             context,
-            allow_codex_sidecar=_is_admin_user(context, event.get("user_id")),
-            source_date=source_date,
+            allow_codex_sidecar = _is_admin_user(context, event.get("user_id")),
+            source_date         = source_date,
         )
 
     except Exception as exc:
@@ -335,7 +336,7 @@ def _is_admin_user(context: PluginContextProtocol, user_id: object) -> bool:
     is_global_admin = getattr(context, "is_global_admin", None)
     if callable(is_global_admin):
         return bool(is_global_admin(user_id))
-    principal = getattr(context, "principal", None)
+    principal    = getattr(context, "principal", None)
     capabilities = getattr(context, "capabilities", None)
     if principal is None or not getattr(capabilities, "is_bot_admin", False):
         return False
@@ -367,7 +368,7 @@ async def _run_filter(
     context: PluginContextProtocol,
     *,
     allow_codex_sidecar: bool = False,
-    source_date: str | None = None,
+    source_date: str | None   = None,
 ) -> FilterResult:
     """
     执行论文筛选
@@ -385,12 +386,12 @@ async def _run_filter(
         source_date = normalized_source_date
 
     # 加载配置
-    config = load_plugin_config()
+    config       = load_plugin_config()
     model_config = config.get("model", {})
     if not isinstance(model_config, Mapping):
         raise ValueError("arxiv_filter model config must be a JSON object")
     environment_model_path = os.environ.get("ARXIV_MODEL_PATH", "").strip()
-    configured_model_path = environment_model_path or model_config.get("path", "best_model")
+    configured_model_path  = environment_model_path or model_config.get("path", "best_model")
     if not isinstance(configured_model_path, str) or not configured_model_path.strip():
         raise ValueError("arxiv_filter model.path must be a non-empty string")
     configured_model_path = configured_model_path.strip()
@@ -430,11 +431,11 @@ async def _run_filter(
                 public_error_response(
                     context,
                     RuntimeError("arXiv inference returned an error result"),
-                    logger=logger,
-                    component="arxiv_filter.inference_result",
+                    logger    = logger,
+                    component = "arxiv_filter.inference_result",
                 ),
-                succeeded=False,
-                outcome="inference_error",
+                succeeded = False,
+                outcome   = "inference_error",
             )
 
         # 检查是否没有结果
@@ -449,8 +450,8 @@ async def _run_filter(
                 list_description = f"今天是 {today}，arXiv 当前最新列表日期为 {source_date}"
             return _filter_result(
                 f"📚 {list_description}，暂时没有发现感兴趣的论文。",
-                succeeded=True,
-                outcome="no_positive_predictions",
+                succeeded = True,
+                outcome   = "no_positive_predictions",
             )
 
         if "No papers found" in arxiv_text:
@@ -458,11 +459,11 @@ async def _run_filter(
                 public_error_response(
                     context,
                     RuntimeError("arXiv inference did not produce a usable paper list"),
-                    logger=logger,
-                    component="arxiv_filter.inference_result",
+                    logger    = logger,
+                    component = "arxiv_filter.inference_result",
                 ),
-                succeeded=False,
-                outcome="inference_error",
+                succeeded = False,
+                outcome   = "inference_error",
             )
 
         if "----- Positive #" not in arxiv_text:
@@ -470,11 +471,11 @@ async def _run_filter(
                 public_error_response(
                     context,
                     RuntimeError("arXiv inference returned an unknown result format"),
-                    logger=logger,
-                    component="arxiv_filter.inference_result",
+                    logger    = logger,
+                    component = "arxiv_filter.inference_result",
                 ),
-                succeeded=False,
-                outcome="unknown_result",
+                succeeded = False,
+                outcome   = "unknown_result",
             )
 
         logger.debug("筛选结果预览: %s...", arxiv_text[:200])
@@ -484,33 +485,33 @@ async def _run_filter(
             public_error_response(
                 context,
                 exc,
-                logger=logger,
-                component="arxiv_filter.model_file",
+                logger    = logger,
+                component = "arxiv_filter.model_file",
             ),
-            succeeded=False,
-            outcome="model_file_error",
+            succeeded = False,
+            outcome   = "model_file_error",
         )
     except ImportError as exc:
         return _filter_result(
             public_error_response(
                 context,
                 exc,
-                logger=logger,
-                component="arxiv_filter.dependencies",
+                logger    = logger,
+                component = "arxiv_filter.dependencies",
             ),
-            succeeded=False,
-            outcome="dependency_error",
+            succeeded = False,
+            outcome   = "dependency_error",
         )
     except Exception as exc:
         return _filter_result(
             public_error_response(
                 context,
                 exc,
-                logger=logger,
-                component="arxiv_filter.run",
+                logger    = logger,
+                component = "arxiv_filter.run",
             ),
-            succeeded=False,
-            outcome="runtime_error",
+            succeeded = False,
+            outcome   = "runtime_error",
         )
 
     # 格式化输出
@@ -529,15 +530,15 @@ async def _run_filter(
             try:
                 schedule_codex_summary_from_filter_result(
                     context,
-                    date=source_date,
-                    filter_text=arxiv_text,
+                    date        = source_date,
+                    filter_text = arxiv_text,
                 )
             except Exception as exc:
                 public_error_message(
                     context,
                     exc,
-                    logger=logger,
-                    component="arxiv_filter.codex_sidecar",
+                    logger    = logger,
+                    component = "arxiv_filter.codex_sidecar",
                 )
     return _filter_result(header + arxiv_text, succeeded=True, outcome="papers")
 
@@ -671,7 +672,7 @@ def _mark_sent_today(data_dir: str | Path, business_date: str) -> None:
     """标记调用方提供的配置时区业务日期已发送。"""
     status = {
         "last_sent_date": business_date,
-        "last_sent_time": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "last_sent_time": datetime.datetime.now(datetime.UTC).isoformat(),
     }
     _save_update_status(data_dir, status)
     _release_claim(data_dir, business_date)
@@ -695,9 +696,9 @@ def _track_delivery(
         await asyncio.to_thread(_release_claim, data_dir, business_date)
 
     receipt = DeliveryReceipt(
-        expected_actions=1,
-        commit=commit,
-        rollback=rollback,
+        expected_actions = 1,
+        commit           = commit,
+        rollback         = rollback,
         # 传输已提交但回执未知时采用 at-most-once：避免同一日报重复广播。
         unknown=commit,
     )
@@ -733,76 +734,92 @@ async def _check_arxiv_update(
 
     # 通过原子 claim 保证同一业务日期只有一个检查者进入发送路径。
     try:
-        claimed = await run_sync(_claim_send_today, data_dir, today)
+        cancellation = DeferredCancellation()
+        claim_task   = asyncio.create_task(run_sync(_claim_send_today, data_dir, today))
+        claimed      = await await_owned_task(claim_task, cancellation)
+        if cancellation.error is not None:
+            if claimed:
+                release_task = asyncio.create_task(run_sync(_release_claim, data_dir, today))
+                await await_owned_task(release_task, cancellation)
+            cancellation.raise_if_requested()
     except Exception as exc:
         # 状态不可信时采用 fail-closed：宁可漏掉一次自动播报，也不能重复群发。
         public_error_message(
             context,
             exc,
-            logger=logger,
-            component="arxiv_filter.claim_delivery",
+            logger    = logger,
+            component = "arxiv_filter.claim_delivery",
         )
         return []
     if not claimed:
         logger.info("今天已经发送过 arXiv 更新，跳过此次检查")
         return []
 
+    transferred = False
     try:
-        # 连同可选抓取依赖一起放到工作线程；测试或禁用路径无需提前导入。
-        arxiv_date = await run_sync(
-            lambda: importlib.import_module(f"{__package__}.arxiv_today").check_arxiv_update_date()
-        )
-    except Exception as exc:
-        public_error_message(
-            context,
-            exc,
-            logger=logger,
-            component="arxiv_filter.check_date",
-        )
-        await run_sync(_release_claim, data_dir, today)
-        return []
-
-    # 如果 arXiv 已更新到今天
-    if arxiv_date == today:
-        logger.info("检测到 arXiv 已更新到 %s，开始筛选论文...", today)
         try:
-            result = await _run_filter(
-                context,
-                allow_codex_sidecar=True,
-                source_date=arxiv_date,
+            # 连同可选抓取依赖一起放到工作线程；测试或禁用路径无需提前导入。
+            arxiv_date = await run_sync(
+                lambda: importlib.import_module(
+                    f"{__package__}.arxiv_today"
+                ).check_arxiv_update_date()
             )
-        except asyncio.CancelledError:
-            await run_sync(_release_claim, data_dir, today)
-            raise
         except Exception as exc:
-            await run_sync(_release_claim, data_dir, today)
-            return _filter_result(
-                public_error_response(
-                    context,
-                    exc,
-                    logger=logger,
-                    component="arxiv_filter.scheduled_filter",
-                ),
-                succeeded=False,
-                outcome="runtime_error",
+            public_error_message(
+                context,
+                exc,
+                logger    = logger,
+                component = "arxiv_filter.check_date",
             )
-        if isinstance(result, FilterResult) and result.succeeded:
+            return []
+
+        # 如果 arXiv 已更新到今天
+        if arxiv_date == today:
+            logger.info("检测到 arXiv 已更新到 %s，开始筛选论文...", today)
+            try:
+                result = await _run_filter(
+                    context,
+                    allow_codex_sidecar = True,
+                    source_date         = arxiv_date,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                return _filter_result(
+                    public_error_response(
+                        context,
+                        exc,
+                        logger    = logger,
+                        component = "arxiv_filter.scheduled_filter",
+                    ),
+                    succeeded = False,
+                    outcome   = "runtime_error",
+                )
+            if isinstance(result, FilterResult) and result.succeeded:
+                transferred = True
+                return _track_delivery(result, data_dir, today)
+            logger.warning("arXiv filter failed after update detection; keep retrying later today")
+            return result
+
+        # 如果是最后一次检查且仍未更新
+        if is_final_check:
+            logger.info(
+                "最后检查时间已到，arXiv 仍未更新（当前日期: %s），发送停更通知", arxiv_date
+            )
+            result = _filter_result(
+                f"📚 arXiv 今日（{today}）暂未更新，可能稍后更新或今日停更。",
+                succeeded = True,
+                outcome   = "no_update",
+            )
+            transferred = True
             return _track_delivery(result, data_dir, today)
-        await run_sync(_release_claim, data_dir, today)
-        logger.warning("arXiv filter failed after update detection; keep retrying later today")
-        return result
 
-    # 如果是最后一次检查且仍未更新
-    if is_final_check:
-        logger.info("最后检查时间已到，arXiv 仍未更新（当前日期: %s），发送停更通知", arxiv_date)
-        result = _filter_result(
-            f"📚 arXiv 今日（{today}）暂未更新，可能稍后更新或今日停更。",
-            succeeded=True,
-            outcome="no_update",
-        )
-        return _track_delivery(result, data_dir, today)
-
-    # 还不是最后检查，继续等待
-    logger.info("arXiv 尚未更新到今天（当前: %s，期望: %s），等待下次检查", arxiv_date, today)
-    await run_sync(_release_claim, data_dir, today)
-    return []
+        # 还不是最后检查，继续等待
+        logger.info("arXiv 尚未更新到今天（当前: %s，期望: %s），等待下次检查", arxiv_date, today)
+        return []
+    finally:
+        if not transferred:
+            cleanup      = asyncio.create_task(run_sync(_release_claim, data_dir, today))
+            cancellation = DeferredCancellation()
+            await await_owned_task(cleanup, cancellation)
+            cancellation.raise_if_requested()

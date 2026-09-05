@@ -18,9 +18,9 @@ from tests.helpers.config_test_support import (
     pytest,
 )
 
-config_file = _fixture_support.config_file
-config_manager = _fixture_support.config_manager
-secrets_file = _fixture_support.secrets_file
+config_file     = _fixture_support.config_file
+config_manager  = _fixture_support.config_manager
+secrets_file    = _fixture_support.secrets_file
 temp_config_dir = _fixture_support.temp_config_dir
 
 
@@ -82,7 +82,7 @@ class TestConfigManagerUpdateSecret:
         config_manager: ConfigManager,
     ):
         snapshots: list[ConfigSnapshot] = []
-        unsubscribe = config_manager.on_reload(snapshots.append)
+        unsubscribe                     = config_manager.on_reload(snapshots.append)
 
         config_manager.update_secret("admin_user_ids", [2024])
         unsubscribe()
@@ -96,7 +96,7 @@ class TestConfigManagerUpdateSecret:
         config_manager: ConfigManager,
     ):
         seen: list[list[int]] = []
-        unsubscribe = None
+        unsubscribe           = None
 
         def callback(snapshot: ConfigSnapshot) -> None:
             seen.append(list(snapshot.secrets["admin_user_ids"]))
@@ -202,7 +202,7 @@ class TestConfigManagerSecretTransactions:
         config_manager: ConfigManager,
         secrets_file: Path,
     ):
-        revoked = {"admin_user_ids": [], "plugins": {"echo": {}}}
+        revoked  = {"admin_user_ids": [], "plugins": {"echo": {}}}
         original = config_manager.snapshot()
         secrets_file.write_text(json.dumps(revoked), encoding="utf-8")
 
@@ -251,7 +251,7 @@ class TestConfigManagerSecretTransactions:
         secrets_file: Path,
         non_finite: float,
     ):
-        before = config_manager.snapshot()
+        before      = config_manager.snapshot()
         before_disk = secrets_file.read_bytes()
 
         with pytest.raises(ValueError):
@@ -278,8 +278,8 @@ class TestConfigManagerSecretTransactions:
         else:
             candidate = "x" * _MAX_CONFIG_SOURCE_BYTES
 
-        before = config_manager.snapshot()
-        before_disk = secrets_file.read_bytes()
+        before         = config_manager.snapshot()
+        before_disk    = secrets_file.read_bytes()
         before_sources = (
             config_manager._config_source.signature,
             config_manager._secrets_source.signature,
@@ -317,12 +317,12 @@ class TestConfigManagerSecretTransactions:
         from core import config as config_module
 
         real_write = config_module._write_secret_payload
-        external = {
+        external   = {
             "admin_user_ids": [7070],
             "plugins": {"external": {"interference": interference}},
         }
         external_payload = json.dumps(external).encode("utf-8")
-        before = config_manager.snapshot()
+        before           = config_manager.snapshot()
 
         def interfere(handle: Any, payload: bytes) -> None:
             if interference == "replace":

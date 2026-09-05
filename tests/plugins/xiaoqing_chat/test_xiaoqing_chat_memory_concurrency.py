@@ -1,3 +1,4 @@
+# 验证并发记忆更新保留各会话新增内容。
 import asyncio
 import threading
 import time
@@ -10,7 +11,7 @@ from plugins.xiaoqing_chat.memory.memory import MemoryStore
 
 @pytest.mark.asyncio
 async def test_cold_memory_load_keeps_event_loop_responsive(tmp_path):
-    store = MemoryStore(tmp_path)
+    store        = MemoryStore(tmp_path)
     load_started = threading.Event()
 
     def slow_load(_chat_id: str):
@@ -29,9 +30,9 @@ async def test_cold_memory_load_keeps_event_loop_responsive(tmp_path):
 
 @pytest.mark.asyncio
 async def test_different_chats_cold_load_concurrently(tmp_path):
-    store = MemoryStore(tmp_path)
-    counter_lock = threading.Lock()
-    active_loads = 0
+    store                = MemoryStore(tmp_path)
+    counter_lock         = threading.Lock()
+    active_loads         = 0
     maximum_active_loads = 0
 
     def slow_load(_chat_id: str):
@@ -52,7 +53,7 @@ async def test_different_chats_cold_load_concurrently(tmp_path):
 
 @pytest.mark.asyncio
 async def test_same_chat_cold_load_remains_singleflight(tmp_path):
-    store = MemoryStore(tmp_path)
+    store      = MemoryStore(tmp_path)
     load_calls = 0
 
     def slow_load(_chat_id: str):

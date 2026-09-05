@@ -39,12 +39,12 @@ def assert_node_esm_contract(
     """
     result = subprocess.run(
         [node, "--input-type=module"],
-        cwd=cwd,
-        input=source,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        capture_output=True,
-        check=False,
+        cwd            = cwd,
+        input          = source,
+        text           = True,
+        encoding       = "utf-8",
+        errors         = "replace",
+        capture_output = True,
+        check          = False,
     )
     assert result.returncode == 0, result.stderr or result.stdout

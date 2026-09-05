@@ -111,12 +111,12 @@ class TestMessageScan:
 class TestParseTextCommandContext:
     def test_strips_bot_name_and_prefix(self):
         event: dict[str, Any] = {"message": [{"type": "text", "data": {"text": "ignored"}}]}
-        result = parse_text_command_context(
+        result                = parse_text_command_context(
             "小青，/echo hi",
             event,
-            bot_name="小青",
-            prefixes=("/",),
-            self_id="",
+            bot_name = "小青",
+            prefixes = ("/",),
+            self_id  = "",
         )
         assert result.is_at_me is False
         assert result.clean_text == "echo hi"
@@ -137,9 +137,9 @@ class TestParseTextCommandContext:
         result = parse_text_command_context(
             "你好",
             event,
-            bot_name="",
-            prefixes=("/",),
-            self_id="12345",
+            bot_name = "",
+            prefixes = ("/",),
+            self_id  = "12345",
         )
         assert result.is_at_me is True
         assert result.clean_text == "你好"
@@ -154,9 +154,9 @@ class TestParseTextCommandContext:
         result = parse_text_command_context(
             "帮我看看 [CQ:at,qq=12345] 这个",
             event,
-            bot_name="",
-            prefixes=("/",),
-            self_id="12345",
+            bot_name = "",
+            prefixes = ("/",),
+            self_id  = "12345",
         )
 
         assert result.is_at_me is True
@@ -165,12 +165,12 @@ class TestParseTextCommandContext:
 
     def test_strict_command_prefix_at_start(self):
         event: dict[str, Any] = {"message": [{"type": "text", "data": {"text": "ignored"}}]}
-        result = parse_text_command_context(
+        result                = parse_text_command_context(
             "/help",
             event,
-            bot_name="小青",
-            prefixes=("/",),
-            self_id="",
+            bot_name = "小青",
+            prefixes = ("/",),
+            self_id  = "",
         )
         assert result.has_command_prefix is True
         assert result.has_prefix is True
@@ -180,12 +180,12 @@ class TestParseTextCommandContext:
 
     def test_bot_name_in_middle_counts_as_has_prefix(self):
         event: dict[str, Any] = {"message": [{"type": "text", "data": {"text": "ignored"}}]}
-        result = parse_text_command_context(
+        result                = parse_text_command_context(
             "你好啊小青",
             event,
-            bot_name="小青",
-            prefixes=("/",),
-            self_id="",
+            bot_name = "小青",
+            prefixes = ("/",),
+            self_id  = "",
         )
         assert result.has_command_prefix is False
         assert result.has_bot_name is True
@@ -194,12 +194,12 @@ class TestParseTextCommandContext:
 
     def test_plain_text_no_signals(self):
         event: dict[str, Any] = {"message": [{"type": "text", "data": {"text": "ignored"}}]}
-        result = parse_text_command_context(
+        result                = parse_text_command_context(
             "在吗",
             event,
-            bot_name="小青",
-            prefixes=("/",),
-            self_id="",
+            bot_name = "小青",
+            prefixes = ("/",),
+            self_id  = "",
         )
         assert result.has_command_prefix is False
         assert result.has_bot_name is False
@@ -208,23 +208,23 @@ class TestParseTextCommandContext:
 
     def test_is_only_bot_name(self):
         event: dict[str, Any] = {"message": [{"type": "text", "data": {"text": "ignored"}}]}
-        result = parse_text_command_context(
+        result                = parse_text_command_context(
             "小青",
             event,
-            bot_name="小青",
-            prefixes=("/",),
-            self_id="",
+            bot_name = "小青",
+            prefixes = ("/",),
+            self_id  = "",
         )
         assert result.is_only_bot_name is True
 
     def test_is_url_only_after_strip(self):
         event: dict[str, Any] = {"message": [{"type": "text", "data": {"text": "ignored"}}]}
-        result = parse_text_command_context(
+        result                = parse_text_command_context(
             "小青 https://example.com",
             event,
-            bot_name="小青",
-            prefixes=("/",),
-            self_id="",
+            bot_name = "小青",
+            prefixes = ("/",),
+            self_id  = "",
         )
         assert result.clean_text == "https://example.com"
         assert result.is_url_only is True
@@ -232,34 +232,34 @@ class TestParseTextCommandContext:
 
     def test_is_url_only_bare_url(self):
         event: dict[str, Any] = {"message": [{"type": "text", "data": {"text": "ignored"}}]}
-        result = parse_text_command_context(
+        result                = parse_text_command_context(
             "https://example.com",
             event,
-            bot_name="小青",
-            prefixes=("/",),
-            self_id="",
+            bot_name = "小青",
+            prefixes = ("/",),
+            self_id  = "",
         )
         assert result.is_url_only is True
         assert result.has_prefix is False
 
     def test_url_with_extra_text_is_not_url_only(self):
         event: dict[str, Any] = {"message": [{"type": "text", "data": {"text": "ignored"}}]}
-        result = parse_text_command_context(
+        result                = parse_text_command_context(
             "看看 https://example.com",
             event,
-            bot_name="小青",
-            prefixes=("/",),
-            self_id="",
+            bot_name = "小青",
+            prefixes = ("/",),
+            self_id  = "",
         )
         assert result.is_url_only is False
 
     def test_strip_message_prefix_with_cached_pattern(self):
         pattern = compile_bot_name_pattern("Bot")
-        clean = strip_message_prefix(
+        clean   = strip_message_prefix(
             "Bot,  /help",
-            bot_name="Bot",
-            prefixes=("/",),
-            bot_name_pattern=pattern,
+            bot_name         = "Bot",
+            prefixes         = ("/",),
+            bot_name_pattern = pattern,
         )
         assert clean == "help"
 

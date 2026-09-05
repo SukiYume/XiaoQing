@@ -21,17 +21,17 @@ from .types import Context, MessageSegments, segments
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "https://h5.youzan.com"
+BASE_URL         = "https://h5.youzan.com"
 _RESPONSE_LIMITS = BodyLimits(
-    max_wire_bytes=512 * 1024,
-    max_decoded_bytes=1024 * 1024,
-    max_decompression_ratio=20,
+    max_wire_bytes          = 512 * 1024,
+    max_decoded_bytes       = 1024 * 1024,
+    max_decompression_ratio = 20,
 )
 _JSON_LIMITS = JsonLimits(
-    max_bytes=1024 * 1024,
-    max_depth=24,
-    max_nodes=10_000,
-    max_string_chars=256_000,
+    max_bytes        = 1024 * 1024,
+    max_depth        = 24,
+    max_nodes        = 10_000,
+    max_string_chars = 256_000,
 )
 _SUCCESS_STATUSES = range(200, 300)
 _FIELD_CHAR_LIMIT = 256
@@ -39,7 +39,7 @@ _MAX_REWARD_LINES = 20
 # 这两个值对应当前观测到的有赞微信客户端请求；若上游开始拒绝原本有效的凭据，
 # 应把二者作为同一份客户端契约一起核对和更新。
 _CLIENT_VERSION = "2.210.8.101"
-_UUID_PREFIX = "xncgEoy8XBh9siy"
+_UUID_PREFIX    = "xncgEoy8XBh9siy"
 
 
 def _get_config(context: Context) -> Mapping[str, Any]:
@@ -55,9 +55,9 @@ def _safe_text(value: object, default: str = "") -> str:
 
     return bounded_external_text(
         value,
-        max_chars=_FIELD_CHAR_LIMIT,
-        max_bytes=_FIELD_CHAR_LIMIT * 4,
-        default=default,
+        max_chars = _FIELD_CHAR_LIMIT,
+        max_bytes = _FIELD_CHAR_LIMIT * 4,
+        default   = default,
     )
 
 
@@ -106,15 +106,15 @@ async def _request_json(
     """使用统一的有界传输和 JSON 结构契约请求接口。"""
 
     request_headers = {**headers, "Authorization": f"Bearer {access_token}"}
-    response = await aiohttp_request_bounded(
+    response        = await aiohttp_request_bounded(
         session,
         "GET",
         f"{BASE_URL}{path}",
-        limits=_RESPONSE_LIMITS,
-        mime_policy=JSON_MIME_POLICY,
-        success_statuses=_SUCCESS_STATUSES,
-        headers=request_headers,
-        request_kwargs={"params": dict(params), "timeout": 20},
+        limits           = _RESPONSE_LIMITS,
+        mime_policy      = JSON_MIME_POLICY,
+        success_statuses = _SUCCESS_STATUSES,
+        headers          = request_headers,
+        request_kwargs   = {"params": dict(params), "timeout": 20},
     )
     payload = parse_bounded_json(response, limits=_JSON_LIMITS)
     if not isinstance(payload, dict):
@@ -132,9 +132,9 @@ async def _get_checkin_id(
     payload = await _request_json(
         session,
         "/wscump/checkin/check-in-info.json",
-        params={"app_id": app_id, "kdt_id": kdt_id},
-        access_token=access_token,
-        headers=headers,
+        params       = {"app_id": app_id, "kdt_id": kdt_id},
+        access_token = access_token,
+        headers      = headers,
     )
     if payload.get("code") != 0:
         return False, "", _safe_text(payload.get("msg"), "获取签到信息失败")
@@ -162,9 +162,9 @@ async def _do_checkin(
     payload = await _request_json(
         session,
         "/wscump/checkin/checkinV2.json",
-        params={"checkinId": checkin_id, "app_id": app_id, "kdt_id": kdt_id},
-        access_token=access_token,
-        headers=headers,
+        params       = {"checkinId": checkin_id, "app_id": app_id, "kdt_id": kdt_id},
+        access_token = access_token,
+        headers      = headers,
     )
     if payload.get("code") != 0:
         return False, _safe_text(payload.get("msg"), "签到失败")
@@ -174,9 +174,9 @@ async def _do_checkin(
         return False, "签到响应格式异常"
 
     description = _safe_text(data.get("desc"))
-    total = _safe_text(data.get("times"), "0")
-    lines = [f"签到成功！{description}", f"📅 累计签到: {total} 次"]
-    rewards = data.get("list")
+    total       = _safe_text(data.get("times"), "0")
+    lines       = [f"签到成功！{description}", f"📅 累计签到: {total} 次"]
+    rewards     = data.get("list")
     if isinstance(rewards, list):
         reward_count = 0
         for item in rewards:
@@ -186,8 +186,8 @@ async def _do_checkin(
             if not isinstance(infos, Mapping):
                 infos = {}
             reward_day = _safe_text(item.get("times"))
-            title = _safe_text(infos.get("title"))
-            detail = _safe_text(infos.get("desc"))
+            title      = _safe_text(infos.get("title"))
+            detail     = _safe_text(infos.get("desc"))
             if not any((reward_day, title, detail)):
                 continue
             reward_line = f"🎁 奖励{f' {reward_day}' if reward_day else ''}"
@@ -205,11 +205,11 @@ async def _do_checkin(
 async def yingshi_sign(context: Context) -> MessageSegments:
     """读取部署凭据并完成查询、签到两个远端步骤。"""
 
-    config = _get_config(context)
-    app_id = _credential_text(config.get("app_id"))
-    kdt_id = _credential_text(config.get("kdt_id"))
+    config       = _get_config(context)
+    app_id       = _credential_text(config.get("app_id"))
+    kdt_id       = _credential_text(config.get("kdt_id"))
     access_token = _credential_text(config.get("access_token"))
-    sid = _credential_text(config.get("sid"))
+    sid          = _credential_text(config.get("sid"))
     if app_id is None or kdt_id is None or access_token is None or sid is None:
         return segments("❌ 影视签到未配置")
 
@@ -218,11 +218,11 @@ async def yingshi_sign(context: Context) -> MessageSegments:
         return segments("❌ HTTP 会话未初始化")
 
     try:
-        headers = _build_headers(app_id)
+        headers               = _build_headers(app_id)
         headers["Extra-Data"] = json.dumps(
             _build_extra_data(sid),
-            ensure_ascii=False,
-            separators=(",", ":"),
+            ensure_ascii = False,
+            separators   = (",", ":"),
         )
         ok, checkin_id, message = await _get_checkin_id(
             session,
@@ -250,7 +250,7 @@ async def yingshi_sign(context: Context) -> MessageSegments:
             public_error_response(
                 context,
                 exc,
-                logger=logger,
-                component="signin.yingshi",
+                logger    = logger,
+                component = "signin.yingshi",
             ),
         )

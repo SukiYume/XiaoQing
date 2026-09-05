@@ -57,6 +57,8 @@ Core 将两个文件组合成带 revision 的只读设置快照。插件通过�
 
 启用 HTTP 或 WebSocket Inbound 时，`secrets.json` 顶层 `inbound_token` 使用非空字符串。HTTP 与 WebSocket 共享该 token、接纳队列和会话排序。
 
+HTTP 上报端通过 `Authorization: Bearer <inbound_token>` 提交认证。标准上报的回复通过 `onebot_http_base` 配置的 Action API 发送，并在实际投递成功后返回 `{}`。因此 HTTP 上报部署同时配置可达的回复通道及其 `onebot_token`。开发验收程序可显式提交 `X-XiaoQing-Response-Mode: actions` 获取动作列表；调用者承担动作执行责任。OneBot `secret` / `X-Signature` 对应 HMAC 签名，当前入站接口验证 Bearer token。
+
 主动 WebSocket 与 HTTP Action 通过 `secrets.json` 顶层 `onebot_token` 使用 Bearer 鉴权。有效 secrets 快照中的空字符串表示双方约定的匿名 OneBot 连接。
 
 Inbound 的接纳容量为 `inbound_ws_max_workers + ws_queue_size`。同一私聊用户、同一群与用户组合各自按接纳顺序串行执行，各会话键之间共享 worker 并行处理。达到容量时 HTTP 返回过载状态，WebSocket 返回过载响应。

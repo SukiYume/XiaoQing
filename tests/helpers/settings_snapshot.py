@@ -1,3 +1,4 @@
+# 测试快照构造器：公开配置和密钥保持同一原子版本。
 """Test builders for the public atomic plugin-settings contract."""
 
 from __future__ import annotations
@@ -12,14 +13,14 @@ T = TypeVar("T")
 
 def settings_snapshot(
     *,
-    config: Mapping[str, Any] | None = None,
+    config: Mapping[str, Any] | None  = None,
     secrets: Mapping[str, Any] | None = None,
-    revision: int = 0,
+    revision: int                     = 0,
 ) -> PluginSettingsSnapshot:
     return PluginSettingsSnapshot(
-        config={} if config is None else config,
-        secrets={} if secrets is None else secrets,
-        revision=revision,
+        config   = {} if config is None else config,
+        secrets  = {} if secrets is None else secrets,
+        revision = revision,
     )
 
 
@@ -27,12 +28,12 @@ def with_settings_reader(context: T, *, revision: int = 0) -> T:
     """Attach a reader that reflects the fixture's current config and secrets."""
 
     def read_settings() -> PluginSettingsSnapshot:
-        config = getattr(context, "config", {})
+        config  = getattr(context, "config", {})
         secrets = getattr(context, "secrets", {})
         return settings_snapshot(
-            config=config if isinstance(config, Mapping) else {},
-            secrets=secrets if isinstance(secrets, Mapping) else {},
-            revision=revision,
+            config   = config if isinstance(config, Mapping) else {},
+            secrets  = secrets if isinstance(secrets, Mapping) else {},
+            revision = revision,
         )
 
     context.get_settings_snapshot = read_settings

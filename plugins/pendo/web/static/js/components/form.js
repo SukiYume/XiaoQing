@@ -24,19 +24,19 @@ export function buildFormHTML(fields) {
 
     return fields
         .map((rawField, index) => {
-            const field = rawField ?? {};
-            const rawName = String(field.name ?? '');
-            const rawFieldId = String(field.id ?? `form-field-${rawName || 'field'}-${index}`);
-            const rawLabelId = `${rawFieldId}-label`;
-            const name = escapeAttr(rawName);
-            const fieldId = escapeAttr(rawFieldId);
-            const labelId = escapeAttr(rawLabelId);
-            const label = escapeHtml(field.label ?? '');
+            const field           = rawField ?? {};
+            const rawName         = String(field.name ?? '');
+            const rawFieldId      = String(field.id ?? `form-field-${rawName || 'field'}-${index}`);
+            const rawLabelId      = `${rawFieldId}-label`;
+            const name            = escapeAttr(rawName);
+            const fieldId         = escapeAttr(rawFieldId);
+            const labelId         = escapeAttr(rawLabelId);
+            const label           = escapeHtml(field.label ?? '');
             const placeholderText = String(field.placeholder ?? '');
-            const placeholder = escapeAttr(placeholderText);
-            const value = field.value ?? '';
-            const required = field.required ? ' required' : '';
-            let labelForId = rawFieldId;
+            const placeholder     = escapeAttr(placeholderText);
+            const value           = field.value ?? '';
+            const required        = field.required ? ' required' : '';
+            let labelForId        = rawFieldId;
             let input;
 
             switch (field.type) {
@@ -64,8 +64,8 @@ export function buildFormHTML(fields) {
                     input = `<input id="${fieldId}" type="text" name="${name}" class="form-input" value="${escapeAttr(value)}" inputmode="numeric" placeholder="${escapeAttr(placeholderText || 'YYYY-MM-DD')}" aria-labelledby="${labelId}"${required}>`;
                     break;
                 case 'number': {
-                    const min = field.min == null ? '' : ` min="${escapeAttr(field.min)}"`;
-                    const max = field.max == null ? '' : ` max="${escapeAttr(field.max)}"`;
+                    const min  = field.min == null ? '' : ` min="${escapeAttr(field.min)}"`;
+                    const max  = field.max == null ? '' : ` max="${escapeAttr(field.max)}"`;
                     const step = escapeAttr(field.step ?? 'any');
                     input = `<input id="${fieldId}" type="number" name="${name}" class="form-input" value="${escapeAttr(value)}"${min}${max} step="${step}" placeholder="${placeholder}" aria-labelledby="${labelId}"${required}>`;
                     break;
@@ -92,7 +92,7 @@ export function buildFormHTML(fields) {
                         label: String(option?.label ?? option?.value ?? option ?? ''),
                         emoji: String(option?.emoji ?? option?.value ?? option ?? ''),
                     }));
-                    const selectedMood = String(value ?? '');
+                    const selectedMood      = String(value ?? '');
                     const selectedMoodIndex = moodOptions.findIndex(
                         (option) => selectedMood === option.value || selectedMood === option.emoji,
                     );
@@ -131,7 +131,7 @@ export function getFormData(container) {
         if (element.type === 'checkbox') {
             data[name] = Boolean(element.checked);
         } else if (element.type === 'number') {
-            const text = String(element.value ?? '').trim();
+            const text   = String(element.value ?? '').trim();
             const number = Number(text);
             data[name] = text && Number.isFinite(number) ? number : null;
         } else {
@@ -140,7 +140,7 @@ export function getFormData(container) {
     });
 
     container.querySelectorAll('.priority-selector .active').forEach((element) => {
-        const name = element.closest('.priority-selector')?.dataset?.name;
+        const name  = element.closest('.priority-selector')?.dataset?.name;
         const value = Number(element.dataset.value);
         if (name && Number.isInteger(value)) data[name] = value;
     });

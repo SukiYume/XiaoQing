@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC
+
 from tests.helpers.pendo_test_support import (
     ROOT,
     SimpleNamespace,
@@ -14,7 +16,7 @@ from tests.helpers.pendo_test_support import (
 class TestPendoFinanceSummaries:
     def test_weekly_finance_summary_sends_on_sunday_evening(self, monkeypatch):
         import sys
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         sys.path.insert(0, str(ROOT))
 
@@ -23,7 +25,7 @@ class TestPendoFinanceSummaries:
         class _FixedDateTime(datetime):
             @classmethod
             def now(cls, tz=None):
-                base = datetime(2030, 1, 6, 13, 0, tzinfo=timezone.utc)
+                base = datetime(2030, 1, 6, 13, 0, tzinfo=UTC)
                 if tz is None:
                     return base.replace(tzinfo=None)
                 return base.astimezone(tz)
@@ -53,7 +55,7 @@ class TestPendoFinanceSummaries:
         )
         monkeypatch.setattr(scheduled_module, "save_user_setting", lambda *args, **kwargs: None)
 
-        db = _with_scheduled_delivery_contract(SimpleNamespace())
+        db     = _with_scheduled_delivery_contract(SimpleNamespace())
         result = asyncio.run(
             scheduled_module.send_weekly_finance_summaries(
                 SimpleNamespace(send_action=send_action), db
@@ -80,7 +82,7 @@ class TestPendoFinanceSummaries:
 
     def test_month_end_finance_summary_sends_on_last_day_evening(self, monkeypatch):
         import sys
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         sys.path.insert(0, str(ROOT))
 
@@ -89,7 +91,7 @@ class TestPendoFinanceSummaries:
         class _FixedDateTime(datetime):
             @classmethod
             def now(cls, tz=None):
-                base = datetime(2030, 3, 31, 13, 0, tzinfo=timezone.utc)
+                base = datetime(2030, 3, 31, 13, 0, tzinfo=UTC)
                 if tz is None:
                     return base.replace(tzinfo=None)
                 return base.astimezone(tz)
@@ -119,7 +121,7 @@ class TestPendoFinanceSummaries:
         )
         monkeypatch.setattr(scheduled_module, "save_user_setting", lambda *args, **kwargs: None)
 
-        db = _with_scheduled_delivery_contract(SimpleNamespace())
+        db     = _with_scheduled_delivery_contract(SimpleNamespace())
         result = asyncio.run(
             scheduled_module.send_month_end_finance_summaries(
                 SimpleNamespace(send_action=send_action), db
@@ -156,7 +158,7 @@ class TestPendoFinanceSummaries:
 
         temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_finance_summary_{uuid.uuid4().hex}"
         temp_dir.mkdir(parents=True, exist_ok=True)
-        db = Database(str(temp_dir / "pendo.db"))
+        db       = Database(str(temp_dir / "pendo.db"))
         owner_id = "u-finance-summary"
 
         try:
@@ -265,9 +267,9 @@ class TestPendoFinanceSummaries:
             [
                 Item(type=ItemType.LEDGER, title="错误模型"),
                 LedgerItem(
-                    title="有效支出",
-                    amount_cents=1250,
-                    transaction_type="expense",
+                    title            = "有效支出",
+                    amount_cents     = 1250,
+                    transaction_type = "expense",
                 ),
             ]
         )
@@ -285,7 +287,7 @@ class TestPendoFinanceSummaries:
         from plugins.pendo.commands import scheduled as scheduled_module
 
         messages = []
-        result = asyncio.run(
+        result   = asyncio.run(
             scheduled_module._send_private_or_collect(
                 SimpleNamespace(),
                 messages,

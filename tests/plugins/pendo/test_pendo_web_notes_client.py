@@ -276,8 +276,8 @@ def _run_notes_client(script: str) -> None:
     assert_node_esm_contract(
         _notes_source_for_test(),
         script,
-        cwd=ROOT,
-        setup=NOTES_SETUP,
+        cwd   = ROOT,
+        setup = NOTES_SETUP,
     )
 
 

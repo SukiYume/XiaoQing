@@ -25,11 +25,11 @@ class TestHeuristicCheckRepeatedQuestion:
             _msg("user", "对", name="Bob"),
         ]
         result = _heuristic_check(
-            reply="那石景山路到底有啥特别的",
-            history=history,
-            max_repeat_compare=2,
-            similarity_threshold=0.9,
-            max_assistant_in_row=3,
+            reply                = "那石景山路到底有啥特别的",
+            history              = history,
+            max_repeat_compare   = 2,
+            similarity_threshold = 0.9,
+            max_assistant_in_row = 3,
         )
         assert result is not None
         assert result.suitable is False
@@ -51,11 +51,11 @@ class TestGeneralRepetitionHeuristic:
             _msg("user", "继续", name="Alice"),
         ]
         result = _heuristic_check(
-            reply=reply,
-            history=history,
-            max_repeat_compare=2,
-            similarity_threshold=0.9,
-            max_assistant_in_row=3,
+            reply                = reply,
+            history              = history,
+            max_repeat_compare   = 2,
+            similarity_threshold = 0.9,
+            max_assistant_in_row = 3,
         )
         assert result is None
 
@@ -65,10 +65,10 @@ async def test_handle_smalltalk_recovers_from_need_replan_rejection_by_retrying_
     from plugins.xiaoqing_chat.handlers import handle_smalltalk
     from plugins.xiaoqing_chat.llm.reply_checker import ReplyRejected
 
-    context = MagicMock()
-    context.logger = MagicMock()
+    context          = MagicMock()
+    context.logger   = MagicMock()
     context.data_dir = tmp_path / "xiaoqing_chat"
-    event = {"message_type": "group", "group_id": 1, "user_id": 2}
+    event            = {"message_type": "group", "group_id": 1, "user_id": 2}
     runtime = SimpleNamespace(cfg=SimpleNamespace(reply_check=SimpleNamespace(max_replan=1)))
     hctx = SimpleNamespace(chat_id="g1", state=MagicMock(), runtime=runtime)
 
@@ -96,11 +96,11 @@ async def test_handle_smalltalk_records_checker_rejected_attempt_for_review_coun
     from plugins.xiaoqing_chat.handlers import handle_smalltalk
     from plugins.xiaoqing_chat.llm.reply_checker import ReplyRejected
 
-    context = MagicMock()
-    context.logger = MagicMock()
-    context.data_dir = tmp_path / "xiaoqing_chat"
-    event = {"message_type": "group", "group_id": 1, "user_id": 2}
-    state = MagicMock()
+    context                     = MagicMock()
+    context.logger              = MagicMock()
+    context.data_dir            = tmp_path / "xiaoqing_chat"
+    event                       = {"message_type": "group", "group_id": 1, "user_id": 2}
+    state                       = MagicMock()
     state.action_history.append = MagicMock()
     runtime = SimpleNamespace(cfg=SimpleNamespace(reply_check=SimpleNamespace(max_replan=1)))
     hctx = SimpleNamespace(chat_id="g1", state=state, runtime=runtime)
@@ -130,10 +130,10 @@ async def test_handle_smalltalk_uses_configured_reply_check_max_replan(tmp_path)
     from plugins.xiaoqing_chat.handlers import handle_smalltalk
     from plugins.xiaoqing_chat.llm.reply_checker import ReplyRejected
 
-    context = MagicMock()
-    context.logger = MagicMock()
+    context          = MagicMock()
+    context.logger   = MagicMock()
     context.data_dir = tmp_path / "xiaoqing_chat"
-    event = {"message_type": "group", "group_id": 1, "user_id": 2}
+    event            = {"message_type": "group", "group_id": 1, "user_id": 2}
     runtime = SimpleNamespace(cfg=SimpleNamespace(reply_check=SimpleNamespace(max_replan=2)))
     hctx = SimpleNamespace(chat_id="g1", state=MagicMock(), runtime=runtime)
 
@@ -162,21 +162,21 @@ async def test_check_reply_allows_when_llm_checker_credentials_missing():
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
     result = await check_reply(
-        http_session=None,
-        secrets={},
-        bot_name="小青",
-        reply="好的",
-        goal="聊天",
-        policy_text="",
-        history=[],
-        chat_history_text="user: hi",
-        enable_llm_checker=True,
-        max_repeat_compare=3,
-        similarity_threshold=0.9,
-        max_assistant_in_row=5,
-        timeout_seconds=1.0,
-        max_retry=0,
-        retry_interval_seconds=0.0,
+        http_session           = None,
+        secrets                = {},
+        bot_name               = "小青",
+        reply                  = "好的",
+        goal                   = "聊天",
+        policy_text            = "",
+        history                = [],
+        chat_history_text      = "user: hi",
+        enable_llm_checker     = True,
+        max_repeat_compare     = 3,
+        similarity_threshold   = 0.9,
+        max_assistant_in_row   = 5,
+        timeout_seconds        = 1.0,
+        max_retry              = 0,
+        retry_interval_seconds = 0.0,
     )
 
     assert result.suitable is True
@@ -197,21 +197,21 @@ async def test_check_reply_allows_when_llm_checker_call_fails(monkeypatch: pytes
     )
 
     result = await check_reply(
-        http_session=None,
-        secrets={"api_base": "https://example.com", "api_key": "k", "model": "m"},
-        bot_name="小青",
-        reply="好的",
-        goal="聊天",
-        policy_text="",
-        history=[],
-        chat_history_text="user: hi",
-        enable_llm_checker=True,
-        max_repeat_compare=3,
-        similarity_threshold=0.9,
-        max_assistant_in_row=5,
-        timeout_seconds=1.0,
-        max_retry=0,
-        retry_interval_seconds=0.0,
+        http_session           = None,
+        secrets                = {"api_base": "https://example.com", "api_key": "k", "model": "m"},
+        bot_name               = "小青",
+        reply                  = "好的",
+        goal                   = "聊天",
+        policy_text            = "",
+        history                = [],
+        chat_history_text      = "user: hi",
+        enable_llm_checker     = True,
+        max_repeat_compare     = 3,
+        similarity_threshold   = 0.9,
+        max_assistant_in_row   = 5,
+        timeout_seconds        = 1.0,
+        max_retry              = 0,
+        retry_interval_seconds = 0.0,
     )
 
     assert result.suitable is True
@@ -235,21 +235,21 @@ async def test_check_reply_allows_when_llm_checker_returns_invalid_json(
     )
 
     result = await check_reply(
-        http_session=None,
-        secrets={"api_base": "https://example.com", "api_key": "k", "model": "m"},
-        bot_name="小青",
-        reply="好家伙，原来是这样",
-        goal="聊天",
-        policy_text="",
-        history=[],
-        chat_history_text="user: hi",
-        enable_llm_checker=True,
-        max_repeat_compare=3,
-        similarity_threshold=0.9,
-        max_assistant_in_row=5,
-        timeout_seconds=1.0,
-        max_retry=0,
-        retry_interval_seconds=0.0,
+        http_session           = None,
+        secrets                = {"api_base": "https://example.com", "api_key": "k", "model": "m"},
+        bot_name               = "小青",
+        reply                  = "好家伙，原来是这样",
+        goal                   = "聊天",
+        policy_text            = "",
+        history                = [],
+        chat_history_text      = "user: hi",
+        enable_llm_checker     = True,
+        max_repeat_compare     = 3,
+        similarity_threshold   = 0.9,
+        max_assistant_in_row   = 5,
+        timeout_seconds        = 1.0,
+        max_retry              = 0,
+        retry_interval_seconds = 0.0,
     )
 
     assert result.suitable is True
@@ -265,22 +265,22 @@ async def test_check_reply_heuristics_use_text_reply_when_media_is_attached():
     history = [_msg("assistant", "咋了咋了", name="小青")]
 
     result = await check_reply(
-        http_session=None,
-        secrets={},
-        bot_name="小青",
-        reply="咋了咋了[表情包：难过]",
-        heuristic_reply="咋了咋了",
-        goal="聊天",
-        policy_text="",
-        history=history,
-        chat_history_text="assistant: 咋了咋了",
-        enable_llm_checker=False,
-        max_repeat_compare=3,
-        similarity_threshold=0.9,
-        max_assistant_in_row=5,
-        timeout_seconds=1.0,
-        max_retry=0,
-        retry_interval_seconds=0.0,
+        http_session           = None,
+        secrets                = {},
+        bot_name               = "小青",
+        reply                  = "咋了咋了[表情包：难过]",
+        heuristic_reply        = "咋了咋了",
+        goal                   = "聊天",
+        policy_text            = "",
+        history                = history,
+        chat_history_text      = "assistant: 咋了咋了",
+        enable_llm_checker     = False,
+        max_repeat_compare     = 3,
+        similarity_threshold   = 0.9,
+        max_assistant_in_row   = 5,
+        timeout_seconds        = 1.0,
+        max_retry              = 0,
+        retry_interval_seconds = 0.0,
     )
 
     assert result.suitable is False
@@ -302,23 +302,23 @@ async def test_check_reply_rejects_media_only_meta_comment_without_llm(current_t
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
     result = await check_reply(
-        http_session=None,
-        secrets={},
-        bot_name="小青",
-        reply=reply,
-        heuristic_reply=reply,
-        current_text=current_text,
-        goal="自然聊天",
-        policy_text="",
-        history=[],
-        chat_history_text=f"user: {current_text}",
-        enable_llm_checker=False,
-        max_repeat_compare=3,
-        similarity_threshold=0.9,
-        max_assistant_in_row=5,
-        timeout_seconds=1.0,
-        max_retry=0,
-        retry_interval_seconds=0.0,
+        http_session           = None,
+        secrets                = {},
+        bot_name               = "小青",
+        reply                  = reply,
+        heuristic_reply        = reply,
+        current_text           = current_text,
+        goal                   = "自然聊天",
+        policy_text            = "",
+        history                = [],
+        chat_history_text      = f"user: {current_text}",
+        enable_llm_checker     = False,
+        max_repeat_compare     = 3,
+        similarity_threshold   = 0.9,
+        max_assistant_in_row   = 5,
+        timeout_seconds        = 1.0,
+        max_retry              = 0,
+        retry_interval_seconds = 0.0,
     )
 
     assert result.suitable is False
@@ -353,26 +353,26 @@ async def test_check_reply_uses_llm_to_reject_repeated_joke_angle(monkeypatch: p
     ]
 
     result = await check_reply(
-        http_session=None,
-        secrets={"api_base": "https://example.com", "api_key": "k", "model": "m"},
-        bot_name="小青",
-        reply="哈哈你这表情包也太多了吧，批发商本商啊",
-        goal="聊天",
-        policy_text="",
-        history=history,
-        chat_history_text=(
+        http_session      = None,
+        secrets           = {"api_base": "https://example.com", "api_key": "k", "model": "m"},
+        bot_name          = "小青",
+        reply             = "哈哈你这表情包也太多了吧，批发商本商啊",
+        goal              = "聊天",
+        policy_text       = "",
+        history           = history,
+        chat_history_text = (
             "小青: 你搁这批发表情包呢哈哈\n"
             "Alice: 批发啥啊\n"
             "小青: 就是表情包一下子发这么多，跟批发似的\n"
             "Alice: [表情包：疑惑，调侃]"
         ),
-        enable_llm_checker=True,
-        max_repeat_compare=3,
-        similarity_threshold=0.9,
-        max_assistant_in_row=5,
-        timeout_seconds=1.0,
-        max_retry=0,
-        retry_interval_seconds=0.0,
+        enable_llm_checker     = True,
+        max_repeat_compare     = 3,
+        similarity_threshold   = 0.9,
+        max_assistant_in_row   = 5,
+        timeout_seconds        = 1.0,
+        max_retry              = 0,
+        retry_interval_seconds = 0.0,
     )
 
     assert result.suitable is False
@@ -387,9 +387,10 @@ async def test_check_reply_llm_prompt_mentions_media_markers(monkeypatch: pytest
     captured: dict[str, object] = {}
 
     async def fake_chat(**kwargs):
-        captured["prompt"] = kwargs["messages"][0]["content"]
+        captured["prompt"]        = "\n".join(message["content"] for message in kwargs["messages"])
+        captured["roles"]         = [message["role"] for message in kwargs["messages"]]
         captured["extra_payload"] = kwargs.get("extra_payload")
-        captured["secrets"] = kwargs["secrets"]
+        captured["secrets"]       = kwargs["secrets"]
         return {"ok": True}, "/v1/chat/completions"
 
     monkeypatch.setattr(
@@ -426,37 +427,75 @@ async def test_check_reply_llm_prompt_mentions_media_markers(monkeypatch: pytest
     )
 
     assert result.suitable is True
+    assert captured["roles"] == ["system", "user"]
     assert "persona_grounded" in str(captured["prompt"])
     assert "factually_plausible" in str(captured["prompt"])
     prompt = str(captured["prompt"])
-    assert "待检查的最终回复" in prompt
-    assert "人物资料采用闭世界边界" in prompt
-    assert "人物证据契约" in prompt
-    assert "persona_scan_complete" in prompt
-    assert "context_scan_complete" in prompt
-    assert "context_claims" in prompt
-    assert "persona_claims" in prompt
-    assert "[表情包：...]" in prompt
-    assert "最终消息会附带相应媒体" in prompt
-    assert "使用同一组通用原则评估任何话题" in prompt
-    assert "不调用记忆中的具体案例" in prompt
-    assert "重复近期相同的结论" in prompt
-    assert "交际作用" in prompt
-    assert "增加交流作用" in prompt
-    assert "回复规模应与这一轮需求相称" in prompt
-    assert "不要用穷举可能性、连续追问或清单式展开" in prompt
-    assert "只评论媒体形式" in prompt
-    assert "当前最新用户消息" in prompt
-    assert "黑猫瞪大双眼" in prompt
-    assert "第一人称过去经历、身份、背景、现实关系、长期习惯" in prompt
-    assert "最新消息对本轮表达方式作出的明确约束" in prompt
-    assert "instruction_followed" in prompt
-    assert "数字、单位、比较或因果" in prompt
-    assert "缺少证据既不能支持正面答案，也不能支持负面答案" in prompt
+    for required in (
+        "待检查回复",
+        "受控人物资料",
+        "证据契约",
+        "persona_scan_complete",
+        "context_scan_complete",
+        "context_claims",
+        "persona_claims",
+        "实际附带媒体",
+        "当前最新用户消息",
+        "黑猫瞪大双眼",
+        "instruction_followed",
+        "确定事实需要依据",
+        "保留来源、否定、条件和不确定性",
+    ):
+        assert required in prompt
     assert all(marker not in prompt for marker in ("例如", "比如", "示例："))
     assert captured["extra_payload"] == {
         "response_format": {"type": "json_object"},
-        "thinking": {"type": "disabled"},
     }
     assert captured["secrets"]["_route"] == "checker"
     assert captured["secrets"]["_pinned_model"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rejections", [0, 1, 2])
+@pytest.mark.parametrize("has_ai", [False, True])
+async def test_checker_preserves_route_thinking_during_json_compatibility_fallback(
+    monkeypatch, rejections, has_ai
+):
+    from core.ai import AIRequestError
+    from plugins.xiaoqing_chat.llm import reply_checker
+
+    payloads = []
+
+    async def fake_request(**kwargs):
+        # 路由默认值由统一 AI 层合并，插件请求始终保持思考配置未覆盖。
+        extra = kwargs["extra_payload"]
+        payloads.append(extra)
+        assert "thinking" not in (extra or {})
+        assert "reasoning_effort" not in (extra or {})
+        assert kwargs["timeout_seconds"] == (None if has_ai else 30)
+        assert kwargs["total_timeout_seconds"] == 30
+        if len(payloads) <= rejections:
+            raise AIRequestError("request", status=400)
+        return {"ok": True}, "/v1/chat/completions"
+
+    monkeypatch.setattr(reply_checker, "chat_completions_raw_with_fallback_paths", fake_request)
+    options = {
+        "checker_secrets": {"_route": "checker"},
+        "prompt": "审查规则",
+        "materials": "{}",
+        "max_tokens": 1536,
+        "timeout_seconds": 30,
+        "max_retry": 0,
+        "retry_interval_seconds": 0,
+    }
+    if has_ai:
+        options["checker_secrets"]["_ai"] = object()
+    if rejections == 2:
+        with pytest.raises(AIRequestError):
+            await reply_checker._request_checker_completion(**options)
+    else:
+        response, _ = await reply_checker._request_checker_completion(**options)
+        assert response == {"ok": True}
+    assert payloads == [{"response_format": {"type": "json_object"}}] + (
+        [None] if rejections else []
+    )

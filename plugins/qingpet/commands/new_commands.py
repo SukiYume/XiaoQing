@@ -20,7 +20,7 @@ _DRESS_SLOT_FIELDS = {
     DressSlot.BACKGROUND: "dress_background",
 }
 _DRESS_SLOT_NAMES = {slot.value: field_name for slot, field_name in _DRESS_SLOT_FIELDS.items()}
-_SHOW_MEDALS = ("🥇", "🥈", "🥉")
+_SHOW_MEDALS      = ("🥇", "🥈", "🥉")
 
 
 # ──────────────────── 召回 ────────────────────
@@ -52,7 +52,7 @@ def handle_dress(user_id: str, group_id: int, args: str, db: Database) -> tuple[
 
     parts = args.strip().split(maxsplit=1)
     action = parts[0]
-    rest = parts[1] if len(parts) > 1 else ""
+    rest   = parts[1] if len(parts) > 1 else ""
 
     if action in {"查看", "view", "状态"}:
         if rest.strip():
@@ -102,7 +102,7 @@ def _dress_view(user_id: str, group_id: int, db: Database) -> tuple[bool, str]:
     if owned:
         lines.extend(("", "📦 已拥有的装扮:"))
         for item_id in owned:
-            item = DEFAULT_DRESS_ITEMS.get(item_id)
+            item      = DEFAULT_DRESS_ITEMS.get(item_id)
             item_name = item["name"] if item is not None else "未知道具"
             lines.append(f"  • [{item_id}] {item_name}")
 
@@ -119,7 +119,7 @@ def _dress_shop() -> tuple[bool, str]:
     for slot_name, items in by_slot.items():
         lines.append(f"📌 **{slot_name}**")
         for item_id, item in items:
-            currency = item.get("currency", "coins")
+            currency   = item.get("currency", "coins")
             price_icon = "💰" if currency == "coins" else "❤️"
             price_text = f"{item['price']}金币" if currency == "coins" else f"{item['price']}友情点"
             lines.append(
@@ -138,9 +138,9 @@ def _dress_buy(user_id: str, group_id: int, item_id: str, db: Database) -> tuple
     if item_id not in DEFAULT_DRESS_ITEMS:
         return False, f"装扮 '{item_id}' 不存在"
 
-    item = DEFAULT_DRESS_ITEMS[item_id]
+    item     = DEFAULT_DRESS_ITEMS[item_id]
     currency = item.get("currency", "coins")
-    price = item["price"]
+    price    = item["price"]
     success, reason = db.purchase_dress_atomic(user_id, group_id, item_id, currency, price)
     if not success:
         if reason == "余额不足":
@@ -170,8 +170,8 @@ def _dress_equip(user_id: str, group_id: int, item_id: str, db: Database) -> tup
     if pet is None:
         return False, "你还没有宠物"
 
-    item = DEFAULT_DRESS_ITEMS[item_id]
-    slot = item["slot"]
+    item       = DEFAULT_DRESS_ITEMS[item_id]
+    slot       = item["slot"]
     field_name = _DRESS_SLOT_FIELDS.get(slot)
     if field_name is None:
         return False, "装扮槽位无效"
@@ -183,7 +183,7 @@ def _dress_equip(user_id: str, group_id: int, item_id: str, db: Database) -> tup
 
 def _dress_unequip(user_id: str, group_id: int, slot_name: str, db: Database) -> tuple[bool, str]:
     slot_name = slot_name.strip()
-    pet = db.get_pet(user_id, group_id)
+    pet       = db.get_pet(user_id, group_id)
     if pet is None:
         return False, "你还没有宠物"
 
@@ -224,7 +224,7 @@ def handle_trade(user_id: str, group_id: int, args: str, db: Database) -> tuple[
 
     parts = args.strip().split(maxsplit=1)
     action = parts[0]
-    rest = parts[1] if len(parts) > 1 else ""
+    rest   = parts[1] if len(parts) > 1 else ""
 
     if action in {"列表", "list"}:
         if rest.strip():
@@ -244,7 +244,7 @@ def _trade_list(group_id: int, db: Database) -> tuple[bool, str]:
     if not listings:
         return True, "🏪 当前没有挂单"
 
-    lines = ["🏪 **交易市场**", ""]
+    lines        = ["🏪 **交易市场**", ""]
     item_service = ItemService(db)
     for listing in listings:
         item = item_service.get_item(listing["item_id"])
@@ -354,7 +354,7 @@ def handle_show(user_id: str, group_id: int, args: str, db: Database) -> tuple[b
 
     parts = args.strip().split(maxsplit=1)
     action = parts[0]
-    rest = parts[1] if len(parts) > 1 else ""
+    rest   = parts[1] if len(parts) > 1 else ""
 
     if action in {"投票", "vote"}:
         return _show_vote(user_id, group_id, rest, db)
@@ -376,8 +376,8 @@ def _show_info(group_id: int, db: Database) -> tuple[bool, str]:
     if votes:
         lines.append("当前排名:")
         for index, (target_user_id, count) in enumerate(votes.items()):
-            pet = db.get_pet(target_user_id, group_id)
-            name = pet.name if pet is not None else target_user_id
+            pet   = db.get_pet(target_user_id, group_id)
+            name  = pet.name if pet is not None else target_user_id
             medal = _SHOW_MEDALS[index] if index < len(_SHOW_MEDALS) else f"#{index + 1}"
             lines.append(f"{medal} {name} ({target_user_id}) - {count}票")
     else:
@@ -462,10 +462,10 @@ def handle_manage_announce(
 
     parts = args.strip().split(maxsplit=1)
     action = parts[0]
-    rest = parts[1] if len(parts) > 1 else ""
+    rest   = parts[1] if len(parts) > 1 else ""
 
     if action in {"展示会", "show"}:
-        title = rest if rest else "宠物展示会"
+        title    = rest if rest else "宠物展示会"
         existing = db.get_active_pet_show(group_id)
         if existing is not None:
             return False, "已有进行中的展示会"

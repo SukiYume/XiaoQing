@@ -69,7 +69,7 @@ UNBOUNDED_PERSONA_FACT_RE = re.compile(
     r"(?:具体(?:学校|大学|城市|住址|专业)|在[\u4e00-\u9fff]{2,16}(?:大学|学院)"
     r"|家住|老家在|身份证|手机号|真实姓名|生日是|父母|对象|确诊|欠债|坐牢)"
 )
-QUESTION_END_RE = re.compile(r"[?？]\s*$")
+QUESTION_END_RE        = re.compile(r"[?？]\s*$")
 UNREQUESTED_COMFORT_RE = re.compile(
     r"(?:抱抱|别难过|会好起来|想开点|加油|照顾好自己|你已经很棒|给你个建议|可以试试)"
 )
@@ -92,14 +92,14 @@ PNG_BYTES = base64.b64decode(
 
 @dataclass(frozen=True)
 class ExperimentConfig:
-    seed: int = 20260501
-    groups: int = 20
-    min_users: int = 12
-    max_users: int = 30
+    seed: int             = 20260501
+    groups: int           = 20
+    min_users: int        = 12
+    max_users: int        = 30
     rounds_per_group: int = 150
-    bot_name: str = DEFAULT_BOT_NAME
-    self_id: int = 11111
-    group_id_start: int = 930001
+    bot_name: str         = DEFAULT_BOT_NAME
+    self_id: int          = 11111
+    group_id_start: int   = 930001
 
 
 @dataclass(frozen=True)
@@ -126,7 +126,7 @@ class GeneratedTurn:
     rubric_tags: list[str]
 
     def to_record(self) -> dict[str, Any]:
-        record = asdict(self)
+        record         = asdict(self)
         record["user"] = asdict(self.user)
         return record
 
@@ -150,19 +150,19 @@ class GroupScript:
 def generate_matrix(config: ExperimentConfig) -> dict[str, Any]:
     """生成可复现的大群实验矩阵。"""
 
-    rng = random.Random(config.seed)
+    rng                       = random.Random(config.seed)
     groups: list[GroupScript] = []
     for group_offset in range(config.groups):
-        group_id = config.group_id_start + group_offset
+        group_id   = config.group_id_start + group_offset
         user_count = rng.randint(config.min_users, config.max_users)
         personas = _build_personas(group_id, user_count, rng, bot_name=config.bot_name)
         turns = _build_turns_for_group(config, group_id, group_offset, personas)
         groups.append(
             GroupScript(
-                group_id=group_id,
-                name=f"拟人大群-{group_offset + 1:02d}",
-                personas=personas,
-                turns=turns,
+                group_id = group_id,
+                name     = f"拟人大群-{group_offset + 1:02d}",
+                personas = personas,
+                turns    = turns,
             )
         )
 
@@ -233,15 +233,15 @@ def score_turn(
     reply_segments: list[dict[str, Any]] | None,
     *,
     elapsed_s: float = 0.0,
-    error: str = "",
+    error: str       = "",
 ) -> dict[str, Any]:
     """评估单轮回复的拟人化表现。"""
 
-    turn_record = _turn_record(turn)
-    expected = str(turn_record["expected_action"])
-    rubric_tags = set(turn_record.get("rubric_tags") or [])
-    reply_text = _segments_text(reply_segments or [])
-    did_reply = bool(reply_text or reply_segments)
+    turn_record      = _turn_record(turn)
+    expected         = str(turn_record["expected_action"])
+    rubric_tags      = set(turn_record.get("rubric_tags") or [])
+    reply_text       = _segments_text(reply_segments or [])
+    did_reply        = bool(reply_text or reply_segments)
     has_output_media = any(
         str(seg.get("type", "")) in {"image", "face", "mface"}
         for seg in reply_segments or []
@@ -249,13 +249,13 @@ def score_turn(
     )
 
     scores: dict[str, int | None] = dict.fromkeys(DIMENSIONS)
-    evidence: dict[str, str] = {}
-    applicable = {"trigger_reasonable", "safety"}
-    failures: list[str] = []
+    evidence: dict[str, str]      = {}
+    applicable                    = {"trigger_reasonable", "safety"}
+    failures: list[str]           = []
 
     def observe(dimension: str, score: int, detail: str) -> None:
         applicable.add(dimension)
-        scores[dimension] = score
+        scores[dimension]   = score
         evidence[dimension] = detail
 
     if expected == "reply" and not did_reply:
@@ -324,10 +324,10 @@ def score_turn(
         elif "joke" in rubric_tags:
             observe("joke_following", 5, "reply followed the joke heuristic")
         _score_behavior_regressions(
-            rubric_tags=rubric_tags,
-            reply_text=reply_text,
-            observe=observe,
-            failures=failures,
+            rubric_tags = rubric_tags,
+            reply_text  = reply_text,
+            observe     = observe,
+            failures    = failures,
         )
 
     if "topic_switch" in rubric_tags:
@@ -363,8 +363,8 @@ def score_turn(
             else "not applicable to this turn"
         )
     observed_scores = [score for score in scores.values() if score is not None]
-    average = round(statistics.mean(observed_scores), 2) if observed_scores else 0.0
-    failure_tags = sorted(set(failures))
+    average         = round(statistics.mean(observed_scores), 2) if observed_scores else 0.0
+    failure_tags    = sorted(set(failures))
     return {
         "did_reply": did_reply,
         "reply_text": _redact(reply_text),
@@ -387,7 +387,7 @@ def write_experiment_artifacts(
     *,
     run_id: str,
     mode: Literal["matrix", "dry-run", "real"] = "matrix",
-    results: list[dict[str, Any]] | None = None,
+    results: list[dict[str, Any]] | None       = None,
 ) -> dict[str, Path]:
     """写出实验矩阵、人设、结果、对话记录和汇总产物。"""
 
@@ -396,10 +396,10 @@ def write_experiment_artifacts(
     transcript_dir = root / "anthropomorphic-transcripts"
     transcript_dir.mkdir(parents=True, exist_ok=True)
 
-    matrix_path = root / "anthropomorphic-group-matrix.json"
+    matrix_path   = root / "anthropomorphic-group-matrix.json"
     personas_path = root / "anthropomorphic-personas.json"
-    results_path = root / "anthropomorphic-results.jsonl"
-    summary_path = root / "anthropomorphic-summary.md"
+    results_path  = root / "anthropomorphic-results.jsonl"
+    summary_path  = root / "anthropomorphic-summary.md"
 
     matrix_path.write_text(
         json.dumps(matrix, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
@@ -472,15 +472,15 @@ async def run_real_experiment(
     write_experiment_artifacts(
         matrix,
         output_dir,
-        run_id=run_id,
-        mode="real",
-        results=_read_result_rows(output_dir / "anthropomorphic-results.jsonl"),
+        run_id  = run_id,
+        mode    = "real",
+        results = _read_result_rows(output_dir / "anthropomorphic-results.jsonl"),
     )
 
     data_dir = output_dir / "isolated_data_dir" / "anthropomorphic"
     data_dir.mkdir(parents=True, exist_ok=True)
     fixture_image = _ensure_fixture_image(data_dir)
-    config = load_json_file(
+    config        = load_json_file(
         Path("config/config.json"),
         default={"bot_name": DEFAULT_BOT_NAME},
     )
@@ -489,10 +489,10 @@ async def run_real_experiment(
     reset_global_state()
     _bind_all_stores(get_state(), data_dir)
 
-    results_path = output_dir / "anthropomorphic-results.jsonl"
+    results_path               = output_dir / "anthropomorphic-results.jsonl"
     rows: list[dict[str, Any]] = _read_result_rows(results_path)
-    completed_case_ids = {str(row.get("case_id") or "") for row in rows}
-    executed_this_run = 0
+    completed_case_ids         = {str(row.get("case_id") or "") for row in rows}
+    executed_this_run          = 0
     async with aiohttp.ClientSession() as session:
         for turn in _iter_turn_records(matrix):
             if str(turn["case_id"]) in completed_case_ids:
@@ -502,16 +502,16 @@ async def run_real_experiment(
             event = _event_from_turn(turn, self_id=matrix["config"]["self_id"])
             _rewrite_image_segments(event, fixture_image)
             context = _make_context(
-                session=session,
-                config=config,
-                secrets=secrets,
-                data_dir=data_dir,
-                user_id=int(turn["user"]["user_id"]),
-                group_id=int(turn["group_id"]),
-                request_id=f"{run_id}-{turn['case_id']}",
+                session    = session,
+                config     = config,
+                secrets    = secrets,
+                data_dir   = data_dir,
+                user_id    = int(turn["user"]["user_id"]),
+                group_id   = int(turn["group_id"]),
+                request_id = f"{run_id}-{turn['case_id']}",
             )
-            started = time.time()
-            error = ""
+            started                              = time.time()
+            error                                = ""
             reply_segments: list[dict[str, Any]] = []
             try:
                 clean_text = str(turn.get("raw_message") or "")
@@ -560,13 +560,13 @@ async def run_real_experiment(
     try:
         await xiaoqing_chat.shutdown(
             _make_context(
-                session=None,
-                config=config,
-                secrets=secrets,
-                data_dir=data_dir,
-                user_id=0,
-                group_id=0,
-                request_id=f"{run_id}-shutdown",
+                session    = None,
+                config     = config,
+                secrets    = secrets,
+                data_dir   = data_dir,
+                user_id    = 0,
+                group_id   = 0,
+                request_id = f"{run_id}-shutdown",
             )
         )
     except Exception as exc:
@@ -595,14 +595,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--checkpoint-interval", type=int, default=20)
     args = parser.parse_args(argv)
 
-    run_id = args.run_id or _default_run_id()
+    run_id     = args.run_id or _default_run_id()
     output_dir = Path(args.output_dir) if args.output_dir else _default_output_dir(run_id)
-    config = ExperimentConfig(
-        seed=args.seed,
-        groups=args.groups,
-        min_users=args.min_users,
-        max_users=args.max_users,
-        rounds_per_group=args.rounds_per_group,
+    config     = ExperimentConfig(
+        seed             = args.seed,
+        groups           = args.groups,
+        min_users        = args.min_users,
+        max_users        = args.max_users,
+        rounds_per_group = args.rounds_per_group,
     )
     matrix = generate_matrix(config)
 
@@ -612,13 +612,13 @@ def main(argv: list[str] | None = None) -> int:
         results = run_dry_experiment(matrix, run_id=run_id)
     else:
         max_real_turns = args.max_real_turns if args.max_real_turns > 0 else None
-        results = asyncio.run(
+        results        = asyncio.run(
             run_real_experiment(
                 matrix,
                 output_dir,
-                run_id=run_id,
-                max_real_turns=max_real_turns,
-                checkpoint_interval=args.checkpoint_interval,
+                run_id              = run_id,
+                max_real_turns      = max_real_turns,
+                checkpoint_interval = args.checkpoint_interval,
             )
         )
 
@@ -636,8 +636,8 @@ def main(argv: list[str] | None = None) -> int:
                 "output_dir": str(output_dir),
                 "summary": str(paths["summary"]),
             },
-            ensure_ascii=False,
-            indent=2,
+            ensure_ascii = False,
+            indent       = 2,
         )
     )
     return 0
@@ -684,9 +684,9 @@ def _build_personas(
     ]
     personas = []
     for index in range(user_count):
-        style = styles[index % len(styles)]
+        style    = styles[index % len(styles)]
         nickname = nicknames[index % len(nicknames)]
-        user_id = group_id * 100 + index + 1
+        user_id  = group_id * 100 + index + 1
         personas.append(
             Persona(
                 user_id=user_id,
@@ -705,30 +705,30 @@ def _build_turns_for_group(
     group_offset: int,
     personas: list[Persona],
 ) -> list[GeneratedTurn]:
-    templates = _turn_templates(config.bot_name, group_offset)
+    templates                  = _turn_templates(config.bot_name, group_offset)
     turns: list[GeneratedTurn] = []
     for round_index in range(1, config.rounds_per_group + 1):
-        template = templates[(round_index - 1) % len(templates)]
-        user = personas[(round_index - 1 + group_offset) % len(personas)]
+        template   = templates[(round_index - 1) % len(templates)]
+        user       = personas[(round_index - 1 + group_offset) % len(personas)]
         message_id = group_id * 100000 + round_index
-        segments = _segments_from_template(template, config.self_id, message_id - 1)
+        segments   = _segments_from_template(template, config.self_id, message_id - 1)
         raw_message = _raw_from_segments(segments, bot_name=config.bot_name)
         turns.append(
             GeneratedTurn(
-                case_id=f"ANTH-G{group_offset + 1:02d}-R{round_index:04d}",
-                group_id=group_id,
-                round_index=round_index,
-                user=user,
-                message_id=message_id,
-                message_segments=segments,
-                raw_message=raw_message,
-                expected_action=template["expected_action"],
-                expected_target_user_id=user.user_id
+                case_id                 = f"ANTH-G{group_offset + 1:02d}-R{round_index:04d}",
+                group_id                = group_id,
+                round_index             = round_index,
+                user                    = user,
+                message_id              = message_id,
+                message_segments        = segments,
+                raw_message             = raw_message,
+                expected_action         = template["expected_action"],
+                expected_target_user_id = user.user_id
                 if template["expected_action"] == "reply"
                 else None,
-                scenario=template["scenario"],
-                trigger_reason=template["trigger_reason"],
-                rubric_tags=list(template["rubric_tags"]),
+                scenario       = template["scenario"],
+                trigger_reason = template["trigger_reason"],
+                rubric_tags    = list(template["rubric_tags"]),
             )
         )
     return turns
@@ -748,8 +748,8 @@ def _turn_templates(bot_name: str, group_offset: int) -> list[dict[str, Any]]:
             "这个表情太精准了",
             "optional_reply",
             "face_text",
-            face=True,
-            tags=["face", "joke"],
+            face = True,
+            tags = ["face", "joke"],
         ),
         _template("mface_only", "", "optional_reply", "mface", mface=True, tags=["mface"]),
         _template(
@@ -757,8 +757,8 @@ def _turn_templates(bot_name: str, group_offset: int) -> list[dict[str, Any]]:
             f"{bot_name} 看这个猫猫无语",
             "reply",
             "mface_text",
-            mface=True,
-            tags=["mface", "joke"],
+            mface = True,
+            tags  = ["mface", "joke"],
         ),
         _template(
             "image", f"{bot_name} 帮忙看看这张图像啥", "reply", "image", image=True, tags=["image"]
@@ -770,11 +770,11 @@ def _turn_templates(bot_name: str, group_offset: int) -> list[dict[str, Any]]:
             f"{bot_name} 这个组合拳你能看懂吗",
             "reply",
             "mixed",
-            face=True,
-            mface=True,
-            image=True,
-            reply=True,
-            tags=["mixed", "multimodal"],
+            face  = True,
+            mface = True,
+            image = True,
+            reply = True,
+            tags  = ["mixed", "multimodal"],
         ),
         _template("joke", f"{bot_name} 接一下这个梗：ddl会咬人", "reply", "joke", tags=["joke"]),
         _template(
@@ -886,11 +886,11 @@ def _template(
     expected_action: Action,
     trigger_reason: str,
     *,
-    at: bool = False,
-    face: bool = False,
-    mface: bool = False,
-    image: bool = False,
-    reply: bool = False,
+    at: bool            = False,
+    face: bool          = False,
+    mface: bool         = False,
+    image: bool         = False,
+    reply: bool         = False,
     tags: Iterable[str] = (),
 ) -> dict[str, Any]:
     return {
@@ -944,7 +944,7 @@ def _segments_from_template(
 def _raw_from_segments(segments: list[dict[str, Any]], *, bot_name: str) -> str:
     parts = []
     for segment in segments:
-        typ = str(segment.get("type") or "")
+        typ  = str(segment.get("type") or "")
         data = segment.get("data") or {}
         if typ == "text":
             parts.append(str(data.get("text") or ""))
@@ -957,10 +957,10 @@ def _raw_from_segments(segments: list[dict[str, Any]], *, bot_name: str) -> str:
 
 def _coverage_summary(turns: list[GeneratedTurn]) -> dict[str, Any]:
     segment_types: Counter[str] = Counter()
-    scenarios: Counter[str] = Counter()
-    actions: Counter[str] = Counter()
-    media_turns = 0
-    mixed_turns = 0
+    scenarios: Counter[str]     = Counter()
+    actions: Counter[str]       = Counter()
+    media_turns                 = 0
+    mixed_turns                 = 0
     for turn in turns:
         scenarios[turn.scenario] += 1
         actions[turn.expected_action] += 1
@@ -1000,17 +1000,17 @@ def _write_transcripts(
     transcript_dir: Path,
     result_rows: list[dict[str, Any]],
 ) -> None:
-    by_case = {row["case_id"]: row for row in result_rows}
+    by_case  = {row["case_id"]: row for row in result_rows}
     bot_name = resolve_bot_name((matrix.get("config") or {}).get("bot_name"))
     for group in matrix.get("groups", []):
-        group_id = group["group_id"]
+        group_id   = group["group_id"]
         jsonl_path = transcript_dir / f"group_{group_id}.jsonl"
-        md_path = transcript_dir / f"group_{group_id}.md"
-        md_lines = [f"# {group['name']}", "", f"Group: `{group_id}`", ""]
+        md_path    = transcript_dir / f"group_{group_id}.md"
+        md_lines   = [f"# {group['name']}", "", f"Group: `{group_id}`", ""]
         with jsonl_path.open("w", encoding="utf-8") as handle:
             for turn in group.get("turns", []):
                 result = by_case.get(turn["case_id"], {})
-                row = {"turn": turn, "result": result}
+                row    = {"turn": turn, "result": result}
                 handle.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
                 user = turn["user"]
                 md_lines.append(f"## Round {turn['round_index']}")
@@ -1038,7 +1038,7 @@ def _build_summary_markdown(
     mode: str,
 ) -> str:
     coverage = matrix.get("coverage", {})
-    lines = [
+    lines    = [
         "# XiaoQing Anthropomorphic Group Experiment",
         "",
         f"RUN_ID: `{run_id}`",
@@ -1075,8 +1075,8 @@ def _build_summary_markdown(
 
 def _aggregate_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     failures: Counter[str] = Counter()
-    averages: list[float] = []
-    replies = 0
+    averages: list[float]  = []
+    replies                = 0
     for row in results:
         score = row.get("score") or {}
         if score.get("did_reply"):
@@ -1162,7 +1162,7 @@ def _segments_text(segments: list[dict[str, Any]]) -> str:
     for segment in segments:
         if not isinstance(segment, dict):
             continue
-        typ = str(segment.get("type") or "")
+        typ  = str(segment.get("type") or "")
         data = segment.get("data") or {}
         if typ == "text":
             parts.append(str(data.get("text") or ""))
@@ -1261,18 +1261,18 @@ def _make_context(
         if session is None:
             raise RuntimeError("experiment HTTP session is unavailable")
         return await complete_configured_route(
-            session=session,
-            config=config,
-            secrets=secrets,
-            plugin_name="xiaoqing_chat",
+            session     = session,
+            config      = config,
+            secrets     = secrets,
+            plugin_name = "xiaoqing_chat",
             **kwargs,
         )
 
     def list_ai_models(**kwargs):
         return list_configured_models(
-            config=config,
-            secrets=secrets,
-            plugin_name="xiaoqing_chat",
+            config      = config,
+            secrets     = secrets,
+            plugin_name = "xiaoqing_chat",
             **kwargs,
         )
 
@@ -1280,21 +1280,21 @@ def _make_context(
     return SimpleNamespace(
         config=config,
         # 与生产上下文一致：插件只能拿到 route capability，不能读取统一密钥。
-        secrets={},
-        capabilities=PluginCapabilities(
+        secrets      = {},
+        capabilities = PluginCapabilities(
             ai=AIService(complete_ai_route, list_ai_models),
         ),
-        plugin_name="xiaoqing_chat",
-        plugin_dir=plugin_dir,
-        data_dir=data_dir,
-        http_session=session,
-        send_action=send_action,
-        logger=Logger(),
-        current_user_id=user_id,
-        current_group_id=group_id,
-        request_id=request_id,
-        admin_ids=[],
-        state={},
+        plugin_name      = "xiaoqing_chat",
+        plugin_dir       = plugin_dir,
+        data_dir         = data_dir,
+        http_session     = session,
+        send_action      = send_action,
+        logger           = Logger(),
+        current_user_id  = user_id,
+        current_group_id = group_id,
+        request_id       = request_id,
+        admin_ids        = [],
+        state            = {},
         is_admin=lambda _uid, _gid=None: False,
         check_permission=lambda _uid, _perm: False,
     )
@@ -1311,7 +1311,7 @@ def _ensure_fixture_image(data_dir: Path) -> Path:
 def _rewrite_image_segments(event: dict[str, Any], fixture_image: Path) -> None:
     for segment in event.get("message", []) or []:
         if segment.get("type") == "image":
-            data = segment.setdefault("data", {})
+            data         = segment.setdefault("data", {})
             data["file"] = str(fixture_image)
 
 

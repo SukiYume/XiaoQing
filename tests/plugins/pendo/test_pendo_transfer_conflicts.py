@@ -26,12 +26,12 @@ auth_headers = _fixture_support.auth_headers
 
 def test_transfer_logs_endpoint(client: Any, temp_db: Database, auth_headers: dict):
     temp_db.log_transfer(
-        owner_id=OWNER_ID,
-        action="export",
-        filename="test.pendo.zip",
-        types=["task"],
-        record_count=5,
-        result_summary={"counts": {"task": 5}},
+        owner_id       = OWNER_ID,
+        action         = "export",
+        filename       = "test.pendo.zip",
+        types          = ["task"],
+        record_count   = 5,
+        result_summary = {"counts": {"task": 5}},
     )
 
     response = client.get("/api/transfer/logs", headers=auth_headers)
@@ -113,8 +113,8 @@ def test_import_missing_timestamps_use_utc_clock_not_host_local_time():
     fixed = datetime(2030, 1, 1, 12, 0, tzinfo=timezone.utc)
     normalized = normalize_import_payload(
         {"type": "task", "title": "done", "status": "done"},
-        source_zone=ZoneInfo("Pacific/Auckland"),
-        now=fixed,
+        source_zone = ZoneInfo("Pacific/Auckland"),
+        now         = fixed,
     )
 
     assert normalized["created_at"] == "2030-01-01T12:00:00+00:00"
@@ -126,9 +126,13 @@ def test_all_import_endpoints_reject_total_record_limit_across_files(
     client: Any,
     temp_db: Database,
     auth_headers: dict,
+    monkeypatch,
 ):
-    tasks = [{"_type": "task", "_schema": 2} for _ in range(10_001)]
-    notes = [{"_type": "note", "_schema": 2} for _ in range(10_000)]
+    from plugins.pendo.web.services import transfer_bundle
+
+    monkeypatch.setattr(transfer_bundle, "MAX_IMPORT_RECORDS", 20_000)
+    tasks  = [{"_type": "task", "_schema": 2} for _ in range(10_001)]
+    notes  = [{"_type": "note", "_schema": 2} for _ in range(10_000)]
     bundle = _build_sample_bundle_bytes({"task": tasks, "note": notes})
     before = temp_db.get_connection().execute("SELECT COUNT(*) FROM items").fetchone()[0]
 
@@ -143,8 +147,8 @@ def test_all_import_endpoints_reject_total_record_limit_across_files(
     for path, extra_headers in requests:
         response = client.post(
             path,
-            headers={**auth_headers, **extra_headers},
-            content=bundle,
+            headers = {**auth_headers, **extra_headers},
+            content = bundle,
         )
         assert response.status_code == 413, (path, response.text)
     after = temp_db.get_connection().execute("SELECT COUNT(*) FROM items").fetchone()[0]
@@ -152,8 +156,8 @@ def test_all_import_endpoints_reject_total_record_limit_across_files(
 
 
 def test_total_record_limit_accepts_exact_boundary_across_files():
-    tasks = [{"_type": "task", "_schema": 2} for _ in range(10_000)]
-    notes = [{"_type": "note", "_schema": 2} for _ in range(10_000)]
+    tasks  = [{"_type": "task", "_schema": 2} for _ in range(10_000)]
+    notes  = [{"_type": "note", "_schema": 2} for _ in range(10_000)]
     bundle = _build_sample_bundle_bytes({"task": tasks, "note": notes})
 
     parsed = read_bundle(io.BytesIO(bundle))
@@ -189,11 +193,11 @@ def test_import_conflict_policies_have_distinct_persistent_results(
             content=bundle,
         )
 
-    first = import_source("first", "skip")
-    skipped = import_source("must not replace", "skip")
+    first       = import_source("first", "skip")
+    skipped     = import_source("must not replace", "skip")
     overwritten = import_source("overwritten", "overwrite")
-    duplicated = import_source("duplicate", "duplicate")
-    isolated = import_source("isolated", "isolate")
+    duplicated  = import_source("duplicate", "duplicate")
+    isolated    = import_source("isolated", "isolate")
 
     assert first.json()["data"]["results"] == {
         "inserted": 1,
@@ -292,7 +296,7 @@ def test_item_identity_generation_and_source_index_ignore_unsafe_metadata(
     """内部 ID 全局查重；来源索引忽略隔离、损坏或无来源的上下文。"""
 
     assert transfer_api._get_item_identity(temp_db, None) is None
-    collision_id = "a" * 32
+    collision_id  = "a" * 32
     task_contexts = {
         collision_id: {"import": {"source_id": "source-valid", "policy": "skip"}},
         "item-isolated": {"import": {"source_id": "source-isolated", "policy": "isolate"}},
@@ -337,7 +341,7 @@ def test_collection_identity_generation_and_source_index_ignore_unsafe_metadata(
     """集合 ID 也做全局查重，且只索引可覆盖的非隔离来源。"""
 
     assert transfer_api._get_event_collection_identity(temp_db, None) is None
-    collision_id = "c" * 32
+    collision_id        = "c" * 32
     collection_contexts = {
         collision_id: {"import": {"source_id": "collection-source", "policy": "skip"}},
         "collection-isolated": {
@@ -391,9 +395,9 @@ def test_collection_import_planner_skips_existing_source_and_rejects_duplicates(
         temp_db,
         OWNER_ID,
         [{"id": "source-collection", "kind": "multi_node", "title": "待跳过"}],
-        selected_types={"event"},
-        conflict_policy="skip",
-        bundle_id="bundle-skip",
+        selected_types  = {"event"},
+        conflict_policy = "skip",
+        bundle_id       = "bundle-skip",
     )
 
     assert operations == []
@@ -406,9 +410,9 @@ def test_collection_import_planner_skips_existing_source_and_rejects_duplicates(
             temp_db,
             OWNER_ID,
             [duplicate, duplicate],
-            selected_types={"event"},
-            conflict_policy="duplicate",
-            bundle_id="bundle-duplicate",
+            selected_types  = {"event"},
+            conflict_policy = "duplicate",
+            bundle_id       = "bundle-duplicate",
         )
     assert exc_info.value.status_code == 422
 
@@ -439,7 +443,7 @@ def test_relationship_helpers_drop_unresolved_or_malformed_external_links() -> N
     )["references"] == [{"id": "internal"}]
 
     external_source = {"type": "event", "source_item_id": "outside"}
-    rewritten = transfer_api._rewrite_import_item_relationships(external_source, item_id_map)
+    rewritten       = transfer_api._rewrite_import_item_relationships(external_source, item_id_map)
     assert "source_item_id" not in rewritten
 
     no_collection = {"type": "event"}
@@ -460,22 +464,22 @@ def test_import_validation_aborts_on_invalid_rows_and_rejects_duplicate_source_i
     )
     with pytest.raises(transfer_api.HTTPException) as invalid_error:
         transfer_api._validate_import_request(
-            parsed=parsed,
-            errors=[{"message": "invalid row"}],
-            parsed_options={},
-            owner_id=OWNER_ID,
-            db=temp_db,
+            parsed         = parsed,
+            errors         = [{"message": "invalid row"}],
+            parsed_options = {},
+            owner_id       = OWNER_ID,
+            db             = temp_db,
         )
     assert invalid_error.value.status_code == 422
 
     duplicate_records = [dict(valid_records[0]), dict(valid_records[0])]
     with pytest.raises(transfer_api.HTTPException) as duplicate_error:
         transfer_api._plan_item_imports(
-            db=temp_db,
-            owner_id=OWNER_ID,
-            valid_records=duplicate_records,
-            selected_types={"task"},
-            conflict_policy="isolate",
+            db              = temp_db,
+            owner_id        = OWNER_ID,
+            valid_records   = duplicate_records,
+            selected_types  = {"task"},
+            conflict_policy = "isolate",
         )
     assert duplicate_error.value.status_code == 422
 
@@ -492,35 +496,35 @@ def test_import_commit_maps_duplicate_bundle_and_unique_constraint_errors(
     monkeypatch.setattr(temp_db, "execute_import_bundle", raise_duplicate_bundle)
     with pytest.raises(transfer_api.HTTPException) as bundle_error:
         transfer_api._commit_import_plan(
-            db=temp_db,
-            owner_id=OWNER_ID,
-            bundle_id="bundle-race",
-            operations=[],
-            collection_operations=[],
-            filename=None,
-            selected_types={"task"},
-            results={"inserted": 0, "updated": 0, "skipped": 0, "failed": 0},
-            force=False,
+            db                    = temp_db,
+            owner_id              = OWNER_ID,
+            bundle_id             = "bundle-race",
+            operations            = [],
+            collection_operations = [],
+            filename              = None,
+            selected_types        = {"task"},
+            results               = {"inserted": 0, "updated": 0, "skipped": 0, "failed": 0},
+            force                 = False,
         )
     assert bundle_error.value.status_code == 409
 
     def raise_unique_constraint(**_kwargs: Any) -> None:
-        cause = transfer_api.sqlite3.IntegrityError("private sqlite detail")
+        cause                  = transfer_api.sqlite3.IntegrityError("private sqlite detail")
         cause.sqlite_errorcode = transfer_api.sqlite3.SQLITE_CONSTRAINT_UNIQUE
         raise RuntimeError("wrapped storage failure") from cause
 
     monkeypatch.setattr(temp_db, "execute_import_bundle", raise_unique_constraint)
     with pytest.raises(transfer_api.HTTPException) as unique_error:
         transfer_api._commit_import_plan(
-            db=temp_db,
-            owner_id=OWNER_ID,
-            bundle_id=None,
-            operations=[],
-            collection_operations=[],
-            filename=None,
-            selected_types={"task"},
-            results={"inserted": 0, "updated": 0, "skipped": 0, "failed": 0},
-            force=False,
+            db                    = temp_db,
+            owner_id              = OWNER_ID,
+            bundle_id             = None,
+            operations            = [],
+            collection_operations = [],
+            filename              = None,
+            selected_types        = {"task"},
+            results               = {"inserted": 0, "updated": 0, "skipped": 0, "failed": 0},
+            force                 = False,
         )
     assert unique_error.value.status_code == 409
     assert "private sqlite detail" not in str(unique_error.value.detail)
@@ -531,9 +535,9 @@ def test_unique_constraint_detection_has_a_bounded_exception_chain() -> None:
 
     error: BaseException = RuntimeError("root")
     for index in range(10):
-        wrapper = RuntimeError(f"wrapper-{index}")
+        wrapper           = RuntimeError(f"wrapper-{index}")
         wrapper.__cause__ = error
-        error = wrapper
+        error             = wrapper
 
     assert transfer_api._is_unique_constraint_failure(error) is False
 
@@ -566,10 +570,10 @@ def test_transfer_logs_reject_invalid_pagination_even_when_called_directly(
 
     with pytest.raises(transfer_api.HTTPException) as exc_info:
         transfer_api.get_transfer_logs(
-            owner_id=OWNER_ID,
-            db=temp_db,
-            limit=limit,
-            offset=offset,
+            owner_id = OWNER_ID,
+            db       = temp_db,
+            limit    = limit,
+            offset   = offset,
         )
     assert exc_info.value.status_code == 422
 
@@ -596,10 +600,10 @@ def test_query_items_for_types_paginates_full_export():
             if offset >= total:
                 return []
             remaining = total - offset
-            size = min(limit, remaining)
+            size      = min(limit, remaining)
             return [{"id": f"task_{offset + idx}"} for idx in range(size)]
 
-    db = FakeDB()
+    db     = FakeDB()
     result = transfer_api.query_items_for_types(db, OWNER_ID, ["task"])
 
     assert len(result["task"]) == 2505

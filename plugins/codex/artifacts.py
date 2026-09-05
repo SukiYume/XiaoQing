@@ -21,10 +21,10 @@ from core.image_validation import (
     validate_image_fd,
 )
 
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)\n]+)\)")
-IMAGE_LINE_RE = re.compile(r"(?im)^\s*(?:图片|image|img|artifact)\s*[:：]\s*(.+?)\s*$")
-COPY_CHUNK_BYTES = 1024 * 1024
+IMAGE_EXTENSIONS          = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+MARKDOWN_IMAGE_RE         = re.compile(r"!\[[^\]]*\]\(([^)\n]+)\)")
+IMAGE_LINE_RE             = re.compile(r"(?im)^\s*(?:图片|image|img|artifact)\s*[:：]\s*(.+?)\s*$")
+COPY_CHUNK_BYTES          = 1024 * 1024
 MAX_REFERENCED_PATH_CHARS = 32_768
 
 
@@ -53,12 +53,12 @@ class ArtifactLimits:
     """
 
     scan_max_entries: int = 512
-    scan_max_depth: int = 8
-    max_artifacts: int = 16
+    scan_max_depth: int   = 8
+    max_artifacts: int    = 16
     max_single_bytes: int = 16 * 1024 * 1024
-    max_total_bytes: int = 64 * 1024 * 1024
-    max_pixels: int = 40_000_000
-    max_frames: int = 120
+    max_total_bytes: int  = 64 * 1024 * 1024
+    max_pixels: int       = 40_000_000
+    max_frames: int       = 120
 
     def __post_init__(self) -> None:
         for name, value in self.__dict__.items():
@@ -84,7 +84,7 @@ class _ScannedEntry:
     is_directory: bool
     is_file: bool
     identity: tuple[int, int, int, int, int] | None = None
-    metadata_error: bool = False
+    metadata_error: bool                            = False
 
 
 @dataclass
@@ -192,8 +192,8 @@ def _scan_directory_entries(
     remaining_entries: int,
 ) -> tuple[list[_ScannedEntry], int, bool]:
     entries: list[_ScannedEntry] = []
-    consumed = 0
-    truncated = False
+    consumed                     = 0
+    truncated                    = False
     with os.scandir(directory) as iterator:
         for entry in iterator:
             if consumed >= remaining_entries:
@@ -202,26 +202,26 @@ def _scan_directory_entries(
             consumed += 1
             try:
                 entry_info = entry.stat(follow_symlinks=False)
-                is_symlink = entry.is_symlink() or stat.S_ISLNK(entry_info.st_mode)
-                is_directory = stat.S_ISDIR(entry_info.st_mode)
-                is_file = stat.S_ISREG(entry_info.st_mode)
-                identity = stat_identity(entry_info)
+                is_symlink     = entry.is_symlink() or stat.S_ISLNK(entry_info.st_mode)
+                is_directory   = stat.S_ISDIR(entry_info.st_mode)
+                is_file        = stat.S_ISREG(entry_info.st_mode)
+                identity       = stat_identity(entry_info)
                 metadata_error = False
             except OSError:
-                is_symlink = False
-                is_directory = False
-                is_file = False
-                identity = None
+                is_symlink     = False
+                is_directory   = False
+                is_file        = False
+                identity       = None
                 metadata_error = True
             entries.append(
                 _ScannedEntry(
-                    name=entry.name,
-                    path=Path(entry.path),
-                    is_symlink=is_symlink,
-                    is_directory=is_directory,
-                    is_file=is_file,
-                    identity=identity,
-                    metadata_error=metadata_error,
+                    name           = entry.name,
+                    path           = Path(entry.path),
+                    is_symlink     = is_symlink,
+                    is_directory   = is_directory,
+                    is_file        = is_file,
+                    identity       = identity,
+                    metadata_error = metadata_error,
                 )
             )
     entries.sort(key=lambda item: item.name.casefold())
@@ -297,7 +297,7 @@ def _record_scanned_entry(
 def _artifact_images(artifact_dir: Path, limits: ArtifactLimits) -> _ArtifactScanResult:
     """按条目数和深度预算扫描本任务目录，不跟随任何链接。"""
 
-    result = _ArtifactScanResult()
+    result        = _ArtifactScanResult()
     root_identity = _scan_root_identity(artifact_dir, result)
     if root_identity is None:
         return result
@@ -329,10 +329,10 @@ def _artifact_images(artifact_dir: Path, limits: ArtifactLimits) -> _ArtifactSca
         for entry in entries:
             _record_scanned_entry(
                 entry,
-                depth=depth,
-                limits=limits,
-                directories=directories,
-                result=result,
+                depth       = depth,
+                limits      = limits,
+                directories = directories,
+                result      = result,
             )
 
         if entry_truncated:
@@ -361,7 +361,7 @@ def _safe_open_source(source_path: Path) -> tuple[int, os.stat_result]:
     except OSError as exc:
         raise _ArtifactRejected("source_open_error") from exc
     try:
-        opened = os.fstat(source_fd)
+        opened  = os.fstat(source_fd)
         current = os.lstat(source_path)
         if (
             not stat.S_ISREG(opened.st_mode)
@@ -392,7 +392,7 @@ def _verify_source_unchanged(
     initial: os.stat_result,
 ) -> None:
     try:
-        after_fd = os.fstat(source_fd)
+        after_fd   = os.fstat(source_fd)
         after_path = os.lstat(source_path)
     except OSError as exc:
         raise _ArtifactRejected("source_changed") from exc
@@ -427,8 +427,8 @@ def _copy_source_bytes(
         copied_bytes += len(chunk)
         _check_copy_budget(
             copied_bytes,
-            committed_bytes=committed_bytes,
-            limits=limits,
+            committed_bytes = committed_bytes,
+            limits          = limits,
         )
         _write_all(temp_fd, chunk)
 
@@ -449,28 +449,28 @@ def _copy_validated_image(
     limits: ArtifactLimits,
     committed_bytes: int,
 ) -> tuple[int | None, str | None]:
-    source_fd: int | None = None
-    temp_fd: int | None = None
+    source_fd: int | None  = None
+    temp_fd: int | None    = None
     temp_path: Path | None = None
     try:
         source_fd, initial = _safe_open_source(source_path)
         _check_copy_budget(
             initial.st_size,
-            committed_bytes=committed_bytes,
-            limits=limits,
+            committed_bytes = committed_bytes,
+            limits          = limits,
         )
 
         temp_fd, raw_temp_path = tempfile.mkstemp(
-            prefix=f".{destination.name}.",
-            suffix=".tmp",
-            dir=destination.parent,
+            prefix = f".{destination.name}.",
+            suffix = ".tmp",
+            dir    = destination.parent,
         )
-        temp_path = Path(raw_temp_path)
+        temp_path    = Path(raw_temp_path)
         copied_bytes = _copy_source_bytes(
             source_fd,
             temp_fd,
-            committed_bytes=committed_bytes,
-            limits=limits,
+            committed_bytes = committed_bytes,
+            limits          = limits,
         )
 
         _verify_source_unchanged(source_fd, source_path, initial)
@@ -488,11 +488,11 @@ def _copy_validated_image(
         try:
             validate_image_fd(
                 temp_fd,
-                expected_suffix=source_path.suffix.lower(),
-                limits=ImageValidationLimits(
-                    max_bytes=limits.max_single_bytes,
-                    max_pixels=limits.max_pixels,
-                    max_frames=limits.max_frames,
+                expected_suffix = source_path.suffix.lower(),
+                limits          = ImageValidationLimits(
+                    max_bytes  = limits.max_single_bytes,
+                    max_pixels = limits.max_pixels,
+                    max_frames = limits.max_frames,
                 ),
             )
         except ImageValidationError as exc:
@@ -551,9 +551,9 @@ def _discover_candidates(
     limits: ArtifactLimits,
 ) -> tuple[list[tuple[Path, str, str]], Counter[str], int, bool]:
     candidates: list[tuple[Path, str, str]] = []
-    seen: set[str] = set()
-    reasons: Counter[str] = Counter()
-    dropped_count = 0
+    seen: set[str]                          = set()
+    reasons: Counter[str]                   = Counter()
+    dropped_count                           = 0
 
     reference_values = chain(referenced_paths or (), _referenced_image_values(final_text))
     for raw_value in reference_values:
@@ -603,13 +603,13 @@ def collect_image_artifacts(
     candidates, reason_counts, dropped_count, scan_truncated = _discover_candidates(
         final_text,
         referenced_paths,
-        cwd=cwd,
-        artifact_dir=artifact_dir,
-        limits=effective_limits,
+        cwd          = cwd,
+        artifact_dir = artifact_dir,
+        limits       = effective_limits,
     )
 
     artifacts: list[CodexImageArtifact] = []
-    committed_bytes = 0
+    committed_bytes                     = 0
     for source_path, source, original_path in candidates:
         if len(artifacts) >= effective_limits.max_artifacts:
             dropped_count += 1
@@ -623,13 +623,13 @@ def collect_image_artifacts(
             continue
 
         artifact_index = len(artifacts) + 1
-        suffix = source_path.suffix.lower()
-        destination = archive_dir / f"job-{job_id:04d}-{artifact_index:02d}{suffix}"
+        suffix         = source_path.suffix.lower()
+        destination    = archive_dir / f"job-{job_id:04d}-{artifact_index:02d}{suffix}"
         copied_bytes, rejection_reason = _copy_validated_image(
             source_path,
             destination,
-            limits=effective_limits,
-            committed_bytes=committed_bytes,
+            limits          = effective_limits,
+            committed_bytes = committed_bytes,
         )
         if rejection_reason is not None or copied_bytes is None:
             dropped_count += 1
@@ -640,16 +640,16 @@ def collect_image_artifacts(
         relative_path = destination.relative_to(session_root).as_posix()
         artifacts.append(
             CodexImageArtifact(
-                path=relative_path,
-                absolute_path=str(destination.resolve()),
-                source=source,
-                original_path=original_path,
+                path          = relative_path,
+                absolute_path = str(destination.resolve()),
+                source        = source,
+                original_path = original_path,
             )
         )
 
     return ArtifactCollectionResult(
-        artifacts=artifacts,
-        dropped_count=dropped_count,
-        reasons=dict(sorted(reason_counts.items())),
-        scan_truncated=scan_truncated,
+        artifacts      = artifacts,
+        dropped_count  = dropped_count,
+        reasons        = dict(sorted(reason_counts.items())),
+        scan_truncated = scan_truncated,
     )

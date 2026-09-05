@@ -49,8 +49,8 @@ def test_public_id_only_shortens_canonical_internal_uuid(stored_id: str, expecte
 
 
 def test_database_resolves_short_ids_per_owner_and_mutates_canonical_row(db: Database) -> None:
-    owner_a = "uuid-owner-a"
-    owner_b = "uuid-owner-b"
+    owner_a   = "uuid-owner-a"
+    owner_b   = "uuid-owner-b"
     item_a_id = "01234567" + "a" * 24
     item_b_id = "01234567" + "b" * 24
     db.insert_item(NoteItem(id=item_a_id, owner_id=owner_a, title="A"))
@@ -77,8 +77,8 @@ def test_database_default_event_collection_id_uses_full_uuid(db: Database) -> No
 
 
 def test_database_rejects_ambiguous_short_id_without_touching_rows(db: Database) -> None:
-    owner_id = "uuid-ambiguous-owner"
-    first_id = "deadbeef" + "0" * 24
+    owner_id  = "uuid-ambiguous-owner"
+    first_id  = "deadbeef" + "0" * 24
     second_id = "deadbeef" + "1" * 24
     db.insert_item(NoteItem(id=first_id, owner_id=owner_id, title="first"))
     db.insert_item(NoteItem(id=second_id, owner_id=owner_id, title="second"))
@@ -94,8 +94,8 @@ def test_database_rejects_ambiguous_short_id_without_touching_rows(db: Database)
 
 
 def test_event_graph_rejects_short_id_shared_by_leaf_and_collection(db: Database) -> None:
-    owner_id = "uuid-event-namespace-owner"
-    leaf_id = "badc0ffe" + "0" * 24
+    owner_id      = "uuid-event-namespace-owner"
+    leaf_id       = "badc0ffe" + "0" * 24
     collection_id = "badc0ffe" + "1" * 24
     db.insert_item(EventItem(id=leaf_id, owner_id=owner_id, title="叶子"))
     db.create_event_collection(
@@ -112,15 +112,15 @@ def test_event_graph_rejects_short_id_shared_by_leaf_and_collection(db: Database
 
 
 def test_reminder_commands_show_short_id_and_confirmation_resolves_it(db: Database) -> None:
-    owner_id = "uuid-reminder-owner"
-    item_id = "facefeed" + "2" * 24
+    owner_id    = "uuid-reminder-owner"
+    item_id     = "facefeed" + "2" * 24
     remind_time = "2035-08-25T18:00:00+00:00"
-    event = EventItem(
-        id=item_id,
-        owner_id=owner_id,
-        title="UUID 提醒",
-        start_time=remind_time,
-        remind_times=[remind_time],
+    event       = EventItem(
+        id           = item_id,
+        owner_id     = owner_id,
+        title        = "UUID 提醒",
+        start_time   = remind_time,
+        remind_times = [remind_time],
     )
     db.insert_item(event)
 
@@ -131,9 +131,9 @@ def test_reminder_commands_show_short_id_and_confirmation_resolves_it(db: Databa
 
     db.confirm_reminder(
         event.display_id,
-        owner_id=owner_id,
-        remind_time=remind_time,
-        allow_future=True,
+        owner_id     = owner_id,
+        remind_time  = remind_time,
+        allow_future = True,
     )
     logs = db.get_reminder_logs(item_id)
     assert len(logs) == 1
@@ -143,8 +143,8 @@ def test_reminder_commands_show_short_id_and_confirmation_resolves_it(db: Databa
 def test_web_returns_conflict_for_ambiguous_short_id(client, db: Database) -> None:
     from plugins.pendo.web.deps import get_current_user
 
-    owner_id = "uuid-web-ambiguous-owner"
-    first_id = "decafbad" + "0" * 24
+    owner_id  = "uuid-web-ambiguous-owner"
+    first_id  = "decafbad" + "0" * 24
     second_id = "decafbad" + "1" * 24
     db.insert_item(NoteItem(id=first_id, owner_id=owner_id, title="first"))
     db.insert_item(NoteItem(id=second_id, owner_id=owner_id, title="second"))

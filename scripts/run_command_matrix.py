@@ -27,11 +27,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 # 此时 Python 默认只把 scripts/ 放入 sys.path，无法导入同级 core/plugins。
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-DEFAULT_POLICY_PATH = PROJECT_ROOT / "tests" / "command_matrix_policy.json"
+DEFAULT_POLICY_PATH   = PROJECT_ROOT / "tests" / "command_matrix_policy.json"
 DEFAULT_SCENARIO_PATH = PROJECT_ROOT / "tests" / "command_scenario_contracts.json"
-DEFAULT_ENDPOINT = "http://127.0.0.1:12000/event"
-DEFAULT_WS_ENDPOINT = "http://127.0.0.1:12000/ws"
-DEFAULT_SECRETS_PATH = PROJECT_ROOT / "config" / "secrets.json"
+DEFAULT_ENDPOINT      = "http://127.0.0.1:12000/event"
+DEFAULT_WS_ENDPOINT   = "http://127.0.0.1:12000/ws"
+DEFAULT_SECRETS_PATH  = PROJECT_ROOT / "config" / "secrets.json"
 
 RISKS = frozenset({"read_only", "isolated_state", "privileged"})
 DEPENDENCIES = frozenset({"local", "external"})
@@ -51,12 +51,12 @@ STATE_MODELS = frozenset(
         "external_session",
     }
 )
-PUBLIC_ERROR_CODE = "XQ-PLUGIN-UNEXPECTED"
+PUBLIC_ERROR_CODE            = "XQ-PLUGIN-UNEXPECTED"
 MAX_PERSISTED_RESPONSE_CHARS = 2_000
-WS_ACTION_SETTLE_SECONDS = 0.15
+WS_ACTION_SETTLE_SECONDS     = 0.15
 
-_AUTHORIZATION = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+")
-_JWT = re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")
+_AUTHORIZATION     = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+")
+_JWT               = re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")
 _SECRET_ASSIGNMENT = re.compile(
     r"(?i)\b(api[_-]?key|token|password|passwd|secret)\s*[:=]\s*[^\s,;]+"
 )
@@ -210,7 +210,7 @@ def load_runtime_auth(path: Path) -> tuple[str, int, tuple[int, ...]]:
     """从本地密钥文件读取入站 token；密钥永不进入输出。"""
 
     payload = _read_json_object(path, label="运行密钥")
-    token = payload.get("inbound_token")
+    token  = payload.get("inbound_token")
     admins = payload.get("admin_user_ids")
     if not isinstance(token, str) or not token:
         raise MatrixError("config/secrets.json 缺少 inbound_token")
@@ -244,8 +244,8 @@ def load_policy(path: Path) -> dict[str, Any]:
     payload = _read_json_object(path, label="命令矩阵策略")
     if payload.get("schema_version") != 1:
         raise MatrixError("命令矩阵策略 schema_version 必须为 1")
-    default = payload.get("default")
-    plugins = payload.get("plugins")
+    default  = payload.get("default")
+    plugins  = payload.get("plugins")
     commands = payload.get("commands")
     if (
         not isinstance(default, dict)
@@ -300,7 +300,7 @@ def _validate_policy_record(
 def policy_for(code: str, plugin: str, policy: dict[str, Any]) -> PolicyDecision:
     """先应用插件默认值，再按最长稳定命令码前缀覆盖。"""
 
-    merged = dict(policy["default"])
+    merged        = dict(policy["default"])
     plugin_record = policy["plugins"].get(plugin)
     if not isinstance(plugin_record, dict):
         raise MatrixError(f"插件 {plugin} 没有显式测试策略")
@@ -317,12 +317,12 @@ def policy_for(code: str, plugin: str, policy: dict[str, Any]) -> PolicyDecision
         merged.update(record)
     _validate_policy_record(merged, label=f"resolved {code}")
     return PolicyDecision(
-        risk=str(merged["risk"]),
-        dependency=str(merged["dependency"]),
-        sensitive=bool(merged["sensitive"]),
-        reason=str(merged.get("reason") or f"{plugin} 插件默认分类"),
-        invalid_expect_any=tuple(merged.get("invalid_expect_any", ())),
-        invalid_reject_any=tuple(merged.get("invalid_reject_any", ())),
+        risk               = str(merged["risk"]),
+        dependency         = str(merged["dependency"]),
+        sensitive          = bool(merged["sensitive"]),
+        reason             = str(merged.get("reason") or f"{plugin} 插件默认分类"),
+        invalid_expect_any = tuple(merged.get("invalid_expect_any", ())),
+        invalid_reject_any = tuple(merged.get("invalid_reject_any", ())),
     )
 
 
@@ -332,8 +332,8 @@ def validate_policy_against_catalog(
 ) -> None:
     """阻止新增插件或删除命令后继续沿用陈旧安全分类。"""
 
-    codes = {str(record.get("code", "")) for record in records}
-    plugins = {str(record.get("plugin", "")) for record in records}
+    codes           = {str(record.get("code", "")) for record in records}
+    plugins         = {str(record.get("plugin", "")) for record in records}
     missing_plugins = sorted(plugins - set(policy["plugins"]))
     if missing_plugins:
         raise MatrixError(f"以下插件缺少测试策略: {missing_plugins}")
@@ -370,7 +370,7 @@ def load_scenario_contract(path: Path) -> dict[str, Any]:
     payload = _read_json_object(path, label="动态业务场景契约")
     if payload.get("schema_version") != 1:
         raise MatrixError("动态业务场景契约 schema_version 必须为 1")
-    plugins = payload.get("plugins")
+    plugins   = payload.get("plugins")
     scenarios = payload.get("scenarios")
     if not isinstance(plugins, dict) or not isinstance(scenarios, list):
         raise MatrixError("动态业务场景契约缺少 plugins 对象或 scenarios 数组")
@@ -388,7 +388,7 @@ def _validate_scenario_audit(
     plugins = payload["plugins"]
     if expected_plugins is not None and set(plugins) != set(expected_plugins):
         missing = sorted(set(expected_plugins) - set(plugins))
-        stale = sorted(set(plugins) - set(expected_plugins))
+        stale   = sorted(set(plugins) - set(expected_plugins))
         raise MatrixError(f"动态场景插件审计不完整: missing={missing}, stale={stale}")
 
     catalog_by_plugin: dict[str, set[str]] = {}
@@ -431,7 +431,7 @@ def _validate_scenario_audit(
                 f"{sorted(regression - dynamic)}"
             )
         catalog_codes = catalog_by_plugin.get(plugin, set())
-        stale_codes = sorted(dynamic - catalog_codes)
+        stale_codes   = sorted(dynamic - catalog_codes)
         if stale_codes:
             raise MatrixError(f"插件 {plugin} 的动态命令码已失效: {stale_codes}")
         if state_model in {"stateless", "external_read_only"} and dynamic:
@@ -499,7 +499,7 @@ def _build_scenario_step(
         raise MatrixError(f"动态场景 {scenario_id} 的步骤含未知字段: {sorted(step_unknown)}")
 
     step_id = raw_step.get("id")
-    code = raw_step.get("code")
+    code    = raw_step.get("code")
     message = raw_step.get("message")
     if not isinstance(step_id, str) or not step_id.strip() or step_id in step_ids:
         raise MatrixError(f"动态场景 {scenario_id} 含空或重复 step id: {step_id}")
@@ -528,7 +528,7 @@ def _build_scenario_step(
     if not isinstance(raw_captures, dict):
         raise MatrixError(f"动态场景 {scenario_id}.{step_id}.captures 必须是对象")
     captures: list[tuple[str, str]] = []
-    template_values = [message, *expect_all, *expect_any, *reject_any]
+    template_values                 = [message, *expect_all, *expect_any, *reject_any]
     for name, pattern in raw_captures.items():
         if (
             not isinstance(name, str)
@@ -610,7 +610,7 @@ def build_business_scenarios(
         if unknown:
             raise MatrixError(f"动态场景含未知字段: {sorted(unknown)}")
         scenario_id = raw.get("id")
-        plugin = raw.get("plugin")
+        plugin      = raw.get("plugin")
         description = raw.get("description")
         if not isinstance(scenario_id, str) or not scenario_id.strip():
             raise MatrixError("动态场景 id 必须是非空字符串")
@@ -652,15 +652,15 @@ def build_business_scenarios(
                 f"动态场景 {scenario_id}.required_fixtures 使用保留变量: "
                 f"{sorted(reserved_fixtures)}"
             )
-        available_values = {*SCENARIO_BUILTIN_VALUES, *fixtures}
+        available_values   = {*SCENARIO_BUILTIN_VALUES, *fixtures}
         step_ids: set[str] = set()
-        steps = [
+        steps              = [
             _build_scenario_step(
                 raw_step,
-                scenario_id=scenario_id,
-                covers=covers,
-                available_values=available_values,
-                step_ids=step_ids,
+                scenario_id      = scenario_id,
+                covers           = covers,
+                available_values = available_values,
+                step_ids         = step_ids,
             )
             for raw_step in raw_steps
         ]
@@ -669,23 +669,23 @@ def build_business_scenarios(
         _validate_scenario_cleanup(scenario_id, str(raw["risk"]), steps)
         scenarios.append(
             BusinessScenario(
-                scenario_id=scenario_id,
-                plugin=str(plugin),
-                description=description.strip(),
-                risk=str(raw["risk"]),
-                dependency=str(raw["dependency"]),
-                scope=str(raw["scope"]),
-                actor=str(raw["actor"]),
-                sensitive=bool(raw["sensitive"]),
-                required_fixtures=fixtures,
-                covers=covers,
-                steps=tuple(steps),
-                step_delay_ms=step_delay_ms,
+                scenario_id       = scenario_id,
+                plugin            = str(plugin),
+                description       = description.strip(),
+                risk              = str(raw["risk"]),
+                dependency        = str(raw["dependency"]),
+                scope             = str(raw["scope"]),
+                actor             = str(raw["actor"]),
+                sensitive         = bool(raw["sensitive"]),
+                required_fixtures = fixtures,
+                covers            = covers,
+                steps             = tuple(steps),
+                step_delay_ms     = step_delay_ms,
             )
         )
 
     for plugin, raw in payload["plugins"].items():
-        dynamic = dynamic_by_plugin[plugin]
+        dynamic    = dynamic_by_plugin[plugin]
         regression = set(raw["regression_codes"])
         # 场景可以携带只读的前置查询（例如先从时间线捕获真实 ID），但闭合审计
         # 只统计该插件声明为动态状态的命令码，避免把合法 setup 步骤误报成 extra。
@@ -757,12 +757,12 @@ class EventClient:
         group_id: int,
         timeout: float,
     ) -> None:
-        self.endpoint = endpoint
-        self.token = token
-        self.admin_id = admin_id
-        self.user_id = user_id
-        self.group_id = group_id
-        self.timeout = timeout
+        self.endpoint  = endpoint
+        self.token     = token
+        self.admin_id  = admin_id
+        self.user_id   = user_id
+        self.group_id  = group_id
+        self.timeout   = timeout
         self._sequence = 0
         # 多个 client 会分别抓目录和跑动态场景；毫秒时间种子会让它们从同一个
         # message_id 起步，触发 Core 去重并表现为无回复。每个实例预留独立号段。
@@ -774,8 +774,8 @@ class EventClient:
         self._sequence += 1
         if scope not in SCOPES:
             raise MatrixError(f"未知消息场景: {scope}")
-        user_id = self.admin_id if actor == "bot_admin" else self.user_id
-        role = "owner" if actor in {"bot_admin", "group_owner"} else "member"
+        user_id               = self.admin_id if actor == "bot_admin" else self.user_id
+        role                  = "owner" if actor in {"bot_admin", "group_owner"} else "member"
         event: dict[str, Any] = {
             "time": int(time.time()),
             "post_type": "message",
@@ -805,6 +805,7 @@ class EventClient:
             headers={
                 "Authorization": f"Bearer {self.token}",
                 "Content-Type": "application/json; charset=utf-8",
+                "X-XiaoQing-Response-Mode": "actions",
             },
             method="POST",
         )
@@ -812,7 +813,7 @@ class EventClient:
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 status = response.status
-                raw = response.read()
+                raw    = response.read()
             try:
                 payload: Any = json.loads(raw.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError):
@@ -840,17 +841,17 @@ class WebSocketEventClient(EventClient):
     async def _send_event(self, event: dict[str, Any]) -> EventResponse:
         started = time.perf_counter()
         timeout = aiohttp.ClientTimeout(
-            total=None,
-            sock_connect=self.timeout,
-            sock_read=self.timeout,
+            total        = None,
+            sock_connect = self.timeout,
+            sock_read    = self.timeout,
         )
         try:
             async with (
                 aiohttp.ClientSession(timeout=timeout) as session,
                 session.ws_connect(
                     self.endpoint,
-                    headers={"Authorization": f"Bearer {self.token}"},
-                    timeout=self.timeout,
+                    headers = {"Authorization": f"Bearer {self.token}"},
+                    timeout = self.timeout,
                 ) as websocket,
             ):
                 await websocket.send_json(event)
@@ -970,7 +971,7 @@ def load_source_catalog() -> list[dict[str, Any]]:
                 root=True,
             )
             for node in root.walk():
-                record = node.to_dict()
+                record                = node.to_dict()
                 record["subcommands"] = [child.code for child in node.children]
                 records.append(record)
     return records
@@ -979,9 +980,9 @@ def load_source_catalog() -> list[dict[str, Any]]:
 def catalog_hash(records: list[dict[str, Any]]) -> str:
     canonical = json.dumps(
         sorted(records, key=lambda record: str(record.get("code", ""))),
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
+        ensure_ascii = False,
+        sort_keys    = True,
+        separators   = (",", ":"),
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -1000,7 +1001,7 @@ def _case_id(code: str, kind: str, scope: str, index: int, message: str) -> str:
 
 
 def _alias_message(record: dict[str, Any], alias: str) -> str:
-    path = record.get("path")
+    path     = record.get("path")
     examples = record.get("examples")
     if not isinstance(path, list) or not path or not all(isinstance(item, str) for item in path):
         raise MatrixError(f"{record.get('code')} 缺少合法 path")
@@ -1021,10 +1022,10 @@ def build_matrix(
     validate_policy_against_catalog(policy, records)
     cases: list[MatrixCase] = []
     for record in records:
-        code = str(record["code"])
-        plugin = str(record["plugin"])
+        code       = str(record["code"])
+        plugin     = str(record["plugin"])
         permission = str(record.get("permission") or "public")
-        contexts = record.get("contexts")
+        contexts   = record.get("contexts")
         if (
             not isinstance(contexts, list)
             or not contexts
@@ -1045,22 +1046,22 @@ def build_matrix(
                     raise MatrixError(f"{code} 含空 {field}")
                 cases.extend(
                     MatrixCase(
-                        case_id=_case_id(code, kind, scope, index, example),
-                        plugin=plugin,
-                        code=code,
-                        kind=kind,
-                        example_index=index,
-                        message=example,
-                        scope=scope,
-                        actor=_actor_for(permission, scope),
-                        permission=permission,
-                        risk=decision.risk,
-                        dependency=decision.dependency,
-                        sensitive=decision.sensitive,
-                        policy_reason=decision.reason,
-                        semantic_expectation=expectation,
-                        invalid_expect_any=decision.invalid_expect_any,
-                        invalid_reject_any=decision.invalid_reject_any,
+                        case_id              = _case_id(code, kind, scope, index, example),
+                        plugin               = plugin,
+                        code                 = code,
+                        kind                 = kind,
+                        example_index        = index,
+                        message              = example,
+                        scope                = scope,
+                        actor                = _actor_for(permission, scope),
+                        permission           = permission,
+                        risk                 = decision.risk,
+                        dependency           = decision.dependency,
+                        sensitive            = decision.sensitive,
+                        policy_reason        = decision.reason,
+                        semantic_expectation = expectation,
+                        invalid_expect_any   = decision.invalid_expect_any,
+                        invalid_reject_any   = decision.invalid_reject_any,
                     )
                     for scope in contexts
                 )
@@ -1074,22 +1075,22 @@ def build_matrix(
             message = _alias_message(record, alias)
             cases.extend(
                 MatrixCase(
-                    case_id=_case_id(code, "alias", scope, index, message),
-                    plugin=plugin,
-                    code=code,
-                    kind="alias",
-                    example_index=index,
-                    message=message,
-                    scope=scope,
-                    actor=_actor_for(permission, scope),
-                    permission=permission,
-                    risk=decision.risk,
-                    dependency=decision.dependency,
-                    sensitive=decision.sensitive,
-                    policy_reason=decision.reason,
-                    semantic_expectation="alias_reaches_same_command_path",
-                    invalid_expect_any=decision.invalid_expect_any,
-                    invalid_reject_any=decision.invalid_reject_any,
+                    case_id              = _case_id(code, "alias", scope, index, message),
+                    plugin               = plugin,
+                    code                 = code,
+                    kind                 = "alias",
+                    example_index        = index,
+                    message              = message,
+                    scope                = scope,
+                    actor                = _actor_for(permission, scope),
+                    permission           = permission,
+                    risk                 = decision.risk,
+                    dependency           = decision.dependency,
+                    sensitive            = decision.sensitive,
+                    policy_reason        = decision.reason,
+                    semantic_expectation = "alias_reaches_same_command_path",
+                    invalid_expect_any   = decision.invalid_expect_any,
+                    invalid_reject_any   = decision.invalid_reject_any,
                 )
                 for scope in contexts
             )
@@ -1106,19 +1107,19 @@ def build_matrix(
                             index,
                             first_example,
                         ),
-                        plugin=plugin,
-                        code=code,
-                        kind="permission_denied",
-                        example_index=index,
-                        message=first_example,
-                        scope=scope,
-                        actor="user",
-                        permission=permission,
-                        risk="read_only",
-                        dependency="local",
-                        sensitive=False,
-                        policy_reason="Core 必须在插件处理器之前拒绝未授权主体",
-                        semantic_expectation="permission_denied_by_core",
+                        plugin               = plugin,
+                        code                 = code,
+                        kind                 = "permission_denied",
+                        example_index        = index,
+                        message              = first_example,
+                        scope                = scope,
+                        actor                = "user",
+                        permission           = permission,
+                        risk                 = "read_only",
+                        dependency           = "local",
+                        sensitive            = False,
+                        policy_reason        = "Core 必须在插件处理器之前拒绝未授权主体",
+                        semantic_expectation = "permission_denied_by_core",
                     )
                 )
         denied_contexts = [scope for scope in SCOPES if scope not in contexts]
@@ -1180,7 +1181,7 @@ def evaluate_response(
             failure = "invalid_forbidden_reply_observed"
     elif case.kind == "permission_denied":
         semantic_strength = "strict_core_assertion"
-        expected = "管理员" if case.permission == "group_admin" else "权限不足"
+        expected          = "管理员" if case.permission == "group_admin" else "权限不足"
         if expected not in text:
             failure = "permission_denial_not_observed"
     elif case.kind == "context_denied":
@@ -1319,7 +1320,7 @@ def _scenario_step_result(
                 details.append(f"forbidden:{forbidden}")
         for name, raw_pattern in step.captures:
             pattern = _render_scenario_template(raw_pattern, values)
-            match = re.search(pattern, text)
+            match   = re.search(pattern, text)
             if match is None:
                 details.append(f"capture_missing:{name}")
                 continue
@@ -1392,11 +1393,11 @@ def execute_business_scenarios(
     """串行执行动态场景；业务失败后跳过普通步骤，但仍尽力执行清理。"""
 
     results: list[dict[str, Any]] = []
-    total_steps = sum(len(scenario.steps) for scenario in scenarios)
-    position = 0
+    total_steps                   = sum(len(scenario.steps) for scenario in scenarios)
+    position                      = 0
     for scenario in scenarios:
         skip_reason: str | None = None
-        missing_fixtures = sorted(set(scenario.required_fixtures) - set(fixture_values))
+        missing_fixtures        = sorted(set(scenario.required_fixtures) - set(fixture_values))
         if plan_only:
             skip_reason = "plan_only"
         elif plugins and scenario.plugin not in plugins:
@@ -1414,7 +1415,7 @@ def execute_business_scenarios(
         elif missing_fixtures:
             skip_reason = "missing_fixture:" + ",".join(missing_fixtures)
 
-        values = {"run_id": run_id, **(runtime_values or {}), **fixture_values}
+        values          = {"run_id": run_id, **(runtime_values or {}), **fixture_values}
         scenario_failed = False
         for step in scenario.steps:
             position += 1
@@ -1468,16 +1469,16 @@ def execute_business_scenarios(
 
             response = client.send(
                 rendered_message,
-                scope=scenario.scope,
-                actor=scenario.actor,
+                scope = scenario.scope,
+                actor = scenario.actor,
             )
             row = _scenario_step_result(
                 scenario,
                 step,
                 response,
-                rendered_message=rendered_message,
-                values=values,
-                redactions=redactions,
+                rendered_message = rendered_message,
+                values           = values,
+                redactions       = redactions,
             )
             results.append(row)
             if row["execution_status"] == "failed" and not step.cleanup:
@@ -1520,8 +1521,8 @@ def _probe_health(endpoint: str, token: str, *, timeout: float) -> dict[str, Any
     started = time.perf_counter()
     request = urllib.request.Request(
         url,
-        headers={"Authorization": f"Bearer {token}"},
-        method="GET",
+        headers = {"Authorization": f"Bearer {token}"},
+        method  = "GET",
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -1577,8 +1578,8 @@ def build_summary(
         if row["execution_status"] in {"passed_business_semantics", "passed_cleanup_contract"}
     ]
     scenario_failed = [row for row in scenario_executed if row["execution_status"] == "failed"]
-    cleanup_steps = [row for row in scenario_executed if row.get("cleanup")]
-    durations = sorted(
+    cleanup_steps   = [row for row in scenario_executed if row.get("cleanup")]
+    durations       = sorted(
         float(row["duration_ms"])
         for row in executed
         if isinstance(row.get("duration_ms"), (int, float))
@@ -1715,14 +1716,14 @@ def build_summary(
 
 
 def render_report(summary: dict[str, Any]) -> str:
-    catalog = summary["catalog"]
-    planned = summary["planned_coverage"]
-    business = summary["business_scenarios"]
+    catalog   = summary["catalog"]
+    planned   = summary["planned_coverage"]
+    business  = summary["business_scenarios"]
     execution = summary["execution"]
-    cleanup = summary["cleanup"]
-    health = summary["health"]
+    cleanup   = summary["cleanup"]
+    health    = summary["health"]
     transport = summary.get("transport", "http")
-    failures = execution["failed_runtime_contract"] + business["failed_steps"]
+    failures  = execution["failed_runtime_contract"] + business["failed_steps"]
     if failures:
         verdict = f"发现 {failures} 条运行态契约失败"
     elif not health["gate_passed"]:
@@ -1855,8 +1856,8 @@ def write_artifacts(
         (output_dir / "business-scenarios.json").write_text(
             json.dumps(
                 [scenario.public_dict() for scenario in scenarios],
-                ensure_ascii=False,
-                indent=2,
+                ensure_ascii = False,
+                indent       = 2,
             )
             + "\n",
             encoding="utf-8",
@@ -1877,7 +1878,7 @@ def write_artifacts(
 
 
 def _parse_csv_set(raw: str, allowed: frozenset[str], *, label: str) -> frozenset[str]:
-    values = frozenset(item.strip() for item in raw.split(",") if item.strip())
+    values  = frozenset(item.strip() for item in raw.split(",") if item.strip())
     unknown = values - allowed
     if not values or unknown:
         raise MatrixError(f"{label} 必须从 {sorted(allowed)} 中选择，未知值: {sorted(unknown)}")
@@ -1889,39 +1890,39 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
     parser.add_argument(
         "--transport",
-        choices=("http", "websocket"),
-        default="http",
-        help="命令事件的真实入站传输；健康检查始终使用 --endpoint 对应的 HTTP /health",
+        choices = ("http", "websocket"),
+        default = "http",
+        help    = "命令事件的真实入站传输；健康检查始终使用 --endpoint 对应的 HTTP /health",
     )
     parser.add_argument(
         "--ws-endpoint",
-        default=DEFAULT_WS_ENDPOINT,
-        help="--transport websocket 时使用的入站 WebSocket 地址",
+        default = DEFAULT_WS_ENDPOINT,
+        help    = "--transport websocket 时使用的入站 WebSocket 地址",
     )
     parser.add_argument("--secrets", type=Path, default=DEFAULT_SECRETS_PATH)
     parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY_PATH)
     parser.add_argument("--scenarios", type=Path, default=DEFAULT_SCENARIO_PATH)
     parser.add_argument(
         "--scenario-fixtures",
-        type=Path,
-        help="可选的本地 JSON fixture；用于外部服务器名等不应写入仓库的参数",
+        type = Path,
+        help = "可选的本地 JSON fixture；用于外部服务器名等不应写入仓库的参数",
     )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--plan-only", action="store_true", help="只抓取目录并生成矩阵")
     parser.add_argument(
         "--scenarios-only",
-        action="store_true",
-        help="只执行动态业务场景；用于修正 fixture 后快速定点复测",
+        action = "store_true",
+        help   = "只执行动态业务场景；用于修正 fixture 后快速定点复测",
     )
     parser.add_argument(
         "--risks",
-        default="read_only",
-        help="逗号分隔：read_only,isolated_state,privileged；默认仅 read_only",
+        default = "read_only",
+        help    = "逗号分隔：read_only,isolated_state,privileged；默认仅 read_only",
     )
     parser.add_argument(
         "--dependencies",
-        default="local",
-        help="逗号分隔：local,external；默认仅 local",
+        default = "local",
+        help    = "逗号分隔：local,external；默认仅 local",
     )
     parser.add_argument("--allow-stateful", action="store_true")
     parser.add_argument("--allow-privileged", action="store_true")
@@ -1929,8 +1930,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--codes", default="", help="只执行逗号分隔的稳定命令码前缀")
     parser.add_argument(
         "--kinds",
-        default=",".join(sorted(CASE_KINDS)),
-        help="只执行逗号分隔的用例类型；例如 invalid",
+        default = ",".join(sorted(CASE_KINDS)),
+        help    = "只执行逗号分隔的用例类型；例如 invalid",
     )
     parser.add_argument("--user-id", type=int, default=990_721_001)
     parser.add_argument("--group-id", type=int, default=990_721_002)
@@ -1951,7 +1952,7 @@ def run(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
         raise MatrixError("执行 privileged 前必须显式提供 --allow-privileged")
     if args.plan_only and args.scenarios_only:
         raise MatrixError("--plan-only 与 --scenarios-only 不能同时使用")
-    scenario_user_id = args.scenario_user_id or args.user_id + SCENARIO_ID_OFFSET
+    scenario_user_id  = args.scenario_user_id or args.user_id + SCENARIO_ID_OFFSET
     scenario_group_id = args.scenario_group_id or args.group_id + SCENARIO_ID_OFFSET
     if (
         args.user_id <= 0
@@ -1966,57 +1967,57 @@ def run(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
 
     token, admin_id, all_admins = load_runtime_auth(args.secrets.resolve())
     validate_test_id_isolation(
-        user_id=args.user_id,
-        group_id=args.group_id,
-        scenario_user_id=scenario_user_id,
-        scenario_group_id=scenario_group_id,
-        admin_ids=all_admins,
+        user_id           = args.user_id,
+        group_id          = args.group_id,
+        scenario_user_id  = scenario_user_id,
+        scenario_group_id = scenario_group_id,
+        admin_ids         = all_admins,
     )
-    policy = load_policy(args.policy.resolve())
+    policy            = load_policy(args.policy.resolve())
     scenario_contract = load_scenario_contract(args.scenarios.resolve())
-    fixture_values = load_scenario_fixtures(
+    fixture_values    = load_scenario_fixtures(
         args.scenario_fixtures.resolve() if args.scenario_fixtures else None
     )
-    client_type = WebSocketEventClient if args.transport == "websocket" else EventClient
-    transport_endpoint = args.ws_endpoint if args.transport == "websocket" else args.endpoint
+    client_type         = WebSocketEventClient if args.transport == "websocket" else EventClient
+    transport_endpoint  = args.ws_endpoint if args.transport == "websocket" else args.endpoint
     client: EventSender = client_type(
-        endpoint=transport_endpoint,
-        token=token,
-        admin_id=admin_id,
-        user_id=args.user_id,
-        group_id=args.group_id,
-        timeout=args.timeout,
+        endpoint = transport_endpoint,
+        token    = token,
+        admin_id = admin_id,
+        user_id  = args.user_id,
+        group_id = args.group_id,
+        timeout  = args.timeout,
     )
     # 动态场景使用独立合成账号和群，避免前面的海量只读/拒绝用例触发插件限流，
     # 也避免残留会话或群状态污染后续 CRUD 闭环。
     scenario_client: EventSender = client_type(
-        endpoint=transport_endpoint,
-        token=token,
-        admin_id=admin_id,
-        user_id=scenario_user_id,
-        group_id=scenario_group_id,
-        timeout=args.timeout,
+        endpoint = transport_endpoint,
+        token    = token,
+        admin_id = admin_id,
+        user_id  = scenario_user_id,
+        group_id = scenario_group_id,
+        timeout  = args.timeout,
     )
     started_at = datetime.now().astimezone().isoformat()
     health_before = _probe_health(args.endpoint, token, timeout=args.timeout)
-    records = fetch_runtime_catalog(client)
+    records        = fetch_runtime_catalog(client)
     source_records = load_source_catalog()
     runtime_sha256 = catalog_hash(records)
-    source_sha256 = catalog_hash(source_records)
+    source_sha256  = catalog_hash(source_records)
     if runtime_sha256 != source_sha256:
         raise MatrixError(
             "运行进程目录与当前源码不一致，拒绝执行；请重启 Bot 后重试: "
             f"runtime={runtime_sha256}, source={source_sha256}"
         )
-    cases = build_matrix(records, policy)
+    cases     = build_matrix(records, policy)
     scenarios = build_business_scenarios(
         scenario_contract,
         records,
         expected_plugins=frozenset(policy["plugins"]),
     )
-    plugins = frozenset(item.strip() for item in args.plugins.split(",") if item.strip())
+    plugins       = frozenset(item.strip() for item in args.plugins.split(",") if item.strip())
     code_prefixes = tuple(item.strip() for item in args.codes.split(",") if item.strip())
-    redactions = (
+    redactions    = (
         token,
         str(admin_id),
         *(str(value) for value in all_admins),
@@ -2025,51 +2026,51 @@ def run(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
     results = execute_matrix(
         client,
         cases,
-        risks=risks,
-        dependencies=dependencies,
-        plugins=plugins,
-        code_prefixes=code_prefixes,
-        kinds=kinds,
-        plan_only=args.plan_only,
-        scenarios_only=args.scenarios_only,
-        delay_ms=args.delay_ms,
-        redactions=redactions,
+        risks          = risks,
+        dependencies   = dependencies,
+        plugins        = plugins,
+        code_prefixes  = code_prefixes,
+        kinds          = kinds,
+        plan_only      = args.plan_only,
+        scenarios_only = args.scenarios_only,
+        delay_ms       = args.delay_ms,
+        redactions     = redactions,
     )
     scenario_results = execute_business_scenarios(
         scenario_client,
         scenarios,
-        risks=risks,
-        dependencies=dependencies,
-        plugins=plugins,
-        code_prefixes=code_prefixes,
-        plan_only=args.plan_only,
-        delay_ms=args.delay_ms,
-        redactions=redactions,
-        fixture_values=fixture_values,
-        run_id=hashlib.sha256(started_at.encode("utf-8")).hexdigest()[:10],
-        runtime_values={
+        risks          = risks,
+        dependencies   = dependencies,
+        plugins        = plugins,
+        code_prefixes  = code_prefixes,
+        plan_only      = args.plan_only,
+        delay_ms       = args.delay_ms,
+        redactions     = redactions,
+        fixture_values = fixture_values,
+        run_id         = hashlib.sha256(started_at.encode("utf-8")).hexdigest()[:10],
+        runtime_values = {
             "test_user_id": str(scenario_user_id),
             "test_group_id": str(scenario_group_id),
         },
     )
     health_after = _probe_health(args.endpoint, token, timeout=args.timeout)
     finished_at = datetime.now().astimezone().isoformat()
-    summary = build_summary(
+    summary     = build_summary(
         records,
         cases,
         results,
         scenarios,
         scenario_results,
-        started_at=started_at,
-        finished_at=finished_at,
-        health_before=health_before,
-        health_after=health_after,
-        source_catalog_sha256=source_sha256,
-        transport=args.transport,
+        started_at            = started_at,
+        finished_at           = finished_at,
+        health_before         = health_before,
+        health_after          = health_after,
+        source_catalog_sha256 = source_sha256,
+        transport             = args.transport,
     )
     output_dir = args.output
     if output_dir is None:
-        stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
+        stamp      = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
         output_dir = PROJECT_ROOT / "test_reports" / "runs" / "project" / f"command-matrix-{stamp}"
     output_dir = output_dir.resolve()
     write_artifacts(
@@ -2086,7 +2087,7 @@ def run(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args   = parser.parse_args(argv)
     try:
         output_dir, summary = run(args)
     except MatrixError as exc:

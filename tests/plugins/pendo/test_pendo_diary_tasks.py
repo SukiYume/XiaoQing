@@ -26,12 +26,12 @@ class TestDiaryViewRegression:
 
         try:
             diary = DiaryItem(
-                owner_id="u1",
-                title="2026-03-28 日记",
-                content="今天周六，十点多醒来，去华贸天地吃饭。",
-                diary_date="2026-03-28",
-                created_at="2026-03-28T21:41:10",
-                updated_at="2026-03-28T21:41:10",
+                owner_id   = "u1",
+                title      = "2026-03-28 日记",
+                content    = "今天周六，十点多醒来，去华贸天地吃饭。",
+                diary_date = "2026-03-28",
+                created_at = "2026-03-28T21:41:10",
+                updated_at = "2026-03-28T21:41:10",
             )
             db.insert_item(diary, "82d34407")
 
@@ -59,12 +59,12 @@ class TestDiaryViewRegression:
 
         try:
             diary = DiaryItem(
-                owner_id="u1",
-                title="2026-03-28 日记",
-                content="今天周六，十点多醒来，去华贸天地吃饭。",
-                diary_date="2026-03-28",
-                created_at="2026-03-28T21:41:10",
-                updated_at="2026-03-28T21:41:10",
+                owner_id   = "u1",
+                title      = "2026-03-28 日记",
+                content    = "今天周六，十点多醒来，去华贸天地吃饭。",
+                diary_date = "2026-03-28",
+                created_at = "2026-03-28T21:41:10",
+                updated_at = "2026-03-28T21:41:10",
             )
             db.insert_item(diary, "82d34407")
 
@@ -91,11 +91,11 @@ class TestDiaryViewRegression:
 
         try:
             event = EventItem(
-                owner_id="u1",
-                title="晨会",
-                start_time="2026-03-29T09:00:00",
-                created_at="2026-03-28T21:41:10",
-                updated_at="2026-03-28T21:41:10",
+                owner_id   = "u1",
+                title      = "晨会",
+                start_time = "2026-03-29T09:00:00",
+                created_at = "2026-03-28T21:41:10",
+                updated_at = "2026-03-28T21:41:10",
             )
             db.insert_item(event, "evt12345")
 
@@ -121,12 +121,12 @@ class TestDiaryViewRegression:
 
         try:
             diary = DiaryItem(
-                owner_id="u1",
-                title="2026-03-28 日记",
-                content="今天周六，十点多醒来。",
-                diary_date="2026-03-28",
-                created_at="2026-03-28T21:41:10",
-                updated_at="2026-03-28T21:41:10",
+                owner_id   = "u1",
+                title      = "2026-03-28 日记",
+                content    = "今天周六，十点多醒来。",
+                diary_date = "2026-03-28",
+                created_at = "2026-03-28T21:41:10",
+                updated_at = "2026-03-28T21:41:10",
             )
             db.insert_item(diary, "82d34407")
 
@@ -152,11 +152,11 @@ class TestDiaryViewRegression:
 
         try:
             event = EventItem(
-                owner_id="u1",
-                title="晨会",
-                start_time="2026-03-29T09:00:00",
-                created_at="2026-03-28T21:41:10",
-                updated_at="2026-03-28T21:41:10",
+                owner_id   = "u1",
+                title      = "晨会",
+                start_time = "2026-03-29T09:00:00",
+                created_at = "2026-03-28T21:41:10",
+                updated_at = "2026-03-28T21:41:10",
             )
             db.insert_item(event, "evt12345")
 
@@ -231,15 +231,15 @@ class TestDiaryMoodAIRegression:
 
         try:
             diary = DiaryItem(
-                owner_id="u1",
-                title="2026-03-28 日记",
-                content="早上出门。",
-                diary_date="2026-03-28",
-                mood="calm",
-                mood_score=5,
-                category="日记",
-                created_at="2026-03-28T21:41:10",
-                updated_at="2026-03-28T21:41:10",
+                owner_id   = "u1",
+                title      = "2026-03-28 日记",
+                content    = "早上出门。",
+                diary_date = "2026-03-28",
+                mood       = "calm",
+                mood_score = 5,
+                category   = "日记",
+                created_at = "2026-03-28T21:41:10",
+                updated_at = "2026-03-28T21:41:10",
             )
             db.insert_item(diary, "dia12345")
 
@@ -249,8 +249,8 @@ class TestDiaryMoodAIRegression:
             )
 
             original = db.get_item("dia12345", "u1")
-            created = db.get_item(result["item_id"], "u1")
-            entries = db.query_items_by_date_range(
+            created  = db.get_item(result["item_id"], "u1")
+            entries  = db.query_items_by_date_range(
                 "u1",
                 "diary",
                 "diary_date",

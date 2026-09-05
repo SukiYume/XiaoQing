@@ -110,18 +110,18 @@ class PluginManager(
         plugins_dir: Path,
         router: CommandRouter,
         context_factory: Any,
-        poll_interval: float = 3600.0,
+        poll_interval: float   = 3600.0,
         data_root: Path | None = None,
     ):
-        import_barrier = _PLUGIN_IMPORT_BARRIER_COORDINATOR.capability()
-        self._hot_reload_supported = import_barrier.available
+        import_barrier                      = _PLUGIN_IMPORT_BARRIER_COORDINATOR.capability()
+        self._hot_reload_supported          = import_barrier.available
         self._hot_reload_unavailable_reason = import_barrier.reason
         if not import_barrier.available:
             logger.warning(
                 "Plugin hot reload is unavailable; plugin changes require a process restart: %s",
                 import_barrier.reason or "module import barrier capability probe failed",
             )
-        self.plugins_dir = plugins_dir
+        self.plugins_dir     = plugins_dir
         configured_data_root = (
             Path(data_root) if data_root is not None else plugins_dir.parent / "data"
         )
@@ -136,12 +136,12 @@ class PluginManager(
             raise PluginPathError("cannot resolve plugin data root") from exc
         else:
             raise PluginPathError("plugin data root must be outside the plugin source tree")
-        self.router = router
-        self.context_factory = context_factory
-        self._plugins: dict[str, LoadedPlugin] = {}
+        self.router                                    = router
+        self.context_factory                           = context_factory
+        self._plugins: dict[str, LoadedPlugin]         = {}
         self._services: dict[str, LoadedPluginService] = {}
-        parsed_poll_interval = self._parse_poll_interval(poll_interval)
-        self._poll_interval = (
+        parsed_poll_interval                           = self._parse_poll_interval(poll_interval)
+        self._poll_interval                            = (
             parsed_poll_interval
             if parsed_poll_interval is not None
             else _DEFAULT_PLUGIN_POLL_INTERVAL_SECONDS
@@ -169,24 +169,24 @@ class PluginManager(
         self._execution_policy_overrides: dict[str, dict[str, Any]] = {}
         self._global_sync_queue_limit = _DEFAULT_GLOBAL_SYNC_QUEUE_LIMIT
         self._sync_broker = PluginSyncBroker(
-            max_workers=_PLUGIN_SYNC_WORKERS,
-            global_queue_limit=self._global_sync_queue_limit,
+            max_workers        = _PLUGIN_SYNC_WORKERS,
+            global_queue_limit = self._global_sync_queue_limit,
         )
         # Watcher failures can repeat every poll while an editor, deployer, or
         # filesystem keeps a path transiently unavailable.  Buckets are fixed
         # strings, so both log volume and limiter memory remain bounded.
-        self._watch_error_next_log_at: dict[str, float] = {}
-        self._watch_error_suppressed: dict[str, int] = {}
-        self._data_directories: dict[str, _PluginDataDirectory] = {}
-        self._source_finders: dict[str, _SourceOnlyPluginFinder] = {}
-        self._namespace_owner_token = object()
-        self._owned_plugin_modules: dict[str, dict[str, ModuleType]] = {}
+        self._watch_error_next_log_at: dict[str, float]                = {}
+        self._watch_error_suppressed: dict[str, int]                   = {}
+        self._data_directories: dict[str, _PluginDataDirectory]        = {}
+        self._source_finders: dict[str, _SourceOnlyPluginFinder]       = {}
+        self._namespace_owner_token                                    = object()
+        self._owned_plugin_modules: dict[str, dict[str, ModuleType]]   = {}
         self._private_plugin_modules: dict[str, dict[str, ModuleType]] = {}
         self._module_origin_cache: OrderedDict[
             tuple[str, int, str, tuple[int, int, int, int]], Path | None
         ] = OrderedDict()
         self._import_path_lease_keys: tuple[_ProcessImportPathLeaseKey, ...] = ()
-        self._import_path_finalizer: weakref.finalize | None = None
+        self._import_path_finalizer: weakref.finalize | None                 = None
 
         # 一次性注册规范 plugins namespace；具体源码仍由受限 finder 加载。
         self._setup_sys_path()
@@ -245,9 +245,9 @@ class PluginManager(
             _release_process_import_paths(tuple(lease_keys))
             raise
 
-        self._plugins_package = package
+        self._plugins_package        = package
         self._import_path_lease_keys = tuple(lease_keys)
-        self._import_path_finalizer = weakref.finalize(
+        self._import_path_finalizer  = weakref.finalize(
             self,
             _release_process_import_paths,
             self._import_path_lease_keys,
@@ -343,8 +343,8 @@ class PluginManager(
         private.update(owned)
         for module_name, module in sorted(
             owned.items(),
-            key=lambda item: item[0].count("."),
-            reverse=True,
+            key     = lambda item: item[0].count("."),
+            reverse = True,
         ):
             self._detach_exact_module_locked(
                 plugin_name,
@@ -385,7 +385,7 @@ class PluginManager(
             if owned.get(entry_module_name) is not entry_module:
                 raise PluginPathError("plugin entry is not owned by this import generation")
             canonical = f"plugins.{plugin_name}"
-            cached = {
+            cached    = {
                 module_name: module
                 for module_name, module in list(sys.modules.items())
                 if module_name == canonical or module_name.startswith(f"{canonical}.")
@@ -471,7 +471,7 @@ class PluginManager(
         execution_gate.close_admission()
         with _PLUGIN_IMPORT_LOCK:
             if finder is not None and self._source_finders.get(plugin_name) is finder:
-                finder._active = False
+                finder._active             = False
                 finder._publication_paused = True
             self._detach_owned_generation_locked(plugin_name)
 
@@ -534,7 +534,7 @@ class PluginManager(
             self._quarantined_plugins.add(plugin_name)
             finder = self._source_finders.get(plugin_name)
             if finder is not None:
-                finder._active = False
+                finder._active      = False
                 finder._compromised = True
             gate = self._execution_gates.get(plugin_name)
         if gate is not None:
@@ -597,7 +597,7 @@ class PluginManager(
         """Keep source-only imports active for init, callbacks, and lazy imports."""
 
         with _PLUGIN_IMPORT_LOCK:
-            finder = self._source_finders.get(plugin_name)
+            finder        = self._source_finders.get(plugin_name)
             same_snapshot = (
                 finder is not None
                 and finder._plugin_root == plugin_root
@@ -623,7 +623,7 @@ class PluginManager(
                             "plugin namespace lost its authoritative import guard"
                         )
                     sys.meta_path.insert(guard_index, replacement)
-                finder = replacement
+                finder                            = replacement
                 self._source_finders[plugin_name] = finder
             else:
                 assert finder is not None
@@ -645,7 +645,7 @@ class PluginManager(
             previous = self._source_finders.get(plugin_name)
             if previous is not None and (previous._active or previous._active_loads):
                 raise PluginPathError("cannot prepare restore over an active source finder")
-            replacement = self._new_source_finder(plugin_name, plugin_root, sources)
+            replacement         = self._new_source_finder(plugin_name, plugin_root, sources)
             replacement._active = False
             if previous is not None:
                 index = _meta_path_identity_index(previous)
@@ -682,18 +682,18 @@ class PluginManager(
     def build_context(
         self,
         plugin_name: str,
-        user_id: int | None = None,
-        group_id: int | None = None,
-        request_id: str | None = None,
+        user_id: int | None               = None,
+        group_id: int | None              = None,
+        request_id: str | None            = None,
         principal: PluginPrincipal | None = None,
     ) -> PluginContextProtocol:
         plugin_dir = self.plugins_dir / plugin_name
-        data_dir = self._ensure_plugin_data_dir(plugin_name)
+        data_dir   = self._ensure_plugin_data_dir(plugin_name)
 
         # 获取或创建插件状态
-        state = self._plugin_states.setdefault(plugin_name, {})
-        loaded = self._plugins.get(plugin_name)
-        capabilities = loaded.definition.capabilities if loaded is not None else frozenset()
+        state         = self._plugin_states.setdefault(plugin_name, {})
+        loaded        = self._plugins.get(plugin_name)
+        capabilities  = loaded.definition.capabilities if loaded is not None else frozenset()
         uses_services = loaded.definition.uses_services if loaded is not None else frozenset()
 
         return cast(

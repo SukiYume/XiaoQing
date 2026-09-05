@@ -23,7 +23,7 @@ from tests.helpers.app_test_support import (
 )
 
 mock_dependencies = _fixture_support.mock_dependencies
-temp_app_root = _fixture_support.temp_app_root
+temp_app_root     = _fixture_support.temp_app_root
 
 
 @pytest.mark.asyncio
@@ -41,7 +41,7 @@ async def test_app_stop_unloads_plugins(temp_app_root: Path):
     app.plugin_manager.unload_plugin = AsyncMock(side_effect=unload_plugin)
 
     # Start
-    app.plugin_manager.load_all = Mock()
+    app.plugin_manager.load_all   = Mock()
     app.plugin_manager.wait_inits = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
     await app.start()
@@ -55,11 +55,11 @@ async def test_app_stop_unloads_plugins(temp_app_root: Path):
 
 @pytest.mark.asyncio
 async def test_app_shutdown_closes_plugin_sync_broker_before_http(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
+    app              = XiaoQingApp(temp_app_root)
     calls: list[str] = []
     app.plugin_manager.list_runtime_plugins = Mock(return_value=[])
-    project_path = os.path.abspath(temp_app_root)
-    package_path = os.path.abspath(temp_app_root / "plugins")
+    project_path    = os.path.abspath(temp_app_root)
+    package_path    = os.path.abspath(temp_app_root / "plugins")
     plugins_package = sys.modules["plugins"]
     assert project_path in sys.path
     assert package_path in plugins_package.__path__  # type: ignore[attr-defined]
@@ -121,9 +121,9 @@ async def test_plugin_batch_shutdown_uses_one_absolute_budget(temp_app_root: Pat
         execution_drain_timeout_seconds = 0.04
 
         def __init__(self) -> None:
-            self.runtime = ["first", "second"]
+            self.runtime                                      = ["first", "second"]
             self.unload_calls: list[tuple[str, float | None]] = []
-            self.broker_close_calls = 0
+            self.broker_close_calls                           = 0
 
         def list_runtime_plugins(self) -> list[str]:
             return list(self.runtime)
@@ -141,10 +141,10 @@ async def test_plugin_batch_shutdown_uses_one_absolute_budget(temp_app_root: Pat
             self.broker_close_calls += 1
             return SimpleNamespace(drained=True)
 
-    manager = SlowPluginManager()
+    manager            = SlowPluginManager()
     app.plugin_manager = manager  # type: ignore[assignment]
-    errors: list[str] = []
-    started = time.monotonic()
+    errors: list[str]  = []
+    started            = time.monotonic()
 
     completed = await asyncio.wait_for(
         app._unload_plugins_for_shutdown(errors),
@@ -168,14 +168,14 @@ async def test_plugin_batch_shutdown_uses_one_absolute_budget(temp_app_root: Pat
 @pytest.mark.unit
 async def test_app_stop_continues_after_cleanup_failures(temp_app_root: Path):
     """Independent cleanup continues while dependent resources wait for retries."""
-    app = XiaoQingApp(temp_app_root)
-    calls: list[str] = []
-    inbound_attempts = 0
-    ws_attempts = 0
-    http_attempts = 0
-    scheduler_attempts = 0
+    app                    = XiaoQingApp(temp_app_root)
+    calls: list[str]       = []
+    inbound_attempts       = 0
+    ws_attempts            = 0
+    http_attempts          = 0
+    scheduler_attempts     = 0
     broken_plugin_attempts = 0
-    runtime_plugins = ["broken", "healthy"]
+    runtime_plugins        = ["broken", "healthy"]
 
     async def fail_inbound_once() -> None:
         nonlocal inbound_attempts
@@ -224,7 +224,7 @@ async def test_app_stop_continues_after_cleanup_failures(temp_app_root: Path):
     app.inbound_manager = failed_inbound
     failed_ws = MagicMock(stop=AsyncMock(side_effect=fail_ws_once))
     failed_http = MagicMock(close=AsyncMock(side_effect=fail_http_once))
-    app.ws_client = failed_ws
+    app.ws_client    = failed_ws
     app.http_session = failed_http
     app.scheduler.shutdown_async = AsyncMock(side_effect=fail_scheduler)
     app.plugin_manager.list_runtime_plugins = Mock(side_effect=lambda: list(runtime_plugins))
@@ -331,15 +331,15 @@ async def test_app_stop_continues_after_cleanup_failures(temp_app_root: Path):
 async def test_app_retains_plugins_and_http_until_scheduler_jobs_stop(
     temp_app_root: Path,
 ):
-    app = XiaoQingApp(temp_app_root)
+    app                                     = XiaoQingApp(temp_app_root)
     app.scheduler._shutdown_timeout_seconds = 0.01
-    scheduler = app.scheduler.scheduler
+    scheduler                               = app.scheduler.scheduler
     assert scheduler is not None
-    executor = next(iter(scheduler._executors.values()))
-    started = asyncio.Event()
+    executor          = next(iter(scheduler._executors.values()))
+    started           = asyncio.Event()
     cancellation_seen = asyncio.Event()
-    release = asyncio.Event()
-    runtime_plugins = ["scheduled_plugin"]
+    release           = asyncio.Event()
+    runtime_plugins   = ["scheduled_plugin"]
 
     resistant_job = cancellation_then_release_callback(started, cancellation_seen, release)
 
@@ -395,17 +395,17 @@ async def test_rapid_config_generations_remain_owned_and_shutdown_is_retryable(
 ):
     from core.config import ConfigSnapshot
 
-    app = XiaoQingApp(temp_app_root)
+    app                                       = XiaoQingApp(temp_app_root)
     app._background_task_stop_timeout_seconds = 0.01
     app.http_session = MagicMock(close=AsyncMock())
     inbound = MagicMock(stop=AsyncMock())
     app.inbound_manager = inbound
-    first_entered = asyncio.Event()
-    first_cancelled = asyncio.Event()
-    first_release = asyncio.Event()
-    second_entered = asyncio.Event()
-    second_release = asyncio.Event()
-    call_count = 0
+    first_entered       = asyncio.Event()
+    first_cancelled     = asyncio.Event()
+    first_release       = asyncio.Event()
+    second_entered      = asyncio.Event()
+    second_release      = asyncio.Event()
+    call_count          = 0
 
     async def apply_runtime(
         _snapshot: ConfigSnapshot,
@@ -471,16 +471,16 @@ async def test_rapid_config_generations_remain_owned_and_shutdown_is_retryable(
 async def test_plugin_watcher_disable_reenable_waits_for_old_generation(
     temp_app_root: Path,
 ):
-    app = XiaoQingApp(temp_app_root)
-    app._lifecycle_state = type(app._lifecycle_state).RUNNING
-    config_watch_release = asyncio.Event()
+    app                    = XiaoQingApp(temp_app_root)
+    app._lifecycle_state   = type(app._lifecycle_state).RUNNING
+    config_watch_release   = asyncio.Event()
     app._config_watch_task = asyncio.create_task(config_watch_release.wait())
-    first_entered = asyncio.Event()
-    first_cancelled = asyncio.Event()
-    first_release = asyncio.Event()
-    second_entered = asyncio.Event()
-    second_release = asyncio.Event()
-    watch_calls = 0
+    first_entered          = asyncio.Event()
+    first_cancelled        = asyncio.Event()
+    first_release          = asyncio.Event()
+    second_entered         = asyncio.Event()
+    second_release         = asyncio.Event()
+    watch_calls            = 0
 
     async def watch() -> None:
         nonlocal watch_calls
@@ -547,18 +547,18 @@ async def test_plugin_watcher_supervisor_restarts_unexpected_exit_with_backoff(
     class FatalWatchError(BaseException):
         pass
 
-    app = XiaoQingApp(temp_app_root)
+    app                  = XiaoQingApp(temp_app_root)
     app._lifecycle_state = type(app._lifecycle_state).RUNNING
     # Windows SelectorEventLoop 的时钟分辨率可能高于 10 ms；使用明显高于
     # 一个时钟刻度的延迟，避免事件循环把短定时器当作已经到期。
     app._plugin_watch_restart_base_delay_seconds = 0.05
-    app._plugin_watch_restart_max_delay_seconds = 0.1
-    app._plugin_watch_stable_reset_seconds = 60.0
-    config_watch_release = asyncio.Event()
-    app._config_watch_task = asyncio.create_task(config_watch_release.wait())
-    second_entered = asyncio.Event()
-    second_release = asyncio.Event()
-    starts: list[float] = []
+    app._plugin_watch_restart_max_delay_seconds  = 0.1
+    app._plugin_watch_stable_reset_seconds       = 60.0
+    config_watch_release                         = asyncio.Event()
+    app._config_watch_task                       = asyncio.create_task(config_watch_release.wait())
+    second_entered                               = asyncio.Event()
+    second_release                               = asyncio.Event()
+    starts: list[float]                          = []
 
     async def watch() -> None:
         starts.append(asyncio.get_running_loop().time())
@@ -595,16 +595,16 @@ async def test_plugin_watcher_supervisor_restarts_unexpected_exit_with_backoff(
 async def test_plugin_watcher_supervisor_backoff_increases_after_repeated_failures(
     temp_app_root: Path,
 ) -> None:
-    app = XiaoQingApp(temp_app_root)
-    app._lifecycle_state = type(app._lifecycle_state).RUNNING
+    app                                          = XiaoQingApp(temp_app_root)
+    app._lifecycle_state                         = type(app._lifecycle_state).RUNNING
     app._plugin_watch_restart_base_delay_seconds = 0.05
-    app._plugin_watch_restart_max_delay_seconds = 0.2
-    app._plugin_watch_stable_reset_seconds = 60.0
-    config_watch_release = asyncio.Event()
-    app._config_watch_task = asyncio.create_task(config_watch_release.wait())
-    fourth_entered = asyncio.Event()
-    fourth_release = asyncio.Event()
-    starts: list[float] = []
+    app._plugin_watch_restart_max_delay_seconds  = 0.2
+    app._plugin_watch_stable_reset_seconds       = 60.0
+    config_watch_release                         = asyncio.Event()
+    app._config_watch_task                       = asyncio.create_task(config_watch_release.wait())
+    fourth_entered                               = asyncio.Event()
+    fourth_release                               = asyncio.Event()
+    starts: list[float]                          = []
 
     async def watch() -> None:
         starts.append(asyncio.get_running_loop().time())
@@ -638,15 +638,15 @@ async def test_plugin_watcher_supervisor_backoff_increases_after_repeated_failur
 async def test_plugin_watcher_stable_generation_resets_restart_backoff(
     temp_app_root: Path,
 ) -> None:
-    app = XiaoQingApp(temp_app_root)
-    app._lifecycle_state = type(app._lifecycle_state).RUNNING
+    app                                          = XiaoQingApp(temp_app_root)
+    app._lifecycle_state                         = type(app._lifecycle_state).RUNNING
     app._plugin_watch_restart_base_delay_seconds = 0.01
-    app._plugin_watch_restart_max_delay_seconds = 0.08
-    app._plugin_watch_stable_reset_seconds = 0.02
-    app._plugin_watch_restart_failures = 3
-    second_entered = asyncio.Event()
-    second_release = asyncio.Event()
-    starts: list[float] = []
+    app._plugin_watch_restart_max_delay_seconds  = 0.08
+    app._plugin_watch_stable_reset_seconds       = 0.02
+    app._plugin_watch_restart_failures           = 3
+    second_entered                               = asyncio.Event()
+    second_release                               = asyncio.Event()
+    starts: list[float]                          = []
 
     async def watch() -> None:
         starts.append(asyncio.get_running_loop().time())
@@ -675,15 +675,15 @@ async def test_plugin_watcher_stable_generation_resets_restart_backoff(
 async def test_plugin_watcher_disable_enable_replaces_cancelled_restart_once(
     temp_app_root: Path,
 ) -> None:
-    app = XiaoQingApp(temp_app_root)
-    app._lifecycle_state = type(app._lifecycle_state).RUNNING
+    app                                          = XiaoQingApp(temp_app_root)
+    app._lifecycle_state                         = type(app._lifecycle_state).RUNNING
     app._plugin_watch_restart_base_delay_seconds = 0.2
-    app._plugin_watch_restart_max_delay_seconds = 0.2
-    config_watch_release = asyncio.Event()
-    app._config_watch_task = asyncio.create_task(config_watch_release.wait())
-    second_entered = asyncio.Event()
-    second_release = asyncio.Event()
-    calls = 0
+    app._plugin_watch_restart_max_delay_seconds  = 0.2
+    config_watch_release                         = asyncio.Event()
+    app._config_watch_task                       = asyncio.create_task(config_watch_release.wait())
+    second_entered                               = asyncio.Event()
+    second_release                               = asyncio.Event()
+    calls                                        = 0
 
     async def watch() -> None:
         nonlocal calls
@@ -726,14 +726,14 @@ async def test_plugin_watcher_disable_enable_replaces_cancelled_restart_once(
 async def test_plugin_watcher_stop_cancels_pending_supervised_restart(
     temp_app_root: Path,
 ) -> None:
-    app = XiaoQingApp(temp_app_root)
-    app._lifecycle_state = type(app._lifecycle_state).RUNNING
+    app                                          = XiaoQingApp(temp_app_root)
+    app._lifecycle_state                         = type(app._lifecycle_state).RUNNING
     app._plugin_watch_restart_base_delay_seconds = 0.2
-    app._plugin_watch_restart_max_delay_seconds = 0.2
-    config_watch_release = asyncio.Event()
-    app._config_watch_task = asyncio.create_task(config_watch_release.wait())
-    first_entered = asyncio.Event()
-    calls = 0
+    app._plugin_watch_restart_max_delay_seconds  = 0.2
+    config_watch_release                         = asyncio.Event()
+    app._config_watch_task                       = asyncio.create_task(config_watch_release.wait())
+    first_entered                                = asyncio.Event()
+    calls                                        = 0
 
     async def watch() -> None:
         nonlocal calls
@@ -771,16 +771,16 @@ async def test_plugin_watcher_stop_cancels_pending_supervised_restart(
 async def test_plugin_watcher_restarts_after_config_watcher_dies_while_app_running(
     temp_app_root: Path,
 ) -> None:
-    app = XiaoQingApp(temp_app_root)
-    app._lifecycle_state = type(app._lifecycle_state).RUNNING
+    app                                          = XiaoQingApp(temp_app_root)
+    app._lifecycle_state                         = type(app._lifecycle_state).RUNNING
     app._plugin_watch_restart_base_delay_seconds = 0.01
-    config_watch_release = asyncio.Event()
-    app._config_watch_task = asyncio.create_task(config_watch_release.wait())
-    fail_watch = asyncio.Event()
-    watch_entered = asyncio.Event()
-    second_entered = asyncio.Event()
-    second_release = asyncio.Event()
-    calls = 0
+    config_watch_release                         = asyncio.Event()
+    app._config_watch_task                       = asyncio.create_task(config_watch_release.wait())
+    fail_watch                                   = asyncio.Event()
+    watch_entered                                = asyncio.Event()
+    second_entered                               = asyncio.Event()
+    second_release                               = asyncio.Event()
+    calls                                        = 0
 
     async def watch() -> None:
         nonlocal calls
@@ -806,7 +806,7 @@ async def test_plugin_watcher_restarts_after_config_watcher_dies_while_app_runni
     assert app._plugin_watch_task.done() is False
 
     app._config_watch_task = None
-    app._stopping = True
+    app._stopping          = True
     await app._cancel_plugin_watch_tasks()
     second_release.set()
     app.scheduler.shutdown()
@@ -819,8 +819,8 @@ async def test_plugin_watcher_does_not_start_outside_active_lifecycle(
     temp_app_root: Path,
     inactive_state: str,
 ) -> None:
-    app = XiaoQingApp(temp_app_root)
-    app._lifecycle_state = getattr(type(app._lifecycle_state), inactive_state)
+    app                      = XiaoQingApp(temp_app_root)
+    app._lifecycle_state     = getattr(type(app._lifecycle_state), inactive_state)
     app.plugin_manager.watch = AsyncMock()
 
     app._configure_plugin_watch({"enable_plugin_watcher": True})
@@ -837,15 +837,15 @@ async def test_plugin_watcher_does_not_start_outside_active_lifecycle(
 async def test_plugin_watcher_resistant_generation_is_retained_until_stop_retry(
     temp_app_root: Path,
 ):
-    app = XiaoQingApp(temp_app_root)
-    app._lifecycle_state = type(app._lifecycle_state).RUNNING
+    app                                       = XiaoQingApp(temp_app_root)
+    app._lifecycle_state                      = type(app._lifecycle_state).RUNNING
     app._background_task_stop_timeout_seconds = 0.01
-    config_watch_release = asyncio.Event()
-    app._config_watch_task = asyncio.create_task(config_watch_release.wait())
-    entered = asyncio.Event()
-    cancelled = asyncio.Event()
-    release = asyncio.Event()
-    runtime_plugins = ["watch_plugin"]
+    config_watch_release                      = asyncio.Event()
+    app._config_watch_task                    = asyncio.create_task(config_watch_release.wait())
+    entered                                   = asyncio.Event()
+    cancelled                                 = asyncio.Event()
+    release                                   = asyncio.Event()
+    runtime_plugins                           = ["watch_plugin"]
     session = MagicMock(close=AsyncMock())
 
     async def unload_plugin(name: str) -> None:
@@ -891,12 +891,12 @@ async def test_plugin_watcher_resistant_generation_is_retained_until_stop_retry(
 async def test_resistant_reload_task_defers_runtime_dependency_cleanup(
     temp_app_root: Path,
 ):
-    app = XiaoQingApp(temp_app_root)
+    app                                       = XiaoQingApp(temp_app_root)
     app._background_task_stop_timeout_seconds = 0.01
-    entered = asyncio.Event()
-    cancelled = asyncio.Event()
-    release = asyncio.Event()
-    runtime_plugins = ["reload_plugin"]
+    entered                                   = asyncio.Event()
+    cancelled                                 = asyncio.Event()
+    release                                   = asyncio.Event()
+    runtime_plugins                           = ["reload_plugin"]
     session = MagicMock(close=AsyncMock())
 
     resistant_reload = cancellation_resistant_callback(entered, cancelled, release)
@@ -904,7 +904,7 @@ async def test_resistant_reload_task_defers_runtime_dependency_cleanup(
     async def unload_plugin(name: str) -> None:
         runtime_plugins.remove(name)
 
-    reload_task = asyncio.create_task(resistant_reload())
+    reload_task      = asyncio.create_task(resistant_reload())
     app._reload_task = reload_task
     app.plugin_manager.list_runtime_plugins = Mock(side_effect=lambda: list(runtime_plugins))
     app.plugin_manager.unload_plugin = AsyncMock(side_effect=unload_plugin)
@@ -946,37 +946,37 @@ async def test_resistant_reload_task_defers_runtime_dependency_cleanup(
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_ws_client_stop_is_shared_across_reconcile_timeouts(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
+    app                                       = XiaoQingApp(temp_app_root)
     app._background_task_stop_timeout_seconds = 0.01
-    entered = asyncio.Event()
-    cancelled = asyncio.Event()
-    release = asyncio.Event()
+    entered                                   = asyncio.Event()
+    cancelled                                 = asyncio.Event()
+    release                                   = asyncio.Event()
 
     resistant_stop = cancellation_resistant_callback(entered, cancelled, release)
 
     old_client = MagicMock(
-        ws_uri="ws://old/ws",
-        auth_token="old-token",
-        _queue_size=10,
+        ws_uri      = "ws://old/ws",
+        auth_token  = "old-token",
+        _queue_size = 10,
         stop=AsyncMock(side_effect=resistant_stop),
     )
     app.ws_client = old_client
-    new_client = MagicMock(
-        ws_uri="ws://new/ws",
-        auth_token="new-token",
-        _queue_size=20,
-        stop=AsyncMock(),
-        set_on_connect=Mock(),
-        connect_and_listen=AsyncMock(),
+    new_client    = MagicMock(
+        ws_uri             = "ws://new/ws",
+        auth_token         = "new-token",
+        _queue_size        = 20,
+        stop               = AsyncMock(),
+        set_on_connect     = Mock(),
+        connect_and_listen = AsyncMock(),
     )
 
     with patch("core.app_ingress.OneBotWsClient", return_value=new_client) as client_cls:
         first = asyncio.create_task(
             app._reconcile_ws_client(
-                enable_ws=True,
-                ws_uri="ws://new/ws",
-                token="new-token",
-                queue_size=20,
+                enable_ws  = True,
+                ws_uri     = "ws://new/ws",
+                token      = "new-token",
+                queue_size = 20,
             )
         )
         await entered.wait()
@@ -986,10 +986,10 @@ async def test_ws_client_stop_is_shared_across_reconcile_timeouts(temp_app_root:
 
         with pytest.raises(RuntimeError, match="stop exceeded"):
             await app._reconcile_ws_client(
-                enable_ws=True,
-                ws_uri="ws://new/ws",
-                token="new-token",
-                queue_size=20,
+                enable_ws  = True,
+                ws_uri     = "ws://new/ws",
+                token      = "new-token",
+                queue_size = 20,
             )
         assert old_client.stop.await_count == 1
 
@@ -998,10 +998,10 @@ async def test_ws_client_stop_is_shared_across_reconcile_timeouts(temp_app_root:
         assert stop_task is not None
         await asyncio.wait_for(asyncio.shield(stop_task), timeout=1)
         await app._reconcile_ws_client(
-            enable_ws=True,
-            ws_uri="ws://new/ws",
-            token="new-token",
-            queue_size=20,
+            enable_ws  = True,
+            ws_uri     = "ws://new/ws",
+            token      = "new-token",
+            queue_size = 20,
         )
 
     client_cls.assert_called_once()
@@ -1020,16 +1020,16 @@ async def test_app_ws_stop_starts_close_before_waiting_for_cancel_resistant_atte
 ):
     from core.onebot import OneBotWsClient
 
-    app = XiaoQingApp(temp_app_root)
+    app                                       = XiaoQingApp(temp_app_root)
     app._background_task_stop_timeout_seconds = 0.1
-    client = OneBotWsClient("ws://old/ws", "")
-    client._shutdown_timeout_seconds = 0.1
-    attempt_entered = asyncio.Event()
-    attempt_cancelled = asyncio.Event()
-    release_attempt = asyncio.Event()
+    client                                    = OneBotWsClient("ws://old/ws", "")
+    client._shutdown_timeout_seconds          = 0.1
+    attempt_entered                           = asyncio.Event()
+    attempt_cancelled                         = asyncio.Event()
+    release_attempt                           = asyncio.Event()
 
     class ReleasingSocket:
-        closed = False
+        closed     = False
         close_code = None
 
         async def close(self) -> None:
@@ -1039,7 +1039,7 @@ async def test_app_ws_stop_starts_close_before_waiting_for_cancel_resistant_atte
     socket = ReleasingSocket()
 
     async def resistant_attempt(_handler):
-        client._ws = socket
+        client._ws                        = socket
         client._connected_auth_generation = client._endpoint_auth.generation
         await resist_cancellation_until_released(
             attempt_entered,
@@ -1051,7 +1051,7 @@ async def test_app_ws_stop_starts_close_before_waiting_for_cancel_resistant_atte
     monkeypatch.setattr(client, "_connect_once", resistant_attempt)
     listener = asyncio.create_task(client.connect_and_listen(AsyncMock()))
     await attempt_entered.wait()
-    app.ws_client = client
+    app.ws_client       = client
     app._ws_client_task = listener
 
     await asyncio.wait_for(app._stop_ws_client(), timeout=0.5)
@@ -1067,11 +1067,11 @@ async def test_app_ws_stop_starts_close_before_waiting_for_cancel_resistant_atte
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_app_stop_retains_resistant_ws_client_until_retry(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
+    app                                       = XiaoQingApp(temp_app_root)
     app._background_task_stop_timeout_seconds = 0.01
-    entered = asyncio.Event()
-    cancelled = asyncio.Event()
-    release = asyncio.Event()
+    entered                                   = asyncio.Event()
+    cancelled                                 = asyncio.Event()
+    release                                   = asyncio.Event()
 
     resistant_stop = cancellation_resistant_callback(entered, cancelled, release)
 
@@ -1101,11 +1101,11 @@ def test_app_ignores_config_and_schedule_updates_while_stopping(temp_app_root: P
     """Configuration callbacks cannot recreate runtime components after stop begins."""
     from core.config import ConfigSnapshot
 
-    app = XiaoQingApp(temp_app_root)
-    app._stopping = True
+    app                                 = XiaoQingApp(temp_app_root)
+    app._stopping                       = True
     app.dispatcher.refresh_prefix_cache = Mock()
-    app.scheduler.replace_prefix = Mock()
-    app.config_manager.reload = Mock()
+    app.scheduler.replace_prefix        = Mock()
+    app.config_manager.reload           = Mock()
 
     snapshot = ConfigSnapshot(config=app.config, secrets=app.secrets)
     app._apply_config(snapshot)

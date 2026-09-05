@@ -22,7 +22,7 @@ ROOT = REPOSITORY_ROOT
 
 class _ChunkContent:
     def __init__(self, chunks: tuple[bytes, ...]) -> None:
-        self.chunks = chunks
+        self.chunks     = chunks
         self.iterations = 0
 
     async def iter_chunked(self, _size: int):
@@ -36,19 +36,19 @@ class _Response:
         self,
         body: bytes = b"{}",
         *,
-        status: int = 200,
-        content_type: str = "application/json",
+        status: int                = 200,
+        content_type: str          = "application/json",
         content_length: int | None = None,
-        url: str = "https://example.test/api",
+        url: str                   = "https://example.test/api",
     ) -> None:
-        self.status = status
-        self.url = url
+        self.status  = status
+        self.url     = url
         self.headers = {"Content-Type": content_type}
         if content_length is not None:
             self.headers["Content-Length"] = str(content_length)
         self.content_length = content_length
-        self.content = _ChunkContent((body,))
-        self.close_calls = 0
+        self.content        = _ChunkContent((body,))
+        self.close_calls    = 0
 
     async def __aenter__(self):
         return self
@@ -62,14 +62,14 @@ class _Response:
 
 class _Session:
     def __init__(self, *responses: _Response) -> None:
-        self.responses = list(responses)
+        self.responses                                    = list(responses)
         self.calls: list[tuple[str, str, dict[str, Any]]] = []
 
     def request(self, method: str, url: str, **kwargs):
         self.calls.append((method, url, kwargs))
         if not self.responses:
             raise AssertionError("unexpected HTTP request")
-        response = self.responses.pop(0)
+        response     = self.responses.pop(0)
         response.url = url
         return response
 
@@ -77,10 +77,10 @@ class _Session:
 def _context(tmp_path: Path, session: _Session, *, proxy: str = "") -> SimpleNamespace:
     return with_settings_reader(
         SimpleNamespace(
-            http_session=session,
-            logger=logging.getLogger("test.cr221.fixed"),
-            data_dir=tmp_path,
-            secrets={"plugins": {"github": {"proxy": proxy}}},
+            http_session = session,
+            logger       = logging.getLogger("test.cr221.fixed"),
+            data_dir     = tmp_path,
+            secrets      = {"plugins": {"github": {"proxy": proxy}}},
         )
     )
 
@@ -109,8 +109,8 @@ async def test_ads_search_streams_bounded_json_and_preserves_timeout() -> None:
 async def test_ads_bibtex_accepts_only_its_bounded_legacy_text_json() -> None:
     response = _Response(
         b'{"export":"  @article{bounded}  "}',
-        content_type="text/plain; charset=utf-8",
-        url="https://api.adsabs.harvard.edu/v1/export/bibtex",
+        content_type = "text/plain; charset=utf-8",
+        url          = "https://api.adsabs.harvard.edu/v1/export/bibtex",
     )
     session = _Session(response)
 
@@ -124,8 +124,8 @@ async def test_ads_bibtex_accepts_only_its_bounded_legacy_text_json() -> None:
 async def test_ads_rejects_wrong_mime_before_reading_body() -> None:
     response = _Response(
         b'{"response":{"docs":[]}}',
-        content_type="text/html",
-        url="https://api.adsabs.harvard.edu/v1/search/query",
+        content_type = "text/html",
+        url          = "https://api.adsabs.harvard.edu/v1/search/query",
     )
 
     result = await ADSClient("token", _Session(response)).search_papers("frb")
@@ -138,9 +138,9 @@ async def test_ads_rejects_wrong_mime_before_reading_body() -> None:
 async def test_ads_huge_error_body_is_closed_without_being_read() -> None:
     response = _Response(
         b"must-not-be-read",
-        status=503,
-        content_length=1_000_000_000,
-        url="https://api.adsabs.harvard.edu/v1/search/query",
+        status         = 503,
+        content_length = 1_000_000_000,
+        url            = "https://api.adsabs.harvard.edu/v1/search/query",
     )
 
     result = await ADSClient("token", _Session(response)).search_papers("frb")
@@ -235,9 +235,9 @@ async def test_chime_rejects_chunked_body_over_limit(tmp_path: Path) -> None:
 async def test_chime_huge_error_body_is_not_read(tmp_path: Path) -> None:
     response = _Response(
         b"must-not-be-read",
-        status=500,
-        content_length=1_000_000_000,
-        url=chime.CHIME_API_URL,
+        status         = 500,
+        content_length = 1_000_000_000,
+        url            = chime.CHIME_API_URL,
     )
 
     result = await chime.fetch_chime_repeaters(_context(tmp_path, _Session(response)))
@@ -257,8 +257,8 @@ async def test_github_proxy_path_is_exact_origin_and_bounded(tmp_path: Path) -> 
     """
     response = _Response(
         html,
-        content_type="text/html; charset=utf-8",
-        url="https://github.com/trending?since=daily",
+        content_type = "text/html; charset=utf-8",
+        url          = "https://github.com/trending?since=daily",
     )
     session = _Session(response)
     context = _context(tmp_path, session, proxy="http://trusted-proxy.test:8080")
@@ -279,8 +279,8 @@ async def test_github_proxy_path_is_exact_origin_and_bounded(tmp_path: Path) -> 
 async def test_github_proxy_rejects_wrong_mime_before_reading(tmp_path: Path) -> None:
     response = _Response(
         b"<html></html>",
-        content_type="application/octet-stream",
-        url="https://github.com/trending?since=daily",
+        content_type = "application/octet-stream",
+        url          = "https://github.com/trending?since=daily",
     )
     context = _context(
         tmp_path,
@@ -298,9 +298,9 @@ async def test_github_proxy_rejects_wrong_mime_before_reading(tmp_path: Path) ->
 async def test_github_proxy_does_not_read_huge_error_body(tmp_path: Path) -> None:
     response = _Response(
         b"must-not-be-read",
-        status=502,
-        content_length=1_000_000_000,
-        url="https://github.com/trending?since=daily",
+        status         = 502,
+        content_length = 1_000_000_000,
+        url            = "https://github.com/trending?since=daily",
     )
     context = _context(
         tmp_path,
@@ -321,13 +321,13 @@ async def test_github_proxy_rejects_cross_origin_redirect_before_request(
 ) -> None:
     redirect = _Response(
         b"",
-        status=302,
-        content_type="text/html",
-        url="https://github.com/trending?since=daily",
+        status       = 302,
+        content_type = "text/html",
+        url          = "https://github.com/trending?since=daily",
     )
     redirect.headers["Location"] = "https://evil.example/internal"
-    session = _Session(redirect)
-    context = _context(
+    session                      = _Session(redirect)
+    context                      = _context(
         tmp_path,
         session,
         proxy="http://trusted-proxy.test:8080",

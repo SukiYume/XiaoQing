@@ -12,7 +12,7 @@ import pytest
 
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT = REPOSITORY_ROOT
+ROOT         = REPOSITORY_ROOT
 CLEAN_SCRIPT = ROOT / "scripts" / "clean_pycache.sh"
 
 
@@ -39,7 +39,7 @@ def test_clean_pycache_is_anchored_to_script_repository(tmp_path: Path) -> None:
         pytest.skip("POSIX bash is unavailable")
 
     repository = tmp_path / "repository"
-    outside = tmp_path / "outside"
+    outside    = tmp_path / "outside"
     (repository / "core").mkdir(parents=True)
     outside.mkdir()
     (repository / ".xiaoqing-sync-root").write_text(
@@ -51,7 +51,7 @@ def test_clean_pycache_is_anchored_to_script_repository(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     (repository / "main.py").write_text("", encoding="utf-8")
-    cleaner = _copy_cleaner(repository)
+    cleaner          = _copy_cleaner(repository)
     repository_cache = repository / "pkg" / "__pycache__"
     repository_cache.mkdir(parents=True)
     (repository_cache / "module.pyc").write_bytes(b"cache")
@@ -80,13 +80,13 @@ def test_clean_pycache_is_anchored_to_script_repository(tmp_path: Path) -> None:
 
     result = subprocess.run(
         [bash, str(cleaner)],
-        cwd=outside,
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=10,
+        cwd            = outside,
+        check          = False,
+        capture_output = True,
+        text           = True,
+        encoding       = "utf-8",
+        errors         = "replace",
+        timeout        = 10,
     )
 
     assert result.returncode == 0, result.stderr
@@ -102,22 +102,22 @@ def test_clean_pycache_refuses_a_directory_without_all_sentinels(tmp_path: Path)
         pytest.skip("POSIX bash is unavailable")
 
     fake_repository = tmp_path / "not-a-repository"
-    outside = tmp_path / "outside"
+    outside         = tmp_path / "outside"
     fake_repository.mkdir()
     outside.mkdir()
     cleaner = _copy_cleaner(fake_repository)
-    marker = outside / "keep.pyc"
+    marker  = outside / "keep.pyc"
     marker.write_bytes(b"outside")
 
     result = subprocess.run(
         [bash, str(cleaner)],
-        cwd=outside,
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=10,
+        cwd            = outside,
+        check          = False,
+        capture_output = True,
+        text           = True,
+        encoding       = "utf-8",
+        errors         = "replace",
+        timeout        = 10,
     )
 
     assert result.returncode == 2

@@ -23,7 +23,7 @@ from tests.helpers.server_test_support import (
     threading,
 )
 
-mock_handler = _fixture_support.mock_handler
+mock_handler  = _fixture_support.mock_handler
 sample_server = _fixture_support.sample_server
 
 
@@ -67,8 +67,8 @@ async def test_server_broadcast_socket_error(sample_server):
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_server_broadcast_reports_partial_failure_without_duplicate_encoding(sample_server):
-    healthy = AsyncMock()
-    failed = AsyncMock()
+    healthy                     = AsyncMock()
+    failed                      = AsyncMock()
     failed.send_str.side_effect = ConnectionError("gone")
     sample_server._active_sockets.update({healthy, failed})
 
@@ -89,25 +89,25 @@ async def test_server_broadcast_times_out_hung_client_without_blocking_healthy_c
     mock_handler,
 ):
     server = InboundServer(
-        host="127.0.0.1",
-        port=8765,
-        token="test_token",
-        handler=mock_handler,
-        ws_broadcast_timeout_seconds=0.01,
+        host                         = "127.0.0.1",
+        port                         = 8765,
+        token                        = "test_token",
+        handler                      = mock_handler,
+        ws_broadcast_timeout_seconds = 0.01,
     )
     never = asyncio.Event()
-    hung = AsyncMock()
+    hung  = AsyncMock()
 
     async def hung_send(_text: str) -> None:
         await never.wait()
 
     hung.send_str.side_effect = hung_send
-    healthy = AsyncMock()
+    healthy                   = AsyncMock()
     server._active_sockets.update({hung, healthy})
 
     started_at = asyncio.get_running_loop().time()
-    result = await server.broadcast({"action": "test"})
-    elapsed = asyncio.get_running_loop().time() - started_at
+    result     = await server.broadcast({"action": "test"})
+    elapsed    = asyncio.get_running_loop().time() - started_at
 
     assert elapsed < 0.5
     assert result == BroadcastResult(target_count=2, success_count=1, timeout_count=1)
@@ -124,17 +124,17 @@ async def test_server_broadcast_uses_bounded_workers_for_many_sockets(
     monkeypatch,
 ):
     server = InboundServer(
-        host="127.0.0.1",
-        port=8765,
-        token="test_token",
-        handler=mock_handler,
-        ws_max_workers=3,
-        ws_broadcast_timeout_seconds=1,
+        host                         = "127.0.0.1",
+        port                         = 8765,
+        token                        = "test_token",
+        handler                      = mock_handler,
+        ws_max_workers               = 3,
+        ws_broadcast_timeout_seconds = 1,
     )
-    release = asyncio.Event()
-    saturated = asyncio.Event()
+    release      = asyncio.Event()
+    saturated    = asyncio.Event()
     active_sends = 0
-    peak_sends = 0
+    peak_sends   = 0
 
     async def slow_send(_text: str) -> None:
         nonlocal active_sends, peak_sends
@@ -149,7 +149,7 @@ async def test_server_broadcast_uses_bounded_workers_for_many_sockets(
 
     sockets = [MagicMock(send_str=slow_send) for _ in range(40)]
     server._active_sockets.update(sockets)
-    real_create_task = asyncio.create_task
+    real_create_task                      = asyncio.create_task
     worker_tasks: list[asyncio.Task[Any]] = []
 
     def track_worker(coro):
@@ -175,11 +175,11 @@ async def test_server_broadcast_uses_bounded_workers_for_many_sockets(
 @pytest.mark.unit
 async def test_server_broadcast_preserves_caller_cancellation(mock_handler):
     server = InboundServer(
-        host="127.0.0.1",
-        port=8765,
-        token="test_token",
-        handler=mock_handler,
-        ws_broadcast_timeout_seconds=30,
+        host                         = "127.0.0.1",
+        port                         = 8765,
+        token                        = "test_token",
+        handler                      = mock_handler,
+        ws_broadcast_timeout_seconds = 30,
     )
     entered = asyncio.Event()
     release = asyncio.Event()
@@ -188,7 +188,7 @@ async def test_server_broadcast_preserves_caller_cancellation(mock_handler):
         entered.set()
         await release.wait()
 
-    socket = MagicMock()
+    socket          = MagicMock()
     socket.send_str = send_str
     server._active_sockets.add(socket)
     task = asyncio.create_task(server.broadcast({"action": "test"}))
@@ -211,9 +211,9 @@ async def test_server_broadcast_child_fatal_cancels_and_drains_sibling(
     class ChildFatal(BaseException):
         pass
 
-    sibling_entered = asyncio.Event()
+    sibling_entered   = asyncio.Event()
     sibling_cancelled = asyncio.Event()
-    blocker = asyncio.Event()
+    blocker           = asyncio.Event()
 
     async def slow_send(_text: str) -> None:
         sibling_entered.set()
@@ -228,9 +228,9 @@ async def test_server_broadcast_child_fatal_cancels_and_drains_sibling(
             raise asyncio.CancelledError
         raise ChildFatal("fatal send")
 
-    slow_socket = MagicMock()
-    slow_socket.send_str = slow_send
-    fatal_socket = MagicMock()
+    slow_socket           = MagicMock()
+    slow_socket.send_str  = slow_send
+    fatal_socket          = MagicMock()
     fatal_socket.send_str = fatal_send
     sample_server._active_sockets.update({slow_socket, fatal_socket})
 
@@ -250,10 +250,10 @@ def test_broadcast_result_enforces_accounting_and_aggregates():
     second = BroadcastResult(target_count=1, timeout_count=1)
 
     assert first + second == BroadcastResult(
-        target_count=3,
-        success_count=1,
-        failure_count=1,
-        timeout_count=1,
+        target_count  = 3,
+        success_count = 1,
+        failure_count = 1,
+        timeout_count = 1,
     )
     with pytest.raises(ValueError, match="sum"):
         BroadcastResult(target_count=2, success_count=1)
@@ -265,10 +265,10 @@ def test_broadcast_result_enforces_accounting_and_aggregates():
 @pytest.mark.unit
 async def test_inbound_lanes_serialize_same_key_and_are_released(sample_server):
     """Same-key work stays serial and its lane is removed after the final ticket."""
-    ws = AsyncMock()
+    ws      = AsyncMock()
     entered = asyncio.Event()
     release = asyncio.Event()
-    probe = BlockingConcurrencyProbe(entered, release)
+    probe   = BlockingConcurrencyProbe(entered, release)
 
     sample_server.handler = probe.run
     first = asyncio.create_task(sample_server._handle_ws_event(ws, {"user_id": 12345}))
@@ -290,11 +290,11 @@ async def test_inbound_lanes_serialize_same_key_and_are_released(sample_server):
 @pytest.mark.unit
 async def test_inbound_lanes_allow_different_keys_in_parallel(sample_server):
     """Independent event keys must not block each other."""
-    ws = AsyncMock()
+    ws           = AsyncMock()
     both_entered = asyncio.Event()
-    release = asyncio.Event()
-    active = 0
-    max_active = 0
+    release      = asyncio.Event()
+    active       = 0
+    max_active   = 0
 
     async def handler(_payload: dict[str, Any]) -> list[dict[str, Any]]:
         nonlocal active, max_active
@@ -307,8 +307,8 @@ async def test_inbound_lanes_allow_different_keys_in_parallel(sample_server):
         return []
 
     sample_server.handler = handler
-    first = asyncio.create_task(sample_server._handle_ws_event(ws, {"user_id": 1}))
-    second = asyncio.create_task(sample_server._handle_ws_event(ws, {"user_id": 2}))
+    first                 = asyncio.create_task(sample_server._handle_ws_event(ws, {"user_id": 1}))
+    second                = asyncio.create_task(sample_server._handle_ws_event(ws, {"user_id": 2}))
     await asyncio.wait_for(both_entered.wait(), timeout=1)
 
     assert max_active == 2
@@ -321,7 +321,7 @@ async def test_inbound_lanes_allow_different_keys_in_parallel(sample_server):
 @pytest.mark.unit
 async def test_inbound_lane_ticket_cancellation_releases_capacity(sample_server):
     """Cancelling a same-key ticket must release lane capacity immediately."""
-    ws = AsyncMock()
+    ws      = AsyncMock()
     entered = asyncio.Event()
     release = asyncio.Event()
 
@@ -367,10 +367,10 @@ def test_server_set_status_providers(sample_server):
     metrics = Mock(return_value={"test": "data"})
 
     sample_server.set_status_providers(
-        plugins_count=plugins_count,
-        sessions_count=sessions_count,
-        pending_jobs=pending_jobs,
-        metrics=metrics,
+        plugins_count  = plugins_count,
+        sessions_count = sessions_count,
+        pending_jobs   = pending_jobs,
+        metrics        = metrics,
     )
 
     assert sample_server._get_plugins_count == plugins_count
@@ -407,9 +407,9 @@ def test_server_update_token(sample_server):
 async def test_server_token_rotation_immediately_removes_and_closes_active_sockets(
     sample_server,
 ):
-    first = MagicMock()
-    first.close = AsyncMock()
-    second = MagicMock()
+    first        = MagicMock()
+    first.close  = AsyncMock()
+    second       = MagicMock()
     second.close = AsyncMock()
     sample_server._active_sockets.update({first, second})
 
@@ -419,19 +419,19 @@ async def test_server_token_rotation_immediately_removes_and_closes_active_socke
     assert sample_server.active_ws_connections() == 0
     await asyncio.sleep(0)
     first.close.assert_awaited_once_with(
-        code=1008,
-        message=b"inbound token rotated",
+        code    = 1008,
+        message = b"inbound token rotated",
     )
     second.close.assert_awaited_once_with(
-        code=1008,
-        message=b"inbound token rotated",
+        code    = 1008,
+        message = b"inbound token rotated",
     )
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_server_cross_thread_rotation_revokes_only_old_socket_generation(sample_server):
-    loop = asyncio.get_running_loop()
+    loop                      = asyncio.get_running_loop()
     sample_server._event_loop = loop
     old_socket = MagicMock(close=AsyncMock())
     old_state = sample_server._auth_state
@@ -461,8 +461,8 @@ async def test_server_cross_thread_rotation_revokes_only_old_socket_generation(s
     assert old_socket not in sample_server._active_sockets
     assert new_socket in sample_server._active_sockets
     old_socket.close.assert_awaited_once_with(
-        code=1008,
-        message=b"inbound token rotated",
+        code    = 1008,
+        message = b"inbound token rotated",
     )
     new_socket.close.assert_not_awaited()
 
@@ -474,10 +474,10 @@ async def test_broadcast_rechecks_auth_after_cross_thread_rotation_captures_sock
 ):
     """A socket snapshot cannot outlive the token generation that admitted it."""
 
-    loop = asyncio.get_running_loop()
+    loop                      = asyncio.get_running_loop()
     sample_server._event_loop = loop
     old_socket = MagicMock(send_str=AsyncMock(), close=AsyncMock())
-    old_state = sample_server._auth_state
+    old_state                                     = sample_server._auth_state
     sample_server._socket_auth_states[old_socket] = old_state
 
     class RotatingSocketSet(set):
@@ -488,9 +488,9 @@ async def test_broadcast_rechecks_auth_after_cross_thread_rotation_captures_sock
                 yield socket
                 if not self.rotated:
                     self.rotated = True
-                    worker = threading.Thread(
-                        target=sample_server.update_token,
-                        args=("new-token",),
+                    worker       = threading.Thread(
+                        target = sample_server.update_token,
+                        args   = ("new-token",),
                     )
                     worker.start()
                     worker.join(timeout=2)
@@ -513,9 +513,9 @@ async def test_broadcast_commit_runs_send_factory_without_update_join_deadlock(s
     """A post-commit rotation cannot deadlock or revoke the admitted send."""
 
     sample_server._event_loop = asyncio.get_running_loop()
-    old_state = sample_server._auth_state
-    send_body_started = False
-    committed_states = []
+    old_state                 = sample_server._auth_state
+    send_body_started         = False
+    committed_states          = []
 
     async def send_body() -> None:
         nonlocal send_body_started
@@ -523,15 +523,15 @@ async def test_broadcast_commit_runs_send_factory_without_update_join_deadlock(s
 
     class RotatingSocket:
         def __init__(self) -> None:
-            self.send_called = False
+            self.send_called  = False
             self.close_called = False
 
         def send_str(self, _text: str):
             self.send_called = True
             committed_states.append(sample_server._socket_auth_states[self])
             worker = threading.Thread(
-                target=sample_server.update_token,
-                args=("new-token",),
+                target = sample_server.update_token,
+                args   = ("new-token",),
             )
             worker.start()
             worker.join(timeout=2)
@@ -560,7 +560,7 @@ async def test_broadcast_commit_runs_send_factory_without_update_join_deadlock(s
 @pytest.mark.unit
 def test_server_rotation_tolerates_loop_closing_after_is_closed_check(sample_server):
     old_state = sample_server._auth_state
-    socket = MagicMock()
+    socket    = MagicMock()
 
     class ClosingLoop:
         @staticmethod
@@ -584,7 +584,7 @@ def test_server_rotation_tolerates_loop_closing_after_is_closed_check(sample_ser
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_server_same_token_update_keeps_active_websockets(sample_server):
-    ws = MagicMock()
+    ws       = MagicMock()
     ws.close = AsyncMock()
     sample_server._active_sockets.add(ws)
 
@@ -618,7 +618,7 @@ async def test_server_token_rotation_during_ws_prepare_rejects_connection(
         async def __anext__(self):
             raise StopAsyncIteration
 
-    ws = FakeWebSocket()
+    ws      = FakeWebSocket()
     request = _make_request_with_auth("GET", "/ws", "test_token")
     with patch("core.server.web.WebSocketResponse", return_value=ws):
         handler_task = asyncio.create_task(sample_server.ws_handler(request))
@@ -631,8 +631,8 @@ async def test_server_token_rotation_during_ws_prepare_rejects_connection(
     assert sample_server._active_sockets == set()
     assert sample_server._get_ws_connections() == 0
     ws.close.assert_awaited_once_with(
-        code=1008,
-        message=b"inbound token rotated",
+        code    = 1008,
+        message = b"inbound token rotated",
     )
 
 
@@ -641,15 +641,15 @@ async def test_server_token_rotation_during_ws_prepare_rejects_connection(
 async def test_server_worker_drops_events_from_revoked_generation():
     handler = AsyncMock(return_value=[])
     server = InboundServer(
-        host="127.0.0.1",
-        port=8765,
-        token="old-token",
-        handler=handler,
-        enable_http=False,
-        enable_ws=True,
-        ws_max_workers=1,
+        host           = "127.0.0.1",
+        port           = 8765,
+        token          = "old-token",
+        handler        = handler,
+        enable_http    = False,
+        enable_ws      = True,
+        ws_max_workers = 1,
     )
-    ws = AsyncMock()
+    ws    = AsyncMock()
     queue = server._ws_event_queue
     assert queue is not None
     admitted_auth = server._auth_state
@@ -681,13 +681,13 @@ def test_inbound_manager_initialization():
         return []
 
     manager = InboundManager(
-        inbound_http_base="http://localhost:8080",
-        inbound_ws_uri="ws://localhost:8080/ws",
-        token="test_token",
-        handler=handler,
-        ws_max_workers=4,
-        ws_queue_size=100,
-        ws_broadcast_timeout_seconds=2.5,
+        inbound_http_base            = "http://localhost:8080",
+        inbound_ws_uri               = "ws://localhost:8080/ws",
+        token                        = "test_token",
+        handler                      = handler,
+        ws_max_workers               = 4,
+        ws_queue_size                = 100,
+        ws_broadcast_timeout_seconds = 2.5,
     )
 
     assert manager._inbound_http_base == "http://localhost:8080"

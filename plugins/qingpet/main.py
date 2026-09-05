@@ -90,7 +90,7 @@ from .utils.time import business_date, business_week
 
 _db_instance: Database | None = None
 
-_pet_service: PetService | None = None
+_pet_service: PetService | None       = None
 _social_service: SocialService | None = None
 
 _router: CommandRouter | None = None
@@ -136,8 +136,8 @@ _PRIVATE_ALWAYS_ALLOWED_COMMANDS = frozenset(
 )
 _SPAM_DECAY_COMMANDS = frozenset({"feed", "clean", "play", "train", "explore"})
 _MESSAGE_ID_COMMANDS = frozenset({"visit", "game"})
-_SHOW_MEDALS = ("🥇", "🥈", "🥉")
-_ADMIN_HANDLERS = {
+_SHOW_MEDALS         = ("🥇", "🥈", "🥉")
+_ADMIN_HANDLERS      = {
     "enable": handle_manage_enable,
     "disable": handle_manage_disable,
     "config": handle_manage_config,
@@ -218,7 +218,7 @@ def _extract_text_after_first_at(event: dict[str, Any]) -> str:
     if not isinstance(message, list):
         return ""
 
-    at_found = False
+    at_found              = False
     text_parts: list[str] = []
     for segment in message:
         if not isinstance(segment, dict):
@@ -245,7 +245,7 @@ def _has_leading_qq_target(text: str) -> bool:
 async def init(context) -> None:
     global _db_instance, _pet_service, _social_service, _router
 
-    log = _get_logger(context)
+    log                       = _get_logger(context)
     database: Database | None = None
 
     try:
@@ -253,32 +253,32 @@ async def init(context) -> None:
             await asyncio.to_thread(_db_instance.cleanup)
 
         data_dir = context.data_dir if hasattr(context, "data_dir") else "data"
-        db_path = Path(data_dir) / "qingpet" / "qingpet.db"
+        db_path  = Path(data_dir) / "qingpet" / "qingpet.db"
 
         database = await asyncio.to_thread(Database, str(db_path))
 
         # 定时任务跨调用复用这两个无请求状态的服务对象。
-        pet_service = PetService(database)
+        pet_service    = PetService(database)
         social_service = SocialService(database)
 
-        _db_instance = database
-        _pet_service = pet_service
+        _db_instance    = database
+        _pet_service    = pet_service
         _social_service = social_service
-        _router = None
+        _router         = None
 
         log.info("Qingpet plugin initialized successfully")
     except Exception as exc:
         if database is not None:
             await asyncio.to_thread(database.cleanup)
-        _db_instance = None
-        _pet_service = None
+        _db_instance    = None
+        _pet_service    = None
         _social_service = None
-        _router = None
+        _router         = None
         public_error_message(
             context,
             exc,
-            logger=log,
-            component="qingpet.init",
+            logger    = log,
+            component = "qingpet.init",
         )
 
 
@@ -286,11 +286,11 @@ async def cleanup(context) -> None:
     global _db_instance, _pet_service, _social_service, _router
     log = _get_logger(context)
 
-    database = _db_instance
-    _db_instance = None
-    _pet_service = None
+    database        = _db_instance
+    _db_instance    = None
+    _pet_service    = None
     _social_service = None
-    _router = None
+    _router         = None
     if database is not None:
         await asyncio.to_thread(database.cleanup)
     log.info("Qingpet plugin cleaned up")
@@ -308,7 +308,7 @@ def _get_anti_spam_state(user_id: str, group_id: int) -> tuple[str | None, float
         user_id, group_id, int(ANTI_SPAM_CONFIG["window_seconds"])
     )
     max_commands = int(ANTI_SPAM_CONFIG["max_commands"])
-    hard_limit = max(
+    hard_limit   = max(
         max_commands + 1, int(ANTI_SPAM_CONFIG.get("hard_block_commands", max_commands * 2))
     )
     if recent_count >= hard_limit:
@@ -316,7 +316,7 @@ def _get_anti_spam_state(user_id: str, group_id: int) -> tuple[str | None, float
 
     # 当前请求通过检查后会立即记入频率，因此按“已有次数 + 本次”计算收益。
     excess = max(0, recent_count + 1 - max_commands)
-    base = float(ANTI_SPAM_CONFIG["exponential_decay_base"])
+    base   = float(ANTI_SPAM_CONFIG["exponential_decay_base"])
     return None, math.pow(base, excess)
 
 
@@ -407,7 +407,7 @@ def _catalog_root(context: Any) -> CommandCatalogNode:
 def _format_help_overview(root: CommandCatalogNode) -> str:
     """生成适合手机阅读的分类总览，不在首屏展开全部命令。"""
 
-    lines = ["🐾 宠物系统帮助", "发送 /宠物 help <类别> 查看详细命令", ""]
+    lines     = ["🐾 宠物系统帮助", "发送 /宠物 help <类别> 查看详细命令", ""]
     help_node = root.resolve_child("help")
     if help_node is None:
         return "\n".join(lines)
@@ -430,7 +430,7 @@ def _format_category_help(root: CommandCatalogNode, category_name: str) -> str:
     lines = [f"🐾 {title}命令", ""]
     for top_level_node in nodes:
         for node in top_level_node.walk():
-            depth = len(node.path) - len(top_level_node.path)
+            depth  = len(node.path) - len(top_level_node.path)
             indent = "  " * depth
             lines.append(f"{indent}• {node.usage}")
             lines.append(f"{indent}  {node.help_text}")
@@ -519,7 +519,7 @@ def _parse_requested_action(
 ) -> tuple[str, str, CommandInvocation] | None:
     """由 Core 目录解析子命令，并兼容重复写一次根命令别名。"""
 
-    root = _catalog_root(context)
+    root       = _catalog_root(context)
     invocation = resolve_context_command_invocation(context, root.code, args)
     if invocation is None:
         invocation = resolve_catalog_invocation(root, args)
@@ -582,8 +582,8 @@ def _apply_at_target(
         return f"{at_qq} {tail_text or rest_args.strip()}".strip()
     if canonical_action != "game":
         return rest_args
-    game_text = rest_args.strip().lower()
-    has_race = game_text.startswith("赛跑") or game_text.startswith("race")
+    game_text   = rest_args.strip().lower()
+    has_race    = game_text.startswith("赛跑") or game_text.startswith("race")
     race_target = game_text.replace("赛跑", "", 1).replace("race", "", 1).strip()
     if has_race and not _has_leading_qq_target(race_target):
         return f"{rest_args.strip()} {at_qq}".strip()
@@ -653,7 +653,7 @@ def _build_handler_kwargs(
         )
         handler_kwargs["message_id"] = str(message_id)
     if canonical_action == "admin":
-        handler_kwargs["context"] = context
+        handler_kwargs["context"]            = context
         handler_kwargs["command_invocation"] = invocation
     return handler_kwargs
 
@@ -674,7 +674,7 @@ def _execute_qingpet_command(
     if parsed is None:
         return _format_help_overview(_catalog_root(context))
     action, rest_args, invocation = parsed
-    router = _get_router(context)
+    router           = _get_router(context)
     canonical_action = router.resolve_command(action)
     effective_group_id, group_error = _resolve_command_group(
         db,
@@ -733,8 +733,8 @@ def _execute_qingpet_command(
         return public_error_message(
             context,
             exc,
-            logger=_get_logger(context),
-            component="qingpet.command",
+            logger    = _get_logger(context),
+            component = "qingpet.command",
         )
 
 
@@ -743,13 +743,13 @@ async def handle(
 ) -> list[dict[str, Any]]:
     """把根命令交给隔离线程执行，并统一规范化插件输出。"""
 
-    log = _get_logger(context)
+    log          = _get_logger(context)
     raw_group_id = event.get("group_id")
     try:
         group_id = int(raw_group_id) if raw_group_id is not None else 0
     except (TypeError, ValueError):
         group_id = 0
-    user_id = str(event.get("user_id", ""))
+    user_id    = str(event.get("user_id", ""))
     is_private = raw_group_id in (None, "", 0, "0")
     if _db_instance is None:
         return cast(list[dict[str, Any]], segments("宠物系统尚未初始化，请联系管理员"))
@@ -774,8 +774,8 @@ async def handle(
             public_error_response(
                 context,
                 exc,
-                logger=log,
-                component="qingpet.handle",
+                logger    = log,
+                component = "qingpet.handle",
             ),
         )
     return _normalize_plugin_output(result)
@@ -790,7 +790,7 @@ def _handle_admin_command(
     args: str,
     db: Database,
     *,
-    context=None,
+    context                                      = None,
     command_invocation: CommandInvocation | None = None,
 ) -> tuple[bool, str]:
     """
@@ -813,12 +813,12 @@ def _handle_admin_command(
         and len(command_invocation.chain) > 2
         and command_invocation.chain[1].name == "admin"
     ):
-        action = command_invocation.chain[2].name
+        action    = command_invocation.chain[2].name
         rest_args = command_invocation.remainder_after(2)
     else:
         admin_node = _catalog_root(context).resolve_child("admin")
-        child = admin_node.resolve_child(action) if admin_node is not None else None
-        action = child.name if child is not None else action.casefold()
+        child      = admin_node.resolve_child(action) if admin_node is not None else None
+        action     = child.name if child is not None else action.casefold()
 
     # 只信任 core 基于已认证事件签发的主体，不回退到插件私有密钥或测试字段。
     principal = getattr(context, "principal", None) if context is not None else None
@@ -826,11 +826,11 @@ def _handle_admin_command(
         same_actor = principal is not None and int(principal.user_id) == int(user_id)
     except (TypeError, ValueError):
         same_actor = False
-    capabilities = getattr(context, "capabilities", None) if context is not None else None
-    is_global_admin = bool(getattr(capabilities, "is_bot_admin", False))
+    capabilities     = getattr(context, "capabilities", None) if context is not None else None
+    is_global_admin  = bool(getattr(capabilities, "is_bot_admin", False))
     can_manage_group = getattr(principal, "can_manage_group", None)
     is_group_manager = bool(can_manage_group(group_id)) if callable(can_manage_group) else False
-    is_admin = bool(same_actor and (is_global_admin or is_group_manager))
+    is_admin         = bool(same_actor and (is_global_admin or is_group_manager))
 
     handler = _ADMIN_HANDLERS.get(action)
     if handler is not None:
@@ -855,16 +855,16 @@ async def scheduled_decay(context) -> list[ScheduledDelivery]:
 
     if _db_instance is None or _pet_service is None:
         return []
-    db = _db_instance
+    db          = _db_instance
     pet_service = _pet_service
 
     def _run_job() -> list[ScheduledDelivery]:
         messages: list[ScheduledDelivery] = []
-        enabled_group_decay = db.get_enabled_group_decay_map()
+        enabled_group_decay               = db.get_enabled_group_decay_map()
         if not enabled_group_decay:
             db.cleanup_old_timestamps()
             return messages
-        pets = db.get_all_pets()
+        pets         = db.get_all_pets()
         trustee_keys = db.get_active_trustee_keys()
 
         for pet in pets:
@@ -890,8 +890,8 @@ async def scheduled_decay(context) -> list[ScheduledDelivery]:
         public_error_message(
             context,
             exc,
-            logger=log,
-            component="qingpet.schedule.decay",
+            logger    = log,
+            component = "qingpet.schedule.decay",
         )
         return []
 
@@ -910,8 +910,8 @@ async def scheduled_trade_expiry(context) -> None:
         public_error_message(
             context,
             exc,
-            logger=log,
-            component="qingpet.schedule.trade_expiry",
+            logger    = log,
+            component = "qingpet.schedule.trade_expiry",
         )
     return
 
@@ -921,7 +921,7 @@ async def scheduled_pet_show_settlement(context) -> list[ScheduledDelivery]:
     log = _get_logger(context)
     if _db_instance is None or _social_service is None:
         return []
-    db = _db_instance
+    db             = _db_instance
     social_service = _social_service
 
     def _run_job() -> list[ScheduledDelivery]:
@@ -938,8 +938,8 @@ async def scheduled_pet_show_settlement(context) -> list[ScheduledDelivery]:
         public_error_message(
             context,
             exc,
-            logger=log,
-            component="qingpet.schedule.pet_show_settlement",
+            logger    = log,
+            component = "qingpet.schedule.pet_show_settlement",
         )
         return []
 
@@ -956,9 +956,9 @@ async def scheduled_daily_reset(context) -> None:
     db = _db_instance
 
     def _run_job() -> None:
-        period = business_date()
+        period      = business_date()
         reset_count = 0
-        age_count = 0
+        age_count   = 0
         for group_id in db.get_enabled_group_ids():
             result = db.run_daily_reset_atomic(f"{period}:{group_id}", group_id)
             if result is None:
@@ -976,8 +976,8 @@ async def scheduled_daily_reset(context) -> None:
         public_error_message(
             context,
             exc,
-            logger=log,
-            component="qingpet.schedule.daily_reset",
+            logger    = log,
+            component = "qingpet.schedule.daily_reset",
         )
     return
 
@@ -996,7 +996,7 @@ async def scheduled_weekly_activity(context) -> list[ScheduledDelivery]:
     def _run_job() -> list[ScheduledDelivery]:
         messages: list[ScheduledDelivery] = []
         group_ids = db.get_enabled_group_ids(require_activity=True)
-        period = business_week()
+        period         = business_week()
         settled_groups = 0
 
         for group_id in group_ids:
@@ -1030,7 +1030,7 @@ async def scheduled_weekly_activity(context) -> list[ScheduledDelivery]:
         public_error_message(
             context,
             exc,
-            logger=log,
-            component="qingpet.schedule.weekly_activity",
+            logger    = log,
+            component = "qingpet.schedule.weekly_activity",
         )
         return []

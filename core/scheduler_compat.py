@@ -1,3 +1,4 @@
+# 调度兼容适配：先探测停止与排空能力，再选择受支持的关闭路径。
 """Capability-gated APScheduler shutdown integration.
 
 APScheduler 3.x does not expose a public API that both stops new scheduling
@@ -32,9 +33,9 @@ class SchedulerDrainCapability:
 
 def _unavailable(reason: str) -> SchedulerDrainCapability:
     return SchedulerDrainCapability(
-        available=False,
-        reason=reason,
-        apscheduler_version=str(getattr(apscheduler, "__version__", "unknown")),
+        available           = False,
+        reason              = reason,
+        apscheduler_version = str(getattr(apscheduler, "__version__", "unknown")),
     )
 
 
@@ -80,9 +81,9 @@ def probe_asyncio_scheduler_drain(scheduler: object) -> SchedulerDrainCapability
         return _unavailable("AsyncIOScheduler logger is incompatible")
 
     return SchedulerDrainCapability(
-        available=True,
-        reason=None,
-        apscheduler_version=str(getattr(apscheduler, "__version__", "unknown")),
+        available           = True,
+        reason              = None,
+        apscheduler_version = str(getattr(apscheduler, "__version__", "unknown")),
     )
 
 
@@ -93,14 +94,14 @@ class AsyncIOSchedulerDrain:
         capability = probe_asyncio_scheduler_drain(scheduler)
         if not capability.available:
             raise ValueError(capability.reason or "APScheduler private drain is unavailable")
-        self.scheduler = scheduler
-        self.timeout_seconds = timeout_seconds
-        self.pending_executor_cleanup: list[Any] = []
-        self.pending_jobstore_cleanup: list[Any] = []
-        self.pending_job_futures: set[asyncio.Future[Any]] = set()
+        self.scheduler                                            = scheduler
+        self.timeout_seconds                                      = timeout_seconds
+        self.pending_executor_cleanup: list[Any]                  = []
+        self.pending_jobstore_cleanup: list[Any]                  = []
+        self.pending_job_futures: set[asyncio.Future[Any]]        = set()
         self.job_futures_cancel_requested: set[asyncio.Task[Any]] = set()
-        self.timer_cleanup_pending = False
-        self._started = False
+        self.timer_cleanup_pending                                = False
+        self._started                                             = False
 
     def _begin(self) -> None:
         if not self._started:
@@ -110,7 +111,7 @@ class AsyncIOSchedulerDrain:
             self.pending_job_futures.clear()
             self.job_futures_cancel_requested.clear()
             self.timer_cleanup_pending = True
-            self._started = True
+            self._started              = True
         self.scheduler.state = STATE_STOPPED
 
     def _cleanup_resources(self, *, wait: bool) -> list[tuple[str, BaseException]]:
@@ -180,7 +181,7 @@ class AsyncIOSchedulerDrain:
         return errors
 
     async def _drain_jobs(self) -> list[tuple[str, BaseException]]:
-        errors = self._request_job_cancellation()
+        errors  = self._request_job_cancellation()
         pending = set(self.pending_job_futures)
         if pending:
             try:

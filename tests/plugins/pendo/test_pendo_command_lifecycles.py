@@ -59,7 +59,7 @@ def _snapshot(item: Any) -> dict[str, Any]:
 async def test_todo_same_id_covers_all_fields_statuses_invalid_input_and_delete(db) -> None:
     """一条待办必须用同一 ID 完成全字段增查改、状态迁移和删除。"""
 
-    owner = "lifecycle-todo"
+    owner   = "lifecycle-todo"
     handler = TaskHandler(db)
     created = await handler.handle(
         owner,
@@ -71,7 +71,7 @@ async def test_todo_same_id_covers_all_fields_statuses_invalid_input_and_delete(
 
     assert created["status"] == "success"
     task_id = created["item_id"]
-    task = db.get_item(task_id, owner)
+    task    = db.get_item(task_id, owner)
     assert task is not None
     assert task.title == "初始待办"
     assert task.plan_date == "2035-01-10"
@@ -93,7 +93,7 @@ async def test_todo_same_id_covers_all_fields_statuses_invalid_input_and_delete(
     assert "初始待办" in viewed["message"]
 
     before_invalid = _snapshot(task)
-    invalid = await handler.handle(owner, f"edit {task_id} plan:not-a-date", {})
+    invalid        = await handler.handle(owner, f"edit {task_id} plan:not-a-date", {})
     assert invalid["status"] == "error"
     assert "参数无效" in invalid["message"]
     assert "YYYY-MM-DD" in invalid["message"]
@@ -138,11 +138,11 @@ async def test_todo_same_id_covers_all_fields_statuses_invalid_input_and_delete(
 async def test_note_same_id_covers_fields_mutations_links_invalid_input_and_delete(db) -> None:
     """笔记编辑、追加、标签和关联必须落在创建返回的同一 ID 上。"""
 
-    owner = "lifecycle-note"
-    handler = NoteHandler(db)
-    first_target = await handler.handle(owner, "add 关联目标一 cat:资料 #目标", {})
+    owner         = "lifecycle-note"
+    handler       = NoteHandler(db)
+    first_target  = await handler.handle(owner, "add 关联目标一 cat:资料 #目标", {})
     second_target = await handler.handle(owner, "add 关联目标二 cat:资料 #目标", {})
-    note = await handler.handle(
+    note          = await handler.handle(
         owner,
         f'add title:"初始标题" content 初始正文 cat:"研究" #初始 ref:{first_target["item_id"]}',
         {},
@@ -151,7 +151,7 @@ async def test_note_same_id_covers_fields_mutations_links_invalid_input_and_dele
 
     assert note["status"] == "success"
     note_id = note["item_id"]
-    stored = db.get_item(note_id, owner)
+    stored  = db.get_item(note_id, owner)
     assert stored.title == "初始标题"
     assert stored.content == "初始正文"
     assert stored.category == "研究"
@@ -164,7 +164,7 @@ async def test_note_same_id_covers_fields_mutations_links_invalid_input_and_dele
     assert "初始正文" in viewed["message"]
 
     before_invalid = _snapshot(db.get_item(note_id, owner))
-    invalid = await handler.handle(owner, f"link {note_id} {note_id}", {})
+    invalid        = await handler.handle(owner, f"link {note_id} {note_id}", {})
     assert invalid["status"] == "error"
     assert _snapshot(db.get_item(note_id, owner)) == before_invalid
 
@@ -176,9 +176,9 @@ async def test_note_same_id_covers_fields_mutations_links_invalid_input_and_dele
     )
     assert edited["status"] == "success"
     appended = await handler.handle(owner, f"append {note_id} 追加结论", {})
-    tagged = await handler.handle(owner, f"tag {note_id} #复盘 #共享", {})
+    tagged   = await handler.handle(owner, f"tag {note_id} #复盘 #共享", {})
     untagged = await handler.handle(owner, f"untag {note_id} #共享", {})
-    linked = await handler.handle(owner, f"link {note_id} {first_target['item_id']}", {})
+    linked   = await handler.handle(owner, f"link {note_id} {first_target['item_id']}", {})
     assert [item["status"] for item in (appended, tagged, untagged)] == [
         "success",
         "success",
@@ -205,7 +205,7 @@ async def test_note_same_id_covers_fields_mutations_links_invalid_input_and_dele
 async def test_diary_same_id_covers_all_command_fields_and_rejects_invalid_boolean(db) -> None:
     """日记支持的全部显式字段都要持久化，非法收藏值不能创建记录。"""
 
-    owner = "lifecycle-diary"
+    owner   = "lifecycle-diary"
     handler = DiaryHandler(db)
     created = await handler.handle(
         owner,
@@ -217,7 +217,7 @@ async def test_diary_same_id_covers_all_command_fields_and_rejects_invalid_boole
 
     assert created["status"] == "success"
     diary_id = created["item_id"]
-    diary = db.get_item(diary_id, owner)
+    diary    = db.get_item(diary_id, owner)
     assert diary.content == "完整日记"
     assert diary.diary_date == "2035-03-12"
     assert (
@@ -263,7 +263,7 @@ async def test_diary_same_id_covers_all_command_fields_and_rejects_invalid_boole
 async def test_ledger_same_id_covers_every_edit_field_and_all_transaction_types(db) -> None:
     """一条账目在同一 ID 上覆盖支出、转账、收入及全部可编辑字段。"""
 
-    owner = "lifecycle-ledger"
+    owner   = "lifecycle-ledger"
     handler = LedgerHandler(db)
     created = await handler.handle(
         owner,
@@ -275,7 +275,7 @@ async def test_ledger_same_id_covers_every_edit_field_and_all_transaction_types(
 
     assert created["status"] == "success"
     ledger_id = created["item_id"]
-    item = db.get_item(ledger_id, owner)
+    item      = db.get_item(ledger_id, owner)
     assert item.amount_cents == 3550
     assert item.transaction_type == "expense"
     assert item.ledger_category == "餐饮"
@@ -288,7 +288,7 @@ async def test_ledger_same_id_covers_every_edit_field_and_all_transaction_types(
     assert item.context == {"group_id": 71004}
 
     before_invalid = _snapshot(item)
-    invalid = await handler.handle(owner, f"edit {ledger_id} to:银行卡", {})
+    invalid        = await handler.handle(owner, f"edit {ledger_id} to:银行卡", {})
     assert invalid["status"] == "error"
     assert _snapshot(db.get_item(ledger_id, owner)) == before_invalid
 
@@ -353,7 +353,7 @@ async def _set_event_updates(handler: EventHandler, updates: dict[str, Any]) -> 
 async def test_single_event_same_id_covers_fields_reminders_invalid_edit_and_delete(db) -> None:
     """单次 Event 在同一 ID 上覆盖可用字段、提醒、错误不变性和删除。"""
 
-    owner = "lifecycle-event-single"
+    owner   = "lifecycle-event-single"
     handler = _event_handler(db)
     created = await handler.create_event(
         owner,
@@ -373,7 +373,7 @@ async def test_single_event_same_id_covers_fields_reminders_invalid_edit_and_del
     )
     assert created["status"] == "success"
     event_id = created["item_id"]
-    event = db.get_item(event_id, owner)
+    event    = db.get_item(event_id, owner)
     assert event.event_role == "single"
     assert event.title == "单次会议"
     assert event.content == "初始议程"
@@ -390,7 +390,7 @@ async def test_single_event_same_id_covers_fields_reminders_invalid_edit_and_del
     ]
 
     before_invalid = _snapshot(event)
-    invalid = await handler.edit_event(owner, event_id, {})
+    invalid        = await handler.edit_event(owner, event_id, {})
     assert invalid["status"] == "error"
     assert _snapshot(db.get_item(event_id, owner)) == before_invalid
 
@@ -496,18 +496,18 @@ async def test_event_collection_types_cover_collection_and_child_crud(
 ) -> None:
     """重复和多节点 Event 都要验证集合 ID 与同一组子 ID 的完整 CRUD。"""
 
-    owner = f"lifecycle-event-{kind}"
+    owner   = f"lifecycle-event-{kind}"
     handler = _event_handler(db)
     created = await handler.create_event(owner, deepcopy(payload), {}, allow_conflict=True)
     assert created["status"] == "success"
     collection_id = created["item_id"]
-    collection = db.get_event_collection(collection_id, owner)
+    collection    = db.get_event_collection(collection_id, owner)
     assert collection is not None
     assert collection["kind"] == kind
     for field in ("title", "content", "category", "location", "tags", "notes", "context"):
         assert collection[field] == payload[field]
 
-    children = db.get_collection_events(collection_id, owner)
+    children  = db.get_collection_events(collection_id, owner)
     child_ids = tuple(child.id for child in children)
     assert len(set(child_ids)) == 3
     assert all(is_canonical_internal_id(child_id) for child_id in child_ids)
@@ -528,7 +528,7 @@ async def test_event_collection_types_cover_collection_and_child_crud(
         assert [child.notes for child in children] == ["先提审", "观察", "收尾"]
 
     collection_view = await handler.view_event(owner, collection_id, {})
-    child_view = await handler.view_event(owner, child_ids[1], {})
+    child_view      = await handler.view_event(owner, child_ids[1], {})
     assert collection_view["status"] == child_view["status"] == "success"
     assert collection_id[:8] in child_view["message"]
     assert collection_id not in child_view["message"]
@@ -547,7 +547,7 @@ async def test_event_collection_types_cover_collection_and_child_crud(
         assert payload["content"] in child_view["message"]
 
     collection_before = deepcopy(collection)
-    invalid = await handler.edit_event(owner, f"{collection_id} 时间改到2035-08-01", {})
+    invalid           = await handler.edit_event(owner, f"{collection_id} 时间改到2035-08-01", {})
     assert invalid["status"] == "warning"
     assert db.get_event_collection(collection_id, owner) == collection_before
 

@@ -8,8 +8,8 @@ from pathlib import Path
 
 def _build_parser() -> argparse.ArgumentParser:
     return argparse.ArgumentParser(
-        prog="xiaoqing",
-        description="XiaoQing QQ Bot framework",
+        prog        = "xiaoqing",
+        description = "XiaoQing QQ Bot framework",
     )
 
 
@@ -46,7 +46,7 @@ async def main() -> None:
     _prepare_runtime()
     from core.app import XiaoQingApp
 
-    app = XiaoQingApp(Path(__file__).resolve().parent)
+    app        = XiaoQingApp(Path(__file__).resolve().parent)
     stop_event = asyncio.Event()
 
     def request_stop() -> None:
@@ -66,6 +66,9 @@ async def main() -> None:
     finally:
         try:
             await asyncio.shield(app.stop())
+            if app.shutdown_errors:
+                # 资源仍未收敛时让进程返回失败，运行器可据此发现关闭异常。
+                raise RuntimeError("XiaoQing shutdown incomplete; see runtime log")
         except asyncio.CancelledError:
             pass
 

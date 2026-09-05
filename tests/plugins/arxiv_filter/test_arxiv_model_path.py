@@ -1,3 +1,4 @@
+# 验证 arXiv 模型路径解析和允许的文件边界。
 from __future__ import annotations
 
 import json
@@ -58,7 +59,7 @@ def test_config_can_use_legacy_fallback_only_without_an_override(
     monkeypatch,
 ) -> None:
     plugin_dir = tmp_path / "plugin"
-    fallback = plugin_dir / "best_model"
+    fallback   = plugin_dir / "best_model"
     fallback.mkdir(parents=True)
     monkeypatch.setattr(shared, "_PLUGIN_DIR", str(plugin_dir))
     monkeypatch.setattr(
@@ -116,13 +117,13 @@ def test_packaged_config_and_repository_cli_expose_the_external_model_contract()
     assert not (ROOT / "plugins" / "arxiv_filter" / "arxiv_test.py").exists()
     completed = subprocess.run(
         [sys.executable, str(cli), "--help"],
-        cwd=ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=30,
+        cwd            = ROOT,
+        check          = False,
+        capture_output = True,
+        text           = True,
+        encoding       = "utf-8",
+        errors         = "replace",
+        timeout        = 30,
     )
     assert completed.returncode == 0
     assert "--model-path" in completed.stdout
@@ -185,9 +186,9 @@ def test_repository_cli_atomically_writes_and_explicitly_replaces_csv(
         ]
     )
     facade = SimpleNamespace(
-        run_inference_for_today=lambda **_kwargs: (data, 0.5),
-        select_positives=lambda frame: frame.loc[frame["Prediction"] == 1],
-        format_positives=lambda _frame: "formatted positive",
+        run_inference_for_today = lambda **_kwargs: (data, 0.5),
+        select_positives        = lambda frame: frame.loc[frame["Prediction"] == 1],
+        format_positives        = lambda _frame: "formatted positive",
     )
     monkeypatch.setattr(arxiv_inference_cli, "_load_inference", lambda: facade)
     output = tmp_path / "nested" / "result.csv"

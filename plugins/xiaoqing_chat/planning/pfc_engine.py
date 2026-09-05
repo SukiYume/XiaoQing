@@ -36,9 +36,9 @@ GenerateReplyFn = Callable[[str, str, str], Awaitable[str]]
 def _build_goal_focus_context(goal_list: Sequence[dict[str, Any]]) -> str:
     if not goal_list:
         return ""
-    first = goal_list[0] if isinstance(goal_list[0], dict) else {}
-    goal = str(first.get("goal", "") or "").strip()
-    focus = str(first.get("focus", "") or "").strip()
+    first            = goal_list[0] if isinstance(goal_list[0], dict) else {}
+    goal             = str(first.get("goal", "") or "").strip()
+    focus            = str(first.get("focus", "") or "").strip()
     lines: list[str] = []
     if goal:
         lines.append(f"目标: {goal}")
@@ -53,9 +53,9 @@ async def _action_history_summary_async(store: ActionHistoryStore, chat_id: str)
         return "", ""
     lines = []
     for r in recent[-8:]:
-        ts = time.strftime("%H:%M:%S", time.localtime(r.ts))
+        ts  = time.strftime("%H:%M:%S", time.localtime(r.ts))
         tgt = r.local_target or "-"
-        ok = "ok" if r.executed else "fail"
+        ok  = "ok" if r.executed else "fail"
         lines.append(f"- {ts} {r.action} {tgt} {ok} {r.reasoning}".strip())
     summary = "\n".join(lines).strip()
     last = recent[-1]
@@ -64,7 +64,7 @@ async def _action_history_summary_async(store: ActionHistoryStore, chat_id: str)
 
 
 def _timeout_context(history: Sequence[StoredMessage], *, minutes: int = 6) -> str:
-    now = time.time()
+    now          = time.time()
     last_user_ts = 0.0
     for msg in reversed(history[-200:]):
         if msg.role == "user":
@@ -131,15 +131,15 @@ def _normalize_action(action: str) -> str:
 
 def _wait_run_result(plan: PFCPlan, action: str) -> PFCRunResult:
     wait_seconds = float(plan.wait_seconds if plan.wait_seconds > 0 else 0)
-    reason = plan.reason
+    reason       = plan.reason
     if plan.thinking:
         reason = f"[thinking: {plan.thinking[:120]}] {plan.reason}"
     return PFCRunResult(
-        reply="",
-        action=action,
-        reason=reason,
-        ended=False,
-        wait_seconds=wait_seconds,
+        reply        = "",
+        action       = action,
+        reason       = reason,
+        ended        = False,
+        wait_seconds = wait_seconds,
     )
 
 
@@ -162,7 +162,7 @@ class _PFCSession:
     recent_reply_action: str
     planner_timeout: float
     now: float
-    dirty: bool = False
+    dirty: bool               = False
     planner_goal_context: str = ""
 
 
@@ -194,11 +194,11 @@ async def _prepare_pfc_session(
         ),
     )
     followup_action_window = runtime_cfg.pfc_followup_action_window_seconds
-    recent_reply_action = _recent_successful_reply_action(
+    recent_reply_action    = _recent_successful_reply_action(
         history,
         state.last_successful_reply_action or "",
-        now=now,
-        window_seconds=followup_action_window,
+        now            = now,
+        window_seconds = followup_action_window,
     )
     action_summary, last_action_context = await _action_history_summary_async(
         action_history,
@@ -210,27 +210,27 @@ async def _prepare_pfc_session(
         and not recent_reply_action
     ):
         state.last_successful_reply_action = ""
-        dirty = True
+        dirty                              = True
     planner_timeout = min(runtime_cfg.pfc_planner_timeout_seconds, runtime_cfg.timeout_seconds)
     return _PFCSession(
-        context=context,
-        runtime_cfg=runtime_cfg,
-        secrets=secrets,
-        bot_name=bot_name,
-        is_private=is_private,
-        chat_id=chat_id,
-        current_text=current_text,
-        memory_db=memory_db,
-        state=state,
-        generate_reply=generate_reply,
-        history=history,
-        action_summary=action_summary,
-        last_action_context=last_action_context,
-        timeout_context=timeout_context,
-        recent_reply_action=recent_reply_action,
-        planner_timeout=planner_timeout,
-        now=now,
-        dirty=dirty,
+        context             = context,
+        runtime_cfg         = runtime_cfg,
+        secrets             = secrets,
+        bot_name            = bot_name,
+        is_private          = is_private,
+        chat_id             = chat_id,
+        current_text        = current_text,
+        memory_db           = memory_db,
+        state               = state,
+        generate_reply      = generate_reply,
+        history             = history,
+        action_summary      = action_summary,
+        last_action_context = last_action_context,
+        timeout_context     = timeout_context,
+        recent_reply_action = recent_reply_action,
+        planner_timeout     = planner_timeout,
+        now                 = now,
+        dirty               = dirty,
     )
 
 
@@ -260,21 +260,21 @@ async def _plan_pfc_action(session: _PFCSession) -> PFCPlan:
     _log_step(
         session.context,
         session.runtime_cfg,
-        chat_id=session.chat_id,
-        step="pfc.plan.start",
-        fields={"history_items": len(session.history)},
+        chat_id = session.chat_id,
+        step    = "pfc.plan.start",
+        fields  = {"history_items": len(session.history)},
     )
     plan = await plan_next_action(
-        goal_list=session.state.goal_list,
-        knowledge_list=session.state.knowledge_list,
+        goal_list      = session.state.goal_list,
+        knowledge_list = session.state.knowledge_list,
         **_planner_kwargs(session),
     )
     _log_step(
         session.context,
         session.runtime_cfg,
-        chat_id=session.chat_id,
-        step="pfc.plan.done",
-        fields={
+        chat_id = session.chat_id,
+        step    = "pfc.plan.done",
+        fields  = {
             "elapsed_s": round(time.monotonic() - started_at, 3),
             "action": plan.action,
             "reason": plan.reason,
@@ -293,10 +293,10 @@ def _record_planner_health(session: _PFCSession, plan: PFCPlan) -> None:
         "planner_invalid_response",
         "planner_timeout",
     }:
-        window_seconds = session.runtime_cfg.pfc_planner_fail_window_seconds
-        threshold = session.runtime_cfg.pfc_planner_fail_threshold
+        window_seconds  = session.runtime_cfg.pfc_planner_fail_window_seconds
+        threshold       = session.runtime_cfg.pfc_planner_fail_threshold
         backoff_seconds = session.runtime_cfg.pfc_planner_backoff_seconds
-        failures = [
+        failures        = [
             value for value in state.planner_fail_ts if session.now - float(value) < window_seconds
         ]
         failures.append(session.now)
@@ -306,9 +306,9 @@ def _record_planner_health(session: _PFCSession, plan: PFCPlan) -> None:
             _log_step(
                 session.context,
                 session.runtime_cfg,
-                chat_id=session.chat_id,
-                step="pfc.plan.backoff",
-                fields={
+                chat_id = session.chat_id,
+                step    = "pfc.plan.backoff",
+                fields  = {
                     "fails": len(failures),
                     "window_s": window_seconds,
                     "backoff_s": backoff_seconds,
@@ -316,9 +316,9 @@ def _record_planner_health(session: _PFCSession, plan: PFCPlan) -> None:
             )
         session.dirty = True
     elif state.planner_fail_ts or state.planner_skip_until:
-        state.planner_fail_ts = []
+        state.planner_fail_ts    = []
         state.planner_skip_until = 0.0
-        session.dirty = True
+        session.dirty            = True
 
 
 def _passive_pfc_result(
@@ -333,15 +333,15 @@ def _passive_pfc_result(
         _log_step(
             session.context,
             session.runtime_cfg,
-            chat_id=session.chat_id,
-            step="pfc.block",
-            fields={"reason": plan.reason},
+            chat_id = session.chat_id,
+            step    = "pfc.block",
+            fields  = {"reason": plan.reason},
         )
         return PFCRunResult(
-            reply="",
-            action="wait",
-            reason=f"current_message_blocked: {plan.reason}",
-            ended=False,
+            reply  = "",
+            action = "wait",
+            reason = f"current_message_blocked: {plan.reason}",
+            ended  = False,
         )
     if action not in ("wait", "listening"):
         return None
@@ -355,9 +355,9 @@ def _passive_pfc_result(
     _log_step(
         session.context,
         session.runtime_cfg,
-        chat_id=session.chat_id,
-        step="pfc.no_reply",
-        fields=fields,
+        chat_id = session.chat_id,
+        step    = "pfc.no_reply",
+        fields  = fields,
     )
     return _wait_run_result(plan, action)
 
@@ -366,31 +366,31 @@ async def _rethink_pfc_goal(session: _PFCSession) -> PFCPlan:
     _log_step(
         session.context,
         session.runtime_cfg,
-        chat_id=session.chat_id,
-        step="pfc.rethink_goal.start",
-        fields={},
+        chat_id = session.chat_id,
+        step    = "pfc.rethink_goal.start",
+        fields  = {},
     )
     session.state.goal_list = await analyze_goals(
-        secrets=session.secrets,
-        bot_name=session.bot_name,
-        personality=session.runtime_cfg.personality,
-        history=session.history,
-        current_goal_list=session.state.goal_list,
-        action_history_text=session.action_summary,
-        temperature=session.runtime_cfg.temperature,
-        top_p=session.runtime_cfg.top_p,
-        max_tokens=session.runtime_cfg.max_tokens,
-        timeout_seconds=session.planner_timeout,
-        max_retry=0,
-        retry_interval_seconds=0.2,
+        secrets                = session.secrets,
+        bot_name               = session.bot_name,
+        personality            = session.runtime_cfg.personality,
+        history                = session.history,
+        current_goal_list      = session.state.goal_list,
+        action_history_text    = session.action_summary,
+        temperature            = session.runtime_cfg.temperature,
+        top_p                  = session.runtime_cfg.top_p,
+        max_tokens             = session.runtime_cfg.max_tokens,
+        timeout_seconds        = session.planner_timeout,
+        max_retry              = 0,
+        retry_interval_seconds = 0.2,
     )
     session.dirty = True
     _log_step(
         session.context,
         session.runtime_cfg,
-        chat_id=session.chat_id,
-        step="pfc.rethink_goal.done",
-        fields={"goals": len(session.state.goal_list or [])},
+        chat_id = session.chat_id,
+        step    = "pfc.rethink_goal.done",
+        fields  = {"goals": len(session.state.goal_list or [])},
     )
     session.planner_goal_context = _build_goal_focus_context(session.state.goal_list or [])
     return await _plan_pfc_action(session)
@@ -400,37 +400,37 @@ async def _fetch_pfc_knowledge(session: _PFCSession, plan: PFCPlan) -> PFCPlan:
     _log_step(
         session.context,
         session.runtime_cfg,
-        chat_id=session.chat_id,
-        step="pfc.fetch_knowledge.start",
-        fields={},
+        chat_id = session.chat_id,
+        step    = "pfc.fetch_knowledge.start",
+        fields  = {},
     )
     await asyncio.to_thread(session.memory_db.bind, session.context.data_dir)
     memory = await build_memory_block(
-        data_dir=session.context.data_dir,
-        chat_id=session.chat_id,
-        secrets=session.secrets,
-        cfg=session.runtime_cfg.memory,
-        bot_name=session.bot_name,
-        history=session.history,
-        current_text=session.current_text,
-        planner_question=plan.reason or session.current_text,
-        memory_db=session.memory_db,
-        temperature=session.runtime_cfg.temperature,
-        top_p=session.runtime_cfg.top_p,
-        max_tokens=session.runtime_cfg.max_tokens,
-        timeout_seconds=session.planner_timeout,
+        data_dir         = session.context.data_dir,
+        chat_id          = session.chat_id,
+        secrets          = session.secrets,
+        cfg              = session.runtime_cfg.memory,
+        bot_name         = session.bot_name,
+        history          = session.history,
+        current_text     = session.current_text,
+        planner_question = plan.reason or session.current_text,
+        memory_db        = session.memory_db,
+        temperature      = session.runtime_cfg.temperature,
+        top_p            = session.runtime_cfg.top_p,
+        max_tokens       = session.runtime_cfg.max_tokens,
+        timeout_seconds  = session.planner_timeout,
     )
     memory = (memory or "").strip()
     if memory:
         session.state.knowledge_list.append({"text": memory, "ts": time.time()})
         session.state.knowledge_list = session.state.knowledge_list[-10:]
-        session.dirty = True
+        session.dirty                = True
     _log_step(
         session.context,
         session.runtime_cfg,
-        chat_id=session.chat_id,
-        step="pfc.fetch_knowledge.done",
-        fields={
+        chat_id = session.chat_id,
+        step    = "pfc.fetch_knowledge.done",
+        fields  = {
             "mem_chars": len(memory),
             "knowledge_items": len(session.state.knowledge_list or []),
         },
@@ -445,30 +445,30 @@ async def _finish_pfc_action(
 ) -> PFCRunResult:
     if action == "end_conversation":
         say_bye, why = await decide_say_bye(
-            secrets=session.secrets,
-            bot_name=session.bot_name,
-            is_private=session.is_private,
-            personality=session.runtime_cfg.personality,
-            history=session.history,
-            temperature=session.runtime_cfg.temperature,
-            top_p=session.runtime_cfg.top_p,
-            max_tokens=session.runtime_cfg.max_tokens,
-            timeout_seconds=session.planner_timeout,
-            max_retry=0,
-            retry_interval_seconds=0.2,
+            secrets                = session.secrets,
+            bot_name               = session.bot_name,
+            is_private             = session.is_private,
+            personality            = session.runtime_cfg.personality,
+            history                = session.history,
+            temperature            = session.runtime_cfg.temperature,
+            top_p                  = session.runtime_cfg.top_p,
+            max_tokens             = session.runtime_cfg.max_tokens,
+            timeout_seconds        = session.planner_timeout,
+            max_retry              = 0,
+            retry_interval_seconds = 0.2,
         )
         session.state.ended = True
-        session.dirty = True
+        session.dirty       = True
         if not say_bye:
             return PFCRunResult(reply="", action=action, reason=plan.reason, ended=True)
         reply = await session.generate_reply("say_goodbye", plan.reason, why)
         if reply:
             session.state.last_successful_reply_action = "say_goodbye"
         return PFCRunResult(
-            reply=reply,
-            action="say_goodbye",
-            reason=plan.reason,
-            ended=True,
+            reply  = reply,
+            action = "say_goodbye",
+            reason = plan.reason,
+            ended  = True,
         )
     if action in ("direct_reply", "send_new_message"):
         combined_reason = plan.reason
@@ -481,22 +481,22 @@ async def _finish_pfc_action(
         )
         if reply:
             session.state.last_successful_reply_action = action
-            session.dirty = True
+            session.dirty                              = True
         return PFCRunResult(
-            reply=reply,
-            action=action,
-            reason=plan.reason,
-            ended=False,
+            reply  = reply,
+            action = action,
+            reason = plan.reason,
+            ended  = False,
         )
     reply = await session.generate_reply("direct_reply", plan.reason, "")
     if reply:
         session.state.last_successful_reply_action = "direct_reply"
-        session.dirty = True
+        session.dirty                              = True
     return PFCRunResult(
-        reply=reply,
-        action="direct_reply",
-        reason=plan.reason,
-        ended=False,
+        reply  = reply,
+        action = "direct_reply",
+        reason = plan.reason,
+        ended  = False,
     )
 
 
@@ -515,71 +515,71 @@ async def run_pfc_once(
     pfc_state_store: PFCStateStore,
     generate_reply: GenerateReplyFn,
     state_override: PFCConversationState | None = None,
-    persist_state: bool = True,
+    persist_state: bool                         = True,
 ) -> PFCRunResult:
     """执行一轮基于上下文的规划，并持久化每次状态转换。"""
     pfc_state_store.bind(context.data_dir)
-    state = state_override or await pfc_state_store.get_async(chat_id)
-    now = time.time()
-    dirty = False
+    state                       = state_override or await pfc_state_store.get_async(chat_id)
+    now                         = time.time()
+    dirty                       = False
     session: _PFCSession | None = None
     if state.ignore_until_ts:
         # 旧版本允许模型控制整个会话的忽略窗口，存在安全风险，不再沿用。
         state.ignore_until_ts = 0.0
-        dirty = True
+        dirty                 = True
     try:
         if state.ended:
             _log_step(context, runtime_cfg, chat_id=chat_id, step="pfc.ended", fields={})
             return PFCRunResult(
-                reply="",
-                action="end_conversation",
-                reason="ended",
-                ended=True,
+                reply  = "",
+                action = "end_conversation",
+                reason = "ended",
+                ended  = True,
             )
         session = await _prepare_pfc_session(
-            context=context,
-            runtime_cfg=runtime_cfg,
-            secrets=secrets,
-            bot_name=bot_name,
-            is_private=is_private,
-            chat_id=chat_id,
-            current_text=current_text,
-            memory_store=memory_store,
-            action_history=action_history,
-            memory_db=memory_db,
-            state=state,
-            generate_reply=generate_reply,
-            now=now,
-            dirty=dirty,
+            context        = context,
+            runtime_cfg    = runtime_cfg,
+            secrets        = secrets,
+            bot_name       = bot_name,
+            is_private     = is_private,
+            chat_id        = chat_id,
+            current_text   = current_text,
+            memory_store   = memory_store,
+            action_history = action_history,
+            memory_db      = memory_db,
+            state          = state,
+            generate_reply = generate_reply,
+            now            = now,
+            dirty          = dirty,
         )
         skip_until = float(state.planner_skip_until or 0.0)
         if skip_until and now < skip_until:
             _log_step(
                 context,
                 runtime_cfg,
-                chat_id=chat_id,
-                step="pfc.plan.skip",
-                fields={"skip_left_s": round(skip_until - now, 2)},
+                chat_id = chat_id,
+                step    = "pfc.plan.skip",
+                fields  = {"skip_left_s": round(skip_until - now, 2)},
             )
             if not is_private:
                 return PFCRunResult(
-                    reply="",
-                    action="wait",
-                    reason="planner_skipped",
-                    ended=False,
+                    reply  = "",
+                    action = "wait",
+                    reason = "planner_skipped",
+                    ended  = False,
                 )
             reply = await generate_reply("direct_reply", "planner_skipped", "")
             return PFCRunResult(
-                reply=reply,
-                action="direct_reply",
-                reason="planner_skipped",
-                ended=False,
+                reply  = reply,
+                action = "direct_reply",
+                reason = "planner_skipped",
+                ended  = False,
             )
 
         plan = await _plan_pfc_action(session)
         _record_planner_health(session, plan)
         # 规划器已经看过完整群聊上下文；后续简单规则不得推翻它的 wait 决策。
-        action = _normalize_action(plan.action)
+        action         = _normalize_action(plan.action)
         passive_result = _passive_pfc_result(
             session,
             plan,
@@ -590,27 +590,27 @@ async def run_pfc_once(
             return passive_result
 
         if action == "rethink_goal":
-            plan = await _rethink_pfc_goal(session)
-            action = _normalize_action(plan.action)
+            plan           = await _rethink_pfc_goal(session)
+            action         = _normalize_action(plan.action)
             passive_result = _passive_pfc_result(
                 session,
                 plan,
                 action,
-                allow_block=False,
-                after="rethink_goal",
+                allow_block = False,
+                after       = "rethink_goal",
             )
             if passive_result is not None:
                 return passive_result
 
         if action == "fetch_knowledge":
-            plan = await _fetch_pfc_knowledge(session, plan)
-            action = _normalize_action(plan.action)
+            plan           = await _fetch_pfc_knowledge(session, plan)
+            action         = _normalize_action(plan.action)
             passive_result = _passive_pfc_result(
                 session,
                 plan,
                 action,
-                allow_block=False,
-                after="fetch_knowledge",
+                allow_block = False,
+                after       = "fetch_knowledge",
             )
             if passive_result is not None:
                 return passive_result

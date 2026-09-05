@@ -29,9 +29,9 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
         group_id: int,
         operator_user_id: str,
         operation_type: str,
-        params: str = "",
+        params: str                = "",
         target_user_id: str | None = None,
-        result: str = "success",
+        result: str                = "success",
     ) -> None:
         conn.execute(
             """INSERT INTO operation_logs
@@ -76,21 +76,21 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
 
     def get_operation_logs(self, group_id: int, limit: int = 50) -> list[OperationLog]:
         try:
-            conn = self._get_connection()
+            conn   = self._get_connection()
             cursor = conn.execute(
                 "SELECT * FROM operation_logs WHERE group_id = ? ORDER BY created_at DESC LIMIT ?",
                 (group_id, limit),
             )
             return [
                 OperationLog(
-                    id=row["id"],
-                    group_id=row["group_id"],
-                    user_id=row["user_id"],
-                    target_user_id=row["target_user_id"],
-                    operation_type=row["operation_type"],
-                    params=row["params"],
-                    result=row["result"],
-                    created_at=datetime.fromisoformat(row["created_at"])
+                    id             = row["id"],
+                    group_id       = row["group_id"],
+                    user_id        = row["user_id"],
+                    target_user_id = row["target_user_id"],
+                    operation_type = row["operation_type"],
+                    params         = row["params"],
+                    result         = row["result"],
+                    created_at     = datetime.fromisoformat(row["created_at"])
                     if row["created_at"]
                     else database_clock.now(),
                 )
@@ -139,11 +139,11 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
                 return False
             self._insert_operation_log_in_transaction(
                 conn,
-                group_id=group_id,
-                operator_user_id=operator_user_id,
-                operation_type="RESET",
-                params=f"reset user {user_id}",
-                target_user_id=user_id,
+                group_id         = group_id,
+                operator_user_id = operator_user_id,
+                operation_type   = "RESET",
+                params           = f"reset user {user_id}",
+                target_user_id   = user_id,
             )
             conn.commit()
             return True
@@ -181,14 +181,14 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
                 conn.rollback()
                 return False
             operation_type = "BAN" if is_banned else "UNBAN"
-            params = f"ban {days} days" if days is not None else "unban"
+            params         = f"ban {days} days" if days is not None else "unban"
             self._insert_operation_log_in_transaction(
                 conn,
-                group_id=group_id,
-                operator_user_id=operator_user_id,
-                operation_type=operation_type,
-                params=params,
-                target_user_id=user_id,
+                group_id         = group_id,
+                operator_user_id = operator_user_id,
+                operation_type   = operation_type,
+                params           = params,
+                target_user_id   = user_id,
             )
             conn.commit()
             return True
@@ -215,11 +215,11 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
                 return False
             self._insert_operation_log_in_transaction(
                 conn,
-                group_id=group_id,
-                operator_user_id=operator_user_id,
-                operation_type="DELETE",
-                params=f"delete pet for user {user_id}",
-                target_user_id=user_id,
+                group_id         = group_id,
+                operator_user_id = operator_user_id,
+                operation_type   = "DELETE",
+                params           = f"delete pet for user {user_id}",
+                target_user_id   = user_id,
             )
             conn.commit()
             return True
@@ -253,14 +253,14 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
         conn = self._get_connection()
         try:
             conn.execute("BEGIN IMMEDIATE")
-            now = database_clock.now()
-            today = now.strftime("%Y-%m-%d")
+            now   = database_clock.now()
+            today = database_clock.business_date(now)
             self._ensure_daily_task_templates(
                 conn,
                 user_id,
                 group_id,
-                today=today,
-                now_iso=now.isoformat(),
+                today   = today,
+                now_iso = now.isoformat(),
             )
             rows = conn.execute(
                 "SELECT * FROM tasks WHERE user_id = ? AND group_id = ? AND created_date = ?",
@@ -277,8 +277,8 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
         conn = self._get_connection()
         try:
             conn.execute("BEGIN IMMEDIATE")
-            today = database_clock.now().strftime("%Y-%m-%d")
-            row = conn.execute(
+            today = database_clock.business_date(database_clock.now())
+            row   = conn.execute(
                 """SELECT reward_coins FROM tasks
                 WHERE user_id = ? AND group_id = ? AND task_type = ?
                 AND created_date = ? AND claimed = 0 AND current_value >= target_value""",
@@ -301,11 +301,11 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
                 user_id,
                 group_id,
                 int(row["reward_coins"] or 0),
-                reason="daily_task",
-                reference_id=f"daily-task:{today}:{group_id}:{task_type}:{user_id}",
-                daily_limit=_DAILY_COIN_LIMIT,
-                now_iso=database_clock.now().isoformat(),
-                record_zero=True,
+                reason       = "daily_task",
+                reference_id = f"daily-task:{today}:{group_id}:{task_type}:{user_id}",
+                daily_limit  = _DAILY_COIN_LIMIT,
+                now_iso      = database_clock.now().isoformat(),
+                record_zero  = True,
             )
             conn.commit()
             return reward
@@ -318,7 +318,7 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
 
     def get_active_activities(self, group_id: int) -> list[dict]:
         try:
-            conn = self._get_connection()
+            conn   = self._get_connection()
             cursor = conn.execute(
                 """SELECT * FROM activities
                    WHERE group_id = ? AND is_active = 1
@@ -343,7 +343,7 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
         if not isinstance(activity_type, str) or not isinstance(title, str):
             return None
         activity_type = activity_type.strip()
-        title = title.strip()
+        title         = title.strip()
         if (
             not activity_type
             or not title
@@ -357,8 +357,8 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
             return None
         conn: sqlite3.Connection | None = None
         try:
-            conn = self._get_connection()
-            now = database_clock.now()
+            conn   = self._get_connection()
+            now    = database_clock.now()
             cursor = conn.execute(
                 """INSERT INTO activities
                    (group_id, activity_type, title, target_value, current_value,
@@ -433,11 +433,11 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
                 user_id,
                 group_id,
                 int(row["reward_coins"] or 0),
-                reason="activity",
-                reference_id=f"activity:{activity_id}:{user_id}",
-                daily_limit=_DAILY_COIN_LIMIT,
-                now_iso=database_clock.now().isoformat(),
-                record_zero=True,
+                reason       = "activity",
+                reference_id = f"activity:{activity_id}:{user_id}",
+                daily_limit  = _DAILY_COIN_LIMIT,
+                now_iso      = database_clock.now().isoformat(),
+                record_zero  = True,
             )
             conn.commit()
             return reward
@@ -460,7 +460,7 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
         if from_user_id == to_user_id:
             return LeaveMessageAtomicResult(False, "不能给自己留言")
         limit = max(0, int(daily_limit))
-        conn = self._get_connection()
+        conn  = self._get_connection()
         try:
             conn.execute("BEGIN IMMEDIATE")
             sender = conn.execute(
@@ -518,7 +518,7 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
 
     def get_messages(self, to_user_id: str, group_id: int, limit: int = 10) -> list[dict]:
         try:
-            conn = self._get_connection()
+            conn   = self._get_connection()
             cursor = conn.execute(
                 """SELECT * FROM message_board
                 WHERE to_user_id = ? AND group_id = ? ORDER BY created_at DESC LIMIT ?""",
@@ -547,9 +547,9 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
 
     def get_recent_command_count(self, user_id: str, group_id: int, window_seconds: int) -> int:
         try:
-            conn = self._get_connection()
+            conn      = self._get_connection()
             threshold = time.time() - window_seconds
-            cursor = conn.execute(
+            cursor    = conn.execute(
                 "SELECT COUNT(*) as cnt FROM command_timestamps WHERE user_id = ? AND group_id = ? AND timestamp > ?",
                 (user_id, group_id, threshold),
             )
@@ -561,9 +561,9 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
 
     def get_group_recent_command_count(self, group_id: int, window_seconds: int) -> int:
         try:
-            conn = self._get_connection()
+            conn      = self._get_connection()
             threshold = time.time() - window_seconds
-            cursor = conn.execute(
+            cursor    = conn.execute(
                 "SELECT COUNT(*) as cnt FROM command_timestamps WHERE group_id = ? AND timestamp > ?",
                 (group_id, threshold),
             )
@@ -576,7 +576,7 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
     def cleanup_old_timestamps(self, max_age_seconds: int = 3600) -> None:
         conn: sqlite3.Connection | None = None
         try:
-            conn = self._get_connection()
+            conn      = self._get_connection()
             threshold = time.time() - max_age_seconds
             conn.execute("DELETE FROM command_timestamps WHERE timestamp < ?", (threshold,))
             conn.commit()
@@ -590,8 +590,8 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
     def get_active_listings(self, group_id: int) -> list[dict]:
         self.settle_expired_trade_listings(group_id)
         try:
-            conn = self._get_connection()
-            now = database_clock.now().isoformat()
+            conn   = self._get_connection()
+            now    = database_clock.now().isoformat()
             cursor = conn.execute(
                 """SELECT * FROM trade_listings
                 WHERE group_id = ? AND is_active = 1 AND expires_at > ?
@@ -607,7 +607,7 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
         self.settle_expired_trade_listings(group_id)
         try:
             conn = self._get_connection()
-            now = database_clock.now().isoformat()
+            now  = database_clock.now().isoformat()
             if group_id is None:
                 cursor = conn.execute(
                     """SELECT * FROM trade_listings
@@ -630,7 +630,7 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
         conn = self._get_connection()
         try:
             conn.execute("BEGIN IMMEDIATE")
-            now = database_clock.now().isoformat()
+            now    = database_clock.now().isoformat()
             cursor = conn.execute(
                 "SELECT * FROM trade_listings WHERE id = ? AND group_id = ? AND is_active = 1",
                 (listing_id, group_id),
@@ -692,7 +692,7 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
         conn = self._get_connection()
         try:
             conn.execute("BEGIN IMMEDIATE")
-            now = database_clock.now().isoformat()
+            now    = database_clock.now().isoformat()
             cursor = conn.execute(
                 "SELECT * FROM trade_listings WHERE id = ? AND is_active = 1",
                 (listing_id,),
@@ -726,7 +726,7 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
                 return False, "用户不存在"
 
             total_cost = int(listing["price"])
-            tax = int(total_cost * tax_rate)
+            tax        = int(total_cost * tax_rate)
             if int(buyer_row["coins"]) < total_cost:
                 conn.rollback()
                 return False, f"金币不足，需要{total_cost}金币"
@@ -754,21 +754,21 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
                 raise RuntimeError("trade participant changed during settlement")
             self._record_asset_delta(
                 conn,
-                user_id=buyer_id,
-                group_id=group_id,
-                asset_type="coins",
-                delta=-total_cost,
-                reason="trade_purchase",
-                reference_id=f"trade-purchase:{listing_id}:buyer",
+                user_id      = buyer_id,
+                group_id     = group_id,
+                asset_type   = "coins",
+                delta        = -total_cost,
+                reason       = "trade_purchase",
+                reference_id = f"trade-purchase:{listing_id}:buyer",
             )
             self._record_asset_delta(
                 conn,
-                user_id=str(listing["seller_user_id"]),
-                group_id=group_id,
-                asset_type="coins",
-                delta=max(0, total_cost - tax),
-                reason="trade_purchase",
-                reference_id=f"trade-purchase:{listing_id}:seller",
+                user_id      = str(listing["seller_user_id"]),
+                group_id     = group_id,
+                asset_type   = "coins",
+                delta        = max(0, total_cost - tax),
+                reason       = "trade_purchase",
+                reference_id = f"trade-purchase:{listing_id}:seller",
             )
 
             inventory_items = self._load_inventory_items(conn, buyer_id, group_id)
@@ -819,8 +819,8 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
 
     def get_active_pet_show(self, group_id: int) -> dict | None:
         try:
-            conn = self._get_connection()
-            now = database_clock.now().isoformat()
+            conn   = self._get_connection()
+            now    = database_clock.now().isoformat()
             cursor = conn.execute(
                 """SELECT * FROM pet_shows
                 WHERE group_id = ? AND is_active = 1
@@ -836,7 +836,7 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
 
     def get_pet_show_votes(self, show_id: int) -> dict[str, int]:
         try:
-            conn = self._get_connection()
+            conn   = self._get_connection()
             cursor = conn.execute(
                 """SELECT pet_user_id, COUNT(*) as votes
                 FROM pet_show_votes WHERE show_id = ?
@@ -852,7 +852,7 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
 
     def get_dress_inventory(self, user_id: str, group_id: int) -> list[str]:
         try:
-            conn = self._get_connection()
+            conn   = self._get_connection()
             cursor = conn.execute(
                 """SELECT dress_item_id FROM dress_inventory
                 WHERE user_id = ? AND group_id = ?""",
@@ -894,7 +894,7 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
         conn = self._get_connection()
         try:
             conn.execute("BEGIN IMMEDIATE")
-            today = database_clock.now().strftime("%Y-%m-%d")
+            today = database_clock.business_date(database_clock.now())
             self._ensure_group_task_templates(conn, group_id, today)
             rows = conn.execute(
                 """SELECT * FROM group_tasks
@@ -919,8 +919,8 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
         conn = self._get_connection()
         try:
             conn.execute("BEGIN IMMEDIATE")
-            today = database_clock.now().strftime("%Y-%m-%d")
-            task = conn.execute(
+            today = database_clock.business_date(database_clock.now())
+            task  = conn.execute(
                 """SELECT reward_coins FROM group_tasks
                    WHERE group_id = ? AND task_type = ? AND created_date = ?
                    AND (is_completed = 1 OR current_value >= target_value)""",
@@ -943,11 +943,11 @@ class CommunityRepositoryMixin(DatabaseRepositorySupport):
                 user_id,
                 group_id,
                 int(task["reward_coins"] or 0),
-                reason="group_task",
-                reference_id=f"group-task:{today}:{group_id}:{task_type}:{user_id}",
-                daily_limit=daily_coin_limit,
-                now_iso=database_clock.now().isoformat(),
-                record_zero=True,
+                reason       = "group_task",
+                reference_id = f"group-task:{today}:{group_id}:{task_type}:{user_id}",
+                daily_limit  = daily_coin_limit,
+                now_iso      = database_clock.now().isoformat(),
+                record_zero  = True,
             )
             conn.commit()
             return reward

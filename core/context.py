@@ -74,12 +74,12 @@ def _scoped_plugin_config(plugin_name: str, source: Mapping[str, Any]) -> Mappin
     plugin_options = plugins.get(plugin_name, {})
     if not isinstance(plugin_options, Mapping):
         plugin_options = {}
-    view = {key: source[key] for key in _PLUGIN_PUBLIC_CONFIG_KEYS if key in source}
+    view            = {key: source[key] for key in _PLUGIN_PUBLIC_CONFIG_KEYS if key in source}
     view["plugins"] = {plugin_name: plugin_options}
     return _ScopedPluginView(
-        value=_freeze_config_mapping(view),
-        plugin_name=plugin_name,
-        kind="config",
+        value       = _freeze_config_mapping(view),
+        plugin_name = plugin_name,
+        kind        = "config",
     )
 
 
@@ -100,9 +100,9 @@ def _scoped_plugin_secrets(plugin_name: str, source: Mapping[str, Any]) -> Mappi
     if not isinstance(plugin_secrets, Mapping):
         plugin_secrets = {}
     return _ScopedPluginView(
-        value=_freeze_config_mapping({"plugins": {plugin_name: plugin_secrets}}),
-        plugin_name=plugin_name,
-        kind="secrets",
+        value       = _freeze_config_mapping({"plugins": {plugin_name: plugin_secrets}}),
+        plugin_name = plugin_name,
+        kind        = "secrets",
     )
 
 
@@ -115,10 +115,10 @@ if TYPE_CHECKING:
 class _RequestLogger:
     def __init__(self, base_logger: logging.Logger, request_id: str | None) -> None:
         self._base_logger = base_logger
-        self._request_id = request_id
+        self._request_id  = request_id
 
     def _with_request_id(self, kwargs: dict[str, Any]) -> dict[str, Any]:
-        extra = dict(kwargs.get("extra", {}))
+        extra               = dict(kwargs.get("extra", {}))
         extra["request_id"] = self._request_id
         return {**kwargs, "extra": extra}
 
@@ -158,15 +158,15 @@ class PluginContext:
     # 会话管理器（用于多轮对话）
     session_manager: "SessionManager | None" = None
     # 当前事件的 user_id 和 group_id（由 dispatcher 注入）
-    current_user_id: int | None = None
+    current_user_id: int | None  = None
     current_group_id: int | None = None
     # 静音控制接口
     mute_control: MuteControl | None = None
     # ConfigManager 引用（用于更新配置）
-    config_manager: ConfigManagerLike | None = None
+    config_manager: ConfigManagerLike | None                     = None
     settings_reader: Callable[[], PluginSettingsSnapshot] | None = field(
-        default=None,
-        repr=False,
+        default = None,
+        repr    = False,
     )
     secret_reader: Callable[[str], Any] | None = field(default=None, repr=False)
     secret_writer: Callable[[str, Any], None] | None = field(default=None, repr=False)
@@ -175,7 +175,7 @@ class PluginContext:
         default_factory=lambda: PluginPrincipal(kind="lifecycle"),
     )
     capabilities: PluginCapabilities = field(default_factory=PluginCapabilities)
-    request_id: str | None = None
+    request_id: str | None                         = None
     command_invocation: "CommandInvocation | None" = None
     state: dict[str, Any] = field(default_factory=dict)
     logger: Any = field(init=False, repr=False)
@@ -183,9 +183,9 @@ class PluginContext:
     def __post_init__(self) -> None:
         # Enforce the least-privilege view even for extension/test factories that
         # construct PluginContext directly instead of going through XiaoQingApp.
-        self.config = _scoped_plugin_config(self.plugin_name, self.config)
+        self.config  = _scoped_plugin_config(self.plugin_name, self.config)
         self.secrets = _scoped_plugin_secrets(self.plugin_name, self.secrets)
-        self.logger = _RequestLogger(
+        self.logger  = _RequestLogger(
             logging.getLogger(f"plugin.{self.plugin_name}"),
             self.request_id,
         )
@@ -224,7 +224,7 @@ class PluginContext:
         # 与 get_config() 一样只消费一份原子 settings 快照。直接构造的测试/
         # 扩展上下文通常没有 secret_reader，但仍可能有可热更新的 settings_reader；
         # 从 self.secrets 读取会把这条兼容路径固定在旧代。
-        settings = self.get_settings_snapshot()
+        settings     = self.get_settings_snapshot()
         current: Any = settings.secrets.get("plugins", {}).get(self.plugin_name, {})
         for part in path.split("."):
             if not isinstance(current, Mapping) or part not in current:
@@ -237,9 +237,9 @@ class PluginContext:
         if self.settings_reader is not None:
             return self.settings_reader()
         return PluginSettingsSnapshot(
-            config=_freeze_config_mapping(self.config),
-            secrets=_freeze_config_mapping(self.secrets),
-            revision=0,
+            config   = _freeze_config_mapping(self.config),
+            secrets  = _freeze_config_mapping(self.secrets),
+            revision = 0,
         )
 
     def now(self):
@@ -249,7 +249,7 @@ class PluginContext:
 
     def get_config(self, path: str) -> Any:
         """Read one detached value from the current plugin config namespace."""
-        settings = self.get_settings_snapshot()
+        settings     = self.get_settings_snapshot()
         current: Any = settings.config.get("plugins", {}).get(self.plugin_name, {})
         for part in path.split("."):
             if not isinstance(current, Mapping) or part not in current:
@@ -307,7 +307,7 @@ class PluginContext:
     async def create_session(
         self,
         initial_data: dict[str, Any] | None = None,
-        timeout: float | None = None,
+        timeout: float | None               = None,
     ) -> "Session":
         """
         为当前用户创建会话
@@ -325,11 +325,11 @@ class PluginContext:
             raise RuntimeError("No current user context")
 
         return await self.session_manager.create(
-            user_id=self.current_user_id,
-            group_id=self.current_group_id,
-            plugin_name=self.plugin_name,
-            initial_data=initial_data,
-            timeout=timeout,
+            user_id      = self.current_user_id,
+            group_id     = self.current_group_id,
+            plugin_name  = self.plugin_name,
+            initial_data = initial_data,
+            timeout      = timeout,
         )
 
     async def get_session(self) -> "Session | None":
@@ -346,8 +346,8 @@ class PluginContext:
             return None
 
         return await self.session_manager.get(
-            user_id=self.current_user_id,
-            group_id=self.current_group_id,
+            user_id  = self.current_user_id,
+            group_id = self.current_group_id,
         )
 
     async def update_session(self, callback: Callable[["Session"], Any]) -> Any:
@@ -363,9 +363,9 @@ class PluginContext:
         if self.current_user_id is None:
             return None
         return await self.session_manager.update(
-            user_id=self.current_user_id,
-            group_id=self.current_group_id,
-            callback=callback,
+            user_id  = self.current_user_id,
+            group_id = self.current_group_id,
+            callback = callback,
         )
 
     async def end_session(self) -> bool:
@@ -382,8 +382,8 @@ class PluginContext:
 
         return bool(
             await self.session_manager.delete(
-                user_id=self.current_user_id,
-                group_id=self.current_group_id,
+                user_id  = self.current_user_id,
+                group_id = self.current_group_id,
             )
         )
 
@@ -393,7 +393,7 @@ class PluginContext:
             return False
         return bool(
             await self.session_manager.exists(
-                user_id=self.current_user_id,
-                group_id=self.current_group_id,
+                user_id  = self.current_user_id,
+                group_id = self.current_group_id,
             )
         )

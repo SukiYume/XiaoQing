@@ -68,7 +68,7 @@ def get_runtime_settings(device: torch.device) -> dict[str, Any]:
     if use_amp:
         torch.set_float32_matmul_precision("high")
         torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32       = True
     return {
         "use_amp": use_amp,
         "pin_memory": use_amp,
@@ -120,7 +120,7 @@ def forward_logits(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Run one title-only or title+abstract classifier batch."""
 
-    batch = move_batch_to_device(batch, device)
+    batch        = move_batch_to_device(batch, device)
     model_inputs = {
         "input_ids": batch["input_ids"],
         "attention_mask": batch["attention_mask"],
@@ -145,7 +145,7 @@ def build_classifier_config_log_lines(
 ) -> list[str]:
     """Build the stable startup banner shared by both BERT trainers."""
 
-    ratio = float("inf") if positive_count == 0 else negative_count / positive_count
+    ratio      = float("inf") if positive_count == 0 else negative_count / positive_count
     ratio_text = "inf" if ratio == float("inf") else f"{ratio:.1f}"
     return [
         "═" * 70,
@@ -176,9 +176,9 @@ def split_train_validation_frame(
 
     train_frame, validation_frame = train_test_split(
         df,
-        test_size=validation_size,
-        stratify=df["label"],
-        random_state=random_seed,
+        test_size    = validation_size,
+        stratify     = df["label"],
+        random_state = random_seed,
     )
     return pd.DataFrame(train_frame), pd.DataFrame(validation_frame)
 
@@ -192,16 +192,16 @@ def dynamic_pad_collate(
     max_len = max(len(sample["input_ids"]) for sample in batch)
     # 同一 DataLoader 的样本字段必须一致，只检查首项即可；混合 schema 应由数据集
     # 构造阶段暴露，而不是在每个 batch 内静默补造 token_type_ids。
-    include_token_types = "token_type_ids" in batch[0]
-    input_ids: list[list[int]] = []
+    include_token_types              = "token_type_ids" in batch[0]
+    input_ids: list[list[int]]       = []
     attention_masks: list[list[int]] = []
-    token_type_ids: list[list[int]] = []
-    labels: list[int] = []
+    token_type_ids: list[list[int]]  = []
+    labels: list[int]                = []
 
     for sample in batch:
-        sample_input_ids = list(sample["input_ids"])
+        sample_input_ids      = list(sample["input_ids"])
         sample_attention_mask = list(sample["attention_mask"])
-        pad_len = max_len - len(sample_input_ids)
+        pad_len               = max_len - len(sample_input_ids)
         input_ids.append(sample_input_ids + [pad_id] * pad_len)
         attention_masks.append(sample_attention_mask + [0] * pad_len)
         if include_token_types:
@@ -224,14 +224,14 @@ def create_seeded_data_loader(
     collate_fn,
     batch_size: int,
     sampler: WeightedRandomSampler | None = None,
-    num_workers: int = 0,
-    pin_memory: bool = False,
-    random_seed: int | None = None,
-    shuffle: bool = True,
+    num_workers: int                      = 0,
+    pin_memory: bool                      = False,
+    random_seed: int | None               = None,
+    shuffle: bool                         = True,
 ) -> DataLoader[Any]:
     """Create a reproducibly seeded DataLoader without invalid worker options."""
 
-    generator = None
+    generator      = None
     worker_init_fn = None
     if random_seed is not None:
         generator = torch.Generator()
@@ -241,12 +241,12 @@ def create_seeded_data_loader(
     loader_kwargs = build_loader_kwargs(num_workers=num_workers, pin_memory=pin_memory)
     return DataLoader(
         dataset,
-        batch_size=batch_size,
-        sampler=sampler,
-        shuffle=shuffle and sampler is None,
-        collate_fn=collate_fn,
-        worker_init_fn=worker_init_fn,
-        generator=generator,
+        batch_size     = batch_size,
+        sampler        = sampler,
+        shuffle        = shuffle and sampler is None,
+        collate_fn     = collate_fn,
+        worker_init_fn = worker_init_fn,
+        generator      = generator,
         **loader_kwargs,
     )
 
@@ -258,7 +258,7 @@ def train_epoch(
     scheduler,
     device,
     loss_fn,
-    use_amp: bool = False,
+    use_amp: bool          = False,
     amp_dtype: torch.dtype = torch.float32,
 ) -> tuple[float, float]:
     """Run one classifier training epoch and return accuracy and mean loss."""
@@ -277,7 +277,7 @@ def train_epoch(
         preds = logits.argmax(dim=1)
         correct_predictions += torch.sum(preds == labels).item()
         losses.append(loss.item())
-    accuracy = correct_predictions / len(data_loader.dataset)
+    accuracy     = correct_predictions / len(data_loader.dataset)
     average_loss = sum(losses) / len(losses)
     return accuracy, average_loss
 
@@ -290,9 +290,9 @@ def build_weighted_sampler(
 
     sample_weights = [class_weights[label].item() for label in labels]
     return WeightedRandomSampler(
-        weights=sample_weights,
-        num_samples=len(sample_weights),
-        replacement=True,
+        weights     = sample_weights,
+        num_samples = len(sample_weights),
+        replacement = True,
     )
 
 
@@ -321,14 +321,14 @@ def prepare_classifier_training(
     frame = prepare_frame(read_training_csv(config.data_path))
     train_frame, validation_frame = split_train_validation_frame(
         frame,
-        validation_size=config.validation_size,
-        random_seed=config.random_seed,
+        validation_size = config.validation_size,
+        random_seed     = config.random_seed,
     )
 
     class_weights = compute_class_weight(
-        class_weight="balanced",
-        classes=np.unique(train_frame.loc[:, "label"]),
-        y=train_frame.loc[:, "label"],
+        class_weight = "balanced",
+        classes      = np.unique(train_frame.loc[:, "label"]),
+        y            = train_frame.loc[:, "label"],
     )
     class_weights_tensor = torch.tensor(class_weights, dtype=torch.float, device=device)
     loss_fn = torch.nn.CrossEntropyLoss(weight=class_weights_tensor)
@@ -341,13 +341,13 @@ def prepare_classifier_training(
     positive_count = int((train_frame.loc[:, "label"] == 1).sum())
     for line in build_classifier_config_log_lines(
         config,
-        classifier_name=classifier_name,
-        device=str(device),
-        sample_count=len(frame),
-        train_count=len(train_frame),
-        val_count=len(validation_frame),
-        negative_count=negative_count,
-        positive_count=positive_count,
+        classifier_name = classifier_name,
+        device          = str(device),
+        sample_count    = len(frame),
+        train_count     = len(train_frame),
+        val_count       = len(validation_frame),
+        negative_count  = negative_count,
+        positive_count  = positive_count,
     ):
         timestamp_log(line)
 
@@ -355,26 +355,26 @@ def prepare_classifier_training(
         config.num_workers if config.num_workers is not None else min(8, os.cpu_count() or 4)
     )
     timestamp_log("  Loading tokenizer...")
-    tokenizer = tokenizer_factory.from_pretrained(config.model_name)
+    tokenizer    = tokenizer_factory.from_pretrained(config.model_name)
     train_loader = create_loader(
         train_frame,
         tokenizer,
         config.max_len,
         config.batch_size,
-        sampler=sampler,
-        num_workers=num_workers,
-        pin_memory=runtime["pin_memory"],
-        random_seed=config.random_seed,
+        sampler     = sampler,
+        num_workers = num_workers,
+        pin_memory  = runtime["pin_memory"],
+        random_seed = config.random_seed,
     )
     validation_loader = create_loader(
         validation_frame,
         tokenizer,
         config.max_len,
         config.batch_size,
-        num_workers=num_workers,
-        pin_memory=runtime["pin_memory"],
-        random_seed=config.random_seed,
-        shuffle=False,
+        num_workers = num_workers,
+        pin_memory  = runtime["pin_memory"],
+        random_seed = config.random_seed,
+        shuffle     = False,
     )
 
     timestamp_log(f"  Loading model {config.model_name.split('/')[-1]}...")
@@ -382,29 +382,29 @@ def prepare_classifier_training(
     model.to(device)
     optimizer = create_optimizer(
         model.parameters(),
-        learning_rate=config.learning_rate,
-        use_fused=runtime["use_fused"],
+        learning_rate = config.learning_rate,
+        use_fused     = runtime["use_fused"],
     )
     total_steps = len(train_loader) * config.num_epochs
-    scheduler = scheduler_factory(
+    scheduler   = scheduler_factory(
         optimizer,
-        num_warmup_steps=int(config.warmup_proportion * total_steps),
-        num_training_steps=total_steps,
+        num_warmup_steps   = int(config.warmup_proportion * total_steps),
+        num_training_steps = total_steps,
     )
     config.output_dir.mkdir(parents=True, exist_ok=True)
 
     return ClassifierTrainingRuntime(
-        runtime=runtime,
-        frame=frame,
-        train_frame=train_frame,
-        validation_frame=validation_frame,
-        tokenizer=tokenizer,
-        model=model,
-        train_loader=train_loader,
-        validation_loader=validation_loader,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        loss_fn=loss_fn,
+        runtime           = runtime,
+        frame             = frame,
+        train_frame       = train_frame,
+        validation_frame  = validation_frame,
+        tokenizer         = tokenizer,
+        model             = model,
+        train_loader      = train_loader,
+        validation_loader = validation_loader,
+        optimizer         = optimizer,
+        scheduler         = scheduler,
+        loss_fn           = loss_fn,
     )
 
 

@@ -22,15 +22,15 @@ def chime_context(tmp_path: Path) -> SimpleNamespace:
     data_dir = tmp_path / "chime-data"
     data_dir.mkdir()
     return SimpleNamespace(
-        data_dir=data_dir,
-        http_session=MagicMock(),
-        logger=MagicMock(),
-        request_id="test-chime",
+        data_dir     = data_dir,
+        http_session = MagicMock(),
+        logger       = MagicMock(),
+        request_id   = "test-chime",
     )
 
 
 def _payload(
-    name: str = "FRB20260714A",
+    name: str      = "FRB20260714A",
     timestamp: str = "2026-07-14T00:00:00",
     *,
     pulse_key: str = "260714",
@@ -49,7 +49,7 @@ def _payload(
 
 
 def _frb(
-    name: str = "FRB20260714A",
+    name: str      = "FRB20260714A",
     timestamp: str = "2026-07-14T00:00:00",
 ) -> chime.FRBData:
     data = _payload(name, timestamp)
@@ -105,11 +105,11 @@ class TestChimeRuntimeContract:
         assert _frb(timestamp=timestamp).is_valid() is True
 
     def test_external_display_fields_are_bounded_scalars(self) -> None:
-        info = _payload()["FRB20260714A"]
-        info["260714"]["dm"] = {"value": "line\nbreak"}
+        info                  = _payload()["FRB20260714A"]
+        info["260714"]["dm"]  = {"value": "line\nbreak"}
         info["260714"]["snr"] = {"value": float("inf")}
-        info["ra"] = {"value": [1, 2]}
-        info["dec"] = {"value": "x" * 129}
+        info["ra"]            = {"value": [1, 2]}
+        info["dec"]           = {"value": "x" * 129}
 
         text = chime.FRBData("FRB20260714A", info).format_info()
 
@@ -150,8 +150,8 @@ class TestChimeParsingAndHistory:
         self,
         chime_context: SimpleNamespace,
     ) -> None:
-        malicious_name = "FRB-BAD\nSECRET"
-        data = _payload()
+        malicious_name       = "FRB-BAD\nSECRET"
+        data                 = _payload()
         data[malicious_name] = _payload("FRB-BAD")["FRB-BAD"]
 
         parsed = chime.parse_frb_data(data, chime_context)
@@ -260,7 +260,7 @@ class TestChimeParsingAndHistory:
         self,
         chime_context: SimpleNamespace,
     ) -> None:
-        old = {"FRB-A": "2026-07-14 00:00:00"}
+        old     = {"FRB-A": "2026-07-14 00:00:00"}
         current = [_frb("FRB-A", "2026-07-14T00:00:00Z")]
 
         assert chime.find_updates(current, old, chime_context) == ([], [])
@@ -272,7 +272,7 @@ class TestChimeParsingAndHistory:
 
     def test_update_message_limits_each_section_to_five_records(self) -> None:
         new_repeaters = [_frb(f"FRB-N{index}") for index in range(6)]
-        new_pulses = [_frb(f"FRB-P{index}") for index in range(6)]
+        new_pulses    = [_frb(f"FRB-P{index}") for index in range(6)]
 
         message = chime.format_update_message(
             new_repeaters,
@@ -346,7 +346,7 @@ async def test_catalog_cache_avoids_repeated_manual_downloads(
     monkeypatch.setattr(chime, "aiohttp_request_bounded", request)
     monkeypatch.setattr(chime, "parse_bounded_json", Mock(return_value=data))
 
-    first = await chime.fetch_chime_repeaters(chime_context)
+    first  = await chime.fetch_chime_repeaters(chime_context)
     second = await chime.fetch_chime_repeaters(chime_context)
 
     assert first == second == data
@@ -363,8 +363,8 @@ async def test_catalog_cache_coalesces_concurrent_cold_requests(
 ) -> None:
     chime_context.state = {}
     monkeypatch.setattr(chime, "_CATALOG_FETCH_LOCK", asyncio.Lock())
-    entered = asyncio.Event()
-    release = asyncio.Event()
+    entered       = asyncio.Event()
+    release       = asyncio.Event()
     request_count = 0
 
     async def request(*_args, **_kwargs):
@@ -614,7 +614,7 @@ async def test_scheduled_corrupt_history_fails_closed(
 ) -> None:
     send = AsyncMock(return_value=True)
     chime_context.default_groups = lambda: [123]
-    chime_context.send_action = send
+    chime_context.send_action    = send
     monkeypatch.setattr(chime, "fetch_chime_repeaters", AsyncMock(return_value=_payload()))
     monkeypatch.setattr(
         chime,
@@ -648,13 +648,13 @@ async def test_delivery_ack_persistence_failure_stops_fanout(
 ) -> None:
     chime_context.default_groups = lambda: [101, 202]
     chime_context.send_action = AsyncMock(return_value=True)
-    path = chime_context.data_dir / "chime_delivery.json"
+    path    = chime_context.data_dir / "chime_delivery.json"
     pending = chime.create_pending(
         path,
-        event_id="chime:test-ack",
-        payload=list(chime.segments("message")),
-        targets=chime.default_group_targets(chime_context),
-        commit={"history": {"FRB-A": "2026-07-14T00:00:00"}},
+        event_id = "chime:test-ack",
+        payload  = list(chime.segments("message")),
+        targets  = chime.default_group_targets(chime_context),
+        commit   = {"history": {"FRB-A": "2026-07-14T00:00:00"}},
     )
     monkeypatch.setattr(chime, "mark_delivered", Mock(side_effect=OSError("disk failed")))
 
@@ -669,16 +669,16 @@ async def test_delivery_ack_persistence_failure_stops_fanout(
 async def test_delivery_exception_retains_target_without_logging_details(
     chime_context: SimpleNamespace,
 ) -> None:
-    secret = "must-not-appear"
+    secret                       = "must-not-appear"
     chime_context.default_groups = lambda: [101]
     chime_context.send_action = AsyncMock(side_effect=RuntimeError(secret))
-    path = chime_context.data_dir / "chime_delivery.json"
+    path    = chime_context.data_dir / "chime_delivery.json"
     pending = chime.create_pending(
         path,
-        event_id="chime:test-send-error",
-        payload=list(chime.segments("message")),
-        targets=chime.default_group_targets(chime_context),
-        commit={"history": {"FRB-A": "2026-07-14T00:00:00"}},
+        event_id = "chime:test-send-error",
+        payload  = list(chime.segments("message")),
+        targets  = chime.default_group_targets(chime_context),
+        commit   = {"history": {"FRB-A": "2026-07-14T00:00:00"}},
     )
 
     assert await chime._deliver_pending(chime_context, pending) is False
@@ -695,13 +695,13 @@ async def test_completed_delivery_retains_outbox_when_history_commit_fails(
 ) -> None:
     chime_context.default_groups = lambda: [101]
     chime_context.send_action = AsyncMock(return_value=True)
-    path = chime_context.data_dir / "chime_delivery.json"
+    path    = chime_context.data_dir / "chime_delivery.json"
     pending = chime.create_pending(
         path,
-        event_id="chime:test-commit",
-        payload=list(chime.segments("message")),
-        targets=chime.default_group_targets(chime_context),
-        commit={"history": {"FRB-A": "2026-07-14T00:00:00"}},
+        event_id = "chime:test-commit",
+        payload  = list(chime.segments("message")),
+        targets  = chime.default_group_targets(chime_context),
+        commit   = {"history": {"FRB-A": "2026-07-14T00:00:00"}},
     )
     monkeypatch.setattr(chime, "save_history", Mock(return_value=False))
 

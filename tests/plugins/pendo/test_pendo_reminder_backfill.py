@@ -27,22 +27,22 @@ class TestReminderBackfillRegression:
 
         try:
             future_event = EventItem(
-                owner_id="u1",
-                title="未来会议",
-                start_time="2030-01-03T09:00:00",
-                end_time="2030-01-03T10:00:00",
-                remind_times=["2030-01-03T08:00:00"],
-                created_at="2030-01-01T00:00:00",
-                updated_at="2030-01-01T00:00:00",
+                owner_id     = "u1",
+                title        = "未来会议",
+                start_time   = "2030-01-03T09:00:00",
+                end_time     = "2030-01-03T10:00:00",
+                remind_times = ["2030-01-03T08:00:00"],
+                created_at   = "2030-01-01T00:00:00",
+                updated_at   = "2030-01-01T00:00:00",
             )
             past_event = EventItem(
-                owner_id="u1",
-                title="过去会议",
-                start_time="2029-12-30T09:00:00",
-                end_time="2029-12-30T10:00:00",
-                remind_times=["2029-12-30T08:00:00"],
-                created_at="2029-12-01T00:00:00",
-                updated_at="2029-12-01T00:00:00",
+                owner_id     = "u1",
+                title        = "过去会议",
+                start_time   = "2029-12-30T09:00:00",
+                end_time     = "2029-12-30T10:00:00",
+                remind_times = ["2029-12-30T08:00:00"],
+                created_at   = "2029-12-01T00:00:00",
+                updated_at   = "2029-12-01T00:00:00",
             )
             db.insert_item(future_event, "evt_future")
             db.insert_item(past_event, "evt_past")
@@ -86,13 +86,13 @@ class TestReminderBackfillRegression:
 
         try:
             event = EventItem(
-                owner_id="u1",
-                title="带时区会议",
-                start_time="2026-05-01T09:00:00+08:00",
-                end_time="2026-05-01T10:00:00+08:00",
-                remind_times=["2026-05-01T08:30:00+08:00"],
-                created_at="2026-05-01T00:00:00",
-                updated_at="2026-05-01T00:00:00",
+                owner_id     = "u1",
+                title        = "带时区会议",
+                start_time   = "2026-05-01T09:00:00+08:00",
+                end_time     = "2026-05-01T10:00:00+08:00",
+                remind_times = ["2026-05-01T08:30:00+08:00"],
+                created_at   = "2026-05-01T00:00:00",
+                updated_at   = "2026-05-01T00:00:00",
             )
             db.insert_item(event, "evtaware")
             handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
@@ -112,10 +112,10 @@ class TestReminderBackfillRegression:
 
         from plugins.pendo.commands.operations import handle_confirm
 
-        db = MagicMock()
+        db                       = MagicMock()
         db.get_item.return_value = None
 
-        reminder_service = MagicMock()
+        reminder_service                               = MagicMock()
         reminder_service.confirm_reminder.return_value = {"status": "success", "message": "ok"}
 
         result = asyncio.run(handle_confirm("u1", "evt123", reminder_service, db))
@@ -137,16 +137,16 @@ class TestReminderBackfillRegression:
 
         try:
             event = EventItem(
-                owner_id="u1",
-                title="提醒测试",
-                start_time="2020-01-01T10:00:00",
-                remind_times=["2020-01-01T08:00:00", "2020-01-01T09:00:00"],
-                created_at="2020-01-01T00:00:00",
-                updated_at="2020-01-01T00:00:00",
+                owner_id     = "u1",
+                title        = "提醒测试",
+                start_time   = "2020-01-01T10:00:00",
+                remind_times = ["2020-01-01T08:00:00", "2020-01-01T09:00:00"],
+                created_at   = "2020-01-01T00:00:00",
+                updated_at   = "2020-01-01T00:00:00",
             )
             db.insert_item(event, "evt123")
 
-            conn = db.get_connection()
+            conn   = db.get_connection()
             cursor = conn.cursor()
             with conn:
                 cursor.execute(
@@ -179,9 +179,9 @@ class TestReminderBackfillRegression:
             result = asyncio.run(handle_confirm("u1", "evt123", ReminderService(db), db))
 
             assert result["status"] == "success"
-            logs = db.get_reminder_logs("evt123")
+            logs           = db.get_reminder_logs("evt123")
             confirmed_logs = [log for log in logs if log["confirmed_at"]]
-            pending_logs = [log for log in logs if not log["confirmed_at"]]
+            pending_logs   = [log for log in logs if not log["confirmed_at"]]
 
             assert [log["remind_time"] for log in confirmed_logs] == ["2020-01-01T01:00:00+00:00"]
             assert [log["remind_time"] for log in pending_logs] == ["2020-01-01T00:00:00+00:00"]
@@ -200,21 +200,21 @@ class TestReminderBackfillRegression:
 
         try:
             event = EventItem(
-                owner_id="u1",
-                title="提醒测试",
-                start_time="2030-01-02T10:00:00",
-                remind_times=["2030-01-02T09:00:00", "2030-01-02T10:00:00"],
-                created_at="2030-01-01T00:00:00",
-                updated_at="2030-01-01T00:00:00",
+                owner_id     = "u1",
+                title        = "提醒测试",
+                start_time   = "2030-01-02T10:00:00",
+                remind_times = ["2030-01-02T09:00:00", "2030-01-02T10:00:00"],
+                created_at   = "2030-01-01T00:00:00",
+                updated_at   = "2030-01-01T00:00:00",
             )
             db.insert_item(event, "evtfuture")
 
             result = db.confirm_reminder(
                 "evtfuture",
                 "preconfirmed",
-                owner_id="u1",
-                remind_time="2030-01-02T01:00:00+00:00",
-                allow_future=True,
+                owner_id     = "u1",
+                remind_time  = "2030-01-02T01:00:00+00:00",
+                allow_future = True,
             )
 
             assert result["status"] == "success"
@@ -252,17 +252,17 @@ class TestReminderBackfillRegression:
 
         try:
             event = EventItem(
-                owner_id="u1",
-                title="今日提醒",
-                start_time="2030-01-02T14:00:00",
-                remind_times=[
+                owner_id     = "u1",
+                title        = "今日提醒",
+                start_time   = "2030-01-02T14:00:00",
+                remind_times = [
                     "2030-01-02T09:00:00",
                     "2030-01-02T13:00:00",
                     "2030-01-02T14:00:00",
                     "2030-01-03T09:00:00",
                 ],
-                created_at="2030-01-01T00:00:00",
-                updated_at="2030-01-01T00:00:00",
+                created_at = "2030-01-01T00:00:00",
+                updated_at = "2030-01-01T00:00:00",
             )
             db.insert_item(event, "evtday02")
 
@@ -273,7 +273,7 @@ class TestReminderBackfillRegression:
 
             assert result["status"] == "success"
             assert "已确认 3 个提醒" in result["message"]
-            logs = db.get_reminder_logs("evtday02")
+            logs      = db.get_reminder_logs("evtday02")
             confirmed = {log["remind_time"] for log in logs if log["confirmed_at"]}
             assert confirmed == {
                 "2030-01-02T01:00:00+00:00",
@@ -307,16 +307,16 @@ class TestReminderBackfillRegression:
         )
 
         item = SimpleNamespace(
-            id="evt123",
-            owner_id="u1",
-            title="晨会",
-            start_time="2030-01-01T10:00:00",
-            end_time="2030-01-01T11:00:00",
-            remind_times=["2030-01-01T09:00:00"],
-            context={},
-            location="会议室A",
-            notes="",
-            tags=[],
+            id           = "evt123",
+            owner_id     = "u1",
+            title        = "晨会",
+            start_time   = "2030-01-01T10:00:00",
+            end_time     = "2030-01-01T11:00:00",
+            remind_times = ["2030-01-01T09:00:00"],
+            context      = {},
+            location     = "会议室A",
+            notes        = "",
+            tags         = [],
         )
 
         class _FakeDb:
@@ -376,16 +376,16 @@ class TestReminderBackfillRegression:
         )
 
         item = SimpleNamespace(
-            id="evt123",
-            owner_id="u1",
-            title="晨会",
-            start_time="2030-01-01T10:00:00",
-            end_time="2030-01-01T11:00:00",
-            remind_times=["2030-01-01T09:00:00"],
-            context={},
-            location="会议室A",
-            notes="",
-            tags=[],
+            id           = "evt123",
+            owner_id     = "u1",
+            title        = "晨会",
+            start_time   = "2030-01-01T10:00:00",
+            end_time     = "2030-01-01T11:00:00",
+            remind_times = ["2030-01-01T09:00:00"],
+            context      = {},
+            location     = "会议室A",
+            notes        = "",
+            tags         = [],
         )
 
         class _FakeDb:
@@ -444,7 +444,7 @@ class TestReminderBackfillRegression:
         from plugins.pendo.services import reminder as reminder_module
         from plugins.pendo.services.reminder import ReminderService
 
-        fixed_now = datetime.fromisoformat("2030-01-01T09:10:00+08:00")
+        fixed_now   = datetime.fromisoformat("2030-01-01T09:10:00+08:00")
         remind_time = "2030-01-01T08:00:00"
 
         monkeypatch.setattr(
@@ -456,16 +456,16 @@ class TestReminderBackfillRegression:
         )
 
         item = SimpleNamespace(
-            id="evt123",
-            owner_id="u1",
-            title="晨会",
-            start_time="2030-01-01T10:00:00",
-            end_time="2030-01-01T11:00:00",
-            remind_times=[remind_time],
-            context={},
-            location="会议室A",
-            notes="",
-            tags=[],
+            id           = "evt123",
+            owner_id     = "u1",
+            title        = "晨会",
+            start_time   = "2030-01-01T10:00:00",
+            end_time     = "2030-01-01T11:00:00",
+            remind_times = [remind_time],
+            context      = {},
+            location     = "会议室A",
+            notes        = "",
+            tags         = [],
         )
 
         class _FakeDb:

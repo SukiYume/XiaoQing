@@ -63,6 +63,7 @@ async def _finalize_http_action_response(
     actions: list[dict[str, Any]],
     *,
     write_to_transport: bool,
+    standard_onebot: bool = False,
 ) -> web.Response:
     """Serialize actions and resolve receipts only after the HTTP write boundary.
 
@@ -75,7 +76,7 @@ async def _finalize_http_action_response(
     clean_actions = [strip_receipt(action) for action in actions]
     try:
         response = web.json_response(
-            {"actions": clean_actions},
+            {} if standard_onebot else {"actions": clean_actions},
             dumps=lambda obj: json.dumps(obj, ensure_ascii=False),
         )
         if write_to_transport:
@@ -146,7 +147,7 @@ class _InboundBroadcastCommit:
 class BroadcastResult:
     """Delivery counts for one logical WebSocket broadcast."""
 
-    target_count: int = 0
+    target_count: int  = 0
     success_count: int = 0
     failure_count: int = 0
     timeout_count: int = 0
@@ -176,10 +177,10 @@ class BroadcastResult:
         if not isinstance(other, BroadcastResult):
             return NotImplemented
         return BroadcastResult(
-            target_count=self.target_count + other.target_count,
-            success_count=self.success_count + other.success_count,
-            failure_count=self.failure_count + other.failure_count,
-            timeout_count=self.timeout_count + other.timeout_count,
+            target_count  = self.target_count + other.target_count,
+            success_count = self.success_count + other.success_count,
+            failure_count = self.failure_count + other.failure_count,
+            timeout_count = self.timeout_count + other.timeout_count,
         )
 
 
@@ -211,9 +212,9 @@ class _InboundEventTicket:
     key: str
     payload: dict[str, Any]
     result: asyncio.Future[list[dict[str, Any]]]
-    auth_guard: Callable[[], bool] | None = None
-    started: bool = False
-    finished: bool = False
+    auth_guard: Callable[[], bool] | None                         = None
+    started: bool                                                 = False
+    finished: bool                                                = False
     operation_task: "asyncio.Task[_InboundHandlerOutcome] | None" = None
 
 
@@ -223,14 +224,14 @@ class _InboundEventLane:
 
     pending: deque[_InboundEventTicket] = field(default_factory=deque)
     running: _InboundEventTicket | None = None
-    ready: bool = False
+    ready: bool                         = False
 
 
 @dataclass(frozen=True, slots=True)
 class _InboundHandlerOutcome:
     """A task-safe handler result; raw BaseException never escapes its child task."""
 
-    actions: Any = None
+    actions: Any                = None
     error: BaseException | None = None
 
 
@@ -259,28 +260,28 @@ class _InboundEventDispatcher:
         max_workers: int,
         queue_size: int,
         drain_timeout_seconds: float = 5.0,
-        allow_lazy_start: bool = False,
+        allow_lazy_start: bool       = False,
     ) -> None:
-        self._handler = handler
+        self._handler     = handler
         self._max_workers = max(1, int(max_workers))
-        self._queue_size = max(0, int(queue_size))
+        self._queue_size  = max(0, int(queue_size))
         # queue_size is the waiting backlog; running workers are additional
         # bounded slots.  Even queue_size=0 is therefore bounded, not unlimited.
-        self._capacity = self._max_workers + self._queue_size
+        self._capacity              = self._max_workers + self._queue_size
         self._drain_timeout_seconds = max(0.01, float(drain_timeout_seconds))
-        self._allow_lazy_start = allow_lazy_start
+        self._allow_lazy_start      = allow_lazy_start
 
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._ready_keys: asyncio.Queue[str] | None = None
-        self._lanes: dict[str, _InboundEventLane] = {}
-        self._workers: set[asyncio.Task[None]] = set()
-        self._drained: asyncio.Event | None = None
-        self._sequence = 0
-        self._worker_starts = 0
-        self._inflight = 0
-        self._accepting = False
-        self._started_once = False
-        self._stopping = False
+        self._ready_keys: asyncio.Queue[str] | None  = None
+        self._lanes: dict[str, _InboundEventLane]    = {}
+        self._workers: set[asyncio.Task[None]]       = set()
+        self._drained: asyncio.Event | None          = None
+        self._sequence                               = 0
+        self._worker_starts                          = 0
+        self._inflight                               = 0
+        self._accepting                              = False
+        self._started_once                           = False
+        self._stopping                               = False
 
     @property
     def is_stopped(self) -> bool:
@@ -307,17 +308,17 @@ class _InboundEventDispatcher:
         self._start_on_loop(loop)
 
     def _start_on_loop(self, loop: asyncio.AbstractEventLoop) -> None:
-        self._loop = loop
+        self._loop       = loop
         self._ready_keys = asyncio.Queue()
         self._lanes.clear()
         self._workers = {task for task in self._workers if not task.done()}
         self._drained = asyncio.Event()
         self._drained.set()
-        self._sequence = 0
-        self._inflight = 0
-        self._accepting = True
+        self._sequence     = 0
+        self._inflight     = 0
+        self._accepting    = True
         self._started_once = True
-        self._stopping = False
+        self._stopping     = False
 
     @staticmethod
     def _event_key(payload: dict[str, Any], sequence: int) -> str:
@@ -351,15 +352,15 @@ class _InboundEventDispatcher:
             )
 
         self._sequence += 1
-        sequence = self._sequence
-        key = self._event_key(payload, sequence)
+        sequence                                     = self._sequence
+        key                                          = self._event_key(payload, sequence)
         result: asyncio.Future[list[dict[str, Any]]] = loop.create_future()
-        ticket = _InboundEventTicket(
-            sequence=sequence,
-            key=key,
-            payload=payload,
-            result=result,
-            auth_guard=auth_guard,
+        ticket                                       = _InboundEventTicket(
+            sequence   = sequence,
+            key        = key,
+            payload    = payload,
+            result     = result,
+            auth_guard = auth_guard,
         )
         lane = self._lanes.setdefault(key, _InboundEventLane())
         lane.pending.append(ticket)
@@ -451,7 +452,7 @@ class _InboundEventDispatcher:
         if ready is None:
             return
         self._workers = {task for task in self._workers if not task.done()}
-        desired = min(self._max_workers, len(self._workers) + ready.qsize())
+        desired       = min(self._max_workers, len(self._workers) + ready.qsize())
         while len(self._workers) < desired:
             task = asyncio.create_task(self._worker_loop())
             self._worker_starts += 1
@@ -505,7 +506,7 @@ class _InboundEventDispatcher:
                     if lane.pending:
                         self._schedule_lane(key, lane, spawn_worker=False)
                     continue
-                lane.running = ticket
+                lane.running   = ticket
                 ticket.started = True
                 await self._execute_ticket(ticket)
             finally:
@@ -560,7 +561,7 @@ class _InboundEventDispatcher:
                 ticket.result.set_result(actions)
         finally:
             ticket.operation_task = None
-            ticket.finished = True
+            ticket.finished       = True
             if lane.running is ticket:
                 lane.running = None
             self._decrement_inflight()
@@ -581,7 +582,7 @@ class _InboundEventDispatcher:
 
         try:
             awaitable = self._handler(payload)
-            actions = await awaitable
+            actions   = await awaitable
         except asyncio.CancelledError as exc:
             task = asyncio.current_task()
             if task is not None and task.cancelling():
@@ -614,7 +615,7 @@ class _InboundEventDispatcher:
         """Stop admission, drain accepted events, then bound forced cancellation."""
 
         self._accepting = False
-        self._stopping = True
+        self._stopping  = True
         if self._loop is None:
             self._stopping = False
             return
@@ -628,7 +629,7 @@ class _InboundEventDispatcher:
                     drained.wait(),
                     timeout=self._drain_timeout_seconds,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 self._abort_pending()
                 for lane in tuple(self._lanes.values()):
                     running = lane.running
@@ -646,7 +647,7 @@ class _InboundEventDispatcher:
                             drained.wait(),
                             timeout=self._drain_timeout_seconds,
                         )
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         raise RuntimeError(
                             f"{self._inflight} inbound event handler(s) ignored cancellation"
                         ) from None
@@ -691,9 +692,9 @@ class _InboundEventDispatcher:
         self._lanes.clear()
         self._workers.clear()
         self._ready_keys = None
-        self._drained = None
-        self._loop = None
-        self._stopping = False
+        self._drained    = None
+        self._loop       = None
+        self._stopping   = False
 
 
 class InboundServer:
@@ -721,22 +722,22 @@ class InboundServer:
     ) -> None:
         if type(trusted_tls_proxy) is not bool:
             raise TypeError("trusted_tls_proxy must be a boolean")
-        self.host = host
-        self.port = port
-        self.ws_path = ws_path
-        self._auth_state = _InboundAuthState(token)
-        self._auth_state_lock = threading.RLock()
+        self.host                                          = host
+        self.port                                          = port
+        self.ws_path                                       = ws_path
+        self._auth_state                                   = _InboundAuthState(token)
+        self._auth_state_lock                              = threading.RLock()
         self._event_loop: asyncio.AbstractEventLoop | None = None
-        self.handler = handler
-        self.enable_http = bool(enable_http)
-        self.enable_ws = bool(enable_ws)
-        self.trusted_tls_proxy = trusted_tls_proxy
-        self._ws_broadcast_timeout_seconds = _parse_positive_float(
+        self.handler                                       = handler
+        self.enable_http                                   = bool(enable_http)
+        self.enable_ws                                     = bool(enable_ws)
+        self.trusted_tls_proxy                             = trusted_tls_proxy
+        self._ws_broadcast_timeout_seconds                 = _parse_positive_float(
             ws_broadcast_timeout_seconds,
             default=DEFAULT_INBOUND_WS_BROADCAST_TIMEOUT_SECONDS,
         )
         self.app = web.Application()
-        routes = []
+        routes   = []
         if self.enable_http:
             routes.extend(
                 [
@@ -750,13 +751,13 @@ class InboundServer:
         self.app.add_routes(routes)
 
         # 状态追踪
-        self._start_time = time.time()
-        self._request_count = 0
-        self._ws_connections = 0
+        self._start_time                   = time.time()
+        self._request_count                = 0
+        self._ws_connections               = 0
         self._runner: web.AppRunner | None = None
-        self._site: web.TCPSite | None = None
-        self._running = False
-        self._lifecycle_lock = _LazyAsyncLock()
+        self._site: web.TCPSite | None     = None
+        self._running                      = False
+        self._lifecycle_lock               = _LazyAsyncLock()
 
         self._ws_event_queue: (
             asyncio.Queue[
@@ -769,7 +770,7 @@ class InboundServer:
             | None
         ) = None
         self._ws_worker_tasks: list[asyncio.Task[None]] = []
-        self._ws_close_tasks: set[asyncio.Task[None]] = set()
+        self._ws_close_tasks: set[asyncio.Task[None]]   = set()
         self._ws_max_workers = max(1, _parse_positive_int(ws_max_workers, default=1))
         # Outbound fan-out shares the configured WS concurrency budget.  The
         # semaphore is global to this server, so overlapping broadcasts cannot
@@ -790,21 +791,21 @@ class InboundServer:
             self._ws_event_queue = asyncio.Queue(maxsize=delivery_queue_size)
 
         self._handler_drain_timeout_seconds = 5.0
-        self._owns_event_dispatcher = event_dispatcher is None
-        self._event_dispatcher = event_dispatcher or self._new_owned_event_dispatcher()
+        self._owns_event_dispatcher         = event_dispatcher is None
+        self._event_dispatcher              = event_dispatcher or self._new_owned_event_dispatcher()
 
         # 可选：外部注入的状态获取函数
-        self._get_plugins_count: Callable[[], int] | None = None
-        self._get_sessions_count: Callable[[], int] | None = None
-        self._get_pending_jobs: Callable[[], int] | None = None
+        self._get_plugins_count: Callable[[], int] | None      = None
+        self._get_sessions_count: Callable[[], int] | None     = None
+        self._get_pending_jobs: Callable[[], int] | None       = None
         self._get_metrics: Callable[[], dict[str, Any]] | None = None
 
         # 活跃的 WebSocket 连接集合
-        self._active_sockets: set[web.WebSocketResponse] = set()
+        self._active_sockets: set[web.WebSocketResponse]                         = set()
         self._socket_auth_states: dict[web.WebSocketResponse, _InboundAuthState] = {}
         # A constructed server may be invoked directly by embedders/tests;
         # network admission is still impossible until ``start`` binds a site.
-        self._accepting_events = True
+        self._accepting_events                             = True
         self._active_handler_tasks: set[asyncio.Task[Any]] = set()
 
     async def _call_handler(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -815,10 +816,10 @@ class InboundServer:
     def _new_owned_event_dispatcher(self) -> _InboundEventDispatcher:
         return _InboundEventDispatcher(
             self._call_handler,
-            max_workers=self._ws_max_workers,
-            queue_size=self._event_queue_size,
-            drain_timeout_seconds=self._handler_drain_timeout_seconds,
-            allow_lazy_start=True,
+            max_workers           = self._ws_max_workers,
+            queue_size            = self._event_queue_size,
+            drain_timeout_seconds = self._handler_drain_timeout_seconds,
+            allow_lazy_start      = True,
         )
 
     @property
@@ -833,16 +834,16 @@ class InboundServer:
 
     def set_status_providers(
         self,
-        plugins_count: Callable[[], int] | None = None,
-        sessions_count: Callable[[], int] | None = None,
-        pending_jobs: Callable[[], int] | None = None,
+        plugins_count: Callable[[], int] | None      = None,
+        sessions_count: Callable[[], int] | None     = None,
+        pending_jobs: Callable[[], int] | None       = None,
         metrics: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         """设置状态提供函数"""
-        self._get_plugins_count = plugins_count
+        self._get_plugins_count  = plugins_count
         self._get_sessions_count = sessions_count
-        self._get_pending_jobs = pending_jobs
-        self._get_metrics = metrics
+        self._get_pending_jobs   = pending_jobs
+        self._get_metrics        = metrics
 
     def update_token(self, token: str) -> None:
         """Replace the inbound token and revoke older WebSocket sessions."""
@@ -850,7 +851,7 @@ class InboundServer:
             previous_state = self._auth_state
             if token == previous_state.token:
                 return
-            next_state = _InboundAuthState(token, previous_state.generation + 1)
+            next_state       = _InboundAuthState(token, previous_state.generation + 1)
             self._auth_state = next_state
 
         # The state swap above makes every old request/socket generation fail
@@ -964,7 +965,7 @@ class InboundServer:
             )
         except asyncio.CancelledError:
             raise
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("WebSocket inbound response timed out")
             self._schedule_ws_close(ws, reason=b"inbound response timed out")
             return False
@@ -1050,7 +1051,7 @@ class InboundServer:
         if user_id is None or isinstance(user_id, bool) or not str(user_id).strip():
             return "Missing or invalid user_id", 400
 
-        message = payload.get("message")
+        message     = payload.get("message")
         raw_message = str(payload.get("raw_message") or "")
         if message is None and not raw_message.strip():
             return "Missing message or raw_message", 400
@@ -1179,14 +1180,14 @@ class InboundServer:
             return f"{int(seconds)}s"
         elif seconds < SECONDS_PER_HOUR:
             minutes = int(seconds / 60)
-            secs = int(seconds % 60)
+            secs    = int(seconds % 60)
             return f"{minutes}m {secs}s"
         elif seconds < SECONDS_PER_DAY:
-            hours = int(seconds / SECONDS_PER_HOUR)
+            hours   = int(seconds / SECONDS_PER_HOUR)
             minutes = int((seconds % SECONDS_PER_HOUR) / 60)
             return f"{hours}h {minutes}m"
         else:
-            days = int(seconds / SECONDS_PER_DAY)
+            days  = int(seconds / SECONDS_PER_DAY)
             hours = int((seconds % SECONDS_PER_DAY) / SECONDS_PER_HOUR)
             return f"{days}d {hours}h"
 
@@ -1196,7 +1197,7 @@ class InboundServer:
         auth_state: _InboundAuthState | None = None,
     ) -> bool:
         auth_state = self._auth_state if auth_state is None else auth_state
-        auth = request.headers.get("Authorization", "")
+        auth       = request.headers.get("Authorization", "")
         return verify_bearer_token(auth, auth_state.token)
 
     async def post_event(self, request: web.Request) -> web.Response:
@@ -1208,7 +1209,7 @@ class InboundServer:
             return self._unauthorized_response()
 
         content_type = request.headers.get("Content-Type", "")
-        media_type = content_type.partition(";")[0].strip().lower()
+        media_type   = content_type.partition(";")[0].strip().lower()
         if media_type != "application/json" and not (
             media_type.startswith("application/") and media_type.endswith("+json")
         ):
@@ -1233,6 +1234,11 @@ class InboundServer:
         try:
             assert normalized is not None
             normalized["_source"] = "inbound_http"
+            # 只有显式请求 action-envelope 的测试/自定义客户端接收动作列表。
+            # 标准 HTTP 上报由应用通过 action API 投递，响应正文仅确认接收。
+            normalized["_http_action_delivery"] = (
+                request.headers.get("X-XiaoQing-Response-Mode", "onebot") != "actions"
+            )
             actions = await self._invoke_handler(
                 normalized,
                 auth_generation=auth_state,
@@ -1265,7 +1271,8 @@ class InboundServer:
             # Unit tests call handlers with a small request double.  A real
             # aiohttp Request owns the payload writer and therefore uses the
             # explicit prepare/write_eof acknowledgement boundary.
-            write_to_transport=isinstance(request, web.Request),
+            write_to_transport = isinstance(request, web.Request),
+            standard_onebot    = bool(normalized.get("_http_action_delivery")),
         )
 
     async def ws_handler(self, request: web.Request) -> web.StreamResponse:
@@ -1284,8 +1291,8 @@ class InboundServer:
         if not self._accepting_events:
             await self._close_ws_bounded(
                 ws,
-                code=1013,
-                message=b"inbound server is not accepting events",
+                code    = 1013,
+                message = b"inbound server is not accepting events",
             )
             return ws
         with self._auth_state_lock:
@@ -1298,8 +1305,8 @@ class InboundServer:
         if stale_auth:
             await self._close_ws_bounded(
                 ws,
-                code=1008,
-                message=b"inbound token rotated",
+                code    = 1008,
+                message = b"inbound token rotated",
             )
             return ws
 
@@ -1309,8 +1316,8 @@ class InboundServer:
                 if not self._auth_is_current(connection_auth):
                     await self._close_ws_bounded(
                         ws,
-                        code=1008,
-                        message=b"inbound token rotated",
+                        code    = 1008,
+                        message = b"inbound token rotated",
                     )
                     break
                 if not self._accepting_events:
@@ -1382,7 +1389,7 @@ class InboundServer:
     async def broadcast(self, action: dict[str, Any]) -> BroadcastResult:
         """向当前所有 WebSocket 客户端并发广播，并报告实际投递结果。"""
         auth_state = self._auth_state
-        sockets = tuple(
+        sockets    = tuple(
             ws
             for ws in self._active_sockets
             if self._socket_auth_states.get(ws, auth_state) is auth_state
@@ -1422,7 +1429,7 @@ class InboundServer:
                 )
                 if outcome.error is not None:
                     raise outcome.error
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(
                     "Broadcast timed out for one client after %.3fs",
                     self._ws_broadcast_timeout_seconds,
@@ -1445,7 +1452,7 @@ class InboundServer:
             return "success"
 
         outcomes: list[str | None] = [None] * len(sockets)
-        pending_sockets = iter(enumerate(sockets))
+        pending_sockets            = iter(enumerate(sockets))
 
         async def send_worker() -> None:
             while True:
@@ -1475,10 +1482,10 @@ class InboundServer:
             raise
 
         return BroadcastResult(
-            target_count=len(sockets),
-            success_count=outcomes.count("success"),
-            failure_count=outcomes.count("failure"),
-            timeout_count=outcomes.count("timeout"),
+            target_count  = len(sockets),
+            success_count = outcomes.count("success"),
+            failure_count = outcomes.count("failure"),
+            timeout_count = outcomes.count("timeout"),
         )
 
     def active_ws_connections(self) -> int:
@@ -1509,9 +1516,9 @@ class InboundServer:
             if isinstance(payload, _InboundEventTicket):
                 actions = await self._await_admitted_event(payload)
             else:
-                payload = normalize_inbound_message(payload)
+                payload            = normalize_inbound_message(payload)
                 payload["_source"] = "inbound_ws"
-                actions = await self._invoke_handler(
+                actions            = await self._invoke_handler(
                     payload,
                     auth_generation=auth_generation,
                 )
@@ -1547,7 +1554,7 @@ class InboundServer:
     def _ensure_ws_workers(self) -> None:
         if not self.enable_ws or self._ws_event_queue is None:
             return
-        alive = [task for task in self._ws_worker_tasks if not task.done()]
+        alive  = [task for task in self._ws_worker_tasks if not task.done()]
         needed = self._ws_max_workers - len(alive)
         for _ in range(needed):
             alive.append(asyncio.create_task(self._ws_worker_loop()))
@@ -1584,7 +1591,7 @@ class InboundServer:
                 self.commit_admission()
             return
         self._event_loop = asyncio.get_running_loop()
-        completed_tasks = [
+        completed_tasks  = [
             task
             for task in (
                 *self._active_handler_tasks,
@@ -1599,7 +1606,7 @@ class InboundServer:
             task for task in self._active_handler_tasks if not task.done()
         }
         self._ws_worker_tasks = [task for task in self._ws_worker_tasks if not task.done()]
-        self._ws_close_tasks = {task for task in self._ws_close_tasks if not task.done()}
+        self._ws_close_tasks  = {task for task in self._ws_close_tasks if not task.done()}
         if (
             self._owns_event_dispatcher
             and self._event_dispatcher.is_stopped
@@ -1630,10 +1637,10 @@ class InboundServer:
                     "non-loopback inbound server bind is plaintext and requires "
                     "trusted_tls_proxy=true"
                 )
-        self._accepting_events = False
-        runner = web.AppRunner(self.app)
+        self._accepting_events   = False
+        runner                   = web.AppRunner(self.app)
         site: web.TCPSite | None = None
-        self._runner = runner
+        self._runner             = runner
         try:
             await runner.setup()
             site = web.TCPSite(runner, self.host, self.port, ssl_context=None)
@@ -1644,7 +1651,7 @@ class InboundServer:
         except BaseException:
 
             async def rollback() -> None:
-                site_failed = False
+                site_failed   = False
                 runner_failed = False
                 if site is not None:
                     try:
@@ -1669,15 +1676,15 @@ class InboundServer:
                             "Failed to stop partially started inbound dispatcher",
                             exc_info=cleanup_exc,
                         )
-                self._site = site if site_failed else None
-                self._runner = runner if runner_failed else None
-                self._running = False
+                self._site             = site if site_failed else None
+                self._runner           = runner if runner_failed else None
+                self._running          = False
                 self._accepting_events = False
 
             cleanup_task = asyncio.create_task(_run_owned_cleanup(rollback))
             await _await_cleanup_task(cleanup_task, deferred_cancellation)
             raise
-        self._running = True
+        self._running          = True
         self._accepting_events = accept_events
         logger.info(
             "Inbound server listening on %s:%s (http=%s ws=%s)",
@@ -1793,11 +1800,11 @@ class InboundServer:
 
     async def _stop_locked(self) -> None:
         """停止入站服务器，并在单个清理步骤失败时继续收敛其余资源。"""
-        self._accepting_events = False
-        self._running = False
-        errors: list[tuple[str, BaseException]] = []
+        self._accepting_events                       = False
+        self._running                                = False
+        errors: list[tuple[str, BaseException]]      = []
         caller_cancel: asyncio.CancelledError | None = None
-        cancelled_steps: set[str] = set()
+        cancelled_steps: set[str]                    = set()
 
         async def cleanup_step(name: str, operation: Callable[[], Awaitable[None]]) -> None:
             nonlocal caller_cancel
@@ -1813,14 +1820,14 @@ class InboundServer:
             except BaseException as exc:
                 errors.append((name, exc))
 
-        site = self._site
+        site       = self._site
         self._site = None
         if site is not None:
             await cleanup_step("site", site.stop)
 
         await cleanup_step("handlers", self._drain_handler_tasks)
 
-        runner = self._runner
+        runner       = self._runner
         self._runner = None
         if runner is not None:
             await cleanup_step("runner", runner.cleanup)
@@ -1968,7 +1975,7 @@ def _parse_inbound_manager_spec(
         return None
 
     inbound_http_base = str(config.get("inbound_http_base", "") or "").strip()
-    inbound_ws_uri = str(config.get("inbound_ws_uri", "") or "").strip()
+    inbound_ws_uri    = str(config.get("inbound_ws_uri", "") or "").strip()
     if not inbound_http_base and not inbound_ws_uri:
         return None
     if not token.strip():
@@ -1976,8 +1983,8 @@ def _parse_inbound_manager_spec(
 
     ws_max_workers = _parse_positive_int(
         config.get("inbound_ws_max_workers", default_ws_max_workers),
-        default=default_ws_max_workers,
-        min_value=1,
+        default   = default_ws_max_workers,
+        min_value = 1,
     )
     ws_queue_size = _parse_non_negative_int(
         config.get("ws_queue_size", default_ws_queue_size),
@@ -2005,12 +2012,12 @@ def _parse_inbound_manager_spec(
         trusted_tls_proxy=trusted_tls_proxy,
     )
     return _InboundManagerSpec(
-        inbound_http_base=inbound_http_base,
-        inbound_ws_uri=inbound_ws_uri,
-        ws_max_workers=ws_max_workers,
-        ws_queue_size=ws_queue_size,
-        ws_broadcast_timeout_seconds=ws_broadcast_timeout_seconds,
-        trusted_tls_proxy=trusted_tls_proxy,
+        inbound_http_base            = inbound_http_base,
+        inbound_ws_uri               = inbound_ws_uri,
+        ws_max_workers               = ws_max_workers,
+        ws_queue_size                = ws_queue_size,
+        ws_broadcast_timeout_seconds = ws_broadcast_timeout_seconds,
+        trusted_tls_proxy            = trusted_tls_proxy,
     )
 
 
@@ -2022,10 +2029,10 @@ class InboundManager:
         inbound_ws_uri: str,
         token: str,
         handler: Callable[[dict[str, Any]], Awaitable[list[dict[str, Any]]]],
-        ws_max_workers: int = DEFAULT_INBOUND_WS_MAX_WORKERS,
-        ws_queue_size: int = DEFAULT_INBOUND_WS_QUEUE_SIZE,
+        ws_max_workers: int                 = DEFAULT_INBOUND_WS_MAX_WORKERS,
+        ws_queue_size: int                  = DEFAULT_INBOUND_WS_QUEUE_SIZE,
         ws_broadcast_timeout_seconds: float = DEFAULT_INBOUND_WS_BROADCAST_TIMEOUT_SECONDS,
-        trusted_tls_proxy: bool = False,
+        trusted_tls_proxy: bool             = False,
     ) -> None:
         if type(trusted_tls_proxy) is not bool:
             raise TypeError("trusted_tls_proxy must be a boolean")
@@ -2046,15 +2053,15 @@ class InboundManager:
         if non_loopback and not token.strip():
             raise ValueError("non-loopback inbound listeners require a non-empty inbound token")
         self._inbound_http_base = inbound_http_base
-        self._inbound_ws_uri = inbound_ws_uri
+        self._inbound_ws_uri    = inbound_ws_uri
         self._trusted_tls_proxy = trusted_tls_proxy
-        self._token = token
-        self._auth_lock = threading.RLock()
-        self._handler = handler
-        self._ws_max_workers = _parse_positive_int(
+        self._token             = token
+        self._auth_lock         = threading.RLock()
+        self._handler           = handler
+        self._ws_max_workers    = _parse_positive_int(
             ws_max_workers,
-            default=DEFAULT_INBOUND_WS_MAX_WORKERS,
-            min_value=1,
+            default   = DEFAULT_INBOUND_WS_MAX_WORKERS,
+            min_value = 1,
         )
         self._ws_queue_size = _parse_non_negative_int(
             ws_queue_size,
@@ -2065,11 +2072,11 @@ class InboundManager:
             default=DEFAULT_INBOUND_WS_BROADCAST_TIMEOUT_SECONDS,
         )
 
-        self.http_server: InboundServer | None = None
-        self.ws_server: InboundServer | None = None
-        self._event_dispatcher: _InboundEventDispatcher | None = None
-        self._running = False
-        self._lifecycle_lock = _LazyAsyncLock()
+        self.http_server: InboundServer | None                       = None
+        self.ws_server: InboundServer | None                         = None
+        self._event_dispatcher: _InboundEventDispatcher | None       = None
+        self._running                                                = False
+        self._lifecycle_lock                                         = _LazyAsyncLock()
         self._status_providers: dict[str, Callable[..., Any] | None] = {
             "plugins_count": None,
             "sessions_count": None,
@@ -2087,8 +2094,8 @@ class InboundManager:
         *,
         config: Mapping[str, Any],
         token: str,
-        default_ws_max_workers: int = DEFAULT_INBOUND_WS_MAX_WORKERS,
-        default_ws_queue_size: int = DEFAULT_INBOUND_WS_QUEUE_SIZE,
+        default_ws_max_workers: int                 = DEFAULT_INBOUND_WS_MAX_WORKERS,
+        default_ws_queue_size: int                  = DEFAULT_INBOUND_WS_QUEUE_SIZE,
         default_ws_broadcast_timeout_seconds: float = (
             DEFAULT_INBOUND_WS_BROADCAST_TIMEOUT_SECONDS
         ),
@@ -2097,10 +2104,10 @@ class InboundManager:
 
         spec = _parse_inbound_manager_spec(
             config,
-            token=token,
-            default_ws_max_workers=default_ws_max_workers,
-            default_ws_queue_size=default_ws_queue_size,
-            default_ws_broadcast_timeout_seconds=default_ws_broadcast_timeout_seconds,
+            token                                = token,
+            default_ws_max_workers               = default_ws_max_workers,
+            default_ws_queue_size                = default_ws_queue_size,
+            default_ws_broadcast_timeout_seconds = default_ws_broadcast_timeout_seconds,
         )
         return None if spec is None else spec.config_key
 
@@ -2111,18 +2118,18 @@ class InboundManager:
         config: Mapping[str, Any],
         token: str,
         handler: Callable[[dict[str, Any]], Awaitable[list[dict[str, Any]]]],
-        default_ws_max_workers: int = DEFAULT_INBOUND_WS_MAX_WORKERS,
-        default_ws_queue_size: int = DEFAULT_INBOUND_WS_QUEUE_SIZE,
+        default_ws_max_workers: int                 = DEFAULT_INBOUND_WS_MAX_WORKERS,
+        default_ws_queue_size: int                  = DEFAULT_INBOUND_WS_QUEUE_SIZE,
         default_ws_broadcast_timeout_seconds: float = (
             DEFAULT_INBOUND_WS_BROADCAST_TIMEOUT_SECONDS
         ),
     ) -> "InboundManager | None":
         spec = _parse_inbound_manager_spec(
             config,
-            token=token,
-            default_ws_max_workers=default_ws_max_workers,
-            default_ws_queue_size=default_ws_queue_size,
-            default_ws_broadcast_timeout_seconds=default_ws_broadcast_timeout_seconds,
+            token                                = token,
+            default_ws_max_workers               = default_ws_max_workers,
+            default_ws_queue_size                = default_ws_queue_size,
+            default_ws_broadcast_timeout_seconds = default_ws_broadcast_timeout_seconds,
         )
         if spec is None:
             if not bool(config.get("enable_inbound_server", True)):
@@ -2131,14 +2138,14 @@ class InboundManager:
                 logger.info("Inbound server disabled (inbound_http_base/inbound_ws_uri are empty)")
             return None
         return cls(
-            inbound_http_base=spec.inbound_http_base,
-            inbound_ws_uri=spec.inbound_ws_uri,
-            token=token,
-            handler=handler,
-            ws_max_workers=spec.ws_max_workers,
-            ws_queue_size=spec.ws_queue_size,
-            ws_broadcast_timeout_seconds=spec.ws_broadcast_timeout_seconds,
-            trusted_tls_proxy=spec.trusted_tls_proxy,
+            inbound_http_base            = spec.inbound_http_base,
+            inbound_ws_uri               = spec.inbound_ws_uri,
+            token                        = token,
+            handler                      = handler,
+            ws_max_workers               = spec.ws_max_workers,
+            ws_queue_size                = spec.ws_queue_size,
+            ws_broadcast_timeout_seconds = spec.ws_broadcast_timeout_seconds,
+            trusted_tls_proxy            = spec.trusted_tls_proxy,
         )
 
     async def broadcast(self, action: dict[str, Any]) -> BroadcastResult:
@@ -2179,8 +2186,8 @@ class InboundManager:
             except Exception as exc:
                 logger.warning("Inbound server broadcast failed: %s", exc)
                 return BroadcastResult(
-                    target_count=target_count,
-                    failure_count=target_count,
+                    target_count  = target_count,
+                    failure_count = target_count,
                 )
             except BaseException as exc:
                 raise _BroadcastFatalError(exc) from exc
@@ -2190,8 +2197,8 @@ class InboundManager:
                     type(result).__name__,
                 )
                 return BroadcastResult(
-                    target_count=target_count,
-                    failure_count=target_count,
+                    target_count  = target_count,
+                    failure_count = target_count,
                 )
             return result
 
@@ -2236,8 +2243,8 @@ class InboundManager:
     def binding_ports(self) -> frozenset[int]:
         """Ports this manager would bind, deduplicating a shared HTTP/WS listener."""
         ports: set[int] = set()
-        http_parsed = _parse_http_base(self._inbound_http_base)
-        ws_parsed = _parse_ws_uri(self._inbound_ws_uri)
+        http_parsed     = _parse_http_base(self._inbound_http_base)
+        ws_parsed       = _parse_ws_uri(self._inbound_ws_uri)
         if http_parsed is not None:
             ports.add(http_parsed[1])
         if ws_parsed is not None:
@@ -2246,9 +2253,9 @@ class InboundManager:
 
     def set_status_providers(
         self,
-        plugins_count: Callable[[], int] | None = None,
-        sessions_count: Callable[[], int] | None = None,
-        pending_jobs: Callable[[], int] | None = None,
+        plugins_count: Callable[[], int] | None      = None,
+        sessions_count: Callable[[], int] | None     = None,
+        pending_jobs: Callable[[], int] | None       = None,
         metrics: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self._status_providers = {
@@ -2300,7 +2307,7 @@ class InboundManager:
             await self._start_servers(accept_events=accept_events)
         except BaseException:
             self._running = False
-            cleanup_task = asyncio.create_task(_run_owned_cleanup(self._stop_servers))
+            cleanup_task  = asyncio.create_task(_run_owned_cleanup(self._stop_servers))
             try:
                 await _await_cleanup_task(cleanup_task, deferred_cancellation)
             except BaseException as cleanup_exc:
@@ -2312,16 +2319,16 @@ class InboundManager:
 
     async def _start_servers(self, *, accept_events: bool = True) -> None:
         http_parsed = _parse_http_base(self._inbound_http_base)
-        ws_parsed = _parse_ws_uri(self._inbound_ws_uri)
+        ws_parsed   = _parse_ws_uri(self._inbound_ws_uri)
 
         if not http_parsed and not ws_parsed:
             return
 
         dispatcher = _InboundEventDispatcher(
             self._handler,
-            max_workers=self._ws_max_workers,
-            queue_size=self._ws_queue_size,
-            drain_timeout_seconds=5.0,
+            max_workers           = self._ws_max_workers,
+            queue_size            = self._ws_queue_size,
+            drain_timeout_seconds = 5.0,
         )
         self._event_dispatcher = dispatcher
         await dispatcher.start()
@@ -2331,25 +2338,25 @@ class InboundManager:
             _, _, path = ws_parsed
             with self._auth_lock:
                 published_token = self._token
-                server = InboundServer(
+                server          = InboundServer(
                     host,
                     port,
                     published_token,
                     self._handler,
-                    enable_http=True,
-                    enable_ws=True,
-                    ws_path=path,
-                    ws_max_workers=self._ws_max_workers,
-                    ws_queue_size=self._ws_queue_size,
-                    ws_broadcast_timeout_seconds=self._ws_broadcast_timeout_seconds,
-                    trusted_tls_proxy=self._trusted_tls_proxy,
-                    event_dispatcher=dispatcher,
+                    enable_http                  = True,
+                    enable_ws                    = True,
+                    ws_path                      = path,
+                    ws_max_workers               = self._ws_max_workers,
+                    ws_queue_size                = self._ws_queue_size,
+                    ws_broadcast_timeout_seconds = self._ws_broadcast_timeout_seconds,
+                    trusted_tls_proxy            = self._trusted_tls_proxy,
+                    event_dispatcher             = dispatcher,
                 )
                 if published_token != self._token:
                     server.update_token(self._token)
                 self._apply_status_providers(server)
                 self.http_server = server
-                self.ws_server = server
+                self.ws_server   = server
             await server.start(accept_events=False)
             if accept_events:
                 server.commit_admission()
@@ -2359,16 +2366,16 @@ class InboundManager:
             host, port = http_parsed
             with self._auth_lock:
                 published_token = self._token
-                server = InboundServer(
+                server          = InboundServer(
                     host,
                     port,
                     published_token,
                     self._handler,
-                    enable_http=True,
-                    enable_ws=False,
-                    ws_broadcast_timeout_seconds=self._ws_broadcast_timeout_seconds,
-                    trusted_tls_proxy=self._trusted_tls_proxy,
-                    event_dispatcher=dispatcher,
+                    enable_http                  = True,
+                    enable_ws                    = False,
+                    ws_broadcast_timeout_seconds = self._ws_broadcast_timeout_seconds,
+                    trusted_tls_proxy            = self._trusted_tls_proxy,
+                    event_dispatcher             = dispatcher,
                 )
                 if published_token != self._token:
                     server.update_token(self._token)
@@ -2380,19 +2387,19 @@ class InboundManager:
             host, port, path = ws_parsed
             with self._auth_lock:
                 published_token = self._token
-                server = InboundServer(
+                server          = InboundServer(
                     host,
                     port,
                     published_token,
                     self._handler,
-                    enable_http=False,
-                    enable_ws=True,
-                    ws_path=path,
-                    ws_max_workers=self._ws_max_workers,
-                    ws_queue_size=self._ws_queue_size,
-                    ws_broadcast_timeout_seconds=self._ws_broadcast_timeout_seconds,
-                    trusted_tls_proxy=self._trusted_tls_proxy,
-                    event_dispatcher=dispatcher,
+                    enable_http                  = False,
+                    enable_ws                    = True,
+                    ws_path                      = path,
+                    ws_max_workers               = self._ws_max_workers,
+                    ws_queue_size                = self._ws_queue_size,
+                    ws_broadcast_timeout_seconds = self._ws_broadcast_timeout_seconds,
+                    trusted_tls_proxy            = self._trusted_tls_proxy,
+                    event_dispatcher             = dispatcher,
                 )
                 if published_token != self._token:
                     server.update_token(self._token)
@@ -2428,19 +2435,19 @@ class InboundManager:
 
     async def _stop_servers(self) -> None:
         with self._auth_lock:
-            original_http = self.http_server
-            original_ws = self.ws_server
+            original_http    = self.http_server
+            original_ws      = self.ws_server
             self.http_server = None
-            self.ws_server = None
-        dispatcher = self._event_dispatcher
+            self.ws_server   = None
+        dispatcher                   = self._event_dispatcher
         servers: list[InboundServer] = []
         for server in (original_http, original_ws):
             if server is not None and all(server is not current for current in servers):
                 servers.append(server)
-        self._running = False
-        errors: list[BaseException] = []
-        failed_servers: list[InboundServer] = []
-        dispatcher_failed = False
+        self._running                                = False
+        errors: list[BaseException]                  = []
+        failed_servers: list[InboundServer]          = []
+        dispatcher_failed                            = False
         caller_cancel: asyncio.CancelledError | None = None
         for server in servers:
             try:

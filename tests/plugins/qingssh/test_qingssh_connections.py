@@ -29,12 +29,12 @@ from tests.helpers.settings_snapshot import with_settings_reader
 
 def test_disconnect_closes_active_channel_and_jump_connection(tmp_path):
     manager = ssh_manager_module.SSHManager(tmp_path)
-    key = manager.build_connection_key("10001", "20001", "srv")
+    key     = manager.build_connection_key("10001", "20001", "srv")
     channel = _FakeChannel()
-    client = _FakeClient()
+    client  = _FakeClient()
 
     manager.active_channels[key] = channel
-    manager.connections[key] = client
+    manager.connections[key]     = client
 
     assert manager.disconnect("10001", "20001", "srv") is True
     assert channel.closed is True
@@ -65,8 +65,8 @@ async def test_connect_closes_jump_host_when_target_connection_fails(monkeypatch
         instances: ClassVar[list[object]] = []
 
         def __init__(self):
-            self.closed = False
-            self.sock = _FakeProxySock()
+            self.closed    = False
+            self.sock      = _FakeProxySock()
             self.connected = False
             _FakeJumpClient.instances.append(self)
 
@@ -111,11 +111,11 @@ async def test_connect_closes_jump_host_when_target_connection_fails(monkeypatch
     monkeypatch.setattr(ssh_manager_module.paramiko, "SSHClient", _client_factory)
     monkeypatch.setattr(ssh_manager_module, "PARAMIKO_AVAILABLE", True)
 
-    context = MagicMock()
+    context            = MagicMock()
     context.request_id = "req-qingssh-connect"
-    context.secrets = {"private_exception_canary": "CR_P02_SSH_SECRET"}
+    context.secrets    = {"private_exception_canary": "CR_P02_SSH_SECRET"}
     manager = ssh_manager_module.SSHManager(tmp_path, context=context)
-    manager._ssh_config = MagicMock()
+    manager._ssh_config                    = MagicMock()
     manager._ssh_config.lookup.side_effect = lambda host: {
         "hostname": host,
         "port": "22",
@@ -146,16 +146,16 @@ async def test_connect_closes_jump_host_when_target_connection_fails(monkeypatch
 async def test_manager_request_context_is_task_local(tmp_path):
     state = {}
     first = SimpleNamespace(
-        state=state,
-        data_dir=tmp_path,
-        plugin_dir=tmp_path,
-        logger=Mock(),
+        state      = state,
+        data_dir   = tmp_path,
+        plugin_dir = tmp_path,
+        logger     = Mock(),
     )
     second = SimpleNamespace(
-        state=state,
-        data_dir=tmp_path,
-        plugin_dir=tmp_path,
-        logger=Mock(),
+        state      = state,
+        data_dir   = tmp_path,
+        plugin_dir = tmp_path,
+        logger     = Mock(),
     )
 
     manager = await ssh_manager_module.get_manager(first)
@@ -176,7 +176,7 @@ async def test_manager_request_context_is_task_local(tmp_path):
 
 
 def test_authentication_failure_never_exposes_private_key_path(tmp_path):
-    manager = ssh_manager_module.SSHManager(tmp_path)
+    manager     = ssh_manager_module.SSHManager(tmp_path)
     private_key = r"C:\private\keys\production-id_ed25519"
 
     message = manager._authentication_failure_message(
@@ -195,10 +195,10 @@ def test_authentication_failure_never_exposes_private_key_path(tmp_path):
 
 @pytest.mark.asyncio
 async def test_stream_failure_uses_correlated_public_error(tmp_path):
-    canary = "CR_P02_STREAM_SECRET"
-    context = MagicMock()
+    canary             = "CR_P02_STREAM_SECRET"
+    context            = MagicMock()
     context.request_id = "req-qingssh-stream"
-    context.secrets = {"private_exception_canary": canary}
+    context.secrets    = {"private_exception_canary": canary}
     manager = ssh_manager_module.SSHManager(tmp_path, context=context)
     key = manager.build_connection_key("1", "2", "srv")
 
@@ -233,7 +233,7 @@ async def test_stream_failure_uses_correlated_public_error(tmp_path):
 async def test_connect_reserves_capacity_across_concurrent_dials(monkeypatch, tmp_path):
     class _Client:
         def __init__(self):
-            self.closed = False
+            self.closed    = False
             self.connected = False
 
         def set_missing_host_key_policy(self, _policy):
@@ -319,10 +319,10 @@ async def test_connect_prunes_stale_clients_before_enforcing_capacity(monkeypatc
         "port": 22,
         "username": "root",
     }
-    stale = _StaleClient()
-    stale_key = manager.build_connection_key("old-user", "g1", "old")
+    stale                          = _StaleClient()
+    stale_key                      = manager.build_connection_key("old-user", "g1", "old")
     manager.connections[stale_key] = cast(Any, stale)
-    new_client = _NewClient()
+    new_client                     = _NewClient()
     monkeypatch.setattr(ssh_manager_module, "PARAMIKO_AVAILABLE", True)
     monkeypatch.setattr(ssh_manager_module.paramiko, "SSHClient", lambda: new_client)
     monkeypatch.setattr(manager, "_load_host_keys", lambda *_args: None)
@@ -358,12 +358,12 @@ async def test_connect_closes_jump_client_when_channel_open_fails(monkeypatch, t
         def get_transport(self):
             return _BrokenTransport()
 
-    target_client = _TargetClient()
-    jump_client = _JumpClient()
-    clients = [target_client, jump_client]
-    context = MagicMock()
+    target_client      = _TargetClient()
+    jump_client        = _JumpClient()
+    clients            = [target_client, jump_client]
+    context            = MagicMock()
     context.request_id = "req-qingssh-jump"
-    context.secrets = {}
+    context.secrets    = {}
     manager = ssh_manager_module.SSHManager(tmp_path, context=context)
     manager.servers["srv"] = {
         "host": "srv.internal",
@@ -411,16 +411,17 @@ async def test_cancelled_connect_closes_client_and_releases_reservation(monkeypa
         def close(self):
             self.closed = True
 
-    client = _Client()
+    client       = _Client()
     dial_started = asyncio.Event()
+    release_dial = asyncio.Event()
 
     async def blocked_to_thread(func, *args, **kwargs):
         if getattr(func, "__name__", "") == "connect":
             dial_started.set()
-            await asyncio.Event().wait()
+            await release_dial.wait()
         return func(*args, **kwargs)
 
-    manager = ssh_manager_module.SSHManager(tmp_path)
+    manager                = ssh_manager_module.SSHManager(tmp_path)
     manager.servers["srv"] = {"host": "srv.internal", "port": 22, "username": "root"}
     monkeypatch.setattr(ssh_manager_module, "PARAMIKO_AVAILABLE", True)
     monkeypatch.setattr(ssh_manager_module.paramiko, "SSHClient", lambda: client)
@@ -430,6 +431,9 @@ async def test_cancelled_connect_closes_client_and_releases_reservation(monkeypa
     task = asyncio.create_task(manager.connect("u1", "g1", "srv"))
     await dial_started.wait()
     task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done()
+    release_dial.set()
     with pytest.raises(asyncio.CancelledError):
         await task
 
@@ -448,9 +452,9 @@ async def test_execute_command_stream_applies_timeout(monkeypatch, tmp_path):
 
     terminate = AsyncMock(
         return_value=ssh_manager_module.CommandTerminationResult(
-            found=True,
-            local_cleaned=True,
-            remote_confirmed=False,
+            found            = True,
+            local_cleaned    = True,
+            remote_confirmed = False,
         )
     )
     output = AsyncMock()
@@ -469,7 +473,7 @@ async def test_execute_command_stream_applies_timeout(monkeypatch, tmp_path):
 async def test_password_setup_is_rejected_in_group_chat():
     context = Mock(current_user_id=10001, current_group_id=20001)
     context.end_session = AsyncMock()
-    session = _SessionStub(
+    session             = _SessionStub(
         {
             SessionKeys.STEP: "auth_type",
             SessionKeys.SERVER_CONFIG: {
@@ -497,7 +501,7 @@ async def test_password_setup_is_rejected_in_group_chat():
 async def test_private_password_setup_keeps_plaintext_out_of_session_state():
     context = Mock(current_user_id=10001, current_group_id=None)
     context.end_session = AsyncMock()
-    manager = MagicMock()
+    manager             = MagicMock()
     manager.add_server = AsyncMock(return_value=True)
     session = _SessionStub(
         {
@@ -524,7 +528,7 @@ async def test_private_password_setup_keeps_plaintext_out_of_session_state():
 async def test_corrupt_add_session_is_ended_instead_of_raising():
     context = Mock(current_user_id=10001, current_group_id=None)
     context.end_session = AsyncMock()
-    session = _SessionStub(
+    session             = _SessionStub(
         {
             SessionKeys.STEP: "password",
             SessionKeys.SERVER_CONFIG: {},
@@ -546,7 +550,7 @@ async def test_corrupt_add_session_is_ended_instead_of_raising():
 async def test_agent_add_failure_does_not_report_success_or_end_session():
     context = Mock(current_user_id=10001, current_group_id=None)
     context.end_session = AsyncMock()
-    manager = MagicMock()
+    manager             = MagicMock()
     manager.add_server = AsyncMock(return_value=False)
     session = _SessionStub(
         {
@@ -578,8 +582,8 @@ def test_session_without_plugin_identity_cannot_own_qingssh_job():
 
     assert not ssh_session_handlers._session_owns_job(
         cast(Any, AnonymousSession()),
-        server_name="srv",
-        job_id="job",
+        server_name = "srv",
+        job_id      = "job",
     )
 
 
@@ -587,14 +591,14 @@ def test_session_without_plugin_identity_cannot_own_qingssh_job():
 async def test_connected_session_rejects_overlong_command_before_starting_job():
     context = Mock(current_user_id=10001, current_group_id=20001, config={})
     context.end_session = AsyncMock()
-    session = _SessionStub(
+    session             = _SessionStub(
         {
             SessionKeys.SERVER_NAME: "srv",
             SessionKeys.STATE: "connected",
             SessionKeys.COMMAND_COUNT: 0,
         }
     )
-    manager = MagicMock()
+    manager                           = MagicMock()
     manager.is_connected.return_value = True
 
     result = await ssh_session_handlers._handle_connected_session(
@@ -613,9 +617,9 @@ async def test_connected_session_rejects_overlong_command_before_starting_job():
 @pytest.mark.parametrize("alias", ["help", "/help", "ssh帮助", "插件帮助", "帮助"])
 async def test_connected_session_help_aliases_do_not_start_remote_commands(alias: str):
     context = Mock(current_user_id=10001, current_group_id=20001)
-    context.end_session = AsyncMock()
-    session = _connected_session()
-    manager = MagicMock()
+    context.end_session               = AsyncMock()
+    session                           = _connected_session()
+    manager                           = MagicMock()
     manager.is_connected.return_value = True
 
     result = await ssh_session_handlers._handle_connected_session(
@@ -639,11 +643,11 @@ async def test_showimg_without_pattern_returns_usage_instead_of_running_remote_c
     command: str,
 ):
     context = Mock(current_user_id=10001, current_group_id=20001)
-    context.end_session = AsyncMock()
-    session = _connected_session()
-    manager = MagicMock()
+    context.end_session               = AsyncMock()
+    session                           = _connected_session()
+    manager                           = MagicMock()
     manager.is_connected.return_value = True
-    manager.list_files = AsyncMock()
+    manager.list_files                = AsyncMock()
 
     result = await ssh_session_handlers._handle_connected_session(
         command,
@@ -736,9 +740,9 @@ async def test_list_files_applies_wildcard_and_returns_stable_filename_order(tmp
         def open_sftp(self):
             return self.sftp
 
-    manager = ssh_manager_module.SSHManager(tmp_path)
-    sftp = SFTP()
-    key = manager.build_connection_key("10001", "20001", "srv")
+    manager                  = ssh_manager_module.SSHManager(tmp_path)
+    sftp                     = SFTP()
+    key                      = manager.build_connection_key("10001", "20001", "srv")
     manager.connections[key] = cast(Any, Client(sftp))
     manager.is_connected = Mock(return_value=True)
 
@@ -773,8 +777,8 @@ async def test_list_files_keeps_matches_beyond_historical_first_hundred(tmp_path
         def open_sftp():
             return SFTP()
 
-    manager = ssh_manager_module.SSHManager(tmp_path)
-    key = manager.build_connection_key("10001", "20001", "srv")
+    manager                  = ssh_manager_module.SSHManager(tmp_path)
+    key                      = manager.build_connection_key("10001", "20001", "srv")
     manager.connections[key] = cast(Any, Client())
     manager.is_connected = Mock(return_value=True)
 
@@ -795,21 +799,21 @@ async def test_list_files_keeps_matches_beyond_historical_first_hundred(tmp_path
 @pytest.mark.asyncio
 async def test_showimg_path_wildcard_sends_requested_page_with_global_positions(tmp_path: Path):
     context = Mock(
-        current_user_id=10001,
-        current_group_id=20001,
-        plugin_dir=tmp_path,
+        current_user_id  = 10001,
+        current_group_id = 20001,
+        plugin_dir       = tmp_path,
     )
     context.end_session = AsyncMock()
     context.send_action = AsyncMock()
-    session = _SessionStub(
+    session             = _SessionStub(
         {
             SessionKeys.SERVER_NAME: "srv",
             SessionKeys.CWD: "/remote",
         }
     )
-    manager = MagicMock()
+    manager                           = MagicMock()
     manager.is_connected.return_value = True
-    manager.list_files = AsyncMock(
+    manager.list_files                = AsyncMock(
         return_value=(
             True,
             [
@@ -856,7 +860,7 @@ async def test_showimg_path_wildcard_sends_requested_page_with_global_positions(
         zip(expected_filenames, context.send_action.await_args_list, strict=True),
         6,
     ):
-        action = action_call.args[0]
+        action  = action_call.args[0]
         message = action["params"]["message"]
         assert [segment["type"] for segment in message] == ["text", "image"]
         assert message[0]["data"]["text"] == f"📷 {global_index}/12\n{expected_filename}\n"
@@ -871,21 +875,21 @@ async def test_showimg_path_wildcard_sends_requested_page_with_global_positions(
 @pytest.mark.asyncio
 async def test_showimg_rejects_page_beyond_matching_images_before_download(tmp_path: Path):
     context = Mock(
-        current_user_id=10001,
-        current_group_id=20001,
-        plugin_dir=tmp_path,
+        current_user_id  = 10001,
+        current_group_id = 20001,
+        plugin_dir       = tmp_path,
     )
     context.end_session = AsyncMock()
     context.send_action = AsyncMock()
-    session = _SessionStub(
+    session             = _SessionStub(
         {
             SessionKeys.SERVER_NAME: "srv",
             SessionKeys.CWD: "/remote",
         }
     )
-    manager = MagicMock()
+    manager                           = MagicMock()
     manager.is_connected.return_value = True
-    manager.list_files = AsyncMock(
+    manager.list_files                = AsyncMock(
         return_value=(True, [f"plot-{index}.png" for index in range(1, 7)])
     )
     manager.download_file = AsyncMock()
@@ -905,9 +909,9 @@ async def test_showimg_rejects_page_beyond_matching_images_before_download(tmp_p
 @pytest.mark.asyncio
 async def test_showimg_send_failure_still_removes_downloaded_temp_file(tmp_path: Path):
     context = Mock(
-        current_user_id=10001,
-        current_group_id=20001,
-        plugin_dir=tmp_path,
+        current_user_id  = 10001,
+        current_group_id = 20001,
+        plugin_dir       = tmp_path,
     )
     context.end_session = AsyncMock()
     context.send_action = AsyncMock(side_effect=RuntimeError("send failed"))
@@ -917,7 +921,7 @@ async def test_showimg_send_failure_still_removes_downloaded_temp_file(tmp_path:
             SessionKeys.CWD: "/remote",
         }
     )
-    manager = MagicMock()
+    manager                           = MagicMock()
     manager.is_connected.return_value = True
     manager.list_files = AsyncMock(return_value=(True, ["plot.png"]))
 
@@ -940,8 +944,8 @@ async def test_showimg_send_failure_still_removes_downloaded_temp_file(tmp_path:
 
 @pytest.mark.asyncio
 async def test_server_config_never_persists_plaintext_password(tmp_path):
-    stored = {}
-    context = Mock()
+    stored             = {}
+    context            = Mock()
     context.set_secret = lambda key, value: stored.__setitem__(key, value)
     manager = ssh_manager_module.SSHManager(tmp_path, context=context)
 

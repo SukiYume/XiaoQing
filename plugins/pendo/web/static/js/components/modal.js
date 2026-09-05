@@ -2,7 +2,7 @@
 
 import { escapeHtml } from '../utils/ui.js';
 
-const SAFE_HTML_VALUE = Symbol('pendo.safe-html');
+const SAFE_HTML_VALUE    = Symbol('pendo.safe-html');
 const FOCUSABLE_SELECTOR = [
     'button:not([disabled])',
     'a[href]',
@@ -12,9 +12,9 @@ const FOCUSABLE_SELECTOR = [
     '[tabindex]:not([tabindex="-1"])',
 ].join(',');
 
-let modalOpen = false;
+let modalOpen      = false;
 let currentOnClose = null;
-let previousFocus = null;
+let previousFocus  = null;
 
 /**
  * 标记已经由调用方完成逐值转义的内部 HTML。
@@ -53,15 +53,15 @@ function handleModalKeydown(event) {
     }
     if (event.key !== 'Tab') return;
 
-    const content = document.getElementById('modal-content');
+    const content   = document.getElementById('modal-content');
     const focusable = [...(content?.querySelectorAll(FOCUSABLE_SELECTOR) ?? [])];
     if (!focusable.length) {
         event.preventDefault();
         return;
     }
 
-    const first = focusable[0];
-    const last = focusable.at(-1);
+    const first  = focusable[0];
+    const last   = focusable.at(-1);
     const active = document.activeElement;
     if (!focusable.includes(active)) {
         event.preventDefault();
@@ -136,9 +136,9 @@ export function showModal(title, contentValue, options = {}) {
 export function closeModal() {
     if (!modalOpen) return;
 
-    const overlay = document.getElementById('modal-overlay');
-    const content = document.getElementById('modal-content');
-    const onClose = currentOnClose;
+    const overlay     = document.getElementById('modal-overlay');
+    const content     = document.getElementById('modal-content');
+    const onClose     = currentOnClose;
     const focusTarget = previousFocus;
 
     // 先清空单实例状态，保证 onClose 可以安全重入并打开下一弹窗。
@@ -182,16 +182,16 @@ export function showConfirmModal(options = {}) {
     } = options;
 
     return new Promise((resolve) => {
-        let settled = false;
+        let settled  = false;
         const finish = (result) => {
             if (settled) return;
             settled = true;
             resolve(result);
             closeModal();
         };
-        const isDanger = tone === 'danger';
+        const isDanger  = tone === 'danger';
         const iconClass = isDanger ? 'confirm-modal-icon-danger' : 'confirm-modal-icon-info';
-        const bodyHTML = `
+        const bodyHTML  = `
             <div class="confirm-modal-body">
                 <div class="confirm-modal-icon ${iconClass}" aria-hidden="true">${isDanger ? '🗑️' : 'ℹ️'}</div>
                 <p class="confirm-modal-message">${escapeHtml(message)}</p>

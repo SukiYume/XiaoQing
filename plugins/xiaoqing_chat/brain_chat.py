@@ -24,7 +24,7 @@ def get_brain_chat_identity(runtime: _ChatRuntime, is_brain_chat: bool) -> str:
     兴趣和人物边界，形成两个互不一致的“小青”。
     """
 
-    base_identity = str(runtime.cfg.personality.identity or "").strip()
+    base_identity  = str(runtime.cfg.personality.identity or "").strip()
     brain_identity = runtime.cfg.brain_chat.brain_identity
     if is_brain_chat and brain_identity:
         supplement = str(brain_identity or "").strip()

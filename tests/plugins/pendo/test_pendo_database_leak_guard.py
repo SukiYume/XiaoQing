@@ -1,3 +1,4 @@
+# 验证数据库泄漏防护能够捕获遗留连接并隔离测试。
 from __future__ import annotations
 
 import gc
@@ -136,16 +137,16 @@ def test_autouse_fixture_tracks_real_database_instance(tmp_path, pendo_database_
 
 
 def test_non_pendo_plugin_path_does_not_import_database_module() -> None:
-    probe = TESTS_ROOT / "plugins" / "_pendo_guard_nonpendo_probe.py"
+    probe     = TESTS_ROOT / "plugins" / "_pendo_guard_nonpendo_probe.py"
     completed = subprocess.run(
         [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", str(probe), "-q"],
-        cwd=ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=60,
+        cwd            = ROOT,
+        check          = False,
+        capture_output = True,
+        text           = True,
+        encoding       = "utf-8",
+        errors         = "replace",
+        timeout        = 60,
     )
 
     assert completed.returncode == 0, completed.stdout + completed.stderr

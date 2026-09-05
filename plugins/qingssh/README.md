@@ -153,6 +153,8 @@ data/qingssh/command_outputs/ssh-output-*.txt
 
 任务取消会先收敛远端进程，再清理临时归档。完成的长输出归档只向 QQ 展示文件名，完整本机路径进入内部日志。
 
+连接、命令通道或 SFTP 在线程中创建时，取消流程等待创建结果并关闭返回资源；远端状态待确认时保留明确提示。文字和图片投递收到 `False` 时按失败处理，成功计数仅包含已接受的发送。
+
 ---
 
 ## 🎨 远程图片
@@ -208,7 +210,7 @@ SFTP 下载到临时文件，经 OneBot action 接收后清理；发送异常与
 在仓库根目录运行：
 
 ```bash
-python -m ruff check plugins/qingssh tests/plugins/qingssh/test_qingssh*.py
+python -m ruff check plugins/qingssh tests/plugins/qingssh
 python -m mypy plugins/qingssh
-python -m pytest -q tests/plugins -k qingssh -n 2
+python -m pytest -q tests/plugins/qingssh -n 2
 ```

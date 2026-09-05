@@ -60,7 +60,7 @@ def _bump_chat_count(chat_counts: list[list[Any]], chat_id: str) -> list[list[An
     """递增当前会话计数，并只保留最常见的三十个会话。"""
 
     out: list[list[Any]] = []
-    found = False
+    found                = False
     for item in chat_counts:
         if not isinstance(item, list) or len(item) < 2:
             continue
@@ -82,7 +82,7 @@ def _log_jargon_step(
     *,
     chat_id: str,
     fields: dict[str, Any] | None = None,
-    warning: bool = False,
+    warning: bool                 = False,
 ) -> None:
     payload = {"step": step, "chat_id": _redacted_value(chat_id)}
     if fields:
@@ -134,20 +134,20 @@ async def mine_jargon(
     prompt = _EXTRACT_PROMPT.format(dialogue=dialogue)
     try:
         resp, _path = await chat_completions_raw_with_fallback_paths(
-            secrets=secrets,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=min(0.4, float(temperature)),
-            top_p=float(top_p),
-            max_tokens=min(700, max(400, int(max_tokens))),
-            timeout_seconds=float(timeout_seconds),
-            max_retry=int(max_retry),
-            retry_interval_seconds=float(retry_interval_seconds),
+            secrets                = secrets,
+            messages               = [{"role": "user", "content": prompt}],
+            temperature            = min(0.4, float(temperature)),
+            top_p                  = float(top_p),
+            max_tokens             = min(700, max(400, int(max_tokens))),
+            timeout_seconds        = float(timeout_seconds),
+            max_retry              = int(max_retry),
+            retry_interval_seconds = float(retry_interval_seconds),
         )
     except LLMError as exc:
         _log_jargon_step(
             "jargon.extract.fail",
-            chat_id=chat_id,
-            fields={
+            chat_id = chat_id,
+            fields  = {
                 "error_type": type(exc).__name__,
                 "elapsed_s": round(time.monotonic() - t0, 3),
             },
@@ -155,16 +155,16 @@ async def mine_jargon(
         )
         return 0
     content = (((resp.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
-    arr = parse_first_json_array(str(content))
+    arr     = parse_first_json_array(str(content))
     _log_jargon_step(
         "jargon.extract.done",
-        chat_id=chat_id,
-        fields={"candidates": len(arr), "elapsed_s": round(time.monotonic() - t0, 3)},
+        chat_id = chat_id,
+        fields  = {"candidates": len(arr), "elapsed_s": round(time.monotonic() - t0, 3)},
     )
 
-    db = store.load()
-    changed = 0
-    now = time.time()
+    db           = store.load()
+    changed      = 0
+    now          = time.time()
     context_snip = dialogue.splitlines()[-6:]
     context_text = "\n".join(context_snip).strip()
 
@@ -173,25 +173,25 @@ async def mine_jargon(
         if not term or len(term) > 32:
             continue
         is_jargon = it.get("is_jargon") is True
-        meaning = str(it.get("meaning", "") or "").strip()
+        meaning   = str(it.get("meaning", "") or "").strip()
         if not is_jargon:
             continue
 
         record_key = store.key_for(term, chat_id)
-        rec = db.get(record_key)
+        rec        = db.get(record_key)
         if not rec:
             rec = JargonRecord(content=term, scope_chat_id=chat_id, count=0, updated_at=now)
             db[record_key] = rec
-        rec.count = int(rec.count or 0) + 1
-        rec.updated_at = now
-        rec.is_jargon = True
-        chat_id_counts = rec.chat_id_counts if isinstance(rec.chat_id_counts, list) else []
+        rec.count          = int(rec.count or 0) + 1
+        rec.updated_at     = now
+        rec.is_jargon      = True
+        chat_id_counts     = rec.chat_id_counts if isinstance(rec.chat_id_counts, list) else []
         rec.chat_id_counts = _bump_chat_count(chat_id_counts, chat_id)
         if context_text and context_text not in rec.raw_content:
             rec.raw_content.append(context_text)
             rec.raw_content = rec.raw_content[-20:]
         if meaning and not rec.meaning:
-            rec.meaning = meaning[:120].strip()
+            rec.meaning     = meaning[:120].strip()
             rec.is_complete = True
         changed += 1
 
@@ -208,25 +208,25 @@ async def mine_jargon(
         to_infer.append((rec.content, rec))
 
     for term, rec in to_infer[:6]:
-        it0 = time.monotonic()
+        it0      = time.monotonic()
         contexts = "\n---\n".join(rec.raw_content[-6:]).strip() or "（无）"
         ip = _INFER_PROMPT.format(term=term, contexts=contexts)
         try:
             r2, _p2 = await chat_completions_raw_with_fallback_paths(
-                secrets=secrets,
-                messages=[{"role": "user", "content": ip}],
-                temperature=min(0.2, float(temperature)),
-                top_p=float(top_p),
-                max_tokens=min(300, int(max_tokens)),
-                timeout_seconds=float(timeout_seconds),
-                max_retry=int(max_retry),
-                retry_interval_seconds=float(retry_interval_seconds),
+                secrets                = secrets,
+                messages               = [{"role": "user", "content": ip}],
+                temperature            = min(0.2, float(temperature)),
+                top_p                  = float(top_p),
+                max_tokens             = min(300, int(max_tokens)),
+                timeout_seconds        = float(timeout_seconds),
+                max_retry              = int(max_retry),
+                retry_interval_seconds = float(retry_interval_seconds),
             )
         except LLMError as exc:
             _log_jargon_step(
                 "jargon.infer.fail",
-                chat_id=chat_id,
-                fields={
+                chat_id = chat_id,
+                fields  = {
                     "term": term,
                     "error_type": type(exc).__name__,
                     "elapsed_s": round(time.monotonic() - it0, 3),
@@ -234,22 +234,22 @@ async def mine_jargon(
                 warning=True,
             )
             continue
-        c2 = (((r2.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
-        obj = parse_first_json_object(str(c2)) or {}
+        c2      = (((r2.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
+        obj     = parse_first_json_object(str(c2)) or {}
         meaning = str(obj.get("meaning", "") or "").strip()
         _log_jargon_step(
             "jargon.infer.done",
-            chat_id=chat_id,
-            fields={"term": term, "elapsed_s": round(time.monotonic() - it0, 3)},
+            chat_id = chat_id,
+            fields  = {"term": term, "elapsed_s": round(time.monotonic() - it0, 3)},
         )
         if meaning:
-            rec.meaning = meaning[:200].strip()
+            rec.meaning     = meaning[:200].strip()
             rec.is_complete = True
         # 模型输出可以解释术语，但绝不能扩大其可见范围。
-        rec.is_global = False
+        rec.is_global            = False
         rec.last_inference_count = rec.count
-        rec.updated_at = time.time()
+        rec.updated_at           = time.time()
         changed += 1
 
-    store.save(list(db.values()))
+    store.save(db)
     return changed

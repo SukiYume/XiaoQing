@@ -134,7 +134,7 @@ def test_every_plugin_manifest_matches_its_runtime_dependency_contract() -> None
         actual: dict[str, bool] = {}
         for dependency in dependencies:
             assert isinstance(dependency, dict), plugin_name
-            name = dependency.get("name")
+            name        = dependency.get("name")
             description = dependency.get("description")
             assert isinstance(name, str) and name, plugin_name
             assert isinstance(description, str) and description.strip(), f"{plugin_name}:{name}"

@@ -180,6 +180,7 @@
                                         },
                                         "checker": {
                                                 "models": ["deepseek-flash-thinking", "deepseek-pro", "glm-5.2"],
+                                                "request_defaults": {"thinking": {"type": "disabled"}},
                                                 "timeout_seconds": 8,
                                                 "total_timeout_seconds": 20,
                                                 "max_retry": 0

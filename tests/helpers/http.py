@@ -14,14 +14,14 @@ def bounded_json_response(payload: object, *, url: str) -> BoundedHttpResponse:
 
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     return BoundedHttpResponse(
-        url=url,
-        status=200,
-        body=body,
-        media_type="application/json",
-        charset="utf-8",
-        headers={"Content-Type": "application/json"},
-        wire_bytes=len(body),
-        decoded_bytes=len(body),
+        url           = url,
+        status        = 200,
+        body          = body,
+        media_type    = "application/json",
+        charset       = "utf-8",
+        headers       = {"Content-Type": "application/json"},
+        wire_bytes    = len(body),
+        decoded_bytes = len(body),
     )
 
 
@@ -44,18 +44,18 @@ class AiohttpResponse:
         body: bytes,
         *,
         media_type: str,
-        status: int = 200,
-        url: str = "https://example.invalid/",
-        charset: str | None = "utf-8",
+        status: int                       = 200,
+        url: str                          = "https://example.invalid/",
+        charset: str | None               = "utf-8",
         headers: Mapping[str, str] | None = None,
     ) -> None:
-        self.status = status
-        self.url = url
-        self.closed = False
-        self.content = AiohttpBodyStream(body)
+        self.status         = status
+        self.url            = url
+        self.closed         = False
+        self.content        = AiohttpBodyStream(body)
         self.content_length = len(body)
-        self.headers = dict(headers or {})
-        content_type = media_type
+        self.headers        = dict(headers or {})
+        content_type        = media_type
         if charset is not None:
             content_type = f"{content_type}; charset={charset}"
         self.headers.setdefault("Content-Type", content_type)
@@ -74,9 +74,9 @@ class AiohttpResponse:
 def aiohttp_json_response(
     payload: object,
     *,
-    status: int = 200,
-    media_type: str = "application/json",
-    url: str = "https://example.invalid/",
+    status: int                       = 200,
+    media_type: str                   = "application/json",
+    url: str                          = "https://example.invalid/",
     headers: Mapping[str, str] | None = None,
 ) -> AiohttpResponse:
     """构造尚待生产有界传输读取的 JSON 响应。"""
@@ -84,29 +84,29 @@ def aiohttp_json_response(
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     return AiohttpResponse(
         body,
-        status=status,
-        media_type=media_type,
-        url=url,
-        headers=headers,
+        status     = status,
+        media_type = media_type,
+        url        = url,
+        headers    = headers,
     )
 
 
 def aiohttp_text_response(
     text: str,
     *,
-    status: int = 200,
-    media_type: str = "text/plain",
-    url: str = "https://example.invalid/",
+    status: int                       = 200,
+    media_type: str                   = "text/plain",
+    url: str                          = "https://example.invalid/",
     headers: Mapping[str, str] | None = None,
 ) -> AiohttpResponse:
     """构造尚待生产有界传输读取的 UTF-8 文本响应。"""
 
     return AiohttpResponse(
         text.encode("utf-8"),
-        status=status,
-        media_type=media_type,
-        url=url,
-        headers=headers,
+        status     = status,
+        media_type = media_type,
+        url        = url,
+        headers    = headers,
     )
 
 
@@ -114,7 +114,7 @@ class QueuedAiohttpSession:
     """记录标准 ``request`` 调用，并按顺序返回预置响应。"""
 
     def __init__(self, *responses: AiohttpResponse) -> None:
-        self.responses = list(responses)
+        self.responses                                       = list(responses)
         self.requests: list[tuple[str, str, dict[str, Any]]] = []
 
     def queue(self, *responses: AiohttpResponse) -> None:

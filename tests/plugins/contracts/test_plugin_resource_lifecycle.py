@@ -25,7 +25,7 @@ from tests.helpers.settings_snapshot import with_settings_reader
 def _chat_context(
     *,
     data_dir: Path,
-    user_limit: int = 1,
+    user_limit: int   = 1,
     global_limit: int = 10,
 ) -> SimpleNamespace:
     return with_settings_reader(
@@ -39,10 +39,10 @@ def _chat_context(
                     }
                 },
             },
-            http_session=object(),
-            data_dir=data_dir,
-            logger=MagicMock(),
-            secrets={
+            http_session = object(),
+            data_dir     = data_dir,
+            logger       = MagicMock(),
+            secrets      = {
                 "plugins": {
                     "chat": {
                         "token": "token",
@@ -59,7 +59,7 @@ def _chat_context(
 async def test_chat_quota_resets_at_business_date_boundary(monkeypatch, tmp_path):
     context = _chat_context(data_dir=tmp_path)
     current_date = ["2026-07-14"]
-    calls = 0
+    calls        = 0
 
     async def fake_call(*_args, **_kwargs):
         nonlocal calls
@@ -69,10 +69,10 @@ async def test_chat_quota_resets_at_business_date_boundary(monkeypatch, tmp_path
     monkeypatch.setattr(chat_main, "_business_date", lambda _context: current_date[0])
     monkeypatch.setattr(chat_main, "call_coze_api", fake_call)
 
-    first = await chat_main.handle("chat", "first", {"user_id": 7}, context)
-    denied = await chat_main.handle("chat", "second", {"user_id": 7}, context)
+    first           = await chat_main.handle("chat", "first", {"user_id": 7}, context)
+    denied          = await chat_main.handle("chat", "second", {"user_id": 7}, context)
     current_date[0] = "2026-07-15"
-    next_day = await chat_main.handle("chat", "third", {"user_id": 7}, context)
+    next_day        = await chat_main.handle("chat", "third", {"user_id": 7}, context)
 
     assert text_segments_text(first) == "ok"
     assert "额度已用完" in text_segments_text(denied)
@@ -114,7 +114,7 @@ async def test_chat_concurrent_reservations_cannot_oversubscribe(monkeypatch, tm
     context = _chat_context(data_dir=tmp_path, user_limit=1, global_limit=1)
     entered = asyncio.Event()
     release = asyncio.Event()
-    calls = 0
+    calls   = 0
 
     async def fake_call(*_args, **_kwargs):
         nonlocal calls
@@ -142,7 +142,7 @@ def test_bounded_file_cache_enforces_lru_ttl_entry_and_byte_limits(tmp_path):
         tmp_path / "entries",
         FileCacheLimits(max_entries=2, max_bytes=100, ttl_seconds=60),
     )
-    first = entry_cache.put("first.jpg", b"1")
+    first  = entry_cache.put("first.jpg", b"1")
     second = entry_cache.put("second.jpg", b"2")
     assert first is not None and second is not None
     old = time.time() - 10
@@ -194,10 +194,10 @@ class _FakeAdnmbClient:
     created: ClassVar[list[_FakeAdnmbClient]] = []
 
     def __init__(self, session, cache_dir: Path, uuid: str = "") -> None:
-        self.session = session
-        self.cache_dir = cache_dir
-        self.uuid = uuid
-        self.closed = False
+        self.session     = session
+        self.cache_dir   = cache_dir
+        self.uuid        = uuid
+        self.closed      = False
         self.close_calls = 0
         self.created.append(self)
 
@@ -209,11 +209,11 @@ class _FakeAdnmbClient:
 def _adnmb_context(tmp_path: Path) -> SimpleNamespace:
     return with_settings_reader(
         SimpleNamespace(
-            current_user_id=None,
-            http_session=_SharedSession(),
-            secrets={"plugins": {"adnmb": {"uuid": "shared"}}},
-            state={},
-            data_dir=tmp_path / "data",
+            current_user_id = None,
+            http_session    = _SharedSession(),
+            secrets         = {"plugins": {"adnmb": {"uuid": "shared"}}},
+            state           = {},
+            data_dir        = tmp_path / "data",
         )
     )
 
@@ -225,7 +225,7 @@ async def test_adnmb_client_registry_evicts_lru_and_shutdown_closes_wrappers_onl
     _FakeAdnmbClient.created = []
     monkeypatch.setattr(adnmb_main, "AdnmbClient", _FakeAdnmbClient)
     monkeypatch.setattr(adnmb_main, "MAX_CACHED_CLIENTS", 2)
-    context = _adnmb_context(tmp_path)
+    context   = _adnmb_context(tmp_path)
     cache_dir = context.data_dir / "images"
 
     first = adnmb_main._get_client(context, cache_dir, user_id="1")
@@ -249,7 +249,7 @@ def test_adnmb_client_registry_expires_idle_entries(monkeypatch, tmp_path):
     _FakeAdnmbClient.created = []
     monkeypatch.setattr(adnmb_main, "AdnmbClient", _FakeAdnmbClient)
     monkeypatch.setattr(adnmb_main, "CLIENT_IDLE_TTL_SECONDS", 1)
-    context = _adnmb_context(tmp_path)
+    context   = _adnmb_context(tmp_path)
     cache_dir = context.data_dir / "images"
 
     first = adnmb_main._get_client(context, cache_dir, user_id="1")
@@ -279,9 +279,9 @@ async def test_adnmb_forum_cache_has_ttl_capacity_and_copy_boundary(monkeypatch,
     monkeypatch.setattr("plugins.adnmb.adapi.MAX_FORUM_CACHE_ENTRIES", client_module_limit)
     monkeypatch.setattr(client, "_get", fake_get)
 
-    first = await client.get_forum_list()
+    first            = await client.get_forum_list()
     first["mutated"] = "outside"
-    cached = await client.get_forum_list()
+    cached           = await client.get_forum_list()
     assert calls == 1
     assert len(cached) == client_module_limit
     assert "mutated" not in cached
@@ -292,7 +292,7 @@ async def test_adnmb_forum_cache_has_ttl_capacity_and_copy_boundary(monkeypatch,
 
 
 def test_disabled_adnmb_user_module_is_removed_from_runtime_tree():
-    root = REPOSITORY_ROOT
+    root       = REPOSITORY_ROOT
     plugin_dir = root / "plugins" / "adnmb"
 
     assert not (plugin_dir / "user.py").exists()

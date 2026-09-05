@@ -25,16 +25,16 @@ class _Context:
         self,
         data_dir: Path,
         *,
-        user_id: object = 123,
+        user_id: object  = 123,
         group_id: object = None,
     ) -> None:
-        self.data_dir = data_dir
-        self.current_user_id = user_id
+        self.data_dir         = data_dir
+        self.current_user_id  = user_id
         self.current_group_id = group_id
-        self.request_id = "smalltalk-test-request"
-        self.logger = logging.getLogger("test.smalltalk")
-        self.config: object = {"plugins": {"smalltalk": {"voice_probability": 0.0}}}
-        self.chat_reply = SimpleNamespace(
+        self.request_id       = "smalltalk-test-request"
+        self.logger           = logging.getLogger("test.smalltalk")
+        self.config: object   = {"plugins": {"smalltalk": {"voice_probability": 0.0}}}
+        self.chat_reply       = SimpleNamespace(
             reply=AsyncMock(return_value=smalltalk.segments("provider response"))
         )
         self.voice_synthesis = SimpleNamespace(
@@ -43,8 +43,8 @@ class _Context:
             )
         )
         self.capabilities = SimpleNamespace(
-            chat_reply=self.chat_reply,
-            voice_synthesis=None,
+            chat_reply      = self.chat_reply,
+            voice_synthesis = None,
         )
 
     def get_settings_snapshot(self):
@@ -321,8 +321,8 @@ async def test_list_qa_exact_query_and_empty_states(
     await smalltalk._add_qa(context, "天气 雨")
     await smalltalk._add_qa(context, "天气预报 多云")
 
-    index = text_segments_text(await smalltalk.handle("qa_list", "", event, context))
-    exact = text_segments_text(await smalltalk.handle("qa_list", "天气", event, context))
+    index   = text_segments_text(await smalltalk.handle("qa_list", "", event, context))
+    exact   = text_segments_text(await smalltalk.handle("qa_list", "天气", event, context))
     missing = text_segments_text(await smalltalk.handle("qa_list", "天气预", event, context))
 
     assert "天气" in index and "天气预报" in index
@@ -558,11 +558,11 @@ async def test_qa_hot_path_caches_snapshot_and_offloads_json_io(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _write_json(smalltalk._qa_file(context), {"缓存问题": ["缓存回答"]})
-    event_loop_thread = threading.get_ident()
-    load_threads: list[int] = []
+    event_loop_thread        = threading.get_ident()
+    load_threads: list[int]  = []
     write_threads: list[int] = []
-    original_load = smalltalk._load_json
-    original_write = smalltalk._write_json
+    original_load            = smalltalk._load_json
+    original_write           = smalltalk._write_json
 
     def tracked_load(path: Path, default: object) -> object:
         load_threads.append(threading.get_ident())
@@ -575,9 +575,9 @@ async def test_qa_hot_path_caches_snapshot_and_offloads_json_io(
     monkeypatch.setattr(smalltalk, "_load_json", tracked_load)
     monkeypatch.setattr(smalltalk, "_write_json", tracked_write)
 
-    first = await smalltalk.handle_smalltalk("缓存问题", event, context)
+    first  = await smalltalk.handle_smalltalk("缓存问题", event, context)
     second = await smalltalk.handle_smalltalk("缓存问题", event, context)
-    added = await smalltalk.handle("qa", "新问题 新回答", event, context)
+    added  = await smalltalk.handle("qa", "新问题 新回答", event, context)
 
     assert text_segments_text(first) == text_segments_text(second) == "缓存回答"
     assert "成功" in text_segments_text(added)
@@ -591,7 +591,7 @@ async def test_qa_hot_path_caches_snapshot_and_offloads_json_io(
 async def test_chat_provider_receives_only_normalized_actor(
     context: _Context,
 ) -> None:
-    context.current_user_id = "42"
+    context.current_user_id  = "42"
     context.current_group_id = "84"
 
     result = await smalltalk._call_chat_api("private prompt", context)
@@ -619,12 +619,12 @@ async def test_invalid_chat_provider_result_uses_fallback(
 @pytest.mark.asyncio
 async def test_missing_or_failed_chat_provider_uses_fallback(context: _Context) -> None:
     context.capabilities.chat_reply = None
-    missing = await smalltalk._call_chat_api("test", context)
+    missing                         = await smalltalk._call_chat_api("test", context)
     assert text_segments_text(missing) == "暂时无法回复，请稍后再试~"
 
-    context.capabilities.chat_reply = context.chat_reply
+    context.capabilities.chat_reply      = context.chat_reply
     context.chat_reply.reply.side_effect = RuntimeError("private provider detail")
-    failed = await smalltalk._call_chat_api("test", context)
+    failed                               = await smalltalk._call_chat_api("test", context)
     assert text_segments_text(failed) == "暂时无法回复，请稍后再试~"
     assert "private provider detail" not in text_segments_text(failed)
 
@@ -712,7 +712,7 @@ async def test_voice_success_concatenates_bounded_text(
 ) -> None:
     _set_voice_probability(context, 1.0)
     context.capabilities.voice_synthesis = context.voice_synthesis
-    reply = [
+    reply                                = [
         {"type": "text", "data": {"text": "第一"}},
         {"type": "text", "data": {"text": "第二"}},
     ]
@@ -773,9 +773,9 @@ async def test_invalid_voice_provider_result_keeps_text(
     context: _Context,
 ) -> None:
     _set_voice_probability(context, 1.0)
-    context.capabilities.voice_synthesis = context.voice_synthesis
+    context.capabilities.voice_synthesis                 = context.voice_synthesis
     context.voice_synthesis.synthesize_text.return_value = provider_result
-    reply = smalltalk.segments("文字")
+    reply                                                = smalltalk.segments("文字")
 
     assert await smalltalk._maybe_convert_to_voice(reply, context) == reply
 
@@ -783,9 +783,9 @@ async def test_invalid_voice_provider_result_keeps_text(
 @pytest.mark.asyncio
 async def test_voice_provider_exception_keeps_text(context: _Context) -> None:
     _set_voice_probability(context, 1.0)
-    context.capabilities.voice_synthesis = context.voice_synthesis
+    context.capabilities.voice_synthesis                = context.voice_synthesis
     context.voice_synthesis.synthesize_text.side_effect = RuntimeError("private voice detail")
-    reply = smalltalk.segments("文字")
+    reply                                               = smalltalk.segments("文字")
 
     result = await smalltalk._maybe_convert_to_voice(reply, context)
 

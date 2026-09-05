@@ -16,28 +16,28 @@ from core.interfaces import PluginContextProtocol
 from core.plugin_base import has_control_characters, run_sync, segments
 from core.public_errors import public_error_message, public_error_response
 
-MAX_ARGUMENT_CHARS = 512
-MAX_QUERY_CHARS = 256
-MAX_RESULTS = 100
-DEFAULT_RESULTS = 10
-MAX_MANIFEST_BYTES = 32 * 1024
-MAX_DICTIONARY_BYTES = 4 * 1024 * 1024
-MAX_DICTIONARY_ENTRIES = 50_000
-MAX_PAGE = MAX_DICTIONARY_ENTRIES
+MAX_ARGUMENT_CHARS        = 512
+MAX_QUERY_CHARS           = 256
+MAX_RESULTS               = 100
+DEFAULT_RESULTS           = 10
+MAX_MANIFEST_BYTES        = 32 * 1024
+MAX_DICTIONARY_BYTES      = 4 * 1024 * 1024
+MAX_DICTIONARY_ENTRIES    = 50_000
+MAX_PAGE                  = MAX_DICTIONARY_ENTRIES
 MAX_DICTIONARY_LINE_CHARS = 2_048
-MAX_SOURCE_CHARS = 256
-MAX_DESTINATION_CHARS = 1_024
+MAX_SOURCE_CHARS          = 256
+MAX_DESTINATION_CHARS     = 1_024
 
-_HELP_ALIASES = frozenset({"help", "帮助"})
-_EXACT_OPTIONS = frozenset({"-e", "--exact"})
-_LIMIT_OPTIONS = frozenset({"-n", "--num", "--size", "--page-size"})
-_PAGE_OPTIONS = frozenset({"-p", "--page"})
-_SHA256_PATTERN = re.compile(r"[0-9a-fA-F]{64}\Z")
-_LIMIT_PATTERN = re.compile(r"[1-9][0-9]{0,2}\Z")
-_PAGE_PATTERN = re.compile(r"[1-9][0-9]{0,4}\Z")
+_HELP_ALIASES    = frozenset({"help", "帮助"})
+_EXACT_OPTIONS   = frozenset({"-e", "--exact"})
+_LIMIT_OPTIONS   = frozenset({"-n", "--num", "--size", "--page-size"})
+_PAGE_OPTIONS    = frozenset({"-p", "--page"})
+_SHA256_PATTERN  = re.compile(r"[0-9a-fA-F]{64}\Z")
+_LIMIT_PATTERN   = re.compile(r"[1-9][0-9]{0,2}\Z")
+_PAGE_PATTERN    = re.compile(r"[1-9][0-9]{0,4}\Z")
 _CHINESE_PATTERN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0002fa1f]")
 
-Messages = list[dict[str, Any]]
+Messages       = list[dict[str, Any]]
 QueryDirection = Literal["chinese_to_english", "english_to_chinese"]
 
 HELP_TEXT = """📖 天文学词典
@@ -89,10 +89,10 @@ class DictionaryRequest:
     """一次已经消除选项歧义的词典请求。"""
 
     action: Literal["help", "query"]
-    query: str = ""
+    query: str        = ""
     exact_match: bool = False
-    max_results: int = DEFAULT_RESULTS
-    page: int = 1
+    max_results: int  = DEFAULT_RESULTS
+    page: int         = 1
 
 
 def _clean_query(value: object) -> str:
@@ -155,14 +155,14 @@ def _parse_request(args: object) -> DictionaryRequest:
             return DictionaryRequest("help")
         raise ValueError("help 子命令不接受额外参数；用法：/dict help")
 
-    exact_match = False
-    limit_seen = False
-    page_seen = False
-    max_results = DEFAULT_RESULTS
-    page = 1
+    exact_match             = False
+    limit_seen              = False
+    page_seen               = False
+    max_results             = DEFAULT_RESULTS
+    page                    = 1
     query_tokens: list[str] = []
-    options_enabled = True
-    index = 0
+    options_enabled         = True
+    index                   = 0
     while index < len(tokens):
         token = tokens[index]
         if options_enabled and token == "--":
@@ -178,14 +178,14 @@ def _parse_request(args: object) -> DictionaryRequest:
             if index >= len(tokens):
                 raise ValueError("每页条数选项缺少数值")
             max_results = _parse_limit(tokens[index])
-            limit_seen = True
+            limit_seen  = True
         elif options_enabled and token in _PAGE_OPTIONS:
             if page_seen:
                 raise ValueError("页码选项不能重复")
             index += 1
             if index >= len(tokens):
                 raise ValueError("页码选项缺少数值")
-            page = _parse_page(tokens[index])
+            page      = _parse_page(tokens[index])
             page_seen = True
         elif options_enabled and token.startswith("-") and token != "-":
             raise ValueError(f"未知选项：{token}")
@@ -195,10 +195,10 @@ def _parse_request(args: object) -> DictionaryRequest:
 
     return DictionaryRequest(
         "query",
-        query=_clean_query(" ".join(query_tokens)),
-        exact_match=exact_match,
-        max_results=max_results,
-        page=page,
+        query       = _clean_query(" ".join(query_tokens)),
+        exact_match = exact_match,
+        max_results = max_results,
+        page        = page,
     )
 
 
@@ -211,7 +211,7 @@ def _query_command(
 ) -> str:
     """构造查询词优先、可复制执行且无歧义的规范命令。"""
 
-    parts = ["/dict"]
+    parts              = ["/dict"]
     options: list[str] = []
     if exact_match:
         options.append("--exact")
@@ -250,18 +250,18 @@ def _read_manifest(path: Path) -> dict[str, Any]:
 def _resource_spec(manifest: dict[str, Any], direction: QueryDirection) -> ResourceSpec:
     """提取一项资源约束，并同时施加独立于清单的硬上限。"""
 
-    files = manifest.get("files")
+    files    = manifest.get("files")
     raw_spec = files.get(direction) if isinstance(files, dict) else None
     if type(manifest.get("schema_version")) is not int or manifest["schema_version"] != 1:
         raw_spec = None
     if not isinstance(raw_spec, dict):
         raise DictionaryDataError("天文学词典资源清单无效；请重新安装完整发行包")
 
-    filename = raw_spec.get("filename")
-    expected_sha256 = raw_spec.get("sha256")
-    expected_bytes = raw_spec.get("bytes")
+    filename         = raw_spec.get("filename")
+    expected_sha256  = raw_spec.get("sha256")
+    expected_bytes   = raw_spec.get("bytes")
     expected_entries = raw_spec.get("entries")
-    valid_filename = (
+    valid_filename   = (
         isinstance(filename, str)
         and 0 < len(filename) <= 64
         and "/" not in filename
@@ -309,7 +309,7 @@ def _load_dictionary(
     if len(lines) != spec.entry_count:
         raise DictionaryDataError(f"天文学词典数据校验失败: {spec.filename}")
 
-    entries: list[DictionaryEntry] = []
+    entries: list[DictionaryEntry]   = []
     seen_pairs: set[tuple[str, str]] = set()
     for line in lines:
         if not line or len(line) > MAX_DICTIONARY_LINE_CHARS:
@@ -340,8 +340,8 @@ def _load_dictionary(
 def _load_direction(plugin_dir: Path, direction: QueryDirection) -> tuple[DictionaryEntry, ...]:
     """根据清单定位一份发行资产，并以文件元数据刷新解析缓存。"""
 
-    manifest = _read_manifest(plugin_dir / "assets" / "manifest.json")
-    spec = _resource_spec(manifest, direction)
+    manifest  = _read_manifest(plugin_dir / "assets" / "manifest.json")
+    spec      = _resource_spec(manifest, direction)
     dict_file = plugin_dir / "assets" / spec.filename
     try:
         file_info = dict_file.lstat()
@@ -434,8 +434,8 @@ def _exact_miss_message(
         "\n查看全部："
         + _query_command(
             query,
-            exact_match=False,
-            max_results=DEFAULT_RESULTS,
+            exact_match = False,
+            max_results = DEFAULT_RESULTS,
         )
     )
     return "\n".join(lines)
@@ -452,16 +452,16 @@ def _query_astrodict_sync(
 
     if _CHINESE_PATTERN.search(query) is not None:
         direction_key: QueryDirection = "chinese_to_english"
-        direction_label = "中译英"
+        direction_label               = "中译英"
     else:
-        direction_key = "english_to_chinese"
+        direction_key   = "english_to_chinese"
         direction_label = "英译中"
     try:
         entries = _load_direction(plugin_dir, direction_key)
     except DictionaryDataError as exc:
         return str(exc)
 
-    folded = query.casefold()
+    folded   = query.casefold()
     keywords = folded.split()
     if exact_match:
         all_matches = [entry for entry in entries if entry.source_folded == folded]
@@ -483,16 +483,16 @@ def _query_astrodict_sync(
     if page > total_pages:
         return f"❌ 第 {page} 页超出范围（共 {total_pages} 页）\n最后一页：" + _query_command(
             query,
-            exact_match=exact_match,
-            max_results=max_results,
-            page=total_pages,
+            exact_match = exact_match,
+            max_results = max_results,
+            page        = total_pages,
         )
 
     page_start = (page - 1) * max_results
-    page_end = page_start + max_results
-    matches = all_matches[page_start:page_end]
-    mode = "｜精确匹配" if exact_match else ""
-    lines = [f"📖 “{query}”｜{direction_label}{mode}", ""]
+    page_end   = page_start + max_results
+    matches    = all_matches[page_start:page_end]
+    mode       = "｜精确匹配" if exact_match else ""
+    lines      = [f"📖 “{query}”｜{direction_label}{mode}", ""]
     lines.extend(
         f"{index}. {entry.source} → {entry.destination}"
         for index, entry in enumerate(matches, page_start + 1)
@@ -506,9 +506,9 @@ def _query_astrodict_sync(
             "上一页："
             + _query_command(
                 query,
-                exact_match=exact_match,
-                max_results=max_results,
-                page=page - 1,
+                exact_match = exact_match,
+                max_results = max_results,
+                page        = page - 1,
             )
         )
     if page < total_pages:
@@ -516,9 +516,9 @@ def _query_astrodict_sync(
             "下一页："
             + _query_command(
                 query,
-                exact_match=exact_match,
-                max_results=max_results,
-                page=page + 1,
+                exact_match = exact_match,
+                max_results = max_results,
+                page        = page + 1,
             )
         )
     lines.extend(navigation)
@@ -529,8 +529,8 @@ async def query_astrodict(
     query: object,
     context: PluginContextProtocol,
     exact_match: bool = False,
-    max_results: int = DEFAULT_RESULTS,
-    page: int = 1,
+    max_results: int  = DEFAULT_RESULTS,
+    page: int         = 1,
 ) -> str:
     """校验公开调用参数，并在线程池中完成文件读取与词条扫描。"""
 
@@ -564,8 +564,8 @@ async def query_astrodict(
             public_error_message(
                 context,
                 exc,
-                logger=context.logger,
-                component="dict.search",
+                logger    = context.logger,
+                component = "dict.search",
             ),
         )
 
@@ -593,9 +593,9 @@ async def handle(
         result = await query_astrodict(
             request.query,
             context,
-            exact_match=request.exact_match,
-            max_results=request.max_results,
-            page=request.page,
+            exact_match = request.exact_match,
+            max_results = request.max_results,
+            page        = request.page,
         )
         return segments(result)
     except ValueError as exc:
@@ -606,7 +606,7 @@ async def handle(
             public_error_response(
                 context,
                 exc,
-                logger=context.logger,
-                component="dict.handle",
+                logger    = context.logger,
+                component = "dict.handle",
             ),
         )

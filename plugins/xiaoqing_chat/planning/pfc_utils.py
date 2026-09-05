@@ -13,11 +13,12 @@ from ..utils.json_parsing import (
 def get_items_from_json(
     content: str,
     *items: str,
-    default_values: dict[str, Any] | None = None,
+    default_values: dict[str, Any] | None  = None,
     required_types: dict[str, type] | None = None,
-    allow_array: bool = True,
+    optional_items: tuple[str, ...]        = (),
+    allow_array: bool                      = True,
 ) -> tuple[bool, dict[str, Any] | list[dict[str, Any]]]:
-    s = (content or "").strip()
+    s                      = (content or "").strip()
     result: dict[str, Any] = {}
     if default_values:
         result.update(default_values)
@@ -55,7 +56,7 @@ def get_items_from_json(
     if not isinstance(parsed, dict):
         return False, result
 
-    for k in items:
+    for k in (*items, *optional_items):
         if k in parsed:
             result[k] = parsed[k]
 

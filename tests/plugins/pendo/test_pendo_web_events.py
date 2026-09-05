@@ -44,22 +44,22 @@ def _load_events_module():
         def __init__(self, status_code: int, detail: str):
             super().__init__(detail)
             self.status_code = status_code
-            self.detail = detail
+            self.detail      = detail
 
     fastapi.APIRouter = _Router
     fastapi.Depends = lambda dep=None: dep
     fastapi.HTTPException = _HTTPException
     fastapi.Header = lambda default=None, **_kwargs: default
     fastapi.Query = lambda default=None, **_kwargs: default
-    fastapi.Request = type("Request", (), {})
+    fastapi.Request  = type("Request", (), {})
     fastapi.Response = type("Response", (), {})
 
-    responses = types.ModuleType("fastapi.responses")
+    responses          = types.ModuleType("fastapi.responses")
     responses.Response = fastapi.Response
 
-    _orig_fastapi = sys.modules.get("fastapi")
-    _orig_responses = sys.modules.get("fastapi.responses")
-    sys.modules["fastapi"] = fastapi
+    _orig_fastapi                    = sys.modules.get("fastapi")
+    _orig_responses                  = sys.modules.get("fastapi.responses")
+    sys.modules["fastapi"]           = fastapi
     sys.modules["fastapi.responses"] = responses
     sys.modules.pop("plugins.pendo.web.api.events", None)
     try:
@@ -78,7 +78,7 @@ def _load_events_module():
 def test_build_events_overview_supports_multi_node_recurring_and_reminder_filters():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_events_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
+    db       = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-events"
 
     try:
@@ -162,10 +162,10 @@ def test_build_events_overview_supports_multi_node_recurring_and_reminder_filter
         db.log_reminder("ev2col_m01", "2026-03-13T09:00:00+00:00", sent=True)
 
         result = build_events_overview(
-            db=db,
-            owner_id=owner_id,
-            start_date="2026-03-01",
-            end_date="2026-03-31",
+            db         = db,
+            owner_id   = owner_id,
+            start_date = "2026-03-01",
+            end_date   = "2026-03-31",
         )
 
         assert result["summary"]["event_count"] == 3
@@ -178,22 +178,22 @@ def test_build_events_overview_supports_multi_node_recurring_and_reminder_filter
         assert any(day["date"] == "2026-03-10" for day in result["timeline_days"])
 
         sent_only = build_events_overview(
-            db=db,
-            owner_id=owner_id,
-            start_date="2026-03-01",
-            end_date="2026-03-31",
-            reminder="sent",
+            db         = db,
+            owner_id   = owner_id,
+            start_date = "2026-03-01",
+            end_date   = "2026-03-31",
+            reminder   = "sent",
         )
         assert sent_only["summary"]["event_count"] == 1
         assert sent_only["events"][0]["id"] == "ev2col_m01"
 
         meeting_only = build_events_overview(
-            db=db,
-            owner_id=owner_id,
-            start_date="2026-03-01",
-            end_date="2026-03-31",
-            category="会议",
-            kind="recurring",
+            db         = db,
+            owner_id   = owner_id,
+            start_date = "2026-03-01",
+            end_date   = "2026-03-31",
+            category   = "会议",
+            kind       = "recurring",
         )
         assert meeting_only["summary"]["event_count"] == 1
         assert meeting_only["events"][0]["id"] == "series_20260318"
@@ -205,7 +205,7 @@ def test_build_events_overview_supports_multi_node_recurring_and_reminder_filter
 def test_build_events_overview_includes_each_day_for_multi_day_events():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_events_multiday_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
+    db       = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-events-multiday"
 
     try:
@@ -222,10 +222,10 @@ def test_build_events_overview_includes_each_day_for_multi_day_events():
         )
 
         result = build_events_overview(
-            db=db,
-            owner_id=owner_id,
-            start_date="2026-03-10",
-            end_date="2026-03-12",
+            db         = db,
+            owner_id   = owner_id,
+            start_date = "2026-03-10",
+            end_date   = "2026-03-12",
         )
 
         assert result["calendar_days"]["2026-03-11"]["has_events"] is True
@@ -251,7 +251,7 @@ def test_event_schedule_converts_offset_aware_datetimes_to_default_local_time():
 def test_build_event_detail_includes_reminder_logs_and_related_instances():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_event_detail_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
+    db       = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-event-detail"
 
     try:
@@ -325,7 +325,7 @@ def test_build_event_detail_preserves_multi_node_leaf_notes():
         ROOT / ".pytest_cache" / "tmp" / f"pendo_web_event_milestone_notes_{uuid.uuid4().hex}"
     )
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
+    db       = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-event-milestone-notes"
 
     try:
@@ -373,7 +373,7 @@ def test_build_event_detail_preserves_multi_node_leaf_notes():
 def test_events_overview_and_detail_return_collection_context_for_leaf_events():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_event_graph_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
+    db       = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-web-event-graph"
 
     try:
@@ -422,10 +422,10 @@ def test_events_overview_and_detail_return_collection_context_for_leaf_events():
         )
 
         overview = build_events_overview(
-            db=db,
-            owner_id=owner_id,
-            start_date="2030-05-01",
-            end_date="2030-05-31",
+            db         = db,
+            owner_id   = owner_id,
+            start_date = "2030-05-01",
+            end_date   = "2030-05-31",
         )
 
         assert overview["summary"]["event_count"] == 2
@@ -454,34 +454,34 @@ def test_events_overview_and_detail_return_collection_context_for_leaf_events():
 def test_events_collection_api_creates_updates_and_deletes_graph():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_event_graph_api_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
-    owner_id = "u-web-event-graph-api"
+    db         = Database(str(temp_dir / "pendo.db"))
+    owner_id   = "u-web-event-graph-api"
     events_api = _load_events_module()
 
     try:
         created = events_api.create_event_collection(
             body=events_api.EventCollectionCreate(
-                title="发布项目",
-                category="项目",
-                location="线上",
-                reminder_rules=[{"offset_seconds": 3600}, {"offset_seconds": 0}],
-                children=[
+                title          = "发布项目",
+                category       = "项目",
+                location       = "线上",
+                reminder_rules = [{"offset_seconds": 3600}, {"offset_seconds": 0}],
+                children       = [
                     events_api.EventCollectionChildCreate(
-                        title="提审",
-                        start_time="2030-05-01T10:00:00",
+                        title      = "提审",
+                        start_time = "2030-05-01T10:00:00",
                     ),
                     events_api.EventCollectionChildCreate(
-                        title="上线",
-                        start_time="2030-05-02T18:00:00",
+                        title      = "上线",
+                        start_time = "2030-05-02T18:00:00",
                     ),
                 ],
             ),
-            owner_id=owner_id,
-            db=db,
+            owner_id = owner_id,
+            db       = db,
         )
 
         collection_id = created["data"]["id"]
-        child_ids = created["data"]["child_ids"]
+        child_ids     = created["data"]["child_ids"]
         assert is_canonical_internal_id(collection_id)
         assert created["data"]["display_id"] == collection_id[:8]
         assert len(set(child_ids)) == 2
@@ -499,8 +499,8 @@ def test_events_collection_api_creates_updates_and_deletes_graph():
         updated = events_api.update_collection(
             collection_id,
             body=events_api.EventCollectionUpdate(title="发布项目 v2"),
-            owner_id=owner_id,
-            db=db,
+            owner_id = owner_id,
+            db       = db,
         )
         assert updated["ok"] is True
         assert db.get_event_collection(collection_id, owner_id)["title"] == "发布项目 v2"
@@ -520,28 +520,28 @@ def test_events_collection_api_rejects_invalid_child_without_partial_writes():
         ROOT / ".pytest_cache" / "tmp" / f"pendo_web_event_graph_invalid_child_{uuid.uuid4().hex}"
     )
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
-    owner_id = "u-web-event-graph-invalid-child"
+    db         = Database(str(temp_dir / "pendo.db"))
+    owner_id   = "u-web-event-graph-invalid-child"
     events_api = _load_events_module()
 
     try:
         with pytest.raises(events_api.HTTPException) as exc_info:
             events_api.create_event_collection(
                 body=events_api.EventCollectionCreate(
-                    title="发布项目",
-                    children=[
+                    title    = "发布项目",
+                    children = [
                         events_api.EventCollectionChildCreate(
-                            title="提审",
-                            start_time="2030-05-01T10:00:00",
+                            title      = "提审",
+                            start_time = "2030-05-01T10:00:00",
                         ),
                         events_api.EventCollectionChildCreate(
-                            title="上线",
-                            start_time="not-a-date",
+                            title      = "上线",
+                            start_time = "not-a-date",
                         ),
                     ],
                 ),
-                owner_id=owner_id,
-                db=db,
+                owner_id = owner_id,
+                db       = db,
             )
 
         assert exc_info.value.status_code == 422
@@ -574,27 +574,27 @@ def test_events_collection_update_rejects_invalid_reminder_rules():
         ROOT / ".pytest_cache" / "tmp" / f"pendo_web_event_graph_invalid_rules_{uuid.uuid4().hex}"
     )
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
-    owner_id = "u-web-event-graph-invalid-rules"
+    db         = Database(str(temp_dir / "pendo.db"))
+    owner_id   = "u-web-event-graph-invalid-rules"
     events_api = _load_events_module()
 
     try:
         created = events_api.create_event_collection(
             body=events_api.EventCollectionCreate(
-                title="发布项目",
-                children=[
+                title    = "发布项目",
+                children = [
                     events_api.EventCollectionChildCreate(
-                        title="提审",
-                        start_time="2030-05-01T10:00:00",
+                        title      = "提审",
+                        start_time = "2030-05-01T10:00:00",
                     ),
                     events_api.EventCollectionChildCreate(
-                        title="上线",
-                        start_time="2030-05-02T18:00:00",
+                        title      = "上线",
+                        start_time = "2030-05-02T18:00:00",
                     ),
                 ],
             ),
-            owner_id=owner_id,
-            db=db,
+            owner_id = owner_id,
+            db       = db,
         )
 
         with pytest.raises(events_api.HTTPException) as exc_info:
@@ -603,8 +603,8 @@ def test_events_collection_update_rejects_invalid_reminder_rules():
                 body=events_api.EventCollectionUpdate(
                     reminder_rules=[{"offset_seconds": -120}],
                 ),
-                owner_id=owner_id,
-                db=db,
+                owner_id = owner_id,
+                db       = db,
             )
 
         assert exc_info.value.status_code == 422
@@ -617,7 +617,7 @@ def test_events_collection_update_rejects_invalid_reminder_rules():
 def test_build_events_overview_batches_reminder_log_reads(monkeypatch):
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_events_batch_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
+    db       = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-events-batch"
 
     try:
@@ -646,7 +646,7 @@ def test_build_events_overview_batches_reminder_log_reads(monkeypatch):
         from plugins.pendo.web.analytics import events_overview as events_overview_module
 
         original_fetch = events_overview_module._fetch_reminder_logs_by_event_ids
-        call_info = {"count": 0, "event_ids": []}
+        call_info      = {"count": 0, "event_ids": []}
 
         def wrapped_fetch(db_obj, event_ids):
             call_info["count"] += 1
@@ -665,10 +665,10 @@ def test_build_events_overview_batches_reminder_log_reads(monkeypatch):
         monkeypatch.setattr(Database, "get_reminder_logs", fail_get_reminder_logs)
 
         result = build_events_overview(
-            db=db,
-            owner_id=owner_id,
-            start_date="2026-03-01",
-            end_date="2026-03-31",
+            db         = db,
+            owner_id   = owner_id,
+            start_date = "2026-03-01",
+            end_date   = "2026-03-31",
         )
 
         assert call_info["count"] == 1
@@ -683,7 +683,7 @@ def test_build_events_overview_batches_reminder_log_reads(monkeypatch):
 def test_build_events_overview_counts_only_visible_nodes_and_in_range_reminders():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_events_visible_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
+    db       = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-events-visible"
 
     try:
@@ -736,10 +736,10 @@ def test_build_events_overview_counts_only_visible_nodes_and_in_range_reminders(
         )
 
         result = build_events_overview(
-            db=db,
-            owner_id=owner_id,
-            start_date="2026-05-01",
-            end_date="2026-05-31",
+            db         = db,
+            owner_id   = owner_id,
+            start_date = "2026-05-01",
+            end_date   = "2026-05-31",
         )
 
         assert result["summary"]["event_count"] == 1
@@ -755,7 +755,7 @@ def test_build_events_overview_counts_only_visible_nodes_and_in_range_reminders(
 def test_build_events_overview_accepts_offset_aware_imported_events():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_events_offset_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
+    db       = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-events-offset"
 
     try:
@@ -776,10 +776,10 @@ def test_build_events_overview_accepts_offset_aware_imported_events():
         )
 
         result = build_events_overview(
-            db=db,
-            owner_id=owner_id,
-            start_date="2026-01-01",
-            end_date="2026-01-31",
+            db         = db,
+            owner_id   = owner_id,
+            start_date = "2026-01-01",
+            end_date   = "2026-01-31",
         )
 
         assert result["summary"]["event_count"] == 1

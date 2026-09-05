@@ -21,9 +21,9 @@ class GenerationLimiter:
     _chat_inflight: dict[str, int] = field(default_factory=dict)
     _user_inflight: dict[str, int] = field(default_factory=dict)
     _user_calls: dict[str, deque[float]] = field(default_factory=dict)
-    max_tracked_users: int = 10_000
+    max_tracked_users: int        = 10_000
     sweep_interval_seconds: float = 300.0
-    _last_sweep_at: float = 0.0
+    _last_sweep_at: float         = 0.0
 
     def _sweep_user_calls(self, cutoff: float) -> None:
         for tracked_user, tracked_calls in tuple(self._user_calls.items()):
@@ -43,7 +43,7 @@ class GenerationLimiter:
         max_per_user: int,
         max_calls_per_user_per_day: int,
     ) -> AsyncIterator[None]:
-        now = time.time()
+        now    = time.time()
         cutoff = now - 86400.0
         async with self._lock:
             if now - self._last_sweep_at >= max(0.0, self.sweep_interval_seconds) or len(

@@ -11,7 +11,7 @@ from ...utils.time_utils import TimezoneHelper
 from ..utils import collection_payload, item_to_dict
 from .event_schedule import build_event_schedule
 
-JsonObject = dict[str, Any]
+JsonObject     = dict[str, Any]
 ScheduledEvent = tuple[date, JsonObject]
 
 
@@ -26,7 +26,7 @@ def _month_bounds(day: date) -> tuple[date, date]:
 def _display_fields(row: JsonObject, collection: JsonObject | None) -> JsonObject:
     """将多节点集合标题、地点和分类叠加到日程显示行。"""
 
-    title = row["title"]
+    title    = row["title"]
     subtitle = row["subtitle"]
     location = row["location"]
     category = row["category"]
@@ -34,7 +34,7 @@ def _display_fields(row: JsonObject, collection: JsonObject | None) -> JsonObjec
     if collection and collection.get("kind") == "multi_node":
         collection_title = str(collection.get("title") or "").strip()
         if collection_title:
-            title = collection_title
+            title    = collection_title
             subtitle = row["title"] if row["title"] != collection_title else row["subtitle"]
         location = location or collection.get("location") or ""
         category = category or collection.get("category") or ""
@@ -98,8 +98,8 @@ def _local_datetime(
     user_timezone = TimezoneHelper.get_user_timezone(owner_id, db)
     if value is None:
         return cast(datetime, TimezoneHelper.now(user_timezone)).replace(
-            tzinfo=None,
-            microsecond=0,
+            tzinfo      = None,
+            microsecond = 0,
         )
     if value.tzinfo is not None:
         return value.astimezone(user_timezone).replace(tzinfo=None, microsecond=0)
@@ -132,7 +132,7 @@ def _scheduled_events(
     entries: list[ScheduledEvent] = []
     for item in raw_events:
         collection_id = item.event_collection_id
-        collection = collections.get(str(collection_id)) if collection_id else None
+        collection    = collections.get(str(collection_id)) if collection_id else None
         entries.extend(_event_entries(item, range_start, range_end, user_timezone, collection))
     return entries
 
@@ -147,8 +147,8 @@ def _recent_counts(
     """用一次聚合查询统计近三十天日记和已完成任务。"""
 
     user_timezone = TimezoneHelper.get_user_timezone(owner_id, db)
-    start_epoch = TimezoneHelper.parse(start_time.isoformat(), user_timezone).timestamp()
-    end_epoch = TimezoneHelper.parse(end_time.isoformat(), user_timezone).timestamp()
+    start_epoch   = TimezoneHelper.parse(start_time.isoformat(), user_timezone).timestamp()
+    end_epoch     = TimezoneHelper.parse(end_time.isoformat(), user_timezone).timestamp()
 
     row = (
         db.get_connection()
@@ -190,17 +190,17 @@ def build_dashboard_overview(
 ) -> JsonObject:
     """构建当前用户的完整看板响应。"""
 
-    current = _local_datetime(db, owner_id, now)
+    current    = _local_datetime(db, owner_id, now)
     today_date = current.date()
     month_start_date, month_end_date = _month_bounds(today_date)
     agenda_end_date = (current + timedelta(days=21)).date()
     coverage_end_date = max(month_end_date, agenda_end_date)
-    today = today_date.isoformat()
+    today             = today_date.isoformat()
     month_ago_date = today_date - timedelta(days=30)
     month_ago_time = current - timedelta(days=30)
 
     active_task_filters = {"type": "task", "status": "open"}
-    active_task_count = db.count_items(owner_id, active_task_filters)
+    active_task_count   = db.count_items(owner_id, active_task_filters)
     active_tasks = db.get_active_task_preview(owner_id, limit=8)
     tasks_completed = db.get_items(
         owner_id,
@@ -210,8 +210,8 @@ def build_dashboard_overview(
             "sort_field": "updated_at",
             "sort_order": "DESC",
         },
-        limit=16,
-        use_cache=True,
+        limit     = 16,
+        use_cache = True,
     )
 
     recent_ledger = db.get_items(
@@ -224,11 +224,21 @@ def build_dashboard_overview(
             "sort_field": "ledger_date",
             "sort_order": "DESC",
         },
-        limit=8,
-        use_cache=True,
+        limit     = 8,
+        use_cache = True,
     )
 
     month_ledger = db.aggregate_ledger_amounts_by_day(
+        owner_id,
+        {
+            "type": "ledger",
+            "date_field": "ledger_date",
+            "start_date": month_start_date.isoformat(),
+            "end_date": today,
+        },
+    )
+
+    by_currency = db.aggregate_ledger_by_currency(
         owner_id,
         {
             "type": "ledger",
@@ -242,7 +252,7 @@ def build_dashboard_overview(
         day: expense_cents / 100 for day, (expense_cents, _income_cents) in month_ledger.items()
     }
     month_expense = sum(expense_cents for expense_cents, _ in month_ledger.values()) / 100
-    month_income = sum(income_cents for _, income_cents in month_ledger.values()) / 100
+    month_income  = sum(income_cents for _, income_cents in month_ledger.values()) / 100
 
     spending_trend: list[JsonObject] = []
     for offset in range((today_date - month_start_date).days + 1):
@@ -300,6 +310,7 @@ def build_dashboard_overview(
         },
         "recent_ledger": [item_to_dict(item) for item in recent_ledger],
         "spending_trend": spending_trend,
+        "ledger_by_currency": by_currency,
         "month_summary": {
             "income": round(month_income, 2),
             "expense": round(month_expense, 2),

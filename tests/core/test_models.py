@@ -32,14 +32,14 @@ class TestOneBotEvent:
     def test_create_full_event(self):
         """测试创建完整事件"""
         event = OneBotEvent(
-            time=1234567890,
-            self_id=11111,
-            post_type="message",
-            message_type="group",
-            user_id=12345,
-            group_id=67890,
-            message=[{"type": "text", "data": {"text": "hello"}}],
-            raw_message="hello",
+            time         = 1234567890,
+            self_id      = 11111,
+            post_type    = "message",
+            message_type = "group",
+            user_id      = 12345,
+            group_id     = 67890,
+            message      = [{"type": "text", "data": {"text": "hello"}}],
+            raw_message  = "hello",
         )
         assert event.time == 1234567890
         assert event.self_id == 11111
@@ -157,11 +157,11 @@ class TestPluginCommandManifest:
     def test_create_command_manifest(self):
         """测试创建命令清单"""
         manifest = PluginCommandManifest(
-            name="echo",
-            triggers=["echo", "回显"],
-            help="回显消息",
-            admin_only=False,
-            priority=0,
+            name       = "echo",
+            triggers   = ["echo", "回显"],
+            help       = "回显消息",
+            admin_only = False,
+            priority   = 0,
         )
         assert manifest.name == "echo"
         assert manifest.triggers == ["echo", "回显"]
@@ -173,9 +173,9 @@ class TestPluginCommandManifest:
     def test_default_values(self):
         """测试默认值"""
         manifest = PluginCommandManifest(
-            name="test",
-            triggers=["test"],
-            help="test command",
+            name     = "test",
+            triggers = ["test"],
+            help     = "test command",
         )
         assert manifest.admin_only is False
         assert manifest.priority == 0
@@ -192,10 +192,10 @@ class TestPluginScheduleManifest:
     def test_create_schedule_manifest(self):
         """测试创建定时任务清单"""
         manifest = PluginScheduleManifest(
-            handler="daily_job",
-            cron={"hour": "9", "minute": "0"},
-            id="daily_9am",
-            group_ids=[123, 456],
+            handler   = "daily_job",
+            cron      = {"hour": "9", "minute": "0"},
+            id        = "daily_9am",
+            group_ids = [123, 456],
         )
         assert manifest.handler == "daily_job"
         assert manifest.cron == {"hour": "9", "minute": "0"}
@@ -206,8 +206,8 @@ class TestPluginScheduleManifest:
     def test_default_values(self):
         """测试默认值"""
         manifest = PluginScheduleManifest(
-            handler="job",
-            cron={"hour": "*"},
+            handler = "job",
+            cron    = {"hour": "*"},
         )
         assert manifest.id is None
         assert manifest.delivery == "broadcast"
@@ -217,49 +217,49 @@ class TestPluginScheduleManifest:
     def test_schedule_delivery_modes_and_silent_target_contract(self):
         for delivery in ("broadcast", "targeted", "silent"):
             manifest = PluginScheduleManifest(
-                handler="job",
-                cron={"hour": "*"},
-                delivery=delivery,
+                handler  = "job",
+                cron     = {"hour": "*"},
+                delivery = delivery,
             )
             assert manifest.delivery == delivery
 
         with pytest.raises(ValidationError, match="delivery"):
             PluginScheduleManifest(
-                handler="job",
-                cron={"hour": "*"},
-                delivery="plugin",
+                handler  = "job",
+                cron     = {"hour": "*"},
+                delivery = "plugin",
             )
         with pytest.raises(ValidationError, match="silent schedules"):
             PluginScheduleManifest(
-                handler="job",
-                cron={"hour": "*"},
-                delivery="silent",
-                group_ids=[],
+                handler   = "job",
+                cron      = {"hour": "*"},
+                delivery  = "silent",
+                group_ids = [],
             )
 
     def test_schedule_rejects_unknown_fields(self):
         with pytest.raises(ValidationError):
             PluginScheduleManifest(
-                handler="job",
-                cron={"hour": "*"},
-                dangerous_unimplemented_option=True,
+                handler                        = "job",
+                cron                           = {"hour": "*"},
+                dangerous_unimplemented_option = True,
             )
 
     def test_schedule_preserves_explicit_empty_groups_and_rejects_invalid_ids(self):
         assert (
             PluginScheduleManifest(
-                handler="job",
-                cron={"hour": "*"},
-                group_ids=[],
+                handler   = "job",
+                cron      = {"hour": "*"},
+                group_ids = [],
             ).group_ids
             == []
         )
         for group_ids in ([0], [-1], [True], [123, 123]):
             with pytest.raises(ValidationError):
                 PluginScheduleManifest(
-                    handler="job",
-                    cron={"hour": "*"},
-                    group_ids=group_ids,
+                    handler   = "job",
+                    cron      = {"hour": "*"},
+                    group_ids = group_ids,
                 )
 
 
@@ -298,24 +298,24 @@ class TestPluginManifest:
     def test_create_full_manifest(self):
         """测试创建完整清单"""
         manifest = PluginManifest(
-            name="my_plugin",
-            version="1.0.0",
-            entry="custom.py",
-            commands=[
+            name     = "my_plugin",
+            version  = "1.0.0",
+            entry    = "custom.py",
+            commands = [
                 PluginCommandManifest(
-                    name="cmd1",
-                    triggers=["cmd1"],
-                    help="Command 1",
+                    name     = "cmd1",
+                    triggers = ["cmd1"],
+                    help     = "Command 1",
                 ),
             ],
             schedule=[
                 PluginScheduleManifest(
-                    handler="job1",
-                    cron={"hour": "*"},
+                    handler = "job1",
+                    cron    = {"hour": "*"},
                 ),
             ],
-            concurrency="sequential",
-            enabled=True,
+            concurrency = "sequential",
+            enabled     = True,
         )
         assert manifest.name == "my_plugin"
         assert manifest.version == "1.0.0"
@@ -344,8 +344,8 @@ class TestPluginManifest:
 
     def test_manifest_watch_files_are_bounded_canonical_and_unique(self):
         manifest = PluginManifest(
-            name="test",
-            watch_files=["config/settings.json", "assets/catalog.json"],
+            name        = "test",
+            watch_files = ["config/settings.json", "assets/catalog.json"],
         )
         assert manifest.watch_files == ["config/settings.json", "assets/catalog.json"]
 
@@ -434,9 +434,9 @@ class TestPluginManifest:
 
     def test_service_contracts_are_closed_and_provider_scoped(self):
         service = PluginServiceManifest(
-            name="voice.synthesize_text",
-            callback="convert_text_to_voice",
-            callers=["smalltalk"],
+            name     = "voice.synthesize_text",
+            callback = "convert_text_to_voice",
+            callers  = ["smalltalk"],
         )
         manifest = PluginManifest(name="voice", services=[service])
         assert manifest.services == [service]
@@ -464,8 +464,8 @@ class TestPluginManifest:
 
         with pytest.raises(ValidationError):
             PluginManifest(
-                name="voice",
-                services=[service.model_dump(), service.model_dump()],
+                name     = "voice",
+                services = [service.model_dump(), service.model_dump()],
             )
 
         with pytest.raises(ValidationError):
@@ -488,12 +488,12 @@ class TestPluginManifest:
 
     def test_capabilities_are_manifest_declared_but_core_owner_scoped(self):
         assert PluginManifest(
-            name="bot_core",
-            capabilities=["secret_admin"],
+            name         = "bot_core",
+            capabilities = ["secret_admin"],
         ).capabilities == ["secret_admin"]
         assert PluginManifest(
-            name="codex",
-            capabilities=["admin_sessions", "execution_timeout_exempt"],
+            name         = "codex",
+            capabilities = ["admin_sessions", "execution_timeout_exempt"],
         ).capabilities == ["admin_sessions", "execution_timeout_exempt"]
 
         for payload in (
@@ -509,8 +509,8 @@ class TestPluginManifest:
 
     def test_service_consumers_and_core_observer_are_closed_contracts(self):
         smalltalk = PluginManifest(
-            name="smalltalk",
-            uses_services=["chat.reply", "voice.synthesize_text"],
+            name          = "smalltalk",
+            uses_services = ["chat.reply", "voice.synthesize_text"],
         )
         assert smalltalk.uses_services == ["chat.reply", "voice.synthesize_text"]
         observer = {

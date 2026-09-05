@@ -12,12 +12,12 @@ from ...utils.identifiers import public_id
 from ...utils.time_utils import TimezoneHelper, now_in_timezone
 from ..utils import parse_iso_date
 
-JsonObject = dict[str, Any]
+JsonObject         = dict[str, Any]
 CadenceGranularity = Literal["day", "week", "month", "year"]
 
-_NOTE_CATEGORY_SQL = "COALESCE(NULLIF(TRIM(i.category), ''), '未分类')"
+_NOTE_CATEGORY_SQL    = "COALESCE(NULLIF(TRIM(i.category), ''), '未分类')"
 _NOTE_CREATED_DAY_SQL = "pendo_local_date(i.created_at, :timezone)"
-_NOTE_TAGS_SQL = "CASE WHEN json_valid(i.tags) THEN i.tags ELSE '[]' END"
+_NOTE_TAGS_SQL        = "CASE WHEN json_valid(i.tags) THEN i.tags ELSE '[]' END"
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,25 +52,25 @@ def _resolve_period(
 ) -> _NotePeriod:
     """校验请求范围，并为当前周期裁掉尚未发生的未来日期。"""
 
-    today_day = _parse_argument_day(today, "today") or now_in_timezone(owner_id, db).date()
+    today_day   = _parse_argument_day(today, "today") or now_in_timezone(owner_id, db).date()
     range_start = _parse_argument_day(start_date, "start_date")
-    range_end = _parse_argument_day(end_date, "end_date")
+    range_end   = _parse_argument_day(end_date, "end_date")
     if (range_start is None) != (range_end is None):
         raise ValueError("start_date and end_date must be provided together")
     if range_start is None or range_end is None:
         return _NotePeriod(
-            today=today_day,
-            range_start=None,
-            range_end=None,
+            today       = today_day,
+            range_start = None,
+            range_end   = None,
             cadence_start=today_day - timedelta(days=13),
-            cadence_end=today_day,
-            granularity="day",
+            cadence_end = today_day,
+            granularity = "day",
         )
     if range_start > range_end:
         raise ValueError("start_date must not be after end_date")
 
     cadence_end = today_day if range_start <= today_day <= range_end else range_end
-    span_days = (range_end - range_start).days
+    span_days   = (range_end - range_start).days
     if range_start.year != range_end.year:
         granularity: CadenceGranularity = "year"
     elif span_days > 62:
@@ -80,12 +80,12 @@ def _resolve_period(
     else:
         granularity = "day"
     return _NotePeriod(
-        today=today_day,
-        range_start=range_start,
-        range_end=range_end,
-        cadence_start=range_start,
-        cadence_end=cadence_end,
-        granularity=granularity,
+        today         = today_day,
+        range_start   = range_start,
+        range_end     = range_end,
+        cadence_start = range_start,
+        cadence_end   = cadence_end,
+        granularity   = granularity,
     )
 
 
@@ -171,7 +171,7 @@ def _note_where(
 ) -> tuple[str, dict[str, Any]]:
     """生成 overview 各条聚合查询共用的笔记过滤条件。"""
 
-    where = ["i.owner_id = :owner_id", "i.type = 'note'", "i.deleted = 0"]
+    where                  = ["i.owner_id = :owner_id", "i.type = 'note'", "i.deleted = 0"]
     params: dict[str, Any] = {"owner_id": owner_id}
     if period.range_start is not None:
         where.extend(
@@ -181,8 +181,8 @@ def _note_where(
             ]
         )
         params.update(
-            range_start=period.cadence_start.isoformat(),
-            range_end=period.cadence_end.isoformat(),
+            range_start = period.cadence_start.isoformat(),
+            range_end   = period.cadence_end.isoformat(),
         )
     if category is not None:
         where.append(f"{_NOTE_CATEGORY_SQL} = :category")
@@ -203,21 +203,21 @@ def _note_where(
 def build_notes_overview(
     db: Database,
     owner_id: str,
-    today: str | None = None,
+    today: str | None      = None,
     start_date: str | None = None,
-    end_date: str | None = None,
-    category: str | None = None,
-    tags: str | None = None,
+    end_date: str | None   = None,
+    category: str | None   = None,
+    tags: str | None       = None,
 ) -> JsonObject:
     """生成指定范围内的笔记数量、分类、标签、趋势和近期预览。"""
 
-    period = _resolve_period(db, owner_id, today, start_date, end_date)
+    period              = _resolve_period(db, owner_id, today, start_date, end_date)
     normalized_category = (category or "").strip() or None
-    tag_query = (tags or "").strip().casefold()
+    tag_query           = (tags or "").strip().casefold()
     where, params = _note_where(period, owner_id, normalized_category, tag_query)
     params["timezone"] = TimezoneHelper.get_user_timezone(owner_id, db).key
     week_start = period.today - timedelta(days=6)
-    conn = db.get_connection()
+    conn    = db.get_connection()
     summary = conn.execute(
         f"""
         SELECT COUNT(*) AS total_count,
@@ -231,7 +231,7 @@ def build_notes_overview(
         """,
         {**params, "week_start": week_start.isoformat(), "today": period.today.isoformat()},
     ).fetchone()
-    total_count = int(summary["total_count"] or 0)
+    total_count  = int(summary["total_count"] or 0)
     total_length = int(summary["total_length"] or 0)
     tagged_count = int(summary["tagged_count"] or 0)
 
@@ -360,8 +360,8 @@ def build_notes_widget_overview(
     period = _resolve_period(db, owner_id, today, None, None)
     week_start = period.today - timedelta(days=6)
     timezone_name = TimezoneHelper.get_user_timezone(owner_id, db).key
-    conn = db.get_connection()
-    summary = conn.execute(
+    conn          = db.get_connection()
+    summary       = conn.execute(
         f"""
         SELECT COUNT(*) AS total_count,
                COALESCE(SUM(CASE WHEN {_NOTE_CREATED_DAY_SQL} BETWEEN :week_start AND :today

@@ -6,8 +6,9 @@ from typing import Final
 
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
+from tests.helpers.pendo_client_source import replace_js_source
 
-ROOT: Final = REPOSITORY_ROOT
+ROOT: Final          = REPOSITORY_ROOT
 LEDGER_CLIENT: Final = ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "ledger.js"
 FORMAT_CLIENT: Final = ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "utils" / "format.js"
 
@@ -54,7 +55,7 @@ def _ledger_source_for_test() -> str:
     source = LEDGER_CLIENT.read_text(encoding="utf-8")
     format_source = FORMAT_CLIENT.read_text(encoding="utf-8").replace("export ", "")
     format_runtime = f"""
-const {{ finiteNumber, formatAmount, isValidDateInput, nonNegativeInteger }} = (() => {{
+const {{ finiteNumber, formatAmount: baseFormatAmount, isValidDateInput, nonNegativeInteger }} = (() => {{
 {format_source}
     return {{ finiteNumber, formatAmount, isValidDateInput, nonNegativeInteger }};
 }})();
@@ -106,7 +107,7 @@ const initCustomSelects = () => {};""",
         (
             """import {
     finiteNumber,
-    formatAmount,
+    formatAmount as baseFormatAmount,
     isValidDateInput,
     nonNegativeInteger,
 } from '../utils/format.js';""",
@@ -168,8 +169,7 @@ const subscribeDataChanges = (...args) => globalThis.__subscribeDataChanges(...a
         ),
     )
     for original, replacement in replacements:
-        assert original in source
-        source = source.replace(original, replacement)
+        source = replace_js_source(source, original, replacement)
 
     return (
         source
@@ -229,8 +229,8 @@ def _run_ledger_client(script: str) -> None:
     assert_node_esm_contract(
         _ledger_source_for_test(),
         script,
-        cwd=ROOT,
-        setup=LEDGER_SETUP,
+        cwd   = ROOT,
+        setup = LEDGER_SETUP,
     )
 
 
@@ -266,7 +266,7 @@ def test_ledger_amount_item_and_summary_boundaries() -> None:
             transfer: 12.9,
             balance: Symbol('bad'),
             count: 3.9,
-        }), { income: 0, expense: 0, transfer: 12.9, balance: 0, count: 3 });
+        }), { currency: 'CNY', income: 0, expense: 0, transfer: 12.9, balance: 0, count: 3 });
         assert.equal(client.normalizeLedgerItem(null), null);
         """
     )
@@ -290,6 +290,7 @@ def test_ledger_filters_share_validated_range_and_amount_params() -> None:
             start_date: '1970-01-01', end_date: '2026-03-15',
         });
         assert.deepEqual(client.currentFilterParams(), {
+            currency: 'CNY',
             start_date: '1970-01-01',
             end_date: '2026-03-15',
             transaction_type: 'expense',

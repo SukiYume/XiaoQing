@@ -61,8 +61,8 @@ def _message_length(message: Any) -> int:
             length += 1
             continue
         raw_data = segment.get("data")
-        data = raw_data if isinstance(raw_data, Mapping) else {}
-        text = data.get("text", "")
+        data     = raw_data if isinstance(raw_data, Mapping) else {}
+        text     = data.get("text", "")
         length += len(text) if isinstance(text, str) else len(str(text))
     return length
 
@@ -107,7 +107,7 @@ class AppDeliveryMixin:
             connect_msg = f"🟢 {bot_name}已上线~"
         if not connect_msg:
             return
-        now = time.monotonic()
+        now          = time.monotonic()
         min_interval = self._connect_notification_min_interval()
         if (
             min_interval > 0
@@ -117,7 +117,7 @@ class AppDeliveryMixin:
             logger.info("Connect notification suppressed by min interval")
             return
         self._last_connect_notification_ts = now
-        message = [{"type": "text", "data": {"text": connect_msg}}]
+        message                            = [{"type": "text", "data": {"text": connect_msg}}]
         for group_id in parsed_groups:
             action = {
                 "action": "send_group_msg",
@@ -142,10 +142,10 @@ class AppDeliveryMixin:
         if self._stopping:
             logger.debug("Dropping event while XiaoQing is stopping")
             return None
-        result = await self.dispatcher.handle_event(event)
+        result  = await self.dispatcher.handle_event(event)
         receipt = getattr(result, "delivery_receipt", None)
-        segs = segments(result)
-        action = build_action(segs, event.get("user_id"), event.get("group_id"))
+        segs    = segments(result)
+        action  = build_action(segs, event.get("user_id"), event.get("group_id"))
         if not isinstance(receipt, DeliveryReceipt):
             return cast(dict[str, Any] | None, action)
         if action is None:
@@ -208,7 +208,7 @@ class AppDeliveryMixin:
 
         if self._stopping:
             return None
-        action = {"action": action_name, "params": dict(params)}
+        action    = {"action": action_name, "params": dict(params)}
         ws_client = self.ws_client
         if (
             ws_client is not None
@@ -238,7 +238,10 @@ class AppDeliveryMixin:
     ) -> bool | None:
         actions = self._prepare_action_delivery(action)
         receipt = receipt_from_action(action)
-        sink = current_action_sink.get()
+        if receipt is not None:
+            # Core 负责每个物理动作的确认，辅助发送器不能重复累计部分成功。
+            receipt.defer_to_transport()
+        sink             = current_action_sink.get()
         captured_by_sink = bool(
             not action.get(ACTION_BYPASS_SINK_KEY, False)
             and sink is not None
@@ -306,22 +309,22 @@ class AppDeliveryMixin:
 
         try:
             loaded, observer_service = self.plugin_manager.resolve_service(
-                caller_plugin="core",
-                service_name="core.observe_outgoing_action",
+                caller_plugin = "core",
+                service_name  = "core.observe_outgoing_action",
             )
         except RuntimeError as exc:
             logger.debug("Outgoing action observer unavailable: %s", exc)
             return
 
-        raw_params = action.get("params")
+        raw_params             = action.get("params")
         params: dict[str, Any] = raw_params if isinstance(raw_params, dict) else {}
-        group_id = params.get("group_id")
-        user_id = params.get("user_id")
+        group_id               = params.get("group_id")
+        user_id                = params.get("user_id")
         try:
             context = self.plugin_manager.build_context(
                 observer_service.owner,
-                user_id=user_id if group_id in (None, "") else None,
-                group_id=group_id,
+                user_id  = user_id if group_id in (None, "") else None,
+                group_id = group_id,
                 # 路由范围由上下文参数提供；生命周期主体不能伪装成用户主体携带群范围。
                 principal=self.identity_service.issue(
                     kind="lifecycle",
@@ -399,8 +402,11 @@ class AppDeliveryMixin:
             # 日志记录失败不影响消息发送，仅记录调试信息
             logger.debug("Failed to generate message preview: %s", exc)
         bypass_sink = bool(action.get(ACTION_BYPASS_SINK_KEY, False))
-        sink = current_action_sink.get()
+        sink        = current_action_sink.get()
         if not bypass_sink and sink is not None and getattr(sink, "is_active", True):
+            receipt = receipt_from_action(action)
+            if receipt is not None:
+                receipt.defer_to_transport()
             await sink(
                 {key: value for key, value in action.items() if key != ACTION_BYPASS_SINK_KEY}
             )
@@ -509,7 +515,7 @@ class AppDeliveryMixin:
     ) -> list[dict[str, Any]]:
         if not await self._claim_inbound_event(event):
             return []
-        sink = current_action_sink.get()
+        sink  = current_action_sink.get()
         event = dict(event)
         event.setdefault("_source", default_source)
 
@@ -612,5 +618,21 @@ class AppDeliveryMixin:
             await self._send_action(action)
 
     async def _handle_inbound_event(self, event: dict[str, Any]) -> list[dict[str, Any]]:
-        """处理来自 Inbound Server 的事件"""
-        return await self._collect_actions_for_event(event, default_source="inbound_http")
+        """接收事件；标准 HTTP 模式通过真实 action API 确认每个回复。"""
+        actions = await self._collect_actions_for_event(event, default_source="inbound_http")
+        if event.get("_source") == "inbound_http" and event.get("_http_action_delivery"):
+            for index, action in enumerate(actions):
+                try:
+                    # 脱离事件暂存器，投递失败由收据明确回滚，未知结果保持未知。
+                    action[ACTION_BYPASS_SINK_KEY] = True
+                    if await self._send_action(action) is not True:
+                        raise RuntimeError("OneBot action delivery was not acknowledged")
+                except BaseException:
+                    # 尚未尝试的其他逻辑回复也必须终结；同一收据重复结算保持幂等。
+                    for pending in actions[index + 1 :]:
+                        pending_receipt = receipt_from_action(pending)
+                        if pending_receipt is not None:
+                            await asyncio.shield(pending_receipt.record(False))
+                    raise
+            return []
+        return actions

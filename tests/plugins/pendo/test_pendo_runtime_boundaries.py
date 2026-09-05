@@ -42,11 +42,11 @@ class TestPendoRuntimeBoundaries:
 
         reset_pendo_runtime_config()
         expected = PendoRuntimeSettings(
-            web_enabled=False,
-            web_host="localhost",
-            web_port=12_003,
-            web_session_cookie_secure=True,
-            web_demo_enabled=True,
+            web_enabled               = False,
+            web_host                  = "localhost",
+            web_port                  = 12_003,
+            web_session_cookie_secure = True,
+            web_demo_enabled          = True,
         )
         assert PendoConfig.configure(
             {
@@ -111,9 +111,9 @@ class TestPendoRuntimeBoundaries:
 
                 return unsubscribe
 
-        subscription = _DummySubscription()
-        databases = []
-        database_paths = []
+        subscription     = _DummySubscription()
+        databases        = []
+        database_paths   = []
         reconfigurations = []
 
         def build_database(path):
@@ -134,12 +134,12 @@ class TestPendoRuntimeBoundaries:
             revision=1,
         )
         current_settings = {"value": initial_snapshot}
-        context = SimpleNamespace(
-            config=initial_snapshot.config,
-            config_manager=None,
+        context          = SimpleNamespace(
+            config         = initial_snapshot.config,
+            config_manager = None,
             capabilities=PluginCapabilities(config_subscription=subscription),
-            state={},
-            data_dir=tmp_path / "plugin-data" / "pendo",
+            state    = {},
+            data_dir = tmp_path / "plugin-data" / "pendo",
             logger=SimpleNamespace(info=lambda *args, **kwargs: None),
             get_settings_snapshot=lambda: current_settings["value"],
         )
@@ -200,7 +200,7 @@ class TestPendoRuntimeBoundaries:
         from plugins.pendo import main as pendo_main
 
         task_handler = _StubTaskHandler()
-        services = {
+        services     = {
             "db": object(),
             "reminder_service": object(),
             "exporter": _StubExporter(),
@@ -262,10 +262,10 @@ class TestPendoRuntimeBoundaries:
 
         from plugins.pendo import main as pendo_main
 
-        task_handler = _StubCaptureHandler()
+        task_handler  = _StubCaptureHandler()
         event_handler = _StubCaptureHandler()
         diary_handler = _StubCaptureHandler()
-        services = {
+        services      = {
             "db": object(),
             "reminder_service": object(),
             "exporter": _StubExporter(),
@@ -293,7 +293,7 @@ class TestPendoRuntimeBoundaries:
         from plugins.pendo import main as pendo_main
 
         note_handler = _StubCaptureHandler()
-        services = {
+        services     = {
             "db": object(),
             "reminder_service": object(),
             "exporter": _StubExporter(),
@@ -377,7 +377,7 @@ class TestPendoRuntimeBoundaries:
         db = Database(str(tmp_path / "pendo-export.db"))
         request.addfinalizer(db.cleanup)
         owner = "u-export-ranges"
-        rows = [
+        rows  = [
             {
                 "id": "ld_may1",
                 "owner_id": owner,
@@ -456,14 +456,14 @@ class TestPendoRuntimeBoundaries:
         month_result = service.export_markdown(owner, "本月账本 month ledger", {})
         month_text = Path(month_result["file_path"]).read_text(encoding="utf-8")
         assert month_result["record_count"] == 3
-        assert "2026-05-01 00:00 .. 2026-05-31 23:59" in month_result["range_label"]
+        assert "2026-05-01 00:00+08:00 .. 2026-05-31 23:59+08:00" in month_result["range_label"]
         assert "五月一日账目" in month_text
         assert "五月四日账目" in month_text
 
         week_result = service.export_markdown(owner, "本周账本 week ledger", {})
         week_text = Path(week_result["file_path"]).read_text(encoding="utf-8")
         assert week_result["record_count"] == 2
-        assert "2026-04-27 00:00 .. 2026-05-03 23:59" in week_result["range_label"]
+        assert "2026-04-27 00:00+08:00 .. 2026-05-03 23:59+08:00" in week_result["range_label"]
         assert "五月一日账目" in week_text
         assert "五月三日账目" in week_text
         assert "五月四日账目" not in week_text
@@ -479,7 +479,7 @@ class TestPendoRuntimeBoundaries:
     def test_pendo_help_root_is_overview_and_subcommand_is_detailed(self):
         from plugins.pendo import main as pendo_main
 
-        overview = pendo_main._show_help("")
+        overview    = pendo_main._show_help("")
         export_help = pendo_main._show_help("export")
 
         assert "🧭 **可用命令**" in overview
@@ -568,9 +568,9 @@ class TestPendoRuntimeBoundaries:
 
         db = Database(":memory:")
         try:
-            settings_key = db._cache_key("settings", "u-empty")
+            settings_key     = db._cache_key("settings", "u-empty")
             resolved_filters = db._resolve_item_filters("u-empty", {"type": "note"})
-            items_key = db._cache_key("items", "u-empty", resolved_filters, 10, 0)
+            items_key        = db._cache_key("items", "u-empty", resolved_filters, 10, 0)
             db._cache_set(settings_key, {})
             db._cache_set(items_key, [])
 
@@ -590,7 +590,7 @@ class TestPendoRuntimeBoundaries:
 
         calls = []
         state = {"running": True}
-        db = object()
+        db    = object()
 
         monkeypatch.setattr(web_server, "is_running", lambda: state["running"])
 
@@ -645,7 +645,7 @@ class TestPendoRuntimeBoundaries:
             def cleanup(self):
                 self.cleaned = True
 
-        database = _DummyDb()
+        database        = _DummyDb()
         runtime_service = PendoRuntimeService()
         runtime_service.adopt_database(database)
         stopped = []
@@ -678,8 +678,8 @@ class TestPendoRuntimeBoundaries:
         from plugins.pendo import main as pendo_main
 
         metrics: list[tuple[str, float, bool]] = []
-        context = SimpleNamespace()
-        log_messages: list[str] = []
+        context                                = SimpleNamespace()
+        log_messages: list[str]                = []
         log = SimpleNamespace(info=lambda msg, *args: log_messages.append(msg % args))
 
         async def fake_record_metric(_context, name, duration, is_error=False):
@@ -688,7 +688,7 @@ class TestPendoRuntimeBoundaries:
         async def cancelled_task():
             raise asyncio.CancelledError()
 
-        original_record_metric = pendo_main._record_metric
+        original_record_metric    = pendo_main._record_metric
         pendo_main._record_metric = fake_record_metric
         try:
             result = asyncio.run(
@@ -709,8 +709,8 @@ class TestPendoRuntimeBoundaries:
             _build_task(f"d{i}", "2026-02-10", f"2026-02-10T08:00:0{i}") for i in range(1, 9)
         ]
         work_tasks = [_build_task(f"w{i}", "work", f"2026-02-10T09:00:0{i}") for i in range(1, 8)]
-        db = _FakeDb(date_tasks + work_tasks)
-        handler = TaskHandler(db)
+        db         = _FakeDb(date_tasks + work_tasks)
+        handler    = TaskHandler(db)
 
         result = asyncio.run(handler.list_tasks("u1", "done page:2", {}))
 

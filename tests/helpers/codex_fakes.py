@@ -11,7 +11,7 @@ StreamExchange = Callable[[bytes], Awaitable[tuple[bytes, bytes]]]
 class _MemoryStdin:
     def __init__(self, process: CallbackStreamingProcess) -> None:
         self._process = process
-        self._closed = False
+        self._closed  = False
 
     def write(self, payload: bytes) -> None:
         if self._closed:
@@ -32,15 +32,15 @@ class _MemoryStdin:
 class _MemoryReader:
     def __init__(self, process: CallbackStreamingProcess, index: int) -> None:
         self._process = process
-        self._index = index
-        self._offset = 0
+        self._index   = index
+        self._offset  = 0
 
     async def read(self, size: int) -> bytes:
         output = (await self._process._exchange_result())[self._index]
         if self._offset >= len(output):
             return b""
-        end = min(len(output), self._offset + max(1, size))
-        chunk = output[self._offset : end]
+        end          = min(len(output), self._offset + max(1, size))
+        chunk        = output[self._offset : end]
         self._offset = end
         return chunk
 
@@ -52,18 +52,18 @@ class CallbackStreamingProcess:
         self,
         exchange: StreamExchange,
         *,
-        pid: int = 43_210,
+        pid: int               = 43_210,
         returncode: int | None = None,
     ) -> None:
-        self.pid = pid
-        self.returncode = returncode
-        self.stdin_payload = bytearray()
-        self._exchange = exchange
-        self._stdin_closed = asyncio.Event()
+        self.pid                                                      = pid
+        self.returncode                                               = returncode
+        self.stdin_payload                                            = bytearray()
+        self._exchange                                                = exchange
+        self._stdin_closed                                            = asyncio.Event()
         self._exchange_task: asyncio.Task[tuple[bytes, bytes]] | None = None
-        self.stdin = _MemoryStdin(self)
-        self.stdout = _MemoryReader(self, 0)
-        self.stderr = _MemoryReader(self, 1)
+        self.stdin                                                    = _MemoryStdin(self)
+        self.stdout                                                   = _MemoryReader(self, 0)
+        self.stderr                                                   = _MemoryReader(self, 1)
 
     async def _exchange_result(self) -> tuple[bytes, bytes]:
         await self._stdin_closed.wait()

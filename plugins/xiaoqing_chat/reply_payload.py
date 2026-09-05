@@ -54,7 +54,7 @@ def _build_batch_segments(
 
     built: list[dict[str, Any]] = []
     consumed_indexes: list[int] = []
-    cursor = 0
+    cursor                      = 0
     for match in MEDIA_PLACEHOLDER_RE.finditer(batch):
         text_prefix = batch[cursor : match.start()].strip("\r\n")
         if text_prefix.strip():
@@ -109,17 +109,17 @@ def _build_reply_payload_core(
             outbound_batches.append(trailing_segments)
 
     visible_template = template_with_fallback_placeholders(display_template, media_sequence)
-    visible_text = rebuild_message_content(
+    visible_text     = rebuild_message_content(
         visible_template,
         media_sequence,
         resolved_items=media_sequence,
     )
 
     return ReplyPayload(
-        display_text=visible_text,
-        outbound_batches=outbound_batches,
-        media_items=media_sequence,
-        parts=payload_parts,
+        display_text     = visible_text,
+        outbound_batches = outbound_batches,
+        media_items      = media_sequence,
+        parts            = payload_parts,
     )
 
 
@@ -128,7 +128,7 @@ def build_reply_payload_from_parts(
     *,
     display_parts=None,
 ) -> ReplyPayload:
-    normalized_reply_parts = normalize_message_parts(reply_parts)
+    normalized_reply_parts   = normalize_message_parts(reply_parts)
     normalized_display_parts = (
         normalize_message_parts(display_parts)
         if display_parts is not None
@@ -137,8 +137,8 @@ def build_reply_payload_from_parts(
     reply_template, _legacy_media_items = message_parts_to_legacy(normalized_reply_parts)
     display_template, _display_media_items = message_parts_to_legacy(normalized_display_parts)
     return _build_reply_payload_core(
-        reply_template=reply_template,
-        media_sequence=_media_sequence_from_parts(normalized_reply_parts),
-        display_template=display_template,
-        payload_parts=normalized_display_parts,
+        reply_template   = reply_template,
+        media_sequence   = _media_sequence_from_parts(normalized_reply_parts),
+        display_template = display_template,
+        payload_parts    = normalized_display_parts,
     )

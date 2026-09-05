@@ -17,9 +17,9 @@ from tests.helpers.config_test_support import (
     pytest,
 )
 
-config_file = _fixture_support.config_file
-config_manager = _fixture_support.config_manager
-secrets_file = _fixture_support.secrets_file
+config_file     = _fixture_support.config_file
+config_manager  = _fixture_support.config_manager
+secrets_file    = _fixture_support.secrets_file
 temp_config_dir = _fixture_support.temp_config_dir
 
 
@@ -34,9 +34,9 @@ class TestConfigSnapshot:
 
     def test_builtin_base_methods_cannot_mutate_snapshot_containers(self):
         snapshot = ConfigSnapshot(
-            config={"nested": {"enabled": True}, "items": [1, 2]},
-            secrets={"plugins": {"demo": {"token": "secret"}}},
-            revision=7,
+            config   = {"nested": {"enabled": True}, "items": [1, 2]},
+            secrets  = {"plugins": {"demo": {"token": "secret"}}},
+            revision = 7,
         )
 
         with pytest.raises(TypeError):
@@ -71,7 +71,7 @@ class TestConfigSnapshot:
         assert snapshot.revision == 7
 
     def test_constructor_detaches_mutable_inputs(self):
-        config = {"nested": {"items": [1]}}
+        config  = {"nested": {"items": [1]}}
         secrets = {"plugins": {"demo": {"token": "before"}}}
         snapshot = ConfigSnapshot(config=config, secrets=secrets)
 
@@ -83,11 +83,11 @@ class TestConfigSnapshot:
 
     def test_materialize_snapshot_value_returns_detached_mutable_containers(self):
         snapshot = ConfigSnapshot(
-            config={"nested": {"items": [1, {"enabled": True}]}},
-            secrets={},
+            config  = {"nested": {"items": [1, {"enabled": True}]}},
+            secrets = {},
         )
 
-        materialized = materialize_snapshot_value(snapshot.config["nested"])
+        materialized                        = materialize_snapshot_value(snapshot.config["nested"])
         materialized["items"][1]["enabled"] = False
         materialized["items"].append(2)
 
@@ -95,7 +95,7 @@ class TestConfigSnapshot:
         assert snapshot.config["nested"] == {"items": (1, {"enabled": True})}
 
     def test_replace_snapshot_detaches_caller_aliases(self, config_manager: ConfigManager):
-        config = {"nested": {"items": [1]}}
+        config  = {"nested": {"items": [1]}}
         secrets = {"plugins": {"demo": {"token": "before"}}}
         config_manager._replace_snapshot(config, secrets)
 
@@ -118,13 +118,13 @@ class TestConfigSnapshot:
         candidate_config: dict[str, Any],
         candidate_secrets: dict[str, Any],
     ):
-        before_config = config_manager.config
-        before_secrets = config_manager.secrets
-        before_internal_config = config_manager.snapshot().mutable_config()
+        before_config           = config_manager.config
+        before_secrets          = config_manager.secrets
+        before_internal_config  = config_manager.snapshot().mutable_config()
         before_internal_secrets = config_manager.snapshot().mutable_secrets()
-        before_revision = config_manager.revision
-        before_generation = config_manager._source_generation
-        before_sources = (
+        before_revision         = config_manager.revision
+        before_generation       = config_manager._source_generation
+        before_sources          = (
             config_manager._config_source.signature,
             config_manager._secrets_source.signature,
         )
@@ -176,7 +176,7 @@ class TestConfigHotReload:
         self, temp_config_dir: Path, config_file: Path, secrets_file: Path
     ):
         """测试配置重新加载"""
-        manager = ConfigManager(config_file, secrets_file)
+        manager       = ConfigManager(config_file, secrets_file)
         initial_value = manager.config.get("bot_name")
 
         # 修改配置文件

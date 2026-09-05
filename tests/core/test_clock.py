@@ -1,3 +1,4 @@
+# 验证时钟和随机源替身为测试提供确定性结果。
 """
 Tests for core/clock.py - Clock and random interfaces for testability
 """
@@ -50,7 +51,7 @@ def test_iclock_protocol_has_now_method():
 @pytest.mark.unit
 def test_iclock_protocol_with_mock():
     """Test IClock protocol with mock"""
-    mock_clock = MagicMock()
+    mock_clock                  = MagicMock()
     mock_clock.now.return_value = 123.456
 
     assert hasattr(mock_clock, "now")
@@ -86,7 +87,7 @@ def test_irandom_protocol_has_required_methods():
 @pytest.mark.unit
 def test_irandom_protocol_with_mock():
     """Test IRandom protocol with mock"""
-    mock_random = MagicMock()
+    mock_random                     = MagicMock()
     mock_random.random.return_value = 0.75
     mock_random.choice.return_value = "selected"
 
@@ -103,7 +104,7 @@ def test_irandom_protocol_with_mock():
 def test_system_clock_now():
     """Test SystemClock.now returns current time"""
     clock = SystemClock()
-    now = clock.now()
+    now   = clock.now()
 
     assert isinstance(now, float)
     assert now > 0
@@ -113,7 +114,7 @@ def test_system_clock_now():
 def test_system_clock_now_increases():
     """Test SystemClock.now increases over time"""
     clock = SystemClock()
-    now1 = clock.now()
+    now1  = clock.now()
     time.sleep(0.01)  # Small delay
     now2 = clock.now()
 
@@ -123,9 +124,9 @@ def test_system_clock_now_increases():
 @pytest.mark.unit
 def test_system_clock_matches_time_time():
     """Test SystemClock.now matches time.time()"""
-    clock = SystemClock()
+    clock     = SystemClock()
     clock_now = clock.now()
-    time_now = time.time()
+    time_now  = time.time()
 
     # Should be very close (within 1 second)
     assert abs(clock_now - time_now) < 1.0
@@ -148,7 +149,7 @@ def test_system_clock_has_now_method():
 def test_system_random_random():
     """Test SystemRandom.random returns valid range"""
     random_obj = SystemRandom()
-    value = random_obj.random()
+    value      = random_obj.random()
 
     assert isinstance(value, float)
     assert 0.0 <= value < 1.0
@@ -158,7 +159,7 @@ def test_system_random_random():
 def test_system_random_random_distribution():
     """Test SystemRandom.random produces varied values"""
     random_obj = SystemRandom()
-    values = [random_obj.random() for _ in range(100)]
+    values     = [random_obj.random() for _ in range(100)]
 
     # Should have variety
     assert len(set(values)) > 90  # Most should be unique
@@ -169,7 +170,7 @@ def test_system_random_random_distribution():
 def test_system_random_choice():
     """Test SystemRandom.choice returns element from sequence"""
     random_obj = SystemRandom()
-    seq = [1, 2, 3, 4, 5]
+    seq        = [1, 2, 3, 4, 5]
 
     result = random_obj.choice(seq)
     assert result in seq
@@ -179,7 +180,7 @@ def test_system_random_choice():
 def test_system_random_choice_single_element():
     """Test SystemRandom.choice with single element"""
     random_obj = SystemRandom()
-    seq = ["only"]
+    seq        = ["only"]
 
     result = random_obj.choice(seq)
     assert result == "only"
@@ -189,7 +190,7 @@ def test_system_random_choice_single_element():
 def test_system_random_choice_string():
     """Test SystemRandom.choice with string"""
     random_obj = SystemRandom()
-    result = random_obj.choice("hello")
+    result     = random_obj.choice("hello")
 
     assert result in "hello"
 
@@ -243,7 +244,7 @@ def test_custom_random_implementation():
     class DeterministicRandom:
         def __init__(self, sequence):
             self._sequence = sequence
-            self._index = 0
+            self._index    = 0
 
         def random(self):
             value = self._sequence[self._index % len(self._sequence)]
@@ -296,7 +297,7 @@ def test_mock_random_for_testing():
     class MockRandom:
         def __init__(self, return_values=None):
             self._values = return_values or [0.5]
-            self._index = 0
+            self._index  = 0
 
         def random(self):
             value = self._values[self._index % len(self._values)]
@@ -325,7 +326,7 @@ def test_clock_and_random_together():
 
     class MockSystem:
         def __init__(self):
-            self.clock = SystemClock()
+            self.clock  = SystemClock()
             self.random = SystemRandom()
 
         def get_timestamp_and_random(self):
@@ -335,7 +336,7 @@ def test_clock_and_random_together():
             }
 
     system = MockSystem()
-    data = system.get_timestamp_and_random()
+    data   = system.get_timestamp_and_random()
 
     assert "timestamp" in data
     assert "random_value" in data

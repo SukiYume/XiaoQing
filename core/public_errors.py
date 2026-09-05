@@ -22,13 +22,13 @@ PUBLIC_ERROR_CODE = "XQ-PLUGIN-UNEXPECTED"
 PUBLIC_ERROR_TEXT = "操作失败，请稍后重试"
 
 _MAX_REQUEST_ID_CHARS = 64
-_MAX_COMPONENT_CHARS = 96
-_MAX_RAW_CHARS = 32_768
-_MAX_MESSAGE_CHARS = 4_096
-_MAX_TRACEBACK_CHARS = 12_288
-_MAX_SECRET_DEPTH = 8
-_MAX_SECRET_VALUES = 512
-_MAX_EXCEPTION_CHAIN = 8
+_MAX_COMPONENT_CHARS  = 96
+_MAX_RAW_CHARS        = 32_768
+_MAX_MESSAGE_CHARS    = 4_096
+_MAX_TRACEBACK_CHARS  = 12_288
+_MAX_SECRET_DEPTH     = 8
+_MAX_SECRET_VALUES    = 512
+_MAX_EXCEPTION_CHAIN  = 8
 _MAX_TRACEBACK_FRAMES = 48
 
 _SAFE_REQUEST_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}\Z")
@@ -39,11 +39,11 @@ _CREDENTIAL_ASSIGNMENT = re.compile(
     r"(?i)\b(api[_-]?key|access[_-]?token|auth[_-]?token|password|passwd|secret)"
     r"\s*[:=]\s*[^\s,;]+"
 )
-_URL = re.compile(r"(?i)\b(?:https?|wss?|ftp)://[^\s\"'<>]+")
-_UNC_PATH = re.compile(r"(?<![\\\w])\\\\[^\\/\s\"'<>|]+[\\/][^\s\"'<>|]+")
+_URL          = re.compile(r"(?i)\b(?:https?|wss?|ftp)://[^\s\"'<>]+")
+_UNC_PATH     = re.compile(r"(?<![\\\w])\\\\[^\\/\s\"'<>|]+[\\/][^\s\"'<>|]+")
 _WINDOWS_PATH = re.compile(r"(?<![\w])(?:[A-Za-z]:[\\/])[^\s\"'<>|]+")
-_POSIX_PATH = re.compile(r"(?<![\w:])/(?!/)(?:[^/\s\"'<>|]+/)*[^/\s\"'<>|:,;)\]}]+")
-_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+_POSIX_PATH   = re.compile(r"(?<![\w:])/(?!/)(?:[^/\s\"'<>|]+/)*[^/\s\"'<>|:,;)\]}]+")
+_CONTROL      = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
 def _safe_getattr(value: object, name: str, default: Any = None) -> Any:
@@ -90,11 +90,11 @@ def _collect_secret_strings(root: object) -> tuple[tuple[str, ...], bool]:
     if root is None:
         return (), True
 
-    values: set[str] = set()
-    seen: set[int] = set()
+    values: set[str]                = set()
+    seen: set[int]                  = set()
     stack: list[tuple[object, int]] = [(root, 0)]
-    complete = True
-    visited_values = 0
+    complete                        = True
+    visited_values                  = 0
 
     while stack:
         current, depth = stack.pop()
@@ -184,13 +184,13 @@ def _redact_known_secrets(text: str, secrets: tuple[str, ...]) -> str:
             if match < 0:
                 break
             redacted[match : match + len(secret)] = b"\x01" * len(secret)
-            start = match + 1
+            start                                 = match + 1
 
     if not any(redacted):
         return text
 
     chunks: list[str] = []
-    index = 0
+    index             = 0
     while index < len(text):
         if not redacted[index]:
             next_redacted = redacted.find(1, index)
@@ -292,10 +292,10 @@ def _base_exception_attribute(exc: BaseException, name: str, default: Any = None
 
 
 def _traceback_frames(exc: BaseException, secrets: tuple[str, ...]) -> tuple[list[str], bool]:
-    current = _base_exception_attribute(exc, "__traceback__")
+    current           = _base_exception_attribute(exc, "__traceback__")
     frames: list[str] = []
-    seen: set[int] = set()
-    truncated = False
+    seen: set[int]    = set()
+    truncated         = False
 
     while current is not None:
         current_id = id(current)
@@ -310,7 +310,7 @@ def _traceback_frames(exc: BaseException, secrets: tuple[str, ...]) -> tuple[lis
             code = current.tb_frame.f_code
             filename = _bounded_string(code.co_filename, limit=1_024) or "<unknown>"
             function = _bounded_string(code.co_name, limit=256) or "<unknown>"
-            lineno = int(current.tb_lineno)
+            lineno     = int(current.tb_lineno)
             frame_text = f'File "{filename}", line {lineno}, in {function}'
             frames.append(_sanitize_text(frame_text, secrets=secrets, limit=1_536))
             current = current.tb_next
@@ -326,10 +326,10 @@ def _exception_chain(
     exc: BaseException, secrets: tuple[str, ...], *, include_messages: bool
 ) -> dict[str, Any]:
     current: BaseException | None = exc
-    seen: set[int] = set()
+    seen: set[int]                = set()
     entries: list[dict[str, Any]] = []
-    relation = "root"
-    chain_truncated = False
+    relation                      = "root"
+    chain_truncated               = False
 
     while current is not None:
         current_id = id(current)
@@ -350,8 +350,8 @@ def _exception_chain(
         else:
             safe_message = _sanitize_text(
                 message,
-                secrets=secrets,
-                limit=_MAX_MESSAGE_CHARS,
+                secrets = secrets,
+                limit   = _MAX_MESSAGE_CHARS,
             )
 
         frames, frames_truncated = _traceback_frames(current, secrets)
@@ -367,23 +367,23 @@ def _exception_chain(
 
         cause = _base_exception_attribute(current, "__cause__")
         if isinstance(cause, BaseException):
-            current = cause
+            current  = cause
             relation = "cause"
             continue
         suppressed = bool(_base_exception_attribute(current, "__suppress_context__", False))
-        context = _base_exception_attribute(current, "__context__")
+        context    = _base_exception_attribute(current, "__context__")
         if not suppressed and isinstance(context, BaseException):
-            current = context
+            current  = context
             relation = "context"
             continue
         current = None
 
-    root = entries[0]
+    root           = entries[0]
     traceback_text = " | ".join(
         f"{entry['relation']} {entry['type']}: " + "; ".join(entry["frames"]) for entry in entries
     )
     if len(traceback_text) > _MAX_TRACEBACK_CHARS:
-        traceback_text = f"{traceback_text[:_MAX_TRACEBACK_CHARS]}<truncated>"
+        traceback_text  = f"{traceback_text[:_MAX_TRACEBACK_CHARS]}<truncated>"
         chain_truncated = True
     return {
         "exception_type": root["type"],
@@ -434,7 +434,7 @@ def public_error_message(
         secret_values,
     )
     safe_component = _normalize_component(component, secret_values)
-    diagnostic = _exception_chain(
+    diagnostic     = _exception_chain(
         exc,
         secret_values,
         include_messages=secret_scan_complete,
@@ -463,8 +463,8 @@ def public_error_response(
     message = public_error_message(
         context,
         exc,
-        logger=logger,
-        component=component,
+        logger    = logger,
+        component = component,
     )
     return [{"type": "text", "data": {"text": message}}]
 

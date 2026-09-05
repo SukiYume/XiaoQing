@@ -61,42 +61,42 @@ except ModuleNotFoundError:  # Direct script execution outside the repository ro
         validate_bounded_xml,
     )
 
-_utils_module = importlib.import_module(f"{__package__}.utils" if __package__ else "utils")
+_utils_module  = importlib.import_module(f"{__package__}.utils" if __package__ else "utils")
 clean_arxiv_id = _utils_module.clean_arxiv_id
 
 # ============================================================
 # 配置
 # ============================================================
-DATA_PREP_DIR = Path(__file__).resolve().parent
-TRAIN_MODEL_DIR = DATA_PREP_DIR.parent
-CACHE_DIR = DATA_PREP_DIR / "cache"
+DATA_PREP_DIR    = Path(__file__).resolve().parent
+TRAIN_MODEL_DIR  = DATA_PREP_DIR.parent
+CACHE_DIR        = DATA_PREP_DIR / "cache"
 POSITIVE_IDS_CSV = CACHE_DIR / "positive_ids.csv"
-OUTPUT_CSV = TRAIN_MODEL_DIR / "arxiv_papers_with_abstract.csv"
+OUTPUT_CSV       = TRAIN_MODEL_DIR / "arxiv_papers_with_abstract.csv"
 
 ABSTRACT_CACHE_FILE = CACHE_DIR / "abstract_cache.json"  # 用于缓存补充获取的正样本摘要
 
-BATCH_SIZE = 100
-SLEEP_SECONDS = 3
-API_TIMEOUT = 120
-MAX_RETRIES = 3
+BATCH_SIZE       = 100
+SLEEP_SECONDS    = 3
+API_TIMEOUT      = 120
+MAX_RETRIES      = 3
 ATOM_BODY_LIMITS = BodyLimits(
-    max_wire_bytes=8 * 1024 * 1024,
-    max_decoded_bytes=16 * 1024 * 1024,
-    max_decompression_ratio=100,
+    max_wire_bytes          = 8 * 1024 * 1024,
+    max_decoded_bytes       = 16 * 1024 * 1024,
+    max_decompression_ratio = 100,
 )
 ATOM_XML_LIMITS = XmlLimits(
-    max_bytes=ATOM_BODY_LIMITS.max_decoded_bytes,
-    max_depth=64,
-    max_nodes=50_000,
-    max_attributes=100_000,
-    max_attribute_chars=2 * 1024 * 1024,
-    max_name_chars=512,
-    max_text_chars=12 * 1024 * 1024,
+    max_bytes           = ATOM_BODY_LIMITS.max_decoded_bytes,
+    max_depth           = 64,
+    max_nodes           = 50_000,
+    max_attributes      = 100_000,
+    max_attribute_chars = 2 * 1024 * 1024,
+    max_name_chars      = 512,
+    max_text_chars      = 12 * 1024 * 1024,
 )
 ARXIV_REDIRECT_POLICY = RedirectPolicy(
-    max_hops=3,
-    allowed_schemes=frozenset({"https"}),
-    same_origin_only=True,
+    max_hops         = 3,
+    allowed_schemes  = frozenset({"https"}),
+    same_origin_only = True,
 )
 
 
@@ -128,7 +128,7 @@ def save_abstract_cache(cache: dict[str, dict[str, str]]) -> None:
 
 
 def compute_positive_coverage(df_output: pd.DataFrame, positive_ids: set[str]) -> dict[str, int]:
-    dataset_ids = set(df_output["arXiv ID"].astype(str).apply(clean_arxiv_id))
+    dataset_ids          = set(df_output["arXiv ID"].astype(str).apply(clean_arxiv_id))
     covered_positive_ids = len(dataset_ids & positive_ids)
     missing_positive_ids = len(positive_ids - dataset_ids)
     return {
@@ -155,7 +155,7 @@ def _write_final_dataset(df_output: pd.DataFrame, output_path: Path) -> int:
     if total == 0:
         raise RuntimeError("过滤后训练数据集为空，拒绝写出无效文件")
     required_columns = {"arXiv ID", "Title", "Abstract", "label"}
-    missing_columns = required_columns - set(df_output.columns)
+    missing_columns  = required_columns - set(df_output.columns)
     if missing_columns:
         missing = ", ".join(sorted(missing_columns))
         raise ValueError(f"最终训练数据集缺少列: {missing}")
@@ -175,8 +175,8 @@ def _parse_feed_entries(entries: Iterable[Any]) -> dict[str, dict[str, str]]:
     results: dict[str, dict[str, str]] = {}
     for entry in entries:
         try:
-            aid = clean_arxiv_id(entry.id)
-            title = re.sub(r"\s+", " ", entry.title.strip())
+            aid      = clean_arxiv_id(entry.id)
+            title    = re.sub(r"\s+", " ", entry.title.strip())
             abstract = re.sub(r"\s+", " ", entry.summary.strip())
         except (AttributeError, TypeError):
             continue
@@ -186,7 +186,7 @@ def _parse_feed_entries(entries: Iterable[Any]) -> dict[str, dict[str, str]]:
 
 def fetch_abstracts_batch(arxiv_ids: list[str]) -> dict[str, dict[str, str]]:
     """通过 arXiv API 批量获取论文标题和摘要"""
-    url = "https://export.arxiv.org/api/query"
+    url    = "https://export.arxiv.org/api/query"
     params = {
         "id_list": ",".join(arxiv_ids),
         "max_results": len(arxiv_ids),
@@ -197,11 +197,11 @@ def fetch_abstracts_batch(arxiv_ids: list[str]) -> dict[str, dict[str, str]]:
             response = requests_request_bounded(
                 "GET",
                 url,
-                limits=ATOM_BODY_LIMITS,
-                mime_policy=XML_MIME_POLICY,
-                redirect_policy=ARXIV_REDIRECT_POLICY,
-                headers={"User-Agent": "arxiv-training-data-builder/2.0"},
-                request_kwargs={"params": params, "timeout": API_TIMEOUT},
+                limits          = ATOM_BODY_LIMITS,
+                mime_policy     = XML_MIME_POLICY,
+                redirect_policy = ARXIV_REDIRECT_POLICY,
+                headers         = {"User-Agent": "arxiv-training-data-builder/2.0"},
+                request_kwargs  = {"params": params, "timeout": API_TIMEOUT},
             )
             xml_body = validate_bounded_xml(response, limits=ATOM_XML_LIMITS)
             feed = feedparser.parse(xml_body)
@@ -240,17 +240,17 @@ def _fetch_one_by_one(arxiv_ids: list[str]) -> dict[str, dict[str, str]]:
 
 def fetch_abstracts_batch_single(arxiv_id: str) -> dict[str, dict[str, str]]:
     """获取单篇论文"""
-    url = "https://export.arxiv.org/api/query"
+    url    = "https://export.arxiv.org/api/query"
     params = {"id_list": arxiv_id, "max_results": 1}
 
     response = requests_request_bounded(
         "GET",
         url,
-        limits=ATOM_BODY_LIMITS,
-        mime_policy=XML_MIME_POLICY,
-        redirect_policy=ARXIV_REDIRECT_POLICY,
-        headers={"User-Agent": "arxiv-training-data-builder/2.0"},
-        request_kwargs={"params": params, "timeout": API_TIMEOUT},
+        limits          = ATOM_BODY_LIMITS,
+        mime_policy     = XML_MIME_POLICY,
+        redirect_policy = ARXIV_REDIRECT_POLICY,
+        headers         = {"User-Agent": "arxiv-training-data-builder/2.0"},
+        request_kwargs  = {"params": params, "timeout": API_TIMEOUT},
     )
     xml_body = validate_bounded_xml(response, limits=ATOM_XML_LIMITS)
     feed = feedparser.parse(xml_body)
@@ -269,7 +269,7 @@ def main() -> None:
     print("=" * 60)
     df_pos = pd.read_csv(POSITIVE_IDS_CSV, dtype={"arXiv ID": str})
     df_pos["arXiv ID"] = df_pos["arXiv ID"].apply(clean_arxiv_id)
-    positive_ids = set(df_pos["arXiv ID"])
+    positive_ids       = set(df_pos["arXiv ID"])
     if not positive_ids:
         raise RuntimeError("正样本列表为空，拒绝构建只有负样本的训练数据集")
     print(f"正样本: {len(positive_ids)} 个唯一 ID")
@@ -279,18 +279,31 @@ def main() -> None:
     print("从缓存加载论文数据")
     print("=" * 60)
     all_records: list[dict[str, str]] = []
-    monthly_dir = CACHE_DIR / "monthly"
-    cache_files = sorted(monthly_dir.glob("[0-9][0-9][0-9][0-9].json"))
-    for cf in cache_files:
+    monthly_dir                       = CACHE_DIR / "monthly"
+    range_module                      = importlib.import_module(
+        f"{__package__}.step2_fetch_all_astro_ph" if __package__ else "step2_fetch_all_astro_ph"
+    )
+    start, end = range_module.load_date_range(CACHE_DIR / "date_range.json")
+    for api_start, api_end, yymm in range_module.generate_monthly_ranges(start, end):
+        cf = monthly_dir / f"{yymm}.json"
         with open(cf, encoding="utf-8") as f:
             month_data = json.load(f)
+        if (
+            not isinstance(month_data, dict)
+            or month_data.get("completed") is not True
+            or month_data.get("query_range") != [api_start, api_end]
+        ):
+            raise ValueError(f"月度缓存缺少当前日期范围的完整结果，请重新运行 step 2: {cf}")
+        month_data = month_data.get("papers")
+        if not isinstance(month_data, list) or any(not isinstance(row, dict) for row in month_data):
+            raise ValueError(f"月度缓存结构无效: {cf}")
         all_records.extend(month_data)
         print(f"  {cf.stem}: {len(month_data)} 篇")
     print(f"总计加载: {len(all_records)} 篇")
     if not all_records:
         raise RuntimeError("月度缓存为空，无法构建训练数据集")
 
-    df_all = pd.DataFrame(all_records)
+    df_all             = pd.DataFrame(all_records)
     df_all["arxiv_id"] = df_all["arxiv_id"].apply(clean_arxiv_id)
     # 去重
     before = len(df_all)
@@ -305,7 +318,7 @@ def main() -> None:
     print("=" * 60)
     df_all["label"] = df_all["arxiv_id"].apply(lambda x: 1 if x in positive_ids else 0)
 
-    found_positive = set(df_all[df_all["label"] == 1]["arxiv_id"])
+    found_positive   = set(df_all[df_all["label"] == 1]["arxiv_id"])
     missing_positive = positive_ids - found_positive
 
     n_pos = (df_all["label"] == 1).sum()
@@ -321,9 +334,9 @@ def main() -> None:
         print("=" * 60)
 
         # 先查缓存
-        cache = load_abstract_cache()
+        cache         = load_abstract_cache()
         still_missing = [aid for aid in missing_positive if aid not in cache]
-        from_cache = len(missing_positive) - len(still_missing)
+        from_cache    = len(missing_positive) - len(still_missing)
         if from_cache > 0:
             print(f"  从缓存中恢复: {from_cache} 个")
 
@@ -333,8 +346,8 @@ def main() -> None:
             missing_list = sorted(still_missing)
 
             for i in range(0, len(missing_list), BATCH_SIZE):
-                batch = missing_list[i : i + BATCH_SIZE]
-                batch_num = i // BATCH_SIZE + 1
+                batch         = missing_list[i : i + BATCH_SIZE]
+                batch_num     = i // BATCH_SIZE + 1
                 total_batches = (len(missing_list) + BATCH_SIZE - 1) // BATCH_SIZE
                 print(
                     f"    批次 {batch_num}/{total_batches}: {len(batch)} 篇...", end="", flush=True
@@ -409,9 +422,9 @@ def main() -> None:
     coverage = ensure_positive_coverage(df_output, positive_ids)
     print(
         "  正样本覆盖: {covered}/{expected} (label=1 行数: {rows})".format(
-            covered=coverage["covered_positive_ids"],
-            expected=coverage["expected_positive_ids"],
-            rows=coverage["dataset_positive_rows"],
+            covered  = coverage["covered_positive_ids"],
+            expected = coverage["expected_positive_ids"],
+            rows     = coverage["dataset_positive_rows"],
         )
     )
 

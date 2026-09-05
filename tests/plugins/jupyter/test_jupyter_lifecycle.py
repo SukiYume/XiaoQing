@@ -17,7 +17,7 @@ class FakeClient:
     def __init__(self, *, fail_start: bool = False, fail_ready: bool = False) -> None:
         self.fail_start = fail_start
         self.fail_ready = fail_ready
-        self.started = False
+        self.started    = False
         self.stop_calls = 0
 
     def start_channels(self) -> None:
@@ -52,20 +52,20 @@ class FakeKernel:
         self,
         client: FakeClient | None = None,
         *,
-        fail_start: bool = False,
-        fail_client: bool = False,
-        fail_shutdown: bool = False,
+        fail_start: bool                                            = False,
+        fail_client: bool                                           = False,
+        fail_shutdown: bool                                         = False,
         block_start: tuple[threading.Event, threading.Event] | None = None,
     ) -> None:
         self.client_instance = client or FakeClient()
-        self.fail_start = fail_start
-        self.fail_client = fail_client
-        self.fail_shutdown = fail_shutdown
-        self.block_start = block_start
-        self.alive = False
-        self.start_calls = 0
-        self.shutdown_calls = 0
-        self.cleanup_calls = 0
+        self.fail_start      = fail_start
+        self.fail_client     = fail_client
+        self.fail_shutdown   = fail_shutdown
+        self.block_start     = block_start
+        self.alive           = False
+        self.start_calls     = 0
+        self.shutdown_calls  = 0
+        self.cleanup_calls   = 0
 
     def start_kernel(self) -> None:
         self.start_calls += 1
@@ -173,7 +173,7 @@ def test_failed_start_can_retry_on_the_same_manager(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     first = FakeKernel(fail_start=True)
-    second = FakeKernel()
+    second  = FakeKernel()
     kernels = iter((first, second))
     monkeypatch.setattr(manager_module, "KernelManager", lambda **_kwargs: next(kernels))
     manager = JupyterKernelManager(tmp_path)
@@ -214,7 +214,7 @@ def test_concurrent_start_creates_exactly_one_kernel(
     created: list[FakeKernel] = []
 
     def factory(**_kwargs: Any) -> FakeKernel:
-        kernel = FakeKernel()
+        kernel         = FakeKernel()
         original_start = kernel.start_kernel
 
         def delayed_start() -> None:
@@ -243,12 +243,12 @@ def test_shutdown_continues_after_channel_failure(
             self.stop_calls += 1
             raise RuntimeError("channel cleanup failed")
 
-    client = BrokenClient()
-    kernel = FakeKernel(client)
+    client       = BrokenClient()
+    kernel       = FakeKernel(client)
     kernel.alive = True
-    manager = JupyterKernelManager(tmp_path)
-    manager._km = kernel  # noqa: SLF001
-    manager._kc = client  # noqa: SLF001
+    manager      = JupyterKernelManager(tmp_path)
+    manager._km  = kernel  # noqa: SLF001
+    manager._kc  = client  # noqa: SLF001
 
     manager.shutdown_kernel()
 
@@ -275,11 +275,11 @@ def test_shutdown_failure_uses_provisioner_kill_fallback(
             self.calls += 1
             kernel.alive = False
 
-    provisioner = Provisioner()
+    provisioner        = Provisioner()
     kernel.provisioner = provisioner  # type: ignore[attr-defined]
-    manager = JupyterKernelManager(tmp_path)
-    manager._km = kernel  # noqa: SLF001
-    manager._kc = kernel.client_instance  # noqa: SLF001
+    manager            = JupyterKernelManager(tmp_path)
+    manager._km        = kernel  # noqa: SLF001
+    manager._kc        = kernel.client_instance  # noqa: SLF001
 
     manager.shutdown_kernel()
 
@@ -290,12 +290,12 @@ def test_shutdown_failure_uses_provisioner_kill_fallback(
 
 
 def test_successful_shutdown_evicts_registered_instance(tmp_path: Path) -> None:
-    owner = "user-1"
-    manager = JupyterKernelManager.get_instance(tmp_path, owner)
-    kernel = FakeKernel()
+    owner        = "user-1"
+    manager      = JupyterKernelManager.get_instance(tmp_path, owner)
+    kernel       = FakeKernel()
     kernel.alive = True
-    manager._km = kernel  # noqa: SLF001
-    manager._kc = kernel.client_instance  # noqa: SLF001
+    manager._km  = kernel  # noqa: SLF001
+    manager._kc  = kernel.client_instance  # noqa: SLF001
 
     manager.shutdown_kernel()
 
@@ -308,13 +308,13 @@ def test_restart_keeps_registered_manager_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    owner = "user-1"
-    manager = JupyterKernelManager.get_instance(tmp_path, owner)
-    old_kernel = FakeKernel()
+    owner            = "user-1"
+    manager          = JupyterKernelManager.get_instance(tmp_path, owner)
+    old_kernel       = FakeKernel()
     old_kernel.alive = True
-    manager._km = old_kernel  # noqa: SLF001
-    manager._kc = old_kernel.client_instance  # noqa: SLF001
-    new_kernel = FakeKernel()
+    manager._km      = old_kernel  # noqa: SLF001
+    manager._kc      = old_kernel.client_instance  # noqa: SLF001
+    new_kernel       = FakeKernel()
     monkeypatch.setattr(manager_module, "KernelManager", lambda **_kwargs: new_kernel)
 
     manager.restart_kernel()
@@ -326,8 +326,8 @@ def test_restart_keeps_registered_manager_identity(
 
 @pytest.mark.asyncio
 async def test_shutdown_all_async_propagates_cleanup_failures(tmp_path: Path) -> None:
-    first = JupyterKernelManager.get_instance(tmp_path / "a", "user-1")
-    second = JupyterKernelManager.get_instance(tmp_path / "b", "user-2")
+    first                 = JupyterKernelManager.get_instance(tmp_path / "a", "user-1")
+    second                = JupyterKernelManager.get_instance(tmp_path / "b", "user-2")
     first.shutdown_kernel = lambda *args, **kwargs: None  # type: ignore[method-assign]
 
     def fail_shutdown(*_args: Any, **_kwargs: Any) -> None:
@@ -345,7 +345,7 @@ async def test_shutdown_all_async_propagates_cleanup_failures(tmp_path: Path) ->
 def test_unconfirmed_orphan_marks_instance_broken_and_evicts_registry(
     tmp_path: Path,
 ) -> None:
-    owner = "user-1"
+    owner   = "user-1"
     manager = JupyterKernelManager.get_instance(tmp_path, owner)
     kernel = FakeKernel(fail_shutdown=True)
     kernel.alive = True
@@ -363,8 +363,8 @@ def test_unconfirmed_orphan_marks_instance_broken_and_evicts_registry(
         raise RuntimeError("private kill failed")
 
     kernel._kill_kernel = private_kill  # type: ignore[attr-defined]
-    manager._km = kernel  # noqa: SLF001
-    manager._kc = kernel.client_instance  # noqa: SLF001
+    manager._km         = kernel  # noqa: SLF001
+    manager._kc         = kernel.client_instance  # noqa: SLF001
 
     with pytest.raises(RuntimeError, match="无法确认"):
         manager.shutdown_kernel()
@@ -420,9 +420,9 @@ async def test_kernel_shutdown_command_does_not_claim_success_when_unconfirmed(
         lambda *_args, **_kwargs: BrokenManager(),
     )
     context = SimpleNamespace(
-        data_dir=tmp_path,
-        current_user_id=1,
-        current_group_id=2,
+        data_dir         = tmp_path,
+        current_user_id  = 1,
+        current_group_id = 2,
     )
 
     response = await jupyter_main._handle_kernel("shutdown", context)

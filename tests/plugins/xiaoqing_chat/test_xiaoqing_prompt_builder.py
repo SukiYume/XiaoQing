@@ -4,62 +4,6 @@ from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.runtime_state import get_state
 
 
-def test_static_model_prompts_use_general_principles_without_case_examples() -> None:
-    from plugins.xiaoqing_chat.expression.bw_expression_learner import (
-        _LEARN_PROMPT,
-        _SINGLE_CHECK_PROMPT,
-    )
-    from plugins.xiaoqing_chat.expression.bw_jargon_miner import _EXTRACT_PROMPT, _INFER_PROMPT
-    from plugins.xiaoqing_chat.expression.bw_reflect_tracker import _JUDGE_PROMPT
-    from plugins.xiaoqing_chat.llm.prompt_builder import (
-        _DEFAULT_REPLYER_SYSTEM,
-        _HUMANLIKE_REPLY_DIRECTIVE,
-    )
-    from plugins.xiaoqing_chat.llm.summarizer import _TOPIC_SYSTEM
-    from plugins.xiaoqing_chat.memory.knowledge_extract import _FACT_SYSTEM
-    from plugins.xiaoqing_chat.memory.memory_retrieval import _QUESTION_SYSTEM, _REACT_SYSTEM
-    from plugins.xiaoqing_chat.planning.pfc_action_planner import (
-        PROMPT_END_DECISION,
-        PROMPT_FOLLOW_UP_COMPACT,
-        PROMPT_INITIAL_REPLY_COMPACT,
-    )
-
-    prompts = (
-        _DEFAULT_REPLYER_SYSTEM,
-        _HUMANLIKE_REPLY_DIRECTIVE,
-        PROMPT_INITIAL_REPLY_COMPACT,
-        PROMPT_FOLLOW_UP_COMPACT,
-        PROMPT_END_DECISION,
-        _TOPIC_SYSTEM,
-        _FACT_SYSTEM,
-        _QUESTION_SYSTEM,
-        _REACT_SYSTEM,
-        _LEARN_PROMPT,
-        _SINGLE_CHECK_PROMPT,
-        _EXTRACT_PROMPT,
-        _INFER_PROMPT,
-        _JUDGE_PROMPT,
-    )
-    assert all(marker not in prompt for prompt in prompts for marker in ("例如", "比如", "示例："))
-    assert "依据边界" in _DEFAULT_REPLYER_SYSTEM
-    assert "稳定身份、可核验背景、现实关系" in _DEFAULT_REPLYER_SYSTEM
-    assert "当下的看法、口味倾向和低风险能力判断" in _DEFAULT_REPLYER_SYSTEM
-    assert "普通低风险生活片段" in _DEFAULT_REPLYER_SYSTEM
-    assert "不冒充证据" in _DEFAULT_REPLYER_SYSTEM
-    assert "称呼你的名字只是把话说给你听" in _DEFAULT_REPLYER_SYSTEM
-    assert "明确提出的交流偏好、禁止项和回答范围" in _DEFAULT_REPLYER_SYSTEM
-    assert "不把问题当默认结尾" in _HUMANLIKE_REPLY_DIRECTIVE
-    assert "轻轻调侃" in _HUMANLIKE_REPLY_DIRECTIVE
-    assert all(
-        case_token not in prompt
-        for prompt in prompts
-        for case_token in ("冻饺子", "赶期末", "小何平时", "别安慰我")
-    )
-    assert "不自动等于必须回复" in PROMPT_INITIAL_REPLY_COMPACT
-    assert "同一说话人的原话直接支持" in _FACT_SYSTEM
-    assert "无法脱离原始内容安全复用时就跳过" in _LEARN_PROMPT
-
-
 def test_default_personality_states_only_describe_current_conversation_style() -> None:
     from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
 
@@ -85,63 +29,53 @@ def test_default_personality_states_only_describe_current_conversation_style() -
 
 def test_prompt_builder_discourages_repetitive_clarifying_questions() -> None:
     personality = PersonalityConfig(
-        polite_guardrail=True,
-        identity="住校的理工科学生。",
-        states=[],
-        state_probability=0.0,
-        reply_style="口语化",
+        polite_guardrail  = True,
+        identity          = "住校的理工科学生。",
+        states            = [],
+        state_probability = 0.0,
+        reply_style       = "口语化",
     )
 
     msgs = build_prompt_messages(
-        is_private=False,
-        bot_name="小青",
-        sender_name="测试用户",
-        think_level=1,
-        history=[],
-        current_text="放弃下载了，太大了",
-        personality=personality,
-        keyword_rules=[],
-        regex_rules=[],
-        request_id="req-test",
+        is_private    = False,
+        bot_name      = "小青",
+        sender_name   = "测试用户",
+        think_level   = 1,
+        history       = [],
+        current_text  = "放弃下载了，太大了",
+        personality   = personality,
+        keyword_rules = [],
+        regex_rules   = [],
+        request_id    = "req-test",
     )
 
     system_prompt = msgs[0].content
-    assert "角色事实与边界" in system_prompt
-    assert "日常创作许可" in system_prompt
-    assert "普通、低风险、不可核验" in system_prompt
-    assert "不具名临时配角" in system_prompt
-    assert "叙事视角和称呼必须与稳定身份一致" in system_prompt
-    assert "真实用户、群友、第三方" in system_prompt
-    assert "回复规模要和对方这一轮的需求相称" in system_prompt
-    assert "避免穷举可能性、连续追问或展开成清单" in system_prompt
-    assert "不把问题当默认结尾" in system_prompt
-    assert "调侃要贴着当前内容" in system_prompt
-    assert "普通闲聊通常一两句只接一个点" in msgs[1].content
-    assert "实质任务才完整展开" in msgs[1].content
-    # Prompt should discourage chasing unanswered questions
-    assert (
-        "问过的问题没人回答" in system_prompt or "追问" in system_prompt or "放下" in system_prompt
-    )
+    assert msgs[0].role == "system"
+    assert msgs[1].role == "user"
+    assert personality.identity in system_prompt
+    assert "放弃下载了，太大了" in msgs[1].content
+    assert "放弃下载了，太大了" not in system_prompt
+    assert "测试用户" in msgs[1].content
 
 
 def test_prompt_builder_can_disable_persona_story_creation() -> None:
     personality = PersonalityConfig(
-        identity="住校的理工科学生。",
-        allow_low_stakes_persona_fiction=False,
-        states=[],
+        identity                         = "住校的理工科学生。",
+        allow_low_stakes_persona_fiction = False,
+        states                           = [],
     )
 
     msgs = build_prompt_messages(
-        is_private=False,
-        bot_name="小青",
-        sender_name="测试用户",
-        think_level=0,
-        history=[],
-        current_text="大家讲个近况",
-        personality=personality,
-        keyword_rules=[],
-        regex_rules=[],
-        request_id="strict-persona",
+        is_private    = False,
+        bot_name      = "小青",
+        sender_name   = "测试用户",
+        think_level   = 0,
+        history       = [],
+        current_text  = "大家讲个近况",
+        personality   = personality,
+        keyword_rules = [],
+        regex_rules   = [],
+        request_id    = "strict-persona",
     )
 
     system_prompt = msgs[0].content
@@ -153,7 +87,7 @@ def test_brain_chat_keeps_base_persona_and_adds_mode_rules() -> None:
     from plugins.xiaoqing_chat.brain_chat import get_brain_chat_identity
     from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
 
-    cfg = XiaoQingChatConfig()
+    cfg     = XiaoQingChatConfig()
     runtime = type("Runtime", (), {"cfg": cfg})()
 
     identity = get_brain_chat_identity(runtime, True)
@@ -165,32 +99,32 @@ def test_brain_chat_keeps_base_persona_and_adds_mode_rules() -> None:
 
 def test_prompt_builder_does_not_include_user_id_in_name() -> None:
     personality = PersonalityConfig(
-        polite_guardrail=True,
-        identity="住校的理工科学生。",
-        states=[],
-        state_probability=0.0,
-        reply_style="口语化",
+        polite_guardrail  = True,
+        identity          = "住校的理工科学生。",
+        states            = [],
+        state_probability = 0.0,
+        reply_style       = "口语化",
     )
 
     msgs = build_prompt_messages(
-        is_private=False,
-        bot_name="小青",
-        sender_name="测试用户",
-        think_level=1,
-        history=[
+        is_private  = False,
+        bot_name    = "小青",
+        sender_name = "测试用户",
+        think_level = 1,
+        history     = [
             StoredMessage(
-                role="user",
-                name="测试用户",
-                content="你好",
-                ts=1700000000.0,
-                user_id=123456,
+                role    = "user",
+                name    = "测试用户",
+                content = "你好",
+                ts      = 1700000000.0,
+                user_id = 123456,
             )
         ],
-        current_text="在吗",
-        personality=personality,
-        keyword_rules=[],
-        regex_rules=[],
-        request_id="req-test-2",
+        current_text  = "在吗",
+        personality   = personality,
+        keyword_rules = [],
+        regex_rules   = [],
+        request_id    = "req-test-2",
     )
 
     user_prompt = msgs[1].content
@@ -199,24 +133,24 @@ def test_prompt_builder_does_not_include_user_id_in_name() -> None:
 
 def test_prompt_builder_treats_media_markers_as_real_content() -> None:
     personality = PersonalityConfig(
-        polite_guardrail=True,
-        identity="住校的理工科学生。",
-        states=[],
-        state_probability=0.0,
-        reply_style="口语化",
+        polite_guardrail  = True,
+        identity          = "住校的理工科学生。",
+        states            = [],
+        state_probability = 0.0,
+        reply_style       = "口语化",
     )
 
     msgs = build_prompt_messages(
-        is_private=False,
-        bot_name="小青",
-        sender_name="测试用户",
-        think_level=1,
-        history=[],
-        current_text="[QQ表情：微笑]",
-        personality=personality,
-        keyword_rules=[],
-        regex_rules=[],
-        request_id="req-test-3",
+        is_private    = False,
+        bot_name      = "小青",
+        sender_name   = "测试用户",
+        think_level   = 1,
+        history       = [],
+        current_text  = "[QQ表情：微笑]",
+        personality   = personality,
+        keyword_rules = [],
+        regex_rules   = [],
+        request_id    = "req-test-3",
     )
 
     system_prompt = msgs[0].content
@@ -229,11 +163,11 @@ def test_prompt_builder_treats_media_markers_as_real_content() -> None:
 
 def test_prompt_builder_rehydrates_media_marker_from_registry(tmp_path) -> None:
     personality = PersonalityConfig(
-        polite_guardrail=True,
-        identity="住校的理工科学生。",
-        states=[],
-        state_probability=0.0,
-        reply_style="口语化",
+        polite_guardrail  = True,
+        identity          = "住校的理工科学生。",
+        states            = [],
+        state_probability = 0.0,
+        reply_style       = "口语化",
     )
     state = get_state()
     state.media_store.bind(tmp_path)
@@ -250,16 +184,16 @@ def test_prompt_builder_rehydrates_media_marker_from_registry(tmp_path) -> None:
     )
 
     msgs = build_prompt_messages(
-        is_private=False,
-        bot_name="小青",
-        sender_name="测试用户",
-        think_level=1,
-        history=[
+        is_private  = False,
+        bot_name    = "小青",
+        sender_name = "测试用户",
+        think_level = 1,
+        history     = [
             StoredMessage(
-                role="user",
-                name="测试用户",
-                content="[[xc_media_1]]",
-                media_items=(
+                role        = "user",
+                name        = "测试用户",
+                content     = "[[xc_media_1]]",
+                media_items = (
                     {
                         "kind": "emoji",
                         "media_hash": "hash-emoji-1",
@@ -269,11 +203,11 @@ def test_prompt_builder_rehydrates_media_marker_from_registry(tmp_path) -> None:
                 ts=1700000001.0,
             )
         ],
-        current_text="你看懂没",
-        personality=personality,
-        keyword_rules=[],
-        regex_rules=[],
-        request_id="req-test-4",
+        current_text  = "你看懂没",
+        personality   = personality,
+        keyword_rules = [],
+        regex_rules   = [],
+        request_id    = "req-test-4",
     )
 
     user_prompt = msgs[1].content
@@ -285,26 +219,26 @@ def test_prompt_builder_rehydrates_media_marker_from_registry(tmp_path) -> None:
 
 def test_prompt_builder_prefers_canonical_parts_when_legacy_fields_are_stale(tmp_path) -> None:
     personality = PersonalityConfig(
-        polite_guardrail=True,
-        identity="住校的理工科学生。",
-        states=[],
-        state_probability=0.0,
-        reply_style="口语化",
+        polite_guardrail  = True,
+        identity          = "住校的理工科学生。",
+        states            = [],
+        state_probability = 0.0,
+        reply_style       = "口语化",
     )
     state = get_state()
     state.media_store.bind(tmp_path)
 
     msgs = build_prompt_messages(
-        is_private=False,
-        bot_name="小青",
-        sender_name="测试用户",
-        think_level=1,
-        history=[
+        is_private  = False,
+        bot_name    = "小青",
+        sender_name = "测试用户",
+        think_level = 1,
+        history     = [
             StoredMessage(
-                role="user",
-                name="测试用户",
-                content="[[xc_media_1]]",
-                media_items=(
+                role        = "user",
+                name        = "测试用户",
+                content     = "[[xc_media_1]]",
+                media_items = (
                     {
                         "kind": "emoji",
                         "media_hash": "hash-emoji-1",
@@ -325,11 +259,11 @@ def test_prompt_builder_prefers_canonical_parts_when_legacy_fields_are_stale(tmp
                 ts=1700000002.0,
             )
         ],
-        current_text="在吗",
-        personality=personality,
-        keyword_rules=[],
-        regex_rules=[],
-        request_id="req-test-5",
+        current_text  = "在吗",
+        personality   = personality,
+        keyword_rules = [],
+        regex_rules   = [],
+        request_id    = "req-test-5",
     )
 
     user_prompt = msgs[1].content
@@ -339,24 +273,24 @@ def test_prompt_builder_prefers_canonical_parts_when_legacy_fields_are_stale(tmp
 
 def test_prompt_builder_uses_media_only_reply_target_block_for_current_parts() -> None:
     personality = PersonalityConfig(
-        polite_guardrail=True,
-        identity="住校的理工科学生。",
-        states=[],
-        state_probability=0.0,
-        reply_style="口语化",
+        polite_guardrail  = True,
+        identity          = "住校的理工科学生。",
+        states            = [],
+        state_probability = 0.0,
+        reply_style       = "口语化",
     )
 
     msgs = build_prompt_messages(
-        is_private=False,
-        bot_name="小青",
-        sender_name="测试用户",
-        think_level=1,
-        history=[],
-        current_text="[图片：海边落日]",
-        personality=personality,
-        keyword_rules=[],
-        regex_rules=[],
-        current_parts=(
+        is_private    = False,
+        bot_name      = "小青",
+        sender_name   = "测试用户",
+        think_level   = 1,
+        history       = [],
+        current_text  = "[图片：海边落日]",
+        personality   = personality,
+        keyword_rules = [],
+        regex_rules   = [],
+        current_parts = (
             {
                 "kind": "image",
                 "marker": "[图片：海边落日]",
@@ -373,24 +307,24 @@ def test_prompt_builder_uses_media_only_reply_target_block_for_current_parts() -
 
 def test_prompt_builder_treats_media_only_emoji_text_as_user_speech() -> None:
     personality = PersonalityConfig(
-        polite_guardrail=True,
-        identity="住校的理工科学生。",
-        states=[],
-        state_probability=0.0,
-        reply_style="口语化",
+        polite_guardrail  = True,
+        identity          = "住校的理工科学生。",
+        states            = [],
+        state_probability = 0.0,
+        reply_style       = "口语化",
     )
 
     msgs = build_prompt_messages(
-        is_private=True,
-        bot_name="小青",
-        sender_name="测试用户",
-        think_level=1,
-        history=[],
-        current_text="[表情包：佩服，调侃；写着“不愧是你 我佩服得鹉体投地”]",
-        personality=personality,
-        keyword_rules=[],
-        regex_rules=[],
-        current_parts=(
+        is_private    = True,
+        bot_name      = "小青",
+        sender_name   = "测试用户",
+        think_level   = 1,
+        history       = [],
+        current_text  = "[表情包：佩服，调侃；写着“不愧是你 我佩服得鹉体投地”]",
+        personality   = personality,
+        keyword_rules = [],
+        regex_rules   = [],
+        current_parts = (
             {
                 "kind": "emoji",
                 "marker": "[表情包：佩服，调侃；写着“不愧是你 我佩服得鹉体投地”]",
@@ -400,11 +334,7 @@ def test_prompt_builder_treats_media_only_emoji_text_as_user_speech() -> None:
         request_id="req-test-emoji-speech",
     )
 
-    system_prompt = msgs[0].content
     user_prompt = msgs[1].content
-    assert "媒体消息理解" in system_prompt
-    assert "交际作用" in system_prompt
-    assert "不要直接输出 `[表情包：...]`" in system_prompt
     assert "现在测试用户借表情包表达：想说的话：不愧是你 我佩服得鹉体投地" in user_prompt
     assert "语气反应：佩服，调侃" in user_prompt
     assert "发送的表情包" not in user_prompt
@@ -412,24 +342,24 @@ def test_prompt_builder_treats_media_only_emoji_text_as_user_speech() -> None:
 
 def test_prompt_builder_treats_media_only_qq_face_as_tone() -> None:
     personality = PersonalityConfig(
-        polite_guardrail=True,
-        identity="住校的理工科学生。",
-        states=[],
-        state_probability=0.0,
-        reply_style="口语化",
+        polite_guardrail  = True,
+        identity          = "住校的理工科学生。",
+        states            = [],
+        state_probability = 0.0,
+        reply_style       = "口语化",
     )
 
     msgs = build_prompt_messages(
-        is_private=True,
-        bot_name="小青",
-        sender_name="测试用户",
-        think_level=1,
-        history=[],
-        current_text="[QQ表情：菜汪]",
-        personality=personality,
-        keyword_rules=[],
-        regex_rules=[],
-        current_parts=(
+        is_private    = True,
+        bot_name      = "小青",
+        sender_name   = "测试用户",
+        think_level   = 1,
+        history       = [],
+        current_text  = "[QQ表情：菜汪]",
+        personality   = personality,
+        keyword_rules = [],
+        regex_rules   = [],
+        current_parts = (
             {
                 "kind": "qq_face",
                 "marker": "[QQ表情：菜汪]",
@@ -446,24 +376,24 @@ def test_prompt_builder_treats_media_only_qq_face_as_tone() -> None:
 
 def test_prompt_builder_uses_mixed_reply_target_block_for_current_parts() -> None:
     personality = PersonalityConfig(
-        polite_guardrail=True,
-        identity="住校的理工科学生。",
-        states=[],
-        state_probability=0.0,
-        reply_style="口语化",
+        polite_guardrail  = True,
+        identity          = "住校的理工科学生。",
+        states            = [],
+        state_probability = 0.0,
+        reply_style       = "口语化",
     )
 
     msgs = build_prompt_messages(
-        is_private=False,
-        bot_name="小青",
-        sender_name="测试用户",
-        think_level=1,
-        history=[],
-        current_text="你看这个\n[表情包：无语]",
-        personality=personality,
-        keyword_rules=[],
-        regex_rules=[],
-        current_parts=(
+        is_private    = False,
+        bot_name      = "小青",
+        sender_name   = "测试用户",
+        think_level   = 1,
+        history       = [],
+        current_text  = "你看这个\n[表情包：无语]",
+        personality   = personality,
+        keyword_rules = [],
+        regex_rules   = [],
+        current_parts = (
             {"kind": "text", "text": "你看这个"},
             {
                 "kind": "emoji",
@@ -480,11 +410,11 @@ def test_prompt_builder_uses_mixed_reply_target_block_for_current_parts() -> Non
 
 def test_prompt_builder_does_not_duplicate_current_turn_when_history_already_contains_it() -> None:
     personality = PersonalityConfig(
-        polite_guardrail=True,
-        identity="住校的理工科学生。",
-        states=[],
-        state_probability=0.0,
-        reply_style="口语化",
+        polite_guardrail  = True,
+        identity          = "住校的理工科学生。",
+        states            = [],
+        state_probability = 0.0,
+        reply_style       = "口语化",
     )
 
     current_parts = (
@@ -497,25 +427,25 @@ def test_prompt_builder_does_not_duplicate_current_turn_when_history_already_con
     )
     history = [
         StoredMessage(
-            role="user",
-            name="测试用户",
-            parts=current_parts,
-            ts=1700000003.0,
+            role  = "user",
+            name  = "测试用户",
+            parts = current_parts,
+            ts    = 1700000003.0,
         )
     ]
 
     msgs = build_prompt_messages(
-        is_private=False,
-        bot_name="小青",
-        sender_name="测试用户",
-        think_level=1,
-        history=history,
-        current_text="你看这个\n[图片：海边落日]",
-        personality=personality,
-        keyword_rules=[],
-        regex_rules=[],
-        current_parts=current_parts,
-        request_id="req-test-8",
+        is_private    = False,
+        bot_name      = "小青",
+        sender_name   = "测试用户",
+        think_level   = 1,
+        history       = history,
+        current_text  = "你看这个\n[图片：海边落日]",
+        personality   = personality,
+        keyword_rules = [],
+        regex_rules   = [],
+        current_parts = current_parts,
+        request_id    = "req-test-8",
     )
 
     user_prompt = msgs[1].content

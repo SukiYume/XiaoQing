@@ -42,17 +42,17 @@ if __package__ in {None, ""}:
 else:
     from . import training_utils as _training
 
-_log = _training.timestamp_log
-forward_logits = _training.forward_logits
-log_epoch_header = _training.log_epoch_header
+_log                = _training.timestamp_log
+forward_logits      = _training.forward_logits
+log_epoch_header    = _training.log_epoch_header
 dynamic_pad_collate = _training.dynamic_pad_collate
-train_epoch = _training.train_epoch
+train_epoch         = _training.train_epoch
 
 # 动态导入 transformers 库，避免静态依赖问题
-transformers = importlib.import_module("transformers")
+transformers                       = importlib.import_module("transformers")
 AutoModelForSequenceClassification = transformers.AutoModelForSequenceClassification
-AutoTokenizer = transformers.AutoTokenizer
-get_linear_schedule_with_warmup = transformers.get_linear_schedule_with_warmup
+AutoTokenizer                      = transformers.AutoTokenizer
+get_linear_schedule_with_warmup    = transformers.get_linear_schedule_with_warmup
 
 _PLUGIN_DIR = Path(__file__).resolve().parents[2]
 
@@ -63,16 +63,16 @@ _PLUGIN_DIR = Path(__file__).resolve().parents[2]
 
 @dataclass(frozen=True, slots=True)
 class TrainingConfig:
-    data_path: Path = _PLUGIN_DIR / "train_model" / "arxiv_papers_with_abstract.csv"
-    model_name: str = "bert-base-cased"
-    max_len: int = 64
-    batch_size: int = 256
-    num_epochs: int = 20
-    learning_rate: float = 2e-5
+    data_path: Path          = _PLUGIN_DIR / "train_model" / "arxiv_papers_with_abstract.csv"
+    model_name: str          = "bert-base-cased"
+    max_len: int             = 64
+    batch_size: int          = 256
+    num_epochs: int          = 20
+    learning_rate: float     = 2e-5
     warmup_proportion: float = 0.1
-    validation_size: float = 0.1
-    random_seed: int = 42
-    num_workers: int | None = None
+    validation_size: float   = 0.1
+    random_seed: int         = 42
+    num_workers: int | None  = None
     output_dir: Path = field(default_factory=lambda: _PLUGIN_DIR / "best_model_title")
 
 
@@ -104,12 +104,12 @@ def prepare_training_frame(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     required_columns = {"title", "label"}
-    missing_columns = required_columns - set(renamed.columns)
+    missing_columns  = required_columns - set(renamed.columns)
     if missing_columns:
         missing = ", ".join(sorted(missing_columns))
         raise ValueError(f"Missing required columns: {missing}")
 
-    prepared = renamed.loc[:, ["title", "label"]].copy()
+    prepared          = renamed.loc[:, ["title", "label"]].copy()
     prepared["title"] = prepared["title"].fillna("").astype(str)
     prepared["label"] = _training.coerce_binary_labels(prepared["label"])
     return prepared
@@ -130,14 +130,14 @@ class TitleDataset(Dataset[dict[str, Any]]):
     ):
         encodings = tokenizer(
             titles,
-            add_special_tokens=True,
-            max_length=max_len,
-            padding=False,
-            truncation=True,
+            add_special_tokens = True,
+            max_length         = max_len,
+            padding            = False,
+            truncation         = True,
         )
-        self.input_ids: list[list[int]] = encodings["input_ids"]
+        self.input_ids: list[list[int]]      = encodings["input_ids"]
         self.attention_mask: list[list[int]] = encodings["attention_mask"]
-        self.labels = labels
+        self.labels                          = labels
 
     def __len__(self) -> int:
         return len(self.labels)
@@ -161,29 +161,29 @@ def create_data_loader(
     max_len: int,
     batch_size: int,
     sampler: WeightedRandomSampler | None = None,
-    num_workers: int = 0,
-    pin_memory: bool = False,
-    random_seed: int | None = None,
-    shuffle: bool = True,
+    num_workers: int                      = 0,
+    pin_memory: bool                      = False,
+    random_seed: int | None               = None,
+    shuffle: bool                         = True,
 ) -> DataLoader[Any]:
     dataset = TitleDataset(
-        titles=df["title"].tolist(),
-        labels=df["label"].tolist(),
-        tokenizer=tokenizer,
-        max_len=max_len,
+        titles    = df["title"].tolist(),
+        labels    = df["label"].tolist(),
+        tokenizer = tokenizer,
+        max_len   = max_len,
     )
 
     collate_fn = partial(dynamic_pad_collate, pad_id=tokenizer.pad_token_id or 0)
 
     return _training.create_seeded_data_loader(
         dataset,
-        collate_fn=collate_fn,
-        batch_size=batch_size,
-        sampler=sampler,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-        random_seed=random_seed,
-        shuffle=shuffle,
+        collate_fn  = collate_fn,
+        batch_size  = batch_size,
+        sampler     = sampler,
+        num_workers = num_workers,
+        pin_memory  = pin_memory,
+        random_seed = random_seed,
+        shuffle     = shuffle,
     )
 
 
@@ -196,20 +196,20 @@ def eval_model(
     model,
     data_loader,
     device,
-    use_amp: bool = False,
+    use_amp: bool          = False,
     amp_dtype: torch.dtype = torch.float32,
 ):
     model.eval()
-    losses: list[float] = []
+    losses: list[float]   = []
     all_labels: list[int] = []
-    all_preds: list[int] = []
-    loss_fn = torch.nn.CrossEntropyLoss()
+    all_preds: list[int]  = []
+    loss_fn               = torch.nn.CrossEntropyLoss()
 
     with torch.no_grad():
         for batch in tqdm(data_loader, desc="Validation", ascii=True):
             logits, labels = forward_logits(model, batch, device, use_amp, amp_dtype)
             logits = logits.float()
-            loss = loss_fn(logits, labels)
+            loss   = loss_fn(logits, labels)
 
             preds = logits.argmax(dim=1)
 
@@ -231,10 +231,10 @@ def eval_model(
     cm = confusion_matrix(all_labels, all_preds, labels=[0, 1])
     average_loss = sum(losses) / len(losses)
     return ValidationMetrics(
-        accuracy=accuracy,
-        average_loss=average_loss,
-        report=report,
-        cm=cm,
+        accuracy     = accuracy,
+        average_loss = average_loss,
+        report       = report,
+        cm           = cm,
     )
 
 
@@ -266,22 +266,22 @@ def save_training_config(
 def main(config: TrainingConfig = CONFIG) -> None:
     training = _training.prepare_classifier_training(
         config,
-        device=DEVICE,
-        classifier_name="arXiv Title Classifier",
-        prepare_frame=prepare_training_frame,
-        create_loader=create_data_loader,
-        tokenizer_factory=AutoTokenizer,
-        model_factory=AutoModelForSequenceClassification,
-        scheduler_factory=get_linear_schedule_with_warmup,
+        device            = DEVICE,
+        classifier_name   = "arXiv Title Classifier",
+        prepare_frame     = prepare_training_frame,
+        create_loader     = create_data_loader,
+        tokenizer_factory = AutoTokenizer,
+        model_factory     = AutoModelForSequenceClassification,
+        scheduler_factory = get_linear_schedule_with_warmup,
     )
-    runtime = training.runtime
-    tokenizer = training.tokenizer
-    model = training.model
+    runtime      = training.runtime
+    tokenizer    = training.tokenizer
+    model        = training.model
     train_loader = training.train_loader
-    val_loader = training.validation_loader
-    optimizer = training.optimizer
-    scheduler = training.scheduler
-    loss_fn = training.loss_fn
+    val_loader   = training.validation_loader
+    optimizer    = training.optimizer
+    scheduler    = training.scheduler
+    loss_fn      = training.loss_fn
 
     best_accuracy = 0.0
 
@@ -295,8 +295,8 @@ def main(config: TrainingConfig = CONFIG) -> None:
             scheduler,
             DEVICE,
             loss_fn,
-            use_amp=runtime["use_amp"],
-            amp_dtype=runtime["amp_dtype"],
+            use_amp   = runtime["use_amp"],
+            amp_dtype = runtime["amp_dtype"],
         )
         print(f"\n  {'─' * 72}")
         _log(f"Train | loss={train_loss:.4f}  acc={train_acc:.4f}")
@@ -305,16 +305,16 @@ def main(config: TrainingConfig = CONFIG) -> None:
             model,
             val_loader,
             DEVICE,
-            use_amp=runtime["use_amp"],
-            amp_dtype=runtime["amp_dtype"],
+            use_amp   = runtime["use_amp"],
+            amp_dtype = runtime["amp_dtype"],
         )
 
         is_best = val_metrics.accuracy > best_accuracy
         _log(
             "Valid | loss={loss:.4f}  acc={acc:.4f}  {star}".format(
-                loss=val_metrics.average_loss,
-                acc=val_metrics.accuracy,
-                star="★" if is_best else "",
+                loss = val_metrics.average_loss,
+                acc  = val_metrics.accuracy,
+                star = "★" if is_best else "",
             )
         )
         print(val_metrics.report)

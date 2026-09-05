@@ -21,14 +21,14 @@ PNG_BYTES = base64.b64decode(
 
 def _response(body: bytes, media_type: str) -> BoundedHttpResponse:
     return BoundedHttpResponse(
-        url="https://api.wolframalpha.com/test",
-        status=200,
-        body=body,
-        media_type=media_type,
-        charset="utf-8",
-        headers={},
-        wire_bytes=len(body),
-        decoded_bytes=len(body),
+        url           = "https://api.wolframalpha.com/test",
+        status        = 200,
+        body          = body,
+        media_type    = media_type,
+        charset       = "utf-8",
+        headers       = {},
+        wire_bytes    = len(body),
+        decoded_bytes = len(body),
     )
 
 
@@ -70,9 +70,9 @@ async def test_natural_step_and_cp_suffixes_remain_part_of_simple_question(
     monkeypatch.setattr(wolframalpha, "aiohttp_request_bounded", request)
     context = with_settings_reader(
         SimpleNamespace(
-            secrets={"plugins": {"wolframalpha": {"appid": "appid"}}},
-            http_session=object(),
-            logger=logging.getLogger("test.wolframalpha"),
+            secrets      = {"plugins": {"wolframalpha": {"appid": "appid"}}},
+            http_session = object(),
+            logger       = logging.getLogger("test.wolframalpha"),
         )
     )
 
@@ -88,7 +88,7 @@ async def test_all_wolfram_modes_share_two_request_concurrency_limit(
     monkeypatch: pytest.MonkeyPatch,
 ):
     active = 0
-    peak = 0
+    peak   = 0
 
     async def request(_session, _method, _url, **kwargs):
         nonlocal active, peak
@@ -111,8 +111,8 @@ async def test_all_wolfram_modes_share_two_request_concurrency_limit(
 
     monkeypatch.setattr(wolframalpha, "aiohttp_request_bounded", request)
     context = SimpleNamespace(
-        http_session=object(),
-        logger=logging.getLogger("test.wolframalpha"),
+        http_session = object(),
+        logger       = logging.getLogger("test.wolframalpha"),
     )
     tasks = []
     for index in range(4):
@@ -144,9 +144,9 @@ async def test_apod_image_fetch_uses_only_pinned_bounded_client(
     async def fetch(url: str, **kwargs):
         captured.update(url=url, **kwargs)
         return SimpleNamespace(
-            url=url,
-            body=PNG_BYTES,
-            headers={"Content-Type": "image/png"},
+            url     = url,
+            body    = PNG_BYTES,
+            headers = {"Content-Type": "image/png"},
         )
 
     monkeypatch.setattr(apod, "fetch_public_bytes", fetch)
@@ -178,9 +178,9 @@ async def test_apod_image_cache_prunes_old_entries(
 ):
     async def fetch(url: str, **_kwargs):
         return SimpleNamespace(
-            url=url,
-            body=PNG_BYTES,
-            headers={"Content-Type": "image/png"},
+            url     = url,
+            body    = PNG_BYTES,
+            headers = {"Content-Type": "image/png"},
         )
 
     monkeypatch.setattr(apod, "fetch_public_bytes", fetch)

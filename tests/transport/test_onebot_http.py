@@ -32,9 +32,9 @@ class TestOneBotHttpSender:
     def sender(self, mock_session):
         """创建 OneBotHttpSender 实例"""
         return OneBotHttpSender(
-            http_base="http://localhost:3000",
-            auth_token="test_token",
-            session=mock_session,
+            http_base  = "http://localhost:3000",
+            auth_token = "test_token",
+            session    = mock_session,
         )
 
     def test_initialization(self, sender: OneBotHttpSender):
@@ -45,9 +45,9 @@ class TestOneBotHttpSender:
     def test_http_base_trailing_slash_removed(self, mock_session):
         """测试移除尾部斜杠"""
         sender = OneBotHttpSender(
-            http_base="http://localhost:3000/",
-            auth_token="",
-            session=mock_session,
+            http_base  = "http://localhost:3000/",
+            auth_token = "",
+            session    = mock_session,
         )
         assert sender.http_base == "http://localhost:3000"
 
@@ -81,8 +81,8 @@ class TestOneBotHttpSender:
         sender: OneBotHttpSender,
         monkeypatch,
     ):
-        entered = asyncio.Event()
-        release = asyncio.Event()
+        entered                                    = asyncio.Event()
+        release                                    = asyncio.Event()
         captured: list[tuple[str, dict[str, str]]] = []
 
         async def request(_session, _method, url, **kwargs):
@@ -124,14 +124,14 @@ class TestOneBotHttpSender:
         mock_session,
         response_envelope,
     ):
-        mock_response = AsyncMock()
+        mock_response        = AsyncMock()
         mock_response.status = 200
         mock_response.json = AsyncMock(return_value=response_envelope)
         cm = MagicMock()
         cm.__aenter__ = AsyncMock(return_value=mock_response)
         cm.__aexit__ = AsyncMock(return_value=None)
         mock_session.post.return_value = cm
-        action = {"action": "get_msg", "params": {"message_id": 7}}
+        action                         = {"action": "get_msg", "params": {"message_id": 7}}
 
         result = await sender.request_action(action)
 
@@ -139,9 +139,9 @@ class TestOneBotHttpSender:
         assert action == {"action": "get_msg", "params": {"message_id": 7}}
         mock_session.post.assert_called_once_with(
             "http://localhost:3000/get_msg",
-            json={"message_id": 7},
-            headers={"Authorization": "Bearer test_token"},
-            timeout=mock_session.post.call_args.kwargs["timeout"],
+            json    = {"message_id": 7},
+            headers = {"Authorization": "Bearer test_token"},
+            timeout = mock_session.post.call_args.kwargs["timeout"],
         )
 
     @pytest.mark.asyncio
@@ -150,7 +150,7 @@ class TestOneBotHttpSender:
         sender: OneBotHttpSender,
         mock_session,
     ):
-        mock_response = AsyncMock()
+        mock_response        = AsyncMock()
         mock_response.status = 200
         mock_response.json = AsyncMock(return_value=[{"status": "ok"}])
         cm = MagicMock()
@@ -163,7 +163,7 @@ class TestOneBotHttpSender:
     @pytest.mark.asyncio
     async def test_send_action(self, sender: OneBotHttpSender, mock_session):
         """测试发送动作"""
-        mock_response = AsyncMock()
+        mock_response        = AsyncMock()
         mock_response.status = 200
         mock_response.json = AsyncMock(return_value={"status": "ok", "retcode": 0})
 
@@ -198,7 +198,7 @@ class TestOneBotHttpSender:
     async def test_send_action_normalizes_emoji_segment(
         self, sender: OneBotHttpSender, mock_session
     ):
-        mock_response = AsyncMock()
+        mock_response        = AsyncMock()
         mock_response.status = 200
         mock_response.json = AsyncMock(return_value={"status": "ok", "retcode": 0})
 
@@ -270,7 +270,7 @@ class TestOneBotHttpSender:
 
     @pytest.mark.asyncio
     async def test_send_action_rejects_nonzero_onebot_retcode(self, sender, mock_session):
-        mock_response = AsyncMock()
+        mock_response        = AsyncMock()
         mock_response.status = 200
         mock_response.json = AsyncMock(return_value={"status": "failed", "retcode": 100})
         cm = MagicMock()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Sequence
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -44,15 +45,23 @@ class JargonRecord:
 
     content: str
     scope_chat_id: str = ""
-    meaning: str = ""
+    meaning: str       = ""
     raw_content: list[str] = field(default_factory=list)
     chat_id_counts: list[list[Any]] = field(default_factory=list)
-    is_global: bool = False
-    count: int = 0
-    is_jargon: bool = True
-    is_complete: bool = False
+    is_global: bool           = False
+    count: int                = 0
+    is_jargon: bool           = True
+    is_complete: bool         = False
     last_inference_count: int = 0
     updated_at: float = field(default_factory=lambda: time.time())
+
+
+class JargonSnapshot(dict[str, JargonRecord]):
+    """黑话集合与其原始版本一起传递，保持异步推断前后的增量语义。"""
+
+    def __init__(self, records: dict[str, JargonRecord]) -> None:
+        super().__init__(deepcopy(records))
+        self.baseline = deepcopy(records)
 
 
 class JargonStore(StoreBase):
@@ -60,14 +69,26 @@ class JargonStore(StoreBase):
 
     def __init__(self) -> None:
         super().__init__()
-        self._cache: dict[str, JargonRecord] | None = None
-        self._baseline: dict[str, JargonRecord] = {}
+        self._cache: dict[str, JargonRecord] | None                        = None
+        self._baseline_context: ContextVar[dict[str, JargonRecord] | None] = ContextVar(
+            "snapshot_baseline", default=None
+        )
+
+    @property
+    def _baseline(self) -> dict[str, JargonRecord]:
+        """每个异步学习流程拥有独立快照，跨会话等待期间保持基线配对。"""
+        value = self._baseline_context.get()
+        return value if value is not None else {}
+
+    @_baseline.setter
+    def _baseline(self, value: dict[str, JargonRecord]) -> None:
+        self._baseline_context.set(value)
 
     def bind(self, data_dir: Path) -> None:
         if self._data_dir == data_dir:
             return
         super().bind(data_dir)
-        self._cache = None
+        self._cache    = None
         self._baseline = {}
 
     def _path(self) -> Path | None:
@@ -75,7 +96,7 @@ class JargonStore(StoreBase):
 
     @staticmethod
     def key_for(content: str, chat_id: str = "") -> str:
-        term = str(content or "").strip()
+        term  = str(content or "").strip()
         scope = str(chat_id or "").strip()
         return f"{scope}\x1f{term}" if scope else term
 
@@ -92,11 +113,11 @@ class JargonStore(StoreBase):
             if not content:
                 continue
             rec = JargonRecord(
-                content=content,
-                scope_chat_id=str(item.get("scope_chat_id", "") or "").strip(),
-                meaning=str(item.get("meaning", "") or "").strip(),
-                raw_content=_string_list(item.get("raw_content")),
-                chat_id_counts=_chat_count_list(item.get("chat_id_counts")),
+                content        = content,
+                scope_chat_id  = str(item.get("scope_chat_id", "") or "").strip(),
+                meaning        = str(item.get("meaning", "") or "").strip(),
+                raw_content    = _string_list(item.get("raw_content")),
+                chat_id_counts = _chat_count_list(item.get("chat_id_counts")),
                 is_global=coerce_json_bool(item.get("is_global"), default=False),
                 count=coerce_int(item.get("count"), default=0, minimum=0),
                 is_jargon=coerce_json_bool(item.get("is_jargon"), default=True),
@@ -106,8 +127,8 @@ class JargonStore(StoreBase):
                 ),
                 updated_at=coerce_finite_float(
                     item.get("updated_at"),
-                    default=time.time(),
-                    minimum=0.0,
+                    default = time.time(),
+                    minimum = 0.0,
                 ),
             )
             out[self.key_for(content, "" if rec.is_global else rec.scope_chat_id)] = rec
@@ -118,20 +139,19 @@ class JargonStore(StoreBase):
         if path is None:
             return {}
         with keyed_path_lock(path):
-            if self._cache is None:
-                self._cache = self._read_records()
-                self._baseline = deepcopy(self._cache)
-            return deepcopy(self._cache)
+            self._cache    = self._read_records()
+            self._baseline = deepcopy(self._cache)
+            return JargonSnapshot(self._cache)
 
     def clear(self, chat_id: str) -> None:
         """删除一个会话的黑话记录及其全局统计，保留全局定义与其它会话。"""
 
         target = str(chat_id or "").strip()
-        path = self._path()
+        path   = self._path()
         if not target or path is None:
             return
         with keyed_path_lock(path):
-            latest = self._read_records()
+            latest                             = self._read_records()
             remaining: dict[str, JargonRecord] = {}
             for record in latest.values():
                 if not record.is_global and record.scope_chat_id == target:
@@ -150,7 +170,7 @@ class JargonStore(StoreBase):
                 payload = [asdict(item) for item in remaining.values()]
                 if not self._save_json_to_path_parts("bw_learner", "jargon.json", data=payload):
                     return
-            self._cache = deepcopy(remaining)
+            self._cache    = deepcopy(remaining)
             self._baseline = deepcopy(remaining)
 
     @staticmethod
@@ -179,22 +199,22 @@ class JargonStore(StoreBase):
         if latest is None:
             return deepcopy(desired)
 
-        merged = deepcopy(latest)
+        merged         = deepcopy(latest)
         baseline_count = baseline.count if baseline is not None else 0
-        merged.count = max(0, latest.count + (desired.count - baseline_count))
+        merged.count   = max(0, latest.count + (desired.count - baseline_count))
 
-        baseline_raw = baseline.raw_content if baseline is not None else []
-        removed_raw = set(baseline_raw) - set(desired.raw_content)
-        additions = [item for item in desired.raw_content if item not in baseline_raw]
+        baseline_raw       = baseline.raw_content if baseline is not None else []
+        removed_raw        = set(baseline_raw) - set(desired.raw_content)
+        additions          = [item for item in desired.raw_content if item not in baseline_raw]
         merged.raw_content = [item for item in latest.raw_content if item not in removed_raw]
         merged.raw_content.extend(item for item in additions if item not in merged.raw_content)
         merged.raw_content = merged.raw_content[-20:]
 
-        latest_counts = cls._count_map(latest.chat_id_counts)
+        latest_counts   = cls._count_map(latest.chat_id_counts)
         baseline_counts = cls._count_map(baseline.chat_id_counts if baseline is not None else [])
-        desired_counts = cls._count_map(desired.chat_id_counts)
+        desired_counts  = cls._count_map(desired.chat_id_counts)
         for chat_id, desired_count in desired_counts.items():
-            delta = desired_count - baseline_counts.get(chat_id, 0)
+            delta                  = desired_count - baseline_counts.get(chat_id, 0)
             latest_counts[chat_id] = max(0, latest_counts.get(chat_id, 0) + delta)
         merged.chat_id_counts = [
             [chat_id, count]
@@ -210,11 +230,11 @@ class JargonStore(StoreBase):
             merged.meaning = desired.meaning
         for field_name in ("content", "scope_chat_id", "is_global", "is_jargon"):
             baseline_value = getattr(baseline, field_name) if baseline is not None else None
-            desired_value = getattr(desired, field_name)
-            latest_value = getattr(latest, field_name)
+            desired_value  = getattr(desired, field_name)
+            latest_value   = getattr(latest, field_name)
             if desired_value != baseline_value and latest_value == baseline_value:
                 setattr(merged, field_name, desired_value)
-        merged.is_complete = latest.is_complete or desired.is_complete
+        merged.is_complete          = latest.is_complete or desired.is_complete
         merged.last_inference_count = max(
             latest.last_inference_count,
             desired.last_inference_count,
@@ -222,13 +242,14 @@ class JargonStore(StoreBase):
         merged.updated_at = max(latest.updated_at, desired.updated_at)
         return merged
 
-    def save(self, items: Sequence[JargonRecord]) -> None:
-        desired_items = deepcopy(list(items))
-        path = self._path()
+    def save(self, items: Sequence[JargonRecord] | dict[str, JargonRecord]) -> None:
+        baseline      = items.baseline if isinstance(items, JargonSnapshot) else self._baseline
+        desired_items = deepcopy(list(items.values()) if isinstance(items, dict) else list(items))
+        path          = self._path()
         if path is None:
             return
         with keyed_path_lock(path):
-            latest = self._read_records()
+            latest  = self._read_records()
             desired = {
                 self.key_for(item.content, "" if item.is_global else item.scope_chat_id): item
                 for item in desired_items
@@ -237,20 +258,20 @@ class JargonStore(StoreBase):
             for key, desired_record in desired.items():
                 merged[key] = self._merge_record(
                     latest.get(key),
-                    self._baseline.get(key),
+                    baseline.get(key),
                     desired_record,
                 )
-            for key in set(self._baseline) - set(desired):
+            for key in set(baseline) - set(desired):
                 merged.pop(key, None)
 
-            concurrent_keys = [
-                key for key in latest if key not in self._baseline and key not in desired
-            ]
-            desired_keys = list(desired)
-            order = [*concurrent_keys, *desired_keys]
-            merged_items = [merged[key] for key in order if key in merged]
-            payload = [asdict(item) for item in merged_items]
+            concurrent_keys = [key for key in latest if key not in baseline and key not in desired]
+            desired_keys    = list(desired)
+            order           = [*concurrent_keys, *desired_keys]
+            merged_items    = [merged[key] for key in order if key in merged]
+            payload         = [asdict(item) for item in merged_items]
             if not self._save_json_to_path_parts("bw_learner", "jargon.json", data=payload):
                 return
-            self._cache = deepcopy(merged)
+            self._cache    = deepcopy(merged)
             self._baseline = deepcopy(merged)
+            if isinstance(items, JargonSnapshot):
+                items.baseline = deepcopy(desired)

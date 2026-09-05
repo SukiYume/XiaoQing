@@ -27,7 +27,7 @@ ROOT = REPOSITORY_ROOT
 
 
 def test_every_schedule_declares_core_delivery_mode() -> None:
-    allowed = {"broadcast", "targeted", "silent"}
+    allowed   = {"broadcast", "targeted", "silent"}
     schedules = []
     for manifest_path in sorted((ROOT / "plugins").glob("*/plugin.json")):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -41,13 +41,13 @@ def test_every_schedule_declares_core_delivery_mode() -> None:
 
 class _ScopedContext:
     def __init__(self, data_dir: Path, *, user_id: int = 1, group_id: int | None = None):
-        self.data_dir = data_dir
-        self.plugin_dir = ROOT / "plugins" / "smalltalk"
-        self.current_user_id = user_id
+        self.data_dir         = data_dir
+        self.plugin_dir       = ROOT / "plugins" / "smalltalk"
+        self.current_user_id  = user_id
         self.current_group_id = group_id
-        self.config = {"plugins": {"smalltalk": {"voice_probability": 0}}}
-        self.logger = MagicMock()
-        self.chat_reply = MagicMock()
+        self.config           = {"plugins": {"smalltalk": {"voice_probability": 0}}}
+        self.logger           = MagicMock()
+        self.chat_reply       = MagicMock()
         self.chat_reply.reply = AsyncMock(
             return_value=smalltalk.segments("provider response"),
         )
@@ -105,14 +105,14 @@ async def test_adnmb_image_download_is_bounded_validated_and_hashed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    body = _png_bytes()
+    body  = _png_bytes()
     fetch = AsyncMock(
         return_value=SafeHttpResponse(
-            url="https://image.nmb.best/image/a.png",
-            status=200,
-            body=body,
-            charset=None,
-            headers={"Content-Type": "image/png"},
+            url     = "https://image.nmb.best/image/a.png",
+            status  = 200,
+            body    = body,
+            charset = None,
+            headers = {"Content-Type": "image/png"},
         )
     )
     monkeypatch.setattr(adapi, "fetch_public_bytes", fetch)
@@ -150,7 +150,7 @@ async def test_simbad_total_deadline_returns_without_global_lock(
     from astropy import units as _units  # noqa: F401
     from astropy.coordinates import SkyCoord as _SkyCoord  # noqa: F401
 
-    release_query = threading.Event()
+    release_query  = threading.Event()
     query_finished = threading.Event()
 
     def slow_query(_name: str):
@@ -196,7 +196,7 @@ def test_custom_colors_are_scoped_and_atomic(tmp_path: Path) -> None:
 
 
 def test_github_history_remains_valid_under_concurrent_writers(tmp_path: Path) -> None:
-    context = MagicMock()
+    context          = MagicMock()
     context.data_dir = tmp_path
 
     def save(index: int) -> None:

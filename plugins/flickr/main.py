@@ -40,22 +40,22 @@ from .client import (
 logger = logging.getLogger(__name__)
 
 SESSION_TTL_SECONDS = 15 * 60
-MAX_SESSIONS = 512
-MAX_MORE_COUNT = 5
-MAX_IMAGE_BYTES = 12 * 1024 * 1024
+MAX_SESSIONS        = 512
+MAX_MORE_COUNT      = 5
+MAX_IMAGE_BYTES     = 12 * 1024 * 1024
 _STATIC_IMAGE_HOSTS = frozenset({"live.staticflickr.com"})
-_FLICKR_PAGE_HOSTS = frozenset({"flickr.com", "www.flickr.com", "m.flickr.com"})
-_IMAGE_EXTENSIONS = (".jpg", ".png", ".webp", ".gif")
-_IMAGE_LIMITS = ImageValidationLimits(
-    max_bytes=MAX_IMAGE_BYTES,
-    max_pixels=40_000_000,
-    max_dimension=12_000,
-    max_frames=1,
+_FLICKR_PAGE_HOSTS  = frozenset({"flickr.com", "www.flickr.com", "m.flickr.com"})
+_IMAGE_EXTENSIONS   = (".jpg", ".png", ".webp", ".gif")
+_IMAGE_LIMITS       = ImageValidationLimits(
+    max_bytes     = MAX_IMAGE_BYTES,
+    max_pixels    = 40_000_000,
+    max_dimension = 12_000,
+    max_frames    = 1,
 )
 _IMAGE_CACHE_LIMITS = FileCacheLimits(
-    max_entries=256,
-    max_bytes=256 * 1024 * 1024,
-    ttl_seconds=60 * 60,
+    max_entries = 256,
+    max_bytes   = 256 * 1024 * 1024,
+    ttl_seconds = 60 * 60,
 )
 
 _SORTS = {
@@ -146,11 +146,11 @@ class _SearchRequest:
 def _runtime(context: PluginContextProtocol) -> dict[str, Any]:
     state = getattr(context, "state", None)
     if not isinstance(state, dict):
-        state = {}
+        state         = {}
         context.state = state
     runtime = state.setdefault("flickr_runtime", {})
     if not isinstance(runtime, dict):
-        runtime = {}
+        runtime                 = {}
         state["flickr_runtime"] = runtime
     runtime.setdefault("sessions", {})
     runtime.setdefault("locks", {})
@@ -166,7 +166,7 @@ def _session_key(
     event: dict[str, Any],
     context: PluginContextProtocol,
 ) -> tuple[str, int, int] | tuple[str, int]:
-    user_id = getattr(context, "current_user_id", None) or _event_id(event, "user_id")
+    user_id  = getattr(context, "current_user_id", None) or _event_id(event, "user_id")
     group_id = getattr(context, "current_group_id", None) or _event_id(event, "group_id")
     if not isinstance(user_id, int) or isinstance(user_id, bool) or user_id <= 0:
         raise FlickrUsageError("无法识别当前用户，不能保存 Flickr 翻页状态")
@@ -177,32 +177,47 @@ def _session_key(
 
 def _prune_runtime(runtime: dict[str, Any], *, now: float) -> None:
     sessions = runtime["sessions"]
-    locks = runtime["locks"]
+    locks    = runtime["locks"]
     if not isinstance(sessions, dict) or not isinstance(locks, dict):
         runtime["sessions"] = {}
-        runtime["locks"] = {}
+        runtime["locks"]    = {}
         return
+
+    # 没有会话的空闲锁也需要回收；等待者已排队时保留同一个锁对象。
+    def in_use(lock: object) -> bool:
+        return isinstance(lock, asyncio.Lock) and (
+            lock.locked() or bool(getattr(lock, "_waiters", None))
+        )
+
+    for key, lock in tuple(locks.items()):
+        if key not in sessions and not in_use(lock):
+            locks.pop(key, None)
     for key, session in tuple(sessions.items()):
         if not isinstance(session, _BrowseSession) or session.expires_at <= now:
             lock = locks.get(key)
-            if isinstance(lock, asyncio.Lock) and lock.locked():
+            if in_use(lock):
                 continue
             sessions.pop(key, None)
             locks.pop(key, None)
     if len(sessions) <= MAX_SESSIONS:
         return
     excess = len(sessions) - MAX_SESSIONS
-    oldest = sorted(sessions.items(), key=lambda item: item[1].expires_at)[:excess]
+    oldest = sorted(sessions.items(), key=lambda item: item[1].expires_at)
     for key, _session in oldest:
+        if excess <= 0:
+            break
+        if in_use(locks.get(key)):
+            continue
         sessions.pop(key, None)
         locks.pop(key, None)
+        excess -= 1
 
 
 def _session_lock(runtime: dict[str, Any], key: object) -> asyncio.Lock:
     locks = runtime["locks"]
-    lock = locks.get(key)
+    lock  = locks.get(key)
     if not isinstance(lock, asyncio.Lock):
-        lock = asyncio.Lock()
+        lock       = asyncio.Lock()
         locks[key] = lock
     return lock
 
@@ -241,12 +256,12 @@ def _parse_search(parsed: ParsedArgs, *, token_start: int) -> _SearchRequest:
     _require_option_values(parsed, {"tags", "sort", "license", "date"})
     query = bounded_external_text(
         " ".join(parsed.tokens[token_start:]),
-        max_chars=300,
-        max_bytes=1_200,
-        truncate=False,
+        max_chars = 300,
+        max_bytes = 1_200,
+        truncate  = False,
     )
     raw_tags = parsed.opt("tags")
-    tags = ",".join(
+    tags     = ",".join(
         tag
         for item in raw_tags.split(",")
         if (tag := bounded_external_text(item, max_chars=48, max_bytes=192, truncate=False))
@@ -263,12 +278,12 @@ def _parse_search(parsed: ParsedArgs, *, token_start: int) -> _SearchRequest:
     if parsed.has("date"):
         min_date, max_date = _taken_date_range(parsed.opt("date"))
     return _SearchRequest(
-        query=query,
-        tags=tags,
-        sort=_SORTS[sort_name],
-        license_ids=_LICENSE_FILTERS[license_name],
-        min_taken_date=min_date,
-        max_taken_date=max_date,
+        query          = query,
+        tags           = tags,
+        sort           = _SORTS[sort_name],
+        license_ids    = _LICENSE_FILTERS[license_name],
+        min_taken_date = min_date,
+        max_taken_date = max_date,
     )
 
 
@@ -287,7 +302,7 @@ def _parse_album_reference(tokens: list[str]) -> tuple[str, str]:
     value = tokens[0]
     try:
         parsed = urlsplit(value)
-        port = parsed.port
+        port   = parsed.port
     except ValueError as exc:
         raise FlickrUsageError("相册 URL 格式无效") from exc
     host = (parsed.hostname or "").rstrip(".").casefold()
@@ -333,7 +348,7 @@ def _parse_photo_reference(value: str) -> str:
         return _opaque_id(candidate, label="照片 ID")
     try:
         parsed = urlsplit(candidate)
-        port = parsed.port
+        port   = parsed.port
     except ValueError as exc:
         raise FlickrUsageError("照片 URL 格式无效") from exc
     host = (parsed.hostname or "").rstrip(".").casefold()
@@ -366,15 +381,15 @@ def _photo_caption(
 ) -> str:
     title_value = bounded_external_text(
         photo.title,
-        max_chars=180,
-        max_bytes=720,
-        default="无标题",
+        max_chars = 180,
+        max_bytes = 720,
+        default   = "无标题",
     )
     owner = bounded_external_text(
         photo.owner_name,
-        max_chars=100,
-        max_bytes=400,
-        default=photo.owner_id,
+        max_chars = 100,
+        max_bytes = 400,
+        default   = photo.owner_id,
     )
     license_name, license_url = _license_line(photo)
     lines = [f"📷 {title_value}", f"👤 {owner}", f"📜 {license_name}"]
@@ -388,8 +403,8 @@ def _photo_caption(
     if detailed and photo.description:
         description = bounded_external_text(
             photo.description,
-            max_chars=700,
-            max_bytes=2_800,
+            max_chars = 700,
+            max_bytes = 2_800,
         )
         lines.extend(("", description))
     lines.extend(("", f"🔗 {photo.page_url}"))
@@ -404,7 +419,7 @@ def _image_cache(context: PluginContextProtocol) -> BoundedFileCache:
 
 async def _download_photo(photo: FlickrPhoto, context: PluginContextProtocol) -> Path:
     digest = hashlib.sha256(photo.media_url.encode("utf-8")).hexdigest()
-    cache = _image_cache(context)
+    cache  = _image_cache(context)
     cached = await run_sync(
         cache.get_any, tuple(f"{digest}{suffix}" for suffix in _IMAGE_EXTENSIONS)
     )
@@ -412,21 +427,21 @@ async def _download_photo(photo: FlickrPhoto, context: PluginContextProtocol) ->
         return cached
     response = await fetch_public_bytes(
         photo.media_url,
-        timeout_seconds=15.0,
-        max_bytes=MAX_IMAGE_BYTES,
-        allowed_content_types={"image/jpeg", "image/png", "image/webp", "image/gif"},
-        allowed_content_type_prefixes=(),
-        allowed_hosts=_STATIC_IMAGE_HOSTS,
-        allowed_schemes=("https",),
-        allow_transparent_proxy_fake_dns=True,
+        timeout_seconds                  = 15.0,
+        max_bytes                        = MAX_IMAGE_BYTES,
+        allowed_content_types            = {"image/jpeg", "image/png", "image/webp", "image/gif"},
+        allowed_content_type_prefixes    = (),
+        allowed_hosts                    = _STATIC_IMAGE_HOSTS,
+        allowed_schemes                  = ("https",),
+        allow_transparent_proxy_fake_dns = True,
     )
     if response is None:
         raise SafeHttpError("Flickr image download returned no response")
     validated = await run_sync(
         validate_image_bytes,
         response.body,
-        limits=_IMAGE_LIMITS,
-        allow_animation=False,
+        limits          = _IMAGE_LIMITS,
+        allow_animation = False,
     )
     stored = await run_sync(cache.put, f"{digest}{validated.extension}", response.body)
     if stored is None:
@@ -461,28 +476,28 @@ async def _open_page(
     if not page.photos:
         return [text("🔍 没有找到可发送的 Flickr 公共照片")]
     runtime = _runtime(context)
-    now = time.monotonic()
+    now     = time.monotonic()
     _prune_runtime(runtime, now=now)
-    key = _session_key(event, context)
+    key  = _session_key(event, context)
     lock = _session_lock(runtime, key)
     async with lock:
         runtime["sessions"][key] = _BrowseSession(
-            photos=page.photos,
-            next_index=1,
-            last_index=0,
-            summary=bounded_external_text(
+            photos     = page.photos,
+            next_index = 1,
+            last_index = 0,
+            summary    = bounded_external_text(
                 summary,
-                max_chars=100,
-                max_bytes=400,
-                default="当前 Flickr 结果",
+                max_chars = 100,
+                max_bytes = 400,
+                default   = "当前 Flickr 结果",
             ),
             expires_at=now + SESSION_TTL_SECONDS,
         )
         return await _render_photo(
             page.photos[0],
             context,
-            index=0,
-            total=len(page.photos),
+            index = 0,
+            total = len(page.photos),
         )
 
 
@@ -493,9 +508,9 @@ async def _more(
     context: PluginContextProtocol,
 ) -> Segments:
     runtime = _runtime(context)
-    now = time.monotonic()
+    now     = time.monotonic()
     _prune_runtime(runtime, now=now)
-    key = _session_key(event, context)
+    key  = _session_key(event, context)
     lock = _session_lock(runtime, key)
     async with lock:
         session = runtime["sessions"].get(key)
@@ -504,15 +519,15 @@ async def _more(
             return [text("⏳ 当前没有可继续的 Flickr 结果，请先搜索或浏览精选")]
         if session.next_index >= len(session.photos):
             return [text(f"✅ {session.summary}已经浏览完")]
-        end = min(session.next_index + count, len(session.photos))
+        end             = min(session.next_index + count, len(session.photos))
         reply: Segments = []
         for index in range(session.next_index, end):
             reply.extend(
                 await _render_photo(
                     session.photos[index],
                     context,
-                    index=index,
-                    total=len(session.photos),
+                    index = index,
+                    total = len(session.photos),
                 )
             )
         session.last_index = end - 1
@@ -527,9 +542,9 @@ async def _last_photo(
     context: PluginContextProtocol,
 ) -> FlickrPhoto | None:
     runtime = _runtime(context)
-    now = time.monotonic()
+    now     = time.monotonic()
     _prune_runtime(runtime, now=now)
-    key = _session_key(event, context)
+    key  = _session_key(event, context)
     lock = _session_lock(runtime, key)
     async with lock:
         session = runtime["sessions"].get(key)
@@ -553,20 +568,20 @@ async def _dispatch(
         if parsed.tokens or parsed.options:
             raise FlickrUsageError("用法：/flickr")
         client = FlickrClient(context)
-        page = await client.interesting()
+        page   = await client.interesting()
         return await _open_page(page, summary="今日精选", event=event, context=context)
 
     if action in {"search", "commons"}:
         request = _parse_search(parsed, token_start=1)
         client = FlickrClient(context)
-        page = await client.search(
-            query=request.query,
-            tags=request.tags,
-            sort=request.sort,
-            license_ids=request.license_ids,
-            min_taken_date=request.min_taken_date,
-            max_taken_date=request.max_taken_date,
-            commons_only=action == "commons",
+        page   = await client.search(
+            query          = request.query,
+            tags           = request.tags,
+            sort           = request.sort,
+            license_ids    = request.license_ids,
+            min_taken_date = request.min_taken_date,
+            max_taken_date = request.max_taken_date,
+            commons_only   = action == "commons",
         )
         summary = "Flickr Commons" if action == "commons" else "Flickr 搜索"
         return await _open_page(page, summary=summary, event=event, context=context)
@@ -576,15 +591,15 @@ async def _dispatch(
         reference = " ".join(parsed.tokens[1:]).strip()
         if not reference:
             raise FlickrUsageError("用法：/flickr user <用户名或个人页 URL>")
-        client = FlickrClient(context)
+        client  = FlickrClient(context)
         user_id = await client.resolve_user(reference)
-        page = await client.public_photos(user_id)
+        page    = await client.public_photos(user_id)
         return await _open_page(page, summary=f"用户 {reference}", event=event, context=context)
 
     if action == "album":
         _require_option_values(parsed, set())
         owner_reference, album_id = _parse_album_reference(parsed.tokens[1:])
-        client = FlickrClient(context)
+        client  = FlickrClient(context)
         user_id = await client.resolve_user(owner_reference)
         page = await client.album_photos(user_id=user_id, album_id=album_id)
         return await _open_page(page, summary=f"相册 {album_id}", event=event, context=context)
@@ -609,7 +624,7 @@ async def _dispatch(
         photo: FlickrPhoto | None
         if len(parsed.tokens) == 2:
             client = FlickrClient(context)
-            photo = await client.photo_info(_parse_photo_reference(parsed.tokens[1]))
+            photo  = await client.photo_info(_parse_photo_reference(parsed.tokens[1]))
         else:
             photo = await _last_photo(event=event, context=context)
         if photo is None:
@@ -650,8 +665,8 @@ async def handle(
         return public_error_response(
             context,
             exc,
-            logger=context.logger,
-            component="flickr.handle",
+            logger    = context.logger,
+            component = "flickr.handle",
         )
 
 

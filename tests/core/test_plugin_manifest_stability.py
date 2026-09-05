@@ -1,3 +1,4 @@
+# 验证清单快照的稳定读取、字节上限和变更检测。
 """Regression tests for stable, bounded plugin manifest snapshots."""
 
 import json
@@ -19,9 +20,9 @@ def _build_manager(tmp_path: Path) -> PluginManager:
     plugins_dir.mkdir()
     (plugins_dir / "__init__.py").write_text("", encoding="utf-8")
     return PluginManager(
-        plugins_dir=plugins_dir,
-        router=CommandRouter(),
-        context_factory=lambda *_args, **_kwargs: None,
+        plugins_dir     = plugins_dir,
+        router          = CommandRouter(),
+        context_factory = lambda *_args, **_kwargs: None,
     )
 
 
@@ -42,7 +43,7 @@ def _manifest_payload(name: str, version: str = "1.0.0") -> bytes:
 
 class _ReadAudit:
     def __init__(self, handle, read_limits: list[int]) -> None:  # type: ignore[no-untyped-def]
-        self._handle = handle
+        self._handle      = handle
         self._read_limits = read_limits
 
     def __enter__(self):  # type: ignore[no-untyped-def]
@@ -64,12 +65,12 @@ def _audit_manifest_open(
     monkeypatch: pytest.MonkeyPatch,
     manifest_path: Path,
 ) -> tuple[list[str], list[int]]:
-    real_open = Path.open
-    modes: list[str] = []
+    real_open              = Path.open
+    modes: list[str]       = []
     read_limits: list[int] = []
 
     def audited_open(path: Path, *args, **kwargs):  # type: ignore[no-untyped-def]
-        mode = args[0] if args else kwargs.get("mode", "r")
+        mode   = args[0] if args else kwargs.get("mode", "r")
         handle = real_open(path, *args, **kwargs)
         if path == manifest_path and mode == "rb":
             modes.append(mode)
@@ -99,10 +100,10 @@ def _redirect_manifest_open(
 
 
 def _write_race_pair(tmp_path: Path) -> tuple[PluginManager, Path, Path, Path]:
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
-    manifest_path = plugin_dir / "plugin.json"
+    manifest_path    = plugin_dir / "plugin.json"
     replacement_path = tmp_path / "replacement-plugin.json"
     manifest_path.write_bytes(_manifest_payload("demo", "1.0.0"))
     replacement_path.write_bytes(_manifest_payload("demo", "2.0.0"))
@@ -125,14 +126,14 @@ def test_manifest_snapshot_uses_binary_bounded_read_and_two_fstats(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
     manifest_path = plugin_dir / "plugin.json"
     manifest_path.write_bytes(_manifest_payload("demo"))
     modes, read_limits = _audit_manifest_open(monkeypatch, manifest_path)
 
-    real_fstat = os.fstat
+    real_fstat           = os.fstat
     fstat_fds: list[int] = []
 
     def audited_fstat(fd: int):  # type: ignore[no-untyped-def]
@@ -156,7 +157,7 @@ def test_oversized_manifest_is_rejected_after_at_most_one_mib_plus_one_byte(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
     manifest_path = plugin_dir / "plugin.json"

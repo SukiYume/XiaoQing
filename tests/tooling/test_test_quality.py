@@ -8,7 +8,7 @@ from pathlib import Path
 
 from tests.helpers.paths import REPOSITORY_ROOT, TESTS_ROOT
 
-PROJECT_ROOT = REPOSITORY_ROOT
+PROJECT_ROOT          = REPOSITORY_ROOT
 REMOVED_RUNTIME_PATHS = {
     "plugins/adnmb/user.py",
     "plugins/signin/sony.py",
@@ -221,8 +221,8 @@ TRANSPORT_CONTRACT_TESTS = {
     "plugins/twitter/test_twitter.py",
     "plugins/wolframalpha/test_wolframalpha.py",
 }
-MAX_TEST_MODULE_LINES = 1200
-OPAQUE_REVIEW_FILENAME = re.compile(r"^test_cr\d", re.IGNORECASE)
+MAX_TEST_MODULE_LINES       = 1200
+OPAQUE_REVIEW_FILENAME      = re.compile(r"^test_cr\d", re.IGNORECASE)
 REPOSITORY_DEPTH_EXPRESSION = re.compile(
     r"Path\(__file__\)\.resolve\(\)\.(?:parents\[|parent\.parent)"
 )
@@ -264,7 +264,7 @@ def _implicit_subprocess_text_decoders() -> list[str]:
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
-            keywords = {keyword.arg: keyword.value for keyword in node.keywords if keyword.arg}
+            keywords  = {keyword.arg: keyword.value for keyword in node.keywords if keyword.arg}
             text_mode = keywords.get("text") or keywords.get("universal_newlines")
             if not (
                 isinstance(text_mode, ast.Constant)
@@ -392,7 +392,7 @@ def _source_flags(
     }
     if isinstance(node, ast.Attribute) and node.attr == "__file__":
         # `Path(imported_module.__file__)` 已经是具体 Python 模块文件，而不是目录锚点。
-        has_python_path = True
+        has_python_path  = True
         project_anchored = True
 
     if isinstance(node, ast.Name) and node.id in bindings and node.id not in resolving:
@@ -473,7 +473,7 @@ def test_only_audited_contract_tests_read_project_python_source() -> None:
                 readers.add((relative_path, function.name))
 
     unexpected = sorted(readers - ALLOWED_PROJECT_SOURCE_READERS)
-    stale = sorted(ALLOWED_PROJECT_SOURCE_READERS - readers)
+    stale      = sorted(ALLOWED_PROJECT_SOURCE_READERS - readers)
     assert unexpected == [] and stale == [], (
         "unaudited project-source readers:\n"
         + "\n".join(f"  + {path}::{name}" for path, name in unexpected)

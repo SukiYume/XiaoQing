@@ -67,7 +67,7 @@ def build_paired_texts(
 ) -> list[str]:
     """Build normalized title/abstract strings using a caller-owned template."""
 
-    titles = frame[title_column].fillna("").astype(str).tolist()
+    titles    = frame[title_column].fillna("").astype(str).tolist()
     abstracts = frame[abstract_column].fillna("").astype(str).tolist()
     return [
         template.format(t=_clean_text(title), a=_clean_text(abstract)).strip()
@@ -95,7 +95,7 @@ def validate_embedding_matrix(
     *,
     expected_rows: int,
     expected_dim: int | None = None,
-    name: str = "embeddings",
+    name: str                = "embeddings",
 ) -> np.ndarray:
     """验证预计算 embedding 的行数、维度和有限性，并统一为 float32。"""
 
@@ -122,7 +122,7 @@ def best_fbeta_threshold(
         raise ValueError("beta must be a finite positive number")
     if beta <= 0:
         raise ValueError("beta must be a finite positive number")
-    labels = np.asarray(y_true)
+    labels       = np.asarray(y_true)
     scores_input = np.asarray(y_score)
     if labels.ndim != 1 or scores_input.ndim != 1 or len(labels) != len(scores_input):
         raise ValueError("y_true and y_score must be one-dimensional arrays of equal length")
@@ -136,7 +136,7 @@ def best_fbeta_threshold(
     if len(thresholds) == 0:
         return 0.5, 0.0
     beta_squared = beta * beta
-    scores = ((1 + beta_squared) * precision[:-1] * recall[:-1]) / np.clip(
+    scores       = ((1 + beta_squared) * precision[:-1] * recall[:-1]) / np.clip(
         (beta_squared * precision[:-1]) + recall[:-1],
         1e-12,
         None,
@@ -169,15 +169,15 @@ def split_dataframe(
     val_size: float,
     split_mode: str,
     *,
-    seed: int = 42,
-    date_col: str | None = None,
-    label_col: str | None = None,
+    seed: int                  = 42,
+    date_col: str | None       = None,
+    label_col: str | None      = None,
     log: Callable[[str], None] = timestamp_log,
     missing_date_error: str,
     stratify_fallback_message: str,
     invalid_dates_message: str | None = None,
-    empty_training_error: str | None = None,
-    unknown_mode_error: str | None = None,
+    empty_training_error: str | None  = None,
+    unknown_mode_error: str | None    = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Create a time-ordered or deterministic random interest-model split."""
 
@@ -204,7 +204,7 @@ def split_dataframe(
         working["_dt"] = datetimes
         working = working.sort_values("_dt").reset_index(drop=True)
         validation_count = max(1, int(round(len(working) * val_size)))
-        training_count = len(working) - validation_count
+        training_count   = len(working) - validation_count
         if training_count <= 0:
             raise ValueError(empty_training_error or "validation split leaves no training rows")
         train_frame = working.iloc[:training_count].drop(columns=["_dt"]).reset_index(drop=True)
@@ -219,17 +219,17 @@ def split_dataframe(
         try:
             train_frame, validation_frame = train_test_split(
                 working,
-                test_size=val_size,
-                stratify=working[label_col],
-                random_state=seed,
+                test_size    = val_size,
+                stratify     = working[label_col],
+                random_state = seed,
             )
             return train_frame.reset_index(drop=True), validation_frame.reset_index(drop=True)
         except ValueError:
             log(stratify_fallback_message)
     train_frame, validation_frame = train_test_split(
         working,
-        test_size=val_size,
-        random_state=seed,
+        test_size    = val_size,
+        random_state = seed,
     )
     return train_frame.reset_index(drop=True), validation_frame.reset_index(drop=True)
 

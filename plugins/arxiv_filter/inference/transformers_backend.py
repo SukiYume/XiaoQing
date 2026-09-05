@@ -22,9 +22,9 @@ from .shared import InferenceParams, model_artifact_fingerprint
 
 logger = logging.getLogger(__name__)
 
-transformers = importlib.import_module("transformers")
+transformers                       = importlib.import_module("transformers")
 AutoModelForSequenceClassification = transformers.AutoModelForSequenceClassification
-AutoTokenizer = transformers.AutoTokenizer
+AutoTokenizer                      = transformers.AutoTokenizer
 
 _MODEL_CACHE: dict[tuple[str, str, str], tuple[object, object]] = {}
 
@@ -41,17 +41,17 @@ class TitleAbstractDataset(Dataset):
         if abstracts is not None and len(abstracts) != len(titles):
             raise ValueError("titles and abstracts must contain the same number of rows")
         truncation = "only_second" if abstracts is not None else True
-        enc = tokenizer(
+        enc        = tokenizer(
             titles,
-            text_pair=abstracts,
-            add_special_tokens=True,
-            max_length=max_len,
-            padding=False,
-            truncation=truncation,
+            text_pair          = abstracts,
+            add_special_tokens = True,
+            max_length         = max_len,
+            padding            = False,
+            truncation         = truncation,
         )
         if not isinstance(enc, Mapping):
             raise TypeError("tokenizer must return a mapping")
-        self.input_ids = enc["input_ids"]
+        self.input_ids      = enc["input_ids"]
         self.attention_mask = enc["attention_mask"]
         self.token_type_ids = enc.get("token_type_ids")
         if len(self.input_ids) != len(titles) or len(self.attention_mask) != len(titles):
@@ -102,7 +102,7 @@ def load_model_and_tokenizer(
     if not os.path.isdir(model_path):
         raise FileNotFoundError(f"Model path does not exist or is not a directory: {model_path}")
     resolved_path = os.path.abspath(model_path)
-    cache_key = (
+    cache_key     = (
         resolved_path,
         artifact_fingerprint or model_artifact_fingerprint(resolved_path),
         str(device),
@@ -111,7 +111,7 @@ def load_model_and_tokenizer(
     if cached is not None:
         return cached
 
-    model = AutoModelForSequenceClassification.from_pretrained(model_path).to(device).eval()
+    model     = AutoModelForSequenceClassification.from_pretrained(model_path).to(device).eval()
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     for stale_key in [key for key in _MODEL_CACHE if key[0] == resolved_path]:
         _MODEL_CACHE.pop(stale_key, None)
@@ -159,7 +159,7 @@ def run_transformers_inference(
     all_probs: list[float] = []
     with torch.no_grad():
         for batch in loader:
-            kw = {k: v.to(device) for k, v in batch.items()}
+            kw     = {k: v.to(device) for k, v in batch.items()}
             logits = model(**kw).logits
             all_probs.extend(F.softmax(logits, dim=1)[:, 1].cpu().tolist())
 

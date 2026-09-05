@@ -71,7 +71,7 @@ def build_event_schedule(
 ) -> JsonObject:
     """把单个日程展开为范围内每天可直接渲染的时间轴条目。"""
 
-    kind = event_kind(event)
+    kind           = event_kind(event)
     start_resolved = _resolve_datetime(event.start_time, timezone_info)
     end_resolved = _resolve_datetime(event.end_time, timezone_info, is_end=True)
     if start_resolved is None:
@@ -87,12 +87,12 @@ def build_event_schedule(
     end_dt, end_epoch_ms = end_resolved if end_resolved is not None else (None, None)
 
     display_start = max(start_dt.date(), range_start_day)
-    display_end = min((end_dt or start_dt).date(), range_end_day)
-    display_days = daterange(display_start, display_end) if display_start <= display_end else []
+    display_end   = min((end_dt or start_dt).date(), range_end_day)
+    display_days  = daterange(display_start, display_end) if display_start <= display_end else []
     start_time = start_dt.isoformat(timespec="seconds")
     end_time = end_dt.isoformat(timespec="seconds") if end_dt else ""
-    start_day = start_dt.date().isoformat()
-    end_day = end_dt.date().isoformat() if end_dt else start_day
+    start_day    = start_dt.date().isoformat()
+    end_day      = end_dt.date().isoformat() if end_dt else start_day
     time_summary = start_dt.strftime("%H:%M")
     if end_dt is not None:
         time_summary = f"{time_summary} - {end_dt.strftime('%H:%M')}"
@@ -100,13 +100,13 @@ def build_event_schedule(
     day_entries: dict[str, list[JsonObject]] = {}
     for day in display_days:
         if day == start_day:
-            row_time = start_time
+            row_time   = start_time
             time_label = start_dt.strftime("%H:%M")
         elif end_dt is not None and day == end_day:
-            row_time = f"{day}T00:00:00"
+            row_time   = f"{day}T00:00:00"
             time_label = f"至 {end_dt.strftime('%H:%M')}"
         else:
-            row_time = f"{day}T00:00:00"
+            row_time   = f"{day}T00:00:00"
             time_label = "跨天"
         day_entries[day] = [
             {

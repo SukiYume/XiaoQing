@@ -65,7 +65,7 @@ def test_operation_logs_schema_supports_marked_undo_and_query_indexes(tmp_path: 
 
 def test_existing_operation_logs_are_migrated_without_losing_rows(tmp_path: Path) -> None:
     db_path = tmp_path / "pendo-operation-migration.db"
-    conn = sqlite3.connect(db_path)
+    conn    = sqlite3.connect(db_path)
     conn.execute(
         """
         CREATE TABLE operation_logs (
@@ -102,9 +102,9 @@ def test_existing_operation_logs_are_migrated_without_losing_rows(tmp_path: Path
 
 
 def test_undo_edit_marks_source_and_appends_audit_record(tmp_path: Path) -> None:
-    db = Database(str(tmp_path / "pendo-undo-edit-audit.db"))
+    db       = Database(str(tmp_path / "pendo-undo-edit-audit.db"))
     owner_id = "u-undo-edit-audit"
-    item_id = "note-undo-edit-audit"
+    item_id  = "note-undo-edit-audit"
     try:
         db.insert_item(
             {
@@ -119,8 +119,8 @@ def test_undo_edit_marks_source_and_appends_audit_record(tmp_path: Path) -> None
             item_id,
             {"title": "新标题"},
             owner_id,
-            item_type="note",
-            operation_log={
+            item_type     = "note",
+            operation_log = {
                 "user_id": owner_id,
                 "action": "edit_note",
                 "item_type": "note",
@@ -195,8 +195,8 @@ def test_web_item_create_uses_user_clock_and_update_uses_database_clock(
     try:
         created = items_api.create_item(
             items_api.ItemCreate(type="note", title="按用户时间创建"),
-            owner_id=owner_id,
-            db=db,
+            owner_id = owner_id,
+            db       = db,
         )
         item_id = str(created["data"]["id"])
         initial = db.get_item(item_id, owner_id=owner_id)
@@ -208,8 +208,8 @@ def test_web_item_create_uses_user_clock_and_update_uses_database_clock(
         items_api.update_item(
             item_id,
             items_api.ItemUpdate(title="数据库时间更新"),
-            owner_id=owner_id,
-            db=db,
+            owner_id = owner_id,
+            db       = db,
         )
         updated = db.get_item(item_id, owner_id=owner_id)
 
@@ -287,7 +287,7 @@ def test_web_list_and_search_http_endpoints_reject_out_of_range_pagination() -> 
     app.include_router(items_api.router)
     app.include_router(search_api.router)
     app.dependency_overrides[items_api.get_current_user] = lambda: "u-pagination"
-    app.dependency_overrides[items_api.get_db] = lambda: db
+    app.dependency_overrides[items_api.get_db]           = lambda: db
 
     try:
         with TestClient(app) as client:
@@ -541,7 +541,7 @@ def test_schema_migrations_are_versioned_and_idempotent():
         )
         assert rows_before
         add_column_count = len(db_schema._ADD_COLUMN_MIGRATIONS)
-        add_column_rows = rows_before[:add_column_count]
+        add_column_rows  = rows_before[:add_column_count]
         assert [row["version"] for row in add_column_rows] == list(range(1, add_column_count + 1))
         assert all(row["name"].startswith("add-column-") for row in add_column_rows)
         assert all("ADD COLUMN" in row["sql"] for row in add_column_rows)
@@ -608,9 +608,9 @@ def test_database_initialization_helpers_share_one_rollback_boundary(
     from plugins.pendo.services import db as db_module
     from plugins.pendo.services import db_schema as db_schema_module
 
-    db_path = tmp_path / "pendo-init-rollback.db"
-    db = db_module.Database(str(db_path))
-    original_create_event_schema = db_schema_module._create_event_schema
+    db_path                          = tmp_path / "pendo-init-rollback.db"
+    db                               = db_module.Database(str(db_path))
+    original_create_event_schema     = db_schema_module._create_event_schema
     helper_connection_ids: list[int] = []
 
     def fail_after_event_schema(cursor: sqlite3.Cursor) -> None:
@@ -643,13 +643,13 @@ async def test_event_range_lists_batch_collection_and_reminder_queries(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    db = Database(str(tmp_path / "pendo-event-batch-lists.db"))
+    db       = Database(str(tmp_path / "pendo-event-batch-lists.db"))
     owner_id = "u-event-batch"
     _seed_event_batch_fixture(db, owner_id)
-    handler = EventHandler(db, SimpleNamespace(), SimpleNamespace())
+    handler              = EventHandler(db, SimpleNamespace(), SimpleNamespace())
     original_collections = db.get_event_collections_by_ids
-    original_logs = db.get_reminder_logs_by_item_ids
-    calls = {"collections": 0, "logs": 0}
+    original_logs        = db.get_reminder_logs_by_item_ids
+    calls                = {"collections": 0, "logs": 0}
 
     def counted_collections(request_owner: str, collection_ids: list[str]):
         calls["collections"] += 1

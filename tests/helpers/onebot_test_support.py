@@ -36,7 +36,7 @@ def bounded_transport_adapter(monkeypatch):
 
     async def request(session, method, url, **kwargs):
         request_kwargs = dict(kwargs.get("request_kwargs") or {})
-        response_cm = session.post(
+        response_cm    = session.post(
             url,
             headers=kwargs.get("headers"),
             **request_kwargs,

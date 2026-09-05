@@ -39,8 +39,8 @@ class TestPendoConfig:
     def test_undo_window_has_one_production_source(self):
         from plugins.pendo.config import PendoConfig
 
-        plugin_root = ROOT / "plugins" / "pendo"
-        handler_paths = tuple((plugin_root / "handlers").glob("*.py"))
+        plugin_root        = ROOT / "plugins" / "pendo"
+        handler_paths      = tuple((plugin_root / "handlers").glob("*.py"))
         production_sources = {
             path: path.read_text(encoding="utf-8")
             for path in (plugin_root / "main.py", *handler_paths)
@@ -94,7 +94,7 @@ class TestPendoConfig:
 
         from plugins.pendo.main import _show_help
 
-        overview = _show_help()
+        overview   = _show_help()
         event_help = _show_help("event")
 
         assert "🧭 **可用命令**" in overview

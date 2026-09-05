@@ -32,14 +32,14 @@ ROOT = REPOSITORY_ROOT
 
 
 class _PendoSessionTestContext:
-    plugin_name = "pendo"
-    current_user_id = 1001
+    plugin_name      = "pendo"
+    current_user_id  = 1001
     current_group_id = None
-    logger = logging.getLogger("test.pendo.session")
+    logger           = logging.getLogger("test.pendo.session")
 
     def __init__(self, manager: SessionManager, services: dict[str, object]) -> None:
-        self.session_manager = manager
-        self.state = {"pendo_runtime": {"services": services}}
+        self.session_manager   = manager
+        self.state             = {"pendo_runtime": {"services": services}}
         self.get_session_calls = 0
 
     async def get_session(self):
@@ -108,7 +108,7 @@ def _seed_event_batch_fixture(db: Database, owner_id: str = "u-event-batch") -> 
             }
         )
         for event_index in range(1, 4):
-            event_id = f"{collection_id}_m{event_index:02d}"
+            event_id    = f"{collection_id}_m{event_index:02d}"
             remind_time = f"2030-01-0{collection_index}T0{event_index}:00:00"
             db.insert_item(
                 {
@@ -128,10 +128,10 @@ def _seed_event_batch_fixture(db: Database, owner_id: str = "u-event-batch") -> 
             stored_remind_time = db.get_item(event_id, owner_id).remind_times[0]
             db.confirm_reminder(
                 event_id,
-                user_action="preconfirmed",
-                owner_id=owner_id,
-                remind_time=stored_remind_time,
-                allow_future=True,
+                user_action  = "preconfirmed",
+                owner_id     = owner_id,
+                remind_time  = stored_remind_time,
+                allow_future = True,
             )
             event_ids.append(event_id)
     return event_ids

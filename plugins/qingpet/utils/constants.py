@@ -51,53 +51,53 @@ class _TrainingSpecialEvent(TypedDict, total=False):
 
 
 class PetStage(enum.Enum):
-    EGG = "蛋"
-    YOUNG = "幼年"
+    EGG    = "蛋"
+    YOUNG  = "幼年"
     GROWTH = "成长期"
     MATURE = "成熟期"
-    OLD = "老年"
+    OLD    = "老年"
 
 
 class PetPersonality(enum.Enum):
-    LIVELY = "活泼"
-    CLINGY = "粘人"
-    SHY = "怕生"
-    CALM = "温顺"
+    LIVELY  = "活泼"
+    CLINGY  = "粘人"
+    SHY     = "怕生"
+    CALM    = "温顺"
     NAUGHTY = "调皮"
-    SMART = "聪明"
+    SMART   = "聪明"
 
 
 class PetStatus(enum.Enum):
     """宠物运行状态的唯一枚举定义。"""
 
-    NORMAL = "正常"
-    SICK = "生病"
-    SLEEPING = "睡觉中"
+    NORMAL    = "正常"
+    SICK      = "生病"
+    SLEEPING  = "睡觉中"
     TRAVELING = "旅行中"
-    DEAD = "已死亡"
+    DEAD      = "已死亡"
 
 
 class ItemType(enum.Enum):
-    FOOD = "食物"
-    TOY = "玩具"
-    MEDICINE = "药品"
-    DECORATION = "装饰"
+    FOOD         = "食物"
+    TOY          = "玩具"
+    MEDICINE     = "药品"
+    DECORATION   = "装饰"
     ACCELERATION = "加速卡"
-    TRUSTEESHIP = "托管券"
+    TRUSTEESHIP  = "托管券"
 
 
 class ItemRarity(enum.Enum):
-    COMMON = "普通"
-    RARE = "稀有"
-    EPIC = "史诗"
+    COMMON    = "普通"
+    RARE      = "稀有"
+    EPIC      = "史诗"
     LEGENDARY = "传说"
 
 
 # 宠物装扮槽位
 class DressSlot(enum.Enum):
-    HAT = "帽子"
-    CLOTHES = "衣服"
-    ACCESSORY = "饰品"
+    HAT        = "帽子"
+    CLOTHES    = "衣服"
+    ACCESSORY  = "饰品"
     BACKGROUND = "背景"
 
 
@@ -178,10 +178,10 @@ AGE_EVOLUTION_THRESHOLDS: dict[PetStage, int] = {
 def validate_evolution_state_machine() -> None:
     """在导入时验证每个非终态都有业务可生成且定义完整的转移。"""
     non_terminal_stages = set(PetStage) - {PetStage.OLD}
-    configured_stages = set(EVOLUTION_EVENTS_BY_STAGE)
+    configured_stages   = set(EVOLUTION_EVENTS_BY_STAGE)
     if configured_stages != non_terminal_stages:
         missing = sorted(stage.name for stage in non_terminal_stages - configured_stages)
-        extra = sorted(stage.name for stage in configured_stages - non_terminal_stages)
+        extra   = sorted(stage.name for stage in configured_stages - non_terminal_stages)
         raise RuntimeError(f"进化事件阶段配置不完整: missing={missing}, extra={extra}")
 
     for stage, generated_events in EVOLUTION_EVENTS_BY_STAGE.items():

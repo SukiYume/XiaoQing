@@ -37,7 +37,7 @@ class EventCollectionChildCreate(BaseModel):  # type: ignore[misc]
     title: str
     start_time: str
     end_time: str | None = None
-    notes: str | None = ""
+    notes: str | None    = ""
 
 
 class EventCollectionCreate(BaseModel):  # type: ignore[misc]
@@ -45,12 +45,12 @@ class EventCollectionCreate(BaseModel):  # type: ignore[misc]
 
     kind: str = "multi_node"
     title: str
-    content: str | None = ""
+    content: str | None  = ""
     category: str | None = None
     location: str | None = ""
     tags: list[str] = Field(default_factory=list)
-    notes: str | None = ""
-    timezone: str | None = None
+    notes: str | None                           = ""
+    timezone: str | None                        = None
     reminder_rules: list[dict[str, Any]] | None = None
     children: list[EventCollectionChildCreate]
 
@@ -58,13 +58,13 @@ class EventCollectionCreate(BaseModel):  # type: ignore[misc]
 class EventCollectionUpdate(BaseModel):  # type: ignore[misc]
     """部分更新日程集合的请求体；显式空值用于清空可选字段。"""
 
-    title: str | None = None
-    content: str | None = None
-    category: str | None = None
-    location: str | None = None
-    tags: list[str] | None = None
-    notes: str | None = None
-    timezone: str | None = None
+    title: str | None                           = None
+    content: str | None                         = None
+    category: str | None                        = None
+    location: str | None                        = None
+    tags: list[str] | None                      = None
+    notes: str | None                           = None
+    timezone: str | None                        = None
     reminder_rules: list[dict[str, Any]] | None = None
 
 
@@ -79,25 +79,25 @@ class EventReminderConfirmationUpdate(BaseModel):  # type: ignore[misc]
 def get_events_overview(
     start_date: str,
     end_date: str,
-    keyword: str = "",
+    keyword: str  = "",
     category: str = "",
-    kind: str = "all",
+    kind: str     = "all",
     reminder: str = "all",
     owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    db: Database  = Depends(get_db),
 ) -> dict[str, object]:
     """按日期范围和筛选条件返回当前所有者的日程概览。"""
 
     try:
         overview = build_events_overview(
-            db=db,
-            owner_id=owner_id,
-            start_date=start_date,
-            end_date=end_date,
-            keyword=keyword,
-            category=category,
-            kind=kind,
-            reminder=reminder,
+            db         = db,
+            owner_id   = owner_id,
+            start_date = start_date,
+            end_date   = end_date,
+            keyword    = keyword,
+            category   = category,
+            kind       = kind,
+            reminder   = reminder,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -111,7 +111,7 @@ def get_events_overview(
 @router.get("/events/categories")
 def get_event_categories(
     owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    db: Database  = Depends(get_db),
 ) -> dict[str, object]:
     """只读取日程分类，避免为分类下拉框构造跨 130 年的完整概览。"""
 
@@ -158,7 +158,7 @@ def _normalize_collection_updates(
 def create_event_collection(
     body: EventCollectionCreate,
     owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    db: Database  = Depends(get_db),
 ) -> dict[str, object]:
     """校验并原子创建集合头、全部叶子日程和创建审计记录。"""
 
@@ -172,7 +172,7 @@ def create_event_collection(
         )
 
     category_text = str(body.category or "").strip()
-    category = (
+    category      = (
         resolve_default_category(db, owner_id)
         if not category_text or category_text == PendoConfig.DEFAULT_CATEGORY
         else category_text
@@ -181,8 +181,8 @@ def create_event_collection(
         rules = normalize_reminder_rules(
             body.reminder_rules if body.reminder_rules is not None else [{"offset_seconds": 0}]
         )
-        collection_id = new_internal_id()
-        local_now = now_in_timezone(owner_id, db)
+        collection_id    = new_internal_id()
+        local_now        = now_in_timezone(owner_id, db)
         default_timezone = str(
             getattr(local_now.tzinfo, "key", None) or PendoConfig.DEFAULT_TIMEZONE
         )
@@ -193,7 +193,7 @@ def create_event_collection(
 
         child_rows: list[tuple[str, dict[str, Any]]] = []
         for index, child in enumerate(body.children, 1):
-            node_key = f"m{index:02d}"
+            node_key   = f"m{index:02d}"
             normalized = normalize_event_fields(
                 {
                     "owner_id": owner_id,
@@ -221,9 +221,9 @@ def create_event_collection(
             child_rows.append((new_internal_id(), normalized))
 
         # 有偏移和无偏移时间统一映射到集合时区后比较，避免 ISO 字符串字典序误判。
-        shared_fields = child_rows[0][1]
+        shared_fields  = child_rows[0][1]
         event_timezone = ZoneInfo(str(shared_fields["timezone"]))
-        start_time = min(
+        start_time     = min(
             (str(row["start_time"]) for _, row in child_rows),
             key=lambda value: TimezoneHelper.parse(value, event_timezone),
         )
@@ -273,7 +273,7 @@ def create_event_collection(
 def get_collection_detail(
     collection_id: str,
     owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    db: Database  = Depends(get_db),
 ) -> dict[str, object]:
     """返回集合头及其全部叶子日程。"""
 
@@ -288,7 +288,7 @@ def update_collection(
     collection_id: str,
     body: EventCollectionUpdate,
     owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    db: Database  = Depends(get_db),
 ) -> dict[str, object]:
     """原子更新集合字段、全部叶子提醒和对应审计记录。"""
 
@@ -296,15 +296,15 @@ def update_collection(
     if collection is None:
         raise HTTPException(status_code=404, detail="Event collection not found")
 
-    local_now = now_in_timezone(owner_id, db)
+    local_now        = now_in_timezone(owner_id, db)
     default_timezone = str(getattr(local_now.tzinfo, "key", None) or PendoConfig.DEFAULT_TIMEZONE)
     try:
         updates = _normalize_collection_updates(
             body,
             db,
             owner_id,
-            anchor_start_time=collection.get("start_time"),
-            default_timezone=default_timezone,
+            anchor_start_time = collection.get("start_time"),
+            default_timezone  = default_timezone,
         )
         audit_updates = dict(updates)
         operation_log = {
@@ -316,7 +316,7 @@ def update_collection(
         }
 
         if "reminder_rules" in updates:
-            rules = cast(list[dict[str, int]], updates.pop("reminder_rules"))
+            rules         = cast(list[dict[str, int]], updates.pop("reminder_rules"))
             child_updates = {
                 child.id: (
                     build_remind_times_from_rules(child.start_time, rules),
@@ -329,8 +329,8 @@ def update_collection(
                 owner_id,
                 child_updates,
                 rules,
-                collection_updates=updates,
-                operation_log=operation_log,
+                collection_updates = updates,
+                operation_log      = operation_log,
             )
         elif not db.update_event_collection(
             collection_id,
@@ -343,7 +343,7 @@ def update_collection(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ItemNotFoundException as exc:
         status_code = 404 if exc.item_id == collection_id else 409
-        detail = (
+        detail      = (
             "Event collection not found"
             if status_code == 404
             else "Event collection changed; reload and retry"
@@ -363,7 +363,7 @@ def update_collection(
 def delete_collection(
     collection_id: str,
     owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    db: Database  = Depends(get_db),
 ) -> dict[str, object]:
     """在一个事务内软删除集合、叶子日程和提醒，并写入删除审计。"""
 
@@ -375,8 +375,8 @@ def delete_collection(
     success = db.delete_event_collection(
         resolved_collection_id,
         owner_id,
-        cascade=True,
-        operation_log={
+        cascade       = True,
+        operation_log = {
             "user_id": owner_id,
             "action": "delete_event_collection",
             "item_type": "event",
@@ -400,7 +400,7 @@ def delete_collection(
 def get_event_detail(
     event_id: str,
     owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    db: Database  = Depends(get_db),
 ) -> dict[str, object]:
     """返回一个叶子日程及其提醒和同集合关联信息。"""
 
@@ -415,7 +415,7 @@ def set_event_reminder_confirmation(
     event_id: str,
     body: EventReminderConfirmationUpdate,
     owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    db: Database  = Depends(get_db),
 ) -> dict[str, object]:
     """提前确认或重新开启当前用户的一条未到期日程提醒。"""
 

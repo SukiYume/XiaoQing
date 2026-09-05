@@ -51,7 +51,7 @@ class OneBotActionOutcomeUnknown(RuntimeError):
 class _EndpointAuthState:
     endpoint: str
     token: str
-    generation: int = 0
+    generation: int           = 0
     credentials_trusted: bool = True
 
     def __post_init__(self) -> None:
@@ -97,20 +97,20 @@ class _OneBotActionCommit:
 
 _ONEBOT_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=DEFAULT_ONEBOT_HTTP_TIMEOUT_SECONDS)
 _ONEBOT_BODY_LIMITS = BodyLimits(
-    max_wire_bytes=2 * 1024 * 1024,
-    max_decoded_bytes=2 * 1024 * 1024,
-    max_decompression_ratio=20,
+    max_wire_bytes          = 2 * 1024 * 1024,
+    max_decoded_bytes       = 2 * 1024 * 1024,
+    max_decompression_ratio = 20,
 )
 _ONEBOT_JSON_LIMITS = JsonLimits(
-    max_bytes=2 * 1024 * 1024,
-    max_depth=32,
-    max_nodes=20_000,
-    max_string_chars=512_000,
+    max_bytes        = 2 * 1024 * 1024,
+    max_depth        = 32,
+    max_nodes        = 20_000,
+    max_string_chars = 512_000,
 )
 _ONEBOT_JSON_MIME_POLICY = MimePolicy(
-    exact=frozenset({"application/json", "text/json", "text/plain"}),
-    structured_suffixes=frozenset({"+json"}),
-    allow_missing=True,
+    exact               = frozenset({"application/json", "text/json", "text/plain"}),
+    structured_suffixes = frozenset({"+json"}),
+    allow_missing       = True,
 )
 _ONEBOT_SUCCESS_STATUSES = range(200, 300)
 
@@ -121,12 +121,12 @@ _SENSITIVE_PATTERNS = [
     re.compile(rf"({key}\s*[:=]\s*)([^\s,;]+)", re.IGNORECASE) for key in _SENSITIVE_KEYS
 ]
 _CONNECT_SIGNATURE_CACHE: dict[Any, tuple[Any, frozenset[str]]] = {}
-_ONEBOT_WS_SHUTDOWN_TIMEOUT_SECONDS = 5.0
-_ONEBOT_WS_RECONNECT_INITIAL_SECONDS = 5.0
-_ONEBOT_WS_RECONNECT_MAX_SECONDS = 60.0
-_ONEBOT_WS_RECONNECT_STABLE_SECONDS = 30.0
-_ONEBOT_WS_RECONNECT_JITTER_RATIO = 0.2
-_ONEBOT_WS_ROTATION_CANCEL_GRACE_SECONDS = 0.1
+_ONEBOT_WS_SHUTDOWN_TIMEOUT_SECONDS                             = 5.0
+_ONEBOT_WS_RECONNECT_INITIAL_SECONDS                            = 5.0
+_ONEBOT_WS_RECONNECT_MAX_SECONDS                                = 60.0
+_ONEBOT_WS_RECONNECT_STABLE_SECONDS                             = 30.0
+_ONEBOT_WS_RECONNECT_JITTER_RATIO                               = 0.2
+_ONEBOT_WS_ROTATION_CANCEL_GRACE_SECONDS                        = 0.1
 
 
 class _OneBotChildFatalError(_FatalErrorCarrier):
@@ -176,7 +176,7 @@ def _extract_message_preview(message: Any, max_len: int = MAX_SHORT_TEXT_LENGTH)
             continue
         seg_type = str(seg.get("type", "") or "")
         raw_data = seg.get("data", {})
-        data = raw_data if isinstance(raw_data, Mapping) else {}
+        data     = raw_data if isinstance(raw_data, Mapping) else {}
         if seg_type == "text":
             parts.append(_mask_sensitive_text(str(data.get("text", "") or "")))
         elif seg_type == "emoji":
@@ -215,7 +215,7 @@ def _normalize_segment_for_onebot(seg: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(text, (str, int, float, bool)):
             raise TypeError("OneBot text segment content must be a scalar")
         data["text"] = str(text)
-    normalized = dict(seg)
+    normalized         = dict(seg)
     normalized["type"] = seg_type
     normalized["data"] = data
     if seg_type != "emoji":
@@ -231,13 +231,13 @@ def _normalize_action_for_onebot(action: dict[str, Any]) -> dict[str, Any]:
     action_name = action.get("action")
     if type(action_name) is not str or not action_name.strip():
         raise ValueError("OneBot action name must be a non-empty string")
-    params = dict(action.get("params", {}) or {})
+    params  = dict(action.get("params", {}) or {})
     message = params.get("message")
     if isinstance(message, list):
         params["message"] = [_normalize_segment_for_onebot(segment) for segment in message]
     elif message is not None and not isinstance(message, str):
         raise TypeError("OneBot message must be text or a segment list")
-    normalized = dict(action)
+    normalized           = dict(action)
     normalized["action"] = action_name.strip()
     normalized["params"] = params
     return normalized
@@ -260,13 +260,13 @@ def _finalize_onebot_action(
 ) -> bool:
     """统一处理两种传输的业务回执、消息 ID 回写与脱敏日志。"""
 
-    raw_params = action.get("params", {})
-    params = raw_params if isinstance(raw_params, Mapping) else {}
-    target = params.get("group_id") or params.get("user_id")
-    message = params.get("message", [])
+    raw_params  = action.get("params", {})
+    params      = raw_params if isinstance(raw_params, Mapping) else {}
+    target      = params.get("group_id") or params.get("user_id")
+    message     = params.get("message", [])
     action_name = str(action.get("action", "unknown") or "unknown").strip()
     if _onebot_action_succeeded(response):
-        data = response.get("data") if isinstance(response, dict) else None
+        data       = response.get("data") if isinstance(response, dict) else None
         message_id = data.get("message_id") if isinstance(data, dict) else None
         if message_id not in (None, ""):
             action[ACTION_RESULT_MESSAGE_ID_KEY] = message_id
@@ -291,13 +291,13 @@ def _finalize_onebot_action(
 
 
 def _summarize_event(event: dict[str, Any]) -> str:
-    post_type = event.get("post_type")
+    post_type    = event.get("post_type")
     message_type = event.get("message_type")
-    user_id = event.get("user_id")
-    group_id = event.get("group_id")
-    message = event.get("message")
+    user_id      = event.get("user_id")
+    group_id     = event.get("group_id")
+    message      = event.get("message")
     message_kind = type(message).__name__
-    message_len = len(message) if isinstance(message, list) else None
+    message_len  = len(message) if isinstance(message, list) else None
     return (
         f"post_type={post_type} message_type={message_type} "
         f"user_id={user_id} group_id={group_id} "
@@ -318,19 +318,19 @@ def _get_connect_signature(websockets_module) -> frozenset[str]:
     try:
         hash(connect_func)
     except TypeError:
-        cache_key: Any = ("unhashable-connect", id(connect_func))
+        cache_key: Any   = ("unhashable-connect", id(connect_func))
         require_identity = True
     else:
         # Bound methods compare and hash by (instance, function), so repeated
         # descriptor access reuses one cache entry rather than leaking entries.
-        cache_key = connect_func
+        cache_key        = connect_func
         require_identity = False
     cached = _CONNECT_SIGNATURE_CACHE.get(cache_key)
     if cached is not None and (not require_identity or cached[0] is connect_func):
         return cached[1]
 
     try:
-        sig = inspect.signature(connect_func)
+        sig           = inspect.signature(connect_func)
         keyword_kinds = {
             inspect.Parameter.POSITIONAL_OR_KEYWORD,
             inspect.Parameter.KEYWORD_ONLY,
@@ -374,10 +374,10 @@ def _select_connect_header_parameter(websockets_module, token: str) -> str | Non
 def _jittered_reconnect_delay(base_delay: float, random_sample: float) -> float:
     """Apply continuous bounded jitter, including at the maximum backoff."""
 
-    sample = min(1.0, max(0.0, float(random_sample)))
+    sample       = min(1.0, max(0.0, float(random_sample)))
     bounded_base = min(_ONEBOT_WS_RECONNECT_MAX_SECONDS, max(0.0, float(base_delay)))
-    low = bounded_base * (1.0 - _ONEBOT_WS_RECONNECT_JITTER_RATIO)
-    high = min(
+    low          = bounded_base * (1.0 - _ONEBOT_WS_RECONNECT_JITTER_RATIO)
+    high         = min(
         _ONEBOT_WS_RECONNECT_MAX_SECONDS,
         bounded_base * (1.0 + _ONEBOT_WS_RECONNECT_JITTER_RATIO),
     )
@@ -432,24 +432,24 @@ class OneBotHttpSender:
         """Send an action and return its parsed OneBot response envelope."""
 
         normalized_action = _normalize_action_for_onebot(action)
-        endpoint_auth = self._endpoint_auth
+        endpoint_auth     = self._endpoint_auth
         if not endpoint_auth.endpoint or not endpoint_auth.credentials_trusted:
             return None
 
-        url = f"{endpoint_auth.endpoint}/{normalized_action['action']}"
+        url     = f"{endpoint_auth.endpoint}/{normalized_action['action']}"
         headers = {"Authorization": f"Bearer {endpoint_auth.token}"} if endpoint_auth.token else {}
-        params = normalized_action.get("params", {})
+        params  = normalized_action.get("params", {})
 
         try:
             bounded_response = await aiohttp_request_bounded(
                 self.session,
                 "POST",
                 url,
-                limits=_ONEBOT_BODY_LIMITS,
-                mime_policy=_ONEBOT_JSON_MIME_POLICY,
-                success_statuses=_ONEBOT_SUCCESS_STATUSES,
-                headers=headers,
-                request_kwargs={"json": params, "timeout": _ONEBOT_HTTP_TIMEOUT},
+                limits           = _ONEBOT_BODY_LIMITS,
+                mime_policy      = _ONEBOT_JSON_MIME_POLICY,
+                success_statuses = _ONEBOT_SUCCESS_STATUSES,
+                headers          = headers,
+                request_kwargs   = {"json": params, "timeout": _ONEBOT_HTTP_TIMEOUT},
             )
             response = parse_bounded_json(bounded_response, limits=_ONEBOT_JSON_LIMITS)
             return response if isinstance(response, dict) else None
@@ -476,10 +476,10 @@ class OneBotWsClient:
         self,
         ws_uri: str,
         auth_token: str,
-        max_pending_events: int = 100,
-        queue_size: int = 100,
-        queue_ttl_seconds: float = 300.0,
-        queue_cleanup_interval: float = 60.0,
+        max_pending_events: int                = 100,
+        queue_size: int                        = 100,
+        queue_ttl_seconds: float               = 300.0,
+        queue_cleanup_interval: float          = 60.0,
         action_response_timeout_seconds: float = DEFAULT_ONEBOT_WS_ACTION_TIMEOUT_SECONDS,
         *,
         credentials_trusted: bool = True,
@@ -505,12 +505,12 @@ class OneBotWsClient:
             auth_token,
             credentials_trusted=credentials_trusted,
         )
-        self._auth_state_lock = threading.RLock()
-        self._connected_auth_generation: int | None = None
-        self._event_loop: asyncio.AbstractEventLoop | None = None
-        self._ws: Any | None = None
-        self._running = False
-        self._accepting_events = True
+        self._auth_state_lock                                  = threading.RLock()
+        self._connected_auth_generation: int | None            = None
+        self._event_loop: asyncio.AbstractEventLoop | None     = None
+        self._ws: Any | None                                   = None
+        self._running                                          = False
+        self._accepting_events                                 = True
         self._on_connect: Callable[[], Awaitable[None]] | None = None
         self._message_queues: dict[
             str,
@@ -558,7 +558,7 @@ class OneBotWsClient:
     def _schedule_ws_close(self, ws: Any) -> asyncio.Task[Any]:
         """Own one close task per exact socket so rotations cannot mask each other."""
 
-        key = id(ws)
+        key      = id(ws)
         existing = self._ws_close_tasks.get(key)
         if existing is not None and existing[0] is ws:
             existing_task = existing[1]
@@ -573,7 +573,7 @@ class OneBotWsClient:
                 self._ws_close_tasks.pop(key, None)
                 return existing_task
 
-        task = asyncio.create_task(_run_onebot_child(ws.close))
+        task                      = asyncio.create_task(_run_onebot_child(ws.close))
         self._ws_close_tasks[key] = (ws, task)
 
         def observe_close_result(done: asyncio.Task[Any]) -> None:
@@ -592,7 +592,7 @@ class OneBotWsClient:
                 self._ws_close_tasks.pop(key, None)
                 with self._auth_state_lock:
                     if self._ws is ws:
-                        self._ws = None
+                        self._ws                        = None
                         self._connected_auth_generation = None
 
         task.add_done_callback(observe_close_result)
@@ -796,7 +796,7 @@ class OneBotWsClient:
                 # available once its owning loop can no longer run callbacks.
                 with self._auth_state_lock:
                     if self._ws is ws and self._endpoint_auth is not previous_state:
-                        self._ws = None
+                        self._ws                        = None
                         self._connected_auth_generation = None
                 logger.debug("OneBot auth rotation raced with event-loop shutdown")
 
@@ -804,8 +804,8 @@ class OneBotWsClient:
         """Snapshot an internally current connection, then inspect it without the auth lock."""
 
         with self._auth_state_lock:
-            ws = self._ws
-            auth_state = self._endpoint_auth
+            ws                        = self._ws
+            auth_state                = self._endpoint_auth
             connected_auth_generation = self._connected_auth_generation
         if ws is None:
             return None
@@ -822,7 +822,7 @@ class OneBotWsClient:
             close_code = getattr(ws, "close_code", None)
             if isinstance(close_code, int):
                 return None
-            state = getattr(ws, "state", None)
+            state      = getattr(ws, "state", None)
             state_name = getattr(state, "name", "")
             if isinstance(state_name, str) and state_name.upper() in {"CLOSING", "CLOSED"}:
                 return None
@@ -839,19 +839,19 @@ class OneBotWsClient:
     async def request_action(self, action: dict[str, Any]) -> dict[str, Any] | None:
         """Send an action and return the response matched by its ``echo``."""
 
-        current_loop = asyncio.get_running_loop()
+        current_loop      = asyncio.get_running_loop()
         normalized_action = _normalize_action_for_onebot(action)
-        action_name = str(normalized_action.get("action", "unknown") or "unknown")
-        echo = f"xiaoqing-{uuid.uuid4().hex}"
-        request = dict(normalized_action)
-        request["echo"] = echo
+        action_name       = str(normalized_action.get("action", "unknown") or "unknown")
+        echo              = f"xiaoqing-{uuid.uuid4().hex}"
+        request           = dict(normalized_action)
+        request["echo"]   = echo
         payload = json.dumps(request, ensure_ascii=False)
         connected_target = self._connected_target()
         if connected_target is None:
             return None
         candidate_ws, candidate_auth_state = connected_target
         response_future: asyncio.Future[dict[str, Any]] = current_loop.create_future()
-        commit: _OneBotActionCommit | None = None
+        commit: _OneBotActionCommit | None              = None
         try:
             # Token creation is the action's linearization point.  No external
             # WebSocket code runs while this threading lock is held: rotation
@@ -868,12 +868,12 @@ class OneBotWsClient:
                 ):
                     commit = None
                 else:
-                    self._pending_action_futures[echo] = response_future
+                    self._pending_action_futures[echo]     = response_future
                     self._pending_action_auth_states[echo] = candidate_auth_state
-                    commit = _OneBotActionCommit(
-                        auth_state=candidate_auth_state,
-                        ws=candidate_ws,
-                        echo=echo,
+                    commit                                 = _OneBotActionCommit(
+                        auth_state = candidate_auth_state,
+                        ws         = candidate_ws,
+                        echo       = echo,
                     )
             if commit is None:
                 return None
@@ -886,7 +886,7 @@ class OneBotWsClient:
             return response if isinstance(response, dict) else None
         except asyncio.CancelledError:
             raise
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             logger.warning(
                 "[WS] Timed out waiting for OneBot response to %s",
                 action_name,
@@ -899,8 +899,8 @@ class OneBotWsClient:
                     self._ws = None
             self._fail_pending_action_futures(
                 "WebSocket send failed",
-                exclude=response_future,
-                auth_state=commit.auth_state if commit is not None else None,
+                exclude    = response_future,
+                auth_state = commit.auth_state if commit is not None else None,
             )
             if commit is None:
                 return None
@@ -952,7 +952,7 @@ class OneBotWsClient:
         with self._auth_state_lock:
             if auth_state is not self._endpoint_auth:
                 return True
-            future = self._pending_action_futures.get(echo)
+            future        = self._pending_action_futures.get(echo)
             pending_state = self._pending_action_auth_states.get(echo)
             if future is not None and not future.done() and pending_state is auth_state:
                 future.set_result(event)
@@ -963,7 +963,7 @@ class OneBotWsClient:
         reason: str,
         *,
         exclude: asyncio.Future[dict[str, Any]] | None = None,
-        auth_state: _EndpointAuthState | None = None,
+        auth_state: _EndpointAuthState | None          = None,
     ) -> None:
         pending: list[asyncio.Future[dict[str, Any]]] = []
         for echo, future in tuple(self._pending_action_futures.items()):
@@ -991,8 +991,8 @@ class OneBotWsClient:
             await self._reconnect_sleep(delay)
             return False
         # 重连等待器允许测试注入 Future；ensure_future 同时接收协程和一般 Awaitable。
-        sleep_task: asyncio.Future[None] = asyncio.ensure_future(self._reconnect_sleep(delay))
-        wake_task = asyncio.create_task(reconnect_wakeup.wait())
+        sleep_task: asyncio.Future[None]  = asyncio.ensure_future(self._reconnect_sleep(delay))
+        wake_task                         = asyncio.create_task(reconnect_wakeup.wait())
         waiters: set[asyncio.Future[Any]] = {sleep_task, wake_task}
         try:
             done, _ = await asyncio.wait(
@@ -1050,13 +1050,13 @@ class OneBotWsClient:
             or bool(self._ws_close_tasks)
         ):
             raise RuntimeError("OneBot WS client has an incomplete previous stop")
-        self._main_task = current_task
-        self._event_loop = asyncio.get_running_loop()
+        self._main_task        = current_task
+        self._event_loop       = asyncio.get_running_loop()
         self._reconnect_wakeup = asyncio.Event()
-        self._running = True
+        self._running          = True
         self._accepting_events = True
 
-        cleanup_task = asyncio.create_task(self._cleanup_inactive_queues_loop())
+        cleanup_task       = asyncio.create_task(self._cleanup_inactive_queues_loop())
         self._cleanup_task = cleanup_task
         return current_task, cleanup_task
 
@@ -1078,12 +1078,12 @@ class OneBotWsClient:
             return retry_base
 
         connected_duration: float | None = None
-        failure: Exception | None = None
+        failure: Exception | None        = None
         try:
             attempt = await self._await_connection_attempt(handler, reconnect_wakeup)
             if isinstance(attempt, _ConnectionAttemptResult):
                 connected_duration = attempt.connected_seconds
-                failure = attempt.error
+                failure            = attempt.error
             elif isinstance(attempt, (int, float)) and not isinstance(attempt, bool):
                 # 兼容仍返回连接时长的私有测试适配器和第三方子类。
                 connected_duration = max(0.0, float(attempt))
@@ -1118,7 +1118,7 @@ class OneBotWsClient:
         else:
             logger.warning("OneBot WS error: %s; reconnecting in %.2fs", failure, delay)
         with self._auth_state_lock:
-            self._ws = None
+            self._ws                        = None
             self._connected_auth_generation = None
         if await self._wait_for_reconnect(delay):
             return _ONEBOT_WS_RECONNECT_INITIAL_SECONDS
@@ -1167,8 +1167,8 @@ class OneBotWsClient:
         finally:
             # 此层没有 await，第二次取消也不能遗留监听器身份或 loop wakeup。
             if self._main_task is current_task:
-                self._main_task = None
-                self._event_loop = None
+                self._main_task        = None
+                self._event_loop       = None
                 self._reconnect_wakeup = None
 
     async def connect_and_listen(
@@ -1212,7 +1212,7 @@ class OneBotWsClient:
         ws,
         handler: Callable[[dict[str, Any]], Awaitable[None]],
         *,
-        auth_generation: int | None = None,
+        auth_generation: int | None           = None,
         auth_state: _EndpointAuthState | None = None,
     ) -> _ConnectionAttemptResult:
         """Listen until disconnection and retain abnormal close information."""
@@ -1226,20 +1226,23 @@ class OneBotWsClient:
             if auth_state is not self._endpoint_auth:
                 stale_auth = True
             else:
-                stale_auth = False
-                self._ws = ws
+                stale_auth                      = False
+                self._ws                        = ws
                 self._connected_auth_generation = auth_state.generation
         if stale_auth:
             await ws.close()
             return _ConnectionAttemptResult(0.0)
         logger.info("Connected to OneBot WS: %s", redact_url_for_log(self.ws_uri))
 
-        # 触发连接成功回调
-        if self._on_connect:
+        # 上线通知可能等待 echo；读循环必须与回调同时运行才能消费回执。
+        async def notify_connected() -> None:
             try:
-                await self._on_connect()
+                if self._on_connect:
+                    await self._on_connect()
             except Exception as exc:
                 logger.warning("on_connect callback error: %s", exc)
+
+        connect_task = asyncio.create_task(notify_connected(), name="onebot-on-connect")
 
         from websockets.exceptions import ConnectionClosed, ConnectionClosedOK
 
@@ -1273,9 +1276,13 @@ class OneBotWsClient:
                 "WebSocket connection closed",
                 auth_state=auth_state,
             )
+            # 回调归当前连接所有，断开后完整回收，防止旧连接任务跨代继续发送。
+            if not connect_task.done():
+                connect_task.cancel()
+            await asyncio.gather(connect_task, return_exceptions=True)
             with self._auth_state_lock:
                 if self._ws is ws:
-                    self._ws = None
+                    self._ws                        = None
                     self._connected_auth_generation = None
         return _ConnectionAttemptResult(
             max(0.0, time.monotonic() - connected_at),
@@ -1360,7 +1367,7 @@ class OneBotWsClient:
                 queue.put(_QueuedOneBotEvent(event=event, auth_state=auth_state)),
                 timeout=1.0,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("Queue put timeout for %s, dropping event", key)
         task = self._queue_tasks.get(key)
         if task is None or task.done():
@@ -1384,7 +1391,7 @@ class OneBotWsClient:
                     logger.warning("Dropping OneBot queue item without an auth generation")
                     self._queue_last_activity[key] = time.time()
                     continue
-                event = queued.event
+                event      = queued.event
                 auth_state = queued.auth_state
                 async with self._pending_semaphore:
                     await self._handle_event_safely(
@@ -1394,7 +1401,7 @@ class OneBotWsClient:
                     )
                 # 标记任务为活跃
                 self._queue_last_activity[key] = time.time()
-        except asyncio.TimeoutError:
+        except TimeoutError:
             # 超时表示队列为空，正常退出
             pass
         finally:
@@ -1420,7 +1427,7 @@ class OneBotWsClient:
         """取消所有按会话串行化的消息队列 worker。"""
 
         all_queue_tasks = set(self._queue_tasks.values())
-        queue_tasks = {task for task in all_queue_tasks if not task.done()}
+        queue_tasks     = {task for task in all_queue_tasks if not task.done()}
         for task in queue_tasks:
             task.cancel()
         if queue_tasks:
@@ -1523,7 +1530,7 @@ class OneBotWsClient:
         """等待所有 WebSocket close；成功项撤销所有权，超时项保留诊断。"""
 
         close_entries = tuple(self._ws_close_tasks.values())
-        close_tasks = {task for _, task in close_entries}
+        close_tasks   = {task for _, task in close_entries}
         if not close_tasks:
             return
         close_done, close_pending = await asyncio.wait(close_tasks, timeout=remaining())
@@ -1537,12 +1544,12 @@ class OneBotWsClient:
             except BaseException as exc:
                 errors.append(("WebSocket close", exc))
             else:
-                key = id(owned_ws)
+                key   = id(owned_ws)
                 entry = self._ws_close_tasks.get(key)
                 if entry is not None and entry[0] is owned_ws and entry[1] is close_task:
                     self._ws_close_tasks.pop(key, None)
                 if self._ws is owned_ws:
-                    self._ws = None
+                    self._ws                        = None
                     self._connected_auth_generation = None
         for close_task in close_pending:
             close_task.cancel()
@@ -1564,7 +1571,7 @@ class OneBotWsClient:
     ) -> None:
         """取消主监听任务，并仅在所有权确实释放后清理 loop 状态。"""
 
-        main_task = self._main_task
+        main_task    = self._main_task
         current_task = asyncio.current_task()
         if main_task and main_task is not current_task and not main_task.done():
             main_task.cancel()
@@ -1605,16 +1612,16 @@ class OneBotWsClient:
             # A listener cancelled during its own cleanup may already be done
             # before stop() observes it.  Stop is the final ownership backstop
             # for loop-bound wakeup fields in that case.
-            self._event_loop = None
+            self._event_loop       = None
             self._reconnect_wakeup = None
 
     async def _stop_locked(self) -> None:
-        self._running = False
+        self._running          = False
         self._accepting_events = False
         self._fail_pending_action_futures("WebSocket client stopped")
         errors: list[tuple[str, BaseException]] = []
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + self._shutdown_timeout_seconds
+        loop                                    = asyncio.get_running_loop()
+        deadline                                = loop.time() + self._shutdown_timeout_seconds
 
         def remaining() -> float:
             return max(0.0, deadline - loop.time())
@@ -1640,11 +1647,11 @@ class OneBotWsClient:
             self._cleanup_inactive_queues()
 
     def _cleanup_inactive_queues(self) -> None:
-        now = time.time()
+        now                      = time.time()
         inactive_keys: list[str] = []
         for key, queue in self._message_queues.items():
             last_active = self._queue_last_activity.get(key, 0)
-            task = self._queue_tasks.get(key)
+            task        = self._queue_tasks.get(key)
             if queue.empty() and (not task or task.done()):
                 if now - last_active > self._queue_ttl_seconds:
                     inactive_keys.append(key)

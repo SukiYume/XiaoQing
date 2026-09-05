@@ -21,14 +21,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-ARXIV_SUMMARY_SOURCE = "arxiv_filter"
-ARXIV_SUMMARY_KIND = "arxiv_daily_summary"
-ARXIV_SUMMARY_INIT_KIND = "arxiv_summary_init"
-MAX_ARXIV_LINKS = 512
-MAX_ARXIV_LINK_CHARS = 2_048
+ARXIV_SUMMARY_SOURCE        = "arxiv_filter"
+ARXIV_SUMMARY_KIND          = "arxiv_daily_summary"
+ARXIV_SUMMARY_INIT_KIND     = "arxiv_summary_init"
+MAX_ARXIV_LINKS             = 512
+MAX_ARXIV_LINK_CHARS        = 2_048
 MAX_CONVERSATION_READ_BYTES = 8 * 1024 * 1024
 MAX_CONVERSATION_LINE_BYTES = 1024 * 1024
-ARXIV_LINK_RE = re.compile(
+ARXIV_LINK_RE               = re.compile(
     r"https?://(?:www\.)?arxiv\.org/(?:abs|pdf)/"
     r"(?P<identifier>[0-9]{4}\.[0-9]{4,5})(?:v[0-9]+)?(?:\.pdf)?/?(?:[?#].*)?",
     re.IGNORECASE,
@@ -70,7 +70,7 @@ def _normalize_arxiv_links(links: Any) -> tuple[list[str], str | None]:
         return [], f"单次 arXiv 总结最多接受 {MAX_ARXIV_LINKS} 个链接。"
 
     normalized: list[str] = []
-    seen: set[str] = set()
+    seen: set[str]        = set()
     for link in links:
         value = link.strip()
         if not value or len(value) > MAX_ARXIV_LINK_CHARS or any(ord(char) < 32 for char in value):
@@ -107,7 +107,7 @@ async def enqueue_or_replay_arxiv_summary(
     *,
     date: str,
     links: list[str],
-    user_id: int | None = None,
+    user_id: int | None  = None,
     group_id: int | None = None,
 ) -> str:
     from .manager import get_manager
@@ -120,9 +120,9 @@ async def enqueue_or_replay_arxiv_summary(
         group_id if group_id is not None else getattr(context, "current_group_id", None),
         field_name="group_id",
     )
-    principal = getattr(context, "principal", None)
-    capabilities = getattr(context, "capabilities", None)
-    is_system = bool(capabilities is not None and getattr(capabilities, "is_system", False))
+    principal        = getattr(context, "principal", None)
+    capabilities     = getattr(context, "capabilities", None)
+    is_system        = bool(capabilities is not None and getattr(capabilities, "is_system", False))
     is_current_admin = False
     if principal is not None and getattr(capabilities, "is_bot_admin", False):
         is_current_admin = principal.user_id is not None and principal.user_id == effective_user_id
@@ -138,14 +138,14 @@ async def enqueue_or_replay_arxiv_summary(
     if getattr(context, "plugin_name", None) != "codex":
         raise PermissionError("Codex arXiv entrypoint requires a Codex-scoped context")
     manager = await get_manager(context)
-    addon = ArxivSummaryAddon(manager)
+    addon   = ArxivSummaryAddon(manager)
     return await addon.enqueue_or_replay(
-        date=date,
-        links=links,
-        user_id=effective_user_id,
-        group_id=effective_group_id,
-        context=context,
-        delivery_targets=delivery_targets,
+        date             = date,
+        links            = links,
+        user_id          = effective_user_id,
+        group_id         = effective_group_id,
+        context          = context,
+        delivery_targets = delivery_targets,
     )
 
 
@@ -184,7 +184,7 @@ class ArxivSummaryAddon:
             return "arXiv 总结任务缺少链接。"
         date = normalized_date
 
-        label = self.manager.config.arxiv_summary_label
+        label            = self.manager.config.arxiv_summary_label
         explicit_targets = (
             delivery_targets
             if delivery_targets is not None
@@ -196,9 +196,9 @@ class ArxivSummaryAddon:
             date,
             len(normalized_links),
         )
-        replay_message: str | None = None
+        replay_message: str | None   = None
         inflight_message: str | None = None
-        disk_usage_bytes = await self.manager._measure_disk_usage_bytes(
+        disk_usage_bytes             = await self.manager._measure_disk_usage_bytes(
             max_bytes=self.manager.config.emergency_disk_bytes
         )
 
@@ -221,8 +221,8 @@ class ArxivSummaryAddon:
                     normalized_links,
                 )
                 if latest_success is not None:
-                    job_id = latest_success.get("job_id", "?")
-                    content = str(latest_success.get("content") or "").strip()
+                    job_id         = latest_success.get("job_id", "?")
+                    content        = str(latest_success.get("content") or "").strip()
                     replay_message = f"[codex:{label} #{job_id}] 完成:\n{content}"
                 else:
                     init_job = None
@@ -231,33 +231,33 @@ class ArxivSummaryAddon:
                             init_job, _init_tasks_ahead = self.manager._enqueue_job_locked(
                                 session,
                                 self._build_init_prompt(),
-                                user_id=user_id,
-                                group_id=group_id,
-                                context=context,
-                                metadata={
+                                user_id  = user_id,
+                                group_id = group_id,
+                                context  = context,
+                                metadata = {
                                     "source": ARXIV_SUMMARY_SOURCE,
                                     "kind": ARXIV_SUMMARY_INIT_KIND,
                                     "suppress_delivery": True,
                                     "queue_overhead": True,
                                 },
-                                delivery_targets=explicit_targets,
-                                disk_usage_bytes=disk_usage_bytes,
+                                delivery_targets = explicit_targets,
+                                disk_usage_bytes = disk_usage_bytes,
                             )
                         job, _tasks_ahead = self.manager._enqueue_job_locked(
                             session,
                             self._build_link_prompt(date, normalized_links),
-                            user_id=user_id,
-                            group_id=group_id,
-                            context=context,
-                            metadata={
+                            user_id  = user_id,
+                            group_id = group_id,
+                            context  = context,
+                            metadata = {
                                 "source": ARXIV_SUMMARY_SOURCE,
                                 "kind": ARXIV_SUMMARY_KIND,
                                 "date": date,
                                 "links": normalized_links,
                                 "failure_title": f"{date} arXiv 总结",
                             },
-                            delivery_targets=explicit_targets,
-                            disk_usage_bytes=disk_usage_bytes,
+                            delivery_targets = explicit_targets,
+                            disk_usage_bytes = disk_usage_bytes,
                         )
                     except RuntimeError as exc:
                         return str(exc)
@@ -288,10 +288,10 @@ class ArxivSummaryAddon:
             return "未执行 arXiv 总结任务。"
         await self._send_text_to_target(
             existing_message,
-            user_id=user_id,
-            group_id=group_id,
-            context=context,
-            delivery_targets=explicit_targets,
+            user_id          = user_id,
+            group_id         = group_id,
+            context          = context,
+            delivery_targets = explicit_targets,
         )
         return (
             f"已重发 {date} arXiv 历史总结。"
@@ -324,8 +324,8 @@ class ArxivSummaryAddon:
         metadata = job.metadata or {}
         return isinstance(metadata, Mapping) and _summary_identity_matches(
             metadata,
-            date=date,
-            links=links,
+            date  = date,
+            links = links,
         )
 
     def _is_init_job(self, job: RuntimeJob) -> bool:
@@ -400,8 +400,8 @@ class ArxivSummaryAddon:
                 or not isinstance(metadata, Mapping)
                 or not _summary_identity_matches(
                     metadata,
-                    date=date,
-                    links=links,
+                    date  = date,
+                    links = links,
                 )
             ):
                 continue
@@ -410,14 +410,14 @@ class ArxivSummaryAddon:
             if event.get("exit_code") not in (0, None):
                 continue
             raw_content = event.get("content")
-            content = raw_content.strip() if isinstance(raw_content, str) else ""
+            content     = raw_content.strip() if isinstance(raw_content, str) else ""
             if content:
                 latest = event
         return latest
 
     def _build_link_prompt(self, date: str, links: list[str]) -> str:
         methodology = self.manager.config.arxiv_summary_methodology
-        link_block = f"## {date}\n" + "\n".join(links)
+        link_block  = f"## {date}\n" + "\n".join(links)
         return (
             f"请先读取当前工作目录下的 `{methodology}`，并严格遵守该文件中的输出格式要求。\n"
             "不要把方法论文件内容复述出来，只输出最终 Markdown 摘要。\n\n"
@@ -442,7 +442,7 @@ class ArxivSummaryAddon:
         user_id: int | None,
         group_id: int | None,
     ) -> CodexSession:
-        label = self.manager.config.arxiv_summary_label
+        label   = self.manager.config.arxiv_summary_label
         session = self.manager.sessions.get(label)
         if session is not None:
             return session
@@ -456,7 +456,7 @@ class ArxivSummaryAddon:
         return self.manager._create_session_record_locked(
             label,
             cwd,
-            user_id=user_id,
-            group_id=group_id,
-            metadata={"source": ARXIV_SUMMARY_SOURCE, "kind": "session"},
+            user_id  = user_id,
+            group_id = group_id,
+            metadata = {"source": ARXIV_SUMMARY_SOURCE, "kind": "session"},
         )

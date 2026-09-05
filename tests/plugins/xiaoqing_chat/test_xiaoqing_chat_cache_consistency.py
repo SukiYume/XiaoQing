@@ -9,7 +9,7 @@ import pytest
 def test_topic_summary_cache_parser_keeps_latest_valid_topic_summary(tmp_path: Path) -> None:
     from plugins.xiaoqing_chat.memory.topic_summary_cache import load_topic_summary_entries
 
-    chat_id = "shared-cache-parser"
+    chat_id      = "shared-cache-parser"
     summary_path = tmp_path / "hippo_memorizer" / f"{chat_id}.json"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     _ = summary_path.write_text(
@@ -33,7 +33,7 @@ def test_topic_summary_cache_parser_keeps_latest_valid_topic_summary(tmp_path: P
 def test_summarizer_load_cache_accepts_legacy_entries_without_topic_id(tmp_path: Path) -> None:
     from plugins.xiaoqing_chat.llm.summarizer import _load_cache
 
-    chat_id = "legacy-summarizer-cache"
+    chat_id      = "legacy-summarizer-cache"
     summary_path = tmp_path / "hippo_memorizer" / f"{chat_id}.json"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     _ = summary_path.write_text(
@@ -59,7 +59,7 @@ async def test_action_history_append_on_cold_cache_keeps_persisted_records(
     from plugins.xiaoqing_chat.planning.action_history import ActionHistoryStore, ActionRecord
 
     chat_id = "cold-cache-history"
-    store = ActionHistoryStore()
+    store   = ActionHistoryStore()
     store.bind(tmp_path)
 
     action_dir = tmp_path / "action_history"
@@ -76,12 +76,12 @@ async def test_action_history_append_on_cold_cache_keeps_persisted_records(
     store.append(
         chat_id,
         ActionRecord(
-            ts=2.0,
-            local_target="u2",
-            action="reply",
-            reasoning="new-record",
-            detail={},
-            executed=True,
+            ts           = 2.0,
+            local_target = "u2",
+            action       = "reply",
+            reasoning    = "new-record",
+            detail       = {},
+            executed     = True,
         ),
     )
     store.flush(chat_id)
@@ -103,7 +103,7 @@ async def test_action_history_get_recent_async_does_not_overwrite_concurrent_app
     from plugins.xiaoqing_chat.planning.action_history import ActionHistoryStore, ActionRecord
 
     chat_id = "append-race-history"
-    store = ActionHistoryStore()
+    store   = ActionHistoryStore()
     store.bind(tmp_path)
 
     action_dir = tmp_path / "action_history"
@@ -117,7 +117,7 @@ async def test_action_history_get_recent_async_does_not_overwrite_concurrent_app
         encoding="utf-8",
     )
 
-    gate = asyncio.Event()
+    gate               = asyncio.Event()
     original_to_thread = action_history_module.asyncio.to_thread
 
     async def delayed_to_thread(func, *args, **kwargs):
@@ -132,12 +132,12 @@ async def test_action_history_get_recent_async_does_not_overwrite_concurrent_app
         store.append(
             chat_id,
             ActionRecord(
-                ts=2.0,
-                local_target="u2",
-                action="reply",
-                reasoning="new-record",
-                detail={},
-                executed=True,
+                ts           = 2.0,
+                local_target = "u2",
+                action       = "reply",
+                reasoning    = "new-record",
+                detail       = {},
+                executed     = True,
             ),
         )
         gate.set()
@@ -162,7 +162,7 @@ async def test_action_history_get_recent_async_does_not_restore_after_concurrent
     from plugins.xiaoqing_chat.planning.action_history import ActionHistoryStore
 
     chat_id = "clear-race-history"
-    store = ActionHistoryStore()
+    store   = ActionHistoryStore()
     store.bind(tmp_path)
 
     action_dir = tmp_path / "action_history"
@@ -176,7 +176,7 @@ async def test_action_history_get_recent_async_does_not_restore_after_concurrent
         encoding="utf-8",
     )
 
-    gate = asyncio.Event()
+    gate               = asyncio.Event()
     original_to_thread = action_history_module.asyncio.to_thread
 
     async def delayed_to_thread(func, *args, **kwargs):

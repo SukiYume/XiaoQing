@@ -38,11 +38,11 @@ class _MockRequest:
     """Mock request object with configurable headers"""
 
     def __init__(self, method: str, path: str, headers: dict | None = None):
-        self.method = method
-        self.path = path
-        self.headers = headers or {}
-        self.query = {}
-        self.app = None
+        self.method     = method
+        self.path       = path
+        self.headers    = headers or {}
+        self.query      = {}
+        self.app        = None
         self.match_info = Mock()
 
 
@@ -50,7 +50,8 @@ def _make_request_with_auth(method: str, path: str, token: str) -> _MockRequest:
     """Create a mock request with Authorization header"""
     headers = {"Authorization": f"Bearer {token}"}
     if method.upper() == "POST":
-        headers["Content-Type"] = "application/json"
+        headers["Content-Type"]             = "application/json"
+        headers["X-XiaoQing-Response-Mode"] = "actions"
     return _MockRequest(method, path, headers)
 
 
@@ -104,30 +105,30 @@ def mock_handler():
 def sample_server(mock_handler):
     """Create a sample InboundServer for testing"""
     return InboundServer(
-        host="127.0.0.1",
-        port=8765,
-        token="test_token",
-        handler=mock_handler,
-        enable_http=True,
-        enable_ws=True,
-        ws_path="/ws",
-        ws_max_workers=2,
-        ws_queue_size=10,
+        host           = "127.0.0.1",
+        port           = 8765,
+        token          = "test_token",
+        handler        = mock_handler,
+        enable_http    = True,
+        enable_ws      = True,
+        ws_path        = "/ws",
+        ws_max_workers = 2,
+        ws_queue_size  = 10,
     )
 
 
 def _make_server(mock_handler, port: int) -> InboundServer:
     """Create a server instance for tests that need to bind a real socket."""
     return InboundServer(
-        host="127.0.0.1",
-        port=port,
-        token="test_token",
-        handler=mock_handler,
-        enable_http=True,
-        enable_ws=True,
-        ws_path="/ws",
-        ws_max_workers=2,
-        ws_queue_size=10,
+        host           = "127.0.0.1",
+        port           = port,
+        token          = "test_token",
+        handler        = mock_handler,
+        enable_http    = True,
+        enable_ws      = True,
+        ws_path        = "/ws",
+        ws_max_workers = 2,
+        ws_queue_size  = 10,
     )
 
 

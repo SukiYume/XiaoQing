@@ -18,9 +18,9 @@ from tests.helpers.config_test_support import (
     time,
 )
 
-config_file = _fixture_support.config_file
-config_manager = _fixture_support.config_manager
-secrets_file = _fixture_support.secrets_file
+config_file     = _fixture_support.config_file
+config_manager  = _fixture_support.config_manager
+secrets_file    = _fixture_support.secrets_file
 temp_config_dir = _fixture_support.temp_config_dir
 
 
@@ -31,7 +31,7 @@ class TestConfigManagerWatch:
     async def test_watch_detects_changes(self, config_manager: ConfigManager, config_file: Path):
         """测试监控文件变化"""
         changes_detected = []
-        changed = asyncio.Event()
+        changed          = asyncio.Event()
 
         def callback(snapshot: ConfigSnapshot):
             changes_detected.append(snapshot)
@@ -65,9 +65,9 @@ class TestConfigManagerWatch:
     ):
         """测试回调执行期间写入的新配置不会被 mtime 覆盖掉"""
         changes_detected = []
-        both_changes = asyncio.Event()
-        first_mtime = time.time() + 10
-        second_mtime = first_mtime + 10
+        both_changes     = asyncio.Event()
+        first_mtime      = time.time() + 10
+        second_mtime     = first_mtime + 10
 
         def write_config(bot_name: str, mtime: float) -> None:
             with open(config_file, "w", encoding="utf-8") as f:
@@ -102,7 +102,7 @@ class TestConfigManagerWatch:
         config_manager: ConfigManager,
         config_file: Path,
     ):
-        changed = asyncio.Event()
+        changed                         = asyncio.Event()
         snapshots: list[ConfigSnapshot] = []
 
         def callback(snapshot: ConfigSnapshot) -> None:
@@ -128,7 +128,7 @@ class TestConfigManagerWatch:
         config_manager: ConfigManager,
         secrets_file: Path,
     ):
-        changed = asyncio.Event()
+        changed                         = asyncio.Event()
         snapshots: list[ConfigSnapshot] = []
 
         def callback(snapshot: ConfigSnapshot) -> None:
@@ -155,13 +155,13 @@ class TestConfigManagerWatch:
         self,
         temp_config_dir: Path,
     ):
-        config_path = temp_config_dir / "same-mtime-config.json"
+        config_path  = temp_config_dir / "same-mtime-config.json"
         secrets_path = temp_config_dir / "same-mtime-secrets.json"
         config_path.write_text('{"bot_name":"AAAA"}', encoding="utf-8")
         secrets_path.write_text("{}", encoding="utf-8")
-        manager = ConfigManager(config_path, secrets_path)
-        original_stat = config_path.stat()
-        changed = asyncio.Event()
+        manager                         = ConfigManager(config_path, secrets_path)
+        original_stat                   = config_path.stat()
+        changed                         = asyncio.Event()
         snapshots: list[ConfigSnapshot] = []
 
         def callback(snapshot: ConfigSnapshot) -> None:
@@ -197,9 +197,9 @@ class TestConfigManagerWatch:
         import core.config as config_module
 
         full_reads: list[Path] = []
-        validation_calls = 0
-        original_read = config_manager._read_source_unlocked
-        original_validate = config_module._validate_runtime_config
+        validation_calls       = 0
+        original_read          = config_manager._read_source_unlocked
+        original_validate      = config_module._validate_runtime_config
 
         def record_read(path: Path):
             full_reads.append(path)
@@ -228,9 +228,9 @@ class TestConfigManagerWatch:
         import core.config as config_module
 
         full_reads: list[Path] = []
-        validation_calls = 0
-        original_read = config_manager._read_source_unlocked
-        original_validate = config_module._validate_runtime_config
+        validation_calls       = 0
+        original_read          = config_manager._read_source_unlocked
+        original_validate      = config_module._validate_runtime_config
 
         def record_read(path: Path):
             full_reads.append(path)
@@ -257,9 +257,9 @@ class TestConfigManagerWatch:
         monkeypatch: pytest.MonkeyPatch,
     ):
         original_read_sources = config_manager._read_sources
-        worker_entered = threading.Event()
-        release_worker = threading.Event()
-        worker_finished = threading.Event()
+        worker_entered        = threading.Event()
+        release_worker        = threading.Event()
+        worker_finished       = threading.Event()
 
         def blocked_read_sources(*args, **kwargs):
             worker_entered.set()
@@ -293,9 +293,9 @@ class TestConfigManagerWatch:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         original_read_sources = config_manager._read_sources
-        second_read_entered = threading.Event()
-        release_second_read = threading.Event()
-        calls = 0
+        second_read_entered   = threading.Event()
+        release_second_read   = threading.Event()
+        calls                 = 0
 
         def block_second_read(*args, **kwargs):
             nonlocal calls
@@ -308,7 +308,7 @@ class TestConfigManagerWatch:
         monkeypatch.setattr(config_manager, "_read_sources", block_second_read)
         watchdog = threading.Timer(1.0, release_second_read.set)
         watchdog.start()
-        started = asyncio.get_running_loop().time()
+        started   = asyncio.get_running_loop().time()
         reconcile = asyncio.create_task(config_manager._watch_reconcile_once())
         try:
             assert await asyncio.to_thread(second_read_entered.wait, 2)
@@ -328,7 +328,7 @@ class TestConfigManagerWatch:
         config_manager: ConfigManager,
         secrets_file: Path,
     ):
-        snapshots: asyncio.Queue[ConfigSnapshot] = asyncio.Queue()
+        snapshots: asyncio.Queue[ConfigSnapshot]    = asyncio.Queue()
         pending_notices: list[PendingSecretsChange] = []
         config_manager.on_reload(snapshots.put_nowait)
         config_manager.on_pending_secrets_change(pending_notices.append)
@@ -368,8 +368,8 @@ class TestConfigManagerWatch:
         config_manager: ConfigManager,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        original_read_sources = config_manager._read_sources
-        calls = 0
+        original_read_sources                    = config_manager._read_sources
+        calls                                    = 0
         snapshots: asyncio.Queue[ConfigSnapshot] = asyncio.Queue()
 
         def flaky_read_sources(*args, **kwargs):
@@ -406,13 +406,13 @@ class TestConfigManagerWatch:
         monkeypatch: pytest.MonkeyPatch,
     ):
         original_read_sources = config_manager._read_sources
-        rotated = {
+        rotated               = {
             "admin_user_ids": [],
             "plugins": {"echo": {"api_key": "must-never-authorize"}},
         }
-        calls = 0
+        calls                           = 0
         snapshots: list[ConfigSnapshot] = []
-        missing = asyncio.Event()
+        missing                         = asyncio.Event()
 
         def create_then_delete_before_final_read(*args, **kwargs):
             nonlocal calls
@@ -460,8 +460,8 @@ class TestConfigManagerWatch:
         secrets_file: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        original_read_sources = config_manager._read_sources
-        read_calls = 0
+        original_read_sources                       = config_manager._read_sources
+        read_calls                                  = 0
         security_publications: list[ConfigSnapshot] = []
 
         def unlink_after_final_stable_read(*args, **kwargs):
@@ -524,8 +524,8 @@ class TestConfigManagerWatch:
         config_manager: ConfigManager,
         secrets_file: Path,
     ):
-        original = config_manager.snapshot()
-        original_identity = config_manager._secrets_source.identity
+        original                                    = config_manager.snapshot()
+        original_identity                           = config_manager._secrets_source.identity
         security_publications: list[ConfigSnapshot] = []
         pending_notices: list[PendingSecretsChange] = []
         config_manager.on_security_update(security_publications.append)
@@ -575,7 +575,7 @@ class TestConfigManagerWatch:
             "admin_user_ids": [9090],
             "plugins": {"echo": {"api_key": "explicitly-confirmed-only"}},
         }
-        original = config_manager.snapshot()
+        original                                    = config_manager.snapshot()
         security_publications: list[ConfigSnapshot] = []
         config_manager.on_security_update(security_publications.append)
 

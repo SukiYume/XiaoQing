@@ -1,3 +1,4 @@
+# 验证重置与正在进行的记忆落盘之间的代际隔离。
 """Regression tests for reset versus in-flight memory persistence."""
 
 from __future__ import annotations
@@ -12,20 +13,20 @@ from plugins.xiaoqing_chat.memory.memory import MemoryStore
 def _append(store: MemoryStore, chat_id: str, content: str) -> None:
     store.append(
         chat_id,
-        role="user",
-        name="Tester",
-        user_id=1,
-        content=content,
+        role    = "user",
+        name    = "Tester",
+        user_id = 1,
+        content = content,
     )
 
 
 def test_reset_waits_for_old_snapshot_commit_then_removes_it(tmp_path, monkeypatch):
-    store = MemoryStore(tmp_path)
+    store   = MemoryStore(tmp_path)
     chat_id = "g-reset-race"
     _append(store, chat_id, "old private history")
-    writer_started = threading.Event()
+    writer_started      = threading.Event()
     allow_writer_commit = threading.Event()
-    clear_started = threading.Event()
+    clear_started       = threading.Event()
 
     def blocking_write(path, payload):
         writer_started.set()
@@ -57,7 +58,7 @@ def test_reset_waits_for_old_snapshot_commit_then_removes_it(tmp_path, monkeypat
 
 
 def test_consecutive_resets_keep_tombstone_and_history_empty(tmp_path):
-    store = MemoryStore(tmp_path)
+    store   = MemoryStore(tmp_path)
     chat_id = "g-double-reset"
     _append(store, chat_id, "old history")
     store.persist(chat_id)
@@ -71,7 +72,7 @@ def test_consecutive_resets_keep_tombstone_and_history_empty(tmp_path):
 
 
 def test_new_message_after_reset_starts_new_generation_without_old_history(tmp_path):
-    store = MemoryStore(tmp_path)
+    store   = MemoryStore(tmp_path)
     chat_id = "g-reset-new-message"
     _append(store, chat_id, "old history")
     store.persist(chat_id)

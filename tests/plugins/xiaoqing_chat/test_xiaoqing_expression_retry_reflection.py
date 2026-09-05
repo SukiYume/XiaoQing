@@ -29,13 +29,13 @@ from plugins.xiaoqing_chat.memory.memory import StoredMessage
 
 def _expression(expression_id: str, *, count: int = 1) -> ExpressionRecord:
     return ExpressionRecord(
-        expression_id=expression_id,
-        chat_id="g1",
-        situation=f"situation-{expression_id}",
-        style=f"style-{expression_id}",
-        content_list=["base"],
-        count=count,
-        last_active_time=1.0,
+        expression_id    = expression_id,
+        chat_id          = "g1",
+        situation        = f"situation-{expression_id}",
+        style            = f"style-{expression_id}",
+        content_list     = ["base"],
+        count            = count,
+        last_active_time = 1.0,
     )
 
 
@@ -44,7 +44,7 @@ async def test_expression_learning_filters_bot_lines_and_bounds_llm_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict = {}
-    payload = [
+    payload        = [
         {
             "situation": "情境" * 50,
             "style": f"风格-{index}",
@@ -72,14 +72,14 @@ async def test_expression_learning_filters_bot_lines_and_bounds_llm_output(
     ]
 
     learned = await expression_learner.learn_from_messages(
-        secrets={"api_base": "https://example.test", "api_key": "k", "model": "m"},
-        messages=messages,
-        temperature=9.0,
-        top_p=0.9,
-        max_tokens=100,
-        timeout_seconds=1,
-        max_retry=0,
-        retry_interval_seconds=0,
+        secrets                = {"api_base": "https://example.test", "api_key": "k", "model": "m"},
+        messages               = messages,
+        temperature            = 9.0,
+        top_p                  = 0.9,
+        max_tokens             = 100,
+        timeout_seconds        = 1,
+        max_retry              = 0,
+        retry_interval_seconds = 0,
     )
 
     assert len(learned) == 12
@@ -96,38 +96,38 @@ async def test_expression_learning_filters_bot_lines_and_bounds_llm_output(
 async def test_expression_upsert_caps_only_target_chat_and_preserves_other_tenant(tmp_path) -> None:
     store = ExpressionStore()
     store.bind(tmp_path)
-    target = _expression("target")
-    other = _expression("other")
+    target        = _expression("target")
+    other         = _expression("other")
     other.chat_id = "g2"
     store.save([target, other])
 
     changed = await expression_learner.upsert_learned(
-        store=store,
-        chat_id="g1",
-        learned=[
+        store   = store,
+        chat_id = "g1",
+        learned = [
             expression_learner.LearnedExpression(
-                situation=target.situation,
-                style=target.style,
-                source_id="m1",
+                situation = target.situation,
+                style     = target.style,
+                source_id = "m1",
             ),
             expression_learner.LearnedExpression(
-                situation="new situation",
-                style="new style",
-                source_id="m2",
+                situation = "new situation",
+                style     = "new style",
+                source_id = "m2",
             ),
         ],
-        similarity_threshold=0.72,
-        max_store=1,
-        self_reflect=False,
-        secrets={},
-        bot_name="小青",
-        personality=PersonalityConfig(),
-        temperature=0.5,
-        top_p=0.9,
-        max_tokens=500,
-        timeout_seconds=1,
-        max_retry=0,
-        retry_interval_seconds=0,
+        similarity_threshold   = 0.72,
+        max_store              = 1,
+        self_reflect           = False,
+        secrets                = {},
+        bot_name               = "小青",
+        personality            = PersonalityConfig(),
+        temperature            = 0.5,
+        top_p                  = 0.9,
+        max_tokens             = 500,
+        timeout_seconds        = 1,
+        max_retry              = 0,
+        retry_interval_seconds = 0,
     )
 
     assert changed == 2
@@ -144,33 +144,33 @@ async def test_expression_upsert_caps_only_target_chat_and_preserves_other_tenan
 async def test_expression_upsert_does_not_revive_user_rejected_situation(tmp_path) -> None:
     store = ExpressionStore()
     store.bind(tmp_path)
-    rejected = _expression("rejected")
-    rejected.rejected = True
+    rejected             = _expression("rejected")
+    rejected.rejected    = True
     rejected.modified_by = "user"
     store.save([rejected])
 
     changed = await expression_learner.upsert_learned(
-        store=store,
-        chat_id="g1",
-        learned=[
+        store   = store,
+        chat_id = "g1",
+        learned = [
             expression_learner.LearnedExpression(
-                situation=rejected.situation,
-                style=rejected.style,
-                source_id="m1",
+                situation = rejected.situation,
+                style     = rejected.style,
+                source_id = "m1",
             )
         ],
-        similarity_threshold=0.72,
-        max_store=20,
-        self_reflect=False,
-        secrets={},
-        bot_name="小青",
-        personality=PersonalityConfig(),
-        temperature=0.5,
-        top_p=0.9,
-        max_tokens=500,
-        timeout_seconds=1,
-        max_retry=0,
-        retry_interval_seconds=0,
+        similarity_threshold   = 0.72,
+        max_store              = 20,
+        self_reflect           = False,
+        secrets                = {},
+        bot_name               = "小青",
+        personality            = PersonalityConfig(),
+        temperature            = 0.5,
+        top_p                  = 0.9,
+        max_tokens             = 500,
+        timeout_seconds        = 1,
+        max_retry              = 0,
+        retry_interval_seconds = 0,
     )
 
     assert changed == 0
@@ -180,11 +180,11 @@ async def test_expression_upsert_does_not_revive_user_rejected_situation(tmp_pat
 def test_expression_store_concurrent_new_records_are_both_preserved(tmp_path) -> None:
     # 模拟热重载前后的两个类代际：旧实现的类级锁池在这里彼此独立。
     class FirstGenerationStore(ExpressionStore):
-        _locks_guard = threading.Lock()
+        _locks_guard                                      = threading.Lock()
         _path_locks: ClassVar[dict[str, threading.RLock]] = {}
 
     class SecondGenerationStore(ExpressionStore):
-        _locks_guard = threading.Lock()
+        _locks_guard                                      = threading.Lock()
         _path_locks: ClassVar[dict[str, threading.RLock]] = {}
 
     stores = [FirstGenerationStore(), SecondGenerationStore()]
@@ -192,9 +192,9 @@ def test_expression_store_concurrent_new_records_are_both_preserved(tmp_path) ->
         store.bind(tmp_path)
         assert store.load() == []
 
-    barrier = threading.Barrier(2)
-    counter_lock = threading.Lock()
-    active_reads = 0
+    barrier          = threading.Barrier(2)
+    counter_lock     = threading.Lock()
+    active_reads     = 0
     max_active_reads = 0
 
     for store in stores:
@@ -237,7 +237,7 @@ def test_expression_store_rebases_concurrent_count_and_content_deltas(tmp_path) 
     initial.bind(tmp_path)
     initial.save([_expression("shared")])
 
-    stores = [ExpressionStore(), ExpressionStore()]
+    stores                                = [ExpressionStore(), ExpressionStore()]
     desired: list[list[ExpressionRecord]] = []
     for index, store in enumerate(stores):
         store.bind(tmp_path)
@@ -301,8 +301,8 @@ def test_expression_store_same_root_rebind_preserves_merge_baseline(tmp_path) ->
 def test_expression_store_only_user_can_clear_a_rejection(tmp_path) -> None:
     store = ExpressionStore()
     store.bind(tmp_path)
-    rejected = _expression("rejected")
-    rejected.rejected = True
+    rejected             = _expression("rejected")
+    rejected.rejected    = True
     rejected.modified_by = "user"
     store.save([rejected])
 
@@ -382,12 +382,12 @@ async def test_llm_retry_count_is_exact(monkeypatch: pytest.MonkeyPatch, max_ret
     }
     with pytest.raises(AIRequestError, match="ai_transport"):
         await complete_configured_route(
-            session=object(),
-            config=config,
-            secrets={"ai": {"providers": {"test": {"api_key": "key"}}}},
-            plugin_name="xiaoqing_chat",
-            route_name="chat",
-            messages=[{"role": "user", "content": "hello"}],
+            session     = object(),
+            config      = config,
+            secrets     = {"ai": {"providers": {"test": {"api_key": "key"}}}},
+            plugin_name = "xiaoqing_chat",
+            route_name  = "chat",
+            messages    = [{"role": "user", "content": "hello"}],
         )
 
     assert attempts == 1 + max_retry
@@ -398,7 +398,7 @@ async def test_reflector_queues_every_question_instead_of_overwriting(tmp_path) 
     expression_store = ExpressionStore()
     expression_store.bind(tmp_path)
     expression_store.save([_expression("first"), _expression("second")])
-    tracker_store = ReflectTrackerStore()
+    tracker_store       = ReflectTrackerStore()
     actions: list[dict] = []
 
     async def send_action(action: dict) -> None:
@@ -406,13 +406,13 @@ async def test_reflector_queues_every_question_instead_of_overwriting(tmp_path) 
 
     context = SimpleNamespace(data_dir=tmp_path, send_action=send_action)
     sent = await maybe_ask_for_reflection(
-        context=context,
-        expr_store=expression_store,
-        tracker_store=tracker_store,
-        operator_user_id=0,
-        operator_group_id=123,
-        min_interval_seconds=0.0,
-        ask_per_check=2,
+        context              = context,
+        expr_store           = expression_store,
+        tracker_store        = tracker_store,
+        operator_user_id     = 0,
+        operator_group_id    = 123,
+        min_interval_seconds = 0.0,
+        ask_per_check        = 2,
     )
 
     assert sent == 2
@@ -435,12 +435,12 @@ async def test_reflector_does_not_advance_tracker_after_explicit_rejection(tmp_p
 
     sent = await maybe_ask_for_reflection(
         context=SimpleNamespace(data_dir=tmp_path, send_action=reject),
-        expr_store=expression_store,
-        tracker_store=tracker_store,
-        operator_user_id=0,
-        operator_group_id=123,
-        min_interval_seconds=0.0,
-        ask_per_check=1,
+        expr_store           = expression_store,
+        tracker_store        = tracker_store,
+        operator_user_id     = 0,
+        operator_group_id    = 123,
+        min_interval_seconds = 0.0,
+        ask_per_check        = 1,
     )
 
     assert sent == 0
@@ -536,14 +536,14 @@ async def test_expired_reflection_removes_only_that_queue_entry(
     changed = await tick_reflect_tracker(
         operator_chat_id="g1",
         memory_store=SimpleNamespace(get_async=AsyncMock()),
-        expr_store=ExpressionStore(),
-        tracker_store=tracker_store,
-        secrets={},
-        bot_name="小青",
-        timeout_seconds=1.0,
-        max_retry=0,
-        retry_interval_seconds=0.0,
-        max_duration_seconds=10.0,
+        expr_store             = ExpressionStore(),
+        tracker_store          = tracker_store,
+        secrets                = {},
+        bot_name               = "小青",
+        timeout_seconds        = 1.0,
+        max_retry              = 0,
+        retry_interval_seconds = 0.0,
+        max_duration_seconds   = 10.0,
     )
 
     assert changed is True

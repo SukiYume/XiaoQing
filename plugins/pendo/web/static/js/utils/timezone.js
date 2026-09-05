@@ -2,13 +2,12 @@
 
 import { api } from '../api.js';
 
-const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-const WALL_DATETIME_PATTERN =
-    /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?$/;
-const AWARE_SUFFIX_PATTERN = /(?:Z|[+-]\d{2}:?\d{2})$/i;
-const OFFSET_SAMPLE_HOURS = 48;
+const DATE_KEY_PATTERN      = /^\d{4}-\d{2}-\d{2}$/;
+const WALL_DATETIME_PATTERN =     /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?$/;
+const AWARE_SUFFIX_PATTERN     = /(?:Z|[+-]\d{2}:?\d{2})$/i;
+const OFFSET_SAMPLE_HOURS      = 48;
 const OFFSET_SAMPLE_STEP_HOURS = 3;
-const FORMATTER_CACHE = new Map();
+const FORMATTER_CACHE          = new Map();
 
 let _userTimeZone = '';
 
@@ -104,7 +103,7 @@ function inputValue(parts) {
 }
 
 function wallDateTimeValue(parts) {
-    const pad = (value) => String(value).padStart(2, '0');
+    const pad      = (value) => String(value).padStart(2, '0');
     const fraction = parts.millisecond ? `.${String(parts.millisecond).padStart(3, '0')}` : '';
     return `${String(parts.year).padStart(4, '0')}-${pad(parts.month)}-${pad(parts.day)}T${pad(parts.hour)}:${pad(parts.minute)}:${pad(parts.second)}${fraction}`;
 }
@@ -177,7 +176,7 @@ export function formatZonedDateTime(value, fallback = '未知时间', timeZone =
     const text = typeof value === 'string' ? value.trim() : '';
     if (DATE_KEY_PATTERN.test(text) && wallParts(`${text}T00:00:00`)) return text;
     const dateKey = zonedDateKey(value, timeZone);
-    const time = formatZonedTime(value, '', timeZone);
+    const time    = formatZonedTime(value, '', timeZone);
     return dateKey && time ? `${dateKey} ${time}` : fallback;
 }
 
@@ -224,14 +223,14 @@ export function zonedInputToUtcIso(value, timeZone = '') {
     const wall = wallParts(value);
     if (!wall) return '';
     const resolvedTimeZone = resolveTimeZone(timeZone);
-    const formatter = formatterFor(resolvedTimeZone);
-    const offsets = new Set();
-    const hourMs = 60 * 60 * 1000;
+    const formatter        = formatterFor(resolvedTimeZone);
+    const offsets          = new Set();
+    const hourMs           = 60 * 60 * 1000;
     for (let hours = -OFFSET_SAMPLE_HOURS; hours <= OFFSET_SAMPLE_HOURS; hours += OFFSET_SAMPLE_STEP_HOURS) {
-        const sampleEpoch = wall.epoch + hours * hourMs;
-        const sampleWall = partsAt(formatter, sampleEpoch);
+        const sampleEpoch       = wall.epoch + hours * hourMs;
+        const sampleWall        = partsAt(formatter, sampleEpoch);
         const sampleMillisecond = ((sampleEpoch % 1000) + 1000) % 1000;
-        const sampleAsUtc = new Date(0);
+        const sampleAsUtc       = new Date(0);
         sampleAsUtc.setUTCFullYear(sampleWall.year, sampleWall.month - 1, sampleWall.day);
         sampleAsUtc.setUTCHours(
             sampleWall.hour,

@@ -20,7 +20,7 @@ def pet_service():
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as file:
         db_path = file.name
     database = Database(db_path)
-    service = PetService(database)
+    service  = PetService(database)
     service.adopt_pet("evolution-user", 10001, "岁岁")
     try:
         yield service, database
@@ -56,9 +56,9 @@ def test_mature_pet_requires_both_age_and_experience_boundaries(
     pet_service, age: int, experience: int
 ):
     service, database = pet_service
-    pet = _pet(database)
-    pet.stage = PetStage.MATURE
-    pet.age = age
+    pet            = _pet(database)
+    pet.stage      = PetStage.MATURE
+    pet.age        = age
     pet.experience = experience
     database.update_pet(pet)
 
@@ -70,15 +70,15 @@ def test_mature_pet_requires_both_age_and_experience_boundaries(
 
 def test_mature_pet_reaches_old_stage_exactly_once(pet_service, monkeypatch):
     service, database = pet_service
-    pet = _pet(database)
-    pet.stage = PetStage.MATURE
-    pet.form = "成熟"
-    pet.age = 60
+    pet            = _pet(database)
+    pet.stage      = PetStage.MATURE
+    pet.form       = "成熟"
+    pet.age        = 60
     pet.experience = 150
     database.update_pet(pet)
 
     update_calls = 0
-    real_update = database.update_pet
+    real_update  = database.update_pet
 
     def count_update(current_pet):
         nonlocal update_calls
@@ -116,9 +116,9 @@ def test_young_and_growth_care_branches_remain_unchanged(
     expected_form: str,
 ):
     service, database = pet_service
-    pet = _pet(database)
-    pet.stage = stage
-    pet.age = age
+    pet            = _pet(database)
+    pet.stage      = stage
+    pet.age        = age
     pet.experience = experience
     pet.hunger = pet.mood = pet.clean = pet.energy = pet.health = stat
     database.update_pet(pet)
@@ -132,10 +132,10 @@ def test_young_and_growth_care_branches_remain_unchanged(
 
 def test_failed_evolution_write_restores_in_memory_pet(pet_service, monkeypatch):
     service, database = pet_service
-    pet = _pet(database)
-    pet.stage = PetStage.MATURE
-    pet.form = "成熟"
-    pet.age = 60
+    pet            = _pet(database)
+    pet.stage      = PetStage.MATURE
+    pet.form       = "成熟"
+    pet.age        = 60
     pet.experience = 150
     database.update_pet(pet)
     monkeypatch.setattr(database, "update_pet", lambda _pet: False)

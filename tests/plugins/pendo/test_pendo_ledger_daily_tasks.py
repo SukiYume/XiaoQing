@@ -125,7 +125,7 @@ async def test_ledger_session_uses_scoped_identity_and_rejects_corrupt_state(
             self.end_calls += 1
             return True
 
-    handler = LedgerHandler(SimpleNamespace())
+    handler     = LedgerHandler(SimpleNamespace())
     unavailable = await handler.start_add_session("u-scoped", SimpleNamespace())
     assert unavailable == {"status": "error", "message": "❌ 无法创建记账会话，请稍后重试"}
 
@@ -158,7 +158,7 @@ async def test_ledger_session_uses_scoped_identity_and_rejects_corrupt_state(
     assert saved_group == 42
 
     corrupt_context = _Context()
-    corrupt = await handler.handle_session_step(
+    corrupt         = await handler.handle_session_step(
         "u-scoped", "12", _Session({"data": {}}), corrupt_context
     )
     assert corrupt == {"status": "error", "message": "❌ 记账会话状态损坏，请重新开始"}
@@ -171,7 +171,7 @@ async def test_ledger_month_ranges_use_user_clock_and_integer_cents(
 ) -> None:
     from plugins.pendo.handlers.ledger import LedgerHandler
 
-    db = Database(str(tmp_path / "pendo-ledger-user-clock.db"))
+    db       = Database(str(tmp_path / "pendo-ledger-user-clock.db"))
     owner_id = "u-ledger-clock"
     try:
         for item_id, title, transaction_type, cents, ledger_date in (
@@ -203,8 +203,8 @@ async def test_ledger_month_ranges_use_user_clock_and_integer_cents(
         )
         handler = LedgerHandler(db)
 
-        listing = await handler.list_ledger(owner_id, "month all", SimpleNamespace())
-        summary = await handler.summary(owner_id, "month", SimpleNamespace())
+        listing         = await handler.list_ledger(owner_id, "month all", SimpleNamespace())
+        summary         = await handler.summary(owner_id, "month", SimpleNamespace())
         invalid_summary = await handler.summary(owner_id, "not-a-range", SimpleNamespace())
 
         assert listing["status"] == "success"
@@ -229,7 +229,7 @@ def test_ledger_type_switch_clears_transfer_fields_and_rejects_ambiguous_edits()
 
     temp_dir, db = _make_temp_db("pendo_review_ledger_type_switch")
     owner_id = "u-ledger-switch"
-    item_id = "ledger-transfer"
+    item_id  = "ledger-transfer"
     try:
         db.insert_item(
             {
@@ -538,7 +538,7 @@ def test_daily_migration_rechecks_business_state_and_rolls_back_marker_with_audi
 
 def test_daily_migration_is_atomic_across_database_instances():
     temp_dir, db1 = _make_temp_db("pendo_review_task_migration_instances")
-    db2 = Database(db1.db_path)
+    db2      = Database(db1.db_path)
     owner_id = "u-task-migration-instances"
     try:
         db1.insert_item(
@@ -628,24 +628,24 @@ def test_task_today_shortcut_uses_user_timezone(monkeypatch):
             self.captured_filters = filters
             return [
                 SimpleNamespace(
-                    id="la",
-                    title="LA today",
-                    status="open",
-                    priority=3,
-                    plan_date="2030-01-01",
-                    deadline_at=None,
-                    category="工作",
-                    created_at="2030-01-01T08:00:00",
+                    id          = "la",
+                    title       = "LA today",
+                    status      = "open",
+                    priority    = 3,
+                    plan_date   = "2030-01-01",
+                    deadline_at = None,
+                    category    = "工作",
+                    created_at  = "2030-01-01T08:00:00",
                 ),
                 SimpleNamespace(
-                    id="server",
-                    title="Server tomorrow",
-                    status="open",
-                    priority=3,
-                    plan_date="2030-01-02",
-                    deadline_at=None,
-                    category="工作",
-                    created_at="2030-01-02T08:00:00",
+                    id          = "server",
+                    title       = "Server tomorrow",
+                    status      = "open",
+                    priority    = 3,
+                    plan_date   = "2030-01-02",
+                    deadline_at = None,
+                    category    = "工作",
+                    created_at  = "2030-01-02T08:00:00",
                 ),
             ]
 
@@ -811,7 +811,7 @@ def test_todo_edit_plain_text_and_metadata_update_only_mentioned_fields():
 
     try:
         handler = TaskHandler(db)
-        cases = [
+        cases   = [
             ("todosem1", "新标题", "新标题", "原分类"),
             ("todosem2", "cat:新分类", "原标题", "新分类"),
             ("todosem3", "新标题 cat:新分类", "新标题", "新分类"),

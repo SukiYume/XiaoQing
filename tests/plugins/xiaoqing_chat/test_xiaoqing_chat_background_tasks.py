@@ -1,3 +1,4 @@
+# 验证后台任务登记、异常观察和关闭回收。
 import asyncio
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -22,7 +23,7 @@ from plugins.xiaoqing_chat.task_scheduler import _spawn_bg_task
 async def test_expensive_per_chat_background_jobs_are_singleflight(task_name):
     state = ChatRuntimeState()
     context = SimpleNamespace(logger=MagicMock())
-    gate = asyncio.Event()
+    gate    = asyncio.Event()
     started = 0
 
     async def blocked_job() -> None:
@@ -50,7 +51,7 @@ async def test_background_task_registry_rejects_work_above_global_capacity(monke
     state = ChatRuntimeState()
     monkeypatch.setattr(ChatRuntimeState, "_MAX_BACKGROUND_TASKS", 2, raising=False)
     context = SimpleNamespace(logger=MagicMock())
-    gate = asyncio.Event()
+    gate    = asyncio.Event()
     started = 0
 
     async def blocked_job() -> None:

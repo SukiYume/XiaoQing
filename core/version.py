@@ -1,7 +1,9 @@
+# 版本来源：源码读取构建元数据，安装包读取发行元数据。
 """Resolve the runtime version from package/build metadata without duplication."""
 
 from __future__ import annotations
 
+import tomllib
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -10,11 +12,6 @@ def _source_tree_version() -> str | None:
     pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
     if not pyproject.is_file():
         return None
-    try:
-        import tomllib
-    except ModuleNotFoundError:  # pragma: no cover - exercised on CPython 3.10
-        import tomli as tomllib  # type: ignore[no-redef]
-
     with pyproject.open("rb") as stream:
         project = tomllib.load(stream).get("project")
     project_version = project.get("version") if isinstance(project, dict) else None

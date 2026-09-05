@@ -118,7 +118,7 @@ class PluginGenerationMixin:
     ) -> bool:
         """Undo a never-published plugin initialization in reverse order."""
 
-        name = definition.name
+        name                      = definition.name
         had_registered_generation = name in self._plugins
         if retain_quarantine:
             # Incomplete import/external-alias uncertainty is irreversible in
@@ -135,10 +135,10 @@ class PluginGenerationMixin:
                 definition.capabilities,
             )
         plugin = LoadedPlugin(
-            definition=definition,
-            module=module,
-            mtime=mtime,
-            execution_gate=gate,
+            definition     = definition,
+            module         = module,
+            mtime          = mtime,
+            execution_gate = gate,
         )
 
         drain = await self._close_generation_gate(
@@ -157,8 +157,8 @@ class PluginGenerationMixin:
                 name,
                 plugin,
                 gate,
-                phase="failed initialization rollback",
-                reason=f"shutdown interrupted ({type(exc).__name__})",
+                phase  = "failed initialization rollback",
+                reason = f"shutdown interrupted ({type(exc).__name__})",
             )
             raise
         if not shutdown_ok:
@@ -166,8 +166,8 @@ class PluginGenerationMixin:
                 name,
                 plugin,
                 gate,
-                phase="failed initialization rollback",
-                reason="shutdown failed",
+                phase  = "failed initialization rollback",
+                reason = "shutdown failed",
             )
             return False
 
@@ -185,8 +185,8 @@ class PluginGenerationMixin:
                 name,
                 plugin,
                 gate,
-                phase="partial import rollback",
-                reason="module execution did not reach a known-complete import state",
+                phase  = "partial import rollback",
+                reason = "module execution did not reach a known-complete import state",
             )
             return False
 
@@ -212,7 +212,7 @@ class PluginGenerationMixin:
         pending: tuple[PluginDefinition, ModuleType, float],
         *,
         init_task: asyncio.Task[Any] | None = None,
-        retain_quarantine: bool = False,
+        retain_quarantine: bool             = False,
     ) -> asyncio.Task[Any]:
         """Claim one pending generation and give it exactly one finalizer."""
 
@@ -247,7 +247,7 @@ class PluginGenerationMixin:
         self,
         pending: tuple[PluginDefinition, ModuleType, float],
         *,
-        retain_quarantine: bool = False,
+        retain_quarantine: bool              = False,
         original_error: BaseException | None = None,
     ) -> bool:
         """Bridge the synchronous loader to terminal async rollback.
@@ -436,9 +436,9 @@ class PluginGenerationMixin:
     async def _wait_for_pending_finalizers(self) -> None:
         """Wait until every already-claimed pending generation reaches a terminal state."""
 
-        fatal_error: BaseException | None = None
+        fatal_error: BaseException | None        = None
         interruption_error: BaseException | None = None
-        ordinary_error: BaseException | None = None
+        ordinary_error: BaseException | None     = None
         while self._pending_finalizers:
             finalizers = tuple(dict.fromkeys(self._pending_finalizers.values()))
             for finalizer in finalizers:
@@ -471,7 +471,7 @@ class PluginGenerationMixin:
     async def _wait_inits_unsafe(self) -> None:
         """Wait for the one shared startup-init batch and its terminal cleanup."""
 
-        waiter = self._init_wait_task
+        waiter     = self._init_wait_task
         owns_batch = waiter is None or waiter.done()
         if owns_batch:
             waiter = asyncio.create_task(self._capture_lifecycle(self._drain_initializations()))
@@ -518,7 +518,7 @@ class PluginGenerationMixin:
         """Own and finalize every startup init visible to this shared batch."""
 
         terminal_errors: list[BaseException] = []
-        owned_names = set(self._pending_finalizers)
+        owned_names                          = set(self._pending_finalizers)
         while self._init_tasks:
             tasks = list(dict.fromkeys(self._init_tasks))
             owned_names.update(
@@ -557,17 +557,17 @@ class PluginGenerationMixin:
     ) -> None:
         """Atomically claim each result without hiding later work from unload."""
 
-        fatal_error: BaseException | None = None
+        fatal_error: BaseException | None        = None
         interruption_error: BaseException | None = None
         for task, result in zip(tasks, results, strict=True):
             finalizer: asyncio.Task[bool] | None = None
-            plugin_name: str | None = None
-            publish_error: BaseException | None = None
+            plugin_name: str | None              = None
+            publish_error: BaseException | None  = None
             async with self._lifecycle_lock.get():
                 while task in self._init_tasks:
                     self._init_tasks.remove(task)
                 plugin_name = self._init_task_plugins.pop(task, None)
-                pending = self._pending_plugins.pop(task, None)
+                pending     = self._pending_plugins.pop(task, None)
                 transaction = self._pending_transactions.pop(task, None)
 
                 if isinstance(result, BaseException):
@@ -586,13 +586,13 @@ class PluginGenerationMixin:
                                 plugin_dir,
                                 definition,
                                 mtime,
-                                module=module,
-                                authorized_entry=transaction.authorized_entry,
-                                transaction=transaction,
+                                module           = module,
+                                authorized_entry = transaction.authorized_entry,
+                                transaction      = transaction,
                             )
                         )
                     except BaseException as exc:
-                        publish_error = exc
+                        publish_error         = exc
                         authorization_current = False
                     if definition.name in self._quarantined_plugins or not authorization_current:
                         finalizer = self._start_pending_rollback(
@@ -622,7 +622,7 @@ class PluginGenerationMixin:
                             if transaction is not None and isinstance(exc, PluginPathError):
                                 transaction.uncertain_external_code = True
                             publish_error = exc
-                            finalizer = self._start_pending_rollback(
+                            finalizer     = self._start_pending_rollback(
                                 pending,
                                 retain_quarantine=(
                                     transaction.uncertain_external_code
@@ -726,9 +726,9 @@ class PluginGenerationMixin:
             logger.error("Cannot fingerprint plugin %s: %s", definition.name, exc)
             return
         transaction = _PluginLoadTransaction(
-            definition=definition,
-            gate=self._execution_gate_for(definition),
-            mtime=mtime,
+            definition = definition,
+            gate       = self._execution_gate_for(definition),
+            mtime      = mtime,
         )
         try:
             module, init_task = self._load_module(
@@ -739,14 +739,14 @@ class PluginGenerationMixin:
         except BaseException as exc:
             fatal_deferred = False
             if transaction.module is not None:
-                pending = (definition, transaction.module, mtime)
+                pending           = (definition, transaction.module, mtime)
                 retain_quarantine = transaction.uncertain_external_code or (
                     transaction.import_attempted and not transaction.import_completed
                 )
                 fatal_deferred = self._run_or_schedule_pending_rollback(
                     pending,
-                    retain_quarantine=retain_quarantine,
-                    original_error=exc,
+                    retain_quarantine = retain_quarantine,
+                    original_error    = exc,
                 )
             elif transaction.import_attempted or transaction.uncertain_external_code:
                 transaction.gate.close_admission()
@@ -755,8 +755,8 @@ class PluginGenerationMixin:
                 self._quarantine_gate_without_module(
                     definition.name,
                     transaction.gate,
-                    phase="partial initial import",
-                    reason=f"module execution failed without a handle ({type(exc).__name__})",
+                    phase  = "partial initial import",
+                    reason = f"module execution failed without a handle ({type(exc).__name__})",
                 )
             else:
                 transaction.gate.close_admission()
@@ -797,7 +797,7 @@ class PluginGenerationMixin:
                 self._release_plugin_namespace(definition.name)
             return
         if init_task:
-            self._pending_plugins[init_task] = (definition, module, mtime)
+            self._pending_plugins[init_task]      = (definition, module, mtime)
             self._pending_transactions[init_task] = transaction
         else:
             pending = (definition, module, mtime)
@@ -806,9 +806,9 @@ class PluginGenerationMixin:
                     plugin_dir,
                     definition,
                     mtime,
-                    module=module,
-                    authorized_entry=transaction.authorized_entry,
-                    transaction=transaction,
+                    module           = module,
+                    authorized_entry = transaction.authorized_entry,
+                    transaction      = transaction,
                 )
             except BaseException as exc:
                 fatal_deferred = self._run_or_schedule_pending_rollback(
@@ -840,8 +840,8 @@ class PluginGenerationMixin:
                     transaction.uncertain_external_code = True
                 fatal_deferred = self._run_or_schedule_pending_rollback(
                     pending,
-                    retain_quarantine=transaction.uncertain_external_code,
-                    original_error=exc,
+                    retain_quarantine = transaction.uncertain_external_code,
+                    original_error    = exc,
                 )
                 if fatal_deferred:
                     return
@@ -928,7 +928,7 @@ class PluginGenerationMixin:
             for task, (definition, _module, _mtime) in self._pending_plugins.items()
             if definition.name == name
         )
-        finalizers: set[asyncio.Task[Any]] = set()
+        finalizers: set[asyncio.Task[Any]]     = set()
         orphan_tasks: list[asyncio.Task[None]] = []
         for task in tasks_to_cancel:
             self._init_task_plugins.pop(task, None)
@@ -950,7 +950,7 @@ class PluginGenerationMixin:
             return
 
         plugin = self._plugins.get(name)
-        gate = self._execution_gates.get(name) or (
+        gate   = self._execution_gates.get(name) or (
             plugin.execution_gate if plugin is not None else None
         )
         if plugin is not None and gate is None:
@@ -959,7 +959,7 @@ class PluginGenerationMixin:
                 name,
                 plugin.definition.capabilities,
             )
-            plugin.execution_gate = gate
+            plugin.execution_gate       = gate
             self._execution_gates[name] = gate
         if gate is not None:
             drain = await self._close_generation_gate(
@@ -1012,8 +1012,8 @@ class PluginGenerationMixin:
                 name,
                 plugin,
                 gate,
-                phase="unload shutdown",
-                reason=f"shutdown interrupted ({type(exc).__name__})",
+                phase  = "unload shutdown",
+                reason = f"shutdown interrupted ({type(exc).__name__})",
             )
             raise
         if not shutdown_ok:
@@ -1022,8 +1022,8 @@ class PluginGenerationMixin:
                 name,
                 plugin,
                 gate,
-                phase="unload shutdown",
-                reason="shutdown failed",
+                phase  = "unload shutdown",
+                reason = "shutdown failed",
             )
             return
 
@@ -1196,10 +1196,10 @@ class PluginGenerationMixin:
             return None
 
         return _ReloadAuthorization(
-            plugin_dir=plugin_dir,
-            definition=definition,
-            mtime=candidate_mtime,
-            definition_changed=definition_changed,
+            plugin_dir         = plugin_dir,
+            definition         = definition,
+            mtime              = candidate_mtime,
+            definition_changed = definition_changed,
         )
 
     async def _retire_plugin_for_reload(
@@ -1209,16 +1209,16 @@ class PluginGenerationMixin:
     ) -> _RetiredPluginGeneration | None:
         """Drain, stop, and detach the old generation while retaining rollback data."""
 
-        old_state = self._plugin_states.setdefault(name, {})
+        old_state          = self._plugin_states.setdefault(name, {})
         old_state_snapshot = dict(old_state)
-        old_gate = old_plugin.execution_gate or self._execution_gates.get(name)
+        old_gate           = old_plugin.execution_gate or self._execution_gates.get(name)
         if old_gate is None:
             old_gate = self._new_execution_gate(
                 old_plugin.definition.concurrency,
                 name,
                 old_plugin.definition.capabilities,
             )
-        old_plugin.execution_gate = old_gate
+        old_plugin.execution_gate   = old_gate
         self._execution_gates[name] = old_gate
 
         old_drain = await self._close_generation_gate(
@@ -1236,8 +1236,8 @@ class PluginGenerationMixin:
                 name,
                 old_plugin,
                 old_gate,
-                phase="reload old-generation shutdown",
-                reason=f"shutdown interrupted ({type(exc).__name__})",
+                phase  = "reload old-generation shutdown",
+                reason = f"shutdown interrupted ({type(exc).__name__})",
             )
             raise
         if not old_shutdown_ok:
@@ -1245,8 +1245,8 @@ class PluginGenerationMixin:
                 name,
                 old_plugin,
                 old_gate,
-                phase="reload old-generation shutdown",
-                reason="shutdown failed",
+                phase  = "reload old-generation shutdown",
+                reason = "shutdown failed",
             )
             return None
 
@@ -1276,11 +1276,11 @@ class PluginGenerationMixin:
             self._raise_collected_lifecycle_errors(old_generation_errors)
 
         return _RetiredPluginGeneration(
-            plugin=old_plugin,
-            state=old_state,
-            state_snapshot=old_state_snapshot,
-            gate=old_gate,
-            modules=old_modules,
+            plugin         = old_plugin,
+            state          = old_state,
+            state_snapshot = old_state_snapshot,
+            gate           = old_gate,
+            modules        = old_modules,
         )
 
     def _create_reload_candidate(
@@ -1293,13 +1293,13 @@ class PluginGenerationMixin:
             authorization.definition.name,
             authorization.definition.capabilities,
         )
-        self._plugin_states[name] = {}
+        self._plugin_states[name]   = {}
         self._execution_gates[name] = candidate_gate
-        transaction = _PluginLoadTransaction(
-            definition=authorization.definition,
-            gate=candidate_gate,
-            mtime=authorization.mtime,
-            track_init_task=False,
+        transaction                 = _PluginLoadTransaction(
+            definition      = authorization.definition,
+            gate            = candidate_gate,
+            mtime           = authorization.mtime,
+            track_init_task = False,
         )
         return _ReloadCandidateGeneration(gate=candidate_gate, transaction=transaction)
 
@@ -1317,9 +1317,9 @@ class PluginGenerationMixin:
                 authorization.plugin_dir,
                 authorization.definition,
                 authorization.mtime,
-                module=candidate.plugin.module,
-                authorized_entry=candidate.transaction.authorized_entry,
-                transaction=candidate.transaction,
+                module           = candidate.plugin.module,
+                authorized_entry = candidate.transaction.authorized_entry,
+                transaction      = candidate.transaction,
             )
         except BaseException as exc:
             candidate.authorization_error = exc
@@ -1333,8 +1333,8 @@ class PluginGenerationMixin:
             candidate.plugin.definition,
             candidate.plugin.module,
             candidate.plugin.mtime,
-            loaded_plugin=candidate.plugin,
-            authorized_entry=candidate.transaction.authorized_entry,
+            loaded_plugin    = candidate.plugin,
+            authorized_entry = candidate.transaction.authorized_entry,
         )
 
     async def _rollback_reload_candidate(
@@ -1373,8 +1373,8 @@ class PluginGenerationMixin:
                     name,
                     None,
                     candidate.gate,
-                    phase="candidate without-module drain",
-                    discard_registered_plugin=True,
+                    phase                     = "candidate without-module drain",
+                    discard_registered_plugin = True,
                 )
                 rollback_clean = candidate_drain.drained
                 if (
@@ -1387,8 +1387,8 @@ class PluginGenerationMixin:
                         self._quarantine_gate_without_module(
                             name,
                             candidate.gate,
-                            phase="partial candidate import",
-                            reason=(
+                            phase  = "partial candidate import",
+                            reason = (
                                 "module execution failed without a handle "
                                 f"({type(original_error).__name__})"
                             ),
@@ -1427,8 +1427,8 @@ class PluginGenerationMixin:
                         if candidate.plugin is not None
                         else candidate.transaction.module
                     ),
-                    authorized_entry=candidate.transaction.authorized_entry,
-                    transaction=candidate.transaction,
+                    authorized_entry = candidate.transaction.authorized_entry,
+                    transaction      = candidate.transaction,
                 )
             except BaseException as exc:
                 authorization_error = exc
@@ -1457,13 +1457,13 @@ class PluginGenerationMixin:
         )
         if authorization.definition_changed or not authorization_current:
             self._retain_retired_plugin_quarantine(
-                name=name,
-                plugin=retired.plugin,
-                gate=retired.gate,
-                state=retired.state,
-                state_snapshot=retired.state_snapshot,
-                modules=retired.modules,
-                reason=(
+                name           = name,
+                plugin         = retired.plugin,
+                gate           = retired.gate,
+                state          = retired.state,
+                state_snapshot = retired.state_snapshot,
+                modules        = retired.modules,
+                reason         = (
                     f"candidate authorization or load failed ({type(original_error).__name__})"
                 ),
             )
@@ -1471,15 +1471,15 @@ class PluginGenerationMixin:
                 raise authorization_error from original_error
         else:
             await self._restore_old_generation(
-                name=name,
-                plugin=retired.plugin,
-                state=retired.state,
-                state_snapshot=retired.state_snapshot,
-                modules=retired.modules,
-                plugin_dir=authorization.plugin_dir,
-                authorization_definition=authorization.definition,
-                authorization_mtime=authorization.mtime,
-                original_error=original_error,
+                name                     = name,
+                plugin                   = retired.plugin,
+                state                    = retired.state,
+                state_snapshot           = retired.state_snapshot,
+                modules                  = retired.modules,
+                plugin_dir               = authorization.plugin_dir,
+                authorization_definition = authorization.definition,
+                authorization_mtime      = authorization.mtime,
+                original_error           = original_error,
             )
         deferred_candidate_errors = self._take_deferred_lifecycle_errors({name})
         if deferred_candidate_errors:
@@ -1555,17 +1555,17 @@ class PluginGenerationMixin:
             self._private_plugin_modules[name] = dict(modules)
         state.clear()
         state.update(state_snapshot)
-        plugin.execution_gate = gate
-        plugin.shutdown_attempted = True
-        plugin.shutdown_completed = True
-        self._plugin_states[name] = state
+        plugin.execution_gate       = gate
+        plugin.shutdown_attempted   = True
+        plugin.shutdown_completed   = True
+        self._plugin_states[name]   = state
         self._execution_gates[name] = gate
         self._quarantine_closed_plugin(
             name,
             plugin,
             gate,
-            phase="candidate rollback",
-            reason=reason,
+            phase  = "candidate rollback",
+            reason = reason,
         )
 
     async def _restore_old_generation(
@@ -1607,8 +1607,8 @@ class PluginGenerationMixin:
                 name,
                 plugin,
                 plugin.execution_gate,
-                phase="old-generation cache restore",
-                reason=str(restore_collision),
+                phase  = "old-generation cache restore",
+                reason = str(restore_collision),
             )
             logger.error(
                 "Plugin %s old generation was not restored because canonical cache slots "
@@ -1630,13 +1630,13 @@ class PluginGenerationMixin:
             plugin.definition.capabilities,
         )
         staging_gate.close_admission()
-        plugin.execution_gate = staging_gate
+        plugin.execution_gate     = staging_gate
         plugin.shutdown_attempted = False
         plugin.shutdown_completed = False
-        plugin.shutdown_task = None
+        plugin.shutdown_task      = None
         self._unregister_services_owned_by(name)
-        self._plugins[name] = plugin
-        self._plugin_states[name] = state
+        self._plugins[name]         = plugin
+        self._plugin_states[name]   = state
         self._execution_gates[name] = staging_gate
         try:
             try:
@@ -1644,8 +1644,8 @@ class PluginGenerationMixin:
                     self._restore_generation_modules,
                     name,
                     modules,
-                    plugin_root=plugin_root if old_sources is not None else None,
-                    sources=old_sources,
+                    plugin_root = plugin_root if old_sources is not None else None,
+                    sources     = old_sources,
                 )
             except PluginPathError as restore_collision:
                 # A foreign canonical cache object must never be replaced, and
@@ -1654,13 +1654,13 @@ class PluginGenerationMixin:
                 recovery_gate.close_admission()
                 self._restart_required_plugins.add(name)
                 self._retain_retired_plugin_quarantine(
-                    name=name,
-                    plugin=plugin,
-                    gate=staging_gate,
-                    state=state,
-                    state_snapshot=state_snapshot,
-                    modules=modules,
-                    reason=str(restore_collision),
+                    name           = name,
+                    plugin         = plugin,
+                    gate           = staging_gate,
+                    state          = state,
+                    state_snapshot = state_snapshot,
+                    modules        = modules,
+                    reason         = str(restore_collision),
                 )
                 logger.error(
                     "Plugin %s old generation cache restore collided before recovery init: %s",
@@ -1684,8 +1684,8 @@ class PluginGenerationMixin:
                 plugin_dir,
                 authorization_definition,
                 authorization_mtime,
-                module=plugin.module if plugin.authorized_entry is not None else None,
-                authorized_entry=plugin.authorized_entry,
+                module           = plugin.module if plugin.authorized_entry is not None else None,
+                authorized_entry = plugin.authorized_entry,
             ):
                 raise PluginLoadError(
                     name,
@@ -1695,15 +1695,15 @@ class PluginGenerationMixin:
             # Publication is synchronous after the last authorization check.
             # Until this point the externally visible plugin is held behind a
             # separate closed gate and owns no resolvable service bindings.
-            plugin.execution_gate = recovery_gate
+            plugin.execution_gate       = recovery_gate
             self._execution_gates[name] = recovery_gate
             await self._register_loaded_plugin_async(
                 plugin.definition,
                 plugin.module,
                 plugin.mtime,
-                loaded_plugin=plugin,
-                authorized_entry=plugin.authorized_entry,
-                current_authorization=(
+                loaded_plugin         = plugin,
+                authorized_entry      = plugin.authorized_entry,
+                current_authorization = (
                     authorization_definition,
                     authorization_mtime,
                 ),
@@ -1737,9 +1737,9 @@ class PluginGenerationMixin:
                 ) or self._is_fatal_base_exception(restore_exc):
                     raise restore_exc
                 return False
-            plugin.execution_gate = staging_gate
+            plugin.execution_gate       = staging_gate
             self._execution_gates[name] = staging_gate
-            failed_state_snapshot = dict(state)
+            failed_state_snapshot       = dict(state)
             try:
                 rollback_clean = await self._rollback_pending_plugin(
                     plugin.definition,
@@ -1784,9 +1784,9 @@ class PluginGenerationMixin:
     ) -> LoadedPlugin:
         """Import and fully initialize a canonical module without registering it."""
 
-        definition = transaction.definition
+        definition  = transaction.definition
         fingerprint = await self._capture_plugin_snapshot_async(plugin_dir, definition)
-        prepared = await asyncio.to_thread(
+        prepared    = await asyncio.to_thread(
             self._prepare_module_load,
             plugin_dir,
             definition,
@@ -1796,8 +1796,8 @@ class PluginGenerationMixin:
         module, init_task = self._load_module(
             plugin_dir,
             definition,
-            transaction=transaction,
-            prepared=prepared,
+            transaction = transaction,
+            prepared    = prepared,
         )
         if module is None:
             raise PluginLoadError(definition.name, "Canonical entry could not be loaded")
@@ -1810,11 +1810,11 @@ class PluginGenerationMixin:
                 self._init_task_plugins.pop(init_task, None)
                 self._pending_plugins.pop(init_task, None)
         return LoadedPlugin(
-            definition=definition,
-            module=module,
-            mtime=transaction.mtime,
-            execution_gate=transaction.gate,
-            authorized_entry=transaction.authorized_entry,
+            definition       = definition,
+            module           = module,
+            mtime            = transaction.mtime,
+            execution_gate   = transaction.gate,
+            authorized_entry = transaction.authorized_entry,
         )
 
     async def _initialize_plugin_instance(
@@ -1828,7 +1828,7 @@ class PluginGenerationMixin:
         if init_func is None:
             return
         plugin_dir = self.plugins_dir / definition.name
-        context = self.context_factory(
+        context    = self.context_factory(
             definition.name,
             plugin_dir,
             self._ensure_plugin_data_dir(definition.name),
@@ -1860,7 +1860,7 @@ class PluginGenerationMixin:
         name: str,
         plugin: LoadedPlugin,
         *,
-        state: dict[str, Any] | None = None,
+        state: dict[str, Any] | None    = None,
         shutdown_deadline: float | None = None,
     ) -> bool:
         if plugin.shutdown_attempted:
@@ -1872,7 +1872,7 @@ class PluginGenerationMixin:
             return True
 
         async def perform_shutdown_once() -> bool:
-            success = False
+            success                                           = False
             fallback_data: tempfile.TemporaryDirectory | None = None
             try:
                 context = None
@@ -1905,11 +1905,11 @@ class PluginGenerationMixin:
                     else:
                         await call_plugin_callback(shutdown, context)
 
-                shutdown_timeout = PLUGIN_INIT_TIMEOUT_SECONDS
+                shutdown_timeout                 = PLUGIN_INIT_TIMEOUT_SECONDS
                 deadline_remaining: float | None = None
                 if shutdown_deadline is not None:
                     deadline_remaining = max(0.0, shutdown_deadline - time.monotonic())
-                    shutdown_timeout = min(
+                    shutdown_timeout   = min(
                         shutdown_timeout,
                         deadline_remaining,
                     )
@@ -1966,12 +1966,12 @@ class PluginGenerationMixin:
         module: ModuleType,
         mtime: float,
         *,
-        loaded_plugin: LoadedPlugin | None = None,
-        authorized_entry: Path | None = None,
+        loaded_plugin: LoadedPlugin | None                                 = None,
+        authorized_entry: Path | None                                      = None,
         current_authorization: tuple[PluginDefinition, int | float] | None = None,
-        _publication_finder: _SourceOnlyPluginFinder | None = None,
-        _generation_quiesced: bool = False,
-        _authorization_verified: bool = False,
+        _publication_finder: _SourceOnlyPluginFinder | None                = None,
+        _generation_quiesced: bool                                         = False,
+        _authorization_verified: bool                                      = False,
     ) -> LoadedPlugin:
         effective_entry = authorized_entry or (
             loaded_plugin.authorized_entry if loaded_plugin is not None else None
@@ -1983,7 +1983,7 @@ class PluginGenerationMixin:
                 if _generation_quiesced
                 else self._quiesce_source_generation_for_publication(definition.name)
             )
-            plugin_dir = self.plugins_dir / definition.name
+            plugin_dir    = self.plugins_dir / definition.name
             current_entry = resolve_plugin_entry(
                 self.plugins_dir,
                 plugin_dir,
@@ -2005,15 +2005,15 @@ class PluginGenerationMixin:
                     plugin_dir,
                     authorization_definition,
                     authorization_mtime,
-                    module=module,
-                    authorized_entry=effective_entry,
+                    module           = module,
+                    authorized_entry = effective_entry,
                 )
             ):
                 raise PluginLoadError(
                     definition.name,
                     "Manifest authorization or source fingerprint changed during final publication",
                 )
-            module_suffix = definition.entry.removesuffix(".py").replace("/", ".")
+            module_suffix     = definition.entry.removesuffix(".py").replace("/", ".")
             entry_module_name = f"plugins.{definition.name}.{module_suffix}"
             self._validate_owned_namespace(
                 definition.name,
@@ -2033,43 +2033,43 @@ class PluginGenerationMixin:
                     definition.name,
                     f"Service name is already registered by {existing.owner}: {service_name}",
                 )
-        execution_gate = self._execution_gate_for(definition)
-        command_specs = self._build_command_specs(definition, module, execution_gate)
-        previous_plugin = self._plugins.get(definition.name)
+        execution_gate    = self._execution_gate_for(definition)
+        command_specs     = self._build_command_specs(definition, module, execution_gate)
+        previous_plugin   = self._plugins.get(definition.name)
         previous_services = {
             service_name: binding
             for service_name, binding in self._services.items()
             if binding.owner == definition.name
         }
         previous_commands: tuple[CommandSpec, ...] = ()
-        publication_token = execution_gate.hold_for_publication()
+        publication_token                          = execution_gate.hold_for_publication()
         try:
             previous_commands = self.router.replace_plugin(definition.name, command_specs)
             self._unregister_services_owned_by(definition.name)
             self._services.update(services)
             loaded = loaded_plugin or LoadedPlugin(
-                definition=definition,
-                module=module,
-                mtime=mtime,
-                execution_gate=execution_gate,
-                services=services,
-                authorized_entry=effective_entry,
-                data_dir=(
+                definition       = definition,
+                module           = module,
+                mtime            = mtime,
+                execution_gate   = execution_gate,
+                services         = services,
+                authorized_entry = effective_entry,
+                data_dir         = (
                     self._data_directories[definition.name].path
                     if definition.name in self._data_directories
                     else None
                 ),
             )
-            loaded.definition = definition
-            loaded.module = module
-            loaded.mtime = mtime
-            loaded.execution_gate = execution_gate
+            loaded.definition         = definition
+            loaded.module             = module
+            loaded.mtime              = mtime
+            loaded.execution_gate     = execution_gate
             loaded.shutdown_attempted = False
             loaded.shutdown_completed = False
-            loaded.shutdown_task = None
-            loaded.services = services
-            loaded.authorized_entry = effective_entry
-            data_record = self._data_directories.get(definition.name)
+            loaded.shutdown_task      = None
+            loaded.services           = services
+            loaded.authorized_entry   = effective_entry
+            data_record               = self._data_directories.get(definition.name)
             if data_record is not None:
                 loaded.data_dir = data_record.path
             self._plugins[definition.name] = loaded
@@ -2114,8 +2114,8 @@ class PluginGenerationMixin:
         module: ModuleType,
         mtime: float,
         *,
-        loaded_plugin: LoadedPlugin | None = None,
-        authorized_entry: Path | None = None,
+        loaded_plugin: LoadedPlugin | None                                 = None,
+        authorized_entry: Path | None                                      = None,
         current_authorization: tuple[PluginDefinition, int | float] | None = None,
     ) -> LoadedPlugin:
         """Quiesce import threads without blocking the asyncio event loop."""
@@ -2130,9 +2130,9 @@ class PluginGenerationMixin:
                 definition,
                 module,
                 mtime,
-                loaded_plugin=loaded_plugin,
-                authorized_entry=authorized_entry,
-                current_authorization=current_authorization,
+                loaded_plugin         = loaded_plugin,
+                authorized_entry      = authorized_entry,
+                current_authorization = current_authorization,
             )
         finder = await self._await_uncancellable_thread_transaction(
             self._quiesce_source_generation_for_publication,
@@ -2147,8 +2147,8 @@ class PluginGenerationMixin:
                 self.plugins_dir / definition.name,
                 authorization_definition,
                 authorization_mtime,
-                module=module,
-                authorized_entry=effective_entry,
+                module           = module,
+                authorized_entry = effective_entry,
             )
         ):
             raise PluginLoadError(
@@ -2159,12 +2159,12 @@ class PluginGenerationMixin:
             definition,
             module,
             mtime,
-            loaded_plugin=loaded_plugin,
-            authorized_entry=authorized_entry,
-            current_authorization=current_authorization,
-            _publication_finder=finder,
-            _generation_quiesced=True,
-            _authorization_verified=True,
+            loaded_plugin           = loaded_plugin,
+            authorized_entry        = authorized_entry,
+            current_authorization   = current_authorization,
+            _publication_finder     = finder,
+            _generation_quiesced    = True,
+            _authorization_verified = True,
         )
 
     def _execution_gate_for(self, definition: PluginDefinition) -> PluginExecutionGate:
@@ -2196,13 +2196,13 @@ class PluginGenerationMixin:
         if not isinstance(registered, LoadedPlugin):
             return candidates
         registered_module = registered.module
-        registered_name = ModuleType.__getattribute__(registered_module, "__name__")
+        registered_name   = ModuleType.__getattribute__(registered_module, "__name__")
         if registered_name != canonical_name and not registered_name.startswith(prefix):
             return candidates
         candidates.setdefault(registered_name, registered_module)
 
         # 私有加载台账可能只记录入口；沿精确的父子绑定补齐其包链。
-        child_name = registered_name
+        child_name   = registered_name
         child_module = registered_module
         while child_name != canonical_name:
             parent_name, separator, attribute = child_name.rpartition(".")
@@ -2215,7 +2215,7 @@ class PluginGenerationMixin:
             if namespace.get(attribute) is not child_module:
                 break
             candidates.setdefault(parent_name, parent_module)
-            child_name = parent_name
+            child_name   = parent_name
             child_module = parent_module
         return candidates
 
@@ -2280,13 +2280,13 @@ class PluginGenerationMixin:
     ) -> None:
         """按子到父顺序删除模块；任一身份校验失败时恢复全部已删对象。"""
 
-        removed_modules: dict[str, ModuleType] = {}
+        removed_modules: dict[str, ModuleType]                              = {}
         removed_parent_attributes: list[tuple[ModuleType, str, ModuleType]] = []
         try:
             for module_name, expected in sorted(
                 candidates.items(),
-                key=lambda item: item[0].count("."),
-                reverse=True,
+                key     = lambda item: item[0].count("."),
+                reverse = True,
             ):
                 parent_binding = parent_bindings.get(module_name)
                 if parent_binding is not None:
@@ -2342,13 +2342,13 @@ class PluginGenerationMixin:
 
     def _purge_plugin_modules(self, name: str) -> dict[str, ModuleType]:
         canonical_name = f"plugins.{name}"
-        prefix = f"{canonical_name}."
+        prefix         = f"{canonical_name}."
         finder: _SourceOnlyPluginFinder | None
         with _PLUGIN_IMPORT_LOCK:
             owner = _PLUGIN_NAMESPACE_OWNERS.get(name)
             if owner is not None and owner is not self._namespace_owner_token:
                 return {}
-            finder = self._source_finders.get(name)
+            finder                 = self._source_finders.get(name)
             module_names: set[str] = {
                 module_name
                 for module_name in list(sys.modules)
@@ -2447,8 +2447,8 @@ class PluginGenerationMixin:
         """验证待恢复模块的父链，并记录真正需要写入的空槽位。"""
 
         parent_bindings: dict[str, tuple[dict[str, Any], str] | None] = {}
-        missing_module_slots: set[str] = set()
-        missing_parent_slots: set[str] = set()
+        missing_module_slots: set[str]                                = set()
+        missing_parent_slots: set[str]                                = set()
         for module_name, module in ordered:
             current = sys.modules.get(module_name, missing)
             if current is not missing and current is not module:
@@ -2478,7 +2478,7 @@ class PluginGenerationMixin:
                 raise PluginPathError(
                     f"canonical parent module is foreign during restore: {module_name}"
                 )
-            namespace = ModuleType.__getattribute__(parent, "__dict__")
+            namespace      = ModuleType.__getattribute__(parent, "__dict__")
             parent_current = namespace.get(child_name, missing)
             if parent_current is not missing and parent_current is not module:
                 raise PluginPathError(
@@ -2499,12 +2499,12 @@ class PluginGenerationMixin:
         spec_states: list[tuple[dict[str, Any], object, object, bool]] = []
         try:
             for module_name, module in ordered:
-                namespace = ModuleType.__getattribute__(module, "__dict__")
+                namespace     = ModuleType.__getattribute__(module, "__dict__")
                 original_spec = namespace.get("__spec__", missing)
                 if type(original_spec) is importlib.machinery.ModuleSpec:
-                    spec_namespace = vars(original_spec)
-                    had_initializing = "_initializing" in spec_namespace
-                    original_initializing = spec_namespace.get("_initializing", missing)
+                    spec_namespace                  = vars(original_spec)
+                    had_initializing                = "_initializing" in spec_namespace
+                    original_initializing           = spec_namespace.get("_initializing", missing)
                     spec_namespace["_initializing"] = True
                     spec_states.append(
                         (
@@ -2602,7 +2602,7 @@ class PluginGenerationMixin:
         plugin_name: str,
         modules: Mapping[str, ModuleType],
         *,
-        plugin_root: Path | None = None,
+        plugin_root: Path | None            = None,
         sources: Mapping[str, bytes] | None = None,
     ) -> None:
         """Atomically restore exact objects while CPython import locks hide staging."""
@@ -2610,8 +2610,8 @@ class PluginGenerationMixin:
         if (plugin_root is None) != (sources is None):
             raise PluginPathError("restored source finder requires both root and sources")
         canonical = f"plugins.{plugin_name}"
-        prefix = f"{canonical}."
-        missing = object()
+        prefix    = f"{canonical}."
+        missing   = object()
         ordered = sorted(modules.items(), key=lambda item: item[0].count("."))
         if any(
             module_name != canonical and not module_name.startswith(prefix)
@@ -2673,8 +2673,8 @@ class PluginGenerationMixin:
         """Return non-canonical module names backed by files in one plugin."""
         canonical = f"plugins.{name}"
         root = plugin_dir.resolve(strict=False)
-        root_text = os.path.normcase(os.fspath(root))
-        root_prefix = root_text if root_text.endswith(os.sep) else f"{root_text}{os.sep}"
+        root_text          = os.path.normcase(os.fspath(root))
+        root_prefix        = root_text if root_text.endswith(os.sep) else f"{root_text}{os.sep}"
         aliases: list[str] = []
         for module_name, module in list(sys.modules.items()):
             if type(module_name) is not str or not isinstance(module, ModuleType):
@@ -2698,11 +2698,11 @@ class PluginGenerationMixin:
                 continue
             module_path = Path(module_file)
             try:
-                metadata = module_path.stat()
-                identity = self._watch_file_identity(metadata)
+                metadata  = module_path.stat()
+                identity  = self._watch_file_identity(metadata)
                 cache_key = (module_name, id(module), module_file, identity)
-                missing = object()
-                resolved = self._module_origin_cache.get(cache_key, missing)
+                missing   = object()
+                resolved  = self._module_origin_cache.get(cache_key, missing)
                 if resolved is missing:
                     resolved = module_path.resolve(strict=False)
                     self._module_origin_cache[cache_key] = resolved

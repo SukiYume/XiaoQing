@@ -22,18 +22,18 @@ import {
     subscribeDataChanges,
 } from '../utils/ui.js';
 
-const CSS_ID = 'pendo-events-redesign-styles';
+const CSS_ID                      = 'pendo-events-redesign-styles';
 const CALENDAR_VISIBLE_ITEM_LIMIT = 3;
-const WEEKDAYS = Object.freeze(['周一', '周二', '周三', '周四', '周五', '周六', '周日']);
-const EVENT_KINDS = new Set(['single', 'multi_node', 'recurring']);
-const REMINDER_STATUSES = new Set(['pending', 'sent', 'confirmed']);
-const EVENT_FILTER_KINDS = new Set(['', 'all', ...EVENT_KINDS]);
-const REMINDER_FILTERS = new Set(['', 'all', 'with', 'none', ...REMINDER_STATUSES]);
+const WEEKDAYS                    = Object.freeze(['周一', '周二', '周三', '周四', '周五', '周六', '周日']);
+const EVENT_KINDS                 = new Set(['single', 'multi_node', 'recurring']);
+const REMINDER_STATUSES           = new Set(['pending', 'sent', 'confirmed']);
+const EVENT_FILTER_KINDS          = new Set(['', 'all', ...EVENT_KINDS]);
+const REMINDER_FILTERS            = new Set(['', 'all', 'with', 'none', ...REMINDER_STATUSES]);
 
-let _container = null;
+let _container              = null;
 let _unsubscribeDataChanges = null;
-let _loadVersion = 0;
-let _state = {
+let _loadVersion            = 0;
+let _state                  = {
     viewMode: 'calendar',
     monthCursor: firstDayOfMonth(parseDate('1970-01-01')),
     selectedDate: '',
@@ -105,12 +105,12 @@ function canToggleReminder(value, nowMs = Date.now()) {
 }
 
 function watchReminderExpiry(content) {
-    let timerId = null;
+    let timerId   = null;
     const refresh = () => {
         timerId = null;
-        const nowMs = Date.now();
+        const nowMs       = Date.now();
         let nearestFuture = Number.POSITIVE_INFINITY;
-        const buttons = content?.querySelectorAll?.('[data-toggle-reminder]') ?? [];
+        const buttons     = content?.querySelectorAll?.('[data-toggle-reminder]') ?? [];
         for (const button of buttons) {
             const remindAt = zonedInstantEpoch(button.dataset.reminderTime);
             if (!Number.isFinite(remindAt) || remindAt <= nowMs) {
@@ -180,8 +180,8 @@ function reminderRulesFromTimes(startTime, remindTimes) {
 
 /** 接口边界只保留渲染所需结构，异常字段统一收敛为空值或非负整数。 */
 function normalizeOverview(value) {
-    const raw = value && typeof value === 'object' ? value : {};
-    const summary = raw.summary && typeof raw.summary === 'object' ? raw.summary : {};
+    const raw        = value && typeof value === 'object' ? value : {};
+    const summary    = raw.summary && typeof raw.summary === 'object' ? raw.summary : {};
     const categories = Array.isArray(raw.categories)
         ? [...new Set(raw.categories.map((item) => String(item ?? '').trim()).filter(Boolean))]
         : [];
@@ -584,7 +584,7 @@ function ensureStyles() {
 
 function renderHero() {
     const summary = _state.overview?.summary || {};
-    const range = currentRange();
+    const range   = currentRange();
     return `
         <section class="events-hero">
             <div>
@@ -603,7 +603,7 @@ function renderHero() {
 }
 
 function renderFilters() {
-    const filters = _state.filters;
+    const filters             = _state.filters;
     const categoryOptionsList = [
         { value: '', label: '全部分类' },
         ...(_state.overview?.categories || []).map((category) => ({ value: category, label: category })),
@@ -666,9 +666,9 @@ function renderFilters() {
 
 function renderCalendarCell(day, currentMonth, calendarDay, today) {
     const dayString = isoDate(day);
-    const outside = day.getMonth() !== currentMonth;
-    const selected = _state.selectedDate === dayString;
-    const classes = ['events-calendar-cell'];
+    const outside   = day.getMonth() !== currentMonth;
+    const selected  = _state.selectedDate === dayString;
+    const classes   = ['events-calendar-cell'];
     if (outside) classes.push('outside');
     if (selected) classes.push('selected');
     if (today === dayString) classes.push('today');
@@ -676,8 +676,8 @@ function renderCalendarCell(day, currentMonth, calendarDay, today) {
     const items = Array.isArray(calendarDay?.items)
         ? calendarDay.items.filter((item) => item && typeof item === 'object')
         : [];
-    const count = Math.max(finiteCount(calendarDay?.count), items.length);
-    const visibleItems = items.slice(0, CALENDAR_VISIBLE_ITEM_LIMIT);
+    const count          = Math.max(finiteCount(calendarDay?.count), items.length);
+    const visibleItems   = items.slice(0, CALENDAR_VISIBLE_ITEM_LIMIT);
     const selectionLabel = `${dayString}，${count} 条日程`;
     return `
         <div class="${classes.join(' ')}">
@@ -688,7 +688,7 @@ function renderCalendarCell(day, currentMonth, calendarDay, today) {
                 ${visibleItems
                     .map((item) => {
                         const eventId = String(item.event_id ?? '');
-                        const label = String(item.label ?? '(无标题)');
+                        const label   = String(item.label ?? '(无标题)');
                         return `<button type="button" class="events-calendar-chip ${normalizedKind(item.kind)}" data-event-id="${escapeHtml(eventId)}" title="${escapeHtml(label)}" aria-label="查看日程：${escapeHtml(label)}" ${eventId ? '' : 'disabled'}><span class="events-calendar-chip-text">${escapeHtml(label)}</span></button>`;
                     })
                     .join('')}
@@ -698,15 +698,15 @@ function renderCalendarCell(day, currentMonth, calendarDay, today) {
 }
 
 function renderCalendarPanel() {
-    const overview = _state.overview;
-    const calendarDays = overview?.calendar_days || {};
-    const start = firstDayOfMonth(_state.monthCursor);
+    const overview        = _state.overview;
+    const calendarDays    = overview?.calendar_days || {};
+    const start           = firstDayOfMonth(_state.monthCursor);
     const daysInThisMonth = lastDayOfMonth(_state.monthCursor).getDate();
-    const offset = weekdayIndexMonday(start);
-    const totalCells = Math.ceil((offset + daysInThisMonth) / 7) * 7;
-    const cells = [];
-    const currentMonth = _state.monthCursor.getMonth();
-    const today = todayRangeKey();
+    const offset          = weekdayIndexMonday(start);
+    const totalCells      = Math.ceil((offset + daysInThisMonth) / 7) * 7;
+    const cells           = [];
+    const currentMonth    = _state.monthCursor.getMonth();
+    const today           = todayRangeKey();
 
     for (let index = 0; index < totalCells; index += 1) {
         const dayNumber = index - offset + 1;
@@ -943,7 +943,7 @@ async function loadOverview(options = {}) {
             _state.listRange === 'all' &&
             (!_state.allRangeStart || !_state.allRangeEnd)
         ) {
-            const today = todayRangeKey();
+            const today  = todayRangeKey();
             const bounds = await fetchItemRangeBounds(api, {
                 type: 'event',
                 sortField: 'start_time',
@@ -957,7 +957,7 @@ async function loadOverview(options = {}) {
             _state.allRangeEnd = bounds.end;
         }
         const range = currentRange();
-        const res = await api.get('/events/overview', {
+        const res   = await api.get('/events/overview', {
             start_date: range.start,
             end_date: range.end,
             keyword: _state.filters.keyword,
@@ -1015,17 +1015,17 @@ function nodeRowHTML(name = '', time = '', notes = '') {
 
 function editorModalHTML(existing = null, prefillDate = '', userTimeZone) {
     const defaultDate = isValidDateInput(prefillDate) ? prefillDate : '';
-    const startValue = existing?.start_time
+    const startValue  = existing?.start_time
         ? toInputDateTime(existing.start_time, userTimeZone)
         : defaultDate
           ? `${defaultDate}T09:00`
           : '';
-    const endValue = existing?.end_time ? toInputDateTime(existing.end_time, userTimeZone) : '';
+    const endValue  = existing?.end_time ? toInputDateTime(existing.end_time, userTimeZone) : '';
     const reminders = (Array.isArray(existing?.reminders) ? existing.reminders : [])
         .map((row) => toInputDateTime(row?.time, userTimeZone))
         .filter(Boolean);
     const initialReminderValues = reminders.length ? reminders : existing ? [] : [startValue];
-    const initialNodes = [
+    const initialNodes          = [
         { time: defaultDate ? `${defaultDate}T09:00:00` : '' },
         { time: defaultDate ? `${defaultDate}T18:00:00` : '' },
     ];
@@ -1122,11 +1122,11 @@ function setEditorMode(content, mode) {
 function collectEditorPayload(content, userTimeZone) {
     const form = content.querySelector('#events-editor-form');
     if (!form) throw new Error('日程编辑器未正确加载');
-    const mode = form.dataset.mode === 'multi_node' ? 'multi_node' : 'single';
-    const title = form.querySelector('[name="title"]')?.value.trim() || '';
-    const category = form.querySelector('[name="category"]')?.value.trim() || '未分类';
-    const location = form.querySelector('[name="location"]')?.value.trim() || '';
-    const notes = form.querySelector('[name="notes"]')?.value.trim() || '';
+    const mode           = form.dataset.mode === 'multi_node' ? 'multi_node' : 'single';
+    const title          = form.querySelector('[name="title"]')?.value.trim() || '';
+    const category       = form.querySelector('[name="category"]')?.value.trim() || '未分类';
+    const location       = form.querySelector('[name="location"]')?.value.trim() || '';
+    const notes          = form.querySelector('[name="notes"]')?.value.trim() || '';
     const reminderInputs = [...form.querySelectorAll('.events-editor-reminder-input')]
         .map((input) => input.value.trim())
         .filter(Boolean);
@@ -1141,8 +1141,8 @@ function collectEditorPayload(content, userTimeZone) {
     if (mode === 'multi_node') {
         const nodes = [];
         for (const row of form.querySelectorAll('[data-node-row]')) {
-            const name = row.querySelector('.events-editor-node-name')?.value.trim() || '';
-            const rawTime = row.querySelector('.events-editor-node-time')?.value.trim() || '';
+            const name      = row.querySelector('.events-editor-node-name')?.value.trim() || '';
+            const rawTime   = row.querySelector('.events-editor-node-time')?.value.trim() || '';
             const nodeNotes = row.querySelector('.events-editor-node-notes')?.value.trim() || '';
             if (!name && !rawTime && !nodeNotes) continue;
             const time = inputToIso(rawTime, userTimeZone);
@@ -1244,7 +1244,7 @@ async function openEventEditor(existing = null, prefillDate = '') {
             if (existing) {
                 const eventId = String(existing.id ?? '');
                 if (!eventId) throw new Error('无法更新缺少编号的日程');
-                await api.put(`/items/${encodeURIComponent(eventId)}`, payload);
+                await api.put(`/items/${encodeURIComponent(eventId)}`, { ...payload, version: existing.version });
                 showToast('日程已更新', 'success');
             } else if (payload.children?.length) {
                 await api.post('/events/collections', payload);
@@ -1417,7 +1417,7 @@ async function openCollectionDetail(collectionId) {
         const collection = detail.collection;
         if (!collection || typeof collection !== 'object') throw new Error('集合数据不完整');
         const canMutate = Boolean(String(collection.id ?? ''));
-        const content = showModal('多节点日程', safeHtml(renderCollectionDetailBody(detail)), {
+        const content   = showModal('多节点日程', safeHtml(renderCollectionDetailBody(detail)), {
             footer: safeHtml(`
                 <button type="button" class="btn btn-secondary" id="events-collection-close">关闭</button>
                 <button type="button" class="btn btn-primary" id="events-collection-edit" ${canMutate ? '' : 'disabled'}>编辑整体</button>
@@ -1480,9 +1480,9 @@ function renderDetailBody(detail) {
                     <div class="events-detail-list">
                         ${reminders
                             .map((row) => {
-                                const status = normalizedReminderStatus(row.status);
+                                const status      = normalizedReminderStatus(row.status);
                                 const repeatCount = finiteCount(row.repeat_count);
-                                const canToggle = canToggleReminder(row.time);
+                                const canToggle   = canToggleReminder(row.time);
                                 const isConfirmed = status === 'confirmed';
                                 return `
                             <div class="events-detail-row">
@@ -1551,15 +1551,15 @@ export async function openEventDetail(eventId) {
         return;
     }
     try {
-        const res = await api.get(`/events/${encodeURIComponent(normalizedId)}/detail`);
+        const res    = await api.get(`/events/${encodeURIComponent(normalizedId)}/detail`);
         const detail = res?.data && typeof res.data === 'object' ? res.data : {};
-        const event = detail.event;
+        const event  = detail.event;
         if (!event || typeof event !== 'object') throw new Error('日程数据不完整');
-        const actionNoun = detailActionNoun(event);
-        const canMutate = Boolean(String(event.id ?? ''));
-        const hasCollection = Boolean(String(event.collection?.id ?? ''));
+        const actionNoun              = detailActionNoun(event);
+        const canMutate               = Boolean(String(event.id ?? ''));
+        const hasCollection           = Boolean(String(event.collection?.id ?? ''));
         let stopReminderExpiryWatcher = () => {};
-        const content = showModal('日程详情', safeHtml(renderDetailBody(detail)), {
+        const content                 = showModal('日程详情', safeHtml(renderDetailBody(detail)), {
             footer: safeHtml(`
                 <button type="button" class="btn btn-secondary" id="events-detail-close">关闭</button>
                 ${hasCollection ? '<button type="button" class="btn btn-secondary" id="events-detail-group">管理整体</button>' : ''}
@@ -1606,12 +1606,12 @@ export async function openEventDetail(eventId) {
                         `/events/${encodeURIComponent(normalizedId)}/reminders/confirmation`,
                         { remind_time: remindTime, confirmed: shouldConfirm },
                     );
-                    const reminder = response?.data?.reminder;
-                    const status = normalizedReminderStatus(reminder?.status);
-                    const repeatCount = finiteCount(reminder?.repeat_count);
-                    const row = reminderButton.closest('.events-detail-row');
+                    const reminder      = response?.data?.reminder;
+                    const status        = normalizedReminderStatus(reminder?.status);
+                    const repeatCount   = finiteCount(reminder?.repeat_count);
+                    const row           = reminderButton.closest('.events-detail-row');
                     const statusElement = row?.querySelector('[data-reminder-status]');
-                    const metaElement = row?.querySelector('[data-reminder-meta]');
+                    const metaElement   = row?.querySelector('[data-reminder-meta]');
 
                     reminderButton.dataset.reminderConfirmed = status === 'confirmed' ? 'true' : 'false';
                     reminderButton.textContent = status === 'confirmed' ? '重新开启' : '提前确认';
@@ -1740,12 +1740,12 @@ function attachPageListeners() {
         }
     };
 
-    const customStart = root.querySelector('#events-custom-start');
-    const customEnd = root.querySelector('#events-custom-end');
-    const customApply = root.querySelector('#events-custom-apply');
+    const customStart      = root.querySelector('#events-custom-start');
+    const customEnd        = root.querySelector('#events-custom-end');
+    const customApply      = root.querySelector('#events-custom-apply');
     const applyCustomRange = async () => {
         const nextStart = customStart?.value.trim() || '';
-        const nextEnd = customEnd?.value.trim() || '';
+        const nextEnd   = customEnd?.value.trim() || '';
         if (!isValidDateInput(nextStart) || !isValidDateInput(nextEnd)) {
             showToast('请输入有效日期，格式为 YYYY-MM-DD', 'error');
             return;
@@ -1771,7 +1771,7 @@ export function render(container) {
     _unsubscribeDataChanges = null;
     _container = container;
     const todayKey = todayRangeKey();
-    const today = parseDate(todayKey);
+    const today    = parseDate(todayKey);
     _state = {
         viewMode: 'calendar',
         monthCursor: firstDayOfMonth(today),

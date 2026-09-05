@@ -13,9 +13,9 @@ from plugins.codex import runner
 
 class _FakeProcess:
     def __init__(self, *, pid: int = 43210, returncode: int | None = None) -> None:
-        self.pid = pid
+        self.pid        = pid
         self.returncode = returncode
-        self.exited = asyncio.Event()
+        self.exited     = asyncio.Event()
         self.kill_calls = 0
         if returncode is not None:
             self.exited.set()
@@ -34,8 +34,8 @@ class _FakeTaskkill(_FakeProcess):
     def __init__(self, target: _FakeProcess, *, code: int = 0, hang: bool = False) -> None:
         super().__init__(pid=9876)
         self.target = target
-        self.code = code
-        self.hang = hang
+        self.code   = code
+        self.hang   = hang
 
     async def wait(self) -> int:
         if self.hang:
@@ -57,7 +57,7 @@ async def test_posix_kills_process_group_even_when_parent_already_exited(monkeyp
     monkeypatch.setattr(runner.signal, "SIGTERM", sigterm, raising=False)
     monkeypatch.setattr(runner.signal, "SIGKILL", sigkill, raising=False)
     process = _FakeProcess(returncode=0)
-    group_alive = True
+    group_alive        = True
     signals: list[int] = []
 
     def killpg(_process_group_id: int, sent_signal: int) -> None:
@@ -74,8 +74,8 @@ async def test_posix_kills_process_group_even_when_parent_already_exited(monkeyp
 
     result = await runner.terminate_process_tree(
         process,  # type: ignore[arg-type]
-        term_grace_seconds=0,
-        kill_timeout_seconds=0.1,
+        term_grace_seconds   = 0,
+        kill_timeout_seconds = 0.1,
     )
 
     assert signals == [sigterm, sigkill]
@@ -94,8 +94,8 @@ async def test_windows_awaits_taskkill_and_confirms_tree(monkeypatch):
 
     result = await runner.terminate_process_tree(
         target,  # type: ignore[arg-type]
-        helper_timeout_seconds=0.1,
-        kill_timeout_seconds=0.1,
+        helper_timeout_seconds = 0.1,
+        kill_timeout_seconds   = 0.1,
     )
 
     assert result.tree_confirmed is True
@@ -107,8 +107,8 @@ async def test_windows_awaits_taskkill_and_confirms_tree(monkeypatch):
         str(target.pid),
         "/T",
         "/F",
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
+        stdout = asyncio.subprocess.DEVNULL,
+        stderr = asyncio.subprocess.DEVNULL,
     )
 
 
@@ -130,8 +130,8 @@ async def test_windows_taskkill_failure_or_timeout_falls_back_to_parent_kill(
 
     result = await runner.terminate_process_tree(
         target,  # type: ignore[arg-type]
-        helper_timeout_seconds=0.01,
-        kill_timeout_seconds=0.01,
+        helper_timeout_seconds = 0.01,
+        kill_timeout_seconds   = 0.01,
     )
 
     assert result.tree_confirmed is False
@@ -153,8 +153,8 @@ async def test_windows_attempts_taskkill_even_if_parent_has_exited(monkeypatch):
 
     result = await runner.terminate_process_tree(
         target,  # type: ignore[arg-type]
-        helper_timeout_seconds=0.1,
-        kill_timeout_seconds=0.1,
+        helper_timeout_seconds = 0.1,
+        kill_timeout_seconds   = 0.1,
     )
 
     assert create_helper.await_count == 1
@@ -176,8 +176,8 @@ async def test_windows_treats_missing_reaped_target_as_already_terminated(monkey
 
     result = await runner.terminate_process_tree(
         target,  # type: ignore[arg-type]
-        helper_timeout_seconds=0.1,
-        kill_timeout_seconds=0.1,
+        helper_timeout_seconds = 0.1,
+        kill_timeout_seconds   = 0.1,
     )
 
     assert result.tree_confirmed is True
@@ -190,7 +190,7 @@ async def test_windows_treats_missing_reaped_target_as_already_terminated(monkey
 @pytest.mark.skipif(os.name != "nt", reason="Windows process-tree integration test")
 def test_real_windows_parent_child_and_grandchild_are_reaped():
     policy = asyncio.WindowsProactorEventLoopPolicy()
-    loop = policy.new_event_loop()
+    loop   = policy.new_event_loop()
     try:
         loop.run_until_complete(_exercise_real_windows_process_tree())
     finally:
@@ -217,7 +217,7 @@ async def _exercise_real_windows_process_tree() -> None:
             ctypes.windll.kernel32.CloseHandle(process_handle)
 
     grandchild_code = "import time; time.sleep(60)"
-    child_code = (
+    child_code      = (
         "import subprocess,sys,time; "
         f"grandchild=subprocess.Popen([sys.executable, '-c', {grandchild_code!r}]); "
         "print(grandchild.pid, flush=True); "
@@ -232,13 +232,13 @@ async def _exercise_real_windows_process_tree() -> None:
         "time.sleep(60)"
     )
     creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
-    process = await asyncio.create_subprocess_exec(
+    process       = await asyncio.create_subprocess_exec(
         sys.executable,
         "-c",
         parent_code,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        creationflags=creationflags,
+        stdout        = asyncio.subprocess.PIPE,
+        stderr        = asyncio.subprocess.PIPE,
+        creationflags = creationflags,
     )
     assert process.stdout is not None
     child_pid, grandchild_pid = map(
@@ -249,8 +249,8 @@ async def _exercise_real_windows_process_tree() -> None:
     try:
         result = await runner.terminate_process_tree(
             process,
-            helper_timeout_seconds=5,
-            kill_timeout_seconds=5,
+            helper_timeout_seconds = 5,
+            kill_timeout_seconds   = 5,
         )
 
         assert result.parent_reaped is True
@@ -269,8 +269,8 @@ async def _exercise_real_windows_process_tree() -> None:
             if process_alive(pid):
                 subprocess.run(
                     ["taskkill", "/PID", str(pid), "/T", "/F"],
-                    check=False,
-                    capture_output=True,
+                    check          = False,
+                    capture_output = True,
                 )
 
 
@@ -284,7 +284,7 @@ async def test_pipe_drain_has_hard_deadline_and_closes_transports():
         async def communicate(self):
             await never.wait()
 
-    process = _HangingProcess()
+    process         = _HangingProcess()
     pipe_transports = [MagicMock(), MagicMock(), MagicMock()]
     process._transport = SimpleTransport = MagicMock()  # noqa: N806
     SimpleTransport.get_pipe_transport.side_effect = pipe_transports
@@ -313,9 +313,9 @@ async def test_real_posix_parent_and_term_ignoring_child_are_reaped():
         sys.executable,
         "-c",
         parent_code,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        start_new_session=True,
+        stdout            = asyncio.subprocess.PIPE,
+        stderr            = asyncio.subprocess.PIPE,
+        start_new_session = True,
     )
     assert process.stdout is not None
     child_pid = int((await asyncio.wait_for(process.stdout.readline(), timeout=2)).strip())
@@ -323,8 +323,8 @@ async def test_real_posix_parent_and_term_ignoring_child_are_reaped():
     try:
         result = await runner.terminate_process_tree(
             process,
-            term_grace_seconds=0.2,
-            kill_timeout_seconds=2,
+            term_grace_seconds   = 0.2,
+            kill_timeout_seconds = 2,
         )
         assert result.parent_reaped is True
         assert result.tree_confirmed is True

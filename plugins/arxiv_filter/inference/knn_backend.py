@@ -86,12 +86,12 @@ class KNNInferenceModel:
             raise ValueError("meta.json must contain a JSON object")
 
         encoder_name = meta.get("encoder_name")
-        embed_dim = meta.get("embed_dim")
-        k = meta.get("k", 10)
-        neg_k = meta.get("neg_k", 5)
-        neg_weight = meta.get("neg_weight", 0.5)
-        threshold = meta.get("threshold", 0.5)
-        columns = meta.get("columns", {})
+        embed_dim    = meta.get("embed_dim")
+        k            = meta.get("k", 10)
+        neg_k        = meta.get("neg_k", 5)
+        neg_weight   = meta.get("neg_weight", 0.5)
+        threshold    = meta.get("threshold", 0.5)
+        columns      = meta.get("columns", {})
         if not isinstance(encoder_name, str) or not encoder_name.strip():
             raise ValueError("encoder_name must be a non-empty string")
         if type(embed_dim) is not int or embed_dim <= 0:
@@ -119,12 +119,12 @@ class KNNInferenceModel:
         ):
             raise ValueError("columns must map strings to strings or null")
 
-        self.encoder_name = encoder_name.strip()
-        self.embed_dim = embed_dim
-        self.k = k
-        self.neg_k = neg_k
-        self.neg_weight = float(neg_weight)
-        self.threshold = float(threshold)
+        self.encoder_name            = encoder_name.strip()
+        self.embed_dim               = embed_dim
+        self.k                       = k
+        self.neg_k                   = neg_k
+        self.neg_weight              = float(neg_weight)
+        self.threshold               = float(threshold)
         self.columns: dict[str, Any] = dict(columns)
 
         # ── 加载 embedding 库 ───────────────────────────────────────────
@@ -133,8 +133,8 @@ class KNNInferenceModel:
             raise FileNotFoundError(f"pos_embeddings.npy not found at {pos_path}")
         self.pos_embeddings = _load_embedding_matrix(
             pos_path,
-            expected_dim=self.embed_dim,
-            name="pos_embeddings",
+            expected_dim = self.embed_dim,
+            name         = "pos_embeddings",
         )
         logger.info("Loaded pos_embeddings: %s", self.pos_embeddings.shape)
 
@@ -142,8 +142,8 @@ class KNNInferenceModel:
         if neg_path.exists():
             self.neg_embeddings: np.ndarray | None = _load_embedding_matrix(
                 neg_path,
-                expected_dim=self.embed_dim,
-                name="neg_embeddings",
+                expected_dim = self.embed_dim,
+                name         = "neg_embeddings",
             )
             logger.info("Loaded neg_embeddings: %s", self.neg_embeddings.shape)
         else:
@@ -151,9 +151,9 @@ class KNNInferenceModel:
             logger.info("neg_embeddings.npy not found; running without negative penalty.")
 
         # ── 加载编码器 ──────────────────────────────────────────────────
-        self._fp16 = torch.cuda.is_available()
+        self._fp16           = torch.cuda.is_available()
         sentence_transformer = importlib.import_module("sentence_transformers").SentenceTransformer
-        self.encoder = sentence_transformer(self.encoder_name)
+        self.encoder         = sentence_transformer(self.encoder_name)
 
     # ------------------------------------------------------------------
     # Encoding
@@ -186,7 +186,7 @@ class KNNInferenceModel:
 
         score_i = mean(top_k_pos_sims_i) - neg_weight * mean(top_k_neg_sims_i)
         """
-        query = np.asarray(query_emb)
+        query        = np.asarray(query_emb)
         expected_dim = int(self.pos_embeddings.shape[1])
         if query.ndim != 2 or query.shape[1] != expected_dim:
             raise ValueError(f"query embeddings must have shape (n, {expected_dim})")
@@ -197,13 +197,13 @@ class KNNInferenceModel:
 
         # 正样本相似度
         pos_sims = query @ self.pos_embeddings.T  # (n, n_pos)
-        k = min(self.k, pos_sims.shape[1])
+        k        = min(self.k, pos_sims.shape[1])
         top_k_pos = np.sort(pos_sims, axis=1)[:, -k:].mean(axis=1)  # (n,)
 
         # 负样本惩罚（可选）
         if self.neg_embeddings is not None and self.neg_k > 0 and self.neg_weight > 0:
             neg_sims = query @ self.neg_embeddings.T  # (n, n_neg)
-            nk = min(self.neg_k, neg_sims.shape[1])
+            nk       = min(self.neg_k, neg_sims.shape[1])
             top_k_neg = np.sort(neg_sims, axis=1)[:, -nk:].mean(axis=1)
             return cast(
                 np.ndarray,
@@ -224,7 +224,7 @@ class KNNInferenceModel:
             raise ValueError("unsupported input_mode")
 
         # 列名解析：优先用训练时记录的列名，fallback 到通用候选
-        title_col = resolve_dataframe_column(df, self.columns.get("title"), ("Title", "title"))
+        title_col    = resolve_dataframe_column(df, self.columns.get("title"), ("Title", "title"))
         abstract_col = None
         if input_mode != "title_only":
             abstract_col = resolve_dataframe_column(
@@ -236,7 +236,7 @@ class KNNInferenceModel:
                 raise ValueError("title_abstract input requires an abstract column")
 
         texts = build_paper_texts(df, title_col, abstract_col)
-        emb = self.encode(texts)
+        emb   = self.encode(texts)
         return self._score(emb)
 
 
@@ -250,10 +250,10 @@ def run_knn_inference(
     data: pd.DataFrame,
 ) -> tuple[list[float], list[int]]:
     """执行 k-NN 模型推理，返回 (probs, preds)。"""
-    tcfg = load_training_config(params.model_path)
-    runtime_path = resolve_multi_interest_model_path(params.model_path, tcfg)
+    tcfg          = load_training_config(params.model_path)
+    runtime_path  = resolve_multi_interest_model_path(params.model_path, tcfg)
     resolved_path = str(Path(runtime_path).resolve())
-    cache_key = (
+    cache_key     = (
         resolved_path,
         resolve_artifact_fingerprint(params, resolved_path),
         int(params.batch_size),

@@ -302,7 +302,7 @@ class _ImportRequest:
     """满足传输 API 直接调用所需最小接口的请求替身。"""
 
     def __init__(self, body: bytes, headers: dict[str, Any] | None = None) -> None:
-        self._body = body
+        self._body   = body
         self.headers = headers or {}
 
     async def body(self) -> bytes:

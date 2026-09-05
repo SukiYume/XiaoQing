@@ -41,7 +41,7 @@ def _scheduled_action_allowed(principal: PluginPrincipal, action: Mapping[str, A
     if mode == "silent":
         return False
     action_name = action.get("action")
-    params = action.get("params")
+    params      = action.get("params")
     if not isinstance(params, Mapping):
         return False
     if action_name == "send_group_msg":
@@ -132,36 +132,36 @@ class AppPluginContextMixin:
         plugin_dir: Path,
         data_dir: Path,
         state: dict[str, Any],
-        user_id: int | None = None,
-        group_id: int | None = None,
-        request_id: str | None = None,
-        principal: PluginPrincipal | None = None,
+        user_id: int | None                   = None,
+        group_id: int | None                  = None,
+        request_id: str | None                = None,
+        principal: PluginPrincipal | None     = None,
         declared_capabilities: frozenset[str] = frozenset(),
-        uses_services: frozenset[str] = frozenset(),
+        uses_services: frozenset[str]         = frozenset(),
     ) -> Any:
         """构建插件上下文"""
         if principal is None:
             if user_id is not None:
                 principal = self.issue_user_principal(
                     {},
-                    user_id=user_id,
-                    group_id=group_id,
-                    is_private=group_id is None,
+                    user_id    = user_id,
+                    group_id   = group_id,
+                    is_private = group_id is None,
                 )
             else:
                 principal = self.identity_service.issue(
-                    kind="lifecycle",
-                    group_id=group_id,
+                    kind     = "lifecycle",
+                    group_id = group_id,
                 )
         elif not self.identity_service.owns(principal):
             raise PermissionError("plugin context principal was not issued by this application")
         if principal.kind == "user":
             try:
-                context_user_id = int(user_id) if user_id is not None else None
+                context_user_id   = int(user_id) if user_id is not None else None
                 principal_user_id = (
                     int(principal.user_id) if principal.user_id is not None else None
                 )
-                context_group_id = int(group_id) if group_id is not None else None
+                context_group_id   = int(group_id) if group_id is not None else None
                 principal_group_id = (
                     int(principal.group_id) if principal.group_id is not None else None
                 )
@@ -191,12 +191,12 @@ class AppPluginContextMixin:
             )
 
         plugin_settings = self._plugin_settings_snapshot(plugin_name)
-        capabilities = self._build_plugin_capabilities(
+        capabilities    = self._build_plugin_capabilities(
             plugin_name,
             principal,
             request_id,
-            declared_capabilities=declared_capabilities,
-            uses_services=uses_services,
+            declared_capabilities = declared_capabilities,
+            uses_services         = uses_services,
         )
         return PluginContext(
             config=plugin_settings.config,
@@ -243,12 +243,12 @@ class AppPluginContextMixin:
         if not self.identity_service.owns(principal):
             raise PermissionError("plugin service principal was not issued by this application")
         loaded, service = self.plugin_manager.resolve_service(
-            caller_plugin=caller_plugin,
-            service_name=service_name,
-            granted_capabilities=granted_capabilities,
+            caller_plugin        = caller_plugin,
+            service_name         = service_name,
+            granted_capabilities = granted_capabilities,
         )
-        user_id = principal.user_id if principal.kind == "user" else None
-        group_id = principal.group_id if principal.kind == "user" else None
+        user_id        = principal.user_id if principal.kind == "user" else None
+        group_id       = principal.group_id if principal.kind == "user" else None
         target_context = self.plugin_manager.build_context(
             service.owner,
             user_id,
@@ -285,17 +285,17 @@ class AppPluginContextMixin:
     ) -> str:
         if not self._codex_arxiv_authorized(principal):
             raise PermissionError("Codex arXiv capability is no longer authorized")
-        user_id = principal.user_id if principal.kind == "user" else None
+        user_id  = principal.user_id if principal.kind == "user" else None
         group_id = principal.group_id if principal.kind == "user" else None
         return cast(
             str,
             await self._invoke_declared_service(
-                caller_plugin=caller_plugin,
-                service_name="codex.enqueue_arxiv_summary",
-                principal=principal,
-                request_id=request_id,
-                args=(date, list(links), user_id, group_id),
-                granted_capabilities=frozenset({"codex_arxiv_summary"}),
+                caller_plugin        = caller_plugin,
+                service_name         = "codex.enqueue_arxiv_summary",
+                principal            = principal,
+                request_id           = request_id,
+                args                 = (date, list(links), user_id, group_id),
+                granted_capabilities = frozenset({"codex_arxiv_summary"}),
             ),
         )
 
@@ -306,9 +306,9 @@ class AppPluginContextMixin:
         request_id: str | None = None,
         *,
         declared_capabilities: frozenset[str] = frozenset(),
-        uses_services: frozenset[str] = frozenset(),
+        uses_services: frozenset[str]         = frozenset(),
     ) -> PluginCapabilities:
-        is_system = principal.is_system and self.identity_service.owns(principal)
+        is_system    = principal.is_system and self.identity_service.owns(principal)
         is_bot_admin = (
             principal.kind == "user"
             and self.identity_service.owns(principal)
@@ -322,8 +322,8 @@ class AppPluginContextMixin:
                     and principal.is_private
                     and self.is_admin(principal.user_id)
                 ),
-                _snapshot=lambda: self.config_manager.snapshot().secrets,
-                _writer=self.config_manager.update_secret,
+                _snapshot = lambda: self.config_manager.snapshot().secrets,
+                _writer   = self.config_manager.update_secret,
             )
 
         onebot_media = None
@@ -346,28 +346,28 @@ class AppPluginContextMixin:
         codex_arxiv_summary = None
         if "codex.enqueue_arxiv_summary" in uses_services and (is_system or is_bot_admin):
             codex_arxiv_summary = CodexArxivSummaryService(
-                _authorized=lambda: self._codex_arxiv_authorized(principal),
-                _enqueue=functools.partial(
+                _authorized = lambda: self._codex_arxiv_authorized(principal),
+                _enqueue    = functools.partial(
                     self._enqueue_codex_arxiv_summary,
-                    caller_plugin=plugin_name,
-                    principal=principal,
-                    request_id=request_id,
+                    caller_plugin = plugin_name,
+                    principal     = principal,
+                    request_id    = request_id,
                 ),
             )
 
         voice_synthesis = None
-        chat_reply = None
+        chat_reply      = None
         if "voice.synthesize_text" in uses_services:
 
             async def synthesize_text(text: str) -> list[dict[str, Any]] | None:
                 return cast(
                     list[dict[str, Any]] | None,
                     await self._invoke_declared_service(
-                        caller_plugin=plugin_name,
-                        service_name="voice.synthesize_text",
-                        principal=principal,
-                        request_id=request_id,
-                        args=(text,),
+                        caller_plugin = plugin_name,
+                        service_name  = "voice.synthesize_text",
+                        principal     = principal,
+                        request_id    = request_id,
+                        args          = (text,),
                     ),
                 )
 
@@ -382,11 +382,11 @@ class AppPluginContextMixin:
                 return cast(
                     list[dict[str, Any]],
                     await self._invoke_declared_service(
-                        caller_plugin=plugin_name,
-                        service_name="chat.reply",
-                        principal=principal,
-                        request_id=request_id,
-                        args=(text, dict(event)),
+                        caller_plugin = plugin_name,
+                        service_name  = "chat.reply",
+                        principal     = principal,
+                        request_id    = request_id,
+                        args          = (text, dict(event)),
                     ),
                 )
 
@@ -396,17 +396,17 @@ class AppPluginContextMixin:
             *,
             route_name: str,
             messages: list[dict[str, Any]],
-            required_modalities: tuple[str, ...] = ("text",),
-            pinned_model: str | None = None,
-            temperature: float | None = None,
-            top_p: float | None = None,
-            max_tokens: int | None = None,
-            timeout_seconds: float | None = None,
-            total_timeout_seconds: float | None = None,
-            max_retry: int | None = None,
-            retry_interval_seconds: float | None = None,
-            tools: list[dict[str, Any]] | None = None,
-            tool_choice: Any = None,
+            required_modalities: tuple[str, ...]    = ("text",),
+            pinned_model: str | None                = None,
+            temperature: float | None               = None,
+            top_p: float | None                     = None,
+            max_tokens: int | None                  = None,
+            timeout_seconds: float | None           = None,
+            total_timeout_seconds: float | None     = None,
+            max_retry: int | None                   = None,
+            retry_interval_seconds: float | None    = None,
+            tools: list[dict[str, Any]] | None      = None,
+            tool_choice: Any                        = None,
             extra_payload: Mapping[str, Any] | None = None,
         ) -> AICompletionResult:
             """用当前原子配置快照执行插件自己的 AI route。"""
@@ -416,24 +416,24 @@ class AppPluginContextMixin:
                 raise RuntimeError("shared HTTP session is unavailable")
             snapshot = self.config_manager.snapshot()
             return await complete_configured_route(
-                session=session,
-                config=snapshot.config,
-                secrets=snapshot.secrets,
-                plugin_name=plugin_name,
-                route_name=route_name,
-                messages=messages,
-                required_modalities=required_modalities,
-                pinned_model=pinned_model,
-                temperature=temperature,
-                top_p=top_p,
-                max_tokens=max_tokens,
-                timeout_seconds=timeout_seconds,
-                total_timeout_seconds=total_timeout_seconds,
-                max_retry=max_retry,
-                retry_interval_seconds=retry_interval_seconds,
-                tools=tools,
-                tool_choice=tool_choice,
-                extra_payload=extra_payload,
+                session                = session,
+                config                 = snapshot.config,
+                secrets                = snapshot.secrets,
+                plugin_name            = plugin_name,
+                route_name             = route_name,
+                messages               = messages,
+                required_modalities    = required_modalities,
+                pinned_model           = pinned_model,
+                temperature            = temperature,
+                top_p                  = top_p,
+                max_tokens             = max_tokens,
+                timeout_seconds        = timeout_seconds,
+                total_timeout_seconds  = total_timeout_seconds,
+                max_retry              = max_retry,
+                retry_interval_seconds = retry_interval_seconds,
+                tools                  = tools,
+                tool_choice            = tool_choice,
+                extra_payload          = extra_payload,
             )
 
         def list_ai_models(
@@ -445,24 +445,24 @@ class AppPluginContextMixin:
             return cast(
                 tuple[AIModelInfo, ...],
                 list_configured_models(
-                    config=snapshot.config,
-                    secrets=snapshot.secrets,
-                    plugin_name=plugin_name,
-                    route_name=route_name,
-                    required_modalities=required_modalities,
+                    config              = snapshot.config,
+                    secrets             = snapshot.secrets,
+                    plugin_name         = plugin_name,
+                    route_name          = route_name,
+                    required_modalities = required_modalities,
                 ),
             )
 
         return PluginCapabilities(
-            is_bot_admin=is_bot_admin,
-            is_system=is_system,
-            secret_admin=secret_admin,
-            onebot_media=onebot_media,
-            config_subscription=config_subscription,
-            codex_arxiv_summary=codex_arxiv_summary,
-            voice_synthesis=voice_synthesis,
-            chat_reply=chat_reply,
-            ai=AIService(complete_ai_route, list_ai_models),
+            is_bot_admin        = is_bot_admin,
+            is_system           = is_system,
+            secret_admin        = secret_admin,
+            onebot_media        = onebot_media,
+            config_subscription = config_subscription,
+            codex_arxiv_summary = codex_arxiv_summary,
+            voice_synthesis     = voice_synthesis,
+            chat_reply          = chat_reply,
+            ai                  = AIService(complete_ai_route, list_ai_models),
         )
 
     def _plugin_config_view(
@@ -494,15 +494,15 @@ class AppPluginContextMixin:
             self._plugin_settings_cache.clear()
             self._plugin_settings_cache_revision = source.revision
         cache_key = (plugin_name, source.revision)
-        cached = self._plugin_settings_cache.get(cache_key)
+        cached    = self._plugin_settings_cache.get(cache_key)
         if cached is not None:
             return cached
         settings = PluginSettingsSnapshot(
-            config=self._plugin_config_view(plugin_name, source.config),
-            secrets=self._plugin_secrets_view(plugin_name, source.secrets),
-            revision=source.revision,
-            config_status=source.config_status.value,
-            secrets_status=source.secrets_status.value,
+            config         = self._plugin_config_view(plugin_name, source.config),
+            secrets        = self._plugin_secrets_view(plugin_name, source.secrets),
+            revision       = source.revision,
+            config_status  = source.config_status.value,
+            secrets_status = source.secrets_status.value,
         )
         self._plugin_settings_cache[cache_key] = settings
         return settings

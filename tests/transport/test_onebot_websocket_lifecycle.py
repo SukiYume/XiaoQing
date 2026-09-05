@@ -26,10 +26,10 @@ class TestOneBotWebSocketLifecycle:
     @pytest.mark.asyncio
     async def test_stop(self):
         """测试停止客户端"""
-        client = OneBotWsClient("ws://localhost:3000", "")
-        mock_ws = AsyncMock()
+        client        = OneBotWsClient("ws://localhost:3000", "")
+        mock_ws       = AsyncMock()
         mock_ws.close = AsyncMock()
-        client._ws = mock_ws
+        client._ws    = mock_ws
 
         await client.stop()
 
@@ -40,7 +40,7 @@ class TestOneBotWebSocketLifecycle:
     @pytest.mark.asyncio
     async def test_stop_awaits_cleanup_task_cancellation(self):
         """测试 stop 会等待 cleanup task 完成取消清理"""
-        client = OneBotWsClient("ws://localhost:3000", "")
+        client           = OneBotWsClient("ws://localhost:3000", "")
         cleanup_finished = asyncio.Event()
 
         async def cleanup_loop():
@@ -59,7 +59,7 @@ class TestOneBotWebSocketLifecycle:
 
     @pytest.mark.asyncio
     async def test_stop_cancels_all_keyed_drainers_and_clears_queues(self):
-        client = OneBotWsClient("ws://localhost:3000", "")
+        client  = OneBotWsClient("ws://localhost:3000", "")
         entered = asyncio.Event()
 
         async def handler(_event):
@@ -82,16 +82,16 @@ class TestOneBotWebSocketLifecycle:
 
     @pytest.mark.asyncio
     async def test_stop_bounds_and_retains_cancellation_resistant_queue_worker(self):
-        client = OneBotWsClient("ws://localhost:3000", "")
+        client                           = OneBotWsClient("ws://localhost:3000", "")
         client._shutdown_timeout_seconds = 0.01
-        entered = asyncio.Event()
-        cancelled = asyncio.Event()
-        release = asyncio.Event()
+        entered                          = asyncio.Event()
+        cancelled                        = asyncio.Event()
+        release                          = asyncio.Event()
 
         resistant_worker = cancellation_resistant_callback(entered, cancelled, release)
 
-        task = asyncio.create_task(resistant_worker())
-        client._queue_tasks["user:1"] = task
+        task                             = asyncio.create_task(resistant_worker())
+        client._queue_tasks["user:1"]    = task
         client._message_queues["user:1"] = asyncio.Queue()
         await entered.wait()
 
@@ -129,10 +129,10 @@ class TestOneBotWebSocketLifecycle:
 
     @pytest.mark.asyncio
     async def test_overlapping_rotations_close_each_exact_socket_independently(self):
-        client = OneBotWsClient("ws://old.example/ws", "old-token")
+        client             = OneBotWsClient("ws://old.example/ws", "old-token")
         client._event_loop = asyncio.get_running_loop()
-        prior_started = asyncio.Event()
-        prior_release = asyncio.Event()
+        prior_started      = asyncio.Event()
+        prior_release      = asyncio.Event()
 
         class PriorSocket:
             async def close(self) -> None:
@@ -140,11 +140,11 @@ class TestOneBotWebSocketLifecycle:
                 await prior_release.wait()
 
         prior_socket = PriorSocket()
-        prior_task = client._schedule_ws_close(prior_socket)
+        prior_task   = client._schedule_ws_close(prior_socket)
         await prior_started.wait()
 
         current_socket = MagicMock(close=AsyncMock())
-        client._ws = current_socket
+        client._ws                        = current_socket
         client._connected_auth_generation = client._endpoint_auth.generation
 
         client.update("ws://new.example/ws", "new-token")
@@ -171,14 +171,14 @@ class TestOneBotWebSocketLifecycle:
         monkeypatch,
         close_mode: str,
     ):
-        client = OneBotWsClient("ws://old.example/ws", "old-token")
-        first_entered = asyncio.Event()
-        first_cancelled = asyncio.Event()
-        first_release = asyncio.Event()
-        close_entered = asyncio.Event()
-        close_release = asyncio.Event()
+        client           = OneBotWsClient("ws://old.example/ws", "old-token")
+        first_entered    = asyncio.Event()
+        first_cancelled  = asyncio.Event()
+        first_release    = asyncio.Event()
+        close_entered    = asyncio.Event()
+        close_release    = asyncio.Event()
         second_attempted = asyncio.Event()
-        attempts = 0
+        attempts         = 0
 
         class RevokedSocket:
             def __init__(self) -> None:
@@ -198,7 +198,7 @@ class TestOneBotWebSocketLifecycle:
             nonlocal attempts
             attempts += 1
             if attempts == 1:
-                client._ws = socket
+                client._ws                        = socket
                 client._connected_auth_generation = client._endpoint_auth.generation
                 first_entered.set()
                 while not first_release.is_set():
@@ -251,7 +251,7 @@ class TestOneBotWebSocketLifecycle:
 
     @pytest.mark.asyncio
     async def test_stop_cancels_and_joins_its_own_listen_task(self, monkeypatch):
-        client = OneBotWsClient("ws://localhost:3000", "")
+        client  = OneBotWsClient("ws://localhost:3000", "")
         entered = asyncio.Event()
 
         async def block_connect(_handler):
@@ -289,7 +289,7 @@ class TestOneBotWebSocketLifecycle:
     @pytest.mark.asyncio
     async def test_fatal_listener_exit_cancels_its_cleanup_and_can_restart(self, monkeypatch):
         client = OneBotWsClient("ws://localhost:3000", "")
-        calls = 0
+        calls  = 0
 
         async def fail_after_rotation(_handler):
             nonlocal calls
@@ -322,11 +322,11 @@ class TestOneBotWebSocketLifecycle:
         self,
         monkeypatch,
     ):
-        client = OneBotWsClient("ws://localhost:3000", "")
-        attempt_entered = asyncio.Event()
+        client                = OneBotWsClient("ws://localhost:3000", "")
+        attempt_entered       = asyncio.Event()
         second_attempt_cancel = asyncio.Event()
-        release_attempt = asyncio.Event()
-        cancel_count = 0
+        release_attempt       = asyncio.Event()
+        cancel_count          = 0
 
         async def cancellation_resistant_attempt(_handler):
             nonlocal cancel_count
@@ -374,7 +374,7 @@ class TestOneBotWebSocketLifecycle:
         self,
         monkeypatch,
     ):
-        client = OneBotWsClient("ws://localhost:3000", "")
+        client   = OneBotWsClient("ws://localhost:3000", "")
         attempts = iter((0.01, RuntimeError("short failure"), 0.02, 0.03, 0.04, 0.05))
 
         async def connect_once(_handler):
@@ -391,7 +391,7 @@ class TestOneBotWebSocketLifecycle:
                 client._running = False
 
         monkeypatch.setattr(client, "_connect_once", connect_once)
-        client._reconnect_sleep = record_sleep
+        client._reconnect_sleep  = record_sleep
         client._reconnect_random = lambda: 0.5
 
         await client.connect_and_listen(AsyncMock())
@@ -401,8 +401,8 @@ class TestOneBotWebSocketLifecycle:
 
     @pytest.mark.asyncio
     async def test_stable_connection_resets_reconnect_backoff(self, monkeypatch):
-        client = OneBotWsClient("ws://localhost:3000", "")
-        durations = iter((0.01, 0.02, 31.0, 0.03))
+        client              = OneBotWsClient("ws://localhost:3000", "")
+        durations           = iter((0.01, 0.02, 31.0, 0.03))
         delays: list[float] = []
 
         async def connect_once(_handler):
@@ -414,7 +414,7 @@ class TestOneBotWebSocketLifecycle:
                 client._running = False
 
         monkeypatch.setattr(client, "_connect_once", connect_once)
-        client._reconnect_sleep = record_sleep
+        client._reconnect_sleep  = record_sleep
         client._reconnect_random = lambda: 0.5
 
         await client.connect_and_listen(AsyncMock())
@@ -424,8 +424,8 @@ class TestOneBotWebSocketLifecycle:
 
     @pytest.mark.asyncio
     async def test_cross_thread_auth_rotation_wakes_current_backoff(self, monkeypatch):
-        client = OneBotWsClient("ws://old.example/ws", "")
-        backoff_entered = asyncio.Event()
+        client            = OneBotWsClient("ws://old.example/ws", "")
+        backoff_entered   = asyncio.Event()
         backoff_cancelled = asyncio.Event()
 
         async def blocked_sleep(_delay: float) -> None:
@@ -437,15 +437,15 @@ class TestOneBotWebSocketLifecycle:
 
         connect_once = AsyncMock(return_value=0.0)
         monkeypatch.setattr(client, "_connect_once", connect_once)
-        client._reconnect_sleep = blocked_sleep
+        client._reconnect_sleep  = blocked_sleep
         client._reconnect_random = lambda: 0.5
 
         listener = asyncio.create_task(client.connect_and_listen(AsyncMock()))
         await asyncio.wait_for(backoff_entered.wait(), timeout=1)
 
         worker = threading.Thread(
-            target=client.update,
-            args=("ws://new.example/ws", "new-token"),
+            target = client.update,
+            args   = ("ws://new.example/ws", "new-token"),
         )
         worker.start()
         worker.join(timeout=2)
@@ -468,9 +468,9 @@ class TestOneBotWebSocketLifecycle:
 
     @pytest.mark.asyncio
     async def test_auth_rotation_between_attempt_and_wait_is_not_lost(self, monkeypatch):
-        client = OneBotWsClient("ws://old.example/ws", "")
+        client              = OneBotWsClient("ws://old.example/ws", "")
         delays: list[float] = []
-        calls = 0
+        calls               = 0
 
         async def connect_once(_handler):
             nonlocal calls
@@ -499,8 +499,8 @@ class TestOneBotWebSocketLifecycle:
 
     @pytest.mark.asyncio
     async def test_reconnect_backoff_applies_jitter_without_exceeding_cap(self, monkeypatch):
-        client = OneBotWsClient("ws://localhost:3000", "")
-        samples = iter((0.0, 1.0, 1.0, 1.0, 1.0))
+        client              = OneBotWsClient("ws://localhost:3000", "")
+        samples             = iter((0.0, 1.0, 1.0, 1.0, 1.0))
         delays: list[float] = []
 
         async def record_sleep(delay: float) -> None:
@@ -509,7 +509,7 @@ class TestOneBotWebSocketLifecycle:
                 client._running = False
 
         monkeypatch.setattr(client, "_connect_once", AsyncMock(return_value=0.0))
-        client._reconnect_sleep = record_sleep
+        client._reconnect_sleep  = record_sleep
         client._reconnect_random = lambda: next(samples)
 
         await client.connect_and_listen(AsyncMock())
@@ -519,7 +519,7 @@ class TestOneBotWebSocketLifecycle:
 
     def test_max_backoff_jitter_remains_continuous_instead_of_collapsing_at_cap(self):
         samples = (0.0, 0.25, 0.5, 0.75, 1.0)
-        values = [_jittered_reconnect_delay(60.0, sample) for sample in samples]
+        values  = [_jittered_reconnect_delay(60.0, sample) for sample in samples]
 
         assert values == sorted(values)
         assert len(set(values)) == len(values)
@@ -546,7 +546,7 @@ class TestOneBotWebSocketLifecycle:
                     raise StopAsyncIteration
                 raise self.error
 
-        normal = ConnectionClosedOK(Close(1000, "normal"), Close(1000, "normal"), True)
+        normal   = ConnectionClosedOK(Close(1000, "normal"), Close(1000, "normal"), True)
         abnormal = ConnectionClosedError(Close(1008, "policy"), None, None)
         ordinary = RuntimeError("iterator failed")
 

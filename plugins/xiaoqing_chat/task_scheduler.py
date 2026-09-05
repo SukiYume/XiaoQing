@@ -86,8 +86,8 @@ def _track_bg_task(
             public_error_message(
                 context,
                 exc,
-                logger=context.logger,
-                component=f"xiaoqing_chat.bg_task.{name}",
+                logger    = context.logger,
+                component = f"xiaoqing_chat.bg_task.{name}",
             )
 
     task.add_done_callback(_done)
@@ -96,7 +96,7 @@ def _track_bg_task(
 
 
 def _spawn_bg_task(context: Any, coro, *, name: str) -> None:
-    state = _state()
+    state            = _state()
     singleflight_key = _singleflight_key(name)
     if not state.can_add_bg_task(key=singleflight_key):
         _close_awaitable(coro)
@@ -111,14 +111,14 @@ def _spawn_bg_task(context: Any, coro, *, name: str) -> None:
     _track_bg_task(
         context,
         task,
-        name=name,
-        singleflight_key=singleflight_key,
+        name             = name,
+        singleflight_key = singleflight_key,
     )
 
 
 def _schedule_memory_persist(context: Any, runtime: _ChatRuntime, *, chat_id: str) -> None:
     delay = max(0.0, runtime.cfg.io_persist_debounce_seconds)
-    old = _state().get_persist_task(chat_id)
+    old   = _state().get_persist_task(chat_id)
     _cancel_pending_task(context, old, kind="memory_persist")
 
     async def _run() -> None:
@@ -142,7 +142,7 @@ def _schedule_memory_persist(context: Any, runtime: _ChatRuntime, *, chat_id: st
 
 def _schedule_memory_db_save(context: Any, runtime: _ChatRuntime) -> None:
     delay = max(0.0, runtime.cfg.memory_db_save_debounce_seconds)
-    old = _state().get_vdb_save_task()
+    old   = _state().get_vdb_save_task()
     _cancel_pending_task(context, old, kind="memory_db_save")
 
     async def _run() -> None:
@@ -159,7 +159,7 @@ def _schedule_memory_db_save(context: Any, runtime: _ChatRuntime) -> None:
     _track_bg_task(context, task, name="memory_db_save")
 
 
-_action_flush_tasks: dict[str, asyncio.Task[Any]] = {}
+_action_flush_tasks: dict[str, asyncio.Task[Any]]    = {}
 _pfc_state_flush_tasks: dict[str, asyncio.Task[Any]] = {}
 _media_registry_flush_task: asyncio.Task[Any] | None = None
 
@@ -175,7 +175,7 @@ def _schedule_debounced_flush(
 ) -> None:
     """调度防抖刷盘任务的内部公共实现。"""
     delay = max(0.0, runtime.cfg.io_persist_debounce_seconds)
-    old = task_registry.get(chat_id)
+    old   = task_registry.get(chat_id)
     _cancel_pending_task(context, old, kind=name_prefix)
 
     async def _run() -> None:
@@ -202,10 +202,10 @@ def _schedule_action_history_flush(context: Any, runtime: _ChatRuntime, *, chat_
     _schedule_debounced_flush(
         context,
         runtime,
-        chat_id=chat_id,
-        task_registry=_action_flush_tasks,
-        flush_func=_state().action_history.flush,
-        name_prefix="action_flush",
+        chat_id       = chat_id,
+        task_registry = _action_flush_tasks,
+        flush_func    = _state().action_history.flush,
+        name_prefix   = "action_flush",
     )
 
 
@@ -214,10 +214,10 @@ def _schedule_pfc_state_flush(context: Any, runtime: _ChatRuntime, *, chat_id: s
     _schedule_debounced_flush(
         context,
         runtime,
-        chat_id=chat_id,
-        task_registry=_pfc_state_flush_tasks,
-        flush_func=_state().pfc_state_store.save,
-        name_prefix="pfc_state_flush",
+        chat_id       = chat_id,
+        task_registry = _pfc_state_flush_tasks,
+        flush_func    = _state().pfc_state_store.save,
+        name_prefix   = "pfc_state_flush",
     )
 
 
@@ -225,7 +225,7 @@ def _schedule_media_registry_flush(context: Any, runtime: _ChatRuntime) -> None:
     global _media_registry_flush_task
 
     delay = max(0.0, runtime.cfg.io_persist_debounce_seconds)
-    old = _media_registry_flush_task
+    old   = _media_registry_flush_task
     _cancel_pending_task(context, old, kind="media_registry_flush")
 
     async def _run() -> None:

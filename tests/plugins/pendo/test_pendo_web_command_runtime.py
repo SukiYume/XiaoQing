@@ -24,10 +24,10 @@ class TestPendoWebHandler:
             sys.modules,
             "plugins.pendo.web.server",
             types.SimpleNamespace(
-                get_url=lambda: "http://127.0.0.1:8765",
-                is_running=lambda: True,
-                start=lambda _db: True,
-                stop=lambda: True,
+                get_url    = lambda: "http://127.0.0.1:8765",
+                is_running = lambda: True,
+                start      = lambda _db: True,
+                stop       = lambda: True,
             ),
         )
 
@@ -83,10 +83,10 @@ class TestPendoWebHandler:
             sys.modules,
             "plugins.pendo.web.server",
             types.SimpleNamespace(
-                get_url=lambda: "http://127.0.0.1:8765",
-                is_running=lambda: False,
-                start=lambda _db: True,
-                stop=lambda: True,
+                get_url    = lambda: "http://127.0.0.1:8765",
+                is_running = lambda: False,
+                start      = lambda _db: True,
+                stop       = lambda: True,
             ),
         )
 
@@ -118,12 +118,12 @@ class TestPendoWebHandler:
             )
         )
         result = WebHandler._build_token_result(
-            token_sent=outcome,
-            header="Pendo Web",
-            success_line="generated",
-            expiry_text="5 minutes",
-            private_hint="sent",
-            private_copy_hint="copy",
+            token_sent        = outcome,
+            header            = "Pendo Web",
+            success_line      = "generated",
+            expiry_text       = "5 minutes",
+            private_hint      = "sent",
+            private_copy_hint = "copy",
         )
 
         assert outcome is None
@@ -142,18 +142,22 @@ class TestPendoWebHandler:
             sys.modules,
             "plugins.pendo.web.server",
             types.SimpleNamespace(
-                get_url=lambda: "http://127.0.0.1:8765",
-                is_running=lambda: False,
-                start=lambda _db: False,
-                stop=lambda: True,
-                get_last_error=lambda: "无法绑定到 127.0.0.1:8765，端口可能已被占用。",
+                get_url        = lambda: "http://127.0.0.1:8765",
+                is_running     = lambda: False,
+                start          = lambda _db: False,
+                stop           = lambda: True,
+                get_last_error = lambda: "无法绑定到 127.0.0.1:8765，端口可能已被占用。",
             ),
         )
 
         web_module = importlib.import_module("plugins.pendo.handlers.web")
 
         handler = web_module.WebHandler(db=None)
-        result = asyncio.run(handler.handle("1001", "start", context=None))
+        result = asyncio.run(
+            handler.handle(
+                "1001", "start", context=types.SimpleNamespace(is_global_admin=lambda _uid: True)
+            )
+        )
 
         assert result["status"] == "error"
         assert "服务启动失败" in result["message"]
@@ -171,18 +175,22 @@ class TestPendoWebHandler:
             sys.modules,
             "plugins.pendo.web.server",
             types.SimpleNamespace(
-                get_url=lambda: "http://127.0.0.1:8765",
-                is_running=lambda: True,
-                is_managed_running=lambda: False,
-                start=lambda _db: False,
-                stop=lambda: False,
+                get_url            = lambda: "http://127.0.0.1:8765",
+                is_running         = lambda: True,
+                is_managed_running = lambda: False,
+                start              = lambda _db: False,
+                stop               = lambda: False,
             ),
         )
 
         web_module = importlib.import_module("plugins.pendo.handlers.web")
 
         handler = web_module.WebHandler(db=None)
-        result = asyncio.run(handler.handle("1001", "stop", context=None))
+        result = asyncio.run(
+            handler.handle(
+                "1001", "stop", context=types.SimpleNamespace(is_global_admin=lambda _uid: True)
+            )
+        )
 
         assert result["status"] == "success"
         assert "外部服务" in result["message"]
@@ -198,15 +206,15 @@ class TestPendoWebHandler:
             sys.modules,
             "plugins.pendo.web.server",
             types.SimpleNamespace(
-                get_url=lambda: "http://127.0.0.1:8765",
-                is_running=lambda: True,
-                start=lambda _db: True,
-                stop=lambda: True,
+                get_url    = lambda: "http://127.0.0.1:8765",
+                is_running = lambda: True,
+                start      = lambda _db: True,
+                stop       = lambda: True,
             ),
         )
 
         web_module = importlib.import_module("plugins.pendo.handlers.web")
-        issuance = {}
+        issuance   = {}
 
         def issue_widget(owner_id, *, expires_seconds, db):
             issuance.update(owner_id=owner_id, expires_seconds=expires_seconds, db=db)
@@ -243,8 +251,8 @@ class TestPendoWebHandler:
         import importlib
 
         web_module = importlib.import_module("plugins.pendo.handlers.web")
-        calls = []
-        db = SimpleNamespace(
+        calls      = []
+        db         = SimpleNamespace(
             revoke_widget_tokens=lambda owner_id: calls.append(owner_id) or 2,
         )
         handler = web_module.WebHandler(db=db)
@@ -281,7 +289,7 @@ class TestPendoSearchAndImportRegression:
                 return [], 0
 
         handler = SearchHandler(_ItemsRepo())
-        result = asyncio.run(
+        result  = asyncio.run(
             handler.search("u1", "会议 type=event range=last7d", context=SimpleNamespace())
         )
 
@@ -316,7 +324,7 @@ class TestPendoSearchAndImportRegression:
                 ],
                 "u1",
             )
-            conn = db.get_connection()
+            conn      = db.get_connection()
             first_row = conn.execute(
                 "SELECT title, content FROM items_fts WHERE id = ?",
                 ("note-1",),
@@ -359,7 +367,7 @@ class TestPendoRedesignRegression:
         from plugins.pendo.services.db import Database
         from plugins.pendo.web.api.widget import build_widget_summary
 
-        db = Database(str(tmp_path / "pendo.db"))
+        db       = Database(str(tmp_path / "pendo.db"))
         owner_id = "u-widget-ledger"
         try:
             db.insert_item(
@@ -380,8 +388,8 @@ class TestPendoRedesignRegression:
             summary = build_widget_summary(
                 db,
                 owner_id,
-                section="ledger",
-                now="2026-04-30T12:00:00",
+                section = "ledger",
+                now     = "2026-04-30T12:00:00",
             )
 
             assert summary["panel"]["items"][0]["amount_text"] == "-¥123"
@@ -398,12 +406,12 @@ class TestPendoRedesignRegression:
         from plugins.pendo.web.api.transfer import item_matches_range
 
         spanning_event = SimpleNamespace(
-            start_time="2026-04-29T23:00:00+08:00",
-            end_time="2026-04-30T01:00:00+08:00",
+            start_time = "2026-04-29T23:00:00+08:00",
+            end_time   = "2026-04-30T01:00:00+08:00",
         )
         before_event = SimpleNamespace(
-            start_time="2026-04-29T20:00:00+08:00",
-            end_time="2026-04-29T21:00:00+08:00",
+            start_time = "2026-04-29T20:00:00+08:00",
+            end_time   = "2026-04-29T21:00:00+08:00",
         )
 
         assert item_matches_range(spanning_event, "event", date(2026, 4, 30), date(2026, 4, 30))
@@ -416,7 +424,7 @@ class TestPendoRedesignRegression:
 
         from plugins.pendo.services.db import Database
 
-        db = Database(str(tmp_path / "pendo.db"))
+        db       = Database(str(tmp_path / "pendo.db"))
         owner_id = "u-search-collection"
         try:
             collection_id = db.create_event_collection(

@@ -1,6 +1,6 @@
 """Shell 插件的默认命令入口、拒绝规则与资源上限。"""
 
-DEFAULT_TIMEOUT = 30
+DEFAULT_TIMEOUT   = 30
 MAX_OUTPUT_LENGTH = 4000
 
 # 该列表只减少管理员误触，不能限制程序参数、解释器代码、网络或子进程能力。

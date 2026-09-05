@@ -140,8 +140,8 @@ class PluginWatcherMixin:
         definition: PluginDefinition,
         mtime: int | float,
         *,
-        module: ModuleType | None = None,
-        authorized_entry: Path | None = None,
+        module: ModuleType | None                  = None,
+        authorized_entry: Path | None              = None,
         transaction: _PluginLoadTransaction | None = None,
     ) -> bool:
         """Revalidate authorization and source fingerprint immediately before publish."""
@@ -184,8 +184,8 @@ class PluginWatcherMixin:
         definition: PluginDefinition,
         mtime: int | float,
         *,
-        module: ModuleType | None = None,
-        authorized_entry: Path | None = None,
+        module: ModuleType | None                  = None,
+        authorized_entry: Path | None              = None,
         transaction: _PluginLoadTransaction | None = None,
     ) -> bool:
         """Run publication revalidation without performing file I/O on the loop."""
@@ -195,9 +195,9 @@ class PluginWatcherMixin:
             plugin_dir,
             definition,
             mtime,
-            module=module,
-            authorized_entry=authorized_entry,
-            transaction=transaction,
+            module           = module,
+            authorized_entry = authorized_entry,
+            transaction      = transaction,
         )
 
     @staticmethod
@@ -230,7 +230,7 @@ class PluginWatcherMixin:
 
         # Callers use a small fixed bucket set (root-scan, path, round).  Do not
         # key this state by attacker-controlled paths or exception text.
-        now = time.monotonic()
+        now         = time.monotonic()
         next_log_at = self._watch_error_next_log_at.get(bucket, 0.0)
         if now < next_log_at:
             self._watch_error_suppressed[bucket] = self._watch_error_suppressed.get(bucket, 0) + 1
@@ -274,21 +274,21 @@ class PluginWatcherMixin:
     def _scan_plugin_directories(self) -> _PluginDirectoryScan:
         """Return a deletion-safe best-effort snapshot of plugin directories."""
 
-        directories: list[Path] = []
-        uncertain_names: set[str] = set()
+        directories: list[Path]                   = []
+        uncertain_names: set[str]                 = set()
         errors: list[tuple[Path | None, OSError]] = []
-        error_count = 0
-        complete = True
+        error_count                               = 0
+        complete                                  = True
 
         try:
             iterator = iter(self.plugins_dir.iterdir())
         except OSError as exc:
             return _PluginDirectoryScan(
-                directories=(),
-                uncertain_names=frozenset(),
-                complete=False,
-                errors=((None, exc),),
-                error_count=1,
+                directories     = (),
+                uncertain_names = frozenset(),
+                complete        = False,
+                errors          = ((None, exc),),
+                error_count     = 1,
             )
         while True:
             try:
@@ -319,10 +319,10 @@ class PluginWatcherMixin:
 
         return _PluginDirectoryScan(
             directories=tuple(sorted(directories, key=lambda item: item.name)),
-            uncertain_names=frozenset(uncertain_names),
-            complete=complete,
-            errors=tuple(errors),
-            error_count=error_count,
+            uncertain_names = frozenset(uncertain_names),
+            complete        = complete,
+            errors          = tuple(errors),
+            error_count     = error_count,
         )
 
     async def reconcile_plugins(self) -> None:
@@ -358,7 +358,7 @@ class PluginWatcherMixin:
                 OSError(f"{scan.error_count - len(scan.errors)} additional failure(s)"),
             )
 
-        plugin_dirs = scan.directories
+        plugin_dirs   = scan.directories
         current_names = {plugin_dir.name for plugin_dir in plugin_dirs}
 
         # A removed directory is an explicit request to retire its runtime.
@@ -479,9 +479,9 @@ class PluginWatcherMixin:
                 definition.entry,
             )
         except PluginPathError as exc:
-            existing = self._plugins.get(definition.name)
+            existing        = self._plugins.get(definition.name)
             transient_cause = exc.__cause__
-            transient_io = isinstance(transient_cause, OSError) and not isinstance(
+            transient_io    = isinstance(transient_cause, OSError) and not isinstance(
                 transient_cause,
                 FileNotFoundError,
             )
@@ -575,10 +575,10 @@ class PluginWatcherMixin:
             await self._reload_plugin_once(
                 definition.name,
                 authorization=_ReloadAuthorization(
-                    plugin_dir=plugin_dir,
-                    definition=definition,
-                    mtime=mtime,
-                    definition_changed=definition != existing.definition,
+                    plugin_dir         = plugin_dir,
+                    definition         = definition,
+                    mtime              = mtime,
+                    definition_changed = definition != existing.definition,
                 ),
             )
         else:
@@ -616,10 +616,10 @@ class PluginWatcherMixin:
             )
             return
         authorization = _ReloadAuthorization(
-            plugin_dir=plugin_dir,
-            definition=definition,
-            mtime=fingerprint,
-            definition_changed=False,
+            plugin_dir         = plugin_dir,
+            definition         = definition,
+            mtime              = fingerprint,
+            definition_changed = False,
         )
         candidate = self._create_reload_candidate(definition.name, authorization)
         try:
@@ -648,7 +648,7 @@ class PluginWatcherMixin:
     ) -> int:
         with self._watch_waiters_lock:
             self._next_watch_waiter_id += 1
-            waiter_id = self._next_watch_waiter_id
+            waiter_id                      = self._next_watch_waiter_id
             self._watch_waiters[waiter_id] = (loop, wakeup)
             return waiter_id
 
@@ -669,14 +669,14 @@ class PluginWatcherMixin:
 
         try:
             await asyncio.wait_for(wakeup.wait(), timeout=interval)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return False
         return True
 
     async def watch(self) -> None:
         self._require_hot_reload()
-        loop = asyncio.get_running_loop()
-        wakeup = asyncio.Event()
+        loop      = asyncio.get_running_loop()
+        wakeup    = asyncio.Event()
         waiter_id = self._register_watch_waiter(loop, wakeup)
         try:
             while True:
@@ -713,7 +713,7 @@ class PluginWatcherMixin:
             # the same containment/link policy as the Python entry rather than
             # following a symlink or junction outside the plugin root.
             definition_path.lstat()
-            plugin_root = resolve_plugin_root(self.plugins_dir, plugin_dir)
+            plugin_root     = resolve_plugin_root(self.plugins_dir, plugin_dir)
             definition_path = resolve_contained_regular_file(
                 plugin_root,
                 "plugin.json",
@@ -726,8 +726,8 @@ class PluginWatcherMixin:
             # identity closes that window and the extra byte keeps allocation
             # bounded while still distinguishing an oversized manifest.
             with definition_path.open("rb") as handle:
-                opened = os.fstat(handle.fileno())
-                payload = handle.read(_MAX_PLUGIN_MANIFEST_BYTES + 1)
+                opened   = os.fstat(handle.fileno())
+                payload  = handle.read(_MAX_PLUGIN_MANIFEST_BYTES + 1)
                 finished = os.fstat(handle.fileno())
         except FileNotFoundError as exc:
             self._log_manifest_issue(
@@ -764,7 +764,7 @@ class PluginWatcherMixin:
                 "plugin.json",
                 description="plugin manifest",
             )
-            current = current_definition_path.stat()
+            current         = current_definition_path.stat()
             opened_identity = self._watch_file_identity(opened)
             if (
                 current_definition_path != definition_path
@@ -852,29 +852,29 @@ class PluginWatcherMixin:
             return _ManifestRejection("invalid")
 
         return PluginDefinition(
-            name=manifest.name,
-            version=manifest.version,
-            entry=manifest.entry,
-            commands=[c.model_dump() for c in manifest.commands],
-            schedule=[s.model_dump() for s in manifest.schedule],
-            concurrency=manifest.concurrency,
-            enabled=manifest.enabled,
-            description=manifest.description,
-            author=manifest.author,
-            dependencies=[dependency.name for dependency in manifest.dependencies],
-            services=tuple(
+            name         = manifest.name,
+            version      = manifest.version,
+            entry        = manifest.entry,
+            commands     = [c.model_dump() for c in manifest.commands],
+            schedule     = [s.model_dump() for s in manifest.schedule],
+            concurrency  = manifest.concurrency,
+            enabled      = manifest.enabled,
+            description  = manifest.description,
+            author       = manifest.author,
+            dependencies = [dependency.name for dependency in manifest.dependencies],
+            services     = tuple(
                 PluginServiceDefinition(
-                    name=service.name,
-                    callback=service.callback,
-                    callers=frozenset(service.callers),
-                    required_capability=service.required_capability,
+                    name                = service.name,
+                    callback            = service.callback,
+                    callers             = frozenset(service.callers),
+                    required_capability = service.required_capability,
                 )
                 for service in manifest.services
             ),
-            uses_services=frozenset(manifest.uses_services),
-            capabilities=frozenset(manifest.capabilities),
-            watch_files=tuple(manifest.watch_files),
-            manifest_payload=payload,
+            uses_services    = frozenset(manifest.uses_services),
+            capabilities     = frozenset(manifest.capabilities),
+            watch_files      = tuple(manifest.watch_files),
+            manifest_payload = payload,
         )
 
     def _dependencies_available(self, manifest: PluginManifest) -> bool:
@@ -918,7 +918,7 @@ class PluginWatcherMixin:
             return True
 
         search_path: list[str] | None = None
-        qualified: list[str] = []
+        qualified: list[str]          = []
         for index, part in enumerate(parts):
             qualified.append(part)
             spec = importlib.machinery.PathFinder.find_spec(".".join(qualified), search_path)
@@ -935,9 +935,9 @@ class PluginWatcherMixin:
     @staticmethod
     def _module_origins(module: ModuleType) -> tuple[str, ...]:
         origins: list[str] = []
-        spec = getattr(module, "__spec__", None)
-        spec_origin = getattr(spec, "origin", None)
-        module_file = getattr(module, "__file__", None)
+        spec               = getattr(module, "__spec__", None)
+        spec_origin        = getattr(spec, "origin", None)
+        module_file        = getattr(module, "__file__", None)
         for origin in (spec_origin, module_file):
             if isinstance(origin, str) and origin not in origins:
                 origins.append(origin)
@@ -1016,7 +1016,7 @@ class PluginWatcherMixin:
             for value in package_paths:
                 try:
                     candidate = Path(value)
-                    metadata = candidate.lstat()
+                    metadata  = candidate.lstat()
                     resolved = candidate.resolve(strict=True)
                     resolved.relative_to(plugin_root)
                 except (OSError, TypeError, ValueError) as exc:
@@ -1037,7 +1037,7 @@ class PluginWatcherMixin:
         """解析并冻结本次导入允许读取的插件源码。"""
 
         try:
-            plugin_root = resolve_plugin_root(self.plugins_dir, plugin_dir)
+            plugin_root      = resolve_plugin_root(self.plugins_dir, plugin_dir)
             authorized_entry = resolve_plugin_entry(
                 self.plugins_dir,
                 plugin_dir,
@@ -1252,7 +1252,7 @@ class PluginWatcherMixin:
 
         if not hasattr(module, "init"):
             return None
-        init_func = module.init
+        init_func       = module.init
         accepts_context = callback_accepts_positional_context(init_func)
 
         async def run_init() -> None:
@@ -1294,7 +1294,7 @@ class PluginWatcherMixin:
         plugin_dir: Path,
         definition: PluginDefinition,
         *,
-        transaction: _PluginLoadTransaction | None = None,
+        transaction: _PluginLoadTransaction | None              = None,
         prepared: tuple[Path, Path, Mapping[str, bytes]] | None = None,
     ) -> tuple[ModuleType | None, asyncio.Task[Any] | None]:
         plugin_root, authorized_entry, sources = prepared or self._prepare_module_load(
@@ -1305,8 +1305,8 @@ class PluginWatcherMixin:
 
         # Import only through the repository's canonical namespace.  The
         # manifest validator makes this path-to-module mapping injective.
-        module_name = f"plugins.{plugin_dir.name}"
-        entry_stem = definition.entry.removesuffix(".py").replace("/", ".")
+        module_name      = f"plugins.{plugin_dir.name}"
+        entry_stem       = definition.entry.removesuffix(".py").replace("/", ".")
         full_module_name = f"{module_name}.{entry_stem}"
         self._reject_plugin_module_aliases(plugin_dir, definition, transaction)
 
@@ -1350,22 +1350,22 @@ class PluginWatcherMixin:
         if not hasattr(module, "handle"):
             logger.warning("Plugin %s missing handle()", definition.name)
             return []
-        gate = execution_gate or self._execution_gate_for(definition)
+        gate                     = execution_gate or self._execution_gate_for(definition)
         specs: list[CommandSpec] = []
         for command in definition.commands:
             catalog = build_command_catalog_node(definition.name, command, root=True)
             specs.append(
                 CommandSpec(
-                    plugin=definition.name,
-                    name=command.get("name", ""),
-                    triggers=command.get("triggers", []),
-                    help_text=command.get("help", ""),
-                    admin_only=command.get("admin_only", False),
-                    handler=module.handle,
-                    priority=command.get("priority", 0),
-                    usage=command.get("usage"),
-                    catalog=catalog,
-                    execution_gate=gate,
+                    plugin         = definition.name,
+                    name           = command.get("name", ""),
+                    triggers       = command.get("triggers", []),
+                    help_text      = command.get("help", ""),
+                    admin_only     = command.get("admin_only", False),
+                    handler        = module.handle,
+                    priority       = command.get("priority", 0),
+                    usage          = command.get("usage"),
+                    catalog        = catalog,
+                    execution_gate = gate,
                 )
             )
         return specs
@@ -1397,17 +1397,17 @@ class PluginWatcherMixin:
         digest.update(b"XIAOQING_PLUGIN_SNAPSHOT_V2\0")
         digest.update(len(paths).to_bytes(8, "big"))
         opened_identities: dict[Path, tuple[int, int, int, int]] = {}
-        sources: dict[str, bytes] = {}
-        manifest_payload: bytes | None = None
-        source_total = 0
-        snapshot_total = 0
+        sources: dict[str, bytes]                                = {}
+        manifest_payload: bytes | None                           = None
+        source_total                                             = 0
+        snapshot_total                                           = 0
         for path in paths:
             try:
                 relative = path.relative_to(plugin_root).as_posix()
             except ValueError:
                 relative = path.as_posix()
             relative_bytes = relative.encode("utf-8", errors="surrogatepass")
-            content = bytearray()
+            content    = bytearray()
             file_bytes = 0
             with path.open("rb") as handle:
                 opened = os.fstat(handle.fileno())
@@ -1444,8 +1444,8 @@ class PluginWatcherMixin:
                     if path.suffix == ".py" or relative == "plugin.json":
                         content.extend(chunk)
                 finished = os.fstat(handle.fileno())
-            current = path.stat()
-            opened_identity = self._watch_file_identity(opened)
+            current                 = path.stat()
+            opened_identity         = self._watch_file_identity(opened)
             opened_identities[path] = opened_identity
             if (
                 self._watch_file_identity(finished) != opened_identity
@@ -1479,9 +1479,9 @@ class PluginWatcherMixin:
             raise OSError("plugin manifest changed between authorization and fingerprint")
         return _PluginContentFingerprint(
             int.from_bytes(digest.digest(), "big"),
-            sources=sources,
-            manifest_payload=manifest_payload,
-            file_identities={
+            sources          = sources,
+            manifest_payload = manifest_payload,
+            file_identities  = {
                 path.relative_to(plugin_root).as_posix(): identity
                 for path, identity in opened_identities.items()
             },
@@ -1539,16 +1539,16 @@ class PluginWatcherMixin:
         plugin_root = resolve_plugin_root(self.plugins_dir, plugin_dir)
         identities: dict[str, tuple[int, int, int, int]] = {}
         for path in self._iter_watch_files(plugin_dir, definition):
-            relative = path.relative_to(plugin_root).as_posix()
+            relative             = path.relative_to(plugin_root).as_posix()
             identities[relative] = self._watch_file_identity(path.stat())
         return MappingProxyType(identities)
 
     def _iter_watch_files(self, plugin_dir: Path, definition: PluginDefinition) -> list[Path]:
-        plugin_root = resolve_plugin_root(self.plugins_dir, plugin_dir)
+        plugin_root            = resolve_plugin_root(self.plugins_dir, plugin_dir)
         files: dict[str, Path] = {}
-        explicit_watch_files = set(definition.watch_files)
-        directory_count = 0
-        scanned_entries = 0
+        explicit_watch_files   = set(definition.watch_files)
+        directory_count        = 0
+        scanned_entries        = 0
 
         def validate_relative(relative: str) -> None:
             if len(relative.encode("utf-8", errors="surrogatepass")) > (
@@ -1567,7 +1567,7 @@ class PluginWatcherMixin:
             if directory_count > _MAX_PLUGIN_SOURCE_DIRECTORIES:
                 raise PluginPathError("plugin source tree exceeds the directory budget")
             child_directories: list[Path] = []
-            directory_entries = 0
+            directory_entries             = 0
             with os.scandir(root_path) as entries:
                 for entry in entries:
                     directory_entries += 1
@@ -1576,7 +1576,7 @@ class PluginWatcherMixin:
                         raise PluginPathError("plugin source directory exceeds the entry budget")
                     if scanned_entries > _MAX_PLUGIN_SCANNED_ENTRIES:
                         raise PluginPathError("plugin source tree exceeds the scanned-entry budget")
-                    path = root_path / entry.name
+                    path          = root_path / entry.name
                     reserved_name = entry.name.casefold()
                     if reserved_name == "__pycache__":
                         continue
@@ -1622,14 +1622,14 @@ class PluginWatcherMixin:
 
         # Bind the fingerprint to the manifest-authorized entry explicitly;
         # never rely on a broad walk having happened to include it.
-        entry_path = resolve_plugin_entry(self.plugins_dir, plugin_dir, definition.entry)
+        entry_path    = resolve_plugin_entry(self.plugins_dir, plugin_dir, definition.entry)
         manifest_path = resolve_contained_regular_file(
             plugin_root,
             "plugin.json",
             description="plugin manifest",
         )
         files[entry_path.relative_to(plugin_root).as_posix()] = entry_path
-        files["plugin.json"] = manifest_path
+        files["plugin.json"]                                  = manifest_path
         for relative in explicit_watch_files:
             watched = resolve_contained_regular_file(
                 plugin_root,

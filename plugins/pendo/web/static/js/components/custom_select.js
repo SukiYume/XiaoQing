@@ -6,7 +6,7 @@ const CHEVRON_SVG = `<svg class="pselect-chevron" width="13" height="13" viewBox
     <path d="M3 5l3.5 3.5L10 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`;
 
-const changeCallbacks = new WeakMap();
+const changeCallbacks     = new WeakMap();
 let documentClickAttached = false;
 
 function normalizeOptions(options) {
@@ -33,7 +33,7 @@ function normalizeClassName(className) {
 function closeCustomSelect(selectEl) {
     selectEl.classList.remove('pselect-open');
     const trigger = selectEl.querySelector('.pselect-trigger');
-    const panel = selectEl.querySelector('.pselect-panel');
+    const panel   = selectEl.querySelector('.pselect-panel');
     trigger?.setAttribute('aria-expanded', 'false');
     trigger?.removeAttribute('aria-activedescendant');
     panel?.setAttribute('aria-hidden', 'true');
@@ -75,14 +75,14 @@ export function renderCustomSelect({
     const selectId = String(id ?? '').trim();
     if (!selectId) throw new TypeError('自定义选择框必须提供 id');
 
-    const normalized = normalizeOptions(options);
+    const normalized  = normalizeOptions(options);
     let selectedIndex = normalized.findIndex((option) => String(option.value) === String(selected));
     if (selectedIndex < 0 && normalized.length) selectedIndex = 0;
-    const current = normalized[selectedIndex] ?? { value: '', label: placeholder };
-    const disabled = normalized.length === 0;
+    const current       = normalized[selectedIndex] ?? { value: '', label: placeholder };
+    const disabled      = normalized.length === 0;
     const safeClassName = normalizeClassName(className);
-    const triggerId = `${selectId}-trigger`;
-    const panelId = `${selectId}-panel`;
+    const triggerId     = `${selectId}-trigger`;
+    const panelId       = `${selectId}-panel`;
 
     const optionHtml = normalized
         .map((option, index) => {
@@ -144,9 +144,9 @@ export function initCustomSelects(container, callbacks = {}) {
         if (selectEl.dataset.initialized === 'true') return;
 
         const trigger = selectEl.querySelector('.pselect-trigger');
-        const panel = selectEl.querySelector('.pselect-panel');
-        const label = selectEl.querySelector('.pselect-label');
-        const input = selectEl.querySelector('.pselect-input');
+        const panel   = selectEl.querySelector('.pselect-panel');
+        const label   = selectEl.querySelector('.pselect-label');
+        const input   = selectEl.querySelector('.pselect-input');
         if (!trigger || !panel || !label) return;
 
         const optionNodes = [...panel.querySelectorAll('.pselect-option')];

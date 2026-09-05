@@ -7,7 +7,7 @@ from typing import Final
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT: Final = REPOSITORY_ROOT
+ROOT: Final              = REPOSITORY_ROOT
 PAGINATION_CLIENT: Final = (
     ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "components" / "pagination.js"
 )
@@ -50,8 +50,8 @@ def _run_pagination_client(script: str) -> None:
     assert_node_esm_contract(
         PAGINATION_CLIENT.read_text(encoding="utf-8"),
         script,
-        cwd=ROOT,
-        setup=PAGINATION_SETUP,
+        cwd   = ROOT,
+        setup = PAGINATION_SETUP,
     )
 
 

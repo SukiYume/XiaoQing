@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -49,7 +49,7 @@ ALLOWED_DATE_FIELDS_BY_TYPE: Final[dict[str | None, frozenset[str]]] = {
     None: frozenset(Database.ALLOWED_DATE_FIELDS),
 }
 
-DATE_ONLY_FIELDS: Final = frozenset({"plan_date", "diary_date", "ledger_date"})
+DATE_ONLY_FIELDS: Final    = frozenset({"plan_date", "diary_date", "ledger_date"})
 ALLOWED_SORT_FIELDS: Final = frozenset(Database._ALLOWED_SORT_FIELDS)
 
 
@@ -188,56 +188,56 @@ UPDATE_FIELD_DEPENDENCIES: Final[dict[str, tuple[FieldDependency, ...]]] = {
 class _ItemPayload(BaseModel):  # type: ignore[misc]
     """创建与更新接口共用的可写字段。"""
 
-    title: str | None = None
-    content: str | None = None
+    title: str | None      = None
+    content: str | None    = None
     tags: list[str] | None = None
-    category: str | None = None
+    category: str | None   = None
     # 日程字段
-    start_time: str | None = None
-    end_time: str | None = None
-    location: str | None = None
-    timezone: str | None = None
-    remind_times: list[str] | None = None
+    start_time: str | None                      = None
+    end_time: str | None                        = None
+    location: str | None                        = None
+    timezone: str | None                        = None
+    remind_times: list[str] | None              = None
     reminder_rules: list[dict[str, Any]] | None = None
-    notes: str | None = None
+    notes: str | None                           = None
     # 待办字段
-    plan_date: str | None = None
-    deadline_at: str | None = None
-    priority: int | None = None
-    status: str | None = None
-    repeat_rule: str | None = None
+    plan_date: str | None    = None
+    deadline_at: str | None  = None
+    priority: int | None     = None
+    status: str | None       = None
+    repeat_rule: str | None  = None
     completed_at: str | None = None
     cancelled_at: str | None = None
     # 日记字段
-    diary_date: str | None = None
-    mood: str | None = None
-    mood_score: int | None = None
-    weather: str | None = None
-    template_id: str | None = None
-    entry_time: str | None = None
+    diary_date: str | None                        = None
+    mood: str | None                              = None
+    mood_score: int | None                        = None
+    weather: str | None                           = None
+    template_id: str | None                       = None
+    entry_time: str | None                        = None
     template_answers: list[dict[str, Any]] | None = None
-    is_favorite: bool | None = None
+    is_favorite: bool | None                      = None
     # 账目字段
-    amount: float | None = None
-    amount_cents: int | None = None
-    currency: str | None = None
-    transaction_type: str | None = None
-    ledger_category: str | None = None
-    ledger_date: str | None = None
-    account_name: str | None = None
+    amount: float | None             = None
+    amount_cents: int | None         = None
+    currency: str | None             = None
+    transaction_type: str | None     = None
+    ledger_category: str | None      = None
+    ledger_date: str | None          = None
+    account_name: str | None         = None
     counter_account_name: str | None = None
-    merchant: str | None = None
-    remark: str | None = None
+    merchant: str | None             = None
+    remark: str | None               = None
     # 笔记字段
     references: list[dict[str, Any]] | None = None
-    related_items: list[str] | None = None
+    related_items: list[str] | None         = None
 
 
 class ItemCreate(_ItemPayload):
     """创建一个受支持类型条目的请求体。"""
 
     type: str
-    title: str | None = ""
+    title: str | None   = ""
     content: str | None = ""
     tags: list[str] = Field(default_factory=list)
 
@@ -277,12 +277,12 @@ def _resolve_note_reference_payload(
     ids = _collect_note_reference_ids(payload)
 
     if not ids:
-        payload["references"] = []
+        payload["references"]    = []
         payload["related_items"] = []
         return payload
 
     canonical_ids: list[str] = []
-    missing_ids: list[str] = []
+    missing_ids: list[str]   = []
     seen_canonical: set[str] = set()
     for ref_id in ids:
         resolved_id = db.resolve_item_id(owner_id, ref_id)
@@ -293,8 +293,8 @@ def _resolve_note_reference_payload(
             canonical_ids.append(resolved_id)
     if missing_ids:
         raise HTTPException(
-            status_code=422,
-            detail=f"Referenced item not found: {missing_ids[0]}",
+            status_code = 422,
+            detail      = f"Referenced item not found: {missing_ids[0]}",
         )
     targets = db.get_items_by_ids(owner_id, canonical_ids)
 
@@ -311,7 +311,7 @@ def _resolve_note_reference_payload(
             }
         )
 
-    payload["references"] = references
+    payload["references"]    = references
     payload["related_items"] = canonical_ids
     return payload
 
@@ -326,7 +326,7 @@ def _resolve_date_field(item_type: str | None, date_field: str | None) -> str:
     allowed_fields = ALLOWED_DATE_FIELDS_BY_TYPE[item_type]
     if date_field not in allowed_fields:
         allowed_display = ", ".join(sorted(allowed_fields))
-        type_label = item_type or "all"
+        type_label      = item_type or "all"
         raise HTTPException(
             status_code=422,
             detail=f"Invalid date_field '{date_field}' for type '{type_label}'. Allowed values: {allowed_display}",
@@ -367,13 +367,13 @@ def _merge_date_range_inputs(
     """合并两种日期区间输入形式，并拒绝残缺或冲突的参数。"""
 
     start_text = str(start_date or "").strip()
-    end_text = str(end_date or "").strip()
+    end_text   = str(end_date or "").strip()
     range_text = str(date_range or "").strip()
     if range_text:
         if start_text or end_text:
             raise HTTPException(
-                status_code=422,
-                detail="range cannot be combined with start_date or end_date",
+                status_code = 422,
+                detail      = "range cannot be combined with start_date or end_date",
             )
         parts = [part.strip() for part in range_text.split("..")]
         if len(parts) != 2 or not all(parts):
@@ -381,8 +381,8 @@ def _merge_date_range_inputs(
         start_text, end_text = parts
     if bool(start_text) != bool(end_text):
         raise HTTPException(
-            status_code=422,
-            detail="start_date and end_date must be provided together",
+            status_code = 422,
+            detail      = "start_date and end_date must be provided together",
         )
     return start_text, end_text
 
@@ -392,7 +392,7 @@ def _validate_iso_date_order(start_text: str, end_text: str) -> None:
 
     try:
         parsed_start = datetime.fromisoformat(start_text.replace("Z", "+00:00"))
-        parsed_end = datetime.fromisoformat(end_text.replace("Z", "+00:00"))
+        parsed_end   = datetime.fromisoformat(end_text.replace("Z", "+00:00"))
         if parsed_start > parsed_end:
             raise HTTPException(status_code=422, detail="start_date cannot exceed end_date")
     except HTTPException:
@@ -437,13 +437,13 @@ def _shift_event_end_time_if_start_moved(
     if "start_time" not in updates or "end_time" in updates:
         return
     old_start = current.get("start_time")
-    old_end = current.get("end_time")
+    old_end   = current.get("end_time")
     new_start = updates.get("start_time")
     if not old_start or not old_end or not new_start:
         return
     try:
         old_start_dt = datetime.fromisoformat(str(old_start))
-        old_end_dt = datetime.fromisoformat(str(old_end))
+        old_end_dt   = datetime.fromisoformat(str(old_end))
         new_start_dt = datetime.fromisoformat(str(new_start))
     except (TypeError, ValueError):
         return
@@ -461,7 +461,7 @@ def _prepare_event_update(
     _shift_event_end_time_if_start_moved(current, updates)
     if "reminder_rules" in updates and not updates.get("reminder_rules"):
         updates["reminder_rules"] = []
-        updates["remind_times"] = []
+        updates["remind_times"]   = []
     elif "start_time" in updates and "reminder_rules" not in updates:
         old_rules = current.get("reminder_rules") or derive_reminder_rules(
             current.get("start_time"),
@@ -501,9 +501,9 @@ def _resolve_note_reference_update(
     if set(_collect_note_reference_ids(reference_payload)) == set(
         _collect_note_reference_ids(current)
     ):
-        references = current.get("references")
-        reference_payload["references"] = references if isinstance(references, list) else []
-        related_items = current.get("related_items")
+        references                         = current.get("references")
+        reference_payload["references"]    = references if isinstance(references, list) else []
+        related_items                      = current.get("related_items")
         reference_payload["related_items"] = (
             related_items
             if isinstance(related_items, list)
@@ -511,7 +511,7 @@ def _resolve_note_reference_update(
         )
     else:
         reference_payload = _resolve_note_reference_payload(db, owner_id, reference_payload)
-    normalized["references"] = reference_payload["references"]
+    normalized["references"]    = reference_payload["references"]
     normalized["related_items"] = reference_payload["related_items"]
 
 
@@ -526,12 +526,15 @@ def _normalize_update_payload(
     """合并当前条目，执行统一规范化，并只返回请求字段及必要联动字段。"""
 
     updates = dict(requested_updates)
-    merged = dict(current)
+    merged  = dict(current)
     if item_type == "event":
         _prepare_event_update(merged, updates)
     if item_type == "ledger" and "amount" in requested_fields:
         if "amount_cents" not in requested_fields:
             merged.pop("amount_cents", None)
+    # 显式绝对提醒优先于存量相对规则，空列表同时清除旧规则。
+    if "remind_times" in requested_fields and "reminder_rules" not in requested_fields:
+        merged["reminder_rules"] = []
     merged.update(updates)
     normalized = normalize_item_fields(merged, partial=False)
     if item_type == "note":
@@ -575,19 +578,20 @@ def _build_update_operation_log(
 
 @router.get("/items/aggregate")
 def aggregate_items(
-    type: str | None = None,
-    transaction_type: str | None = None,
-    account_name: str | None = None,
+    type: str | None                 = None,
+    transaction_type: str | None     = None,
+    account_name: str | None         = None,
     counter_account_name: str | None = None,
-    merchant: str | None = None,
-    category: str | None = None,
-    date_field: str | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    amount_min: float | None = None,
-    amount_max: float | None = None,
-    owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    merchant: str | None             = None,
+    category: str | None             = None,
+    date_field: str | None           = None,
+    start_date: str | None           = None,
+    end_date: str | None             = None,
+    amount_min: float | None         = None,
+    amount_max: float | None         = None,
+    owner_id: str                    = Depends(get_current_user),
+    db: Database                     = Depends(get_db),
+    currency: str                    = "CNY",
 ) -> dict[str, object]:
     """按完整过滤结果汇总账目收入、支出、转账和条目数。"""
 
@@ -617,9 +621,12 @@ def aggregate_items(
         filters["ledger_category"] = category.strip()
     filters.update(_resolve_date_filters(item_type, date_field, start_date, end_date))
 
-    summary = db.aggregate_item_amounts(owner_id, filters)
+    currency = currency.strip().upper() or "CNY"
+    if len(currency) != 3 or not currency.isascii() or not currency.isalpha():
+        raise HTTPException(status_code=422, detail="currency 必须为三个字母的币种代码")
+    summary = db.aggregate_item_amounts(owner_id, filters, currency=currency)
     amounts: dict[str, int] = dict.fromkeys(LEDGER_TRANSACTION_TYPES, 0)
-    count = 0
+    count                   = 0
     for kind, (amount_cents, item_count) in summary.items():
         if kind in amounts:
             amounts[kind] = amount_cents
@@ -627,6 +634,8 @@ def aggregate_items(
     return {
         "ok": True,
         "data": {
+            "currency": currency,
+            "by_currency": db.aggregate_ledger_by_currency(owner_id, filters),
             "income": amounts["income"] / 100,
             "expense": amounts["expense"] / 100,
             "transfer": amounts["transfer"] / 100,
@@ -640,15 +649,15 @@ def aggregate_items(
 @router.get("/items/categories")
 def list_categories(
     type: str | None = None,
-    owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    owner_id: str    = Depends(get_current_user),
+    db: Database     = Depends(get_db),
 ) -> dict[str, object]:
     """返回当前所有者指定类型的非空去重分类。"""
 
-    item_type = normalize_item_type_query(type)
-    conn = db.get_connection()
+    item_type      = normalize_item_type_query(type)
+    conn           = db.get_connection()
     category_field = _resolve_category_field(item_type)
-    where = [
+    where          = [
         "owner_id = ?",
         "deleted = 0",
         f"{category_field} IS NOT NULL",
@@ -670,7 +679,7 @@ def list_categories(
 @router.get("/items/ledger/accounts")
 def list_ledger_accounts(
     owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    db: Database  = Depends(get_db),
 ) -> dict[str, object]:
     """返回账目两侧出现过的账户名；空数据提供现金默认项。"""
 
@@ -696,33 +705,38 @@ def list_ledger_accounts(
 
 @router.get("/items")
 def list_items(
-    type: str | None = None,
-    status: str | None = None,
-    category: str | None = None,
-    tags: str | None = None,
-    keyword: str | None = None,
-    priority: int | None = None,
-    transaction_type: str | None = None,
-    account_name: str | None = None,
+    type: str | None                 = None,
+    status: str | None               = None,
+    category: str | None             = None,
+    tags: str | None                 = None,
+    keyword: str | None              = None,
+    priority: int | None             = None,
+    transaction_type: str | None     = None,
+    account_name: str | None         = None,
     counter_account_name: str | None = None,
-    merchant: str | None = None,
-    date_field: str | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    amount_min: float | None = None,
-    amount_max: float | None = None,
+    merchant: str | None             = None,
+    date_field: str | None           = None,
+    start_date: str | None           = None,
+    end_date: str | None             = None,
+    amount_min: float | None         = None,
+    amount_max: float | None         = None,
     date_range: Annotated[str | None, Query(alias="range")] = None,
-    sort: str = "created_at",
+    sort: str  = "created_at",
     order: str = "desc",
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
-    owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    owner_id: str        = Depends(get_current_user),
+    db: Database         = Depends(get_db),
+    currency: str | None = None,
 ) -> dict[str, object]:
     """按同一过滤契约返回当前页条目和完整匹配总数。"""
 
     item_type = normalize_item_type_query(type)
-    status = normalize_choice_query(status, TASK_STATUSES, "status")
+    if currency is not None:
+        currency = currency.strip().upper() or None
+    if currency and (len(currency) != 3 or not currency.isascii() or not currency.isalpha()):
+        raise HTTPException(status_code=422, detail="currency 必须为三个字母的币种代码")
+    status           = normalize_choice_query(status, TASK_STATUSES, "status")
     transaction_type = normalize_choice_query(
         transaction_type,
         LEDGER_TRANSACTION_TYPES,
@@ -732,8 +746,8 @@ def list_items(
         raise HTTPException(status_code=422, detail="priority must be between 1 and 5")
     item_type = infer_item_query_type(
         item_type,
-        has_task_filters=status is not None or priority is not None,
-        has_ledger_filters=any(
+        has_task_filters   = status is not None or priority is not None,
+        has_ledger_filters = any(
             value is not None
             for value in (
                 transaction_type,
@@ -742,6 +756,7 @@ def list_items(
                 merchant,
                 amount_min,
                 amount_max,
+                currency,
             )
         ),
     )
@@ -761,6 +776,7 @@ def list_items(
             ("status", status),
             ("tags", str(tags or "").strip() or None),
             ("keyword", str(keyword or "").strip() or None),
+            ("currency", currency),
             ("priority", priority),
             ("transaction_type", transaction_type),
             ("account_name", str(account_name or "").strip() or None),
@@ -778,12 +794,12 @@ def list_items(
     filters["sort_order"] = normalized_order
 
     offset = (page - 1) * page_size
-    items = db.get_items(
+    items  = db.get_items(
         owner_id,
-        filters=filters,
-        limit=page_size,
-        offset=offset,
-        use_cache=True,
+        filters   = filters,
+        limit     = page_size,
+        offset    = offset,
+        use_cache = True,
     )
     total = db.count_items(owner_id, filters)
 
@@ -801,7 +817,7 @@ def list_items(
 def get_item(
     item_id: str,
     owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    db: Database  = Depends(get_db),
 ) -> dict[str, object]:
     """按所有者和 ID 返回一个未删除条目。"""
 
@@ -815,7 +831,7 @@ def get_item(
 def create_item(
     body: ItemCreate,
     owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    db: Database  = Depends(get_db),
 ) -> dict[str, object]:
     """统一规范化请求，并原子写入条目及创建审计。"""
 
@@ -825,7 +841,7 @@ def create_item(
 
     local_now = now_in_timezone(owner_id, db)
     local_now_iso = local_now.replace(tzinfo=None).isoformat()
-    storage_now = local_now.astimezone(timezone.utc).isoformat(timespec="seconds")
+    storage_now = local_now.astimezone(UTC).isoformat(timespec="seconds")
     item_data = body.model_dump(exclude_none=True)
     item_data.update(
         {
@@ -838,6 +854,8 @@ def create_item(
         }
     )
 
+    if item_type == "event" and not item_data.get("timezone"):
+        item_data["timezone"] = str(TimezoneHelper.get_user_timezone(owner_id, db))
     category = str(item_data.get("category") or "").strip()
     if item_type in {"event", "note"} and (not category or category == "未分类"):
         item_data["category"] = resolve_default_category(db, owner_id)
@@ -858,9 +876,9 @@ def create_item(
     if item_type == "note" and _collect_note_reference_ids(item_data):
         item_data = _resolve_note_reference_payload(db, owner_id, item_data)
     if item_type == "diary" and not str(item_data.get("title") or "").strip():
-        entry_time = str(item_data["entry_time"])
-        user_timezone = TimezoneHelper.get_user_timezone(owner_id, db)
-        entry_label = TimezoneHelper.parse(entry_time, user_timezone).strftime("%H:%M")
+        entry_time         = str(item_data["entry_time"])
+        user_timezone      = TimezoneHelper.get_user_timezone(owner_id, db)
+        entry_label        = TimezoneHelper.parse(entry_time, user_timezone).strftime("%H:%M")
         item_data["title"] = f"{item_data['diary_date']} {entry_label} 日记".strip()
 
     item_id = db.insert_item(
@@ -884,7 +902,7 @@ def update_item(
     item_id: str,
     body: ItemUpdate,
     owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    db: Database  = Depends(get_db),
 ) -> dict[str, object]:
     """规范化有效变更，并以乐观版本号原子更新条目和审计。"""
 
@@ -910,12 +928,21 @@ def update_item(
             status_code=422,
             detail=f"Fields are not valid for {item_type}: {', '.join(sorted(invalid_fields))}",
         )
-    current = {str(key): value for key, value in item.to_dict().items()}
+    # 完整表单必须携带读取时版本，防止旧窗口写回已经更新的正文。
+    form_fields = {
+        "note": {"title", "content"},
+        "diary": {"diary_date", "content"},
+        "event": {"title", "start_time"},
+        "ledger": {"title", "amount"},
+    }.get(item_type, set())
+    if form_fields and form_fields <= requested_fields and body.version is None:
+        raise HTTPException(status_code=422, detail="Full item edits require version")
+    current         = {str(key): value for key, value in item.to_dict().items()}
     current_version = int(current.get("version") or 0)
     if body.version is not None and body.version != current_version:
         raise HTTPException(
-            status_code=409,
-            detail="Item changed by another request; refresh and retry",
+            status_code = 409,
+            detail      = "Item changed by another request; refresh and retry",
         )
     try:
         normalized_updates = _normalize_update_payload(
@@ -947,10 +974,10 @@ def update_item(
     success = db.update_item(
         item_id,
         updates,
-        owner_id=owner_id,
-        expected_version=current_version,
-        item_type=item_type,
-        operation_log=operation_log,
+        owner_id         = owner_id,
+        expected_version = current_version,
+        item_type        = item_type,
+        operation_log    = operation_log,
     )
     if not success:
         raise HTTPException(
@@ -972,7 +999,7 @@ def update_item(
 def delete_item(
     item_id: str,
     owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    db: Database  = Depends(get_db),
 ) -> dict[str, object]:
     """原子软删除条目；日程使用图感知删除，避免遗留空集合头。"""
 
@@ -986,9 +1013,9 @@ def delete_item(
     else:
         success = db.delete_item(
             item_id,
-            soft=True,
-            owner_id=owner_id,
-            operation_log={
+            soft          = True,
+            owner_id      = owner_id,
+            operation_log = {
                 "user_id": owner_id,
                 "action": "delete",
                 "item_type": item_type,
@@ -996,8 +1023,8 @@ def delete_item(
         )
     if not success:
         raise HTTPException(
-            status_code=409,
-            detail="Item changed by another request; refresh and retry",
+            status_code = 409,
+            detail      = "Item changed by another request; refresh and retry",
         )
 
     return {

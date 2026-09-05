@@ -17,7 +17,7 @@ def resolve_bot_name(value: object) -> str:
 def compose_persona_identity(identity: object, bot_name: object) -> str:
     """组合只含一个姓名声明的完整人格描述。"""
 
-    name = resolve_bot_name(bot_name)
+    name    = resolve_bot_name(bot_name)
     details = str(identity or "").strip()
     return f"你的名字是{name}" + (f"，{details}" if details else "")
 

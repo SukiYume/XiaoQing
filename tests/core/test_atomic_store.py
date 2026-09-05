@@ -85,9 +85,9 @@ def test_atomic_write_retries_transient_permission_errors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    path = tmp_path / "state.bin"
+    path         = tmp_path / "state.bin"
     real_replace = atomic_store.os.replace
-    attempts = 0
+    attempts     = 0
 
     def flaky_replace(source, destination):
         nonlocal attempts

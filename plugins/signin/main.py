@@ -12,9 +12,9 @@ from .types import Context, MessageSegments, OneBotEvent, segments
 
 logger = logging.getLogger(__name__)
 
-_HELP_ALIASES = {"help", "帮助", "?"}
+_HELP_ALIASES    = {"help", "帮助", "?"}
 _YINGSHI_ALIASES = {"yingshi", "yingshijufeng", "y"}
-_HELP_TEXT = (
+_HELP_TEXT       = (
     "📝 影视飓风远端签到\n"
     "• /signin yingshi\n"
     "  立即签到（简写：/signin y）\n"
@@ -47,9 +47,9 @@ async def handle(
             return await yingshi.yingshi_sign(context)
         visible_target = bounded_external_text(
             target,
-            max_chars=32,
-            max_bytes=128,
-            default="未知",
+            max_chars = 32,
+            max_bytes = 128,
+            default   = "未知",
         )
         return segments(f"❓ 未知平台: {visible_target}\n\n{_HELP_TEXT}")
     except Exception as exc:
@@ -58,8 +58,8 @@ async def handle(
             public_error_response(
                 context,
                 exc,
-                logger=logger,
-                component="signin.handle",
+                logger    = logger,
+                component = "signin.handle",
             ),
         )
 

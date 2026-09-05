@@ -14,7 +14,7 @@ from plugins.voice import main as voice
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.settings_snapshot import with_settings_reader
 
-ROOT = REPOSITORY_ROOT
+ROOT         = REPOSITORY_ROOT
 VALID_CONFIG = {
     "subscription_key": "test-key",
     "region": "southeastasia",
@@ -30,24 +30,24 @@ def _context(tmp_path: Path, config: object = VALID_CONFIG) -> SimpleNamespace:
 
     return with_settings_reader(
         SimpleNamespace(
-            data_dir=tmp_path / "voice-data",
-            http_session=object(),
-            logger=MagicMock(),
-            secrets={"plugins": {"voice": config}},
+            data_dir     = tmp_path / "voice-data",
+            http_session = object(),
+            logger       = MagicMock(),
+            secrets      = {"plugins": {"voice": config}},
         )
     )
 
 
 def _response(body: bytes, media_type: str) -> BoundedHttpResponse:
     return BoundedHttpResponse(
-        url="https://voice.test/",
-        status=200,
-        body=body,
-        media_type=media_type,
-        charset="utf-8" if media_type == "application/json" else None,
-        headers={"Content-Type": media_type},
-        wire_bytes=len(body),
-        decoded_bytes=len(body),
+        url           = "https://voice.test/",
+        status        = 200,
+        body          = body,
+        media_type    = media_type,
+        charset       = "utf-8" if media_type == "application/json" else None,
+        headers       = {"Content-Type": media_type},
+        wire_bytes    = len(body),
+        decoded_bytes = len(body),
     )
 
 
@@ -137,7 +137,7 @@ def test_settings_use_safe_defaults_and_validate_proxy(tmp_path: Path) -> None:
     ],
 )
 def test_settings_ignore_invalid_proxy(tmp_path: Path, proxy: object) -> None:
-    config = {**VALID_CONFIG, "proxy": proxy}
+    config   = {**VALID_CONFIG, "proxy": proxy}
     settings = voice._get_settings(_context(tmp_path, config))
     assert settings is not None
     assert settings.proxy is None
@@ -153,9 +153,9 @@ def test_mp3_header_detection(payload: bytes, expected: bool) -> None:
 
 @pytest.mark.asyncio
 async def test_tts_builds_escaped_bounded_request(monkeypatch, tmp_path: Path) -> None:
-    config = {**VALID_CONFIG, "proxy": "http://127.0.0.1:7890"}
+    config  = {**VALID_CONFIG, "proxy": "http://127.0.0.1:7890"}
     context = _context(tmp_path, config)
-    calls = _install_response(monkeypatch, _response(b"ID3audio", "audio/mpeg"))
+    calls   = _install_response(monkeypatch, _response(b"ID3audio", "audio/mpeg"))
 
     output = await voice.text_to_speech("  <你好&  ", context)
 
@@ -180,12 +180,12 @@ async def test_tts_cache_reuses_valid_audio_and_separates_voice_settings(
     tmp_path: Path,
 ) -> None:
     context = _context(tmp_path, dict(VALID_CONFIG))
-    calls = _install_response(monkeypatch, _response(b"ID3cached", "audio/mpeg"))
+    calls   = _install_response(monkeypatch, _response(b"ID3cached", "audio/mpeg"))
 
-    first = await voice.text_to_speech("同一句话", context)
-    second = await voice.text_to_speech("同一句话", context)
+    first                                        = await voice.text_to_speech("同一句话", context)
+    second                                       = await voice.text_to_speech("同一句话", context)
     context.secrets["plugins"]["voice"]["style"] = "sad"
-    third = await voice.text_to_speech("同一句话", context)
+    third                                        = await voice.text_to_speech("同一句话", context)
 
     assert first == second
     assert first != third
@@ -195,7 +195,7 @@ async def test_tts_cache_reuses_valid_audio_and_separates_voice_settings(
 @pytest.mark.asyncio
 async def test_tts_replaces_corrupt_legacy_cache(monkeypatch, tmp_path: Path) -> None:
     context = _context(tmp_path)
-    calls = _install_response(monkeypatch, _response(b"ID3fresh", "audio/mpeg"))
+    calls   = _install_response(monkeypatch, _response(b"ID3fresh", "audio/mpeg"))
 
     first = await voice.text_to_speech("修复缓存", context)
     assert first is not None
@@ -208,17 +208,17 @@ async def test_tts_replaces_corrupt_legacy_cache(monkeypatch, tmp_path: Path) ->
 
 
 def test_cached_audio_handles_read_and_cleanup_failures(caplog) -> None:
-    cache = MagicMock()
-    unreadable = MagicMock()
+    cache                       = MagicMock()
+    unreadable                  = MagicMock()
     unreadable.stat.side_effect = OSError("unreadable")
-    cache.get_any.return_value = unreadable
+    cache.get_any.return_value  = unreadable
     assert voice._get_cached_audio(cache, "entry.mp3") is None
 
-    corrupt = MagicMock()
-    corrupt.stat.return_value.st_size = 3
+    corrupt                                                                = MagicMock()
+    corrupt.stat.return_value.st_size                                      = 3
     corrupt.open.return_value.__enter__.return_value.readinto.return_value = 0
-    corrupt.unlink.side_effect = OSError("locked")
-    cache.get_any.return_value = corrupt
+    corrupt.unlink.side_effect                                             = OSError("locked")
+    cache.get_any.return_value                                             = corrupt
     assert voice._get_cached_audio(cache, "entry.mp3") is None
     assert "无法移除" in caplog.text
 
@@ -294,8 +294,8 @@ async def test_handle_covers_help_empty_unknown_success_and_failure(
     monkeypatch, tmp_path: Path
 ) -> None:
     context = _context(tmp_path)
-    event = {"user_id": 1}
-    audio = tmp_path / "answer.mp3"
+    event   = {"user_id": 1}
+    audio   = tmp_path / "answer.mp3"
     audio.write_bytes(b"ID3audio")
 
     assert "文字转语音" in str(await voice.handle("tts", "帮助", event, context))
@@ -355,7 +355,7 @@ async def test_handle_returns_public_error_on_unexpected_failure(
 @pytest.mark.asyncio
 async def test_service_callback_builds_record_or_returns_none(monkeypatch, tmp_path: Path) -> None:
     context = _context(tmp_path)
-    audio = tmp_path / "service.mp3"
+    audio   = tmp_path / "service.mp3"
     audio.write_bytes(b"ID3audio")
     synthesize = AsyncMock(return_value=str(audio))
     monkeypatch.setattr(voice, "text_to_speech", synthesize)

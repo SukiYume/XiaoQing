@@ -41,10 +41,10 @@ def test_stats_http_preserves_range_alias_and_declared_query_bounds(db: Database
     """真实 HTTP 层继续接收 ``range``，并在进入路由前拦截数值越界。"""
 
     owner_id = "u-stats-http"
-    app = FastAPI()
+    app      = FastAPI()
     app.include_router(stats_api.router)
     app.dependency_overrides[stats_api.get_current_user] = lambda: owner_id
-    app.dependency_overrides[stats_api.get_db] = lambda: db
+    app.dependency_overrides[stats_api.get_db]           = lambda: db
 
     with TestClient(app) as client:
         response = client.get(
@@ -76,16 +76,16 @@ def test_ledger_insights_normalizes_filters_and_validates_bounds(
 
     monkeypatch.setattr(stats_api, "build_ledger_insights", fake_build_ledger_insights)
     result = stats_api.ledger_visual_insights(
-        transaction_type="expense",
-        category=" 餐饮 ",
-        account_name=" 现金 ",
-        start_date="2026-03-01",
-        end_date="2026-03-31",
-        amount_min=10,
-        amount_max=20,
-        compare_mode="previous_year_to_date",
-        owner_id="u-insights",
-        db=db,
+        transaction_type = "expense",
+        category         = " 餐饮 ",
+        account_name     = " 现金 ",
+        start_date       = "2026-03-01",
+        end_date         = "2026-03-31",
+        amount_min       = 10,
+        amount_max       = 20,
+        compare_mode     = "previous_year_to_date",
+        owner_id         = "u-insights",
+        db               = db,
     )
 
     assert result["data"] == {"marker": "ok"}
@@ -96,27 +96,27 @@ def test_ledger_insights_normalizes_filters_and_validates_bounds(
     _assert_http_error(
         422,
         lambda: stats_api.ledger_visual_insights(
-            start_date="2026-03-01",
-            owner_id="u-insights",
-            db=db,
+            start_date = "2026-03-01",
+            owner_id   = "u-insights",
+            db         = db,
         ),
     )
     _assert_http_error(
         422,
         lambda: stats_api.ledger_visual_insights(
-            start_date="2026-03-31",
-            end_date="2026-03-01",
-            owner_id="u-insights",
-            db=db,
+            start_date = "2026-03-31",
+            end_date   = "2026-03-01",
+            owner_id   = "u-insights",
+            db         = db,
         ),
     )
     _assert_http_error(
         422,
         lambda: stats_api.ledger_visual_insights(
-            amount_min=20,
-            amount_max=10,
-            owner_id="u-insights",
-            db=db,
+            amount_min = 20,
+            amount_max = 10,
+            owner_id   = "u-insights",
+            db         = db,
         ),
     )
 
@@ -136,9 +136,9 @@ def test_task_overview_translates_builder_validation_error(db: Database) -> None
     error = _assert_http_error(
         400,
         lambda: stats_api.task_overview(
-            today="not-a-date",
-            owner_id="u-task-invalid",
-            db=db,
+            today    = "not-a-date",
+            owner_id = "u-task-invalid",
+            db       = db,
         ),
     )
     assert "valid ISO date" in error.detail
@@ -167,9 +167,9 @@ def test_ledger_stats_returns_expense_amount_histogram(db: Database) -> None:
         )
 
     result = stats_api.ledger_stats(
-        range_str="2026-03-01..2026-03-31",
-        owner_id=owner_id,
-        db=db,
+        range_str = "2026-03-01..2026-03-31",
+        owner_id  = owner_id,
+        db        = db,
     )
     histogram = {
         item["bucket"]: item["count"] for item in result["data"]["expense_amount_histogram"]
@@ -250,9 +250,9 @@ def test_ledger_stats_respects_range_for_totals_categories_and_trend_data(
     db.get_connection().commit()
 
     data = stats_api.ledger_stats(
-        range_str="2026-03-01..2026-03-31",
-        owner_id=owner_id,
-        db=db,
+        range_str = "2026-03-01..2026-03-31",
+        owner_id  = owner_id,
+        db        = db,
     )["data"]
 
     assert data["monthly"] == [{"month": "2026-03", "income": 300, "expense": 18}]
@@ -276,7 +276,7 @@ def test_ledger_stats_all_range_stops_at_today_and_excludes_future_entries(
     """“全部”范围以今天为上界，不能把未来流水算作已发生。"""
 
     owner_id = "u-ledger-all"
-    now = datetime.now()
+    now      = datetime.now()
     included_date = (now - timedelta(days=2)).strftime("%Y-%m-%d")
     future_date = (now + timedelta(days=30)).strftime("%Y-%m-%d")
 
@@ -324,9 +324,9 @@ def test_event_stats_filters_range_and_builds_weekday_slot_matrix(db: Database) 
         )
 
     data = stats_api.event_stats(
-        range_str="2026-03-31..2026-03-31",
-        owner_id=owner_id,
-        db=db,
+        range_str = "2026-03-31..2026-03-31",
+        owner_id  = owner_id,
+        db        = db,
     )["data"]
     by_category = {item["category"]: item["count"] for item in data["by_category"]}
 
@@ -365,14 +365,14 @@ def test_timestamp_stats_group_aware_values_in_user_timezone(db: Database) -> No
         db.insert_item({"owner_id": owner_id, **payload})
 
     event_data = stats_api.event_stats(
-        range_str="2026-03-31..2026-03-31",
-        owner_id=owner_id,
-        db=db,
+        range_str = "2026-03-31..2026-03-31",
+        owner_id  = owner_id,
+        db        = db,
     )["data"]
     task_data = stats_api.task_stats(
-        range_str="2026-03-31..2026-03-31",
-        owner_id=owner_id,
-        db=db,
+        range_str = "2026-03-31..2026-03-31",
+        owner_id  = owner_id,
+        db        = db,
     )["data"]
     heatmap = stats_api.activity_heatmap(year=2026, owner_id=owner_id, db=db)["data"]
     march_30 = next(row for row in heatmap["days"] if row["date"] == "2026-03-30")
@@ -420,9 +420,9 @@ def test_event_stats_counts_graph_leaves_and_uses_trimmed_collection_category(
         )
 
     data = stats_api.event_stats(
-        range_str="2026-03-01..2026-03-31",
-        owner_id=owner_id,
-        db=db,
+        range_str = "2026-03-01..2026-03-31",
+        owner_id  = owner_id,
+        db        = db,
     )["data"]
 
     assert sum(item["count"] for item in data["weekly"]) == 2
@@ -487,9 +487,9 @@ def test_task_stats_separates_created_done_and_cancelled_weeks(db: Database) -> 
         db.insert_item(item)
 
     data = stats_api.task_stats(
-        range_str="2026-03-01..2026-03-31",
-        owner_id=owner_id,
-        db=db,
+        range_str = "2026-03-01..2026-03-31",
+        owner_id  = owner_id,
+        db        = db,
     )["data"]
     weekly = {item["week"]: item for item in data["weekly"]}
 
@@ -539,12 +539,12 @@ def test_diary_overview_accepts_explicit_range_and_auto_cadence(db: Database) ->
         )
 
     data = stats_api.diary_overview(
-        start_date="2026-01-01",
-        end_date="2026-02-15",
-        cadence_granularity="auto",
-        today="2026-02-15",
-        owner_id=owner_id,
-        db=db,
+        start_date          = "2026-01-01",
+        end_date            = "2026-02-15",
+        cadence_granularity = "auto",
+        today               = "2026-02-15",
+        owner_id            = owner_id,
+        db                  = db,
     )["data"]
 
     assert data["summary"]["entry_count"] == 3
@@ -561,10 +561,10 @@ def test_diary_overview_translates_builder_validation_error(db: Database) -> Non
     error = _assert_http_error(
         400,
         lambda: stats_api.diary_overview(
-            start_date="2026-03-31",
-            end_date="2026-03-01",
-            owner_id="u-diary-invalid",
-            db=db,
+            start_date = "2026-03-31",
+            end_date   = "2026-03-01",
+            owner_id   = "u-diary-invalid",
+            db         = db,
         ),
     )
     assert error.detail
@@ -594,13 +594,13 @@ def test_notes_overview_accepts_explicit_range_and_trims_filters(db: Database) -
         )
 
     data = stats_api.notes_overview(
-        start_date="2026-03-01",
-        end_date="2026-03-31",
-        today="2026-03-31",
-        category="   ",
-        tags="   ",
-        owner_id=owner_id,
-        db=db,
+        start_date = "2026-03-01",
+        end_date   = "2026-03-31",
+        today      = "2026-03-31",
+        category   = "   ",
+        tags       = "   ",
+        owner_id   = owner_id,
+        db         = db,
     )["data"]
 
     assert data["summary"]["total_count"] == 2
@@ -616,9 +616,9 @@ def test_notes_overview_translates_builder_validation_error(db: Database) -> Non
     error = _assert_http_error(
         400,
         lambda: stats_api.notes_overview(
-            start_date="2026-03-01",
-            owner_id="u-note-invalid",
-            db=db,
+            start_date = "2026-03-01",
+            owner_id   = "u-note-invalid",
+            db         = db,
         ),
     )
     assert "provided together" in error.detail
@@ -645,11 +645,11 @@ def test_ledger_stats_explicit_bounds_override_range_preset(db: Database) -> Non
         )
 
     data = stats_api.ledger_stats(
-        range_str="all",
-        start_date="2026-03-01",
-        end_date="2026-03-31",
-        owner_id=owner_id,
-        db=db,
+        range_str  = "all",
+        start_date = "2026-03-01",
+        end_date   = "2026-03-31",
+        owner_id   = owner_id,
+        db         = db,
     )["data"]
 
     assert data["expense_by_category"] == [{"category": "测试", "total": 66}]
@@ -679,11 +679,11 @@ def test_notes_overview_uses_yearly_cadence_for_cross_year_ranges(db: Database) 
         )
 
     data = stats_api.notes_overview(
-        start_date="2024-01-01",
-        end_date="2026-12-31",
-        today="2026-12-31",
-        owner_id=owner_id,
-        db=db,
+        start_date = "2024-01-01",
+        end_date   = "2026-12-31",
+        today      = "2026-12-31",
+        owner_id   = owner_id,
+        db         = db,
     )["data"]
 
     assert data["cadence_granularity"] == "year"

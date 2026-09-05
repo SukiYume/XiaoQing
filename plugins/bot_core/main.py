@@ -29,21 +29,21 @@ logger = logging.getLogger(__name__)
 # 常量配置
 # ============================================================
 
-DEFAULT_MUTE_MINUTES = 10  # 默认静音时长（分钟）
-MAX_MUTE_MINUTES = 1440  # 最长静音时长（分钟，24小时）
-SECRET_MASK_CHAR = "*"  # 密钥遮罩字符
-METRICS_SEPARATOR = "─" * 20  # 指标显示分隔线
+DEFAULT_MUTE_MINUTES      = 10  # 默认静音时长（分钟）
+MAX_MUTE_MINUTES          = 1440  # 最长静音时长（分钟，24小时）
+SECRET_MASK_CHAR          = "*"  # 密钥遮罩字符
+METRICS_SEPARATOR         = "─" * 20  # 指标显示分隔线
 MAX_DISPLAYED_SECRET_KEYS = 20
 # JSON 导出沿用原分页大小；面向手机的文本目录单独使用更小页面。
-HELP_PAGE_SIZE = 12
-HELP_TEXT_PAGE_SIZE = 8
-HELP_PLUGIN_PAGE_SIZE = 6
-MAX_HELP_QUERY_LENGTH = 128
+HELP_PAGE_SIZE                     = 12
+HELP_TEXT_PAGE_SIZE                = 8
+HELP_PLUGIN_PAGE_SIZE              = 6
+MAX_HELP_QUERY_LENGTH              = 128
 MAX_PLUGIN_OVERVIEW_SUMMARY_LENGTH = 32
-MAX_HELP_MENU_SUMMARY_LENGTH = 32
-HELP_MOBILE_LINE_WIDTH = 34
-_RELOAD_NOTIFICATION_MARKER = "_xiaoqing_bot_core_reload_notification_registered"
-_NO_ARGUMENT_USAGE = {
+MAX_HELP_MENU_SUMMARY_LENGTH       = 32
+HELP_MOBILE_LINE_WIDTH             = 34
+_RELOAD_NOTIFICATION_MARKER        = "_xiaoqing_bot_core_reload_notification_registered"
+_NO_ARGUMENT_USAGE                 = {
     "reload": "/reload",
     "plugins": "/plugins",
     "说话": "/说话",
@@ -51,7 +51,7 @@ _NO_ARGUMENT_USAGE = {
 }
 
 _SECRET_PATH_PATTERN = re.compile(r"[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\Z")
-_DURATION_PATTERN = re.compile(
+_DURATION_PATTERN    = re.compile(
     r"(?P<value>(?:\d+(?:\.\d*)?|\.\d+))(?P<unit>h|小时|m|min|分钟)?\Z",
     flags=re.IGNORECASE,
 )
@@ -94,9 +94,9 @@ def _secret_admin_capability(
 ) -> SecretAdminCapability | None:
     """仅为可信 Bot 管理员私聊返回全局密钥管理能力。"""
 
-    principal = getattr(context, "principal", None)
+    principal    = getattr(context, "principal", None)
     capabilities = getattr(context, "capabilities", None)
-    capability = getattr(capabilities, "secret_admin", None)
+    capability   = getattr(capabilities, "secret_admin", None)
     if (
         principal is None
         or not getattr(capabilities, "is_bot_admin", False)
@@ -198,8 +198,8 @@ async def handle(
         return public_error_response(
             context,
             exc,
-            logger=logger,
-            component="bot_core.handle",
+            logger    = logger,
+            component = "bot_core.handle",
         )
 
 
@@ -226,10 +226,10 @@ def _handle_help(
             return segments(
                 _format_plugin_overview(
                     plugin_groups,
-                    page=page,
-                    total_pages=total_pages,
-                    total_plugins=len(_group_catalog_by_plugin(catalog)),
-                    total_nodes=len(_flatten_catalog(catalog)),
+                    page          = page,
+                    total_pages   = total_pages,
+                    total_plugins = len(_group_catalog_by_plugin(catalog)),
+                    total_nodes   = len(_flatten_catalog(catalog)),
                 )
             )
 
@@ -260,10 +260,10 @@ def _handle_help(
         return segments(
             _format_search_results(
                 page_nodes,
-                query=query,
-                page=page,
-                total_pages=total_pages,
-                total_nodes=len(selected),
+                query       = query,
+                page        = page,
+                total_pages = total_pages,
+                total_nodes = len(selected),
             )
         )
 
@@ -279,8 +279,8 @@ def _handle_help(
         return public_error_response(
             context,
             exc,
-            logger=logger,
-            component="bot_core.help",
+            logger    = logger,
+            component = "bot_core.help",
         )
 
 
@@ -294,7 +294,7 @@ def _help_not_found(query: str) -> list[dict[str, Any]]:
 def _parse_help_request(raw: str) -> tuple[str, str, int]:
     """解析帮助查询；保留 `/help <关键词>` 的兼容入口。"""
 
-    tokens = raw.strip().split()
+    tokens        = raw.strip().split()
     output_format = "text"
     if tokens and tokens[0].casefold() in {"json", "export", "导出"}:
         output_format = "json"
@@ -357,7 +357,7 @@ def _plugin_overview_page(
     catalog: tuple[CommandCatalogNode, ...],
     page: int,
 ) -> tuple[tuple[tuple[str, tuple[CommandCatalogNode, ...]], ...], int]:
-    groups = _group_catalog_by_plugin(catalog)
+    groups      = _group_catalog_by_plugin(catalog)
     total_pages = max(1, math.ceil(len(groups) / HELP_PLUGIN_PAGE_SIZE))
     if page > total_pages:
         raise ValueError(f"页码超出范围，共 {total_pages} 页")
@@ -391,8 +391,8 @@ def _truncate_display_text(value: str, max_width: int) -> str:
     if _display_width(value) <= max_width:
         return value
     retained: list[str] = []
-    width = 0
-    budget = max(1, max_width - 1)
+    width               = 0
+    budget              = max(1, max_width - 1)
     for char in value:
         char_width = 2 if unicodedata.east_asian_width(char) in {"W", "F"} else 1
         if width + char_width > budget:
@@ -414,16 +414,16 @@ def _format_plugin_overview_entry(
     plugin: str,
     roots: tuple[CommandCatalogNode, ...],
 ) -> str:
-    primary = _primary_catalog_root(roots)
+    primary    = _primary_catalog_root(roots)
     entrypoint = _overview_usage(primary)
     if plugin == "bot_core":
-        preferred = ("/help", "/plugins", "/reload")
-        available = {_overview_usage(root) for root in roots}
+        preferred  = ("/help", "/plugins", "/reload")
+        available  = {_overview_usage(root) for root in roots}
         entrypoint = " · ".join(usage for usage in preferred if usage in available)
     elif len(roots) > 1:
         entrypoint += f"（另有{len(roots) - 1}个入口）"
     node_count = sum(len(root.walk()) for root in roots)
-    label = "bot_core（Core）" if plugin == "bot_core" else plugin
+    label      = "bot_core（Core）" if plugin == "bot_core" else plugin
     return "\n".join(
         (
             f"• {label} · {node_count}个命令",
@@ -478,7 +478,7 @@ def _find_plugin_roots(
 
 
 def _catalog_exact_terms(node: CommandCatalogNode) -> frozenset[str]:
-    path = tuple(part.casefold() for part in node.path)
+    path  = tuple(part.casefold() for part in node.path)
     terms = {
         node.code.casefold(),
         " ".join(path),
@@ -511,7 +511,7 @@ def _select_catalog_nodes(
 ) -> tuple[CommandCatalogNode, ...]:
     """精确查询优先；命中父节点时返回其完整子树。"""
 
-    nodes = _flatten_catalog(catalog)
+    nodes      = _flatten_catalog(catalog)
     normalized = _normalized_help_query(query)
     if not normalized:
         return nodes
@@ -584,7 +584,7 @@ def _compact_help_summary(value: str) -> str:
 def _wrap_help_tokens(
     value: str,
     *,
-    first_prefix: str = "",
+    first_prefix: str      = "",
     subsequent_prefix: str = "  ",
 ) -> list[str]:
     """按手机可读宽度在参数边界换行，不拆开命令 token。"""
@@ -593,7 +593,7 @@ def _wrap_help_tokens(
     if not tokens:
         return [first_prefix.rstrip()]
     lines: list[str] = []
-    current = first_prefix
+    current          = first_prefix
     for token in tokens:
         separator = "" if current == first_prefix else " "
         candidate = f"{current}{separator}{token}"
@@ -646,7 +646,7 @@ def _append_text_page_navigation(
 def _plugin_menu_nodes(
     roots: tuple[CommandCatalogNode, ...],
 ) -> tuple[CommandCatalogNode, ...]:
-    primary = _primary_catalog_root(roots)
+    primary             = _primary_catalog_root(roots)
     compatibility_roots = tuple(root for root in roots if root is not primary)
     if primary.children:
         return (*primary.children, *compatibility_roots)
@@ -658,7 +658,7 @@ def _format_plugin_menu(
     *,
     page: int,
 ) -> str:
-    primary = _primary_catalog_root(roots)
+    primary    = _primary_catalog_root(roots)
     menu_nodes = _plugin_menu_nodes(roots)
     if len(roots) == 1 and not primary.children:
         if page != 1:
@@ -667,7 +667,7 @@ def _format_plugin_menu(
 
     page_nodes, total_pages = _text_catalog_page(menu_nodes, page)
     total_nodes = sum(len(root.walk()) for root in roots)
-    lines = [
+    lines       = [
         f"📦 {primary.plugin}  {page}/{total_pages}",
         f"{total_nodes} 个命令 · 本层 {len(menu_nodes)} 个入口",
         _overview_usage(primary),
@@ -678,9 +678,9 @@ def _format_plugin_menu(
     ]
     _append_text_page_navigation(
         lines,
-        query=primary.plugin,
-        page=page,
-        total_pages=total_pages,
+        query       = primary.plugin,
+        page        = page,
+        total_pages = total_pages,
     )
     example = _menu_navigation_example(page_nodes)
     if example is not None:
@@ -702,9 +702,9 @@ def _format_branch_menu(node: CommandCatalogNode, *, page: int) -> str:
     ]
     _append_text_page_navigation(
         lines,
-        query=query,
-        page=page,
-        total_pages=total_pages,
+        query       = query,
+        page        = page,
+        total_pages = total_pages,
     )
     example = _menu_navigation_example(page_nodes)
     if example is not None:
@@ -774,9 +774,9 @@ def _format_search_results(
     ]
     _append_text_page_navigation(
         lines,
-        query=query,
-        page=page,
-        total_pages=total_pages,
+        query       = query,
+        page        = page,
+        total_pages = total_pages,
     )
     if nodes:
         lines.append(f"查看详情：/help {_help_query_for_node(nodes[0])}")
@@ -792,7 +792,7 @@ def _format_catalog_json(
 ) -> str:
     records = []
     for node in nodes:
-        record = node.to_dict()
+        record                = node.to_dict()
         record["subcommands"] = [child.code for child in node.children]
         records.append(record)
     payload = {
@@ -877,8 +877,8 @@ def _register_reload_completion_notification(
         return False
 
     principal = context.principal
-    user_id = principal.user_id if principal.kind == "user" else None
-    group_id = principal.group_id if principal.kind == "user" else None
+    user_id   = principal.user_id if principal.kind == "user" else None
+    group_id  = principal.group_id if principal.kind == "user" else None
 
     def on_reload_done(done_task: asyncio.Future[Any]) -> None:
         if done_task.cancelled():
@@ -892,12 +892,12 @@ def _register_reload_completion_notification(
             logger.error("插件重载任务异常结束: error_type=%s", type(exc).__name__)
 
         elapsed_seconds = max(0.0, time.monotonic() - started_at)
-        delivery = _deliver_reload_completion(
+        delivery        = _deliver_reload_completion(
             context,
-            succeeded=succeeded,
-            elapsed_seconds=elapsed_seconds,
-            user_id=user_id,
-            group_id=group_id,
+            succeeded       = succeeded,
+            elapsed_seconds = elapsed_seconds,
+            user_id         = user_id,
+            group_id        = group_id,
         )
         try:
             delivery_task = done_task.get_loop().create_task(
@@ -930,7 +930,7 @@ async def _handle_reload(context: PluginContextProtocol) -> list[dict[str, Any]]
         # reload_plugins() 的契约是创建并返回后台任务。这里不能等待该任务：
         # 当前命令仍占用 bot_core 的执行门，而全量重载需要先排空同一执行门；
         # 若在此 await，就会形成“处理器等重载、重载等处理器”的自锁。
-        started_at = time.monotonic()
+        started_at  = time.monotonic()
         reload_task = context.reload_plugins()
         if reload_task is None:
             logger.warning("配置已重载，但插件后台重载未启动")
@@ -938,8 +938,8 @@ async def _handle_reload(context: PluginContextProtocol) -> list[dict[str, Any]]
 
         notification_ready = _register_reload_completion_notification(
             reload_task,
-            context=context,
-            started_at=started_at,
+            context    = context,
+            started_at = started_at,
         )
         if not notification_ready:
             logger.warning("配置已重载，但插件重载完成通知未登记")
@@ -951,8 +951,8 @@ async def _handle_reload(context: PluginContextProtocol) -> list[dict[str, Any]]
         return public_error_response(
             context,
             exc,
-            logger=logger,
-            component="bot_core.reload",
+            logger    = logger,
+            component = "bot_core.reload",
         )
 
 
@@ -972,15 +972,15 @@ def _handle_plugins(context: PluginContextProtocol) -> list[dict[str, Any]]:
             return segments("❌ 暂无插件")
 
         header = f"🔌 已加载插件 ({len(plugins)}):\n"
-        body = "\n".join(f"  • {name}" for name in plugins)
+        body   = "\n".join(f"  • {name}" for name in plugins)
         logger.info("显示插件列表: %d 个", len(plugins))
         return segments(header + body)
     except Exception as exc:
         return public_error_response(
             context,
             exc,
-            logger=logger,
-            component="bot_core.plugins",
+            logger    = logger,
+            component = "bot_core.plugins",
         )
 
 
@@ -1044,8 +1044,8 @@ def _handle_mute(
         return public_error_response(
             context,
             exc,
-            logger=logger,
-            component="bot_core.mute",
+            logger    = logger,
+            component = "bot_core.mute",
         )
 
 
@@ -1084,8 +1084,8 @@ def _handle_unmute(
         return public_error_response(
             context,
             exc,
-            logger=logger,
-            component="bot_core.unmute",
+            logger    = logger,
+            component = "bot_core.unmute",
         )
 
 
@@ -1155,8 +1155,8 @@ async def _handle_set_secret(
         return public_error_response(
             context,
             exc,
-            logger=logger,
-            component="bot_core.set_secret",
+            logger    = logger,
+            component = "bot_core.set_secret",
         )
 
 
@@ -1202,10 +1202,10 @@ def _handle_get_secret(
             keys_list = [str(key) for key in current]
             if len(keys_list) > MAX_DISPLAYED_SECRET_KEYS:
                 display_keys = keys_list[:MAX_DISPLAYED_SECRET_KEYS]
-                suffix = f", ... 还有 {len(keys_list) - MAX_DISPLAYED_SECRET_KEYS} 个"
+                suffix       = f", ... 还有 {len(keys_list) - MAX_DISPLAYED_SECRET_KEYS} 个"
             else:
                 display_keys = keys_list
-                suffix = ""
+                suffix       = ""
             logger.info("查询配置目录: %s, %d 个键", path, len(keys_list))
             return segments(f"🔑 {path} 包含以下键:\n  {', '.join(display_keys)}{suffix}")
 
@@ -1225,8 +1225,8 @@ def _handle_get_secret(
         return public_error_response(
             context,
             exc,
-            logger=logger,
-            component="bot_core.get_secret",
+            logger    = logger,
+            component = "bot_core.get_secret",
         )
 
 
@@ -1251,14 +1251,14 @@ async def _handle_metrics(context: PluginContextProtocol) -> list[dict[str, Any]
             return segments("❌ 无法获取 Metrics 数据")
 
         raw_global_stats = summary.get("global", {})
-        global_stats = raw_global_stats if isinstance(raw_global_stats, Mapping) else {}
-        uptime_seconds = _metric_number(summary, "uptime_seconds")
-        total_calls = _metric_number(global_stats, "total_calls")
+        global_stats     = raw_global_stats if isinstance(raw_global_stats, Mapping) else {}
+        uptime_seconds   = _metric_number(summary, "uptime_seconds")
+        total_calls      = _metric_number(global_stats, "total_calls")
         success_rate = _metric_number(global_stats, "success_rate", maximum=1.0)
-        avg_time = _metric_number(global_stats, "avg_time")
+        avg_time   = _metric_number(global_stats, "avg_time")
         slow_calls = _metric_number(global_stats, "slow_calls")
-        errors = _metric_number(global_stats, "errors")
-        lines = [
+        errors     = _metric_number(global_stats, "errors")
+        lines      = [
             "📈 运行指标",
             METRICS_SEPARATOR,
             f"⏱️ 运行时间: {_format_metric(uptime_seconds, '.0f', 's')}",
@@ -1275,7 +1275,7 @@ async def _handle_metrics(context: PluginContextProtocol) -> list[dict[str, Any]
             for item in top_slow[:5]:  # 限制显示5个
                 if not isinstance(item, Mapping):
                     continue
-                raw_name = item.get("plugin")
+                raw_name    = item.get("plugin")
                 plugin_name = (
                     " ".join(raw_name.split())[:64]
                     if isinstance(raw_name, str) and raw_name.strip()
@@ -1295,8 +1295,8 @@ async def _handle_metrics(context: PluginContextProtocol) -> list[dict[str, Any]
         return public_error_response(
             context,
             exc,
-            logger=logger,
-            component="bot_core.metrics",
+            logger    = logger,
+            component = "bot_core.metrics",
         )
 
 

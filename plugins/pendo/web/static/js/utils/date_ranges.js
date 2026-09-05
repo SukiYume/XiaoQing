@@ -78,7 +78,7 @@ export function derivePresetRange(
         }
         case 'custom': {
             const start = normalizeDateKey(customStart);
-            const end = normalizeDateKey(customEnd);
+            const end   = normalizeDateKey(customEnd);
             if (start && end) return { start, end };
             if (!customFallback) return { start: '', end: '' };
             return derivePresetRange(customFallback, {
@@ -128,11 +128,11 @@ export async function fetchItemRangeBounds(
         }),
     ]);
     const earliestItem = earliestRes?.data?.items?.[0];
-    const latestItem = latestRes?.data?.items?.[0];
-    const fallback = resolveToday(fallbackEnd).key;
-    const start = normalizeDateKey(earliestItem?.[startField]) || fallback;
-    const latestStart = normalizeDateKey(latestItem?.[startField]);
-    let end = normalizeDateKey(latestItem?.[endField]) || latestStart || fallback;
+    const latestItem   = latestRes?.data?.items?.[0];
+    const fallback     = resolveToday(fallbackEnd).key;
+    const start        = normalizeDateKey(earliestItem?.[startField]) || fallback;
+    const latestStart  = normalizeDateKey(latestItem?.[startField]);
+    let end            = normalizeDateKey(latestItem?.[endField]) || latestStart || fallback;
 
     // 防止损坏数据、空集合或最小展示日产生反向范围。
     for (const lowerBound of [latestStart, normalizeDateKey(minimumEnd), start]) {

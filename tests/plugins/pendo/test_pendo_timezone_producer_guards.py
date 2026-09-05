@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -187,7 +187,7 @@ def test_reminder_log_public_producers_reject_noncanonical_keys(db: Database) ->
 
 def test_undo_normalizes_legacy_wall_time_snapshot_before_writing(db: Database) -> None:
     owner_id = "guard-owner"
-    item_id = "guarded-undo-event"
+    item_id  = "guarded-undo-event"
     db.insert_item(
         {
             "id": item_id,
@@ -201,9 +201,9 @@ def test_undo_normalizes_legacy_wall_time_snapshot_before_writing(db: Database) 
     db.log_operation(
         owner_id,
         "edit_event",
-        item_type="event",
-        item_id=item_id,
-        details={"old_values": {"start_time": "2030-01-01T09:00:00"}},
+        item_type = "event",
+        item_id   = item_id,
+        details   = {"old_values": {"start_time": "2030-01-01T09:00:00"}},
     )
 
     assert db.undo_edit(owner_id)["status"] == "success"
@@ -213,7 +213,7 @@ def test_undo_normalizes_legacy_wall_time_snapshot_before_writing(db: Database) 
 
 def test_unsent_confirmation_normalizes_a_legacy_reminder_key(db: Database) -> None:
     owner_id = "guard-owner"
-    item_id = "guarded-confirm-event"
+    item_id  = "guarded-confirm-event"
     db.insert_item(
         {
             "id": item_id,
@@ -239,7 +239,7 @@ def test_unsent_confirmation_normalizes_a_legacy_reminder_key(db: Database) -> N
 
 def test_reminder_and_outbox_lifecycle_timestamps_use_canonical_precision(db: Database) -> None:
     owner_id = "guard-owner"
-    item_id = "guarded-lifecycle-event"
+    item_id  = "guarded-lifecycle-event"
     db.insert_item(
         {
             "id": item_id,
@@ -251,7 +251,7 @@ def test_reminder_and_outbox_lifecycle_timestamps_use_canonical_precision(db: Da
         }
     )
     remind_time = db.get_item(item_id, owner_id).remind_times[0]
-    now = datetime(2030, 1, 1, 0, 0, 0, 123456, tzinfo=timezone.utc)
+    now = datetime(2030, 1, 1, 0, 0, 0, 123456, tzinfo=UTC)
 
     assert db.claim_reminder(item_id, remind_time, now=now, lease_seconds=30)
     reminder_row = (

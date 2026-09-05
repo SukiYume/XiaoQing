@@ -31,13 +31,13 @@ def mock_context(temp_data_dir):
 
     class MockContext:
         def __init__(self, data_dir):
-            self.data_dir = data_dir
-            self.config = {"plugins": {"apod": {}}}
-            self.http_session = None
-            self.logger = MagicMock()
-            self.current_user_id = 12345
+            self.data_dir         = data_dir
+            self.config           = {"plugins": {"apod": {}}}
+            self.http_session     = None
+            self.logger           = MagicMock()
+            self.current_user_id  = 12345
             self.current_group_id = 123456789
-            self.send_action = AsyncMock()
+            self.send_action      = AsyncMock()
 
     return with_settings_reader(MockContext(temp_data_dir))
 
@@ -111,10 +111,10 @@ def safe_transport_adapter(monkeypatch, mock_context):
         if body is None:
             return None
         return SimpleNamespace(
-            url=url,
-            status=200,
-            body=body,
-            headers={"Content-Type": "text/html; charset=utf-8"},
+            url     = url,
+            status  = 200,
+            body    = body,
+            headers = {"Content-Type": "text/html; charset=utf-8"},
         )
 
     async def fetch_bytes(url, **_kwargs):
@@ -122,10 +122,10 @@ def safe_transport_adapter(monkeypatch, mock_context):
         if body is None:
             return None
         return SimpleNamespace(
-            url=url,
-            status=200,
-            body=body,
-            headers={"Content-Type": "image/jpeg"},
+            url     = url,
+            status  = 200,
+            body    = body,
+            headers = {"Content-Type": "image/jpeg"},
         )
 
     async def download(url, images_dir, _context):
@@ -188,7 +188,7 @@ class TestConfig:
         class MockContext:
             def __init__(self, data_dir):
                 self.data_dir = data_dir
-                self.config = {
+                self.config   = {
                     "plugins": {
                         "apod": {
                             "url": "https://apod.nasa.gov/apod/astropix.html",
@@ -197,10 +197,10 @@ class TestConfig:
                     }
                 }
                 self.http_session = None
-                self.logger = MagicMock()
+                self.logger       = MagicMock()
 
         context = with_settings_reader(MockContext(temp_data_dir))
-        config = apod._get_config(context)
+        config  = apod._get_config(context)
         assert config == {
             "url": "https://apod.nasa.gov/apod/astropix.html",
             "allowed_hosts": ["apod.nasa.gov"],
@@ -229,7 +229,7 @@ class TestTitleExtraction:
         """测试从 center 标签中的 b 标签提取标题"""
         from bs4 import BeautifulSoup
 
-        soup = BeautifulSoup(SAMPLE_APOD_HTML_WITH_IMAGE, "html.parser")
+        soup  = BeautifulSoup(SAMPLE_APOD_HTML_WITH_IMAGE, "html.parser")
         title = apod._extract_title(soup, MagicMock())
         assert "Galaxy Center" in title or "Astronomy" in title
 
@@ -237,7 +237,7 @@ class TestTitleExtraction:
         """测试没有 center 标签时使用 title 标签"""
         from bs4 import BeautifulSoup
 
-        soup = BeautifulSoup(SAMPLE_APOD_HTML_NO_TITLE, "html.parser")
+        soup  = BeautifulSoup(SAMPLE_APOD_HTML_NO_TITLE, "html.parser")
         title = apod._extract_title(soup, MagicMock())
         assert title == "Page Title" or title == apod.DEFAULT_FALLBACK_TITLE
 
@@ -245,7 +245,7 @@ class TestTitleExtraction:
         """测试标题提取失败时使用默认值"""
         from bs4 import BeautifulSoup
 
-        soup = BeautifulSoup("<html><body></body></html>", "html.parser")
+        soup  = BeautifulSoup("<html><body></body></html>", "html.parser")
         title = apod._extract_title(soup, MagicMock())
         assert title == apod.DEFAULT_FALLBACK_TITLE
 
@@ -293,8 +293,8 @@ def test_image_selection_rejects_ambiguous_allowed_images(mock_context) -> None:
 
 class TestCacheFilename:
     def test_cache_filename_is_stable_hash_with_verified_mime_extension(self):
-        first = apod._cache_filename("https://apod.nasa.gov/image?id=1", ".png")
-        second = apod._cache_filename("https://apod.nasa.gov/image?id=1", ".png")
+        first     = apod._cache_filename("https://apod.nasa.gov/image?id=1", ".png")
+        second    = apod._cache_filename("https://apod.nasa.gov/image?id=1", ".png")
         different = apod._cache_filename("https://apod.nasa.gov/image?id=2", ".png")
 
         assert first == second
@@ -321,7 +321,7 @@ class TestExplanationExtraction:
         """测试提取有效的解释文本"""
         from bs4 import BeautifulSoup
 
-        soup = BeautifulSoup(SAMPLE_APOD_HTML_WITH_IMAGE, "html.parser")
+        soup        = BeautifulSoup(SAMPLE_APOD_HTML_WITH_IMAGE, "html.parser")
         explanation = apod.get_explanation(soup, MagicMock())
         assert "test explanation" in explanation.lower()
 
@@ -334,7 +334,7 @@ class TestExplanationExtraction:
         """测试没有段落"""
         from bs4 import BeautifulSoup
 
-        soup = BeautifulSoup("<html><body>No content</body></html>", "html.parser")
+        soup        = BeautifulSoup("<html><body>No content</body></html>", "html.parser")
         explanation = apod.get_explanation(soup, MagicMock())
         assert "No explanation found" in explanation or "unavailable" in explanation.lower()
 
@@ -348,7 +348,7 @@ class TestExplanationExtraction:
         """
         from bs4 import BeautifulSoup
 
-        soup = BeautifulSoup(html, "html.parser")
+        soup        = BeautifulSoup(html, "html.parser")
         explanation = apod.get_explanation(soup, MagicMock())
         assert "Tomorrow" not in explanation
         assert "Today's picture description" in explanation
@@ -461,9 +461,9 @@ class TestImageExtraction:
             "fetch_public_html",
             AsyncMock(
                 return_value=SimpleNamespace(
-                    url=apod.DEFAULT_APOD_URL,
-                    body=SAMPLE_APOD_HTML_WITH_IMAGE,
-                    headers={"Content-Type": "text/html"},
+                    url     = apod.DEFAULT_APOD_URL,
+                    body    = SAMPLE_APOD_HTML_WITH_IMAGE,
+                    headers = {"Content-Type": "text/html"},
                 )
             ),
         )
@@ -568,9 +568,9 @@ class TestVideoHandling:
             "fetch_public_html",
             AsyncMock(
                 return_value=SimpleNamespace(
-                    url="https://apod.nasa.gov/redirected/day/page.html",
-                    body=html,
-                    headers={"Content-Type": "text/html"},
+                    url     = "https://apod.nasa.gov/redirected/day/page.html",
+                    body    = html,
+                    headers = {"Content-Type": "text/html"},
                 )
             ),
         )
@@ -726,10 +726,10 @@ class TestScheduled:
 
         assert result == expected
         handle.assert_awaited_once_with(
-            command="apod",
-            args="",
-            event={},
-            context=mock_context,
+            command = "apod",
+            args    = "",
+            event   = {},
+            context = mock_context,
         )
 
 

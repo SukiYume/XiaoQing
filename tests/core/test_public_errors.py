@@ -18,7 +18,7 @@ _MAX_RAW_CHARS_FOR_TEST = 32_768
 class CaptureLogger:
     def __init__(self, *, fail: bool = False) -> None:
         self.calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
-        self.fail = fail
+        self.fail                                                = fail
 
     def error(self, *args: Any, **kwargs: Any) -> None:
         self.calls.append((args, kwargs))
@@ -46,27 +46,27 @@ def _raised_error(message: str) -> RuntimeError:
 
 def test_public_message_redacts_credentials_urls_paths_secrets_and_controls() -> None:
     context_secret = "context-secret-canary-9472"
-    bearer = "bearer-canary-1849"
-    basic = "YmFzaWMtY2FuYXJ5LTQy"
-    url = "https://alice:pw@example.test/private?q=url-canary"
-    windows_path = r"C:\Users\alice\private\token.txt"
-    posix_path = "/home/alice/private/token.txt"
-    forged_line = "FORGED LOG LINE"
-    error = _raised_error(
+    bearer         = "bearer-canary-1849"
+    basic          = "YmFzaWMtY2FuYXJ5LTQy"
+    url            = "https://alice:pw@example.test/private?q=url-canary"
+    windows_path   = r"C:\Users\alice\private\token.txt"
+    posix_path     = "/home/alice/private/token.txt"
+    forged_line    = "FORGED LOG LINE"
+    error          = _raised_error(
         f"Authorization: Bearer {bearer}; Basic {basic}; {url}; "
         f"{windows_path}; {posix_path}; {context_secret}\n{forged_line}\x00"
     )
     context = SimpleNamespace(
-        request_id="request-123",
-        secrets={"plugins": {"demo": {"to" + "ken": context_secret}}},
+        request_id = "request-123",
+        secrets    = {"plugins": {"demo": {"to" + "ken": context_secret}}},
     )
     logger = CaptureLogger()
 
     message = public_error_message(
         context,
         error,
-        logger=logger,
-        component="demo.handle",
+        logger    = logger,
+        component = "demo.handle",
     )
 
     assert message == (
@@ -100,8 +100,8 @@ def test_public_error_response_is_onebot_text_and_logs_exactly_once() -> None:
     response = public_error_response(
         context,
         ValueError("private details"),
-        logger=logger,
-        component="demo.response",
+        logger    = logger,
+        component = "demo.response",
     )
 
     assert response == [
@@ -120,15 +120,15 @@ def test_public_error_response_is_onebot_text_and_logs_exactly_once() -> None:
 
 def test_malicious_request_id_and_component_are_replaced_not_cleaned_in_place() -> None:
     malicious_request_id = "safe-prefix\nAuthorization: Bearer request-token"
-    malicious_component = "component\r\n/home/operator/secret"
-    logger = CaptureLogger()
+    malicious_component  = "component\r\n/home/operator/secret"
+    logger               = CaptureLogger()
     context = SimpleNamespace(request_id=malicious_request_id, secrets={})
 
     message = public_error_message(
         context,
         RuntimeError("failure"),
-        logger=logger,
-        component=malicious_component,
+        logger    = logger,
+        component = malicious_component,
     )
 
     request_id_match = re.search(r"request_id：([0-9a-f]{12})）", message)
@@ -151,8 +151,8 @@ def test_request_id_that_contains_a_context_secret_is_replaced() -> None:
     message = public_error_message(
         context,
         RuntimeError("failure"),
-        logger=logger,
-        component="demo.handle",
+        logger    = logger,
+        component = "demo.handle",
     )
 
     assert secret not in message
@@ -162,7 +162,7 @@ def test_request_id_that_contains_a_context_secret_is_replaced() -> None:
 
 
 def test_secret_tree_depth_limit_fails_closed_for_exception_messages() -> None:
-    deep_secret = "deep-secret-canary-8831"
+    deep_secret            = "deep-secret-canary-8831"
     nested: dict[str, Any] = {"secret": deep_secret}
     for index in range(12):
         nested = {f"level_{index}": nested}
@@ -172,8 +172,8 @@ def test_secret_tree_depth_limit_fails_closed_for_exception_messages() -> None:
     public_error_message(
         context,
         RuntimeError(deep_secret),
-        logger=logger,
-        component="demo.deep",
+        logger    = logger,
+        component = "demo.deep",
     )
 
     serialized, payload = _logged_payload(logger)
@@ -184,14 +184,14 @@ def test_secret_tree_depth_limit_fails_closed_for_exception_messages() -> None:
 
 def test_secret_tree_cycle_is_bounded_but_complete() -> None:
     secrets: dict[str, Any] = {"to" + "ken": "cycle-secret-canary"}
-    secrets["self"] = secrets
-    logger = CaptureLogger()
+    secrets["self"]         = secrets
+    logger                  = CaptureLogger()
 
     public_error_message(
         SimpleNamespace(request_id="req-cycle", secrets=secrets),
         RuntimeError("cycle-secret-canary"),
-        logger=logger,
-        component="demo.cycle",
+        logger    = logger,
+        component = "demo.cycle",
     )
 
     serialized, payload = _logged_payload(logger)
@@ -204,16 +204,16 @@ def test_long_exception_and_chain_are_bounded() -> None:
     context = SimpleNamespace(request_id="req-long", secrets={})
     previous: BaseException | None = None
     for index in range(20):
-        current = RuntimeError(f"layer-{index}-" + ("x" * 40_000))
+        current           = RuntimeError(f"layer-{index}-" + ("x" * 40_000))
         current.__cause__ = previous
-        previous = current
+        previous          = current
     assert previous is not None
 
     public_error_message(
         context,
         previous,
-        logger=logger,
-        component="demo.long",
+        logger    = logger,
+        component = "demo.long",
     )
 
     serialized, payload = _logged_payload(logger)
@@ -232,8 +232,8 @@ def test_secret_crossing_exception_truncation_boundary_is_fully_omitted() -> Non
     public_error_message(
         context,
         RuntimeError(prefix + secret + "tail"),
-        logger=logger,
-        component="demo.boundary",
+        logger    = logger,
+        component = "demo.boundary",
     )
 
     serialized, payload = _logged_payload(logger)
@@ -244,12 +244,12 @@ def test_secret_crossing_exception_truncation_boundary_is_fully_omitted() -> Non
 
 def test_sanitizer_never_keeps_a_prefix_that_crosses_its_input_bound() -> None:
     secret = "BOUNDARYSECRET12345"
-    raw = "x" * (_MAX_RAW_CHARS_FOR_TEST - 5) + secret
+    raw    = "x" * (_MAX_RAW_CHARS_FOR_TEST - 5) + secret
 
     sanitized = _sanitize_text(
         raw,
-        secrets=(secret,),
-        limit=len(raw) + 100,
+        secrets = (secret,),
+        limit   = len(raw) + 100,
     )
 
     assert sanitized == "<omitted: oversized diagnostic>"
@@ -262,8 +262,8 @@ def test_short_punctuation_secret_is_redacted_everywhere() -> None:
     public_error_message(
         SimpleNamespace(request_id="req-short-secret", secrets={"token": "a-"}),
         RuntimeError("oops a- leaked and a- repeated"),
-        logger=logger,
-        component="demo.short_secret",
+        logger    = logger,
+        component = "demo.short_secret",
     )
 
     serialized, payload = _logged_payload(logger)
@@ -278,13 +278,13 @@ def test_unprintable_exception_still_returns_and_logs_type_and_traceback() -> No
             raise ValueError("string conversion failed")
 
     logger = CaptureLogger()
-    error = UnprintableError()
+    error  = UnprintableError()
 
     response = public_error_response(
         SimpleNamespace(request_id="req-unprintable", secrets={}),
         error,
-        logger=logger,
-        component="demo.unprintable",
+        logger    = logger,
+        component = "demo.unprintable",
     )
 
     assert response[0]["data"]["text"].endswith("request_id：req-unprintable）")
@@ -301,8 +301,8 @@ def test_logging_failure_cannot_replace_the_safe_response() -> None:
     message = public_error_message(
         SimpleNamespace(request_id="req-log-failure", secrets={}),
         RuntimeError("private"),
-        logger=logger,
-        component="demo.logger",
+        logger    = logger,
+        component = "demo.logger",
     )
 
     assert message.endswith("request_id：req-log-failure）")
@@ -316,8 +316,8 @@ def test_missing_request_id_generates_a_real_correlation_id() -> None:
     message = public_error_message(
         SimpleNamespace(request_id=None, secrets={}),
         RuntimeError("private"),
-        logger=logger,
-        component="demo.missing_request",
+        logger    = logger,
+        component = "demo.missing_request",
     )
 
     assert "request_id：None" not in message

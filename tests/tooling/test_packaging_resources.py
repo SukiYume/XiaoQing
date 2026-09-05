@@ -12,8 +12,8 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - Python 3.10 CI
     import tomli as tomllib
 
-ROOT = REPOSITORY_ROOT
-PLUGINS_DIR = ROOT / "plugins"
+ROOT                         = REPOSITORY_ROOT
+PLUGINS_DIR                  = ROOT / "plugins"
 _SOURCE_OR_DOCUMENT_SUFFIXES = {".md", ".py", ".pyi"}
 
 
@@ -43,15 +43,15 @@ def _tracked_plugin_assets() -> set[str]:
 def _declared_plugin_assets() -> set[str]:
     """按 setuptools 的真实包目录和 glob 规则展开 package-data。"""
 
-    setuptools = _pyproject()["tool"]["setuptools"]
-    packages = setuptools["packages"]
-    package_data = setuptools["package-data"]
+    setuptools         = _pyproject()["tool"]["setuptools"]
+    packages           = setuptools["packages"]
+    package_data       = setuptools["package-data"]
     declared: set[str] = set()
 
     # `*` 规则作用于每个包；包专属规则再补充其静态文件和内置数据。
     for package in packages:
         package_dir = ROOT / package.replace(".", "/")
-        patterns = [*package_data.get("*", []), *package_data.get(package, [])]
+        patterns    = [*package_data.get("*", []), *package_data.get(package, [])]
         for pattern in patterns:
             declared.update(
                 path.relative_to(ROOT).as_posix()

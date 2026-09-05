@@ -41,7 +41,7 @@ function extractLoginCode(rawValue) {
 }
 
 async function bootstrap() {
-    const url = new URL(window.location.href);
+    const url       = new URL(window.location.href);
     const loginCode = url.searchParams.get('code');
     if (loginCode) {
         url.searchParams.delete('code');
@@ -67,13 +67,13 @@ function showLogin(initialError = '') {
     document.getElementById('login-screen').style.display = 'flex';
     document.getElementById('app').style.display = 'none';
 
-    const btn = document.getElementById('login-btn');
+    const btn      = document.getElementById('login-btn');
     const clearBtn = document.getElementById('login-clear-btn');
-    const demoBtn = document.getElementById('login-demo-btn');
-    const input = document.getElementById('token-input');
-    const error = document.getElementById('login-error');
-    const helper = document.getElementById('login-helper');
-    let pending = false;
+    const demoBtn  = document.getElementById('login-demo-btn');
+    const input    = document.getElementById('token-input');
+    const error    = document.getElementById('login-error');
+    const helper   = document.getElementById('login-helper');
+    let pending    = false;
 
     if (initialError) {
         error.textContent = initialError;

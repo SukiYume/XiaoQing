@@ -50,7 +50,7 @@ data/qingpet/qingpet/qingpet.db
 开发与测试遵循以下约定：
 
 - 测试使用 `tmp_path` 创建独立 SQLite 数据库；
-- 数据迁移先复制数据库、WAL 和 SHM 文件，再在副本上验证；
+- 数据迁移先使用 SQLite `Connection.backup()` 在线备份生成一致快照，快照包含 WAL 中已提交的数据，再在快照副本上验证；
 - 清理脚本的目标限定为测试目录、缓存目录或显式传入路径；
 - Schema 变更采用兼容 migration，并添加已有数据库升级测试；
 - 资产与状态修复通过事务 service 和审计记录执行；

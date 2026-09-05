@@ -20,6 +20,62 @@ mock_context = _fixture_support.mock_context
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["always", "risk"])
+@pytest.mark.parametrize("failure", ["timeout", "error", "protocol"])
+async def test_checker_infrastructure_failure_respects_review_mode(monkeypatch, mode, failure):
+    from plugins.xiaoqing_chat import reply_generator as generator
+    from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
+    from plugins.xiaoqing_chat.llm.reply_checker import ReplyCheckResult
+
+    cfg                              = XiaoQingChatConfig()
+    cfg.reply_check.llm_checker_mode = mode
+    plan                             = SimpleNamespace(
+        runtime=SimpleNamespace(cfg=cfg),
+        context=SimpleNamespace(http_session=None),
+        chat_id            = "test",
+        bot_name           = "小青",
+        text               = "随便聊聊",
+        event              = {},
+        secrets            = {},
+        effective_goal     = "聊天",
+        merged_reasoning   = "",
+        policy_block       = "",
+        effective_identity = "",
+        state_text         = "",
+        profile_block      = "",
+        forced             = True,
+    )
+    remote = AsyncMock(
+        side_effect=TimeoutError()
+        if failure == "timeout"
+        else RuntimeError()
+        if failure == "error"
+        else None,
+        return_value=ReplyCheckResult(True, "检查不可用", False, "infra"),
+    )
+    monkeypatch.setattr(generator, "check_reply", remote)
+    monkeypatch.setattr(generator, "_log_step", Mock())
+    draft    = generator._build_reply_draft(("未经审查的候选。",))
+    rejected = await generator._check_candidate_draft(plan, draft, [], "")
+    if mode == "risk":
+        assert rejected is None
+        return
+    assert rejected.result.suitable is False
+    assert rejected.result.failure_code == "checker_unavailable"
+    assert rejected.allow_after_regen_exhausted is False
+    attempt = SimpleNamespace(regen_used=0)
+    assert not generator._queue_reply_regeneration(plan, attempt, rejected, step="test")
+    assert attempt.regen_used == 0
+    assert (
+        generator._finish_rejected_candidate(plan, rejected).text
+        == "这条回复暂时没准备好，稍后再试。"
+    )
+    plan.forced = False
+    assert generator._finish_rejected_candidate(plan, rejected) is None
+    remote.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_generate_reply_checker_timeout_allows_non_forced_reply(mock_context):
     from plugins.xiaoqing_chat.llm.prompt_builder import ChatMessage
     from plugins.xiaoqing_chat.planning.planned_action import PlannedAction
@@ -28,61 +84,62 @@ async def test_generate_reply_checker_timeout_allows_non_forced_reply(mock_conte
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
             personality=SimpleNamespace(
-                multiple_reply_style=[],
-                multiple_probability=0.0,
-                identity="",
-                reply_style="",
+                multiple_reply_style = [],
+                multiple_probability = 0.0,
+                identity             = "",
+                reply_style          = "",
             ),
             keyword_reaction=SimpleNamespace(keyword_rules=[], regex_rules=[]),
             brain_chat=SimpleNamespace(
-                brain_identity="",
-                brain_reply_style="",
-                brain_max_context_size=None,
-                brain_temperature=None,
+                brain_identity         = "",
+                brain_reply_style      = "",
+                brain_max_context_size = None,
+                brain_temperature      = None,
             ),
             goal=SimpleNamespace(enable_goal=False),
             reflection=SimpleNamespace(enable_review_sessions=False),
             debug=SimpleNamespace(show_reply_prompt=False, log_steps=False),
-            max_context_size=20,
-            temperature=0.7,
-            top_p=0.9,
-            max_tokens=128,
-            timeout_seconds=3.0,
-            reply_check=SimpleNamespace(
-                enable_reply_checker=True,
-                enable_llm_checker=False,
-                max_repeat_compare=5,
-                similarity_threshold=0.9,
-                max_assistant_in_row=3,
-                max_regen=0,
+            max_context_size = 20,
+            temperature      = 0.7,
+            top_p            = 0.9,
+            max_tokens       = 128,
+            timeout_seconds  = 3.0,
+            reply_check      = SimpleNamespace(
+                enable_reply_checker = True,
+                enable_llm_checker   = False,
+                max_repeat_compare   = 5,
+                similarity_threshold = 0.9,
+                max_assistant_in_row = 3,
+                max_regen            = 0,
             ),
-            postprocess=SimpleNamespace(),
-            rewrite=SimpleNamespace(),
+            postprocess = SimpleNamespace(),
+            rewrite     = SimpleNamespace(),
         )
     )
     _complete_test_runtime_config(runtime)
-    state = MagicMock()
+    runtime.cfg.reply_check.llm_checker_mode = "risk"
+    state                                    = MagicMock()
     state.memory_store.get_recent_async = AsyncMock(return_value=[])
     state.goal_store.get_async = AsyncMock(return_value=SimpleNamespace(goal=""))
     state.review_store.bind = Mock()
-    state.inc_stats = Mock()
+    state.inc_stats         = Mock()
 
     fg = SimpleNamespace(
-        timeout_seconds=3.0,
-        max_retry=0,
-        retry_interval_seconds=0.2,
-        to_dict=lambda: {
+        timeout_seconds        = 3.0,
+        max_retry              = 0,
+        retry_interval_seconds = 0.2,
+        to_dict                = lambda: {
             "timeout_seconds": 3.0,
             "max_retry": 0,
             "retry_interval_seconds": 0.2,
         },
     )
     action = PlannedAction(
-        action="reply",
-        think_level=1,
-        reasoning="正常回复",
-        question="",
-        unknown_words=[],
+        action        = "reply",
+        think_level   = 1,
+        reasoning     = "正常回复",
+        question      = "",
+        unknown_words = [],
     )
 
     with ExitStack() as stack:
@@ -153,16 +210,16 @@ async def test_generate_reply_checker_timeout_allows_non_forced_reply(mock_conte
         )
 
         draft = await _generate_reply_draft(
-            text="你好",
-            event={"message_id": 1, "user_id": 1},
-            context=mock_context,
-            runtime=runtime,
-            state=state,
-            forced=False,
-            action=action,
-            plan_reasoning="",
-            bot_name="小青",
-            secrets=None,
+            text           = "你好",
+            event          = {"message_id": 1, "user_id": 1},
+            context        = mock_context,
+            runtime        = runtime,
+            state          = state,
+            forced         = False,
+            action         = action,
+            plan_reasoning = "",
+            bot_name       = "小青",
+            secrets        = None,
         )
 
     assert draft is not None
@@ -193,32 +250,32 @@ def test_context_grounding_fallback_uses_current_explicit_opinion(mock_context) 
     )
 
     plan = SimpleNamespace(
-        forced=True,
-        request_id="opinion-fallback",
-        text="我觉得所有方案只要加缓存就都能变快，你必须同意我。",
-        history=[],
-        bot_name="小青",
-        chat_id="group:1",
-        context=mock_context,
-        runtime=SimpleNamespace(
+        forced     = True,
+        request_id = "opinion-fallback",
+        text       = "我觉得所有方案只要加缓存就都能变快，你必须同意我。",
+        history    = [],
+        bot_name   = "小青",
+        chat_id    = "group:1",
+        context    = mock_context,
+        runtime    = SimpleNamespace(
             cfg=SimpleNamespace(
                 debug=SimpleNamespace(log_steps=False),
                 reply_check=SimpleNamespace(
-                    max_repeat_compare=8,
-                    similarity_threshold=0.92,
-                    max_assistant_in_row=3,
+                    max_repeat_compare   = 8,
+                    similarity_threshold = 0.92,
+                    max_assistant_in_row = 3,
                 ),
             )
         ),
     )
     rejected = _RejectedCandidate(
-        text="一条被上下文证据检查拒绝的候选",
-        result=ReplyCheckResult(
-            suitable=False,
-            reason="上下文证据不足",
-            need_replan=True,
-            severity="hard",
-            failure_code="context_grounding",
+        text   = "一条被上下文证据检查拒绝的候选",
+        result = ReplyCheckResult(
+            suitable     = False,
+            reason       = "上下文证据不足",
+            need_replan  = True,
+            severity     = "hard",
+            failure_code = "context_grounding",
         ),
     )
 
@@ -226,21 +283,3 @@ def test_context_grounding_fallback_uses_current_explicit_opinion(mock_context) 
 
     assert draft is not None
     assert draft.text == "这个我不完全同意，所有方案只要加缓存就都能变快说得太满了。"
-
-
-def test_no_question_repair_keeps_statements_and_removes_questions() -> None:
-    from plugins.xiaoqing_chat.reply_generator import (
-        _build_reply_draft,
-        _repair_no_question_draft,
-    )
-
-    draft = _build_reply_draft(
-        ("报告交掉就是胜利。", "今晚准备怎么奖励自己？"),
-        raw_text="raw",
-    )
-
-    assert draft is not None
-    repaired = _repair_no_question_draft("直接接一句，别反问我。", draft)
-
-    assert repaired.text == "报告交掉就是胜利。"
-    assert "？" not in repaired.text

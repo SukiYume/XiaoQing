@@ -18,11 +18,11 @@ def test_default_output_dir_is_project_scoped():
 
 def test_generate_matrix_covers_large_group_message_types():
     config = experiment.ExperimentConfig(
-        seed=7,
-        groups=2,
-        min_users=4,
-        max_users=4,
-        rounds_per_group=30,
+        seed             = 7,
+        groups           = 2,
+        min_users        = 4,
+        max_users        = 4,
+        rounds_per_group = 30,
     )
 
     matrix = experiment.generate_matrix(config)
@@ -52,8 +52,8 @@ def test_score_turn_detects_missed_and_over_reply():
     matrix = experiment.generate_matrix(
         experiment.ExperimentConfig(groups=1, min_users=3, max_users=3, rounds_per_group=24)
     )
-    turns = matrix["groups"][0]["turns"]
-    expected_reply = next(turn for turn in turns if turn["expected_action"] == "reply")
+    turns            = matrix["groups"][0]["turns"]
+    expected_reply   = next(turn for turn in turns if turn["expected_action"] == "reply")
     expected_silence = next(turn for turn in turns if turn["expected_action"] == "silence")
 
     missed = experiment.score_turn(expected_reply, [])
@@ -163,11 +163,11 @@ def test_score_turn_covers_recent_humanlike_regressions():
 def test_dry_run_writes_artifacts(tmp_path: Path):
     matrix = experiment.generate_matrix(
         experiment.ExperimentConfig(
-            seed=11,
-            groups=2,
-            min_users=4,
-            max_users=4,
-            rounds_per_group=12,
+            seed             = 11,
+            groups           = 2,
+            min_users        = 4,
+            max_users        = 4,
+            rounds_per_group = 12,
         )
     )
 
@@ -175,9 +175,9 @@ def test_dry_run_writes_artifacts(tmp_path: Path):
     paths = experiment.write_experiment_artifacts(
         matrix,
         tmp_path,
-        run_id="test-run",
-        mode="dry-run",
-        results=results,
+        run_id  = "test-run",
+        mode    = "dry-run",
+        results = results,
     )
 
     assert paths["matrix"].exists()
@@ -268,13 +268,13 @@ def test_real_experiment_context_exposes_ai_route_without_secrets(tmp_path: Path
     secrets = {"ai": {"providers": {"test": {"api_key": "secret-key"}}}}
 
     context = experiment._make_context(
-        session=object(),
-        config=config,
-        secrets=secrets,
-        data_dir=tmp_path,
-        user_id=1,
-        group_id=2,
-        request_id="test",
+        session    = object(),
+        config     = config,
+        secrets    = secrets,
+        data_dir   = tmp_path,
+        user_id    = 1,
+        group_id   = 2,
+        request_id = "test",
     )
 
     assert context.secrets == {}

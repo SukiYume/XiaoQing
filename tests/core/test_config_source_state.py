@@ -16,9 +16,9 @@ from tests.helpers.config_test_support import (
     pytest,
 )
 
-config_file = _fixture_support.config_file
-config_manager = _fixture_support.config_manager
-secrets_file = _fixture_support.secrets_file
+config_file     = _fixture_support.config_file
+config_manager  = _fixture_support.config_manager
+secrets_file    = _fixture_support.secrets_file
 temp_config_dir = _fixture_support.temp_config_dir
 
 
@@ -38,7 +38,7 @@ class TestConfigSourceStateModel:
         config_file: Path,
         secrets_file: Path,
     ):
-        original_config = config_manager.snapshot().mutable_config()
+        original_config  = config_manager.snapshot().mutable_config()
         original_secrets = config_manager.snapshot().mutable_secrets()
 
         config_file.unlink()
@@ -93,7 +93,7 @@ class TestConfigSourceStateModel:
         config_file: Path,
         secrets_file: Path,
     ):
-        before = config_manager.snapshot()
+        before  = config_manager.snapshot()
         rotated = {
             "admin_user_ids": [999],
             "plugins": {"echo": {"api_key": "for-new-config-only"}},
@@ -110,7 +110,7 @@ class TestConfigSourceStateModel:
         assert rejected.mutable_config() == before.mutable_config()
         assert rejected.mutable_secrets() == {}
 
-        repaired_config = before.mutable_config()
+        repaired_config             = before.mutable_config()
         repaired_config["bot_name"] = "paired-new-config"
         config_file.write_text(json.dumps(repaired_config), encoding="utf-8")
         confirmed = config_manager.reload()
@@ -121,12 +121,12 @@ class TestConfigSourceStateModel:
         assert confirmed.mutable_secrets() == rotated
 
     def test_initial_invalid_config_never_authorizes_valid_secrets(self, tmp_path: Path):
-        config_path = tmp_path / "invalid-initial-config.json"
+        config_path  = tmp_path / "invalid-initial-config.json"
         secrets_path = tmp_path / "valid-initial-secrets.json"
         config_path.write_text("{broken", encoding="utf-8")
         secrets_path.write_text(json.dumps({"onebot_token": "must-not-authorize"}))
 
-        manager = ConfigManager(config_path, secrets_path)
+        manager  = ConfigManager(config_path, secrets_path)
         snapshot = manager.snapshot()
 
         assert snapshot.config_status is ConfigSourceStatus.INVALID
@@ -212,11 +212,11 @@ class TestConfigSourceStateModel:
         config_file: Path,
         secrets_file: Path,
     ):
-        config_backup = config_file.with_name(f"{config_file.name}.bak")
+        config_backup  = config_file.with_name(f"{config_file.name}.bak")
         secrets_backup = secrets_file.with_name(f"{secrets_file.name}.bak")
         config_backup.write_text('{"bot_name":"backup-config"}', encoding="utf-8")
         secrets_backup.write_text('{"token":"revoked-backup"}', encoding="utf-8")
-        invalid_config = b"{invalid-config"
+        invalid_config  = b"{invalid-config"
         invalid_secrets = b"{invalid-secrets"
         config_file.write_bytes(invalid_config)
         secrets_file.write_bytes(invalid_secrets)

@@ -87,13 +87,13 @@ def handle_command_errors(
         @functools.wraps(target)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
             parent_depth = _command_error_depth.get()
-            depth_token = _command_error_depth.set(parent_depth + 1)
+            depth_token  = _command_error_depth.set(parent_depth + 1)
             try:
                 return await target(*args, **kwargs)
             except PendoException as exc:
                 if parent_depth:
                     raise
-                context = _context_from_call(target, args, kwargs)
+                context    = _context_from_call(target, args, kwargs)
                 request_id = str(getattr(context, "request_id", "") or "-")
                 logger.warning(
                     "Pendo business error error_code=%s error_type=%s",
@@ -108,12 +108,12 @@ def handle_command_errors(
                 if parent_depth:
                     raise
                 context = _context_from_call(target, args, kwargs)
-                log = getattr(context, "logger", None) or logger
+                log     = getattr(context, "logger", None) or logger
                 message = public_error_message(
                     context,
                     exc,
-                    logger=log,
-                    component=f"pendo.{target.__name__}",
+                    logger    = log,
+                    component = f"pendo.{target.__name__}",
                 )
                 if return_segments:
                     return [{"type": "text", "data": {"text": message}}]

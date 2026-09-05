@@ -10,11 +10,11 @@ from typing import Any, ClassVar
 class PendoRuntimeSettings:
     """Atomically published settings that may change while the plugin is loaded."""
 
-    web_enabled: bool = True
-    web_host: str = "127.0.0.1"
-    web_port: int = 12001
+    web_enabled: bool               = True
+    web_host: str                   = "127.0.0.1"
+    web_port: int                   = 12001
     web_session_cookie_secure: bool = False
-    web_demo_enabled: bool = False
+    web_demo_enabled: bool          = False
 
 
 class PendoConfig:
@@ -24,22 +24,22 @@ class PendoConfig:
     DB_FILENAME = "pendo.db"
 
     # 用户设置默认值
-    DEFAULT_TIMEZONE = "Asia/Shanghai"
+    DEFAULT_TIMEZONE          = "Asia/Shanghai"
     DEFAULT_QUIET_HOURS_START = "23:00"
-    DEFAULT_QUIET_HOURS_END = "07:00"
+    DEFAULT_QUIET_HOURS_END   = "07:00"
     DEFAULT_DAILY_REPORT_TIME = "08:00"
     DEFAULT_DIARY_REMIND_TIME = "21:30"
-    DEFAULT_CATEGORY = "未分类"
+    DEFAULT_CATEGORY          = "未分类"
 
     # 提醒配置
-    REMINDER_CHECK_WINDOW_SECONDS = 120  # 提醒检查时间窗口（秒）
-    REMINDER_CLAIM_LEASE_SECONDS = 120  # 原子领取后的 worker lease
-    REMINDER_MAX_RETRY = 3  # 提醒发送最大重试次数
-    REMINDER_REPEAT_INTERVAL_SECONDS = 300  # 未确认提醒重复间隔（秒），默认5分钟
-    REMINDER_MAX_REPEATS = 3  # 未确认提醒最大重复次数
+    REMINDER_CHECK_WINDOW_SECONDS                  = 120  # 提醒检查时间窗口（秒）
+    REMINDER_CLAIM_LEASE_SECONDS                   = 120  # 原子领取后的 worker lease
+    REMINDER_MAX_RETRY                             = 3  # 提醒发送最大重试次数
+    REMINDER_REPEAT_INTERVAL_SECONDS               = 300  # 未确认提醒重复间隔（秒），默认5分钟
+    REMINDER_MAX_REPEATS                           = 3  # 未确认提醒最大重复次数
     REMINDER_AUTO_CONFIRM_AFTER_FINAL_SEND_SECONDS = 600
-    REMINDER_STALE_AFTER_SECONDS = 24 * 60 * 60  # 服务长时间离线后不复活旧提醒
-    REMINDER_LOG_RETENTION_DAYS = 90  # 已确认提醒历史保留天数
+    REMINDER_STALE_AFTER_SECONDS                   = 24 * 60 * 60  # 服务长时间离线后不复活旧提醒
+    REMINDER_LOG_RETENTION_DAYS                    = 90  # 已确认提醒历史保留天数
 
     # 搜索配置
     DEFAULT_SEARCH_LIMIT = 50  # 默认搜索结果数量
@@ -48,14 +48,14 @@ class PendoConfig:
     EVENT_MAX_RRULE_COUNT = 365  # 重复日程最大次数
 
     # AI配置
-    AI_PARSE_TIMEOUT = 30  # AI解析超时时间（秒）
+    AI_PARSE_TIMEOUT     = 30  # AI解析超时时间（秒）
     AI_PARSE_TEMPERATURE = 0.3  # AI解析温度参数
-    AI_MAX_TOKENS = 1000  # AI最大token数
+    AI_MAX_TOKENS        = 1000  # AI最大token数
     AI_FALLBACK_TO_RULES = True  # AI失败时是否回退到规则解析
 
     LOG_OPERATION_RETENTION_DAYS = 90  # 操作日志保留天数
-    UNDO_WINDOW_MINUTES = 5  # 删除与编辑共享的固定可撤销窗口
-    UNDO_HINT = f"💡 {UNDO_WINDOW_MINUTES}分钟内可用 /pendo undo 撤销"
+    UNDO_WINDOW_MINUTES          = 5  # 删除与编辑共享的固定可撤销窗口
+    UNDO_HINT                    = f"💡 {UNDO_WINDOW_MINUTES}分钟内可用 /pendo undo 撤销"
     # 分页配置
     LIST_PAGE_SIZE = 10  # 列表分页大小
 
@@ -66,7 +66,7 @@ class PendoConfig:
     SEARCH_CONTENT_PREVIEW_LENGTH = 50  # 搜索结果内容预览长度
 
     # 会话配置
-    SESSION_TIMEOUT_SECONDS = 300.0  # 会话超时时间（秒）
+    SESSION_TIMEOUT_SECONDS                          = 300.0  # 会话超时时间（秒）
     SESSION_EXIT_COMMANDS: ClassVar[tuple[str, ...]] = (
         "退出",
         "exit",
@@ -82,23 +82,23 @@ class PendoConfig:
     # 会话类型常量
     SESSION_TYPE_DIARY_TEMPLATE = "diary_template"
     SESSION_TYPE_EVENT_CONFLICT = "event_conflict"
-    SESSION_TYPE_EVENT_INFO = "event_info"
-    SESSION_TYPE_TASK_ADD = "task_add"
-    SESSION_TYPE_LEDGER_ADD = "ledger_add"
+    SESSION_TYPE_EVENT_INFO     = "event_info"
+    SESSION_TYPE_TASK_ADD       = "task_add"
+    SESSION_TYPE_LEDGER_ADD     = "ledger_add"
 
     # Web UI
     # 认证期限统一使用秒。登录 Code 与浏览器会话均为 7 天，Widget
     # Bearer Token 为 365 天；认证方式不同，但到期计算共享同一时间单位。
-    WEB_LOGIN_CODE_EXPIRE_SECONDS = 7 * 24 * 60 * 60
-    WEB_SESSION_EXPIRE_SECONDS = WEB_LOGIN_CODE_EXPIRE_SECONDS
-    WEB_WIDGET_TOKEN_EXPIRE_SECONDS = 365 * 24 * 60 * 60
-    WEB_DEMO_EXPIRE_HOURS = 6
-    WEB_DEMO_MAX_ACTIVE_SESSIONS = 20
-    WEB_DEMO_REQUESTS_PER_HOUR = 3
+    WEB_LOGIN_CODE_EXPIRE_SECONDS                     = 7 * 24 * 60 * 60
+    WEB_SESSION_EXPIRE_SECONDS                        = WEB_LOGIN_CODE_EXPIRE_SECONDS
+    WEB_WIDGET_TOKEN_EXPIRE_SECONDS                   = 365 * 24 * 60 * 60
+    WEB_DEMO_EXPIRE_HOURS                             = 6
+    WEB_DEMO_MAX_ACTIVE_SESSIONS                      = 20
+    WEB_DEMO_REQUESTS_PER_HOUR                        = 3
     _RUNTIME_DEFAULTS: ClassVar[PendoRuntimeSettings] = PendoRuntimeSettings()
     _runtime_settings: ClassVar[PendoRuntimeSettings] = _RUNTIME_DEFAULTS
-    _runtime_revision: ClassVar[int | None] = None
-    _runtime_lock: ClassVar[Lock] = Lock()
+    _runtime_revision: ClassVar[int | None]           = None
+    _runtime_lock: ClassVar[Lock]                     = Lock()
 
     @classmethod
     def validate(cls) -> None:
@@ -202,7 +202,7 @@ class PendoConfig:
                 and candidate != cls._runtime_settings
             ):
                 raise RuntimeError("conflicting Pendo settings for the same revision")
-            changed = candidate != cls._runtime_settings
+            changed               = candidate != cls._runtime_settings
             cls._runtime_settings = candidate
             if settings_revision is not None:
                 cls._runtime_revision = settings_revision

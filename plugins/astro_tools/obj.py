@@ -20,32 +20,32 @@ from core.bounded_http import (
 from core.plugin_base import PluginContextProtocol
 from core.public_errors import public_error_message
 
-SIMBAD_TAP_SYNC_URL = "https://simbad.cds.unistra.fr/simbad/sim-tap/sync"
-SIMBAD_CONNECT_TIMEOUT_SECONDS = 3
-SIMBAD_REQUEST_TIMEOUT_SECONDS = 12
+SIMBAD_TAP_SYNC_URL                    = "https://simbad.cds.unistra.fr/simbad/sim-tap/sync"
+SIMBAD_CONNECT_TIMEOUT_SECONDS         = 3
+SIMBAD_REQUEST_TIMEOUT_SECONDS         = 12
 SIMBAD_TRANSPORT_TOTAL_TIMEOUT_SECONDS = 14
-SIMBAD_TOTAL_TIMEOUT_SECONDS = 15
-SIMBAD_MAX_OBJECT_NAME_CHARS = 256
+SIMBAD_TOTAL_TIMEOUT_SECONDS           = 15
+SIMBAD_MAX_OBJECT_NAME_CHARS           = 256
 
-_SIMBAD_MAX_COLUMNS = 32
+_SIMBAD_MAX_COLUMNS           = 32
 _SIMBAD_MAX_COLUMN_NAME_CHARS = 64
-_SIMBAD_MAX_TEXT_CHARS = 128
-_SIMBAD_MAX_QUERY_CHARS = 64 * 1024
-_SIMBAD_COLUMN_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
-_SIMBAD_REQUIRED_COLUMNS = frozenset({"ra", "dec", "otype", "v", "sp_type"})
-_SIMBAD_BODY_LIMITS = BodyLimits(
-    max_wire_bytes=128 * 1024,
-    max_decoded_bytes=256 * 1024,
-    max_decompression_ratio=20,
-    ratio_grace_bytes=8 * 1024,
-    chunk_bytes=16 * 1024,
+_SIMBAD_MAX_TEXT_CHARS        = 128
+_SIMBAD_MAX_QUERY_CHARS       = 64 * 1024
+_SIMBAD_COLUMN_NAME           = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+_SIMBAD_REQUIRED_COLUMNS      = frozenset({"ra", "dec", "otype", "v", "sp_type"})
+_SIMBAD_BODY_LIMITS           = BodyLimits(
+    max_wire_bytes          = 128 * 1024,
+    max_decoded_bytes       = 256 * 1024,
+    max_decompression_ratio = 20,
+    ratio_grace_bytes       = 8 * 1024,
+    chunk_bytes             = 16 * 1024,
 )
 _SIMBAD_JSON_LIMITS = JsonLimits(
-    max_bytes=_SIMBAD_BODY_LIMITS.max_decoded_bytes,
-    max_depth=8,
-    max_nodes=1_024,
-    max_string_chars=64 * 1024,
-    max_number_chars=128,
+    max_bytes        = _SIMBAD_BODY_LIMITS.max_decoded_bytes,
+    max_depth        = 8,
+    max_nodes        = 1_024,
+    max_string_chars = 64 * 1024,
+    max_number_chars = 128,
 )
 
 
@@ -74,7 +74,7 @@ def _build_simbad_query(name: str) -> str:
         raise ValueError("invalid SIMBAD object name")
 
     escaped_name = normalized_name.replace("'", "''")
-    query = (
+    query        = (
         'SELECT TOP 1 basic."ra" AS "ra", basic."dec" AS "dec", '
         'basic."otype" AS "otype", allfluxes."V" AS "V", '
         'basic."sp_type" AS "sp_type" FROM basic '
@@ -111,7 +111,7 @@ def _validate_simbad_payload(payload: object) -> SimbadRow | None:
     if not isinstance(payload, Mapping):
         raise ResponseFormatError("invalid SIMBAD JSON root")
     metadata = payload.get("metadata")
-    data = payload.get("data")
+    data     = payload.get("data")
     if not isinstance(metadata, list) or not isinstance(data, list):
         raise ResponseFormatError("invalid SIMBAD JSON table")
     if not metadata or len(metadata) > _SIMBAD_MAX_COLUMNS:
@@ -158,8 +158,8 @@ def _validate_simbad_payload(payload: object) -> SimbadRow | None:
     raw_v = cell("v")
     v_magnitude = None if raw_v is None else _finite_number(raw_v, field="V")
     return SimbadRow(
-        ra_deg=ra_deg,
-        dec_deg=dec_deg,
+        ra_deg  = ra_deg,
+        dec_deg = dec_deg,
         otype=_optional_text(cell("otype"), field="otype"),
         v_magnitude=v_magnitude,
         sp_type=_optional_text(cell("sp_type"), field="sp_type"),
@@ -169,14 +169,14 @@ def _validate_simbad_payload(payload: object) -> SimbadRow | None:
 def _query_simbad_object(name: str) -> SimbadRow | None:
     """通过受限同步 HTTP 请求查询单个 SIMBAD 对象。"""
 
-    query = _build_simbad_query(name)
+    query    = _build_simbad_query(name)
     response = requests_request_bounded(
         "POST",
         SIMBAD_TAP_SYNC_URL,
-        limits=_SIMBAD_BODY_LIMITS,
-        mime_policy=JSON_MIME_POLICY,
-        headers={"Accept": "application/json"},
-        request_kwargs={
+        limits         = _SIMBAD_BODY_LIMITS,
+        mime_policy    = JSON_MIME_POLICY,
+        headers        = {"Accept": "application/json"},
+        request_kwargs = {
             "data": {
                 "REQUEST": "doQuery",
                 "LANG": "ADQL",
@@ -431,7 +431,7 @@ async def handle_obj(args: str, context: PluginContextProtocol) -> str:
     if len(parts) > 1 and parts[0].casefold() in reserved_names:
         return f"不接受额外参数\n用法: /astro obj {parts[0]}"
 
-    obj_name = args.casefold()
+    obj_name          = args.casefold()
     solar_system_info = SOLAR_SYSTEM_INFO.get(obj_name)
     if solar_system_info is not None:
         return solar_system_info
@@ -448,12 +448,12 @@ async def handle_obj(args: str, context: PluginContextProtocol) -> str:
         if rendered is None:
             return f"未找到天体: {args}\n\n提示: 可以尝试使用英文名称，如 'Crab Nebula', 'Betelgeuse' 等"
         return rendered
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return "SIMBAD 查询超时，请稍后再试。"
     except Exception as exc:
         return public_error_message(
             context,
             exc,
-            logger=context.logger,
-            component="astro_tools.obj",
+            logger    = context.logger,
+            component = "astro_tools.obj",
         )

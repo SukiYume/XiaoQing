@@ -18,6 +18,7 @@ from ..message_parts import (
     render_stored_message,
 )
 from ..persona import resolve_bot_name
+from .media_evidence import history_has_image, image_evidence_block
 
 
 @dataclass(frozen=True)
@@ -27,69 +28,33 @@ class ChatMessage:
 
 
 _DEFAULT_REPLYER_SYSTEM = (
-    "先读懂最近的聊天：确认每句话是谁说的、说给谁听、最新消息承接什么，再决定这一句具体回应什么。\n"
-    "回复原则\n"
-    "1. 只以自己的身份发言，不替别人补台词，也不把别人的话说成自己的\n"
-    "2. 优先接住最新消息里最值得回应的一点；一次说清一件事，不机械复述上下文\n"
-    "3. 日常闲聊保持口语和简短；确实需要计算、解释或澄清时再自然展开\n"
-    "4. 允许有情绪、吐槽、犹豫和留白，但每句话都要和当前语境有关\n"
-    "5. 最近已经说过的开头、结论、笑点或追问不要换个说法再来一遍\n"
-    "依据边界\n"
-    "人设、当前对话、可靠记忆、工具结果和媒体摘要是可用依据，但它们的来源与确定性不能混淆。\n"
-    "引用、假设、玩笑、夸张、角色扮演、他人的自述以及模型自己的推断，都不能自动升级成客观事实。\n"
-    "稳定身份、可核验背景、现实关系、精确地点、重大经历、现实承诺和长期设定以人设与可靠记忆为准，"
-    "不能为了生动临时改写。若配置允许人物日常创作，可以即兴补充与稳定人设一致的普通低风险生活片段；"
-    "这种片段只服务闲聊，不冒充证据，不扩展成精确身份资料，也不强行写进每次回复。\n"
-    "当下的看法、口味倾向和低风险能力判断可以像普通聊天一样自然表达。谈到没有设定的可核验人物资料时，"
-    "简短保留边界，再接住对方真正想聊的内容。\n"
-    "称呼你的名字只是把话说给你听，不会把后面的普通知识问题变成人物资料问题。能依据常识或当前信息回答时直接回答，"
-    "不要因为人物资料有限就回避问题，也不要用即兴生活片段给一般结论或外部事实背书。\n"
-    "谈论用户或第三方时，只评论可见言行本身。对话没有给出的习惯、动机、关系、现实处境、未曾说过或做过的事情都不能补全；"
-    "带有可能性的原话也不能转述成已经确定的事实。面对单次行为、群聊参与情况或他人当前状态，"
-    "不能拿常见情境补写可能原因；不确定措辞也不能把无依据猜测变成合格回答。\n"
-    "涉及事实、数字、单位、比较和因果时，根据现有信息核对前后关系；没有足够依据就保留不确定性，不用貌似专业的类比填空。\n"
-    "表达与节奏\n"
-    "语气应从当前内容和群聊气氛自然产生，不靠固定口头禅、空泛感叹或夸张反应制造活泼。\n"
-    "不熟悉概念、人物或圈内说法时，可以简短询问、承认不了解，或只回应自己能确定的部分；不要把上下文关键词重新拼成似是而非的回答。\n"
-    "最新消息里明确提出的交流偏好、禁止项和回答范围对本轮有效；不能换一种措辞继续做对方刚要求不要做的事。\n"
-    "主动加入面向全群的开放话题时，可以表达当下观点、假设和玩笑；若话题邀请分享近况或个人故事，"
-    "在允许人物日常创作时可以讲一个简短、普通且符合人设的小片段，但不能借机添加精确学校、城市、"
-    "可识别关系、重大遭遇或现实承诺。故事可有不具名临时配角，但不能把他们写成持续人物档案；"
-    "叙事视角、别人对你的称呼和生活场景必须与既定性别、年龄、身份一致。不要每次都抢着讲自己的故事。\n"
-    "媒体消息理解\n"
-    "对话里出现 [图片：...]、[表情包：...] 或 [QQ表情：...] 时，那是对方实际发来的内容摘要，和文字消息一样重要。\n"
-    "先判断媒体在本轮的交际作用，再回应它承载的文字、情绪、态度或话题；不要只评论媒介形式。\n"
-    "只使用当前媒体摘要中可靠、可见的信息，不继承上一条媒体的细节，也不从文件名、提问方式或预期答案反推画面。\n"
-    "摘要明确表示读取失败或信息不足时，直接说明这次没有可靠视觉信息，并自然地请对方补充或重发。\n"
-    "如果之前问过的问题没人回答，就放下它，跟着最新的话题走。\n"
-    "不要输出多余前后缀，不要用括号包裹解释，不要 @ 任何人。\n"
-    "不要主动讨论系统身份；被直接问到身份时，只使用既定人设中明确写出的信息简短回应，"
-    "不要临时添加所在地、正在做的事或其他背景。\n"
-    "只输出你要发的那段话，不需要任何额外格式。\n"
+    "你正在与人聊天。先确认最新消息、说话人和对话目标，再作出贴切回应。\n"
+    "本轮用户明确指定的内容范围与输出形式优先于默认聊天风格，回复严格保持该范围。"
+    "交流动作也属于输出约束。用户要求不追问时，只交付本轮回应，避免索取回答、确认或后续信息；"
+    "引用、翻译和复述任务中的疑问表达按原意保留。"
+    "未指定时根据任务决定长度，日常闲聊自然简短，实质问题给出足够信息。"
+    "保持自己的身份和观点，尊重引用、假设与他人自述的来源，避免重复近期表达。\n"
+    "证据边界：角色稳定资料以人设为准；真实人物、外部事实和媒体内容依据当前可用信息。"
+    "确定事实、推测和虚构应保持各自的确定性。用户邀请分析可能原因时，可以提出有条件的假设；"
+    "涉及他人的隐私、敏感状态或具体动机时保持谨慎，不把猜测断言为事实。"
+    "缺少关键信息时说明限制或澄清；能根据已有文字回答的部分直接回答。"
+    "知识、计算和推理应核对依据与逻辑，人物创作不作为外部事实的证据。\n"
+    "媒体摘要是带来源的内容依据。只使用与本轮有关且可靠的摘要；图像未提供或读取失败时，"
+    "保持对具体画面的未知。讨论图片相关概念、编程或用户已写明的内容时，按实际任务回答。"
+    "只输出要发送的回复；媒体附件使用约定的 marker。"
 )
 
 _HUMANLIKE_REPLY_DIRECTIVE = (
-    "拟人聊天补充\n"
-    "自然感来自对具体内容的真实反应、合适的省略和对轮次的尊重，不来自固定口癖、"
-    "夸张情绪或堆砌人物小传。除非对方明确需要完整说明，否则像普通群友一样接住当下即可，"
-    "不必把每句话写成总结、建议或完整答案。回复规模要和对方这一轮的需求相称；"
-    "没有明确要求分析时，只选最自然的一点回应，避免穷举可能性、连续追问或展开成清单。"
-    "能直接回答、表态、接梗或轻轻调侃时就直接说，不用固定感叹词、同一套不确定性话术或反问来拖延。"
-    "追问只在确实缺关键信息或对方明显想继续展开时使用，不把问题当默认结尾，更不要一条回复连问几件事。"
-    "调侃要贴着当前内容、留有分寸，不拿隐私、脆弱处或真实处境开刀。"
-    "不要靠通用网络套话、成串语气词或自动添加 Unicode emoji 假装活泼；群里已有的表达习惯可以自然跟随。"
+    "表达偏好：像普通群友一样回应具体内容，允许适度幽默、情绪和留白。"
+    "追问应有实际用途，避免默认用问题结尾；尊重用户明确要求。"
+    "语气随语境变化，避免固定口癖、空泛附和、连续反问和主动堆叠 emoji。"
 )
 
 _OUTBOUND_MEDIA_MARKER_DIRECTIVE = (
-    "出站媒体 marker\n"
-    "你可以在合适的时候为这条回复挂一个媒体：表情包、QQ 系统表情或图片。"
-    "挂法是在文本里加一个 marker：`[想发表情:简短描述]`、"
-    "`[想发QQ表情:简短描述]`、`[想发图片:简短描述]`。"
-    "不要直接输出 `[表情包：...]`、`[QQ表情：...]` 或 `[图片：...]`，那是对方消息摘要的格式。"
-    "每条回复最多挂一个；不挂就不写。"
-    "挂的前提是这个媒体能为这条回复加一层语气、情绪或调侃，单纯复读情绪没必要挂。"
-    "简短描述最多 12 个字，要具体表达希望补充的动作、表情或语气，不能只写空泛评价。"
-    "候选库会按描述查最匹配的项，找不到就当没挂。"
+    "出站媒体格式：有助于表达时可添加一个 `[想发表情:简短描述]`、"
+    "`[想发QQ表情:简短描述]` 或 `[想发图片:简短描述]`，描述最多 12 字。"
+    "每条回复最多一个；候选库没有合适素材时省略。"
+    "`[图片：...]`、`[表情包：...]` 和 `[QQ表情：...]` 用于入站摘要，不用于生成附件。"
 )
 
 _CURRENT_MEDIA_MARKER_RE = re.compile(r"\[(图片|表情包|QQ表情)：([^\]\n]{1,400})\]")
@@ -160,14 +125,14 @@ def _current_turn_fallback_parts(current_text: str) -> tuple[dict[str, Any], ...
         return ()
 
     parts: list[dict[str, Any]] = []
-    cursor = 0
+    cursor                      = 0
     for match in _CURRENT_MEDIA_MARKER_RE.finditer(text):
         prefix = text[cursor : match.start()].strip()
         if prefix:
             parts.append({"kind": "text", "text": prefix})
-        marker = str(match.group(0) or "").strip()
+        marker     = str(match.group(0) or "").strip()
         media_type = str(match.group(1) or "").strip()
-        label = str(match.group(2) or "").strip()
+        label      = str(match.group(2) or "").strip()
         if media_type == "图片":
             parts.append({"kind": "image", "marker": marker, "description": label})
         elif media_type == "表情包":
@@ -185,7 +150,7 @@ def _current_turn_fallback_parts(current_text: str) -> tuple[dict[str, Any], ...
 
 
 def _media_marker_for_current_turn(part: dict[str, Any]) -> str:
-    kind = str(part.get("kind", "") or "").strip()
+    kind   = str(part.get("kind", "") or "").strip()
     marker = str(part.get("marker", "") or "").strip()
     if marker:
         return marker
@@ -279,9 +244,9 @@ def _current_turn_target_block(
         text = str(current_text or "").strip()
         return f"现在{sender}说的：{text}。引起了你的注意" if text else ""
 
-    text_parts: list[str] = []
+    text_parts: list[str]    = []
     media_markers: list[str] = []
-    media_kinds: list[str] = []
+    media_kinds: list[str]   = []
     for part in parts:
         kind = str(part.get("kind", "") or "").strip()
         if kind == "text":
@@ -294,10 +259,10 @@ def _current_turn_target_block(
             media_markers.append(marker)
             media_kinds.append(kind)
 
-    text_part = "\n".join(text_parts).strip()
+    text_part  = "\n".join(text_parts).strip()
     media_part = " ".join(media_markers).strip()
-    has_text = bool(text_part)
-    has_media = bool(media_part)
+    has_text   = bool(text_part)
+    has_media  = bool(media_part)
 
     if not has_media:
         return f"现在{sender}说的：{text_part or str(current_text or '').strip()}。引起了你的注意"
@@ -314,9 +279,9 @@ def _current_turn_target_block(
 
     if has_media and not has_text:
         media_only_block = _media_only_target_block(
-            sender=sender,
-            media_kinds=media_kinds,
-            media_markers=media_markers,
+            sender        = sender,
+            media_kinds   = media_kinds,
+            media_markers = media_markers,
         )
         if media_only_block:
             return media_only_block + "。引起了你的注意"
@@ -332,12 +297,11 @@ def build_dialogue_prompt(
     max_chars: int = 800,
 ) -> str:
     lines: list[str] = []
-    total = 0
-    truncated = False
+    truncated        = False
 
     items = list(history)
     if truncate and len(items) > 12:
-        items = items[-12:]
+        items     = items[-12:]
         truncated = True
 
     last_ts: float = 0.0
@@ -360,8 +324,8 @@ def build_dialogue_prompt(
             f"m{msg.message_id}" if getattr(msg, "message_id", None) is not None else ""
         )
         prefix = f"[{id_text}]" if id_text else ""
-        t = _format_message_time(msg_ts) if msg_ts else ""
-        text = _render_message_content_for_prompt(msg)
+        t      = _format_message_time(msg_ts) if msg_ts else ""
+        text   = _render_message_content_for_prompt(msg)
         if not text:
             continue
         if truncate:
@@ -369,13 +333,17 @@ def build_dialogue_prompt(
             new_text = _maybe_truncate_message(text, ratio=ratio)
             if new_text != text:
                 truncated = True
-                text = new_text
+                text      = new_text
         line = f"{prefix}{t}, {name}: {text}".strip()
-        if truncate and total + len(line) > max_chars and lines:
-            truncated = True
-            break
         lines.append(line)
-        total += len(line)
+
+    # 优先保留最新输入，再从较早的上下文回收预算；展示顺序仍为时间正序。
+    if truncate:
+        while len(lines) > 1 and sum(map(len, lines)) > max_chars:
+            lines.pop(0)
+            truncated = True
+        while lines and lines[0].startswith("——距离上一条消息"):
+            lines.pop(0)
 
     if truncated:
         lines.insert(0, "（前面的有点记不清了…）")
@@ -395,20 +363,21 @@ def build_prompt_messages(
     keyword_rules: Sequence[Any],
     regex_rules: Sequence[Any],
     current_parts: Sequence[dict[str, Any]] | None = None,
-    memory_block: str = "",
-    expression_habits_block: str = "",
-    jargon_explanation: str = "",
-    tool_info_block: str = "",
-    planner_reasoning: str = "",
-    identity_block: str = "",
-    reply_style_override: str = "",
-    state_override: str = "",
+    current_image_attached: bool | None            = None,
+    memory_block: str                              = "",
+    expression_habits_block: str                   = "",
+    jargon_explanation: str                        = "",
+    tool_info_block: str                           = "",
+    planner_reasoning: str                         = "",
+    identity_block: str                            = "",
+    reply_style_override: str                      = "",
+    state_override: str                            = "",
     request_id: str,
     goal: str = "",
 ) -> list[ChatMessage]:
     bot_name = resolve_bot_name(bot_name)
-    sender = sender_name.strip() if sender_name else "用户"
-    now = time.strftime("%Y-%m-%d %H:%M", time.localtime())
+    sender   = sender_name.strip() if sender_name else "用户"
+    now      = time.strftime("%Y-%m-%d %H:%M", time.localtime())
 
     guardrail = ""
     if personality.polite_guardrail:
@@ -419,7 +388,7 @@ def build_prompt_messages(
         if reply_style_override
         else (personality.reply_style.strip() if personality.reply_style else "")
     )
-    channel = "私聊" if is_private else "群聊"
+    channel  = "私聊" if is_private else "群聊"
     identity = identity_block.strip() if identity_block else personality.identity.strip()
     # 使用调用方传入的持久化情绪状态（由 handlers.py 管理生命周期）
     state_text = state_override.strip() if state_override else ""
@@ -460,6 +429,10 @@ def build_prompt_messages(
     ]
     if guardrail.strip():
         instruction_parts.append(guardrail.strip())
+    if visual_evidence := image_evidence_block(
+        current_image_attached, history_available=history_has_image(history)
+    ):
+        instruction_parts.append(visual_evidence)
     if style:
         instruction_parts.append("回复风格偏好\n" + style)
 
@@ -473,18 +446,18 @@ def build_prompt_messages(
     if request_id:
         meta_parts.append(f"请求ID\n{request_id}")
 
-    all_sections = persona_parts + instruction_parts + reference_parts + meta_parts
+    all_sections  = persona_parts + instruction_parts + reference_parts + meta_parts
     system_prompt = "\n\n".join([s for s in all_sections if s]).strip()
 
     dialogue_history = _history_without_current_turn(
         history,
-        current_text=current_text,
-        current_parts=current_parts,
+        current_text  = current_text,
+        current_parts = current_parts,
     )
     dialogue = build_dialogue_prompt(dialogue_history, bot_name=bot_name, truncate=True)
-    chat_target = "下面是你们的对话" if is_private else "下面是群里正在聊的内容"
+    chat_target            = "下面是你们的对话" if is_private else "下面是群里正在聊的内容"
     user_blocks: list[str] = []
-    untrusted_context = {
+    untrusted_context      = {
         key: value.strip()[:1200]
         for key, value in {
             "retrieved_memory": memory_block,
@@ -508,33 +481,29 @@ def build_prompt_messages(
         user_blocks.append("你为什么要回复这条消息\n" + planner_reasoning.strip())
     user_blocks.append(f'{chat_target}（注意：你是"{bot_name}(你)"）\n{dialogue}'.strip())
     reply_target_block = _current_turn_target_block(
-        sender=sender,
-        current_text=current_text,
-        current_parts=current_parts,
+        sender        = sender,
+        current_text  = current_text,
+        current_parts = current_parts,
     )
     if reply_target_block:
         user_blocks.append(reply_target_block)
-    user_blocks.append(
-        f"你准备回复给 {sender}。先按本轮任务强度控制回复：普通闲聊通常一两句只接一个点，"
-        "需要论证、计算、比较或操作步骤的实质任务才完整展开。只输出你要发的那段话。"
-    )
 
     reaction_prompts: list[str] = []
     for item in keyword_rules or []:
         if isinstance(item, dict):
-            kw = str(item.get("keyword", "")).strip()
+            kw     = str(item.get("keyword", "")).strip()
             prompt = str(item.get("prompt", "")).strip()
         else:
-            kw = str(getattr(item, "keyword", "")).strip()
+            kw     = str(getattr(item, "keyword", "")).strip()
             prompt = str(getattr(item, "prompt", "")).strip()
         if kw and prompt:
             reaction_prompts.append(prompt)
     for item in regex_rules or []:
         if isinstance(item, dict):
-            pat = str(item.get("pattern", "")).strip()
+            pat    = str(item.get("pattern", "")).strip()
             prompt = str(item.get("prompt", "")).strip()
         else:
-            pat = str(getattr(item, "pattern", "")).strip()
+            pat    = str(getattr(item, "pattern", "")).strip()
             prompt = str(getattr(item, "prompt", "")).strip()
         if pat and prompt:
             reaction_prompts.append(prompt)
@@ -542,6 +511,12 @@ def build_prompt_messages(
         user_blocks.append(
             "关键词反应（可参考，不要生硬照抄）\n" + "；".join([p for p in reaction_prompts if p])
         )
+
+    # 最终输出契约保持最高任务优先级，避免风格偏好覆盖严格输出范围。
+    user_blocks.append(
+        f"回复给 {sender}，交付范围以最新用户原话为准。用户限定只输出指定内容时，"
+        "完整回复仅包含该内容，省略额外的引导、解释和寒暄。其余情况按任务需要组织内容。"
+    )
 
     user_prompt = re.sub(
         r"\n{3,}", "\n\n", "\n\n".join([b for b in user_blocks if b]).strip()

@@ -19,9 +19,9 @@ class GroupConfig:
     enabled: bool = True
 
     economy_multiplier: float = 1.0
-    decay_multiplier: float = 1.0
+    decay_multiplier: float   = 1.0
 
-    trade_enabled: bool = False
+    trade_enabled: bool           = False
     natural_trigger_enabled: bool = False
 
     activity_enabled: bool = True

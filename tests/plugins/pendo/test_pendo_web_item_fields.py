@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from tests.helpers.pendo_ledger_assertions import assert_cny_aggregate
 from tests.helpers.pendo_web_items_test_support import (
     ROOT,
     Database,
@@ -19,8 +20,8 @@ from tests.helpers.pendo_web_items_test_support import (
 def test_items_api_and_database_use_the_ledger_category_column():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_items_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
-    owner_id = "u-ledger"
+    db           = Database(str(temp_dir / "pendo.db"))
+    owner_id     = "u-ledger"
     items_module = items_api
 
     try:
@@ -51,10 +52,10 @@ def test_items_api_and_database_use_the_ledger_category_column():
 
         items = db.get_items(owner_id, filters={"type": "ledger", "ledger_category": "餐饮"})
         response = items_module.list_items(
-            type="ledger",
-            category=" 餐饮 ",
-            owner_id=owner_id,
-            db=db,
+            type     = "ledger",
+            category = " 餐饮 ",
+            owner_id = owner_id,
+            db       = db,
         )
         categories = items_module.list_categories(type="ledger", owner_id=owner_id, db=db)
 
@@ -72,8 +73,8 @@ def test_items_api_and_database_use_the_ledger_category_column():
 def test_items_list_applies_priority_before_pagination_and_total_count():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_items_priority_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
-    owner_id = "u-priority"
+    db           = Database(str(temp_dir / "pendo.db"))
+    owner_id     = "u-priority"
     items_module = items_api
 
     try:
@@ -115,12 +116,12 @@ def test_items_list_applies_priority_before_pagination_and_total_count():
         )
 
         result = items_module.list_items(
-            type="task",
-            priority=1,
-            page=1,
-            page_size=1,
-            owner_id=owner_id,
-            db=db,
+            type      = "task",
+            priority  = 1,
+            page      = 1,
+            page_size = 1,
+            owner_id  = owner_id,
+            db        = db,
         )
 
         assert result["data"]["total"] == 2
@@ -159,7 +160,7 @@ def test_resolve_date_field_restricts_fields_by_item_type():
 def test_database_get_items_supports_diary_date_sort_field():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_items_diary_sort_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
+    db       = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-diary-sort"
 
     try:
@@ -205,28 +206,28 @@ def test_database_get_items_supports_diary_date_sort_field():
 
         items = db.get_items(
             owner_id,
-            filters={"type": "diary", "sort_field": "diary_date", "sort_order": "ASC"},
-            limit=10,
+            filters = {"type": "diary", "sort_field": "diary_date", "sort_order": "ASC"},
+            limit   = 10,
         )
 
         assert [item.id for item in items] == ["d1", "d2", "d3"]
 
         by_entry_time = db.get_items(
             owner_id,
-            filters={"type": "diary", "sort_field": "entry_time", "sort_order": "DESC"},
-            limit=10,
+            filters = {"type": "diary", "sort_field": "entry_time", "sort_order": "DESC"},
+            limit   = 10,
         )
         assert [item.id for item in by_entry_time] == ["d2", "d3", "d1"]
 
         items_module = items_api
-        response = items_module.list_items(
-            type="diary",
-            sort="entry_time",
-            order="desc",
-            page=1,
-            page_size=10,
-            owner_id=owner_id,
-            db=db,
+        response     = items_module.list_items(
+            type      = "diary",
+            sort      = "entry_time",
+            order     = "desc",
+            page      = 1,
+            page_size = 10,
+            owner_id  = owner_id,
+            db        = db,
         )
         assert [item["id"] for item in response["data"]["items"]] == ["d2", "d3", "d1"]
     finally:
@@ -252,8 +253,8 @@ def test_normalize_ledger_fields_sets_defaults_and_rejects_invalid_amount():
 def test_update_ledger_item_recomputes_amount_cents_when_amount_changes():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_ledger_amount_update_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
-    owner_id = "u-ledger-amount"
+    db           = Database(str(temp_dir / "pendo.db"))
+    owner_id     = "u-ledger-amount"
     items_module = items_api
 
     try:
@@ -278,8 +279,8 @@ def test_update_ledger_item_recomputes_amount_cents_when_amount_changes():
         response = items_module.update_item(
             "ledger_amount",
             body=items_module.ItemUpdate(amount=56.78),
-            owner_id=owner_id,
-            db=db,
+            owner_id = owner_id,
+            db       = db,
         )
         item = db.get_item("ledger_amount", owner_id=owner_id)
 
@@ -294,7 +295,7 @@ def test_update_ledger_item_recomputes_amount_cents_when_amount_changes():
 def test_database_row_to_item_does_not_mask_incomplete_ledger_rows():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_ledger_strict_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
+    db       = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-ledger-strict"
 
     try:
@@ -367,8 +368,8 @@ def test_normalize_ledger_fields_handles_transfer_and_rejects_invalid_update_val
 def test_ledger_aggregate_tracks_transfer_separately_and_lists_accounts():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_ledger_v2_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
-    owner_id = "u-ledger-v2"
+    db           = Database(str(temp_dir / "pendo.db"))
+    owner_id     = "u-ledger-v2"
     items_module = items_api
 
     try:
@@ -413,36 +414,42 @@ def test_ledger_aggregate_tracks_transfer_separately_and_lists_accounts():
             db.insert_item(record)
 
         aggregate = items_module.aggregate_items(
-            type="ledger",
-            start_date="2026-03-01",
-            end_date="2026-03-31",
-            owner_id=owner_id,
-            db=db,
+            type       = "ledger",
+            start_date = "2026-03-01",
+            end_date   = "2026-03-31",
+            owner_id   = owner_id,
+            db         = db,
         )["data"]
         transfer_account = items_module.aggregate_items(
-            type="ledger",
-            account_name="招行信用卡",
-            start_date="2026-03-01",
-            end_date="2026-03-31",
-            owner_id=owner_id,
-            db=db,
+            type         = "ledger",
+            account_name = "招行信用卡",
+            start_date   = "2026-03-01",
+            end_date     = "2026-03-31",
+            owner_id     = owner_id,
+            db           = db,
         )["data"]
         accounts = items_module.list_ledger_accounts(owner_id=owner_id, db=db)["data"]["accounts"]
 
-        assert aggregate == {
-            "income": 5000,
-            "expense": 32.5,
-            "transfer": 1200,
-            "balance": 4967.5,
-            "count": 3,
-        }
-        assert transfer_account == {
-            "income": 0,
-            "expense": 0,
-            "transfer": 1200,
-            "balance": 0,
-            "count": 1,
-        }
+        assert_cny_aggregate(
+            aggregate,
+            {
+                "income": 5000,
+                "expense": 32.5,
+                "transfer": 1200,
+                "balance": 4967.5,
+                "count": 3,
+            },
+        )
+        assert_cny_aggregate(
+            transfer_account,
+            {
+                "income": 0,
+                "expense": 0,
+                "transfer": 1200,
+                "balance": 0,
+                "count": 1,
+            },
+        )
         assert accounts == ["微信", "招行", "招行信用卡"]
     finally:
         db.cleanup()
@@ -535,8 +542,8 @@ def test_event_update_route_preserves_event_notes_when_title_changes():
         ROOT / ".pytest_cache" / "tmp" / f"pendo_event_update_preserves_notes_{uuid.uuid4().hex}"
     )
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
-    owner_id = "u-event-metadata"
+    db           = Database(str(temp_dir / "pendo.db"))
+    owner_id     = "u-event-metadata"
     items_module = items_api
 
     try:
@@ -563,9 +570,9 @@ def test_event_update_route_preserves_event_notes_when_title_changes():
 
         result = items_module.update_item(
             "ev-note",
-            body=body,
-            owner_id=owner_id,
-            db=db,
+            body     = body,
+            owner_id = owner_id,
+            db       = db,
         )
 
         assert result["ok"] is True
@@ -628,7 +635,7 @@ def test_item_create_model_accepts_explicit_nullable_text_fields():
 
 def test_task_update_route_preserves_explicit_nulls_for_clearing_fields(tmp_path, request):
     items_module = items_api
-    db = Database(str(tmp_path / "pendo_task_clear_fields.db"))
+    db           = Database(str(tmp_path / "pendo_task_clear_fields.db"))
     request.addfinalizer(db.cleanup)
     owner_id = "u-task-clear-fields"
     db.insert_item(
@@ -652,13 +659,13 @@ def test_task_update_route_preserves_explicit_nulls_for_clearing_fields(tmp_path
     response = items_module.update_item(
         "task-clear-fields",
         items_module.ItemUpdate(
-            deadline_at=None,
-            plan_date=None,
-            category=None,
-            content=None,
+            deadline_at = None,
+            plan_date   = None,
+            category    = None,
+            content     = None,
         ),
-        owner_id=owner_id,
-        db=db,
+        owner_id = owner_id,
+        db       = db,
     )
     updated = db.get_item("task-clear-fields", owner_id=owner_id)
 
@@ -713,8 +720,8 @@ def test_normalize_note_fields_normalizes_references_and_related_items():
 def test_database_get_items_filters_note_tags_exactly_and_keyword():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_note_exact_tag_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
-    owner_id = "u-note-exact-tag"
+    db           = Database(str(temp_dir / "pendo.db"))
+    owner_id     = "u-note-exact-tag"
     items_module = items_api
 
     try:
@@ -752,10 +759,10 @@ def test_database_get_items_filters_note_tags_exactly_and_keyword():
         tagged = db.get_items(owner_id, filters={"type": "note", "tags": "工作"}, limit=10)
         keyword = db.get_items(owner_id, filters={"type": "note", "keyword": "深度"}, limit=10)
         api_tagged = items_module.list_items(
-            type="note",
-            tags=" 工作 ",
-            owner_id=owner_id,
-            db=db,
+            type     = "note",
+            tags     = " 工作 ",
+            owner_id = owner_id,
+            db       = db,
         )
 
         assert [item.id for item in tagged] == ["note_work"]
@@ -769,8 +776,8 @@ def test_database_get_items_filters_note_tags_exactly_and_keyword():
 def test_items_list_keyword_matches_extended_fields_and_total_count():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_items_keyword_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
-    owner_id = "u-items-keyword"
+    db           = Database(str(temp_dir / "pendo.db"))
+    owner_id     = "u-items-keyword"
     items_module = items_api
 
     try:
@@ -808,20 +815,20 @@ def test_items_list_keyword_matches_extended_fields_and_total_count():
         )
 
         ledger_result = items_module.list_items(
-            type="ledger",
-            keyword="窗口商户",
-            page=1,
-            page_size=10,
-            owner_id=owner_id,
-            db=db,
+            type      = "ledger",
+            keyword   = "窗口商户",
+            page      = 1,
+            page_size = 10,
+            owner_id  = owner_id,
+            db        = db,
         )
         event_result = items_module.list_items(
-            type="event",
-            keyword="会议室",
-            page=1,
-            page_size=10,
-            owner_id=owner_id,
-            db=db,
+            type      = "event",
+            keyword   = "会议室",
+            page      = 1,
+            page_size = 10,
+            owner_id  = owner_id,
+            db        = db,
         )
 
         assert ledger_result["data"]["total"] == 1

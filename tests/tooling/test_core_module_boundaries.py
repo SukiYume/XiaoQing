@@ -1,3 +1,4 @@
+# 架构回归：应用和插件控制面的模块职责保持分离。
 """Architecture gates for the split application and plugin control planes."""
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ ROOT = REPOSITORY_ROOT
 
 
 def _declared_methods(source: str, class_name: str) -> set[str]:
-    tree = ast.parse(source)
+    tree       = ast.parse(source)
     class_node = next(
         node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == class_name
     )
@@ -114,7 +115,7 @@ def test_runtime_compatibility_uses_capabilities_instead_of_exact_versions() -> 
 
     assert "sys.version_info" not in plugin_support
     assert "apscheduler.__version__" not in scheduler
-    assert 'requires-python = ">=3.10"' in project
+    assert 'requires-python = ">=3.11"' in project
     assert '"apscheduler>=3.11,<4"' in project
     assert "apscheduler>=3.11,<4" in requirements.splitlines()
     assert "^core/app\\\\.py$" not in project

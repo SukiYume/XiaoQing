@@ -46,7 +46,7 @@ class ReflectTrackerState:
     operator_chat_id: str
     expression_id: str
     created_time: float
-    last_check_count: int = 0
+    last_check_count: int     = 0
     last_consumed_time: float = 0.0
 
 
@@ -54,7 +54,7 @@ class ReflectTrackerStore(StoreBase):
     def __init__(self) -> None:
         super().__init__()
         self._cache: dict[str, list[ReflectTrackerState]] | None = None
-        self._lock = threading.RLock()
+        self._lock                                               = threading.RLock()
 
     def bind(self, data_dir: Path) -> None:
         with self._lock:
@@ -80,7 +80,7 @@ class ReflectTrackerStore(StoreBase):
                 return
             out: dict[str, list[ReflectTrackerState]] = {}
             for key, value in raw.items():
-                values = value if isinstance(value, list) else [value]
+                values                           = value if isinstance(value, list) else [value]
                 queue: list[ReflectTrackerState] = []
                 for item in values:
                     if not isinstance(item, dict):
@@ -88,18 +88,18 @@ class ReflectTrackerStore(StoreBase):
                     operator_chat_id = (
                         str(item.get("operator_chat_id", "") or "").strip() or str(key).strip()
                     )
-                    expression_id = str(item.get("expression_id", "") or "").strip()
-                    created_time = float(item.get("created_time", 0.0) or 0.0)
-                    last_check_count = int(item.get("last_check_count", 0) or 0)
+                    expression_id      = str(item.get("expression_id", "") or "").strip()
+                    created_time       = float(item.get("created_time", 0.0) or 0.0)
+                    last_check_count   = int(item.get("last_check_count", 0) or 0)
                     last_consumed_time = float(item.get("last_consumed_time", 0.0) or 0.0)
                     if operator_chat_id and expression_id and created_time > 0:
                         queue.append(
                             ReflectTrackerState(
-                                operator_chat_id=operator_chat_id,
-                                expression_id=expression_id,
-                                created_time=created_time,
-                                last_check_count=max(0, last_check_count),
-                                last_consumed_time=max(0.0, last_consumed_time),
+                                operator_chat_id   = operator_chat_id,
+                                expression_id      = expression_id,
+                                created_time       = created_time,
+                                last_check_count   = max(0, last_check_count),
+                                last_consumed_time = max(0.0, last_consumed_time),
                             )
                         )
                 if queue:
@@ -141,9 +141,9 @@ class ReflectTrackerStore(StoreBase):
                 return
             queue.append(
                 ReflectTrackerState(
-                    operator_chat_id=operator_chat_id,
-                    expression_id=expression_id,
-                    created_time=time.time(),
+                    operator_chat_id = operator_chat_id,
+                    expression_id    = expression_id,
+                    created_time     = time.time(),
                 )
             )
             del queue[: max(0, len(queue) - max(1, int(max_pending)))]
@@ -158,7 +158,7 @@ class ReflectTrackerStore(StoreBase):
                 changed = bool(self._cache.pop(operator_chat_id, None))
             else:
                 remaining = [state for state in queue if state.expression_id != expression_id]
-                changed = len(remaining) != len(queue)
+                changed   = len(remaining) != len(queue)
                 if remaining:
                     self._cache[operator_chat_id] = remaining
                 else:
@@ -181,7 +181,7 @@ class ReflectTrackerStore(StoreBase):
         with self._lock:
             self._ensure_loaded()
             assert self._cache is not None
-            queue = self._cache.get(operator_chat_id, [])
+            queue     = self._cache.get(operator_chat_id, [])
             remaining = [state for state in queue if state.expression_id != expression_id]
             for state in remaining:
                 state.last_consumed_time = max(
@@ -223,13 +223,13 @@ async def _tick_reflect_tracker_once(
     retry_interval_seconds: float,
     bot_name: str,
     max_duration_seconds: float = 15 * 60,
-    max_message_count: int = 30,
+    max_message_count: int      = 30,
 ) -> bool:
     if time.time() - tracker.created_time > float(max_duration_seconds):
         tracker_store.remove_tracker(operator_chat_id, tracker.expression_id)
         return True
 
-    history = await memory_store.get_async(operator_chat_id)
+    history  = await memory_store.get_async(operator_chat_id)
     new_msgs = [
         message
         for message in history
@@ -247,7 +247,7 @@ async def _tick_reflect_tracker_once(
     current_msg_count = len(new_msgs)
 
     expr_items = expr_store.load()
-    expr = _find_expression(expr_items, tracker.expression_id)
+    expr       = _find_expression(expr_items, tracker.expression_id)
     if not expr:
         tracker_store.remove_tracker(operator_chat_id, tracker.expression_id)
         return True
@@ -271,14 +271,14 @@ async def _tick_reflect_tracker_once(
         situation=expr.situation, style=expr.style, context_block=context_block
     )
     resp, _path = await chat_completions_raw_with_fallback_paths(
-        secrets=secrets,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.1,
-        top_p=0.8,
-        max_tokens=400,
-        timeout_seconds=float(timeout_seconds),
-        max_retry=int(max_retry),
-        retry_interval_seconds=float(retry_interval_seconds),
+        secrets                = secrets,
+        messages               = [{"role": "user", "content": prompt}],
+        temperature            = 0.1,
+        top_p                  = 0.8,
+        max_tokens             = 400,
+        timeout_seconds        = float(timeout_seconds),
+        max_retry              = int(max_retry),
+        retry_interval_seconds = float(retry_interval_seconds),
     )
     content = (((resp.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
     obj = parse_first_json_object(str(content)) or {}
@@ -288,22 +288,22 @@ async def _tick_reflect_tracker_once(
 
     resolved = False
     if judgment == "approve":
-        expr.checked = True
-        expr.rejected = False
+        expr.checked     = True
+        expr.rejected    = False
         expr.modified_by = "user"
-        resolved = True
+        resolved         = True
     elif judgment == "reject":
         if corrected_situation or corrected_style:
             if corrected_situation:
                 expr.situation = corrected_situation[:80].strip()
             if corrected_style:
                 expr.style = corrected_style[:80].strip()
-            expr.checked = True
-            expr.rejected = False
+            expr.checked     = True
+            expr.rejected    = False
             expr.modified_by = "user"
         else:
-            expr.checked = False
-            expr.rejected = True
+            expr.checked     = False
+            expr.rejected    = True
             expr.modified_by = "user"
         resolved = True
     elif judgment == "ignore":
@@ -335,23 +335,23 @@ async def tick_reflect_tracker(
     retry_interval_seconds: float,
     bot_name: str,
     max_duration_seconds: float = 15 * 60,
-    max_message_count: int = 30,
+    max_message_count: int      = 30,
 ) -> bool:
     """检查待反思队列，且一条用户回复最多消费一道题。"""
     for tracker in tracker_store.get_trackers(operator_chat_id):
         changed = await _tick_reflect_tracker_once(
-            operator_chat_id=operator_chat_id,
-            tracker=tracker,
-            memory_store=memory_store,
-            expr_store=expr_store,
-            tracker_store=tracker_store,
-            secrets=secrets,
-            timeout_seconds=timeout_seconds,
-            max_retry=max_retry,
-            retry_interval_seconds=retry_interval_seconds,
-            max_duration_seconds=max_duration_seconds,
-            max_message_count=max_message_count,
-            bot_name=bot_name,
+            operator_chat_id       = operator_chat_id,
+            tracker                = tracker,
+            memory_store           = memory_store,
+            expr_store             = expr_store,
+            tracker_store          = tracker_store,
+            secrets                = secrets,
+            timeout_seconds        = timeout_seconds,
+            max_retry              = max_retry,
+            retry_interval_seconds = retry_interval_seconds,
+            max_duration_seconds   = max_duration_seconds,
+            max_message_count      = max_message_count,
+            bot_name               = bot_name,
         )
         if changed:
             return True

@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
 
-T = TypeVar("T")
-MISSING_ETAG = "missing"
+T                            = TypeVar("T")
+MISSING_ETAG                 = "missing"
 _ATOMIC_REPLACE_RETRY_DELAYS = (0.01, 0.02, 0.04, 0.08)
 
 
@@ -24,7 +24,7 @@ class _LockEntry:
     users: int = 0
 
 
-_POOL_GUARD = threading.RLock()
+_POOL_GUARD                         = threading.RLock()
 _PATH_LOCKS: dict[Path, _LockEntry] = {}
 
 
@@ -39,7 +39,7 @@ def keyed_path_lock(path: Path) -> Iterator[None]:
     with _POOL_GUARD:
         entry = _PATH_LOCKS.get(key)
         if entry is None:
-            entry = _LockEntry(threading.RLock())
+            entry            = _LockEntry(threading.RLock())
             _PATH_LOCKS[key] = entry
         entry.users += 1
     try:
@@ -94,7 +94,7 @@ class AtomicJsonStore:
     """带有效备份恢复的原子 JSON 读写器。"""
 
     def __init__(self, path: Path) -> None:
-        self.path = Path(path)
+        self.path        = Path(path)
         self.backup_path = self.path.with_name(f"{self.path.name}.bak")
 
     @staticmethod
@@ -105,9 +105,9 @@ class AtomicJsonStore:
     def _encode(value: Any) -> bytes:
         return json.dumps(
             value,
-            ensure_ascii=False,
-            indent=2,
-            allow_nan=False,
+            ensure_ascii = False,
+            indent       = 2,
+            allow_nan    = False,
         ).encode("utf-8")
 
     def _read_payload_unlocked(self) -> bytes | None:
@@ -129,7 +129,7 @@ class AtomicJsonStore:
                 raise primary_error from None
             try:
                 backup_payload = self.backup_path.read_bytes()
-                recovered = self._decode(backup_payload)
+                recovered      = self._decode(backup_payload)
             except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError):
                 return default
             atomic_write_bytes(self.path, backup_payload)

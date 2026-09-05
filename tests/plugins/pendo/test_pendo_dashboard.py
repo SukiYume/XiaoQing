@@ -27,27 +27,27 @@ def test_build_dashboard_overview_uses_month_events_and_mixed_task_buckets(
     _insert(
         db,
         owner_id,
-        id="ev1",
-        type="event",
-        title="月内会议",
-        start_time="2026-03-10T09:00:00",
-        end_time="2026-03-10T10:00:00",
+        id         = "ev1",
+        type       = "event",
+        title      = "月内会议",
+        start_time = "2026-03-10T09:00:00",
+        end_time   = "2026-03-10T10:00:00",
     )
     _insert(
         db,
         owner_id,
-        id="ev2",
-        type="event",
-        title="月末复盘",
-        start_time="2026-03-28T18:00:00",
+        id         = "ev2",
+        type       = "event",
+        title      = "月末复盘",
+        start_time = "2026-03-28T18:00:00",
     )
     _insert(
         db,
         owner_id,
-        id="ev3",
-        type="event",
-        title="下月活动",
-        start_time="2026-04-02T18:00:00",
+        id         = "ev3",
+        type       = "event",
+        title      = "下月活动",
+        start_time = "2026-04-02T18:00:00",
     )
     db.create_event_collection(
         {
@@ -69,87 +69,87 @@ def test_build_dashboard_overview_uses_month_events_and_mixed_task_buckets(
         _insert(
             db,
             owner_id,
-            id=item_id,
-            type="event",
-            title=title,
-            category="学术",
-            start_time=start_time,
-            event_role="multi_node_child",
-            event_collection_id="ev4col",
-            event_collection_kind="multi_node",
-            event_index=index,
-            event_node_key=f"m0{index}",
+            id                    = item_id,
+            type                  = "event",
+            title                 = title,
+            category              = "学术",
+            start_time            = start_time,
+            event_role            = "multi_node_child",
+            event_collection_id   = "ev4col",
+            event_collection_kind = "multi_node",
+            event_index           = index,
+            event_node_key        = f"m0{index}",
         )
 
     _insert(
         db,
         owner_id,
-        id="task1",
-        type="task",
-        title="未完成任务",
-        status="open",
-        priority=2,
-        plan_date="2026-03-26",
-        deadline_at="2026-03-26T10:00:00",
+        id          = "task1",
+        type        = "task",
+        title       = "未完成任务",
+        status      = "open",
+        priority    = 2,
+        plan_date   = "2026-03-26",
+        deadline_at = "2026-03-26T10:00:00",
     )
     _insert(
         db,
         owner_id,
-        id="task2",
-        type="task",
-        title="今日任务",
-        status="open",
-        priority=1,
-        plan_date="2026-03-25",
-        deadline_at="2026-03-25T18:00:00",
+        id          = "task2",
+        type        = "task",
+        title       = "今日任务",
+        status      = "open",
+        priority    = 1,
+        plan_date   = "2026-03-25",
+        deadline_at = "2026-03-25T18:00:00",
     )
     _insert(
         db,
         owner_id,
-        id="task3",
-        type="task",
-        title="已完成任务",
-        status="done",
-        priority=3,
-        completed_at="2026-03-24T21:00:00",
-        updated_at="2026-03-24T21:00:00",
+        id           = "task3",
+        type         = "task",
+        title        = "已完成任务",
+        status       = "done",
+        priority     = 3,
+        completed_at = "2026-03-24T21:00:00",
+        updated_at   = "2026-03-24T21:00:00",
     )
     _insert(
         db,
         owner_id,
-        id="ledger1",
-        type="ledger",
-        title="午饭",
-        amount=25.5,
-        transaction_type="expense",
-        ledger_category="餐饮",
-        ledger_date="2026-03-20",
+        id               = "ledger1",
+        type             = "ledger",
+        title            = "午饭",
+        amount           = 25.5,
+        transaction_type = "expense",
+        ledger_category  = "餐饮",
+        ledger_date      = "2026-03-20",
     )
     _insert(
         db,
         owner_id,
-        id="ledger2",
-        type="ledger",
-        title="工资",
-        amount=3000,
-        transaction_type="income",
-        ledger_category="工资",
-        ledger_date="2026-03-21",
+        id               = "ledger2",
+        type             = "ledger",
+        title            = "工资",
+        amount           = 3000,
+        transaction_type = "income",
+        ledger_category  = "工资",
+        ledger_date      = "2026-03-21",
     )
     _insert(
         db,
         owner_id,
-        id="diary1",
-        type="diary",
-        title="三月日记",
-        content="记录一下",
-        diary_date="2026-03-05",
+        id         = "diary1",
+        type       = "diary",
+        title      = "三月日记",
+        content    = "记录一下",
+        diary_date = "2026-03-05",
     )
 
     range_calls: list[tuple[str, str, str]] = []
-    collection_batches: list[list[str]] = []
-    get_events_for_range = db.get_events_for_range
-    get_event_collections_by_ids = db.get_event_collections_by_ids
+    collection_batches: list[list[str]]     = []
+    get_events_for_range                    = db.get_events_for_range
+    get_event_collections_by_ids            = db.get_event_collections_by_ids
 
     def track_range(user_id: str, start: str, end: str) -> list[Any]:
         range_calls.append((user_id, start, end))
@@ -168,9 +168,9 @@ def test_build_dashboard_overview_uses_month_events_and_mixed_task_buckets(
     )
 
     result = build_dashboard_overview(
-        db=db,
-        owner_id=owner_id,
-        now=datetime(2026, 3, 25, 9, 30),
+        db       = db,
+        owner_id = owner_id,
+        now      = datetime(2026, 3, 25, 9, 30),
     )
 
     assert range_calls == [(owner_id, "2026-03-01T00:00:00", "2026-04-15T23:59:59")]
@@ -215,32 +215,32 @@ def test_dashboard_overview_prefers_amount_cents_and_paginates_month_ledger(
         _insert(
             db,
             owner_id,
-            id=f"ledger_expense_{index}",
-            type="ledger",
-            title=f"批量支出 {index}",
-            amount=0,
-            amount_cents=100,
-            transaction_type="expense",
-            ledger_category="压力测试",
-            ledger_date="2026-03-20",
+            id               = f"ledger_expense_{index}",
+            type             = "ledger",
+            title            = f"批量支出 {index}",
+            amount           = 0,
+            amount_cents     = 100,
+            transaction_type = "expense",
+            ledger_category  = "压力测试",
+            ledger_date      = "2026-03-20",
         )
     _insert(
         db,
         owner_id,
-        id="ledger_income_cents",
-        type="ledger",
-        title="收入",
-        amount=0,
-        amount_cents=12345,
-        transaction_type="income",
-        ledger_category="工资",
-        ledger_date="2026-03-21",
+        id               = "ledger_income_cents",
+        type             = "ledger",
+        title            = "收入",
+        amount           = 0,
+        amount_cents     = 12345,
+        transaction_type = "income",
+        ledger_category  = "工资",
+        ledger_date      = "2026-03-21",
     )
 
     result = build_dashboard_overview(
-        db=db,
-        owner_id=owner_id,
-        now=datetime(2026, 3, 25, 9, 30),
+        db       = db,
+        owner_id = owner_id,
+        now      = datetime(2026, 3, 25, 9, 30),
     )
 
     assert result["summary"]["ledger_month_expense"] == 505.0
@@ -258,28 +258,28 @@ def test_dashboard_active_task_sort_is_not_truncated_before_priority(
         _insert(
             db,
             owner_id,
-            id=f"ordinary-{index}",
-            type="task",
-            title=f"普通任务 {index}",
-            status="open",
-            priority=5,
-            plan_date=f"2026-03-{index + 1:02d}",
+            id        = f"ordinary-{index}",
+            type      = "task",
+            title     = f"普通任务 {index}",
+            status    = "open",
+            priority  = 5,
+            plan_date = f"2026-03-{index + 1:02d}",
         )
     _insert(
         db,
         owner_id,
-        id="important-late-plan",
-        type="task",
-        title="高优先级远期任务",
-        status="open",
-        priority=1,
-        plan_date="2026-12-31",
+        id        = "important-late-plan",
+        type      = "task",
+        title     = "高优先级远期任务",
+        status    = "open",
+        priority  = 1,
+        plan_date = "2026-12-31",
     )
 
     result = build_dashboard_overview(
-        db=db,
-        owner_id=owner_id,
-        now=datetime(2026, 3, 25, 9, 30),
+        db       = db,
+        owner_id = owner_id,
+        now      = datetime(2026, 3, 25, 9, 30),
     )
 
     assert result["summary"]["tasks_pending"] == 22
@@ -290,8 +290,8 @@ def test_dashboard_converts_aware_now_to_user_wall_clock(db: Database) -> None:
     """带时区当前时间必须先转换到用户时区，再决定自然月边界。"""
 
     result = build_dashboard_overview(
-        db=db,
-        owner_id="u-dashboard-timezone",
+        db       = db,
+        owner_id = "u-dashboard-timezone",
         now=datetime(2026, 3, 31, 18, tzinfo=UTC),
     )
 

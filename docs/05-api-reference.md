@@ -535,7 +535,8 @@ event.get("sender")
 
 - 请求体：OneBot v11 事件 JSON 对象，媒体类型为 `application/json` 或 `application/*+json`
 - 鉴权：`Authorization: Bearer <inbound_token>`
-- 成功响应：固定信封 `{"actions": [...]}`，无 Action 时数组为空
+- 标准成功响应：`{}`；应用通过 OneBot action API 投递回复并等待确认
+- 自定义动作列表响应：显式发送 `X-XiaoQing-Response-Mode: actions`，收到 `{"actions": [...]}`；调用者负责执行动作，该模式用于命令矩阵
 - 主要状态：`200` 成功，`400` JSON 或事件结构错误，`401` 鉴权失败，`415` 媒体类型错误，`500` 处理器异常，`503` 服务关闭或接纳队列过载
 
 ### `WebSocket /ws`

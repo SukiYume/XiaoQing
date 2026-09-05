@@ -1,3 +1,4 @@
+# 验证聊天调度器抑制同一逻辑任务的重复执行。
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -13,16 +14,16 @@ from plugins.xiaoqing_chat.task_scheduler import (
 
 @pytest.fixture
 def mock_context():
-    context = MagicMock()
+    context        = MagicMock()
     context.logger = MagicMock()
     return context
 
 
 @pytest.mark.asyncio
 async def test_schedule_action_history_flush_behavior(mock_context):
-    runtime = MagicMock()
+    runtime                                 = MagicMock()
     runtime.cfg.io_persist_debounce_seconds = 0.01
-    state = MagicMock()
+    state                                   = MagicMock()
 
     async def fake_to_thread(func, *args, **kwargs):
         return func(*args, **kwargs)
@@ -59,9 +60,9 @@ async def test_schedule_action_history_flush_behavior(mock_context):
 
 @pytest.mark.asyncio
 async def test_schedule_pfc_state_flush_behavior(mock_context):
-    runtime = MagicMock()
+    runtime                                 = MagicMock()
     runtime.cfg.io_persist_debounce_seconds = 0.01
-    state = MagicMock()
+    state                                   = MagicMock()
 
     async def fake_to_thread(func, *args, **kwargs):
         return func(*args, **kwargs)
@@ -100,9 +101,9 @@ async def test_schedule_pfc_state_flush_behavior(mock_context):
 async def test_schedule_media_registry_flush_behavior(mock_context):
     from plugins.xiaoqing_chat import task_scheduler as task_scheduler_module
 
-    runtime = MagicMock()
+    runtime                                 = MagicMock()
     runtime.cfg.io_persist_debounce_seconds = 0.01
-    state = MagicMock()
+    state                                   = MagicMock()
 
     async def fake_to_thread(func, *args, **kwargs):
         return func(*args, **kwargs)

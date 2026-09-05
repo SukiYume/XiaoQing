@@ -36,15 +36,15 @@ class _Response:
         self,
         body: bytes,
         *,
-        status: int = 200,
+        status: int       = 200,
         content_type: str = "application/json",
     ) -> None:
-        self.status = status
-        self.url = twitter._TIMELINE_URL
-        self.headers = {"Content-Type": content_type}
+        self.status         = status
+        self.url            = twitter._TIMELINE_URL
+        self.headers        = {"Content-Type": content_type}
         self.content_length = None
-        self.content = _AsyncContent(body)
-        self.closed = False
+        self.content        = _AsyncContent(body)
+        self.closed         = False
 
     async def __aenter__(self):
         return self
@@ -58,7 +58,7 @@ class _Response:
 
 class _Session:
     def __init__(self, *responses: _Response) -> None:
-        self.responses = list(responses)
+        self.responses                          = list(responses)
         self.calls: list[tuple[str, str, dict]] = []
 
     def request(self, method: str, url: str, **kwargs):
@@ -114,8 +114,8 @@ def _timeline_payload(entries: list[object]) -> dict:
 def context(tmp_path: Path) -> SimpleNamespace:
     return with_settings_reader(
         SimpleNamespace(
-            data_dir=tmp_path,
-            secrets={
+            data_dir = tmp_path,
+            secrets  = {
                 "plugins": {
                     "twitter": {
                         "user_id": "123456789",
@@ -126,11 +126,11 @@ def context(tmp_path: Path) -> SimpleNamespace:
                     }
                 }
             },
-            http_session=None,
-            current_user_id=123,
-            current_group_id=456,
-            send_action=AsyncMock(),
-            logger=MagicMock(),
+            http_session     = None,
+            current_user_id  = 123,
+            current_group_id = 456,
+            send_action      = AsyncMock(),
+            logger           = MagicMock(),
         )
     )
 
@@ -184,7 +184,7 @@ def test_api_headers_keep_only_safe_explicit_string_values(context: SimpleNamesp
 
 def test_non_mapping_headers_do_not_add_credentials(context: SimpleNamespace) -> None:
     context.secrets["plugins"]["twitter"]["headers"] = "Bearer hidden"
-    headers = twitter._get_headers(context)
+    headers                                          = twitter._get_headers(context)
     assert {key.casefold() for key in headers} == {"accept", "user-agent"}
 
 
@@ -310,7 +310,7 @@ async def test_timeline_request_uses_bounded_get_and_extracts_entries(
         {"entryId": "cursor-bottom-next", "content": {"value": "next-token"}},
         {"entryId": "cursor-bottom-later", "content": {"value": "ignored"}},
     ]
-    session = _Session(_json_response(_timeline_payload(entries)))
+    session              = _Session(_json_response(_timeline_payload(entries)))
     context.http_session = session
 
     tweets, cursor, has_next = await twitter._fetch_timeline(context, 'cursor"\\value')
@@ -350,7 +350,7 @@ async def test_timeline_ignores_invalid_cursor_and_malformed_instructions(
             }
         }
     }
-    session = _Session(_json_response(payload))
+    session              = _Session(_json_response(payload))
     context.http_session = session
 
     assert await twitter._fetch_timeline(context, "bad\ncursor") == ([], None, False)
@@ -363,10 +363,10 @@ async def test_timeline_ignores_invalid_cursor_and_malformed_instructions(
     ("payload", "is_format_error"),
     [
         ([], True),
-        ({"data": []}, False),
+        ({"data": []}, True),
         (
             {"data": {"user": {"result": {"timeline": {"timeline": {"instructions": {}}}}}}},
-            False,
+            True,
         ),
     ],
 )
@@ -441,8 +441,8 @@ async def test_download_validates_and_commits_by_content_hash(
     tmp_path: Path,
     install_media_fetch,
 ) -> None:
-    payload = _image_bytes("PNG")
-    fetch = install_media_fetch(payload)
+    payload  = _image_bytes("PNG")
+    fetch    = install_media_fetch(payload)
     save_dir = tmp_path / "images"
 
     assert await twitter._download_image(
@@ -474,14 +474,14 @@ async def test_media_fetch_uses_safe_direct_transport_without_proxy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context.secrets["plugins"]["twitter"]["proxy"] = ""
-    payload = _image_bytes()
-    public_fetch = AsyncMock(
+    payload                                        = _image_bytes()
+    public_fetch                                   = AsyncMock(
         return_value=SafeHttpResponse(
-            url="https://pbs.twimg.com/media/final",
-            status=200,
-            body=payload,
-            charset=None,
-            headers={"Content-Type": "image/png"},
+            url     = "https://pbs.twimg.com/media/final",
+            status  = 200,
+            body    = payload,
+            charset = None,
+            headers = {"Content-Type": "image/png"},
         )
     )
     monkeypatch.setattr(twitter, "fetch_public_bytes", public_fetch)
@@ -552,7 +552,7 @@ async def test_download_failures_leave_no_committed_image(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     save_dir = tmp_path / "images"
-    url = "https://pbs.twimg.com/media/a.png"
+    url      = "https://pbs.twimg.com/media/a.png"
 
     install_media_fetch(None)
     assert not await twitter._download_image(url, save_dir, context)
@@ -582,9 +582,9 @@ async def test_fetch_paginates_and_deduplicates_urls(
     context: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    first = "https://pbs.twimg.com/media/a.jpg"
+    first  = "https://pbs.twimg.com/media/a.jpg"
     second = "https://pbs.twimg.com/media/b.jpg"
-    pages = {
+    pages  = {
         None: ([_tweet(first, first)], "cursor-1", True),
         "cursor-1": ([_tweet(first, second)], None, False),
     }
@@ -714,7 +714,7 @@ async def test_duplicate_fetch_rounds_are_serialized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     active = 0
-    peak = 0
+    peak   = 0
 
     async def slow_empty_page(_context, _cursor=None):
         nonlocal active, peak
@@ -777,14 +777,14 @@ async def test_random_image_advances_posted_state_only_after_delivery_ack(
     (image_dir / "retry.jpg").write_bytes(_image_bytes("JPEG"))
     monkeypatch.setattr(twitter.random, "choice", lambda values: values[0])
 
-    first = await twitter.handle("twimg", "", {}, context)
+    first   = await twitter.handle("twimg", "", {}, context)
     receipt = getattr(first, "delivery_receipt", None)
 
     assert receipt is not None
     assert not (context.data_dir / "posted.txt").exists()
 
     await receipt.record(False)
-    retry = await twitter.handle("twimg", "", {}, context)
+    retry         = await twitter.handle("twimg", "", {}, context)
     retry_receipt = getattr(retry, "delivery_receipt", None)
 
     assert retry_receipt is not None
@@ -806,7 +806,7 @@ async def test_pending_random_image_deliveries_reserve_distinct_files(
     (image_dir / "b.jpg").write_bytes(_image_bytes("JPEG"))
     monkeypatch.setattr(twitter.random, "choice", lambda values: values[0])
 
-    first = await twitter._get_random_image(context)
+    first  = await twitter._get_random_image(context)
     second = await twitter._get_random_image(context)
 
     assert first is not None and second is not None
@@ -893,7 +893,7 @@ def test_cache_listing_ignores_entries_that_fail_stat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class BrokenEntry:
-        name = "broken.jpg"
+        name   = "broken.jpg"
         suffix = ".jpg"
 
         def is_symlink(self) -> bool:
@@ -955,7 +955,7 @@ async def test_manual_fetch_returns_immediately_and_notifies_on_completion(
 ) -> None:
     started = asyncio.Event()
     release = asyncio.Event()
-    calls = 0
+    calls   = 0
 
     async def fetch(_context):
         nonlocal calls
@@ -988,7 +988,7 @@ async def test_manual_fetch_returns_immediately_and_notifies_on_completion(
     assert "新下载 5 张" in action["params"]["message"][0]["data"]["text"]
 
     context.current_group_id = None
-    context.current_user_id = None
+    context.current_user_id  = None
     context.send_action.reset_mock()
     no_target = await twitter.handle("tw_fetch", "", {}, context)
     assert "无法确定" in no_target[0]["data"]["text"]
@@ -1012,7 +1012,7 @@ async def test_manual_fetch_reports_remote_http_failure(
     notification = twitter._MANUAL_NOTIFICATION_TASK
     assert notification is not None
     await asyncio.wait_for(notification, timeout=1.0)
-    action = context.send_action.await_args.args[0]
+    action  = context.send_action.await_args.args[0]
     message = action["params"]["message"][0]["data"]["text"]
 
     assert "抓取失败" in message

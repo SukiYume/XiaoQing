@@ -38,27 +38,27 @@ def _build_search_filters(
 ) -> dict[str, Any]:
     """规范搜索筛选，并拒绝被旧实现静默忽略的冲突组合。"""
 
-    item_type = normalize_item_type_query(item_type)
-    category = _clean_optional_text(category)
-    ledger_category = _clean_optional_text(ledger_category)
-    status = normalize_choice_query(status, TASK_STATUSES, "status")
+    item_type        = normalize_item_type_query(item_type)
+    category         = _clean_optional_text(category)
+    ledger_category  = _clean_optional_text(ledger_category)
+    status           = normalize_choice_query(status, TASK_STATUSES, "status")
     transaction_type = normalize_choice_query(
         transaction_type,
         LEDGER_TRANSACTION_TYPES,
         "transaction_type",
     )
     account_name = _clean_optional_text(account_name)
-    merchant = _clean_optional_text(merchant)
+    merchant     = _clean_optional_text(merchant)
     if category and ledger_category:
         raise HTTPException(
-            status_code=422,
-            detail="category and ledger_category cannot be combined",
+            status_code = 422,
+            detail      = "category and ledger_category cannot be combined",
         )
 
     item_type = infer_item_query_type(
         item_type,
-        has_task_filters=status is not None,
-        has_ledger_filters=any(
+        has_task_filters   = status is not None,
+        has_ledger_filters = any(
             value is not None
             for value in (ledger_category, transaction_type, account_name, merchant)
         ),
@@ -88,7 +88,7 @@ def _serialize_results(
 ) -> list[dict[str, Any]]:
     """序列化结果，并一次批量补齐当前所有者的日程集合摘要。"""
 
-    payloads = [item_to_dict(item) for item in results]
+    payloads       = [item_to_dict(item) for item in results]
     collection_ids = [
         str(collection_id)
         for payload in payloads
@@ -106,16 +106,16 @@ def _serialize_results(
 def search_items(
     q: Annotated[str, Query(min_length=1)],
     item_type: Annotated[str | None, Query(alias="type")] = None,
-    category: str | None = None,
-    ledger_category: str | None = None,
-    status: str | None = None,
+    category: str | None         = None,
+    ledger_category: str | None  = None,
+    status: str | None           = None,
     transaction_type: str | None = None,
-    account_name: str | None = None,
-    merchant: str | None = None,
+    account_name: str | None     = None,
+    merchant: str | None         = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 50,
     owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    db: Database  = Depends(get_db),
 ) -> dict[str, object]:
     """按统一筛选契约返回全文搜索当前页、完整总数和集合摘要。"""
 
@@ -137,9 +137,9 @@ def search_items(
     results, total = db.search_items_page(
         owner_id,
         query,
-        filters=filters,
-        limit=page_size,
-        offset=offset,
+        filters = filters,
+        limit   = page_size,
+        offset  = offset,
     )
 
     return {

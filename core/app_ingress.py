@@ -1,3 +1,4 @@
+# 接入重配事务：候选连接通过验证后发布，旧连接排空后回收。
 # mypy: disable-error-code=attr-defined
 """Transactional OneBot WebSocket and inbound server reconciliation."""
 
@@ -73,7 +74,7 @@ class AppIngressMixin:
         ws_uri: str,
         token: str,
         queue_size: int,
-        credentials_trusted: bool = True,
+        credentials_trusted: bool       = True,
         owner: _ConfigApplyOwner | None = None,
     ) -> None:
         if not self._owns_config_apply(owner):
@@ -119,14 +120,14 @@ class AppIngressMixin:
             ws_client = OneBotWsClient(
                 ws_uri,
                 token,
-                queue_size=queue_size,
-                credentials_trusted=credentials_trusted,
+                queue_size          = queue_size,
+                credentials_trusted = credentials_trusted,
             )
             if not self._owns_config_apply_locked(owner):
                 ws_client.update(ws_uri, "", credentials_trusted=False)
                 return
             ws_client.set_on_connect(self._on_ws_connected)
-            self.ws_client = ws_client
+            self.ws_client                  = ws_client
             self._ws_client_auth_quarantine = None
             self._ws_client_auth_generation = self._onebot_auth_generation
 
@@ -162,9 +163,9 @@ class AppIngressMixin:
         try:
             with self._inbound_candidates_lock:
                 desired = InboundManager.from_config(
-                    config=config,
-                    token=inbound_token,
-                    handler=self._handle_inbound_event,
+                    config  = config,
+                    token   = inbound_token,
+                    handler = self._handle_inbound_event,
                 )
                 if desired is not None:
                     self._inbound_candidates_active.add(desired)
@@ -388,7 +389,7 @@ class AppIngressMixin:
         try:
             await _await_owned_task(restore_task, deferred_cancellation)
         except BaseException as restore_error:
-            restore_error = _unwrap_owned_failure(restore_error)
+            restore_error        = _unwrap_owned_failure(restore_error)
             self.inbound_manager = None
             if all(manager is not pending for pending in self._inbound_cleanup_pending):
                 self._inbound_cleanup_pending.append(manager)
@@ -453,7 +454,7 @@ class AppIngressMixin:
                     desired.commit_admission()
                     self.inbound_manager = desired
         except BaseException as exc:
-            commit_error = exc
+            commit_error      = exc
             publish_candidate = False
         if not publish_candidate:
             desired.update_token("")
@@ -561,8 +562,8 @@ class AppIngressMixin:
             return cast(dict[str, Any], self.metrics.summary_snapshot())
 
         manager.set_status_providers(
-            plugins_count=_plugins_count,
-            sessions_count=_sessions_count,
-            pending_jobs=_pending_jobs,
-            metrics=_metrics,
+            plugins_count  = _plugins_count,
+            sessions_count = _sessions_count,
+            pending_jobs   = _pending_jobs,
+            metrics        = _metrics,
         )

@@ -76,22 +76,22 @@ async def test_media_render_singleflight_lock_is_released_after_use(tmp_path: Pa
     from plugins.xiaoqing_chat.media import event_media as event_media_module
 
     resolved = ResolvedMedia(
-        media_hash="cache-lifetime",
-        segment_type="image",
-        source_name="fixture.png",
-        mime_type="image/png",
-        cached_path=tmp_path / "fixture.png",
+        media_hash   = "cache-lifetime",
+        segment_type = "image",
+        source_name  = "fixture.png",
+        mime_type    = "image/png",
+        cached_path  = tmp_path / "fixture.png",
     )
     rendered = RenderedMedia(
-        media_hash=resolved.media_hash,
-        kind="image",
-        description="fixture",
-        emotion_tags=(),
-        marker="[图片：fixture]",
-        cached_path=resolved.cached_path,
+        media_hash   = resolved.media_hash,
+        kind         = "image",
+        description  = "fixture",
+        emotion_tags = (),
+        marker       = "[图片：fixture]",
+        cached_path  = resolved.cached_path,
     )
     context = SimpleNamespace(data_dir=tmp_path)
-    loop = asyncio.get_running_loop()
+    loop     = asyncio.get_running_loop()
     lock_key = f"{tmp_path.resolve()}::{resolved.media_hash}"
 
     with patch.object(
@@ -101,9 +101,9 @@ async def test_media_render_singleflight_lock_is_released_after_use(tmp_path: Pa
     ):
         result = await event_media_module._render_resolved_media(
             resolved,
-            context=context,
-            runtime=SimpleNamespace(),
-            prefer_emoji=False,
+            context      = context,
+            runtime      = SimpleNamespace(),
+            prefer_emoji = False,
         )
 
     gc.collect()

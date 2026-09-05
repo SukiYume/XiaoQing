@@ -29,8 +29,8 @@ from typing import Any, Literal, TypeVar, cast
 from .lifecycle import LazyAsyncLock as _LazyAsyncLock
 
 PluginConcurrency = Literal["parallel", "sequential"]
-T = TypeVar("T")
-logger = logging.getLogger(__name__)
+T                 = TypeVar("T")
+logger            = logging.getLogger(__name__)
 
 
 def callback_accepts_positional_context(callback: Callable[..., Any]) -> bool:
@@ -73,13 +73,13 @@ class PluginExecutionPolicy:
     """Runtime limits shared by all callback types of one plugin generation."""
 
     timeout_seconds: float | None = 60.0
-    parallel_limit: int = 4
-    admission_queue_limit: int = 64
-    sync_parallel_limit: int = 1
-    sync_queue_limit: int = 16
-    failure_threshold: int = 3
-    cooldown_seconds: float = 60.0
-    drain_timeout_seconds: float = 5.0
+    parallel_limit: int           = 4
+    admission_queue_limit: int    = 64
+    sync_parallel_limit: int      = 1
+    sync_queue_limit: int         = 16
+    failure_threshold: int        = 3
+    cooldown_seconds: float       = 60.0
+    drain_timeout_seconds: float  = 5.0
 
     @classmethod
     def from_mapping(
@@ -90,7 +90,7 @@ class PluginExecutionPolicy:
     ) -> PluginExecutionPolicy:
         """Build a defensive policy for non-schema embedders and test doubles."""
 
-        base = fallback or cls()
+        base   = fallback or cls()
         values = values if isinstance(values, Mapping) else {}
 
         raw_timeout = values.get("timeout_seconds", base.timeout_seconds)
@@ -122,27 +122,27 @@ class PluginExecutionPolicy:
                 return default
 
         return cls(
-            timeout_seconds=timeout,
-            parallel_limit=bounded_int(
+            timeout_seconds = timeout,
+            parallel_limit  = bounded_int(
                 "parallel_limit", base.parallel_limit, minimum=1, maximum=1024
             ),
             admission_queue_limit=bounded_int(
                 "admission_queue_limit",
                 base.admission_queue_limit,
-                minimum=0,
-                maximum=10000,
+                minimum = 0,
+                maximum = 10000,
             ),
             sync_parallel_limit=bounded_int(
                 "sync_parallel_limit",
                 base.sync_parallel_limit,
-                minimum=1,
-                maximum=3,
+                minimum = 1,
+                maximum = 3,
             ),
             sync_queue_limit=bounded_int(
                 "sync_queue_limit",
                 base.sync_queue_limit,
-                minimum=0,
-                maximum=10000,
+                minimum = 0,
+                maximum = 10000,
             ),
             failure_threshold=bounded_int(
                 "failure_threshold", base.failure_threshold, minimum=1, maximum=10000
@@ -198,15 +198,15 @@ class _SyncCallbackJob:
     loop: asyncio.AbstractEventLoop
     callback: Callable[[], Any] | None
     completion: asyncio.Future[Any]
-    allow_closed: bool = False
+    allow_closed: bool                                           = False
     state: Literal["queued", "running", "terminal", "cancelled"] = "queued"
-    actual_future: ConcurrentFuture[Any] | None = None
-    detached: bool = False
-    delivered: bool = False
+    actual_future: ConcurrentFuture[Any] | None                  = None
+    detached: bool                                               = False
+    delivered: bool                                              = False
     outcome_kind: Literal["result", "error", "cancelled"] | None = None
-    outcome: Any = None
-    fatal_deferred: bool = False
-    delivery_pending: bool = False
+    outcome: Any                                                 = None
+    fatal_deferred: bool                                         = False
+    delivery_pending: bool                                       = False
 
 
 class PluginSyncBroker:
@@ -220,7 +220,7 @@ class PluginSyncBroker:
     def __init__(
         self,
         *,
-        max_workers: int = 4,
+        max_workers: int        = 4,
         global_queue_limit: int = 256,
         thread_name_prefix: str = "xiaoqing-plugin",
     ) -> None:
@@ -232,23 +232,23 @@ class PluginSyncBroker:
             or global_queue_limit < 1
         ):
             raise ValueError("global_queue_limit must be a positive integer")
-        self.max_workers = int(max_workers)
-        self._global_queue_limit = int(global_queue_limit)
-        self._thread_name_prefix = thread_name_prefix
-        self._lock = threading.RLock()
+        self.max_workers                          = int(max_workers)
+        self._global_queue_limit                  = int(global_queue_limit)
+        self._thread_name_prefix                  = thread_name_prefix
+        self._lock                                = threading.RLock()
         self._executor: ThreadPoolExecutor | None = None
         # 以下队列、计数与 ready 集合只能在 _lock 内修改；任一 job 在全局和 lane
         # 计数中各占一个位置，迁移状态时必须在同一临界区同时释放。
         self._lane_queues: dict[object, deque[_SyncCallbackJob]] = {}
-        self._ready_lanes: deque[object] = deque()
-        self._ready_lane_set: set[object] = set()
-        self._running_by_lane: dict[object, int] = {}
-        self._queued_count = 0
-        self._running_count = 0
-        self._pending_delivery_count = 0
-        self._closed = False
-        self._executor_shutdown = False
-        self._fallback_lane = object()
+        self._ready_lanes: deque[object]                         = deque()
+        self._ready_lane_set: set[object]                        = set()
+        self._running_by_lane: dict[object, int]                 = {}
+        self._queued_count                                       = 0
+        self._running_count                                      = 0
+        self._pending_delivery_count                             = 0
+        self._closed                                             = False
+        self._executor_shutdown                                  = False
+        self._fallback_lane                                      = object()
 
     @property
     def closed(self) -> bool:
@@ -314,7 +314,7 @@ class PluginSyncBroker:
                 if job.allow_closed:
                     retained.append(job)
                     continue
-                job.state = "cancelled"
+                job.state    = "cancelled"
                 job.detached = True
                 job.callback = None
                 self._queued_count -= 1
@@ -366,8 +366,8 @@ class PluginSyncBroker:
             if self._executor_shutdown:
                 raise PluginExecutionClosed("plugin sync broker is shut down")
             self._executor = ThreadPoolExecutor(
-                max_workers=self.max_workers,
-                thread_name_prefix=self._thread_name_prefix,
+                max_workers        = self.max_workers,
+                thread_name_prefix = self._thread_name_prefix,
             )
         return self._executor
 
@@ -395,8 +395,8 @@ class PluginSyncBroker:
             or self._executor is None
         ):
             return None
-        executor = self._executor
-        self._executor = None
+        executor                = self._executor
+        self._executor          = None
         self._executor_shutdown = True
         return executor
 
@@ -409,10 +409,10 @@ class PluginSyncBroker:
     ) -> _SyncCallbackJob:
         """Queue one callback or fail immediately when a hard bound is full."""
 
-        loop = asyncio.get_running_loop()
-        lane: object = gate if gate is not None else self._fallback_lane
+        loop                            = asyncio.get_running_loop()
+        lane: object                    = gate if gate is not None else self._fallback_lane
         completion: asyncio.Future[Any] = loop.create_future()
-        job = _SyncCallbackJob(
+        job                             = _SyncCallbackJob(
             lane,
             gate,
             loop,
@@ -424,8 +424,8 @@ class PluginSyncBroker:
             if self._closed:
                 raise PluginExecutionClosed("plugin sync broker is closed")
             lane_queue = self._lane_queues.setdefault(lane, deque())
-            running = self._running_by_lane.get(lane, 0)
-            immediate = (
+            running    = self._running_by_lane.get(lane, 0)
+            immediate  = (
                 self._running_count < self.max_workers
                 and running < self._lane_running_limit_locked(lane)
                 and not lane_queue
@@ -461,7 +461,7 @@ class PluginSyncBroker:
             job = queue.popleft()
             self._queued_count -= 1
             if job.gate is not None and job.gate.closed and not job.allow_closed:
-                job.state = "cancelled"
+                job.state    = "cancelled"
                 job.detached = True
                 job.callback = None
                 try:
@@ -476,12 +476,12 @@ class PluginSyncBroker:
             job.state = "running"
             self._running_count += 1
             self._running_by_lane[lane] = self._running_by_lane.get(lane, 0) + 1
-            callback = job.callback
+            callback                    = job.callback
             assert callback is not None
             start_barrier = threading.Event()
 
             def run_tracked_callback(
-                callback: Callable[[], Any] = callback,
+                callback: Callable[[], Any]    = callback,
                 start_barrier: threading.Event = start_barrier,
             ) -> Any:
                 # submit 返回前 worker 就可能启动；必须先把真实 Future 登记到 gate，
@@ -493,14 +493,14 @@ class PluginSyncBroker:
                 future = self._ensure_executor_locked().submit(run_tracked_callback)
             except BaseException as exc:
                 self._release_running_slot_locked(lane)
-                job.callback = None
-                job.state = "terminal"
+                job.callback     = None
+                job.state        = "terminal"
                 job.outcome_kind = "error"
-                job.outcome = exc
+                job.outcome      = exc
                 self._schedule_delivery_locked(job)
             else:
                 job.actual_future = future
-                job.callback = None
+                job.callback      = None
                 if job.gate is not None:
                     job.gate._register_sync_future(future)
                 future.add_done_callback(functools.partial(self._complete_from_worker, job))
@@ -523,14 +523,14 @@ class PluginSyncBroker:
         with self._lock:
             if job.state != "running":
                 return
-            lane = job.lane
+            lane      = job.lane
             job.state = "terminal"
             self._release_running_slot_locked(lane)
             try:
                 job.outcome = future.result()
             except BaseException as exc:
                 job.outcome_kind = "cancelled" if future.cancelled() else "error"
-                job.outcome = exc
+                job.outcome      = exc
             else:
                 job.outcome_kind = "result"
             self._schedule_delivery_locked(job)
@@ -553,7 +553,7 @@ class PluginSyncBroker:
             # in the worker so a stopped-but-not-yet-closed loop cannot accept
             # and then silently discard the queued delivery callback.
             job.delivered = True
-            fatal = self._defer_fatal_locked(job)
+            fatal         = self._defer_fatal_locked(job)
             if fatal is not None and job.gate is not None:
                 job.gate._defer_fatal_error(fatal)
             if job.gate is not None and job.actual_future is not None:
@@ -567,9 +567,9 @@ class PluginSyncBroker:
             # A dead event loop has no attached consumer.  Complete ownership
             # transfer synchronously so a gate cannot stay poisoned forever or
             # lose a fatal outcome during loop teardown.
-            job.detached = True
-            fatal = self._defer_fatal_locked(job)
-            job.delivered = True
+            job.detached         = True
+            fatal                = self._defer_fatal_locked(job)
+            job.delivered        = True
             job.delivery_pending = False
             self._pending_delivery_count -= 1
             if fatal is not None and job.gate is not None:
@@ -590,7 +590,7 @@ class PluginSyncBroker:
         return None
 
     def _deliver(self, job: _SyncCallbackJob) -> None:
-        fatal: BaseException | None = None
+        fatal: BaseException | None                     = None
         future_to_discard: ConcurrentFuture[Any] | None = None
         executor_to_shutdown: ThreadPoolExecutor | None = None
         with self._lock:
@@ -598,7 +598,7 @@ class PluginSyncBroker:
                 return
             job.delivered = True
             if job.delivery_pending:
-                job.delivery_pending = False
+                job.delivery_pending         = False
                 self._pending_delivery_count = max(0, self._pending_delivery_count - 1)
             if job.detached:
                 fatal = self._defer_fatal_locked(job)
@@ -609,7 +609,7 @@ class PluginSyncBroker:
                     job.completion.cancel()
                 else:
                     job.completion.set_exception(job.outcome)
-            future_to_discard = job.actual_future
+            future_to_discard    = job.actual_future
             executor_to_shutdown = self._take_drained_executor_locked()
         if fatal is not None and job.gate is not None:
             job.gate._defer_fatal_error(fatal)
@@ -621,8 +621,8 @@ class PluginSyncBroker:
     def cancel_or_detach(self, job: _SyncCallbackJob) -> None:
         """Physically remove queued work, or detach an already-running thread."""
 
-        fatal: BaseException | None = None
-        detached_future: ConcurrentFuture[Any] | None = None
+        fatal: BaseException | None                     = None
+        detached_future: ConcurrentFuture[Any] | None   = None
         future_to_discard: ConcurrentFuture[Any] | None = None
         executor_to_shutdown: ThreadPoolExecutor | None = None
         with self._lock:
@@ -635,7 +635,7 @@ class PluginSyncBroker:
                         pass
                     else:
                         self._queued_count -= 1
-                job.state = "cancelled"
+                job.state    = "cancelled"
                 job.detached = True
                 job.callback = None
                 self._drop_stale_ready_lane_locked(job.lane)
@@ -649,7 +649,7 @@ class PluginSyncBroker:
                 return
 
             job.detached = True
-            future = job.actual_future
+            future       = job.actual_future
             if future is not None and not future.done():
                 detached_future = future
                 future.cancel()
@@ -659,8 +659,8 @@ class PluginSyncBroker:
                     # The worker finished first, but its owner-loop delivery is
                     # still queued.  Cancellation now owns terminal cleanup;
                     # the already-queued callback becomes an idempotent no-op.
-                    job.delivered = True
-                    job.delivery_pending = False
+                    job.delivered                = True
+                    job.delivery_pending         = False
                     self._pending_delivery_count = max(
                         0,
                         self._pending_delivery_count - 1,
@@ -688,7 +688,7 @@ class PluginSyncBroker:
             for job in queue:
                 if job.state != "queued":
                     continue
-                job.state = "cancelled"
+                job.state    = "cancelled"
                 job.detached = True
                 job.callback = None
                 try:
@@ -707,8 +707,8 @@ class PluginSyncBroker:
     ) -> PluginSyncBrokerDrainResult:
         """Reject new jobs and wait a bounded time for real worker callbacks."""
 
-        started = time.monotonic()
-        timeout = 5.0 if timeout_seconds is None else max(0.0, float(timeout_seconds))
+        started  = time.monotonic()
+        timeout  = 5.0 if timeout_seconds is None else max(0.0, float(timeout_seconds))
         deadline = started + timeout
         with self._lock:
             self._closed = True
@@ -722,9 +722,9 @@ class PluginSyncBroker:
             await asyncio.sleep(min(0.01, max(0.0, deadline - time.monotonic())))
 
         with self._lock:
-            pending = self._running_count + self._pending_delivery_count
-            queued = self._queued_count
-            drained = pending == 0 and queued == 0
+            pending  = self._running_count + self._pending_delivery_count
+            queued   = self._queued_count
+            drained  = pending == 0 and queued == 0
             executor = self._take_drained_executor_locked() if drained else None
         if executor is not None:
             executor.shutdown(wait=False, cancel_futures=True)
@@ -736,10 +736,10 @@ class PluginSyncBroker:
                 waited,
             )
         return PluginSyncBrokerDrainResult(
-            drained=drained,
-            pending_callbacks=pending,
-            queued_callbacks=queued,
-            waited_seconds=waited,
+            drained           = drained,
+            pending_callbacks = pending,
+            queued_callbacks  = queued,
+            waited_seconds    = waited,
         )
 
 
@@ -762,40 +762,40 @@ class PluginExecutionGate:
         self,
         mode: PluginConcurrency,
         *,
-        plugin_name: str = "<unknown>",
+        plugin_name: str                     = "<unknown>",
         policy: PluginExecutionPolicy | None = None,
         sync_broker: PluginSyncBroker | None = None,
     ) -> None:
         if mode not in {"parallel", "sequential"}:
             raise ValueError(f"unsupported plugin concurrency mode: {mode}")
-        self.mode = mode
-        self.plugin_name = plugin_name
-        self._policy = policy or PluginExecutionPolicy()
+        self.mode         = mode
+        self.plugin_name  = plugin_name
+        self._policy      = policy or PluginExecutionPolicy()
         self._sync_broker = sync_broker or _FALLBACK_SYNC_BROKER
-        self._state_lock = _LazyAsyncLock()
+        self._state_lock  = _LazyAsyncLock()
         # gate_running + gate_waiters 是 admission 状态；active/operation 是外层
         # 调用与真实子任务的所有权状态。两组不能合并，否则取消抵抗型子任务会提前消失。
-        self._gate_running = 0
-        self._gate_waiters: deque[_GateWaiter] = deque()
-        self._active_tasks: set[asyncio.Task[Any]] = set()
-        self._operation_tasks: set[asyncio.Task[Any]] = set()
+        self._gate_running                                     = 0
+        self._gate_waiters: deque[_GateWaiter]                 = deque()
+        self._active_tasks: set[asyncio.Task[Any]]             = set()
+        self._operation_tasks: set[asyncio.Task[Any]]          = set()
         self._detached_operation_tasks: set[asyncio.Task[Any]] = set()
-        self._policy_tasks: set[asyncio.Task[Any]] = set()
-        self._sync_futures_lock = threading.RLock()
-        self._sync_futures: set[ConcurrentFuture[Any]] = set()
+        self._policy_tasks: set[asyncio.Task[Any]]             = set()
+        self._sync_futures_lock                                = threading.RLock()
+        self._sync_futures: set[ConcurrentFuture[Any]]         = set()
         # broker Future 必须等终态结果送达（或同步转存）后才能解绑；单独记录来源，
         # 让 close 的重试能清掉已终止的无主 tracker，又不会抢走 fatal 的唯一交付权。
         self._broker_owned_sync_futures: set[ConcurrentFuture[Any]] = set()
-        self._detached_sync_futures: set[ConcurrentFuture[Any]] = set()
-        self._deferred_fatal_lock = threading.RLock()
-        self._deferred_fatal_errors: list[BaseException] = []
-        self._admission_lock = threading.RLock()
-        self._closed = False
-        self._publication_token: object | None = None
-        self._consecutive_failures = 0
-        self._circuit_open_until = 0.0
-        self._poisoned_by_timeout = False
-        self._poisoned_by_sync_callback = False
+        self._detached_sync_futures: set[ConcurrentFuture[Any]]     = set()
+        self._deferred_fatal_lock                                   = threading.RLock()
+        self._deferred_fatal_errors: list[BaseException]            = []
+        self._admission_lock                                        = threading.RLock()
+        self._closed                                                = False
+        self._publication_token: object | None                      = None
+        self._consecutive_failures                                  = 0
+        self._circuit_open_until                                    = 0.0
+        self._poisoned_by_timeout                                   = False
+        self._poisoned_by_sync_callback                             = False
 
     @property
     def closed(self) -> bool:
@@ -832,7 +832,7 @@ class PluginExecutionGate:
         """Synchronously reject normal work before asynchronous drain starts."""
 
         with self._admission_lock:
-            self._closed = True
+            self._closed            = True
             self._publication_token = None
         self._sync_broker.close_gate_admission(self)
 
@@ -842,9 +842,9 @@ class PluginExecutionGate:
         with self._admission_lock:
             if self._closed:
                 raise PluginExecutionClosed("plugin generation is already closed")
-            token = object()
+            token                   = object()
             self._publication_token = token
-            self._closed = True
+            self._closed            = True
         self._sync_broker.close_gate_admission(self)
         return token
 
@@ -855,7 +855,7 @@ class PluginExecutionGate:
             if self._publication_token is not token:
                 raise PluginExecutionClosed("plugin publication hold was revoked")
             self._publication_token = None
-            self._closed = False
+            self._closed            = False
         self._sync_broker.notify_policy_change(self)
 
     def set_policy(self, policy: PluginExecutionPolicy) -> None:
@@ -1040,12 +1040,12 @@ class PluginExecutionGate:
                 result = await task
             else:
                 if timeout_seconds <= 0:
-                    raise asyncio.TimeoutError
+                    raise TimeoutError
                 result = await asyncio.wait_for(
                     asyncio.shield(task),
                     timeout=timeout_seconds,
                 )
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             await self._record_failure(force_open=True)
             self._detached_operation_tasks.add(task)
             task.cancel()
@@ -1078,7 +1078,7 @@ class PluginExecutionGate:
     async def _remove_or_release_waiter(self, waiter: _GateWaiter) -> None:
         async with self._state_lock.get():
             if waiter.granted:
-                waiter.granted = False
+                waiter.granted     = False
                 self._gate_running = max(0, self._gate_running - 1)
             else:
                 try:
@@ -1098,17 +1098,17 @@ class PluginExecutionGate:
         task = asyncio.current_task()
         if task is None:
             raise RuntimeError("plugin execution requires an asyncio Task")
-        started = time.monotonic()
-        timeout = self._policy.timeout_seconds
-        deadline = None if timeout is None else started + timeout
-        state_lock = self._state_lock.get()
+        started                    = time.monotonic()
+        timeout                    = self._policy.timeout_seconds
+        deadline                   = None if timeout is None else started + timeout
+        state_lock                 = self._state_lock.get()
         waiter: _GateWaiter | None = None
-        granted = False
+        granted                    = False
 
         async with state_lock:
             self._ensure_available_locked(allow_closed=allow_closed)
-            capacity = self._execution_capacity()
-            admitted = self._gate_running + len(self._gate_waiters)
+            capacity        = self._execution_capacity()
+            admitted        = self._gate_running + len(self._gate_waiters)
             admission_limit = capacity + self._policy.admission_queue_limit
             if admitted >= admission_limit:
                 raise PluginExecutionOverloaded(
@@ -1130,10 +1130,10 @@ class PluginExecutionGate:
                     else:
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
-                            raise asyncio.TimeoutError
+                            raise TimeoutError
                         await asyncio.wait_for(asyncio.shield(waiter.ready), timeout=remaining)
                     granted = waiter.granted
-                except asyncio.TimeoutError as exc:
+                except TimeoutError as exc:
                     await self._remove_or_release_waiter(waiter)
                     await self._record_failure(force_open=True)
                     raise PluginExecutionTimeout("plugin callback timed out while queued") from exc
@@ -1146,8 +1146,8 @@ class PluginExecutionGate:
             remaining_timeout = None if deadline is None else deadline - time.monotonic()
             return await self._run_bounded(
                 operation,
-                timeout_seconds=remaining_timeout,
-                allow_closed=allow_closed,
+                timeout_seconds = remaining_timeout,
+                allow_closed    = allow_closed,
             )
         finally:
             async with state_lock:
@@ -1170,7 +1170,7 @@ class PluginExecutionGate:
             if timeout_seconds is None
             else max(0.0, float(timeout_seconds))
         )
-        deadline = started + timeout
+        deadline     = started + timeout
         current_task = asyncio.current_task()
         async with self._state_lock.get():
             tasks_to_cancel = {
@@ -1209,7 +1209,7 @@ class PluginExecutionGate:
         with self._sync_futures_lock:
             pending_sync_count = len(self._sync_futures)
         drained = pending_async_count == 0 and pending_sync_count == 0
-        waited = time.monotonic() - started
+        waited  = time.monotonic() - started
         if drained and tasks_to_cancel:
             await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
         for task in tuple(self._operation_tasks):
@@ -1229,10 +1229,10 @@ class PluginExecutionGate:
                 waited,
             )
         return PluginExecutionDrainResult(
-            drained=drained,
-            pending_async_tasks=pending_async_count,
-            pending_sync_callbacks=pending_sync_count,
-            waited_seconds=waited,
+            drained                = drained,
+            pending_async_tasks    = pending_async_count,
+            pending_sync_callbacks = pending_sync_count,
+            waited_seconds         = waited,
         )
 
 
@@ -1275,11 +1275,11 @@ async def offload_plugin_sync(
 
     broker, gate, allow_closed = _resolve_sync_broker()
     context = contextvars.copy_context()
-    bound = functools.partial(callback, *args, **kwargs)
-    job = broker.submit(
+    bound   = functools.partial(callback, *args, **kwargs)
+    job     = broker.submit(
         functools.partial(context.run, bound),
-        gate=gate,
-        allow_closed=allow_closed,
+        gate         = gate,
+        allow_closed = allow_closed,
     )
     try:
         return await asyncio.shield(job.completion)

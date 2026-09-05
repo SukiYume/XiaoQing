@@ -47,9 +47,9 @@ def test_overview_and_detail_only_publish_fields_used_by_the_page(db: Database) 
     overview = build_events_overview(
         db,
         "owner-a",
-        start_date="2030-01-01",
-        end_date="2030-01-31",
-        keyword="可搜索",
+        start_date = "2030-01-01",
+        end_date   = "2030-01-31",
+        keyword    = "可搜索",
     )
 
     assert set(overview) == {
@@ -127,7 +127,7 @@ def test_overview_batches_collection_reads(
             }
         )
 
-    original_batch_read = db.get_event_collections_by_ids
+    original_batch_read          = db.get_event_collections_by_ids
     batch_calls: list[list[str]] = []
 
     def record_batch(owner_id: str, collection_ids: list[str]) -> dict[str, dict[str, Any]]:
@@ -143,8 +143,8 @@ def test_overview_batches_collection_reads(
     overview = build_events_overview(
         db,
         "owner-a",
-        start_date="2030-01-01",
-        end_date="2030-01-31",
+        start_date = "2030-01-01",
+        end_date   = "2030-01-31",
     )
 
     assert overview["summary"]["event_count"] == 2

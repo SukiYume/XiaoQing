@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from datetime import date, datetime, timedelta, timezone, tzinfo
+from datetime import UTC, date, datetime, timedelta, tzinfo
 from typing import TYPE_CHECKING, Any, cast
 
 from ..config import PendoConfig
@@ -30,7 +30,7 @@ class ReminderService:
     """生成带持久化租约的提醒投递消息。"""
 
     def __init__(self, db: Database) -> None:
-        self.db = db
+        self.db                                   = db
         self._last_history_prune_day: date | None = None
 
     def _current_user_time(self, user_id: str | None) -> datetime:
@@ -61,7 +61,7 @@ class ReminderService:
     def _collect_initial_reminders(self) -> list[dict[str, Any]]:
         """逐条目收集首次投递；一个坏条目不能中断其他用户的提醒。"""
         messages: list[dict[str, Any]] = []
-        for item in self.db.get_due_reminder_items(now=datetime.now(timezone.utc)):
+        for item in self.db.get_due_reminder_items(now=datetime.now(UTC)):
             try:
                 messages.extend(self._collect_item_reminders(item))
             except Exception as exc:
@@ -71,7 +71,7 @@ class ReminderService:
     def _prune_reminder_history(self) -> None:
         """每个 UTC 自然日最多清理一次过期的已确认提醒历史。"""
 
-        current = datetime.now(timezone.utc)
+        current = datetime.now(UTC)
         if self._last_history_prune_day == current.date():
             return
         try:
@@ -128,9 +128,9 @@ class ReminderService:
         # 首次见到的提醒只允许落在当前检查窗口内，防止启动时补发多年历史。
         # 已经实际尝试但投递失败的提醒则允许按退避时间重试；否则 5 分钟退避
         # 会天然超过 2 分钟检查窗口，记录虽写成待重试却永远不会再被领取。
-        overdue_seconds = (current_time - scheduled_time).total_seconds()
-        failure_count = log.get("failure_count", 0) if log else 0
-        is_delivery_retry = type(failure_count) is int and failure_count > 0
+        overdue_seconds         = (current_time - scheduled_time).total_seconds()
+        failure_count           = log.get("failure_count", 0) if log else 0
+        is_delivery_retry       = type(failure_count) is int and failure_count > 0
         allowed_overdue_seconds = (
             PendoConfig.REMINDER_STALE_AFTER_SECONDS
             if is_delivery_retry
@@ -144,8 +144,8 @@ class ReminderService:
         claim_token = self.db.claim_reminder(
             item.id,
             remind_time,
-            now=current_time,
-            lease_seconds=PendoConfig.REMINDER_CLAIM_LEASE_SECONDS,
+            now           = current_time,
+            lease_seconds = PendoConfig.REMINDER_CLAIM_LEASE_SECONDS,
         )
         if not claim_token:
             return None
@@ -199,10 +199,10 @@ class ReminderService:
         current_time: datetime | None,
     ) -> dict[str, Any] | None:
         """检查一个未确认提醒，必要时领取下一次重复投递。"""
-        item_id = str(log["item_id"])
-        remind_time = str(log["remind_time"])
+        item_id      = str(log["item_id"])
+        remind_time  = str(log["remind_time"])
         repeat_count = int(log["repeat_count"])
-        item = self.db.get_item(item_id)
+        item         = self.db.get_item(item_id)
         if not item or not self._is_active_reminder_item(item):
             return None
 
@@ -217,8 +217,8 @@ class ReminderService:
             item_id,
             remind_time,
             repeat_count,
-            now=user_now,
-            lease_seconds=PendoConfig.REMINDER_CLAIM_LEASE_SECONDS,
+            now           = user_now,
+            lease_seconds = PendoConfig.REMINDER_CLAIM_LEASE_SECONDS,
         )
         if not claim_token:
             return None
@@ -230,8 +230,8 @@ class ReminderService:
                 message,
                 remind_time,
                 claim_token,
-                claim_kind="repeat",
-                repeat_count=repeat_count,
+                claim_kind   = "repeat",
+                repeat_count = repeat_count,
             )
         except Exception:
             self.db.release_reminder_repeat(
@@ -250,15 +250,15 @@ class ReminderService:
         settings: dict[str, Any],
     ) -> bool:
         """判断重复间隔、最大次数和静默时段是否允许本次投递。"""
-        repeat_count = int(log["repeat_count"])
-        last_sent_at = self._parse_user_time(str(log["last_sent_at"]), item.owner_id)
+        repeat_count       = int(log["repeat_count"])
+        last_sent_at       = self._parse_user_time(str(log["last_sent_at"]), item.owner_id)
         seconds_since_last = (user_now - last_sent_at).total_seconds()
         if repeat_count >= PendoConfig.REMINDER_MAX_REPEATS + 1:
             if seconds_since_last >= PendoConfig.REMINDER_AUTO_CONFIRM_AFTER_FINAL_SEND_SECONDS:
                 self.db.confirm_reminder(
                     str(log["item_id"]),
-                    user_action="auto_confirmed",
-                    remind_time=str(log["remind_time"]),
+                    user_action = "auto_confirmed",
+                    remind_time = str(log["remind_time"]),
                 )
             return False
         # 服务长期离线后，不应把数月或数年前的“未确认”提醒重新复活。
@@ -266,8 +266,8 @@ class ReminderService:
         if seconds_since_last >= PendoConfig.REMINDER_STALE_AFTER_SECONDS:
             self.db.confirm_reminder(
                 str(log["item_id"]),
-                user_action="auto_confirmed",
-                remind_time=str(log["remind_time"]),
+                user_action = "auto_confirmed",
+                remind_time = str(log["remind_time"]),
             )
             return False
         if seconds_since_last < PendoConfig.REMINDER_REPEAT_INTERVAL_SECONDS:
@@ -315,13 +315,13 @@ class ReminderService:
         remind_time_str: str,
         claim_token: str | None = None,
         *,
-        claim_kind: str = "initial",
+        claim_kind: str   = "initial",
         repeat_count: int = 0,
     ) -> dict[str, Any]:
         """构建调度器和发送层共享的稳定投递载荷。"""
-        attempt = repeat_count + 1
+        attempt  = repeat_count + 1
         identity = f"{item.id}\0{remind_time_str}\0{attempt}".encode()
-        context = getattr(item, "context", None)
+        context  = getattr(item, "context", None)
         return {
             "user_id": item.owner_id,
             "group_id": context.get("group_id") if isinstance(context, dict) else None,
@@ -337,10 +337,10 @@ class ReminderService:
     def confirm_reminder(
         self,
         item_id: str,
-        user_action: str = "confirmed",
-        owner_id: str | None = None,
+        user_action: str        = "confirmed",
+        owner_id: str | None    = None,
         remind_time: str | None = None,
-        allow_future: bool = False,
+        allow_future: bool      = False,
     ) -> dict[str, Any]:
         """把用户确认请求交给数据库原子更新提醒日志。"""
         return cast(
@@ -348,9 +348,9 @@ class ReminderService:
             self.db.confirm_reminder(
                 item_id,
                 user_action,
-                owner_id=owner_id,
-                remind_time=remind_time,
-                allow_future=allow_future,
+                owner_id     = owner_id,
+                remind_time  = remind_time,
+                allow_future = allow_future,
             ),
         )
 
@@ -359,7 +359,7 @@ class ReminderService:
     ) -> list[dict[str, Any]]:
         """按绝对时间检测半开区间冲突，兼容无时区和带偏移的 ISO 时间。"""
         start_dt = self._parse_user_time(start_time, user_id)
-        end_dt = (
+        end_dt   = (
             self._parse_user_time(end_time, user_id) if end_time else start_dt + timedelta(hours=1)
         )
         if end_dt <= start_dt:
@@ -376,9 +376,9 @@ class ReminderService:
             if not item_start_text:
                 continue
             try:
-                item_start = self._parse_user_time(str(item_start_text), user_id)
+                item_start    = self._parse_user_time(str(item_start_text), user_id)
                 item_end_text = getattr(item, "end_time", None)
-                item_end = (
+                item_end      = (
                     self._parse_user_time(str(item_end_text), user_id)
                     if item_end_text
                     else item_start + timedelta(hours=1)
@@ -408,7 +408,7 @@ class ReminderService:
         title = item.title or "无标题"
         if repeat_count is not None:
             max_repeats = PendoConfig.REMINDER_MAX_REPEATS
-            header = f"⏰ **提醒 (第{repeat_count + 1}次，共{max_repeats + 1}次)**"
+            header      = f"⏰ **提醒 (第{repeat_count + 1}次，共{max_repeats + 1}次)**"
         else:
             header = "⏰ **提醒**"
         lines = [header]
@@ -426,7 +426,7 @@ class ReminderService:
         else:
             lines.append(f"🗓️ {title}")
 
-        owner_id = getattr(item, "owner_id", None)
+        owner_id         = getattr(item, "owner_id", None)
         display_timezone = (
             TimezoneHelper.get_user_timezone(str(owner_id), self.db)
             if owner_id
@@ -573,7 +573,7 @@ class ReminderService:
     ) -> bool:
         """按用户本地时钟判断提醒是否落在静默时段。"""
         try:
-            resolved = settings if settings is not None else self.db.get_user_settings(user_id)
+            resolved      = settings if settings is not None else self.db.get_user_settings(user_id)
             start_minutes = cast(
                 int | None,
                 parse_hhmm_to_minutes(
@@ -609,7 +609,7 @@ class ReminderService:
     ) -> datetime:
         """计算跨午夜静默时段结束后的下一次可投递时刻。"""
         try:
-            resolved = settings if settings is not None else self.db.get_user_settings(user_id)
+            resolved    = settings if settings is not None else self.db.get_user_settings(user_id)
             end_minutes = cast(
                 int | None,
                 parse_hhmm_to_minutes(
@@ -622,10 +622,10 @@ class ReminderService:
         if end_minutes is None:
             return current_time + timedelta(minutes=1)
         candidate = current_time.replace(
-            hour=end_minutes // 60,
-            minute=end_minutes % 60,
-            second=0,
-            microsecond=0,
+            hour        = end_minutes // 60,
+            minute      = end_minutes % 60,
+            second      = 0,
+            microsecond = 0,
         )
         if candidate <= current_time:
             candidate += timedelta(days=1)
@@ -639,7 +639,7 @@ class ReminderService:
             return True
 
         important_tags = {"重要", "紧急", "important", "urgent"}
-        tags = getattr(item, "tags", None) or []
+        tags           = getattr(item, "tags", None) or []
         if any(str(tag).strip().casefold() in important_tags for tag in tags):
             return True
 

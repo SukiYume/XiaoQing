@@ -10,17 +10,17 @@ from core.interfaces import PluginContextProtocol
 from core.plugin_base import Segments, segments
 from core.public_errors import public_error_response
 
-MIN_OPTIONS = 2
-MAX_OPTIONS = 50
-MAX_CHOICES = 10
-DEFAULT_CHOICES = 1
+MIN_OPTIONS        = 2
+MAX_OPTIONS        = 50
+MAX_CHOICES        = 10
+DEFAULT_CHOICES    = 1
 MAX_ARGUMENT_CHARS = 4_096
 MAX_QUESTION_CHARS = 100
-MAX_OPTION_CHARS = 200
+MAX_OPTION_CHARS   = 200
 
 CHOICE_EMOJIS = ("🎲", "🎯", "✨", "🌟", "💫", "🎰", "🔮", "🎪")
-_HELP_WORDS = frozenset({"help", "帮助"})
-_RNG = random.SystemRandom()
+_HELP_WORDS   = frozenset({"help", "帮助"})
+_RNG          = random.SystemRandom()
 
 HELP_TEXT = """
 🎲 随机选择助手
@@ -56,11 +56,11 @@ def _is_bounded_text(value: object, max_chars: int) -> bool:
 def _parse_choice_tokens(tokens: list[str]) -> tuple[list[str], int, bool]:
     """扫描位置参数及 `-n`、`-u`、`--` 状态，不再执行第二次分词。"""
     positional: list[str] = []
-    choice_count = DEFAULT_CHOICES
-    count_seen = False
-    unique = False
-    parse_flags = True
-    index = 0
+    choice_count          = DEFAULT_CHOICES
+    count_seen            = False
+    unique                = False
+    parse_flags           = True
+    index                 = 0
     while index < len(tokens):
         token = tokens[index]
         if parse_flags and token == "--":
@@ -80,7 +80,7 @@ def _parse_choice_tokens(tokens: list[str]) -> tuple[list[str], int, bool]:
             if not raw_count.isascii() or not raw_count.isdecimal() or len(raw_count) > 2:
                 raise ChoiceArgumentError("选择数量必须是 1–10 的 ASCII 整数")
             choice_count = int(raw_count)
-            count_seen = True
+            count_seen   = True
             index += 2
             continue
         if parse_flags and token.startswith("-"):
@@ -165,7 +165,7 @@ async def handle(
         if question is None:
             return segments(HELP_TEXT)
 
-        choices = make_choice(options, choice_count, unique)
+        choices        = make_choice(options, choice_count, unique)
         distinct_count = len(dict.fromkeys(options))
         context.logger.info(
             "随机选择：问题长度=%d，候选位置=%d，不同选项=%d，选择数=%d，去重=%s",
@@ -176,7 +176,7 @@ async def handle(
             unique,
         )
         total_options = distinct_count if unique else len(options)
-        result = format_choice_result(question, choices, total_options)
+        result        = format_choice_result(question, choices, total_options)
         context.logger.debug("随机选择完成：结果数=%d", len(choices))
         return segments(result)
     except ChoiceArgumentError as exc:
@@ -185,6 +185,6 @@ async def handle(
         return public_error_response(
             context,
             exc,
-            logger=context.logger,
-            component="choice.handle",
+            logger    = context.logger,
+            component = "choice.handle",
         )

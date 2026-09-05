@@ -6,9 +6,9 @@ from typing import Any, Protocol, cast
 from core.interfaces import PluginSettingsSnapshot
 from core.plugin_base import segments as _core_segments
 
-OneBotEvent = dict[str, Any]
+OneBotEvent     = dict[str, Any]
 MessageSegments = list[dict[str, Any]]
-segments = cast(Callable[[Any], MessageSegments], _core_segments)
+segments        = cast(Callable[[Any], MessageSegments], _core_segments)
 
 
 class Context(Protocol):

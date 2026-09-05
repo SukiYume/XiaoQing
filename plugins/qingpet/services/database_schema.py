@@ -27,6 +27,7 @@ _ALLOWED_SCHEMA_COLUMNS: dict[str, dict[str, str]] = {
         "version": "INTEGER NOT NULL DEFAULT 0",
     },
     "pets": {
+        "decay_remainders": "TEXT NOT NULL DEFAULT '{}'",
         "likes": "INTEGER DEFAULT 0",
         "dress_hat": "TEXT",
         "dress_clothes": "TEXT",
@@ -58,8 +59,9 @@ _ALLOWED_SCHEMA_COLUMNS: dict[str, dict[str, str]] = {
     },
 }
 
-_CURRENT_SCHEMA_VERSION = 5
+_CURRENT_SCHEMA_VERSION   = 6
 _LEGACY_COLUMN_MIGRATIONS = (
+    ("pets", "decay_remainders", "TEXT NOT NULL DEFAULT '{}'"),
     ("users", "total_feed_count", "INTEGER DEFAULT 0"),
     ("users", "total_clean_count", "INTEGER DEFAULT 0"),
     ("users", "total_play_count", "INTEGER DEFAULT 0"),
@@ -433,7 +435,7 @@ def _migrate_pet_show_votes_table(cursor: sqlite3.Cursor) -> None:
 
 def _migrate_group_tasks_table(cursor: sqlite3.Cursor) -> None:
     """合并旧版重复群任务，并建立每日任务唯一键。"""
-    table_info = cursor.execute("PRAGMA table_info(group_tasks)").fetchall()
+    table_info            = cursor.execute("PRAGMA table_info(group_tasks)").fetchall()
     created_date_not_null = any(
         row["name"] == "created_date" and int(row["notnull"]) == 1 for row in table_info
     )
@@ -442,7 +444,7 @@ def _migrate_group_tasks_table(cursor: sqlite3.Cursor) -> None:
         if int(index["unique"]) != 1:
             continue
         index_name = str(index["name"]).replace('"', '""')
-        columns = [
+        columns    = [
             str(row["name"])
             for row in cursor.execute(f'PRAGMA index_info("{index_name}")').fetchall()
         ]

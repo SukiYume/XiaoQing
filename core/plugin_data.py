@@ -1,3 +1,4 @@
+# 插件数据目录：明确可写路径归属和历史数据迁移边界。
 # mypy: disable-error-code=attr-defined
 """Plugin writable-data directory ownership and migration."""
 
@@ -82,7 +83,7 @@ class PluginDataMixin:
         """Retire one migrated source-tree directory without deleting its fallback copy."""
 
         archive_root = self._ensure_legacy_data_archive_root(data_root)
-        archive = archive_root / plugin_name
+        archive      = archive_root / plugin_name
         try:
             archive.lstat()
         except FileNotFoundError:
@@ -103,8 +104,8 @@ class PluginDataMixin:
             try:
                 staging = Path(
                     tempfile.mkdtemp(
-                        prefix=f".{plugin_name}.archiving-",
-                        dir=archive_root,
+                        prefix = f".{plugin_name}.archiving-",
+                        dir    = archive_root,
                     )
                 )
             except OSError as staging_exc:
@@ -148,15 +149,15 @@ class PluginDataMixin:
         legacy = resolve_contained_directory(
             plugin_root,
             "data",
-            description="legacy plugin data directory",
-            reject_root_link=True,
+            description      = "legacy plugin data directory",
+            reject_root_link = True,
         )
         if not target.exists():
             try:
                 staging = Path(
                     tempfile.mkdtemp(
-                        prefix=f".{plugin_name}.migrating-",
-                        dir=data_root,
+                        prefix = f".{plugin_name}.migrating-",
+                        dir    = data_root,
                     )
                 )
             except OSError as exc:
@@ -177,8 +178,8 @@ class PluginDataMixin:
                 self._remove_migration_staging(staging)
         self._archive_legacy_data_dir(
             plugin_name,
-            legacy=legacy,
-            data_root=data_root,
+            legacy    = legacy,
+            data_root = data_root,
         )
 
     @staticmethod
@@ -205,25 +206,25 @@ class PluginDataMixin:
         cached = self._data_directories.get(plugin_name)
         if cached is not None and not force:
             return self._verify_data_directory_record(cached)
-        plugin_dir = self.plugins_dir / plugin_name
+        plugin_dir  = self.plugins_dir / plugin_name
         plugin_root = resolve_plugin_root(self.plugins_dir, plugin_dir)
-        data_root = self._ensure_data_root()
+        data_root   = self._ensure_data_root()
         self._seed_external_data_dir(
             canonical_plugin_name(plugin_name),
-            plugin_root=plugin_root,
-            data_root=data_root,
+            plugin_root = plugin_root,
+            data_root   = data_root,
         )
         verified = resolve_contained_directory(
             data_root,
             canonical_plugin_name(plugin_name),
-            description="plugin data directory",
-            reject_root_link=True,
+            description      = "plugin data directory",
+            reject_root_link = True,
         )
         record = _PluginDataDirectory(
-            data_root=data_root,
-            path=verified,
-            root_identity=data_root.lstat(),
-            data_identity=verified.lstat(),
+            data_root     = data_root,
+            path          = verified,
+            root_identity = data_root.lstat(),
+            data_identity = verified.lstat(),
         )
         self._verify_data_directory_record(record)
         self._data_directories[plugin_name] = record

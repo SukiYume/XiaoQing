@@ -32,14 +32,14 @@ logger = logging.getLogger(__name__)
 
 _ADS_REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=10, sock_read=20)
 _ADS_BODY_LIMITS = BodyLimits(
-    max_wire_bytes=2 * 1024 * 1024,
-    max_decoded_bytes=4 * 1024 * 1024,
+    max_wire_bytes    = 2 * 1024 * 1024,
+    max_decoded_bytes = 4 * 1024 * 1024,
 )
 _ADS_JSON_LIMITS = JsonLimits(
-    max_bytes=_ADS_BODY_LIMITS.max_decoded_bytes,
-    max_depth=32,
-    max_nodes=25_000,
-    max_string_chars=3 * 1024 * 1024,
+    max_bytes        = _ADS_BODY_LIMITS.max_decoded_bytes,
+    max_depth        = 32,
+    max_nodes        = 25_000,
+    max_string_chars = 3 * 1024 * 1024,
 )
 _ADS_BIBTEX_MIME_POLICY = MimePolicy(
     exact=frozenset(
@@ -56,7 +56,7 @@ _ADS_BIBTEX_MIME_POLICY = MimePolicy(
 )
 
 # 关系查询只允许 ADS 明确定义的两个操作符，避免调用方把任意文本拼进查询语法。
-_ADSRelation = Literal["citations", "references"]
+_ADSRelation     = Literal["citations", "references"]
 _RELATION_FIELDS = ("bibcode", "title", "author", "year", "citation_count")
 
 
@@ -101,11 +101,11 @@ class ADSClient:
             token: ADS API token
             session: Shared aiohttp ClientSession for connection pooling
         """
-        self.token = token
-        self.session = session
-        self.context = context
+        self.token    = token
+        self.session  = session
+        self.context  = context
         self.base_url = "https://api.adsabs.harvard.edu/v1"
-        self.headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        self.headers  = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
     async def _request_json(
         self,
@@ -119,10 +119,10 @@ class ADSClient:
             self.session,
             method,
             url,
-            limits=_ADS_BODY_LIMITS,
-            mime_policy=mime_policy,
-            headers=self.headers,
-            request_kwargs={
+            limits         = _ADS_BODY_LIMITS,
+            mime_policy    = mime_policy,
+            headers        = self.headers,
+            request_kwargs = {
                 **request_kwargs,
                 "timeout": _ADS_REQUEST_TIMEOUT,
             },
@@ -167,15 +167,15 @@ class ADSClient:
             public_error_message(
                 self.context,
                 exc,
-                logger=logger,
-                component=component,
+                logger    = logger,
+                component = component,
             )
             return []
 
     async def search_papers(
         self,
         query: str,
-        max_results: int = DEFAULT_MAX_RESULTS,
+        max_results: int         = DEFAULT_MAX_RESULTS,
         fields: list[str] | None = None,
         *,
         sort: str = "citation_count desc",
@@ -205,10 +205,10 @@ class ADSClient:
 
         return await self._search_docs(
             query,
-            fields=fields,
-            max_results=max_results,
-            sort=sort,
-            component="ads_paper.search",
+            fields      = fields,
+            max_results = max_results,
+            sort        = sort,
+            component   = "ads_paper.search",
         )
 
     async def get_bibtex(self, bibcode: str) -> str | None:
@@ -219,15 +219,15 @@ class ADSClient:
         historically also labels that JSON as text.  Only this endpoint uses
         the narrow legacy text MIME compatibility policy.
         """
-        url = f"{self.base_url}/export/bibtex"
+        url     = f"{self.base_url}/export/bibtex"
         payload = {"bibcode": [bibcode]}
 
         try:
             data = await self._request_json(
                 "POST",
                 url,
-                request_kwargs={"json": payload},
-                mime_policy=_ADS_BIBTEX_MIME_POLICY,
+                request_kwargs = {"json": payload},
+                mime_policy    = _ADS_BIBTEX_MIME_POLICY,
             )
             if not isinstance(data, dict):
                 return None
@@ -237,14 +237,14 @@ class ADSClient:
             public_error_message(
                 self.context,
                 exc,
-                logger=logger,
-                component="ads_paper.bibtex",
+                logger    = logger,
+                component = "ads_paper.bibtex",
             )
             return None
 
     async def get_paper_by_bibcode(self, bibcode: str) -> dict[str, Any] | None:
         bibcode = _validate_bibcode(bibcode)
-        docs = await self._search_docs(
+        docs    = await self._search_docs(
             f"bibcode:{_escape_ads_term(bibcode)}",
             fields=[
                 "bibcode",
@@ -256,9 +256,9 @@ class ADSClient:
                 "identifier",
                 "abstract",
             ],
-            max_results=1,
-            sort="citation_count desc",
-            component="ads_paper.get_paper",
+            max_results = 1,
+            sort        = "citation_count desc",
+            component   = "ads_paper.get_paper",
         )
         return docs[0] if docs else None
 
@@ -274,10 +274,10 @@ class ADSClient:
         validated_bibcode = _validate_bibcode(bibcode)
         return await self._search_docs(
             f"{relation}(bibcode:{_escape_ads_term(validated_bibcode)})",
-            fields=_RELATION_FIELDS,
-            max_results=max_results,
-            sort="citation_count desc",
-            component=f"ads_paper.{relation}",
+            fields      = _RELATION_FIELDS,
+            max_results = max_results,
+            sort        = "citation_count desc",
+            component   = f"ads_paper.{relation}",
         )
 
     async def get_citations(
@@ -302,11 +302,11 @@ class ADSClient:
         self, author: str, max_results: int = DEFAULT_MAX_RESULTS
     ) -> list[dict[str, Any]]:
         query = f'author:"{_escape_ads_term(author)}"'
-        return await self.search_papers(query, max_results)
+        return await self.search_papers(query, max_results, sort="date desc")
 
     async def search_by_arxiv_id(self, arxiv_id: str) -> dict[str, Any] | None:
         arxiv_id = self._normalize_arxiv_id(arxiv_id)
-        query = f"arxiv:{arxiv_id}"
+        query    = f"arxiv:{arxiv_id}"
         papers = await self.search_papers(query, max_results=1)
         return papers[0] if papers else None
 
@@ -365,12 +365,12 @@ class ADSClient:
 
     @staticmethod
     def format_paper_info(paper: dict[str, Any]) -> str:
-        title = paper_title(paper)
-        authors = ADSClient.format_authors(paper.get("author", []))
-        year = paper.get("year", "N/A")
+        title     = paper_title(paper)
+        authors   = ADSClient.format_authors(paper.get("author", []))
+        year      = paper.get("year", "N/A")
         citations = paper.get("citation_count", 0)
-        bibcode = paper.get("bibcode", "")
-        arxiv_id = ADSClient.extract_arxiv_id(bibcode)
+        bibcode   = paper.get("bibcode", "")
+        arxiv_id  = ADSClient.extract_arxiv_id(bibcode)
 
         lines = [f"📄 {title}", f"   👤 {authors}", f"   📅 {year}", f"   📊 Cited: {citations}"]
         if arxiv_id:

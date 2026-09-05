@@ -21,7 +21,7 @@ async def safe_end_session(context: Any) -> bool:
 async def safe_create_session(
     context: Any,
     initial_data: dict[str, Any] | None = None,
-    timeout: float = 300.0,
+    timeout: float                      = 300.0,
 ) -> bool:
     """上下文支持会话接口时创建会话，否则返回 ``False``。"""
     if context is None:

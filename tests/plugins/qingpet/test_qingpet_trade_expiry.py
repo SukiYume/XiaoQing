@@ -6,7 +6,7 @@ import os
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -16,10 +16,10 @@ from plugins.qingpet.services.database import Database
 from plugins.qingpet.services.user_service import UserService
 from tests.helpers.paths import REPOSITORY_ROOT
 
-GROUP_ID = 13579
+GROUP_ID  = 13579
 SELLER_ID = "seller"
-BUYER_ID = "buyer"
-FROZEN_NOW = datetime(2026, 7, 13, 12, 0, tzinfo=timezone.utc)
+BUYER_ID  = "buyer"
+FROZEN_NOW = datetime(2026, 7, 13, 12, 0, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -27,12 +27,12 @@ def trade_db(monkeypatch):
     monkeypatch.setattr(database_clock, "now", lambda: FROZEN_NOW)
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as file:
         db_path = file.name
-    database = Database(db_path)
-    users = UserService(database)
-    seller = users.get_or_create_user(SELLER_ID, GROUP_ID)
-    buyer = users.get_or_create_user(BUYER_ID, GROUP_ID)
+    database     = Database(db_path)
+    users        = UserService(database)
+    seller       = users.get_or_create_user(SELLER_ID, GROUP_ID)
+    buyer        = users.get_or_create_user(BUYER_ID, GROUP_ID)
     seller.coins = 100
-    buyer.coins = 200
+    buyer.coins  = 200
     assert database.update_user(seller)
     assert database.update_user(buyer)
     assert database.purchase_item_atomic(SELLER_ID, GROUP_ID, "apple", 3, 0)[0]
@@ -42,8 +42,8 @@ def trade_db(monkeypatch):
         "apple",
         3,
         90,
-        expire_hours=72,
-        max_listings=5,
+        expire_hours = 72,
+        max_listings = 5,
     )
     listing_id = int(
         database._get_connection().execute("SELECT id FROM trade_listings").fetchone()["id"]
@@ -78,7 +78,7 @@ def _raw_listing(database: Database, listing_id: int) -> dict:
 
 def _asset_state(database: Database, listing_id: int) -> dict:
     seller = database.get_user(SELLER_ID, GROUP_ID)
-    buyer = database.get_user(BUYER_ID, GROUP_ID)
+    buyer  = database.get_user(BUYER_ID, GROUP_ID)
     assert seller is not None and buyer is not None
     ledger_count = int(
         database._get_connection()
@@ -123,7 +123,7 @@ def test_exact_expiry_purchase_cancel_and_settlement_have_one_terminal_state(tra
     database, db_path, listing_id = trade_db
     _set_expiry(database, listing_id, FROZEN_NOW)
     contenders = [Database(db_path) for _ in range(3)]
-    barrier = threading.Barrier(3)
+    barrier    = threading.Barrier(3)
 
     def purchase():
         barrier.wait()
@@ -170,8 +170,8 @@ def test_unexpired_purchase_and_cancel_claim_only_one_terminal_state(trade_db):
     database, db_path, listing_id = trade_db
     _set_expiry(database, listing_id, FROZEN_NOW + timedelta(seconds=1))
     purchase_db = Database(db_path)
-    cancel_db = Database(db_path)
-    barrier = threading.Barrier(2)
+    cancel_db   = Database(db_path)
+    barrier     = threading.Barrier(2)
 
     def purchase():
         barrier.wait()
@@ -184,9 +184,9 @@ def test_unexpired_purchase_and_cancel_claim_only_one_terminal_state(trade_db):
     try:
         with ThreadPoolExecutor(max_workers=2) as executor:
             purchase_future = executor.submit(purchase)
-            cancel_future = executor.submit(cancel)
+            cancel_future   = executor.submit(cancel)
             purchase_result = purchase_future.result()
-            cancel_result = cancel_future.result()
+            cancel_result   = cancel_future.result()
     finally:
         purchase_db.cleanup()
         cancel_db.cleanup()

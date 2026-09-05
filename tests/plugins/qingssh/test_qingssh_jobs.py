@@ -30,12 +30,12 @@ from tests.helpers.settings_snapshot import with_settings_reader
 
 def test_qingssh_session_does_not_store_task_object():
     async def _run():
-        manager = _ManagerStub()
-        context = with_settings_reader(Mock())
-        context.current_user_id = 10001
+        manager                  = _ManagerStub()
+        context                  = with_settings_reader(Mock())
+        context.current_user_id  = 10001
         context.current_group_id = 50001
-        context.send_action = AsyncMock()
-        context.end_session = AsyncMock()
+        context.send_action      = AsyncMock()
+        context.end_session      = AsyncMock()
 
         session = _SessionStub(
             {
@@ -86,15 +86,15 @@ async def test_sensitive_commands_are_not_retained_in_session_history(
     command: str,
 ) -> None:
     await ssh_session_handlers.shutdown_tasks()
-    manager = _ManagerStub()
-    context = with_settings_reader(Mock())
-    context.current_user_id = 10001
+    manager                  = _ManagerStub()
+    context                  = with_settings_reader(Mock())
+    context.current_user_id  = 10001
     context.current_group_id = 50001
-    context.send_action = AsyncMock()
-    context.end_session = AsyncMock()
-    context.config = {}
-    context.request_id = "sensitive-history-test"
-    session = _connected_session()
+    context.send_action      = AsyncMock()
+    context.end_session      = AsyncMock()
+    context.config           = {}
+    context.request_id       = "sensitive-history-test"
+    session                  = _connected_session()
 
     async def update_session(callback):
         return callback(session)
@@ -143,12 +143,12 @@ async def test_export_value_uses_shell_quoting_and_rejects_unclosed_quotes(tmp_p
 @pytest.mark.asyncio
 async def test_existing_sensitive_history_is_scrubbed_before_display_or_replay() -> None:
     await ssh_session_handlers.shutdown_tasks()
-    manager = _ManagerStub()
-    context = with_settings_reader(Mock())
-    context.current_user_id = 10001
+    manager                  = _ManagerStub()
+    context                  = with_settings_reader(Mock())
+    context.current_user_id  = 10001
     context.current_group_id = 50001
-    context.end_session = AsyncMock()
-    session = _connected_session()
+    context.end_session      = AsyncMock()
+    session                  = _connected_session()
     session.set(
         SessionKeys.HISTORY,
         [
@@ -172,15 +172,15 @@ async def test_existing_sensitive_history_is_scrubbed_before_display_or_replay()
 @pytest.mark.asyncio
 async def test_ordinary_commands_remain_available_in_session_history() -> None:
     await ssh_session_handlers.shutdown_tasks()
-    manager = _ManagerStub()
-    context = with_settings_reader(Mock())
-    context.current_user_id = 10001
+    manager                  = _ManagerStub()
+    context                  = with_settings_reader(Mock())
+    context.current_user_id  = 10001
     context.current_group_id = 50001
-    context.send_action = AsyncMock()
-    context.end_session = AsyncMock()
-    context.config = {}
-    context.request_id = "ordinary-history-test"
-    session = _connected_session()
+    context.send_action      = AsyncMock()
+    context.end_session      = AsyncMock()
+    context.config           = {}
+    context.request_id       = "ordinary-history-test"
+    session                  = _connected_session()
 
     async def update_session(callback):
         return callback(session)
@@ -273,8 +273,8 @@ async def test_parent_rollback_never_opens_ssh(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_parent_cancellation_never_opens_ssh(tmp_path: Path) -> None:
     await ssh_session_handlers.shutdown_tasks()
-    context = _TransactionalContext(_connected_session())
-    manager = _CommandGateManager(tmp_path)
+    context  = _TransactionalContext(_connected_session())
+    manager  = _CommandGateManager(tmp_path)
     launched = asyncio.Event()
 
     async def parent(working: _SessionStub) -> None:
@@ -307,9 +307,9 @@ async def test_parent_cancellation_never_opens_ssh(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_session_replacement_before_commit_never_opens_ssh(tmp_path: Path) -> None:
     await ssh_session_handlers.shutdown_tasks()
-    context = _TransactionalContext(_connected_session())
-    manager = _CommandGateManager(tmp_path)
-    replacement = _SessionStub({SessionKeys.STATE: "other"})
+    context                 = _TransactionalContext(_connected_session())
+    manager                 = _CommandGateManager(tmp_path)
+    replacement             = _SessionStub({SessionKeys.STATE: "other"})
     replacement.plugin_name = "other-plugin"
 
     try:
@@ -344,13 +344,13 @@ async def test_old_job_cannot_overwrite_new_generation_or_unregister_it(tmp_path
         current.set(SessionKeys.STATE, "executing")
 
     await context.update_session(install_new_generation)
-    never = asyncio.Event()
+    never    = asyncio.Event()
     new_task = asyncio.create_task(never.wait())
-    new_job = ssh_session_handlers._CommandJob(
-        key=(context.current_user_id, context.current_group_id),
-        server_name="srv1",
-        job_id=new_job_id,
-        task=cast("asyncio.Task[None]", new_task),
+    new_job  = ssh_session_handlers._CommandJob(
+        key         = (context.current_user_id, context.current_group_id),
+        server_name = "srv1",
+        job_id      = new_job_id,
+        task        = cast("asyncio.Task[None]", new_task),
     )
     ssh_session_handlers._register_job(new_job)
 
@@ -394,7 +394,7 @@ async def test_shutdown_cancels_all_jobs_and_restores_owned_session(tmp_path: Pa
 
 @pytest.mark.asyncio
 async def test_stale_job_checks_do_not_touch_replacement_session_metadata() -> None:
-    manager = SessionManager()
+    manager     = SessionManager()
     replacement = await manager.create(
         10001,
         50001,
@@ -411,8 +411,8 @@ async def test_stale_job_checks_do_not_touch_replacement_session_metadata() -> N
     assert (
         await ssh_session_handlers._session_job_is_current(
             update_session,
-            server_name="old-server",
-            job_id="a" * 32,
+            server_name = "old-server",
+            job_id      = "a" * 32,
         )
         is False
     )
@@ -422,9 +422,9 @@ async def test_stale_job_checks_do_not_touch_replacement_session_metadata() -> N
     assert (
         await ssh_session_handlers._commit_job_result(
             update_session,
-            server_name="old-server",
-            job_id="a" * 32,
-            cwd="/must-not-commit",
+            server_name = "old-server",
+            job_id      = "a" * 32,
+            cwd         = "/must-not-commit",
         )
         is False
     )
@@ -436,12 +436,12 @@ async def test_repeated_worker_cancellation_cannot_interrupt_final_session_cas(
     tmp_path: Path,
 ) -> None:
     await ssh_session_handlers.shutdown_tasks()
-    context = _TransactionalContext(_connected_session())
-    manager = _CommandGateManager(tmp_path)
-    real_update = context.update_session
+    context         = _TransactionalContext(_connected_session())
+    manager         = _CommandGateManager(tmp_path)
+    real_update     = context.update_session
     cleanup_entered = asyncio.Event()
-    allow_cleanup = asyncio.Event()
-    update_calls = 0
+    allow_cleanup   = asyncio.Event()
+    update_calls    = 0
 
     async def gated_update(callback: Any) -> Any:
         nonlocal update_calls
@@ -457,7 +457,7 @@ async def test_repeated_worker_cancellation_cannot_interrupt_final_session_cas(
     await asyncio.wait_for(manager.started.wait(), timeout=1)
     assert context.session is not None
     job_id = context.session.get(SessionKeys.CURRENT_TASK)
-    job = ssh_session_handlers._COMMAND_JOBS[job_id]
+    job    = ssh_session_handlers._COMMAND_JOBS[job_id]
 
     try:
         job.task.cancel()
@@ -545,12 +545,12 @@ async def test_close_cancels_only_the_exact_session_generation(
     context = with_settings_reader(Mock(current_user_id=10001, current_group_id=50001))
     manager = _DisconnectManagerStub()
     monkeypatch.setattr(ssh_session_handlers, "get_manager", AsyncMock(return_value=manager))
-    key = (context.current_user_id, context.current_group_id)
-    never = asyncio.Event()
-    old_task = asyncio.create_task(never.wait())
+    key          = (context.current_user_id, context.current_group_id)
+    never        = asyncio.Event()
+    old_task     = asyncio.create_task(never.wait())
     current_task = asyncio.create_task(never.wait())
-    old_job = ssh_session_handlers._CommandJob(key, "srv1", "a" * 32, old_task)
-    current_job = ssh_session_handlers._CommandJob(key, "srv1", "b" * 32, current_task)
+    old_job      = ssh_session_handlers._CommandJob(key, "srv1", "a" * 32, old_task)
+    current_job  = ssh_session_handlers._CommandJob(key, "srv1", "b" * 32, current_task)
     ssh_session_handlers._register_job(old_job)
     ssh_session_handlers._register_job(current_job)
     session = _SessionStub(
@@ -586,9 +586,9 @@ async def test_close_cancels_exact_job_before_manager_initialization_failure(
 ) -> None:
     await ssh_session_handlers.shutdown_tasks()
     context = with_settings_reader(Mock(current_user_id=10001, current_group_id=50001))
-    key = (context.current_user_id, context.current_group_id)
+    key  = (context.current_user_id, context.current_group_id)
     task = asyncio.create_task(asyncio.Event().wait())
-    job = ssh_session_handlers._CommandJob(key, "srv1", "c" * 32, task)
+    job  = ssh_session_handlers._CommandJob(key, "srv1", "c" * 32, task)
     ssh_session_handlers._register_job(job)
     session = _SessionStub(
         {
@@ -642,15 +642,15 @@ async def test_stop_reply_does_not_claim_remote_exit_when_only_local_cleanup_suc
 
         async def stop_command(self, *_args):
             return ssh_manager_module.CommandTerminationResult(
-                found=True,
-                local_cleaned=True,
-                remote_confirmed=False,
-                error="missing remote PID",
+                found            = True,
+                local_cleaned    = True,
+                remote_confirmed = False,
+                error            = "missing remote PID",
             )
 
     context = with_settings_reader(Mock(current_user_id=10001, current_group_id=50001))
     context.end_session = AsyncMock()
-    session = _SessionStub(
+    session             = _SessionStub(
         {
             SessionKeys.STATE: "executing",
             SessionKeys.SERVER_NAME: "srv1",
@@ -671,12 +671,12 @@ async def test_stop_reply_does_not_claim_remote_exit_when_only_local_cleanup_suc
 
 def test_qingssh_disconnect_respects_explicit_target_without_ending_current_session():
     async def _run():
-        manager = _DisconnectManagerStub()
-        context = with_settings_reader(Mock())
-        context.current_user_id = 10001
+        manager                  = _DisconnectManagerStub()
+        context                  = with_settings_reader(Mock())
+        context.current_user_id  = 10001
         context.current_group_id = 50001
-        context.end_session = AsyncMock()
-        context.get_session = AsyncMock(
+        context.end_session      = AsyncMock()
+        context.get_session      = AsyncMock(
             return_value=_SessionStub({SessionKeys.SERVER_NAME: "current-srv"})
         )
 
@@ -730,7 +730,7 @@ async def test_qingssh_main_does_not_replace_another_plugin_session(
 ):
     from plugins.qingssh import handlers as handlers_module
 
-    session = _SessionStub()
+    session             = _SessionStub()
     session.plugin_name = "pendo"
     context = with_settings_reader(Mock(current_user_id=10001, current_group_id=50001))
     context.get_session = AsyncMock(return_value=session)
@@ -749,7 +749,7 @@ async def test_qingssh_quick_add_rejects_surplus_arguments():
 
     context = with_settings_reader(Mock())
     context.get_session = AsyncMock(return_value=None)
-    manager = Mock()
+    manager            = Mock()
     manager.add_server = AsyncMock()
 
     result = await handlers_module.handle_ssh_add(
@@ -769,7 +769,7 @@ async def test_qingssh_quick_add_rejects_unclosed_quote():
 
     context = with_settings_reader(Mock())
     context.get_session = AsyncMock(return_value=None)
-    manager = Mock()
+    manager            = Mock()
     manager.add_server = AsyncMock()
 
     result = await handlers_module.handle_ssh_add(

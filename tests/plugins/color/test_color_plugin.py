@@ -242,7 +242,7 @@ class TestColorDataManager:
         assert "#D54547" in result or "213, 69, 71" in result
 
     def test_load_colors_reuses_cached_builtin_palette(self, tmp_path, monkeypatch):
-        calls = {"builtin": 0}
+        calls      = {"builtin": 0}
         plugin_dir = tmp_path / "plugin"
         plugin_dir.mkdir()
         data_dir = tmp_path / "data"
@@ -276,11 +276,11 @@ class TestColorDataManager:
 
     def test_bundled_palette_is_complete_and_rgb_hex_consistent(self, tmp_path):
         context = SimpleNamespace(
-            plugin_dir=ROOT / "plugins" / "color",
-            data_dir=tmp_path,
-            current_group_id=1001,
-            current_user_id=42,
-            logger=MagicMock(),
+            plugin_dir       = ROOT / "plugins" / "color",
+            data_dir         = tmp_path,
+            current_group_id = 1001,
+            current_user_id  = 42,
+            logger           = MagicMock(),
         )
 
         colors = color_data_manager.load_colors(context)
@@ -293,11 +293,11 @@ class TestColorDataManager:
         self, monkeypatch, tmp_path
     ):
         context = SimpleNamespace(
-            plugin_dir=ROOT / "plugins" / "color",
-            data_dir=tmp_path,
-            current_group_id=1001,
-            current_user_id=42,
-            logger=MagicMock(),
+            plugin_dir       = ROOT / "plugins" / "color",
+            data_dir         = tmp_path,
+            current_group_id = 1001,
+            current_user_id  = 42,
+            logger           = MagicMock(),
         )
         custom = MagicMock(
             return_value=[
@@ -322,9 +322,9 @@ class TestColorDataManager:
 
     def test_custom_scope_fails_closed_without_authenticated_identity(self, tmp_path):
         context = SimpleNamespace(
-            data_dir=tmp_path,
-            current_group_id=None,
-            current_user_id=None,
+            data_dir         = tmp_path,
+            current_group_id = None,
+            current_user_id  = None,
         )
 
         with pytest.raises(ValueError, match="requires a group or user scope"):
@@ -332,9 +332,9 @@ class TestColorDataManager:
 
     def test_noop_mutation_does_not_create_or_rewrite_scope_file(self, tmp_path):
         context = SimpleNamespace(
-            data_dir=tmp_path,
-            current_group_id=1001,
-            current_user_id=42,
+            data_dir         = tmp_path,
+            current_group_id = 1001,
+            current_user_id  = 42,
         )
         custom_file = color_data_manager._custom_file(context)
 
@@ -343,9 +343,9 @@ class TestColorDataManager:
 
     def test_mutation_rejects_invalid_record_without_overwriting_file(self, tmp_path):
         context = SimpleNamespace(
-            data_dir=tmp_path,
-            current_group_id=1001,
-            current_user_id=42,
+            data_dir         = tmp_path,
+            current_group_id = 1001,
+            current_user_id  = 42,
         )
         custom_file = color_data_manager._custom_file(context)
         custom_file.parent.mkdir(parents=True, exist_ok=True)
@@ -380,16 +380,16 @@ class TestColorDataManager:
 class TestColorHandleFixes:
     @pytest.mark.asyncio
     async def test_color_bare_spectype_flag_lists_all_types(self, monkeypatch):
-        context = MagicMock()
+        context            = MagicMock()
         context.plugin_dir = ROOT / "plugins" / "color"
-        context.data_dir = ROOT / "plugins" / "color" / "data"
-        context.logger = MagicMock()
+        context.data_dir   = ROOT / "plugins" / "color" / "data"
+        context.logger     = MagicMock()
 
         called = {}
 
         def _fake_list(prefix, _context, *, page=1):
             called["prefix"] = prefix
-            called["page"] = page
+            called["page"]   = page
             return [{"type": "text", "data": {"text": "ok"}}]
 
         monkeypatch.setattr(color_main.stellar, "list_spectral_types", _fake_list)
@@ -402,11 +402,11 @@ class TestColorHandleFixes:
     @staticmethod
     def _context(tmp_path, *, admin=False):
         return SimpleNamespace(
-            plugin_dir=ROOT / "plugins" / "color",
-            data_dir=tmp_path,
-            current_group_id=1001,
-            current_user_id=42,
-            logger=MagicMock(),
+            plugin_dir       = ROOT / "plugins" / "color",
+            data_dir         = tmp_path,
+            current_group_id = 1001,
+            current_user_id  = 42,
+            logger           = MagicMock(),
             is_global_admin=lambda user_id=None: admin and user_id == 42,
         )
 
@@ -429,7 +429,7 @@ class TestColorHandleFixes:
         generate = AsyncMock(return_value=None)
         monkeypatch.setattr(color_main.image_gen, "generate_color_image", generate)
 
-        plain = await color_main.handle("color", "-r 1 2 3", {}, context)
+        plain    = await color_main.handle("color", "-r 1 2 3", {}, context)
         pictured = await color_main.handle("color", "-r 1 2 3 -p", {}, context)
 
         assert "输入：RGB 1, 2, 3" in text_segments_text(plain)
@@ -525,7 +525,7 @@ class TestColorHandleFixes:
     async def test_catalog_is_discoverable_paginated_and_keeps_legacy_list_alias(self, tmp_path):
         context = self._context(tmp_path)
 
-        first = text_segments_text(await color_main.handle("color", "list", {}, context))
+        first  = text_segments_text(await color_main.handle("color", "list", {}, context))
         second = text_segments_text(await color_main.handle("color", "-l 2", {}, context))
 
         assert first.startswith("🎨 颜色目录")
@@ -540,7 +540,7 @@ class TestColorHandleFixes:
     async def test_name_and_pinyin_search_are_paginated_with_replayable_commands(self, tmp_path):
         context = self._context(tmp_path)
 
-        names = text_segments_text(await color_main.handle("color", "search 红", {}, context))
+        names  = text_segments_text(await color_main.handle("color", "search 红", {}, context))
         pinyin = text_segments_text(
             await color_main.handle("color", "search hong --page 2", {}, context)
         )
@@ -554,7 +554,7 @@ class TestColorHandleFixes:
     async def test_non_exact_values_return_a_labeled_nearest_palette_color(self, tmp_path):
         context = self._context(tmp_path)
 
-        by_hex = text_segments_text(await color_main.handle("color", "#f9f4dd", {}, context))
+        by_hex  = text_segments_text(await color_main.handle("color", "#f9f4dd", {}, context))
         by_cmyk = text_segments_text(await color_main.handle("color", "4 5 18 1", {}, context))
 
         assert "最接近的收录色（近似匹配）" in by_hex
@@ -653,11 +653,11 @@ class TestColorHandleFixes:
             "generate_color_image",
             AsyncMock(return_value=None),
         )
-        event_loop_thread = threading.get_ident()
-        read_threads: list[int] = []
+        event_loop_thread        = threading.get_ident()
+        read_threads: list[int]  = []
         write_threads: list[int] = []
-        original_read = color_data_manager._read_custom_colors
-        original_write = color_data_manager.write_json
+        original_read            = color_data_manager._read_custom_colors
+        original_write           = color_data_manager.write_json
 
         def tracked_read(*args, **kwargs):
             read_threads.append(threading.get_ident())
@@ -686,9 +686,9 @@ class TestColorHandleFixes:
 class TestStellarColorData:
     def test_standard_library_parser_validates_real_table(self, tmp_path):
         context = SimpleNamespace(
-            plugin_dir=ROOT / "plugins" / "color",
-            data_dir=tmp_path,
-            logger=MagicMock(),
+            plugin_dir = ROOT / "plugins" / "color",
+            data_dir   = tmp_path,
+            logger     = MagicMock(),
         )
 
         rows = color_stellar.load_stellar_colors(context)
@@ -700,12 +700,12 @@ class TestStellarColorData:
 
     def test_spectral_type_list_is_unique(self, tmp_path):
         context = SimpleNamespace(
-            plugin_dir=ROOT / "plugins" / "color",
-            data_dir=tmp_path,
-            logger=MagicMock(),
+            plugin_dir = ROOT / "plugins" / "color",
+            data_dir   = tmp_path,
+            logger     = MagicMock(),
         )
 
-        result = color_stellar.list_spectral_types("", context)
+        result   = color_stellar.list_spectral_types("", context)
         rendered = text_segments_text(result)
 
         assert "共 74 个" in rendered
@@ -715,9 +715,9 @@ class TestStellarColorData:
 
     def test_spectral_type_list_supports_later_pages_and_bounds(self, tmp_path):
         context = SimpleNamespace(
-            plugin_dir=ROOT / "plugins" / "color",
-            data_dir=tmp_path,
-            logger=MagicMock(),
+            plugin_dir = ROOT / "plugins" / "color",
+            data_dir   = tmp_path,
+            logger     = MagicMock(),
         )
 
         second = text_segments_text(color_stellar.list_spectral_types("", context, page=2))
@@ -730,13 +730,13 @@ class TestStellarColorData:
     @pytest.mark.asyncio
     async def test_duplicate_spectral_type_reports_source_grid(self, monkeypatch, tmp_path):
         context = SimpleNamespace(
-            plugin_dir=ROOT / "plugins" / "color",
-            data_dir=tmp_path,
-            logger=MagicMock(),
+            plugin_dir = ROOT / "plugins" / "color",
+            data_dir   = tmp_path,
+            logger     = MagicMock(),
         )
         monkeypatch.setattr(color_stellar, "generate_color_image", AsyncMock(return_value=None))
 
-        result = await color_stellar.query_stellar_color("m6v", context, tmp_path / "images")
+        result   = await color_stellar.query_stellar_color("m6v", context, tmp_path / "images")
         rendered = text_segments_text(result)
 
         assert "光谱型：M6V" in rendered

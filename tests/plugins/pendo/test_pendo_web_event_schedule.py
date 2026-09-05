@@ -58,12 +58,12 @@ def test_build_event_schedule_expands_multi_day_event_once_per_day() -> None:
     """跨天日程应保留首日时间、中间日标记和末日结束时间。"""
 
     event = EventItem(
-        title="跨天出差",
-        category="工作",
-        location="上海",
-        start_time="2026-03-10T09:00:00",
-        end_time="2026-03-12T03:00:00",
-        event_collection_kind="multi_node",
+        title                 = "跨天出差",
+        category              = "工作",
+        location              = "上海",
+        start_time            = "2026-03-10T09:00:00",
+        end_time              = "2026-03-12T03:00:00",
+        event_collection_kind = "multi_node",
     )
 
     result = build_event_schedule(

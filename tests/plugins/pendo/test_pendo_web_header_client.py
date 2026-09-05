@@ -7,7 +7,7 @@ from typing import Final
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT: Final = REPOSITORY_ROOT
+ROOT: Final          = REPOSITORY_ROOT
 HEADER_CLIENT: Final = (
     ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "components" / "header.js"
 )
@@ -95,7 +95,7 @@ def _header_source_for_test() -> str:
     """只替换 API 与路由依赖，保留顶栏模块的真实实现。"""
 
     source = HEADER_CLIENT.read_text(encoding="utf-8")
-    api_import = "import { logout } from '../api.js';"
+    api_import    = "import { logout } from '../api.js';"
     router_import = "import { navigate, onRouteChange } from '../router.js';"
     assert api_import in source
     assert router_import in source
@@ -111,8 +111,8 @@ def _run_header_client(script: str) -> None:
     assert_node_esm_contract(
         _header_source_for_test(),
         script,
-        cwd=ROOT,
-        setup=HEADER_SETUP,
+        cwd   = ROOT,
+        setup = HEADER_SETUP,
     )
 
 

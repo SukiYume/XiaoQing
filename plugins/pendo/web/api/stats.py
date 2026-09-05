@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ...models.item import EventItem
 from ...services.db import Database
+from ...utils.currency import currency_code
 from ...utils.time_utils import TimezoneHelper, now_in_timezone
 from ..analytics.diary_overview import build_diary_overview
 from ..analytics.ledger_insights import build_ledger_insights
@@ -20,15 +21,15 @@ from ..analytics.notes_overview import build_notes_overview
 from ..analytics.task_overview import build_task_overview
 from ..deps import get_current_user, get_db
 
-router = APIRouter()
+router     = APIRouter()
 JsonObject = dict[str, Any]
 StatsRange = Annotated[str | None, Query(alias="range", max_length=64)]
 DateQuery = Annotated[str | None, Query(max_length=10)]
 TextQuery = Annotated[str | None, Query(max_length=120)]
 LedgerTransactionType = Literal["expense", "income", "transfer"]
-LedgerCompareMode = Literal["previous_period", "previous_year_to_date", "none"]
+LedgerCompareMode     = Literal["previous_period", "previous_year_to_date", "none"]
 
-LEDGER_AMOUNT_EXPR = Database._LEDGER_AMOUNT_CENTS_EXPR
+LEDGER_AMOUNT_EXPR       = Database._LEDGER_AMOUNT_CENTS_EXPR
 LEDGER_AMOUNT_TOTAL_EXPR = f"ROUND(COALESCE(SUM({LEDGER_AMOUNT_EXPR}), 0) / 100.0, 2)"
 
 LEDGER_HISTOGRAM_BUCKETS: tuple[tuple[str, float, float | None], ...] = (
@@ -97,9 +98,9 @@ def _aggregate_ledger_periods(
 
     periods: dict[str, JsonObject] = {}
     for row in rows:
-        period = str(row[0])
+        period           = str(row[0])
         transaction_type = str(row[1])
-        total = float(row[2] or 0)
+        total            = float(row[2] or 0)
         if period not in periods:
             periods[period] = {key_name: period, "income": 0, "expense": 0}
         if transaction_type == "income":
@@ -114,7 +115,7 @@ def _validate_date_bounds(start: str, end: str) -> tuple[str, str]:
 
     try:
         start_day = date.fromisoformat(start.strip())
-        end_day = date.fromisoformat(end.strip())
+        end_day   = date.fromisoformat(end.strip())
     except (AttributeError, ValueError) as exc:
         raise ValueError("日期范围必须使用 YYYY-MM-DD 格式") from exc
     if start_day > end_day:
@@ -125,8 +126,8 @@ def _validate_date_bounds(start: str, end: str) -> tuple[str, str]:
 def _parse_range(range_str: str | None, *, today: date | None = None) -> tuple[str, str]:
     """把预设、月份或显式区间解析为规范化的闭区间日期。"""
 
-    current_day = today or _today()
-    value = str(range_str or "month").strip() or "month"
+    current_day   = today or _today()
+    value         = str(range_str or "month").strip() or "month"
     quarter_month = ((current_day.month - 1) // 3) * 3 + 1
     preset_bounds = {
         "month": (current_day.replace(day=1), current_day),
@@ -160,7 +161,7 @@ def _parse_range(range_str: str | None, *, today: date | None = None) -> tuple[s
 def _resolve_stats_range(
     range_str: str | None,
     start_date: str | None = None,
-    end_date: str | None = None,
+    end_date: str | None   = None,
     *,
     today: date | None = None,
 ) -> tuple[str, str]:
@@ -205,9 +206,10 @@ def _shift_months(value: date, delta: int) -> date:
 def ledger_stats(
     range_str: StatsRange = None,
     start_date: DateQuery = None,
-    end_date: DateQuery = None,
+    end_date: DateQuery   = None,
+    currency: Annotated[str, Query(pattern="^[A-Za-z]{3}$")] = "CNY",
     owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    db: Database  = Depends(get_db),
 ) -> JsonObject:
     """返回指定日期范围内的账本趋势、分类和金额分布。"""
 
@@ -217,7 +219,8 @@ def ledger_stats(
         end_date,
         today=_today(db, owner_id),
     )
-    conn = db.get_connection()
+    currency = currency_code(currency)
+    conn     = db.get_connection()
 
     monthly = conn.execute(
         f"""
@@ -225,10 +228,11 @@ def ledger_stats(
                transaction_type AS ledger_kind,
                {LEDGER_AMOUNT_TOTAL_EXPR} AS total
         FROM items WHERE type='ledger' AND owner_id=? AND deleted=0
+        AND COALESCE(NULLIF(UPPER(TRIM(currency)), ''), 'CNY') = ?
         AND ledger_date BETWEEN ? AND ?
         GROUP BY month, ledger_kind ORDER BY month
     """,
-        (owner_id, start, end),
+        (owner_id, currency, start, end),
     ).fetchall()
 
     by_category = conn.execute(
@@ -238,11 +242,12 @@ def ledger_stats(
                {LEDGER_AMOUNT_TOTAL_EXPR} AS total,
                COUNT(*) AS count
         FROM items WHERE type='ledger' AND owner_id=? AND deleted=0
+        AND COALESCE(NULLIF(UPPER(TRIM(currency)), ''), 'CNY') = ?
         AND ledger_date BETWEEN ? AND ?
         GROUP BY category, ledger_kind
         ORDER BY total DESC, category
     """,
-        (owner_id, start, end),
+        (owner_id, currency, start, end),
     ).fetchall()
 
     daily = conn.execute(
@@ -251,20 +256,22 @@ def ledger_stats(
                transaction_type AS ledger_kind,
                {LEDGER_AMOUNT_TOTAL_EXPR} AS total
         FROM items WHERE type='ledger' AND owner_id=? AND deleted=0
+        AND COALESCE(NULLIF(UPPER(TRIM(currency)), ''), 'CNY') = ?
         AND ledger_date BETWEEN ? AND ?
         GROUP BY ledger_date, ledger_kind ORDER BY ledger_date
     """,
-        (owner_id, start, end),
+        (owner_id, currency, start, end),
     ).fetchall()
 
     expense_amounts = conn.execute(
         f"""
         SELECT ROUND({LEDGER_AMOUNT_EXPR} / 100.0, 2)
         FROM items WHERE type='ledger' AND owner_id=? AND deleted=0
+        AND COALESCE(NULLIF(UPPER(TRIM(currency)), ''), 'CNY') = ?
         AND transaction_type='expense' AND ledger_date BETWEEN ? AND ?
         ORDER BY {LEDGER_AMOUNT_EXPR}
     """,
-        (owner_id, start, end),
+        (owner_id, currency, start, end),
     ).fetchall()
 
     category_totals: dict[str, list[JsonObject]] = {
@@ -281,6 +288,16 @@ def ledger_stats(
     return {
         "ok": True,
         "data": {
+            "currency": currency,
+            "by_currency": db.aggregate_ledger_by_currency(
+                owner_id,
+                {
+                    "type": "ledger",
+                    "date_field": "ledger_date",
+                    "start_date": start,
+                    "end_date": end,
+                },
+            ),
             "monthly": _aggregate_ledger_periods(monthly, "month"),
             "expense_by_category": category_totals["expense"],
             "income_by_category": category_totals["income"],
@@ -297,15 +314,16 @@ def ledger_stats(
 @router.get("/stats/ledger/insights")  # type: ignore[untyped-decorator]
 def ledger_visual_insights(
     transaction_type: Annotated[LedgerTransactionType | None, Query()] = None,
-    category: TextQuery = None,
-    account_name: TextQuery = None,
-    start_date: DateQuery = None,
-    end_date: DateQuery = None,
+    category: TextQuery                                                = None,
+    account_name: TextQuery                                            = None,
+    start_date: DateQuery                                              = None,
+    end_date: DateQuery                                                = None,
     amount_min: Annotated[float | None, Query(ge=0)] = None,
     amount_max: Annotated[float | None, Query(ge=0)] = None,
     compare_mode: LedgerCompareMode = "previous_period",
+    currency: Annotated[str, Query(pattern="^[A-Za-z]{3}$")] = "CNY",
     owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    db: Database  = Depends(get_db),
 ) -> JsonObject:
     """返回账本页视觉卡片所需的紧凑洞察。"""
 
@@ -322,16 +340,17 @@ def ledger_visual_insights(
     return {
         "ok": True,
         "data": build_ledger_insights(
-            db=db,
-            owner_id=owner_id,
-            transaction_type=transaction_type,
-            category=(category or "").strip() or None,
-            account_name=(account_name or "").strip() or None,
-            start_date=start_date,
-            end_date=end_date,
-            amount_min=amount_min,
-            amount_max=amount_max,
-            compare_mode=compare_mode,
+            db               = db,
+            owner_id         = owner_id,
+            transaction_type = transaction_type,
+            category         = (category or "").strip() or None,
+            account_name     = (account_name or "").strip() or None,
+            start_date       = start_date,
+            end_date         = end_date,
+            amount_min       = amount_min,
+            amount_max       = amount_max,
+            compare_mode     = compare_mode,
+            currency         = currency_code(currency),
         ),
         "message": "",
     }
@@ -340,17 +359,17 @@ def ledger_visual_insights(
 @router.get("/stats/tasks")  # type: ignore[untyped-decorator]
 def task_stats(
     range_str: StatsRange = None,
-    owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    owner_id: str         = Depends(get_current_user),
+    db: Database          = Depends(get_db),
 ) -> JsonObject:
     """返回任务状态、创建/关闭趋势及未完成任务分布。"""
 
     start, end = _resolve_stats_range(range_str, today=_today(db, owner_id))
     start_day = date.fromisoformat(start)
-    end_day = date.fromisoformat(end)
+    end_day   = date.fromisoformat(end)
     lower_date, upper_date = _coarse_timestamp_dates(start_day, end_day)
     user_timezone = TimezoneHelper.get_user_timezone(owner_id, db)
-    task_rows = (
+    task_rows     = (
         db.get_connection()
         .execute(
             """
@@ -381,13 +400,13 @@ def task_stats(
         .fetchall()
     )
 
-    status_counter: Counter[str] = Counter()
-    priority_counter: Counter[Any] = Counter()
-    plan_counter: Counter[str] = Counter()
-    text_category_counter: Counter[str] = Counter()
+    status_counter: Counter[str]             = Counter()
+    priority_counter: Counter[Any]           = Counter()
+    plan_counter: Counter[str]               = Counter()
+    text_category_counter: Counter[str]      = Counter()
     weekly_counter: Counter[tuple[str, str]] = Counter()
     for row in task_rows:
-        created_at = _local_datetime(row["created_at"], user_timezone)
+        created_at   = _local_datetime(row["created_at"], user_timezone)
         completed_at = _local_datetime(row["completed_at"], user_timezone)
         cancelled_at = _local_datetime(row["cancelled_at"], user_timezone)
         try:
@@ -443,7 +462,7 @@ def task_stats(
             {"week": week_key, "created": 0, "done": 0, "cancelled": 0},
         )
         entry[activity] = count
-    weekly = [weekly_map[key] for key in sorted(weekly_map)]
+    weekly        = [weekly_map[key] for key in sorted(weekly_map)]
     new_this_week = sum(int(item["created"]) for item in weekly)
 
     category_counts = sorted(
@@ -476,8 +495,8 @@ def task_stats(
 @router.get("/stats/tasks/overview")  # type: ignore[untyped-decorator]
 def task_overview(
     today: DateQuery = None,
-    owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    owner_id: str    = Depends(get_current_user),
+    db: Database     = Depends(get_db),
 ) -> JsonObject:
     """返回新版任务页所需的紧凑概览。"""
 
@@ -494,25 +513,25 @@ def task_overview(
 
 @router.get("/stats/notes/overview")  # type: ignore[untyped-decorator]
 def notes_overview(
-    today: DateQuery = None,
+    today: DateQuery      = None,
     start_date: DateQuery = None,
-    end_date: DateQuery = None,
-    category: TextQuery = None,
+    end_date: DateQuery   = None,
+    category: TextQuery   = None,
     tags: Annotated[str | None, Query(max_length=500)] = None,
     owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    db: Database  = Depends(get_db),
 ) -> JsonObject:
     """返回新版笔记页所需的紧凑概览。"""
 
     try:
         data = build_notes_overview(
-            db=db,
-            owner_id=owner_id,
-            today=today,
-            start_date=start_date,
-            end_date=end_date,
-            category=(category or "").strip() or None,
-            tags=(tags or "").strip() or None,
+            db         = db,
+            owner_id   = owner_id,
+            today      = today,
+            start_date = start_date,
+            end_date   = end_date,
+            category   = (category or "").strip() or None,
+            tags       = (tags or "").strip() or None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -538,14 +557,14 @@ def diary_overview(
 
     try:
         data = build_diary_overview(
-            db=db,
-            owner_id=owner_id,
-            year=year,
-            month=month,
-            start_date=start_date,
-            end_date=end_date,
-            today=today,
-            cadence_granularity=cadence_granularity,
+            db                  = db,
+            owner_id            = owner_id,
+            year                = year,
+            month               = month,
+            start_date          = start_date,
+            end_date            = end_date,
+            today               = today,
+            cadence_granularity = cadence_granularity,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -555,16 +574,16 @@ def diary_overview(
 @router.get("/stats/events")  # type: ignore[untyped-decorator]
 def event_stats(
     range_str: StatsRange = None,
-    owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    owner_id: str         = Depends(get_current_user),
+    db: Database          = Depends(get_db),
 ) -> JsonObject:
     """返回日程的周趋势、时段矩阵和分类分布。"""
 
     start, end = _resolve_stats_range(range_str, today=_today(db, owner_id))
-    start_day = date.fromisoformat(start)
-    end_day = date.fromisoformat(end)
+    start_day     = date.fromisoformat(start)
+    end_day       = date.fromisoformat(end)
     user_timezone = TimezoneHelper.get_user_timezone(owner_id, db)
-    events = db.get_events_for_range(
+    events        = db.get_events_for_range(
         owner_id,
         f"{start}T00:00:00",
         f"{end}T23:59:59",
@@ -576,10 +595,10 @@ def event_stats(
     ]
     collections = db.get_event_collections_by_ids(owner_id, collection_ids)
 
-    weekly_counter: Counter[str] = Counter()
-    slot_counter: Counter[str] = Counter()
+    weekly_counter: Counter[str]                   = Counter()
+    slot_counter: Counter[str]                     = Counter()
     weekday_slot_counter: Counter[tuple[int, str]] = Counter()
-    category_counter: Counter[str] = Counter()
+    category_counter: Counter[str]                 = Counter()
     for event in events:
         start_at = _local_datetime(event.start_time, user_timezone)
         if start_at is None or not _day_in_range(start_at.date(), start_day, end_day):
@@ -593,7 +612,7 @@ def event_stats(
         category = str(event.category or "").strip()
         if not category or category == "未分类":
             collection = collections.get(str(event.event_collection_id or ""))
-            category = str((collection or {}).get("category") or "").strip()
+            category   = str((collection or {}).get("category") or "").strip()
         category_counter[category if category and category != "未分类" else "未分类"] += 1
 
     weekly = [{"week": week, "count": weekly_counter[week]} for week in sorted(weekly_counter)]
@@ -628,8 +647,9 @@ def event_stats(
 @router.get("/stats/ledger/comparison")  # type: ignore[untyped-decorator]
 def ledger_comparison(
     months: Annotated[int, Query(ge=3, le=12)] = 6,
+    currency: Annotated[str, Query(pattern="^[A-Za-z]{3}$")] = "CNY",
     owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    db: Database  = Depends(get_db),
 ) -> JsonObject:
     """返回连续月份的收支，以及环比和同比基线。"""
 
@@ -638,10 +658,11 @@ def ledger_comparison(
         raise HTTPException(status_code=422, detail="months 必须在 3 到 12 之间")
 
     current_month = _month_floor(_today(db, owner_id))
-    conn = db.get_connection()
-    month_window = [_shift_months(current_month, offset) for offset in range(-(months - 1), 1)]
-    query_start = _shift_months(month_window[0], -12).isoformat()
-    query_end = _shift_months(current_month, 1).isoformat()
+    currency      = currency_code(currency)
+    conn          = db.get_connection()
+    month_window  = [_shift_months(current_month, offset) for offset in range(-(months - 1), 1)]
+    query_start   = _shift_months(month_window[0], -12).isoformat()
+    query_end     = _shift_months(current_month, 1).isoformat()
 
     # 同比窗口已经覆盖当前窗口和环比基线，一次查询即可满足三种比较。
     monthly_rows = conn.execute(
@@ -650,16 +671,17 @@ def ledger_comparison(
                transaction_type AS ledger_kind,
                {LEDGER_AMOUNT_TOTAL_EXPR} AS total
         FROM items WHERE type='ledger' AND owner_id=? AND deleted=0
+        AND COALESCE(NULLIF(UPPER(TRIM(currency)), ''), 'CNY') = ?
         AND ledger_date >= ? AND ledger_date < ?
         GROUP BY month, ledger_kind ORDER BY month
     """,
-        (owner_id, query_start, query_end),
+        (owner_id, currency, query_start, query_end),
     ).fetchall()
 
     monthly_map: dict[str, JsonObject] = {}
     for month, transaction_type, total in monthly_rows:
         month_key = str(month)
-        values = monthly_map.setdefault(month_key, {"expense": 0.0, "income": 0.0})
+        values    = monthly_map.setdefault(month_key, {"expense": 0.0, "income": 0.0})
         if transaction_type == "income":
             values["income"] = round(float(total or 0), 2)
         elif transaction_type == "expense":
@@ -667,12 +689,12 @@ def ledger_comparison(
 
     result_months: list[JsonObject] = []
     for month_start in month_window:
-        month_key = month_start.strftime("%Y-%m")
-        current_values = monthly_map.get(month_key, {"expense": 0.0, "income": 0.0})
-        prev_key = _shift_months(month_start, -1).strftime("%Y-%m")
+        month_key       = month_start.strftime("%Y-%m")
+        current_values  = monthly_map.get(month_key, {"expense": 0.0, "income": 0.0})
+        prev_key        = _shift_months(month_start, -1).strftime("%Y-%m")
         previous_values = monthly_map.get(prev_key, {"expense": 0.0, "income": 0.0})
-        yoy_key = _shift_months(month_start, -12).strftime("%Y-%m")
-        yoy_values = monthly_map.get(yoy_key, {"expense": 0.0, "income": 0.0})
+        yoy_key         = _shift_months(month_start, -12).strftime("%Y-%m")
+        yoy_values      = monthly_map.get(yoy_key, {"expense": 0.0, "income": 0.0})
         result_months.append(
             {
                 "month": month_key,
@@ -687,7 +709,7 @@ def ledger_comparison(
 
     return {
         "ok": True,
-        "data": {"months": result_months},
+        "data": {"currency": currency, "months": result_months},
         "message": "",
     }
 
@@ -696,16 +718,16 @@ def ledger_comparison(
 def activity_heatmap(
     year: Annotated[int | None, Query(ge=1970, le=9999)] = None,
     owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    db: Database  = Depends(get_db),
 ) -> JsonObject:
     """按天返回全年五类条目活动，用于贡献式热力图。"""
 
     if year is not None and not 1970 <= year <= 9999:
         raise HTTPException(status_code=422, detail="year 必须在 1970 到 9999 之间")
     target_year = year or _today(db, owner_id).year
-    start_date = date(target_year, 1, 1)
-    end_date = date(target_year, 12, 31)
-    conn = db.get_connection()
+    start_date  = date(target_year, 1, 1)
+    end_date    = date(target_year, 12, 31)
+    conn        = db.get_connection()
 
     day_count = (end_date - start_date).days + 1
     all_days = [(start_date + timedelta(days=offset)).isoformat() for offset in range(day_count)]
@@ -751,7 +773,7 @@ def activity_heatmap(
     user_timezone = TimezoneHelper.get_user_timezone(owner_id, db)
     for row in timestamp_rows:
         item_type = str(row["type"])
-        value = row["start_time"] if item_type == "event" else row["created_at"]
+        value     = row["start_time"] if item_type == "event" else row["created_at"]
         timestamp = _local_datetime(value, user_timezone)
         if timestamp is not None and _day_in_range(timestamp.date(), start_date, end_date):
             activity_counts[item_type][timestamp.date().isoformat()] += 1
@@ -759,10 +781,10 @@ def activity_heatmap(
     days: list[JsonObject] = []
     for day_key in all_days:
         ledger_count = activity_counts["ledger"][day_key]
-        task_count = activity_counts["task"][day_key]
-        event_count = activity_counts["event"][day_key]
-        note_count = activity_counts["note"][day_key]
-        diary_count = activity_counts["diary"][day_key]
+        task_count   = activity_counts["task"][day_key]
+        event_count  = activity_counts["event"][day_key]
+        note_count   = activity_counts["note"][day_key]
+        diary_count  = activity_counts["diary"][day_key]
         days.append(
             {
                 "date": day_key,

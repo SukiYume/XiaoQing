@@ -16,7 +16,7 @@ def png_chunk(chunk_type: bytes, data: bytes) -> bytes:
 
 
 def image_bytes(
-    image_format: str = "PNG",
+    image_format: str           = "PNG",
     color: tuple[int, int, int] = (1, 2, 3),
 ) -> bytes:
     """生成一个最小 RGB 图片，供格式识别和下载边界测试使用。"""

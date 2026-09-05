@@ -1,3 +1,4 @@
+# 应用共享状态：凭据快照、生命周期记录和主体授权保持一致。
 """Shared application credentials, lifecycle records, and principal authority."""
 
 import asyncio
@@ -19,15 +20,15 @@ from .interfaces import (
 
 logger = logging.getLogger(__name__)
 
-_PLUGIN_WATCH_RESTART_BASE_DELAY_SECONDS = 0.1
-_PLUGIN_WATCH_RESTART_MAX_DELAY_SECONDS = 30.0
-_PLUGIN_WATCH_STABLE_RESET_SECONDS = 30.0
-_STARTUP_OWNERSHIP_MAX_ATTEMPTS = 64
-_STARTUP_OWNERSHIP_TIMEOUT_SECONDS = 5.0
+_PLUGIN_WATCH_RESTART_BASE_DELAY_SECONDS    = 0.1
+_PLUGIN_WATCH_RESTART_MAX_DELAY_SECONDS     = 30.0
+_PLUGIN_WATCH_STABLE_RESET_SECONDS          = 30.0
+_STARTUP_OWNERSHIP_MAX_ATTEMPTS             = 64
+_STARTUP_OWNERSHIP_TIMEOUT_SECONDS          = 5.0
 _STARTUP_OWNERSHIP_RETRY_BASE_DELAY_SECONDS = 0.001
-_STARTUP_OWNERSHIP_RETRY_MAX_DELAY_SECONDS = 0.05
+_STARTUP_OWNERSHIP_RETRY_MAX_DELAY_SECONDS  = 0.05
 
-Action = dict[str, Any]
+Action     = dict[str, Any]
 ActionSink = Callable[[Action], Awaitable[None]]
 current_action_sink: ContextVar[ActionSink | None] = ContextVar("current_action_sink", default=None)
 
@@ -119,7 +120,7 @@ def _onebot_credentials(snapshot: ConfigSnapshot) -> tuple[str, bool]:
 def _inbound_credentials(snapshot: ConfigSnapshot) -> str:
     """Return an exact string token from a healthy secrets source only."""
 
-    trusted = _trusted_secrets(snapshot)
+    trusted   = _trusted_secrets(snapshot)
     raw_token = trusted.get("inbound_token", "")
     if type(raw_token) is not str:
         logger.error(
@@ -172,8 +173,8 @@ def _require_onebot_holder_credentials(
 ) -> None:
     """Prove that a legacy/mocked holder actually applied an auth update."""
 
-    actual_token = getattr(holder, "auth_token", None)
-    actual_trust = getattr(holder, "credentials_trusted", None)
+    actual_token    = getattr(holder, "auth_token", None)
+    actual_trust    = getattr(holder, "credentials_trusted", None)
     actual_endpoint = getattr(holder, endpoint_attribute, None)
     if (
         actual_endpoint != expected_endpoint
@@ -184,12 +185,12 @@ def _require_onebot_holder_credentials(
 
 
 class _AppLifecycleState(Enum):
-    NEW = "new"
+    NEW      = "new"
     STARTING = "starting"
-    RUNNING = "running"
+    RUNNING  = "running"
     STOPPING = "stopping"
-    STOPPED = "stopped"
-    FAILED = "failed"
+    STOPPED  = "stopped"
+    FAILED   = "failed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,7 +212,7 @@ class InboundReconcileError(RuntimeError):
             f"restore={type(restore_error).__name__}: {restore_error}"
         )
         self.candidate_error = candidate_error
-        self.restore_error = restore_error
+        self.restore_error   = restore_error
 
 
 class ApplicationLifecycleFatalError(RuntimeError):
@@ -244,13 +245,13 @@ class _PrincipalAuthority:
         self,
         *,
         kind: str,
-        user_id: int | None = None,
-        group_id: int | None = None,
-        is_bot_admin: bool = False,
-        is_private: bool = False,
-        group_role: str = "unknown",
+        user_id: int | None                                 = None,
+        group_id: int | None                                = None,
+        is_bot_admin: bool                                  = False,
+        is_private: bool                                    = False,
+        group_role: str                                     = "unknown",
         delivery_targets: tuple[DeliveryTarget, ...] | None = None,
-        schedule_delivery: ScheduleDeliveryMode | None = None,
+        schedule_delivery: ScheduleDeliveryMode | None      = None,
     ) -> PluginPrincipal:
         if delivery_targets is None:
             if kind == "user" and group_id is not None:
@@ -260,14 +261,14 @@ class _PrincipalAuthority:
             else:
                 delivery_targets = ()
         principal = PluginPrincipal(
-            kind=kind,  # type: ignore[arg-type]
-            user_id=user_id,
-            group_id=group_id,
-            is_bot_admin=is_bot_admin,
-            is_private=is_private,
-            group_role=group_role,  # type: ignore[arg-type]
-            delivery_targets=delivery_targets,
-            schedule_delivery=schedule_delivery,
+            kind              = kind,  # type: ignore[arg-type]
+            user_id           = user_id,
+            group_id          = group_id,
+            is_bot_admin      = is_bot_admin,
+            is_private        = is_private,
+            group_role        = group_role,  # type: ignore[arg-type]
+            delivery_targets  = delivery_targets,
+            schedule_delivery = schedule_delivery,
         )
         self._issued[principal] = kind
         return principal

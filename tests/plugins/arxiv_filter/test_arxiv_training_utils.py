@@ -74,14 +74,14 @@ def inference_modules(
     fake_torch.device = lambda name: name  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
 
-    package = importlib.import_module("plugins.arxiv_filter.inference")
+    package      = importlib.import_module("plugins.arxiv_filter.inference")
     module_names = (
         "plugins.arxiv_filter.inference.knn_backend",
         "plugins.arxiv_filter.inference.multi_interest_backend",
         "plugins.arxiv_filter.inference.runner",
     )
-    attribute_names = ("knn_backend", "multi_interest_backend", "runner")
-    previous_modules = {name: sys.modules.get(name) for name in module_names}
+    attribute_names     = ("knn_backend", "multi_interest_backend", "runner")
+    previous_modules    = {name: sys.modules.get(name) for name in module_names}
     previous_attributes = {
         name: getattr(package, name) for name in attribute_names if hasattr(package, name)
     }
@@ -89,9 +89,9 @@ def inference_modules(
     imported = [importlib.import_module(name) for name in module_names]
     try:
         yield SimpleNamespace(
-            knn_backend=imported[0],
-            multi_interest_backend=imported[1],
-            runner=imported[2],
+            knn_backend            = imported[0],
+            multi_interest_backend = imported[1],
+            runner                 = imported[2],
         )
     finally:
         for name, previous in previous_modules.items():
@@ -107,7 +107,7 @@ def inference_modules(
 
 
 def test_bert_loader_shuffles_training_but_not_validation() -> None:
-    torch = pytest.importorskip("torch")
+    torch          = pytest.importorskip("torch")
     training_utils = importlib.import_module(
         "plugins.arxiv_filter.train_model.bert_model.training_utils"
     )
@@ -115,16 +115,16 @@ def test_bert_loader_shuffles_training_but_not_validation() -> None:
 
     training = training_utils.create_seeded_data_loader(
         dataset,
-        collate_fn=list,
-        batch_size=2,
-        random_seed=17,
+        collate_fn  = list,
+        batch_size  = 2,
+        random_seed = 17,
     )
     validation = training_utils.create_seeded_data_loader(
         dataset,
-        collate_fn=list,
-        batch_size=2,
-        random_seed=17,
-        shuffle=False,
+        collate_fn  = list,
+        batch_size  = 2,
+        random_seed = 17,
+        shuffle     = False,
     )
 
     assert isinstance(training.sampler, torch.utils.data.RandomSampler)
@@ -135,7 +135,7 @@ def test_bert_training_bootstrap_builds_shared_resources_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    torch = pytest.importorskip("torch")
+    torch          = pytest.importorskip("torch")
     training_utils = importlib.import_module(
         "plugins.arxiv_filter.train_model.bert_model.training_utils"
     )
@@ -209,28 +209,28 @@ def test_bert_training_bootstrap_builds_shared_resources_once(
         return object()
 
     config = SimpleNamespace(
-        random_seed=17,
-        data_path=tmp_path / "training.csv",
-        validation_size=0.5,
-        model_name="model/demo",
-        max_len=64,
-        batch_size=2,
-        num_workers=0,
-        learning_rate=2e-5,
-        num_epochs=3,
-        warmup_proportion=0.5,
-        output_dir=tmp_path / "model",
+        random_seed       = 17,
+        data_path         = tmp_path / "training.csv",
+        validation_size   = 0.5,
+        model_name        = "model/demo",
+        max_len           = 64,
+        batch_size        = 2,
+        num_workers       = 0,
+        learning_rate     = 2e-5,
+        num_epochs        = 3,
+        warmup_proportion = 0.5,
+        output_dir        = tmp_path / "model",
     )
 
     runtime = training_utils.prepare_classifier_training(
         config,
-        device=torch.device("cpu"),
-        classifier_name="test classifier",
-        prepare_frame=lambda value: value,
-        create_loader=create_loader,
-        tokenizer_factory=TokenizerFactory,
-        model_factory=ModelFactory,
-        scheduler_factory=create_scheduler,
+        device            = torch.device("cpu"),
+        classifier_name   = "test classifier",
+        prepare_frame     = lambda value: value,
+        create_loader     = create_loader,
+        tokenizer_factory = TokenizerFactory,
+        model_factory     = ModelFactory,
+        scheduler_factory = create_scheduler,
     )
 
     assert runtime.frame.equals(frame)
@@ -265,7 +265,7 @@ def test_data_prep_rejects_invalid_dataset_before_overwriting_output(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    step3 = _load_data_prep_module("step3_build_dataset", monkeypatch)
+    step3       = _load_data_prep_module("step3_build_dataset", monkeypatch)
     output_path = tmp_path / "training.csv"
     output_path.write_text("existing\n", encoding="utf-8")
 
@@ -281,13 +281,13 @@ def test_data_prep_rejects_invalid_dataset_before_overwriting_output(
 
 
 def test_knn_config_follows_custom_output_directory(tmp_path: Path) -> None:
-    module = _load_knn_training_module()
+    module     = _load_knn_training_module()
     output_dir = tmp_path / "model"
 
     default_cache = module.KNNConfig(output_dir=output_dir)
     explicit_cache = module.KNNConfig(
-        output_dir=output_dir,
-        emb_cache_dir=tmp_path / "shared-cache",
+        output_dir    = output_dir,
+        emb_cache_dir = tmp_path / "shared-cache",
     )
 
     assert default_cache.resolved_emb_cache_dir == output_dir / "emb_cache"
@@ -298,7 +298,7 @@ def test_knn_training_reuses_known_embedding_dimension_and_saves_max_len(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    module = _load_knn_training_module()
+    module     = _load_knn_training_module()
     load_calls = 0
 
     def load_encoder() -> object:
@@ -308,9 +308,9 @@ def test_knn_training_reuses_known_embedding_dimension_and_saves_max_len(
 
     monkeypatch.setattr(module._training, "load_sentence_transformer_class", load_encoder)
     model = module.KNNInterestModel(
-        embedding_dim=2,
-        max_len=128,
-        neg_sample_size=2,
+        embedding_dim   = 2,
+        max_len         = 128,
+        neg_sample_size = 2,
     )
     frame = pd.DataFrame(
         {
@@ -334,7 +334,7 @@ def test_stable_softmax_is_finite_normalized_and_shift_invariant() -> None:
     values = np.array([[1000.0, 1001.0], [-1000.0, -999.0]])
 
     probabilities = stable_softmax(values)
-    shifted = stable_softmax(values + 10_000.0)
+    shifted       = stable_softmax(values + 10_000.0)
 
     assert np.isfinite(probabilities).all()
     assert np.allclose(probabilities.sum(axis=1), np.ones(2))
@@ -345,7 +345,7 @@ def test_knn_backend_builds_normalized_text_and_applies_negative_penalty(
     inference_modules: SimpleNamespace,
 ) -> None:
     knn_backend = inference_modules.knn_backend
-    frame = pd.DataFrame(
+    frame       = pd.DataFrame(
         {
             "Title": ["  First\n title ", None],
             "Abstract": [" abstract\tvalue ", "second"],
@@ -359,8 +359,8 @@ def test_knn_backend_builds_normalized_text_and_applies_negative_penalty(
     model = object.__new__(knn_backend.KNNInferenceModel)
     model.pos_embeddings = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
     model.neg_embeddings = np.array([[-1.0, 0.0]], dtype=np.float32)
-    model.k = 1
-    model.neg_k = 1
+    model.k          = 1
+    model.neg_k      = 1
     model.neg_weight = 0.5
 
     scores = model._score(np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32))
@@ -387,8 +387,8 @@ def test_multi_interest_feature_builder_is_finite_and_preserves_contrast(
     inference_modules: SimpleNamespace,
 ) -> None:
     multi_interest_backend = inference_modules.multi_interest_backend
-    model = object.__new__(multi_interest_backend.MultiInterestInferenceModel)
-    model.artifacts = SimpleNamespace(
+    model                  = object.__new__(multi_interest_backend.MultiInterestInferenceModel)
+    model.artifacts        = SimpleNamespace(
         interest_centers=np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
         pos_centroid=np.array([1.0, 0.0], dtype=np.float32),
         neg_centroid=np.array([0.0, 1.0], dtype=np.float32),
@@ -407,11 +407,11 @@ def test_inference_runner_copies_input_and_publishes_backend_results(
 ) -> None:
     runner = inference_modules.runner
     params = InferenceParams(
-        model_path="model",
-        threshold=0.6,
-        batch_size=2,
-        max_len=32,
-        model_type="knn",
+        model_path = "model",
+        threshold  = 0.6,
+        batch_size = 2,
+        max_len    = 32,
+        model_type = "knn",
     )
     monkeypatch.setattr(runner, "resolve_params", lambda *_args, **_kwargs: params)
     monkeypatch.setattr(runner, "_dispatch_inference", lambda *_args: ([0.8, 0.2], [1, 0]))
@@ -492,8 +492,8 @@ def test_interest_column_resolution_preserves_alias_order_and_required_errors() 
     assert interest_utils.resolve_columns(
         frame,
         aliases,
-        required_fields={"title", "abstract"},
-        error_prefix="missing columns",
+        required_fields = {"title", "abstract"},
+        error_prefix    = "missing columns",
     ) == {
         "id": "Article ID",
         "title": "Paper Title",
@@ -505,8 +505,8 @@ def test_interest_column_resolution_preserves_alias_order_and_required_errors() 
         interest_utils.resolve_columns(
             frame.drop(columns=["Summary"]),
             aliases,
-            required_fields={"abstract"},
-            error_prefix="missing columns",
+            required_fields = {"abstract"},
+            error_prefix    = "missing columns",
         )
 
 
@@ -527,16 +527,16 @@ def test_interest_split_supports_deterministic_random_and_time_policies() -> Non
         frame,
         0.25,
         "random",
-        seed=17,
-        label_col="label",
+        seed      = 17,
+        label_col = "label",
         **common,
     )
     train_b, validation_b = interest_utils.split_dataframe(
         frame,
         0.25,
         "random",
-        seed=17,
-        label_col="label",
+        seed      = 17,
+        label_col = "label",
         **common,
     )
     assert train_a.equals(train_b)
@@ -606,8 +606,8 @@ def test_embedding_validation_rejects_wrong_rows_dimensions_and_nan() -> None:
     with pytest.raises(ValueError, match="dimension 3"):
         interest_utils.validate_embedding_matrix(
             np.ones((2, 2)),
-            expected_rows=2,
-            expected_dim=3,
+            expected_rows = 2,
+            expected_dim  = 3,
         )
     with pytest.raises(ValueError, match="finite"):
         interest_utils.validate_embedding_matrix(

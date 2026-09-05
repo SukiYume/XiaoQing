@@ -9,6 +9,7 @@ from typing import Annotated, Any, Final, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ...services.db import Database
+from ...utils.currency import currency_label
 from ...utils.formatters import ledger_amount_yuan
 from ...utils.identifiers import public_id
 from ...utils.time_utils import TimezoneHelper, now_in_timezone
@@ -21,15 +22,15 @@ from ..utils import parse_iso_date
 
 router = APIRouter()
 
-JsonObject = dict[str, Any]
+JsonObject                          = dict[str, Any]
 MAX_CALENDAR_SYNC_RANGE_DAYS: Final = 3660
-PanelSection = Literal["tasks", "ledger", "notes"]
-WidgetSection = Literal["tasks", "ledger", "notes", "all"]
-PanelBuilder = Callable[[Database, str, datetime], JsonObject]
+PanelSection                        = Literal["tasks", "ledger", "notes"]
+WidgetSection                       = Literal["tasks", "ledger", "notes", "all"]
+PanelBuilder                        = Callable[[Database, str, datetime], JsonObject]
 
-_WEEKDAY_LABELS: Final = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+_WEEKDAY_LABELS: Final                          = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 _SECTION_ORDER: Final[tuple[PanelSection, ...]] = ("tasks", "ledger", "notes")
-_LINKS: Final = {
+_LINKS: Final                                   = {
     "dashboard": "#/dashboard",
     "events": "#/events",
     "tasks": "#/tasks",
@@ -82,7 +83,7 @@ def _preview_text(value: str | None, limit: int = 26) -> str:
     return f"{text[: limit - 1]}…"
 
 
-def _format_amount(value: float, *, signed: bool = False) -> str:
+def _format_amount(value: float, *, signed: bool = False, currency: str = "CNY") -> str:
     """按小组件的整数元样式格式化金额。"""
 
     amount = float(value or 0)
@@ -90,15 +91,15 @@ def _format_amount(value: float, *, signed: bool = False) -> str:
     if signed:
         prefix = "+" if amount >= 0 else "-"
         amount = abs(amount)
-    return f"{prefix}¥{amount:.0f}"
+    return f"{prefix}{currency_label(currency)}{amount:.0f}"
 
 
 def _format_event_meta(entry: JsonObject) -> str:
     """拼接日程时间段与地点。"""
 
     parts: list[str] = []
-    start_time = str(entry.get("start_time") or "")
-    end_time = str(entry.get("end_time") or "")
+    start_time       = str(entry.get("start_time") or "")
+    end_time         = str(entry.get("end_time") or "")
     if start_time:
         label = start_time[11:16]
         if end_time:
@@ -138,10 +139,10 @@ def _format_task_meta(
         "done": "已完成",
         "cancelled": "已取消",
     }
-    status = status_map.get(str(task.get("status") or ""), "待办")
-    plan_date = str(task.get("plan_date") or "")
+    status      = status_map.get(str(task.get("status") or ""), "待办")
+    plan_date   = str(task.get("plan_date") or "")
     deadline_at = str(task.get("deadline_at") or "")
-    due_day = parse_iso_date(plan_date)
+    due_day     = parse_iso_date(plan_date)
     if due_day is None and deadline_at:
         try:
             due_day = TimezoneHelper.parse(deadline_at, user_timezone).date()
@@ -167,10 +168,10 @@ def _flatten_event_entries(
     """展开日程显示行，并一次批量补齐可能引用的集合头。"""
 
     rows: list[JsonObject] = []
-    user_timezone = TimezoneHelper.get_user_timezone(owner_id, db)
-    start_day = range_start.date()
-    end_day = range_end.date()
-    collection_ids = list(
+    user_timezone          = TimezoneHelper.get_user_timezone(owner_id, db)
+    start_day              = range_start.date()
+    end_day                = range_end.date()
+    collection_ids         = list(
         dict.fromkeys(
             str(collection_id)
             for event in events
@@ -182,8 +183,8 @@ def _flatten_event_entries(
     )
     for event in events:
         collection_id = getattr(event, "event_collection_id", None)
-        collection = collections.get(str(collection_id)) if collection_id else None
-        schedule = build_event_schedule(event, start_day, end_day, user_timezone)
+        collection    = collections.get(str(collection_id)) if collection_id else None
+        schedule      = build_event_schedule(event, start_day, end_day, user_timezone)
         for day in schedule["display_days"]:
             for row in schedule["day_entries"].get(day, []):
                 row_start = ensure_datetime(
@@ -199,8 +200,17 @@ def _flatten_event_entries(
                         "day": day,
                         "title": entry_title,
                         "subtitle": row.get("subtitle") or "",
-                        "start_time": row.get("start_time") or "",
-                        "end_time": row.get("end_time") or "",
+                        # 使用展示层保留的真实时间轴，夏令时回拨的重叠墙钟仍保持原始偏移。
+                        "start_time": datetime.fromtimestamp(
+                            row["start_epoch_ms"] / 1000, user_timezone
+                        ).isoformat()
+                        if row.get("start_time")
+                        else "",
+                        "end_time": datetime.fromtimestamp(
+                            row["end_epoch_ms"] / 1000, user_timezone
+                        ).isoformat()
+                        if row.get("end_time")
+                        else "",
                         "location": row.get("location") or (collection or {}).get("location") or "",
                         "category": row.get("category") or (collection or {}).get("category") or "",
                         "entry_kind": row.get("kind") or "",
@@ -224,9 +234,9 @@ def _build_agenda(db: Database, owner_id: str, now: datetime) -> dict[str, Any]:
         today_start.strftime("%Y-%m-%dT%H:%M:%S"),
         range_end.strftime("%Y-%m-%dT%H:%M:%S"),
     )
-    rows = _flatten_event_entries(db, owner_id, raw_events, today_start, range_end)
-    upcoming = [row for row in rows if row["sort_time"] >= now][:5]
-    today_key = today_start.strftime("%Y-%m-%d")
+    rows         = _flatten_event_entries(db, owner_id, raw_events, today_start, range_end)
+    upcoming     = [row for row in rows if row["sort_time"] >= now][:5]
+    today_key    = today_start.strftime("%Y-%m-%d")
     tomorrow_key = tomorrow_start.strftime("%Y-%m-%d")
 
     return {
@@ -261,7 +271,7 @@ def build_widget_calendar(
     """返回一个闭区间内的完整日程集合，供 Scriptable 对账 iOS 日历。"""
 
     start_day = _parse_calendar_sync_date(start_date, "start_date")
-    end_day = _parse_calendar_sync_date(end_date, "end_date")
+    end_day   = _parse_calendar_sync_date(end_date, "end_date")
     if end_day < start_day:
         raise HTTPException(status_code=422, detail="end_date must not precede start_date")
     range_days = (end_day - start_day).days + 1
@@ -283,9 +293,9 @@ def build_widget_calendar(
     # 跨天日程会为页面生成多个自然日展示行。日历同步按 Pendo 条目 ID
     # 收敛同一条日程的跨天行，同时保留同名、同开始时刻的不同条目。
     unique_rows: list[JsonObject] = []
-    seen: set[tuple[str, ...]] = set()
+    seen: set[tuple[str, ...]]    = set()
     for row in rows:
-        payload = _event_item_payload(row)
+        payload  = _event_item_payload(row)
         event_id = str(payload["id"])
         identity = (
             ("id", event_id)
@@ -314,15 +324,15 @@ def _build_task_panel(db: Database, owner_id: str, now: datetime) -> JsonObject:
     """构建去重后的待办概览。"""
 
     today_key = now.strftime("%Y-%m-%d")
-    overview = build_task_widget_overview(
-        db=db,
-        owner_id=owner_id,
-        today=today_key,
-        limit=5,
+    overview  = build_task_widget_overview(
+        db       = db,
+        owner_id = owner_id,
+        today    = today_key,
+        limit    = 5,
     )
-    items = overview["items"]
-    summary = overview["summary"]
-    user_timezone = TimezoneHelper.get_user_timezone(owner_id, db)
+    items          = overview["items"]
+    summary        = overview["summary"]
+    user_timezone  = TimezoneHelper.get_user_timezone(owner_id, db)
     secondary_bits = [f"{summary['focus_count']} 项今日聚焦"]
     if summary["overdue_count"]:
         secondary_bits.append(f"{summary['overdue_count']} 项逾期")
@@ -352,10 +362,10 @@ def _build_ledger_panel(db: Database, owner_id: str, now: datetime) -> JsonObjec
     today_key = now.strftime("%Y-%m-%d")
     month_start = now.replace(day=1).strftime("%Y-%m-%d")
     insights = build_ledger_insights(
-        db=db,
-        owner_id=owner_id,
-        start_date=month_start,
-        end_date=today_key,
+        db         = db,
+        owner_id   = owner_id,
+        start_date = month_start,
+        end_date   = today_key,
     )
     recent_ledger = db.get_items(
         owner_id,
@@ -367,24 +377,32 @@ def _build_ledger_panel(db: Database, owner_id: str, now: datetime) -> JsonObjec
             "sort_field": "ledger_date",
             "sort_order": "DESC",
         },
-        limit=5,
-        use_cache=True,
+        limit     = 5,
+        use_cache = True,
     )
     # 稳定排序只把支出放在前面；同组日期顺序沿用数据库的 DESC 结果。
     recent_ledger = sorted(
         recent_ledger,
         key=lambda item: getattr(item, "transaction_type", "expense") != "expense",
     )
-    summary = insights["summary"]
-    balance = summary["income_total"] - summary["expense_total"]
+    summary          = insights["summary"]
+    balance          = summary["income_total"] - summary["expense_total"]
+    other_currencies = " · ".join(
+        f"{code} 支出 {totals['expense']:.0f} / 收入 {totals['income']:.0f}"
+        for code, totals in insights["by_currency"].items()
+        if code != "CNY"
+    )
 
     return {
         "section": "ledger",
         "title": "财务",
+        "currency": "CNY",
+        "by_currency": insights["by_currency"],
         "path": _LINKS["ledger"],
         "summary": {
             "primary": f"支出 {_format_amount(summary['expense_total'])}",
-            "secondary": f"收入 {_format_amount(summary['income_total'])} · 结余 {_format_amount(balance, signed=True)}",
+            "secondary": f"收入 {_format_amount(summary['income_total'])} · 结余 {_format_amount(balance, signed=True)}"
+            + (f" · {other_currencies}" if other_currencies else ""),
         },
         "items": [
             {
@@ -399,12 +417,16 @@ def _build_ledger_panel(db: Database, owner_id: str, now: datetime) -> JsonObjec
                 ),
                 "transaction_type": getattr(item, "transaction_type", "expense") or "expense",
                 "amount_text": (
-                    f"↔ {_format_amount(ledger_amount_yuan(item))}"
+                    f"↔ {_format_amount(ledger_amount_yuan(item), currency=getattr(item, 'currency', 'CNY'))}"
                     if getattr(item, "transaction_type", "expense") == "transfer"
                     else (
-                        _format_amount(ledger_amount_yuan(item), signed=True)
+                        _format_amount(
+                            ledger_amount_yuan(item),
+                            signed   = True,
+                            currency = getattr(item, "currency", "CNY"),
+                        )
                         if getattr(item, "transaction_type", "expense") == "income"
-                        else f"-{_format_amount(ledger_amount_yuan(item))}"
+                        else f"-{_format_amount(ledger_amount_yuan(item), currency=getattr(item, 'currency', 'CNY'))}"
                     )
                 ),
             }
@@ -418,14 +440,14 @@ def _build_note_panel(db: Database, owner_id: str, now: datetime) -> JsonObject:
     """构建笔记总量、近七天新增量与最近预览。"""
 
     today_key = now.strftime("%Y-%m-%d")
-    overview = build_notes_widget_overview(
-        db=db,
-        owner_id=owner_id,
-        today=today_key,
-        limit=5,
+    overview  = build_notes_widget_overview(
+        db       = db,
+        owner_id = owner_id,
+        today    = today_key,
+        limit    = 5,
     )
     summary = overview["summary"]
-    notes = overview["recent_notes"]
+    notes   = overview["recent_notes"]
 
     return {
         "section": "notes",
@@ -452,8 +474,8 @@ def build_widget_summary(
 ) -> JsonObject:
     """构建单板块或全板块小组件响应。"""
 
-    current = _parse_now(now, owner_id, db)
-    resolved_section = _section_for(section, current)
+    current                                          = _parse_now(now, owner_id, db)
+    resolved_section                                 = _section_for(section, current)
     panel_builders: dict[PanelSection, PanelBuilder] = {
         "tasks": _build_task_panel,
         "ledger": _build_ledger_panel,
@@ -480,7 +502,7 @@ def get_widget_summary(
     section: Annotated[str, Query(max_length=16)] = "auto",
     now: Annotated[str | None, Query(max_length=64)] = None,
     owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    db: Database  = Depends(get_db),
 ) -> JsonObject:
     """返回经认证所有者的小组件摘要。"""
 
@@ -496,7 +518,7 @@ def get_widget_calendar(
     start_date: Annotated[str, Query(min_length=10, max_length=10)],
     end_date: Annotated[str, Query(min_length=10, max_length=10)],
     owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    db: Database  = Depends(get_db),
 ) -> JsonObject:
     """返回 Scriptable 覆盖游标指定窗口内的完整日程。"""
 
@@ -505,8 +527,8 @@ def get_widget_calendar(
         "data": build_widget_calendar(
             db,
             owner_id,
-            start_date=start_date,
-            end_date=end_date,
+            start_date = start_date,
+            end_date   = end_date,
         ),
         "message": "",
     }

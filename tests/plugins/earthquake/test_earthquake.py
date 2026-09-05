@@ -31,11 +31,11 @@ EARTHQUAKE_TEXT = (
 def _card(
     post_id: str = "1234567890",
     *,
-    magnitude: str = "4.5",
+    magnitude: str        = "4.5",
     image_url: str | None = None,
 ) -> dict:
     raw_text = EARTHQUAKE_TEXT.replace("4.5", magnitude)
-    mblog = {"id": post_id, "text": raw_text}
+    mblog    = {"id": post_id, "text": raw_text}
     if image_url is not None:
         mblog["original_pic"] = image_url
     return {"mblog": mblog}
@@ -47,14 +47,14 @@ def _index(cards: list[dict]) -> dict:
 
 def _bounded(url: str, payload: bytes, content_type: str) -> BoundedHttpResponse:
     return BoundedHttpResponse(
-        url=url,
-        status=200,
-        body=payload,
-        media_type=content_type,
-        charset="utf-8",
-        headers={"Content-Type": content_type},
-        wire_bytes=len(payload),
-        decoded_bytes=len(payload),
+        url           = url,
+        status        = 200,
+        body          = payload,
+        media_type    = content_type,
+        charset       = "utf-8",
+        headers       = {"Content-Type": content_type},
+        wire_bytes    = len(payload),
+        decoded_bytes = len(payload),
     )
 
 
@@ -65,7 +65,7 @@ def _json_response(url: str, value: object) -> BoundedHttpResponse:
 def _image_bytes(
     image_format: str,
     *,
-    mode: str = "RGB",
+    mode: str             = "RGB",
     size: tuple[int, int] = (3, 2),
 ) -> bytes:
     buffer = io.BytesIO()
@@ -76,7 +76,7 @@ def _image_bytes(
 class TrackingSession:
     def __init__(self) -> None:
         self.entered = False
-        self.closed = False
+        self.closed  = False
 
     def __enter__(self):
         self.entered = True
@@ -92,11 +92,11 @@ class TrackingSession:
 @pytest.fixture
 def context(tmp_path: Path):
     return SimpleNamespace(
-        data_dir=tmp_path,
-        state={},
-        secrets={},
-        request_id="earthquake-test",
-        default_groups=lambda: [],
+        data_dir       = tmp_path,
+        state          = {},
+        secrets        = {},
+        request_id     = "earthquake-test",
+        default_groups = lambda: [],
         send_action=AsyncMock(return_value=True),
     )
 
@@ -110,7 +110,7 @@ def test_create_session_only_constructs_session() -> None:
 
 @pytest.mark.asyncio
 async def test_api_pipeline_uses_one_session_and_one_worker_per_scan(context) -> None:
-    session = TrackingSession()
+    session                                         = TrackingSession()
     calls: list[tuple[str, str, object, int, dict]] = []
 
     def bounded(method: str, url: str, **kwargs):
@@ -146,7 +146,7 @@ async def test_api_pipeline_uses_one_session_and_one_worker_per_scan(context) ->
 
 @pytest.mark.asyncio
 async def test_bootstrap_failures_are_logged_but_index_is_still_attempted(context) -> None:
-    session = TrackingSession()
+    session          = TrackingSession()
     calls: list[str] = []
 
     def bounded(method: str, url: str, **kwargs):
@@ -267,10 +267,10 @@ def test_card_expansion_applies_one_budget_to_nested_nodes() -> None:
 
 
 def test_grouped_cards_keep_their_display_order() -> None:
-    first = {"id": "3"}
+    first  = {"id": "3"}
     nested = {"id": "2"}
-    last = {"id": "1"}
-    cards = [
+    last   = {"id": "1"}
+    cards  = [
         {"mblog": first, "card_group": [{"mblog": nested}]},
         {"mblog": last},
     ]
@@ -320,7 +320,7 @@ def test_state_file_size_is_bounded_before_json_decode(context) -> None:
 def test_state_symlink_is_quarantined_without_touching_target(context) -> None:
     earthquake._save_since(context, "29")
     state_path = context.data_dir / "earthquake.json"
-    target = context.data_dir / "external-state.json"
+    target     = context.data_dir / "external-state.json"
     target.write_text('{"since_id":"999"}', encoding="utf-8")
     state_path.unlink()
     try:
@@ -620,11 +620,11 @@ def test_animated_webp_is_rejected() -> None:
     frames = [Image.new("RGB", (2, 2), color) for color in ("red", "blue")]
     frames[0].save(
         buffer,
-        format="WEBP",
-        save_all=True,
-        append_images=frames[1:],
-        duration=10,
-        loop=0,
+        format        = "WEBP",
+        save_all      = True,
+        append_images = frames[1:],
+        duration      = 10,
+        loop          = 0,
     )
     with pytest.raises(ResponseFormatError, match="animated"):
         earthquake._validate_image_bytes(buffer.getvalue(), media_type="image/webp")
@@ -646,16 +646,16 @@ def test_pillow_decompression_warning_is_an_error() -> None:
 
 @pytest.mark.asyncio
 async def test_download_uses_pinned_public_fetch_minimal_headers_and_worker(context) -> None:
-    payload = _image_bytes("PNG")
+    payload  = _image_bytes("PNG")
     response = SafeHttpResponse(
-        url="https://wx1.sinaimg.cn/large/map.png",
-        status=200,
-        body=payload,
-        charset=None,
-        headers={"Content-Type": "image/png"},
+        url     = "https://wx1.sinaimg.cn/large/map.png",
+        status  = 200,
+        body    = payload,
+        charset = None,
+        headers = {"Content-Type": "image/png"},
     )
     worker_threads: list[int] = []
-    real_store = earthquake._validate_and_store_figure
+    real_store                = earthquake._validate_and_store_figure
 
     def tracking_store(ctx, bounded_response):
         worker_threads.append(threading.get_ident())
@@ -698,11 +698,11 @@ async def test_download_uses_pinned_public_fetch_minimal_headers_and_worker(cont
 
 def test_invalid_image_is_not_persisted(context) -> None:
     response = SafeHttpResponse(
-        url="https://wx1.sinaimg.cn/map.jpg",
-        status=200,
-        body=_image_bytes("PNG"),
-        charset=None,
-        headers={"Content-Type": "image/jpeg"},
+        url     = "https://wx1.sinaimg.cn/map.jpg",
+        status  = 200,
+        body    = _image_bytes("PNG"),
+        charset = None,
+        headers = {"Content-Type": "image/jpeg"},
     )
     with (
         patch.object(earthquake.BoundedFileCache, "put_if_absent") as store,
@@ -715,10 +715,10 @@ def test_invalid_image_is_not_persisted(context) -> None:
 @pytest.mark.asyncio
 async def test_image_failure_keeps_already_appended_text(context) -> None:
     prepared = earthquake._PreparedCard(
-        clean_text="中国地震台网正式测定：发生5.0级地震",
-        magnitude=5.0,
-        figure_url="https://wx1.sinaimg.cn/map.jpg",
-        event_id="123",
+        clean_text = "中国地震台网正式测定：发生5.0级地震",
+        magnitude  = 5.0,
+        figure_url = "https://wx1.sinaimg.cn/map.jpg",
+        event_id   = "123",
     )
     with (
         patch.object(
@@ -796,7 +796,7 @@ async def test_handle_rejects_invalid_commands_without_fetching(context, args: s
 
 
 def test_notification_id_is_order_independent_and_rejects_bad_event_ids() -> None:
-    first = earthquake._notification_id("200", ["002", 1])
+    first  = earthquake._notification_id("200", ["002", 1])
     second = earthquake._notification_id("0200", ["1", "2", "2"])
     assert first == second
     with pytest.raises(ValueError, match="event id"):

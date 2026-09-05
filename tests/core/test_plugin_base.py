@@ -106,9 +106,9 @@ class TestBoundedExternalText:
             assert (
                 bounded_external_text(
                     value,
-                    max_chars=32,
-                    max_bytes=64,
-                    default="fallback",
+                    max_chars = 32,
+                    max_bytes = 64,
+                    default   = "fallback",
                 )
                 == "fallback"
             )
@@ -116,10 +116,10 @@ class TestBoundedExternalText:
     def test_strips_ansi_controls_and_obeys_both_budgets(self):
         result = bounded_external_text(
             "\x1b[31mred\x1b[0m\x00" + "砖" * 20,
-            max_chars=10,
-            max_bytes=16,
-            suffix="…",
-            strip=False,
+            max_chars = 10,
+            max_bytes = 16,
+            suffix    = "…",
+            strip     = False,
         )
 
         assert "\x1b" not in result and "\x00" not in result
@@ -134,10 +134,10 @@ class TestBoundedExternalText:
         assert (
             bounded_external_text(
                 "x" * 20,
-                max_chars=5,
-                max_bytes=5,
-                default="N/A",
-                truncate=False,
+                max_chars = 5,
+                max_bytes = 5,
+                default   = "N/A",
+                truncate  = False,
             )
             == "N/A"
         )
@@ -180,7 +180,7 @@ class TestAsyncTools:
     @pytest.mark.asyncio
     async def test_gather_bounded_preserves_order_and_limit(self):
         active = 0
-        peak = 0
+        peak   = 0
 
         async def work(value: int) -> int:
             nonlocal active, peak
@@ -307,7 +307,7 @@ class TestJsonUtils:
     def test_write_and_load_json(self, tmp_path: Path):
         """测试写入和读取 JSON"""
         json_path = tmp_path / "test.json"
-        data = {"name": "测试", "count": 42, "items": [1, 2, 3]}
+        data      = {"name": "测试", "count": 42, "items": [1, 2, 3]}
 
         write_json(json_path, data)
         loaded = load_json(json_path)
@@ -362,7 +362,7 @@ class TestSplitMessageSegments:
 
     def test_short_message_no_split(self):
         """短消息不拆分"""
-        segs = segments("Hello World")
+        segs   = segments("Hello World")
         result = split_message_segments(segs)
         assert len(result) == 1
         assert result[0] == segs
@@ -380,9 +380,9 @@ class TestSplitMessageSegments:
     def test_long_text_splits(self):
         """超长文本按行拆分"""
         # 构造一段超过默认限制的文本（每行 50 字符，100 行 = 5000+ 字符）
-        lines = [f"Line {i:04d}: {'x' * 42}" for i in range(100)]
+        lines     = [f"Line {i:04d}: {'x' * 42}" for i in range(100)]
         long_text = "\n".join(lines)
-        segs = segments(long_text)
+        segs      = segments(long_text)
         result = split_message_segments(segs, max_length=500)
 
         # 应该拆分为多条
@@ -395,7 +395,7 @@ class TestSplitMessageSegments:
     def test_single_long_line_force_split(self):
         """单行超长文本按字符强制拆分"""
         long_line = "A" * 1000
-        segs = segments(long_line)
+        segs      = segments(long_line)
         result = split_message_segments(segs, max_length=300)
 
         # 应该拆分为多条
@@ -458,9 +458,9 @@ class TestSplitMessageSegments:
 
     def test_preserves_content_integrity(self):
         """拆分后拼接内容与原始内容一致"""
-        lines = [f"文件{i}.txt" for i in range(50)]
+        lines    = [f"文件{i}.txt" for i in range(50)]
         original = "\n".join(lines)
-        segs = segments(original)
+        segs     = segments(original)
         result = split_message_segments(segs, max_length=100)
 
         reconstructed = "".join(

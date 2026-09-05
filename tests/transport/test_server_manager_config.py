@@ -17,7 +17,7 @@ from tests.helpers.server_test_support import (
     pytest,
 )
 
-mock_handler = _fixture_support.mock_handler
+mock_handler  = _fixture_support.mock_handler
 sample_server = _fixture_support.sample_server
 
 
@@ -30,9 +30,9 @@ def test_inbound_manager_from_config_disabled():
         return []
 
     manager = InboundManager.from_config(
-        config=config,
-        token="test_token",
-        handler=handler,
+        config  = config,
+        token   = "test_token",
+        handler = handler,
     )
 
     assert manager is None
@@ -51,9 +51,9 @@ def test_inbound_manager_from_config_no_urls():
         return []
 
     manager = InboundManager.from_config(
-        config=config,
-        token="test_token",
-        handler=handler,
+        config  = config,
+        token   = "test_token",
+        handler = handler,
     )
 
     assert manager is None
@@ -98,9 +98,9 @@ def test_inbound_manager_from_config_http_only():
         return []
 
     manager = InboundManager.from_config(
-        config=config,
-        token="test_token",
-        handler=handler,
+        config  = config,
+        token   = "test_token",
+        handler = handler,
     )
 
     assert manager is not None
@@ -120,9 +120,9 @@ def test_inbound_manager_from_config_ws_only():
         return []
 
     manager = InboundManager.from_config(
-        config=config,
-        token="test_token",
-        handler=handler,
+        config  = config,
+        token   = "test_token",
+        handler = handler,
     )
 
     assert manager is not None
@@ -166,8 +166,8 @@ def test_inbound_manager_from_config_applies_broadcast_timeout():
 def test_inbound_manager_rejects_tls_schemes_it_does_not_terminate(config):
     with pytest.raises(ValueError, match="does not terminate TLS"):
         InboundManager.from_config(
-            config=config,
-            token="test_token",
+            config = config,
+            token  = "test_token",
             handler=AsyncMock(return_value=[]),
         )
 
@@ -176,9 +176,9 @@ def test_inbound_manager_rejects_tls_schemes_it_does_not_terminate(config):
 def test_inbound_manager_rejects_plaintext_non_loopback_without_proxy_acknowledgement():
     with pytest.raises(ValueError, match="non-loopback.*plaintext"):
         InboundManager(
-            inbound_http_base="http://0.0.0.0:8080",
-            inbound_ws_uri="",
-            token="test_token",
+            inbound_http_base = "http://0.0.0.0:8080",
+            inbound_ws_uri    = "",
+            token             = "test_token",
             handler=AsyncMock(return_value=[]),
         )
 
@@ -205,9 +205,9 @@ def test_inbound_manager_accepts_non_loopback_with_trusted_tls_proxy_acknowledge
 def test_inbound_manager_requires_token_for_non_loopback_proxy_listener():
     with pytest.raises(ValueError, match="require a non-empty inbound token"):
         InboundManager(
-            inbound_http_base="http://0.0.0.0:8080",
-            inbound_ws_uri="",
-            token="",
+            inbound_http_base = "http://0.0.0.0:8080",
+            inbound_ws_uri    = "",
+            token             = "",
             handler=AsyncMock(return_value=[]),
             trusted_tls_proxy=True,
         )
@@ -218,9 +218,9 @@ def test_inbound_manager_requires_token_for_non_loopback_proxy_listener():
 def test_inbound_runtime_rejects_non_boolean_proxy_flags(invalid_flag):
     with pytest.raises(TypeError, match="must be a boolean"):
         InboundManager(
-            inbound_http_base="http://127.0.0.1:8080",
-            inbound_ws_uri="",
-            token="test_token",
+            inbound_http_base = "http://127.0.0.1:8080",
+            inbound_ws_uri    = "",
+            token             = "test_token",
             handler=AsyncMock(return_value=[]),
             trusted_tls_proxy=invalid_flag,
         )
@@ -262,9 +262,9 @@ def test_inbound_manager_rejects_all_non_loopback_plaintext_without_proxy(
 ):
     with pytest.raises(ValueError, match="non-loopback.*plaintext"):
         InboundManager(
-            inbound_http_base=http_base,
-            inbound_ws_uri=ws_uri,
-            token="test_token",
+            inbound_http_base = http_base,
+            inbound_ws_uri    = ws_uri,
+            token             = "test_token",
             handler=AsyncMock(return_value=[]),
         )
 
@@ -311,9 +311,9 @@ async def test_direct_inbound_server_rejects_empty_token_before_runner_setup():
 @pytest.mark.unit
 async def test_inbound_manager_rejects_empty_token_before_starting_servers():
     manager = InboundManager(
-        inbound_http_base="http://127.0.0.1:8080",
-        inbound_ws_uri="",
-        token="",
+        inbound_http_base = "http://127.0.0.1:8080",
+        inbound_ws_uri    = "",
+        token             = "",
         handler=AsyncMock(return_value=[]),
     )
     manager._start_servers = AsyncMock()
@@ -334,10 +334,10 @@ async def test_direct_proxy_server_enters_explicit_plaintext_tcpsite():
         AsyncMock(return_value=[]),
         trusted_tls_proxy=True,
     )
-    runner = MagicMock()
+    runner       = MagicMock()
     runner.setup = AsyncMock()
-    site = MagicMock()
-    site.start = AsyncMock()
+    site         = MagicMock()
+    site.start   = AsyncMock()
 
     with (
         patch("core.server.web.AppRunner", return_value=runner),
@@ -367,17 +367,17 @@ async def test_inbound_manager_propagates_proxy_acknowledgement_to_every_server(
     expected_servers,
 ):
     manager = InboundManager(
-        inbound_http_base=http_base,
-        inbound_ws_uri=ws_uri,
-        token="test_token",
+        inbound_http_base = http_base,
+        inbound_ws_uri    = ws_uri,
+        token             = "test_token",
         handler=AsyncMock(return_value=[]),
-        ws_broadcast_timeout_seconds=2.5,
-        trusted_tls_proxy=True,
+        ws_broadcast_timeout_seconds = 2.5,
+        trusted_tls_proxy            = True,
     )
     created = []
 
     def build_server(*args, **kwargs):
-        server = MagicMock()
+        server       = MagicMock()
         server.start = AsyncMock()
         created.append(server)
         return server
@@ -402,22 +402,22 @@ async def test_inbound_manager_broadcast():
         return []
 
     manager = InboundManager(
-        inbound_http_base="",
-        inbound_ws_uri="",
-        token="test_token",
-        handler=handler,
+        inbound_http_base = "",
+        inbound_ws_uri    = "",
+        token             = "test_token",
+        handler           = handler,
     )
 
     # Mock servers
-    manager.http_server = MagicMock()
+    manager.http_server                                    = MagicMock()
     manager.http_server.active_ws_connections.return_value = 2
-    manager.http_server.broadcast = AsyncMock(
+    manager.http_server.broadcast                          = AsyncMock(
         return_value=BroadcastResult(target_count=2, success_count=1, failure_count=1)
     )
 
-    manager.ws_server = MagicMock()
+    manager.ws_server                                    = MagicMock()
     manager.ws_server.active_ws_connections.return_value = 1
-    manager.ws_server.broadcast = AsyncMock(
+    manager.ws_server.broadcast                          = AsyncMock(
         return_value=BroadcastResult(target_count=1, timeout_count=1)
     )
 
@@ -427,10 +427,10 @@ async def test_inbound_manager_broadcast():
     manager.http_server.broadcast.assert_called_once()
     manager.ws_server.broadcast.assert_called_once()
     assert result == BroadcastResult(
-        target_count=3,
-        success_count=1,
-        failure_count=1,
-        timeout_count=1,
+        target_count  = 3,
+        success_count = 1,
+        failure_count = 1,
+        timeout_count = 1,
     )
 
 
@@ -443,18 +443,18 @@ async def test_inbound_manager_broadcast_same_server():
         return []
 
     manager = InboundManager(
-        inbound_http_base="",
-        inbound_ws_uri="",
-        token="test_token",
-        handler=handler,
+        inbound_http_base = "",
+        inbound_ws_uri    = "",
+        token             = "test_token",
+        handler           = handler,
     )
 
     # Same server instance
-    mock_server = MagicMock()
+    mock_server                                    = MagicMock()
     mock_server.active_ws_connections.return_value = 1
     mock_server.broadcast = AsyncMock(return_value=BroadcastResult(target_count=1, success_count=1))
     manager.http_server = mock_server
-    manager.ws_server = mock_server
+    manager.ws_server   = mock_server
 
     result = await manager.broadcast({"action": "test"})
 
@@ -467,9 +467,9 @@ async def test_inbound_manager_broadcast_same_server():
 @pytest.mark.unit
 async def test_inbound_manager_broadcast_without_servers_returns_zero_result():
     manager = InboundManager(
-        inbound_http_base="",
-        inbound_ws_uri="",
-        token="test_token",
+        inbound_http_base = "",
+        inbound_ws_uri    = "",
+        token             = "test_token",
         handler=AsyncMock(return_value=[]),
     )
 
@@ -480,19 +480,19 @@ async def test_inbound_manager_broadcast_without_servers_returns_zero_result():
 @pytest.mark.unit
 async def test_inbound_manager_broadcast_isolates_one_server_failure():
     manager = InboundManager(
-        inbound_http_base="",
-        inbound_ws_uri="",
-        token="test_token",
+        inbound_http_base = "",
+        inbound_ws_uri    = "",
+        token             = "test_token",
         handler=AsyncMock(return_value=[]),
     )
-    failed = MagicMock()
+    failed                                    = MagicMock()
     failed.active_ws_connections.return_value = 2
     failed.broadcast = AsyncMock(side_effect=ConnectionError("server failed"))
-    healthy = MagicMock()
+    healthy                                    = MagicMock()
     healthy.active_ws_connections.return_value = 1
     healthy.broadcast = AsyncMock(return_value=BroadcastResult(target_count=1, success_count=1))
     manager.http_server = failed
-    manager.ws_server = healthy
+    manager.ws_server   = healthy
 
     result = await manager.broadcast({"action": "test"})
 
@@ -505,12 +505,12 @@ async def test_inbound_manager_broadcast_isolates_one_server_failure():
 @pytest.mark.unit
 async def test_inbound_manager_broadcast_preserves_cancellation():
     manager = InboundManager(
-        inbound_http_base="",
-        inbound_ws_uri="",
-        token="test_token",
+        inbound_http_base = "",
+        inbound_ws_uri    = "",
+        token             = "test_token",
         handler=AsyncMock(return_value=[]),
     )
-    server = MagicMock()
+    server                                    = MagicMock()
     server.active_ws_connections.return_value = 1
     server.broadcast = AsyncMock(side_effect=asyncio.CancelledError)
     manager.ws_server = server
@@ -527,14 +527,14 @@ async def test_inbound_manager_child_fatal_cancels_and_drains_sibling(fatal_kind
         pass
 
     manager = InboundManager(
-        inbound_http_base="",
-        inbound_ws_uri="",
-        token="test_token",
+        inbound_http_base = "",
+        inbound_ws_uri    = "",
+        token             = "test_token",
         handler=AsyncMock(return_value=[]),
     )
-    sibling_entered = asyncio.Event()
+    sibling_entered   = asyncio.Event()
     sibling_cancelled = asyncio.Event()
-    blocker = asyncio.Event()
+    blocker           = asyncio.Event()
 
     async def slow_broadcast(_action: dict[str, Any]) -> BroadcastResult:
         sibling_entered.set()
@@ -550,14 +550,14 @@ async def test_inbound_manager_child_fatal_cancels_and_drains_sibling(fatal_kind
             raise asyncio.CancelledError
         raise ChildFatal("fatal server")
 
-    slow_server = MagicMock()
-    slow_server.active_ws_connections.return_value = 1
-    slow_server.broadcast = slow_broadcast
-    fatal_server = MagicMock()
+    slow_server                                     = MagicMock()
+    slow_server.active_ws_connections.return_value  = 1
+    slow_server.broadcast                           = slow_broadcast
+    fatal_server                                    = MagicMock()
     fatal_server.active_ws_connections.return_value = 1
-    fatal_server.broadcast = fatal_broadcast
-    manager.http_server = slow_server
-    manager.ws_server = fatal_server
+    fatal_server.broadcast                          = fatal_broadcast
+    manager.http_server                             = slow_server
+    manager.ws_server                               = fatal_server
 
     expected = asyncio.CancelledError if fatal_kind == "cancelled" else ChildFatal
     with pytest.raises(expected):
@@ -574,15 +574,15 @@ def test_inbound_manager_update_token():
         return []
 
     manager = InboundManager(
-        inbound_http_base="",
-        inbound_ws_uri="",
-        token="old_token",
-        handler=handler,
+        inbound_http_base = "",
+        inbound_ws_uri    = "",
+        token             = "old_token",
+        handler           = handler,
     )
 
     # Create mock servers
     manager.http_server = MagicMock()
-    manager.ws_server = MagicMock()
+    manager.ws_server   = MagicMock()
 
     manager.update_token("new_token")
 
@@ -597,14 +597,14 @@ def test_inbound_manager_update_token_deduplicates_shared_server_and_same_value(
         return []
 
     manager = InboundManager(
-        inbound_http_base="",
-        inbound_ws_uri="",
-        token="old_token",
-        handler=handler,
+        inbound_http_base = "",
+        inbound_ws_uri    = "",
+        token             = "old_token",
+        handler           = handler,
     )
-    shared_server = MagicMock()
+    shared_server       = MagicMock()
     manager.http_server = shared_server
-    manager.ws_server = shared_server
+    manager.ws_server   = shared_server
 
     manager.update_token("new_token")
     manager.update_token("new_token")
@@ -620,10 +620,10 @@ async def test_inbound_manager_factory_reentrant_rotation_cannot_publish_old_tok
         return []
 
     manager = InboundManager(
-        inbound_http_base="http://127.0.0.1:8765",
-        inbound_ws_uri="",
-        token="old-token",
-        handler=handler,
+        inbound_http_base = "http://127.0.0.1:8765",
+        inbound_ws_uri    = "",
+        token             = "old-token",
+        handler           = handler,
     )
     server = MagicMock(start=AsyncMock())
 
@@ -649,36 +649,36 @@ def test_inbound_manager_set_status_providers_updates_existing_servers():
         return []
 
     manager = InboundManager(
-        inbound_http_base="",
-        inbound_ws_uri="",
-        token="test_token",
-        handler=handler,
+        inbound_http_base = "",
+        inbound_ws_uri    = "",
+        token             = "test_token",
+        handler           = handler,
     )
     manager.http_server = MagicMock()
-    manager.ws_server = MagicMock()
+    manager.ws_server   = MagicMock()
     plugins_count = Mock(return_value=5)
     sessions_count = Mock(return_value=2)
     pending_jobs = Mock(return_value=1)
     metrics = Mock(return_value={"ok": True})
 
     manager.set_status_providers(
-        plugins_count=plugins_count,
-        sessions_count=sessions_count,
-        pending_jobs=pending_jobs,
-        metrics=metrics,
+        plugins_count  = plugins_count,
+        sessions_count = sessions_count,
+        pending_jobs   = pending_jobs,
+        metrics        = metrics,
     )
 
     manager.http_server.set_status_providers.assert_called_once_with(
-        plugins_count=plugins_count,
-        sessions_count=sessions_count,
-        pending_jobs=pending_jobs,
-        metrics=metrics,
+        plugins_count  = plugins_count,
+        sessions_count = sessions_count,
+        pending_jobs   = pending_jobs,
+        metrics        = metrics,
     )
     manager.ws_server.set_status_providers.assert_called_once_with(
-        plugins_count=plugins_count,
-        sessions_count=sessions_count,
-        pending_jobs=pending_jobs,
-        metrics=metrics,
+        plugins_count  = plugins_count,
+        sessions_count = sessions_count,
+        pending_jobs   = pending_jobs,
+        metrics        = metrics,
     )
 
 
@@ -695,8 +695,8 @@ async def test_inbound_manager_applies_status_providers_when_servers_start():
     class FakeInboundServer:
         def __init__(self, *args, **kwargs):
             self.set_status_providers = Mock()
-            self.commit_admission = Mock()
-            self.kwargs = kwargs
+            self.commit_admission     = Mock()
+            self.kwargs               = kwargs
             created.append(self)
 
         async def start(self, *, accept_events: bool = True):
@@ -707,10 +707,10 @@ async def test_inbound_manager_applies_status_providers_when_servers_start():
             return None
 
     manager = InboundManager(
-        inbound_http_base="http://localhost:8080",
-        inbound_ws_uri="",
-        token="test_token",
-        handler=handler,
+        inbound_http_base = "http://localhost:8080",
+        inbound_ws_uri    = "",
+        token             = "test_token",
+        handler           = handler,
     )
     plugins_count = Mock(return_value=5)
 
@@ -721,10 +721,10 @@ async def test_inbound_manager_applies_status_providers_when_servers_start():
 
     assert len(created) == 1
     created[0].set_status_providers.assert_called_once_with(
-        plugins_count=plugins_count,
-        sessions_count=None,
-        pending_jobs=None,
-        metrics=None,
+        plugins_count  = plugins_count,
+        sessions_count = None,
+        pending_jobs   = None,
+        metrics        = None,
     )
     created[0].commit_admission.assert_called_once_with()
     await manager.stop()

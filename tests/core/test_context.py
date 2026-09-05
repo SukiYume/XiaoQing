@@ -47,22 +47,22 @@ def sample_context(tmp_path: Path) -> PluginContext:
     def mock_get_command_catalog():
         return (
             CommandCatalogNode(
-                code="bot_core.help",
-                plugin="bot_core",
-                path=("help",),
-                name="help",
-                aliases=("帮助",),
-                help_text="查看帮助",
-                usage="/help",
+                code      = "bot_core.help",
+                plugin    = "bot_core",
+                path      = ("help",),
+                name      = "help",
+                aliases   = ("帮助",),
+                help_text = "查看帮助",
+                usage     = "/help",
             ),
             CommandCatalogNode(
-                code="echo.echo",
-                plugin="echo",
-                path=("echo",),
-                name="echo",
-                aliases=("回显",),
-                help_text="回显消息",
-                usage="/echo <消息>",
+                code      = "echo.echo",
+                plugin    = "echo",
+                path      = ("echo",),
+                name      = "echo",
+                aliases   = ("回显",),
+                help_text = "回显消息",
+                usage     = "/echo <消息>",
             ),
         )
 
@@ -70,26 +70,26 @@ def sample_context(tmp_path: Path) -> PluginContext:
         return ["echo", "help", "choice"]
 
     return PluginContext(
-        config={"bot_name": "测试机器人", "command_prefixes": ["/"]},
-        secrets={
+        config  = {"bot_name": "测试机器人", "command_prefixes": ["/"]},
+        secrets = {
             "admin_user_ids": [12345],
             "plugins": {"echo": {"api_key": "plugin-key"}, "other": {"hidden": True}},
         },
-        plugin_name="echo",
-        plugin_dir=tmp_path / "plugins" / "echo",
-        data_dir=tmp_path / "data" / "echo",
-        http_session=None,
-        send_action=mock_send_action,
-        reload_config=mock_reload_config,
-        reload_plugins=mock_reload_plugins,
-        get_command_catalog=mock_get_command_catalog,
-        list_plugins=mock_list_plugins,
-        current_user_id=12345,
-        current_group_id=67890,
+        plugin_name         = "echo",
+        plugin_dir          = tmp_path / "plugins" / "echo",
+        data_dir            = tmp_path / "data" / "echo",
+        http_session        = None,
+        send_action         = mock_send_action,
+        reload_config       = mock_reload_config,
+        reload_plugins      = mock_reload_plugins,
+        get_command_catalog = mock_get_command_catalog,
+        list_plugins        = mock_list_plugins,
+        current_user_id     = 12345,
+        current_group_id    = 67890,
         principal=PluginPrincipal(kind="user", user_id=12345, is_bot_admin=True),
         capabilities=PluginCapabilities(is_bot_admin=True),
-        request_id="test_request_001",
-        state={"counter": 0, "calls": calls},
+        request_id = "test_request_001",
+        state      = {"counter": 0, "calls": calls},
     )
 
 
@@ -114,8 +114,8 @@ class TestPluginContextInit:
         assert sample_context.state["counter"] == 0
 
         snapshot = ConfigSnapshot(
-            config={"default_group_ids": [123, 456]},
-            secrets={
+            config  = {"default_group_ids": [123, 456]},
+            secrets = {
                 "plugins": {
                     "echo": {
                         "api_key": "snapshot-key",
@@ -124,7 +124,7 @@ class TestPluginContextInit:
                 }
             },
         )
-        sample_context.config = snapshot.config
+        sample_context.config  = snapshot.config
         sample_context.secrets = snapshot.secrets
         assert sample_context.default_groups() == [123, 456]
         assert isinstance(sample_context.default_groups(), list)
@@ -138,21 +138,21 @@ class TestPluginContextInit:
     def test_optional_properties_none(self):
         """测试可选属性为 None"""
         context = PluginContext(
-            config={},
-            secrets={},
-            plugin_name="test",
-            plugin_dir=Path("/tmp"),
-            data_dir=Path("/tmp"),
-            http_session=None,
-            send_action=lambda x: None,
-            reload_config=lambda: None,
-            reload_plugins=lambda: None,
-            get_command_catalog=lambda: (),
-            list_plugins=lambda: [],
-            current_user_id=None,
-            current_group_id=None,
-            request_id=None,
-            state=None,
+            config              = {},
+            secrets             = {},
+            plugin_name         = "test",
+            plugin_dir          = Path("/tmp"),
+            data_dir            = Path("/tmp"),
+            http_session        = None,
+            send_action         = lambda x: None,
+            reload_config       = lambda: None,
+            reload_plugins      = lambda: None,
+            get_command_catalog = lambda: (),
+            list_plugins        = lambda: [],
+            current_user_id     = None,
+            current_group_id    = None,
+            request_id          = None,
+            state               = None,
         )
         assert context.current_user_id is None
         assert context.current_group_id is None
@@ -194,10 +194,10 @@ class TestPluginContextAccess:
     ) -> None:
         """定时插件读取 Core 已解析的清单目标，显式空列表也不会回退。"""
 
-        sample_context.config = {"default_group_ids": (999,)}
+        sample_context.config    = {"default_group_ids": (999,)}
         sample_context.principal = PluginPrincipal(
-            kind="scheduled_system",
-            delivery_targets=delivery_targets,
+            kind             = "scheduled_system",
+            delivery_targets = delivery_targets,
         )
 
         assert sample_context.default_groups() == expected
@@ -254,13 +254,13 @@ class TestPluginContextAccess:
                     }
                 }
             },
-            secrets={"plugins": {"echo": {"api_key": "current"}}},
-            revision=7,
+            secrets  = {"plugins": {"echo": {"api_key": "current"}}},
+            revision = 7,
         )
         settings = PluginSettingsSnapshot(
-            config=source.config,
-            secrets=source.secrets,
-            revision=source.revision,
+            config   = source.config,
+            secrets  = source.secrets,
+            revision = source.revision,
         )
         reads: list[int] = []
 
@@ -271,7 +271,7 @@ class TestPluginContextAccess:
         sample_context.settings_reader = read_settings
 
         observed = sample_context.get_settings_snapshot()
-        nested = sample_context.get_config("nested")
+        nested   = sample_context.get_config("nested")
 
         assert observed is settings
         assert reads == [7, 7]
@@ -286,12 +286,12 @@ class TestPluginContextAccess:
         """无独立 secret_reader 时也不能绕过 settings 快照读到旧密钥代。"""
 
         settings = PluginSettingsSnapshot(
-            config={"plugins": {"echo": {}}},
-            secrets={"plugins": {"echo": {"api_key": "your-api-key-placeholder"}}},
-            revision=8,
+            config   = {"plugins": {"echo": {}}},
+            secrets  = {"plugins": {"echo": {"api_key": "your-api-key-placeholder"}}},
+            revision = 8,
         )
         sample_context.settings_reader = lambda: settings
-        sample_context.secret_reader = None
+        sample_context.secret_reader   = None
 
         assert sample_context.get_secret("api_key") == "your-api-key-placeholder"
 
@@ -310,9 +310,9 @@ class TestPluginContextAccess:
         sample_context: PluginContext,
     ):
         sample_context.settings_reader = lambda: PluginSettingsSnapshot(
-            config={"plugins": {"echo": {"enabled": True}}},
-            secrets={"plugins": {"echo": {"api_key": "plugin-key"}}},
-            revision=4,
+            config   = {"plugins": {"echo": {"enabled": True}}},
+            secrets  = {"plugins": {"echo": {"api_key": "plugin-key"}}},
+            revision = 4,
         )
         settings = sample_context.get_settings_snapshot()
 
@@ -323,9 +323,9 @@ class TestPluginContextAccess:
 
     def test_settings_snapshot_treats_malformed_namespaces_as_absent(self):
         settings = PluginSettingsSnapshot(
-            config={"plugins": {"echo": "invalid"}},
-            secrets={"plugins": []},
-            revision=3,
+            config   = {"plugins": {"echo": "invalid"}},
+            secrets  = {"plugins": []},
+            revision = 3,
         )
 
         assert settings.plugin_config("echo") == {}
@@ -352,7 +352,7 @@ class TestPluginContextMethods:
     async def test_send_action(self, sample_context: PluginContext):
         """测试发送消息"""
         message = [{"type": "text", "data": {"text": "测试"}}]
-        result = await sample_context.send_action(message)
+        result  = await sample_context.send_action(message)
         assert result is True
         assert sample_context.state["calls"]["send_action"] == [message]
 
@@ -370,10 +370,10 @@ class TestPluginContextMethods:
         self,
         sample_context: PluginContext,
     ):
-        mute_control = MagicMock()
-        mute_control.unmute_group.return_value = True
+        mute_control                                 = MagicMock()
+        mute_control.unmute_group.return_value       = True
         mute_control.get_mute_remaining.return_value = 12.5
-        sample_context.mute_control = mute_control
+        sample_context.mute_control                  = mute_control
 
         sample_context.mute_group(67890, 30.5)
 
@@ -417,12 +417,12 @@ class TestPluginContextMethods:
         assert after_exists.updated_at == before.updated_at
 
         created.data["nested"]["value"] = 2
-        read = await sample_context.get_session()
+        read                            = await sample_context.get_session()
         assert read is not None and read.data["nested"]["value"] == 1
 
         await sample_context.update_session(lambda working: working.set("value", 3))
         read.data["nested"]["value"] = 4
-        committed = await manager.peek(12345, 67890)
+        committed                    = await manager.peek(12345, 67890)
         assert committed is not None
         assert committed.get("value") == 3
         assert committed.data["nested"]["value"] == 1
@@ -432,7 +432,7 @@ class TestPluginContextMethods:
         self,
         sample_context: PluginContext,
     ):
-        manager = SessionManager()
+        manager                        = SessionManager()
         sample_context.session_manager = manager
         await sample_context.create_session({"step": 1}, timeout=30)
         stored = manager._sessions[(12345, 67890)]
@@ -457,21 +457,21 @@ class TestPrivateVsGroupContext:
     def test_private_message_context(self, tmp_path: Path):
         """测试私聊消息上下文"""
         context = PluginContext(
-            config={},
-            secrets={},
-            plugin_name="test",
-            plugin_dir=tmp_path,
-            data_dir=tmp_path,
-            http_session=None,
-            send_action=lambda x: None,
-            reload_config=lambda: None,
-            reload_plugins=lambda: None,
-            get_command_catalog=lambda: (),
-            list_plugins=lambda: [],
-            current_user_id=12345,
-            current_group_id=None,
-            request_id="priv_001",
-            state={},
+            config              = {},
+            secrets             = {},
+            plugin_name         = "test",
+            plugin_dir          = tmp_path,
+            data_dir            = tmp_path,
+            http_session        = None,
+            send_action         = lambda x: None,
+            reload_config       = lambda: None,
+            reload_plugins      = lambda: None,
+            get_command_catalog = lambda: (),
+            list_plugins        = lambda: [],
+            current_user_id     = 12345,
+            current_group_id    = None,
+            request_id          = "priv_001",
+            state               = {},
         )
         assert context.current_user_id == 12345
         assert context.current_group_id is None
@@ -479,21 +479,21 @@ class TestPrivateVsGroupContext:
     def test_group_message_context(self, tmp_path: Path):
         """测试群聊消息上下文"""
         context = PluginContext(
-            config={},
-            secrets={},
-            plugin_name="test",
-            plugin_dir=tmp_path,
-            data_dir=tmp_path,
-            http_session=None,
-            send_action=lambda x: None,
-            reload_config=lambda: None,
-            reload_plugins=lambda: None,
-            get_command_catalog=lambda: (),
-            list_plugins=lambda: [],
-            current_user_id=12345,
-            current_group_id=67890,
-            request_id="group_001",
-            state={},
+            config              = {},
+            secrets             = {},
+            plugin_name         = "test",
+            plugin_dir          = tmp_path,
+            data_dir            = tmp_path,
+            http_session        = None,
+            send_action         = lambda x: None,
+            reload_config       = lambda: None,
+            reload_plugins      = lambda: None,
+            get_command_catalog = lambda: (),
+            list_plugins        = lambda: [],
+            current_user_id     = 12345,
+            current_group_id    = 67890,
+            request_id          = "group_001",
+            state               = {},
         )
         assert context.current_user_id == 12345
         assert context.current_group_id == 67890
@@ -510,21 +510,21 @@ class TestEmptyState:
     def test_empty_state_dict(self, tmp_path: Path):
         """测试空状态字典"""
         context = PluginContext(
-            config={},
-            secrets={},
-            plugin_name="test",
-            plugin_dir=tmp_path,
-            data_dir=tmp_path,
-            http_session=None,
-            send_action=lambda x: None,
-            reload_config=lambda: None,
-            reload_plugins=lambda: None,
-            get_command_catalog=lambda: (),
-            list_plugins=lambda: [],
-            current_user_id=None,
-            current_group_id=None,
-            request_id=None,
-            state={},
+            config              = {},
+            secrets             = {},
+            plugin_name         = "test",
+            plugin_dir          = tmp_path,
+            data_dir            = tmp_path,
+            http_session        = None,
+            send_action         = lambda x: None,
+            reload_config       = lambda: None,
+            reload_plugins      = lambda: None,
+            get_command_catalog = lambda: (),
+            list_plugins        = lambda: [],
+            current_user_id     = None,
+            current_group_id    = None,
+            request_id          = None,
+            state               = {},
         )
         assert context.state == {}
         assert len(context.state) == 0
@@ -547,20 +547,20 @@ class TestHttpSession:
         mock_session = object()
 
         context = PluginContext(
-            config={},
-            secrets={},
-            plugin_name="test",
-            plugin_dir=tmp_path,
-            data_dir=tmp_path,
-            http_session=mock_session,
-            send_action=lambda x: None,
-            reload_config=lambda: None,
-            reload_plugins=lambda: None,
-            get_command_catalog=lambda: (),
-            list_plugins=lambda: [],
-            current_user_id=None,
-            current_group_id=None,
-            request_id=None,
-            state={},
+            config              = {},
+            secrets             = {},
+            plugin_name         = "test",
+            plugin_dir          = tmp_path,
+            data_dir            = tmp_path,
+            http_session        = mock_session,
+            send_action         = lambda x: None,
+            reload_config       = lambda: None,
+            reload_plugins      = lambda: None,
+            get_command_catalog = lambda: (),
+            list_plugins        = lambda: [],
+            current_user_id     = None,
+            current_group_id    = None,
+            request_id          = None,
+            state               = {},
         )
         assert context.http_session is mock_session

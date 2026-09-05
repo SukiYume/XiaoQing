@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -14,8 +15,10 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_ENDPOINT = "http://127.0.0.1:12000/event"
-DEFAULT_SECRETS = PROJECT_ROOT / "config" / "secrets.json"
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+DEFAULT_ENDPOINT      = "http://127.0.0.1:12000/event"
+DEFAULT_SECRETS       = PROJECT_ROOT / "config" / "secrets.json"
 DEFAULT_CHAT_DATA_DIR = PROJECT_ROOT / "data" / "xiaoqing_chat"
 
 
@@ -103,7 +106,7 @@ def _load_auth(path: Path) -> tuple[str, int]:
         payload = _decode_json_object(text)
     except JsonDataError as exc:
         raise RuntimeError(f"鉴权配置无效 {path}: {exc}") from exc
-    token = payload.get("inbound_token")
+    token  = payload.get("inbound_token")
     admins = payload.get("admin_user_ids")
     if not isinstance(token, str) or not token.strip():
         raise RuntimeError("config/secrets.json 缺少 inbound_token")
@@ -124,12 +127,12 @@ class EventProbe:
         timeout: float,
         message_id_seed: int,
     ) -> None:
-        self.endpoint = endpoint
-        self.token = token
-        self.admin_id = admin_id
-        self.timeout = timeout
+        self.endpoint        = endpoint
+        self.token           = token
+        self.admin_id        = admin_id
+        self.timeout         = timeout
         self.message_id_seed = message_id_seed
-        self._sequence = 0
+        self._sequence       = 0
 
     def send(
         self,
@@ -138,11 +141,11 @@ class EventProbe:
         user_id: int,
         group_id: int,
         event_time: float | None = None,
-        admin: bool = False,
+        admin: bool              = False,
     ) -> ProbeResult:
         self._sequence += 1
         actor_id = self.admin_id if admin else user_id
-        payload = {
+        payload  = {
             "time": int(time.time() if event_time is None else event_time),
             "post_type": "message",
             "message_type": "group",
@@ -166,18 +169,19 @@ class EventProbe:
             headers={
                 "Authorization": f"Bearer {self.token}",
                 "Content-Type": "application/json; charset=utf-8",
+                "X-XiaoQing-Response-Mode": "actions",
             },
             method="POST",
         )
-        started = time.perf_counter()
+        started                   = time.perf_counter()
         request_error: str | None = None
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                body = response.read()
+                body   = response.read()
                 status = response.status
         except urllib.error.HTTPError as exc:
-            body = exc.read()
-            status = exc.code
+            body          = exc.read()
+            status        = exc.code
             request_error = f"HTTPError: {exc.code} {exc.reason}"
         except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
             return {
@@ -209,7 +213,7 @@ def _reply_text(result: ProbeResult) -> str:
     for action in actions:
         if not isinstance(action, dict):
             continue
-        params = action.get("params")
+        params  = action.get("params")
         message = params.get("message") if isinstance(params, dict) else None
         if isinstance(message, str):
             chunks.append(message)
@@ -226,36 +230,38 @@ def _reply_text(result: ProbeResult) -> str:
 
 
 def _automatic_checks(case_id: str, reply: str) -> dict[str, bool]:
-    lowered = reply.casefold()
-    checks = {
-        "has_reply": bool(reply),
-        "concise": 0 < len(reply) <= 256,
-        "no_ai_self_label": not any(
-            marker in lowered for marker in ("作为ai", "作为一个ai", "人工智能助手", "语言模型")
-        ),
-        "no_service_script": not any(
-            marker in reply for marker in ("有什么可以帮", "请问您", "希望以上")
-        ),
-    }
-    if case_id in {
-        "direct_without_question",
-        "playful_teasing",
-        "low_stakes_persona_story",
-    }:
-        checks["does_not_end_with_question"] = not reply.rstrip().endswith(("?", "？"))
+    """机器门禁仅检查响应存在与明确长度上限；语义由独立人工审阅。"""
+    return {"has_reply": bool(reply), "concise": 0 < len(reply) <= 256}
+
+
+def _semantic_review_material(
+    case_id: str, message: str, reply: str, *, prior_message: str = ""
+) -> dict[str, Any]:
+    """保留完整输入输出及待审标准，不使用生产规则生成语义结论。"""
+    criteria = ["回答切合当前输入，表达自然，事实与身份边界有依据"]
+    if case_id in {"direct_without_question", "playful_teasing", "low_stakes_persona_story"}:
+        criteria.append("遵守用户不追问的要求，检查整段回答中的直接及间接追问")
     if case_id == "third_party_boundary":
-        checks["does_not_assert_private_fact"] = not any(
-            marker in reply for marker in ("肯定失恋", "一定失恋", "就是失恋")
+        criteria.append(
+            "尊重第三方事实边界，保持未知与推测的确定性；普通可能性可用于说明证据不足，敏感状态和具体动机需要依据"
         )
-        hedge = any(
-            marker in reply for marker in ("可能", "也许", "大概", "估计", "没准", "说不定")
+    if case_id == "stale_topic":
+        criteria.extend(
+            [
+                "本轮没有图片附件，明确说明缺少图片且不臆造图像内容",
+                "聚焦当前话题，正确处理指代，完整检查旧话题是否被无故带回",
+            ]
         )
-        boundary = any(
-            marker in reply
-            for marker in ("不知道", "不清楚", "不确定", "判断不了", "没法判断", "不好说")
-        )
-        checks["does_not_replace_with_another_guess"] = not hedge or boundary
-    return checks
+    return {
+        "case_id": case_id,
+        "status": "pending",
+        "reviewer": None,
+        "verdict": None,
+        "criteria": criteria,
+        "message": message,
+        "prior_message": prior_message,
+        "reply": reply,
+    }
 
 
 def _cleanup(probe: EventProbe, *, user_id: int, group_id: int) -> dict[str, Any]:
@@ -263,9 +269,9 @@ def _cleanup(probe: EventProbe, *, user_id: int, group_id: int) -> dict[str, Any
 
     result = probe.send(
         "/xc reset confirm",
-        user_id=user_id,
-        group_id=group_id,
-        admin=True,
+        user_id  = user_id,
+        group_id = group_id,
+        admin    = True,
     )
     return {
         "status": result["status"],
@@ -282,7 +288,7 @@ def _wait_for_store(
 ) -> list[dict[str, Any]]:
     """等待 Core 权威 data_dir 中的会话快照原子发布完成。"""
 
-    path = data_dir / f"g{group_id}.json"
+    path     = data_dir / f"g{group_id}.json"
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
@@ -303,19 +309,19 @@ def _run_stale_topic_case(
 ) -> dict[str, Any]:
     """找到一次成功观测但未插话的旧消息，再验证当前回复不追旧话题。"""
 
-    old_message = "这包烟叼着确实挺有格调"
-    current_message = "小青，这个KIMI怎么蛤里蛤气的？只说当前这张图的话题。"
+    old_message                    = "这包烟叼着确实挺有格调"
+    current_message                = "小青，这个KIMI怎么蛤里蛤气的？只说当前这张图的话题。"
     attempts: list[dict[str, Any]] = []
     for attempt in range(1, 9):
-        group_id = base_group + attempt
-        user_id = 880_054_000 + attempt
+        group_id   = base_group + attempt
+        user_id    = 880_054_000 + attempt
         old_result = probe.send(
             old_message,
-            user_id=user_id,
-            group_id=group_id,
-            event_time=time.time() - 3 * 86400,
+            user_id    = user_id,
+            group_id   = group_id,
+            event_time = time.time() - 3 * 86400,
         )
-        old_reply = _reply_text(old_result)
+        old_reply                      = _reply_text(old_result)
         attempt_result: dict[str, Any] = {
             "attempt": attempt,
             "group_id": group_id,
@@ -329,19 +335,19 @@ def _run_stale_topic_case(
         if not old_request_ok or old_reply:
             attempt_result["cleanup"] = _cleanup(
                 probe,
-                user_id=user_id,
-                group_id=group_id,
+                user_id  = user_id,
+                group_id = group_id,
             )
             attempts.append(attempt_result)
             continue
 
         current_result = probe.send(
             current_message,
-            user_id=user_id,
-            group_id=group_id,
+            user_id  = user_id,
+            group_id = group_id,
         )
         current_reply = _reply_text(current_result)
-        stored = _wait_for_store(data_dir, group_id)
+        stored        = _wait_for_store(data_dir, group_id)
         serialized = json.dumps(stored, ensure_ascii=False)
         checks = {
             "old_request_ok": old_request_ok,
@@ -350,12 +356,6 @@ def _run_stale_topic_case(
                 current_result["status"] == 200 and current_result["error"] is None
             ),
             "current_turn_has_reply": bool(current_reply),
-            "reply_does_not_return_to_smoke": not any(
-                marker in current_reply for marker in ("烟", "叼着", "格调")
-            ),
-            "reply_addresses_current_topic": any(
-                marker in current_reply.casefold() for marker in ("kimi", "蛤")
-            ),
             "full_store_keeps_old_turn": old_message in serialized,
             "full_store_keeps_current_turn": "KIMI" in serialized,
         }
@@ -378,6 +378,9 @@ def _run_stale_topic_case(
             "error": current_result["error"],
             "latency_ms": current_result["latency_ms"],
             "checks": checks,
+            "semantic_review": _semantic_review_material(
+                "stale_topic", current_message, current_reply, prior_message=old_message
+            ),
             "cleanup": cleanup,
             "attempts": attempts,
             "all_requests_ok": all(
@@ -390,6 +393,9 @@ def _run_stale_topic_case(
     return {
         "attempt": None,
         "checks": {"found_non_reply_seed": False},
+        "semantic_review": _semantic_review_material(
+            "stale_topic", current_message, "", prior_message=old_message
+        ),
         "cleanup": {},
         "attempts": attempts,
         "all_requests_ok": all(
@@ -405,9 +411,9 @@ def _run_forced_cases(probe: EventProbe) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     for index, case in enumerate(CASES, 1):
         group_id = 972_232_000 + index
-        user_id = 880_053_000 + index
+        user_id  = 880_053_000 + index
         response = probe.send(case.message, user_id=user_id, group_id=group_id)
-        reply = _reply_text(response)
+        reply  = _reply_text(response)
         result = {
             "case_id": case.case_id,
             "message": case.message,
@@ -416,6 +422,7 @@ def _run_forced_cases(probe: EventProbe) -> list[dict[str, Any]]:
             "error": response["error"],
             "latency_ms": response["latency_ms"],
             "checks": _automatic_checks(case.case_id, reply),
+            "semantic_review": _semantic_review_material(case.case_id, case.message, reply),
             "cleanup": _cleanup(probe, user_id=user_id, group_id=group_id),
         }
         results.append(result)
@@ -427,20 +434,23 @@ def _run_participation_case(probe: EventProbe) -> dict[str, Any]:
     """最多发送三条低风险群聊线索，验证小青能否自主参与。"""
 
     attempts: list[dict[str, Any]] = []
-    participation_reply = ""
+    participation_reply            = ""
+    message                        = "有没有人懂，修一个 bug 又冒出三个，代码在跟我搞人口普查"
     for attempt in range(1, 4):
         group_id = 972_233_000 + attempt
-        user_id = 880_055_000 + attempt
+        user_id  = 880_055_000 + attempt
         response = probe.send(
-            "有没有人懂，修一个 bug 又冒出三个，代码在跟我搞人口普查",
-            user_id=user_id,
-            group_id=group_id,
+            message,
+            user_id  = user_id,
+            group_id = group_id,
         )
         reply = _reply_text(response)
         attempts.append(
             {
                 "attempt": attempt,
+                "message": message,
                 "reply": reply,
+                "semantic_review": _semantic_review_material("participation", message, reply),
                 "status": response["status"],
                 "error": response["error"],
                 "latency_ms": response["latency_ms"],
@@ -462,10 +472,10 @@ def _run_participation_case(probe: EventProbe) -> dict[str, Any]:
 def _run_quality_suite(probe: EventProbe, data_dir: Path) -> dict[str, Any]:
     """按固定顺序执行质量用例并生成可审计报告。"""
 
-    started_at = datetime.now(UTC).isoformat()
-    results = _run_forced_cases(probe)
+    started_at    = datetime.now(UTC).isoformat()
+    results       = _run_forced_cases(probe)
     participation = _run_participation_case(probe)
-    stale_topic = _run_stale_topic_case(probe, 972_234_000, data_dir)
+    stale_topic   = _run_stale_topic_case(probe, 972_234_000, data_dir)
 
     question_endings = sum(
         result["reply"].rstrip().endswith(("?", "？")) for result in results if result["reply"]
@@ -476,15 +486,15 @@ def _run_quality_suite(probe: EventProbe, data_dir: Path) -> dict[str, Any]:
         result["status"] == 200 and result["error"] is None for result in results
     )
     forced_cleanups_ok = all(result["cleanup"]["ok"] for result in results)
-    all_requests_ok = (
+    all_requests_ok    = (
         forced_requests_ok and participation["all_requests_ok"] and stale_topic["all_requests_ok"]
     )
     all_cleanups_ok = (
         forced_cleanups_ok and participation["all_cleanups_ok"] and stale_topic["all_cleanups_ok"]
     )
-    forced_replies = sum(bool(result["reply"]) for result in results)
+    forced_replies            = sum(bool(result["reply"]) for result in results)
     all_machine_checks_passed = all(all_checks)
-    gate_passed = (
+    gate_passed               = (
         forced_replies == len(results)
         and all_machine_checks_passed
         and participation["replied_within_three_cues"]
@@ -494,6 +504,11 @@ def _run_quality_suite(probe: EventProbe, data_dir: Path) -> dict[str, Any]:
     finished_at = datetime.now(UTC).isoformat()
     return {
         "schema_version": 2,
+        "schema_notes": "schema 2 additive fields; gate_passed aliases machine_gate_passed; semantic checks require independent human review",
+        "semantic_review_required": True,
+        "semantic_review_status": "pending",
+        "semantic_acceptance_passed": None,
+        "machine_gate_passed": gate_passed,
         "started_at": started_at,
         "finished_at": finished_at,
         "generated_at": finished_at,
@@ -524,23 +539,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--secrets", type=Path, default=DEFAULT_SECRETS)
     parser.add_argument(
         "--chat-data-dir",
-        type=Path,
-        default=DEFAULT_CHAT_DATA_DIR,
-        help="xiaoqing_chat 的 Core 权威 data_dir；默认 data/xiaoqing_chat",
+        type    = Path,
+        default = DEFAULT_CHAT_DATA_DIR,
+        help    = "xiaoqing_chat 的 Core 权威 data_dir；默认 data/xiaoqing_chat",
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--timeout", type=float, default=60.0)
     parser.add_argument(
         "--message-id-seed",
-        type=int,
-        help="固定 OneBot message_id 起点以复现实验；默认使用当前微秒时间",
+        type = int,
+        help = "固定 OneBot message_id 起点以复现实验；默认使用当前微秒时间",
     )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args   = parser.parse_args(argv)
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("--timeout 必须是正数")
     if args.message_id_seed is not None and args.message_id_seed <= 0:
@@ -558,19 +573,20 @@ def main(argv: list[str] | None = None) -> int:
 
     token, admin_id = _load_auth(args.secrets.resolve())
     message_id_seed = args.message_id_seed or time.time_ns() // 1_000
-    probe = EventProbe(
-        endpoint=args.endpoint,
-        token=token,
-        admin_id=admin_id,
-        timeout=args.timeout,
-        message_id_seed=message_id_seed,
+    probe           = EventProbe(
+        endpoint        = args.endpoint,
+        token           = token,
+        admin_id        = admin_id,
+        timeout         = args.timeout,
+        message_id_seed = message_id_seed,
     )
     report = _run_quality_suite(probe, data_dir)
     with args.output.open("x", encoding="utf-8") as report_file:
         report_file.write(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     print(f"report={args.output.resolve()}")
     gate_passed = bool(report["gate_passed"])
-    print(f"gate_passed={gate_passed}")
+    print(f"machine_gate_passed={gate_passed}")
+    print("semantic_review_required=True; semantic_acceptance=pending")
     return 0 if gate_passed else 1
 
 

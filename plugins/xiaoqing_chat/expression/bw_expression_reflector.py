@@ -68,9 +68,9 @@ async def maybe_ask_for_reflection(
     if not operator_user_id and not operator_group_id:
         return 0
     data_dir: Path = context.data_dir
-    st = _load_state(data_dir)
-    last_sent = float(st.get("last_sent_ts", 0.0) or 0.0)
-    now = time.time()
+    st             = _load_state(data_dir)
+    last_sent      = float(st.get("last_sent_ts", 0.0) or 0.0)
+    now            = time.time()
     if min_interval_seconds > 0 and now - last_sent < float(min_interval_seconds):
         return 0
 
@@ -95,18 +95,18 @@ async def maybe_ask_for_reflection(
             "- 不行 / 拒绝\n"
             "- 按‘情景改成… 风格改成…’给修改意见\n"
         ).strip()
-        segs = segments([text(msg)])
+        segs   = segments([text(msg)])
         action = build_action(
             segs,
-            user_id=int(operator_user_id) if operator_user_id else None,
-            group_id=int(operator_group_id) if operator_group_id else None,
+            user_id  = int(operator_user_id) if operator_user_id else None,
+            group_id = int(operator_group_id) if operator_group_id else None,
         )
         if action:
             confirm = partial(tracker_store.set_tracker, op_chat_id, ex.expression_id)
             receipt = DeliveryReceipt(
-                expected_actions=1,
-                commit=confirm,
-                rollback=lambda: None,
+                expected_actions = 1,
+                commit           = confirm,
+                rollback         = lambda: None,
                 # 审查提示若可能已经送达，就登记 tracker，避免重复追问同一条表达。
                 unknown=confirm,
             )

@@ -11,16 +11,16 @@ from .database import Database
 _ITEMS: Mapping[str, Item] = MappingProxyType(
     {
         item_id: Item(
-            name=data["name"],
-            item_type=data["type"],
-            rarity=data["rarity"],
-            price=data["price"],
-            hunger_gain=data.get("hunger_gain", 0),
-            mood_gain=data.get("mood_gain", 0),
-            health_gain=data.get("health_gain", 0),
-            clean_gain=data.get("clean_gain", 0),
-            exp_gain=data.get("exp_gain", 0),
-            trustee_hours=data.get("trustee_hours", 0),
+            name          = data["name"],
+            item_type     = data["type"],
+            rarity        = data["rarity"],
+            price         = data["price"],
+            hunger_gain   = data.get("hunger_gain", 0),
+            mood_gain     = data.get("mood_gain", 0),
+            health_gain   = data.get("health_gain", 0),
+            clean_gain    = data.get("clean_gain", 0),
+            exp_gain      = data.get("exp_gain", 0),
+            trustee_hours = data.get("trustee_hours", 0),
         )
         for item_id, data in DEFAULT_ITEMS.items()
     }

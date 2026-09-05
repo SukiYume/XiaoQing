@@ -205,8 +205,8 @@ class TestQingsshPluginJson:
         """清单触发词和定时入口必须与实际导出保持一致。"""
         plugin_json = ROOT / "plugins" / "qingssh" / "plugin.json"
         content = json.loads(plugin_json.read_text(encoding="utf-8"))
-        commands = content["commands"]
-        main_names = {command["name"] for command in commands[:1]}
+        commands     = content["commands"]
+        main_names   = {command["name"] for command in commands[:1]}
         legacy_names = {command["name"] for command in commands[1:]}
 
         assert main_names == qingssh_main._MAIN_COMMANDS
@@ -254,7 +254,7 @@ class TestQingsshPathResolver:
 
     def test_build_command_with_cwd(self):
         """测试有 CWD 时的命令构建"""
-        pr = self._import_path_resolver()
+        pr     = self._import_path_resolver()
         result = pr.build_command("ls", "/home/user/data")
         assert result == "cd /home/user/data && ls"
 
@@ -268,14 +268,14 @@ class TestQingsshPathResolver:
         assert result == "cd /tmp && printf '%s%s\\n' '__XQ_CWD__' \"$(pwd -P)\""
 
         # cd 有 CWD
-        cwd = "/home/user/low.iops.files"
+        cwd    = "/home/user/low.iops.files"
         result = pr.build_command("cd FRB121102", cwd)
         assert result == (
             f"cd {shlex.quote(cwd)} && cd FRB121102 && printf '%s%s\\n' '__XQ_CWD__' \"$(pwd -P)\""
         )
 
         # bare cd 有 CWD
-        cwd2 = "/home/user/data"
+        cwd2   = "/home/user/data"
         result = pr.build_command("cd", cwd2)
         assert result == (
             f"cd {shlex.quote(cwd2)} && cd && printf '%s%s\\n' '__XQ_CWD__' \"$(pwd -P)\""
@@ -287,7 +287,7 @@ class TestQingsshPathResolver:
         pr = self._import_path_resolver()
         import shlex
 
-        cwd = "/home/user"
+        cwd    = "/home/user"
         result = pr.build_command("echo $FOO", cwd, {"FOO": "bar"})
         assert f"cd {shlex.quote(cwd)}" in result
         assert "export FOO=" in result

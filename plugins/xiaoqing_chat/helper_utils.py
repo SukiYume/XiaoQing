@@ -25,7 +25,7 @@ def _get_lock(chat_id: str):
 def _chat_id(event: dict[str, Any]) -> str:
     """从 OneBot 事件提取统一会话 ID：群聊以 g 开头，私聊以 u 开头。"""
     group_id = event.get("group_id")
-    user_id = event.get("user_id")
+    user_id  = event.get("user_id")
     if group_id not in (None, ""):
         return f"g{group_id}"
     if user_id not in (None, ""):
@@ -70,11 +70,11 @@ def _has_bot_name(event: dict[str, Any], bot_name: str) -> bool:
 
 def _load_runtime(context: Any) -> _ChatRuntime:
     """加载或返回缓存的运行配置，并按实际加载优先级监听配置文件。"""
-    settings = context.get_settings_snapshot()
+    settings         = context.get_settings_snapshot()
     plugin_dir: Path = context.plugin_dir
-    config_key = str(plugin_dir)
+    config_key       = str(plugin_dir)
     # 监听器必须观察加载器实际读取的路径；config/ 子目录优先于插件根目录。
-    config_path_sub = plugin_dir / "config" / "xiaoqing_config.json"
+    config_path_sub  = plugin_dir / "config" / "xiaoqing_config.json"
     config_path_root = plugin_dir / "xiaoqing_config.json"
     if config_path_sub.exists():
         config_path = config_path_sub
@@ -84,7 +84,7 @@ def _load_runtime(context: Any) -> _ChatRuntime:
         config_path = config_path_sub  # 文件尚不存在时仍监听约定路径。
     mtime = config_path.stat().st_mtime_ns if config_path.exists() else -1
 
-    state = _state()
+    state  = _state()
     cached = state.get_runtime(config_key)
     if (
         cached is not None
@@ -105,10 +105,10 @@ def _load_runtime(context: Any) -> _ChatRuntime:
     from .memory.knowledge_base import ensure_knowledge_index
 
     ensure_knowledge_index(
-        memory_db=state.memory_db,
-        data_dir=context.data_dir,
-        plugin_dir=plugin_dir,
-        files=cfg.knowledge.files if cfg.knowledge.enable_knowledge else (),
+        memory_db  = state.memory_db,
+        data_dir   = context.data_dir,
+        plugin_dir = plugin_dir,
+        files      = cfg.knowledge.files if cfg.knowledge.enable_knowledge else (),
     )
     state.set_runtime(config_key, runtime, mtime, settings.revision)
     return runtime
@@ -123,7 +123,7 @@ def _get_ai_route_context(context: Any, *, chat_id: str | None = None) -> dict[s
     """
 
     capabilities = getattr(context, "capabilities", None)
-    ai_service = getattr(capabilities, "ai", None)
+    ai_service   = getattr(capabilities, "ai", None)
     if ai_service is None:
         return {
             "model": "",
@@ -136,16 +136,16 @@ def _get_ai_route_context(context: Any, *, chat_id: str | None = None) -> dict[s
         }
 
     model_infos = ai_service.list_models("chat")
-    by_profile = {item.name: item for item in model_infos}
+    by_profile  = {item.name: item for item in model_infos}
 
-    plugin_config = context.get_settings_snapshot().plugin_config("xiaoqing_chat")
-    ai_config = plugin_config.get("ai", {}) if isinstance(plugin_config, Mapping) else {}
+    plugin_config  = context.get_settings_snapshot().plugin_config("xiaoqing_chat")
+    ai_config      = plugin_config.get("ai", {}) if isinstance(plugin_config, Mapping) else {}
     aliases_config = ai_config.get("model_aliases", {}) if isinstance(ai_config, Mapping) else {}
 
     aliases: dict[str, str] = {}
     if isinstance(aliases_config, Mapping):
         for raw_alias, raw_profile in aliases_config.items():
-            alias = str(raw_alias or "").strip()
+            alias   = str(raw_alias or "").strip()
             profile = str(raw_profile or "").strip()
             if alias and profile in by_profile and alias not in aliases:
                 aliases[alias] = profile
@@ -170,17 +170,17 @@ def _get_ai_route_context(context: Any, *, chat_id: str | None = None) -> dict[s
         else ""
     )
     if configured_default not in providers:
-        primary_profile = model_infos[0].name if model_infos else ""
+        primary_profile    = model_infos[0].name if model_infos else ""
         configured_default = next(
             (alias for alias, profile in aliases.items() if profile == primary_profile),
             "",
         )
 
-    state = _state()
-    active = state.resolve_provider_name(chat_id, list(providers), configured_default)
-    active_config = providers.get(active, {})
-    local_override = state.get_chat_provider(chat_id) if chat_id is not None else None
-    global_override = state.global_active_provider
+    state                = _state()
+    active               = state.resolve_provider_name(chat_id, list(providers), configured_default)
+    active_config        = providers.get(active, {})
+    local_override       = state.get_chat_provider(chat_id) if chat_id is not None else None
+    global_override      = state.global_active_provider
     is_explicit_override = active in {local_override, global_override}
 
     return {
@@ -202,20 +202,20 @@ def _resolve_llm_config(
 ) -> LLMCallConfig:
     """解析插件行为配置中的超时、重试和生成参数。"""
     if foreground:
-        timeout = cfg.foreground_timeout_seconds
-        max_retry = cfg.foreground_max_retry
+        timeout        = cfg.foreground_timeout_seconds
+        max_retry      = cfg.foreground_max_retry
         retry_interval = cfg.foreground_retry_interval_seconds
     else:
-        timeout = cfg.background_timeout_seconds
-        max_retry = cfg.background_max_retry
+        timeout        = cfg.background_timeout_seconds
+        max_retry      = cfg.background_max_retry
         retry_interval = cfg.background_retry_interval_seconds
     return LLMCallConfig(
-        timeout_seconds=timeout,
-        max_retry=max_retry,
-        retry_interval_seconds=retry_interval,
-        temperature=float(cfg.temperature),
-        top_p=float(cfg.top_p),
-        max_tokens=int(cfg.max_tokens),
+        timeout_seconds        = timeout,
+        max_retry              = max_retry,
+        retry_interval_seconds = retry_interval,
+        temperature            = float(cfg.temperature),
+        top_p                  = float(cfg.top_p),
+        max_tokens             = int(cfg.max_tokens),
     )
 
 
@@ -258,7 +258,7 @@ def _replace_local_ids_with_text(chat_id: str, text: str, *, bot_name: str) -> s
 
     def _repl(match: re.Match[str]) -> str:
         local_id = match.group(0)
-        msg = _find_by_local_id(chat_id, local_id)
+        msg      = _find_by_local_id(chat_id, local_id)
         if msg:
             role_text = "对方" if msg.role == "user" else resolve_bot_name(bot_name)
             return f"{role_text}说过"

@@ -109,14 +109,14 @@ def _plugin_context_for(
     app: XiaoQingApp,
     plugin_name: str,
     *,
-    user_id: int | None = None,
-    group_id: int | None = None,
-    principal: PluginPrincipal | None = None,
+    user_id: int | None                   = None,
+    group_id: int | None                  = None,
+    principal: PluginPrincipal | None     = None,
     manifest_capabilities: frozenset[str] = frozenset(),
-    uses_services: frozenset[str] = frozenset(),
+    uses_services: frozenset[str]         = frozenset(),
 ):
     plugin_dir = app.root / "plugins" / plugin_name
-    data_dir = app.root / "data" / plugin_name
+    data_dir   = app.root / "data" / plugin_name
     data_dir.mkdir(parents=True, exist_ok=True)
     return app._build_plugin_context(
         plugin_name,
