@@ -4,6 +4,12 @@
 
 ## 下一版本
 
+## 4.3.1 — 2026-09-05
+
+- 为 Windows Job 构造器添加显式平台边界，使 Linux 类型检查正确处理 Windows 专用 API。
+- 更正 checker 路由配置路径为 `plugins.xiaoqing_chat.ai.routes.checker`。
+- `4.3.0` 标签的 Linux 类型检查未通过，生产发布使用修复后的版本。
+
 ## 4.3.0 — 2026-09-05
 
 ### 聊天提示词与语义检查收敛
