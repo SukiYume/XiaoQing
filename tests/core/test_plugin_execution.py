@@ -377,7 +377,18 @@ async def test_sync_timeout_tracks_real_future_and_close_reports_undrained_work(
 
 
 @pytest.mark.asyncio
-async def test_late_sync_fatal_is_retained_until_gate_drain() -> None:
+async def test_late_sync_fatal_is_retained_until_gate_drain(monkeypatch) -> None:
+    # 手动安排真实 asyncio 超时，只让计时起点依赖线程启动事件。
+    real_timeout = asyncio.timeout
+    deadlines    = []
+
+    def controlled_timeout(delay):
+        assert 0 < delay <= 0.01
+        deadline = real_timeout(None)
+        deadlines.append(deadline)
+        return deadline
+
+    monkeypatch.setattr("core.plugin_execution.asyncio.timeout", controlled_timeout)
     gate = PluginExecutionGate(
         "sequential",
         plugin_name = "late-sync-fatal",
@@ -397,11 +408,16 @@ async def test_late_sync_fatal_is_retained_until_gate_drain() -> None:
         finished.set()
         raise expected
 
-    with pytest.raises(PluginExecutionTimeout):
-        await gate.run(lambda: call_plugin_callback(blocking_callback))
-    assert started.is_set()
-
-    release.set()
+    running = asyncio.create_task(gate.run(lambda: call_plugin_callback(blocking_callback)))
+    try:
+        assert await asyncio.to_thread(started.wait, 1)
+        assert len(deadlines) == 1
+        deadlines[0].reschedule(asyncio.get_running_loop().time())
+        with pytest.raises(PluginExecutionTimeout):
+            await running
+        assert gate.pending_sync_callbacks == 1
+    finally:
+        release.set()
     assert await asyncio.to_thread(finished.wait, 1)
     result = await gate.close()
 

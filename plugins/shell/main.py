@@ -519,6 +519,7 @@ async def _execute_command(args: list[str], timeout: float) -> tuple[int, str, s
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("command timeout must be finite and positive")
     proc, windows_job = await _spawn_owned_command(args)
+    command_deadline = asyncio.get_running_loop().time() + timeout
 
     overflow       = asyncio.Event()
     captured_bytes = 0
@@ -574,9 +575,18 @@ async def _execute_command(args: list[str], timeout: float) -> tuple[int, str, s
         if status != 0 and windows_job is not None:
             windows_job.close()
         try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                asyncio.gather(stdout_task, stderr_task), timeout=_PROCESS_STOP_TIMEOUT
+            # 父进程可能先于 wait 任务退出；继承管道的子进程仍受原命令预算约束。
+            # 已触发终止时使用独立收尾预算，正常路径不能额外获得五秒执行时间。
+            drain_timeout = (
+                _PROCESS_STOP_TIMEOUT
+                if status != 0
+                else min(
+                    _PROCESS_STOP_TIMEOUT,
+                    max(0.0, command_deadline - asyncio.get_running_loop().time()),
+                )
             )
+            async with asyncio.timeout(drain_timeout):
+                stdout_bytes, stderr_bytes = await asyncio.gather(stdout_task, stderr_task)
         except TimeoutError:
             if windows_job is not None:
                 windows_job.close()
