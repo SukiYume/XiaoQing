@@ -3,6 +3,7 @@ Tests for core/metrics.py - MetricsCollector and related classes
 """
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -438,14 +439,19 @@ async def test_timed_async_decorator_records_and_propagates_cancellation():
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_execution_timer():
+async def test_execution_timer(monkeypatch):
     """Test ExecutionTimer context manager"""
     collector = MetricsCollector()
+    # 使用可控的高精度时钟验证差值，事件循环的唤醒精度独立于此计时契约。
+    ticks = iter((10.0, 10.125))
+    monkeypatch.setattr(
+        "core.metrics.time", SimpleNamespace(perf_counter=lambda: next(ticks), time=lambda: 1000.0)
+    )
 
     async with ExecutionTimer(collector, "test_plugin", "test_cmd") as timer:
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0)
 
-    assert timer.duration >= 0.1
+    assert timer.duration == 0.125
 
     stats = await collector.get_plugin_stats("test_plugin")
     assert stats["total_calls"] == 1
