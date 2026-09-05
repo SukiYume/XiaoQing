@@ -51,6 +51,9 @@ class WindowsJob:
     """关闭句柄时收敛整个命令树，父命令提前退出后仍保留归属。"""
 
     def __init__(self, pid: int) -> None:
+        # 平台边界同时约束运行调用与静态检查，Windows API 仅在对应平台可用。
+        if sys.platform != "win32":
+            raise OSError("Windows Job objects require Windows")
         kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         self._kernel                            = kernel
         kernel.CreateJobObjectW.argtypes        = [ctypes.c_void_p, wintypes.LPCWSTR]
@@ -87,6 +90,8 @@ class WindowsJob:
                 kernel.CloseHandle(process)
 
     def close(self) -> None:
+        if sys.platform != "win32":
+            return
         if self._handle:
             self._kernel.CloseHandle(self._handle)
             self._handle = None
