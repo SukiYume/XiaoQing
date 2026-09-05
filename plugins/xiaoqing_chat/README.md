@@ -262,7 +262,7 @@ python main.py
 
 `model_aliases` 为 `/xc model` 提供管理员可选名称。每条 route 按 `models` 顺序执行回退。Core AI capability 负责凭据、传输、超时、重试和 profile 切换。
 
-发行配置在 `checker` 路由使用 `request_defaults.thinking.type=disabled`，覆盖该路由内模型的思考默认值。已有部署需在 `config/config.json` 的 `ai.plugins.xiaoqing_chat.routes.checker` 中设置该项；生产同步保留已有配置。其他路由继续使用各自设置。
+发行配置在 `checker` 路由使用 `request_defaults.thinking.type=disabled`，覆盖该路由内模型的思考默认值。已有部署需在 `config/config.json` 的 `plugins.xiaoqing_chat.ai.routes.checker` 中设置该项；生产同步保留已有配置。其他路由继续使用各自设置。
 
 缺少图片或解析失败时，回复说明画面不可用；依据用户文字评价时明确来源。文字配文、翻译和编程任务可以直接完成。checker 同时检查视觉事实与是否暗示看过未知画面，配文中的比喻和拟人保持创作性质。
 
