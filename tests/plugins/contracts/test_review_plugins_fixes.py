@@ -95,8 +95,26 @@ def test_review_adnmb_malformed_html_is_bounded():
     assert Post.from_json({"content": "a<b>c</b>"}).content == "ac"
 
 
-def test_review_shell_timeout_reaps_inherited_pipe_child(tmp_path):
-    from plugins.shell.main import _execute_command
+@pytest.mark.parametrize("parent_exits_before_wait", [False, True])
+def test_review_shell_timeout_reaps_inherited_pipe_child(
+    tmp_path, monkeypatch, parent_exits_before_wait
+):
+    from plugins.shell import main as shell
+
+    if parent_exits_before_wait and sys.platform == "win32":
+        pytest.skip("POSIX parent-exit scheduling regression")
+    if parent_exits_before_wait:
+        original_spawn = shell._spawn_owned_command
+
+        async def spawn_after_parent_exit(args):
+            proc, job = await original_spawn(args)
+            # 保留真实进程与继承管道，仅固定父退出早于 wait 任务创建的竞态顺序。
+            async with asyncio.timeout(0.5):
+                while proc.returncode is None:
+                    await asyncio.sleep(0.001)
+            return proc, job
+
+        monkeypatch.setattr(shell, "_spawn_owned_command", spawn_after_parent_exit)
 
     marker = tmp_path / "escaped.txt"
     child  = (
@@ -108,7 +126,7 @@ def test_review_shell_timeout_reaps_inherited_pipe_child(tmp_path):
 
     async def exercise():
         start = time.monotonic()
-        code, _stdout, _stderr = await _execute_command([sys.executable, "-c", parent], 0.2)
+        code, _stdout, _stderr = await shell._execute_command([sys.executable, "-c", parent], 0.2)
         assert code == -1
         assert time.monotonic() - start < 0.9
         await asyncio.sleep(1.05)
