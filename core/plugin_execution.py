@@ -1041,10 +1041,9 @@ class PluginExecutionGate:
             else:
                 if timeout_seconds <= 0:
                     raise TimeoutError
-                result = await asyncio.wait_for(
-                    asyncio.shield(task),
-                    timeout=timeout_seconds,
-                )
+                # 当前任务内计时，保留外部取消与子任务同轮完成时的取消优先语义。
+                async with asyncio.timeout(timeout_seconds):
+                    result = await asyncio.shield(task)
         except TimeoutError as exc:
             await self._record_failure(force_open=True)
             self._detached_operation_tasks.add(task)
@@ -1131,7 +1130,8 @@ class PluginExecutionGate:
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
                             raise TimeoutError
-                        await asyncio.wait_for(asyncio.shield(waiter.ready), timeout=remaining)
+                        async with asyncio.timeout(remaining):
+                            await asyncio.shield(waiter.ready)
                     granted = waiter.granted
                 except TimeoutError as exc:
                     await self._remove_or_release_waiter(waiter)

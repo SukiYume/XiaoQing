@@ -179,6 +179,23 @@ async def test_close_cancels_active_and_queued_work_then_rejects_new_work():
 
 
 @pytest.mark.asyncio
+async def test_callback_completion_does_not_consume_same_turn_caller_cancellation():
+    gate   = PluginExecutionGate("sequential")
+    caller = None
+
+    async def completes_while_cancelled():
+        # 回调完成与调用方取消发生在同一轮，调用方必须观察到取消。
+        caller.cancel()
+        return "completed"
+
+    caller = asyncio.create_task(gate.run(completes_while_cancelled))
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    assert caller.cancelled()
+    assert (await gate.close()).drained
+
+
+@pytest.mark.asyncio
 async def test_timeout_cancels_callback_and_opens_circuit():
     gate = PluginExecutionGate(
         "parallel",

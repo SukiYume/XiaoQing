@@ -1386,7 +1386,9 @@ class OneBotWsClient:
         try:
             while True:
                 # 等待事件，最多等待 1 秒
-                queued = await asyncio.wait_for(queue.get(), timeout=1.0)
+                # 在当前任务内计时，避免 Python 3.11 的 wait_for 在取到事件的同轮吞掉取消。
+                async with asyncio.timeout(1.0):
+                    queued = await queue.get()
                 if not isinstance(queued, _QueuedOneBotEvent):
                     logger.warning("Dropping OneBot queue item without an auth generation")
                     self._queue_last_activity[key] = time.time()
