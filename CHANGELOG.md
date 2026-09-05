@@ -8,6 +8,7 @@
 
 - 为 Windows Job 构造器添加显式平台边界，使 Linux 类型检查正确处理 Windows 专用 API。
 - 修复 Python 3.11 中取消与操作完成同轮发生时的传播竞态，覆盖插件执行器、OneBot 队列、Minecraft RCON 与 SSH 通道所有权。
+- 将 Shell 继承管道的读取纳入原命令预算，父进程先退出时仍按时回收子进程；限制 Coze 请求预算的浮点上溢，并使用显式同步验证线程迟到异常。
 - 更正 checker 路由配置路径为 `plugins.xiaoqing_chat.ai.routes.checker`。
 - `4.3.0` 标签的 Linux 类型检查未通过，生产发布使用修复后的版本。
 

@@ -336,7 +336,8 @@ async def _request_coze_json_before_deadline(
 ) -> dict[str, Any] | None:
     """用整轮剩余预算同时约束 aiohttp 和不遵守参数的替代实现。"""
 
-    remaining = deadline - asyncio.get_running_loop().time()
+    # 截止时刻相减可能产生浮点舍入误差，单次请求始终受配置上限约束。
+    remaining = min(REQUEST_TIMEOUT, deadline - asyncio.get_running_loop().time())
     if remaining <= 0:
         raise TimeoutError
     return await asyncio.wait_for(
