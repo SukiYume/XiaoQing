@@ -568,7 +568,7 @@ async def test_execution_broker_closes_only_after_runtimes_and_rebuilds_lazily(
 async def test_unload_reuses_one_deadline_for_both_generation_drains(tmp_path: Path, monkeypatch):
     # 只控制卸载器的时钟，验证剩余预算递减，避免平台计时精度影响 5ms 等待。
     elapsed = 0.0
-    clock   = Mock(spec=["monotonic"], monotonic=lambda: elapsed)
+    clock = Mock(spec=["monotonic"], monotonic=lambda: elapsed)
     monkeypatch.setattr("core.plugin_generation.time", clock)
     monkeypatch.setattr("core.plugin_runtime.time", clock)
     manager                  = _build_manager(tmp_path)

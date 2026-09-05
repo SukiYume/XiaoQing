@@ -2,6 +2,8 @@
 
 import ast
 
+import pytest
+
 from scripts.format_code import align_assignments, align_script
 
 
@@ -38,3 +40,22 @@ def test_javascript_template_text_is_excluded_from_alignment():
 def test_shell_assignments_keep_required_no_space_syntax():
     source = "a=1\nlong_name=2\n"
     assert align_script(source, ".sh") == source
+
+
+@pytest.mark.parametrize("absolute", [False, True])
+def test_check_reports_unformatted_explicit_path_without_mutation(
+    tmp_path, monkeypatch, capsys, absolute
+):
+    from scripts.format_code import main
+
+    # 相对路径和仓库外的显式路径均应报告格式差异，文件内容保持原样。
+    source = "a=1\nlong_name=2\n"
+    path   = tmp_path / "sample.py"
+    path.write_text(source, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv", ["format_code.py", "--check", str(path) if absolute else path.name]
+    )
+    assert main() == 1
+    assert path.read_text(encoding="utf-8") == source
+    assert "sample.py" in capsys.readouterr().out
