@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -45,10 +45,10 @@ SAMPLE_TRENDING_HTML = """
 def context(tmp_path: Path) -> SimpleNamespace:
     return with_settings_reader(
         SimpleNamespace(
-            data_dir=tmp_path,
-            secrets={"plugins": {"github": {"proxy": ""}}},
-            http_session=None,
-            request_id="github-test",
+            data_dir     = tmp_path,
+            secrets      = {"plugins": {"github": {"proxy": ""}}},
+            http_session = None,
+            request_id   = "github-test",
         )
     )
 
@@ -60,25 +60,25 @@ def event() -> dict[str, Any]:
 
 def _safe_html(html: str, *, charset: str | None = "utf-8") -> SafeHttpResponse:
     return SafeHttpResponse(
-        url="https://github.com/trending?since=daily",
-        status=200,
-        body=html.encode("utf-8"),
-        charset=charset,
-        headers={"Content-Type": "text/html; charset=utf-8"},
+        url     = "https://github.com/trending?since=daily",
+        status  = 200,
+        body    = html.encode("utf-8"),
+        charset = charset,
+        headers = {"Content-Type": "text/html; charset=utf-8"},
     )
 
 
 def _bounded_html(html: str) -> BoundedHttpResponse:
     payload = html.encode("utf-8")
     return BoundedHttpResponse(
-        url="https://github.com/trending?since=daily",
-        status=200,
-        body=payload,
-        media_type="text/html",
-        charset="utf-8",
-        headers={"Content-Type": "text/html; charset=utf-8"},
-        wire_bytes=len(payload),
-        decoded_bytes=len(payload),
+        url           = "https://github.com/trending?since=daily",
+        status        = 200,
+        body          = payload,
+        media_type    = "text/html",
+        charset       = "utf-8",
+        headers       = {"Content-Type": "text/html; charset=utf-8"},
+        wire_bytes    = len(payload),
+        decoded_bytes = len(payload),
     )
 
 
@@ -165,13 +165,13 @@ async def test_direct_fetch_is_pinned_bounded_and_saved(context: SimpleNamespace
 @pytest.mark.asyncio
 async def test_proxy_fetch_uses_exact_bounded_transport(context: SimpleNamespace) -> None:
     context.secrets["plugins"]["github"]["proxy"] = "http://proxy.example:8080"
-    context.http_session = object()
+    context.http_session                          = object()
     fetch = AsyncMock(return_value=_bounded_html(SAMPLE_TRENDING_HTML))
     with patch.object(github, "aiohttp_request_bounded", new=fetch):
         result = await github._fetch_trending("daily", context)
 
     assert "octocat/Hello-World" in str(result)
-    args = fetch.await_args.args
+    args   = fetch.await_args.args
     kwargs = fetch.await_args.kwargs
     assert args[1:3] == ("GET", "https://github.com/trending?since=daily")
     assert kwargs["request_kwargs"] == {
@@ -185,7 +185,7 @@ async def test_proxy_fetch_uses_exact_bounded_transport(context: SimpleNamespace
 @pytest.mark.asyncio
 async def test_proxy_requires_http_session(context: SimpleNamespace) -> None:
     context.secrets["plugins"]["github"]["proxy"] = "http://proxy.example:8080"
-    result = await github._fetch_trending("daily", context)
+    result                                        = await github._fetch_trending("daily", context)
     assert "XQ-PLUGIN-UNEXPECTED" in str(result)
 
 
@@ -194,7 +194,7 @@ async def test_invalid_proxy_returns_actionable_configuration_error(
     context: SimpleNamespace,
 ) -> None:
     context.secrets["plugins"]["github"]["proxy"] = "ftp://proxy.example"
-    result = await github.handle("github", "", {}, context)
+    result                                        = await github.handle("github", "", {}, context)
     assert "代理" in str(result)
     assert "XQ-PLUGIN-UNEXPECTED" not in str(result)
 
@@ -355,8 +355,8 @@ def test_parse_uses_defaults_and_skips_bad_or_duplicate_paths() -> None:
 
 def test_parse_removes_hidden_content_controls_and_bounds_fields() -> None:
     description = "visible\x00" + "x" * 400
-    language = "Py\x7fthon"
-    html = f"""
+    language    = "Py\x7fthon"
+    html        = f"""
     <script>page secret</script>
     <article class="Box-row">
       <h2><a href="/owner/repo">owner/repo</a></h2>
@@ -393,7 +393,7 @@ def test_format_never_exceeds_onebot_text_budget() -> None:
     rendered = github._format_trending(
         repositories,
         "monthly",
-        now=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        now=datetime(2030, 1, 1, tzinfo=UTC),
     )
     assert len(rendered) <= MAX_MESSAGE_TEXT_LENGTH
     assert "GitHub 每月趋势" in rendered

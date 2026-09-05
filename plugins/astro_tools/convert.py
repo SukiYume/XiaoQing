@@ -39,7 +39,7 @@ def _handle_convert_sync(args: str, context: PluginContextProtocol) -> str:
             return "数值必须是有限数字"
 
         from_unit_str = parts[1]
-        to_unit_str = parts[2]
+        to_unit_str   = parts[2]
 
         # 扩展的单位映射
         unit_map = {
@@ -81,21 +81,21 @@ def _handle_convert_sync(args: str, context: PluginContextProtocol) -> str:
             "g": u.g,
         }
 
-        from_u = unit_map.get(from_unit_str.lower())
-        if from_u is None:
-            try:
-                from_u = u.Unit(from_unit_str)
-            except ValueError:
+        try:
+            from_u = u.Unit(from_unit_str)
+        except ValueError:
+            from_u = unit_map.get(from_unit_str.lower())
+            if from_u is None:
                 return (
                     f"不支持的源单位: {from_unit_str}\n\n"
                     f"支持标准单位符号 (如 m, s, kg) 及 astropy 单位字符串"
                 )
 
-        to_u = unit_map.get(to_unit_str.lower())
-        if to_u is None:
-            try:
-                to_u = u.Unit(to_unit_str)
-            except ValueError:
+        try:
+            to_u = u.Unit(to_unit_str)
+        except ValueError:
+            to_u = unit_map.get(to_unit_str.lower())
+            if to_u is None:
                 return (
                     f"不支持的目标单位: {to_unit_str}\n\n"
                     f"支持标准单位符号 (如 m, s, kg) 及 astropy 单位字符串"

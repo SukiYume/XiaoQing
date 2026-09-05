@@ -42,16 +42,16 @@ def _handle_redshift_sync(args: str, context: PluginContextProtocol) -> str:
         from astropy.cosmology import Planck18 as cosmo
 
         # 计算各种距离和时间
-        d_L = cosmo.luminosity_distance(z)
-        d_A = cosmo.angular_diameter_distance(z)
-        d_C = cosmo.comoving_distance(z)
+        d_L        = cosmo.luminosity_distance(z)
+        d_A        = cosmo.angular_diameter_distance(z)
+        d_C        = cosmo.comoving_distance(z)
         t_lookback = cosmo.lookback_time(z)
-        age_at_z = cosmo.age(z)
+        age_at_z   = cosmo.age(z)
 
         # 低于 1000 Mpc 时保留 Mpc，避免把近邻天体显示成难读的 0.00x Gpc。
-        distance_unit = u.Mpc if d_L.to_value(u.Mpc) < 1000 else u.Gpc
+        distance_unit      = u.Mpc if d_L.to_value(u.Mpc) < 1000 else u.Gpc
         distance_precision = 3 if distance_unit == u.Mpc else 4
-        result_lines = [
+        result_lines       = [
             "🌌 红移计算 (Planck 2018)",
             "",
             f"**输入红移: z = {z}**",

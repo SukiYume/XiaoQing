@@ -20,7 +20,7 @@ from .event_media_common import _SUPPORTED_IMAGE_SUFFIXES
 from .qq_face_catalog import QQFaceEntry, load_qq_face_catalog
 
 MediaMarkerKind = Literal["emoji", "qq_face", "image"]
-T = TypeVar("T")
+T               = TypeVar("T")
 
 _OUTBOUND_MARKER_RE = re.compile(r"\[想发(表情|QQ表情|图片)[:：]([^\]\n]{1,12})\]")
 _OUTBOUND_MARKER_RESIDUE_RE = re.compile(r"\[想发[^\]\n]*(?:\]|$)")
@@ -63,8 +63,8 @@ class ResolvedMarker:
 def parse_marker(text: str) -> ParsedMarker | None:
     """解析第一条当前 marker；渲染格式只作为模型偏差的安全归一化入口。"""
 
-    raw_text = str(text or "")
-    match = _OUTBOUND_MARKER_RE.search(raw_text)
+    raw_text        = str(text or "")
+    match           = _OUTBOUND_MARKER_RE.search(raw_text)
     rendered_format = match is None
     if match is None:
         # 模型偶尔会直接输出渲染格式；识别后仍走同一候选授权流程，不能把内部标记
@@ -73,7 +73,7 @@ def parse_marker(text: str) -> ParsedMarker | None:
         if match is None:
             return None
     label = str(match.group(1) or "").strip()
-    hint = str(match.group(2) or "").strip()
+    hint  = str(match.group(2) or "").strip()
     if rendered_format:
         hint = re.split(r"[；;]", hint, maxsplit=1)[0].strip()
     kind = _MARKER_KIND_BY_LABEL.get(label)
@@ -90,9 +90,9 @@ def _clean_stripped_text(text: str) -> str:
 
 def strip_marker(text: str, span: tuple[int, int]) -> str:
     start, end = span
-    raw = str(text or "")
+    raw   = str(text or "")
     start = max(0, min(int(start), len(raw)))
-    end = max(start, min(int(end), len(raw)))
+    end   = max(start, min(int(end), len(raw)))
     return _clean_stripped_text(raw[:start] + raw[end:])
 
 
@@ -113,7 +113,7 @@ def tokenize_media_text(value: str, *, pattern: str = _TOKEN_PATTERN) -> list[st
     raw = str(value or "").lower()
     if not raw:
         return []
-    tokens = re.findall(pattern, raw)
+    tokens             = re.findall(pattern, raw)
     ordered: list[str] = []
     for token in tokens:
         cleaned = token.strip()
@@ -140,8 +140,8 @@ def find_candidate_by_hint(
         if any(lowered_hint == key.lower() for key in keys if key):
             return entry
 
-    compact_hint = re.sub(r"\s+", "", lowered_hint)
-    hint_tokens = tokenize_media_text(normalized_hint)
+    compact_hint                 = re.sub(r"\s+", "", lowered_hint)
+    hint_tokens                  = tokenize_media_text(normalized_hint)
     best: tuple[float, T] | None = None
     for entry in candidates:
         for key in key_fn(entry):
@@ -163,7 +163,7 @@ def _resolve_authorized_image_path(data_root: Path, raw_path: str | Path) -> Pat
     """解析真实图片文件，并拒绝 data 根外路径、目录和非图片后缀。"""
 
     try:
-        root = data_root.resolve()
+        root      = data_root.resolve()
         candidate = Path(raw_path)
         if not candidate.is_absolute():
             candidate = root / candidate
@@ -197,11 +197,11 @@ def _entry_from_media_ref(media_ref: Mapping[str, Any], *, file_path: Path) -> I
     if not marker:
         marker = f"[图片：{description}]"
     return ImageLibraryEntry(
-        media_key=str(media_ref.get("media_key", "") or "").strip(),
-        media_hash=str(media_ref.get("media_hash", "") or "").strip(),
-        file_path=file_path,
-        description=description,
-        marker=marker,
+        media_key   = str(media_ref.get("media_key", "") or "").strip(),
+        media_hash  = str(media_ref.get("media_hash", "") or "").strip(),
+        file_path   = file_path,
+        description = description,
+        marker      = marker,
     )
 
 
@@ -209,7 +209,7 @@ def _collect_library_image_entries(
     context, *, media_store: MediaRegistryStore | None
 ) -> list[ImageLibraryEntry]:
     library_dir = (Path(context.data_dir) / "media" / "reply_images").resolve()
-    files = _iter_image_library_files(library_dir)
+    files       = _iter_image_library_files(library_dir)
     if not files:
         return []
 
@@ -235,7 +235,7 @@ def _collect_history_image_entries(
     data_root: Path,
     media_store: MediaRegistryStore | None,
 ) -> list[ImageLibraryEntry]:
-    seen_keys: set[str] = set()
+    seen_keys: set[str]              = set()
     entries: list[ImageLibraryEntry] = []
     for message in reversed(history or ()):
         if str(getattr(message, "role", "") or "").strip() != "assistant":
@@ -260,7 +260,7 @@ def _collect_history_image_entries(
 
 
 def _merge_candidate_entries(*entry_groups: Sequence[ImageLibraryEntry]) -> list[ImageLibraryEntry]:
-    seen_keys: set[str] = set()
+    seen_keys: set[str]             = set()
     merged: list[ImageLibraryEntry] = []
     for group in entry_groups:
         for entry in group:
@@ -293,18 +293,18 @@ async def _resolve_emoji_marker(
     if entry is None:
         return None
     return ResolvedMarker(
-        kind="emoji",
-        hint=parsed.hint,
-        raw_span=parsed.raw_span,
-        entry=entry,
-        marker=entry.marker,
-        mode="text_with_emoji",
+        kind     = "emoji",
+        hint     = parsed.hint,
+        raw_span = parsed.raw_span,
+        entry    = entry,
+        marker   = entry.marker,
+        mode     = "text_with_emoji",
     )
 
 
 async def _resolve_qq_face_marker(parsed: ParsedMarker, *, context) -> ResolvedMarker | None:
     entries = await load_qq_face_catalog(context)
-    entry = find_candidate_by_hint(
+    entry   = find_candidate_by_hint(
         entries,
         parsed.hint,
         key_fn=lambda item: (item.marker, item.label, item.face_id, *tuple(item.aliases)),
@@ -312,12 +312,12 @@ async def _resolve_qq_face_marker(parsed: ParsedMarker, *, context) -> ResolvedM
     if entry is None:
         return None
     return ResolvedMarker(
-        kind="qq_face",
-        hint=parsed.hint,
-        raw_span=parsed.raw_span,
-        entry=entry,
-        marker=entry.marker,
-        mode="text_with_face",
+        kind     = "qq_face",
+        hint     = parsed.hint,
+        raw_span = parsed.raw_span,
+        entry    = entry,
+        marker   = entry.marker,
+        mode     = "text_with_face",
     )
 
 
@@ -332,8 +332,8 @@ async def _resolve_image_marker(
         _collect_library_image_entries(context, media_store=media_store),
         _collect_history_image_entries(
             history or (),
-            data_root=Path(context.data_dir),
-            media_store=media_store,
+            data_root   = Path(context.data_dir),
+            media_store = media_store,
         ),
     )
     entry = find_candidate_by_hint(
@@ -344,12 +344,12 @@ async def _resolve_image_marker(
     if entry is None:
         return None
     return ResolvedMarker(
-        kind="image",
-        hint=parsed.hint,
-        raw_span=parsed.raw_span,
-        entry=entry,
-        marker=entry.marker,
-        mode="text_with_image",
+        kind     = "image",
+        hint     = parsed.hint,
+        raw_span = parsed.raw_span,
+        entry    = entry,
+        marker   = entry.marker,
+        mode     = "text_with_image",
     )
 
 
@@ -358,25 +358,25 @@ async def resolve_marker(
     *,
     context,
     runtime,
-    history: Sequence[Any] | None = None,
-    chat_id: str = "",
+    history: Sequence[Any] | None          = None,
+    chat_id: str                           = "",
     media_store: MediaRegistryStore | None = None,
 ) -> ResolvedMarker | None:
     if parsed.kind == "emoji":
         return await _resolve_emoji_marker(
             parsed,
-            context=context,
-            runtime=runtime,
-            chat_id=chat_id,
+            context = context,
+            runtime = runtime,
+            chat_id = chat_id,
         )
     if parsed.kind == "qq_face":
         return await _resolve_qq_face_marker(parsed, context=context)
     if parsed.kind == "image":
         return await _resolve_image_marker(
             parsed,
-            context=context,
-            history=history,
-            media_store=media_store,
+            context     = context,
+            history     = history,
+            media_store = media_store,
         )
     return None
 

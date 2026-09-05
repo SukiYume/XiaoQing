@@ -22,7 +22,7 @@ class TestMessageFlow:
         """Create a test dispatcher with minimal setup"""
         from core.config import ConfigManager
 
-        config_file = temp_dir / "config.json"
+        config_file  = temp_dir / "config.json"
         secrets_file = temp_dir / "secrets.json"
 
         # Write minimal config
@@ -38,9 +38,9 @@ class TestMessageFlow:
         with open(secrets_file, "w") as f:
             json.dump({"admin_user_ids": [12345]}, f)
 
-        config_manager = ConfigManager(config_file, secrets_file)
+        config_manager  = ConfigManager(config_file, secrets_file)
         session_manager = SessionManager()
-        router = CommandRouter()
+        router          = CommandRouter()
 
         # Mock components
         mock_registry = MagicMock()
@@ -61,24 +61,24 @@ class TestMessageFlow:
         # Register echo command
         router.register(
             CommandSpec(
-                plugin="echo",
-                name="echo",
-                triggers=["echo", "回显"],
-                help_text="Echo message",
-                admin_only=False,
-                handler=echo_handler,
-                priority=0,
+                plugin     = "echo",
+                name       = "echo",
+                triggers   = ["echo", "回显"],
+                help_text  = "Echo message",
+                admin_only = False,
+                handler    = echo_handler,
+                priority   = 0,
             )
         )
 
         dispatcher = Dispatcher(
-            router=router,
-            config_provider=config_manager,
-            plugin_registry=mock_registry,
-            admin_check=mock_admin_check,
-            build_context=mock_context_factory,
-            semaphore=asyncio.Semaphore(10),
-            session_manager=session_manager,
+            router          = router,
+            config_provider = config_manager,
+            plugin_registry = mock_registry,
+            admin_check     = mock_admin_check,
+            build_context   = mock_context_factory,
+            semaphore       = asyncio.Semaphore(10),
+            session_manager = session_manager,
         )
 
         return dispatcher, session_manager
@@ -205,10 +205,10 @@ class TestMessageFlow:
 
         # Create an active session
         await session_manager.create(
-            user_id=12345,
-            group_id=50001,
-            plugin_name="test",
-            initial_data={"step": 1},
+            user_id      = 12345,
+            group_id     = 50001,
+            plugin_name  = "test",
+            initial_data = {"step": 1},
         )
 
         # Verify session exists
@@ -235,10 +235,10 @@ class TestMessageFlow:
         """Two inbound events cannot lose a same-session update across an await."""
         dispatcher, session_manager = test_dispatcher
         await session_manager.create(
-            user_id=12345,
-            group_id=50001,
-            plugin_name="stateful",
-            initial_data={"counter": 0},
+            user_id      = 12345,
+            group_id     = 50001,
+            plugin_name  = "stateful",
+            initial_data = {"counter": 0},
         )
 
         async def handle_session(_text, _event, _context, session):
@@ -278,10 +278,10 @@ class TestMessageFlow:
         dispatcher, session_manager = test_dispatcher
         original_data = {"step": "ready", "nested": {"items": ["kept"]}}
         await session_manager.create(
-            user_id=12345,
-            group_id=50001,
-            plugin_name="stateful",
-            initial_data=original_data,
+            user_id      = 12345,
+            group_id     = 50001,
+            plugin_name  = "stateful",
+            initial_data = original_data,
         )
         close_snapshots: list[dict[str, object]] = []
 
@@ -300,8 +300,8 @@ class TestMessageFlow:
 
         loaded = SimpleNamespace(
             module=SimpleNamespace(
-                handle_session=handle_session,
-                close_session=close_session,
+                handle_session = handle_session,
+                close_session  = close_session,
             ),
             execution_gate=None,
         )
@@ -334,11 +334,11 @@ class TestMessageFlow:
         """A replacement committed after failure wins over conditional cleanup."""
 
         dispatcher, session_manager = test_dispatcher
-        original = await session_manager.create(12345, 50001, "stateful", {"step": "old"})
+        original        = await session_manager.create(12345, 50001, "stateful", {"step": "old"})
         cleanup_waiting = asyncio.Event()
-        allow_cleanup = asyncio.Event()
-        real_update = session_manager.update
-        update_calls = 0
+        allow_cleanup   = asyncio.Event()
+        real_update     = session_manager.update
+        update_calls    = 0
 
         async def delay_cleanup_update(user_id, group_id, callback):
             nonlocal update_calls
@@ -355,10 +355,10 @@ class TestMessageFlow:
             raise RuntimeError("continuation failed")
 
         close_session = MagicMock()
-        loaded = SimpleNamespace(
+        loaded        = SimpleNamespace(
             module=SimpleNamespace(
-                handle_session=handle_session,
-                close_session=close_session,
+                handle_session = handle_session,
+                close_session  = close_session,
             ),
             execution_gate=None,
         )
@@ -366,19 +366,19 @@ class TestMessageFlow:
             loaded if name == "stateful" else None
         )
         context = MessageContext(
-            request_id="replacement-after-failure",
-            text="continue",
-            clean_text="continue",
-            user_id=12345,
-            group_id=50001,
-            is_private=False,
-            has_bot_name=False,
-            has_prefix=False,
-            has_command_prefix=False,
-            is_only_bot_name=False,
-            is_at_me=False,
-            is_url_only=False,
-            event={"user_id": 12345, "group_id": 50001},
+            request_id         = "replacement-after-failure",
+            text               = "continue",
+            clean_text         = "continue",
+            user_id            = 12345,
+            group_id           = 50001,
+            is_private         = False,
+            has_bot_name       = False,
+            has_prefix         = False,
+            has_command_prefix = False,
+            is_only_bot_name   = False,
+            is_at_me           = False,
+            is_url_only        = False,
+            event              = {"user_id": 12345, "group_id": 50001},
         )
 
         dispatch_task = asyncio.create_task(dispatcher._try_handle_session(context))
@@ -422,7 +422,7 @@ class TestMessageFlow:
                 await allow_first_snapshot.wait()
             return snapshot
 
-        session_manager.peek = pause_first_peek
+        session_manager.peek           = pause_first_peek
         handled_session_ids: list[str] = []
 
         async def handle_session(_text, _event, _context, session):
@@ -437,19 +437,19 @@ class TestMessageFlow:
             loaded if name == "stateful" else None
         )
         context = MessageContext(
-            request_id="same-plugin-replacement",
-            text="continue",
-            clean_text="continue",
-            user_id=12345,
-            group_id=50001,
-            is_private=False,
-            has_bot_name=False,
-            has_prefix=False,
-            has_command_prefix=False,
-            is_only_bot_name=False,
-            is_at_me=False,
-            is_url_only=False,
-            event={"user_id": 12345, "group_id": 50001},
+            request_id         = "same-plugin-replacement",
+            text               = "continue",
+            clean_text         = "continue",
+            user_id            = 12345,
+            group_id           = 50001,
+            is_private         = False,
+            has_bot_name       = False,
+            has_prefix         = False,
+            has_command_prefix = False,
+            is_only_bot_name   = False,
+            is_at_me           = False,
+            is_url_only        = False,
+            event              = {"user_id": 12345, "group_id": 50001},
         )
 
         dispatch_task = asyncio.create_task(dispatcher._try_handle_session(context))
@@ -485,7 +485,7 @@ class TestMessageFlow:
         dispatcher.plugin_registry.get.side_effect = lambda name: (
             loaded if name == "stateful" else None
         )
-        command_holds_gate = asyncio.Event()
+        command_holds_gate   = asyncio.Event()
         allow_command_delete = asyncio.Event()
 
         async def command_operation() -> bool:
@@ -496,19 +496,19 @@ class TestMessageFlow:
         command_task = asyncio.create_task(gate.run(command_operation))
         await command_holds_gate.wait()
         context = MessageContext(
-            request_id="abba-regression",
-            text="continue",
-            clean_text="continue",
-            user_id=12345,
-            group_id=50001,
-            is_private=False,
-            has_bot_name=False,
-            has_prefix=False,
-            has_command_prefix=False,
-            is_only_bot_name=False,
-            is_at_me=False,
-            is_url_only=False,
-            event={"user_id": 12345, "group_id": 50001},
+            request_id         = "abba-regression",
+            text               = "continue",
+            clean_text         = "continue",
+            user_id            = 12345,
+            group_id           = 50001,
+            is_private         = False,
+            has_bot_name       = False,
+            has_prefix         = False,
+            has_command_prefix = False,
+            is_only_bot_name   = False,
+            is_at_me           = False,
+            is_url_only        = False,
+            event              = {"user_id": 12345, "group_id": 50001},
         )
         session_task = asyncio.create_task(dispatcher._try_handle_session(context))
         await asyncio.sleep(0)
@@ -532,7 +532,7 @@ class TestDispatcherIntegration:
         """Create a dispatcher with router"""
         from core.config import ConfigManager
 
-        config_file = temp_dir / "config.json"
+        config_file  = temp_dir / "config.json"
         secrets_file = temp_dir / "secrets.json"
 
         # Write minimal config
@@ -541,7 +541,7 @@ class TestDispatcherIntegration:
         with open(secrets_file, "w") as f:
             json.dump({"admin_user_ids": [12345]}, f)
 
-        config_manager = ConfigManager(config_file, secrets_file)
+        config_manager  = ConfigManager(config_file, secrets_file)
         session_manager = SessionManager()
 
         # Mock components
@@ -555,13 +555,13 @@ class TestDispatcherIntegration:
         mock_context_factory = Mock(return_value=mock_context)
 
         dispatcher = Dispatcher(
-            router=sample_router,
-            config_provider=config_manager,
-            plugin_registry=mock_registry,
-            admin_check=mock_admin_check,
-            build_context=mock_context_factory,
-            semaphore=asyncio.Semaphore(10),
-            session_manager=session_manager,
+            router          = sample_router,
+            config_provider = config_manager,
+            plugin_registry = mock_registry,
+            admin_check     = mock_admin_check,
+            build_context   = mock_context_factory,
+            semaphore       = asyncio.Semaphore(10),
+            session_manager = session_manager,
         )
 
         return dispatcher, session_manager

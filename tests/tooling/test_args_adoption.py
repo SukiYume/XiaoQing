@@ -1,3 +1,4 @@
+# 架构回归：插件统一使用公共参数解析器。
 """Guard the reviewed plugins against reintroducing private shell lexers."""
 
 import ast
@@ -29,7 +30,7 @@ def test_reviewed_plugins_use_core_argument_layer(
     """The seven reviewed parsers share core lexing and do not import shlex."""
 
     source = (ROOT / relative_path).read_text(encoding="utf-8")
-    tree = ast.parse(source)
+    tree         = ast.parse(source)
     core_imports = {
         alias.name
         for node in ast.walk(tree)
@@ -66,7 +67,7 @@ def test_reviewed_integer_consumers_use_core_parser(relative_path: str) -> None:
     """Numeric consumers cannot restore the unsafe ``isdigit``/conversion split."""
 
     source = (ROOT / relative_path).read_text(encoding="utf-8")
-    tree = ast.parse(source)
+    tree         = ast.parse(source)
     core_imports = {
         alias.name
         for node in ast.walk(tree)

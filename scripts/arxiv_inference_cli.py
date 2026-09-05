@@ -37,8 +37,8 @@ def build_parser() -> argparse.ArgumentParser:
     """构造可被测试复用的命令行参数。"""
 
     parser = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description     = __doc__,
+        formatter_class = argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--model-path", help="外部模型目录")
     parser.add_argument("--threshold", type=float, help="分类阈值")
@@ -46,9 +46,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-len", type=int, help="最大 token 长度")
     parser.add_argument(
         "--output",
-        type=Path,
-        default=Path("inference_output.csv"),
-        help="完整结果 CSV 路径",
+        type    = Path,
+        default = Path("inference_output.csv"),
+        help    = "完整结果 CSV 路径",
     )
     parser.add_argument("--force", action="store_true", help="允许原子替换已有输出文件")
     parser.add_argument("--test-positive", action="store_true", help="只运行单篇论文冒烟")
@@ -103,9 +103,9 @@ def _write_csv_atomic(data: Any, output: Path) -> None:
     """先在目标目录写临时 CSV，完整成功后再原子发布。"""
 
     descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{output.name}.",
-        suffix=".tmp",
-        dir=output.parent,
+        prefix = f".{output.name}.",
+        suffix = ".tmp",
+        dir    = output.parent,
     )
     os.close(descriptor)
     temporary = Path(temporary_name)
@@ -118,7 +118,7 @@ def _write_csv_atomic(data: Any, output: Path) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args   = parser.parse_args(argv)
     _validate_args(parser, args)
     output = None if args.test_positive else _prepare_output(parser, args.output, force=args.force)
     logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
@@ -126,12 +126,12 @@ def main(argv: list[str] | None = None) -> int:
     inference = _load_inference()
     if args.test_positive:
         probabilities, predictions, params = inference.run_single_paper_inference(
-            title=args.test_title,
-            abstract=args.test_abstract,
-            model_path=args.model_path,
-            threshold=args.threshold,
-            batch_size=args.batch_size,
-            max_len=args.max_len,
+            title      = args.test_title,
+            abstract   = args.test_abstract,
+            model_path = args.model_path,
+            threshold  = args.threshold,
+            batch_size = args.batch_size,
+            max_len    = args.max_len,
         )
         print(
             f"\n[冒烟检查] model_type={params.model_type}, "
@@ -143,10 +143,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     data, result = inference.run_inference_for_today(
-        model_path=args.model_path,
-        threshold=args.threshold,
-        batch_size=args.batch_size,
-        max_len=args.max_len,
+        model_path = args.model_path,
+        threshold  = args.threshold,
+        batch_size = args.batch_size,
+        max_len    = args.max_len,
     )
     if data is None:
         print(result)

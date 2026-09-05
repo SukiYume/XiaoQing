@@ -16,7 +16,7 @@ from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 from pathlib import Path
 from typing import Any, ClassVar
 
-_STD_OUTPUT_HANDLE = -11
+_STD_OUTPUT_HANDLE                  = -11
 _ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
 
 
@@ -25,7 +25,7 @@ def _enable_windows_ansi(kernel32: Any) -> bool:
 
     import ctypes
 
-    handle = kernel32.GetStdHandle(_STD_OUTPUT_HANDLE)
+    handle       = kernel32.GetStdHandle(_STD_OUTPUT_HANDLE)
     current_mode = ctypes.c_uint()
     if not kernel32.GetConsoleMode(handle, ctypes.byref(current_mode)):
         return False
@@ -65,16 +65,16 @@ class ColoredFormatter(RequestContextFormatter):
 
     def __init__(
         self,
-        fmt: str | None = None,
+        fmt: str | None     = None,
         datefmt: str | None = None,
-        use_color: bool = True,
+        use_color: bool     = True,
     ) -> None:
         super().__init__(fmt, datefmt)
         self.use_color = use_color
 
     def format(self, record: logging.LogRecord) -> str:
         if self.use_color and record.levelname in self.COLORS:
-            colored_record = copy.copy(record)
+            colored_record           = copy.copy(record)
             colored_record.levelname = (
                 f"{self.COLORS[record.levelname]}{record.levelname}{self.RESET}"
             )
@@ -112,30 +112,30 @@ class LogManager:
     def __init__(
         self,
         log_dir: Path,
-        level: str = "INFO",
+        level: str           = "INFO",
         console_output: bool = True,
-        file_output: bool = True,
-        use_color: bool = True,
-        max_bytes: int = 10 * 1024 * 1024,  # 10MB
-        backup_count: int = 5,
-        rotation_type: str = "size",  # "size" 或 "time"
+        file_output: bool    = True,
+        use_color: bool      = True,
+        max_bytes: int       = 10 * 1024 * 1024,  # 10MB
+        backup_count: int    = 5,
+        rotation_type: str   = "size",  # "size" 或 "time"
     ):
-        self.log_dir = Path(log_dir)
-        self.level = getattr(logging, level.upper(), logging.INFO)
+        self.log_dir        = Path(log_dir)
+        self.level          = getattr(logging, level.upper(), logging.INFO)
         self.console_output = console_output
-        self.file_output = file_output
-        self.use_color = use_color
-        self.max_bytes = max_bytes
-        self.backup_count = backup_count
-        self.rotation_type = rotation_type
+        self.file_output    = file_output
+        self.use_color      = use_color
+        self.max_bytes      = max_bytes
+        self.backup_count   = backup_count
+        self.rotation_type  = rotation_type
 
         # 确保日志目录存在
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
         # 保存 handler 引用，方便后续管理
         self._console_handler: logging.Handler | None = None
-        self._file_handler: logging.Handler | None = None
-        self._error_handler: logging.Handler | None = None
+        self._file_handler: logging.Handler | None    = None
+        self._error_handler: logging.Handler | None   = None
 
         # 初始化
         self._setup()
@@ -200,9 +200,9 @@ class LogManager:
                 use_color = False
 
         formatter = ColoredFormatter(
-            fmt=self.DEFAULT_FORMAT,
-            datefmt=self.DEFAULT_DATE_FORMAT,
-            use_color=use_color,
+            fmt       = self.DEFAULT_FORMAT,
+            datefmt   = self.DEFAULT_DATE_FORMAT,
+            use_color = use_color,
         )
         handler.setFormatter(formatter)
 
@@ -216,28 +216,28 @@ class LogManager:
         if self.rotation_type == "time":
             # 按时间轮转（每天一个文件）
             timed_handler = TimedRotatingFileHandler(
-                filename=str(log_file),
-                when="midnight",
-                interval=1,
-                backupCount=self.backup_count,
-                encoding="utf-8",
+                filename    = str(log_file),
+                when        = "midnight",
+                interval    = 1,
+                backupCount = self.backup_count,
+                encoding    = "utf-8",
             )
             # 设置文件名后缀格式
             timed_handler.suffix = "%Y-%m-%d"
-            handler = timed_handler
+            handler              = timed_handler
         else:
             # 按大小轮转
             handler = RotatingFileHandler(
-                filename=str(log_file),
-                maxBytes=self.max_bytes,
-                backupCount=self.backup_count,
-                encoding="utf-8",
+                filename    = str(log_file),
+                maxBytes    = self.max_bytes,
+                backupCount = self.backup_count,
+                encoding    = "utf-8",
             )
 
         handler.setLevel(self.level)
         formatter = RequestContextFormatter(
-            fmt=self.FILE_FORMAT,
-            datefmt=self.DEFAULT_DATE_FORMAT,
+            fmt     = self.FILE_FORMAT,
+            datefmt = self.DEFAULT_DATE_FORMAT,
         )
         handler.setFormatter(formatter)
 
@@ -248,16 +248,16 @@ class LogManager:
         error_file = self.log_dir / "xiaoqing_error.log"
 
         handler = RotatingFileHandler(
-            filename=str(error_file),
-            maxBytes=self.max_bytes,
-            backupCount=self.backup_count,
-            encoding="utf-8",
+            filename    = str(error_file),
+            maxBytes    = self.max_bytes,
+            backupCount = self.backup_count,
+            encoding    = "utf-8",
         )
         handler.setLevel(logging.ERROR)
 
         formatter = RequestContextFormatter(
-            fmt=self.FILE_FORMAT,
-            datefmt=self.DEFAULT_DATE_FORMAT,
+            fmt     = self.FILE_FORMAT,
+            datefmt = self.DEFAULT_DATE_FORMAT,
         )
         handler.setFormatter(formatter)
 
@@ -304,27 +304,27 @@ def setup_logging(config: Mapping[str, Any], log_dir: Path | None = None) -> Log
     global _log_manager
 
     # 从配置读取参数
-    level = config.get("log_level", "INFO")
-    file_output = config.get("log_to_file", True)
+    level          = config.get("log_level", "INFO")
+    file_output    = config.get("log_to_file", True)
     console_output = config.get("log_to_console", True)
-    use_color = config.get("log_use_color", True)
-    max_size_mb = config.get("log_max_size_mb", 10)
-    backup_count = config.get("log_backup_count", 5)
-    rotation_type = config.get("log_rotation", "time")
+    use_color      = config.get("log_use_color", True)
+    max_size_mb    = config.get("log_max_size_mb", 10)
+    backup_count   = config.get("log_backup_count", 5)
+    rotation_type  = config.get("log_rotation", "time")
 
     # 默认日志目录
     if log_dir is None:
         log_dir = Path(__file__).parent.parent / "logs"
 
     _log_manager = LogManager(
-        log_dir=log_dir,
-        level=level,
-        console_output=console_output,
-        file_output=file_output,
-        use_color=use_color,
-        max_bytes=max_size_mb * 1024 * 1024,
-        backup_count=backup_count,
-        rotation_type=rotation_type,
+        log_dir        = log_dir,
+        level          = level,
+        console_output = console_output,
+        file_output    = file_output,
+        use_color      = use_color,
+        max_bytes      = max_size_mb * 1024 * 1024,
+        backup_count   = backup_count,
+        rotation_type  = rotation_type,
     )
 
     # 记录启动信息

@@ -1,3 +1,4 @@
+# 验证插件导入代不可变；每例完整恢复进程级模块和导入器状态。
 """Regression tests for immutable plugin import generations.
 
 These tests deliberately exercise process-global import state.  Every case uses
@@ -26,7 +27,7 @@ from core.models import PluginManifest
 from core.plugin_manager import PluginManager, PluginPathError
 from core.router import CommandRouter
 
-_PLUGIN_PREFIX = "integrity_"
+_PLUGIN_PREFIX  = "integrity_"
 _TRACKER_PREFIX = "xiaoqing_integrity_"
 
 
@@ -51,16 +52,16 @@ def _drop_test_modules() -> None:
 def _restore_process_import_state():
     """Keep managers created here from leaking process-global import state."""
 
-    plugins_package = importlib.import_module("plugins")
-    meta_path = list(sys.meta_path)
-    sys_path = list(sys.path)
-    plugins_path = list(plugins_package.__path__)
+    plugins_package  = importlib.import_module("plugins")
+    meta_path        = list(sys.meta_path)
+    sys_path         = list(sys.path)
+    plugins_path     = list(plugins_package.__path__)
     namespace_owners = dict(plugin_manager_module._PLUGIN_NAMESPACE_OWNERS)
-    path_leases = {
+    path_leases      = {
         key: type(lease)(
-            container=lease.container,
-            owners=lease.owners,
-            inserted=lease.inserted,
+            container = lease.container,
+            owners    = lease.owners,
+            inserted  = lease.inserted,
         )
         for key, lease in plugin_manager_module._PROCESS_IMPORT_PATH_LEASES.items()
     }
@@ -68,8 +69,8 @@ def _restore_process_import_state():
     yield
 
     _drop_test_modules()
-    sys.meta_path[:] = meta_path
-    sys.path[:] = sys_path
+    sys.meta_path[:]            = meta_path
+    sys.path[:]                 = sys_path
     plugins_package.__path__[:] = plugins_path
     plugin_manager_module._PLUGIN_NAMESPACE_OWNERS.clear()
     plugin_manager_module._PLUGIN_NAMESPACE_OWNERS.update(namespace_owners)
@@ -82,9 +83,9 @@ def _build_manager(root: Path) -> PluginManager:
     plugins_dir.mkdir(parents=True)
     (plugins_dir / "__init__.py").write_text("", encoding="utf-8")
     return PluginManager(
-        plugins_dir=plugins_dir,
-        router=CommandRouter(),
-        context_factory=lambda *args, **kwargs: object(),
+        plugins_dir     = plugins_dir,
+        router          = CommandRouter(),
+        context_factory = lambda *args, **kwargs: object(),
     )
 
 
@@ -114,9 +115,9 @@ def test_plugin_manager_degrades_to_restart_only_when_import_barrier_is_unavaila
     plugins_dir.mkdir()
     (plugins_dir / "__init__.py").write_text("", encoding="utf-8")
     manager = PluginManager(
-        plugins_dir=plugins_dir,
-        router=CommandRouter(),
-        context_factory=lambda *args, **kwargs: object(),
+        plugins_dir     = plugins_dir,
+        router          = CommandRouter(),
+        context_factory = lambda *args, **kwargs: object(),
     )
 
     assert setup_calls == [manager]
@@ -177,10 +178,10 @@ def test_import_barrier_probe_treats_private_api_failure_as_unavailable(
 def test_import_barrier_coordinator_keeps_one_worker_across_timeouts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    coordinator = plugin_manager_module._ModuleImportBarrierCoordinator()
+    coordinator             = plugin_manager_module._ModuleImportBarrierCoordinator()
     coordinator._capability = plugin_manager_module._ModuleImportBarrierCapability(True)
-    held_lock_entered = threading.Event()
-    release_held_lock = threading.Event()
+    held_lock_entered       = threading.Event()
+    release_held_lock       = threading.Event()
 
     class FakeModuleLock:
         def __init__(self, name: str) -> None:
@@ -263,7 +264,7 @@ async def _force_cleanup(manager: PluginManager, name: str) -> None:
             pass
     finally:
         canonical = f"plugins.{name}"
-        owned = manager._owned_plugin_modules.get(name, {})
+        owned     = manager._owned_plugin_modules.get(name, {})
         if manager._owns_plugin_namespace(name):
             for module_name in sorted(
                 [
@@ -271,8 +272,8 @@ async def _force_cleanup(manager: PluginManager, name: str) -> None:
                     for module_name in sys.modules
                     if module_name == canonical or module_name.startswith(f"{canonical}.")
                 ],
-                key=lambda value: value.count("."),
-                reverse=True,
+                key     = lambda value: value.count("."),
+                reverse = True,
             ):
                 module = sys.modules.get(module_name)
                 if owned.get(module_name) is module:
@@ -299,11 +300,11 @@ def _create_directory_link(target: Path, link: Path) -> None:
     if os.name == "nt":
         completed = subprocess.run(
             ["cmd", "/d", "/c", "mklink", "/J", str(link), str(target)],
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
+            check          = False,
+            capture_output = True,
+            text           = True,
+            encoding       = "utf-8",
+            errors         = "replace",
         )
         if completed.returncode == 0:
             return
@@ -324,8 +325,8 @@ def _remove_directory_link(link: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_orphan_lazy_helper_bytecode_is_not_importable(tmp_path: Path) -> None:
-    manager = _build_manager(tmp_path)
-    name = "integrity_orphan_pyc"
+    manager    = _build_manager(tmp_path)
+    name       = "integrity_orphan_pyc"
     plugin_dir = _write_plugin(
         manager,
         name,
@@ -353,8 +354,8 @@ async def test_orphan_lazy_helper_bytecode_is_not_importable(tmp_path: Path) -> 
 
 @pytest.mark.asyncio
 async def test_source_added_after_publication_is_not_lazy_importable(tmp_path: Path) -> None:
-    manager = _build_manager(tmp_path)
-    name = "integrity_added_source"
+    manager    = _build_manager(tmp_path)
+    name       = "integrity_added_source"
     plugin_dir = _write_plugin(
         manager,
         name,
@@ -381,8 +382,8 @@ async def test_source_added_after_publication_is_not_lazy_importable(tmp_path: P
 async def test_source_finder_resume_requires_a_matching_publication_pause(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
-    name = "integrity_publication_resume"
+    manager    = _build_manager(tmp_path)
+    name       = "integrity_publication_resume"
     plugin_dir = _write_plugin(manager, name, "VALUE = 'published'\n")
 
     try:
@@ -403,11 +404,11 @@ async def test_source_finder_resume_requires_a_matching_publication_pause(
 async def test_async_init_cache_removal_cannot_create_two_live_generations(
     tmp_path: Path,
 ) -> None:
-    name = "integrity_manager_collision"
+    name            = "integrity_manager_collision"
     canonical_entry = f"plugins.{name}.main"
-    first = _build_manager(tmp_path / "first")
-    second = _build_manager(tmp_path / "second")
-    first_plugin = _write_plugin(
+    first           = _build_manager(tmp_path / "first")
+    second          = _build_manager(tmp_path / "second")
+    first_plugin    = _write_plugin(
         first,
         name,
         "import sys\n"
@@ -418,15 +419,15 @@ async def test_async_init_cache_removal_cannot_create_two_live_generations(
         "    tracker.started.set()\n"
         "    await tracker.release.wait()\n",
     )
-    second_plugin = _write_plugin(second, name, "VALUE = 'second'\n")
+    second_plugin   = _write_plugin(second, name, "VALUE = 'second'\n")
     external_source = tmp_path / "foreign_generation.py"
     external_source.write_text("VALUE = 'foreign'\n", encoding="utf-8")
-    foreign = ModuleType(canonical_entry)
-    foreign.__file__ = str(external_source)
-    tracker = ModuleType("xiaoqing_integrity_collision_tracker")
-    tracker.foreign = foreign
-    tracker.started = asyncio.Event()
-    tracker.release = asyncio.Event()
+    foreign                       = ModuleType(canonical_entry)
+    foreign.__file__              = str(external_source)
+    tracker                       = ModuleType("xiaoqing_integrity_collision_tracker")
+    tracker.foreign               = foreign
+    tracker.started               = asyncio.Event()
+    tracker.release               = asyncio.Event()
     sys.modules[tracker.__name__] = tracker
 
     try:
@@ -462,16 +463,16 @@ async def test_async_init_cache_removal_cannot_create_two_live_generations(
 async def test_unload_ignores_external_module_after_plugin_path_becomes_link(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
-    name = "integrity_renamed_root"
-    plugin_dir = _write_plugin(manager, name, "VALUE = 'loaded'\n")
-    moved_dir = manager.plugins_dir / f"{name}_moved"
+    manager      = _build_manager(tmp_path)
+    name         = "integrity_renamed_root"
+    plugin_dir   = _write_plugin(manager, name, "VALUE = 'loaded'\n")
+    moved_dir    = manager.plugins_dir / f"{name}_moved"
     external_dir = tmp_path / "external"
     external_dir.mkdir()
     external_source = external_dir / "already_imported.py"
     external_source.write_text("VALUE = 'external'\n", encoding="utf-8")
-    external = ModuleType("xiaoqing_integrity_external_module")
-    external.__file__ = str(external_source)
+    external                       = ModuleType("xiaoqing_integrity_external_module")
+    external.__file__              = str(external_source)
     sys.modules[external.__name__] = external
 
     try:
@@ -495,8 +496,8 @@ async def test_unload_ignores_external_module_after_plugin_path_becomes_link(
 async def test_case_variant_lazy_import_cannot_alias_one_windows_source(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
-    name = "integrity_case_variant"
+    manager    = _build_manager(tmp_path)
+    name       = "integrity_case_variant"
     plugin_dir = _write_plugin(
         manager,
         name,
@@ -537,10 +538,10 @@ def test_manifest_model_rejects_reserved_or_nfkc_unstable_entries(entry: str) ->
 
 @pytest.mark.asyncio
 async def test_nested_data_package_is_fingerprinted_and_importable(tmp_path: Path) -> None:
-    manager = _build_manager(tmp_path)
-    name = "integrity_nested_data_package"
-    plugin_dir = manager.plugins_dir / name
-    package = plugin_dir / "pkg"
+    manager     = _build_manager(tmp_path)
+    name        = "integrity_nested_data_package"
+    plugin_dir  = manager.plugins_dir / name
+    package     = plugin_dir / "pkg"
     nested_data = package / "data"
     nested_data.mkdir(parents=True)
     (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
@@ -571,23 +572,23 @@ async def test_source_change_after_fingerprint_is_rejected_before_execution(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager = _build_manager(tmp_path)
-    name = "integrity_source_aba"
+    manager      = _build_manager(tmp_path)
+    name         = "integrity_source_aba"
     tracker_name = "xiaoqing_integrity_aba_tracker"
-    safe_source = f"import {tracker_name} as tracker\ntracker.safe += 1\nVALUE = 'SAFE'\n"
-    evil_source = f"import {tracker_name} as tracker\ntracker.evil += 1\nVALUE = 'EVIL'\n"
-    safe_bytes = safe_source.encode()
-    evil_bytes = evil_source.encode()
+    safe_source  = f"import {tracker_name} as tracker\ntracker.safe += 1\nVALUE = 'SAFE'\n"
+    evil_source  = f"import {tracker_name} as tracker\ntracker.evil += 1\nVALUE = 'EVIL'\n"
+    safe_bytes   = safe_source.encode()
+    evil_bytes   = evil_source.encode()
     assert len(safe_bytes) == len(evil_bytes)
     plugin_dir = _write_plugin(manager, name, safe_source)
-    entry = plugin_dir / "main.py"
+    entry      = plugin_dir / "main.py"
     entry.write_bytes(safe_bytes)
-    tracker = ModuleType(tracker_name)
-    tracker.safe = 0
-    tracker.evil = 0
-    sys.modules[tracker_name] = tracker
+    tracker                     = ModuleType(tracker_name)
+    tracker.safe                = 0
+    tracker.evil                = 0
+    sys.modules[tracker_name]   = tracker
     original_authorize_snapshot = manager._authorize_plugin_snapshot
-    calls = 0
+    calls                       = 0
 
     def fingerprint_then_change_source(current_dir: Path, definition):
         nonlocal calls
@@ -615,8 +616,8 @@ async def test_source_change_after_fingerprint_is_rejected_before_execution(
 
 @pytest.mark.asyncio
 async def test_lazy_namespace_packages_are_owned_and_fully_unloaded(tmp_path: Path) -> None:
-    manager = _build_manager(tmp_path)
-    name = "integrity_namespace_unload"
+    manager    = _build_manager(tmp_path)
+    name       = "integrity_namespace_unload"
     plugin_dir = _write_plugin(
         manager,
         name,
@@ -628,7 +629,7 @@ async def test_lazy_namespace_packages_are_owned_and_fully_unloaded(tmp_path: Pa
     namespace_dir.mkdir()
     (namespace_dir / "helper.py").write_text("VALUE = 42\n", encoding="utf-8")
     namespace_name = f"plugins.{name}.ns"
-    helper_name = f"{namespace_name}.helper"
+    helper_name    = f"{namespace_name}.helper"
 
     manager.load_plugin(plugin_dir)
     loaded = manager.get(name)
@@ -648,8 +649,8 @@ async def test_lazy_namespace_packages_are_owned_and_fully_unloaded(tmp_path: Pa
 
 @pytest.mark.asyncio
 async def test_entry_can_join_thread_that_lazy_imports_same_generation(tmp_path: Path) -> None:
-    manager = _build_manager(tmp_path)
-    name = "integrity_import_lock_order"
+    manager    = _build_manager(tmp_path)
+    name       = "integrity_import_lock_order"
     plugin_dir = _write_plugin(
         manager,
         name,
@@ -681,10 +682,10 @@ async def test_spec_created_before_unload_is_revoked_before_source_execution(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager = _build_manager(tmp_path)
-    name = "integrity_stale_spec"
+    manager      = _build_manager(tmp_path)
+    name         = "integrity_stale_spec"
     tracker_name = "xiaoqing_integrity_stale_spec_tracker"
-    plugin_dir = _write_plugin(
+    plugin_dir   = _write_plugin(
         manager,
         name,
         "import importlib\n"
@@ -695,19 +696,19 @@ async def test_spec_created_before_unload_is_revoked_before_source_execution(
         f"import {tracker_name} as tracker\ntracker.executions += 1\nVALUE = 1\n",
         encoding="utf-8",
     )
-    tracker = ModuleType(tracker_name)
-    tracker.executions = 0
+    tracker                   = ModuleType(tracker_name)
+    tracker.executions        = 0
     sys.modules[tracker_name] = tracker
-    helper_name = f"plugins.{name}.helper"
+    helper_name               = f"plugins.{name}.helper"
 
     manager.load_plugin(plugin_dir)
     loaded = manager.get(name)
     assert loaded is not None
-    finder = manager._source_finders[name]
-    original_find_spec = finder.find_spec
-    original_deactivate = finder.deactivate_and_wait
-    spec_ready = threading.Event()
-    release_spec = threading.Event()
+    finder                             = manager._source_finders[name]
+    original_find_spec                 = finder.find_spec
+    original_deactivate                = finder.deactivate_and_wait
+    spec_ready                         = threading.Event()
+    release_spec                       = threading.Event()
     import_errors: list[BaseException] = []
 
     def delayed_find_spec(fullname, path=None, target=None):  # type: ignore[no-untyped-def]
@@ -759,10 +760,10 @@ async def test_unload_crosses_importlib_post_exec_parent_binding_window(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager = _build_manager(tmp_path)
-    name = "integrity_import_tail"
+    manager      = _build_manager(tmp_path)
+    name         = "integrity_import_tail"
     tracker_name = "xiaoqing_integrity_import_tail_tracker"
-    plugin_dir = _write_plugin(
+    plugin_dir   = _write_plugin(
         manager,
         name,
         "import importlib\n"
@@ -773,19 +774,19 @@ async def test_unload_crosses_importlib_post_exec_parent_binding_window(
         f"import {tracker_name} as tracker\ntracker.executions += 1\nVALUE = 1\n",
         encoding="utf-8",
     )
-    tracker = ModuleType(tracker_name)
-    tracker.executions = 0
+    tracker                   = ModuleType(tracker_name)
+    tracker.executions        = 0
     sys.modules[tracker_name] = tracker
-    helper_name = f"plugins.{name}.helper"
+    helper_name               = f"plugins.{name}.helper"
     manager.load_plugin(plugin_dir)
     loaded = manager.get(name)
     assert loaded is not None
-    finder = manager._source_finders[name]
-    original_deactivate = finder.deactivate_and_wait
-    original_exec = plugin_manager_module._SourceOnlyPluginLoader.exec_module
-    exec_returned = threading.Event()
-    release_exec = threading.Event()
-    import_results: list[ModuleType] = []
+    finder                             = manager._source_finders[name]
+    original_deactivate                = finder.deactivate_and_wait
+    original_exec                      = plugin_manager_module._SourceOnlyPluginLoader.exec_module
+    exec_returned                      = threading.Event()
+    release_exec                       = threading.Event()
+    import_results: list[ModuleType]   = []
     import_errors: list[BaseException] = []
 
     def delayed_exec(loader, module):  # type: ignore[no-untyped-def]
@@ -839,20 +840,20 @@ async def test_purge_cannot_delete_foreign_replacement_after_drain_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager = _build_manager(tmp_path)
-    name = "integrity_purge_swap"
+    manager    = _build_manager(tmp_path)
+    name       = "integrity_purge_swap"
     plugin_dir = _write_plugin(manager, name, "VALUE = 'owned'\n")
     manager.load_plugin(plugin_dir)
     loaded = manager.get(name)
     assert loaded is not None
-    package_name = f"plugins.{name}"
-    entry_name = f"{package_name}.main"
-    package = sys.modules[package_name]
-    owned_entry = loaded.module
-    foreign_entry = ModuleType(entry_name)
-    original_barrier = manager._wait_for_module_import_barriers
-    barrier_crossed = threading.Event()
-    resume_purge = threading.Event()
+    package_name                      = f"plugins.{name}"
+    entry_name                        = f"{package_name}.main"
+    package                           = sys.modules[package_name]
+    owned_entry                       = loaded.module
+    foreign_entry                     = ModuleType(entry_name)
+    original_barrier                  = manager._wait_for_module_import_barriers
+    barrier_crossed                   = threading.Event()
+    resume_purge                      = threading.Event()
     purge_errors: list[BaseException] = []
 
     def paused_barrier(module_names, *, timeout=5.0):  # type: ignore[no-untyped-def]
@@ -897,14 +898,14 @@ async def test_reload_restore_collision_preserves_foreign_objects_and_quarantine
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager = _build_manager(tmp_path)
-    name = "integrity_restore_collision"
-    tracker_name = "xiaoqing_integrity_restore_collision_tracker"
-    tracker = ModuleType(tracker_name)
-    tracker.old_inits = 0
-    tracker.candidate_inits = 0
+    manager                   = _build_manager(tmp_path)
+    name                      = "integrity_restore_collision"
+    tracker_name              = "xiaoqing_integrity_restore_collision_tracker"
+    tracker                   = ModuleType(tracker_name)
+    tracker.old_inits         = 0
+    tracker.candidate_inits   = 0
     sys.modules[tracker_name] = tracker
-    plugin_dir = _write_plugin(
+    plugin_dir                = _write_plugin(
         manager,
         name,
         f"import {tracker_name} as tracker\n"
@@ -928,18 +929,18 @@ async def test_reload_restore_collision_preserves_foreign_objects_and_quarantine
         "    return None\n",
         encoding="utf-8",
     )
-    package_name = f"plugins.{name}"
-    entry_name = f"{package_name}.main"
-    foreign_package = ModuleType(package_name)
+    package_name             = f"plugins.{name}"
+    entry_name               = f"{package_name}.main"
+    foreign_package          = ModuleType(package_name)
     foreign_package.__path__ = []  # type: ignore[attr-defined]
-    foreign_entry = ModuleType(entry_name)
+    foreign_entry            = ModuleType(entry_name)
     ModuleType.__getattribute__(foreign_package, "__dict__")["main"] = foreign_entry
-    plugins_package = sys.modules["plugins"]
+    plugins_package  = sys.modules["plugins"]
     original_restore = manager._restore_generation_modules
 
     def collide_then_restore(plugin_name, modules, **kwargs):  # type: ignore[no-untyped-def]
         sys.modules[package_name] = foreign_package
-        sys.modules[entry_name] = foreign_entry
+        sys.modules[entry_name]   = foreign_entry
         ModuleType.__getattribute__(plugins_package, "__dict__")[name] = foreign_package
         return original_restore(plugin_name, modules, **kwargs)
 
@@ -967,8 +968,8 @@ async def test_reload_restore_collision_preserves_foreign_objects_and_quarantine
 def test_restore_blocks_absent_fast_path_import_until_old_objects_are_committed(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
-    name = "integrity_restore_race"
+    manager    = _build_manager(tmp_path)
+    name       = "integrity_restore_race"
     plugin_dir = _write_plugin(
         manager,
         name,
@@ -979,18 +980,18 @@ def test_restore_blocks_absent_fast_path_import_until_old_objects_are_committed(
     fingerprint = manager._capture_plugin_snapshot(plugin_dir, definition)
     manager._claim_plugin_namespace(name)
 
-    package_name = f"plugins.{name}"
-    entry_name = f"{package_name}.main"
-    old_package = ModuleType(package_name)
+    package_name         = f"plugins.{name}"
+    entry_name           = f"{package_name}.main"
+    old_package          = ModuleType(package_name)
     old_package.__path__ = [str(plugin_dir)]  # type: ignore[attr-defined]
-    old_entry = ModuleType(entry_name)
+    old_entry            = ModuleType(entry_name)
     ModuleType.__getattribute__(old_package, "__dict__")["main"] = old_entry
-    modules = {package_name: old_package, entry_name: old_entry}
-    modules_inserted = threading.Event()
-    release_commit = threading.Event()
-    import_done = threading.Event()
-    import_results: list[ModuleType] = []
-    import_errors: list[BaseException] = []
+    modules                             = {package_name: old_package, entry_name: old_entry}
+    modules_inserted                    = threading.Event()
+    release_commit                      = threading.Event()
+    import_done                         = threading.Event()
+    import_results: list[ModuleType]    = []
+    import_errors: list[BaseException]  = []
     restore_errors: list[BaseException] = []
 
     class BlockingOwnedLedger(dict[str, dict[str, ModuleType]]):
@@ -1020,8 +1021,8 @@ def test_restore_blocks_absent_fast_path_import_until_old_objects_are_committed(
             manager._restore_generation_modules(
                 name,
                 modules,
-                plugin_root=plugin_dir,
-                sources=fingerprint.sources,
+                plugin_root = plugin_dir,
+                sources     = fingerprint.sources,
             )
         except BaseException as exc:
             restore_errors.append(exc)

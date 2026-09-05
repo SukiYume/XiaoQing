@@ -43,17 +43,17 @@ from .constants import VALID_PLUGIN_NAME_PATTERN
 from .exceptions import ConfigLoadError
 from .inbound_policy import validate_inbound_listener
 
-ConfigCallback = Callable[["ConfigSnapshot"], None] | Callable[["ConfigSnapshot"], Any]
+ConfigCallback         = Callable[["ConfigSnapshot"], None] | Callable[["ConfigSnapshot"], Any]
 SecurityConfigCallback = Callable[["ConfigSnapshot"], None]
-T = TypeVar("T")
-_SourceStatKey = tuple[int, int, int, int]
+T                      = TypeVar("T")
+_SourceStatKey         = tuple[int, int, int, int]
 
-_MAX_CONFIG_SOURCE_BYTES = 8 * 1024 * 1024
-_MAX_CONFIG_TREE_DEPTH = 64
-_MAX_CONFIG_TREE_NODES = 100_000
-_MAX_WATCH_STABILITY_RETRIES = 3
-_REQUIRED_STABLE_SOURCE_READS = 3
-_MAX_STABLE_SOURCE_READS = 6
+_MAX_CONFIG_SOURCE_BYTES         = 8 * 1024 * 1024
+_MAX_CONFIG_TREE_DEPTH           = 64
+_MAX_CONFIG_TREE_NODES           = 100_000
+_MAX_WATCH_STABILITY_RETRIES     = 3
+_REQUIRED_STABLE_SOURCE_READS    = 3
+_MAX_STABLE_SOURCE_READS         = 6
 _CONFIG_CALLBACK_TIMEOUT_SECONDS = 5.0
 _MAX_PENDING_SECRET_CHANGE_PATHS = 30
 
@@ -130,14 +130,14 @@ class _RuntimeConfigSchema(BaseModel):
     ws_queue_size: int | None = Field(default=None, ge=1, le=10000)
     inbound_ws_max_workers: int | None = Field(default=None, ge=1, le=128)
     inbound_ws_broadcast_timeout_seconds: float | None = Field(default=None, gt=0, le=300)
-    timezone: str | None = None
-    enable_ws_client: bool | None = None
-    enable_inbound_server: bool | None = None
-    inbound_trusted_tls_proxy: StrictBool | None = None
-    onebot_ws_uri: str | None = None
-    onebot_http_base: str | None = None
-    inbound_ws_uri: str | None = None
-    inbound_http_base: str | None = None
+    timezone: str | None                                  = None
+    enable_ws_client: bool | None                         = None
+    enable_inbound_server: bool | None                    = None
+    inbound_trusted_tls_proxy: StrictBool | None          = None
+    onebot_ws_uri: str | None                             = None
+    onebot_http_base: str | None                          = None
+    inbound_ws_uri: str | None                            = None
+    inbound_http_base: str | None                         = None
     plugin_execution: _PluginExecutionConfigSchema | None = None
 
     @field_validator("data_root")
@@ -220,7 +220,7 @@ def _validate_runtime_config(config: dict[str, Any]) -> dict[str, Any]:
 def _validate_config_tree(value: Any) -> None:
     """Bound and validate a JSON-like tree before recursive freezing."""
 
-    nodes = 0
+    nodes                        = 0
     stack: list[tuple[Any, int]] = [(value, 0)]
     while stack:
         current, depth = stack.pop()
@@ -305,11 +305,11 @@ def _check_secrets_file_permissions(path: Path) -> None:
         return
 
     try:
-        st = os.stat(path)
+        st   = os.stat(path)
         mode = st.st_mode
 
         # 检查是否对组或其他用户可读
-        group_readable = bool(mode & stat.S_IRGRP)
+        group_readable  = bool(mode & stat.S_IRGRP)
         others_readable = bool(mode & stat.S_IROTH)
 
         if group_readable or others_readable:
@@ -325,10 +325,10 @@ def _check_secrets_file_permissions(path: Path) -> None:
 class ConfigSourceStatus(str, Enum):
     """Observed state of one on-disk configuration source."""
 
-    VALID = "valid"
-    MISSING = "missing"
-    INVALID = "invalid"
-    UNAVAILABLE = "unavailable"
+    VALID        = "valid"
+    MISSING      = "missing"
+    INVALID      = "invalid"
+    UNAVAILABLE  = "unavailable"
     INCONSISTENT = "inconsistent"
 
 
@@ -345,8 +345,8 @@ class ConfigSnapshot(tuple[Any, ...]):
         cls,
         config: Mapping[str, Any],
         secrets: Mapping[str, Any],
-        revision: int = 0,
-        config_status: ConfigSourceStatus = ConfigSourceStatus.VALID,
+        revision: int                      = 0,
+        config_status: ConfigSourceStatus  = ConfigSourceStatus.VALID,
         secrets_status: ConfigSourceStatus = ConfigSourceStatus.VALID,
     ) -> "ConfigSnapshot":
         if isinstance(revision, bool) or not isinstance(revision, int):
@@ -427,7 +427,7 @@ def _summarize_secret_changes(
     """比较字段结构和值，只保留路径和计数，避免通知泄露凭据。"""
 
     samples: dict[str, list[str]] = {"added": [], "removed": [], "changed": []}
-    counts = {"added": 0, "removed": 0, "changed": 0}
+    counts                        = {"added": 0, "removed": 0, "changed": 0}
 
     def record(kind: str, path: str) -> None:
         counts[kind] += 1
@@ -452,12 +452,12 @@ def _summarize_secret_changes(
 
     walk(active, candidate)
     return PendingSecretsChange(
-        added_paths=tuple(samples["added"]),
-        removed_paths=tuple(samples["removed"]),
-        changed_paths=tuple(samples["changed"]),
-        added_count=counts["added"],
-        removed_count=counts["removed"],
-        changed_count=counts["changed"],
+        added_paths   = tuple(samples["added"]),
+        removed_paths = tuple(samples["removed"]),
+        changed_paths = tuple(samples["changed"]),
+        added_count   = counts["added"],
+        removed_count = counts["removed"],
+        changed_count = counts["changed"],
     )
 
 
@@ -465,9 +465,9 @@ def _summarize_secret_changes(
 class _SourceRead:
     status: ConfigSourceStatus
     etag: str
-    value: dict[str, Any] | None = None
-    error: ConfigLoadError | None = None
-    identity: str = ""
+    value: dict[str, Any] | None    = None
+    error: ConfigLoadError | None   = None
+    identity: str                   = ""
     stat_key: _SourceStatKey | None = None
 
     @property
@@ -553,13 +553,13 @@ class ConfigManager:
         # latest immutable snapshot.
         self._notification_current: _ConfigNotification | None = None
         self._notification_queue: deque[_ConfigNotification] = deque(maxlen=1)
-        self._notification_draining = False
+        self._notification_draining                           = False
         self._callback_loop: asyncio.AbstractEventLoop | None = None
-        self._callback_timeout_seconds = _CONFIG_CALLBACK_TIMEOUT_SECONDS
-        self._last_notified_revision = 0
-        self._parsed_source_cache: dict[Path, _SourceRead] = {}
-        self._parsed_source_cache_lock = threading.Lock()
-        self._lock = threading.RLock()
+        self._callback_timeout_seconds                        = _CONFIG_CALLBACK_TIMEOUT_SECONDS
+        self._last_notified_revision                          = 0
+        self._parsed_source_cache: dict[Path, _SourceRead]    = {}
+        self._parsed_source_cache_lock                        = threading.Lock()
+        self._lock                                            = threading.RLock()
         self._initial_load()
 
     def _initial_load(self) -> None:
@@ -575,9 +575,9 @@ class ConfigManager:
             self._apply_source_reads_locked(
                 config_read,
                 published_secrets,
-                force=True,
-                bump_revision=False,
-                notify=False,
+                force         = True,
+                bump_revision = False,
+                notify        = False,
             )
             if paired:
                 self._mark_sources_paired_locked(config_read, secrets_read)
@@ -600,18 +600,18 @@ class ConfigManager:
 
     def _snapshot_locked(self) -> ConfigSnapshot:
         return ConfigSnapshot(
-            config=self._config_view,
-            secrets=self._secrets_view,
-            revision=self._revision,
-            config_status=self._config_source.status,
-            secrets_status=self._secrets_source.status,
+            config         = self._config_view,
+            secrets        = self._secrets_view,
+            revision       = self._revision,
+            config_status  = self._config_source.status,
+            secrets_status = self._secrets_source.status,
         )
 
     def _enqueue_notification_locked(self, snapshot: ConfigSnapshot) -> _ConfigNotification:
         notification = _ConfigNotification(
-            revision=snapshot.revision,
-            snapshot=snapshot,
-            callbacks=tuple(self._callbacks),
+            revision  = snapshot.revision,
+            snapshot  = snapshot,
+            callbacks = tuple(self._callbacks),
         )
         if self._notification_current is None and not self._notification_draining:
             self._notification_current = notification
@@ -633,9 +633,9 @@ class ConfigManager:
             snapshot, notification, _changed = self._apply_source_reads_locked(
                 config_read,
                 published_secrets,
-                force=True,
-                bump_revision=True,
-                notify=notify,
+                force         = True,
+                bump_revision = True,
+                notify        = notify,
             )
             if paired:
                 self._mark_sources_paired_locked(config_read, secrets_read)
@@ -660,7 +660,7 @@ class ConfigManager:
         config_read: _SourceRead,
         secrets_read: _SourceRead,
     ) -> None:
-        self._paired_config_signature = config_read.signature
+        self._paired_config_signature  = config_read.signature
         self._paired_secrets_signature = secrets_read.signature
 
     def _pending_read_hint_locked(self) -> tuple[_SourceRead, _SourceRead]:
@@ -672,8 +672,8 @@ class ConfigManager:
     def _clear_pending_sources_locked(self, *, bump_generation: bool = False) -> None:
         """清除待确认候选，并按需使并发中的旧 watcher 读失效。"""
 
-        had_pending_source = self._pending_secrets_source is not None
-        self._pending_secrets_source = None
+        had_pending_source             = self._pending_secrets_source is not None
+        self._pending_secrets_source   = None
         self._pending_notice_signature = None
         if had_pending_source and bump_generation:
             self._source_generation += 1
@@ -742,7 +742,7 @@ class ConfigManager:
 
         if secrets_read.status is not ConfigSourceStatus.VALID:
             return secrets_read
-        secret_is_confirmed = secrets_read.signature == self._paired_secrets_signature
+        secret_is_confirmed  = secrets_read.signature == self._paired_secrets_signature
         config_is_compatible = (
             config_read.status is not ConfigSourceStatus.VALID
             or config_read.signature == self._paired_config_signature
@@ -756,8 +756,8 @@ class ConfigManager:
         return _SourceRead(
             ConfigSourceStatus.INCONSISTENT,
             f"pending:{config_read.status.value}:{config_read.etag}:{secrets_read.etag}",
-            error=error,
-            identity=secrets_read.identity,
+            error    = error,
+            identity = secrets_read.identity,
         )
 
     def _prepare_confirmed_secrets_locked(
@@ -786,14 +786,14 @@ class ConfigManager:
     ) -> None:
         """Install detached internal copies; callers cannot retain a mutable alias."""
 
-        config_view = _freeze_config_mapping(config)
+        config_view  = _freeze_config_mapping(config)
         secrets_view = _freeze_config_mapping(secrets)
-        config_copy = cast(dict[str, Any], materialize_snapshot_value(config_view))
+        config_copy  = cast(dict[str, Any], materialize_snapshot_value(config_view))
         secrets_copy = cast(dict[str, Any], materialize_snapshot_value(secrets_view))
         # Commit only after every copy and validation step succeeds.
-        self._config = config_copy
-        self._secrets = secrets_copy
-        self._config_view = config_view
+        self._config       = config_copy
+        self._secrets      = secrets_copy
+        self._config_view  = config_view
         self._secrets_view = secrets_view
 
     def _apply_source_reads_locked(
@@ -822,15 +822,15 @@ class ConfigManager:
             else {}
         )
         data_changed = next_config != self._config or next_secrets != self._secrets
-        changed = force or source_changed or data_changed
+        changed      = force or source_changed or data_changed
 
         if not changed:
-            self._config_source = config_read
+            self._config_source  = config_read
             self._secrets_source = secrets_read
             return self._snapshot_locked(), None, False
 
         self._replace_snapshot(next_config, next_secrets)
-        self._config_source = config_read
+        self._config_source  = config_read
         self._secrets_source = secrets_read
         if bump_revision:
             self._revision += 1
@@ -851,8 +851,8 @@ class ConfigManager:
         """Mutate the strict on-disk value and publish only after durable commit."""
 
         notification: _ConfigNotification | None = None
-        failure: BaseException | None = None
-        result = cast(T, None)
+        failure: BaseException | None            = None
+        result                                   = cast(T, None)
         with self._lock:
             with keyed_path_lock(self.secrets_path):
                 current = self._read_source_unlocked(self.secrets_path)
@@ -861,9 +861,9 @@ class ConfigManager:
                     snapshot, notification, _changed = self._apply_source_reads_locked(
                         self._config_source,
                         current,
-                        force=False,
-                        bump_revision=True,
-                        notify=True,
+                        force         = False,
+                        bump_revision = True,
+                        notify        = True,
                     )
                     self._mark_sources_paired_locked(self._config_source, current)
                     failure = self._secret_source_error(current)
@@ -886,9 +886,9 @@ class ConfigManager:
                         snapshot, notification, _changed = self._apply_source_reads_locked(
                             self._config_source,
                             guarded,
-                            force=False,
-                            bump_revision=True,
-                            notify=True,
+                            force         = False,
+                            bump_revision = True,
+                            notify        = True,
                         )
                     failure = ConfigLoadError(
                         "secrets changed on disk; reload the latest source and retry the mutation"
@@ -925,9 +925,9 @@ class ConfigManager:
                             snapshot, notification, _published = self._apply_source_reads_locked(
                                 self._config_source,
                                 guarded,
-                                force=False,
-                                bump_revision=True,
-                                notify=True,
+                                force         = False,
+                                bump_revision = True,
+                                notify        = True,
                             )
                             if observed.status is not ConfigSourceStatus.VALID:
                                 self._mark_sources_paired_locked(self._config_source, observed)
@@ -941,9 +941,9 @@ class ConfigManager:
                         snapshot, notification, _published = self._apply_source_reads_locked(
                             self._config_source,
                             published,
-                            force=False,
-                            bump_revision=True,
-                            notify=True,
+                            force         = False,
+                            bump_revision = True,
+                            notify        = True,
                         )
                         if paired:
                             self._mark_sources_paired_locked(self._config_source, committed)
@@ -1022,7 +1022,7 @@ class ConfigManager:
             for part in parts[:-1]:
                 child = current.get(part)
                 if not isinstance(child, dict):
-                    child = {}
+                    child         = {}
                     current[part] = child
                 current = child
             current[parts[-1]] = copy.deepcopy(value)
@@ -1178,7 +1178,7 @@ class ConfigManager:
                         result,
                         timeout=self._callback_timeout_seconds,
                     )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("Pending secrets callback timed out")
             except asyncio.CancelledError:
                 raise
@@ -1218,13 +1218,13 @@ class ConfigManager:
                 self._fail_closed_watch_error(exc)
 
     async def _watch_reconcile_once(self) -> None:
-        notification: _ConfigNotification | None = None
-        changed = False
-        pending_external_change = False
-        pending_candidate_changed = False
-        pending_notice: PendingSecretsChange | None = None
-        published_config: _SourceRead | None = None
-        published_secrets: _SourceRead | None = None
+        notification: _ConfigNotification | None          = None
+        changed                                           = False
+        pending_external_change                           = False
+        pending_candidate_changed                         = False
+        pending_notice: PendingSecretsChange | None       = None
+        published_config: _SourceRead | None              = None
+        published_secrets: _SourceRead | None             = None
         read_hint: tuple[_SourceRead, _SourceRead] | None = None
         for _attempt in range(_MAX_WATCH_STABILITY_RETRIES):
             with self._lock:
@@ -1275,20 +1275,20 @@ class ConfigManager:
                 )
                 if staged:
                     pending_external_change = True
-                    pending_notice = self._pending_secrets_notice_locked()
+                    pending_notice          = self._pending_secrets_notice_locked()
                     break
                 self._clear_pending_sources_locked(bump_generation=True)
                 config_read, secrets_read, paired = self._prepare_watched_sources_locked(*final)
                 _snapshot, notification, changed = self._apply_source_reads_locked(
                     config_read,
                     secrets_read,
-                    force=False,
-                    bump_revision=True,
-                    notify=True,
+                    force         = False,
+                    bump_revision = True,
+                    notify        = True,
                 )
                 if paired:
                     self._mark_sources_paired_locked(*final)
-                published_config = config_read
+                published_config  = config_read
                 published_secrets = secrets_read
                 break
         else:
@@ -1337,7 +1337,7 @@ class ConfigManager:
             # byte-identical old credentials will then require explicit reload.
             return config_read, secrets_read, True
         guarded_secrets = self._guard_unconfirmed_secrets_locked(config_read, secrets_read)
-        paired = (
+        paired          = (
             guarded_secrets is secrets_read
             and secrets_read.status is ConfigSourceStatus.VALID
             and secrets_read.signature == self._paired_secrets_signature
@@ -1349,7 +1349,7 @@ class ConfigManager:
         return config_read, guarded_secrets, paired
 
     def _fail_closed_watch_error(self, exc: BaseException) -> None:
-        error = ConfigLoadError(f"configuration watcher failed: {type(exc).__name__}: {exc}")
+        error       = ConfigLoadError(f"configuration watcher failed: {type(exc).__name__}: {exc}")
         unavailable = _SourceRead(
             ConfigSourceStatus.UNAVAILABLE,
             f"watch-error:{type(exc).__name__}",
@@ -1360,9 +1360,9 @@ class ConfigManager:
             _snapshot, notification, changed = self._apply_source_reads_locked(
                 self._config_source,
                 unavailable,
-                force=False,
-                bump_revision=True,
-                notify=True,
+                force         = False,
+                bump_revision = True,
+                notify        = True,
             )
         if changed:
             self._log_source_problem("secrets", unavailable)
@@ -1377,15 +1377,15 @@ class ConfigManager:
         except RuntimeError:
             running_loop = None
 
-        start_sync = False
+        start_sync                                      = False
         schedule_loop: asyncio.AbstractEventLoop | None = None
         with self._lock:
             callback_loop = self._callback_loop
             if callback_loop is not None and callback_loop.is_closed():
                 self._callback_loop = None
-                callback_loop = None
+                callback_loop       = None
             if running_loop is not None and callback_loop is None:
-                callback_loop = running_loop
+                callback_loop       = running_loop
                 self._callback_loop = running_loop
 
             if not self._notification_draining:
@@ -1421,7 +1421,7 @@ class ConfigManager:
     def _next_notification(self) -> _ConfigNotification | None:
         with self._lock:
             if self._notification_current is not None:
-                notification = self._notification_current
+                notification               = self._notification_current
                 self._notification_current = None
                 return notification
             if self._notification_queue:
@@ -1447,7 +1447,7 @@ class ConfigManager:
                             timeout=self._callback_timeout_seconds,
                         )
                     )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(
                     "Config callback timed out at revision %d",
                     notification.revision,
@@ -1483,7 +1483,7 @@ class ConfigManager:
                                 result,
                                 timeout=self._callback_timeout_seconds,
                             )
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         logger.warning(
                             "Config callback timed out at revision %d",
                             notification.revision,
@@ -1513,10 +1513,10 @@ class ConfigManager:
         return _SourceRead(
             cached.status,
             etag,
-            value=cached.value,
-            error=cached.error,
-            identity=identity,
-            stat_key=stat_key,
+            value    = cached.value,
+            error    = cached.error,
+            identity = identity,
+            stat_key = stat_key,
         )
 
     def _remember_parsed_source(self, path: Path, source: _SourceRead) -> None:
@@ -1550,11 +1550,11 @@ class ConfigManager:
 
         try:
             with path.open("rb") as handle:
-                initial_stat = os.fstat(handle.fileno())
+                initial_stat  = os.fstat(handle.fileno())
                 observed_size = initial_stat.st_size
-                raw = handle.read(_MAX_CONFIG_SOURCE_BYTES + 1)
-                final_stat = os.fstat(handle.fileno())
-                path_stat = path.stat()
+                raw           = handle.read(_MAX_CONFIG_SOURCE_BYTES + 1)
+                final_stat    = os.fstat(handle.fileno())
+                path_stat     = path.stat()
         except FileNotFoundError:
             return _SourceRead(ConfigSourceStatus.MISSING, MISSING_ETAG)
         except OSError as exc:
@@ -1583,17 +1583,17 @@ class ConfigManager:
             return _SourceRead(
                 ConfigSourceStatus.INVALID,
                 token,
-                error=error,
-                identity=identity,
-                stat_key=stat_key,
+                error    = error,
+                identity = identity,
+                stat_key = stat_key,
             )
 
-        etag = _payload_etag(raw)
+        etag   = _payload_etag(raw)
         cached = self._cached_parsed_source(
             path,
-            etag=etag,
-            identity=identity,
-            stat_key=stat_key,
+            etag     = etag,
+            identity = identity,
+            stat_key = stat_key,
         )
         if cached is not None:
             return cached
@@ -1619,22 +1619,22 @@ class ConfigManager:
             RecursionError,
             ConfigLoadError,
         ) as exc:
-            error = exc if isinstance(exc, ConfigLoadError) else ConfigLoadError(path, exc)
+            error  = exc if isinstance(exc, ConfigLoadError) else ConfigLoadError(path, exc)
             result = _SourceRead(
                 ConfigSourceStatus.INVALID,
                 etag,
-                error=error,
-                identity=identity,
-                stat_key=stat_key,
+                error    = error,
+                identity = identity,
+                stat_key = stat_key,
             )
             self._remember_parsed_source(path, result)
             return result
         result = _SourceRead(
             ConfigSourceStatus.VALID,
             etag,
-            value=value,
-            identity=identity,
-            stat_key=stat_key,
+            value    = value,
+            identity = identity,
+            stat_key = stat_key,
         )
         self._remember_parsed_source(path, result)
         return result
@@ -1680,7 +1680,7 @@ class ConfigManager:
         last_signatures: tuple[tuple[ConfigSourceStatus, str, str], ...] = ()
         for _attempt in range(_MAX_STABLE_SOURCE_READS):
             require_content_read = stable_count >= _REQUIRED_STABLE_SOURCE_READS - 1
-            current = self._read_sources(
+            current              = self._read_sources(
                 previous_reads,
                 allow_stat_reuse=not require_content_read,
             )
@@ -1689,9 +1689,9 @@ class ConfigManager:
                 stable_count += 1
             else:
                 previous_signatures = signatures
-                stable_count = 1
+                stable_count        = 1
             last_signatures = signatures
-            previous_reads = current
+            previous_reads  = current
             if stable_count >= _REQUIRED_STABLE_SOURCE_READS:
                 return current
 
@@ -1724,9 +1724,9 @@ class ConfigManager:
         _validate_config_tree(candidate)
         payload = json.dumps(
             candidate,
-            indent="\t",
-            ensure_ascii=False,
-            allow_nan=False,
+            indent       = "\t",
+            ensure_ascii = False,
+            allow_nan    = False,
         )
         payload_bytes = payload.encode("utf-8")
         if len(payload_bytes) > _MAX_CONFIG_SOURCE_BYTES:
@@ -1784,9 +1784,9 @@ class ConfigManager:
         result = _SourceRead(
             ConfigSourceStatus.VALID,
             _payload_etag(payload_bytes),
-            value=canonical,
-            identity=_source_identity(closed_path_stat),
-            stat_key=_source_stat_key(closed_path_stat),
+            value    = canonical,
+            identity = _source_identity(closed_path_stat),
+            stat_key = _source_stat_key(closed_path_stat),
         )
         self._remember_parsed_source(self.secrets_path, result)
         return result

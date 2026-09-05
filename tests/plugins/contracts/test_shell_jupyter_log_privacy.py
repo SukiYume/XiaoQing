@@ -15,10 +15,10 @@ from tests.helpers.assertions import text_segments_text
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.settings_snapshot import with_settings_reader
 
-ROOT = REPOSITORY_ROOT
+ROOT           = REPOSITORY_ROOT
 COMMAND_CANARY = "CR220_SHELL_TOKEN_CANARY"
-CODE_CANARY = "CR220_JUPYTER_CODE_CANARY"
-ERROR_CANARY = "CR220_PRIVATE_EXCEPTION_CANARY"
+CODE_CANARY    = "CR220_JUPYTER_CODE_CANARY"
+ERROR_CANARY   = "CR220_PRIVATE_EXCEPTION_CANARY"
 
 
 def _messages(caplog: pytest.LogCaptureFixture, *logger_names: str) -> str:
@@ -38,7 +38,7 @@ async def test_shell_command_is_executed_but_only_fingerprinted_in_logs(
     executed: dict[str, object] = {}
 
     async def execute(command_args: list[str], timeout: int):
-        executed["args"] = command_args
+        executed["args"]    = command_args
         executed["timeout"] = timeout
         return 0, "ok", ""
 
@@ -47,8 +47,8 @@ async def test_shell_command_is_executed_but_only_fingerprinted_in_logs(
     monkeypatch.setattr(shell_main, "_execute_command", execute)
     context = with_settings_reader(
         SimpleNamespace(
-            request_id="req-shell-cr220",
-            secrets={"plugins": {"shell": {"timeout": 17}}},
+            request_id = "req-shell-cr220",
+            secrets    = {"plugins": {"shell": {"timeout": 17}}},
         )
     )
 
@@ -60,7 +60,7 @@ async def test_shell_command_is_executed_but_only_fingerprinted_in_logs(
             context,
         )
 
-    logged = _messages(caplog, shell_main.logger.name)
+    logged  = _messages(caplog, shell_main.logger.name)
     summary = summarize_sensitive(command)
     assert executed == {"args": ["python", command], "timeout": 17}
     assert "ok" in text_segments_text(response)
@@ -82,7 +82,7 @@ async def test_shell_exception_body_stays_out_of_logs_and_public_response(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     command = f"echo {COMMAND_CANARY}"
-    detail = f"{ERROR_CANARY} C:\\private\\shell-error.txt"
+    detail  = f"{ERROR_CANARY} C:\\private\\shell-error.txt"
 
     async def fail_execute(_command_args: list[str], _timeout: int):
         raise RuntimeError(detail)
@@ -92,8 +92,8 @@ async def test_shell_exception_body_stays_out_of_logs_and_public_response(
     monkeypatch.setattr(shell_main, "_execute_command", fail_execute)
     context = with_settings_reader(
         SimpleNamespace(
-            request_id="req-shell-error",
-            secrets={
+            request_id = "req-shell-error",
+            secrets    = {
                 "plugins": {"shell": {"timeout": 3}},
                 "private_exception_canary": ERROR_CANARY,
             },
@@ -103,7 +103,7 @@ async def test_shell_exception_body_stays_out_of_logs_and_public_response(
     with caplog.at_level(logging.INFO, logger=shell_main.logger.name):
         response = await shell_main.handle("shell", command, {}, context)
 
-    logged = _messages(caplog, shell_main.logger.name)
+    logged      = _messages(caplog, shell_main.logger.name)
     public_text = text_segments_text(response)
     assert "XQ-PLUGIN-UNEXPECTED" in public_text
     assert "req-shell-error" in public_text
@@ -122,7 +122,7 @@ async def test_jupyter_code_is_executed_but_only_fingerprinted_in_logs(
     tmp_path: Path,
 ) -> None:
     credential_name = "to" + "ken"
-    code = (
+    code            = (
         f'{credential_name} = "{CODE_CANARY}"\n'
         r'path = "C:\private\analysis.ipynb"'
         "\nprint(token)"
@@ -140,16 +140,16 @@ async def test_jupyter_code_is_executed_but_only_fingerprinted_in_logs(
         lambda *_args: Manager(),
     )
     context = SimpleNamespace(
-        data_dir=tmp_path,
-        current_user_id=1,
-        current_group_id=None,
-        request_id="req-jupyter-cr220",
+        data_dir         = tmp_path,
+        current_user_id  = 1,
+        current_group_id = None,
+        request_id       = "req-jupyter-cr220",
     )
 
     with caplog.at_level(logging.INFO, logger=jupyter_main.logger.name):
         response = await jupyter_main._handle_execute(code, context)
 
-    logged = _messages(caplog, jupyter_main.logger.name)
+    logged  = _messages(caplog, jupyter_main.logger.name)
     summary = summarize_sensitive(code)
     assert executed["value"] == code
     assert executed["timeout"] > 0
@@ -172,7 +172,7 @@ async def test_jupyter_exception_body_stays_out_of_logs_and_public_response(
     caplog: pytest.LogCaptureFixture,
     tmp_path: Path,
 ) -> None:
-    code = f'raise RuntimeError("{CODE_CANARY}")'
+    code   = f'raise RuntimeError("{CODE_CANARY}")'
     detail = f"{ERROR_CANARY} C:\\private\\kernel.json"
 
     class Manager:
@@ -185,16 +185,16 @@ async def test_jupyter_exception_body_stays_out_of_logs_and_public_response(
         lambda *_args: Manager(),
     )
     context = SimpleNamespace(
-        data_dir=tmp_path,
-        current_user_id=1,
-        current_group_id=None,
-        request_id="req-jupyter-error",
+        data_dir         = tmp_path,
+        current_user_id  = 1,
+        current_group_id = None,
+        request_id       = "req-jupyter-error",
     )
 
     with caplog.at_level(logging.INFO, logger=jupyter_main.logger.name):
         response = await jupyter_main._handle_execute(code, context)
 
-    logged = _messages(caplog, jupyter_main.logger.name)
+    logged      = _messages(caplog, jupyter_main.logger.name)
     public_text = text_segments_text(response)
     assert "执行失败，请稍后重试" in public_text
     assert detail not in public_text

@@ -15,28 +15,28 @@ def _message(
     content: str,
     *,
     ts: float,
-    role: str = "user",
+    role: str     = "user",
     local_id: str = "",
 ) -> StoredMessage:
     return StoredMessage(
-        role=role,
-        name="小青" if role == "assistant" else "群友",
-        content=content,
-        ts=ts,
-        local_id=local_id,
+        role     = role,
+        name     = "小青" if role == "assistant" else "群友",
+        content  = content,
+        ts       = ts,
+        local_id = local_id,
     )
 
 
 def test_active_conversation_suffix_drops_topic_before_three_day_gap() -> None:
-    old_ts = 1_700_000_000.0
+    old_ts     = 1_700_000_000.0
     current_ts = old_ts + 3 * 86400
-    history = [
+    history    = [
         _message("[图片：一支烟] 这个烟太有格调了", ts=old_ts, local_id="old-user"),
         _message("啥烟啊，发出来看看", ts=old_ts + 12, role="assistant"),
         _message(
             "[图片：KIMI截图] 这个KIMI怎么蛤里蛤气的？",
-            ts=current_ts,
-            local_id="current-user",
+            ts       = current_ts,
+            local_id = "current-user",
         ),
     ]
 
@@ -80,8 +80,8 @@ async def test_idle_boundary_clears_transient_state_once_without_clearing_memory
 ) -> None:
     from plugins.xiaoqing_chat.handlers import _maybe_reset_idle_conversation
 
-    old_ts = 1_700_000_000.0
-    current_ts = old_ts + 3 * 86400
+    old_ts       = 1_700_000_000.0
+    current_ts   = old_ts + 3 * 86400
     memory_store = SimpleNamespace(
         get_recent_async=AsyncMock(
             return_value=[

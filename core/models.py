@@ -29,7 +29,7 @@ def canonical_relative_path(raw: str, *, description: str = "path") -> str:
 
     if type(raw) is not str or not raw or "\x00" in raw or "\\" in raw:
         raise ValueError(f"{description} must be a non-empty POSIX relative path")
-    path = PurePosixPath(raw)
+    path         = PurePosixPath(raw)
     windows_path = PureWindowsPath(raw)
     if path.is_absolute() or windows_path.is_absolute() or windows_path.drive:
         raise ValueError(f"{description} must be relative")
@@ -72,7 +72,7 @@ def canonical_python_entry(raw: str) -> str:
     path = PurePosixPath(entry)
     if path.suffix != ".py":
         raise ValueError("plugin entry must name a lowercase .py source file")
-    parents = tuple(part.casefold() for part in path.parts[:-1])
+    parents      = tuple(part.casefold() for part in path.parts[:-1])
     module_parts = (*path.parts[:-1], path.stem)
     if (
         (parents and parents[0] == "data")
@@ -86,7 +86,7 @@ def canonical_python_entry(raw: str) -> str:
 
 def canonical_plugin_watch_file(raw: str) -> str:
     relative = canonical_relative_path(raw, description="plugin watch file")
-    path = PurePosixPath(relative)
+    path    = PurePosixPath(relative)
     parents = tuple(part.casefold() for part in path.parts[:-1])
     if path.suffix != ".json":
         raise ValueError("plugin watch file must be a lowercase .json file")
@@ -101,13 +101,13 @@ class OneBotEvent(BaseModel):
     time: int | None = Field(default=None, description="事件时间戳")
     self_id: int | None = Field(default=None, description="机器人 QQ 号")
     post_type: str | None = Field(default=None, description="事件类型")
-    message_type: str | None = None
-    sub_type: str | None = None
-    message_id: int | None = None
-    user_id: int | None = None
-    group_id: int | None = None
+    message_type: str | None                   = None
+    sub_type: str | None                       = None
+    message_id: int | None                     = None
+    user_id: int | None                        = None
+    group_id: int | None                       = None
     message: list[dict[str, Any]] | str | None = None
-    raw_message: str | None = None
+    raw_message: str | None                    = None
 
     @field_validator("message", mode="before")
     @classmethod
@@ -143,7 +143,7 @@ class OneBotEvent(BaseModel):
         return self
 
 
-CommandContext = Literal["private", "group"]
+CommandContext    = Literal["private", "group"]
 CommandPermission = Literal["public", "bot_admin", "group_admin"]
 
 
@@ -189,7 +189,7 @@ def _validate_command_children(
     for child in children:
         for token in (child.name, *child.aliases):
             normalized = token.casefold()
-            previous = claimed.get(normalized)
+            previous   = claimed.get(normalized)
             if previous is not None:
                 raise ValueError(
                     f"command token {token!r} conflicts with sibling command {previous!r}"
@@ -209,7 +209,7 @@ class PluginCommandNodeManifest(BaseModel):
     usage: str
     match: Literal["prefix", "exact"] = "prefix"
     # 省略时继承父命令；Core 发布目录时会展开为最终有效值。
-    permission: CommandPermission | None = None
+    permission: CommandPermission | None  = None
     contexts: list[CommandContext] | None = None
     examples: list[str] = Field(default_factory=list, max_length=16)
     invalid_examples: list[str] = Field(default_factory=list, max_length=16)
@@ -275,9 +275,9 @@ class PluginCommandManifest(BaseModel):
     name: str
     triggers: list[str]
     help: str
-    admin_only: bool = False
-    priority: int = 0
-    usage: str | None = None
+    admin_only: bool              = False
+    priority: int                 = 0
+    usage: str | None             = None
     permission: CommandPermission = "public"
     contexts: list[CommandContext] = Field(default_factory=_default_command_contexts)
     examples: list[str] = Field(default_factory=list, max_length=16)
@@ -348,11 +348,11 @@ class PluginScheduleManifest(BaseModel):
 
     handler: str
     cron: dict[str, Any]
-    id: str | None = None
+    id: str | None                 = None
     delivery: ScheduleDeliveryMode = "broadcast"
-    group_ids: list[int] | None = None
-    description: str | None = None
-    enabled: bool = True
+    group_ids: list[int] | None    = None
+    description: str | None        = None
+    enabled: bool                  = True
 
     @field_validator("group_ids", mode="before")
     @classmethod
@@ -385,7 +385,7 @@ class PluginDependencyManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
-    required: bool = True
+    required: bool          = True
     description: str | None = None
 
 
@@ -478,10 +478,10 @@ class PluginManifest(BaseModel):
 
     name: str
     schema_version: Literal[1] = 1
-    version: str = "0.0.0"
-    description: str | None = None
-    author: str | None = None
-    entry: str = "main.py"
+    version: str               = "0.0.0"
+    description: str | None    = None
+    author: str | None         = None
+    entry: str                 = "main.py"
     commands: list[PluginCommandManifest] = Field(default_factory=list, max_length=128)
     schedule: list[PluginScheduleManifest] = Field(default_factory=list)
     dependencies: list[PluginDependencyManifest] = Field(default_factory=list)
@@ -490,7 +490,7 @@ class PluginManifest(BaseModel):
     capabilities: list[PluginCapabilityName] = Field(default_factory=list)
     watch_files: list[str] = Field(default_factory=list, max_length=64)
     concurrency: PluginConcurrency = "parallel"
-    enabled: bool = True
+    enabled: bool                  = True
 
     @field_validator("name")
     @classmethod
@@ -516,7 +516,7 @@ class PluginManifest(BaseModel):
         if len(command_names) != len(set(command_names)):
             raise ValueError("plugin commands must not contain duplicate stable names")
 
-        command_count = 0
+        command_count                                                              = 0
         stack: list[tuple[PluginCommandManifest | PluginCommandNodeManifest, int]] = [
             (command, 1) for command in self.commands
         ]

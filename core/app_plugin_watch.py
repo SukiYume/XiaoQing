@@ -1,3 +1,4 @@
+# 插件监控监督器：统一管理重启、退避和取消期间的任务所有权。
 # mypy: disable-error-code=attr-defined
 """Application-owned plugin watcher supervision."""
 
@@ -44,16 +45,16 @@ class AppPluginWatchMixin:
         )
 
     def _plugin_watch_poll_interval(self, config: Mapping[str, Any] | None = None) -> float:
-        source = config if config is not None else self.config
+        source       = config if config is not None else self.config
         raw_interval = source.get("plugin_poll_interval", 3600)
         try:
             interval = _coerce_runtime_number(
                 raw_interval,
-                key="plugin_poll_interval",
-                default=3600.0,
-                integer=False,
-                minimum=0.01,
-                maximum=86400.0,
+                key     = "plugin_poll_interval",
+                default = 3600.0,
+                integer = False,
+                minimum = 0.01,
+                maximum = 86400.0,
             )
         except ValueError:
             return 3600.0
@@ -90,7 +91,7 @@ class AppPluginWatchMixin:
             delay = 0.0
         else:
             exponent = min(self._plugin_watch_restart_failures, 30)
-            delay = min(
+            delay    = min(
                 self._plugin_watch_restart_max_delay_seconds,
                 self._plugin_watch_restart_base_delay_seconds * (2**exponent),
             )
@@ -105,7 +106,7 @@ class AppPluginWatchMixin:
             if self._plugin_watch_can_restart():
                 self._start_plugin_watch_generation()
 
-        restart_task = asyncio.create_task(restart_after_delay())
+        restart_task                    = asyncio.create_task(restart_after_delay())
         self._plugin_watch_restart_task = restart_task
 
         def restart_done(done: asyncio.Task[None]) -> None:
@@ -135,7 +136,7 @@ class AppPluginWatchMixin:
         if not self._plugin_watch_can_restart():
             return
         started_at = asyncio.get_running_loop().time()
-        task = asyncio.create_task(_run_background_operation(self.plugin_manager.watch))
+        task       = asyncio.create_task(_run_background_operation(self.plugin_manager.watch))
         self._plugin_watch_tasks.add(task)
         self._plugin_watch_task = task
 
@@ -163,7 +164,7 @@ class AppPluginWatchMixin:
             # must not mutate the newer generation's restart ownership.
             if not is_current_generation:
                 return
-            was_restart_pending = self._plugin_watch_restart_pending
+            was_restart_pending                = self._plugin_watch_restart_pending
             self._plugin_watch_restart_pending = False
             if ran_for >= self._plugin_watch_stable_reset_seconds:
                 self._plugin_watch_restart_failures = 0
@@ -189,13 +190,13 @@ class AppPluginWatchMixin:
         self.plugin_manager.update_poll_interval(
             self._plugin_watch_poll_interval(config) if poll_interval is None else poll_interval
         )
-        enabled = self._plugin_watch_enabled(config)
+        enabled                    = self._plugin_watch_enabled(config)
         self._plugin_watch_desired = enabled
         if not self._watch_runtime_active():
             return
 
         live_tasks = [task for task in self._plugin_watch_tasks if not task.done()]
-        current = self._plugin_watch_task
+        current    = self._plugin_watch_task
         if current is not None and not current.done() and current not in live_tasks:
             self._plugin_watch_tasks.add(current)
             live_tasks.append(current)
@@ -219,9 +220,9 @@ class AppPluginWatchMixin:
                 self._start_plugin_watch_generation()
             return
 
-        self._plugin_watch_restart_pending = False
+        self._plugin_watch_restart_pending  = False
         self._plugin_watch_restart_failures = 0
-        restart_task = self._plugin_watch_restart_task
+        restart_task                        = self._plugin_watch_restart_task
         if restart_task is not None and not restart_task.done():
             restart_task.cancel()
         for task in live_tasks:

@@ -51,7 +51,7 @@ def _merge_event_info(
         if not merged.get(field) and value:
             merged[field] = value
 
-    raw_reminders = parsed.get("remind_times")
+    raw_reminders    = parsed.get("remind_times")
     parsed_reminders = (
         [value.strip() for value in raw_reminders if isinstance(value, str) and value.strip()]
         if isinstance(raw_reminders, list)
@@ -60,9 +60,9 @@ def _merge_event_info(
     if not merged.get("remind_times") and parsed_reminders:
         merged["remind_times"] = parsed_reminders
 
-    start_time = merged.get("start_time")
+    start_time  = merged.get("start_time")
     raw_offsets = merged.get("remind_offsets") or parsed.get("remind_offsets")
-    offsets = (
+    offsets     = (
         [offset.strip() for offset in raw_offsets if isinstance(offset, str) and offset.strip()]
         if isinstance(raw_offsets, list)
         else []
@@ -89,7 +89,7 @@ async def handle_session_message(
     """按会话类型分发消息；损坏或过期类型会被清除以便用户重试。"""
 
     raw_session_type = session.get("type")
-    session_type = raw_session_type if isinstance(raw_session_type, str) else "<invalid>"
+    session_type     = raw_session_type if isinstance(raw_session_type, str) else "<invalid>"
 
     if session_type == PendoConfig.SESSION_TYPE_DIARY_TEMPLATE:
         # 用户身份来自已完成作用域校验的入口，不信任会话中的身份副本。
@@ -131,7 +131,7 @@ async def handle_event_conflict_session(
         event_handler = _require_services(context)["event_handler"]
         # 创建过程会补默认分类和提醒，复制后不污染仍在事务中的会话快照。
         parsed_data: dict[str, Any] = dict(raw_data)
-        result = await event_handler.create_event(
+        result                      = await event_handler.create_event(
             user_id, parsed_data, context, allow_conflict=True
         )
         await safe_end_session(context)
@@ -157,9 +157,9 @@ async def handle_event_info_session(
         await safe_end_session(context)
         return error_result("日程会话状态损坏，请重新创建")
 
-    services = _require_services(context)
+    services      = _require_services(context)
     event_handler = services["event_handler"]
-    ai_parser = services["ai_parser"]
+    ai_parser     = services["ai_parser"]
 
     # AIParser 自身已实现规则降级；局部模式不会把“明天九点”误填成标题或正文。
     parsed = await ai_parser.parse_event_with_ai(text, user_id, partial=True)

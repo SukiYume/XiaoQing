@@ -1,3 +1,4 @@
+# 验证聊天关闭等待后台工作终结并完成最终持久化。
 from __future__ import annotations
 
 import logging
@@ -13,7 +14,7 @@ def test_shutdown_store_flushers_persist_all_dirty_conversations(tmp_path) -> No
     from plugins.xiaoqing_chat.memory.memory import MemoryStore
     from plugins.xiaoqing_chat.planning.pfc_state import PFCConversationState, PFCStateStore
 
-    memory_dir = tmp_path / "memory"
+    memory_dir   = tmp_path / "memory"
     memory_store = MemoryStore(memory_dir)
     memory_store.append("g1", role="user", name="one", content="first")
     memory_store.append("g2", role="user", name="two", content="second")
@@ -46,7 +47,7 @@ async def test_shutdown_flushes_memory_and_pfc_before_cancelling_pending_tasks(
             order.append("cancel")
 
     pending = _PendingTask()
-    state = SimpleNamespace(
+    state   = SimpleNamespace(
         stop_accepting_background_tasks=Mock(side_effect=lambda: order.append("stop")),
         background_tasks=Mock(return_value={pending}),
         memory_store=SimpleNamespace(persist_all=Mock(side_effect=lambda: order.append("memory"))),
@@ -59,7 +60,7 @@ async def test_shutdown_flushes_memory_and_pfc_before_cancelling_pending_tasks(
     monkeypatch.setattr(
         xiaoqing_chat.asyncio,
         "wait",
-        AsyncMock(side_effect=[(set(), {pending}), ({pending}, set())]),
+        AsyncMock(return_value=({pending}, set())),
     )
     context = SimpleNamespace(logger=logging.getLogger("test.xiaoqing_chat.shutdown"))
 

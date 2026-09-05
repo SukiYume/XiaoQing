@@ -43,14 +43,14 @@ class TestEventLeafModel:
         from plugins.pendo.models.item import EventItem
 
         item = EventItem(
-            owner_id="u1",
-            title="摘要截止",
-            event_role="multi_node_child",
-            event_collection_id="conf2026",
-            event_collection_kind="multi_node",
-            event_index=1,
-            event_node_key="m01",
-            notes="备注",
+            owner_id              = "u1",
+            title                 = "摘要截止",
+            event_role            = "multi_node_child",
+            event_collection_id   = "conf2026",
+            event_collection_kind = "multi_node",
+            event_index           = 1,
+            event_node_key        = "m01",
+            notes                 = "备注",
         )
         d = item.to_dict()
         assert "milestones" not in d
@@ -80,13 +80,13 @@ class TestAIParserMilestones:
 
     def test_build_remind_times_for_milestones(self):
         """多节点时 remind_times 是所有里程碑各自提醒的并集"""
-        parser = self._make_parser()
+        parser     = self._make_parser()
         milestones = [
             {"name": "注册截止", "time": "2030-04-06T00:00:00"},
             {"name": "会议开始", "time": "2030-04-22T10:30:00"},
         ]
         remind_offsets = ["提前1天", "提前1小时"]
-        times = parser.build_remind_times_for_milestones(milestones, remind_offsets)
+        times          = parser.build_remind_times_for_milestones(milestones, remind_offsets)
         # 2 milestones × 2 offsets = 4 remind times
         assert len(times) == 4
 
@@ -134,7 +134,7 @@ class TestAIParserMilestones:
         import json
         from unittest.mock import AsyncMock, patch
 
-        parser = self._make_parser()
+        parser        = self._make_parser()
         mock_response = json.dumps(
             {
                 "parse_source": "rule",
@@ -210,7 +210,7 @@ class TestMilestoneEventHandler:
         db.insert_item = MagicMock(return_value="abc12345")
         db.log_operation = MagicMock()
 
-        ai_parser = MagicMock()
+        ai_parser        = MagicMock()
         reminder_service = MagicMock()
         reminder_service.detect_conflict = MagicMock(return_value=[])
 
@@ -220,7 +220,7 @@ class TestMilestoneEventHandler:
     def test_create_milestone_event_success(self):
         import asyncio
 
-        handler = self._make_handler()
+        handler                     = self._make_handler()
         parsed_data: dict[str, Any] = {
             "title": "星团会议",
             "milestones": [
@@ -252,7 +252,7 @@ class TestMilestoneEventHandler:
     def test_create_single_event_with_notes(self):
         import asyncio
 
-        handler = self._make_handler()
+        handler                     = self._make_handler()
         parsed_data: dict[str, Any] = {
             "title": "普通会议",
             "milestones": [],
@@ -291,7 +291,7 @@ class TestMilestoneReminderMessage:
         """多节点 leaf 提醒显示集合标题、节点标题和节点备注"""
         from types import SimpleNamespace
 
-        service = self._make_service()
+        service                                      = self._make_service()
         service.db.get_event_collection.return_value = {
             "id": "abc12345",
             "kind": "multi_node",
@@ -300,17 +300,17 @@ class TestMilestoneReminderMessage:
         }
 
         item = SimpleNamespace(
-            id="abc12345_m01",
-            title="注册截止",
-            start_time="2030-04-06T00:00:00",
-            end_time=None,
-            location="江苏溧水",
-            notes="报名材料今晚前发给秘书",
-            remind_times=["2030-04-05T00:00:00", "2030-04-05T23:00:00"],
-            context={},
-            owner_id="user1",
-            event_collection_id="abc12345",
-            event_collection_kind="multi_node",
+            id                    = "abc12345_m01",
+            title                 = "注册截止",
+            start_time            = "2030-04-06T00:00:00",
+            end_time              = None,
+            location              = "江苏溧水",
+            notes                 = "报名材料今晚前发给秘书",
+            remind_times          = ["2030-04-05T00:00:00", "2030-04-05T23:00:00"],
+            context               = {},
+            owner_id              = "user1",
+            event_collection_id   = "abc12345",
+            event_collection_kind = "multi_node",
         )
 
         msg = service._build_reminder_message(item, "2030-04-05T00:00:00")
@@ -328,15 +328,15 @@ class TestMilestoneReminderMessage:
         service = self._make_service()
 
         item = SimpleNamespace(
-            id="abc12345",
-            title="普通会议",
-            start_time="2030-04-06T09:00:00",
-            end_time=None,
-            location="",
-            notes="会议链接: https://meet.example.com",
-            remind_times=["2030-04-05T09:00:00"],
-            context={},
-            owner_id="user1",
+            id           = "abc12345",
+            title        = "普通会议",
+            start_time   = "2030-04-06T09:00:00",
+            end_time     = None,
+            location     = "",
+            notes        = "会议链接: https://meet.example.com",
+            remind_times = ["2030-04-05T09:00:00"],
+            context      = {},
+            owner_id     = "user1",
         )
 
         msg = service._build_reminder_message(item, "2030-04-05T09:00:00")
@@ -394,7 +394,7 @@ class TestRecurringEventRegression:
         from plugins.pendo.models.item import EventItem
         from plugins.pendo.services.db import Database
 
-        db = Database(str(tmp_path / "pendo.db"))
+        db            = Database(str(tmp_path / "pendo.db"))
         collection_id = "series123"
 
         try:
@@ -411,32 +411,32 @@ class TestRecurringEventRegression:
                 }
             )
             first = EventItem(
-                owner_id="u1",
-                title="重复会议",
-                start_time="2030-01-01T09:00:00",
-                end_time="2030-01-01T10:00:00",
-                remind_times=["2030-01-01T08:00:00"],
-                event_role="recurring_occurrence",
-                event_collection_id=collection_id,
-                event_collection_kind="recurring",
-                event_index=1,
-                event_node_key="20300101",
-                created_at="2030-01-01T00:00:00",
-                updated_at="2030-01-01T00:00:00",
+                owner_id              = "u1",
+                title                 = "重复会议",
+                start_time            = "2030-01-01T09:00:00",
+                end_time              = "2030-01-01T10:00:00",
+                remind_times          = ["2030-01-01T08:00:00"],
+                event_role            = "recurring_occurrence",
+                event_collection_id   = collection_id,
+                event_collection_kind = "recurring",
+                event_index           = 1,
+                event_node_key        = "20300101",
+                created_at            = "2030-01-01T00:00:00",
+                updated_at            = "2030-01-01T00:00:00",
             )
             second = EventItem(
-                owner_id="u1",
-                title="重复会议",
-                start_time="2030-01-02T09:00:00",
-                end_time="2030-01-02T10:00:00",
-                remind_times=["2030-01-02T08:00:00"],
-                event_role="recurring_occurrence",
-                event_collection_id=collection_id,
-                event_collection_kind="recurring",
-                event_index=2,
-                event_node_key="20300102",
-                created_at="2030-01-01T00:00:00",
-                updated_at="2030-01-01T00:00:00",
+                owner_id              = "u1",
+                title                 = "重复会议",
+                start_time            = "2030-01-02T09:00:00",
+                end_time              = "2030-01-02T10:00:00",
+                remind_times          = ["2030-01-02T08:00:00"],
+                event_role            = "recurring_occurrence",
+                event_collection_id   = collection_id,
+                event_collection_kind = "recurring",
+                event_index           = 2,
+                event_node_key        = "20300102",
+                created_at            = "2030-01-01T00:00:00",
+                updated_at            = "2030-01-01T00:00:00",
             )
             db.insert_item(first, "series123_20300101")
             db.insert_item(second, "series123_20300102")
@@ -454,7 +454,7 @@ class TestRecurringEventRegression:
 
             assert result["status"] == "success"
 
-            updated_first = db.get_item("series123_20300101", "u1")
+            updated_first  = db.get_item("series123_20300101", "u1")
             updated_second = db.get_item("series123_20300102", "u1")
 
             assert updated_first is not None
@@ -500,10 +500,10 @@ class TestReminderRegression:
             db=MagicMock(), ai_parser=_FakeAiParser(), reminder_service=MagicMock()
         )
         current_event = EventItem(
-            owner_id="u1",
-            title="FAST2026观测申请截止",
-            category="工作",
-            start_time="2026-03-31T14:00:00",
+            owner_id   = "u1",
+            title      = "FAST2026观测申请截止",
+            category   = "工作",
+            start_time = "2026-03-31T14:00:00",
         )
 
         updates = asyncio.run(handler._parse_updates(changes, current_event))
@@ -529,17 +529,17 @@ class TestReminderRegression:
         from plugins.pendo.utils.formatters import ItemFormatter
 
         owner_id = "u-ai-offset-edit"
-        db = Database(str(tmp_path / "pendo.db"))
+        db       = Database(str(tmp_path / "pendo.db"))
 
         try:
             assert db.update_user_settings(owner_id, {"timezone": "Asia/Shanghai"})
             event = EventItem(
-                owner_id=owner_id,
-                title="心理咨询",
-                category="健康",
-                start_time="2026-08-12T18:00:00",
-                timezone="Asia/Shanghai",
-                reminder_rules=[
+                owner_id       = owner_id,
+                title          = "心理咨询",
+                category       = "健康",
+                start_time     = "2026-08-12T18:00:00",
+                timezone       = "Asia/Shanghai",
+                reminder_rules = [
                     {"offset_seconds": 86400},
                     {"offset_seconds": 3600},
                     {"offset_seconds": 0},
@@ -549,8 +549,8 @@ class TestReminderRegression:
                     "2026-08-12T17:00:00",
                     "2026-08-12T18:00:00",
                 ],
-                created_at="2026-08-06T14:03:09",
-                updated_at="2026-08-06T14:03:09",
+                created_at = "2026-08-06T14:03:09",
+                updated_at = "2026-08-06T14:03:09",
             )
             db.insert_item(event, "06f123e5")
 
@@ -618,11 +618,11 @@ class TestReminderRegression:
             db=MagicMock(), ai_parser=_FakeAiParser(), reminder_service=MagicMock()
         )
         current_event = EventItem(
-            owner_id="u1",
-            title="会议开始",
-            location="杭州",
-            notes="",
-            start_time="2030-01-22T10:30:00",
+            owner_id   = "u1",
+            title      = "会议开始",
+            location   = "杭州",
+            notes      = "",
+            start_time = "2030-01-22T10:30:00",
         )
 
         updates = asyncio.run(handler._parse_updates("备注从北京南坐G123去会场", current_event))
@@ -643,17 +643,17 @@ class TestReminderRegression:
 
         try:
             event = EventItem(
-                owner_id="u1",
-                title="FAST2026观测申请截止",
-                category="工作",
-                start_time="2026-03-31T14:00:00",
-                remind_times=[
+                owner_id     = "u1",
+                title        = "FAST2026观测申请截止",
+                category     = "工作",
+                start_time   = "2026-03-31T14:00:00",
+                remind_times = [
                     "2026-03-30T14:00:00",
                     "2026-03-31T13:00:00",
                     "2026-03-31T14:00:00",
                 ],
-                created_at="2026-03-20T00:00:00",
-                updated_at="2026-03-20T00:00:00",
+                created_at = "2026-03-20T00:00:00",
+                updated_at = "2026-03-20T00:00:00",
             )
             db.insert_item(event, "evt12345")
 
@@ -717,39 +717,39 @@ class TestReminderRegression:
                 }
             )
             first = EventItem(
-                owner_id="u1",
-                title="重复会议",
-                category="工作",
-                start_time="2030-01-01T10:00:00",
-                end_time="2030-01-01T11:00:00",
-                remind_times=["2030-01-01T09:00:00"],
-                event_role="recurring_occurrence",
-                event_collection_id=collection_id,
-                event_collection_kind="recurring",
-                event_index=1,
-                event_node_key="20300101",
-                created_at="2030-01-01T00:00:00",
-                updated_at="2030-01-01T00:00:00",
+                owner_id              = "u1",
+                title                 = "重复会议",
+                category              = "工作",
+                start_time            = "2030-01-01T10:00:00",
+                end_time              = "2030-01-01T11:00:00",
+                remind_times          = ["2030-01-01T09:00:00"],
+                event_role            = "recurring_occurrence",
+                event_collection_id   = collection_id,
+                event_collection_kind = "recurring",
+                event_index           = 1,
+                event_node_key        = "20300101",
+                created_at            = "2030-01-01T00:00:00",
+                updated_at            = "2030-01-01T00:00:00",
             )
             second = EventItem(
-                owner_id="u1",
-                title="重复会议",
-                category="工作",
-                start_time="2030-01-02T10:00:00",
-                end_time="2030-01-02T11:00:00",
-                remind_times=["2030-01-02T09:00:00"],
-                event_role="recurring_occurrence",
-                event_collection_id=collection_id,
-                event_collection_kind="recurring",
-                event_index=2,
-                event_node_key="20300102",
-                created_at="2030-01-01T00:00:00",
-                updated_at="2030-01-01T00:00:00",
+                owner_id              = "u1",
+                title                 = "重复会议",
+                category              = "工作",
+                start_time            = "2030-01-02T10:00:00",
+                end_time              = "2030-01-02T11:00:00",
+                remind_times          = ["2030-01-02T09:00:00"],
+                event_role            = "recurring_occurrence",
+                event_collection_id   = collection_id,
+                event_collection_kind = "recurring",
+                event_index           = 2,
+                event_node_key        = "20300102",
+                created_at            = "2030-01-01T00:00:00",
+                updated_at            = "2030-01-01T00:00:00",
             )
             db.insert_item(first, "series123_20300101")
             db.insert_item(second, "series123_20300102")
 
-            ai_parser = MagicMock()
+            ai_parser                                                    = MagicMock()
             ai_parser.build_reminder_rules_from_description.return_value = [
                 {"offset_seconds": 86400},
                 {"offset_seconds": 3600},
@@ -763,7 +763,7 @@ class TestReminderRegression:
 
             assert result["status"] == "success"
 
-            updated_first = db.get_item("series123_20300101", "u1")
+            updated_first  = db.get_item("series123_20300101", "u1")
             updated_second = db.get_item("series123_20300102", "u1")
 
             assert updated_first is not None
@@ -795,13 +795,13 @@ class TestReminderRegression:
 
         try:
             event = EventItem(
-                owner_id="u1",
-                title="元旦会议",
-                start_time="2030-01-01T10:00:00",
-                end_time="2030-01-01T11:00:00",
-                remind_times=["2030-01-01T09:00:00"],
-                created_at="2029-12-01T00:00:00",
-                updated_at="2029-12-01T00:00:00",
+                owner_id     = "u1",
+                title        = "元旦会议",
+                start_time   = "2030-01-01T10:00:00",
+                end_time     = "2030-01-01T11:00:00",
+                remind_times = ["2030-01-01T09:00:00"],
+                created_at   = "2029-12-01T00:00:00",
+                updated_at   = "2029-12-01T00:00:00",
             )
             db.insert_item(event, "evtday01")
 
@@ -899,30 +899,30 @@ class TestReminderRegression:
                 }
             )
             first = EventItem(
-                owner_id="u1",
-                title="开始",
-                start_time="2030-01-01T10:00:00",
-                event_role="multi_node_child",
-                event_collection_id="mile1234",
-                event_collection_kind="multi_node",
-                event_index=1,
-                event_node_key="m01",
-                remind_times=["2029-12-31T10:00:00", "2030-01-01T10:00:00"],
-                created_at="2030-01-01T00:00:00",
-                updated_at="2030-01-01T00:00:00",
+                owner_id              = "u1",
+                title                 = "开始",
+                start_time            = "2030-01-01T10:00:00",
+                event_role            = "multi_node_child",
+                event_collection_id   = "mile1234",
+                event_collection_kind = "multi_node",
+                event_index           = 1,
+                event_node_key        = "m01",
+                remind_times          = ["2029-12-31T10:00:00", "2030-01-01T10:00:00"],
+                created_at            = "2030-01-01T00:00:00",
+                updated_at            = "2030-01-01T00:00:00",
             )
             second = EventItem(
-                owner_id="u1",
-                title="截止",
-                start_time="2030-01-03T10:00:00",
-                event_role="multi_node_child",
-                event_collection_id="mile1234",
-                event_collection_kind="multi_node",
-                event_index=2,
-                event_node_key="m02",
-                remind_times=["2030-01-03T10:00:00"],
-                created_at="2030-01-01T00:00:00",
-                updated_at="2030-01-01T00:00:00",
+                owner_id              = "u1",
+                title                 = "截止",
+                start_time            = "2030-01-03T10:00:00",
+                event_role            = "multi_node_child",
+                event_collection_id   = "mile1234",
+                event_collection_kind = "multi_node",
+                event_index           = 2,
+                event_node_key        = "m02",
+                remind_times          = ["2030-01-03T10:00:00"],
+                created_at            = "2030-01-01T00:00:00",
+                updated_at            = "2030-01-01T00:00:00",
             )
             db.insert_item(first, "mile1234_m01")
             db.insert_item(second, "mile1234_m02")
@@ -941,7 +941,7 @@ class TestReminderRegression:
             assert result["status"] == "success"
             assert "已更新日程" in result["message"]
 
-            updated_first = db.get_item("mile1234_m01", "u1")
+            updated_first  = db.get_item("mile1234_m01", "u1")
             updated_second = db.get_item("mile1234_m02", "u1")
             assert updated_first is not None
             assert updated_second is not None
@@ -976,22 +976,22 @@ class TestReminderRegression:
                 }
             )
             event = EventItem(
-                owner_id="u1",
-                title="会议开始",
-                start_time="2030-01-22T10:30:00",
-                remind_times=[
+                owner_id     = "u1",
+                title        = "会议开始",
+                start_time   = "2030-01-22T10:30:00",
+                remind_times = [
                     "2030-01-21T10:30:00",
                     "2030-01-22T09:30:00",
                     "2030-01-22T10:30:00",
                 ],
-                notes="",
-                event_role="multi_node_child",
-                event_collection_id="mile5678",
-                event_collection_kind="multi_node",
-                event_index=3,
-                event_node_key="m03",
-                created_at="2030-01-01T00:00:00",
-                updated_at="2030-01-01T00:00:00",
+                notes                 = "",
+                event_role            = "multi_node_child",
+                event_collection_id   = "mile5678",
+                event_collection_kind = "multi_node",
+                event_index           = 3,
+                event_node_key        = "m03",
+                created_at            = "2030-01-01T00:00:00",
+                updated_at            = "2030-01-01T00:00:00",
             )
             db.insert_item(event, "mile5678_m03")
 
@@ -1050,30 +1050,30 @@ class TestReminderRegression:
                 }
             )
             first = EventItem(
-                owner_id="u1",
-                title="重复会议",
-                start_time="2030-01-01T10:00:00",
-                remind_times=["2030-01-01T09:00:00"],
-                event_role="recurring_occurrence",
-                event_collection_id="abcd1234",
-                event_collection_kind="recurring",
-                event_index=1,
-                event_node_key="20300101",
-                created_at="2030-01-01T00:00:00",
-                updated_at="2030-01-01T00:00:00",
+                owner_id              = "u1",
+                title                 = "重复会议",
+                start_time            = "2030-01-01T10:00:00",
+                remind_times          = ["2030-01-01T09:00:00"],
+                event_role            = "recurring_occurrence",
+                event_collection_id   = "abcd1234",
+                event_collection_kind = "recurring",
+                event_index           = 1,
+                event_node_key        = "20300101",
+                created_at            = "2030-01-01T00:00:00",
+                updated_at            = "2030-01-01T00:00:00",
             )
             second = EventItem(
-                owner_id="u1",
-                title="重复会议",
-                start_time="2030-01-02T10:00:00",
-                remind_times=["2030-01-02T09:00:00"],
-                event_role="recurring_occurrence",
-                event_collection_id="abcd1234",
-                event_collection_kind="recurring",
-                event_index=2,
-                event_node_key="20300102",
-                created_at="2030-01-01T00:00:00",
-                updated_at="2030-01-01T00:00:00",
+                owner_id              = "u1",
+                title                 = "重复会议",
+                start_time            = "2030-01-02T10:00:00",
+                remind_times          = ["2030-01-02T09:00:00"],
+                event_role            = "recurring_occurrence",
+                event_collection_id   = "abcd1234",
+                event_collection_kind = "recurring",
+                event_index           = 2,
+                event_node_key        = "20300102",
+                created_at            = "2030-01-01T00:00:00",
+                updated_at            = "2030-01-01T00:00:00",
             )
             db.insert_item(first, "abcd1234_20300101")
             db.insert_item(second, "abcd1234_20300102")
@@ -1114,37 +1114,37 @@ class TestReminderRegression:
                 }
             )
             start_event = EventItem(
-                owner_id="u1",
-                title="会议开始",
-                start_time="2030-01-22T10:30:00",
-                remind_times=[
+                owner_id     = "u1",
+                title        = "会议开始",
+                start_time   = "2030-01-22T10:30:00",
+                remind_times = [
                     "2030-01-21T10:30:00",
                     "2030-01-22T09:30:00",
                     "2030-01-22T10:30:00",
                 ],
-                event_role="multi_node_child",
-                event_collection_id="mileweek",
-                event_collection_kind="multi_node",
-                event_index=1,
-                event_node_key="m01",
-                created_at="2030-01-01T00:00:00",
-                updated_at="2030-01-01T00:00:00",
+                event_role            = "multi_node_child",
+                event_collection_id   = "mileweek",
+                event_collection_kind = "multi_node",
+                event_index           = 1,
+                event_node_key        = "m01",
+                created_at            = "2030-01-01T00:00:00",
+                updated_at            = "2030-01-01T00:00:00",
             )
             end_event = EventItem(
-                owner_id="u1",
-                title="会议结束",
-                start_time="2030-01-26T12:00:00",
-                remind_times=[
+                owner_id     = "u1",
+                title        = "会议结束",
+                start_time   = "2030-01-26T12:00:00",
+                remind_times = [
                     "2030-01-25T12:00:00",
                     "2030-01-26T12:00:00",
                 ],
-                event_role="multi_node_child",
-                event_collection_id="mileweek",
-                event_collection_kind="multi_node",
-                event_index=2,
-                event_node_key="m02",
-                created_at="2030-01-01T00:00:00",
-                updated_at="2030-01-01T00:00:00",
+                event_role            = "multi_node_child",
+                event_collection_id   = "mileweek",
+                event_collection_kind = "multi_node",
+                event_index           = 2,
+                event_node_key        = "m02",
+                created_at            = "2030-01-01T00:00:00",
+                updated_at            = "2030-01-01T00:00:00",
             )
             db.insert_item(start_event, "mileweek_m01")
             db.insert_item(end_event, "mileweek_m02")

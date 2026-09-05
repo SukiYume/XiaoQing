@@ -403,7 +403,7 @@ def test_exceptions_all_exports():
 @pytest.mark.unit
 def test_plugin_error_message_format():
     """Test PluginError message format"""
-    exc = PluginError("my_plugin", "Error message")
+    exc     = PluginError("my_plugin", "Error message")
     message = str(exc)
     assert message.startswith("[my_plugin]")
     assert "Error message" in message
@@ -412,7 +412,7 @@ def test_plugin_error_message_format():
 @pytest.mark.unit
 def test_command_permission_error_message_format():
     """Test CommandPermissionError message format"""
-    exc = CommandPermissionError("admin_only", 999)
+    exc     = CommandPermissionError("admin_only", 999)
     message = str(exc)
     assert "admin_only" in message
     assert "999" in message
@@ -421,7 +421,7 @@ def test_command_permission_error_message_format():
 @pytest.mark.unit
 def test_session_not_found_private_message_format():
     """Test SessionNotFoundError message for private"""
-    exc = SessionNotFoundError(12345)
+    exc     = SessionNotFoundError(12345)
     message = str(exc)
     assert "12345" in message
     assert "private" in message
@@ -430,7 +430,7 @@ def test_session_not_found_private_message_format():
 @pytest.mark.unit
 def test_session_not_found_group_message_format():
     """Test SessionNotFoundError message for group"""
-    exc = SessionNotFoundError(12345, 67890)
+    exc     = SessionNotFoundError(12345, 67890)
     message = str(exc)
     assert "12345" in message
     assert "67890" in message

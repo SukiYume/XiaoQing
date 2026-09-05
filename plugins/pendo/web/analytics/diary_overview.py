@@ -26,16 +26,16 @@ def _parse_day(value: str | None) -> date | None:
 
 
 def _resolve_period(
-    year: int | None = None,
-    month: int | None = None,
+    year: int | None       = None,
+    month: int | None      = None,
     start_date: str | None = None,
-    end_date: str | None = None,
+    end_date: str | None   = None,
 ) -> tuple[date, date]:
     """把自然月或显式日期范围归一为闭区间。"""
 
     if start_date is not None or end_date is not None:
         start = _parse_day(start_date)
-        end = _parse_day(end_date)
+        end   = _parse_day(end_date)
         if start is None or end is None:
             raise ValueError("start_date and end_date must be valid YYYY-MM-DD strings")
         if start > end:
@@ -64,7 +64,7 @@ def _load_diary_days(db: Database, owner_id: str) -> set[date]:
     )
     days: set[date] = set()
     for row in rows:
-        value = row[0]
+        value  = row[0]
         parsed = _parse_day(value if isinstance(value, str) else None)
         if parsed is not None:
             days.add(parsed)
@@ -103,12 +103,12 @@ def _current_streak(days: set[date], today: date) -> int:
 def _longest_streak(days: set[date]) -> int:
     """计算一组日期中的最长连续区间。"""
 
-    longest = 0
-    current = 0
+    longest               = 0
+    current               = 0
     previous: date | None = None
     for current_day in sorted(days):
         current = current + 1 if previous and current_day - previous == timedelta(days=1) else 1
-        longest = max(longest, current)
+        longest  = max(longest, current)
         previous = current_day
     return longest
 
@@ -150,17 +150,17 @@ def _build_cadence(
         date_key = current.isoformat()
         if resolved == "year":
             bucket_key = current.strftime("%Y")
-            label = bucket_key
+            label      = bucket_key
         elif resolved == "month":
             bucket_key = current.strftime("%Y-%m")
-            label = bucket_key
+            label      = bucket_key
         elif resolved == "week":
-            iso = current.isocalendar()
+            iso        = current.isocalendar()
             bucket_key = f"{iso.year}-W{iso.week:02d}"
-            label = bucket_key
+            label      = bucket_key
         else:
             bucket_key = date_key
-            label = (
+            label      = (
                 str(current.day)
                 if start.year == end.year and start.month == end.month
                 else f"{current.month}/{current.day}"
@@ -184,11 +184,11 @@ def _build_cadence(
 def build_diary_overview(
     db: Database,
     owner_id: str,
-    year: int | None = None,
-    month: int | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    today: str | None = None,
+    year: int | None         = None,
+    month: int | None        = None,
+    start_date: str | None   = None,
+    end_date: str | None     = None,
+    today: str | None        = None,
     cadence_granularity: str = "day",
 ) -> dict[str, Any]:
     """生成指定自然月或显式日期范围的日记概览。"""
@@ -211,17 +211,17 @@ def build_diary_overview(
     )
     window_items = sorted(
         (item for item in queried_items if isinstance(item, DiaryItem)),
-        key=_entry_sort_key,
-        reverse=True,
+        key     = _entry_sort_key,
+        reverse = True,
     )
     user_timezone = TimezoneHelper.get_user_timezone(owner_id, db)
 
-    day_counts: dict[str, int] = {}
-    day_words: dict[str, int] = {}
-    mood_counts: dict[str, int] = {}
+    day_counts: dict[str, int]      = {}
+    day_words: dict[str, int]       = {}
+    mood_counts: dict[str, int]     = {}
     template_counts: dict[str, int] = {}
-    period_days: set[date] = set()
-    total_words = 0
+    period_days: set[date]          = set()
+    total_words                     = 0
 
     for item in window_items:
         diary_day = _parse_day(item.diary_date)
@@ -243,19 +243,19 @@ def build_diary_overview(
         if template_id:
             template_counts[template_id] = template_counts.get(template_id, 0) + 1
 
-    all_days = _load_diary_days(db, owner_id)
-    current_streak = _current_streak(all_days, today_day)
-    longest_streak = _longest_streak(all_days)
+    all_days              = _load_diary_days(db, owner_id)
+    current_streak        = _current_streak(all_days, today_day)
+    longest_streak        = _longest_streak(all_days)
     period_longest_streak = _longest_streak(period_days)
-    total_days = (end - start).days + 1
-    active_days = len(period_days)
+    total_days            = (end - start).days + 1
+    active_days           = len(period_days)
 
     resolved_cadence_granularity, cadence = _build_cadence(
-        start=start,
-        end=end,
-        day_counts=day_counts,
-        day_words=day_words,
-        cadence_granularity=cadence_granularity,
+        start               = start,
+        end                 = end,
+        day_counts          = day_counts,
+        day_words           = day_words,
+        cadence_granularity = cadence_granularity,
     )
 
     mood_breakdown = [

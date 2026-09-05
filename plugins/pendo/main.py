@@ -80,8 +80,8 @@ from .utils.error_handlers import handle_command_errors, success_result
 from .utils.session_utils import safe_end_session
 from .utils.settings_utils import PLUGIN_SETTINGS_HELP_LINES
 
-logger = logging.getLogger(__name__)
-_runtime_service = PendoRuntimeService()
+logger                    = logging.getLogger(__name__)
+_runtime_service          = PendoRuntimeService()
 _SESSION_INPUT_EXCEPTIONS = (
     InvalidDateRangeException,
     InvalidFieldValueException,
@@ -136,7 +136,7 @@ def _register_config_reload_hook(context: PluginContextProtocol | None) -> None:
         before = PendoConfig.runtime()
         if not _apply_runtime_config(context):
             return
-        after = PendoConfig.runtime()
+        after    = PendoConfig.runtime()
         database = runtime_service.database
         if database is None:
             raise RuntimeError("Pendo runtime database is unavailable during config reload")
@@ -156,11 +156,11 @@ def init(context: PluginContextProtocol) -> None:
     """插件初始化"""
 
     _apply_runtime_config(context)
-    runtime_state = get_plugin_runtime_state(context)
+    runtime_state                      = get_plugin_runtime_state(context)
     runtime_state["lifecycle_service"] = _runtime_service
-    database_opened = False
+    database_opened                    = False
     try:
-        db = _runtime_service.open_database(context, Database)
+        db              = _runtime_service.open_database(context, Database)
         database_opened = True
         _register_config_reload_hook(context)
         log = _get_logger(context)
@@ -175,16 +175,16 @@ def init(context: PluginContextProtocol) -> None:
             public_error_message(
                 context,
                 exc,
-                logger=getattr(context, "logger", None) or logger,
-                component="pendo.init.config_subscription_rollback",
+                logger    = getattr(context, "logger", None) or logger,
+                component = "pendo.init.config_subscription_rollback",
             )
         if database_opened:
             for failure in _runtime_service.close_databases():
                 public_error_message(
                     context,
                     failure.error,
-                    logger=getattr(context, "logger", None) or logger,
-                    component=f"pendo.init.{failure.component}_rollback",
+                    logger    = getattr(context, "logger", None) or logger,
+                    component = f"pendo.init.{failure.component}_rollback",
                 )
         if runtime_state.get("lifecycle_service") is _runtime_service:
             runtime_state.pop("lifecycle_service", None)
@@ -224,8 +224,8 @@ def _cleanup_resources(context=None, *, stop_web: bool) -> None:
         public_error_message(
             context,
             exc,
-            logger=getattr(context, "logger", None) or logger,
-            component="pendo.cleanup.config_subscription",
+            logger    = getattr(context, "logger", None) or logger,
+            component = "pendo.cleanup.config_subscription",
         )
 
     if stop_web:
@@ -235,8 +235,8 @@ def _cleanup_resources(context=None, *, stop_web: bool) -> None:
         public_error_message(
             context,
             failure.error,
-            logger=getattr(context, "logger", None) or logger,
-            component=f"pendo.cleanup.{failure.component}",
+            logger    = getattr(context, "logger", None) or logger,
+            component = f"pendo.cleanup.{failure.component}",
         )
 
     try:
@@ -245,8 +245,8 @@ def _cleanup_resources(context=None, *, stop_web: bool) -> None:
         public_error_message(
             context,
             exc,
-            logger=getattr(context, "logger", None) or logger,
-            component="pendo.cleanup.reminders",
+            logger    = getattr(context, "logger", None) or logger,
+            component = "pendo.cleanup.reminders",
         )
 
     try:
@@ -256,8 +256,8 @@ def _cleanup_resources(context=None, *, stop_web: bool) -> None:
         public_error_message(
             context,
             exc,
-            logger=getattr(context, "logger", None) or logger,
-            component="pendo.cleanup.runtime_state",
+            logger    = getattr(context, "logger", None) or logger,
+            component = "pendo.cleanup.runtime_state",
         )
 
     log = _get_logger(context)
@@ -300,11 +300,11 @@ async def handle(
     Returns:
         消息列表
     """
-    log = _get_logger(context)
-    user_id = str(event.get("user_id", ""))
-    group_id = event.get("group_id")
+    log         = _get_logger(context)
+    user_id     = str(event.get("user_id", ""))
+    group_id    = event.get("group_id")
     raw_message = event.get("raw_message") or f"{command} {args}".strip()
-    route_args = _normalize_trigger_args(command, args)
+    route_args  = _normalize_trigger_args(command, args)
 
     # 1. 优先检查是否存在活跃会话 (多轮对话)
     # 注意：只处理属于 pendo 的会话，忽略其他插件的会话
@@ -334,7 +334,7 @@ def _is_explicit_pendo_command(raw_message: str) -> bool:
 
 def _normalize_trigger_args(command: str, args: str) -> str:
     command_name = str(command or "").strip().lstrip("/")
-    subcommand = TRIGGER_SUBCOMMAND_MAP.get(command_name)
+    subcommand   = TRIGGER_SUBCOMMAND_MAP.get(command_name)
     if not subcommand:
         return args
     return f"{subcommand} {str(args or '').strip()}".strip()
@@ -350,10 +350,10 @@ async def _has_active_session(context, plugin_name: str | None = None) -> bool:
     Returns:
         是否存在（匹配的）活跃会话
     """
-    session = None
+    session         = None
     session_manager = getattr(context, "session_manager", None)
     current_user_id = getattr(context, "current_user_id", None)
-    peek = getattr(session_manager, "peek", None)
+    peek            = getattr(session_manager, "peek", None)
     if callable(peek) and current_user_id is not None:
         session = await peek(current_user_id, getattr(context, "current_group_id", None))
     else:
@@ -382,7 +382,7 @@ async def handle_session(
     every mutation made to its isolated working copy.
     """
 
-    user_id = str(event.get("user_id", ""))
+    user_id  = str(event.get("user_id", ""))
     group_id = event.get("group_id")
     try:
         return await _handle_active_session(user_id, text, context, session, group_id)
@@ -461,12 +461,12 @@ async def _handle_command_routing(
     router = _build_command_router(context, group_id)
 
     catalog_root = getattr(router, "root", None) or _catalog_root(context)
-    invocation = resolve_context_command_invocation(context, catalog_root.code, args)
+    invocation   = resolve_context_command_invocation(context, catalog_root.code, args)
     if invocation is None:
         invocation = resolve_catalog_invocation(catalog_root, args)
     if len(invocation.chain) > 1:
         subcommand = invocation.chain[1].name
-        rest_args = invocation.remainder_after(1)
+        rest_args  = invocation.remainder_after(1)
     else:
         subcommand, rest_args = _split_subcommand_preserve_rest(args)
     if not subcommand:
@@ -475,7 +475,7 @@ async def _handle_command_routing(
     # 使用 CommandRouter 路由子命令
 
     start_time = time.perf_counter()
-    is_error = False
+    is_error   = False
     try:
         result = await router.route(subcommand, user_id, rest_args, context)
         if isinstance(result, dict) and result.get("status") == "error":
@@ -492,14 +492,14 @@ async def _handle_command_routing(
 
 def _split_subcommand_preserve_rest(args: str) -> tuple[str, str]:
     """拆分一级子命令，同时保留剩余参数中的原始换行。"""
-    raw = args or ""
+    raw      = args or ""
     stripped = raw.strip()
     if not stripped:
         return "", ""
 
     parts = stripped.split(maxsplit=1)
     subcommand = parts[0].lower()
-    rest = parts[1] if len(parts) > 1 else ""
+    rest       = parts[1] if len(parts) > 1 else ""
     return subcommand, rest
 
 
@@ -528,7 +528,7 @@ async def scheduled_daily_briefing(context) -> list[dict[str, Any]]:
     重构后：直接调用commands.scheduled模块
     """
     log = _get_logger(context)
-    db = _get_database(context)
+    db  = _get_database(context)
 
     result = await _run_scheduled_task(
         context, "daily_briefings", lambda: send_daily_briefings(context, db), log
@@ -542,7 +542,7 @@ async def scheduled_diary_reminder(context) -> list[dict[str, Any]]:
     重构后：直接调用commands.scheduled模块
     """
     log = _get_logger(context)
-    db = _get_database(context)
+    db  = _get_database(context)
 
     result = await _run_scheduled_task(
         context, "diary_reminders", lambda: check_diary_reminders(context, db), log
@@ -556,7 +556,7 @@ async def scheduled_migrate_todos(context) -> list[dict[str, Any]]:
     重构后：直接调用commands.scheduled模块
     """
     log = _get_logger(context)
-    db = _get_database(context)
+    db  = _get_database(context)
 
     result = await _run_scheduled_task(
         context, "migrate_todos", lambda: migrate_undone_todos(context, db), log
@@ -567,7 +567,7 @@ async def scheduled_migrate_todos(context) -> list[dict[str, Any]]:
 async def scheduled_prune_operation_logs(context) -> None:
     """Daily operation-log privacy retention task."""
     log = _get_logger(context)
-    db = _get_database(context)
+    db  = _get_database(context)
     await _run_scheduled_task(
         context, "prune_operation_logs", lambda: prune_operation_logs(context, db), log
     )
@@ -576,7 +576,7 @@ async def scheduled_prune_operation_logs(context) -> None:
 async def scheduled_weekly_finance_summary(context) -> list[dict[str, Any]]:
     """每周财务总结定时任务。"""
     log = _get_logger(context)
-    db = _get_database(context)
+    db  = _get_database(context)
 
     result = await _run_scheduled_task(
         context,
@@ -590,7 +590,7 @@ async def scheduled_weekly_finance_summary(context) -> list[dict[str, Any]]:
 async def scheduled_month_end_finance_summary(context) -> list[dict[str, Any]]:
     """月底财务总结定时任务。"""
     log = _get_logger(context)
-    db = _get_database(context)
+    db  = _get_database(context)
 
     result = await _run_scheduled_task(
         context,
@@ -604,7 +604,7 @@ async def scheduled_month_end_finance_summary(context) -> list[dict[str, Any]]:
 async def scheduled_cleanup_demo_data(context) -> None:
     """Pendo Web demo 数据清理定时任务。"""
     log = _get_logger(context)
-    db = _get_database(context)
+    db  = _get_database(context)
 
     await _run_scheduled_task(
         context,
@@ -652,8 +652,8 @@ async def _run_scheduled_task(
         public_error_message(
             context,
             exc,
-            logger=log,
-            component=f"pendo.scheduled.{task_name}",
+            logger    = log,
+            component = f"pendo.scheduled.{task_name}",
         )
         return []
 
@@ -705,17 +705,17 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
     注意：不再按 group_id 做全局缓存，避免闭包捕获过期上下文。
     """
 
-    services = _get_services(context)
-    db = services["db"]
+    services         = _get_services(context)
+    db               = services["db"]
     reminder_service = services["reminder_service"]
-    exporter = services["exporter"]
-    event_handler = services["event_handler"]
-    task_handler = services["task_handler"]
-    note_handler = services["note_handler"]
-    diary_handler = services["diary_handler"]
-    search_handler = services["search_handler"]
-    ledger_handler = services["ledger_handler"]
-    web_handler = services["web_handler"]
+    exporter         = services["exporter"]
+    event_handler    = services["event_handler"]
+    task_handler     = services["task_handler"]
+    note_handler     = services["note_handler"]
+    diary_handler    = services["diary_handler"]
+    search_handler   = services["search_handler"]
+    ledger_handler   = services["ledger_handler"]
+    web_handler      = services["web_handler"]
 
     async def _export_cmd(user_id: str, args: str, ctx: Any) -> dict[str, Any]:
         if not args or not args.strip():
@@ -1084,7 +1084,7 @@ def _render_help_section(key: str) -> list[str]:
         return []
 
     title = str(section[0]).rstrip(":")
-    body = [str(line) for line in section[1:]]
+    body  = [str(line) for line in section[1:]]
     return [f"━━ {title}", *body]
 
 
@@ -1174,20 +1174,20 @@ def _get_services(context: PendoContext) -> PendoServices:
     if cached_services is not None:
         return cached_services
 
-    db = _get_database(context)
-    ai_parser = AIParser(context)
-    ai_parser.db = db
+    db               = _get_database(context)
+    ai_parser        = AIParser(context)
+    ai_parser.db     = db
     reminder_service = ReminderService(db)
-    exporter = ExporterService(db, Path(context.data_dir) / "exports")
+    exporter         = ExporterService(db, Path(context.data_dir) / "exports")
 
     # Event/Diary 需要 AI 能力
     event_handler = EventHandler(db, ai_parser, reminder_service)
-    task_handler = TaskHandler(db)
-    note_handler = NoteHandler(db)
+    task_handler  = TaskHandler(db)
+    note_handler  = NoteHandler(db)
     diary_handler = DiaryHandler(db, ai_parser=ai_parser)
     search_handler = SearchHandler(db)
     ledger_handler = LedgerHandler(db)
-    web_handler = WebHandler(db)
+    web_handler    = WebHandler(db)
 
     services: PendoServices = {
         "db": db,

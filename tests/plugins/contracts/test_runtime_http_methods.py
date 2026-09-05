@@ -1,3 +1,4 @@
+# 通过真实模块导入验证生产 HTTP 方法的边界。
 """CR-282 regressions for real imports and production HTTP boundaries."""
 
 from __future__ import annotations
@@ -28,9 +29,9 @@ async def test_twitter_uses_get_and_rejects_wrong_json_mime() -> None:
     session = QueuedAiohttpSession(response)
     context = with_settings_reader(
         SimpleNamespace(
-            http_session=session,
-            secrets={"plugins": {"twitter": {"user_id": "123456789"}}},
-            logger=MagicMock(),
+            http_session = session,
+            secrets      = {"plugins": {"twitter": {"user_id": "123456789"}}},
+            logger       = MagicMock(),
         )
     )
 
@@ -62,8 +63,8 @@ async def test_signin_uses_get_and_rejects_wrong_json_mime() -> None:
 async def test_wolfram_simple_query_uses_get() -> None:
     session = QueuedAiohttpSession(aiohttp_text_response("42"))
     context = SimpleNamespace(
-        http_session=session,
-        logger=MagicMock(),
+        http_session = session,
+        logger       = MagicMock(),
     )
 
     result = await wolframalpha._get_answer("1+1", "appid", context)
@@ -76,13 +77,13 @@ async def test_wolfram_simple_query_uses_get() -> None:
 async def test_wolfram_get_redirect_is_rejected_and_closed() -> None:
     response = aiohttp_text_response(
         "redirect",
-        status=302,
-        headers={"Location": "https://example.com/elsewhere"},
+        status  = 302,
+        headers = {"Location": "https://example.com/elsewhere"},
     )
     session = QueuedAiohttpSession(response)
     context = SimpleNamespace(
-        http_session=session,
-        logger=MagicMock(),
+        http_session = session,
+        logger       = MagicMock(),
     )
 
     result = await wolframalpha._get_answer("1+1", "appid", context)

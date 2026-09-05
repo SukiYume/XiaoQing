@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import io
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Final, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -45,9 +45,9 @@ _COLLECTION_DATETIME_FIELDS: Final = (
     "start_time",
     "end_time",
 )
-_COLLECTION_KINDS: Final = frozenset({"multi_node", "recurring"})
+_COLLECTION_KINDS: Final        = frozenset({"multi_node", "recurring"})
 _COLLECTION_VISIBILITIES: Final = frozenset({"private", "group_scope"})
-_DEFAULT_SOURCE_ZONE: Final = ZoneInfo(PendoConfig.DEFAULT_TIMEZONE)
+_DEFAULT_SOURCE_ZONE: Final     = ZoneInfo(PendoConfig.DEFAULT_TIMEZONE)
 
 
 def _normalization_context(
@@ -56,8 +56,8 @@ def _normalization_context(
 ) -> tuple[ZoneInfo, str]:
     """解析来源时区，并生成一次性的 UTC 秒级导入时间戳。"""
 
-    zone = source_zone if source_zone is not None else _DEFAULT_SOURCE_ZONE
-    current = now if now is not None else datetime.now(timezone.utc)
+    zone    = source_zone if source_zone is not None else _DEFAULT_SOURCE_ZONE
+    current = now if now is not None else datetime.now(UTC)
     try:
         offset = current.utcoffset()
     except (OverflowError, ValueError) as exc:
@@ -65,7 +65,7 @@ def _normalization_context(
     if offset is None:
         raise ValueError("import clock must be timezone-aware")
     try:
-        timestamp = current.astimezone(timezone.utc).isoformat(timespec="seconds")
+        timestamp = current.astimezone(UTC).isoformat(timespec="seconds")
     except (OverflowError, ValueError) as exc:
         raise ValueError("import clock is outside the supported range") from exc
     return zone, timestamp
@@ -128,16 +128,16 @@ def normalize_import_payload(
     payload: dict[str, Any],
     *,
     source_zone: ZoneInfo | None = None,
-    now: datetime | None = None,
+    now: datetime | None         = None,
 ) -> dict[str, Any]:
     """规范普通条目，统一来源时间、业务字段和不可信任的存储元数据。"""
 
     zone, default_timestamp = _normalization_context(source_zone, now)
     item_type = str(payload.get("type") or "").strip()
-    base = _normalize_source_datetimes(payload, _ITEM_DATETIME_FIELDS, zone)
+    base      = _normalize_source_datetimes(payload, _ITEM_DATETIME_FIELDS, zone)
     base.pop("_bundle_line", None)
     base.pop("version", None)
-    base["type"] = item_type
+    base["type"]       = item_type
     base["created_at"] = base.get("created_at") or default_timestamp
     base["updated_at"] = base.get("updated_at") or base["created_at"]
     if item_type == "event" and not base.get("timezone"):
@@ -147,13 +147,13 @@ def normalize_import_payload(
     if item_type == "task" and base.get("status") == "cancelled":
         base["cancelled_at"] = base.get("cancelled_at") or default_timestamp
 
-    context = base.get("context")
-    attachments = base.get("attachments")
-    ai_meta = base.get("ai_meta")
-    base["context"] = dict(context) if isinstance(context, dict) else {}
+    context             = base.get("context")
+    attachments         = base.get("attachments")
+    ai_meta             = base.get("ai_meta")
+    base["context"]     = dict(context) if isinstance(context, dict) else {}
     base["attachments"] = list(attachments) if isinstance(attachments, list) else []
-    base["ai_meta"] = dict(ai_meta) if isinstance(ai_meta, dict) else {}
-    base["deleted"] = normalize_bool_flag(base.get("deleted", False))
+    base["ai_meta"]     = dict(ai_meta) if isinstance(ai_meta, dict) else {}
+    base["deleted"]     = normalize_bool_flag(base.get("deleted", False))
     return cast(dict[str, Any], normalize_item_fields(base, partial=False))
 
 
@@ -161,27 +161,27 @@ def normalize_import_event_collection(
     payload: dict[str, Any],
     *,
     source_zone: ZoneInfo | None = None,
-    now: datetime | None = None,
+    now: datetime | None         = None,
 ) -> dict[str, Any]:
     """规范日程集合头，并拒绝无法安全写入集合表的字段形状。"""
 
     zone, default_timestamp = _normalization_context(source_zone, now)
     normalized = _normalize_source_datetimes(payload, _COLLECTION_DATETIME_FIELDS, zone)
-    kind = str(normalized.get("kind") or "").strip()
+    kind       = str(normalized.get("kind") or "").strip()
     if kind not in _COLLECTION_KINDS:
         raise ValueError("Invalid event collection kind")
     title = str(normalized.get("title") or "").strip()
     if not title:
         raise ValueError("event collection title is required")
 
-    normalized["kind"] = kind
-    normalized["title"] = validate_title(title)
-    normalized["content"] = sanitize_text(str(normalized.get("content") or ""), 50_000)
+    normalized["kind"]     = kind
+    normalized["title"]    = validate_title(title)
+    normalized["content"]  = sanitize_text(str(normalized.get("content") or ""), 50_000)
     normalized["category"] = validate_category(
         str(normalized.get("category") or PendoConfig.DEFAULT_CATEGORY)
     )
     normalized["location"] = validate_location(str(normalized.get("location") or ""))
-    normalized["notes"] = sanitize_text(str(normalized.get("notes") or ""), 50_000)
+    normalized["notes"]    = sanitize_text(str(normalized.get("notes") or ""), 50_000)
 
     raw_tags = normalized.get("tags") or []
     if not isinstance(raw_tags, list):
@@ -190,9 +190,9 @@ def normalize_import_event_collection(
         dict.fromkeys(validate_tag(str(tag)) for tag in raw_tags if tag not in (None, ""))
     )
 
-    context = normalized.get("context")
+    context               = normalized.get("context")
     normalized["context"] = dict(context) if isinstance(context, dict) else {}
-    visibility = sanitize_text(str(normalized.get("visibility") or "private"), 30)
+    visibility            = sanitize_text(str(normalized.get("visibility") or "private"), 30)
     if visibility not in _COLLECTION_VISIBILITIES:
         raise ValueError("Invalid event collection visibility")
     normalized["visibility"] = visibility
@@ -202,18 +202,18 @@ def normalize_import_event_collection(
         ZoneInfo(timezone_name)
     except (ValueError, ZoneInfoNotFoundError) as exc:
         raise ValueError("Invalid event collection timezone") from exc
-    normalized["timezone"] = timezone_name
+    normalized["timezone"]       = timezone_name
     normalized["reminder_rules"] = normalize_reminder_rules(normalized.get("reminder_rules"))
 
-    rrule = normalized.get("rrule")
-    normalized["rrule"] = (sanitize_text(str(rrule), 2_000) or None) if rrule else None
-    source_item_id = normalized.get("source_item_id")
+    rrule                        = normalized.get("rrule")
+    normalized["rrule"]          = (sanitize_text(str(rrule), 2_000) or None) if rrule else None
+    source_item_id               = normalized.get("source_item_id")
     normalized["source_item_id"] = (
         (sanitize_text(str(source_item_id), 256) or None) if source_item_id else None
     )
 
     start_time = normalized.get("start_time")
-    end_time = normalized.get("end_time")
+    end_time   = normalized.get("end_time")
     if (
         start_time
         and end_time
@@ -223,7 +223,7 @@ def normalize_import_event_collection(
 
     normalized["created_at"] = normalized.get("created_at") or default_timestamp
     normalized["updated_at"] = normalized.get("updated_at") or normalized["created_at"]
-    normalized["deleted"] = normalize_bool_flag(normalized.get("deleted", False))
+    normalized["deleted"]    = normalize_bool_flag(normalized.get("deleted", False))
     normalized["deleted_at"] = normalized.get("deleted_at")
     normalized.pop("_bundle_line", None)
     return normalized
@@ -234,11 +234,11 @@ def inspect_bundle_bytes(
 ) -> tuple[ParsedBundle, list[dict[str, Any]], list[dict[str, Any]]]:
     """解析传输包，并把逐条规范化失败合并为带文件与行号的错误列表。"""
 
-    parsed = read_bundle(io.BytesIO(file_bytes))
-    source = cast(dict[str, Any], parsed.manifest["source"])
-    source_zone = ZoneInfo(cast(str, source["timezone"]))
-    current = datetime.now(timezone.utc)
-    valid_records: list[dict[str, Any]] = []
+    parsed                                  = read_bundle(io.BytesIO(file_bytes))
+    source                                  = cast(dict[str, Any], parsed.manifest["source"])
+    source_zone                             = ZoneInfo(cast(str, source["timezone"]))
+    current                                 = datetime.now(UTC)
+    valid_records: list[dict[str, Any]]     = []
     valid_collections: list[dict[str, Any]] = []
     validation_errors: list[dict[str, Any]] = list(parsed.errors)
     for index, collection in enumerate(parsed.event_collections, start=1):
@@ -246,8 +246,8 @@ def inspect_bundle_bytes(
             valid_collections.append(
                 normalize_import_event_collection(
                     collection,
-                    source_zone=source_zone,
-                    now=current,
+                    source_zone = source_zone,
+                    now         = current,
                 )
             )
         except ValueError as exc:
@@ -264,8 +264,8 @@ def inspect_bundle_bytes(
             try:
                 normalized = normalize_import_payload(
                     record,
-                    source_zone=source_zone,
-                    now=current,
+                    source_zone = source_zone,
+                    now         = current,
                 )
                 valid_records.append(normalized)
             except ValueError as exc:

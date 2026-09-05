@@ -28,48 +28,48 @@ def test_build_diary_overview_tracks_fill_rate_streaks_and_moods(
     _insert(
         db,
         owner_id,
-        id="d1",
-        title="春天",
-        content="今天写了很多很多字。",
-        diary_date="2026-03-20",
-        mood="happy",
-        weather="☀️ 晴",
-        created_at="2026-03-20T22:00:00",
-        updated_at="2026-03-20T22:00:00",
+        id         = "d1",
+        title      = "春天",
+        content    = "今天写了很多很多字。",
+        diary_date = "2026-03-20",
+        mood       = "happy",
+        weather    = "☀️ 晴",
+        created_at = "2026-03-20T22:00:00",
+        updated_at = "2026-03-20T22:00:00",
     )
     _insert(
         db,
         owner_id,
-        id="d2",
-        title="散步",
-        content="今天继续写日记。",
-        diary_date="2026-03-21",
-        mood="happy",
-        created_at="2026-03-21T22:00:00",
-        updated_at="2026-03-21T22:00:00",
+        id         = "d2",
+        title      = "散步",
+        content    = "今天继续写日记。",
+        diary_date = "2026-03-21",
+        mood       = "happy",
+        created_at = "2026-03-21T22:00:00",
+        updated_at = "2026-03-21T22:00:00",
     )
     _insert(
         db,
         owner_id,
-        id="d3",
-        title="雨夜",
-        content="这一天有些疲惫。",
-        diary_date="2026-03-23",
-        mood="tired",
-        template_id="night_review",
-        created_at="2026-03-23T22:00:00",
-        updated_at="2026-03-23T22:00:00",
+        id          = "d3",
+        title       = "雨夜",
+        content     = "这一天有些疲惫。",
+        diary_date  = "2026-03-23",
+        mood        = "tired",
+        template_id = "night_review",
+        created_at  = "2026-03-23T22:00:00",
+        updated_at  = "2026-03-23T22:00:00",
     )
     _insert(
         db,
         owner_id,
-        id="d4",
-        title="四月第一天",
-        content="下一月的记录不应算进三月。",
-        diary_date="2026-04-01",
-        mood="neutral",
-        created_at="2026-04-01T22:00:00",
-        updated_at="2026-04-01T22:00:00",
+        id         = "d4",
+        title      = "四月第一天",
+        content    = "下一月的记录不应算进三月。",
+        diary_date = "2026-04-01",
+        mood       = "neutral",
+        created_at = "2026-04-01T22:00:00",
+        updated_at = "2026-04-01T22:00:00",
     )
 
     # 全局 streak 只应读取日期列，不应分页装载完整历史条目。
@@ -79,11 +79,11 @@ def test_build_diary_overview_tracks_fill_rate_streaks_and_moods(
         lambda *_args, **_kwargs: pytest.fail("日记概览不应装载完整历史条目"),
     )
     result = build_diary_overview(
-        db=db,
-        owner_id=owner_id,
-        year=2026,
-        month=3,
-        today="2026-03-23",
+        db       = db,
+        owner_id = owner_id,
+        year     = 2026,
+        month    = 3,
+        today    = "2026-03-23",
     )
 
     assert result["summary"] == {
@@ -131,23 +131,23 @@ def test_build_diary_overview_supports_range_based_weekly_cadence(db: Database) 
         _insert(
             db,
             owner_id,
-            id=item_id,
-            title=item_id,
-            content=content,
-            diary_date=diary_date,
-            mood=mood,
-            template_id=template_id,
-            created_at=f"{diary_date}T21:00:00",
-            updated_at=f"{diary_date}T21:00:00",
+            id          = item_id,
+            title       = item_id,
+            content     = content,
+            diary_date  = diary_date,
+            mood        = mood,
+            template_id = template_id,
+            created_at  = f"{diary_date}T21:00:00",
+            updated_at  = f"{diary_date}T21:00:00",
         )
 
     result = build_diary_overview(
-        db=db,
-        owner_id=owner_id,
-        start_date="2026-01-01",
-        end_date="2026-02-15",
-        today="2026-02-15",
-        cadence_granularity="auto",
+        db                  = db,
+        owner_id            = owner_id,
+        start_date          = "2026-01-01",
+        end_date            = "2026-02-15",
+        today               = "2026-02-15",
+        cadence_granularity = "auto",
     )
 
     assert result["summary"]["entry_count"] == 4
@@ -176,21 +176,21 @@ def test_build_diary_overview_supports_cross_year_yearly_cadence(db: Database) -
         _insert(
             db,
             owner_id,
-            id=item_id,
-            title=item_id,
-            content=content,
-            diary_date=diary_date,
-            created_at=f"{diary_date}T21:00:00",
-            updated_at=f"{diary_date}T21:00:00",
+            id         = item_id,
+            title      = item_id,
+            content    = content,
+            diary_date = diary_date,
+            created_at = f"{diary_date}T21:00:00",
+            updated_at = f"{diary_date}T21:00:00",
         )
 
     result = build_diary_overview(
-        db=db,
-        owner_id=owner_id,
-        start_date="2024-01-01",
-        end_date="2026-12-31",
-        today="2026-12-31",
-        cadence_granularity="auto",
+        db                  = db,
+        owner_id            = owner_id,
+        start_date          = "2024-01-01",
+        end_date            = "2026-12-31",
+        today               = "2026-12-31",
+        cadence_granularity = "auto",
     )
 
     assert result["cadence_granularity"] == "year"
@@ -208,10 +208,10 @@ def test_build_diary_overview_uses_user_clock_when_today_is_omitted(
     _insert(
         db,
         owner_id,
-        id="d1",
-        title="昨天",
-        content="仍应算作当前连续记录。",
-        diary_date="2030-01-01",
+        id         = "d1",
+        title      = "昨天",
+        content    = "仍应算作当前连续记录。",
+        diary_date = "2030-01-01",
     )
 
     def user_now(user_id: str, database: Database) -> datetime:
@@ -244,9 +244,9 @@ def test_build_diary_overview_rejects_invalid_direct_arguments(
 
     with pytest.raises(ValueError, match=message):
         build_diary_overview(
-            db=db,
-            owner_id="u-diary-invalid",
-            year=2026,
-            month=3,
+            db       = db,
+            owner_id = "u-diary-invalid",
+            year     = 2026,
+            month    = 3,
             **kwargs,
         )

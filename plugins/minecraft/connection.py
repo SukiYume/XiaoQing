@@ -38,7 +38,7 @@ class ConnectionManager:
 
     def __init__(self) -> None:
         self._connections: dict[DeliveryTarget, McConnection] = {}
-        self._lock = asyncio.Lock()
+        self._lock                                            = asyncio.Lock()
 
     def get_connection(self, target: DeliveryTarget) -> McConnection | None:
         """返回当前快照；所有写操作均在同一事件循环内原子发布。"""
@@ -49,7 +49,7 @@ class ConnectionManager:
         """先发布新连接，再尽力关闭同一目标的旧连接。"""
 
         async with self._lock:
-            old = self._connections.get(conn.target)
+            old                            = self._connections.get(conn.target)
             self._connections[conn.target] = conn
 
         if old is not None and old is not conn:

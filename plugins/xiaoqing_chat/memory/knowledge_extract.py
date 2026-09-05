@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from core.atomic_store import keyed_path_lock
+
 from ..llm.llm_client import LLMError, chat_completions
 from ..llm.prompt_builder import ChatMessage
 from ..message_parts import render_stored_message
@@ -20,7 +22,11 @@ from .fact_extraction_checkpoint import (
 )
 from .memory import StoredMessage
 from .memory_db import MemoryDB, normalize_memory_chat_id, person_fact_doc_id
-from .person_profile import update_profile_and_index
+from .person_profile import (
+    get_profile_generation,
+    profile_generation_path,
+    update_profile_and_index,
+)
 
 
 @dataclass(frozen=True)
@@ -44,7 +50,7 @@ _FACT_SYSTEM = (
 
 def _build_fact_dialogue(history: Sequence[StoredMessage], *, max_chars: int = 1800) -> str:
     lines: list[str] = []
-    total = 0
+    total            = 0
     for msg in history:
         if msg.role != "user":
             continue
@@ -74,12 +80,12 @@ def build_fact_messages(*, history: Sequence[StoredMessage]) -> list[ChatMessage
 
 
 def _parse_fact_json(text: str) -> list[PersonFact]:
-    arr = extract_named_list_field(parse_first_json_object(text), "facts")
+    arr                   = extract_named_list_field(parse_first_json_object(text), "facts")
     out: list[PersonFact] = []
     for item in arr:
         if not isinstance(item, dict):
             continue
-        subject_id_raw = item.get("subject_id", None)
+        subject_id_raw         = item.get("subject_id", None)
         subject_id: int | None = None
         if subject_id_raw is not None:
             try:
@@ -87,8 +93,8 @@ def _parse_fact_json(text: str) -> list[PersonFact]:
             except (TypeError, ValueError):
                 subject_id = None
         subject_name = str(item.get("subject_name", "")).strip()
-        fact = str(item.get("fact", "")).strip()
-        ev = str(item.get("evidence", "")).strip()
+        fact         = str(item.get("fact", "")).strip()
+        ev           = str(item.get("evidence", "")).strip()
         if subject_name and fact:
             out.append(
                 PersonFact(subject_id=subject_id, subject_name=subject_name, fact=fact, evidence=ev)
@@ -100,13 +106,13 @@ def _bind_facts_to_history_subjects(
     facts: Sequence[PersonFact], history: Sequence[StoredMessage]
 ) -> list[PersonFact]:
     """用当前历史中的权威用户 ID 校准模型提取的事实。"""
-    trusted_names: dict[int, str] = {}
+    trusted_names: dict[int, str]    = {}
     ids_by_name: dict[str, set[int]] = {}
     for message in history:
         if message.role != "user" or not message.user_id:
             continue
-        subject_id = int(message.user_id)
-        trusted_name = (message.name or "用户").strip() or "用户"
+        subject_id                = int(message.user_id)
+        trusted_name              = (message.name or "用户").strip() or "用户"
         trusted_names[subject_id] = trusted_name
         ids_by_name.setdefault(trusted_name.casefold(), set()).add(subject_id)
 
@@ -114,16 +120,16 @@ def _bind_facts_to_history_subjects(
     for fact in facts:
         resolved_id = fact.subject_id
         if resolved_id is None or resolved_id not in trusted_names:
-            matches = ids_by_name.get(fact.subject_name.casefold(), set())
+            matches     = ids_by_name.get(fact.subject_name.casefold(), set())
             resolved_id = next(iter(matches)) if len(matches) == 1 else None
         if resolved_id is None or resolved_id not in trusted_names:
             continue
         bound.append(
             PersonFact(
-                subject_id=resolved_id,
-                subject_name=trusted_names[resolved_id],
-                fact=fact.fact,
-                evidence=fact.evidence,
+                subject_id   = resolved_id,
+                subject_name = trusted_names[resolved_id],
+                fact         = fact.fact,
+                evidence     = fact.evidence,
             )
         )
     return bound
@@ -135,24 +141,39 @@ def _persist_person_facts(
     memory_db: MemoryDB,
     chat_id: str,
     facts: Sequence[PersonFact],
+    expected_generation: str | None = None,
+) -> None:
+    with keyed_path_lock(profile_generation_path(data_dir, chat_id)):
+        if (
+            expected_generation is not None
+            and get_profile_generation(data_dir, chat_id) != expected_generation
+        ):
+            return
+        _persist_current_person_facts(
+            data_dir=data_dir, memory_db=memory_db, chat_id=chat_id, facts=facts
+        )
+
+
+def _persist_current_person_facts(
+    *, data_dir: Path, memory_db: MemoryDB, chat_id: str, facts: Sequence[PersonFact]
 ) -> None:
     by_subject: dict[int, list[str]] = {}
-    by_name: dict[int, str] = {}
+    by_name: dict[int, str]          = {}
     for fact in facts:
         subject_id = int(fact.subject_id or 0)
         try:
             doc_id = person_fact_doc_id(
-                chat_id=chat_id,
-                subject_id=subject_id,
-                subject_name=fact.subject_name,
-                fact=fact.fact,
+                chat_id      = chat_id,
+                subject_id   = subject_id,
+                subject_name = fact.subject_name,
+                fact         = fact.fact,
             )
         except ValueError:
             continue
         memory_db.upsert_text(
-            doc_id=doc_id,
-            text=(f"{fact.subject_name}<{subject_id}>：{fact.fact}\n证据：{fact.evidence}").strip(),
-            meta={
+            doc_id = doc_id,
+            text   = (f"{fact.subject_name}<{subject_id}>：{fact.fact}\n证据：{fact.evidence}").strip(),
+            meta   = {
                 "type": "person_info",
                 "chat_id": chat_id,
                 "subject_id": subject_id,
@@ -166,12 +187,12 @@ def _persist_person_facts(
 
     for subject_id, facts_list in by_subject.items():
         update_profile_and_index(
-            data_dir=data_dir,
-            memory_db=memory_db,
-            chat_id=chat_id,
-            subject_id=subject_id,
-            subject_name=by_name.get(subject_id, str(subject_id)),
-            new_facts=facts_list,
+            data_dir     = data_dir,
+            memory_db    = memory_db,
+            chat_id      = chat_id,
+            subject_id   = subject_id,
+            subject_name = by_name.get(subject_id, str(subject_id)),
+            new_facts    = facts_list,
         )
 
 
@@ -198,8 +219,10 @@ async def maybe_extract_person_facts(
     if "_ai" in secrets and secrets.get("_ai") is None:
         return
 
+    generation = get_profile_generation(data_dir, scoped_chat_id)
+
     last_observed_ts = await asyncio.to_thread(load_last_observed_ts, data_dir, scoped_chat_id)
-    observed_count = (
+    observed_count   = (
         len(history)
         if last_observed_ts <= 0
         else observed_message_count(history, after_ts=last_observed_ts)
@@ -221,14 +244,14 @@ async def maybe_extract_person_facts(
     payload_msgs = [{"role": m.role, "content": m.content} for m in msgs]
     try:
         out = await chat_completions(
-            secrets=secrets,
-            messages=payload_msgs,
-            temperature=min(0.6, temperature),
-            top_p=top_p,
-            max_tokens=min(768, max_tokens),
-            timeout_seconds=timeout_seconds,
-            max_retry=max_retry,
-            retry_interval_seconds=retry_interval_seconds,
+            secrets                = secrets,
+            messages               = payload_msgs,
+            temperature            = min(0.6, temperature),
+            top_p                  = top_p,
+            max_tokens             = min(768, max_tokens),
+            timeout_seconds        = timeout_seconds,
+            max_retry              = max_retry,
+            retry_interval_seconds = retry_interval_seconds,
         )
     except LLMError:
         return
@@ -237,8 +260,9 @@ async def maybe_extract_person_facts(
         return
     await asyncio.to_thread(
         _persist_person_facts,
-        data_dir=data_dir,
-        memory_db=memory_db,
-        chat_id=scoped_chat_id,
-        facts=facts,
+        data_dir            = data_dir,
+        memory_db           = memory_db,
+        chat_id             = scoped_chat_id,
+        facts               = facts,
+        expected_generation = generation,
     )

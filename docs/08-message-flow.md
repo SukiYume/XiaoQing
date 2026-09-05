@@ -253,6 +253,8 @@ Core 将字符串转换为文本段，将消息段转换为当前用户或群的
 
 `OneBotHttpSender` 向 `onebot_http_base` 发送 OneBot Action，并使用可选 `onebot_token`。
 
+标准 HTTP 事件上报也使用该实际投递通道，事件响应为 `{}`。开发客户端显式设置 `X-XiaoQing-Response-Mode: actions` 后获得动作列表，由客户端执行后续投递。HTTP 上报的 Bearer 凭据与 OneBot action API 凭据分别配置。
+
 ### WebSocket Action
 
 主动 WebSocket 连接或 Inbound WebSocket 会话可承载 Action。广播路径受 worker 数量、队列和单连接预算控制。
@@ -260,6 +262,8 @@ Core 将字符串转换为文本段，将消息段转换为当前用户或群的
 ### 回执
 
 Delivery 层将投递结果返回给回执对象。需要 commit-after-ack 的插件在发送成功后提交提醒、任务或通知状态。
+
+事件作用域中的 action sink 只暂存动作，并持有后续结算权。`send_with_receipt` 观察到暂存状态时保持收据待定；最终传输成功、明确失败和结果未知分别进入对应回调。主动 WebSocket 的上线通知与读循环并发运行，echo 回执由读循环消费，通知任务随连接断开回收。
 
 ---
 

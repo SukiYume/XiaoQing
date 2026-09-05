@@ -43,7 +43,7 @@ class TestSchedulerManagerInit:
 
     @pytest.mark.asyncio
     async def test_private_drain_is_selected_by_capability_not_exact_version(self):
-        manager = SchedulerManager()
+        manager   = SchedulerManager()
         scheduler = manager.scheduler
         assert scheduler is not None
 
@@ -59,7 +59,7 @@ class TestSchedulerManagerInit:
         self,
         monkeypatch,
     ):
-        manager = SchedulerManager()
+        manager   = SchedulerManager()
         scheduler = manager.scheduler
         assert scheduler is not None
         unavailable = SchedulerDrainCapability(False, "layout changed", "3.11.99")
@@ -115,7 +115,7 @@ class TestSchedulerManagerInit:
         """重复 ensure_started 只初始化一次"""
         from core import scheduler as scheduler_module
 
-        init_count = 0
+        init_count  = 0
         start_count = 0
 
         class FakeScheduler:
@@ -123,7 +123,7 @@ class TestSchedulerManagerInit:
                 nonlocal init_count
                 init_count += 1
                 self.timezone = timezone
-                self.running = False
+                self.running  = False
 
             def start(self):
                 nonlocal start_count
@@ -132,11 +132,11 @@ class TestSchedulerManagerInit:
 
         monkeypatch.setattr(scheduler_module, "AsyncIOScheduler", FakeScheduler)
 
-        manager = SchedulerManager()
+        manager           = SchedulerManager()
         manager.scheduler = None
-        manager._started = False
-        init_count = 0
-        start_count = 0
+        manager._started  = False
+        init_count        = 0
+        start_count       = 0
 
         for _ in range(10):
             manager.ensure_started()
@@ -154,7 +154,7 @@ class TestSchedulerManagerInit:
         class FakeScheduler:
             def __init__(self, timezone):
                 self.timezone = timezone
-                self.running = False
+                self.running  = False
 
             def start(self):
                 self.running = True
@@ -175,7 +175,7 @@ class TestSchedulerManagerInit:
     @pytest.mark.asyncio
     async def test_shutdown_resets_scheduler_and_allows_lazy_restart(self):
         manager = SchedulerManager()
-        first = manager.scheduler
+        first   = manager.scheduler
 
         manager.shutdown()
 
@@ -190,7 +190,7 @@ class TestSchedulerManagerInit:
 
     @pytest.mark.asyncio
     async def test_shutdown_is_idempotent(self):
-        manager = SchedulerManager()
+        manager   = SchedulerManager()
         scheduler = manager.scheduler
         assert scheduler is not None
 
@@ -203,12 +203,12 @@ class TestSchedulerManagerInit:
 
     @pytest.mark.asyncio
     async def test_real_scheduler_cleanup_failure_is_owned_and_retried(self):
-        manager = SchedulerManager()
+        manager   = SchedulerManager()
         scheduler = manager.scheduler
         assert scheduler is not None
-        executor = next(iter(scheduler._executors.values()))
+        executor          = next(iter(scheduler._executors.values()))
         original_shutdown = executor.shutdown
-        calls = 0
+        calls             = 0
 
         def fail_once(wait: bool = True) -> None:
             nonlocal calls
@@ -241,14 +241,14 @@ class TestSchedulerManagerInit:
 
     @pytest.mark.asyncio
     async def test_real_scheduler_resistant_job_is_retained_until_retry(self):
-        manager = SchedulerManager()
+        manager                           = SchedulerManager()
         manager._shutdown_timeout_seconds = 0.01
-        scheduler = manager.scheduler
+        scheduler                         = manager.scheduler
         assert scheduler is not None
-        executor = next(iter(scheduler._executors.values()))
-        started = asyncio.Event()
+        executor          = next(iter(scheduler._executors.values()))
+        started           = asyncio.Event()
         cancellation_seen = asyncio.Event()
-        release = asyncio.Event()
+        release           = asyncio.Event()
 
         resistant_job = cancellation_then_release_callback(started, cancellation_seen, release)
 
@@ -295,13 +295,13 @@ class TestSchedulerManagerInit:
 
     @pytest.mark.asyncio
     async def test_thread_backed_job_future_is_not_falsely_cancelled(self):
-        manager = SchedulerManager()
+        manager                           = SchedulerManager()
         manager._shutdown_timeout_seconds = 0.01
-        scheduler = manager.scheduler
+        scheduler                         = manager.scheduler
         assert scheduler is not None
         executor = next(iter(scheduler._executors.values()))
-        started = threading.Event()
-        release = threading.Event()
+        started  = threading.Event()
+        release  = threading.Event()
 
         def blocking_job() -> None:
             started.set()
@@ -344,14 +344,14 @@ class TestSchedulerManagerInit:
 
     @pytest.mark.asyncio
     async def test_cancelled_shutdown_keeps_cleanup_gate_closed_until_retry(self):
-        manager = SchedulerManager()
+        manager                           = SchedulerManager()
         manager._shutdown_timeout_seconds = 5
-        scheduler = manager.scheduler
+        scheduler                         = manager.scheduler
         assert scheduler is not None
-        executor = next(iter(scheduler._executors.values()))
-        started = asyncio.Event()
+        executor          = next(iter(scheduler._executors.values()))
+        started           = asyncio.Event()
         cancellation_seen = asyncio.Event()
-        release = asyncio.Event()
+        release           = asyncio.Event()
 
         resistant_job = cancellation_then_release_callback(started, cancellation_seen, release)
 
@@ -415,7 +415,7 @@ class TestSchedulerManagerInit:
         scheduler = Mock(running=True)
         scheduler.shutdown = Mock(side_effect=[RuntimeError("stop failed"), None])
         manager.scheduler = scheduler
-        manager._started = True
+        manager._started  = True
 
         with pytest.raises(RuntimeError, match="stop failed"):
             manager.shutdown()
@@ -440,7 +440,7 @@ class TestSchedulerManagerInit:
         class FakeScheduler:
             def __init__(self, timezone):
                 self.timezone = timezone
-                self.running = False
+                self.running  = False
                 created.append(self)
 
             def start(self):
@@ -450,7 +450,7 @@ class TestSchedulerManagerInit:
                 raise RuntimeError("stop failed")
 
         monkeypatch.setattr(scheduler_module, "AsyncIOScheduler", FakeScheduler)
-        manager = SchedulerManager("Asia/Shanghai")
+        manager       = SchedulerManager("Asia/Shanghai")
         old_scheduler = manager.scheduler
 
         with pytest.raises(RuntimeError, match="stop failed"):
@@ -486,7 +486,7 @@ class TestSchedulerManagerInit:
         residue = Mock(running=False)
         residue.shutdown = Mock(side_effect=RuntimeError("must not be called"))
         manager.scheduler = residue
-        manager._started = False
+        manager._started  = False
 
         manager.shutdown()
 
@@ -506,7 +506,7 @@ class TestSchedulerManagerInit:
     ):
         from core import scheduler as scheduler_module
 
-        manager = SchedulerManager("Asia/Shanghai")
+        manager       = SchedulerManager("Asia/Shanghai")
         old_scheduler = manager.scheduler
         assert old_scheduler is not None
         failed_candidate = Mock(running=False)
@@ -665,7 +665,7 @@ class TestAddJob:
         scheduler.add_job("job1", lambda: job_func("job1"), {"second": "*/1"})
         scheduler.add_job("job2", lambda: job_func("job2"), {"second": "*/2"})
 
-        jobs = scheduler.scheduler.get_jobs()
+        jobs    = scheduler.scheduler.get_jobs()
         job_ids = [job.id for job in jobs]
         assert "job1" in job_ids
         assert "job2" in job_ids
@@ -721,7 +721,7 @@ class TestReplacePrefix:
             if job.id.startswith("plugin.demo.")
         }
         real_add_job = scheduler.scheduler.add_job
-        failed = False
+        failed       = False
 
         def fail_second_once(*args, **kwargs):
             nonlocal failed

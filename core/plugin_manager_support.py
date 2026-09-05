@@ -38,8 +38,8 @@ class PluginPathError(ValueError):
 
 
 def is_link_like(metadata: object) -> bool:
-    mode = getattr(metadata, "st_mode", 0)
-    attributes = getattr(metadata, "st_file_attributes", 0)
+    mode         = getattr(metadata, "st_mode", 0)
+    attributes   = getattr(metadata, "st_file_attributes", 0)
     reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
     return stat.S_ISLNK(mode) or bool(reparse_flag and attributes & reparse_flag)
 
@@ -76,7 +76,7 @@ def resolve_contained_regular_file(
     root: Path,
     relative: str,
     *,
-    description: str = "file",
+    description: str       = "file",
     reject_root_link: bool = True,
 ) -> Path:
     try:
@@ -100,7 +100,7 @@ def resolve_contained_directory(
     root: Path,
     relative: str,
     *,
-    description: str = "directory",
+    description: str       = "directory",
     reject_root_link: bool = True,
 ) -> Path:
     try:
@@ -122,7 +122,7 @@ def resolve_contained_directory(
 
 def resolve_plugin_root(plugins_dir: Path, plugin_dir: Path) -> Path:
     plugins_path = Path(plugins_dir)
-    candidate = Path(plugin_dir)
+    candidate    = Path(plugin_dir)
     try:
         name = canonical_plugin_name(candidate.name)
     except ValueError as exc:
@@ -132,8 +132,8 @@ def resolve_plugin_root(plugins_dir: Path, plugin_dir: Path) -> Path:
     return resolve_contained_directory(
         plugins_path,
         name,
-        description="plugin directory",
-        reject_root_link=False,
+        description      = "plugin directory",
+        reject_root_link = False,
     )
 
 
@@ -159,28 +159,28 @@ def validate_plugin_module_origin(origin: str | None, expected_entry: Path) -> P
     return expected
 
 
-_MAX_PLUGIN_MANIFEST_BYTES = 1024 * 1024
-_MAX_PLUGIN_SOURCE_FILE_BYTES = 8 * 1024 * 1024
-_MAX_PLUGIN_SOURCE_TOTAL_BYTES = 64 * 1024 * 1024
-_MAX_PLUGIN_WATCH_FILE_BYTES = 64 * 1024 * 1024
-_MAX_PLUGIN_SNAPSHOT_TOTAL_BYTES = 128 * 1024 * 1024
-_MAX_PLUGIN_SNAPSHOT_FILES = 4096
-_MAX_PLUGIN_SOURCE_DIRECTORIES = 512
-_MAX_PLUGIN_DIRECTORY_ENTRIES = 8192
-_MAX_PLUGIN_SCANNED_ENTRIES = 65536
-_MAX_PLUGIN_RELATIVE_PATH_BYTES = 1024
-_MAX_PLUGIN_RELATIVE_PATH_DEPTH = 32
-_PLUGIN_SYNC_WORKERS = 4
-_DEFAULT_GLOBAL_SYNC_QUEUE_LIMIT = 256
-_WATCH_ERROR_LOG_INTERVAL_SECONDS = 30.0
-_PLUGIN_FINGERPRINT_AUDIT_INTERVAL_SECONDS = 30.0
-_MAX_MODULE_ORIGIN_CACHE_ENTRIES = 16384
-_MAX_RECORDED_SCAN_ERRORS = 8
-_MIN_PLUGIN_POLL_INTERVAL_SECONDS = 0.01
-_DEFAULT_PLUGIN_POLL_INTERVAL_SECONDS = 3600.0
-_PLUGIN_IMPORT_DRAIN_TIMEOUT_SECONDS = 5.0
-_PLUGIN_IMPORT_LOCK = threading.RLock()
-_PLUGIN_NAMESPACE_OWNERS: dict[str, object] = {}
+_MAX_PLUGIN_MANIFEST_BYTES                           = 1024 * 1024
+_MAX_PLUGIN_SOURCE_FILE_BYTES                        = 8 * 1024 * 1024
+_MAX_PLUGIN_SOURCE_TOTAL_BYTES                       = 64 * 1024 * 1024
+_MAX_PLUGIN_WATCH_FILE_BYTES                         = 64 * 1024 * 1024
+_MAX_PLUGIN_SNAPSHOT_TOTAL_BYTES                     = 128 * 1024 * 1024
+_MAX_PLUGIN_SNAPSHOT_FILES                           = 4096
+_MAX_PLUGIN_SOURCE_DIRECTORIES                       = 512
+_MAX_PLUGIN_DIRECTORY_ENTRIES                        = 8192
+_MAX_PLUGIN_SCANNED_ENTRIES                          = 65536
+_MAX_PLUGIN_RELATIVE_PATH_BYTES                      = 1024
+_MAX_PLUGIN_RELATIVE_PATH_DEPTH                      = 32
+_PLUGIN_SYNC_WORKERS                                 = 4
+_DEFAULT_GLOBAL_SYNC_QUEUE_LIMIT                     = 256
+_WATCH_ERROR_LOG_INTERVAL_SECONDS                    = 30.0
+_PLUGIN_FINGERPRINT_AUDIT_INTERVAL_SECONDS           = 30.0
+_MAX_MODULE_ORIGIN_CACHE_ENTRIES                     = 16384
+_MAX_RECORDED_SCAN_ERRORS                            = 8
+_MIN_PLUGIN_POLL_INTERVAL_SECONDS                    = 0.01
+_DEFAULT_PLUGIN_POLL_INTERVAL_SECONDS                = 3600.0
+_PLUGIN_IMPORT_DRAIN_TIMEOUT_SECONDS                 = 5.0
+_PLUGIN_IMPORT_LOCK                                  = threading.RLock()
+_PLUGIN_NAMESPACE_OWNERS: dict[str, object]          = {}
 _WATCH_MANIFEST_LOG_OWNER: ContextVar[object | None] = ContextVar(
     "xiaoqing_watch_manifest_log_owner",
     default=None,
@@ -219,9 +219,9 @@ def _acquire_process_import_path(container: Any, value: str) -> _ProcessImportPa
             inserted = _OwnedImportPath(value)
             container.insert(0, inserted)
         _PROCESS_IMPORT_PATH_LEASES[key] = _ProcessImportPathLease(
-            container=container,
-            owners=1,
-            inserted=inserted,
+            container = container,
+            owners    = 1,
+            inserted  = inserted,
         )
     return key
 
@@ -321,11 +321,11 @@ class _PluginContentFingerprint(int):
         file_identities: Mapping[str, tuple[int, int, int, int]],
         captured_at: float,
     ) -> "_PluginContentFingerprint":
-        instance = int.__new__(cls, value)
-        instance.sources = MappingProxyType(dict(sources))
+        instance                  = int.__new__(cls, value)
+        instance.sources          = MappingProxyType(dict(sources))
         instance.manifest_payload = manifest_payload
-        instance.file_identities = MappingProxyType(dict(file_identities))
-        instance.captured_at = captured_at
+        instance.file_identities  = MappingProxyType(dict(file_identities))
+        instance.captured_at      = captured_at
         return instance
 
 
@@ -340,17 +340,17 @@ class _SourceOnlyPluginLoader(importlib.machinery.SourceFileLoader):
         plugin_root: Path,
         relative: str,
         source: bytes,
-        on_loaded: Callable[[str, ModuleType], None] | None = None,
+        on_loaded: Callable[[str, ModuleType], None] | None                                 = None,
         execution_guard: (Callable[[str, ModuleType], AbstractContextManager[None]] | None) = None,
-        on_compromised: Callable[[str], None] | None = None,
+        on_compromised: Callable[[str], None] | None                                        = None,
     ) -> None:
         super().__init__(fullname, path)
-        self._plugin_root = plugin_root
-        self._relative = relative
-        self._source = source
-        self._on_loaded = on_loaded
+        self._plugin_root     = plugin_root
+        self._relative        = relative
+        self._source          = source
+        self._on_loaded       = on_loaded
         self._execution_guard = execution_guard
-        self._on_compromised = on_compromised
+        self._on_compromised  = on_compromised
 
     def get_code(self, fullname: str):  # type: ignore[no-untyped-def]
         if fullname != self.name:
@@ -404,10 +404,10 @@ class _SourceOnlyNamespaceLoader(importlib.abc.Loader):
         execution_guard: Callable[[str, ModuleType], AbstractContextManager[None]],
         on_compromised: Callable[[str], None],
     ) -> None:
-        self._fullname = fullname
-        self._on_loaded = on_loaded
+        self._fullname        = fullname
+        self._on_loaded       = on_loaded
         self._execution_guard = execution_guard
-        self._on_compromised = on_compromised
+        self._on_compromised  = on_compromised
 
     def create_module(self, spec):  # type: ignore[no-untyped-def]
         return None
@@ -431,9 +431,9 @@ class _SourceOnlyPluginFinder(importlib.abc.MetaPathFinder):
         plugin_root: Path,
         plugin_name: str,
         sources: Mapping[str, bytes],
-        on_loaded: Callable[[str, ModuleType], None] | None = None,
+        on_loaded: Callable[[str, ModuleType], None] | None            = None,
         is_current: Callable[["_SourceOnlyPluginFinder"], bool] | None = None,
-        on_compromised: Callable[[str], None] | None = None,
+        on_compromised: Callable[[str], None] | None                   = None,
     ) -> None:
         self._plugin_root = plugin_root
         self._prefix = f"plugins.{plugin_name}"
@@ -459,7 +459,7 @@ class _SourceOnlyPluginFinder(importlib.abc.MetaPathFinder):
         callback: Callable[[str], None] | None
         with _PLUGIN_IMPORT_LOCK:
             self._compromised = True
-            callback = self._on_compromised
+            callback          = self._on_compromised
         if callback is not None:
             callback(reason)
 
@@ -527,10 +527,10 @@ class _SourceOnlyPluginFinder(importlib.abc.MetaPathFinder):
     ) -> tuple[str, ...]:
         """Become a blocking tombstone and wait for loader bodies to leave."""
 
-        deadline = time.monotonic() + timeout
+        deadline  = time.monotonic() + timeout
         thread_id = threading.get_ident()
         with _PLUGIN_IMPORT_LOCK:
-            self._active = False
+            self._active             = False
             self._publication_paused = True
             if self._active_threads.get(thread_id):
                 self._compromised = True
@@ -552,7 +552,7 @@ class _SourceOnlyPluginFinder(importlib.abc.MetaPathFinder):
     ) -> tuple[str, ...]:
         """Stop new loader leases and wait for detached imports to settle."""
 
-        deadline = time.monotonic() + timeout
+        deadline  = time.monotonic() + timeout
         thread_id = threading.get_ident()
         with _PLUGIN_IMPORT_LOCK:
             if not self._active or self._compromised:
@@ -619,19 +619,19 @@ class _SourceOnlyPluginFinder(importlib.abc.MetaPathFinder):
         loader = _SourceOnlyPluginLoader(
             fullname,
             str(source_path),
-            plugin_root=self._plugin_root,
-            relative=relative,
-            source=source,
-            on_loaded=self._on_loaded,
-            execution_guard=self.execution_guard,
-            on_compromised=self._mark_compromised,
+            plugin_root     = self._plugin_root,
+            relative        = relative,
+            source          = source,
+            on_loaded       = self._on_loaded,
+            execution_guard = self.execution_guard,
+            on_compromised  = self._mark_compromised,
         )
         search_locations = None if package_dir is None else [str(package_dir)]
         return importlib.util.spec_from_file_location(
             fullname,
             source_path,
-            loader=loader,
-            submodule_search_locations=search_locations,
+            loader                     = loader,
+            submodule_search_locations = search_locations,
         )
 
     def find_spec(self, fullname: str, path=None, target=None):  # type: ignore[no-untyped-def]
@@ -655,11 +655,11 @@ class _SourceOnlyPluginFinder(importlib.abc.MetaPathFinder):
         if any(not canonical_python_module_part(part) for part in suffix_parts):
             raise ImportError(f"non-canonical plugin module name: {fullname}")
 
-        relative_stem = "/".join(suffix_parts)
+        relative_stem   = "/".join(suffix_parts)
         module_relative = f"{relative_stem}.py" if relative_stem else None
-        package_prefix = f"{relative_stem}/" if relative_stem else ""
-        init_relative = f"{package_prefix}__init__.py"
-        module_present = module_relative in self._sources if module_relative is not None else False
+        package_prefix  = f"{relative_stem}/" if relative_stem else ""
+        init_relative   = f"{package_prefix}__init__.py"
+        module_present  = module_relative in self._sources if module_relative is not None else False
         package_present = init_relative in self._sources or any(
             relative.startswith(package_prefix) for relative in self._sources
         )
@@ -681,7 +681,7 @@ class _SourceOnlyPluginFinder(importlib.abc.MetaPathFinder):
                 name=fullname,
             )
 
-        package_dir = self._plugin_root.joinpath(*suffix_parts)
+        package_dir  = self._plugin_root.joinpath(*suffix_parts)
         package_info = self._lstat_optional(package_dir)
         if package_info is None:
             raise ImportError(f"authorized plugin package disappeared: {fullname}")
@@ -699,15 +699,15 @@ class _SourceOnlyPluginFinder(importlib.abc.MetaPathFinder):
             return self._source_spec(
                 fullname,
                 init_relative,
-                source=self._sources[init_relative],
-                package_dir=package_dir,
+                source      = self._sources[init_relative],
+                package_dir = package_dir,
             )
 
         loader = _SourceOnlyNamespaceLoader(
             fullname,
-            on_loaded=self._on_loaded,
-            execution_guard=self.execution_guard,
-            on_compromised=self._mark_compromised,
+            on_loaded       = self._on_loaded,
+            execution_guard = self.execution_guard,
+            on_compromised  = self._mark_compromised,
         )
         spec = importlib.machinery.ModuleSpec(fullname, loader=loader, is_package=True)
         spec.submodule_search_locations = [str(package_dir)]
@@ -733,19 +733,19 @@ class _ModuleImportBarrierCoordinator:
     """Bound module-lock waits to one process-wide daemon worker."""
 
     def __init__(self) -> None:
-        self._condition = threading.Condition()
-        self._capability_lock = threading.Lock()
+        self._condition                                         = threading.Condition()
+        self._capability_lock                                   = threading.Lock()
         self._capability: _ModuleImportBarrierCapability | None = None
-        self._job: _ModuleImportBarrierJob | None = None
-        self._busy = False
-        self._worker: threading.Thread | None = None
+        self._job: _ModuleImportBarrierJob | None               = None
+        self._busy                                              = False
+        self._worker: threading.Thread | None                   = None
 
     @staticmethod
     def _lock_getter() -> Callable[[str], Any]:
         if sys.implementation.name != "cpython":
             raise PluginPathError("safe plugin import draining requires CPython")
         bootstrap = getattr(importlib, "_bootstrap", None)
-        getter = getattr(bootstrap, "_get_module_lock", None)
+        getter    = getattr(bootstrap, "_get_module_lock", None)
         if not callable(getter):
             raise PluginPathError("CPython module-lock API is unavailable")
         return cast(Callable[[str], Any], getter)
@@ -799,10 +799,10 @@ class _ModuleImportBarrierCoordinator:
                 "ModuleSpec initialization marker is not observable",
             )
 
-        module = ModuleType(probe_name)
-        module.__spec__ = spec
-        started = threading.Event()
-        completed = threading.Event()
+        module                      = ModuleType(probe_name)
+        module.__spec__             = spec
+        started                     = threading.Event()
+        completed                   = threading.Event()
         errors: list[BaseException] = []
 
         def import_probe() -> None:
@@ -815,16 +815,16 @@ class _ModuleImportBarrierCoordinator:
                 completed.set()
 
         worker = threading.Thread(
-            target=import_probe,
-            name="xiaoqing-plugin-import-capability-probe",
-            daemon=True,
+            target = import_probe,
+            name   = "xiaoqing-plugin-import-capability-probe",
+            daemon = True,
         )
-        acquired = False
-        worker_started = False
+        acquired            = False
+        worker_started      = False
         failure: str | None = None
         try:
             acquire()
-            acquired = True
+            acquired                = True
             sys.modules[probe_name] = module
             worker.start()
             worker_started = True
@@ -864,7 +864,7 @@ class _ModuleImportBarrierCoordinator:
         with self._capability_lock:
             cached = self._capability
             if cached is None:
-                cached = self._probe_capability()
+                cached           = self._probe_capability()
                 self._capability = cached
         return cached
 
@@ -873,8 +873,8 @@ class _ModuleImportBarrierCoordinator:
             with self._condition:
                 while self._job is None:
                     self._condition.wait()
-                job = self._job
-                self._job = None
+                job        = self._job
+                self._job  = None
                 self._busy = True
             locks: list[Any] = []
             try:
@@ -888,7 +888,7 @@ class _ModuleImportBarrierCoordinator:
                     locks.append(module_lock)
                 with self._condition:
                     if job.state != "cancelled":
-                        job.state = "running"
+                        job.state  = "running"
                         should_run = True
                     else:
                         should_run = False
@@ -924,9 +924,9 @@ class _ModuleImportBarrierCoordinator:
             self._job = job
             if self._worker is None or not self._worker.is_alive():
                 self._worker = threading.Thread(
-                    target=self._run,
-                    name="xiaoqing-plugin-import-barrier",
-                    daemon=True,
+                    target = self._run,
+                    name   = "xiaoqing-plugin-import-barrier",
+                    daemon = True,
                 )
                 self._worker.start()
             self._condition.notify()
@@ -991,14 +991,14 @@ class PluginDefinition:
     commands: list[dict[str, Any]]
     schedule: list[dict[str, Any]]
     concurrency: PluginConcurrency
-    enabled: bool = True  # 插件是否启用
-    description: str | None = None
-    author: str | None = None
-    dependencies: list[str] | None = None
+    enabled: bool                                   = True  # 插件是否启用
+    description: str | None                         = None
+    author: str | None                              = None
+    dependencies: list[str] | None                  = None
     services: tuple["PluginServiceDefinition", ...] = ()
-    uses_services: frozenset[str] = frozenset()
-    capabilities: frozenset[str] = frozenset()
-    watch_files: tuple[str, ...] = ()
+    uses_services: frozenset[str]                   = frozenset()
+    capabilities: frozenset[str]                    = frozenset()
+    watch_files: tuple[str, ...]                    = ()
     manifest_payload: bytes | None = field(default=None, repr=False, compare=False)
 
 
@@ -1023,18 +1023,18 @@ class LoadedPlugin:
     module: ModuleType
     mtime: int | float
     execution_gate: PluginExecutionGate | None = None
-    shutdown_attempted: bool = False
-    shutdown_completed: bool = False
-    shutdown_task: asyncio.Task[Any] | None = field(
-        default=None,
-        repr=False,
-        compare=False,
+    shutdown_attempted: bool                   = False
+    shutdown_completed: bool                   = False
+    shutdown_task: asyncio.Task[Any] | None    = field(
+        default = None,
+        repr    = False,
+        compare = False,
     )
     services: Mapping[str, LoadedPluginService] = field(
         default_factory=lambda: MappingProxyType({}),
     )
     authorized_entry: Path | None = None
-    data_dir: Path | None = None
+    data_dir: Path | None         = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1054,14 +1054,14 @@ class _PluginLoadTransaction:
     definition: PluginDefinition
     gate: PluginExecutionGate
     mtime: float
-    track_init_task: bool = True
-    import_attempted: bool = False
-    import_completed: bool = False
-    uncertain_external_code: bool = False
-    unowned_canonical_namespace: bool = False
-    namespace_claim_new: bool = False
-    authorized_entry: Path | None = None
-    module: ModuleType | None = None
+    track_init_task: bool               = True
+    import_attempted: bool              = False
+    import_completed: bool              = False
+    uncertain_external_code: bool       = False
+    unowned_canonical_namespace: bool   = False
+    namespace_claim_new: bool           = False
+    authorized_entry: Path | None       = None
+    module: ModuleType | None           = None
     init_task: asyncio.Task[Any] | None = None
 
 
@@ -1092,8 +1092,8 @@ class _ReloadCandidateGeneration:
 
     gate: PluginExecutionGate
     transaction: _PluginLoadTransaction
-    plugin: LoadedPlugin | None = None
-    authorization: bool | None = None
+    plugin: LoadedPlugin | None               = None
+    authorization: bool | None                = None
     authorization_error: BaseException | None = None
 
 
@@ -1101,7 +1101,7 @@ class _ReloadCandidateGeneration:
 class _LifecycleTaskOutcome:
     """Value-or-error envelope preventing fatal plugin errors escaping a Task early."""
 
-    value: Any = None
+    value: Any                  = None
     error: BaseException | None = None
 
 

@@ -210,8 +210,8 @@ def _run_search_client(script: str) -> None:
     assert_node_esm_contract(
         _search_source_for_test(),
         script,
-        cwd=ROOT,
-        setup=SEARCH_SETUP,
+        cwd   = ROOT,
+        setup = SEARCH_SETUP,
     )
 
 

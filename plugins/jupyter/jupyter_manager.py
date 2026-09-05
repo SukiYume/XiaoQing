@@ -49,10 +49,10 @@ _ANSI_ESCAPE_PATTERN = re.compile(r"(?:\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]
 _PNG_FORMAT_EXTENSIONS = {"PNG": ".png"}
 
 # 可选依赖允许安装后重试，因此失败状态不是永久缓存。
-JUPYTER_AVAILABLE = False
-IMPORT_ERROR: str | None = None
+JUPYTER_AVAILABLE         = False
+IMPORT_ERROR: str | None  = None
 KernelManager: Any | None = None
-_IMPORT_LOCK = threading.Lock()
+_IMPORT_LOCK              = threading.Lock()
 
 
 def validate_png_bytes(image_data: object) -> bool:
@@ -62,13 +62,13 @@ def validate_png_bytes(image_data: object) -> bool:
         validate_image_bytes(
             image_data,
             limits=ImageValidationLimits(
-                max_bytes=MAX_IMAGE_BYTES,
-                max_pixels=MAX_IMAGE_PIXELS,
-                max_frames=1,
+                max_bytes  = MAX_IMAGE_BYTES,
+                max_pixels = MAX_IMAGE_PIXELS,
+                max_frames = 1,
             ),
-            format_extensions=_PNG_FORMAT_EXTENSIONS,
-            expected_format="PNG",
-            allow_animation=False,
+            format_extensions = _PNG_FORMAT_EXTENSIONS,
+            expected_format   = "PNG",
+            allow_animation   = False,
         )
     except ImageValidationError:
         return False
@@ -80,13 +80,13 @@ class KernelCleanupReport:
     """保留分阶段的尽力清理结果，供隔离决策、诊断和测试使用。"""
 
     context: str
-    channels_stopped: bool | None = None
+    channels_stopped: bool | None   = None
     shutdown_succeeded: bool | None = None
-    resources_cleaned: bool | None = None
+    resources_cleaned: bool | None  = None
     fallback_methods: list[str] = field(default_factory=list)
     fallback_succeeded: bool | None = None
-    alive_after: bool | None = None
-    orphan_confirmed_absent: bool = True
+    alive_after: bool | None        = None
+    orphan_confirmed_absent: bool   = True
     errors: list[str] = field(default_factory=list)
 
     def record_error(self, stage: str, exc: BaseException | None = None) -> None:
@@ -97,7 +97,7 @@ class KernelCleanupReport:
 
     def summary(self) -> str:
         error_text = ", ".join(self.errors) if self.errors else "none"
-        fallbacks = ",".join(self.fallback_methods) if self.fallback_methods else "none"
+        fallbacks  = ",".join(self.fallback_methods) if self.fallback_methods else "none"
         return (
             f"context={self.context}; channels={self.channels_stopped}; "
             f"shutdown={self.shutdown_succeeded}; resources={self.resources_cleaned}; "
@@ -136,10 +136,10 @@ class _ExecutionState:
     """记录可能仍在线程中运行的 I/O，保证取消时可以等待其收敛。"""
 
     kernel_was_running: bool
-    pending_task: asyncio.Task[Any] | None = None
-    pending_kind: str | None = None
+    pending_task: asyncio.Task[Any] | None  = None
+    pending_kind: str | None                = None
     recovery_task: asyncio.Task[str] | None = None
-    msg_id: str | None = None
+    msg_id: str | None                      = None
 
 
 def lazy_import_jupyter() -> None:
@@ -153,39 +153,39 @@ def lazy_import_jupyter() -> None:
             from jupyter_client import KernelManager as imported_manager
         except ImportError as exc:
             JUPYTER_AVAILABLE = False
-            IMPORT_ERROR = str(exc)
-            KernelManager = None
+            IMPORT_ERROR      = str(exc)
+            KernelManager     = None
             return
-        KernelManager = imported_manager
-        IMPORT_ERROR = None
+        KernelManager     = imported_manager
+        IMPORT_ERROR      = None
         JUPYTER_AVAILABLE = True
 
 
 class JupyterKernelManager:
-    _instances: ClassVar[dict[str, JupyterKernelManager]] = {}
+    _instances: ClassVar[dict[str, JupyterKernelManager]]       = {}
     _quarantined_instances: ClassVar[set[JupyterKernelManager]] = set()
-    _instances_lock = threading.Lock()
+    _instances_lock                                             = threading.Lock()
 
     def __init__(self, data_dir: Path):
-        self.data_dir = Path(data_dir)
+        self.data_dir    = Path(data_dir)
         self.figures_dir = self.data_dir / "figures"
         self._cleanup_legacy_figures()
 
-        self._km: Any | None = None
-        self._kc: Any | None = None
-        self._started_at: float | None = None
-        self._execution_count = 0
-        self._execute_lock = asyncio.Lock()
-        self._lifecycle_lock = threading.RLock()
-        self._broken = False
+        self._km: Any | None                                  = None
+        self._kc: Any | None                                  = None
+        self._started_at: float | None                        = None
+        self._execution_count                                 = 0
+        self._execute_lock                                    = asyncio.Lock()
+        self._lifecycle_lock                                  = threading.RLock()
+        self._broken                                          = False
         self._last_cleanup_report: KernelCleanupReport | None = None
-        self._orphan_km: Any | None = None
-        self._orphan_kc: Any | None = None
+        self._orphan_km: Any | None                           = None
+        self._orphan_kc: Any | None                           = None
 
         # 自动关闭相关
-        self._last_activity = 0.0
+        self._last_activity                            = 0.0
         self._shutdown_task: asyncio.Task[None] | None = None
-        self._loop: asyncio.AbstractEventLoop | None = None
+        self._loop: asyncio.AbstractEventLoop | None   = None
 
     def _cleanup_legacy_figures(self) -> None:
         """有界删除两代旧输出布局，同时保留链接和无关用户文件。"""
@@ -197,9 +197,9 @@ class JupyterKernelManager:
                     log_sensitive_audit(
                         logger,
                         "jupyter.figures.migration",
-                        status="bounded",
-                        error_type="EntryLimit",
-                        level=logging.WARNING,
+                        status     = "bounded",
+                        error_type = "EntryLimit",
+                        level      = logging.WARNING,
                     )
                     break
                 self._remove_legacy_figure(child)
@@ -224,9 +224,9 @@ class JupyterKernelManager:
             log_sensitive_audit(
                 logger,
                 "jupyter.figures.migration",
-                status="error",
-                error_type="LegacyCleanupError",
-                level=logging.WARNING,
+                status     = "error",
+                error_type = "LegacyCleanupError",
+                level      = logging.WARNING,
             )
 
     @staticmethod
@@ -250,7 +250,7 @@ class JupyterKernelManager:
                 registered = set(cls._instances.values()) | cls._quarantined_instances
                 if key not in cls._instances and len(registered) >= MAX_KERNEL_INSTANCES:
                     raise RuntimeError("Jupyter kernel instance limit reached")
-                instance = cls(data_dir)
+                instance            = cls(data_dir)
                 cls._instances[key] = instance
             return instance
 
@@ -298,8 +298,8 @@ class JupyterKernelManager:
                 log_sensitive_audit(
                     logger,
                     "jupyter.kernel.shutdown_all",
-                    status="error",
-                    exc=failure,
+                    status = "error",
+                    exc    = failure,
                 )
             raise RuntimeError(f"{len(failures)} Jupyter kernel cleanup operation(s) failed")
 
@@ -324,8 +324,8 @@ class JupyterKernelManager:
     def _resolve_awaitable(value: Any, *, timeout: float = 5.0) -> Any:
         if not inspect.isawaitable(value):
             return value
-        deadline = max(0.1, timeout)
-        result: list[Any] = []
+        deadline                    = max(0.1, timeout)
+        result: list[Any]           = []
         errors: list[BaseException] = []
 
         async def await_value() -> Any:
@@ -349,12 +349,12 @@ class JupyterKernelManager:
     @classmethod
     def _invoke_cleanup(cls, callback: Any, *args: Any, **kwargs: Any) -> Any:
         try:
-            parameters = inspect.signature(callback).parameters.values()
+            parameters     = inspect.signature(callback).parameters.values()
             accepts_kwargs = any(
                 parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters
             )
             accepted_names = {parameter.name for parameter in parameters}
-            call_kwargs = (
+            call_kwargs    = (
                 kwargs
                 if accepts_kwargs
                 else {key: value for key, value in kwargs.items() if key in accepted_names}
@@ -405,8 +405,8 @@ class JupyterKernelManager:
     @classmethod
     def _force_kill_kernel(cls, km: Any, report: KernelCleanupReport) -> bool:
         candidates: list[tuple[str, Any, dict[str, Any]]] = []
-        provisioner = getattr(km, "provisioner", None)
-        provisioner_kill = getattr(provisioner, "kill", None)
+        provisioner                                       = getattr(km, "provisioner", None)
+        provisioner_kill                                  = getattr(provisioner, "kill", None)
         if callable(provisioner_kill):
             candidates.append(("provisioner.kill", provisioner_kill, {"restart": False}))
         private_kill = getattr(km, "_kill_kernel", None)
@@ -496,7 +496,7 @@ class JupyterKernelManager:
         report = KernelCleanupReport(context=context)
         cls._stop_client_channels(kc, report)
         if km is None:
-            report.alive_after = False
+            report.alive_after             = False
             report.orphan_confirmed_absent = True
             return report
 
@@ -510,7 +510,7 @@ class JupyterKernelManager:
             return report
 
         report.fallback_succeeded = False
-        killed = cls._force_kill_kernel(km, report)
+        killed                    = cls._force_kill_kernel(km, report)
         if killed:
             if callable(cleanup_resources) and report.resources_cleaned is False:
                 cls._request_resource_cleanup(km, report, after_kill=True)
@@ -518,22 +518,22 @@ class JupyterKernelManager:
             return report
 
         alive = cls._kernel_alive(km, report=report, stage="post_fallback")
-        report.alive_after = alive
+        report.alive_after             = alive
         report.orphan_confirmed_absent = alive is False
         return report
 
     def _mark_broken(self, km: Any, kc: Any, report: KernelCleanupReport) -> None:
-        self._broken = True
-        self._orphan_km = km
-        self._orphan_kc = kc
+        self._broken              = True
+        self._orphan_km           = km
+        self._orphan_kc           = kc
         self._last_cleanup_report = report
         self._isolate_instance(self)
         log_sensitive_audit(
             logger,
             "jupyter.kernel.cleanup",
-            status="quarantined",
-            error_type="KernelCleanupIncomplete",
-            level=logging.ERROR,
+            status     = "quarantined",
+            error_type = "KernelCleanupIncomplete",
+            level      = logging.ERROR,
         )
 
     async def _shutdown_if_expired(self) -> bool:
@@ -556,7 +556,7 @@ class JupyterKernelManager:
     async def _check_idleness_loop(self) -> None:
         """后台任务：检查空闲时间并自动关闭。"""
 
-        while self.is_running:
+        while await asyncio.to_thread(lambda: self.is_running):
             await asyncio.sleep(CHECK_INTERVAL)
             if await self._shutdown_if_expired():
                 break
@@ -595,8 +595,8 @@ class JupyterKernelManager:
 
             if self._km is not None or self._kc is not None:
                 stale_km, stale_kc = self._km, self._kc
-                self._km = None
-                self._kc = None
+                self._km     = None
+                self._kc     = None
                 stale_report = self._cleanup_kernel_resources(
                     stale_km,
                     stale_kc,
@@ -625,22 +625,22 @@ class JupyterKernelManager:
                     context="start-failure",
                 )
                 self._last_cleanup_report = report
-                self._km = None
-                self._kc = None
-                self._started_at = None
-                self._execution_count = 0
+                self._km                  = None
+                self._kc                  = None
+                self._started_at          = None
+                self._execution_count     = 0
                 if not report.orphan_confirmed_absent:
                     self._mark_broken(km, kc, report)
                 raise RuntimeError(f"启动内核失败: {exc}; cleanup: {report.summary()}") from exc
 
             # ready 与内联后端初始化全部成功后，才发布可复用实例。
-            self._km = km
-            self._kc = kc
-            self._orphan_km = None
-            self._orphan_kc = None
-            self._started_at = time.monotonic()
+            self._km              = km
+            self._kc              = kc
+            self._orphan_km       = None
+            self._orphan_kc       = None
+            self._started_at      = time.monotonic()
             self._execution_count = 0
-            self._last_activity = time.monotonic()
+            self._last_activity   = time.monotonic()
             return True
 
     @staticmethod
@@ -667,7 +667,7 @@ try:
 except ImportError:
     pass
 """
-        msg_id = str(kc.execute(init_code))
+        msg_id   = str(kc.execute(init_code))
         deadline = time.monotonic() + 10.0
         while time.monotonic() < deadline:
             try:
@@ -693,16 +693,16 @@ except ImportError:
                 else:
                     task.cancel()
             self._shutdown_task = None
-            self._loop = None
+            self._loop          = None
 
-            km = self._km if self._km is not None else self._orphan_km
-            kc = self._kc if self._kc is not None else self._orphan_kc
+            km       = self._km if self._km is not None else self._orphan_km
+            kc       = self._kc if self._kc is not None else self._orphan_kc
             self._km = None
             self._kc = None
             report = self._cleanup_kernel_resources(km, kc, context="shutdown")
             self._last_cleanup_report = report
-            self._started_at = None
-            self._execution_count = 0
+            self._started_at          = None
+            self._execution_count     = 0
             if report.orphan_confirmed_absent:
                 self._orphan_km = None
                 self._orphan_kc = None
@@ -734,7 +734,7 @@ except ImportError:
         if not msg_id or not isinstance(message, dict) or message.get("msg_type") != "status":
             return False
         content = message.get("content")
-        parent = message.get("parent_header")
+        parent  = message.get("parent_header")
         return bool(
             isinstance(content, dict)
             and isinstance(parent, dict)
@@ -807,9 +807,9 @@ except ImportError:
             log_sensitive_audit(
                 logger,
                 "jupyter.cancel.pending_operation",
-                status="error",
-                job_id=audit_id,
-                exc=exc,
+                status = "error",
+                job_id = audit_id,
+                exc    = exc,
             )
             return None, True
 
@@ -827,9 +827,9 @@ except ImportError:
             log_sensitive_audit(
                 logger,
                 operation,
-                status="quarantined",
-                job_id=audit_id,
-                exc=exc,
+                status = "quarantined",
+                job_id = audit_id,
+                exc    = exc,
             )
 
     async def _cancel_execution_cleanup(
@@ -845,9 +845,9 @@ except ImportError:
                 log_sensitive_audit(
                     logger,
                     "jupyter.cancel.recovery",
-                    status="error",
-                    job_id=audit_id,
-                    exc=exc,
+                    status = "error",
+                    job_id = audit_id,
+                    exc    = exc,
                 )
             return
 
@@ -884,14 +884,14 @@ except ImportError:
             log_sensitive_audit(
                 logger,
                 "jupyter.cancel.cleanup",
-                status="error",
-                job_id=audit_id,
-                exc=exc,
+                status = "error",
+                job_id = audit_id,
+                exc    = exc,
             )
 
     @staticmethod
     def _set_output_limit(result: ExecutionResult, message: str) -> None:
-        result.error = message
+        result.error   = message
         result.success = False
 
     def _append_image(
@@ -946,7 +946,7 @@ except ImportError:
     ) -> tuple[object, dict[str, Any]] | None:
         if not isinstance(message, dict):
             return None
-        parent = message.get("parent_header")
+        parent  = message.get("parent_header")
         content = message.get("content")
         if not isinstance(parent, dict) or parent.get("msg_id") != msg_id:
             return None
@@ -976,7 +976,7 @@ except ImportError:
         budget: _OutputBudget,
     ) -> bool:
         traceback = content.get("traceback")
-        lines = traceback if isinstance(traceback, list) else []
+        lines     = traceback if isinstance(traceback, list) else []
         result.error, exceeded = budget.append("", "\n".join(map(str, lines)))
         result.success = False
         return exceeded
@@ -1026,9 +1026,9 @@ except ImportError:
             log_sensitive_audit(
                 logger,
                 "jupyter.interrupt",
-                status="error",
-                job_id=audit_id,
-                exc=exc,
+                status = "error",
+                job_id = audit_id,
+                exc    = exc,
             )
         return await self._recover_after_interrupt(msg_id, audit_id=audit_id)
 
@@ -1065,9 +1065,9 @@ except ImportError:
             log_sensitive_audit(
                 logger,
                 "jupyter.execute.containment",
-                status="quarantined",
-                job_id=audit_id,
-                exc=exc,
+                status = "quarantined",
+                job_id = audit_id,
+                exc    = exc,
             )
 
     async def _collect_execution_messages(
@@ -1081,11 +1081,11 @@ except ImportError:
         audit_id: str,
     ) -> None:
         total_image_bytes = 0
-        deadline = started_at + timeout
+        deadline          = started_at + timeout
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                result.error = f"执行超时 ({timeout}s)"
+                result.error   = f"执行超时 ({timeout}s)"
                 result.success = False
                 await self._run_recovery(state, audit_id)
                 return
@@ -1120,22 +1120,24 @@ except ImportError:
     ) -> ExecutionResult:
         """执行代码，并在外部取消返回前收敛底层 kernel 工作。"""
         async with self._execute_lock:
-            timeout = self._normalize_timeout(timeout)
+            timeout  = self._normalize_timeout(timeout)
             audit_id = safe_audit_id(audit_id)
             if audit_id == "-":
                 audit_id = uuid.uuid4().hex
-            state = _ExecutionState(kernel_was_running=self.is_running)
-            result = ExecutionResult()
-            budget = _OutputBudget()
+            state = _ExecutionState(
+                kernel_was_running=await asyncio.to_thread(lambda: self.is_running)
+            )
+            result     = ExecutionResult()
+            budget     = _OutputBudget()
             started_at = time.monotonic()
 
             try:
-                if not self.is_running:
+                if not await asyncio.to_thread(lambda: self.is_running):
                     await self._run_tracked_thread(state, "start", self.start_kernel)
                 self._last_activity = time.monotonic()
                 self.ensure_idle_monitor()
-                started_at = time.monotonic()
-                client = self._require_client()
+                started_at   = time.monotonic()
+                client       = self._require_client()
                 submitted_id = await self._run_tracked_thread(
                     state,
                     "submit",
@@ -1158,8 +1160,8 @@ except ImportError:
             except asyncio.CancelledError:
                 cleanup_task = asyncio.create_task(
                     self._cancel_execution_cleanup(
-                        state=state,
-                        audit_id=audit_id,
+                        state    = state,
+                        audit_id = audit_id,
                     ),
                     name="jupyter-cancel-recovery",
                 )
@@ -1174,9 +1176,9 @@ except ImportError:
                     log_sensitive_audit(
                         logger,
                         "jupyter.cancel.cleanup_task",
-                        status="error",
-                        job_id=audit_id,
-                        exc=exc,
+                        status = "error",
+                        job_id = audit_id,
+                        exc    = exc,
                     )
                 self._last_activity = time.monotonic()
                 raise
@@ -1185,15 +1187,15 @@ except ImportError:
                 log_sensitive_audit(
                     logger,
                     "jupyter.execute",
-                    status="error",
-                    job_id=audit_id,
-                    payload=code,
-                    exc=exc,
+                    status  = "error",
+                    job_id  = audit_id,
+                    payload = code,
+                    exc     = exc,
                 )
-                result.error = "执行失败，请稍后重试"
+                result.error   = "执行失败，请稍后重试"
                 result.success = False
 
-            self._last_activity = time.monotonic()
+            self._last_activity   = time.monotonic()
             result.execution_time = time.monotonic() - started_at
             return result
 
@@ -1220,9 +1222,9 @@ except ImportError:
             log_sensitive_audit(
                 logger,
                 "jupyter.interrupt.restart",
-                status="error",
-                job_id=audit_id,
-                exc=exc,
+                status = "error",
+                job_id = audit_id,
+                exc    = exc,
             )
             try:
                 await asyncio.to_thread(self.shutdown_kernel)
@@ -1231,9 +1233,9 @@ except ImportError:
                 log_sensitive_audit(
                     logger,
                     "jupyter.interrupt.shutdown",
-                    status="quarantined",
-                    job_id=audit_id,
-                    exc=shutdown_exc,
+                    status = "quarantined",
+                    job_id = audit_id,
+                    exc    = shutdown_exc,
                 )
                 return "quarantined"
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC
+
 from tests.helpers.pendo_test_support import (
     ROOT,
     SimpleNamespace,
@@ -82,16 +84,16 @@ class TestScheduledRegression:
                 self.retry_at = retry_at
                 return True
 
-        db = _Db()
+        db       = _Db()
         delivery = scheduled_module._ReminderDelivery(
-            user_id="1001",
-            message="提醒消息",
-            item_id="evt123",
-            remind_time="2030-01-01T09:00:00",
-            claim_token="claim-1",
-            claim_kind="initial",
-            claim_repeat_count=0,
-            delivery_key="delivery-1",
+            user_id            = "1001",
+            message            = "提醒消息",
+            item_id            = "evt123",
+            remind_time        = "2030-01-01T09:00:00",
+            claim_token        = "claim-1",
+            claim_kind         = "initial",
+            claim_repeat_count = 0,
+            delivery_key       = "delivery-1",
         )
         before = datetime.now(timezone.utc)
 
@@ -107,7 +109,7 @@ class TestScheduledRegression:
 
     def test_daily_briefing_respects_user_timezone_and_configured_time(self, monkeypatch):
         import sys
-        from datetime import datetime, timezone
+        from datetime import datetime
         from typing import Any, cast
 
         sys.path.insert(0, str(ROOT))
@@ -117,7 +119,7 @@ class TestScheduledRegression:
         class _FixedDateTime(datetime):
             @classmethod
             def now(cls, tz=None):
-                base = datetime(2030, 1, 1, 0, 0, tzinfo=timezone.utc)
+                base = datetime(2030, 1, 1, 0, 0, tzinfo=UTC)
                 if tz is None:
                     return base.replace(tzinfo=None)
                 return base.astimezone(tz)
@@ -151,9 +153,9 @@ class TestScheduledRegression:
             Any,
             _with_scheduled_delivery_contract(
                 SimpleNamespace(
-                    get_user_settings=get_user_settings,
-                    get_user_settings_batch=get_user_settings_batch,
-                    update_user_settings=lambda user_id, settings: True,
+                    get_user_settings       = get_user_settings,
+                    get_user_settings_batch = get_user_settings_batch,
+                    update_user_settings    = lambda user_id, settings: True,
                 )
             ),
         )
@@ -184,7 +186,7 @@ class TestScheduledRegression:
 
     def test_daily_briefing_returns_messages_without_send_action(self, monkeypatch):
         import sys
-        from datetime import datetime, timezone
+        from datetime import datetime
         from typing import Any, cast
 
         sys.path.insert(0, str(ROOT))
@@ -194,7 +196,7 @@ class TestScheduledRegression:
         class _FixedDateTime(datetime):
             @classmethod
             def now(cls, tz=None):
-                base = datetime(2030, 1, 1, 0, 0, tzinfo=timezone.utc)
+                base = datetime(2030, 1, 1, 0, 0, tzinfo=UTC)
                 if tz is None:
                     return base.replace(tzinfo=None)
                 return base.astimezone(tz)
@@ -216,8 +218,8 @@ class TestScheduledRegression:
                     get_user_settings=lambda user_id: (_ for _ in ()).throw(
                         AssertionError("send_daily_briefings should use batch settings lookup")
                     ),
-                    get_user_settings_batch=get_user_settings_batch,
-                    update_user_settings=lambda user_id, settings: True,
+                    get_user_settings_batch = get_user_settings_batch,
+                    update_user_settings    = lambda user_id, settings: True,
                 )
             ),
         )
@@ -259,7 +261,7 @@ class TestScheduledRegression:
         db = Database(str(tmp_path / "pendo_briefing_milestone.db"))
 
         try:
-            batch_calls = []
+            batch_calls           = []
             original_batch_lookup = db.get_event_collections_by_ids
 
             def track_batch_lookup(owner_id, collection_ids):
@@ -283,17 +285,17 @@ class TestScheduledRegression:
                 }
             )
             event = EventItem(
-                owner_id="u1",
-                title="主会场报告",
-                start_time="2030-01-02T10:30:00",
-                remind_times=[],
-                event_role="multi_node_child",
-                event_collection_id="milebrief",
-                event_collection_kind="multi_node",
-                event_index=2,
-                event_node_key="m02",
-                created_at="2030-01-01T00:00:00",
-                updated_at="2030-01-01T00:00:00",
+                owner_id              = "u1",
+                title                 = "主会场报告",
+                start_time            = "2030-01-02T10:30:00",
+                remind_times          = [],
+                event_role            = "multi_node_child",
+                event_collection_id   = "milebrief",
+                event_collection_kind = "multi_node",
+                event_index           = 2,
+                event_node_key        = "m02",
+                created_at            = "2030-01-01T00:00:00",
+                updated_at            = "2030-01-01T00:00:00",
             )
             db.insert_item(event, "milebrief_m02")
 
@@ -310,14 +312,14 @@ class TestScheduledRegression:
 
     def test_generate_daily_briefing_ignores_malformed_overdue_deadline(self, monkeypatch):
         import sys
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.commands import scheduled as scheduled_module
         from plugins.pendo.models.item import TaskItem
 
-        fixed_now = datetime(2030, 1, 2, 8, 0, tzinfo=timezone.utc)
+        fixed_now = datetime(2030, 1, 2, 8, 0, tzinfo=UTC)
         overdue = TaskItem(owner_id="1001", title="旧数据", deadline_at="not-an-iso-time")
         db = SimpleNamespace(
             get_briefing_items=lambda *_args: ([], [], [overdue]),
@@ -330,7 +332,7 @@ class TestScheduledRegression:
         monkeypatch.setattr(
             scheduled_module.TimezoneHelper,
             "get_user_timezone",
-            staticmethod(lambda _user_id, _db: timezone.utc),
+            staticmethod(lambda _user_id, _db: UTC),
         )
 
         briefing = asyncio.run(scheduled_module._generate_briefing_content("1001", db))
@@ -371,7 +373,7 @@ class TestScheduledRegression:
 
     def test_diary_reminder_respects_user_timezone_and_existing_diary(self, monkeypatch):
         import sys
-        from datetime import datetime, timezone
+        from datetime import datetime
         from typing import Any, cast
 
         sys.path.insert(0, str(ROOT))
@@ -381,7 +383,7 @@ class TestScheduledRegression:
         class _FixedDateTime(datetime):
             @classmethod
             def now(cls, tz=None):
-                base = datetime(2030, 1, 1, 13, 30, tzinfo=timezone.utc)
+                base = datetime(2030, 1, 1, 13, 30, tzinfo=UTC)
                 if tz is None:
                     return base.replace(tzinfo=None)
                 return base.astimezone(tz)
@@ -423,9 +425,9 @@ class TestScheduledRegression:
                     get_user_settings=lambda user_id: (_ for _ in ()).throw(
                         AssertionError("check_diary_reminders should use batch settings lookup")
                     ),
-                    get_user_settings_batch=get_user_settings_batch,
-                    update_user_settings=lambda user_id, settings: True,
-                    has_diary_for_date=has_diary_for_date,
+                    get_user_settings_batch = get_user_settings_batch,
+                    update_user_settings    = lambda user_id, settings: True,
+                    has_diary_for_date      = has_diary_for_date,
                 )
             ),
         )
@@ -521,7 +523,7 @@ class TestScheduledRegression:
 
         monkeypatch.setattr(scheduled_module, "purge_expired_demo_users", fake_purge)
 
-        db = SimpleNamespace()
+        db     = SimpleNamespace()
         result = asyncio.run(scheduled_module.cleanup_expired_demo_data(SimpleNamespace(), db))
 
         assert result == []
@@ -532,7 +534,7 @@ class TestScheduledRegression:
 
         context = SimpleNamespace(logger=pendo_main.logger)
         database = SimpleNamespace()
-        calls = []
+        calls    = []
 
         async def fake_cleanup(received_context, received_database):
             calls.append(("cleanup", received_context, received_database))

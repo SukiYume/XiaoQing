@@ -5,7 +5,7 @@ from typing import Final
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT: Final = REPOSITORY_ROOT
+ROOT: Final            = REPOSITORY_ROOT
 TIMEZONE_CLIENT: Final = (
     ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "utils" / "timezone.js"
 )
@@ -19,8 +19,8 @@ def _run_timezone_client(script: str) -> None:
     assert_node_esm_contract(
         source,
         script,
-        cwd=ROOT,
-        setup=(
+        cwd   = ROOT,
+        setup = (
             "process.env.TZ = 'America/Los_Angeles';\n"
             "globalThis.__api = { get: async () => "
             "({ data: { timezone: 'Asia/Shanghai' } }) };"

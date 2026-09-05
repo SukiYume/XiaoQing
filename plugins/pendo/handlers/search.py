@@ -42,18 +42,18 @@ from ..utils.validators import sanitize_search_keyword, validate_tag
 if TYPE_CHECKING:
     from ..services.db import Database
 
-SearchItem = EventItem | TaskItem | DiaryItem | NoteItem | LedgerItem
+SearchItem    = EventItem | TaskItem | DiaryItem | NoteItem | LedgerItem
 SearchFilters = dict[str, Any]
 
-_ALLOWED_SEARCH_TYPES: Final = frozenset({"event", "task", "note", "diary", "ledger"})
-_ALLOWED_TASK_STATUS: Final = frozenset({"open", "done", "cancelled"})
+_ALLOWED_SEARCH_TYPES: Final      = frozenset({"event", "task", "note", "diary", "ledger"})
+_ALLOWED_TASK_STATUS: Final       = frozenset({"open", "done", "cancelled"})
 _ALLOWED_TRANSACTION_TYPES: Final = frozenset({"income", "expense", "transfer"})
-_SEARCH_TYPE_ORDER: Final = ("event", "task", "ledger", "diary", "note")
-_SEARCH_RESULT_LIMIT: Final = 15
-_SEARCH_INPUT_MAX_CHARS: Final = 2_000
-_SEARCH_QUERY_MAX_CHARS: Final = 100
-_SEARCH_TITLE_MAX_CHARS: Final = 60
-_FILTER_TOKEN_RE: Final = re.compile(
+_SEARCH_TYPE_ORDER: Final         = ("event", "task", "ledger", "diary", "note")
+_SEARCH_RESULT_LIMIT: Final       = 15
+_SEARCH_INPUT_MAX_CHARS: Final    = 2_000
+_SEARCH_QUERY_MAX_CHARS: Final    = 100
+_SEARCH_TITLE_MAX_CHARS: Final    = 60
+_FILTER_TOKEN_RE: Final           = re.compile(
     r"^(type|status|category|transaction_type|account|merchant|tag|tags|range)[=:](.*)$",
     re.IGNORECASE,
 )
@@ -69,7 +69,7 @@ _DATE_FIELD_BY_TYPE: Final = {
     "ledger": "ledger_date",
     "note": "created_at",
 }
-_DATE_ONLY_SEARCH_FIELDS: Final = frozenset({"plan_date", "diary_date", "ledger_date"})
+_DATE_ONLY_SEARCH_FIELDS: Final           = frozenset({"plan_date", "diary_date", "ledger_date"})
 _TYPE_ACTION_HINTS: Final[dict[str, str]] = {
     "event": "/pendo event view <id>",
     "task": "/pendo todo view <id>",
@@ -78,7 +78,7 @@ _TYPE_ACTION_HINTS: Final[dict[str, str]] = {
     "ledger": "/pendo ledger view <id>",
 }
 _TRANSACTION_LABELS: Final = {"income": "收入", "expense": "支出", "transfer": "转账"}
-_TRANSACTION_SIGNS: Final = {"income": "+", "expense": "-", "transfer": "↔"}
+_TRANSACTION_SIGNS: Final  = {"income": "+", "expense": "-", "transfer": "↔"}
 
 
 class SearchHandler:
@@ -121,8 +121,8 @@ class SearchHandler:
             user_id,
             query,
             filters,
-            limit=_SEARCH_RESULT_LIMIT,
-            offset=0,
+            limit  = _SEARCH_RESULT_LIMIT,
+            offset = 0,
         )
         results = cast(list[SearchItem], raw_results)
 
@@ -134,7 +134,7 @@ class SearchHandler:
             }
 
         collection_titles = await self._load_event_collection_titles(user_id, results)
-        display_timezone = await run_sync(
+        display_timezone  = await run_sync(
             TimezoneHelper.get_user_timezone,
             user_id,
             self.db,
@@ -162,7 +162,7 @@ class SearchHandler:
         if not filter_match:
             return None
         raw_key, raw_value = filter_match.groups()
-        key = _FILTER_KEY_ALIASES.get(raw_key.casefold(), raw_key.casefold())
+        key   = _FILTER_KEY_ALIASES.get(raw_key.casefold(), raw_key.casefold())
         value = raw_value.strip()
         if not value:
             raise ValueError(f"{raw_key} 筛选值不能为空")
@@ -180,7 +180,7 @@ class SearchHandler:
         except ValueError as exc:
             raise ValueError("搜索参数中的引号未闭合") from exc
 
-        query_tokens: list[str] = []
+        query_tokens: list[str]     = []
         raw_filters: dict[str, str] = {}
         for token in tokens:
             parsed = cls._parse_filter_token(token)
@@ -238,7 +238,7 @@ class SearchHandler:
         filters["date_field"] = date_field
         if date_field in _DATE_ONLY_SEARCH_FIELDS:
             start_date = start_date[:10] if start_date else None
-            end_date = end_date[:10] if end_date else None
+            end_date   = end_date[:10] if end_date else None
         if start_date:
             filters["start_date"] = start_date
         if end_date:
@@ -251,14 +251,14 @@ class SearchHandler:
         user_now: datetime,
     ) -> SearchFilters:
         filters: SearchFilters = {}
-        item_type = cls._infer_filter_type(raw_filters)
+        item_type              = cls._infer_filter_type(raw_filters)
         if item_type:
             filters["type"] = item_type
         if status := raw_filters.get("status"):
             filters["status"] = status.casefold()
         if category := raw_filters.get("category"):
-            category_key = "ledger_category" if item_type == "ledger" else "category"
-            category_limit = 60 if item_type == "ledger" else 50
+            category_key          = "ledger_category" if item_type == "ledger" else "category"
+            category_limit        = 60 if item_type == "ledger" else 50
             filters[category_key] = cls._bounded_filter_value(category, "分类筛选", category_limit)
         if transaction_type := raw_filters.get("transaction_type"):
             filters["transaction_type"] = transaction_type.casefold()
@@ -269,7 +269,7 @@ class SearchHandler:
             if value := raw_filters.get(key):
                 filters[key] = cls._bounded_filter_value(value, label, limit)
         if tag := raw_filters.get("tags"):
-            bounded_tag = cls._bounded_filter_value(tag, "标签筛选", 20)
+            bounded_tag     = cls._bounded_filter_value(tag, "标签筛选", 20)
             filters["tags"] = validate_tag(bounded_tag)
         if range_value := raw_filters.get("range"):
             cls._apply_date_filter(filters, range_value, user_now)
@@ -360,7 +360,7 @@ class SearchHandler:
                 type_name = TYPE_NAMES.get(item_type, item_type)
                 parts.append(f"【{type_name}】本页 {len(items)} 条")
             for item in items:
-                collection_id = item.event_collection_id if isinstance(item, EventItem) else None
+                collection_id    = item.event_collection_id if isinstance(item, EventItem) else None
                 collection_title = collection_titles.get(collection_id or "")
                 parts.append(
                     self._format_item_line(
@@ -394,7 +394,7 @@ class SearchHandler:
         title = single_line_text(item.title)
         if isinstance(item, EventItem) and collection_title:
             collection = single_line_text(collection_title) or "无标题"
-            title = f"{collection} · {title or '无标题'}"
+            title      = f"{collection} · {title or '无标题'}"
         if not title:
             title = single_line_text(item.content) or "无标题"
         return ItemFormatter.truncate_content(title, _SEARCH_TITLE_MAX_CHARS, "...")
@@ -402,7 +402,7 @@ class SearchHandler:
     @staticmethod
     def _format_item_heading(item: SearchItem, title: str) -> str:
         item_type = get_item_type_value(item.type, default=str(item.type))
-        icon = ItemFormatter.format_type_icon(item_type)
+        icon      = ItemFormatter.format_type_icon(item_type)
         main_line = f"• {icon} {title}"
         if isinstance(item, LedgerItem):
             sign = _TRANSACTION_SIGNS.get(item.transaction_type, "-")
@@ -476,16 +476,16 @@ class SearchHandler:
 
     def _get_content_preview(self, item: SearchItem, query: str) -> str:
         """提取单行内容片段，并尽量把命中位置保留在固定预算内。"""
-        source = item.remark if isinstance(item, LedgerItem) else item.content
+        source  = item.remark if isinstance(item, LedgerItem) else item.content
         content = single_line_text(source)
         if not content or content == single_line_text(item.title):
             return ""
 
         preview_len = PendoConfig.SEARCH_CONTENT_PREVIEW_LENGTH
-        idx = content.casefold().find(query.casefold())
+        idx         = content.casefold().find(query.casefold())
         if idx >= 0:
-            start = max(0, idx - 10)
-            end = min(len(content), start + preview_len)
+            start   = max(0, idx - 10)
+            end     = min(len(content), start + preview_len)
             snippet = content[start:end]
             if start > 0:
                 snippet = f"...{snippet}"
@@ -535,7 +535,7 @@ class SearchHandler:
             parts.append(f"标签=#{filters['tags']}")
         if filters.get("transaction_type"):
             transaction_type = filters["transaction_type"]
-            label = _TRANSACTION_LABELS.get(transaction_type, transaction_type)
+            label            = _TRANSACTION_LABELS.get(transaction_type, transaction_type)
             parts.append(f"交易={label}")
         if filters.get("account_name"):
             parts.append(f"账户={filters['account_name']}")

@@ -35,8 +35,8 @@ def schedule_codex_summary_from_filter_result(
     )
     return schedule_codex_summary(
         context,
-        date=date,
-        links=links,
+        date  = date,
+        links = links,
     )
 
 
@@ -62,7 +62,7 @@ def schedule_codex_summary(
                 len(tuple(getattr(getattr(context, "principal", None), "delivery_targets", ()))),
             )
             capabilities = getattr(context, "capabilities", None)
-            service = (
+            service      = (
                 getattr(capabilities, "codex_arxiv_summary", None)
                 if capabilities is not None
                 else None
@@ -71,16 +71,16 @@ def schedule_codex_summary(
                 logger.info("skip Codex arXiv summary enqueue: capability unavailable")
                 return
             result = await service.enqueue_or_replay(
-                date=date,
-                links=links,
+                date  = date,
+                links = links,
             )
             logger.info("Codex arXiv summary sidecar enqueue result: %s", result)
         except Exception as exc:
             public_error_message(
                 context,
                 exc,
-                logger=logger,
-                component="arxiv_filter.codex_enqueue",
+                logger    = logger,
+                component = "arxiv_filter.codex_enqueue",
             )
 
     try:
@@ -97,7 +97,7 @@ def schedule_codex_summary(
         public_error_message(
             context,
             exc,
-            logger=logger,
-            component="arxiv_filter.codex_schedule",
+            logger    = logger,
+            component = "arxiv_filter.codex_schedule",
         )
         return None

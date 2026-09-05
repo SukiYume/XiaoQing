@@ -76,14 +76,14 @@ async def analyze_goals(
 
     try:
         resp, _path = await chat_completions_raw_with_fallback_paths(
-            secrets=secrets,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=min(0.7, float(temperature)),
-            top_p=float(top_p),
-            max_tokens=min(1200, max(700, int(max_tokens))),
-            timeout_seconds=float(timeout_seconds),
-            max_retry=int(max_retry),
-            retry_interval_seconds=float(retry_interval_seconds),
+            secrets                = secrets,
+            messages               = [{"role": "user", "content": prompt}],
+            temperature            = min(0.7, float(temperature)),
+            top_p                  = float(top_p),
+            max_tokens             = min(1200, max(700, int(max_tokens))),
+            timeout_seconds        = float(timeout_seconds),
+            max_retry              = int(max_retry),
+            retry_interval_seconds = float(retry_interval_seconds),
         )
     except Exception:
         return list(current_goal_list)
@@ -92,8 +92,8 @@ async def analyze_goals(
         str(content),
         "goal",
         "reasoning",
-        required_types={"goal": str, "reasoning": str},
-        allow_array=True,
+        required_types = {"goal": str, "reasoning": str},
+        allow_array    = True,
     )
     if ok and isinstance(result, list):
         out: list[dict[str, Any]] = []

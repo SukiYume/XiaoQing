@@ -42,9 +42,9 @@ class _AsyncConcurrencyProbe:
     """记录异步桩的调用次数与最大并发数。"""
 
     def __init__(self) -> None:
-        self.active = 0
+        self.active         = 0
         self.maximum_active = 0
-        self.calls = 0
+        self.calls          = 0
 
     async def run(self, *_args) -> None:
         self.calls += 1
@@ -60,18 +60,18 @@ class _AsyncConcurrencyProbe:
 def _isolate_process_global_plugin_import_state():  # type: ignore[no-untyped-def]
     """Keep deliberate restart-only test generations from leaking to the next case."""
 
-    original_owners = dict(_PLUGIN_NAMESPACE_OWNERS)
+    original_owners      = dict(_PLUGIN_NAMESPACE_OWNERS)
     original_path_leases = {
         key: type(lease)(
-            container=lease.container,
-            owners=lease.owners,
-            inserted=lease.inserted,
+            container = lease.container,
+            owners    = lease.owners,
+            inserted  = lease.inserted,
         )
         for key, lease in _PROCESS_IMPORT_PATH_LEASES.items()
     }
-    original_meta_path = list(sys.meta_path)
-    original_sys_path = list(sys.path)
-    plugins_package = sys.modules.get("plugins")
+    original_meta_path    = list(sys.meta_path)
+    original_sys_path     = list(sys.path)
+    plugins_package       = sys.modules.get("plugins")
     original_plugins_path = (
         list(plugins_package.__path__)
         if isinstance(plugins_package, ModuleType) and hasattr(plugins_package, "__path__")
@@ -85,7 +85,7 @@ def _isolate_process_global_plugin_import_state():  # type: ignore[no-untyped-de
         parent_name, _, child_name = name.rpartition(".")
         parent = sys.modules.get(parent_name)
         if isinstance(parent, ModuleType):
-            namespace = ModuleType.__getattribute__(parent, "__dict__")
+            namespace                      = ModuleType.__getattribute__(parent, "__dict__")
             original_parent_bindings[name] = (
                 parent,
                 child_name,
@@ -115,7 +115,7 @@ def _isolate_process_global_plugin_import_state():  # type: ignore[no-untyped-de
         else:
             namespace.pop(child_name, None)
     sys.meta_path[:] = original_meta_path
-    sys.path[:] = original_sys_path
+    sys.path[:]      = original_sys_path
     if isinstance(plugins_package, ModuleType):
         sys.modules["plugins"] = plugins_package
         if original_plugins_path is not None:
@@ -133,21 +133,21 @@ def _build_manager(tmp_path: Path) -> PluginManager:
     plugins_dir.mkdir()
     (plugins_dir / "__init__.py").write_text("", encoding="utf-8")
     return PluginManager(
-        plugins_dir=plugins_dir,
-        router=CommandRouter(),
-        context_factory=lambda *args, **kwargs: Mock(),
+        plugins_dir     = plugins_dir,
+        router          = CommandRouter(),
+        context_factory = lambda *args, **kwargs: Mock(),
     )
 
 
 def _build_definition(name: str = "demo") -> PluginDefinition:
     return PluginDefinition(
-        name=name,
-        version="1.0.0",
-        entry="main.py",
-        commands=[],
-        schedule=[],
-        concurrency="parallel",
-        enabled=True,
+        name        = name,
+        version     = "1.0.0",
+        entry       = "main.py",
+        commands    = [],
+        schedule    = [],
+        concurrency = "parallel",
+        enabled     = True,
     )
 
 
@@ -159,13 +159,13 @@ def _register_test_command(
         return []
 
     spec = CommandSpec(
-        plugin="demo",
-        name="demo",
-        triggers=["/demo"],
-        help_text="demo",
-        admin_only=False,
-        handler=handler,
-        execution_gate=gate,
+        plugin         = "demo",
+        name           = "demo",
+        triggers       = ["/demo"],
+        help_text      = "demo",
+        admin_only     = False,
+        handler        = handler,
+        execution_gate = gate,
     )
     manager.router.register(spec)
     return spec
@@ -173,19 +173,19 @@ def _register_test_command(
 
 def _service_definition(
     *,
-    owner: str = "voice",
-    name: str = "voice.synthesize_text",
-    callback: str = "synthesize",
-    callers: frozenset[str] = frozenset({"smalltalk"}),
+    owner: str                      = "voice",
+    name: str                       = "voice.synthesize_text",
+    callback: str                   = "synthesize",
+    callers: frozenset[str]         = frozenset({"smalltalk"}),
     required_capability: str | None = None,
 ) -> PluginDefinition:
-    definition = _build_definition(owner)
+    definition          = _build_definition(owner)
     definition.services = (
         PluginServiceDefinition(
-            name=name,
-            callback=callback,
-            callers=callers,
-            required_capability=required_capability,
+            name                = name,
+            callback            = callback,
+            callers             = callers,
+            required_capability = required_capability,
         ),
     )
     return definition

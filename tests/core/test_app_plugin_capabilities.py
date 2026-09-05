@@ -25,12 +25,12 @@ from tests.helpers.app_test_support import (
 )
 
 mock_dependencies = _fixture_support.mock_dependencies
-temp_app_root = _fixture_support.temp_app_root
+temp_app_root     = _fixture_support.temp_app_root
 
 
 @pytest.mark.unit
 def test_app_grants_only_plugin_scoped_capabilities(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
+    app     = XiaoQingApp(temp_app_root)
     secrets = {
         "admin_user_ids": [12345],
         "onebot_token": "top-level-token",
@@ -46,25 +46,25 @@ def test_app_grants_only_plugin_scoped_capabilities(temp_app_root: Path):
     app._load_admins(secrets)
     principal = app.issue_user_principal(
         {"user_id": 12345},
-        user_id=12345,
-        group_id=None,
-        is_private=True,
+        user_id    = 12345,
+        group_id   = None,
+        is_private = True,
     )
 
     name_only_context = _plugin_context_for(
         app,
         "bot_core",
-        user_id=12345,
-        principal=principal,
+        user_id   = 12345,
+        principal = principal,
     )
     assert name_only_context.capabilities.secret_admin is None
 
     bot_context = _plugin_context_for(
         app,
         "bot_core",
-        user_id=12345,
-        principal=principal,
-        manifest_capabilities=frozenset({"secret_admin"}),
+        user_id               = 12345,
+        principal             = principal,
+        manifest_capabilities = frozenset({"secret_admin"}),
     )
     assert bot_context.config_manager is None
     assert set(bot_context.secrets["plugins"]) == {"bot_core"}
@@ -77,8 +77,8 @@ def test_app_grants_only_plugin_scoped_capabilities(temp_app_root: Path):
     ordinary_context = _plugin_context_for(
         app,
         "other",
-        user_id=12345,
-        principal=principal,
+        user_id   = 12345,
+        principal = principal,
     )
     assert set(ordinary_context.secrets["plugins"]) == {"other"}
     assert ordinary_context.capabilities.secret_admin is None
@@ -88,9 +88,9 @@ def test_app_grants_only_plugin_scoped_capabilities(temp_app_root: Path):
     media_context = _plugin_context_for(
         app,
         "xiaoqing_chat",
-        user_id=12345,
-        principal=principal,
-        manifest_capabilities=frozenset({"onebot_media"}),
+        user_id               = 12345,
+        principal             = principal,
+        manifest_capabilities = frozenset({"onebot_media"}),
     )
     assert media_context.capabilities.onebot_media is not None
     assert "onebot_http_base" not in media_context.config
@@ -99,9 +99,9 @@ def test_app_grants_only_plugin_scoped_capabilities(temp_app_root: Path):
     pendo_context = _plugin_context_for(
         app,
         "pendo",
-        user_id=12345,
-        principal=principal,
-        manifest_capabilities=frozenset({"config_subscription"}),
+        user_id               = 12345,
+        principal             = principal,
+        manifest_capabilities = frozenset({"config_subscription"}),
     )
     assert pendo_context.capabilities.config_subscription is not None
     assert pendo_context.capabilities.secret_admin is None
@@ -116,7 +116,7 @@ async def test_ai_capability_reads_one_fresh_snapshot_per_call(temp_app_root: Pa
     app.http_session = SimpleNamespace(closed=False)
 
     def install(model: str, api_key: str) -> None:
-        config = app.config_manager.snapshot().mutable_config()
+        config       = app.config_manager.snapshot().mutable_config()
         config["ai"] = {
             "providers": {
                 "test": {
@@ -133,8 +133,8 @@ async def test_ai_capability_reads_one_fresh_snapshot_per_call(temp_app_root: Pa
             },
         }
         config["plugins"] = {"demo": {"ai": {"routes": {"chat": {"models": ["profile"]}}}}}
-        secrets = app.config_manager.snapshot().mutable_secrets()
-        secrets["ai"] = {"providers": {"test": {"api_key": api_key}}}
+        secrets           = app.config_manager.snapshot().mutable_secrets()
+        secrets["ai"]     = {"providers": {"test": {"api_key": api_key}}}
         app.config_manager._replace_snapshot(config, secrets)
 
     install("model-v1", "key-v1")
@@ -154,12 +154,12 @@ async def test_ai_capability_reads_one_fresh_snapshot_per_call(temp_app_root: Pa
             )
         )
         return AICompletionResult(
-            response={"choices": [{"message": {"content": "ok"}}]},
-            profile="profile",
-            provider="test",
-            model=observed[-1][0],
-            finish_reason="stop",
-            attempts=1,
+            response      = {"choices": [{"message": {"content": "ok"}}]},
+            profile       = "profile",
+            provider      = "test",
+            model         = observed[-1][0],
+            finish_reason = "stop",
+            attempts      = 1,
         )
 
     with patch(
@@ -175,20 +175,20 @@ async def test_ai_capability_reads_one_fresh_snapshot_per_call(temp_app_root: Pa
 
 @pytest.mark.unit
 def test_app_rejects_forged_copied_and_mismatched_principals(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
+    app    = XiaoQingApp(temp_app_root)
     issued = app.issue_user_principal(
         {"user_id": 12345},
-        user_id=12345,
-        group_id=None,
-        is_private=True,
+        user_id    = 12345,
+        group_id   = None,
+        is_private = True,
     )
     forged = PluginPrincipal(
-        kind="user",
-        user_id=12345,
-        is_bot_admin=True,
-        is_private=True,
+        kind         = "user",
+        user_id      = 12345,
+        is_bot_admin = True,
+        is_private   = True,
     )
-    copied = copy.copy(issued)
+    copied      = copy.copy(issued)
     deep_copied = copy.deepcopy(issued)
     assert copied is not issued
     assert deep_copied is not issued
@@ -198,9 +198,9 @@ def test_app_rejects_forged_copied_and_mismatched_principals(temp_app_root: Path
             _plugin_context_for(
                 app,
                 "test",
-                user_id=principal.user_id,
-                group_id=principal.group_id,
-                principal=principal,
+                user_id   = principal.user_id,
+                group_id  = principal.group_id,
+                principal = principal,
             )
 
     with pytest.raises(PermissionError, match="do not match"):
@@ -209,19 +209,19 @@ def test_app_rejects_forged_copied_and_mismatched_principals(temp_app_root: Path
 
 @pytest.mark.unit
 def test_app_recomputes_admin_capability_after_revocation(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
+    app       = XiaoQingApp(temp_app_root)
     principal = app.issue_user_principal(
         {"user_id": 12345},
-        user_id=12345,
-        group_id=None,
-        is_private=True,
+        user_id    = 12345,
+        group_id   = None,
+        is_private = True,
     )
     before = _plugin_context_for(
         app,
         "bot_core",
-        user_id=12345,
-        principal=principal,
-        manifest_capabilities=frozenset({"secret_admin"}),
+        user_id               = 12345,
+        principal             = principal,
+        manifest_capabilities = frozenset({"secret_admin"}),
     )
     assert before.capabilities.is_bot_admin is True
     assert before.capabilities.secret_admin is not None
@@ -230,9 +230,9 @@ def test_app_recomputes_admin_capability_after_revocation(temp_app_root: Path):
     after = _plugin_context_for(
         app,
         "bot_core",
-        user_id=12345,
-        principal=principal,
-        manifest_capabilities=frozenset({"secret_admin"}),
+        user_id               = 12345,
+        principal             = principal,
+        manifest_capabilities = frozenset({"secret_admin"}),
     )
     assert after.capabilities.is_bot_admin is False
     assert after.capabilities.secret_admin is None
@@ -240,24 +240,24 @@ def test_app_recomputes_admin_capability_after_revocation(temp_app_root: Path):
 
 @pytest.mark.unit
 def test_app_issues_group_role_only_for_matching_sender(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
+    app      = XiaoQingApp(temp_app_root)
     matching = app.issue_user_principal(
         {"sender": {"user_id": 111, "role": "admin"}},
-        user_id=111,
-        group_id=222,
-        is_private=False,
+        user_id    = 111,
+        group_id   = 222,
+        is_private = False,
     )
     mismatched = app.issue_user_principal(
         {"sender": {"user_id": 999, "role": "owner"}},
-        user_id=111,
-        group_id=222,
-        is_private=False,
+        user_id    = 111,
+        group_id   = 222,
+        is_private = False,
     )
     private = app.issue_user_principal(
         {"sender": {"user_id": 111, "role": "owner"}},
-        user_id=111,
-        group_id=None,
-        is_private=True,
+        user_id    = 111,
+        group_id   = None,
+        is_private = True,
     )
 
     assert matching.can_manage_group(222) is True
@@ -270,8 +270,8 @@ def test_app_issues_group_role_only_for_matching_sender(temp_app_root: Path):
 
 @pytest.mark.unit
 def test_pendo_config_subscription_is_scoped_and_unsubscribable(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
-    config = app.config_manager.snapshot().mutable_config()
+    app               = XiaoQingApp(temp_app_root)
+    config            = app.config_manager.snapshot().mutable_config()
     config["plugins"] = {
         "pendo": {"web_demo_enabled": True},
         "other": {"private_option": "hidden"},
@@ -285,7 +285,7 @@ def test_pendo_config_subscription_is_scoped_and_unsubscribable(temp_app_root: P
     )
     subscription = context.capabilities.config_subscription
     assert subscription is not None
-    received = []
+    received    = []
     unsubscribe = subscription.subscribe(received.append)
 
     app.config_manager.update_secret("admin_user_ids", [12345])
@@ -304,7 +304,7 @@ def test_pendo_config_subscription_is_scoped_and_unsubscribable(temp_app_root: P
 async def test_bot_core_secret_admin_works_with_production_context(temp_app_root: Path):
     from plugins.bot_core import main as bot_core
 
-    app = XiaoQingApp(temp_app_root)
+    app     = XiaoQingApp(temp_app_root)
     secrets = {
         "admin_user_ids": [12345],
         "onebot_token": "",
@@ -316,24 +316,24 @@ async def test_bot_core_secret_admin_works_with_production_context(temp_app_root
     app._load_admins(secrets)
     principal = app.issue_user_principal(
         {"user_id": 12345},
-        user_id=12345,
-        group_id=None,
-        is_private=True,
+        user_id    = 12345,
+        group_id   = None,
+        is_private = True,
     )
     definition = PluginDefinition(
-        name="bot_core",
-        version="1.0.0",
-        entry="main.py",
-        commands=[],
-        schedule=[],
-        concurrency="parallel",
-        capabilities=frozenset({"secret_admin"}),
+        name         = "bot_core",
+        version      = "1.0.0",
+        entry        = "main.py",
+        commands     = [],
+        schedule     = [],
+        concurrency  = "parallel",
+        capabilities = frozenset({"secret_admin"}),
     )
     _register_test_loaded_plugin(app, definition, bot_core)
     context = app.plugin_manager.build_context(
         "bot_core",
-        user_id=12345,
-        principal=principal,
+        user_id   = 12345,
+        principal = principal,
     )
     secret_admin = context.capabilities.secret_admin
     assert secret_admin is not None
@@ -357,16 +357,16 @@ async def test_bot_core_secret_admin_works_with_production_context(temp_app_root
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_onebot_request_uses_correlated_outbound_transport_only(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
+    app             = XiaoQingApp(temp_app_root)
     failed_response = {"status": "failed", "retcode": 100, "data": {}}
-    app.ws_client = SimpleNamespace(
-        credentials_trusted=True,
-        connected=lambda: True,
+    app.ws_client   = SimpleNamespace(
+        credentials_trusted = True,
+        connected           = lambda: True,
         request_action=AsyncMock(return_value=failed_response),
     )
     app.http_sender = SimpleNamespace(
-        http_base="http://onebot",
-        credentials_trusted=True,
+        http_base           = "http://onebot",
+        credentials_trusted = True,
         request_action=AsyncMock(return_value={"status": "ok", "retcode": 0}),
     )
     app.inbound_manager = SimpleNamespace(broadcast=AsyncMock())
@@ -381,16 +381,16 @@ async def test_onebot_request_uses_correlated_outbound_transport_only(temp_app_r
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_onebot_request_falls_back_to_http_on_ws_transport_failure(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
+    app           = XiaoQingApp(temp_app_root)
     http_response = {"status": "ok", "retcode": 0, "data": {"message_id": 42}}
     app.ws_client = SimpleNamespace(
-        credentials_trusted=True,
-        connected=lambda: True,
+        credentials_trusted = True,
+        connected           = lambda: True,
         request_action=AsyncMock(return_value=None),
     )
     app.http_sender = SimpleNamespace(
-        http_base="http://onebot",
-        credentials_trusted=True,
+        http_base           = "http://onebot",
+        credentials_trusted = True,
         request_action=AsyncMock(return_value=http_response),
     )
 
@@ -405,15 +405,15 @@ async def test_onebot_request_falls_back_to_http_on_ws_transport_failure(temp_ap
 async def test_onebot_request_does_not_fallback_after_committed_ws_outcome_unknown(
     temp_app_root: Path,
 ):
-    app = XiaoQingApp(temp_app_root)
+    app           = XiaoQingApp(temp_app_root)
     app.ws_client = SimpleNamespace(
-        credentials_trusted=True,
-        connected=lambda: True,
+        credentials_trusted = True,
+        connected           = lambda: True,
         request_action=AsyncMock(side_effect=OneBotActionOutcomeUnknown("get_msg")),
     )
     app.http_sender = SimpleNamespace(
-        http_base="http://onebot",
-        credentials_trusted=True,
+        http_base           = "http://onebot",
+        credentials_trusted = True,
         request_action=AsyncMock(return_value={"status": "ok", "retcode": 0}),
     )
 
@@ -428,7 +428,7 @@ async def test_onebot_request_does_not_fallback_after_committed_ws_outcome_unkno
 async def test_xiaoqing_media_capability_validates_and_crops_onebot_responses(
     temp_app_root: Path,
 ):
-    app = XiaoQingApp(temp_app_root)
+    app                        = XiaoQingApp(temp_app_root)
     app._request_onebot_action = AsyncMock(
         side_effect=[
             {"status": "ok", "retcode": 0, "data": {"message_id": 7, "raw": "ok"}},
@@ -471,7 +471,7 @@ async def test_xiaoqing_media_capability_validates_and_crops_onebot_responses(
 async def test_declared_voice_service_preserves_signed_principal_and_target_scope(
     temp_app_root: Path,
 ):
-    app = XiaoQingApp(temp_app_root)
+    app     = XiaoQingApp(temp_app_root)
     secrets = {
         "admin_user_ids": [12345],
         "onebot_token": "",
@@ -482,7 +482,7 @@ async def test_declared_voice_service_preserves_signed_principal_and_target_scop
             "chat": {"chat_key": "c"},
         },
     }
-    config = app.config_manager.snapshot().mutable_config()
+    config            = app.config_manager.snapshot().mutable_config()
     config["plugins"] = {
         "smalltalk": {"source_option": 1},
         "voice": {"target_option": 2},
@@ -492,9 +492,9 @@ async def test_declared_voice_service_preserves_signed_principal_and_target_scop
     app._load_admins(secrets)
     principal = app.issue_user_principal(
         {"user_id": 12345},
-        user_id=12345,
-        group_id=None,
-        is_private=True,
+        user_id    = 12345,
+        group_id   = None,
+        is_private = True,
     )
     seen_contexts = []
 
@@ -502,20 +502,20 @@ async def test_declared_voice_service_preserves_signed_principal_and_target_scop
         seen_contexts.append(context)
         return [{"type": "text", "data": {"text": value}}]
 
-    module = ModuleType("plugins.voice.main")
+    module            = ModuleType("plugins.voice.main")
     module.synthesize = synthesize
-    definition = PluginDefinition(
-        name="voice",
-        version="1.0.0",
-        entry="main.py",
-        commands=[],
-        schedule=[],
-        concurrency="sequential",
-        services=(
+    definition        = PluginDefinition(
+        name        = "voice",
+        version     = "1.0.0",
+        entry       = "main.py",
+        commands    = [],
+        schedule    = [],
+        concurrency = "sequential",
+        services    = (
             PluginServiceDefinition(
-                name="voice.synthesize_text",
-                callback="synthesize",
-                callers=frozenset({"smalltalk"}),
+                name     = "voice.synthesize_text",
+                callback = "synthesize",
+                callers  = frozenset({"smalltalk"}),
             ),
         ),
     )
@@ -523,11 +523,11 @@ async def test_declared_voice_service_preserves_signed_principal_and_target_scop
     source = _plugin_context_for(
         app,
         "smalltalk",
-        user_id=12345,
-        principal=principal,
-        uses_services=frozenset({"chat.reply", "voice.synthesize_text"}),
+        user_id       = 12345,
+        principal     = principal,
+        uses_services = frozenset({"chat.reply", "voice.synthesize_text"}),
     )
-    service = source.capabilities.voice_synthesis
+    service      = source.capabilities.voice_synthesis
     chat_service = source.capabilities.chat_reply
     assert service is not None
     assert chat_service is not None
@@ -539,20 +539,20 @@ async def test_declared_voice_service_preserves_signed_principal_and_target_scop
         chat_contexts.append(context)
         return [{"type": "text", "data": {"text": f"{text}:{event['user_id']}"}}]
 
-    chat_module = ModuleType("plugins.chat.main")
+    chat_module       = ModuleType("plugins.chat.main")
     chat_module.reply = reply
-    chat_definition = PluginDefinition(
-        name="chat",
-        version="1.0.0",
-        entry="main.py",
-        commands=[],
-        schedule=[],
-        concurrency="parallel",
-        services=(
+    chat_definition   = PluginDefinition(
+        name        = "chat",
+        version     = "1.0.0",
+        entry       = "main.py",
+        commands    = [],
+        schedule    = [],
+        concurrency = "parallel",
+        services    = (
             PluginServiceDefinition(
-                name="chat.reply",
-                callback="reply",
-                callers=frozenset({"smalltalk"}),
+                name     = "chat.reply",
+                callback = "reply",
+                callers  = frozenset({"smalltalk"}),
             ),
         ),
     )
@@ -584,22 +584,22 @@ async def test_declared_voice_service_preserves_signed_principal_and_target_scop
 async def test_arxiv_codex_capability_uses_real_target_context_and_rechecks_admin(
     temp_app_root: Path,
 ):
-    app = XiaoQingApp(temp_app_root)
+    app     = XiaoQingApp(temp_app_root)
     secrets = {
         "admin_user_ids": [12345],
         "onebot_token": "",
         "inbound_token": "",
         "plugins": {"arxiv_filter": {"source": "s"}, "codex": {"target": "t"}},
     }
-    config = app.config_manager.snapshot().mutable_config()
+    config            = app.config_manager.snapshot().mutable_config()
     config["plugins"] = {"arxiv_filter": {"source_option": 1}, "codex": {"target_option": 2}}
     app.config_manager._replace_snapshot(config, secrets)
     app._load_admins(secrets)
     principal = app.issue_user_principal(
         {"user_id": 12345},
-        user_id=12345,
-        group_id=None,
-        is_private=True,
+        user_id    = 12345,
+        group_id   = None,
+        is_private = True,
     )
     captured = []
 
@@ -617,21 +617,21 @@ async def test_arxiv_codex_capability_uses_real_target_context_and_rechecks_admi
         )
         return "queued"
 
-    module = ModuleType("plugins.codex.main")
+    module                       = ModuleType("plugins.codex.main")
     module.enqueue_arxiv_summary = enqueue_arxiv_summary
-    definition = PluginDefinition(
-        name="codex",
-        version="1.0.0",
-        entry="main.py",
-        commands=[],
-        schedule=[],
-        concurrency="sequential",
-        services=(
+    definition                   = PluginDefinition(
+        name        = "codex",
+        version     = "1.0.0",
+        entry       = "main.py",
+        commands    = [],
+        schedule    = [],
+        concurrency = "sequential",
+        services    = (
             PluginServiceDefinition(
-                name="codex.enqueue_arxiv_summary",
-                callback="enqueue_arxiv_summary",
-                callers=frozenset({"arxiv_filter"}),
-                required_capability="codex_arxiv_summary",
+                name                = "codex.enqueue_arxiv_summary",
+                callback            = "enqueue_arxiv_summary",
+                callers             = frozenset({"arxiv_filter"}),
+                required_capability = "codex_arxiv_summary",
             ),
         ),
     )
@@ -639,17 +639,17 @@ async def test_arxiv_codex_capability_uses_real_target_context_and_rechecks_admi
     source = _plugin_context_for(
         app,
         "arxiv_filter",
-        user_id=12345,
-        principal=principal,
-        uses_services=frozenset({"codex.enqueue_arxiv_summary"}),
+        user_id       = 12345,
+        principal     = principal,
+        uses_services = frozenset({"codex.enqueue_arxiv_summary"}),
     )
     service = source.capabilities.codex_arxiv_summary
     assert service is not None
 
     assert (
         await service.enqueue_or_replay(
-            date="2026-07-11",
-            links=["https://arxiv.org/abs/2607.00001"],
+            date  = "2026-07-11",
+            links = ["https://arxiv.org/abs/2607.00001"],
         )
         == "queued"
     )
@@ -665,8 +665,8 @@ async def test_arxiv_codex_capability_uses_real_target_context_and_rechecks_admi
     app._admin_set.clear()
     with pytest.raises(PermissionError, match="no longer authorized"):
         await service.enqueue_or_replay(
-            date="2026-07-11",
-            links=["https://arxiv.org/abs/2607.00001"],
+            date  = "2026-07-11",
+            links = ["https://arxiv.org/abs/2607.00001"],
         )
     assert len(captured) == 1
 
@@ -676,35 +676,35 @@ async def test_arxiv_codex_capability_uses_real_target_context_and_rechecks_admi
 async def test_arxiv_codex_capability_is_source_scoped_and_resolves_current_loaded_gate(
     temp_app_root: Path,
 ):
-    app = XiaoQingApp(temp_app_root)
+    app       = XiaoQingApp(temp_app_root)
     principal = app.issue_user_principal(
         {"user_id": 12345},
-        user_id=12345,
-        group_id=None,
-        is_private=True,
+        user_id    = 12345,
+        group_id   = None,
+        is_private = True,
     )
     assert (
         _plugin_context_for(
             app,
             "other",
-            user_id=12345,
-            principal=principal,
+            user_id   = 12345,
+            principal = principal,
         ).capabilities.codex_arxiv_summary
         is None
     )
     service = _plugin_context_for(
         app,
         "arxiv_filter",
-        user_id=12345,
-        principal=principal,
-        uses_services=frozenset({"codex.enqueue_arxiv_summary"}),
+        user_id       = 12345,
+        principal     = principal,
+        uses_services = frozenset({"codex.enqueue_arxiv_summary"}),
     ).capabilities.codex_arxiv_summary
     assert service is not None
 
     with pytest.raises(RuntimeError, match="unavailable"):
         await service.enqueue_or_replay(
-            date="2026-07-11",
-            links=["https://arxiv.org/abs/2607.00001"],
+            date  = "2026-07-11",
+            links = ["https://arxiv.org/abs/2607.00001"],
         )
 
     calls: list[str] = []
@@ -714,21 +714,21 @@ async def test_arxiv_codex_capability_is_source_scoped_and_resolves_current_load
             calls.append(value)
             return value
 
-        module = ModuleType(f"plugins.codex.{value}")
+        module                       = ModuleType(f"plugins.codex.{value}")
         module.enqueue_arxiv_summary = enqueue_arxiv_summary
-        definition = PluginDefinition(
-            name="codex",
-            version="1.0.0",
-            entry="main.py",
-            commands=[],
-            schedule=[],
-            concurrency="sequential",
-            services=(
+        definition                   = PluginDefinition(
+            name        = "codex",
+            version     = "1.0.0",
+            entry       = "main.py",
+            commands    = [],
+            schedule    = [],
+            concurrency = "sequential",
+            services    = (
                 PluginServiceDefinition(
-                    name="codex.enqueue_arxiv_summary",
-                    callback="enqueue_arxiv_summary",
-                    callers=frozenset({"arxiv_filter"}),
-                    required_capability="codex_arxiv_summary",
+                    name                = "codex.enqueue_arxiv_summary",
+                    callback            = "enqueue_arxiv_summary",
+                    callers             = frozenset({"arxiv_filter"}),
+                    required_capability = "codex_arxiv_summary",
                 ),
             ),
         )
@@ -737,16 +737,16 @@ async def test_arxiv_codex_capability_is_source_scoped_and_resolves_current_load
     install("first")
     assert (
         await service.enqueue_or_replay(
-            date="2026-07-11",
-            links=["https://arxiv.org/abs/2607.00001"],
+            date  = "2026-07-11",
+            links = ["https://arxiv.org/abs/2607.00001"],
         )
         == "first"
     )
     install("second")
     assert (
         await service.enqueue_or_replay(
-            date="2026-07-11",
-            links=["https://arxiv.org/abs/2607.00001"],
+            date  = "2026-07-11",
+            links = ["https://arxiv.org/abs/2607.00001"],
         )
         == "second"
     )
@@ -755,8 +755,8 @@ async def test_arxiv_codex_capability_is_source_scoped_and_resolves_current_load
     app.plugin_manager._plugins["codex"].definition.enabled = False
     with pytest.raises(RuntimeError, match="not accepting calls"):
         await service.enqueue_or_replay(
-            date="2026-07-11",
-            links=["https://arxiv.org/abs/2607.00001"],
+            date  = "2026-07-11",
+            links = ["https://arxiv.org/abs/2607.00001"],
         )
 
 
@@ -823,8 +823,8 @@ async def test_xiaoqing_provider_scope_uses_production_principal_capabilities(
     from plugins.xiaoqing_chat.helper_utils import _get_ai_route_context
     from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
-    app = XiaoQingApp(temp_app_root)
-    config = app.config_manager.snapshot().mutable_config()
+    app          = XiaoQingApp(temp_app_root)
+    config       = app.config_manager.snapshot().mutable_config()
     config["ai"] = {
         "providers": {
             "deepseek": {
@@ -861,7 +861,7 @@ async def test_xiaoqing_provider_scope_uses_production_principal_capabilities(
             }
         }
     }
-    secrets = app.config_manager.snapshot().mutable_secrets()
+    secrets       = app.config_manager.snapshot().mutable_secrets()
     secrets["ai"] = {
         "providers": {
             "deepseek": {"api_key": "<DEEPSEEK_API_KEY>"},
@@ -877,16 +877,16 @@ async def test_xiaoqing_provider_scope_uses_production_principal_capabilities(
     }
     group_admin = app.issue_user_principal(
         group_admin_event,
-        user_id=777,
-        group_id=100,
-        is_private=False,
+        user_id    = 777,
+        group_id   = 100,
+        is_private = False,
     )
     group_context = _plugin_context_for(
         app,
         "xiaoqing_chat",
-        user_id=777,
-        group_id=100,
-        principal=group_admin,
+        user_id   = 777,
+        group_id  = 100,
+        principal = group_admin,
     )
     state = ChatRuntimeState()
 
@@ -894,7 +894,7 @@ async def test_xiaoqing_provider_scope_uses_production_principal_capabilities(
         patch("plugins.xiaoqing_chat.handlers._state", return_value=state),
         patch("plugins.xiaoqing_chat.helper_utils._state", return_value=state),
     ):
-        local_result = await handle_provider("glm", group_admin_event, group_context)
+        local_result  = await handle_provider("glm", group_admin_event, group_context)
         denied_global = await handle_provider("global glm", group_admin_event, group_context)
         group_a = _get_ai_route_context(group_context, chat_id="g100")
         group_b = _get_ai_route_context(group_context, chat_id="g200")
@@ -906,16 +906,16 @@ async def test_xiaoqing_provider_scope_uses_production_principal_capabilities(
         }
         bot_admin = app.issue_user_principal(
             bot_admin_event,
-            user_id=12345,
-            group_id=200,
-            is_private=False,
+            user_id    = 12345,
+            group_id   = 200,
+            is_private = False,
         )
         bot_context = _plugin_context_for(
             app,
             "xiaoqing_chat",
-            user_id=12345,
-            group_id=200,
-            principal=bot_admin,
+            user_id   = 12345,
+            group_id  = 200,
+            principal = bot_admin,
         )
         global_result = await handle_provider("global glm", bot_admin_event, bot_context)
 

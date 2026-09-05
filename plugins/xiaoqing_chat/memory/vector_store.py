@@ -18,7 +18,7 @@ from numpy.typing import NDArray
 from core.atomic_store import atomic_write_bytes
 from core.plugin_base import load_json, write_json
 
-_RE_WS = re.compile(r"\s+")
+_RE_WS                = re.compile(r"\s+")
 FloatArray: TypeAlias = NDArray[np.float32]
 
 
@@ -34,10 +34,10 @@ class VectorDoc:
 def _docs_content_digest(docs: Sequence[VectorDoc]) -> str:
     payload = json.dumps(
         [asdict(doc) for doc in docs],
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
+        ensure_ascii = False,
+        sort_keys    = True,
+        separators   = (",", ":"),
+        allow_nan    = False,
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
@@ -67,8 +67,8 @@ class VectorStore:
     """维护唯一文档 ID，并在首次查询时惰性构建归一化矩阵。"""
 
     def __init__(self, *, dim: int = 2048) -> None:
-        self._dim = dim
-        self._docs: list[VectorDoc] = []
+        self._dim                       = dim
+        self._docs: list[VectorDoc]     = []
         self._matrix: FloatArray | None = None
         self._id_to_idx: dict[str, int] = {}
 
@@ -113,15 +113,15 @@ class VectorStore:
         mat: FloatArray = np.zeros((len(self._docs), self._dim), dtype=np.float32)
         for i, d in enumerate(self._docs):
             mat[i, :] = _embed(d.text, dim=self._dim)
-        mat = _l2_normalize(mat)
+        mat          = _l2_normalize(mat)
         self._matrix = mat
 
     def query(
         self,
         text: str,
         *,
-        top_k: int = 5,
-        min_score: float = 0.12,
+        top_k: int                                    = 5,
+        min_score: float                              = 0.12,
         predicate: Callable[[VectorDoc], bool] | None = None,
     ) -> list[tuple[VectorDoc, float]]:
         if top_k <= 0:
@@ -130,7 +130,7 @@ class VectorStore:
         if self._matrix is None or self._matrix.shape[0] == 0:
             return []
         q: FloatArray = _embed(text, dim=self._dim)
-        q = _l2_normalize(q.reshape(1, -1))[0]
+        q      = _l2_normalize(q.reshape(1, -1))[0]
         scores = self._matrix @ q
         if scores.size == 0:
             return []
@@ -140,9 +140,9 @@ class VectorStore:
         )
         if candidate_idxs.size == 0:
             return []
-        candidate_scores = scores[candidate_idxs]
-        ranked = np.argsort(candidate_scores)[::-1][:top_k]
-        idxs = candidate_idxs[ranked]
+        candidate_scores                   = scores[candidate_idxs]
+        ranked                             = np.argsort(candidate_scores)[::-1][:top_k]
+        idxs                               = candidate_idxs[ranked]
         out: list[tuple[VectorDoc, float]] = []
         for idx in idxs.tolist():
             score = float(scores[idx])
@@ -161,11 +161,11 @@ class VectorStore:
         )
 
     def load(self, dir_path: Path, *, name: str) -> None:
-        docs_path = dir_path / f"{name}.docs.json"
-        npz_path = dir_path / f"{name}.vecs.npz"
-        self._docs = []
+        docs_path       = dir_path / f"{name}.docs.json"
+        npz_path        = dir_path / f"{name}.vecs.npz"
+        self._docs      = []
         self._id_to_idx = {}
-        self._matrix = None
+        self._matrix    = None
 
         if docs_path.exists():
             try:
@@ -175,22 +175,22 @@ class VectorStore:
                         if not isinstance(item, dict):
                             continue
                         doc_id = str(item.get("doc_id", "")).strip()
-                        text = str(item.get("text", "")).strip()
-                        meta = item.get("meta", {})
+                        text   = str(item.get("text", "")).strip()
+                        meta   = item.get("meta", {})
                         if doc_id and text:
                             if not isinstance(meta, dict):
                                 meta = {}
                             # 加载也必须遵守运行时的唯一 ID 语义；重复项以后出现者为准。
                             self.upsert(
                                 VectorDoc(
-                                    doc_id=doc_id,
-                                    text=text,
-                                    meta={str(key): value for key, value in meta.items()},
+                                    doc_id = doc_id,
+                                    text   = text,
+                                    meta   = {str(key): value for key, value in meta.items()},
                                 )
                             )
             except OSError:
                 # 文档加载失败时没有可用数据。
-                self._docs = []
+                self._docs      = []
                 self._id_to_idx = {}
 
         # 仅在已有文档时尝试加载向量缓存。
@@ -212,8 +212,8 @@ class VectorStore:
                         return
                     self._matrix = _validate_cached_matrix(
                         npz["matrix"],
-                        expected_rows=len(self._docs),
-                        expected_dim=self._dim,
+                        expected_rows = len(self._docs),
+                        expected_dim  = self._dim,
                     )
             except (
                 OSError,
@@ -240,16 +240,16 @@ def write_vector_store_files(
     matrix: FloatArray,
 ) -> None:
     dir_path.mkdir(parents=True, exist_ok=True)
-    docs_path = dir_path / f"{name}.docs.json"
-    npz_path = dir_path / f"{name}.vecs.npz"
+    docs_path    = dir_path / f"{name}.docs.json"
+    npz_path     = dir_path / f"{name}.vecs.npz"
     docs_payload = [asdict(d) for d in docs]
     write_json(docs_path, docs_payload)
     buffer = io.BytesIO()
     np.savez_compressed(
         buffer,
-        dim=np.int32(dim),
-        matrix=matrix,
-        docs_digest=np.asarray(_docs_content_digest(docs)),
+        dim         = np.int32(dim),
+        matrix      = matrix,
+        docs_digest = np.asarray(_docs_content_digest(docs)),
     )
     atomic_write_bytes(npz_path, buffer.getvalue())
 
@@ -259,7 +259,7 @@ def _tokenize(text: str) -> list[str]:
     if not s:
         return []
     tokens: list[str] = []
-    buf: list[str] = []
+    buf: list[str]    = []
     for ch in s:
         if "\u4e00" <= ch <= "\u9fff":
             if buf:

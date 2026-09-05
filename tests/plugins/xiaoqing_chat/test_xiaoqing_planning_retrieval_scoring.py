@@ -26,11 +26,11 @@ async def test_heartflow_uses_only_current_explicit_score_contract() -> None:
     engine._cache["g1"] = HeartflowState(no_reply_streak=3)
 
     score = await engine.score_async(
-        chat_id="g1",
-        text="这是问题吗？",
-        goal="回答用户问题",
-        seconds_since_last_reply=300.0,
-        base=0.2,
+        chat_id                  = "g1",
+        text                     = "这是问题吗？",
+        goal                     = "回答用户问题",
+        seconds_since_last_reply = 300.0,
+        base                     = 0.2,
     )
 
     assert score == pytest.approx(0.51)
@@ -76,22 +76,22 @@ async def test_compact_planner_prompt_keeps_all_computed_context(
                 "steady": {"profile": "steady-profile"},
             },
         },
-        bot_name="小青",
-        is_private=False,
-        personality=PersonalityConfig(),
+        bot_name    = "小青",
+        is_private  = False,
+        personality = PersonalityConfig(),
         history=[StoredMessage(role="user", name="甲", content="当前消息", ts=1.0)],
-        goal_list=[{"goal": "目标哨兵"}],
-        knowledge_list=[{"text": "知识哨兵"}],
-        action_history_summary="行动概要哨兵",
-        last_action_context="上次行动哨兵",
-        timeout_context="超时哨兵",
-        last_successful_reply_action=last_action,
-        temperature=0.5,
-        top_p=0.9,
-        max_tokens=300,
-        timeout_seconds=1.0,
-        max_retry=0,
-        retry_interval_seconds=0.0,
+        goal_list                    = [{"goal": "目标哨兵"}],
+        knowledge_list               = [{"text": "知识哨兵"}],
+        action_history_summary       = "行动概要哨兵",
+        last_action_context          = "上次行动哨兵",
+        timeout_context              = "超时哨兵",
+        last_successful_reply_action = last_action,
+        temperature                  = 0.5,
+        top_p                        = 0.9,
+        max_tokens                   = 300,
+        timeout_seconds              = 1.0,
+        max_retry                    = 0,
+        retry_interval_seconds       = 0.0,
     )
 
     prompt = captured["messages"][0]["content"]
@@ -107,11 +107,11 @@ async def test_generation_layer_executes_propagated_planner_wait(
     sleep = AsyncMock()
     monkeypatch.setattr("plugins.xiaoqing_chat.smalltalk_execution.asyncio.sleep", sleep)
     result = PFCRunResult(
-        reply="",
-        action="wait",
-        reason="give the user space",
-        ended=False,
-        wait_seconds=12.5,
+        reply        = "",
+        action       = "wait",
+        reason       = "give the user space",
+        ended        = False,
+        wait_seconds = 12.5,
     )
 
     await _execute_planner_wait(result)
@@ -120,7 +120,7 @@ async def test_generation_layer_executes_propagated_planner_wait(
 
 
 def test_direct_memory_query_strictly_reranks_and_limits_top_k() -> None:
-    memory_db = MagicMock()
+    memory_db                    = MagicMock()
     memory_db.query.return_value = [
         RetrievedItem(doc_id="later", text="later", score=0.2, meta={}),
         RetrievedItem(doc_id="z-tie", text="z", score=0.9, meta={}),
@@ -162,9 +162,9 @@ def test_planner_json_object_preserves_defaults_and_rejects_type_mismatch() -> N
         "action",
         "reason",
         "wait_seconds",
-        default_values={"reason": "default"},
-        required_types={"wait_seconds": int},
-        allow_array=False,
+        default_values = {"reason": "default"},
+        required_types = {"wait_seconds": int},
+        allow_array    = False,
     )
     assert ok is True
     assert result == {"action": "reply", "reason": "default", "wait_seconds": 5}
@@ -174,8 +174,8 @@ def test_planner_json_object_preserves_defaults_and_rejects_type_mismatch() -> N
         "action",
         "reason",
         "wait_seconds",
-        required_types={"wait_seconds": int},
-        allow_array=False,
+        required_types = {"wait_seconds": int},
+        allow_array    = False,
     )
     assert invalid is False
     assert partial["action"] == "reply"

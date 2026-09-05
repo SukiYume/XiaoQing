@@ -18,9 +18,9 @@ export function renderPagination(container, options = {}) {
     if (typeof onChange !== 'function') throw new TypeError('分页回调必须是函数');
 
     const safePageSize = Math.max(1, toInteger(pageSize, 1));
-    const safeTotal = Math.max(0, toInteger(total, 0));
-    const totalPages = Math.max(1, Math.ceil(safeTotal / safePageSize));
-    const currentPage = Math.min(Math.max(1, toInteger(page, 1)), totalPages);
+    const safeTotal    = Math.max(0, toInteger(total, 0));
+    const totalPages   = Math.max(1, Math.ceil(safeTotal / safePageSize));
+    const currentPage  = Math.min(Math.max(1, toInteger(page, 1)), totalPages);
     if (totalPages <= 1) {
         container.replaceChildren();
         return;
@@ -50,7 +50,7 @@ export function renderPagination(container, options = {}) {
     nextButton.disabled = currentPage >= totalPages;
 
     const enabledButtons = [previousButton, nextButton].filter((button) => !button.disabled);
-    let changing = false;
+    let changing         = false;
     for (const button of enabledButtons) {
         button.onclick = async () => {
             if (changing) return;

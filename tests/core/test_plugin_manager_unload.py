@@ -37,7 +37,7 @@ async def test_shutdown_timeout_log_includes_budget_and_deadline(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     manager = _build_manager(tmp_path)
-    module = ModuleType("plugins.demo.main")
+    module  = ModuleType("plugins.demo.main")
 
     async def shutdown() -> None:
         await asyncio.Event().wait()
@@ -63,7 +63,7 @@ async def test_shutdown_context_uses_registered_state_when_caller_omits_state(
     tmp_path: Path,
 ) -> None:
     manager = _build_manager(tmp_path)
-    module = ModuleType("plugins.demo.main")
+    module  = ModuleType("plugins.demo.main")
 
     async def shutdown(context) -> None:
         context.state["shutdown_seen"] = True
@@ -86,8 +86,8 @@ async def test_shutdown_elapsed_deadline_is_logged_before_callback_is_started(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    manager = _build_manager(tmp_path)
-    module = ModuleType("plugins.demo.main")
+    manager         = _build_manager(tmp_path)
+    module          = ModuleType("plugins.demo.main")
     module.shutdown = AsyncMock()
     plugin = LoadedPlugin(definition=_build_definition(), module=module, mtime=0.0)
 
@@ -109,9 +109,9 @@ async def test_shutdown_elapsed_deadline_is_logged_before_callback_is_started(
 async def test_unload_cancellation_retains_closed_quarantined_generation(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
-    definition = _build_definition()
-    module = ModuleType("plugins.demo.main")
+    manager          = _build_manager(tmp_path)
+    definition       = _build_definition()
+    module           = ModuleType("plugins.demo.main")
     shutdown_started = asyncio.Event()
     release_shutdown = asyncio.Event()
 
@@ -122,14 +122,14 @@ async def test_unload_cancellation_retains_closed_quarantined_generation(
     module.shutdown = shutdown
     gate = PluginExecutionGate("parallel", plugin_name="demo")
     plugin = LoadedPlugin(
-        definition=definition,
-        module=module,
-        mtime=0.0,
-        execution_gate=gate,
+        definition     = definition,
+        module         = module,
+        mtime          = 0.0,
+        execution_gate = gate,
     )
-    state = {"resource": object()}
-    manager._plugins["demo"] = plugin
-    manager._plugin_states["demo"] = state
+    state                            = {"resource": object()}
+    manager._plugins["demo"]         = plugin
+    manager._plugin_states["demo"]   = state
     manager._execution_gates["demo"] = gate
 
     unload_task = asyncio.create_task(manager.unload_plugin("demo"))
@@ -154,12 +154,12 @@ async def test_unload_cancellation_retains_closed_quarantined_generation(
 async def test_shutdown_side_effect_is_not_invoked_twice_after_unload_cancellation(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
-    definition = _build_definition()
-    module = ModuleType("plugins.demo.main")
+    manager                   = _build_manager(tmp_path)
+    definition                = _build_definition()
+    module                    = ModuleType("plugins.demo.main")
     shutdown_side_effect_done = asyncio.Event()
-    release_shutdown = asyncio.Event()
-    shutdown_calls = 0
+    release_shutdown          = asyncio.Event()
+    shutdown_calls            = 0
 
     async def shutdown(context=None) -> None:
         nonlocal shutdown_calls
@@ -170,14 +170,14 @@ async def test_shutdown_side_effect_is_not_invoked_twice_after_unload_cancellati
     module.shutdown = shutdown
     gate = PluginExecutionGate("parallel", plugin_name="demo")
     plugin = LoadedPlugin(
-        definition=definition,
-        module=module,
-        mtime=0.0,
-        execution_gate=gate,
+        definition     = definition,
+        module         = module,
+        mtime          = 0.0,
+        execution_gate = gate,
     )
-    state = {"resource": object()}
-    manager._plugins["demo"] = plugin
-    manager._plugin_states["demo"] = state
+    state                            = {"resource": object()}
+    manager._plugins["demo"]         = plugin
+    manager._plugin_states["demo"]   = state
     manager._execution_gates["demo"] = gate
 
     unload_task = asyncio.create_task(manager.unload_plugin("demo"))
@@ -201,28 +201,28 @@ async def test_shutdown_side_effect_is_not_invoked_twice_after_unload_cancellati
 async def test_unload_cancellation_during_admission_drain_quarantines_generation(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
-    definition = _build_definition()
-    module = ModuleType("plugins.demo.main")
+    manager         = _build_manager(tmp_path)
+    definition      = _build_definition()
+    module          = ModuleType("plugins.demo.main")
     module.shutdown = AsyncMock()
-    gate = PluginExecutionGate(
+    gate            = PluginExecutionGate(
         "parallel",
         plugin_name="demo",
         policy=PluginExecutionPolicy(drain_timeout_seconds=0.05),
     )
     plugin = LoadedPlugin(
-        definition=definition,
-        module=module,
-        mtime=0.0,
-        execution_gate=gate,
+        definition     = definition,
+        module         = module,
+        mtime          = 0.0,
+        execution_gate = gate,
     )
-    state = {"resource": object()}
+    state                                        = {"resource": object()}
     unfinished_sync_work: ConcurrentFuture[None] = ConcurrentFuture()
     gate._sync_futures.add(unfinished_sync_work)
 
-    stale_spec = _register_test_command(manager, gate)
-    manager._plugins["demo"] = plugin
-    manager._plugin_states["demo"] = state
+    stale_spec                       = _register_test_command(manager, gate)
+    manager._plugins["demo"]         = plugin
+    manager._plugin_states["demo"]   = state
     manager._execution_gates["demo"] = gate
 
     unload_task = asyncio.create_task(manager.unload_plugin("demo"))
@@ -250,21 +250,21 @@ async def test_unload_cancellation_during_admission_drain_quarantines_generation
 async def test_unload_closes_admission_before_a_blocking_state_lock_wait(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
-    definition = _build_definition()
-    module = ModuleType("plugins.demo.main")
+    manager         = _build_manager(tmp_path)
+    definition      = _build_definition()
+    module          = ModuleType("plugins.demo.main")
     module.shutdown = AsyncMock()
     gate = PluginExecutionGate("parallel", plugin_name="demo")
     plugin = LoadedPlugin(
-        definition=definition,
-        module=module,
-        mtime=0.0,
-        execution_gate=gate,
+        definition     = definition,
+        module         = module,
+        mtime          = 0.0,
+        execution_gate = gate,
     )
-    state = {"resource": object()}
-    stale_spec = _register_test_command(manager, gate)
-    manager._plugins["demo"] = plugin
-    manager._plugin_states["demo"] = state
+    state                            = {"resource": object()}
+    stale_spec                       = _register_test_command(manager, gate)
+    manager._plugins["demo"]         = plugin
+    manager._plugin_states["demo"]   = state
     manager._execution_gates["demo"] = gate
 
     state_lock = gate._state_lock.get()
@@ -300,9 +300,9 @@ async def test_unload_closes_admission_before_a_blocking_state_lock_wait(
 async def test_gate_close_failure_propagates_after_fail_closed_quarantine(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
-    definition = _build_definition()
-    module = ModuleType("plugins.demo.main")
+    manager         = _build_manager(tmp_path)
+    definition      = _build_definition()
+    module          = ModuleType("plugins.demo.main")
     module.shutdown = AsyncMock()
     gate = PluginExecutionGate("parallel", plugin_name="demo")
     original_close = gate.close
@@ -311,16 +311,16 @@ async def test_gate_close_failure_propagates_after_fail_closed_quarantine(
         raise RuntimeError("drain implementation failed")
 
     gate.close = fail_close
-    plugin = LoadedPlugin(
-        definition=definition,
-        module=module,
-        mtime=0.0,
-        execution_gate=gate,
+    plugin     = LoadedPlugin(
+        definition     = definition,
+        module         = module,
+        mtime          = 0.0,
+        execution_gate = gate,
     )
-    state = {"resource": object()}
-    stale_spec = _register_test_command(manager, gate)
-    manager._plugins["demo"] = plugin
-    manager._plugin_states["demo"] = state
+    state                            = {"resource": object()}
+    stale_spec                       = _register_test_command(manager, gate)
+    manager._plugins["demo"]         = plugin
+    manager._plugin_states["demo"]   = state
     manager._execution_gates["demo"] = gate
 
     with pytest.raises(RuntimeError, match="drain implementation failed"):
@@ -344,20 +344,20 @@ async def test_gate_close_failure_propagates_after_fail_closed_quarantine(
 async def test_module_purge_failure_retains_exact_closed_generation_for_retry(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
-    definition = _build_definition()
-    module = ModuleType("plugins.demo.main")
+    manager         = _build_manager(tmp_path)
+    definition      = _build_definition()
+    module          = ModuleType("plugins.demo.main")
     module.shutdown = AsyncMock()
     gate = PluginExecutionGate("parallel", plugin_name="demo")
     plugin = LoadedPlugin(
-        definition=definition,
-        module=module,
-        mtime=0.0,
-        execution_gate=gate,
+        definition     = definition,
+        module         = module,
+        mtime          = 0.0,
+        execution_gate = gate,
     )
-    state = {"resource": object()}
-    manager._plugins["demo"] = plugin
-    manager._plugin_states["demo"] = state
+    state                            = {"resource": object()}
+    manager._plugins["demo"]         = plugin
+    manager._plugin_states["demo"]   = state
     manager._execution_gates["demo"] = gate
     manager._purge_plugin_modules = Mock(side_effect=RuntimeError("purge failed"))
 
@@ -383,20 +383,20 @@ async def test_module_purge_failure_retains_exact_closed_generation_for_retry(
 async def test_reload_purge_failure_keeps_old_plugin_gate_and_state_together(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
-    definition = _build_definition()
-    module = ModuleType("plugins.demo.main")
+    manager         = _build_manager(tmp_path)
+    definition      = _build_definition()
+    module          = ModuleType("plugins.demo.main")
     module.shutdown = AsyncMock()
     gate = PluginExecutionGate("parallel", plugin_name="demo")
     plugin = LoadedPlugin(
-        definition=definition,
-        module=module,
-        mtime=0.0,
-        execution_gate=gate,
+        definition     = definition,
+        module         = module,
+        mtime          = 0.0,
+        execution_gate = gate,
     )
-    state = {"resource": object()}
-    manager._plugins["demo"] = plugin
-    manager._plugin_states["demo"] = state
+    state                            = {"resource": object()}
+    manager._plugins["demo"]         = plugin
+    manager._plugin_states["demo"]   = state
     manager._execution_gates["demo"] = gate
     manager._load_definition = Mock(return_value=definition)
     manager._authorize_plugin_snapshot = Mock(return_value=1.0)
@@ -426,17 +426,17 @@ async def test_lifecycle_cancellation_during_shutdown_drain_quarantines_generati
     tmp_path: Path,
     operation: str,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     definition = _build_definition()
-    gate = PluginExecutionGate(
+    gate       = PluginExecutionGate(
         "parallel",
         plugin_name="demo",
         policy=PluginExecutionPolicy(drain_timeout_seconds=0.05),
     )
     unfinished_sync_work: ConcurrentFuture[None] = ConcurrentFuture()
-    second_close_started = asyncio.Event()
-    close_calls = 0
-    original_close = gate.close
+    second_close_started                         = asyncio.Event()
+    close_calls                                  = 0
+    original_close                               = gate.close
 
     async def tracked_close(*, timeout_seconds=None):
         nonlocal close_calls
@@ -446,22 +446,22 @@ async def test_lifecycle_cancellation_during_shutdown_drain_quarantines_generati
         return await original_close(timeout_seconds=timeout_seconds)
 
     gate.close = tracked_close
-    module = ModuleType("plugins.demo.main")
+    module     = ModuleType("plugins.demo.main")
 
     async def shutdown(context=None) -> None:
         gate._sync_futures.add(unfinished_sync_work)
 
     module.shutdown = AsyncMock(side_effect=shutdown)
     plugin = LoadedPlugin(
-        definition=definition,
-        module=module,
-        mtime=0.0,
-        execution_gate=gate,
+        definition     = definition,
+        module         = module,
+        mtime          = 0.0,
+        execution_gate = gate,
     )
-    state = {"resource": object()}
-    stale_spec = _register_test_command(manager, gate)
-    manager._plugins["demo"] = plugin
-    manager._plugin_states["demo"] = state
+    state                            = {"resource": object()}
+    stale_spec                       = _register_test_command(manager, gate)
+    manager._plugins["demo"]         = plugin
+    manager._plugin_states["demo"]   = state
     manager._execution_gates["demo"] = gate
     if operation == "reload":
         manager._load_definition = Mock(return_value=definition)
@@ -495,7 +495,7 @@ async def test_lifecycle_cancellation_during_shutdown_drain_quarantines_generati
 @pytest.mark.asyncio
 async def test_unload_reload_and_reconcile_share_lifecycle_lock(tmp_path: Path) -> None:
     manager = _build_manager(tmp_path)
-    probe = _AsyncConcurrencyProbe()
+    probe   = _AsyncConcurrencyProbe()
     manager._unload_plugin_once = AsyncMock(side_effect=probe.run)
     manager._reload_plugin_once = AsyncMock(side_effect=probe.run)
     manager._reconcile_plugins_once = AsyncMock(side_effect=probe.run)
@@ -513,13 +513,13 @@ async def test_unload_reload_and_reconcile_share_lifecycle_lock(tmp_path: Path) 
 async def test_concurrent_reload_and_unload_shutdown_each_generation_once(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
-    definition = _build_definition()
-    old_module = ModuleType("plugins.demo.main")
-    candidate_module = ModuleType("plugins.demo.main")
+    manager              = _build_manager(tmp_path)
+    definition           = _build_definition()
+    old_module           = ModuleType("plugins.demo.main")
+    candidate_module     = ModuleType("plugins.demo.main")
     old_shutdown_started = asyncio.Event()
     release_old_shutdown = asyncio.Event()
-    shutdown_calls = {"old": 0, "candidate": 0}
+    shutdown_calls       = {"old": 0, "candidate": 0}
 
     async def old_shutdown(context=None) -> None:
         shutdown_calls["old"] += 1
@@ -529,14 +529,14 @@ async def test_concurrent_reload_and_unload_shutdown_each_generation_once(
     async def candidate_shutdown(context=None) -> None:
         shutdown_calls["candidate"] += 1
 
-    old_module.shutdown = old_shutdown
+    old_module.shutdown       = old_shutdown
     candidate_module.shutdown = candidate_shutdown
     old_gate = PluginExecutionGate("parallel", plugin_name="demo")
     manager._plugins["demo"] = LoadedPlugin(
-        definition=definition,
-        module=old_module,
-        mtime=0.0,
-        execution_gate=old_gate,
+        definition     = definition,
+        module         = old_module,
+        mtime          = 0.0,
+        execution_gate = old_gate,
     )
     manager._execution_gates["demo"] = old_gate
     manager._load_definition = Mock(return_value=definition)
@@ -544,10 +544,10 @@ async def test_concurrent_reload_and_unload_shutdown_each_generation_once(
 
     async def load_candidate(_plugin_dir, transaction):
         return LoadedPlugin(
-            definition=definition,
-            module=candidate_module,
-            mtime=transaction.mtime,
-            execution_gate=transaction.gate,
+            definition     = definition,
+            module         = candidate_module,
+            mtime          = transaction.mtime,
+            execution_gate = transaction.gate,
         )
 
     manager._load_canonical_candidate = AsyncMock(side_effect=load_candidate)
@@ -571,21 +571,21 @@ async def test_concurrent_reload_and_unload_shutdown_each_generation_once(
 async def test_unload_quarantines_until_timed_out_sync_callback_really_finishes(
     tmp_path: Path,
 ):
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     definition = _build_definition()
-    gate = PluginExecutionGate(
+    gate       = PluginExecutionGate(
         "sequential",
-        plugin_name="demo",
-        policy=PluginExecutionPolicy(
-            timeout_seconds=0.1,
-            drain_timeout_seconds=0.1,
+        plugin_name = "demo",
+        policy      = PluginExecutionPolicy(
+            timeout_seconds       = 0.1,
+            drain_timeout_seconds = 0.1,
         ),
     )
-    started = threading.Event()
-    release = threading.Event()
-    finished = threading.Event()
+    started         = threading.Event()
+    release         = threading.Event()
+    finished        = threading.Event()
     shutdown_called = asyncio.Event()
-    module = ModuleType("plugins.demo.main")
+    module          = ModuleType("plugins.demo.main")
 
     def blocking_handler() -> None:
         started.set()
@@ -596,17 +596,17 @@ async def test_unload_quarantines_until_timed_out_sync_callback_really_finishes(
         shutdown_called.set()
 
     module.shutdown = shutdown
-    plugin = LoadedPlugin(
-        definition=definition,
-        module=module,
-        mtime=0.0,
-        execution_gate=gate,
+    plugin          = LoadedPlugin(
+        definition     = definition,
+        module         = module,
+        mtime          = 0.0,
+        execution_gate = gate,
     )
-    state = {"owned": object()}
-    manager._plugins["demo"] = plugin
-    manager._plugin_states["demo"] = state
+    state                            = {"owned": object()}
+    manager._plugins["demo"]         = plugin
+    manager._plugin_states["demo"]   = state
     manager._execution_gates["demo"] = gate
-    manager._purge_plugin_modules = Mock()
+    manager._purge_plugin_modules    = Mock()
 
     with pytest.raises(PluginExecutionTimeout):
         await gate.run(lambda: call_plugin_callback(blocking_handler))
@@ -638,19 +638,19 @@ async def test_unload_quarantines_until_timed_out_sync_callback_really_finishes(
 async def test_reload_never_installs_candidate_beside_timed_out_sync_callback(
     tmp_path: Path,
 ):
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     definition = _build_definition()
-    gate = PluginExecutionGate(
+    gate       = PluginExecutionGate(
         "sequential",
-        plugin_name="demo",
-        policy=PluginExecutionPolicy(
+        plugin_name = "demo",
+        policy      = PluginExecutionPolicy(
             # 给 Windows 线程池留出实际启动时间，同时仍验证超时隔离语义。
-            timeout_seconds=0.1,
-            drain_timeout_seconds=0.1,
+            timeout_seconds       = 0.1,
+            drain_timeout_seconds = 0.1,
         ),
     )
-    started = threading.Event()
-    release = threading.Event()
+    started  = threading.Event()
+    release  = threading.Event()
     finished = threading.Event()
 
     def blocking_handler() -> None:
@@ -659,14 +659,14 @@ async def test_reload_never_installs_candidate_beside_timed_out_sync_callback(
         finished.set()
 
     old_plugin = LoadedPlugin(
-        definition=definition,
-        module=ModuleType("plugins.demo.main"),
-        mtime=0.0,
-        execution_gate=gate,
+        definition     = definition,
+        module         = ModuleType("plugins.demo.main"),
+        mtime          = 0.0,
+        execution_gate = gate,
     )
-    manager._plugins["demo"] = old_plugin
+    manager._plugins["demo"]         = old_plugin
     manager._execution_gates["demo"] = gate
-    manager._plugin_states["demo"] = {"old": True}
+    manager._plugin_states["demo"]   = {"old": True}
     manager._load_definition = Mock(return_value=definition)
     manager._shutdown_plugin_instance = AsyncMock(return_value=True)
     manager._authorize_plugin_snapshot = Mock(return_value=1.0)

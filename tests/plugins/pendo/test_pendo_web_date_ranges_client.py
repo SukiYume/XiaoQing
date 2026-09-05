@@ -7,7 +7,7 @@ from typing import Final
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT: Final = REPOSITORY_ROOT
+ROOT: Final               = REPOSITORY_ROOT
 DATE_RANGES_CLIENT: Final = (
     ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "utils" / "date_ranges.js"
 )
@@ -27,7 +27,7 @@ def _date_ranges_source_for_test() -> str:
     """只替换相邻格式化依赖，保留真实日期范围实现。"""
 
     source = DATE_RANGES_CLIENT.read_text(encoding="utf-8")
-    format_import = "import { isoDate } from './format.js';"
+    format_import   = "import { isoDate } from './format.js';"
     timezone_import = "import { todayInUserTimeZone } from './timezone.js';"
     assert format_import in source
     assert timezone_import in source
@@ -46,8 +46,8 @@ def _run_date_ranges_client(script: str) -> None:
     assert_node_esm_contract(
         _date_ranges_source_for_test(),
         script,
-        cwd=ROOT,
-        setup=DATE_RANGES_SETUP,
+        cwd   = ROOT,
+        setup = DATE_RANGES_SETUP,
     )
 
 

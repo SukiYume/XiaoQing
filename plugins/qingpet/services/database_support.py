@@ -7,7 +7,7 @@ from ..utils.constants import DAILY_LIMITS
 
 logger = logging.getLogger(__name__)
 
-_SAFE_OPERATION_RE = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
+_SAFE_OPERATION_RE  = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 _SAFE_ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,95}\Z")
 
 _PET_ACTION_COUNTERS = {
@@ -24,14 +24,14 @@ _DAILY_TASK_TEMPLATES = (
     ("visit", 2, 20),
 )
 _WEEKLY_RANKING_REWARDS = (100, 50, 30)
-_DAILY_COIN_LIMIT = int(DAILY_LIMITS["coins"])
+_DAILY_COIN_LIMIT       = int(DAILY_LIMITS["coins"])
 
 
 def _log_database_failure(operation: str, exc: BaseException) -> None:
     """仅记录稳定的操作名和异常类型，避免数据库内容进入日志。"""
 
     safe_operation = operation if _SAFE_OPERATION_RE.fullmatch(operation) else "unknown"
-    error_type = type(exc).__name__
+    error_type     = type(exc).__name__
     if not _SAFE_ERROR_TYPE_RE.fullmatch(error_type):
         error_type = "Exception"
     logger.error(

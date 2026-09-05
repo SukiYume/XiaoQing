@@ -18,14 +18,14 @@ from plugins.qingpet.utils.constants import PetStage
 
 def _setup(path: str, *, group_id: int = 73001):
     database = Database(path)
-    user = UserService(database).get_or_create_user("keeper", group_id)
-    service = PetService(database)
+    user     = UserService(database).get_or_create_user("keeper", group_id)
+    service  = PetService(database)
     assert service.adopt_pet(user.user_id, group_id, "事务兽")[0]
     pet = database.get_pet(user.user_id, group_id)
     assert pet is not None
     pet.stage = PetStage.YOUNG
     pet.clean = 50
-    pet.age = 3
+    pet.age   = 3
     assert database.update_pet(pet)
     return database, user
 
@@ -49,7 +49,7 @@ def test_explicit_activity_progress_is_in_action_transaction_and_ignores_natural
             20,
         )
         assert activity_id is not None
-        before_pet = database.get_pet(user.user_id, user.group_id)
+        before_pet  = database.get_pet(user.user_id, user.group_id)
         before_user = database.get_user(user.user_id, user.group_id)
         assert before_pet is not None and before_user is not None
         conn = database._get_connection()
@@ -61,7 +61,7 @@ def test_explicit_activity_progress_is_in_action_transaction_and_ignores_natural
 
         failed = PetService(database).clean_pet(before_pet, before_user)
 
-        persisted_pet = database.get_pet(user.user_id, user.group_id)
+        persisted_pet  = database.get_pet(user.user_id, user.group_id)
         persisted_user = database.get_user(user.user_id, user.group_id)
         assert failed[0] is False
         assert persisted_pet is not None and persisted_user is not None
@@ -77,7 +77,7 @@ def test_explicit_activity_progress_is_in_action_transaction_and_ignores_natural
         )
 
         _drop_trigger(database, "fail_activity_progress")
-        fresh_pet = database.get_pet(user.user_id, user.group_id)
+        fresh_pet  = database.get_pet(user.user_id, user.group_id)
         fresh_user = database.get_user(user.user_id, user.group_id)
         assert fresh_pet is not None and fresh_user is not None
         assert PetService(database).clean_pet(fresh_pet, fresh_user)[0] is True
@@ -140,7 +140,7 @@ def test_weekly_failure_is_retryable_and_announcement_uses_actual_ledger_grant(
         limited_user.today_coins_earned = 498
         assert database.update_user(limited_user)
         before_coins = limited_user.coins
-        conn = database._get_connection()
+        conn         = database._get_connection()
         conn.execute(
             """CREATE TRIGGER fail_weekly_ledger BEFORE INSERT ON asset_ledger
                BEGIN SELECT RAISE(ABORT, 'injected weekly ledger failure'); END"""
@@ -184,7 +184,7 @@ def test_weekly_failure_is_retryable_and_announcement_uses_actual_ledger_grant(
 def test_pet_show_reward_and_announcement_roll_back_together(tmp_path):
     database, winner_user = _setup(str(tmp_path / "show.db"), group_id=73004)
     try:
-        voter = UserService(database).get_or_create_user("voter", winner_user.group_id)
+        voter   = UserService(database).get_or_create_user("voter", winner_user.group_id)
         show_id = database.create_pet_show(winner_user.group_id, "原子展示会", 24)
         assert show_id is not None
         assert database.vote_pet_show_atomic(
@@ -204,7 +204,7 @@ def test_pet_show_reward_and_announcement_roll_back_together(tmp_path):
 
         assert SocialService(database).settle_pet_show(winner_user.group_id, force=True) == ""
         failed_user = database.get_user(winner_user.user_id, winner_user.group_id)
-        show = conn.execute("SELECT * FROM pet_shows WHERE id = ?", (show_id,)).fetchone()
+        show        = conn.execute("SELECT * FROM pet_shows WHERE id = ?", (show_id,)).fetchone()
         assert failed_user is not None
         assert failed_user.coins == before.coins
         assert "展示会冠军" not in failed_user.titles
@@ -231,7 +231,7 @@ def test_pet_show_reward_and_announcement_roll_back_together(tmp_path):
 def test_admin_mutation_and_audit_log_share_one_transaction(tmp_path, operation):
     database, user = _setup(str(tmp_path / f"admin-{operation}.db"), group_id=73005)
     try:
-        before_pet = database.get_pet(user.user_id, user.group_id)
+        before_pet  = database.get_pet(user.user_id, user.group_id)
         before_user = database.get_user(user.user_id, user.group_id)
         assert before_pet is not None and before_user is not None
         conn = database._get_connection()
@@ -250,7 +250,7 @@ def test_admin_mutation_and_audit_log_share_one_transaction(tmp_path, operation)
             return admin.delete_user_pet(user.user_id, user.group_id, "operator")
 
         assert run() is False
-        failed_pet = database.get_pet(user.user_id, user.group_id)
+        failed_pet  = database.get_pet(user.user_id, user.group_id)
         failed_user = database.get_user(user.user_id, user.group_id)
         assert failed_pet is not None and failed_user is not None
         assert failed_pet.stage == before_pet.stage
@@ -305,7 +305,7 @@ def test_daily_task_claim_and_ledger_share_one_transaction(tmp_path):
 
         _drop_trigger(database, "fail_task_ledger")
         granted = database.claim_task_reward(user.user_id, user.group_id, "feed")
-        ledger = conn.execute(
+        ledger  = conn.execute(
             "SELECT delta FROM asset_ledger WHERE reason = 'daily_task'"
         ).fetchone()
         assert granted == 30

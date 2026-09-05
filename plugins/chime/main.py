@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import json
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -41,39 +41,39 @@ from core.plugin_base import (
 from core.public_errors import public_error_message, public_error_response
 
 # 官方公共目录重建期间，这个旧 JSON 端点可能暂时不可用；目前没有等价的实时归档接口。
-CHIME_API_URL = "https://catalog.chime-frb.ca/repeaters"
+CHIME_API_URL    = "https://catalog.chime-frb.ca/repeaters"
 MAX_DISPLAY_FRBS = 5
 
 _PULSE_DATE_RE = re.compile(r"\d{6}", re.ASCII)
-_FRB_NAME_RE = re.compile(r"FRB[A-Z0-9.+-]{1,60}", re.IGNORECASE | re.ASCII)
-_TIMESTAMP_RE = re.compile(
+_FRB_NAME_RE   = re.compile(r"FRB[A-Z0-9.+-]{1,60}", re.IGNORECASE | re.ASCII)
+_TIMESTAMP_RE  = re.compile(
     r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}"
     r"(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})?",
     re.ASCII,
 )
-_INVALID_VALUES = frozenset({"", "n/a", "na", "none", "null", "unknown", "-"})
-_MAX_ARGUMENT_CHARS = 128
-_MAX_FIELD_CHARS = 128
-_MAX_FRB_RECORDS = 5_000
+_INVALID_VALUES      = frozenset({"", "n/a", "na", "none", "null", "unknown", "-"})
+_MAX_ARGUMENT_CHARS  = 128
+_MAX_FIELD_CHARS     = 128
+_MAX_FRB_RECORDS     = 5_000
 _MAX_HISTORY_RECORDS = 10_000
-_MIN_TIMESTAMP = datetime.min.replace(tzinfo=timezone.utc)
+_MIN_TIMESTAMP = datetime.min.replace(tzinfo=UTC)
 _HISTORY_FILENAME = "chime_history.json"
-_FANOUT_FILENAME = "chime_delivery.json"
+_FANOUT_FILENAME  = "chime_delivery.json"
 
 _CHIME_BODY_LIMITS = BodyLimits(
-    max_wire_bytes=4 * 1024 * 1024,
-    max_decoded_bytes=8 * 1024 * 1024,
+    max_wire_bytes    = 4 * 1024 * 1024,
+    max_decoded_bytes = 8 * 1024 * 1024,
 )
 _CHIME_JSON_LIMITS = JsonLimits(
-    max_bytes=_CHIME_BODY_LIMITS.max_decoded_bytes,
-    max_depth=64,
-    max_nodes=100_000,
-    max_string_chars=6 * 1024 * 1024,
+    max_bytes        = _CHIME_BODY_LIMITS.max_decoded_bytes,
+    max_depth        = 64,
+    max_nodes        = 100_000,
+    max_string_chars = 6 * 1024 * 1024,
 )
-_CHIME_CACHE_KEY = "chime_catalog_cache"
+_CHIME_CACHE_KEY         = "chime_catalog_cache"
 _CHIME_CACHE_TTL_SECONDS = 5 * 60
-_CATALOG_FETCH_LOCK = asyncio.Lock()
-_DELIVERY_LOCK = asyncio.Lock()
+_CATALOG_FETCH_LOCK      = asyncio.Lock()
+_DELIVERY_LOCK           = asyncio.Lock()
 
 HELP_TEXT = """
 📡 CHIME FRB 重复暴监测
@@ -106,8 +106,8 @@ def _parse_timestamp(value: str) -> datetime | None:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _parse_pulse_date(value: object) -> datetime | None:
@@ -127,10 +127,10 @@ def _extract_scalar(data: dict[str, Any], key: str) -> str | None:
         value = value.get("value")
     text_value = bounded_external_text(
         value,
-        max_chars=_MAX_FIELD_CHARS,
-        max_bytes=_MAX_FIELD_CHARS * 4,
-        suffix="",
-        truncate=False,
+        max_chars = _MAX_FIELD_CHARS,
+        max_bytes = _MAX_FIELD_CHARS * 4,
+        suffix    = "",
+        truncate  = False,
     )
     if not text_value or not text_value.isprintable() or text_value.casefold() in _INVALID_VALUES:
         return None
@@ -157,7 +157,7 @@ class FRBData:
             name.strip().upper() if isinstance(name, str) and len(name) <= _MAX_FIELD_CHARS else ""
         )
         self.name = normalized_name if _FRB_NAME_RE.fullmatch(normalized_name) else ""
-        record = info if isinstance(info, dict) else {}
+        record    = info if isinstance(info, dict) else {}
 
         # 先解析实际日期再排序，避免跨世纪时按字符串把 99 年误排在 00 年之后。
         pulse_dates: list[tuple[datetime, str]] = []
@@ -165,18 +165,18 @@ class FRBData:
             pulse_date = _parse_pulse_date(key)
             if pulse_date is not None:
                 pulse_dates.append((pulse_date, key))
-        self.pulses = tuple(key for _, key in sorted(pulse_dates))
+        self.pulses       = tuple(key for _, key in sorted(pulse_dates))
         self.latest_pulse = self.pulses[-1] if self.pulses else None
-        pulse = record.get(self.latest_pulse) if self.latest_pulse else None
-        pulse_data = pulse if isinstance(pulse, dict) else {}
+        pulse             = record.get(self.latest_pulse) if self.latest_pulse else None
+        pulse_data        = pulse if isinstance(pulse, dict) else {}
 
-        raw_timestamp = _extract_scalar(pulse_data, "timestamp")
+        raw_timestamp    = _extract_scalar(pulse_data, "timestamp")
         self.observed_at = _parse_timestamp(raw_timestamp) if raw_timestamp else None
-        self.timestamp = raw_timestamp if self.observed_at is not None else None
-        self.dm = _extract_scalar(pulse_data, "dm")
-        self.snr = _extract_scalar(pulse_data, "snr")
-        self.ra = _extract_scalar(record, "ra")
-        self.dec = _extract_scalar(record, "dec")
+        self.timestamp   = raw_timestamp if self.observed_at is not None else None
+        self.dm          = _extract_scalar(pulse_data, "dm")
+        self.snr         = _extract_scalar(pulse_data, "snr")
+        self.ra          = _extract_scalar(record, "ra")
+        self.dec         = _extract_scalar(record, "dec")
 
     def is_valid(self) -> bool:
         """名称、最新脉冲和观测时间都可信时才允许进入后续流程。"""
@@ -228,8 +228,8 @@ async def fetch_chime_repeaters(
     """通过旧版官方 JSON 端点读取目录，并合并并发的冷缓存请求。"""
 
     runtime_state = getattr(context, "state", None)
-    state = runtime_state if isinstance(runtime_state, dict) else None
-    loop = asyncio.get_running_loop()
+    state         = runtime_state if isinstance(runtime_state, dict) else None
+    loop          = asyncio.get_running_loop()
     if not force_refresh and (cached := _cached_catalog(state, loop.time())) is not None:
         return cached
 
@@ -243,9 +243,9 @@ async def fetch_chime_repeaters(
                 context.http_session,
                 "POST",
                 CHIME_API_URL,
-                limits=_CHIME_BODY_LIMITS,
-                mime_policy=JSON_MIME_POLICY,
-                request_kwargs={"json": {}, "timeout": 30},
+                limits         = _CHIME_BODY_LIMITS,
+                mime_policy    = JSON_MIME_POLICY,
+                request_kwargs = {"json": {}, "timeout": 30},
             )
             data = parse_bounded_json(response, limits=_CHIME_JSON_LIMITS)
             if not isinstance(data, dict):
@@ -261,14 +261,14 @@ async def fetch_chime_repeaters(
             return data
         except HttpStatusError as exc:
             context.logger.warning("CHIME 目录请求失败：HTTP %s", exc.status)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             context.logger.warning("CHIME 目录请求超时")
         except Exception as exc:
             public_error_message(
                 context,
                 exc,
-                logger=context.logger,
-                component="chime.fetch",
+                logger    = context.logger,
+                component = "chime.fetch",
             )
         return None
 
@@ -283,8 +283,8 @@ def parse_frb_data(
         return []
 
     parsed: list[FRBData] = []
-    seen_names: set[str] = set()
-    invalid_count = 0
+    seen_names: set[str]  = set()
+    invalid_count         = 0
     for name, info in data.items():
         frb = FRBData(name, info)
         if not frb.is_valid():
@@ -345,8 +345,8 @@ def save_history(context: PluginContextProtocol, mapping: object) -> bool:
         public_error_message(
             context,
             exc,
-            logger=context.logger,
-            component="chime.save_history",
+            logger    = context.logger,
+            component = "chime.save_history",
         )
         return False
 
@@ -358,8 +358,8 @@ def find_updates(
 ) -> tuple[list[FRBData], list[FRBData]]:
     """只把新增源或严格晚于基线的观测视为更新。"""
     new_repeaters: list[FRBData] = []
-    new_pulses: list[FRBData] = []
-    regressed = 0
+    new_pulses: list[FRBData]    = []
+    regressed                    = 0
     for frb in frb_list:
         old_timestamp = old_mapping.get(frb.name)
         if old_timestamp is None:
@@ -391,7 +391,7 @@ def merge_history(
     for frb in frb_list:
         if frb.timestamp is None or frb.observed_at is None:
             raise ValueError("cannot merge an invalid FRB record")
-        previous = merged.get(frb.name)
+        previous      = merged.get(frb.name)
         previous_time = _parse_timestamp(previous) if previous else None
         if previous_time is None or frb.observed_at > previous_time:
             merged[frb.name] = frb.timestamp
@@ -427,8 +427,8 @@ def format_update_message(
 def _sorted_frbs_by_latest_timestamp(frb_list: list[FRBData]) -> list[FRBData]:
     return sorted(
         frb_list,
-        key=lambda item: item.observed_at or _MIN_TIMESTAMP,
-        reverse=True,
+        key     = lambda item: item.observed_at or _MIN_TIMESTAMP,
+        reverse = True,
     )
 
 
@@ -459,7 +459,7 @@ def _render_direct_query(
     """渲染不依赖通知历史的列表或单源查询；更新预览返回 None。"""
     if mode == "list":
         latest = _sorted_frbs_by_latest_timestamp(frb_list)[:MAX_DISPLAY_FRBS]
-        lines = ["📡 最近更新的 FRB："]
+        lines  = ["📡 最近更新的 FRB："]
         lines.extend(f"• {frb.name} - {frb.timestamp}" for frb in latest)
         if len(frb_list) > MAX_DISPLAY_FRBS:
             lines.append(f"\n... 共 {len(frb_list)} 个")
@@ -521,8 +521,8 @@ async def handle(
         return public_error_response(
             context,
             exc,
-            logger=context.logger,
-            component="chime.handle",
+            logger    = context.logger,
+            component = "chime.handle",
         )
 
 
@@ -541,9 +541,9 @@ async def _deliver_pending(
         confirm_target = partial(mark_delivered, path, pending, target)
 
         receipt = DeliveryReceipt(
-            expected_actions=1,
-            commit=confirm_target,
-            rollback=lambda: None,
+            expected_actions = 1,
+            commit           = confirm_target,
+            rollback         = lambda: None,
             # 这是公告型 fanout；结果未知时采用 at-most-once，避免重复群公告。
             unknown=confirm_target,
         )
@@ -557,8 +557,8 @@ async def _deliver_pending(
             public_error_message(
                 context,
                 receipt.callback_error,
-                logger=context.logger,
-                component="chime.delivery_ack",
+                logger    = context.logger,
+                component = "chime.delivery_ack",
             )
             return False
         if not receipt.resolved or receipt.outcome is False:
@@ -580,8 +580,8 @@ async def _deliver_pending(
         public_error_message(
             context,
             exc,
-            logger=context.logger,
-            component="chime.delivery_clear",
+            logger    = context.logger,
+            component = "chime.delivery_clear",
         )
         return False
     return True
@@ -596,8 +596,8 @@ async def scheduled_check(context: PluginContextProtocol) -> Segments:
             public_error_message(
                 context,
                 exc,
-                logger=context.logger,
-                component="chime.scheduled",
+                logger    = context.logger,
+                component = "chime.scheduled",
             )
             return []
 
@@ -612,8 +612,8 @@ async def _scheduled_check_locked(context: PluginContextProtocol) -> Segments:
         public_error_message(
             context,
             exc,
-            logger=context.logger,
-            component="chime.load_delivery_state",
+            logger    = context.logger,
+            component = "chime.load_delivery_state",
         )
         return []
     if pending is not None:
@@ -636,8 +636,8 @@ async def _scheduled_check_locked(context: PluginContextProtocol) -> Segments:
         public_error_message(
             context,
             exc,
-            logger=context.logger,
-            component="chime.load_history",
+            logger    = context.logger,
+            component = "chime.load_history",
         )
         return []
 
@@ -661,24 +661,24 @@ async def _scheduled_check_locked(context: PluginContextProtocol) -> Segments:
     try:
         canonical_history = json.dumps(
             new_mapping,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
+            ensure_ascii = False,
+            sort_keys    = True,
+            separators   = (",", ":"),
         )
         event_id = f"chime:{hashlib.sha256(canonical_history.encode('utf-8')).hexdigest()}"
-        pending = create_pending(
+        pending  = create_pending(
             _fanout_path(context),
-            event_id=event_id,
-            payload=list(segments(message)),
-            targets=targets,
-            commit={"history": new_mapping},
+            event_id = event_id,
+            payload  = list(segments(message)),
+            targets  = targets,
+            commit   = {"history": new_mapping},
         )
         await _deliver_pending(context, pending)
     except Exception as exc:
         public_error_message(
             context,
             exc,
-            logger=context.logger,
-            component="chime.delivery_state",
+            logger    = context.logger,
+            component = "chime.delivery_state",
         )
     return []

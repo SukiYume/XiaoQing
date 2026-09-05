@@ -17,7 +17,7 @@ from tests.helpers.xiaoqing_chat_test_support import (
     pytest,
 )
 
-mock_context = _fixture_support.mock_context
+mock_context       = _fixture_support.mock_context
 sample_group_event = _fixture_support.sample_group_event
 
 
@@ -28,31 +28,31 @@ async def test_smalltalk_rejection_persists_updated_pfc_state_and_cancels_specul
     from plugins.xiaoqing_chat.handlers import _maybe_reply_smalltalk
     from plugins.xiaoqing_chat.llm.reply_checker import ReplyRejected
 
-    lock = asyncio.Lock()
-    cancel_seen = asyncio.Event()
-    blocker = asyncio.Event()
-    state = MagicMock()
-    state.get_lock.return_value = lock
+    lock                              = asyncio.Lock()
+    cancel_seen                       = asyncio.Event()
+    blocker                           = asyncio.Event()
+    state                             = MagicMock()
+    state.get_lock.return_value       = lock
     state.get_mood_state.return_value = ""
     state.memory_store.get_async = AsyncMock(return_value=[])
     state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.memory_store.append = Mock()
+    state.memory_store.append       = Mock()
     state.pfc_state_store.get_async = AsyncMock(
         return_value=SimpleNamespace(
-            chat_id="g67890",
-            ignore_until_ts=0.0,
-            ended=False,
-            last_successful_reply_action="",
-            goal_list=[],
-            knowledge_list=[],
-            planner_fail_ts=[],
-            planner_skip_until=0.0,
-            updated_at=0.0,
+            chat_id                      = "g67890",
+            ignore_until_ts              = 0.0,
+            ended                        = False,
+            last_successful_reply_action = "",
+            goal_list                    = [],
+            knowledge_list               = [],
+            planner_fail_ts              = [],
+            planner_skip_until           = 0.0,
+            updated_at                   = 0.0,
         )
     )
-    state.pfc_state_store.set_state = Mock()
+    state.pfc_state_store.set_state       = Mock()
     state.heartflow.on_user_message_async = AsyncMock()
-    state.heartflow.on_no_reply_async = AsyncMock()
+    state.heartflow.on_no_reply_async     = AsyncMock()
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
@@ -78,8 +78,8 @@ async def test_smalltalk_rejection_persists_updated_pfc_state_and_cancels_specul
         return ""
 
     async def fake_run_pfc_once(**kwargs):
-        snapshot = kwargs["state_override"]
-        snapshot.goal_list = [{"goal": "重规划后的目标"}]
+        snapshot                    = kwargs["state_override"]
+        snapshot.goal_list          = [{"goal": "重规划后的目标"}]
         snapshot.planner_skip_until = 30.0
         await asyncio.sleep(0)
         raise ReplyRejected("需要重新规划", True)
@@ -125,20 +125,20 @@ async def test_smalltalk_forced_reply_generation_runs_outside_chat_lock_but_comm
 ):
     from plugins.xiaoqing_chat.handlers import _maybe_reply_smalltalk
 
-    lock = asyncio.Lock()
-    state = MagicMock()
-    state.get_lock.return_value = lock
-    state.get_mood_state.return_value = ""
+    lock                                = asyncio.Lock()
+    state                               = MagicMock()
+    state.get_lock.return_value         = lock
+    state.get_mood_state.return_value   = ""
     state.memory_store.get.return_value = []
     state.memory_store.get_async = AsyncMock(return_value=[])
     state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.memory_store.append = Mock()
-    state.pfc_state_store.get_async = AsyncMock()
+    state.memory_store.append             = Mock()
+    state.pfc_state_store.get_async       = AsyncMock()
     state.heartflow.on_user_message_async = AsyncMock()
-    state.heartflow.on_bot_reply_async = AsyncMock()
-    state.heartflow.on_no_reply_async = AsyncMock()
-    state.inc_stats = Mock()
-    state.action_history.append = Mock()
+    state.heartflow.on_bot_reply_async    = AsyncMock()
+    state.heartflow.on_no_reply_async     = AsyncMock()
+    state.inc_stats                       = Mock()
+    state.action_history.append           = Mock()
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
@@ -153,7 +153,7 @@ async def test_smalltalk_forced_reply_generation_runs_outside_chat_lock_but_comm
             debug=SimpleNamespace(log_latency=False),
         )
     )
-    event = dict(sample_group_event)
+    event                       = dict(sample_group_event)
     event["_xc_command_forced"] = True
 
     async def fake_generate_reply_draft(**kwargs):
@@ -204,33 +204,33 @@ async def test_smalltalk_stale_generation_is_dropped_before_commit(
 ):
     from plugins.xiaoqing_chat.handlers import _maybe_reply_smalltalk
 
-    lock = asyncio.Lock()
-    state = MagicMock()
-    state.get_lock.return_value = lock
-    state.get_mood_state.return_value = ""
+    lock                                = asyncio.Lock()
+    state                               = MagicMock()
+    state.get_lock.return_value         = lock
+    state.get_mood_state.return_value   = ""
     state.memory_store.get.return_value = []
     state.memory_store.get_async = AsyncMock(return_value=[])
     state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.memory_store.append = Mock()
+    state.memory_store.append       = Mock()
     state.pfc_state_store.get_async = AsyncMock(
         return_value=SimpleNamespace(
-            chat_id="g67890",
-            ignore_until_ts=0.0,
-            ended=False,
-            last_successful_reply_action="",
-            goal_list=[],
-            knowledge_list=[],
-            planner_fail_ts=[],
-            planner_skip_until=0.0,
-            updated_at=0.0,
+            chat_id                      = "g67890",
+            ignore_until_ts              = 0.0,
+            ended                        = False,
+            last_successful_reply_action = "",
+            goal_list                    = [],
+            knowledge_list               = [],
+            planner_fail_ts              = [],
+            planner_skip_until           = 0.0,
+            updated_at                   = 0.0,
         )
     )
-    state.pfc_state_store.set_state = Mock()
+    state.pfc_state_store.set_state       = Mock()
     state.heartflow.on_user_message_async = AsyncMock()
-    state.heartflow.on_bot_reply_async = AsyncMock()
-    state.heartflow.on_no_reply_async = AsyncMock()
-    state.inc_stats = Mock()
-    state.action_history.append = Mock()
+    state.heartflow.on_bot_reply_async    = AsyncMock()
+    state.heartflow.on_no_reply_async     = AsyncMock()
+    state.inc_stats                       = Mock()
+    state.action_history.append           = Mock()
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
@@ -300,32 +300,32 @@ async def test_smalltalk_no_reply_current_turn_schedules_pfc_state_flush(
 ):
     from plugins.xiaoqing_chat.handlers import _maybe_reply_smalltalk
 
-    lock = asyncio.Lock()
-    state = MagicMock()
-    state.get_lock.return_value = lock
-    state.get_mood_state.return_value = ""
+    lock                                = asyncio.Lock()
+    state                               = MagicMock()
+    state.get_lock.return_value         = lock
+    state.get_mood_state.return_value   = ""
     state.memory_store.get.return_value = []
     state.memory_store.get_async = AsyncMock(return_value=[])
     state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.memory_store.append = Mock()
+    state.memory_store.append       = Mock()
     state.pfc_state_store.get_async = AsyncMock(
         return_value=SimpleNamespace(
-            chat_id="g67890",
-            ignore_until_ts=0.0,
-            ended=False,
-            last_successful_reply_action="",
-            goal_list=[],
-            knowledge_list=[],
-            planner_fail_ts=[],
-            planner_skip_until=0.0,
-            updated_at=0.0,
+            chat_id                      = "g67890",
+            ignore_until_ts              = 0.0,
+            ended                        = False,
+            last_successful_reply_action = "",
+            goal_list                    = [],
+            knowledge_list               = [],
+            planner_fail_ts              = [],
+            planner_skip_until           = 0.0,
+            updated_at                   = 0.0,
         )
     )
     state.heartflow.on_user_message_async = AsyncMock()
-    state.heartflow.on_bot_reply_async = AsyncMock()
-    state.heartflow.on_no_reply_async = AsyncMock()
-    state.inc_stats = Mock()
-    state.action_history.append = Mock()
+    state.heartflow.on_bot_reply_async    = AsyncMock()
+    state.heartflow.on_no_reply_async     = AsyncMock()
+    state.inc_stats                       = Mock()
+    state.action_history.append           = Mock()
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
@@ -370,8 +370,8 @@ async def test_smalltalk_no_reply_current_turn_schedules_pfc_state_flush(
         ),
         patch(
             "plugins.xiaoqing_chat.handlers._schedule_pfc_state_flush",
-            side_effect=fake_schedule_pfc_state_flush,
-            create=True,
+            side_effect = fake_schedule_pfc_state_flush,
+            create      = True,
         ) as mock_schedule_pfc_state_flush,
         patch("plugins.xiaoqing_chat.handlers._most_recent_user_local_id", return_value="u1"),
         patch("plugins.xiaoqing_chat.handlers._spawn_post_reply_bg_tasks", new=AsyncMock()),
@@ -401,32 +401,32 @@ async def test_smalltalk_schedules_pfc_flush_even_if_post_commit_reply_record_fa
 ):
     from plugins.xiaoqing_chat.handlers import _maybe_reply_smalltalk
 
-    lock = asyncio.Lock()
-    state = MagicMock()
-    state.get_lock.return_value = lock
-    state.get_mood_state.return_value = ""
+    lock                                = asyncio.Lock()
+    state                               = MagicMock()
+    state.get_lock.return_value         = lock
+    state.get_mood_state.return_value   = ""
     state.memory_store.get.return_value = []
     state.memory_store.get_async = AsyncMock(return_value=[])
     state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.memory_store.append = Mock()
+    state.memory_store.append       = Mock()
     state.pfc_state_store.get_async = AsyncMock(
         return_value=SimpleNamespace(
-            chat_id="g67890",
-            ignore_until_ts=0.0,
-            ended=False,
-            last_successful_reply_action="",
-            goal_list=[],
-            knowledge_list=[],
-            planner_fail_ts=[],
-            planner_skip_until=0.0,
-            updated_at=0.0,
+            chat_id                      = "g67890",
+            ignore_until_ts              = 0.0,
+            ended                        = False,
+            last_successful_reply_action = "",
+            goal_list                    = [],
+            knowledge_list               = [],
+            planner_fail_ts              = [],
+            planner_skip_until           = 0.0,
+            updated_at                   = 0.0,
         )
     )
     state.heartflow.on_user_message_async = AsyncMock()
-    state.heartflow.on_bot_reply_async = AsyncMock()
-    state.heartflow.on_no_reply_async = AsyncMock()
-    state.inc_stats = Mock()
-    state.action_history.append = Mock()
+    state.heartflow.on_bot_reply_async    = AsyncMock()
+    state.heartflow.on_no_reply_async     = AsyncMock()
+    state.inc_stats                       = Mock()
+    state.action_history.append           = Mock()
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
@@ -502,31 +502,31 @@ async def test_smalltalk_schedules_pfc_flush_even_if_post_commit_no_reply_hook_f
 ):
     from plugins.xiaoqing_chat.handlers import _maybe_reply_smalltalk
 
-    lock = asyncio.Lock()
-    state = MagicMock()
-    state.get_lock.return_value = lock
-    state.get_mood_state.return_value = ""
+    lock                                = asyncio.Lock()
+    state                               = MagicMock()
+    state.get_lock.return_value         = lock
+    state.get_mood_state.return_value   = ""
     state.memory_store.get.return_value = []
     state.memory_store.get_async = AsyncMock(return_value=[])
     state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.memory_store.append = Mock()
+    state.memory_store.append       = Mock()
     state.pfc_state_store.get_async = AsyncMock(
         return_value=SimpleNamespace(
-            chat_id="g67890",
-            ignore_until_ts=0.0,
-            ended=False,
-            last_successful_reply_action="",
-            goal_list=[],
-            knowledge_list=[],
-            planner_fail_ts=[],
-            planner_skip_until=0.0,
-            updated_at=0.0,
+            chat_id                      = "g67890",
+            ignore_until_ts              = 0.0,
+            ended                        = False,
+            last_successful_reply_action = "",
+            goal_list                    = [],
+            knowledge_list               = [],
+            planner_fail_ts              = [],
+            planner_skip_until           = 0.0,
+            updated_at                   = 0.0,
         )
     )
     state.heartflow.on_user_message_async = AsyncMock()
-    state.heartflow.on_bot_reply_async = AsyncMock()
+    state.heartflow.on_bot_reply_async    = AsyncMock()
     state.heartflow.on_no_reply_async = AsyncMock(side_effect=RuntimeError("no-reply boom"))
-    state.inc_stats = Mock()
+    state.inc_stats             = Mock()
     state.action_history.append = Mock()
 
     runtime = SimpleNamespace(
@@ -593,17 +593,17 @@ async def test_smalltalk_schedules_pfc_flush_even_if_post_commit_no_reply_hook_f
 async def test_mode_indicator_only_applies_in_brain_chat(mock_context, sample_group_event):
     from plugins.xiaoqing_chat.handlers import _maybe_reply_smalltalk
 
-    state = MagicMock()
-    state.get_mood_state.return_value = ""
+    state                               = MagicMock()
+    state.get_mood_state.return_value   = ""
     state.memory_store.get.return_value = []
     state.memory_store.get_async = AsyncMock(return_value=[])
     state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.memory_store.append = Mock()
+    state.memory_store.append             = Mock()
     state.heartflow.on_user_message_async = AsyncMock()
-    state.heartflow.on_bot_reply_async = AsyncMock()
-    state.heartflow.on_no_reply_async = AsyncMock()
-    state.inc_stats = Mock()
-    state.action_history.append = Mock()
+    state.heartflow.on_bot_reply_async    = AsyncMock()
+    state.heartflow.on_no_reply_async     = AsyncMock()
+    state.inc_stats                       = Mock()
+    state.action_history.append           = Mock()
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
@@ -613,16 +613,16 @@ async def test_mode_indicator_only_applies_in_brain_chat(mock_context, sample_gr
                 enable_expression_reflection=False, enable_review_sessions=False
             ),
             brain_chat=SimpleNamespace(
-                enable_private_brain_chat=False,
-                show_mode_indicator=True,
-                brain_mode_indicator="[brain]",
+                enable_private_brain_chat = False,
+                show_mode_indicator       = True,
+                brain_mode_indicator      = "[brain]",
             ),
             planner=SimpleNamespace(resolve_think_level=lambda history_len=0: 0),
             personality=SimpleNamespace(states=[], state_probability=0.0),
             debug=SimpleNamespace(log_latency=False),
         )
     )
-    event = dict(sample_group_event)
+    event                       = dict(sample_group_event)
     event["_xc_command_forced"] = True
 
     hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)
@@ -658,17 +658,17 @@ async def test_mode_indicator_is_emitted_when_brain_chat_is_active(
 ):
     from plugins.xiaoqing_chat.handlers import _maybe_reply_smalltalk
 
-    state = MagicMock()
-    state.get_mood_state.return_value = ""
+    state                               = MagicMock()
+    state.get_mood_state.return_value   = ""
     state.memory_store.get.return_value = []
     state.memory_store.get_async = AsyncMock(return_value=[])
     state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.memory_store.append = Mock()
+    state.memory_store.append             = Mock()
     state.heartflow.on_user_message_async = AsyncMock()
-    state.heartflow.on_bot_reply_async = AsyncMock()
-    state.heartflow.on_no_reply_async = AsyncMock()
-    state.inc_stats = Mock()
-    state.action_history.append = Mock()
+    state.heartflow.on_bot_reply_async    = AsyncMock()
+    state.heartflow.on_no_reply_async     = AsyncMock()
+    state.inc_stats                       = Mock()
+    state.action_history.append           = Mock()
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
@@ -678,16 +678,16 @@ async def test_mode_indicator_is_emitted_when_brain_chat_is_active(
                 enable_expression_reflection=False, enable_review_sessions=False
             ),
             brain_chat=SimpleNamespace(
-                enable_private_brain_chat=True,
-                show_mode_indicator=True,
-                brain_mode_indicator="[brain]",
+                enable_private_brain_chat = True,
+                show_mode_indicator       = True,
+                brain_mode_indicator      = "[brain]",
             ),
             planner=SimpleNamespace(resolve_think_level=lambda history_len=0: 0),
             personality=SimpleNamespace(states=[], state_probability=0.0),
             debug=SimpleNamespace(log_latency=False),
         )
     )
-    event = dict(sample_group_event)
+    event                       = dict(sample_group_event)
     event["_xc_command_forced"] = True
 
     hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)
@@ -722,7 +722,7 @@ async def test_handle_provider_denies_switch_for_non_admin(mock_context, sample_
     from plugins.xiaoqing_chat.handlers import handle_provider
     from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
-    state = ChatRuntimeState()
+    state                = ChatRuntimeState()
     mock_context.secrets = {}
     _set_context_principal(mock_context, sample_group_event, group_role="member")
 

@@ -18,8 +18,8 @@ from core.public_errors import public_error_response
 from . import convert, data_manager, image_gen, query, stellar
 from .data_manager import ColorRecord
 
-logger = logging.getLogger(__name__)
-Messages = list[dict[str, Any]]
+logger      = logging.getLogger(__name__)
+Messages    = list[dict[str, Any]]
 ColorAction = Literal[
     "help",
     "auto",
@@ -36,12 +36,12 @@ ColorAction = Literal[
     "spectype",
 ]
 
-MAX_ARGS_CHARS = 2_048
-MAX_QUERY_CHARS = 64
-MAX_DEFINITION_CHARS = 512
-LIST_PAGE_SIZE = 20
-MAX_PAGE = 1_000
-MAX_CUSTOM_COLORS_PER_SCOPE = data_manager.MAX_CUSTOM_COLORS_PER_SCOPE
+MAX_ARGS_CHARS               = 2_048
+MAX_QUERY_CHARS              = 64
+MAX_DEFINITION_CHARS         = 512
+LIST_PAGE_SIZE               = 20
+MAX_PAGE                     = 1_000
+MAX_CUSTOM_COLORS_PER_SCOPE  = data_manager.MAX_CUSTOM_COLORS_PER_SCOPE
 MAX_CUSTOM_COLOR_NAME_LENGTH = data_manager.MAX_COLOR_NAME_CHARS
 
 _PRIMARY_OPTIONS: dict[ColorAction, tuple[str, ...]] = {
@@ -57,23 +57,23 @@ _PRIMARY_OPTIONS: dict[ColorAction, tuple[str, ...]] = {
     "stellar": ("s", "stellar"),
     "spectype": ("t", "spectype"),
 }
-_PICTURE_OPTIONS = ("p", "picture")
-_PAGE_OPTIONS = ("page",)
-_HELP_WORDS = frozenset({"help", "h", "帮助"})
-_CATALOG_WORDS = frozenset({"list", "ls", "colors", "列表", "色表"})
-_SEARCH_WORDS = frozenset({"search", "find", "搜索", "查找", "搜"})
-_RANDOM_WORDS = frozenset({"random", "rand", "随机"})
-_STELLAR_WORDS = frozenset({"star", "stellar", "恒星"})
-_SPECTYPE_WORDS = frozenset({"stars", "types", "spectypes", "光谱型"})
-_WRITE_WORDS = frozenset({"add", "write", "添加", "新增"})
-_DELETE_WORDS = frozenset({"delete", "del", "remove", "删除"})
-_NAME_WORDS = frozenset({"name", "名称"})
-_RGB_WORDS = frozenset({"rgb"})
-_HEX_WORDS = frozenset({"hex"})
-_CMYK_WORDS = frozenset({"cmyk"})
-_PICTURE_ACTIONS = frozenset({"auto", "name", "rgb", "hex", "cmyk", "random"})
-_REST_ACTIONS = frozenset({"rgb", "cmyk", "keyword", "write"})
-_ASCII_INTEGER = re.compile(r"-?[0-9]+")
+_PICTURE_OPTIONS    = ("p", "picture")
+_PAGE_OPTIONS       = ("page",)
+_HELP_WORDS         = frozenset({"help", "h", "帮助"})
+_CATALOG_WORDS      = frozenset({"list", "ls", "colors", "列表", "色表"})
+_SEARCH_WORDS       = frozenset({"search", "find", "搜索", "查找", "搜"})
+_RANDOM_WORDS       = frozenset({"random", "rand", "随机"})
+_STELLAR_WORDS      = frozenset({"star", "stellar", "恒星"})
+_SPECTYPE_WORDS     = frozenset({"stars", "types", "spectypes", "光谱型"})
+_WRITE_WORDS        = frozenset({"add", "write", "添加", "新增"})
+_DELETE_WORDS       = frozenset({"delete", "del", "remove", "删除"})
+_NAME_WORDS         = frozenset({"name", "名称"})
+_RGB_WORDS          = frozenset({"rgb"})
+_HEX_WORDS          = frozenset({"hex"})
+_CMYK_WORDS         = frozenset({"cmyk"})
+_PICTURE_ACTIONS    = frozenset({"auto", "name", "rgb", "hex", "cmyk", "random"})
+_REST_ACTIONS       = frozenset({"rgb", "cmyk", "keyword", "write"})
+_ASCII_INTEGER      = re.compile(r"-?[0-9]+")
 _DIRECT_HEX_PATTERN = re.compile(r"#?(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})\Z")
 
 HELP_TEXT = """🎨 颜色工具｜526 种中国传统色
@@ -105,9 +105,9 @@ class ColorInputError(ValueError):
 @dataclass(frozen=True)
 class ColorRequest:
     action: ColorAction
-    value: str = ""
+    value: str    = ""
     picture: bool = False
-    page: int = 1
+    page: int     = 1
 
 
 def _selected_option(parsed: ParsedArgs, aliases: Sequence[str]) -> tuple[str, str] | None:
@@ -140,7 +140,7 @@ def _parse_args(args: str) -> ParsedArgs:
         tokenize(args, strict=True)
     except ValueError as exc:
         raise ColorInputError("命令中的引号没有闭合") from exc
-    parsed = parse(args)
+    parsed        = parse(args)
     known_options = (
         {alias for aliases in _PRIMARY_OPTIONS.values() for alias in aliases}
         | set(_PICTURE_OPTIONS)
@@ -211,18 +211,18 @@ def _request_from_option(
         raise ColorInputError("当前操作不支持 -p/--picture")
     if page_option is not None and action not in {"keyword", "spectype"}:
         raise ColorInputError("--page 只能用于颜色目录、搜索结果或光谱型列表")
-    page = _resolve_page(None, page_option) if action in {"keyword", "spectype"} else 1
-    maximum = MAX_DEFINITION_CHARS if action == "write" else MAX_QUERY_CHARS
+    page          = _resolve_page(None, page_option) if action in {"keyword", "spectype"} else 1
+    maximum       = MAX_DEFINITION_CHARS if action == "write" else MAX_QUERY_CHARS
     cleaned_value = _clean_request_value(
         raw_value,
-        maximum=maximum,
-        allow_empty=action == "spectype",
+        maximum     = maximum,
+        allow_empty = action == "spectype",
     )
     return ColorRequest(
-        action=action,
-        value=cleaned_value,
-        picture=picture,
-        page=page,
+        action  = action,
+        value   = cleaned_value,
+        picture = picture,
+        page    = page,
     )
 
 
@@ -241,7 +241,7 @@ def _request_from_words(
         return ColorRequest("help")
 
     command_word = tokens[0].casefold()
-    values = tokens[1:]
+    values       = tokens[1:]
     if command_word in _HELP_WORDS:
         if values or picture or page_option is not None:
             raise ColorInputError("帮助命令不接受额外参数")
@@ -259,8 +259,8 @@ def _request_from_words(
         value = _clean_request_value(" ".join(values), maximum=MAX_QUERY_CHARS)
         return ColorRequest(
             "keyword",
-            value=value,
-            page=_resolve_page(None, page_option),
+            value = value,
+            page  = _resolve_page(None, page_option),
         )
     if command_word in _RANDOM_WORDS:
         if values or page_option is not None:
@@ -276,13 +276,13 @@ def _request_from_words(
             raise ColorInputError("光谱型列表不支持 -p/--picture")
         value = _clean_request_value(
             " ".join(values),
-            maximum=MAX_QUERY_CHARS,
-            allow_empty=True,
+            maximum     = MAX_QUERY_CHARS,
+            allow_empty = True,
         )
         return ColorRequest(
             "spectype",
-            value=value,
-            page=_resolve_page(None, page_option),
+            value = value,
+            page  = _resolve_page(None, page_option),
         )
     if command_word in _WRITE_WORDS:
         if picture or page_option is not None:
@@ -311,31 +311,31 @@ def _request_from_words(
     value = _clean_request_value(" ".join(tokens), maximum=MAX_QUERY_CHARS)
     return ColorRequest(
         "auto",
-        value=value,
-        picture=picture,
-        page=_resolve_page(None, page_option),
+        value   = value,
+        picture = picture,
+        page    = _resolve_page(None, page_option),
     )
 
 
 def _parse_request(args: str) -> ColorRequest:
-    parsed = _parse_args(args)
+    parsed         = _parse_args(args)
     picture_option = _selected_option(parsed, _PICTURE_OPTIONS)
     if picture_option is not None and picture_option[1] != FLAG_VALUE:
         raise ColorInputError("-p/--picture 不接受参数")
-    picture = picture_option is not None
-    page_option = _selected_option(parsed, _PAGE_OPTIONS)
+    picture       = picture_option is not None
+    page_option   = _selected_option(parsed, _PAGE_OPTIONS)
     action_option = _selected_action(parsed)
     if action_option is None:
         return _request_from_words(
             parsed,
-            picture=picture,
-            page_option=page_option,
+            picture     = picture,
+            page_option = page_option,
         )
     return _request_from_option(
         parsed,
         action_option,
-        picture=picture,
-        page_option=page_option,
+        picture     = picture,
+        page_option = page_option,
     )
 
 
@@ -411,9 +411,9 @@ def _format_color_page(
     total_pages = (total + LIST_PAGE_SIZE - 1) // LIST_PAGE_SIZE
     if page > total_pages:
         return segments(f"❌ 第 {page} 页超出范围（共 {total_pages} 页）")
-    start = (page - 1) * LIST_PAGE_SIZE
+    start     = (page - 1) * LIST_PAGE_SIZE
     displayed = colors[start : start + LIST_PAGE_SIZE]
-    lines = [f"🎨 {title}", ""]
+    lines     = [f"🎨 {title}", ""]
     lines.extend(_color_row(color, start + offset) for offset, color in enumerate(displayed, 1))
     lines.extend(("", f"第 {page}/{total_pages} 页｜共 {total} 种"))
     if page > 1:
@@ -428,9 +428,9 @@ def _handle_catalog(request: ColorRequest, colors: Sequence[ColorRecord]) -> Mes
     logger.info("浏览颜色目录: page=%d count=%d", request.page, len(colors))
     return _format_color_page(
         colors,
-        title="颜色目录",
-        page=request.page,
-        page_command=lambda page: f"/color list {page}",
+        title        = "颜色目录",
+        page         = request.page,
+        page_command = lambda page: f"/color list {page}",
     )
 
 
@@ -445,9 +445,9 @@ def _handle_keyword(request: ColorRequest, colors: Sequence[ColorRecord]) -> Mes
     quoted = quote_token(request.value)
     return _format_color_page(
         matches,
-        title=f"“{request.value}”的名称/拼音搜索结果",
-        page=request.page,
-        page_command=lambda page: f"/color search {quoted} --page {page}",
+        title        = f"“{request.value}”的名称/拼音搜索结果",
+        page         = request.page,
+        page_command = lambda page: f"/color search {quoted} --page {page}",
     )
 
 
@@ -464,9 +464,9 @@ async def _handle_name(
             quoted = quote_token(request.value)
             return _format_color_page(
                 matches,
-                title=f"没有精确名称“{request.value}”，相近结果",
-                page=1,
-                page_command=lambda page: f"/color search {quoted} --page {page}",
+                title        = f"没有精确名称“{request.value}”，相近结果",
+                page         = 1,
+                page_command = lambda page: f"/color search {quoted} --page {page}",
             )
         return segments(f"❌ 没有收录名称“{request.value}”\n可用 /color list 浏览全部颜色")
     return await _found_color_response(color, picture=request.picture, context=context)
@@ -518,11 +518,11 @@ async def _handle_rgb(
     color, distance = nearest
     return await _nearest_color_response(
         color,
-        input_label=f"RGB {', '.join(str(channel) for channel in rgb)}",
-        input_rgb=rgb,
-        distance=distance,
-        picture=request.picture,
-        context=context,
+        input_label = f"RGB {', '.join(str(channel) for channel in rgb)}",
+        input_rgb   = rgb,
+        distance    = distance,
+        picture     = request.picture,
+        context     = context,
     )
 
 
@@ -536,7 +536,7 @@ async def _handle_hex(
     except ValueError as exc:
         raise ColorInputError(str(exc)) from exc
     normalized = convert.rgb_to_hex(rgb)
-    color = query.find_by_hex(colors, normalized)
+    color      = query.find_by_hex(colors, normalized)
     logger.info("HEX 查询: exact=%s", color is not None)
     if color is not None:
         return await _found_color_response(color, picture=request.picture, context=context)
@@ -546,11 +546,11 @@ async def _handle_hex(
     color, distance = nearest
     return await _nearest_color_response(
         color,
-        input_label=f"HEX {normalized}",
-        input_rgb=rgb,
-        distance=distance,
-        picture=request.picture,
-        context=context,
+        input_label = f"HEX {normalized}",
+        input_rgb   = rgb,
+        distance    = distance,
+        picture     = request.picture,
+        context     = context,
     )
 
 
@@ -564,18 +564,18 @@ async def _handle_cmyk(
     logger.info("CMYK 查询: exact=%s", exact is not None)
     if exact is not None:
         return await _found_color_response(exact, picture=request.picture, context=context)
-    rgb = convert.cmyk_to_rgb(cmyk)
+    rgb     = convert.cmyk_to_rgb(cmyk)
     nearest = query.find_nearest_by_rgb(colors, rgb)
     if nearest is None:
         raise RuntimeError("color palette is empty")
     color, distance = nearest
     return await _nearest_color_response(
         color,
-        input_label=f"CMYK {', '.join(str(channel) for channel in cmyk)}",
-        input_rgb=rgb,
-        distance=distance,
-        picture=request.picture,
-        context=context,
+        input_label = f"CMYK {', '.join(str(channel) for channel in cmyk)}",
+        input_rgb   = rgb,
+        distance    = distance,
+        picture     = request.picture,
+        context     = context,
     )
 
 
@@ -597,7 +597,7 @@ async def _handle_auto(
         _ASCII_INTEGER.fullmatch(part) is not None for part in channel_parts
     ):
         action: ColorAction = "rgb" if len(channel_parts) == 3 else "cmyk"
-        handler = _handle_rgb if action == "rgb" else _handle_cmyk
+        handler             = _handle_rgb if action == "rgb" else _handle_cmyk
         return await handler(
             ColorRequest(action, value=value, picture=request.picture),
             colors,
@@ -611,7 +611,7 @@ async def _handle_auto(
         return await _found_color_response(exact_name, picture=request.picture, context=context)
 
     exact_pinyin = query.find_by_pinyin(colors, value)
-    matches = exact_pinyin or query.find_by_keyword(colors, value)
+    matches      = exact_pinyin or query.find_by_keyword(colors, value)
     logger.info(
         "自动颜色查询: query_chars=%d page=%d matches=%d",
         len(value),
@@ -629,9 +629,9 @@ async def _handle_auto(
     quoted = quote_token(value)
     return _format_color_page(
         matches,
-        title=f"“{value}”的名称/拼音搜索结果",
-        page=request.page,
-        page_command=lambda page: f"/color search {quoted} --page {page}",
+        title        = f"“{value}”的名称/拼音搜索结果",
+        page         = request.page,
+        page_command = lambda page: f"/color search {quoted} --page {page}",
     )
 
 
@@ -641,7 +641,11 @@ def _parse_custom_color(definition: str) -> ColorRecord:
         raise ColorInputError(
             "格式错误；请使用“颜色名 R G B”或“颜色名 #HEX”，例如 /color add 我的红 255 0 0"
         )
-    if _DIRECT_HEX_PATTERN.fullmatch(parts[-1]) is not None:
+    if len(parts) >= 4 and all(re.fullmatch(r"\d+", part) for part in parts[-3:]):
+        # 完整 RGB 三元组具有优先权，避免把三位蓝色通道解释为短 HEX。
+        name_parts = parts[:-3]
+        rgb = _parse_channels(" ".join(parts[-3:]), label="RGB", count=3, maximum=convert.RGB_MAX)
+    elif _DIRECT_HEX_PATTERN.fullmatch(parts[-1]) is not None:
         name_parts = parts[:-1]
         try:
             rgb = convert.hex_to_rgb(parts[-1])
@@ -674,7 +678,7 @@ async def _add_custom_color(
     context: PluginContextProtocol,
 ) -> Messages:
     new_color = _parse_custom_color(definition)
-    name = new_color["name"]
+    name      = new_color["name"]
     if query.find_by_name(colors, name) is not None:
         return segments(f"❌ 「{name}」已经定义过了哦")
 
@@ -708,7 +712,7 @@ async def _add_custom_color(
 async def _delete_custom_color(name: str, context: PluginContextProtocol) -> Messages:
     def remove(colors: list[ColorRecord]) -> bool:
         original_count = len(colors)
-        colors[:] = [color for color in colors if color["name"] != name]
+        colors[:]      = [color for color in colors if color["name"] != name]
         return len(colors) != original_count
 
     if not await data_manager.mutate_custom_colors_async(context, remove):

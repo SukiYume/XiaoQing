@@ -35,7 +35,7 @@ async def test_load_emoji_library_rebuilds_bad_existing_metadata(mock_context):
     library_dir.mkdir(parents=True, exist_ok=True)
     image_path = _write_png(library_dir / "坏条目.png")
     media_hash = hashlib.sha256(image_path.read_bytes()).hexdigest()
-    runtime = _make_media_runtime()
+    runtime    = _make_media_runtime()
     (library_dir / "index.json").write_text(
         json.dumps(
             {
@@ -59,12 +59,12 @@ async def test_load_emoji_library_rebuilds_bad_existing_metadata(mock_context):
     async def _fake_render(file_path, *, context, runtime, prefer_emoji):
         file_path = Path(file_path)
         return RenderedMedia(
-            media_hash=media_hash,
-            kind="emoji",
-            description="一只黑色小鸟站着，眼神疑惑",
-            emotion_tags=("疑惑", "震惊"),
-            marker="[表情包：疑惑，震惊]",
-            cached_path=file_path,
+            media_hash   = media_hash,
+            kind         = "emoji",
+            description  = "一只黑色小鸟站着，眼神疑惑",
+            emotion_tags = ("疑惑", "震惊"),
+            marker       = "[表情包：疑惑，震惊]",
+            cached_path  = file_path,
         )
 
     with patch(
@@ -121,7 +121,7 @@ async def test_load_emoji_library_schedules_background_repair_without_blocking(m
     library_dir.mkdir(parents=True, exist_ok=True)
     image_path = _write_png(library_dir / "坏条目.png")
     media_hash = hashlib.sha256(image_path.read_bytes()).hexdigest()
-    runtime = _make_media_runtime()
+    runtime    = _make_media_runtime()
     (library_dir / "index.json").write_text(
         json.dumps(
             {
@@ -155,8 +155,8 @@ async def test_load_emoji_library_schedules_background_repair_without_blocking(m
         entries = await load_emoji_library(
             mock_context,
             runtime,
-            repair_invalid=False,
-            schedule_background_repair=True,
+            repair_invalid             = False,
+            schedule_background_repair = True,
         )
 
     assert entries == []
@@ -170,7 +170,7 @@ async def test_load_emoji_library_schedules_background_repair_without_blocking(m
 async def test_load_emoji_library_clears_stale_index_when_library_empty(mock_context):
     library_dir = mock_context.data_dir / "media" / "library"
     library_dir.mkdir(parents=True, exist_ok=True)
-    runtime = _make_media_runtime()
+    runtime    = _make_media_runtime()
     index_path = library_dir / "index.json"
     index_path.write_text(
         json.dumps(
@@ -196,15 +196,15 @@ async def test_load_emoji_library_clears_stale_index_when_library_empty(mock_con
 
 
 def test_collect_emoji_candidate_skips_structured_garbage(mock_context):
-    runtime = _make_media_runtime()
+    runtime     = _make_media_runtime()
     source_path = _write_png(mock_context.data_dir / "bad_emoji.png")
-    rendered = RenderedMedia(
-        media_hash=hashlib.sha256(source_path.read_bytes()).hexdigest(),
-        kind="emoji",
-        description='json\n{"kind":"emoji"}',
-        emotion_tags=("json", "kind"),
-        marker="[表情包：json，kind]",
-        cached_path=source_path,
+    rendered    = RenderedMedia(
+        media_hash   = hashlib.sha256(source_path.read_bytes()).hexdigest(),
+        kind         = "emoji",
+        description  = 'json\n{"kind":"emoji"}',
+        emotion_tags = ("json", "kind"),
+        marker       = "[表情包：json，kind]",
+        cached_path  = source_path,
     )
 
     collected = collect_emoji_candidate(
@@ -221,10 +221,10 @@ def test_collect_emoji_candidate_skips_structured_garbage(mock_context):
 def test_collect_emoji_candidate_rehomes_outside_library_target_path(mock_context):
     library_dir = mock_context.data_dir / "media" / "library"
     library_dir.mkdir(parents=True, exist_ok=True)
-    runtime = _make_media_runtime()
-    source_path = _write_png(mock_context.data_dir / "emoji_source" / "source.png")
+    runtime      = _make_media_runtime()
+    source_path  = _write_png(mock_context.data_dir / "emoji_source" / "source.png")
     outside_path = mock_context.plugin_dir.parent / "outside.png"
-    index_path = library_dir / "index.json"
+    index_path   = library_dir / "index.json"
     index_path.write_text(
         json.dumps(
             {
@@ -246,17 +246,17 @@ def test_collect_emoji_candidate_rehomes_outside_library_target_path(mock_contex
         encoding="utf-8",
     )
     rendered = RenderedMedia(
-        media_hash="hash-safe",
-        kind="emoji",
-        description="猫猫无语摊手",
-        emotion_tags=("无语",),
-        marker="[表情包：无语]",
-        cached_path=source_path,
+        media_hash   = "hash-safe",
+        kind         = "emoji",
+        description  = "猫猫无语摊手",
+        emotion_tags = ("无语",),
+        marker       = "[表情包：无语]",
+        cached_path  = source_path,
     )
 
     collected = collect_emoji_candidate(mock_context, runtime, rendered, source_path=source_path)
     persisted = json.loads(index_path.read_text(encoding="utf-8"))
-    stored_rel = persisted["entries"]["hash-safe"]["file_path"]
+    stored_rel  = persisted["entries"]["hash-safe"]["file_path"]
     stored_path = (mock_context.data_dir / stored_rel).resolve()
 
     assert collected is not None
@@ -269,9 +269,9 @@ def test_collect_emoji_candidate_prunes_old_auto_entries(mock_context):
     from PIL import Image
 
     runtime = _make_media_runtime(emoji_auto_collect_max_entries=1)
-    first_path = mock_context.data_dir / "first_auto.png"
-    second_path = mock_context.data_dir / "second_auto.png"
-    first_image = Image.new("RGBA", (24, 24), (255, 255, 255, 255))
+    first_path   = mock_context.data_dir / "first_auto.png"
+    second_path  = mock_context.data_dir / "second_auto.png"
+    first_image  = Image.new("RGBA", (24, 24), (255, 255, 255, 255))
     second_image = Image.new("RGBA", (24, 24), (255, 255, 255, 255))
     for index in range(24):
         first_image.putpixel((index, index), (255, 120, 120, 255))
@@ -280,20 +280,20 @@ def test_collect_emoji_candidate_prunes_old_auto_entries(mock_context):
     second_image.save(second_path)
 
     first_rendered = RenderedMedia(
-        media_hash=hashlib.sha256(first_path.read_bytes()).hexdigest(),
-        kind="emoji",
-        description="红色小鸟翻白眼",
-        emotion_tags=("无语",),
-        marker="[表情包：无语]",
-        cached_path=first_path,
+        media_hash   = hashlib.sha256(first_path.read_bytes()).hexdigest(),
+        kind         = "emoji",
+        description  = "红色小鸟翻白眼",
+        emotion_tags = ("无语",),
+        marker       = "[表情包：无语]",
+        cached_path  = first_path,
     )
     second_rendered = RenderedMedia(
-        media_hash=hashlib.sha256(second_path.read_bytes()).hexdigest(),
-        kind="emoji",
-        description="蓝色小鸟生气",
-        emotion_tags=("生气",),
-        marker="[表情包：生气]",
-        cached_path=second_path,
+        media_hash   = hashlib.sha256(second_path.read_bytes()).hexdigest(),
+        kind         = "emoji",
+        description  = "蓝色小鸟生气",
+        emotion_tags = ("生气",),
+        marker       = "[表情包：生气]",
+        cached_path  = second_path,
     )
 
     assert (
@@ -318,13 +318,13 @@ def test_collect_emoji_candidate_prunes_old_auto_entries(mock_context):
 async def test_collect_emoji_candidate_requires_approval_keeps_entry_pending(mock_context):
     runtime = _make_media_runtime(emoji_auto_collect_requires_approval=True)
     source_path = _write_png(mock_context.data_dir / "pending_emoji.png")
-    rendered = RenderedMedia(
-        media_hash=hashlib.sha256(source_path.read_bytes()).hexdigest(),
-        kind="emoji",
-        description="猫猫翻白眼",
-        emotion_tags=("无语",),
-        marker="[表情包：无语]",
-        cached_path=source_path,
+    rendered    = RenderedMedia(
+        media_hash   = hashlib.sha256(source_path.read_bytes()).hexdigest(),
+        kind         = "emoji",
+        description  = "猫猫翻白眼",
+        emotion_tags = ("无语",),
+        marker       = "[表情包：无语]",
+        cached_path  = source_path,
     )
 
     collected = collect_emoji_candidate(mock_context, runtime, rendered, source_path=source_path)
@@ -343,7 +343,7 @@ def test_collect_emoji_candidate_dedups_visually_identical_auto_entries(mock_con
     from PIL import Image, PngImagePlugin
 
     runtime = _make_media_runtime(emoji_auto_collect_similarity_threshold=0)
-    first_path = mock_context.data_dir / "dup1.png"
+    first_path  = mock_context.data_dir / "dup1.png"
     second_path = mock_context.data_dir / "dup2.png"
 
     image = Image.new("RGBA", (24, 24), (255, 255, 255, 255))
@@ -354,20 +354,20 @@ def test_collect_emoji_candidate_dedups_visually_identical_auto_entries(mock_con
     image.save(second_path, pnginfo=pnginfo)
 
     first_rendered = RenderedMedia(
-        media_hash=hashlib.sha256(first_path.read_bytes()).hexdigest(),
-        kind="emoji",
-        description="猫猫无语",
-        emotion_tags=("无语",),
-        marker="[表情包：无语]",
-        cached_path=first_path,
+        media_hash   = hashlib.sha256(first_path.read_bytes()).hexdigest(),
+        kind         = "emoji",
+        description  = "猫猫无语",
+        emotion_tags = ("无语",),
+        marker       = "[表情包：无语]",
+        cached_path  = first_path,
     )
     second_rendered = RenderedMedia(
-        media_hash=hashlib.sha256(second_path.read_bytes()).hexdigest(),
-        kind="emoji",
-        description="猫猫无语",
-        emotion_tags=("无语",),
-        marker="[表情包：无语]",
-        cached_path=second_path,
+        media_hash   = hashlib.sha256(second_path.read_bytes()).hexdigest(),
+        kind         = "emoji",
+        description  = "猫猫无语",
+        emotion_tags = ("无语",),
+        marker       = "[表情包：无语]",
+        cached_path  = second_path,
     )
 
     first = collect_emoji_candidate(mock_context, runtime, first_rendered, source_path=first_path)
@@ -432,14 +432,14 @@ def test_vision_candidates_never_materialize_plugin_credentials(mock_context):
 
 def test_malformed_legacy_vision_secrets_cannot_change_core_candidates(mock_context):
     mock_context.secrets = {"plugins": {"xiaoqing_chat": {"vision": ["invalid"]}}}
-    candidates = _resolve_media_llm_secret_candidates(mock_context)
+    candidates           = _resolve_media_llm_secret_candidates(mock_context)
     assert candidates[0]["_profile"] == "glm-4.6v-flash"
     assert len(candidates) == 4
 
 
 def test_vision_candidates_report_unavailable_without_ai_capability(mock_context):
     mock_context.capabilities = PluginCapabilities()
-    candidates = _resolve_media_llm_secret_candidates(mock_context)
+    candidates                = _resolve_media_llm_secret_candidates(mock_context)
     assert len(candidates) == 1
     assert candidates[0]["_vision_enabled"] is False
     assert candidates[0]["_ai"] is None

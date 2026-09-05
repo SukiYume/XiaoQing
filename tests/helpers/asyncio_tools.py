@@ -68,9 +68,9 @@ class BlockingConcurrencyProbe:
     """在释放事件前阻塞调用，并记录观察到的最大并发数。"""
 
     def __init__(self, entered: asyncio.Event, release: asyncio.Event) -> None:
-        self.entered = entered
-        self.release = release
-        self.active = 0
+        self.entered        = entered
+        self.release        = release
+        self.active         = 0
         self.maximum_active = 0
 
     async def run(self, *_args: Any) -> list[Any]:

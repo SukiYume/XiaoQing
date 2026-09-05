@@ -20,7 +20,7 @@ from tests.helpers.app_test_support import (
 )
 
 mock_dependencies = _fixture_support.mock_dependencies
-temp_app_root = _fixture_support.temp_app_root
+temp_app_root     = _fixture_support.temp_app_root
 
 
 @pytest.mark.asyncio
@@ -28,9 +28,9 @@ temp_app_root = _fixture_support.temp_app_root
 async def test_inbound_event_uses_same_long_message_splitter_as_active_delivery(
     temp_app_root: Path,
 ):
-    app = XiaoQingApp(temp_app_root)
-    image_segment = {"type": "image", "data": {"file": "test.png"}}
-    original_text = "A" * (MAX_MESSAGE_TEXT_LENGTH + 17)
+    app                = XiaoQingApp(temp_app_root)
+    image_segment      = {"type": "image", "data": {"file": "test.png"}}
+    original_text      = "A" * (MAX_MESSAGE_TEXT_LENGTH + 17)
     app._process_event = AsyncMock(
         return_value={
             "action": "send_group_msg",
@@ -74,7 +74,7 @@ async def test_send_single_action_logs_full_logical_message_length(
     temp_app_root: Path,
     caplog,
 ):
-    app = XiaoQingApp(temp_app_root)
+    app     = XiaoQingApp(temp_app_root)
     message = [
         {"type": "text", "data": {"text": "A" * 300}},
         *({"type": "text", "data": {"text": "B"}} for _ in range(20)),
@@ -142,7 +142,7 @@ async def test_app_handle_upstream_event(temp_app_root: Path):
     app = XiaoQingApp(temp_app_root)
 
     # Mock ws_client
-    app.ws_client = MagicMock()
+    app.ws_client                     = MagicMock()
     app.ws_client.credentials_trusted = True
     app.ws_client.connected = Mock(return_value=True)
     app.ws_client.send_action = AsyncMock()
@@ -175,10 +175,10 @@ async def test_app_handle_upstream_event_not_connected(temp_app_root: Path):
     app.ws_client = MagicMock()
     app.ws_client.connected = Mock(return_value=False)
     app.ws_client.send_action = AsyncMock()
-    app.http_sender = SimpleNamespace(
-        http_base="http://onebot",
-        credentials_trusted=True,
-        send_action=AsyncMock(),
+    app.http_sender           = SimpleNamespace(
+        http_base           = "http://onebot",
+        credentials_trusted = True,
+        send_action         = AsyncMock(),
     )
 
     # Mock dispatcher
@@ -314,7 +314,7 @@ async def test_app_dedupe_hot_path_never_scans_live_key_map(
         def items(self):
             raise AssertionError("dedupe hot path must not scan every live key")
 
-    app = XiaoQingApp(temp_app_root)
+    app                   = XiaoQingApp(temp_app_root)
     app._recent_event_ids = NoScanDict()
     monkeypatch.setattr("core.app_delivery.MAX_INBOUND_EVENT_DEDUP_KEYS", 2)
     now = 100.0
@@ -345,7 +345,7 @@ async def test_app_dedupe_heap_prunes_only_expired_entries(
     monkeypatch.setattr("core.app_delivery.INBOUND_EVENT_DEDUP_TTL_SECONDS", 5.0)
     monkeypatch.setattr("core.app_delivery.time.monotonic", lambda: now)
 
-    first = {"message_id": 1, "user_id": 7, "message_type": "private"}
+    first  = {"message_id": 1, "user_id": 7, "message_type": "private"}
     second = {"message_id": 2, "user_id": 7, "message_type": "private"}
     assert await app._claim_inbound_event(first)
     now = 102.0
@@ -362,14 +362,14 @@ async def test_app_send_single_action_falls_back_to_http_when_inbound_has_no_ws_
     temp_app_root: Path,
 ):
     """Test inbound manager does not swallow actions when no inbound WS clients are connected."""
-    app = XiaoQingApp(temp_app_root)
+    app                 = XiaoQingApp(temp_app_root)
     app.inbound_manager = MagicMock()
     app.inbound_manager.has_active_ws_clients = Mock(return_value=False)
-    app.inbound_manager.broadcast = AsyncMock()
-    app.http_sender = MagicMock()
-    app.http_sender.http_base = "http://localhost:5700"
+    app.inbound_manager.broadcast       = AsyncMock()
+    app.http_sender                     = MagicMock()
+    app.http_sender.http_base           = "http://localhost:5700"
     app.http_sender.credentials_trusted = True
-    app.http_sender.send_action = AsyncMock()
+    app.http_sender.send_action         = AsyncMock()
 
     action = {"action": "send_group_msg", "params": {"group_id": 1, "message": []}}
     await app._send_single_action(action)
@@ -383,16 +383,16 @@ async def test_app_send_single_action_falls_back_to_http_when_inbound_has_no_ws_
 async def test_app_send_single_action_accepts_partial_inbound_broadcast_success(
     temp_app_root: Path,
 ):
-    app = XiaoQingApp(temp_app_root)
-    app.inbound_manager = MagicMock()
+    app                                                    = XiaoQingApp(temp_app_root)
+    app.inbound_manager                                    = MagicMock()
     app.inbound_manager.has_active_ws_clients.return_value = True
-    app.inbound_manager.broadcast = AsyncMock(
+    app.inbound_manager.broadcast                          = AsyncMock(
         return_value=BroadcastResult(
             target_count=3, success_count=1, failure_count=1, timeout_count=1
         )
     )
-    app.http_sender = MagicMock()
-    app.http_sender.http_base = "http://localhost:5700"
+    app.http_sender                     = MagicMock()
+    app.http_sender.http_base           = "http://localhost:5700"
     app.http_sender.credentials_trusted = True
     app.http_sender.send_action = AsyncMock(return_value=True)
     action = {"action": "send_group_msg", "params": {"group_id": 1, "message": []}}
@@ -416,12 +416,12 @@ async def test_app_send_single_action_falls_back_when_inbound_delivers_to_nobody
     temp_app_root: Path,
     broadcast_result: BroadcastResult,
 ):
-    app = XiaoQingApp(temp_app_root)
-    app.inbound_manager = MagicMock()
+    app                                                    = XiaoQingApp(temp_app_root)
+    app.inbound_manager                                    = MagicMock()
     app.inbound_manager.has_active_ws_clients.return_value = True
     app.inbound_manager.broadcast = AsyncMock(return_value=broadcast_result)
-    app.http_sender = MagicMock()
-    app.http_sender.http_base = "http://localhost:5700"
+    app.http_sender                     = MagicMock()
+    app.http_sender.http_base           = "http://localhost:5700"
     app.http_sender.credentials_trusted = True
     app.http_sender.send_action = AsyncMock(return_value=True)
     action = {"action": "send_group_msg", "params": {"group_id": 1, "message": []}}
@@ -437,14 +437,14 @@ async def test_app_send_single_action_falls_back_when_inbound_delivers_to_nobody
 async def test_app_send_single_action_preserves_unknown_inbound_timeout(
     temp_app_root: Path,
 ):
-    app = XiaoQingApp(temp_app_root)
-    app.inbound_manager = MagicMock()
+    app                                                    = XiaoQingApp(temp_app_root)
+    app.inbound_manager                                    = MagicMock()
     app.inbound_manager.has_active_ws_clients.return_value = True
-    app.inbound_manager.broadcast = AsyncMock(
+    app.inbound_manager.broadcast                          = AsyncMock(
         return_value=BroadcastResult(target_count=2, timeout_count=2)
     )
-    app.http_sender = MagicMock()
-    app.http_sender.http_base = "http://localhost:5700"
+    app.http_sender                     = MagicMock()
+    app.http_sender.http_base           = "http://localhost:5700"
     app.http_sender.credentials_trusted = True
     app.http_sender.send_action = AsyncMock(return_value=True)
     action = {"action": "send_group_msg", "params": {"group_id": 1, "message": []}}
@@ -460,12 +460,12 @@ async def test_app_send_single_action_preserves_unknown_inbound_timeout(
 async def test_app_send_single_action_falls_back_after_inbound_broadcast_exception(
     temp_app_root: Path,
 ):
-    app = XiaoQingApp(temp_app_root)
-    app.inbound_manager = MagicMock()
+    app                                                    = XiaoQingApp(temp_app_root)
+    app.inbound_manager                                    = MagicMock()
     app.inbound_manager.has_active_ws_clients.return_value = True
     app.inbound_manager.broadcast = AsyncMock(side_effect=ConnectionError("broadcast failed"))
-    app.http_sender = MagicMock()
-    app.http_sender.http_base = "http://localhost:5700"
+    app.http_sender                     = MagicMock()
+    app.http_sender.http_base           = "http://localhost:5700"
     app.http_sender.credentials_trusted = True
     app.http_sender.send_action = AsyncMock(return_value=True)
     action = {"action": "send_group_msg", "params": {"group_id": 1, "message": []}}
@@ -480,12 +480,12 @@ async def test_app_send_single_action_falls_back_after_inbound_broadcast_excepti
 async def test_app_send_single_action_returns_false_when_zero_inbound_delivery_has_no_fallback(
     temp_app_root: Path,
 ):
-    app = XiaoQingApp(temp_app_root)
-    app.inbound_manager = MagicMock()
+    app                                                    = XiaoQingApp(temp_app_root)
+    app.inbound_manager                                    = MagicMock()
     app.inbound_manager.has_active_ws_clients.return_value = True
     app.inbound_manager.broadcast = AsyncMock(return_value=BroadcastResult())
     app.http_sender = None
-    action = {"action": "send_group_msg", "params": {"group_id": 1, "message": []}}
+    action          = {"action": "send_group_msg", "params": {"group_id": 1, "message": []}}
 
     assert await app._send_single_action(action) is False
 
@@ -494,13 +494,13 @@ async def test_app_send_single_action_returns_false_when_zero_inbound_delivery_h
 @pytest.mark.unit
 async def test_app_send_single_action_does_not_mutate_bypass_action(temp_app_root: Path):
     """Test internal _bypass_sink marker is stripped from delivery copy only."""
-    app = XiaoQingApp(temp_app_root)
+    app                 = XiaoQingApp(temp_app_root)
     app.inbound_manager = MagicMock()
     app.inbound_manager.has_active_ws_clients = Mock(return_value=False)
-    app.http_sender = MagicMock()
-    app.http_sender.http_base = "http://localhost:5700"
+    app.http_sender                     = MagicMock()
+    app.http_sender.http_base           = "http://localhost:5700"
     app.http_sender.credentials_trusted = True
-    app.http_sender.send_action = AsyncMock()
+    app.http_sender.send_action         = AsyncMock()
 
     action = {
         "action": "send_group_msg",
@@ -518,15 +518,15 @@ async def test_app_send_single_action_does_not_mutate_bypass_action(temp_app_roo
 @pytest.mark.unit
 async def test_app_send_single_action_falls_back_to_http_when_ws_send_fails(temp_app_root: Path):
     """Test WS send failures fall through to HTTP sender."""
-    app = XiaoQingApp(temp_app_root)
-    app.ws_client = MagicMock()
+    app                               = XiaoQingApp(temp_app_root)
+    app.ws_client                     = MagicMock()
     app.ws_client.credentials_trusted = True
     app.ws_client.connected = Mock(return_value=True)
     app.ws_client.send_action = AsyncMock(return_value=False)
-    app.http_sender = MagicMock()
-    app.http_sender.http_base = "http://localhost:5700"
+    app.http_sender                     = MagicMock()
+    app.http_sender.http_base           = "http://localhost:5700"
     app.http_sender.credentials_trusted = True
-    app.http_sender.send_action = AsyncMock()
+    app.http_sender.send_action         = AsyncMock()
 
     action = {"action": "send_group_msg", "params": {"group_id": 1, "message": []}}
     await app._send_single_action(action)
@@ -540,15 +540,15 @@ async def test_app_send_single_action_falls_back_to_http_when_ws_send_fails(temp
 async def test_app_send_does_not_fallback_after_committed_ws_outcome_unknown(
     temp_app_root: Path,
 ):
-    app = XiaoQingApp(temp_app_root)
+    app           = XiaoQingApp(temp_app_root)
     app.ws_client = SimpleNamespace(
-        credentials_trusted=True,
-        connected=lambda: True,
+        credentials_trusted = True,
+        connected           = lambda: True,
         send_action=AsyncMock(side_effect=OneBotActionOutcomeUnknown("send_group_msg")),
     )
     app.inbound_manager = SimpleNamespace(
-        has_active_ws_clients=lambda: True,
-        broadcast=AsyncMock(),
+        has_active_ws_clients = lambda: True,
+        broadcast             = AsyncMock(),
     )
     app.http_sender = SimpleNamespace(
         http_base="http://onebot",
@@ -568,14 +568,14 @@ async def test_app_send_does_not_fallback_after_committed_ws_outcome_unknown(
 async def test_app_wait_ws_does_not_retry_or_fallback_after_outcome_unknown(
     temp_app_root: Path,
 ):
-    app = XiaoQingApp(temp_app_root)
+    app           = XiaoQingApp(temp_app_root)
     app.ws_client = SimpleNamespace(
         credentials_trusted=True,
         connected=Mock(side_effect=[False, True]),
         send_action=AsyncMock(side_effect=OneBotActionOutcomeUnknown("send_group_msg")),
     )
     app.inbound_manager = None
-    app.http_sender = SimpleNamespace(
+    app.http_sender     = SimpleNamespace(
         http_base="http://onebot",
         send_action=AsyncMock(return_value=True),
     )
@@ -594,17 +594,17 @@ async def test_app_wait_ws_follows_a_trusted_client_rotation(temp_app_root: Path
     old_send = AsyncMock(return_value=True)
     new_send = AsyncMock(return_value=True)
     old_client = SimpleNamespace(
-        credentials_trusted=True,
-        connected=lambda: False,
-        send_action=old_send,
+        credentials_trusted = True,
+        connected           = lambda: False,
+        send_action         = old_send,
     )
     new_client = SimpleNamespace(
-        credentials_trusted=True,
-        connected=lambda: True,
-        send_action=new_send,
+        credentials_trusted = True,
+        connected           = lambda: True,
+        send_action         = new_send,
     )
     app.ws_client = old_client
-    action = {"action": "send_group_msg", "params": {"group_id": 1, "message": []}}
+    action        = {"action": "send_group_msg", "params": {"group_id": 1, "message": []}}
 
     sending = asyncio.create_task(app._send_single_action(action, wait_ws_seconds=0.3))
     await asyncio.sleep(0.03)
@@ -624,7 +624,7 @@ async def test_http_fallback_does_not_dereference_or_use_a_holder_detached_durin
     send = AsyncMock(return_value=True)
 
     class DetachingHttpHolder:
-        http_base = "http://onebot"
+        http_base   = "http://onebot"
         send_action = send
 
         @property
@@ -633,7 +633,7 @@ async def test_http_fallback_does_not_dereference_or_use_a_holder_detached_durin
             return True
 
     app.http_sender = DetachingHttpHolder()  # type: ignore[assignment]
-    action = {"action": "send_group_msg", "params": {"group_id": 1, "message": []}}
+    action          = {"action": "send_group_msg", "params": {"group_id": 1, "message": []}}
 
     assert await app._send_single_action(action) is False
     send.assert_not_awaited()
@@ -643,8 +643,8 @@ async def test_http_fallback_does_not_dereference_or_use_a_holder_detached_durin
 @pytest.mark.unit
 async def test_app_send_action_propagates_onebot_business_rejection(temp_app_root: Path):
     """Plugin callers can distinguish an acknowledged send from a OneBot rejection."""
-    app = XiaoQingApp(temp_app_root)
-    app.http_sender = MagicMock()
+    app                       = XiaoQingApp(temp_app_root)
+    app.http_sender           = MagicMock()
     app.http_sender.http_base = "http://localhost:5700"
     app.http_sender.send_action = AsyncMock(return_value=False)
     app.plugin_manager.get = Mock(return_value=None)

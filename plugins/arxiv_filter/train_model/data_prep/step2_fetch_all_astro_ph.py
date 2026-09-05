@@ -27,7 +27,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 feedparser = importlib.import_module("feedparser")
@@ -56,14 +56,14 @@ except ModuleNotFoundError:  # Direct script execution outside the repository ro
         validate_bounded_xml,
     )
 
-_utils_module = importlib.import_module(f"{__package__}.utils" if __package__ else "utils")
+_utils_module  = importlib.import_module(f"{__package__}.utils" if __package__ else "utils")
 clean_arxiv_id = _utils_module.clean_arxiv_id
 
 # ============================================================
 # 配置
 # ============================================================
-DATA_PREP_DIR = Path(__file__).resolve().parent
-CACHE_DIR = DATA_PREP_DIR / "cache"
+DATA_PREP_DIR   = Path(__file__).resolve().parent
+CACHE_DIR       = DATA_PREP_DIR / "cache"
 DATE_RANGE_FILE = CACHE_DIR / "date_range.json"
 
 API_URL = "https://export.arxiv.org/api/query"
@@ -73,27 +73,27 @@ HEADERS = {
         "XiaoQingBot-arxiv-research/2.0 (+https://github.com/SukiYume/XiaoQing)",
     )
 }
-MAX_RESULTS = 2000  # 每页最大结果数
-RETRY_LIMIT = 5  # 单次请求重试次数
-DELAY = 3  # 请求间隔（秒）
+MAX_RESULTS      = 2000  # 每页最大结果数
+RETRY_LIMIT      = 5  # 单次请求重试次数
+DELAY            = 3  # 请求间隔（秒）
 ATOM_BODY_LIMITS = BodyLimits(
-    max_wire_bytes=16 * 1024 * 1024,
-    max_decoded_bytes=32 * 1024 * 1024,
-    max_decompression_ratio=100,
+    max_wire_bytes          = 16 * 1024 * 1024,
+    max_decoded_bytes       = 32 * 1024 * 1024,
+    max_decompression_ratio = 100,
 )
 ATOM_XML_LIMITS = XmlLimits(
-    max_bytes=ATOM_BODY_LIMITS.max_decoded_bytes,
-    max_depth=64,
-    max_nodes=100_000,
-    max_attributes=200_000,
-    max_attribute_chars=4 * 1024 * 1024,
-    max_name_chars=512,
-    max_text_chars=24 * 1024 * 1024,
+    max_bytes           = ATOM_BODY_LIMITS.max_decoded_bytes,
+    max_depth           = 64,
+    max_nodes           = 100_000,
+    max_attributes      = 200_000,
+    max_attribute_chars = 4 * 1024 * 1024,
+    max_name_chars      = 512,
+    max_text_chars      = 24 * 1024 * 1024,
 )
 ARXIV_REDIRECT_POLICY = RedirectPolicy(
-    max_hops=3,
-    allowed_schemes=frozenset({"https"}),
-    same_origin_only=True,
+    max_hops         = 3,
+    allowed_schemes  = frozenset({"https"}),
+    same_origin_only = True,
 )
 
 
@@ -102,9 +102,9 @@ ARXIV_REDIRECT_POLICY = RedirectPolicy(
 # ============================================================
 
 
-def load_date_range() -> tuple[str, str]:
+def load_date_range(path: Path | None = None) -> tuple[str, str]:
     """加载日期范围"""
-    with open(DATE_RANGE_FILE, encoding="utf-8") as f:
+    with open(path or DATE_RANGE_FILE, encoding="utf-8") as f:
         payload = json.load(f)
     if not isinstance(payload, dict):
         raise ValueError("date_range.json must contain a JSON object")
@@ -112,7 +112,7 @@ def load_date_range() -> tuple[str, str]:
     if not isinstance(start, str) or not isinstance(end, str):
         raise ValueError("date_range.json must contain string start/end fields")
     start_date = datetime.strptime(start, "%Y-%m-%d")
-    end_date = datetime.strptime(end, "%Y-%m-%d")
+    end_date   = datetime.strptime(end, "%Y-%m-%d")
     if start_date > end_date:
         raise ValueError("date range start must not be after end")
     return start, end
@@ -127,8 +127,8 @@ def generate_monthly_ranges(start_str: str, end_str: str) -> list[tuple[str, str
         api_start/api_end 格式: YYYYMMDDHHMM（arXiv API 要求）
         yymm: 月份标识（如 2012 = 2020-12）
     """
-    start = datetime.strptime(start_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    end_day = datetime.strptime(end_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    start = datetime.strptime(start_str, "%Y-%m-%d").replace(tzinfo=UTC)
+    end_day = datetime.strptime(end_str, "%Y-%m-%d").replace(tzinfo=UTC)
     if start > end_day:
         raise ValueError("date range start must not be after end")
 
@@ -137,22 +137,22 @@ def generate_monthly_ranges(start_str: str, end_str: str) -> list[tuple[str, str
     end = end_day + timedelta(days=1) - timedelta(minutes=1)
 
     ranges = []
-    current = datetime(start.year, start.month, 1, tzinfo=timezone.utc)
+    current = datetime(start.year, start.month, 1, tzinfo=UTC)
 
     while current <= end:
         if current.month == 12:
-            next_month = datetime(current.year + 1, 1, 1, tzinfo=timezone.utc)
+            next_month = datetime(current.year + 1, 1, 1, tzinfo=UTC)
         else:
-            next_month = datetime(current.year, current.month + 1, 1, tzinfo=timezone.utc)
+            next_month = datetime(current.year, current.month + 1, 1, tzinfo=UTC)
 
         month_start = max(current, start)
         month_end = next_month - timedelta(minutes=1)
         if month_end > end:
             month_end = end
 
-        yymm = (current.year - 2000) * 100 + current.month
+        yymm      = (current.year - 2000) * 100 + current.month
         api_start = month_start.strftime("%Y%m%d%H%M")
-        api_end = month_end.strftime("%Y%m%d%H%M")
+        api_end   = month_end.strftime("%Y%m%d%H%M")
 
         ranges.append((api_start, api_end, yymm))
         current = next_month
@@ -162,7 +162,7 @@ def generate_monthly_ranges(start_str: str, end_str: str) -> list[tuple[str, str
 
 def yymm_to_label(yymm: int) -> str:
     """YYMM → '2020-12' 形式"""
-    year = 2000 + yymm // 100
+    year  = 2000 + yymm // 100
     month = yymm % 100
     return f"{year}-{month:02d}"
 
@@ -188,6 +188,8 @@ def load_cache(yymm: int) -> list[dict[str, str]] | None:
     if cache_file.exists():
         with open(cache_file, encoding="utf-8") as f:
             payload = json.load(f)
+        if isinstance(payload, dict):
+            payload = payload.get("papers")
         if not isinstance(payload, list) or any(
             not isinstance(record, dict)
             or any(
@@ -201,27 +203,41 @@ def load_cache(yymm: int) -> list[dict[str, str]] | None:
     return None
 
 
-def save_cache(yymm: int, papers: list[dict[str, str]]) -> None:
+def save_cache(
+    yymm: int, papers: list[dict[str, str]], *, api_start: str = "", api_end: str = ""
+) -> None:
     """保存某月的缓存"""
     MONTHLY_DIR.mkdir(parents=True, exist_ok=True)
     cache_file = MONTHLY_DIR / f"{yymm}.json"
-    atomic_write_text(cache_file, json.dumps(papers, ensure_ascii=False))
+    atomic_write_text(
+        cache_file,
+        json.dumps(
+            {
+                "papers": papers,
+                "query_range": [api_start, api_end],
+                "completed": True,
+            },
+            ensure_ascii=False,
+        ),
+    )
 
 
 def _partial_path(yymm: int) -> Path:
     return MONTHLY_DIR / f"{yymm}.partial.json"
 
 
-def load_checkpoint(yymm: int) -> FetchResult:
+def load_checkpoint(yymm: int, *, api_start: str = "", api_end: str = "") -> FetchResult:
     path = _partial_path(yymm)
     if not path.exists():
         return FetchResult([], False, 0, None)
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"invalid checkpoint: {path}")
-    papers = payload.get("papers")
-    completed = payload.get("completed")
-    next_offset = payload.get("next_offset")
+    if payload.get("query_range", ["", ""]) != [api_start, api_end]:
+        return FetchResult([], False, 0, None)
+    papers        = payload.get("papers")
+    completed     = payload.get("completed")
+    next_offset   = payload.get("next_offset")
     total_results = payload.get("total_results")
     if (
         not isinstance(papers, list)
@@ -242,13 +258,16 @@ def load_checkpoint(yymm: int) -> FetchResult:
     return FetchResult(papers, completed, next_offset, total_results)
 
 
-def save_checkpoint(yymm: int, result: FetchResult) -> None:
+def save_checkpoint(
+    yymm: int, result: FetchResult, *, api_start: str = "", api_end: str = ""
+) -> None:
     MONTHLY_DIR.mkdir(parents=True, exist_ok=True)
     path = _partial_path(yymm)
     atomic_write_text(
         path,
         json.dumps(
             {
+                "query_range": [api_start, api_end],
                 "papers": result.papers,
                 "next_offset": result.next_offset,
                 "total_results": result.total_results,
@@ -259,14 +278,27 @@ def save_checkpoint(yymm: int, result: FetchResult) -> None:
     )
 
 
-def is_month_finalized(yymm: int) -> bool:
+def is_month_finalized(yymm: int, *, api_start: str = "", api_end: str = "") -> bool:
     """
     当月是否已定型（不再需要更新）。
     条件：缓存存在 且 该月已过去（当月数据可能有新增，需重新获取）。
     """
-    today = datetime.now(timezone.utc)
+    today        = datetime.now(UTC)
     current_yymm = (today.year - 2000) * 100 + today.month
-    return (MONTHLY_DIR / f"{yymm}.json").is_file() and yymm < current_yymm
+    identity     = MONTHLY_DIR / f"{yymm}.json"
+    if not identity.is_file():
+        return False
+    # 查询边界变化后从头抓取；历史无身份缓存也通过此路径重新生成。
+    try:
+        payload = json.loads(identity.read_text(encoding="utf-8"))
+        matches = (
+            isinstance(payload, dict)
+            and payload.get("completed") is True
+            and payload.get("query_range") == [api_start, api_end]
+        )
+    except (OSError, ValueError):
+        return False
+    return matches and (MONTHLY_DIR / f"{yymm}.json").is_file() and yymm < current_yymm
 
 
 # ============================================================
@@ -279,8 +311,8 @@ def fetch_month(
     api_end: str,
     *,
     initial_papers: list[dict[str, str]] | None = None,
-    start_offset: int = 0,
-    initial_total_results: int | None = None,
+    start_offset: int                           = 0,
+    initial_total_results: int | None           = None,
 ) -> FetchResult:
     """
     获取指定月份的所有 astrophysics 论文（标题 + 摘要）。
@@ -292,13 +324,13 @@ def fetch_month(
         type(initial_total_results) is not int or initial_total_results < 0
     ):
         raise ValueError("initial_total_results must be a non-negative integer or None")
-    papers = list(initial_papers or [])
-    offset = start_offset
+    papers        = list(initial_papers or [])
+    offset        = start_offset
     total_results = initial_total_results
 
     while True:
         search_query = f"astrophysics AND submittedDate:[{api_start} TO {api_end}]"
-        params = {
+        params       = {
             "search_query": search_query,
             "start": offset,
             "max_results": MAX_RESULTS,
@@ -313,11 +345,11 @@ def fetch_month(
                 response = requests_request_bounded(
                     "GET",
                     API_URL,
-                    limits=ATOM_BODY_LIMITS,
-                    mime_policy=XML_MIME_POLICY,
-                    redirect_policy=ARXIV_REDIRECT_POLICY,
-                    headers=HEADERS,
-                    request_kwargs={"params": params, "timeout": 120},
+                    limits          = ATOM_BODY_LIMITS,
+                    mime_policy     = XML_MIME_POLICY,
+                    redirect_policy = ARXIV_REDIRECT_POLICY,
+                    headers         = HEADERS,
+                    request_kwargs  = {"params": params, "timeout": 120},
                 )
                 xml_body = validate_bounded_xml(response, limits=ATOM_XML_LIMITS)
                 feed = feedparser.parse(xml_body)
@@ -344,7 +376,7 @@ def fetch_month(
             if not re.match(r"\d{4}\.\d{4,5}", arxiv_id):
                 continue
 
-            title = re.sub(r"\s+", " ", entry.title.strip())
+            title    = re.sub(r"\s+", " ", entry.title.strip())
             abstract = re.sub(r"\s+", " ", entry.get("summary", "").strip())
             batch.append(
                 {
@@ -389,16 +421,16 @@ def main() -> None:
     print(f"共 {len(monthly_ranges)} 个月\n")
 
     # 2. 按月获取
-    all_papers = []
+    all_papers    = []
     fetched_count = 0
-    cached_count = 0
+    cached_count  = 0
 
     for i, (api_start, api_end, yymm) in enumerate(monthly_ranges):
-        label = yymm_to_label(yymm)
+        label    = yymm_to_label(yymm)
         progress = f"[{i + 1}/{len(monthly_ranges)}]"
 
         # 检查缓存
-        if is_month_finalized(yymm):
+        if is_month_finalized(yymm, api_start=api_start, api_end=api_end):
             cached = load_cache(yymm)
             if cached is None:
                 continue
@@ -409,23 +441,23 @@ def main() -> None:
 
         # 从 API 获取
         print(f"  {progress} {label}: 获取中...")
-        checkpoint = load_checkpoint(yymm)
+        checkpoint = load_checkpoint(yymm, api_start=api_start, api_end=api_end)
         result = fetch_month(
             api_start,
             api_end,
-            initial_papers=checkpoint.papers,
-            start_offset=checkpoint.next_offset,
-            initial_total_results=checkpoint.total_results,
+            initial_papers        = checkpoint.papers,
+            start_offset          = checkpoint.next_offset,
+            initial_total_results = checkpoint.total_results,
         )
 
         if result.completed:
-            save_cache(yymm, result.papers)
+            save_cache(yymm, result.papers, api_start=api_start, api_end=api_end)
             _partial_path(yymm).unlink(missing_ok=True)
             all_papers.extend(result.papers)
             fetched_count += len(result.papers)
             print(f"  {progress} {label}: {len(result.papers):>5} 篇 (完整缓存已发布)")
         elif result.papers:
-            save_checkpoint(yymm, result)
+            save_checkpoint(yymm, result, api_start=api_start, api_end=api_end)
             print(
                 f"  {progress} {label}: {len(result.papers):>5} 篇 "
                 f"(partial, 下次从 offset={result.next_offset} 续传)"
@@ -440,15 +472,15 @@ def main() -> None:
     print(f"从缓存加载: {cached_count} 条")
     print(f"新获取:     {fetched_count} 条")
 
-    seen = set()
-    total_unique = 0
+    seen                         = set()
+    total_unique                 = 0
     month_counts: dict[int, int] = {}
     for p in all_papers:
         if p["arxiv_id"] not in seen:
             seen.add(p["arxiv_id"])
             total_unique += 1
             try:
-                ym = int(p["arxiv_id"][:4])
+                ym               = int(p["arxiv_id"][:4])
                 month_counts[ym] = month_counts.get(ym, 0) + 1
             except ValueError:
                 pass

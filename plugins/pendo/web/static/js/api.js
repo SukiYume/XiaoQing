@@ -1,6 +1,6 @@
 /** Pendo Web 的同源请求、会话与下载边界。 */
 
-const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+const SAFE_METHODS              = new Set(['GET', 'HEAD', 'OPTIONS']);
 const DEFAULT_DOWNLOAD_FILENAME = 'download.bin';
 
 // CSRF 令牌只保存在当前页面内存中，任何会话失效都会立即清空。
@@ -17,9 +17,9 @@ function formatErrorDetail(detail) {
 }
 
 function rememberSession(data, invalidMessage) {
-    const ownerId = String(data?.owner_id ?? '').trim();
+    const ownerId       = String(data?.owner_id ?? '').trim();
     const nextCsrfToken = String(data?.csrf_token ?? '').trim();
-    const ok = Boolean(ownerId && nextCsrfToken);
+    const ok            = Boolean(ownerId && nextCsrfToken);
     if (!ok) {
         csrfToken = '';
         return { ok: false, message: invalidMessage };
@@ -35,7 +35,7 @@ function rememberSession(data, invalidMessage) {
 
 function sessionHeaders(options = {}) {
     const headers = new Headers(options.headers);
-    const method = String(options.method || 'GET').toUpperCase();
+    const method  = String(options.method || 'GET').toUpperCase();
     if (typeof options.body === 'string' && !headers.has('Content-Type')) {
         headers.set('Content-Type', 'application/json');
     }
@@ -87,7 +87,7 @@ async function request(path, options = {}) {
 
 // 优先采用 RFC 5987 的 UTF-8 文件名，再回退到传统 filename 参数。
 function downloadFilename(disposition) {
-    let filename = '';
+    let filename       = '';
     const encodedMatch = disposition.match(/filename\*\s*=\s*([^;]+)/i);
     if (encodedMatch) {
         const encoded = encodedMatch[1]
@@ -103,7 +103,7 @@ function downloadFilename(disposition) {
 
     if (!filename) {
         const quotedMatch = disposition.match(/filename\s*=\s*"((?:\\.|[^"])*)"/i);
-        const plainMatch = disposition.match(/filename\s*=\s*([^;]+)/i);
+        const plainMatch  = disposition.match(/filename\s*=\s*([^;]+)/i);
         filename = quotedMatch?.[1].replace(/\\([\\"])/g, '$1') || plainMatch?.[1].trim() || '';
     }
 
@@ -151,17 +151,21 @@ export const api = {
 };
 
 export function apiUpload(path, body, headers = {}) {
-    return request(path, { method: 'POST', body, headers });
+    // 文件名经过 UTF-8 百分号编码，保证 HTTP 请求头只含 ASCII。
+    const encodedHeaders = Object.fromEntries(Object.entries(headers).map(([key, value]) => [
+        key, key.toLowerCase() === 'x-transfer-filename' ? encodeURIComponent(String(value)) : value,
+    ]));
+    return request(path, { method: 'POST', body, headers: encodedHeaders });
 }
 
 export async function apiDownload(path, body) {
     const options = { method: 'POST', body: JSON.stringify(body) };
-    const res = await fetchApi(path, options);
+    const res     = await fetchApi(path, options);
     if (!res.ok) {
         throw new Error(await parseErrorResponse(res));
     }
 
-    const blob = await res.blob();
+    const blob        = await res.blob();
     const disposition = res.headers.get('content-disposition') || '';
     return { blob, filename: downloadFilename(disposition) };
 }
@@ -195,9 +199,7 @@ export function createDemoSession() {
 }
 
 export async function logout() {
-    try {
-        await request('/auth/logout', { method: 'POST' });
-    } finally {
-        csrfToken = '';
-    }
+    // 网络失败保留令牌，用户可以恢复连接后直接重试。
+    await request('/auth/logout', { method: 'POST' });
+    csrfToken = '';
 }

@@ -18,7 +18,7 @@ from tests.helpers.app_test_support import (
 )
 
 mock_dependencies = _fixture_support.mock_dependencies
-temp_app_root = _fixture_support.temp_app_root
+temp_app_root     = _fixture_support.temp_app_root
 
 
 @pytest.mark.asyncio
@@ -28,7 +28,7 @@ async def test_app_start(temp_app_root: Path):
     app = XiaoQingApp(temp_app_root)
 
     # Mock plugin manager methods
-    app.plugin_manager.load_all = Mock()
+    app.plugin_manager.load_all   = Mock()
     app.plugin_manager.wait_inits = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
 
@@ -73,8 +73,8 @@ async def test_startup_factory_reentrant_security_update_revokes_provisional_can
 ):
     from core.config import ConfigSnapshot
 
-    app = XiaoQingApp(temp_app_root)
-    app.plugin_manager.load_all = Mock()
+    app                           = XiaoQingApp(temp_app_root)
+    app.plugin_manager.load_all   = Mock()
     app.plugin_manager.wait_inits = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
     app.plugin_manager.list_runtime_plugins = Mock(return_value=[])
@@ -93,19 +93,19 @@ async def test_startup_factory_reentrant_security_update_revokes_provisional_can
         "inbound_http_base": "",
     }
     old_snapshot = ConfigSnapshot(
-        config=old_config,
-        secrets={**app.secrets, "inbound_token": "rev1-old"},
-        revision=1,
+        config   = old_config,
+        secrets  = {**app.secrets, "inbound_token": "rev1-old"},
+        revision = 1,
     )
     new_snapshot = ConfigSnapshot(
-        config=new_config,
-        secrets={**app.secrets, "inbound_token": "rev2-new"},
-        revision=2,
+        config   = new_config,
+        secrets  = {**app.secrets, "inbound_token": "rev2-new"},
+        revision = 2,
     )
     candidate = MagicMock(
-        config_key=("http://127.0.0.1:12000", "", 8, 200, 5.0, False),
-        start=AsyncMock(),
-        stop=AsyncMock(),
+        config_key = ("http://127.0.0.1:12000", "", 8, 200, 5.0, False),
+        start      = AsyncMock(),
+        stop       = AsyncMock(),
     )
     factory_calls = 0
 
@@ -154,8 +154,8 @@ async def test_startup_ownership_retry_is_bounded_and_rolls_back(
     timeout_seconds: float,
     expected_attempts: int,
 ):
-    app = XiaoQingApp(temp_app_root)
-    app.plugin_manager.load_all = Mock()
+    app                           = XiaoQingApp(temp_app_root)
+    app.plugin_manager.load_all   = Mock()
     app.plugin_manager.wait_inits = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
     app.plugin_manager.list_runtime_plugins = Mock(return_value=[])
@@ -188,8 +188,8 @@ async def test_startup_ownership_retry_is_bounded_and_rolls_back(
 async def test_app_start_failure_rolls_back_every_resource_and_allows_retry(
     temp_app_root: Path,
 ):
-    app = XiaoQingApp(temp_app_root)
-    app.plugin_manager.load_all = Mock()
+    app                           = XiaoQingApp(temp_app_root)
+    app.plugin_manager.load_all   = Mock()
     app.plugin_manager.wait_inits = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
     app.plugin_manager.list_runtime_plugins = Mock(return_value=[])
@@ -197,10 +197,10 @@ async def test_app_start_failure_rolls_back_every_resource_and_allows_retry(
     second_session = MagicMock(close=AsyncMock())
     failed_manager = MagicMock()
     failed_manager.start = AsyncMock(side_effect=OSError("inbound bind failed"))
-    failed_manager.stop = AsyncMock()
-    healthy_manager = MagicMock()
+    failed_manager.stop   = AsyncMock()
+    healthy_manager       = MagicMock()
     healthy_manager.start = AsyncMock()
-    healthy_manager.stop = AsyncMock()
+    healthy_manager.stop  = AsyncMock()
 
     with (
         patch(
@@ -243,8 +243,8 @@ async def test_timezone_reload_after_clean_start_rollback_is_used_on_retry(
 ):
     from core.config import ConfigSnapshot
 
-    app = XiaoQingApp(temp_app_root)
-    app.plugin_manager.load_all = Mock()
+    app                           = XiaoQingApp(temp_app_root)
+    app.plugin_manager.load_all   = Mock()
     app.plugin_manager.wait_inits = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
     app.plugin_manager.list_runtime_plugins = Mock(return_value=[])
@@ -274,9 +274,9 @@ async def test_timezone_reload_after_clean_start_rollback_is_used_on_retry(
 
         app._apply_config(
             ConfigSnapshot(
-                config={**app.config, "timezone": "UTC"},
-                secrets=app.secrets,
-                revision=app.config_manager.revision + 1,
+                config   = {**app.config, "timezone": "UTC"},
+                secrets  = app.secrets,
+                revision = app.config_manager.revision + 1,
             )
         )
         config_task = app._config_apply_task
@@ -302,8 +302,8 @@ async def test_timezone_reload_after_clean_start_rollback_is_used_on_retry(
 async def test_start_rollback_cleanup_failure_retains_ownership_and_blocks_retry(
     temp_app_root: Path,
 ):
-    app = XiaoQingApp(temp_app_root)
-    app.plugin_manager.load_all = Mock()
+    app                           = XiaoQingApp(temp_app_root)
+    app.plugin_manager.load_all   = Mock()
     app.plugin_manager.wait_inits = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
     app.plugin_manager.list_runtime_plugins = Mock(return_value=[])
@@ -337,7 +337,7 @@ async def test_start_rollback_cleanup_failure_retains_ownership_and_blocks_retry
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_concurrent_and_repeated_start_calls_create_one_runtime(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
+    app     = XiaoQingApp(temp_app_root)
     entered = asyncio.Event()
     release = asyncio.Event()
 
@@ -377,7 +377,7 @@ async def test_concurrent_and_repeated_start_calls_create_one_runtime(temp_app_r
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_start_cancellation_finishes_rollback_before_propagating(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
+    app     = XiaoQingApp(temp_app_root)
     entered = asyncio.Event()
     blocker = asyncio.Event()
 
@@ -421,8 +421,8 @@ async def test_start_fatal_is_task_safe_and_rolls_back(temp_app_root: Path):
     class StartupFatal(BaseException):
         pass
 
-    app = XiaoQingApp(temp_app_root)
-    fatal = StartupFatal("plugin init fatal")
+    app                         = XiaoQingApp(temp_app_root)
+    fatal                       = StartupFatal("plugin init fatal")
     app.plugin_manager.load_all = Mock()
     app.plugin_manager.wait_inits = AsyncMock(side_effect=fatal)
     app.plugin_manager.list_runtime_plugins = Mock(return_value=[])
@@ -485,13 +485,13 @@ async def test_runtime_config_ws_fatal_is_task_safe(temp_app_root: Path):
     class WsStopFatal(BaseException):
         pass
 
-    app = XiaoQingApp(temp_app_root)
-    fatal = WsStopFatal("ws stop fatal")
+    app              = XiaoQingApp(temp_app_root)
+    fatal            = WsStopFatal("ws stop fatal")
     app.http_session = MagicMock()
     app.ws_client = MagicMock(stop=AsyncMock(side_effect=fatal))
     snapshot = ConfigSnapshot(
-        config={"enable_ws_client": False, "onebot_ws_uri": ""},
-        secrets={},
+        config  = {"enable_ws_client": False, "onebot_ws_uri": ""},
+        secrets = {},
     )
 
     task = asyncio.create_task(app._apply_runtime_config(snapshot))
@@ -508,8 +508,8 @@ async def test_runtime_config_ws_fatal_is_task_safe(temp_app_root: Path):
 async def test_start_after_terminal_stop_is_rejected_and_stop_is_idempotent(
     temp_app_root: Path,
 ):
-    app = XiaoQingApp(temp_app_root)
-    app.plugin_manager.load_all = Mock()
+    app                           = XiaoQingApp(temp_app_root)
+    app.plugin_manager.load_all   = Mock()
     app.plugin_manager.wait_inits = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
     app.plugin_manager.list_runtime_plugins = Mock(return_value=[])
@@ -555,10 +555,10 @@ async def test_start_failure_at_each_phase_rolls_back_and_allows_retry(
         config["onebot_http_base"] = "http://127.0.0.1:11001"
     if failure_phase == "ws_constructor":
         config["enable_ws_client"] = True
-        config["onebot_ws_uri"] = "ws://127.0.0.1:11000/ws"
+        config["onebot_ws_uri"]    = "ws://127.0.0.1:11000/ws"
     if failure_phase in {"inbound_factory", "inbound_start"}:
         config["enable_inbound_server"] = True
-        config["inbound_http_base"] = "http://127.0.0.1:12000"
+        config["inbound_http_base"]     = "http://127.0.0.1:12000"
     config_path.write_text(json.dumps(config), encoding="utf-8")
 
     app = XiaoQingApp(temp_app_root)
@@ -573,7 +573,7 @@ async def test_start_failure_at_each_phase_rolls_back_and_allows_retry(
 
     if failure_phase == "scheduler":
         original_ensure_started = app.scheduler.ensure_started
-        ensure_calls = 0
+        ensure_calls            = 0
 
         def fail_scheduler_once() -> None:
             nonlocal ensure_calls
@@ -586,7 +586,7 @@ async def test_start_failure_at_each_phase_rolls_back_and_allows_retry(
 
     if failure_phase == "reschedule":
         original_reschedule = app._reschedule
-        reschedule_calls = 0
+        reschedule_calls    = 0
 
         def fail_reschedule_once(name: str) -> None:
             nonlocal reschedule_calls
@@ -604,17 +604,17 @@ async def test_start_failure_at_each_phase_rolls_back_and_allows_retry(
         if failure_phase == "client_session"
         else [first_session, second_session]
     )
-    healthy_sender = MagicMock()
+    healthy_sender                = MagicMock()
     sender_side_effect: list[Any] = (
         [RuntimeError("sender failed"), healthy_sender]
         if failure_phase == "http_sender"
         else [healthy_sender]
     )
-    healthy_ws = MagicMock()
-    healthy_ws.set_on_connect = Mock()
+    healthy_ws                    = MagicMock()
+    healthy_ws.set_on_connect     = Mock()
     healthy_ws.connect_and_listen = AsyncMock()
-    healthy_ws.stop = AsyncMock()
-    ws_side_effect: list[Any] = (
+    healthy_ws.stop               = AsyncMock()
+    ws_side_effect: list[Any]     = (
         [RuntimeError("ws failed"), healthy_ws]
         if failure_phase == "ws_constructor"
         else [healthy_ws]
@@ -664,13 +664,13 @@ async def test_start_failure_at_each_phase_rolls_back_and_allows_retry(
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_app_start_creates_shared_http_session_with_default_timeout(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
-    app.plugin_manager.load_all = Mock()
+    app                           = XiaoQingApp(temp_app_root)
+    app.plugin_manager.load_all   = Mock()
     app.plugin_manager.wait_inits = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
 
-    mock_session = MagicMock()
-    mock_session.close = AsyncMock()
+    mock_session             = MagicMock()
+    mock_session.close       = AsyncMock()
     captured: dict[str, Any] = {}
 
     def _fake_client_session(*args, **kwargs):
@@ -694,14 +694,14 @@ async def test_app_start_tracks_and_stops_background_tasks(temp_app_root: Path):
     config_file = temp_app_root / "config" / "config.json"
     with open(config_file, encoding="utf-8") as f:
         config = json.load(f)
-    config["enable_ws_client"] = True
-    config["onebot_ws_uri"] = "ws://localhost:6700/ws"
+    config["enable_ws_client"]      = True
+    config["onebot_ws_uri"]         = "ws://localhost:6700/ws"
     config["enable_plugin_watcher"] = True
     with open(config_file, "w", encoding="utf-8") as f:
         json.dump(config, f)
 
-    app = XiaoQingApp(temp_app_root)
-    app.plugin_manager.load_all = Mock()
+    app                           = XiaoQingApp(temp_app_root)
+    app.plugin_manager.load_all   = Mock()
     app.plugin_manager.wait_inits = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
 
@@ -723,9 +723,9 @@ async def test_app_start_tracks_and_stops_background_tasks(temp_app_root: Path):
     app.config_manager.watch = config_watch
     app.plugin_manager.watch = plugin_watch
 
-    mock_ws_client = MagicMock()
+    mock_ws_client                = MagicMock()
     mock_ws_client.set_on_connect = Mock()
-    mock_ws_client.stop = AsyncMock()
+    mock_ws_client.stop           = AsyncMock()
 
     async def ws_connect_and_listen(handler):
         await _block_until_cancelled("ws")
@@ -754,9 +754,9 @@ async def test_app_apply_config_toggles_plugin_watch_task(temp_app_root: Path):
     """Test _apply_config can enable/disable plugin watcher at runtime."""
     from core.config import ConfigSnapshot
 
-    app = XiaoQingApp(temp_app_root)
+    app                  = XiaoQingApp(temp_app_root)
     app._lifecycle_state = type(app._lifecycle_state).RUNNING
-    task_cancelled = {"plugin": False}
+    task_cancelled       = {"plugin": False}
 
     async def plugin_watch():
         try:
@@ -765,15 +765,15 @@ async def test_app_apply_config_toggles_plugin_watch_task(temp_app_root: Path):
             task_cancelled["plugin"] = True
             raise
 
-    app.plugin_manager.watch = plugin_watch
-    app._config_watch_task = MagicMock()
+    app.plugin_manager.watch                 = plugin_watch
+    app._config_watch_task                   = MagicMock()
     app._config_watch_task.done.return_value = False
 
     app._apply_config(
         ConfigSnapshot(
-            config={**app.config, "enable_plugin_watcher": True},
-            secrets=app.secrets,
-            revision=1,
+            config   = {**app.config, "enable_plugin_watcher": True},
+            secrets  = app.secrets,
+            revision = 1,
         )
     )
     await asyncio.sleep(0)
@@ -783,9 +783,9 @@ async def test_app_apply_config_toggles_plugin_watch_task(temp_app_root: Path):
 
     app._apply_config(
         ConfigSnapshot(
-            config={**app.config, "enable_plugin_watcher": False},
-            secrets=app.secrets,
-            revision=2,
+            config   = {**app.config, "enable_plugin_watcher": False},
+            secrets  = app.secrets,
+            revision = 2,
         )
     )
     await asyncio.sleep(0)
@@ -799,14 +799,14 @@ async def test_app_apply_config_toggles_plugin_watch_task(temp_app_root: Path):
 @pytest.mark.unit
 async def test_app_start_binds_inbound_status_providers(temp_app_root: Path):
     """Test inbound manager gets status providers before startup."""
-    app = XiaoQingApp(temp_app_root)
-    app.plugin_manager.load_all = Mock()
+    app                           = XiaoQingApp(temp_app_root)
+    app.plugin_manager.load_all   = Mock()
     app.plugin_manager.wait_inits = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
 
-    mock_manager = MagicMock()
+    mock_manager       = MagicMock()
     mock_manager.start = AsyncMock()
-    mock_manager.stop = AsyncMock()
+    mock_manager.stop  = AsyncMock()
 
     with patch("core.app_ingress.InboundManager.from_config", return_value=mock_manager):
         await app.start()
@@ -834,7 +834,7 @@ async def test_app_start_with_http_configured(temp_app_root: Path):
     app = XiaoQingApp(temp_app_root)
 
     # Mock plugin manager
-    app.plugin_manager.load_all = Mock()
+    app.plugin_manager.load_all   = Mock()
     app.plugin_manager.wait_inits = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
 
@@ -863,7 +863,7 @@ async def test_app_start_with_ws_disabled(temp_app_root: Path):
     app = XiaoQingApp(temp_app_root)
 
     # Mock plugin manager
-    app.plugin_manager.load_all = Mock()
+    app.plugin_manager.load_all   = Mock()
     app.plugin_manager.wait_inits = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
 
@@ -886,7 +886,7 @@ async def test_app_stop(temp_app_root: Path):
     app.plugin_manager.unload_plugin = AsyncMock()
 
     # Start the app first
-    app.plugin_manager.load_all = Mock()
+    app.plugin_manager.load_all   = Mock()
     app.plugin_manager.wait_inits = AsyncMock()
     app.plugin_manager.schedule_definitions = Mock(return_value=[])
     await app.start()

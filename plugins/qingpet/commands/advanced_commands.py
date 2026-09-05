@@ -33,7 +33,7 @@ _EXPLORE_LOCATIONS = {
     "ruins": "ruins",
 }
 _RANKING_TYPES = ("care_score", "intimacy", "experience", "coins")
-_TASK_NAMES = {
+_TASK_NAMES    = {
     "feed": "喂食宠物",
     "clean": "清洁宠物",
     "play": "玩耍互动",
@@ -78,20 +78,20 @@ def handle_train(
         return False, "无效训练类型，可用: 体力、敏捷、智力"
 
     user_service = UserService(db)
-    user = user_service.get_or_create_user(user_id, resolved_group_id)
+    user         = user_service.get_or_create_user(user_id, resolved_group_id)
 
-    pet_service = PetService(db)
+    pet_service   = PetService(db)
     training_type = _TRAINING_TYPES.get(requested_type, "strength")
     success, message, _coins = pet_service.train_pet(
         pet,
         user,
-        training_type=training_type,
-        spam_decay_factor=spam_decay_factor,
+        training_type     = training_type,
+        spam_decay_factor = spam_decay_factor,
     )
 
     if success:
         status_text = format_status_text(pet)
-        message = f"{message}\n\n{status_text}"
+        message     = f"{message}\n\n{status_text}"
 
     return success, with_pet_name(pet, message)
 
@@ -117,20 +117,20 @@ def handle_explore(
         return False, "无效探索地点，可用: 森林、海边、山洞、废墟"
 
     user_service = UserService(db)
-    user = user_service.get_or_create_user(user_id, resolved_group_id)
+    user         = user_service.get_or_create_user(user_id, resolved_group_id)
 
     pet_service = PetService(db)
-    location = _EXPLORE_LOCATIONS.get(requested_location, "forest")
+    location    = _EXPLORE_LOCATIONS.get(requested_location, "forest")
     success, message, _coins = pet_service.explore(
         pet,
         user,
-        location=location,
-        spam_decay_factor=spam_decay_factor,
+        location          = location,
+        spam_decay_factor = spam_decay_factor,
     )
 
     if success:
         status_text = format_status_text(pet)
-        message = f"{message}\n\n{status_text}"
+        message     = f"{message}\n\n{status_text}"
 
     return success, with_pet_name(pet, message)
 
@@ -146,7 +146,7 @@ def handle_treat(user_id: str, group_id: int, args: str, db: Database) -> tuple[
 
     item_id = resolved_args.strip() or "medicine"
 
-    item_service = ItemService(db)
+    item_service  = ItemService(db)
     resolved_item = item_service.resolve_item(item_id)
     if resolved_item is None:
         return False, "该药品不存在"
@@ -160,10 +160,10 @@ def handle_treat(user_id: str, group_id: int, args: str, db: Database) -> tuple[
         resolved_group_id,
         pet.id,
         item_id,
-        health_gain=item.health_gain,
-        clean_gain=item.clean_gain,
-        daily_limit=20,
-        cooldown_seconds=300,
+        health_gain      = item.health_gain,
+        clean_gain       = item.clean_gain,
+        daily_limit      = 20,
+        cooldown_seconds = 300,
     )
     if result.success and result.pet is not None:
         pet.__dict__.update(result.pet.__dict__)
@@ -180,7 +180,7 @@ def handle_backpack(user_id: str, group_id: int, args: str, db: Database) -> tup
     if args.strip():
         return False, "背包命令不接受额外参数\n用法: /宠物 背包"
     item_service = ItemService(db)
-    inventory = item_service.get_inventory(user_id, group_id)
+    inventory    = item_service.get_inventory(user_id, group_id)
 
     if not inventory.items:
         return True, "你的背包是空的\n使用 /宠物 商店 查看可购买的道具"
@@ -201,7 +201,7 @@ def handle_shop(user_id: str, group_id: int, args: str, db: Database) -> tuple[b
     if args.strip():
         return False, "商店命令不接受额外参数\n用法: /宠物 商店"
     item_service = ItemService(db)
-    items = item_service.get_all_items()
+    items        = item_service.get_all_items()
 
     shop_list: list[str] = []
     for item_id, item in items.items():
@@ -236,7 +236,7 @@ def handle_buy(user_id: str, group_id: int, args: str, db: Database) -> tuple[bo
         return False, "参数过多\n用法: /宠物 购买 <道具名> [数量]"
 
     item_id = parts[0]
-    amount = 1
+    amount  = 1
     if len(parts) == 2:
         parsed_amount = parse_int(parts[1])
         if parsed_amount is None:
@@ -244,7 +244,7 @@ def handle_buy(user_id: str, group_id: int, args: str, db: Database) -> tuple[bo
         amount = parsed_amount
 
     user_service = UserService(db)
-    user = user_service.get_or_create_user(user_id, group_id)
+    user         = user_service.get_or_create_user(user_id, group_id)
     if user.is_banned_active():
         return False, "你已被封禁，无法操作"
 
@@ -269,9 +269,9 @@ def handle_use(user_id: str, group_id: int, args: str, db: Database) -> tuple[bo
         return False, "请指定要使用的道具\n用法: /宠物 使用 <道具名>"
 
     user_service = UserService(db)
-    user = user_service.get_or_create_user(user_id, resolved_group_id)
+    user         = user_service.get_or_create_user(user_id, resolved_group_id)
 
-    item_service = ItemService(db)
+    item_service  = ItemService(db)
     resolved_item = item_service.resolve_item(item_id)
     if resolved_item is None:
         return False, "道具不存在"
@@ -294,8 +294,8 @@ def handle_gift(user_id: str, group_id: int, args: str, db: Database) -> tuple[b
         return False, "格式错误\n用法: /宠物 送礼 @QQ号 <道具名> [数量]"
 
     target_user_id = match.group(1)
-    item_id = match.group(2)
-    amount_text = match.group(3)
+    item_id        = match.group(2)
+    amount_text    = match.group(3)
     if amount_text is not None and len(amount_text) > 3:
         return False, "单次数量不能超过99"
     amount = int(amount_text) if amount_text is not None else 1
@@ -304,7 +304,7 @@ def handle_gift(user_id: str, group_id: int, args: str, db: Database) -> tuple[b
         return False, message
 
     user_service = UserService(db)
-    user = user_service.get_or_create_user(user_id, group_id)
+    user         = user_service.get_or_create_user(user_id, group_id)
 
     if user.is_banned_active():
         return False, "你已被封禁，无法操作"
@@ -330,7 +330,7 @@ def handle_visit(
     target_user_id = match.group(1)
 
     user_service = UserService(db)
-    user = user_service.get_or_create_user(user_id, group_id)
+    user         = user_service.get_or_create_user(user_id, group_id)
 
     if user.is_banned_active():
         return False, "你已被封禁，无法操作"
@@ -380,7 +380,7 @@ def handle_message(user_id: str, group_id: int, args: str, db: Database) -> tupl
         return False, "格式错误\n用法: /宠物 留言 @QQ号 <内容>\n用法: /宠物 留言 （查看你的留言）"
 
     target_user_id = match.group(1)
-    message_text = match.group(2)
+    message_text   = match.group(2)
 
     social_service = SocialService(db)
     return social_service.leave_message(user_id, target_user_id, group_id, message_text)
@@ -393,7 +393,7 @@ def handle_ranking(user_id: str, group_id: int, args: str, db: Database) -> tupl
         return False, f"无效的排行类型\n可用类型: {', '.join(_RANKING_TYPES)}"
 
     social_service = SocialService(db)
-    ranking = social_service.get_ranking(group_id, ranking_type, 10)
+    ranking        = social_service.get_ranking(group_id, ranking_type, 10)
 
     return True, format_ranking_list(ranking, ranking_type)
 
@@ -419,11 +419,11 @@ def handle_activity(user_id: str, group_id: int, args: str, db: Database) -> tup
 
     lines = ["🎉 **群活动**", ""]
     for act in activities:
-        title = act.get("title", act.get("activity_type", "未知活动"))
-        desc = act.get("description", "")
-        current = act.get("current_value", 0)
-        target = act.get("target_value", 0)
-        reward = act.get("reward_coins", 0)
+        title    = act.get("title", act.get("activity_type", "未知活动"))
+        desc     = act.get("description", "")
+        current  = act.get("current_value", 0)
+        target   = act.get("target_value", 0)
+        reward   = act.get("reward_coins", 0)
         progress = min(100, int(current / target * 100)) if target > 0 else 0
 
         lines.append(f"📌 **#{act['id']} {title}**")
@@ -456,7 +456,7 @@ def handle_task(user_id: str, group_id: int, args: str, db: Database) -> tuple[b
         return False, "未知任务命令\n用法: /宠物 任务 [领取]"
 
     if requested in {"领取", "claim"}:
-        claimed_total = 0
+        claimed_total            = 0
         claimed_tasks: list[str] = []
         for task_type, task_name in _TASK_NAMES.items():
             reward = db.claim_task_reward(user_id, resolved_group_id, task_type)
@@ -471,23 +471,23 @@ def handle_task(user_id: str, group_id: int, args: str, db: Database) -> tuple[b
             )
         return True, with_pet_name(pet, "暂无可领取的任务奖励（未完成或已领取）")
 
-    tasks = db.get_or_create_daily_tasks(user_id, resolved_group_id)
-    lines = ["📋 **每日任务**", ""]
+    tasks         = db.get_or_create_daily_tasks(user_id, resolved_group_id)
+    lines         = ["📋 **每日任务**", ""]
     all_completed = True
     for task in tasks:
         task_type = task["task_type"]
-        current = task["current_value"]
-        target = task["target_value"]
-        reward = task["reward_coins"]
-        claimed = task["claimed"]
-        name = _TASK_NAMES.get(task_type, task_type)
+        current   = task["current_value"]
+        target    = task["target_value"]
+        reward    = task["reward_coins"]
+        claimed   = task["claimed"]
+        name      = _TASK_NAMES.get(task_type, task_type)
 
         if claimed:
             status = "✅ 已领取"
         elif current >= target:
             status = "🎁 可领取"
         else:
-            status = f"({current}/{target})"
+            status        = f"({current}/{target})"
             all_completed = False
 
         lines.append(f"• {name} {status} - 奖励 {reward}金币")
@@ -509,7 +509,7 @@ def handle_group_task(user_id: str, group_id: int, args: str, db: Database) -> t
     tasks = db.get_or_create_group_tasks(group_id)
     if requested in {"领取", "claim"}:
         claimed: list[str] = []
-        total = 0
+        total              = 0
         for task in tasks:
             reward = db.claim_group_task_reward(user_id, group_id, str(task["task_type"]))
             if reward is not None:
@@ -554,8 +554,8 @@ def handle_title(user_id: str, group_id: int, args: str, db: Database) -> tuple[
     if args.strip():
         return False, "称号命令不接受额外参数\n用法: /宠物 称号"
     user_service = UserService(db)
-    new_titles = user_service.check_and_award_titles(user_id, group_id)
-    text = user_service.format_titles(user_id, group_id)
+    new_titles   = user_service.check_and_award_titles(user_id, group_id)
+    text         = user_service.format_titles(user_id, group_id)
     if new_titles:
         text += f"\n\n🎉 新获得称号: {'、'.join(new_titles)}"
     return True, text
@@ -579,8 +579,8 @@ def handle_minigame(
         )
 
     parts = args.strip().split(maxsplit=1)
-    game_type = parts[0]
-    game_args = parts[1] if len(parts) > 1 else ""
+    game_type      = parts[0]
+    game_args      = parts[1] if len(parts) > 1 else ""
     social_service = SocialService(db)
 
     if game_type in {"猜拳", "rps"}:

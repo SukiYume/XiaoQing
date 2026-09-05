@@ -116,7 +116,7 @@ def test_legacy_group_task_duplicates_are_merged_before_unique_key(tmp_path):
 
 
 def test_group_task_initialization_and_increment_roll_back_together(tmp_path):
-    db = Database(str(tmp_path / "group-task-rollback.db"))
+    db       = Database(str(tmp_path / "group-task-rollback.db"))
     group_id = 70002
     try:
         user = UserService(db).get_or_create_user("rollback-keeper", group_id)
@@ -160,11 +160,11 @@ def test_group_task_initialization_and_increment_roll_back_together(tmp_path):
 
 
 def test_two_database_instances_create_once_and_increment_one_row_per_action(tmp_path):
-    path = str(tmp_path / "group-task-concurrent.db")
-    first = Database(path)
-    second = Database(path)
+    path     = str(tmp_path / "group-task-concurrent.db")
+    first    = Database(path)
+    second   = Database(path)
     group_id = 70003
-    barrier = threading.Barrier(2)
+    barrier  = threading.Barrier(2)
 
     keepers = ((first, "keeper-first"), (second, "keeper-second"))
     for db, keeper in keepers:
@@ -174,7 +174,7 @@ def test_two_database_instances_create_once_and_increment_one_row_per_action(tmp
     def increment(entry: tuple[Database, str]) -> list[bool]:
         db, keeper = entry
         user = db.get_user(keeper, group_id)
-        pet = db.get_pet(keeper, group_id)
+        pet  = db.get_pet(keeper, group_id)
         assert user is not None
         assert pet is not None
         barrier.wait(timeout=5)
@@ -212,10 +212,10 @@ def test_two_database_instances_create_once_and_increment_one_row_per_action(tmp
 
 
 def test_atomic_pet_action_creates_templates_and_advances_only_selected_task(tmp_path):
-    db = Database(str(tmp_path / "group-task-pet-action.db"))
+    db       = Database(str(tmp_path / "group-task-pet-action.db"))
     group_id = 70004
     try:
-        user = UserService(db).get_or_create_user("keeper", group_id)
+        user        = UserService(db).get_or_create_user("keeper", group_id)
         pet_service = PetService(db)
         assert pet_service.adopt_pet("keeper", group_id, "团团")[0] is True
         pet = db.get_pet("keeper", group_id)
@@ -242,14 +242,14 @@ def test_atomic_pet_action_creates_templates_and_advances_only_selected_task(tmp
 
 
 def test_completed_group_task_reward_can_only_be_claimed_once(tmp_path):
-    path = str(tmp_path / "group-task-claim.db")
-    first = Database(path)
-    second = Database(path)
+    path     = str(tmp_path / "group-task-claim.db")
+    first    = Database(path)
+    second   = Database(path)
     group_id = 70005
     try:
-        user = UserService(first).get_or_create_user("claimer", group_id)
+        user  = UserService(first).get_or_create_user("claimer", group_id)
         tasks = first.get_or_create_group_tasks(group_id)
-        feed = next(task for task in tasks if task["task_type"] == "group_feed")
+        feed  = next(task for task in tasks if task["task_type"] == "group_feed")
         first._get_connection().execute(
             """UPDATE group_tasks SET current_value = target_value, is_completed = 1
                WHERE group_id = ? AND task_type = 'group_feed' AND created_date = ?""",
@@ -257,7 +257,7 @@ def test_completed_group_task_reward_can_only_be_claimed_once(tmp_path):
         )
         first._get_connection().commit()
 
-        reward = first.claim_group_task_reward("claimer", group_id, "group_feed")
+        reward    = first.claim_group_task_reward("claimer", group_id, "group_feed")
         duplicate = second.claim_group_task_reward("claimer", group_id, "group_feed")
 
         assert reward == feed["reward_coins"]

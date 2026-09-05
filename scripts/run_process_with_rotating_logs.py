@@ -22,8 +22,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import BinaryIO
 
-_READ_SIZE = 64 * 1024
-_COPY_SIZE = 1024 * 1024
+_READ_SIZE                = 64 * 1024
+_COPY_SIZE                = 1024 * 1024
 _SHUTDOWN_TIMEOUT_SECONDS = 5.0
 
 
@@ -39,11 +39,11 @@ class BoundedRotatingLog:
         if backup_count <= 0:
             raise ValueError("backup_count must be positive")
 
-        self.path = path
-        self.maximum_bytes = maximum_bytes
-        self.backup_count = backup_count
+        self.path                     = path
+        self.maximum_bytes            = maximum_bytes
+        self.backup_count             = backup_count
         self._stream: BinaryIO | None = None
-        self._size = 0
+        self._size                    = 0
 
     def __enter__(self) -> BoundedRotatingLog:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -69,13 +69,13 @@ class BoundedRotatingLog:
         if self._stream is None:
             raise RuntimeError("log is not open")
 
-        view = memoryview(data)
+        view   = memoryview(data)
         offset = 0
         while offset < len(view):
             if self._size >= self.maximum_bytes:
                 self._rotate()
             writable = min(self.maximum_bytes - self._size, len(view) - offset)
-            written = self._stream.write(view[offset : offset + writable])
+            written  = self._stream.write(view[offset : offset + writable])
             if written is None or written <= 0:
                 raise OSError("log write made no progress")
             self._size += written
@@ -152,13 +152,13 @@ def _pump_stream(
     """日志失败立即通知主线程，但继续排空管道直到子进程停止。"""
 
     log: BoundedRotatingLog | None = None
-    logging_failed = False
+    logging_failed                 = False
     try:
         try:
             log = BoundedRotatingLog(
                 log_path,
-                maximum_bytes=maximum_bytes,
-                backup_count=backup_count,
+                maximum_bytes = maximum_bytes,
+                backup_count  = backup_count,
             )
             log.__enter__()
         # 日志对象可能来自测试替身或平台文件层；任意失败都必须转成停机信号，
@@ -233,21 +233,21 @@ def _terminate_process_tree(
     """停止本包装器创建的进程树，并返回主进程退出码与清理异常。"""
 
     tree_error: Exception | None = None
-    group_signaled = False
+    group_signaled               = False
     if os.name == "nt":
         if process.poll() is not None:
             return process.returncode, None
         system_root = Path(os.environ.get("SYSTEMROOT", r"C:\Windows"))
-        taskkill = system_root / "System32" / "taskkill.exe"
+        taskkill    = system_root / "System32" / "taskkill.exe"
         try:
             completed = subprocess.run(
                 [str(taskkill), "/PID", str(process.pid), "/T", "/F"],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-                timeout=5,
-                creationflags=subprocess.CREATE_NO_WINDOW,
+                stdin         = subprocess.DEVNULL,
+                stdout        = subprocess.DEVNULL,
+                stderr        = subprocess.DEVNULL,
+                check         = False,
+                timeout       = 5,
+                creationflags = subprocess.CREATE_NO_WINDOW,
             )
             if completed.returncode != 0:
                 tree_error = RuntimeError(
@@ -300,7 +300,7 @@ def _terminate_process_tree(
             )
         if not group_exited:
             timeout_error = RuntimeError(f"process group {process.pid} did not stop before kill")
-            sigkill = getattr(signal, "SIGKILL", None)
+            sigkill       = getattr(signal, "SIGKILL", None)
             if sigkill is not None:
                 with contextlib.suppress(OSError):
                     _send_posix_group_signal(process.pid, sigkill)
@@ -389,28 +389,28 @@ def run_process(
         raise ValueError("stdout and stderr logs must be different files")
 
     creation_flags = 0
-    startup_info = None
+    startup_info   = None
     if os.name == "nt":
         creation_flags = subprocess.CREATE_NO_WINDOW
-        startup_info = subprocess.STARTUPINFO()
+        startup_info   = subprocess.STARTUPINFO()
         startup_info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         startup_info.wShowWindow = subprocess.SW_HIDE
 
-    errors: list[Exception] = []
+    errors: list[Exception]                 = []
     started_threads: list[threading.Thread] = []
-    stopping: threading.Event | None = None
-    cleaned_up = False
+    stopping: threading.Event | None        = None
+    cleaned_up                              = False
     process: subprocess.Popen[bytes] | None = None
     try:
         process = subprocess.Popen(
             list(command),
-            cwd=working_directory,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            bufsize=0,
-            creationflags=creation_flags,
-            startupinfo=startup_info,
+            cwd           = working_directory,
+            stdin         = subprocess.DEVNULL,
+            stdout        = subprocess.PIPE,
+            stderr        = subprocess.PIPE,
+            bufsize       = 0,
+            creationflags = creation_flags,
+            startupinfo   = startup_info,
             # POSIX 使用独立会话，清理时才能按进程组终止所有后代；Windows
             # 保持既有 taskkill /T 语义，不改变生产监控链。
             start_new_session=os.name != "nt",
@@ -418,9 +418,9 @@ def run_process(
         if process.stdout is None or process.stderr is None:  # pragma: no cover - Popen 契约
             raise RuntimeError("failed to create output pipes")
 
-        failed = threading.Event()
+        failed   = threading.Event()
         stopping = threading.Event()
-        common = {
+        common   = {
             "maximum_bytes": maximum_bytes,
             "backup_count": backup_count,
             "errors": errors,
@@ -433,10 +433,10 @@ def run_process(
         )
         for stream, log_path, name in thread_specs:
             thread = threading.Thread(
-                target=_pump_stream,
-                kwargs={"stream": stream, "log_path": log_path, **common},
-                name=name,
-                daemon=True,
+                target = _pump_stream,
+                kwargs = {"stream": stream, "log_path": log_path, **common},
+                name   = name,
+                daemon = True,
             )
             thread.start()
             started_threads.append(thread)
@@ -478,8 +478,8 @@ def run_process(
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description     = __doc__,
+        formatter_class = argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--stdout-log", required=True, type=Path)
     parser.add_argument("--stderr-log", required=True, type=Path)
@@ -513,11 +513,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parse_args(argv)
     return run_process(
         arguments.command,
-        working_directory=arguments.cwd,
-        stdout_log=arguments.stdout_log,
-        stderr_log=arguments.stderr_log,
-        maximum_bytes=arguments.max_bytes,
-        backup_count=arguments.backup_count,
+        working_directory = arguments.cwd,
+        stdout_log        = arguments.stdout_log,
+        stderr_log        = arguments.stderr_log,
+        maximum_bytes     = arguments.max_bytes,
+        backup_count      = arguments.backup_count,
     )
 
 

@@ -27,26 +27,26 @@ _isolate_process_global_plugin_import_state = (
 
 @pytest.mark.asyncio
 async def test_watch_does_not_auto_reload_quarantined_plugin(tmp_path: Path):
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     definition = _build_definition()
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
     old_gate = PluginExecutionGate("parallel", plugin_name="demo")
     await old_gate.close()
     manager._plugins["demo"] = LoadedPlugin(
-        definition=definition,
-        module=ModuleType("plugins.demo.main"),
-        mtime=0.0,
-        execution_gate=old_gate,
+        definition     = definition,
+        module         = ModuleType("plugins.demo.main"),
+        mtime          = 0.0,
+        execution_gate = old_gate,
     )
     manager._execution_gates["demo"] = old_gate
     manager._quarantined_plugins.add("demo")
     manager._load_definition = Mock(return_value=definition)
     manager._capture_plugin_snapshot_async = AsyncMock(return_value=1.0)
     manager._load_new_plugin_from_watch = AsyncMock()
-    manager.reload_plugin = AsyncMock()
+    manager.reload_plugin               = AsyncMock()
     manager.update_poll_interval(0.01)
-    reconciled = asyncio.Event()
+    reconciled     = asyncio.Event()
     original_clear = manager.router.clear_plugin
 
     def clear_plugin(name: str) -> None:
@@ -71,7 +71,7 @@ async def test_watch_retries_after_ordinary_reconcile_failure(tmp_path: Path) ->
     manager = _build_manager(tmp_path)
     manager.update_poll_interval(0.01)
     second_poll = asyncio.Event()
-    calls = 0
+    calls       = 0
 
     async def reconcile() -> None:
         nonlocal calls
@@ -167,7 +167,7 @@ async def test_watch_rate_limits_repeated_round_failures_and_recovers(
     manager = _build_manager(tmp_path)
     manager.update_poll_interval(0.01)
     recovered = asyncio.Event()
-    calls = 0
+    calls     = 0
 
     async def reconcile() -> None:
         nonlocal calls
@@ -211,21 +211,21 @@ async def test_watch_propagates_fatal_lifecycle_carrier(tmp_path: Path) -> None:
 async def test_reconcile_path_stat_failure_preserves_runtime_and_processes_sibling(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager      = _build_manager(tmp_path)
     inaccessible = manager.plugins_dir / "a_inaccessible"
-    healthy = manager.plugins_dir / "b_healthy"
+    healthy      = manager.plugins_dir / "b_healthy"
     inaccessible.mkdir()
     healthy.mkdir()
     (healthy / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
     old_definition = _build_definition("a_inaccessible")
-    old_plugin = LoadedPlugin(
-        definition=old_definition,
-        module=ModuleType("plugins.a_inaccessible.main"),
-        mtime=0,
+    old_plugin     = LoadedPlugin(
+        definition = old_definition,
+        module     = ModuleType("plugins.a_inaccessible.main"),
+        mtime      = 0,
     )
     manager._plugins[old_definition.name] = old_plugin
-    healthy_definition = _build_definition("b_healthy")
-    original_is_plugin_dir = manager._is_plugin_dir
+    healthy_definition                    = _build_definition("b_healthy")
+    original_is_plugin_dir                = manager._is_plugin_dir
 
     def classify(path: Path) -> bool:
         if path == inaccessible:
@@ -253,20 +253,20 @@ async def test_reconcile_incomplete_root_iteration_preserves_unknown_runtime(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manager = _build_manager(tmp_path)
-    unseen = manager.plugins_dir / "a_unseen"
+    unseen  = manager.plugins_dir / "a_unseen"
     healthy = manager.plugins_dir / "b_healthy"
     unseen.mkdir()
     healthy.mkdir()
     (healthy / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
     old_definition = _build_definition("a_unseen")
-    old_plugin = LoadedPlugin(
-        definition=old_definition,
-        module=ModuleType("plugins.a_unseen.main"),
-        mtime=0,
+    old_plugin     = LoadedPlugin(
+        definition = old_definition,
+        module     = ModuleType("plugins.a_unseen.main"),
+        mtime      = 0,
     )
     manager._plugins[old_definition.name] = old_plugin
-    healthy_definition = _build_definition("b_healthy")
-    original_iterdir = Path.iterdir
+    healthy_definition                    = _build_definition("b_healthy")
+    original_iterdir                      = Path.iterdir
 
     def flaky_iterdir(path: Path):
         if path != manager.plugins_dir:
@@ -300,15 +300,15 @@ async def test_reconcile_deleted_plugin_failure_does_not_block_siblings_and_retr
     manager = _build_manager(tmp_path)
     for name in ("a_broken", "b_deleted"):
         manager._plugins[name] = LoadedPlugin(
-            definition=_build_definition(name),
-            module=ModuleType(f"plugins.{name}.main"),
-            mtime=0,
+            definition = _build_definition(name),
+            module     = ModuleType(f"plugins.{name}.main"),
+            mtime      = 0,
         )
     healthy = manager.plugins_dir / "c_healthy"
     healthy.mkdir()
     (healthy / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
     healthy_definition = _build_definition("c_healthy")
-    broken_attempts = 0
+    broken_attempts    = 0
 
     async def unload(name: str) -> None:
         nonlocal broken_attempts
@@ -350,9 +350,9 @@ async def test_reconcile_manifest_read_failure_does_not_block_sibling(
     monkeypatch: pytest.MonkeyPatch,
     manifest_error: type[OSError],
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager      = _build_manager(tmp_path)
     inaccessible = manager.plugins_dir / "a_inaccessible"
-    healthy = manager.plugins_dir / "b_healthy"
+    healthy      = manager.plugins_dir / "b_healthy"
     for plugin_dir in (inaccessible, healthy):
         plugin_dir.mkdir()
         (plugin_dir / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
@@ -387,7 +387,7 @@ async def test_watcher_manifest_errors_are_rate_limited_but_manual_loads_are_not
     caplog: pytest.LogCaptureFixture,
     manifest_state: str,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "broken"
     plugin_dir.mkdir()
     if manifest_state == "invalid":
@@ -415,24 +415,24 @@ async def test_reconcile_fingerprint_race_isolated_to_one_plugin(
     monkeypatch: pytest.MonkeyPatch,
     failure_stage: str,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager                                  = _build_manager(tmp_path)
     definitions: dict[str, PluginDefinition] = {}
     for name in ("a_racy", "b_changed"):
         plugin_dir = manager.plugins_dir / name
         plugin_dir.mkdir()
         (plugin_dir / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
         (plugin_dir / "plugin.json").write_text("{}", encoding="utf-8")
-        definition = _build_definition(name)
-        definitions[name] = definition
+        definition             = _build_definition(name)
+        definitions[name]      = definition
         manager._plugins[name] = LoadedPlugin(
-            definition=definition,
-            module=ModuleType(f"plugins.{name}.main"),
-            mtime=0,
+            definition = definition,
+            module     = ModuleType(f"plugins.{name}.main"),
+            mtime      = 0,
         )
 
     manager._load_definition = Mock(side_effect=lambda path: definitions[path.name])
     manager._reload_plugin_once = AsyncMock()
-    racy_dir = manager.plugins_dir / "a_racy"
+    racy_dir                    = manager.plugins_dir / "a_racy"
     if failure_stage == "rglob":
         original_iter = manager._iter_watch_files
 
@@ -444,7 +444,7 @@ async def test_reconcile_fingerprint_race_isolated_to_one_plugin(
         manager._iter_watch_files = Mock(side_effect=flaky_iter)
     else:
         original_open = Path.open
-        failed_path = racy_dir / "main.py"
+        failed_path   = racy_dir / "main.py"
 
         def flaky_open(path: Path, *args, **kwargs):
             if path == failed_path:
@@ -466,15 +466,15 @@ async def test_reconcile_fingerprint_race_isolated_to_one_plugin(
 async def test_reconcile_transient_fingerprint_failure_recovers_next_round(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
     (plugin_dir / "main.py").write_text("VALUE = 2\n", encoding="utf-8")
     definition = _build_definition()
     old_plugin = LoadedPlugin(
-        definition=definition,
-        module=ModuleType("plugins.demo.main"),
-        mtime=1,
+        definition = definition,
+        module     = ModuleType("plugins.demo.main"),
+        mtime      = 1,
     )
     manager._plugins[definition.name] = old_plugin
     manager._load_definition = Mock(return_value=definition)
@@ -499,16 +499,16 @@ async def test_reload_authorization_snapshot_runs_off_event_loop(tmp_path: Path)
     import threading
     import time
 
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     definition = _build_definition()
     old_plugin = LoadedPlugin(
-        definition=definition,
-        module=ModuleType("plugins.demo.main"),
-        mtime=0,
+        definition = definition,
+        module     = ModuleType("plugins.demo.main"),
+        mtime      = 0,
     )
     manager._load_definition = Mock(return_value=definition)
-    started = threading.Event()
-    release = threading.Event()
+    started                 = threading.Event()
+    release                 = threading.Event()
     blocked_at: list[float] = []
 
     def blocking_fingerprint(_plugin_dir: Path, _definition: PluginDefinition) -> int:
@@ -538,16 +538,16 @@ def test_capture_plugin_snapshot_rejects_atomic_replace_after_open(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
     definition = _build_definition()
-    main = plugin_dir / "main.py"
+    main       = plugin_dir / "main.py"
     main.write_text("VALUE = 1\n", encoding="utf-8")
     (plugin_dir / "plugin.json").write_text("{}", encoding="utf-8")
     original_open = Path.open
     original_stat = Path.stat
-    opened = False
+    opened        = False
 
     def replacing_open(path: Path, *args, **kwargs):
         nonlocal opened
@@ -587,11 +587,11 @@ def test_capture_plugin_snapshot_rejects_atomic_replace_after_open(
 async def test_watch_snapshot_reuses_recent_stable_metadata_then_hashes_change(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
     definition = _build_definition()
-    source = plugin_dir / "main.py"
+    source     = plugin_dir / "main.py"
     source.write_text("VALUE = 1\n", encoding="utf-8")
     (plugin_dir / "plugin.json").write_text("{}", encoding="utf-8")
     first = manager._capture_plugin_snapshot(plugin_dir, definition)
@@ -630,26 +630,26 @@ async def test_reconcile_rejects_cross_file_mixed_fingerprint_snapshot(
     )
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
-    definition = _build_definition()
+    definition       = _build_definition()
     definition.entry = "a.py"
-    first = plugin_dir / "a.py"
-    second = plugin_dir / "b.py"
-    replacement = plugin_dir / "replacement.tmp"
-    manifest = plugin_dir / "plugin.json"
+    first            = plugin_dir / "a.py"
+    second           = plugin_dir / "b.py"
+    replacement      = plugin_dir / "replacement.tmp"
+    manifest         = plugin_dir / "plugin.json"
     first.write_text("VALUE = 1\n", encoding="utf-8")
     second.write_text("VALUE = 1\n", encoding="utf-8")
     replacement.write_text("VALUE = 2\n", encoding="utf-8")
     manifest.write_text("{}", encoding="utf-8")
     old_plugin = LoadedPlugin(
-        definition=definition,
-        module=ModuleType("plugins.demo.main"),
-        mtime=manager._capture_plugin_snapshot(plugin_dir, definition),
+        definition = definition,
+        module     = ModuleType("plugins.demo.main"),
+        mtime      = manager._capture_plugin_snapshot(plugin_dir, definition),
     )
     manager._plugins[definition.name] = old_plugin
     manager._load_definition = Mock(return_value=definition)
     manager._reload_plugin_once = AsyncMock()
-    original_open = Path.open
-    replaced = False
+    original_open               = Path.open
+    replaced                    = False
 
     def replace_first_before_reading_second(path: Path, *args, **kwargs):
         nonlocal replaced
@@ -671,15 +671,15 @@ async def test_reconcile_rejects_cross_file_mixed_fingerprint_snapshot(
 def test_iter_watch_files_traverses_data_named_source_directory(tmp_path: Path) -> None:
     data_ancestor = tmp_path / "data"
     data_ancestor.mkdir()
-    manager = _build_manager(data_ancestor)
+    manager    = _build_manager(data_ancestor)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
-    definition = _build_definition()
-    main = plugin_dir / "main.py"
-    helper = plugin_dir / "helper.py"
+    definition   = _build_definition()
+    main         = plugin_dir / "main.py"
+    helper       = plugin_dir / "helper.py"
     runtime_data = plugin_dir / "data"
     runtime_data.mkdir()
-    state = runtime_data / "state.json"
+    state         = runtime_data / "state.json"
     nested_source = runtime_data / "helper.py"
     main.write_text("VALUE = 1\n", encoding="utf-8")
     helper.write_text("HELPER = 1\n", encoding="utf-8")
@@ -702,19 +702,19 @@ def test_fingerprint_prunes_bytecode_before_descent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
     definition = _build_definition()
-    main = plugin_dir / "main.py"
-    manifest = plugin_dir / "plugin.json"
-    cache_dir = plugin_dir / "__pycache__"
+    main       = plugin_dir / "main.py"
+    manifest   = plugin_dir / "plugin.json"
+    cache_dir  = plugin_dir / "__pycache__"
     cache_dir.mkdir()
     main.write_text("VALUE = 1\n", encoding="utf-8")
     manifest.write_text("{}", encoding="utf-8")
     (cache_dir / "generated.py").write_text("VALUE = 2\n", encoding="utf-8")
-    original_scandir = os.scandir
-    original_stat = Path.stat
+    original_scandir    = os.scandir
+    original_stat       = Path.stat
     scanned: list[Path] = []
 
     def tracked_scandir(path):

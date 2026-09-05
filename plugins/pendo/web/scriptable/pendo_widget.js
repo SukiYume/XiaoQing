@@ -3,8 +3,8 @@
 // icon-color: deep-purple; icon-glyph: magic;
 
 // 使用前填写 Pendo Web 地址和 `/pendo web widget-token` 返回的只读令牌。
-const BASE_URL = normalizeBaseUrl('https://example.com/pendo');
-const TOKEN = 'PASTE_WIDGET_TOKEN_HERE';
+const BASE_URL               = normalizeBaseUrl('https://example.com/pendo');
+const TOKEN                  = 'PASTE_WIDGET_TOKEN_HERE';
 const DEFAULT_MEDIUM_SECTION = 'auto';
 // 日历同步：在 Scriptable 内直接运行脚本时，将 Pendo 日程同步到 iOS 日历。
 // 设为空字符串（""）可禁用同步功能。
@@ -28,7 +28,7 @@ const DARK = {
     subtext: '#A7AFBF',
     line: '#343844',
 };
-const dyn = (light, dark) => Color.dynamic(new Color(light), new Color(dark));
+const dyn    = (light, dark) => Color.dynamic(new Color(light), new Color(dark));
 const COLORS = {
     text: dyn(LIGHT.text, DARK.text),
     subtext: dyn(LIGHT.subtext, DARK.subtext),
@@ -57,7 +57,7 @@ function getDynamicGradient() {
 function drawTransparentDecorations(fam) {
     const { w, h } = fam === 'small' ? { w: 340, h: 340 } : fam === 'large' ? { w: 720, h: 760 } : { w: 720, h: 340 };
     const base = Math.min(w, h);
-    const ctx = new DrawContext();
+    const ctx  = new DrawContext();
     ctx.size = new Size(w, h);
     ctx.opaque = false; // 关键：透明镂空背景
     ctx.respectScreenScale = false;
@@ -248,7 +248,7 @@ function isRecord(value) {
 
 function textValue(value, fallback = '', limit = 200) {
     const normalized = typeof value === 'string' ? value.trim() : '';
-    const text = normalized || fallback;
+    const text       = normalized || fallback;
     return Array.from(text).slice(0, limit).join('');
 }
 
@@ -291,7 +291,7 @@ function normalizePanel(value) {
     const section = textValue(value.section).toLowerCase();
     if (!PANEL_SECTIONS.has(section)) return null;
     const summary = isRecord(value.summary) ? value.summary : {};
-    const items = Array.isArray(value.items)
+    const items   = Array.isArray(value.items)
         ? value.items
               .filter(isRecord)
               .slice(0, 5)
@@ -321,7 +321,7 @@ function normalizePanel(value) {
 
 function normalizeAgendaItems(value, limit = null) {
     if (!Array.isArray(value)) return [];
-    const records = value.filter(isRecord);
+    const records  = value.filter(isRecord);
     const selected = Number.isInteger(limit) && limit >= 0 ? records.slice(0, limit) : records;
     return selected.map((item) => ({
         id: textValue(item.id, '', 160).replace(/[\r\n]/g, '').trim(),
@@ -339,10 +339,10 @@ function normalizeWidgetData(value) {
     if (!isRecord(value) || !isRecord(value.agenda)) {
         throw new Error('小组件摘要结构无效');
     }
-    const rawAgenda = value.agenda;
-    const rawDate = isRecord(rawAgenda.date) ? rawAgenda.date : {};
-    const rawLinks = isRecord(value.links) ? value.links : {};
-    const rawPanels = isRecord(value.panels) ? value.panels : {};
+    const rawAgenda   = value.agenda;
+    const rawDate     = isRecord(rawAgenda.date) ? rawAgenda.date : {};
+    const rawLinks    = isRecord(value.links) ? value.links : {};
+    const rawPanels   = isRecord(value.panels) ? value.panels : {};
     const calendarDay = nonNegativeInteger(rawDate.day);
     const agendaItems = normalizeAgendaItems(rawAgenda.items, 5);
     return {
@@ -443,9 +443,9 @@ function parseDateKey(value) {
 }
 
 function agendaLeadLabel(item, data) {
-    const dayInfo = parseDateKey(item?.day);
+    const dayInfo   = parseDateKey(item?.day);
     const todayInfo = parseDateKey(textValue(data?.generated_at, '', 10));
-    let dayText = '--/--';
+    let dayText     = '--/--';
     if (dayInfo && todayInfo && dayInfo.key === todayInfo.key) {
         dayText = '今天';
     } else if (dayInfo && todayInfo) {
@@ -494,8 +494,8 @@ async function fetchWidgetApi(url, token) {
     request.method = 'GET';
     request.headers = { Authorization: `Bearer ${textValue(token, '', 4096)}` };
     request.timeoutInterval = 20;
-    const raw = await request.loadString();
-    const status = Number(request.response?.statusCode);
+    const raw       = await request.loadString();
+    const status    = Number(request.response?.statusCode);
     const hasStatus = Number.isInteger(status) && status > 0;
     let result;
     try {
@@ -591,7 +591,7 @@ function renderAgendaList(stack, data, opts = {}) {
         rowGap = 5,
     } = opts;
     const actualLeadSize = leadSize ?? Math.max(9, size - 2);
-    const items = data.agenda.items;
+    const items          = data.agenda.items;
     if (!items.length) {
         addText(stack, data.agenda.empty_text, {
             size,
@@ -600,12 +600,12 @@ function renderAgendaList(stack, data, opts = {}) {
         });
         return;
     }
-    const slice = items.slice(0, limit);
-    const url = appUrl(data.links.events);
+    const slice      = items.slice(0, limit);
+    const url        = appUrl(data.links.events);
     const titleWidth = columnWidth ? Math.max(0, columnWidth - leadWidth - gap) : 0;
     for (let i = 0; i < slice.length; i++) {
         const item = slice[i];
-        const row = stack.addStack();
+        const row  = stack.addStack();
         row.layoutHorizontally();
         row.centerAlignContent();
         row.spacing = gap;
@@ -673,8 +673,8 @@ function renderPanelList(stack, panel, data, opts = {}) {
         return;
     }
     const section = panelSectionKey(panel);
-    const items = panel.items || [];
-    const url = appUrl(panel.path || data.links.dashboard);
+    const items   = panel.items || [];
+    const url     = appUrl(panel.path || data.links.dashboard);
     if (!items.length) {
         addText(stack, panel.empty_text || '暂无内容', {
             size,
@@ -685,15 +685,15 @@ function renderPanelList(stack, panel, data, opts = {}) {
     }
     const slice = items.slice(0, limit);
     for (let i = 0; i < slice.length; i++) {
-        const item = slice[i];
+        const item      = slice[i];
         const titleText = titleLimit ? truncate(item.title, titleLimit) : item.title;
-        const row = stack.addStack();
+        const row       = stack.addStack();
         row.layoutHorizontally();
         row.centerAlignContent();
         if (columnWidth) row.size = new Size(columnWidth, 0);
         row.url = url;
 
-        const marker = panelItemMarker(section, item);
+        const marker    = panelItemMarker(section, item);
         const markerBox = row.addStack();
         markerBox.layoutHorizontally();
         markerBox.size = new Size(markerWidth, 0);
@@ -701,7 +701,7 @@ function renderPanelList(stack, panel, data, opts = {}) {
         const sym = SFSymbol.named(marker.icon);
         if (sym) {
             const markerSize = Math.max(10, size);
-            const img = markerBox.addImage(sym.image);
+            const img        = markerBox.addImage(sym.image);
             img.imageSize = new Size(markerSize, markerSize);
             img.tintColor = marker.color;
         } else {
@@ -729,7 +729,7 @@ function renderPanelList(stack, panel, data, opts = {}) {
             });
         } else if (section === 'tasks') {
             const metaParts = getMetaParts(item.meta || '');
-            const status = truncate(metaParts[metaParts.length - 1] || '', 6);
+            const status    = truncate(metaParts[metaParts.length - 1] || '', 6);
             if (status) {
                 if (opts.inlineTaskStatus) row.addSpacer(opts.statusGap ?? 8);
                 else row.addSpacer();
@@ -767,7 +767,7 @@ function renderMedium(widget, data) {
     const layout = LAYOUTS.medium;
     widget.setPadding(...layout.padding);
 
-    const leftColWidth = layout.leftColWidth;
+    const leftColWidth  = layout.leftColWidth;
     const rightColWidth = layout.rightColWidth;
 
     const top = widget.addStack();
@@ -846,9 +846,9 @@ function renderLarge(widget, data) {
     const layout = LAYOUTS.large;
     widget.setPadding(...layout.padding);
     const panels = data.panels;
-    const tasks = panels.tasks;
+    const tasks  = panels.tasks;
     const ledger = panels.ledger;
-    const notes = panels.notes;
+    const notes  = panels.notes;
 
     renderAgendaSummaryBar(widget, data, {
         url: appUrl(data.links.dashboard),
@@ -858,7 +858,7 @@ function renderLarge(widget, data) {
     widget.addSpacer(layout.headerBodyGap);
 
     const quadWidth = layout.quadWidth;
-    const rows = [
+    const rows      = [
         [
             {
                 title: '日程',
@@ -951,7 +951,7 @@ function parseItemStartDate(item, { allowDateOnly = false } = {}) {
     // 兜底：从 day + meta/subtitle 推断
     const dayInfo = parseDateKey(item?.day);
     if (!dayInfo) return null;
-    const time = firstMetaPart(item?.meta || item?.subtitle || '');
+    const time  = firstMetaPart(item?.meta || item?.subtitle || '');
     const match = /^([01]\d|2[0-3]):([0-5]\d)/.exec(time);
     if (match) {
         const parsed = new Date(dayInfo.date);
@@ -1003,9 +1003,9 @@ function computeNextRefresh(data, currentTime = new Date()) {
 // 游标更早时从游标续传，既补齐间隔，也重新对账近期修改和删除。
 // 每次只查询一次这个完整窗口，不遍历或删除窗口外的日历事件。
 function localDateKey(value) {
-    const year = value.getFullYear();
+    const year  = value.getFullYear();
     const month = String(value.getMonth() + 1).padStart(2, '0');
-    const day = String(value.getDate()).padStart(2, '0');
+    const day   = String(value.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
 }
 
@@ -1018,9 +1018,9 @@ function addLocalDays(value, days) {
 function buildCalendarSyncWindow(currentTime = new Date()) {
     const now =
         currentTime instanceof Date && !Number.isNaN(currentTime.getTime()) ? new Date(currentTime) : new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const today      = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const plannedEnd = addLocalDays(today, CALENDAR_SYNC_LOOKAHEAD_DAYS);
-    let lastSuccess = null;
+    let lastSuccess  = null;
     if (Keychain.contains(CALENDAR_SYNC_CURSOR_KEY)) {
         lastSuccess = parseDateKey(Keychain.get(CALENDAR_SYNC_CURSOR_KEY));
         if (!lastSuccess) Keychain.remove(CALENDAR_SYNC_CURSOR_KEY);
@@ -1028,8 +1028,8 @@ function buildCalendarSyncWindow(currentTime = new Date()) {
 
     // 始终回看最近一段时间，确保已同步日程的修改和删除也能被重新对账；
     // 若上次成功运行更早，则仍从旧游标开始补齐完整缺口。
-    const storedIsLater = lastSuccess && lastSuccess.date > today;
-    const initialStart = addLocalDays(today, -CALENDAR_SYNC_INITIAL_LOOKBACK_DAYS);
+    const storedIsLater  = lastSuccess && lastSuccess.date > today;
+    const initialStart   = addLocalDays(today, -CALENDAR_SYNC_INITIAL_LOOKBACK_DAYS);
     const requestedStart = new Date(
         lastSuccess && lastSuccess.date < initialStart ? lastSuccess.date : initialStart,
     );
@@ -1050,7 +1050,7 @@ function normalizeCalendarSyncData(value, window) {
         throw new Error('日历同步响应结构无效');
     }
     const startKey = parseDateKey(value.start_date)?.key || '';
-    const endKey = parseDateKey(value.end_date)?.key || '';
+    const endKey   = parseDateKey(value.end_date)?.key || '';
     if (startKey !== window.startKey || endKey !== window.endKey) {
         throw new Error('日历同步响应窗口与请求不一致');
     }
@@ -1072,12 +1072,12 @@ function calendarLegacyKey(title, startDate) {
 }
 
 function calendarSyncMetadata(notes) {
-    const text = textValue(notes, '', 4096);
-    const lines = text ? text.split(/\r?\n/) : [];
+    const text    = textValue(notes, '', 4096);
+    const lines   = text ? text.split(/\r?\n/) : [];
     const managed = lines.includes(SYNC_MARKER);
     if (!managed) return { managed: false, id: '' };
     const idLine = lines.find((line) => line.startsWith(CALENDAR_EVENT_ID_PREFIX));
-    const id = idLine
+    const id     = idLine
         ? textValue(idLine.slice(CALENDAR_EVENT_ID_PREFIX.length), '', 160).trim()
         : '';
     return { managed: true, id };
@@ -1085,7 +1085,7 @@ function calendarSyncMetadata(notes) {
 
 function calendarSyncNotes(notes, eventId) {
     const currentNotes = textValue(notes, '', 4096);
-    const extraLines = currentNotes
+    const extraLines   = currentNotes
         ? currentNotes
               .split(/\r?\n/)
               .filter((line) => line !== SYNC_MARKER && !line.startsWith(CALENDAR_EVENT_ID_PREFIX))
@@ -1146,7 +1146,7 @@ function takeIndexedCalendarEvent(index, key) {
 
 function parseCalendarSyncItem(item, rangeStart, rangeEnd) {
     if (!isRecord(item)) throw new Error('日历同步响应包含无效日程');
-    const id = textValue(item.id, '', 160).replace(/[\r\n]/g, '').trim();
+    const id        = textValue(item.id, '', 160).replace(/[\r\n]/g, '').trim();
     const startDate = parseItemStartDate(item, { allowDateOnly: true });
     if (!startDate) throw new Error('日历同步响应包含无效日程');
 
@@ -1155,7 +1155,7 @@ function parseCalendarSyncItem(item, rangeStart, rangeEnd) {
         /^([01]\d|2[0-3]):[0-5]\d/.test(firstMetaPart(item.meta || item.subtitle || '')),
     );
 
-    let endDate = null;
+    let endDate  = null;
     const endRaw = textValue(item.end_time, '', 64);
     if (endRaw.length >= 16) {
         const parsedEnd = new Date(endRaw);
@@ -1183,10 +1183,10 @@ function parseCalendarSyncItem(item, rangeStart, rangeEnd) {
 
 function prepareCalendarSyncItems(items, rangeStart, rangeEnd) {
     if (!Array.isArray(items)) throw new Error('日历同步响应结构无效');
-    const prepared = [];
+    const prepared   = [];
     const identities = new Set();
     for (const rawItem of items) {
-        const item = parseCalendarSyncItem(rawItem, rangeStart, rangeEnd);
+        const item     = parseCalendarSyncItem(rawItem, rangeStart, rangeEnd);
         const identity = item.id
             ? `id:${item.id}`
             : `fields:${calendarLegacyKey(item.title, item.startDate)}`;
@@ -1232,7 +1232,7 @@ function indexExistingCalendarEvents(existing) {
             addIndexedCalendarEvent(index.managedById, metadata.id, event);
             continue;
         }
-        const legacyKey = calendarLegacyKey(event.title, event.startDate);
+        const legacyKey   = calendarLegacyKey(event.title, event.startDate);
         const targetIndex = metadata.managed
             ? index.managedLegacyByKey
             : index.unmanagedByLegacyKey;
@@ -1242,8 +1242,8 @@ function indexExistingCalendarEvents(existing) {
 }
 
 async function reconcileCalendarItem(item, index, targetCalendar, retainedEvents) {
-    const legacyKey = calendarLegacyKey(item.title, item.startDate);
-    let event = item.id ? (index.managedById.get(item.id) || [])[0] || null : null;
+    const legacyKey      = calendarLegacyKey(item.title, item.startDate);
+    let event            = item.id ? (index.managedById.get(item.id) || [])[0] || null : null;
     let replacementNotes = null;
     if (!event) {
         event = takeIndexedCalendarEvent(index.managedLegacyByKey, legacyKey);
@@ -1300,7 +1300,7 @@ function formatCalendarSyncCounts(counts) {
 }
 
 async function applyAgendaItemsToCalendar(items, rangeStart, rangeEnd) {
-    const preparedItems = prepareCalendarSyncItems(items, rangeStart, rangeEnd);
+    const preparedItems  = prepareCalendarSyncItems(items, rangeStart, rangeEnd);
     const targetCalendar = await findWritableSyncCalendar();
     if (!targetCalendar) {
         return {
@@ -1309,10 +1309,10 @@ async function applyAgendaItemsToCalendar(items, rangeStart, rangeEnd) {
         };
     }
 
-    const existing = await CalendarEvent.between(rangeStart, rangeEnd, [targetCalendar]);
-    const index = indexExistingCalendarEvents(existing);
+    const existing       = await CalendarEvent.between(rangeStart, rangeEnd, [targetCalendar]);
+    const index          = indexExistingCalendarEvents(existing);
     const retainedEvents = new Set();
-    const counts = { created: 0, updated: 0, removed: 0, unchanged: 0, skipped: 0 };
+    const counts         = { created: 0, updated: 0, removed: 0, unchanged: 0, skipped: 0 };
     for (const item of preparedItems) {
         const action = await reconcileCalendarItem(item, index, targetCalendar, retainedEvents);
         counts[action]++;
@@ -1326,10 +1326,10 @@ async function syncCalendarFromServer(token, currentTime = new Date()) {
     if (!SYNC_CALENDAR_NAME) return '同步已禁用（SYNC_CALENDAR_NAME 为空）';
 
     const window = buildCalendarSyncWindow(currentTime);
-    const data = await fetchCalendarSyncData(window, token);
+    const data   = await fetchCalendarSyncData(window, token);
     // 服务端窗口按自然日闭区间定义，Scriptable 的 between 使用右开区间。
     const rangeEnd = addLocalDays(window.endDate, 1);
-    const result = await applyAgendaItemsToCalendar(data.items, window.startDate, rangeEnd);
+    const result   = await applyAgendaItemsToCalendar(data.items, window.startDate, rangeEnd);
     if (result.completed) {
         Keychain.set(CALENDAR_SYNC_CURSOR_KEY, window.nextCursorKey);
     }
@@ -1373,7 +1373,7 @@ function createErrorWidget(error) {
 }
 
 let widget;
-let widgetData = null;
+let widgetData    = null;
 const widgetToken = textValue(TOKEN, '', 4096);
 try {
     if (!/^https?:\/\/[^\s/]+/i.test(BASE_URL) || BASE_URL.includes('example.com')) {
@@ -1392,7 +1392,7 @@ try {
 if (!config.runsInWidget && widgetData) {
     try {
         const result = await syncCalendarFromServer(widgetToken);
-        const note = new Notification();
+        const note   = new Notification();
         note.title = 'Pendo 日历同步';
         note.body = result;
         await note.schedule();

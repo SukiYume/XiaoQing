@@ -1,3 +1,4 @@
+# 验证不可信图片在尺寸、格式和解码边界受到统一约束。
 """Shared untrusted-image validation boundaries."""
 
 from __future__ import annotations
@@ -23,20 +24,20 @@ def _image_bytes(image_format: str = "PNG", *, frames: int = 1) -> bytes:
     images = [Image.new("RGB", (4, 3), color) for color in ("red", "blue", "green")[:frames]]
     images[0].save(
         buffer,
-        format=image_format,
-        save_all=frames > 1,
-        append_images=images[1:],
-        duration=10,
-        loop=0,
+        format        = image_format,
+        save_all      = frames > 1,
+        append_images = images[1:],
+        duration      = 10,
+        loop          = 0,
     )
     return buffer.getvalue()
 
 
 def _limits(**overrides: int) -> ImageValidationLimits:
     return ImageValidationLimits(
-        max_bytes=overrides.get("max_bytes", 1024 * 1024),
-        max_pixels=overrides.get("max_pixels", 10_000),
-        max_frames=overrides.get("max_frames", 10),
+        max_bytes  = overrides.get("max_bytes", 1024 * 1024),
+        max_pixels = overrides.get("max_pixels", 10_000),
+        max_frames = overrides.get("max_frames", 10),
     )
 
 

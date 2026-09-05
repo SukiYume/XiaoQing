@@ -62,7 +62,7 @@ class WebAuthRepositoryMixin:
         """持久化仅可使用一次的浏览器登录码摘要。"""
 
         digest = self._validate_auth_digest(code_digest, "login code digest")
-        owner = self._validate_auth_owner(owner_id)
+        owner  = self._validate_auth_owner(owner_id)
         issued, expires = self._validate_auth_times(issued_at, expires_at)
         with self.transaction(immediate=True) as conn:
             conn.execute("DELETE FROM login_code_registry WHERE expires_at <= ?", (issued,))
@@ -111,8 +111,8 @@ class WebAuthRepositoryMixin:
 
         digest = self._validate_auth_digest(session_digest, "web session digest")
         device = str(device_id or "").strip()
-        csrf = str(csrf_token or "").strip()
-        owner = self._validate_auth_owner(owner_id)
+        csrf   = str(csrf_token or "").strip()
+        owner  = self._validate_auth_owner(owner_id)
         created, expires = self._validate_auth_times(created_at, expires_at)
         if not device or len(device) > 256:
             raise ValueError("web session device_id is invalid")
@@ -192,7 +192,7 @@ class WebAuthRepositoryMixin:
     ) -> bool:
         """撤销指定用户拥有的一条有效浏览器会话。"""
 
-        owner = self._validate_auth_owner(owner_id)
+        owner  = self._validate_auth_owner(owner_id)
         device = str(device_id or "").strip()
         if not device:
             return False
@@ -219,7 +219,7 @@ class WebAuthRepositoryMixin:
         expires_at: int,
     ) -> tuple[str, str, int, int]:
         token_id = str(jti or "").strip()
-        owner = str(owner_id or "").strip()
+        owner    = str(owner_id or "").strip()
         if not token_id or len(token_id) > 256:
             raise ValueError("widget token jti is invalid")
         if not owner or len(owner) > 256:
@@ -287,7 +287,7 @@ class WebAuthRepositoryMixin:
         """仅当 JTI 已登记、未过期且未撤销时返回真。"""
 
         token_id = str(jti or "").strip()
-        owner = str(owner_id or "").strip()
+        owner    = str(owner_id or "").strip()
         if not token_id or not owner:
             return False
         timestamp = int(time.time()) if now is None else now

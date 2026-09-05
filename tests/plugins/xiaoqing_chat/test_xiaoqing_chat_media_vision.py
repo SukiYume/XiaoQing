@@ -24,9 +24,9 @@ mock_context = _fixture_support.mock_context
 
 @pytest.mark.asyncio
 async def test_render_event_media_text_retries_same_provider_once_on_semantic_failure(mock_context):
-    runtime = _make_media_runtime()
-    vision = mock_context.secrets["plugins"]["xiaoqing_chat"]["vision"]
-    vision["default"] = "glm-4.6v-flash"
+    runtime             = _make_media_runtime()
+    vision              = mock_context.secrets["plugins"]["xiaoqing_chat"]["vision"]
+    vision["default"]   = "glm-4.6v-flash"
     vision["fallbacks"] = ["glm-4v-flash"]
     vision["providers"] = {
         "glm-4.6v-flash": {
@@ -82,7 +82,7 @@ async def test_render_event_media_text_retries_same_provider_once_on_semantic_fa
 @pytest.mark.asyncio
 async def test_render_event_media_text_logs_raw_response_metadata(mock_context):
     runtime = _make_media_runtime()
-    event = {"message": [{"type": "image", "data": {"url": "https://example.com/cat_photo.png"}}]}
+    event   = {"message": [{"type": "image", "data": {"url": "https://example.com/cat_photo.png"}}]}
     raw_content = json.dumps({"kind": "image", "description": "海边落日"}, ensure_ascii=False)
 
     async def _fake_chat_raw(**kwargs):
@@ -126,14 +126,14 @@ async def test_render_event_media_text_preserves_visible_text_for_text_heavy_scr
     mock_context,
 ):
     runtime = _make_media_runtime()
-    event = {
+    event   = {
         "message": [{"type": "image", "data": {"url": "https://example.com/news_screenshot.jpg"}}]
     }
     captured: dict[str, object] = {}
 
     async def _fake_chat_raw(**kwargs):
-        messages = kwargs["messages"]
-        captured["prompt"] = messages[1]["content"][0]["text"]
+        messages               = kwargs["messages"]
+        captured["prompt"]     = messages[1]["content"][0]["text"]
         captured["max_tokens"] = kwargs["max_tokens"]
         return _raw_media_response(
             json.dumps(
@@ -173,10 +173,10 @@ async def test_render_event_media_text_preserves_visible_text_for_text_heavy_scr
 @pytest.mark.asyncio
 async def test_render_event_media_text_retries_when_finish_reason_length(mock_context):
     runtime = _make_media_runtime()
-    event = {
+    event   = {
         "message": [{"type": "image", "data": {"url": "https://example.com/news_screenshot.jpg"}}]
     }
-    calls = 0
+    calls                      = 0
     max_tokens_seen: list[int] = []
 
     async def _fake_chat_raw(**kwargs):
@@ -232,9 +232,9 @@ async def test_render_event_media_text_retries_when_finish_reason_length(mock_co
 
 @pytest.mark.asyncio
 async def test_render_event_media_text_falls_back_after_semantic_retry_exhausted(mock_context):
-    runtime = _make_media_runtime()
-    vision = mock_context.secrets["plugins"]["xiaoqing_chat"]["vision"]
-    vision["default"] = "glm-4.6v-flash"
+    runtime             = _make_media_runtime()
+    vision              = mock_context.secrets["plugins"]["xiaoqing_chat"]["vision"]
+    vision["default"]   = "glm-4.6v-flash"
     vision["fallbacks"] = ["glm-4v-flash"]
     vision["providers"] = {
         "glm-4.6v-flash": {
@@ -286,9 +286,9 @@ async def test_render_event_media_text_falls_back_after_semantic_retry_exhausted
 
 @pytest.mark.asyncio
 async def test_render_event_media_text_falls_back_immediately_on_request_timeout(mock_context):
-    runtime = _make_media_runtime()
-    vision = mock_context.secrets["plugins"]["xiaoqing_chat"]["vision"]
-    vision["default"] = "glm-4.6v-flash"
+    runtime             = _make_media_runtime()
+    vision              = mock_context.secrets["plugins"]["xiaoqing_chat"]["vision"]
+    vision["default"]   = "glm-4.6v-flash"
     vision["fallbacks"] = ["glm-4v-flash"]
     vision["providers"] = {
         "glm-4.6v-flash": {
@@ -340,7 +340,7 @@ async def test_render_event_media_text_falls_back_immediately_on_request_timeout
 @pytest.mark.asyncio
 async def test_render_event_media_text_uses_detail_when_emoji_refine_is_generic(mock_context):
     runtime = _make_media_runtime()
-    event = {
+    event   = {
         "message": [
             {
                 "type": "image",
@@ -389,8 +389,8 @@ async def test_render_event_media_text_uses_detail_when_emoji_refine_is_generic(
 @pytest.mark.asyncio
 async def test_render_event_media_text_defers_slow_emoji_refine_and_uses_detail(mock_context):
     runtime = _make_media_runtime(
-        enable_emoji_refine_background=True,
-        emoji_refine_timeout_seconds=0.01,
+        enable_emoji_refine_background = True,
+        emoji_refine_timeout_seconds   = 0.01,
     )
     event = {
         "message": [
@@ -444,8 +444,8 @@ async def test_render_event_media_text_defers_slow_emoji_refine_and_uses_detail(
 @pytest.mark.asyncio
 async def test_render_event_media_background_refine_updates_cache(mock_context):
     runtime = _make_media_runtime(
-        enable_emoji_refine_background=True,
-        emoji_refine_timeout_seconds=1.0,
+        enable_emoji_refine_background = True,
+        emoji_refine_timeout_seconds   = 1.0,
     )
     event = {
         "message": [
@@ -498,7 +498,7 @@ async def test_render_event_media_background_refine_updates_cache(mock_context):
 
     assert text == "[表情包：惊讶，警觉]"
     cache_path = mock_context.data_dir / "media" / "render_cache.json"
-    item = {}
+    item       = {}
     for _ in range(20):
         cache = json.loads(cache_path.read_text(encoding="utf-8"))
         item = next(iter(cache["items"].values()))
@@ -516,30 +516,30 @@ async def test_background_refine_does_not_replace_equal_quality_foreground(
     from plugins.xiaoqing_chat.media import event_media_analysis
 
     runtime = _make_media_runtime(
-        enable_emoji_refine_background=True,
-        emoji_refine_timeout_seconds=1.0,
+        enable_emoji_refine_background = True,
+        emoji_refine_timeout_seconds   = 1.0,
     )
     resolved = ResolvedMedia(
-        media_hash="stable-quality",
-        segment_type="image",
-        source_name="emoji.png",
-        mime_type="image/png",
-        cached_path=mock_context.data_dir / "emoji.png",
+        media_hash   = "stable-quality",
+        segment_type = "image",
+        source_name  = "emoji.png",
+        mime_type    = "image/png",
+        cached_path  = mock_context.data_dir / "emoji.png",
     )
     rendered = RenderedMedia(
-        media_hash=resolved.media_hash,
-        kind="emoji",
-        description="一只黑猫瞪大眼睛并举起前爪",
-        emotion_tags=("惊讶", "警觉"),
-        marker="[表情包：惊讶，警觉]",
-        cached_path=resolved.cached_path,
+        media_hash   = resolved.media_hash,
+        kind         = "emoji",
+        description  = "一只黑猫瞪大眼睛并举起前爪",
+        emotion_tags = ("惊讶", "警觉"),
+        marker       = "[表情包：惊讶，警觉]",
+        cached_path  = resolved.cached_path,
     )
     refined = MediaAnalysisDraft(
-        kind="emoji",
-        description="黑猫震惊",
-        visible_text="",
-        emotion_tags=("惊讶", "警觉"),
-        parsed_json=True,
+        kind         = "emoji",
+        description  = "黑猫震惊",
+        visible_text = "",
+        emotion_tags = ("惊讶", "警觉"),
+        parsed_json  = True,
     )
     pending = []
 
@@ -559,8 +559,8 @@ async def test_background_refine_does_not_replace_equal_quality_foreground(
         event_media_analysis._schedule_background_emoji_refine(
             rendered,
             resolved,
-            context=mock_context,
-            runtime=runtime,
+            context = mock_context,
+            runtime = runtime,
         )
         await pending[0]
 
@@ -575,7 +575,7 @@ async def test_background_refine_does_not_replace_equal_quality_foreground(
 @pytest.mark.asyncio
 async def test_render_event_media_text_retries_and_then_falls_back_when_detail_empty(mock_context):
     runtime = _make_media_runtime()
-    event = {
+    event   = {
         "message": [
             {
                 "type": "image",
@@ -631,7 +631,7 @@ async def test_render_event_media_text_does_not_leak_download_query_into_fallbac
     mock_context,
 ):
     runtime = _make_media_runtime()
-    event = {
+    event   = {
         "message": [
             {
                 "type": "image",
@@ -671,34 +671,34 @@ async def test_render_event_media_text_does_not_leak_download_query_into_fallbac
 
 def test_semantic_validation_rejects_vision_refusal_as_a_description(tmp_path):
     resolved = ResolvedMedia(
-        media_hash="refusal-hash",
-        segment_type="image",
-        source_name="photo",
-        mime_type="image/png",
-        cached_path=tmp_path / "photo.png",
+        media_hash   = "refusal-hash",
+        segment_type = "image",
+        source_name  = "photo",
+        mime_type    = "image/png",
+        cached_path  = tmp_path / "photo.png",
     )
     rendered = RenderedMedia(
-        media_hash="refusal-hash",
-        kind="image",
-        description="无法查看这张图片",
-        emotion_tags=(),
-        marker="[图片：无法查看这张图片]",
-        cached_path=resolved.cached_path,
+        media_hash   = "refusal-hash",
+        kind         = "image",
+        description  = "无法查看这张图片",
+        emotion_tags = (),
+        marker       = "[图片：无法查看这张图片]",
+        cached_path  = resolved.cached_path,
     )
     detail = MediaAnalysisDraft(
-        kind="image",
-        description=rendered.description,
-        visible_text="",
-        emotion_tags=(),
-        parsed_json=True,
+        kind         = "image",
+        description  = rendered.description,
+        visible_text = "",
+        emotion_tags = (),
+        parsed_json  = True,
     )
 
     assert (
         _semantic_retry_reason(
-            detail=detail,
-            rendered=rendered,
-            used_summary_fallback=False,
-            resolved=resolved,
+            detail                = detail,
+            rendered              = rendered,
+            used_summary_fallback = False,
+            resolved              = resolved,
         )
         == "vision_refusal"
     )
@@ -707,7 +707,7 @@ def test_semantic_validation_rejects_vision_refusal_as_a_description(tmp_path):
 @pytest.mark.asyncio
 async def test_render_event_media_text_resolves_remote_url_into_cache(mock_context):
     runtime = _make_media_runtime()
-    event = {"message": [{"type": "image", "data": {"url": "https://example.com/cat_photo.png"}}]}
+    event   = {"message": [{"type": "image", "data": {"url": "https://example.com/cat_photo.png"}}]}
 
     with (
         patch(

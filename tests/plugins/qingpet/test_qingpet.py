@@ -21,7 +21,7 @@ def test_database_initialization(qingpet_db):
 
 def test_user_creation(qingpet_db):
     user_service = UserService(qingpet_db)
-    user = user_service.get_or_create_user("test_user", 123456)
+    user         = user_service.get_or_create_user("test_user", 123456)
     assert user.user_id == "test_user"
     assert user.group_id == 123456
     assert user.coins == 100
@@ -29,14 +29,14 @@ def test_user_creation(qingpet_db):
 
 def test_group_economy_stats_use_constant_query_count(qingpet_db):
     user_service = UserService(qingpet_db)
-    pet_service = PetService(qingpet_db)
+    pet_service  = PetService(qingpet_db)
     for index in range(4):
         user_id = f"stats-user-{index}"
         user_service.get_or_create_user(user_id, 123456)
         pet_service.adopt_pet(user_id, 123456, f"统计宠{index}")
 
     statements: list[str] = []
-    connection = qingpet_db._get_connection()
+    connection            = qingpet_db._get_connection()
     connection.set_trace_callback(statements.append)
     try:
         stats = EconomyService(qingpet_db).get_group_stats(123456)
@@ -57,23 +57,23 @@ def test_group_economy_stats_use_constant_query_count(qingpet_db):
 
 def test_group_economy_stats_detect_unledgered_balance_drift(qingpet_db):
     user_service = UserService(qingpet_db)
-    pet_service = PetService(qingpet_db)
+    pet_service  = PetService(qingpet_db)
     user_service.get_or_create_user("ledger-user", 123456)
     pet_service.adopt_pet("ledger-user", 123456, "账本宠")
     service = EconomyService(qingpet_db)
 
-    baseline = service.get_group_stats(123456)
+    baseline   = service.get_group_stats(123456)
     settlement = qingpet_db.settle_minigame_atomic(
         "ledger-user",
         123456,
         "reconciliation_test",
-        reference_id="reconciliation-test:credit",
-        daily_coin_limit=500,
-        cooldown_seconds=0,
+        reference_id     = "reconciliation-test:credit",
+        daily_coin_limit = 500,
+        cooldown_seconds = 0,
         outcome_factory=lambda _pet, _opponent: MinigameOutcome(requested_coins=25),
     )
     consistent = service.get_group_stats(123456)
-    user = qingpet_db.get_user("ledger-user", 123456)
+    user       = qingpet_db.get_user("ledger-user", 123456)
     user.coins -= 10
     assert qingpet_db.update_user(user) is True
     after_user_update = service.get_group_stats(123456)
@@ -83,7 +83,7 @@ def test_group_economy_stats_detect_unledgered_balance_drift(qingpet_db):
         "ledger-user", 123456, "red_hat", "coins", 50
     )
     after_dress_purchase = service.get_group_stats(123456)
-    connection = qingpet_db._get_connection()
+    connection           = qingpet_db._get_connection()
     connection.execute(
         "UPDATE users SET coins = coins + 7 WHERE user_id = ? AND group_id = ?",
         ("ledger-user", 123456),
@@ -124,7 +124,7 @@ def test_pet_adopt(qingpet_db):
 
 def test_pet_feed(qingpet_db):
     user_service = UserService(qingpet_db)
-    user = user_service.get_or_create_user("test_user", 123456)
+    user         = user_service.get_or_create_user("test_user", 123456)
 
     pet_service = PetService(qingpet_db)
     pet_service.adopt_pet("test_user", 123456, "小白")
@@ -137,7 +137,7 @@ def test_pet_feed(qingpet_db):
 
 def test_pet_clean(qingpet_db):
     user_service = UserService(qingpet_db)
-    user = user_service.get_or_create_user("test_user", 123456)
+    user         = user_service.get_or_create_user("test_user", 123456)
 
     pet_service = PetService(qingpet_db)
     pet_service.adopt_pet("test_user", 123456, "小白")
@@ -149,7 +149,7 @@ def test_pet_clean(qingpet_db):
 
 def test_pet_play(qingpet_db):
     user_service = UserService(qingpet_db)
-    user = user_service.get_or_create_user("test_user", 123456)
+    user         = user_service.get_or_create_user("test_user", 123456)
 
     pet_service = PetService(qingpet_db)
     pet_service.adopt_pet("test_user", 123456, "小白")
@@ -177,12 +177,12 @@ def test_pet_sleep_and_wake(qingpet_db):
 
 def test_pet_train(qingpet_db):
     user_service = UserService(qingpet_db)
-    user = user_service.get_or_create_user("test_user", 123456)
+    user         = user_service.get_or_create_user("test_user", 123456)
 
     pet_service = PetService(qingpet_db)
     pet_service.adopt_pet("test_user", 123456, "小白")
 
-    pet = qingpet_db.get_pet("test_user", 123456)
+    pet        = qingpet_db.get_pet("test_user", 123456)
     pet.energy = 50
 
     success, _message, _coins = pet_service.train_pet(pet, user)
@@ -191,12 +191,12 @@ def test_pet_train(qingpet_db):
 
 def test_pet_explore(qingpet_db):
     user_service = UserService(qingpet_db)
-    user = user_service.get_or_create_user("test_user", 123456)
+    user         = user_service.get_or_create_user("test_user", 123456)
 
     pet_service = PetService(qingpet_db)
     pet_service.adopt_pet("test_user", 123456, "小白")
 
-    pet = qingpet_db.get_pet("test_user", 123456)
+    pet        = qingpet_db.get_pet("test_user", 123456)
     pet.energy = 50
 
     success, _message, _coins = pet_service.explore(pet, user)
@@ -206,7 +206,7 @@ def test_pet_explore(qingpet_db):
 def test_item_service(qingpet_db):
     item_service = ItemService(qingpet_db)
     user_service = UserService(qingpet_db)
-    _user = user_service.get_or_create_user("test_user", 123456)
+    _user        = user_service.get_or_create_user("test_user", 123456)
 
     success, _message = item_service.buy_item("test_user", 123456, "apple", 5)
     assert success
@@ -229,7 +229,7 @@ def test_social_visit(qingpet_db):
 
 
 def test_social_ranking(qingpet_db):
-    pet_service = PetService(qingpet_db)
+    pet_service  = PetService(qingpet_db)
     user_service = UserService(qingpet_db)
 
     for i in range(5):
@@ -238,7 +238,7 @@ def test_social_ranking(qingpet_db):
         pet_service.adopt_pet(user_id, 123456, f"宠物{i}")
 
     social_service = SocialService(qingpet_db)
-    ranking = social_service.get_ranking(123456, "care_score", 10)
+    ranking        = social_service.get_ranking(123456, "care_score", 10)
     assert len(ranking) == 5
 
 
@@ -279,7 +279,7 @@ def test_pet_decay(qingpet_db):
     pet.last_update = datetime.now() - timedelta(minutes=10)
     qingpet_db.update_pet(pet)
 
-    pet = qingpet_db.get_pet("test_user", 123456)
+    pet            = qingpet_db.get_pet("test_user", 123456)
     initial_hunger = pet.hunger
 
     # apply_decay returns Optional[str] (alert message or None), not bool
@@ -291,10 +291,10 @@ def test_pet_decay(qingpet_db):
 
 def test_user_daily_reset(qingpet_db):
     user_service = UserService(qingpet_db)
-    user = user_service.get_or_create_user("test_user", 123456)
+    user         = user_service.get_or_create_user("test_user", 123456)
 
     user.today_coins_earned = 100
-    user.today_feed_count = 5
+    user.today_feed_count   = 5
     qingpet_db.update_user(user)
 
     result = qingpet_db.run_daily_reset_atomic("test-user-daily-reset:123456", 123456)
@@ -344,7 +344,7 @@ def test_admin_reset_clears_pet_cooldowns_and_social_cooldowns(qingpet_db):
     admin_service = AdminService(qingpet_db)
     assert admin_service.reset_user_pet("test_user", 123456) is True
 
-    reset_pet = qingpet_db.get_pet("test_user", 123456)
+    reset_pet  = qingpet_db.get_pet("test_user", 123456)
     reset_user = qingpet_db.get_user("test_user", 123456)
 
     assert reset_pet.status == PetStatus.NORMAL
@@ -399,17 +399,17 @@ async def test_trade_cancel_returns_item_to_listing_group_inventory(qingpet_db):
     assert ok is True
 
     listing_group_inventory = qingpet_db.get_or_create_inventory("seller", 123456)
-    other_group_inventory = qingpet_db.get_or_create_inventory("seller", 999999)
+    other_group_inventory   = qingpet_db.get_or_create_inventory("seller", 999999)
     assert listing_group_inventory.get_item_count("apple") == 2
     assert other_group_inventory.get_item_count("apple") == 0
 
 
 def test_purchase_trade_listing_updates_users_and_inventory(qingpet_db):
     user_service = UserService(qingpet_db)
-    seller = user_service.get_or_create_user("seller", 123456)
-    buyer = user_service.get_or_create_user("buyer", 123456)
+    seller       = user_service.get_or_create_user("seller", 123456)
+    buyer        = user_service.get_or_create_user("buyer", 123456)
     seller.coins = 100
-    buyer.coins = 200
+    buyer.coins  = 200
     qingpet_db.update_user(seller)
     qingpet_db.update_user(buyer)
     pet_service = PetService(qingpet_db)
@@ -436,7 +436,7 @@ def test_purchase_trade_listing_updates_users_and_inventory(qingpet_db):
 
 def test_pet_show_votes_allow_multiple_votes_per_user(qingpet_db):
     user_service = UserService(qingpet_db)
-    pet_service = PetService(qingpet_db)
+    pet_service  = PetService(qingpet_db)
     user_service.get_or_create_user("voter", 123456)
     user_service.get_or_create_user("pet_a", 123456)
     user_service.get_or_create_user("pet_b", 123456)

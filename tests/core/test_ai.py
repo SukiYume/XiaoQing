@@ -1,3 +1,4 @@
+# 验证统一 AI 服务的配置路由、模型调用与失败边界。
 from __future__ import annotations
 
 import asyncio
@@ -26,16 +27,16 @@ class _Body:
 
 class _Response:
     def __init__(self, status: int, payload: dict[str, Any] | None = None) -> None:
-        body = json.dumps(payload or {}).encode("utf-8")
-        self.status = status
-        self.url = ""
+        body         = json.dumps(payload or {}).encode("utf-8")
+        self.status  = status
+        self.url     = ""
         self.headers = {
             "Content-Type": "application/json",
             "Content-Length": str(len(body)),
         }
         self.content_length = len(body)
-        self.content = _Body(body)
-        self.closed = False
+        self.content        = _Body(body)
+        self.closed         = False
 
     async def __aenter__(self) -> _Response:
         return self
@@ -51,12 +52,12 @@ class _Session:
     closed = False
 
     def __init__(self, *responses: _Response) -> None:
-        self.responses = list(responses)
+        self.responses                                    = list(responses)
         self.calls: list[tuple[str, str, dict[str, Any]]] = []
 
     def request(self, method: str, url: str, **kwargs: Any) -> _Response:
         self.calls.append((method, url, kwargs))
-        response = self.responses.pop(0)
+        response     = self.responses.pop(0)
         response.url = url
         return response
 
@@ -148,10 +149,10 @@ def test_ai_model_listing_preserves_order_without_exposing_credentials() -> None
     config, secrets = _settings()
 
     models = list_configured_models(
-        config=config,
-        secrets=secrets,
-        plugin_name="demo",
-        route_name="chat",
+        config      = config,
+        secrets     = secrets,
+        plugin_name = "demo",
+        route_name  = "chat",
     )
 
     assert [model.name for model in models] == ["primary-text", "backup-text"]
@@ -165,14 +166,14 @@ async def test_ai_route_uses_first_model_and_merges_explicit_request_layers() ->
     session = _Session(_Response(200, _completion()))
 
     result = await complete_configured_route(
-        session=session,
-        config=config,
-        secrets=secrets,
-        plugin_name="demo",
-        route_name="chat",
-        messages=[{"role": "user", "content": "hello"}],
-        top_p=0.9,
-        extra_payload={"seed": 7},
+        session       = session,
+        config        = config,
+        secrets       = secrets,
+        plugin_name   = "demo",
+        route_name    = "chat",
+        messages      = [{"role": "user", "content": "hello"}],
+        top_p         = 0.9,
+        extra_payload = {"seed": 7},
     )
 
     assert result.content == "ok"
@@ -208,12 +209,12 @@ async def test_ai_route_falls_back_in_order_after_rate_limit() -> None:
     )
 
     result = await complete_configured_route(
-        session=session,
-        config=config,
-        secrets=secrets,
-        plugin_name="demo",
-        route_name="chat",
-        messages=[{"role": "user", "content": "hello"}],
+        session     = session,
+        config      = config,
+        secrets     = secrets,
+        plugin_name = "demo",
+        route_name  = "chat",
+        messages    = [{"role": "user", "content": "hello"}],
     )
 
     assert result.content == "backup"
@@ -254,12 +255,12 @@ async def test_ai_route_treats_structurally_nonempty_but_semantically_empty_part
     )
 
     result = await complete_configured_route(
-        session=session,
-        config=config,
-        secrets=secrets,
-        plugin_name="demo",
-        route_name="chat",
-        messages=[{"role": "user", "content": "hello"}],
+        session     = session,
+        config      = config,
+        secrets     = secrets,
+        plugin_name = "demo",
+        route_name  = "chat",
+        messages    = [{"role": "user", "content": "hello"}],
     )
 
     assert result.content == "backup"
@@ -288,12 +289,12 @@ async def test_ai_route_accepts_text_from_structured_content_parts() -> None:
     )
 
     result = await complete_configured_route(
-        session=session,
-        config=config,
-        secrets=secrets,
-        plugin_name="demo",
-        route_name="chat",
-        messages=[{"role": "user", "content": "hello"}],
+        session     = session,
+        config      = config,
+        secrets     = secrets,
+        plugin_name = "demo",
+        route_name  = "chat",
+        messages    = [{"role": "user", "content": "hello"}],
     )
 
     assert result.content == "first\nsecond"
@@ -303,19 +304,19 @@ async def test_ai_route_accepts_text_from_structured_content_parts() -> None:
 async def test_ai_route_retries_a_model_before_using_the_next_profile() -> None:
     config, secrets = _settings()
     config["plugins"]["demo"]["ai"]["routes"]["chat"]["max_retry"] = 1
-    session = _Session(
+    session                                                        = _Session(
         _Response(500),
         _Response(500),
         _Response(200, _completion("backup")),
     )
 
     result = await complete_configured_route(
-        session=session,
-        config=config,
-        secrets=secrets,
-        plugin_name="demo",
-        route_name="chat",
-        messages=[{"role": "user", "content": "hello"}],
+        session     = session,
+        config      = config,
+        secrets     = secrets,
+        plugin_name = "demo",
+        route_name  = "chat",
+        messages    = [{"role": "user", "content": "hello"}],
     )
 
     assert result.profile == "backup-text"
@@ -337,12 +338,12 @@ async def test_ai_route_does_not_hide_authentication_failure_with_fallback() -> 
 
     with pytest.raises(AIRequestError, match="ai_authentication") as captured:
         await complete_configured_route(
-            session=session,
-            config=config,
-            secrets=secrets,
-            plugin_name="demo",
-            route_name="chat",
-            messages=[{"role": "user", "content": "hello"}],
+            session     = session,
+            config      = config,
+            secrets     = secrets,
+            plugin_name = "demo",
+            route_name  = "chat",
+            messages    = [{"role": "user", "content": "hello"}],
         )
 
     assert captured.value.status == 401
@@ -355,13 +356,13 @@ async def test_ai_pinned_model_is_strict_and_skips_other_profiles() -> None:
     session = _Session(_Response(200, _completion("pinned")))
 
     result = await complete_configured_route(
-        session=session,
-        config=config,
-        secrets=secrets,
-        plugin_name="demo",
-        route_name="chat",
-        pinned_model="backup-text",
-        messages=[{"role": "user", "content": "hello"}],
+        session      = session,
+        config       = config,
+        secrets      = secrets,
+        plugin_name  = "demo",
+        route_name   = "chat",
+        pinned_model = "backup-text",
+        messages     = [{"role": "user", "content": "hello"}],
     )
 
     assert result.content == "pinned"
@@ -376,13 +377,13 @@ async def test_ai_route_rejects_modality_mismatch_before_network() -> None:
 
     with pytest.raises(AIConfigError, match="does not support"):
         await complete_configured_route(
-            session=session,
-            config=config,
-            secrets=secrets,
-            plugin_name="demo",
-            route_name="chat",
-            required_modalities=("text", "image"),
-            messages=[{"role": "user", "content": "image"}],
+            session             = session,
+            config              = config,
+            secrets             = secrets,
+            plugin_name         = "demo",
+            route_name          = "chat",
+            required_modalities = ("text", "image"),
+            messages            = [{"role": "user", "content": "image"}],
         )
 
     assert session.calls == []
@@ -394,20 +395,20 @@ def test_ai_route_requires_valid_references_and_provider_credentials() -> None:
 
     with pytest.raises(AIConfigError, match="config.ai.models.missing"):
         list_configured_models(
-            config=config,
-            secrets=secrets,
-            plugin_name="demo",
-            route_name="chat",
+            config      = config,
+            secrets     = secrets,
+            plugin_name = "demo",
+            route_name  = "chat",
         )
 
     config, secrets = _settings()
     del secrets["ai"]["providers"]["primary"]["api_key"]
     with pytest.raises(AIConfigError, match="api_key"):
         list_configured_models(
-            config=config,
-            secrets=secrets,
-            plugin_name="demo",
-            route_name="chat",
+            config      = config,
+            secrets     = secrets,
+            plugin_name = "demo",
+            route_name  = "chat",
         )
 
 
@@ -417,20 +418,20 @@ def test_ai_route_rejects_reserved_payload_overrides() -> None:
 
     with pytest.raises(AIConfigError, match="reserved"):
         list_configured_models(
-            config=config,
-            secrets=secrets,
-            plugin_name="demo",
-            route_name="chat",
+            config      = config,
+            secrets     = secrets,
+            plugin_name = "demo",
+            route_name  = "chat",
         )
 
     config, secrets = _settings()
     config["plugins"]["demo"]["ai"]["routes"]["chat"]["request_defaults"] = {"temperature": 1.9}
     with pytest.raises(AIConfigError, match="reserved"):
         list_configured_models(
-            config=config,
-            secrets=secrets,
-            plugin_name="demo",
-            route_name="chat",
+            config      = config,
+            secrets     = secrets,
+            plugin_name = "demo",
+            route_name  = "chat",
         )
 
 
@@ -441,13 +442,13 @@ async def test_ai_request_rejects_reserved_extra_payload_before_network() -> Non
 
     with pytest.raises(AIConfigError, match="reserved"):
         await complete_configured_route(
-            session=session,
-            config=config,
-            secrets=secrets,
-            plugin_name="demo",
-            route_name="chat",
-            messages=[{"role": "user", "content": "hello"}],
-            extra_payload={"model": "must-not-override"},
+            session       = session,
+            config        = config,
+            secrets       = secrets,
+            plugin_name   = "demo",
+            route_name    = "chat",
+            messages      = [{"role": "user", "content": "hello"}],
+            extra_payload = {"model": "must-not-override"},
         )
 
     assert session.calls == []
@@ -469,12 +470,12 @@ async def test_ai_route_total_timeout_bounds_response_reading() -> None:
 
     with pytest.raises(AIRequestError, match="ai_route_timeout"):
         await complete_configured_route(
-            session=session,
-            config=config,
-            secrets=secrets,
-            plugin_name="demo",
-            route_name="chat",
-            messages=[{"role": "user", "content": "hello"}],
+            session     = session,
+            config      = config,
+            secrets     = secrets,
+            plugin_name = "demo",
+            route_name  = "chat",
+            messages    = [{"role": "user", "content": "hello"}],
         )
 
     assert len(session.calls) == 1

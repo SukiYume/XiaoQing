@@ -19,7 +19,7 @@ from core.interfaces import (
 
 def test_delivery_target_is_validated_and_immutable() -> None:
     private = DeliveryTarget("private", 123)
-    group = DeliveryTarget("group", 456)
+    group   = DeliveryTarget("group", 456)
 
     assert (private.user_id, private.group_id) == (123, None)
     assert (group.user_id, group.group_id) == (None, 456)
@@ -34,10 +34,10 @@ def test_delivery_target_is_validated_and_immutable() -> None:
 
 def test_plugin_principal_validates_identity_and_group_authority() -> None:
     principal = PluginPrincipal(
-        kind="user",
-        user_id=123,
-        group_id=456,
-        group_role="admin",
+        kind       = "user",
+        user_id    = 123,
+        group_id   = 456,
+        group_role = "admin",
     )
 
     assert principal.can_manage_group(456) is True
@@ -62,8 +62,8 @@ def test_plugin_principal_validates_identity_and_group_authority() -> None:
         PluginPrincipal(kind="lifecycle", schedule_delivery="silent")
     with pytest.raises(ValueError, match="delivery mode"):
         PluginPrincipal(
-            kind="scheduled_system",
-            schedule_delivery="plugin",  # type: ignore[arg-type]
+            kind              = "scheduled_system",
+            schedule_delivery = "plugin",  # type: ignore[arg-type]
         )
 
 
@@ -276,7 +276,7 @@ def test_config_manager_like_declares_atomic_reload_and_snapshot_contract() -> N
 
     for owner in (ConfigManagerLike, ConfigManager):
         reload_signature = inspect.signature(owner.reload)
-        notify = reload_signature.parameters["notify"]
+        notify           = reload_signature.parameters["notify"]
         assert notify.kind is inspect.Parameter.KEYWORD_ONLY
         assert notify.default is False
         assert hasattr(owner, "snapshot")
@@ -295,7 +295,7 @@ def test_plugin_config_protocol():
 
     class MockPluginConfig:
         def __init__(self):
-            self.config = {"bot_name": "测试"}
+            self.config  = {"bot_name": "测试"}
             self.secrets = {"admin_ids": [12345]}
 
     plugin_config = MockPluginConfig()
@@ -354,8 +354,8 @@ def test_session_access_protocol():
 
     class MockSessionAccess:
         def __init__(self):
-            self.session_manager = MagicMock()
-            self.current_user_id = 12345
+            self.session_manager  = MagicMock()
+            self.current_user_id  = 12345
             self.current_group_id = 67890
 
     access = MockSessionAccess()
@@ -374,8 +374,8 @@ def test_session_access_with_none_values():
 
     class MockSessionAccess:
         def __init__(self):
-            self.session_manager = None
-            self.current_user_id = None
+            self.session_manager  = None
+            self.current_user_id  = None
             self.current_group_id = None
 
     access = MockSessionAccess()
@@ -396,30 +396,30 @@ def test_plugin_context_protocol():
     class MockPluginContext:
         def __init__(self):
             # PluginConfig
-            self.config = {"test": "value"}
+            self.config  = {"test": "value"}
             self.secrets = {"token": "secret"}
 
             # PluginRuntime
             async def send_action(action):
                 pass
 
-            self.send_action = send_action
-            self.reload_config = lambda: None
-            self.reload_plugins = lambda: None
+            self.send_action         = send_action
+            self.reload_config       = lambda: None
+            self.reload_plugins      = lambda: None
             self.get_command_catalog = lambda: ()
-            self.list_plugins = lambda: ["test"]
+            self.list_plugins        = lambda: ["test"]
 
             # SessionAccess
-            self.session_manager = MagicMock()
-            self.current_user_id = 12345
+            self.session_manager  = MagicMock()
+            self.current_user_id  = 12345
             self.current_group_id = 67890
 
             # Additional required attributes
             self.plugin_name = "test_plugin"
-            self.plugin_dir = Path("/test/plugin")
-            self.data_dir = Path("/test/data")
-            self.logger = MagicMock()
-            self.state = {"key": "value"}
+            self.plugin_dir  = Path("/test/plugin")
+            self.data_dir    = Path("/test/data")
+            self.logger      = MagicMock()
+            self.state       = {"key": "value"}
 
         def default_groups(self):
             return [123, 456]
@@ -475,22 +475,22 @@ def test_protocol_compatibility_with_core_context():
     from core.context import PluginContext
 
     context = PluginContext(
-        config={"test": "value"},
-        secrets={"token": "secret"},
-        plugin_name="test",
-        plugin_dir=Path("/test"),
-        data_dir=Path("/test/data"),
-        http_session=None,
-        send_action=AsyncMock(),
-        reload_config=lambda: None,
-        reload_plugins=lambda: None,
-        get_command_catalog=lambda: (),
-        list_plugins=lambda: ["test"],
-        session_manager=None,
-        current_user_id=123,
-        current_group_id=456,
-        request_id="req-123",
-        state={"key": "value"},
+        config              = {"test": "value"},
+        secrets             = {"token": "secret"},
+        plugin_name         = "test",
+        plugin_dir          = Path("/test"),
+        data_dir            = Path("/test/data"),
+        http_session        = None,
+        send_action         = AsyncMock(),
+        reload_config       = lambda: None,
+        reload_plugins      = lambda: None,
+        get_command_catalog = lambda: (),
+        list_plugins        = lambda: ["test"],
+        session_manager     = None,
+        current_user_id     = 123,
+        current_group_id    = 456,
+        request_id          = "req-123",
+        state               = {"key": "value"},
     )
 
     # Verify all required attributes exist (duck typing)
@@ -532,7 +532,7 @@ def test_protocols_allow_structural_subtyping():
             return {"key": "value"}
 
     # Should be compatible with protocols (duck typing)
-    admin_check = SimpleAdminCheck()
+    admin_check     = SimpleAdminCheck()
     config_provider = SimpleConfigProvider()
 
     assert admin_check.is_admin(12345) is True

@@ -1,3 +1,4 @@
+# CI 跳过策略：仅允许明确登记的原因，新增跳过项需要更新契约。
 """Strict allowlist support for skips reported by CI test runs."""
 
 from __future__ import annotations
@@ -42,13 +43,13 @@ def load_skip_allowances(path: Path) -> tuple[SkipAllowance, ...]:
     if not isinstance(raw_entries, list) or not raw_entries:
         raise ValueError("CI skip allowlist must contain entries")
 
-    allowances: list[SkipAllowance] = []
+    allowances: list[SkipAllowance]                  = []
     identities: set[tuple[str, str, frozenset[str]]] = set()
     for index, entry in enumerate(raw_entries):
         if not isinstance(entry, dict) or set(entry) != {"nodeid", "reason", "platforms"}:
             raise ValueError(f"CI skip allowlist entry {index} has an invalid shape")
-        nodeid = entry["nodeid"]
-        reason = entry["reason"]
+        nodeid        = entry["nodeid"]
+        reason        = entry["reason"]
         raw_platforms = entry["platforms"]
         if not isinstance(nodeid, str) or not nodeid:
             raise ValueError(f"CI skip allowlist entry {index} has an invalid nodeid")
@@ -87,7 +88,7 @@ def unexpected_skips(
     *,
     platform: str,
 ) -> tuple[str, ...]:
-    active_allowances = tuple(allowances)
+    active_allowances     = tuple(allowances)
     unexpected: list[str] = []
     for report in reports:
         nodeid = str(getattr(report, "nodeid", "<unknown>"))

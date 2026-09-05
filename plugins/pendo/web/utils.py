@@ -14,7 +14,7 @@ from ..models.item import ItemType
 from ..utils.identifiers import public_id
 from ..utils.validators import ledger_amount_filter_to_cents
 
-logger = logging.getLogger(__name__)
+logger                            = logging.getLogger(__name__)
 _COLLECTION_PAYLOAD_FIELDS: Final = (
     "id",
     "kind",
@@ -88,7 +88,7 @@ def collection_payload(collection: Mapping[str, Any] | None) -> dict[str, Any] |
     """只保留 API 允许公开的日程集合字段。"""
     if not collection:
         return None
-    payload = {field: collection.get(field) for field in _COLLECTION_PAYLOAD_FIELDS}
+    payload               = {field: collection.get(field) for field in _COLLECTION_PAYLOAD_FIELDS}
     payload["display_id"] = public_id(payload.get("id"))
     return payload
 
@@ -108,9 +108,9 @@ def item_to_dict(item: object) -> dict[str, Any]:
             type(payload).__name__,
         )
         return {}
-    result = {str(key): value for key, value in payload.items()}
+    result               = {str(key): value for key, value in payload.items()}
     result["display_id"] = public_id(result.get("id"))
-    references = result.get("references")
+    references           = result.get("references")
     if isinstance(references, list):
         result["references"] = [
             {

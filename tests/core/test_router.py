@@ -41,19 +41,19 @@ async def dummy_handler(
 def make_spec(
     name: str,
     triggers: list[str],
-    plugin: str = "test",
-    priority: int = 0,
+    plugin: str      = "test",
+    priority: int    = 0,
     admin_only: bool = False,
 ) -> CommandSpec:
     """创建测试用的 CommandSpec"""
     return CommandSpec(
-        plugin=plugin,
-        name=name,
-        triggers=triggers,
-        help_text=f"Help for {name}",
-        admin_only=admin_only,
-        handler=dummy_handler,
-        priority=priority,
+        plugin     = plugin,
+        name       = name,
+        triggers   = triggers,
+        help_text  = f"Help for {name}",
+        admin_only = admin_only,
+        handler    = dummy_handler,
+        priority   = priority,
     )
 
 
@@ -220,26 +220,26 @@ class TestCommandRouter:
         self,
         router: CommandRouter,
     ):
-        spec = make_spec("echo", ["echo"])
+        spec       = make_spec("echo", ["echo"])
         spec.usage = "/echo <text>"
-        child = CommandCatalogNode(
-            code="test.echo.raw",
-            plugin="test",
-            path=("echo", "raw"),
-            name="raw",
-            aliases=("原样",),
-            help_text="原样回显",
-            usage="/echo raw <text>",
+        child      = CommandCatalogNode(
+            code      = "test.echo.raw",
+            plugin    = "test",
+            path      = ("echo", "raw"),
+            name      = "raw",
+            aliases   = ("原样",),
+            help_text = "原样回显",
+            usage     = "/echo raw <text>",
         )
         spec.catalog = CommandCatalogNode(
-            code="test.echo",
-            plugin="test",
-            path=("echo",),
-            name="echo",
-            aliases=("回显",),
-            help_text="回显消息",
-            usage="/echo <text>",
-            children=(child,),
+            code      = "test.echo",
+            plugin    = "test",
+            path      = ("echo",),
+            name      = "echo",
+            aliases   = ("回显",),
+            help_text = "回显消息",
+            usage     = "/echo <text>",
+            children  = (child,),
         )
         router.register(spec)
 
@@ -282,43 +282,43 @@ class TestCommandRouter:
 
     def test_catalog_invocation_uses_longest_recursive_alias_path(self):
         confirm = CommandCatalogNode(
-            code="pendo.pendo.event.reminders.confirm",
-            plugin="pendo",
-            path=("pendo", "event", "reminders", "confirm"),
-            name="confirm",
-            aliases=("确认",),
-            help_text="确认提醒",
-            usage="/pendo event reminders confirm <id>",
+            code      = "pendo.pendo.event.reminders.confirm",
+            plugin    = "pendo",
+            path      = ("pendo", "event", "reminders", "confirm"),
+            name      = "confirm",
+            aliases   = ("确认",),
+            help_text = "确认提醒",
+            usage     = "/pendo event reminders confirm <id>",
         )
         reminders = CommandCatalogNode(
-            code="pendo.pendo.event.reminders",
-            plugin="pendo",
-            path=("pendo", "event", "reminders"),
-            name="reminders",
-            aliases=("提醒",),
-            help_text="管理提醒",
-            usage="/pendo event reminders <操作>",
-            children=(confirm,),
+            code      = "pendo.pendo.event.reminders",
+            plugin    = "pendo",
+            path      = ("pendo", "event", "reminders"),
+            name      = "reminders",
+            aliases   = ("提醒",),
+            help_text = "管理提醒",
+            usage     = "/pendo event reminders <操作>",
+            children  = (confirm,),
         )
         event = CommandCatalogNode(
-            code="pendo.pendo.event",
-            plugin="pendo",
-            path=("pendo", "event"),
-            name="event",
-            aliases=("日程",),
-            help_text="管理日程",
-            usage="/pendo event <操作>",
-            children=(reminders,),
+            code      = "pendo.pendo.event",
+            plugin    = "pendo",
+            path      = ("pendo", "event"),
+            name      = "event",
+            aliases   = ("日程",),
+            help_text = "管理日程",
+            usage     = "/pendo event <操作>",
+            children  = (reminders,),
         )
         root = CommandCatalogNode(
-            code="pendo.pendo",
-            plugin="pendo",
-            path=("pendo",),
-            name="pendo",
-            aliases=(),
-            help_text="个人管理",
-            usage="/pendo <命令>",
-            children=(event,),
+            code      = "pendo.pendo",
+            plugin    = "pendo",
+            path      = ("pendo",),
+            name      = "pendo",
+            aliases   = (),
+            help_text = "个人管理",
+            usage     = "/pendo <命令>",
+            children  = (event,),
         )
 
         invocation = resolve_catalog_invocation(root, "日程 提醒 确认 abc123 today")
@@ -335,24 +335,24 @@ class TestCommandRouter:
 
     def test_catalog_invocation_stops_before_dynamic_business_arguments(self):
         child = CommandCatalogNode(
-            code="chat.chat.help",
-            plugin="chat",
-            path=("chat", "help"),
-            name="help",
-            aliases=("帮助",),
-            help_text="帮助",
-            usage="/chat help",
-            match_mode="exact",
+            code       = "chat.chat.help",
+            plugin     = "chat",
+            path       = ("chat", "help"),
+            name       = "help",
+            aliases    = ("帮助",),
+            help_text  = "帮助",
+            usage      = "/chat help",
+            match_mode = "exact",
         )
         root = CommandCatalogNode(
-            code="chat.chat",
-            plugin="chat",
-            path=("chat",),
-            name="chat",
-            aliases=(),
-            help_text="聊天",
-            usage="/chat <内容>",
-            children=(child,),
+            code      = "chat.chat",
+            plugin    = "chat",
+            path      = ("chat",),
+            name      = "chat",
+            aliases   = (),
+            help_text = "聊天",
+            usage     = "/chat <内容>",
+            children  = (child,),
         )
 
         invocation = resolve_catalog_invocation(root, "help me write code")
@@ -373,13 +373,13 @@ class TestRouterEdgeCases:
 
         # 空触发词会被 resolve 跳过（见 router.py:52-53）
         spec = CommandSpec(
-            plugin="test",
-            name="test",
-            triggers=[""],
-            help_text="test",
-            admin_only=False,
-            handler=handler,
-            priority=0,
+            plugin     = "test",
+            name       = "test",
+            triggers   = [""],
+            help_text  = "test",
+            admin_only = False,
+            handler    = handler,
+            priority   = 0,
         )
         empty_router.register(spec)
 
@@ -404,13 +404,13 @@ class TestRouterEdgeCases:
 
         for trigger in special_triggers:
             spec = CommandSpec(
-                plugin="test",
-                name=f"test_{len(trigger)}",
-                triggers=[trigger],
-                admin_only=False,
-                handler=handler,
-                priority=0,
-                help_text=f"test {trigger}",
+                plugin     = "test",
+                name       = f"test_{len(trigger)}",
+                triggers   = [trigger],
+                admin_only = False,
+                handler    = handler,
+                priority   = 0,
+                help_text  = f"test {trigger}",
             )
             empty_router.register(spec)
 
@@ -446,24 +446,24 @@ class TestRouterEdgeCases:
         # 注册相同触发词，不同优先级
         empty_router.register(
             CommandSpec(
-                plugin="test",
-                name="low",
-                triggers=["test"],
-                admin_only=False,
-                handler=handler_low,
-                priority=0,
-                help_text="low",
+                plugin     = "test",
+                name       = "low",
+                triggers   = ["test"],
+                admin_only = False,
+                handler    = handler_low,
+                priority   = 0,
+                help_text  = "low",
             )
         )
         empty_router.register(
             CommandSpec(
-                plugin="test",
-                name="high",
-                triggers=["test"],
-                admin_only=False,
-                handler=handler_high,
-                priority=10,
-                help_text="high",
+                plugin     = "test",
+                name       = "high",
+                triggers   = ["test"],
+                admin_only = False,
+                handler    = handler_high,
+                priority   = 10,
+                help_text  = "high",
             )
         )
 

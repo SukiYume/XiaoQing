@@ -16,13 +16,13 @@ from tests.helpers.dispatcher_test_support import (
     pytest,
 )
 
-dispatcher = _fixture_support.dispatcher
-mock_admin_check = _fixture_support.mock_admin_check
-mock_config_provider = _fixture_support.mock_config_provider
-mock_context_factory = _fixture_support.mock_context_factory
-mock_metrics = _fixture_support.mock_metrics
-mock_router = _fixture_support.mock_router
-mock_session_manager = _fixture_support.mock_session_manager
+dispatcher             = _fixture_support.dispatcher
+mock_admin_check       = _fixture_support.mock_admin_check
+mock_config_provider   = _fixture_support.mock_config_provider
+mock_context_factory   = _fixture_support.mock_context_factory
+mock_metrics           = _fixture_support.mock_metrics
+mock_router            = _fixture_support.mock_router
+mock_session_manager   = _fixture_support.mock_session_manager
 sample_message_context = _fixture_support.sample_message_context
 
 
@@ -110,14 +110,14 @@ class TestExecuteCommand:
         mock_admin_check.is_admin = Mock(return_value=False)
 
         handler = AsyncMock()
-        spec = CommandSpec(
-            plugin="admin",
-            name="reload",
-            triggers=["reload"],
-            help_text="重载",
-            admin_only=True,
-            handler=handler,
-            priority=0,
+        spec    = CommandSpec(
+            plugin     = "admin",
+            name       = "reload",
+            triggers   = ["reload"],
+            help_text  = "重载",
+            admin_only = True,
+            handler    = handler,
+            priority   = 0,
         )
 
         result = await dispatcher._execute_command((spec, ""), sample_message_context)
@@ -140,13 +140,13 @@ class TestExecuteCommand:
         new_gate = PluginExecutionGate("parallel", plugin_name="stateful")
         old_handler = AsyncMock(return_value=[{"type": "text", "data": {"text": "stale"}}])
         old_spec = CommandSpec(
-            plugin="stateful",
-            name="work",
-            triggers=["work"],
-            help_text="work",
-            admin_only=False,
-            handler=old_handler,
-            execution_gate=old_gate,
+            plugin         = "stateful",
+            name           = "work",
+            triggers       = ["work"],
+            help_text      = "work",
+            admin_only     = False,
+            handler        = old_handler,
+            execution_gate = old_gate,
         )
 
         # Model the exact race: routing retained the old spec, then unload or
@@ -172,22 +172,22 @@ class TestExecuteCommand:
         sample_message_context: MessageContext,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        canary = "CR219_DISPATCHER_SECRET"
+        canary  = "CR219_DISPATCHER_SECRET"
         context = SimpleNamespace(
-            request_id=sample_message_context.request_id,
-            secrets={"token": canary},
+            request_id = sample_message_context.request_id,
+            secrets    = {"token": canary},
         )
         dispatcher.build_context = Mock(return_value=context)
         handler = AsyncMock(
             side_effect=RuntimeError(f"Authorization: Bearer {canary} C:\\private\\{canary}.txt")
         )
         spec = CommandSpec(
-            plugin="public_demo",
-            name="demo",
-            triggers=["demo"],
-            help_text="demo",
-            admin_only=False,
-            handler=handler,
+            plugin     = "public_demo",
+            name       = "demo",
+            triggers   = ["demo"],
+            help_text  = "demo",
+            admin_only = False,
+            handler    = handler,
         )
 
         with caplog.at_level("ERROR"):
@@ -195,7 +195,7 @@ class TestExecuteCommand:
 
         assert result is not None
         response_text = result[0]["data"]["text"]
-        log_text = "\n".join(record.getMessage() for record in caplog.records)
+        log_text      = "\n".join(record.getMessage() for record in caplog.records)
         assert "XQ-PLUGIN-UNEXPECTED" in response_text
         assert sample_message_context.request_id in response_text
         assert sample_message_context.request_id in log_text
@@ -226,9 +226,9 @@ async def test_unexpected_session_error_is_redacted_and_closes_session(
         execution_gate=None,
     )
     mock_plugin_registry.get.return_value = plugin
-    context = SimpleNamespace(
-        request_id=sample_message_context.request_id,
-        secrets={"password": canary},
+    context                               = SimpleNamespace(
+        request_id = sample_message_context.request_id,
+        secrets    = {"password": canary},
     )
     dispatcher.build_context = Mock(return_value=context)
 
@@ -237,7 +237,7 @@ async def test_unexpected_session_error_is_redacted_and_closes_session(
 
     assert result is not None
     response_text = result[0]["data"]["text"]
-    log_text = "\n".join(record.getMessage() for record in caplog.records)
+    log_text      = "\n".join(record.getMessage() for record in caplog.records)
     assert "XQ-PLUGIN-UNEXPECTED" in response_text
     assert sample_message_context.request_id in response_text
     assert canary not in response_text
@@ -267,14 +267,14 @@ async def test_session_continuation_obeys_published_command_contexts(
     )
     mock_router.get_command_catalog.return_value = (
         CommandCatalogNode(
-            code="private_tool.run",
-            plugin="private_tool",
-            path=("run",),
-            name="run",
-            aliases=(),
-            help_text="run",
-            usage="/run",
-            contexts=("private",),
+            code      = "private_tool.run",
+            plugin    = "private_tool",
+            path      = ("run",),
+            name      = "run",
+            aliases   = (),
+            help_text = "run",
+            usage     = "/run",
+            contexts  = ("private",),
         ),
     )
 
@@ -302,9 +302,9 @@ async def test_admin_session_recheck_uses_manifest_capability_not_plugin_name(
     session = SimpleNamespace(plugin_name=plugin_name, session_id="session-privileged")
     mock_session_manager.get.return_value = session
     mock_session_manager.delete = AsyncMock(return_value=True)
-    mock_admin_check.is_admin.return_value = False
+    mock_admin_check.is_admin.return_value           = False
     mock_plugin_registry.has_capability.return_value = True
-    close_session = AsyncMock()
+    close_session                                    = AsyncMock()
     handle_session = AsyncMock(return_value=[{"type": "text", "data": {"text": "secret"}}])
     mock_plugin_registry.get.return_value = SimpleNamespace(
         module=SimpleNamespace(close_session=close_session, handle_session=handle_session),
@@ -312,14 +312,14 @@ async def test_admin_session_recheck_uses_manifest_capability_not_plugin_name(
     )
     mock_router.get_command_catalog.return_value = (
         CommandCatalogNode(
-            code=f"{plugin_name}.run",
-            plugin=plugin_name,
-            path=("run",),
-            name="run",
-            aliases=(),
-            help_text="run",
-            usage="/run",
-            contexts=("group",),
+            code      = f"{plugin_name}.run",
+            plugin    = plugin_name,
+            path      = ("run",),
+            name      = "run",
+            aliases   = (),
+            help_text = "run",
+            usage     = "/run",
+            contexts  = ("group",),
         ),
     )
 
@@ -342,8 +342,8 @@ async def test_admin_plugin_name_without_manifest_capability_does_not_change_ses
 ) -> None:
     plugin_name = "qingssh"
     session = SimpleNamespace(plugin_name=plugin_name, session_id="session-name-only")
-    mock_session_manager.get.return_value = session
-    mock_admin_check.is_admin.return_value = False
+    mock_session_manager.get.return_value            = session
+    mock_admin_check.is_admin.return_value           = False
     mock_plugin_registry.has_capability.return_value = False
     handle_session = AsyncMock(return_value=[{"type": "text", "data": {"text": "continued"}}])
     mock_plugin_registry.get.return_value = SimpleNamespace(
@@ -352,14 +352,14 @@ async def test_admin_plugin_name_without_manifest_capability_does_not_change_ses
     )
     mock_router.get_command_catalog.return_value = (
         CommandCatalogNode(
-            code=f"{plugin_name}.run",
-            plugin=plugin_name,
-            path=("run",),
-            name="run",
-            aliases=(),
-            help_text="run",
-            usage="/run",
-            contexts=("group",),
+            code      = f"{plugin_name}.run",
+            plugin    = plugin_name,
+            path      = ("run",),
+            name      = "run",
+            aliases   = (),
+            help_text = "run",
+            usage     = "/run",
+            contexts  = ("group",),
         ),
     )
 

@@ -39,33 +39,33 @@ from core.safe_http import fetch_public_html
 
 logger = logging.getLogger(__name__)
 
-TimeRange = Literal["daily", "weekly", "monthly"]
+TimeRange      = Literal["daily", "weekly", "monthly"]
 RepositoryData = dict[str, str]
 
-VALID_RANGES = frozenset({"daily", "weekly", "monthly"})
+VALID_RANGES                      = frozenset({"daily", "weekly", "monthly"})
 RANGE_NAMES: dict[TimeRange, str] = {
     "daily": "每日",
     "weekly": "每周",
     "monthly": "每月",
 }
 
-MAX_ARGUMENT_CHARS = 64
-MAX_HTML_BYTES = 2 * 1024 * 1024
-MAX_HTML_CHARS = 2 * 1024 * 1024
-MAX_REPOSITORIES = 50
-MAX_OUTPUT_REPOSITORIES = 10
-MAX_DESCRIPTION_CHARS = 240
-MAX_LANGUAGE_CHARS = 64
+MAX_ARGUMENT_CHARS          = 64
+MAX_HTML_BYTES              = 2 * 1024 * 1024
+MAX_HTML_CHARS              = 2 * 1024 * 1024
+MAX_REPOSITORIES            = 50
+MAX_OUTPUT_REPOSITORIES     = 10
+MAX_DESCRIPTION_CHARS       = 240
+MAX_LANGUAGE_CHARS          = 64
 MAX_HISTORY_FILES_PER_RANGE = 90
-MAX_PROXY_CHARS = 2_048
+MAX_PROXY_CHARS             = 2_048
 
-_HELP_ALIASES = frozenset({"help", "h", "帮助"})
+_HELP_ALIASES            = frozenset({"help", "h", "帮助"})
 _REPOSITORY_PATH_PATTERN = re.compile(
     r"/([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)/"
     r"([A-Za-z0-9_.-]{1,100})/?\Z"
 )
 _COUNT_PATTERN = re.compile(r"([0-9]+(?:,[0-9]{3})*)([kKmM]?)")
-_GAIN_PATTERN = re.compile(
+_GAIN_PATTERN  = re.compile(
     r"\b([0-9]+(?:,[0-9]{3})*)\s+stars?\s+(today|this week|this month)\b",
     re.IGNORECASE,
 )
@@ -80,17 +80,17 @@ _REQUEST_HEADERS = {
     "Accept": "text/html,application/xhtml+xml",
 }
 _GITHUB_BODY_LIMITS = BodyLimits(
-    max_wire_bytes=MAX_HTML_BYTES,
-    max_decoded_bytes=MAX_HTML_BYTES,
-    max_decompression_ratio=20,
-    ratio_grace_bytes=64 * 1024,
-    chunk_bytes=64 * 1024,
+    max_wire_bytes          = MAX_HTML_BYTES,
+    max_decoded_bytes       = MAX_HTML_BYTES,
+    max_decompression_ratio = 20,
+    ratio_grace_bytes       = 64 * 1024,
+    chunk_bytes             = 64 * 1024,
 )
 _GITHUB_PROXY_REDIRECTS = RedirectPolicy(
-    max_hops=3,
-    allowed_schemes=frozenset({"https"}),
-    allowed_origins=frozenset({"https://github.com"}),
-    same_origin_only=True,
+    max_hops         = 3,
+    allowed_schemes  = frozenset({"https"}),
+    allowed_origins  = frozenset({"https://github.com"}),
+    same_origin_only = True,
 )
 _HISTORY_LOCK = threading.RLock()
 
@@ -168,7 +168,7 @@ def _get_proxy(context: _GitHubContext) -> str:
         raise GitHubCommandError("GitHub 代理配置格式无效")
     try:
         parsed = urlsplit(proxy)
-        port = parsed.port
+        port   = parsed.port
     except ValueError as exc:
         raise GitHubCommandError("GitHub 代理 URL 无效") from exc
     if (
@@ -233,18 +233,18 @@ def _decode_html(body: object, charset: object) -> str:
 async def _download_trending_html(context: _GitHubContext, time_range: TimeRange) -> str | None:
     """根据是否配置代理选择一条有界传输路径，目标始终固定为 GitHub。"""
 
-    url = f"https://github.com/trending?since={time_range}"
+    url   = f"https://github.com/trending?since={time_range}"
     proxy = _get_proxy(context)
     if not proxy:
         fetched = await fetch_public_html(
             url,
-            headers=_REQUEST_HEADERS,
-            timeout_seconds=15,
-            allowed_hosts={"github.com"},
+            headers         = _REQUEST_HEADERS,
+            timeout_seconds = 15,
+            allowed_hosts   = {"github.com"},
         )
         if fetched is None:
             return None
-        body = fetched.body
+        body    = fetched.body
         charset = fetched.charset
     else:
         if context.http_session is None:
@@ -253,13 +253,13 @@ async def _download_trending_html(context: _GitHubContext, time_range: TimeRange
             context.http_session,
             "GET",
             url,
-            limits=_GITHUB_BODY_LIMITS,
-            mime_policy=HTML_MIME_POLICY,
-            redirect_policy=_GITHUB_PROXY_REDIRECTS,
-            headers=_REQUEST_HEADERS,
-            request_kwargs={"proxy": proxy, "timeout": 15},
+            limits          = _GITHUB_BODY_LIMITS,
+            mime_policy     = HTML_MIME_POLICY,
+            redirect_policy = _GITHUB_PROXY_REDIRECTS,
+            headers         = _REQUEST_HEADERS,
+            request_kwargs  = {"proxy": proxy, "timeout": 15},
         )
-        body = response.body
+        body    = response.body
         charset = response.charset
     return _decode_html(body, charset)
 
@@ -269,7 +269,7 @@ async def _fetch_trending(time_range: str, context: _GitHubContext) -> Segments:
 
     try:
         normalized_range = _require_time_range(time_range)
-        html = await _download_trending_html(context, normalized_range)
+        html             = await _download_trending_html(context, normalized_range)
         if html is None:
             return segments("❌ GitHub 返回了无效响应")
         repositories = await run_sync(_parse_trending_html, html)
@@ -292,9 +292,9 @@ def _clean_element_text(element: Tag | None, *, fallback: str, max_chars: int) -
     raw = element.get_text(" ", strip=True)
     visible = bounded_external_text(
         raw,
-        max_chars=max_chars,
-        max_bytes=max_chars * 4,
-        default=fallback,
+        max_chars = max_chars,
+        max_bytes = max_chars * 4,
+        default   = fallback,
     )
     cleaned = re.sub(r"\s+", " ", visible).strip()
     return cleaned or fallback
@@ -344,13 +344,13 @@ def _parse_repository_article(article: Tag) -> RepositoryData | None:
         "url": f"https://github.com{repository_path}",
         "description": _clean_element_text(
             article.select_one("p"),
-            fallback="无描述",
-            max_chars=MAX_DESCRIPTION_CHARS,
+            fallback  = "无描述",
+            max_chars = MAX_DESCRIPTION_CHARS,
         ),
         "language": _clean_element_text(
             article.select_one("span[itemprop='programmingLanguage']"),
-            fallback="未知",
-            max_chars=MAX_LANGUAGE_CHARS,
+            fallback  = "未知",
+            max_chars = MAX_LANGUAGE_CHARS,
         ),
         "stars": _extract_link_count(article, repository_path, "stargazers"),
         "forks": _extract_link_count(article, repository_path, "forks"),
@@ -369,7 +369,7 @@ def _parse_trending_html(html: str) -> list[RepositoryData]:
     for hidden in soup.find_all(("script", "style", "template", "noscript")):
         hidden.decompose()
     repositories: list[RepositoryData] = []
-    seen: set[str] = set()
+    seen: set[str]                     = set()
     for article in soup.select("article.Box-row")[:MAX_REPOSITORIES]:
         repository = _parse_repository_article(article)
         if repository is None:
@@ -390,7 +390,7 @@ def _format_trending(
 ) -> str:
     """在单条 QQ 文本预算内按页面顺序格式化最多十个仓库。"""
 
-    today = now.strftime("%Y-%m-%d")
+    today  = now.strftime("%Y-%m-%d")
     output = f"📈 GitHub {RANGE_NAMES[time_range]}趋势 ({today})\n"
     for index, repository in enumerate(repositories[:MAX_OUTPUT_REPOSITORIES], 1):
         stars = repository.get("stars_gained") or repository.get("stars", "0")

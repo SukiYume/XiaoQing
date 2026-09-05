@@ -34,7 +34,7 @@ def _log_media_bookkeeping_failure(context: Any, operation: str, exc: Exception)
     """媒体旁路统计失败只记类型，不泄露路径或消息内容。"""
 
     logger = getattr(context, "logger", None)
-    debug = getattr(logger, "debug", None)
+    debug  = getattr(logger, "debug", None)
     if callable(debug):
         debug(
             "xiaoqing_chat media bookkeeping failed operation=%s error_type=%s",
@@ -97,13 +97,13 @@ def _serialize_rendered_media_items(
 
     serialized: list[dict[str, Any]] = []
     for item in rendered_items:
-        marker = str(item.marker or "").strip()
-        description = str(item.description or "").strip()
-        media_hash = str(item.media_hash or "").strip()
-        kind = str(item.kind or "").strip()
-        face_id = str(item.face_id or "").strip()
+        marker       = str(item.marker or "").strip()
+        description  = str(item.description or "").strip()
+        media_hash   = str(item.media_hash or "").strip()
+        kind         = str(item.kind or "").strip()
+        face_id      = str(item.face_id or "").strip()
         emotion_tags = [str(tag).strip() for tag in (item.emotion_tags or ()) if str(tag).strip()]
-        payload = _drop_empty(
+        payload      = _drop_empty(
             {
                 "kind": kind,
                 "media_hash": media_hash,
@@ -153,13 +153,13 @@ def _sync_message_parts_to_registry(
     if not normalized_parts:
         return ()
     _content, media_items = message_parts_to_legacy(normalized_parts)
-    media_store = state.media_store
+    media_store        = state.media_store
     synced_media_items = cast(
         list[dict[str, Any]],
         upsert_registered_media_items(
             media_items,
-            store=media_store,
-            compact=False,
+            store   = media_store,
+            compact = False,
         ),
     )
     if media_items and media_store.is_dirty():
@@ -185,7 +185,7 @@ def _prefix_reply_parts(
     """把发送层前缀并入首个文本 part，保持媒体的原始相对顺序。"""
 
     normalized_parts = cast(tuple[dict[str, Any], ...], normalize_message_parts(parts))
-    prefix = str(prefix_text or "")
+    prefix           = str(prefix_text or "")
     if not prefix:
         return normalized_parts
     if not normalized_parts:
@@ -206,7 +206,7 @@ def _display_reply_text(generated: _GeneratedSmalltalkTurn) -> str:
 
 
 def _reply_send_prefix(reply_text: str, reply_for_send: str) -> str:
-    reply = str(reply_text or "")
+    reply     = str(reply_text or "")
     send_text = str(reply_for_send or "")
     if reply and send_text != reply and send_text.endswith(reply):
         return send_text[: -len(reply)]
@@ -223,7 +223,7 @@ def _normalize_generated_reply_state(
 
     generated.reply = str(reply_text or "").strip()
     if not generated.reply:
-        generated.reply_parts = ()
+        generated.reply_parts  = ()
         generated.reply_output = None
         return
 
@@ -231,14 +231,14 @@ def _normalize_generated_reply_state(
     if not normalized_parts:
         normalized_parts = build_text_message_parts(generated.reply)
 
-    generated.reply_parts = normalized_parts
+    generated.reply_parts  = normalized_parts
     generated.reply_output = None
 
 
 def _mark_reply_media_used(context, generated: _GeneratedSmalltalkTurn) -> None:
     """登记已送达回复中的媒体；统计失败不反向影响发送结果。"""
 
-    marker = generated.media_marker
+    marker      = generated.media_marker
     marker_kind = str(getattr(marker, "kind", "") or "") if marker is not None else ""
     reply_parts = normalize_message_parts(generated.reply_parts)
 

@@ -18,7 +18,7 @@ class Inventory:
 
     def mark_persisted(self) -> None:
         """把当前背包记为下一次并发合并的持久化基线。"""
-        self._persisted_items = dict(self.items)
+        self._persisted_items     = dict(self.items)
         self._has_persisted_state = True
 
     def merged_onto(self, latest_items: dict[str, int]) -> dict[str, int]:

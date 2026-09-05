@@ -8,7 +8,7 @@ from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.pendo_web_timezone_test_support import inline_timezone_runtime
 
-ROOT: Final = REPOSITORY_ROOT
+ROOT: Final            = REPOSITORY_ROOT
 TRANSFER_CLIENT: Final = (
     ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "transfer.js"
 )
@@ -93,7 +93,7 @@ def _transfer_source_for_test() -> str:
 
     source = TRANSFER_CLIENT.read_text(encoding="utf-8")
     timezone_runtime = inline_timezone_runtime(TIMEZONE_CLIENT)
-    replacements = (
+    replacements     = (
         (
             "import { api, apiDownload, apiUpload } from '../api.js';",
             "const api = globalThis.__api;\n"
@@ -207,8 +207,8 @@ def _run_transfer_client(script: str) -> None:
     assert_node_esm_contract(
         _transfer_source_for_test(),
         script,
-        cwd=ROOT,
-        setup=TRANSFER_SETUP,
+        cwd   = ROOT,
+        setup = TRANSFER_SETUP,
     )
 
 

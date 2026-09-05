@@ -7,7 +7,7 @@ from typing import Final
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT: Final = REPOSITORY_ROOT
+ROOT: Final          = REPOSITORY_ROOT
 FORMAT_CLIENT: Final = ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "utils" / "format.js"
 
 FIXED_DATE_SETUP: Final = r"""
@@ -29,8 +29,8 @@ def _run_format_client(script: str) -> None:
     assert_node_esm_contract(
         FORMAT_CLIENT.read_text(encoding="utf-8"),
         script,
-        cwd=ROOT,
-        setup=FIXED_DATE_SETUP,
+        cwd   = ROOT,
+        setup = FIXED_DATE_SETUP,
     )
 
 

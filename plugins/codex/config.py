@@ -94,7 +94,7 @@ def _string_tuple(value: Any, *, max_items: int = MAX_ALLOWED_ROOTS) -> tuple[st
         return ()
 
     cleaned: list[str] = []
-    seen: set[str] = set()
+    seen: set[str]     = set()
     for item in items[:max_items]:
         text = _clean_string(item, "")
         if not text or text in seen:
@@ -143,16 +143,16 @@ def load_plugin_config_snapshot(
 ) -> CodexPluginConfig:
     """校验一次已经原子取得的配置快照。"""
 
-    raw = _merged_plugin_config(settings)
+    raw         = _merged_plugin_config(settings)
     default_cwd = _clean_string(raw.get("default_cwd"), "") or _default_workspace_dir(data_dir)
-    arxiv_raw = raw.get("arxiv_summary", {})
+    arxiv_raw   = raw.get("arxiv_summary", {})
     if not isinstance(arxiv_raw, Mapping):
         arxiv_raw = {}
     arxiv_summary_label = _first_clean_string(
         arxiv_raw.get("label"),
         raw.get("arxiv_summary_label"),
-        default=DEFAULT_ARXIV_SUMMARY_LABEL,
-        max_chars=32,
+        default   = DEFAULT_ARXIV_SUMMARY_LABEL,
+        max_chars = 32,
     )
     if re.fullmatch(LABEL_PATTERN, arxiv_summary_label) is None:
         arxiv_summary_label = DEFAULT_ARXIV_SUMMARY_LABEL
@@ -164,10 +164,10 @@ def load_plugin_config_snapshot(
     arxiv_summary_methodology = _first_clean_string(
         arxiv_raw.get("methodology"),
         raw.get("arxiv_summary_methodology"),
-        default=DEFAULT_ARXIV_SUMMARY_METHODOLOGY,
-        max_chars=1_024,
+        default   = DEFAULT_ARXIV_SUMMARY_METHODOLOGY,
+        max_chars = 1_024,
     )
-    allowed_roots = _string_tuple(raw.get("allowed_cwd_roots")) or (default_cwd,)
+    allowed_roots      = _string_tuple(raw.get("allowed_cwd_roots")) or (default_cwd,)
     protected_sessions = {
         label
         for label in _string_tuple(raw.get("protected_sessions"))
@@ -175,7 +175,7 @@ def load_plugin_config_snapshot(
     }
     protected_sessions.add(arxiv_summary_label)
     per_session_queue_limit = _bounded_int(raw, "per_session_queue_limit", 10, 1, 1_000)
-    emergency_queue_limit = max(
+    emergency_queue_limit   = max(
         per_session_queue_limit,
         _bounded_int(raw, "emergency_queue_limit", 1_000, 10, 10_000),
     )
@@ -198,15 +198,15 @@ def load_plugin_config_snapshot(
     )
 
     return CodexPluginConfig(
-        codex_bin=_clean_string(raw.get("codex_bin"), "codex"),
-        default_cwd=default_cwd,
-        allowed_cwd_roots=allowed_roots,
-        max_parallel_jobs=_bounded_int(raw, "max_parallel_jobs", 2, 1, 64),
-        per_session_queue_limit=per_session_queue_limit,
-        max_prompt_chars=_bounded_int(raw, "max_prompt_chars", 200_000, 1_000, 1_000_000),
-        spawn_timeout_seconds=_bounded_int(raw, "spawn_timeout_seconds", 30, 1, 120),
-        job_timeout_seconds=_bounded_int(raw, "job_timeout_seconds", 3_600, 30, 604_800),
-        max_stdout_bytes=_bounded_int(
+        codex_bin               = _clean_string(raw.get("codex_bin"), "codex"),
+        default_cwd             = default_cwd,
+        allowed_cwd_roots       = allowed_roots,
+        max_parallel_jobs       = _bounded_int(raw, "max_parallel_jobs", 2, 1, 64),
+        per_session_queue_limit = per_session_queue_limit,
+        max_prompt_chars        = _bounded_int(raw, "max_prompt_chars", 200_000, 1_000, 1_000_000),
+        spawn_timeout_seconds   = _bounded_int(raw, "spawn_timeout_seconds", 30, 1, 120),
+        job_timeout_seconds     = _bounded_int(raw, "job_timeout_seconds", 3_600, 30, 604_800),
+        max_stdout_bytes        = _bounded_int(
             raw, "max_stdout_bytes", 16 * 1024**2, 64 * 1024, 128 * 1024**2
         ),
         max_stderr_bytes=_bounded_int(

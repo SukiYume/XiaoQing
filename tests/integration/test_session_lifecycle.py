@@ -18,10 +18,10 @@ class TestSessionLifecycle:
 
         # Create session
         session = await manager.create(
-            user_id=10001,
-            group_id=50001,
-            plugin_name="test_plugin",
-            initial_data={"step": 1, "value": None},
+            user_id      = 10001,
+            group_id     = 50001,
+            plugin_name  = "test_plugin",
+            initial_data = {"step": 1, "value": None},
         )
         assert session is not None
 
@@ -32,7 +32,7 @@ class TestSessionLifecycle:
 
         # Update through the transaction boundary; retrieved is a snapshot.
         def update_values(working):
-            working.data["step"] = 2
+            working.data["step"]  = 2
             working.data["value"] = "test"
 
         await manager.update(10001, 50001, update_values)
@@ -86,10 +86,10 @@ class TestSessionLifecycle:
 
         # Create private session
         await manager.create(
-            user_id=10001,
-            group_id=None,
-            plugin_name="private_game",
-            initial_data={"mode": "private"},
+            user_id      = 10001,
+            group_id     = None,
+            plugin_name  = "private_game",
+            initial_data = {"mode": "private"},
         )
 
         # Create group session for same user
@@ -99,7 +99,7 @@ class TestSessionLifecycle:
 
         # Verify both exist independently
         private_retrieved = await manager.get(10001, None)
-        group_retrieved = await manager.get(10001, 50001)
+        group_retrieved   = await manager.get(10001, 50001)
 
         assert private_retrieved is not None
         assert group_retrieved is not None
@@ -116,10 +116,10 @@ class TestSessionLifecycle:
 
         # Create session with initial data
         await manager.create(
-            user_id=10001,
-            group_id=50001,
-            plugin_name="test",
-            initial_data={"counter": 0, "history": []},
+            user_id      = 10001,
+            group_id     = 50001,
+            plugin_name  = "test",
+            initial_data = {"counter": 0, "history": []},
         )
 
         # First transactional modification.
@@ -337,10 +337,10 @@ class TestSessionDataOperations:
         manager = SessionManager()
 
         session = await manager.create(
-            user_id=10001,
-            group_id=50001,
-            plugin_name="test",
-            initial_data={"key1": "value1", "key2": 42},
+            user_id      = 10001,
+            group_id     = 50001,
+            plugin_name  = "test",
+            initial_data = {"key1": "value1", "key2": 42},
         )
 
         # Test get
@@ -355,7 +355,7 @@ class TestSessionDataOperations:
 
         # Windows 时钟允许同一 tick 内连续读数相等；用版本号验证 touch 确实发生。
         previous_updated_at = session.updated_at
-        previous_version = session.version
+        previous_version    = session.version
         session.update()
         assert session.updated_at >= previous_updated_at >= session.created_at
         assert session.version == previous_version + 1
@@ -373,10 +373,10 @@ class TestSessionDataOperations:
         manager = SessionManager()
 
         await manager.create(
-            user_id=10001,
-            group_id=50001,
-            plugin_name="test",
-            initial_data={
+            user_id      = 10001,
+            group_id     = 50001,
+            plugin_name  = "test",
+            initial_data = {
                 "list": [1, 2, 3],
                 "dict": {"nested": "value"},
                 "empty_list": [],

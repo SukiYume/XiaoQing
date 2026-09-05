@@ -92,6 +92,8 @@ JSON 使用原子写入。解析异常会保留源文件，并生成带内容摘
 
 `/paper daily` 依据 ADS `entdate` 选择 UTC 当天记录，并按 `entdate` 降序、bibcode 升序排列。
 
+`/paper author` 按 ADS `date` 降序展示作者的近期论文。引用网络中的“本次展示参考文献”表示当前返回的最多 5 篇记录；被引用次数使用论文的 ADS `citation_count` 字段。
+
 ---
 
 ## 🩺 排障

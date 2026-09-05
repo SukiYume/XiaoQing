@@ -27,7 +27,7 @@ from tests.helpers.server_test_support import (
     web,
 )
 
-mock_handler = _fixture_support.mock_handler
+mock_handler  = _fixture_support.mock_handler
 sample_server = _fixture_support.sample_server
 
 
@@ -96,15 +96,15 @@ def test_parse_positive_int():
 @pytest.mark.unit
 async def test_inbound_server_site_start_failure_cleans_runner(mock_handler):
     server = InboundServer(
-        host="127.0.0.1",
-        port=8765,
-        token="test_token",
-        handler=mock_handler,
+        host    = "127.0.0.1",
+        port    = 8765,
+        token   = "test_token",
+        handler = mock_handler,
     )
-    runner = MagicMock()
-    runner.setup = AsyncMock()
+    runner         = MagicMock()
+    runner.setup   = AsyncMock()
     runner.cleanup = AsyncMock()
-    site = MagicMock()
+    site           = MagicMock()
     site.start = AsyncMock(side_effect=OSError("port occupied"))
     site.stop = AsyncMock()
 
@@ -128,10 +128,10 @@ async def test_inbound_server_site_start_failure_cleans_runner(mock_handler):
 @pytest.mark.unit
 async def test_inbound_server_stop_waits_for_concurrent_start(mock_handler):
     server = InboundServer(
-        host="127.0.0.1",
-        port=8765,
-        token="test_token",
-        handler=mock_handler,
+        host    = "127.0.0.1",
+        port    = 8765,
+        token   = "test_token",
+        handler = mock_handler,
     )
     entered = asyncio.Event()
     release = asyncio.Event()
@@ -167,10 +167,10 @@ async def test_inbound_server_stop_waits_for_concurrent_start(mock_handler):
 @pytest.mark.unit
 async def test_inbound_server_concurrent_starts_bind_once(mock_handler):
     server = InboundServer(
-        host="127.0.0.1",
-        port=8765,
-        token="test_token",
-        handler=mock_handler,
+        host    = "127.0.0.1",
+        port    = 8765,
+        token   = "test_token",
+        handler = mock_handler,
     )
     entered = asyncio.Event()
     release = asyncio.Event()
@@ -203,9 +203,9 @@ async def test_inbound_server_concurrent_starts_bind_once(mock_handler):
 @pytest.mark.unit
 async def test_inbound_manager_stop_waits_for_concurrent_start():
     manager = InboundManager(
-        inbound_http_base="http://127.0.0.1:18080",
-        inbound_ws_uri="",
-        token="test_token",
+        inbound_http_base = "http://127.0.0.1:18080",
+        inbound_ws_uri    = "",
+        token             = "test_token",
         handler=AsyncMock(return_value=[]),
     )
     entered = asyncio.Event()
@@ -218,9 +218,9 @@ async def test_inbound_manager_stop_waits_for_concurrent_start():
 
     server = MagicMock(
         start=AsyncMock(side_effect=blocked_start),
-        stop=AsyncMock(),
-        set_status_providers=Mock(),
-        commit_admission=Mock(),
+        stop                 = AsyncMock(),
+        set_status_providers = Mock(),
+        commit_admission     = Mock(),
     )
 
     with patch("core.server.InboundServer", return_value=server):
@@ -246,15 +246,15 @@ async def test_inbound_server_stop_bounds_cancellation_resistant_tasks(
     task_kind: str,
 ):
     server = InboundServer(
-        host="127.0.0.1",
-        port=8765,
-        token="test_token",
-        handler=mock_handler,
+        host    = "127.0.0.1",
+        port    = 8765,
+        token   = "test_token",
+        handler = mock_handler,
     )
     server._handler_drain_timeout_seconds = 0.01
-    entered = asyncio.Event()
-    cancelled = asyncio.Event()
-    release = asyncio.Event()
+    entered                               = asyncio.Event()
+    cancelled                             = asyncio.Event()
+    release                               = asyncio.Event()
 
     resist_cancellation = cancellation_resistant_callback(entered, cancelled, release)
 
@@ -265,7 +265,7 @@ async def test_inbound_server_stop_bounds_cancellation_resistant_tasks(
             return []
 
         server.handler = resistant_handler
-        task = asyncio.create_task(server._invoke_handler({}))
+        task           = asyncio.create_task(server._invoke_handler({}))
     else:
         task = asyncio.create_task(resist_cancellation())
         if task_kind == "close":
@@ -306,10 +306,10 @@ async def test_scheduled_websocket_close_isolates_fatal(mock_handler):
         pass
 
     server = InboundServer(
-        host="127.0.0.1",
-        port=8765,
-        token="old-token",
-        handler=mock_handler,
+        host    = "127.0.0.1",
+        port    = 8765,
+        token   = "old-token",
+        handler = mock_handler,
     )
     socket = MagicMock(close=AsyncMock(side_effect=CloseFatal("close fatal")))
     server._active_sockets.add(socket)
@@ -328,15 +328,15 @@ async def test_scheduled_websocket_close_isolates_fatal(mock_handler):
 @pytest.mark.unit
 async def test_inbound_manager_second_listener_failure_stops_first():
     manager = InboundManager(
-        inbound_http_base="http://127.0.0.1:18080",
-        inbound_ws_uri="ws://127.0.0.1:18081/ws",
-        token="test_token",
+        inbound_http_base = "http://127.0.0.1:18080",
+        inbound_ws_uri    = "ws://127.0.0.1:18081/ws",
+        token             = "test_token",
         handler=AsyncMock(return_value=[]),
     )
-    first = MagicMock()
+    first       = MagicMock()
     first.start = AsyncMock()
-    first.stop = AsyncMock()
-    second = MagicMock()
+    first.stop  = AsyncMock()
+    second      = MagicMock()
     second.start = AsyncMock(side_effect=OSError("second bind failed"))
     second.stop = AsyncMock()
 
@@ -360,15 +360,15 @@ async def test_inbound_manager_second_listener_failure_stops_first():
 @pytest.mark.unit
 def test_inbound_manager_binding_ports_deduplicates_shared_port():
     shared = InboundManager(
-        inbound_http_base="http://127.0.0.1:18080",
-        inbound_ws_uri="ws://127.0.0.1:18080/ws",
-        token="test_token",
+        inbound_http_base = "http://127.0.0.1:18080",
+        inbound_ws_uri    = "ws://127.0.0.1:18080/ws",
+        token             = "test_token",
         handler=AsyncMock(return_value=[]),
     )
     separate = InboundManager(
-        inbound_http_base="http://127.0.0.1:18080",
-        inbound_ws_uri="ws://127.0.0.1:18081/ws",
-        token="test_token",
+        inbound_http_base = "http://127.0.0.1:18080",
+        inbound_ws_uri    = "ws://127.0.0.1:18081/ws",
+        token             = "test_token",
         handler=AsyncMock(return_value=[]),
     )
 
@@ -404,15 +404,15 @@ async def test_server_token_rotation_revokes_old_ws_and_accepts_new_token(
         return [{"action": "ack", "params": {"message_id": event["message_id"]}}]
 
     server = InboundServer(
-        host="127.0.0.1",
-        port=unused_tcp_port,
-        token="old-token",
-        handler=handler,
-        enable_http=False,
-        enable_ws=True,
-        ws_path="/ws",
-        ws_max_workers=1,
-        ws_queue_size=4,
+        host           = "127.0.0.1",
+        port           = unused_tcp_port,
+        token          = "old-token",
+        handler        = handler,
+        enable_http    = False,
+        enable_ws      = True,
+        ws_path        = "/ws",
+        ws_max_workers = 1,
+        ws_queue_size  = 4,
     )
     await server.start()
     url = f"http://127.0.0.1:{unused_tcp_port}/ws"
@@ -441,7 +441,7 @@ async def test_server_token_rotation_revokes_old_ws_and_accepts_new_token(
                 url,
                 headers={"Authorization": "Bearer new-token"},
             )
-            payload = _onebot_message_payload("/help")
+            payload               = _onebot_message_payload("/help")
             payload["message_id"] = 902
             await new_ws.send_json(payload)
             response = await new_ws.receive_json(timeout=2)
@@ -464,8 +464,8 @@ async def test_server_stop_with_workers(mock_handler, unused_tcp_port):
     await server.start()
 
     # Create mock worker tasks
-    mock_task1 = asyncio.create_task(asyncio.sleep(10))
-    mock_task2 = asyncio.create_task(asyncio.sleep(10))
+    mock_task1              = asyncio.create_task(asyncio.sleep(10))
+    mock_task2              = asyncio.create_task(asyncio.sleep(10))
     server._ws_worker_tasks = [mock_task1, mock_task2]
 
     await server.stop()
@@ -485,15 +485,15 @@ async def test_manager_http_ws_listeners_share_fifo_and_parallel_lanes(
 ):
     """Combined and split listeners linearize into one manager dispatcher."""
 
-    http_port = unused_tcp_port_factory()
-    ws_port = http_port if listener_layout == "shared-port" else unused_tcp_port_factory()
-    same_entered = asyncio.Event()
-    same_release = asyncio.Event()
+    http_port        = unused_tcp_port_factory()
+    ws_port          = http_port if listener_layout == "shared-port" else unused_tcp_port_factory()
+    same_entered     = asyncio.Event()
+    same_release     = asyncio.Event()
     ws_first_entered = asyncio.Event()
     ws_first_release = asyncio.Event()
-    other_entered = asyncio.Event()
-    other_release = asyncio.Event()
-    seen: list[str] = []
+    other_entered    = asyncio.Event()
+    other_release    = asyncio.Event()
+    seen: list[str]  = []
 
     async def handler(event: dict[str, Any]) -> list[dict[str, Any]]:
         marker = str(event["marker"])
@@ -510,12 +510,12 @@ async def test_manager_http_ws_listeners_share_fifo_and_parallel_lanes(
         return [{"marker": marker}]
 
     manager = InboundManager(
-        inbound_http_base=f"http://127.0.0.1:{http_port}",
-        inbound_ws_uri=f"ws://127.0.0.1:{ws_port}/ws",
-        token="shared-token",
-        handler=handler,
-        ws_max_workers=2,
-        ws_queue_size=8,
+        inbound_http_base = f"http://127.0.0.1:{http_port}",
+        inbound_ws_uri    = f"ws://127.0.0.1:{ws_port}/ws",
+        token             = "shared-token",
+        handler           = handler,
+        ws_max_workers    = 2,
+        ws_queue_size     = 8,
     )
     await manager.start()
     assert manager.http_server is not None
@@ -527,7 +527,7 @@ async def test_manager_http_ws_listeners_share_fifo_and_parallel_lanes(
     assert manager.http_server._event_dispatcher is manager.ws_server._event_dispatcher
     assert manager._event_dispatcher is manager.http_server._event_dispatcher
 
-    headers = {"Authorization": "Bearer shared-token"}
+    headers = {"Authorization": "Bearer shared-token", "X-XiaoQing-Response-Mode": "actions"}
 
     def payload(marker: str, user_id: int) -> dict[str, Any]:
         event = _onebot_message_payload(marker)
@@ -537,8 +537,8 @@ async def test_manager_http_ws_listeners_share_fifo_and_parallel_lanes(
     async def post(session: ClientSession, event: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         async with session.post(
             f"http://127.0.0.1:{http_port}/event",
-            headers=headers,
-            json=event,
+            headers = headers,
+            json    = event,
         ) as response:
             return response.status, await response.json()
 
@@ -565,7 +565,7 @@ async def test_manager_http_ws_listeners_share_fifo_and_parallel_lanes(
                 await ws.send_json(payload("ws-first", 1501))
                 await asyncio.wait_for(ws_first_entered.wait(), timeout=1)
                 before_reverse = len(seen)
-                http_after_ws = asyncio.create_task(post(session, payload("http-after-ws", 1501)))
+                http_after_ws  = asyncio.create_task(post(session, payload("http-after-ws", 1501)))
                 await asyncio.sleep(0.02)
                 assert seen[before_reverse:] == []
                 ws_first_release.set()

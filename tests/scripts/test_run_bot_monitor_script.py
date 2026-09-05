@@ -62,12 +62,12 @@ def test_vbs_launcher_parses_and_reports_a_missing_monitor(tmp_path: Path) -> No
 
     result = subprocess.run(
         [cscript, "//NoLogo", str(isolated_launcher)],
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding=locale.getencoding(),
-        errors="replace",
-        timeout=10,
+        check          = False,
+        capture_output = True,
+        text           = True,
+        encoding       = locale.getencoding(),
+        errors         = "replace",
+        timeout        = 10,
     )
 
     assert result.returncode == 1
@@ -84,12 +84,12 @@ def test_vbs_stop_launcher_parses_and_reports_a_missing_monitor(tmp_path: Path) 
 
     result = subprocess.run(
         [cscript, "//NoLogo", str(isolated_launcher)],
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding=locale.getencoding(),
-        errors="replace",
-        timeout=10,
+        check          = False,
+        capture_output = True,
+        text           = True,
+        encoding       = locale.getencoding(),
+        errors         = "replace",
+        timeout        = 10,
     )
 
     assert result.returncode == 1
@@ -274,7 +274,7 @@ def test_monitor_scopes_configured_mkl_layer_to_bot_process_tree() -> None:
         pytest.skip("PowerShell is not installed")
 
     environment = {**os.environ, "XIAOQING_MONITOR_AST_PATH": str(MONITOR)}
-    probe = r"""
+    probe       = r"""
 $tokens = $null
 $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile(
@@ -325,9 +325,9 @@ def test_monitor_default_bot_root_resolves_in_windows_powershell(
     if executable is None:
         pytest.skip("PowerShell is not installed")
 
-    clean_checkout = tmp_path / "clean checkout"
+    clean_checkout    = tmp_path / "clean checkout"
     scripts_directory = clean_checkout / "scripts"
-    config_directory = clean_checkout / "config"
+    config_directory  = clean_checkout / "config"
     scripts_directory.mkdir(parents=True)
     config_directory.mkdir()
     copied_monitor = scripts_directory / MONITOR.name
@@ -366,9 +366,9 @@ def test_stop_mode_ends_only_the_scoped_monitor_tree_and_is_idempotent(
     if cscript is None:
         pytest.skip("Windows Script Host is not installed")
 
-    bot_root = tmp_path / "isolated-bot"
+    bot_root          = tmp_path / "isolated-bot"
     scripts_directory = bot_root / "scripts"
-    config_directory = bot_root / "config"
+    config_directory  = bot_root / "config"
     scripts_directory.mkdir(parents=True)
     config_directory.mkdir()
     copied_monitor = scripts_directory / MONITOR.name
@@ -412,19 +412,19 @@ def test_stop_mode_ends_only_the_scoped_monitor_tree_and_is_idempotent(
             "-StableRunSeconds",
             "1",
         ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout = subprocess.PIPE,
+        stderr = subprocess.PIPE,
     )
     sentinel = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(60)"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout = subprocess.DEVNULL,
+        stderr = subprocess.DEVNULL,
     )
     owned_process_ids = {monitor.pid}
     try:
         monitor_pid_file = bot_root / "logs" / "xiaoqing-monitor.pid.json"
-        bot_pid_file = bot_root / "logs" / "xiaoqing-bot.pid.json"
-        deadline = time.monotonic() + 20
+        bot_pid_file     = bot_root / "logs" / "xiaoqing-bot.pid.json"
+        deadline         = time.monotonic() + 20
         while time.monotonic() < deadline:
             if monitor.poll() is not None:
                 stdout, stderr = monitor.communicate(timeout=1)
@@ -454,12 +454,12 @@ def test_stop_mode_ends_only_the_scoped_monitor_tree_and_is_idempotent(
         )
         result = subprocess.run(
             [cscript, "//NoLogo", str(copied_stop_launcher)],
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding=locale.getencoding(),
-            errors="replace",
-            timeout=40,
+            check          = False,
+            capture_output = True,
+            text           = True,
+            encoding       = locale.getencoding(),
+            errors         = "replace",
+            timeout        = 40,
         )
 
         assert result.returncode == 0, (
@@ -493,10 +493,10 @@ def test_stop_mode_ends_only_the_scoped_monitor_tree_and_is_idempotent(
             )
             subprocess.run(
                 [str(taskkill), "/PID", str(monitor.pid), "/T", "/F"],
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=5,
+                check   = False,
+                stdout  = subprocess.DEVNULL,
+                stderr  = subprocess.DEVNULL,
+                timeout = 5,
             )
         if sentinel.poll() is None:
             sentinel.terminate()

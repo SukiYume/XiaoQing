@@ -27,15 +27,15 @@ from .deps import set_db
 
 logger = logging.getLogger("pendo.web")
 
-_app: FastAPI | None = None
-_server: uvicorn.Server | None = None
+_app: FastAPI | None             = None
+_server: uvicorn.Server | None   = None
 _thread: threading.Thread | None = None
-_last_error: str | None = None
-_STATE_LOCK = threading.RLock()
+_last_error: str | None          = None
+_STATE_LOCK                      = threading.RLock()
 
-STATIC_DIR = Path(__file__).parent / "static"
+STATIC_DIR      = Path(__file__).parent / "static"
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
-_CSP = (
+_CSP            = (
     "default-src 'self'; "
     "base-uri 'self'; "
     "object-src 'none'; "
@@ -66,8 +66,8 @@ def create_app(db: Database) -> FastAPI:
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request, exc):
         return JSONResponse(
-            status_code=exc.status_code,
-            content={"ok": False, "message": exc.detail, "error_code": str(exc.status_code)},
+            status_code = exc.status_code,
+            content     = {"ok": False, "message": exc.detail, "error_code": str(exc.status_code)},
         )
 
     @app.exception_handler(RequestValidationError)
@@ -81,8 +81,8 @@ def create_app(db: Database) -> FastAPI:
             for err in exc.errors()
         ]
         return JSONResponse(
-            status_code=422,
-            content={
+            status_code = 422,
+            content     = {
                 "ok": False,
                 "message": "请求参数校验失败",
                 "error_code": "validation_error",
@@ -94,8 +94,8 @@ def create_app(db: Database) -> FastAPI:
     async def pendo_exception_handler(request, exc):
         status_code = 409 if isinstance(exc, AmbiguousIdentifierException) else 400
         return JSONResponse(
-            status_code=status_code,
-            content={
+            status_code = status_code,
+            content     = {
                 "ok": False,
                 "message": exc.get_user_message(),
                 "error_code": exc.error_code,
@@ -116,7 +116,7 @@ def _format_start_error(host: str, port: int, exc: BaseException) -> str:
     target = f"{host}:{port}"
     if isinstance(exc, OSError):
         winerror = getattr(exc, "winerror", None)
-        errno = getattr(exc, "errno", None)
+        errno    = getattr(exc, "errno", None)
 
         if winerror == 10048:
             return f"无法绑定到 {target}，端口已被其他进程占用。"
@@ -135,7 +135,7 @@ def _reset_state() -> None:
     """Clear server globals after a completed stop or failed startup."""
     global _app, _server, _thread
 
-    _app = None
+    _app    = None
     _server = None
     _thread = None
 
@@ -192,8 +192,8 @@ def start(db: Database) -> bool:
             return False
 
         runtime = PendoConfig.runtime()
-        host = runtime.web_host
-        port = runtime.web_port
+        host    = runtime.web_host
+        port    = runtime.web_port
         if host.lower() not in _LOOPBACK_HOSTS and not runtime.web_session_cookie_secure:
             _last_error = (
                 "拒绝将 Pendo Web 绑定到非 loopback 地址而不使用 Secure session cookie；"
@@ -204,14 +204,14 @@ def start(db: Database) -> bool:
             return False
 
         _last_error = None
-        _app = create_app(db)
+        _app        = create_app(db)
         config = uvicorn.Config(_app, host=host, port=port, log_level="warning")
         server = uvicorn.Server(config)
         thread = threading.Thread(
-            target=_run_server,
-            args=(server, host, port),
-            daemon=True,
-            name="pendo-web",
+            target = _run_server,
+            args   = (server, host, port),
+            daemon = True,
+            name   = "pendo-web",
         )
         _server = server
         _thread = thread
@@ -294,7 +294,7 @@ def get_last_error() -> str | None:
 
 def get_url() -> str:
     """Get the web UI URL."""
-    runtime = PendoConfig.runtime()
-    host = runtime.web_host
+    runtime  = PendoConfig.runtime()
+    host     = runtime.web_host
     url_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
     return f"http://{url_host}:{runtime.web_port}"

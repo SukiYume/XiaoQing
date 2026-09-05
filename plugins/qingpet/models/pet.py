@@ -13,7 +13,7 @@ from ..utils.constants import (
 )
 from ..utils.time import utc_now
 
-_STAT_FIELDS = ("hunger", "mood", "clean", "energy", "health")
+_STAT_FIELDS       = ("hunger", "mood", "clean", "energy", "health")
 _DRESS_SLOT_FIELDS = (
     ("帽子", "dress_hat"),
     ("衣服", "dress_clothes"),
@@ -34,32 +34,34 @@ class Pet:
     form: str = "普通"
 
     hunger: int = 100
-    mood: int = 100
-    clean: int = 100
+    mood: int   = 100
+    clean: int  = 100
     energy: int = 100
     health: int = 100
 
-    age: int = 0
+    age: int        = 0
     experience: int = 0
-    intimacy: int = 0
+    intimacy: int   = 0
 
     personality: PetPersonality = PetPersonality.LIVELY
-    favorite_food: str | None = None
+    favorite_food: str | None   = None
 
-    status: PetStatus = PetStatus.NORMAL
+    status: PetStatus                   = PetStatus.NORMAL
     status_expire_time: datetime | None = None
 
     # 当前装备的装扮道具
-    dress_hat: str | None = None
-    dress_clothes: str | None = None
-    dress_accessory: str | None = None
+    dress_hat: str | None        = None
+    dress_clothes: str | None    = None
+    dress_accessory: str | None  = None
     dress_background: str | None = None
 
     last_update: datetime = field(default_factory=utc_now)
-    last_feed: datetime | None = None
-    last_clean: datetime | None = None
-    last_play: datetime | None = None
-    last_train: datetime | None = None
+    # 每项衰减的小数余量随状态持久化，保证短周期与离线结算一致。
+    decay_remainders: dict[str, float] = field(default_factory=dict)
+    last_feed: datetime | None    = None
+    last_clean: datetime | None   = None
+    last_play: datetime | None    = None
+    last_train: datetime | None   = None
     last_explore: datetime | None = None
 
     likes: int = 0
@@ -87,6 +89,7 @@ class Pet:
         "status_expire_time",
         *(field_name for _slot_name, field_name in _DRESS_SLOT_FIELDS),
         "last_update",
+        "decay_remainders",
         "last_feed",
         "last_clean",
         "last_play",
@@ -109,14 +112,14 @@ class Pet:
         merged = replace(latest)
         for name in self._MERGE_FIELDS:
             original = self._persisted_state[name]
-            desired = getattr(self, name)
+            desired  = getattr(self, name)
             if desired == original:
                 continue
             if name in self._DELTA_FIELDS:
-                latest_value = cast(int, getattr(latest, name))
-                desired_value = cast(int, desired)
+                latest_value   = cast(int, getattr(latest, name))
+                desired_value  = cast(int, desired)
                 original_value = cast(int, original)
-                value = latest_value + desired_value - original_value
+                value          = latest_value + desired_value - original_value
                 if name in _STAT_FIELDS:
                     value = min(MAX_STAT_VALUE, max(0, value))
                 setattr(merged, name, value)
@@ -137,7 +140,7 @@ class Pet:
         """在指定上下界内增减一个合法的宠物属性。"""
         if stat not in _STAT_FIELDS:
             raise ValueError(f"未知宠物属性: {stat}")
-        current = cast(int, getattr(self, stat))
+        current   = cast(int, getattr(self, stat))
         new_value = min(max_val, max(min_val, current + delta))
         setattr(self, stat, new_value)
         return new_value
@@ -158,7 +161,7 @@ class Pet:
         bonus = 0
         for _slot_name, field_name in _DRESS_SLOT_FIELDS:
             item_id = getattr(self, field_name)
-            item = DEFAULT_DRESS_ITEMS.get(item_id) if item_id else None
+            item    = DEFAULT_DRESS_ITEMS.get(item_id) if item_id else None
             if item is not None:
                 bonus += int(item.get("mood_bonus", 0))
         return bonus

@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 def _show_ssh_help(manager: SSHManager) -> MessageSegments:
     """显示已保存目标、SSH config 目标和常用入口。"""
-    servers = manager.list_servers()
+    servers          = manager.list_servers()
     ssh_config_hosts = manager.get_ssh_config_hosts()
 
     lines: list[str] = []
@@ -88,10 +88,10 @@ async def _connect_to_server(
             )
 
     if username_override:
-        server = server.copy()
+        server             = server.copy()
         server["username"] = username_override
 
-    user_id = str(context.current_user_id)
+    user_id  = str(context.current_user_id)
     group_id = str(context.current_group_id)
     success, message = await manager.connect(
         user_id, group_id, server_name, username_override=username_override
@@ -159,8 +159,8 @@ async def handle_ssh_main(
         if existing_session.plugin_name != "qingssh":
             return segments("❌ 请先结束当前会话后再连接 SSH")
         server_name = existing_session.get(SessionKeys.SERVER_NAME)
-        user_id = str(context.current_user_id)
-        group_id = str(context.current_group_id)
+        user_id     = str(context.current_user_id)
+        group_id    = str(context.current_group_id)
         if server_name and manager.is_connected(user_id, group_id, server_name):
             return segments(
                 format_section(
@@ -179,7 +179,7 @@ async def handle_ssh_main(
         return _show_ssh_help(manager)
 
     username_override = None
-    server_name = args
+    server_name       = args
 
     if "@" in args:
         username_override, server_name = args.split("@", 1)
@@ -200,15 +200,15 @@ async def handle_ssh_disconnect(
     """断开指定连接，未指定名称时处理当前 QingSSH 会话。"""
     session = await context.get_session()
 
-    user_id = str(context.current_user_id)
-    group_id = str(context.current_group_id)
+    user_id       = str(context.current_user_id)
+    group_id      = str(context.current_group_id)
     target_server = args.strip() or None
     if target_server and any(character.isspace() for character in target_server):
         return segments("❌ 用法: /ssh disconnect [服务器名]")
 
     if session is not None and session.plugin_name == "qingssh":
         current_server = session.get(SessionKeys.SERVER_NAME)
-        server_name = target_server or current_server
+        server_name    = target_server or current_server
 
         if server_name and manager.disconnect(user_id, group_id, server_name):
             if current_server == server_name:
@@ -246,15 +246,15 @@ async def handle_ssh_list(
 
     lines = ["📋 SSH 服务器列表", DIVIDER]
 
-    user_id = str(context.current_user_id)
+    user_id  = str(context.current_user_id)
     group_id = str(context.current_group_id)
 
     for name, config in sorted(servers.items()):
         status = "🟢" if manager.is_connected(user_id, group_id, name) else "⚪"
         lines.append(f"{status} {name}")
         username = config.get("username", "?")
-        host = config.get("host", "?")
-        port = config.get("port", "?")
+        host     = config.get("host", "?")
+        port     = config.get("port", "?")
         if config.get("proxycommand") or config.get("proxyjump"):
             lines.append(f"   {username}@{host} (跳板机)")
         else:
@@ -281,8 +281,8 @@ async def handle_ssh_status(
 
     for conn in active_conns:
         s_name = conn["server_name"]
-        u_id = conn["user_id"]
-        g_id = conn["group_id"]
+        u_id   = conn["user_id"]
+        g_id   = conn["group_id"]
 
         info = f"🔌 {s_name}"
         if g_id is not None:
@@ -437,7 +437,7 @@ async def handle_ssh_import(
     lines = ["📥 从 ~/.ssh/config 导入", DIVIDER]
     lines.append("可导入的 Host:")
 
-    new_hosts = [host for host in hosts if host not in servers]
+    new_hosts      = [host for host in hosts if host not in servers]
     existing_count = len(hosts) - len(new_hosts)
 
     if new_hosts:
@@ -490,7 +490,7 @@ async def handle_ssh_config_list(
     servers = manager.list_servers()
 
     for host in hosts[:20]:
-        config = manager.get_ssh_config_for_host(host)
+        config   = manager.get_ssh_config_for_host(host)
         imported = "✓" if host in servers else " "
 
         if config:

@@ -201,8 +201,8 @@ def _run_diary_client(script: str) -> None:
     assert_node_esm_contract(
         _diary_source_for_test(),
         script,
-        cwd=ROOT,
-        setup=DIARY_SETUP,
+        cwd   = ROOT,
+        setup = DIARY_SETUP,
     )
 
 
@@ -520,7 +520,7 @@ def test_diary_modal_encodes_mutations_and_dispatches_one_refresh() -> None:
             content: '正文',
         };
         await client.__openDiaryFormModal({
-            id: 'entry/a b', diary_date: '2026-03-02', content: '旧正文',
+            id: 'entry/a b', version: 3, diary_date: '2026-03-02', content: '旧正文',
         });
         const saveButton = buttons.get('#diary-modal-save');
         const saving = saveButton.onclick();
@@ -536,7 +536,7 @@ def test_diary_modal_encodes_mutations_and_dispatches_one_refresh() -> None:
             {
                 diary_date: '2026-03-02',
                 entry_time: '2026-03-02T00:30:00+00:00',
-                content: '正文',
+                content: '正文', version: 3,
             },
         ]);
         assert.equal(saveButton.disabled, false);
@@ -546,7 +546,7 @@ def test_diary_modal_encodes_mutations_and_dispatches_one_refresh() -> None:
 
         const deleteCalls = [];
         __api.delete = async (...args) => { deleteCalls.push(args); };
-        await client.__deleteDiary({ id: 'entry/a b', title: '正文' });
+        await client.__deleteDiary({ id: 'entry/a b', version: 3, title: '正文' });
         assert.deepEqual(deleteCalls, [['/items/entry%2Fa%20b']]);
         assert.equal(__dispatchedEvents.length, 2);
         assert.equal(getCalls.length, 1);

@@ -10,11 +10,11 @@ class PendoException(Exception):
         self,
         message: str,
         user_message: str | None = None,
-        error_code: str | None = None,
+        error_code: str | None   = None,
     ) -> None:
         super().__init__(message)
         self.user_message = user_message or message
-        self.error_code = error_code or uuid.uuid4().hex[:8].upper()
+        self.error_code   = error_code or uuid.uuid4().hex[:8].upper()
 
     def get_user_message(self) -> str:
         """返回不含内部堆栈与实现细节的公开消息。"""
@@ -41,12 +41,12 @@ class AmbiguousIdentifierException(PendoException):
 
     def __init__(self, reference: str, matched_ids: list[str]) -> None:
         candidates = "、".join(f"`{item_id}`" for item_id in matched_ids[:5])
-        suffix = f"\n\n候选完整 ID：{candidates}" if candidates else ""
+        suffix     = f"\n\n候选完整 ID：{candidates}" if candidates else ""
         super().__init__(
             f"Ambiguous identifier {reference}: {matched_ids}",
             f"⚠️ 短标识 `{reference}` 匹配到多个条目，请使用完整 ID{suffix}",
         )
-        self.reference = reference
+        self.reference   = reference
         self.matched_ids = matched_ids
 
 

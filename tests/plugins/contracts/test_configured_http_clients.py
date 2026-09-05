@@ -1,3 +1,4 @@
+# 验证配置驱动的 HTTP 客户端共用有界请求接口。
 from __future__ import annotations
 
 import ast
@@ -17,7 +18,7 @@ from plugins.voice import main as voice
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.settings_snapshot import with_settings_reader
 
-ROOT = REPOSITORY_ROOT
+ROOT         = REPOSITORY_ROOT
 ERROR_CANARY = b"CR221_HUGE_PRIVATE_ERROR_BODY_CANARY"
 
 
@@ -87,8 +88,8 @@ def _core_ai_settings(api_base: str) -> tuple[dict[str, Any], dict[str, Any]]:
 
 class _ChunkedContent:
     def __init__(self, chunks: list[bytes], *, poison: bool = False) -> None:
-        self.chunks = chunks
-        self.poison = poison
+        self.chunks     = chunks
+        self.poison     = poison
         self.iterations = 0
 
     async def iter_chunked(self, _chunk_bytes: int):
@@ -106,14 +107,14 @@ class _Response:
         status: int,
         chunks: list[bytes],
         headers: dict[str, str] | None = None,
-        poison: bool = False,
+        poison: bool                   = False,
     ) -> None:
-        self.status = status
+        self.status  = status
         self.headers = headers or {}
         self.content = _ChunkedContent(chunks, poison=poison)
         self.content_length = sum(len(chunk) for chunk in chunks)
-        self.url = ""
-        self.closed = False
+        self.url            = ""
+        self.closed         = False
 
     async def __aenter__(self) -> _Response:
         return self
@@ -127,12 +128,12 @@ class _Response:
 
 class _Session:
     def __init__(self, *responses: _Response) -> None:
-        self.responses = list(responses)
+        self.responses                                    = list(responses)
         self.calls: list[tuple[str, str, dict[str, Any]]] = []
 
     def request(self, method: str, url: str, **kwargs: Any) -> _Response:
         self.calls.append((method, url, kwargs))
-        response = self.responses.pop(0)
+        response     = self.responses.pop(0)
         response.url = url
         return response
 
@@ -141,26 +142,26 @@ def _json_response(
     payload: Any,
     *,
     compressed: bool = False,
-    split_at: int = 7,
+    split_at: int    = 7,
 ) -> _Response:
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     headers = {"Content-Type": "application/json; charset=utf-8"}
     if compressed:
-        body = gzip.compress(body)
+        body                        = gzip.compress(body)
         headers["Content-Encoding"] = "gzip"
     return _Response(
-        status=200,
-        chunks=[body[:split_at], body[split_at:]],
-        headers=headers,
+        status  = 200,
+        chunks  = [body[:split_at], body[split_at:]],
+        headers = headers,
     )
 
 
 def _error_response(status: int = 500) -> _Response:
     return _Response(
-        status=status,
-        chunks=[ERROR_CANARY * 100_000],
-        headers={"Content-Type": "text/plain"},
-        poison=True,
+        status  = status,
+        chunks  = [ERROR_CANARY * 100_000],
+        headers = {"Content-Type": "text/plain"},
+        poison  = True,
     )
 
 
@@ -179,9 +180,9 @@ def _voice_context(tmp_path: Path, session: _Session) -> SimpleNamespace:
                     }
                 }
             },
-            data_dir=tmp_path,
-            http_session=session,
-            logger=MagicMock(),
+            data_dir     = tmp_path,
+            http_session = session,
+            logger       = MagicMock(),
         )
     )
 
@@ -197,12 +198,12 @@ async def test_ads_llm_accepts_private_base_and_chunked_gzip() -> None:
 
     config, secrets = _core_ai_settings("http://127.0.0.1:18080/v1")
     result = await complete_configured_route(
-        session=session,
-        config=config,
-        secrets=secrets,
-        plugin_name="ads_paper",
-        route_name="summary",
-        messages=[{"role": "user", "content": "abstract"}],
+        session     = session,
+        config      = config,
+        secrets     = secrets,
+        plugin_name = "ads_paper",
+        route_name  = "summary",
+        messages    = [{"role": "user", "content": "abstract"}],
     )
 
     assert result.content == "bounded summary"
@@ -225,13 +226,13 @@ async def test_pendo_llm_preserves_private_base_proxy_timeout_and_no_redirect() 
 
     config, secrets = _core_ai_settings("http://llm.internal:11434/v1")
     config["ai"]["providers"]["local"]["proxy"] = "http://127.0.0.1:7890"
-    result = await complete_configured_route(
-        session=session,
-        config=config,
-        secrets=secrets,
-        plugin_name="pendo",
-        route_name="parse",
-        messages=[{"role": "user", "content": "hello"}],
+    result                                      = await complete_configured_route(
+        session     = session,
+        config      = config,
+        secrets     = secrets,
+        plugin_name = "pendo",
+        route_name  = "parse",
+        messages    = [{"role": "user", "content": "hello"}],
     )
 
     assert result.content == "local answer"
@@ -254,13 +255,13 @@ async def test_xiaoqing_llm_preserves_private_base_proxy_and_payload() -> None:
 
     config, secrets = _core_ai_settings("http://127.0.0.1:11434/v1")
     config["ai"]["providers"]["local"]["proxy"] = "http://proxy.internal:8080"
-    result = await complete_configured_route(
-        session=session,
-        config=config,
-        secrets=secrets,
-        plugin_name="xiaoqing_chat",
-        route_name="chat",
-        messages=[{"role": "user", "content": "hello"}],
+    result                                      = await complete_configured_route(
+        session     = session,
+        config      = config,
+        secrets     = secrets,
+        plugin_name = "xiaoqing_chat",
+        route_name  = "chat",
+        messages    = [{"role": "user", "content": "hello"}],
     )
 
     assert result.content == "ok"
@@ -312,9 +313,9 @@ async def test_chat_preserves_proxy_and_parses_chunked_json() -> None:
 @pytest.mark.asyncio
 async def test_voice_tts_uses_identity_existing_cap_and_proxy(tmp_path: Path) -> None:
     response = _Response(
-        status=200,
-        chunks=[b"ID3audio", b"-data"],
-        headers={"Content-Type": "audio/mpeg"},
+        status  = 200,
+        chunks  = [b"ID3audio", b"-data"],
+        headers = {"Content-Type": "audio/mpeg"},
     )
     session = _Session(response)
     context = _voice_context(tmp_path, session)
@@ -337,24 +338,24 @@ async def test_non_success_bodies_are_never_read_or_logged(tmp_path: Path) -> No
     config, secrets = _core_ai_settings("http://127.0.0.1:18080/v1")
     with pytest.raises(AIRequestError, match="ai_server_error") as ads_error:
         await complete_configured_route(
-            session=_Session(ads_response),
-            config=config,
-            secrets=secrets,
-            plugin_name="ads_paper",
-            route_name="summary",
-            messages=[{"role": "user", "content": "abstract"}],
+            session     = _Session(ads_response),
+            config      = config,
+            secrets     = secrets,
+            plugin_name = "ads_paper",
+            route_name  = "summary",
+            messages    = [{"role": "user", "content": "abstract"}],
         )
     assert ERROR_CANARY.decode() not in str(ads_error.value)
 
     xiaoqing_response = _error_response(400)
     with pytest.raises(AIRequestError, match="ai_invalid_request") as error:
         await complete_configured_route(
-            session=_Session(xiaoqing_response),
-            config=config,
-            secrets=secrets,
-            plugin_name="xiaoqing_chat",
-            route_name="chat",
-            messages=[{"role": "user", "content": "hello"}],
+            session     = _Session(xiaoqing_response),
+            config      = config,
+            secrets     = secrets,
+            plugin_name = "xiaoqing_chat",
+            route_name  = "chat",
+            messages    = [{"role": "user", "content": "hello"}],
         )
     assert ERROR_CANARY.decode() not in str(error.value)
 
@@ -392,12 +393,12 @@ async def test_llm_rejects_excessive_json_complexity() -> None:
     config, secrets = _core_ai_settings("http://127.0.0.1:18080/v1")
     with pytest.raises(AIRequestError, match="ai_invalid_response"):
         await complete_configured_route(
-            session=_Session(response),
-            config=config,
-            secrets=secrets,
-            plugin_name="xiaoqing_chat",
-            route_name="chat",
-            messages=[{"role": "user", "content": "hello"}],
+            session     = _Session(response),
+            config      = config,
+            secrets     = secrets,
+            plugin_name = "xiaoqing_chat",
+            route_name  = "chat",
+            messages    = [{"role": "user", "content": "hello"}],
         )
 
 
@@ -412,12 +413,12 @@ async def test_xiaoqing_transport_error_does_not_expose_private_provider() -> No
     config, secrets = _core_ai_settings(f"http://{canary}/v1")
     with pytest.raises(AIRequestError, match="^ai_transport$") as caught:
         await complete_configured_route(
-            session=FailingSession(),
-            config=config,
-            secrets=secrets,
-            plugin_name="xiaoqing_chat",
-            route_name="chat",
-            messages=[{"role": "user", "content": "hello"}],
+            session     = FailingSession(),
+            config      = config,
+            secrets     = secrets,
+            plugin_name = "xiaoqing_chat",
+            route_name  = "chat",
+            messages    = [{"role": "user", "content": "hello"}],
         )
 
     assert canary not in str(caught.value)
@@ -426,9 +427,9 @@ async def test_xiaoqing_transport_error_does_not_expose_private_provider() -> No
 @pytest.mark.asyncio
 async def test_tts_declared_overflow_is_rejected_before_stream_read(tmp_path: Path) -> None:
     response = _Response(
-        status=200,
-        chunks=[b"x"],
-        headers={
+        status  = 200,
+        chunks  = [b"x"],
+        headers = {
             "Content-Type": "audio/mpeg",
             "Content-Length": str(voice.MAX_AUDIO_BYTES + 1),
         },

@@ -1,3 +1,4 @@
+# 有界文件缓存：原子落盘配合过期时间、最近访问顺序和字节容量。
 """Small crash-safe disk cache with TTL, LRU, entry and byte limits."""
 
 from __future__ import annotations
@@ -36,8 +37,8 @@ class BoundedFileCache:
     """
 
     def __init__(self, directory: Path, limits: FileCacheLimits) -> None:
-        self.directory = Path(directory)
-        self.limits = limits
+        self.directory  = Path(directory)
+        self.limits     = limits
         self._lock_path = self.directory / ".budget.lock"
 
     @staticmethod
@@ -64,7 +65,7 @@ class BoundedFileCache:
         return entries
 
     def _prune_unlocked(self, *, now: float, protect: Path | None = None) -> None:
-        entries = self._entries_unlocked()
+        entries                                     = self._entries_unlocked()
         retained: list[tuple[Path, os.stat_result]] = []
         for path, stat in entries:
             if path != protect and now - stat.st_mtime > self.limits.ttl_seconds:

@@ -9,7 +9,7 @@ import pytest
 from core.interfaces import PluginContextProtocol
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT = REPOSITORY_ROOT
+ROOT         = REPOSITORY_ROOT
 CONTEXT_DOCS = (
     ROOT / "docs" / "00-overview.md",
     ROOT / "docs" / "03-plugin-development.md",

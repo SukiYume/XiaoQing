@@ -6,7 +6,7 @@ import os
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -18,7 +18,7 @@ from plugins.qingpet.services.user_service import UserService
 from tests.helpers.paths import REPOSITORY_ROOT
 
 GROUP_ID = 86420
-BASE_TIME = datetime(2026, 7, 13, 8, 0, tzinfo=timezone.utc)
+BASE_TIME = datetime(2026, 7, 13, 8, 0, tzinfo=UTC)
 TARGET_ID = "target"
 
 
@@ -29,8 +29,8 @@ def show_context(monkeypatch):
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as file:
         db_path = file.name
     database = Database(db_path)
-    users = UserService(database)
-    pets = PetService(database)
+    users    = UserService(database)
+    pets     = PetService(database)
     for user_id in [TARGET_ID, "voter-before", "voter-exact", "voter-after", "voter-late"]:
         users.get_or_create_user(user_id, GROUP_ID)
     pets.adopt_pet(TARGET_ID, GROUP_ID, "星星")
@@ -76,7 +76,7 @@ def test_vote_is_allowed_only_strictly_before_end_time(show_context):
 def test_vote_rejects_forged_show_and_pet_from_another_group(show_context):
     database, _db_path, show_id, current_time = show_context
     users = UserService(database)
-    pets = PetService(database)
+    pets  = PetService(database)
     users.get_or_create_user("other-target", GROUP_ID + 1)
     pets.adopt_pet("other-target", GROUP_ID + 1, "异群宠")
     current_time[0] = BASE_TIME + timedelta(minutes=1)
@@ -112,7 +112,7 @@ def test_concurrent_vote_and_settlement_reward_winner_once(show_context):
     assert database.vote_pet_show_atomic(show_id, "voter-exact", TARGET_ID, 3)
     current_time[0] = BASE_TIME + timedelta(hours=1)
     contenders = [Database(db_path) for _ in range(3)]
-    barrier = threading.Barrier(3)
+    barrier    = threading.Barrier(3)
 
     def late_vote():
         barrier.wait()
@@ -160,7 +160,7 @@ def test_concurrent_creation_keeps_one_active_show_per_group(show_context):
     current_time[0] = BASE_TIME + timedelta(hours=1)
     assert database.settle_pet_show_atomic(GROUP_ID, force=False) is not None
     contenders = [Database(db_path), Database(db_path)]
-    barrier = threading.Barrier(2)
+    barrier    = threading.Barrier(2)
 
     def create(index: int):
         barrier.wait()

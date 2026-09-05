@@ -10,8 +10,8 @@ from core.sensitive_audit import SensitiveAuditSummary, audit_error_type, summar
 def test_sensitive_summary_is_correlatable_without_containing_the_payload() -> None:
     canary = "Authorization: Bearer CR220-COMMAND-SECRET"
 
-    first = summarize_sensitive(canary)
-    repeated = summarize_sensitive(canary)
+    first     = summarize_sensitive(canary)
+    repeated  = summarize_sensitive(canary)
     different = summarize_sensitive(canary + "!")
 
     assert first == repeated
@@ -25,7 +25,7 @@ def test_sensitive_summary_is_correlatable_without_containing_the_payload() -> N
 
 
 def test_unicode_and_binary_lengths_have_explicit_units() -> None:
-    text = summarize_sensitive("小青")
+    text   = summarize_sensitive("小青")
     binary = summarize_sensitive("小青".encode())
 
     assert (text.kind, text.length, text.byte_length) == ("text", 2, 6)
@@ -34,8 +34,8 @@ def test_unicode_and_binary_lengths_have_explicit_units() -> None:
 
 
 def test_mutable_binary_input_is_copied_before_fingerprinting() -> None:
-    payload = bytearray(b"secret")
-    before = summarize_sensitive(payload)
+    payload    = bytearray(b"secret")
+    before     = summarize_sensitive(payload)
     payload[:] = b"public"
 
     assert summarize_sensitive(b"secret") == before
@@ -53,10 +53,10 @@ def test_summary_rejects_objects_that_could_execute_unsafe_string_conversion() -
 
 def test_summary_dataclass_itself_contains_only_safe_metadata() -> None:
     summary = SensitiveAuditSummary(
-        kind="text",
-        length=12,
-        byte_length=12,
-        fingerprint="hmac-sha256:" + ("a" * 24),
+        kind        = "text",
+        length      = 12,
+        byte_length = 12,
+        fingerprint = "hmac-sha256:" + ("a" * 24),
     )
 
     assert summary.kind == "text"

@@ -21,7 +21,7 @@ from tests.helpers.app_test_support import (
 from tests.helpers.config_test_support import _last_notified_revision
 
 mock_dependencies = _fixture_support.mock_dependencies
-temp_app_root = _fixture_support.temp_app_root
+temp_app_root     = _fixture_support.temp_app_root
 
 
 @pytest.mark.asyncio
@@ -31,7 +31,7 @@ async def test_valid_external_plugin_secret_change_keeps_control_channel_until_r
 ):
     from core.onebot import OneBotWsClient
 
-    config_path = temp_app_root / "config" / "config.json"
+    config_path  = temp_app_root / "config" / "config.json"
     secrets_path = temp_app_root / "config" / "secrets.json"
     config = json.loads(config_path.read_text(encoding="utf-8"))
     config.update(
@@ -49,12 +49,12 @@ async def test_valid_external_plugin_secret_change_keeps_control_channel_until_r
     }
     secrets_path.write_text(json.dumps(active_secrets), encoding="utf-8")
 
-    app = XiaoQingApp(temp_app_root)
-    ws_client = OneBotWsClient("ws://127.0.0.1:6700", "stable-onebot")
+    app           = XiaoQingApp(temp_app_root)
+    ws_client     = OneBotWsClient("ws://127.0.0.1:6700", "stable-onebot")
     app.ws_client = ws_client
     app._send_action = AsyncMock(return_value=True)  # type: ignore[method-assign]
-    before = app.config_manager.snapshot()
-    candidate = json.loads(json.dumps(active_secrets))
+    before                                  = app.config_manager.snapshot()
+    candidate                               = json.loads(json.dumps(active_secrets))
     candidate["plugins"]["demo"]["api_key"] = "new-plugin-secret"
     secrets_path.write_text(json.dumps(candidate), encoding="utf-8")
 
@@ -74,7 +74,7 @@ async def test_valid_external_plugin_secret_change_keeps_control_channel_until_r
 
         assert app._send_action.await_count == 2
         first_action = app._send_action.await_args_list[0].args[0]
-        notice_text = first_action["params"]["message"][0]["data"]["text"]
+        notice_text  = first_action["params"]["message"][0]["data"]["text"]
         assert first_action["action"] == "send_private_msg"
         assert first_action["params"]["user_id"] == 12345
         assert "✅ 文件完整且格式有效" in notice_text
@@ -117,25 +117,25 @@ async def test_failed_reload_revokes_auth_and_admin_before_blocked_callbacks(
         ),
         encoding="utf-8",
     )
-    app = XiaoQingApp(temp_app_root)
+    app             = XiaoQingApp(temp_app_root)
     app.http_sender = OneBotHttpSender("http://127.0.0.1:5700", "old-onebot", MagicMock())
-    app.ws_client = OneBotWsClient("ws://127.0.0.1:6700", "old-onebot")
-    inbound = InboundManager(
-        inbound_http_base="http://127.0.0.1:12000",
-        inbound_ws_uri="",
-        token="old-inbound",
-        handler=app._handle_inbound_event,
+    app.ws_client   = OneBotWsClient("ws://127.0.0.1:6700", "old-onebot")
+    inbound         = InboundManager(
+        inbound_http_base = "http://127.0.0.1:12000",
+        inbound_ws_uri    = "",
+        token             = "old-inbound",
+        handler           = app._handle_inbound_event,
     )
     app.inbound_manager = inbound
-    callback_entered = asyncio.Event()
-    callback_release = asyncio.Event()
+    callback_entered    = asyncio.Event()
+    callback_release    = asyncio.Event()
 
     async def block_ordinary_callbacks(_snapshot) -> None:
         callback_entered.set()
         await callback_release.wait()
 
     app.config_manager.on_reload(block_ordinary_callbacks)
-    first_config = app.config_manager.snapshot().mutable_config()
+    first_config             = app.config_manager.snapshot().mutable_config()
     first_config["bot_name"] = "first revision"
     app.config_manager.config_path.write_text(json.dumps(first_config), encoding="utf-8")
     app.config_manager.reload(notify=True)
@@ -182,7 +182,7 @@ async def test_real_failed_reload_stops_old_ws_and_valid_recovery_restarts_trust
     from core.exceptions import ConfigLoadError
     from core.onebot import OneBotWsClient
 
-    config_path = temp_app_root / "config" / "config.json"
+    config_path  = temp_app_root / "config" / "config.json"
     secrets_path = temp_app_root / "config" / "secrets.json"
     config = json.loads(config_path.read_text(encoding="utf-8"))
     config.update(
@@ -194,11 +194,11 @@ async def test_real_failed_reload_stops_old_ws_and_valid_recovery_restarts_trust
     )
     config_path.write_text(json.dumps(config), encoding="utf-8")
     secrets_path.write_text(json.dumps({"onebot_token": "old"}), encoding="utf-8")
-    app = XiaoQingApp(temp_app_root)
-    app.http_session = MagicMock()
-    old_client = OneBotWsClient("ws://127.0.0.1:6700", "old")
-    old_listener = asyncio.create_task(asyncio.sleep(3600))
-    app.ws_client = old_client
+    app                 = XiaoQingApp(temp_app_root)
+    app.http_session    = MagicMock()
+    old_client          = OneBotWsClient("ws://127.0.0.1:6700", "old")
+    old_listener        = asyncio.create_task(asyncio.sleep(3600))
+    app.ws_client       = old_client
     app._ws_client_task = old_listener
 
     async def drain_config_publications() -> None:
@@ -232,12 +232,12 @@ async def test_real_failed_reload_stops_old_ws_and_valid_recovery_restarts_trust
         await release_listener.wait()
 
     candidate = MagicMock(
-        ws_uri="ws://127.0.0.1:6700",
-        auth_token="new",
-        credentials_trusted=True,
-        _queue_size=app._parse_ws_queue_size(config),
-        set_on_connect=Mock(),
-        stop=AsyncMock(),
+        ws_uri              = "ws://127.0.0.1:6700",
+        auth_token          = "new",
+        credentials_trusted = True,
+        _queue_size         = app._parse_ws_queue_size(config),
+        set_on_connect      = Mock(),
+        stop                = AsyncMock(),
         connect_and_listen=AsyncMock(side_effect=listen),
     )
     with patch("core.app_ingress.OneBotWsClient", return_value=candidate) as client_factory:
@@ -247,8 +247,8 @@ async def test_real_failed_reload_stops_old_ws_and_valid_recovery_restarts_trust
     client_factory.assert_called_once_with(
         "ws://127.0.0.1:6700",
         "new",
-        queue_size=app._parse_ws_queue_size(config),
-        credentials_trusted=True,
+        queue_size          = app._parse_ws_queue_size(config),
+        credentials_trusted = True,
     )
     assert app.ws_client is candidate
     assert app._runtime_onebot_credentials_trusted is True
@@ -265,46 +265,46 @@ async def test_real_failed_reload_stops_old_ws_and_valid_recovery_restarts_trust
 async def test_ws_reconcile_does_not_create_client_until_credentials_are_trusted(
     temp_app_root: Path,
 ):
-    app = XiaoQingApp(temp_app_root)
+    app     = XiaoQingApp(temp_app_root)
     release = asyncio.Event()
 
     async def listen(_handler) -> None:
         await release.wait()
 
     client = MagicMock(
-        ws_uri="ws://new/ws",
-        auth_token="",
-        credentials_trusted=True,
-        _queue_size=20,
-        stop=AsyncMock(),
-        set_on_connect=Mock(),
+        ws_uri              = "ws://new/ws",
+        auth_token          = "",
+        credentials_trusted = True,
+        _queue_size         = 20,
+        stop                = AsyncMock(),
+        set_on_connect      = Mock(),
         connect_and_listen=AsyncMock(side_effect=listen),
     )
 
     with patch("core.app_ingress.OneBotWsClient", return_value=client) as client_cls:
         await app._reconcile_ws_client(
-            enable_ws=True,
-            ws_uri="ws://new/ws",
-            token="",
-            queue_size=20,
-            credentials_trusted=False,
+            enable_ws           = True,
+            ws_uri              = "ws://new/ws",
+            token               = "",
+            queue_size          = 20,
+            credentials_trusted = False,
         )
         client_cls.assert_not_called()
         assert app.ws_client is None
 
         await app._reconcile_ws_client(
-            enable_ws=True,
-            ws_uri="ws://new/ws",
-            token="",
-            queue_size=20,
-            credentials_trusted=True,
+            enable_ws           = True,
+            ws_uri              = "ws://new/ws",
+            token               = "",
+            queue_size          = 20,
+            credentials_trusted = True,
         )
 
     client_cls.assert_called_once_with(
         "ws://new/ws",
         "",
-        queue_size=20,
-        credentials_trusted=True,
+        queue_size          = 20,
+        credentials_trusted = True,
     )
     assert app.ws_client is client
     release.set()
@@ -323,7 +323,7 @@ def test_nonvalid_secret_source_revokes_even_an_explicitly_empty_onebot_token(
     from core.config import ConfigSnapshot, ConfigSourceStatus
     from core.onebot import OneBotHttpSender, OneBotWsClient
 
-    app = XiaoQingApp(temp_app_root)
+    app    = XiaoQingApp(temp_app_root)
     config = app.config_manager.snapshot().mutable_config()
     config.update(
         {
@@ -332,14 +332,14 @@ def test_nonvalid_secret_source_revokes_even_an_explicitly_empty_onebot_token(
             "onebot_ws_uri": "ws://127.0.0.1:6700",
         }
     )
-    app.http_sender = OneBotHttpSender("http://127.0.0.1:5700", "", MagicMock())
-    app.ws_client = OneBotWsClient("ws://127.0.0.1:6700", "")
+    app.http_sender   = OneBotHttpSender("http://127.0.0.1:5700", "", MagicMock())
+    app.ws_client     = OneBotWsClient("ws://127.0.0.1:6700", "")
     before_generation = app._onebot_auth_generation
-    snapshot = ConfigSnapshot(
-        config=config,
-        secrets={"onebot_token": "must-not-authorize"},
-        revision=1,
-        secrets_status=getattr(ConfigSourceStatus, status_name),
+    snapshot          = ConfigSnapshot(
+        config         = config,
+        secrets        = {"onebot_token": "must-not-authorize"},
+        revision       = 1,
+        secrets_status = getattr(ConfigSourceStatus, status_name),
     )
 
     app._apply_security_snapshot(snapshot)
@@ -360,11 +360,11 @@ def test_valid_secret_source_with_nonstring_onebot_token_is_revoked(
 ):
     from core.config import ConfigSnapshot
 
-    app = XiaoQingApp(temp_app_root)
+    app      = XiaoQingApp(temp_app_root)
     snapshot = ConfigSnapshot(
-        config=app.config,
-        secrets={"onebot_token": invalid_token},
-        revision=1,
+        config   = app.config,
+        secrets  = {"onebot_token": invalid_token},
+        revision = 1,
     )
 
     assert _onebot_credentials(snapshot) == ("", False)
@@ -381,11 +381,11 @@ def test_string_subclass_cannot_change_empty_token_header_semantics(temp_app_roo
         def __bool__(self) -> bool:
             return False
 
-    app = XiaoQingApp(temp_app_root)
+    app      = XiaoQingApp(temp_app_root)
     snapshot = ConfigSnapshot(
-        config=app.config,
-        secrets={"onebot_token": FalseString("must-not-be-silently-anonymous")},
-        revision=1,
+        config   = app.config,
+        secrets  = {"onebot_token": FalseString("must-not-be-silently-anonymous")},
+        revision = 1,
     )
 
     assert _onebot_credentials(snapshot) == ("", False)
@@ -398,7 +398,7 @@ def test_nonvalid_secret_sources_revoke_inbound_and_admin_holders_even_with_valu
 ):
     from core.config import ConfigSnapshot, ConfigSourceStatus
 
-    app = XiaoQingApp(temp_app_root)
+    app    = XiaoQingApp(temp_app_root)
     config = app.config_manager.snapshot().mutable_config()
     config.update(
         {
@@ -408,16 +408,16 @@ def test_nonvalid_secret_sources_revoke_inbound_and_admin_holders_even_with_valu
         }
     )
     current = InboundManager(
-        inbound_http_base="http://127.0.0.1:12000",
-        inbound_ws_uri="",
-        token="old",
-        handler=app._handle_inbound_event,
+        inbound_http_base = "http://127.0.0.1:12000",
+        inbound_ws_uri    = "",
+        token             = "old",
+        handler           = app._handle_inbound_event,
     )
     candidate = InboundManager(
-        inbound_http_base="http://127.0.0.1:12000",
-        inbound_ws_uri="",
-        token="old",
-        handler=app._handle_inbound_event,
+        inbound_http_base = "http://127.0.0.1:12000",
+        inbound_ws_uri    = "",
+        token             = "old",
+        handler           = app._handle_inbound_event,
     )
     app.inbound_manager = current
     with app._inbound_candidates_lock:
@@ -434,10 +434,10 @@ def test_nonvalid_secret_sources_revoke_inbound_and_admin_holders_even_with_valu
         candidate.update_token("old")
         app._apply_security_snapshot(
             ConfigSnapshot(
-                config=config,
-                secrets={"inbound_token": "must-not-authorize", "admin_user_ids": [12345]},
-                revision=revision,
-                secrets_status=status,
+                config         = config,
+                secrets        = {"inbound_token": "must-not-authorize", "admin_user_ids": [12345]},
+                revision       = revision,
+                secrets_status = status,
             )
         )
         assert app._runtime_inbound_token == ""
@@ -457,7 +457,7 @@ def test_valid_secret_source_rejects_non_exact_inbound_token_types(temp_app_root
     class TokenSubclass(str):
         pass
 
-    app = XiaoQingApp(temp_app_root)
+    app    = XiaoQingApp(temp_app_root)
     config = app.config_manager.snapshot().mutable_config()
     config.update(
         {
@@ -467,21 +467,21 @@ def test_valid_secret_source_rejects_non_exact_inbound_token_types(temp_app_root
         }
     )
     current = InboundManager(
-        inbound_http_base="http://127.0.0.1:12000",
-        inbound_ws_uri="",
-        token="old",
-        handler=app._handle_inbound_event,
+        inbound_http_base = "http://127.0.0.1:12000",
+        inbound_ws_uri    = "",
+        token             = "old",
+        handler           = app._handle_inbound_event,
     )
     app.inbound_manager = current
-    invalid_values = (False, 0, None, ["token"], {"token": "value"}, TokenSubclass("token"))
+    invalid_values      = (False, 0, None, ["token"], {"token": "value"}, TokenSubclass("token"))
 
     for revision, invalid_token in enumerate(invalid_values, start=1):
         current.update_token("old")
         app._apply_security_snapshot(
             ConfigSnapshot(
-                config=config,
-                secrets={"inbound_token": invalid_token},
-                revision=revision,
+                config   = config,
+                secrets  = {"inbound_token": invalid_token},
+                revision = revision,
             )
         )
         assert app._runtime_inbound_token == ""
@@ -497,7 +497,7 @@ async def test_holder_update_failure_quarantines_every_onebot_network_path(
 ):
     from core.config import ConfigSnapshot, ConfigSourceStatus
 
-    app = XiaoQingApp(temp_app_root)
+    app    = XiaoQingApp(temp_app_root)
     config = app.config_manager.snapshot().mutable_config()
     config.update(
         {
@@ -512,17 +512,17 @@ async def test_holder_update_failure_quarantines_every_onebot_network_path(
     ws_send = AsyncMock(return_value=True)
 
     class BrokenHttpHolder:
-        http_base = "http://127.0.0.1:5700"
+        http_base           = "http://127.0.0.1:5700"
         credentials_trusted = True
 
         def update(self, _base: str, _token: str) -> None:
             raise AssertionError("legacy two-argument holder")
 
         request_action = http_request
-        send_action = http_send
+        send_action    = http_send
 
     class BrokenWsHolder:
-        ws_uri = "ws://127.0.0.1:6700"
+        ws_uri              = "ws://127.0.0.1:6700"
         credentials_trusted = True
 
         def update(self, _uri: str, _token: str) -> None:
@@ -533,23 +533,23 @@ async def test_holder_update_failure_quarantines_every_onebot_network_path(
             return True
 
         request_action = ws_request
-        send_action = ws_send
+        send_action    = ws_send
 
-    http_holder = BrokenHttpHolder()
-    ws_holder = BrokenWsHolder()
-    listener_release = asyncio.Event()
-    listener_task = asyncio.create_task(listener_release.wait())
-    app.http_sender = http_holder  # type: ignore[assignment]
-    app.ws_client = ws_holder  # type: ignore[assignment]
+    http_holder         = BrokenHttpHolder()
+    ws_holder           = BrokenWsHolder()
+    listener_release    = asyncio.Event()
+    listener_task       = asyncio.create_task(listener_release.wait())
+    app.http_sender     = http_holder  # type: ignore[assignment]
+    app.ws_client       = ws_holder  # type: ignore[assignment]
     app._ws_client_task = listener_task
     app.dispatcher.handle_event = AsyncMock(return_value=[])
 
     app._apply_security_snapshot(
         ConfigSnapshot(
-            config=config,
-            secrets={"onebot_token": "ignored"},
-            revision=1,
-            secrets_status=ConfigSourceStatus.INVALID,
+            config         = config,
+            secrets        = {"onebot_token": "ignored"},
+            revision       = 1,
+            secrets_status = ConfigSourceStatus.INVALID,
         )
     )
     await asyncio.sleep(0)
@@ -569,8 +569,8 @@ async def test_holder_update_failure_quarantines_every_onebot_network_path(
     ws_request.assert_not_awaited()
     ws_send.assert_not_awaited()
     app.dispatcher.handle_event.assert_not_awaited()
-    app._ws_client_task = None
-    app.ws_client = None
+    app._ws_client_task            = None
+    app.ws_client                  = None
     app._ws_client_auth_quarantine = None
     app.scheduler.shutdown()
 
@@ -588,21 +588,21 @@ async def test_noop_holder_update_fails_postcondition_and_cannot_keep_old_author
     ws_send = AsyncMock(return_value=True)
 
     class NoopHttpHolder:
-        http_base = "http://old.example"
-        auth_token = "old-token"
+        http_base           = "http://old.example"
+        auth_token          = "old-token"
         credentials_trusted = True
-        request_action = http_request
+        request_action      = http_request
 
         @staticmethod
         def update(*_args, **_kwargs) -> None:
             pass
 
     class NoopWsHolder:
-        ws_uri = "ws://old.example"
-        auth_token = "old-token"
+        ws_uri              = "ws://old.example"
+        auth_token          = "old-token"
         credentials_trusted = True
-        request_action = ws_request
-        send_action = ws_send
+        request_action      = ws_request
+        send_action         = ws_send
 
         @staticmethod
         def update(*_args, **_kwargs) -> None:
@@ -612,10 +612,10 @@ async def test_noop_holder_update_fails_postcondition_and_cannot_keep_old_author
         def connected() -> bool:
             return True
 
-    http_holder = NoopHttpHolder()
-    ws_holder = NoopWsHolder()
+    http_holder     = NoopHttpHolder()
+    ws_holder       = NoopWsHolder()
     app.http_sender = http_holder  # type: ignore[assignment]
-    app.ws_client = ws_holder  # type: ignore[assignment]
+    app.ws_client   = ws_holder  # type: ignore[assignment]
     app.dispatcher.handle_event = AsyncMock(return_value=[])
     config = app.config_manager.snapshot().mutable_config()
     config.update(
@@ -628,9 +628,9 @@ async def test_noop_holder_update_fails_postcondition_and_cannot_keep_old_author
 
     app._apply_security_snapshot(
         ConfigSnapshot(
-            config=config,
-            secrets={"onebot_token": "new-token"},
-            revision=1,
+            config   = config,
+            secrets  = {"onebot_token": "new-token"},
+            revision = 1,
         )
     )
 
@@ -644,7 +644,7 @@ async def test_noop_holder_update_fails_postcondition_and_cannot_keep_old_author
     ws_request.assert_not_awaited()
     ws_send.assert_not_awaited()
     app.dispatcher.handle_event.assert_not_awaited()
-    app.ws_client = None
+    app.ws_client                  = None
     app._ws_client_auth_quarantine = None
     app.scheduler.shutdown()
 
@@ -658,8 +658,8 @@ def test_closed_loop_listener_cancellation_failure_cannot_skip_inbound_revocatio
     app = XiaoQingApp(temp_app_root)
 
     class BrokenWsHolder:
-        ws_uri = "ws://127.0.0.1:6700"
-        auth_token = "old"
+        ws_uri              = "ws://127.0.0.1:6700"
+        auth_token          = "old"
         credentials_trusted = True
 
         @staticmethod
@@ -672,17 +672,17 @@ def test_closed_loop_listener_cancellation_failure_cannot_skip_inbound_revocatio
     foreign_loop = asyncio.new_event_loop()
     foreign_task = foreign_loop.create_task(never_started())
     foreign_loop.close()
-    inbound = MagicMock()
-    app.ws_client = BrokenWsHolder()  # type: ignore[assignment]
+    inbound             = MagicMock()
+    app.ws_client       = BrokenWsHolder()  # type: ignore[assignment]
     app._ws_client_task = foreign_task
     app.inbound_manager = inbound
 
     app._apply_security_snapshot(
         ConfigSnapshot(
-            config=app.config,
-            secrets={"onebot_token": "old", "inbound_token": "old"},
-            revision=1,
-            secrets_status=ConfigSourceStatus.INVALID,
+            config         = app.config,
+            secrets        = {"onebot_token": "old", "inbound_token": "old"},
+            revision       = 1,
+            secrets_status = ConfigSourceStatus.INVALID,
         )
     )
 
@@ -690,9 +690,9 @@ def test_closed_loop_listener_cancellation_failure_cannot_skip_inbound_revocatio
     assert app._ws_client_auth_quarantine is app.ws_client
     inbound.update_token.assert_called_once_with("")
 
-    app._ws_client_task = None
-    app.ws_client = None
-    app._ws_client_auth_quarantine = None
+    app._ws_client_task               = None
+    app.ws_client                     = None
+    app._ws_client_auth_quarantine    = None
     foreign_task._log_destroy_pending = False
     foreign_task.get_coro().close()
     app.scheduler.shutdown()
@@ -707,14 +707,14 @@ async def test_legacy_holder_without_explicit_trust_is_never_used(temp_app_root:
     http_request = AsyncMock(return_value={"status": "ok"})
     http_send = AsyncMock(return_value=True)
     app.ws_client = SimpleNamespace(
-        connected=lambda: True,
-        request_action=ws_request,
-        send_action=ws_send,
+        connected      = lambda: True,
+        request_action = ws_request,
+        send_action    = ws_send,
     )
     app.http_sender = SimpleNamespace(
-        http_base="http://onebot",
-        request_action=http_request,
-        send_action=http_send,
+        http_base      = "http://onebot",
+        request_action = http_request,
+        send_action    = http_send,
     )
 
     assert await app._request_onebot_action("get_status", {}) is None
@@ -732,21 +732,21 @@ def test_equal_security_revision_is_idempotent_but_conflict_stays_fail_closed(
 ):
     from core.config import ConfigSnapshot, ConfigSourceStatus
 
-    app = XiaoQingApp(temp_app_root)
+    app   = XiaoQingApp(temp_app_root)
     first = ConfigSnapshot(
-        config=app.config,
-        secrets={"onebot_token": "first"},
-        revision=1,
+        config   = app.config,
+        secrets  = {"onebot_token": "first"},
+        revision = 1,
     )
     equal_copy = ConfigSnapshot(
-        config=first.mutable_config(),
-        secrets=first.mutable_secrets(),
-        revision=1,
+        config   = first.mutable_config(),
+        secrets  = first.mutable_secrets(),
+        revision = 1,
     )
     conflicting = ConfigSnapshot(
-        config=app.config,
-        secrets={"onebot_token": "conflicting"},
-        revision=1,
+        config   = app.config,
+        secrets  = {"onebot_token": "conflicting"},
+        revision = 1,
     )
 
     app._apply_security_snapshot(first)
@@ -795,7 +795,7 @@ def test_valid_secret_recovery_reenables_empty_or_bearer_credentials(temp_app_ro
     from core.config import ConfigSnapshot, ConfigSourceStatus
     from core.onebot import OneBotHttpSender, OneBotWsClient
 
-    app = XiaoQingApp(temp_app_root)
+    app    = XiaoQingApp(temp_app_root)
     config = app.config_manager.snapshot().mutable_config()
     config.update(
         {
@@ -805,12 +805,12 @@ def test_valid_secret_recovery_reenables_empty_or_bearer_credentials(temp_app_ro
         }
     )
     app.http_sender = OneBotHttpSender("http://127.0.0.1:5700", "old", MagicMock())
-    app.ws_client = OneBotWsClient("ws://127.0.0.1:6700", "old")
-    revoked = ConfigSnapshot(
-        config=config,
-        secrets={},
-        revision=1,
-        secrets_status=ConfigSourceStatus.MISSING,
+    app.ws_client   = OneBotWsClient("ws://127.0.0.1:6700", "old")
+    revoked         = ConfigSnapshot(
+        config         = config,
+        secrets        = {},
+        revision       = 1,
+        secrets_status = ConfigSourceStatus.MISSING,
     )
     anonymous = ConfigSnapshot(config=config, secrets={"onebot_token": ""}, revision=2)
     bearer = ConfigSnapshot(config=config, secrets={"onebot_token": "new-token"}, revision=3)
@@ -830,19 +830,19 @@ def test_valid_secret_recovery_reenables_empty_or_bearer_credentials(temp_app_ro
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_structural_inbound_failure_never_restores_revoked_token(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
+    app     = XiaoQingApp(temp_app_root)
     current = InboundManager(
-        inbound_http_base="http://127.0.0.1:12000",
-        inbound_ws_uri="",
-        token="old-inbound",
-        handler=app._handle_inbound_event,
+        inbound_http_base = "http://127.0.0.1:12000",
+        inbound_ws_uri    = "",
+        token             = "old-inbound",
+        handler           = app._handle_inbound_event,
     )
     desired = InboundManager(
-        inbound_http_base="http://127.0.0.1:12000",
-        inbound_ws_uri="",
-        token="",
-        handler=app._handle_inbound_event,
-        trusted_tls_proxy=True,
+        inbound_http_base = "http://127.0.0.1:12000",
+        inbound_ws_uri    = "",
+        token             = "",
+        handler           = app._handle_inbound_event,
+        trusted_tls_proxy = True,
     )
     observed_tokens: list[str] = []
 
@@ -852,7 +852,7 @@ async def test_structural_inbound_failure_never_restores_revoked_token(temp_app_
     current.stop = AsyncMock(side_effect=stop_current)
     current.start = AsyncMock(side_effect=lambda: observed_tokens.append(current._token))
     desired.start = AsyncMock(side_effect=OSError("candidate failed"))
-    desired.stop = AsyncMock()
+    desired.stop        = AsyncMock()
     app.inbound_manager = current
 
     with (
@@ -874,19 +874,19 @@ def test_endpoint_rotation_revokes_old_holders_without_pairing_them_with_new_tok
     from core.config import ConfigSnapshot
     from core.onebot import OneBotHttpSender, OneBotWsClient
 
-    app = XiaoQingApp(temp_app_root)
-    old_http = OneBotHttpSender("http://127.0.0.1:5700", "old-onebot", MagicMock())
-    old_ws = OneBotWsClient("ws://127.0.0.1:6700", "old-onebot")
+    app         = XiaoQingApp(temp_app_root)
+    old_http    = OneBotHttpSender("http://127.0.0.1:5700", "old-onebot", MagicMock())
+    old_ws      = OneBotWsClient("ws://127.0.0.1:6700", "old-onebot")
     old_inbound = InboundManager(
-        inbound_http_base="http://127.0.0.1:12000",
-        inbound_ws_uri="",
-        token="old-inbound",
-        handler=app._handle_inbound_event,
+        inbound_http_base = "http://127.0.0.1:12000",
+        inbound_ws_uri    = "",
+        token             = "old-inbound",
+        handler           = app._handle_inbound_event,
     )
-    app.http_sender = old_http
-    app.ws_client = old_ws
+    app.http_sender     = old_http
+    app.ws_client       = old_ws
     app.inbound_manager = old_inbound
-    config = app.config_manager.snapshot().mutable_config()
+    config              = app.config_manager.snapshot().mutable_config()
     config.update(
         {
             "onebot_http_base": "http://127.0.0.1:5701",
@@ -898,9 +898,9 @@ def test_endpoint_rotation_revokes_old_holders_without_pairing_them_with_new_tok
         }
     )
     snapshot = ConfigSnapshot(
-        config=config,
-        secrets={"onebot_token": "new-onebot", "inbound_token": "new-inbound"},
-        revision=1,
+        config   = config,
+        secrets  = {"onebot_token": "new-onebot", "inbound_token": "new-inbound"},
+        revision = 1,
     )
 
     with patch("core.app_ingress.InboundManager.from_config") as inbound_factory:
@@ -931,17 +931,17 @@ async def test_new_revision_revokes_cancellation_resistant_provisional_inbound_c
 ):
     from core.config import ConfigSnapshot
 
-    app = XiaoQingApp(temp_app_root)
+    app              = XiaoQingApp(temp_app_root)
     app.http_session = MagicMock()
-    candidate = InboundManager(
-        inbound_http_base="http://127.0.0.1:12000",
-        inbound_ws_uri="",
-        token="stale-rev1",
-        handler=app._handle_inbound_event,
+    candidate        = InboundManager(
+        inbound_http_base = "http://127.0.0.1:12000",
+        inbound_ws_uri    = "",
+        token             = "stale-rev1",
+        handler           = app._handle_inbound_event,
     )
-    start_entered = asyncio.Event()
+    start_entered    = asyncio.Event()
     cancel_swallowed = asyncio.Event()
-    start_release = asyncio.Event()
+    start_release    = asyncio.Event()
 
     async def resistant_start() -> None:
         start_entered.set()
@@ -953,7 +953,7 @@ async def test_new_revision_revokes_cancellation_resistant_provisional_inbound_c
 
     candidate.start = AsyncMock(side_effect=resistant_start)
     candidate.stop = AsyncMock()
-    config = app.config_manager.snapshot().mutable_config()
+    config         = app.config_manager.snapshot().mutable_config()
     config.update(
         {
             "enable_inbound_server": True,
@@ -962,16 +962,16 @@ async def test_new_revision_revokes_cancellation_resistant_provisional_inbound_c
         }
     )
     first_snapshot = ConfigSnapshot(
-        config=config,
-        secrets={"inbound_token": "stale-rev1"},
-        revision=1,
+        config   = config,
+        secrets  = {"inbound_token": "stale-rev1"},
+        revision = 1,
     )
-    disabled_config = dict(config)
+    disabled_config                          = dict(config)
     disabled_config["enable_inbound_server"] = False
-    second_snapshot = ConfigSnapshot(
-        config=disabled_config,
-        secrets={"inbound_token": "rev2"},
-        revision=2,
+    second_snapshot                          = ConfigSnapshot(
+        config   = disabled_config,
+        secrets  = {"inbound_token": "rev2"},
+        revision = 2,
     )
 
     with patch("core.app_ingress.InboundManager.from_config", side_effect=[candidate, None]):
@@ -1005,43 +1005,43 @@ async def test_stale_config_task_that_swallows_cancel_cannot_reauthorize_old_sec
 ):
     from core.config import ConfigSnapshot
 
-    app = XiaoQingApp(temp_app_root)
-    app.http_session = MagicMock()
+    app                                = XiaoQingApp(temp_app_root)
+    app.http_session                   = MagicMock()
     auth_events: list[tuple[str, str]] = []
     http_sender = MagicMock(http_base="http://127.0.0.1:5700", auth_token="initial")
     ws_client = MagicMock(
-        ws_uri="ws://127.0.0.1:6700",
-        auth_token="initial",
-        _queue_size=100,
+        ws_uri      = "ws://127.0.0.1:6700",
+        auth_token  = "initial",
+        _queue_size = 100,
     )
     inbound = MagicMock()
 
     def update_http(base: str, token: str, *, credentials_trusted: bool = True) -> None:
-        http_sender.http_base = base
-        http_sender.auth_token = token
+        http_sender.http_base           = base
+        http_sender.auth_token          = token
         http_sender.credentials_trusted = credentials_trusted
         auth_events.append(("http", token))
 
     def update_ws(uri: str, token: str, *, credentials_trusted: bool = True) -> None:
-        ws_client.ws_uri = uri
-        ws_client.auth_token = token
+        ws_client.ws_uri              = uri
+        ws_client.auth_token          = token
         ws_client.credentials_trusted = credentials_trusted
         auth_events.append(("ws", token))
 
     def update_inbound(token: str) -> None:
         auth_events.append(("inbound", token))
 
-    http_sender.update.side_effect = update_http
-    ws_client.update.side_effect = update_ws
+    http_sender.update.side_effect   = update_http
+    ws_client.update.side_effect     = update_ws
     inbound.update_token.side_effect = update_inbound
-    app.http_sender = http_sender
-    app.ws_client = ws_client
-    app.inbound_manager = inbound
-    app._reconcile_ws_client = AsyncMock()
-    app._reconcile_inbound_manager = AsyncMock()
-    first_entered = asyncio.Event()
-    first_cancel_swallowed = asyncio.Event()
-    first_release = asyncio.Event()
+    app.http_sender                  = http_sender
+    app.ws_client                    = ws_client
+    app.inbound_manager              = inbound
+    app._reconcile_ws_client         = AsyncMock()
+    app._reconcile_inbound_manager   = AsyncMock()
+    first_entered                    = asyncio.Event()
+    first_cancel_swallowed           = asyncio.Event()
+    first_release                    = asyncio.Event()
 
     async def reset_timezone(timezone: str) -> None:
         assert timezone == "UTC"
@@ -1062,14 +1062,14 @@ async def test_stale_config_task_that_swallows_cancel_cannot_reauthorize_old_sec
         }
     )
     old_snapshot = ConfigSnapshot(
-        config={**base_config, "timezone": "UTC"},
-        secrets={"onebot_token": "old-onebot", "inbound_token": "old-inbound"},
-        revision=1,
+        config   = {**base_config, "timezone": "UTC"},
+        secrets  = {"onebot_token": "old-onebot", "inbound_token": "old-inbound"},
+        revision = 1,
     )
     new_snapshot = ConfigSnapshot(
-        config={**base_config, "timezone": "Asia/Shanghai"},
-        secrets={"onebot_token": "new-onebot", "inbound_token": "new-inbound"},
-        revision=2,
+        config   = {**base_config, "timezone": "Asia/Shanghai"},
+        secrets  = {"onebot_token": "new-onebot", "inbound_token": "new-inbound"},
+        revision = 2,
     )
 
     app._apply_config(old_snapshot)

@@ -1,3 +1,4 @@
+# 验证共享存储工具的文件读写、备份与异常恢复。
 from plugins.xiaoqing_chat import store_base as store_base_module
 from plugins.xiaoqing_chat.planning.action_history import ActionHistoryStore, ActionRecord
 from plugins.xiaoqing_chat.store_base import StoreBase
@@ -65,12 +66,12 @@ def test_action_history_flush_uses_atomic_json_writer(tmp_path, monkeypatch):
     store.append(
         "chat-1",
         ActionRecord(
-            ts=1.0,
-            local_target="t",
-            action="reply",
-            reasoning="ok",
-            detail={},
-            executed=True,
+            ts           = 1.0,
+            local_target = "t",
+            action       = "reply",
+            reasoning    = "ok",
+            detail       = {},
+            executed     = True,
         ),
     )
 

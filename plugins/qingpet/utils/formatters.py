@@ -38,9 +38,9 @@ _RANKING_FORMAT = {
 def _progress_bar(value: int, max_val: int = MAX_STAT_VALUE, length: int = 10) -> str:
     """把属性值转换为固定宽度进度条，并限制异常值造成的绘制溢出。"""
     safe_length = max(0, length)
-    filled = int(value / max_val * safe_length) if max_val > 0 else 0
-    filled = min(safe_length, max(0, filled))
-    bar = "█" * filled + "░" * (safe_length - filled)
+    filled      = int(value / max_val * safe_length) if max_val > 0 else 0
+    filled      = min(safe_length, max(0, filled))
+    bar         = "█" * filled + "░" * (safe_length - filled)
     return f"[{bar}] {value}/{max_val}"
 
 
@@ -143,9 +143,9 @@ def format_ranking_list(ranking: list[tuple[str, str, float]], ranking_type: str
         return header + "暂无数据"
 
     rows: list[str] = []
-    medal_emoji = ("🥇", "🥈", "🥉")
+    medal_emoji     = ("🥇", "🥈", "🥉")
     for index, (user_id, pet_name, value) in enumerate(ranking):
-        position = medal_emoji[index] if index < len(medal_emoji) else f"#{index + 1}"
+        position      = medal_emoji[index] if index < len(medal_emoji) else f"#{index + 1}"
         display_value = f"{value}{unit}" if unit else str(value)
         rows.append(f"{position} {pet_name} ({user_id}) - {display_value}")
     return header + "\n".join(rows) + "\n"

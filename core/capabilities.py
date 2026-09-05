@@ -63,7 +63,7 @@ class OneBotMediaService:
         self,
         *,
         file_id: str | None = None,
-        file: str | None = None,
+        file: str | None    = None,
     ) -> dict[str, Any]:
         provided = [("file_id", file_id), ("file", file)]
         if any(value is not None and not isinstance(value, str) for _, value in provided):
@@ -128,8 +128,8 @@ class CodexArxivSummaryService:
         ):
             raise ValueError("arXiv summary links must be non-empty strings")
         return await self._enqueue(
-            date=normalized_date,
-            links=list(links),
+            date  = normalized_date,
+            links = list(links),
         )
 
 
@@ -177,37 +177,37 @@ class AIService:
         route: str,
         messages: list[dict[str, Any]],
         *,
-        required_modalities: tuple[str, ...] = ("text",),
-        pinned_model: str | None = None,
-        temperature: float | None = None,
-        top_p: float | None = None,
-        max_tokens: int | None = None,
-        timeout_seconds: float | None = None,
-        total_timeout_seconds: float | None = None,
-        max_retry: int | None = None,
-        retry_interval_seconds: float | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        tool_choice: Any = None,
+        required_modalities: tuple[str, ...]    = ("text",),
+        pinned_model: str | None                = None,
+        temperature: float | None               = None,
+        top_p: float | None                     = None,
+        max_tokens: int | None                  = None,
+        timeout_seconds: float | None           = None,
+        total_timeout_seconds: float | None     = None,
+        max_retry: int | None                   = None,
+        retry_interval_seconds: float | None    = None,
+        tools: list[dict[str, Any]] | None      = None,
+        tool_choice: Any                        = None,
         extra_payload: Mapping[str, Any] | None = None,
     ) -> AICompletionResult:
         normalized_route = str(route or "").strip()
         if not normalized_route:
             raise ValueError("AI route is required")
         return await self._complete(
-            route_name=normalized_route,
-            messages=messages,
-            required_modalities=required_modalities,
-            pinned_model=pinned_model,
-            temperature=temperature,
-            top_p=top_p,
-            max_tokens=max_tokens,
-            timeout_seconds=timeout_seconds,
-            total_timeout_seconds=total_timeout_seconds,
-            max_retry=max_retry,
-            retry_interval_seconds=retry_interval_seconds,
-            tools=tools,
-            tool_choice=tool_choice,
-            extra_payload=extra_payload,
+            route_name             = normalized_route,
+            messages               = messages,
+            required_modalities    = required_modalities,
+            pinned_model           = pinned_model,
+            temperature            = temperature,
+            top_p                  = top_p,
+            max_tokens             = max_tokens,
+            timeout_seconds        = timeout_seconds,
+            total_timeout_seconds  = total_timeout_seconds,
+            max_retry              = max_retry,
+            retry_interval_seconds = retry_interval_seconds,
+            tools                  = tools,
+            tool_choice            = tool_choice,
+            extra_payload          = extra_payload,
         )
 
     def list_models(
@@ -220,6 +220,6 @@ class AIService:
         if not normalized_route:
             raise ValueError("AI route is required")
         return self._list_models(
-            route_name=normalized_route,
-            required_modalities=required_modalities,
+            route_name          = normalized_route,
+            required_modalities = required_modalities,
         )

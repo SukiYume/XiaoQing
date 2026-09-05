@@ -1,3 +1,4 @@
+# 验证聊天回想流程的上下文选择与规划结果。
 from __future__ import annotations
 
 import json
@@ -8,11 +9,11 @@ from plugins.xiaoqing_chat.memory import thinking_back
 
 
 def test_compaction_and_append_share_one_path_lock(monkeypatch, tmp_path: Path) -> None:
-    entered_atomic_write = threading.Event()
-    release_atomic_write = threading.Event()
-    second_finished = threading.Event()
+    entered_atomic_write          = threading.Event()
+    release_atomic_write          = threading.Event()
+    second_finished               = threading.Event()
     failures: list[BaseException] = []
-    real_atomic_write = thinking_back.atomic_write_text
+    real_atomic_write             = thinking_back.atomic_write_text
 
     def blocked_atomic_write(path: Path, payload: str) -> None:
         entered_atomic_write.set()
@@ -24,12 +25,12 @@ def test_compaction_and_append_share_one_path_lock(monkeypatch, tmp_path: Path) 
     def append(question: str, answer: str, *, finished: threading.Event | None = None) -> None:
         try:
             thinking_back.append_record(
-                data_dir=tmp_path,
-                chat_id="chat-1",
-                question=question,
-                answer=answer,
-                max_entries=10,
-                max_bytes=1,
+                data_dir    = tmp_path,
+                chat_id     = "chat-1",
+                question    = question,
+                answer      = answer,
+                max_entries = 10,
+                max_bytes   = 1,
             )
         except BaseException as exc:  # pragma: no cover - surfaced below
             failures.append(exc)

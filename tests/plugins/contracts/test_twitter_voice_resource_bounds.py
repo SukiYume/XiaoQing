@@ -37,11 +37,17 @@ async def test_twitter_graphql_params_are_real_json_with_exact_strings(monkeypat
         return object()
 
     monkeypatch.setattr(twitter, "aiohttp_request_bounded", fake_request)
-    monkeypatch.setattr(twitter, "parse_bounded_json", lambda *_args, **_kwargs: {"data": {}})
+    monkeypatch.setattr(
+        twitter,
+        "parse_bounded_json",
+        lambda *_args, **_kwargs: {
+            "data": {"user": {"result": {"timeline": {"timeline": {"instructions": []}}}}}
+        },
+    )
     context = with_settings_reader(
         SimpleNamespace(
-            http_session=object(),
-            secrets={
+            http_session = object(),
+            secrets      = {
                 "plugins": {
                     "twitter": {
                         "user_id": 'id"\\Unicode-用户',
@@ -60,8 +66,8 @@ async def test_twitter_graphql_params_are_real_json_with_exact_strings(monkeypat
     )
 
     variables = json.loads(captured["params"]["variables"])
-    features = json.loads(captured["params"]["features"])
-    toggles = json.loads(captured["params"]["fieldToggles"])
+    features  = json.loads(captured["params"]["features"])
+    toggles   = json.loads(captured["params"]["fieldToggles"])
     assert variables["userId"] == 'id"\\Unicode-用户'
     assert variables["cursor"] == 'cursor"\\value'
     assert variables["includePromotedContent"] is False
@@ -104,8 +110,8 @@ async def test_twitter_downloads_are_globally_bounded_and_cache_commit_is_atomic
     monkeypatch, tmp_path
 ):
     payloads = [_png((index, 2, 3)) for index in range(1, 7)]
-    active = 0
-    peak = 0
+    active   = 0
+    peak     = 0
 
     async def fake_fetch(url: str, **_kwargs):
         nonlocal active, peak
@@ -115,11 +121,11 @@ async def test_twitter_downloads_are_globally_bounded_and_cache_commit_is_atomic
         await asyncio.sleep(0.01)
         active -= 1
         return SafeHttpResponse(
-            url=url,
-            status=200,
-            body=payloads[index],
-            charset=None,
-            headers={"Content-Type": "image/png"},
+            url     = url,
+            status  = 200,
+            body    = payloads[index],
+            charset = None,
+            headers = {"Content-Type": "image/png"},
         )
 
     tweets = [
@@ -155,16 +161,16 @@ async def test_twitter_downloads_are_globally_bounded_and_cache_commit_is_atomic
         twitter,
         "IMAGE_CACHE_LIMITS",
         FileCacheLimits(
-            max_entries=2,
-            max_bytes=2 * max(map(len, payloads)),
-            ttl_seconds=60,
+            max_entries = 2,
+            max_bytes   = 2 * max(map(len, payloads)),
+            ttl_seconds = 60,
         ),
     )
     context = with_settings_reader(
         SimpleNamespace(
-            data_dir=tmp_path,
-            logger=MagicMock(),
-            secrets={"plugins": {"twitter": {"user_id": "123456789", "max_pages": 1}}},
+            data_dir = tmp_path,
+            logger   = MagicMock(),
+            secrets  = {"plugins": {"twitter": {"user_id": "123456789", "max_pages": 1}}},
         )
     )
 
@@ -178,10 +184,10 @@ async def test_twitter_downloads_are_globally_bounded_and_cache_commit_is_atomic
 def _voice_context(tmp_path: Path) -> SimpleNamespace:
     return with_settings_reader(
         SimpleNamespace(
-            data_dir=tmp_path / "voice-data",
-            http_session=object(),
-            logger=MagicMock(),
-            secrets={
+            data_dir     = tmp_path / "voice-data",
+            http_session = object(),
+            logger       = MagicMock(),
+            secrets      = {
                 "plugins": {
                     "voice": {
                         "subscription_key": "secret",
@@ -237,7 +243,7 @@ async def test_voice_many_unique_completed_keys_do_not_accumulate(monkeypatch, t
 
 def test_root_voice_and_twitter_examples_match_runtime_schema():
     document = json.loads((ROOT / "config" / "secrets.json.example").read_text(encoding="utf-8"))
-    voice_config = document["plugins"]["voice"]
+    voice_config   = document["plugins"]["voice"]
     twitter_config = document["plugins"]["twitter"]
 
     assert set(voice_config) == {

@@ -20,7 +20,7 @@ from tests.helpers.xiaoqing_chat_test_support import (
     time,
 )
 
-mock_context = _fixture_support.mock_context
+mock_context       = _fixture_support.mock_context
 sample_group_event = _fixture_support.sample_group_event
 
 
@@ -30,28 +30,28 @@ async def test_smalltalk_direct_reply_uses_dynamic_history_think_level_when_plan
 ):
     from plugins.xiaoqing_chat.handlers import _maybe_reply_smalltalk
 
-    lock = asyncio.Lock()
-    state = MagicMock()
+    lock                              = asyncio.Lock()
+    state                             = MagicMock()
     state.get_mood_state.return_value = ""
     state.memory_store.get_async = AsyncMock(return_value=[])
     state.memory_store.get_recent_async = AsyncMock(return_value=[object(), object(), object()])
-    state.memory_store.append = Mock()
+    state.memory_store.append             = Mock()
     state.heartflow.on_user_message_async = AsyncMock()
-    state.heartflow.on_bot_reply_async = AsyncMock()
-    state.heartflow.on_no_reply_async = AsyncMock()
-    state.inc_stats = Mock()
-    state.action_history.append = Mock()
-    state.pfc_state_store.get_async = AsyncMock(
+    state.heartflow.on_bot_reply_async    = AsyncMock()
+    state.heartflow.on_no_reply_async     = AsyncMock()
+    state.inc_stats                       = Mock()
+    state.action_history.append           = Mock()
+    state.pfc_state_store.get_async       = AsyncMock(
         return_value=SimpleNamespace(
-            chat_id="g67890",
-            ignore_until_ts=0.0,
-            ended=False,
-            last_successful_reply_action="",
-            goal_list=[],
-            knowledge_list=[],
-            planner_fail_ts=[],
-            planner_skip_until=0.0,
-            updated_at=0.0,
+            chat_id                      = "g67890",
+            ignore_until_ts              = 0.0,
+            ended                        = False,
+            last_successful_reply_action = "",
+            goal_list                    = [],
+            knowledge_list               = [],
+            planner_fail_ts              = [],
+            planner_skip_until           = 0.0,
+            updated_at                   = 0.0,
         )
     )
     state.pfc_state_store.set_state = Mock()
@@ -62,7 +62,7 @@ async def test_smalltalk_direct_reply_uses_dynamic_history_think_level_when_plan
         return "prefetched-memory"
 
     async def fake_generate_reply_draft(**kwargs):
-        seen["action"] = kwargs["action"]
+        seen["action"]                 = kwargs["action"]
         seen["prefetched_memory_task"] = kwargs.get("prefetched_memory_task")
         if seen["prefetched_memory_task"] is not None:
             seen["prefetched_memory"] = await seen["prefetched_memory_task"]
@@ -76,12 +76,12 @@ async def test_smalltalk_direct_reply_uses_dynamic_history_think_level_when_plan
                 enable_expression_reflection=False, enable_review_sessions=False
             ),
             brain_chat=SimpleNamespace(
-                enable_private_brain_chat=False,
-                private_planner_always_on=True,
-                brain_max_context_size=10,
+                enable_private_brain_chat = False,
+                private_planner_always_on = True,
+                brain_max_context_size    = 10,
             ),
-            max_context_size=10,
-            planner=SimpleNamespace(
+            max_context_size = 10,
+            planner          = SimpleNamespace(
                 enable_planner=False,
                 resolve_think_level=lambda history_len=0: 2 if history_len >= 3 else 0,
             ),
@@ -139,28 +139,28 @@ async def test_smalltalk_private_brain_chat_keeps_planner_when_private_always_on
 ):
     from plugins.xiaoqing_chat.handlers import _maybe_reply_smalltalk
 
-    lock = asyncio.Lock()
-    state = MagicMock()
+    lock                              = asyncio.Lock()
+    state                             = MagicMock()
     state.get_mood_state.return_value = ""
     state.memory_store.get_async = AsyncMock(return_value=[])
     state.memory_store.get_recent_async = AsyncMock(return_value=[object()])
-    state.memory_store.append = Mock()
+    state.memory_store.append             = Mock()
     state.heartflow.on_user_message_async = AsyncMock()
-    state.heartflow.on_bot_reply_async = AsyncMock()
-    state.heartflow.on_no_reply_async = AsyncMock()
-    state.inc_stats = Mock()
-    state.action_history.append = Mock()
-    state.pfc_state_store.get_async = AsyncMock(
+    state.heartflow.on_bot_reply_async    = AsyncMock()
+    state.heartflow.on_no_reply_async     = AsyncMock()
+    state.inc_stats                       = Mock()
+    state.action_history.append           = Mock()
+    state.pfc_state_store.get_async       = AsyncMock(
         return_value=SimpleNamespace(
-            chat_id="u12345",
-            ignore_until_ts=0.0,
-            ended=False,
-            last_successful_reply_action="",
-            goal_list=[],
-            knowledge_list=[],
-            planner_fail_ts=[],
-            planner_skip_until=0.0,
-            updated_at=0.0,
+            chat_id                      = "u12345",
+            ignore_until_ts              = 0.0,
+            ended                        = False,
+            last_successful_reply_action = "",
+            goal_list                    = [],
+            knowledge_list               = [],
+            planner_fail_ts              = [],
+            planner_skip_until           = 0.0,
+            updated_at                   = 0.0,
         )
     )
     state.pfc_state_store.set_state = Mock()
@@ -173,13 +173,13 @@ async def test_smalltalk_private_brain_chat_keeps_planner_when_private_always_on
                 enable_expression_reflection=False, enable_review_sessions=False
             ),
             brain_chat=SimpleNamespace(
-                enable_private_brain_chat=True,
-                private_planner_always_on=True,
-                brain_max_context_size=6,
-                brain_think_level=2,
+                enable_private_brain_chat = True,
+                private_planner_always_on = True,
+                brain_max_context_size    = 6,
+                brain_think_level         = 2,
             ),
-            max_context_size=6,
-            planner=SimpleNamespace(
+            max_context_size = 6,
+            planner          = SimpleNamespace(
                 enable_planner=False,
                 resolve_think_level=lambda history_len=0: 0,
             ),
@@ -231,19 +231,19 @@ async def test_smalltalk_finalize_defers_post_reply_tasks_and_media_marking_to_b
 ):
     from plugins.xiaoqing_chat.handlers import _maybe_reply_smalltalk
 
-    lock = asyncio.Lock()
-    state = MagicMock()
+    lock                              = asyncio.Lock()
+    state                             = MagicMock()
     state.get_mood_state.return_value = ""
     state.memory_store.get_async = AsyncMock(return_value=[])
     state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.memory_store.append = Mock()
+    state.memory_store.append             = Mock()
     state.heartflow.on_user_message_async = AsyncMock()
-    state.heartflow.on_bot_reply_async = AsyncMock()
-    state.heartflow.on_no_reply_async = AsyncMock()
-    state.inc_stats = Mock()
-    state.action_history.append = Mock()
-    state.pfc_state_store.get_async = AsyncMock()
-    state.pfc_state_store.set_state = Mock()
+    state.heartflow.on_bot_reply_async    = AsyncMock()
+    state.heartflow.on_no_reply_async     = AsyncMock()
+    state.inc_stats                       = Mock()
+    state.action_history.append           = Mock()
+    state.pfc_state_store.get_async       = AsyncMock()
+    state.pfc_state_store.set_state       = Mock()
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
@@ -260,7 +260,7 @@ async def test_smalltalk_finalize_defers_post_reply_tasks_and_media_marking_to_b
             debug=SimpleNamespace(log_latency=False),
         )
     )
-    event = dict(sample_group_event)
+    event                       = dict(sample_group_event)
     event["_xc_command_forced"] = True
 
     async def fake_build_memory_block(**_kwargs):
@@ -327,9 +327,9 @@ async def test_prepare_smalltalk_turn_forces_reply_when_bot_name_is_mentioned(
 ):
     from plugins.xiaoqing_chat.handlers import _prepare_smalltalk_turn
 
-    state = MagicMock()
+    state                              = MagicMock()
     state.review_store.cleanup_expired = Mock()
-    state.pfc_state_store.get_async = AsyncMock(
+    state.pfc_state_store.get_async    = AsyncMock(
         return_value=SimpleNamespace(goal_list=[], planner_skip_until=0.0)
     )
     state.get_mood_state.return_value = ""
@@ -338,8 +338,8 @@ async def test_prepare_smalltalk_turn_forces_reply_when_bot_name_is_mentioned(
         cfg=SimpleNamespace(
             goal=SimpleNamespace(enable_goal=False),
             reflection=SimpleNamespace(
-                enable_expression_reflection=False,
-                enable_review_sessions=False,
+                enable_expression_reflection = False,
+                enable_review_sessions       = False,
             ),
             brain_chat=SimpleNamespace(enable_private_brain_chat=False),
             personality=SimpleNamespace(states=[], state_probability=0.0),
@@ -374,24 +374,24 @@ async def test_prepare_smalltalk_turn_forces_reply_when_recent_coreference_menti
     from plugins.xiaoqing_chat.handlers import _prepare_smalltalk_turn
     from plugins.xiaoqing_chat.memory.memory import StoredMessage
 
-    event = dict(sample_group_event)
-    event["message_id"] = 103
-    state = MagicMock()
+    event                               = dict(sample_group_event)
+    event["message_id"]                 = 103
+    state                               = MagicMock()
     state.memory_store.get_recent_async = AsyncMock(
         return_value=[
             StoredMessage(
-                role="user",
-                name="群友",
-                ts=time.time() - 5,
-                message_id=101,
-                content="小青你在吗",
+                role       = "user",
+                name       = "群友",
+                ts         = time.time() - 5,
+                message_id = 101,
+                content    = "小青你在吗",
             ),
             StoredMessage(
-                role="assistant",
-                name="小青",
-                ts=time.time() - 4,
-                message_id=102,
-                content="在呢",
+                role       = "assistant",
+                name       = "小青",
+                ts         = time.time() - 4,
+                message_id = 102,
+                content    = "在呢",
             ),
         ]
     )
@@ -404,8 +404,8 @@ async def test_prepare_smalltalk_turn_forces_reply_when_recent_coreference_menti
         cfg=SimpleNamespace(
             goal=SimpleNamespace(enable_goal=False),
             reflection=SimpleNamespace(
-                enable_expression_reflection=False,
-                enable_review_sessions=False,
+                enable_expression_reflection = False,
+                enable_review_sessions       = False,
             ),
             brain_chat=SimpleNamespace(enable_private_brain_chat=False),
             personality=SimpleNamespace(states=[], state_probability=0.0),
@@ -444,17 +444,17 @@ async def test_prepare_smalltalk_turn_does_not_force_coreference_without_bot_anc
     from plugins.xiaoqing_chat.handlers import _prepare_smalltalk_turn
     from plugins.xiaoqing_chat.memory.memory import StoredMessage
 
-    event = dict(sample_group_event)
-    event["message_id"] = 103
-    state = MagicMock()
+    event                               = dict(sample_group_event)
+    event["message_id"]                 = 103
+    state                               = MagicMock()
     state.memory_store.get_recent_async = AsyncMock(
         return_value=[
             StoredMessage(
-                role="user",
-                name="群友",
-                ts=time.time() - 5,
-                message_id=101,
-                content="她刚才还在说外卖",
+                role       = "user",
+                name       = "群友",
+                ts         = time.time() - 5,
+                message_id = 101,
+                content    = "她刚才还在说外卖",
             )
         ]
     )
@@ -467,8 +467,8 @@ async def test_prepare_smalltalk_turn_does_not_force_coreference_without_bot_anc
         cfg=SimpleNamespace(
             goal=SimpleNamespace(enable_goal=False),
             reflection=SimpleNamespace(
-                enable_expression_reflection=False,
-                enable_review_sessions=False,
+                enable_expression_reflection = False,
+                enable_review_sessions       = False,
             ),
             brain_chat=SimpleNamespace(enable_private_brain_chat=False),
             personality=SimpleNamespace(states=[], state_probability=0.0),
@@ -503,24 +503,24 @@ async def test_smalltalk_commit_syncs_goal_store_to_top_planner_goal_after_state
 ):
     from plugins.xiaoqing_chat.handlers import _maybe_reply_smalltalk
 
-    lock = asyncio.Lock()
-    state = MagicMock()
+    lock                              = asyncio.Lock()
+    state                             = MagicMock()
     state.get_mood_state.return_value = ""
     state.memory_store.get_async = AsyncMock(return_value=[])
     state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.memory_store.append = Mock()
-    state.goal_store.set_async = AsyncMock()
+    state.memory_store.append       = Mock()
+    state.goal_store.set_async      = AsyncMock()
     state.pfc_state_store.get_async = AsyncMock(
         return_value=SimpleNamespace(
-            chat_id="g67890",
-            ignore_until_ts=0.0,
-            ended=False,
-            last_successful_reply_action="",
-            goal_list=[{"goal": "旧规划目标"}],
-            knowledge_list=[],
-            planner_fail_ts=[],
-            planner_skip_until=0.0,
-            updated_at=0.0,
+            chat_id                      = "g67890",
+            ignore_until_ts              = 0.0,
+            ended                        = False,
+            last_successful_reply_action = "",
+            goal_list                    = [{"goal": "旧规划目标"}],
+            knowledge_list               = [],
+            planner_fail_ts              = [],
+            planner_skip_until           = 0.0,
+            updated_at                   = 0.0,
         )
     )
     state.pfc_state_store.set_state = Mock()
@@ -590,28 +590,28 @@ async def test_smalltalk_commit_clears_goal_store_when_planner_goal_list_becomes
     from plugins.xiaoqing_chat.handlers import _maybe_reply_smalltalk
     from plugins.xiaoqing_chat.planning.goal_state import GoalStore
 
-    chat_id = "g67890"
-    lock = asyncio.Lock()
+    chat_id    = "g67890"
+    lock       = asyncio.Lock()
     goal_store = GoalStore()
     await goal_store.set_async(chat_id, goal="围绕旧目标继续", source="user")
 
-    state = MagicMock()
+    state                             = MagicMock()
     state.get_mood_state.return_value = ""
     state.memory_store.get_async = AsyncMock(return_value=[])
     state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.memory_store.append = Mock()
-    state.goal_store = goal_store
+    state.memory_store.append       = Mock()
+    state.goal_store                = goal_store
     state.pfc_state_store.get_async = AsyncMock(
         return_value=SimpleNamespace(
-            chat_id=chat_id,
-            ignore_until_ts=0.0,
-            ended=False,
-            last_successful_reply_action="",
-            goal_list=[{"goal": "旧规划目标"}],
-            knowledge_list=[],
-            planner_fail_ts=[],
-            planner_skip_until=0.0,
-            updated_at=0.0,
+            chat_id                      = chat_id,
+            ignore_until_ts              = 0.0,
+            ended                        = False,
+            last_successful_reply_action = "",
+            goal_list                    = [{"goal": "旧规划目标"}],
+            knowledge_list               = [],
+            planner_fail_ts              = [],
+            planner_skip_until           = 0.0,
+            updated_at                   = 0.0,
         )
     )
     state.pfc_state_store.set_state = Mock()
@@ -678,28 +678,28 @@ async def test_smalltalk_pre_gate_clears_goal_store_when_no_goal_is_derived(
     from plugins.xiaoqing_chat.handlers import _maybe_reply_smalltalk
     from plugins.xiaoqing_chat.planning.goal_state import GoalStore
 
-    chat_id = "g67890"
-    lock = asyncio.Lock()
+    chat_id    = "g67890"
+    lock       = asyncio.Lock()
     goal_store = GoalStore()
     await goal_store.set_async(chat_id, goal="围绕旧目标继续", source="user")
 
-    state = MagicMock()
+    state                             = MagicMock()
     state.get_mood_state.return_value = ""
     state.memory_store.get_async = AsyncMock(return_value=[])
     state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.memory_store.append = Mock()
-    state.goal_store = goal_store
+    state.memory_store.append       = Mock()
+    state.goal_store                = goal_store
     state.pfc_state_store.get_async = AsyncMock(
         return_value=SimpleNamespace(
-            chat_id=chat_id,
-            ignore_until_ts=0.0,
-            ended=False,
-            last_successful_reply_action="",
-            goal_list=[],
-            knowledge_list=[],
-            planner_fail_ts=[],
-            planner_skip_until=0.0,
-            updated_at=0.0,
+            chat_id                      = chat_id,
+            ignore_until_ts              = 0.0,
+            ended                        = False,
+            last_successful_reply_action = "",
+            goal_list                    = [],
+            knowledge_list               = [],
+            planner_fail_ts              = [],
+            planner_skip_until           = 0.0,
+            updated_at                   = 0.0,
         )
     )
     state.heartflow.on_no_reply_async = AsyncMock()
@@ -739,9 +739,9 @@ async def test_smalltalk_pre_gate_clears_goal_store_when_no_goal_is_derived(
 @pytest.mark.asyncio
 async def test_handle_errors_uses_keyword_context_for_logging():
     context = SimpleNamespace(
-        logger=MagicMock(),
-        request_id="req-xc-handler",
-        secrets={},
+        logger     = MagicMock(),
+        request_id = "req-xc-handler",
+        secrets    = {},
     )
 
     @handle_errors
@@ -771,19 +771,19 @@ async def test_handle_internal_reset_clears_goal_heartflow_and_action_history(
 
     chat_id = "g67890"
     runtime = MagicMock()
-    state = ChatRuntimeState()
+    state   = ChatRuntimeState()
     _bind_all_stores(state, tmp_path)
 
     state.memory_store.append(chat_id, role="user", name="Tester", content="hi")
     state.memory_db.upsert_text(
-        doc_id="topic-current-chat",
-        text="本群旧话题",
-        meta={"type": "topic_summary", "chat_id": chat_id},
+        doc_id = "topic-current-chat",
+        text   = "本群旧话题",
+        meta   = {"type": "topic_summary", "chat_id": chat_id},
     )
     state.memory_db.upsert_text(
-        doc_id="topic-other-chat",
-        text="其他群话题",
-        meta={"type": "topic_summary", "chat_id": "g-other"},
+        doc_id = "topic-other-chat",
+        text   = "其他群话题",
+        meta   = {"type": "topic_summary", "chat_id": "g-other"},
     )
     state.memory_db.save()
     await state.goal_store.set_async(chat_id, goal="围绕旧目标继续", source="user")
@@ -792,12 +792,12 @@ async def test_handle_internal_reset_clears_goal_heartflow_and_action_history(
     state.action_history.append(
         chat_id,
         ActionRecord(
-            ts=time.time(),
-            local_target="u1",
-            action="reply",
-            reasoning="old",
-            detail={"source": "pfc"},
-            executed=True,
+            ts           = time.time(),
+            local_target = "u1",
+            action       = "reply",
+            reasoning    = "old",
+            detail       = {"source": "pfc"},
+            executed     = True,
         ),
     )
     state.set_continuous_reply_count(chat_id, 3)
@@ -809,12 +809,12 @@ async def test_handle_internal_reset_clears_goal_heartflow_and_action_history(
     assert state.fetch_and_increment_local_id(chat_id) == 1
     assert state.fetch_and_increment_local_id(chat_id) == 2
 
-    pfc_st = await state.pfc_state_store.get_async(chat_id)
-    pfc_st.ended = True
-    pfc_st.ignore_until_ts = 123.0
+    pfc_st                              = await state.pfc_state_store.get_async(chat_id)
+    pfc_st.ended                        = True
+    pfc_st.ignore_until_ts              = 123.0
     pfc_st.last_successful_reply_action = "say_goodbye"
-    pfc_st.goal_list = [{"goal": "old"}]
-    pfc_st.knowledge_list = [{"text": "old"}]
+    pfc_st.goal_list                    = [{"goal": "old"}]
+    pfc_st.knowledge_list               = [{"text": "old"}]
     await state.pfc_state_store.save_async(chat_id)
     state.bw_expr_store.save(
         [
@@ -827,9 +827,9 @@ async def test_handle_internal_reset_clears_goal_heartflow_and_action_history(
             JargonRecord(content="本群黑话", scope_chat_id=chat_id),
             JargonRecord(content="其它群黑话", scope_chat_id="g-other"),
             JargonRecord(
-                content="全局黑话",
-                is_global=True,
-                chat_id_counts=[[chat_id, 3], ["g-other", 1]],
+                content        = "全局黑话",
+                is_global      = True,
+                chat_id_counts = [[chat_id, 3], ["g-other", 1]],
             ),
         ]
     )
@@ -897,7 +897,7 @@ async def test_handle_internal_reset_removes_per_chat_files_and_atomic_backups(
 
     chat_id = "g67890"
     runtime = MagicMock()
-    state = ChatRuntimeState()
+    state   = ChatRuntimeState()
     _bind_all_stores(state, tmp_path)
 
     json_paths = [
@@ -948,15 +948,15 @@ async def test_handle_internal_reset_clears_review_policy_and_sessions_for_curre
 
     chat_id = "g67890"
     runtime = MagicMock()
-    state = ChatRuntimeState()
+    state   = ChatRuntimeState()
     _bind_all_stores(state, tmp_path)
 
     state.review_store.save_policy(
         chat_id,
         ReviewPolicy(
-            goal_override="旧目标覆写",
-            strategy_note="旧策略备注",
-            avoid_patterns=["避免句式A", "避免句式B"],
+            goal_override  = "旧目标覆写",
+            strategy_note  = "旧策略备注",
+            avoid_patterns = ["避免句式A", "避免句式B"],
         ),
     )
     # 连续写入以生成原子备份，验证重置不会只清理主文件。
@@ -965,19 +965,19 @@ async def test_handle_internal_reset_clears_review_policy_and_sessions_for_curre
         ReviewPolicy(goal_override="旧目标覆写", strategy_note="旧策略备注"),
     )
     session = state.review_store.open_session_if_allowed(
-        kind="goal_strategy",
-        chat_id=chat_id,
-        payload={"goal": "旧目标", "stats": "旧统计"},
-        timeout_seconds=600.0,
-        cooldown_seconds=0.0,
+        kind             = "goal_strategy",
+        chat_id          = chat_id,
+        payload          = {"goal": "旧目标", "stats": "旧统计"},
+        timeout_seconds  = 600.0,
+        cooldown_seconds = 0.0,
     )
     assert session is not None
     second_session = state.review_store.open_session_if_allowed(
-        kind="reply_style",
-        chat_id=chat_id,
-        payload={"style": "旧风格"},
-        timeout_seconds=600.0,
-        cooldown_seconds=0.0,
+        kind             = "reply_style",
+        chat_id          = chat_id,
+        payload          = {"style": "旧风格"},
+        timeout_seconds  = 600.0,
+        cooldown_seconds = 0.0,
     )
     assert second_session is not None
 
@@ -1011,28 +1011,28 @@ async def test_smalltalk_action_history_preserves_real_planner_action_name(
 ):
     from plugins.xiaoqing_chat.handlers import _maybe_reply_smalltalk
 
-    lock = asyncio.Lock()
-    state = MagicMock()
+    lock                              = asyncio.Lock()
+    state                             = MagicMock()
     state.get_mood_state.return_value = ""
     state.memory_store.get_async = AsyncMock(return_value=[])
     state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.memory_store.append = Mock()
+    state.memory_store.append             = Mock()
     state.heartflow.on_user_message_async = AsyncMock()
-    state.heartflow.on_bot_reply_async = AsyncMock()
-    state.heartflow.on_no_reply_async = AsyncMock()
-    state.inc_stats = Mock()
-    state.action_history.append = Mock()
-    state.pfc_state_store.get_async = AsyncMock(
+    state.heartflow.on_bot_reply_async    = AsyncMock()
+    state.heartflow.on_no_reply_async     = AsyncMock()
+    state.inc_stats                       = Mock()
+    state.action_history.append           = Mock()
+    state.pfc_state_store.get_async       = AsyncMock(
         return_value=SimpleNamespace(
-            chat_id="g67890",
-            ignore_until_ts=0.0,
-            ended=False,
-            last_successful_reply_action="",
-            goal_list=[],
-            knowledge_list=[],
-            planner_fail_ts=[],
-            planner_skip_until=0.0,
-            updated_at=0.0,
+            chat_id                      = "g67890",
+            ignore_until_ts              = 0.0,
+            ended                        = False,
+            last_successful_reply_action = "",
+            goal_list                    = [],
+            knowledge_list               = [],
+            planner_fail_ts              = [],
+            planner_skip_until           = 0.0,
+            updated_at                   = 0.0,
         )
     )
     state.pfc_state_store.set_state = Mock()
@@ -1101,16 +1101,16 @@ async def test_run_pfc_once_rethink_goal_passes_replanned_goal_focus_to_reply_ge
     from plugins.xiaoqing_chat.planning.pfc_engine import run_pfc_once
     from plugins.xiaoqing_chat.planning.pfc_state import PFCStateStore
 
-    chat_id = "pfc-goal-replan"
-    cfg = XiaoQingChatConfig()
-    context = MagicMock()
-    context.data_dir = tmp_path
+    chat_id              = "pfc-goal-replan"
+    cfg                  = XiaoQingChatConfig()
+    context              = MagicMock()
+    context.data_dir     = tmp_path
     context.http_session = AsyncMock()
 
     memory_store = MemoryStore()
     memory_store.append(chat_id, role="user", name="Tester", content="今天去哪家火锅店")
-    action_history = ActionHistoryStore()
-    memory_db = MagicMock()
+    action_history  = ActionHistoryStore()
+    memory_db       = MagicMock()
     pfc_state_store = PFCStateStore()
 
     generate_reply = AsyncMock(return_value="ok")
@@ -1121,16 +1121,16 @@ async def test_run_pfc_once_rethink_goal_passes_replanned_goal_focus_to_reply_ge
             new=AsyncMock(
                 side_effect=[
                     PFCPlan(
-                        action="rethink_goal",
-                        reason="当前目标过时，需要重设",
-                        thinking="先确认预算和口味偏好",
-                        wait_seconds=0,
+                        action       = "rethink_goal",
+                        reason       = "当前目标过时，需要重设",
+                        thinking     = "先确认预算和口味偏好",
+                        wait_seconds = 0,
                     ),
                     PFCPlan(
-                        action="direct_reply",
-                        reason="继续回复",
-                        thinking="",
-                        wait_seconds=0,
+                        action       = "direct_reply",
+                        reason       = "继续回复",
+                        thinking     = "",
+                        wait_seconds = 0,
                     ),
                 ]
             ),
@@ -1148,18 +1148,18 @@ async def test_run_pfc_once_rethink_goal_passes_replanned_goal_focus_to_reply_ge
         ),
     ):
         result = await run_pfc_once(
-            context=context,
-            runtime_cfg=cfg,
-            secrets={"api_base": "http://test", "api_key": "key", "model": "test-model"},
-            bot_name="小青",
-            is_private=False,
-            chat_id=chat_id,
-            current_text="今天去哪家火锅店",
-            memory_store=memory_store,
-            action_history=action_history,
-            memory_db=memory_db,
-            pfc_state_store=pfc_state_store,
-            generate_reply=generate_reply,
+            context         = context,
+            runtime_cfg     = cfg,
+            secrets         = {"api_base": "http://test", "api_key": "key", "model": "test-model"},
+            bot_name        = "小青",
+            is_private      = False,
+            chat_id         = chat_id,
+            current_text    = "今天去哪家火锅店",
+            memory_store    = memory_store,
+            action_history  = action_history,
+            memory_db       = memory_db,
+            pfc_state_store = pfc_state_store,
+            generate_reply  = generate_reply,
         )
 
     assert result.reply == "ok"

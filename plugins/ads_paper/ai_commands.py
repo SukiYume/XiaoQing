@@ -73,7 +73,7 @@ async def cmd_summarize(
         )
 
     paper_id = args.strip()
-    bibcode = await resolve_paper_id_to_bibcode(client, paper_id)
+    bibcode  = await resolve_paper_id_to_bibcode(client, paper_id)
 
     if not bibcode:
         return segments(f"❌ 未找到论文: {paper_id}")
@@ -84,7 +84,7 @@ async def cmd_summarize(
 
     title = paper_title(paper, default="")
     raw_abstract = paper.get("abstract", "")
-    abstract = raw_abstract.strip() if isinstance(raw_abstract, str) else ""
+    abstract     = raw_abstract.strip() if isinstance(raw_abstract, str) else ""
 
     if not abstract:
         return segments(f"⚠️ 论文 '{title}' 没有摘要")
@@ -99,7 +99,7 @@ async def cmd_summarize(
         return segments("\n".join(lines))
 
     try:
-        result = await ai.complete("summary", _summary_messages(title, abstract))
+        result  = await ai.complete("summary", _summary_messages(title, abstract))
         summary = result.content
         if not summary:
             raise RuntimeError("AI summary response is empty")
@@ -110,8 +110,8 @@ async def cmd_summarize(
         error_message = public_error_message(
             context,
             exc,
-            logger=logger,
-            component="ads_paper.summarize",
+            logger    = logger,
+            component = "ads_paper.summarize",
         )
         lines = [
             f"📄 论文: {title}\n",
@@ -132,12 +132,12 @@ async def cmd_daily(
     if not topics:
         return segments("🏷️ 请先添加研究兴趣关键词\n用法: /paper topics add <关键词>")
 
-    today = _utc_today()
-    query = _daily_topic_query(topics, today)
+    today  = _utc_today()
+    query  = _daily_topic_query(topics, today)
     papers = await client.search_papers(
         query,
-        max_results=DEFAULT_DAILY_PAPERS,
-        fields=[
+        max_results = DEFAULT_DAILY_PAPERS,
+        fields      = [
             "bibcode",
             "title",
             "author",
@@ -179,7 +179,7 @@ async def cmd_ref_add(
         )
 
     paper_id = args.strip()
-    bibcode = await resolve_paper_id_to_bibcode(client, paper_id)
+    bibcode  = await resolve_paper_id_to_bibcode(client, paper_id)
 
     if not bibcode:
         return segments(f"❌ 未找到论文: {paper_id}")
@@ -198,8 +198,8 @@ async def cmd_ref_add(
         return public_error_response(
             context,
             exc,
-            logger=logger,
-            component="ads_paper.ref_add",
+            logger    = logger,
+            component = "ads_paper.ref_add",
         )
 
 
@@ -233,6 +233,6 @@ async def cmd_refs(
         return public_error_response(
             context,
             exc,
-            logger=logger,
-            component="ads_paper.refs",
+            logger    = logger,
+            component = "ads_paper.refs",
         )

@@ -19,8 +19,8 @@ ROOT = REPOSITORY_ROOT
 @pytest.fixture
 def mock_context():
     """模拟上下文"""
-    context = MagicMock()
-    context.config = {}
+    context         = MagicMock()
+    context.config  = {}
     context.secrets = {
         "plugins": {
             "shell": {
@@ -48,10 +48,10 @@ def pending_process():
     """在异步测试的事件循环内创建持续运行的假进程。"""
 
     def create():
-        proc = MagicMock()
+        proc            = MagicMock()
         proc.returncode = None
-        proc.stdout = asyncio.StreamReader()
-        proc.stderr = asyncio.StreamReader()
+        proc.stdout     = asyncio.StreamReader()
+        proc.stderr     = asyncio.StreamReader()
 
         async def wait_forever():
             await asyncio.Event().wait()
@@ -75,8 +75,8 @@ class TestShellConfig:
         from core.config import ConfigSnapshot
 
         mock_context.secrets = ConfigSnapshot(
-            config={},
-            secrets={
+            config  = {},
+            secrets = {
                 "plugins": {
                     "shell": {
                         "whitelist": ["echo", "pwd"],
@@ -327,7 +327,7 @@ class TestOutputTruncate:
 
     def test_truncate_uses_default_max(self):
         """测试使用默认最大长度"""
-        text = "a" * 10000
+        text   = "a" * 10000
         result = shell_main._truncate(text)
         assert len(result) == shell_config.MAX_OUTPUT_LENGTH
 
@@ -549,7 +549,7 @@ class TestShellHandle:
         }
         monkeypatch.setattr(shell_main, "_resolve_terminal_executable", lambda _settings: None)
         execute = AsyncMock()
-        audit = MagicMock()
+        audit   = MagicMock()
         monkeypatch.setattr(shell_main, "_execute_command", execute)
         monkeypatch.setattr(shell_main, "_log_command_audit", audit)
 
@@ -564,7 +564,7 @@ class TestShellHandle:
     @pytest.mark.asyncio
     async def test_handle_list_whitelist_hides_unsupported_builtins(self, mock_context, mock_event):
         result = await shell_main.handle("shell", "list", mock_event, mock_context)
-        text = str(result)
+        text   = str(result)
         assert "cd" not in text
         assert "copy" not in text
 
@@ -620,6 +620,11 @@ class TestShellHandle:
 class TestShellExecutionSafety:
     """子进程资源限制和跨平台终止语义。"""
 
+    @pytest.fixture(autouse=True)
+    def fake_job_for_mock_process(self, monkeypatch):
+        # 本组使用内存进程；真实 Windows Job 在独立集成回归中验证。
+        monkeypatch.setattr(shell_main, "_attach_windows_job", AsyncMock(return_value=None))
+
     @pytest.mark.asyncio
     async def test_execute_command_starts_in_own_process_group(self):
         captured = {}
@@ -651,7 +656,12 @@ class TestShellExecutionSafety:
         assert code == 0
         assert stdout == "ok"
         assert stderr == ""
-        assert captured["stdin"] is asyncio.subprocess.DEVNULL
+        expected_stdin = (
+            asyncio.subprocess.PIPE
+            if shell_main.sys.platform == "win32"
+            else asyncio.subprocess.DEVNULL
+        )
+        assert captured["stdin"] is expected_stdin
         if shell_main.sys.platform == "win32":
             assert captured.get("creationflags", 0) != 0
         else:
@@ -772,7 +782,7 @@ class TestShellExecutionSafety:
         monkeypatch,
         pending_process,
     ):
-        proc = pending_process()
+        proc            = pending_process()
         cleanup_started = asyncio.Event()
         release_cleanup = asyncio.Event()
 
@@ -857,14 +867,14 @@ class TestSmartDecode:
 
     def test_decode_utf8(self):
         """测试 UTF-8 解码"""
-        data = b"hello"
+        data   = b"hello"
         result = shell_main._smart_decode(data)
         assert result == "hello"
 
     def test_decode_gbk(self, monkeypatch):
         """测试 GBK 解码"""
         monkeypatch.setattr(shell_main.sys, "platform", "win32")
-        data = "你好".encode("gbk")
+        data   = "你好".encode("gbk")
         result = shell_main._smart_decode(data)
         assert result == "你好"
 

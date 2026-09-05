@@ -76,24 +76,24 @@ _REQUIRED_DRAFT_FIELDS: dict[str, tuple[str, ...]] = {
     "password": ("name", "host", "port", "username", "auth_type"),
     "key_path": ("name", "host", "port", "username", "auth_type"),
 }
-_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg"})
-_MAX_SHOWIMG_FILES = 5
-_MAX_SHOWIMG_BYTES = 10 * 1024 * 1024
+_IMAGE_EXTENSIONS          = frozenset({".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg"})
+_MAX_SHOWIMG_FILES         = 5
+_MAX_SHOWIMG_BYTES         = 10 * 1024 * 1024
 _MAX_SHOWIMG_PATTERN_CHARS = 512
-_SHOWIMG_USAGE = (
+_SHOWIMG_USAGE             = (
     "用法: showimg <路径或通配符> [--page N]\n"
     "示例: showimg ./*.png 或 showimg ./plots/*.jpg --page 2"
 )
-_MAX_ENV_VARS = 64
+_MAX_ENV_VARS        = 64
 _MAX_ENV_VALUE_CHARS = 4096
 _MAX_ENV_TOTAL_CHARS = 32_768
-_IMAGE_CACHE_LIMITS = FileCacheLimits(
-    max_entries=64,
-    max_bytes=64 * 1024 * 1024,
-    ttl_seconds=3600,
+_IMAGE_CACHE_LIMITS  = FileCacheLimits(
+    max_entries = 64,
+    max_bytes   = 64 * 1024 * 1024,
+    ttl_seconds = 3600,
 )
-_ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*", re.ASCII)
-_EXPORT_RE = re.compile(r"export\s+([A-Za-z_][A-Za-z0-9_]*)=(.*)", re.ASCII)
+_ENV_NAME_RE                     = re.compile(r"[A-Za-z_][A-Za-z0-9_]*", re.ASCII)
+_EXPORT_RE                       = re.compile(r"export\s+([A-Za-z_][A-Za-z0-9_]*)=(.*)", re.ASCII)
 _SENSITIVE_HISTORY_ASSIGNMENT_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9_])"
     r"[A-Za-z0-9_]*(?:api[_-]?key|token|secret|password|passwd|authorization|credential|"
@@ -106,9 +106,9 @@ _SENSITIVE_HISTORY_OPTION_RE = re.compile(
 _SENSITIVE_HISTORY_HEADER_RE = re.compile(
     r"(?i)(?:^|[\s'\"])(?:authorization|proxy-authorization|x-api-key)\s*:"
 )
-_URL_CREDENTIAL_RE = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@")
+_URL_CREDENTIAL_RE      = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@")
 _SHOWIMG_PAGE_SUFFIX_RE = re.compile(r"\s+--page(?:\s+|=)(?P<page>\S+)\s*\Z", re.ASCII)
-_SHOWIMG_PAGE_TOKEN_RE = re.compile(r"(?:^|\s)--page(?:\s|=|\Z)", re.ASCII)
+_SHOWIMG_PAGE_TOKEN_RE  = re.compile(r"(?:^|\s)--page(?:\s|=|\Z)", re.ASCII)
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,13 +138,13 @@ def _parse_showimg_request(value: str) -> _ShowImageRequest:
         raise _ShowImageInputError("缺少图片路径或通配符")
 
     raw_arguments = parts[1].strip()
-    page = 1
-    page_match = _SHOWIMG_PAGE_SUFFIX_RE.search(raw_arguments)
+    page          = 1
+    page_match    = _SHOWIMG_PAGE_SUFFIX_RE.search(raw_arguments)
     if page_match is not None:
         parsed_page = parse_int(page_match.group("page"), minimum=1)
         if parsed_page is None:
             raise _ShowImageInputError("--page 页码必须是正整数")
-        page = parsed_page
+        page         = parsed_page
         file_pattern = raw_arguments[: page_match.start()].rstrip()
     else:
         if _SHOWIMG_PAGE_TOKEN_RE.search(raw_arguments) is not None:
@@ -188,7 +188,7 @@ def _parse_export_environment(
     if export_match is None:
         return None, None
 
-    var_name = export_match.group(1)
+    var_name  = export_match.group(1)
     raw_value = export_match.group(2).strip()
     if not raw_value:
         var_value = ""
@@ -223,9 +223,9 @@ class _CommandJob:
 
 # 按唯一 ID 保存全部存活任务，避免新会话代次覆盖索引后，关闭流程漏掉旧任务。
 # 第二个索引只指向每个用户/群会话的当前代次；任务结束时同时做对象与 ID 比较。
-_COMMAND_JOBS: dict[str, _CommandJob] = {}
+_COMMAND_JOBS: dict[str, _CommandJob]          = {}
 _CURRENT_JOB_BY_KEY: dict[_SessionJobKey, str] = {}
-_SHUTTING_DOWN = False
+_SHUTTING_DOWN                                 = False
 
 
 class _JobGenerationChanged(Exception):
@@ -275,7 +275,7 @@ def _new_job_id() -> str:
 
 
 def _register_job(job: _CommandJob) -> None:
-    _COMMAND_JOBS[job.job_id] = job
+    _COMMAND_JOBS[job.job_id]    = job
     _CURRENT_JOB_BY_KEY[job.key] = job.job_id
 
 
@@ -364,9 +364,9 @@ async def _commit_job_result_resilient(
     cleanup = asyncio.create_task(
         _commit_job_result(
             update_session,
-            server_name=server_name,
-            job_id=job_id,
-            cwd=cwd,
+            server_name = server_name,
+            job_id      = job_id,
+            cwd         = cwd,
         ),
         name=f"qingssh-session-cleanup-{job_id[:12]}",
     )
@@ -390,8 +390,8 @@ async def _commit_job_result_resilient(
 
 async def close_session(context: Context, session: Session) -> None:
     server_name = session.get(SessionKeys.SERVER_NAME)
-    job_id = session.get(SessionKeys.CURRENT_TASK)
-    job = _find_job(_session_job_key(context), server_name, job_id)
+    job_id      = session.get(SessionKeys.CURRENT_TASK)
+    job         = _find_job(_session_job_key(context), server_name, job_id)
     if job is not None:
         # close_session 通常持有父会话事务：先把准确代次标记为已关闭，再只发出取消；
         # 子任务会在键锁释放后完成 CAS，父事务即使回滚也不会永久停在 executing。
@@ -445,7 +445,7 @@ async def ensure_session_connected(
     if not isinstance(server_name, str) or not server_name:
         await context.end_session()
         return False, "❌ SSH 会话状态无效，请使用 /ssh 重新连接"
-    user_id = str(context.current_user_id)
+    user_id  = str(context.current_user_id)
     group_id = str(context.current_group_id)
 
     if not manager.is_connected(user_id, group_id, server_name):
@@ -485,9 +485,9 @@ async def _finish_server_add(
 ) -> MessageSegments:
     """校验完整草稿，持久化服务器并生成统一完成消息。"""
 
-    name = config.get("name")
-    host = config.get("host")
-    port = config.get("port")
+    name     = config.get("name")
+    host     = config.get("host")
+    port     = config.get("port")
     username = config.get("username")
     if (
         not isinstance(name, str)
@@ -504,8 +504,8 @@ async def _finish_server_add(
         port,
         username,
         auth_type,
-        password=password,
-        key_path=key_path,
+        password = password,
+        key_path = key_path,
     )
     if not added:
         return segments("❌ 服务器保存失败，请稍后重试")
@@ -520,14 +520,14 @@ async def _handle_adding_session(
     """推进引导式服务器添加流程。"""
 
     raw_text = text
-    text = text.strip()
+    text     = text.strip()
 
     if text.casefold() in CANCEL_KEYWORDS:
         await context.end_session()
         return segments("❌ 已取消添加服务器")
 
-    step = session.get(SessionKeys.STEP)
-    raw_config = session.get(SessionKeys.SERVER_CONFIG, {})
+    step            = session.get(SessionKeys.STEP)
+    raw_config      = session.get(SessionKeys.SERVER_CONFIG, {})
     required_fields = _REQUIRED_DRAFT_FIELDS.get(step) if isinstance(step, str) else None
     if (
         required_fields is None
@@ -662,7 +662,7 @@ async def _handle_connected_session(
         await context.end_session()
         return segments("❌ SSH 会话状态无效，请使用 /ssh 重新连接")
     raw_command_count = session.get(SessionKeys.COMMAND_COUNT, 0)
-    command_count = (
+    command_count     = (
         raw_command_count
         if isinstance(raw_command_count, int) and not isinstance(raw_command_count, bool)
         else 0
@@ -674,7 +674,7 @@ async def _handle_connected_session(
 
     text = text.strip()
 
-    user_id = str(context.current_user_id)
+    user_id  = str(context.current_user_id)
     group_id = str(context.current_group_id)
 
     if session.get(SessionKeys.STATE) == "executing":
@@ -708,11 +708,11 @@ async def _handle_connected_session(
         )
 
     if text.casefold() in {"状态", "status"}:
-        server = manager.get_server(server_name)
-        raw_cwd = session.get(SessionKeys.CWD, "~")
-        status_cwd = raw_cwd if isinstance(raw_cwd, str) else "~"
+        server       = manager.get_server(server_name)
+        raw_cwd      = session.get(SessionKeys.CWD, "~")
+        status_cwd   = raw_cwd if isinstance(raw_cwd, str) else "~"
         raw_env_vars = session.get(SessionKeys.ENV_VARS, {})
-        env_vars = (
+        env_vars     = (
             {
                 key: value
                 for key, value in raw_env_vars.items()
@@ -759,10 +759,10 @@ async def _handle_connected_session(
     except ValueError as exc:
         return segments(f"❌ QingSSH 输出配置无效: {exc}")
 
-    raw_cwd = session.get(SessionKeys.CWD)
-    cwd = raw_cwd if isinstance(raw_cwd, str) else None
+    raw_cwd      = session.get(SessionKeys.CWD)
+    cwd          = raw_cwd if isinstance(raw_cwd, str) else None
     raw_env_vars = session.get(SessionKeys.ENV_VARS, {})
-    env_vars = (
+    env_vars     = (
         {
             key: value
             for key, value in raw_env_vars.items()
@@ -799,8 +799,8 @@ async def _handle_connected_session(
 
     # 只记录不可逆的审计摘要；原始命令仍完整交给可信管理员和 SSH 后端。
     command_audit = summarize_sensitive(actual_command)
-    job_id = _new_job_id()
-    request_id = audit_request_id(context)
+    job_id        = _new_job_id()
+    request_id    = audit_request_id(context)
     logger.info(
         "SSH audit operation=command status=started request_id=%s job_id=%s "
         "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s",
@@ -814,9 +814,9 @@ async def _handle_connected_session(
 
     # 这里仍处于父会话事务中；子任务的第一次
     # update_session 会等待该事务提交，然后核验这个 job_id。
-    target_user_id = context.current_user_id
+    target_user_id  = context.current_user_id
     target_group_id = context.current_group_id
-    job_key = _session_job_key(context)
+    job_key         = _session_job_key(context)
     session.set(SessionKeys.CURRENT_TASK, job_id)
     background = _run_background_command(
         context.update_session,
@@ -829,10 +829,10 @@ async def _handle_connected_session(
         target_user_id,
         target_group_id,
         output_policy,
-        is_cd=is_cd,
-        job_key=job_key,
-        job_id=job_id,
-        request_id=request_id,
+        is_cd      = is_cd,
+        job_key    = job_key,
+        job_id     = job_id,
+        request_id = request_id,
     )
     try:
         task = asyncio.create_task(background, name=f"qingssh-command-{job_id[:12]}")
@@ -841,10 +841,10 @@ async def _handle_connected_session(
         raise
     _register_job(
         _CommandJob(
-            key=job_key,
-            server_name=server_name,
-            job_id=job_id,
-            task=task,
+            key         = job_key,
+            server_name = server_name,
+            job_id      = job_id,
+            task        = task,
         )
     )
 
@@ -865,30 +865,31 @@ async def _run_background_command(
     *,
     job_key: _SessionJobKey,
     job_id: str,
-    is_cd: bool = False,
+    is_cd: bool            = False,
     request_id: str | None = None,
 ) -> None:
     """核验会话代次后执行命令、投影输出，并用 CAS 提交最终状态。"""
 
-    cd_output_tail = ""
+    cd_output_tail               = ""
     relay: SSHOutputRelay | None = None
-    relay_finished = False
-    resolved_cwd: str | None = None
-    command_audit = summarize_sensitive(command)
-    audit_job_id = audit_id(job_id)
-    request_id = audit_id(request_id)
+    relay_finished               = False
+    resolved_cwd: str | None     = None
+    command_audit                = summarize_sensitive(command)
+    audit_job_id                 = audit_id(job_id)
+    request_id                   = audit_id(request_id)
 
     async def send_text(content: str) -> None:
         action = build_action(segments(content), user_id, group_id)
         if action:
             action[ACTION_BYPASS_SINK_KEY] = True
-            await send_action(action)
+            if await send_action(action) is False:
+                raise RuntimeError("SSH output delivery failed")
 
     async def output_callback(text: str) -> None:
         nonlocal cd_output_tail
         if is_cd:
             cd_output_tail = (cd_output_tail + text)[-8192:]
-            text = strip_cwd_markers(text)
+            text           = strip_cwd_markers(text)
         if relay is not None:
             await relay.feed(text)
 
@@ -904,7 +905,7 @@ async def _run_background_command(
         cleanup.result()
 
     try:
-        registered = _find_job(job_key, server_name, job_id)
+        registered   = _find_job(job_key, server_name, job_id)
         current_task = asyncio.current_task()
         if (
             registered is None
@@ -915,15 +916,15 @@ async def _run_background_command(
         # 与父会话事务同步；父事务回滚、删除或替换后，不得触碰 SSH。
         if not await _session_job_is_current(
             update_session,
-            server_name=server_name,
-            job_id=job_id,
+            server_name = server_name,
+            job_id      = job_id,
         ):
             return
 
         relay = SSHOutputRelay(
-            output_dir=Path(manager.data_dir) / "command_outputs",
-            policy=output_policy,
-            send_text=send_text,
+            output_dir = Path(manager.data_dir) / "command_outputs",
+            policy     = output_policy,
+            send_text  = send_text,
         )
         exit_code = await manager.execute_command_stream(
             conn_user_id,
@@ -948,7 +949,7 @@ async def _run_background_command(
                     resolved_cwd = new_cwd
 
         summary: SSHOutputSummary = await relay.finish(result_msg)
-        relay_finished = True
+        relay_finished            = True
         logger.info(
             "SSH audit operation=command status=completed request_id=%s job_id=%s "
             "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s "
@@ -1032,16 +1033,16 @@ async def _run_background_command(
         try:
             await _commit_job_result_resilient(
                 update_session,
-                server_name=server_name,
-                job_id=job_id,
-                cwd=resolved_cwd,
+                server_name = server_name,
+                job_id      = job_id,
+                cwd         = resolved_cwd,
             )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             logger.debug("SSH session CAS cleanup failed error_type=%s", audit_error_type(exc))
         finally:
-            registered = _COMMAND_JOBS.get(job_id)
+            registered   = _COMMAND_JOBS.get(job_id)
             current_task = asyncio.current_task()
             if registered is not None and registered.task is current_task:
                 _remove_job_if_current(registered)
@@ -1061,7 +1062,7 @@ async def _handle_showimg_command(
     if not isinstance(server_name, str) or not server_name:
         await context.end_session()
         return segments("❌ SSH 会话状态无效，请使用 /ssh 重新连接")
-    user_id = str(context.current_user_id)
+    user_id  = str(context.current_user_id)
     group_id = str(context.current_group_id)
 
     is_valid, error_msg = await ensure_session_connected(context, session, manager)
@@ -1069,7 +1070,7 @@ async def _handle_showimg_command(
         return segments(error_msg)
 
     raw_cwd = session.get(SessionKeys.CWD)
-    cwd = raw_cwd if isinstance(raw_cwd, str) and raw_cwd.startswith("/") else None
+    cwd     = raw_cwd if isinstance(raw_cwd, str) and raw_cwd.startswith("/") else None
 
     if not cwd:
         success, pwd_output = await manager.execute_command(user_id, group_id, server_name, "pwd")
@@ -1097,7 +1098,7 @@ async def _handle_showimg_command(
         return segments(f"❌ 未找到图片文件\n匹配的文件: {', '.join(files)}")
 
     matched_image_count = len(image_files)
-    total_pages = (matched_image_count + _MAX_SHOWIMG_FILES - 1) // _MAX_SHOWIMG_FILES
+    total_pages         = (matched_image_count + _MAX_SHOWIMG_FILES - 1) // _MAX_SHOWIMG_FILES
     if request.page > total_pages:
         return segments(
             f"❌ 页码超出范围：共 {total_pages} 页、{matched_image_count} 张图片\n{_SHOWIMG_USAGE}"
@@ -1106,7 +1107,7 @@ async def _handle_showimg_command(
     page_files = image_files[page_start : page_start + _MAX_SHOWIMG_FILES]
 
     configured_data_dir = getattr(context, "data_dir", None)
-    data_dir = (
+    data_dir            = (
         Path(configured_data_dir)
         if isinstance(configured_data_dir, (str, Path))
         else Path(context.plugin_dir) / "data"
@@ -1115,12 +1116,12 @@ async def _handle_showimg_command(
     await asyncio.to_thread(BoundedFileCache(images_dir, _IMAGE_CACHE_LIMITS).prune)
 
     downloaded_files: list[tuple[int, str, Path]] = []
-    local_paths: list[Path] = []
-    errors: list[str] = []
+    local_paths: list[Path]                       = []
+    errors: list[str]                             = []
     try:
         for global_index, filename in enumerate(page_files, page_start + 1):
             remote_path = resolve_remote_path(filename, remote_dir)
-            local_path = images_dir / f"{uuid.uuid4().hex}{Path(filename).suffix}"
+            local_path  = images_dir / f"{uuid.uuid4().hex}{Path(filename).suffix}"
             local_paths.append(local_path)
             success, message = await manager.download_file(
                 user_id,
@@ -1137,7 +1138,7 @@ async def _handle_showimg_command(
 
         message_parts: list[str] = []
         if downloaded_files:
-            sent_count = len(downloaded_files)
+            sent_count = 0
             for global_index, filename, local_path in downloaded_files:
                 action = build_action(
                     [
@@ -1149,7 +1150,10 @@ async def _handle_showimg_command(
                 )
                 if action:
                     action[ACTION_BYPASS_SINK_KEY] = True
-                    await context.send_action(action)
+                    if await context.send_action(action) is False:
+                        errors.append(f"{filename}: 图片投递失败")
+                    else:
+                        sent_count += 1
             message_parts.append(
                 f"✅ 第 {request.page}/{total_pages} 页已按文件名顺序发送 {sent_count} 张图片"
             )
@@ -1163,7 +1167,7 @@ async def _handle_showimg_command(
             message_parts.append(f"📄 共 {matched_image_count} 张图片\n" + "\n".join(navigation))
 
         if errors:
-            error_msg = f"❌ 下载失败 ({len(errors)} 个):\n" + "\n".join(
+            error_msg = f"❌ 下载或投递失败 ({len(errors)} 个):\n" + "\n".join(
                 f"  • {error}" for error in errors[:5]
             )
             if len(errors) > 5:

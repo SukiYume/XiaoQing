@@ -7,7 +7,7 @@ import json
 import sqlite3
 import uuid
 from contextlib import AbstractContextManager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -63,7 +63,7 @@ class ReminderRepositoryMixin:
         """要求显式时区并转换到 UTC，杜绝本机时区参与租约计算。"""
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError(f"{field_name} must be timezone-aware")
-        return value.astimezone(timezone.utc)
+        return value.astimezone(UTC)
 
     @staticmethod
     def _scheduled_identity(
@@ -80,9 +80,9 @@ class ReminderRepositoryMixin:
     def log_reminder(self, item_id: str, remind_time: str, sent: bool = True) -> None:
         """记录提醒发送（UPSERT：首次 INSERT，重复发送 UPDATE repeat_count + last_sent_at）"""
         require_canonical_utc_timestamp(remind_time, "remind_time")
-        conn = self.get_connection()
+        conn   = self.get_connection()
         cursor = conn.cursor()
-        now = utc_now_iso() if sent else None
+        now    = utc_now_iso() if sent else None
         with conn:
             cursor.execute(
                 """
@@ -104,14 +104,14 @@ class ReminderRepositoryMixin:
         remind_time: str,
         *,
         now: datetime | None = None,
-        lease_seconds: int = PendoConfig.REMINDER_CLAIM_LEASE_SECONDS,
+        lease_seconds: int   = PendoConfig.REMINDER_CLAIM_LEASE_SECONDS,
     ) -> str | None:
         """原子领取一个尚未发送的提醒。"""
         if lease_seconds <= 0:
             raise ValueError("reminder claim lease must be positive")
         require_canonical_utc_timestamp(remind_time, "remind_time")
-        current = self._as_utc(now or datetime.now(timezone.utc), "reminder claim time")
-        token = uuid.uuid4().hex
+        current = self._as_utc(now or datetime.now(UTC), "reminder claim time")
+        token   = uuid.uuid4().hex
         now_text = current.isoformat(timespec="seconds")
         lease_text = (current + timedelta(seconds=lease_seconds)).isoformat(timespec="seconds")
         conn = self.get_connection()
@@ -139,7 +139,7 @@ class ReminderRepositoryMixin:
     def scheduled_delivery_key(task_name: str, owner_id: str, period_key: str) -> str:
         """为一次逻辑投递生成稳定且不暴露明文身份的幂等键。"""
         normalized = ReminderRepositoryMixin._scheduled_identity(task_name, owner_id, period_key)
-        identity = "\0".join(normalized).encode("utf-8")
+        identity   = "\0".join(normalized).encode("utf-8")
         return f"pendo-{hashlib.sha256(identity).hexdigest()}"
 
     def claim_scheduled_delivery(
@@ -149,18 +149,18 @@ class ReminderRepositoryMixin:
         period_key: str,
         *,
         now: datetime | None = None,
-        lease_seconds: int = PendoConfig.REMINDER_CLAIM_LEASE_SECONDS,
+        lease_seconds: int   = PendoConfig.REMINDER_CLAIM_LEASE_SECONDS,
     ) -> dict[str, str] | None:
         """原子创建或领取一个持久化调度投递记录。"""
         if lease_seconds <= 0:
             raise ValueError("scheduled delivery lease must be positive")
         task, owner, period = self._scheduled_identity(task_name, owner_id, period_key)
-        current = self._as_utc(now or datetime.now(timezone.utc), "scheduled delivery claim time")
+        current = self._as_utc(now or datetime.now(UTC), "scheduled delivery claim time")
         now_text = current.isoformat(timespec="seconds")
         token = uuid.uuid4().hex
         lease_text = (current + timedelta(seconds=lease_seconds)).isoformat(timespec="seconds")
         delivery_key = self.scheduled_delivery_key(task, owner, period)
-        conn = self.get_connection()
+        conn         = self.get_connection()
         with conn:
             conn.execute(
                 """
@@ -200,7 +200,7 @@ class ReminderRepositoryMixin:
         """仅在调用方仍持有租约时把调度投递标为已发送。"""
         task, owner, period = self._scheduled_identity(task_name, owner_id, period_key)
         current = self._as_utc(
-            now or datetime.now(timezone.utc), "scheduled delivery completion time"
+            now or datetime.now(UTC), "scheduled delivery completion time"
         ).isoformat(timespec="seconds")
         conn = self.get_connection()
         with conn:
@@ -224,12 +224,12 @@ class ReminderRepositoryMixin:
         claim_token: str,
         *,
         retry_at: datetime | None = None,
-        now: datetime | None = None,
+        now: datetime | None      = None,
     ) -> bool:
         """释放失败租约，使其他 worker 可在指定时间后重试。"""
         task, owner, period = self._scheduled_identity(task_name, owner_id, period_key)
         current = self._as_utc(
-            now or datetime.now(timezone.utc), "scheduled delivery release time"
+            now or datetime.now(UTC), "scheduled delivery release time"
         ).isoformat(timespec="seconds")
         retry_text = (
             self._as_utc(retry_at, "scheduled delivery retry time").isoformat(timespec="seconds")
@@ -257,7 +257,7 @@ class ReminderRepositoryMixin:
         expected_repeat_count: int,
         *,
         now: datetime | None = None,
-        lease_seconds: int = PendoConfig.REMINDER_CLAIM_LEASE_SECONDS,
+        lease_seconds: int   = PendoConfig.REMINDER_CLAIM_LEASE_SECONDS,
     ) -> str | None:
         """原子领取一个已发送提醒的下一次重复投递。"""
         if expected_repeat_count < 1:
@@ -265,8 +265,8 @@ class ReminderRepositoryMixin:
         if lease_seconds <= 0:
             raise ValueError("reminder repeat lease must be positive")
         require_canonical_utc_timestamp(remind_time, "remind_time")
-        current = self._as_utc(now or datetime.now(timezone.utc), "reminder repeat claim time")
-        token = uuid.uuid4().hex
+        current = self._as_utc(now or datetime.now(UTC), "reminder repeat claim time")
+        token   = uuid.uuid4().hex
         now_text = current.isoformat(timespec="seconds")
         lease_text = (current + timedelta(seconds=lease_seconds)).isoformat(timespec="seconds")
         conn = self.get_connection()
@@ -303,7 +303,7 @@ class ReminderRepositoryMixin:
         expected_repeat_count: int,
     ) -> bool:
         require_canonical_utc_timestamp(remind_time, "remind_time")
-        now = utc_now_iso()
+        now  = utc_now_iso()
         conn = self.get_connection()
         with conn:
             cursor = conn.execute(
@@ -350,7 +350,7 @@ class ReminderRepositoryMixin:
     def complete_reminder_claim(self, item_id: str, remind_time: str, claim_token: str) -> bool:
         """仅在当前 worker 仍持有租约时持久化首次投递。"""
         require_canonical_utc_timestamp(remind_time, "remind_time")
-        now = utc_now_iso()
+        now  = utc_now_iso()
         conn = self.get_connection()
         with conn:
             cursor = conn.execute(
@@ -396,10 +396,10 @@ class ReminderRepositoryMixin:
     def confirm_reminder(
         self,
         item_id: str,
-        user_action: str = "confirmed",
-        owner_id: str | None = None,
+        user_action: str        = "confirmed",
+        owner_id: str | None    = None,
         remind_time: str | None = None,
-        allow_future: bool = False,
+        allow_future: bool      = False,
     ) -> dict[str, Any]:
         """确认指定条目的未确认提醒，并在需要时物化确认记录。"""
         if remind_time is not None:
@@ -409,12 +409,12 @@ class ReminderRepositoryMixin:
             if resolved_id is None:
                 return {"status": "success", "message": f"已记录: {user_action}"}
             item_id = resolved_id
-        conn = self.get_connection()
+        conn   = self.get_connection()
         cursor = conn.cursor()
-        now = utc_now_iso()
+        now    = utc_now_iso()
         with conn:
             # 构建 UPDATE 条件
-            where_clauses = ["rl.item_id = ?", "rl.confirmed_at IS NULL"]
+            where_clauses     = ["rl.item_id = ?", "rl.confirmed_at IS NULL"]
             params: list[Any] = [item_id]
             if owner_id is not None:
                 where_clauses.append("i.owner_id = ?")
@@ -504,10 +504,10 @@ class ReminderRepositoryMixin:
                 return None
 
             current = self._as_utc(
-                now or datetime.now(timezone.utc),
+                now or datetime.now(UTC),
                 "future reminder confirmation time",
             )
-            target = datetime.fromisoformat(remind_time).astimezone(timezone.utc)
+            target = datetime.fromisoformat(remind_time).astimezone(UTC)
             if target <= current:
                 return {"outcome": "expired", "time": remind_time}
 
@@ -592,7 +592,7 @@ class ReminderRepositoryMixin:
         allow_future: bool = False,
     ) -> None:
         """为未发送但用户手动确认的提醒补插一条记录"""
-        item_where = ["id = ?", "deleted = 0"]
+        item_where             = ["id = ?", "deleted = 0"]
         item_params: list[Any] = [item_id]
         if owner_id is not None:
             item_where.append("owner_id = ?")
@@ -612,7 +612,7 @@ class ReminderRepositoryMixin:
         if not isinstance(remind_times, list):
             return
 
-        user_id = str(row["owner_id"])
+        user_id       = str(row["owner_id"])
         user_timezone = TimezoneHelper.get_user_timezone(user_id, self)
         timezone_info = user_timezone
         if str(row["type"] or "") == ItemType.EVENT.value and row["timezone"]:
@@ -620,13 +620,13 @@ class ReminderRepositoryMixin:
                 timezone_info = ZoneInfo(str(row["timezone"]))
             except (ZoneInfoNotFoundError, ValueError) as exc:
                 raise ValueError("Invalid event timezone") from exc
-        now_dt = datetime.fromisoformat(now)
+        now_dt      = datetime.fromisoformat(now)
         target_time = self._latest_confirmable_time(
             remind_times,
-            requested_time=remind_time,
-            allow_future=allow_future,
-            now=now_dt,
-            timezone_info=timezone_info,
+            requested_time = remind_time,
+            allow_future   = allow_future,
+            now            = now_dt,
+            timezone_info  = timezone_info,
         )
         if target_time is None:
             return
@@ -682,7 +682,7 @@ class ReminderRepositoryMixin:
 
     def get_reminder_logs(self, item_id: str) -> list[dict[str, Any]]:
         """获取某个条目的所有提醒日志"""
-        conn = self.get_connection()
+        conn   = self.get_connection()
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -705,9 +705,9 @@ class ReminderRepositoryMixin:
         log_maps: dict[str, dict[str, dict[str, Any]]] = {item_id: {} for item_id in unique_ids}
         conn = self.get_connection()
         for offset in range(0, len(unique_ids), _SQLITE_ID_BATCH_SIZE):
-            batch = unique_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
+            batch        = unique_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
             placeholders = ",".join("?" for _ in batch)
-            rows = conn.execute(
+            rows         = conn.execute(
                 f"""
                 SELECT rl.item_id, rl.remind_time, rl.sent_at, rl.confirmed_at,
                        rl.user_action, rl.repeat_count, rl.last_sent_at,
@@ -721,15 +721,15 @@ class ReminderRepositoryMixin:
                 [owner_id, *batch],
             ).fetchall()
             for row in rows:
-                log = dict(row)
-                item_id = str(log.pop("item_id"))
+                log                                        = dict(row)
+                item_id                                    = str(log.pop("item_id"))
                 log_maps[item_id][str(log["remind_time"])] = log
         return log_maps
 
     def get_due_reminder_items(self, *, now: datetime | None = None) -> list[Item]:
         """通过物化 UTC 队列读取当前到期且仍可投递的提醒条目。"""
 
-        current = self._as_utc(now or datetime.now(timezone.utc), "reminder queue time")
+        current = self._as_utc(now or datetime.now(UTC), "reminder queue time")
         now_text = current.isoformat(timespec="seconds")
         initial_cutoff = (
             current - timedelta(seconds=PendoConfig.REMINDER_CHECK_WINDOW_SECONDS)
@@ -796,7 +796,7 @@ class ReminderRepositoryMixin:
         """删除保留期之前的已确认提醒历史。"""
 
         cutoff = self._as_utc(before, "reminder retention cutoff").isoformat()
-        conn = self.get_connection()
+        conn   = self.get_connection()
         with conn:
             cursor = conn.execute(
                 "DELETE FROM reminder_logs WHERE confirmed_at IS NOT NULL AND confirmed_at < ?",
@@ -839,7 +839,7 @@ class ReminderRepositoryMixin:
         不按条目的开始时间截断：“提前数天”的提醒可能已到期，
         即使日程本身仍在较远的将来。
         """
-        conn = self.get_connection()
+        conn   = self.get_connection()
         cursor = conn.cursor()
 
         conditions = [

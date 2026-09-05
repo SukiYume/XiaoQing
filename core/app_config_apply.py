@@ -156,7 +156,7 @@ class AppConfigApplyMixin:
                 # object for the same revision.  Equality is the publication
                 # identity here; treating object identity as a new generation
                 # can cancel the only task that is able to converge revocation.
-                snapshot = accepted
+                snapshot                = accepted
                 new_security_generation = False
             elif self._security_conflict_revision == snapshot.revision:
                 logger.error(
@@ -166,7 +166,7 @@ class AppConfigApplyMixin:
                 )
                 if accepted is None:
                     return
-                snapshot = accepted
+                snapshot                = accepted
                 new_security_generation = False
             else:
                 logger.critical(
@@ -176,11 +176,11 @@ class AppConfigApplyMixin:
                 )
                 baseline = accepted or snapshot
                 snapshot = ConfigSnapshot(
-                    config=baseline.config,
-                    secrets={},
-                    revision=snapshot.revision,
-                    config_status=baseline.config_status,
-                    secrets_status=ConfigSourceStatus.INCONSISTENT,
+                    config         = baseline.config,
+                    secrets        = {},
+                    revision       = snapshot.revision,
+                    config_status  = baseline.config_status,
+                    secrets_status = ConfigSourceStatus.INCONSISTENT,
                 )
                 self._security_conflict_revision = snapshot.revision
         else:
@@ -199,20 +199,20 @@ class AppConfigApplyMixin:
             self._runtime_onebot_credentials_trusted,
         ):
             self._onebot_auth_generation += 1
-        self._runtime_onebot_token = onebot_token
+        self._runtime_onebot_token               = onebot_token
         self._runtime_onebot_credentials_trusted = onebot_credentials_trusted
-        self._runtime_inbound_token = inbound_token
+        self._runtime_inbound_token              = inbound_token
         self._load_admins(trusted_secrets)
 
         desired_http_base = str(snapshot.config.get("onebot_http_base", "") or "").strip()
         desired_http_base = desired_http_base.rstrip("/")
-        sender = self.http_sender
+        sender            = self.http_sender
         if sender is not None:
             try:
                 holder_endpoint = sender.http_base
-                holder_matches = bool(desired_http_base and holder_endpoint == desired_http_base)
-                holder_trusted = holder_matches and onebot_credentials_trusted
-                holder_token = onebot_token if holder_trusted else ""
+                holder_matches  = bool(desired_http_base and holder_endpoint == desired_http_base)
+                holder_trusted  = holder_matches and onebot_credentials_trusted
+                holder_token    = onebot_token if holder_trusted else ""
                 sender.update(
                     holder_endpoint,
                     holder_token,
@@ -220,10 +220,10 @@ class AppConfigApplyMixin:
                 )
                 _require_onebot_holder_credentials(
                     sender,
-                    endpoint_attribute="http_base",
-                    expected_endpoint=holder_endpoint,
-                    expected_token=holder_token,
-                    expected_trust=holder_trusted,
+                    endpoint_attribute = "http_base",
+                    expected_endpoint  = holder_endpoint,
+                    expected_token     = holder_token,
+                    expected_trust     = holder_trusted,
                 )
             except BaseException as exc:
                 logger.exception("Could not synchronously rotate HTTP auth", exc_info=exc)
@@ -233,17 +233,17 @@ class AppConfigApplyMixin:
                 if self.http_sender is sender:
                     self.http_sender = None
 
-        desired_ws_uri = str(snapshot.config.get("onebot_ws_uri", "") or "").strip()
+        desired_ws_uri     = str(snapshot.config.get("onebot_ws_uri", "") or "").strip()
         desired_ws_enabled = bool(snapshot.config.get("enable_ws_client", True))
-        ws_client = self.ws_client
+        ws_client          = self.ws_client
         if ws_client is not None:
             try:
                 holder_endpoint = ws_client.ws_uri
-                holder_matches = bool(
+                holder_matches  = bool(
                     desired_ws_enabled and desired_ws_uri and holder_endpoint == desired_ws_uri
                 )
                 holder_trusted = holder_matches and onebot_credentials_trusted
-                holder_token = onebot_token if holder_trusted else ""
+                holder_token   = onebot_token if holder_trusted else ""
                 ws_client.update(
                     holder_endpoint,
                     holder_token,
@@ -251,10 +251,10 @@ class AppConfigApplyMixin:
                 )
                 _require_onebot_holder_credentials(
                     ws_client,
-                    endpoint_attribute="ws_uri",
-                    expected_endpoint=holder_endpoint,
-                    expected_token=holder_token,
-                    expected_trust=holder_trusted,
+                    endpoint_attribute = "ws_uri",
+                    expected_endpoint  = holder_endpoint,
+                    expected_token     = holder_token,
+                    expected_trust     = holder_trusted,
                 )
             except BaseException as exc:
                 logger.exception("Could not synchronously rotate WebSocket auth", exc_info=exc)
@@ -263,7 +263,7 @@ class AppConfigApplyMixin:
                 # immediately.  Cancelling the listener is best-effort and is
                 # thread-safe when the security callback runs off-loop.
                 self._ws_client_auth_quarantine = ws_client
-                ws_task = self._ws_client_task
+                ws_task                         = self._ws_client_task
                 if ws_task is not None and not ws_task.done():
                     try:
                         ws_task.get_loop().call_soon_threadsafe(ws_task.cancel)
@@ -283,15 +283,15 @@ class AppConfigApplyMixin:
         desired_inbound_key: tuple[Any, ...] | None = None
         try:
             desired_inbound_key = InboundManager.config_key_from_config(
-                config=snapshot.config,
-                token=inbound_token,
+                config = snapshot.config,
+                token  = inbound_token,
             )
         except BaseException as exc:
             logger.warning(
                 "Invalid inbound configuration during synchronous auth rotation: %s",
                 exc,
             )
-        self._runtime_inbound_key = desired_inbound_key
+        self._runtime_inbound_key             = desired_inbound_key
         inbound_holders: list[InboundManager] = []
         for manager in (
             self.inbound_manager,
@@ -334,10 +334,10 @@ class AppConfigApplyMixin:
 
             self._config_apply_generation += 1
             self._config_apply_revision = snapshot.revision
-            owner = _ConfigApplyOwner(
-                generation=self._config_apply_generation,
-                revision=snapshot.revision,
-                security_generation=self._security_generation,
+            owner                       = _ConfigApplyOwner(
+                generation          = self._config_apply_generation,
+                revision            = snapshot.revision,
+                security_generation = self._security_generation,
             )
             self._config_apply_owner = owner
             return owner
@@ -396,27 +396,27 @@ class AppConfigApplyMixin:
         # Validate every scalar before changing any runtime-owned component.
         session_timeout = _coerce_runtime_number(
             config.get("session_timeout", DEFAULT_SESSION_TIMEOUT_SEC),
-            key="session_timeout",
-            default=DEFAULT_SESSION_TIMEOUT_SEC,
-            integer=False,
-            minimum=0.001,
-            maximum=604800.0,
+            key     = "session_timeout",
+            default = DEFAULT_SESSION_TIMEOUT_SEC,
+            integer = False,
+            minimum = 0.001,
+            maximum = 604800.0,
         )
         concurrency = _coerce_runtime_number(
             config.get("max_concurrency", DEFAULT_MAX_CONCURRENCY),
-            key="max_concurrency",
-            default=DEFAULT_MAX_CONCURRENCY,
-            integer=True,
-            minimum=1,
-            maximum=1024,
+            key     = "max_concurrency",
+            default = DEFAULT_MAX_CONCURRENCY,
+            integer = True,
+            minimum = 1,
+            maximum = 1024,
         )
         poll_interval = _coerce_runtime_number(
             config.get("plugin_poll_interval", 3600),
-            key="plugin_poll_interval",
-            default=3600.0,
-            integer=False,
-            minimum=0.01,
-            maximum=86400.0,
+            key     = "plugin_poll_interval",
+            default = 3600.0,
+            integer = False,
+            minimum = 0.01,
+            maximum = 86400.0,
         )
 
         self.dispatcher.refresh_prefix_cache()
@@ -514,7 +514,7 @@ class AppConfigApplyMixin:
         *,
         owner: _ConfigApplyOwner | None = None,
     ) -> None:
-        config = snapshot.config
+        config  = snapshot.config
         secrets = _trusted_secrets(snapshot)
         if not self._owns_config_apply(owner):
             return
@@ -555,16 +555,16 @@ class AppConfigApplyMixin:
             else:
                 self.http_sender = None
 
-        enable_ws = bool(config.get("enable_ws_client", True))
-        ws_uri = str(config.get("onebot_ws_uri", "") or "").strip()
+        enable_ws     = bool(config.get("enable_ws_client", True))
+        ws_uri        = str(config.get("onebot_ws_uri", "") or "").strip()
         ws_queue_size = self._parse_ws_queue_size(config)
         await self._reconcile_ws_client(
-            enable_ws=enable_ws,
-            ws_uri=ws_uri,
-            token=onebot_token,
-            credentials_trusted=onebot_credentials_trusted,
-            queue_size=ws_queue_size,
-            owner=owner,
+            enable_ws           = enable_ws,
+            ws_uri              = ws_uri,
+            token               = onebot_token,
+            credentials_trusted = onebot_credentials_trusted,
+            queue_size          = ws_queue_size,
+            owner               = owner,
         )
 
         if not self._owns_config_apply(owner):

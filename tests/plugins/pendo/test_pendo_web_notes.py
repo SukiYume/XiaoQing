@@ -27,24 +27,24 @@ def test_build_notes_overview_tracks_categories_tags_and_creation_cadence(
     _insert(
         db,
         owner_id,
-        id="n1",
-        title="项目复盘",
-        content="这是第一条笔记",
-        category="工作",
-        tags=["复盘", "工作", "复盘"],
-        created_at="2026-03-24T10:00:00",
-        updated_at="2026-03-25T08:00:00",
+        id         = "n1",
+        title      = "项目复盘",
+        content    = "这是第一条笔记",
+        category   = "工作",
+        tags       = ["复盘", "工作", "复盘"],
+        created_at = "2026-03-24T10:00:00",
+        updated_at = "2026-03-25T08:00:00",
     )
     _insert(
         db,
         owner_id,
-        id="n2",
-        title="阅读摘录",
-        content="第二条笔记更长一些",
-        category="学习",
-        tags=["阅读"],
-        created_at="2026-03-26T09:00:00",
-        updated_at="2026-03-26T09:30:00",
+        id         = "n2",
+        title      = "阅读摘录",
+        content    = "第二条笔记更长一些",
+        category   = "学习",
+        tags       = ["阅读"],
+        created_at = "2026-03-26T09:00:00",
+        updated_at = "2026-03-26T09:30:00",
     )
 
     result = build_notes_overview(db=db, owner_id=owner_id, today="2026-03-26")
@@ -82,20 +82,20 @@ def test_build_notes_overview_clips_current_period_cadence_to_today(db: Database
     _insert(
         db,
         owner_id,
-        id="n1",
-        title="本月笔记",
-        content="本月内容",
-        category="工作",
-        created_at="2026-04-06T09:00:00",
-        updated_at="2026-04-06T09:00:00",
+        id         = "n1",
+        title      = "本月笔记",
+        content    = "本月内容",
+        category   = "工作",
+        created_at = "2026-04-06T09:00:00",
+        updated_at = "2026-04-06T09:00:00",
     )
 
     result = build_notes_overview(
-        db=db,
-        owner_id=owner_id,
-        today="2026-04-08",
-        start_date="2026-04-01",
-        end_date="2026-04-30",
+        db         = db,
+        owner_id   = owner_id,
+        today      = "2026-04-08",
+        start_date = "2026-04-01",
+        end_date   = "2026-04-30",
     )
 
     assert result["summary"]["range_start"] == "2026-04-01"
@@ -112,31 +112,31 @@ def test_build_notes_overview_filters_tags_by_trimmed_exact_match(db: Database) 
     _insert(
         db,
         owner_id,
-        id="n_work",
-        title="工作",
-        content="工作内容",
-        category="工作",
-        tags=["工作"],
-        created_at="2026-03-24T10:00:00",
-        updated_at="2026-03-24T10:00:00",
+        id         = "n_work",
+        title      = "工作",
+        content    = "工作内容",
+        category   = "工作",
+        tags       = ["工作"],
+        created_at = "2026-03-24T10:00:00",
+        updated_at = "2026-03-24T10:00:00",
     )
     _insert(
         db,
         owner_id,
-        id="n_workflow",
-        title="工作流",
-        content="工作流内容",
-        category="工作",
-        tags=["工作流"],
-        created_at="2026-03-25T10:00:00",
-        updated_at="2026-03-25T10:00:00",
+        id         = "n_workflow",
+        title      = "工作流",
+        content    = "工作流内容",
+        category   = "工作",
+        tags       = ["工作流"],
+        created_at = "2026-03-25T10:00:00",
+        updated_at = "2026-03-25T10:00:00",
     )
 
     result = build_notes_overview(
-        db=db,
-        owner_id=owner_id,
-        today="2026-03-26",
-        tags="  工作  ",
+        db       = db,
+        owner_id = owner_id,
+        today    = "2026-03-26",
+        tags     = "  工作  ",
     )
 
     assert result["summary"]["total_count"] == 1
@@ -148,12 +148,12 @@ def test_build_notes_overview_preserves_unicode_casefold_tag_matching(db: Databa
     _insert(
         db,
         owner_id,
-        id="unicode-tag",
-        title="Unicode 标签",
-        content="正文",
-        tags=["legacy"],
-        created_at="2026-03-26T09:00:00",
-        updated_at="2026-03-26T09:00:00",
+        id         = "unicode-tag",
+        title      = "Unicode 标签",
+        content    = "正文",
+        tags       = ["legacy"],
+        created_at = "2026-03-26T09:00:00",
+        updated_at = "2026-03-26T09:00:00",
     )
     with db.get_connection() as conn:
         conn.execute(
@@ -162,10 +162,10 @@ def test_build_notes_overview_preserves_unicode_casefold_tag_matching(db: Databa
         )
 
     result = build_notes_overview(
-        db=db,
-        owner_id=owner_id,
-        today="2026-03-26",
-        tags="STRASSE",
+        db       = db,
+        owner_id = owner_id,
+        today    = "2026-03-26",
+        tags     = "STRASSE",
     )
 
     assert result["summary"]["total_count"] == 1
@@ -186,11 +186,11 @@ def test_build_notes_overview_uses_user_clock_and_excludes_future_week_new(
         _insert(
             db,
             owner_id,
-            id=item_id,
-            title=item_id,
-            content=item_id,
-            created_at=created_at,
-            updated_at=created_at,
+            id         = item_id,
+            title      = item_id,
+            content    = item_id,
+            created_at = created_at,
+            updated_at = created_at,
         )
 
     def user_now(user_id: str, database: Database) -> datetime:
@@ -215,12 +215,12 @@ def test_build_notes_overview_reads_all_pages(db: Database) -> None:
         _insert(
             db,
             owner_id,
-            id=f"note-{index:03d}",
-            title=f"笔记 {index}",
-            content="内容",
-            category="批量",
-            created_at="2026-03-26T09:00:00",
-            updated_at=f"2026-03-26T09:{index % 60:02d}:00",
+            id         = f"note-{index:03d}",
+            title      = f"笔记 {index}",
+            content    = "内容",
+            category   = "批量",
+            created_at = "2026-03-26T09:00:00",
+            updated_at = f"2026-03-26T09:{index % 60:02d}:00",
         )
 
     result = build_notes_overview(db=db, owner_id=owner_id, today="2026-03-26")
@@ -237,19 +237,19 @@ def test_notes_overview_groups_aware_creation_in_user_timezone(db: Database) -> 
     _insert(
         db,
         owner_id,
-        id="aware-note",
-        title="跨 UTC 日期",
-        content="内容",
-        created_at="2026-03-30T23:30:00+00:00",
-        updated_at="2026-03-30T23:30:00+00:00",
+        id         = "aware-note",
+        title      = "跨 UTC 日期",
+        content    = "内容",
+        created_at = "2026-03-30T23:30:00+00:00",
+        updated_at = "2026-03-30T23:30:00+00:00",
     )
 
     result = build_notes_overview(
-        db=db,
-        owner_id=owner_id,
-        today="2026-03-31",
-        start_date="2026-03-31",
-        end_date="2026-03-31",
+        db         = db,
+        owner_id   = owner_id,
+        today      = "2026-03-31",
+        start_date = "2026-03-31",
+        end_date   = "2026-03-31",
     )
 
     assert result["summary"]["week_new_count"] == 1
@@ -264,11 +264,11 @@ def test_build_notes_overview_uses_aggregates_instead_of_item_materialization(
     _insert(
         db,
         owner_id,
-        id="sql-note",
-        title="SQL 聚合",
-        content="正文",
-        created_at="2026-03-26T09:00:00",
-        updated_at="2026-03-26T09:00:00",
+        id         = "sql-note",
+        title      = "SQL 聚合",
+        content    = "正文",
+        created_at = "2026-03-26T09:00:00",
+        updated_at = "2026-03-26T09:00:00",
     )
     monkeypatch.setattr(
         db,

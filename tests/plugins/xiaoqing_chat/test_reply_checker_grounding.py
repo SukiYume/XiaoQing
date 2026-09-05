@@ -1,6 +1,7 @@
 """回复检查器的人设与对话上下文事实锚定。"""
 
 import importlib.util
+import json
 import sys
 from unittest.mock import MagicMock
 
@@ -55,6 +56,12 @@ async def test_checker_requires_direct_grounding_for_each_persona_claim(
         ),
     ]
 
+    # 语义模型负责识别证据无法支持的推断和确定性升级。
+    for index in (2, 3):
+        payload                     = json.loads(outputs[index])
+        payload["persona_grounded"] = False
+        outputs[index]              = json.dumps(payload)
+
     async def fake_chat(**_kwargs):
         return {"ok": True}, "/v1/chat/completions"
 
@@ -83,31 +90,31 @@ async def test_checker_requires_direct_grounding_for_each_persona_claim(
     }
 
     unsupported = await check_reply(
-        reply="我老家在北方",
-        current_text="你老家在哪",
-        grounding_text="你叫小青，是一个大二在读女大学生",
-        chat_history_text="Alice: 你老家在哪",
+        reply             = "我老家在北方",
+        current_text      = "你老家在哪",
+        grounding_text    = "你叫小青，是一个大二在读女大学生",
+        chat_history_text = "Alice: 你老家在哪",
         **common,
     )
     supported = await check_reply(
-        reply="我是大二学生",
-        current_text="你是什么身份",
-        grounding_text="你叫小青，是一个大二在读女大学生",
-        chat_history_text="Alice: 你是什么身份",
+        reply             = "我是大二学生",
+        current_text      = "你是什么身份",
+        grounding_text    = "你叫小青，是一个大二在读女大学生",
+        chat_history_text = "Alice: 你是什么身份",
         **common,
     )
     related_but_not_direct = await check_reply(
-        reply="我平时住在学校附近",
-        current_text="你住在哪里",
-        grounding_text="你叫小青，是一个大二在读女大学生",
-        chat_history_text="Alice: 你住在哪里",
+        reply             = "我平时住在学校附近",
+        current_text      = "你住在哪里",
+        grounding_text    = "你叫小青，是一个大二在读女大学生",
+        chat_history_text = "Alice: 你住在哪里",
         **common,
     )
     overstated_uncertainty = await check_reply(
-        reply="我每天跑步",
-        current_text="你每天跑步吗",
-        grounding_text="我可能每天跑步",
-        chat_history_text="Alice: 你每天跑步吗",
+        reply             = "我每天跑步",
+        current_text      = "你每天跑步吗",
+        grounding_text    = "我可能每天跑步",
+        chat_history_text = "Alice: 你每天跑步吗",
         **common,
     )
 
@@ -182,16 +189,16 @@ async def test_checker_allows_bounded_persona_story_but_rejects_persona_overreac
     }
 
     low_stakes = await check_reply(
-        reply="我有次端着饭找了半天座，最后发现旁边一直有空桌。",
-        current_text="大家最近有什么不丢人但挺好笑的小插曲？",
-        chat_history_text="Alice: 大家最近有什么不丢人但挺好笑的小插曲？",
-        check_omitted_persona_episode=True,
+        reply                         = "我有次端着饭找了半天座，最后发现旁边一直有空桌。",
+        current_text                  = "大家最近有什么不丢人但挺好笑的小插曲？",
+        chat_history_text             = "Alice: 大家最近有什么不丢人但挺好笑的小插曲？",
+        check_omitted_persona_episode = True,
         **common,
     )
     overreach = await check_reply(
-        reply="我在星河大学读计算机。",
-        current_text="小青，你具体在哪所大学？",
-        chat_history_text="Alice: 小青，你具体在哪所大学？",
+        reply             = "我在星河大学读计算机。",
+        current_text      = "小青，你具体在哪所大学？",
+        chat_history_text = "Alice: 小青，你具体在哪所大学？",
         **common,
     )
 
@@ -199,8 +206,8 @@ async def test_checker_allows_bounded_persona_story_but_rejects_persona_overreac
     assert low_stakes.persona_claim_count == 1
     assert overreach.suitable is False
     assert overreach.failure_code == "persona_grounding"
-    assert "低风险、不可核验" in captured_prompts[0]
-    assert "人物创作许可不能替他们补事实" in captured_prompts[0]
+    assert "低风险日常创作" in captured_prompts[0]
+    assert "精确身份、持续关系和现实承诺仍需依据" in captured_prompts[0]
 
 
 @pytest.mark.asyncio
@@ -209,25 +216,25 @@ async def test_checker_forces_boundary_for_profile_fields_declared_unset() -> No
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
     identity = XiaoQingChatConfig().personality.identity
-    result = await check_reply(
-        http_session=None,
-        secrets={"_ai": None},
-        bot_name="小青",
-        reply="我读普通二本，专业和电子沾边，城市在南方。",
-        goal="自我介绍",
-        current_text="小青，你具体在哪所学校、哪个城市、读什么专业？",
-        policy_text="",
-        grounding_text=identity,
-        history=[],
-        chat_history_text="Alice: 小青，你具体在哪所学校、哪个城市、读什么专业？",
-        enable_llm_checker=False,
-        max_repeat_compare=3,
-        similarity_threshold=0.9,
-        max_assistant_in_row=5,
-        timeout_seconds=1.0,
-        max_retry=0,
-        retry_interval_seconds=0.0,
-        allow_low_stakes_persona_fiction=True,
+    result   = await check_reply(
+        http_session                     = None,
+        secrets                          = {"_ai": None},
+        bot_name                         = "小青",
+        reply                            = "我读普通二本，专业和电子沾边，城市在南方。",
+        goal                             = "自我介绍",
+        current_text                     = "小青，你具体在哪所学校、哪个城市、读什么专业？",
+        policy_text                      = "",
+        grounding_text                   = identity,
+        history                          = [],
+        chat_history_text                = "Alice: 小青，你具体在哪所学校、哪个城市、读什么专业？",
+        enable_llm_checker               = False,
+        max_repeat_compare               = 3,
+        similarity_threshold             = 0.9,
+        max_assistant_in_row             = 5,
+        timeout_seconds                  = 1.0,
+        max_retry                        = 0,
+        retry_interval_seconds           = 0.0,
+        allow_low_stakes_persona_fiction = True,
     )
 
     assert result.suitable is False
@@ -276,32 +283,38 @@ async def test_checker_rejects_story_address_that_conflicts_with_stable_gender()
 
 
 @pytest.mark.asyncio
-async def test_persona_story_permission_never_relaxes_third_party_grounding() -> None:
+async def test_persona_story_permission_never_relaxes_third_party_grounding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
+    from tests.plugins.xiaoqing_chat.test_reply_checker_risk_mode import _semantic_outputs
 
+    remote = _semantic_outputs(monkeypatch, [[{"claim": "小何平时就是不爱说话", "evidence": ""}]])
     result = await check_reply(
-        http_session=None,
-        secrets={"_ai": None},
-        bot_name="小青",
-        reply="小何平时就是不爱说话。",
-        goal="自然聊天",
-        current_text="小何今天怎么没说话？",
-        policy_text="",
-        grounding_text="小青是住校的大二理工科女生。",
-        history=[],
-        chat_history_text="Alice: 小何今天怎么没说话？",
-        enable_llm_checker=False,
-        max_repeat_compare=3,
-        similarity_threshold=0.9,
-        max_assistant_in_row=5,
-        timeout_seconds=1.0,
-        max_retry=0,
-        retry_interval_seconds=0.0,
-        allow_low_stakes_persona_fiction=True,
+        http_session                     = None,
+        secrets                          = {"_ai": object()},
+        bot_name                         = "小青",
+        reply                            = "小何平时就是不爱说话。",
+        goal                             = "自然聊天",
+        current_text                     = "小何今天怎么没说话？",
+        policy_text                      = "",
+        grounding_text                   = "小青是住校的大二理工科女生。",
+        history                          = [],
+        chat_history_text                = "Alice: 小何今天怎么没说话？",
+        enable_llm_checker               = True,
+        max_repeat_compare               = 3,
+        similarity_threshold             = 0.9,
+        max_assistant_in_row             = 5,
+        timeout_seconds                  = 1.0,
+        max_retry                        = 0,
+        retry_interval_seconds           = 0.0,
+        allow_low_stakes_persona_fiction = True,
     )
 
     assert result.suitable is False
     assert result.failure_code == "context_grounding"
+
+    remote.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -347,6 +360,10 @@ async def test_checker_requires_direct_dialogue_evidence_for_context_claims(
         ),
     ]
 
+    payload                     = json.loads(outputs[1])
+    payload["context_coherent"] = False
+    outputs[1]                  = json.dumps(payload)
+
     async def fake_chat(**_kwargs):
         return {"ok": True}, "/v1/chat/completions"
 
@@ -376,27 +393,27 @@ async def test_checker_requires_direct_dialogue_evidence_for_context_claims(
     }
 
     unsupported_backstory = await check_reply(
-        reply="她准备换工作了？之前一直忙着另一个项目呢",
-        current_text="小岚说“我准备换工作了”，你怎么看？",
-        chat_history_text="Alice: 小岚说“我准备换工作了”，你怎么看？",
+        reply             = "她准备换工作了？之前一直忙着另一个项目呢",
+        current_text      = "小岚说“我准备换工作了”，你怎么看？",
+        chat_history_text = "Alice: 小岚说“我准备换工作了”，你怎么看？",
         **common,
     )
     question_as_fact = await check_reply(
-        reply="她参加过比赛",
-        current_text="她参加过比赛吗？",
-        chat_history_text="Alice: 她参加过比赛吗？",
+        reply             = "她参加过比赛",
+        current_text      = "她参加过比赛吗？",
+        chat_history_text = "Alice: 她参加过比赛吗？",
         **common,
     )
     supported_statement = await check_reply(
-        reply="她准备换工作了，这决定应该不轻松",
-        current_text="小岚说“我准备换工作了”，你怎么看？",
-        chat_history_text="Alice: 小岚说“我准备换工作了”，你怎么看？",
+        reply             = "她准备换工作了，这决定应该不轻松",
+        current_text      = "小岚说“我准备换工作了”，你怎么看？",
+        chat_history_text = "Alice: 小岚说“我准备换工作了”，你怎么看？",
         **common,
     )
     preserved_uncertainty = await check_reply(
-        reply="她说可能会换工作，听着还没完全决定",
-        current_text="小岚说“我可能会换工作”，你怎么看？",
-        chat_history_text="Alice: 小岚说“我可能会换工作”，你怎么看？",
+        reply             = "她说可能会换工作，听着还没完全决定",
+        current_text      = "小岚说“我可能会换工作”，你怎么看？",
+        chat_history_text = "Alice: 小岚说“我可能会换工作”，你怎么看？",
         **common,
     )
 
@@ -431,23 +448,23 @@ async def test_checker_fails_closed_when_context_scan_is_incomplete(
     )
 
     result = await check_reply(
-        http_session=None,
-        secrets={"_ai": object()},
-        bot_name="小青",
-        reply="一条候选回复",
-        goal="自然聊天",
-        current_text="一条用户消息",
-        policy_text="",
-        grounding_text="",
-        history=[],
-        chat_history_text="Alice: 一条用户消息",
-        enable_llm_checker=True,
-        max_repeat_compare=3,
-        similarity_threshold=0.9,
-        max_assistant_in_row=5,
-        timeout_seconds=1.0,
-        max_retry=0,
-        retry_interval_seconds=0.0,
+        http_session           = None,
+        secrets                = {"_ai": object()},
+        bot_name               = "小青",
+        reply                  = "一条候选回复",
+        goal                   = "自然聊天",
+        current_text           = "一条用户消息",
+        policy_text            = "",
+        grounding_text         = "",
+        history                = [],
+        chat_history_text      = "Alice: 一条用户消息",
+        enable_llm_checker     = True,
+        max_repeat_compare     = 3,
+        similarity_threshold   = 0.9,
+        max_assistant_in_row   = 5,
+        timeout_seconds        = 1.0,
+        max_retry              = 0,
+        retry_interval_seconds = 0.0,
     )
 
     assert result.suitable is False
@@ -477,25 +494,56 @@ async def test_checker_fails_closed_when_persona_scan_is_incomplete(
     )
 
     result = await check_reply(
-        http_session=None,
-        secrets={"_ai": object()},
-        bot_name="小青",
-        reply="一条候选回复",
-        goal="自然聊天",
-        current_text="一条用户消息",
-        policy_text="",
-        grounding_text="",
-        history=[],
-        chat_history_text="Alice: 一条用户消息",
-        enable_llm_checker=True,
-        max_repeat_compare=3,
-        similarity_threshold=0.9,
-        max_assistant_in_row=5,
-        timeout_seconds=1.0,
-        max_retry=0,
-        retry_interval_seconds=0.0,
+        http_session           = None,
+        secrets                = {"_ai": object()},
+        bot_name               = "小青",
+        reply                  = "一条候选回复",
+        goal                   = "自然聊天",
+        current_text           = "一条用户消息",
+        policy_text            = "",
+        grounding_text         = "",
+        history                = [],
+        chat_history_text      = "Alice: 一条用户消息",
+        enable_llm_checker     = True,
+        max_repeat_compare     = 3,
+        similarity_threshold   = 0.9,
+        max_assistant_in_row   = 5,
+        timeout_seconds        = 1.0,
+        max_retry              = 0,
+        retry_interval_seconds = 0.0,
     )
 
     assert result.suitable is False
     assert result.is_hard is True
     assert result.failure_code == "persona_grounding"
+
+
+@pytest.mark.parametrize("semantic_supported", [True, False])
+def test_context_evidence_allows_natural_paraphrase_and_obeys_semantic_axis(semantic_supported):
+    from plugins.xiaoqing_chat.llm.reply_checker import _interpret_checker_response
+
+    reply   = "那这封邮件总算收工了。"
+    payload = {
+        "suitable": True,
+        "need_replan": False,
+        "reason": "语义支持判断",
+        "severity": "soft",
+        "persona_scan_complete": True,
+        "persona_claims": [],
+        "context_scan_complete": True,
+        "context_claims": [{"claim": reply, "evidence": "刚把客户邮件发出去了"}],
+        "context_coherent": semantic_supported,
+    }
+    result = _interpret_checker_response(
+        content                          = json.dumps(payload),
+        reply                            = reply,
+        current_text                     = "刚把客户邮件发出去了",
+        history_text                     = "",
+        grounding_text                   = "",
+        bot_name                         = "小青",
+        allow_low_stakes_persona_fiction = True,
+    )
+    assert result.suitable is semantic_supported
+    if not semantic_supported:
+        assert result.failure_code == "context_grounding"
+        assert result.is_hard

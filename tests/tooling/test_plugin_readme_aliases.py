@@ -1,3 +1,4 @@
+# 验证用户文档中的命令别名与运行清单保持一致。
 """Keep user-facing command aliases synchronized with executable manifests."""
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ import pytest
 
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT = REPOSITORY_ROOT
+ROOT            = REPOSITORY_ROOT
 AUDITED_PLUGINS = (
     "apod",
     "chat",
@@ -28,8 +29,8 @@ AUDITED_PLUGINS = (
     "minecraft",
     "qingssh",
 )
-SECTION_START = "<!-- manifest-command-aliases:start -->"
-SECTION_END = "<!-- manifest-command-aliases:end -->"
+SECTION_START      = "<!-- manifest-command-aliases:start -->"
+SECTION_END        = "<!-- manifest-command-aliases:end -->"
 SLASH_CODE_SPAN_RE = re.compile(r"`/([^`\s]+)`")
 
 
@@ -62,6 +63,6 @@ def test_readme_command_alias_rows_match_manifest(plugin_name: str) -> None:
     """Each visible table row must describe exactly one manifest command."""
 
     plugin_dir = ROOT / "plugins" / plugin_name
-    expected = Counter(_manifest_trigger_sets(plugin_dir))
+    expected   = Counter(_manifest_trigger_sets(plugin_dir))
     documented = Counter(_documented_trigger_sets(plugin_dir))
     assert documented == expected

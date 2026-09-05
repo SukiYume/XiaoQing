@@ -23,12 +23,12 @@ from plugins.qingpet.utils.formatters import format_pet_card
 @pytest.fixture
 def pet_and_user(qingpet_db):
     user_service = UserService(qingpet_db)
-    user = user_service.get_or_create_user("test_user", 123456)
-    pet_service = PetService(qingpet_db)
+    user         = user_service.get_or_create_user("test_user", 123456)
+    pet_service  = PetService(qingpet_db)
     pet_service.adopt_pet("test_user", 123456, "小花")
     pet = qingpet_db.get_pet("test_user", 123456)
     # upgrade to young so can_interact() works when status=NORMAL
-    pet.stage = PetStage.YOUNG
+    pet.stage  = PetStage.YOUNG
     pet.status = PetStatus.NORMAL
     qingpet_db.update_pet(pet)
     return pet, user
@@ -72,7 +72,7 @@ def test_recall_requires_only_coins(pet_and_user, qingpet_db):
     pet.status_expire_time = datetime.now() + timedelta(hours=12)
     qingpet_db.update_pet(pet)
 
-    user.coins = 50
+    user.coins             = 50
     user.friendship_points = 0  # no friendship points
     qingpet_db.update_user(user)
     economy_service = EconomyService(qingpet_db)
@@ -105,7 +105,7 @@ def test_recall_success_message_no_friendship(pet_and_user, qingpet_db):
     pet.status = PetStatus.TRAVELING
     pet.status_expire_time = datetime.now() + timedelta(hours=1)
     qingpet_db.update_pet(pet)
-    user.coins = 100
+    user.coins             = 100
     user.friendship_points = 0
     qingpet_db.update_user(user)
 
@@ -120,8 +120,8 @@ def test_apply_decay_travel_message_no_friendship(pet_and_user, qingpet_db):
     """apply_decay 触发旅行的消息不包含友情点"""
     pet, _ = pet_and_user
     pet.hunger = 0
-    pet.mood = 0
-    pet.clean = 0
+    pet.mood   = 0
+    pet.clean  = 0
     pet.energy = 0
     pet.health = 0
     pet.status = PetStatus.NORMAL
@@ -129,7 +129,7 @@ def test_apply_decay_travel_message_no_friendship(pet_and_user, qingpet_db):
     qingpet_db.update_pet(pet)
 
     pet_service = PetService(qingpet_db)
-    result = pet_service.apply_decay(pet)
+    result      = pet_service.apply_decay(pet)
     if result and "旅行" in result:
         assert "友情" not in result
 
@@ -145,8 +145,8 @@ def test_sleep_expiry_wakes_pet_and_limits_energy_recovery(
 
     pet, _user = pet_and_user
     pet.hunger = 80
-    pet.mood = 80
-    pet.clean = 80
+    pet.mood   = 80
+    pet.clean  = 80
     pet.energy = 50
     pet.health = 80
     assert qingpet_db.update_pet(pet)
@@ -168,7 +168,7 @@ def test_sleep_expiry_wakes_pet_and_limits_energy_recovery(
         assert qingpet_db.update_pet(pet)
 
     current_time["value"] += timedelta(minutes=11)
-    alert = pet_service.apply_decay(pet)
+    alert  = pet_service.apply_decay(pet)
     stored = qingpet_db.get_pet(pet.user_id, pet.group_id)
 
     assert stored is not None
@@ -229,12 +229,12 @@ def test_train_agility_boosts_mood(pet_and_user, qingpet_db):
     import random
 
     random.seed(42)
-    pet_service = PetService(qingpet_db)
+    pet_service    = PetService(qingpet_db)
     mood_increased = False
     for _ in range(20):
-        p = qingpet_db.get_pet("test_user", 123456)
-        p.energy = 100
-        p.mood = 50
+        p            = qingpet_db.get_pet("test_user", 123456)
+        p.energy     = 100
+        p.mood       = 50
         p.last_train = None
         qingpet_db.update_pet(p)
         u = qingpet_db.get_user("test_user", 123456)
@@ -327,7 +327,7 @@ def test_explore_shy_personality_accepted_by_service(pet_and_user, qingpet_db):
     random.seed(7)
     pet, user = pet_and_user
     pet.personality = PetPersonality.SHY
-    pet.health = 80
+    pet.health      = 80
     qingpet_db.update_pet(pet)
     pet_service = PetService(qingpet_db)
     _success, msg, _ = pet_service.explore(pet, user, location="cave")
@@ -340,7 +340,7 @@ def test_explore_smart_personality_accepted_by_service(pet_and_user, qingpet_db)
     random.seed(99)
     pet, user = pet_and_user
     pet.personality = PetPersonality.SMART
-    pet.health = 80
+    pet.health      = 80
     qingpet_db.update_pet(pet)
     pet_service = PetService(qingpet_db)
     _success, msg, _ = pet_service.explore(pet, user, location="ruins")
@@ -373,9 +373,9 @@ def test_format_pet_card_shows_travel_time(pet_and_user, qingpet_db):
 def test_format_pet_card_normal_no_travel_time(pet_and_user, qingpet_db):
     """正常状态不显示旅行剩余时间"""
     pet, user = pet_and_user
-    pet.status = PetStatus.NORMAL
+    pet.status             = PetStatus.NORMAL
     pet.status_expire_time = None
-    card = format_pet_card(pet, user)
+    card                   = format_pet_card(pet, user)
     assert "旅行剩余" not in card
 
 

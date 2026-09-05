@@ -7,7 +7,7 @@ from typing import Final
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT: Final = REPOSITORY_ROOT
+ROOT: Final          = REPOSITORY_ROOT
 ROUTER_CLIENT: Final = ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "router.js"
 
 ROUTER_SETUP: Final = r"""
@@ -44,7 +44,7 @@ def _router_source_for_test() -> str:
     """仅替换 UI 转义依赖，保留真实路由实现。"""
 
     source = ROUTER_CLIENT.read_text(encoding="utf-8")
-    ui_import = "import { escapeHtml } from './utils/ui.js';"
+    ui_import       = "import { escapeHtml } from './utils/ui.js';"
     timezone_import = "import { fetchUserTimeZone } from './utils/timezone.js';"
     assert ui_import in source
     assert timezone_import in source
@@ -63,8 +63,8 @@ def _run_router_client(script: str) -> None:
     assert_node_esm_contract(
         _router_source_for_test(),
         script,
-        cwd=ROOT,
-        setup=ROUTER_SETUP,
+        cwd   = ROOT,
+        setup = ROUTER_SETUP,
     )
 
 

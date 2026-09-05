@@ -50,17 +50,17 @@ from .event_media_common import (
     write_render_cache_entry,
 )
 
-_MEDIA_DETAIL_BASE_MAX_TOKENS = 360
+_MEDIA_DETAIL_BASE_MAX_TOKENS            = 360
 _MEDIA_DETAIL_TRUNCATED_RETRY_MAX_TOKENS = 720
-_MEDIA_SEMANTIC_RETRY_LIMIT = 1
-_VISION_REFUSAL_RE = re.compile(
+_MEDIA_SEMANTIC_RETRY_LIMIT              = 1
+_VISION_REFUSAL_RE                       = re.compile(
     r"(?:无法|不能|没法|未能|暂时无法)(?:查看|读取|识别|访问|打开|看到)|"
     r"(?:看不到|没看到|图片缺失|图像缺失|未提供图片|没有提供图片|图片打不开)"
 )
 
 
 def _media_llm_max_tokens(secrets: Mapping[str, Any], base_max_tokens: int) -> int:
-    base = max(1, int(base_max_tokens))
+    base  = max(1, int(base_max_tokens))
     model = str(secrets.get("model", "") or "").strip().lower()
     if "thinking" not in model:
         return base
@@ -112,7 +112,7 @@ class _MediaAnalysisAttempt:
 @dataclass(frozen=True)
 class _MediaProviderOutcome:
     rendered: RenderedMedia | None = None
-    fallback_reason: str = ""
+    fallback_reason: str           = ""
 
 
 def _media_request_failure_reason(exc: Exception) -> str:
@@ -142,8 +142,8 @@ def _log_media_provider_fallback(
     _media_log(
         context,
         runtime,
-        step="media.analyze.provider_fallback",
-        fields={
+        step   = "media.analyze.provider_fallback",
+        fields = {
             "from_provider": from_provider.get("_provider_name", ""),
             "to_provider": to_provider.get("_provider_name", ""),
             "to_model": to_provider.get("model", ""),
@@ -171,7 +171,7 @@ def _resolve_media_llm_secret_candidates(context) -> list[dict[str, Any]]:
         "_vision_enabled": False,
     }
     capabilities = getattr(context, "capabilities", None)
-    ai_service = getattr(capabilities, "ai", None)
+    ai_service   = getattr(capabilities, "ai", None)
     if ai_service is None:
         return [empty]
     try:
@@ -240,8 +240,8 @@ def _should_refresh_cached_render(
     if normalized_source == "llm":
         if cached_quality == "generic" or _is_low_quality_rendered_media(
             cached_rendered,
-            summary_hint=summary_hint,
-            resolved=resolved,
+            summary_hint = summary_hint,
+            resolved     = resolved,
         ):
             return True
         return cached_prompt_version < _MEDIA_ANALYSIS_PROMPT_VERSION
@@ -251,8 +251,8 @@ def _should_refresh_cached_render(
         cached_rendered, fallback_rendered
     ) or _looks_like_source_placeholder(
         cached_rendered,
-        summary_hint=summary_hint,
-        resolved=resolved,
+        summary_hint = summary_hint,
+        resolved     = resolved,
     )
 
 
@@ -285,13 +285,13 @@ def _prepare_media_for_llm(
             if resolved.is_animated:
                 contact_sheet_payload, frame_count = _render_animation_contact_sheet(payload)
                 return PreparedMediaForLLM(
-                    payload=contact_sheet_payload,
-                    mime_type="image/png",
-                    transcoded=True,
-                    source_mime_type=source_mime,
-                    is_animated=True,
-                    frame_strategy="animation_contact_sheet",
-                    frame_count=frame_count,
+                    payload          = contact_sheet_payload,
+                    mime_type        = "image/png",
+                    transcoded       = True,
+                    source_mime_type = source_mime,
+                    is_animated      = True,
+                    frame_strategy   = "animation_contact_sheet",
+                    frame_count      = frame_count,
                 )
 
             from PIL import Image
@@ -302,24 +302,24 @@ def _prepare_media_for_llm(
                 buffer = io.BytesIO()
                 image.save(buffer, format="PNG")
             return PreparedMediaForLLM(
-                payload=buffer.getvalue(),
-                mime_type="image/png",
-                transcoded=True,
-                source_mime_type=source_mime,
-                is_animated=resolved.is_animated,
-                frame_strategy="single_frame_png",
-                frame_count=1,
+                payload          = buffer.getvalue(),
+                mime_type        = "image/png",
+                transcoded       = True,
+                source_mime_type = source_mime,
+                is_animated      = resolved.is_animated,
+                frame_strategy   = "single_frame_png",
+                frame_count      = 1,
             )
         except Exception as exc:
             raise ValueError("image decode or transcode failed") from exc
     return PreparedMediaForLLM(
-        payload=payload,
-        mime_type=source_mime,
-        transcoded=False,
-        source_mime_type=source_mime,
-        is_animated=resolved.is_animated,
-        frame_strategy="original",
-        frame_count=1,
+        payload          = payload,
+        mime_type        = source_mime,
+        transcoded       = False,
+        source_mime_type = source_mime,
+        is_animated      = resolved.is_animated,
+        frame_strategy   = "original",
+        frame_count      = 1,
     )
 
 
@@ -360,15 +360,15 @@ async def _call_media_llm(
     if not candidates:
         return "", {}
 
-    route_context = dict(candidates[0])
+    route_context                  = dict(candidates[0])
     route_context["_pinned_model"] = None
-    result = await _call_media_llm_once(
-        runtime=runtime,
-        secrets=route_context,
-        messages=messages,
-        temperature=temperature,
-        top_p=top_p,
-        max_tokens=max_tokens,
+    result                         = await _call_media_llm_once(
+        runtime     = runtime,
+        secrets     = route_context,
+        messages    = messages,
+        temperature = temperature,
+        top_p       = top_p,
+        max_tokens  = max_tokens,
     )
     return result.text, result.used_secrets
 
@@ -384,22 +384,22 @@ async def _call_media_llm_once(
 ) -> MediaLLMCallResult:
     """发起一次有界视觉请求，只保留可安全脱敏的元数据。"""
 
-    cfg = _media_cfg(runtime)
-    effective_max_tokens = _media_llm_max_tokens(secrets, max_tokens)
-    used_secrets = dict(secrets)
+    cfg                                   = _media_cfg(runtime)
+    effective_max_tokens                  = _media_llm_max_tokens(secrets, max_tokens)
+    used_secrets                          = dict(secrets)
     used_secrets["_effective_max_tokens"] = effective_max_tokens
     response_data, used_profile = await chat_completions_raw_with_fallback_paths(
-        secrets=secrets,
-        route="vision",
-        required_modalities=("text", "image"),
-        model=str(secrets.get("model", "") or ""),
-        messages=messages,
-        temperature=temperature,
-        top_p=top_p,
-        max_tokens=effective_max_tokens,
-        timeout_seconds=float(cfg.vision_timeout_seconds),
-        max_retry=int(cfg.vision_max_retry),
-        retry_interval_seconds=float(cfg.vision_retry_interval_seconds),
+        secrets                = secrets,
+        route                  = "vision",
+        required_modalities    = ("text", "image"),
+        model                  = str(secrets.get("model", "") or ""),
+        messages               = messages,
+        temperature            = temperature,
+        top_p                  = top_p,
+        max_tokens             = effective_max_tokens,
+        timeout_seconds        = float(cfg.vision_timeout_seconds),
+        max_retry              = int(cfg.vision_max_retry),
+        retry_interval_seconds = float(cfg.vision_retry_interval_seconds),
     )
     text = extract_response_content(response_data)
     try:
@@ -420,11 +420,11 @@ async def _call_media_llm_once(
             }
         )
     return MediaLLMCallResult(
-        text=text,
-        used_secrets=used_secrets,
-        used_path=str(used_profile or ""),
-        finish_reason=extract_response_finish_reason(response_data),
-        raw_chars=len(text),
+        text          = text,
+        used_secrets  = used_secrets,
+        used_path     = str(used_profile or ""),
+        finish_reason = extract_response_finish_reason(response_data),
+        raw_chars     = len(text),
     )
 
 
@@ -441,9 +441,9 @@ def _parse_detail_analysis_output(
     if kind not in {"image", "emoji"}:
         kind = _fallback_kind(
             resolved.source_name,
-            width=resolved.width,
-            height=resolved.height,
-            segment_type=resolved.segment_type,
+            width        = resolved.width,
+            height       = resolved.height,
+            segment_type = resolved.segment_type,
         )
     if prefer_emoji:
         kind = "emoji"
@@ -467,19 +467,19 @@ def _parse_detail_analysis_output(
         raw_output = str(output or "").strip().strip("`")
         if _can_use_raw_media_description(raw_output):
             description = raw_output
-    description = _merge_visible_text(description, visible_text)
+    description  = _merge_visible_text(description, visible_text)
     emotion_tags = _normalize_emotion_tags(
         data.get("emotion_tags") or data.get("emotions") or data.get("tone_tags")
     )
     if kind == "emoji" and not emotion_tags:
         emotion_tags = _normalize_emotion_tags(description or visible_text)
     return MediaAnalysisDraft(
-        kind=kind,
-        description=description.strip(),
-        visible_text=visible_text.strip(),
-        emotion_tags=emotion_tags,
-        raw_output=str(output or "").strip(),
-        parsed_json=parsed_json,
+        kind         = kind,
+        description  = description.strip(),
+        visible_text = visible_text.strip(),
+        emotion_tags = emotion_tags,
+        raw_output   = str(output or "").strip(),
+        parsed_json  = parsed_json,
     )
 
 
@@ -491,7 +491,7 @@ def _finalize_media_analysis(
 ) -> tuple[RenderedMedia, bool, str]:
     """构造确定性渲染结果，并报告是否使用了来源降级。"""
 
-    kind = detail.kind
+    kind                  = detail.kind
     used_summary_fallback = False
     if kind == "emoji":
         if refined and refined.description and not _is_generic_media_label(refined.description):
@@ -503,7 +503,7 @@ def _finalize_media_analysis(
         elif detail.description:
             description = detail.description
         else:
-            description = _safe_source_name(resolved.source_name) or "一张表情包"
+            description           = _safe_source_name(resolved.source_name) or "一张表情包"
             used_summary_fallback = True
         emotion_tags = (
             refined.emotion_tags if refined and refined.emotion_tags else detail.emotion_tags
@@ -513,25 +513,25 @@ def _finalize_media_analysis(
     else:
         description = detail.description
         if not description:
-            description = _safe_source_name(resolved.source_name) or "一张图片"
+            description           = _safe_source_name(resolved.source_name) or "一张图片"
             used_summary_fallback = True
         emotion_tags = ()
 
-    marker = _build_marker(kind, description, emotion_tags)
+    marker   = _build_marker(kind, description, emotion_tags)
     rendered = RenderedMedia(
-        media_hash=resolved.media_hash,
-        kind=kind,
-        description=description,
-        emotion_tags=emotion_tags,
-        marker=marker,
-        cached_path=resolved.cached_path,
+        media_hash   = resolved.media_hash,
+        kind         = kind,
+        description  = description,
+        emotion_tags = emotion_tags,
+        marker       = marker,
+        cached_path  = resolved.cached_path,
     )
     quality = (
         "generic"
         if _is_low_quality_rendered_media(
             rendered,
-            summary_hint=resolved.source_name,
-            resolved=resolved,
+            summary_hint = resolved.source_name,
+            resolved     = resolved,
         )
         else "detailed"
     )
@@ -598,30 +598,30 @@ async def _refine_emoji_analysis_with_llm(
         },
     ]
     output, used_secrets = await _call_media_llm(
-        context=context,
-        runtime=runtime,
-        messages=messages,
-        temperature=0.2,
-        top_p=0.9,
-        max_tokens=120,
+        context     = context,
+        runtime     = runtime,
+        messages    = messages,
+        temperature = 0.2,
+        top_p       = 0.9,
+        max_tokens  = 120,
     )
-    data = parse_first_json_object(output) or {}
+    data        = parse_first_json_object(output) or {}
     description = _extract_first_text_value(data, "description", "label", "summary")
     if not description:
         raw_output = str(output or "").strip().strip("`")
         if _can_use_raw_media_description(raw_output):
             description = raw_output
-    description = description.strip()
+    description  = description.strip()
     emotion_tags = _normalize_emotion_tags(data.get("emotion_tags") or data.get("emotions"))
     if not emotion_tags:
         emotion_tags = draft.emotion_tags
     return (
         MediaAnalysisDraft(
-            kind="emoji",
-            description=description,
-            visible_text=draft.visible_text,
-            emotion_tags=emotion_tags,
-            raw_output=str(output or "").strip(),
+            kind         = "emoji",
+            description  = description,
+            visible_text = draft.visible_text,
+            emotion_tags = emotion_tags,
+            raw_output   = str(output or "").strip(),
         ),
         used_secrets,
     )
@@ -646,12 +646,12 @@ def _schedule_background_emoji_refine(
         return
 
     detail = MediaAnalysisDraft(
-        kind="emoji",
-        description=rendered.description,
-        visible_text="",
-        emotion_tags=rendered.emotion_tags,
-        raw_output="",
-        parsed_json=True,
+        kind         = "emoji",
+        description  = rendered.description,
+        visible_text = "",
+        emotion_tags = rendered.emotion_tags,
+        raw_output   = "",
+        parsed_json  = True,
     )
 
     async def _run() -> None:
@@ -659,18 +659,18 @@ def _schedule_background_emoji_refine(
             refined, refined_provider = await asyncio.wait_for(
                 _refine_emoji_analysis_with_llm(
                     detail,
-                    resolved=resolved,
-                    context=context,
-                    runtime=runtime,
+                    resolved = resolved,
+                    context  = context,
+                    runtime  = runtime,
                 ),
                 timeout=timeout,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             _media_log(
                 context,
                 runtime,
-                step="media.analyze.refine.background.timeout",
-                fields={
+                step   = "media.analyze.refine.background.timeout",
+                fields = {
                     "media_hash": resolved.media_hash[:12],
                     "timeout_seconds": f"{timeout:.3f}",
                 },
@@ -681,8 +681,8 @@ def _schedule_background_emoji_refine(
             _media_log(
                 context,
                 runtime,
-                step="media.analyze.refine.background.fail",
-                fields={
+                step   = "media.analyze.refine.background.fail",
+                fields = {
                     "media_hash": resolved.media_hash[:12],
                     "error_type": type(exc).__name__,
                 },
@@ -691,22 +691,22 @@ def _schedule_background_emoji_refine(
             return
 
         refined_rendered, used_summary_fallback, quality = _finalize_media_analysis(
-            detail=detail,
-            refined=refined,
-            resolved=resolved,
+            detail   = detail,
+            refined  = refined,
+            resolved = resolved,
         )
         semantic_reason = _semantic_retry_reason(
-            detail=detail,
-            rendered=refined_rendered,
-            used_summary_fallback=used_summary_fallback,
-            resolved=resolved,
+            detail                = detail,
+            rendered              = refined_rendered,
+            used_summary_fallback = used_summary_fallback,
+            resolved              = resolved,
         )
         if semantic_reason:
             _media_log(
                 context,
                 runtime,
-                step="media.analyze.refine.background.skip",
-                fields={
+                step   = "media.analyze.refine.background.skip",
+                fields = {
                     "media_hash": resolved.media_hash[:12],
                     "reason_code": semantic_reason,
                     "description": refined_rendered.description,
@@ -737,8 +737,8 @@ def _schedule_background_emoji_refine(
             _media_log(
                 context,
                 runtime,
-                step="media.analyze.refine.background.skip",
-                fields={
+                step   = "media.analyze.refine.background.skip",
+                fields = {
                     "media_hash": resolved.media_hash[:12],
                     "reason_code": "quality_not_improved",
                     "quality": quality,
@@ -751,15 +751,15 @@ def _schedule_background_emoji_refine(
             context.data_dir,
             resolved,
             refined_rendered,
-            source="llm",
-            quality=quality,
-            prompt_version=_MEDIA_ANALYSIS_PROMPT_VERSION,
+            source         = "llm",
+            quality        = quality,
+            prompt_version = _MEDIA_ANALYSIS_PROMPT_VERSION,
         )
         _media_log(
             context,
             runtime,
-            step="media.analyze.refine.background.ok",
-            fields={
+            step   = "media.analyze.refine.background.ok",
+            fields = {
                 "provider": refined_provider.get("_provider_name", ""),
                 "model": refined_provider.get("model", ""),
                 "max_tokens": refined_provider.get("_effective_max_tokens", ""),
@@ -774,8 +774,8 @@ def _schedule_background_emoji_refine(
     _media_log(
         context,
         runtime,
-        step="media.analyze.refine.background.spawn",
-        fields={"media_hash": resolved.media_hash[:12]},
+        step   = "media.analyze.refine.background.spawn",
+        fields = {"media_hash": resolved.media_hash[:12]},
     )
     _spawn_bg_task(context, _run(), name=f"media_refine:{resolved.media_hash[:12]}")
 
@@ -788,15 +788,15 @@ def _resolve_media_analysis_candidates(
 ) -> tuple[Any, list[dict[str, Any]]] | None:
     """验证媒体配置，并按优先级返回不含凭据的模型 profile。"""
 
-    cfg = _media_cfg(runtime)
-    candidates = _resolve_media_llm_secret_candidates(context)
+    cfg             = _media_cfg(runtime)
+    candidates      = _resolve_media_llm_secret_candidates(context)
     primary_secrets = candidates[0] if candidates else {}
     if not any(bool(secrets.get("_vision_enabled")) for secrets in candidates):
         _media_log(
             context,
             runtime,
-            step="media.analyze.skip",
-            fields={
+            step   = "media.analyze.skip",
+            fields = {
                 "reason": "vision_not_configured",
                 "media_hash": resolved.media_hash[:12],
                 "segment_type": resolved.segment_type,
@@ -811,8 +811,8 @@ def _resolve_media_analysis_candidates(
     _media_log(
         context,
         runtime,
-        step="media.analyze.skip",
-        fields={
+        step   = "media.analyze.skip",
+        fields = {
             "reason": "vision_route_unavailable",
             "provider": primary_secrets.get("_provider_name", ""),
             "provider_scope": primary_secrets.get("_provider_scope", ""),
@@ -878,8 +878,8 @@ async def _prepare_media_analysis_request(
         _media_log(
             context,
             runtime,
-            step="media.analyze.skip",
-            fields={
+            step   = "media.analyze.skip",
+            fields = {
                 "reason": "media_too_large",
                 "bytes": payload_size,
                 "limit": int(cfg.max_analyze_bytes),
@@ -922,8 +922,8 @@ def _log_media_analysis_start(
     _media_log(
         context,
         runtime,
-        step="media.analyze.start",
-        fields={
+        step   = "media.analyze.start",
+        fields = {
             "provider": provider_secrets.get("_provider_name", ""),
             "provider_scope": provider_secrets.get("_provider_scope", ""),
             "model": provider_secrets.get("model", ""),
@@ -959,8 +959,8 @@ def _log_media_analysis_exception(
     _media_log(
         context,
         runtime,
-        step="media.analyze.fail",
-        fields={
+        step   = "media.analyze.fail",
+        fields = {
             "provider": provider_secrets.get("_provider_name", ""),
             "model": provider_secrets.get("model", ""),
             "media_hash": resolved.media_hash[:12],
@@ -984,33 +984,33 @@ async def _run_media_analysis_attempt(
     """调用一个服务商一次，并规范化其原始响应。"""
 
     _log_media_analysis_start(
-        context=context,
-        runtime=runtime,
-        resolved=resolved,
-        prepared=request.prepared,
-        provider_secrets=provider_secrets,
-        prefer_emoji=prefer_emoji,
-        semantic_attempt=semantic_attempt,
-        attempt_base_max_tokens=attempt_base_max_tokens,
+        context                 = context,
+        runtime                 = runtime,
+        resolved                = resolved,
+        prepared                = request.prepared,
+        provider_secrets        = provider_secrets,
+        prefer_emoji            = prefer_emoji,
+        semantic_attempt        = semantic_attempt,
+        attempt_base_max_tokens = attempt_base_max_tokens,
     )
     llm_result = await _call_media_llm_once(
-        runtime=runtime,
-        secrets=provider_secrets,
-        messages=request.messages,
-        temperature=0.2,
-        top_p=0.9,
-        max_tokens=attempt_base_max_tokens,
+        runtime     = runtime,
+        secrets     = provider_secrets,
+        messages    = request.messages,
+        temperature = 0.2,
+        top_p       = 0.9,
+        max_tokens  = attempt_base_max_tokens,
     )
     detail = _parse_detail_analysis_output(
         llm_result.text,
-        resolved=resolved,
-        prefer_emoji=prefer_emoji,
+        resolved     = resolved,
+        prefer_emoji = prefer_emoji,
     )
     _media_log(
         context,
         runtime,
-        step="media.analyze.detail.ok",
-        fields={
+        step   = "media.analyze.detail.ok",
+        fields = {
             "provider": llm_result.used_secrets.get("_provider_name", ""),
             "model": llm_result.used_secrets.get("model", ""),
             "max_tokens": llm_result.used_secrets.get("_effective_max_tokens", ""),
@@ -1027,16 +1027,16 @@ async def _run_media_analysis_attempt(
         },
     )
     rendered, used_summary_fallback, quality = _finalize_media_analysis(
-        detail=detail,
-        refined=None,
-        resolved=resolved,
+        detail   = detail,
+        refined  = None,
+        resolved = resolved,
     )
     return _MediaAnalysisAttempt(
-        llm_result=llm_result,
-        detail=detail,
-        rendered=rendered,
-        used_summary_fallback=used_summary_fallback,
-        quality=quality,
+        llm_result            = llm_result,
+        detail                = detail,
+        rendered              = rendered,
+        used_summary_fallback = used_summary_fallback,
+        quality               = quality,
     )
 
 
@@ -1065,16 +1065,16 @@ def _log_invalid_media_analysis(
     _media_log(
         context,
         runtime,
-        step="media.analyze.semantic.invalid",
-        fields=fields,
-        level="warning",
+        step   = "media.analyze.semantic.invalid",
+        fields = fields,
+        level  = "warning",
     )
     if will_retry:
         _media_log(
             context,
             runtime,
-            step="media.analyze.provider_retry",
-            fields={
+            step   = "media.analyze.provider_retry",
+            fields = {
                 key: value for key, value in fields.items() if key not in {"description", "quality"}
             },
             level="warning",
@@ -1094,8 +1094,8 @@ def _log_terminal_semantic_failure(
     _media_log(
         context,
         runtime,
-        step="media.analyze.fail",
-        fields={
+        step   = "media.analyze.fail",
+        fields = {
             "provider": attempt.llm_result.used_secrets.get("_provider_name", ""),
             "model": attempt.llm_result.used_secrets.get("model", ""),
             "media_hash": resolved.media_hash[:12],
@@ -1115,34 +1115,34 @@ async def _commit_media_analysis_attempt(
 ) -> RenderedMedia:
     """应用可选增强、写入成功审计并返回结果。"""
 
-    rendered = attempt.rendered
+    rendered      = attempt.rendered
     cultural_hint = ""
     if _should_extract_cultural_hint(rendered, attempt.detail, runtime):
         cultural_hint = await _extract_cultural_hint(
-            rendered=rendered,
-            detail=attempt.detail,
-            resolved=resolved,
-            context=context,
-            runtime=runtime,
+            rendered = rendered,
+            detail   = attempt.detail,
+            resolved = resolved,
+            context  = context,
+            runtime  = runtime,
         )
         if cultural_hint:
             rendered = RenderedMedia(
-                media_hash=rendered.media_hash,
-                kind=rendered.kind,
-                description=rendered.description,
-                emotion_tags=rendered.emotion_tags,
-                marker=rendered.marker,
-                cached_path=rendered.cached_path,
-                face_id=rendered.face_id,
-                cultural_hint=cultural_hint,
+                media_hash    = rendered.media_hash,
+                kind          = rendered.kind,
+                description   = rendered.description,
+                emotion_tags  = rendered.emotion_tags,
+                marker        = rendered.marker,
+                cached_path   = rendered.cached_path,
+                face_id       = rendered.face_id,
+                cultural_hint = cultural_hint,
             )
 
     llm_result = attempt.llm_result
     _media_log(
         context,
         runtime,
-        step="media.analyze.ok",
-        fields={
+        step   = "media.analyze.ok",
+        fields = {
             "provider": llm_result.used_secrets.get("_provider_name", ""),
             "model": llm_result.used_secrets.get("model", ""),
             "max_tokens": llm_result.used_secrets.get("_effective_max_tokens", ""),
@@ -1184,53 +1184,53 @@ async def _analyze_media_with_provider(
         )
         try:
             attempt = await _run_media_analysis_attempt(
-                context=context,
-                runtime=runtime,
-                resolved=resolved,
-                request=request,
-                provider_secrets=provider_secrets,
-                prefer_emoji=prefer_emoji,
-                semantic_attempt=semantic_attempt,
-                attempt_base_max_tokens=attempt_base_max_tokens,
+                context                 = context,
+                runtime                 = runtime,
+                resolved                = resolved,
+                request                 = request,
+                provider_secrets        = provider_secrets,
+                prefer_emoji            = prefer_emoji,
+                semantic_attempt        = semantic_attempt,
+                attempt_base_max_tokens = attempt_base_max_tokens,
             )
         except Exception as exc:
             if has_fallback_provider and _is_media_request_failure(exc):
                 return _MediaProviderOutcome(fallback_reason=_media_request_failure_reason(exc))
             _log_media_analysis_exception(
                 exc,
-                context=context,
-                runtime=runtime,
-                resolved=resolved,
-                provider_secrets=provider_secrets,
+                context          = context,
+                runtime          = runtime,
+                resolved         = resolved,
+                provider_secrets = provider_secrets,
             )
             raise
 
         semantic_reason = _semantic_retry_reason(
-            detail=attempt.detail,
-            rendered=attempt.rendered,
-            used_summary_fallback=attempt.used_summary_fallback,
-            resolved=resolved,
-            finish_reason=attempt.llm_result.finish_reason,
+            detail                = attempt.detail,
+            rendered              = attempt.rendered,
+            used_summary_fallback = attempt.used_summary_fallback,
+            resolved              = resolved,
+            finish_reason         = attempt.llm_result.finish_reason,
         )
         if not semantic_reason:
             rendered = await _commit_media_analysis_attempt(
                 attempt,
-                context=context,
-                runtime=runtime,
-                resolved=resolved,
+                context  = context,
+                runtime  = runtime,
+                resolved = resolved,
             )
             return _MediaProviderOutcome(rendered=rendered)
 
         last_semantic_reason = semantic_reason
-        will_retry = semantic_attempt <= _MEDIA_SEMANTIC_RETRY_LIMIT
+        will_retry           = semantic_attempt <= _MEDIA_SEMANTIC_RETRY_LIMIT
         _log_invalid_media_analysis(
             attempt,
-            semantic_reason=semantic_reason,
-            semantic_attempt=semantic_attempt,
-            will_retry=will_retry,
-            context=context,
-            runtime=runtime,
-            resolved=resolved,
+            semantic_reason  = semantic_reason,
+            semantic_attempt = semantic_attempt,
+            will_retry       = will_retry,
+            context          = context,
+            runtime          = runtime,
+            resolved         = resolved,
         )
         if will_retry:
             continue
@@ -1239,10 +1239,10 @@ async def _analyze_media_with_provider(
 
         _log_terminal_semantic_failure(
             attempt,
-            semantic_reason=semantic_reason,
-            context=context,
-            runtime=runtime,
-            resolved=resolved,
+            semantic_reason = semantic_reason,
+            context         = context,
+            runtime         = runtime,
+            resolved        = resolved,
         )
         return _MediaProviderOutcome()
 
@@ -1260,8 +1260,8 @@ async def _analyze_media_with_llm(
 
     candidate_setup = _resolve_media_analysis_candidates(
         resolved,
-        context=context,
-        runtime=runtime,
+        context = context,
+        runtime = runtime,
     )
     if candidate_setup is None:
         return None
@@ -1269,43 +1269,43 @@ async def _analyze_media_with_llm(
 
     request = await _prepare_media_analysis_request(
         resolved,
-        context=context,
-        runtime=runtime,
-        cfg=cfg,
-        prefer_emoji=prefer_emoji,
+        context      = context,
+        runtime      = runtime,
+        cfg          = cfg,
+        prefer_emoji = prefer_emoji,
     )
     if request is None:
         return None
 
     previous_provider: dict[str, Any] | None = None
-    previous_reason = ""
+    previous_reason                          = ""
     for index, provider_secrets in enumerate(complete_candidates):
         if previous_provider is not None:
             _log_media_provider_fallback(
-                context=context,
-                runtime=runtime,
-                from_provider=previous_provider,
-                to_provider=provider_secrets,
-                max_tokens=_media_detail_base_max_tokens_for_reason(previous_reason),
-                reason=previous_reason,
+                context       = context,
+                runtime       = runtime,
+                from_provider = previous_provider,
+                to_provider   = provider_secrets,
+                max_tokens    = _media_detail_base_max_tokens_for_reason(previous_reason),
+                reason        = previous_reason,
             )
 
         outcome = await _analyze_media_with_provider(
-            context=context,
-            runtime=runtime,
-            resolved=resolved,
-            request=request,
-            provider_secrets=provider_secrets,
-            prefer_emoji=prefer_emoji,
-            previous_reason=previous_reason,
-            has_fallback_provider=index + 1 < len(complete_candidates),
+            context               = context,
+            runtime               = runtime,
+            resolved              = resolved,
+            request               = request,
+            provider_secrets      = provider_secrets,
+            prefer_emoji          = prefer_emoji,
+            previous_reason       = previous_reason,
+            has_fallback_provider = index + 1 < len(complete_candidates),
         )
         if outcome.rendered is not None:
             return outcome.rendered
         if not outcome.fallback_reason:
             return None
         previous_provider = provider_secrets
-        previous_reason = outcome.fallback_reason
+        previous_reason   = outcome.fallback_reason
 
     return None
 
@@ -1321,7 +1321,7 @@ def _load_and_prepare_media_for_llm(
         payload = _read_file_bounded(resolved.cached_path, max_bytes=max_bytes)
     except MediaPayloadTooLarge as exc:
         return None, "", exc.size
-    prepared = _prepare_media_for_llm(resolved, payload)
+    prepared  = _prepare_media_for_llm(resolved, payload)
     image_b64 = base64.b64encode(prepared.payload).decode("ascii")
     return prepared, image_b64, len(payload)
 
@@ -1337,7 +1337,7 @@ def _should_extract_cultural_hint(
     if rendered.kind != "emoji":
         return False
     visible_text = str(getattr(detail, "visible_text", "") or "").strip()
-    description = str(rendered.description or "").strip()
+    description  = str(rendered.description or "").strip()
     return bool(visible_text) or "“" in description or '"' in description
 
 
@@ -1351,11 +1351,11 @@ async def _extract_cultural_hint(
 ) -> str:
     """在独立超时和输出上限内请求可选的简短梗背景。"""
 
-    cfg = _media_cfg(runtime)
+    cfg     = _media_cfg(runtime)
     timeout = max(1.0, cfg.meme_cultural_hint_timeout_seconds)
 
     visible_text = str(getattr(detail, "visible_text", "") or "").strip()
-    description = str(rendered.description or "").strip()
+    description  = str(rendered.description or "").strip()
 
     payload = {
         "description": description,
@@ -1376,21 +1376,21 @@ async def _extract_cultural_hint(
     try:
         output, used_secrets = await asyncio.wait_for(
             _call_media_llm(
-                context=context,
-                runtime=runtime,
-                messages=messages,
-                temperature=0.2,
-                top_p=0.9,
-                max_tokens=80,
+                context     = context,
+                runtime     = runtime,
+                messages    = messages,
+                temperature = 0.2,
+                top_p       = 0.9,
+                max_tokens  = 80,
             ),
             timeout=timeout,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         _media_log(
             context,
             runtime,
-            step="media.cultural_hint.timeout",
-            fields={
+            step   = "media.cultural_hint.timeout",
+            fields = {
                 "media_hash": resolved.media_hash[:12],
                 "timeout_seconds": f"{timeout:.3f}",
             },
@@ -1401,8 +1401,8 @@ async def _extract_cultural_hint(
         _media_log(
             context,
             runtime,
-            step="media.cultural_hint.fail",
-            fields={
+            step   = "media.cultural_hint.fail",
+            fields = {
                 "media_hash": resolved.media_hash[:12],
                 "error_type": type(exc).__name__,
             },
@@ -1422,8 +1422,8 @@ async def _extract_cultural_hint(
     _media_log(
         context,
         runtime,
-        step="media.cultural_hint.ok",
-        fields={
+        step   = "media.cultural_hint.ok",
+        fields = {
             "provider": used_secrets.get("_provider_name", ""),
             "model": used_secrets.get("model", ""),
             "media_hash": resolved.media_hash[:12],

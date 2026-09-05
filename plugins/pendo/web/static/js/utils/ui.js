@@ -59,7 +59,7 @@ export function injectStyles(styleId, cssText) {
 
 /** 订阅跨页面数据失效事件，并返回可重复调用的退订函数。 */
 export function subscribeDataChanges(expectedType, refresh) {
-    let active = true;
+    let active    = true;
     const handler = (event) => {
         const changedType = event?.detail?.type;
         // 省略 type 表示全局失效；带 type 时只刷新对应页面。

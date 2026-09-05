@@ -22,26 +22,26 @@ def _catalog_node(
     help_text: str,
     usage: str,
     *,
-    aliases: tuple[str, ...] = (),
+    aliases: tuple[str, ...]                 = (),
     children: tuple[CommandCatalogNode, ...] = (),
-    permission: str = "public",
-    contexts: tuple[str, ...] = ("private", "group"),
-    examples: tuple[str, ...] = (),
-    invalid_examples: tuple[str, ...] = (),
+    permission: str                          = "public",
+    contexts: tuple[str, ...]                = ("private", "group"),
+    examples: tuple[str, ...]                = (),
+    invalid_examples: tuple[str, ...]        = (),
 ) -> CommandCatalogNode:
     return CommandCatalogNode(
-        code=code,
-        plugin=plugin,
-        path=path,
-        name=path[-1],
-        aliases=aliases,
-        help_text=help_text,
-        usage=usage,
-        permission=permission,
-        contexts=contexts,
-        examples=examples,
-        invalid_examples=invalid_examples,
-        children=children,
+        code             = code,
+        plugin           = plugin,
+        path             = path,
+        name             = path[-1],
+        aliases          = aliases,
+        help_text        = help_text,
+        usage            = usage,
+        permission       = permission,
+        contexts         = contexts,
+        examples         = examples,
+        invalid_examples = invalid_examples,
+        children         = children,
     )
 
 
@@ -52,9 +52,9 @@ def _sample_catalog() -> tuple[CommandCatalogNode, ...]:
         ("help", "search"),
         "搜索命令",
         "/help search <关键词>",
-        aliases=("find", "搜索"),
-        examples=("/help search 提醒",),
-        invalid_examples=("/help search",),
+        aliases          = ("find", "搜索"),
+        examples         = ("/help search 提醒",),
+        invalid_examples = ("/help search",),
     )
     return (
         _catalog_node(
@@ -63,8 +63,8 @@ def _sample_catalog() -> tuple[CommandCatalogNode, ...]:
             ("help",),
             "查看完整命令目录",
             "/help [关键词]",
-            aliases=("h", "帮助"),
-            children=(help_search,),
+            aliases  = ("h", "帮助"),
+            children = (help_search,),
         ),
         _catalog_node(
             "bot_core.reload",
@@ -96,18 +96,18 @@ def mock_context():
 
     class MockContext:
         def __init__(self):
-            self.plugin_dir = ROOT / "plugins" / "bot_core"
-            self.data_dir = self.plugin_dir / "data"
-            self.secrets = {"plugins": {"bot_core": {}}}
+            self.plugin_dir     = ROOT / "plugins" / "bot_core"
+            self.data_dir       = self.plugin_dir / "data"
+            self.secrets        = {"plugins": {"bot_core": {}}}
             self.config_manager = None
-            self.principal = PluginPrincipal(
-                kind="user",
-                user_id=12345,
-                is_bot_admin=True,
-                is_private=True,
+            self.principal      = PluginPrincipal(
+                kind         = "user",
+                user_id      = 12345,
+                is_bot_admin = True,
+                is_private   = True,
             )
             secret_admin = MagicMock()
-            values = {
+            values       = {
                 "plugins": {
                     "signin": {
                         "yingshijufeng": {"sid": "test_sid_12345"},
@@ -125,9 +125,9 @@ def mock_context():
                 return current
 
             secret_admin.get.side_effect = get_secret
-            self.capabilities = PluginCapabilities(
-                is_bot_admin=True,
-                secret_admin=secret_admin,
+            self.capabilities            = PluginCapabilities(
+                is_bot_admin = True,
+                secret_admin = secret_admin,
             )
             self.send_action = AsyncMock(return_value=True)
             self.mute_group = MagicMock()
@@ -171,7 +171,7 @@ def mock_context_with_mute():
     class MockContext:
         def __init__(self):
             self.plugin_dir = ROOT / "plugins" / "bot_core"
-            self.data_dir = self.plugin_dir / "data"
+            self.data_dir   = self.plugin_dir / "data"
             self.get_mute_remaining = MagicMock(return_value=5.0)
             self.unmute_group = MagicMock(return_value=True)
 
@@ -205,8 +205,8 @@ def mock_context_with_metrics():
     class MockContext:
         def __init__(self):
             self.plugin_dir = ROOT / "plugins" / "bot_core"
-            self.data_dir = self.plugin_dir / "data"
-            self.metrics = MockMetrics()
+            self.data_dir   = self.plugin_dir / "data"
+            self.metrics    = MockMetrics()
 
         def get_command_catalog(self):
             return ()
@@ -277,7 +277,7 @@ class TestHelpCommand:
     async def test_help_json_without_query_keeps_complete_flat_catalog(self, mock_context):
         """自动化依赖的 JSON 全量目录不随人类首页分层而改变。"""
 
-        result = await bot_core.handle("help", "json page 1", {}, mock_context)
+        result  = await bot_core.handle("help", "json page 1", {}, mock_context)
         payload = json.loads(result[0]["data"]["text"])
 
         assert [command["code"] for command in payload["commands"]] == [
@@ -322,7 +322,7 @@ class TestReloadCommand:
     @pytest.mark.asyncio
     async def test_reload_success(self, mock_context):
         """插件重载必须留在后台，不能阻塞仍占用 bot_core 执行门的命令。"""
-        pending_reload = asyncio.get_running_loop().create_future()
+        pending_reload             = asyncio.get_running_loop().create_future()
         mock_context.reload_config = MagicMock()
         mock_context.reload_plugins = MagicMock(return_value=pending_reload)
 
@@ -345,11 +345,11 @@ class TestReloadCommand:
     async def test_reload_sends_one_completion_notification_for_reused_task(self, mock_context):
         """同一后台任务被重复请求时，只向首次发起会话发送一次完成通知。"""
 
-        pending_reload = asyncio.get_running_loop().create_future()
+        pending_reload             = asyncio.get_running_loop().create_future()
         mock_context.reload_config = MagicMock()
         mock_context.reload_plugins = MagicMock(return_value=pending_reload)
 
-        first = await bot_core.handle("reload", "", {}, mock_context)
+        first  = await bot_core.handle("reload", "", {}, mock_context)
         second = await bot_core.handle("reload", "", {}, mock_context)
         assert "插件正在后台重载" in str(first)
         assert "插件正在后台重载" in str(second)
@@ -372,7 +372,7 @@ class TestReloadCommand:
 
     @pytest.mark.asyncio
     async def test_reload_failure_sends_final_failure_notification(self, mock_context):
-        pending_reload = asyncio.get_running_loop().create_future()
+        pending_reload             = asyncio.get_running_loop().create_future()
         mock_context.reload_config = MagicMock()
         mock_context.reload_plugins = MagicMock(return_value=pending_reload)
 
@@ -384,7 +384,7 @@ class TestReloadCommand:
             await asyncio.sleep(0)
 
         mock_context.send_action.assert_awaited_once()
-        action = mock_context.send_action.await_args.args[0]
+        action  = mock_context.send_action.await_args.args[0]
         message = action["params"]["message"][0]["data"]["text"]
         assert "插件重载失败或中止" in message
         assert "检查日志或重启服务" in message
@@ -610,19 +610,19 @@ class TestSetSecretCommand:
         class Ctx:
             def __init__(self):
                 self.principal = PluginPrincipal(
-                    kind="user",
-                    user_id=1,
-                    is_bot_admin=True,
-                    is_private=True,
+                    kind         = "user",
+                    user_id      = 1,
+                    is_bot_admin = True,
+                    is_private   = True,
                 )
                 self.secret_admin = MagicMock()
                 self.capabilities = PluginCapabilities(
-                    is_bot_admin=True,
-                    secret_admin=self.secret_admin,
+                    is_bot_admin = True,
+                    secret_admin = self.secret_admin,
                 )
                 self.reload_config = MagicMock()
 
-        ctx = Ctx()
+        ctx    = Ctx()
         result = await bot_core.handle(
             "set_secret", "plugins.signin.yingshijufeng.sid new_sid", {}, ctx
         )
@@ -736,7 +736,7 @@ class TestGetSecretCommand:
 
     @pytest.mark.asyncio
     async def test_get_secret_path_matches_core_hyphen_contract(self, mock_context):
-        mock_context.capabilities.secret_admin.get.side_effect = None
+        mock_context.capabilities.secret_admin.get.side_effect  = None
         mock_context.capabilities.secret_admin.get.return_value = "secret"
 
         result = await bot_core.handle("get_secret", "plugins.my-plugin.api-key", {}, mock_context)
@@ -748,7 +748,7 @@ class TestGetSecretCommand:
 
     @pytest.mark.asyncio
     async def test_get_secret_dictionary_truncation_has_separator(self, mock_context):
-        mock_context.capabilities.secret_admin.get.side_effect = None
+        mock_context.capabilities.secret_admin.get.side_effect  = None
         mock_context.capabilities.secret_admin.get.return_value = {
             f"key-{index}": index for index in range(bot_core.MAX_DISPLAYED_SECRET_KEYS + 1)
         }
@@ -1044,8 +1044,8 @@ class TestStructuredCommandCatalog:
             ("demo", "section", "run"),
             "执行操作",
             "/demo section run <参数>",
-            examples=("/demo section run value",),
-            invalid_examples=("/demo section run",),
+            examples         = ("/demo section run value",),
+            invalid_examples = ("/demo section run",),
         )
         section = _catalog_node(
             "demo.demo.section",
@@ -1112,7 +1112,7 @@ class TestStructuredCommandCatalog:
         )
 
     def test_searches_alias_and_help_without_parsing_formatted_text(self):
-        by_alias = bot_core._select_catalog_nodes(_sample_catalog(), "重载")
+        by_alias       = bot_core._select_catalog_nodes(_sample_catalog(), "重载")
         by_description = bot_core._select_catalog_nodes(_sample_catalog(), "AI 对话")
 
         assert tuple(node.code for node in by_alias) == ("bot_core.reload",)

@@ -47,7 +47,7 @@ from .adapi import AdnmbClient, Post, Thread
 
 logger = logging.getLogger(__name__)
 
-MAX_CACHED_CLIENTS = 128
+MAX_CACHED_CLIENTS      = 128
 CLIENT_IDLE_TTL_SECONDS = 60 * 60
 
 
@@ -71,7 +71,7 @@ def _get_plugin_runtime_state(
             return cast(dict[str, Any], runtime_state)
         if create:
             created: dict[str, Any] = {}
-            state["adnmb_runtime"] = created
+            state["adnmb_runtime"]  = created
             return created
     return {}
 
@@ -94,7 +94,7 @@ def _client_registry(runtime_state: dict[str, Any]) -> OrderedDict[str, _ClientE
             _close_client(value)
             runtime_state.pop(key, None)
     registry: OrderedDict[str, _ClientEntry] = OrderedDict()
-    runtime_state["clients"] = registry
+    runtime_state["clients"]                 = registry
     return registry
 
 
@@ -117,13 +117,13 @@ def _get_client(
     user_id: str | None = None,
 ) -> AdnmbClient:
     runtime_state = _get_plugin_runtime_state(context)
-    owner_key = str(user_id or getattr(context, "current_user_id", "") or "")
-    cache_key = f"client:{owner_key}" if owner_key else "client"
-    registry = _client_registry(runtime_state)
-    now = time.monotonic()
+    owner_key     = str(user_id or getattr(context, "current_user_id", "") or "")
+    cache_key     = f"client:{owner_key}" if owner_key else "client"
+    registry      = _client_registry(runtime_state)
+    now           = time.monotonic()
     _prune_clients(registry, now)
-    cached_entry = registry.get(cache_key)
-    plugin_cfg = context.get_settings_snapshot().plugin_secrets("adnmb")
+    cached_entry    = registry.get(cache_key)
+    plugin_cfg      = context.get_settings_snapshot().plugin_secrets("adnmb")
     configured_uuid = str(plugin_cfg.get("uuid", "") or "")
     if configured_uuid and owner_key:
         effective_uuid = str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, f"{configured_uuid}:{owner_key}"))
@@ -192,7 +192,7 @@ async def shutdown(context: PluginContextProtocol | None = None) -> None:
 async def format_posts(
     posts: list[Post],
     client: AdnmbClient,
-    max_items: int = 10,
+    max_items: int        = 10,
     download_images: bool = True,
 ) -> Segments:
     """
@@ -210,7 +210,7 @@ async def format_posts(
     if not posts:
         return segments("暂无内容")
 
-    selected_posts = posts[:max_items]
+    selected_posts                 = posts[:max_items]
     image_paths: list[Path | None] = [None] * len(selected_posts)
 
     async def download_image(index: int, post: object) -> None:
@@ -243,7 +243,7 @@ async def format_posts(
 async def format_threads(
     threads: list[Thread],
     client: AdnmbClient,
-    max_items: int = 10,
+    max_items: int     = 10,
     show_replies: bool = True,
 ) -> Segments:
     """
@@ -314,7 +314,7 @@ _ACTIVE_OPTION_GROUPS = {
     "a": ("a", "addfeed"),
     "e": ("e", "delfeed"),
 }
-_HELP_OPTIONS = frozenset({"h", "help", "l", "list"})
+_HELP_OPTIONS     = frozenset({"h", "help", "l", "list"})
 _DISABLED_OPTIONS = frozenset(
     {
         "v",
@@ -331,7 +331,7 @@ _DISABLED_OPTIONS = frozenset(
         "logout",
     }
 )
-_PAGE_ACTIONS = frozenset({"t", "m", "c", "d"})
+_PAGE_ACTIONS       = frozenset({"t", "m", "c", "d"})
 _NUMERIC_ID_ACTIONS = frozenset({"c", "r", "a", "e"})
 
 
@@ -375,7 +375,7 @@ def _request_error(parsed: ParsedArgs) -> tuple[str | None, str | None]:
     """验证通用选项组合，并阻止多余参数在业务分支中被静默忽略。"""
 
     known_options = _ACTIVE_OPTIONS | _HELP_OPTIONS | _DISABLED_OPTIONS | frozenset({"p", "page"})
-    unknown = sorted(set(parsed.options) - known_options)
+    unknown       = sorted(set(parsed.options) - known_options)
     if unknown:
         return None, f"未知选项: --{unknown[0]}"
     if parsed.tokens:
@@ -402,7 +402,7 @@ def _request_error(parsed: ParsedArgs) -> tuple[str | None, str | None]:
         return None, "请指定页码，如: /adnmb -t -p 2"
 
     if action in {"t", "f", "d"}:
-        aliases = _ACTIVE_OPTION_GROUPS[action]
+        aliases        = _ACTIVE_OPTION_GROUPS[action]
         selected_alias = next(alias for alias in aliases if parsed.has(alias))
         if parsed.opt(selected_alias) != FLAG_VALUE:
             return None, f"-{aliases[0]}/--{aliases[1]} 不接受参数"
@@ -482,7 +482,7 @@ async def handle(
         # 板块列表
         if selected_action == "f":
             forum_list = await client.get_forum_list()
-            lines = ["A岛板块列表", "=" * 20]
+            lines      = ["A岛板块列表", "=" * 20]
             for name, fid in forum_list.items():
                 lines.append(f"  {name} (ID: {fid})")
             return segments("\n".join(lines))
@@ -512,7 +512,7 @@ async def handle(
         # 单条回复
         if selected_action == "r":
             ref_id = option_values["r"]
-            post = await client.get_ref(ref_id)
+            post   = await client.get_ref(ref_id)
             if not post:
                 return segments("该回复不存在")
             return await format_posts([post], client)
@@ -527,13 +527,13 @@ async def handle(
         # 添加订阅
         if selected_action == "a":
             thread_id = option_values["a"]
-            result = await client.add_feed(thread_id)
+            result    = await client.add_feed(thread_id)
             return segments(f"订阅结果: {result}")
 
         # 删除订阅
         if selected_action == "e":
             thread_id = option_values["e"]
-            result = await client.del_feed(thread_id)
+            result    = await client.del_feed(thread_id)
             return segments(f"取消订阅结果: {result}")
 
         # 默认显示帮助

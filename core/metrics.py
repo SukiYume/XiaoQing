@@ -21,27 +21,27 @@ logger = logging.getLogger(__name__)
 class ExecutionStats:
     """执行统计数据"""
 
-    total_calls: int = 0
-    total_time: float = 0.0
-    min_time: float = float("inf")
-    max_time: float = 0.0
-    slow_calls: int = 0  # 超过阈值的调用次数
-    errors: int = 0
-    cancelled: int = 0
+    total_calls: int      = 0
+    total_time: float     = 0.0
+    min_time: float       = float("inf")
+    max_time: float       = 0.0
+    slow_calls: int       = 0  # 超过阈值的调用次数
+    errors: int           = 0
+    cancelled: int        = 0
     last_call_time: float = 0.0
 
     def record(
         self,
         duration: float,
         slow_threshold: float = 5.0,
-        is_error: bool = False,
-        is_cancelled: bool = False,
+        is_error: bool        = False,
+        is_cancelled: bool    = False,
     ) -> None:
         """记录一次执行"""
         self.total_calls += 1
         self.total_time += duration
-        self.min_time = min(self.min_time, duration)
-        self.max_time = max(self.max_time, duration)
+        self.min_time       = min(self.min_time, duration)
+        self.max_time       = max(self.max_time, duration)
         self.last_call_time = time.time()
 
         if duration > slow_threshold:
@@ -97,11 +97,11 @@ class MetricsCollector:
         Args:
             slow_threshold: 慢调用阈值（秒），超过此阈值的调用会被标记
         """
-        self._slow_threshold = slow_threshold
-        self._plugin_stats: dict[str, ExecutionStats] = defaultdict(ExecutionStats)
+        self._slow_threshold                           = slow_threshold
+        self._plugin_stats: dict[str, ExecutionStats]  = defaultdict(ExecutionStats)
         self._command_stats: dict[str, ExecutionStats] = defaultdict(ExecutionStats)
-        self._global_stats = ExecutionStats()
-        self._start_time = time.time()
+        self._global_stats                             = ExecutionStats()
+        self._start_time                               = time.time()
         # summary_snapshot() is intentionally synchronous, so this remains a
         # threading lock. Keep protected sections in-memory only; never await
         # or perform I/O while holding it.
@@ -117,7 +117,7 @@ class MetricsCollector:
         plugin_name: str,
         command_name: str,
         duration: float,
-        is_error: bool = False,
+        is_error: bool     = False,
         is_cancelled: bool = False,
     ) -> None:
         """
@@ -200,7 +200,7 @@ class MetricsCollector:
             self._plugin_stats.clear()
             self._command_stats.clear()
             self._global_stats = ExecutionStats()
-            self._start_time = time.time()
+            self._start_time   = time.time()
             logger.info("Metrics reset")
 
 
@@ -217,8 +217,8 @@ def timed_async(collector: MetricsCollector, plugin_name: str, command_name: str
     def decorator(func: Callable):
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):
-            start = time.perf_counter()
-            is_error = False
+            start        = time.perf_counter()
+            is_error     = False
             is_cancelled = False
             try:
                 return await func(*args, **kwargs)
@@ -234,8 +234,8 @@ def timed_async(collector: MetricsCollector, plugin_name: str, command_name: str
                     plugin_name,
                     command_name,
                     duration,
-                    is_error=is_error,
-                    is_cancelled=is_cancelled,
+                    is_error     = is_error,
+                    is_cancelled = is_cancelled,
                 )
 
         return wrapper
@@ -260,20 +260,20 @@ class ExecutionTimer:
         plugin_name: str,
         command_name: str,
     ):
-        self.collector = collector
-        self.plugin_name = plugin_name
-        self.command_name = command_name
+        self.collector         = collector
+        self.plugin_name       = plugin_name
+        self.command_name      = command_name
         self.start_time: float = 0
-        self.duration: float = 0
-        self._is_error = False
-        self._is_cancelled = False
+        self.duration: float   = 0
+        self._is_error         = False
+        self._is_cancelled     = False
 
     async def __aenter__(self) -> "ExecutionTimer":
         self.start_time = time.perf_counter()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
-        self.duration = time.perf_counter() - self.start_time
+        self.duration      = time.perf_counter() - self.start_time
         self._is_cancelled = exc_type is not None and issubclass(
             exc_type,
             asyncio.CancelledError,
@@ -283,8 +283,8 @@ class ExecutionTimer:
             self.plugin_name,
             self.command_name,
             self.duration,
-            is_error=self._is_error,
-            is_cancelled=self._is_cancelled,
+            is_error     = self._is_error,
+            is_cancelled = self._is_cancelled,
         )
 
 

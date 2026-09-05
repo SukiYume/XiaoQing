@@ -16,12 +16,12 @@ from ...utils.time_utils import TimezoneHelper
 from ..utils import collection_payload
 from .event_schedule import build_event_schedule, daterange, ensure_datetime, event_kind
 
-JsonObject = dict[str, Any]
-ReminderStatus = Literal["pending", "sent", "confirmed"]
+JsonObject          = dict[str, Any]
+ReminderStatus      = Literal["pending", "sent", "confirmed"]
 EventWithCollection = tuple[EventItem, JsonObject | None]
 
-_EVENT_KINDS: Final = frozenset({"", "all", "single", "multi_node", "recurring"})
-_REMINDER_FILTERS: Final = frozenset({"", "all", "with", "none", "pending", "sent", "confirmed"})
+_EVENT_KINDS: Final       = frozenset({"", "all", "single", "multi_node", "recurring"})
+_REMINDER_FILTERS: Final  = frozenset({"", "all", "with", "none", "pending", "sent", "confirmed"})
 _SQLITE_BATCH_SIZE: Final = 500
 
 
@@ -86,17 +86,17 @@ def _normalize_filters(
 ) -> _EventFilters:
     """清理文本筛选，并拒绝前端约定之外的枚举值。"""
 
-    normalized_kind = kind.strip().lower()
+    normalized_kind     = kind.strip().lower()
     normalized_reminder = reminder.strip().lower()
     if normalized_kind not in _EVENT_KINDS:
         raise ValueError(f"unsupported event kind: {kind}")
     if normalized_reminder not in _REMINDER_FILTERS:
         raise ValueError(f"unsupported reminder filter: {reminder}")
     return _EventFilters(
-        keyword=keyword.strip().casefold(),
-        category=category.strip(),
-        kind=normalized_kind,
-        reminder=normalized_reminder,
+        keyword  = keyword.strip().casefold(),
+        category = category.strip(),
+        kind     = normalized_kind,
+        reminder = normalized_reminder,
     )
 
 
@@ -147,7 +147,7 @@ def _select_events(
 
     selected: list[EventWithCollection] = []
     for event in events:
-        collection = collections_by_id.get(event.event_collection_id or "")
+        collection  = collections_by_id.get(event.event_collection_id or "")
         actual_kind = event_kind(event)
         if filters.category and event.category != filters.category:
             continue
@@ -165,7 +165,7 @@ def _build_reminder_rows(event: EventItem, reminder_logs: list[JsonObject]) -> l
     log_map = {str(log["remind_time"]): log for log in reminder_logs if log.get("remind_time")}
     rows: list[JsonObject] = []
     for remind_time in sorted(str(value) for value in event.remind_times if value):
-        log = log_map.get(remind_time)
+        log                    = log_map.get(remind_time)
         status: ReminderStatus = "pending"
         if log is not None and log.get("confirmed_at"):
             status = "confirmed"
@@ -208,10 +208,10 @@ def _summarize_reminders_in_range(
         ):
             counts[cast(ReminderStatus, status)] += 1
     return _ReminderSummary(
-        total=sum(counts.values()),
-        pending=counts["pending"],
-        sent=counts["sent"],
-        confirmed=counts["confirmed"],
+        total     = sum(counts.values()),
+        pending   = counts["pending"],
+        sent      = counts["sent"],
+        confirmed = counts["confirmed"],
     )
 
 
@@ -239,9 +239,9 @@ def _fetch_reminder_logs_by_event_ids(
     logs_by_event: dict[str, list[JsonObject]] = {event_id: [] for event_id in unique_ids}
     conn = db.get_connection()
     for offset in range(0, len(unique_ids), _SQLITE_BATCH_SIZE):
-        batch = unique_ids[offset : offset + _SQLITE_BATCH_SIZE]
+        batch        = unique_ids[offset : offset + _SQLITE_BATCH_SIZE]
         placeholders = ",".join("?" for _ in batch)
-        rows = conn.execute(
+        rows         = conn.execute(
             f"""
             SELECT item_id, remind_time, sent_at, confirmed_at, user_action,
                    repeat_count, last_sent_at
@@ -252,7 +252,7 @@ def _fetch_reminder_logs_by_event_ids(
             batch,
         ).fetchall()
         for row in rows:
-            log = dict(row)
+            log     = dict(row)
             item_id = str(log.pop("item_id"))
             logs_by_event[item_id].append(log)
     return logs_by_event
@@ -274,7 +274,7 @@ def _prepare_overview_events(
     )
     prepared: list[_OverviewEvent] = []
     for event, collection in selected:
-        schedule = build_event_schedule(event, range_start_day, range_end_day, user_timezone)
+        schedule     = build_event_schedule(event, range_start_day, range_end_day, user_timezone)
         display_days = cast(list[str], schedule["display_days"])
         if not display_days:
             continue
@@ -288,14 +288,14 @@ def _prepare_overview_events(
             continue
         prepared.append(
             _OverviewEvent(
-                id=event.id,
-                title=event.title or "",
-                category=event.category or "",
-                kind=str(schedule["kind"]),
-                collection=collection_payload(collection),
-                display_days=display_days,
-                day_entries=cast(dict[str, list[JsonObject]], schedule["day_entries"]),
-                reminder_summary=reminder_summary,
+                id               = event.id,
+                title            = event.title or "",
+                category         = event.category or "",
+                kind             = str(schedule["kind"]),
+                collection       = collection_payload(collection),
+                display_days     = display_days,
+                day_entries      = cast(dict[str, list[JsonObject]], schedule["day_entries"]),
+                reminder_summary = reminder_summary,
             )
         )
     return prepared
@@ -308,7 +308,7 @@ def _build_calendar_views(
 ) -> tuple[dict[str, JsonObject], list[JsonObject]]:
     """一次遍历生成日历格和有内容的时间线日期。"""
 
-    day_keys = daterange(range_start_day, range_end_day)
+    day_keys                             = daterange(range_start_day, range_end_day)
     calendar_days: dict[str, JsonObject] = {
         day: {"date": day, "count": 0, "items": [], "has_events": False} for day in day_keys
     }
@@ -319,9 +319,9 @@ def _build_calendar_views(
             calendar = calendar_days.get(day)
             if calendar is None:
                 continue
-            calendar["count"] = int(calendar["count"]) + 1
+            calendar["count"]      = int(calendar["count"]) + 1
             calendar["has_events"] = True
-            items = cast(list[JsonObject], calendar["items"])
+            items                  = cast(list[JsonObject], calendar["items"])
             if len(items) < 3:
                 items.append(
                     {
@@ -364,16 +364,16 @@ def build_events_overview(  # noqa: PLR0913 - 参数对应稳定的 HTTP 查询�
     *,
     start_date: str,
     end_date: str,
-    keyword: str = "",
+    keyword: str  = "",
     category: str = "",
-    kind: str = "all",
+    kind: str     = "all",
     reminder: str = "all",
 ) -> JsonObject:
     """返回指定范围的最小日程概览响应。"""
 
     user_timezone = TimezoneHelper.get_user_timezone(owner_id, db)
     range_start, range_end = _parse_range(start_date, end_date, user_timezone)
-    filters = _normalize_filters(keyword, category, kind, reminder)
+    filters      = _normalize_filters(keyword, category, kind, reminder)
     range_events = db.get_events_for_range(
         owner_id,
         range_start.isoformat(timespec="seconds"),
@@ -383,8 +383,8 @@ def build_events_overview(  # noqa: PLR0913 - 参数对应稳定的 HTTP 查询�
         event.event_collection_id for event in range_events if event.event_collection_id is not None
     ]
     collections_by_id = db.get_event_collections_by_ids(owner_id, collection_ids)
-    selected = _select_events(range_events, collections_by_id, filters)
-    events = _prepare_overview_events(
+    selected          = _select_events(range_events, collections_by_id, filters)
+    events            = _prepare_overview_events(
         db,
         selected,
         range_start.date(),

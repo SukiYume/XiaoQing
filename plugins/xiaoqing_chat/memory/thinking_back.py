@@ -56,7 +56,7 @@ def get_cached_answer(
     if not q:
         return ""
     path = _path(data_dir, chat_id)
-    now = time.time()
+    now  = time.time()
     with keyed_path_lock(path):
         recent = _load_recent(path, max_lines=max_scan_lines)
     for obj in reversed(recent):
@@ -82,7 +82,7 @@ def append_record(
     question: str,
     answer: str,
     max_entries: int = 200,
-    max_bytes: int = 2_000_000,
+    max_bytes: int   = 2_000_000,
 ) -> None:
     q = (question or "").strip()
     a = (answer or "").strip()

@@ -14,7 +14,7 @@ class OperationLog:
     group_id: int
     user_id: str
     target_user_id: str | None = None
-    operation_type: str = ""
-    params: str = ""
-    result: str = "success"
+    operation_type: str        = ""
+    params: str                = ""
+    result: str                = "success"
     created_at: datetime = field(default_factory=utc_now)

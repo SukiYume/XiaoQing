@@ -12,10 +12,10 @@ from core.public_errors import public_error_response
 
 logger = logging.getLogger(__name__)
 
-_ECHO_ALIASES = frozenset({"echo", "回显"})
-_HELLO_ALIASES = frozenset({"hello", "你好"})
+_ECHO_ALIASES       = frozenset({"echo", "回显"})
+_HELLO_ALIASES      = frozenset({"hello", "你好"})
 _MAX_USER_ID_DIGITS = 19
-_MAX_USER_ID = 2**63 - 1
+_MAX_USER_ID        = 2**63 - 1
 
 HELP_TEXT = """📢 Echo 插件
 
@@ -65,8 +65,8 @@ async def handle(
                 return segments(HELP_TEXT)
             if has_control_characters(
                 cleaned,
-                allow_formatting_whitespace=True,
-                include_c1=True,
+                allow_formatting_whitespace = True,
+                include_c1                  = True,
             ):
                 return segments("回显文本不能包含不可显示的控制字符")
             logger.info("Echo command accepted: length=%d", len(cleaned))

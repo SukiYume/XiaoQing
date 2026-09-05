@@ -20,14 +20,14 @@ class CommandRouter:
         handler_names = set(handlers)
         if catalog_names != handler_names:
             missing = sorted(catalog_names - handler_names)
-            extra = sorted(handler_names - catalog_names)
+            extra   = sorted(handler_names - catalog_names)
             raise ValueError(
                 f"qingpet command catalog mismatch missing_handlers={missing} "
                 f"extra_handlers={extra}"
             )
 
-        self.root = root
-        self.routes = dict(handlers)
+        self.root                    = root
+        self.routes                  = dict(handlers)
         self.aliases: dict[str, str] = {}
         for child in root.children:
             self.aliases[child.name.casefold()] = child.name

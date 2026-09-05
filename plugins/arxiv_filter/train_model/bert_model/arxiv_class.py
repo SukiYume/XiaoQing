@@ -43,17 +43,17 @@ if __package__ in {None, ""}:
 else:
     from . import training_utils as _training
 
-_log = _training.timestamp_log
-forward_logits = _training.forward_logits
-log_epoch_header = _training.log_epoch_header
+_log                = _training.timestamp_log
+forward_logits      = _training.forward_logits
+log_epoch_header    = _training.log_epoch_header
 dynamic_pad_collate = _training.dynamic_pad_collate
-train_epoch = _training.train_epoch
+train_epoch         = _training.train_epoch
 
 # 动态导入 transformers 库，避免静态依赖问题
-transformers = importlib.import_module("transformers")
+transformers                       = importlib.import_module("transformers")
 AutoModelForSequenceClassification = transformers.AutoModelForSequenceClassification  # 序列分类模型
-AutoTokenizer = transformers.AutoTokenizer  # 分词器
-get_linear_schedule_with_warmup = (
+AutoTokenizer                      = transformers.AutoTokenizer  # 分词器
+get_linear_schedule_with_warmup    = (
     transformers.get_linear_schedule_with_warmup
 )  # 带预热的学习率调度器
 
@@ -84,17 +84,17 @@ class TrainingConfig:
         output_dir: 最佳模型保存目录
     """
 
-    data_path: Path = _PLUGIN_DIR / "train_model" / "arxiv_papers_with_abstract.csv"
-    model_name: str = "bert-base-cased"
-    max_len: int = 512
-    batch_size: int = 128
-    num_epochs: int = 20
-    learning_rate: float = 2e-5
+    data_path: Path          = _PLUGIN_DIR / "train_model" / "arxiv_papers_with_abstract.csv"
+    model_name: str          = "bert-base-cased"
+    max_len: int             = 512
+    batch_size: int          = 128
+    num_epochs: int          = 20
+    learning_rate: float     = 2e-5
     warmup_proportion: float = 0.1
-    validation_size: float = 0.1
-    random_seed: int = 42
-    num_workers: int | None = 16
-    threshold_beta: float = 2.0
+    validation_size: float   = 0.1
+    random_seed: int         = 42
+    num_workers: int | None  = 16
+    threshold_beta: float    = 2.0
     output_dir: Path = field(default_factory=lambda: _PLUGIN_DIR / "best_model")
 
 
@@ -150,16 +150,16 @@ def prepare_training_frame(df: pd.DataFrame) -> pd.DataFrame:
 
     # 检查必需列
     required_columns = {"title", "abstract", "label"}
-    missing_columns = required_columns - set(renamed.columns)
+    missing_columns  = required_columns - set(renamed.columns)
     if missing_columns:
         missing = ", ".join(sorted(missing_columns))
         raise ValueError(f"Missing required columns: {missing}")
 
     # 选择需要的列并处理数据类型
-    prepared = renamed.loc[:, ["title", "abstract", "label"]].copy()
-    prepared["title"] = prepared["title"].fillna("").astype(str)
+    prepared             = renamed.loc[:, ["title", "abstract", "label"]].copy()
+    prepared["title"]    = prepared["title"].fillna("").astype(str)
     prepared["abstract"] = prepared["abstract"].fillna("").astype(str)
-    prepared["label"] = _training.coerce_binary_labels(prepared["label"])
+    prepared["label"]    = _training.coerce_binary_labels(prepared["label"])
     return prepared
 
 
@@ -197,16 +197,16 @@ class TitleAbstractDataset(Dataset[dict[str, Any]]):
         # 使用分词器处理文本对（title + abstract）
         encodings = tokenizer(
             titles,
-            text_pair=abstracts,  # 摘要作为第二个文本段
-            add_special_tokens=True,  # 自动添加 [CLS], [SEP] 等特殊 token
-            max_length=max_len,
-            padding=False,  # 不在此处 padding，由 collate_fn 动态处理
-            truncation="only_second",  # 仅截断摘要（Segment B），完整保留标题（Segment A）
+            text_pair          = abstracts,  # 摘要作为第二个文本段
+            add_special_tokens = True,  # 自动添加 [CLS], [SEP] 等特殊 token
+            max_length         = max_len,
+            padding            = False,  # 不在此处 padding，由 collate_fn 动态处理
+            truncation         = "only_second",  # 仅截断摘要（Segment B），完整保留标题（Segment A）
         )
-        self.input_ids: list[list[int]] = encodings["input_ids"]
+        self.input_ids: list[list[int]]      = encodings["input_ids"]
         self.attention_mask: list[list[int]] = encodings["attention_mask"]
         self.token_type_ids: list[list[int]] = encodings["token_type_ids"]
-        self.labels = labels
+        self.labels                          = labels
 
     def __len__(self) -> int:
         """返回数据集大小"""
@@ -242,10 +242,10 @@ def create_data_loader(
     max_len: int,
     batch_size: int,
     sampler: WeightedRandomSampler | None = None,
-    num_workers: int = 0,
-    pin_memory: bool = False,
-    random_seed: int | None = None,
-    shuffle: bool = True,
+    num_workers: int                      = 0,
+    pin_memory: bool                      = False,
+    random_seed: int | None               = None,
+    shuffle: bool                         = True,
 ) -> DataLoader[Any]:
     """
     创建数据加载器
@@ -267,23 +267,23 @@ def create_data_loader(
         - 使用 partial 绑定 pad_id 到 collate_fn
     """
     dataset = TitleAbstractDataset(
-        titles=df["title"].tolist(),
-        abstracts=df["abstract"].tolist(),
-        labels=df["label"].tolist(),
-        tokenizer=tokenizer,
-        max_len=max_len,
+        titles    = df["title"].tolist(),
+        abstracts = df["abstract"].tolist(),
+        labels    = df["label"].tolist(),
+        tokenizer = tokenizer,
+        max_len   = max_len,
     )
 
     collate_fn = partial(dynamic_pad_collate, pad_id=tokenizer.pad_token_id or 0)
     return _training.create_seeded_data_loader(
         dataset,
-        collate_fn=collate_fn,
-        batch_size=batch_size,
-        sampler=sampler,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-        random_seed=random_seed,
-        shuffle=shuffle,
+        collate_fn  = collate_fn,
+        batch_size  = batch_size,
+        sampler     = sampler,
+        num_workers = num_workers,
+        pin_memory  = pin_memory,
+        random_seed = random_seed,
+        shuffle     = shuffle,
     )
 
 
@@ -296,9 +296,9 @@ def eval_model(
     model,
     data_loader,
     device,
-    use_amp: bool = False,
+    use_amp: bool          = False,
     amp_dtype: torch.dtype = torch.float32,
-    threshold_beta: float = 1.0,
+    threshold_beta: float  = 1.0,
 ):
     """
     评估模型在验证集上的性能
@@ -324,16 +324,16 @@ def eval_model(
         - cm: 混淆矩阵
     """
     model.eval()
-    losses: list[float] = []
-    all_labels: list[int] = []
+    losses: list[float]             = []
+    all_labels: list[int]           = []
     all_positive_probs: list[float] = []
-    loss_fn = torch.nn.CrossEntropyLoss()
+    loss_fn                         = torch.nn.CrossEntropyLoss()
 
     with torch.no_grad():  # 评估时不需要计算梯度
         for batch in tqdm(data_loader, desc="Validation", ascii=True):
             logits, labels = forward_logits(model, batch, device, use_amp, amp_dtype)
             logits = logits.float()  # 确保使用 float32 计算损失
-            loss = loss_fn(logits, labels)
+            loss   = loss_fn(logits, labels)
             positive_probs = torch.softmax(logits, dim=1)[:, 1]
 
             losses.append(loss.item())
@@ -360,25 +360,25 @@ def eval_model(
     )
     # 生成混淆矩阵
     cm = confusion_matrix(all_labels, all_preds, labels=[0, 1])
-    true_positive = int(cm[1, 1])
-    false_positive = int(cm[0, 1])
-    false_negative = int(cm[1, 0])
+    true_positive      = int(cm[1, 1])
+    false_positive     = int(cm[0, 1])
+    false_negative     = int(cm[1, 0])
     positive_precision = true_positive / max(true_positive + false_positive, 1)
-    positive_recall = true_positive / max(true_positive + false_negative, 1)
-    positive_f1 = (2 * positive_precision * positive_recall) / max(
+    positive_recall    = true_positive / max(true_positive + false_negative, 1)
+    positive_f1        = (2 * positive_precision * positive_recall) / max(
         positive_precision + positive_recall,
         1e-12,
     )
     average_loss = sum(losses) / len(losses)
     return ValidationMetrics(
-        accuracy=accuracy,
-        average_loss=average_loss,
-        report=report,
-        cm=cm,
-        positive_recall=float(positive_recall),
-        positive_f1=float(positive_f1),
-        threshold_score=threshold_score,
-        optimal_threshold=optimal_threshold,
+        accuracy          = accuracy,
+        average_loss      = average_loss,
+        report            = report,
+        cm                = cm,
+        positive_recall   = float(positive_recall),
+        positive_f1       = float(positive_f1),
+        threshold_score   = threshold_score,
+        optimal_threshold = optimal_threshold,
     )
 
 
@@ -394,7 +394,7 @@ def find_optimal_threshold(
     if len(thresholds) == 0:
         return 0.5, 0.0
 
-    beta_sq = beta * beta
+    beta_sq      = beta * beta
     fbeta_scores = ((1 + beta_sq) * precision[:-1] * recall[:-1]) / np.clip(
         (beta_sq * precision[:-1]) + recall[:-1], 1e-12, None
     )
@@ -470,27 +470,27 @@ def main(config: TrainingConfig = CONFIG) -> None:
     """
     training = _training.prepare_classifier_training(
         config,
-        device=DEVICE,
-        classifier_name="arXiv Title+Abstract Classifier",
-        prepare_frame=prepare_training_frame,
-        create_loader=create_data_loader,
-        tokenizer_factory=AutoTokenizer,
-        model_factory=AutoModelForSequenceClassification,
-        scheduler_factory=get_linear_schedule_with_warmup,
+        device            = DEVICE,
+        classifier_name   = "arXiv Title+Abstract Classifier",
+        prepare_frame     = prepare_training_frame,
+        create_loader     = create_data_loader,
+        tokenizer_factory = AutoTokenizer,
+        model_factory     = AutoModelForSequenceClassification,
+        scheduler_factory = get_linear_schedule_with_warmup,
     )
-    runtime = training.runtime
-    tokenizer = training.tokenizer
-    model = training.model
+    runtime      = training.runtime
+    tokenizer    = training.tokenizer
+    model        = training.model
     train_loader = training.train_loader
-    val_loader = training.validation_loader
-    optimizer = training.optimizer
-    scheduler = training.scheduler
-    loss_fn = training.loss_fn
+    val_loader   = training.validation_loader
+    optimizer    = training.optimizer
+    scheduler    = training.scheduler
+    loss_fn      = training.loss_fn
 
-    best_accuracy = 0.0
-    best_positive_f1 = 0.0
+    best_accuracy        = 0.0
+    best_positive_f1     = 0.0
     best_threshold_score = 0.0
-    best_threshold = 0.5
+    best_threshold       = 0.5
 
     # 8. 训练循环
     for epoch in range(1, config.num_epochs + 1):
@@ -504,8 +504,8 @@ def main(config: TrainingConfig = CONFIG) -> None:
             scheduler,
             DEVICE,
             loss_fn,
-            use_amp=runtime["use_amp"],
-            amp_dtype=runtime["amp_dtype"],
+            use_amp   = runtime["use_amp"],
+            amp_dtype = runtime["amp_dtype"],
         )
         print(f"\n  {'─' * 72}")
         _log(f"Train | loss={train_loss:.4f}  acc={train_acc:.4f}")
@@ -515,9 +515,9 @@ def main(config: TrainingConfig = CONFIG) -> None:
             model,
             val_loader,
             DEVICE,
-            use_amp=runtime["use_amp"],
-            amp_dtype=runtime["amp_dtype"],
-            threshold_beta=config.threshold_beta,
+            use_amp        = runtime["use_amp"],
+            amp_dtype      = runtime["amp_dtype"],
+            threshold_beta = config.threshold_beta,
         )
 
         # 检查是否是最佳模型
@@ -527,13 +527,13 @@ def main(config: TrainingConfig = CONFIG) -> None:
         )
         _log(
             "Valid | loss={loss:.4f}  acc={acc:.4f}  pos_recall={pos_recall:.4f}  pos_f1={pos_f1:.4f}  fbeta={fbeta:.4f}  thr={thr:.4f}  {star}".format(
-                loss=val_metrics.average_loss,
-                acc=val_metrics.accuracy,
-                pos_recall=val_metrics.positive_recall,
-                pos_f1=val_metrics.positive_f1,
-                fbeta=val_metrics.threshold_score,
-                thr=val_metrics.optimal_threshold,
-                star="★" if is_best else "",
+                loss       = val_metrics.average_loss,
+                acc        = val_metrics.accuracy,
+                pos_recall = val_metrics.positive_recall,
+                pos_f1     = val_metrics.positive_f1,
+                fbeta      = val_metrics.threshold_score,
+                thr        = val_metrics.optimal_threshold,
+                star       = "★" if is_best else "",
             )
         )
         print(val_metrics.report)
@@ -542,10 +542,10 @@ def main(config: TrainingConfig = CONFIG) -> None:
 
         # 如果是最佳模型，保存之
         if is_best:
-            best_accuracy = val_metrics.accuracy
-            best_positive_f1 = val_metrics.positive_f1
+            best_accuracy        = val_metrics.accuracy
+            best_positive_f1     = val_metrics.positive_f1
             best_threshold_score = val_metrics.threshold_score
-            best_threshold = val_metrics.optimal_threshold
+            best_threshold       = val_metrics.optimal_threshold
             _log(
                 f"      | ★ New best (recall={val_metrics.positive_recall:.4f}, pos_f1={best_positive_f1:.4f}, fbeta={best_threshold_score:.4f}, thr={best_threshold:.4f}), saving -> {config.output_dir}"
             )

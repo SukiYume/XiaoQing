@@ -101,10 +101,10 @@ def format_positives(positives: pd.DataFrame) -> str:
 
 def run_inference_for_dataframe(
     data: pd.DataFrame,
-    model_path: str | None = None,
+    model_path: str | None  = None,
     threshold: float | None = None,
-    batch_size: int | None = None,
-    max_len: int | None = None,
+    batch_size: int | None  = None,
+    max_len: int | None     = None,
     *,
     artifact_fingerprint: str | None = None,
 ) -> tuple[pd.DataFrame, float] | tuple[None, str]:
@@ -124,19 +124,19 @@ def run_inference_for_dataframe(
     # 插件公开边界统一生成脱敏且带 request_id 的错误响应。
     probs, preds = _dispatch_inference(params, data)
 
-    output = data.copy()
+    output                = data.copy()
     output["Probability"] = probs
-    output["Prediction"] = preds
+    output["Prediction"]  = preds
     return output, params.threshold
 
 
 def run_single_paper_inference(
     title: str,
     abstract: str,
-    model_path: str | None = None,
+    model_path: str | None  = None,
     threshold: float | None = None,
-    batch_size: int | None = None,
-    max_len: int | None = None,
+    batch_size: int | None  = None,
+    max_len: int | None     = None,
     *,
     artifact_fingerprint: str | None = None,
 ) -> tuple[list[float], list[int], InferenceParams]:
@@ -154,10 +154,10 @@ def run_single_paper_inference(
 
 
 def run_inference_for_today(
-    model_path: str | None = None,
+    model_path: str | None  = None,
     threshold: float | None = None,
-    batch_size: int | None = None,
-    max_len: int | None = None,
+    batch_size: int | None  = None,
+    max_len: int | None     = None,
     *,
     artifact_fingerprint: str | None = None,
 ) -> tuple[pd.DataFrame, float] | tuple[None, str]:
@@ -177,10 +177,10 @@ def run_inference_for_today(
 
 
 def get_positive_arxiv_today_as_string(
-    model_path: str | None = None,
+    model_path: str | None  = None,
     threshold: float | None = None,
-    batch_size: int | None = None,
-    max_len: int | None = None,
+    batch_size: int | None  = None,
+    max_len: int | None     = None,
     *,
     artifact_fingerprint: str | None = None,
 ) -> str:

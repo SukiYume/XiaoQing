@@ -1,3 +1,4 @@
+# 按键互斥池：引用计数覆盖等待者和持有者，空闲锁按容量回收。
 """Bounded, reference-counted asyncio keyed lock pool."""
 
 from __future__ import annotations
@@ -13,18 +14,18 @@ from typing import Any
 @dataclass
 class _Entry:
     lock: asyncio.Lock
-    users: int = 0
+    users: int                      = 0
     owner: asyncio.Task[Any] | None = None
-    depth: int = 0
+    depth: int                      = 0
 
 
 class AsyncKeyedLockPool:
     def __init__(self, *, max_keys: int = 4096, max_key_length: int = 256) -> None:
         if max_keys <= 0 or max_key_length <= 0:
             raise ValueError("keyed lock limits must be positive")
-        self.max_keys = max_keys
-        self.max_key_length = max_key_length
-        self._guard = threading.RLock()
+        self.max_keys                         = max_keys
+        self.max_key_length                   = max_key_length
+        self._guard                           = threading.RLock()
         self._entries: dict[Hashable, _Entry] = {}
 
     @property
@@ -49,7 +50,7 @@ class AsyncKeyedLockPool:
             if entry is None:
                 if len(self._entries) >= self.max_keys:
                     raise RuntimeError("keyed lock pool capacity exceeded")
-                entry = _Entry(asyncio.Lock())
+                entry              = _Entry(asyncio.Lock())
                 self._entries[key] = entry
             entry.users += 1
             reentrant = entry.owner is task

@@ -57,7 +57,7 @@ def test_default_plan_covers_both_transports_pressure_and_ci_gates(tmp_path: Pat
     ]
     assert all(spec.command[0] == "python" for spec in specs[:-2])
     websocket = specs[0].command
-    http = specs[1].command
+    http      = specs[1].command
     assert websocket[websocket.index("--transport") + 1] == "websocket"
     assert http[http.index("--transport") + 1] == "http"
     assert "read_only,isolated_state,privileged" in websocket
@@ -71,9 +71,9 @@ def test_external_and_paid_quality_remain_explicit_opt_ins(tmp_path: Path) -> No
     fixture.write_text('{"ssh_test_host":"127.0.0.1"}', encoding="utf-8")
     specs = run_full_uat._build_phase_specs(
         _arguments(
-            include_external=True,
-            include_chat_quality=True,
-            scenario_fixtures=fixture,
+            include_external     = True,
+            include_chat_quality = True,
+            scenario_fixtures    = fixture,
         ),
         tmp_path / "run",
     )
@@ -91,10 +91,10 @@ def test_external_and_paid_quality_remain_explicit_opt_ins(tmp_path: Path) -> No
 def test_matrix_filters_are_forwarded_for_fast_targeted_reruns(tmp_path: Path) -> None:
     specs = run_full_uat._build_phase_specs(
         _arguments(
-            phases="ws-matrix",
-            matrix_plugins="pendo,qingpet",
-            matrix_codes="pendo.pendo.todo,qingpet.qingpet.feed",
-            matrix_kinds="invalid,permission_denied",
+            phases         = "ws-matrix",
+            matrix_plugins = "pendo,qingpet",
+            matrix_codes   = "pendo.pendo.todo,qingpet.qingpet.feed",
+            matrix_kinds   = "invalid,permission_denied",
         ),
         tmp_path / "run",
     )
@@ -110,13 +110,13 @@ def test_runtime_isolation_restores_config_byte_for_byte_after_failure(
     tmp_path: Path,
 ) -> None:
     project_root = tmp_path / "project"
-    legacy_data = project_root / "plugins" / "demo" / "data"
+    legacy_data  = project_root / "plugins" / "demo" / "data"
     legacy_data.mkdir(parents=True)
     (legacy_data.parent / "plugin.json").write_text("{}", encoding="utf-8")
     (legacy_data / "state.json").write_text('{"preserve":true}', encoding="utf-8")
     config_path = tmp_path / "config.json"
-    lock_path = tmp_path / "reports" / ".full-uat.lock"
-    original = b'{\n\t"bot_name": "format-must-survive",\n\t"log_to_file": true\n}\n'
+    lock_path   = tmp_path / "reports" / ".full-uat.lock"
+    original    = b'{\n\t"bot_name": "format-must-survive",\n\t"log_to_file": true\n}\n'
     config_path.write_bytes(original)
     monkeypatch.setattr(run_full_uat, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(run_full_uat, "CONFIG_PATH", config_path)
@@ -152,7 +152,7 @@ def test_runtime_recovery_restores_hidden_legacy_data_before_config(
     tmp_path: Path,
 ) -> None:
     project_root = tmp_path / "project"
-    legacy_data = project_root / "plugins" / "demo" / "data"
+    legacy_data  = project_root / "plugins" / "demo" / "data"
     legacy_data.mkdir(parents=True)
     (legacy_data.parent / "plugin.json").write_text("{}", encoding="utf-8")
     (legacy_data / "state.json").write_text("legacy", encoding="utf-8")
@@ -353,11 +353,11 @@ def test_core_pressure_cli_writes_report_with_explicit_seed(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    output = tmp_path / "reports" / "pressure.json"
+    output                      = tmp_path / "reports" / "pressure.json"
     captured: dict[str, object] = {}
 
     async def fake_run(args: argparse.Namespace) -> dict[str, object]:
-        captured["seed"] = args.message_id_seed
+        captured["seed"]   = args.message_id_seed
         captured["stages"] = args.stages
         return {"schema_version": 2, "gate_passed": True}
 
@@ -406,11 +406,11 @@ async def test_core_pressure_health_preflight_failure_produces_failed_report(
     )
     monkeypatch.setattr(run_core_pressure, "_get_health", failed_health)
     args = argparse.Namespace(
-        endpoint="http://127.0.0.1:12000/event",
-        secrets=secrets,
-        timeout=1.0,
-        message_id_seed=100,
-        stages=[run_core_pressure.Stage("one", 1, 1, False)],
+        endpoint        = "http://127.0.0.1:12000/event",
+        secrets         = secrets,
+        timeout         = 1.0,
+        message_id_seed = 100,
+        stages          = [run_core_pressure.Stage("one", 1, 1, False)],
     )
 
     report = await run_core_pressure.run(args)
@@ -436,11 +436,11 @@ def test_quality_probe_converts_network_failure_but_propagates_programming_error
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     probe = run_xiaoqing_chat_quality.EventProbe(
-        endpoint="http://127.0.0.1:12000/event",
-        token="token",
-        admin_id=1,
-        timeout=1.0,
-        message_id_seed=100,
+        endpoint        = "http://127.0.0.1:12000/event",
+        token           = "token",
+        admin_id        = 1,
+        timeout         = 1.0,
+        message_id_seed = 100,
     )
 
     def fail_network(*_args: object, **_kwargs: object) -> None:
@@ -501,7 +501,7 @@ def test_quality_cli_writes_exclusive_report_with_explicit_seed(
 ) -> None:
     data_dir = tmp_path / "data" / "xiaoqing_chat"
     data_dir.mkdir(parents=True)
-    output = tmp_path / "quality.json"
+    output                      = tmp_path / "quality.json"
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(run_xiaoqing_chat_quality, "_load_auth", lambda _path: ("token", 1))
@@ -510,7 +510,7 @@ def test_quality_cli_writes_exclusive_report_with_explicit_seed(
         probe: run_xiaoqing_chat_quality.EventProbe,
         actual_data_dir: Path,
     ) -> dict[str, object]:
-        captured["seed"] = probe.message_id_seed
+        captured["seed"]     = probe.message_id_seed
         captured["data_dir"] = actual_data_dir
         return {"schema_version": 2, "gate_passed": True}
 
@@ -571,17 +571,17 @@ def test_bash_is_the_documented_cross_platform_entrypoint() -> None:
     assert "powershell" not in source.casefold()
     if sys.platform == "win32":
         program_files = Path(os.environ.get("PROGRAMFILES", r"C:\Program Files"))
-        git_bash = program_files / "Git" / "bin" / "bash.exe"
-        bash = str(git_bash) if git_bash.is_file() else None
+        git_bash      = program_files / "Git" / "bin" / "bash.exe"
+        bash          = str(git_bash) if git_bash.is_file() else None
     else:
         bash = shutil.which("bash")
     if bash is not None:
         completed = subprocess.run(
             [bash, "-n", str(BASH_ENTRYPOINT)],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
+            capture_output = True,
+            text           = True,
+            encoding       = "utf-8",
+            errors         = "replace",
+            check          = False,
         )
         assert completed.returncode == 0, completed.stderr

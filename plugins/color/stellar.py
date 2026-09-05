@@ -18,13 +18,13 @@ from .convert import hex_to_rgb
 from .image_gen import generate_color_image
 
 MAX_STELLAR_FILE_BYTES = 64 * 1024
-MAX_STELLAR_ROWS = 512
+MAX_STELLAR_ROWS       = 512
 MAX_STELLAR_LINE_CHARS = 256
-MAX_SPECTRAL_TYPES = 30
-_STELLAR_HEADER = ("SpT", "Teff", "log(g)", "RGB", "Hex")
+MAX_SPECTRAL_TYPES     = 30
+_STELLAR_HEADER        = ("SpT", "Teff", "log(g)", "RGB", "Hex")
 _SPECTRAL_TYPE_PATTERN = re.compile(r"[OBAFGKM][0-9](?:\.5)?V", re.IGNORECASE)
-_HEX_PATTERN = re.compile(r"#[0-9a-fA-F]{6}")
-Messages = list[dict[str, Any]]
+_HEX_PATTERN           = re.compile(r"#[0-9a-fA-F]{6}")
+Messages               = list[dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -47,8 +47,8 @@ def _parse_stellar_row(line: str, *, line_number: int) -> StellarColor:
         raise ValueError(f"invalid spectral type at line {line_number}")
     try:
         temperature = int(raw_temperature)
-        log_g = float(raw_log_g)
-        rgb_values = tuple(float(value) for value in raw_rgb.split(","))
+        log_g       = float(raw_log_g)
+        rgb_values  = tuple(float(value) for value in raw_rgb.split(","))
     except ValueError as exc:
         raise ValueError(f"invalid stellar numeric value at line {line_number}") from exc
     if not 1_000 <= temperature <= 100_000 or not math.isfinite(log_g) or not 0 <= log_g <= 10:
@@ -61,11 +61,11 @@ def _parse_stellar_row(line: str, *, line_number: int) -> StellarColor:
         raise ValueError(f"invalid stellar HEX value at line {line_number}")
     # 论文表格的线性 RGB 只保留三位小数，HEX 来自更高精度原值，因此不反推二者相等。
     return StellarColor(
-        spectral_type=spectral_type.upper(),
-        temperature_k=temperature,
-        log_g=log_g,
-        linear_rgb=rgb_values,
-        hex_value=hex_value.casefold(),
+        spectral_type = spectral_type.upper(),
+        temperature_k = temperature,
+        log_g         = log_g,
+        linear_rgb    = rgb_values,
+        hex_value     = hex_value.casefold(),
     )
 
 
@@ -144,8 +144,8 @@ async def query_stellar_color(
                 ),
             )
 
-        selected = matches[0]
-        rgb = hex_to_rgb(selected.hex_value)
+        selected    = matches[0]
+        rgb         = hex_to_rgb(selected.hex_value)
         sample_note = ""
         if len(matches) > 1:
             sample_note = (
@@ -208,9 +208,9 @@ def list_spectral_types(
         total_pages = (len(matches) + MAX_SPECTRAL_TYPES - 1) // MAX_SPECTRAL_TYPES
         if page > total_pages:
             return cast(Messages, segments(f"❌ 第 {page} 页超出范围（共 {total_pages} 页）"))
-        start = (page - 1) * MAX_SPECTRAL_TYPES
-        displayed = matches[start : start + MAX_SPECTRAL_TYPES]
-        query_part = f" {quote_token(normalized_prefix)}" if normalized_prefix else ""
+        start                 = (page - 1) * MAX_SPECTRAL_TYPES
+        displayed             = matches[start : start + MAX_SPECTRAL_TYPES]
+        query_part            = f" {quote_token(normalized_prefix)}" if normalized_prefix else ""
         navigation: list[str] = []
         if page > 1:
             navigation.append(f"上一页：/color stars{query_part} --page {page - 1}")

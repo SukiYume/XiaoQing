@@ -67,7 +67,7 @@ class _WebServer(Protocol):
         ...
 
 
-_WebComponents: TypeAlias = tuple[_LoginCodeIssuer, _WidgetTokenGenerator, _WebServer]
+_WebComponents: TypeAlias         = tuple[_LoginCodeIssuer, _WidgetTokenGenerator, _WebServer]
 _OPTIONAL_WEB_IMPORT_ROOTS: Final = frozenset(
     {"anyio", "fastapi", "jwt", "multipart", "pydantic", "starlette", "uvicorn"}
 )
@@ -80,7 +80,7 @@ def _load_web_components() -> _WebComponents | None:
         raise RuntimeError("无法确定 Pendo Web 组件的包路径")
     plugin_package = package.rsplit(".", 1)[0]
     try:
-        auth_module = import_module(f"{plugin_package}.web.auth")
+        auth_module   = import_module(f"{plugin_package}.web.auth")
         server_module = import_module(f"{plugin_package}.web.server")
     except ModuleNotFoundError as exc:
         # 只降级已知可选依赖；本地模块缺失或内部导入错误必须显式暴露。
@@ -100,9 +100,9 @@ issue_login_code: _LoginCodeIssuer | None
 generate_widget_token: _WidgetTokenGenerator | None
 web_server: _WebServer | None
 if _loaded_components is None:
-    issue_login_code = None
+    issue_login_code      = None
     generate_widget_token = None
-    web_server = None
+    web_server            = None
 else:
     issue_login_code, generate_widget_token, web_server = _loaded_components
 del _loaded_components
@@ -126,11 +126,11 @@ class WebHandler:
         user_id: str,
         args: str,
         context: PendoContext | None = None,
-        group_id: int | None = None,
+        group_id: int | None         = None,
     ) -> CommandMessage:
         """按精确子命令处理 Web 请求；``group_id`` 仅用于统一 Handler 接口。"""
-        server = web_server
-        login_code_issuer = issue_login_code
+        server                 = web_server
+        login_code_issuer      = issue_login_code
         widget_token_generator = generate_widget_token
         if server is None or login_code_issuer is None or widget_token_generator is None:
             return {
@@ -149,6 +149,10 @@ class WebHandler:
             return await self._generate_widget_token(user_id, context, widget_token_generator)
         if command in {"widget-revoke", "widget_revoke", "widget revoke"}:
             return await self._revoke_widget_tokens(user_id)
+        if command in {"start", "stop"} and (
+            context is None or not context.is_global_admin(int(user_id))
+        ):
+            return {"status": "error", "message": "❌ 只有机器人管理员可以启动或停止共享 Web 服务"}
         if command == "start":
             return await self._start(server)
         if command == "stop":
@@ -170,22 +174,22 @@ class WebHandler:
         """生成一次性登录码，并只在私聊中发送原始 Code。"""
         code = issuer(
             user_id,
-            expires_seconds=PendoConfig.WEB_LOGIN_CODE_EXPIRE_SECONDS,
-            db=self.db,
+            expires_seconds = PendoConfig.WEB_LOGIN_CODE_EXPIRE_SECONDS,
+            db              = self.db,
         )
-        code_days = PendoConfig.WEB_LOGIN_CODE_EXPIRE_SECONDS // (24 * 60 * 60)
+        code_days    = PendoConfig.WEB_LOGIN_CODE_EXPIRE_SECONDS // (24 * 60 * 60)
         session_days = PendoConfig.WEB_SESSION_EXPIRE_SECONDS // (24 * 60 * 60)
-        token_sent = await self._send_private_text(context, user_id, code)
+        token_sent   = await self._send_private_text(context, user_id, code)
 
         return self._build_token_result(
-            token_sent=token_sent,
-            header="🌐 Pendo Web",
-            success_line="✅ 已生成一次性登录 Code",
-            expiry_text=(
+            token_sent   = token_sent,
+            header       = "🌐 Pendo Web",
+            success_line = "✅ 已生成一次性登录 Code",
+            expiry_text  = (
                 f"Code {code_days} 天内可兑换一次；登录后浏览器会话保持 {session_days} 天"
             ),
-            private_hint="🔒 登录 Code 已单独私聊发送",
-            private_copy_hint="💡 复制私聊中的 Code，在 Pendo Web 登录页粘贴使用。",
+            private_hint      = "🔒 登录 Code 已单独私聊发送",
+            private_copy_hint = "💡 复制私聊中的 Code，在 Pendo Web 登录页粘贴使用。",
         )
 
     async def _generate_widget_token(
@@ -198,11 +202,11 @@ class WebHandler:
         token = await run_sync(
             generator,
             user_id,
-            expires_seconds=PendoConfig.WEB_WIDGET_TOKEN_EXPIRE_SECONDS,
-            db=self.db,
+            expires_seconds = PendoConfig.WEB_WIDGET_TOKEN_EXPIRE_SECONDS,
+            db              = self.db,
         )
         expiry_days = PendoConfig.WEB_WIDGET_TOKEN_EXPIRE_SECONDS // (24 * 60 * 60)
-        token_sent = await self._send_private_text(
+        token_sent  = await self._send_private_text(
             context,
             user_id,
             "\n".join(
@@ -219,13 +223,13 @@ class WebHandler:
             ),
         )
         return self._build_token_result(
-            token_sent=token_sent,
-            header="🧩 Pendo Web Widget Token",
-            success_line="✅ 已生成只读小组件令牌",
-            expiry_text=f"{expiry_days} 天",
-            private_hint="🔒 Widget Token 已单独私聊发送",
-            private_copy_hint="💡 请从私聊复制 token，并在 Scriptable App 内首次运行脚本时粘贴",
-            extra_lines=[
+            token_sent        = token_sent,
+            header            = "🧩 Pendo Web Widget Token",
+            success_line      = "✅ 已生成只读小组件令牌",
+            expiry_text       = f"{expiry_days} 天",
+            private_hint      = "🔒 Widget Token 已单独私聊发送",
+            private_copy_hint = "💡 请从私聊复制 token，并在 Scriptable App 内首次运行脚本时粘贴",
+            extra_lines       = [
                 "用于 Scriptable 等只读小组件访问。",
                 "📍 接口路径: /api/widget/summary",
                 "💡 在 Scriptable 中把 BASE_URL 改成你的 Pendo Web 地址",
@@ -246,7 +250,7 @@ class WebHandler:
     async def _start(self, server: _WebServer) -> CommandMessage:
         """启动插件托管的 Web 服务，并返回可执行的失败原因。"""
         runtime = PendoConfig.runtime()
-        url = server.get_url()
+        url     = server.get_url()
         if await run_sync(server.is_running):
             return {
                 "status": "success",
@@ -271,9 +275,9 @@ class WebHandler:
                 ),
             }
         error_reader = getattr(server, "get_last_error", None)
-        raw_detail = error_reader() if callable(error_reader) else None
-        detail = " ".join(str(raw_detail).split()) if raw_detail else None
-        lines = [
+        raw_detail   = error_reader() if callable(error_reader) else None
+        detail       = " ".join(str(raw_detail).split()) if raw_detail else None
+        lines        = [
             "🌐 Pendo Web",
             "❌ 服务启动失败",
             "",
@@ -316,7 +320,7 @@ class WebHandler:
     async def _status(server: _WebServer) -> CommandMessage:
         """返回 Web 服务的可访问状态和入口信息。"""
         running = await run_sync(server.is_running)
-        status = "🟢 运行中" if running else "🔴 未启动"
+        status  = "🟢 运行中" if running else "🔴 未启动"
         return {
             "status": "success",
             "message": (

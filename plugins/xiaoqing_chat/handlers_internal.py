@@ -82,7 +82,7 @@ def is_admin_operator(event: dict[str, Any], context) -> bool:
 
 
 def is_global_admin_operator(event: dict[str, Any], context) -> bool:
-    principal = _matching_user_principal(event, context)
+    principal    = _matching_user_principal(event, context)
     capabilities = getattr(context, "capabilities", None) if context is not None else None
     if principal is None or not getattr(capabilities, "is_bot_admin", False):
         return False
@@ -110,11 +110,11 @@ async def handle_internal_impl(
         mem_msgs = await state.memory_store.get_async(chat_id)
         lines.append(f"• 上下文消息数: {len(mem_msgs) if mem_msgs else 0}")
 
-        expressions = state.bw_expr_store.load()
+        expressions    = state.bw_expr_store.load()
         expr_this_chat = [e for e in expressions if e.chat_id == chat_id]
         lines.append(f"• 学到的表达 (本会话/全部): {len(expr_this_chat)}/{len(expressions)}")
 
-        jargons = state.bw_jargon_store.load()
+        jargons        = state.bw_jargon_store.load()
         scoped_jargons = _visible_jargons(jargons, chat_id)
         lines.append(f"• 学到的黑话 (本会话): {len(scoped_jargons)}")
 
@@ -129,7 +129,7 @@ async def handle_internal_impl(
 
     if command == "重置":
         is_group_reset = event.get("group_id") not in (None, "")
-        confirmation = str(args or "").strip().casefold()
+        confirmation   = str(args or "").strip().casefold()
         if is_group_reset:
             if not is_admin_operator_fn(event, context):
                 return segments(
@@ -142,7 +142,7 @@ async def handle_internal_impl(
                 )
 
         pop_persist_task = getattr(state, "pop_persist_task", None)
-        pending = pop_persist_task(chat_id) if callable(pop_persist_task) else None
+        pending          = pop_persist_task(chat_id) if callable(pop_persist_task) else None
         if pending is not None:
             cancel_pending_task(pending)
         async with get_lock(chat_id):
@@ -158,8 +158,8 @@ async def handle_internal_impl(
         return segments("✅ 已重置会话记忆")
 
     if command == "深度对话":
-        current = runtime.cfg.brain_chat.enable_private_brain_chat
-        status = "✅ 已启用" if current else "❌ 未启用"
+        current   = runtime.cfg.brain_chat.enable_private_brain_chat
+        status    = "✅ 已启用" if current else "❌ 未启用"
         mode_desc = (
             f"🧠 **深度对话模式**\n\n"
             f"状态: {status}\n"
@@ -215,7 +215,7 @@ async def handle_config_impl(
         lines.append(f"• 思考等级: {cfg.brain_chat.brain_think_level}")
 
     model_alias = secrets.get("_provider_name", "?")
-    model_name = secrets.get("model", "?")
+    model_name  = secrets.get("model", "?")
     lines.append(f"\n**当前 LLM 模型:** {model_alias} ({model_name})")
     lines.append("\n**提示:** 模型路由由 config/config.json 统一配置")
     return segments("\n".join(lines))
@@ -235,9 +235,9 @@ async def handle_review_impl(
     if len(parts) < 2 or parts[0].casefold() not in {"ok", "no", "answer", "close"}:
         return segments("用法：/xc 审查 <ok|no|answer|close> <会话ID> [内容]")
     action, session_id = parts[0].casefold(), parts[1]
-    answer = parts[2].strip() if len(parts) > 2 else ""
-    hctx = handler_context_from_event(event, context)
-    store = hctx.state.review_store
+    answer  = parts[2].strip() if len(parts) > 2 else ""
+    hctx    = handler_context_from_event(event, context)
+    store   = hctx.state.review_store
     session = store.get_session(session_id)
     if session is None or session.chat_id != hctx.chat_id:
         return segments("❌ 审查会话不存在、已过期或不属于当前会话")
@@ -255,11 +255,11 @@ async def handle_review_impl(
         return segments("❌ answer 操作必须提供规则、目标或策略内容")
     cfg = hctx.runtime.cfg.reflection
     session, applied = apply_review_answer(
-        store=store,
-        sess=session,
-        answer=answer,
-        goal_lock_seconds=cfg.goal_lock_seconds,
-        max_avoid_patterns=cfg.max_avoid_patterns,
+        store              = store,
+        sess               = session,
+        answer             = answer,
+        goal_lock_seconds  = cfg.goal_lock_seconds,
+        max_avoid_patterns = cfg.max_avoid_patterns,
     )
     if applied is None:
         return segments("❌ 当前审查会话不接受该答案")
@@ -285,9 +285,9 @@ async def handle_memory_impl(
     results = await asyncio.to_thread(
         memory_db.query,
         query,
-        chat_id=hctx.chat_id,
-        top_k=runtime.cfg.memory.top_k,
-        min_score=runtime.cfg.memory.min_score,
+        chat_id   = hctx.chat_id,
+        top_k     = runtime.cfg.memory.top_k,
+        min_score = runtime.cfg.memory.min_score,
     )
     if not results:
         return segments(f"🔍 **记忆检索结果**\n\n关键词: {query}\n\n未找到相关记忆")
@@ -303,10 +303,10 @@ async def handle_memory_impl(
 async def handle_expression_impl(
     event: dict[str, Any], context, *, handler_context_from_event
 ) -> list[dict[str, Any]]:
-    hctx = handler_context_from_event(event, context)
-    state = hctx.state
+    hctx             = handler_context_from_event(event, context)
+    state            = hctx.state
     expression_store = state.bw_expr_store
-    expressions = [item for item in expression_store.load() if item.chat_id == hctx.chat_id]
+    expressions      = [item for item in expression_store.load() if item.chat_id == hctx.chat_id]
 
     if not expressions:
         return segments(
@@ -328,10 +328,10 @@ async def handle_expression_impl(
 async def handle_jargon_impl(
     event: dict[str, Any], context, *, handler_context_from_event
 ) -> list[dict[str, Any]]:
-    hctx = handler_context_from_event(event, context)
-    state = hctx.state
+    hctx         = handler_context_from_event(event, context)
+    state        = hctx.state
     jargon_store = state.bw_jargon_store
-    jargons = jargon_store.load()
+    jargons      = jargon_store.load()
     if not jargons:
         return segments(
             f"🏴‍☠️ **黑话学习**\n\n还没有学到任何黑话\n\n继续聊天，{hctx.bot_name}会从对话中学习独特的词汇"
@@ -339,8 +339,8 @@ async def handle_jargon_impl(
 
     jargon_list = sorted(
         _visible_jargons(jargons, hctx.chat_id),
-        key=lambda x: x.count,
-        reverse=True,
+        key     = lambda x: x.count,
+        reverse = True,
     )
     lines = ["🏴‍☠️ **学到的黑话**\n", f"共 {len(jargon_list)} 条记录\n"]
     for i, jar in enumerate(jargon_list[:15], 1):
@@ -361,13 +361,13 @@ async def handle_provider_impl(
     is_admin_operator_fn: Callable[[dict[str, Any], Any], bool],
     is_global_admin_operator_fn: Callable[[dict[str, Any], Any], bool],
 ) -> list[dict[str, Any]]:
-    state = state_getter()
+    state   = state_getter()
     chat_id = chat_id_from_event(event)
     route = _get_ai_route_context(context, chat_id=chat_id)
-    providers = route.get("_providers", {})
-    providers = providers if isinstance(providers, Mapping) else {}
+    providers    = route.get("_providers", {})
+    providers    = providers if isinstance(providers, Mapping) else {}
     default_name = str(route.get("_default", "") or "")
-    current = str(route.get("_provider_name", "") or "")
+    current      = str(route.get("_provider_name", "") or "")
 
     target = (args or "").strip()
     if not target:
@@ -375,13 +375,13 @@ async def handle_provider_impl(
         for name, pcfg in providers.items():
             if not isinstance(pcfg, Mapping):
                 continue
-            model_name = pcfg.get("model", "?")
+            model_name    = pcfg.get("model", "?")
             provider_name = pcfg.get("provider", "?")
-            marker = " ✅" if current == name else ""
+            marker        = " ✅" if current == name else ""
             lines.append(f"• **{name}** ({model_name} / {provider_name}){marker}")
         if not providers:
             lines.append("(当前路由未配置任何模型)")
-        local_override = state.get_chat_provider(chat_id)
+        local_override  = state.get_chat_provider(chat_id)
         global_override = state.global_active_provider
         lines.append(f"\n当前会话覆盖: {local_override or '(继承)'}")
         lines.append(f"全局运行时覆盖: {global_override or '(未设置)'}")
@@ -410,8 +410,8 @@ async def handle_provider_impl(
         else:
             state.set_chat_provider(chat_id, None)
             scope_label = "当前会话覆盖"
-        effective = state.resolve_provider_name(chat_id, list(providers), default_name)
-        effective_cfg = providers.get(effective, {})
+        effective       = state.resolve_provider_name(chat_id, list(providers), default_name)
+        effective_cfg   = providers.get(effective, {})
         effective_model = effective_cfg.get("model", "?")
         return segments(
             f"✅ 已清除{scope_label}；当前生效 **{effective}** ({effective_model})"
@@ -428,7 +428,7 @@ async def handle_provider_impl(
     else:
         state.set_chat_provider(chat_id, selection)
         scope_label = "当前会话模型"
-    pcfg = providers[selection]
+    pcfg       = providers[selection]
     model_name = pcfg.get("model", "?")
     return segments(
         f"✅ 已将{scope_label}切换到 **{selection}** ({model_name})"

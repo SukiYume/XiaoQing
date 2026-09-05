@@ -89,10 +89,10 @@ def test_settings_http_rejects_unknown_fields_and_returns_defaults(db: Database)
     """真实 HTTP 层应拒绝未知键，并按认证所有者返回默认设置。"""
 
     owner_id = "owner-settings-http"
-    app = FastAPI()
+    app      = FastAPI()
     app.include_router(settings_api.router)
     app.dependency_overrides[settings_api.get_current_user] = lambda: owner_id
-    app.dependency_overrides[settings_api.get_db] = lambda: db
+    app.dependency_overrides[settings_api.get_db]           = lambda: db
 
     with TestClient(app) as client:
         defaults = client.get("/settings")
@@ -138,17 +138,17 @@ def test_settings_update_rejects_empty_and_skips_normalized_noop(
         422,
         lambda: settings_api.update_settings(
             settings_api.SettingsUpdate(),
-            owner_id=owner_id,
-            db=db,
+            owner_id = owner_id,
+            db       = db,
         ),
     )
     response = settings_api.update_settings(
         settings_api.SettingsUpdate(
-            timezone=" Asia/Shanghai ",
-            settings_json={"reminder_enabled": True},
+            timezone      = " Asia/Shanghai ",
+            settings_json = {"reminder_enabled": True},
         ),
-        owner_id=owner_id,
-        db=db,
+        owner_id = owner_id,
+        db       = db,
     )
 
     assert response["message"] == "无变化"
@@ -173,12 +173,12 @@ def test_settings_update_persists_normalized_patch_and_maps_storage_failure(
     owner_id = "owner-settings-update"
     response = settings_api.update_settings(
         settings_api.SettingsUpdate(
-            timezone=" Asia/Shanghai ",
-            daily_report_time="8:15",
-            settings_json={"weekly_report_enabled": True},
+            timezone          = " Asia/Shanghai ",
+            daily_report_time = "8:15",
+            settings_json     = {"weekly_report_enabled": True},
         ),
-        owner_id=owner_id,
-        db=db,
+        owner_id = owner_id,
+        db       = db,
     )
     data = cast(dict[str, Any], response["data"])
     assert response["message"] == "设置已更新"
@@ -188,8 +188,8 @@ def test_settings_update_persists_normalized_patch_and_maps_storage_failure(
 
     json_only = settings_api.update_settings(
         settings_api.SettingsUpdate(settings_json={"extension_only": "新值"}),
-        owner_id=owner_id,
-        db=db,
+        owner_id = owner_id,
+        db       = db,
     )
     json_data = cast(dict[str, Any], json_only["data"])
     assert cast(dict[str, Any], json_data["settings_json"])["extension_only"] == "新值"
@@ -198,8 +198,8 @@ def test_settings_update_persists_normalized_patch_and_maps_storage_failure(
         422,
         lambda: settings_api.update_settings(
             settings_api.SettingsUpdate(daily_report_time="25:00"),
-            owner_id=owner_id,
-            db=db,
+            owner_id = owner_id,
+            db       = db,
         ),
     )
     assert invalid.detail == "Invalid daily_report_time, expected HH:MM"
@@ -209,8 +209,8 @@ def test_settings_update_persists_normalized_patch_and_maps_storage_failure(
         500,
         lambda: settings_api.update_settings(
             settings_api.SettingsUpdate(timezone="UTC"),
-            owner_id=owner_id,
-            db=db,
+            owner_id = owner_id,
+            db       = db,
         ),
     )
     assert error.detail == "Failed to update settings"
@@ -342,7 +342,7 @@ def test_concurrent_single_setting_patches_preserve_both_keys(db: Database) -> N
     """并发聊天设置写入只能合并各自键，不能回写陈旧全量快照。"""
 
     owner_id = "u-settings-concurrent"
-    barrier = threading.Barrier(2)
+    barrier  = threading.Barrier(2)
 
     def save(key: str) -> None:
         barrier.wait(timeout=5)
@@ -427,7 +427,7 @@ def test_plugin_settings_single_value_commands_persist_by_storage_layer(db: Data
         assert expected_text in message
 
     settings = db.get_user_settings(owner_id)
-    custom = cast(dict[str, Any], settings["settings_json"])
+    custom   = cast(dict[str, Any], settings["settings_json"])
     assert settings["timezone"] == "Asia/Shanghai"
     assert settings["daily_report_time"] == "09:15"
     assert settings["diary_remind_time"] == "22:10"
@@ -440,7 +440,7 @@ def test_plugin_settings_ai_privacy_alias_updates_same_consent_key(db: Database)
     """旧 AI 隐私命令别名应复用同一设置键，避免产生重复配置。"""
 
     owner_id = "u-settings-ai-alias"
-    message = asyncio.run(handle_settings(owner_id, "ai_privacy off", db))
+    message  = asyncio.run(handle_settings(owner_id, "ai_privacy off", db))
 
     custom = cast(dict[str, Any], db.get_user_settings(owner_id)["settings_json"])
     assert "🔒 已关闭" in message
@@ -452,7 +452,7 @@ def test_plugin_settings_quiet_hours_are_written_atomically(db: Database) -> Non
     """合法静默时段应一次写入起止时间，并允许两侧空白。"""
 
     owner_id = "u-settings-quiet-hours"
-    message = asyncio.run(handle_settings(owner_id, "quiet_hours 23:00 - 07:00", db))
+    message  = asyncio.run(handle_settings(owner_id, "quiet_hours 23:00 - 07:00", db))
 
     settings = db.get_user_settings(owner_id)
     assert "🔕 静默时段: 23:00 - 07:00" in message
@@ -478,7 +478,7 @@ def test_plugin_settings_invalid_values_do_not_change_defaults(
     """非法值必须失败关闭，不能把半成品配置写入数据库。"""
 
     owner_id = f"u-settings-invalid-{command.split()[0]}"
-    before = db.get_user_settings(owner_id)
+    before   = db.get_user_settings(owner_id)
 
     message = asyncio.run(handle_settings(owner_id, command, db))
 
@@ -491,7 +491,7 @@ def test_plugin_settings_whitespace_only_args_show_current_settings(db: Database
 
     owner_id = "u-settings-whitespace"
 
-    empty_message = asyncio.run(handle_settings(owner_id, "", db))
+    empty_message      = asyncio.run(handle_settings(owner_id, "", db))
     whitespace_message = asyncio.run(handle_settings(owner_id, "  \t  ", db))
 
     assert whitespace_message == empty_message
@@ -529,7 +529,7 @@ def test_note_and_event_handlers_apply_persisted_default_category(db: Database) 
 
     assert note_result["status"] == "success"
     assert event_result["status"] == "success"
-    note = db.get_item(str(note_result["item_id"]), owner_id)
+    note  = db.get_item(str(note_result["item_id"]), owner_id)
     event = db.get_item(str(event_result["item_id"]), owner_id)
     assert note is not None and note.category == "工作手稿"
     assert event is not None and event.category == "工作手稿"

@@ -1,3 +1,4 @@
+# 验证 Web 服务启动、停止、认证与连接回收。
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -17,9 +18,9 @@ def _reset_runtime_config():
 
 class _FakeThread:
     def __init__(self, *, stop_on_join: bool) -> None:
-        self.alive = True
+        self.alive        = True
         self.stop_on_join = stop_on_join
-        self.started = False
+        self.started      = False
 
     def start(self) -> None:
         self.started = True

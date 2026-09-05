@@ -4,8 +4,8 @@ import {
     arrayValue as safeArray,
     errorMessage,
     finiteNumber,
-    formatAmount,
-    formatMoneyCompact,
+    formatAmount as baseFormatAmount,
+    formatMoneyCompact as baseFormatMoneyCompact,
     isRecord,
     isValidDateInput,
     noteCadenceSubtitle,
@@ -15,7 +15,7 @@ import {
 import { derivePresetRange, fetchItemRangeBounds, RANGE_PRESET_OPTIONS, todayRangeKey } from '../utils/date_ranges.js';
 import { bindEnterAction, BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
-const CSS_ID = 'pendo-stats-waterfall-styles';
+const CSS_ID     = 'pendo-stats-waterfall-styles';
 const RANGE_KEYS = new Set(RANGE_PRESET_OPTIONS.map((option) => option.key));
 const TASK_TONES = Object.freeze({
     open: '#F59E0B',
@@ -46,22 +46,27 @@ const DEFAULT_MOOD_LABELS = {
     neutral: '普通',
 };
 
-let _container = null;
-let _range = 'month';
-let _loading = false;
-let _data = null;
-let _customStart = '';
-let _customEnd = '';
-let _customDraftStart = '';
-let _customDraftEnd = '';
-let _heatmapData = null;
-let _comparisonData = null;
-let _moodEmojis = { ...DEFAULT_MOOD_EMOJIS };
-let _moodLabels = { ...DEFAULT_MOOD_LABELS };
-let _loadVersion = 0;
+let _container              = null;
+let _range                  = 'month';
+let _currency               = 'CNY';
+let _loading                = false;
+let _data                   = null;
+let _customStart            = '';
+let _customEnd              = '';
+let _customDraftStart       = '';
+let _customDraftEnd         = '';
+let _heatmapData            = null;
+let _comparisonData         = null;
+let _moodEmojis             = { ...DEFAULT_MOOD_EMOJIS };
+let _moodLabels             = { ...DEFAULT_MOOD_LABELS };
+let _loadVersion            = 0;
 let _activeRequestSignature = '';
-let _dataSignature = '';
-let _chartSequence = 0;
+let _dataSignature          = '';
+let _chartSequence          = 0;
+
+// 当前金额始终绑定已加载数据的币种，切换筛选时保留旧数据的正确单位。
+function formatAmount(value) { return baseFormatAmount(value, _data?.ledger?.currency || _currency); }
+function formatMoneyCompact(value) { return baseFormatMoneyCompact(value, _data?.ledger?.currency || _currency); }
 
 // 通用数据边界：统计接口异常时不把 NaN、Infinity 或空记录带入图表。
 function nonNegativeNumber(value, fallback = 0) {
@@ -128,12 +133,12 @@ function sortByNumericDesc(items, key) {
 }
 
 function sampleIndexes(length, maxPoints = 18) {
-    const size = Math.max(0, Math.floor(finiteNumber(length)));
+    const size  = Math.max(0, Math.floor(finiteNumber(length)));
     const limit = Math.max(1, Math.floor(finiteNumber(maxPoints, 18)));
     if (size <= limit) return Array.from({ length: size }, (_, index) => index);
     if (limit === 1) return [0];
 
-    const step = (size - 1) / (limit - 1);
+    const step   = (size - 1) / (limit - 1);
     const picked = new Set();
     for (let index = 0; index < limit; index += 1) {
         picked.add(Math.round(index * step));
@@ -167,8 +172,8 @@ function deriveRangeDates({
 
 function currentRangeRequest() {
     const rangeKey = RANGE_KEYS.has(_range) ? _range : 'month';
-    const today = userTodayKey();
-    const range = deriveRangeDates({
+    const today    = userTodayKey();
+    const range    = deriveRangeDates({
         rangeKey,
         customStart: _customStart,
         customEnd: _customEnd,
@@ -178,7 +183,8 @@ function currentRangeRequest() {
         rangeKey,
         range,
         today,
-        signature: `${rangeKey}|${range.start}|${range.end}`,
+        currency: _currency,
+        signature: `${rangeKey}|${range.start}|${range.end}|${_currency}`,
     };
 }
 
@@ -203,25 +209,24 @@ function resolveHeatmapYear(range = deriveRangeDates()) {
 function clampRangeToYear(range, year) {
     if (!year || !range?.start || !range?.end) return { start: '', end: '' };
     const yearStart = `${year}-01-01`;
-    const yearEnd = `${year}-12-31`;
-    const start = range.start > yearStart ? range.start : yearStart;
-    const end = range.end < yearEnd ? range.end : yearEnd;
+    const yearEnd   = `${year}-12-31`;
+    const start     = range.start > yearStart ? range.start : yearStart;
+    const end       = range.end < yearEnd ? range.end : yearEnd;
     return start <= end ? { start, end } : { start: '', end: '' };
 }
 
 function diffDays(start, end) {
     if (!isValidDateInput(start) || !isValidDateInput(end)) return 0;
     const startTime = Date.parse(`${start}T00:00:00Z`);
-    const endTime = Date.parse(`${end}T00:00:00Z`);
-    const diff = endTime - startTime;
+    const endTime   = Date.parse(`${end}T00:00:00Z`);
+    const diff      = endTime - startTime;
     return Math.max(0, Math.round(diff / 86400000));
 }
 
 function ledgerRhythmSeries(ledger, range = deriveRangeDates()) {
-    const spanDays = diffDays(range.start, range.end);
+    const spanDays   = diffDays(range.start, range.end);
     const useMonthly = _range === 'year' || _range === 'last_year' || spanDays > 62;
-    const source =
-        useMonthly && safeRecords(ledger?.monthly).length ? safeRecords(ledger.monthly) : safeRecords(ledger?.daily);
+    const source     =         useMonthly && safeRecords(ledger?.monthly).length ? safeRecords(ledger.monthly) : safeRecords(ledger?.daily);
     const labelKey = useMonthly ? 'month' : 'date';
     return source.map((item) => ({
         label: compactAxisLabel(String(item[labelKey] || '')),
@@ -230,10 +235,9 @@ function ledgerRhythmSeries(ledger, range = deriveRangeDates()) {
 }
 
 function ledgerTrendSeries(ledger, range = deriveRangeDates()) {
-    const spanDays = diffDays(range.start, range.end);
+    const spanDays   = diffDays(range.start, range.end);
     const useMonthly = _range === 'year' || _range === 'last_year' || spanDays > 62;
-    const source =
-        useMonthly && safeRecords(ledger?.monthly).length ? safeRecords(ledger.monthly) : safeRecords(ledger?.daily);
+    const source     =         useMonthly && safeRecords(ledger?.monthly).length ? safeRecords(ledger.monthly) : safeRecords(ledger?.daily);
     const labelKey = useMonthly ? 'month' : 'date';
     return source.map((item) => ({
         label: String(item[labelKey] || ''),
@@ -271,8 +275,8 @@ function diaryCadenceSubtitle(granularity) {
 function sparklinePath(values, width = 440, height = 168, padding = 18) {
     const normalized = safeArray(values).map(nonNegativeNumber);
     if (!normalized.length) return { line: '', area: '', points: [] };
-    const max = Math.max(...normalized, 1);
-    const step = normalized.length > 1 ? (width - padding * 2) / (normalized.length - 1) : 0;
+    const max    = Math.max(...normalized, 1);
+    const step   = normalized.length > 1 ? (width - padding * 2) / (normalized.length - 1) : 0;
     const points = normalized.map((value, index) => {
         const x = padding + step * index;
         const y = height - padding - (value / max) * (height - padding * 2);
@@ -286,7 +290,7 @@ function sparklinePath(values, width = 440, height = 168, padding = 18) {
 function compressSeries(labels, values, maxPoints = 26) {
     const safeLabels = safeArray(labels);
     const safeValues = safeArray(values).map(nonNegativeNumber);
-    const limit = Math.max(1, Math.floor(finiteNumber(maxPoints, 26)));
+    const limit      = Math.max(1, Math.floor(finiteNumber(maxPoints, 26)));
     if (safeValues.length <= limit) return { labels: safeLabels, values: safeValues };
     if (limit === 1) return { labels: [safeLabels[0]], values: [safeValues[0]] };
     if (limit === 2) {
@@ -297,10 +301,10 @@ function compressSeries(labels, values, maxPoints = 26) {
     }
     const innerSlots = limit - 2;
     const bucketSize = (safeValues.length - 2) / innerSlots;
-    const picked = [0];
+    const picked     = [0];
     for (let bucket = 0; bucket < innerSlots; bucket += 1) {
-        const start = 1 + Math.floor(bucket * bucketSize);
-        const end = Math.min(safeValues.length - 1, 1 + Math.floor((bucket + 1) * bucketSize));
+        const start   = 1 + Math.floor(bucket * bucketSize);
+        const end     = Math.min(safeValues.length - 1, 1 + Math.floor((bucket + 1) * bucketSize));
         let bestIndex = Math.min(start, safeValues.length - 2);
         let bestValue = -Infinity;
         for (let index = start; index < Math.max(start + 1, end); index += 1) {
@@ -325,8 +329,8 @@ function renderSparkline(labels, values, color, formatter) {
     if (!compressed.values.length) return '<div class="stats-empty-card">暂无数据</div>';
     const gradId = `stats-grad-${color.replace(/[^a-zA-Z0-9]/g, '')}-${++_chartSequence}`;
     const { line, area, points } = sparklinePath(compressed.values);
-    const max = Math.max(...compressed.values, 1);
-    const footerLabels = buildAxisTickLabels(compressed.labels, 6);
+    const max                 = Math.max(...compressed.values, 1);
+    const footerLabels        = buildAxisTickLabels(compressed.labels, 6);
     const visiblePointIndexes = sampleIndexes(compressed.values.length, 14);
     return `
         <div class="stats-chart-block">
@@ -374,7 +378,7 @@ function renderColumnChart(items, valueKey, labelKey, color, formatter) {
         <div class="stats-column-chart">
             ${rows
                 .map((item) => {
-                    const value = nonNegativeNumber(item[valueKey]);
+                    const value  = nonNegativeNumber(item[valueKey]);
                     const height = Math.max(8, Math.round((value / max) * 100));
                     return `
                     <div class="stats-column-item" title="${escapeHtml(item[labelKey])} · ${escapeHtml(formatter(value))}">
@@ -430,7 +434,7 @@ function renderTreemap(items, valueKey, labelKey, colors, formatter) {
             ${sorted
                 .map((item, index) => {
                     const ratio = item.__value / max;
-                    const span = ratio > 0.72 ? 2 : 1;
+                    const span  = ratio > 0.72 ? 2 : 1;
                     const shade = (0.14 + ratio * 0.2).toFixed(2);
                     return `
                     <div class="stats-treemap-tile" style="grid-column: span ${span}; background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(255,255,255,0.7)), rgba(255,255,255,0.88); border-color: rgba(255,255,255,0.55); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.28);">
@@ -446,7 +450,7 @@ function renderTreemap(items, valueKey, labelKey, colors, formatter) {
 }
 
 function renderStackedColumns(items, labelKey, segments, formatter) {
-    const rows = safeRecords(items);
+    const rows         = safeRecords(items);
     const safeSegments = safeRecords(segments);
     if (!rows.length || !safeSegments.length) return '<div class="stats-empty-card">暂无数据</div>';
     const normalized = rows.map((item) => {
@@ -490,7 +494,7 @@ function renderHistogram(items, valueKey, labelKey, color, formatter) {
         <div class="stats-histogram">
             ${rows
                 .map((item) => {
-                    const value = nonNegativeNumber(item[valueKey]);
+                    const value  = nonNegativeNumber(item[valueKey]);
                     const height = Math.max(value ? 14 : 6, Math.round((value / max) * 100));
                     return `
                     <div class="stats-histogram-bin" title="${escapeHtml(item[labelKey])} · ${escapeHtml(formatter(value))}">
@@ -515,10 +519,10 @@ function polarToCartesian(cx, cy, r, angle) {
 
 function arcPath(cx, cy, outer, inner, startAngle, endAngle) {
     const startOuter = polarToCartesian(cx, cy, outer, endAngle);
-    const endOuter = polarToCartesian(cx, cy, outer, startAngle);
+    const endOuter   = polarToCartesian(cx, cy, outer, startAngle);
     const startInner = polarToCartesian(cx, cy, inner, endAngle);
-    const endInner = polarToCartesian(cx, cy, inner, startAngle);
-    const largeArc = endAngle - startAngle > 180 ? 1 : 0;
+    const endInner   = polarToCartesian(cx, cy, inner, startAngle);
+    const largeArc   = endAngle - startAngle > 180 ? 1 : 0;
     return [
         `M ${startOuter.x} ${startOuter.y}`,
         `A ${outer} ${outer} 0 ${largeArc} 0 ${endOuter.x} ${endOuter.y}`,
@@ -558,7 +562,7 @@ function renderMatrixHeatmap(rows, xLabels, yLabels, color) {
                 <div class="stats-matrix-ylabel">${escapeHtml(weekday)}</div>
                 ${xLabels
                     .map((slot) => {
-                        const value = nonNegativeNumber(matrix.get(`${weekday}|${slot}`));
+                        const value   = nonNegativeNumber(matrix.get(`${weekday}|${slot}`));
                         const opacity = value ? 0.12 + (value / max) * 0.88 : 0.06;
                         return `
                         <div class="stats-matrix-cell" title="${escapeHtml(weekday)} · ${escapeHtml(slot)} · ${value} 个"
@@ -589,10 +593,10 @@ function renderDonut(items, valueKey, labelKey, colors, centerValue, centerLabel
     const total = normalized.reduce((sum, item) => sum + item.value, 0);
     if (!total) return '<div class="stats-empty-card">暂无数据</div>';
     const providedColors = safeArray(colors).filter((color) => typeof color === 'string' && color);
-    const palette = providedColors.length ? providedColors : ['#94a3b8'];
-    let cursor = 0;
-    const outer = 67;
-    const inner = 43;
+    const palette        = providedColors.length ? providedColors : ['#94a3b8'];
+    let cursor           = 0;
+    const outer          = 67;
+    const inner          = 43;
     return `
         <div class="stats-donut-wrap">
             <svg viewBox="0 0 180 180" class="stats-donut">
@@ -600,8 +604,7 @@ function renderDonut(items, valueKey, labelKey, colors, centerValue, centerLabel
                 ${normalized
                     .map((item, index) => {
                         const angle = (item.value / total) * 360;
-                        const path =
-                            angle >= 359.999
+                        const path  = angle >= 359.999
                                 ? fullRingPath(90, 90, outer, inner)
                                 : arcPath(90, 90, outer, inner, cursor, cursor + angle);
                         const color = palette[index % palette.length];
@@ -640,7 +643,7 @@ function renderHeatStrip(items, valueKey, labelKey, color, formatter = (value) =
         <div class="stats-heat-strip"${style}>
             ${rows
                 .map((item) => {
-                    const value = nonNegativeNumber(item[valueKey]);
+                    const value   = nonNegativeNumber(item[valueKey]);
                     const opacity = value ? 0.16 + (value / max) * 0.84 : 0.08;
                     return `
                     <div class="stats-heat-cell" title="${escapeHtml(item[labelKey])} · ${escapeHtml(formatter(value))}"
@@ -687,11 +690,11 @@ function renderActivityHeatmap(days, highlightStart, highlightEnd) {
         .sort((a, b) => a.date.localeCompare(b.date));
     if (!normalizedDays.length) return '<div class="stats-empty-card">暂无数据</div>';
     const weekdayLabels = ['一', '二', '三', '四', '五', '六', '日'];
-    const firstDay = new Date(`${normalizedDays[0].date}T00:00:00`);
-    const maxCount = Math.max(...normalizedDays.map((day) => day.count), 1);
-    const weeks = [];
-    let week = [];
-    const startWeekday = (firstDay.getDay() + 6) % 7;
+    const firstDay      = new Date(`${normalizedDays[0].date}T00:00:00`);
+    const maxCount      = Math.max(...normalizedDays.map((day) => day.count), 1);
+    const weeks         = [];
+    let week            = [];
+    const startWeekday  = (firstDay.getDay() + 6) % 7;
     for (let i = 0; i < startWeekday; i += 1) {
         week.push(null);
     }
@@ -710,7 +713,7 @@ function renderActivityHeatmap(days, highlightStart, highlightEnd) {
         weeks.push(week);
     }
     const monthLabels = [];
-    let lastMonth = -1;
+    let lastMonth     = -1;
     weeks.forEach((w, wi) => {
         const firstValid = w.find((c) => c !== null);
         if (firstValid) {
@@ -835,17 +838,17 @@ function renderComparisonBars(months) {
 
 // 洞察文本只拼接页面计算结果；来自接口的标签必须先转义。
 function generateInsights(data) {
-    const insights = [];
-    const ledger = data?.ledger || {};
-    const tasks = data?.tasks || {};
-    const events = data?.events || {};
-    const diary = data?.diary || {};
+    const insights          = [];
+    const ledger            = data?.ledger || {};
+    const tasks             = data?.tasks || {};
+    const events            = data?.events || {};
+    const diary             = data?.diary || {};
     const expenseByCategory = sortByNumericDesc(ledger.expense_by_category, 'total');
-    const incomeByCategory = sortByNumericDesc(ledger.income_by_category, 'total');
-    const expenseTotal = sumBy(expenseByCategory, 'total');
-    const incomeTotal = sumBy(incomeByCategory, 'total');
-    const totals = normalizeTaskTotals(tasks.totals);
-    const totalTasks = totals.total;
+    const incomeByCategory  = sortByNumericDesc(ledger.income_by_category, 'total');
+    const expenseTotal      = sumBy(expenseByCategory, 'total');
+    const incomeTotal       = sumBy(incomeByCategory, 'total');
+    const totals            = normalizeTaskTotals(tasks.totals);
+    const totalTasks        = totals.total;
 
     if (expenseTotal > 0) {
         const top = expenseByCategory[0];
@@ -865,11 +868,11 @@ function generateInsights(data) {
     }
 
     if (totalTasks > 0) {
-        const doneCount = totals.done;
+        const doneCount      = totals.done;
         const completionBase = totals.open + totals.done;
-        const rate = Math.round(totals.completionRate * 100);
-        const active = totals.open;
-        const cancelled = totals.cancelled;
+        const rate           = Math.round(totals.completionRate * 100);
+        const active         = totals.open;
+        const cancelled      = totals.cancelled;
         insights.push({
             icon: '✅',
             color: '#f0fdf4',
@@ -894,7 +897,7 @@ function generateInsights(data) {
     }
 
     const diarySummary = diary.summary || {};
-    const streak = diarySummary.current_streak || 0;
+    const streak       = diarySummary.current_streak || 0;
     if (_range === 'month' && streak > 0) {
         insights.push({
             icon: '📔',
@@ -939,11 +942,11 @@ function renderInsightCard(data) {
 }
 
 function normalizeTaskTotals(totals = {}) {
-    const source = isRecord(totals) ? totals : {};
-    const open = Math.round(nonNegativeNumber(source.open));
-    const done = Math.round(nonNegativeNumber(source.done));
-    const cancelled = Math.round(nonNegativeNumber(source.cancelled));
-    const total = open + done + cancelled;
+    const source         = isRecord(totals) ? totals : {};
+    const open           = Math.round(nonNegativeNumber(source.open));
+    const done           = Math.round(nonNegativeNumber(source.done));
+    const cancelled      = Math.round(nonNegativeNumber(source.cancelled));
+    const total          = open + done + cancelled;
     const completionBase = open + done;
     return {
         open,
@@ -956,8 +959,8 @@ function normalizeTaskTotals(totals = {}) {
 
 // 顶部大图、比较卡与通用卡片骨架。
 function renderFeaturedDeck() {
-    const range = deriveRangeDates();
-    const heatmapYear = Math.round(nonNegativeNumber(_heatmapData?.year));
+    const range        = deriveRangeDates();
+    const heatmapYear  = Math.round(nonNegativeNumber(_heatmapData?.year));
     const heatmapRange = clampRangeToYear(range, heatmapYear);
     return `
         <section class="stats-featured">
@@ -1372,8 +1375,8 @@ function ensureStyles() {
 }
 
 // 数据请求：固定本次范围快照，全部时间的三个边界查询并行执行。
-async function fetchAllData({ rangeKey, range, today }) {
-    const rangeParam = buildRequestRangeValue(rangeKey, range);
+async function fetchAllData({ rangeKey, range, today, currency }) {
+    const rangeParam  = buildRequestRangeValue(rangeKey, range);
     const heatmapYear = resolveHeatmapYear(range);
     const [ledgerRange, notesRange, diaryRange] =
         rangeKey === 'all'
@@ -1404,7 +1407,7 @@ async function fetchAllData({ rangeKey, range, today }) {
     const [ledgerRes, tasksRes, eventsRes, notesRes, diaryRes, heatmapRes, comparisonRes, moodRes] = await Promise.all([
         api.get(
             '/stats/ledger',
-            rangeKey === 'all' ? { start_date: ledgerRange.start, end_date: ledgerRange.end } : { range: rangeParam },
+            rangeKey === 'all' ? { currency, start_date: ledgerRange.start, end_date: ledgerRange.end } : { currency, range: rangeParam },
         ),
         api.get('/stats/tasks', { range: rangeParam }),
         api.get('/stats/events', { range: rangeParam }),
@@ -1420,7 +1423,7 @@ async function fetchAllData({ rangeKey, range, today }) {
             cadence_granularity: 'auto',
         }),
         api.get('/stats/activity-heatmap', { year: heatmapYear }),
-        api.get('/stats/ledger/comparison', { months: 6 }),
+        api.get('/stats/ledger/comparison', { months: 6, currency }),
         api.get('/config/diary/moods').catch(() => null),
     ]);
     const moodData = responseData(moodRes);
@@ -1553,15 +1556,15 @@ function financeCards() {
 }
 
 function taskCards() {
-    const tasks = _data?.tasks || {};
-    const totals = normalizeTaskTotals(tasks.totals);
-    const totalCount = totals.total;
+    const tasks       = _data?.tasks || {};
+    const totals      = normalizeTaskTotals(tasks.totals);
+    const totalCount  = totals.total;
     const statusItems = [
         { label: '未完成', count: totals.open, color: TASK_TONES.open },
         { label: '已完成', count: totals.done, color: TASK_TONES.done },
         { label: '已取消', count: totals.cancelled, color: TASK_TONES.cancelled },
     ].filter((item) => item.count > 0);
-    const weekly = safeRecords(tasks.weekly);
+    const weekly    = safeRecords(tasks.weekly);
     const planItems = safeRecords(tasks.by_plan)
         .slice(0, 8)
         .map((item) => ({ label: item.plan || '未安排', count: item.count }));
@@ -1659,10 +1662,10 @@ function taskCards() {
 }
 
 function eventCards() {
-    const events = _data?.events || {};
-    const weekly = safeRecords(events.weekly);
-    const totalEvents = sumBy(weekly, 'count');
-    const slotLabels = ['06-09', '09-12', '12-14', '14-18', '18-21', '21-24'];
+    const events        = _data?.events || {};
+    const weekly        = safeRecords(events.weekly);
+    const totalEvents   = sumBy(weekly, 'count');
+    const slotLabels    = ['06-09', '09-12', '12-14', '14-18', '18-21', '21-24'];
     const weekdayLabels = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
     return [
         renderCard({
@@ -1722,11 +1725,11 @@ function eventCards() {
 }
 
 function noteCards() {
-    const notes = _data?.notes || {};
-    const summary = notes.summary || {};
+    const notes              = _data?.notes || {};
+    const summary            = notes.summary || {};
     const cadenceGranularity = notes.cadence_granularity || 'day';
-    const categories = safeRecords(notes.categories);
-    const hotTags = safeRecords(notes.hot_tags)
+    const categories         = safeRecords(notes.categories);
+    const hotTags            = safeRecords(notes.hot_tags)
         .slice(0, 10)
         .map((item) => ({ label: `#${item.tag}`, value: item.count }));
     const cadenceItems = safeRecords(notes.cadence).map((item) => ({ label: item.label, count: item.count }));
@@ -1776,10 +1779,10 @@ function noteCards() {
 }
 
 function diaryCards() {
-    const diary = _data?.diary || {};
-    const summary = diary.summary || {};
+    const diary              = _data?.diary || {};
+    const summary            = diary.summary || {};
     const cadenceGranularity = diary.cadence_granularity || 'day';
-    const cadenceItems = safeRecords(diary.cadence).map((item) => ({
+    const cadenceItems       = safeRecords(diary.cadence).map((item) => ({
         ...item,
         mood_label: formatMoodLabel(item.mood),
         template_label: item.template_id || '手写',
@@ -1857,16 +1860,16 @@ function diaryCards() {
 
 // 页面级摘要、瀑布流与交互绑定。
 function renderSummary() {
-    const ledger = _data?.ledger || {};
-    const tasks = _data?.tasks || {};
-    const events = _data?.events || {};
-    const notes = _data?.notes || {};
-    const diary = _data?.diary || {};
-    const totals = normalizeTaskTotals(tasks.totals);
-    const totalEvents = sumBy(events.weekly, 'count');
+    const ledger       = _data?.ledger || {};
+    const tasks        = _data?.tasks || {};
+    const events       = _data?.events || {};
+    const notes        = _data?.notes || {};
+    const diary        = _data?.diary || {};
+    const totals       = normalizeTaskTotals(tasks.totals);
+    const totalEvents  = sumBy(events.weekly, 'count');
     const expenseTotal = sumBy(ledger.expense_by_category, 'total');
-    const incomeTotal = sumBy(ledger.income_by_category, 'total');
-    const rangeTitle = _range === 'custom' ? '自定义范围' : rangeLabel();
+    const incomeTotal  = sumBy(ledger.income_by_category, 'total');
+    const rangeTitle   = _range === 'custom' ? '自定义范围' : rangeLabel();
     return `
         <section class="stats-summary-grid">
             <article class="stats-summary-card"><div class="stats-summary-label">${rangeTitle}支出</div><div class="stats-summary-value">${formatAmount(expenseTotal)}</div><div class="stats-summary-meta">收入 ${formatAmount(incomeTotal)}</div></article>
@@ -1906,7 +1909,7 @@ function renderPage() {
         return;
     }
     _chartSequence = 0;
-    const range = deriveRangeDates();
+    const range        = deriveRangeDates();
     const rangeSummary = _range === 'all' ? '全部时间' : `${range.start} → ${range.end}`;
     _container.innerHTML = `
         <div class="stats-shell" ${_loading ? 'aria-busy="true"' : ''}>
@@ -1924,6 +1927,7 @@ function renderPage() {
                         </div>
                     </div>
                     <div class="stats-range-group">
+                        <label>财务币种 <input id="stats-currency" class="stats-date-field" value="${escapeHtml(_currency)}" maxlength="3" size="4" aria-label="统计币种代码"></label>
                         <div class="stats-chip-row">
                             ${RANGE_PRESET_OPTIONS.map((option) => `<button type="button" class="stats-range-btn${_range === option.key ? ' active' : ''}" data-range="${escapeHtml(option.key)}" aria-pressed="${_range === option.key}">${escapeHtml(option.label)}</button>`).join('')}
                         </div>
@@ -1951,7 +1955,14 @@ function renderPage() {
 
 function attachListeners() {
     if (!_container) return;
-    const container = _container;
+    const container     = _container;
+    const currencyInput = container.querySelector('#stats-currency');
+    if (currencyInput) currencyInput.onchange = async () => {
+        const currency = currencyInput.value.trim().toUpperCase();
+        if (!/^[A-Z]{3}$/.test(currency)) { showToast('请输入三位币种代码，如 CNY、USD', 'error'); return; }
+        _currency = currency;
+        await loadAndRender();
+    };
     container.querySelectorAll('.stats-range-btn[data-range]').forEach((button) => {
         button.onclick = async () => {
             if (_container !== container) return;
@@ -1969,13 +1980,13 @@ function attachListeners() {
             await loadAndRender();
         };
     });
-    const customStart = container.querySelector('#stats-custom-start');
-    const customEnd = container.querySelector('#stats-custom-end');
-    const customApply = container.querySelector('#stats-custom-apply');
+    const customStart      = container.querySelector('#stats-custom-start');
+    const customEnd        = container.querySelector('#stats-custom-end');
+    const customApply      = container.querySelector('#stats-custom-apply');
     const applyCustomRange = async () => {
         if (_container !== container) return;
         const nextStart = String(customStart?.value || '').trim();
-        const nextEnd = String(customEnd?.value || '').trim();
+        const nextEnd   = String(customEnd?.value || '').trim();
         _customDraftStart = nextStart;
         _customDraftEnd = nextEnd;
         if (!isValidDateInput(nextStart) || !isValidDateInput(nextEnd)) {
@@ -2012,7 +2023,7 @@ async function loadAndRender() {
     if (_loading && request.signature === _activeRequestSignature) return;
 
     const container = _container;
-    const version = ++_loadVersion;
+    const version   = ++_loadVersion;
     _activeRequestSignature = request.signature;
     _loading = true;
     renderPage();

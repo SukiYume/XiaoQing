@@ -96,8 +96,8 @@ def test_scoped_tool_rejects_malformed_subject_instead_of_broadening_query() -> 
         lambda args: _tool_query_db(
             memory_db,
             args,
-            type_filter="person_info",
-            chat_id="g1",
+            type_filter = "person_info",
+            chat_id     = "g1",
         ),
         {"query": "喜欢什么", "subject_id": "not-an-id"},
     )
@@ -109,15 +109,15 @@ def test_scoped_tool_rejects_malformed_subject_instead_of_broadening_query() -> 
 def test_global_memory_tool_redacts_legacy_absolute_path_metadata() -> None:
     from plugins.xiaoqing_chat.memory.memory_db import RetrievedItem
 
-    windows_path = r"C:\Users\operator\private\knowledge.txt"
-    posix_path = "/home/operator/private/knowledge.txt"
-    memory_db = MagicMock()
+    windows_path                        = r"C:\Users\operator\private\knowledge.txt"
+    posix_path                          = "/home/operator/private/knowledge.txt"
+    memory_db                           = MagicMock()
     memory_db.query_global.return_value = [
         RetrievedItem(
-            doc_id="kb:legacy:0",
-            text="approved knowledge",
-            score=0.9,
-            meta={
+            doc_id = "kb:legacy:0",
+            text   = "approved knowledge",
+            score  = 0.9,
+            meta   = {
                 "type": "knowledge",
                 "source": windows_path,
                 "source_path": posix_path,
@@ -219,23 +219,23 @@ async def test_memory_direct_miss_skips_agent_for_ordinary_message(
     )
 
     block = await build_memory_block(
-        data_dir=tmp_path,
-        chat_id="g1",
-        secrets={"_ai": object()},
-        cfg=MemoryConfig(
-            planner_question=False,
-            enable_thinking_back_cache=False,
-            agent_on_direct_miss_requires_reference=True,
+        data_dir = tmp_path,
+        chat_id  = "g1",
+        secrets  = {"_ai": object()},
+        cfg      = MemoryConfig(
+            planner_question                        = False,
+            enable_thinking_back_cache              = False,
+            agent_on_direct_miss_requires_reference = True,
         ),
-        bot_name="小青",
-        history=[],
-        current_text="冻饺子怎么煮",
-        planner_question="",
-        memory_db=memory_db,
-        temperature=0.7,
-        top_p=0.9,
-        max_tokens=256,
-        timeout_seconds=3.0,
+        bot_name         = "小青",
+        history          = [],
+        current_text     = "冻饺子怎么煮",
+        planner_question = "",
+        memory_db        = memory_db,
+        temperature      = 0.7,
+        top_p            = 0.9,
+        max_tokens       = 256,
+        timeout_seconds  = 3.0,
     )
 
     assert block == ""
@@ -248,9 +248,9 @@ async def test_memory_direct_query_runs_outside_event_loop_thread(monkeypatch, t
 
     from plugins.xiaoqing_chat.memory.memory_retrieval import build_memory_block
 
-    event_loop_thread = threading.get_ident()
+    event_loop_thread           = threading.get_ident()
     observed_threads: list[int] = []
-    memory_db = MagicMock()
+    memory_db                   = MagicMock()
 
     def query(*_args, **_kwargs):
         observed_threads.append(threading.get_ident())
@@ -264,23 +264,23 @@ async def test_memory_direct_query_runs_outside_event_loop_thread(monkeypatch, t
     )
 
     await build_memory_block(
-        data_dir=tmp_path,
-        chat_id="g1",
-        secrets={"_ai": object()},
-        cfg=MemoryConfig(
-            planner_question=False,
-            enable_thinking_back_cache=False,
-            agent_on_direct_miss_requires_reference=True,
+        data_dir = tmp_path,
+        chat_id  = "g1",
+        secrets  = {"_ai": object()},
+        cfg      = MemoryConfig(
+            planner_question                        = False,
+            enable_thinking_back_cache              = False,
+            agent_on_direct_miss_requires_reference = True,
         ),
-        bot_name="小青",
-        history=[],
-        current_text="普通消息",
-        planner_question="",
-        memory_db=memory_db,
-        temperature=0.7,
-        top_p=0.9,
-        max_tokens=256,
-        timeout_seconds=3.0,
+        bot_name         = "小青",
+        history          = [],
+        current_text     = "普通消息",
+        planner_question = "",
+        memory_db        = memory_db,
+        temperature      = 0.7,
+        top_p            = 0.9,
+        max_tokens       = 256,
+        timeout_seconds  = 3.0,
     )
 
     assert observed_threads
@@ -304,23 +304,23 @@ async def test_memory_direct_miss_keeps_agent_for_explicit_recall(
     )
 
     block = await build_memory_block(
-        data_dir=tmp_path,
-        chat_id="g1",
-        secrets={"_ai": object()},
-        cfg=MemoryConfig(
-            planner_question=False,
-            enable_thinking_back_cache=False,
-            agent_on_direct_miss_requires_reference=True,
+        data_dir = tmp_path,
+        chat_id  = "g1",
+        secrets  = {"_ai": object()},
+        cfg      = MemoryConfig(
+            planner_question                        = False,
+            enable_thinking_back_cache              = False,
+            agent_on_direct_miss_requires_reference = True,
         ),
-        bot_name="小青",
-        history=[],
-        current_text="她之前说过喜欢什么来着",
-        planner_question="",
-        memory_db=memory_db,
-        temperature=0.7,
-        top_p=0.9,
-        max_tokens=256,
-        timeout_seconds=3.0,
+        bot_name         = "小青",
+        history          = [],
+        current_text     = "她之前说过喜欢什么来着",
+        planner_question = "",
+        memory_db        = memory_db,
+        temperature      = 0.7,
+        top_p            = 0.9,
+        max_tokens       = 256,
+        timeout_seconds  = 3.0,
     )
 
     assert "喜欢清淡口味" in block

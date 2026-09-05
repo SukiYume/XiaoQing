@@ -22,9 +22,9 @@ from plugins.minecraft.rcon import (
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.settings_snapshot import settings_snapshot
 
-ROOT = REPOSITORY_ROOT
+ROOT           = REPOSITORY_ROOT
 PRIVATE_TARGET = DeliveryTarget("private", 10001)
-GROUP_TARGET = DeliveryTarget("group", 20001)
+GROUP_TARGET   = DeliveryTarget("group", 20001)
 
 
 class _Context:
@@ -33,10 +33,10 @@ class _Context:
         plugin_dir: Path,
         *,
         password: Any = "secret-pass",
-        profile: str = "default",
+        profile: str  = "default",
     ) -> None:
         self.plugin_dir = plugin_dir
-        self.data_dir = plugin_dir / "runtime-data"
+        self.data_dir   = plugin_dir / "runtime-data"
         self.request_id = "mc-test-request"
         self.send_action = AsyncMock(return_value=True)
         self.secrets = {"plugins": {"minecraft": {profile: password}}}
@@ -50,17 +50,17 @@ class _FakeRconClient:
     next_connect_result = RconConnectResult(success=True)
 
     def __init__(self, host: str, port: int, password: str) -> None:
-        self.host = host
-        self.port = port
-        self.password = password
-        self.connected = False
-        self.disconnected = False
+        self.host                = host
+        self.port                = port
+        self.password            = password
+        self.connected           = False
+        self.disconnected        = False
         self.commands: list[str] = []
         self.command_result = RconCommandResult(success=True, response="ok")
         type(self).instances.append(self)
 
     async def connect(self) -> RconConnectResult:
-        result = type(self).next_connect_result
+        result         = type(self).next_connect_result
         self.connected = result.success
         return result
 
@@ -69,7 +69,7 @@ class _FakeRconClient:
         return self.command_result
 
     async def disconnect(self) -> None:
-        self.connected = False
+        self.connected    = False
         self.disconnected = True
 
 
@@ -95,7 +95,7 @@ def _context(
     tmp_path: Path,
     *,
     password: Any = "secret-pass",
-    profile: str = "default",
+    profile: str  = "default",
 ) -> PluginContextProtocol:
     return cast(
         PluginContextProtocol,
@@ -123,17 +123,17 @@ def _server_config(**overrides: Any) -> dict[str, Any]:
 def _connection(
     target: DeliveryTarget,
     *,
-    client: Any = None,
+    client: Any  = None,
     monitor: Any = None,
-    host: str = "127.0.0.1",
-    port: int = 25575,
+    host: str    = "127.0.0.1",
+    port: int    = 25575,
 ) -> McConnection:
     return McConnection(
-        host=host,
-        port=port,
-        target=target,
-        rcon_client=cast(Any, client),
-        log_monitor=cast(Any, monitor),
+        host        = host,
+        port        = port,
+        target      = target,
+        rcon_client = cast(Any, client),
+        log_monitor = cast(Any, monitor),
     )
 
 
@@ -339,8 +339,8 @@ class TestMinecraftConfiguration:
         _write_config(tmp_path, _server_config())
         _FakeRconClient.next_connect_result = RconConnectResult(
             False,
-            error_kind=RconErrorKind.AUTH,
-            error_message="RCON 认证失败，请检查密码",
+            error_kind    = RconErrorKind.AUTH,
+            error_message = "RCON 认证失败，请检查密码",
         )
         monkeypatch.setattr(mc_main, "RconClient", _FakeRconClient)
 
@@ -363,7 +363,7 @@ class TestMinecraftConfiguration:
 
         monkeypatch.setattr(mc_main, "RconClient", explode)
         result = await mc_main._handle_connect("default", PRIVATE_TARGET, _context(tmp_path))
-        text = result[0]["data"]["text"]
+        text   = result[0]["data"]["text"]
         assert text == "❌ RCON 连接初始化失败"
         assert "SECRET" not in text
         assert reset_minecraft_runtime.get_connection(PRIVATE_TARGET) is None
@@ -412,8 +412,8 @@ class TestMinecraftCommands:
         monkeypatch.setattr(mc_main, "RconClient", _FakeRconClient)
         context = _context(tmp_path)
 
-        connected = await mc_main.handle("mcconnect", "default", {"user_id": 9}, context)
-        status = await mc_main.handle("mc", "status", {"user_id": 9}, context)
+        connected    = await mc_main.handle("mcconnect", "default", {"user_id": 9}, context)
+        status       = await mc_main.handle("mc", "status", {"user_id": 9}, context)
         disconnected = await mc_main.handle("mcdisconnect", "", {"user_id": 9}, context)
 
         assert "已连接" in connected[0]["data"]["text"]
@@ -432,9 +432,9 @@ class TestMinecraftCommands:
         context = _context(tmp_path)
 
         connected = await mc_main.handle("mc", "connect default", {"user_id": 10}, context)
-        client = _FakeRconClient.instances[0]
+        client    = _FakeRconClient.instances[0]
         client.command_result = RconCommandResult(True, response="players: 1")
-        command = await mc_main.handle("mc", "list", {"user_id": 10}, context)
+        command      = await mc_main.handle("mc", "list", {"user_id": 10}, context)
         disconnected = await mc_main.handle("mc", "disconnect", {"user_id": 10}, context)
 
         assert "已连接" in connected[0]["data"]["text"]
@@ -479,7 +479,7 @@ class TestMinecraftCommands:
         tmp_path: Path,
     ) -> None:
         private_client = _FakeRconClient("private", 25575, "p")
-        group_client = _FakeRconClient("group", 25576, "p")
+        group_client   = _FakeRconClient("group", 25576, "p")
         private_client.command_result = RconCommandResult(True, response="players: 3")
         group_client.command_result = RconCommandResult(True, response="")
         await reset_minecraft_runtime.replace_connection(
@@ -494,8 +494,8 @@ class TestMinecraftCommands:
         empty = await mc_main._handle_mc_command("save-all", GROUP_TARGET, context)
         private_client.command_result = RconCommandResult(
             False,
-            error_kind=RconErrorKind.TIMEOUT,
-            error_message="RCON 操作超时，未收到完整响应",
+            error_kind    = RconErrorKind.TIMEOUT,
+            error_message = "RCON 操作超时，未收到完整响应",
         )
         failed = await mc_main._handle_mc_command("list", PRIVATE_TARGET, context)
 
@@ -524,9 +524,9 @@ class TestMinecraftCommands:
 
     @pytest.mark.asyncio
     async def test_missing_disconnect_and_status_are_explicit(self, tmp_path: Path) -> None:
-        context = _context(tmp_path)
+        context      = _context(tmp_path)
         disconnected = await mc_main._handle_disconnect(PRIVATE_TARGET, context)
-        status = mc_main._handle_status_command(PRIVATE_TARGET, context)
+        status       = mc_main._handle_status_command(PRIVATE_TARGET, context)
         assert "当前无连接" in disconnected[0]["data"]["text"]
         assert "未连接到任何服务器" in status[0]["data"]["text"]
 
@@ -562,7 +562,7 @@ class TestMinecraftCommands:
         reset_minecraft_runtime: ConnectionManager,
         tmp_path: Path,
     ) -> None:
-        client = _FakeRconClient("private", 25575, "p")
+        client                = _FakeRconClient("private", 25575, "p")
         client.command_result = RconCommandResult(
             True,
             response="\x1b[31mSECRET\x1b[0m\x00" + "🧱" * 5000,
@@ -570,7 +570,7 @@ class TestMinecraftCommands:
         await reset_minecraft_runtime.replace_connection(_connection(PRIVATE_TARGET, client=client))
 
         result = await mc_main._handle_mc_command("list", PRIVATE_TARGET, _context(tmp_path))
-        text = result[0]["data"]["text"]
+        text   = result[0]["data"]["text"]
 
         assert "\x1b" not in text and "\x00" not in text
         assert "响应已截断" in text
@@ -583,11 +583,11 @@ class TestMinecraftCommands:
         reset_minecraft_runtime: ConnectionManager,
         tmp_path: Path,
     ) -> None:
-        client = _FakeRconClient("private", 25575, "p")
+        client                = _FakeRconClient("private", 25575, "p")
         client.command_result = RconCommandResult(
             True,
-            response="partial response",
-            truncated=True,
+            response  = "partial response",
+            truncated = True,
         )
         await reset_minecraft_runtime.replace_connection(_connection(PRIVATE_TARGET, client=client))
 
@@ -606,7 +606,7 @@ class TestMinecraftCommands:
 
         monkeypatch.setattr(mc_main, "_dispatch_command", explode)
         result = await mc_main.handle("mc", "status", {"user_id": 1}, _context(tmp_path))
-        text = result[0]["data"]["text"]
+        text   = result[0]["data"]["text"]
         assert "处理 Minecraft 请求失败" in text
         assert "TOP-SECRET-INTERNAL" not in text
 
@@ -627,7 +627,7 @@ class TestMinecraftCommands:
 class TestConnectionManager:
     @pytest.mark.asyncio
     async def test_replace_is_atomic_and_closes_old_client(self) -> None:
-        manager = ConnectionManager()
+        manager    = ConnectionManager()
         old_client = _FakeRconClient("old", 25575, "p")
         new_client = _FakeRconClient("new", 25575, "p")
         old = _connection(PRIVATE_TARGET, client=old_client, host="old")
@@ -644,7 +644,7 @@ class TestConnectionManager:
     @pytest.mark.asyncio
     async def test_disconnect_missing_and_snapshot_are_safe(self) -> None:
         manager = ConnectionManager()
-        conn = _connection(PRIVATE_TARGET)
+        conn    = _connection(PRIVATE_TARGET)
         await manager.replace_connection(conn)
         snapshot = manager.all_connections()
         snapshot.clear()
@@ -686,11 +686,11 @@ class TestConnectionManager:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         manager = ConnectionManager()
-        client = _FakeRconClient("host", 25575, "p")
+        client  = _FakeRconClient("host", 25575, "p")
         await manager.replace_connection(_connection(PRIVATE_TARGET, client=client))
         monkeypatch.setattr(mc_main, "_manager", manager)
         mc_main._event_buckets[("host", 25575, "private", 10001)] = mc_main._EventTokenBucket()
-        mc_main._delivery_cursor = 4
+        mc_main._delivery_cursor                                  = 4
 
         await mc_main.shutdown(None)
 
@@ -751,15 +751,15 @@ class TestLogMonitor:
         self, tmp_path: Path
     ) -> None:
         log_path = tmp_path / "latest.log"
-        payload = (b"ignored line\n" * 80) + b"[12:00:00] [Server thread/INFO]: <Steve> bounded\n"
+        payload  = (b"ignored line\n" * 80) + b"[12:00:00] [Server thread/INFO]: <Steve> bounded\n"
         log_path.write_bytes(payload)
-        monitor = LogMonitor(str(log_path))
-        monitor._initialized = True  # noqa: SLF001
+        monitor                = LogMonitor(str(log_path))
+        monitor._initialized   = True  # noqa: SLF001
         monitor._last_position = 0  # noqa: SLF001
         monitor.MAX_READ_BYTES = 128
-        read_start = len(payload) - monitor.MAX_READ_BYTES
-        partial = read_start > 0 and payload[read_start - 1 : read_start] != b"\n"
-        partial_end = payload.find(b"\n", read_start) + 1 if partial else read_start
+        read_start             = len(payload) - monitor.MAX_READ_BYTES
+        partial                = read_start > 0 and payload[read_start - 1 : read_start] != b"\n"
+        partial_end            = payload.find(b"\n", read_start) + 1 if partial else read_start
 
         batch = monitor.check_updates()
 
@@ -772,13 +772,13 @@ class TestLogMonitor:
 
     def test_event_retention_is_bounded_and_counts_all_matches(self, tmp_path: Path) -> None:
         log_path = tmp_path / "latest.log"
-        lines = "".join(
+        lines    = "".join(
             f"[12:00:00] [Server thread/INFO]: <Player{index % 100}> message-{index}\n"
             for index in range(1500)
         )
         log_path.write_text(lines, encoding="utf-8")
-        monitor = LogMonitor(str(log_path))
-        monitor._initialized = True  # noqa: SLF001
+        monitor                = LogMonitor(str(log_path))
+        monitor._initialized   = True  # noqa: SLF001
         monitor.MAX_READ_BYTES = log_path.stat().st_size + 1
 
         batch = monitor.check_updates()
@@ -811,7 +811,7 @@ class TestLogMonitor:
         assert rotated.cursor_after == log_path.stat().st_size
 
     def test_persisted_cursor_survives_restart(self, tmp_path: Path) -> None:
-        log_path = tmp_path / "latest.log"
+        log_path   = tmp_path / "latest.log"
         state_path = tmp_path / "state" / "cursor.json"
         log_path.write_bytes(b"")
         first_monitor = LogMonitor(str(log_path), state_path=state_path)
@@ -830,7 +830,7 @@ class TestLogMonitor:
         assert [event.player for event in second_batch.events] == ["B"]
 
     def test_corrupt_cursor_starts_at_current_end(self, tmp_path: Path) -> None:
-        log_path = tmp_path / "latest.log"
+        log_path   = tmp_path / "latest.log"
         state_path = tmp_path / "cursor.json"
         log_path.write_text(
             "[12:00:00] [Server thread/INFO]: Old joined the game\n",
@@ -850,7 +850,7 @@ class TestLogMonitor:
         self,
         tmp_path: Path,
     ) -> None:
-        log_path = tmp_path / "latest.log"
+        log_path   = tmp_path / "latest.log"
         state_path = tmp_path / "cursor.json"
         log_path.write_text(
             "[12:00:00] [Server thread/INFO]: Old joined the game\n",
@@ -874,7 +874,7 @@ class TestLogMonitor:
         assert mismatch._last_position == 0  # noqa: SLF001
 
     def test_invalid_cursor_position_and_directory_path_fail_closed(self, tmp_path: Path) -> None:
-        log_path = tmp_path / "latest.log"
+        log_path   = tmp_path / "latest.log"
         state_path = tmp_path / "cursor.json"
         log_path.write_text("history\n", encoding="utf-8")
         state_path.write_text(
@@ -903,12 +903,12 @@ class TestLogMonitor:
 
     def test_large_unscanned_prefix_keeps_unknown_line_count(self, tmp_path: Path) -> None:
         log_path = tmp_path / "latest.log"
-        event = b"[12:00:00] [Server thread/INFO]: <Steve> bounded\n"
-        payload = b"x" * 200 + b"\n" + event
+        event    = b"[12:00:00] [Server thread/INFO]: <Steve> bounded\n"
+        payload  = b"x" * 200 + b"\n" + event
         log_path.write_bytes(payload)
-        monitor = LogMonitor(str(log_path))
-        monitor._initialized = True  # noqa: SLF001
-        monitor.MAX_READ_BYTES = len(event) + 50
+        monitor                             = LogMonitor(str(log_path))
+        monitor._initialized                = True  # noqa: SLF001
+        monitor.MAX_READ_BYTES              = len(event) + 50
         monitor.MAX_SKIPPED_LINE_SCAN_BYTES = 1
 
         batch = monitor.check_updates()
@@ -923,10 +923,10 @@ class TestLogMonitor:
         assert monitor.initialize()
         assert monitor.commit(LogBatch(events=[])) is False
         stale = LogBatch(
-            events=[],
-            cursor_before=99,
-            cursor_after=100,
-            file_identity="1:2",
+            events        = [],
+            cursor_before = 99,
+            cursor_after  = 100,
+            file_identity = "1:2",
         )
         assert monitor.commit(stale) is False
 

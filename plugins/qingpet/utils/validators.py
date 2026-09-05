@@ -13,7 +13,7 @@ def validate_sensitive_content(
 ) -> tuple[bool, str]:
     """检查文本是否包含默认或调用方补充的敏感词。"""
     normalized_text = text.casefold()
-    words = dict.fromkeys((*DEFAULT_SENSITIVE_WORDS, *(sensitive_words or ())))
+    words           = dict.fromkeys((*DEFAULT_SENSITIVE_WORDS, *(sensitive_words or ())))
     for word in words:
         if word and word.casefold() in normalized_text:
             return False, "内容包含不允许使用的词汇"

@@ -1,3 +1,4 @@
+# 入站监听策略：约束明文 HTTP/WS 的本机地址与可信代理配置。
 """Security policy for XiaoQing's plaintext inbound HTTP/WS listeners."""
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ def parse_inbound_listener(value: object, transport: InboundTransport) -> SplitR
         return None
     try:
         parts = urlsplit(raw)
-        port = parts.port
+        port  = parts.port
     except ValueError as exc:
         raise ValueError(f"invalid inbound {transport.upper()} listener URL") from exc
 

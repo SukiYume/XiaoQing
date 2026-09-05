@@ -24,8 +24,8 @@ from tests.helpers.settings_snapshot import with_settings_reader
 @pytest.fixture
 def codex_config(tmp_path: Path) -> CodexPluginConfig:
     context = SimpleNamespace(
-        data_dir=tmp_path / "plugin-data",
-        config={
+        data_dir = tmp_path / "plugin-data",
+        config   = {
             "plugins": {
                 "codex": {
                     "default_cwd": str(tmp_path),
@@ -50,8 +50,8 @@ def _json_line(event: dict[str, object]) -> bytes:
 
 def _feed_in_chunks(accumulator: _StdoutEventAccumulator, payload: bytes) -> None:
     chunk_sizes = (1, 2, 5, 13, 29, 7)
-    offset = 0
-    index = 0
+    offset      = 0
+    index       = 0
     while offset < len(payload):
         size = chunk_sizes[index % len(chunk_sizes)]
         accumulator.feed(payload[offset : offset + size])
@@ -61,11 +61,11 @@ def _feed_in_chunks(accumulator: _StdoutEventAccumulator, payload: bytes) -> Non
 
 def _job() -> SimpleNamespace:
     return SimpleNamespace(
-        label="budget-test",
-        process=None,
-        prompt_started=False,
-        cancel_requested=False,
-        cancel_event=asyncio.Event(),
+        label            = "budget-test",
+        process          = None,
+        prompt_started   = False,
+        cancel_requested = False,
+        cancel_event     = asyncio.Event(),
     )
 
 
@@ -85,7 +85,7 @@ def test_chunked_stdout_keeps_events_then_enforces_total_budget(
     codex_config: CodexPluginConfig,
 ) -> None:
     accumulator = _StdoutEventAccumulator(codex_config)
-    events = [
+    events      = [
         {"type": "thread.started", "thread_id": "thread-budget"},
         {
             "type": "item.completed",
@@ -190,7 +190,7 @@ def test_unterminated_json_line_has_a_hard_limit(codex_config: CodexPluginConfig
 
 def test_utf8_truncation_is_valid_and_bounded() -> None:
     byte_budget = 73
-    truncated = _truncate_utf8("青🧪" * 100, byte_budget)
+    truncated   = _truncate_utf8("青🧪" * 100, byte_budget)
 
     assert truncated.endswith("...[output truncated]")
     assert "\ufffd" not in truncated
@@ -229,7 +229,7 @@ def test_qq_preview_limit_preserves_the_complete_bounded_file(
     output_dir = tmp_path / "outputs"
     output_dir.mkdir()
     raw_output = output_dir / "raw.txt"
-    original = "q" * (codex_config.max_qq_text_chars + 100)
+    original   = "q" * (codex_config.max_qq_text_chars + 100)
     raw_output.write_text(original, encoding="utf-8")
 
     capture = _capture_final_output(
@@ -309,10 +309,10 @@ def test_runner_streams_real_subprocess_events(
     async def exercise_runner():
         return await asyncio.wait_for(
             runner.run(
-                cwd=tmp_path,
-                prompt="stream events",
-                thread_id=None,
-                job=_job(),
+                cwd       = tmp_path,
+                prompt    = "stream events",
+                thread_id = None,
+                job       = _job(),
             ),
             timeout=10,
         )
@@ -333,7 +333,7 @@ def test_runner_terminates_real_subprocess_on_stdout_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     survived = tmp_path / "survived.txt"
-    script = (
+    script   = (
         "import pathlib,sys,time\n"
         "sys.stdin.buffer.read()\n"
         "for _ in range(80):\n"
@@ -352,13 +352,13 @@ def test_runner_terminates_real_subprocess_on_stdout_limit(
     )
 
     async def exercise_runner():
-        job = _job()
+        job    = _job()
         result = await asyncio.wait_for(
             runner.run(
-                cwd=tmp_path,
-                prompt="overflow stdout",
-                thread_id=None,
-                job=job,
+                cwd       = tmp_path,
+                prompt    = "overflow stdout",
+                thread_id = None,
+                job       = job,
             ),
             timeout=10,
         )

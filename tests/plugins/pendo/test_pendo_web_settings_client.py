@@ -7,7 +7,7 @@ from typing import Final
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT: Final = REPOSITORY_ROOT
+ROOT: Final            = REPOSITORY_ROOT
 SETTINGS_CLIENT: Final = (
     ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "settings.js"
 )
@@ -152,8 +152,8 @@ def _run_settings_client(script: str) -> None:
     assert_node_esm_contract(
         _settings_source_for_test(),
         script,
-        cwd=ROOT,
-        setup=SETTINGS_SETUP,
+        cwd   = ROOT,
+        setup = SETTINGS_SETUP,
     )
 
 

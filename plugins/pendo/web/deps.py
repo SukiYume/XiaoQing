@@ -11,11 +11,11 @@ from ..services.db import Database
 from ..utils.db_ops import set_database_singleton
 from .auth import AuthError, WebSession, configure_auth_database, get_web_session, verify_token
 
-SESSION_COOKIE_NAME: Final = "pendo_web_session"
-CSRF_HEADER_NAME: Final = "X-CSRF-Token"
-_WIDGET_KIND: Final = "widget"
-_WIDGET_SCOPE: Final = "widget:read"
-_SAFE_METHODS: Final = frozenset({"GET", "HEAD", "OPTIONS"})
+SESSION_COOKIE_NAME: Final    = "pendo_web_session"
+CSRF_HEADER_NAME: Final       = "X-CSRF-Token"
+_WIDGET_KIND: Final           = "widget"
+_WIDGET_SCOPE: Final          = "widget:read"
+_SAFE_METHODS: Final          = frozenset({"GET", "HEAD", "OPTIONS"})
 _REQUEST_SESSION_STATE: Final = "_pendo_web_session"
 
 # ``server.create_app`` 在开始接收请求前设置此引用。
@@ -55,12 +55,12 @@ def get_current_user(
                 )
             if payload.get("scope") != _WIDGET_SCOPE:
                 raise HTTPException(status_code=403, detail="Widget token has invalid scope")
-            path = request.url.path
+            path   = request.url.path
             method = request.method
             if method != "GET" or not path.startswith("/api/widget/"):
                 raise HTTPException(
-                    status_code=403,
-                    detail="Widget token is limited to /api/widget/* read-only requests",
+                    status_code = 403,
+                    detail      = "Widget token is limited to /api/widget/* read-only requests",
                 )
             owner_id = payload.get("owner_id")
             if not isinstance(owner_id, str) or not owner_id:

@@ -44,16 +44,16 @@ class PaperStorageCorruptionError(RuntimeError):
 
 class PaperStorage:
     # 同一数据目录的多个临时实例必须共用锁，否则读改写会彼此覆盖。
-    _locks_guard: ClassVar[Any] = threading.Lock()
+    _locks_guard: ClassVar[Any]                     = threading.Lock()
     _locks: ClassVar[WeakValueDictionary[str, Any]] = WeakValueDictionary()
 
     def __init__(self, data_dir: Path) -> None:
-        self.data_dir = data_dir
-        self.notes_file = data_dir / "paper_notes.json"
-        self.writing_file = data_dir / "writing_ideas.json"
-        self.topics_file = data_dir / "research_topics.json"
+        self.data_dir       = data_dir
+        self.notes_file     = data_dir / "paper_notes.json"
+        self.writing_file   = data_dir / "writing_ideas.json"
+        self.topics_file    = data_dir / "research_topics.json"
         self.deadlines_file = data_dir / "deadlines.json"
-        lock_key = str(data_dir.resolve())
+        lock_key            = str(data_dir.resolve())
         with self._locks_guard:
             self._lock = self._locks.setdefault(lock_key, threading.RLock())
 
@@ -82,7 +82,7 @@ class PaperStorage:
                 return {}
             try:
                 payload = path.read_bytes()
-                value = json.loads(
+                value   = json.loads(
                     payload.decode("utf-8"),
                     parse_constant=_reject_json_constant,
                 )
@@ -91,7 +91,7 @@ class PaperStorage:
                 self._validate_document(path, value)
                 return value
             except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
-                digest = hashlib.sha256(payload).hexdigest()[:12]
+                digest     = hashlib.sha256(payload).hexdigest()[:12]
                 quarantine = path.with_name(f"{path.name}.corrupt-{digest}")
                 try:
                     if not quarantine.exists():
@@ -151,7 +151,7 @@ class PaperStorage:
             return self._save_json(self.notes_file, data)
 
     def get_paper_notes(self, paper_id: str, user_id: int) -> list[dict[str, Any]]:
-        data = self._load_json(self.notes_file)
+        data  = self._load_json(self.notes_file)
         notes = data.get(paper_id, [])
         return [note for note in notes if _owned_by(note, user_id)]
 
@@ -161,7 +161,7 @@ class PaperStorage:
             if paper_id not in data:
                 return False
 
-            notes = data[paper_id]
+            notes          = data[paper_id]
             target_indices = [i for i, note in enumerate(notes) if _owned_by(note, user_id)]
             if index < 0 or index >= len(target_indices):
                 return False
@@ -206,7 +206,7 @@ class PaperStorage:
             if section not in data:
                 return False
 
-            ideas = data[section]
+            ideas         = data[section]
             owned_indices = [
                 position for position, idea in enumerate(ideas) if _owned_by(idea, user_id)
             ]
@@ -254,7 +254,7 @@ class PaperStorage:
                 return False
 
             keyword = keyword.strip().lower()
-            target = next(
+            target  = next(
                 (
                     entry
                     for entry in data["keywords"]
@@ -272,7 +272,7 @@ class PaperStorage:
     def clear_topics(self, user_id: int) -> bool:
         """Clear all research topics."""
         with self._lock:
-            data = self._load_json(self.topics_file)
+            data             = self._load_json(self.topics_file)
             data["keywords"] = [
                 entry for entry in data.get("keywords", []) if not _owned_by(entry, user_id)
             ]
@@ -286,12 +286,12 @@ class PaperStorage:
             existing = path.read_text(encoding="utf-8") if path.exists() else ""
             try:
                 existing_entries = citation_entries(existing)
-                new_entries = citation_entries(bibtex)
+                new_entries      = citation_entries(bibtex)
             except BibTeXParseError:
                 logger.error("BibTeX storage parse failed; existing file was not modified")
                 raise
             existing_keys = {entry.citation_key for entry in existing_entries}
-            new_keys = {entry.citation_key for entry in new_entries}
+            new_keys      = {entry.citation_key for entry in new_entries}
             if not new_entries or str(bibcode).strip() not in new_keys:
                 raise BibTeXParseError("ADS BibTeX export does not contain the requested bibcode")
             if existing_keys.intersection(new_keys):
@@ -323,7 +323,7 @@ class PaperStorage:
             return self._save_json(self.deadlines_file, data)
 
     def get_deadlines(self, user_id: int) -> list[dict[str, Any]]:
-        data = self._load_json(self.deadlines_file)
+        data      = self._load_json(self.deadlines_file)
         deadlines = data.get("deadlines", [])
         deadlines = [deadline for deadline in deadlines if _owned_by(deadline, user_id)]
         return sorted(deadlines, key=lambda x: x.get("date", ""))
@@ -335,7 +335,7 @@ class PaperStorage:
                 return False
 
             deadlines = data["deadlines"]
-            ordered = [
+            ordered   = [
                 (i, deadline)
                 for i, deadline in enumerate(deadlines)
                 if _owned_by(deadline, user_id)

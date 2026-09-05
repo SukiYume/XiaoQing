@@ -12,11 +12,11 @@ from pathlib import Path
 from .memory_db import MemoryDB
 from .vector_store import VectorDoc
 
-MAX_KNOWLEDGE_FILES = 32
-MAX_KNOWLEDGE_FILE_BYTES = 1024 * 1024
+MAX_KNOWLEDGE_FILES       = 32
+MAX_KNOWLEDGE_FILE_BYTES  = 1024 * 1024
 MAX_TOTAL_KNOWLEDGE_BYTES = 4 * 1024 * 1024
-MAX_KNOWLEDGE_CHUNKS = 512
-KNOWLEDGE_CHUNK_CHARS = 800
+MAX_KNOWLEDGE_CHUNKS      = 512
+KNOWLEDGE_CHUNK_CHARS     = 800
 
 
 class KnowledgeIndexError(ValueError):
@@ -36,8 +36,8 @@ def _hash_id(value: str) -> str:
 
 
 def _split_chunks(text: str, *, max_len: int = KNOWLEDGE_CHUNK_CHARS) -> list[str]:
-    normalized = (text or "").replace("\r\n", "\n").replace("\r", "\n")
-    parts = [part.strip() for part in normalized.split("\n\n") if part.strip()]
+    normalized        = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    parts             = [part.strip() for part in normalized.split("\n\n") if part.strip()]
     chunks: list[str] = []
     for part in parts:
         if len(part) <= max_len:
@@ -79,8 +79,8 @@ def _resolve_sources(*, files: Sequence[str], plugin_dir: Path) -> list[_Knowled
         raise KnowledgeIndexError("plugin directory could not be resolved") from exc
 
     sources: list[_KnowledgeSource] = []
-    seen: set[Path] = set()
-    declared_bytes = 0
+    seen: set[Path]                 = set()
+    declared_bytes                  = 0
     for raw_path in files:
         if type(raw_path) is not str or not raw_path.strip():
             raise KnowledgeIndexError("knowledge file paths must be non-empty strings")
@@ -118,8 +118,8 @@ def _resolve_sources(*, files: Sequence[str], plugin_dir: Path) -> list[_Knowled
             _KnowledgeSource(
                 path=path,
                 label=_logical_source_label(path=path, plugin_root=plugin_root),
-                identity=_stat_identity(info),
-                size=size,
+                identity = _stat_identity(info),
+                size     = size,
             )
         )
     return sources
@@ -131,7 +131,7 @@ def _read_source(source: _KnowledgeSource) -> bytes:
             opened = os.fstat(handle.fileno())
             if not stat.S_ISREG(opened.st_mode) or _stat_identity(opened) != source.identity:
                 raise KnowledgeIndexError("knowledge file changed during preflight")
-            payload = handle.read(MAX_KNOWLEDGE_FILE_BYTES + 1)
+            payload  = handle.read(MAX_KNOWLEDGE_FILE_BYTES + 1)
             finished = os.fstat(handle.fileno())
     except KnowledgeIndexError:
         raise
@@ -150,7 +150,7 @@ def _read_source(source: _KnowledgeSource) -> bytes:
 def _prepare_documents(*, files: Sequence[str], plugin_dir: Path) -> list[VectorDoc]:
     sources = _resolve_sources(files=files, plugin_dir=plugin_dir)
     documents: list[VectorDoc] = []
-    read_bytes = 0
+    read_bytes                 = 0
     for source in sources:
         payload = _read_source(source)
         read_bytes += len(payload)
@@ -171,9 +171,9 @@ def _prepare_documents(*, files: Sequence[str], plugin_dir: Path) -> list[Vector
         base = _hash_id(source.label)
         documents.extend(
             VectorDoc(
-                doc_id=f"kb:{base}:{index}",
-                text=chunk,
-                meta={
+                doc_id = f"kb:{base}:{index}",
+                text   = chunk,
+                meta   = {
                     "type": "knowledge",
                     "source": source.label,
                     "chunk": index,

@@ -25,8 +25,8 @@ from .media.event_media_common import (
 )
 from .store_base import LockedDirtyStateMixin, StoreBase
 
-_MEDIA_MARKER_RE = re.compile(r"\[(?:图片|表情包|QQ表情)：[^\]\n]{0,400}\]")
-MEDIA_PLACEHOLDER_RE = re.compile(r"\[\[xc_media_(\d+)\]\]")
+_MEDIA_MARKER_RE            = re.compile(r"\[(?:图片|表情包|QQ表情)：[^\]\n]{0,400}\]")
+MEDIA_PLACEHOLDER_RE        = re.compile(r"\[\[xc_media_(\d+)\]\]")
 _MEDIA_PLACEHOLDER_TEMPLATE = "[[xc_media_{index}]]"
 
 
@@ -35,7 +35,7 @@ def _clean_text(value: Any) -> str:
 
 
 def _clean_text_list(values: Any) -> list[str]:
-    items = values if isinstance(values, (list, tuple, set)) else [values]
+    items              = values if isinstance(values, (list, tuple, set)) else [values]
     cleaned: list[str] = []
     for item in items:
         text = _clean_text(item)
@@ -132,11 +132,11 @@ def _quality_score(item: dict[str, Any]) -> float:
     该分数只是内部合并启发式，不代表信任或安全等级。
     """
 
-    kind = _clean_text(item.get("kind"))
-    description = _clean_text(item.get("description"))
-    marker = _clean_text(item.get("marker"))
+    kind         = _clean_text(item.get("kind"))
+    description  = _clean_text(item.get("description"))
+    marker       = _clean_text(item.get("marker"))
     emotion_tags = _clean_text_list(item.get("emotion_tags", []))
-    aliases = _clean_text_list(item.get("aliases", []))
+    aliases      = _clean_text_list(item.get("aliases", []))
 
     score = 0.0
     if description:
@@ -165,19 +165,19 @@ def _quality_score(item: dict[str, Any]) -> float:
 def _render_media_marker(item: dict[str, Any]) -> str:
     """把单个规范化引用渲染为确定性的提示词可见文本。"""
 
-    kind = _clean_text(item.get("kind"))
-    marker = _clean_text(item.get("marker"))
-    description = _clean_text(item.get("description"))
-    label = _clean_text(item.get("label"))
+    kind         = _clean_text(item.get("kind"))
+    marker       = _clean_text(item.get("marker"))
+    description  = _clean_text(item.get("description"))
+    label        = _clean_text(item.get("label"))
     emotion_tags = _clean_text_list(item.get("emotion_tags", []))
-    aliases = _clean_text_list(item.get("aliases", []))
+    aliases      = _clean_text_list(item.get("aliases", []))
 
     if kind == "qq_face":
         resolved_label = (
             label or description or (aliases[0] if aliases else "") or _extract_marker_label(marker)
         )
         if not resolved_label:
-            face_id = _clean_text(item.get("face_id"))
+            face_id        = _clean_text(item.get("face_id"))
             resolved_label = f"系统表情#{face_id}" if face_id else ""
         return f"[QQ表情：{resolved_label}]" if resolved_label else marker
 
@@ -257,7 +257,7 @@ def upsert_registered_media_items(
     items: Sequence[dict[str, Any]] | None,
     *,
     store: Any | None = None,
-    compact: bool = True,
+    compact: bool     = True,
 ) -> list[dict[str, Any]]:
     """尽力更新注册表，并按需执行持久化压缩。"""
 
@@ -283,7 +283,7 @@ def compact_message_content(content: str, media_items: Sequence[dict[str, Any]] 
     静默丢失结构化引用。
     """
 
-    text = _clean_text(content)
+    text  = _clean_text(content)
     items = [item for item in media_items or [] if isinstance(item, dict)]
     if not items:
         return text
@@ -296,8 +296,8 @@ def compact_message_content(content: str, media_items: Sequence[dict[str, Any]] 
         return "\n".join([part for part in [text, *placeholders] if part]).strip()
 
     parts: list[str] = []
-    cursor = 0
-    replaced_count = 0
+    cursor           = 0
+    replaced_count   = 0
     for index, match in enumerate(matches, start=1):
         parts.append(text[cursor : match.start()])
         if index <= len(items):
@@ -326,17 +326,17 @@ def _merge_media_record(existing: dict[str, Any], incoming: dict[str, Any]) -> d
     调用方访问文件系统前仍须自行验证。
     """
 
-    now = float(time.time())
+    now    = float(time.time())
     merged = dict(existing) if isinstance(existing, dict) else {}
 
     incoming_score = _quality_score(incoming)
     existing_score = float(merged.get("quality_score", 0.0) or 0.0)
     should_upgrade = incoming_score > existing_score + 0.05
 
-    merged["media_key"] = incoming.get("media_key") or merged.get("media_key") or ""
-    merged["kind"] = incoming.get("kind") or merged.get("kind") or ""
+    merged["media_key"]  = incoming.get("media_key") or merged.get("media_key") or ""
+    merged["kind"]       = incoming.get("kind") or merged.get("kind") or ""
     merged["media_hash"] = incoming.get("media_hash") or merged.get("media_hash") or ""
-    merged["face_id"] = incoming.get("face_id") or merged.get("face_id") or ""
+    merged["face_id"]    = incoming.get("face_id") or merged.get("face_id") or ""
 
     if should_upgrade or not _clean_text(merged.get("description")):
         merged["description"] = incoming.get("description") or merged.get("description") or ""
@@ -345,7 +345,7 @@ def _merge_media_record(existing: dict[str, Any], incoming: dict[str, Any]) -> d
 
     incoming_tags = _clean_text_list(incoming.get("emotion_tags", []))
     existing_tags = _clean_text_list(merged.get("emotion_tags", []))
-    tag_source = incoming_tags if should_upgrade and incoming_tags else existing_tags
+    tag_source    = incoming_tags if should_upgrade and incoming_tags else existing_tags
     if not tag_source:
         tag_source = incoming_tags or existing_tags
     if tag_source:
@@ -355,7 +355,7 @@ def _merge_media_record(existing: dict[str, Any], incoming: dict[str, Any]) -> d
 
     incoming_aliases = _clean_text_list(incoming.get("aliases", []))
     existing_aliases = _clean_text_list(merged.get("aliases", []))
-    alias_source = existing_aliases[:]
+    alias_source     = existing_aliases[:]
     for alias in incoming_aliases:
         if alias not in alias_source:
             alias_source.append(alias)
@@ -371,8 +371,8 @@ def _merge_media_record(existing: dict[str, Any], incoming: dict[str, Any]) -> d
 
     merged["quality_score"] = max(existing_score, incoming_score)
     merged["first_seen_ts"] = float(merged.get("first_seen_ts", 0.0) or 0.0) or now
-    merged["last_seen_ts"] = now
-    merged["seen_count"] = int(merged.get("seen_count", 0) or 0) + 1
+    merged["last_seen_ts"]  = now
+    merged["seen_count"]    = int(merged.get("seen_count", 0) or 0) + 1
     return merged
 
 
@@ -388,8 +388,8 @@ def rebuild_message_content(
     结构化元数据数量不一致时意外丢失内容。
     """
 
-    text = _clean_text(content)
-    items = list(resolved_items if resolved_items is not None else media_items or [])
+    text    = _clean_text(content)
+    items   = list(resolved_items if resolved_items is not None else media_items or [])
     markers = [_render_media_marker(item) for item in items if isinstance(item, dict)]
     markers = [marker for marker in markers if marker]
     if not markers:
@@ -397,8 +397,8 @@ def rebuild_message_content(
 
     placeholder_matches = list(MEDIA_PLACEHOLDER_RE.finditer(text))
     if placeholder_matches:
-        parts: list[str] = []
-        cursor = 0
+        parts: list[str]       = []
+        cursor                 = 0
         used_indexes: set[int] = set()
         for match in placeholder_matches:
             parts.append(text[cursor : match.start()])
@@ -419,8 +419,8 @@ def rebuild_message_content(
     matches = list(_MEDIA_MARKER_RE.finditer(text))
     if matches:
         marker_parts: list[str] = []
-        cursor = 0
-        marker_index = 0
+        cursor                  = 0
+        marker_index            = 0
         for match in matches:
             marker_parts.append(text[cursor : match.start()])
             if marker_index < len(markers):
@@ -473,12 +473,12 @@ class MediaRegistryStore(LockedDirtyStateMixin, StoreBase):
 
     def __init__(self) -> None:
         super().__init__()
-        self._entries_cache: dict[str, dict[str, Any]] = {}
+        self._entries_cache: dict[str, dict[str, Any]]   = {}
         self._pending_observations: list[dict[str, Any]] = []
-        self._dirty = False
-        self._lock = threading.Lock()
-        self._flush_lock = threading.Lock()
-        self._revision = 0
+        self._dirty                                      = False
+        self._lock                                       = threading.Lock()
+        self._flush_lock                                 = threading.Lock()
+        self._revision                                   = 0
 
     def bind(self, data_dir: Path) -> None:
         """绑定数据根目录，并丢弃前一根目录对应的缓存状态。"""
@@ -487,9 +487,9 @@ class MediaRegistryStore(LockedDirtyStateMixin, StoreBase):
             if self._data_dir == data_dir:
                 return
             super().bind(data_dir)
-            self._entries_cache = {}
+            self._entries_cache        = {}
             self._pending_observations = []
-            self._dirty = False
+            self._dirty                = False
             self._revision += 1
 
     def _index_path(self) -> Path | None:
@@ -508,7 +508,7 @@ class MediaRegistryStore(LockedDirtyStateMixin, StoreBase):
         """同步加载持久化索引；生命周期入口必须在线程池中调用。"""
 
         with self._lock:
-            path = self._index_path()
+            path     = self._index_path()
             revision = self._revision
             if path is None or self._dirty:
                 return
@@ -528,9 +528,9 @@ class MediaRegistryStore(LockedDirtyStateMixin, StoreBase):
             with self._lock:
                 if not self._dirty or not self._pending_observations:
                     return
-                path = self._index_path()
+                path     = self._index_path()
                 revision = self._revision
-                pending = deepcopy(self._pending_observations)
+                pending  = deepcopy(self._pending_observations)
             if path is None:
                 return
 
@@ -562,9 +562,9 @@ class MediaRegistryStore(LockedDirtyStateMixin, StoreBase):
                             refreshed.get(media_key, {}),
                             item,
                         )
-                self._entries_cache = refreshed
+                self._entries_cache        = refreshed
                 self._pending_observations = remaining
-                self._dirty = bool(remaining)
+                self._dirty                = bool(remaining)
 
     def upsert_media_items(self, items: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
         """在同一把锁下合并观测记录，并返回信息最丰富的视图。"""
@@ -574,8 +574,8 @@ class MediaRegistryStore(LockedDirtyStateMixin, StoreBase):
             return []
 
         with self._lock:
-            entries = self._entries_cache
-            changed = False
+            entries                              = self._entries_cache
+            changed                              = False
             resolved_items: list[dict[str, Any]] = []
 
             for item in normalized_items:
@@ -584,7 +584,7 @@ class MediaRegistryStore(LockedDirtyStateMixin, StoreBase):
                     resolved_items.append(item)
                     continue
                 existing = entries.get(media_key, {})
-                merged = _merge_media_record(existing if isinstance(existing, dict) else {}, item)
+                merged   = _merge_media_record(existing if isinstance(existing, dict) else {}, item)
                 if merged != existing:
                     entries[media_key] = merged
                     self._pending_observations.append(item)

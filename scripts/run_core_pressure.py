@@ -16,9 +16,9 @@ from typing import Any
 
 import aiohttp
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_ENDPOINT = "http://127.0.0.1:12000/event"
-DEFAULT_SECRETS = PROJECT_ROOT / "config" / "secrets.json"
+PROJECT_ROOT            = Path(__file__).resolve().parents[1]
+DEFAULT_ENDPOINT        = "http://127.0.0.1:12000/event"
+DEFAULT_SECRETS         = PROJECT_ROOT / "config" / "secrets.json"
 EXPECTED_EVENT_STATUSES = {200, 503}
 
 
@@ -69,16 +69,16 @@ def _percentile(values: list[float], ratio: float) -> float | None:
     if not values:
         return None
     ordered = sorted(values)
-    index = max(0, math.ceil(len(ordered) * ratio) - 1)
+    index   = max(0, math.ceil(len(ordered) * ratio) - 1)
     return round(ordered[index], 2)
 
 
 def _event(message_id: int, identity_index: int, *, same_session: bool) -> dict[str, Any]:
     if same_session:
-        user_id = 881_100_001 + identity_index
+        user_id  = 881_100_001 + identity_index
         group_id = 973_100_001 + identity_index
     else:
-        user_id = 881_200_000 + identity_index
+        user_id  = 881_200_000 + identity_index
         group_id = 973_200_000 + identity_index
     message = f"/echo core-pressure-{message_id}"
     return {
@@ -111,8 +111,11 @@ async def _post_event(
     try:
         async with session.post(
             endpoint,
-            json=payload,
-            headers={"Authorization": f"Bearer {token}"},
+            json    = payload,
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "X-XiaoQing-Response-Mode": "actions",
+            },
         ) as response:
             await response.read()
             return RequestResult(
@@ -150,11 +153,11 @@ async def _run_stage(
                 ),
             )
 
-    started = time.perf_counter()
-    results = await asyncio.gather(*(one(index) for index in range(stage.requests)))
-    duration = time.perf_counter() - started
+    started   = time.perf_counter()
+    results   = await asyncio.gather(*(one(index) for index in range(stage.requests)))
+    duration  = time.perf_counter() - started
     latencies = [result.latency_ms for result in results]
-    statuses = Counter(
+    statuses  = Counter(
         str(result.status) if result.status is not None else "transport_error" for result in results
     )
     unexpected = [
@@ -184,7 +187,7 @@ async def _get_health(
     token: str,
 ) -> dict[str, Any]:
     health_url = endpoint.rsplit("/event", 1)[0] + "/health"
-    started = time.perf_counter()
+    started    = time.perf_counter()
     try:
         async with session.get(
             health_url,
@@ -215,7 +218,7 @@ async def _protocol_probes(
     """独立探测鉴权和 JSON 错误；传输失败保留到报告而不吞掉。"""
 
     statuses: dict[str, int | None] = {"missing_auth": None, "malformed_json": None}
-    errors: dict[str, str] = {}
+    errors: dict[str, str]          = {}
     try:
         async with session.post(endpoint, json={}) as response:
             statuses["missing_auth"] = response.status
@@ -226,10 +229,11 @@ async def _protocol_probes(
     try:
         async with session.post(
             endpoint,
-            data=b"{broken-json",
-            headers={
+            data    = b"{broken-json",
+            headers = {
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
+                "X-XiaoQing-Response-Mode": "actions",
             },
         ) as response:
             statuses["malformed_json"] = response.status
@@ -251,14 +255,14 @@ def _health_ok(result: dict[str, Any]) -> bool:
 
 async def run(args: argparse.Namespace) -> dict[str, Any]:
     started_at = datetime.now(UTC).isoformat()
-    token = _load_token(args.secrets.resolve())
+    token      = _load_token(args.secrets.resolve())
     timeout = aiohttp.ClientTimeout(total=args.timeout)
     connector = aiohttp.TCPConnector(limit=max(stage.concurrency for stage in args.stages))
-    stages: list[dict[str, Any]] = []
+    stages: list[dict[str, Any]]  = []
     probes: dict[str, int | None] = {"missing_auth": None, "malformed_json": None}
-    probe_errors: dict[str, str] = {}
-    recovery = RequestResult(None, 0.0, "health preflight failed")
-    health_after: dict[str, Any] = {
+    probe_errors: dict[str, str]  = {}
+    recovery                      = RequestResult(None, 0.0, "health preflight failed")
+    health_after: dict[str, Any]  = {
         "status": None,
         "payload": None,
         "latency_ms": 0.0,
@@ -272,7 +276,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         else:
             probes, probe_errors = await _protocol_probes(session, args.endpoint, token)
             next_message_id = args.message_id_seed
-            next_identity = 0
+            next_identity   = 0
             for stage in args.stages:
                 result = await _run_stage(
                     session,
@@ -331,12 +335,12 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 def _parse_stage(raw: str) -> Stage:
     try:
         name, requests, concurrency, mode = raw.split(":", 3)
-        name = name.strip()
+        name  = name.strip()
         stage = Stage(
-            name=name,
-            requests=int(requests),
-            concurrency=int(concurrency),
-            same_session=mode == "same",
+            name         = name,
+            requests     = int(requests),
+            concurrency  = int(concurrency),
+            same_session = mode == "same",
         )
     except (TypeError, ValueError) as exc:
         raise argparse.ArgumentTypeError(
@@ -362,23 +366,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=float, default=20.0)
     parser.add_argument(
         "--message-id-seed",
-        type=int,
-        help="固定 OneBot message_id 起点以复现压测；默认使用当前微秒时间",
+        type = int,
+        help = "固定 OneBot message_id 起点以复现压测；默认使用当前微秒时间",
     )
     parser.add_argument(
         "--stage",
-        dest="stages",
-        type=_parse_stage,
-        action="append",
-        default=None,
-        help="name:requests:concurrency:unique|same，可重复",
+        dest    = "stages",
+        type    = _parse_stage,
+        action  = "append",
+        default = None,
+        help    = "name:requests:concurrency:unique|same，可重复",
     )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args   = parser.parse_args(argv)
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("--timeout 必须是正数")
     if args.message_id_seed is not None and args.message_id_seed <= 0:
@@ -391,10 +395,10 @@ def main(argv: list[str] | None = None) -> int:
             Stage(name="parallel", requests=500, concurrency=32, same_session=False),
             Stage(name="burst", requests=1_200, concurrency=128, same_session=False),
             Stage(
-                name="same_session_backpressure",
-                requests=400,
-                concurrency=256,
-                same_session=True,
+                name         = "same_session_backpressure",
+                requests     = 400,
+                concurrency  = 256,
+                same_session = True,
             ),
         ]
     stage_names = [stage.name for stage in args.stages]

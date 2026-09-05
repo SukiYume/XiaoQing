@@ -57,13 +57,13 @@ def _settle(db: Database, reference_id: str = "game:test"):
         "player",
         GROUP,
         "dice",
-        reference_id=reference_id,
-        daily_coin_limit=500,
-        cooldown_seconds=120,
-        outcome_factory=lambda _pet, _opponent: MinigameOutcome(
-            requested_coins=20,
-            experience=8,
-            payload={"player_dice": 6, "pet_dice": 1, "result": "你赢了"},
+        reference_id     = reference_id,
+        daily_coin_limit = 500,
+        cooldown_seconds = 120,
+        outcome_factory  = lambda _pet, _opponent: MinigameOutcome(
+            requested_coins = 20,
+            experience      = 8,
+            payload         = {"player_dice": 6, "pet_dice": 1, "result": "你赢了"},
         ),
     )
 
@@ -71,7 +71,7 @@ def _settle(db: Database, reference_id: str = "game:test"):
 class _FailingConnection:
     def __init__(self, connection: sqlite3.Connection, fragment: str):
         self.connection = connection
-        self.fragment = " ".join(fragment.upper().split())
+        self.fragment   = " ".join(fragment.upper().split())
 
     def execute(self, sql, parameters=()):
         normalized = " ".join(str(sql).upper().split())
@@ -86,7 +86,7 @@ class _FailingConnection:
 class _CommitFailingConnection:
     def __init__(self, connection: sqlite3.Connection):
         self.connection = connection
-        self.failed = False
+        self.failed     = False
 
     def commit(self):
         if not self.failed:
@@ -111,7 +111,7 @@ class _CommitFailingConnection:
 def test_failure_at_each_minigame_write_rolls_back_everything(tmp_path, fragment):
     db = Database(str(tmp_path / "failure.db"))
     _seed(db)
-    before = _state(db)
+    before         = _state(db)
     db._local.conn = _FailingConnection(db._get_connection(), fragment)
 
     result = _settle(db)
@@ -124,7 +124,7 @@ def test_failure_at_each_minigame_write_rolls_back_everything(tmp_path, fragment
 def test_minigame_commit_failure_rolls_back_everything(tmp_path):
     db = Database(str(tmp_path / "commit.db"))
     _seed(db)
-    before = _state(db)
+    before         = _state(db)
     db._local.conn = _CommitFailingConnection(db._get_connection())
 
     result = _settle(db)
@@ -143,9 +143,9 @@ def test_same_reference_replays_original_outcome_without_new_random_or_assets(tm
         nonlocal calls
         calls += 1
         return MinigameOutcome(
-            requested_coins=20,
-            experience=8,
-            payload={"roll": calls},
+            requested_coins = 20,
+            experience      = 8,
+            payload         = {"roll": calls},
         )
 
     kwargs = {
@@ -154,7 +154,7 @@ def test_same_reference_replays_original_outcome_without_new_random_or_assets(tm
         "cooldown_seconds": 120,
         "outcome_factory": make_outcome,
     }
-    first = db.settle_minigame_atomic("player", GROUP, "dice", **kwargs)
+    first  = db.settle_minigame_atomic("player", GROUP, "dice", **kwargs)
     second = db.settle_minigame_atomic("player", GROUP, "dice", **kwargs)
 
     assert first.success is True
@@ -167,11 +167,11 @@ def test_same_reference_replays_original_outcome_without_new_random_or_assets(tm
 
 
 def test_two_connections_concurrently_settle_same_reference_once(tmp_path):
-    path = str(tmp_path / "concurrent.db")
+    path     = str(tmp_path / "concurrent.db")
     first_db = Database(path)
     _seed(first_db)
     second_db = Database(path)
-    barrier = threading.Barrier(2)
+    barrier   = threading.Barrier(2)
 
     def run(db: Database):
         barrier.wait(timeout=2)
@@ -301,17 +301,17 @@ def test_main_forwards_message_id_for_idempotent_minigame_replay(tmp_path, monke
     _seed(db)
     rolls = iter((6, 1, 1, 6))
     monkeypatch.setattr(social_module.random, "randint", lambda _a, _b: next(rolls))
-    original_db = qingpet_main._db_instance
-    original_router = qingpet_main._router
+    original_db               = qingpet_main._db_instance
+    original_router           = qingpet_main._router
     qingpet_main._db_instance = db
-    qingpet_main._router = None
-    event = {"user_id": "player", "group_id": GROUP, "message_id": 7654321}
+    qingpet_main._router      = None
+    event                     = {"user_id": "player", "group_id": GROUP, "message_id": 7654321}
     try:
-        first = asyncio.run(qingpet_main.handle("pet", "游戏 骰子", event, None))
+        first  = asyncio.run(qingpet_main.handle("pet", "游戏 骰子", event, None))
         second = asyncio.run(qingpet_main.handle("pet", "游戏 骰子", event, None))
     finally:
         qingpet_main._db_instance = original_db
-        qingpet_main._router = original_router
+        qingpet_main._router      = original_router
 
     assert first == second
     assert _state(db) == ((120, 20), (8, 100), 1, 1, 1)

@@ -22,12 +22,12 @@ class SettingsUpdate(BaseModel):  # type: ignore[misc]
 
     model_config = ConfigDict(extra="forbid")
 
-    timezone: str | None = None
-    quiet_hours_start: str | None = None
-    quiet_hours_end: str | None = None
-    daily_report_time: str | None = None
-    diary_remind_time: str | None = None
-    default_category: str | None = None
+    timezone: str | None                 = None
+    quiet_hours_start: str | None        = None
+    quiet_hours_end: str | None          = None
+    daily_report_time: str | None        = None
+    diary_remind_time: str | None        = None
+    default_category: str | None         = None
     settings_json: dict[str, Any] | None = None
 
 
@@ -61,7 +61,7 @@ def _normalize_settings_payload(updates: dict[str, Any]) -> dict[str, Any]:
             normalized[field] = _normalize_time_text(str(normalized[field]), field)
 
     if normalized.get("default_category") is not None:
-        category = str(normalized["default_category"]).strip()
+        category                       = str(normalized["default_category"]).strip()
         normalized["default_category"] = validate_category(category or "未分类")
 
     if normalized.get("settings_json") is not None:
@@ -98,7 +98,7 @@ def _settings_patch_changes(
 @router.get("/settings")
 def get_settings(
     owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    db: Database  = Depends(get_db),
 ) -> dict[str, object]:
     """返回当前所有者的持久化设置或完整默认值。"""
 
@@ -110,7 +110,7 @@ def get_settings(
 def update_settings(
     body: SettingsUpdate,
     owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    db: Database  = Depends(get_db),
 ) -> dict[str, object]:
     """校验设置补丁，仅在实际变化时写库并增加版本。"""
 

@@ -1,3 +1,4 @@
+# 架构回归：插件读取同一原子版本的配置快照。
 """Architecture gates for the atomic plugin-settings contract."""
 
 from __future__ import annotations
@@ -6,7 +7,7 @@ import ast
 
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT = REPOSITORY_ROOT
+ROOT    = REPOSITORY_ROOT
 PLUGINS = ROOT / "plugins"
 
 REVIEWED_RUNTIME_FILES = {

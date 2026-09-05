@@ -32,11 +32,11 @@ async def test_qq_crud_and_operation_log_share_one_transaction(
     tmp_path: Path,
     operation: str,
 ) -> None:
-    db = Database(str(tmp_path / "pendo-qq-transaction.db"))
-    ops = DbOpsMixin()
-    ops.db = db
+    db       = Database(str(tmp_path / "pendo-qq-transaction.db"))
+    ops      = DbOpsMixin()
+    ops.db   = db
     owner_id = "qq-transaction-user"
-    seed = {
+    seed     = {
         "id": "qq-transaction-item",
         "owner_id": owner_id,
         "type": "note",
@@ -58,8 +58,8 @@ async def test_qq_crud_and_operation_log_share_one_transaction(
                 seed["id"],
                 {"title": "after", "type": "note"},
                 owner_id,
-                action="edit_note",
-                expected_version=0,
+                action           = "edit_note",
+                expected_version = 0,
             )
         else:
             await ops._db_soft_delete_with_log(seed["id"], owner_id, item_type="note")
@@ -84,11 +84,11 @@ async def test_qq_crud_and_operation_log_share_one_transaction(
 async def test_chat_update_rejects_a_stale_item_version(tmp_path: Path) -> None:
     from plugins.pendo.core.exceptions import ItemVersionConflictException
 
-    db = Database(str(tmp_path / "pendo-chat-cas.db"))
-    ops = DbOpsMixin()
-    ops.db = db
+    db       = Database(str(tmp_path / "pendo-chat-cas.db"))
+    ops      = DbOpsMixin()
+    ops.db   = db
     owner_id = "chat-cas-user"
-    item_id = "chat-cas-note"
+    item_id  = "chat-cas-note"
     db.insert_item(
         {
             "id": item_id,
@@ -112,8 +112,8 @@ async def test_chat_update_rejects_a_stale_item_version(tmp_path: Path) -> None:
             item_id,
             {"title": "stale", "type": "note"},
             owner_id,
-            action="edit_note",
-            expected_version=stale.version,
+            action           = "edit_note",
+            expected_version = stale.version,
         )
 
     current = db.get_item(item_id, owner_id)
@@ -130,10 +130,10 @@ def test_event_collection_change_and_operation_log_share_one_transaction(
     operation: str,
 ) -> None:
     """集合内容、子日程与审计日志必须在同一事务中提交。"""
-    db = Database(str(tmp_path / f"pendo-collection-{operation}.db"))
-    owner_id = "collection-transaction-user"
+    db            = Database(str(tmp_path / f"pendo-collection-{operation}.db"))
+    owner_id      = "collection-transaction-user"
     collection_id = "collection-transaction"
-    child_id = "collection-transaction-child"
+    child_id      = "collection-transaction-child"
     db.create_event_collection(
         {
             "id": collection_id,
@@ -174,8 +174,8 @@ def test_event_collection_change_and_operation_log_share_one_transaction(
             db.delete_event_collection(
                 collection_id,
                 owner_id,
-                cascade=True,
-                operation_log=operation_log,
+                cascade       = True,
+                operation_log = operation_log,
             )
 
     assert db.get_event_collection(collection_id, owner_id)["title"] == "修改前"
@@ -193,21 +193,21 @@ def test_export_reads_all_pages_and_keeps_offset_date_in_user_calendar(
     from plugins.pendo.services.exporter import ExporterService
 
     event = SimpleNamespace(
-        id="offset-event",
-        owner_id="u-export",
-        type="event",
-        title="时区标题\n不应换行",
-        content="",
-        category="测试",
-        tags=[],
-        created_at="2030-01-01T00:00:00+14:00",
-        updated_at="2030-01-01T00:00:00+14:00",
-        start_time="2030-01-01T00:30:00+14:00",
-        end_time=None,
-        location="",
-        remind_times=[],
-        notes="",
-        event_collection_id=None,
+        id                  = "offset-event",
+        owner_id            = "u-export",
+        type                = "event",
+        title               = "时区标题\n不应换行",
+        content             = "",
+        category            = "测试",
+        tags                = [],
+        created_at          = "2030-01-01T00:00:00+14:00",
+        updated_at          = "2030-01-01T00:00:00+14:00",
+        start_time          = "2030-01-01T00:30:00+14:00",
+        end_time            = None,
+        location            = "",
+        remind_times        = [],
+        notes               = "",
+        event_collection_id = None,
     )
 
     class _Repo:
@@ -232,11 +232,14 @@ def test_export_reads_all_pages_and_keeps_offset_date_in_user_calendar(
         def get_items(self, *args, **kwargs):
             return self._repo.get_items(*args, **kwargs)
 
+        def get_user_settings(self, _owner):
+            return {"timezone": "Pacific/Kiritimati"}
+
         def log_transfer(self, **_kwargs):
             return 1
 
     database = _Db()
-    result = ExporterService(database, tmp_path).export_markdown(
+    result   = ExporterService(database, tmp_path).export_markdown(
         "u-export",
         "时区档案 2030-01-01 event",
         {},
@@ -253,9 +256,9 @@ def test_event_reminder_shift_preserves_absolute_offset_across_iso_zones() -> No
     from plugins.pendo.handlers.event_support import recalculate_event_reminders
 
     event = SimpleNamespace(
-        start_time="2030-01-01T09:00:00+08:00",
-        remind_times=["2030-01-01T00:00:00+00:00"],
-        reminder_rules=[],
+        start_time     = "2030-01-01T09:00:00+08:00",
+        remind_times   = ["2030-01-01T00:00:00+00:00"],
+        reminder_rules = [],
     )
 
     shifted = recalculate_event_reminders(
@@ -271,9 +274,9 @@ def test_event_reminder_shift_preserves_explicit_empty_reminders() -> None:
     from plugins.pendo.handlers.event_support import recalculate_event_reminders
 
     event = SimpleNamespace(
-        start_time="2030-01-01T09:00:00+08:00",
-        remind_times=[],
-        reminder_rules=[],
+        start_time     = "2030-01-01T09:00:00+08:00",
+        remind_times   = [],
+        reminder_rules = [],
     )
 
     shifted = recalculate_event_reminders(
@@ -302,7 +305,7 @@ async def test_pendo_handle_session_uses_transaction_argument_and_atomically_rep
     from plugins.pendo import main as pendo_main
     from plugins.pendo.config import PendoConfig
 
-    manager = SessionManager()
+    manager  = SessionManager()
     original = await manager.create(
         1001,
         None,
@@ -343,7 +346,7 @@ async def test_pendo_event_info_replacement_failure_rolls_back_staged_generation
     from plugins.pendo import main as pendo_main
     from plugins.pendo.config import PendoConfig
 
-    manager = SessionManager()
+    manager  = SessionManager()
     original = await manager.create(
         1001,
         None,
@@ -385,7 +388,7 @@ async def test_pendo_session_service_exception_is_not_swallowed_or_committed(mon
     from plugins.pendo import main as pendo_main
     from plugins.pendo.core.exceptions import PendoException
 
-    manager = SessionManager()
+    manager  = SessionManager()
     original = await manager.create(
         1001,
         None,
@@ -424,7 +427,7 @@ async def test_pendo_session_service_exception_is_not_swallowed_or_committed(mon
 async def test_pendo_session_plain_value_error_is_not_misclassified_as_input(monkeypatch):
     from plugins.pendo import main as pendo_main
 
-    manager = SessionManager()
+    manager  = SessionManager()
     original = await manager.create(
         1001,
         None,
@@ -699,7 +702,7 @@ async def test_cached_pendo_ai_parser_uses_live_core_capability(monkeypatch):
 
     temp_dir, db = _make_temp_db("pendo_live_secret_rotation")
     outcomes: list[object] = ["old", "new", RuntimeError("route removed")]
-    routes: list[str] = []
+    routes: list[str]      = []
 
     class AI:
         async def complete(self, route, _messages, **_kwargs):
@@ -710,18 +713,18 @@ async def test_cached_pendo_ai_parser_uses_live_core_capability(monkeypatch):
             return SimpleNamespace(content=outcome)
 
     context = SimpleNamespace(
-        state={},
-        data_dir=temp_dir,
+        state    = {},
+        data_dir = temp_dir,
         capabilities=SimpleNamespace(ai=AI()),
-        logger=logging.getLogger("test.pendo.live_ai"),
-        request_id=None,
+        logger     = logging.getLogger("test.pendo.live_ai"),
+        request_id = None,
     )
 
     monkeypatch.setattr(pendo_main, "_get_database", lambda _context: db)
 
     try:
         services = pendo_main._get_services(context)
-        parser = services["ai_parser"]
+        parser   = services["ai_parser"]
         assert pendo_main._get_services(context)["ai_parser"] is parser
 
         assert await parser._call_llm([{"role": "user", "content": "before"}]) == "old"
@@ -754,7 +757,7 @@ async def test_pendo_ai_parser_never_reads_plugin_llm_secrets():
 def test_reminder_dispatch_uses_owner_timezone(monkeypatch):
     from plugins.pendo.services import reminder as reminder_module
 
-    la_tz = ZoneInfo("America/Los_Angeles")
+    la_tz       = ZoneInfo("America/Los_Angeles")
     shanghai_tz = ZoneInfo("Asia/Shanghai")
 
     monkeypatch.setattr(
@@ -775,16 +778,16 @@ def test_reminder_dispatch_uses_owner_timezone(monkeypatch):
     )
 
     item = SimpleNamespace(
-        id="evt-la",
-        owner_id="u-la",
-        title="Morning sync",
-        start_time="2030-01-01T10:00:00",
-        end_time="2030-01-01T11:00:00",
-        remind_times=["2030-01-01T09:00:00"],
-        context={},
-        location="Room 1",
-        notes="",
-        tags=[],
+        id           = "evt-la",
+        owner_id     = "u-la",
+        title        = "Morning sync",
+        start_time   = "2030-01-01T10:00:00",
+        end_time     = "2030-01-01T11:00:00",
+        remind_times = ["2030-01-01T09:00:00"],
+        context      = {},
+        location     = "Room 1",
+        notes        = "",
+        tags         = [],
     )
 
     class _FakeDb:
@@ -830,10 +833,10 @@ def test_reminder_dispatch_uses_owner_timezone(monkeypatch):
 
 def test_reminder_conflict_compares_absolute_time_across_offsets():
     existing = SimpleNamespace(
-        id="evt-shanghai",
-        title="跨时区会议",
-        start_time="2030-01-02T10:00:00+08:00",
-        end_time="2030-01-02T11:00:00+08:00",
+        id         = "evt-shanghai",
+        title      = "跨时区会议",
+        start_time = "2030-01-02T10:00:00+08:00",
+        end_time   = "2030-01-02T11:00:00+08:00",
     )
 
     class _FakeDb:
@@ -877,13 +880,13 @@ def test_reminder_accepts_open_task_status_enum():
 
 def test_reminder_service_skips_closed_tasks():
     done_task = SimpleNamespace(
-        id="task-done",
-        owner_id="u-task",
-        type="task",
-        status="done",
-        title="已完成任务",
-        remind_times=["2030-01-01T09:00:00"],
-        context={},
+        id           = "task-done",
+        owner_id     = "u-task",
+        type         = "task",
+        status       = "done",
+        title        = "已完成任务",
+        remind_times = ["2030-01-01T09:00:00"],
+        context      = {},
     )
 
     class _FakeDb:
@@ -907,13 +910,13 @@ def test_reminder_service_skips_closed_tasks():
 
 def test_reminder_repeats_skip_closed_tasks():
     cancelled_task = SimpleNamespace(
-        id="task-cancelled",
-        owner_id="u-task",
-        type="task",
-        status="cancelled",
-        title="已取消任务",
-        remind_times=["2030-01-01T09:00:00"],
-        context={},
+        id           = "task-cancelled",
+        owner_id     = "u-task",
+        type         = "task",
+        status       = "cancelled",
+        title        = "已取消任务",
+        remind_times = ["2030-01-01T09:00:00"],
+        context      = {},
     )
 
     class _FakeDb:
@@ -939,10 +942,10 @@ def test_reminder_repeats_skip_closed_tasks():
 
 def test_reminder_repeats_respect_disabled_setting():
     item = SimpleNamespace(
-        id="evt-disabled",
-        owner_id="u-disabled",
-        type="event",
-        title="已关闭提醒的日程",
+        id       = "evt-disabled",
+        owner_id = "u-disabled",
+        type     = "event",
+        title    = "已关闭提醒的日程",
     )
 
     class _FakeDb:

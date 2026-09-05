@@ -1,3 +1,4 @@
+# 时钟与随机源接口：生产环境和确定性测试共用调用契约。
 """Clock and random interfaces for testability."""
 
 from __future__ import annotations
@@ -9,7 +10,7 @@ from datetime import datetime
 from typing import Any, Protocol, TypeVar
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-T = TypeVar("T")
+T                       = TypeVar("T")
 DEFAULT_CONFIG_TIMEZONE = "Asia/Shanghai"
 
 
@@ -41,8 +42,8 @@ def now_in_configured_timezone(context: Any) -> datetime:
 
     timezone_name = DEFAULT_CONFIG_TIMEZONE
     try:
-        settings = context.get_settings_snapshot()
-        config = getattr(settings, "config", {})
+        settings   = context.get_settings_snapshot()
+        config     = getattr(settings, "config", {})
         configured = config.get("timezone") if hasattr(config, "get") else None
         if isinstance(configured, str) and configured.strip():
             timezone_name = configured.strip()

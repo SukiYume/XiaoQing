@@ -29,8 +29,8 @@ def mock_context():
     class MockContext:
         def __init__(self):
             self.plugin_dir = ROOT / "plugins" / "astro_tools"
-            self.data_dir = self.plugin_dir / "data"
-            self.logger = self._create_logger()
+            self.data_dir   = self.plugin_dir / "data"
+            self.logger     = self._create_logger()
 
         def _create_logger(self):
             import logging
@@ -260,7 +260,7 @@ class TestAstroToolsConst:
     @pytest.mark.asyncio
     async def test_constant_alias_resolves_to_single_canonical_value(self, mock_context):
         canonical = await astro_const.handle_const("c", mock_context)
-        alias = await astro_const.handle_const("speed", mock_context)
+        alias     = await astro_const.handle_const("speed", mock_context)
 
         assert alias == canonical
 

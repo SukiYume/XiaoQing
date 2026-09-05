@@ -22,6 +22,7 @@ from core.bounded_http import (
     parse_bounded_json,
 )
 from core.interfaces import PluginContextProtocol
+from core.lifecycle import DeferredCancellation, await_owned_task
 from core.plugin_base import run_sync, segments
 from core.public_errors import public_error_message, public_error_response
 
@@ -29,32 +30,32 @@ from core.public_errors import public_error_message, public_error_response
 # 常量配置
 # ============================================================
 
-COZE_API_URL = "https://api.coze.com/v3/chat"
-COZE_RETRIEVE_URL = f"{COZE_API_URL}/retrieve"
-COZE_MESSAGES_URL = f"{COZE_API_URL}/message/list"
-COZE_CANCEL_URL = f"{COZE_API_URL}/cancel"
-REQUEST_TIMEOUT = 30  # 秒
-POLL_INTERVAL_SECONDS = 1.0
-_CANCEL_TIMEOUT_SECONDS = 3.0
-MAX_QUERY_LENGTH = 2000  # 最大查询长度
-MAX_CONFIG_STRING_LENGTH = 4096
-MAX_DAILY_QUOTA = 1_000_000
-DEFAULT_DAILY_USER_LIMIT = 20
+COZE_API_URL               = "https://api.coze.com/v3/chat"
+COZE_RETRIEVE_URL          = f"{COZE_API_URL}/retrieve"
+COZE_MESSAGES_URL          = f"{COZE_API_URL}/message/list"
+COZE_CANCEL_URL            = f"{COZE_API_URL}/cancel"
+REQUEST_TIMEOUT            = 30  # 秒
+POLL_INTERVAL_SECONDS      = 1.0
+_CANCEL_TIMEOUT_SECONDS    = 3.0
+MAX_QUERY_LENGTH           = 2000  # 最大查询长度
+MAX_CONFIG_STRING_LENGTH   = 4096
+MAX_DAILY_QUOTA            = 1_000_000
+DEFAULT_DAILY_USER_LIMIT   = 20
 DEFAULT_DAILY_GLOBAL_LIMIT = 100
-_ANONYMOUS_ACTOR = "anonymous"
-_CHAT_STATUSES = frozenset(
+_ANONYMOUS_ACTOR           = "anonymous"
+_CHAT_STATUSES             = frozenset(
     {"created", "in_progress", "completed", "failed", "requires_action", "canceled"}
 )
 _PENDING_CHAT_STATUSES = frozenset({"created", "in_progress"})
-_API_SEMAPHORE = asyncio.Semaphore(2)
-_COZE_BODY_LIMITS = BodyLimits(
-    max_wire_bytes=2 * 1024 * 1024,
-    max_decoded_bytes=4 * 1024 * 1024,
+_API_SEMAPHORE         = asyncio.Semaphore(2)
+_COZE_BODY_LIMITS      = BodyLimits(
+    max_wire_bytes    = 2 * 1024 * 1024,
+    max_decoded_bytes = 4 * 1024 * 1024,
 )
 _COZE_JSON_LIMITS = JsonLimits(max_bytes=_COZE_BODY_LIMITS.max_decoded_bytes)
 _COZE_JSON_MIME = MimePolicy(
-    exact=frozenset({"application/json"}),
-    structured_suffixes=frozenset({"+json"}),
+    exact               = frozenset({"application/json"}),
+    structured_suffixes = frozenset({"+json"}),
 )
 _QUOTA_LOCKS = AsyncKeyedLockPool(max_keys=1024)
 _QUOTA_FILENAME = "chat_quota.json"
@@ -203,7 +204,7 @@ def _reserve_quota_file(
     with keyed_path_lock(path):
         store = AtomicJsonStore(path)
         usage = _validated_usage(store.read(None, raise_on_error=True), window)
-        users = usage["users"]
+        users       = usage["users"]
         actor_count = users.get(actor, 0)
         if actor_count >= per_user_limit or usage["total"] >= global_limit:
             raise ChatQuotaExceeded
@@ -217,7 +218,7 @@ def _rollback_quota_file(path: Path, window: str, actor: str) -> None:
         store = AtomicJsonStore(path)
         usage = _validated_usage(store.read(None, raise_on_error=True), window)
         # `_validated_usage` 已把其他日期映射为空的当前窗口；这里只需按计数决定是否回滚。
-        users = usage["users"]
+        users       = usage["users"]
         actor_count = users.get(actor, 0)
         if actor_count <= 0 or usage["total"] <= 0:
             return
@@ -237,17 +238,26 @@ async def _reserve_quota(
     global_limit: int,
 ) -> _QuotaReservation:
     window = _business_date(context)
-    path = _quota_path(context)
+    path   = _quota_path(context)
     async with _QUOTA_LOCKS.hold(_QUOTA_LOCK_KEY):
         try:
-            await run_sync(
-                _reserve_quota_file,
-                path,
-                window,
-                actor,
-                per_user_limit,
-                global_limit,
+            pending = asyncio.create_task(
+                run_sync(
+                    _reserve_quota_file,
+                    path,
+                    window,
+                    actor,
+                    per_user_limit,
+                    global_limit,
+                )
             )
+            cancellation = DeferredCancellation()
+            await await_owned_task(pending, cancellation)
+            if cancellation.error is not None:
+                # 成功预留后尚未交给调用方，当前事务负责补偿，锁覆盖真实写入。
+                rollback = asyncio.create_task(run_sync(_rollback_quota_file, path, window, actor))
+                await await_owned_task(rollback, cancellation)
+                cancellation.raise_if_requested()
         except ChatQuotaExceeded:
             raise
         except (OSError, TypeError, ValueError, ChatQuotaStateError) as exc:
@@ -294,10 +304,10 @@ async def _request_coze_json(
             context.http_session,
             method,
             url,
-            limits=_COZE_BODY_LIMITS,
-            mime_policy=_COZE_JSON_MIME,
-            headers=headers,
-            request_kwargs=request_kwargs,
+            limits         = _COZE_BODY_LIMITS,
+            mime_policy    = _COZE_JSON_MIME,
+            headers        = headers,
+            request_kwargs = request_kwargs,
         )
     except HttpStatusError as exc:
         context.logger.error("Coze API 返回 HTTP 错误: status=%s", exc.status)
@@ -328,14 +338,14 @@ async def _request_coze_json_before_deadline(
 
     remaining = deadline - asyncio.get_running_loop().time()
     if remaining <= 0:
-        raise asyncio.TimeoutError
+        raise TimeoutError
     return await asyncio.wait_for(
         _request_coze_json(
             context,
             method,
             url,
-            headers=headers,
-            request_kwargs={**request_kwargs, "timeout": remaining},
+            headers        = headers,
+            request_kwargs = {**request_kwargs, "timeout": remaining},
         ),
         timeout=remaining,
     )
@@ -361,7 +371,7 @@ def _chat_state(payload: Mapping[str, Any]) -> tuple[str, str, str] | None:
     if not isinstance(data, Mapping):
         return None
 
-    chat_id = _coze_identifier(data.get("id"))
+    chat_id         = _coze_identifier(data.get("id"))
     conversation_id = _coze_identifier(data.get("conversation_id"))
     if chat_id is None or conversation_id is None:
         return None
@@ -391,8 +401,8 @@ async def _cancel_chat(
                 context,
                 "POST",
                 COZE_CANCEL_URL,
-                headers=headers,
-                request_kwargs={
+                headers        = headers,
+                request_kwargs = {
                     **request_kwargs,
                     "timeout": _CANCEL_TIMEOUT_SECONDS,
                     "params": {"conversation_id": conversation_id, "chat_id": chat_id},
@@ -404,8 +414,8 @@ async def _cancel_chat(
         public_error_message(
             context,
             exc,
-            logger=context.logger,
-            component="chat.coze_cancel",
+            logger    = context.logger,
+            component = "chat.coze_cancel",
         )
 
 
@@ -423,15 +433,15 @@ async def _poll_coze_chat(
     while status in _PENDING_CHAT_STATUSES:
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
-            raise asyncio.TimeoutError
+            raise TimeoutError
 
         await asyncio.sleep(min(POLL_INTERVAL_SECONDS, remaining))
         response = await _request_coze_json_before_deadline(
             context,
             "GET",
             COZE_RETRIEVE_URL,
-            headers=headers,
-            request_kwargs={
+            headers        = headers,
+            request_kwargs = {
                 **request_kwargs,
                 "params": {"conversation_id": conversation_id, "chat_id": chat_id},
             },
@@ -462,8 +472,8 @@ async def _fetch_coze_messages(
         context,
         "GET",
         COZE_MESSAGES_URL,
-        headers=headers,
-        request_kwargs={
+        headers        = headers,
+        request_kwargs = {
             **request_kwargs,
             "params": {"conversation_id": conversation_id, "chat_id": chat_id},
         },
@@ -491,12 +501,12 @@ async def call_coze_api(
         context.logger.error("Chat 插件配置无效: %s", error_message)
         return None
 
-    token = config["token"]
+    token  = config["token"]
     bot_id = config["bot_id"]
     _, actor = _actor_identity(actor_id)
     identity_source = f"{bot_id}:{actor if actor is not None else _ANONYMOUS_ACTOR}"
-    user_id = hashlib.sha256(identity_source.encode("utf-8")).hexdigest()[:32]
-    proxy = config.get("proxy") or None
+    user_id         = hashlib.sha256(identity_source.encode("utf-8")).hexdigest()[:32]
+    proxy           = config.get("proxy") or None
 
     headers = {
         "Authorization": f"Bearer {token}",
@@ -524,13 +534,13 @@ async def call_coze_api(
         context.logger.info("调用 Coze API v3，查询长度: %d 字符", len(query))
         async with _API_SEMAPHORE:
             deadline = asyncio.get_running_loop().time() + REQUEST_TIMEOUT
-            created = await _request_coze_json_before_deadline(
+            created  = await _request_coze_json_before_deadline(
                 context,
                 "POST",
                 COZE_API_URL,
-                headers=headers,
-                request_kwargs={**base_request_kwargs, "json": payload},
-                deadline=deadline,
+                headers        = headers,
+                request_kwargs = {**base_request_kwargs, "json": payload},
+                deadline       = deadline,
             )
             if created is None:
                 return None
@@ -542,9 +552,9 @@ async def call_coze_api(
             state = await _poll_coze_chat(
                 context,
                 state,
-                headers=headers,
-                request_kwargs=base_request_kwargs,
-                deadline=deadline,
+                headers        = headers,
+                request_kwargs = base_request_kwargs,
+                deadline       = deadline,
             )
             if state is None:
                 return None
@@ -556,34 +566,34 @@ async def call_coze_api(
 
             messages = await _fetch_coze_messages(
                 context,
-                chat_id=chat_id,
-                conversation_id=conversation_id,
-                headers=headers,
-                request_kwargs=base_request_kwargs,
-                deadline=deadline,
+                chat_id         = chat_id,
+                conversation_id = conversation_id,
+                headers         = headers,
+                request_kwargs  = base_request_kwargs,
+                deadline        = deadline,
             )
             if messages is None:
                 return None
             context.logger.info("Coze API 调用成功，响应消息数: %d", len(messages))
             return {"messages": messages}
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         context.logger.error("Coze API 请求超时 (%ss)", REQUEST_TIMEOUT)
         if state is not None and state[2] in _PENDING_CHAT_STATUSES:
             await _cancel_chat(
                 context,
-                chat_id=state[0],
-                conversation_id=state[1],
-                headers=headers,
-                request_kwargs=base_request_kwargs,
+                chat_id         = state[0],
+                conversation_id = state[1],
+                headers         = headers,
+                request_kwargs  = base_request_kwargs,
             )
         return None
     except Exception as exc:
         public_error_message(
             context,
             exc,
-            logger=context.logger,
-            component="chat.coze_api",
+            logger    = context.logger,
+            component = "chat.coze_api",
         )
         return None
 
@@ -633,9 +643,9 @@ async def _answer_query(
     try:
         reservation = await _reserve_quota(
             context,
-            actor=actor,
-            per_user_limit=per_user_limit,
-            global_limit=global_limit,
+            actor          = actor,
+            per_user_limit = per_user_limit,
+            global_limit   = global_limit,
         )
     except ChatQuotaExceeded:
         return segments("❌ 今日 AI 对话额度已用完")
@@ -667,7 +677,7 @@ async def _run_chat_query(
     """验证查询与配置，并在持久额度事务中调用远端。"""
 
     settings = context.get_settings_snapshot()
-    config = settings.plugin_secrets("chat")
+    config   = settings.plugin_secrets("chat")
     is_valid, error_msg = validate_config(config)
     if not is_valid:
         context.logger.error("Chat 插件配置无效: %s", error_msg)
@@ -695,8 +705,8 @@ async def _run_chat_query(
         event,
         context,
         config,
-        per_user_limit=per_user_limit,
-        global_limit=global_limit,
+        per_user_limit = per_user_limit,
+        global_limit   = global_limit,
     )
 
 
@@ -732,8 +742,8 @@ async def handle(
         return public_error_response(
             context,
             exc,
-            logger=context.logger,
-            component="chat.handle",
+            logger    = context.logger,
+            component = "chat.handle",
         )
 
 

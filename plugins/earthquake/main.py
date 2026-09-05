@@ -66,27 +66,27 @@ from core.safe_http import SafeHttpError, SafeHttpResponse, fetch_public_bytes
 logger = logging.getLogger(__name__)
 
 # 用户参数和微博字段都来自不可信输入；在进入解析器前先施加独立硬上限。
-MAX_ARGUMENT_CHARS = 64
-MAX_RAW_TEXT_CHARS = 64 * 1024
-MAX_CLEAN_TEXT_CHARS = 16 * 1024
-MAX_CLEAN_TEXT_BYTES = 64 * 1024
-MAX_FIGURE_URL_CHARS = 2_048
-MAX_STATE_BYTES = 4 * 1024
-MAX_IMAGE_BYTES = 8 * 1024 * 1024
-MAX_IMAGE_DIMENSION = 16_384
-MAX_IMAGE_PIXELS = 32_000_000
+MAX_ARGUMENT_CHARS      = 64
+MAX_RAW_TEXT_CHARS      = 64 * 1024
+MAX_CLEAN_TEXT_CHARS    = 16 * 1024
+MAX_CLEAN_TEXT_BYTES    = 64 * 1024
+MAX_FIGURE_URL_CHARS    = 2_048
+MAX_STATE_BYTES         = 4 * 1024
+MAX_IMAGE_BYTES         = 8 * 1024 * 1024
+MAX_IMAGE_DIMENSION     = 16_384
+MAX_IMAGE_PIXELS        = 32_000_000
 MAX_DECODED_IMAGE_BYTES = 128 * 1024 * 1024
 
-WEIBO_UID = "1904228041"
-CONTAINER_ID = "1076031904228041"
-_MAX_WEIBO_CARDS = 200
+WEIBO_UID            = "1904228041"
+CONTAINER_ID         = "1076031904228041"
+_MAX_WEIBO_CARDS     = 200
 _MAX_SINCE_ID_DIGITS = 32
-_MIN_PUSH_MAGNITUDE = 4.0
-_EARTHQUAKE_MARKERS = ("#地震快讯#", "中国地震台网正式测定")
-_HELP_ALIASES = frozenset({"help", "h", "帮助"})
-_LATEST_ALIASES = frozenset({"latest", "最新"})
-_MAGNITUDE_PATTERN = re.compile(r"发生([0-9]{1,2}(?:\.[0-9]{1,2})?)级地震")
-_DECIMAL_ID_PATTERN = re.compile(rf"[0-9]{{1,{_MAX_SINCE_ID_DIGITS}}}\Z")
+_MIN_PUSH_MAGNITUDE  = 4.0
+_EARTHQUAKE_MARKERS  = ("#地震快讯#", "中国地震台网正式测定")
+_HELP_ALIASES        = frozenset({"help", "h", "帮助"})
+_LATEST_ALIASES      = frozenset({"latest", "最新"})
+_MAGNITUDE_PATTERN   = re.compile(r"发生([0-9]{1,2}(?:\.[0-9]{1,2})?)级地震")
+_DECIMAL_ID_PATTERN  = re.compile(rf"[0-9]{{1,{_MAX_SINCE_ID_DIGITS}}}\Z")
 
 _IMAGE_HOSTS = frozenset(
     {
@@ -102,15 +102,15 @@ _IMAGE_MIME_FORMATS = {
     "image/webp": ("WEBP", ".webp"),
 }
 _IMAGE_FORMAT_EXTENSIONS = dict(_IMAGE_MIME_FORMATS.values())
-_IMAGE_FORMAT_MODES = {
+_IMAGE_FORMAT_MODES      = {
     "JPEG": frozenset({"L", "RGB", "CMYK", "YCbCr"}),
     "PNG": frozenset({"1", "L", "LA", "P", "RGB", "RGBA"}),
     "WEBP": frozenset({"RGB", "RGBA"}),
 }
 _IMAGE_CACHE_LIMITS = FileCacheLimits(
-    max_entries=64,
-    max_bytes=64 * 1024 * 1024,
-    ttl_seconds=30 * 24 * 60 * 60,
+    max_entries = 64,
+    max_bytes   = 64 * 1024 * 1024,
+    ttl_seconds = 30 * 24 * 60 * 60,
 )
 
 _VISITOR_MIME_POLICY = MimePolicy(
@@ -123,39 +123,39 @@ _VISITOR_MIME_POLICY = MimePolicy(
     )
 )
 _VISITOR_BODY_LIMITS = BodyLimits(
-    max_wire_bytes=256 * 1024,
-    max_decoded_bytes=512 * 1024,
-    max_decompression_ratio=20,
-    ratio_grace_bytes=16 * 1024,
-    chunk_bytes=32 * 1024,
+    max_wire_bytes          = 256 * 1024,
+    max_decoded_bytes       = 512 * 1024,
+    max_decompression_ratio = 20,
+    ratio_grace_bytes       = 16 * 1024,
+    chunk_bytes             = 32 * 1024,
 )
 _CONFIG_BODY_LIMITS = BodyLimits(
-    max_wire_bytes=256 * 1024,
-    max_decoded_bytes=512 * 1024,
-    max_decompression_ratio=20,
-    ratio_grace_bytes=16 * 1024,
-    chunk_bytes=32 * 1024,
+    max_wire_bytes          = 256 * 1024,
+    max_decoded_bytes       = 512 * 1024,
+    max_decompression_ratio = 20,
+    ratio_grace_bytes       = 16 * 1024,
+    chunk_bytes             = 32 * 1024,
 )
 _CONFIG_JSON_LIMITS = JsonLimits(
-    max_bytes=_CONFIG_BODY_LIMITS.max_decoded_bytes,
-    max_depth=12,
-    max_nodes=5_000,
-    max_string_chars=128 * 1024,
-    max_number_chars=128,
+    max_bytes        = _CONFIG_BODY_LIMITS.max_decoded_bytes,
+    max_depth        = 12,
+    max_nodes        = 5_000,
+    max_string_chars = 128 * 1024,
+    max_number_chars = 128,
 )
 _INDEX_BODY_LIMITS = BodyLimits(
-    max_wire_bytes=1024 * 1024,
-    max_decoded_bytes=2 * 1024 * 1024,
-    max_decompression_ratio=20,
-    ratio_grace_bytes=32 * 1024,
-    chunk_bytes=64 * 1024,
+    max_wire_bytes          = 1024 * 1024,
+    max_decoded_bytes       = 2 * 1024 * 1024,
+    max_decompression_ratio = 20,
+    ratio_grace_bytes       = 32 * 1024,
+    chunk_bytes             = 64 * 1024,
 )
 _INDEX_JSON_LIMITS = JsonLimits(
-    max_bytes=_INDEX_BODY_LIMITS.max_decoded_bytes,
-    max_depth=24,
-    max_nodes=30_000,
-    max_string_chars=512 * 1024,
-    max_number_chars=128,
+    max_bytes        = _INDEX_BODY_LIMITS.max_decoded_bytes,
+    max_depth        = 24,
+    max_nodes        = 30_000,
+    max_string_chars = 512 * 1024,
+    max_number_chars = 128,
 )
 _WEIBO_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -164,22 +164,22 @@ _WEIBO_USER_AGENT = (
 )
 # 这些字段来自当前微博访客端点契约，不接受用户配置覆盖。若端点变更，连续失败会在
 # 达到阈值后升级日志等级，避免长期静默重试。
-_WEIBO_VISITOR_VERSION = "20250916"
-_WEIBO_VISITOR_RID = "01Cn_5z8ew6CZHvNiTdPeyK2Qf740"
+_WEIBO_VISITOR_VERSION        = "20250916"
+_WEIBO_VISITOR_RID            = "01Cn_5z8ew6CZHvNiTdPeyK2Qf740"
 _BOOTSTRAP_FAILURE_ESCALATION = 3
-_WEIBO_SESSION_TTL_SECONDS = 15 * 60
-_WEIBO_SESSION_STATE_KEY = "earthquake_weibo_session"
-_IMAGE_HEADERS = {
+_WEIBO_SESSION_TTL_SECONDS    = 15 * 60
+_WEIBO_SESSION_STATE_KEY      = "earthquake_weibo_session"
+_IMAGE_HEADERS                = {
     "User-Agent": _WEIBO_USER_AGENT,
     "Referer": "https://m.weibo.cn/",
     "Accept": "image/*",
     "Accept-Encoding": "identity",
 }
 
-_PENDING_CURSOR_KEY = "earthquake_pending_since"
+_PENDING_CURSOR_KEY    = "earthquake_pending_since"
 _PENDING_EVENT_IDS_KEY = "earthquake_pending_event_ids"
-_DELIVERY_LOCK = asyncio.Lock()
-_WEIBO_SESSION_LOCK = threading.Lock()
+_DELIVERY_LOCK         = asyncio.Lock()
+_WEIBO_SESSION_LOCK    = threading.Lock()
 
 HELP_TEXT = """🌏 地震快讯
 
@@ -358,7 +358,7 @@ def _save_since(context: _EarthquakeContext, since_id: str | int) -> None:
     """先写活动游标，再写恢复检查点；两份文件均使用原子替换。"""
 
     normalized = _validate_since_payload({"since_id": since_id})
-    path = _since_path(context)
+    path       = _since_path(context)
     path.parent.mkdir(parents=True, exist_ok=True)
     write_json(path, {"since_id": normalized})
     write_json(_checkpoint_path(context), {"since_id": normalized})
@@ -387,17 +387,17 @@ def _close_session(session: object) -> None:
 def _get_cached_session(context: _EarthquakeContext) -> tuple[requests.Session, bool]:
     """取得插件代内共享的微博会话，并报告是否需要重新 bootstrap。"""
 
-    now = time.monotonic()
+    now    = time.monotonic()
     record = context.state.get(_WEIBO_SESSION_STATE_KEY)
     if isinstance(record, dict):
-        session = record.get("session")
+        session    = record.get("session")
         expires_at = record.get("expires_at")
         if session is not None and isinstance(expires_at, (int, float)) and expires_at > now:
             return cast(requests.Session, session), not bool(record.get("bootstrapped"))
         if session is not None:
             _close_session(session)
 
-    session = _create_session()
+    session                                 = _create_session()
     context.state[_WEIBO_SESSION_STATE_KEY] = {
         "session": session,
         "expires_at": now + _WEIBO_SESSION_TTL_SECONDS,
@@ -466,7 +466,7 @@ def _iter_mblogs(cards: object) -> list[dict[str, Any]]:
     if len(nodes) > _MAX_WEIBO_CARDS:
         raise ResponseLimitError("Weibo API returned too many card nodes")
     mblogs: list[dict[str, Any]] = []
-    index = 0
+    index                        = 0
     while index < len(nodes):
         card = nodes[index]
         index += 1
@@ -503,7 +503,7 @@ def _bootstrap_session(
 ) -> bool:
     """尽力建立访客 Cookie；失败不降低后续索引响应的边界校验。"""
 
-    visitor_url = "https://visitor.passport.weibo.cn/visitor/genvisitor2"
+    visitor_url  = "https://visitor.passport.weibo.cn/visitor/genvisitor2"
     visitor_data = {
         "cb": "visitor_gray_callback",
         "ver": _WEIBO_VISITOR_VERSION,
@@ -514,19 +514,19 @@ def _bootstrap_session(
         "rid": _WEIBO_VISITOR_RID,
         "return_url": f"https://m.weibo.cn/u/{WEIBO_UID}",
     }
-    headers = _weibo_headers()
+    headers   = _weibo_headers()
     succeeded = True
     try:
         requests_request_bounded(
             "POST",
             visitor_url,
-            session=session,
-            headers=headers,
-            limits=_VISITOR_BODY_LIMITS,
-            mime_policy=_VISITOR_MIME_POLICY,
-            redirect_policy=NO_REDIRECTS,
-            request_kwargs={"data": visitor_data, "timeout": (5.0, 15.0)},
-            total_timeout_seconds=20.0,
+            session               = session,
+            headers               = headers,
+            limits                = _VISITOR_BODY_LIMITS,
+            mime_policy           = _VISITOR_MIME_POLICY,
+            redirect_policy       = NO_REDIRECTS,
+            request_kwargs        = {"data": visitor_data, "timeout": (5.0, 15.0)},
+            total_timeout_seconds = 20.0,
         )
     except Exception as exc:
         succeeded = False
@@ -536,13 +536,13 @@ def _bootstrap_session(
         response = requests_request_bounded(
             "GET",
             "https://m.weibo.cn/api/config",
-            session=session,
-            headers=headers,
-            limits=_CONFIG_BODY_LIMITS,
-            mime_policy=JSON_MIME_POLICY,
-            redirect_policy=NO_REDIRECTS,
-            request_kwargs={"timeout": (5.0, 15.0)},
-            total_timeout_seconds=20.0,
+            session               = session,
+            headers               = headers,
+            limits                = _CONFIG_BODY_LIMITS,
+            mime_policy           = JSON_MIME_POLICY,
+            redirect_policy       = NO_REDIRECTS,
+            request_kwargs        = {"timeout": (5.0, 15.0)},
+            total_timeout_seconds = 20.0,
         )
         _validate_api_envelope(
             parse_bounded_json(response, limits=_CONFIG_JSON_LIMITS),
@@ -572,15 +572,15 @@ def _fetch_weibo(session: requests.Session) -> list[dict[str, Any]]:
 
     headers = _weibo_headers(referer=f"https://m.weibo.cn/u/{WEIBO_UID}")
     headers["X-Requested-With"] = "XMLHttpRequest"
-    response = requests_request_bounded(
+    response                    = requests_request_bounded(
         "GET",
         "https://m.weibo.cn/api/container/getIndex",
-        session=session,
-        headers=headers,
-        limits=_INDEX_BODY_LIMITS,
-        mime_policy=JSON_MIME_POLICY,
-        redirect_policy=NO_REDIRECTS,
-        request_kwargs={
+        session         = session,
+        headers         = headers,
+        limits          = _INDEX_BODY_LIMITS,
+        mime_policy     = JSON_MIME_POLICY,
+        redirect_policy = NO_REDIRECTS,
+        request_kwargs  = {
             "params": {"type": "uid", "value": WEIBO_UID, "containerid": CONTAINER_ID},
             "timeout": (5.0, 15.0),
         },
@@ -611,12 +611,12 @@ def _extract_clean_text(raw_text: str) -> str:
         hidden.decompose()
     visible = str(parsed.get_text(" ", strip=True))
     collapsed = re.sub(r"[\s\u200b]+", " ", visible).strip()
-    cleaned = bounded_external_text(
+    cleaned   = bounded_external_text(
         collapsed,
-        max_chars=MAX_CLEAN_TEXT_CHARS,
-        max_bytes=MAX_CLEAN_TEXT_BYTES,
-        suffix="",
-        truncate=False,
+        max_chars = MAX_CLEAN_TEXT_CHARS,
+        max_bytes = MAX_CLEAN_TEXT_BYTES,
+        suffix    = "",
+        truncate  = False,
     )
     if collapsed and not cleaned:
         raise ResponseLimitError("earthquake clean text limit exceeded")
@@ -643,7 +643,7 @@ def _normalize_event_id(value: object) -> tuple[str, int] | None:
     if _DECIMAL_ID_PATTERN.fullmatch(candidate) is None:
         return None
     normalized = str(int(candidate))
-    numeric = int(normalized)
+    numeric    = int(normalized)
     return (normalized, numeric) if numeric > 0 else None
 
 
@@ -654,8 +654,8 @@ def _normalize_figure_url(value: object) -> str | None:
         return None
     try:
         parsed = urlsplit(value)
-        host = (parsed.hostname or "").rstrip(".").casefold()
-        port = parsed.port
+        host   = (parsed.hostname or "").rstrip(".").casefold()
+        port   = parsed.port
     except ValueError:
         return None
     if (
@@ -672,7 +672,7 @@ def _normalize_figure_url(value: object) -> str | None:
 def _prepare_mblog(mblog: Mapping[str, Any]) -> _PreparedCard | None:
     """把单条外部微博转换为受信内部结构；畸形单条数据不会中断整页扫描。"""
 
-    event = _normalize_event_id(mblog.get("id"))
+    event    = _normalize_event_id(mblog.get("id"))
     raw_text = mblog.get("text")
     if event is None or not isinstance(raw_text, str):
         return None
@@ -684,10 +684,10 @@ def _prepare_mblog(mblog: Mapping[str, Any]) -> _PreparedCard | None:
     if not clean_text or any(marker not in clean_text for marker in _EARTHQUAKE_MARKERS):
         return None
     return _PreparedCard(
-        clean_text=clean_text,
-        magnitude=_extract_magnitude(clean_text),
-        figure_url=_normalize_figure_url(mblog.get("original_pic")),
-        event_id=event[0],
+        clean_text = clean_text,
+        magnitude  = _extract_magnitude(clean_text),
+        figure_url = _normalize_figure_url(mblog.get("original_pic")),
+        event_id   = event[0],
     )
 
 
@@ -699,7 +699,7 @@ def _select_earthquakes(
 ) -> _FetchBatch:
     """完整扫描有界 feed；去重排序后取最近一条或返回全部新事件。"""
 
-    since_numeric = int(since_id)
+    since_numeric                            = int(since_id)
     prepared_by_id: dict[int, _PreparedCard] = {}
     for mblog in mblogs:
         prepared = _prepare_mblog(mblog)
@@ -779,16 +779,16 @@ def _validate_image_bytes(payload: bytes, *, media_type: str) -> str:
         validate_image_bytes(
             payload,
             limits=ImageValidationLimits(
-                max_bytes=MAX_IMAGE_BYTES,
-                max_pixels=MAX_IMAGE_PIXELS,
-                max_frames=1,
-                max_dimension=MAX_IMAGE_DIMENSION,
-                max_decoded_bytes=MAX_DECODED_IMAGE_BYTES,
+                max_bytes         = MAX_IMAGE_BYTES,
+                max_pixels        = MAX_IMAGE_PIXELS,
+                max_frames        = 1,
+                max_dimension     = MAX_IMAGE_DIMENSION,
+                max_decoded_bytes = MAX_DECODED_IMAGE_BYTES,
             ),
-            format_extensions=_IMAGE_FORMAT_EXTENSIONS,
-            expected_format=expected_format,
-            allowed_modes=_IMAGE_FORMAT_MODES,
-            allow_animation=False,
+            format_extensions = _IMAGE_FORMAT_EXTENSIONS,
+            expected_format   = expected_format,
+            allowed_modes     = _IMAGE_FORMAT_MODES,
+            allow_animation   = False,
         )
     except ImageValidationError as exc:
         if exc.reason in {
@@ -823,7 +823,7 @@ def _validate_and_store_figure(
     media_type = _image_media_type(response.headers)
     extension = _validate_image_bytes(response.body, media_type=media_type)
     digest = hashlib.sha256(response.body).hexdigest()
-    cache = BoundedFileCache(context.data_dir / "EarthquakeFigures", _IMAGE_CACHE_LIMITS)
+    cache  = BoundedFileCache(context.data_dir / "EarthquakeFigures", _IMAGE_CACHE_LIMITS)
     file_path, _created = cache.put_if_absent(f"{digest}{extension}", response.body)
     if file_path is None:
         raise OSError("earthquake image cache rejected the validated payload")
@@ -833,13 +833,13 @@ def _validate_and_store_figure(
 async def _download_figure(context: _EarthquakeContext, figure_url: str) -> Path:
     response = await fetch_public_bytes(
         figure_url,
-        headers=_IMAGE_HEADERS,
-        timeout_seconds=20.0,
-        max_bytes=MAX_IMAGE_BYTES,
-        allowed_content_type_prefixes=(),
-        allowed_content_types=tuple(_IMAGE_MIME_FORMATS),
-        allowed_hosts=_IMAGE_HOSTS,
-        allowed_schemes=("https",),
+        headers                       = _IMAGE_HEADERS,
+        timeout_seconds               = 20.0,
+        max_bytes                     = MAX_IMAGE_BYTES,
+        allowed_content_type_prefixes = (),
+        allowed_content_types         = tuple(_IMAGE_MIME_FORMATS),
+        allowed_hosts                 = _IMAGE_HOSTS,
+        allowed_schemes               = ("https",),
     )
     if response is None:
         raise SafeHttpError("earthquake image request failed")
@@ -859,8 +859,8 @@ async def _render_cards(
             public_error_message(
                 context,
                 exc,
-                logger=logger,
-                component="earthquake.download_image",
+                logger    = logger,
+                component = "earthquake.download_image",
             )
             return None
 
@@ -918,7 +918,7 @@ async def _record_scan_progress(
     if advance_cursor or not batch.cards:
         await asyncio.to_thread(_save_since, context, batch.newest_seen_id)
         return
-    context.state[_PENDING_CURSOR_KEY] = batch.newest_seen_id
+    context.state[_PENDING_CURSOR_KEY]    = batch.newest_seen_id
     context.state[_PENDING_EVENT_IDS_KEY] = list(batch.event_ids)
 
 
@@ -939,8 +939,8 @@ async def _fetch_earthquake_news(
             public_error_message(
                 context,
                 exc,
-                logger=logger,
-                component="earthquake.fetch_scheduled",
+                logger    = logger,
+                component = "earthquake.fetch_scheduled",
             )
             return []
         return public_error_response(context, exc, logger=logger, component="earthquake.fetch")
@@ -948,9 +948,9 @@ async def _fetch_earthquake_news(
     if not force:
         await _record_scan_progress(
             context,
-            batch=batch,
-            previous_since_id=since_id,
-            advance_cursor=advance_cursor,
+            batch             = batch,
+            previous_since_id = since_id,
+            advance_cursor    = advance_cursor,
         )
     if not batch.cards:
         return segments("未获取到地震快讯数据") if force else []
@@ -973,13 +973,13 @@ def _notification_id(since_id: str, event_ids: object) -> str:
     """根据规范化游标和事件集合生成稳定、无外部原文的幂等键。"""
 
     normalized_since = _validate_since_payload({"since_id": since_id})
-    material = json.dumps(
+    material         = json.dumps(
         {
             "since_id": normalized_since,
             "event_ids": _normalize_notification_event_ids(event_ids),
         },
-        sort_keys=True,
-        separators=(",", ":"),
+        sort_keys  = True,
+        separators = (",", ":"),
     ).encode("utf-8")
     return f"earthquake:{hashlib.sha256(material).hexdigest()}"
 
@@ -989,9 +989,9 @@ async def _deliver_pending(context: _EarthquakeContext, pending: PendingFanout) 
 
     path = _fanout_path(context)
     for target in pending.pending_targets():
-        user_id = target.target_id if target.kind == "private" else None
+        user_id  = target.target_id if target.kind == "private" else None
         group_id = target.target_id if target.kind == "group" else None
-        action = build_action(pending.payload, user_id, group_id)
+        action   = build_action(pending.payload, user_id, group_id)
         if action is None:
             logger.error("Earthquake fanout could not build target action")
             continue
@@ -999,9 +999,9 @@ async def _deliver_pending(context: _EarthquakeContext, pending: PendingFanout) 
         confirm_target = partial(asyncio.to_thread, mark_delivered, path, pending, target)
 
         receipt = DeliveryReceipt(
-            expected_actions=1,
-            commit=confirm_target,
-            rollback=lambda: None,
+            expected_actions = 1,
+            commit           = confirm_target,
+            rollback         = lambda: None,
             # 地震告警采用 at-most-once；回执丢失时不重复推送可能已送达的告警。
             unknown=confirm_target,
         )
@@ -1014,8 +1014,8 @@ async def _deliver_pending(context: _EarthquakeContext, pending: PendingFanout) 
             public_error_message(
                 context,
                 receipt.callback_error,
-                logger=logger,
-                component="earthquake.delivery_ack",
+                logger    = logger,
+                component = "earthquake.delivery_ack",
             )
             return False
         if not receipt.resolved or receipt.outcome is False:
@@ -1058,8 +1058,8 @@ async def _scheduled_locked(context: _EarthquakeContext) -> Segments:
         public_error_message(
             context,
             exc,
-            logger=logger,
-            component="earthquake.load_delivery_state",
+            logger    = logger,
+            component = "earthquake.load_delivery_state",
         )
         return []
     if pending is not None:
@@ -1069,8 +1069,8 @@ async def _scheduled_locked(context: _EarthquakeContext) -> Segments:
             public_error_message(
                 context,
                 exc,
-                logger=logger,
-                component="earthquake.delivery_state",
+                logger    = logger,
+                component = "earthquake.delivery_state",
             )
         return []
 
@@ -1078,7 +1078,7 @@ async def _scheduled_locked(context: _EarthquakeContext) -> Segments:
     context.state.pop(_PENDING_CURSOR_KEY, None)
     context.state.pop(_PENDING_EVENT_IDS_KEY, None)
     result = await _fetch_earthquake_news(context, force=False, advance_cursor=False)
-    pending_since = context.state.pop(_PENDING_CURSOR_KEY, None)
+    pending_since     = context.state.pop(_PENDING_CURSOR_KEY, None)
     pending_event_ids = context.state.pop(_PENDING_EVENT_IDS_KEY, ())
     if not result:
         if isinstance(pending_since, str):
@@ -1096,17 +1096,17 @@ async def _scheduled_locked(context: _EarthquakeContext) -> Segments:
         pending = await asyncio.to_thread(
             create_pending,
             _fanout_path(context),
-            event_id=_notification_id(pending_since, pending_event_ids),
-            payload=result,
-            targets=targets,
-            commit={"since_id": pending_since},
+            event_id = _notification_id(pending_since, pending_event_ids),
+            payload  = result,
+            targets  = targets,
+            commit   = {"since_id": pending_since},
         )
         await _deliver_pending(context, pending)
     except Exception as exc:
         public_error_message(
             context,
             exc,
-            logger=logger,
-            component="earthquake.delivery_state",
+            logger    = logger,
+            component = "earthquake.delivery_state",
         )
     return []

@@ -15,7 +15,7 @@ from tests.helpers.xiaoqing_chat_test_support import (
     pytest,
 )
 
-mock_context = _fixture_support.mock_context
+mock_context       = _fixture_support.mock_context
 sample_group_event = _fixture_support.sample_group_event
 
 
@@ -25,28 +25,28 @@ async def test_smalltalk_no_reply_preserves_wait_action_name_in_action_history(
 ):
     from plugins.xiaoqing_chat.handlers import _maybe_reply_smalltalk
 
-    lock = asyncio.Lock()
-    state = MagicMock()
+    lock                              = asyncio.Lock()
+    state                             = MagicMock()
     state.get_mood_state.return_value = ""
     state.memory_store.get_async = AsyncMock(return_value=[])
     state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.memory_store.append = Mock()
+    state.memory_store.append             = Mock()
     state.heartflow.on_user_message_async = AsyncMock()
-    state.heartflow.on_bot_reply_async = AsyncMock()
-    state.heartflow.on_no_reply_async = AsyncMock()
-    state.inc_stats = Mock()
-    state.action_history.append = Mock()
-    state.pfc_state_store.get_async = AsyncMock(
+    state.heartflow.on_bot_reply_async    = AsyncMock()
+    state.heartflow.on_no_reply_async     = AsyncMock()
+    state.inc_stats                       = Mock()
+    state.action_history.append           = Mock()
+    state.pfc_state_store.get_async       = AsyncMock(
         return_value=SimpleNamespace(
-            chat_id="g67890",
-            ignore_until_ts=0.0,
-            ended=False,
-            last_successful_reply_action="",
-            goal_list=[],
-            knowledge_list=[],
-            planner_fail_ts=[],
-            planner_skip_until=0.0,
-            updated_at=0.0,
+            chat_id                      = "g67890",
+            ignore_until_ts              = 0.0,
+            ended                        = False,
+            last_successful_reply_action = "",
+            goal_list                    = [],
+            knowledge_list               = [],
+            planner_fail_ts              = [],
+            planner_skip_until           = 0.0,
+            updated_at                   = 0.0,
         )
     )
     state.pfc_state_store.set_state = Mock()
@@ -100,8 +100,8 @@ async def test_smalltalk_no_reply_preserves_wait_action_name_in_action_history(
 def test_load_latest_topic_and_summary_skips_invalid_tail_entries(tmp_path):
     from plugins.xiaoqing_chat.planning.goal_state import load_latest_topic_and_summary
 
-    data_dir = tmp_path
-    chat_id = "goal-parser-dedup"
+    data_dir     = tmp_path
+    chat_id      = "goal-parser-dedup"
     summary_path = data_dir / "hippo_memorizer" / f"{chat_id}.json"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(
@@ -123,7 +123,7 @@ def test_load_latest_topic_and_summary_skips_invalid_tail_entries(tmp_path):
 def test_memory_db_bind_clears_previous_store_when_switching_dirs(tmp_path):
     from plugins.xiaoqing_chat.memory.memory_db import MemoryDB
 
-    first_dir = tmp_path / "a"
+    first_dir  = tmp_path / "a"
     second_dir = tmp_path / "b"
     first_dir.mkdir()
     second_dir.mkdir()
@@ -131,9 +131,9 @@ def test_memory_db_bind_clears_previous_store_when_switching_dirs(tmp_path):
     db = MemoryDB()
     db.bind(first_dir)
     db.upsert_text(
-        doc_id="doc1",
-        text="旧目录里的记忆",
-        meta={"type": "knowledge", "global_approved": True},
+        doc_id = "doc1",
+        text   = "旧目录里的记忆",
+        meta   = {"type": "knowledge", "global_approved": True},
     )
     assert db.query_global("旧目录", top_k=5, type_filter="knowledge")
 
@@ -142,8 +142,20 @@ def test_memory_db_bind_clears_previous_store_when_switching_dirs(tmp_path):
     assert db.query_global("旧目录", top_k=5, type_filter="knowledge") == []
 
 
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        "那确实挺难受的",
+        "他要不要来还没定，先按原计划安排。",
+        "文档里的‘你需要什么’是一个示例句。",
+        "附件没有传过来，我暂时无法判断。",
+        "你需要什么",
+    ],
+)
 @pytest.mark.asyncio
-async def test_generate_reply_forced_soft_rejection_uses_last_contextual_candidate(mock_context):
+async def test_generate_reply_forced_soft_rejection_uses_last_contextual_candidate(
+    mock_context, candidate
+):
     from contextlib import ExitStack
 
     from plugins.xiaoqing_chat.llm.reply_checker import ReplyCheckResult
@@ -153,36 +165,36 @@ async def test_generate_reply_forced_soft_rejection_uses_last_contextual_candida
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
             personality=SimpleNamespace(
-                multiple_reply_style=[],
-                multiple_probability=0.0,
-                identity="",
-                reply_style="",
+                multiple_reply_style = [],
+                multiple_probability = 0.0,
+                identity             = "",
+                reply_style          = "",
             ),
             keyword_reaction=SimpleNamespace(keyword_rules=[], regex_rules=[]),
             brain_chat=SimpleNamespace(
-                brain_identity="",
-                brain_reply_style="",
-                brain_max_context_size=None,
-                brain_temperature=None,
+                brain_identity         = "",
+                brain_reply_style      = "",
+                brain_max_context_size = None,
+                brain_temperature      = None,
             ),
             goal=SimpleNamespace(enable_goal=False),
             reflection=SimpleNamespace(enable_review_sessions=False),
             debug=SimpleNamespace(show_reply_prompt=False, log_steps=True),
-            max_context_size=20,
-            temperature=0.7,
-            top_p=0.9,
-            max_tokens=128,
-            timeout_seconds=3.0,
-            reply_check=SimpleNamespace(
-                enable_reply_checker=True,
-                enable_llm_checker=False,
-                max_repeat_compare=5,
-                similarity_threshold=0.9,
-                max_assistant_in_row=3,
-                max_regen=0,
+            max_context_size = 20,
+            temperature      = 0.7,
+            top_p            = 0.9,
+            max_tokens       = 128,
+            timeout_seconds  = 3.0,
+            reply_check      = SimpleNamespace(
+                enable_reply_checker = True,
+                enable_llm_checker   = False,
+                max_repeat_compare   = 5,
+                similarity_threshold = 0.9,
+                max_assistant_in_row = 3,
+                max_regen            = 0,
             ),
-            postprocess=SimpleNamespace(),
-            rewrite=SimpleNamespace(),
+            postprocess = SimpleNamespace(),
+            rewrite     = SimpleNamespace(),
         )
     )
     _complete_test_runtime_config(runtime)
@@ -190,24 +202,24 @@ async def test_generate_reply_forced_soft_rejection_uses_last_contextual_candida
     state.memory_store.get_recent_async = AsyncMock(return_value=[])
     state.goal_store.get_async = AsyncMock(return_value=SimpleNamespace(goal=""))
     state.review_store.bind = Mock()
-    state.inc_stats = Mock()
+    state.inc_stats         = Mock()
 
     fg = SimpleNamespace(
-        timeout_seconds=3.0,
-        max_retry=0,
-        retry_interval_seconds=0.2,
-        to_dict=lambda: {
+        timeout_seconds        = 3.0,
+        max_retry              = 0,
+        retry_interval_seconds = 0.2,
+        to_dict                = lambda: {
             "timeout_seconds": 3.0,
             "max_retry": 0,
             "retry_interval_seconds": 0.2,
         },
     )
     action = PlannedAction(
-        action="reply",
-        think_level=1,
-        reasoning="用户要求直接回复",
-        question="",
-        unknown_words=[],
+        action        = "reply",
+        think_level   = 1,
+        reasoning     = "用户要求直接回复",
+        question      = "",
+        unknown_words = [],
     )
 
     with ExitStack() as stack:
@@ -267,17 +279,17 @@ async def test_generate_reply_forced_soft_rejection_uses_last_contextual_candida
         stack.enter_context(
             patch(
                 "plugins.xiaoqing_chat.reply_generator.chat_completions_with_fallback_paths",
-                new=AsyncMock(return_value=("那确实挺难受的", "primary")),
+                new=AsyncMock(return_value=(candidate, "primary")),
             )
         )
         stack.enter_context(
             patch(
                 "plugins.xiaoqing_chat.reply_generator.process_llm_response",
-                return_value=["那确实挺难受的"],
+                return_value=[candidate],
             )
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator.join_reply", return_value="那确实挺难受的")
+            patch("plugins.xiaoqing_chat.reply_generator.join_reply", return_value=candidate)
         )
         stack.enter_context(
             patch(
@@ -290,28 +302,28 @@ async def test_generate_reply_forced_soft_rejection_uses_last_contextual_candida
                 "plugins.xiaoqing_chat.reply_generator.check_reply",
                 new=AsyncMock(
                     return_value=ReplyCheckResult(
-                        suitable=False,
-                        reason="风格检查器认为不够自然",
-                        need_replan=False,
-                        severity="soft",
+                        suitable    = False,
+                        reason      = "风格检查器认为不够自然",
+                        need_replan = False,
+                        severity    = "soft",
                     )
                 ),
             )
         )
 
         draft = await _generate_reply_draft(
-            text="最烦的是做完也没人知道，像悄悄打完一场仗。",
-            event={"group_id": 1, "user_id": 2},
-            context=mock_context,
-            runtime=runtime,
-            state=state,
-            forced=True,
-            action=action,
-            plan_reasoning="用户要求直接回复",
+            text           = "请直接说明情况，别反问我。",
+            event          = {"group_id": 1, "user_id": 2},
+            context        = mock_context,
+            runtime        = runtime,
+            state          = state,
+            forced         = True,
+            action         = action,
+            plan_reasoning = "用户要求直接回复",
         )
 
     assert draft is not None
-    assert draft.text == "那确实挺难受的"
+    assert draft.text == candidate
     logged_payloads = [str(call.args[1]) for call in mock_context.logger.info.call_args_list]
     assert any('"step": "reply.check.exhausted.accept"' in payload for payload in logged_payloads)
 
@@ -324,11 +336,11 @@ def test_finish_forced_structural_rejection_uses_safe_fallback() -> None:
     )
 
     rejected = _RejectedCandidate(
-        text="重复回复",
-        result=ReplyCheckResult(
-            suitable=False,
-            reason="回复与之前机器人消息完全相同",
-            need_replan=True,
+        text   = "重复回复",
+        result = ReplyCheckResult(
+            suitable    = False,
+            reason      = "回复与之前机器人消息完全相同",
+            need_replan = True,
         ),
     )
 
@@ -348,31 +360,31 @@ def test_finish_forced_persona_grounding_rejection_keeps_conversation_alive(mock
     )
 
     plan = SimpleNamespace(
-        forced=True,
-        request_id="grounding-test",
-        text="一个要求角色补全未知人物信息的问题",
-        history=[],
-        bot_name="小青",
-        chat_id="group:1",
-        context=mock_context,
-        runtime=SimpleNamespace(
+        forced     = True,
+        request_id = "grounding-test",
+        text       = "一个要求角色补全未知人物信息的问题",
+        history    = [],
+        bot_name   = "小青",
+        chat_id    = "group:1",
+        context    = mock_context,
+        runtime    = SimpleNamespace(
             cfg=SimpleNamespace(
                 debug=SimpleNamespace(log_steps=True),
                 reply_check=SimpleNamespace(
-                    max_repeat_compare=8,
-                    similarity_threshold=0.92,
-                    max_assistant_in_row=3,
+                    max_repeat_compare   = 8,
+                    similarity_threshold = 0.92,
+                    max_assistant_in_row = 3,
                 ),
             )
         ),
     )
     rejected = _RejectedCandidate(
-        text="一条无依据的人物信息",
-        result=ReplyCheckResult(
-            suitable=False,
-            reason="人物陈述没有直接证据",
-            need_replan=True,
-            failure_code="persona_grounding",
+        text   = "一条无依据的人物信息",
+        result = ReplyCheckResult(
+            suitable     = False,
+            reason       = "人物陈述没有直接证据",
+            need_replan  = True,
+            failure_code = "persona_grounding",
         ),
     )
 
@@ -393,31 +405,31 @@ def test_finish_persona_grounding_identity_query_uses_only_known_name(mock_conte
     )
 
     plan = SimpleNamespace(
-        forced=True,
-        request_id="identity-test",
-        text="你究竟是谁？",
-        history=[],
-        bot_name="小青",
-        chat_id="group:1",
-        context=mock_context,
-        runtime=SimpleNamespace(
+        forced     = True,
+        request_id = "identity-test",
+        text       = "你究竟是谁？",
+        history    = [],
+        bot_name   = "小青",
+        chat_id    = "group:1",
+        context    = mock_context,
+        runtime    = SimpleNamespace(
             cfg=SimpleNamespace(
                 debug=SimpleNamespace(log_steps=False),
                 reply_check=SimpleNamespace(
-                    max_repeat_compare=8,
-                    similarity_threshold=0.92,
-                    max_assistant_in_row=3,
+                    max_repeat_compare   = 8,
+                    similarity_threshold = 0.92,
+                    max_assistant_in_row = 3,
                 ),
             )
         ),
     )
     rejected = _RejectedCandidate(
-        text="一条夹带了未知身份细节的回复",
-        result=ReplyCheckResult(
-            suitable=False,
-            reason="人物陈述没有直接证据",
-            need_replan=True,
-            failure_code="persona_grounding",
+        text   = "一条夹带了未知身份细节的回复",
+        result = ReplyCheckResult(
+            suitable     = False,
+            reason       = "人物陈述没有直接证据",
+            need_replan  = True,
+            failure_code = "persona_grounding",
         ),
     )
 
@@ -428,15 +440,17 @@ def test_finish_persona_grounding_identity_query_uses_only_known_name(mock_conte
 
 
 @pytest.mark.parametrize(
-    ("text", "expected_fragment"),
+    ("text", "expected_fragment", "includes_profile"),
     [
         (
             "小青，你具体在哪所学校、哪个城市、读什么专业？",
-            "具体到现实资料我就不展开",
+            "当前人设没有设定这些具体资料",
+            False,
         ),
         (
             "小青，说说你是个什么样的人，像群友自我介绍。",
             "按公开人设来说",
+            True,
         ),
     ],
     ids=("precise-profile", "self-intro"),
@@ -445,6 +459,7 @@ def test_finish_persona_grounding_uses_configured_persona_fallbacks(
     mock_context,
     text,
     expected_fragment,
+    includes_profile,
 ) -> None:
     from plugins.xiaoqing_chat.llm.reply_checker import ReplyCheckResult
     from plugins.xiaoqing_chat.reply_generator import (
@@ -456,32 +471,32 @@ def test_finish_persona_grounding_uses_configured_persona_fallbacks(
         "是一名海边书店店员，喜欢旧唱片；具体学校、专业、城市没有设定，不主动补成真实资料。"
     )
     plan = SimpleNamespace(
-        forced=True,
-        request_id="profile-fallback",
-        text=text,
-        effective_identity=configured_identity,
-        history=[],
-        bot_name="小青",
-        chat_id="group:1",
-        context=mock_context,
-        runtime=SimpleNamespace(
+        forced             = True,
+        request_id         = "profile-fallback",
+        text               = text,
+        effective_identity = configured_identity,
+        history            = [],
+        bot_name           = "小青",
+        chat_id            = "group:1",
+        context            = mock_context,
+        runtime            = SimpleNamespace(
             cfg=SimpleNamespace(
                 debug=SimpleNamespace(log_steps=False),
                 reply_check=SimpleNamespace(
-                    max_repeat_compare=8,
-                    similarity_threshold=0.92,
-                    max_assistant_in_row=3,
+                    max_repeat_compare   = 8,
+                    similarity_threshold = 0.92,
+                    max_assistant_in_row = 3,
                 ),
             )
         ),
     )
     rejected = _RejectedCandidate(
-        text="一条越界人物回复",
-        result=ReplyCheckResult(
-            suitable=False,
-            reason="人物边界不满足",
-            need_replan=True,
-            failure_code="persona_grounding",
+        text   = "一条越界人物回复",
+        result = ReplyCheckResult(
+            suitable     = False,
+            reason       = "人物边界不满足",
+            need_replan  = True,
+            failure_code = "persona_grounding",
         ),
     )
 
@@ -489,8 +504,8 @@ def test_finish_persona_grounding_uses_configured_persona_fallbacks(
 
     assert draft is not None
     assert expected_fragment in draft.text
-    assert "海边书店店员" in draft.text
-    assert "旧唱片" in draft.text
+    assert ("海边书店店员" in draft.text) is includes_profile
+    assert ("旧唱片" in draft.text) is includes_profile
     assert "不主动补成真实资料" not in draft.text
     assert len(draft.text) <= 120
     assert "住校" not in draft.text
@@ -506,31 +521,31 @@ def test_finish_context_grounding_uses_varied_evidence_boundary_fallback(mock_co
     )
 
     plan = SimpleNamespace(
-        forced=True,
-        request_id="context-grounding-test",
-        text="一个要求猜测他人状态的问题",
-        history=[],
-        bot_name="小青",
-        chat_id="group:1",
-        context=mock_context,
-        runtime=SimpleNamespace(
+        forced     = True,
+        request_id = "context-grounding-test",
+        text       = "一个要求猜测他人状态的问题",
+        history    = [],
+        bot_name   = "小青",
+        chat_id    = "group:1",
+        context    = mock_context,
+        runtime    = SimpleNamespace(
             cfg=SimpleNamespace(
                 debug=SimpleNamespace(log_steps=False),
                 reply_check=SimpleNamespace(
-                    max_repeat_compare=8,
-                    similarity_threshold=0.92,
-                    max_assistant_in_row=3,
+                    max_repeat_compare   = 8,
+                    similarity_threshold = 0.92,
+                    max_assistant_in_row = 3,
                 ),
             )
         ),
     )
     rejected = _RejectedCandidate(
-        text="一条没有依据的他人状态推断",
-        result=ReplyCheckResult(
-            suitable=False,
-            reason="第三方陈述没有直接证据",
-            need_replan=True,
-            failure_code="context_grounding",
+        text   = "一条没有依据的他人状态推断",
+        result = ReplyCheckResult(
+            suitable     = False,
+            reason       = "第三方陈述没有直接证据",
+            need_replan  = True,
+            failure_code = "context_grounding",
         ),
     )
 
@@ -573,11 +588,11 @@ def test_persona_grounding_rejection_gets_one_targeted_regeneration(mock_context
     )
 
     plan = SimpleNamespace(
-        forced=True,
-        bot_name="小青",
-        context=mock_context,
-        chat_id="group:1",
-        runtime=SimpleNamespace(
+        forced   = True,
+        bot_name = "小青",
+        context  = mock_context,
+        chat_id  = "group:1",
+        runtime  = SimpleNamespace(
             cfg=SimpleNamespace(
                 debug=SimpleNamespace(log_steps=False),
                 reply_check=SimpleNamespace(max_regen=1),
@@ -586,12 +601,12 @@ def test_persona_grounding_rejection_gets_one_targeted_regeneration(mock_context
     )
     attempt = _ReplyAttemptState(max_items=10)
     rejected = _RejectedCandidate(
-        text="我以前经常这么做",
-        result=ReplyCheckResult(
-            suitable=False,
-            reason="人物经历没有依据",
-            need_replan=True,
-            failure_code="persona_grounding",
+        text   = "我以前经常这么做",
+        result = ReplyCheckResult(
+            suitable     = False,
+            reason       = "人物经历没有依据",
+            need_replan  = True,
+            failure_code = "persona_grounding",
         ),
     )
 
@@ -633,18 +648,18 @@ def test_proactive_grounding_exhaustion_prefers_silence_to_full_replan(mock_cont
     )
 
     plan = SimpleNamespace(
-        forced=False,
-        context=mock_context,
+        forced  = False,
+        context = mock_context,
         runtime=SimpleNamespace(cfg=SimpleNamespace(debug=SimpleNamespace(log_steps=False))),
         chat_id="group:1",
     )
     rejected = _RejectedCandidate(
-        text="一条无依据的生活片段",
-        result=ReplyCheckResult(
-            suitable=False,
-            reason="人物经历没有依据",
-            need_replan=True,
-            failure_code="persona_grounding",
+        text   = "一条无依据的生活片段",
+        result = ReplyCheckResult(
+            suitable     = False,
+            reason       = "人物经历没有依据",
+            need_replan  = True,
+            failure_code = "persona_grounding",
         ),
     )
 

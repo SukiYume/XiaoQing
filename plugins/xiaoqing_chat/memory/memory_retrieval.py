@@ -27,9 +27,9 @@ from .memory import StoredMessage
 from .memory_db import MemoryDB, RetrievedItem
 from .thinking_back import append_record, get_cached_answer
 
-_logger = logging.getLogger("plugin.xiaoqing_chat")
+_logger                   = logging.getLogger("plugin.xiaoqing_chat")
 _WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
-_PATH_META_KEYS = frozenset(
+_PATH_META_KEYS           = frozenset(
     {
         "path",
         "source_path",
@@ -283,7 +283,7 @@ def _extract_tool_calls(resp: dict[str, Any]) -> list[ToolCall]:
     tool_calls = msg.get("tool_calls") or []
     if not isinstance(tool_calls, list):
         return []
-    out: list[ToolCall] = []
+    out: list[ToolCall]     = []
     used_call_ids: set[str] = set()
     for index, call in enumerate(tool_calls):
         if not isinstance(call, dict):
@@ -291,8 +291,8 @@ def _extract_tool_calls(resp: dict[str, Any]) -> list[ToolCall]:
         func = call.get("function") or {}
         if not isinstance(func, dict):
             continue
-        name = str(func.get("name", "")).strip()
-        arg_text = func.get("arguments", "{}")
+        name                 = str(func.get("name", "")).strip()
+        arg_text             = func.get("arguments", "{}")
         args: dict[str, Any] = {}
         if isinstance(arg_text, str):
             try:
@@ -307,7 +307,7 @@ def _extract_tool_calls(resp: dict[str, Any]) -> list[ToolCall]:
             call_id = str(call.get("id", "")).strip()
             if not call_id or call_id in used_call_ids:
                 call_id = f"memory_call_{index}"
-                suffix = 1
+                suffix  = 1
                 while call_id in used_call_ids:
                     call_id = f"memory_call_{index}_{suffix}"
                     suffix += 1
@@ -358,7 +358,7 @@ def _tool_query_chat_history(
     if not query:
         return {"snippets": []}
     out: list[str] = []
-    q = query.lower()
+    q              = query.lower()
     for msg in reversed(history[-120:]):
         if user_id_filter is not None and msg.user_id != user_id_filter:
             continue
@@ -366,7 +366,7 @@ def _tool_query_chat_history(
         if not text:
             continue
         if q in text.lower():
-            lid = getattr(msg, "local_id", "") or ""
+            lid    = getattr(msg, "local_id", "") or ""
             prefix = f"{lid} " if lid else ""
             out.append(f"{prefix}{msg.role}:{msg.name}<{msg.user_id}>:{text}")
         if len(out) >= limit:
@@ -392,11 +392,11 @@ def _tool_query_db(
         meta_filter = {"subject_id": subject_id}
     items = db.query(
         query,
-        chat_id=scoped_chat_id,
-        top_k=top_k,
-        min_score=0.0,
-        type_filter=type_filter,
-        meta_filter=meta_filter,
+        chat_id     = scoped_chat_id,
+        top_k       = top_k,
+        min_score   = 0.0,
+        type_filter = type_filter,
+        meta_filter = meta_filter,
     )
     return {"items": [_public_retrieved_item(item) for item in items]}
 
@@ -415,9 +415,9 @@ def _tool_query_global_db(
         return {"items": []}
     items = db.query_global(
         query,
-        top_k=top_k,
-        min_score=0.0,
-        type_filter=type_filter,
+        top_k       = top_k,
+        min_score   = 0.0,
+        type_filter = type_filter,
     )
     return {"items": [_public_retrieved_item(item) for item in items]}
 
@@ -459,11 +459,11 @@ def _query_direct_memory_items(
         return []
     items = memory_db.query(
         question,
-        chat_id=chat_id,
-        top_k=max(6, limit * 4),
-        min_score=cfg.min_score,
-        type_filter=None,
-        meta_filter=None,
+        chat_id     = chat_id,
+        top_k       = max(6, limit * 4),
+        min_score   = cfg.min_score,
+        type_filter = None,
+        meta_filter = None,
     )
     return sorted(items, key=lambda item: (-float(item.score), item.doc_id))[:limit]
 
@@ -527,25 +527,25 @@ async def react_retrieve(
     }
 
     messages: list[dict[str, Any]] = build_react_messages(question=question)
-    started = time.monotonic()
+    started        = time.monotonic()
     api_call_count = 0
-    has_evidence = False
+    has_evidence   = False
 
     for _ in range(max(1, int(cfg.max_agent_iterations))):
         if time.monotonic() - started > float(cfg.agent_timeout_seconds):
             break
         api_call_count += 1
         resp, _ = await chat_completions_raw_with_fallback_paths(
-            secrets=secrets,
-            messages=messages,
-            temperature=min(0.4, temperature),
-            top_p=top_p,
-            max_tokens=min(768, max_tokens),
-            timeout_seconds=timeout_seconds,
-            max_retry=max_retry,
-            retry_interval_seconds=retry_interval_seconds,
-            tools=_tools_schema(),
-            tool_choice="auto",
+            secrets                = secrets,
+            messages               = messages,
+            temperature            = min(0.4, temperature),
+            top_p                  = top_p,
+            max_tokens             = min(768, max_tokens),
+            timeout_seconds        = timeout_seconds,
+            max_retry              = max_retry,
+            retry_interval_seconds = retry_interval_seconds,
+            tools                  = _tools_schema(),
+            tool_choice            = "auto",
         )
         tool_calls = _extract_tool_calls(resp)
         if not tool_calls:
@@ -672,10 +672,10 @@ async def build_memory_block(
 
     if not cfg.enable_memory_retrieval:
         return ""
-    soft_budget = 4.0
+    soft_budget               = 4.0
     explicit_planner_question = planner_question.strip()
-    question = explicit_planner_question
-    current_query = str(current_text or "").strip()
+    question                  = explicit_planner_question
+    current_query             = str(current_text or "").strip()
     if not question and current_query and len(current_query) <= 120:
         question = current_query
     if not question and cfg.planner_question:
@@ -686,15 +686,15 @@ async def build_memory_block(
         try:
             raw, _ = await asyncio.wait_for(
                 chat_completions_raw_with_fallback_paths(
-                    secrets=secrets,
-                    messages=payload_msgs,
-                    temperature=min(0.5, temperature),
-                    top_p=top_p,
-                    max_tokens=min(256, max_tokens),
-                    timeout_seconds=min(3.0, float(timeout_seconds)),
-                    max_retry=0,
-                    retry_interval_seconds=0.2,
-                    extra_payload={"response_format": {"type": "json_object"}},
+                    secrets                = secrets,
+                    messages               = payload_msgs,
+                    temperature            = min(0.5, temperature),
+                    top_p                  = top_p,
+                    max_tokens             = min(256, max_tokens),
+                    timeout_seconds        = min(3.0, float(timeout_seconds)),
+                    max_retry              = 0,
+                    retry_interval_seconds = 0.2,
+                    extra_payload          = {"response_format": {"type": "json_object"}},
                 ),
                 timeout=min(2.0, soft_budget),
             )
@@ -715,10 +715,10 @@ async def build_memory_block(
     if cfg.enable_thinking_back_cache:
         cached = await asyncio.to_thread(
             get_cached_answer,
-            data_dir=data_dir,
-            chat_id=chat_id,
-            question=question,
-            window_seconds=float(cfg.thinking_back_window_seconds or 0.0),
+            data_dir       = data_dir,
+            chat_id        = chat_id,
+            question       = question,
+            window_seconds = float(cfg.thinking_back_window_seconds or 0.0),
         )
         if cached:
             return f"你回忆起了以下信息：\n{_bounded_memory_text(cached, cfg)}\n"
@@ -727,19 +727,19 @@ async def build_memory_block(
         _query_direct_memory_items,
         memory_db,
         question,
-        cfg=cfg,
-        chat_id=chat_id,
+        cfg     = cfg,
+        chat_id = chat_id,
     )
     direct_answer = _format_memory_items(direct_items, cfg)
     if direct_answer:
         if cfg.enable_thinking_back_cache:
             await asyncio.to_thread(
                 append_record,
-                data_dir=data_dir,
-                chat_id=chat_id,
-                question=question,
-                answer=direct_answer,
-                max_entries=int(cfg.thinking_back_max_entries or 200),
+                data_dir    = data_dir,
+                chat_id     = chat_id,
+                question    = question,
+                answer      = direct_answer,
+                max_entries = int(cfg.thinking_back_max_entries or 200),
             )
         return f"你回忆起了以下信息：\n{direct_answer}\n"
 
@@ -754,18 +754,18 @@ async def build_memory_block(
     try:
         answer = await asyncio.wait_for(
             react_retrieve(
-                secrets=secrets,
-                cfg=cfg,
-                history=history,
-                chat_id=chat_id,
-                question=question,
-                memory_db=memory_db,
-                temperature=temperature,
-                top_p=top_p,
-                max_tokens=max_tokens,
-                timeout_seconds=min(4.0, float(timeout_seconds)),
-                max_retry=0,
-                retry_interval_seconds=0.2,
+                secrets                = secrets,
+                cfg                    = cfg,
+                history                = history,
+                chat_id                = chat_id,
+                question               = question,
+                memory_db              = memory_db,
+                temperature            = temperature,
+                top_p                  = top_p,
+                max_tokens             = max_tokens,
+                timeout_seconds        = min(4.0, float(timeout_seconds)),
+                max_retry              = 0,
+                retry_interval_seconds = 0.2,
             ),
             timeout=float(soft_budget),
         )
@@ -778,10 +778,10 @@ async def build_memory_block(
     if cfg.enable_thinking_back_cache:
         await asyncio.to_thread(
             append_record,
-            data_dir=data_dir,
-            chat_id=chat_id,
-            question=question,
-            answer=answer,
-            max_entries=int(cfg.thinking_back_max_entries or 200),
+            data_dir    = data_dir,
+            chat_id     = chat_id,
+            question    = question,
+            answer      = answer,
+            max_entries = int(cfg.thinking_back_max_entries or 200),
         )
     return f"你回忆起了以下信息：\n{answer}\n"

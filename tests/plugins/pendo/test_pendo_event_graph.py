@@ -18,7 +18,7 @@ from plugins.pendo.utils.validators import (
 def test_event_graph_schema_and_event_item_roundtrip(tmp_path: Path):
     db = Database(str(tmp_path / "pendo_event_graph_schema.db"))
     try:
-        conn = db.get_connection()
+        conn         = db.get_connection()
         item_columns = {row["name"] for row in conn.execute("PRAGMA table_info(items)").fetchall()}
         assert {
             "event_role",
@@ -45,16 +45,16 @@ def test_event_graph_schema_and_event_item_roundtrip(tmp_path: Path):
         }.issubset(collection_columns)
 
         event = EventItem(
-            owner_id="u1",
-            title="节点",
-            start_time="2030-01-01T10:00:00",
-            event_role="multi_node_child",
-            event_collection_id="col12345",
-            event_collection_kind="multi_node",
-            event_index=2,
-            event_node_key="m02",
-            source_item_id="legacy01",
-            reminder_rules=[{"offset_seconds": 3600}, {"offset_seconds": 0}],
+            owner_id              = "u1",
+            title                 = "节点",
+            start_time            = "2030-01-01T10:00:00",
+            event_role            = "multi_node_child",
+            event_collection_id   = "col12345",
+            event_collection_kind = "multi_node",
+            event_index           = 2,
+            event_node_key        = "m02",
+            source_item_id        = "legacy01",
+            reminder_rules        = [{"offset_seconds": 3600}, {"offset_seconds": 0}],
         )
         db.insert_item(event, "node0002")
 
@@ -76,7 +76,7 @@ def test_event_graph_schema_and_event_item_roundtrip(tmp_path: Path):
 
 def test_reminder_rules_derive_and_rebuild_remind_times():
     start_time = "2030-01-02T09:00:00"
-    rules = derive_reminder_rules(
+    rules      = derive_reminder_rules(
         start_time,
         [
             "2030-01-01T09:00:00",
@@ -178,26 +178,26 @@ def test_event_collection_store_and_graph_service(tmp_path: Path):
         assert collection_id == "col00001"
 
         first = EventItem(
-            owner_id="u1",
-            title="注册截止",
-            start_time="2030-01-01T09:00:00",
-            event_role="multi_node_child",
-            event_collection_id=collection_id,
-            event_collection_kind="multi_node",
-            event_index=1,
-            reminder_rules=[{"offset_seconds": 0}],
-            remind_times=["2030-01-01T09:00:00"],
+            owner_id              = "u1",
+            title                 = "注册截止",
+            start_time            = "2030-01-01T09:00:00",
+            event_role            = "multi_node_child",
+            event_collection_id   = collection_id,
+            event_collection_kind = "multi_node",
+            event_index           = 1,
+            reminder_rules        = [{"offset_seconds": 0}],
+            remind_times          = ["2030-01-01T09:00:00"],
         )
         second = EventItem(
-            owner_id="u1",
-            title="会议开始",
-            start_time="2030-01-03T09:00:00",
-            event_role="multi_node_child",
-            event_collection_id=collection_id,
-            event_collection_kind="multi_node",
-            event_index=2,
-            reminder_rules=[{"offset_seconds": 0}],
-            remind_times=["2030-01-03T09:00:00"],
+            owner_id              = "u1",
+            title                 = "会议开始",
+            start_time            = "2030-01-03T09:00:00",
+            event_role            = "multi_node_child",
+            event_collection_id   = collection_id,
+            event_collection_kind = "multi_node",
+            event_index           = 2,
+            reminder_rules        = [{"offset_seconds": 0}],
+            remind_times          = ["2030-01-03T09:00:00"],
         )
         db.insert_item(second, "node0002")
         db.insert_item(first, "node0001")
@@ -213,7 +213,7 @@ def test_event_collection_store_and_graph_service(tmp_path: Path):
         children = db.get_collection_events(collection_id, "u1")
         assert [child.id for child in children] == ["node0001", "node0002"]
 
-        service = EventGraphService(db)
+        service     = EventGraphService(db)
         leaf_family = service.load_by_id("u1", "node0002")
         assert leaf_family.kind == "multi_node"
         assert leaf_family.leaf is not None
@@ -241,20 +241,20 @@ def test_event_collection_store_and_graph_service(tmp_path: Path):
         db.cleanup()
 
 
-def test_batch_soft_delete_removes_child_reminder_logs(tmp_path: Path):
+def test_batch_soft_delete_preserves_sent_history_and_stops_delivery(tmp_path: Path):
     db = Database(str(tmp_path / "pendo_batch_delete_reminder_logs.db"))
     try:
         first = EventItem(
-            owner_id="u1",
-            title="节点一",
-            start_time="2030-01-01T09:00:00",
-            remind_times=["2030-01-01T08:00:00"],
+            owner_id     = "u1",
+            title        = "节点一",
+            start_time   = "2030-01-01T09:00:00",
+            remind_times = ["2030-01-01T08:00:00"],
         )
         second = EventItem(
-            owner_id="u1",
-            title="节点二",
-            start_time="2030-01-02T09:00:00",
-            remind_times=["2030-01-02T08:00:00"],
+            owner_id     = "u1",
+            title        = "节点二",
+            start_time   = "2030-01-02T09:00:00",
+            remind_times = ["2030-01-02T08:00:00"],
         )
         db.insert_item(first, "node-log1")
         db.insert_item(second, "node-log2")
@@ -266,8 +266,9 @@ def test_batch_soft_delete_removes_child_reminder_logs(tmp_path: Path):
 
         db.batch_soft_delete(["node-log1", "node-log2"], "u1")
 
-        assert db.get_reminder_logs("node-log1") == []
-        assert db.get_reminder_logs("node-log2") == []
+        assert len(db.get_reminder_logs("node-log1")) == 1
+        assert len(db.get_reminder_logs("node-log2")) == 1
+        assert db.get_unconfirmed_sent_reminders() == []
     finally:
         db.cleanup()
 
@@ -290,11 +291,11 @@ class _UnusedAiParser:
 def test_create_multi_node_event_writes_collection_and_leaf_events(tmp_path: Path):
     import asyncio
 
-    db = Database(str(tmp_path / "pendo_event_graph_create_multi.db"))
+    db      = Database(str(tmp_path / "pendo_event_graph_create_multi.db"))
     handler = EventHandler(
-        db=db,
-        ai_parser=_UnusedAiParser(),
-        reminder_service=_NoConflictReminderService(),
+        db               = db,
+        ai_parser        = _UnusedAiParser(),
+        reminder_service = _NoConflictReminderService(),
     )
 
     try:
@@ -318,7 +319,7 @@ def test_create_multi_node_event_writes_collection_and_leaf_events(tmp_path: Pat
 
         assert result["status"] == "success"
         collection_id = result["item_id"]
-        collection = db.get_event_collection(collection_id, "u1")
+        collection    = db.get_event_collection(collection_id, "u1")
         assert collection is not None
         assert collection["kind"] == "multi_node"
         assert collection["title"] == "学术会议"
@@ -348,9 +349,9 @@ def test_create_multi_node_event_writes_collection_and_leaf_events(tmp_path: Pat
 
 
 def test_atomic_collection_create_rolls_back_header_and_children_on_failure(tmp_path: Path):
-    db = Database(str(tmp_path / "pendo_event_graph_atomic_rollback.db"))
+    db            = Database(str(tmp_path / "pendo_event_graph_atomic_rollback.db"))
     collection_id = "c" * 32
-    child = {
+    child         = {
         "owner_id": "u1",
         "type": "event",
         "title": "节点",
@@ -385,11 +386,11 @@ def test_atomic_collection_create_rolls_back_header_and_children_on_failure(tmp_
 def test_create_recurring_event_writes_collection_and_occurrence_leaves(tmp_path: Path):
     import asyncio
 
-    db = Database(str(tmp_path / "pendo_event_graph_create_recurring.db"))
+    db      = Database(str(tmp_path / "pendo_event_graph_create_recurring.db"))
     handler = EventHandler(
-        db=db,
-        ai_parser=_UnusedAiParser(),
-        reminder_service=_NoConflictReminderService(),
+        db               = db,
+        ai_parser        = _UnusedAiParser(),
+        reminder_service = _NoConflictReminderService(),
     )
 
     try:
@@ -410,7 +411,7 @@ def test_create_recurring_event_writes_collection_and_occurrence_leaves(tmp_path
 
         assert result["status"] == "success"
         collection_id = result["item_id"]
-        collection = db.get_event_collection(collection_id, "u1")
+        collection    = db.get_event_collection(collection_id, "u1")
         assert collection is not None
         assert collection["kind"] == "recurring"
         assert collection["rrule"] == "FREQ=DAILY;COUNT=2"
@@ -442,11 +443,11 @@ def test_create_recurring_event_writes_collection_and_occurrence_leaves(tmp_path
 def test_cli_view_edit_delete_and_reminders_support_event_graph(tmp_path: Path):
     import asyncio
 
-    db = Database(str(tmp_path / "pendo_event_graph_cli_crud.db"))
+    db      = Database(str(tmp_path / "pendo_event_graph_cli_crud.db"))
     handler = EventHandler(
-        db=db,
-        ai_parser=_UnusedAiParser(),
-        reminder_service=_NoConflictReminderService(),
+        db               = db,
+        ai_parser        = _UnusedAiParser(),
+        reminder_service = _NoConflictReminderService(),
     )
 
     try:
@@ -466,7 +467,7 @@ def test_cli_view_edit_delete_and_reminders_support_event_graph(tmp_path: Path):
             )
         )
         collection_id = create["item_id"]
-        children = db.get_collection_events(collection_id, "u1")
+        children      = db.get_collection_events(collection_id, "u1")
         first_id, second_id = (child.id for child in children)
         first_display_id, second_display_id = (child.display_id for child in children)
 
@@ -502,7 +503,7 @@ def test_cli_view_edit_delete_and_reminders_support_event_graph(tmp_path: Path):
             return {"title": "提审截止"}
 
         handler._parse_updates = fake_parse_updates
-        edit_leaf = asyncio.run(handler.edit_event("u1", f"{first_display_id} 改名", {}))
+        edit_leaf              = asyncio.run(handler.edit_event("u1", f"{first_display_id} 改名", {}))
         assert edit_leaf["status"] == "success"
         assert db.get_item(first_id, "u1").title == "提审截止"
         assert db.get_item(second_id, "u1").title == "上线"
@@ -524,32 +525,32 @@ def test_cli_view_edit_delete_and_reminders_support_event_graph(tmp_path: Path):
 def test_cli_delete_single_reminder_removes_it_from_event_and_logs(tmp_path: Path):
     import asyncio
 
-    db = Database(str(tmp_path / "pendo_event_reminder_delete.db"))
+    db      = Database(str(tmp_path / "pendo_event_reminder_delete.db"))
     handler = EventHandler(
-        db=db,
-        ai_parser=_UnusedAiParser(),
-        reminder_service=_NoConflictReminderService(),
+        db               = db,
+        ai_parser        = _UnusedAiParser(),
+        reminder_service = _NoConflictReminderService(),
     )
 
     try:
         db.insert_item(
             EventItem(
-                id="evt-del",
-                owner_id="u1",
-                title="可删除提醒",
-                start_time="2030-06-01T10:00:00",
-                end_time="2030-06-01T11:00:00",
-                reminder_rules=[{"offset_seconds": 3600}, {"offset_seconds": 0}],
-                remind_times=["2030-06-01T09:00:00", "2030-06-01T10:00:00"],
+                id             = "evt-del",
+                owner_id       = "u1",
+                title          = "可删除提醒",
+                start_time     = "2030-06-01T10:00:00",
+                end_time       = "2030-06-01T11:00:00",
+                reminder_rules = [{"offset_seconds": 3600}, {"offset_seconds": 0}],
+                remind_times   = ["2030-06-01T09:00:00", "2030-06-01T10:00:00"],
             ),
             "evt-del",
         )
         db.confirm_reminder(
             "evt-del",
-            user_action="preconfirmed",
-            owner_id="u1",
-            remind_time="2030-06-01T01:00:00+00:00",
-            allow_future=True,
+            user_action  = "preconfirmed",
+            owner_id     = "u1",
+            remind_time  = "2030-06-01T01:00:00+00:00",
+            allow_future = True,
         )
 
         result = asyncio.run(handler.handle_reminders("u1", "delete evt-del 2030-06-01 09:00", {}))
@@ -581,16 +582,16 @@ def test_grouped_leaf_reminder_message_uses_collection_context(tmp_path: Path):
             }
         )
         leaf = EventItem(
-            owner_id="u1",
-            title="报告提交截止",
-            start_time="2030-04-02T12:00:00",
-            event_role="multi_node_child",
-            event_collection_id=collection_id,
-            event_collection_kind="multi_node",
-            event_index=2,
-            reminder_rules=[{"offset_seconds": 3600}, {"offset_seconds": 0}],
-            remind_times=["2030-04-02T11:00:00", "2030-04-02T12:00:00"],
-            notes="提交 PDF",
+            owner_id              = "u1",
+            title                 = "报告提交截止",
+            start_time            = "2030-04-02T12:00:00",
+            event_role            = "multi_node_child",
+            event_collection_id   = collection_id,
+            event_collection_kind = "multi_node",
+            event_index           = 2,
+            reminder_rules        = [{"offset_seconds": 3600}, {"offset_seconds": 0}],
+            remind_times          = ["2030-04-02T11:00:00", "2030-04-02T12:00:00"],
+            notes                 = "提交 PDF",
         )
         db.insert_item(leaf, "conf2030_m02")
 

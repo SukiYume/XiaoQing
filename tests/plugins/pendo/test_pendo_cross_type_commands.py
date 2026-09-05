@@ -25,11 +25,11 @@ class TestCrossTypeCommandRegression:
 
         try:
             event = EventItem(
-                owner_id="u1",
-                title="晨会",
-                start_time="2026-03-29T09:00:00",
-                created_at="2026-03-28T21:41:10",
-                updated_at="2026-03-28T21:41:10",
+                owner_id   = "u1",
+                title      = "晨会",
+                start_time = "2026-03-29T09:00:00",
+                created_at = "2026-03-28T21:41:10",
+                updated_at = "2026-03-28T21:41:10",
             )
             db.insert_item(event, "evt12345")
 
@@ -55,16 +55,16 @@ class TestCrossTypeCommandRegression:
 
         try:
             event = EventItem(
-                owner_id="u1",
-                title="晨会",
-                start_time="2026-03-29T09:00:00",
-                created_at="2026-03-28T21:41:10",
-                updated_at="2026-03-28T21:41:10",
+                owner_id   = "u1",
+                title      = "晨会",
+                start_time = "2026-03-29T09:00:00",
+                created_at = "2026-03-28T21:41:10",
+                updated_at = "2026-03-28T21:41:10",
             )
             db.insert_item(event, "evt12345")
 
             handler = NoteHandler(db=db)
-            result = asyncio.run(handler.delete_note("u1", "evt12345", SimpleNamespace()))
+            result    = asyncio.run(handler.delete_note("u1", "evt12345", SimpleNamespace()))
             preserved = db.get_item("evt12345", "u1")
 
             assert result["status"] == "success"
@@ -239,11 +239,11 @@ class TestCrossTypeCommandRegression:
         try:
             db.insert_item(
                 EventItem(
-                    owner_id="u1",
-                    title="晨会",
-                    start_time="2026-04-20T09:00:00",
-                    created_at="2026-04-19T21:00:00",
-                    updated_at="2026-04-19T21:00:00",
+                    owner_id   = "u1",
+                    title      = "晨会",
+                    start_time = "2026-04-20T09:00:00",
+                    created_at = "2026-04-19T21:00:00",
+                    updated_at = "2026-04-19T21:00:00",
                 ),
                 "evt12345",
             )
@@ -285,37 +285,37 @@ class TestCrossTypeCommandRegression:
         try:
             db.insert_item(
                 NoteItem(
-                    owner_id="u1",
-                    title="主笔记",
-                    content="第一段",
-                    tags=["原始"],
-                    category="工作",
-                    created_at="2026-04-20T09:00:00",
-                    updated_at="2026-04-20T09:00:00",
+                    owner_id   = "u1",
+                    title      = "主笔记",
+                    content    = "第一段",
+                    tags       = ["原始"],
+                    category   = "工作",
+                    created_at = "2026-04-20T09:00:00",
+                    updated_at = "2026-04-20T09:00:00",
                 ),
                 "note_main",
             )
             db.insert_item(
                 NoteItem(
-                    owner_id="u1",
-                    title="引用笔记",
-                    content="引用正文",
-                    category="工作",
-                    created_at="2026-04-20T10:00:00",
-                    updated_at="2026-04-20T10:00:00",
+                    owner_id   = "u1",
+                    title      = "引用笔记",
+                    content    = "引用正文",
+                    category   = "工作",
+                    created_at = "2026-04-20T10:00:00",
+                    updated_at = "2026-04-20T10:00:00",
                 ),
                 "note_ref",
             )
 
             handler = NoteHandler(db=db)
             append = asyncio.run(handler.append_note("u1", "note_main 第二段", SimpleNamespace()))
-            tag = asyncio.run(handler.tag_note("u1", "note_main #新增 #原始", SimpleNamespace()))
-            untag = asyncio.run(handler.untag_note("u1", "note_main #原始", SimpleNamespace()))
-            link = asyncio.run(handler.link_note("u1", "note_ref note_main", SimpleNamespace()))
+            tag    = asyncio.run(handler.tag_note("u1", "note_main #新增 #原始", SimpleNamespace()))
+            untag  = asyncio.run(handler.untag_note("u1", "note_main #原始", SimpleNamespace()))
+            link   = asyncio.run(handler.link_note("u1", "note_ref note_main", SimpleNamespace()))
 
             updated = db.get_item("note_main", "u1")
-            linked = db.get_item("note_ref", "u1")
-            view = asyncio.run(handler.view_note("u1", "note_main", SimpleNamespace()))
+            linked  = db.get_item("note_ref", "u1")
+            view    = asyncio.run(handler.view_note("u1", "note_main", SimpleNamespace()))
 
             assert append["status"] == "success"
             assert tag["status"] == "success"
@@ -342,12 +342,12 @@ class TestCrossTypeCommandRegression:
 
         try:
             diary = DiaryItem(
-                owner_id="u1",
-                title="2026-03-28 日记",
-                content="今天周六，十点多醒来。",
-                diary_date="2026-03-28",
-                created_at="2026-03-28T21:41:10",
-                updated_at="2026-03-28T21:41:10",
+                owner_id   = "u1",
+                title      = "2026-03-28 日记",
+                content    = "今天周六，十点多醒来。",
+                diary_date = "2026-03-28",
+                created_at = "2026-03-28T21:41:10",
+                updated_at = "2026-03-28T21:41:10",
             )
             db.insert_item(diary, "dia12345")
 
@@ -373,11 +373,11 @@ class TestCrossTypeCommandRegression:
 
         try:
             note = NoteItem(
-                owner_id="u1",
-                title="采购清单",
-                content="牛奶 面包",
-                created_at="2026-03-28T21:41:10",
-                updated_at="2026-03-28T21:41:10",
+                owner_id   = "u1",
+                title      = "采购清单",
+                content    = "牛奶 面包",
+                created_at = "2026-03-28T21:41:10",
+                updated_at = "2026-03-28T21:41:10",
             )
             db.insert_item(note, "not12345")
 
@@ -439,13 +439,13 @@ class TestCrossTypeCommandRegression:
                 return True
 
         handler = LedgerHandler(db=MagicMock())
-        context = _Context()
-        session = _Session({"step": "amount", "data": {}, "group_id": 123})
+        context  = _Context()
+        session  = _Session({"step": "amount", "data": {}, "group_id": 123})
         captured = {}
 
         async def _fake_save(user_id, data, group_id=None):
-            captured["user_id"] = user_id
-            captured["data"] = dict(data)
+            captured["user_id"]  = user_id
+            captured["data"]     = dict(data)
             captured["group_id"] = group_id
             return {"status": "success", "message": "saved"}
 
@@ -540,8 +540,8 @@ class TestCrossTypeCommandRegression:
         captured = {}
 
         async def _fake_save(user_id, data, group_id=None):
-            captured["user_id"] = user_id
-            captured["data"] = dict(data)
+            captured["user_id"]  = user_id
+            captured["data"]     = dict(data)
             captured["group_id"] = group_id
             return {"status": "success", "message": "saved"}
 
@@ -573,7 +573,7 @@ class TestCrossTypeCommandRegression:
         try:
             handler = LedgerHandler(db=db)
             result = asyncio.run(handler.handle("u1", "add 28 午饭", SimpleNamespace()))
-            item = db.get_item(result["item_id"], "u1")
+            item   = db.get_item(result["item_id"], "u1")
 
             assert result["status"] == "success"
             assert item is not None
@@ -691,7 +691,7 @@ class TestCrossTypeCommandRegression:
             assert session["data"]["title"] == "写周报"
 
             result = asyncio.run(handler.handle_session_step("u1", "0", session, context))
-            item = db.get_item(result["item_id"], "u1")
+            item   = db.get_item(result["item_id"], "u1")
 
             assert result["status"] == "success"
             assert context.end_calls == 1
@@ -723,7 +723,7 @@ class TestCrossTypeCommandRegression:
 
         handler = TaskHandler(db=MagicMock())
         session = _Session({"step": "plan_date", "data": {"title": "写周报"}})
-        result = asyncio.run(
+        result  = asyncio.run(
             handler.handle_session_step("u1", "不是日期", session, SimpleNamespace())
         )
 
@@ -744,14 +744,14 @@ class TestCrossTypeCommandRegression:
 
         try:
             task = TaskItem(
-                owner_id="u1",
-                title="提交报销",
-                content="整理发票并提交系统",
-                category="工作",
-                priority=2,
-                status=TaskStatus.OPEN,
-                created_at="2026-03-28T21:41:10",
-                updated_at="2026-03-28T21:41:10",
+                owner_id   = "u1",
+                title      = "提交报销",
+                content    = "整理发票并提交系统",
+                category   = "工作",
+                priority   = 2,
+                status     = TaskStatus.OPEN,
+                created_at = "2026-03-28T21:41:10",
+                updated_at = "2026-03-28T21:41:10",
             )
             db.insert_item(task, "tsk12345")
 
@@ -778,16 +778,16 @@ class TestCrossTypeCommandRegression:
 
         try:
             note = NoteItem(
-                owner_id="u1",
-                title="采购清单",
-                content="牛奶 面包",
-                created_at="2026-03-28T21:41:10",
-                updated_at="2026-03-28T21:41:10",
+                owner_id   = "u1",
+                title      = "采购清单",
+                content    = "牛奶 面包",
+                created_at = "2026-03-28T21:41:10",
+                updated_at = "2026-03-28T21:41:10",
             )
             db.insert_item(note, "not12345")
 
             handler = TaskHandler(db=db)
-            result = asyncio.run(handler.mark_done("u1", "not12345", SimpleNamespace()))
+            result    = asyncio.run(handler.mark_done("u1", "not12345", SimpleNamespace()))
             preserved = db.get_item("not12345", "u1")
 
             assert result["status"] == "success"
@@ -836,13 +836,13 @@ class TestCrossTypeCommandRegression:
 
         try:
             task = TaskItem(
-                owner_id="u1",
-                title="提交报销",
-                category="工作",
-                priority=2,
-                status=TaskStatus.OPEN,
-                created_at="2026-03-28T21:41:10",
-                updated_at="2026-03-28T21:41:10",
+                owner_id   = "u1",
+                title      = "提交报销",
+                category   = "工作",
+                priority   = 2,
+                status     = TaskStatus.OPEN,
+                created_at = "2026-03-28T21:41:10",
+                updated_at = "2026-03-28T21:41:10",
             )
             db.insert_item(task, "tsk12345")
 
@@ -868,12 +868,12 @@ class TestCrossTypeCommandRegression:
 
         try:
             diary = DiaryItem(
-                owner_id="u1",
-                title="2026-03-28 日记",
-                content="今天周六。",
-                diary_date="2026-03-28",
-                created_at="2026-03-28T21:41:10",
-                updated_at="2026-03-28T21:41:10",
+                owner_id   = "u1",
+                title      = "2026-03-28 日记",
+                content    = "今天周六。",
+                diary_date = "2026-03-28",
+                created_at = "2026-03-28T21:41:10",
+                updated_at = "2026-03-28T21:41:10",
             )
             db.insert_item(diary, "dia12345")
 
@@ -906,12 +906,12 @@ class TestCrossTypeCommandRegression:
 
         try:
             diary = DiaryItem(
-                owner_id="u1",
-                title="2026-03-28 日记",
-                content="今天周六。",
-                diary_date="2026-03-28",
-                created_at="2026-03-28T21:41:10",
-                updated_at="2026-03-28T21:41:10",
+                owner_id   = "u1",
+                title      = "2026-03-28 日记",
+                content    = "今天周六。",
+                diary_date = "2026-03-28",
+                created_at = "2026-03-28T21:41:10",
+                updated_at = "2026-03-28T21:41:10",
             )
             db.insert_item(diary, "8bec805e")
 
@@ -938,11 +938,11 @@ class TestCrossTypeCommandRegression:
 
         try:
             note = NoteItem(
-                owner_id="u1",
-                title="采购清单",
-                content="牛奶 面包",
-                created_at="2026-03-28T21:41:10",
-                updated_at="2026-03-28T21:41:10",
+                owner_id   = "u1",
+                title      = "采购清单",
+                content    = "牛奶 面包",
+                created_at = "2026-03-28T21:41:10",
+                updated_at = "2026-03-28T21:41:10",
             )
             db.insert_item(note, "not12345")
 
@@ -974,16 +974,16 @@ class TestCrossTypeCommandRegression:
 
         try:
             note = NoteItem(
-                owner_id="u1",
-                title="采购清单",
-                content="牛奶 面包",
-                created_at="2026-03-28T21:41:10",
-                updated_at="2026-03-28T21:41:10",
+                owner_id   = "u1",
+                title      = "采购清单",
+                content    = "牛奶 面包",
+                created_at = "2026-03-28T21:41:10",
+                updated_at = "2026-03-28T21:41:10",
             )
             db.insert_item(note, "not12345")
 
             handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
-            result = asyncio.run(handler.delete_event("u1", "not12345", SimpleNamespace()))
+            result    = asyncio.run(handler.delete_event("u1", "not12345", SimpleNamespace()))
             preserved = db.get_item("not12345", "u1")
 
             assert result["status"] == "success"

@@ -35,9 +35,9 @@ except ModuleNotFoundError:  # 允许在仓库根目录之外直接执行脚本�
 # 配置
 # ============================================================
 DEFAULT_APOD_ROOT = Path(r"D:/EscapeWeb/vitepress/docs/apod")
-DATA_PREP_DIR = Path(__file__).resolve().parent
-CACHE_DIR = DATA_PREP_DIR / "cache"
-OUTPUT_IDS_CSV = CACHE_DIR / "positive_ids.csv"
+DATA_PREP_DIR     = Path(__file__).resolve().parent
+CACHE_DIR         = DATA_PREP_DIR / "cache"
+OUTPUT_IDS_CSV    = CACHE_DIR / "positive_ids.csv"
 OUTPUT_DATE_RANGE = CACHE_DIR / "date_range.json"
 
 # 匹配 arxiv.org/abs/XXXX.XXXXX 或 arxiv.org/pdf/XXXX.XXXXX
@@ -58,7 +58,7 @@ def resolve_apod_root() -> Path:
 def extract_from_file(filepath: Path, apod_root: Path) -> tuple[list[dict[str, str]], list[str]]:
     """从单个 md 文件中提取 arXiv ID 和日期"""
     ids: list[dict[str, str]] = []
-    dates: list[str] = []
+    dates: list[str]          = []
 
     try:
         text = filepath.read_text(encoding="utf-8")
@@ -88,10 +88,10 @@ def extract_from_file(filepath: Path, apod_root: Path) -> tuple[list[dict[str, s
 
 def main() -> None:
     apod_root = resolve_apod_root()
-    md_files = sorted(apod_root.rglob("AstroPH-*.md"))
+    md_files  = sorted(apod_root.rglob("AstroPH-*.md"))
     print(f"找到 {len(md_files)} 个笔记文件")
 
-    all_ids = []
+    all_ids   = []
     all_dates = []
 
     for f in md_files:
@@ -102,7 +102,7 @@ def main() -> None:
         all_dates.extend(dates)
 
     # 去重 ID（同一篇论文可能在多个地方被引用）
-    seen = set()
+    seen       = set()
     unique_ids = []
     for r in all_ids:
         if r["arXiv ID"] not in seen:
@@ -115,7 +115,7 @@ def main() -> None:
     if not all_dates:
         raise RuntimeError("未从笔记中提取到有效日期，拒绝使用过期的硬编码范围")
     date_start = min(all_dates)
-    date_end = max(all_dates)
+    date_end   = max(all_dates)
 
     print(f"日期范围: {date_start} ~ {date_end}")
 

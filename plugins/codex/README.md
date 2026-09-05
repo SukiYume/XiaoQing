@@ -131,7 +131,7 @@ Windows 路径建议使用 `/`，例如 `C:/workspace/project`。Linux 和 macOS
 | `deleted_sessions/<name>-<time>/` | 删除会话后的历史归档 |
 | `outputs/` | Codex CLI 临时输出 |
 
-状态文件采用版本化字段白名单。结构、字段或路径校验异常的快照进入 `quarantine/`，运行时以安全状态继续启动。删除会话会移动历史目录；重建同名会话会创建新的记录链。
+状态文件采用版本化字段白名单。加载时依次验证主文件与 `.bak` 的语法、结构、字段和路径；主文件无效且备份有效时恢复备份。主副本均不可用的快照进入 `quarantine/`，运行时以安全状态继续启动。删除会话会移动历史目录；重建同名会话会创建新的记录链。
 
 ---
 
@@ -167,7 +167,7 @@ Windows 路径建议使用 `/`，例如 `C:/workspace/project`。Linux 和 macOS
 在仓库根目录运行：
 
 ```bash
-python -m pytest -q tests/plugins/codex/test_codex_*.py
+python -m pytest -q tests/plugins/codex
 python -m ruff check plugins/codex
 python -m mypy plugins/codex
 ```

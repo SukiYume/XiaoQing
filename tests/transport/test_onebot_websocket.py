@@ -68,8 +68,8 @@ class TestOneBotWebSocketConfiguration:
     def test_initialization(self):
         """测试初始化"""
         client = OneBotWsClient(
-            ws_uri="ws://localhost:3000",
-            auth_token="test_token",
+            ws_uri     = "ws://localhost:3000",
+            auth_token = "test_token",
         )
         assert client.ws_uri == "ws://localhost:3000"
         assert client.auth_token == "test_token"
@@ -94,7 +94,7 @@ class TestOneBotWebSocketConfiguration:
 
     def test_rotation_tolerates_loop_closing_after_is_closed_check(self):
         client = OneBotWsClient("ws://old:3000", "old-token")
-        ws = MagicMock()
+        ws     = MagicMock()
 
         class ClosingLoop:
             @staticmethod
@@ -105,8 +105,8 @@ class TestOneBotWebSocketConfiguration:
             def call_soon_threadsafe(*_args) -> None:
                 raise RuntimeError("Event loop is closed")
 
-        client._event_loop = ClosingLoop()
-        client._ws = ws
+        client._event_loop                = ClosingLoop()
+        client._ws                        = ws
         client._connected_auth_generation = client._endpoint_auth.generation
 
         client.update("ws://new:4000", "new-token")
@@ -128,22 +128,22 @@ class TestOneBotWebSocketConfiguration:
         """测试 closed/close_code/state 会被识别为未连接"""
         client = OneBotWsClient("ws://localhost:3000", "")
 
-        ws = MagicMock()
-        ws.closed = True
+        ws         = MagicMock()
+        ws.closed  = True
         client._ws = ws
         assert client.connected() is False
 
-        ws = MagicMock()
-        ws.closed = False
+        ws            = MagicMock()
+        ws.closed     = False
         ws.close_code = 1000
-        client._ws = ws
+        client._ws    = ws
         assert client.connected() is False
 
-        ws = MagicMock()
-        ws.closed = False
+        ws            = MagicMock()
+        ws.closed     = False
         ws.close_code = None
         ws.state.name = "CLOSED"
-        client._ws = ws
+        client._ws    = ws
         assert client.connected() is False
 
     @pytest.mark.asyncio
@@ -153,9 +153,9 @@ class TestOneBotWebSocketConfiguration:
         monkeypatch,
         header_parameter,
     ):
-        client = OneBotWsClient("ws://localhost:3000", "secret-token")
+        client                   = OneBotWsClient("ws://localhost:3000", "secret-token")
         captured: dict[str, Any] = {}
-        ws = object()
+        ws                       = object()
 
         class ConnectContext:
             async def __aenter__(self):
@@ -268,9 +268,9 @@ class TestOneBotWebSocketConfiguration:
 
     @pytest.mark.asyncio
     async def test_no_token_connects_without_unproven_header_keyword(self, monkeypatch):
-        client = OneBotWsClient("ws://localhost:3000", "")
+        client                   = OneBotWsClient("ws://localhost:3000", "")
         captured: dict[str, Any] = {}
-        ws = object()
+        ws                       = object()
 
         class ConnectContext:
             async def __aenter__(self):
@@ -295,7 +295,7 @@ class TestOneBotWebSocketConfiguration:
     async def test_connect_once_rejects_cross_thread_rotated_auth_snapshot(self, monkeypatch):
         """An old endpoint/token snapshot can never inherit the new generation."""
 
-        snapshot_read = threading.Event()
+        snapshot_read     = threading.Event()
         rotation_finished = threading.Event()
 
         class SnapshotRaceClient(OneBotWsClient):
@@ -318,7 +318,7 @@ class TestOneBotWebSocketConfiguration:
             def _endpoint_auth(self, state) -> None:
                 self._race_state = state
 
-        client = SnapshotRaceClient()
+        client             = SnapshotRaceClient()
         client._event_loop = asyncio.get_running_loop()
         client._race_armed = True
         ws = MagicMock(close=AsyncMock())
@@ -378,8 +378,8 @@ class TestOneBotWebSocketConfiguration:
         client._pending_action_auth_states["old"] = old_state
 
         worker = threading.Thread(
-            target=client.update,
-            args=("ws://new.example/ws", "new-token"),
+            target = client.update,
+            args   = ("ws://new.example/ws", "new-token"),
         )
         worker.start()
         worker.join(timeout=2)
@@ -388,8 +388,8 @@ class TestOneBotWebSocketConfiguration:
         # The owning-loop callback is queued but has not run while this
         # coroutine is still executing.  A request from the new generation
         # must survive that delayed callback.
-        new_future = loop.create_future()
-        client._pending_action_futures["new"] = new_future
+        new_future                                = loop.create_future()
+        client._pending_action_futures["new"]     = new_future
         client._pending_action_auth_states["new"] = client._endpoint_auth
         await asyncio.sleep(0)
 

@@ -10,8 +10,8 @@ import re
 import shlex
 from collections.abc import Mapping
 
-_ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*", re.ASCII)
-_CWD_MARKER = "__XQ_CWD__"
+_ENV_NAME_RE          = re.compile(r"[A-Za-z_][A-Za-z0-9_]*", re.ASCII)
+_CWD_MARKER           = "__XQ_CWD__"
 _SHELL_CONTROL_TOKENS = frozenset({"&&", "||", ";", "&", "|", ">", ">>", "<", "<<"})
 
 
@@ -35,7 +35,7 @@ def is_cd_command(text: str) -> bool:
 
 def build_command(
     text: str,
-    cwd: str | None = None,
+    cwd: str | None                    = None,
     env_vars: Mapping[str, str] | None = None,
 ) -> str:
     """构造应用当前目录和环境变量的完整远端 shell 命令。"""

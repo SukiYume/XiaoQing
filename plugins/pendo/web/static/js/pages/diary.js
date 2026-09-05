@@ -86,22 +86,22 @@ const DIARY_FIELDS = [
     { name: 'content', label: '日记内容', type: 'textarea', rows: 10, required: true },
 ];
 
-let _container = null;
-let _items = [];
-let _overview = null;
-let _year = 0;
-let _month = 0;
-let _selectedDate = '';
-let _loading = false;
-let _templates = [];
-let _templatesLoaded = false;
+let _container              = null;
+let _items                  = [];
+let _overview               = null;
+let _year                   = 0;
+let _month                  = 0;
+let _selectedDate           = '';
+let _loading                = false;
+let _templates              = [];
+let _templatesLoaded        = false;
 let _unsubscribeDataChanges = null;
-let _moodEmojis = { ...DEFAULT_MOOD_EMOJIS };
-let _moodLabels = { ...DEFAULT_MOOD_LABELS };
-let _moodOptions = [...DEFAULT_MOOD_OPTIONS];
-let _loadVersion = 0;
-let _lifecycleVersion = 0;
-let _formOpening = false;
+let _moodEmojis             = { ...DEFAULT_MOOD_EMOJIS };
+let _moodLabels             = { ...DEFAULT_MOOD_LABELS };
+let _moodOptions            = [...DEFAULT_MOOD_OPTIONS];
+let _loadVersion            = 0;
+let _lifecycleVersion       = 0;
+let _formOpening            = false;
 
 // ---------- 接口边界、日期与展示格式 ----------
 
@@ -135,9 +135,9 @@ async function updateMonth(year, month, selectedDate = '') {
     }
 
     const parsedSelectedDate = parseDate(selectedDate);
-    const selectedDateKey = parsedSelectedDate ? isoDate(parsedSelectedDate) : '';
-    const targetPrefix = `${year}-${pad2(month)}`;
-    const nextSelectedDate = selectedDateKey.startsWith(targetPrefix) ? selectedDateKey : '';
+    const selectedDateKey    = parsedSelectedDate ? isoDate(parsedSelectedDate) : '';
+    const targetPrefix       = `${year}-${pad2(month)}`;
+    const nextSelectedDate   = selectedDateKey.startsWith(targetPrefix) ? selectedDateKey : '';
     if (_year === year && _month === month) {
         if (nextSelectedDate && nextSelectedDate !== _selectedDate) {
             _selectedDate = nextSelectedDate;
@@ -160,7 +160,7 @@ function parseMonthInput(value) {
         .trim()
         .match(/^(\d{4})-(\d{1,2})$/);
     if (!matched) return null;
-    const year = Number(matched[1]);
+    const year  = Number(matched[1]);
     const month = Number(matched[2]);
     if (!Number.isInteger(year) || !Number.isInteger(month)) return null;
     if (year < DIARY_YEAR_START || year > DIARY_YEAR_END) return null;
@@ -182,9 +182,9 @@ function moodEmoji(mood) {
 function moodBadgeText(mood) {
     const normalized = String(mood || '').trim();
     if (!normalized) return '';
-    const emoji = moodEmoji(normalized);
+    const emoji  = moodEmoji(normalized);
     const moodId = normalized.toLowerCase();
-    const label = Object.hasOwn(_moodLabels, moodId) ? _moodLabels[moodId] : normalized;
+    const label  = Object.hasOwn(_moodLabels, moodId) ? _moodLabels[moodId] : normalized;
     return emoji ? `${emoji} ${label}` : label;
 }
 
@@ -213,12 +213,12 @@ function formatEntryTime(item, { timeOnly = false } = {}) {
     if (timeOnly) return time || '全天';
 
     const diaryDate = parseDate(item?.diary_date);
-    const date = diaryDate ? isoDate(diaryDate) : timestamp ? zonedDateKey(text) : '未知日期';
+    const date      = diaryDate ? isoDate(diaryDate) : timestamp ? zonedDateKey(text) : '未知日期';
     return time ? `${date} ${time}` : date;
 }
 
 function defaultEntryTime(dateStr, userTimeZone) {
-    const date = parseDate(dateStr);
+    const date     = parseDate(dateStr);
     const nowInput = zonedDateTimeToInput(new Date().toISOString(), userTimeZone);
     return `${date ? isoDate(date) : todayInUserTimeZone()}T${nowInput.slice(11, 16)}`;
 }
@@ -271,12 +271,12 @@ function buildItemsByDate(items) {
 
 function ensureSelectedDate() {
     const monthPrefix = `${_year}-${pad2(_month)}`;
-    const dates = new Set(
+    const dates       = new Set(
         _items
             .map((item) => item.diary_date)
             .filter((value) => typeof value === 'string' && value.startsWith(monthPrefix)),
     );
-    const today = todayInUserTimeZone();
+    const today          = todayInUserTimeZone();
     const inCurrentMonth = monthPrefix === today.slice(0, 7);
     if (_selectedDate && _selectedDate.startsWith(monthPrefix)) return;
     if (inCurrentMonth) {
@@ -288,8 +288,8 @@ function ensureSelectedDate() {
 }
 
 function normalizeDiaryOverview(payload) {
-    const overview = isRecord(payload) ? payload : {};
-    const summary = isRecord(overview.summary) ? overview.summary : {};
+    const overview   = isRecord(payload) ? payload : {};
+    const summary    = isRecord(overview.summary) ? overview.summary : {};
     const busiestDay = isRecord(summary.busiest_day) ? summary.busiest_day : null;
 
     return {
@@ -333,7 +333,7 @@ function normalizeDiaryOverview(payload) {
 function normalizeTemplates(value) {
     return records(value)
         .map((template) => {
-            const id = String(template.id || '').trim();
+            const id      = String(template.id || '').trim();
             const prompts = Array.isArray(template.prompts)
                 ? [...new Set(template.prompts.map((prompt) => String(prompt || '').trim()).filter(Boolean))]
                 : [];
@@ -347,8 +347,8 @@ function normalizeTemplates(value) {
 }
 
 async function fetchItems(year, month) {
-    const items = [];
-    let page = 1;
+    const items    = [];
+    let page       = 1;
     const pageSize = 80;
     while (true) {
         const res = await api.get('/items', {
@@ -361,7 +361,7 @@ async function fetchItems(year, month) {
             sort: 'entry_time',
             order: 'desc',
         });
-        const data = isRecord(res?.data) ? res.data : {};
+        const data  = isRecord(res?.data) ? res.data : {};
         const batch = records(data.items);
         const total = nonNegativeInteger(data.total);
         items.push(...batch);
@@ -393,12 +393,12 @@ async function loadTemplates() {
 
 async function loadMoodEmojis() {
     try {
-        const res = await api.get('/config/diary/moods');
-        const data = isRecord(res?.data) ? res.data : {};
+        const res           = await api.get('/config/diary/moods');
+        const data          = isRecord(res?.data) ? res.data : {};
         const fetchedEmojis = isRecord(data.mood_emojis) ? data.mood_emojis : {};
         const fetchedLabels = isRecord(data.mood_labels) ? data.mood_labels : {};
-        const fetchedMoods = records(data.moods);
-        const validMoodId = (value) => {
+        const fetchedMoods  = records(data.moods);
+        const validMoodId   = (value) => {
             const id = String(value || '')
                 .trim()
                 .toLowerCase();
@@ -447,11 +447,11 @@ async function loadMoodEmojis() {
 }
 
 function buildCalendarDays(year, month) {
-    const first = new Date(year, month - 1, 1);
+    const first  = new Date(year, month - 1, 1);
     const offset = (first.getDay() + 6) % 7;
-    const start = new Date(year, month - 1, 1 - offset);
-    const today = todayInUserTimeZone();
-    const days = [];
+    const start  = new Date(year, month - 1, 1 - offset);
+    const today  = todayInUserTimeZone();
+    const days   = [];
     for (let index = 0; index < 42; index += 1) {
         const current = new Date(start);
         current.setDate(start.getDate() + index);
@@ -734,7 +734,7 @@ function renderHero() {
 }
 
 function renderSummaryCards() {
-    const summary = _overview?.summary || {};
+    const summary  = _overview?.summary || {};
     const fillRate = Math.round((summary.fill_rate || 0) * 100);
     return `
         <section class="diary-summary-grid">
@@ -792,8 +792,8 @@ function renderCalendarPanel(entries) {
                 <div class="diary-calendar-grid">
                     ${buildCalendarDays(_year, _month)
                         .map((day) => {
-                            const list = entries.get(day.key) || [];
-                            const first = list[0];
+                            const list       = entries.get(day.key) || [];
+                            const first      = list[0];
                             const totalWords = list.length
                                 ? list.reduce((sum, item) => sum + diaryWordCount(item), 0)
                                 : 0;
@@ -803,7 +803,7 @@ function renderCalendarPanel(entries) {
                             const mood = first?.mood
                                 ? `<span class="diary-day-mood">${escapeHtml(moodEmoji(first.mood) || first.mood)}</span>`
                                 : '';
-                            const selected = day.key === _selectedDate;
+                            const selected  = day.key === _selectedDate;
                             const ariaLabel = list.length
                                 ? `${formatDateLabel(day.key)}，${metric}`
                                 : `${formatDateLabel(day.key)}，没有日记`;
@@ -869,7 +869,7 @@ function renderMoodPanel() {
 }
 
 function renderCadencePanel() {
-    const cadence = _overview?.cadence || [];
+    const cadence  = _overview?.cadence || [];
     const maxValue = cadence.reduce((maximum, item) => Math.max(maximum, item.words), 1);
     return `
         <section class="diary-panel">
@@ -893,7 +893,7 @@ function renderCadencePanel() {
 }
 
 function renderRecentPanel() {
-    const recent = _overview?.recent_entries || [];
+    const recent    = _overview?.recent_entries || [];
     const templates = _overview?.template_usage || [];
     return `
         <section class="diary-panel">
@@ -1082,9 +1082,9 @@ function templateAnswerInputRows(template, answers = []) {
         ? [...new Set(template.prompts.map((prompt) => String(prompt || '').trim()).filter(Boolean))]
         : [];
     const remainingAnswers = normalizeTemplateAnswers(answers);
-    const rows = prompts.map((prompt) => {
+    const rows             = prompts.map((prompt) => {
         const answerIndex = remainingAnswers.findIndex((item) => item.prompt === prompt);
-        const matched = answerIndex >= 0 ? remainingAnswers.splice(answerIndex, 1)[0] : null;
+        const matched     = answerIndex >= 0 ? remainingAnswers.splice(answerIndex, 1)[0] : null;
         return { prompt, answer: matched?.answer || '' };
     });
     rows.push(...remainingAnswers);
@@ -1142,7 +1142,7 @@ export function openDiaryViewModal(item) {
     }
     ensureStyles();
     const moodScore = finiteNumber(item.mood_score);
-    const bodyHTML = `
+    const bodyHTML  = `
         <div class="diary-view-meta">
             <span class="diary-view-chip">📅 ${escapeHtml(item.diary_date)}</span>
             <span class="diary-view-chip">🕒 ${escapeHtml(formatEntryTime(item, { timeOnly: true }))}</span>
@@ -1181,10 +1181,10 @@ async function openDiaryFormModal(existing = null, presetDate = null) {
     try {
         const userTimeZone = await fetchUserTimeZone();
         ensureStyles();
-        const diary = isRecord(existing) ? existing : null;
-        const isEdit = diary !== null;
+        const diary    = isRecord(existing) ? existing : null;
+        const isEdit   = diary !== null;
         const formDate = diary?.diary_date || presetDate || _selectedDate || todayInUserTimeZone();
-        const fields = DIARY_FIELDS.map((field) => {
+        const fields   = DIARY_FIELDS.map((field) => {
             let value = '';
             if (diary) value = diary[field.name] ?? '';
             else if (field.name === 'diary_date') value = formDate;
@@ -1271,10 +1271,10 @@ async function openDiaryFormModal(existing = null, presetDate = null) {
         const saveButton = content.querySelector('#diary-modal-save');
         saveButton.onclick = async () => {
             if (saveButton.disabled) return;
-            const form = content.querySelector('#diary-form');
-            const data = getFormData(form);
+            const form                 = content.querySelector('#diary-form');
+            const data                 = getFormData(form);
             const templateAnswerInputs = form.querySelectorAll('.diary-template-answer-input');
-            const templateAnswers = collectTemplateAnswers(form);
+            const templateAnswers      = collectTemplateAnswers(form);
             if (templateAnswerInputs.length || templateAnswers.length) {
                 data.template_answers = templateAnswers;
                 if (!String(data.content || '').trim()) {
@@ -1287,7 +1287,7 @@ async function openDiaryFormModal(existing = null, presetDate = null) {
                 return;
             }
             const parsedDiaryDate = parseDate(rawDiaryDate);
-            const diaryDate = parsedDiaryDate ? isoDate(parsedDiaryDate) : '';
+            const diaryDate       = parsedDiaryDate ? isoDate(parsedDiaryDate) : '';
             if (diaryDate !== rawDiaryDate) {
                 showToast('请选择有效日期', 'warning');
                 return;
@@ -1316,7 +1316,7 @@ async function openDiaryFormModal(existing = null, presetDate = null) {
                 if (isEdit) {
                     const itemId = typeof diary.id === 'string' ? diary.id.trim() : '';
                     if (!itemId) throw new Error('日记缺少有效编号');
-                    await api.put(`/items/${encodeURIComponent(itemId)}`, data);
+                    await api.put(`/items/${encodeURIComponent(itemId)}`, { ...data, version: diary.version });
                     showToast('日记已更新', 'success');
                 } else {
                     await api.post('/items', { type: 'diary', ...data });
@@ -1473,10 +1473,10 @@ async function loadAndRender() {
     if (!container) return;
 
     const lifecycleVersion = _lifecycleVersion;
-    const loadVersion = ++_loadVersion;
-    const year = _year;
-    const month = _month;
-    const isCurrent = () =>
+    const loadVersion      = ++_loadVersion;
+    const year             = _year;
+    const month            = _month;
+    const isCurrent        = () =>
         _container === container &&
         _lifecycleVersion === lifecycleVersion &&
         _loadVersion === loadVersion &&

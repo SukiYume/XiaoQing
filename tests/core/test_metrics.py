@@ -171,7 +171,7 @@ def test_execution_stats_to_dict():
 def test_execution_stats_to_dict_empty():
     """Test converting empty stats to dict"""
     stats = ExecutionStats()
-    data = stats.to_dict()
+    data  = stats.to_dict()
 
     assert data["total_calls"] == 0
     assert data["total_time"] == 0
@@ -215,10 +215,10 @@ async def test_metrics_collector_record_plugin_execution():
     collector = MetricsCollector()
 
     await collector.record_plugin_execution(
-        plugin_name="test_plugin",
-        command_name="test_command",
-        duration=1.5,
-        is_error=False,
+        plugin_name  = "test_plugin",
+        command_name = "test_command",
+        duration     = 1.5,
+        is_error     = False,
     )
 
     plugin_stats = await collector.get_plugin_stats("test_plugin")
@@ -318,7 +318,7 @@ async def test_metrics_collector_get_summary_top_slow():
     await collector.record_plugin_execution("medium", "cmd", 1.0)
     await collector.record_plugin_execution("slow", "cmd", 3.0)
 
-    summary = await collector.get_summary()
+    summary  = await collector.get_summary()
     top_slow = summary["top_slow_plugins"]
 
     # Slowest should be first
@@ -406,8 +406,8 @@ async def test_timed_async_decorator_with_error():
 @pytest.mark.unit
 async def test_timed_async_decorator_records_and_propagates_cancellation():
     collector = MetricsCollector()
-    started = asyncio.Event()
-    blocked = asyncio.Event()
+    started   = asyncio.Event()
+    blocked   = asyncio.Event()
 
     @timed_async(collector, "test_plugin", "test_cmd")
     async def cancelled_function():
@@ -473,8 +473,8 @@ async def test_execution_timer_with_error():
 @pytest.mark.unit
 async def test_execution_timer_records_and_propagates_cancellation():
     collector = MetricsCollector()
-    started = asyncio.Event()
-    blocked = asyncio.Event()
+    started   = asyncio.Event()
+    blocked   = asyncio.Event()
 
     async def use_timer() -> None:
         async with ExecutionTimer(collector, "test_plugin", "test_cmd"):

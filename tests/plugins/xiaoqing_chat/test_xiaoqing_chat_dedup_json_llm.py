@@ -26,7 +26,7 @@ def test_json_parsing_helper_rejects_embedded_object() -> None:
     )
 
     text = 'note {"items": [{"k": 1}], "facts": [{"k": 2}]} done'
-    obj = parse_first_json_object(text)
+    obj  = parse_first_json_object(text)
 
     assert obj is None
     assert extract_named_list_field(obj, "items") == []
@@ -131,7 +131,7 @@ async def test_reply_checker_uses_shared_content_extractor(monkeypatch: pytest.M
             "/v1/chat/completions",
         )
 
-    called = {"count": 0}
+    called             = {"count": 0}
     original_extractor = llm_client.extract_response_content
 
     def traced_extractor(data):
@@ -145,21 +145,21 @@ async def test_reply_checker_uses_shared_content_extractor(monkeypatch: pytest.M
     monkeypatch.setattr(llm_client, "extract_response_content", traced_extractor)
 
     result = await check_reply(
-        http_session=None,
-        secrets={"api_base": "https://example.com", "api_key": "k", "model": "m"},
-        bot_name="小青",
-        reply="好的",
-        goal="聊天",
-        policy_text="",
-        history=[],
-        chat_history_text="user: hi",
-        enable_llm_checker=True,
-        max_repeat_compare=3,
-        similarity_threshold=0.9,
-        max_assistant_in_row=5,
-        timeout_seconds=1.0,
-        max_retry=0,
-        retry_interval_seconds=0.0,
+        http_session           = None,
+        secrets                = {"api_base": "https://example.com", "api_key": "k", "model": "m"},
+        bot_name               = "小青",
+        reply                  = "好的",
+        goal                   = "聊天",
+        policy_text            = "",
+        history                = [],
+        chat_history_text      = "user: hi",
+        enable_llm_checker     = True,
+        max_repeat_compare     = 3,
+        similarity_threshold   = 0.9,
+        max_assistant_in_row   = 5,
+        timeout_seconds        = 1.0,
+        max_retry              = 0,
+        retry_interval_seconds = 0.0,
     )
 
     assert called["count"] == 1
@@ -181,25 +181,25 @@ async def test_llm_client_fallback_wrapper_shared_logic_for_content_mode() -> No
     service = SimpleNamespace(
         complete=AsyncMock(
             return_value=AICompletionResult(
-                response={"choices": [{"message": {"content": "ok"}}]},
-                profile="fallback-profile",
-                provider="provider",
-                model="actual-model",
-                finish_reason="stop",
-                attempts=2,
+                response      = {"choices": [{"message": {"content": "ok"}}]},
+                profile       = "fallback-profile",
+                provider      = "provider",
+                model         = "actual-model",
+                finish_reason = "stop",
+                attempts      = 2,
             )
         )
     )
     response, used_profile = await chat_completions_raw_with_fallback_paths(
-        secrets={"_ai": service, "_route": "chat"},
-        model="legacy-display-only",
-        messages=[{"role": "user", "content": "hi"}],
-        temperature=0.2,
-        top_p=0.9,
-        max_tokens=32,
-        timeout_seconds=1.0,
-        max_retry=0,
-        retry_interval_seconds=0.0,
+        secrets                = {"_ai": service, "_route": "chat"},
+        model                  = "legacy-display-only",
+        messages               = [{"role": "user", "content": "hi"}],
+        temperature            = 0.2,
+        top_p                  = 0.9,
+        max_tokens             = 32,
+        timeout_seconds        = 1.0,
+        max_retry              = 0,
+        retry_interval_seconds = 0.0,
     )
 
     assert response["choices"][0]["message"]["content"] == "ok"
@@ -222,14 +222,14 @@ async def test_llm_client_fallback_wrapper_stops_on_non_404() -> None:
     )
     with pytest.raises(AIRequestError, match="ai_authentication"):
         await chat_completions_raw_with_fallback_paths(
-            secrets={"_ai": service, "_route": "chat"},
-            messages=[{"role": "user", "content": "hi"}],
-            temperature=0.2,
-            top_p=0.9,
-            max_tokens=32,
-            timeout_seconds=1.0,
-            max_retry=0,
-            retry_interval_seconds=0.0,
+            secrets                = {"_ai": service, "_route": "chat"},
+            messages               = [{"role": "user", "content": "hi"}],
+            temperature            = 0.2,
+            top_p                  = 0.9,
+            max_tokens             = 32,
+            timeout_seconds        = 1.0,
+            max_retry              = 0,
+            retry_interval_seconds = 0.0,
         )
 
     service.complete.assert_awaited_once()
@@ -260,17 +260,17 @@ async def test_person_fact_extract_skips_empty_llm_response(
     memory_db = MagicMock()
 
     await maybe_extract_person_facts(
-        data_dir=tmp_path,
-        secrets={"api_base": "https://example.com", "api_key": "k", "model": "m"},
-        memory_db=memory_db,
-        chat_id="g1",
-        history=history,
-        temperature=0.8,
-        top_p=0.9,
-        max_tokens=512,
-        timeout_seconds=1.0,
-        max_retry=0,
-        retry_interval_seconds=0.0,
+        data_dir               = tmp_path,
+        secrets                = {"api_base": "https://example.com", "api_key": "k", "model": "m"},
+        memory_db              = memory_db,
+        chat_id                = "g1",
+        history                = history,
+        temperature            = 0.8,
+        top_p                  = 0.9,
+        max_tokens             = 512,
+        timeout_seconds        = 1.0,
+        max_retry              = 0,
+        retry_interval_seconds = 0.0,
     )
 
     memory_db.upsert_text.assert_not_called()

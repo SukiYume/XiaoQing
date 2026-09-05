@@ -42,8 +42,8 @@ auth_headers = _fixture_support.auth_headers
 def test_web_validation_errors_use_safe_response_shape(client: Any, auth_headers: dict):
     response = client.post(
         "/api/items",
-        headers=auth_headers,
-        json={"type": "ledger", "title": "坏账", "amount": "not-number"},
+        headers = auth_headers,
+        json    = {"type": "ledger", "title": "坏账", "amount": "not-number"},
     )
 
     assert response.status_code == 422
@@ -60,12 +60,12 @@ async def test_import_inspect_parsing_does_not_block_event_loop(
     temp_db: Database,
     monkeypatch,
 ):
-    bundle = _simple_task_bundle("inspect-offloop")
+    bundle       = _simple_task_bundle("inspect-offloop")
     real_inspect = transfer_api._inspect_bundle_data
-    release = threading.Event()
-    heartbeat = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    entered_at = 0.0
+    release      = threading.Event()
+    heartbeat    = asyncio.Event()
+    loop         = asyncio.get_running_loop()
+    entered_at   = 0.0
 
     def slow_inspect(payload: bytes):
         nonlocal entered_at
@@ -98,12 +98,12 @@ async def test_import_planning_and_transaction_do_not_block_event_loop(
     temp_db: Database,
     monkeypatch,
 ):
-    bundle = _simple_task_bundle("execute-offloop")
+    bundle       = _simple_task_bundle("execute-offloop")
     real_execute = temp_db.execute_import_bundle
-    release = threading.Event()
-    heartbeat = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    entered_at = 0.0
+    release      = threading.Event()
+    heartbeat    = asyncio.Event()
+    loop         = asyncio.get_running_loop()
+    entered_at   = 0.0
 
     def slow_execute(**kwargs):
         nonlocal entered_at
@@ -119,9 +119,9 @@ async def test_import_planning_and_transaction_do_not_block_event_loop(
         task = asyncio.create_task(
             transfer_api.execute_import(
                 _ImportRequest(bundle),
-                x_transfer_options=json.dumps({"types": ["task"]}),
-                owner_id=OWNER_ID,
-                db=temp_db,
+                x_transfer_options = json.dumps({"types": ["task"]}),
+                owner_id           = OWNER_ID,
+                db                 = temp_db,
             )
         )
         await asyncio.wait_for(heartbeat.wait(), timeout=0.75)
@@ -171,21 +171,21 @@ def test_build_manifest_and_serialize_item_preserve_type_fields():
 
     event_record = serialize_item(
         EventItem(
-            id="event_1",
-            owner_id=OWNER_ID,
-            title="发布会",
-            category="工作",
-            start_time="2026-03-20T09:00:00+08:00",
-            end_time="2026-03-20T10:00:00+08:00",
-            timezone="Asia/Shanghai",
-            participants=["A"],
-            remind_times=["2026-03-20T08:30:00+08:00"],
-            notes="带录音",
-            event_role="multi_node_child",
-            event_collection_id="col_1",
-            event_collection_kind="multi_node",
-            event_index=1,
-            event_node_key="m01",
+            id                    = "event_1",
+            owner_id              = OWNER_ID,
+            title                 = "发布会",
+            category              = "工作",
+            start_time            = "2026-03-20T09:00:00+08:00",
+            end_time              = "2026-03-20T10:00:00+08:00",
+            timezone              = "Asia/Shanghai",
+            participants          = ["A"],
+            remind_times          = ["2026-03-20T08:30:00+08:00"],
+            notes                 = "带录音",
+            event_role            = "multi_node_child",
+            event_collection_id   = "col_1",
+            event_collection_kind = "multi_node",
+            event_index           = 1,
+            event_node_key        = "m01",
         )
     )
     collection_record = serialize_event_collection(
@@ -202,61 +202,61 @@ def test_build_manifest_and_serialize_item_preserve_type_fields():
     )
     task_record = serialize_item(
         TaskItem(
-            id="task_1",
-            owner_id=OWNER_ID,
-            title="补图表",
-            content="导出实现",
-            category="工作",
-            plan_date="2026-03-21",
-            deadline_at="2026-03-21T18:00:00+08:00",
-            priority=2,
-            status="open",
-            remind_times=["2026-03-21T09:00:00+08:00"],
+            id           = "task_1",
+            owner_id     = OWNER_ID,
+            title        = "补图表",
+            content      = "导出实现",
+            category     = "工作",
+            plan_date    = "2026-03-21",
+            deadline_at  = "2026-03-21T18:00:00+08:00",
+            priority     = 2,
+            status       = "open",
+            remind_times = ["2026-03-21T09:00:00+08:00"],
         )
     )
     note_record = serialize_item(
         NoteItem(
-            id="note_1",
-            owner_id=OWNER_ID,
-            title="格式说明",
-            content="记录规范",
-            category="知识",
-            tags=["格式"],
-            references=[{"kind": "item", "id": "task_1"}],
-            related_items=["event_1"],
+            id            = "note_1",
+            owner_id      = OWNER_ID,
+            title         = "格式说明",
+            content       = "记录规范",
+            category      = "知识",
+            tags          = ["格式"],
+            references    = [{"kind": "item", "id": "task_1"}],
+            related_items = ["event_1"],
         )
     )
     diary_record = serialize_item(
         DiaryItem(
-            id="diary_1",
-            owner_id=OWNER_ID,
-            title="今天",
-            content="正文",
-            diary_date="2026-03-21",
-            mood="happy",
-            mood_score=9,
-            weather="sunny",
-            location="家",
-            template_id="tpl-1",
-            entry_time="2026-03-21T22:15:00",
-            template_answers=[{"prompt": "今天做了什么", "answer": "写日记"}],
-            is_favorite=True,
+            id               = "diary_1",
+            owner_id         = OWNER_ID,
+            title            = "今天",
+            content          = "正文",
+            diary_date       = "2026-03-21",
+            mood             = "happy",
+            mood_score       = 9,
+            weather          = "sunny",
+            location         = "家",
+            template_id      = "tpl-1",
+            entry_time       = "2026-03-21T22:15:00",
+            template_answers = [{"prompt": "今天做了什么", "answer": "写日记"}],
+            is_favorite      = True,
         )
     )
     ledger_record = serialize_item(
         LedgerItem(
-            id="ledger_1",
-            owner_id=OWNER_ID,
-            title="咖啡",
-            amount=18,
-            amount_cents=1800,
-            transaction_type="expense",
-            currency="CNY",
-            ledger_category="餐饮",
-            ledger_date="2026-03-21",
-            account_name="微信",
-            merchant="咖啡店",
-            remark="拿铁",
+            id               = "ledger_1",
+            owner_id         = OWNER_ID,
+            title            = "咖啡",
+            amount           = 18,
+            amount_cents     = 1800,
+            transaction_type = "expense",
+            currency         = "CNY",
+            ledger_category  = "餐饮",
+            ledger_date      = "2026-03-21",
+            account_name     = "微信",
+            merchant         = "咖啡店",
+            remark           = "拿铁",
         )
     )
 
@@ -409,7 +409,7 @@ def test_read_bundle_reports_invalid_record_metadata(
 
 
 def test_read_bundle_accepts_missing_optional_summaries_and_record_metadata():
-    content = b'{"id":"task_external","title":"External task"}\n'
+    content  = b'{"id":"task_external","title":"External task"}\n'
     manifest = build_manifest(
         {"types": ["task"], "preset": "all", "start": None, "end": None},
         [{"path": "data/tasks.ndjson", "type": "task"}],
@@ -427,7 +427,7 @@ def test_read_bundle_accepts_missing_optional_summaries_and_record_metadata():
 
 
 def test_read_bundle_infers_file_type_when_manifest_entry_omits_it():
-    content = b'{"id":"task_inferred","title":"Inferred"}\n'
+    content  = b'{"id":"task_inferred","title":"Inferred"}\n'
     manifest = build_manifest(
         {"types": ["task"], "preset": "all", "start": None, "end": None},
         [
@@ -447,7 +447,7 @@ def test_read_bundle_infers_file_type_when_manifest_entry_omits_it():
 
 def test_read_bundle_enforces_runtime_record_limit_without_declared_count(monkeypatch):
     monkeypatch.setattr(transfer_bundle_module, "MAX_IMPORT_RECORDS", 0)
-    content = b'\n{"_type":"task","_schema":2}\n'
+    content  = b'\n{"_type":"task","_schema":2}\n'
     manifest = build_manifest(
         {"types": ["task"], "preset": "all", "start": None, "end": None},
         [
@@ -465,7 +465,7 @@ def test_read_bundle_enforces_runtime_record_limit_without_declared_count(monkey
 
 
 def test_read_bundle_rejects_missing_declared_member():
-    content = b'{"_type":"task","_schema":2}\n'
+    content  = b'{"_type":"task","_schema":2}\n'
     manifest = _build_single_member_manifest("task", content)
 
     with pytest.raises(BundleValidationError, match="Bundle is missing data/tasks.ndjson"):
@@ -474,7 +474,7 @@ def test_read_bundle_rejects_missing_declared_member():
 
 def test_read_bundle_rejects_checksum_mismatch():
     expected = b'{"_type":"task","_schema":2,"id":"expected"}\n'
-    actual = b'{"_type":"task","_schema":2,"id":"changed"}\n'
+    actual   = b'{"_type":"task","_schema":2,"id":"changed"}\n'
     manifest = _build_single_member_manifest("task", expected)
 
     with pytest.raises(BundleValidationError, match="Checksum mismatch"):
@@ -482,7 +482,7 @@ def test_read_bundle_rejects_checksum_mismatch():
 
 
 def test_read_bundle_rejects_invalid_member_utf8():
-    content = b"\xff\n"
+    content  = b"\xff\n"
     manifest = _build_single_member_manifest("task", content)
 
     with pytest.raises(BundleValidationError, match="not valid UTF-8"):
@@ -498,7 +498,7 @@ def test_read_bundle_rejects_actual_count_mismatch():
 
 
 def test_read_bundle_rejects_duplicate_archive_member():
-    content = b'{"_type":"task","_schema":2,"id":"task_1"}\n'
+    content  = b'{"_type":"task","_schema":2,"id":"task_1"}\n'
     manifest = _build_single_member_manifest("task", content)
     with pytest.warns(UserWarning, match="Duplicate name"):
         buf = _build_raw_bundle(
@@ -516,7 +516,7 @@ def test_read_bundle_rejects_encrypted_archive_member_flag():
         [],
         "Asia/Shanghai",
     )
-    archive = bytearray(_build_raw_bundle(manifest, []).getvalue())
+    archive        = bytearray(_build_raw_bundle(manifest, []).getvalue())
     central_header = archive.find(b"PK\x01\x02")
     assert central_header >= 0
     flag_offset = central_header + 8
@@ -528,13 +528,13 @@ def test_read_bundle_rejects_encrypted_archive_member_flag():
 
 
 def test_read_bundle_maps_corrupt_member_crc_to_validation_error():
-    content = b'{"_type":"task","_schema":2,"id":"crc-corruption"}\n'
+    content  = b'{"_type":"task","_schema":2,"id":"crc-corruption"}\n'
     manifest = _build_single_member_manifest("task", content)
-    buf = io.BytesIO()
+    buf      = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zf:
         zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False))
         zf.writestr("data/tasks.ndjson", content)
-    archive = bytearray(buf.getvalue())
+    archive        = bytearray(buf.getvalue())
     content_offset = archive.find(content)
     assert content_offset >= 0
     archive[content_offset] ^= 0x1
@@ -634,7 +634,7 @@ def test_build_manifest_rejects_invalid_selection_types(types: object):
 
 
 def test_write_bundle_rejects_manifest_record_count_mismatch():
-    content = b'{"_type":"task","_schema":2,"id":"task_1"}\n'
+    content  = b'{"_type":"task","_schema":2,"id":"task_1"}\n'
     manifest = _build_single_member_manifest("task", content)
 
     with pytest.raises(BundleValidationError, match="Count mismatch"):
@@ -644,7 +644,7 @@ def test_write_bundle_rejects_manifest_record_count_mismatch():
 def test_write_bundle_rejects_manifest_checksum_mismatch():
     record = {"_type": "task", "_schema": 2}
     content = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
-    manifest = _build_single_member_manifest("task", content)
+    manifest                       = _build_single_member_manifest("task", content)
     manifest["files"][0]["sha256"] = "0" * 64
 
     with pytest.raises(BundleValidationError, match="Checksum mismatch"):
@@ -681,7 +681,7 @@ def test_write_bundle_rejects_manifest_record_layout_mismatch(
     message: str,
 ):
     content = b""
-    files = (
+    files   = (
         [
             {
                 "path": "data/tasks.ndjson",
@@ -752,7 +752,7 @@ def test_write_bundle_enforces_archive_size_limits(
 def test_read_bundle_counts_all_declared_members_in_uncompressed_limit(monkeypatch):
     task_content = b'{"_type":"task","_schema":2}\n'
     note_content = b'{"_type":"note","_schema":2}\n'
-    manifest = build_manifest(
+    manifest     = build_manifest(
         {"types": ["task", "note"], "preset": "all", "start": None, "end": None},
         [
             {
@@ -950,8 +950,8 @@ def test_export_preview_accepts_supported_presets(
 
     response = client.post(
         "/api/transfer/export/preview",
-        headers=auth_headers,
-        json={"selection": {"types": ["task"], **payload}},
+        headers = auth_headers,
+        json    = {"selection": {"types": ["task"], **payload}},
     )
 
     assert response.status_code == 200

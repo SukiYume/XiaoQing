@@ -56,17 +56,17 @@ class HandlerContext:
         from .store_binding import _bind_all_stores
 
         runtime = runtime or _load_runtime(context)
-        state = _state()
+        state   = _state()
         _bind_all_stores(state, context.data_dir)
         chat_id = _chat_id(event)
         return cls(
-            chat_id=chat_id,
-            runtime=runtime,
-            state=state,
+            chat_id = chat_id,
+            runtime = runtime,
+            state   = state,
             secrets=_get_ai_route_context(context, chat_id=chat_id),
-            data_dir=context.data_dir,
-            bot_name=_get_bot_name(context),
-            context=context,
+            data_dir = context.data_dir,
+            bot_name = _get_bot_name(context),
+            context  = context,
         )
 
 
@@ -84,8 +84,8 @@ def handle_errors(fn):
             return public_error_response(
                 context,
                 exc,
-                logger=getattr(context, "logger", logger),
-                component=f"xiaoqing_chat.handler.{fn.__name__}",
+                logger    = getattr(context, "logger", logger),
+                component = f"xiaoqing_chat.handler.{fn.__name__}",
             )
 
     return wrapper

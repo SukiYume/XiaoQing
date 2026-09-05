@@ -32,9 +32,9 @@ from typing import Any, Literal, TypeVar, overload
 
 from .async_keyed_lock import AsyncKeyedLockPool
 
-logger = logging.getLogger(__name__)
-T = TypeVar("T")
-SessionKey = tuple[int, int | None]
+logger                  = logging.getLogger(__name__)
+T                       = TypeVar("T")
+SessionKey              = tuple[int, int | None]
 _MAX_SESSION_DATA_DEPTH = 64
 _MAX_SESSION_DATA_NODES = 100_000
 
@@ -82,28 +82,28 @@ def _clone_session_value(
     try:
         if value_type is dict:
             cloned_dict: dict[str, Any] = {}
-            memo[identity] = cloned_dict
+            memo[identity]              = cloned_dict
             for key, item in value.items():
                 if type(key) is not str:
                     raise TypeError("session data mapping keys must be strings")
                 cloned_dict[key] = _clone_session_value(
                     item,
-                    memo=memo,
-                    active=active,
-                    depth=depth + 1,
-                    nodes=nodes,
+                    memo   = memo,
+                    active = active,
+                    depth  = depth + 1,
+                    nodes  = nodes,
                 )
             return cloned_dict
         if value_type is list:
             cloned_list: list[Any] = []
-            memo[identity] = cloned_list
+            memo[identity]         = cloned_list
             cloned_list.extend(
                 _clone_session_value(
                     item,
-                    memo=memo,
-                    active=active,
-                    depth=depth + 1,
-                    nodes=nodes,
+                    memo   = memo,
+                    active = active,
+                    depth  = depth + 1,
+                    nodes  = nodes,
                 )
                 for item in value
             )
@@ -112,10 +112,10 @@ def _clone_session_value(
         cloned_tuple = tuple(
             _clone_session_value(
                 item,
-                memo=memo,
-                active=active,
-                depth=depth + 1,
-                nodes=nodes,
+                memo   = memo,
+                active = active,
+                depth  = depth + 1,
+                nodes  = nodes,
             )
             for item in value
         )
@@ -217,17 +217,17 @@ class Session:
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     timeout: float = 300.0
-    version: int = 0
+    version: int   = 0
 
     def __post_init__(self) -> None:
         self.user_id = int(_normalize_id(self.user_id, field_name="user_id"))
         self.group_id = _normalize_id(
             self.group_id,
-            field_name="group_id",
-            allow_none=True,
+            field_name = "group_id",
+            allow_none = True,
         )
         self.plugin_name = _normalize_plugin_name(self.plugin_name)
-        self.session_id = _normalize_session_id(self.session_id)
+        self.session_id  = _normalize_session_id(self.session_id)
         if type(self.state) is not str:
             raise TypeError("session state must be a string")
         self.created_at = _normalize_timestamp(self.created_at, field_name="created_at")
@@ -307,7 +307,7 @@ class SessionManager:
 
     def __init__(self, default_timeout: float = 300.0) -> None:
         self._sessions: dict[SessionKey, Session] = {}
-        self._lock = asyncio.Lock()
+        self._lock                                = asyncio.Lock()
         self._key_lock_pool = AsyncKeyedLockPool(max_keys=4096, max_key_length=128)
         self._default_timeout = _normalize_timeout(default_timeout)
         # 事务视图按“实际执行回调的 Task + 会话键”隔离；子任务不会继承父任务的
@@ -332,8 +332,8 @@ class SessionManager:
         normalized_user = _normalize_id(user_id, field_name="user_id")
         normalized_group = _normalize_id(
             group_id,
-            field_name="group_id",
-            allow_none=True,
+            field_name = "group_id",
+            allow_none = True,
         )
         return (int(normalized_user), normalized_group)
 
@@ -397,16 +397,16 @@ class SessionManager:
     @staticmethod
     def _clone(session: Session) -> Session:
         return Session(
-            user_id=session.user_id,
-            group_id=session.group_id,
-            plugin_name=session.plugin_name,
-            session_id=session.session_id,
-            state=session.state,
-            data=_clone_session_data(session.data),
-            created_at=session.created_at,
-            updated_at=session.updated_at,
-            timeout=session.timeout,
-            version=session.version,
+            user_id     = session.user_id,
+            group_id    = session.group_id,
+            plugin_name = session.plugin_name,
+            session_id  = session.session_id,
+            state       = session.state,
+            data        = _clone_session_data(session.data),
+            created_at  = session.created_at,
+            updated_at  = session.updated_at,
+            timeout     = session.timeout,
+            version     = session.version,
         )
 
     @staticmethod
@@ -448,13 +448,13 @@ class SessionManager:
     ) -> Session:
         now = time.time()
         return Session(
-            user_id=key[0],
-            group_id=key[1],
-            plugin_name=_normalize_plugin_name(plugin_name),
-            data=self._initial_data_copy(initial_data),
-            created_at=now,
-            updated_at=now,
-            timeout=self._default_timeout if timeout is None else _normalize_timeout(timeout),
+            user_id     = key[0],
+            group_id    = key[1],
+            plugin_name = _normalize_plugin_name(plugin_name),
+            data        = self._initial_data_copy(initial_data),
+            created_at  = now,
+            updated_at  = now,
+            timeout     = self._default_timeout if timeout is None else _normalize_timeout(timeout),
         )
 
     async def create(
@@ -463,18 +463,18 @@ class SessionManager:
         group_id: int | None,
         plugin_name: str,
         initial_data: dict[str, Any] | None = None,
-        timeout: float | None = None,
+        timeout: float | None               = None,
     ) -> Session:
         """Create or replace a session and return a detached snapshot."""
 
         key = self._make_key(user_id, group_id)
         self._reject_cross_key_transaction(key)
-        session = self._new_session(key, plugin_name, initial_data, timeout)
+        session  = self._new_session(key, plugin_name, initial_data, timeout)
         returned = self._clone(session)
 
         transaction = self._current_transaction(key)
         if transaction is not None:
-            transaction.working = session
+            transaction.working  = session
             transaction.replaced = True
             return returned
 
@@ -624,22 +624,22 @@ class SessionManager:
         if transaction.working is None:
             return None
 
-        candidate = self._clone(transaction.working)
-        candidate.user_id = key[0]
+        candidate          = self._clone(transaction.working)
+        candidate.user_id  = key[0]
         candidate.group_id = key[1]
-        candidate.timeout = _normalize_timeout(candidate.timeout)
+        candidate.timeout  = _normalize_timeout(candidate.timeout)
         if not isinstance(candidate.data, dict):
             raise TypeError("session data must be a dict")
 
         candidate.updated_at = time.time()
-        candidate.version = transaction.original.version + 1
+        candidate.version    = transaction.original.version + 1
         if transaction.replaced:
             candidate.plugin_name = _normalize_plugin_name(candidate.plugin_name)
-            candidate.session_id = _normalize_session_id(candidate.session_id)
+            candidate.session_id  = _normalize_session_id(candidate.session_id)
         else:
             candidate.plugin_name = transaction.original.plugin_name
-            candidate.created_at = transaction.original.created_at
-            candidate.session_id = transaction.original.session_id
+            candidate.created_at  = transaction.original.created_at
+            candidate.session_id  = transaction.original.session_id
         return candidate
 
     async def update(

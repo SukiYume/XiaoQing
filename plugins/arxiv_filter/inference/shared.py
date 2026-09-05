@@ -25,10 +25,10 @@ from ..utils import load_plugin_config
 
 logger = logging.getLogger(__name__)
 
-_PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_CONTENT_HASH_LIMIT_BYTES = 1024 * 1024
+_PLUGIN_DIR                 = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_CONTENT_HASH_LIMIT_BYTES   = 1024 * 1024
 _NON_RUNTIME_ARTIFACT_NAMES = {"validation_scored.csv"}
-_NON_RUNTIME_ARTIFACT_DIRS = {"emb_cache", "__pycache__"}
+_NON_RUNTIME_ARTIFACT_DIRS  = {"emb_cache", "__pycache__"}
 
 
 # =============================================================================
@@ -42,8 +42,8 @@ class InferenceParams:
     threshold: float
     batch_size: int
     max_len: int
-    input_mode: str = "title_abstract"  # "title_only" | "title_abstract"
-    model_type: str = "transformers"  # "transformers" | "multi_interest" | "knn"
+    input_mode: str                  = "title_abstract"  # "title_only" | "title_abstract"
+    model_type: str                  = "transformers"  # "transformers" | "multi_interest" | "knn"
     artifact_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
@@ -115,7 +115,7 @@ def model_artifact_fingerprint(model_path: str) -> str:
     on every inference request.
     """
 
-    root = Path(model_path).resolve()
+    root   = Path(model_path).resolve()
     digest = hashlib.sha256()
     digest.update(str(root).encode("utf-8", errors="surrogatepass"))
     if not root.exists():
@@ -134,7 +134,7 @@ def model_artifact_fingerprint(model_path: str) -> str:
         )
     )
     for path in paths:
-        stat = path.stat()
+        stat     = path.stat()
         relative = path.name if root.is_file() else path.relative_to(root).as_posix()
         digest.update(relative.encode("utf-8", errors="surrogatepass"))
         digest.update(f"\0{stat.st_size}\0{stat.st_mtime_ns}\0".encode())
@@ -201,10 +201,10 @@ def resolve_model_path(model_path: str | None = None) -> str:
     3. config.json 中显式设置的 model.path
     4. 未设置 model.path 时按固定兼容顺序搜索 best_model* 目录
     """
-    config = _mapping(load_plugin_config(), "plugin config")
-    model_config = _mapping(config.get("model", {}), "model config")
+    config           = _mapping(load_plugin_config(), "plugin config")
+    model_config     = _mapping(config.get("model", {}), "model config")
     configured_value = model_config.get("path")
-    configured = (
+    configured       = (
         _non_empty_path(configured_value, "model.path")
         if configured_value is not None
         else "best_model"
@@ -294,37 +294,37 @@ def resolve_multi_interest_model_path(
 
 
 def resolve_params(
-    model_path: str | None = None,
+    model_path: str | None  = None,
     threshold: float | None = None,
-    batch_size: int | None = None,
-    max_len: int | None = None,
+    batch_size: int | None  = None,
+    max_len: int | None     = None,
     *,
     artifact_fingerprint: str | None = None,
 ) -> InferenceParams:
     """解析所有推理参数，自动从 training_config / plugin config 读取默认值。"""
     plugin_config = _mapping(load_plugin_config(), "plugin config")
-    plugin_cfg = _mapping(plugin_config.get("model", {}), "model config")
+    plugin_cfg    = _mapping(plugin_config.get("model", {}), "model config")
     resolved_path = resolve_model_path(model_path)
-    tcfg = load_training_config(resolved_path)
+    tcfg          = load_training_config(resolved_path)
 
-    model_type = detect_model_type(tcfg)
-    input_mode = tcfg.get("input_mode", "title_abstract")
+    model_type      = detect_model_type(tcfg)
+    input_mode      = tcfg.get("input_mode", "title_abstract")
     threshold_value = (
         threshold
         if threshold is not None
         else tcfg.get("optimal_threshold", plugin_cfg.get("threshold", 0.5))
     )
     batch_size_value = batch_size if batch_size is not None else plugin_cfg.get("batch_size", 32)
-    max_len_value = (
+    max_len_value    = (
         max_len if max_len is not None else tcfg.get("max_len", plugin_cfg.get("max_len", 512))
     )
 
     return InferenceParams(
-        model_path=resolved_path,
-        threshold=_finite_float(threshold_value, "threshold"),
-        batch_size=_positive_int(batch_size_value, "batch_size"),
-        max_len=_positive_int(max_len_value, "max_len"),
-        input_mode=input_mode if isinstance(input_mode, str) else "",
-        model_type=model_type,
-        artifact_fingerprint=artifact_fingerprint,
+        model_path           = resolved_path,
+        threshold            = _finite_float(threshold_value, "threshold"),
+        batch_size           = _positive_int(batch_size_value, "batch_size"),
+        max_len              = _positive_int(max_len_value, "max_len"),
+        input_mode           = input_mode if isinstance(input_mode, str) else "",
+        model_type           = model_type,
+        artifact_fingerprint = artifact_fingerprint,
     )

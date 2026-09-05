@@ -9,7 +9,7 @@ class TestLRUCache:
     def _make_db(self, cache_size: int = 3):
         from plugins.pendo.services.db import Database
 
-        db = Database(":memory:")
+        db                = Database(":memory:")
         db.CACHE_MAX_SIZE = cache_size
         return db
 

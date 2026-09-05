@@ -19,14 +19,14 @@ from core.public_errors import public_error_message
 from .convert import validate_rgb
 
 MAX_IMAGE_NAME_CHARS = 64
-IMAGE_CACHE_LIMITS = FileCacheLimits(
-    max_entries=256,
-    max_bytes=32 * 1024 * 1024,
-    ttl_seconds=30 * 24 * 60 * 60,
+IMAGE_CACHE_LIMITS   = FileCacheLimits(
+    max_entries = 256,
+    max_bytes   = 32 * 1024 * 1024,
+    ttl_seconds = 30 * 24 * 60 * 60,
 )
 
 MATPLOTLIB_AVAILABLE = find_spec("numpy") is not None and find_spec("matplotlib") is not None
-_CJK_FONT_FAMILIES = (
+_CJK_FONT_FAMILIES   = (
     "Noto Sans CJK SC",
     "Noto Sans CJK",
     "WenQuanYi Zen Hei",
@@ -40,10 +40,10 @@ logger = logging.getLogger(__name__)
 def _renderer_modules() -> tuple[Any, Any, Any]:
     """首次真正生成色卡时才加载两个体积较大的绘图库。"""
 
-    numpy = importlib.import_module("numpy")
+    numpy      = importlib.import_module("numpy")
     matplotlib = importlib.import_module("matplotlib")
     matplotlib.use("Agg")
-    pyplot = importlib.import_module("matplotlib.pyplot")
+    pyplot       = importlib.import_module("matplotlib.pyplot")
     font_manager = importlib.import_module("matplotlib.font_manager")
     return numpy, pyplot, font_manager
 
@@ -83,7 +83,7 @@ def _render_color_image(name: str, rgb: list[int]) -> bytes:
         raise RuntimeError("matplotlib renderer is unavailable")
     numpy, pyplot, font_manager = _renderer_modules()
     image_array: Any = numpy.zeros([100, 200, 3], numpy.uint8)
-    image_array[:] = rgb
+    image_array[:]   = rgb
     figure, axes = pyplot.subplots(figsize=(2, 1))
     try:
         axes.imshow(image_array)
@@ -118,13 +118,13 @@ async def generate_color_image(
         cleaned_name, cleaned_rgb = _clean_image_input(name, rgb)
         if not isinstance(output_dir, Path):
             raise ValueError("color image output_dir must be a Path")
-        cache = BoundedFileCache(output_dir, IMAGE_CACHE_LIMITS)
+        cache    = BoundedFileCache(output_dir, IMAGE_CACHE_LIMITS)
         filename = _cache_filename(cleaned_name, cleaned_rgb)
-        cached = await run_sync(cache.get_any, (filename,))
+        cached   = await run_sync(cache.get_any, (filename,))
         if cached is not None:
             return str(cached)
 
-        payload = await run_sync(_render_color_image, cleaned_name, cleaned_rgb)
+        payload    = await run_sync(_render_color_image, cleaned_name, cleaned_rgb)
         image_path = await run_sync(cache.put, filename, payload)
         if image_path is None:
             context.logger.warning("颜色图片超过缓存总字节预算")

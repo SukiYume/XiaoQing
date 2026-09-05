@@ -29,7 +29,7 @@ from .utils import load_plugin_config
 logger = logging.getLogger(__name__)
 
 # 空结果的列定义（避免魔法字面量重复）
-_EMPTY_COLUMNS = ["arXiv ID", "Title", "Abstract"]
+_EMPTY_COLUMNS  = ["arXiv ID", "Title", "Abstract"]
 _ENGLISH_MONTHS = {
     "january": 1,
     "february": 2,
@@ -45,15 +45,15 @@ _ENGLISH_MONTHS = {
     "december": 12,
 }
 _HTML_BODY_LIMITS = BodyLimits(
-    max_wire_bytes=4 * 1024 * 1024,
-    max_decoded_bytes=8 * 1024 * 1024,
-    max_decompression_ratio=20,
+    max_wire_bytes          = 4 * 1024 * 1024,
+    max_decoded_bytes       = 8 * 1024 * 1024,
+    max_decompression_ratio = 20,
 )
 _ARXIV_REDIRECT_POLICY = RedirectPolicy(
-    max_hops=3,
-    allowed_schemes=frozenset({"http", "https"}),
-    same_origin_only=True,
-    allow_https_upgrade_same_host=True,
+    max_hops                      = 3,
+    allowed_schemes               = frozenset({"http", "https"}),
+    same_origin_only              = True,
+    allow_https_upgrade_same_host = True,
 )
 
 
@@ -76,7 +76,7 @@ def _get_request_params(
     proxy = os.getenv("ARXIV_PROXY") or arxiv_config.get("proxy")
     if proxy is not None and (not isinstance(proxy, str) or not proxy.strip()):
         raise ValueError("arxiv.proxy must be null or a non-empty string")
-    proxy = proxy.strip() if isinstance(proxy, str) else None
+    proxy   = proxy.strip() if isinstance(proxy, str) else None
     proxies = {"http": proxy, "https": proxy} if proxy else None
 
     # SSL 验证：如果使用代理且配置允许，可以禁用
@@ -104,7 +104,7 @@ def _get_request_params(
 
 
 def _fetch_arxiv_page(
-    url: str | None = None,
+    url: str | None                  = None,
     config: Mapping[str, Any] | None = None,
 ) -> BeautifulSoup | None:
     """
@@ -134,11 +134,11 @@ def _fetch_arxiv_page(
         response = requests_request_bounded(
             "GET",
             url,
-            limits=_HTML_BODY_LIMITS,
-            mime_policy=HTML_MIME_POLICY,
-            redirect_policy=_ARXIV_REDIRECT_POLICY,
-            headers={"User-Agent": "Mozilla/5.0"},
-            request_kwargs={
+            limits          = _HTML_BODY_LIMITS,
+            mime_policy     = HTML_MIME_POLICY,
+            redirect_policy = _ARXIV_REDIRECT_POLICY,
+            headers         = {"User-Agent": "Mozilla/5.0"},
+            request_kwargs  = {
                 "timeout": timeout,
                 "proxies": proxies,
                 "verify": verify,

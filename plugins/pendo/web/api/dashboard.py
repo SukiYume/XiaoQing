@@ -12,7 +12,7 @@ router = APIRouter()
 @router.get("/dashboard")
 def get_dashboard(
     owner_id: str = Depends(get_current_user),
-    db: Database = Depends(get_db),
+    db: Database  = Depends(get_db),
 ) -> dict[str, object]:
     """在当前所有者范围内构建并返回看板概览。"""
 

@@ -6,8 +6,9 @@ from typing import Final
 
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
+from tests.helpers.pendo_client_source import has_js_source
 
-ROOT: Final = REPOSITORY_ROOT
+ROOT: Final          = REPOSITORY_ROOT
 WIDGET_CLIENT: Final = ROOT / "plugins" / "pendo" / "web" / "scriptable" / "pendo_widget.js"
 
 WIDGET_SETUP: Final = r"""
@@ -67,8 +68,8 @@ def _run_widget_client(script: str) -> None:
     assert_node_esm_contract(
         _widget_source_for_test(),
         script,
-        cwd=ROOT,
-        setup=WIDGET_SETUP,
+        cwd   = ROOT,
+        setup = WIDGET_SETUP,
     )
 
 
@@ -82,7 +83,7 @@ def test_scriptable_header_and_transformed_module_parse() -> None:
         "// icon-color: deep-purple; icon-glyph: magic;",
     ]
     source = WIDGET_CLIENT.read_text(encoding="utf-8")
-    assert "const TOKEN = 'PASTE_WIDGET_TOKEN_HERE';" in source
+    assert has_js_source(source, "const TOKEN = 'PASTE_WIDGET_TOKEN_HERE';")
     assert "TOKEN_KEYCHAIN_KEY" not in source
     assert "new Alert()" not in source
     assert "Keychain.set(" in source

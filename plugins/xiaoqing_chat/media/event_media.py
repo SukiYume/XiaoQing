@@ -74,9 +74,9 @@ async def _download_url_bytes(url: str, *, max_bytes: int) -> tuple[bytes, str]:
     try:
         response = await fetch_public_bytes(
             url,
-            timeout_seconds=float(_MEDIA_DOWNLOAD_TIMEOUT.total),
-            max_bytes=max(1, int(max_bytes)),
-            allowed_content_type_prefixes=("image/", "application/octet-stream"),
+            timeout_seconds               = float(_MEDIA_DOWNLOAD_TIMEOUT.total),
+            max_bytes                     = max(1, int(max_bytes)),
+            allowed_content_type_prefixes = ("image/", "application/octet-stream"),
         )
     except SafeHttpError as exc:
         raise ValueError(str(exc)) from exc
@@ -105,8 +105,8 @@ def _matching_segments_from_message(
     original_segment: dict[str, Any],
     message_segments: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    original_key = _segment_identity_key(original_segment)
-    matches: list[dict[str, Any]] = []
+    original_key                    = _segment_identity_key(original_segment)
+    matches: list[dict[str, Any]]   = []
     fallbacks: list[dict[str, Any]] = []
 
     for seg in message_segments:
@@ -129,9 +129,9 @@ def _get_image_request_candidates(
 ) -> list[dict[str, str]]:
     """构造去重后的适配器标识符，不把标识符当作路径。"""
 
-    data = segment.get("data", {}) or {}
+    data                             = segment.get("data", {}) or {}
     candidates: list[dict[str, str]] = []
-    seen: set[tuple[str, str]] = set()
+    seen: set[tuple[str, str]]       = set()
 
     def _push(key: str, value: Any) -> None:
         cleaned = str(value or "").strip()
@@ -165,8 +165,8 @@ async def _resolve_onebot_image_result(
         "name": str(data.get("file_name", "") or summary_hint or "").strip(),
         "summary": summary_hint,
     }
-    file_value = str(data.get("file", "") or "").strip()
-    url_value = str(data.get("url", "") or "").strip()
+    file_value   = str(data.get("file", "") or "").strip()
+    url_value    = str(data.get("url", "") or "").strip()
     base64_value = str(data.get("base64", "") or "").strip()
     if file_value:
         synthetic_data["file"] = file_value
@@ -181,9 +181,9 @@ async def _resolve_onebot_image_result(
     try:
         return await _resolve_media_bytes(
             synthetic_segment,
-            context=context,
-            max_bytes=max_bytes,
-            event=None,
+            context   = context,
+            max_bytes = max_bytes,
+            event     = None,
         )
     except Exception:
         return None
@@ -209,10 +209,10 @@ async def _recover_mface_media_via_onebot(
     if onebot_media is None:
         return None
 
-    message_id = event.get("message_id")
-    summary_hint = _segment_summary_hint(segment)
+    message_id                               = event.get("message_id")
+    summary_hint                             = _segment_summary_hint(segment)
     candidate_requests: list[dict[str, str]] = []
-    seen_requests: set[tuple[str, str]] = set()
+    seen_requests: set[tuple[str, str]]      = set()
 
     def _extend_requests(items: list[dict[str, str]]) -> None:
         for item in items:
@@ -244,8 +244,8 @@ async def _recover_mface_media_via_onebot(
     for params in candidate_requests:
         try:
             image_data = await onebot_media.get_image(
-                file_id=params.get("file_id"),
-                file=params.get("file"),
+                file_id = params.get("file_id"),
+                file    = params.get("file"),
             )
         except Exception:
             continue
@@ -253,9 +253,9 @@ async def _recover_mface_media_via_onebot(
             continue
         resolved = await _resolve_onebot_image_result(
             image_data,
-            summary_hint=summary_hint,
-            context=context,
-            max_bytes=max_bytes,
+            summary_hint = summary_hint,
+            context      = context,
+            max_bytes    = max_bytes,
         )
         if resolved is not None:
             return resolved
@@ -276,9 +276,9 @@ async def _recover_media_bytes_if_needed(
         return None
     return await _recover_mface_media_via_onebot(
         segment,
-        event=event,
-        context=context,
-        max_bytes=max_bytes,
+        event     = event,
+        context   = context,
+        max_bytes = max_bytes,
     )
 
 
@@ -343,7 +343,7 @@ def _decode_data_url(value: str, *, max_bytes: int = 0) -> tuple[bytes, str]:
     if not sep:
         raise ValueError("invalid data url")
 
-    meta = header[5:]
+    meta      = header[5:]
     mime_type = "image/png"
     is_base64 = False
     for part in meta.split(";"):
@@ -403,10 +403,10 @@ def _resolve_media_sources(
 ) -> list[tuple[str, str, Path | None]]:
     """按信任顺序返回去重来源，并排除越界本地路径。"""
 
-    data = segment.get("data", {}) or {}
-    key_order = {"path": 0, "file": 1, "url": 2}
+    data                                        = segment.get("data", {}) or {}
+    key_order                                   = {"path": 0, "file": 1, "url": 2}
     sources: list[tuple[str, str, Path | None]] = []
-    seen: set[str] = set()
+    seen: set[str]                              = set()
     for key in ("path", "file", "url"):
         value = str(data.get(key, "") or "").strip()
         if not value or value in seen:
@@ -448,15 +448,15 @@ async def _resolve_media_bytes(
     """依次尝试有界来源，并保留最后一个类型化错误供降级处理。"""
 
     sources = await _run_media_blocking(_resolve_media_sources, segment, context=context)
-    summary_hint = _segment_summary_hint(segment)
-    suffix_hint = _segment_suffix_hint(segment)
+    summary_hint                 = _segment_summary_hint(segment)
+    suffix_hint                  = _segment_suffix_hint(segment)
     last_error: Exception | None = None
 
     if not sources:
         last_error = FileNotFoundError("segment has no supported media source")
 
     for source_key, source_value, source_path in sources:
-        embedded = _looks_like_base64_source(source_value) or _looks_like_data_url(source_value)
+        embedded    = _looks_like_base64_source(source_value) or _looks_like_data_url(source_value)
         source_name = _safe_source_name(summary_hint or ("image" if embedded else source_value))
         try:
             if source_path is not None:
@@ -497,9 +497,9 @@ async def _resolve_media_bytes(
 
     recovered = await _recover_media_bytes_if_needed(
         segment,
-        event=event,
-        context=context,
-        max_bytes=max_bytes,
+        event     = event,
+        context   = context,
+        max_bytes = max_bytes,
     )
     if recovered is not None:
         return recovered
@@ -542,31 +542,31 @@ async def _resolve_segment_media(
     *,
     context,
     max_bytes: int,
-    max_pixels: int = 16_000_000,
-    max_frames: int = 120,
-    disk_quota_bytes: int = 256 * 1024 * 1024,
-    cache_ttl_seconds: float = 7 * 86400.0,
+    max_pixels: int              = 16_000_000,
+    max_frames: int              = 120,
+    disk_quota_bytes: int        = 256 * 1024 * 1024,
+    cache_ttl_seconds: float     = 7 * 86400.0,
     event: dict[str, Any] | None = None,
 ) -> ResolvedMedia | None:
     """解析单个片段，仅在全部资源限制通过后才落盘。"""
 
     payload, source_name, suffix = await _resolve_media_bytes(
         segment,
-        context=context,
-        max_bytes=max_bytes,
-        event=event,
+        context   = context,
+        max_bytes = max_bytes,
+        event     = event,
     )
     materialized = await _run_media_blocking(
         _materialize_resolved_media,
         payload,
-        segment_type=str(segment.get("type", "") or ""),
-        source_name=source_name,
-        suffix=suffix,
-        context=context,
-        max_pixels=max_pixels,
-        max_frames=max_frames,
-        disk_quota_bytes=disk_quota_bytes,
-        cache_ttl_seconds=cache_ttl_seconds,
+        segment_type      = str(segment.get("type", "") or ""),
+        source_name       = source_name,
+        suffix            = suffix,
+        context           = context,
+        max_pixels        = max_pixels,
+        max_frames        = max_frames,
+        disk_quota_bytes  = disk_quota_bytes,
+        cache_ttl_seconds = cache_ttl_seconds,
     )
     return materialized if isinstance(materialized, ResolvedMedia) else None
 
@@ -591,35 +591,35 @@ def _materialize_resolved_media(
 
     info = _inspect_image_payload_details(payload, fallback_suffix=suffix)
     _validate_image_resource_limits(
-        width=info.width,
-        height=info.height,
-        max_pixels=max_pixels,
-        max_frames=max_frames,
-        frame_count=info.frame_count,
+        width       = info.width,
+        height      = info.height,
+        max_pixels  = max_pixels,
+        max_frames  = max_frames,
+        frame_count = info.frame_count,
     )
-    media_hash = _hash_bytes(payload)
+    media_hash  = _hash_bytes(payload)
     cached_path = _cached_media_path(context, media_hash, info.suffix)
     ensure_dir(cached_path.parent)
     with keyed_path_lock(cached_path.parent):
         already_cached = cached_path.exists()
         _prune_media_inbox(
             cached_path.parent,
-            quota_bytes=disk_quota_bytes,
-            ttl_seconds=cache_ttl_seconds,
-            incoming_bytes=0 if already_cached else len(payload),
-            protected_path=cached_path if already_cached else None,
+            quota_bytes    = disk_quota_bytes,
+            ttl_seconds    = cache_ttl_seconds,
+            incoming_bytes = 0 if already_cached else len(payload),
+            protected_path = cached_path if already_cached else None,
         )
         if not already_cached:
             atomic_write_bytes(cached_path, payload)
     return ResolvedMedia(
-        media_hash=media_hash,
-        segment_type=segment_type,
-        source_name=source_name,
-        mime_type=info.mime_type,
-        cached_path=cached_path,
-        width=info.width,
-        height=info.height,
-        is_animated=info.is_animated,
+        media_hash   = media_hash,
+        segment_type = segment_type,
+        source_name  = source_name,
+        mime_type    = info.mime_type,
+        cached_path  = cached_path,
+        width        = info.width,
+        height       = info.height,
+        is_animated  = info.is_animated,
     )
 
 
@@ -653,13 +653,13 @@ def _prune_media_inbox(
 ) -> None:
     """只在专用收件箱内先按 TTL、再按最旧优先执行容量淘汰。"""
 
-    now = time.time()
+    now                                  = time.time()
     files: list[tuple[float, int, Path]] = []
     for path in root.glob("*"):
         try:
             if not path.is_file():
                 continue
-            stat = path.stat()
+            stat         = path.stat()
             is_protected = protected_path is not None and path == protected_path
             if not is_protected and ttl_seconds > 0 and now - stat.st_mtime > ttl_seconds:
                 path.unlink(missing_ok=True)
@@ -694,17 +694,17 @@ async def _render_resolved_media(
 ) -> RenderedMedia:
     """同一事件循环内合并相同媒体的并发渲染，并复用持久缓存。"""
 
-    loop = asyncio.get_running_loop()
-    locks = _MEDIA_RENDER_LOCKS_BY_LOOP.setdefault(loop, weakref.WeakValueDictionary())
+    loop     = asyncio.get_running_loop()
+    locks    = _MEDIA_RENDER_LOCKS_BY_LOOP.setdefault(loop, weakref.WeakValueDictionary())
     lock_key = f"{Path(context.data_dir).resolve()}::{resolved.media_hash}"
-    lock = locks.setdefault(lock_key, asyncio.Lock())
+    lock     = locks.setdefault(lock_key, asyncio.Lock())
     async with lock:
         return await _render_resolved_media_locked(
             resolved,
-            context=context,
-            runtime=runtime,
-            prefer_emoji=prefer_emoji,
-            summary_hint=summary_hint,
+            context      = context,
+            runtime      = runtime,
+            prefer_emoji = prefer_emoji,
+            summary_hint = summary_hint,
         )
 
 
@@ -732,24 +732,24 @@ async def _render_resolved_media_locked(
         cached_rendered = _rendered_media_from_cache(cached, resolved=resolved)
         fallback_rendered = _build_fallback_render(
             resolved,
-            summary_hint=summary_hint,
-            prefer_emoji=prefer_emoji,
+            summary_hint = summary_hint,
+            prefer_emoji = prefer_emoji,
         )
         if not _should_refresh_cached_render(
             cached_rendered,
-            cached_source=str(cached.get("analysis_source", "") or ""),
-            cached_quality=str(cached.get("analysis_quality", "") or ""),
-            cached_prompt_version=int(cached.get("analysis_prompt_version", 0) or 0),
-            fallback_rendered=fallback_rendered,
-            summary_hint=summary_hint,
-            resolved=resolved,
-            context=context,
+            cached_source         = str(cached.get("analysis_source", "") or ""),
+            cached_quality        = str(cached.get("analysis_quality", "") or ""),
+            cached_prompt_version = int(cached.get("analysis_prompt_version", 0) or 0),
+            fallback_rendered     = fallback_rendered,
+            summary_hint          = summary_hint,
+            resolved              = resolved,
+            context               = context,
         ):
             _media_log(
                 context,
                 runtime,
-                step="media.cache.hit",
-                fields={
+                step   = "media.cache.hit",
+                fields = {
                     "media_hash": resolved.media_hash[:12],
                     "analysis_source": str(cached.get("analysis_source", "") or "unknown"),
                     "analysis_quality": str(cached.get("analysis_quality", "") or ""),
@@ -761,8 +761,8 @@ async def _render_resolved_media_locked(
         _media_log(
             context,
             runtime,
-            step="media.cache.refresh",
-            fields={
+            step   = "media.cache.refresh",
+            fields = {
                 "media_hash": resolved.media_hash[:12],
                 "cached_source": str(cached.get("analysis_source", "") or "unknown"),
                 "cached_quality": str(cached.get("analysis_quality", "") or ""),
@@ -772,14 +772,14 @@ async def _render_resolved_media_locked(
             },
         )
 
-    rendered = None
+    rendered        = None
     rendered_source = "fallback"
     try:
         rendered = await _analyze_media_with_llm(
             resolved,
-            context=context,
-            runtime=runtime,
-            prefer_emoji=prefer_emoji,
+            context      = context,
+            runtime      = runtime,
+            prefer_emoji = prefer_emoji,
         )
     except Exception:
         rendered = None
@@ -787,14 +787,14 @@ async def _render_resolved_media_locked(
     if rendered is None:
         rendered = _build_fallback_render(
             resolved,
-            summary_hint=summary_hint,
-            prefer_emoji=prefer_emoji,
+            summary_hint = summary_hint,
+            prefer_emoji = prefer_emoji,
         )
         _media_log(
             context,
             runtime,
-            step="media.render.fallback",
-            fields={
+            step   = "media.render.fallback",
+            fields = {
                 "media_hash": resolved.media_hash[:12],
                 "segment_type": resolved.segment_type,
                 "summary_hint": summary_hint,
@@ -808,8 +808,8 @@ async def _render_resolved_media_locked(
     rendered_quality = "detailed"
     if _is_low_quality_rendered_media(
         rendered,
-        summary_hint=summary_hint,
-        resolved=resolved,
+        summary_hint = summary_hint,
+        resolved     = resolved,
     ):
         rendered_quality = "generic"
 
@@ -818,23 +818,23 @@ async def _render_resolved_media_locked(
         context.data_dir,
         resolved,
         rendered,
-        source=rendered_source,
-        quality=rendered_quality,
+        source  = rendered_source,
+        quality = rendered_quality,
     )
     if rendered_source == "llm" and rendered.kind == "emoji" and rendered_quality == "detailed":
         _schedule_background_emoji_refine(
             rendered,
             resolved,
-            context=context,
-            runtime=runtime,
+            context = context,
+            runtime = runtime,
         )
     return rendered
 
 
 def _load_cached_render_entry(data_dir: Path, media_hash: str) -> dict[str, Any] | None:
     with _render_cache_lock(data_dir):
-        cache = _load_render_cache(data_dir)
-        items = cache.setdefault("items", {})
+        cache  = _load_render_cache(data_dir)
+        items  = cache.setdefault("items", {})
         cached = items.get(media_hash)
         return dict(cached) if isinstance(cached, dict) else None
 
@@ -848,24 +848,24 @@ async def render_local_media_file(
 ) -> RenderedMedia | None:
     """按相同字节、像素和帧数预算渲染调用方提供的可信文件。"""
 
-    path = Path(file_path)
+    path      = Path(file_path)
     max_bytes = runtime.cfg.media.max_analyze_bytes
     try:
         resolved = await _run_media_blocking(
             _resolved_local_media,
             path,
-            max_bytes=max_bytes,
-            max_pixels=runtime.cfg.media.max_image_pixels,
-            max_frames=runtime.cfg.media.max_animation_frames,
+            max_bytes  = max_bytes,
+            max_pixels = runtime.cfg.media.max_image_pixels,
+            max_frames = runtime.cfg.media.max_animation_frames,
         )
     except (FileNotFoundError, MediaPayloadTooLarge, OSError, ValueError):
         return None
     return await _render_resolved_media(
         resolved,
-        context=context,
-        runtime=runtime,
-        prefer_emoji=prefer_emoji,
-        summary_hint=path.stem,
+        context      = context,
+        runtime      = runtime,
+        prefer_emoji = prefer_emoji,
+        summary_hint = path.stem,
     )
 
 
@@ -879,21 +879,21 @@ def _resolved_local_media(
     payload = _read_file_bounded(path, max_bytes=max_bytes)
     info = _inspect_image_payload_details(payload, fallback_suffix=path.suffix or ".png")
     _validate_image_resource_limits(
-        width=info.width,
-        height=info.height,
-        max_pixels=max_pixels,
-        max_frames=max_frames,
-        frame_count=info.frame_count,
+        width       = info.width,
+        height      = info.height,
+        max_pixels  = max_pixels,
+        max_frames  = max_frames,
+        frame_count = info.frame_count,
     )
     return ResolvedMedia(
-        media_hash=_hash_bytes(payload),
-        segment_type="image",
-        source_name=path.stem,
-        mime_type=info.mime_type,
-        cached_path=path,
-        width=info.width,
-        height=info.height,
-        is_animated=info.is_animated,
+        media_hash   = _hash_bytes(payload),
+        segment_type = "image",
+        source_name  = path.stem,
+        mime_type    = info.mime_type,
+        cached_path  = path,
+        width        = info.width,
+        height       = info.height,
+        is_animated  = info.is_animated,
     )
 
 
@@ -906,26 +906,26 @@ def _render_summary_only_media(
     """仅使用已清洗的适配器摘要构造非模型降级结果。"""
 
     cleaned = _safe_source_name(summary)
-    kind = (
+    kind    = (
         "emoji"
         if prefer_emoji
         else _fallback_kind(cleaned, width=0, height=0, segment_type=segment_type)
     )
     if kind == "emoji":
         emotion_tags = _normalize_emotion_tags(cleaned)
-        description = cleaned or "一张表情包"
+        description  = cleaned or "一张表情包"
     else:
         emotion_tags = ()
-        description = cleaned or "图片内容读取失败"
-    marker = _build_marker(kind, description, emotion_tags)
+        description  = cleaned or "图片内容读取失败"
+    marker      = _build_marker(kind, description, emotion_tags)
     summary_key = f"{segment_type}:{kind}:{summary or description}"
     return RenderedMedia(
-        media_hash=f"summary:{hashlib.sha1(summary_key.encode('utf-8')).hexdigest()}",
-        kind=kind,
-        description=description,
-        emotion_tags=emotion_tags,
-        marker=marker,
-        cached_path=None,
+        media_hash   = f"summary:{hashlib.sha1(summary_key.encode('utf-8')).hexdigest()}",
+        kind         = kind,
+        description  = description,
+        emotion_tags = emotion_tags,
+        marker       = marker,
+        cached_path  = None,
     )
 
 
@@ -934,7 +934,7 @@ def _segment_failure_summary_hint(segment: dict[str, Any]) -> str:
 
     data = segment.get("data", {}) or {}
     for key in ("summary", "text"):
-        value = str(data.get(key, "") or "").strip()
+        value   = str(data.get(key, "") or "").strip()
         cleaned = _safe_source_name(value)
         if cleaned and cleaned not in {"图片", "一张图片", "[图片]"}:
             return value
@@ -944,9 +944,9 @@ def _segment_failure_summary_hint(segment: dict[str, Any]) -> str:
 def _render_face_segment(segment: dict[str, Any]) -> RenderedMedia:
     """用稳定 ID 表示内置 QQ 表情，不下载媒体。"""
 
-    data = segment.get("data", {}) or {}
-    face_id = str(data.get("id", "") or "").strip()
-    label = describe_face_segment(segment)
+    data                          = segment.get("data", {}) or {}
+    face_id                       = str(data.get("id", "") or "").strip()
+    label                         = describe_face_segment(segment)
     emotion_tags: tuple[str, ...] = ()
     if not label.startswith("id=") and "系统表情" not in label:
         emotion_tags = _normalize_emotion_tags(label)
@@ -960,13 +960,13 @@ def _render_face_segment(segment: dict[str, Any]) -> RenderedMedia:
             ).hexdigest()
         )
     return RenderedMedia(
-        media_hash=media_hash,
-        kind="qq_face",
-        description=label,
-        emotion_tags=emotion_tags,
-        marker=f"[QQ表情：{label}]",
-        cached_path=None,
-        face_id=face_id,
+        media_hash   = media_hash,
+        kind         = "qq_face",
+        description  = label,
+        emotion_tags = emotion_tags,
+        marker       = f"[QQ表情：{label}]",
+        cached_path  = None,
+        face_id      = face_id,
     )
 
 
@@ -1014,14 +1014,14 @@ def _upgrade_rendered_media_from_registry(
         )
         upgraded.append(
             RenderedMedia(
-                media_hash=str(resolved.get("media_hash", "") or original.media_hash),
-                kind=str(resolved.get("kind", "") or original.kind),
-                description=str(resolved.get("description", "") or original.description),
-                emotion_tags=tags or original.emotion_tags,
-                marker=str(resolved.get("marker", "") or original.marker),
-                cached_path=original.cached_path,
-                face_id=str(resolved.get("face_id", "") or original.face_id),
-                cultural_hint=original.cultural_hint,
+                media_hash    = str(resolved.get("media_hash", "") or original.media_hash),
+                kind          = str(resolved.get("kind", "") or original.kind),
+                description   = str(resolved.get("description", "") or original.description),
+                emotion_tags  = tags or original.emotion_tags,
+                marker        = str(resolved.get("marker", "") or original.marker),
+                cached_path   = original.cached_path,
+                face_id       = str(resolved.get("face_id", "") or original.face_id),
+                cultural_hint = original.cultural_hint,
             )
         )
     return upgraded
@@ -1034,13 +1034,13 @@ def _trim_ordered_text_segments(text_parts: list[str], clean_text: str) -> list[
         return []
 
     raw_text = "".join(text_parts)
-    target = (clean_text or "").strip()
+    target   = (clean_text or "").strip()
     if not raw_text:
         return text_parts
 
     raw_lstripped = raw_text.lstrip()
-    leading_ws = len(raw_text) - len(raw_lstripped)
-    raw_core = raw_lstripped.rstrip()
+    leading_ws    = len(raw_text) - len(raw_lstripped)
+    raw_core      = raw_lstripped.rstrip()
 
     if not target:
         remove_count = len(raw_text)
@@ -1049,7 +1049,7 @@ def _trim_ordered_text_segments(text_parts: list[str], clean_text: str) -> list[
     else:
         return text_parts
 
-    remaining = remove_count
+    remaining           = remove_count
     adjusted: list[str] = []
     for part in text_parts:
         if remaining <= 0:
@@ -1088,11 +1088,11 @@ def _compose_effective_user_text(
         if str(segment.get("type", "") or "") == "text"
     ]
     trimmed_text_parts = _trim_ordered_text_segments(text_parts, clean_text)
-    text_iter = iter(trimmed_text_parts)
-    media_iter = iter(rendered_items)
+    text_iter          = iter(trimmed_text_parts)
+    media_iter         = iter(rendered_items)
 
     ordered_blocks: list[str] = []
-    text_buffer = ""
+    text_buffer               = ""
     for segment in segments:
         segment_type = str(segment.get("type", "") or "")
         if segment_type == "text":
@@ -1104,7 +1104,7 @@ def _compose_effective_user_text(
         if flushed:
             ordered_blocks.append(flushed)
         text_buffer = ""
-        rendered = next(media_iter, None)
+        rendered    = next(media_iter, None)
         if rendered is not None:
             context_marker = _build_context_marker(rendered)
             if context_marker.strip():
@@ -1173,11 +1173,11 @@ def _compose_effective_user_parts(
         if str(segment.get("type", "") or "") == "text"
     ]
     trimmed_text_parts = _trim_ordered_text_segments(text_parts, clean_text)
-    text_iter = iter(trimmed_text_parts)
-    media_iter = iter(rendered_items)
+    text_iter          = iter(trimmed_text_parts)
+    media_iter         = iter(rendered_items)
 
     ordered_parts: list[dict[str, Any]] = []
-    text_buffer = ""
+    text_buffer                         = ""
     for segment in segments:
         segment_type = str(segment.get("type", "") or "")
         if segment_type == "text":
@@ -1189,7 +1189,7 @@ def _compose_effective_user_parts(
         if flushed:
             ordered_parts.append({"kind": "text", "text": flushed})
         text_buffer = ""
-        rendered = next(media_iter, None)
+        rendered    = next(media_iter, None)
         if rendered is not None:
             ordered_parts.append(_rendered_media_to_message_part(rendered))
 
@@ -1220,8 +1220,8 @@ async def render_event_media(event: dict[str, Any], *, context, runtime) -> list
         return []
 
     rendered_items: list[RenderedMedia] = []
-    new_emoji_markers: list[str] = []
-    max_media = max(0, cfg.max_media_per_message)
+    new_emoji_markers: list[str]        = []
+    max_media                           = max(0, cfg.max_media_per_message)
     for segment in iter_message_segments(event):
         segment_type = str(segment.get("type", "") or "")
         if segment_type not in _SUPPORTED_MEDIA_TYPES:
@@ -1233,8 +1233,8 @@ async def render_event_media(event: dict[str, Any], *, context, runtime) -> list
         _media_log(
             context,
             runtime,
-            step="media.segment",
-            fields={
+            step   = "media.segment",
+            fields = {
                 **_event_media_log_fields(event),
                 "segment_type": segment_type,
                 "summary_hint": summary_hint,
@@ -1248,37 +1248,37 @@ async def render_event_media(event: dict[str, Any], *, context, runtime) -> list
                 face_data = segment.get("data", {}) or {}
                 record_face_observation(
                     context,
-                    face_id=face_data.get("id"),
-                    label=rendered_face.description,
+                    face_id = face_data.get("id"),
+                    label   = rendered_face.description,
                 )
             except Exception as exc:
                 # 内置表情观察索引属于附属能力，失败不能阻断当前消息渲染。
                 _media_log(
                     context,
                     runtime,
-                    step="media.face_observation.fail",
-                    fields={"error_type": type(exc).__name__},
-                    level="warning",
+                    step   = "media.face_observation.fail",
+                    fields = {"error_type": type(exc).__name__},
+                    level  = "warning",
                 )
             continue
 
         try:
             resolved = await _resolve_segment_media(
                 segment,
-                context=context,
-                max_bytes=cfg.max_analyze_bytes,
-                max_pixels=cfg.max_image_pixels,
-                max_frames=cfg.max_animation_frames,
-                disk_quota_bytes=cfg.inbox_disk_quota_bytes,
-                cache_ttl_seconds=cfg.inbox_ttl_seconds,
-                event=event,
+                context           = context,
+                max_bytes         = cfg.max_analyze_bytes,
+                max_pixels        = cfg.max_image_pixels,
+                max_frames        = cfg.max_animation_frames,
+                disk_quota_bytes  = cfg.inbox_disk_quota_bytes,
+                cache_ttl_seconds = cfg.inbox_ttl_seconds,
+                event             = event,
             )
         except Exception as exc:
             _media_log(
                 context,
                 runtime,
-                step="media.resolve.fail",
-                fields={
+                step   = "media.resolve.fail",
+                fields = {
                     **_event_media_log_fields(event),
                     "segment_type": segment_type,
                     "summary_hint": summary_hint,
@@ -1289,14 +1289,14 @@ async def render_event_media(event: dict[str, Any], *, context, runtime) -> list
             )
             rendered = _render_summary_only_media(
                 _segment_failure_summary_hint(segment),
-                segment_type=segment_type,
-                prefer_emoji=prefer_emoji,
+                segment_type = segment_type,
+                prefer_emoji = prefer_emoji,
             )
             _media_log(
                 context,
                 runtime,
-                step="media.summary_only",
-                fields={
+                step   = "media.summary_only",
+                fields = {
                     **_event_media_log_fields(event),
                     "segment_type": segment_type,
                     "summary_hint": summary_hint,
@@ -1312,10 +1312,10 @@ async def render_event_media(event: dict[str, Any], *, context, runtime) -> list
 
         rendered = await _render_resolved_media(
             resolved,
-            context=context,
-            runtime=runtime,
-            prefer_emoji=prefer_emoji,
-            summary_hint=summary_hint or resolved.source_name,
+            context      = context,
+            runtime      = runtime,
+            prefer_emoji = prefer_emoji,
+            summary_hint = summary_hint or resolved.source_name,
         )
         rendered_items.append(rendered)
         if rendered.kind == "emoji" and rendered.cached_path is not None:
@@ -1327,8 +1327,8 @@ async def render_event_media(event: dict[str, Any], *, context, runtime) -> list
                     context,
                     runtime,
                     rendered,
-                    source_path=rendered.cached_path,
-                    source_chat_id=(
+                    source_path    = rendered.cached_path,
+                    source_chat_id = (
                         f"g{event.get('group_id')}"
                         if event.get("group_id") not in (None, "")
                         else f"u{event.get('user_id')}"
@@ -1341,10 +1341,10 @@ async def render_event_media(event: dict[str, Any], *, context, runtime) -> list
                 _, is_new = collected
                 if is_new:
                     new_emoji_markers.append(rendered.marker)
-    rendered_items = _upgrade_rendered_media_from_registry(rendered_items)
+    rendered_items                    = _upgrade_rendered_media_from_registry(rendered_items)
     event["_xc_rendered_media_items"] = rendered_items
-    event["_xc_new_emoji_markers"] = new_emoji_markers
-    event["_xc_new_emoji_count"] = len(new_emoji_markers)
+    event["_xc_new_emoji_markers"]    = new_emoji_markers
+    event["_xc_new_emoji_count"]      = len(new_emoji_markers)
     return rendered_items
 
 
@@ -1357,21 +1357,21 @@ async def build_effective_user_text(
 ) -> str:
     """把文本与已解析媒体合成为本轮回复使用的统一消息表示。"""
 
-    cached = str(event.get("_xc_effective_user_text", "") or "").strip()
+    cached       = str(event.get("_xc_effective_user_text", "") or "").strip()
     cached_parts = normalize_message_parts(event.get("_xc_effective_user_parts"))
     if cached and cached_parts:
         return cached
     rendered_items = await render_event_media(event, context=context, runtime=runtime)
     effective = _compose_effective_user_text(
-        clean_text=clean_text,
-        event=event,
-        rendered_items=rendered_items,
+        clean_text     = clean_text,
+        event          = event,
+        rendered_items = rendered_items,
     )
     effective_parts = _compose_effective_user_parts(
-        clean_text=clean_text,
-        event=event,
-        rendered_items=rendered_items,
+        clean_text     = clean_text,
+        event          = event,
+        rendered_items = rendered_items,
     )
-    event["_xc_effective_user_text"] = effective
+    event["_xc_effective_user_text"]  = effective
     event["_xc_effective_user_parts"] = effective_parts
     return effective

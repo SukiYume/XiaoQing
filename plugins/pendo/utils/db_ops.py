@@ -71,7 +71,7 @@ def get_database(context: Any) -> Database:
     from ..services.db import Database
 
     if _db_singleton is None:
-        db_path = resolve_database_path(context)
+        db_path       = resolve_database_path(context)
         _db_singleton = Database(str(db_path))
     return _db_singleton
 
@@ -160,7 +160,7 @@ class DbOpsMixin:
         *,
         expected_version: int,
         operation_log: dict[str, Any] | None = None,
-        touch: bool = True,
+        touch: bool                          = True,
     ) -> None:
         """更新条目"""
         if owner_id:
@@ -170,9 +170,9 @@ class DbOpsMixin:
             item_id,
             updates,
             owner_id,
-            expected_version=expected_version,
-            operation_log=operation_log,
-            touch=touch,
+            expected_version = expected_version,
+            operation_log    = operation_log,
+            touch            = touch,
         )
         if not updated:
             raise ItemVersionConflictException(item_id)
@@ -209,8 +209,8 @@ class DbOpsMixin:
             self.db.delete_item,
             item_id,
             soft,
-            owner_id=owner_id,
-            operation_log=operation_log,
+            owner_id      = owner_id,
+            operation_log = operation_log,
         )
 
     async def _db_get_and_check(self, item_id: str, owner_id: str) -> Item:
@@ -270,7 +270,7 @@ class DbOpsMixin:
     ) -> dict[str, Any]:
         item_type = get_item_type_value(getattr(item, "type", None), default="item")
         type_label = cls._item_type_label(item_type)
-        command = cls._build_view_hint_for_item(item)
+        command    = cls._build_view_hint_for_item(item)
         return {
             "status": "success",
             "message": f"💡 `{query_id}` 不是{expected_label}ID，它属于{type_label}\n\n请使用 {command}",
@@ -322,7 +322,7 @@ class DbOpsMixin:
             if current_item:
                 old_values = self._snapshot_item_values(current_item, log_updates)
 
-        log_details = dict(details or {})
+        log_details            = dict(details or {})
         log_details["updates"] = log_updates
         if old_values:
             log_details["old_values"] = old_values
@@ -332,8 +332,8 @@ class DbOpsMixin:
             item_id,
             updates,
             owner_id,
-            expected_version=expected_version,
-            operation_log={
+            expected_version = expected_version,
+            operation_log    = {
                 "user_id": owner_id,
                 "action": action,
                 "item_type": item_type,
@@ -362,9 +362,9 @@ class DbOpsMixin:
         item_id = await self._db_resolve_item_id(item_id, owner_id)
         await self._db_delete_item(
             item_id,
-            soft=True,
-            owner_id=owner_id,
-            operation_log={
+            soft          = True,
+            owner_id      = owner_id,
+            operation_log = {
                 "user_id": owner_id,
                 "action": "delete",
                 "item_type": item_type,
@@ -394,9 +394,9 @@ class DbOpsMixin:
                 self.db.batch_soft_delete,
                 item_ids,
                 owner_id,
-                item_type=item_type,
-                operation_action=action,
-                details_factory=details_factory,
+                item_type        = item_type,
+                operation_action = action,
+                details_factory  = details_factory,
             ),
         )
 
@@ -404,7 +404,7 @@ class DbOpsMixin:
         self,
         item_data: dict[str, Any] | Item,
         owner_id: str,
-        action: str = "create",
+        action: str           = "create",
         custom_id: str | None = None,
     ) -> str:
         """创建条目并记录日志

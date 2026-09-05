@@ -6,10 +6,10 @@ import re
 from collections.abc import Sequence
 from typing import cast
 
-RGB_MIN = 0
-RGB_MAX = 255
-CMYK_MIN = 0
-CMYK_MAX = 100
+RGB_MIN      = 0
+RGB_MAX      = 255
+CMYK_MIN     = 0
+CMYK_MAX     = 100
 _HEX_PATTERN = re.compile(r"#?(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})")
 
 
@@ -37,10 +37,10 @@ def validate_rgb(rgb: Sequence[object]) -> tuple[bool, str | None]:
 
     return _validate_channels(
         rgb,
-        label="RGB",
-        expected_count=3,
-        minimum=RGB_MIN,
-        maximum=RGB_MAX,
+        label          = "RGB",
+        expected_count = 3,
+        minimum        = RGB_MIN,
+        maximum        = RGB_MAX,
     )
 
 
@@ -49,10 +49,10 @@ def validate_cmyk(cmyk: Sequence[object]) -> tuple[bool, str | None]:
 
     return _validate_channels(
         cmyk,
-        label="CMYK",
-        expected_count=4,
-        minimum=CMYK_MIN,
-        maximum=CMYK_MAX,
+        label          = "CMYK",
+        expected_count = 4,
+        minimum        = CMYK_MIN,
+        maximum        = CMYK_MAX,
     )
 
 
@@ -70,11 +70,11 @@ def rgb_to_cmyk(rgb: Sequence[object]) -> list[int]:
     if (red, green, blue) == (0, 0, 0):
         return [0, 0, 0, CMYK_MAX]
 
-    cyan = 1 - red / RGB_MAX
+    cyan    = 1 - red / RGB_MAX
     magenta = 1 - green / RGB_MAX
-    yellow = 1 - blue / RGB_MAX
-    black = min(cyan, magenta, yellow)
-    scale = 1 - black
+    yellow  = 1 - blue / RGB_MAX
+    black   = min(cyan, magenta, yellow)
+    scale   = 1 - black
     return [
         round((cyan - black) / scale * CMYK_MAX),
         round((magenta - black) / scale * CMYK_MAX),

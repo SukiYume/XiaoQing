@@ -1,3 +1,4 @@
+# 验证向量存储拒绝结构损坏或不匹配的记录。
 import json
 from pathlib import Path
 
@@ -28,9 +29,9 @@ def _write_vector_cache(
     )
     np.savez_compressed(
         root / "memory.vecs.npz",
-        dim=dim,
-        matrix=matrix,
-        docs_digest=np.asarray(digest),
+        dim         = dim,
+        matrix      = matrix,
+        docs_digest = np.asarray(digest),
     )
 
 
@@ -108,13 +109,13 @@ def test_same_shape_vector_cache_with_wrong_document_digest_is_discarded(tmp_pat
         matrix=np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32),
     )
     with np.load(tmp_path / "memory.vecs.npz", allow_pickle=False) as cache:
-        dim = cache["dim"]
+        dim    = cache["dim"]
         matrix = cache["matrix"]
     np.savez_compressed(
         tmp_path / "memory.vecs.npz",
-        dim=dim,
-        matrix=matrix,
-        docs_digest=np.asarray("0" * 64),
+        dim         = dim,
+        matrix      = matrix,
+        docs_digest = np.asarray("0" * 64),
     )
     store = VectorStore(dim=4)
 
@@ -128,11 +129,11 @@ def test_vector_store_write_persists_matching_digest(tmp_path):
     matrix = np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32)
 
     write_vector_store_files(
-        dir_path=tmp_path,
-        name="memory",
-        docs=docs,
-        dim=4,
-        matrix=matrix,
+        dir_path = tmp_path,
+        name     = "memory",
+        docs     = docs,
+        dim      = 4,
+        matrix   = matrix,
     )
 
     with np.load(tmp_path / "memory.vecs.npz", allow_pickle=False) as cache:

@@ -11,16 +11,21 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime
+from contextvars import ContextVar
+from datetime import datetime, tzinfo
 from pathlib import Path
 from typing import Any, ClassVar, Protocol
 
 from ..models.item import get_item_type_value
+from ..utils.currency import currency_label
 from ..utils.error_handlers import error_result, success_result
 from ..utils.identifiers import public_id
-from ..utils.time_utils import parse_search_date_range
+from ..utils.time_utils import TimezoneHelper, parse_search_date_range
 
-logger = logging.getLogger(__name__)
+logger                               = logging.getLogger(__name__)
+_EXPORT_TIMEZONE: ContextVar[tzinfo] = ContextVar(
+    "pendo_export_timezone", default=TimezoneHelper.DEFAULT_TZ
+)
 
 
 class _ExportItemsRepository(Protocol):
@@ -30,8 +35,8 @@ class _ExportItemsRepository(Protocol):
         self,
         owner_id: str,
         filters: dict[str, Any] | None = None,
-        limit: int = 100,
-        offset: int = 0,
+        limit: int                     = 100,
+        offset: int                    = 0,
         *,
         use_cache: bool = True,
     ) -> list[Any]: ...
@@ -52,14 +57,16 @@ class _ExportItemsRepository(Protocol):
 class _ExportDatabase(_ExportItemsRepository, Protocol):
     """导出器依赖的最小数据库接口。"""
 
+    def get_user_settings(self, user_id: str) -> dict[str, Any]: ...
+
     def log_transfer(
         self,
         owner_id: str,
         action: str,
-        bundle_id: str | None = None,
-        filename: str | None = None,
-        types: list[str] | None = None,
-        record_count: int = 0,
+        bundle_id: str | None                 = None,
+        filename: str | None                  = None,
+        types: list[str] | None               = None,
+        record_count: int                     = 0,
         result_summary: dict[str, Any] | None = None,
     ) -> int: ...
 
@@ -126,16 +133,24 @@ class ExporterService:
 
     def export_markdown(self, user_id: str, args: str, context: dict[str, Any]) -> dict[str, Any]:
         """导出为单个 Markdown 档案文件。"""
+        token = _EXPORT_TIMEZONE.set(TimezoneHelper.get_user_timezone(user_id, self.db))
+        try:
+            return self._export_markdown(user_id, args, context)
+        finally:
+            _EXPORT_TIMEZONE.reset(token)
+
+    def _export_markdown(self, user_id: str, args: str, context: dict[str, Any]) -> dict[str, Any]:
+        """在调用级时区上下文中收集并渲染档案。"""
         self._event_collection_cache.clear()
         params = self._parse_export_args(args)
         if params.get("status") == "error":
             return params
 
         items = self._collect_items(
-            user_id=user_id,
-            selected_types=params["types"],
-            start_date=params["start_date"],
-            end_date=params["end_date"],
+            user_id        = user_id,
+            selected_types = params["types"],
+            start_date     = params["start_date"],
+            end_date       = params["end_date"],
         )
         if not items:
             return success_result(
@@ -159,12 +174,12 @@ class ExporterService:
                 f"时间范围: {params['range_label']}\n"
                 f"类型: {params['type_label']}"
             ),
-            file_path=str(file_path.resolve()),
-            file_name=params["filename"],
-            counts=counts,
-            record_count=len(items),
-            range_label=params["range_label"],
-            type_label=params["type_label"],
+            file_path    = str(file_path.resolve()),
+            file_name    = params["filename"],
+            counts       = counts,
+            record_count = len(items),
+            range_label  = params["range_label"],
+            type_label   = params["type_label"],
         )
 
     def _parse_export_args(self, args: str) -> dict[str, Any]:
@@ -185,7 +200,7 @@ class ExporterService:
         if not filename:
             return error_result("导出文件名无效，请换一个更简单的名字")
 
-        rest = tokens[1:]
+        rest        = tokens[1:]
         range_token = None
         if rest and self._looks_like_range_spec(rest[0]):
             range_token = rest.pop(0)
@@ -211,7 +226,7 @@ class ExporterService:
         }
 
     def _tokenize_args(self, args: str) -> list[str]:
-        pattern = r'"([^"]+)"|\'([^\']+)\'|(\S+)'
+        pattern           = r'"([^"]+)"|\'([^\']+)\'|(\S+)'
         tokens: list[str] = []
         for match in re.finditer(pattern, args or ""):
             token = next((group for group in match.groups() if group), "")
@@ -260,7 +275,9 @@ class ExporterService:
                 "label": "全部时间",
             }
 
-        start_date, end_date = parse_search_date_range(normalized)
+        start_date, end_date = parse_search_date_range(
+            normalized, TimezoneHelper.now(_EXPORT_TIMEZONE.get()).replace(tzinfo=None)
+        )
         if not start_date or not end_date:
             return error_result(f"无法解析时间范围: {normalized}")
 
@@ -301,7 +318,7 @@ class ExporterService:
             selected = list(self._TYPE_ORDER)
 
         ordered = [item_type for item_type in self._TYPE_ORDER if item_type in selected]
-        label = "、".join(self._TYPE_LABELS[item_type] for item_type in ordered)
+        label   = "、".join(self._TYPE_LABELS[item_type] for item_type in ordered)
         return {
             "status": "success",
             "types": ordered,
@@ -322,15 +339,15 @@ class ExporterService:
             if hasattr(self.db, "get_all_items"):
                 type_items = self.db.get_all_items(
                     user_id,
-                    filters={"type": item_type},
-                    page_size=500,
+                    filters   = {"type": item_type},
+                    page_size = 500,
                 )
             else:
                 type_items = self.db.get_items(
                     user_id,
-                    filters={"type": item_type},
-                    limit=10000,
-                    use_cache=False,
+                    filters   = {"type": item_type},
+                    limit     = 10000,
+                    use_cache = False,
                 )
             for item in type_items:
                 if self._item_matches_range(item, item_type, start_date, end_date):
@@ -352,7 +369,7 @@ class ExporterService:
             return False
 
         start_dt = self._parse_datetime(start_date)
-        end_dt = self._parse_datetime(end_date)
+        end_dt   = self._parse_datetime(end_date)
         if start_dt is None or end_dt is None:
             return True
         return start_dt <= item_dt <= end_dt
@@ -401,9 +418,8 @@ class ExporterService:
             return None
 
         if dt.tzinfo is not None:
-            # 导出范围是用户看到的日历时间，保留 ISO 文本自身的墙钟值；不能让
-            # 运行机器的本地时区改变条目所属日期。
-            return dt.replace(tzinfo=None)
+            # 范围与显示均采用当前导出用户的时区，再比较日历墙钟。
+            return dt.astimezone(_EXPORT_TIMEZONE.get()).replace(tzinfo=None)
         return dt
 
     def _build_counts(self, items: list[Any]) -> dict[str, int]:
@@ -420,8 +436,8 @@ class ExporterService:
         items: list[Any],
         params: dict[str, Any],
     ) -> str:
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        counts = self._build_counts(items)
+        now = TimezoneHelper.now(_EXPORT_TIMEZONE.get()).isoformat(timespec="seconds")
+        counts              = self._build_counts(items)
         sections: list[str] = []
 
         header = [
@@ -500,10 +516,10 @@ class ExporterService:
         return "\n".join(blocks)
 
     def _render_item_block(self, item_type: str, item: Any, index: int) -> str:
-        title = re.sub(r"[\r\n]+", " ", self._display_title(item_type, item)).strip()
-        meta_rows = self._build_common_meta_rows(item_type, item)
+        title      = re.sub(r"[\r\n]+", " ", self._display_title(item_type, item)).strip()
+        meta_rows  = self._build_common_meta_rows(item_type, item)
         extra_rows = self._build_type_specific_rows(item_type, item)
-        all_rows = meta_rows + extra_rows
+        all_rows   = meta_rows + extra_rows
 
         lines = [
             f"### {index:02d}. {title}",
@@ -619,9 +635,11 @@ class ExporterService:
             return []
 
         if item_type == "ledger":
-            amount = getattr(item, "amount", None)
+            amount           = getattr(item, "amount", None)
             transaction_type = getattr(item, "transaction_type", "")
-            amount_text = self._format_ledger_amount(amount, transaction_type)
+            amount_text      = self._format_ledger_amount(
+                amount, transaction_type, getattr(item, "currency", "CNY")
+            )
             return [
                 (
                     "记账日期",
@@ -683,7 +701,7 @@ class ExporterService:
 
     def _build_body_sections(self, item_type: str, item: Any) -> list[str]:
         sections: list[str] = []
-        content = (getattr(item, "content", "") or "").strip()
+        content             = (getattr(item, "content", "") or "").strip()
         if content:
             self._append_body_section(sections, "**正文**", [content])
 
@@ -729,7 +747,7 @@ class ExporterService:
 
     def _get_event_collection(self, item: Any) -> dict[str, Any] | None:
         collection_id = getattr(item, "event_collection_id", None)
-        owner_id = getattr(item, "owner_id", None)
+        owner_id      = getattr(item, "owner_id", None)
         if not collection_id or not hasattr(self.db, "get_event_collection"):
             return None
         cache_key = (str(owner_id) if owner_id else None, str(collection_id))
@@ -766,7 +784,7 @@ class ExporterService:
             "item": "条目",
         }
         lines: list[str] = []
-        seen: set[str] = set()
+        seen: set[str]   = set()
         for ref in references:
             if not isinstance(ref, dict):
                 continue
@@ -775,8 +793,8 @@ class ExporterService:
                 continue
             seen.add(ref_id)
             ref_type = str(ref.get("type") or ref.get("kind") or "item").strip()
-            label = labels.get(ref_type, labels.get(str(ref.get("kind") or ""), "条目"))
-            title = self._value_or_dash(ref.get("title"))
+            label    = labels.get(ref_type, labels.get(str(ref.get("kind") or ""), "条目"))
+            title    = self._value_or_dash(ref.get("title"))
             lines.append(f"- {label}: {title} (`{public_id(ref_id)}`)")
         return lines
 
@@ -825,10 +843,12 @@ class ExporterService:
         }
         return mapping.get(str(value), self._value_or_dash(value))
 
-    def _format_ledger_amount(self, amount: Any, transaction_type: Any) -> str:
+    def _format_ledger_amount(
+        self, amount: Any, transaction_type: Any, currency: Any = "CNY"
+    ) -> str:
         transaction_type_text = self._format_transaction_type(transaction_type)
         try:
-            return f"{transaction_type_text} ¥{float(amount):.2f}"
+            return f"{transaction_type_text} {currency_label(currency)}{float(amount):.2f}"
         except (TypeError, ValueError):
             return self._value_or_dash(amount)
 
@@ -845,7 +865,7 @@ class ExporterService:
 
         if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
             return parsed.strftime("%Y-%m-%d")
-        return parsed.strftime("%Y-%m-%d %H:%M")
+        return parsed.replace(tzinfo=_EXPORT_TIMEZONE.get()).isoformat(sep=" ", timespec="minutes")
 
     def _format_time_list(self, values: Any, empty: str = "无") -> str:
         if not values:

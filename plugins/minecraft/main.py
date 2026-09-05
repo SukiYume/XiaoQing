@@ -26,18 +26,18 @@ from .rcon import RconClient
 logger = logging.getLogger(__name__)
 
 # QQ 投递与日志洪泛边界。
-MC_MAX_EVENTS_PER_CONNECTION = 12
-MC_MAX_ACTION_CHARS = 1800
-MC_MAX_ACTION_BYTES = 6000
-MC_MAX_ACTIONS_PER_TICK = 5
-MC_SEND_TIMEOUT_SECONDS = 3.0
-MC_EVENT_BUCKET_CAPACITY = 24.0
+MC_MAX_EVENTS_PER_CONNECTION      = 12
+MC_MAX_ACTION_CHARS               = 1800
+MC_MAX_ACTION_BYTES               = 6000
+MC_MAX_ACTIONS_PER_TICK           = 5
+MC_SEND_TIMEOUT_SECONDS           = 3.0
+MC_EVENT_BUCKET_CAPACITY          = 24.0
 MC_EVENT_BUCKET_REFILL_PER_SECOND = 0.5
 
 # 配置、命令响应和单条日志字段边界。
-MC_MAX_CONFIG_BYTES = 64 * 1024
-MC_MAX_RESPONSE_CHARS = 4000
-MC_MAX_RESPONSE_BYTES = 12 * 1024
+MC_MAX_CONFIG_BYTES      = 64 * 1024
+MC_MAX_RESPONSE_CHARS    = 4000
+MC_MAX_RESPONSE_BYTES    = 12 * 1024
 MC_MAX_EVENT_FIELD_CHARS = 600
 MC_MAX_EVENT_FIELD_BYTES = 2400
 
@@ -58,14 +58,14 @@ class _MinecraftConfigError(ValueError):
 
 @dataclass(slots=True)
 class _EventTokenBucket:
-    tokens: float = MC_EVENT_BUCKET_CAPACITY
+    tokens: float     = MC_EVENT_BUCKET_CAPACITY
     updated_at: float = 0.0
 
     def take(self, requested: int, *, now: float) -> int:
         if self.updated_at <= 0:
             self.updated_at = now
         else:
-            elapsed = max(0.0, now - self.updated_at)
+            elapsed     = max(0.0, now - self.updated_at)
             self.tokens = min(
                 MC_EVENT_BUCKET_CAPACITY,
                 self.tokens + elapsed * MC_EVENT_BUCKET_REFILL_PER_SECOND,
@@ -79,10 +79,10 @@ class _EventTokenBucket:
         self.tokens = min(MC_EVENT_BUCKET_CAPACITY, self.tokens + max(0, granted))
 
 
-_manager = ConnectionManager()
+_manager                                                           = ConnectionManager()
 _event_buckets: dict[tuple[str, int, str, int], _EventTokenBucket] = {}
-_delivery_cursor = 0
-_schedule_lock = asyncio.Lock()
+_delivery_cursor                                                   = 0
+_schedule_lock                                                     = asyncio.Lock()
 
 
 async def shutdown(_context: PluginContextProtocol | None) -> None:
@@ -125,7 +125,7 @@ def _target_from_event(event: dict[str, Any]) -> DeliveryTarget | None:
     """群事件严格使用群目标；没有群 ID 时才使用私聊用户目标。"""
 
     group_id = event.get("group_id")
-    user_id = event.get("user_id")
+    user_id  = event.get("user_id")
     try:
         if group_id is not None:
             return DeliveryTarget("group", group_id)
@@ -159,8 +159,8 @@ def _read_config_root(config_path: Path) -> dict[str, Any]:
 def _validate_server_config(server: dict[str, Any]) -> _ServerConfig:
     """校验一个 profile 的公开连接字段和已解析的密钥。"""
 
-    host = server.get("host")
-    port = server.get("port", 25575)
+    host     = server.get("host")
+    port     = server.get("port", 25575)
     log_file = server.get("log_file", "")
     password = server.get("_resolved_password")
     if "password" in server:
@@ -199,7 +199,7 @@ def _load_server_config(context: PluginContextProtocol, profile: str) -> _Server
 
     if _PROFILE_PATTERN.fullmatch(profile) is None:
         raise _MinecraftConfigError("配置名必须为 1 至 64 个字母、数字、下划线、点或连字符")
-    root = _read_config_root(context.plugin_dir / "config.json")
+    root   = _read_config_root(context.plugin_dir / "config.json")
     server = root.get(profile)
     if not isinstance(server, dict):
         raise _MinecraftConfigError("未找到指定服务器配置")
@@ -221,7 +221,7 @@ def _create_log_monitor(
         return None
     try:
         configured_path = Path(server.log_file).expanduser()
-        log_path = (
+        log_path        = (
             configured_path
             if configured_path.is_absolute()
             else context.plugin_dir / configured_path
@@ -236,7 +236,7 @@ def _create_log_monitor(
             errors="surrogatepass",
         )
         cursor_name = hashlib.sha256(cursor_material).hexdigest() + ".json"
-        monitor = LogMonitor(
+        monitor     = LogMonitor(
             str(resolved_path),
             state_path=context.data_dir / "log_cursors" / cursor_name,
         )
@@ -331,7 +331,7 @@ async def _handle_connect(
         return segments(f"❌ {exc}")
 
     target_audit = summarize_sensitive("\0".join((server.host, str(server.port), server.log_file)))
-    request_id = audit_request_id(context)
+    request_id   = audit_request_id(context)
     logger.info(
         "sensitive_audit operation=minecraft.connect request_id=%s status=started "
         "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s",
@@ -343,7 +343,7 @@ async def _handle_connect(
     )
 
     try:
-        client = RconClient(server.host, server.port, server.password)
+        client         = RconClient(server.host, server.port, server.password)
         connect_result = await client.connect()
     except asyncio.CancelledError:
         raise
@@ -365,11 +365,11 @@ async def _handle_connect(
     monitor = _create_log_monitor(server, target, context)
     await _manager.replace_connection(
         McConnection(
-            host=server.host,
-            port=server.port,
-            target=target,
-            rcon_client=client,
-            log_monitor=monitor,
+            host        = server.host,
+            port        = server.port,
+            target      = target,
+            rcon_client = client,
+            log_monitor = monitor,
         )
     )
     logger.info(
@@ -420,7 +420,7 @@ async def _handle_mc_command(
     if not command:
         return segments("❌ 请提供要执行的命令")
     command_audit = summarize_sensitive(command)
-    request_id = audit_request_id(context)
+    request_id    = audit_request_id(context)
     try:
         result = await conn.rcon_client.command(command)
     except asyncio.CancelledError:
@@ -471,12 +471,12 @@ async def _handle_mc_command(
     if not result.response:
         return segments("✅ 命令执行成功（空响应）")
     truncation_warning = "\n⚠️ 响应可能不完整（续包等待超时）" if result.truncated else ""
-    response = bounded_external_text(
+    response           = bounded_external_text(
         result.response,
-        max_chars=max(1, MC_MAX_RESPONSE_CHARS - len(truncation_warning)),
-        max_bytes=max(1, MC_MAX_RESPONSE_BYTES - len(truncation_warning.encode("utf-8"))),
-        suffix="\n…（响应已截断）",
-        strip=False,
+        max_chars = max(1, MC_MAX_RESPONSE_CHARS - len(truncation_warning)),
+        max_bytes = max(1, MC_MAX_RESPONSE_BYTES - len(truncation_warning.encode("utf-8"))),
+        suffix    = "\n…（响应已截断）",
+        strip     = False,
     )
     return segments(f"📤 {response}{truncation_warning}")
 
@@ -514,17 +514,17 @@ def _message_fits_budget(message: str) -> bool:
 def _format_event_message(event: LogEvent) -> str:
     player = bounded_external_text(
         event.player,
-        max_chars=16,
-        max_bytes=64,
-        suffix="",
-        strip=False,
+        max_chars = 16,
+        max_bytes = 64,
+        suffix    = "",
+        strip     = False,
     )
     message = bounded_external_text(
         event.message or "",
-        max_chars=MC_MAX_EVENT_FIELD_CHARS,
-        max_bytes=MC_MAX_EVENT_FIELD_BYTES,
-        suffix="…",
-        strip=False,
+        max_chars = MC_MAX_EVENT_FIELD_CHARS,
+        max_bytes = MC_MAX_EVENT_FIELD_BYTES,
+        suffix    = "…",
+        strip     = False,
     )
     if event.event_type is LogEventType.CHAT:
         return f"🎮 [MC] {player}: {message}"
@@ -543,11 +543,11 @@ def _batch_message(
     *,
     now: float,
 ) -> tuple[str, int, int]:
-    bucket = _event_buckets.setdefault(_server_bucket_key(conn), _EventTokenBucket())
+    bucket          = _event_buckets.setdefault(_server_bucket_key(conn), _EventTokenBucket())
     candidate_count = min(len(batch.events), MC_MAX_EVENTS_PER_CONNECTION)
     granted = bucket.take(candidate_count, now=now)
     event_lines = [_format_event_message(event) for event in batch.events[:granted]]
-    dropped = max(0, batch.dropped_events) + max(0, len(batch.events) - granted)
+    dropped     = max(0, batch.dropped_events) + max(0, len(batch.events) - granted)
 
     def render() -> str:
         lines = list(event_lines) or [f"🎮 [MC] {conn.host}:{conn.port} 日志摘要"]
@@ -588,7 +588,7 @@ async def _send_mc_action(
             send_with_receipt(context.send_action, action, receipt),
             timeout=MC_SEND_TIMEOUT_SECONDS,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         await receipt.record(None)
         logger.warning(
             "Minecraft log delivery status=unknown reason=timeout target_type=%s",
@@ -669,9 +669,9 @@ async def _deliver_log_batch(
             raise RuntimeError("Minecraft log cursor commit failed")
 
     receipt = DeliveryReceipt(
-        expected_actions=1,
-        commit=commit_cursor,
-        rollback=lambda: _event_buckets[_server_bucket_key(conn)].refund(granted),
+        expected_actions = 1,
+        commit           = commit_cursor,
+        rollback         = lambda: _event_buckets[_server_bucket_key(conn)].refund(granted),
         # 日志 tail 不具备幂等键；结果未知时推进游标，避免重复转发可能已送达的批次。
         unknown=commit_cursor,
     )
@@ -691,11 +691,11 @@ async def _run_scheduled(context: PluginContextProtocol) -> None:
         if key not in active_bucket_keys:
             _event_buckets.pop(key, None)
 
-    start = _delivery_cursor % len(connections)
-    ordered = connections[start:] + connections[:start]
+    start            = _delivery_cursor % len(connections)
+    ordered          = connections[start:] + connections[:start]
     _delivery_cursor = (start + MC_MAX_ACTIONS_PER_TICK) % len(connections)
-    polled = await asyncio.gather(*(_poll_connection(conn) for conn in ordered))
-    deliveries = [delivery for delivery in polled if delivery is not None]
+    polled           = await asyncio.gather(*(_poll_connection(conn) for conn in ordered))
+    deliveries       = [delivery for delivery in polled if delivery is not None]
     await asyncio.gather(
         *(
             _deliver_log_batch(context, conn, batch)

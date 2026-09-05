@@ -17,12 +17,12 @@ from ..utils.error_handlers import error_result, success_result
 from ..utils.identifiers import public_id
 from ..utils.time_utils import TimezoneHelper, now_in_timezone, parse_delay_time
 
-JsonObject = dict[str, Any]
+JsonObject    = dict[str, Any]
 CommandResult = JsonObject
 ResultBuilder = Callable[[str], CommandResult]
 
 # 依赖模块在局部严格 Mypy 中按边界处理；一次标注后避免每个返回点重复 cast。
-_error_result: Final[ResultBuilder] = cast(ResultBuilder, error_result)
+_error_result: Final[ResultBuilder]   = cast(ResultBuilder, error_result)
 _success_result: Final[ResultBuilder] = cast(ResultBuilder, success_result)
 
 _CONFIRM_ICONS: Final = {
@@ -62,10 +62,10 @@ def _parse_remind_time_for_compare(
 def _confirmed_item_message(item: Item, item_id: str, now: datetime) -> str:
     """构造确认成功消息，并统计同一条目后续仍有效的提醒。"""
 
-    item_type = get_item_type_value(item.type)
-    icon = _CONFIRM_ICONS.get(item_type, "📌")
+    item_type    = get_item_type_value(item.type)
+    icon         = _CONFIRM_ICONS.get(item_type, "📌")
     remind_times = item.remind_times if isinstance(item, (EventItem, TaskItem)) else []
-    timezone = now.tzinfo or TimezoneHelper.DEFAULT_TZ
+    timezone     = now.tzinfo or TimezoneHelper.DEFAULT_TZ
     future_count = 0
     for remind_time in remind_times:
         remind_at = _parse_remind_time_for_compare(remind_time, timezone)
@@ -89,9 +89,9 @@ async def handle_confirm(
     parsed = parse(args)
     if len(parsed) != 1 or parsed.options:
         return _error_result("❌ 请指定一个要确认的条目ID\n\n例如: /pendo confirm 3f2a91c4")
-    item_id = parsed.first
+    item_id  = parsed.first
     database = db or reminder_service.db
-    item = cast(Item | None, await run_sync(database.get_item, item_id, user_id))
+    item     = cast(Item | None, await run_sync(database.get_item, item_id, user_id))
     if item is None:
         return _error_result(f"❌ 未找到条目: {item_id}")
     resolved_id = str(item.id)
@@ -136,7 +136,7 @@ async def _apply_snooze(
 ) -> CommandResult:
     """写入新的提醒集合，并只确认被延后的具体提醒点。"""
 
-    database = reminder_service.db
+    database            = reminder_service.db
     snoozed_remind_time = cast(
         str | None,
         await run_sync(
@@ -203,11 +203,11 @@ async def handle_snooze(
         )
     if len(parsed) != 2 or parsed.options:
         return _error_result("请指定一个条目ID和延后时间，例如: 3f2a91c4 10m")
-    item_id = parsed.first
+    item_id  = parsed.first
     time_arg = parsed.second
 
     database = reminder_service.db
-    item = cast(Item | None, await run_sync(database.get_item, item_id, user_id))
+    item     = cast(Item | None, await run_sync(database.get_item, item_id, user_id))
     if item is None:
         return _error_result(f"未找到条目: {item_id}")
     if not isinstance(item, (EventItem, TaskItem)) or not item.remind_times:
@@ -254,13 +254,13 @@ async def _undo_edit(user_id: str, minutes: int, db: Database) -> CommandResult:
     item_id = str(result.get("item_id") or "")
     if not item_id:
         return _error_result("撤销结果缺少条目ID")
-    item = cast(Item | None, await run_sync(db.get_item, item_id, user_id))
+    item    = cast(Item | None, await run_sync(db.get_item, item_id, user_id))
     message = (
         f"✅ 已撤销{_EDIT_ACTION_NAMES.get(str(result.get('action') or ''), '条目')}编辑: "
         f"{item.title if item else '未知'}"
     )
     instance_count = result.get("instance_count", 1)
-    affected = result.get("affected", 0)
+    affected       = result.get("affected", 0)
     if isinstance(instance_count, int) and instance_count > 1:
         message += f"\n📊 共恢复 {affected if isinstance(affected, int) else 0} 个实例"
     return _success_result(message)
@@ -276,8 +276,8 @@ async def handle_undo(user_id: str, args: str, db: Database) -> CommandResult:
     if parsed:
         parsed_minutes = parse_int(
             parsed.first,
-            minimum=1,
-            maximum=PendoConfig.UNDO_WINDOW_MINUTES,
+            minimum = 1,
+            maximum = PendoConfig.UNDO_WINDOW_MINUTES,
         )
         if parsed_minutes is None:
             return _error_result(f"分钟数必须是 1～{PendoConfig.UNDO_WINDOW_MINUTES} 的整数")

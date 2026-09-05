@@ -41,7 +41,7 @@ from .runtime_state import get_state as _state
 logger = logging.getLogger(__name__)
 
 CommandResponse = list[dict[str, Any]]
-CommandHandler = Callable[[str, dict[str, Any], Any], Awaitable[CommandResponse]]
+CommandHandler  = Callable[[str, dict[str, Any], Any], Awaitable[CommandResponse]]
 
 
 # 子命令只在这里绑定业务处理器；名称、别名、权限和帮助仍以 manifest 目录为准。
@@ -75,7 +75,7 @@ def _resolve_invocation(args: str, context: Any) -> CommandInvocation | None:
 
 
 def _help_text(context: Any) -> str:
-    root = _catalog_root(context)
+    root  = _catalog_root(context)
     title = f"💬 {_get_bot_name(context)}智能对话"
     if root is None:
         return f"{title}\n\n完整命令目录暂不可用，请使用 /help xiaoqing_chat"
@@ -108,7 +108,7 @@ async def handle(
         raw_args = str(args or "").strip()
         raw_parts = raw_args.split(maxsplit=1)
         catalog_root = _catalog_root(context)
-        first_node = (
+        first_node   = (
             catalog_root.resolve_child(raw_parts[0]) if raw_parts and catalog_root else None
         )
         first_is_help = bool(first_node is not None and first_node.name == "help") or bool(
@@ -119,7 +119,7 @@ async def handle(
             return segments(f"❌ help 子命令不接受额外参数\n用法: {usage}")
 
         invocation = _resolve_invocation(args, context)
-        root = invocation.root if invocation is not None else None
+        root       = invocation.root if invocation is not None else None
         if not raw_args:
             return segments(_help_text(context))
 
@@ -128,16 +128,16 @@ async def handle(
         )
         rest = invocation.remainder_after(1) if invocation is not None and action else ""
         if not action and root is None:
-            parts = raw_parts
+            parts     = raw_parts
             candidate = parts[0].casefold() if parts else ""
-            action = candidate if candidate in {*_HANDLERS, "help"} else ""
-            rest = parts[1] if len(parts) > 1 else ""
+            action    = candidate if candidate in {*_HANDLERS, "help"} else ""
+            rest      = parts[1] if len(parts) > 1 else ""
 
         if action == "help":
             return segments(_help_text(context))
 
         if not action and root is not None:
-            parts = raw_parts
+            parts          = raw_parts
             candidate_node = root.resolve_child(parts[0]) if parts else None
             if (
                 candidate_node is not None
@@ -170,8 +170,8 @@ async def handle(
         return public_error_response(
             context,
             exc,
-            logger=log,
-            component="xiaoqing_chat.handle",
+            logger    = log,
+            component = "xiaoqing_chat.handle",
         )
 
 
@@ -225,8 +225,8 @@ async def _flush_shutdown_state(context: Any, state: Any, log: logging.Logger) -
             public_error_message(
                 context,
                 exc,
-                logger=log,
-                component=f"xiaoqing_chat.shutdown.{component}",
+                logger    = log,
+                component = f"xiaoqing_chat.shutdown.{component}",
             )
 
     try:
@@ -236,25 +236,21 @@ async def _flush_shutdown_state(context: Any, state: Any, log: logging.Logger) -
         public_error_message(
             context,
             exc,
-            logger=log,
-            component="xiaoqing_chat.shutdown.memory_db",
+            logger    = log,
+            component = "xiaoqing_chat.shutdown.memory_db",
         )
 
 
 async def shutdown(context) -> None:
-    """停止新后台工作，完整落盘，再取消超时任务并做最终落盘。"""
+    """停止新后台工作，完整落盘，再取消后台任务并做最终落盘。"""
 
     log = getattr(context, "logger", logger)
     log.info("XiaoQing Chat plugin shutting down")
     state = _state()
     state.stop_accepting_background_tasks()
 
-    # 已登记任务先获得一次自然收尾机会；关闭标志会拒绝它们继续派生后台工作。
-    bg_tasks = state.background_tasks()
-    pending: set[asyncio.Task[Any]] = set()
-    if bg_tasks:
-        log.info("XiaoQing Chat: waiting for %d background tasks...", len(bg_tasks))
-        _done, pending = await asyncio.wait(bg_tasks, timeout=5.0)
+    # Core 的总关闭预算由所有插件共享，防抖和后台学习直接进入取消收尾。
+    pending = state.background_tasks()
 
     # 必须在取消任务前保存：防抖写入本身也可能位于 pending 集合中。
     await _flush_shutdown_state(context, state, log)
@@ -262,7 +258,10 @@ async def shutdown(context) -> None:
         log.warning("XiaoQing Chat: cancelling %d unfinished tasks", len(pending))
         for task in pending:
             task.cancel()
-        await asyncio.wait(pending, timeout=2.0)
+        _done, pending = await asyncio.wait(pending, timeout=2.0)
+        if pending:
+            # 清理任务仍持有旧模块状态时，生命周期调用必须向上报告失败。
+            raise TimeoutError(f"XiaoQing Chat shutdown: {len(pending)} tasks still running")
         # 任务的 finally 块可能在取消过程中产生最后一批状态变更。
         await _flush_shutdown_state(context, state, log)
 

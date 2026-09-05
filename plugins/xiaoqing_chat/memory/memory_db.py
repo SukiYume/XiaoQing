@@ -17,8 +17,8 @@ import numpy as np
 from ..store_base import LockedDirtyStateMixin
 from .vector_store import VectorDoc, VectorStore, write_vector_store_files
 
-_logger = logging.getLogger("plugin.xiaoqing_chat")
-_LEGACY_PERSON_ID_RE = re.compile(r"^person:\d+:\d+$")
+_logger                      = logging.getLogger("plugin.xiaoqing_chat")
+_LEGACY_PERSON_ID_RE         = re.compile(r"^person:\d+:\d+$")
 _CONFIGURED_KNOWLEDGE_PREFIX = "kb:"
 
 
@@ -36,14 +36,14 @@ def person_fact_doc_id(
     subject_name: str,
     fact: str,
 ) -> str:
-    scoped_chat_id = normalize_memory_chat_id(chat_id)
+    scoped_chat_id  = normalize_memory_chat_id(chat_id)
     normalized_fact = str(fact or "").strip()
     if subject_id <= 0 or not normalized_fact:
         raise ValueError("invalid person fact identity")
     normalized_name = str(subject_name or "").strip()
-    scope_hash = hashlib.sha256(scoped_chat_id.encode("utf-8")).hexdigest()[:16]
-    material = f"{scoped_chat_id}\0{subject_id}\0{normalized_name}\0{normalized_fact}"
-    fact_hash = hashlib.sha256(material.encode("utf-8")).hexdigest()[:20]
+    scope_hash      = hashlib.sha256(scoped_chat_id.encode("utf-8")).hexdigest()[:16]
+    material        = f"{scoped_chat_id}\0{subject_id}\0{normalized_name}\0{normalized_fact}"
+    fact_hash       = hashlib.sha256(material.encode("utf-8")).hexdigest()[:20]
     return f"person:v2:{scope_hash}:{subject_id}:{fact_hash}"
 
 
@@ -59,17 +59,17 @@ class MemoryDB(LockedDirtyStateMixin):
     def __init__(self) -> None:
         self._store = VectorStore(dim=2048)
         self._loaded_dir: Path | None = None
-        self._dirty = False
-        self._dirty_version = 0
-        self._lock = threading.RLock()
-        self._save_lock = threading.Lock()
+        self._dirty                   = False
+        self._dirty_version           = 0
+        self._lock                    = threading.RLock()
+        self._save_lock               = threading.Lock()
 
     def bind(self, data_dir: Path) -> None:
         with self._lock:
             if self._loaded_dir and self._loaded_dir == data_dir:
                 return
             self._loaded_dir = data_dir
-            self._dirty = False
+            self._dirty      = False
             self._store = VectorStore(dim=2048)
             vdb_dir = data_dir / "vdb"
             if vdb_dir.exists():
@@ -95,18 +95,18 @@ class MemoryDB(LockedDirtyStateMixin):
                 continue
             meta = dict(doc.meta)
             try:
-                chat_id = normalize_memory_chat_id(meta.get("chat_id"))
-                subject_id = int(meta.get("subject_id", 0) or 0)
+                chat_id      = normalize_memory_chat_id(meta.get("chat_id"))
+                subject_id   = int(meta.get("subject_id", 0) or 0)
                 subject_name = str(meta.get("subject_name", "") or "").strip()
-                fact = self._legacy_person_fact_text(doc.text)
-                new_doc_id = person_fact_doc_id(
-                    chat_id=chat_id,
-                    subject_id=subject_id,
-                    subject_name=subject_name,
-                    fact=fact,
+                fact         = self._legacy_person_fact_text(doc.text)
+                new_doc_id   = person_fact_doc_id(
+                    chat_id      = chat_id,
+                    subject_id   = subject_id,
+                    subject_name = subject_name,
+                    fact         = fact,
                 )
             except (TypeError, ValueError):
-                meta["type"] = "quarantined_person_info"
+                meta["type"]              = "quarantined_person_info"
                 meta["quarantine_reason"] = "invalid_scope_or_identity"
                 self._store.upsert(VectorDoc(doc_id=doc.doc_id, text=doc.text, meta=meta))
                 changed = True
@@ -136,8 +136,8 @@ class MemoryDB(LockedDirtyStateMixin):
                     return
                 self._store.build()
                 docs = self._store.all_docs()
-                dim = int(self._store.dim)
-                mat = self._store._matrix
+                dim  = int(self._store.dim)
+                mat  = self._store._matrix
                 mat = np.zeros((0, dim), dtype=np.float32) if mat is None else mat.copy()
                 save_version = self._dirty_version
             vdb_dir = loaded_dir / "vdb"
@@ -202,7 +202,7 @@ class MemoryDB(LockedDirtyStateMixin):
         知识集合。
         """
         requested: list[VectorDoc] = []
-        requested_ids: set[str] = set()
+        requested_ids: set[str]    = set()
         for document in documents:
             if not document.doc_id.startswith(_CONFIGURED_KNOWLEDGE_PREFIX):
                 raise ValueError("configured knowledge document has an invalid namespace")
@@ -229,10 +229,10 @@ class MemoryDB(LockedDirtyStateMixin):
             if requested_ids.intersection(document.doc_id for document in retained):
                 raise ValueError("configured knowledge ID conflicts with another memory type")
 
-            published_at = time.time()
+            published_at              = time.time()
             resolved: list[VectorDoc] = []
             for document in requested:
-                previous = managed.get(document.doc_id)
+                previous      = managed.get(document.doc_id)
                 previous_meta = (
                     {key: value for key, value in previous.meta.items() if key != "updated_at"}
                     if previous is not None
@@ -247,9 +247,9 @@ class MemoryDB(LockedDirtyStateMixin):
                 else:
                     resolved.append(
                         VectorDoc(
-                            doc_id=document.doc_id,
-                            text=document.text,
-                            meta={**document.meta, "updated_at": published_at},
+                            doc_id = document.doc_id,
+                            text   = document.text,
+                            meta   = {**document.meta, "updated_at": published_at},
                         )
                     )
 
@@ -270,9 +270,9 @@ class MemoryDB(LockedDirtyStateMixin):
         question: str,
         *,
         chat_id: str,
-        top_k: int = 5,
-        min_score: float = 0.12,
-        type_filter: str | None = None,
+        top_k: int                         = 5,
+        min_score: float                   = 0.12,
+        type_filter: str | None            = None,
         meta_filter: dict[str, Any] | None = None,
     ) -> list[RetrievedItem]:
         """查询租户范围内的记忆；会话范围始终必填。"""
@@ -281,6 +281,9 @@ class MemoryDB(LockedDirtyStateMixin):
             raise ValueError("chat_id is required for memory queries")
 
         def in_scope(doc: VectorDoc) -> bool:
+            # 隔离状态只供维护读取，所有面向聊天的检索统一排除。
+            if str(doc.meta.get("type", "")).startswith("quarantined_"):
+                return False
             if str(doc.meta.get("chat_id", "") or "") != scoped_chat_id:
                 return False
             if type_filter and str(doc.meta.get("type", "")) != type_filter:
@@ -302,7 +305,7 @@ class MemoryDB(LockedDirtyStateMixin):
         self,
         question: str,
         *,
-        top_k: int = 5,
+        top_k: int       = 5,
         min_score: float = 0.12,
         type_filter: str,
     ) -> list[RetrievedItem]:

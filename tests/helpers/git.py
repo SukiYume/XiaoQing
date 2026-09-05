@@ -15,7 +15,7 @@ _TRANSIENT_LOCK_MARKERS = (
     "resource temporarily unavailable",
 )
 _TRANSIENT_RETRY_DELAYS = (0.02, 0.05)
-_MAX_DIAGNOSTIC_CHARS = 2_000
+_MAX_DIAGNOSTIC_CHARS   = 2_000
 
 
 def _bounded_text(value: str, limit: int) -> str:
@@ -49,13 +49,13 @@ class GitCommandError(RuntimeError):
         args: tuple[str, ...],
         result: subprocess.CompletedProcess[str],
     ) -> None:
-        self.repo = repo
+        self.repo     = repo
         self.git_args = args
-        self.result = result
-        header = f"git command failed with exit code {result.returncode}"
-        repo_prefix = "; repo="
-        repo_budget = _MAX_DIAGNOSTIC_CHARS - len(header) - len(repo_prefix)
-        message = f"{header}{repo_prefix}{_bounded_text(str(repo), repo_budget)}"
+        self.result   = result
+        header        = f"git command failed with exit code {result.returncode}"
+        repo_prefix   = "; repo="
+        repo_budget   = _MAX_DIAGNOSTIC_CHARS - len(header) - len(repo_prefix)
+        message       = f"{header}{repo_prefix}{_bounded_text(str(repo), repo_budget)}"
         for label, value in (
             ("stderr", (result.stderr or "").strip()),
             ("stdout", (result.stdout or "").strip()),
@@ -63,7 +63,7 @@ class GitCommandError(RuntimeError):
             if not value:
                 continue
             field_prefix = f"; {label}="
-            remaining = _MAX_DIAGNOSTIC_CHARS - len(message) - len(field_prefix)
+            remaining    = _MAX_DIAGNOSTIC_CHARS - len(message) - len(field_prefix)
             if remaining <= 0:
                 break
             message = f"{message}{field_prefix}{_bounded_text(value, remaining)}"
@@ -84,12 +84,12 @@ def run_git(repo: Path, *args: str) -> str:
     for attempt in range(len(_TRANSIENT_RETRY_DELAYS) + 1):
         result = subprocess.run(
             command,
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=_isolated_git_env(),
+            check          = False,
+            capture_output = True,
+            text           = True,
+            encoding       = "utf-8",
+            errors         = "replace",
+            env            = _isolated_git_env(),
         )
         if result.returncode == 0:
             return result.stdout.strip()

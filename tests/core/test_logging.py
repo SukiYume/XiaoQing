@@ -18,8 +18,8 @@ from core.logging_config import (
 
 class _FakeKernel32:
     def __init__(self, *, mode: int = 0x20, get_mode_ok: bool = True) -> None:
-        self.mode = mode
-        self.get_mode_ok = get_mode_ok
+        self.mode                             = mode
+        self.get_mode_ok                      = get_mode_ok
         self.set_calls: list[tuple[int, int]] = []
 
     def GetStdHandle(self, identifier: int) -> int:
@@ -49,18 +49,18 @@ class TestColoredFormatter:
     def test_format_with_color(self):
         """测试带颜色格式化"""
         formatter = ColoredFormatter(
-            fmt="%(levelname)s: %(message)s",
-            use_color=True,
+            fmt       = "%(levelname)s: %(message)s",
+            use_color = True,
         )
 
         record = logging.LogRecord(
-            name="test",
-            level=logging.INFO,
-            pathname="",
-            lineno=0,
-            msg="Test message",
-            args=(),
-            exc_info=None,
+            name     = "test",
+            level    = logging.INFO,
+            pathname = "",
+            lineno   = 0,
+            msg      = "Test message",
+            args     = (),
+            exc_info = None,
         )
 
         result = formatter.format(record)
@@ -73,17 +73,17 @@ class TestColoredFormatter:
     def test_format_with_color_does_not_mutate_record(self):
         """测试带颜色格式化不会修改原始 LogRecord"""
         formatter = ColoredFormatter(
-            fmt="%(levelname)s: %(message)s",
-            use_color=True,
+            fmt       = "%(levelname)s: %(message)s",
+            use_color = True,
         )
         record = logging.LogRecord(
-            name="test",
-            level=logging.WARNING,
-            pathname="",
-            lineno=0,
-            msg="Test message",
-            args=(),
-            exc_info=None,
+            name     = "test",
+            level    = logging.WARNING,
+            pathname = "",
+            lineno   = 0,
+            msg      = "Test message",
+            args     = (),
+            exc_info = None,
         )
 
         formatter.format(record)
@@ -93,18 +93,18 @@ class TestColoredFormatter:
     def test_format_without_color(self):
         """测试无颜色格式化"""
         formatter = ColoredFormatter(
-            fmt="%(levelname)s: %(message)s",
-            use_color=False,
+            fmt       = "%(levelname)s: %(message)s",
+            use_color = False,
         )
 
         record = logging.LogRecord(
-            name="test",
-            level=logging.INFO,
-            pathname="",
-            lineno=0,
-            msg="Test message",
-            args=(),
-            exc_info=None,
+            name     = "test",
+            level    = logging.INFO,
+            pathname = "",
+            lineno   = 0,
+            msg      = "Test message",
+            args     = (),
+            exc_info = None,
         )
 
         result = formatter.format(record)
@@ -125,25 +125,25 @@ class TestColoredFormatter:
         assert kernel32.set_calls == []
 
     def test_format_includes_request_id_or_safe_background_placeholder(self):
-        formatter = RequestContextFormatter("[request_id=%(request_id)s] %(message)s")
+        formatter      = RequestContextFormatter("[request_id=%(request_id)s] %(message)s")
         request_record = logging.LogRecord(
-            name="test",
-            level=logging.INFO,
-            pathname="",
-            lineno=0,
-            msg="correlated",
-            args=(),
-            exc_info=None,
+            name     = "test",
+            level    = logging.INFO,
+            pathname = "",
+            lineno   = 0,
+            msg      = "correlated",
+            args     = (),
+            exc_info = None,
         )
         request_record.request_id = "req-123"  # type: ignore[attr-defined]
-        background_record = logging.LogRecord(
-            name="test",
-            level=logging.INFO,
-            pathname="",
-            lineno=0,
-            msg="background",
-            args=(),
-            exc_info=None,
+        background_record         = logging.LogRecord(
+            name     = "test",
+            level    = logging.INFO,
+            pathname = "",
+            lineno   = 0,
+            msg      = "background",
+            args     = (),
+            exc_info = None,
         )
 
         assert formatter.format(request_record) == "[request_id=req-123] correlated"
@@ -162,10 +162,10 @@ class TestLogManager:
     def test_create_log_manager(self, tmp_path: Path):
         """测试创建日志管理器"""
         manager = LogManager(
-            log_dir=tmp_path / "logs",
-            level="INFO",
-            console_output=False,  # 测试时禁用控制台
-            file_output=True,
+            log_dir        = tmp_path / "logs",
+            level          = "INFO",
+            console_output = False,  # 测试时禁用控制台
+            file_output    = True,
         )
 
         assert manager.level == logging.INFO
@@ -173,12 +173,12 @@ class TestLogManager:
 
     def test_log_file_created(self, tmp_path: Path):
         """测试日志文件创建"""
-        log_dir = tmp_path / "logs"
+        log_dir  = tmp_path / "logs"
         _manager = LogManager(
-            log_dir=log_dir,
-            level="INFO",
-            console_output=False,
-            file_output=True,
+            log_dir        = log_dir,
+            level          = "INFO",
+            console_output = False,
+            file_output    = True,
         )
 
         # 写入日志
@@ -190,12 +190,12 @@ class TestLogManager:
 
     def test_error_log_file(self, tmp_path: Path):
         """测试错误日志文件"""
-        log_dir = tmp_path / "logs"
+        log_dir  = tmp_path / "logs"
         _manager = LogManager(
-            log_dir=log_dir,
-            level="DEBUG",
-            console_output=False,
-            file_output=True,
+            log_dir        = log_dir,
+            level          = "DEBUG",
+            console_output = False,
+            file_output    = True,
         )
 
         # 写入错误日志
@@ -223,10 +223,10 @@ class TestLogManager:
     def test_set_level(self, tmp_path: Path):
         """测试动态设置日志级别"""
         manager = LogManager(
-            log_dir=tmp_path / "logs",
-            level="INFO",
-            console_output=False,
-            file_output=False,
+            log_dir        = tmp_path / "logs",
+            level          = "INFO",
+            console_output = False,
+            file_output    = False,
         )
 
         assert manager.level == logging.INFO
@@ -240,12 +240,12 @@ class TestLogManager:
     def test_rotation_type_size(self, tmp_path: Path):
         """测试按大小轮转"""
         manager = LogManager(
-            log_dir=tmp_path / "logs",
-            level="INFO",
-            console_output=False,
-            file_output=True,
-            rotation_type="size",
-            max_bytes=1024,  # 1KB 便于测试
+            log_dir        = tmp_path / "logs",
+            level          = "INFO",
+            console_output = False,
+            file_output    = True,
+            rotation_type  = "size",
+            max_bytes      = 1024,  # 1KB 便于测试
         )
 
         assert manager.rotation_type == "size"
@@ -253,11 +253,11 @@ class TestLogManager:
     def test_rotation_type_time(self, tmp_path: Path):
         """测试按时间轮转"""
         manager = LogManager(
-            log_dir=tmp_path / "logs",
-            level="INFO",
-            console_output=False,
-            file_output=True,
-            rotation_type="time",
+            log_dir        = tmp_path / "logs",
+            level          = "INFO",
+            console_output = False,
+            file_output    = True,
+            rotation_type  = "time",
         )
 
         assert manager.rotation_type == "time"
@@ -353,7 +353,7 @@ class TestGetLogger:
     def test_logger_hierarchy(self):
         """测试 logger 层级"""
         parent = get_logger("parent")
-        child = get_logger("parent.child")
+        child  = get_logger("parent.child")
 
         assert child.parent is parent
         assert child.parent.name == "parent"

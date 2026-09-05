@@ -32,10 +32,10 @@ from core.plugin_base import segments as _core_segments
 from core.public_errors import public_error_message
 from core.public_errors import public_error_response as _core_public_error_response
 
-MessageSegment = dict[str, Any]
+MessageSegment  = dict[str, Any]
 MessageSegments = list[MessageSegment]
-OneBotEvent = dict[str, Any]
-QueryMode = Literal["simple", "step", "complete"]
+OneBotEvent     = dict[str, Any]
+QueryMode       = Literal["simple", "step", "complete"]
 
 
 class Context(Protocol):
@@ -46,24 +46,24 @@ class Context(Protocol):
     def get_settings_snapshot(self) -> PluginSettingsSnapshot: ...
 
 
-segments = cast(Callable[[object], MessageSegments], _core_segments)
+segments              = cast(Callable[[object], MessageSegments], _core_segments)
 public_error_response = cast(Callable[..., MessageSegments], _core_public_error_response)
 
 logger = logging.getLogger(__name__)
 
 WA_RESULT_URL = "https://api.wolframalpha.com/v1/result"
-WA_QUERY_URL = "https://api.wolframalpha.com/v2/query"
+WA_QUERY_URL  = "https://api.wolframalpha.com/v2/query"
 
-MAX_QUERY_LENGTH = 500
-MAX_APPID_LENGTH = 128
-MAX_RESPONSE_BYTES = 1024 * 1024
-MAX_RESULT_ITEMS = 20
+MAX_QUERY_LENGTH       = 500
+MAX_APPID_LENGTH       = 128
+MAX_RESPONSE_BYTES     = 1024 * 1024
+MAX_RESULT_ITEMS       = 20
 MAX_RESULT_TEXT_LENGTH = 2_400
 
-_APPID_PATTERN = re.compile(rf"[A-Za-z0-9_-]{{1,{MAX_APPID_LENGTH}}}\Z")
-_HELP_ALIASES = frozenset({"help", "帮助"})
-_EXACT_HELP_ARGUMENTS = frozenset({*_HELP_ALIASES, "-h", "--help"})
-_SUPPORTED_OPTIONS = frozenset({"h", "help", "mode"})
+_APPID_PATTERN                      = re.compile(rf"[A-Za-z0-9_-]{{1,{MAX_APPID_LENGTH}}}\Z")
+_HELP_ALIASES                       = frozenset({"help", "帮助"})
+_EXACT_HELP_ARGUMENTS               = frozenset({*_HELP_ALIASES, "-h", "--help"})
+_SUPPORTED_OPTIONS                  = frozenset({"h", "help", "mode"})
 _MODE_ALIASES: dict[str, QueryMode] = {
     "simple": "simple",
     "step": "step",
@@ -84,26 +84,26 @@ _HELP_TEXT = """🧮 Wolfram|Alpha
 /alpha --mode=step integrate x^2"""
 
 _WA_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=10, sock_read=25)
-_WA_SEMAPHORE = asyncio.Semaphore(2)
+_WA_SEMAPHORE    = asyncio.Semaphore(2)
 _RESPONSE_LIMITS = BodyLimits(
-    max_wire_bytes=MAX_RESPONSE_BYTES,
-    max_decoded_bytes=MAX_RESPONSE_BYTES,
-    max_decompression_ratio=20,
+    max_wire_bytes          = MAX_RESPONSE_BYTES,
+    max_decoded_bytes       = MAX_RESPONSE_BYTES,
+    max_decompression_ratio = 20,
 )
 _TEXT_MIME_POLICY = MimePolicy(exact=frozenset({"text/plain"}))
 _JSON_LIMITS = JsonLimits(
-    max_bytes=MAX_RESPONSE_BYTES,
-    max_depth=32,
-    max_nodes=20_000,
-    max_string_chars=512_000,
+    max_bytes        = MAX_RESPONSE_BYTES,
+    max_depth        = 32,
+    max_nodes        = 20_000,
+    max_string_chars = 512_000,
 )
 _XML_LIMITS = XmlLimits(
-    max_bytes=MAX_RESPONSE_BYTES,
-    max_depth=48,
-    max_nodes=20_000,
-    max_attributes=20_000,
-    max_attribute_chars=256_000,
-    max_text_chars=512_000,
+    max_bytes           = MAX_RESPONSE_BYTES,
+    max_depth           = 48,
+    max_nodes           = 20_000,
+    max_attributes      = 20_000,
+    max_attribute_chars = 256_000,
+    max_text_chars      = 512_000,
 )
 
 
@@ -176,8 +176,8 @@ async def _get_answer(
         response = await _request_wolfram(
             session,
             WA_RESULT_URL,
-            params={"appid": appid, "i": question},
-            mime_policy=_TEXT_MIME_POLICY,
+            params      = {"appid": appid, "i": question},
+            mime_policy = _TEXT_MIME_POLICY,
         )
         result = _bound_result_text(
             _decode_text_response(response),
@@ -187,31 +187,31 @@ async def _get_answer(
     except HttpStatusError as exc:
         logger.error("WolframAlpha API 返回非成功状态：%d", exc.status)
         return segments(f"❌ 查询失败（HTTP {exc.status}）")
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.error("WolframAlpha 查询超时")
         return segments("❌ 查询超时，请稍后重试")
     except aiohttp.ClientError as exc:
         public_error_message(
             context,
             exc,
-            logger=logger,
-            component="wolframalpha.network",
+            logger    = logger,
+            component = "wolframalpha.network",
         )
         return segments("❌ 网络错误，请稍后重试")
     except ResponseFormatError as exc:
         public_error_message(
             context,
             exc,
-            logger=logger,
-            component="wolframalpha.response",
+            logger    = logger,
+            component = "wolframalpha.response",
         )
         return segments("❌ 服务返回格式异常，请稍后重试")
     except Exception as exc:
         return public_error_response(
             context,
             exc,
-            logger=logger,
-            component="wolframalpha.query",
+            logger    = logger,
+            component = "wolframalpha.query",
         )
 
 
@@ -230,7 +230,7 @@ async def _query_step(question: str, appid: str, session: Any) -> str:
         mime_policy=XML_MIME_POLICY,
     )
     payload = validate_bounded_xml(response, limits=_XML_LIMITS)
-    root = ElementTree.fromstring(payload)
+    root             = ElementTree.fromstring(payload)
     lines: list[str] = []
     for item in root.iter("plaintext"):
         text = item.text.strip() if isinstance(item.text, str) else ""
@@ -263,7 +263,7 @@ async def _query_complete(question: str, appid: str, session: Any) -> str:
     if not isinstance(payload, Mapping):
         raise ResponseFormatError("WolframAlpha response must be a JSON object")
     query_result = payload.get("queryresult")
-    pods = query_result.get("pods") if isinstance(query_result, Mapping) else None
+    pods         = query_result.get("pods") if isinstance(query_result, Mapping) else None
     if not isinstance(pods, list):
         logger.error("WolframAlpha 完整结果缺少 pods 列表")
         return "结果解析失败"
@@ -275,7 +275,7 @@ async def _query_complete(question: str, appid: str, session: Any) -> str:
             continue
         for subpod in subpods:
             plaintext = subpod.get("plaintext") if isinstance(subpod, Mapping) else None
-            text = plaintext.strip() if isinstance(plaintext, str) else ""
+            text      = plaintext.strip() if isinstance(plaintext, str) else ""
             if text:
                 results.append(text)
             if len(results) == MAX_RESULT_ITEMS:
@@ -302,9 +302,9 @@ async def _request_wolfram(
             session,
             "GET",
             url,
-            limits=_RESPONSE_LIMITS,
-            mime_policy=mime_policy,
-            request_kwargs={"params": params, "timeout": _WA_TIMEOUT},
+            limits         = _RESPONSE_LIMITS,
+            mime_policy    = mime_policy,
+            request_kwargs = {"params": params, "timeout": _WA_TIMEOUT},
         )
     return response
 
@@ -360,6 +360,6 @@ async def handle(
         return public_error_response(
             context,
             exc,
-            logger=logger,
-            component="wolframalpha.handle",
+            logger    = logger,
+            component = "wolframalpha.handle",
         )

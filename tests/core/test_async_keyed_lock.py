@@ -1,3 +1,4 @@
+# 验证按键锁的等待、回收及并发互斥契约。
 from __future__ import annotations
 
 import asyncio
@@ -21,9 +22,9 @@ async def test_high_cardinality_keys_are_removed_after_use() -> None:
 
 @pytest.mark.asyncio
 async def test_same_key_is_strictly_serialized() -> None:
-    pool = AsyncKeyedLockPool()
+    pool   = AsyncKeyedLockPool()
     active = 0
-    peak = 0
+    peak   = 0
 
     async def use() -> None:
         nonlocal active, peak
@@ -40,7 +41,7 @@ async def test_same_key_is_strictly_serialized() -> None:
 
 @pytest.mark.asyncio
 async def test_cancelled_waiter_does_not_leak_key() -> None:
-    pool = AsyncKeyedLockPool()
+    pool    = AsyncKeyedLockPool()
     entered = asyncio.Event()
     release = asyncio.Event()
 
@@ -79,9 +80,9 @@ async def test_key_length_and_pool_capacity_are_bounded() -> None:
 
 @pytest.mark.asyncio
 async def test_same_task_can_reenter_without_releasing_to_waiter() -> None:
-    pool = AsyncKeyedLockPool()
-    inner_entered = asyncio.Event()
-    release_outer = asyncio.Event()
+    pool           = AsyncKeyedLockPool()
+    inner_entered  = asyncio.Event()
+    release_outer  = asyncio.Event()
     waiter_entered = asyncio.Event()
 
     async def owner() -> None:

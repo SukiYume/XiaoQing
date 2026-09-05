@@ -6,10 +6,11 @@ from typing import Final
 
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
+from tests.helpers.pendo_client_source import replace_js_source
 from tests.helpers.pendo_web_timezone_test_support import inline_timezone_runtime
 
-ROOT: Final = REPOSITORY_ROOT
-TASKS_CLIENT: Final = ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "tasks.js"
+ROOT: Final            = REPOSITORY_ROOT
+TASKS_CLIENT: Final    = ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "tasks.js"
 TIMEZONE_CLIENT: Final = (
     ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "utils" / "timezone.js"
 )
@@ -90,7 +91,7 @@ def _tasks_source_for_test() -> str:
 
     source = TASKS_CLIENT.read_text(encoding="utf-8")
     timezone_runtime = inline_timezone_runtime(TIMEZONE_CLIENT)
-    replacements = (
+    replacements     = (
         ("import { api } from '../api.js';", "const api = globalThis.__api;"),
         (
             "import { showToast } from '../components/toast.js';",
@@ -184,8 +185,7 @@ const subscribeDataChanges = (type, refresh) => {
         ),
     )
     for original, replacement in replacements:
-        assert original in source
-        source = source.replace(original, replacement)
+        source = replace_js_source(source, original, replacement)
 
     return (
         source
@@ -235,8 +235,8 @@ def _run_tasks_client(script: str) -> None:
     assert_node_esm_contract(
         _tasks_source_for_test(),
         script,
-        cwd=ROOT,
-        setup=TASKS_SETUP,
+        cwd   = ROOT,
+        setup = TASKS_SETUP,
     )
 
 

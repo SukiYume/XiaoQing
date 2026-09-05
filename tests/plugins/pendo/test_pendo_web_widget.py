@@ -136,8 +136,8 @@ def test_widget_summary_returns_agenda_and_task_panel(client: Any, temp_db: Data
 
     res = client.get(
         "/api/widget/summary",
-        params={"section": "tasks", "now": "2026-03-25T09:30:00"},
-        headers=_headers(token),
+        params  = {"section": "tasks", "now": "2026-03-25T09:30:00"},
+        headers = _headers(token),
     )
 
     assert res.status_code == 200
@@ -414,8 +414,8 @@ def test_widget_task_and_note_panels_do_not_materialize_full_item_sets(
     data = widget_api.build_widget_summary(
         temp_db,
         owner_id,
-        section=section,
-        now="2026-03-25T09:30:00",
+        section = section,
+        now     = "2026-03-25T09:30:00",
     )
 
     assert data["panel"]["section"] == section
@@ -458,7 +458,7 @@ def test_build_widget_summary_batches_collection_titles_for_agenda(
             }
         )
 
-    real_batch_lookup = temp_db.get_event_collections_by_ids
+    real_batch_lookup                  = temp_db.get_event_collections_by_ids
     calls: list[tuple[str, list[str]]] = []
 
     def track_batch_lookup(
@@ -491,23 +491,23 @@ def test_widget_summary_supports_ledger_notes_and_auto_sections(
 
     ledger_res = client.get(
         "/api/widget/summary",
-        params={"section": "ledger", "now": "2026-03-25T09:30:00"},
-        headers=_headers(token),
+        params  = {"section": "ledger", "now": "2026-03-25T09:30:00"},
+        headers = _headers(token),
     )
     notes_res = client.get(
         "/api/widget/summary",
-        params={"section": "notes", "now": "2026-03-25T11:30:00"},
-        headers=_headers(token),
+        params  = {"section": "notes", "now": "2026-03-25T11:30:00"},
+        headers = _headers(token),
     )
     auto_res = client.get(
         "/api/widget/summary",
-        params={"section": "auto", "now": "2026-03-25T11:30:00"},
-        headers=_headers(token),
+        params  = {"section": "auto", "now": "2026-03-25T11:30:00"},
+        headers = _headers(token),
     )
 
     ledger_data = ledger_res.json()["data"]
-    notes_data = notes_res.json()["data"]
-    auto_data = auto_res.json()["data"]
+    notes_data  = notes_res.json()["data"]
+    auto_data   = auto_res.json()["data"]
 
     assert ledger_data["section"] == "ledger"
     assert ledger_data["panel"]["title"] == "财务"
@@ -702,8 +702,8 @@ def test_widget_token_is_limited_to_widget_endpoint(client: Any, temp_db: Databa
 
     widget_res = client.get(
         "/api/widget/summary",
-        params={"section": "tasks", "now": "2026-03-25T09:30:00"},
-        headers=_headers(token),
+        params  = {"section": "tasks", "now": "2026-03-25T09:30:00"},
+        headers = _headers(token),
     )
     dashboard_res = client.get("/api/dashboard", headers=_headers(token))
 
@@ -748,10 +748,10 @@ def test_web_handler_never_inlines_widget_token_when_private_delivery_is_unavail
         sys.modules,
         "plugins.pendo.web.server",
         types.SimpleNamespace(
-            get_url=lambda: "http://127.0.0.1:8765",
-            is_running=lambda: True,
-            start=lambda _db: True,
-            stop=lambda: True,
+            get_url    = lambda: "http://127.0.0.1:8765",
+            is_running = lambda: True,
+            start      = lambda _db: True,
+            stop       = lambda: True,
         ),
     )
 

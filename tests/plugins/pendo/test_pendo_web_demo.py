@@ -6,7 +6,7 @@ import json
 import re
 from collections import deque
 from collections.abc import Iterator
-from datetime import datetime, timedelta, timezone, tzinfo
+from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
 from typing import Any
 from unittest.mock import Mock
@@ -18,6 +18,7 @@ from plugins.pendo.services.db import Database
 from plugins.pendo.utils.identifiers import is_canonical_internal_id
 from plugins.pendo.web.services.transfer_bundle import ParsedBundle
 from tests.helpers.paths import REPOSITORY_ROOT
+from tests.helpers.pendo_client_source import has_js_source
 from tests.helpers.pendo_test_support import reset_pendo_runtime_config
 
 try:
@@ -152,7 +153,7 @@ def test_session_device_list_and_revoke_route_require_cookie_and_csrf(client: An
     """设备会话列表依赖 Cookie，撤销操作还必须携带正确 CSRF。"""
 
     exchange = client.post("/api/auth/exchange", json={"code": issue_login_code("device-owner")})
-    csrf = exchange.json()["data"]["csrf_token"]
+    csrf     = exchange.json()["data"]["csrf_token"]
     sessions = client.get("/api/auth/sessions")
 
     assert sessions.status_code == 200
@@ -292,8 +293,8 @@ def test_demo_capacity_failure_does_not_retain_empty_client_bucket(
     with pytest.raises(demo_space_module.DemoCapacityError, match="capacity"):
         demo_space_module.create_demo_session(
             temp_db,
-            now=datetime(2030, 1, 1, 12, 0),
-            client_key="capacity-client",
+            now        = datetime(2030, 1, 1, 12, 0),
+            client_key = "capacity-client",
         )
 
     assert demo_space_module._DEMO_REQUESTS == {}
@@ -302,7 +303,7 @@ def test_demo_capacity_failure_does_not_retain_empty_client_bucket(
 def test_recent_demo_requests_prunes_stale_buckets_and_normalizes_client_key() -> None:
     """全局限流表应清掉过期键，并规范化当前客户端但不预先落空桶。"""
 
-    now = datetime(2030, 1, 1, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2030, 1, 1, 12, 0, tzinfo=UTC)
     demo_space_module._DEMO_REQUESTS.update(
         {
             "stale": deque([datetime(2029, 12, 31, 0, 0)]),
@@ -337,8 +338,8 @@ def test_demo_seed_failure_removes_partial_owner_and_does_not_consume_rate_limit
     with pytest.raises(RuntimeError, match="seed failed"):
         demo_space_module.create_demo_session(
             temp_db,
-            now=datetime(2030, 1, 1, 12, 0),
-            client_key="failed-client",
+            now        = datetime(2030, 1, 1, 12, 0),
+            client_key = "failed-client",
         )
 
     remaining = temp_db.get_connection().execute(
@@ -393,7 +394,7 @@ def test_demo_time_shifters_preserve_empty_invalid_and_overflow_values() -> None
     assert (
         demo_space_module._is_expired(
             broken_datetime,
-            datetime(2030, 1, 1, tzinfo=timezone.utc),
+            datetime(2030, 1, 1, tzinfo=UTC),
         )
         is True
     )
@@ -404,7 +405,7 @@ def test_demo_template_bundle_exists_and_covers_time_filters() -> None:
 
     assert demo_space_module._DEMO_TEMPLATE_PATH.exists()
 
-    records = demo_space_module._load_demo_template_records()
+    records                                  = demo_space_module._load_demo_template_records()
     by_type: dict[str, list[dict[str, Any]]] = {}
     for record in records:
         by_type.setdefault(record["type"], []).append(record)
@@ -457,8 +458,8 @@ def test_demo_template_loader_rejects_missing_asset(
         ),
         (
             ParsedBundle(
-                manifest={},
-                file_summaries=[
+                manifest       = {},
+                file_summaries = [
                     {"type": item_type} for item_type in demo_space_module._DEMO_ITEM_TYPES
                 ],
             ),
@@ -468,8 +469,8 @@ def test_demo_template_loader_rejects_missing_asset(
         ),
         (
             ParsedBundle(
-                manifest={},
-                file_summaries=[
+                manifest       = {},
+                file_summaries = [
                     {"type": item_type} for item_type in demo_space_module._DEMO_ITEM_TYPES
                 ],
             ),
@@ -505,7 +506,7 @@ def test_demo_template_loader_rejects_invalid_runtime_contracts(
 def test_purge_demo_owner_deletes_every_owner_scoped_table(temp_db: Database) -> None:
     """演示回收应覆盖业务、审计、导入和 Web 认证记录。"""
 
-    owner_id = "demo_web_cleanup01"
+    owner_id      = "demo_web_cleanup01"
     regular_owner = "regular-owner"
     for owner in (owner_id, regular_owner):
         temp_db.update_user_settings(
@@ -531,9 +532,9 @@ def test_purge_demo_owner_deletes_every_owner_scoped_table(temp_db: Database) ->
         "demo-device",
         owner_id,
         "demo-csrf",
-        created_at=1,
-        expires_at=2,
-        demo=True,
+        created_at = 1,
+        expires_at = 2,
+        demo       = True,
     )
     temp_db.register_widget_token("demo-widget", owner_id, issued_at=1, expires_at=2)
 
@@ -753,9 +754,9 @@ def test_login_page_sources_offer_demo_entry() -> None:
     )
 
     assert "createDemoSession" in app_src
-    assert "const demoBtn = document.getElementById('login-demo-btn');" in app_src
-    assert "const enterDemo = async () => {" in app_src
-    assert "demoBtn.onclick = enterDemo;" in app_src
+    assert has_js_source(app_src, "const demoBtn = document.getElementById('login-demo-btn');")
+    assert has_js_source(app_src, "const enterDemo = async () => {")
+    assert has_js_source(app_src, "demoBtn.onclick = enterDemo;")
     assert "export function createDemoSession()" in api_src
     assert "'api/auth/demo'" in api_src
     assert 'id="login-demo-btn"' in html

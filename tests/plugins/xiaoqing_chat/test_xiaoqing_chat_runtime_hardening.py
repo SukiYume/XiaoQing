@@ -104,8 +104,8 @@ def test_config_file_deep_merge_preserves_unoverridden_nested_values(tmp_path):
     }
 
     loaded = load_xiaoqing_chat_config(
-        context_config=context_config,
-        plugin_dir=tmp_path,
+        context_config = context_config,
+        plugin_dir     = tmp_path,
     )
 
     assert loaded.media.max_media_per_message == 3
@@ -114,36 +114,36 @@ def test_config_file_deep_merge_preserves_unoverridden_nested_values(tmp_path):
 
 def test_expression_block_requires_checked_records_when_approval_required(tmp_path):
     checked = ExpressionRecord(
-        expression_id="checked",
-        chat_id="g1",
-        situation="表示惊讶时",
-        style="短促地说一句我去",
-        checked=True,
-        rejected=False,
-        count=1,
-        last_active_time=10.0,
+        expression_id    = "checked",
+        chat_id          = "g1",
+        situation        = "表示惊讶时",
+        style            = "短促地说一句我去",
+        checked          = True,
+        rejected         = False,
+        count            = 1,
+        last_active_time = 10.0,
     )
     unchecked = ExpressionRecord(
-        expression_id="unchecked",
-        chat_id="g1",
-        situation="听到离谱事情时",
-        style="好家伙",
-        checked=False,
-        rejected=False,
-        count=99,
-        last_active_time=99.0,
+        expression_id    = "unchecked",
+        chat_id          = "g1",
+        situation        = "听到离谱事情时",
+        style            = "好家伙",
+        checked          = False,
+        rejected         = False,
+        count            = 99,
+        last_active_time = 99.0,
     )
     state = SimpleNamespace(bw_expr_store=MagicMock())
     state.bw_expr_store.load.return_value = [unchecked, checked]
-    runtime = SimpleNamespace(
+    runtime                               = SimpleNamespace(
         cfg=SimpleNamespace(
             expression=ExpressionConfig(
-                enable_expression_selector=True,
-                max_injected=5,
+                enable_expression_selector = True,
+                max_injected               = 5,
             ),
             reflection=ReflectionConfig(
-                enable_expression_reflection=False,
-                require_approval_for_injection=True,
+                enable_expression_reflection   = False,
+                require_approval_for_injection = True,
             ),
         )
     )
@@ -156,36 +156,36 @@ def test_expression_block_requires_checked_records_when_approval_required(tmp_pa
 
 def test_expression_block_never_auto_injects_unchecked_high_count_records(tmp_path):
     low_count_unchecked = ExpressionRecord(
-        expression_id="low",
-        chat_id="g1",
-        situation="听到普通新鲜事时",
-        style="哦这样啊",
-        checked=False,
-        rejected=False,
-        count=2,
-        last_active_time=5.0,
+        expression_id    = "low",
+        chat_id          = "g1",
+        situation        = "听到普通新鲜事时",
+        style            = "哦这样啊",
+        checked          = False,
+        rejected         = False,
+        count            = 2,
+        last_active_time = 5.0,
     )
     high_count_unchecked = ExpressionRecord(
-        expression_id="high",
-        chat_id="g1",
-        situation="听到离谱事情时",
-        style="好家伙",
-        checked=False,
-        rejected=False,
-        count=10,
-        last_active_time=99.0,
+        expression_id    = "high",
+        chat_id          = "g1",
+        situation        = "听到离谱事情时",
+        style            = "好家伙",
+        checked          = False,
+        rejected         = False,
+        count            = 10,
+        last_active_time = 99.0,
     )
     state = SimpleNamespace(bw_expr_store=MagicMock())
     state.bw_expr_store.load.return_value = [low_count_unchecked, high_count_unchecked]
-    runtime = SimpleNamespace(
+    runtime                               = SimpleNamespace(
         cfg=SimpleNamespace(
             expression=ExpressionConfig(
-                enable_expression_selector=True,
-                max_injected=5,
+                enable_expression_selector = True,
+                max_injected               = 5,
             ),
             reflection=ReflectionConfig(
-                enable_expression_reflection=False,
-                require_approval_for_injection=True,
+                enable_expression_reflection   = False,
+                require_approval_for_injection = True,
             ),
         )
     )
@@ -209,11 +209,11 @@ def test_expression_learning_dialogue_excludes_assistant_messages():
         [
             StoredMessage(role="assistant", name="小青", content="好家伙，又来了", ts=1.0),
             StoredMessage(
-                role="user",
-                name="群友",
-                user_id=123456,
-                content="这不比卖烤鸭香",
-                ts=2.0,
+                role    = "user",
+                name    = "群友",
+                user_id = 123456,
+                content = "这不比卖烤鸭香",
+                ts      = 2.0,
             ),
         ],
     )
@@ -229,11 +229,11 @@ def test_fact_prompt_uses_real_user_ids_and_skips_assistant_messages():
         history=[
             StoredMessage(role="assistant", name="小青", content="我也喜欢这个", ts=1.0),
             StoredMessage(
-                role="user",
-                name="PulsEternal",
-                user_id=503906146,
-                content="我十连四发",
-                ts=2.0,
+                role    = "user",
+                name    = "PulsEternal",
+                user_id = 503906146,
+                content = "我十连四发",
+                ts      = 2.0,
             ),
         ],
     )
@@ -249,21 +249,21 @@ def test_expression_reflector_can_build_operator_review_action(tmp_path):
     from plugins.xiaoqing_chat.expression.bw_expression_reflector import maybe_ask_for_reflection
 
     sent_actions = []
-    context = SimpleNamespace(
-        data_dir=tmp_path,
-        send_action=lambda action: sent_actions.append(action),
+    context      = SimpleNamespace(
+        data_dir    = tmp_path,
+        send_action = lambda action: sent_actions.append(action),
     )
-    expr_store = MagicMock()
+    expr_store                   = MagicMock()
     expr_store.load.return_value = [
         ExpressionRecord(
-            expression_id="e1",
-            chat_id="g1",
-            situation="吐槽离谱事情时",
-            style="短促地说一句好家伙",
-            checked=False,
-            rejected=False,
-            count=5,
-            last_active_time=10.0,
+            expression_id    = "e1",
+            chat_id          = "g1",
+            situation        = "吐槽离谱事情时",
+            style            = "短促地说一句好家伙",
+            checked          = False,
+            rejected         = False,
+            count            = 5,
+            last_active_time = 10.0,
         )
     ]
     tracker_store = MagicMock()
@@ -275,13 +275,13 @@ def test_expression_reflector_can_build_operator_review_action(tmp_path):
 
     sent = asyncio.run(
         maybe_ask_for_reflection(
-            context=context,
-            expr_store=expr_store,
-            tracker_store=tracker_store,
-            operator_user_id=123,
-            operator_group_id=456,
-            min_interval_seconds=0,
-            ask_per_check=1,
+            context              = context,
+            expr_store           = expr_store,
+            tracker_store        = tracker_store,
+            operator_user_id     = 123,
+            operator_group_id    = 456,
+            min_interval_seconds = 0,
+            ask_per_check        = 1,
         )
     )
 
@@ -294,12 +294,12 @@ def test_humanize_typing_delay_scales_with_lengths_and_caps():
     from plugins.xiaoqing_chat.smalltalk_execution import _compute_typing_delay
 
     cfg = HumanizeConfig(
-        enable_typing_delay=True,
-        read_base_seconds=0.4,
-        read_per_char_seconds=0.04,
-        type_per_char_seconds=0.05,
-        jitter_ratio=0.0,
-        max_total_delay_seconds=5.0,
+        enable_typing_delay     = True,
+        read_base_seconds       = 0.4,
+        read_per_char_seconds   = 0.04,
+        type_per_char_seconds   = 0.05,
+        jitter_ratio            = 0.0,
+        max_total_delay_seconds = 5.0,
     )
     runtime = SimpleNamespace(cfg=SimpleNamespace(humanize=cfg))
 
@@ -326,18 +326,18 @@ def test_refresh_mood_state_reuses_active_mood_without_reroll():
 
     from plugins.xiaoqing_chat.handlers import _refresh_mood_state
 
-    state = MagicMock()
+    state                             = MagicMock()
     state.get_mood_state.return_value = "现在心情不错"
     # 最近一分钟有活动，远小于 idle threshold
     state.get_last_observe_ts.return_value = time.time() - 30
-    state.get_last_reply_ts.return_value = time.time() - 60
+    state.get_last_reply_ts.return_value   = time.time() - 60
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
             personality=PersonalityConfig(
-                states=["现在心情不错", "刚吃完饭"],
-                state_probability=0.30,
-                state_force_refresh_after_idle_seconds=14400,
+                states                                 = ["现在心情不错", "刚吃完饭"],
+                state_probability                      = 0.30,
+                state_force_refresh_after_idle_seconds = 14400,
             )
         )
     )
@@ -354,20 +354,20 @@ def test_refresh_mood_state_resets_after_long_idle():
 
     from plugins.xiaoqing_chat.handlers import _refresh_mood_state
 
-    state = MagicMock()
+    state                             = MagicMock()
     state.get_mood_state.return_value = "现在心情不错"
     # 上次活跃距今超过 4h
     state.get_last_observe_ts.return_value = time.time() - 6 * 3600
-    state.get_last_reply_ts.return_value = 0.0
+    state.get_last_reply_ts.return_value   = 0.0
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
             personality=PersonalityConfig(
-                states=["现在心情不错", "刚吃完饭"],
-                state_probability=1.0,  # 强制进入重摇分支
-                state_force_refresh_after_idle_seconds=14400,
-                state_min_duration_seconds=7200,
-                state_max_duration_seconds=21600,
+                states                                 = ["现在心情不错", "刚吃完饭"],
+                state_probability                      = 1.0,  # 强制进入重摇分支
+                state_force_refresh_after_idle_seconds = 14400,
+                state_min_duration_seconds             = 7200,
+                state_max_duration_seconds             = 21600,
             )
         )
     )

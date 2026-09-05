@@ -24,19 +24,19 @@ def _command_spec(plugin_name: str, command_name: str) -> CommandSpec:
     )
     command = next(item for item in manifest["commands"] if item["name"] == command_name)
     return CommandSpec(
-        plugin=plugin_name,
-        name=command["name"],
-        triggers=command["triggers"],
-        help_text=command["help"],
-        admin_only=bool(command.get("admin_only", False)),
-        handler=_handler,
-        priority=command.get("priority", 0),
+        plugin     = plugin_name,
+        name       = command["name"],
+        triggers   = command["triggers"],
+        help_text  = command["help"],
+        admin_only = bool(command.get("admin_only", False)),
+        handler    = _handler,
+        priority   = command.get("priority", 0),
     )
 
 
 def test_exec_trigger_is_owned_only_by_shell() -> None:
     jupyter = _command_spec("jupyter", "jupyter")
-    shell = _command_spec("shell", "shell")
+    shell   = _command_spec("shell", "shell")
 
     assert "exec" not in jupyter.triggers
     assert "exec" in shell.triggers

@@ -16,9 +16,9 @@ from tests.helpers.config_test_support import (
     time,
 )
 
-config_file = _fixture_support.config_file
-config_manager = _fixture_support.config_manager
-secrets_file = _fixture_support.secrets_file
+config_file     = _fixture_support.config_file
+config_manager  = _fixture_support.config_manager
+secrets_file    = _fixture_support.secrets_file
 temp_config_dir = _fixture_support.temp_config_dir
 
 
@@ -50,8 +50,8 @@ class TestConfigManagerThreadSafety:
     ):
         writers = [
             threading.Thread(
-                target=config_manager.set_plugin_secret,
-                args=("qingssh", f"passwords.ref-{index}", f"secret-{index}"),
+                target = config_manager.set_plugin_secret,
+                args   = ("qingssh", f"passwords.ref-{index}", f"secret-{index}"),
             )
             for index in range(20)
         ]
@@ -62,15 +62,15 @@ class TestConfigManagerThreadSafety:
 
         mutations = [
             threading.Thread(
-                target=config_manager.delete_plugin_secret,
-                args=("qingssh", f"passwords.ref-{index}"),
+                target = config_manager.delete_plugin_secret,
+                args   = ("qingssh", f"passwords.ref-{index}"),
             )
             for index in range(0, 20, 2)
         ]
         mutations.append(
             threading.Thread(
-                target=config_manager.update_secret,
-                args=("admin_user_ids", [8080]),
+                target = config_manager.update_secret,
+                args   = ("admin_user_ids", [8080]),
             )
         )
         for mutation in mutations:
@@ -102,11 +102,11 @@ class TestConfigManagerThreadSafety:
     ):
         from core import config as config_module
 
-        real_write = config_module._write_secret_payload
-        first_write_entered = threading.Event()
-        release_first_write = threading.Event()
-        write_calls = 0
-        call_lock = threading.Lock()
+        real_write                  = config_module._write_secret_payload
+        first_write_entered         = threading.Event()
+        release_first_write         = threading.Event()
+        write_calls                 = 0
+        call_lock                   = threading.Lock()
         errors: list[BaseException] = []
 
         def delayed_write(handle: Any, payload: bytes) -> None:
@@ -127,12 +127,12 @@ class TestConfigManagerThreadSafety:
 
         monkeypatch.setattr(config_module, "_write_secret_payload", delayed_write)
         first = threading.Thread(
-            target=run,
-            args=(lambda: config_manager.update_secret("admin_user_ids", [111]),),
+            target = run,
+            args   = (lambda: config_manager.update_secret("admin_user_ids", [111]),),
         )
         second = threading.Thread(
-            target=run,
-            args=(lambda: config_manager.set_plugin_secret("qingssh", "passwords.b", "two"),),
+            target = run,
+            args   = (lambda: config_manager.set_plugin_secret("qingssh", "passwords.b", "two"),),
         )
         first.start()
         assert first_write_entered.wait(timeout=1)
@@ -159,9 +159,9 @@ class TestConfigManagerThreadSafety:
     ):
         from core import config as config_module
 
-        real_write = config_module._write_secret_payload
-        failing_write_entered = threading.Event()
-        release_failure = threading.Event()
+        real_write                    = config_module._write_secret_payload
+        failing_write_entered         = threading.Event()
+        release_failure               = threading.Event()
         failures: list[BaseException] = []
 
         def fail_selected(handle: Any, payload: bytes) -> None:
@@ -203,9 +203,9 @@ class TestConfigManagerThreadSafety:
         secrets_file: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        original_read = config_manager._read_source_unlocked
+        original_read          = config_manager._read_source_unlocked
         reload_reading_secrets = threading.Event()
-        release_reload = threading.Event()
+        release_reload         = threading.Event()
 
         def delayed_read(path: Path):
             if path == secrets_file and not reload_reading_secrets.is_set():
@@ -241,7 +241,7 @@ class TestConfigManagerThreadSafety:
     ):
         first_callback_entered = threading.Event()
         release_first_callback = threading.Event()
-        revisions: list[int] = []
+        revisions: list[int]   = []
 
         def callback(snapshot: ConfigSnapshot) -> None:
             revisions.append(snapshot.revision)
@@ -273,7 +273,7 @@ class TestConfigManagerThreadSafety:
         self,
         config_manager: ConfigManager,
     ):
-        revisions: list[int] = []
+        revisions: list[int]               = []
         nested_errors: list[BaseException] = []
 
         def callback(snapshot: ConfigSnapshot) -> None:
@@ -306,9 +306,9 @@ class TestConfigManagerThreadSafety:
         config_manager: ConfigManager,
     ):
         revisions: list[int] = []
-        depth = 0
-        maximum_depth = 0
-        reentered = False
+        depth                = 0
+        maximum_depth        = 0
+        reentered            = False
 
         def callback(snapshot: ConfigSnapshot) -> None:
             nonlocal depth, maximum_depth, reentered
@@ -333,9 +333,9 @@ class TestConfigManagerThreadSafety:
         self,
         config_manager: ConfigManager,
     ):
-        loop_thread = threading.get_ident()
+        loop_thread                 = threading.get_ident()
         seen: list[tuple[int, int]] = []
-        delivered = asyncio.Event()
+        delivered                   = asyncio.Event()
 
         async def callback(snapshot: ConfigSnapshot) -> None:
             await asyncio.sleep(0)

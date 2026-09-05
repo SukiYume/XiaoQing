@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -33,7 +33,7 @@ async def test_claimed_reminder_distinguishes_rejection_from_unknown_outcome(
             }
 
     db = SimpleNamespace(released=[], completed=[])
-    db.release_reminder_claim = lambda *args, **_kwargs: db.released.append(args) or True
+    db.release_reminder_claim  = lambda *args, **_kwargs: db.released.append(args) or True
     db.complete_reminder_claim = lambda *args: db.completed.append(args) or True
 
     async def send_action(_action):
@@ -65,9 +65,9 @@ async def test_reminder_delivery_always_targets_owner_private_chat(monkeypatch) 
                 ]
             }
 
-    completed: list[tuple] = []
+    completed: list[tuple]   = []
     sent_actions: list[dict] = []
-    db = SimpleNamespace(
+    db                       = SimpleNamespace(
         complete_reminder_claim=lambda *args: completed.append(args) or True,
     )
 
@@ -76,8 +76,8 @@ async def test_reminder_delivery_always_targets_owner_private_chat(monkeypatch) 
         return True
 
     context = SimpleNamespace(
-        event={"message_type": "group", "group_id": 2002, "user_id": 1001},
-        send_action=send_action,
+        event       = {"message_type": "group", "group_id": 2002, "user_id": 1001},
+        send_action = send_action,
     )
     monkeypatch.setattr(scheduled, "get_database", lambda _context: db)
     monkeypatch.setattr(scheduled, "_reminder_service_singleton", ReminderService())
@@ -98,7 +98,7 @@ async def test_daily_marker_is_written_only_after_confirmed_delivery(monkeypatch
     class FixedDateTime(datetime):
         @classmethod
         def now(cls, tz=None):
-            instant = datetime(2030, 1, 1, tzinfo=timezone.utc)
+            instant = datetime(2030, 1, 1, tzinfo=UTC)
             return instant if tz else instant.replace(tzinfo=None)
 
     async def active_users(_db):
@@ -115,16 +115,16 @@ async def test_daily_marker_is_written_only_after_confirmed_delivery(monkeypatch
     async def content(_user, _db):
         return "daily-secret"
 
-    saved: list[tuple] = []
+    saved: list[tuple]     = []
     completed: list[tuple] = []
-    released: list[tuple] = []
-    db = SimpleNamespace(
+    released: list[tuple]  = []
+    db                     = SimpleNamespace(
         claim_scheduled_delivery=lambda task, owner, period, **_kwargs: {
             "claim_token": "lease-1",
             "delivery_key": f"{task}:{owner}:{period}",
         },
-        complete_scheduled_delivery=lambda *args: completed.append(args) or True,
-        release_scheduled_delivery=lambda *args: released.append(args) or True,
+        complete_scheduled_delivery = lambda *args: completed.append(args) or True,
+        release_scheduled_delivery  = lambda *args: released.append(args) or True,
     )
     monkeypatch.setattr(scheduled, "datetime", FixedDateTime)
     monkeypatch.setattr(scheduled, "_get_active_user_ids", active_users)
@@ -155,16 +155,16 @@ async def test_daily_marker_is_written_only_after_confirmed_delivery(monkeypatch
 @pytest.mark.asyncio
 async def test_unknown_periodic_delivery_retains_claim_without_completing() -> None:
     completed: list[tuple] = []
-    released: list[tuple] = []
-    db = SimpleNamespace(
-        complete_scheduled_delivery=lambda *args: completed.append(args) or True,
-        release_scheduled_delivery=lambda *args: released.append(args) or True,
+    released: list[tuple]  = []
+    db                     = SimpleNamespace(
+        complete_scheduled_delivery = lambda *args: completed.append(args) or True,
+        release_scheduled_delivery  = lambda *args: released.append(args) or True,
     )
 
     async def unknown(_action):
         return None
 
-    claim = scheduled._PeriodicClaim("daily_briefing", "1001", "2030-01-01", "lease", "key")
+    claim  = scheduled._PeriodicClaim("daily_briefing", "1001", "2030-01-01", "lease", "key")
     result = await scheduled._send_claimed_private(
         SimpleNamespace(send_action=unknown),
         [],
@@ -181,7 +181,7 @@ async def test_unknown_periodic_delivery_retains_claim_without_completing() -> N
 @pytest.mark.asyncio
 async def test_collecting_action_is_not_delivery_ack() -> None:
     actions: list[dict] = []
-    confirmed = await scheduled._send_private_or_collect(
+    confirmed           = await scheduled._send_private_or_collect(
         SimpleNamespace(), actions, "1001", "message"
     )
     assert confirmed is False
@@ -198,8 +198,8 @@ async def test_confirmed_periodic_send_never_releases_after_completion_error() -
         raise RuntimeError("injected completion failure")
 
     db = SimpleNamespace(
-        complete_scheduled_delivery=fail_completion,
-        release_scheduled_delivery=lambda *args: released.append(args) or True,
+        complete_scheduled_delivery = fail_completion,
+        release_scheduled_delivery  = lambda *args: released.append(args) or True,
     )
 
     async def confirmed(_action):
@@ -223,7 +223,7 @@ async def test_periodic_send_error_releases_unsent_claim() -> None:
     """发送端抛异常时尚未确认送达，租约应立即释放。"""
 
     released: list[tuple] = []
-    db = SimpleNamespace(
+    db                    = SimpleNamespace(
         release_scheduled_delivery=lambda *args: released.append(args) or True,
     )
 
@@ -262,7 +262,7 @@ async def test_invalid_reminder_owner_releases_claim(monkeypatch) -> None:
             }
 
     released: list[tuple] = []
-    db = SimpleNamespace(
+    db                    = SimpleNamespace(
         release_reminder_claim=lambda *args, **_kwargs: released.append(args) or True,
     )
     monkeypatch.setattr(scheduled, "get_database", lambda _context: db)

@@ -41,14 +41,14 @@ from pathlib import Path
 from typing import Any, BinaryIO
 from urllib.parse import urlsplit, urlunsplit
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CONFIG_PATH = PROJECT_ROOT / "config" / "config.json"
-SECRETS_PATH = PROJECT_ROOT / "config" / "secrets.json"
+PROJECT_ROOT          = Path(__file__).resolve().parents[1]
+CONFIG_PATH           = PROJECT_ROOT / "config" / "config.json"
+SECRETS_PATH          = PROJECT_ROOT / "config" / "secrets.json"
 DEFAULT_REPORT_PARENT = PROJECT_ROOT / "test_reports" / "runs" / "project"
-LOCK_PATH = DEFAULT_REPORT_PARENT / ".full-uat.lock"
-DEFAULT_ENDPOINT = "http://127.0.0.1:12000/event"
-PYTHON_COMMAND = "python"
-DEFAULT_PHASES = (
+LOCK_PATH             = DEFAULT_REPORT_PARENT / ".full-uat.lock"
+DEFAULT_ENDPOINT      = "http://127.0.0.1:12000/event"
+PYTHON_COMMAND        = "python"
+DEFAULT_PHASES        = (
     "ws-matrix",
     "http-matrix",
     "core-pressure",
@@ -202,7 +202,7 @@ def _health_endpoint(endpoint: str) -> str:
 
 def _endpoint_host_port(endpoint: str) -> tuple[str, int]:
     parsed = urlsplit(endpoint)
-    host = parsed.hostname
+    host   = parsed.hostname
     if host is None:
         raise UATError(f"URL 缺少主机: {endpoint}")
     if host not in {"127.0.0.1", "localhost", "::1"}:
@@ -261,9 +261,9 @@ def _matrix_phase(
     index: int,
 ) -> PhaseSpec:
     user_id, group_id, scenario_user_id, scenario_group_id = _identity_block(output_dir, index)
-    report_dir = output_dir / "reports" / f"{transport}-command-matrix"
+    report_dir   = output_dir / "reports" / f"{transport}-command-matrix"
     dependencies = "local,external" if args.include_external else "local"
-    command = [
+    command      = [
         PYTHON_COMMAND,
         str(PROJECT_ROOT / "scripts" / "run_command_matrix.py"),
         "--transport",
@@ -299,27 +299,27 @@ def _matrix_phase(
         command.extend(("--kinds", args.matrix_kinds))
     label = "WebSocket" if transport == "websocket" else "HTTP"
     return PhaseSpec(
-        name=f"{transport}-matrix",
-        command=tuple(command),
-        requires_service=True,
-        description=f"真实 {label} 命令目录、权限/场景拒绝与动态 CRUD/清理场景",
+        name             = f"{transport}-matrix",
+        command          = tuple(command),
+        requires_service = True,
+        description      = f"真实 {label} 命令目录、权限/场景拒绝与动态 CRUD/清理场景",
     )
 
 
 def _build_phase_specs(args: argparse.Namespace, output_dir: Path) -> tuple[PhaseSpec, ...]:
     selected = _selected_phases(args.phases, include_chat_quality=args.include_chat_quality)
     specs: list[PhaseSpec] = []
-    matrix_index = 0
+    matrix_index           = 0
     for phase in selected:
         if phase in MATRIX_PHASES:
             matrix_index += 1
             transport = "websocket" if phase == "ws-matrix" else "http"
             specs.append(
                 _matrix_phase(
-                    transport=transport,
-                    args=args,
-                    output_dir=output_dir,
-                    index=matrix_index,
+                    transport  = transport,
+                    args       = args,
+                    output_dir = output_dir,
+                    index      = matrix_index,
                 )
             )
         elif phase == "core-pressure":
@@ -435,7 +435,7 @@ def _is_link_like(metadata: os.stat_result) -> bool:
     """识别符号链接和 Windows 重解析点，避免重命名不透明目标。"""
 
     reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-    attributes = int(getattr(metadata, "st_file_attributes", 0))
+    attributes   = int(getattr(metadata, "st_file_attributes", 0))
     return stat.S_ISLNK(metadata.st_mode) or bool(attributes & reparse_flag)
 
 
@@ -547,7 +547,7 @@ def _legacy_moves_from_lock(lock: dict[str, Any]) -> tuple[_LegacyDataMove, ...]
         raise UATError("无法解析当前插件目录") from exc
 
     moves: list[_LegacyDataMove] = []
-    seen_sources: set[Path] = set()
+    seen_sources: set[Path]      = set()
     for raw in raw_moves:
         if not isinstance(raw, dict):
             raise UATError("UAT 恢复锁含无效旧数据移动记录")
@@ -582,22 +582,22 @@ class RuntimeIsolation:
     """隔离数据与运行入口，并在退出时逐字节恢复生产配置。"""
 
     def __init__(self, output_dir: Path) -> None:
-        self.output_dir = output_dir
-        self.backup_path = output_dir / "config.original.json"
-        self.original_bytes = b""
-        self.original_hash = ""
+        self.output_dir                                     = output_dir
+        self.backup_path                                    = output_dir / "config.original.json"
+        self.original_bytes                                 = b""
+        self.original_hash                                  = ""
         self.legacy_data_moves: tuple[_LegacyDataMove, ...] = ()
-        self.restored = False
+        self.restored                                       = False
 
     def __enter__(self) -> RuntimeIsolation:
         if LOCK_PATH.exists():
             raise UATError(f"发现未收口的 UAT 锁: {LOCK_PATH}；确认服务已停止后运行 --recover")
         self.original_bytes = CONFIG_PATH.read_bytes()
-        self.original_hash = _sha256_bytes(self.original_bytes)
+        self.original_hash  = _sha256_bytes(self.original_bytes)
         _atomic_write(self.backup_path, self.original_bytes)
-        move_token = f"{os.getpid()}-{time.time_ns()}"
+        move_token             = f"{os.getpid()}-{time.time_ns()}"
         self.legacy_data_moves = _discover_legacy_data_moves(move_token)
-        lock_payload = {
+        lock_payload           = {
             "schema_version": 2,
             "pid": os.getpid(),
             "created_at": _now_iso(),
@@ -628,17 +628,17 @@ class RuntimeIsolation:
                 raise UATError("config/config.json 不是有效 UTF-8") from exc
             config = _decode_json_object(
                 config_text,
-                label="config/config.json",
-                source=CONFIG_PATH,
+                label  = "config/config.json",
+                source = CONFIG_PATH,
             )
             data_root = (self.output_dir / "data").resolve()
             data_root.mkdir(parents=True, exist_ok=True)
-            config["data_root"] = str(data_root)
+            config["data_root"]   = str(data_root)
             config["log_to_file"] = False
             # 命令矩阵需要本地入站端口；UAT 不连接生产 NapCat，也不在测试
             # 期间监听源码变化。三项设置都只存在于恢复锁保护的临时配置中。
             config["enable_inbound_server"] = True
-            config["enable_ws_client"] = False
+            config["enable_ws_client"]      = False
             config["enable_plugin_watcher"] = False
             temporary = (json.dumps(config, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
             _atomic_write(CONFIG_PATH, temporary)
@@ -673,7 +673,7 @@ def _recover_interrupted_run(endpoint: str) -> int:
     if _port_is_open(host, port):
         raise UATError(f"{host}:{port} 仍有服务监听；先停止服务，再恢复配置")
     lock = _read_json_object(LOCK_PATH, label="UAT 恢复锁")
-    root_text = lock.get("project_root")
+    root_text   = lock.get("project_root")
     config_text = lock.get("config_path")
     backup_text = lock.get("backup_path")
     if (
@@ -689,10 +689,10 @@ def _recover_interrupted_run(endpoint: str) -> int:
     if locked_root != PROJECT_ROOT.resolve():
         raise UATError(f"恢复锁指向意外项目目录: {locked_root}")
     expected_config = CONFIG_PATH.resolve()
-    locked_config = Path(config_text).resolve()
+    locked_config   = Path(config_text).resolve()
     if locked_config != expected_config:
         raise UATError(f"恢复锁指向意外配置文件: {locked_config}")
-    backup = Path(backup_text).resolve()
+    backup        = Path(backup_text).resolve()
     original_hash = str(lock.get("original_sha256", ""))
     if not backup.is_file():
         raise UATError(f"恢复备份不存在: {backup}")
@@ -718,17 +718,17 @@ def _terminate_process_tree(process: subprocess.Popen[Any]) -> None:
     if os.name == "nt":
         subprocess.run(
             ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-            timeout=10,
+            stdin   = subprocess.DEVNULL,
+            stdout  = subprocess.DEVNULL,
+            stderr  = subprocess.DEVNULL,
+            check   = False,
+            timeout = 10,
         )
     else:
         # Windows 类型存根不暴露 POSIX 专属 API；运行时探测既保持跨平台，也避免
         # 为解释器或操作系统增加人为版本限制。
         kill_process_group = getattr(os, "killpg", None)
-        sigkill = getattr(signal, "SIGKILL", None)
+        sigkill            = getattr(signal, "SIGKILL", None)
         if callable(kill_process_group) and sigkill is not None:
             with contextlib.suppress(ProcessLookupError):
                 kill_process_group(process.pid, sigkill)
@@ -749,10 +749,10 @@ def _popen_flags() -> dict[str, Any]:
 def _run_logged_phase(spec: PhaseSpec, output_dir: Path, *, timeout: float) -> PhaseResult:
     log_path = output_dir / "logs" / f"{spec.name}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    started = time.monotonic()
+    started               = time.monotonic()
     exit_code: int | None = None
-    detail = ""
-    environment = os.environ.copy()
+    detail                = ""
+    environment           = os.environ.copy()
     environment.setdefault("PYTHONUTF8", "1")
     print(f"[RUN ] {spec.name}: {spec.description}", flush=True)
     with log_path.open("w", encoding="utf-8", errors="backslashreplace") as log:
@@ -760,11 +760,11 @@ def _run_logged_phase(spec: PhaseSpec, output_dir: Path, *, timeout: float) -> P
         log.flush()
         process = subprocess.Popen(
             list(spec.command),
-            cwd=PROJECT_ROOT,
-            stdin=subprocess.DEVNULL,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            env=environment,
+            cwd    = PROJECT_ROOT,
+            stdin  = subprocess.DEVNULL,
+            stdout = log,
+            stderr = subprocess.STDOUT,
+            env    = environment,
             **_popen_flags(),
         )
         try:
@@ -778,7 +778,7 @@ def _run_logged_phase(spec: PhaseSpec, output_dir: Path, *, timeout: float) -> P
             _terminate_process_tree(process)
             raise
     duration = round(time.monotonic() - started, 3)
-    status = "passed" if exit_code == 0 and not detail else "failed"
+    status   = "passed" if exit_code == 0 and not detail else "failed"
     print(f"[{'PASS' if status == 'passed' else 'FAIL'}] {spec.name} ({duration:.1f}s)")
     return PhaseResult(
         spec.name,
@@ -804,25 +804,25 @@ class ServiceController:
         start_timeout: float,
         stop_timeout: float,
     ) -> None:
-        self.output_dir = output_dir
-        self.endpoint = endpoint
-        self.health_url = _health_endpoint(endpoint)
-        self.token = token
-        self.expected_plugins = expected_plugins
-        self.start_timeout = start_timeout
-        self.stop_timeout = stop_timeout
-        self.generation = 0
+        self.output_dir                            = output_dir
+        self.endpoint                              = endpoint
+        self.health_url                            = _health_endpoint(endpoint)
+        self.token                                 = token
+        self.expected_plugins                      = expected_plugins
+        self.start_timeout                         = start_timeout
+        self.stop_timeout                          = stop_timeout
+        self.generation                            = 0
         self.process: subprocess.Popen[Any] | None = None
-        self.stdout_handle: BinaryIO | None = None
-        self.stderr_handle: BinaryIO | None = None
-        self.stdout_path: Path | None = None
-        self.stderr_path: Path | None = None
+        self.stdout_handle: BinaryIO | None        = None
+        self.stderr_handle: BinaryIO | None        = None
+        self.stdout_path: Path | None              = None
+        self.stderr_path: Path | None              = None
 
     def _health(self) -> tuple[bool, str]:
         request = urllib.request.Request(
             self.health_url,
-            headers={"Authorization": f"Bearer {self.token}"},
-            method="GET",
+            headers = {"Authorization": f"Bearer {self.token}"},
+            method  = "GET",
         )
         try:
             with urllib.request.urlopen(request, timeout=1.5) as response:
@@ -844,22 +844,22 @@ class ServiceController:
         self.generation += 1
         logs = self.output_dir / "logs"
         logs.mkdir(parents=True, exist_ok=True)
-        self.stdout_path = logs / f"service-{self.generation}.stdout.log"
-        self.stderr_path = logs / f"service-{self.generation}.stderr.log"
+        self.stdout_path   = logs / f"service-{self.generation}.stdout.log"
+        self.stderr_path   = logs / f"service-{self.generation}.stderr.log"
         self.stdout_handle = self.stdout_path.open("wb")
         self.stderr_handle = self.stderr_path.open("wb")
-        started = time.monotonic()
-        self.process = subprocess.Popen(
+        started            = time.monotonic()
+        self.process       = subprocess.Popen(
             [PYTHON_COMMAND, str(PROJECT_ROOT / "main.py")],
-            cwd=PROJECT_ROOT,
-            stdin=subprocess.DEVNULL,
-            stdout=self.stdout_handle,
-            stderr=self.stderr_handle,
-            env={**os.environ, "PYTHONUTF8": "1"},
+            cwd    = PROJECT_ROOT,
+            stdin  = subprocess.DEVNULL,
+            stdout = self.stdout_handle,
+            stderr = self.stderr_handle,
+            env    = {**os.environ, "PYTHONUTF8": "1"},
             **_popen_flags(),
         )
         deadline = time.monotonic() + self.start_timeout
-        detail = "health timeout"
+        detail   = "health timeout"
         while time.monotonic() < deadline:
             if self.process.poll() is not None:
                 detail = f"main.py 提前退出，exit_code={self.process.returncode}"
@@ -908,8 +908,8 @@ class ServiceController:
     def stop(self) -> LifecycleResult:
         if self.process is None or self.stdout_path is None or self.stderr_path is None:
             raise UATError("当前没有可停止的 UAT 服务")
-        started = time.monotonic()
-        timed_out = False
+        started      = time.monotonic()
+        timed_out    = False
         signal_error = ""
         if self.process.poll() is None:
             try:
@@ -933,8 +933,8 @@ class ServiceController:
         host, port = _endpoint_host_port(self.endpoint)
         released = _wait_for_port_release(host, port, timeout=10)
         graceful = "XiaoQing shutdown complete" in combined
-        passed = not timed_out and not signal_error and exit_code == 0 and graceful and released
-        detail = (
+        passed   = not timed_out and not signal_error and exit_code == 0 and graceful and released
+        detail   = (
             f"signal={'CTRL_BREAK_EVENT' if os.name == 'nt' else 'SIGINT'}, "
             f"shutdown_complete={graceful}, port_released={released}, timed_out={timed_out}, "
             f"signal_error={signal_error or 'none'}"
@@ -958,21 +958,21 @@ class ServiceController:
 def _write_repo_snapshot(output_dir: Path) -> dict[str, Any]:
     status = subprocess.run(
         ["git", "status", "--porcelain=v1"],
-        cwd=PROJECT_ROOT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        capture_output=True,
-        check=False,
+        cwd            = PROJECT_ROOT,
+        text           = True,
+        encoding       = "utf-8",
+        errors         = "replace",
+        capture_output = True,
+        check          = False,
     )
     head = subprocess.run(
         ["git", "rev-parse", "HEAD"],
-        cwd=PROJECT_ROOT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        capture_output=True,
-        check=False,
+        cwd            = PROJECT_ROOT,
+        text           = True,
+        encoding       = "utf-8",
+        errors         = "replace",
+        capture_output = True,
+        check          = False,
     )
     (output_dir / "git-status-before.txt").write_text(status.stdout, encoding="utf-8")
     return {
@@ -1029,9 +1029,9 @@ def _execute_service_phases(
     *,
     phase_timeout: float,
 ) -> tuple[list[PhaseResult], list[LifecycleResult]]:
-    phases: list[PhaseResult] = []
+    phases: list[PhaseResult]        = []
     lifecycle: list[LifecycleResult] = []
-    started = controller.start()
+    started                          = controller.start()
     lifecycle.append(started)
     if started.status != "passed":
         phases.extend(_mark_skipped(spec, "服务启动失败") for spec in specs)
@@ -1074,7 +1074,7 @@ def _execute_service_phases(
 
 
 def _report_markdown(report: dict[str, Any]) -> str:
-    verdict = "通过" if report["gate_passed"] else "未通过"
+    verdict     = "通过" if report["gate_passed"] else "未通过"
     phase_lines = [
         "| 阶段 | 状态 | 退出码 | 耗时(s) | 日志 |",
         "|---|---:|---:|---:|---|",
@@ -1186,7 +1186,7 @@ def _preflight_service_ports(endpoint: str, config: dict[str, Any]) -> None:
     if _port_is_open(host, port):
         raise UATError(f"入站端口 {host}:{port} 已被占用；runner 不会接管非本次创建的服务")
     plugins = config.get("plugins")
-    pendo = plugins.get("pendo") if isinstance(plugins, dict) else None
+    pendo   = plugins.get("pendo") if isinstance(plugins, dict) else None
     if not isinstance(pendo, dict) or pendo.get("web_enabled", True) is False:
         return
     pendo_host = str(pendo.get("web_host", "127.0.0.1"))
@@ -1199,7 +1199,7 @@ def _preflight_service_ports(endpoint: str, config: dict[str, Any]) -> None:
 
 
 def _execute(args: argparse.Namespace) -> int:
-    stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
+    stamp      = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
     output_dir = (
         args.output.resolve()
         if args.output is not None
@@ -1239,11 +1239,11 @@ def _execute(args: argparse.Namespace) -> int:
             with isolation:
                 controller = ServiceController(
                     output_dir,
-                    endpoint=args.endpoint,
-                    token=_load_inbound_token(),
-                    expected_plugins=len(tuple((PROJECT_ROOT / "plugins").glob("*/plugin.json"))),
-                    start_timeout=args.start_timeout,
-                    stop_timeout=args.stop_timeout,
+                    endpoint         = args.endpoint,
+                    token            = _load_inbound_token(),
+                    expected_plugins = len(tuple((PROJECT_ROOT / "plugins").glob("*/plugin.json"))),
+                    start_timeout    = args.start_timeout,
+                    stop_timeout     = args.stop_timeout,
                 )
                 service_phases, lifecycle = _execute_service_phases(
                     service_specs,
@@ -1302,9 +1302,9 @@ def _execute(args: argparse.Namespace) -> int:
         "secrets_sha256_before": secrets_before,
         "secrets_sha256_after": _sha256_file(SECRETS_PATH),
     }
-    all_phases_passed = all(row.status == "passed" for row in phase_results)
+    all_phases_passed    = all(row.status == "passed" for row in phase_results)
     all_lifecycle_passed = all(row.status == "passed" for row in lifecycle_results)
-    gate_passed = (
+    gate_passed          = (
         not fatal_errors
         and all_phases_passed
         and all_lifecycle_passed
@@ -1345,8 +1345,8 @@ def _execute(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description     = __doc__,
+        formatter_class = argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
@@ -1370,8 +1370,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
+    parser   = build_parser()
+    args     = parser.parse_args(argv)
     timeouts = (args.start_timeout, args.stop_timeout, args.phase_timeout)
     if any(not math.isfinite(value) or value <= 0 for value in timeouts):
         parser.error("超时参数必须为正数")

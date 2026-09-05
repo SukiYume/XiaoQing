@@ -49,9 +49,7 @@ test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/
 
 ```bash
 python -m compileall -q plugins/xiaoqing_chat
-python -m pytest -q \
-  tests/plugins/xiaoqing_chat \
-  tests/plugins/xiaoqing_chat/test_*reply_checker*.py
+python -m pytest -q tests/plugins/xiaoqing_chat
 ```
 
 这组测试覆盖命令、召唤、参与、规划、回复生成、媒体、记忆、租户范围、原子存储、后台任务和关闭流程。
@@ -96,7 +94,7 @@ python scripts/run_full_uat.py \
 
 - 请求状态与 request ID。
 - Router 与 Dispatcher 选择结果。
-- 插件返回的 OneBot action。
+- Core 向 OneBot 动作端投递的消息及 action 回执。
 - 投递回执。
 - 对应会话状态变化。
 
@@ -246,11 +244,11 @@ python scripts/run_full_uat.py \
 ```bash
 python scripts/run_xiaoqing_chat_quality.py \
   --endpoint http://127.0.0.1:12000/onebot \
-  --chat-data-dir data/xiaoqing_chat \
+  --chat-data-dir test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/data/xiaoqing_chat \
   --output test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/quality.json
 ```
 
-报告文件使用新路径，脚本会保护已有报告。
+该端口对应专用测试 Bot。`--chat-data-dir` 指向这个 Bot 实际使用的隔离插件数据目录，运行前确认目录已经创建。探针使用 `X-XiaoQing-Response-Mode: actions` 获取调试动作预览；普通 OneBot HTTP 事件响应为空对象，动作端回执提供实际投递证据。报告文件使用新路径，脚本会保护已有报告。
 
 ### 拟人大群实验
 
@@ -348,6 +346,10 @@ python -m plugins.xiaoqing_chat.experiments.anthropomorphic_group \
 ### 回复检查
 
 覆盖确定性 hard、确定性 soft、语义 hard、语义 soft、重生成、重规划、主动参与耗尽和明确召唤耗尽。每个用例核对候选状态与最终提交状态。
+
+交流约束通过独立阅读完整输入与回复验收，覆盖直接追问、间接陈述、引用、条件句及同义改写。质量探针保留人工复核材料，`machine_gate_passed` 只代表机器指标，`semantic_review_required` 标记独立语义复核需求；复核前 `semantic_acceptance_passed` 保持空值。
+
+缺图用例使用纯文字事件指向具体截图，核对回复明确说明未知画面，并检查颜色、布局、文字和物体陈述的证据。历史真实图片作为独立正例，验证回指仍可使用对应摘要。陈旧话题探针的 `current_turn_discloses_missing_image` 同时记录缺图告知，旧话题排除保持独立检查。
 
 ### 媒体
 
@@ -447,3 +449,9 @@ python -m plugins.xiaoqing_chat.experiments.anthropomorphic_group \
 - 测试负责人和完成时间。
 
 最终结论基于本轮报告中的实际证据。后续复测使用新的 `RUN_ID`，并在缺陷表中关联原缺陷与修复提交。
+
+## 完整审查回归
+
+`tests/plugins/xiaoqing_chat/test_review_xchat_regressions.py` 使用临时目录、模型替身和受控任务验证以下边界：关闭时任务存活、错误结构配合有效备份、锁淘汰与等待者身份、隔离记忆不可见、连续重启后的消息编号、人物档案重置代际、长历史最新消息、等待时长类型与范围、自审空修改字段、跨会话学习快照、相似表情元数据以及并发表情索引更新。
+
+执行 `python -m pytest tests/plugins/xiaoqing_chat -q` 可同时运行插件既有测试及上述回归。真实 QQ 投递、外部模型行为和上线表现使用本文前述验收步骤单独记录。

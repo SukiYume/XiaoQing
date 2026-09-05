@@ -27,15 +27,15 @@ class _Response:
         self,
         payload: object,
         *,
-        status: int = 200,
+        status: int       = 200,
         content_type: str = "application/json",
     ) -> None:
-        self.status = status
-        self.url = flickr_client.API_ENDPOINT
-        self.headers = {"Content-Type": content_type}
+        self.status         = status
+        self.url            = flickr_client.API_ENDPOINT
+        self.headers        = {"Content-Type": content_type}
         self.content_length = None
-        self.content = _AsyncContent(json.dumps(payload).encode("utf-8"))
-        self.closed = False
+        self.content        = _AsyncContent(json.dumps(payload).encode("utf-8"))
+        self.closed         = False
 
     async def __aenter__(self):
         return self
@@ -49,7 +49,7 @@ class _Response:
 
 class _Session:
     def __init__(self, *responses: _Response) -> None:
-        self.responses = list(responses)
+        self.responses                          = list(responses)
         self.calls: list[tuple[str, str, dict]] = []
 
     def request(self, method: str, url: str, **kwargs):
@@ -87,12 +87,12 @@ def _page_payload(*items: object, container: str = "photos") -> dict[str, object
 def context(tmp_path: Path) -> SimpleNamespace:
     return with_settings_reader(
         SimpleNamespace(
-            data_dir=tmp_path,
-            config={},
-            secrets={"plugins": {"flickr": {"api_key": "test-api-key"}}},
-            http_session=None,
-            logger=MagicMock(),
-            state={},
+            data_dir     = tmp_path,
+            config       = {},
+            secrets      = {"plugins": {"flickr": {"api_key": "test-api-key"}}},
+            http_session = None,
+            logger       = MagicMock(),
+            state        = {},
         )
     )
 
@@ -118,7 +118,7 @@ async def test_interesting_uses_fixed_bounded_endpoint_and_parses_photo(
     context: SimpleNamespace,
 ) -> None:
     context.http_session = _Session(_Response(_page_payload(_photo_item())))
-    client = flickr_client.FlickrClient(context)
+    client               = flickr_client.FlickrClient(context)
 
     page = await client.interesting()
 
@@ -149,12 +149,12 @@ async def test_search_omits_license_for_any_and_passes_explicit_filters(
     client = flickr_client.FlickrClient(context)
 
     await client.search(
-        query="aurora",
-        tags="sky,night",
-        sort="interestingness-desc",
-        license_ids=None,
-        min_taken_date="2026-08-01 00:00:00",
-        max_taken_date="2026-08-31 23:59:59",
+        query          = "aurora",
+        tags           = "sky,night",
+        sort           = "interestingness-desc",
+        license_ids    = None,
+        min_taken_date = "2026-08-01 00:00:00",
+        max_taken_date = "2026-08-31 23:59:59",
     )
     first = context.http_session.calls[0][2]["params"]
     assert "license" not in first
@@ -164,13 +164,13 @@ async def test_search_omits_license_for_any_and_passes_explicit_filters(
     assert first["safe_search"] == 1
 
     await client.search(
-        query="moon",
-        tags="",
-        sort="relevance",
-        license_ids="1,2,3,4,5,6,9,10",
-        min_taken_date=None,
-        max_taken_date=None,
-        commons_only=True,
+        query          = "moon",
+        tags           = "",
+        sort           = "relevance",
+        license_ids    = "1,2,3,4,5,6,9,10",
+        min_taken_date = None,
+        max_taken_date = None,
+        commons_only   = True,
     )
     second = context.http_session.calls[1][2]["params"]
     assert second["license"] == "1,2,3,4,5,6,9,10"
@@ -183,22 +183,22 @@ async def test_commons_sized_response_fits_json_string_budget(
 ) -> None:
     items = [
         _photo_item(
-            id=str(index),
-            description={"_content": "x" * 1_500},
+            id          = str(index),
+            description = {"_content": "x" * 1_500},
         )
         for index in range(1, 101)
     ]
     context.http_session = _Session(_Response(_page_payload(*items)))
-    client = flickr_client.FlickrClient(context)
+    client               = flickr_client.FlickrClient(context)
 
     page = await client.search(
-        query="moon",
-        tags="",
-        sort="interestingness-desc",
-        license_ids=None,
-        min_taken_date=None,
-        max_taken_date=None,
-        commons_only=True,
+        query          = "moon",
+        tags           = "",
+        sort           = "interestingness-desc",
+        license_ids    = None,
+        min_taken_date = None,
+        max_taken_date = None,
+        commons_only   = True,
     )
 
     assert len(page.photos) == 100
@@ -265,7 +265,7 @@ def test_photo_parser_skips_malformed_video_and_untrusted_media_urls() -> None:
 async def test_user_resolution_supports_nsid_username_and_profile_url(
     context: SimpleNamespace,
 ) -> None:
-    client = flickr_client.FlickrClient(context)
+    client       = flickr_client.FlickrClient(context)
     client._call = AsyncMock(
         side_effect=[
             {"stat": "ok", "user": {"id": "11@N22"}},
@@ -284,7 +284,7 @@ async def test_user_resolution_supports_nsid_username_and_profile_url(
 async def test_public_photos_album_and_info_use_expected_contracts(
     context: SimpleNamespace,
 ) -> None:
-    client = flickr_client.FlickrClient(context)
+    client       = flickr_client.FlickrClient(context)
     info_payload = {
         "stat": "ok",
         "photo": {

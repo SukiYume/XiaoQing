@@ -22,7 +22,7 @@ class PluginError(XiaoQingError):
 
     def __init__(self, plugin_name: str, message: str, cause: Exception | None = None):
         self.plugin_name = plugin_name
-        self.cause = cause
+        self.cause       = cause
         super().__init__(f"[{plugin_name}] {message}")
 
 
@@ -97,7 +97,7 @@ class ConfigLoadError(ConfigError):
 
     def __init__(self, message_or_path: str | Path, original: Exception | None = None):
         self.path: Path | None = Path(message_or_path) if original is not None else None
-        self.original = original
+        self.original          = original
         if original is None:
             message = str(message_or_path)
         else:
@@ -122,9 +122,9 @@ class SessionNotFoundError(SessionError):
     """会话不存在"""
 
     def __init__(self, user_id: int, group_id: int | None = None):
-        self.user_id = user_id
+        self.user_id  = user_id
         self.group_id = group_id
-        location = f"group {group_id}" if group_id is not None else "private"
+        location      = f"group {group_id}" if group_id is not None else "private"
         super().__init__(f"No active session for user {user_id} in {location}")
 
 

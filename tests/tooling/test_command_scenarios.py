@@ -23,8 +23,8 @@ from scripts.run_command_matrix import (
 )
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT = REPOSITORY_ROOT
-POLICY_PATH = ROOT / "tests" / "command_matrix_policy.json"
+ROOT          = REPOSITORY_ROOT
+POLICY_PATH   = ROOT / "tests" / "command_matrix_policy.json"
 SCENARIO_PATH = ROOT / "tests" / "command_scenario_contracts.json"
 
 
@@ -39,9 +39,9 @@ def _reply(text: str, *, duration_ms: float = 1.0) -> EventResponse:
 def test_scenario_contract_audits_every_plugin_and_closes_dynamic_coverage() -> None:
     """新增插件、失效命令码或没有回归/场景证据的动态命令必须失败关闭。"""
 
-    policy = load_policy(POLICY_PATH)
-    records = load_source_catalog()
-    contract = load_scenario_contract(SCENARIO_PATH)
+    policy    = load_policy(POLICY_PATH)
+    records   = load_source_catalog()
+    contract  = load_scenario_contract(SCENARIO_PATH)
     scenarios = build_business_scenarios(
         contract,
         records,
@@ -61,7 +61,7 @@ def test_scenario_contract_audits_every_plugin_and_closes_dynamic_coverage() -> 
             assert any(step.cleanup for step in scenario.steps), scenario.scenario_id
 
     for plugin, audit in contract["plugins"].items():
-        dynamic = set(audit["dynamic_codes"])
+        dynamic    = set(audit["dynamic_codes"])
         regression = set(audit["regression_codes"])
         assert dynamic == regression | (scenario_codes.get(plugin, set()) & dynamic)
         for relative in audit["test_files"]:
@@ -73,7 +73,7 @@ def test_scenario_contract_audits_every_plugin_and_closes_dynamic_coverage() -> 
 def test_pendo_scenarios_require_same_id_and_all_three_event_shapes() -> None:
     """Pendo 不能退化回相互独立的静态样例或只测一种 Event。"""
 
-    policy = load_policy(POLICY_PATH)
+    policy    = load_policy(POLICY_PATH)
     scenarios = build_business_scenarios(
         load_scenario_contract(SCENARIO_PATH),
         load_source_catalog(),
@@ -113,7 +113,7 @@ def test_pendo_scenarios_require_same_id_and_all_three_event_shapes() -> None:
             assert f"{{{{{name}}}}}" in templates
 
     recurring_templates = "\n".join(step.message for step in pendo["pendo-event-recurring"].steps)
-    multi_templates = "\n".join(step.message for step in pendo["pendo-event-multi-node"].steps)
+    multi_templates     = "\n".join(step.message for step in pendo["pendo-event-multi-node"].steps)
     assert "{{recurring_collection_id}}" in recurring_templates
     assert "{{recurring_child_id}}" in recurring_templates
     assert all(
@@ -125,7 +125,7 @@ def test_pendo_scenarios_require_same_id_and_all_three_event_shapes() -> None:
 def test_qingpet_scenario_reaches_every_strict_argument_rejection_and_cleans_up() -> None:
     """QingPet 错误样例必须在已启用且已有宠物的群中命中真实处理器。"""
 
-    policy = load_policy(POLICY_PATH)
+    policy    = load_policy(POLICY_PATH)
     scenarios = build_business_scenarios(
         load_scenario_contract(SCENARIO_PATH),
         load_source_catalog(),
@@ -149,7 +149,7 @@ def test_qingpet_scenario_reaches_every_strict_argument_rejection_and_cleans_up(
 def test_mutating_adnmb_and_color_commands_have_cleanup_scenarios() -> None:
     """外部订阅和自定义颜色不能再被当作无状态只读样例直接执行。"""
 
-    policy = load_policy(POLICY_PATH)
+    policy    = load_policy(POLICY_PATH)
     scenarios = build_business_scenarios(
         load_scenario_contract(SCENARIO_PATH),
         load_source_catalog(),
@@ -204,7 +204,7 @@ def test_scenario_cover_must_have_a_real_event_step() -> None:
 
 
 def test_scenario_contract_rejects_stale_code_and_missing_plugin_audit() -> None:
-    records = load_source_catalog()
+    records  = load_source_catalog()
     expected = frozenset(load_policy(POLICY_PATH)["plugins"])
 
     stale = deepcopy(load_scenario_contract(SCENARIO_PATH))
@@ -220,7 +220,7 @@ def test_scenario_contract_rejects_stale_code_and_missing_plugin_audit() -> None
 
 class _SequenceSender:
     def __init__(self, replies: list[EventResponse]) -> None:
-        self.replies = list(replies)
+        self.replies                          = list(replies)
         self.sent: list[tuple[str, str, str]] = []
 
     def send(self, message: str, *, scope: str, actor: str) -> EventResponse:
@@ -305,15 +305,15 @@ def test_dynamic_scenario_captures_id_fails_semantics_and_still_cleans_up() -> N
     results = execute_business_scenarios(
         sender,
         [scenario],
-        risks=frozenset({"isolated_state"}),
-        dependencies=frozenset({"local"}),
-        plugins=frozenset(),
-        code_prefixes=(),
-        plan_only=False,
-        delay_ms=0,
-        redactions=(),
-        fixture_values={},
-        run_id="run42",
+        risks          = frozenset({"isolated_state"}),
+        dependencies   = frozenset({"local"}),
+        plugins        = frozenset(),
+        code_prefixes  = (),
+        plan_only      = False,
+        delay_ms       = 0,
+        redactions     = (),
+        fixture_values = {},
+        run_id         = "run42",
     )
 
     assert [row["execution_status"] for row in results] == [
@@ -372,15 +372,15 @@ def test_dynamic_scenario_missing_capture_never_sends_unresolved_cleanup() -> No
     results = execute_business_scenarios(
         sender,
         [scenario],
-        risks=frozenset({"isolated_state"}),
-        dependencies=frozenset({"local"}),
-        plugins=frozenset(),
-        code_prefixes=(),
-        plan_only=False,
-        delay_ms=0,
-        redactions=(),
-        fixture_values={},
-        run_id="run42",
+        risks          = frozenset({"isolated_state"}),
+        dependencies   = frozenset({"local"}),
+        plugins        = frozenset(),
+        code_prefixes  = (),
+        plan_only      = False,
+        delay_ms       = 0,
+        redactions     = (),
+        fixture_values = {},
+        run_id         = "run42",
     )
 
     assert results[0]["failure"] == "business_semantic_assertion_failed"
@@ -390,33 +390,33 @@ def test_dynamic_scenario_missing_capture_never_sends_unresolved_cleanup() -> No
 
 def test_weak_stateful_catalog_case_is_not_executed_without_business_fixture() -> None:
     case = MatrixCase(
-        case_id="stateful-static",
-        plugin="demo",
-        code="demo.create",
-        kind="normal",
-        example_index=1,
-        message="/demo create",
-        scope="private",
-        actor="user",
-        permission="public",
-        risk="isolated_state",
-        dependency="local",
-        sensitive=False,
-        policy_reason="writes state",
-        semantic_expectation="observable_business_reply",
+        case_id              = "stateful-static",
+        plugin               = "demo",
+        code                 = "demo.create",
+        kind                 = "normal",
+        example_index        = 1,
+        message              = "/demo create",
+        scope                = "private",
+        actor                = "user",
+        permission           = "public",
+        risk                 = "isolated_state",
+        dependency           = "local",
+        sensitive            = False,
+        policy_reason        = "writes state",
+        semantic_expectation = "observable_business_reply",
     )
     sender = _SequenceSender([])
 
     results = execute_matrix(
         sender,  # type: ignore[arg-type]
         [case],
-        risks=frozenset({"isolated_state"}),
-        dependencies=frozenset({"local"}),
-        plugins=frozenset(),
-        code_prefixes=(),
-        plan_only=False,
-        delay_ms=0,
-        redactions=(),
+        risks         = frozenset({"isolated_state"}),
+        dependencies  = frozenset({"local"}),
+        plugins       = frozenset(),
+        code_prefixes = (),
+        plan_only     = False,
+        delay_ms      = 0,
+        redactions    = (),
     )
 
     assert results[0]["execution_status"] == "not_executed"
@@ -426,34 +426,34 @@ def test_weak_stateful_catalog_case_is_not_executed_without_business_fixture() -
 
 def test_scenarios_only_skips_direct_matrix_without_sending() -> None:
     case = MatrixCase(
-        case_id="read-only-static",
-        plugin="demo",
-        code="demo.status",
-        kind="normal",
-        example_index=1,
-        message="/demo status",
-        scope="private",
-        actor="user",
-        permission="public",
-        risk="read_only",
-        dependency="local",
-        sensitive=False,
-        policy_reason="read only",
-        semantic_expectation="observable_business_reply",
+        case_id              = "read-only-static",
+        plugin               = "demo",
+        code                 = "demo.status",
+        kind                 = "normal",
+        example_index        = 1,
+        message              = "/demo status",
+        scope                = "private",
+        actor                = "user",
+        permission           = "public",
+        risk                 = "read_only",
+        dependency           = "local",
+        sensitive            = False,
+        policy_reason        = "read only",
+        semantic_expectation = "observable_business_reply",
     )
     sender = _SequenceSender([])
 
     results = execute_matrix(
         sender,  # type: ignore[arg-type]
         [case],
-        risks=frozenset({"read_only"}),
-        dependencies=frozenset({"local"}),
-        plugins=frozenset(),
-        code_prefixes=(),
-        plan_only=False,
-        scenarios_only=True,
-        delay_ms=0,
-        redactions=(),
+        risks          = frozenset({"read_only"}),
+        dependencies   = frozenset({"local"}),
+        plugins        = frozenset(),
+        code_prefixes  = (),
+        plan_only      = False,
+        scenarios_only = True,
+        delay_ms       = 0,
+        redactions     = (),
     )
 
     assert results[0]["execution_status"] == "not_executed"
@@ -491,16 +491,16 @@ def test_scenario_runtime_values_render_synthetic_identity() -> None:
     results = execute_business_scenarios(
         sender,
         [scenario],
-        risks=frozenset({"isolated_state"}),
-        dependencies=frozenset({"local"}),
-        plugins=frozenset(),
-        code_prefixes=(),
-        plan_only=False,
-        delay_ms=0,
-        redactions=(),
-        fixture_values={},
-        run_id="run42",
-        runtime_values={"test_user_id": "991001", "test_group_id": "992002"},
+        risks          = frozenset({"isolated_state"}),
+        dependencies   = frozenset({"local"}),
+        plugins        = frozenset(),
+        code_prefixes  = (),
+        plan_only      = False,
+        delay_ms       = 0,
+        redactions     = (),
+        fixture_values = {},
+        run_id         = "run42",
+        runtime_values = {"test_user_id": "991001", "test_group_id": "992002"},
     )
 
     assert results[0]["execution_status"] == "passed_cleanup_contract"
@@ -512,7 +512,7 @@ def test_scenario_fixture_file_must_not_be_committed() -> None:
 
     contract_text = SCENARIO_PATH.read_text(encoding="utf-8")
     payload: dict[str, Any] = json.loads(contract_text)
-    fixture_names = {
+    fixture_names           = {
         name for scenario in payload["scenarios"] for name in scenario["required_fixtures"]
     }
     assert fixture_names == {
@@ -556,15 +556,15 @@ def test_scenario_fixture_values_are_redacted_from_command_and_response() -> Non
     results = execute_business_scenarios(
         sender,
         [scenario],
-        risks=frozenset({"privileged"}),
-        dependencies=frozenset({"external"}),
-        plugins=frozenset(),
-        code_prefixes=(),
-        plan_only=False,
-        delay_ms=0,
-        redactions=("secret.example",),
-        fixture_values={"host": "secret.example"},
-        run_id="run42",
+        risks          = frozenset({"privileged"}),
+        dependencies   = frozenset({"external"}),
+        plugins        = frozenset(),
+        code_prefixes  = (),
+        plan_only      = False,
+        delay_ms       = 0,
+        redactions     = ("secret.example",),
+        fixture_values = {"host": "secret.example"},
+        run_id         = "run42",
     )
 
     assert results[0]["execution_status"] == "passed_cleanup_contract"

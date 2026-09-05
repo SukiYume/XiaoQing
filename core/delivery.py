@@ -15,7 +15,7 @@ from .message import validate_message_segments
 logger = logging.getLogger(__name__)
 
 DELIVERY_RECEIPT_KEY = "_delivery_receipt"
-DeliveryCallback = Callable[[], Awaitable[None] | None]
+DeliveryCallback     = Callable[[], Awaitable[None] | None]
 
 
 class DeliveryReceipt:
@@ -29,19 +29,31 @@ class DeliveryReceipt:
         rollback: DeliveryCallback,
         unknown: DeliveryCallback,
     ) -> None:
-        self._expected_actions = max(1, int(expected_actions))
+        self._expected_actions  = max(1, int(expected_actions))
         self._delivered_actions = 0
-        self._commit = commit
-        self._rollback = rollback
-        self._unknown = unknown
+        self._commit            = commit
+        self._rollback          = rollback
+        self._unknown           = unknown
         # add_expected_actions() 必须保持同步，因为拆分消息和计划任务会在开始
         # 发送前同步扩充物理 action 数。这里使用线程锁统一保护它与异步 record()
         # 的共享状态；临界区只做内存读写，绝不在持锁期间 await。
-        self._lock = threading.Lock()
-        self._resolved = False
-        self._committed = False
-        self._outcome: bool | None = None
+        self._lock                                 = threading.Lock()
+        self._resolved                             = False
+        self._committed                            = False
+        self._outcome: bool | None                 = None
         self._callback_error: BaseException | None = None
+        self._handoff_pending                      = False
+
+    def defer_to_transport(self) -> None:
+        """将收据结算交给 Core 或暂存队列拥有的实际传输边界。"""
+        with self._lock:
+            self._handoff_pending = True
+
+    @property
+    def handoff_pending(self) -> bool:
+        """返回已登记的发送器是否仍拥有最终结算权。"""
+        with self._lock:
+            return self._handoff_pending and not self._resolved
 
     @property
     def resolved(self) -> bool:
@@ -95,25 +107,25 @@ class DeliveryReceipt:
         """
 
         callback: DeliveryCallback | None = None
-        is_commit = False
+        is_commit                         = False
         with self._lock:
             if self._resolved:
                 return
             if delivered is None:
                 self._resolved = True
-                self._outcome = None
-                callback = self._unknown
+                self._outcome  = None
+                callback       = self._unknown
             elif delivered is False:
                 self._resolved = True
-                self._outcome = False
-                callback = self._rollback
+                self._outcome  = False
+                callback       = self._rollback
             elif delivered is True:
                 self._delivered_actions += 1
                 if self._delivered_actions >= self._expected_actions:
                     self._resolved = True
-                    self._outcome = True
-                    callback = self._commit
-                    is_commit = True
+                    self._outcome  = True
+                    callback       = self._commit
+                    is_commit      = True
             else:
                 raise TypeError("delivery outcome must be True, False, or None")
         if callback is None:
@@ -202,8 +214,9 @@ async def send_with_receipt(
 ) -> bool | None:
     """发送带收据的 action，并确保返回的三态结果恰好结算一次。"""
 
+    # 异常由调用者按具体传输分类；超时可能表示结果未知，须保留其结算权。
     outcome = await send_action(attach_receipt(action, receipt))
-    if not receipt.resolved:
+    if not receipt.resolved and not receipt.handoff_pending:
         await receipt.record(outcome)
     return outcome
 
@@ -216,7 +229,7 @@ def strip_receipt(action: dict[str, Any]) -> dict[str, Any]:
 
 async def resolve_action_handoff(action: dict[str, Any], *, delivered: bool) -> dict[str, Any]:
     """移除内部状态并记录一次真实 transport 结果。"""
-    clean = strip_receipt(action)
+    clean   = strip_receipt(action)
     receipt = receipt_from_action(action)
     if receipt is not None:
         await receipt.record(delivered)

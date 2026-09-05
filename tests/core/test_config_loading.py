@@ -16,9 +16,9 @@ from tests.helpers.config_test_support import (
 )
 from tests.helpers.paths import REPOSITORY_ROOT
 
-config_file = _fixture_support.config_file
-config_manager = _fixture_support.config_manager
-secrets_file = _fixture_support.secrets_file
+config_file     = _fixture_support.config_file
+config_manager  = _fixture_support.config_manager
+secrets_file    = _fixture_support.secrets_file
 temp_config_dir = _fixture_support.temp_config_dir
 
 
@@ -75,10 +75,10 @@ class TestConfigManagerInit:
         assert current["plugins"]["echo"]["enabled"] is True
 
     def test_snapshot_mutable_exports_are_detached(self, config_manager: ConfigManager):
-        snapshot = config_manager.snapshot()
-        config = snapshot.mutable_config()
-        secrets = snapshot.mutable_secrets()
-        config["plugins"]["echo"]["enabled"] = False
+        snapshot                              = config_manager.snapshot()
+        config                                = snapshot.mutable_config()
+        secrets                               = snapshot.mutable_secrets()
+        config["plugins"]["echo"]["enabled"]  = False
         secrets["plugins"]["echo"]["api_key"] = "changed"
 
         assert config_manager.config["plugins"]["echo"]["enabled"] is True
@@ -115,7 +115,7 @@ class TestConfigManagerReload:
 
     def test_reload_handles_missing_files(self, temp_config_dir: Path):
         """测试处理缺失文件"""
-        missing_config = temp_config_dir / "nonexistent_config.json"
+        missing_config  = temp_config_dir / "nonexistent_config.json"
         missing_secrets = temp_config_dir / "nonexistent_secrets.json"
 
         manager = ConfigManager(missing_config, missing_secrets)
@@ -159,8 +159,8 @@ class TestConfigManagerReload:
         field: str,
         value: Any,
     ):
-        original = config_manager.config
-        candidate = config_manager.snapshot().mutable_config()
+        original         = config_manager.config
+        candidate        = config_manager.snapshot().mutable_config()
         candidate[field] = value
         config_file.write_text(json.dumps(candidate), encoding="utf-8")
 
@@ -203,7 +203,7 @@ class TestConfigManagerReload:
         config_manager: ConfigManager,
         config_file: Path,
     ):
-        candidate = config_manager.snapshot().mutable_config()
+        candidate              = config_manager.snapshot().mutable_config()
         candidate["data_root"] = "runtime/plugin-data"
         config_file.write_text(json.dumps(candidate), encoding="utf-8")
 
@@ -218,7 +218,7 @@ class TestConfigManagerReload:
         config_file: Path,
         value: object,
     ):
-        candidate = config_manager.snapshot().mutable_config()
+        candidate              = config_manager.snapshot().mutable_config()
         candidate["data_root"] = value
         config_file.write_text(json.dumps(candidate), encoding="utf-8")
 
@@ -249,10 +249,10 @@ class TestConfigManagerReload:
         config_manager: ConfigManager,
         config_file: Path,
     ):
-        original = config_manager.config
-        candidate = config_manager.snapshot().mutable_config()
+        original                      = config_manager.config
+        candidate                     = config_manager.snapshot().mutable_config()
         candidate["enable_ws_client"] = True
-        candidate["onebot_ws_uri"] = ""
+        candidate["onebot_ws_uri"]    = ""
         config_file.write_text(json.dumps(candidate), encoding="utf-8")
 
         with pytest.raises(ConfigLoadError, match="onebot_ws_uri"):
@@ -265,8 +265,8 @@ class TestConfigManagerReload:
         config_manager: ConfigManager,
         config_file: Path,
     ):
-        original = config_manager.snapshot()
-        candidate = config_manager.snapshot().mutable_config()
+        original                      = config_manager.snapshot()
+        candidate                     = config_manager.snapshot().mutable_config()
         candidate["plugin_execution"] = {
             "sync_parallel_limit": 4,
             "overrides": {"demo": {"global_sync_queue_limit": 8}},

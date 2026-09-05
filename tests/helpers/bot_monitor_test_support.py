@@ -12,10 +12,10 @@ import pytest
 
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT = REPOSITORY_ROOT
-MONITOR = ROOT / "scripts" / "run-bot-monitor.ps1"
-STOP_LAUNCHER = ROOT / "scripts" / "stop-bot.vbs"
-LOG_PUMP = ROOT / "scripts" / "run_process_with_rotating_logs.py"
+ROOT                       = REPOSITORY_ROOT
+MONITOR                    = ROOT / "scripts" / "run-bot-monitor.ps1"
+STOP_LAUNCHER              = ROOT / "scripts" / "stop-bot.vbs"
+LOG_PUMP                   = ROOT / "scripts" / "run_process_with_rotating_logs.py"
 POWERSHELL_TIMEOUT_SECONDS = 30
 
 
@@ -52,19 +52,19 @@ def run_powershell(
     executable: str,
     *arguments: str,
     env: dict[str, str] | None = None,
-    timeout: float = POWERSHELL_TIMEOUT_SECONDS,
+    timeout: float             = POWERSHELL_TIMEOUT_SECONDS,
 ) -> subprocess.CompletedProcess[str]:
     """运行 PowerShell，并稳定解码不同宿主产生的诊断输出。"""
 
     return subprocess.run(
         [executable, "-NoLogo", "-NoProfile", *arguments],
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding=powershell_output_encoding(executable),
-        errors="replace",
-        env=env,
-        timeout=timeout,
+        check          = False,
+        capture_output = True,
+        text           = True,
+        encoding       = powershell_output_encoding(executable),
+        errors         = "replace",
+        env            = env,
+        timeout        = timeout,
     )
 
 
@@ -75,7 +75,7 @@ def assert_process_not_running(process_id: int) -> None:
         executable = powershell_executable()
         assert executable is not None
         environment = {**os.environ, "XIAOQING_TEST_CHILD_PID": str(process_id)}
-        result = subprocess.run(
+        result      = subprocess.run(
             [
                 executable,
                 "-NoLogo",
@@ -84,10 +84,10 @@ def assert_process_not_running(process_id: int) -> None:
                 "if (Get-Process -Id $env:XIAOQING_TEST_CHILD_PID "
                 "-ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }",
             ],
-            check=False,
-            capture_output=True,
-            env=environment,
-            timeout=POWERSHELL_TIMEOUT_SECONDS,
+            check          = False,
+            capture_output = True,
+            env            = environment,
+            timeout        = POWERSHELL_TIMEOUT_SECONDS,
         )
         assert result.returncode == 0
         return

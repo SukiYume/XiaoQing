@@ -16,12 +16,12 @@ import { derivePresetRange, fetchItemRangeBounds, RANGE_PRESET_OPTIONS, todayRan
 import { formatZonedDateTime, formatZonedMonthDay } from '../utils/timezone.js';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss, subscribeDataChanges } from '../utils/ui.js';
 
-const PAGE_SIZE = 18;
-const CSS_ID = 'pendo-notes-styles';
-const RANGE_KEYS = new Set(RANGE_PRESET_OPTIONS.map(({ key }) => key));
-const RANGE_LABELS = new Map(RANGE_PRESET_OPTIONS.map(({ key, label }) => [key, label]));
+const PAGE_SIZE             = 18;
+const CSS_ID                = 'pendo-notes-styles';
+const RANGE_KEYS            = new Set(RANGE_PRESET_OPTIONS.map(({ key }) => key));
+const RANGE_LABELS          = new Map(RANGE_PRESET_OPTIONS.map(({ key, label }) => [key, label]));
 const CADENCE_GRANULARITIES = new Set(['day', 'week', 'month', 'year']);
-const DEFAULT_FILTERS = Object.freeze({
+const DEFAULT_FILTERS       = Object.freeze({
     range: 'year',
     customStart: '',
     customEnd: '',
@@ -46,17 +46,17 @@ const NOTE_FIELDS = [
     { name: 'content', label: '内容', type: 'textarea', rows: 10 },
 ];
 
-let _container = null;
-let _items = [];
-let _overview = null;
-let _total = 0;
-let _page = 1;
-let _loading = false;
+let _container              = null;
+let _items                  = [];
+let _overview               = null;
+let _total                  = 0;
+let _page                   = 1;
+let _loading                = false;
 let _unsubscribeDataChanges = null;
-let _loadVersion = 0;
-let _filters = { ...DEFAULT_FILTERS };
-let _activeRange = { start: '', end: '' };
-const _pendingDeletes = new Set();
+let _loadVersion            = 0;
+let _filters                = { ...DEFAULT_FILTERS };
+let _activeRange            = { start: '', end: '' };
+const _pendingDeletes       = new Set();
 
 // ---------------------------------------------------------------------------
 // 数据边界：所有接口响应先归一化，再进入模板和交互逻辑
@@ -129,6 +129,7 @@ function normalizeNote(value) {
     if (!id) return null;
     return {
         id,
+        version: value.version,
         title: textValue(value.title).trim(),
         category: textValue(value.category).trim(),
         tags: uniqueTextList(value.tags, { caseInsensitive: true }),
@@ -141,9 +142,8 @@ function normalizeNote(value) {
 }
 
 function normalizeOverview(value) {
-    const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-    const rawSummary =
-        source.summary && typeof source.summary === 'object' && !Array.isArray(source.summary) ? source.summary : {};
+    const source     = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    const rawSummary =         source.summary && typeof source.summary === 'object' && !Array.isArray(source.summary) ? source.summary : {};
     const categories = (Array.isArray(source.categories) ? source.categories : [])
         .map((item) => ({
             category: textValue(item?.category).trim(),
@@ -211,10 +211,10 @@ function renderInlineMarkdown(text) {
 }
 
 function renderMarkdown(content) {
-    const lines = textValue(content).replace(/\r\n?/g, '\n').split('\n');
-    const html = [];
-    let listOpen = false;
-    let codeOpen = false;
+    const lines     = textValue(content).replace(/\r\n?/g, '\n').split('\n');
+    const html      = [];
+    let listOpen    = false;
+    let codeOpen    = false;
     const closeList = () => {
         if (listOpen) {
             html.push('</ul>');
@@ -273,7 +273,7 @@ function renderMarkdown(content) {
 }
 
 function noteReferences(note) {
-    const refs = normalizeReferences(note?.references);
+    const refs     = normalizeReferences(note?.references);
     const existing = new Set(refs.map((ref) => String(ref?.id || '')).filter(Boolean));
     uniqueTextList(note?.related_items).forEach((id) => {
         const refId = textValue(id).trim();
@@ -294,7 +294,7 @@ function renderNoteReferences(note) {
             <div class="note-reference-list">
                 ${refs
                     .map((ref) => {
-                        const type = ref.type || ref.kind || 'item';
+                        const type  = ref.type || ref.kind || 'item';
                         const label = REFERENCE_LABELS[type] || REFERENCE_LABELS[ref.kind] || '条目';
                         const title = ref.title || ref.id;
                         return `<div class="note-reference-row"><span>${escapeHtml(label)}</span><strong>${escapeHtml(title)}</strong><code>${escapeHtml(ref.display_id || ref.id)}</code></div>`;
@@ -763,7 +763,7 @@ function renderHero() {
 }
 
 function renderSummary() {
-    const summary = _overview?.summary || {};
+    const summary    = _overview?.summary || {};
     const taggedRate = Math.round((summary.tagged_rate || 0) * 100);
     return `
         <section class="notes-summary-grid">
@@ -793,8 +793,7 @@ function renderSummary() {
 
 function renderRangeControls() {
     const showCustom = _filters.range === 'custom';
-    const rangeText =
-        _activeRange.start && _activeRange.end ? `${_activeRange.start} → ${_activeRange.end}` : '当前范围';
+    const rangeText  =         _activeRange.start && _activeRange.end ? `${_activeRange.start} → ${_activeRange.end}` : '当前范围';
     return `
         <section class="notes-range-panel">
             <div class="notes-range-row">
@@ -825,8 +824,8 @@ function renderRangeControls() {
 }
 
 function renderCadencePanel() {
-    const cadence = _overview?.cadence || [];
-    const maxCount = Math.max(1, ...cadence.map((item) => item.count || 0));
+    const cadence     = _overview?.cadence || [];
+    const maxCount    = Math.max(1, ...cadence.map((item) => item.count || 0));
     const granularity = _overview?.cadence_granularity || 'day';
     return `
         <section class="notes-panel notes-cadence-panel">
@@ -986,10 +985,10 @@ function renderNoteTags(tags, limit = 4, emptyLabel = '未打标签') {
 }
 
 function renderSpotlight(note) {
-    const tags = uniqueTextList(note.tags, { caseInsensitive: true });
-    const preview = previewText(note.content, 220);
+    const tags           = uniqueTextList(note.tags, { caseInsensitive: true });
+    const preview        = previewText(note.content, 220);
     const spotlightLabel = _page === 1 ? '最新更新' : '本页首条';
-    const title = note.title || '(无标题)';
+    const title          = note.title || '(无标题)';
     return `
         <button class="note-card notes-spotlight" type="button" data-open-note="${escapeHtml(note.id)}"
                 aria-label="${escapeHtml(`打开笔记：${title}`)}">
@@ -1017,11 +1016,11 @@ function renderSpotlight(note) {
 }
 
 function renderNoteRow(note, index) {
-    const tags = uniqueTextList(note.tags, { caseInsensitive: true });
-    const preview = previewText(note.content, 96);
-    const date = formatZonedMonthDay(note.updated_at || note.created_at);
+    const tags      = uniqueTextList(note.tags, { caseInsensitive: true });
+    const preview   = previewText(note.content, 96);
+    const date      = formatZonedMonthDay(note.updated_at || note.created_at);
     const wordCount = noteWordCount(note);
-    const title = note.title || '(无标题)';
+    const title     = note.title || '(无标题)';
     return `
         <button class="note-card note-row" type="button" data-open-note="${escapeHtml(note.id)}"
                 aria-label="${escapeHtml(`打开笔记：${title}`)}">
@@ -1152,7 +1151,7 @@ function renderPage() {
 async function loadAndRender() {
     const root = _container;
     if (!root) return;
-    const version = ++_loadVersion;
+    const version       = ++_loadVersion;
     const requestedPage = _page;
     _loading = true;
     renderPage();
@@ -1165,7 +1164,7 @@ async function loadAndRender() {
         ]);
         if (_container !== root || version !== _loadVersion) return;
 
-        let list = initialList;
+        let list      = initialList;
         const maxPage = Math.max(1, Math.ceil(list.total / PAGE_SIZE));
         if (requestedPage > maxPage) {
             _page = maxPage;
@@ -1236,7 +1235,7 @@ export function openNoteViewModal(rawNote) {
         showToast('无法打开无效笔记', 'warning');
         return null;
     }
-    const tags = note.tags;
+    const tags     = note.tags;
     const bodyHTML = `
         <div class="note-view-meta">
             <span class="note-card-category">${escapeHtml(note.category || '未分类')}</span>
@@ -1254,8 +1253,8 @@ export function openNoteViewModal(rawNote) {
     const content = showModal(note.title || '(无标题)', safeHtml(bodyHTML), {
         footer: safeHtml(footer),
     });
-    const closeButton = content.querySelector('#note-close');
-    const editButton = content.querySelector('#note-edit');
+    const closeButton  = content.querySelector('#note-close');
+    const editButton   = content.querySelector('#note-edit');
     const deleteButton = content.querySelector('#note-delete');
     closeButton.onclick = closeModal;
     editButton.onclick = () => {
@@ -1302,7 +1301,7 @@ function openNoteFormModal(existing = null) {
     );
 
     initFormInteractions(content);
-    const form = content.querySelector('#note-form');
+    const form       = content.querySelector('#note-form');
     const saveButton = content.querySelector('#note-modal-save');
     content.querySelector('#note-modal-cancel').onclick = closeModal;
 
@@ -1316,18 +1315,18 @@ function openNoteFormModal(existing = null) {
         };
     }
 
-    let saving = false;
+    let saving     = false;
     const saveNote = async (event) => {
         event?.preventDefault?.();
         if (saving) return;
-        const data = getFormData(form) || {};
+        const data  = getFormData(form) || {};
         const title = textValue(data.title).trim();
         if (!title) {
             showToast('请填写标题', 'warning');
             return;
         }
         const relatedItems = idListFromInput(data.related_items);
-        const payload = {
+        const payload      = {
             title,
             category: textValue(data.category).trim(),
             tags: tagsFromInput(data.tags),
@@ -1339,7 +1338,7 @@ function openNoteFormModal(existing = null) {
         saveButton.disabled = true;
         try {
             if (note) {
-                await api.put(`/items/${encodeURIComponent(note.id)}`, payload);
+                await api.put(`/items/${encodeURIComponent(note.id)}`, { ...payload, version: note.version });
                 showToast('笔记已更新', 'success');
             } else {
                 await api.post('/items', { type: 'note', ...payload });
@@ -1376,7 +1375,7 @@ function attachListeners() {
     root.querySelectorAll('.notes-range-btn').forEach((button) => {
         button.onclick = async () => {
             const requestedRange = textValue(button.dataset.range).trim();
-            const nextRange = RANGE_KEYS.has(requestedRange) ? requestedRange : 'month';
+            const nextRange      = RANGE_KEYS.has(requestedRange) ? requestedRange : 'month';
             if (nextRange === _filters.range) return;
             _filters.range = nextRange;
             if (nextRange === 'custom' && (!_filters.customStart || !_filters.customEnd)) {
@@ -1391,8 +1390,8 @@ function attachListeners() {
 
     const applyCustomRange = async () => {
         if (_container !== root) return;
-        const start = textValue(root.querySelector('#notes-range-start')?.value).trim();
-        const end = textValue(root.querySelector('#notes-range-end')?.value).trim();
+        const start     = textValue(root.querySelector('#notes-range-start')?.value).trim();
+        const end       = textValue(root.querySelector('#notes-range-end')?.value).trim();
         const candidate = derivePresetRange('custom', {
             today: todayRangeKey(),
             customStart: start,

@@ -96,7 +96,7 @@ async def test_hello_does_not_stringify_invalid_user_ids(
     user_id: object,
 ) -> None:
     event["user_id"] = user_id
-    result = await echo.handle("hello", "", event, context)
+    result           = await echo.handle("hello", "", event, context)
     assert result == echo.segments("你好，未知用户！👋")
     assert "secret" not in str(result)
 

@@ -1,3 +1,4 @@
+# 验证 Codex 产物登记、读取及路径范围。
 from __future__ import annotations
 
 import os
@@ -24,19 +25,19 @@ def _save_gif(path: Path, *, frames: int) -> None:
     images = [Image.new("RGB", (8, 8), (index * 50, 0, 0)) for index in range(frames)]
     images[0].save(
         path,
-        format="GIF",
-        save_all=True,
-        append_images=images[1:],
-        duration=10,
-        loop=0,
+        format        = "GIF",
+        save_all      = True,
+        append_images = images[1:],
+        duration      = 10,
+        loop          = 0,
     )
 
 
 def _paths(base: Path) -> tuple[Path, Path, Path, Path]:
-    cwd = base / "cwd"
-    session_dir = base / "session"
+    cwd          = base / "cwd"
+    session_dir  = base / "session"
     artifact_dir = session_dir / "jobs" / "job-0001" / "artifacts"
-    images_dir = session_dir / "images"
+    images_dir   = session_dir / "images"
     cwd.mkdir(parents=True, exist_ok=True)
     artifact_dir.mkdir(parents=True, exist_ok=True)
     return cwd, session_dir, artifact_dir, images_dir
@@ -45,20 +46,20 @@ def _paths(base: Path) -> tuple[Path, Path, Path, Path]:
 def _collect(
     base: Path,
     *,
-    limits: ArtifactLimits | None = None,
-    final_text: str = "",
+    limits: ArtifactLimits | None      = None,
+    final_text: str                    = "",
     referenced_paths: list[str] | None = None,
 ) -> ArtifactCollectionResult:
     cwd, session_dir, artifact_dir, images_dir = _paths(base)
     return collect_image_artifacts(
         final_text,
-        referenced_paths=referenced_paths,
-        cwd=cwd,
-        artifact_dir=artifact_dir,
-        session_dir=session_dir,
-        images_dir=images_dir,
-        job_id=1,
-        limits=limits,
+        referenced_paths = referenced_paths,
+        cwd              = cwd,
+        artifact_dir     = artifact_dir,
+        session_dir      = session_dir,
+        images_dir       = images_dir,
+        job_id           = 1,
+        limits           = limits,
     )
 
 
@@ -140,7 +141,7 @@ def test_enforces_single_and_total_byte_limits(tmp_path: Path) -> None:
 
     total_base = tmp_path / "total"
     _, _, total_artifacts, _ = _paths(total_base)
-    first = total_artifacts / "a.png"
+    first  = total_artifacts / "a.png"
     second = total_artifacts / "b.png"
     _save_png(first, size=(16, 16), color="red")
     _save_png(second, size=(16, 16), color="blue")
@@ -263,11 +264,11 @@ def test_archive_directory_must_stay_inside_session(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="inside the session"):
         collect_image_artifacts(
             "",
-            cwd=cwd,
-            artifact_dir=artifact_dir,
-            session_dir=session_dir,
-            images_dir=tmp_path / "outside-images",
-            job_id=1,
+            cwd          = cwd,
+            artifact_dir = artifact_dir,
+            session_dir  = session_dir,
+            images_dir   = tmp_path / "outside-images",
+            job_id       = 1,
         )
 
 

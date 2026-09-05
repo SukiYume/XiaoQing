@@ -17,6 +17,7 @@ from ..config import (
 from ..core.exceptions import MissingRequiredFieldException
 from ..core.types import CommandMessage, PendoContext, SessionData
 from ..models.item import ItemType, LedgerItem
+from ..utils.currency import currency_code, currency_label, group_by_currency
 from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import handle_command_errors
 from ..utils.formatters import ItemFormatter, paginate
@@ -97,7 +98,7 @@ _EDIT_LEDGER_FIELD_MAP: Final = {
     "remark": "remark",
     "currency": "currency",
 }
-_EDIT_LEDGER_FIELDS: Final = frozenset(_EDIT_LEDGER_FIELD_MAP) | {"type"}
+_EDIT_LEDGER_FIELDS: Final   = frozenset(_EDIT_LEDGER_FIELD_MAP) | {"type"}
 _NONEMPTY_EDIT_FIELDS: Final = frozenset(
     {"amount", "cat", "category", "date", "account", "from", "currency", "type"}
 )
@@ -128,15 +129,15 @@ _SESSION_REQUIRED_FIELDS: Final = {
 class LedgerListFilters:
     """命令行账目列表筛选条件。金额统一保存为分。"""
 
-    range_text: str = ""
-    show_all: bool = False
-    show_extra: bool = False
-    page: int = 1
+    range_text: str              = ""
+    show_all: bool               = False
+    show_extra: bool             = False
+    page: int                    = 1
     transaction_type: str | None = None
-    category: str | None = None
-    account: str | None = None
-    counter_account: str | None = None
-    merchant: str | None = None
+    category: str | None         = None
+    account: str | None          = None
+    counter_account: str | None  = None
+    merchant: str | None         = None
     amount_min_cents: int | None = None
     amount_max_cents: int | None = None
 
@@ -145,8 +146,8 @@ class LedgerListFilters:
 class LedgerTotals:
     """账目汇总；所有计算使用整数分，避免浮点累计误差。"""
 
-    income_cents: int = 0
-    expense_cents: int = 0
+    income_cents: int   = 0
+    expense_cents: int  = 0
     transfer_cents: int = 0
     income_by_category: dict[str, int] = field(default_factory=dict)
     expense_by_category: dict[str, int] = field(default_factory=dict)
@@ -165,10 +166,10 @@ def _transaction_type_icon(transaction_type: str) -> str:
 
 
 def _extract_field_args(text: str) -> tuple[str, dict[str, str]]:
-    fields: dict[str, str] = {}
+    fields: dict[str, str]       = {}
     spans: list[tuple[int, int]] = []
     for match in _FIELD_RE.finditer(text):
-        key = match.group("key").lower()
+        key   = match.group("key").lower()
         value = match.group("value").strip()
         if key in fields:
             raise ValueError(f"字段不能重复: {key}")
@@ -182,7 +183,7 @@ def _extract_field_args(text: str) -> tuple[str, dict[str, str]]:
         return text.strip(), fields
 
     parts: list[str] = []
-    last = 0
+    last             = 0
     for start, end in spans:
         parts.append(text[last:start])
         last = end
@@ -259,7 +260,7 @@ class LedgerHandler(DbOpsMixin):
 
         parts = args.split(maxsplit=1)
         command = parts[0].lower()
-        rest = parts[1] if len(parts) > 1 else ""
+        rest    = parts[1] if len(parts) > 1 else ""
 
         if command == "add":
             if rest.strip():
@@ -332,8 +333,8 @@ class LedgerHandler(DbOpsMixin):
         self, user_id: str, text: str, session: SessionData, context: PendoContext
     ) -> CommandMessage:
         """处理记账会话的每一步"""
-        raw_step = session.get("step")
-        raw_data = session.get("data")
+        raw_step     = session.get("step")
+        raw_data     = session.get("data")
         raw_group_id = session.get("group_id")
         if not isinstance(raw_step, str) or not isinstance(raw_data, dict):
             await safe_end_session(context)
@@ -407,8 +408,8 @@ class LedgerHandler(DbOpsMixin):
             return {
                 "status": "success",
                 "message": self._build_account_prompt(
-                    default_allowed=False,
-                    title="➡️ 请选择转入账户（必须和转出账户不同）：",
+                    default_allowed = False,
+                    title           = "➡️ 请选择转入账户（必须和转出账户不同）：",
                 ),
             }
 
@@ -428,7 +429,7 @@ class LedgerHandler(DbOpsMixin):
         if counter == data.get("account_name"):
             return {"status": "info", "message": "❌ 转入账户不能和转出账户相同，请重新输入："}
         data["counter_account_name"] = counter
-        data["ledger_category"] = "转账"
+        data["ledger_category"]      = "转账"
         session.set("data", data)
         session.set("step", "merchant")
         return {
@@ -443,7 +444,7 @@ class LedgerHandler(DbOpsMixin):
         except (ArithmeticError, ValueError):
             return {"status": "info", "message": "❌ 请输入大于0的有效金额："}
 
-        data["amount"] = amount
+        data["amount"]       = amount
         data["amount_cents"] = amount_cents
         session.set("data", data)
         session.set("step", "description")
@@ -453,10 +454,10 @@ class LedgerHandler(DbOpsMixin):
         self, text: str, data: dict[str, Any], session: SessionData
     ) -> CommandMessage:
         """步骤5: 选择分类"""
-        tx_type = data.get("transaction_type", "expense")
+        tx_type    = data.get("transaction_type", "expense")
         categories = LEDGER_EXPENSE_CATEGORIES if tx_type == "expense" else LEDGER_INCOME_CATEGORIES
 
-        value = text.strip()
+        value                     = text.strip()
         category_name: str | None = None
         if value in {"0", "默认", "跳过"}:
             category_name = "其他"
@@ -572,7 +573,7 @@ class LedgerHandler(DbOpsMixin):
         self, user_id: str, data: dict[str, Any], group_id: int | None = None
     ) -> CommandMessage:
         """保存记账条目"""
-        now = await get_user_local_wall_time(user_id, self.db)
+        now       = await get_user_local_wall_time(user_id, self.db)
         item_data = {
             "owner_id": user_id,
             "title": data.get("title", ""),
@@ -597,37 +598,37 @@ class LedgerHandler(DbOpsMixin):
             return {"status": "error", "message": f"❌ {exc}"}
 
         item = LedgerItem(
-            owner_id=user_id,
-            title=normalized.get("title", ""),
-            content=normalized.get("content", ""),
-            amount=normalized["amount"],
-            amount_cents=normalized["amount_cents"],
-            currency=normalized["currency"],
-            transaction_type=normalized["transaction_type"],
-            ledger_category=normalized["ledger_category"],
-            ledger_date=normalized["ledger_date"],
-            account_name=normalized["account_name"],
-            counter_account_name=normalized.get("counter_account_name", ""),
-            merchant=normalized.get("merchant", ""),
-            remark=normalized.get("remark", ""),
-            context=normalized.get("context", {}),
-            created_at=normalized["created_at"],
-            updated_at=normalized["updated_at"],
+            owner_id             = user_id,
+            title                = normalized.get("title", ""),
+            content              = normalized.get("content", ""),
+            amount               = normalized["amount"],
+            amount_cents         = normalized["amount_cents"],
+            currency             = normalized["currency"],
+            transaction_type     = normalized["transaction_type"],
+            ledger_category      = normalized["ledger_category"],
+            ledger_date          = normalized["ledger_date"],
+            account_name         = normalized["account_name"],
+            counter_account_name = normalized.get("counter_account_name", ""),
+            merchant             = normalized.get("merchant", ""),
+            remark               = normalized.get("remark", ""),
+            context              = normalized.get("context", {}),
+            created_at           = normalized["created_at"],
+            updated_at           = normalized["updated_at"],
         )
 
         item_id = await self._db_create_with_log(item, owner_id=user_id, action="create_ledger")
 
-        amount = normalized["amount"]
+        amount           = normalized["amount"]
         transaction_type = normalized["transaction_type"]
-        cat_icon = _get_category_icon(normalized["ledger_category"])
-        account_line = f"🏦 账户：{normalized['account_name']}"
+        cat_icon         = _get_category_icon(normalized["ledger_category"])
+        account_line     = f"🏦 账户：{normalized['account_name']}"
         if transaction_type == "transfer":
             account_line += f" → {normalized.get('counter_account_name', '')}"
         merchant = normalized.get("merchant", "")
 
         message = (
             f"✅ 记账成功！\n\n"
-            f"{_transaction_type_icon(transaction_type)} {_transaction_type_label(transaction_type)} ¥{amount:.2f}\n"
+            f"{_transaction_type_icon(transaction_type)} {_transaction_type_label(transaction_type)} {currency_label(normalized['currency'])}{amount:.2f}\n"
             f"{cat_icon} 分类：{normalized['ledger_category']}\n"
             f"{account_line}\n"
             f"📝 摘要：{normalized.get('title', '')}\n"
@@ -670,13 +671,13 @@ class LedgerHandler(DbOpsMixin):
         if unknown_fields:
             return {}, f"❌ 不支持的字段: {', '.join(unknown_fields)}"
 
-        raw_type = fields.get("type")
+        raw_type         = fields.get("type")
         transaction_type = (
             parse_ledger_transaction_type(raw_type or "") if raw_type is not None else "expense"
         )
         if transaction_type is None:
             return {}, f"❌ 无效交易类型: {raw_type or '(空)'}"
-        tokens = text.split()
+        tokens                      = text.split()
         remaining_tokens: list[str] = []
         for token in tokens:
             parsed_type = parse_ledger_transaction_type(token)
@@ -754,15 +755,15 @@ class LedgerHandler(DbOpsMixin):
         if empty_fields:
             raise ValueError(f"筛选字段不能为空: {', '.join(empty_fields)}")
 
-        tokens = residual.split()
-        flags = {token.lower() for token in tokens}
+        tokens     = residual.split()
+        flags      = {token.lower() for token in tokens}
         range_text = " ".join(token for token in tokens if token.lower() not in {"all", "ex"})
 
         raw_page = fields.get("page", "1")
         if not raw_page.isdecimal() or int(raw_page) < 1:
             raise ValueError(f"无效页码: {raw_page}")
 
-        raw_type = fields.get("type")
+        raw_type         = fields.get("type")
         transaction_type = (
             parse_ledger_transaction_type(raw_type or "") if raw_type is not None else None
         )
@@ -772,17 +773,17 @@ class LedgerHandler(DbOpsMixin):
         amount_min, amount_max = cls._parse_amount_filter(fields.get("amount"))
 
         return LedgerListFilters(
-            range_text=range_text,
-            show_all="all" in flags,
-            show_extra="ex" in flags,
-            page=int(raw_page),
-            transaction_type=transaction_type,
-            category=fields.get("cat"),
-            account=fields.get("account"),
-            counter_account=fields.get("to"),
-            merchant=fields.get("merchant"),
-            amount_min_cents=amount_min,
-            amount_max_cents=amount_max,
+            range_text       = range_text,
+            show_all         = "all" in flags,
+            show_extra       = "ex" in flags,
+            page             = int(raw_page),
+            transaction_type = transaction_type,
+            category         = fields.get("cat"),
+            account          = fields.get("account"),
+            counter_account  = fields.get("to"),
+            merchant         = fields.get("merchant"),
+            amount_min_cents = amount_min,
+            amount_max_cents = amount_max,
         )
 
     async def _load_ledger_items(
@@ -837,15 +838,17 @@ class LedgerHandler(DbOpsMixin):
             labels.append(f"商户:{filters.merchant}")
         if filters.amount_min_cents is not None and filters.amount_max_cents is not None:
             labels.append(
-                f"¥{_format_filter_cents(filters.amount_min_cents)}"
+                f"金额 {_format_filter_cents(filters.amount_min_cents)}"
                 f"~{_format_filter_cents(filters.amount_max_cents)}"
             )
         elif filters.amount_min_cents is not None:
-            labels.append(f"≥¥{_format_filter_cents(filters.amount_min_cents)}")
+            labels.append(f"金额 ≥{_format_filter_cents(filters.amount_min_cents)}")
         return f" [{', '.join(labels)}]" if labels else ""
 
     @staticmethod
     def _summarize_items(items: list[LedgerItem]) -> LedgerTotals:
+        if len(group_by_currency(items)) > 1:
+            raise ValueError("账目汇总要求单一币种，请先按币种分组")
         totals = LedgerTotals()
         for item in items:
             category = item.ledger_category or "其他"
@@ -866,16 +869,16 @@ class LedgerHandler(DbOpsMixin):
     @staticmethod
     def _format_list_item(item: LedgerItem) -> str:
         transaction_type = item.transaction_type or "expense"
-        account = item.account_name or "现金"
-        counter = item.counter_account_name or ""
-        account_text = (
+        account          = item.account_name or "现金"
+        counter          = item.counter_account_name or ""
+        account_text     = (
             f"{account} → {counter}" if transaction_type == "transfer" and counter else account
         )
         merchant_text = f" | 🏷️ {item.merchant}" if item.merchant else ""
-        title_text = f" {item.title}" if item.title else ""
+        title_text    = f" {item.title}" if item.title else ""
         return (
             f"• {_transaction_type_icon(transaction_type)} "
-            f"{_transaction_sign(transaction_type)}¥{_format_cents(item.amount_cents)}  "
+            f"{_transaction_sign(transaction_type)}{currency_label(item.currency)}{_format_cents(item.amount_cents)}  "
             f"{_get_category_icon(item.ledger_category)}{item.ledger_category}{title_text}\n"
             f"  📅 {item.ledger_date or ''} | 🏦 {account_text}{merchant_text} | "
             f"ID `{item.display_id}`"
@@ -883,25 +886,26 @@ class LedgerHandler(DbOpsMixin):
 
     @staticmethod
     def _format_category_maxima(items: list[LedgerItem]) -> str:
-        maxima: dict[str, LedgerItem] = {}
+        maxima: dict[tuple[str, str], LedgerItem] = {}
         for item in items:
             category = item.ledger_category or "其他"
-            current = maxima.get(category)
+            key      = (currency_code(item.currency), category)
+            current  = maxima.get(key)
             if current is None or item.amount_cents > current.amount_cents:
-                maxima[category] = item
+                maxima[key] = item
         if not maxima:
             return ""
 
         lines = ["📊 **各分类最大单笔**"]
-        for category, item in sorted(
-            maxima.items(), key=lambda pair: (-pair[1].amount_cents, pair[0])
+        for (_code, category), item in sorted(
+            maxima.items(), key=lambda pair: (pair[0][0], -pair[1].amount_cents, pair[0][1])
         ):
             transaction_type = item.transaction_type or "expense"
-            title_text = f" {item.title}" if item.title else ""
+            title_text       = f" {item.title}" if item.title else ""
             lines.append(
                 f"  • {_get_category_icon(category)}{category}: "
                 f"{_transaction_type_icon(transaction_type)}"
-                f"{_transaction_sign(transaction_type)}¥{_format_cents(item.amount_cents)}"
+                f"{_transaction_sign(transaction_type)}{currency_label(item.currency)}{_format_cents(item.amount_cents)}"
                 f"{title_text} ({item.ledger_date or ''})"
             )
         return "\n".join(lines)
@@ -934,14 +938,14 @@ class LedgerHandler(DbOpsMixin):
         - page:N   -> 显示第N页
         """
         try:
-            filters = self._parse_list_filters(filter_str)
+            filters  = self._parse_list_filters(filter_str)
             user_now = await get_user_local_wall_time(user_id, self.db)
             start_date, end_date, range_label = self._parse_date_range(filters.range_text, user_now)
         except ValueError as exc:
             return {"status": "error", "message": f"❌ {exc}"}
 
-        items = await self._load_ledger_items(user_id, start_date, end_date)
-        items = self._apply_list_filters(items, filters)
+        items         = await self._load_ledger_items(user_id, start_date, end_date)
+        items         = self._apply_list_filters(items, filters)
         filter_suffix = self._build_filter_suffix(filters)
 
         if not items:
@@ -966,14 +970,21 @@ class LedgerHandler(DbOpsMixin):
         if not display_items and filters.page > 1:
             return {"status": "error", "message": f"❌ 第 {filters.page} 页没有账目"}
 
-        totals = self._summarize_items(items)
+        currency_totals = []
+        for code, rows in group_by_currency(items).items():
+            totals = self._summarize_items(rows)
+            label  = currency_label(code)
+            currency_totals.append(
+                f"💸 支出 {label}{_format_cents(totals.expense_cents)} | "
+                f"💰 收入 {label}{_format_cents(totals.income_cents)} | "
+                f"🔁 转账 {label}{_format_cents(totals.transfer_cents)}"
+            )
+        totals_text     = "\n".join(currency_totals)
         formatted_items = "\n\n".join(self._format_list_item(item) for item in display_items)
-        message = (
+        message         = (
             f"💰 {range_label}账目{filter_suffix}\n"
             f"共 {len(items)} 笔{page_info}\n"
-            f"💸 支出 ¥{_format_cents(totals.expense_cents)} | "
-            f"💰 收入 ¥{_format_cents(totals.income_cents)} | "
-            f"🔁 转账 ¥{_format_cents(totals.transfer_cents)}\n"
+            f"{totals_text}\n"
             "━━━━━━━━━━━━━━━━━━\n"
             f"{formatted_items}\n"
         )
@@ -1004,24 +1015,24 @@ class LedgerHandler(DbOpsMixin):
         )
         if wrong_type:
             return wrong_type
-        item = cast(LedgerItem, item)
+        item             = cast(LedgerItem, item)
         display_timezone = await run_sync(
             TimezoneHelper.get_user_timezone,
             user_id,
             self.db,
         )
 
-        tx_type = item.transaction_type or "expense"
-        icon = _transaction_type_icon(tx_type)
-        cat_icon = _get_category_icon(item.ledger_category)
-        account = item.account_name or "现金"
-        counter = item.counter_account_name or ""
+        tx_type      = item.transaction_type or "expense"
+        icon         = _transaction_type_icon(tx_type)
+        cat_icon     = _get_category_icon(item.ledger_category)
+        account      = item.account_name or "现金"
+        counter      = item.counter_account_name or ""
         account_text = f"{account} → {counter}" if tx_type == "transfer" and counter else account
 
         message = (
             f"💰 **账目详情**\n\n"
             f"{icon} {_transaction_type_label(tx_type)} "
-            f"¥{_format_cents(item.amount_cents)} {item.currency or 'CNY'}\n"
+            f"{currency_label(item.currency)}{_format_cents(item.amount_cents)} {item.currency or 'CNY'}\n"
             f"{cat_icon} 分类：{item.ledger_category}\n"
             f"🏦 账户：{account_text}\n"
             f"📝 描述：{item.title or '无'}\n"
@@ -1065,7 +1076,7 @@ class LedgerHandler(DbOpsMixin):
             updates[target] = value
 
         if "type" in fields:
-            raw_type = fields["type"]
+            raw_type         = fields["type"]
             transaction_type = parse_ledger_transaction_type(raw_type)
             if transaction_type is None:
                 raise ValueError(f"无效交易类型: {raw_type or '(空)'}")
@@ -1077,9 +1088,9 @@ class LedgerHandler(DbOpsMixin):
         item: LedgerItem, requested_updates: dict[str, Any]
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """合并并校验编辑，同时清理交易类型切换后失效的字段。"""
-        updates = dict(requested_updates)
+        updates    = dict(requested_updates)
         final_type = str(updates.get("transaction_type") or item.transaction_type or "expense")
-        counter = str(updates.get("counter_account_name") or "").strip()
+        counter    = str(updates.get("counter_account_name") or "").strip()
         if final_type != "transfer" and counter:
             raise ValueError("只有转账账目可以设置转入账户")
         if final_type != "transfer" and item.counter_account_name:
@@ -1096,7 +1107,7 @@ class LedgerHandler(DbOpsMixin):
         normalized = normalize_ledger_fields(merged, partial=False)
         apply_updates = {key: normalized[key] for key in updates if key in normalized}
         if "amount" in updates:
-            apply_updates["amount"] = normalized["amount"]
+            apply_updates["amount"]       = normalized["amount"]
             apply_updates["amount_cents"] = normalized["amount_cents"]
         return apply_updates, normalized
 
@@ -1106,7 +1117,9 @@ class LedgerHandler(DbOpsMixin):
         if "transaction_type" in updates:
             labels.append(f"类型 → {_transaction_type_label(normalized['transaction_type'])}")
         if "amount" in updates:
-            labels.append(f"金额 → ¥{normalized['amount']:.2f}")
+            labels.append(
+                f"金额 → {currency_label(normalized.get('currency'))}{normalized['amount']:.2f}"
+            )
         for key, label in _EDIT_LEDGER_LABELS.items():
             if key in updates:
                 labels.append(f"{label} → {normalized.get(key, '')}")
@@ -1139,7 +1152,7 @@ class LedgerHandler(DbOpsMixin):
                 ),
             }
 
-        item_id = parts[0].strip()
+        item_id  = parts[0].strip()
         edit_str = parts[1]
 
         item, wrong_type = await self._db_get_typed_item_or_message(
@@ -1159,12 +1172,12 @@ class LedgerHandler(DbOpsMixin):
             item_id,
             apply_updates,
             user_id,
-            action="edit_ledger",
-            expected_version=item.version,
+            action           = "edit_ledger",
+            expected_version = item.version,
         )
 
         field_labels = self._format_edit_labels(apply_updates, normalized)
-        changes = "\n".join(f"  • {label}" for label in field_labels)
+        changes      = "\n".join(f"  • {label}" for label in field_labels)
         return {
             "status": "success",
             "message": (
@@ -1199,13 +1212,15 @@ class LedgerHandler(DbOpsMixin):
             "status": "success",
             "message": (
                 f"🗑️ 已删除: {_transaction_type_label(item.transaction_type or 'expense')} "
-                f"¥{_format_cents(item.amount_cents)} {item.title or ''}\n\n"
+                f"{currency_label(item.currency)}{_format_cents(item.amount_cents)} {item.title or ''}\n\n"
                 f"{PendoConfig.UNDO_HINT}"
             ),
         }
 
     @staticmethod
-    def _format_category_breakdown(title: str, amounts: dict[str, int], total_cents: int) -> str:
+    def _format_category_breakdown(
+        title: str, amounts: dict[str, int], total_cents: int, label: str = "¥"
+    ) -> str:
         if not amounts:
             return ""
         lines = [title]
@@ -1216,7 +1231,7 @@ class LedgerHandler(DbOpsMixin):
             percentage = amount_cents / total_cents * 100 if total_cents else 0.0
             lines.append(
                 f"  {index}. {_get_category_icon(category)} {category}  "
-                f"¥{_format_cents(amount_cents)} ({percentage:.1f}%)"
+                f"{label}{_format_cents(amount_cents)} ({percentage:.1f}%)"
             )
         return "\n".join(lines)
 
@@ -1235,41 +1250,50 @@ class LedgerHandler(DbOpsMixin):
         if not items:
             return {"status": "success", "message": f"📊 **{range_label}收支汇总**\n\n暂无记录"}
 
-        totals = self._summarize_items(items)
+        groups  = group_by_currency(items)
+        message = "\n\n".join(
+            self._format_currency_summary(rows, range_label, code) for code, rows in groups.items()
+        )
+        return {"status": "success", "message": message}
+
+    def _format_currency_summary(self, items: list[LedgerItem], range_label: str, code: str) -> str:
+        """每段报告只统计一种币种，所有金额与分类保持同一单位。"""
+        label         = currency_label(code)
+        totals        = self._summarize_items(items)
         balance_cents = totals.income_cents - totals.expense_cents
-        balance_sign = "+" if balance_cents >= 0 else ""
-        message = (
+        balance_sign  = "+" if balance_cents >= 0 else ""
+        message       = (
             f"📊 {range_label}收支汇总\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"💸 总支出: ¥{_format_cents(totals.expense_cents)}\n"
-            f"💰 总收入: ¥{_format_cents(totals.income_cents)}\n"
-            f"🔁 转账流量: ¥{_format_cents(totals.transfer_cents)}\n"
-            f"📊 结余: {balance_sign}¥{_format_cents(balance_cents)}\n"
+            f"💸 总支出: {label}{_format_cents(totals.expense_cents)}\n"
+            f"💰 总收入: {label}{_format_cents(totals.income_cents)}\n"
+            f"🔁 转账流量: {label}{_format_cents(totals.transfer_cents)}\n"
+            f"📊 结余: {balance_sign}{label}{_format_cents(balance_cents)}\n"
         )
 
         if totals.expense_by_category:
             top_category, top_cents = sorted(
                 totals.expense_by_category.items(), key=lambda pair: (-pair[1], pair[0])
             )[0]
-            message += f"📂 最大支出分类: {top_category} ¥{_format_cents(top_cents)}\n"
+            message += f"📂 最大支出分类: {top_category} {label}{_format_cents(top_cents)}\n"
         if totals.income_by_category:
             top_category, top_cents = sorted(
                 totals.income_by_category.items(), key=lambda pair: (-pair[1], pair[0])
             )[0]
-            message += f"📥 主要收入来源: {top_category} ¥{_format_cents(top_cents)}\n"
+            message += f"📥 主要收入来源: {top_category} {label}{_format_cents(top_cents)}\n"
 
         message += "━━━━━━━━━━━━━━━━━━\n"
         expense_breakdown = self._format_category_breakdown(
-            "📂 支出分类", totals.expense_by_category, totals.expense_cents
+            "📂 支出分类", totals.expense_by_category, totals.expense_cents, label
         )
         income_breakdown = self._format_category_breakdown(
-            "📂 收入分类", totals.income_by_category, totals.income_cents
+            "📂 收入分类", totals.income_by_category, totals.income_cents, label
         )
         message += "\n\n".join(
             breakdown for breakdown in (expense_breakdown, income_breakdown) if breakdown
         )
 
-        return {"status": "success", "message": message}
+        return message
 
     # 工具方法
 

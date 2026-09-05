@@ -24,7 +24,7 @@ from tests.helpers.server_test_support import (
     web,
 )
 
-mock_handler = _fixture_support.mock_handler
+mock_handler  = _fixture_support.mock_handler
 sample_server = _fixture_support.sample_server
 
 
@@ -40,10 +40,10 @@ def test_health_version_matches_project_metadata() -> None:
 def test_server_initialization(mock_handler):
     """Test InboundServer initialization"""
     server = InboundServer(
-        host="127.0.0.1",
-        port=8765,
-        token="test_token",
-        handler=mock_handler,
+        host    = "127.0.0.1",
+        port    = 8765,
+        token   = "test_token",
+        handler = mock_handler,
     )
 
     assert server.host == "127.0.0.1"
@@ -58,12 +58,12 @@ def test_server_initialization(mock_handler):
 def test_server_initialization_http_only(mock_handler):
     """Test InboundServer initialization with HTTP only"""
     server = InboundServer(
-        host="127.0.0.1",
-        port=8765,
-        token="test_token",
-        handler=mock_handler,
-        enable_http=True,
-        enable_ws=False,
+        host        = "127.0.0.1",
+        port        = 8765,
+        token       = "test_token",
+        handler     = mock_handler,
+        enable_http = True,
+        enable_ws   = False,
     )
 
     assert server.enable_http is True
@@ -74,12 +74,12 @@ def test_server_initialization_http_only(mock_handler):
 def test_server_initialization_ws_only(mock_handler):
     """Test InboundServer initialization with WS only"""
     server = InboundServer(
-        host="127.0.0.1",
-        port=8765,
-        token="test_token",
-        handler=mock_handler,
-        enable_http=False,
-        enable_ws=True,
+        host        = "127.0.0.1",
+        port        = 8765,
+        token       = "test_token",
+        handler     = mock_handler,
+        enable_http = False,
+        enable_ws   = True,
     )
 
     assert server.enable_http is False
@@ -91,35 +91,35 @@ def test_server_queue_size_validation(mock_handler):
     """Test queue size is validated correctly"""
     # Valid queue size
     server1 = InboundServer(
-        host="127.0.0.1",
-        port=8765,
-        token="test_token",
-        handler=mock_handler,
-        enable_ws=True,
-        ws_queue_size=100,
+        host          = "127.0.0.1",
+        port          = 8765,
+        token         = "test_token",
+        handler       = mock_handler,
+        enable_ws     = True,
+        ws_queue_size = 100,
     )
     assert server1._ws_event_queue.maxsize == 100
 
     # Zero/negative backlog remains bounded to the worker count for delivery.
     server2 = InboundServer(
-        host="127.0.0.1",
-        port=8765,
-        token="test_token",
-        handler=mock_handler,
-        enable_ws=True,
-        ws_queue_size=-10,
+        host          = "127.0.0.1",
+        port          = 8765,
+        token         = "test_token",
+        handler       = mock_handler,
+        enable_ws     = True,
+        ws_queue_size = -10,
     )
     assert server2._ws_event_queue.maxsize == server2._ws_max_workers
     assert server2._event_dispatcher._capacity == server2._ws_max_workers
 
     # Invalid queue size becomes default
     server3 = InboundServer(
-        host="127.0.0.1",
-        port=8765,
-        token="test_token",
-        handler=mock_handler,
-        enable_ws=True,
-        ws_queue_size="invalid",
+        host          = "127.0.0.1",
+        port          = 8765,
+        token         = "test_token",
+        handler       = mock_handler,
+        enable_ws     = True,
+        ws_queue_size = "invalid",
     )
     assert server3._ws_event_queue.maxsize == server3._ws_max_workers
     assert server3._event_dispatcher._capacity == server3._ws_max_workers
@@ -129,23 +129,23 @@ def test_server_queue_size_validation(mock_handler):
 def test_server_max_workers_validation(mock_handler):
     """Test max_workers is validated correctly"""
     server = InboundServer(
-        host="127.0.0.1",
-        port=8765,
-        token="test_token",
-        handler=mock_handler,
-        enable_ws=True,
-        ws_max_workers=5,
+        host           = "127.0.0.1",
+        port           = 8765,
+        token          = "test_token",
+        handler        = mock_handler,
+        enable_ws      = True,
+        ws_max_workers = 5,
     )
     assert server._ws_max_workers == 5
 
     # Negative becomes 1
     server2 = InboundServer(
-        host="127.0.0.1",
-        port=8765,
-        token="test_token",
-        handler=mock_handler,
-        enable_ws=True,
-        ws_max_workers=-5,
+        host           = "127.0.0.1",
+        port           = 8765,
+        token          = "test_token",
+        handler        = mock_handler,
+        enable_ws      = True,
+        ws_max_workers = -5,
     )
     assert server2._ws_max_workers == 1
 
@@ -175,10 +175,10 @@ async def test_server_authorized_without_token():
         return []
 
     server = InboundServer(
-        host="127.0.0.1",
-        port=8765,
-        token="",
-        handler=handler,
+        host    = "127.0.0.1",
+        port    = 8765,
+        token   = "",
+        handler = handler,
     )
 
     request = _make_request_without_auth("GET", "/")
@@ -200,7 +200,7 @@ async def test_server_authorized_no_header(sample_server):
 @pytest.mark.unit
 async def test_server_health_unauthorized(sample_server):
     """Test health endpoint returns 401 without auth"""
-    request = _make_request_without_auth("GET", "/health")
+    request  = _make_request_without_auth("GET", "/health")
     response = await sample_server.health(request)
 
     assert response.status == 401
@@ -332,10 +332,10 @@ async def test_server_post_event_rejects_requests_when_token_is_unconfigured():
     """An empty configured token must not expose the event handler."""
     handler = AsyncMock(return_value=[])
     server = InboundServer(
-        host="127.0.0.1",
-        port=8765,
-        token="",
-        handler=handler,
+        host    = "127.0.0.1",
+        port    = 8765,
+        token   = "",
+        handler = handler,
     )
     request = _make_request_with_auth("POST", "/event", "anything")
 
@@ -362,7 +362,7 @@ async def test_server_post_event_invalid_json(sample_server):
 @pytest.mark.unit
 @pytest.mark.parametrize("content_type", ["text/plain", "", "multipart/form-data"])
 async def test_server_post_event_rejects_non_json_content_type(sample_server, content_type):
-    request = _make_request_with_auth("POST", "/event", "test_token")
+    request                         = _make_request_with_auth("POST", "/event", "test_token")
     request.headers["Content-Type"] = content_type
     request.json = AsyncMock(return_value=_onebot_message_payload())
 
@@ -379,7 +379,7 @@ async def test_server_post_event_rejects_non_json_content_type(sample_server, co
     ["application/json; charset=utf-8", "application/problem+json"],
 )
 async def test_server_post_event_accepts_json_media_types(sample_server, content_type):
-    request = _make_request_with_auth("POST", "/event", "test_token")
+    request                         = _make_request_with_auth("POST", "/event", "test_token")
     request.headers["Content-Type"] = content_type
     request.json = AsyncMock(return_value=_onebot_message_payload())
 
@@ -413,11 +413,11 @@ async def test_http_action_receipt_commits_only_after_response_write_eof():
     from core.server import _finalize_http_action_response
 
     events: list[str] = []
-    receipt = DeliveryReceipt(
-        expected_actions=1,
-        commit=lambda: events.append("commit"),
-        rollback=lambda: events.append("rollback"),
-        unknown=lambda: events.append("unknown"),
+    receipt           = DeliveryReceipt(
+        expected_actions = 1,
+        commit           = lambda: events.append("commit"),
+        rollback         = lambda: events.append("rollback"),
+        unknown          = lambda: events.append("unknown"),
     )
     action = attach_receipt(
         {"action": "send_private_msg", "params": {"user_id": 1, "message": []}},
@@ -453,11 +453,11 @@ async def test_http_action_receipt_rolls_back_when_response_write_fails():
     from core.server import _finalize_http_action_response
 
     events: list[str] = []
-    receipt = DeliveryReceipt(
-        expected_actions=1,
-        commit=lambda: events.append("commit"),
-        rollback=lambda: events.append("rollback"),
-        unknown=lambda: events.append("unknown"),
+    receipt           = DeliveryReceipt(
+        expected_actions = 1,
+        commit           = lambda: events.append("commit"),
+        rollback         = lambda: events.append("rollback"),
+        unknown          = lambda: events.append("unknown"),
     )
     action = attach_receipt(
         {"action": "send_private_msg", "params": {"user_id": 1, "message": []}},
@@ -498,7 +498,7 @@ async def test_server_post_event_isolates_handler_fatal(sample_server):
     request = _make_request_with_auth("POST", "/event", "test_token")
     request.json = AsyncMock(return_value=_onebot_message_payload())
 
-    task = asyncio.create_task(sample_server.post_event(request))
+    task     = asyncio.create_task(sample_server.post_event(request))
     response = await task
 
     assert response.status == 500
@@ -516,7 +516,7 @@ async def test_server_post_event_normalizes_raw_message_only_payload(sample_serv
         return []
 
     sample_server.handler = handler
-    payload = _onebot_message_payload("/help")
+    payload               = _onebot_message_payload("/help")
     payload.pop("message")
     request = _make_request_with_auth("POST", "/event", "test_token")
     request.json = AsyncMock(return_value=payload)
@@ -634,9 +634,9 @@ async def test_server_post_event_rejects_malformed_message_segments_before_dispa
 ):
     handler = AsyncMock(return_value=[])
     sample_server.handler = handler
-    payload = _onebot_message_payload()
-    payload["message"] = message
-    request = _make_request_with_auth("POST", "/event", "test_token")
+    payload               = _onebot_message_payload()
+    payload["message"]    = message
+    request               = _make_request_with_auth("POST", "/event", "test_token")
     request.json = AsyncMock(return_value=payload)
 
     response = await sample_server.post_event(request)
@@ -661,9 +661,9 @@ async def test_server_ws_handler_unauthorized(sample_server):
 async def test_server_ws_handler_rejects_requests_when_token_is_unconfigured():
     """An empty configured token must not expose the WebSocket endpoint."""
     server = InboundServer(
-        host="127.0.0.1",
-        port=8765,
-        token="",
+        host  = "127.0.0.1",
+        port  = 8765,
+        token = "",
         handler=AsyncMock(return_value=[]),
         enable_ws=True,
     )
@@ -682,12 +682,12 @@ async def test_server_ws_handler_disabled():
         return []
 
     server = InboundServer(
-        host="127.0.0.1",
-        port=8765,
-        token="test_token",
-        handler=handler,
-        enable_http=True,
-        enable_ws=False,
+        host        = "127.0.0.1",
+        port        = 8765,
+        token       = "test_token",
+        handler     = handler,
+        enable_http = True,
+        enable_ws   = False,
     )
 
     request = _make_request_with_auth("GET", "/ws", "test_token")
@@ -718,7 +718,7 @@ async def test_server_ws_handler_counts_invalid_json_frame(sample_server):
                 raise StopAsyncIteration from None
 
     sample_server._ensure_ws_workers = Mock()
-    request = _make_request_with_auth("GET", "/ws", "test_token")
+    request                          = _make_request_with_auth("GET", "/ws", "test_token")
 
     with patch("core.server.web.WebSocketResponse", return_value=FakeWebSocket()):
         await sample_server.ws_handler(request)

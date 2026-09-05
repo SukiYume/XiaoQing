@@ -32,7 +32,7 @@ ROOT = REPOSITORY_ROOT
 def _valid_png(width: int = 1, height: int = 1) -> bytes:
     """构造结构和 CRC 完整的最小 RGBA PNG，避免把残缺文件当作测试夹具。"""
 
-    header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    header   = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
     scanline = b"\x00" + b"\x00\x00\x00\x00" * max(1, min(width * height, 1))
     return (
         b"\x89PNG\r\n\x1a\n"
@@ -162,7 +162,7 @@ class TestJupyterCodeReviewFixes:
         await JupyterKernelManager.shutdown_all_async()
         manager_a1 = JupyterKernelManager.get_instance(data_dir, "user-1")
         manager_a2 = JupyterKernelManager.get_instance(data_dir, "user-1")
-        manager_b = JupyterKernelManager.get_instance(data_dir, "user-2")
+        manager_b  = JupyterKernelManager.get_instance(data_dir, "user-2")
 
         assert manager_a1 is manager_a2
         assert manager_a1 is not manager_b
@@ -221,7 +221,7 @@ class TestJupyterCodeReviewFixes:
             def get_iopub_msg(self, timeout):
                 raise QueueEmpty()
 
-        fake_km = _FakeKernelManager()
+        fake_km     = _FakeKernelManager()
         manager._km = fake_km
         manager._kc = _FakeKernelClient()
 
@@ -236,9 +236,9 @@ class TestJupyterCodeReviewFixes:
     async def test_cancel_during_kernel_start_waits_then_shuts_down(self, tmp_path):
         from plugins.jupyter.jupyter_manager import JupyterKernelManager
 
-        manager = JupyterKernelManager(tmp_path / "jupyter")
-        start_entered = threading.Event()
-        release_start = threading.Event()
+        manager           = JupyterKernelManager(tmp_path / "jupyter")
+        start_entered     = threading.Event()
+        release_start     = threading.Event()
         shutdown_finished = threading.Event()
 
         class _FakeKernelManager:
@@ -256,8 +256,8 @@ class TestJupyterCodeReviewFixes:
             manager._kc = None
             shutdown_finished.set()
 
-        manager.start_kernel = blocking_start
-        manager.shutdown_kernel = shutdown
+        manager.start_kernel        = blocking_start
+        manager.shutdown_kernel     = shutdown
         manager.ensure_idle_monitor = lambda: None
 
         execution = asyncio.create_task(manager.execute("1 + 1"))
@@ -283,7 +283,7 @@ class TestJupyterCodeReviewFixes:
     async def test_cancel_during_submit_waits_interrupts_and_survives_repeat_cancel(self, tmp_path):
         from plugins.jupyter.jupyter_manager import JupyterKernelManager
 
-        manager = JupyterKernelManager(tmp_path / "jupyter")
+        manager        = JupyterKernelManager(tmp_path / "jupyter")
         submit_entered = threading.Event()
         release_submit = threading.Event()
 
@@ -310,9 +310,9 @@ class TestJupyterCodeReviewFixes:
                     "parent_header": {"msg_id": "msg-cancel"},
                 }
 
-        fake_km = _FakeKernelManager()
-        manager._km = fake_km
-        manager._kc = _FakeKernelClient()
+        fake_km                     = _FakeKernelManager()
+        manager._km                 = fake_km
+        manager._kc                 = _FakeKernelClient()
         manager.ensure_idle_monitor = lambda: None
 
         execution = asyncio.create_task(manager.execute("1 + 1"))
@@ -339,10 +339,10 @@ class TestJupyterCodeReviewFixes:
     async def test_cancel_during_read_drains_reader_before_recovery(self, tmp_path):
         from plugins.jupyter.jupyter_manager import JupyterKernelManager
 
-        manager = JupyterKernelManager(tmp_path / "jupyter")
+        manager      = JupyterKernelManager(tmp_path / "jupyter")
         read_entered = threading.Event()
         release_read = threading.Event()
-        reader_lock = threading.Lock()
+        reader_lock  = threading.Lock()
 
         class _FakeKernelManager:
             def __init__(self):
@@ -356,8 +356,8 @@ class TestJupyterCodeReviewFixes:
 
         class _FakeKernelClient:
             def __init__(self):
-                self.read_calls = 0
-                self.active_readers = 0
+                self.read_calls         = 0
+                self.active_readers     = 0
                 self.max_active_readers = 0
 
             def execute(self, _code):
@@ -387,10 +387,10 @@ class TestJupyterCodeReviewFixes:
                     with reader_lock:
                         self.active_readers -= 1
 
-        fake_km = _FakeKernelManager()
-        fake_kc = _FakeKernelClient()
-        manager._km = fake_km
-        manager._kc = fake_kc
+        fake_km                     = _FakeKernelManager()
+        fake_kc                     = _FakeKernelClient()
+        manager._km                 = fake_km
+        manager._kc                 = fake_kc
         manager.ensure_idle_monitor = lambda: None
 
         execution = asyncio.create_task(manager.execute("print('partial')"))
@@ -497,7 +497,7 @@ class TestJupyterCodeReviewFixes:
             def get_iopub_msg(self, timeout):
                 return self.messages.pop(0)
 
-        fake_km = _FakeKernelManager()
+        fake_km     = _FakeKernelManager()
         manager._km = fake_km
         manager._kc = _FakeKernelClient()
 
@@ -513,10 +513,10 @@ class TestJupyterCodeReviewFixes:
         from plugins.jupyter.jupyter_config import MAX_OUTPUT_BYTES
         from plugins.jupyter.jupyter_manager import JupyterKernelManager
 
-        manager = JupyterKernelManager(tmp_path / "jupyter")
+        manager     = JupyterKernelManager(tmp_path / "jupyter")
         manager._km = SimpleNamespace(
-            is_alive=lambda: True,
-            interrupt_kernel=lambda: None,
+            is_alive         = lambda: True,
+            interrupt_kernel = lambda: None,
         )
         messages = [
             {
@@ -531,8 +531,8 @@ class TestJupyterCodeReviewFixes:
             },
         ]
         manager._kc = SimpleNamespace(
-            execute=lambda _code: "msg-1",
-            get_iopub_msg=lambda _timeout: messages.pop(0),
+            execute       = lambda _code: "msg-1",
+            get_iopub_msg = lambda _timeout: messages.pop(0),
         )
 
         result = await manager.execute("raise RuntimeError", timeout=1)
@@ -547,11 +547,11 @@ class TestJupyterCodeReviewFixes:
         from plugins.jupyter.jupyter_models import ExecutionResult
 
         manager = JupyterKernelManager(tmp_path / "jupyter")
-        image = b"x" * MAX_IMAGE_BYTES
+        image   = b"x" * MAX_IMAGE_BYTES
         monkeypatch.setattr(manager, "_decode_image", lambda _value: image)
         result = ExecutionResult()
         budget = _OutputBudget()
-        total = 0
+        total  = 0
 
         for _ in range(MAX_TOTAL_IMAGE_BYTES // MAX_IMAGE_BYTES):
             total, exceeded = manager._process_data_message(
@@ -579,7 +579,7 @@ class TestJupyterCodeReviewFixes:
         from plugins.jupyter.jupyter_config import MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS
         from plugins.jupyter.jupyter_manager import JupyterKernelManager
 
-        manager = JupyterKernelManager(tmp_path / "jupyter")
+        manager   = JupyterKernelManager(tmp_path / "jupyter")
         oversized = "A" * ((((MAX_IMAGE_BYTES + 2) // 3) * 4) + 4)
         assert manager._decode_image(oversized) is None
 
@@ -590,7 +590,7 @@ class TestJupyterCodeReviewFixes:
         from plugins.jupyter.jupyter_manager import JupyterKernelManager
 
         manager = JupyterKernelManager(tmp_path / "jupyter")
-        png = _valid_png()
+        png     = _valid_png()
         encoded = base64.b64encode(png).decode("ascii")
 
         decoded = manager._decode_image(encoded)
@@ -619,10 +619,10 @@ class TestJupyterCodeReviewFixes:
     def test_manager_cleans_only_legacy_execution_directories(self, tmp_path):
         from plugins.jupyter.jupyter_manager import JupyterKernelManager
 
-        figures = tmp_path / "jupyter" / "figures"
-        legacy = figures / ("a" * 32)
-        preserved = figures / "user-kept"
-        flat_legacy = figures / "output_1769229059_0.png"
+        figures        = tmp_path / "jupyter" / "figures"
+        legacy         = figures / ("a" * 32)
+        preserved      = figures / "user-kept"
+        flat_legacy    = figures / "output_1769229059_0.png"
         unrelated_flat = figures / "output_123_0.png"
         legacy.mkdir(parents=True)
         preserved.mkdir()
@@ -647,7 +647,7 @@ class TestJupyterCodeReviewFixes:
         from plugins.jupyter import main as jupyter_main
         from plugins.jupyter.jupyter_models import ExecutionResult
 
-        png = _valid_png()
+        png          = _valid_png()
         fake_manager = SimpleNamespace(
             execute=lambda *_args, **_kwargs: asyncio.sleep(
                 0,
@@ -660,10 +660,10 @@ class TestJupyterCodeReviewFixes:
             lambda *_args, **_kwargs: fake_manager,
         )
         context = SimpleNamespace(
-            data_dir=tmp_path / "jupyter",
-            current_user_id=1,
-            current_group_id=2,
-            request_id="request-1",
+            data_dir         = tmp_path / "jupyter",
+            current_user_id  = 1,
+            current_group_id = 2,
+            request_id       = "request-1",
         )
 
         response = await jupyter_main._handle_execute("print('image')", context)
@@ -694,7 +694,7 @@ class TestJupyterCodeReviewFixes:
 
         def make_available():
             jupyter_main.jupyter_manager.JUPYTER_AVAILABLE = True
-            jupyter_main.jupyter_manager.IMPORT_ERROR = None
+            jupyter_main.jupyter_manager.IMPORT_ERROR      = None
 
         monkeypatch.setattr(jupyter_main.jupyter_manager, "JUPYTER_AVAILABLE", False)
         monkeypatch.setattr(jupyter_main.jupyter_manager, "lazy_import_jupyter", make_available)
@@ -714,7 +714,7 @@ class TestJupyterCodeReviewFixes:
         )
         context = SimpleNamespace(data_dir=tmp_path)
 
-        main_help = await jupyter_main.handle("jupyter", "help", {}, context)
+        main_help   = await jupyter_main.handle("jupyter", "help", {}, context)
         kernel_help = await jupyter_main.handle("jupyter_kernel", "help", {}, context)
 
         assert "Jupyter" in _response_text(main_help)
@@ -732,10 +732,10 @@ class TestJupyterCodeReviewFixes:
         from plugins.jupyter import main as jupyter_main
 
         session = Session(
-            user_id=1,
-            group_id=2,
-            plugin_name="jupyter",
-            data={"code_buffer": [], "execution_count": 0},
+            user_id     = 1,
+            group_id    = 2,
+            plugin_name = "jupyter",
+            data        = {"code_buffer": [], "execution_count": 0},
         )
         context = SimpleNamespace(end_session=lambda: asyncio.sleep(0), data_dir=tmp_path)
 
@@ -790,18 +790,18 @@ class TestJupyterCodeReviewFixes:
             lambda *_args, **_kwargs: Manager(),
         )
         original_lines = ["for i in range(2):", "    print(i)"]
-        session = Session(
-            user_id=1,
-            group_id=2,
-            plugin_name="jupyter",
-            data={"code_buffer": list(original_lines), "execution_count": 7},
+        session        = Session(
+            user_id     = 1,
+            group_id    = 2,
+            plugin_name = "jupyter",
+            data        = {"code_buffer": list(original_lines), "execution_count": 7},
         )
         context = SimpleNamespace(
-            data_dir=tmp_path,
-            current_user_id=1,
-            current_group_id=2,
-            request_id="req-repl",
-            end_session=lambda: asyncio.sleep(0),
+            data_dir         = tmp_path,
+            current_user_id  = 1,
+            current_group_id = 2,
+            request_id       = "req-repl",
+            end_session      = lambda: asyncio.sleep(0),
         )
 
         response = await jupyter_main.handle_session("run", {}, context, session)

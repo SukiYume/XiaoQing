@@ -33,7 +33,7 @@ _isolate_process_global_plugin_import_state = (
 def test_prepare_module_load_compiles_lazy_helpers_before_any_plugin_code_runs(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
     _write_runtime_manifest(plugin_dir, "demo")
@@ -47,7 +47,7 @@ def test_prepare_module_load_compiles_lazy_helpers_before_any_plugin_code_runs(
 
 
 def test_capture_plugin_snapshot_tracks_submodule_changes(tmp_path: Path):
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
     helper = plugin_dir / "helper.py"
@@ -68,12 +68,12 @@ def test_capture_plugin_snapshot_tracks_submodule_changes(tmp_path: Path):
 
 
 def test_capture_plugin_snapshot_ignores_unchanged_content_metadata(tmp_path: Path):
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
     definition = _build_definition()
-    main = plugin_dir / "main.py"
-    helper = plugin_dir / "helper.py"
+    main       = plugin_dir / "main.py"
+    helper     = plugin_dir / "helper.py"
     (plugin_dir / "plugin.json").write_text(
         '{"name":"demo","version":"1.0.0","entry":"main.py","commands":[],"schedule":[],"concurrency":"parallel","enabled":true}',
         encoding="utf-8",
@@ -96,11 +96,11 @@ def test_capture_plugin_snapshot_ignores_unchanged_content_metadata(tmp_path: Pa
 def test_capture_plugin_snapshot_detects_same_size_content_with_preserved_timestamp(
     tmp_path: Path,
 ):
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
     definition = _build_definition()
-    main = plugin_dir / "main.py"
+    main       = plugin_dir / "main.py"
     (plugin_dir / "plugin.json").write_text(
         '{"name":"demo","version":"1.0.0","entry":"main.py",'
         '"commands":[],"schedule":[],"concurrency":"parallel","enabled":true}',
@@ -108,7 +108,7 @@ def test_capture_plugin_snapshot_detects_same_size_content_with_preserved_timest
     )
     main.write_text("VALUE = 1\n", encoding="utf-8")
     original_stat = main.stat()
-    before = manager._capture_plugin_snapshot(plugin_dir, definition)
+    before        = manager._capture_plugin_snapshot(plugin_dir, definition)
 
     main.write_text("VALUE = 2\n", encoding="utf-8")
     os.utime(main, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
@@ -120,7 +120,7 @@ def test_capture_plugin_snapshot_detects_same_size_content_with_preserved_timest
 
 
 def test_iter_watch_files_treats_data_named_source_tree_as_ordinary_source(tmp_path: Path):
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
     data_dir = plugin_dir / "data"
@@ -140,8 +140,8 @@ def test_iter_watch_files_treats_data_named_source_tree_as_ordinary_source(tmp_p
 
 
 def test_build_context_ensures_data_dir_once(tmp_path: Path):
-    manager = _build_manager(tmp_path)
-    plugin_dir = manager.plugins_dir / "demo"
+    manager     = _build_manager(tmp_path)
+    plugin_dir  = manager.plugins_dir / "demo"
     legacy_data = plugin_dir / "data"
     legacy_data.mkdir(parents=True)
     (legacy_data / "state.json").write_text('{"source":"legacy"}', encoding="utf-8")
@@ -160,8 +160,8 @@ def test_build_context_ensures_data_dir_once(tmp_path: Path):
 
 
 def test_existing_external_plugin_data_is_authoritative_over_legacy(tmp_path: Path):
-    manager = _build_manager(tmp_path)
-    plugin_dir = manager.plugins_dir / "demo"
+    manager     = _build_manager(tmp_path)
+    plugin_dir  = manager.plugins_dir / "demo"
     legacy_data = plugin_dir / "data"
     legacy_data.mkdir(parents=True)
     (legacy_data / "state.json").write_text("legacy", encoding="utf-8")
@@ -182,7 +182,7 @@ def test_cross_device_legacy_archive_uses_private_atomic_staging(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager     = _build_manager(tmp_path)
     legacy_data = manager.plugins_dir / "demo" / "data"
     legacy_data.mkdir(parents=True)
     (legacy_data / "state.json").write_text("legacy", encoding="utf-8")
@@ -208,7 +208,7 @@ def test_cross_device_legacy_archive_uses_private_atomic_staging(
 def test_existing_legacy_archive_is_never_overwritten(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager     = _build_manager(tmp_path)
     legacy_data = manager.plugins_dir / "demo" / "data"
     legacy_data.mkdir(parents=True)
     (legacy_data / "state.json").write_text("unretired", encoding="utf-8")
@@ -231,7 +231,7 @@ def test_failed_legacy_data_migration_leaves_no_partial_external_directory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager     = _build_manager(tmp_path)
     legacy_data = manager.plugins_dir / "demo" / "data"
     legacy_data.mkdir(parents=True)
     (legacy_data / "state.json").write_text("legacy", encoding="utf-8")
@@ -252,7 +252,7 @@ def test_failed_legacy_data_migration_leaves_no_partial_external_directory(
 
 @pytest.mark.asyncio
 async def test_initial_load_retires_legacy_before_source_fingerprint(tmp_path: Path) -> None:
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
     (plugin_dir / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
@@ -273,7 +273,7 @@ async def test_initial_load_retires_legacy_before_source_fingerprint(tmp_path: P
 
 @pytest.mark.asyncio
 async def test_watcher_retires_legacy_before_source_fingerprint(tmp_path: Path) -> None:
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
     (plugin_dir / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
@@ -294,9 +294,9 @@ async def test_watcher_retires_legacy_before_source_fingerprint(tmp_path: Path) 
 
 @pytest.mark.asyncio
 async def test_unload_plugin_clears_pending_plugin_state(tmp_path: Path):
-    manager = _build_manager(tmp_path)
-    definition = _build_definition()
-    module = ModuleType("plugins.demo.main")
+    manager        = _build_manager(tmp_path)
+    definition     = _build_definition()
+    module         = ModuleType("plugins.demo.main")
     shutdown_calls = 0
 
     async def shutdown(context=None) -> None:
@@ -304,11 +304,11 @@ async def test_unload_plugin_clears_pending_plugin_state(tmp_path: Path):
         shutdown_calls += 1
 
     module.shutdown = shutdown
-    task = asyncio.create_task(asyncio.Event().wait())
+    task            = asyncio.create_task(asyncio.Event().wait())
     manager._init_tasks.append(task)
     manager._init_task_plugins[task] = "demo"
-    manager._pending_plugins[task] = (definition, module, 0.0)
-    manager._plugin_states["demo"] = {"value": 1}
+    manager._pending_plugins[task]   = (definition, module, 0.0)
+    manager._plugin_states["demo"]   = {"value": 1}
     manager._execution_gates["demo"] = PluginExecutionGate("parallel", plugin_name="demo")
 
     await manager.unload_plugin("demo")
@@ -324,10 +324,10 @@ async def test_unload_plugin_clears_pending_plugin_state(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_runtime_loads_nested_entry_and_binds_its_exact_origin(tmp_path: Path) -> None:
-    manager = _build_manager(tmp_path)
-    name = "nested_entry_runtime"
+    manager    = _build_manager(tmp_path)
+    name       = "nested_entry_runtime"
     plugin_dir = manager.plugins_dir / name
-    nested = plugin_dir / "nested"
+    nested     = plugin_dir / "nested"
     nested.mkdir(parents=True)
     (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
     (nested / "__init__.py").write_text("", encoding="utf-8")
@@ -355,8 +355,8 @@ async def test_runtime_entry_loader_ignores_mtime_size_matched_stale_bytecode(
 ) -> None:
     import py_compile
 
-    manager = _build_manager(tmp_path)
-    name = "stale_bytecode_runtime"
+    manager    = _build_manager(tmp_path)
+    name       = "stale_bytecode_runtime"
     plugin_dir = manager.plugins_dir / name
     plugin_dir.mkdir()
     (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
@@ -382,8 +382,8 @@ async def test_runtime_entry_loader_ignores_mtime_size_matched_stale_bytecode(
 async def test_live_plugin_lazy_imports_remain_source_only(tmp_path: Path) -> None:
     import py_compile
 
-    manager = _build_manager(tmp_path)
-    name = "lazy_source_only_runtime"
+    manager    = _build_manager(tmp_path)
+    name       = "lazy_source_only_runtime"
     plugin_dir = manager.plugins_dir / name
     plugin_dir.mkdir()
     (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
@@ -415,8 +415,8 @@ async def test_same_named_managers_never_reuse_or_purge_foreign_cached_modules(
 ) -> None:
     import sys
 
-    name = "manager_origin_collision"
-    first_root = tmp_path / "first"
+    name        = "manager_origin_collision"
+    first_root  = tmp_path / "first"
     second_root = tmp_path / "second"
     first_root.mkdir()
     second_root.mkdir()
@@ -430,7 +430,7 @@ async def test_same_named_managers_never_reuse_or_purge_foreign_cached_modules(
     first.load_plugin(first_plugin)
     first_module = first._plugins[name].module
 
-    second = _build_manager(second_root)
+    second        = _build_manager(second_root)
     second_plugin = second.plugins_dir / name
     second_plugin.mkdir()
     (second_plugin / "__init__.py").write_text("", encoding="utf-8")
@@ -456,14 +456,14 @@ async def test_same_named_managers_never_reuse_or_purge_foreign_cached_modules(
 def test_runtime_rejects_entry_symlink_without_executing_its_target(tmp_path: Path) -> None:
     import sys
 
-    manager = _build_manager(tmp_path)
-    name = "linked_entry_runtime"
+    manager    = _build_manager(tmp_path)
+    name       = "linked_entry_runtime"
     plugin_dir = manager.plugins_dir / name
     plugin_dir.mkdir()
-    tracker = ModuleType("xiaoqing_linked_entry_tracker")
-    tracker.executions = 0
+    tracker                       = ModuleType("xiaoqing_linked_entry_tracker")
+    tracker.executions            = 0
     sys.modules[tracker.__name__] = tracker
-    outside = tmp_path / "outside.py"
+    outside                       = tmp_path / "outside.py"
     outside.write_text(
         "import xiaoqing_linked_entry_tracker as tracker\ntracker.executions += 1\n",
         encoding="utf-8",
@@ -483,8 +483,8 @@ def test_runtime_rejects_entry_symlink_without_executing_its_target(tmp_path: Pa
 
 
 def test_runtime_rejects_linked_manifest_authorization(tmp_path: Path) -> None:
-    manager = _build_manager(tmp_path)
-    name = "linked_manifest_runtime"
+    manager    = _build_manager(tmp_path)
+    name       = "linked_manifest_runtime"
     plugin_dir = manager.plugins_dir / name
     plugin_dir.mkdir()
     (plugin_dir / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
@@ -506,8 +506,8 @@ def test_cached_entry_origin_mismatch_is_rejected_before_any_import(tmp_path: Pa
     import importlib.machinery
     import sys
 
-    manager = _build_manager(tmp_path)
-    name = "cached_origin_mismatch"
+    manager    = _build_manager(tmp_path)
+    name       = "cached_origin_mismatch"
     plugin_dir = manager.plugins_dir / name
     plugin_dir.mkdir()
     (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
@@ -515,12 +515,12 @@ def test_cached_entry_origin_mismatch_is_rejected_before_any_import(tmp_path: Pa
     _write_runtime_manifest(plugin_dir, name)
     outside = tmp_path / "foreign.py"
     outside.write_text("VALUE = 'foreign'\n", encoding="utf-8")
-    cached = ModuleType(f"plugins.{name}.main")
+    cached          = ModuleType(f"plugins.{name}.main")
     cached.__file__ = str(outside)
     cached.__spec__ = importlib.machinery.ModuleSpec(
         cached.__name__,
-        loader=None,
-        origin=str(outside),
+        loader = None,
+        origin = str(outside),
     )
     sys.modules[cached.__name__] = cached
 
@@ -539,15 +539,15 @@ def test_cached_entry_origin_mismatch_is_rejected_before_any_import(tmp_path: Pa
 async def test_post_import_origin_drift_is_restart_only_quarantined(tmp_path: Path) -> None:
     import sys
 
-    manager = _build_manager(tmp_path)
-    name = "origin_drift_runtime"
+    manager    = _build_manager(tmp_path)
+    name       = "origin_drift_runtime"
     plugin_dir = manager.plugins_dir / name
     plugin_dir.mkdir()
     (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
     outside = tmp_path / "outside.py"
     outside.write_text("VALUE = 'outside'\n", encoding="utf-8")
-    tracker = ModuleType("xiaoqing_origin_drift_tracker")
-    tracker.executions = 0
+    tracker                       = ModuleType("xiaoqing_origin_drift_tracker")
+    tracker.executions            = 0
     sys.modules[tracker.__name__] = tracker
     (plugin_dir / "main.py").write_text(
         "import xiaoqing_origin_drift_tracker as tracker\n"
@@ -577,8 +577,8 @@ def test_fingerprint_explicitly_includes_entry_when_walk_snapshot_omits_it(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager = _build_manager(tmp_path)
-    name = "explicit_entry_fingerprint"
+    manager    = _build_manager(tmp_path)
+    name       = "explicit_entry_fingerprint"
     plugin_dir = manager.plugins_dir / name
     plugin_dir.mkdir()
     entry = plugin_dir / "main.py"
@@ -602,19 +602,19 @@ async def test_entry_replaced_after_fingerprint_is_neither_executed_nor_publishe
 ) -> None:
     import sys
 
-    manager = _build_manager(tmp_path)
-    name = "entry_replace_transaction"
+    manager    = _build_manager(tmp_path)
+    name       = "entry_replace_transaction"
     plugin_dir = manager.plugins_dir / name
     plugin_dir.mkdir()
     (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
     entry = plugin_dir / "main.py"
     entry.write_text("VALUE = 'old'\n", encoding="utf-8")
     _write_runtime_manifest(plugin_dir, name)
-    tracker = ModuleType("xiaoqing_entry_replace_tracker")
-    tracker.executions = 0
+    tracker                       = ModuleType("xiaoqing_entry_replace_tracker")
+    tracker.executions            = 0
     sys.modules[tracker.__name__] = tracker
-    original_fingerprint = manager._authorize_plugin_snapshot
-    fingerprint_calls = 0
+    original_fingerprint          = manager._authorize_plugin_snapshot
+    fingerprint_calls             = 0
 
     def fingerprint_then_replace(
         current_dir: Path,
@@ -655,16 +655,16 @@ async def test_watcher_isolates_unsafe_linked_entry_and_loads_safe_sibling(
 ) -> None:
     import sys
 
-    manager = _build_manager(tmp_path)
+    manager     = _build_manager(tmp_path)
     unsafe_name = "a_unsafe_linked_entry"
-    safe_name = "b_safe_entry"
-    unsafe = manager.plugins_dir / unsafe_name
-    safe = manager.plugins_dir / safe_name
+    safe_name   = "b_safe_entry"
+    unsafe      = manager.plugins_dir / unsafe_name
+    safe        = manager.plugins_dir / safe_name
     unsafe.mkdir()
     safe.mkdir()
-    outside = tmp_path / "outside.py"
-    tracker = ModuleType("xiaoqing_watcher_link_tracker")
-    tracker.executions = 0
+    outside                       = tmp_path / "outside.py"
+    tracker                       = ModuleType("xiaoqing_watcher_link_tracker")
+    tracker.executions            = 0
     sys.modules[tracker.__name__] = tracker
     outside.write_text(
         "import xiaoqing_watcher_link_tracker as tracker\ntracker.executions += 1\n",
@@ -691,11 +691,11 @@ async def test_watcher_isolates_unsafe_linked_entry_and_loads_safe_sibling(
 
 @pytest.mark.asyncio
 async def test_wait_inits_and_unload_share_one_pending_finalizer(tmp_path: Path) -> None:
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     definition = _build_definition()
-    module = ModuleType("plugins.demo.main")
+    module     = ModuleType("plugins.demo.main")
     gate = PluginExecutionGate("parallel", plugin_name="demo")
-    init_started = asyncio.Event()
+    init_started   = asyncio.Event()
     shutdown_calls = 0
 
     async def init_work() -> None:
@@ -707,12 +707,12 @@ async def test_wait_inits_and_unload_share_one_pending_finalizer(tmp_path: Path)
         shutdown_calls += 1
 
     module.shutdown = shutdown
-    init_task = asyncio.create_task(gate.run(init_work))
+    init_task       = asyncio.create_task(gate.run(init_work))
     manager._init_tasks.append(init_task)
     manager._init_task_plugins[init_task] = "demo"
-    manager._pending_plugins[init_task] = (definition, module, 0.0)
-    manager._plugin_states["demo"] = {"resource": object()}
-    manager._execution_gates["demo"] = gate
+    manager._pending_plugins[init_task]   = (definition, module, 0.0)
+    manager._plugin_states["demo"]        = {"resource": object()}
+    manager._execution_gates["demo"]      = gate
 
     waiter = asyncio.create_task(manager.wait_inits())
     await asyncio.wait_for(init_started.wait(), timeout=1)
@@ -735,11 +735,11 @@ async def test_wait_inits_and_unload_share_one_pending_finalizer(tmp_path: Path)
 async def test_wait_inits_cancellation_still_rolls_back_every_pending_generation(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     definition = _build_definition()
-    module = ModuleType("plugins.demo.main")
+    module     = ModuleType("plugins.demo.main")
     gate = PluginExecutionGate("parallel", plugin_name="demo")
-    init_started = asyncio.Event()
+    init_started   = asyncio.Event()
     shutdown_calls = 0
 
     async def initialize() -> None:
@@ -751,12 +751,12 @@ async def test_wait_inits_cancellation_still_rolls_back_every_pending_generation
         shutdown_calls += 1
 
     module.shutdown = shutdown
-    init_task = asyncio.create_task(gate.run(initialize))
+    init_task       = asyncio.create_task(gate.run(initialize))
     manager._init_tasks.append(init_task)
     manager._init_task_plugins[init_task] = "demo"
-    manager._pending_plugins[init_task] = (definition, module, 0.0)
-    manager._plugin_states["demo"] = {"resource": object()}
-    manager._execution_gates["demo"] = gate
+    manager._pending_plugins[init_task]   = (definition, module, 0.0)
+    manager._plugin_states["demo"]        = {"resource": object()}
+    manager._execution_gates["demo"]      = gate
 
     waiter = asyncio.create_task(manager.wait_inits())
     await asyncio.wait_for(init_started.wait(), timeout=1)
@@ -777,7 +777,7 @@ async def test_wait_inits_cancellation_still_rolls_back_every_pending_generation
 
 @pytest.mark.asyncio
 async def test_pending_finalizer_wait_survives_repeated_cancellation(tmp_path: Path) -> None:
-    manager = _build_manager(tmp_path)
+    manager           = _build_manager(tmp_path)
     finalizer_started = asyncio.Event()
     release_finalizer = asyncio.Event()
 
@@ -787,7 +787,7 @@ async def test_pending_finalizer_wait_survives_repeated_cancellation(tmp_path: P
         return True
 
     finalizer = asyncio.create_task(finalize())
-    waiter = asyncio.create_task(manager._await_pending_finalizer(finalizer))
+    waiter    = asyncio.create_task(manager._await_pending_finalizer(finalizer))
     await asyncio.wait_for(finalizer_started.wait(), timeout=1)
 
     waiter.cancel("first")
@@ -810,10 +810,10 @@ async def test_pending_finalizer_wait_survives_repeated_cancellation(tmp_path: P
 async def test_wait_inits_cancellation_while_finalizing_claims_later_results(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager                = _build_manager(tmp_path)
     first_shutdown_started = asyncio.Event()
     release_first_shutdown = asyncio.Event()
-    shutdown_calls = {"first": 0, "second": 0}
+    shutdown_calls         = {"first": 0, "second": 0}
 
     async def successful_init() -> None:
         return None
@@ -821,7 +821,7 @@ async def test_wait_inits_cancellation_while_finalizing_claims_later_results(
     records = []
     for name in ("first", "second"):
         definition = _build_definition(name)
-        module = ModuleType(f"plugins.{name}.main")
+        module     = ModuleType(f"plugins.{name}.main")
 
         async def shutdown(context=None, *, plugin_name=name) -> None:
             shutdown_calls[plugin_name] += 1
@@ -834,9 +834,9 @@ async def test_wait_inits_cancellation_while_finalizing_claims_later_results(
         init_task = asyncio.create_task(successful_init())
         manager._init_tasks.append(init_task)
         manager._init_task_plugins[init_task] = name
-        manager._pending_plugins[init_task] = (definition, module, 0.0)
-        manager._plugin_states[name] = {"resource": object()}
-        manager._execution_gates[name] = gate
+        manager._pending_plugins[init_task]   = (definition, module, 0.0)
+        manager._plugin_states[name]          = {"resource": object()}
+        manager._execution_gates[name]        = gate
         records.append((name, init_task))
 
     manager._register_loaded_plugin = Mock(side_effect=RuntimeError("publish failed"))
@@ -859,22 +859,22 @@ async def test_wait_inits_cancellation_while_finalizing_claims_later_results(
 
 @pytest.mark.asyncio
 async def test_unload_cancels_running_plugin_gate_before_shutdown(tmp_path: Path):
-    manager = _build_manager(tmp_path)
-    definition = _build_definition()
-    gate = PluginExecutionGate("sequential")
-    entered = asyncio.Event()
+    manager         = _build_manager(tmp_path)
+    definition      = _build_definition()
+    gate            = PluginExecutionGate("sequential")
+    entered         = asyncio.Event()
     shutdown_called = asyncio.Event()
-    module = ModuleType("demo.main")
+    module          = ModuleType("demo.main")
 
     async def shutdown():
         shutdown_called.set()
 
-    module.shutdown = shutdown
+    module.shutdown          = shutdown
     manager._plugins["demo"] = LoadedPlugin(
-        definition=definition,
-        module=module,
-        mtime=0.0,
-        execution_gate=gate,
+        definition     = definition,
+        module         = module,
+        mtime          = 0.0,
+        execution_gate = gate,
     )
     manager._execution_gates["demo"] = gate
 

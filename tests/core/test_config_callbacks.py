@@ -12,9 +12,9 @@ from tests.helpers.config_test_support import (
     threading,
 )
 
-config_file = _fixture_support.config_file
-config_manager = _fixture_support.config_manager
-secrets_file = _fixture_support.secrets_file
+config_file     = _fixture_support.config_file
+config_manager  = _fixture_support.config_manager
+secrets_file    = _fixture_support.secrets_file
 temp_config_dir = _fixture_support.temp_config_dir
 
 
@@ -53,8 +53,8 @@ class TestConfigManagerOnReload:
         self,
         config_manager: ConfigManager,
     ):
-        callback_snapshots: list[ConfigSnapshot] = []
-        mutation_errors: list[BaseException] = []
+        callback_snapshots: list[ConfigSnapshot]         = []
+        mutation_errors: list[BaseException]             = []
         observed: list[tuple[str, tuple[int, ...], int]] = []
 
         def malicious(snapshot: ConfigSnapshot) -> None:
@@ -100,7 +100,7 @@ class TestConfigManagerOnReload:
         class FatalCallback(BaseException):
             pass
 
-        fatal_revisions: list[int] = []
+        fatal_revisions: list[int]    = []
         observed_revisions: list[int] = []
 
         def fatal(snapshot: ConfigSnapshot) -> None:
@@ -126,7 +126,7 @@ class TestConfigManagerOnReload:
         class FatalCallback(BaseException):
             pass
 
-        fatal_revisions: list[int] = []
+        fatal_revisions: list[int]   = []
         observed: asyncio.Queue[int] = asyncio.Queue()
 
         async def fatal(snapshot: ConfigSnapshot) -> None:
@@ -156,7 +156,7 @@ class TestConfigManagerOnReload:
         config_manager: ConfigManager,
     ):
         revisions: list[int] = []
-        completed = asyncio.Event()
+        completed            = asyncio.Event()
 
         async def callback(snapshot: ConfigSnapshot) -> None:
             revisions.append(snapshot.revision)
@@ -184,9 +184,9 @@ class TestConfigManagerOnReload:
         self,
         config_manager: ConfigManager,
     ) -> None:
-        entered = asyncio.Event()
-        observed = asyncio.Event()
-        observed_revisions: list[int] = []
+        entered                                  = asyncio.Event()
+        observed                                 = asyncio.Event()
+        observed_revisions: list[int]            = []
         config_manager._callback_timeout_seconds = 0.02
 
         async def hanging(_snapshot: ConfigSnapshot) -> None:
@@ -211,10 +211,10 @@ class TestConfigManagerOnReload:
         self,
         config_manager: ConfigManager,
     ) -> None:
-        entered = asyncio.Event()
-        release = asyncio.Event()
-        completed = asyncio.Event()
-        observed_revisions: list[int] = []
+        entered                                  = asyncio.Event()
+        release                                  = asyncio.Event()
+        completed                                = asyncio.Event()
+        observed_revisions: list[int]            = []
         config_manager._callback_timeout_seconds = 1.0
 
         async def callback(snapshot: ConfigSnapshot) -> None:
@@ -250,11 +250,11 @@ class TestConfigManagerSecurityUpdates:
         class FatalSecurityCallback(BaseException):
             pass
 
-        fatal_revisions: list[int] = []
+        fatal_revisions: list[int]    = []
         security_revisions: list[int] = []
-        ordinary_entered = threading.Event()
-        release_ordinary = threading.Event()
-        mutation_returned = threading.Event()
+        ordinary_entered              = threading.Event()
+        release_ordinary              = threading.Event()
+        mutation_returned             = threading.Event()
 
         def fatal(snapshot: ConfigSnapshot) -> None:
             fatal_revisions.append(snapshot.revision)
