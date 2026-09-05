@@ -7,7 +7,7 @@ from typing import Any, Protocol, cast
 from core.interfaces import PluginSettingsSnapshot
 from core.plugin_base import segments as _core_segments
 
-OneBotEvent = dict[str, Any]
+OneBotEvent     = dict[str, Any]
 MessageSegments = list[dict[str, Any]]
 
 # follow-imports=skip 时 core 的返回类型会退化为 Any，在插件边界集中恢复稳定契约。
@@ -51,7 +51,7 @@ class Context(Protocol):
         """结束当前会话"""
         ...
 
-    async def send_action(self, action: Any) -> None:
+    async def send_action(self, action: Any) -> bool | None:
         """发送动作"""
         ...
 

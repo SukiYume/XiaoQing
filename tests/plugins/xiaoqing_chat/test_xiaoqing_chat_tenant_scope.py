@@ -51,21 +51,21 @@ def test_react_scoped_db_tools_pass_chat_id_and_never_cross_chats(tmp_path, memo
     db = MemoryDB()
     db.bind(tmp_path)
     db.upsert_text(
-        doc_id=f"a-{memory_type}",
-        text="shared scoped phrase",
-        meta={"type": memory_type, "chat_id": "chat-a", "subject_id": 7},
+        doc_id = f"a-{memory_type}",
+        text   = "shared scoped phrase",
+        meta   = {"type": memory_type, "chat_id": "chat-a", "subject_id": 7},
     )
     db.upsert_text(
-        doc_id=f"b-{memory_type}",
-        text="shared scoped phrase",
-        meta={"type": memory_type, "chat_id": "chat-b", "subject_id": 7},
+        doc_id = f"b-{memory_type}",
+        text   = "shared scoped phrase",
+        meta   = {"type": memory_type, "chat_id": "chat-b", "subject_id": 7},
     )
 
     result = _tool_query_db(
         db,
         {"query": "shared scoped phrase", "subject_id": 7},
-        type_filter=memory_type,
-        chat_id="chat-a",
+        type_filter = memory_type,
+        chat_id     = "chat-a",
     )
 
     assert [item["doc_id"] for item in result["items"]] == [f"a-{memory_type}"]
@@ -76,14 +76,14 @@ def test_react_global_db_tools_use_only_approved_global_types(tmp_path, memory_t
     db = MemoryDB()
     db.bind(tmp_path)
     db.upsert_text(
-        doc_id=f"approved-{memory_type}",
-        text="shared global phrase",
-        meta={"type": memory_type, "global_approved": True},
+        doc_id = f"approved-{memory_type}",
+        text   = "shared global phrase",
+        meta   = {"type": memory_type, "global_approved": True},
     )
     db.upsert_text(
-        doc_id=f"private-{memory_type}",
-        text="shared global phrase",
-        meta={"type": memory_type, "chat_id": "chat-a"},
+        doc_id = f"private-{memory_type}",
+        text   = "shared global phrase",
+        meta   = {"type": memory_type, "chat_id": "chat-a"},
     )
 
     result = _tool_query_global_db(
@@ -103,8 +103,8 @@ def test_react_db_tool_failures_become_stable_observations(tmp_path):
         lambda args: _tool_query_db(
             db,
             args,
-            type_filter="person_info",
-            chat_id="",
+            type_filter = "person_info",
+            chat_id     = "",
         ),
         {"query": "anything"},
     )
@@ -129,11 +129,11 @@ async def test_identical_person_fact_has_independent_chat_scoped_ids_and_deletio
     )
     history = [
         StoredMessage(
-            role="user",
-            name="Alice",
-            content=f"消息 {index}",
-            ts=float(index),
-            user_id=42,
+            role    = "user",
+            name    = "Alice",
+            content = f"消息 {index}",
+            ts      = float(index),
+            user_id = 42,
         )
         for index in range(20)
     ]
@@ -156,16 +156,16 @@ async def test_identical_person_fact_has_independent_chat_scoped_ids_and_deletio
     await maybe_extract_person_facts(chat_id="chat-b", **common)
 
     first_id = person_fact_doc_id(
-        chat_id="chat-a",
-        subject_id=42,
-        subject_name="Alice",
-        fact="喜欢喝茶",
+        chat_id      = "chat-a",
+        subject_id   = 42,
+        subject_name = "Alice",
+        fact         = "喜欢喝茶",
     )
     second_id = person_fact_doc_id(
-        chat_id="chat-b",
-        subject_id=42,
-        subject_name="Alice",
-        fact="喜欢喝茶",
+        chat_id      = "chat-b",
+        subject_id   = 42,
+        subject_name = "Alice",
+        fact         = "喜欢喝茶",
     )
     assert first_id != second_id
     assert db.get(first_id).meta["chat_id"] == "chat-a"
@@ -174,9 +174,9 @@ async def test_identical_person_fact_has_independent_chat_scoped_ids_and_deletio
         item.doc_id
         for item in db.query(
             "喜欢喝茶",
-            chat_id="chat-a",
-            type_filter="person_info",
-            min_score=0.0,
+            chat_id     = "chat-a",
+            type_filter = "person_info",
+            min_score   = 0.0,
         )
     ] == [first_id]
     assert db.delete(first_id)
@@ -188,9 +188,9 @@ def test_legacy_person_fact_migration_rekeys_valid_scope_and_quarantines_invalid
     db = MemoryDB()
     db.bind(tmp_path)
     db.upsert_text(
-        doc_id="person:42:1234",
-        text="Alice<42>：喜欢喝茶\n证据：Alice 说她喜欢喝茶",
-        meta={
+        doc_id = "person:42:1234",
+        text   = "Alice<42>：喜欢喝茶\n证据：Alice 说她喜欢喝茶",
+        meta   = {
             "type": "person_info",
             "chat_id": "chat-a",
             "subject_id": 42,
@@ -198,19 +198,19 @@ def test_legacy_person_fact_migration_rekeys_valid_scope_and_quarantines_invalid
         },
     )
     db.upsert_text(
-        doc_id="person:43:5678",
-        text="Bob<43>：喜欢咖啡\n证据：Bob 说他喜欢咖啡",
-        meta={"type": "person_info", "subject_id": 43, "subject_name": "Bob"},
+        doc_id = "person:43:5678",
+        text   = "Bob<43>：喜欢咖啡\n证据：Bob 说他喜欢咖啡",
+        meta   = {"type": "person_info", "subject_id": 43, "subject_name": "Bob"},
     )
     db.save()
 
     migrated = MemoryDB()
     migrated.bind(tmp_path)
     new_id = person_fact_doc_id(
-        chat_id="chat-a",
-        subject_id=42,
-        subject_name="Alice",
-        fact="喜欢喝茶",
+        chat_id      = "chat-a",
+        subject_id   = 42,
+        subject_name = "Alice",
+        fact         = "喜欢喝茶",
     )
     assert migrated.get("person:42:1234") is None
     assert migrated.get(new_id).meta["schema_version"] == 2
@@ -221,9 +221,9 @@ def test_legacy_person_fact_migration_rekeys_valid_scope_and_quarantines_invalid
         item.doc_id
         for item in migrated.query(
             "喜欢咖啡",
-            chat_id="chat-a",
-            type_filter="person_info",
-            min_score=0.0,
+            chat_id     = "chat-a",
+            type_filter = "person_info",
+            min_score   = 0.0,
         )
     }
     assert visible_ids == {new_id}

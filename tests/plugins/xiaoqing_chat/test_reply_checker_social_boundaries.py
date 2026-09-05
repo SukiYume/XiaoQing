@@ -6,7 +6,9 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_social_state_speculation_requires_an_explicit_evidence_boundary() -> None:
+async def test_social_speculation_has_no_local_keyword_veto_when_semantic_checker_is_disabled() -> (
+    None
+):
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
     common = {
@@ -28,30 +30,30 @@ async def test_social_state_speculation_requires_an_explicit_evidence_boundary()
     }
 
     unsupported = await check_reply(
-        reply="有可能，估计都在忙别的吧。",
-        current_text="小青，群里突然没人说话了，他们是不是都在忙别的？",
+        reply        = "有可能，估计都在忙别的吧。",
+        current_text = "小青，群里突然没人说话了，他们是不是都在忙别的？",
         **common,
     )
     bounded = await check_reply(
-        reply="光看群里安静这一会儿判断不了，可能性太多了。",
-        current_text="小青，群里突然没人说话了，他们是不是都在忙别的？",
+        reply        = "光看群里安静这一会儿判断不了，可能性太多了。",
+        current_text = "小青，群里突然没人说话了，他们是不是都在忙别的？",
         **common,
     )
     natural_query_variant = await check_reply(
-        reply="估计都去忙自己的事了吧。",
-        current_text="这个点群里怎么这么安静，大家都忙什么呢？",
+        reply        = "估计都去忙自己的事了吧。",
+        current_text = "这个点群里怎么这么安静，大家都忙什么呢？",
         **common,
     )
     named_person_variant = await check_reply(
-        reply="说不定人家只是去忙别的了。",
-        current_text="小李今天没说话，他是不是遇到什么事了？",
+        reply        = "说不定人家只是去忙别的了。",
+        current_text = "小李今天没说话，他是不是遇到什么事了？",
         **common,
     )
 
-    assert unsupported.failure_code == "context_grounding"
+    assert unsupported.suitable is True
     assert bounded.suitable is True
-    assert natural_query_variant.failure_code == "context_grounding"
-    assert named_person_variant.failure_code == "context_grounding"
+    assert natural_query_variant.suitable is True
+    assert named_person_variant.suitable is True
 
 
 @pytest.mark.asyncio
@@ -132,24 +134,24 @@ async def test_risk_mode_enforces_latest_explicit_communication_constraint(
     )
 
     result = await check_reply(
-        http_session=None,
-        secrets={"_ai": object()},
-        bot_name="小青",
-        reply="先抱抱你，别太难受了。",
-        goal="自然聊天",
-        current_text="别安慰我，正常聊就行。",
-        policy_text="",
-        grounding_text="",
-        history=[],
-        chat_history_text="Alice: 别安慰我，正常聊就行。",
-        enable_llm_checker=True,
-        max_repeat_compare=3,
-        similarity_threshold=0.9,
-        max_assistant_in_row=5,
-        timeout_seconds=1.0,
-        max_retry=0,
-        retry_interval_seconds=0.0,
-        llm_checker_mode="risk",
+        http_session           = None,
+        secrets                = {"_ai": object()},
+        bot_name               = "小青",
+        reply                  = "先抱抱你，别太难受了。",
+        goal                   = "自然聊天",
+        current_text           = "别安慰我，正常聊就行。",
+        policy_text            = "",
+        grounding_text         = "",
+        history                = [],
+        chat_history_text      = "Alice: 别安慰我，正常聊就行。",
+        enable_llm_checker     = True,
+        max_repeat_compare     = 3,
+        similarity_threshold   = 0.9,
+        max_assistant_in_row   = 5,
+        timeout_seconds        = 1.0,
+        max_retry              = 0,
+        retry_interval_seconds = 0.0,
+        llm_checker_mode       = "risk",
     )
 
     assert result.suitable is False
@@ -158,29 +160,28 @@ async def test_risk_mode_enforces_latest_explicit_communication_constraint(
 
 
 @pytest.mark.asyncio
-async def test_explicit_no_question_constraint_is_enforced_deterministically() -> None:
+async def test_no_question_request_has_no_local_semantic_veto() -> None:
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
     result = await check_reply(
-        http_session=None,
-        secrets={"_ai": None},
-        bot_name="小青",
-        reply="终于交掉了，今晚准备怎么奖励自己？",
-        goal="自然聊天",
-        current_text="报告终于交了，直接接一句，别反问我。",
-        policy_text="",
-        grounding_text="",
-        history=[],
-        chat_history_text="Alice: 报告终于交了，直接接一句，别反问我。",
-        enable_llm_checker=False,
-        max_repeat_compare=3,
-        similarity_threshold=0.9,
-        max_assistant_in_row=5,
-        timeout_seconds=1.0,
-        max_retry=0,
-        retry_interval_seconds=0.0,
+        http_session           = None,
+        secrets                = {"_ai": None},
+        bot_name               = "小青",
+        reply                  = "终于交掉了，今晚准备怎么奖励自己？",
+        goal                   = "自然聊天",
+        current_text           = "报告终于交了，直接接一句，别反问我。",
+        policy_text            = "",
+        grounding_text         = "",
+        history                = [],
+        chat_history_text      = "Alice: 报告终于交了，直接接一句，别反问我。",
+        enable_llm_checker     = False,
+        max_repeat_compare     = 3,
+        similarity_threshold   = 0.9,
+        max_assistant_in_row   = 5,
+        timeout_seconds        = 1.0,
+        max_retry              = 0,
+        retry_interval_seconds = 0.0,
     )
 
-    assert result.suitable is False
-    assert result.is_hard is True
-    assert result.failure_code == "instruction_following"
+    assert result.suitable is True
+    assert result.is_hard is False

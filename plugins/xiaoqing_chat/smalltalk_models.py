@@ -22,15 +22,15 @@ class _PreparedSmalltalkTurn:
 
 @dataclass
 class _GeneratedSmalltalkTurn:
-    local_id: str = ""
-    pfc_result: PFCRunResult | None = None
-    pfc_state_snapshot: Any = None
-    speculative_memory_task: Any = None
-    reply_source: str = "pfc"
-    reply: str = ""
+    local_id: str                           = ""
+    pfc_result: PFCRunResult | None         = None
+    pfc_state_snapshot: Any                 = None
+    speculative_memory_task: Any            = None
+    reply_source: str                       = "pfc"
+    reply: str                              = ""
     reply_parts: tuple[dict[str, Any], ...] = ()
-    reply_output: Any = None
-    media_marker: Any = None
+    reply_output: Any                       = None
+    media_marker: Any                       = None
 
 
 @dataclass(frozen=True)

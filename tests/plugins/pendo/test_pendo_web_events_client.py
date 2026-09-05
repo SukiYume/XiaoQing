@@ -214,8 +214,8 @@ def _run_events_client(script: str) -> None:
     assert_node_esm_contract(
         _events_source_for_test(),
         script,
-        cwd=ROOT,
-        setup=EVENTS_SETUP,
+        cwd   = ROOT,
+        setup = EVENTS_SETUP,
     )
 
 
@@ -710,7 +710,7 @@ def test_events_mutations_encode_ids_block_duplicates_and_dispatch_once() -> Non
             return new Promise((resolve) => { resolvePut = resolve; });
         };
         await client.__openEventEditor({
-            id: 'event/a b', title: '产品评审', start_time: '2026-03-02T09:00:00',
+            id: 'event/a b', version: 3, title: '产品评审', start_time: '2026-03-02T09:00:00',
         });
         const saveButton = buttons.get('#events-editor-save');
         const firstSave = saveButton.onclick();
@@ -722,7 +722,7 @@ def test_events_mutations_encode_ids_block_duplicates_and_dispatch_once() -> Non
         assert.deepEqual(putCalls, [[
             '/items/event%2Fa%20b',
             {
-                title: '产品评审', category: '会议', location: 'A1', notes: '材料',
+                version: 3, title: '产品评审', category: '会议', location: 'A1', notes: '材料',
                 timezone: 'Asia/Shanghai',
                 start_time: '2026-03-02T01:00:00+00:00',
                 end_time: '2026-03-02T02:00:00+00:00',

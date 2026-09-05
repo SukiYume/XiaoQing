@@ -17,8 +17,8 @@ from plugins.pendo.web.auth import AuthError, create_web_session
 
 def _request(
     *,
-    method: str = "GET",
-    path: str = "/api/dashboard",
+    method: str                    = "GET",
+    path: str                      = "/api/dashboard",
     cookies: dict[str, str] | None = None,
     headers: dict[str, str] | None = None,
 ) -> Request:
@@ -28,9 +28,9 @@ def _request(
         SimpleNamespace(
             method=method,
             url=SimpleNamespace(path=path),
-            cookies=cookies or {},
-            headers=headers or {},
-            state=SimpleNamespace(),
+            cookies = cookies or {},
+            headers = headers or {},
+            state   = SimpleNamespace(),
         ),
     )
 
@@ -179,9 +179,9 @@ def test_browser_cookie_requires_csrf_only_for_unsafe_methods() -> None:
     assert missing_csrf.value.status_code == 403
 
     request = _request(
-        method="POST",
-        cookies=cookies,
-        headers={deps.CSRF_HEADER_NAME: session.csrf_token},
+        method  = "POST",
+        cookies = cookies,
+        headers = {deps.CSRF_HEADER_NAME: session.csrf_token},
     )
     assert deps.get_current_user(request, None) == "browser-owner"
 

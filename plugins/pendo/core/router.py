@@ -43,10 +43,10 @@ class CommandRouter:
     ) -> None:
         if root.code != "pendo.pendo":
             raise ValueError(f"unexpected Pendo command root: {root.code}")
-        self.root = root
+        self.root          = root
         self.help_provider = help_provider
-        self.commands = self._build_command_registry(root, handlers)
-        self.alias_map = self._build_alias_map()
+        self.commands      = self._build_command_registry(root, handlers)
+        self.alias_map     = self._build_alias_map()
         logger.info("CommandRouter initialized with %s commands", len(self.commands))
 
     def _build_command_registry(
@@ -56,15 +56,15 @@ class CommandRouter:
     ) -> dict[str, CommandInfo]:
         """只从 Core 目录读取命令元数据，处理器映射只负责业务实现。"""
         catalog_by_name = {child.name: child for child in root.children}
-        missing = sorted((set(handlers) | {"help"}) - set(catalog_by_name))
+        missing         = sorted((set(handlers) | {"help"}) - set(catalog_by_name))
         if missing:
             raise ValueError(f"Pendo handlers and command catalog disagree: missing={missing}")
 
         commands: dict[str, CommandInfo] = {}
-        selected_names = (*handlers, "help")
+        selected_names                   = (*handlers, "help")
         for name in selected_names:
-            node = catalog_by_name[name]
-            handler = self._handle_help if name == "help" else handlers[name]
+            node           = catalog_by_name[name]
+            handler        = self._handle_help if name == "help" else handlers[name]
             commands[name] = CommandInfo(
                 name,
                 handler,

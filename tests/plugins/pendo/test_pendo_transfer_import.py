@@ -219,7 +219,7 @@ def test_import_reassigns_hostile_external_id_and_preserves_only_source_metadata
     auth_headers: dict,
 ):
     hostile_id = '"><svg onload=alert(1)>'
-    bundle = _build_sample_bundle_bytes(
+    bundle     = _build_sample_bundle_bytes(
         {
             "note": [
                 {
@@ -238,8 +238,8 @@ def test_import_reassigns_hostile_external_id_and_preserves_only_source_metadata
 
     response = client.post(
         "/api/transfer/import/execute",
-        headers={**auth_headers, "X-Transfer-Options": json.dumps({"types": ["note"]})},
-        content=bundle,
+        headers = {**auth_headers, "X-Transfer-Options": json.dumps({"types": ["note"]})},
+        content = bundle,
     )
 
     assert response.status_code == 200
@@ -303,9 +303,9 @@ def test_import_execute_isolates_cross_owner_source_ids(temp_db: Database):
     skip_result = asyncio.run(
         transfer_api.execute_import(
             _ImportRequest(bundle("跳过")),
-            x_transfer_options=json.dumps({"types": ["task"], "conflict_policy": "skip"}),
-            owner_id=OWNER_ID,
-            db=temp_db,
+            x_transfer_options = json.dumps({"types": ["task"], "conflict_policy": "skip"}),
+            owner_id           = OWNER_ID,
+            db                 = temp_db,
         )
     )
     assert skip_result["data"]["results"]["inserted"] == 1
@@ -314,9 +314,9 @@ def test_import_execute_isolates_cross_owner_source_ids(temp_db: Database):
     overwrite_result = asyncio.run(
         transfer_api.execute_import(
             _ImportRequest(bundle("覆盖")),
-            x_transfer_options=json.dumps({"types": ["task"], "conflict_policy": "overwrite"}),
-            owner_id=OWNER_ID,
-            db=temp_db,
+            x_transfer_options = json.dumps({"types": ["task"], "conflict_policy": "overwrite"}),
+            owner_id           = OWNER_ID,
+            db                 = temp_db,
         )
     )
     assert overwrite_result["data"]["results"]["inserted"] == 0
@@ -333,9 +333,9 @@ def test_import_execute_isolates_cross_owner_source_ids(temp_db: Database):
     duplicate_result = asyncio.run(
         transfer_api.execute_import(
             _ImportRequest(bundle("副本")),
-            x_transfer_options=json.dumps({"types": ["task"], "conflict_policy": "duplicate"}),
-            owner_id=OWNER_ID,
-            db=temp_db,
+            x_transfer_options = json.dumps({"types": ["task"], "conflict_policy": "duplicate"}),
+            owner_id           = OWNER_ID,
+            db                 = temp_db,
         )
     )
     assert duplicate_result["data"]["results"]["inserted"] == 1
@@ -385,9 +385,9 @@ def test_import_execute_handles_soft_deleted_global_id_conflict(temp_db: Databas
     result = asyncio.run(
         transfer_api.execute_import(
             _ImportRequest(bundle_bytes),
-            x_transfer_options=json.dumps({"types": ["task"], "conflict_policy": "duplicate"}),
-            owner_id=OWNER_ID,
-            db=temp_db,
+            x_transfer_options = json.dumps({"types": ["task"], "conflict_policy": "duplicate"}),
+            owner_id           = OWNER_ID,
+            db                 = temp_db,
         )
     )
 
@@ -564,8 +564,8 @@ def test_import_execute_restores_event_collection_before_leaf_events(
 
     inspect_response = client.post(
         "/api/transfer/import/inspect",
-        headers=auth_headers,
-        content=bundle_bytes,
+        headers = auth_headers,
+        content = bundle_bytes,
     )
     assert inspect_response.status_code == 200
     inspect_data = inspect_response.json()["data"]
@@ -677,26 +677,26 @@ def test_execute_import_bundle_uses_db_level_bundle_guard(temp_db: Database):
     ]
 
     temp_db.execute_import_bundle(
-        owner_id=OWNER_ID,
-        bundle_id="bundle-guard-1",
-        operations=operations,
-        filename="bundle.zip",
-        types=["task"],
-        record_count=1,
-        result_summary={"inserted": 1, "updated": 0, "skipped": 0, "failed": 0},
-        force=False,
+        owner_id       = OWNER_ID,
+        bundle_id      = "bundle-guard-1",
+        operations     = operations,
+        filename       = "bundle.zip",
+        types          = ["task"],
+        record_count   = 1,
+        result_summary = {"inserted": 1, "updated": 0, "skipped": 0, "failed": 0},
+        force          = False,
     )
 
     with pytest.raises(DuplicateBundleImportError):
         temp_db.execute_import_bundle(
-            owner_id=OWNER_ID,
-            bundle_id="bundle-guard-1",
-            operations=operations,
-            filename="bundle.zip",
-            types=["task"],
-            record_count=1,
-            result_summary={"inserted": 1, "updated": 0, "skipped": 0, "failed": 0},
-            force=False,
+            owner_id       = OWNER_ID,
+            bundle_id      = "bundle-guard-1",
+            operations     = operations,
+            filename       = "bundle.zip",
+            types          = ["task"],
+            record_count   = 1,
+            result_summary = {"inserted": 1, "updated": 0, "skipped": 0, "failed": 0},
+            force          = False,
         )
 
     logs = [log for log in temp_db.get_transfer_logs(OWNER_ID) if log["action"] == "import"]
@@ -838,7 +838,7 @@ def test_import_execute_creates_audit_log(client: Any, temp_db: Database, auth_h
         content=bundle_bytes,
     )
 
-    logs = temp_db.get_transfer_logs(OWNER_ID)
+    logs        = temp_db.get_transfer_logs(OWNER_ID)
     import_logs = [log for log in logs if log["action"] == "import"]
     assert len(import_logs) >= 1
     assert import_logs[0]["record_count"] >= 1
@@ -850,8 +850,8 @@ def test_import_rejects_oversized_body(client: Any, auth_headers: dict):
     # 通过 Content-Length header 触发
     response = client.post(
         "/api/transfer/import/inspect",
-        headers={**auth_headers, "Content-Length": str(200 * 1024 * 1024)},
-        content=b"x",
+        headers = {**auth_headers, "Content-Length": str(200 * 1024 * 1024)},
+        content = b"x",
     )
     assert response.status_code == 413
 

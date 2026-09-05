@@ -17,14 +17,14 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from ...models.item import Item, get_item_type_value
 from ...utils.validators import COMMON_ITEM_FIELDS, SUPPORTED_ITEM_TYPES, TYPE_SPECIFIC_ITEM_FIELDS
 
-TRANSFER_FORMAT: Final = "pendo-bundle"
-TRANSFER_VERSION: Final = 2
-MAX_BUNDLE_MANIFEST_BYTES: Final = 1 * 1024 * 1024
-MAX_BUNDLE_MEMBER_BYTES: Final = 50 * 1024 * 1024
-MAX_BUNDLE_UNCOMPRESSED_BYTES: Final = 100 * 1024 * 1024
-MAX_BUNDLE_RECORDS: Final = 100_000
-MAX_IMPORT_RECORDS: Final = 20_000
-SUPPORTED_TYPES: Final[frozenset[str]] = frozenset(SUPPORTED_ITEM_TYPES)
+TRANSFER_FORMAT: Final                    = "pendo-bundle"
+TRANSFER_VERSION: Final                   = 2
+MAX_BUNDLE_MANIFEST_BYTES: Final          = 1 * 1024 * 1024
+MAX_BUNDLE_MEMBER_BYTES: Final            = 50 * 1024 * 1024
+MAX_BUNDLE_UNCOMPRESSED_BYTES: Final      = 100 * 1024 * 1024
+MAX_BUNDLE_RECORDS: Final                 = 100_000
+MAX_IMPORT_RECORDS: Final                 = MAX_BUNDLE_RECORDS * (len(SUPPORTED_ITEM_TYPES) + 1)
+SUPPORTED_TYPES: Final[frozenset[str]]    = frozenset(SUPPORTED_ITEM_TYPES)
 TYPE_FILE_NAMES: Final[Mapping[str, str]] = MappingProxyType(
     {
         "event": "data/events.ndjson",
@@ -34,7 +34,7 @@ TYPE_FILE_NAMES: Final[Mapping[str, str]] = MappingProxyType(
         "diary": "data/diary.ndjson",
     }
 )
-EVENT_COLLECTION_TYPE: Final = "event_collection"
+EVENT_COLLECTION_TYPE: Final      = "event_collection"
 EVENT_COLLECTION_FILE_NAME: Final = "data/event_collections.ndjson"
 # v2 只允许一个清单、五类普通数据文件和一个日程集合文件。
 MAX_ARCHIVE_MEMBERS: Final = len(TYPE_FILE_NAMES) + 2
@@ -161,20 +161,20 @@ def build_manifest(
 def serialize_item(item: Item | dict[str, Any]) -> dict[str, Any]:
     """将条目裁剪为传输格式允许的业务字段。"""
 
-    raw = item.to_dict() if isinstance(item, Item) else dict(item)
+    raw       = item.to_dict() if isinstance(item, Item) else dict(item)
     item_type = get_item_type_value(raw.get("type"))
     if item_type not in SUPPORTED_TYPES:
         raise BundleValidationError(f"Unsupported item type: {item_type}")
 
     allowed_fields = COMMON_FIELDS | TYPE_FIELDS[item_type]
-    record = {"_type": item_type, "_schema": TRANSFER_VERSION}
+    record         = {"_type": item_type, "_schema": TRANSFER_VERSION}
     for key, value in raw.items():
         if key in {"type", "owner_id"}:
             continue
         if key in allowed_fields:
             record[key] = value
 
-    context = record.get("context")
+    context           = record.get("context")
     record["context"] = dict(context) if isinstance(context, dict) else {}
     return record
 
@@ -188,7 +188,7 @@ def serialize_event_collection(collection: dict[str, Any]) -> dict[str, Any]:
             continue
         if key in EVENT_COLLECTION_FIELDS:
             record[key] = value
-    context = record.get("context")
+    context           = record.get("context")
     record["context"] = dict(context) if isinstance(context, dict) else {}
     return record
 
@@ -201,7 +201,7 @@ def deserialize_record(record: dict[str, Any]) -> dict[str, Any]:
         raise BundleValidationError(f"Unsupported record type: {item_type}")
 
     payload: dict[str, Any] = {"type": item_type}
-    allowed_fields = COMMON_FIELDS | TYPE_FIELDS[item_type]
+    allowed_fields          = COMMON_FIELDS | TYPE_FIELDS[item_type]
     for key, value in record.items():
         if key in RESERVED_IMPORT_FIELDS:
             continue
@@ -210,7 +210,7 @@ def deserialize_record(record: dict[str, Any]) -> dict[str, Any]:
         else:
             raise BundleValidationError(f"Unsupported field for {item_type}: {key}")
 
-    context = payload.get("context")
+    context            = payload.get("context")
     payload["context"] = dict(context) if isinstance(context, dict) else {}
     if "_bundle_line" in record:
         payload["_bundle_line"] = record["_bundle_line"]
@@ -229,7 +229,7 @@ def deserialize_event_collection_record(record: dict[str, Any]) -> dict[str, Any
         else:
             raise BundleValidationError(f"Unsupported field for event_collection: {key}")
 
-    context = collection.get("context")
+    context               = collection.get("context")
     collection["context"] = dict(context) if isinstance(context, dict) else {}
     if "_bundle_line" in record:
         collection["_bundle_line"] = record["_bundle_line"]
@@ -242,7 +242,7 @@ def _prepare_bundle_members(
     """把分类型记录编码为规范文件名及 UTF-8 NDJSON。"""
 
     prepared_members: dict[str, bytes] = {}
-    record_counts: dict[str, int] = {}
+    record_counts: dict[str, int]      = {}
     for item_type, records in typed_records.items():
         if item_type == EVENT_COLLECTION_TYPE:
             path = EVENT_COLLECTION_FILE_NAME
@@ -258,7 +258,7 @@ def _prepare_bundle_members(
         if len(payload) > MAX_BUNDLE_MEMBER_BYTES:
             raise BundleValidationError(f"{path} exceeds maximum file size")
         prepared_members[path] = payload
-        record_counts[path] = len(records)
+        record_counts[path]    = len(records)
     return prepared_members, record_counts
 
 
@@ -270,7 +270,7 @@ def _validate_prepared_members(
     """核对待写数据与清单中的路径、行数和校验和。"""
 
     manifest_paths: set[str] = set()
-    entries = cast(list[dict[str, Any]], manifest["files"])
+    entries                  = cast(list[dict[str, Any]], manifest["files"])
     for entry in entries:
         path, _ = _entry_path_and_type(entry)
         manifest_paths.add(path)
@@ -330,7 +330,7 @@ def read_bundle(fileobj: BinaryIO) -> ParsedBundle:
     fileobj.seek(0)
     try:
         with ZipFile(fileobj, "r") as zf:
-            infos = _index_archive_members(zf)
+            infos    = _index_archive_members(zf)
             manifest = _read_manifest(zf, infos)
             _validate_archive_layout(infos, manifest)
 
@@ -338,10 +338,10 @@ def read_bundle(fileobj: BinaryIO) -> ParsedBundle:
                 item_type: [] for item_type in TYPE_FILE_NAMES
             }
             event_collections: list[dict[str, Any]] = []
-            file_summaries: list[dict[str, Any]] = []
-            errors: list[dict[str, Any]] = []
-            warnings: list[str] = []
-            total_record_count = 0
+            file_summaries: list[dict[str, Any]]    = []
+            errors: list[dict[str, Any]]            = []
+            warnings: list[str]                     = []
+            total_record_count                      = 0
 
             entries = cast(list[dict[str, Any]], manifest["files"])
             for entry in entries:
@@ -370,14 +370,14 @@ def read_bundle(fileobj: BinaryIO) -> ParsedBundle:
                 )
 
             return ParsedBundle(
-                manifest=manifest,
-                records_by_type={
+                manifest        = manifest,
+                records_by_type = {
                     item_type: records for item_type, records in records_by_type.items() if records
                 },
-                event_collections=event_collections,
-                file_summaries=file_summaries,
-                errors=errors,
-                warnings=warnings,
+                event_collections = event_collections,
+                file_summaries    = file_summaries,
+                errors            = errors,
+                warnings          = warnings,
             )
     except BundleValidationError:
         raise
@@ -427,8 +427,8 @@ def _read_manifest(zf: ZipFile, infos: dict[str, ZipInfo]) -> dict[str, Any]:
     payload = _read_member_bytes(
         zf,
         info,
-        max_bytes=MAX_BUNDLE_MANIFEST_BYTES,
-        label="Bundle manifest",
+        max_bytes = MAX_BUNDLE_MANIFEST_BYTES,
+        label     = "Bundle manifest",
     )
     try:
         manifest: object = json.loads(payload.decode("utf-8"))
@@ -558,10 +558,10 @@ def _validate_manifest_files(files: object) -> None:
 def _validate_archive_layout(infos: dict[str, ZipInfo], manifest: dict[str, Any]) -> None:
     """核对清单与 ZIP 成员一一对应，并累计未压缩大小和声明行数。"""
 
-    expected_paths = {"manifest.json"}
-    total_size = infos["manifest.json"].file_size
+    expected_paths        = {"manifest.json"}
+    total_size            = infos["manifest.json"].file_size
     declared_record_count = 0
-    entries = cast(list[dict[str, Any]], manifest["files"])
+    entries               = cast(list[dict[str, Any]], manifest["files"])
     for entry in entries:
         path, _ = _entry_path_and_type(entry)
         expected_paths.add(path)
@@ -620,28 +620,28 @@ def _read_record_member(
 ) -> tuple[list[dict[str, Any]], int, list[dict[str, Any]], list[str]]:
     """读取一个 NDJSON 成员，保留合法行并收集可定位的逐行错误。"""
 
-    path = info.filename
+    path       = info.filename
     file_bytes = _read_member_bytes(
         zf,
         info,
-        max_bytes=MAX_BUNDLE_MEMBER_BYTES,
-        label=path,
+        max_bytes = MAX_BUNDLE_MEMBER_BYTES,
+        label     = path,
     )
     warnings: list[str] = []
-    expected_sha = entry.get("sha256")
+    expected_sha        = entry.get("sha256")
     if expected_sha is None:
         warnings.append(f"{path}: 缺少 sha256 校验和，跳过完整性检查")
     elif cast(str, expected_sha).lower() != compute_sha256(file_bytes):
         raise BundleValidationError(f"Checksum mismatch for {path}")
 
     try:
-        file_lines = file_bytes.decode("utf-8").splitlines()
+        file_lines = file_bytes.decode("utf-8").split("\n")
     except UnicodeDecodeError as exc:
         raise BundleValidationError(f"{path} is not valid UTF-8") from exc
 
     records: list[dict[str, Any]] = []
-    errors: list[dict[str, Any]] = []
-    line_count = 0
+    errors: list[dict[str, Any]]  = []
+    line_count                    = 0
     for line_number, line in enumerate(file_lines, start=1):
         if not line.strip():
             continue
@@ -652,9 +652,9 @@ def _read_record_member(
             records.append(
                 _parse_record_line(
                     line,
-                    item_type=item_type,
-                    path=path,
-                    line_number=line_number,
+                    item_type   = item_type,
+                    path        = path,
+                    line_number = line_number,
                 )
             )
         except ValueError as exc:

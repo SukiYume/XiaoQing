@@ -38,7 +38,7 @@ def _state(db: Database) -> tuple[int, int, int]:
 class _FailingConnection:
     def __init__(self, connection: sqlite3.Connection, fragment: str):
         self.connection = connection
-        self.fragment = " ".join(fragment.upper().split())
+        self.fragment   = " ".join(fragment.upper().split())
 
     def execute(self, sql, parameters=()):
         normalized = " ".join(str(sql).upper().split())
@@ -53,7 +53,7 @@ class _FailingConnection:
 class _CommitFailingConnection:
     def __init__(self, connection: sqlite3.Connection):
         self.connection = connection
-        self.failed = False
+        self.failed     = False
 
     def commit(self):
         if not self.failed:
@@ -88,7 +88,7 @@ def test_social_service_uses_atomic_result_and_enforces_limit(tmp_path):
     conn.commit()
     service = SocialService(db)
 
-    first = service.leave_message("sender", "target", GROUP, "最后一条")
+    first  = service.leave_message("sender", "target", GROUP, "最后一条")
     second = service.leave_message("sender", "target", GROUP, "越界")
 
     assert first == (True, "已给留言宠留言：最后一条")
@@ -108,7 +108,7 @@ def test_social_service_uses_atomic_result_and_enforces_limit(tmp_path):
 def test_each_leave_message_write_failure_rolls_back_all_state(tmp_path, fragment):
     db = Database(str(tmp_path / "write-failure.db"))
     _seed(db)
-    before = _state(db)
+    before         = _state(db)
     db._local.conn = _FailingConnection(db._get_connection(), fragment)
 
     result = db.leave_message_atomic("sender", "target", GROUP, "不会留下", 10)
@@ -121,7 +121,7 @@ def test_each_leave_message_write_failure_rolls_back_all_state(tmp_path, fragmen
 def test_leave_message_commit_failure_rolls_back_all_state(tmp_path):
     db = Database(str(tmp_path / "commit-failure.db"))
     _seed(db)
-    before = _state(db)
+    before         = _state(db)
     db._local.conn = _CommitFailingConnection(db._get_connection())
 
     result = db.leave_message_atomic("sender", "target", GROUP, "不会提交", 10)
@@ -132,7 +132,7 @@ def test_leave_message_commit_failure_rolls_back_all_state(tmp_path):
 
 
 def test_two_connections_cannot_both_claim_last_message_slot(tmp_path):
-    path = str(tmp_path / "concurrent.db")
+    path     = str(tmp_path / "concurrent.db")
     first_db = Database(path)
     _seed(first_db)
     conn = first_db._get_connection()
@@ -142,7 +142,7 @@ def test_two_connections_cannot_both_claim_last_message_slot(tmp_path):
     )
     conn.commit()
     second_db = Database(path)
-    barrier = threading.Barrier(2)
+    barrier   = threading.Barrier(2)
 
     def run(db: Database, message: str):
         barrier.wait(timeout=2)

@@ -31,13 +31,13 @@ class ActionHistoryStore:
     """
 
     def __init__(self) -> None:
-        self._data_dir: Path | None = None
+        self._data_dir: Path | None                = None
         self._cache: dict[str, list[ActionRecord]] = {}
-        self._dirty: set[str] = set()
-        self._async_loading: set[str] = set()
-        self._state_version: dict[str, int] = {}
-        self._lock = threading.RLock()
-        self._write_lock = threading.Lock()
+        self._dirty: set[str]                      = set()
+        self._async_loading: set[str]              = set()
+        self._state_version: dict[str, int]        = {}
+        self._lock                                 = threading.RLock()
+        self._write_lock                           = threading.Lock()
 
     def bind(self, data_dir: Path) -> None:
         with self._lock:
@@ -49,7 +49,7 @@ class ActionHistoryStore:
                 if chat_id in self._async_loading:
                     self._cache[chat_id] = []
                 else:
-                    loaded = self._load(chat_id)
+                    loaded               = self._load(chat_id)
                     self._cache[chat_id] = loaded or []
             self._cache[chat_id].append(record)
             self._dirty.add(chat_id)
@@ -62,7 +62,7 @@ class ActionHistoryStore:
                 self._cache.pop(chat_id, None)
                 self._dirty.discard(chat_id)
                 self._state_version[chat_id] = self._state_version.get(chat_id, 0) + 1
-                path = self._path(chat_id)
+                path                         = self._path(chat_id)
             if path:
                 delete_json_artifacts(path)
 
@@ -126,15 +126,15 @@ class ActionHistoryStore:
         for item in raw:
             if not isinstance(item, dict):
                 continue
-            detail_raw = item.get("detail")
+            detail_raw             = item.get("detail")
             detail: dict[str, Any] = detail_raw if isinstance(detail_raw, dict) else {}
             out.append(
                 ActionRecord(
                     ts=coerce_finite_float(item.get("ts"), default=time.time(), minimum=0.0),
-                    local_target=str(item.get("local_target", "") or ""),
-                    action=str(item.get("action", "") or ""),
-                    reasoning=str(item.get("reasoning", "") or ""),
-                    detail=detail,
+                    local_target = str(item.get("local_target", "") or ""),
+                    action       = str(item.get("action", "") or ""),
+                    reasoning    = str(item.get("reasoning", "") or ""),
+                    detail       = detail,
                     executed=coerce_json_bool(item.get("executed"), default=False),
                 )
             )

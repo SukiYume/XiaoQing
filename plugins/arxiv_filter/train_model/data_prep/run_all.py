@@ -33,7 +33,7 @@ def run_step(script: str, description: str) -> bool:
     print(f"  运行: {script}")
     print(f"{'=' * 60}\n")
 
-    start = time.perf_counter()
+    start       = time.perf_counter()
     script_path = SCRIPT_DIR / script
     result = subprocess.run([sys.executable, str(script_path)], cwd=str(SCRIPT_DIR))
     elapsed = time.perf_counter() - start

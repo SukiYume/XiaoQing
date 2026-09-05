@@ -26,21 +26,21 @@ def _event(index: int, *, message: str | None = None) -> LogEvent:
 def _batch(
     events: list[LogEvent],
     *,
-    cursor: int = 0,
+    cursor: int               = 0,
     matched_total: int | None = None,
-    dropped_events: int = 0,
-    skipped_bytes: int = 0,
+    dropped_events: int       = 0,
+    skipped_bytes: int        = 0,
     skipped_lines: int | None = 0,
 ) -> LogBatch:
     return LogBatch(
-        events=events,
-        matched_total=len(events) if matched_total is None else matched_total,
-        dropped_events=dropped_events,
-        skipped_bytes=skipped_bytes,
-        skipped_lines=skipped_lines,
-        cursor_before=cursor,
-        cursor_after=cursor + 1,
-        file_identity="1:1",
+        events         = events,
+        matched_total  = len(events) if matched_total is None else matched_total,
+        dropped_events = dropped_events,
+        skipped_bytes  = skipped_bytes,
+        skipped_lines  = skipped_lines,
+        cursor_before  = cursor,
+        cursor_after   = cursor + 1,
+        file_identity  = "1:1",
     )
 
 
@@ -48,12 +48,12 @@ class _StaticMonitor:
     """轮询不移动游标；只有 commit 成功才进入下一批。"""
 
     def __init__(self, batches: list[LogBatch]) -> None:
-        self.batches = batches
-        self.index = 0
-        self.calls = 0
-        self.committed: list[LogBatch] = []
-        self.commit_result = True
-        self.poll_error: BaseException | None = None
+        self.batches                            = batches
+        self.index                              = 0
+        self.calls                              = 0
+        self.committed: list[LogBatch]          = []
+        self.commit_result                      = True
+        self.poll_error: BaseException | None   = None
         self.commit_error: BaseException | None = None
 
     def check_updates(self) -> LogBatch:
@@ -86,10 +86,10 @@ def _connection(
 ) -> McConnection:
     target = DeliveryTarget(cast(Any, kind), target_id)
     return McConnection(
-        host=host,
-        port=port,
-        target=target,
-        log_monitor=cast(Any, monitor),
+        host        = host,
+        port        = port,
+        target      = target,
+        log_monitor = cast(Any, monitor),
     )
 
 
@@ -150,7 +150,7 @@ async def test_small_batch_preserves_event_order(
 async def test_sustained_flood_uses_cross_tick_target_bucket(
     reset_minecraft_runtime: ConnectionManager,
 ) -> None:
-    flood = [_event(index) for index in range(1000)]
+    flood   = [_event(index) for index in range(1000)]
     monitor = _StaticMonitor(
         [_batch(flood, cursor=index, matched_total=1000) for index in range(3)]
     )
@@ -207,7 +207,7 @@ async def test_send_failures_and_unknown_outcomes_use_distinct_cursor_policies(
 ) -> None:
     monitors: dict[int, _StaticMonitor] = {}
     for target in range(1, 5):
-        monitor = _StaticMonitor([_batch([_event(target)])])
+        monitor          = _StaticMonitor([_batch([_event(target)])])
         monitors[target] = monitor
         await reset_minecraft_runtime.replace_connection(
             _connection(target, monitor, port=25575 + target)
@@ -270,7 +270,7 @@ async def test_long_unicode_events_fit_dual_action_budgets(
 async def test_empty_batch_commits_cursor_without_sending(
     reset_minecraft_runtime: ConnectionManager,
 ) -> None:
-    empty = _batch([])
+    empty   = _batch([])
     monitor = _StaticMonitor([empty])
     await reset_minecraft_runtime.replace_connection(_connection(1, monitor))
     context = SimpleNamespace(send_action=AsyncMock(return_value=True))
@@ -285,9 +285,9 @@ async def test_empty_batch_commits_cursor_without_sending(
 async def test_commit_exception_does_not_fail_other_delivery(
     reset_minecraft_runtime: ConnectionManager,
 ) -> None:
-    failing = _StaticMonitor([_batch([_event(1)])])
+    failing              = _StaticMonitor([_batch([_event(1)])])
     failing.commit_error = OSError("state disk full")
-    healthy = _StaticMonitor([_batch([_event(2)])])
+    healthy              = _StaticMonitor([_batch([_event(2)])])
     await reset_minecraft_runtime.replace_connection(_connection(1, failing))
     await reset_minecraft_runtime.replace_connection(_connection(2, healthy, port=25576))
     context = SimpleNamespace(send_action=AsyncMock(return_value=True))
@@ -303,9 +303,9 @@ async def test_commit_exception_does_not_fail_other_delivery(
 async def test_poll_exception_does_not_block_healthy_monitor(
     reset_minecraft_runtime: ConnectionManager,
 ) -> None:
-    failing = _StaticMonitor([_batch([_event(1)])])
+    failing            = _StaticMonitor([_batch([_event(1)])])
     failing.poll_error = OSError("read failed")
-    healthy = _StaticMonitor([_batch([_event(2)])])
+    healthy            = _StaticMonitor([_batch([_event(2)])])
     await reset_minecraft_runtime.replace_connection(_connection(1, failing))
     await reset_minecraft_runtime.replace_connection(_connection(2, healthy, port=25576))
     context = SimpleNamespace(send_action=AsyncMock(return_value=True))
@@ -366,9 +366,9 @@ async def test_stale_rate_buckets_are_pruned(
     reset_minecraft_runtime: ConnectionManager,
 ) -> None:
     monitor = _StaticMonitor([_batch([])])
-    conn = _connection(1, monitor)
+    conn    = _connection(1, monitor)
     await reset_minecraft_runtime.replace_connection(conn)
-    stale_key = ("old", 1, "private", 99)
+    stale_key                         = ("old", 1, "private", 99)
     mc_main._event_buckets[stale_key] = mc_main._EventTokenBucket()  # noqa: SLF001
 
     await mc_main.scheduled(cast(Any, SimpleNamespace(send_action=AsyncMock(return_value=True))))
@@ -384,9 +384,9 @@ async def test_empty_manager_and_connection_without_monitor_do_nothing(
     await mc_main.scheduled(cast(Any, context))
     await reset_minecraft_runtime.replace_connection(
         McConnection(
-            host="mc.example",
-            port=25575,
-            target=DeliveryTarget("private", 1),
+            host   = "mc.example",
+            port   = 25575,
+            target = DeliveryTarget("private", 1),
         )
     )
     await mc_main.scheduled(cast(Any, context))
@@ -397,7 +397,7 @@ async def test_empty_manager_and_connection_without_monitor_do_nothing(
 async def test_rejected_cursor_commit_is_contained(
     reset_minecraft_runtime: ConnectionManager,
 ) -> None:
-    monitor = _StaticMonitor([_batch([_event(1)])])
+    monitor               = _StaticMonitor([_batch([_event(1)])])
     monitor.commit_result = False
     await reset_minecraft_runtime.replace_connection(_connection(1, monitor))
     context = SimpleNamespace(send_action=AsyncMock(return_value=True))

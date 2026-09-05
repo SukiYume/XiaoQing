@@ -67,7 +67,7 @@ def test_plugin_init_timeout_is_finite() -> None:
 def test_plugin_name_pattern_accepts_only_namespace_safe_names() -> None:
     """插件名只能使用可安全映射到 Python 命名空间的 ASCII 字符。"""
 
-    pattern = re.compile(constants.VALID_PLUGIN_NAME_PATTERN)
+    pattern     = re.compile(constants.VALID_PLUGIN_NAME_PATTERN)
     valid_names = (
         "test",
         "test_plugin",

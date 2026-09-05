@@ -44,7 +44,7 @@ async def _detach_running_callback(
     started: threading.Event,
 ) -> None:
     """取消等待方并保留仍在线程池运行的同步回调。"""
-    task = asyncio.create_task(gate.run(lambda: call_plugin_callback(callback)))
+    task     = asyncio.create_task(gate.run(lambda: call_plugin_callback(callback)))
     deadline = time.monotonic() + 1
     while not started.is_set() and time.monotonic() < deadline:
         await asyncio.sleep(0.001)
@@ -106,11 +106,11 @@ async def test_broker_submit_failure_releases_global_and_lane_slots(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_sequential_gate_allows_only_one_active_operation():
-    gate = PluginExecutionGate("sequential")
-    release = asyncio.Event()
+    gate          = PluginExecutionGate("sequential")
+    release       = asyncio.Event()
     first_started = asyncio.Event()
-    active = 0
-    max_active = 0
+    active        = 0
+    max_active    = 0
 
     async def slow_operation() -> None:
         nonlocal active, max_active
@@ -133,11 +133,11 @@ async def test_sequential_gate_allows_only_one_active_operation():
 
 @pytest.mark.asyncio
 async def test_parallel_gate_preserves_parallel_execution():
-    gate = PluginExecutionGate("parallel")
-    release = asyncio.Event()
+    gate         = PluginExecutionGate("parallel")
+    release      = asyncio.Event()
     both_started = asyncio.Event()
-    active = 0
-    max_active = 0
+    active       = 0
+    max_active   = 0
 
     async def slow_operation() -> None:
         nonlocal active, max_active
@@ -148,7 +148,7 @@ async def test_parallel_gate_preserves_parallel_execution():
         await release.wait()
         active -= 1
 
-    first = asyncio.create_task(gate.run(slow_operation))
+    first  = asyncio.create_task(gate.run(slow_operation))
     second = asyncio.create_task(gate.run(slow_operation))
     await both_started.wait()
     assert max_active == 2
@@ -158,7 +158,7 @@ async def test_parallel_gate_preserves_parallel_execution():
 
 @pytest.mark.asyncio
 async def test_close_cancels_active_and_queued_work_then_rejects_new_work():
-    gate = PluginExecutionGate("sequential")
+    gate    = PluginExecutionGate("sequential")
     entered = asyncio.Event()
 
     async def never_finishes() -> None:
@@ -205,9 +205,9 @@ async def test_failure_threshold_opens_then_recovers_circuit():
     gate = PluginExecutionGate(
         "parallel",
         policy=PluginExecutionPolicy(
-            timeout_seconds=None,
-            failure_threshold=2,
-            cooldown_seconds=0.01,
+            timeout_seconds   = None,
+            failure_threshold = 2,
+            cooldown_seconds  = 0.01,
         ),
     )
 
@@ -231,9 +231,9 @@ async def test_parallel_limit_bounds_parallel_plugin_callbacks():
         "parallel",
         policy=PluginExecutionPolicy(timeout_seconds=None, parallel_limit=1),
     )
-    entered = asyncio.Event()
-    release = asyncio.Event()
-    active = 0
+    entered    = asyncio.Event()
+    release    = asyncio.Event()
+    active     = 0
     max_active = 0
 
     async def slow_operation() -> None:
@@ -260,8 +260,8 @@ async def test_timeout_quarantines_callback_that_ignores_cancellation():
         policy=PluginExecutionPolicy(timeout_seconds=0.1, cooldown_seconds=0.01),
     )
     ignored_cancel = asyncio.Event()
-    release = asyncio.Event()
-    finished = asyncio.Event()
+    release        = asyncio.Event()
+    finished       = asyncio.Event()
 
     async def ignores_cancel() -> None:
         try:
@@ -287,11 +287,11 @@ async def test_timeout_quarantines_callback_that_ignores_cancellation():
 
 @pytest.mark.asyncio
 async def test_sync_callbacks_use_bounded_shared_executor():
-    started = threading.Event()
-    release = threading.Event()
-    active = 0
+    started    = threading.Event()
+    release    = threading.Event()
+    active     = 0
     max_active = 0
-    lock = threading.Lock()
+    lock       = threading.Lock()
 
     def blocking_callback() -> None:
         nonlocal active, max_active
@@ -315,16 +315,16 @@ async def test_sync_callbacks_use_bounded_shared_executor():
 async def test_sync_timeout_tracks_real_future_and_close_reports_undrained_work():
     gate = PluginExecutionGate(
         "sequential",
-        plugin_name="blocking-sync",
-        policy=PluginExecutionPolicy(
-            timeout_seconds=0.1,
-            cooldown_seconds=0.01,
-            drain_timeout_seconds=0.1,
+        plugin_name = "blocking-sync",
+        policy      = PluginExecutionPolicy(
+            timeout_seconds       = 0.1,
+            cooldown_seconds      = 0.01,
+            drain_timeout_seconds = 0.1,
         ),
     )
-    started = threading.Event()
-    release = threading.Event()
-    finished = threading.Event()
+    started                 = threading.Event()
+    release                 = threading.Event()
+    finished                = threading.Event()
     side_effects: list[str] = []
 
     def blocking_callback() -> None:
@@ -363,14 +363,14 @@ async def test_sync_timeout_tracks_real_future_and_close_reports_undrained_work(
 async def test_late_sync_fatal_is_retained_until_gate_drain() -> None:
     gate = PluginExecutionGate(
         "sequential",
-        plugin_name="late-sync-fatal",
-        policy=PluginExecutionPolicy(
-            timeout_seconds=0.01,
-            drain_timeout_seconds=0.2,
+        plugin_name = "late-sync-fatal",
+        policy      = PluginExecutionPolicy(
+            timeout_seconds       = 0.01,
+            drain_timeout_seconds = 0.2,
         ),
     )
-    started = threading.Event()
-    release = threading.Event()
+    started  = threading.Event()
+    release  = threading.Event()
     finished = threading.Event()
     expected = SystemExit("late sync fatal")
 
@@ -398,12 +398,12 @@ async def test_cancelled_sync_callback_poison_blocks_sequential_overlap_until_th
     gate = PluginExecutionGate(
         "sequential",
         policy=PluginExecutionPolicy(
-            timeout_seconds=None,
-            drain_timeout_seconds=0.01,
+            timeout_seconds       = None,
+            drain_timeout_seconds = 0.01,
         ),
     )
-    started = threading.Event()
-    release = threading.Event()
+    started  = threading.Event()
+    release  = threading.Event()
     finished = threading.Event()
 
     def blocking_callback() -> None:
@@ -432,9 +432,9 @@ async def test_cancelled_sync_callback_poison_blocks_sequential_overlap_until_th
 async def test_sync_bulkhead_allows_other_plugin_to_progress() -> None:
     broker = PluginSyncBroker(max_workers=2, global_queue_limit=8)
     policy = PluginExecutionPolicy(
-        timeout_seconds=None,
-        parallel_limit=3,
-        sync_parallel_limit=1,
+        timeout_seconds     = None,
+        parallel_limit      = 3,
+        sync_parallel_limit = 1,
     )
     gate_a = PluginExecutionGate("parallel", plugin_name="a", policy=policy, sync_broker=broker)
     gate_b = PluginExecutionGate("parallel", plugin_name="b", policy=policy, sync_broker=broker)
@@ -473,16 +473,16 @@ async def test_sync_bulkhead_allows_other_plugin_to_progress() -> None:
 async def test_gate_admission_queue_overflow_is_fast_and_bounded() -> None:
     gate = PluginExecutionGate(
         "parallel",
-        plugin_name="bounded",
-        policy=PluginExecutionPolicy(
-            timeout_seconds=None,
-            parallel_limit=1,
-            admission_queue_limit=1,
+        plugin_name = "bounded",
+        policy      = PluginExecutionPolicy(
+            timeout_seconds       = None,
+            parallel_limit        = 1,
+            admission_queue_limit = 1,
         ),
     )
     entered = asyncio.Event()
     release = asyncio.Event()
-    calls = 0
+    calls   = 0
 
     async def blocking() -> None:
         nonlocal calls
@@ -510,18 +510,18 @@ async def test_sync_lane_queue_overflow_is_fast_and_does_not_count_as_failure() 
     broker = PluginSyncBroker(max_workers=2, global_queue_limit=8)
     gate = PluginExecutionGate(
         "parallel",
-        plugin_name="lane-full",
-        policy=PluginExecutionPolicy(
-            timeout_seconds=None,
-            parallel_limit=4,
-            sync_parallel_limit=1,
-            sync_queue_limit=1,
-            failure_threshold=1,
+        plugin_name = "lane-full",
+        policy      = PluginExecutionPolicy(
+            timeout_seconds     = None,
+            parallel_limit      = 4,
+            sync_parallel_limit = 1,
+            sync_queue_limit    = 1,
+            failure_threshold   = 1,
         ),
         sync_broker=broker,
     )
-    started = threading.Event()
-    release = threading.Event()
+    started    = threading.Event()
+    release    = threading.Event()
     late_calls = 0
 
     def blocking() -> None:
@@ -559,8 +559,8 @@ async def test_global_sync_queue_limit_bounds_many_plugin_backlog() -> None:
         PluginExecutionGate("parallel", plugin_name=name, policy=policy, sync_broker=broker)
         for name in ("a", "b", "c")
     ]
-    started = threading.Event()
-    release = threading.Event()
+    started        = threading.Event()
+    release        = threading.Event()
     rejected_calls = 0
 
     def blocking() -> None:
@@ -594,14 +594,14 @@ async def test_global_sync_queue_limit_bounds_many_plugin_backlog() -> None:
 async def test_broker_round_robin_runs_waiting_lane_before_same_lane_backlog() -> None:
     broker = PluginSyncBroker(max_workers=1, global_queue_limit=8)
     policy = PluginExecutionPolicy(
-        timeout_seconds=None,
-        parallel_limit=4,
-        sync_queue_limit=4,
+        timeout_seconds  = None,
+        parallel_limit   = 4,
+        sync_queue_limit = 4,
     )
     gate_a = PluginExecutionGate("parallel", plugin_name="a", policy=policy, sync_broker=broker)
     gate_b = PluginExecutionGate("parallel", plugin_name="b", policy=policy, sync_broker=broker)
-    started = threading.Event()
-    release = threading.Event()
+    started          = threading.Event()
+    release          = threading.Event()
     order: list[str] = []
 
     def first_a() -> None:
@@ -638,13 +638,13 @@ async def test_broker_round_robin_runs_waiting_lane_before_same_lane_backlog() -
 async def test_cancelled_queued_sync_callback_never_runs_and_frees_capacity() -> None:
     broker = PluginSyncBroker(max_workers=1, global_queue_limit=1)
     policy = PluginExecutionPolicy(
-        timeout_seconds=None,
-        parallel_limit=3,
-        sync_queue_limit=2,
+        timeout_seconds  = None,
+        parallel_limit   = 3,
+        sync_queue_limit = 2,
     )
     gate = PluginExecutionGate("parallel", plugin_name="cancel", policy=policy, sync_broker=broker)
-    started = threading.Event()
-    release = threading.Event()
+    started          = threading.Event()
+    release          = threading.Event()
     calls: list[str] = []
 
     def blocking() -> None:
@@ -701,8 +701,8 @@ async def test_queued_sync_timeout_never_executes_late_side_effect() -> None:
         policy=PluginExecutionPolicy(timeout_seconds=0.02),
         sync_broker=broker,
     )
-    started = threading.Event()
-    release = threading.Event()
+    started    = threading.Event()
+    release    = threading.Event()
     late_calls = 0
 
     def blocking() -> None:
@@ -812,12 +812,12 @@ async def test_closed_gate_allows_sync_lifecycle_callback_but_rejects_detached_s
 @pytest.mark.asyncio
 async def test_hot_parallel_limit_decrease_and_increase_apply_to_waiters() -> None:
     policy = PluginExecutionPolicy(
-        timeout_seconds=None,
-        parallel_limit=2,
-        admission_queue_limit=4,
+        timeout_seconds       = None,
+        parallel_limit        = 2,
+        admission_queue_limit = 4,
     )
     gate = PluginExecutionGate("parallel", policy=policy)
-    entered = [asyncio.Event() for _ in range(3)]
+    entered  = [asyncio.Event() for _ in range(3)]
     releases = [asyncio.Event() for _ in range(3)]
 
     async def operation(index: int) -> None:
@@ -828,9 +828,9 @@ async def test_hot_parallel_limit_decrease_and_increase_apply_to_waiters() -> No
     await asyncio.gather(entered[0].wait(), entered[1].wait())
     gate.set_policy(
         PluginExecutionPolicy(
-            timeout_seconds=None,
-            parallel_limit=1,
-            admission_queue_limit=4,
+            timeout_seconds       = None,
+            parallel_limit        = 1,
+            admission_queue_limit = 4,
         )
     )
     tasks.append(asyncio.create_task(gate.run(lambda: operation(2))))
@@ -846,14 +846,14 @@ async def test_hot_parallel_limit_decrease_and_increase_apply_to_waiters() -> No
     increase_gate = PluginExecutionGate(
         "parallel",
         policy=PluginExecutionPolicy(
-            timeout_seconds=None,
-            parallel_limit=1,
-            admission_queue_limit=2,
+            timeout_seconds       = None,
+            parallel_limit        = 1,
+            admission_queue_limit = 2,
         ),
     )
-    first_entered = asyncio.Event()
+    first_entered  = asyncio.Event()
     second_entered = asyncio.Event()
-    release = asyncio.Event()
+    release        = asyncio.Event()
 
     async def first_operation() -> None:
         first_entered.set()
@@ -869,9 +869,9 @@ async def test_hot_parallel_limit_decrease_and_increase_apply_to_waiters() -> No
     await asyncio.sleep(0)
     increase_gate.set_policy(
         PluginExecutionPolicy(
-            timeout_seconds=None,
-            parallel_limit=2,
-            admission_queue_limit=2,
+            timeout_seconds       = None,
+            parallel_limit        = 2,
+            admission_queue_limit = 2,
         )
     )
     await asyncio.wait_for(second_entered.wait(), timeout=0.5)
@@ -886,14 +886,14 @@ async def test_many_plugin_gates_share_fixed_broker_thread_bound() -> None:
     gates = [
         PluginExecutionGate(
             "parallel",
-            plugin_name=f"plugin-{index}",
-            policy=policy,
-            sync_broker=broker,
+            plugin_name = f"plugin-{index}",
+            policy      = policy,
+            sync_broker = broker,
         )
         for index in range(20)
     ]
-    release = threading.Event()
-    started = 0
+    release      = threading.Event()
+    started      = 0
     started_lock = threading.Lock()
     four_started = threading.Event()
 
@@ -944,21 +944,21 @@ async def test_gate_close_waits_for_detached_fatal_delivery_before_reporting_dra
         for index in range(25):
             gate = PluginExecutionGate(
                 "parallel",
-                plugin_name=f"fatal-race-{index}",
-                policy=PluginExecutionPolicy(
-                    timeout_seconds=None,
-                    drain_timeout_seconds=1,
+                plugin_name = f"fatal-race-{index}",
+                policy      = PluginExecutionPolicy(
+                    timeout_seconds       = None,
+                    drain_timeout_seconds = 1,
                 ),
                 sync_broker=broker,
             )
-            started = threading.Event()
-            release = threading.Event()
+            started  = threading.Event()
+            release  = threading.Event()
             expected = SystemExit(f"late-{index}")
 
             def late_fatal(
                 started: threading.Event = started,
                 release: threading.Event = release,
-                expected: SystemExit = expected,
+                expected: SystemExit     = expected,
             ) -> None:
                 started.set()
                 release.wait(timeout=2)
@@ -989,8 +989,8 @@ def test_closed_owner_loop_still_cleans_detached_future_and_retains_fatal() -> N
         policy=PluginExecutionPolicy(timeout_seconds=None),
         sync_broker=broker,
     )
-    started = threading.Event()
-    release = threading.Event()
+    started  = threading.Event()
+    release  = threading.Event()
     finished = threading.Event()
     expected = SystemExit("dead loop fatal")
 
@@ -1028,8 +1028,8 @@ def test_stopped_open_owner_loop_cannot_strand_detached_delivery() -> None:
         policy=PluginExecutionPolicy(timeout_seconds=None),
         sync_broker=broker,
     )
-    started = threading.Event()
-    release = threading.Event()
+    started  = threading.Event()
+    release  = threading.Event()
     finished = threading.Event()
     expected = SystemExit("stopped loop fatal")
 
@@ -1111,17 +1111,17 @@ async def test_gate_close_physically_cancels_queued_sync_job_before_worker_relea
     broker = PluginSyncBroker(max_workers=1, global_queue_limit=4)
     gate = PluginExecutionGate(
         "parallel",
-        plugin_name="close-queued",
-        policy=PluginExecutionPolicy(
-            timeout_seconds=None,
-            parallel_limit=3,
-            sync_queue_limit=2,
-            drain_timeout_seconds=0.01,
+        plugin_name = "close-queued",
+        policy      = PluginExecutionPolicy(
+            timeout_seconds       = None,
+            parallel_limit        = 3,
+            sync_queue_limit      = 2,
+            drain_timeout_seconds = 0.01,
         ),
         sync_broker=broker,
     )
-    started = threading.Event()
-    release = threading.Event()
+    started             = threading.Event()
+    release             = threading.Event()
     queued_side_effects = 0
 
     def blocking() -> None:

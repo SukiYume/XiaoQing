@@ -5,12 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-import tomllib
 
 from core.bounded_file_cache import FileCacheLimits
 from plugins.color import data_manager as color_data
@@ -44,7 +44,7 @@ def test_dict_manifest_covers_full_bundled_assets_and_usage_terms():
         "chinese_to_english": 26_770,
     }
     for direction, spec in manifest["files"].items():
-        path = asset_dir / spec["filename"]
+        path    = asset_dir / spec["filename"]
         payload = path.read_bytes()
         assert len(payload) == spec["bytes"]
         assert hashlib.sha256(payload).hexdigest() == spec["sha256"]
@@ -96,12 +96,12 @@ def test_color_manifest_count_and_docs_match_real_palette():
 def _color_context(tmp_path: Path, *, admin: bool) -> SimpleNamespace:
     actor = 42
     return SimpleNamespace(
-        current_group_id=1001,
-        current_user_id=actor,
-        data_dir=tmp_path / "color-data",
+        current_group_id = 1001,
+        current_user_id  = actor,
+        data_dir         = tmp_path / "color-data",
         is_global_admin=lambda user_id=None: admin and int(user_id) == actor,
-        logger=MagicMock(),
-        plugin_dir=ROOT / "plugins" / "color",
+        logger     = MagicMock(),
+        plugin_dir = ROOT / "plugins" / "color",
     )
 
 

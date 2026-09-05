@@ -43,7 +43,7 @@ def _fill_test_config_defaults(target, defaults) -> None:
         return
     for name in type(defaults).model_fields:
         default_value = getattr(defaults, name)
-        current = _explicit_test_attribute(target, name)
+        current       = _explicit_test_attribute(target, name)
         if current is _MISSING_TEST_CONFIG:
             setattr(target, name, deepcopy(default_value))
             continue
@@ -65,26 +65,26 @@ def _make_hctx(
     runtime,
     state,
     context,
-    event=None,
-    chat_id="g67890",
-    bot_name="小青",
-    secrets=None,
-    data_dir=None,
+    event    = None,
+    chat_id  = "g67890",
+    bot_name = "小青",
+    secrets  = None,
+    data_dir = None,
 ) -> HandlerContext:
     """Build a HandlerContext without going through from_event."""
     _complete_test_runtime_config(runtime)
     return HandlerContext(
-        chat_id=chat_id,
-        runtime=runtime,
-        state=state,
-        secrets=secrets if secrets is not None else {},
-        data_dir=data_dir
+        chat_id  = chat_id,
+        runtime  = runtime,
+        state    = state,
+        secrets  = secrets if secrets is not None else {},
+        data_dir = data_dir
         if data_dir is not None
         else (
             context.data_dir if context else Path(tempfile.gettempdir()) / "xiaoqing_chat_test_data"
         ),
-        bot_name=bot_name,
-        context=context,
+        bot_name = bot_name,
+        context  = context,
     )
 
 
@@ -92,21 +92,21 @@ def _set_context_principal(
     context,
     event: dict[str, Any],
     *,
-    group_role: str = "member",
+    group_role: str    = "member",
     is_bot_admin: bool = False,
 ) -> None:
-    group_id = event.get("group_id")
+    group_id          = event.get("group_id")
     context.principal = PluginPrincipal(
-        kind="user",
-        user_id=event.get("user_id"),
-        group_id=group_id,
-        is_bot_admin=is_bot_admin,
-        is_private=group_id in (None, ""),
-        group_role=group_role if group_id not in (None, "") else "unknown",
+        kind         = "user",
+        user_id      = event.get("user_id"),
+        group_id     = group_id,
+        is_bot_admin = is_bot_admin,
+        is_private   = group_id in (None, ""),
+        group_role   = group_role if group_id not in (None, "") else "unknown",
     )
     context.capabilities = PluginCapabilities(
-        is_bot_admin=is_bot_admin,
-        ai=_provider_test_ai(),
+        is_bot_admin = is_bot_admin,
+        ai           = _provider_test_ai(),
     )
     context.config = {
         **dict(getattr(context, "config", {}) or {}),
@@ -130,8 +130,8 @@ def _provider_test_ai() -> SimpleNamespace:
         AIModelInfo("glm-5.2", "zhipu", "glm-5.2", ("text",)),
     )
     return SimpleNamespace(
-        list_models=lambda route, **kwargs: models,
-        complete=AsyncMock(),
+        list_models = lambda route, **kwargs: models,
+        complete    = AsyncMock(),
     )
 
 
@@ -160,30 +160,30 @@ def _build_xiaoqing_catalog():
 @pytest.fixture
 def mock_context(tmp_path: Path):
     """Create a mock plugin context for xiaoqing_chat"""
-    context = MagicMock()
-    context.config = {"bot_name": "小青"}
+    context         = MagicMock()
+    context.config  = {"bot_name": "小青"}
     context.secrets = {
         "openai_api_key": "test_key",
         "plugins": {
             "xiaoqing_chat": {"api_key": "test", "api_base": "http://test", "model": "test-model"}
         },
     }
-    context.plugin_name = "xiaoqing_chat"
-    context.plugin_dir = tmp_path / "plugins" / "xiaoqing_chat"
-    context.data_dir = tmp_path / "data" / "xiaoqing_chat"
-    context.http_session = AsyncMock()
-    context.send_action = AsyncMock()
-    context.reload_config = Mock()
+    context.plugin_name    = "xiaoqing_chat"
+    context.plugin_dir     = tmp_path / "plugins" / "xiaoqing_chat"
+    context.data_dir       = tmp_path / "data" / "xiaoqing_chat"
+    context.http_session   = AsyncMock()
+    context.send_action    = AsyncMock()
+    context.reload_config  = Mock()
     context.reload_plugins = Mock()
     context.get_command_catalog = Mock(return_value=(_build_xiaoqing_catalog(),))
     context.list_plugins = Mock(return_value=["xiaoqing_chat"])
-    context.current_user_id = 12345
+    context.current_user_id  = 12345
     context.current_group_id = 67890
-    context.request_id = "test-request-123"
-    context.state = {}
-    context.logger = MagicMock()
-    context.session_manager = None
-    context.config_manager = MagicMock()
+    context.request_id       = "test-request-123"
+    context.state            = {}
+    context.logger           = MagicMock()
+    context.session_manager  = None
+    context.config_manager   = MagicMock()
     return with_settings_reader(context)
 
 

@@ -145,7 +145,7 @@ def insert_or_merge_media_part(
         return
 
     media_kind = str(normalized_media.get("kind", "") or "").strip()
-    identity = {
+    identity   = {
         field: str(normalized_media.get(field, "") or "").strip()
         for field in ("face_id", "media_hash", "media_key")
         if str(normalized_media.get(field, "") or "").strip()
@@ -200,7 +200,7 @@ def replace_message_media_parts(
     if not resolved_items:
         return normalized_parts
 
-    media_index = 0
+    media_index                   = 0
     rebuilt: list[dict[str, Any]] = []
     for part in normalized_parts:
         if str(part.get("kind", "") or "").strip() == "text":
@@ -233,7 +233,7 @@ def template_with_fallback_placeholders(
     media_items: Sequence[dict[str, Any]] | None,
 ) -> str:
     normalized = str(template or "").strip()
-    items = _normalize_media_items(media_items)
+    items      = _normalize_media_items(media_items)
     if not items:
         return normalized
     if MEDIA_PLACEHOLDER_RE.search(normalized):
@@ -254,8 +254,8 @@ def build_message_parts_from_template(
         return ()
 
     parts: list[dict[str, Any]] = []
-    cursor = 0
-    consumed_indexes: set[int] = set()
+    cursor                      = 0
+    consumed_indexes: set[int]  = set()
     for match in MEDIA_PLACEHOLDER_RE.finditer(normalized_template):
         _append_text_part(parts, normalized_template[cursor : match.start()])
         media_index = max(0, int(match.group(1)) - 1)
@@ -310,10 +310,10 @@ def message_parts_to_legacy(
     if not normalized_parts:
         return "", []
 
-    visible_chunks: list[str] = []
+    visible_chunks: list[str]         = []
     media_items: list[dict[str, Any]] = []
-    pending_text_prefix = ""
-    total_parts = len(normalized_parts)
+    pending_text_prefix               = ""
+    total_parts                       = len(normalized_parts)
     for index, part in enumerate(normalized_parts):
         kind = str(part.get("kind", "") or "").strip()
         if kind == "text":
@@ -325,15 +325,15 @@ def message_parts_to_legacy(
             else:
                 text = pending_text_prefix + raw_text
             pending_text_prefix = ""
-            next_kind = ""
+            next_kind           = ""
             if index + 1 < total_parts:
                 next_kind = str(normalized_parts[index + 1].get("kind", "") or "").strip()
             if next_kind and next_kind != "text" and text.endswith("\n") and text.strip("\n"):
                 # 媒体前的换行在旧格式里属于媒体后的分隔符；暂存后与下一文本的
                 # 前导换行取最大值，避免 parts→legacy 往返时逐次累加空行。
-                stripped = text.rstrip("\n")
+                stripped            = text.rstrip("\n")
                 pending_text_prefix = text[len(stripped) :]
-                text = stripped
+                text                = stripped
             visible_chunks.append(text)
             continue
         media_item = _normalize_media_part(part)
@@ -345,9 +345,9 @@ def message_parts_to_legacy(
     if pending_text_prefix:
         visible_chunks.append(pending_text_prefix)
 
-    visible_text = "".join(visible_chunks)
+    visible_text          = "".join(visible_chunks)
     compacted_media_items = compact_media_items(media_items)
-    content = compact_message_content(visible_text, compacted_media_items)
+    content               = compact_message_content(visible_text, compacted_media_items)
     return content, compacted_media_items
 
 

@@ -44,7 +44,7 @@ def _command_parent(command: str, context: Any, manager: Any):
 
 class _SessionStub:
     def __init__(self, data=None):
-        self.data = data or {}
+        self.data        = data or {}
         self.plugin_name = "qingssh"
 
     def get(self, key, default=None):
@@ -67,9 +67,9 @@ class _ManagerStub:
     async def stop_command(self, user_id, group_id, server_name):
         self._stop = True
         return ssh_manager_module.CommandTerminationResult(
-            found=True,
-            local_cleaned=True,
-            remote_confirmed=True,
+            found            = True,
+            local_cleaned    = True,
+            remote_confirmed = True,
         )
 
     async def execute_command_stream(self, *args, **kwargs):
@@ -83,9 +83,9 @@ class _DisconnectManagerStub:
 
     async def stop_command(self, _user_id, _group_id, _server_name):
         return ssh_manager_module.CommandTerminationResult(
-            found=False,
-            local_cleaned=True,
-            remote_confirmed=False,
+            found            = False,
+            local_cleaned    = True,
+            remote_confirmed = False,
         )
 
     def disconnect(self, user_id, group_id, server_name):
@@ -100,8 +100,8 @@ class _TransactionalContext:
     """Small deterministic model of the framework's per-session transaction."""
 
     def __init__(self, session: _SessionStub) -> None:
-        self.current_user_id = 10001
-        self.current_group_id = 50001
+        self.current_user_id        = 10001
+        self.current_group_id       = 50001
         self.config: dict[str, Any] = {
             "plugins": {
                 "qingssh": {
@@ -110,10 +110,10 @@ class _TransactionalContext:
                 }
             }
         }
-        self.request_id = "qingssh-transaction-test"
-        self.session: _SessionStub | None = session
+        self.request_id                    = "qingssh-transaction-test"
+        self.session: _SessionStub | None  = session
         self.actions: list[dict[str, Any]] = []
-        self._lock = asyncio.Lock()
+        self._lock                         = asyncio.Lock()
 
     def get_settings_snapshot(self):
         from tests.helpers.settings_snapshot import settings_snapshot
@@ -138,21 +138,21 @@ class _TransactionalContext:
         async with self._lock:
             if self.session is None:
                 raise AssertionError("test session is missing")
-            working = copy.deepcopy(self.session)
-            result = await callback(working)
+            working      = copy.deepcopy(self.session)
+            result       = await callback(working)
             self.session = working if replacement is _NO_REPLACEMENT else cast(Any, replacement)
             return result
 
 
 class _CommandGateManager:
     def __init__(self, data_dir: Path, *, output: str = "") -> None:
-        self.data_dir = data_dir
-        self.output = output
-        self.calls: list[str] = []
+        self.data_dir                                = data_dir
+        self.output                                  = output
+        self.calls: list[str]                        = []
         self.disconnects: list[tuple[str, str, str]] = []
-        self.close_operations: list[str] = []
-        self.started = asyncio.Event()
-        self.release = asyncio.Event()
+        self.close_operations: list[str]             = []
+        self.started                                 = asyncio.Event()
+        self.release                                 = asyncio.Event()
 
     def is_connected(self, *_args: Any) -> bool:
         return True
@@ -165,9 +165,9 @@ class _CommandGateManager:
     async def stop_command(self, _user_id: str, _group_id: str, _server_name: str):
         self.close_operations.append("stop")
         return ssh_manager_module.CommandTerminationResult(
-            found=True,
-            local_cleaned=True,
-            remote_confirmed=True,
+            found            = True,
+            local_cleaned    = True,
+            remote_confirmed = True,
         )
 
     async def execute_command_stream(
@@ -220,7 +220,7 @@ class _FakeJumpClient:
 
 class _FakeClient:
     def __init__(self):
-        self.closed = False
+        self.closed       = False
         self._jump_client = _FakeJumpClient()
 
     def close(self):
@@ -230,7 +230,7 @@ class _FakeClient:
 class _FakeChannel:
     def __init__(self):
         self.closed = False
-        self.sent = []
+        self.sent   = []
 
     def send_ready(self):
         return True

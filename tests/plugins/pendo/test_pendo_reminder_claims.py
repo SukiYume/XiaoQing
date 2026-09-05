@@ -1,7 +1,7 @@
 import asyncio
 import sqlite3
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -16,13 +16,13 @@ from tests.helpers.pendo_test_support import _read_scheduled_delivery
 
 
 def test_initial_reminder_outside_check_window_is_not_backfilled():
-    current = datetime(2030, 1, 1, 12, 0, tzinfo=timezone.utc)
+    current = datetime(2030, 1, 1, 12, 0, tzinfo=UTC)
 
     class _Db:
         def claim_reminder(self, *_args, **_kwargs):
             raise AssertionError("expired reminder must not be claimed")
 
-    service = ReminderService(_Db())
+    service                  = ReminderService(_Db())
     service._parse_user_time = lambda *_args: (
         current - timedelta(seconds=PendoConfig.REMINDER_CHECK_WINDOW_SECONDS + 1)
     )
@@ -32,15 +32,15 @@ def test_initial_reminder_outside_check_window_is_not_backfilled():
         item,
         "2017-02-27T12:00:00+00:00",
         current,
-        log=None,
-        settings={},
+        log      = None,
+        settings = {},
     )
 
     assert delivery is None
 
 
 def test_failed_initial_reminder_can_retry_after_normal_check_window():
-    current = datetime(2030, 1, 1, 12, 5, tzinfo=timezone.utc)
+    current = datetime(2030, 1, 1, 12, 5, tzinfo=UTC)
 
     class _Db:
         def claim_reminder(self, *_args, **_kwargs):
@@ -48,7 +48,7 @@ def test_failed_initial_reminder_can_retry_after_normal_check_window():
 
     service = ReminderService(_Db())
     service._parse_user_time = lambda *_args: current - timedelta(minutes=5)
-    service._should_suppress = lambda *_args, **_kwargs: False
+    service._should_suppress        = lambda *_args, **_kwargs: False
     service._build_reminder_message = lambda *_args, **_kwargs: "retry"
     item = SimpleNamespace(id="recent-failure", owner_id="1001", context=None)
 
@@ -56,8 +56,8 @@ def test_failed_initial_reminder_can_retry_after_normal_check_window():
         item,
         "2030-01-01T12:00:00+00:00",
         current,
-        log={"failure_count": 1, "confirmed_at": None},
-        settings={},
+        log      = {"failure_count": 1, "confirmed_at": None},
+        settings = {},
     )
 
     assert delivery is not None
@@ -65,7 +65,7 @@ def test_failed_initial_reminder_can_retry_after_normal_check_window():
 
 
 def test_reminder_claim_is_atomic_and_recovers_after_lease(db):
-    now = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    now = datetime(2030, 1, 1, tzinfo=UTC)
 
     first = db.claim_reminder("event-1", "2030-01-01T00:00:00+00:00", now=now, lease_seconds=30)
     assert first
@@ -155,8 +155,8 @@ def test_row_decoder_restores_declared_json_containers_and_task_status(db):
 
 def test_get_items_by_ids_batches_above_sqlite_parameter_limit(db):
     item_ids = [f"bulk-note-{index:04d}" for index in range(501)]
-    now = datetime.now(timezone.utc).isoformat()
-    conn = db.get_connection()
+    now      = datetime.now(UTC).isoformat()
+    conn     = db.get_connection()
     conn.executemany(
         """
         INSERT INTO items (id, type, title, created_at, updated_at, owner_id)
@@ -224,8 +224,8 @@ def test_batch_soft_delete_logs_and_cleans_only_actual_matches(db):
     affected = db.batch_soft_delete(
         ["matched-a", "missing", "wrong-type", "matched-b", "matched-a"],
         "u-batch-delete",
-        item_type="note",
-        operation_action="delete_note",
+        item_type        = "note",
+        operation_action = "delete_note",
     )
 
     assert affected == 2
@@ -234,7 +234,9 @@ def test_batch_soft_delete_logs_and_cleans_only_actual_matches(db):
     assert db.get_item("wrong-type", "u-batch-delete") is not None
     conn = db.get_connection()
     assert (
-        conn.execute("SELECT COUNT(*) FROM reminder_logs WHERE item_id = 'matched-a'").fetchone()[0]
+        conn.execute(
+            "SELECT COUNT(*) FROM reminder_logs WHERE item_id = 'matched-a' AND sent_at IS NULL"
+        ).fetchone()[0]
         == 0
     )
     assert (
@@ -287,9 +289,9 @@ def test_latest_confirmable_reminder_uses_absolute_time_order():
 
     selected = Database._latest_confirmable_time(
         remind_times,
-        requested_time=None,
-        allow_future=False,
-        now=datetime(2030, 1, 1, 9, 0, tzinfo=timezone.utc),
+        requested_time = None,
+        allow_future   = False,
+        now=datetime(2030, 1, 1, 9, 0, tzinfo=UTC),
         timezone_info=ZoneInfo("UTC"),
     )
 
@@ -309,8 +311,8 @@ def test_confirm_unsent_reminder_creates_confirmed_state(db):
 
     result = db.confirm_reminder(
         item_id,
-        user_action="done",
-        owner_id="u-unsent-confirmation",
+        user_action = "done",
+        owner_id    = "u-unsent-confirmation",
     )
 
     assert result["status"] == "success"
@@ -332,7 +334,7 @@ def test_future_reminder_confirmation_can_be_reopened_until_target_time(db):
     """提前确认只关闭指定提醒，重新开启后恢复全新的待发送状态。"""
 
     remind_time = "2030-01-01T12:00:00+00:00"
-    item_id = db.insert_item(
+    item_id     = db.insert_item(
         {
             "id": "future-confirmation-toggle",
             "type": "event",
@@ -342,14 +344,14 @@ def test_future_reminder_confirmation_can_be_reopened_until_target_time(db):
             "remind_times": [remind_time, "2030-01-01T12:30:00+00:00"],
         }
     )
-    current = datetime(2030, 1, 1, 11, 0, tzinfo=timezone.utc)
+    current = datetime(2030, 1, 1, 11, 0, tzinfo=UTC)
 
     confirmed = db.set_future_reminder_confirmation(
         item_id,
         remind_time,
         "u-future-confirmation-toggle",
-        confirmed=True,
-        now=current,
+        confirmed = True,
+        now       = current,
     )
     assert confirmed is not None and confirmed["status"] == "confirmed"
     logs = {row["remind_time"]: row for row in db.get_reminder_logs(item_id)}
@@ -360,8 +362,8 @@ def test_future_reminder_confirmation_can_be_reopened_until_target_time(db):
         item_id,
         remind_time,
         "u-future-confirmation-toggle",
-        confirmed=False,
-        now=current,
+        confirmed = False,
+        now       = current,
     )
     assert reopened is not None and reopened["status"] == "pending"
     reopened_log = next(
@@ -376,7 +378,7 @@ def test_future_reminder_confirmation_can_be_reopened_until_target_time(db):
         remind_time,
         "u-future-confirmation-toggle",
         confirmed=True,
-        now=datetime(2030, 1, 1, 12, 0, tzinfo=timezone.utc),
+        now=datetime(2030, 1, 1, 12, 0, tzinfo=UTC),
     )
     assert expired == {"outcome": "expired", "time": remind_time}
     assert (
@@ -384,15 +386,15 @@ def test_future_reminder_confirmation_can_be_reopened_until_target_time(db):
             item_id,
             remind_time,
             "another-owner",
-            confirmed=True,
-            now=current,
+            confirmed = True,
+            now       = current,
         )
         is None
     )
 
 
 def test_scheduled_delivery_validates_time_lease_and_normalizes_identity(db):
-    aware_now = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    aware_now = datetime(2030, 1, 1, tzinfo=UTC)
     with pytest.raises(ValueError, match="timezone-aware"):
         db.claim_scheduled_delivery("briefing", "u1", "2030-01-01", now=datetime(2030, 1, 1))
     with pytest.raises(ValueError, match="lease must be positive"):
@@ -409,7 +411,7 @@ def test_scheduled_delivery_validates_time_lease_and_normalizes_identity(db):
 
 
 def test_reminder_release_respects_next_attempt_time(db):
-    now = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    now = datetime(2030, 1, 1, tzinfo=UTC)
     token = db.claim_reminder("event-2", "2030-01-01T00:00:00+00:00", now=now)
     assert token
     assert db.release_reminder_claim(
@@ -425,7 +427,7 @@ def test_reminder_release_respects_next_attempt_time(db):
 
 
 def test_repeat_release_respects_next_attempt_time(db):
-    now = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    now = datetime(2030, 1, 1, tzinfo=UTC)
     item_id = db.insert_item(
         {
             "type": "event",
@@ -463,11 +465,11 @@ def test_repeat_release_respects_next_attempt_time(db):
 
 
 def test_scheduled_delivery_outbox_is_cross_instance_atomic_and_recoverable(tmp_path):
-    path = str(tmp_path / "shared.db")
-    first_db = Database(path)
+    path      = str(tmp_path / "shared.db")
+    first_db  = Database(path)
     second_db = Database(path)
-    now = datetime(2030, 1, 1, tzinfo=timezone.utc)
-    start = threading.Barrier(2)
+    now = datetime(2030, 1, 1, tzinfo=UTC)
+    start                               = threading.Barrier(2)
     claims: list[dict[str, str] | None] = []
 
     def claim(database: Database) -> None:
@@ -477,8 +479,8 @@ def test_scheduled_delivery_outbox_is_cross_instance_atomic_and_recoverable(tmp_
                 "daily_briefing",
                 "1001",
                 "2030-01-01",
-                now=now,
-                lease_seconds=30,
+                now           = now,
+                lease_seconds = 30,
             )
         )
 
@@ -520,7 +522,7 @@ def test_scheduled_delivery_outbox_is_cross_instance_atomic_and_recoverable(tmp_
 
 
 def test_scheduled_delivery_reclaims_expired_lease_with_same_key(db):
-    now = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    now = datetime(2030, 1, 1, tzinfo=UTC)
     first = db.claim_scheduled_delivery(
         "weekly_finance_summary", "1001", "2030-W01", now=now, lease_seconds=30
     )
@@ -545,11 +547,11 @@ def test_scheduled_delivery_reclaims_expired_lease_with_same_key(db):
 
 
 def test_unconfirmed_repeat_is_leased_once_across_database_instances(tmp_path):
-    path = str(tmp_path / "repeat.db")
-    first_db = Database(path)
-    second_db = Database(path)
+    path        = str(tmp_path / "repeat.db")
+    first_db    = Database(path)
+    second_db   = Database(path)
     remind_time = "2030-01-01T12:00:00+00:00"
-    item_id = first_db.insert_item(
+    item_id     = first_db.insert_item(
         {
             "type": "event",
             "owner_id": "1001",
@@ -559,7 +561,7 @@ def test_unconfirmed_repeat_is_leased_once_across_database_instances(tmp_path):
         }
     )
     first_db.log_reminder(item_id, remind_time)
-    current = datetime(2030, 1, 1, 13, 0, tzinfo=timezone.utc)
+    current = datetime(2030, 1, 1, 13, 0, tzinfo=UTC)
     old = (current - timedelta(minutes=10)).isoformat()
     first_db.get_connection().execute(
         "UPDATE reminder_logs SET sent_at = ?, last_sent_at = ?, repeat_count = 1, state = 'sent' "
@@ -568,7 +570,7 @@ def test_unconfirmed_repeat_is_leased_once_across_database_instances(tmp_path):
     )
     first_db.get_connection().commit()
 
-    start = threading.Barrier(2)
+    start                                  = threading.Barrier(2)
     results: list[list[dict[str, object]]] = []
 
     def check(database: Database) -> None:
@@ -604,14 +606,14 @@ def test_unconfirmed_repeat_is_leased_once_across_database_instances(tmp_path):
 def test_daily_briefing_outbox_prevents_duplicate_after_marker_failure(tmp_path, monkeypatch):
     from plugins.pendo.commands import scheduled as scheduled_module
 
-    path = str(tmp_path / "briefing.db")
-    first_db = Database(path)
+    path      = str(tmp_path / "briefing.db")
+    first_db  = Database(path)
     second_db = Database(path)
 
     class _FixedDateTime(datetime):
         @classmethod
         def now(cls, tz=None):
-            value = datetime(2030, 1, 1, tzinfo=timezone.utc)
+            value = datetime(2030, 1, 1, tzinfo=UTC)
             return value if tz is not None else value.replace(tzinfo=None)
 
     async def active_users(_db):
@@ -716,29 +718,29 @@ def test_item_update_uses_owner_type_and_version_compare_and_swap(db):
     assert db.update_item(
         item_id,
         {"title": "after"},
-        owner_id="u1",
-        item_type="note",
-        expected_version=0,
+        owner_id         = "u1",
+        item_type        = "note",
+        expected_version = 0,
     )
     assert not db.update_item(
         item_id,
         {"title": "stale"},
-        owner_id="u1",
-        item_type="note",
-        expected_version=0,
+        owner_id         = "u1",
+        item_type        = "note",
+        expected_version = 0,
     )
     assert not db.update_item(
         item_id,
         {"title": "wrong type"},
-        owner_id="u1",
-        item_type="task",
-        expected_version=1,
+        owner_id         = "u1",
+        item_type        = "task",
+        expected_version = 1,
     )
     assert db.get_item(item_id, "u1").title == "after"
 
 
 def test_operation_log_retention_redacts_snapshots_then_deletes_expired_rows(db):
-    old = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    old = datetime(2030, 1, 1, tzinfo=UTC)
     db.log_operation("u1", "edit_note", details={"old_values": {"content": "secret"}})
     conn = db.get_connection()
     conn.execute(
@@ -756,7 +758,7 @@ def test_operation_log_retention_redacts_snapshots_then_deletes_expired_rows(db)
 
 
 def test_daily_log_prune_preserves_snapshots_inside_active_undo_window(db):
-    cleanup_time = datetime(2030, 1, 2, 0, 15, tzinfo=timezone.utc)
+    cleanup_time = datetime(2030, 1, 2, 0, 15, tzinfo=UTC)
     db.log_operation("u1", "edit_note", details={"old_values": {"content": "fresh"}})
     db.log_operation("u1", "edit_note", details={"old_values": {"content": "expired"}})
     conn = db.get_connection()
@@ -792,7 +794,7 @@ def test_database_rejects_undo_windows_outside_the_shared_contract(db, minutes):
 
 
 def test_concurrent_user_setting_updates_preserve_disjoint_json_keys(db):
-    start = threading.Barrier(2)
+    start               = threading.Barrier(2)
     results: list[bool] = []
 
     def write(key: str):
@@ -838,8 +840,8 @@ def test_get_all_items_bypasses_shared_page_cache(db):
 
 
 def test_reminder_queue_materializes_utc_and_uses_partial_indexes(db):
-    owner_id = "u-reminder-queue"
-    due_time = "2030-01-01T09:00:00"
+    owner_id    = "u-reminder-queue"
+    due_time    = "2030-01-01T09:00:00"
     future_time = "2030-01-02T09:00:00"
     db.insert_item(
         {
@@ -873,7 +875,7 @@ def test_reminder_queue_materializes_utc_and_uses_partial_indexes(db):
         ("future-reminder", "2030-01-02T01:00:00+00:00"),
     ]
 
-    due = db.get_due_reminder_items(now=datetime(2030, 1, 1, 1, tzinfo=timezone.utc))
+    due = db.get_due_reminder_items(now=datetime(2030, 1, 1, 1, tzinfo=UTC))
     assert [item.id for item in due] == ["due-reminder"]
     assert due[0].content == ""
 
@@ -957,7 +959,7 @@ def test_prune_reminder_logs_removes_only_expired_confirmed_history(db):
             """
         )
 
-    assert db.prune_reminder_logs(before=datetime(2029, 4, 1, tzinfo=timezone.utc)) == 1
+    assert db.prune_reminder_logs(before=datetime(2029, 4, 1, tzinfo=UTC)) == 1
     assert [log["remind_time"] for log in db.get_reminder_logs("retention-reminder")] == [
         "2030-01-02T01:00:00+00:00"
     ]
@@ -969,7 +971,7 @@ def test_reminder_service_prunes_history_once_per_utc_day():
             self.prune_calls = 0
 
         def prune_reminder_logs(self, *, before):
-            assert before.tzinfo is timezone.utc
+            assert before.tzinfo is UTC
             self.prune_calls += 1
             return 0
 
@@ -979,7 +981,7 @@ def test_reminder_service_prunes_history_once_per_utc_day():
         def get_unconfirmed_sent_reminders(self):
             return []
 
-    db = _Db()
+    db      = _Db()
     service = ReminderService(db)
 
     assert service.check_and_send_reminders()["sent"] == 0

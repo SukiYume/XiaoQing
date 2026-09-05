@@ -26,8 +26,8 @@ auth_headers = _fixture_support.auth_headers
 def test_export_preview_rejects_reversed_custom_range(client: Any, auth_headers: dict):
     response = client.post(
         "/api/transfer/export/preview",
-        headers=auth_headers,
-        json={
+        headers = auth_headers,
+        json    = {
             "selection": {
                 "types": ["task"],
                 "preset": "custom",
@@ -125,7 +125,7 @@ def test_items_without_effective_dates_do_not_match_bounded_exports() -> None:
     """缺少有效日期的日程和普通条目不能误入有限日期导出。"""
 
     start = datetime(2026, 3, 1).date()
-    end = datetime(2026, 3, 31).date()
+    end   = datetime(2026, 3, 31).date()
 
     assert transfer_api.item_matches_range(object(), "event", start, end) is False
     assert transfer_api.item_matches_range(object(), "task", start, end) is False
@@ -161,8 +161,8 @@ def test_export_requests_reject_unknown_fields(
 
     response = client.post(
         "/api/transfer/export/preview",
-        headers=auth_headers,
-        json=payload,
+        headers = auth_headers,
+        json    = payload,
     )
 
     assert response.status_code == 422
@@ -175,8 +175,8 @@ def test_export_preview_returns_counts_by_type_and_filters_by_time_field(
 
     response = client.post(
         "/api/transfer/export/preview",
-        headers=auth_headers,
-        json={
+        headers = auth_headers,
+        json    = {
             "selection": {
                 "types": ["event", "task", "ledger", "note", "diary"],
                 "preset": "custom",
@@ -197,8 +197,8 @@ def test_export_preview_returns_warnings_field(client: Any, temp_db: Database, a
 
     response = client.post(
         "/api/transfer/export/preview",
-        headers=auth_headers,
-        json={"selection": {"types": ["task"], "preset": "all"}},
+        headers = auth_headers,
+        json    = {"selection": {"types": ["task"], "preset": "all"}},
     )
 
     assert response.status_code == 200
@@ -214,8 +214,8 @@ def test_export_download_returns_bundle_with_manifest(
 
     response = client.post(
         "/api/transfer/export/download",
-        headers=auth_headers,
-        json={
+        headers = auth_headers,
+        json    = {
             "selection": {
                 "types": ["task", "note"],
                 "preset": "custom",
@@ -272,8 +272,8 @@ def test_export_download_includes_event_collections_for_event_graph(
 
     response = client.post(
         "/api/transfer/export/download",
-        headers=auth_headers,
-        json={
+        headers = auth_headers,
+        json    = {
             "selection": {
                 "types": ["event"],
                 "preset": "custom",
@@ -364,7 +364,7 @@ def test_event_collection_export_uses_one_batch_lookup_and_warns_for_missing_hea
             "title": "存在的集合",
         }
     )
-    real_lookup = temp_db.get_event_collections_by_ids
+    real_lookup                        = temp_db.get_event_collections_by_ids
     calls: list[tuple[str, list[str]]] = []
 
     def track_lookup(owner_id: str, collection_ids: list[str]) -> dict[str, dict[str, Any]]:
@@ -373,7 +373,7 @@ def test_event_collection_export_uses_one_batch_lookup_and_warns_for_missing_hea
 
     monkeypatch.setattr(temp_db, "get_event_collections_by_ids", track_lookup)
     warnings: list[str] = []
-    records = transfer_api._collect_event_collection_records(
+    records             = transfer_api._collect_event_collection_records(
         temp_db,
         OWNER_ID,
         [
@@ -418,8 +418,8 @@ def test_export_download_creates_audit_log(client: Any, temp_db: Database, auth_
 
     client.post(
         "/api/transfer/export/download",
-        headers=auth_headers,
-        json={"selection": {"types": ["task"], "preset": "all"}},
+        headers = auth_headers,
+        json    = {"selection": {"types": ["task"], "preset": "all"}},
     )
 
     logs = temp_db.get_transfer_logs(OWNER_ID)

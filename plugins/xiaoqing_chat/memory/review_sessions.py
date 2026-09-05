@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from core.args import parse_int
-from core.atomic_store import AtomicJsonStore, keyed_path_lock
+from core.atomic_store import AtomicJsonStore, atomic_write_bytes, keyed_path_lock
 from core.delivery import DeliveryReceipt, send_with_receipt
 from core.plugin_base import build_action, segments, text
 
@@ -54,45 +54,29 @@ def _load_json_document(
     """从原子 JSON 存储读取并规范化数据，必要时恢复备份或隔离损坏文件。"""
 
     default = default_factory()
-    store = AtomicJsonStore(path)
+    store   = AtomicJsonStore(path)
     with keyed_path_lock(path):
-        if not path.exists():
-            return default
-
-        try:
-            raw = store.read(default, raise_on_error=True)
-        except (UnicodeDecodeError, json.JSONDecodeError) as primary_error:
-            # 非严格读取会在备份有效时恢复主文件；恢复后再严格读取，避免把
-            # “备份也损坏”误判成一个合法的空状态。
-            store.read(default, raise_on_error=False)
+        primary_error: BaseException | None = None
+        for candidate in (path, store.backup_path):
             try:
-                raw = store.read(default, raise_on_error=True)
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                _quarantine_corrupt_file(
-                    path,
-                    description=description,
-                    error=primary_error,
-                )
-                return default
-            _logger.warning("XiaoQing Chat %s 主文件损坏，已从备份恢复", description)
-
-        try:
-            normalized, repaired = normalize(raw)
-        except (TypeError, ValueError) as exc:
-            # JSON 语法正确但根结构完全不可用时，AtomicJsonStore 会先把旧内容
-            # 保存为 .bak，再写入空状态，因此仍可人工恢复。
-            _logger.error(
-                "XiaoQing Chat %s 结构无效，已重置并保留备份 error_type=%s",
-                description,
-                type(exc).__name__,
-            )
-            store.write(default)
-            return default
-
-        if repaired:
-            store.write(normalized)
-            _logger.warning("XiaoQing Chat %s 含无效记录，已保留备份并修复", description)
-        return normalized
+                payload = candidate.read_bytes()
+                normalized, repaired = normalize(json.loads(payload.decode("utf-8")))
+            except FileNotFoundError:
+                continue
+            except (UnicodeDecodeError, ValueError, TypeError) as exc:
+                if candidate == path:
+                    primary_error = exc
+                continue
+            if candidate != path:
+                # 验证结构后直接恢复主文件，保持最后一个有效备份的字节不变。
+                atomic_write_bytes(path, payload)
+                _logger.warning("XiaoQing Chat %s 已从有效备份恢复", description)
+            if repaired:
+                store.write(normalized)
+            return normalized
+        if primary_error is not None:
+            _quarantine_corrupt_file(path, description=description, error=primary_error)
+        return default
 
 
 def _finite_float(value: Any, *, field_name: str, minimum: float = 0.0) -> float:
@@ -126,9 +110,9 @@ def _non_negative_int(value: Any, *, field_name: str) -> int:
 
 @dataclass
 class ReviewPolicy:
-    goal_override: str = ""
+    goal_override: str     = ""
     goal_lock_until: float = 0.0
-    strategy_note: str = ""
+    strategy_note: str     = ""
     avoid_patterns: list[str] = field(default_factory=list)
 
 
@@ -139,7 +123,7 @@ class ReviewSession:
     chat_id: str
     created_at: float
     expires_at: float
-    step: int = 0
+    step: int           = 0
     last_push_ts: float = 0.0
     payload: dict[str, Any] = field(default_factory=dict)
     answers: list[str] = field(default_factory=list)
@@ -154,7 +138,7 @@ def _normalize_sessions_state(raw: Any) -> tuple[dict[str, Any], bool]:
     if not isinstance(active_raw, dict) or not isinstance(closed_raw, dict):
         raise TypeError("review sessions collections must be objects")
 
-    repaired = "active" not in raw or "last_closed" not in raw
+    repaired                          = "active" not in raw or "last_closed" not in raw
     active: dict[str, dict[str, Any]] = {}
     for session_id, payload in active_raw.items():
         try:
@@ -166,7 +150,7 @@ def _normalize_sessions_state(raw: Any) -> tuple[dict[str, Any], bool]:
         except (TypeError, ValueError, OverflowError):
             repaired = True
             continue
-        encoded = _encode_session(session)
+        encoded            = _encode_session(session)
         active[session_id] = encoded
         if encoded != payload:
             repaired = True
@@ -184,8 +168,8 @@ def _normalize_sessions_state(raw: Any) -> tuple[dict[str, Any], bool]:
         if timestamp != value:
             repaired = True
 
-    normalized = dict(raw)
-    normalized["active"] = active
+    normalized                = dict(raw)
+    normalized["active"]      = active
     normalized["last_closed"] = last_closed
     return normalized, repaired
 
@@ -194,8 +178,8 @@ def _normalize_policy_document(raw: Any) -> tuple[dict[str, Any], bool]:
     if not isinstance(raw, dict):
         raise TypeError("review policy root must be an object")
 
-    goal_override = raw.get("goal_override", "")
-    strategy_note = raw.get("strategy_note", "")
+    goal_override  = raw.get("goal_override", "")
+    strategy_note  = raw.get("strategy_note", "")
     avoid_patterns = raw.get("avoid_patterns", [])
     if not isinstance(goal_override, str) or not isinstance(strategy_note, str):
         raise TypeError("review policy text fields must be strings")
@@ -221,8 +205,8 @@ def _normalize_policy_document(raw: Any) -> tuple[dict[str, Any], bool]:
 class ReviewStore(StoreBase):
     def __init__(self) -> None:
         super().__init__()
-        self._lock = threading.RLock()
-        self._cache_sessions: dict[str, Any] | None = None
+        self._lock                                    = threading.RLock()
+        self._cache_sessions: dict[str, Any] | None   = None
         self._cache_policies: dict[str, ReviewPolicy] = {}
 
     def bind(self, data_dir: Path) -> None:
@@ -253,9 +237,9 @@ class ReviewStore(StoreBase):
                 return self._cache_sessions
             self._cache_sessions = _load_json_document(
                 path,
-                description="反思会话",
-                default_factory=_empty_sessions_state,
-                normalize=_normalize_sessions_state,
+                description     = "反思会话",
+                default_factory = _empty_sessions_state,
+                normalize       = _normalize_sessions_state,
             )
             return self._cache_sessions
 
@@ -281,15 +265,15 @@ class ReviewStore(StoreBase):
             if path:
                 payload = _load_json_document(
                     path,
-                    description="反思策略",
-                    default_factory=dict,
-                    normalize=_normalize_policy_document,
+                    description     = "反思策略",
+                    default_factory = dict,
+                    normalize       = _normalize_policy_document,
                 )
                 policy = ReviewPolicy(
-                    goal_override=str(payload.get("goal_override", "")),
-                    goal_lock_until=float(payload.get("goal_lock_until", 0.0)),
-                    strategy_note=str(payload.get("strategy_note", "")),
-                    avoid_patterns=list(payload.get("avoid_patterns", [])),
+                    goal_override   = str(payload.get("goal_override", "")),
+                    goal_lock_until = float(payload.get("goal_lock_until", 0.0)),
+                    strategy_note   = str(payload.get("strategy_note", "")),
+                    avoid_patterns  = list(payload.get("avoid_patterns", [])),
                 )
             else:
                 policy = ReviewPolicy()
@@ -310,10 +294,10 @@ class ReviewStore(StoreBase):
             if path:
                 AtomicJsonStore(path).write(payload)
             self._cache_policies[chat_id] = ReviewPolicy(
-                goal_override=str(payload["goal_override"]),
-                goal_lock_until=float(payload["goal_lock_until"]),
-                strategy_note=str(payload["strategy_note"]),
-                avoid_patterns=list(payload["avoid_patterns"]),
+                goal_override   = str(payload["goal_override"]),
+                goal_lock_until = float(payload["goal_lock_until"]),
+                strategy_note   = str(payload["strategy_note"]),
+                avoid_patterns  = list(payload["avoid_patterns"]),
             )
 
     def clear_policy(self, chat_id: str) -> None:
@@ -326,8 +310,8 @@ class ReviewStore(StoreBase):
 
     def clear_sessions_for_chat(self, chat_id: str) -> int:
         with self._lock:
-            st = self._load_sessions_state()
-            active = st.get("active", {})
+            st          = self._load_sessions_state()
+            active      = st.get("active", {})
             last_closed = st.get("last_closed", {})
             if not isinstance(active, dict):
                 return 0
@@ -351,11 +335,11 @@ class ReviewStore(StoreBase):
 
     def cleanup_expired(self, *, now: float | None = None) -> int:
         with self._lock:
-            st = self._load_sessions_state()
+            st     = self._load_sessions_state()
             active = st.get("active", {})
             if not isinstance(active, dict):
                 return 0
-            now_ts = float(now or time.time())
+            now_ts  = float(now or time.time())
             removed = 0
             for sid, obj in list(active.items()):
                 if not isinstance(obj, dict):
@@ -364,13 +348,13 @@ class ReviewStore(StoreBase):
                     continue
                 exp = float(obj.get("expires_at", 0.0) or 0.0)
                 if exp and now_ts >= exp:
-                    kind = str(obj.get("kind", "") or "")
+                    kind    = str(obj.get("kind", "") or "")
                     chat_id = str(obj.get("chat_id", "") or "")
                     if kind and chat_id:
                         last_closed = st.get("last_closed", {})
                         if isinstance(last_closed, dict):
                             last_closed[f"{chat_id}:{kind}"] = now_ts
-                            st["last_closed"] = last_closed
+                            st["last_closed"]                = last_closed
                     active.pop(sid, None)
                     removed += 1
             st["active"] = active
@@ -379,7 +363,7 @@ class ReviewStore(StoreBase):
 
     def list_sessions(self) -> list[ReviewSession]:
         with self._lock:
-            st = self._load_sessions_state()
+            st     = self._load_sessions_state()
             active = st.get("active", {})
             if not isinstance(active, dict):
                 return []
@@ -392,7 +376,7 @@ class ReviewStore(StoreBase):
             sid = (session_id or "").strip()
             if not sid:
                 return None
-            st = self._load_sessions_state()
+            st     = self._load_sessions_state()
             active = st.get("active", {})
             if not isinstance(active, dict):
                 return None
@@ -406,7 +390,7 @@ class ReviewStore(StoreBase):
             sid = (session_id or "").strip()
             if not sid:
                 return False
-            st = self._load_sessions_state()
+            st     = self._load_sessions_state()
             active = st.get("active", {})
             if not isinstance(active, dict):
                 return False
@@ -414,12 +398,12 @@ class ReviewStore(StoreBase):
             if not isinstance(obj, dict):
                 self._save_sessions_state(st)
                 return False
-            kind = str(obj.get("kind", "") or "")
-            chat_id = str(obj.get("chat_id", "") or "")
+            kind        = str(obj.get("kind", "") or "")
+            chat_id     = str(obj.get("chat_id", "") or "")
             last_closed = st.get("last_closed", {})
             if isinstance(last_closed, dict) and kind and chat_id:
                 last_closed[f"{chat_id}:{kind}"] = float(now or time.time())
-                st["last_closed"] = last_closed
+                st["last_closed"]                = last_closed
             st["active"] = active
             self._save_sessions_state(st)
             return True
@@ -432,13 +416,13 @@ class ReviewStore(StoreBase):
         payload: dict[str, Any],
         timeout_seconds: float,
         cooldown_seconds: float,
-        max_pending: int = 10,
+        max_pending: int  = 10,
         now: float | None = None,
     ) -> ReviewSession | None:
         with self._lock:
-            now_ts = float(now or time.time())
-            st = self._load_sessions_state()
-            active = st.get("active", {})
+            now_ts      = float(now or time.time())
+            st          = self._load_sessions_state()
+            active      = st.get("active", {})
             last_closed = st.get("last_closed", {})
             if not isinstance(active, dict):
                 active = {}
@@ -463,34 +447,34 @@ class ReviewStore(StoreBase):
                 if now_ts - closed_ts < float(cooldown_seconds):
                     return None
 
-            sid = self._new_session_id(chat_id, kind)
+            sid  = self._new_session_id(chat_id, kind)
             sess = ReviewSession(
-                session_id=sid,
-                kind=kind,
-                chat_id=chat_id,
-                created_at=now_ts,
-                expires_at=now_ts + max(60.0, float(timeout_seconds)),
-                step=0,
-                last_push_ts=0.0,
-                payload=dict(payload or {}),
-                answers=[],
+                session_id   = sid,
+                kind         = kind,
+                chat_id      = chat_id,
+                created_at   = now_ts,
+                expires_at   = now_ts + max(60.0, float(timeout_seconds)),
+                step         = 0,
+                last_push_ts = 0.0,
+                payload      = dict(payload or {}),
+                answers      = [],
             )
-            active[sid] = _encode_session(sess)
-            st["active"] = active
+            active[sid]       = _encode_session(sess)
+            st["active"]      = active
             st["last_closed"] = last_closed
             self._save_sessions_state(st)
             return sess
 
     def update_session(self, sess: ReviewSession) -> None:
         with self._lock:
-            st = self._load_sessions_state()
+            st     = self._load_sessions_state()
             active = st.get("active", {})
             if not isinstance(active, dict):
                 return
             if sess.session_id not in active:
                 return
             active[sess.session_id] = _encode_session(sess)
-            st["active"] = active
+            st["active"]            = active
             self._save_sessions_state(st)
 
 
@@ -508,7 +492,7 @@ def _encode_session(sess: ReviewSession) -> dict[str, Any]:
 
 
 def _decode_session(sid: str, obj: dict[str, Any]) -> ReviewSession:
-    kind = obj.get("kind", "")
+    kind    = obj.get("kind", "")
     chat_id = obj.get("chat_id", "")
     payload = obj.get("payload", {})
     answers = obj.get("answers", [])
@@ -522,15 +506,15 @@ def _decode_session(sid: str, obj: dict[str, Any]) -> ReviewSession:
         raise TypeError("session answers must be an array of strings")
 
     return ReviewSession(
-        session_id=sid,
-        kind=kind.strip(),
-        chat_id=chat_id.strip(),
+        session_id = sid,
+        kind       = kind.strip(),
+        chat_id    = chat_id.strip(),
         created_at=_finite_float(obj.get("created_at", 0.0), field_name="created_at"),
         expires_at=_finite_float(obj.get("expires_at", 0.0), field_name="expires_at"),
         step=_non_negative_int(obj.get("step", 0), field_name="step"),
         last_push_ts=_finite_float(obj.get("last_push_ts", 0.0), field_name="last_push_ts"),
-        payload=dict(payload),
-        answers=[item.strip() for item in answers if item.strip()],
+        payload = dict(payload),
+        answers = [item.strip() for item in answers if item.strip()],
     )
 
 
@@ -538,7 +522,7 @@ def render_session_prompt(sess: ReviewSession) -> str:
     header = f"反思会话：{sess.session_id}（{sess.kind}，会话 {sess.chat_id}）"
     if sess.kind == "bad_reply_pattern":
         reason = str(sess.payload.get("reason", "") or "").strip()
-        goal = str(sess.payload.get("goal", "") or "").strip()
+        goal   = str(sess.payload.get("goal", "") or "").strip()
         if sess.step <= 0:
             return (
                 f"{header}\n"
@@ -560,7 +544,7 @@ def render_session_prompt(sess: ReviewSession) -> str:
         summary = "\n".join(f"- {x}" for x in sess.answers[-3:]) if sess.answers else "-"
         return (f"{header}\n已记录：\n{summary}\n\n- /xc 审查 close {sess.session_id}\n").strip()
     if sess.kind == "goal_strategy":
-        goal = str(sess.payload.get("goal", "") or "").strip()
+        goal  = str(sess.payload.get("goal", "") or "").strip()
         stats = str(sess.payload.get("stats", "") or "").strip()
         if sess.step <= 0:
             return (
@@ -596,11 +580,11 @@ async def maybe_push_session(
         and now - sess.last_push_ts < float(resend_interval_seconds)
     ):
         return False
-    msg = render_session_prompt(sess)
+    msg    = render_session_prompt(sess)
     action = build_action(
         segments([text(msg)]),
-        user_id=int(operator_user_id) if operator_user_id else None,
-        group_id=int(operator_group_id) if operator_group_id else None,
+        user_id  = int(operator_user_id) if operator_user_id else None,
+        group_id = int(operator_group_id) if operator_group_id else None,
     )
     if not action:
         return False
@@ -610,9 +594,9 @@ async def maybe_push_session(
         store.update_session(sess)
 
     receipt = DeliveryReceipt(
-        expected_actions=1,
-        commit=confirm_push,
-        rollback=lambda: None,
+        expected_actions = 1,
+        commit           = confirm_push,
+        rollback         = lambda: None,
         # 可能已送达的审查提示也进入重发冷却，避免回执丢失造成连续刷屏。
         unknown=confirm_push,
     )
@@ -633,7 +617,7 @@ def apply_review_answer(
     a = (answer or "").strip()
     if not a:
         return sess, None
-    pol = store.get_policy(sess.chat_id)
+    pol     = store.get_policy(sess.chat_id)
     applied = None
 
     if sess.kind == "bad_reply_pattern":
@@ -644,14 +628,14 @@ def apply_review_answer(
         store.save_policy(sess.chat_id, pol)
         sess.answers.append(a)
         sess.step = max(sess.step, 2)
-        applied = "已记录为长期规避模式。"
+        applied   = "已记录为长期规避模式。"
         return sess, applied
 
     if sess.kind == "goal_strategy":
         if a.lower().startswith("goal:"):
             g = a.split(":", 1)[1].strip()
             if g:
-                pol.goal_override = g
+                pol.goal_override   = g
                 pol.goal_lock_until = time.time() + max(60.0, float(goal_lock_seconds))
                 store.save_policy(sess.chat_id, pol)
                 applied = "已更新目标（临时锁定）。"
@@ -673,8 +657,8 @@ def apply_review_answer(
 
 
 def build_policy_block(store: ReviewStore, chat_id: str) -> str:
-    pol = store.get_policy(chat_id)
-    now = time.time()
+    pol              = store.get_policy(chat_id)
+    now              = time.time()
     lines: list[str] = []
     if pol.strategy_note.strip():
         lines.append(f"- 策略备注：{pol.strategy_note.strip()}")
@@ -712,10 +696,10 @@ def maybe_open_goal_strategy_review(
         return None
     payload = {"goal": g, "stats": (stats or "").strip()}
     return store.open_session_if_allowed(
-        kind="goal_strategy",
-        chat_id=chat_id,
-        payload=payload,
-        timeout_seconds=timeout_seconds,
-        cooldown_seconds=cooldown_seconds,
-        max_pending=max_pending,
+        kind             = "goal_strategy",
+        chat_id          = chat_id,
+        payload          = payload,
+        timeout_seconds  = timeout_seconds,
+        cooldown_seconds = cooldown_seconds,
+        max_pending      = max_pending,
     )

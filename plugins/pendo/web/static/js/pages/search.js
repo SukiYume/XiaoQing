@@ -17,7 +17,7 @@ import { openDetailModal as openLedgerDetailModal } from './ledger.js';
 import { openNoteViewModal } from './notes.js';
 import { openDiaryViewModal } from './diary.js';
 
-const CSS_ID = 'pendo-search-redesign-styles';
+const CSS_ID    = 'pendo-search-redesign-styles';
 const PAGE_SIZE = 20;
 
 const TYPE_CONFIG = Object.freeze({
@@ -28,11 +28,11 @@ const TYPE_CONFIG = Object.freeze({
     diary: { label: '日记', icon: '📔' },
 });
 
-const TYPE_ORDER = Object.freeze(['event', 'task', 'ledger', 'note', 'diary']);
-const ITEM_TYPES = new Set(TYPE_ORDER);
-const CATEGORY_FIELDS = new Set(['category', 'ledger_category']);
+const TYPE_ORDER        = Object.freeze(['event', 'task', 'ledger', 'note', 'diary']);
+const ITEM_TYPES        = new Set(TYPE_ORDER);
+const CATEGORY_FIELDS   = new Set(['category', 'ledger_category']);
 const TRANSACTION_TYPES = new Set(['expense', 'income', 'transfer']);
-const FILTER_TABS = [
+const FILTER_TABS       = [
     { value: '', label: '全部' },
     ...TYPE_ORDER.map((type) => ({ value: type, label: TYPE_CONFIG[type].label })),
 ];
@@ -44,20 +44,20 @@ const SUGGESTIONS = [
     { label: '找最近日记', query: '今天', type: 'diary' },
 ];
 
-let _container = null;
-let _query = '';
-let _activeType = '';
-let _activeCategory = '';
-let _activeCategoryField = 'category';
+let _container              = null;
+let _query                  = '';
+let _activeType             = '';
+let _activeCategory         = '';
+let _activeCategoryField    = 'category';
 let _activeCategoryTypeHint = '';
-let _results = [];
-let _total = 0;
-let _page = 1;
-let _loading = false;
-let _hasSearched = false;
+let _results                = [];
+let _total                  = 0;
+let _page                   = 1;
+let _loading                = false;
+let _hasSearched            = false;
 let _unsubscribeDataChanges = null;
-let _searchVersion = 0;
-let _lastSearchSignature = '';
+let _searchVersion          = 0;
+let _lastSearchSignature    = '';
 
 // ---------------------------------------------------------------------------
 // 数据边界：未知类型与缺少 ID 的结果不进入页面，其余字段先收敛再渲染
@@ -76,7 +76,7 @@ function normalizeCollection(value) {
 
 function normalizeSearchItem(value) {
     if (!isRecord(value)) return null;
-    const id = textValue(value.id).trim();
+    const id   = textValue(value.id).trim();
     const type = textValue(value.type).trim();
     if (!id || !ITEM_TYPES.has(type)) return null;
     const rawTransactionType = textValue(value.transaction_type).trim();
@@ -166,11 +166,10 @@ function itemMeta(item) {
         ].filter(Boolean);
     }
     if (item.type === 'ledger') {
-        const txType = item.transaction_type || 'expense';
-        const sign = txType === 'income' ? '+' : txType === 'transfer' ? '↔ ' : '-';
-        const amount = item.amount != null ? `${sign}¥${item.amount.toFixed(2)}` : '';
-        const account =
-            txType === 'transfer' && item.counter_account_name
+        const txType  = item.transaction_type || 'expense';
+        const sign    = txType === 'income' ? '+' : txType === 'transfer' ? '↔ ' : '-';
+        const amount  = item.amount != null ? `${sign}¥${item.amount.toFixed(2)}` : '';
+        const account = txType === 'transfer' && item.counter_account_name
                 ? `${item.account_name || '现金'}→${item.counter_account_name}`
                 : item.account_name || '';
         return [amount, item.ledger_category || '', account, item.merchant || '', item.ledger_date || ''].filter(
@@ -210,10 +209,10 @@ function totalPages() {
 function matchingCategories() {
     const map = new Map();
     _results.forEach((item) => {
-        const field = item.type === 'ledger' ? 'ledger_category' : 'category';
+        const field    = item.type === 'ledger' ? 'ledger_category' : 'category';
         const category = field === 'ledger_category' ? item.ledger_category : item.category;
         if (!category) return;
-        const key = `${field}:${category}`;
+        const key   = `${field}:${category}`;
         const entry = map.get(key) || { category, count: 0, field, typeHint: item.type };
         entry.count += 1;
         if (entry.typeHint !== item.type) entry.typeHint = '';
@@ -399,12 +398,11 @@ function renderCategoryChips() {
 
 function renderSummary() {
     if (!_query.trim() || !_hasSearched) return '';
-    const counts = resultCounts();
-    const activeTypes = TYPE_ORDER.filter((type) => counts[type]);
+    const counts       = resultCounts();
+    const activeTypes  = TYPE_ORDER.filter((type) => counts[type]);
     const visibleCount = _results.length;
-    const total = nonNegativeInteger(_total);
-    const summary =
-        total > visibleCount ? `当前共命中 ${total} 条，本页展示 ${visibleCount} 条` : `当前共命中 ${total} 条`;
+    const total        = nonNegativeInteger(_total);
+    const summary      =         total > visibleCount ? `当前共命中 ${total} 条，本页展示 ${visibleCount} 条` : `当前共命中 ${total} 条`;
     return `
         <section class="search-summary">
             <div>
@@ -420,9 +418,9 @@ function renderSummary() {
 }
 
 function renderCard(item) {
-    const cfg = TYPE_CONFIG[item.type];
-    const title = itemTitle(item);
-    const preview = itemPreview(item);
+    const cfg      = TYPE_CONFIG[item.type];
+    const title    = itemTitle(item);
+    const preview  = itemPreview(item);
     const metadata = itemMeta(item);
     return `
         <button class="search-card search-type-${item.type}" type="button"
@@ -467,7 +465,7 @@ function renderResults() {
 function renderPage() {
     if (!_container) return;
     ensureStyles();
-    const typeCounts = resultCounts();
+    const typeCounts  = resultCounts();
     const activeTypes = TYPE_ORDER.filter((type) => typeCounts[type]);
     _container.innerHTML = `
         <div class="search-shell">
@@ -550,9 +548,8 @@ async function openResultDetail(item) {
         return;
     }
     try {
-        const res = await api.get(`/items/${encodeURIComponent(normalizedItem.id)}`);
-        const rawLatest =
-            res?.data && typeof res.data === 'object' && !Array.isArray(res.data) ? res.data : normalizedItem;
+        const res       = await api.get(`/items/${encodeURIComponent(normalizedItem.id)}`);
+        const rawLatest =             res?.data && typeof res.data === 'object' && !Array.isArray(res.data) ? res.data : normalizedItem;
         const latest =
             normalizeSearchItem({
                 ...rawLatest,
@@ -615,7 +612,7 @@ async function doSearch({ resetPage = false, force = false } = {}) {
     const root = _container;
     if (!root) return;
     const requestedPage = Math.max(1, nonNegativeInteger(_page));
-    const signature = searchSignature(q, requestedPage);
+    const signature     = searchSignature(q, requestedPage);
     if (!force && signature === _lastSearchSignature && (_loading || _hasSearched)) return;
 
     const version = ++_searchVersion;
@@ -686,7 +683,7 @@ function attachListeners() {
     root.querySelectorAll('.search-tab[data-type]').forEach((button) => {
         button.onclick = async () => {
             const requestedType = textValue(button.dataset.type).trim();
-            const nextType = ITEM_TYPES.has(requestedType) ? requestedType : '';
+            const nextType      = ITEM_TYPES.has(requestedType) ? requestedType : '';
             if (nextType === _activeType && !_activeCategory) return;
             _activeType = nextType;
             _activeCategory = '';
@@ -727,7 +724,7 @@ function attachListeners() {
 
     root.querySelectorAll('[data-open-result]').forEach((card) => {
         card.onclick = async () => {
-            const id = textValue(card.dataset.openResult);
+            const id   = textValue(card.dataset.openResult);
             const item = _results.find((entry) => entry.id === id);
             if (item) await openResultDetail(item);
         };

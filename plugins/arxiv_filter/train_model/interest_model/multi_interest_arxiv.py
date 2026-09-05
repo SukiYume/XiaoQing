@@ -41,7 +41,7 @@ else:
 _log = _training.timestamp_log
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
-_TRAIN_DIR = _SCRIPT_DIR.parent
+_TRAIN_DIR  = _SCRIPT_DIR.parent
 _PLUGIN_DIR = _TRAIN_DIR.parent
 
 # =============================================================================
@@ -70,8 +70,8 @@ class TrainingConfig:
     #               ⑤ 软件工具 / 数据方法（防止"垃圾桶"cluster）
     #   如果重新训练后 WD/Pulsar 仍有遗漏，可尝试 n=11~12。
     n_interests: int = 6
-    batch_size: int = 256
-    val_size: float = 0.15
+    batch_size: int  = 256
+    val_size: float  = 0.15
     # beta 影响阈值选取方向：
     #   beta=2.0 → 严重偏向 Recall，threshold 极低 → 推的数量过多（原始问题）
     #   beta=1.0 → F1，Precision/Recall 对等（可用于更克制的推荐实验）
@@ -79,9 +79,9 @@ class TrainingConfig:
     beta: float = 2.0
     # min_threshold：F-beta 优化后的阈值下限，防止极端不平衡数据集上阈值被压得过低
     min_threshold: float = 0.40
-    split_mode: str = "random"
-    random_seed: int = 42
-    max_len: int = 512
+    split_mode: str      = "random"
+    random_seed: int     = 42
+    max_len: int         = 512
 
     def __post_init__(self) -> None:
         if not isinstance(self.encoder_name, str) or not self.encoder_name.strip():
@@ -125,8 +125,8 @@ def resolve_columns(df: pd.DataFrame) -> dict[str, str | None]:
                 "timestamp",
             ],
         },
-        required_fields={"title", "abstract"},
-        error_prefix="无法自动识别列名",
+        required_fields = {"title", "abstract"},
+        error_prefix    = "无法自动识别列名",
     )
 
 
@@ -140,15 +140,15 @@ def top_keywords_for_texts(texts: list[str], topn: int = 6) -> str:
     if not texts:
         return "misc"
     vec = TfidfVectorizer(
-        stop_words="english",
-        ngram_range=(1, 2),
-        max_features=5000,
-        token_pattern=r"(?u)\b[a-zA-Z][a-zA-Z\-]{1,}\b",
+        stop_words    = "english",
+        ngram_range   = (1, 2),
+        max_features  = 5000,
+        token_pattern = r"(?u)\b[a-zA-Z][a-zA-Z\-]{1,}\b",
     )
     try:
         X = vec.fit_transform(texts)
         scores = np.asarray(X.mean(axis=0)).ravel()
-        feats = np.asarray(vec.get_feature_names_out())
+        feats    = np.asarray(vec.get_feature_names_out())
         keywords = feats[np.argsort(scores)[::-1]][:topn]
         keywords = [
             w for w, s in zip(keywords, scores[np.argsort(scores)[::-1]], strict=False) if s > 0
@@ -167,23 +167,23 @@ def split_dataframe(
     df: pd.DataFrame,
     val_size: float,
     split_mode: str,
-    seed: int = 42,
-    date_col: str | None = None,
+    seed: int             = 42,
+    date_col: str | None  = None,
     label_col: str | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     return _training.split_dataframe(
         df,
         val_size,
         split_mode,
-        seed=seed,
-        date_col=date_col,
-        label_col=label_col,
-        log=_log,
-        missing_date_error="split_mode=time 时需要可识别的日期列。",
-        stratify_fallback_message="警告：分层随机切分失败，自动退回普通随机切分。",
-        invalid_dates_message="警告：有 {count} 条记录日期无法解析，将被放到最前面参与时间排序。",
-        empty_training_error="验证集比例过大，导致训练集为空。",
-        unknown_mode_error="未知 split_mode: {mode}",
+        seed                      = seed,
+        date_col                  = date_col,
+        label_col                 = label_col,
+        log                       = _log,
+        missing_date_error        = "split_mode=time 时需要可识别的日期列。",
+        stratify_fallback_message = "警告：分层随机切分失败，自动退回普通随机切分。",
+        invalid_dates_message     = "警告：有 {count} 条记录日期无法解析，将被放到最前面参与时间排序。",
+        empty_training_error      = "验证集比例过大，导致训练集为空。",
+        unknown_mode_error        = "未知 split_mode: {mode}",
     )
 
 
@@ -218,11 +218,11 @@ class ModelArtifacts:
 class MultiInterestArxivModel:
     def __init__(
         self,
-        encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2",
-        n_interests: int = 6,
-        batch_size: int = 256,
+        encoder_name: str     = "sentence-transformers/all-MiniLM-L6-v2",
+        n_interests: int      = 6,
+        batch_size: int       = 256,
         threshold_beta: float = 2.0,
-        random_state: int = 42,
+        random_state: int     = 42,
     ):
         if not isinstance(encoder_name, str) or not encoder_name.strip():
             raise ValueError("encoder_name must be a non-empty string")
@@ -236,19 +236,19 @@ class MultiInterestArxivModel:
             or threshold_beta <= 0
         ):
             raise ValueError("threshold_beta must be a finite positive number")
-        self.encoder_name = encoder_name
-        self.n_interests = n_interests
-        self.batch_size = batch_size
+        self.encoder_name   = encoder_name
+        self.n_interests    = n_interests
+        self.batch_size     = batch_size
         self.threshold_beta = threshold_beta
-        self.random_state = random_state
+        self.random_state   = random_state
 
         _log(f"Loading encoder: {encoder_name}")
-        self.encoder = _training.load_sentence_transformer_class()(encoder_name)
+        self.encoder       = _training.load_sentence_transformer_class()(encoder_name)
         self.embedding_dim = int(self.encoder.get_sentence_embedding_dimension())
         if self.embedding_dim <= 0:
             raise ValueError("encoder returned an invalid embedding dimension")
         self.artifacts: ModelArtifacts | None = None
-        self._use_fp16 = torch.cuda.is_available()
+        self._use_fp16                        = torch.cuda.is_available()
         if self._use_fp16:
             _log("Enabled fp16 encoding (CUDA detected)")
 
@@ -268,9 +268,9 @@ class MultiInterestArxivModel:
             emb = self.encoder.encode(texts, **kw)
         return _training.validate_embedding_matrix(
             emb,
-            expected_rows=len(texts),
-            expected_dim=self.embedding_dim,
-            name="encoded embeddings",
+            expected_rows = len(texts),
+            expected_dim  = self.embedding_dim,
+            name          = "encoded embeddings",
         )
 
     # ------------------------------------------------------------------
@@ -303,14 +303,14 @@ class MultiInterestArxivModel:
         n_coarse = max(self.n_interests + 1, min(self.n_interests * 4, 40, n // 10))
 
         # 目标均衡后总量 ≈ n_interests × 80（每个最终 cluster 约 80 篇训练样本足矣）
-        target_total = self.n_interests * 80
+        target_total   = self.n_interests * 80
         max_per_coarse = max(15, target_total // n_coarse)
 
         _log(f"  均衡聚类输入 (粗粒度 k={n_coarse}，每簇上限={max_per_coarse})...")
         km_coarse = KMeans(n_clusters=n_coarse, random_state=self.random_state, n_init=5)
         coarse_labels = km_coarse.fit_predict(pos_embeddings)
 
-        rng = np.random.RandomState(self.random_state)
+        rng                 = np.random.RandomState(self.random_state)
         selected: list[int] = []
         for ci in range(n_coarse):
             idxs = np.where(coarse_labels == ci)[0]
@@ -352,8 +352,8 @@ class MultiInterestArxivModel:
         # centers 基于均衡子集确定（更公平），但 keywords/sizes/examples 来自全量
         sims_all = pos_embeddings @ centers.T
         all_labels = sims_all.argmax(axis=1)
-        keywords: list[str] = []
-        sizes: list[int] = []
+        keywords: list[str]       = []
+        sizes: list[int]          = []
         examples: list[list[str]] = []
 
         for ci in range(k):
@@ -385,15 +385,15 @@ class MultiInterestArxivModel:
             raise ValueError("interest_centers must be a non-empty two-dimensional matrix")
         embeddings = _training.validate_embedding_matrix(
             embeddings,
-            expected_rows=len(embeddings),
-            expected_dim=centers.shape[1],
-            name="embeddings",
+            expected_rows = len(embeddings),
+            expected_dim  = centers.shape[1],
+            name          = "embeddings",
         )
         if np.asarray(pos_centroid).shape != (centers.shape[1],):
             raise ValueError("pos_centroid dimension does not match embeddings")
         if neg_centroid is not None and np.asarray(neg_centroid).shape != (centers.shape[1],):
             raise ValueError("neg_centroid dimension does not match embeddings")
-        n_k = interest_centers.shape[0]
+        n_k           = interest_centers.shape[0]
         feature_names = [f"sim_interest_{i}" for i in range(n_k)] + [
             "max_sim",
             "mean_sim",
@@ -453,14 +453,14 @@ class MultiInterestArxivModel:
         train_df: pd.DataFrame,
         precomputed_embeddings: np.ndarray | None = None,
     ) -> None:
-        columns = resolve_columns(train_df)
+        columns   = resolve_columns(train_df)
         label_col = columns["label"]
         if label_col is None:
             raise ValueError("训练数据必须包含 label 列，且取值为 0/1。")
 
         title_col, abstract_col = columns["title"], columns["abstract"]
-        train_df = train_df.copy()
-        labels = _training.coerce_binary_labels(train_df[label_col])
+        train_df            = train_df.copy()
+        labels              = _training.coerce_binary_labels(train_df[label_col])
         train_df[label_col] = labels
 
         if set(np.unique(labels)) != {0, 1}:
@@ -469,15 +469,15 @@ class MultiInterestArxivModel:
             raise RuntimeError("列解析器未返回必需的标题或摘要列")
 
         raw_texts = _training.build_paired_texts(train_df, title_col, abstract_col, "{t} {a}")
-        titles = train_df[title_col].fillna("").astype(str).tolist()
+        titles    = train_df[title_col].fillna("").astype(str).tolist()
 
         if precomputed_embeddings is not None:
             _log("Using precomputed embeddings for training (skipping encoding).")
             embeddings = _training.validate_embedding_matrix(
                 precomputed_embeddings,
-                expected_rows=len(train_df),
-                expected_dim=self.embedding_dim,
-                name="precomputed embeddings",
+                expected_rows = len(train_df),
+                expected_dim  = self.embedding_dim,
+                name          = "precomputed embeddings",
             )
         else:
             _log("Encoding training texts...")
@@ -511,29 +511,29 @@ class MultiInterestArxivModel:
         )
 
         clf = LogisticRegression(
-            max_iter=3000,
-            class_weight="balanced",
-            C=1.0,
-            solver="lbfgs",
-            random_state=self.random_state,
+            max_iter     = 3000,
+            class_weight = "balanced",
+            C            = 1.0,
+            solver       = "lbfgs",
+            random_state = self.random_state,
         )
         clf.fit(X, labels)
 
         self.artifacts = ModelArtifacts(
-            encoder_name=self.encoder_name,
-            n_interests=centers.shape[0],
-            embedding_dim=self.embedding_dim,
-            interest_centers=centers,
-            pos_centroid=pos_centroid,
-            neg_centroid=neg_centroid,
-            classifier=clf,
-            threshold=0.5,
-            threshold_beta=self.threshold_beta,
-            cluster_keywords=kw,
-            cluster_sizes=sizes,
-            cluster_examples=examples,
-            feature_names=feature_names,
-            columns=columns,
+            encoder_name     = self.encoder_name,
+            n_interests      = centers.shape[0],
+            embedding_dim    = self.embedding_dim,
+            interest_centers = centers,
+            pos_centroid     = pos_centroid,
+            neg_centroid     = neg_centroid,
+            classifier       = clf,
+            threshold        = 0.5,
+            threshold_beta   = self.threshold_beta,
+            cluster_keywords = kw,
+            cluster_sizes    = sizes,
+            cluster_examples = examples,
+            feature_names    = feature_names,
+            columns          = columns,
         )
 
     # ------------------------------------------------------------------
@@ -547,17 +547,17 @@ class MultiInterestArxivModel:
     ) -> tuple[float, float]:
         if self.artifacts is None:
             raise RuntimeError("模型尚未训练或加载。")
-        columns = resolve_columns(val_df)
+        columns   = resolve_columns(val_df)
         label_col = columns["label"]
         if label_col is None:
             raise ValueError("验证集必须包含 label 列。")
 
-        y_true = _training.coerce_binary_labels(val_df[label_col])
+        y_true  = _training.coerce_binary_labels(val_df[label_col])
         y_score = self.predict_proba(
             val_df,
-            sort_output=False,
-            use_current_threshold=False,
-            precomputed_embeddings=precomputed_embeddings,
+            sort_output            = False,
+            use_current_threshold  = False,
+            precomputed_embeddings = precomputed_embeddings,
         )["interest_prob"].to_numpy()
 
         threshold, best_fb = _training.best_fbeta_threshold(y_true, y_score, self.threshold_beta)
@@ -571,13 +571,13 @@ class MultiInterestArxivModel:
     def predict_proba(
         self,
         df: pd.DataFrame,
-        sort_output: bool = True,
-        use_current_threshold: bool = True,
+        sort_output: bool                         = True,
+        use_current_threshold: bool               = True,
         precomputed_embeddings: np.ndarray | None = None,
     ) -> pd.DataFrame:
         if self.artifacts is None:
             raise RuntimeError("模型尚未训练或加载。")
-        a = self.artifacts
+        a       = self.artifacts
         columns = resolve_columns(df)
         title_col, abstract_col, id_col = columns["title"], columns["abstract"], columns["id"]
 
@@ -602,25 +602,25 @@ class MultiInterestArxivModel:
         else:
             emb = _training.validate_embedding_matrix(
                 precomputed_embeddings,
-                expected_rows=len(df),
-                expected_dim=self.embedding_dim,
-                name="precomputed embeddings",
+                expected_rows = len(df),
+                expected_dim  = self.embedding_dim,
+                name          = "precomputed embeddings",
             )
 
         X, best_interest, max_sim, _ = self._build_features(
             emb, a.interest_centers, a.pos_centroid, a.neg_centroid
         )
-        proba = a.classifier.predict_proba(X)[:, 1]
+        proba     = a.classifier.predict_proba(X)[:, 1]
         threshold = a.threshold if use_current_threshold else 0.5
 
         if id_col is None:
             out.insert(0, "paper_id", np.arange(len(out)))
 
-        out["interest_prob"] = proba
-        out["pred_label"] = (proba >= threshold).astype(int)
-        out["best_interest_id"] = best_interest
+        out["interest_prob"]          = proba
+        out["pred_label"]             = (proba >= threshold).astype(int)
+        out["best_interest_id"]       = best_interest
         out["best_interest_keywords"] = [a.cluster_keywords[i] for i in best_interest]
-        out["best_interest_sim"] = max_sim
+        out["best_interest_sim"]      = max_sim
 
         if sort_output:
             out = out.sort_values("interest_prob", ascending=False).reset_index(drop=True)
@@ -634,12 +634,12 @@ class MultiInterestArxivModel:
     def evaluate(
         self,
         df: pd.DataFrame,
-        name: str = "Eval",
+        name: str                                 = "Eval",
         precomputed_embeddings: np.ndarray | None = None,
     ) -> dict[str, float]:
         if self.artifacts is None:
             raise RuntimeError("模型尚未训练或加载。")
-        columns = resolve_columns(df)
+        columns   = resolve_columns(df)
         label_col = columns["label"]
         if label_col is None:
             raise ValueError("评估数据必须包含 label 列。")
@@ -650,7 +650,7 @@ class MultiInterestArxivModel:
         )
         y_score, y_pred = scored["interest_prob"].to_numpy(), scored["pred_label"].to_numpy()
 
-        has_both = len(np.unique(y_true)) >= 2
+        has_both                  = len(np.unique(y_true)) >= 2
         metrics: dict[str, float] = {
             "roc_auc": float(roc_auc_score(y_true, y_score)) if has_both else float("nan"),
             "pr_auc": float(average_precision_score(y_true, y_score)) if has_both else float("nan"),
@@ -669,10 +669,10 @@ class MultiInterestArxivModel:
             classification_report(
                 y_true,
                 y_pred,
-                labels=[0, 1],
-                target_names=["negative", "positive"],
-                digits=4,
-                zero_division=0,
+                labels        = [0, 1],
+                target_names  = ["negative", "positive"],
+                digits        = 4,
+                zero_division = 0,
             )
         )
         return metrics
@@ -756,8 +756,8 @@ def main(config: TrainingConfig = CONFIG) -> None:
     _training.seed_python_numpy(config.random_seed)
 
     # arXiv ID 含前导零，禁止 pandas 将其推断为浮点数。
-    df = _training.read_training_csv(config.input_path)
-    columns = resolve_columns(df)
+    df        = _training.read_training_csv(config.input_path)
+    columns   = resolve_columns(df)
     label_col = columns["label"]
     if label_col is None:
         raise ValueError("训练模式需要 label 列。")
@@ -771,9 +771,9 @@ def main(config: TrainingConfig = CONFIG) -> None:
         df,
         config.val_size,
         config.split_mode,
-        seed=config.random_seed,
-        date_col=columns["date"],
-        label_col=label_col,
+        seed      = config.random_seed,
+        date_col  = columns["date"],
+        label_col = label_col,
     )
 
     pos_train = int((train_df[label_col] == 1).sum())
@@ -793,11 +793,11 @@ def main(config: TrainingConfig = CONFIG) -> None:
     _log("─" * 72)
 
     model = MultiInterestArxivModel(
-        encoder_name=config.encoder_name,
-        n_interests=config.n_interests,
-        batch_size=config.batch_size,
-        threshold_beta=config.beta,
-        random_state=config.random_seed,
+        encoder_name   = config.encoder_name,
+        n_interests    = config.n_interests,
+        batch_size     = config.batch_size,
+        threshold_beta = config.beta,
+        random_state   = config.random_seed,
     )
 
     # 预计算 embeddings（训练集和验证集各编码一次，后续全部复用）

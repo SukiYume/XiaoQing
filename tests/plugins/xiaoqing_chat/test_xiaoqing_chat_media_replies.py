@@ -30,17 +30,17 @@ async def test_smalltalk_emoji_reply_returns_mixed_text_and_image_and_persists_m
     )
     image_path = _write_png(mock_context.data_dir / "emoji_reply.png")
 
-    state = MagicMock()
-    state.get_mood_state.return_value = ""
+    state                               = MagicMock()
+    state.get_mood_state.return_value   = ""
     state.memory_store.get.return_value = []
     state.memory_store.get_async = AsyncMock(return_value=[])
     state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.memory_store.append = Mock()
+    state.memory_store.append             = Mock()
     state.heartflow.on_user_message_async = AsyncMock()
-    state.heartflow.on_bot_reply_async = AsyncMock()
-    state.heartflow.on_no_reply_async = AsyncMock()
-    state.inc_stats = Mock()
-    state.action_history.append = Mock()
+    state.heartflow.on_bot_reply_async    = AsyncMock()
+    state.heartflow.on_no_reply_async     = AsyncMock()
+    state.inc_stats                       = Mock()
+    state.action_history.append           = Mock()
 
     event = {
         "post_type": "message",
@@ -52,18 +52,18 @@ async def test_smalltalk_emoji_reply_returns_mixed_text_and_image_and_persists_m
         "_xc_command_forced": True,
     }
     hctx = SimpleNamespace(
-        runtime=runtime,
-        state=state,
-        chat_id="g67890",
-        bot_name="小青",
-        secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
-        data_dir=mock_context.data_dir,
+        runtime  = runtime,
+        state    = state,
+        chat_id  = "g67890",
+        bot_name = "小青",
+        secrets  = {"api_base": "http://test", "api_key": "key", "model": "model"},
+        data_dir = mock_context.data_dir,
     )
     emoji_marker = SimpleNamespace(
         kind="emoji",
         entry=SimpleNamespace(file_path=str(image_path), media_hash="hash-1"),
-        marker="[表情包：无语]",
-        reasoning="emoji_tag:无语",
+        marker    = "[表情包：无语]",
+        reasoning = "emoji_tag:无语",
     )
     reply_draft = _reply_draft_with_parts(
         "懂了",
@@ -129,17 +129,17 @@ async def test_smalltalk_emoji_only_reply_returns_single_image_and_marker_memory
     image_path.parent.mkdir(parents=True, exist_ok=True)
     image_path = _write_png(image_path)
 
-    state = MagicMock()
-    state.get_mood_state.return_value = ""
+    state                               = MagicMock()
+    state.get_mood_state.return_value   = ""
     state.memory_store.get.return_value = []
     state.memory_store.get_async = AsyncMock(return_value=[])
     state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.memory_store.append = Mock()
+    state.memory_store.append             = Mock()
     state.heartflow.on_user_message_async = AsyncMock()
-    state.heartflow.on_bot_reply_async = AsyncMock()
-    state.heartflow.on_no_reply_async = AsyncMock()
-    state.inc_stats = Mock()
-    state.action_history.append = Mock()
+    state.heartflow.on_bot_reply_async    = AsyncMock()
+    state.heartflow.on_no_reply_async     = AsyncMock()
+    state.inc_stats                       = Mock()
+    state.action_history.append           = Mock()
 
     event = {
         "post_type": "message",
@@ -151,19 +151,19 @@ async def test_smalltalk_emoji_only_reply_returns_single_image_and_marker_memory
         "_xc_command_forced": True,
     }
     hctx = SimpleNamespace(
-        runtime=runtime,
-        state=state,
-        chat_id="g67890",
-        bot_name="小青",
-        secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
-        data_dir=mock_context.data_dir,
+        runtime  = runtime,
+        state    = state,
+        chat_id  = "g67890",
+        bot_name = "小青",
+        secrets  = {"api_base": "http://test", "api_key": "key", "model": "model"},
+        data_dir = mock_context.data_dir,
     )
     emoji_marker = SimpleNamespace(
         kind="emoji",
         entry=SimpleNamespace(file_path=str(image_path), media_hash="hash-1"),
-        marker="[表情包：无语]",
-        reasoning="emoji_mode:emoji_only;emoji_tag:无语",
-        mode="emoji_only",
+        marker    = "[表情包：无语]",
+        reasoning = "emoji_mode:emoji_only;emoji_tag:无语",
+        mode      = "emoji_only",
     )
     reply_draft = _reply_draft_with_parts(
         "笑死",
@@ -223,17 +223,17 @@ async def test_smalltalk_face_reply_returns_mixed_text_and_face_and_persists_mar
         enable_inbound_media_context=False,
     )
 
-    state = MagicMock()
-    state.get_mood_state.return_value = ""
+    state                               = MagicMock()
+    state.get_mood_state.return_value   = ""
     state.memory_store.get.return_value = []
     state.memory_store.get_async = AsyncMock(return_value=[])
     state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.memory_store.append = Mock()
+    state.memory_store.append             = Mock()
     state.heartflow.on_user_message_async = AsyncMock()
-    state.heartflow.on_bot_reply_async = AsyncMock()
-    state.heartflow.on_no_reply_async = AsyncMock()
-    state.inc_stats = Mock()
-    state.action_history.append = Mock()
+    state.heartflow.on_bot_reply_async    = AsyncMock()
+    state.heartflow.on_no_reply_async     = AsyncMock()
+    state.inc_stats                       = Mock()
+    state.action_history.append           = Mock()
 
     event = {
         "post_type": "message",
@@ -245,19 +245,19 @@ async def test_smalltalk_face_reply_returns_mixed_text_and_face_and_persists_mar
         "_xc_command_forced": True,
     }
     hctx = SimpleNamespace(
-        runtime=runtime,
-        state=state,
-        chat_id="g67890",
-        bot_name="小青",
-        secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
-        data_dir=mock_context.data_dir,
+        runtime  = runtime,
+        state    = state,
+        chat_id  = "g67890",
+        bot_name = "小青",
+        secrets  = {"api_base": "http://test", "api_key": "key", "model": "model"},
+        data_dir = mock_context.data_dir,
     )
     face_marker = SimpleNamespace(
         kind="qq_face",
         entry=SimpleNamespace(face_id="277"),
-        marker="[QQ表情：狗头]",
-        reasoning="face_mode:text_with_face;face_label:狗头",
-        mode="text_with_face",
+        marker    = "[QQ表情：狗头]",
+        reasoning = "face_mode:text_with_face;face_label:狗头",
+        mode      = "text_with_face",
     )
     reply_draft = _reply_draft_with_parts(
         "懂了",
@@ -323,17 +323,17 @@ async def test_smalltalk_reply_applies_only_one_outbound_media_plan(mock_context
     image_path.parent.mkdir(parents=True, exist_ok=True)
     image_path = _write_png(image_path)
 
-    state = MagicMock()
-    state.get_mood_state.return_value = ""
+    state                               = MagicMock()
+    state.get_mood_state.return_value   = ""
     state.memory_store.get.return_value = []
     state.memory_store.get_async = AsyncMock(return_value=[])
     state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.memory_store.append = Mock()
+    state.memory_store.append             = Mock()
     state.heartflow.on_user_message_async = AsyncMock()
-    state.heartflow.on_bot_reply_async = AsyncMock()
-    state.heartflow.on_no_reply_async = AsyncMock()
-    state.inc_stats = Mock()
-    state.action_history.append = Mock()
+    state.heartflow.on_bot_reply_async    = AsyncMock()
+    state.heartflow.on_no_reply_async     = AsyncMock()
+    state.inc_stats                       = Mock()
+    state.action_history.append           = Mock()
 
     event = {
         "post_type": "message",
@@ -345,24 +345,24 @@ async def test_smalltalk_reply_applies_only_one_outbound_media_plan(mock_context
         "_xc_command_forced": True,
     }
     hctx = SimpleNamespace(
-        runtime=runtime,
-        state=state,
-        chat_id="g67890",
-        bot_name="小青",
-        secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
-        data_dir=mock_context.data_dir,
+        runtime  = runtime,
+        state    = state,
+        chat_id  = "g67890",
+        bot_name = "小青",
+        secrets  = {"api_base": "http://test", "api_key": "key", "model": "model"},
+        data_dir = mock_context.data_dir,
     )
     emoji_marker = SimpleNamespace(
-        kind="emoji",
-        entry=SimpleNamespace(
-            file_path=str(image_path),
-            media_hash="hash-1",
-            description="无语",
-            emotion_tags=("无语",),
+        kind  = "emoji",
+        entry = SimpleNamespace(
+            file_path    = str(image_path),
+            media_hash   = "hash-1",
+            description  = "无语",
+            emotion_tags = ("无语",),
         ),
-        marker="[表情包：无语]",
-        reasoning="emoji_mode:text_with_emoji;emoji_tag:无语",
-        mode="text_with_emoji",
+        marker    = "[表情包：无语]",
+        reasoning = "emoji_mode:text_with_emoji;emoji_tag:无语",
+        mode      = "text_with_emoji",
     )
     reply_draft = _reply_draft_with_parts(
         "懂了\n你看这个\n再说",
@@ -431,17 +431,17 @@ async def test_smalltalk_face_only_reply_returns_single_face_and_marker_memory(m
         enable_inbound_media_context=False,
     )
 
-    state = MagicMock()
-    state.get_mood_state.return_value = ""
+    state                               = MagicMock()
+    state.get_mood_state.return_value   = ""
     state.memory_store.get.return_value = []
     state.memory_store.get_async = AsyncMock(return_value=[])
     state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.memory_store.append = Mock()
+    state.memory_store.append             = Mock()
     state.heartflow.on_user_message_async = AsyncMock()
-    state.heartflow.on_bot_reply_async = AsyncMock()
-    state.heartflow.on_no_reply_async = AsyncMock()
-    state.inc_stats = Mock()
-    state.action_history.append = Mock()
+    state.heartflow.on_bot_reply_async    = AsyncMock()
+    state.heartflow.on_no_reply_async     = AsyncMock()
+    state.inc_stats                       = Mock()
+    state.action_history.append           = Mock()
 
     event = {
         "post_type": "message",
@@ -452,19 +452,19 @@ async def test_smalltalk_face_only_reply_returns_single_face_and_marker_memory(m
         "_xc_command_forced": True,
     }
     hctx = SimpleNamespace(
-        runtime=runtime,
-        state=state,
-        chat_id="u12345",
-        bot_name="小青",
-        secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
-        data_dir=mock_context.data_dir,
+        runtime  = runtime,
+        state    = state,
+        chat_id  = "u12345",
+        bot_name = "小青",
+        secrets  = {"api_base": "http://test", "api_key": "key", "model": "model"},
+        data_dir = mock_context.data_dir,
     )
     face_marker = SimpleNamespace(
         kind="qq_face",
         entry=SimpleNamespace(face_id="14"),
-        marker="[QQ表情：微笑]",
-        reasoning="face_mode:face_only;face_label:微笑",
-        mode="face_only",
+        marker    = "[QQ表情：微笑]",
+        reasoning = "face_mode:face_only;face_label:微笑",
+        mode      = "face_only",
     )
     reply_draft = _reply_draft_with_parts(
         "懂了",
@@ -523,17 +523,17 @@ async def test_smalltalk_does_not_force_reply_when_new_emoji_collected(mock_cont
     runtime = _make_media_runtime(
         enable_inbound_media_context=True,
     )
-    state = MagicMock()
-    state.get_mood_state.return_value = ""
+    state                               = MagicMock()
+    state.get_mood_state.return_value   = ""
     state.memory_store.get.return_value = []
     state.memory_store.get_async = AsyncMock(return_value=[])
     state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.memory_store.append = Mock()
+    state.memory_store.append             = Mock()
     state.heartflow.on_user_message_async = AsyncMock()
-    state.heartflow.on_bot_reply_async = AsyncMock()
-    state.heartflow.on_no_reply_async = AsyncMock()
-    state.inc_stats = Mock()
-    state.action_history.append = Mock()
+    state.heartflow.on_bot_reply_async    = AsyncMock()
+    state.heartflow.on_no_reply_async     = AsyncMock()
+    state.inc_stats                       = Mock()
+    state.action_history.append           = Mock()
 
     event = {
         "post_type": "message",
@@ -545,12 +545,12 @@ async def test_smalltalk_does_not_force_reply_when_new_emoji_collected(mock_cont
         "_xc_new_emoji_count": 1,
     }
     hctx = SimpleNamespace(
-        runtime=runtime,
-        state=state,
-        chat_id="g67890",
-        bot_name="小青",
-        secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
-        data_dir=mock_context.data_dir,
+        runtime  = runtime,
+        state    = state,
+        chat_id  = "g67890",
+        bot_name = "小青",
+        secrets  = {"api_base": "http://test", "api_key": "key", "model": "model"},
+        data_dir = mock_context.data_dir,
     )
 
     with (

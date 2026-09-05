@@ -69,9 +69,9 @@ async def handle(
         if handler is None:
             safe_subcommand = bounded_external_text(
                 subcommand,
-                max_chars=32,
-                max_bytes=128,
-                suffix="…",
+                max_chars = 32,
+                max_bytes = 128,
+                suffix    = "…",
             )
             return segments(f"未知命令: {safe_subcommand}\n输入 /astro help 查看帮助")
         subcommand_args = parsed.rest(1)

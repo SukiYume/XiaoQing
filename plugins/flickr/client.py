@@ -18,9 +18,9 @@ from core.bounded_http import (
 )
 from core.plugin_base import PluginContextProtocol, has_control_characters
 
-API_ENDPOINT = "https://api.flickr.com/services/rest"
-API_TIMEOUT_SECONDS = 15.0
-MAX_API_RESPONSE_BYTES = 2 * 1024 * 1024
+API_ENDPOINT            = "https://api.flickr.com/services/rest"
+API_TIMEOUT_SECONDS     = 15.0
+MAX_API_RESPONSE_BYTES  = 2 * 1024 * 1024
 MAX_RESULTS_PER_REQUEST = 100
 
 PHOTO_EXTRAS = ",".join(
@@ -43,27 +43,27 @@ JSON_MIME_POLICY = MimePolicy(
     exact=frozenset({"application/json", "application/javascript", "text/json", "text/javascript"})
 )
 API_BODY_LIMITS = BodyLimits(
-    max_wire_bytes=MAX_API_RESPONSE_BYTES,
-    max_decoded_bytes=MAX_API_RESPONSE_BYTES,
-    max_decompression_ratio=20,
-    ratio_grace_bytes=64 * 1024,
-    chunk_bytes=64 * 1024,
+    max_wire_bytes          = MAX_API_RESPONSE_BYTES,
+    max_decoded_bytes       = MAX_API_RESPONSE_BYTES,
+    max_decompression_ratio = 20,
+    ratio_grace_bytes       = 64 * 1024,
+    chunk_bytes             = 64 * 1024,
 )
 API_JSON_LIMITS = JsonLimits(
-    max_bytes=MAX_API_RESPONSE_BYTES,
-    max_depth=24,
-    max_nodes=20_000,
+    max_bytes = MAX_API_RESPONSE_BYTES,
+    max_depth = 24,
+    max_nodes = 20_000,
     # Flickr 列表会汇总照片标题、描述、标签和多种 URL；总字符串预算需覆盖
     # 合法的 100 项响应，最终内存与传输规模仍由 2 MiB 字节上限约束。
-    max_string_chars=1_000_000,
-    max_number_chars=128,
+    max_string_chars = 1_000_000,
+    max_number_chars = 128,
 )
 
-_SAFE_API_KEY = re.compile(r"[A-Za-z0-9._-]{8,256}\Z")
-_SAFE_OPAQUE_ID = re.compile(r"[A-Za-z0-9@_-]{1,128}\Z")
-_FLICKR_HOSTS = frozenset({"flickr.com", "www.flickr.com", "m.flickr.com"})
+_SAFE_API_KEY      = re.compile(r"[A-Za-z0-9._-]{8,256}\Z")
+_SAFE_OPAQUE_ID    = re.compile(r"[A-Za-z0-9@_-]{1,128}\Z")
+_FLICKR_HOSTS      = frozenset({"flickr.com", "www.flickr.com", "m.flickr.com"})
 _STATIC_IMAGE_HOST = "live.staticflickr.com"
-_NSID = re.compile(r"[A-Za-z0-9_-]+@N[A-Za-z0-9_-]+\Z", re.IGNORECASE)
+_NSID              = re.compile(r"[A-Za-z0-9_-]+@N[A-Za-z0-9_-]+\Z", re.IGNORECASE)
 
 
 class FlickrError(RuntimeError):
@@ -118,7 +118,7 @@ class FlickrPage:
 
 def _plugin_api_key(context: PluginContextProtocol) -> str:
     settings = context.get_settings_snapshot().plugin_secrets("flickr")
-    value = settings.get("api_key")
+    value    = settings.get("api_key")
     if not isinstance(value, str):
         raise FlickrConfigurationError("Flickr api_key is not configured")
     api_key = value.strip()
@@ -171,7 +171,7 @@ def _validated_image_url(value: object) -> str | None:
         return None
     try:
         parsed = urlsplit(value.strip())
-        port = parsed.port
+        port   = parsed.port
     except ValueError:
         return None
     if (
@@ -238,7 +238,7 @@ def _parse_tags(value: object) -> tuple[str, ...]:
 def _photo_from_list_item(
     item: object,
     *,
-    default_owner_id: str = "",
+    default_owner_id: str   = "",
     default_owner_name: str = "",
 ) -> FlickrPhoto | None:
     if not isinstance(item, Mapping):
@@ -253,9 +253,9 @@ def _photo_from_list_item(
     if media_url is None:
         return None
     return FlickrPhoto(
-        photo_id=photo_id,
-        owner_id=owner_id,
-        owner_name=_visible_text(
+        photo_id   = photo_id,
+        owner_id   = owner_id,
+        owner_name = _visible_text(
             item.get("ownername"),
             limit=160,
             default=_visible_text(default_owner_name, limit=160, default=owner_id),
@@ -264,9 +264,9 @@ def _photo_from_list_item(
         description=_content_text(item.get("description"), limit=2_000),
         license_id=_license_id(item.get("license")),
         taken_at=_visible_text(item.get("datetaken"), limit=64),
-        tags=_parse_tags(item.get("tags")),
-        media_url=media_url,
-        page_url=_photo_page_url(owner_id, photo_id),
+        tags      = _parse_tags(item.get("tags")),
+        media_url = media_url,
+        page_url  = _photo_page_url(owner_id, photo_id),
     )
 
 
@@ -274,7 +274,7 @@ def _parse_photo_page(
     payload: Mapping[str, Any],
     *,
     container_name: str,
-    default_owner_id: str = "",
+    default_owner_id: str   = "",
     default_owner_name: str = "",
 ) -> FlickrPage:
     container = payload.get(container_name)
@@ -289,8 +289,8 @@ def _parse_photo_page(
         if (
             photo := _photo_from_list_item(
                 item,
-                default_owner_id=default_owner_id,
-                default_owner_name=default_owner_name,
+                default_owner_id   = default_owner_id,
+                default_owner_name = default_owner_name,
             )
         )
         is not None
@@ -304,7 +304,7 @@ def _parse_photo_page(
 
 
 def _user_id_from_payload(payload: Mapping[str, Any]) -> str:
-    user = payload.get("user")
+    user    = payload.get("user")
     user_id = _safe_id(user.get("id")) if isinstance(user, Mapping) else None
     if user_id is None:
         raise FlickrProtocolError("Flickr user response has no valid id")
@@ -325,20 +325,20 @@ def _photo_from_info(payload: Mapping[str, Any]) -> FlickrPhoto:
     media_url = _select_media_url(photo, photo_id=photo_id)
     if media_url is None:
         raise FlickrProtocolError("Flickr photo has no safe image URL")
-    dates = photo.get("dates")
-    taken_at = dates.get("taken") if isinstance(dates, Mapping) else ""
+    dates      = photo.get("dates")
+    taken_at   = dates.get("taken") if isinstance(dates, Mapping) else ""
     owner_name = owner.get("realname") or owner.get("username") or owner_id
     return FlickrPhoto(
-        photo_id=photo_id,
-        owner_id=owner_id,
+        photo_id = photo_id,
+        owner_id = owner_id,
         owner_name=_visible_text(owner_name, limit=160, default=owner_id),
         title=_content_text(photo.get("title"), limit=300) or "无标题",
         description=_content_text(photo.get("description"), limit=2_000),
         license_id=_license_id(photo.get("license")),
         taken_at=_visible_text(taken_at, limit=64),
-        tags=_parse_tags(photo.get("tags")),
-        media_url=media_url,
-        page_url=_photo_page_url(owner_id, photo_id),
+        tags      = _parse_tags(photo.get("tags")),
+        media_url = media_url,
+        page_url  = _photo_page_url(owner_id, photo_id),
     )
 
 
@@ -365,9 +365,9 @@ class FlickrClient:
                 session,
                 "GET",
                 API_ENDPOINT,
-                limits=API_BODY_LIMITS,
-                mime_policy=JSON_MIME_POLICY,
-                request_kwargs={"params": query, "timeout": API_TIMEOUT_SECONDS},
+                limits         = API_BODY_LIMITS,
+                mime_policy    = JSON_MIME_POLICY,
+                request_kwargs = {"params": query, "timeout": API_TIMEOUT_SECONDS},
             )
             payload = parse_bounded_json(response, limits=API_JSON_LIMITS)
         except BoundedHttpError as exc:
@@ -380,7 +380,7 @@ class FlickrClient:
         status = payload.get("stat")
         if status == "fail":
             raw_code = payload.get("code")
-            code = (
+            code     = (
                 str(raw_code)
                 if isinstance(raw_code, int) and not isinstance(raw_code, bool)
                 else _visible_text(raw_code, limit=16, default="unknown")
@@ -393,9 +393,9 @@ class FlickrClient:
     async def interesting(self) -> FlickrPage:
         payload = await self._call(
             "flickr.interestingness.getList",
-            extras=PHOTO_EXTRAS,
-            per_page=MAX_RESULTS_PER_REQUEST,
-            page=1,
+            extras   = PHOTO_EXTRAS,
+            per_page = MAX_RESULTS_PER_REQUEST,
+            page     = 1,
         )
         return _parse_photo_page(payload, container_name="photos")
 
@@ -442,7 +442,7 @@ class FlickrClient:
         if "://" in candidate:
             try:
                 parsed = urlsplit(candidate)
-                port = parsed.port
+                port   = parsed.port
             except ValueError as exc:
                 raise FlickrProtocolError("Flickr user URL is invalid") from exc
             host = (parsed.hostname or "").rstrip(".").casefold()
@@ -470,32 +470,32 @@ class FlickrClient:
     async def public_photos(self, user_id: str) -> FlickrPage:
         payload = await self._call(
             "flickr.people.getPublicPhotos",
-            user_id=user_id,
-            safe_search=1,
-            extras=PHOTO_EXTRAS,
-            per_page=MAX_RESULTS_PER_REQUEST,
-            page=1,
+            user_id     = user_id,
+            safe_search = 1,
+            extras      = PHOTO_EXTRAS,
+            per_page    = MAX_RESULTS_PER_REQUEST,
+            page        = 1,
         )
         return _parse_photo_page(
             payload,
-            container_name="photos",
-            default_owner_id=user_id,
+            container_name   = "photos",
+            default_owner_id = user_id,
         )
 
     async def album_photos(self, *, user_id: str, album_id: str) -> FlickrPage:
         payload = await self._call(
             "flickr.photosets.getPhotos",
-            user_id=user_id,
-            photoset_id=album_id,
-            media="photos",
-            extras=PHOTOSET_EXTRAS,
-            per_page=MAX_RESULTS_PER_REQUEST,
-            page=1,
+            user_id     = user_id,
+            photoset_id = album_id,
+            media       = "photos",
+            extras      = PHOTOSET_EXTRAS,
+            per_page    = MAX_RESULTS_PER_REQUEST,
+            page        = 1,
         )
         return _parse_photo_page(
             payload,
-            container_name="photoset",
-            default_owner_id=user_id,
+            container_name   = "photoset",
+            default_owner_id = user_id,
         )
 
     async def photo_info(self, photo_id: str) -> FlickrPhoto:

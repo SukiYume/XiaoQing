@@ -28,7 +28,7 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
 
     def get_all_group_ids(self) -> list[int]:
         try:
-            conn = self._get_connection()
+            conn   = self._get_connection()
             cursor = conn.execute("SELECT DISTINCT group_id FROM users")
             return [row["group_id"] for row in cursor.fetchall()]
         except Exception as exc:
@@ -39,12 +39,12 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
         conn = self._get_connection()
         try:
             conn.execute("BEGIN IMMEDIATE")
-            now = database_clock.now().isoformat()
+            now           = database_clock.now().isoformat()
             params: tuple = (now,)
-            group_clause = ""
+            group_clause  = ""
             if group_id is not None:
                 group_clause = " AND group_id = ?"
-                params = (params[0], group_id)
+                params       = (params[0], group_id)
             rows = conn.execute(
                 """SELECT * FROM trade_listings WHERE is_active = 1
                    AND expires_at <= ?"""
@@ -76,11 +76,11 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
         if claim.rowcount != 1:
             return False
 
-        seller_id = str(row["seller_user_id"])
-        group_id = int(row["group_id"])
-        item_id = str(row["item_id"])
-        amount = int(row["amount"])
-        items = self._load_inventory_items(conn, seller_id, group_id)
+        seller_id      = str(row["seller_user_id"])
+        group_id       = int(row["group_id"])
+        item_id        = str(row["item_id"])
+        amount         = int(row["amount"])
+        items          = self._load_inventory_items(conn, seller_id, group_id)
         items[item_id] = int(items.get(item_id, 0)) + amount
         self._save_inventory_items(conn, seller_id, group_id, items)
         conn.execute(
@@ -93,7 +93,7 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
 
     def get_enabled_group_ids(self, *, require_activity: bool = False) -> list[int]:
         try:
-            conn = self._get_connection()
+            conn      = self._get_connection()
             condition = (
                 "enabled = 1 AND activity_enabled = 1" if require_activity else "enabled = 1"
             )
@@ -112,7 +112,7 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
         period_key: str,
         lease_seconds: int,
     ) -> bool:
-        now = database_clock.now()
+        now     = database_clock.now()
         now_iso = now.isoformat()
         lease_until = (now + timedelta(seconds=max(1, lease_seconds))).isoformat()
         row = conn.execute(
@@ -163,7 +163,7 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
     def run_daily_reset_atomic(self, period_key: str, group_id: int) -> DailyResetResult | None:
         """原子领取每日任务、重置计数、增加宠物年龄并完成调度。"""
         job_name = "qingpet_daily_reset"
-        conn = self._get_connection()
+        conn     = self._get_connection()
         try:
             conn.execute("BEGIN IMMEDIATE")
             if not self._claim_scheduler_run_in_transaction(
@@ -206,7 +206,7 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
     ) -> WeeklyActivitySettlementResult | None:
         """仅一次领取并结算周排行奖励、称号、账本和调度完成状态。"""
         job_name = "qingpet_weekly_activity"
-        conn = self._get_connection()
+        conn     = self._get_connection()
         try:
             conn.execute("BEGIN IMMEDIATE")
             if not self._claim_scheduler_run_in_transaction(
@@ -224,19 +224,19 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
                    ORDER BY score DESC, user_id ASC LIMIT 3""",
                 (group_id,),
             ).fetchall()
-            now = database_clock.now()
+            now                                = database_clock.now()
             winners: list[WeeklyRankingWinner] = []
             for index, rank_row in enumerate(ranking):
                 user_id = str(rank_row["user_id"])
-                grant = self._credit_coins_in_transaction(
+                grant   = self._credit_coins_in_transaction(
                     conn,
                     user_id,
                     group_id,
                     _WEEKLY_RANKING_REWARDS[index],
-                    reason="weekly_ranking",
-                    reference_id=f"weekly:{period_key}:{index}:{user_id}",
-                    daily_limit=_DAILY_COIN_LIMIT,
-                    now_iso=now.isoformat(),
+                    reason       = "weekly_ranking",
+                    reference_id = f"weekly:{period_key}:{index}:{user_id}",
+                    daily_limit  = _DAILY_COIN_LIMIT,
+                    now_iso      = now.isoformat(),
                 )
                 title_granted = index == 0 and self._grant_temporary_title_in_transaction(
                     conn,
@@ -247,11 +247,11 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
                 )
                 winners.append(
                     WeeklyRankingWinner(
-                        user_id=user_id,
-                        pet_name=str(rank_row["pet_name"]),
-                        score=round(float(rank_row["score"]), 1),
-                        coins_granted=grant,
-                        title_granted=title_granted,
+                        user_id       = user_id,
+                        pet_name      = str(rank_row["pet_name"]),
+                        score         = round(float(rank_row["score"]), 1),
+                        coins_granted = grant,
+                        title_granted = title_granted,
                     )
                 )
             if not self._complete_scheduler_run_in_transaction(conn, job_name, period_key):
@@ -270,7 +270,7 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
         conn = self._get_connection()
         try:
             conn.execute("BEGIN IMMEDIATE")
-            now = database_clock.now().isoformat()
+            now     = database_clock.now().isoformat()
             expired = conn.execute(
                 """SELECT user_id, group_id, title FROM title_expiry
                 WHERE expires_at <= ?""",
@@ -316,12 +316,12 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
         """
 
         empty_snapshot = GroupEconomySnapshot()
-        unavailable = CoinLedgerReconciliation(
-            status="unavailable",
-            current_balance=0,
-            expected_balance=0,
-            difference=0,
-            consistent=False,
+        unavailable    = CoinLedgerReconciliation(
+            status           = "unavailable",
+            current_balance  = 0,
+            expected_balance = 0,
+            difference       = 0,
+            consistent       = False,
         )
         conn = self._get_connection()
         try:
@@ -361,12 +361,12 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
                 (group_id, group_id),
             ).fetchone()
             snapshot = GroupEconomySnapshot(
-                total_pets=int(row["total_pets"] or 0),
-                total_coins=int(row["total_coins"] or 0),
-                total_experience=int(row["total_experience"] or 0),
-                total_intimacy=int(row["total_intimacy"] or 0),
-                average_care_score=float(row["average_care_score"] or 0.0),
-                active_today=int(row["active_today"] or 0),
+                total_pets         = int(row["total_pets"] or 0),
+                total_coins        = int(row["total_coins"] or 0),
+                total_experience   = int(row["total_experience"] or 0),
+                total_intimacy     = int(row["total_intimacy"] or 0),
+                average_care_score = float(row["average_care_score"] or 0.0),
+                active_today       = int(row["active_today"] or 0),
             )
             ledger_row = conn.execute(
                 """
@@ -381,7 +381,7 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
                 (group_id,),
             ).fetchone()
             ledger_total = int(ledger_row["ledger_total"] or 0)
-            checkpoint = conn.execute(
+            checkpoint   = conn.execute(
                 """SELECT balance, ledger_total
                    FROM asset_reconciliation_checkpoints
                    WHERE group_id = ? AND asset_type = 'coins'""",
@@ -396,24 +396,24 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
                     (group_id, snapshot.total_coins, ledger_total, checked_at),
                 )
                 reconciliation = CoinLedgerReconciliation(
-                    status="baseline_created",
-                    current_balance=snapshot.total_coins,
-                    expected_balance=snapshot.total_coins,
-                    difference=0,
-                    consistent=True,
+                    status           = "baseline_created",
+                    current_balance  = snapshot.total_coins,
+                    expected_balance = snapshot.total_coins,
+                    difference       = 0,
+                    consistent       = True,
                 )
             else:
                 expected_balance = int(checkpoint["balance"]) + (
                     ledger_total - int(checkpoint["ledger_total"])
                 )
-                difference = snapshot.total_coins - expected_balance
-                consistent = difference == 0
+                difference     = snapshot.total_coins - expected_balance
+                consistent     = difference == 0
                 reconciliation = CoinLedgerReconciliation(
-                    status="consistent" if consistent else "mismatch",
-                    current_balance=snapshot.total_coins,
-                    expected_balance=expected_balance,
-                    difference=difference,
-                    consistent=consistent,
+                    status           = "consistent" if consistent else "mismatch",
+                    current_balance  = snapshot.total_coins,
+                    expected_balance = expected_balance,
+                    difference       = difference,
+                    consistent       = consistent,
                 )
                 if consistent:
                     conn.execute(
@@ -437,7 +437,7 @@ class SchedulerRepositoryMixin(DatabaseRepositorySupport):
     def get_coins_ranking(self, group_id: int, limit: int = 10) -> list[dict]:
         """通过单次 JOIN 查询返回金币排行，避免逐用户读取宠物。"""
         try:
-            conn = self._get_connection()
+            conn   = self._get_connection()
             cursor = conn.execute(
                 """
                 SELECT u.user_id, p.name as pet_name, u.coins

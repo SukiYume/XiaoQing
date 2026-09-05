@@ -32,15 +32,15 @@ def _text(response: list[dict[str, Any]]) -> str:
 
 def _session(
     lines: list[str] | object | None = None,
-    execution_count: object = 0,
+    execution_count: object          = 0,
     *,
     plugin_name: str = "jupyter",
 ) -> Session:
     return Session(
-        user_id=1,
-        group_id=2,
-        plugin_name=plugin_name,
-        data={
+        user_id     = 1,
+        group_id    = 2,
+        plugin_name = plugin_name,
+        data        = {
             "code_buffer": [] if lines is None else lines,
             "execution_count": execution_count,
         },
@@ -49,13 +49,13 @@ def _session(
 
 class ReplContext:
     def __init__(self, tmp_path: Path, existing: object | None = None) -> None:
-        self.data_dir = tmp_path
-        self.current_user_id = 1
-        self.current_group_id = 2
-        self.request_id = "req-jupyter-contract"
-        self.existing = existing
+        self.data_dir                                        = tmp_path
+        self.current_user_id                                 = 1
+        self.current_group_id                                = 2
+        self.request_id                                      = "req-jupyter-contract"
+        self.existing                                        = existing
         self.created: tuple[dict[str, object], float] | None = None
-        self.end_calls = 0
+        self.end_calls                                       = 0
 
     async def get_session(self) -> object | None:
         return self.existing
@@ -70,10 +70,10 @@ class ReplContext:
 
 class KernelManagerStub:
     def __init__(self, *, running: bool = False, fail: str | None = None) -> None:
-        self.running = running
-        self.fail = fail
+        self.running          = running
+        self.fail             = fail
         self.calls: list[str] = []
-        self.monitor_calls = 0
+        self.monitor_calls    = 0
 
     def get_status(self) -> dict[str, object]:
         return {"running": self.running, "message": "测试状态"}
@@ -156,11 +156,11 @@ def test_owner_key_rejects_invalid_group_identity() -> None:
 
 def test_execution_result_formats_all_fields_and_exactly_truncates() -> None:
     result = ExecutionResult(
-        stdout=" out ",
-        stderr=" warn ",
-        result="42",
-        error="failed",
-        execution_time=1.25,
+        stdout         = " out ",
+        stderr         = " warn ",
+        result         = "42",
+        error          = "failed",
+        execution_time = 1.25,
     )
     rendered = result.format_output()
     assert "out" in rendered
@@ -178,8 +178,8 @@ def test_execution_result_formats_all_fields_and_exactly_truncates() -> None:
 def test_result_segments_keep_headers_footers_and_skip_invalid_images() -> None:
     response = jupyter._build_result_segments(
         ExecutionResult(images=[b"not-a-png"]),
-        header="header",
-        footer="footer",
+        header = "header",
+        footer = "footer",
     )
     assert _text(response).startswith("header")
     assert _text(response).endswith("footer")
@@ -300,7 +300,7 @@ def test_repl_append_rejects_line_and_total_code_limits() -> None:
 
 @pytest.mark.asyncio
 async def test_start_repl_creates_minimal_bounded_session(tmp_path: Path) -> None:
-    context = ReplContext(tmp_path)
+    context  = ReplContext(tmp_path)
     response = await jupyter._start_repl_session(context)
     assert context.created == (
         {"code_buffer": [], "execution_count": 0},
@@ -312,7 +312,7 @@ async def test_start_repl_creates_minimal_bounded_session(tmp_path: Path) -> Non
 @pytest.mark.asyncio
 async def test_start_repl_reuses_valid_session_without_replacing_it(tmp_path: Path) -> None:
     existing = _session([f"line-{index}" for index in range(7)])
-    context = ReplContext(tmp_path, existing)
+    context  = ReplContext(tmp_path, existing)
     response = await jupyter._start_repl_session(context)
     assert context.created is None
     assert "line-2" in _text(response)
@@ -321,7 +321,7 @@ async def test_start_repl_reuses_valid_session_without_replacing_it(tmp_path: Pa
 
 @pytest.mark.asyncio
 async def test_start_repl_discards_only_invalid_jupyter_session(tmp_path: Path) -> None:
-    context = ReplContext(tmp_path, _session("corrupt"))
+    context  = ReplContext(tmp_path, _session("corrupt"))
     response = await jupyter._start_repl_session(context)
     assert context.end_calls == 1
     assert context.created is not None
@@ -372,7 +372,7 @@ async def test_handle_session_management_actions_and_invalid_state(tmp_path: Pat
     assert "已清空" in _text(await jupyter.handle_session("clear", {}, context, session))
     assert "缓冲区为空" in _text(await jupyter.handle_session("show", {}, context, session))
 
-    corrupt = _session("corrupt")
+    corrupt  = _session("corrupt")
     response = await jupyter.handle_session("show", {}, context, corrupt)
     assert context.end_calls == 1
     assert "状态无效" in _text(response)
@@ -402,8 +402,8 @@ async def test_handle_session_rejects_foreign_or_non_string_input(tmp_path: Path
 async def test_handle_session_returns_boundary_error_without_mutating_buffer(
     tmp_path: Path,
 ) -> None:
-    context = ReplContext(tmp_path)
-    session = _session([])
+    context  = ReplContext(tmp_path)
+    session  = _session([])
     response = await jupyter.handle_session(
         "x" * (MAX_REPL_LINE_CHARS + 1),
         {},

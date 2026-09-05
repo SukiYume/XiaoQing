@@ -12,16 +12,16 @@ def test_expression_store_load_save_roundtrip(tmp_path):
     store.save(
         [
             ExpressionRecord(
-                expression_id="exp-1",
-                chat_id="chat-1",
-                situation="s1",
-                style="st1",
-                content_list=["hello", "world"],
-                count=3,
-                last_active_time=123.0,
-                checked=True,
-                rejected=False,
-                modified_by="user",
+                expression_id    = "exp-1",
+                chat_id          = "chat-1",
+                situation        = "s1",
+                style            = "st1",
+                content_list     = ["hello", "world"],
+                count            = 3,
+                last_active_time = 123.0,
+                checked          = True,
+                rejected         = False,
+                modified_by      = "user",
             )
         ]
     )
@@ -77,16 +77,16 @@ def test_jargon_store_load_save_roundtrip(tmp_path):
     store.save(
         [
             JargonRecord(
-                content="梗",
-                meaning="meaning",
-                raw_content=["a", "b"],
-                chat_id_counts=[["chat-1", 2]],
-                is_global=True,
-                count=2,
-                is_jargon=True,
-                is_complete=True,
-                last_inference_count=1,
-                updated_at=456.0,
+                content              = "梗",
+                meaning              = "meaning",
+                raw_content          = ["a", "b"],
+                chat_id_counts       = [["chat-1", 2]],
+                is_global            = True,
+                count                = 2,
+                is_jargon            = True,
+                is_complete          = True,
+                last_inference_count = 1,
+                updated_at           = 456.0,
             )
         ]
     )
@@ -147,22 +147,22 @@ def test_jargon_store_merges_concurrent_incremental_updates(tmp_path):
     seed.save(
         [
             JargonRecord(
-                content="梗",
-                scope_chat_id="chat-1",
-                raw_content=["base"],
-                chat_id_counts=[["chat-1", 1]],
-                count=1,
-                updated_at=1.0,
+                content        = "梗",
+                scope_chat_id  = "chat-1",
+                raw_content    = ["base"],
+                chat_id_counts = [["chat-1", 1]],
+                count          = 1,
+                updated_at     = 1.0,
             )
         ]
     )
-    first = JargonStore()
+    first  = JargonStore()
     second = JargonStore()
     first.bind(tmp_path)
     second.bind(tmp_path)
-    first_items = first.load()
+    first_items  = first.load()
     second_items = second.load()
-    key = JargonStore.key_for("梗", "chat-1")
+    key          = JargonStore.key_for("梗", "chat-1")
 
     first_items[key].count += 1
     first_items[key].raw_content.append("first")
@@ -248,9 +248,9 @@ def test_message_recorder_malformed_file_fallback_then_persist(tmp_path):
 
 
 def test_message_recorder_rebind_does_not_leak_previous_root_cache(tmp_path):
-    first_root = tmp_path / "first"
+    first_root  = tmp_path / "first"
     second_root = tmp_path / "second"
-    recorder = MessageRecorder()
+    recorder    = MessageRecorder()
     recorder.bind(first_root)
     recorder.set_last_time("chat-1", 12.5)
 

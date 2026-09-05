@@ -36,20 +36,20 @@ HEADERS = {
     "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
 }
 
-DEFAULT_APOD_URL = "https://apod.nasa.gov/apod/astropix.html"
-DEFAULT_APOD_HOST = "apod.nasa.gov"
-HTML_TIMEOUT_SECONDS = 15
+DEFAULT_APOD_URL      = "https://apod.nasa.gov/apod/astropix.html"
+DEFAULT_APOD_HOST     = "apod.nasa.gov"
+HTML_TIMEOUT_SECONDS  = 15
 IMAGE_TIMEOUT_SECONDS = 20
-MAX_IMAGE_BYTES = 12 * 1024 * 1024
-MAX_IMAGE_PIXELS = 40_000_000
-MAX_IMAGE_FRAMES = 120
-IMAGE_CACHE_LIMITS = FileCacheLimits(
-    max_entries=90,
-    max_bytes=128 * 1024 * 1024,
-    ttl_seconds=120 * 24 * 60 * 60,
+MAX_IMAGE_BYTES       = 12 * 1024 * 1024
+MAX_IMAGE_PIXELS      = 40_000_000
+MAX_IMAGE_FRAMES      = 120
+IMAGE_CACHE_LIMITS    = FileCacheLimits(
+    max_entries = 90,
+    max_bytes   = 128 * 1024 * 1024,
+    ttl_seconds = 120 * 24 * 60 * 60,
 )
-DEFAULT_FALLBACK_TITLE = "Today's Astronomy Picture of the Day"
-NO_EXPLANATION_TEXT = "No explanation found."
+DEFAULT_FALLBACK_TITLE  = "Today's Astronomy Picture of the Day"
+NO_EXPLANATION_TEXT     = "No explanation found."
 EXPLANATION_UNAVAILABLE = "Explanation unavailable."
 
 
@@ -87,7 +87,7 @@ def _allowed_hosts(context: PluginContextProtocol) -> set[str]:
     """合并 NASA 默认域名与管理员显式允许的附加域名。"""
 
     configured = _get_config(context).get("allowed_hosts", [])
-    hosts = {DEFAULT_APOD_HOST}
+    hosts      = {DEFAULT_APOD_HOST}
     if isinstance(configured, Sequence) and not isinstance(configured, (str, bytes, bytearray)):
         hosts.update(
             host.strip().rstrip(".").lower()
@@ -114,8 +114,8 @@ def _require_allowed_url(
     allowed_hosts: set[str] | None = None,
 ) -> str:
     parsed = urlsplit(url)
-    host = (parsed.hostname or "").rstrip(".").lower()
-    hosts = allowed_hosts if allowed_hosts is not None else _allowed_hosts(context)
+    host   = (parsed.hostname or "").rstrip(".").lower()
+    hosts  = allowed_hosts if allowed_hosts is not None else _allowed_hosts(context)
     if parsed.scheme.lower() != "https" or host not in hosts:
         raise UnsafeUrlError("APOD URL host is not allowed")
     return url
@@ -138,12 +138,12 @@ async def _safe_download_image(
     _require_allowed_url(url, context, allowed_hosts=allowed_hosts)
     fetched = await fetch_public_bytes(
         url,
-        headers={**HEADERS, "accept-encoding": "identity"},
-        timeout_seconds=IMAGE_TIMEOUT_SECONDS,
-        max_bytes=MAX_IMAGE_BYTES,
-        allowed_content_type_prefixes=("image/",),
-        allowed_hosts=allowed_hosts,
-        allow_transparent_proxy_fake_dns=_allow_transparent_proxy_fake_dns(url),
+        headers                          = {**HEADERS, "accept-encoding": "identity"},
+        timeout_seconds                  = IMAGE_TIMEOUT_SECONDS,
+        max_bytes                        = MAX_IMAGE_BYTES,
+        allowed_content_type_prefixes    = ("image/",),
+        allowed_hosts                    = allowed_hosts,
+        allow_transparent_proxy_fake_dns = _allow_transparent_proxy_fake_dns(url),
     )
     if fetched is None:
         return None
@@ -156,14 +156,14 @@ async def _safe_download_image(
         validate_image_bytes,
         fetched.body,
         limits=ImageValidationLimits(
-            max_bytes=MAX_IMAGE_BYTES,
-            max_pixels=MAX_IMAGE_PIXELS,
-            max_frames=MAX_IMAGE_FRAMES,
+            max_bytes  = MAX_IMAGE_BYTES,
+            max_pixels = MAX_IMAGE_PIXELS,
+            max_frames = MAX_IMAGE_FRAMES,
         ),
-        format_extensions=_IMAGE_FORMAT_EXTENSIONS,
-        expected_format=expected_format,
+        format_extensions = _IMAGE_FORMAT_EXTENSIONS,
+        expected_format   = expected_format,
     )
-    cache = BoundedFileCache(images_dir, IMAGE_CACHE_LIMITS)
+    cache  = BoundedFileCache(images_dir, IMAGE_CACHE_LIMITS)
     target = await run_sync(
         cache.put,
         _cache_filename(fetched.url, validated.extension),
@@ -183,7 +183,7 @@ def _find_image_url(
     """Select an APOD image candidate without trusting document order."""
 
     candidates: list[str] = []
-    preferred: list[str] = []
+    preferred: list[str]  = []
     for element in soup.find_all("img"):
         raw_src = element.attrs.get("src")
         if not isinstance(raw_src, str) or not raw_src.strip():
@@ -248,8 +248,8 @@ def get_explanation(
         public_error_message(
             context,
             exc,
-            logger=context.logger,
-            component="apod.parse_explanation",
+            logger    = context.logger,
+            component = "apod.parse_explanation",
         )
         return EXPLANATION_UNAVAILABLE
 
@@ -322,7 +322,7 @@ def _render_video(
 ) -> Segments:
     context.logger.info("发现 video 标签视频")
     nested_source = video.find("source")
-    source = _tag_source(nested_source if isinstance(nested_source, Tag) else None)
+    source        = _tag_source(nested_source if isinstance(nested_source, Tag) else None)
     if source is None:
         source = _tag_source(video)
     if source is None:
@@ -342,39 +342,39 @@ async def _render_page(
 ) -> Segments:
     """按图片、iframe、video 的优先级把已验证页面转换为消息段。"""
 
-    title = _extract_title(soup, context)
+    title       = _extract_title(soup, context)
     explanation = get_explanation(soup, context)
 
     image_url = _find_image_url(soup, base_url, context, allowed_hosts)
     if image_url is not None:
         return await _render_image(
             image_url,
-            images_dir=images_dir,
-            title=title,
-            explanation=explanation,
-            context=context,
+            images_dir  = images_dir,
+            title       = title,
+            explanation = explanation,
+            context     = context,
         )
 
     iframe = soup.find("iframe")
     if isinstance(iframe, Tag):
         return _render_iframe(
             iframe,
-            base_url=base_url,
-            page_url=page_url,
-            title=title,
-            explanation=explanation,
-            context=context,
+            base_url    = base_url,
+            page_url    = page_url,
+            title       = title,
+            explanation = explanation,
+            context     = context,
         )
 
     video = soup.find("video")
     if isinstance(video, Tag):
         return _render_video(
             video,
-            base_url=base_url,
-            page_url=page_url,
-            title=title,
-            explanation=explanation,
-            context=context,
+            base_url    = base_url,
+            page_url    = page_url,
+            title       = title,
+            explanation = explanation,
+            context     = context,
         )
 
     return segments(f"今天的 APOD 内容格式不支持，请直接访问: {page_url}")
@@ -402,9 +402,9 @@ async def handle(
                 return segments(_show_help())
             visible_command = bounded_external_text(
                 parsed.first,
-                max_chars=32,
-                max_bytes=128,
-                default="未知",
+                max_chars = 32,
+                max_bytes = 128,
+                default   = "未知",
             )
             return segments(f"未知命令: {visible_command}\n输入 /apod help 查看帮助")
 
@@ -412,15 +412,15 @@ async def handle(
 
         # 配置只决定入口与额外域名；每次重定向仍由 safe_http 重新校验。
         configured_url = _get_config(context).get("url", DEFAULT_APOD_URL)
-        url = configured_url if isinstance(configured_url, str) else DEFAULT_APOD_URL
-        allowed_hosts = _allowed_hosts(context)
+        url            = configured_url if isinstance(configured_url, str) else DEFAULT_APOD_URL
+        allowed_hosts  = _allowed_hosts(context)
         page_url = _require_allowed_url(url, context, allowed_hosts=allowed_hosts)
         response = await fetch_public_html(
             page_url,
-            headers={**HEADERS, "accept-encoding": "identity"},
-            timeout_seconds=HTML_TIMEOUT_SECONDS,
-            allowed_hosts=allowed_hosts,
-            allow_transparent_proxy_fake_dns=_allow_transparent_proxy_fake_dns(page_url),
+            headers                          = {**HEADERS, "accept-encoding": "identity"},
+            timeout_seconds                  = HTML_TIMEOUT_SECONDS,
+            allowed_hosts                    = allowed_hosts,
+            allow_transparent_proxy_fake_dns = _allow_transparent_proxy_fake_dns(page_url),
         )
         if response is None or not response.body:
             error_msg = "❌ 获取失败: 网络错误"
@@ -430,11 +430,11 @@ async def handle(
         soup = await run_sync(BeautifulSoup, response.body, "html.parser")
         return await _render_page(
             soup,
-            base_url=response.url,
-            page_url=page_url,
-            images_dir=context.data_dir / "images",
-            allowed_hosts=allowed_hosts,
-            context=context,
+            base_url      = response.url,
+            page_url      = page_url,
+            images_dir    = context.data_dir / "images",
+            allowed_hosts = allowed_hosts,
+            context       = context,
         )
 
     except UnsafeUrlError as exc:

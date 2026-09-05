@@ -18,27 +18,27 @@ from tests.helpers.app_test_support import (
 )
 
 mock_dependencies = _fixture_support.mock_dependencies
-temp_app_root = _fixture_support.temp_app_root
+temp_app_root     = _fixture_support.temp_app_root
 
 
 @pytest.mark.asyncio
 async def test_reconcile_inbound_restarts_when_proxy_security_declaration_changes(
     temp_app_root: Path,
 ):
-    app = XiaoQingApp(temp_app_root)
+    app         = XiaoQingApp(temp_app_root)
     old_manager = InboundManager(
-        inbound_http_base="http://127.0.0.1:12000",
-        inbound_ws_uri="",
-        token="token",
-        handler=app._handle_inbound_event,
-        trusted_tls_proxy=False,
+        inbound_http_base = "http://127.0.0.1:12000",
+        inbound_ws_uri    = "",
+        token             = "token",
+        handler           = app._handle_inbound_event,
+        trusted_tls_proxy = False,
     )
     new_manager = InboundManager(
-        inbound_http_base="http://127.0.0.1:12000",
-        inbound_ws_uri="",
-        token="token",
-        handler=app._handle_inbound_event,
-        trusted_tls_proxy=True,
+        inbound_http_base = "http://127.0.0.1:12000",
+        inbound_ws_uri    = "",
+        token             = "token",
+        handler           = app._handle_inbound_event,
+        trusted_tls_proxy = True,
     )
     events: list[str] = []
 
@@ -64,14 +64,14 @@ async def test_reconcile_inbound_restarts_when_proxy_security_declaration_change
 
 @pytest.mark.asyncio
 async def test_invalid_inbound_config_never_stops_current(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
+    app     = XiaoQingApp(temp_app_root)
     current = InboundManager(
-        inbound_http_base="http://127.0.0.1:12000",
-        inbound_ws_uri="",
-        token="token",
-        handler=app._handle_inbound_event,
+        inbound_http_base = "http://127.0.0.1:12000",
+        inbound_ws_uri    = "",
+        token             = "token",
+        handler           = app._handle_inbound_event,
     )
-    current.stop = AsyncMock()
+    current.stop        = AsyncMock()
     app.inbound_manager = current
 
     with (
@@ -90,23 +90,23 @@ async def test_invalid_inbound_config_never_stops_current(temp_app_root: Path):
 
 @pytest.mark.asyncio
 async def test_disjoint_candidate_bind_failure_keeps_current_running(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
+    app     = XiaoQingApp(temp_app_root)
     current = InboundManager(
-        inbound_http_base="http://127.0.0.1:12000",
-        inbound_ws_uri="",
-        token="token",
-        handler=app._handle_inbound_event,
+        inbound_http_base = "http://127.0.0.1:12000",
+        inbound_ws_uri    = "",
+        token             = "token",
+        handler           = app._handle_inbound_event,
     )
     desired = InboundManager(
-        inbound_http_base="http://127.0.0.1:12001",
-        inbound_ws_uri="",
-        token="token",
-        handler=app._handle_inbound_event,
+        inbound_http_base = "http://127.0.0.1:12001",
+        inbound_ws_uri    = "",
+        token             = "token",
+        handler           = app._handle_inbound_event,
     )
-    current.stop = AsyncMock()
+    current.stop  = AsyncMock()
     current.start = AsyncMock()
     desired.start = AsyncMock(side_effect=OSError("bind failed"))
-    desired.stop = AsyncMock()
+    desired.stop        = AsyncMock()
     app.inbound_manager = current
 
     with (
@@ -126,18 +126,18 @@ async def test_disjoint_candidate_bind_failure_keeps_current_running(temp_app_ro
 async def test_failed_candidate_cleanup_remains_owned_until_terminal_cleanup(
     temp_app_root: Path,
 ):
-    app = XiaoQingApp(temp_app_root)
+    app     = XiaoQingApp(temp_app_root)
     current = InboundManager(
-        inbound_http_base="http://127.0.0.1:12000",
-        inbound_ws_uri="",
-        token="token",
-        handler=app._handle_inbound_event,
+        inbound_http_base = "http://127.0.0.1:12000",
+        inbound_ws_uri    = "",
+        token             = "token",
+        handler           = app._handle_inbound_event,
     )
     desired = InboundManager(
-        inbound_http_base="http://127.0.0.1:12001",
-        inbound_ws_uri="",
-        token="token",
-        handler=app._handle_inbound_event,
+        inbound_http_base = "http://127.0.0.1:12001",
+        inbound_ws_uri    = "",
+        token             = "token",
+        handler           = app._handle_inbound_event,
     )
     current.stop = AsyncMock()
     desired.start = AsyncMock(side_effect=OSError("bind failed"))
@@ -166,18 +166,18 @@ async def test_disjoint_occupied_port_switch_keeps_old_health_endpoint_live(
     temp_app_root: Path,
     unused_tcp_port_factory,
 ):
-    old_port = unused_tcp_port_factory()
+    old_port      = unused_tcp_port_factory()
     occupied_port = unused_tcp_port_factory()
-    app = XiaoQingApp(temp_app_root)
-    current = InboundManager(
-        inbound_http_base=f"http://127.0.0.1:{old_port}",
-        inbound_ws_uri="",
-        token="token",
-        handler=app._handle_inbound_event,
+    app           = XiaoQingApp(temp_app_root)
+    current       = InboundManager(
+        inbound_http_base = f"http://127.0.0.1:{old_port}",
+        inbound_ws_uri    = "",
+        token             = "token",
+        handler           = app._handle_inbound_event,
     )
     await current.start()
     app.inbound_manager = current
-    occupied = await asyncio.start_server(
+    occupied            = await asyncio.start_server(
         lambda _reader, writer: writer.close(), "127.0.0.1", occupied_port
     )
 
@@ -214,21 +214,21 @@ async def test_disjoint_occupied_port_switch_keeps_old_health_endpoint_live(
 async def test_disjoint_inbound_switch_starts_candidate_before_stopping_current(
     temp_app_root: Path,
 ):
-    app = XiaoQingApp(temp_app_root)
+    app     = XiaoQingApp(temp_app_root)
     current = InboundManager(
-        inbound_http_base="http://127.0.0.1:12000",
-        inbound_ws_uri="",
-        token="token",
-        handler=app._handle_inbound_event,
+        inbound_http_base = "http://127.0.0.1:12000",
+        inbound_ws_uri    = "",
+        token             = "token",
+        handler           = app._handle_inbound_event,
     )
     desired = InboundManager(
-        inbound_http_base="http://127.0.0.1:12001",
-        inbound_ws_uri="",
-        token="token",
-        handler=app._handle_inbound_event,
+        inbound_http_base = "http://127.0.0.1:12001",
+        inbound_ws_uri    = "",
+        token             = "token",
+        handler           = app._handle_inbound_event,
     )
     events: list[str] = []
-    desired.start = AsyncMock(
+    desired.start     = AsyncMock(
         side_effect=lambda *, accept_events=True: events.append(f"new.start:{accept_events}")
     )
     desired.commit_admission = Mock(side_effect=lambda: events.append("new.commit"))
@@ -245,19 +245,19 @@ async def test_disjoint_inbound_switch_starts_candidate_before_stopping_current(
 
 @pytest.mark.asyncio
 async def test_overlapping_candidate_failure_restores_current(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
+    app     = XiaoQingApp(temp_app_root)
     current = InboundManager(
-        inbound_http_base="http://127.0.0.1:12000",
-        inbound_ws_uri="",
-        token="token",
-        handler=app._handle_inbound_event,
+        inbound_http_base = "http://127.0.0.1:12000",
+        inbound_ws_uri    = "",
+        token             = "token",
+        handler           = app._handle_inbound_event,
     )
     desired = InboundManager(
-        inbound_http_base="http://127.0.0.1:12000",
-        inbound_ws_uri="",
-        token="token",
-        handler=app._handle_inbound_event,
-        trusted_tls_proxy=True,
+        inbound_http_base = "http://127.0.0.1:12000",
+        inbound_ws_uri    = "",
+        token             = "token",
+        handler           = app._handle_inbound_event,
+        trusted_tls_proxy = True,
     )
     events: list[str] = []
     current.stop = AsyncMock(side_effect=lambda: events.append("old.stop"))
@@ -284,24 +284,24 @@ async def test_overlapping_candidate_failure_restores_current(temp_app_root: Pat
 
 @pytest.mark.asyncio
 async def test_overlapping_candidate_and_restore_failure_clears_current(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
+    app     = XiaoQingApp(temp_app_root)
     current = InboundManager(
-        inbound_http_base="http://127.0.0.1:12000",
-        inbound_ws_uri="",
-        token="token",
-        handler=app._handle_inbound_event,
+        inbound_http_base = "http://127.0.0.1:12000",
+        inbound_ws_uri    = "",
+        token             = "token",
+        handler           = app._handle_inbound_event,
     )
     desired = InboundManager(
-        inbound_http_base="http://127.0.0.1:12000",
-        inbound_ws_uri="",
-        token="token",
-        handler=app._handle_inbound_event,
-        trusted_tls_proxy=True,
+        inbound_http_base = "http://127.0.0.1:12000",
+        inbound_ws_uri    = "",
+        token             = "token",
+        handler           = app._handle_inbound_event,
+        trusted_tls_proxy = True,
     )
     current.stop = AsyncMock()
     current.start = AsyncMock(side_effect=OSError("restore failed"))
     desired.start = AsyncMock(side_effect=OSError("candidate failed"))
-    desired.stop = AsyncMock()
+    desired.stop        = AsyncMock()
     app.inbound_manager = current
 
     with (
@@ -322,25 +322,25 @@ async def test_restore_fatal_and_cleanup_failure_remain_owned_until_stop_retry(
     class RestoreFatal(BaseException):
         pass
 
-    app = XiaoQingApp(temp_app_root)
+    app     = XiaoQingApp(temp_app_root)
     current = InboundManager(
-        inbound_http_base="http://127.0.0.1:12000",
-        inbound_ws_uri="",
-        token="token",
-        handler=app._handle_inbound_event,
+        inbound_http_base = "http://127.0.0.1:12000",
+        inbound_ws_uri    = "",
+        token             = "token",
+        handler           = app._handle_inbound_event,
     )
     desired = InboundManager(
-        inbound_http_base="http://127.0.0.1:12000",
-        inbound_ws_uri="",
-        token="token",
-        handler=app._handle_inbound_event,
-        trusted_tls_proxy=True,
+        inbound_http_base = "http://127.0.0.1:12000",
+        inbound_ws_uri    = "",
+        token             = "token",
+        handler           = app._handle_inbound_event,
+        trusted_tls_proxy = True,
     )
     fatal = RestoreFatal("restore fatal")
     current.stop = AsyncMock(side_effect=[None, RuntimeError("old cleanup failed"), None])
     current.start = AsyncMock(side_effect=fatal)
     desired.start = AsyncMock(side_effect=OSError("candidate failed"))
-    desired.stop = AsyncMock()
+    desired.stop        = AsyncMock()
     app.inbound_manager = current
 
     with patch("core.app_ingress.InboundManager.from_config", return_value=desired):
@@ -367,23 +367,23 @@ async def test_inbound_candidate_fatal_is_task_safe_and_keeps_current(temp_app_r
     class CandidateFatal(BaseException):
         pass
 
-    app = XiaoQingApp(temp_app_root)
+    app     = XiaoQingApp(temp_app_root)
     current = InboundManager(
-        inbound_http_base="http://127.0.0.1:12000",
-        inbound_ws_uri="",
-        token="token",
-        handler=app._handle_inbound_event,
+        inbound_http_base = "http://127.0.0.1:12000",
+        inbound_ws_uri    = "",
+        token             = "token",
+        handler           = app._handle_inbound_event,
     )
     desired = InboundManager(
-        inbound_http_base="http://127.0.0.1:12001",
-        inbound_ws_uri="",
-        token="token",
-        handler=app._handle_inbound_event,
+        inbound_http_base = "http://127.0.0.1:12001",
+        inbound_ws_uri    = "",
+        token             = "token",
+        handler           = app._handle_inbound_event,
     )
-    fatal = CandidateFatal("candidate fatal")
+    fatal        = CandidateFatal("candidate fatal")
     current.stop = AsyncMock()
     desired.start = AsyncMock(side_effect=fatal)
-    desired.stop = AsyncMock()
+    desired.stop        = AsyncMock()
     app.inbound_manager = current
 
     with patch("core.app_ingress.InboundManager.from_config", return_value=desired):
@@ -400,25 +400,25 @@ async def test_inbound_candidate_fatal_is_task_safe_and_keeps_current(temp_app_r
 
 @pytest.mark.asyncio
 async def test_inbound_reconcile_cancellation_finishes_rollback(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
+    app     = XiaoQingApp(temp_app_root)
     current = InboundManager(
-        inbound_http_base="http://127.0.0.1:12000",
-        inbound_ws_uri="",
-        token="token",
-        handler=app._handle_inbound_event,
+        inbound_http_base = "http://127.0.0.1:12000",
+        inbound_ws_uri    = "",
+        token             = "token",
+        handler           = app._handle_inbound_event,
     )
     desired = InboundManager(
-        inbound_http_base="http://127.0.0.1:12000",
-        inbound_ws_uri="",
-        token="token",
-        handler=app._handle_inbound_event,
-        trusted_tls_proxy=True,
+        inbound_http_base = "http://127.0.0.1:12000",
+        inbound_ws_uri    = "",
+        token             = "token",
+        handler           = app._handle_inbound_event,
+        trusted_tls_proxy = True,
     )
-    entered = asyncio.Event()
-    blocker = asyncio.Event()
-    current.stop = AsyncMock()
+    entered       = asyncio.Event()
+    blocker       = asyncio.Event()
+    current.stop  = AsyncMock()
     current.start = AsyncMock()
-    desired.stop = AsyncMock()
+    desired.stop  = AsyncMock()
 
     async def block_candidate() -> None:
         entered.set()
@@ -442,23 +442,23 @@ async def test_inbound_reconcile_cancellation_finishes_rollback(temp_app_root: P
 
 @pytest.mark.asyncio
 async def test_repeated_cancellation_during_restore_wins_after_rollback(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
+    app     = XiaoQingApp(temp_app_root)
     current = InboundManager(
-        inbound_http_base="http://127.0.0.1:12000",
-        inbound_ws_uri="",
-        token="token",
-        handler=app._handle_inbound_event,
+        inbound_http_base = "http://127.0.0.1:12000",
+        inbound_ws_uri    = "",
+        token             = "token",
+        handler           = app._handle_inbound_event,
     )
     desired = InboundManager(
-        inbound_http_base="http://127.0.0.1:12000",
-        inbound_ws_uri="",
-        token="token",
-        handler=app._handle_inbound_event,
-        trusted_tls_proxy=True,
+        inbound_http_base = "http://127.0.0.1:12000",
+        inbound_ws_uri    = "",
+        token             = "token",
+        handler           = app._handle_inbound_event,
+        trusted_tls_proxy = True,
     )
     restore_entered = asyncio.Event()
     restore_release = asyncio.Event()
-    current.stop = AsyncMock()
+    current.stop    = AsyncMock()
 
     async def restore_current() -> None:
         restore_entered.set()
@@ -466,7 +466,7 @@ async def test_repeated_cancellation_during_restore_wins_after_rollback(temp_app
 
     current.start = AsyncMock(side_effect=restore_current)
     desired.start = AsyncMock(side_effect=OSError("candidate failed"))
-    desired.stop = AsyncMock()
+    desired.stop        = AsyncMock()
     app.inbound_manager = current
 
     with patch("core.app_ingress.InboundManager.from_config", return_value=desired):

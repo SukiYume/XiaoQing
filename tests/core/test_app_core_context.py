@@ -14,7 +14,7 @@ from tests.helpers.app_test_support import (
 )
 
 mock_dependencies = _fixture_support.mock_dependencies
-temp_app_root = _fixture_support.temp_app_root
+temp_app_root     = _fixture_support.temp_app_root
 
 
 @pytest.mark.unit
@@ -22,7 +22,7 @@ def test_app_init_with_minimal_args(temp_app_root: Path):
     """Test app initialization with minimal arguments"""
     with patch("core.app.setup_logging") as mock_setup:
         mock_setup.return_value = MagicMock()
-        app = XiaoQingApp(temp_app_root)
+        app                     = XiaoQingApp(temp_app_root)
 
         assert app.root == temp_app_root
     assert app.config_manager is not None
@@ -44,11 +44,11 @@ def test_app_init_with_dependencies(temp_app_root: Path, mock_dependencies):
     """Test app initialization with injected dependencies"""
     app = XiaoQingApp(
         temp_app_root,
-        router=mock_dependencies["router"],
-        plugin_manager=mock_dependencies["plugin_manager"],
-        dispatcher=mock_dependencies["dispatcher"],
-        scheduler=mock_dependencies["scheduler"],
-        session_manager=mock_dependencies["session_manager"],
+        router          = mock_dependencies["router"],
+        plugin_manager  = mock_dependencies["plugin_manager"],
+        dispatcher      = mock_dependencies["dispatcher"],
+        scheduler       = mock_dependencies["scheduler"],
+        session_manager = mock_dependencies["session_manager"],
     )
 
     assert app.router is mock_dependencies["router"]
@@ -209,17 +209,17 @@ def test_app_build_plugin_context(temp_app_root: Path):
     app = XiaoQingApp(temp_app_root)
 
     plugin_dir = Path("/test/plugin")
-    data_dir = Path("/test/data")
-    state = {"test": "value"}
+    data_dir   = Path("/test/data")
+    state      = {"test": "value"}
 
     context = app._build_plugin_context(
-        plugin_name="test_plugin",
-        plugin_dir=plugin_dir,
-        data_dir=data_dir,
-        state=state,
-        user_id=12345,
-        group_id=67890,
-        request_id="test-request-123",
+        plugin_name = "test_plugin",
+        plugin_dir  = plugin_dir,
+        data_dir    = data_dir,
+        state       = state,
+        user_id     = 12345,
+        group_id    = 67890,
+        request_id  = "test-request-123",
     )
 
     assert context.plugin_name == "test_plugin"
@@ -238,10 +238,10 @@ async def test_app_context_send_action(temp_app_root: Path):
     app = XiaoQingApp(temp_app_root)
 
     context = app._build_plugin_context(
-        plugin_name="test",
-        plugin_dir=Path("/test"),
-        data_dir=Path("/test"),
-        state={},
+        plugin_name = "test",
+        plugin_dir  = Path("/test"),
+        data_dir    = Path("/test"),
+        state       = {},
     )
 
     # Mock _send_action to track calls
@@ -274,8 +274,8 @@ def test_app_plugin_context_scopes_and_freezes_config_and_secrets(temp_app_root:
 def test_app_plugin_settings_views_are_cached_per_plugin_generation(temp_app_root: Path):
     from core.config import ConfigSnapshot
 
-    app = XiaoQingApp(temp_app_root)
-    first = app._plugin_settings_snapshot("alpha")
+    app      = XiaoQingApp(temp_app_root)
+    first    = app._plugin_settings_snapshot("alpha")
     repeated = app._plugin_settings_snapshot("alpha")
 
     assert repeated is first
@@ -287,9 +287,9 @@ def test_app_plugin_settings_views_are_cached_per_plugin_generation(temp_app_roo
     assert context.secrets is first.secrets
 
     next_generation = ConfigSnapshot(
-        config={"plugins": {"alpha": {"generation": "next"}}},
-        secrets={"plugins": {"alpha": {"generation": "next"}}},
-        revision=first.revision + 1,
+        config   = {"plugins": {"alpha": {"generation": "next"}}},
+        secrets  = {"plugins": {"alpha": {"generation": "next"}}},
+        revision = first.revision + 1,
     )
     refreshed = app._plugin_settings_snapshot("alpha", next_generation)
 
@@ -306,13 +306,13 @@ def test_app_plugin_context_rejects_non_mapping_plugin_namespaces(
 ):
     from core.config import ConfigSnapshot
 
-    app = XiaoQingApp(temp_app_root)
+    app                    = XiaoQingApp(temp_app_root)
     config_plugins: object = [] if malformed_namespace == "config" else {"alpha": {"enabled": True}}
     secret_plugins: object = [] if malformed_namespace == "secrets" else {"alpha": {"token": "a"}}
-    snapshot = ConfigSnapshot(
-        config={"plugins": config_plugins},
-        secrets={"plugins": secret_plugins},
-        revision=7,
+    snapshot               = ConfigSnapshot(
+        config   = {"plugins": config_plugins},
+        secrets  = {"plugins": secret_plugins},
+        revision = 7,
     )
 
     with patch.object(app.config_manager, "snapshot", return_value=snapshot):
@@ -323,7 +323,7 @@ def test_app_plugin_context_rejects_non_mapping_plugin_namespaces(
             {},
         )
 
-    expected_config = {} if malformed_namespace == "config" else {"enabled": True}
+    expected_config  = {} if malformed_namespace == "config" else {"enabled": True}
     expected_secrets = {} if malformed_namespace == "secrets" else {"token": "a"}
     assert context.config["plugins"] == {"alpha": expected_config}
     assert context.secrets["plugins"] == {"alpha": expected_secrets}
@@ -334,16 +334,16 @@ def test_app_plugin_context_initial_settings_share_one_generation(temp_app_root:
     """Initial config/secrets and later refreshes each come from one snapshot call."""
     from core.config import ConfigSnapshot
 
-    app = XiaoQingApp(temp_app_root)
+    app   = XiaoQingApp(temp_app_root)
     first = ConfigSnapshot(
-        config={"plugins": {"alpha": {"generation": "old-public"}}},
-        secrets={"plugins": {"alpha": {"generation": "old-private"}}},
-        revision=11,
+        config   = {"plugins": {"alpha": {"generation": "old-public"}}},
+        secrets  = {"plugins": {"alpha": {"generation": "old-private"}}},
+        revision = 11,
     )
     second = ConfigSnapshot(
-        config={"plugins": {"alpha": {"generation": "new-public"}}},
-        secrets={"plugins": {"alpha": {"generation": "new-private"}}},
-        revision=12,
+        config   = {"plugins": {"alpha": {"generation": "new-public"}}},
+        secrets  = {"plugins": {"alpha": {"generation": "new-private"}}},
+        revision = 12,
     )
 
     with patch.object(app.config_manager, "snapshot", side_effect=[first, second]) as reader:

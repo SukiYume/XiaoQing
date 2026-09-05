@@ -8,23 +8,25 @@ import math
 import random
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Protocol, cast
 
 from core.args import parse
 from core.interfaces import PluginSettingsSnapshot
+from core.lifecycle import DeferredCancellation, await_owned_task
 from core.plugin_base import ensure_dir as _core_ensure_dir
 from core.plugin_base import load_json as _core_load_json
+from core.plugin_base import run_sync
 from core.plugin_base import segments as _core_segments
 from core.plugin_base import write_json as _core_write_json
 from core.public_errors import public_error_message
 from core.public_errors import public_error_response as _core_public_error_response
 
-MessageSegment = dict[str, Any]
+MessageSegment  = dict[str, Any]
 MessageSegments = list[MessageSegment]
-OneBotEvent = dict[str, Any]
+OneBotEvent     = dict[str, Any]
 
 
 class _ChatReplyProvider(Protocol):
@@ -54,24 +56,24 @@ class Context(Protocol):
 # ──────────────────── Core 边界与运行常量 ────────────────────
 
 
-segments = cast(Callable[[object], MessageSegments], _core_segments)
-_ensure_dir = cast(Callable[[Path], None], _core_ensure_dir)
-_load_json = cast(Callable[[Path, object], object], _core_load_json)
-_write_json = cast(Callable[[Path, object], None], _core_write_json)
+segments               = cast(Callable[[object], MessageSegments], _core_segments)
+_ensure_dir            = cast(Callable[[Path], None], _core_ensure_dir)
+_load_json             = cast(Callable[[Path, object], object], _core_load_json)
+_write_json            = cast(Callable[[Path, object], None], _core_write_json)
 _public_error_response = cast(Callable[..., MessageSegments], _core_public_error_response)
 
 logger = logging.getLogger(__name__)
 
-MAX_QUESTIONS = 2_000
-MAX_ANSWERS_PER_QUESTION = 20
-MAX_QUESTION_LENGTH = 128
-MAX_ANSWER_LENGTH = 1_000
-MAX_AUDIT_ENTRIES = 5_000
-MAX_CUSTOM_RESPONSES = 200
+MAX_QUESTIONS              = 2_000
+MAX_ANSWERS_PER_QUESTION   = 20
+MAX_QUESTION_LENGTH        = 128
+MAX_ANSWER_LENGTH          = 1_000
+MAX_AUDIT_ENTRIES          = 5_000
+MAX_CUSTOM_RESPONSES       = 200
 MAX_RANDOM_RESPONSE_LENGTH = 1_000
-MAX_QA_REPLY_LENGTH = 2_800
-MAX_VOICE_TEXT_LENGTH = 3_000
-DEFAULT_VOICE_PROBABILITY = 0.2
+MAX_QA_REPLY_LENGTH        = 2_800
+MAX_VOICE_TEXT_LENGTH      = 3_000
+DEFAULT_VOICE_PROBABILITY  = 0.2
 
 DEFAULT_RESPONSES = (
     "叫我干嘛",
@@ -86,7 +88,7 @@ DEFAULT_RESPONSES = (
 )
 
 _HELP_ALIASES = {"help", "帮助", "?"}
-_HELP_TEXTS = {
+_HELP_TEXTS   = {
     "qa": (
         "💬 问答添加\n"
         "/记忆 <问题> <回答>\n"
@@ -142,7 +144,7 @@ def _normalize_responses(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     responses: list[str] = []
-    seen: set[str] = set()
+    seen: set[str]       = set()
     for item in value:
         if not isinstance(item, str):
             continue
@@ -210,7 +212,7 @@ def _normalize_answers(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     answers: list[str] = []
-    seen: set[str] = set()
+    seen: set[str]     = set()
     for item in value:
         if not isinstance(item, str):
             continue
@@ -269,7 +271,7 @@ def _write_qa_file(path: Path, data: Mapping[str, Sequence[str]]) -> None:
 
 
 def _read_audit_file(path: Path) -> list[dict[str, Any]]:
-    payload = _load_json(path, {})
+    payload     = _load_json(path, {})
     raw_entries = payload.get("entries") if isinstance(payload, Mapping) else None
     if not isinstance(raw_entries, list):
         return []
@@ -298,8 +300,8 @@ async def _record_qa_audit(context: Context, operation: str, question: str) -> N
 
     try:
         snapshot = _audit_snapshot_for(context)
-        entry = {
-            "at": datetime.now(timezone.utc).isoformat(),
+        entry    = {
+            "at": datetime.now(UTC).isoformat(),
             "operation": operation,
             "scope": _qa_scope(context),
             "owner": _positive_id(getattr(context, "current_user_id", None)),
@@ -308,22 +310,33 @@ async def _record_qa_audit(context: Context, operation: str, question: str) -> N
         async with snapshot.lock:
             if snapshot.entries is None:
                 snapshot.entries = await asyncio.to_thread(_read_audit_file, snapshot.path)
-            keep = max(0, MAX_AUDIT_ENTRIES - 1)
+            keep    = max(0, MAX_AUDIT_ENTRIES - 1)
             entries = snapshot.entries[-keep:] if keep else []
             entries = [*entries, entry]
-            await asyncio.to_thread(
-                _write_json,
-                snapshot.path,
-                {"entries": entries},
+            await _commit_snapshot(
+                lambda: _write_json(snapshot.path, {"entries": entries}),
+                lambda: setattr(snapshot, "entries", entries),
             )
-            snapshot.entries = entries
     except Exception as exc:
         public_error_message(
             context,
             exc,
-            logger=logger,
-            component="smalltalk.qa_audit",
+            logger    = logger,
+            component = "smalltalk.qa_audit",
         )
+
+
+async def _commit_snapshot(write: Callable[[], None], publish: Callable[[], None]) -> None:
+    """磁盘提交与缓存发布共用锁生命周期，取消等待真实事务完成后传播。"""
+
+    async def commit() -> None:
+        await run_sync(write)
+        publish()
+
+    task         = asyncio.create_task(commit())
+    cancellation = DeferredCancellation()
+    await await_owned_task(task, cancellation)
+    cancellation.raise_if_requested()
 
 
 async def get_qa_answer(context: Context, question: str) -> str | None:
@@ -342,17 +355,17 @@ def _bounded_lines(header: str, lines: Sequence[str]) -> str:
     """在 QQ 单条文本预算内拼接列表，并报告省略数量。"""
 
     output = header
-    shown = 0
+    shown  = 0
     for line in lines:
         candidate = f"{output}\n{line}"
         remaining = len(lines) - shown - 1
-        suffix = f"\n… 还有 {remaining} 条未显示" if remaining else ""
+        suffix    = f"\n… 还有 {remaining} 条未显示" if remaining else ""
         if len(candidate) + len(suffix) > MAX_QA_REPLY_LENGTH:
             break
         output = candidate
         shown += 1
     omitted = len(lines) - shown
-    suffix = f"\n… 还有 {omitted} 条未显示" if omitted else ""
+    suffix  = f"\n… 还有 {omitted} 条未显示" if omitted else ""
     return output + suffix
 
 
@@ -371,7 +384,7 @@ async def _add_qa(context: Context, args: str) -> MessageSegments:
     snapshot = _qa_snapshot_for(context)
     async with snapshot.lock:
         current = await _qa_data_locked(snapshot)
-        data = {item: list(answers) for item, answers in current.items()}
+        data    = {item: list(answers) for item, answers in current.items()}
         answers = data.get(question)
         if answers is not None:
             if answer in answers:
@@ -383,8 +396,10 @@ async def _add_qa(context: Context, args: str) -> MessageSegments:
             if len(data) == MAX_QUESTIONS:
                 return segments("当前会话的问答库已达上限。")
             data[question] = [answer]
-        await asyncio.to_thread(_write_qa_file, snapshot.path, data)
-        snapshot.data = data
+        await _commit_snapshot(
+            lambda: _write_qa_file(snapshot.path, data),
+            lambda: setattr(snapshot, "data", data),
+        )
     await _record_qa_audit(context, "add", question)
     return segments("对话添加成功了！")
 
@@ -392,7 +407,7 @@ async def _add_qa(context: Context, args: str) -> MessageSegments:
 async def _list_qa(context: Context, args: str) -> MessageSegments:
     """列出当前会话的问题，或精确查询一个问题。"""
 
-    data = await _load_qa(context)
+    data     = await _load_qa(context)
     question = args.strip()
     if question:
         answers = data.get(question)
@@ -411,14 +426,14 @@ async def _remove_qa(context: Context, args: str) -> MessageSegments:
     if not parts:
         return segments("要删除哪个对话？格式: 删除对话 问题 [回答]")
     question = parts[0].strip()
-    answer = parts[1].strip() if len(parts) > 1 else ""
+    answer   = parts[1].strip() if len(parts) > 1 else ""
 
     snapshot = _qa_snapshot_for(context)
     operation: str
     result: MessageSegments
     async with snapshot.lock:
         current = await _qa_data_locked(snapshot)
-        data = {item: list(answers) for item, answers in current.items()}
+        data    = {item: list(answers) for item, answers in current.items()}
         answers = data.get(question)
         if answers is None:
             return segments("似乎没有这个对话呢")
@@ -429,13 +444,15 @@ async def _remove_qa(context: Context, args: str) -> MessageSegments:
             if not answers:
                 del data[question]
             operation = "remove_answer"
-            result = segments(f"对话“{question}”的指定回答已删除。")
+            result    = segments(f"对话“{question}”的指定回答已删除。")
         else:
             removed_count = len(data.pop(question))
-            operation = "remove_question"
-            result = segments(f"对话“{question}”及其 {removed_count} 个回答已删除。")
-        await asyncio.to_thread(_write_qa_file, snapshot.path, data)
-        snapshot.data = data
+            operation     = "remove_question"
+            result        = segments(f"对话“{question}”及其 {removed_count} 个回答已删除。")
+        await _commit_snapshot(
+            lambda: _write_qa_file(snapshot.path, data),
+            lambda: setattr(snapshot, "data", data),
+        )
     await _record_qa_audit(context, operation, question)
     return result
 
@@ -468,8 +485,8 @@ async def handle(
         return _public_error_response(
             context,
             exc,
-            logger=logger,
-            component="smalltalk.handle",
+            logger    = logger,
+            component = "smalltalk.handle",
         )
 
 
@@ -480,7 +497,7 @@ def _voice_probability(context: Context) -> float:
     """读取 0..1 概率；缺省沿用 20%，畸形显式配置则安全禁用。"""
 
     plugin_config = context.get_settings_snapshot().plugin_config("smalltalk")
-    value = plugin_config.get("voice_probability", _MISSING)
+    value         = plugin_config.get("voice_probability", _MISSING)
     if value is _MISSING:
         return DEFAULT_VOICE_PROBABILITY
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -503,7 +520,7 @@ def _voice_text(reply: Sequence[MessageSegment]) -> str | None:
     """提取有界纯文本；内容过长时不向语音 provider 提交截断文本。"""
 
     parts: list[str] = []
-    length = 0
+    length           = 0
     for segment in reply:
         if segment.get("type") != "text":
             return None
@@ -529,7 +546,7 @@ async def _maybe_convert_to_voice(
     if probability <= 0.0 or random.random() >= probability:
         return reply
     capabilities = getattr(context, "capabilities", None)
-    provider = getattr(capabilities, "voice_synthesis", None)
+    provider     = getattr(capabilities, "voice_synthesis", None)
     if provider is None:
         logger.debug("Voice synthesis provider unavailable")
         return reply
@@ -545,8 +562,8 @@ async def _maybe_convert_to_voice(
         public_error_message(
             context,
             exc,
-            logger=logger,
-            component="smalltalk.voice",
+            logger    = logger,
+            component = "smalltalk.voice",
         )
     return reply
 
@@ -556,7 +573,7 @@ async def _call_chat_api(text_content: str, context: Context) -> MessageSegments
 
     try:
         capabilities = getattr(context, "capabilities", None)
-        provider = getattr(capabilities, "chat_reply", None)
+        provider     = getattr(capabilities, "chat_reply", None)
         if provider is None:
             raise RuntimeError("chat reply provider unavailable")
         actor = {
@@ -571,8 +588,8 @@ async def _call_chat_api(text_content: str, context: Context) -> MessageSegments
         public_error_message(
             context,
             exc,
-            logger=logger,
-            component="smalltalk.chat",
+            logger    = logger,
+            component = "smalltalk.chat",
         )
         return segments("暂时无法回复，请稍后再试~")
 
@@ -587,5 +604,5 @@ async def handle_smalltalk(
     if not text_content.strip():
         return []
     answer = await get_qa_answer(context, text_content)
-    reply = segments(answer) if answer is not None else await _call_chat_api(text_content, context)
+    reply  = segments(answer) if answer is not None else await _call_chat_api(text_content, context)
     return await _maybe_convert_to_voice(reply, context)

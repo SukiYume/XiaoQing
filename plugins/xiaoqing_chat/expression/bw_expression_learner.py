@@ -92,13 +92,13 @@ def _similarity(a: str, b: str) -> float:
 def _build_dialogue(
     messages: Sequence[StoredMessage], *, max_lines: int = 60
 ) -> tuple[str, frozenset[str]]:
-    lines: list[str] = []
+    lines: list[str]     = []
     source_ids: set[str] = set()
     for msg in messages[-max_lines:]:
         if msg.role == "assistant":
             continue
-        lid = getattr(msg, "local_id", "") or ""
-        sid = lid or f"t{int(msg.ts or 0)}"
+        lid  = getattr(msg, "local_id", "") or ""
+        sid  = lid or f"t{int(msg.ts or 0)}"
         role = "对方"
         name = msg.name or "用户"
         text = render_stored_message(msg)
@@ -131,21 +131,21 @@ async def learn_from_messages(
 
     prompt = _LEARN_PROMPT.format(dialogue=dialogue)
     resp, _ = await chat_completions_raw_with_fallback_paths(
-        secrets=secrets,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=min(0.7, float(temperature)),
-        top_p=float(top_p),
-        max_tokens=min(900, max(500, int(max_tokens))),
-        timeout_seconds=float(timeout_seconds),
-        max_retry=int(max_retry),
-        retry_interval_seconds=float(retry_interval_seconds),
+        secrets                = secrets,
+        messages               = [{"role": "user", "content": prompt}],
+        temperature            = min(0.7, float(temperature)),
+        top_p                  = float(top_p),
+        max_tokens             = min(900, max(500, int(max_tokens))),
+        timeout_seconds        = float(timeout_seconds),
+        max_retry              = int(max_retry),
+        retry_interval_seconds = float(retry_interval_seconds),
     )
     content = (((resp.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
     arr = parse_first_json_array(str(content))
     out: list[LearnedExpression] = []
     for it in arr:
         situation = str(it.get("situation", "") or "").strip()
-        style = str(it.get("style", "") or "").strip()
+        style     = str(it.get("style", "") or "").strip()
         source_id = str(it.get("source_id", "") or "").strip()
         if not situation or not style or source_id not in source_ids:
             continue
@@ -175,18 +175,18 @@ async def single_expression_check(
         return False, False, "", "", ""
 
     persona_text = compose_persona_identity(personality.identity, bot_name)
-    prompt = _SINGLE_CHECK_PROMPT.format(
+    prompt       = _SINGLE_CHECK_PROMPT.format(
         persona_text=persona_text, situation=situation.strip(), style=style.strip()
     )
     resp, _ = await chat_completions_raw_with_fallback_paths(
-        secrets=secrets,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=min(0.4, float(temperature)),
-        top_p=float(top_p),
-        max_tokens=min(400, int(max_tokens)),
-        timeout_seconds=float(timeout_seconds),
-        max_retry=int(max_retry),
-        retry_interval_seconds=float(retry_interval_seconds),
+        secrets                = secrets,
+        messages               = [{"role": "user", "content": prompt}],
+        temperature            = min(0.4, float(temperature)),
+        top_p                  = float(top_p),
+        max_tokens             = min(400, int(max_tokens)),
+        timeout_seconds        = float(timeout_seconds),
+        max_retry              = int(max_retry),
+        retry_interval_seconds = float(retry_interval_seconds),
     )
     content = (((resp.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
     ok, obj = get_items_from_json(
@@ -194,9 +194,8 @@ async def single_expression_check(
         "checked",
         "rejected",
         "reason",
-        "modified_situation",
-        "modified_style",
-        default_values={
+        optional_items = ("modified_situation", "modified_style"),
+        default_values = {
             "checked": False,
             "rejected": False,
             "reason": "",
@@ -207,13 +206,13 @@ async def single_expression_check(
     )
     if not ok or not isinstance(obj, dict):
         return False, False, "", "", ""
-    checked = strict_json_bool(obj.get("checked"))
+    checked  = strict_json_bool(obj.get("checked"))
     rejected = strict_json_bool(obj.get("rejected"))
     if checked is None or rejected is None:
         return False, False, "", "", ""
     reason = str(obj.get("reason", "") or "").strip()
-    ms = str(obj.get("modified_situation", "") or "").strip()
-    mt = str(obj.get("modified_style", "") or "").strip()
+    ms     = str(obj.get("modified_situation", "") or "").strip()
+    mt     = str(obj.get("modified_style", "") or "").strip()
     return checked, rejected, reason, ms, mt
 
 
@@ -223,7 +222,7 @@ async def upsert_learned(
     chat_id: str,
     learned: Sequence[LearnedExpression],
     similarity_threshold: float = 0.72,
-    max_store: int = 2000,
+    max_store: int              = 2000,
     self_reflect: bool,
     secrets: dict[str, Any],
     bot_name: str,
@@ -235,11 +234,11 @@ async def upsert_learned(
     max_retry: int,
     retry_interval_seconds: float,
 ) -> int:
-    items = store.load()
-    now = time.time()
-    changed = 0
+    items                                        = store.load()
+    now                                          = time.time()
+    changed                                      = 0
     changed_records: dict[str, ExpressionRecord] = {}
-    threshold = float(similarity_threshold)
+    threshold                                    = float(similarity_threshold)
 
     for it in learned:
         sit = it.situation.strip()
@@ -247,8 +246,8 @@ async def upsert_learned(
         if not sit or not sty:
             continue
         best: ExpressionRecord | None = None
-        best_score = 0.0
-        rejected_match = False
+        best_score                    = 0.0
+        rejected_match                = False
         for ex in items:
             if ex.chat_id != chat_id:
                 continue
@@ -257,7 +256,7 @@ async def upsert_learned(
                 rejected_match = rejected_match or score >= threshold
                 continue
             if score > best_score:
-                best = ex
+                best       = ex
                 best_score = score
         if rejected_match:
             continue
@@ -266,24 +265,24 @@ async def upsert_learned(
                 best.content_list.append(sty)
             best.count += 1
             best.last_active_time = now
-            best.checked = False
-            best.rejected = False
-            best.modified_by = "ai"
+            best.checked          = False
+            best.rejected         = False
+            best.modified_by      = "ai"
             changed += 1
             changed_records[best.expression_id] = best
             continue
 
         rec = ExpressionRecord(
-            expression_id=_mk_id(chat_id, sit, sty),
-            chat_id=chat_id,
-            situation=sit,
-            style=sty,
-            content_list=[sty],
-            count=1,
-            last_active_time=now,
-            checked=False,
-            rejected=False,
-            modified_by="ai",
+            expression_id    = _mk_id(chat_id, sit, sty),
+            chat_id          = chat_id,
+            situation        = sit,
+            style            = sty,
+            content_list     = [sty],
+            count            = 1,
+            last_active_time = now,
+            checked          = False,
+            rejected         = False,
+            modified_by      = "ai",
         )
         items.append(rec)
         changed += 1
@@ -298,21 +297,21 @@ async def upsert_learned(
             if ex.checked or ex.rejected:
                 continue
             checked, rejected, _reason, ms, mt = await single_expression_check(
-                secrets=secrets,
-                bot_name=bot_name,
-                personality=personality,
-                situation=ex.situation,
-                style=ex.style,
-                temperature=temperature,
-                top_p=top_p,
-                max_tokens=max_tokens,
-                timeout_seconds=timeout_seconds,
-                max_retry=max_retry,
-                retry_interval_seconds=retry_interval_seconds,
+                secrets                = secrets,
+                bot_name               = bot_name,
+                personality            = personality,
+                situation              = ex.situation,
+                style                  = ex.style,
+                temperature            = temperature,
+                top_p                  = top_p,
+                max_tokens             = max_tokens,
+                timeout_seconds        = timeout_seconds,
+                max_retry              = max_retry,
+                retry_interval_seconds = retry_interval_seconds,
             )
             if rejected:
-                ex.checked = False
-                ex.rejected = True
+                ex.checked     = False
+                ex.rejected    = True
                 ex.modified_by = "ai"
                 continue
             if checked:
@@ -320,12 +319,12 @@ async def upsert_learned(
                     ex.situation = ms[:80].strip()
                 if mt:
                     ex.style = mt[:80].strip()
-                ex.checked = True
-                ex.rejected = False
+                ex.checked     = True
+                ex.rejected    = False
                 ex.modified_by = "ai"
 
     scoped = [item for item in items if item.chat_id == chat_id]
-    other = [item for item in items if item.chat_id != chat_id]
+    other  = [item for item in items if item.chat_id != chat_id]
     scoped.sort(key=lambda item: (item.last_active_time, item.count), reverse=True)
     limit = max(0, int(max_store))
     items = other + (scoped[:limit] if limit else [])

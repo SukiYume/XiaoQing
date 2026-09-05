@@ -45,7 +45,7 @@ def test_codex_manifest_restricts_every_command_to_admins() -> None:
 
 def test_codex_config_rejects_implicit_coercions_and_clamps_resources(tmp_path: Path) -> None:
     context = FakeContext(tmp_path)
-    raw = context.config["plugins"]["codex"]
+    raw     = context.config["plugins"]["codex"]
     raw.update(
         {
             "allowed_cwd_roots": [str(tmp_path), 123, "", str(tmp_path)],
@@ -84,7 +84,7 @@ def test_codex_config_rejects_implicit_coercions_and_clamps_resources(tmp_path: 
 
 
 def test_codex_unconfigured_workspace_defaults_to_plugin_data_dir(tmp_path: Path) -> None:
-    context = FakeContext(tmp_path)
+    context        = FakeContext(tmp_path)
     context.config = {"plugins": {"codex": {}}}
 
     config = load_plugin_config(context)
@@ -99,7 +99,7 @@ def test_danger_full_access_emits_a_startup_warning(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    context = FakeContext(tmp_path)
+    context                                       = FakeContext(tmp_path)
     context.config["plugins"]["codex"]["sandbox"] = "danger-full-access"
 
     with caplog.at_level("WARNING", logger="plugins.codex.manager"):
@@ -109,11 +109,11 @@ def test_danger_full_access_emits_a_startup_warning(
 
 
 def test_default_cwd_is_not_created_before_allowed_root_validation(tmp_path: Path) -> None:
-    context = FakeContext(tmp_path)
-    outside = tmp_path / "outside" / "new-default"
-    safe_root = tmp_path / "safe"
-    raw = context.config["plugins"]["codex"]
-    raw["default_cwd"] = str(outside)
+    context                  = FakeContext(tmp_path)
+    outside                  = tmp_path / "outside" / "new-default"
+    safe_root                = tmp_path / "safe"
+    raw                      = context.config["plugins"]["codex"]
+    raw["default_cwd"]       = str(outside)
     raw["allowed_cwd_roots"] = [str(safe_root)]
 
     with pytest.raises(CwdError, match="不在允许范围"):
@@ -140,14 +140,14 @@ async def test_help_does_not_construct_manager(
 async def test_create_session_uses_default_cwd_and_creates_directory(tmp_path: Path):
     from core.config import ConfigSnapshot
 
-    context = FakeContext(tmp_path)
+    context  = FakeContext(tmp_path)
     snapshot = ConfigSnapshot(
-        config=context.config,
-        secrets={"plugins": {"codex": {"max_parallel_jobs": 7, "job_timeout_seconds": 777}}},
+        config  = context.config,
+        secrets = {"plugins": {"codex": {"max_parallel_jobs": 7, "job_timeout_seconds": 777}}},
     )
-    context.config = snapshot.config
+    context.config  = snapshot.config
     context.secrets = snapshot.secrets
-    loaded = load_plugin_config(context)
+    loaded          = load_plugin_config(context)
     assert loaded.max_parallel_jobs == 7
     assert loaded.job_timeout_seconds == 777
     runner = FakeRunner()
@@ -163,7 +163,7 @@ async def test_create_session_uses_default_cwd_and_creates_directory(tmp_path: P
 @pytest.mark.asyncio
 async def test_create_session_rejects_cwd_outside_allowed_roots(tmp_path: Path):
     context = FakeContext(tmp_path)
-    runner = FakeRunner()
+    runner  = FakeRunner()
     _install_fake_manager(context, runner)
     outside = tmp_path.parent / "outside-codex-test"
     outside.mkdir(exist_ok=True)
@@ -177,10 +177,10 @@ async def test_create_session_rejects_cwd_outside_allowed_roots(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_command_parser_rejects_unknown_flags_values_and_ambiguous_ids(tmp_path: Path):
-    context = FakeContext(tmp_path)
-    context.current_user_id = 42
+    context                  = FakeContext(tmp_path)
+    context.current_user_id  = 42
     context.current_group_id = 43
-    manager = _install_fake_manager(context, FakeRunner())
+    manager                  = _install_fake_manager(context, FakeRunner())
 
     await codex_main.handle(
         "codex",
@@ -189,9 +189,9 @@ async def test_command_parser_rejects_unknown_flags_values_and_ambiguous_ids(tmp
         context,
     )
     unknown = await codex_main.handle("codex", "delete aaa --forceful", {}, context)
-    valued = await codex_main.handle("codex", "delete aaa --force=maybe", {}, context)
-    bad_id = await codex_main.handle("codex", "cancel aaa +1", {}, context)
-    extra = await codex_main.handle("codex", "list extra", {}, context)
+    valued  = await codex_main.handle("codex", "delete aaa --force=maybe", {}, context)
+    bad_id  = await codex_main.handle("codex", "cancel aaa +1", {}, context)
+    extra   = await codex_main.handle("codex", "list extra", {}, context)
 
     assert manager.sessions["aaa"].owner_user_id == 42
     assert manager.sessions["aaa"].target_group_id == 43
@@ -212,9 +212,9 @@ async def test_prompt_limit_is_enforced_at_internal_queue_boundary(tmp_path: Pat
     message = await manager.enqueue(
         "aaa",
         "x" * 1_001,
-        user_id=1,
-        group_id=None,
-        context=context,
+        user_id  = 1,
+        group_id = None,
+        context  = context,
     )
 
     assert "超过 1000 字符上限" in message
@@ -229,7 +229,7 @@ async def test_enqueue_measures_disk_outside_event_loop_and_manager_lock(
     context = FakeContext(tmp_path)
     manager = _install_fake_manager(context, FakeRunner())
     await manager.create_session("aaa", None, user_id=1, group_id=None)
-    event_loop_thread = threading.get_ident()
+    event_loop_thread                    = threading.get_ident()
     observations: list[tuple[int, bool]] = []
 
     def measure_disk(**_kwargs: object) -> int:
@@ -251,7 +251,7 @@ async def test_enqueue_history_failure_rolls_back_without_orphan_job(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context = FakeContext(tmp_path)
-    runner = FakeRunner()
+    runner  = FakeRunner()
     manager = _install_fake_manager(context, runner)
     await manager.create_session("aaa", None, user_id=1, group_id=None)
     original_append_history = manager._append_history
@@ -265,9 +265,9 @@ async def test_enqueue_history_failure_rolls_back_without_orphan_job(
     response = await manager.enqueue(
         "aaa",
         "must not run",
-        user_id=1,
-        group_id=None,
-        context=context,
+        user_id  = 1,
+        group_id = None,
+        context  = context,
     )
 
     assert "未加入执行队列" in response
@@ -302,9 +302,9 @@ async def test_enqueue_state_save_failure_never_publishes_job(
     response = await manager.enqueue(
         "aaa",
         "must not run",
-        user_id=1,
-        group_id=None,
-        context=context,
+        user_id  = 1,
+        group_id = None,
+        context  = context,
     )
     monkeypatch.setattr(manager, "_save", original_save)
 
@@ -318,7 +318,7 @@ async def test_enqueue_state_save_failure_never_publishes_job(
 @pytest.mark.asyncio
 async def test_same_label_queue_runs_serially_and_sends_results(tmp_path: Path):
     context = FakeContext(tmp_path, max_parallel_jobs=2)
-    runner = FakeRunner()
+    runner  = FakeRunner()
     manager = _install_fake_manager(context, runner)
 
     await codex_main.handle("codex", "create aaa", {"user_id": 1, "group_id": 2}, context)
@@ -363,7 +363,7 @@ async def test_private_job_result_stays_private_when_session_created_in_group(tm
 @pytest.mark.asyncio
 async def test_different_labels_can_run_in_parallel(tmp_path: Path):
     context = FakeContext(tmp_path, max_parallel_jobs=2)
-    runner = FakeRunner()
+    runner  = FakeRunner()
     manager = _install_fake_manager(context, runner)
 
     await codex_main.handle("codex", "create aaa", {"user_id": 1, "group_id": 2}, context)
@@ -382,7 +382,7 @@ async def test_different_labels_can_run_in_parallel(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_refresh_failure_after_permit_acquire_releases_capacity(tmp_path: Path) -> None:
     context = FakeContext(tmp_path, max_parallel_jobs=1)
-    runner = FakeRunner()
+    runner  = FakeRunner()
     manager = _install_fake_manager(context, runner)
     await manager.create_session("aaa", None, user_id=1, group_id=None)
     refresh_calls = 0
@@ -413,7 +413,7 @@ async def test_artifact_directory_failure_cannot_leave_claimed_job_running(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context = FakeContext(tmp_path)
-    runner = FakeRunner()
+    runner  = FakeRunner()
     manager = _install_fake_manager(context, runner)
     await manager.create_session("aaa", None, user_id=1, group_id=None)
     monkeypatch.setattr(
@@ -438,7 +438,7 @@ async def test_artifact_directory_failure_cannot_leave_claimed_job_running(
 async def test_delivery_failure_does_not_stop_same_label_queue(tmp_path: Path) -> None:
     context = FakeContext(tmp_path)
     context.send_action = AsyncMock(side_effect=[OSError("private delivery detail"), None])
-    runner = FakeRunner()
+    runner  = FakeRunner()
     manager = _install_fake_manager(context, runner)
     await manager.create_session("aaa", None, user_id=1, group_id=None)
 
@@ -468,9 +468,9 @@ async def test_cancel_while_waiting_for_global_slot_never_spawns(
         await manager.enqueue(
             "race",
             "must not spawn",
-            user_id=1,
-            group_id=2,
-            context=context,
+            user_id  = 1,
+            group_id = 2,
+            context  = context,
         )
         await _wait_until(lambda: "race" in manager.running)
         job = manager.running["race"]
@@ -498,9 +498,9 @@ async def test_cancel_during_spawn_waits_for_handoff_and_never_sends_prompt(
     context.default_cwd.mkdir(parents=True)
     manager = _install_actual_runner_manager(context)
     await manager.create_session("race", None, user_id=1, group_id=2)
-    process = _RaceProcess()
+    process       = _RaceProcess()
     spawn_started = asyncio.Event()
-    allow_spawn = asyncio.Event()
+    allow_spawn   = asyncio.Event()
 
     async def delayed_spawn(*_args, **_kwargs):
         spawn_started.set()
@@ -555,9 +555,9 @@ async def test_cancel_after_process_registration_but_before_prompt_commit(
     context.default_cwd.mkdir(parents=True)
     manager = _install_actual_runner_manager(context)
     await manager.create_session("race", None, user_id=1, group_id=2)
-    process = _RaceProcess()
-    before_prompt = asyncio.Event()
-    allow_prompt = asyncio.Event()
+    process            = _RaceProcess()
+    before_prompt      = asyncio.Event()
+    allow_prompt       = asyncio.Event()
     original_authorize = manager._authorize_job_prompt
 
     async def delayed_authorize(label, job):
@@ -629,7 +629,7 @@ async def test_spawn_failure_completes_handoff_and_terminal_state(
     manager = _install_actual_runner_manager(context)
     await manager.create_session("race", None, user_id=1, group_id=2)
     spawn_started = asyncio.Event()
-    fail_spawn = asyncio.Event()
+    fail_spawn    = asyncio.Event()
 
     async def failing_spawn(*_args, **_kwargs):
         spawn_started.set()
@@ -660,9 +660,9 @@ async def test_shutdown_during_spawn_uses_same_handoff_without_prompt(
     context.default_cwd.mkdir(parents=True)
     manager = _install_actual_runner_manager(context)
     await manager.create_session("race", None, user_id=1, group_id=2)
-    process = _RaceProcess()
+    process       = _RaceProcess()
     spawn_started = asyncio.Event()
-    allow_spawn = asyncio.Event()
+    allow_spawn   = asyncio.Event()
 
     async def delayed_spawn(*_args, **_kwargs):
         spawn_started.set()
@@ -694,7 +694,7 @@ async def test_spawn_timeout_is_bounded_and_finalizes_job(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    context = FakeContext(tmp_path)
+    context                                                     = FakeContext(tmp_path)
     context.config["plugins"]["codex"]["spawn_timeout_seconds"] = 1
     context.default_cwd.mkdir(parents=True)
     manager = _install_actual_runner_manager(context)
@@ -720,7 +720,7 @@ async def test_spawn_timeout_is_bounded_and_finalizes_job(
 
 @pytest.mark.asyncio
 async def test_result_is_not_truncated_by_plugin(tmp_path: Path):
-    context = FakeContext(tmp_path)
+    context   = FakeContext(tmp_path)
     long_text = "x" * 5000
     runner = FakeRunner(result_text=long_text)
     manager = _install_fake_manager(context, runner)
@@ -775,7 +775,7 @@ async def test_markdown_image_result_is_copied_and_sent(tmp_path: Path):
     await codex_main.handle("codex", "aaa draw a plot", {"user_id": 1, "group_id": 2}, context)
     await _wait_manager_idle(manager)
 
-    message = context.actions[-1]["params"]["message"]
+    message        = context.actions[-1]["params"]["message"]
     image_segments = [seg for seg in message if seg.get("type") == "image"]
     assert image_segments
     copied = context.data_dir / "session" / "aaa" / "images" / "job-0001-01.png"
@@ -810,10 +810,10 @@ def test_result_message_batches_enforce_qq_image_limit(tmp_path: Path):
     manager = _install_fake_manager(context, FakeRunner())
     artifacts = [
         CodexImageArtifact(
-            path=f"images/{index}.png",
-            absolute_path=str(tmp_path / f"{index}.png"),
-            source="artifact",
-            original_path=f"{index}.png",
+            path          = f"images/{index}.png",
+            absolute_path = str(tmp_path / f"{index}.png"),
+            source        = "artifact",
+            original_path = f"{index}.png",
         )
         for index in range(3)
     ]
@@ -864,7 +864,7 @@ async def test_long_text_with_image_is_split_before_image(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_arxiv_summary_auto_creates_astro_ph_and_runs(tmp_path: Path):
     context = FakeContext(tmp_path)
-    runner = FakeRunner(
+    runner  = FakeRunner(
         result_text=_valid_arxiv_summary(
             "2026-05-19",
             "https://arxiv.org/abs/2605.16917",
@@ -873,11 +873,11 @@ async def test_arxiv_summary_auto_creates_astro_ph_and_runs(tmp_path: Path):
     manager = _install_fake_manager(context, runner)
 
     result = await _arxiv_addon(manager).enqueue_or_replay(
-        date="2026-05-19",
-        links=["https://arxiv.org/abs/2605.16917"],
-        user_id=1,
-        group_id=2,
-        context=context,
+        date     = "2026-05-19",
+        links    = ["https://arxiv.org/abs/2605.16917"],
+        user_id  = 1,
+        group_id = 2,
+        context  = context,
     )
     await _wait_manager_idle(manager)
 

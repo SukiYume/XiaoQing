@@ -24,10 +24,10 @@ _PLAYER_PATTERN = r"[A-Za-z0-9_]{1,16}"
 class LogEventType(str, Enum):
     """插件会转发的日志事件类型。"""
 
-    CHAT = "chat"
-    JOIN = "join"
-    LEAVE = "leave"
-    DEATH = "death"
+    CHAT        = "chat"
+    JOIN        = "join"
+    LEAVE       = "leave"
+    DEATH       = "death"
     ADVANCEMENT = "advancement"
 
 
@@ -45,12 +45,12 @@ class LogBatch:
     """一次有界轮询的事件、丢弃统计和待提交游标。"""
 
     events: list[LogEvent]
-    matched_total: int = 0
-    dropped_events: int = 0
-    skipped_bytes: int = 0
+    matched_total: int        = 0
+    dropped_events: int       = 0
+    skipped_bytes: int        = 0
     skipped_lines: int | None = 0
     cursor_before: int | None = None
-    cursor_after: int | None = None
+    cursor_after: int | None  = None
     file_identity: str | None = None
 
 
@@ -60,7 +60,7 @@ class _ReadWindow:
     cursor_before: int
     cursor_after: int
     file_identity: str
-    skipped_bytes: int = 0
+    skipped_bytes: int        = 0
     skipped_lines: int | None = 0
 
 
@@ -70,7 +70,7 @@ class LogMonitor:
     LOG_PREFIX_PATTERN = re.compile(
         r"^\[\d{1,2}:\d{2}:\d{2}\] \[[^\]\r\n]+/INFO\]: (?P<body>[^\r\n]*)\Z"
     )
-    CHAT_PATTERN = re.compile(rf"^<(?P<player>{_PLAYER_PATTERN})> (?P<message>.+)\Z")
+    CHAT_PATTERN     = re.compile(rf"^<(?P<player>{_PLAYER_PATTERN})> (?P<message>.+)\Z")
     PRESENCE_PATTERN = re.compile(
         rf"^(?P<player>{_PLAYER_PATTERN}) (?P<action>joined|left) the game\Z"
     )
@@ -87,16 +87,16 @@ class LogMonitor:
         r"was skewered|was obliterated)(?: .*)?)\Z"
     )
 
-    MAX_READ_BYTES = 1024 * 1024
-    MAX_EVENTS_PER_CHECK = 1000
+    MAX_READ_BYTES              = 1024 * 1024
+    MAX_EVENTS_PER_CHECK        = 1000
     MAX_SKIPPED_LINE_SCAN_BYTES = 4 * 1024 * 1024
 
     def __init__(self, log_path: str, *, state_path: str | Path | None = None) -> None:
-        self.log_path = Path(log_path)
-        self.state_path = Path(state_path) if state_path is not None else None
-        self._last_position = 0
+        self.log_path                   = Path(log_path)
+        self.state_path                 = Path(state_path) if state_path is not None else None
+        self._last_position             = 0
         self._file_identity: str | None = None
-        self._initialized = False
+        self._initialized               = False
 
     @staticmethod
     def _identity(stat: os.stat_result) -> str:
@@ -141,14 +141,14 @@ class LogMonitor:
         try:
             with self.log_path.open("rb") as file:
                 stat = os.fstat(file.fileno())
-            file_identity = self._identity(stat)
+            file_identity  = self._identity(stat)
             saved_position = self._load_saved_position(
-                file_identity=file_identity,
-                current_size=stat.st_size,
+                file_identity = file_identity,
+                current_size  = stat.st_size,
             )
             self._last_position = stat.st_size if saved_position is None else saved_position
             self._file_identity = file_identity
-            self._initialized = True
+            self._initialized   = True
             logger.info(
                 "sensitive_audit operation=minecraft.log_monitor status=initialized "
                 "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s "
@@ -209,7 +209,7 @@ class LogMonitor:
     ) -> tuple[int, int, int | None]:
         if current_size - read_position <= self.MAX_READ_BYTES:
             return read_position, 0, 0
-        read_start = current_size - self.MAX_READ_BYTES
+        read_start    = current_size - self.MAX_READ_BYTES
         skipped_lines = self._count_skipped_lines(file, read_position, read_start)
         logger.warning(
             "Minecraft 日志积压超过 %d 字节，仅处理最新 tail",
@@ -229,7 +229,7 @@ class LogMonitor:
         file.seek(read_start - 1)
         if file.read(1) == b"\n":
             return content, 0
-        newline = content.find(b"\n")
+        newline   = content.find(b"\n")
         discarded = len(content) if newline < 0 else newline + 1
         return (b"" if newline < 0 else content[newline + 1 :]), discarded
 
@@ -264,15 +264,15 @@ class LogMonitor:
 
             read_start, skipped_bytes, skipped_lines = self._bounded_read_start(
                 file,
-                read_position=read_position,
-                current_size=current_size,
+                read_position = read_position,
+                current_size  = current_size,
             )
             file.seek(read_start)
             content = file.read(current_size - read_start)
             content, prefix_bytes = self._drop_partial_prefix(
                 file,
-                read_start=read_start,
-                content=content,
+                read_start = read_start,
+                content    = content,
             )
             if prefix_bytes:
                 skipped_bytes += prefix_bytes
@@ -302,7 +302,7 @@ class LogMonitor:
             events, matched_total = self._parse_events(window.content)
         except Exception as exc:
             self._initialized = False
-            path_audit = summarize_sensitive(str(self.log_path))
+            path_audit        = summarize_sensitive(str(self.log_path))
             logger.error(
                 "sensitive_audit operation=minecraft.log_poll status=failed "
                 "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s "
@@ -316,14 +316,14 @@ class LogMonitor:
             return LogBatch(events=[])
 
         return LogBatch(
-            events=events,
-            matched_total=matched_total,
-            dropped_events=max(0, matched_total - len(events)),
-            skipped_bytes=window.skipped_bytes,
-            skipped_lines=window.skipped_lines,
-            cursor_before=window.cursor_before,
-            cursor_after=window.cursor_after,
-            file_identity=window.file_identity,
+            events         = events,
+            matched_total  = matched_total,
+            dropped_events = max(0, matched_total - len(events)),
+            skipped_bytes  = window.skipped_bytes,
+            skipped_lines  = window.skipped_lines,
+            cursor_before  = window.cursor_before,
+            cursor_after   = window.cursor_after,
+            file_identity  = window.file_identity,
         )
 
     def commit(self, batch: LogBatch) -> bool:
@@ -340,7 +340,7 @@ class LogMonitor:
         self._persist_position(batch.cursor_after, batch.file_identity)
         self._last_position = batch.cursor_after
         self._file_identity = batch.file_identity
-        self._initialized = True
+        self._initialized   = True
         return True
 
     def _parse_events(self, content: bytes) -> tuple[list[LogEvent], int]:

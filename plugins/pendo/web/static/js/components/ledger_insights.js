@@ -71,11 +71,11 @@ function normalizeCategories(value) {
 }
 
 function normalizeCandle(item, index) {
-    const open = toNonNegativeNumber(item?.open);
+    const open  = toNonNegativeNumber(item?.open);
     const close = toNonNegativeNumber(item?.close);
-    const high = Math.max(toNonNegativeNumber(item?.high, Math.max(open, close)), open, close);
-    const low = Math.min(toNonNegativeNumber(item?.low, Math.min(open, close)), open, close);
-    const key = String(item?.key ?? '').trim() || `candle-${index}`;
+    const high  = Math.max(toNonNegativeNumber(item?.high, Math.max(open, close)), open, close);
+    const low   = Math.min(toNonNegativeNumber(item?.low, Math.min(open, close)), open, close);
+    const key   = String(item?.key ?? '').trim() || `candle-${index}`;
     return {
         key,
         label: String(item?.label ?? '').trim() || formatAxisLabel(key),
@@ -99,15 +99,15 @@ function renderEmptyCard(title, subtitle, body) {
         </section>`;
 }
 
-function buildTrendSvg(points) {
-    const width = 500;
-    const height = 200;
-    const pad = { top: 18, right: 18, bottom: 30, left: 48 };
-    const maxValue = Math.max(...points.map((point) => point.total), 1);
-    const innerWidth = width - pad.left - pad.right;
+function buildTrendSvg(points, currency) {
+    const width       = 500;
+    const height      = 200;
+    const pad         = { top: 18, right: 18, bottom: 30, left: 48 };
+    const maxValue    = Math.max(...points.map((point) => point.total), 1);
+    const innerWidth  = width - pad.left - pad.right;
     const innerHeight = height - pad.top - pad.bottom;
-    const stepX = points.length > 1 ? innerWidth / (points.length - 1) : 0;
-    const ticks = [1, 0.66, 0.33, 0].map((ratio) => ({
+    const stepX       = points.length > 1 ? innerWidth / (points.length - 1) : 0;
+    const ticks       = [1, 0.66, 0.33, 0].map((ratio) => ({
         value: maxValue * ratio,
         y: pad.top + innerHeight - innerHeight * ratio,
     }));
@@ -138,7 +138,7 @@ function buildTrendSvg(points) {
                             ? `<line x1="${pad.left}" y1="${y.toFixed(2)}" x2="${pad.left}" y2="${y.toFixed(2)}" stroke="rgba(148,163,184,0.55)"/>`
                             : ''
                     }
-                    <text class="ledger-insight-y-label" x="${pad.left - 8}" y="${(y + 4).toFixed(2)}" text-anchor="end">${escapeHtml(formatMoneyCompact(value))}</text>
+                    <text class="ledger-insight-y-label" x="${pad.left - 8}" y="${(y + 4).toFixed(2)}" text-anchor="end">${escapeHtml(formatMoneyCompact(value, currency))}</text>
                 </g>`,
         )
         .join('');
@@ -146,14 +146,14 @@ function buildTrendSvg(points) {
         .map(
             (point) => `
                 <g>
-                    <title>${escapeHtml(point.label)} ${escapeHtml(formatAmount(point.total))} · ${point.count} 笔</title>
+                    <title>${escapeHtml(point.label)} ${escapeHtml(formatAmount(point.total, currency))} · ${point.count} 笔</title>
                     <circle cx="${point.x.toFixed(2)}" cy="${point.y.toFixed(2)}" r="2.7" fill="#fff" stroke="#E15241" stroke-width="1.45"/>
                 </g>`,
         )
         .join('');
 
     const labelIndexes = new Set(pickEvenAxisIndexes(coords.length, 5));
-    const labels = coords
+    const labels       = coords
         .map((point, index) => {
             if (!labelIndexes.has(index)) return '';
             return `<text x="${point.x.toFixed(2)}" y="${height - 6}" text-anchor="middle">${escapeHtml(point.label)}</text>`;
@@ -187,10 +187,10 @@ function polarToCartesian(cx, cy, radius, angle) {
 
 function arcPath(cx, cy, outerRadius, innerRadius, startAngle, endAngle) {
     const startOuter = polarToCartesian(cx, cy, outerRadius, endAngle);
-    const endOuter = polarToCartesian(cx, cy, outerRadius, startAngle);
+    const endOuter   = polarToCartesian(cx, cy, outerRadius, startAngle);
     const startInner = polarToCartesian(cx, cy, innerRadius, endAngle);
-    const endInner = polarToCartesian(cx, cy, innerRadius, startAngle);
-    const largeArc = endAngle - startAngle > 180 ? 1 : 0;
+    const endInner   = polarToCartesian(cx, cy, innerRadius, startAngle);
+    const largeArc   = endAngle - startAngle > 180 ? 1 : 0;
 
     return [
         `M ${startOuter.x} ${startOuter.y}`,
@@ -214,38 +214,37 @@ function fullRingPath(cx, cy, outerRadius, innerRadius) {
     ].join(' ');
 }
 
-function buildRingSvg(categories, total, centerLabel) {
-    const width = 220;
-    const height = 220;
-    const cx = 110;
-    const cy = 110;
-    const outerRadius = 84;
-    const innerRadius = 56;
-    const topCategories = categories.slice(0, 5);
+function buildRingSvg(categories, total, centerLabel, currency) {
+    const width          = 220;
+    const height         = 220;
+    const cx             = 110;
+    const cy             = 110;
+    const outerRadius    = 84;
+    const innerRadius    = 56;
+    const topCategories  = categories.slice(0, 5);
     const remainingTotal = categories.slice(5).reduce((sum, item) => sum + item.total, 0);
-    const segments = [...topCategories];
+    const segments       = [...topCategories];
     if (remainingTotal > 0) {
         segments.push({ category: '其他', total: remainingTotal, count: 0 });
     }
 
     const segmentTotal = segments.reduce((sum, item) => sum + item.total, 0);
     const displayTotal = Math.max(toNonNegativeNumber(total), segmentTotal);
-    let startAngle = 0;
-    const arcs = segments
+    let startAngle     = 0;
+    const arcs         = segments
         .map((item, index) => {
             const share = displayTotal ? item.total / displayTotal : 0;
             const slice = Math.min(share * 360, 360);
             if (slice <= 0) return '';
 
             const endAngle = startAngle + slice;
-            const path =
-                slice >= 359.999
+            const path     = slice >= 359.999
                     ? fullRingPath(cx, cy, outerRadius, innerRadius)
                     : arcPath(cx, cy, outerRadius, innerRadius, startAngle, endAngle);
             startAngle = endAngle;
             return `
                 <path d="${path}" fill="${CHART_PALETTE[index % CHART_PALETTE.length]}" fill-rule="evenodd" stroke="#ffffff" stroke-width="1.5">
-                    <title>${escapeHtml(item.category)} ${escapeHtml(formatAmount(item.total))} · ${(share * 100).toFixed(1)}%</title>
+                    <title>${escapeHtml(item.category)} ${escapeHtml(formatAmount(item.total, currency))} · ${(share * 100).toFixed(1)}%</title>
                 </path>`;
         })
         .join('');
@@ -256,7 +255,7 @@ function buildRingSvg(categories, total, centerLabel) {
                 <div class="ledger-insight-legend-item">
                     <span class="ledger-insight-legend-dot" style="background:${CHART_PALETTE[index % CHART_PALETTE.length]};"></span>
                     <span class="ledger-insight-legend-name">${escapeHtml(item.category)}</span>
-                    <span class="ledger-insight-legend-value">${escapeHtml(formatMoneyCompact(item.total))}</span>
+                    <span class="ledger-insight-legend-value">${escapeHtml(formatMoneyCompact(item.total, currency))}</span>
                 </div>`,
         )
         .join('');
@@ -267,14 +266,14 @@ function buildRingSvg(categories, total, centerLabel) {
                 <circle cx="${cx}" cy="${cy}" r="${outerRadius}" fill="rgba(225,82,65,0.06)"></circle>
                 ${arcs}
                 <circle cx="${cx}" cy="${cy}" r="${innerRadius - 1}" fill="#fff"></circle>
-                <text x="${cx}" y="${cy - 4}" text-anchor="middle" class="ledger-ring-center-value">${escapeHtml(formatMoneyCompact(displayTotal))}</text>
+                <text x="${cx}" y="${cy - 4}" text-anchor="middle" class="ledger-ring-center-value">${escapeHtml(formatMoneyCompact(displayTotal, currency))}</text>
                 <text x="${cx}" y="${cy + 20}" text-anchor="middle" class="ledger-ring-center-label">${escapeHtml(centerLabel)}</text>
             </svg>
             <div class="ledger-insight-legend">${legend}</div>
         </div>`;
 }
 
-function buildHotspots(categories, total) {
+function buildHotspots(categories, total, currency) {
     const denominator = Math.max(toNonNegativeNumber(total), ...categories.map((item) => item.total));
     return `
         <div class="ledger-hotspot-list">
@@ -288,7 +287,7 @@ function buildHotspots(categories, total) {
                             <div class="ledger-hotspot-row-head">
                                 <span class="ledger-hotspot-rank">${String(index + 1).padStart(2, '0')}</span>
                                 <span class="ledger-hotspot-name">${escapeHtml(item.category)}</span>
-                                <span class="ledger-hotspot-amount">${escapeHtml(formatAmount(item.total))}</span>
+                                <span class="ledger-hotspot-amount">${escapeHtml(formatAmount(item.total, currency))}</span>
                             </div>
                             <div class="ledger-hotspot-track">
                                 <div class="ledger-hotspot-fill" style="width:${barWidth.toFixed(2)}%;"></div>
@@ -300,15 +299,15 @@ function buildHotspots(categories, total) {
         </div>`;
 }
 
-function buildCandleSvg(candles, rangeKeys) {
-    const width = 500;
-    const height = 200;
-    const pad = { top: 18, right: 18, bottom: 28, left: 48 };
-    const innerWidth = width - pad.left - pad.right;
+function buildCandleSvg(candles, rangeKeys, currency) {
+    const width       = 500;
+    const height      = 200;
+    const pad         = { top: 18, right: 18, bottom: 28, left: 48 };
+    const innerWidth  = width - pad.left - pad.right;
     const innerHeight = height - pad.top - pad.bottom;
-    const maxValue = Math.max(...candles.map((item) => item.high), 1);
-    const minValue = Math.min(...candles.map((item) => item.low), 0);
-    const spread = Math.max(maxValue - minValue, 1);
+    const maxValue    = Math.max(...candles.map((item) => item.high), 1);
+    const minValue    = Math.min(...candles.map((item) => item.low), 0);
+    const spread      = Math.max(maxValue - minValue, 1);
 
     // 时间线包含零支出日期；追加意外缺失的蜡烛键，避免坐标落到视图之外。
     const domainKeys = [
@@ -324,7 +323,7 @@ function buildCandleSvg(candles, rangeKeys) {
     const xForDomainIndex = (index) =>
         domainKeys.length <= 1 ? pad.left + innerWidth / 2 : pad.left + domainStep * index;
     const candleWidth = Math.max(4, Math.min(12, domainStep * 0.34));
-    const ticks = [1, 0.66, 0.33, 0].map((ratio) => ({
+    const ticks       = [1, 0.66, 0.33, 0].map((ratio) => ({
         value: minValue + spread * ratio,
         y: pad.top + innerHeight - innerHeight * ratio,
     }));
@@ -344,7 +343,7 @@ function buildCandleSvg(candles, rangeKeys) {
                             ? `<line x1="${pad.left}" y1="${y.toFixed(2)}" x2="${pad.left}" y2="${y.toFixed(2)}" stroke="rgba(148,163,184,0.55)"/>`
                             : ''
                     }
-                    <text class="ledger-insight-y-label" x="${pad.left - 8}" y="${(y + 4).toFixed(2)}" text-anchor="end">${escapeHtml(formatMoneyCompact(value))}</text>
+                    <text class="ledger-insight-y-label" x="${pad.left - 8}" y="${(y + 4).toFixed(2)}" text-anchor="end">${escapeHtml(formatMoneyCompact(value, currency))}</text>
                 </g>`,
         )
         .join('');
@@ -363,7 +362,7 @@ function buildCandleSvg(candles, rangeKeys) {
             const wickStroke = isUp ? 'rgba(233,138,72,0.75)' : 'rgba(201,87,59,0.80)';
             return `
                 <g>
-                    <title>${escapeHtml(item.label)} 高:${escapeHtml(formatAmount(item.high))} 低:${escapeHtml(formatAmount(item.low))} 开:${escapeHtml(formatAmount(item.open))} 收:${escapeHtml(formatAmount(item.close))}</title>
+                    <title>${escapeHtml(item.label)} 高:${escapeHtml(formatAmount(item.high, currency))} 低:${escapeHtml(formatAmount(item.low, currency))} 开:${escapeHtml(formatAmount(item.open, currency))} 收:${escapeHtml(formatAmount(item.close, currency))}</title>
                     <line x1="${x.toFixed(2)}" y1="${highY.toFixed(2)}" x2="${x.toFixed(2)}" y2="${lowY.toFixed(2)}" stroke="${wickStroke}" stroke-width="1.4" stroke-linecap="round"></line>
                     <rect x="${(x - candleWidth / 2).toFixed(2)}" y="${bodyTop.toFixed(2)}" width="${candleWidth.toFixed(2)}" height="${bodyHeight.toFixed(2)}" rx="${Math.min(3, candleWidth / 3).toFixed(2)}" fill="${fill}" stroke="${stroke}" stroke-width="0.8" opacity="0.96"></rect>
                 </g>`;
@@ -371,7 +370,7 @@ function buildCandleSvg(candles, rangeKeys) {
         .join('');
 
     const labelIndexes = new Set(pickEvenAxisIndexes(domainKeys.length, 5));
-    const labels = domainKeys
+    const labels       = domainKeys
         .map((key, index) => {
             if (!labelIndexes.has(index)) return '';
             const x = xForDomainIndex(index);
@@ -389,9 +388,9 @@ function buildCandleSvg(candles, rangeKeys) {
 }
 
 export function renderLedgerInsightsPanel(data) {
-    const payload = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
-    const summary =
-        payload.summary && typeof payload.summary === 'object' && !Array.isArray(payload.summary)
+    const payload  = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+    const currency = payload.currency || 'CNY';
+    const summary  =         payload.summary && typeof payload.summary === 'object' && !Array.isArray(payload.summary)
             ? payload.summary
             : {};
     const focusTransactionType = ['income', 'expense', 'transfer'].includes(summary.focus_transaction_type)
@@ -410,10 +409,10 @@ export function renderLedgerInsightsPanel(data) {
             count: toCount(point?.count),
         };
     });
-    const categories = normalizeCategories(payload.expense_categories);
+    const categories       = normalizeCategories(payload.expense_categories);
     const explicitHotspots = normalizeCategories(payload.expense_hotspots);
-    const hotspots = explicitHotspots.length ? explicitHotspots : categories.slice(0, 5);
-    const candles = asArray(payload.expense_candles).map(normalizeCandle);
+    const hotspots         = explicitHotspots.length ? explicitHotspots : categories.slice(0, 5);
+    const candles          = asArray(payload.expense_candles).map(normalizeCandle);
 
     const focusTotal = toNonNegativeNumber(summary.focus_total);
     const averageFocusAmount = toNonNegativeNumber(summary.average_focus_amount);
@@ -437,23 +436,23 @@ export function renderLedgerInsightsPanel(data) {
                 <div class="ledger-pulse-metrics">
                     <div class="ledger-pulse-metric">
                         <span class="ledger-pulse-label">总${focusLabel}</span>
-                        <strong>${escapeHtml(formatAmount(focusTotal))}</strong>
+                        <strong>${escapeHtml(formatAmount(focusTotal, currency))}</strong>
                     </div>
                     <div class="ledger-pulse-metric">
                         <span class="ledger-pulse-label">单笔均值</span>
-                        <strong>${escapeHtml(formatAmount(averageFocusAmount))}</strong>
+                        <strong>${escapeHtml(formatAmount(averageFocusAmount, currency))}</strong>
                     </div>
                     <div class="ledger-pulse-metric">
                         <span class="ledger-pulse-label">峰值时段</span>
                         <strong>${escapeHtml(peakLabel)}</strong>
-                        <small>${escapeHtml(formatMoneyCompact(peakTotal))}</small>
+                        <small>${escapeHtml(formatMoneyCompact(peakTotal, currency))}</small>
                     </div>
                     <div class="ledger-pulse-metric">
                         <span class="ledger-pulse-label">${escapeHtml(deltaLabel)}</span>
                         <strong class="${deltaClass}">${deltaText}</strong>
                     </div>
                 </div>
-                ${buildTrendSvg(timeline)}
+                ${buildTrendSvg(timeline, currency)}
             </section>`
         : renderEmptyCard(
               `${focusLabel}脉搏`,
@@ -470,7 +469,7 @@ export function renderLedgerInsightsPanel(data) {
                         <p>${focusLabel}主要落在哪些类别</p>
                     </div>
                 </div>
-                ${buildRingSvg(categories, focusTotal, `${focusLabel}总额`)}
+                ${buildRingSvg(categories, focusTotal, `${focusLabel}总额`, currency)}
             </section>`
         : renderEmptyCard(
               '分类构成',
@@ -487,7 +486,7 @@ export function renderLedgerInsightsPanel(data) {
                         <p>本期${focusLabel}最高的类别排行</p>
                     </div>
                 </div>
-                ${buildHotspots(hotspots, focusTotal)}
+                ${buildHotspots(hotspots, focusTotal, currency)}
             </section>`
         : renderEmptyCard(
               `${focusLabel}热点`,
@@ -507,6 +506,7 @@ export function renderLedgerInsightsPanel(data) {
                 ${buildCandleSvg(
                     candles,
                     timeline.map((item) => item.key),
+                    currency,
                 )}
             </section>`
         : renderEmptyCard(

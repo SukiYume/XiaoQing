@@ -37,46 +37,46 @@ async def _build_memory_block(
     bot_name: str,
 ) -> str:
     """检索相关会话记忆，并构造成供模型使用的上下文片段。"""
-    mem_t0 = time.monotonic()
+    mem_t0       = time.monotonic()
     memory_block = ""
     try:
         fg = _resolve_llm_config(runtime.cfg, foreground=True)
         memory_block = await asyncio.wait_for(
             build_memory_block(
-                data_dir=data_dir,
-                chat_id=chat_id,
-                secrets=secrets,
-                cfg=runtime.cfg.memory,
-                bot_name=bot_name,
-                history=history,
-                current_text=current_text,
-                planner_question=planner_question,
-                memory_db=state.memory_db,
-                temperature=runtime.cfg.temperature,
-                top_p=runtime.cfg.top_p,
-                max_tokens=runtime.cfg.max_tokens,
-                timeout_seconds=fg.timeout_seconds,
+                data_dir         = data_dir,
+                chat_id          = chat_id,
+                secrets          = secrets,
+                cfg              = runtime.cfg.memory,
+                bot_name         = bot_name,
+                history          = history,
+                current_text     = current_text,
+                planner_question = planner_question,
+                memory_db        = state.memory_db,
+                temperature      = runtime.cfg.temperature,
+                top_p            = runtime.cfg.top_p,
+                max_tokens       = runtime.cfg.max_tokens,
+                timeout_seconds  = fg.timeout_seconds,
             ),
             timeout=MEMORY_RETRIEVAL_TIMEOUT,
         )
         _log_step(
             context,
             runtime,
-            chat_id=chat_id,
-            step="reply.memory.ok",
-            fields={
+            chat_id = chat_id,
+            step    = "reply.memory.ok",
+            fields  = {
                 "elapsed_s": round(time.monotonic() - mem_t0, 3),
                 "memory_chars": len(memory_block or ""),
             },
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         memory_block = ""
         _log_step(
             context,
             runtime,
-            chat_id=chat_id,
-            step="reply.memory.fail",
-            fields={
+            chat_id = chat_id,
+            step    = "reply.memory.fail",
+            fields  = {
                 "elapsed_s": round(time.monotonic() - mem_t0, 3),
                 "reason": "timeout",
             },
@@ -86,15 +86,15 @@ async def _build_memory_block(
         public_error_message(
             context,
             exc,
-            logger=context.logger,
-            component="xiaoqing_chat.memory_context",
+            logger    = context.logger,
+            component = "xiaoqing_chat.memory_context",
         )
         _log_step(
             context,
             runtime,
-            chat_id=chat_id,
-            step="reply.memory.fail",
-            fields={
+            chat_id = chat_id,
+            step    = "reply.memory.fail",
+            fields  = {
                 "elapsed_s": round(time.monotonic() - mem_t0, 3),
                 "reason": type(exc).__name__,
             },
@@ -136,7 +136,7 @@ def _build_expression_block(runtime: _ChatRuntime, state, data_dir, chat_id: str
     lines = []
     for ex in picked:
         situation = str(ex.situation or "").strip()
-        prefix = "" if situation.startswith("当") else "当"
+        prefix    = "" if situation.startswith("当") else "当"
         lines.append(f"- {prefix}{situation}：{ex.style}")
     return "表达习惯（可参考，别生硬照抄）：\n" + "\n".join(lines)
 
@@ -147,9 +147,9 @@ def _build_knowledge_block(runtime: _ChatRuntime, state, text: str) -> str:
         return ""
     kb_items = state.memory_db.query_global(
         text,
-        top_k=runtime.cfg.knowledge.top_k,
-        min_score=runtime.cfg.memory.min_score,
-        type_filter="knowledge",
+        top_k       = runtime.cfg.knowledge.top_k,
+        min_score   = runtime.cfg.memory.min_score,
+        type_filter = "knowledge",
     )
     if not kb_items:
         return ""
@@ -164,7 +164,7 @@ def _build_jargon_explanation(state, data_dir, chat_id: str, unknown_words: list
     if not unknown_words:
         return ""
     jargon_db = None
-    items = []
+    items     = []
     for w in unknown_words[:UNKNOWN_WORDS_MAX]:
         hits = state.memory_db.query_global(w, top_k=1, min_score=0.0, type_filter="word_def")
         if hits:
@@ -192,26 +192,26 @@ async def _build_tool_info_block(
     goal: str,
 ) -> str:
     """只读构造工具状态片段；时间窗口清理由调用方负责。"""
-    now = time.time()
-    last = state.get_last_reply_ts(chat_id)
+    now            = time.time()
+    last           = state.get_last_reply_ts(chat_id)
     cooldown_until = state.get_continuous_cooldown_until(chat_id)
-    cooldown_left = max(0.0, cooldown_until - now)
+    cooldown_left  = max(0.0, cooldown_until - now)
     # 这里只过滤快照，不在构造提示词时修改持久状态。
-    window = [t for t in state.get_reply_timestamps(chat_id) if now - t < 60.0]
+    window         = [t for t in state.get_reply_timestamps(chat_id) if now - t < 60.0]
     recent_actions = []
     for r in await state.action_history.get_recent_async(chat_id, max_items=8):
-        ts = time.strftime("%H:%M:%S", time.localtime(r.ts))
+        ts  = time.strftime("%H:%M:%S", time.localtime(r.ts))
         tgt = r.local_target or "-"
         recent_actions.append(f"{ts} {r.action} {tgt} {r.reasoning}".strip())
     return build_tool_info_block(
-        data_dir=data_dir,
-        bot_name=bot_name,
-        chat_id=chat_id,
-        event=event,
-        goal=goal,
-        last_reply_ts=last,
-        replies_last_minute=len(window),
-        continuous_reply_count=state.get_continuous_reply_count(chat_id),
-        cooldown_left_seconds=cooldown_left,
-        recent_actions=recent_actions,
+        data_dir               = data_dir,
+        bot_name               = bot_name,
+        chat_id                = chat_id,
+        event                  = event,
+        goal                   = goal,
+        last_reply_ts          = last,
+        replies_last_minute    = len(window),
+        continuous_reply_count = state.get_continuous_reply_count(chat_id),
+        cooldown_left_seconds  = cooldown_left,
+        recent_actions         = recent_actions,
     )

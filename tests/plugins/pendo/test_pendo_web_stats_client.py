@@ -6,8 +6,9 @@ from typing import Final
 
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
+from tests.helpers.pendo_client_source import replace_js_source
 
-ROOT: Final = REPOSITORY_ROOT
+ROOT: Final         = REPOSITORY_ROOT
 STATS_CLIENT: Final = ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js"
 
 STATS_SETUP: Final = r"""
@@ -67,8 +68,8 @@ def _stats_source_for_test() -> str:
     arrayValue as safeArray,
     errorMessage,
     finiteNumber,
-    formatAmount,
-    formatMoneyCompact,
+    formatAmount as baseFormatAmount,
+    formatMoneyCompact as baseFormatMoneyCompact,
     isRecord,
     isValidDateInput,
     noteCadenceSubtitle,
@@ -90,8 +91,8 @@ const finiteNumber = (value, fallback = 0) => {
 };
 const errorMessage = (error, fallback = '未知错误') =>
     typeof error?.message === 'string' && error.message.trim() ? error.message.trim() : fallback;
-const formatAmount = (value) => `¥${Number(value || 0).toFixed(2)}`;
-const formatMoneyCompact = (value) => `${Number(value || 0)}`;
+const baseFormatAmount = (value) => `¥${Number(value || 0).toFixed(2)}`;
+const baseFormatMoneyCompact = (value) => `${Number(value || 0)}`;
 const isValidDateInput = (value) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))) return false;
     const date = new Date(`${value}T00:00:00Z`);
@@ -158,8 +159,7 @@ const pageShellCss = () => '';""",
         ),
     )
     for original, replacement in replacements:
-        assert original in source
-        source = source.replace(original, replacement)
+        source = replace_js_source(source, original, replacement)
 
     return (
         source
@@ -239,8 +239,8 @@ def _run_stats_client(script: str) -> None:
     assert_node_esm_contract(
         _stats_source_for_test(),
         script,
-        cwd=ROOT,
-        setup=STATS_SETUP,
+        cwd   = ROOT,
+        setup = STATS_SETUP,
     )
 
 
@@ -412,6 +412,7 @@ def test_stats_fetches_regular_range_with_declared_params_and_safe_moods() -> No
             return { data: { marker: path } };
         };
         const result = await client.fetchAllData({
+            currency: 'CNY',
             rangeKey: 'month',
             range: { start: '2026-05-01', end: '2026-05-20' },
             today: '2026-05-20',
@@ -423,7 +424,7 @@ def test_stats_fetches_regular_range_with_declared_params_and_safe_moods() -> No
         assert.equal(result.moodLabels.happy, '开心');
 
         const byPath = Object.fromEntries(__apiCalls.map((call) => [call.path, call.params]));
-        assert.deepEqual(byPath['/stats/ledger'], { range: '2026-05-01..2026-05-20' });
+        assert.deepEqual(byPath['/stats/ledger'], { currency: 'CNY', range: '2026-05-01..2026-05-20' });
         assert.deepEqual(byPath['/stats/tasks'], { range: '2026-05-01..2026-05-20' });
         assert.deepEqual(byPath['/stats/events'], { range: '2026-05-01..2026-05-20' });
         assert.deepEqual(byPath['/stats/notes/overview'], {
@@ -434,7 +435,7 @@ def test_stats_fetches_regular_range_with_declared_params_and_safe_moods() -> No
             today: '2026-05-20', cadence_granularity: 'auto',
         });
         assert.deepEqual(byPath['/stats/activity-heatmap'], { year: 2026 });
-        assert.deepEqual(byPath['/stats/ledger/comparison'], { months: 6 });
+        assert.deepEqual(byPath['/stats/ledger/comparison'], { months: 6, currency: 'CNY' });
         """
     )
 
@@ -455,6 +456,7 @@ def test_stats_all_range_resolves_three_boundaries_in_parallel() -> None:
             return { data: {} };
         };
         const request = client.fetchAllData({
+            currency: 'CNY',
             rangeKey: 'all',
             range: { start: '1970-01-01', end: '2026-05-20' },
             today: '2026-05-20',
@@ -470,6 +472,7 @@ def test_stats_all_range_resolves_three_boundaries_in_parallel() -> None:
         await request;
         const byPath = Object.fromEntries(__apiCalls.map((call) => [call.path, call.params]));
         assert.deepEqual(byPath['/stats/ledger'], {
+            currency: 'CNY',
             start_date: '2020-01-01', end_date: '2026-05-20',
         });
         assert.deepEqual(byPath['/stats/notes/overview'], {

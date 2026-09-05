@@ -13,10 +13,10 @@ class Item:
     item_type: ItemType
     rarity: ItemRarity
 
-    price: int = 0
-    hunger_gain: int = 0
-    mood_gain: int = 0
-    health_gain: int = 0
-    clean_gain: int = 0
-    exp_gain: int = 0
+    price: int         = 0
+    hunger_gain: int   = 0
+    mood_gain: int     = 0
+    health_gain: int   = 0
+    clean_gain: int    = 0
+    exp_gain: int      = 0
     trustee_hours: int = 0

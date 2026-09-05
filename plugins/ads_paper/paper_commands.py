@@ -103,7 +103,7 @@ async def cmd_cite(client: ADSClient, args: str) -> Segments:
         return segments("❌ 请提供论文标识符\n用法: /paper cite <arXiv ID / arXiv链接 / Bibcode>")
 
     paper_id = args.strip()
-    bibcode = await resolve_paper_id_to_bibcode(client, paper_id)
+    bibcode  = await resolve_paper_id_to_bibcode(client, paper_id)
 
     if not bibcode:
         return segments(f"❌ 未找到论文: {paper_id}")
@@ -123,7 +123,7 @@ async def cmd_cite_network(client: ADSClient, args: str) -> Segments:
         )
 
     paper_id = args.strip()
-    bibcode = await resolve_paper_id_to_bibcode(client, paper_id)
+    bibcode  = await resolve_paper_id_to_bibcode(client, paper_id)
 
     if not bibcode:
         return segments(f"❌ 未找到论文: {paper_id}")
@@ -135,14 +135,14 @@ async def cmd_cite_network(client: ADSClient, args: str) -> Segments:
     citations = await client.get_citations(bibcode, max_results=5)
     references = await client.get_references(bibcode, max_results=5)
 
-    title = paper_title(paper)
+    title          = paper_title(paper)
     citation_count = paper.get("citation_count", 0)
 
     lines = [
         "📊 引用网络分析\n",
         f"📄 论文: {title}",
         f"📊 被引用次数: {citation_count}",
-        f"📚 引用论文数: {len(references)}\n",
+        f"📚 本次展示参考文献: {len(references)} 篇（最多 5 篇）\n",
     ]
 
     citation_lines = _relation_preview(citations, "🔗 被以下论文引用 (前5篇):")
@@ -162,7 +162,7 @@ async def cmd_related(client: ADSClient, args: str) -> Segments:
         )
 
     paper_id = args.strip()
-    bibcode = await resolve_paper_id_to_bibcode(client, paper_id)
+    bibcode  = await resolve_paper_id_to_bibcode(client, paper_id)
 
     if not bibcode:
         return segments(f"❌ 未找到论文: {paper_id}")
@@ -173,7 +173,7 @@ async def cmd_related(client: ADSClient, args: str) -> Segments:
 
     title = paper_title(paper, default="")
     keywords = title.split()[:3]
-    query = " ".join(keywords)
+    query    = " ".join(keywords)
 
     related = await client.search_papers(query, max_results=5)
     related = [p for p in related if p.get("bibcode") != bibcode]

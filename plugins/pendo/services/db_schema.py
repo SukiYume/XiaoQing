@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
@@ -30,12 +30,12 @@ def _sqlite_casefold(value: Any) -> str:
 def _sqlite_local_date(value: Any, timezone_name: Any) -> str:
     """按显式时区解释时间戳，并返回 ISO 日期。"""
 
-    text = str(value or "").strip()
+    text      = str(value or "").strip()
     zone_name = str(timezone_name or "").strip()
     if not text or not zone_name:
         return ""
     try:
-        zone = ZoneInfo(zone_name)
+        zone   = ZoneInfo(zone_name)
         parsed = cast(datetime, TimezoneHelper.parse(text, zone))
         return parsed.date().isoformat()
     except (TypeError, ValueError):
@@ -45,7 +45,7 @@ def _sqlite_local_date(value: Any, timezone_name: Any) -> str:
 def _sqlite_utc_epoch(value: Any, timezone_name: Any) -> float | None:
     """按显式时区把存储的墙钟时间转换为绝对排序键。"""
 
-    text = str(value or "").strip()
+    text      = str(value or "").strip()
     zone_name = str(timezone_name or "").strip()
     if not text or not zone_name:
         return None
@@ -119,7 +119,7 @@ def _is_expected_duplicate_column_error(
     sql: str,
 ) -> bool:
     """仅当报错列名正是当前 ADD COLUMN 目标时返回真。"""
-    prefix = "duplicate column name:"
+    prefix  = "duplicate column name:"
     message = str(error).strip()
     if not message.casefold().startswith(prefix):
         return False
@@ -127,7 +127,7 @@ def _is_expected_duplicate_column_error(
     if match is None:
         return False
     expected = next(value for value in match.groupdict().values() if value is not None)
-    actual = message[len(prefix) :].strip().strip('"`[]')
+    actual   = message[len(prefix) :].strip().strip('"`[]')
     return actual.casefold() == expected.casefold()
 
 
@@ -331,11 +331,11 @@ def reminder_fire_at_utc(remind_time: str, timezone_name: str) -> str | None:
 
     try:
         user_timezone = ZoneInfo(timezone_name)
-        parsed = cast(datetime, TimezoneHelper.parse(remind_time, user_timezone))
+        parsed        = cast(datetime, TimezoneHelper.parse(remind_time, user_timezone))
     except (KeyError, TypeError, ValueError):
         logger.warning("Invalid reminder schedule")
         return None
-    return parsed.astimezone(timezone.utc).isoformat()
+    return parsed.astimezone(UTC).isoformat()
 
 
 def _create_reminder_indexes(cursor: sqlite3.Cursor) -> None:

@@ -23,9 +23,9 @@ def _knowledge_snapshot(db: MemoryDB) -> list[tuple[str, str, dict]]:
         (item.doc_id, item.text, item.meta)
         for item in db.query_global(
             "configured knowledge",
-            top_k=2048,
-            min_score=-1.0,
-            type_filter="knowledge",
+            top_k       = 2048,
+            min_score   = -1.0,
+            type_filter = "knowledge",
         )
     )
 
@@ -163,24 +163,24 @@ def test_memory_db_delete_chat_removes_only_target_scope_and_persists(
     db = MemoryDB()
     db.bind(tmp_path)
     db.upsert_text(
-        doc_id="topic-target",
-        text="目标群旧话题",
-        meta={"type": "topic_summary", "chat_id": "g-target"},
+        doc_id = "topic-target",
+        text   = "目标群旧话题",
+        meta   = {"type": "topic_summary", "chat_id": "g-target"},
     )
     db.upsert_text(
-        doc_id="person-target",
-        text="目标群人物信息",
-        meta={"type": "person_info", "chat_id": "g-target"},
+        doc_id = "person-target",
+        text   = "目标群人物信息",
+        meta   = {"type": "person_info", "chat_id": "g-target"},
     )
     db.upsert_text(
-        doc_id="topic-other",
-        text="其他群旧话题",
-        meta={"type": "topic_summary", "chat_id": "g-other"},
+        doc_id = "topic-other",
+        text   = "其他群旧话题",
+        meta   = {"type": "topic_summary", "chat_id": "g-other"},
     )
     db.upsert_text(
-        doc_id="global-knowledge",
-        text="审核后的全局知识",
-        meta={"type": "knowledge", "global_approved": True},
+        doc_id = "global-knowledge",
+        text   = "审核后的全局知识",
+        meta   = {"type": "knowledge", "global_approved": True},
     )
     db.save()
 
@@ -198,8 +198,8 @@ def test_memory_db_delete_chat_removes_only_target_scope_and_persists(
         item.doc_id
         for item in reloaded.query_global(
             "全局知识",
-            min_score=-1.0,
-            type_filter="knowledge",
+            min_score   = -1.0,
+            type_filter = "knowledge",
         )
     ] == ["global-knowledge"]
 
@@ -208,9 +208,9 @@ def test_configured_knowledge_refresh_removes_shortened_removed_and_deleted_sour
     tmp_path: Path,
 ) -> None:
     plugin_dir = tmp_path / "plugin"
-    data_dir = tmp_path / "data"
+    data_dir   = tmp_path / "data"
     plugin_dir.mkdir()
-    first = plugin_dir / "first.txt"
+    first  = plugin_dir / "first.txt"
     second = plugin_dir / "second.txt"
     first.write_text("alpha\n\nbeta", encoding="utf-8")
     second.write_text("gamma", encoding="utf-8")
@@ -218,17 +218,17 @@ def test_configured_knowledge_refresh_removes_shortened_removed_and_deleted_sour
     db = MemoryDB()
     db.bind(data_dir)
     db.upsert_text(
-        doc_id="reviewed-public",
-        text="public reference",
-        meta={"type": "knowledge", "global_approved": True},
+        doc_id = "reviewed-public",
+        text   = "public reference",
+        meta   = {"type": "knowledge", "global_approved": True},
     )
 
     assert (
         ensure_knowledge_index(
-            memory_db=db,
-            data_dir=data_dir,
-            plugin_dir=plugin_dir,
-            files=["first.txt", "second.txt"],
+            memory_db  = db,
+            data_dir   = data_dir,
+            plugin_dir = plugin_dir,
+            files      = ["first.txt", "second.txt"],
         )
         is True
     )
@@ -240,10 +240,10 @@ def test_configured_knowledge_refresh_removes_shortened_removed_and_deleted_sour
     ]
     assert (
         ensure_knowledge_index(
-            memory_db=db,
-            data_dir=data_dir,
-            plugin_dir=plugin_dir,
-            files=["first.txt", "second.txt"],
+            memory_db  = db,
+            data_dir   = data_dir,
+            plugin_dir = plugin_dir,
+            files      = ["first.txt", "second.txt"],
         )
         is False
     )
@@ -251,10 +251,10 @@ def test_configured_knowledge_refresh_removes_shortened_removed_and_deleted_sour
     first.write_text("alpha revised", encoding="utf-8")
     assert (
         ensure_knowledge_index(
-            memory_db=db,
-            data_dir=data_dir,
-            plugin_dir=plugin_dir,
-            files=["first.txt"],
+            memory_db  = db,
+            data_dir   = data_dir,
+            plugin_dir = plugin_dir,
+            files      = ["first.txt"],
         )
         is True
     )
@@ -266,10 +266,10 @@ def test_configured_knowledge_refresh_removes_shortened_removed_and_deleted_sour
     first.unlink()
     assert (
         ensure_knowledge_index(
-            memory_db=db,
-            data_dir=data_dir,
-            plugin_dir=plugin_dir,
-            files=["first.txt"],
+            memory_db  = db,
+            data_dir   = data_dir,
+            plugin_dir = plugin_dir,
+            files      = ["first.txt"],
         )
         is True
     )
@@ -280,7 +280,7 @@ def test_configured_knowledge_refresh_removes_shortened_removed_and_deleted_sour
 def test_configured_knowledge_metadata_never_stores_absolute_source_paths(
     tmp_path: Path,
 ) -> None:
-    plugin_dir = tmp_path / "plugin"
+    plugin_dir   = tmp_path / "plugin"
     internal_dir = plugin_dir / "docs"
     external_dir = tmp_path / "private" / "operator"
     internal_dir.mkdir(parents=True)
@@ -292,10 +292,10 @@ def test_configured_knowledge_metadata_never_stores_absolute_source_paths(
     db = MemoryDB()
 
     ensure_knowledge_index(
-        memory_db=db,
-        data_dir=tmp_path / "data",
-        plugin_dir=plugin_dir,
-        files=["docs/guide.txt", str(external.resolve())],
+        memory_db  = db,
+        data_dir   = tmp_path / "data",
+        plugin_dir = plugin_dir,
+        files      = ["docs/guide.txt", str(external.resolve())],
     )
 
     configured = [
@@ -317,26 +317,26 @@ def test_knowledge_budget_and_decode_failures_preserve_last_complete_snapshot(
     tmp_path: Path,
 ) -> None:
     plugin_dir = tmp_path / "plugin"
-    data_dir = tmp_path / "data"
+    data_dir   = tmp_path / "data"
     plugin_dir.mkdir()
     baseline_file = plugin_dir / "baseline.txt"
     baseline_file.write_text("last complete snapshot", encoding="utf-8")
     db = MemoryDB()
     assert (
         ensure_knowledge_index(
-            memory_db=db,
-            data_dir=data_dir,
-            plugin_dir=plugin_dir,
-            files=["baseline.txt"],
+            memory_db  = db,
+            data_dir   = data_dir,
+            plugin_dir = plugin_dir,
+            files      = ["baseline.txt"],
         )
         is True
     )
     baseline = _knowledge_snapshot(db)
 
-    first = plugin_dir / "first.txt"
-    second = plugin_dir / "second.txt"
-    oversized = plugin_dir / "oversized.txt"
-    chunked = plugin_dir / "chunked.txt"
+    first        = plugin_dir / "first.txt"
+    second       = plugin_dir / "second.txt"
+    oversized    = plugin_dir / "oversized.txt"
+    chunked      = plugin_dir / "chunked.txt"
     invalid_utf8 = plugin_dir / "invalid.txt"
     first.write_text("aaa", encoding="utf-8")
     second.write_text("bbb", encoding="utf-8")
@@ -350,10 +350,10 @@ def test_knowledge_budget_and_decode_failures_preserve_last_complete_snapshot(
                 scoped.setattr(knowledge_base_module, name, value)
             with pytest.raises(KnowledgeIndexError):
                 ensure_knowledge_index(
-                    memory_db=db,
-                    data_dir=data_dir,
-                    plugin_dir=plugin_dir,
-                    files=files,
+                    memory_db  = db,
+                    data_dir   = data_dir,
+                    plugin_dir = plugin_dir,
+                    files      = files,
                 )
         assert _knowledge_snapshot(db) == baseline
 
@@ -361,8 +361,8 @@ def test_knowledge_budget_and_decode_failures_preserve_last_complete_snapshot(
     reject(["oversized.txt"], MAX_KNOWLEDGE_FILE_BYTES=3)
     reject(
         ["first.txt", "second.txt"],
-        MAX_KNOWLEDGE_FILE_BYTES=10,
-        MAX_TOTAL_KNOWLEDGE_BYTES=5,
+        MAX_KNOWLEDGE_FILE_BYTES  = 10,
+        MAX_TOTAL_KNOWLEDGE_BYTES = 5,
     )
     reject(["chunked.txt"], MAX_KNOWLEDGE_CHUNKS=1)
     reject(["invalid.txt"])
@@ -406,10 +406,10 @@ def test_runtime_refresh_publishes_an_empty_snapshot_when_knowledge_is_disabled(
     from plugins.xiaoqing_chat import helper_utils
 
     plugin_dir = tmp_path / "plugin"
-    data_dir = tmp_path / "data"
+    data_dir   = tmp_path / "data"
     plugin_dir.mkdir()
     memory_db = MagicMock()
-    state = SimpleNamespace(
+    state     = SimpleNamespace(
         memory_db=memory_db,
         get_runtime=MagicMock(return_value=None),
         get_runtime_mtime=MagicMock(return_value=None),
@@ -436,10 +436,10 @@ def test_runtime_refresh_publishes_an_empty_snapshot_when_knowledge_is_disabled(
     )
 
     ensure.assert_called_once_with(
-        memory_db=memory_db,
-        data_dir=data_dir,
-        plugin_dir=plugin_dir,
-        files=(),
+        memory_db  = memory_db,
+        data_dir   = data_dir,
+        plugin_dir = plugin_dir,
+        files      = (),
     )
 
 
@@ -451,10 +451,10 @@ def test_runtime_refreshes_when_settings_revision_changes_without_file_mtime_cha
     from tests.helpers.settings_snapshot import settings_snapshot
 
     plugin_dir = tmp_path / "plugin"
-    data_dir = tmp_path / "data"
+    data_dir   = tmp_path / "data"
     plugin_dir.mkdir()
     cached_runtime = object()
-    state = SimpleNamespace(
+    state          = SimpleNamespace(
         memory_db=MagicMock(),
         get_runtime=MagicMock(return_value=cached_runtime),
         get_runtime_mtime=MagicMock(return_value=-1),
@@ -468,13 +468,13 @@ def test_runtime_refreshes_when_settings_revision_changes_without_file_mtime_cha
     load_config = MagicMock(return_value=config)
     ensure = MagicMock(return_value=True)
     settings = settings_snapshot(
-        config={"plugins": {"xiaoqing_chat": {"changed": True}}},
-        revision=2,
+        config   = {"plugins": {"xiaoqing_chat": {"changed": True}}},
+        revision = 2,
     )
     context = SimpleNamespace(
-        plugin_dir=plugin_dir,
-        data_dir=data_dir,
-        get_settings_snapshot=lambda: settings,
+        plugin_dir            = plugin_dir,
+        data_dir              = data_dir,
+        get_settings_snapshot = lambda: settings,
     )
     monkeypatch.setattr(helper_utils, "_state", lambda: state)
     monkeypatch.setattr(helper_utils, "load_xiaoqing_chat_config", load_config)

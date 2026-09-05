@@ -58,7 +58,7 @@ def client(temp_db):
         pytest.skip("httpx is not installed in this environment")
 
     previous_singleton = db_ops._db_singleton
-    previous_web_db = deps._db_instance
+    previous_web_db    = deps._db_instance
     with auth._AUTH_LOCK:
         previous_auth_db = auth._AUTH_DATABASE
     try:
@@ -77,7 +77,7 @@ def pendo_database_leak_guard():
 
     from plugins.pendo.services.db import Database
 
-    tracker = PendoDatabaseTracker()
+    tracker       = PendoDatabaseTracker()
     original_init = Database.__init__
 
     @functools.wraps(original_init)

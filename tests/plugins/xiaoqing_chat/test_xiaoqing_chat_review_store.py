@@ -42,7 +42,7 @@ def test_non_negative_int_rejects_unicode_digits(value: str) -> None:
 def test_review_store_recovers_malformed_primary_from_backup(tmp_path: Path) -> None:
     path = _sessions_path(tmp_path)
     path.parent.mkdir(parents=True)
-    backup = path.with_name(f"{path.name}.bak")
+    backup   = path.with_name(f"{path.name}.bak")
     expected = {
         "active": {"session-1": _session_payload()},
         "last_closed": {},
@@ -76,12 +76,12 @@ def test_review_store_quarantines_unrecoverable_primary_before_new_write(tmp_pat
     assert not path.exists()
 
     created = store.open_session_if_allowed(
-        kind="goal_strategy",
-        chat_id="42",
-        payload={},
-        timeout_seconds=60,
-        cooldown_seconds=0,
-        now=10.0,
+        kind             = "goal_strategy",
+        chat_id          = "42",
+        payload          = {},
+        timeout_seconds  = 60,
+        cooldown_seconds = 0,
+        now              = 10.0,
     )
 
     assert created is not None
@@ -130,10 +130,10 @@ def test_review_store_quarantines_malformed_policy_and_can_save_replacement(
     store.save_policy(
         "42",
         ReviewPolicy(
-            goal_override="保持简洁",
-            goal_lock_until=30.0,
-            strategy_note="避免重复",
-            avoid_patterns=["复读"],
+            goal_override   = "保持简洁",
+            goal_lock_until = 30.0,
+            strategy_note   = "避免重复",
+            avoid_patterns  = ["复读"],
         ),
     )
 
@@ -147,9 +147,9 @@ def test_review_store_quarantines_malformed_policy_and_can_save_replacement(
 
 
 def test_review_store_rebind_clears_directory_specific_caches(tmp_path: Path) -> None:
-    first = tmp_path / "first"
-    second = tmp_path / "second"
-    first_path = _sessions_path(first)
+    first       = tmp_path / "first"
+    second      = tmp_path / "second"
+    first_path  = _sessions_path(first)
     second_path = _sessions_path(second)
     first_path.parent.mkdir(parents=True)
     second_path.parent.mkdir(parents=True)
@@ -185,12 +185,12 @@ async def test_review_push_distinguishes_rejection_from_unknown_outcome(
     store = ReviewStore()
     store.bind(tmp_path)
     session = store.open_session_if_allowed(
-        kind="goal_strategy",
-        chat_id="42",
-        payload={"goal": "自然聊天"},
-        timeout_seconds=60,
-        cooldown_seconds=0,
-        now=10.0,
+        kind             = "goal_strategy",
+        chat_id          = "42",
+        payload          = {"goal": "自然聊天"},
+        timeout_seconds  = 60,
+        cooldown_seconds = 0,
+        now              = 10.0,
     )
     assert session is not None
     monkeypatch.setattr(review_sessions.time, "time", lambda: 100.0)
@@ -200,11 +200,11 @@ async def test_review_push_distinguishes_rejection_from_unknown_outcome(
 
     pushed = await maybe_push_session(
         context=SimpleNamespace(send_action=send_action),
-        store=store,
-        sess=session,
-        operator_user_id=1,
-        operator_group_id=0,
-        resend_interval_seconds=0,
+        store                   = store,
+        sess                    = session,
+        operator_user_id        = 1,
+        operator_group_id       = 0,
+        resend_interval_seconds = 0,
     )
 
     assert pushed is expected_pushed

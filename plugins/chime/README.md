@@ -47,6 +47,8 @@
 https://catalog.chime-frb.ca/repeaters
 ```
 
+2026-09-05 真实运行核对中，旧接口出现 TLS 证书域名不匹配；请求在目录解析前失败。[官方公共数据页](https://www.chime-frb.ca/repeaters)同时公告网站正在重建基础设施，已发表目录归档继续可用。实时查询与增量通知当前依赖该旧接口恢复或官方提供等价接口；固定发布归档具有明确的数据截止时间。插件保留证书校验和通知基线，失败时返回获取失败提示。
+
 发布数据集可从以下官方入口获取：
 
 - [CHIME/FRB Catalog](https://www.chime-frb.ca/catalog)

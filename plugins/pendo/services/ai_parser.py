@@ -25,8 +25,8 @@ from .rule_parser import RuleParser
 if TYPE_CHECKING:
     from .db import Database
 
-logger = logging.getLogger(__name__)
-WEEKDAY_NAMES: Final = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+logger                  = logging.getLogger(__name__)
+WEEKDAY_NAMES: Final    = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 MOOD_WORD_GROUPS: Final = (
     "positive",
     "negative",
@@ -51,10 +51,9 @@ CHINESE_DIGITS: Final = {
     "九": 9,
 }
 OFFSET_NUMBER_PATTERN: Final = r"\d+|[零一二两三四五六七八九十百半]+"
-OFFSET_UNIT_PATTERN: Final = r"分钟|min|m|小时|hour|h|天|day|d|周|week|w"
-OFFSET_TOKEN_RE: Final = re.compile(rf"({OFFSET_NUMBER_PATTERN})\s*({OFFSET_UNIT_PATTERN})")
-REMINDER_DESCRIPTION_RE: Final = re.compile(
-    rf"(?:提前\s*)?({OFFSET_NUMBER_PATTERN})\s*(?:个)?\s*({OFFSET_UNIT_PATTERN})"
+OFFSET_UNIT_PATTERN: Final   = r"分钟|min|m|小时|hour|h|天|day|d|周|week|w"
+OFFSET_TOKEN_RE: Final       = re.compile(
+    rf"({OFFSET_NUMBER_PATTERN})\s*(?:个)?\s*({OFFSET_UNIT_PATTERN})"
 )
 OFFSET_UNIT_SECONDS: Final = {
     "分钟": 60,
@@ -76,17 +75,17 @@ def analyze_diary_mood_rule(content: str) -> tuple[str, int]:
     """使用本地关键词词典分析日记情绪，作为 AI 不可用时的唯一降级实现。"""
     counts: dict[str, int] = {}
     for group in MOOD_WORD_GROUPS:
-        raw_words = MOOD_ANALYSIS_CONFIG.get(f"{group}_words", [])
-        words = [str(word) for word in raw_words] if isinstance(raw_words, list) else []
+        raw_words     = MOOD_ANALYSIS_CONFIG.get(f"{group}_words", [])
+        words         = [str(word) for word in raw_words] if isinstance(raw_words, list) else []
         counts[group] = sum(1 for word in words if word in content)
 
-    raw_scores = MOOD_ANALYSIS_CONFIG.get("base_scores", {})
+    raw_scores  = MOOD_ANALYSIS_CONFIG.get("base_scores", {})
     base_scores = (
         {str(key): value for key, value in raw_scores.items() if isinstance(value, int)}
         if isinstance(raw_scores, dict)
         else {}
     )
-    raw_increment = MOOD_ANALYSIS_CONFIG.get("score_increment", 1)
+    raw_increment   = MOOD_ANALYSIS_CONFIG.get("score_increment", 1)
     score_increment = raw_increment if isinstance(raw_increment, int) else 1
 
     positive = counts["positive"]
@@ -125,8 +124,8 @@ class RateLimiter:
         """
         if max_calls <= 0 or time_window <= 0:
             raise ValueError("rate limit max_calls and time_window must be positive")
-        self.max_calls = max_calls
-        self.time_window = time_window
+        self.max_calls                            = max_calls
+        self.time_window                          = time_window
         self.call_history: dict[str, list[float]] = {}
 
     def check_rate_limit(self, user_id: str) -> tuple[bool, int]:
@@ -138,7 +137,7 @@ class RateLimiter:
         Returns:
             (是否允许调用, 剩余秒数)
         """
-        now = time.time()
+        now    = time.time()
         cutoff = now - self.time_window
         for key, timestamps in tuple(self.call_history.items()):
             active = [timestamp for timestamp in timestamps if timestamp > cutoff]
@@ -151,7 +150,7 @@ class RateLimiter:
         history = self.call_history.get(user_id, [])
 
         if len(history) >= self.max_calls:
-            oldest = history[0]
+            oldest    = history[0]
             remaining = ceil(oldest + self.time_window - now)
             return False, max(remaining, 0)
 
@@ -228,9 +227,9 @@ class AIParser:
         *,
         now_factory: Callable[[Any], datetime] | None = None,
     ) -> None:
-        self.context = context
-        self.db = db
-        self.rule_parser = RuleParser()
+        self.context      = context
+        self.db           = db
+        self.rule_parser  = RuleParser()
         self._now_factory = now_factory
 
     def _now(self, tz: Any = None) -> datetime:
@@ -245,8 +244,8 @@ class AIParser:
             public_error_message(
                 self.context,
                 exc,
-                logger=logger,
-                component=component,
+                logger    = logger,
+                component = component,
             )
             return
         logger.warning(
@@ -287,9 +286,9 @@ class AIParser:
 
     def parse_natural_language(self, text: str, user_id: str) -> dict[str, Any]:
         """同步规则解析（固定返回 event 类型），也用作 AI 解析的降级路径"""
-        parsed = self.rule_parser.parse(text, user_id)
+        parsed                 = self.rule_parser.parse(text, user_id)
         parsed["parse_source"] = "rule"
-        parsed["type"] = "event"
+        parsed["type"]         = "event"
         return parsed
 
     def _prompt_time_context(self, user_id: str) -> tuple[str, str]:
@@ -309,7 +308,7 @@ class AIParser:
         text: str,
         user_id: str,
         *,
-        partial: bool = False,
+        partial: bool             = False,
         fallback_text: str | None = None,
     ) -> dict[str, Any]:
         """使用AI解析日程（专用于event类型）
@@ -394,9 +393,9 @@ class AIParser:
             if parsed is None:
                 return analyze_diary_mood_rule(text)
 
-            mood = str(parsed.get("mood") or "").strip().lower()
+            mood              = str(parsed.get("mood") or "").strip().lower()
             raw_allowed_moods = MOOD_ANALYSIS_CONFIG.get("allowed_moods", [])
-            allowed_moods = (
+            allowed_moods     = (
                 {str(value) for value in raw_allowed_moods}
                 if isinstance(raw_allowed_moods, list)
                 else set()
@@ -438,7 +437,7 @@ class AIParser:
             if value := parsed.get(field):
                 result[field] = str(value)
 
-        offsets = self._normalize_offset_list(parsed.get("remind_offsets"))
+        offsets    = self._normalize_offset_list(parsed.get("remind_offsets"))
         milestones = self._normalize_milestones(parsed.get("milestones"))
         self._apply_event_milestones(result, milestones, offsets, user_id)
         self._apply_event_reminders(result, parsed, offsets, user_id)
@@ -501,7 +500,7 @@ class AIParser:
     def _normalize_event_datetimes(cls, parsed: dict[str, Any]) -> dict[str, str]:
         """把解析器返回的起止时间规范成 ISO 字符串。"""
         normalized: dict[str, str] = {}
-        ai_wall_time = parsed.get("parse_source") != "rule"
+        ai_wall_time               = parsed.get("parse_source") != "rule"
         for field in ("start_time", "end_time"):
             if parsed.get(field):
                 value = cls._normalize_parser_datetime(
@@ -528,7 +527,7 @@ class AIParser:
         for raw in value:
             if not isinstance(raw, dict):
                 continue
-            name = str(raw.get("name") or "").strip()
+            name     = str(raw.get("name") or "").strip()
             raw_time = raw.get("time")
             if not name or not raw_time:
                 continue
@@ -549,7 +548,7 @@ class AIParser:
         if len(milestones) >= 2:
             result["milestones"] = milestones
             result["start_time"] = milestones[0]["time"]
-            result["end_time"] = milestones[-1]["time"]
+            result["end_time"]   = milestones[-1]["time"]
             if offsets:
                 result["remind_times"] = self.build_remind_times_for_milestones(
                     milestones,
@@ -661,7 +660,9 @@ class AIParser:
 
     def build_reminder_rules_from_description(self, description: str) -> list[dict[str, int]]:
         """从自然语言提醒描述中提取语义规则。"""
-        offsets = ["".join(match) for match in REMINDER_DESCRIPTION_RE.findall(description)]
+        # 显式分隔符区分多次提醒，连续单位累加为同一次复合时长。
+        offsets = re.split(r"[,，、;；]|以及|和|(?=提前)", description)
+        offsets = [part for part in offsets if OFFSET_TOKEN_RE.search(part)]
         if offsets:
             return self.build_reminder_rules_from_offsets(offsets)
         if any(token in str(description) for token in ("准时", "开始时", "到点")):
@@ -670,14 +671,12 @@ class AIParser:
 
     def _parse_offset(self, offset: str) -> timedelta | None:
         """解析偏移量字符串"""
-        match = OFFSET_TOKEN_RE.search(str(offset))
-        if not match:
-            return None
-
-        num = self._parse_chinese_number(match.group(1))
-        if num is None:
-            return None
-        return timedelta(seconds=num * OFFSET_UNIT_SECONDS[match.group(2)])
+        seconds = 0.0
+        for match in OFFSET_TOKEN_RE.finditer(str(offset)):
+            num = self._parse_chinese_number(match.group(1))
+            if num is not None:
+                seconds += num * OFFSET_UNIT_SECONDS[match.group(2)]
+        return timedelta(seconds=seconds) if seconds else None
 
     @classmethod
     def _parse_chinese_number(cls, text: str) -> float | None:
@@ -699,7 +698,7 @@ class AIParser:
 
         if "百" in text:
             left, remaining = text.split("百", 1)
-            hundreds = CHINESE_DIGITS.get(left, 1) if left else 1
+            hundreds  = CHINESE_DIGITS.get(left, 1) if left else 1
             remaining = remaining.lstrip("零")
             remainder = cls._parse_chinese_number(remaining) if remaining else 0.0
             return None if remainder is None else hundreds * 100.0 + remainder

@@ -48,15 +48,15 @@ _INLINE_TITLE_RE: Final = re.compile(
     rf"(^|\s)(title:{_QUOTED_OR_TOKEN_PATTERN})(?=\s|$)", re.IGNORECASE
 )
 _INLINE_REFERENCE_RE: Final = re.compile(rf"(?<!\S)ref:({_QUOTED_OR_TOKEN_PATTERN})", re.IGNORECASE)
-_METADATA_SUFFIX_RE: Final = re.compile(
+_METADATA_SUFFIX_RE: Final  = re.compile(
     rf"(?:^|\s)(cat:{_QUOTED_OR_TOKEN_PATTERN}|ref:{_QUOTED_OR_TOKEN_PATTERN}|#[\w\u4e00-\u9fa5-]+)\s*$",
     re.IGNORECASE,
 )
 _NOTE_TIME_RANGE_RE: Final = re.compile(
     r"last\d+d|\d{4}(?:-\d{2}(?:-\d{2})?)?(?:\.\.\d{4}-\d{2}-\d{2})?"
 )
-_CONTENT_MARKER_RE: Final = re.compile(r"content(?:[\s:]+(.*))?", re.IGNORECASE)
-_EMPTY_INLINE_TITLE_RE: Final = re.compile(r"(^|\s)title:(?=\s|$)", re.IGNORECASE)
+_CONTENT_MARKER_RE: Final            = re.compile(r"content(?:[\s:]+(.*))?", re.IGNORECASE)
+_EMPTY_INLINE_TITLE_RE: Final        = re.compile(r"(^|\s)title:(?=\s|$)", re.IGNORECASE)
 _MALFORMED_METADATA_SUFFIX_RE: Final = re.compile(
     r"""(?:^|\s)(cat|ref):(?:["'“].*)?\s*$""", re.IGNORECASE
 )
@@ -90,14 +90,14 @@ class ParsedNoteText(TypedDict):
 class NoteListFilters:
     """笔记列表筛选；日期边界采用用户本地墙钟时间。"""
 
-    category: str | None = None
-    tag: str | None = None
+    category: str | None   = None
+    tag: str | None        = None
     start_date: str | None = None
-    end_date: str | None = None
+    end_date: str | None   = None
     time_label: str | None = None
-    show_all: bool = False
-    page: int = 1
-    page_explicit: bool = False
+    show_all: bool         = False
+    page: int              = 1
+    page_explicit: bool    = False
 
     @property
     def has_semantic_filter(self) -> bool:
@@ -107,9 +107,9 @@ class NoteListFilters:
 def _split_note_control_tokens(tokens: list[str]) -> tuple[list[str], bool, int, bool]:
     """提取独立的 ``all`` 与 ``page:N``，不误伤 ``#all``。"""
     remaining: list[str] = []
-    show_all = False
-    page = 1
-    page_seen = False
+    show_all             = False
+    page                 = 1
+    page_seen            = False
     for token in tokens:
         normalized = token.casefold()
         if normalized == "all":
@@ -123,7 +123,7 @@ def _split_note_control_tokens(tokens: list[str]) -> tuple[list[str], bool, int,
             raw_page = token.split(":", 1)[1]
             if not raw_page.isdecimal() or int(raw_page) < 1:
                 raise ValueError(f"无效页码: {token}")
-            page = int(raw_page)
+            page      = int(raw_page)
             page_seen = True
             continue
         remaining.append(token)
@@ -134,7 +134,7 @@ def _split_note_control_tokens(tokens: list[str]) -> tuple[list[str], bool, int,
 
 def _split_note_named_tokens(tokens: list[str]) -> tuple[list[str], dict[str, str]]:
     """提取 cat:、since: 与单个 #tag，保留裸时间/分类参数。"""
-    remaining: list[str] = []
+    remaining: list[str]  = []
     named: dict[str, str] = {}
     for token in tokens:
         normalized = token.casefold()
@@ -188,7 +188,7 @@ class NoteHandler(DbOpsMixin):
             return await self.list_notes(user_id, "", context)
 
         command = parts[0].casefold()
-        rest = parts[1] if len(parts) > 1 else ""
+        rest    = parts[1] if len(parts) > 1 else ""
 
         if command == "add":
             return await self.create_note(user_id, rest, context, group_id)
@@ -260,24 +260,24 @@ class NoteHandler(DbOpsMixin):
         except ValueError as exc:
             return {"status": "error", "message": f"❌ {exc}"}
 
-        current = await get_user_local_wall_time(user_id, self.db)
+        current   = await get_user_local_wall_time(user_id, self.db)
         note_item = NoteItem(
-            owner_id=user_id,
-            title=normalized["title"],
-            content=normalized["content"],
-            tags=normalized["tags"],
-            category=normalized["category"],
-            references=normalized["references"],
-            related_items=normalized["related_items"],
-            context={"group_id": group_id} if group_id is not None else {},
-            created_at=current.isoformat(),
-            updated_at=current.isoformat(),
+            owner_id      = user_id,
+            title         = normalized["title"],
+            content       = normalized["content"],
+            tags          = normalized["tags"],
+            category      = normalized["category"],
+            references    = normalized["references"],
+            related_items = normalized["related_items"],
+            context       = {"group_id": group_id} if group_id is not None else {},
+            created_at    = current.isoformat(),
+            updated_at    = current.isoformat(),
         )
 
         item_id = await self._db_create_with_log(note_item, owner_id=user_id, action="create_note")
 
         tags_str = ItemFormatter.format_tags(normalized["tags"])
-        message = "✅ 已记录笔记\n\n"
+        message  = "✅ 已记录笔记\n\n"
         message += f"📝 {normalized['title']}\n"
         message += f"📂 分类: {normalized['category']}\n"
         if tags_str:
@@ -298,7 +298,7 @@ class NoteHandler(DbOpsMixin):
         new_refs: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         merged: list[dict[str, Any]] = []
-        seen: set[str] = set()
+        seen: set[str]               = set()
         for ref in [*(existing_refs or []), *new_refs]:
             if not isinstance(ref, dict):
                 continue
@@ -312,7 +312,7 @@ class NoteHandler(DbOpsMixin):
     @staticmethod
     def _related_from_references(refs: list[dict[str, Any]]) -> list[str]:
         related: list[str] = []
-        seen: set[str] = set()
+        seen: set[str]     = set()
         for ref in refs:
             ref_id = str(ref.get("id") or "").strip()
             if ref_id and ref_id not in seen:
@@ -327,7 +327,7 @@ class NoteHandler(DbOpsMixin):
         source_note_id: str | None = None,
     ) -> tuple[list[dict[str, Any]], list[str]]:
         references: list[dict[str, Any]] = []
-        seen: set[str] = set()
+        seen: set[str]                   = set()
         for raw_id in ref_ids:
             ref_id = str(raw_id or "").strip()
             if not ref_id:
@@ -367,7 +367,7 @@ class NoteHandler(DbOpsMixin):
         - title:标题\n正文多行... cat:xxx #tag1 #tag2
         - 内容 title:标题 cat:xxx #tag1 #tag2
         """
-        meta = self._extract_note_metadata(text)
+        meta         = self._extract_note_metadata(text)
         content_text = meta["text"]
         title, content_text = self._split_explicit_title(content_text)
         explicit_title = bool(title)
@@ -428,14 +428,14 @@ class NoteHandler(DbOpsMixin):
     @classmethod
     def _split_quoted_title(cls, title_payload: str) -> tuple[str, str]:
         closing_quote = {'"': '"', "'": "'", "“": "”"}[title_payload[0]]
-        end_quote = title_payload.find(closing_quote, 1)
+        end_quote     = title_payload.find(closing_quote, 1)
         if end_quote < 0:
             raise ValueError("title: 标题引号未闭合")
 
         title = cls._normalize_title_token(title_payload[: end_quote + 1])
         if not title:
             raise ValueError("title: 后缺少标题")
-        remainder = title_payload[end_quote + 1 :].lstrip()
+        remainder      = title_payload[end_quote + 1 :].lstrip()
         content_marker = _CONTENT_MARKER_RE.fullmatch(remainder)
         if content_marker:
             remainder = content_marker.group(1) or ""
@@ -474,15 +474,15 @@ class NoteHandler(DbOpsMixin):
         if not token_match:
             return None, content_text
 
-        token = token_match.group(2)
+        token     = token_match.group(2)
         raw_title = token[6:]
-        title = NoteHandler._normalize_title_token(raw_title)
+        title     = NoteHandler._normalize_title_token(raw_title)
 
         if not title:
             raise ValueError("title: 后缺少标题")
 
-        before = content_text[: token_match.start(2)].strip()
-        after = content_text[token_match.end(2) :].strip()
+        before    = content_text[: token_match.start(2)].strip()
+        after     = content_text[token_match.end(2) :].strip()
         remaining = f"{before} {after}".strip() if before and after else (before or after)
 
         return title, remaining
@@ -505,8 +505,8 @@ class NoteHandler(DbOpsMixin):
         if not lines:
             return {"text": "", "category": None, "tags": [], "reference_ids": []}
 
-        category: str | None = None
-        tags: list[str] = []
+        category: str | None     = None
+        tags: list[str]          = []
         reference_ids: list[str] = []
 
         for idx in range(len(lines) - 1, -1, -1):
@@ -548,7 +548,7 @@ class NoteHandler(DbOpsMixin):
 
     @staticmethod
     def _normalize_metadata_token_value(raw_value: str) -> str:
-        value = (raw_value or "").strip()
+        value       = (raw_value or "").strip()
         quote_pairs = {'"': '"', "'": "'", "“": "”"}
         if value and value[0] in quote_pairs:
             if not value.endswith(quote_pairs[value[0]]):
@@ -559,7 +559,7 @@ class NoteHandler(DbOpsMixin):
     @staticmethod
     def _dedupe_reference_ids(values: list[str]) -> list[str]:
         result: list[str] = []
-        seen: set[str] = set()
+        seen: set[str]    = set()
         for value in values:
             ref_id = str(value or "").strip()
             if ref_id and ref_id not in seen:
@@ -572,11 +572,11 @@ class NoteHandler(DbOpsMixin):
         line: str,
     ) -> tuple[str, str | None, list[str], list[str], bool]:
         """从单行尾部反复剥离 cat:、ref: 与 #tag token。"""
-        remaining = line.rstrip()
-        category = None
-        tags: list[str] = []
+        remaining                = line.rstrip()
+        category                 = None
+        tags: list[str]          = []
         reference_ids: list[str] = []
-        had_metadata = False
+        had_metadata             = False
 
         while remaining:
             token_match = _METADATA_SUFFIX_RE.search(remaining)
@@ -587,7 +587,7 @@ class NoteHandler(DbOpsMixin):
                     raise ValueError(f"{key}: 参数为空或引号未闭合")
                 break
 
-            token = token_match.group(1)
+            token        = token_match.group(1)
             had_metadata = True
 
             token_lower = token.casefold()
@@ -614,10 +614,10 @@ class NoteHandler(DbOpsMixin):
         tokens: list[str], named: dict[str, str], user_now: datetime
     ) -> tuple[str | None, str | None, str | None, str | None]:
         """把剩余裸参数依次解释为时间范围和分类。"""
-        remaining = list(tokens)
-        category = named.get("cat")
+        remaining              = list(tokens)
+        category               = named.get("cat")
         start_date: str | None = None
-        end_date: str | None = None
+        end_date: str | None   = None
         time_label: str | None = None
 
         if since_value := named.get("since"):
@@ -656,14 +656,14 @@ class NoteHandler(DbOpsMixin):
             tokens, named, user_now
         )
         return NoteListFilters(
-            category=category,
-            tag=named.get("tag"),
-            start_date=start_date,
-            end_date=end_date,
-            time_label=time_label,
-            show_all=show_all,
-            page=page,
-            page_explicit=page_explicit,
+            category      = category,
+            tag           = named.get("tag"),
+            start_date    = start_date,
+            end_date      = end_date,
+            time_label    = time_label,
+            show_all      = show_all,
+            page          = page,
+            page_explicit = page_explicit,
         )
 
     async def _load_notes(self, user_id: str, filters: NoteListFilters) -> list[NoteItem]:
@@ -718,8 +718,8 @@ class NoteHandler(DbOpsMixin):
         lines = ["**分类概览**", ""]
         for category in sorted(grouped, key=str.casefold):
             category_notes = grouped[category]
-            tags = {tag for note in category_notes for tag in (note.tags or [])}
-            tag_text = (
+            tags           = {tag for note in category_notes for tag in (note.tags or [])}
+            tag_text       = (
                 f" {ItemFormatter.format_tags(sorted(tags, key=str.casefold))}" if tags else ""
             )
             lines.append(f"📂 **{category}** ({len(category_notes)}项){tag_text}")
@@ -736,10 +736,10 @@ class NoteHandler(DbOpsMixin):
             raise ValueError(f"第 {filters.page} 页没有笔记")
 
         lines: list[str] = []
-        offset = (filters.page - 1) * PendoConfig.LIST_PAGE_SIZE
+        offset           = (filters.page - 1) * PendoConfig.LIST_PAGE_SIZE
         for index, note in enumerate(display_notes, offset + 1):
-            title = ItemFormatter.truncate_content(note.title or "无标题", 40)
-            tags = ItemFormatter.format_tags(note.tags or [])
+            title    = ItemFormatter.truncate_content(note.title or "无标题", 40)
+            tags     = ItemFormatter.format_tags(note.tags or [])
             metadata = f"📂 {note.category or '未分类'}"
             if tags:
                 metadata += f" | 🏷️ {tags}"
@@ -765,16 +765,16 @@ class NoteHandler(DbOpsMixin):
         """
         try:
             user_now = await get_user_local_wall_time(user_id, self.db)
-            filters = self._parse_list_filters(filter_str, user_now)
+            filters  = self._parse_list_filters(filter_str, user_now)
         except ValueError as exc:
             return {"status": "error", "message": f"❌ {exc}"}
 
-        notes = await self._load_notes(user_id, filters)
+        notes       = await self._load_notes(user_id, filters)
         filter_text = self._format_list_filter_text(filters)
         if not notes:
             return {"status": "success", "message": f"📝 没有找到笔记{filter_text}"}
 
-        message = f"📝 **笔记列表**{filter_text} (共{len(notes)}项)\n\n"
+        message       = f"📝 **笔记列表**{filter_text} (共{len(notes)}项)\n\n"
         overview_only = (
             not filters.has_semantic_filter and not filters.show_all and not filters.page_explicit
         )
@@ -814,9 +814,9 @@ class NoteHandler(DbOpsMixin):
         await self._db_update_item(
             note_id,
             last_viewed,
-            owner_id=user_id,
-            expected_version=note.version,
-            touch=False,
+            owner_id         = user_id,
+            expected_version = note.version,
+            touch            = False,
         )
 
         message = f"📝 **{note.title or '无标题'}**\n\n"
@@ -846,8 +846,8 @@ class NoteHandler(DbOpsMixin):
             for ref in note.references[:10]:
                 if not isinstance(ref, dict):
                     continue
-                ref_id = ref.get("id", "")
-                ref_type = self._type_label(str(ref.get("type") or ""))
+                ref_id    = ref.get("id", "")
+                ref_type  = self._type_label(str(ref.get("type") or ""))
                 ref_title = ref.get("title") or "无标题"
                 message += f"• {ref_type}: {ref_title} `{public_id(ref_id)}`\n"
 
@@ -868,7 +868,7 @@ class NoteHandler(DbOpsMixin):
     ) -> dict[str, Any] | None:
         """仅组装用户明确提供的字段；返回 ``None`` 表示没有有效修改。"""
         updates: dict[str, Any] = {"type": ItemType.NOTE.value}
-        explicit_fields = parsed["_explicit_fields"]
+        explicit_fields         = parsed["_explicit_fields"]
 
         if parsed["_title_provided"]:
             updates["title"] = parsed["title"]
@@ -882,8 +882,8 @@ class NoteHandler(DbOpsMixin):
             new_refs, _ = await self._resolve_note_references(
                 user_id, parsed["reference_ids"], source_note_id=note_id
             )
-            merged_refs = self._merge_references(note.references, new_refs)
-            updates["references"] = merged_refs
+            merged_refs              = self._merge_references(note.references, new_refs)
+            updates["references"]    = merged_refs
             updates["related_items"] = self._related_from_references(merged_refs)
 
         if set(updates) == {"type"}:
@@ -910,7 +910,7 @@ class NoteHandler(DbOpsMixin):
                 ),
             }
 
-        note_id = parts[0].strip()
+        note_id     = parts[0].strip()
         new_content = parts[1]
 
         note, wrong_type = await self._db_get_typed_item_or_message(
@@ -936,8 +936,8 @@ class NoteHandler(DbOpsMixin):
             note_id,
             normalized_updates,
             user_id,
-            action="edit_note",
-            expected_version=note.version,
+            action           = "edit_note",
+            expected_version = note.version,
         )
 
         display_title = str(normalized_updates.get("title") or note.title or "无标题笔记")
@@ -951,7 +951,7 @@ class NoteHandler(DbOpsMixin):
         parts = args.split(maxsplit=1)
         if len(parts) < 2:
             return {"status": "error", "message": "❌ 用法: /pendo note append <id> <追加内容>"}
-        note_id = parts[0].strip()
+        note_id  = parts[0].strip()
         addition = parts[1].strip()
         if not addition:
             return {"status": "error", "message": "❌ 请提供要追加的内容"}
@@ -961,8 +961,8 @@ class NoteHandler(DbOpsMixin):
         )
         if wrong_type:
             return wrong_type
-        note = cast(NoteItem, note)
-        content = (note.content or "").rstrip()
+        note         = cast(NoteItem, note)
+        content      = (note.content or "").rstrip()
         next_content = f"{content}\n\n{addition}" if content else addition
         try:
             updates = normalize_note_fields(
@@ -976,8 +976,8 @@ class NoteHandler(DbOpsMixin):
             note_id,
             updates,
             user_id,
-            action="edit_note",
-            expected_version=note.version,
+            action           = "edit_note",
+            expected_version = note.version,
         )
         return {
             "status": "success",
@@ -990,7 +990,7 @@ class NoteHandler(DbOpsMixin):
         if not tags:
             tags = [part.lstrip("#") for part in (text or "").split() if part.strip()]
         clean: list[str] = []
-        seen: set[str] = set()
+        seen: set[str]   = set()
         for tag in tags:
             tag = tag.strip()
             key = tag.casefold()
@@ -1003,7 +1003,7 @@ class NoteHandler(DbOpsMixin):
         parts = args.split(maxsplit=1)
         if len(parts) < 2:
             return {"status": "error", "message": "❌ 用法: /pendo note tag <id> #标签"}
-        note_id = parts[0].strip()
+        note_id        = parts[0].strip()
         requested_tags = self._extract_tag_args(parts[1])
         if not requested_tags:
             return {"status": "error", "message": "❌ 请提供标签"}
@@ -1019,9 +1019,9 @@ class NoteHandler(DbOpsMixin):
         )
         if wrong_type:
             return wrong_type
-        note = cast(NoteItem, note)
+        note   = cast(NoteItem, note)
         merged = list(note.tags or [])
-        seen = {tag.casefold() for tag in merged}
+        seen   = {tag.casefold() for tag in merged}
         for tag in tags:
             if tag.casefold() not in seen:
                 seen.add(tag.casefold())
@@ -1039,8 +1039,8 @@ class NoteHandler(DbOpsMixin):
             note_id,
             updates,
             user_id,
-            action="edit_note",
-            expected_version=note.version,
+            action           = "edit_note",
+            expected_version = note.version,
         )
         return {
             "status": "success",
@@ -1051,7 +1051,7 @@ class NoteHandler(DbOpsMixin):
         parts = args.split(maxsplit=1)
         if len(parts) < 2:
             return {"status": "error", "message": "❌ 用法: /pendo note untag <id> #标签"}
-        note_id = parts[0].strip()
+        note_id        = parts[0].strip()
         requested_tags = self._extract_tag_args(parts[1])
         if not requested_tags:
             return {"status": "error", "message": "❌ 请提供标签"}
@@ -1068,7 +1068,7 @@ class NoteHandler(DbOpsMixin):
         )
         if wrong_type:
             return wrong_type
-        note = cast(NoteItem, note)
+        note      = cast(NoteItem, note)
         remaining = [tag for tag in (note.tags or []) if tag.casefold() not in tags]
         if remaining == list(note.tags or []):
             return {"status": "info", "message": "ℹ️ 笔记中没有这些标签，未做修改"}
@@ -1083,8 +1083,8 @@ class NoteHandler(DbOpsMixin):
             note_id,
             updates,
             user_id,
-            action="edit_note",
-            expected_version=note.version,
+            action           = "edit_note",
+            expected_version = note.version,
         )
         return {
             "status": "success",
@@ -1095,7 +1095,7 @@ class NoteHandler(DbOpsMixin):
         parts = args.split(maxsplit=1)
         if len(parts) < 2:
             return {"status": "error", "message": "❌ 用法: /pendo note link <id> <关联条目ID>"}
-        note_id = parts[0].strip()
+        note_id   = parts[0].strip()
         target_id = parts[1].strip()
         if error := self._single_token_error(
             target_id, "❌ 关联命令只接受一个目标ID\n例如: /pendo note link note123 event456"
@@ -1116,7 +1116,7 @@ class NoteHandler(DbOpsMixin):
         except ValueError as exc:
             return {"status": "error", "message": f"❌ {exc}"}
         existing_refs = self._merge_references(note.references, [])
-        merged_refs = self._merge_references(existing_refs, new_refs)
+        merged_refs   = self._merge_references(existing_refs, new_refs)
         if merged_refs == existing_refs:
             return {"status": "info", "message": "ℹ️ 该关联已存在，笔记未改变"}
         try:
@@ -1134,8 +1134,8 @@ class NoteHandler(DbOpsMixin):
             note_id,
             updates,
             user_id,
-            action="edit_note",
-            expected_version=note.version,
+            action           = "edit_note",
+            expected_version = note.version,
         )
         ref = new_refs[0]
         return {
@@ -1199,7 +1199,7 @@ class NoteHandler(DbOpsMixin):
         self, user_id: str, category: str, context: PendoContext
     ) -> CommandMessage:
         """删除整个分类下的笔记"""
-        filters = {"type": ItemType.NOTE.value, "category": category}
+        filters  = {"type": ItemType.NOTE.value, "category": category}
         note_ids = await run_sync(self.db.get_item_ids, user_id, filters)
 
         if not note_ids:

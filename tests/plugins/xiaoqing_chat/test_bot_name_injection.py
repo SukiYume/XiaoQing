@@ -6,7 +6,6 @@ from plugins.xiaoqing_chat.expression.expr_utils import render_dialogue
 from plugins.xiaoqing_chat.llm.prompt_builder import build_prompt_messages
 from plugins.xiaoqing_chat.llm.reply_checker import (
     _heuristic_check,
-    _normalize_evidence_text,
     _requires_configured_profile_boundary,
     _requires_llm_semantic_check,
 )
@@ -28,17 +27,17 @@ def test_custom_name_is_injected_into_planner_and_generation_prompt() -> None:
     personality = PersonalityConfig(identity="住校的理工科学生。", states=[])
 
     persona_text = _build_persona_text("阿澄", personality)
-    messages = build_prompt_messages(
-        is_private=False,
-        bot_name="阿澄",
-        sender_name="测试用户",
-        think_level=1,
-        history=[],
-        current_text="阿澄，今天怎么样？",
-        personality=personality,
-        keyword_rules=[],
-        regex_rules=[],
-        request_id="bot-name-test",
+    messages     = build_prompt_messages(
+        is_private    = False,
+        bot_name      = "阿澄",
+        sender_name   = "测试用户",
+        think_level   = 1,
+        history       = [],
+        current_text  = "阿澄，今天怎么样？",
+        personality   = personality,
+        keyword_rules = [],
+        regex_rules   = [],
+        request_id    = "bot-name-test",
     )
     system_prompt = messages[0].content
 
@@ -49,7 +48,7 @@ def test_custom_name_is_injected_into_planner_and_generation_prompt() -> None:
     assert "小青" not in system_prompt
 
 
-def test_custom_name_drives_persona_queries_and_evidence_normalization() -> None:
+def test_custom_name_drives_persona_queries() -> None:
     grounding = "具体学校和城市没有设定，不主动补成可核验资料。"
 
     assert _is_persona_intro_query("阿澄是什么样的人", bot_name="阿澄") is True
@@ -72,14 +71,12 @@ def test_custom_name_drives_persona_queries_and_evidence_normalization() -> None
     )
     assert (
         _requires_llm_semantic_check(
-            reply="我没设定具体学校。",
-            current_text="阿澄多大",
-            bot_name="阿澄",
+            reply        = "我没设定具体学校。",
+            current_text = "阿澄多大",
+            bot_name     = "阿澄",
         )
         is True
     )
-    assert _normalize_evidence_text("阿澄是学生", bot_name="阿澄") == "我是学生"
-    assert _normalize_evidence_text("小青是学生", bot_name="阿澄") == "小青是学生"
 
 
 def test_history_uses_current_name_and_keeps_assistant_role_after_rename() -> None:
@@ -89,11 +86,11 @@ def test_history_uses_current_name_and_keeps_assistant_role_after_rename() -> No
 
     dialogue = render_dialogue(history, bot_name="阿澄")
     repeated = _heuristic_check(
-        reply="刚刚说过",
-        history=history,
-        max_repeat_compare=2,
-        similarity_threshold=0.9,
-        max_assistant_in_row=3,
+        reply                = "刚刚说过",
+        history              = history,
+        max_repeat_compare   = 2,
+        similarity_threshold = 0.9,
+        max_assistant_in_row = 3,
     )
 
     assert dialogue == "阿澄(阿澄)：刚刚说过"

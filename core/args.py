@@ -9,9 +9,9 @@ import shlex
 from dataclasses import dataclass, field
 
 _SHORT_OPTION_PATTERN = re.compile(r"-[A-Za-z]\Z")
-_LONG_OPTION_PATTERN = re.compile(r"--[A-Za-z][A-Za-z0-9_-]*(?:=.*)?\Z")
-_INTEGER_PATTERN = re.compile(r"[+-]?[0-9]+\Z")
-FLAG_VALUE = "true"
+_LONG_OPTION_PATTERN  = re.compile(r"--[A-Za-z][A-Za-z0-9_-]*(?:=.*)?\Z")
+_INTEGER_PATTERN      = re.compile(r"[+-]?[0-9]+\Z")
+FLAG_VALUE            = "true"
 
 
 def _is_option_token(token: str) -> bool:
@@ -138,10 +138,10 @@ def parse(raw: str) -> ParsedArgs:
 
 def _parse_tokens(tokens_list: list[str]) -> tuple[list[str], dict[str, str]]:
     """Parse caller-owned token boundaries without joining and tokenizing again."""
-    args: list[str] = []
+    args: list[str]         = []
     options: dict[str, str] = {}
-    idx = 0
-    options_enabled = True
+    idx                     = 0
+    options_enabled         = True
 
     while idx < len(tokens_list):
         token = tokens_list[idx]

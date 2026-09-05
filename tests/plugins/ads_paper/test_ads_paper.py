@@ -96,7 +96,7 @@ async def test_resolve_real_ads_bibcode_bypasses_arxiv_search() -> None:
 async def test_ads_query_builders_escape_author_and_reject_invalid_bibcodes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client = ADSClient("token", object())
+    client              = ADSClient("token", object())
     captured: list[str] = []
 
     async def capture(query: str, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
@@ -176,15 +176,15 @@ async def test_help_and_local_topics_do_not_require_ads_token(tmp_path):
         Any,
         with_settings_reader(
             SimpleNamespace(
-                secrets={"plugins": {"ads_paper": {}}},
-                state={},
-                data_dir=tmp_path,
-                http_session=object(),
-                request_id=None,
+                secrets      = {"plugins": {"ads_paper": {}}},
+                state        = {},
+                data_dir     = tmp_path,
+                http_session = object(),
+                request_id   = None,
             )
         ),
     )
-    help_result = await ads_main.handle("paper", "help", {}, context)
+    help_result   = await ads_main.handle("paper", "help", {}, context)
     topics_result = await ads_main.handle("paper", "topics", {"user_id": 1}, context)
 
     assert "论文与文献管理助手" in help_result[0]["data"]["text"]
@@ -200,11 +200,11 @@ async def test_free_text_commands_preserve_quotes_backslashes_and_spacing(
         Any,
         with_settings_reader(
             SimpleNamespace(
-                secrets={"plugins": {"ads_paper": {"ads_token": "test-token"}}},
-                state={},
-                data_dir=tmp_path,
-                http_session=object(),
-                request_id="ads-free-text",
+                secrets      = {"plugins": {"ads_paper": {"ads_token": "test-token"}}},
+                state        = {},
+                data_dir     = tmp_path,
+                http_session = object(),
+                request_id   = "ads-free-text",
             )
         ),
     )
@@ -219,7 +219,7 @@ async def test_free_text_commands_preserve_quotes_backslashes_and_spacing(
     search.assert_awaited_once()
     assert search.await_args.args[1] == query
 
-    content = r'-3σ  偏差\路径 "保留引号"'
+    content     = r'-3σ  偏差\路径 "保留引号"'
     note_result = await ads_main.handle(
         "paper",
         f"note 2401.12345 {content}",
@@ -242,11 +242,11 @@ async def test_local_resource_commands_share_one_user_lifecycle_and_reject_bad_m
         Any,
         with_settings_reader(
             SimpleNamespace(
-                secrets={"plugins": {"ads_paper": {}}},
-                state={},
-                data_dir=tmp_path,
-                http_session=object(),
-                request_id="ads-lifecycle",
+                secrets      = {"plugins": {"ads_paper": {}}},
+                state        = {},
+                data_dir     = tmp_path,
+                http_session = object(),
+                request_id   = "ads-lifecycle",
             )
         ),
     )
@@ -420,7 +420,7 @@ class TestPaperStorageBehavior:
         storage.add_deadline("earlier", "2026-05-01", 10001)
         storage.add_deadline("other-user", "2026-04-01", 10002)
 
-        user_notes = storage.get_paper_notes("paper-1", 10001)
+        user_notes  = storage.get_paper_notes("paper-1", 10001)
         other_notes = storage.get_paper_notes("paper-1", 10002)
         assert [note["content"] for note in user_notes] == ["note-user-1"]
         assert [note["content"] for note in other_notes] == ["note-user-2"]
@@ -496,11 +496,11 @@ async def test_ads_client_search_passes_timeout():
             yield b'{"response":{"docs":[]}}'
 
     class MockResponse:
-        status = 200
-        url = "https://api.adsabs.harvard.edu/v1/search/query"
+        status                            = 200
+        url                               = "https://api.adsabs.harvard.edu/v1/search/query"
         headers: ClassVar[dict[str, str]] = {"Content-Type": "application/json"}
-        content_length = None
-        content = MockContent()
+        content_length                    = None
+        content                           = MockContent()
 
         async def __aenter__(self):
             return self
@@ -532,11 +532,11 @@ async def test_ads_bibtex_accepts_valid_json_without_content_type():
             yield b'{"msg":"Retrieved 1 abstract","export":"@article{demo}"}'
 
     class MockResponse:
-        status = 200
-        url = "https://api.adsabs.harvard.edu/v1/export/bibtex"
+        status                            = 200
+        url                               = "https://api.adsabs.harvard.edu/v1/export/bibtex"
         headers: ClassVar[dict[str, str]] = {}
-        content_length = None
-        content = MockContent()
+        content_length                    = None
+        content                           = MockContent()
 
         async def __aenter__(self):
             return self
@@ -567,7 +567,7 @@ async def test_ads_summary_uses_core_ai_route_without_plugin_credentials():
 
     class AI:
         async def complete(self, route, messages):
-            captured["route"] = route
+            captured["route"]    = route
             captured["messages"] = messages
             return SimpleNamespace(content="统一摘要")
 
@@ -576,9 +576,9 @@ async def test_ads_summary_uses_core_ai_route_without_plugin_credentials():
         with_settings_reader(
             SimpleNamespace(
                 capabilities=SimpleNamespace(ai=AI()),
-                secrets={"plugins": {"ads_paper": {"ads_token": "token"}}},
-                logger=SimpleNamespace(),
-                request_id=None,
+                secrets    = {"plugins": {"ads_paper": {"ads_token": "token"}}},
+                logger     = SimpleNamespace(),
+                request_id = None,
             )
         ),
     )

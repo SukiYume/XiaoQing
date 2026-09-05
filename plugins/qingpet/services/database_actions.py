@@ -52,16 +52,16 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                 ).fetchone()
                 conn.rollback()
                 return False, int(row["coins"]) if row else -1
-            items = self._load_inventory_items(conn, user_id, group_id)
+            items          = self._load_inventory_items(conn, user_id, group_id)
             items[item_id] = int(items.get(item_id, 0)) + int(amount)
             self._save_inventory_items(conn, user_id, group_id, items)
             self._record_asset_delta(
                 conn,
-                user_id=user_id,
-                group_id=group_id,
-                asset_type="coins",
-                delta=-total_cost,
-                reason="item_purchase",
+                user_id    = user_id,
+                group_id   = group_id,
+                asset_type = "coins",
+                delta      = -total_cost,
+                reason     = "item_purchase",
             )
             conn.commit()
             return True, 0
@@ -79,18 +79,18 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
     ) -> tuple[bool, int]:
         """只读检查持久化配额和冷却，不消耗次数。"""
         try:
-            current = database_clock.now()
+            current   = database_clock.now()
             timestamp = time.time()
-            row = (
+            row       = (
                 self._get_connection()
                 .execute(
                     """SELECT action_count, available_at FROM action_quotas
                    WHERE user_id = ? AND group_id = ? AND action = ? AND period_date = ?""",
-                    (user_id, group_id, action, current.strftime("%Y-%m-%d")),
+                    (user_id, group_id, action, database_clock.business_date(current)),
                 )
                 .fetchone()
             )
-            count = int(row["action_count"] or 0) if row else 0
+            count        = int(row["action_count"] or 0) if row else 0
             available_at = float(row["available_at"] or 0) if row else 0.0
             if count >= max(0, int(daily_limit)):
                 return False, -1
@@ -114,15 +114,15 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
         now_ts: float | None = None,
     ) -> tuple[bool, int]:
         """在调用方已开启的事务中领取一次持久化配额。"""
-        current = now or database_clock.now()
+        current   = now or database_clock.now()
         timestamp = time.time() if now_ts is None else now_ts
-        today = current.strftime("%Y-%m-%d")
-        row = conn.execute(
+        today     = database_clock.business_date(current)
+        row       = conn.execute(
             """SELECT action_count, available_at FROM action_quotas
                WHERE user_id = ? AND group_id = ? AND action = ? AND period_date = ?""",
             (user_id, group_id, action, today),
         ).fetchone()
-        count = int(row["action_count"] or 0) if row else 0
+        count        = int(row["action_count"] or 0) if row else 0
         available_at = float(row["available_at"] or 0) if row else 0.0
         if count >= max(0, int(daily_limit)):
             return False, -1
@@ -246,8 +246,8 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
             conn,
             user_id,
             group_id,
-            today=today,
-            now_iso=now_iso,
+            today   = today,
+            now_iso = now_iso,
         )
         updated = conn.execute(
             """UPDATE tasks SET current_value = MIN(current_value + ?, target_value)
@@ -268,7 +268,7 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
         cooldown_seconds: int,
         outcome_factory: Callable[[Pet, Pet | None], MinigameOutcome],
         opponent_user_id: str | None = None,
-        minimum_energy: int = 0,
+        minimum_energy: int          = 0,
     ) -> MinigameAtomicResult:
         """在一个立即事务中校验并结算小游戏。
 
@@ -299,13 +299,13 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                 payload = json.loads(str(prior["outcome_payload"]))
                 return MinigameAtomicResult(
                     True,
-                    pet_name=str(prior["pet_name"]),
-                    opponent_pet_name=str(prior["opponent_pet_name"] or ""),
-                    coin_grant=int(prior["coin_grant"]),
-                    experience_grant=int(prior["experience_grant"]),
-                    energy_cost=int(prior["energy_cost"]),
-                    payload=payload if isinstance(payload, dict) else {},
-                    duplicate=True,
+                    pet_name          = str(prior["pet_name"]),
+                    opponent_pet_name = str(prior["opponent_pet_name"] or ""),
+                    coin_grant        = int(prior["coin_grant"]),
+                    experience_grant  = int(prior["experience_grant"]),
+                    energy_cost       = int(prior["energy_cost"]),
+                    payload           = payload if isinstance(payload, dict) else {},
+                    duplicate         = True,
                 )
 
             user_row = conn.execute(
@@ -328,7 +328,7 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                 return MinigameAtomicResult(False, "宠物现在无法互动")
 
             opponent_pet: Pet | None = None
-            opponent_pet_name = ""
+            opponent_pet_name        = ""
             if normalized_opponent:
                 opponent_user = conn.execute(
                     "SELECT 1 FROM users WHERE user_id = ? AND group_id = ?",
@@ -352,8 +352,8 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                 conn.rollback()
                 return MinigameAtomicResult(False, "你的宠物精力不足")
 
-            now = database_clock.now()
-            now_ts = time.time()
+            now          = database_clock.now()
+            now_ts       = time.time()
             cooldown_row = conn.execute(
                 """SELECT available_at FROM minigame_cooldowns
                    WHERE user_id = ? AND group_id = ? AND game_type = ?""",
@@ -364,19 +364,19 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                 conn.rollback()
                 return MinigameAtomicResult(False, f"小游戏冷却中，请等待{remaining}秒")
 
-            outcome = outcome_factory(pet, opponent_pet)
-            requested_coins = max(0, int(outcome.requested_coins))
+            outcome          = outcome_factory(pet, opponent_pet)
+            requested_coins  = max(0, int(outcome.requested_coins))
             experience_grant = max(0, int(outcome.experience))
-            energy_cost = max(0, int(outcome.energy_cost))
+            energy_cost      = max(0, int(outcome.energy_cost))
             if energy_cost > int(pet.energy):
                 conn.rollback()
                 return MinigameAtomicResult(False, "你的宠物精力不足")
-            payload = dict(outcome.payload or {})
+            payload      = dict(outcome.payload or {})
             payload_json = json.dumps(
                 payload,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
+                ensure_ascii = False,
+                sort_keys    = True,
+                separators   = (",", ":"),
             )
 
             conn.execute(
@@ -392,17 +392,17 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                     now_ts + max(0, int(cooldown_seconds)),
                 ),
             )
-            now_iso = now.isoformat()
+            now_iso    = now.isoformat()
             coin_grant = self._credit_coins_in_transaction(
                 conn,
                 user_id,
                 group_id,
                 requested_coins,
-                reason=f"minigame_{game_type}",
-                reference_id=f"{reference_id}:coins",
-                daily_limit=daily_coin_limit,
-                now_iso=now_iso,
-                record_zero=True,
+                reason       = f"minigame_{game_type}",
+                reference_id = f"{reference_id}:coins",
+                daily_limit  = daily_coin_limit,
+                now_iso      = now_iso,
+                record_zero  = True,
             )
             pet_update = conn.execute(
                 """UPDATE pets
@@ -437,12 +437,12 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
             conn.commit()
             return MinigameAtomicResult(
                 True,
-                pet_name=pet.name,
-                opponent_pet_name=opponent_pet_name,
-                coin_grant=coin_grant,
-                experience_grant=experience_grant,
-                energy_cost=energy_cost,
-                payload=payload,
+                pet_name          = pet.name,
+                opponent_pet_name = opponent_pet_name,
+                coin_grant        = coin_grant,
+                experience_grant  = experience_grant,
+                energy_cost       = energy_cost,
+                payload           = payload,
             )
         except sqlite3.IntegrityError as exc:
             conn.rollback()
@@ -489,11 +489,11 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                     return VisitPetAtomicResult(False, "访问请求标识冲突")
                 return VisitPetAtomicResult(
                     True,
-                    pet_name=str(prior["pet_name"]),
-                    visitor_grant=int(prior["visitor_grant"]),
-                    target_grant=int(prior["target_grant"]),
-                    intimacy_grant=int(prior["intimacy_grant"]),
-                    duplicate=True,
+                    pet_name       = str(prior["pet_name"]),
+                    visitor_grant  = int(prior["visitor_grant"]),
+                    target_grant   = int(prior["target_grant"]),
+                    intimacy_grant = int(prior["intimacy_grant"]),
+                    duplicate      = True,
                 )
 
             visitor = conn.execute(
@@ -550,7 +550,7 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                 )
                 return VisitPetAtomicResult(False, reason)
 
-            now_iso = now.isoformat()
+            now_iso        = now.isoformat()
             visitor_update = conn.execute(
                 """UPDATE users SET today_visit_count = today_visit_count + 1,
                    total_visit_count = total_visit_count + 1,
@@ -572,30 +572,30 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                 visitor_user_id,
                 group_id,
                 coin_reward,
-                reason="pet_visit_visitor",
-                reference_id=f"{reference_id}:visitor",
-                daily_limit=daily_coin_limit,
-                now_iso=now_iso,
-                record_zero=True,
+                reason       = "pet_visit_visitor",
+                reference_id = f"{reference_id}:visitor",
+                daily_limit  = daily_coin_limit,
+                now_iso      = now_iso,
+                record_zero  = True,
             )
             target_grant = self._credit_coins_in_transaction(
                 conn,
                 target_user_id,
                 group_id,
                 coin_reward,
-                reason="pet_visit_target",
-                reference_id=f"{reference_id}:target",
-                daily_limit=daily_coin_limit,
-                now_iso=now_iso,
-                record_zero=True,
+                reason       = "pet_visit_target",
+                reference_id = f"{reference_id}:target",
+                daily_limit  = daily_coin_limit,
+                now_iso      = now_iso,
+                record_zero  = True,
             )
             self._increment_task_in_transaction(
                 conn,
                 visitor_user_id,
                 group_id,
                 "visit",
-                now_iso=now_iso,
-                today=now.strftime("%Y-%m-%d"),
+                now_iso = now_iso,
+                today   = database_clock.business_date(now),
             )
             pet_name = str(pet_row["name"])
             conn.execute(
@@ -617,10 +617,10 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
             conn.commit()
             return VisitPetAtomicResult(
                 True,
-                pet_name=pet_name,
-                visitor_grant=visitor_grant,
-                target_grant=target_grant,
-                intimacy_grant=1,
+                pet_name       = pet_name,
+                visitor_grant  = visitor_grant,
+                target_grant   = target_grant,
+                intimacy_grant = 1,
             )
         except sqlite3.IntegrityError as exc:
             conn.rollback()
@@ -656,7 +656,7 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
             if pet_row is None or inventory_row is None:
                 conn.rollback()
                 return None
-            items = json.loads(inventory_row["items"] or "{}")
+            items     = json.loads(inventory_row["items"] or "{}")
             available = int(items.get("acceleration_card", 0))
             if available <= 0:
                 conn.rollback()
@@ -667,7 +667,7 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                 items["acceleration_card"] = available - 1
 
             updated_at = database_clock.now().isoformat()
-            cursor = conn.execute(
+            cursor     = conn.execute(
                 """UPDATE pets SET
                        experience = experience + ?,
                        last_update = ?,
@@ -746,7 +746,7 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
             sender_items[item_id] = int(sender_items[item_id]) - amount
             if sender_items[item_id] <= 0:
                 sender_items.pop(item_id, None)
-            receiver_items = self._load_inventory_items(conn, to_user_id, group_id)
+            receiver_items          = self._load_inventory_items(conn, to_user_id, group_id)
             receiver_items[item_id] = int(receiver_items.get(item_id, 0)) + amount
             self._save_inventory_items(conn, from_user_id, group_id, sender_items)
             self._save_inventory_items(conn, to_user_id, group_id, receiver_items)
@@ -789,7 +789,7 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
         conn = self._get_connection()
         try:
             conn.execute("BEGIN IMMEDIATE")
-            now = database_clock.now()
+            now   = database_clock.now()
             count = conn.execute(
                 """SELECT COUNT(*) AS cnt FROM trade_listings WHERE seller_user_id = ?
                    AND group_id = ? AND is_active = 1 AND expires_at > ?""",
@@ -836,7 +836,7 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
         if type(price) is not int or price < 0:
             return False, "装扮价格无效"
         column = "friendship_points" if currency == "friendship" else "coins"
-        conn = self._get_connection()
+        conn   = self._get_connection()
         try:
             conn.execute("BEGIN IMMEDIATE")
             owned = conn.execute(
@@ -860,11 +860,11 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
             )
             self._record_asset_delta(
                 conn,
-                user_id=user_id,
-                group_id=group_id,
-                asset_type=column,
-                delta=-price,
-                reason="dress_purchase",
+                user_id    = user_id,
+                group_id   = group_id,
+                asset_type = column,
+                delta      = -price,
+                reason     = "dress_purchase",
             )
             conn.commit()
             return True, ""
@@ -884,7 +884,7 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
         conn = self._get_connection()
         try:
             conn.execute("BEGIN IMMEDIATE")
-            now = database_clock.now()
+            now  = database_clock.now()
             show = conn.execute(
                 """SELECT id, group_id FROM pet_shows
                    WHERE id = ? AND is_active = 1
@@ -895,7 +895,7 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                 conn.rollback()
                 return False
             group_id = int(show["group_id"])
-            voter = conn.execute(
+            voter    = conn.execute(
                 "SELECT 1 FROM users WHERE user_id = ? AND group_id = ?",
                 (voter_id, group_id),
             ).fetchone()
@@ -934,11 +934,11 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
         conn = self._get_connection()
         try:
             conn.execute("BEGIN IMMEDIATE")
-            now = database_clock.now()
-            now_iso = now.isoformat()
-            due_clause = "" if force else " AND end_time <= ?"
+            now                     = database_clock.now()
+            now_iso                 = now.isoformat()
+            due_clause              = "" if force else " AND end_time <= ?"
             params: tuple[Any, ...] = (group_id,) if force else (group_id, now_iso)
-            show = conn.execute(
+            show                    = conn.execute(
                 """SELECT * FROM pet_shows
                    WHERE group_id = ? AND is_active = 1"""
                 + due_clause
@@ -986,10 +986,10 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                     user_id,
                     group_id,
                     rewards[index],
-                    reason="pet_show",
-                    reference_id=f"show:{show['id']}:{index}:{user_id}",
-                    daily_limit=_DAILY_COIN_LIMIT,
-                    now_iso=now_iso,
+                    reason       = "pet_show",
+                    reference_id = f"show:{show['id']}:{index}:{user_id}",
+                    daily_limit  = _DAILY_COIN_LIMIT,
+                    now_iso      = now_iso,
                 )
                 if index == 0:
                     self._grant_temporary_title_in_transaction(
@@ -1002,10 +1002,10 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
 
                 winners.append(
                     PetShowWinner(
-                        user_id=user_id,
-                        pet_name=str(vote_row["pet_name"]),
-                        vote_count=int(vote_row["vote_count"]),
-                        coins_granted=granted,
+                        user_id       = user_id,
+                        pet_name      = str(vote_row["pet_name"]),
+                        vote_count    = int(vote_row["vote_count"]),
+                        coins_granted = granted,
                     )
                 )
 
@@ -1018,9 +1018,9 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
             conn.commit()
 
             return PetShowSettlementResult(
-                show_id=int(show["id"]),
-                title=str(show["title"] or "展示会"),
-                winners=tuple(winners),
+                show_id = int(show["id"]),
+                title   = str(show["title"] or "展示会"),
+                winners = tuple(winners),
             )
         except Exception as exc:
             conn.rollback()
@@ -1035,8 +1035,8 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
         conn = self._get_connection()
         try:
             conn.execute("BEGIN IMMEDIATE")
-            today = database_clock.now().strftime("%Y-%m-%d")
-            row = conn.execute(
+            today = database_clock.business_date(database_clock.now())
+            row   = conn.execute(
                 """SELECT like_count FROM daily_likes WHERE user_id = ?
                    AND target_user_id = ? AND group_id = ? AND like_date = ?""",
                 (user_id, target_user_id, group_id, today),
@@ -1097,7 +1097,7 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                 conn.rollback()
                 return TreatPetAtomicResult(False, "宠物不存在")
 
-            items = self._load_inventory_items(conn, user_id, group_id)
+            items     = self._load_inventory_items(conn, user_id, group_id)
             available = int(items.get(item_id, 0))
             if available <= 0:
                 conn.rollback()
@@ -1120,11 +1120,11 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                 items.pop(item_id, None)
             else:
                 items[item_id] = available - 1
-            health = min(100, int(pet_row["health"]) + int(health_gain))
-            clean = min(100, int(pet_row["clean"]) + int(clean_gain))
-            status = PetStatus.NORMAL.value if health >= 50 else str(pet_row["status"])
+            health             = min(100, int(pet_row["health"]) + int(health_gain))
+            clean              = min(100, int(pet_row["clean"]) + int(clean_gain))
+            status             = PetStatus.NORMAL.value if health >= 50 else str(pet_row["status"])
             status_expire_time = None if health >= 50 else pet_row["status_expire_time"]
-            updated = conn.execute(
+            updated            = conn.execute(
                 """UPDATE pets SET health = ?, clean = ?, status = ?,
                    status_expire_time = ?, last_update = ?, version = version + 1
                    WHERE id = ? AND version = ?""",
@@ -1157,7 +1157,7 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
         user: User,
         *,
         inventory: Inventory | None = None,
-        task_type: str | None = None,
+        task_type: str | None       = None,
         group_task_type: str | None = None,
     ) -> bool:
         """在同一事务中原子更新宠物、用户与关联动作状态。"""
@@ -1165,9 +1165,9 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
             self._commit_pet_and_user(
                 pet,
                 user,
-                inventory=inventory,
-                task_type=task_type,
-                group_task_type=group_task_type,
+                inventory       = inventory,
+                task_type       = task_type,
+                group_task_type = group_task_type,
             ).success
         )
 
@@ -1179,13 +1179,13 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
         action: str,
         daily_limit: int,
         cooldown_seconds: int,
-        requested_coins: int = 0,
-        consume_item_id: str | None = None,
+        requested_coins: int                    = 0,
+        consume_item_id: str | None             = None,
         inventory_grants: dict[str, int] | None = None,
-        free_feed_increment: int = 0,
-        free_feed_limit: int = 0,
-        task_type: str | None = None,
-        group_task_type: str | None = None,
+        free_feed_increment: int                = 0,
+        free_feed_limit: int                    = 0,
+        task_type: str | None                   = None,
+        group_task_type: str | None             = None,
     ) -> PetActionAtomicResult:
         """统一提交动作配额、资源、状态、计数器和任务进度。"""
         if action not in _PET_ACTION_COUNTERS:
@@ -1193,16 +1193,16 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
         return self._commit_pet_and_user(
             pet,
             user,
-            task_type=task_type,
-            group_task_type=group_task_type,
-            quota_action=action,
-            quota_daily_limit=daily_limit,
-            quota_cooldown_seconds=cooldown_seconds,
-            requested_coins=requested_coins,
-            consume_item_id=consume_item_id,
-            inventory_grants=inventory_grants,
-            free_feed_increment=free_feed_increment,
-            free_feed_limit=free_feed_limit,
+            task_type              = task_type,
+            group_task_type        = group_task_type,
+            quota_action           = action,
+            quota_daily_limit      = daily_limit,
+            quota_cooldown_seconds = cooldown_seconds,
+            requested_coins        = requested_coins,
+            consume_item_id        = consume_item_id,
+            inventory_grants       = inventory_grants,
+            free_feed_increment    = free_feed_increment,
+            free_feed_limit        = free_feed_limit,
         )
 
     def _commit_pet_and_user(
@@ -1210,17 +1210,17 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
         pet: Pet,
         user: User,
         *,
-        inventory: Inventory | None = None,
-        task_type: str | None = None,
-        group_task_type: str | None = None,
-        quota_action: str | None = None,
-        quota_daily_limit: int = 0,
-        quota_cooldown_seconds: int = 0,
-        requested_coins: int = 0,
-        consume_item_id: str | None = None,
+        inventory: Inventory | None             = None,
+        task_type: str | None                   = None,
+        group_task_type: str | None             = None,
+        quota_action: str | None                = None,
+        quota_daily_limit: int                  = 0,
+        quota_cooldown_seconds: int             = 0,
+        requested_coins: int                    = 0,
+        consume_item_id: str | None             = None,
         inventory_grants: dict[str, int] | None = None,
-        free_feed_increment: int = 0,
-        free_feed_limit: int = 0,
+        free_feed_increment: int                = 0,
+        free_feed_limit: int                    = 0,
     ) -> PetActionAtomicResult:
         conn = self._get_connection()
         try:
@@ -1242,12 +1242,12 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
             if user_row is None:
                 conn.rollback()
                 return PetActionAtomicResult(False, reason="missing_user")
-            current_user = self._row_to_user(user_row)
-            user_to_persist = user.merged_onto(current_user)
-            granted_coins = 0
-            inventory_items: dict[str, int] | None = None
+            current_user                                  = self._row_to_user(user_row)
+            user_to_persist                               = user.merged_onto(current_user)
+            granted_coins                                 = 0
+            inventory_items: dict[str, int] | None        = None
             merged_inventory_items: dict[str, int] | None = None
-            merged_inventory_version: int | None = None
+            merged_inventory_version: int | None          = None
             if quota_action is not None:
                 today_counter, _total_counter = _PET_ACTION_COUNTERS[quota_action]
                 if getattr(current_user, today_counter) >= max(0, int(quota_daily_limit)):
@@ -1295,8 +1295,8 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                     conn.rollback()
                     return PetActionAtomicResult(
                         False,
-                        reason="cooldown" if remaining > 0 else "daily_limit",
-                        remaining=max(0, remaining),
+                        reason    = "cooldown" if remaining > 0 else "daily_limit",
+                        remaining = max(0, remaining),
                     )
 
                 granted_coins = min(
@@ -1309,7 +1309,7 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                 if free_feed_increment:
                     current_user.increment_action("free_feed", free_feed_increment)
                 current_user.last_active = database_clock.now()
-                user_to_persist = current_user
+                user_to_persist          = current_user
 
             if inventory is not None and quota_action is None:
                 inventory_row = conn.execute(
@@ -1320,18 +1320,18 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                 merged_inventory_items = inventory.merged_onto(latest_items)
                 merged_inventory_version = int(inventory_row["version"]) + 1 if inventory_row else 0
 
-            pet_written = self._write_pet_in_transaction(conn, pet_to_persist)
+            pet_written  = self._write_pet_in_transaction(conn, pet_to_persist)
             user_written = self._write_user_in_transaction(conn, user_to_persist)
             if not pet_written or not user_written:
                 conn.rollback()
                 return PetActionAtomicResult(False, reason="persistence")
             self._record_asset_delta(
                 conn,
-                user_id=user_to_persist.user_id,
-                group_id=user_to_persist.group_id,
-                asset_type="coins",
-                delta=int(user_to_persist.coins) - int(user_row["coins"]),
-                reason=(
+                user_id    = user_to_persist.user_id,
+                group_id   = user_to_persist.group_id,
+                asset_type = "coins",
+                delta      = int(user_to_persist.coins) - int(user_row["coins"]),
+                reason     = (
                     f"pet_action_{quota_action}" if quota_action is not None else "pet_state_update"
                 ),
             )
@@ -1349,8 +1349,8 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                     inventory.group_id,
                     merged_inventory_items,
                 )
-            now = database_clock.now()
-            today = now.strftime("%Y-%m-%d")
+            now     = database_clock.now()
+            today   = database_clock.business_date(now)
             now_str = now.isoformat()
             if task_type:
                 self._increment_task_in_transaction(
@@ -1358,8 +1358,8 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                     user.user_id,
                     user.group_id,
                     task_type,
-                    now_iso=now_str,
-                    today=today,
+                    now_iso = now_str,
+                    today   = today,
                 )
             if group_task_type:
                 self._ensure_group_task_templates(conn, user.group_id, today)
@@ -1390,7 +1390,7 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                 and merged_inventory_items is not None
                 and merged_inventory_version is not None
             ):
-                inventory.items = merged_inventory_items
+                inventory.items   = merged_inventory_items
                 inventory.version = merged_inventory_version
                 inventory.mark_persisted()
             return PetActionAtomicResult(True, coins_granted=granted_coins)

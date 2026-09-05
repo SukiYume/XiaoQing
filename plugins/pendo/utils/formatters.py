@@ -75,7 +75,7 @@ TYPE_NAMES = {
 }
 
 TAG_NAME_PATTERN = r"[\w\u4e00-\u9fa5-]+"
-TAG_TOKEN_RE = re.compile(rf"(?<!\S)#({TAG_NAME_PATTERN})(?=\s|$)")
+TAG_TOKEN_RE     = re.compile(rf"(?<!\S)#({TAG_NAME_PATTERN})(?=\s|$)")
 
 
 def extract_tags(text: str | None) -> list[str]:
@@ -273,8 +273,8 @@ def paginate(
     total = len(items)
     if show_all:
         return items, " (全部显示)", False
-    start = (page - 1) * page_size
-    end = start + page_size
+    start   = (page - 1) * page_size
+    end     = start + page_size
     display = items[start:end]
     if page > 1:
         info = f" (第{page}页)"

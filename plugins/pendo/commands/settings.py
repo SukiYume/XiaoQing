@@ -84,7 +84,7 @@ async def _update_setting(
     if spec.custom:
         await run_sync(save_user_setting, user_id, spec.key, processed_value, db)
     else:
-        settings = cast(dict[str, Any], await run_sync(db.get_user_settings, user_id))
+        settings           = cast(dict[str, Any], await run_sync(db.get_user_settings, user_id))
         settings[spec.key] = processed_value
         await run_sync(db.update_user_settings, user_id, settings)
 
@@ -99,7 +99,7 @@ async def _set_quiet_hours(user_id: str, value: str, db: Database) -> str:
 
     raw_start, raw_end = value.split("-", 1)
     start_time = raw_start.strip()
-    end_time = raw_end.strip()
+    end_time   = raw_end.strip()
 
     ok, msg = _validate_hhmm(start_time)
     if not ok:
@@ -180,7 +180,7 @@ async def handle_settings(user_id: str, args: str, db: Database) -> str:
 
     parsed = parse(args)
     action = parsed.first.lower()
-    value = parsed.rest(1)
+    value  = parsed.rest(1)
 
     if action in {"view", "show"}:
         if value:

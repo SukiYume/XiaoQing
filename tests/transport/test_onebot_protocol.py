@@ -66,7 +66,7 @@ class TestMaskSensitiveText:
 
     def test_mask_token(self):
         """测试屏蔽 token"""
-        text = "Authorization: Bearer secret_token_123"
+        text   = "Authorization: Bearer secret_token_123"
         result = _mask_sensitive_text(text)
         # Bearer 关键字被掩码，token 值仍存在（这是当前实现的行为）
         assert "Bearer" not in result or result == "Authorization: ******** secret_token_123"
@@ -74,40 +74,40 @@ class TestMaskSensitiveText:
 
     def test_mask_authorization_header(self):
         """测试屏蔽直接提供的 authorization 值"""
-        text = "authorization=secret_token_123"
+        text   = "authorization=secret_token_123"
         result = _mask_sensitive_text(text)
         assert "secret_token_123" not in result
         assert "********" in result
 
     def test_mask_api_key(self):
         """测试屏蔽 api_key"""
-        text = "api_key=sk-1234567890"
+        text   = "api_key=sk-1234567890"
         result = _mask_sensitive_text(text)
         assert "sk-1234567890" not in result
         assert "********" in result
 
     def test_mask_password(self):
         """测试屏蔽 password"""
-        text = "password=my_password"
+        text   = "password=my_password"
         result = _mask_sensitive_text(text)
         assert "my_password" not in result
 
     def test_mask_multiple(self):
         """测试屏蔽多个敏感信息"""
-        text = "token=abc123 and password=xyz789"
+        text   = "token=abc123 and password=xyz789"
         result = _mask_sensitive_text(text)
         assert "abc123" not in result
         assert "xyz789" not in result
 
     def test_case_insensitive(self):
         """测试大小写不敏感"""
-        text = "API_KEY=secret"
+        text   = "API_KEY=secret"
         result = _mask_sensitive_text(text)
         assert "secret" not in result
 
     def test_no_sensitive_data(self):
         """测试无敏感数据"""
-        text = "hello world"
+        text   = "hello world"
         result = _mask_sensitive_text(text)
         assert result == text
 
@@ -123,7 +123,7 @@ class TestExtractMessagePreview:
     def test_text_only(self):
         """测试纯文本"""
         message = [{"type": "text", "data": {"text": "Hello world"}}]
-        result = _extract_message_preview(message)
+        result  = _extract_message_preview(message)
         assert result == "Hello world"
 
     def test_text_with_image(self):
@@ -158,13 +158,13 @@ class TestExtractMessagePreview:
     def test_unknown_segment_type(self):
         """测试未知消息段类型"""
         message = [{"type": "unknown", "data": {}}]
-        result = _extract_message_preview(message)
+        result  = _extract_message_preview(message)
         assert "[unknown]" in result
 
     def test_truncation(self):
         """测试截断"""
         long_text = "a" * 100
-        message = [{"type": "text", "data": {"text": long_text}}]
+        message   = [{"type": "text", "data": {"text": long_text}}]
         result = _extract_message_preview(message, max_len=20)
         assert result.endswith("...")
         assert len(result) <= 25  # 20 + "..."
@@ -202,7 +202,7 @@ class TestSummarizeEvent:
 
     def test_minimal_event(self):
         """测试最小事件"""
-        event = {"post_type": "notice"}
+        event  = {"post_type": "notice"}
         result = _summarize_event(event)
         assert "post_type=notice" in result
 

@@ -21,7 +21,7 @@ def handle_manage_enable(
         return False, "用法: /宠物 管理 开启"
 
     admin_service = AdminService(db)
-    success = admin_service.enable_plugin(group_id)
+    success       = admin_service.enable_plugin(group_id)
 
     if success:
         admin_service.log_admin_operation(group_id, user_id, "ENABLE", "启用插件")
@@ -39,7 +39,7 @@ def handle_manage_disable(
         return False, "用法: /宠物 管理 关闭"
 
     admin_service = AdminService(db)
-    success = admin_service.disable_plugin(group_id)
+    success       = admin_service.disable_plugin(group_id)
 
     if success:
         admin_service.log_admin_operation(group_id, user_id, "DISABLE", "禁用插件")
@@ -59,7 +59,7 @@ def handle_manage_config(
     raw_args = args.strip()
     if not raw_args or raw_args == "查看":
         config = admin_service.get_config(group_id)
-        lines = [
+        lines  = [
             f"⚙️ **群配置 ({config.group_id})**",
             "",
             f"• 插件状态: {'启用' if config.enabled else '禁用'}",
@@ -83,7 +83,7 @@ def handle_manage_config(
                 "trade_enabled, natural_trigger_enabled, activity_enabled"
             )
 
-        key = parts[1]
+        key   = parts[1]
         value = parts[2]
 
         success = admin_service.set_config(group_id, key, value)
@@ -114,7 +114,7 @@ def handle_manage_reset(
         )
 
     admin_service = AdminService(db)
-    success = admin_service.reset_user_pet(
+    success       = admin_service.reset_user_pet(
         target_user_id,
         group_id,
         operator_user_id=user_id,
@@ -137,7 +137,7 @@ def handle_manage_ban(
         return False, "格式错误\n用法: /宠物 管理 封禁 @QQ号 <天数>\n用法: /宠物 管理 解封 @QQ号"
 
     target_user_id = match.group(1)
-    days = int(match.group(2))
+    days           = int(match.group(2))
 
     admin_service = AdminService(db)
     success = admin_service.ban_user(target_user_id, group_id, days, operator_user_id=user_id)
@@ -175,7 +175,7 @@ def handle_manage_log(
     if not is_admin:
         return False, "⚠️ 该操作需要管理员权限"
 
-    limit = 20
+    limit      = 20
     limit_text = args.strip()
     if limit_text:
         parsed_limit = parse_int(limit_text, minimum=1, maximum=100)
@@ -184,7 +184,7 @@ def handle_manage_log(
         limit = parsed_limit
 
     admin_service = AdminService(db)
-    logs = admin_service.get_logs(group_id, limit)
+    logs          = admin_service.get_logs(group_id, limit)
 
     if not logs:
         return True, "📋 暂无操作日志"
@@ -237,7 +237,7 @@ def handle_manage_activity(
     reward_coins = parse_int(parts[3], minimum=0)
     if reward_coins is None:
         return False, "奖励金币必须是非负整数"
-    title = parts[4] if len(parts) > 4 else activity_type
+    title       = parts[4] if len(parts) > 4 else activity_type
     activity_id = db.create_activity(group_id, activity_type, title, target, reward_coins)
     if activity_id is None:
         return False, "活动创建失败"

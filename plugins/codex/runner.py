@@ -21,11 +21,11 @@ from core.plugin_base import head_tail_preview
 from .artifacts import IMAGE_EXTENSIONS
 from .config import CodexPluginConfig
 
-logger = logging.getLogger(__name__)
-_T = TypeVar("_T")
-_USAGE_KEYS = ("input_tokens", "cached_input_tokens", "output_tokens")
+logger               = logging.getLogger(__name__)
+_T                   = TypeVar("_T")
+_USAGE_KEYS          = ("input_tokens", "cached_input_tokens", "output_tokens")
 _MAX_THREAD_ID_CHARS = 512
-_MAX_EVENT_COUNTER = 2**63 - 1
+_MAX_EVENT_COUNTER   = 2**63 - 1
 
 
 @dataclass
@@ -35,9 +35,9 @@ class CodexRunResult:
     final_text: str
     stdout_tail: str
     stderr_tail: str
-    timed_out: bool = False
-    cancelled: bool = False
-    output_limited: bool = False
+    timed_out: bool         = False
+    cancelled: bool         = False
+    output_limited: bool    = False
     output_path: str | None = None
     image_paths: list[str] = field(default_factory=list)
     usage: dict[str, int] = field(default_factory=dict)
@@ -47,7 +47,7 @@ class CodexRunResult:
 class ProcessTreeTerminationResult:
     tree_confirmed: bool
     parent_reaped: bool
-    forced: bool = False
+    forced: bool             = False
     helper_error: str | None = None
 
 
@@ -66,7 +66,7 @@ def _extract_image_paths(
     value: Any,
     *,
     max_items: int = 100,
-    _depth: int = 0,
+    _depth: int    = 0,
 ) -> list[str]:
     if max_items <= 0 or _depth > 16:
         return []
@@ -86,8 +86,8 @@ def _extract_image_paths(
             paths.extend(
                 _extract_image_paths(
                     child,
-                    max_items=max_items - len(paths),
-                    _depth=_depth + 1,
+                    max_items = max_items - len(paths),
+                    _depth    = _depth + 1,
                 )
             )
             if len(paths) >= max_items:
@@ -97,8 +97,8 @@ def _extract_image_paths(
             paths.extend(
                 _extract_image_paths(
                     child,
-                    max_items=max_items - len(paths),
-                    _depth=_depth + 1,
+                    max_items = max_items - len(paths),
+                    _depth    = _depth + 1,
                 )
             )
             if len(paths) >= max_items:
@@ -132,8 +132,8 @@ def _valid_usage(value: Any) -> dict[str, int] | None:
 
 @dataclass(frozen=True)
 class _ParsedCodexEvent:
-    thread_id: str | None = None
-    message: str | None = None
+    thread_id: str | None        = None
+    message: str | None          = None
     usage: dict[str, int] | None = None
     image_paths: list[str] = field(default_factory=list)
 
@@ -158,9 +158,9 @@ def _parse_codex_event(
                 message = _truncate_utf8(text, max_message_bytes)
     usage = _valid_usage(event.get("usage")) if event_type == "turn.completed" else None
     return _ParsedCodexEvent(
-        thread_id=thread_id,
-        message=message,
-        usage=usage,
+        thread_id = thread_id,
+        message   = message,
+        usage     = usage,
         image_paths=_extract_image_paths(event, max_items=max_image_paths),
     )
 
@@ -168,7 +168,7 @@ def _parse_codex_event(
 @dataclass
 class _EventSummary:
     thread_id: str | None = None
-    last_message: str = ""
+    last_message: str     = ""
     usage: dict[str, int] = field(default_factory=dict)
     image_paths: list[str] = field(default_factory=list)
     seen_image_paths: set[str] = field(default_factory=set, repr=False)
@@ -203,7 +203,7 @@ def _truncate_utf8(value: str, max_bytes: int) -> str:
 class _ByteTail:
     def __init__(self, limit: int = 8 * 1024) -> None:
         self.limit = max(256, int(limit))
-        self.data = bytearray()
+        self.data  = bytearray()
 
     def feed(self, chunk: bytes) -> None:
         if len(chunk) >= self.limit:
@@ -220,11 +220,11 @@ class _ByteTail:
 
 class _StdoutEventAccumulator:
     def __init__(self, config: CodexPluginConfig) -> None:
-        self.config = config
+        self.config      = config
         self.total_bytes = 0
-        self.pending = bytearray()
-        self.tail = _ByteTail()
-        self.summary = _EventSummary()
+        self.pending     = bytearray()
+        self.tail        = _ByteTail()
+        self.summary     = _EventSummary()
 
     def feed(self, chunk: bytes) -> None:
         self.total_bytes += len(chunk)
@@ -263,8 +263,8 @@ class _StdoutEventAccumulator:
             return
         parsed = _parse_codex_event(
             event,
-            max_message_bytes=self.config.max_final_output_bytes,
-            max_image_paths=max(
+            max_message_bytes = self.config.max_final_output_bytes,
+            max_image_paths   = max(
                 0,
                 self.config.max_image_artifacts * 4 - len(self.summary.image_paths),
             ),
@@ -275,9 +275,9 @@ class _StdoutEventAccumulator:
 
 class _StderrAccumulator:
     def __init__(self, max_bytes: int) -> None:
-        self.max_bytes = max_bytes
+        self.max_bytes   = max_bytes
         self.total_bytes = 0
-        self.tail = _ByteTail()
+        self.tail        = _ByteTail()
 
     def feed(self, chunk: bytes) -> None:
         self.total_bytes += len(chunk)
@@ -288,48 +288,48 @@ class _StderrAccumulator:
 
 @dataclass(frozen=True)
 class _StreamIoOutcome:
-    timed_out: bool = False
-    cancelled: bool = False
+    timed_out: bool      = False
+    cancelled: bool      = False
     output_limited: bool = False
-    limit_reason: str = ""
+    limit_reason: str    = ""
 
 
 @dataclass(frozen=True)
 class _FinalOutputCapture:
     text: str
     archive_path: str | None = None
-    limited: bool = False
-    reason: str = ""
+    limited: bool            = False
+    reason: str              = ""
 
 
 @dataclass(frozen=True)
 class _OwnedTaskOutcome(Generic[_T]):
-    result: _T | None = None
-    error: BaseException | None = None
+    result: _T | None                           = None
+    error: BaseException | None                 = None
     cancellation: asyncio.CancelledError | None = None
 
 
 @dataclass
 class _RunResources:
-    output_path: Path | None = None
+    output_path: Path | None                   = None
     process: asyncio.subprocess.Process | None = None
-    process_cleanup_required: bool = False
-    result_committed: bool = False
+    process_cleanup_required: bool             = False
+    result_committed: bool                     = False
     orphan_archives: set[Path] = field(default_factory=set)
 
 
 @dataclass
 class _CodexExecution:
-    timed_out: bool = False
-    cancelled: bool = False
-    output_limited: bool = False
-    limit_reason: str = ""
+    timed_out: bool       = False
+    cancelled: bool       = False
+    output_limited: bool  = False
+    limit_reason: str     = ""
     thread_id: str | None = None
-    message_text: str = ""
+    message_text: str     = ""
     usage: dict[str, int] = field(default_factory=dict)
     image_paths: list[str] = field(default_factory=list)
-    stdout_tail: str = ""
-    stderr_tail: str = ""
+    stdout_tail: str  = ""
+    stderr_tail: str  = ""
     forced_stop: bool = False
 
 
@@ -371,12 +371,12 @@ async def _run_cleanup_cancellation_resistant(
 async def _remove_output_path_with_retry(
     path: Path,
     *,
-    attempts: int = 5,
+    attempts: int        = 5,
     delay_seconds: float = 0.05,
 ) -> bool:
     """等待 Windows 句柄关闭后，删除临时或已放弃的输出文件。"""
 
-    attempts = max(1, int(attempts))
+    attempts                   = max(1, int(attempts))
     last_error: OSError | None = None
     for attempt in range(attempts):
         try:
@@ -491,7 +491,7 @@ async def _monitor_output_file(path: Path, max_bytes: int) -> None:
 
 
 def _qq_preview(text: str, max_chars: int) -> str:
-    text = text.strip()
+    text   = text.strip()
     marker = "\n\n...[QQ preview truncated]...\n\n"
     return head_tail_preview(text, max_chars, marker=marker)
 
@@ -506,11 +506,11 @@ def _archive_destination(output_dir: Path, job: Any) -> Path:
         or "job"
     )
     raw_job_id = getattr(job, "job_id", 0)
-    job_id = raw_job_id if type(raw_job_id) is int and raw_job_id >= 0 else 0
+    job_id     = raw_job_id if type(raw_job_id) is int and raw_job_id >= 0 else 0
     descriptor, name = tempfile.mkstemp(
-        prefix=f"codex-{label}-job-{job_id:04d}-",
-        suffix=".txt",
-        dir=output_dir,
+        prefix = f"codex-{label}-job-{job_id:04d}-",
+        suffix = ".txt",
+        dir    = output_dir,
     )
     destination = Path(name)
     try:
@@ -538,8 +538,8 @@ def _bounded_file_bytes(path: Path, max_bytes: int) -> tuple[bytes, int]:
         f"the {max_bytes}-byte limit]...\n\n"
     ).encode()
     payload_budget = max(0, max_bytes - len(marker))
-    head_size = payload_budget * 2 // 3
-    tail_size = payload_budget - head_size
+    head_size      = payload_budget * 2 // 3
+    tail_size      = payload_budget - head_size
     with path.open("rb") as handle:
         head = handle.read(head_size)
         if tail_size:
@@ -569,7 +569,7 @@ def _capture_final_output(
         payload.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n").strip()
     )
     exceeds_disk_budget = observed_size > config.max_final_output_bytes
-    exceeds_qq_budget = len(decoded) > config.max_qq_text_chars
+    exceeds_qq_budget   = len(decoded) > config.max_qq_text_chars
     if not exceeds_disk_budget and not exceeds_qq_budget:
         return _FinalOutputCapture(text=decoded)
 
@@ -599,14 +599,14 @@ def _capture_final_output(
                 f"{config.max_qq_text_chars} characters"
             )
         resolved_destination = destination.resolve()
-        preview = _qq_preview(decoded, config.max_qq_text_chars)
-        notice = f"\n\n[完整/受控输出已保存到文件: {destination.name}]"
-        preview_budget = max(1, config.max_qq_text_chars - len(notice))
+        preview              = _qq_preview(decoded, config.max_qq_text_chars)
+        notice               = f"\n\n[完整/受控输出已保存到文件: {destination.name}]"
+        preview_budget       = max(1, config.max_qq_text_chars - len(notice))
         return _FinalOutputCapture(
-            text=f"{_qq_preview(preview, preview_budget)}{notice}",
-            archive_path=str(resolved_destination),
-            limited=True,
-            reason=reason,
+            text         = f"{_qq_preview(preview, preview_budget)}{notice}",
+            archive_path = str(resolved_destination),
+            limited      = True,
+            reason       = reason,
         )
     except BaseException:
         _remove_partial_archive(destination)
@@ -631,13 +631,13 @@ def _archive_large_message(
     try:
         destination.write_bytes(limited_bytes)
         resolved_destination = destination.resolve()
-        notice = f"\n\n[受控输出已保存到文件: {destination.name}]"
-        preview_budget = max(1, config.max_qq_text_chars - len(notice))
+        notice               = f"\n\n[受控输出已保存到文件: {destination.name}]"
+        preview_budget       = max(1, config.max_qq_text_chars - len(notice))
         return _FinalOutputCapture(
-            text=f"{_qq_preview(bounded_text, preview_budget)}{notice}",
-            archive_path=str(resolved_destination),
-            limited=True,
-            reason="agent message exceeded a configured output budget",
+            text         = f"{_qq_preview(bounded_text, preview_budget)}{notice}",
+            archive_path = str(resolved_destination),
+            limited      = True,
+            reason       = "agent message exceeded a configured output budget",
         )
     except BaseException:
         _remove_partial_archive(destination)
@@ -669,7 +669,7 @@ async def _wait_for_parent(
         return True
     try:
         await asyncio.wait_for(process.wait(), timeout=max(0.01, timeout_seconds))
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return process.returncode is not None
     except (OSError, RuntimeError):
         return process.returncode is not None
@@ -682,9 +682,9 @@ async def _terminate_windows_process_tree(
     helper_timeout_seconds: float,
     kill_timeout_seconds: float,
 ) -> ProcessTreeTerminationResult:
-    helper_error: str | None = None
-    helper_succeeded = False
-    helper_code: int | None = None
+    helper_error: str | None                  = None
+    helper_succeeded                          = False
+    helper_code: int | None                   = None
     helper: asyncio.subprocess.Process | None = None
     try:
         helper = await asyncio.wait_for(
@@ -694,8 +694,8 @@ async def _terminate_windows_process_tree(
                 str(process.pid),
                 "/T",
                 "/F",
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+                stdout = asyncio.subprocess.DEVNULL,
+                stderr = asyncio.subprocess.DEVNULL,
             ),
             timeout=max(0.01, helper_timeout_seconds),
         )
@@ -704,7 +704,7 @@ async def _terminate_windows_process_tree(
                 helper.wait(),
                 timeout=max(0.01, helper_timeout_seconds),
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             helper_error = "taskkill timed out"
             if helper.returncode is None:
                 try:
@@ -716,13 +716,13 @@ async def _terminate_windows_process_tree(
             helper_succeeded = helper_code == 0
             if not helper_succeeded:
                 helper_error = f"taskkill exited with code {helper_code}"
-    except asyncio.TimeoutError:
+    except TimeoutError:
         helper_error = "taskkill spawn timed out"
     except (OSError, RuntimeError) as exc:
         helper_error = f"taskkill failed: {exc}"
 
     parent_reaped = await _wait_for_parent(process, kill_timeout_seconds)
-    forced = False
+    forced        = False
     if not parent_reaped:
         forced = True
         try:
@@ -737,18 +737,18 @@ async def _terminate_windows_process_tree(
     # 避免把可能残留的子进程误报为已完整终止。
     if helper_code == 128 and parent_reaped and not forced:
         helper_succeeded = True
-        helper_error = None
+        helper_error     = None
 
     return ProcessTreeTerminationResult(
-        tree_confirmed=helper_succeeded,
-        parent_reaped=parent_reaped,
-        forced=forced,
-        helper_error=helper_error,
+        tree_confirmed = helper_succeeded,
+        parent_reaped  = parent_reaped,
+        forced         = forced,
+        helper_error   = helper_error,
     )
 
 
 async def _wait_for_process_group_exit(process_group_id: int, timeout_seconds: float) -> None:
-    loop = asyncio.get_running_loop()
+    loop     = asyncio.get_running_loop()
     deadline = loop.time() + max(0.0, timeout_seconds)
     while _process_group_exists(process_group_id) and loop.time() < deadline:
         await asyncio.sleep(0.05)
@@ -766,7 +766,7 @@ async def _finish_posix_parent_wait(
             asyncio.shield(parent_wait_task),
             timeout=max(0.01, timeout_seconds),
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         parent_wait_task.cancel()
         await asyncio.gather(parent_wait_task, return_exceptions=True)
         return process.returncode is not None
@@ -786,7 +786,7 @@ async def _terminate_posix_process_tree(
     kill_timeout_seconds: float,
 ) -> ProcessTreeTerminationResult:
     process_group_id = process.pid
-    forced = False
+    forced           = False
     parent_wait_task = asyncio.create_task(process.wait()) if process.returncode is None else None
 
     try:
@@ -795,8 +795,8 @@ async def _terminate_posix_process_tree(
         pass
     except PermissionError as exc:
         return ProcessTreeTerminationResult(
-            tree_confirmed=False,
-            parent_reaped=await _finish_posix_parent_wait(
+            tree_confirmed = False,
+            parent_reaped  = await _finish_posix_parent_wait(
                 process,
                 parent_wait_task,
                 kill_timeout_seconds,
@@ -814,14 +814,14 @@ async def _terminate_posix_process_tree(
             pass
         except PermissionError as exc:
             return ProcessTreeTerminationResult(
-                tree_confirmed=False,
-                parent_reaped=await _finish_posix_parent_wait(
+                tree_confirmed = False,
+                parent_reaped  = await _finish_posix_parent_wait(
                     process,
                     parent_wait_task,
                     kill_timeout_seconds,
                 ),
-                forced=True,
-                helper_error=f"SIGKILL permission denied: {exc}",
+                forced       = True,
+                helper_error = f"SIGKILL permission denied: {exc}",
             )
 
     await _wait_for_process_group_exit(process_group_id, kill_timeout_seconds)
@@ -831,17 +831,17 @@ async def _terminate_posix_process_tree(
         kill_timeout_seconds,
     )
     return ProcessTreeTerminationResult(
-        tree_confirmed=not _process_group_exists(process_group_id),
-        parent_reaped=parent_reaped,
-        forced=forced,
+        tree_confirmed = not _process_group_exists(process_group_id),
+        parent_reaped  = parent_reaped,
+        forced         = forced,
     )
 
 
 async def terminate_process_tree(
     process: asyncio.subprocess.Process,
     *,
-    term_grace_seconds: float = 5,
-    kill_timeout_seconds: float = 5,
+    term_grace_seconds: float     = 5,
+    kill_timeout_seconds: float   = 5,
     helper_timeout_seconds: float = 10,
 ) -> ProcessTreeTerminationResult:
     """按平台执行有界等待，并终止完整进程树。"""
@@ -849,13 +849,13 @@ async def terminate_process_tree(
     if sys.platform == "win32":
         return await _terminate_windows_process_tree(
             process,
-            helper_timeout_seconds=helper_timeout_seconds,
-            kill_timeout_seconds=kill_timeout_seconds,
+            helper_timeout_seconds = helper_timeout_seconds,
+            kill_timeout_seconds   = kill_timeout_seconds,
         )
     return await _terminate_posix_process_tree(
         process,
-        term_grace_seconds=term_grace_seconds,
-        kill_timeout_seconds=kill_timeout_seconds,
+        term_grace_seconds   = term_grace_seconds,
+        kill_timeout_seconds = kill_timeout_seconds,
     )
 
 
@@ -866,7 +866,7 @@ def _close_process_pipe_transports(process: asyncio.subprocess.Process) -> None:
             stdin.close()
         except (AttributeError, OSError, RuntimeError):
             pass
-    transport = getattr(process, "_transport", None)
+    transport          = getattr(process, "_transport", None)
     get_pipe_transport = getattr(transport, "get_pipe_transport", None)
     if not callable(get_pipe_transport):
         return
@@ -918,11 +918,11 @@ async def _terminate_and_drain_process(
             except (ProcessLookupError, OSError, RuntimeError):
                 pass
         parent_reaped = await _wait_for_parent(process, 5)
-        termination = ProcessTreeTerminationResult(
-            tree_confirmed=False,
-            parent_reaped=parent_reaped,
-            forced=forced,
-            helper_error=type(exc).__name__,
+        termination   = ProcessTreeTerminationResult(
+            tree_confirmed = False,
+            parent_reaped  = parent_reaped,
+            forced         = forced,
+            helper_error   = type(exc).__name__,
         )
     if not termination.tree_confirmed or not termination.parent_reaped:
         logger.error(
@@ -1015,8 +1015,8 @@ async def _wait_for_stream_trigger(
             return _StreamIoOutcome()
         done, _ = await asyncio.wait(
             active,
-            timeout=remaining,
-            return_when=asyncio.FIRST_COMPLETED,
+            timeout     = remaining,
+            return_when = asyncio.FIRST_COMPLETED,
         )
         if not done:
             return _StreamIoOutcome(timed_out=True)
@@ -1090,12 +1090,12 @@ async def _run_streaming_io(
 
     stdout = process.stdout
     stderr = process.stderr
-    stdin = process.stdin
+    stdin  = process.stdin
     if stdout is None or stderr is None or stdin is None:
         raise RuntimeError("streaming Codex process is missing a configured pipe")
 
-    stdout_accumulator = _StdoutEventAccumulator(config)
-    stderr_accumulator = _StderrAccumulator(config.max_stderr_bytes)
+    stdout_accumulator                  = _StdoutEventAccumulator(config)
+    stderr_accumulator                  = _StderrAccumulator(config.max_stderr_bytes)
     tasks: dict[str, asyncio.Task[Any]] = {
         "stdout": asyncio.create_task(
             _read_stdout_stream(stdout, stdout_accumulator),
@@ -1135,8 +1135,8 @@ async def _run_streaming_io(
         outcome = await _apply_stream_failures(
             process,
             failures,
-            outcome=outcome,
-            process_was_terminated=termination_required,
+            outcome                = outcome,
+            process_was_terminated = termination_required,
         )
         return stdout_accumulator, stderr_accumulator, outcome
     except asyncio.CancelledError as cancellation:
@@ -1162,12 +1162,12 @@ async def _run_streaming_io(
 
 class CodexRunner:
     def __init__(self, config: CodexPluginConfig, output_dir: Path):
-        self.config = config
+        self.config     = config
         self.output_dir = output_dir
 
     def _base_args(self, cwd: Path) -> list[str]:
         codex_bin = shutil.which(self.config.codex_bin) or self.config.codex_bin
-        args = [
+        args      = [
             codex_bin,
             "-C",
             str(cwd),
@@ -1213,12 +1213,12 @@ class CodexRunner:
         # 必须使用 delete=False：Codex 需要在 Windows 上重新打开该路径。创建进程前先关闭
         # 句柄，但生成的文件名始终由本次执行独占。
         with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            suffix=".txt",
-            prefix="codex-last-",
-            dir=self.output_dir,
-            delete=False,
+            mode     = "w",
+            encoding = "utf-8",
+            suffix   = ".txt",
+            prefix   = "codex-last-",
+            dir      = self.output_dir,
+            delete   = False,
         ) as temporary:
             return Path(temporary.name)
 
@@ -1249,14 +1249,14 @@ class CodexRunner:
             return await asyncio.wait_for(
                 asyncio.create_subprocess_exec(
                     *args,
-                    stdin=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
+                    stdin  = asyncio.subprocess.PIPE,
+                    stdout = asyncio.subprocess.PIPE,
+                    stderr = asyncio.subprocess.PIPE,
                     **platform_kwargs,
                 ),
                 timeout=self.config.spawn_timeout_seconds,
             )
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             raise RuntimeError(
                 f"Codex process spawn timed out after {self.config.spawn_timeout_seconds}s"
             ) from exc
@@ -1306,12 +1306,12 @@ class CodexRunner:
         message: str,
     ) -> CodexRunResult:
         return CodexRunResult(
-            exit_code=process.returncode,
-            thread_id=thread_id,
-            final_text=message,
-            stdout_tail="",
-            stderr_tail="",
-            cancelled=True,
+            exit_code   = process.returncode,
+            thread_id   = thread_id,
+            final_text  = message,
+            stdout_tail = "",
+            stderr_tail = "",
+            cancelled   = True,
         )
 
     async def _execute_process(
@@ -1324,23 +1324,23 @@ class CodexRunner:
     ) -> _CodexExecution:
         stdout_accumulator, stderr_accumulator, outcome = await _run_streaming_io(
             process,
-            prompt_payload=prompt_payload,
-            output_path=output_path,
-            cancel_event=cancel_event,
-            config=self.config,
+            prompt_payload = prompt_payload,
+            output_path    = output_path,
+            cancel_event   = cancel_event,
+            config         = self.config,
         )
         return _CodexExecution(
-            timed_out=outcome.timed_out,
-            cancelled=outcome.cancelled,
-            output_limited=outcome.output_limited,
-            limit_reason=outcome.limit_reason,
-            thread_id=stdout_accumulator.summary.thread_id,
-            message_text=stdout_accumulator.summary.last_message,
-            usage=stdout_accumulator.summary.usage,
-            image_paths=stdout_accumulator.summary.image_paths,
-            stdout_tail=stdout_accumulator.tail.text(),
-            stderr_tail=stderr_accumulator.tail.text(),
-            forced_stop=outcome.timed_out or outcome.cancelled or outcome.output_limited,
+            timed_out      = outcome.timed_out,
+            cancelled      = outcome.cancelled,
+            output_limited = outcome.output_limited,
+            limit_reason   = outcome.limit_reason,
+            thread_id      = stdout_accumulator.summary.thread_id,
+            message_text   = stdout_accumulator.summary.last_message,
+            usage          = stdout_accumulator.summary.usage,
+            image_paths    = stdout_accumulator.summary.image_paths,
+            stdout_tail    = stdout_accumulator.tail.text(),
+            stderr_tail    = stderr_accumulator.tail.text(),
+            forced_stop    = outcome.timed_out or outcome.cancelled or outcome.output_limited,
         )
 
     async def _capture_result(
@@ -1356,35 +1356,35 @@ class CodexRunner:
         file_capture = await _capture_in_thread(
             _capture_final_output,
             output_path,
-            orphan_archives=resources.orphan_archives,
-            output_dir=self.output_dir,
-            job=job,
-            config=self.config,
+            orphan_archives = resources.orphan_archives,
+            output_dir      = self.output_dir,
+            job             = job,
+            config          = self.config,
         )
         if file_capture.archive_path:
             resources.orphan_archives.add(Path(file_capture.archive_path))
         execution.output_limited = execution.output_limited or file_capture.limited
-        execution.limit_reason = execution.limit_reason or file_capture.reason
+        execution.limit_reason   = execution.limit_reason or file_capture.reason
 
         result_capture = file_capture
         if not result_capture.text and execution.message_text:
             result_capture = await _capture_in_thread(
                 _archive_large_message,
                 execution.message_text,
-                orphan_archives=resources.orphan_archives,
-                output_dir=self.output_dir,
-                job=job,
-                config=self.config,
+                orphan_archives = resources.orphan_archives,
+                output_dir      = self.output_dir,
+                job             = job,
+                config          = self.config,
             )
             if result_capture.archive_path:
                 resources.orphan_archives.add(Path(result_capture.archive_path))
             execution.output_limited = execution.output_limited or result_capture.limited
-            execution.limit_reason = execution.limit_reason or result_capture.reason
+            execution.limit_reason   = execution.limit_reason or result_capture.reason
 
         final_text = result_capture.text
         if execution.output_limited and execution.limit_reason:
             budget_notice = f"Codex output budget exceeded: {execution.limit_reason}."
-            final_text = f"{budget_notice}\n\n{final_text}" if final_text else budget_notice
+            final_text    = f"{budget_notice}\n\n{final_text}" if final_text else budget_notice
         if not final_text:
             if execution.cancelled:
                 final_text = "Codex 任务已取消。"
@@ -1395,17 +1395,17 @@ class CodexRunner:
                     execution.stderr_tail or execution.stdout_tail or "Codex 没有返回文本结果。"
                 )
         return CodexRunResult(
-            exit_code=process.returncode,
-            thread_id=execution.thread_id or thread_id,
-            final_text=_qq_preview(final_text, self.config.max_qq_text_chars),
-            stdout_tail=execution.stdout_tail,
-            stderr_tail=execution.stderr_tail,
-            timed_out=execution.timed_out,
-            cancelled=execution.cancelled or bool(getattr(job, "cancel_requested", False)),
-            output_limited=execution.output_limited,
-            output_path=result_capture.archive_path,
-            image_paths=execution.image_paths,
-            usage=execution.usage,
+            exit_code      = process.returncode,
+            thread_id      = execution.thread_id or thread_id,
+            final_text     = _qq_preview(final_text, self.config.max_qq_text_chars),
+            stdout_tail    = execution.stdout_tail,
+            stderr_tail    = execution.stderr_tail,
+            timed_out      = execution.timed_out,
+            cancelled      = execution.cancelled or bool(getattr(job, "cancel_requested", False)),
+            output_limited = execution.output_limited,
+            output_path    = result_capture.archive_path,
+            image_paths    = execution.image_paths,
+            usage          = execution.usage,
         )
 
     @staticmethod
@@ -1486,19 +1486,19 @@ class CodexRunner:
         resources = _RunResources()
         try:
             resources.output_path = self._create_output_path()
-            prompt_payload = self._prompt_with_artifact_instruction(prompt, artifact_dir)
-            resources.process = await self._spawn_process(
-                cwd=cwd,
-                prompt_payload=prompt_payload,
-                thread_id=thread_id,
-                output_path=resources.output_path,
-                job=job,
+            prompt_payload        = self._prompt_with_artifact_instruction(prompt, artifact_dir)
+            resources.process     = await self._spawn_process(
+                cwd            = cwd,
+                prompt_payload = prompt_payload,
+                thread_id      = thread_id,
+                output_path    = resources.output_path,
+                job            = job,
             )
-            process = resources.process
+            process                            = resources.process
             resources.process_cleanup_required = True
 
             if process_handoff is None:
-                job.process = process
+                job.process      = process
                 process_callback = None
             else:
 
@@ -1506,11 +1506,11 @@ class CodexRunner:
                     return await process_handoff(process)
 
             may_continue = await self._perform_handoff(
-                process=process,
-                callback=process_callback,
-                default_decision=not bool(getattr(job, "cancel_requested", False)),
-                stage="process",
-                resources=resources,
+                process          = process,
+                callback         = process_callback,
+                default_decision = not bool(getattr(job, "cancel_requested", False)),
+                stage            = "process",
+                resources        = resources,
             )
             if not may_continue:
                 result = self._cancelled_before_execution_result(
@@ -1529,11 +1529,11 @@ class CodexRunner:
             else:
                 prompt_callback = prompt_handoff
             may_send_prompt = await self._perform_handoff(
-                process=process,
-                callback=prompt_callback,
-                default_decision=may_send_by_default,
-                stage="prompt",
-                resources=resources,
+                process          = process,
+                callback         = prompt_callback,
+                default_decision = may_send_by_default,
+                stage            = "prompt",
+                resources        = resources,
             )
             if not may_send_prompt:
                 result = self._cancelled_before_execution_result(
@@ -1544,23 +1544,23 @@ class CodexRunner:
                 resources.result_committed = True
                 return result
 
-            cancel_event = getattr(job, "cancel_event", None)
+            cancel_event       = getattr(job, "cancel_event", None)
             typed_cancel_event = cancel_event if isinstance(cancel_event, asyncio.Event) else None
-            execution = await self._execute_process(
-                process=process,
-                prompt_payload=prompt_payload.encode("utf-8"),
-                output_path=resources.output_path,
-                cancel_event=typed_cancel_event,
+            execution          = await self._execute_process(
+                process        = process,
+                prompt_payload = prompt_payload.encode("utf-8"),
+                output_path    = resources.output_path,
+                cancel_event   = typed_cancel_event,
             )
             result = await self._capture_result(
-                execution=execution,
-                output_path=resources.output_path,
-                process=process,
-                thread_id=thread_id,
-                job=job,
-                resources=resources,
+                execution   = execution,
+                output_path = resources.output_path,
+                process     = process,
+                thread_id   = thread_id,
+                job         = job,
+                resources   = resources,
             )
-            resources.result_committed = True
+            resources.result_committed         = True
             resources.process_cleanup_required = execution.forced_stop or bool(
                 getattr(job, "cancel_requested", False)
             )

@@ -500,6 +500,7 @@
                             "name": "start",
                             "help": "启动 Web UI 服务",
                             "usage": "/pendo web start",
+                            "permission": "bot_admin",
                             "examples": ["/pendo web start"],
                             "invalid_examples": ["/pendo web start extra"]
                         },
@@ -507,6 +508,7 @@
                             "name": "stop",
                             "help": "停止 Web UI 服务",
                             "usage": "/pendo web stop",
+                            "permission": "bot_admin",
                             "examples": ["/pendo web stop"],
                             "invalid_examples": ["/pendo web stop extra"]
                         },

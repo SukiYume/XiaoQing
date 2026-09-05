@@ -4,9 +4,9 @@ from ..models import GroupConfig, OperationLog
 from .database import Database
 
 _MULTIPLIER_KEYS = frozenset({"economy_multiplier", "decay_multiplier"})
-_BOOLEAN_KEYS = frozenset({"trade_enabled", "natural_trigger_enabled", "activity_enabled"})
-_TRUE_VALUES = frozenset({"true", "1", "yes"})
-_FALSE_VALUES = frozenset({"false", "0", "no"})
+_BOOLEAN_KEYS    = frozenset({"trade_enabled", "natural_trigger_enabled", "activity_enabled"})
+_TRUE_VALUES     = frozenset({"true", "1", "yes"})
+_FALSE_VALUES    = frozenset({"false", "0", "no"})
 
 
 class AdminService:
@@ -17,13 +17,13 @@ class AdminService:
 
     def enable_plugin(self, group_id: int) -> bool:
         """启用指定群的宠物系统。"""
-        config = self.db.get_group_config(group_id)
+        config         = self.db.get_group_config(group_id)
         config.enabled = True
         return self.db.update_group_config(config)
 
     def disable_plugin(self, group_id: int) -> bool:
         """停用指定群的宠物系统。"""
-        config = self.db.get_group_config(group_id)
+        config         = self.db.get_group_config(group_id)
         config.enabled = False
         return self.db.update_group_config(config)
 
@@ -104,17 +104,17 @@ class AdminService:
         group_id: int,
         user_id: str,
         operation_type: str,
-        params: str = "",
+        params: str                = "",
         target_user_id: str | None = None,
     ) -> bool:
         """记录一条非事务型管理操作日志。"""
         log = OperationLog(
-            id=0,
-            group_id=group_id,
-            user_id=user_id,
-            target_user_id=target_user_id,
-            operation_type=operation_type,
-            params=params,
-            result="success",
+            id             = 0,
+            group_id       = group_id,
+            user_id        = user_id,
+            target_user_id = target_user_id,
+            operation_type = operation_type,
+            params         = params,
+            result         = "success",
         )
         return self.db.log_operation(log)

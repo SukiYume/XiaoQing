@@ -55,6 +55,8 @@ Codex 摘要任务使用以下复合身份：
 
 `data/arxiv_filter/update_status.json` 记录每日投递状态。五个任务采用 Core `broadcast` 模式，目标来自各 schedule 的 `group_ids`，字段省略时使用 `default_group_ids`。生产推送请配置至少一个目标群。
 
+定时检查取得发送占用后，日期读取、推理或任务取消均通过统一清理路径释放占用。后续调度可继续检查同一天的列表。
+
 ---
 
 ## ⚙️ 插件配置
@@ -143,6 +145,8 @@ data/arxiv_filter/
 ```
 
 模型资产位于配置路径，运行状态位于插件数据目录，两类文件采用独立备份与部署流程。
+
+训练数据准备的月度缓存保存 `papers`、完整 `query_range` 和 `completed`，断点也绑定相同查询范围。修改 `date_range.json` 后，范围不匹配的月份会重新抓取；`step3` 只合并当前范围内已完成且身份匹配的缓存。旧列表格式缓存需要先重新运行 `step2`。
 
 ---
 

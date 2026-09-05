@@ -25,7 +25,7 @@ from tests.helpers.app_test_support import (
 )
 
 mock_dependencies = _fixture_support.mock_dependencies
-temp_app_root = _fixture_support.temp_app_root
+temp_app_root     = _fixture_support.temp_app_root
 
 
 @pytest.mark.asyncio
@@ -194,7 +194,7 @@ async def test_app_run_job_exposes_core_resolved_groups_to_self_delivering_plugi
 async def test_app_run_job_rejects_invalid_group_ids_before_plugin_execution(temp_app_root: Path):
     app = XiaoQingApp(temp_app_root)
     _set_app_config(app, default_group_ids=[123, "invalid"])
-    handler = AsyncMock()
+    handler                          = AsyncMock()
     app.plugin_manager.build_context = Mock()
 
     await app._run_job(handler, "test_plugin")
@@ -300,14 +300,14 @@ async def test_targeted_schedule_validates_returned_and_active_targets(temp_app_
 async def test_app_scheduled_delivery_receipt_rolls_back_on_partial_group_failure(
     temp_app_root: Path,
 ):
-    app = XiaoQingApp(temp_app_root)
-    committed = Mock()
+    app         = XiaoQingApp(temp_app_root)
+    committed   = Mock()
     rolled_back = Mock()
-    receipt = DeliveryReceipt(
-        expected_actions=1,
-        commit=committed,
-        rollback=rolled_back,
-        unknown=rolled_back,
+    receipt     = DeliveryReceipt(
+        expected_actions = 1,
+        commit           = committed,
+        rollback         = rolled_back,
+        unknown          = rolled_back,
     )
 
     async def handler(_context):
@@ -333,12 +333,12 @@ async def test_app_run_job_uses_plugin_sequential_gate(temp_app_root: Path):
     """Scheduled calls share the same manifest gate as message handlers."""
     from core.plugin_execution import PluginExecutionGate
 
-    app = XiaoQingApp(temp_app_root)
+    app  = XiaoQingApp(temp_app_root)
     gate = PluginExecutionGate("sequential")
     loaded = SimpleNamespace(execution_gate=gate)
     entered = asyncio.Event()
     release = asyncio.Event()
-    probe = BlockingConcurrencyProbe(entered, release)
+    probe   = BlockingConcurrencyProbe(entered, release)
 
     app.plugin_manager.get = Mock(return_value=loaded)
     app.plugin_manager.build_context = Mock(return_value=MagicMock())
@@ -380,8 +380,8 @@ async def test_send_action_resolves_declared_observer_for_external_plugin_text(
     await app._send_action(action)
 
     app.plugin_manager.resolve_service.assert_called_once_with(
-        caller_plugin="core",
-        service_name="core.observe_outgoing_action",
+        caller_plugin = "core",
+        service_name  = "core.observe_outgoing_action",
     )
     app.plugin_manager.build_context.assert_called_once()
     build_call = app.plugin_manager.build_context.call_args
@@ -400,7 +400,7 @@ async def test_send_action_resolves_declared_observer_for_external_plugin_text(
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_send_action_does_not_notify_xiaoqing_for_xiaoqing_source(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
+    app                                = XiaoQingApp(temp_app_root)
     app.plugin_manager.resolve_service = Mock()
 
     await app._send_action(
@@ -488,8 +488,8 @@ def test_app_reschedule_single_plugin(temp_app_root: Path):
     app = XiaoQingApp(temp_app_root)
 
     # Create mock loaded plugin
-    mock_plugin = MagicMock()
-    mock_plugin.definition.name = "test_plugin"
+    mock_plugin                     = MagicMock()
+    mock_plugin.definition.name     = "test_plugin"
     mock_plugin.definition.schedule = []
 
     # Mock scheduler and plugin manager
@@ -503,14 +503,14 @@ def test_app_reschedule_single_plugin(temp_app_root: Path):
 
 @pytest.mark.unit
 def test_app_reschedule_skips_manifest_disabled_schedule(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
-    module = MagicMock()
+    app        = XiaoQingApp(temp_app_root)
+    module     = MagicMock()
     definition = PluginDefinition(
-        name="test_plugin",
-        version="1.0.0",
-        entry="main.py",
-        commands=[],
-        schedule=[
+        name     = "test_plugin",
+        version  = "1.0.0",
+        entry    = "main.py",
+        commands = [],
+        schedule = [
             {
                 "id": "disabled",
                 "handler": "scheduled",
@@ -531,15 +531,15 @@ def test_app_reschedule_skips_manifest_disabled_schedule(temp_app_root: Path):
 
 @pytest.mark.unit
 def test_app_reschedule_preserves_manifest_schedule_description(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
-    module = MagicMock()
+    app              = XiaoQingApp(temp_app_root)
+    module           = MagicMock()
     module.scheduled = AsyncMock()
-    definition = PluginDefinition(
-        name="test_plugin",
-        version="1.0.0",
-        entry="main.py",
-        commands=[],
-        schedule=[
+    definition       = PluginDefinition(
+        name     = "test_plugin",
+        version  = "1.0.0",
+        entry    = "main.py",
+        commands = [],
+        schedule = [
             {
                 "id": "enabled",
                 "handler": "scheduled",
@@ -578,11 +578,11 @@ async def test_manifest_schedule_group_ids_reach_plugin_context(temp_app_root: P
         return []
 
     definition = PluginDefinition(
-        name="test_plugin",
-        version="1.0.0",
-        entry="main.py",
-        commands=[],
-        schedule=[
+        name     = "test_plugin",
+        version  = "1.0.0",
+        entry    = "main.py",
+        commands = [],
+        schedule = [
             {
                 "id": "targeted",
                 "handler": "scheduled",
@@ -622,11 +622,11 @@ def test_app_reschedule_validates_every_manifest_before_replacement(temp_app_roo
     app = XiaoQingApp(temp_app_root)
     module = SimpleNamespace(scheduled=AsyncMock())
     definition = PluginDefinition(
-        name="test_plugin",
-        version="1.0.0",
-        entry="main.py",
-        commands=[],
-        schedule=[
+        name     = "test_plugin",
+        version  = "1.0.0",
+        entry    = "main.py",
+        commands = [],
+        schedule = [
             {"id": "valid", "handler": "scheduled", "cron": {"minute": "*"}},
             {
                 "id": "invalid",
@@ -637,7 +637,7 @@ def test_app_reschedule_validates_every_manifest_before_replacement(temp_app_roo
         ],
         concurrency="parallel",
     )
-    app.scheduler.replace_prefix = Mock()
+    app.scheduler.replace_prefix            = Mock()
     app.plugin_manager.schedule_definitions = Mock(
         return_value=[LoadedPlugin(definition=definition, module=module, mtime=0.0)]
     )
@@ -650,16 +650,16 @@ def test_app_reschedule_validates_every_manifest_before_replacement(temp_app_roo
 
 @pytest.mark.unit
 def test_app_reschedule_rejects_missing_handler_before_replacement(temp_app_root: Path):
-    app = XiaoQingApp(temp_app_root)
+    app        = XiaoQingApp(temp_app_root)
     definition = PluginDefinition(
-        name="test_plugin",
-        version="1.0.0",
-        entry="main.py",
-        commands=[],
-        schedule=[{"id": "missing", "handler": "absent", "cron": {"minute": "*"}}],
-        concurrency="parallel",
+        name        = "test_plugin",
+        version     = "1.0.0",
+        entry       = "main.py",
+        commands    = [],
+        schedule    = [{"id": "missing", "handler": "absent", "cron": {"minute": "*"}}],
+        concurrency = "parallel",
     )
-    app.scheduler.replace_prefix = Mock()
+    app.scheduler.replace_prefix            = Mock()
     app.plugin_manager.schedule_definitions = Mock(
         return_value=[LoadedPlugin(definition=definition, module=SimpleNamespace(), mtime=0.0)]
     )
@@ -674,21 +674,21 @@ def test_app_reschedule_rejects_missing_handler_before_replacement(temp_app_root
 def test_app_reschedule_removes_retired_jobs_when_reloaded_handler_is_missing(
     temp_app_root: Path,
 ):
-    app = XiaoQingApp(temp_app_root)
+    app        = XiaoQingApp(temp_app_root)
     definition = PluginDefinition(
-        name="test_plugin",
-        version="1.0.0",
-        entry="main.py",
-        commands=[],
-        schedule=[{"id": "missing", "handler": "absent", "cron": {"minute": "*"}}],
-        concurrency="parallel",
+        name        = "test_plugin",
+        version     = "1.0.0",
+        entry       = "main.py",
+        commands    = [],
+        schedule    = [{"id": "missing", "handler": "absent", "cron": {"minute": "*"}}],
+        concurrency = "parallel",
     )
     app.scheduler.replace_prefix = Mock()
-    app.plugin_manager.get = Mock(
+    app.plugin_manager.get       = Mock(
         return_value=LoadedPlugin(
-            definition=definition,
-            module=SimpleNamespace(),
-            mtime=0.0,
+            definition = definition,
+            module     = SimpleNamespace(),
+            mtime      = 0.0,
         )
     )
 
@@ -788,7 +788,7 @@ async def test_app_on_ws_connected(temp_app_root: Path):
     # But strictly speaking we need to update what ConfigManager returns.
 
     # Mock ws_client
-    app.ws_client = MagicMock()
+    app.ws_client             = MagicMock()
     app.ws_client.send_action = AsyncMock()
 
     # Mock _send_action
@@ -809,7 +809,7 @@ async def test_app_on_ws_connected_no_groups(temp_app_root: Path):
     _set_app_config(app, default_group_ids=[])
 
     # Mock ws_client
-    app.ws_client = MagicMock()
+    app.ws_client             = MagicMock()
     app.ws_client.send_action = AsyncMock()
 
     # Mock _send_action
@@ -841,9 +841,9 @@ async def test_app_on_ws_connected_uses_configured_name_in_default_message(
     app = XiaoQingApp(temp_app_root)
     _set_app_config(
         app,
-        bot_name="阿澄",
-        default_group_ids=[123],
-        connect_notification=None,
+        bot_name             = "阿澄",
+        default_group_ids    = [123],
+        connect_notification = None,
     )
     app.ws_client = MagicMock()
 
@@ -861,8 +861,8 @@ async def test_app_on_ws_connected_throttles_reconnect_notifications(temp_app_ro
     app = XiaoQingApp(temp_app_root)
     _set_app_config(
         app,
-        default_group_ids=[123],
-        connect_notification_min_interval_seconds=300,
+        default_group_ids                         = [123],
+        connect_notification_min_interval_seconds = 300,
     )
     app.ws_client = MagicMock()
 

@@ -1,3 +1,4 @@
+# 验证 CI 跳过白名单能够拒绝新增或过期的跳过项。
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -17,17 +18,17 @@ def test_repository_ci_skip_allowlist_is_valid(project_root) -> None:
 
 def test_skip_policy_matches_node_reason_and_platform_together() -> None:
     allowance = SkipAllowance(
-        nodeid="tests/test_platform.py::test_windows_*",
-        reason="Windows-only capability",
-        platforms=frozenset({"posix"}),
+        nodeid    = "tests/test_platform.py::test_windows_*",
+        reason    = "Windows-only capability",
+        platforms = frozenset({"posix"}),
     )
     allowed = SimpleNamespace(
-        nodeid="tests/test_platform.py::test_windows_tree",
-        longrepr=("test_platform.py", 1, "Skipped: Windows-only capability"),
+        nodeid   = "tests/test_platform.py::test_windows_tree",
+        longrepr = ("test_platform.py", 1, "Skipped: Windows-only capability"),
     )
     wrong_reason = SimpleNamespace(
-        nodeid=allowed.nodeid,
-        longrepr=("test_platform.py", 1, "Skipped: dependency disappeared"),
+        nodeid   = allowed.nodeid,
+        longrepr = ("test_platform.py", 1, "Skipped: dependency disappeared"),
     )
 
     assert unexpected_skips([allowed], [allowance], platform="posix") == ()

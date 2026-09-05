@@ -38,9 +38,9 @@ def _start_background_job(
     command: str,
     policy: SSHOutputPolicy,
     server_name: str = "srv",
-    is_cd: bool = False,
+    is_cd: bool      = False,
 ) -> asyncio.Task[None]:
-    key = (1, 2)
+    key    = (1, 2)
     job_id = uuid.uuid4().hex
     session.set(SessionKeys.SERVER_NAME, server_name)
     session.set(SessionKeys.STATE, "executing")
@@ -61,17 +61,17 @@ def _start_background_job(
             1,
             2,
             policy,
-            job_key=key,
-            job_id=job_id,
-            is_cd=is_cd,
+            job_key = key,
+            job_id  = job_id,
+            is_cd   = is_cd,
         )
     )
     session_handlers._register_job(
         session_handlers._CommandJob(
-            key=key,
-            server_name=server_name,
-            job_id=job_id,
-            task=task,
+            key         = key,
+            server_name = server_name,
+            job_id      = job_id,
+            task        = task,
         )
     )
     return task
@@ -106,9 +106,9 @@ async def test_relay_strips_terminal_controls_only_from_user_projection(tmp_path
         sent.append(value)
 
     relay = SSHOutputRelay(
-        output_dir=tmp_path,
-        policy=_fast_policy(),
-        send_text=send_text,
+        output_dir = tmp_path,
+        policy     = _fast_policy(),
+        send_text  = send_text,
     )
     await relay.feed("\x1b[31mvisible\x1b[0m\x00text")
     summary = await relay.finish("✅ done")
@@ -167,7 +167,7 @@ def test_policy_rejects_unsafe_or_nonfunctional_bounds(name: str, value: Any) ->
 
 @pytest.mark.asyncio
 async def test_normal_output_is_complete_and_creates_no_archive(tmp_path: Path) -> None:
-    actions: list[dict[str, Any]] = []
+    actions: list[dict[str, Any]]         = []
     command_seen: list[tuple[str, float]] = []
 
     class Manager:
@@ -196,11 +196,11 @@ async def test_normal_output_is_complete_and_creates_no_archive(tmp_path: Path) 
     command = "printf '%s\\n' 'hello world' && uname -a"
 
     await _start_background_job(
-        session=session,
-        manager=Manager(),
-        send_action=context.send_action,
-        command=command,
-        policy=_fast_policy(),
+        session     = session,
+        manager     = Manager(),
+        send_action = context.send_action,
+        command     = command,
+        policy      = _fast_policy(),
     )
 
     texts = _action_texts(actions)
@@ -218,11 +218,11 @@ async def test_archive_filesystem_operations_run_off_event_loop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     relay = SSHOutputRelay(
-        output_dir=tmp_path,
-        policy=_fast_policy(),
-        send_text=lambda _text: asyncio.sleep(0),
+        output_dir = tmp_path,
+        policy     = _fast_policy(),
+        send_text  = lambda _text: asyncio.sleep(0),
     )
-    event_loop_thread = threading.get_ident()
+    event_loop_thread                        = threading.get_ident()
     operation_threads: list[tuple[str, int]] = []
 
     for method_name in ("_open_archive", "_archive", "_commit_archive"):
@@ -251,7 +251,7 @@ async def test_multi_megabyte_output_has_bounded_qq_projection_and_full_archive(
     tmp_path: Path,
 ) -> None:
     actions: list[dict[str, Any]] = []
-    payload = "BEGIN\n" + ("x" * (4 * 1024 * 1024)) + "\nEND\n"
+    payload                       = "BEGIN\n" + ("x" * (4 * 1024 * 1024)) + "\nEND\n"
 
     class Manager:
         data_dir = tmp_path
@@ -268,11 +268,11 @@ async def test_multi_megabyte_output_has_bounded_qq_projection_and_full_archive(
         actions.append(action)
 
     await _start_background_job(
-        session=_Session(),
-        manager=Manager(),
-        send_action=send_action,
-        command="yes x | head -c 4194304",
-        policy=_fast_policy(),
+        session     = _Session(),
+        manager     = Manager(),
+        send_action = send_action,
+        command     = "yes x | head -c 4194304",
+        policy      = _fast_policy(),
     )
 
     texts = _action_texts(actions)
@@ -295,14 +295,14 @@ async def test_archive_budget_preserves_head_and_tail_without_exceeding_cap(
     tmp_path: Path,
 ) -> None:
     sent: list[str] = []
-    policy = _fast_policy(
-        archive_max_bytes=1024 * 1024,
-        archive_tail_bytes=64 * 1024,
+    policy          = _fast_policy(
+        archive_max_bytes  = 1024 * 1024,
+        archive_tail_bytes = 64 * 1024,
     )
     relay = SSHOutputRelay(
-        output_dir=tmp_path,
-        policy=policy,
-        send_text=lambda text: _append_async(sent, text),
+        output_dir = tmp_path,
+        policy     = policy,
+        send_text  = lambda text: _append_async(sent, text),
     )
     await relay.feed("BEGIN\n" + ("z" * (2 * 1024 * 1024)) + "\nEND\n")
 
@@ -324,7 +324,7 @@ async def _append_async(items: list[str], value: str) -> None:
 @pytest.mark.asyncio
 async def test_hung_qq_delivery_does_not_backpressure_remote_drain(tmp_path: Path) -> None:
     send_started = 0
-    never = asyncio.Event()
+    never        = asyncio.Event()
 
     async def hung_send(_text: str) -> None:
         nonlocal send_started
@@ -348,7 +348,7 @@ async def test_hung_qq_delivery_does_not_backpressure_remote_drain(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_cancelled_finish_removes_unreported_archive_and_sender(tmp_path: Path) -> None:
     send_started = asyncio.Event()
-    never = asyncio.Event()
+    never        = asyncio.Event()
 
     async def hung_send(_text: str) -> None:
         send_started.set()
@@ -378,7 +378,7 @@ async def test_cancelled_finish_removes_unreported_archive_and_sender(tmp_path: 
 
 @pytest.mark.asyncio
 async def test_cancellation_reclaims_remote_and_removes_relay_artifacts(tmp_path: Path) -> None:
-    entered = asyncio.Event()
+    entered          = asyncio.Event()
     remote_cancelled = asyncio.Event()
 
     class Manager:
@@ -399,12 +399,12 @@ async def test_cancellation_reclaims_remote_and_removes_relay_artifacts(tmp_path
         raise AssertionError("partial output must not escape after cancellation")
 
     session = _Session()
-    task = _start_background_job(
-        session=session,
-        manager=Manager(),
-        send_action=send_action,
-        command="long-running-command --unchanged",
-        policy=_fast_policy(),
+    task    = _start_background_job(
+        session     = session,
+        manager     = Manager(),
+        send_action = send_action,
+        command     = "long-running-command --unchanged",
+        policy      = _fast_policy(),
     )
     await asyncio.wait_for(entered.wait(), timeout=1)
 
@@ -428,7 +428,7 @@ async def test_explicit_zero_timeout_does_not_wrap_unlimited_admin_command(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager = ssh_manager_module.SSHManager(tmp_path)
+    manager                 = ssh_manager_module.SSHManager(tmp_path)
     command_seen: list[str] = []
 
     async def operation(*args: Any, **_kwargs: Any) -> int:
@@ -459,10 +459,10 @@ async def test_repeated_cancel_cannot_abort_remote_cleanup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager = ssh_manager_module.SSHManager(tmp_path)
+    manager           = ssh_manager_module.SSHManager(tmp_path)
     operation_started = asyncio.Event()
-    cleanup_started = asyncio.Event()
-    release_cleanup = asyncio.Event()
+    cleanup_started   = asyncio.Event()
+    release_cleanup   = asyncio.Event()
 
     async def operation(*_args: Any, **_kwargs: Any) -> int:
         operation_started.set()
@@ -473,9 +473,9 @@ async def test_repeated_cancel_cannot_abort_remote_cleanup(
         cleanup_started.set()
         await release_cleanup.wait()
         return ssh_manager_module.CommandTerminationResult(
-            found=True,
-            local_cleaned=True,
-            remote_confirmed=True,
+            found            = True,
+            local_cleaned    = True,
+            remote_confirmed = True,
         )
 
     monkeypatch.setattr(manager, "_execute_command_stream_impl", operation)

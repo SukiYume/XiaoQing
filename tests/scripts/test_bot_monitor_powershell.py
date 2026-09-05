@@ -27,7 +27,7 @@ def test_windows_powershell_native_argument_quoting_round_trip(tmp_path: Path) -
     if executable is None:
         pytest.skip("Windows PowerShell 5.1 is not installed")
     receiver = tmp_path / "argument receiver.py"
-    output = tmp_path / "received arguments.json"
+    output   = tmp_path / "received arguments.json"
     receiver.write_text(
         "import json, pathlib, sys\n"
         "pathlib.Path(sys.argv[1]).write_text("
@@ -95,7 +95,7 @@ def test_monitor_parses_in_windows_powershell_and_pwsh() -> None:
     ]
     if not executables:
         pytest.skip("PowerShell is not installed")
-    environment = {**os.environ, "XIAOQING_MONITOR_AST_PATH": str(MONITOR)}
+    environment    = {**os.environ, "XIAOQING_MONITOR_AST_PATH": str(MONITOR)}
     parser_command = (
         "$tokens=$null; $errors=$null; "
         "[System.Management.Automation.Language.Parser]::ParseFile("
@@ -118,7 +118,7 @@ def test_elevated_stop_preserves_scoped_paths_and_reports_child_failure() -> Non
     if executable is None:
         pytest.skip("PowerShell is not installed")
     environment = {**os.environ, "XIAOQING_MONITOR_AST_PATH": str(MONITOR)}
-    probe = r"""
+    probe       = r"""
 $tokens = $null
 $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile(
@@ -285,7 +285,7 @@ def test_monitor_fails_closed_when_napcat_executable_is_missing(tmp_path: Path) 
         pytest.skip("PowerShell is not installed")
 
     bot_root = tmp_path / "bot"
-    scripts = bot_root / "scripts"
+    scripts  = bot_root / "scripts"
     scripts.mkdir(parents=True)
     config_dir = bot_root / "config"
     config_dir.mkdir()

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -16,16 +16,16 @@ from plugins.pendo.web.services.bundle_import import (
 )
 from plugins.pendo.web.services.transfer_bundle import ParsedBundle
 
-FIXED_NOW = datetime(2030, 1, 1, 12, 0, tzinfo=timezone.utc)
+FIXED_NOW = datetime(2030, 1, 1, 12, 0, tzinfo=UTC)
 
 
 def test_normalize_import_payload_replaces_explicit_empty_timestamps_and_copies_metadata():
     """显式空时间应统一落到同一导入时钟，容器字段不得保留外部别名。"""
 
-    context = {"source": "external"}
+    context     = {"source": "external"}
     attachments = [{"name": "proof.txt"}]
-    ai_meta = {"model": "external"}
-    payload = {
+    ai_meta     = {"model": "external"}
+    payload     = {
         "type": "task",
         "title": "done",
         "status": "done",
@@ -76,8 +76,8 @@ def test_normalize_import_event_uses_source_zone_for_times_and_default_timezone(
             "start_time": "2026-01-15T09:00:00",
             "remind_times": ["2026-01-15T08:30:00", None, ""],
         },
-        source_zone=ZoneInfo("America/New_York"),
-        now=FIXED_NOW,
+        source_zone = ZoneInfo("America/New_York"),
+        now         = FIXED_NOW,
     )
 
     assert normalized["start_time"] == "2026-01-15T14:00:00+00:00"
@@ -159,7 +159,7 @@ def test_normalize_import_payload_rejects_non_list_reminders():
 def test_normalize_import_event_collection_normalizes_storage_fields():
     """日程集合写库前应完成字段清洗、时间换算和容器复制。"""
 
-    context = {"origin": "external"}
+    context    = {"origin": "external"}
     normalized = normalize_import_event_collection(
         {
             "id": "source-collection",
@@ -183,8 +183,8 @@ def test_normalize_import_event_collection_normalizes_storage_fields():
             "deleted": "false",
             "_bundle_line": 8,
         },
-        source_zone=ZoneInfo("Asia/Tokyo"),
-        now=FIXED_NOW,
+        source_zone = ZoneInfo("Asia/Tokyo"),
+        now         = FIXED_NOW,
     )
 
     assert normalized["kind"] == "recurring"
@@ -236,8 +236,8 @@ def test_inspect_bundle_bytes_merges_row_errors_and_keeps_only_valid_records(mon
     """检查入口应保留原解析错误，并只输出规范化成功的记录。"""
 
     parsed = ParsedBundle(
-        manifest={"source": {"timezone": "UTC"}},
-        records_by_type={
+        manifest        = {"source": {"timezone": "UTC"}},
+        records_by_type = {
             "task": [
                 {"type": "task", "title": "valid", "_bundle_line": 3},
                 {"type": "task", "title": "", "_bundle_line": 7},

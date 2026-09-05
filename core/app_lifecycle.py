@@ -83,6 +83,11 @@ class AppLifecycleMixin:
     plugin_manager: PluginManager
     ws_client: OneBotWsClient | None
 
+    @property
+    def shutdown_errors(self) -> tuple[str, ...]:
+        """返回最近一次关闭的失败快照，供进程入口判断退出状态。"""
+        return self._last_shutdown_errors
+
     if TYPE_CHECKING:
 
         def _apply_security_snapshot_locked(self, snapshot: ConfigSnapshot) -> None: ...
@@ -146,7 +151,7 @@ class AppLifecycleMixin:
             raise RuntimeError("startup authentication ownership did not stabilize")
 
         exponent = min(max(0, attempt - 1), 16)
-        delay = min(
+        delay    = min(
             _STARTUP_OWNERSHIP_RETRY_MAX_DELAY_SECONDS,
             _STARTUP_OWNERSHIP_RETRY_BASE_DELAY_SECONDS * (2**exponent),
         )
@@ -172,15 +177,15 @@ class AppLifecycleMixin:
             if self._lifecycle_state is not _AppLifecycleState.NEW:
                 raise RuntimeError("Application start is already in progress")
 
-            self._lifecycle_state = _AppLifecycleState.STARTING
+            self._lifecycle_state      = _AppLifecycleState.STARTING
             self._last_shutdown_errors = ()
             try:
                 await self._start_runtime()
             except BaseException as start_error:
-                self._stopping = True
+                self._stopping             = True
                 rollback_errors: list[str] = []
-                deferred_cancellation = _DeferredCancellation()
-                cleanup_task = asyncio.create_task(
+                deferred_cancellation      = _DeferredCancellation()
+                cleanup_task               = asyncio.create_task(
                     _run_owned_operation(lambda: self._cleanup_runtime(rollback_errors))
                 )
                 try:
@@ -200,13 +205,13 @@ class AppLifecycleMixin:
                     )
                 else:
                     self._lifecycle_state = _AppLifecycleState.NEW
-                    self._stopping = self._shutdown_task is not None
+                    self._stopping        = self._shutdown_task is not None
                     # A clean rollback owns no runtime side effects.  Release
                     # its startup-only revision claim so a same-revision
                     # pre-start apply/retry can run, while keeping generation
                     # counters and the fail-closed security revision monotonic.
                     with self._runtime_auth_lock:
-                        self._config_apply_owner = None
+                        self._config_apply_owner    = None
                         self._config_apply_revision = -1
                 if isinstance(start_error, asyncio.CancelledError):
                     raise
@@ -219,24 +224,24 @@ class AppLifecycleMixin:
 
     async def _start_runtime(self) -> None:
         startup_snapshot = self._latest_startup_snapshot()
-        startup_config = startup_snapshot.config
+        startup_config   = startup_snapshot.config
 
         # 注入的测试 dispatcher 可以没有 limiter；生产 limiter 始终原地调容。
         concurrency = _coerce_runtime_number(
             startup_config.get("max_concurrency", DEFAULT_MAX_CONCURRENCY),
-            key="max_concurrency",
-            default=DEFAULT_MAX_CONCURRENCY,
-            integer=True,
-            minimum=1,
-            maximum=1024,
+            key     = "max_concurrency",
+            default = DEFAULT_MAX_CONCURRENCY,
+            integer = True,
+            minimum = 1,
+            maximum = 1024,
         )
         session_timeout = _coerce_runtime_number(
             startup_config.get("session_timeout", DEFAULT_SESSION_TIMEOUT_SEC),
-            key="session_timeout",
-            default=DEFAULT_SESSION_TIMEOUT_SEC,
-            integer=False,
-            minimum=0.001,
-            maximum=604800.0,
+            key     = "session_timeout",
+            default = DEFAULT_SESSION_TIMEOUT_SEC,
+            integer = False,
+            minimum = 0.001,
+            maximum = 604800.0,
         )
         if self.dispatcher.semaphore is None:
             self.dispatcher.semaphore = AdjustableSemaphore(concurrency)
@@ -246,8 +251,8 @@ class AppLifecycleMixin:
 
         self.http_session = aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(
-                total=DEFAULT_HTTP_TIMEOUT_SECONDS,
-                connect=DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS,
+                total   = DEFAULT_HTTP_TIMEOUT_SECONDS,
+                connect = DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS,
             )
         )
 
@@ -269,19 +274,19 @@ class AppLifecycleMixin:
         # patched factory in tests), so retry until one owner survives every
         # await and publication boundary.
         ownership_started_at = time.monotonic()
-        ownership_attempt = 0
+        ownership_attempt    = 0
         while not self._stopping:
             ownership_attempt += 1
             startup_snapshot = self._latest_startup_snapshot()
-            owner = self._claim_or_reuse_startup_owner(startup_snapshot)
+            owner            = self._claim_or_reuse_startup_owner(startup_snapshot)
             if owner is None:
                 await self._wait_for_startup_ownership_retry(
-                    attempt=ownership_attempt,
-                    started_at=ownership_started_at,
-                    reason="claim_rejected",
+                    attempt    = ownership_attempt,
+                    started_at = ownership_started_at,
+                    reason     = "claim_rejected",
                 )
                 continue
-            config = startup_snapshot.config
+            config  = startup_snapshot.config
             secrets = _trusted_secrets(startup_snapshot)
             onebot_token, onebot_credentials_trusted = _onebot_credentials(startup_snapshot)
             http_base = str(config.get("onebot_http_base", "") or "").strip()
@@ -303,39 +308,39 @@ class AppLifecycleMixin:
                     else:
                         self.http_sender = sender
                 else:
-                    self.http_sender = None
+                    self.http_sender      = None
                     ownership_lost_reason = ""
 
             if ownership_lost_reason:
                 await self._wait_for_startup_ownership_retry(
-                    attempt=ownership_attempt,
-                    started_at=ownership_started_at,
-                    reason=ownership_lost_reason,
+                    attempt    = ownership_attempt,
+                    started_at = ownership_started_at,
+                    reason     = ownership_lost_reason,
                 )
                 continue
 
             await self._reconcile_ws_client(
-                enable_ws=bool(config.get("enable_ws_client", True)),
-                ws_uri=str(config.get("onebot_ws_uri", "") or "").strip(),
-                token=onebot_token,
-                credentials_trusted=onebot_credentials_trusted,
-                queue_size=self._parse_ws_queue_size(config),
-                owner=owner,
+                enable_ws           = bool(config.get("enable_ws_client", True)),
+                ws_uri              = str(config.get("onebot_ws_uri", "") or "").strip(),
+                token               = onebot_token,
+                credentials_trusted = onebot_credentials_trusted,
+                queue_size          = self._parse_ws_queue_size(config),
+                owner               = owner,
             )
             if not self._owns_config_apply(owner):
                 await self._wait_for_startup_ownership_retry(
-                    attempt=ownership_attempt,
-                    started_at=ownership_started_at,
-                    reason="after_ws_reconcile",
+                    attempt    = ownership_attempt,
+                    started_at = ownership_started_at,
+                    reason     = "after_ws_reconcile",
                 )
                 continue
             await self._reconcile_inbound_manager(config, secrets, owner=owner)
             if self._owns_config_apply(owner):
                 break
             await self._wait_for_startup_ownership_retry(
-                attempt=ownership_attempt,
-                started_at=ownership_started_at,
-                reason="after_inbound_reconcile",
+                attempt    = ownership_attempt,
+                started_at = ownership_started_at,
+                reason     = "after_inbound_reconcile",
             )
 
         if self._stopping:
@@ -348,11 +353,11 @@ class AppLifecycleMixin:
         )
         poll_interval = _coerce_runtime_number(
             startup_snapshot.config.get("plugin_poll_interval", 3600),
-            key="plugin_poll_interval",
-            default=3600.0,
-            integer=False,
-            minimum=0.01,
-            maximum=86400.0,
+            key     = "plugin_poll_interval",
+            default = 3600.0,
+            integer = False,
+            minimum = 0.01,
+            maximum = 86400.0,
         )
         self._configure_plugin_watch(
             startup_snapshot.config,
@@ -366,8 +371,8 @@ class AppLifecycleMixin:
             task.done() and self._lifecycle_state is not _AppLifecycleState.STOPPED
         ):
             # 先冻结所有会重建运行时组件的入口，再异步执行逐阶段清理。
-            self._stopping = True
-            task = asyncio.create_task(_run_owned_operation(self._stop_async))
+            self._stopping      = True
+            task                = asyncio.create_task(_run_owned_operation(self._stop_async))
             self._shutdown_task = task
 
         if task is asyncio.current_task():
@@ -488,7 +493,7 @@ class AppLifecycleMixin:
     def _live_control_plane_tasks(self) -> tuple[str, ...]:
         """Return control tasks that still own mutable runtime dependencies."""
         live: list[str] = []
-        config_tasks = set(self._config_apply_tasks)
+        config_tasks    = set(self._config_apply_tasks)
         if self._config_apply_task is not None:
             config_tasks.add(self._config_apply_task)
         if any(not task.done() for task in config_tasks):
@@ -535,10 +540,10 @@ class AppLifecycleMixin:
                 lock.acquire(),
                 timeout=self._background_task_stop_timeout_seconds,
             )
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             raise RuntimeError("timed out waiting for inbound reconciliation to finish") from exc
         try:
-            current = self.inbound_manager
+            current                        = self.inbound_manager
             managers: list[InboundManager] = []
             for manager in (current, *self._inbound_cleanup_pending):
                 if manager is not None and all(manager is not item for item in managers):
@@ -561,7 +566,7 @@ class AppLifecycleMixin:
                     failed.append((manager, exc))
                 else:
                     self._inbound_cleanup_quarantine.pop(id(manager), None)
-            failed_managers = [manager for manager, _ in failed]
+            failed_managers               = [manager for manager, _ in failed]
             self._inbound_cleanup_pending = [
                 manager for manager in failed_managers if current is None or manager is not current
             ]
@@ -594,7 +599,7 @@ class AppLifecycleMixin:
                 pass
             except _OwnedTaskFatalError as exc:
                 self._ws_client_stop_task = None
-                self.ws_client = client
+                self.ws_client            = client
                 raise ApplicationLifecycleFatalError(exc.original) from None
             except BaseException as exc:
                 logger.warning("Earlier WebSocket client stop attempt failed: %s", exc)
@@ -609,14 +614,14 @@ class AppLifecycleMixin:
                 logger.info("WebSocket client stopped")
                 return
             self._ws_client_stop_task = None
-            stop_task = None
+            stop_task                 = None
 
         if stop_task is None:
             if not self._owns_config_apply(owner):
                 return
-            stop_task = asyncio.create_task(_run_owned_operation(client.stop))
+            stop_task                 = asyncio.create_task(_run_owned_operation(client.stop))
             self._ws_client_stop_task = stop_task
-        stop_timeout = self._background_task_stop_timeout_seconds
+        stop_timeout   = self._background_task_stop_timeout_seconds
         client_timeout = getattr(client, "_shutdown_timeout_seconds", None)
         if isinstance(client_timeout, (int, float)) and not isinstance(client_timeout, bool):
             # The client owns one absolute internal deadline.  Give its
@@ -638,11 +643,11 @@ class AppLifecycleMixin:
                 stop_task.result()
             except _OwnedTaskFatalError as exc:
                 self._ws_client_stop_task = None
-                self.ws_client = client
+                self.ws_client            = client
                 raise ApplicationLifecycleFatalError(exc.original) from None
             except BaseException:
                 self._ws_client_stop_task = None
-                self.ws_client = client
+                self.ws_client            = client
                 raise
             else:
                 self._ws_client_stop_task = None
@@ -657,7 +662,7 @@ class AppLifecycleMixin:
         logger.info("Scheduler stopped")
 
     async def _unload_plugins_for_shutdown(self, errors: list[str]) -> bool:
-        budget = self._plugin_shutdown_budget_seconds()
+        budget   = self._plugin_shutdown_budget_seconds()
         deadline = time.monotonic() + budget
         try:
             plugin_names = self.plugin_manager.list_runtime_plugins()
@@ -748,8 +753,8 @@ class AppLifecycleMixin:
         await asyncio.wait_for(operation, timeout=remaining)
 
     async def _close_plugin_execution_broker(self, remaining: float) -> None:
-        close_manager = getattr(self.plugin_manager, "close", None)
-        close_broker = getattr(self.plugin_manager, "close_execution_broker", None)
+        close_manager   = getattr(self.plugin_manager, "close", None)
+        close_broker    = getattr(self.plugin_manager, "close_execution_broker", None)
         close_operation = close_manager if callable(close_manager) else close_broker
         if not callable(close_operation):
             return
@@ -774,13 +779,13 @@ class AppLifecycleMixin:
                 self.http_session = session
                 raise
             self.http_session = None
-            self.http_sender = None
+            self.http_sender  = None
             logger.info("HTTP session closed")
         else:
             self.http_sender = None
 
     async def _cancel_config_apply_tasks(self) -> None:
-        tasks = set(self._config_apply_tasks)
+        tasks   = set(self._config_apply_tasks)
         current = self._config_apply_task
         if current is not None:
             tasks.add(current)
@@ -827,18 +832,18 @@ class AppLifecycleMixin:
             raise RuntimeError(f"runtime configuration task(s) failed: {summary}") from failures[0]
 
     async def _cancel_plugin_watch_tasks(self) -> None:
-        self._plugin_watch_desired = False
-        self._plugin_watch_restart_pending = False
+        self._plugin_watch_desired          = False
+        self._plugin_watch_restart_pending  = False
         self._plugin_watch_restart_failures = 0
-        tasks = set(self._plugin_watch_tasks)
-        current = self._plugin_watch_task
+        tasks                               = set(self._plugin_watch_tasks)
+        current                             = self._plugin_watch_task
         if current is not None:
             tasks.add(current)
         restart_task = self._plugin_watch_restart_task
         if restart_task is not None:
             tasks.add(restart_task)
         if not tasks:
-            self._plugin_watch_task = None
+            self._plugin_watch_task         = None
             self._plugin_watch_restart_task = None
             return
 
@@ -858,7 +863,7 @@ class AppLifecycleMixin:
             except BaseException as exc:
                 failures.append(exc)
 
-        pending_watchers = pending - ({restart_task} if restart_task is not None else set())
+        pending_watchers         = pending - ({restart_task} if restart_task is not None else set())
         self._plugin_watch_tasks = {task for task in self._plugin_watch_tasks if not task.done()}
         self._plugin_watch_tasks.update(pending_watchers)
         if pending:

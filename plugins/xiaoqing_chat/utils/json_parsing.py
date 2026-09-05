@@ -14,7 +14,7 @@ def normalize_llm_text(text: str) -> str:
 
     if not text:
         return ""
-    s = str(text).strip()
+    s     = str(text).strip()
     match = _JSON_BLOCK_RE.fullmatch(s)
     if match:
         return match.group(1).strip()
@@ -28,10 +28,10 @@ def normalize_response_content(data: dict[str, Any]) -> str:
     if not isinstance(choices, list) or not choices:
         return ""
     choice0 = choices[0] if isinstance(choices[0], dict) else {}
-    msg = choice0.get("message")
+    msg     = choice0.get("message")
     if not isinstance(msg, dict):
         delta = choice0.get("delta")
-        msg = delta if isinstance(delta, dict) else {}
+        msg   = delta if isinstance(delta, dict) else {}
     content = msg.get("content")
     return normalize_llm_text(content) if isinstance(content, str) else ""
 
@@ -43,9 +43,9 @@ def _extract_json_root_text(text: str, *, opening: str, closing: str) -> str:
     if not s or not s.startswith(opening):
         return ""
 
-    depth = 0
+    depth     = 0
     in_string = False
-    escaped = False
+    escaped   = False
     for index, ch in enumerate(s):
         if in_string:
             if escaped:
@@ -84,8 +84,8 @@ def extract_first_json_array_text(text: str) -> str:
 
 def _remove_trailing_commas(text: str) -> str:
     out: list[str] = []
-    in_string = False
-    escaped = False
+    in_string      = False
+    escaped        = False
     for i, ch in enumerate(text):
         if in_string:
             out.append(ch)
@@ -130,7 +130,7 @@ def parse_first_json_object_with_status(text: str) -> tuple[dict[str, Any], bool
     obj_text = extract_first_json_object_text(text)
     if not obj_text:
         return {}, False
-    candidates = [obj_text, repair_json_text(obj_text)]
+    candidates     = [obj_text, repair_json_text(obj_text)]
     seen: set[str] = set()
     for candidate in candidates:
         if candidate in seen:
@@ -149,7 +149,7 @@ def parse_first_json_array(text: str) -> list[dict[str, Any]]:
     arr_text = extract_first_json_array_text(text)
     if not arr_text:
         return []
-    candidates = [arr_text, repair_json_text(arr_text)]
+    candidates     = [arr_text, repair_json_text(arr_text)]
     seen: set[str] = set()
     for candidate in candidates:
         if candidate in seen:

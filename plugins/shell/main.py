@@ -20,6 +20,7 @@ import subprocess
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol, cast
 
 from core.interfaces import PluginSettingsSnapshot
@@ -39,7 +40,7 @@ from .config import (
 logger = logging.getLogger(__name__)
 
 MessageSegments = list[dict[str, Any]]
-segments = cast(Callable[[Any], MessageSegments], _core_segments)
+segments        = cast(Callable[[Any], MessageSegments], _core_segments)
 
 _URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
 _WINDOWS_DRIVE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
@@ -59,7 +60,7 @@ class TerminalSettings:
 
     backend: str
     executable: str | None = None
-    error: str | None = None
+    error: str | None      = None
 
 
 class ShellContext(Protocol):
@@ -72,7 +73,7 @@ class ShellContext(Protocol):
 
 
 def _audit_request_id(context: object) -> str:
-    value = getattr(context, "request_id", "")
+    value     = getattr(context, "request_id", "")
     candidate = value if isinstance(value, str) else ""
     return safe_audit_id(candidate)
 
@@ -82,17 +83,17 @@ def _log_command_audit(
     command_text: str,
     *,
     status: str,
-    return_code: int | None = None,
+    return_code: int | None   = None,
     exc: BaseException | None = None,
 ) -> None:
     log_sensitive_operation(
         logger,
         "shell.execute",
-        request_id=_audit_request_id(context),
-        status=status,
-        return_code=return_code,
-        payload=command_text,
-        exc=exc,
+        request_id  = _audit_request_id(context),
+        status      = status,
+        return_code = return_code,
+        payload     = command_text,
+        exc         = exc,
     )
 
 
@@ -116,34 +117,34 @@ def _get_terminal_settings(context: ShellContext) -> TerminalSettings:
         return TerminalSettings(backend=_TERMINAL_DIRECT)
     if not isinstance(raw, Mapping):
         return TerminalSettings(
-            backend=_TERMINAL_DIRECT,
-            error="config.plugins.shell.terminal 必须是对象",
+            backend = _TERMINAL_DIRECT,
+            error   = "config.plugins.shell.terminal 必须是对象",
         )
 
     backend = raw.get("backend", _TERMINAL_DIRECT)
     if not isinstance(backend, str) or not backend.strip():
         return TerminalSettings(
-            backend=_TERMINAL_DIRECT,
-            error="terminal.backend 必须是 direct 或 git-bash",
+            backend = _TERMINAL_DIRECT,
+            error   = "terminal.backend 必须是 direct 或 git-bash",
         )
     normalized_backend = backend.strip().casefold()
     if normalized_backend == _TERMINAL_DIRECT:
         return TerminalSettings(backend=_TERMINAL_DIRECT)
     if normalized_backend != _TERMINAL_GIT_BASH:
         return TerminalSettings(
-            backend=normalized_backend,
-            error="terminal.backend 必须是 direct 或 git-bash",
+            backend = normalized_backend,
+            error   = "terminal.backend 必须是 direct 或 git-bash",
         )
 
     executable = raw.get("executable")
     if not isinstance(executable, str) or not executable.strip():
         return TerminalSettings(
-            backend=_TERMINAL_GIT_BASH,
-            error="Git Bash 终端需要非空 terminal.executable",
+            backend = _TERMINAL_GIT_BASH,
+            error   = "Git Bash 终端需要非空 terminal.executable",
         )
     return TerminalSettings(
-        backend=_TERMINAL_GIT_BASH,
-        executable=executable.strip(),
+        backend    = _TERMINAL_GIT_BASH,
+        executable = executable.strip(),
     )
 
 
@@ -190,7 +191,7 @@ def _get_whitelist(context: ShellContext) -> set[str]:
         return set(DEFAULT_WHITELIST)
 
     custom_set = _normalize_whitelist_entries(config.get("whitelist"))
-    mode = config.get("whitelist_mode", "replace")
+    mode       = config.get("whitelist_mode", "replace")
     if mode == "extend":
         custom_set.update(DEFAULT_WHITELIST)
     return custom_set - UNSUPPORTED_SHELL_BUILTINS
@@ -268,7 +269,7 @@ def _normalize_path_token(token: str) -> str:
 def _merge_windows_quoted_assignments(parts: list[str]) -> list[str] | None:
     """合并 ``key="含空格值"`` 被非 POSIX shlex 拆开的片段。"""
 
-    merged: list[str] = []
+    merged: list[str]  = []
     pending: list[str] = []
     for part in parts:
         if pending:
@@ -371,7 +372,7 @@ def _prepare_execution_args(
 def _command_not_found_message(command: str) -> str:
     """为缺失的可执行文件生成稳定且可操作的提示。"""
 
-    name = _normalize_command_name(command) or "(unknown)"
+    name  = _normalize_command_name(command) or "(unknown)"
     lines = [
         f"❌ 找不到可执行命令 '{name}'",
         "管理员启用列表只控制允许执行的入口，不代表当前系统已经安装该程序。",
@@ -433,9 +434,6 @@ async def _kill_process_directly(proc: asyncio.subprocess.Process) -> None:
 async def _terminate_process_tree(proc: asyncio.subprocess.Process) -> None:
     """终止命令进程树；平台工具失败时回退到直接终止子进程。"""
 
-    if proc.returncode is not None:
-        return
-
     if sys.platform == "win32":
         killer: asyncio.subprocess.Process | None = None
         try:
@@ -445,8 +443,8 @@ async def _terminate_process_tree(proc: asyncio.subprocess.Process) -> None:
                 str(proc.pid),
                 "/T",
                 "/F",
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+                stdout = asyncio.subprocess.DEVNULL,
+                stderr = asyncio.subprocess.DEVNULL,
             )
             await asyncio.wait_for(killer.communicate(), timeout=_PROCESS_STOP_TIMEOUT)
             if killer.returncode == 0 and await _wait_for_process_exit(proc):
@@ -473,6 +471,46 @@ async def _terminate_process_tree(proc: asyncio.subprocess.Process) -> None:
         await _kill_process_directly(proc)
 
 
+async def _attach_windows_job(proc: asyncio.subprocess.Process) -> Any:
+    """登记启动门控进程，随后允许其创建命令树。"""
+    from .windows_job import WindowsJob
+
+    job = WindowsJob(proc.pid)
+    try:
+        assert proc.stdin is not None
+        proc.stdin.write(b"1")
+        await proc.stdin.drain()
+        proc.stdin.close()
+    except BaseException:
+        job.close()
+        raise
+    return job
+
+
+async def _spawn_owned_command(args: list[str]) -> tuple[asyncio.subprocess.Process, Any]:
+    """创建带平台进程树归属的命令，启动失败时回收已创建的根进程。"""
+    windows_job = None
+    launch_args = args
+    if sys.platform == "win32":
+        launch_args = [sys.executable, str(Path(__file__).with_name("windows_job.py")), *args]
+    proc = await asyncio.create_subprocess_exec(
+        *launch_args,
+        stdin  = asyncio.subprocess.PIPE if sys.platform == "win32" else asyncio.subprocess.DEVNULL,
+        stdout = asyncio.subprocess.PIPE,
+        stderr = asyncio.subprocess.PIPE,
+        **_subprocess_group_kwargs(),
+    )
+    if sys.platform == "win32":
+        try:
+            windows_job = await _attach_windows_job(proc)
+        except BaseException:
+            if windows_job is not None:
+                windows_job.close()
+            await _kill_process_directly(proc)
+            raise
+    return proc, windows_job
+
+
 async def _execute_command(args: list[str], timeout: float) -> tuple[int, str, str]:
     """异步执行命令，返回 ``(返回码, stdout, stderr)``。"""
 
@@ -480,18 +518,18 @@ async def _execute_command(args: list[str], timeout: float) -> tuple[int, str, s
         raise ValueError("command arguments must not be empty")
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("command timeout must be finite and positive")
+    proc, windows_job = await _spawn_owned_command(args)
 
-    proc = await asyncio.create_subprocess_exec(
-        args[0],
-        *args[1:],
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        **_subprocess_group_kwargs(),
-    )
-
-    overflow = asyncio.Event()
+    overflow       = asyncio.Event()
     captured_bytes = 0
+
+    async def terminate_owned() -> None:
+        if windows_job is not None:
+            windows_job.close()
+            if not await _wait_for_process_exit(proc):
+                await _kill_process_directly(proc)
+        else:
+            await _terminate_process_tree(proc)
 
     async def read_limited(stream: asyncio.StreamReader | None) -> bytes:
         nonlocal captured_bytes
@@ -511,31 +549,41 @@ async def _execute_command(args: list[str], timeout: float) -> tuple[int, str, s
                 break
         return b"".join(chunks)
 
-    stdout_task = asyncio.create_task(read_limited(proc.stdout))
-    stderr_task = asyncio.create_task(read_limited(proc.stderr))
-    wait_task = asyncio.create_task(proc.wait())
+    stdout_task   = asyncio.create_task(read_limited(proc.stdout))
+    stderr_task   = asyncio.create_task(read_limited(proc.stderr))
+    wait_task     = asyncio.create_task(proc.wait())
     overflow_task = asyncio.create_task(overflow.wait())
-    status = 0
-    message = ""
+    status        = 0
+    message       = ""
 
     try:
         done, _pending = await asyncio.wait(
             {wait_task, overflow_task},
-            timeout=timeout,
-            return_when=asyncio.FIRST_COMPLETED,
+            timeout     = timeout,
+            return_when = asyncio.FIRST_COMPLETED,
         )
         if overflow_task in done and overflow.is_set():
-            status = _EXIT_OUTPUT_LIMIT
+            status  = _EXIT_OUTPUT_LIMIT
             message = f"输出超过 {_MAX_CAPTURE_BYTES} 字节安全上限，已终止进程树"
-            await _terminate_process_tree(proc)
+            await terminate_owned()
         elif wait_task not in done:
-            status = _EXIT_TIMEOUT
+            status  = _EXIT_TIMEOUT
             message = f"命令执行超时（{timeout:g}秒）"
-            await _terminate_process_tree(proc)
+            await terminate_owned()
 
-        stdout_bytes, stderr_bytes = await asyncio.gather(stdout_task, stderr_task)
+        if status != 0 and windows_job is not None:
+            windows_job.close()
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                asyncio.gather(stdout_task, stderr_task), timeout=_PROCESS_STOP_TIMEOUT
+            )
+        except TimeoutError:
+            if windows_job is not None:
+                windows_job.close()
+            await terminate_owned()
+            return _EXIT_TIMEOUT, "", "命令输出管道回收超时，已终止进程树"
         if status == 0 and overflow.is_set():
-            status = _EXIT_OUTPUT_LIMIT
+            status  = _EXIT_OUTPUT_LIMIT
             message = f"输出超过 {_MAX_CAPTURE_BYTES} 字节安全上限"
         if status == 0:
             status = proc.returncode or 0
@@ -544,7 +592,7 @@ async def _execute_command(args: list[str], timeout: float) -> tuple[int, str, s
             stderr_str = f"{stderr_str}\n{message}".strip()
         return status, _smart_decode(stdout_bytes), stderr_str
     except asyncio.CancelledError:
-        cleanup = asyncio.create_task(_terminate_process_tree(proc))
+        cleanup = asyncio.create_task(terminate_owned())
         while not cleanup.done():
             try:
                 await asyncio.shield(cleanup)
@@ -553,9 +601,11 @@ async def _execute_command(args: list[str], timeout: float) -> tuple[int, str, s
         cleanup.result()
         raise
     finally:
+        if windows_job is not None:
+            windows_job.close()
         overflow_task.cancel()
         if proc.returncode is None:
-            await _terminate_process_tree(proc)
+            await terminate_owned()
         for task in (stdout_task, stderr_task, wait_task, overflow_task):
             if not task.done():
                 task.cancel()
@@ -626,14 +676,14 @@ async def handle(
                 return segments(_terminal_error_message("配置的 Git Bash 可执行文件已不可用"))
             return segments(_command_not_found_message(cmd_args[0]))
 
-        streams = [("📤 stdout", stdout), ("⚠️ stderr", stderr)]
-        populated_streams = [(label, text) for label, text in streams if text]
+        streams                 = [("📤 stdout", stdout), ("⚠️ stderr", stderr)]
+        populated_streams       = [(label, text) for label, text in streams if text]
         output_parts: list[str] = []
-        used_body_chars = 0
+        used_body_chars         = 0
         for index, (label, text) in enumerate(populated_streams):
             remaining_streams = len(populated_streams) - index
-            budget = max(0, (MAX_OUTPUT_LENGTH - used_body_chars) // remaining_streams)
-            body = _truncate(text, budget)
+            budget            = max(0, (MAX_OUTPUT_LENGTH - used_body_chars) // remaining_streams)
+            body              = _truncate(text, budget)
             used_body_chars += len(body)
             output_parts.append(f"{label}:\n{body}")
         if not populated_streams:
@@ -644,8 +694,8 @@ async def handle(
         _log_command_audit(
             context,
             cmd_line,
-            status="succeeded" if code == 0 else "failed",
-            return_code=code,
+            status      = "succeeded" if code == 0 else "failed",
+            return_code = code,
         )
         return segments(header + "\n".join(output_parts))
 
@@ -657,8 +707,8 @@ async def handle(
             public_error_response(
                 context,
                 exc,
-                logger=logger,
-                component="shell.handle",
+                logger    = logger,
+                component = "shell.handle",
             ),
         )
 
@@ -667,9 +717,9 @@ def _show_help(context: ShellContext) -> str:
     """根据当前配置生成适合手机私聊阅读的短行帮助。"""
 
     whitelist_status = "已禁用" if _is_whitelist_disabled(context) else "已启用"
-    timeout = _get_timeout(context)
-    terminal = _get_terminal_settings(context)
-    terminal_status = _terminal_label(terminal)
+    timeout          = _get_timeout(context)
+    terminal         = _get_terminal_settings(context)
+    terminal_status  = _terminal_label(terminal)
     if terminal.error:
         terminal_status = f"配置错误（{terminal.error}）"
     if terminal.backend == _TERMINAL_GIT_BASH:
@@ -730,9 +780,7 @@ async def _git_bash_available_commands(
     executable = _resolve_terminal_executable(settings)
     if executable is None:
         return set(), "找不到配置的 Git Bash 可执行文件"
-    script = (
-        'for name in "$@"; do command -v -- "$name" >/dev/null 2>&1 && printf "%s\\n" "$name"; done'
-    )
+    script = 'for name in "$@"; do command -v -- "$name" >/dev/null 2>&1 && printf "%s\\n" "$name"; done; exit 0'
     try:
         code, stdout, _stderr = await _execute_command(
             [
@@ -767,7 +815,7 @@ async def _list_whitelist(context: ShellContext) -> MessageSegments:
             f"当前允许任意入口，因此无法枚举完整命令；实际执行使用{_terminal_label(terminal)}。"
         )
 
-    whitelist = sorted(_get_whitelist(context))
+    whitelist                  = sorted(_get_whitelist(context))
     terminal_error: str | None = None
     if terminal.backend == _TERMINAL_GIT_BASH:
         available_set, terminal_error = await _git_bash_available_commands(
@@ -776,13 +824,13 @@ async def _list_whitelist(context: ShellContext) -> MessageSegments:
             _get_timeout(context),
         )
         available = [name for name in whitelist if name in available_set]
-        scope = "Git Bash"
+        scope     = "Git Bash"
     else:
         available = [name for name in whitelist if _command_available(name)]
-        scope = "Bot PATH"
+        scope     = "Bot PATH"
     available_set = set(available)
-    unavailable = [name for name in whitelist if name not in available_set]
-    lines = ["管理员已启用的命令入口（防误触，不是安全沙箱）:"]
+    unavailable   = [name for name in whitelist if name not in available_set]
+    lines         = ["管理员已启用的命令入口（防误触，不是安全沙箱）:"]
     if terminal_error:
         lines.append(f"\n⚠️ Shell 终端可用性查询失败: {terminal_error}")
     lines.extend(

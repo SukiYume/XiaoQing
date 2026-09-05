@@ -41,7 +41,7 @@ class EventDetailViewMixin:
     ) -> CommandMessage:
         """格式化日程集合及其节点摘要。"""
         kind_label = "多时间节点事件" if collection.get("kind") == "multi_node" else "重复日程"
-        lines = [
+        lines      = [
             f"📋 **{collection.get('title') or '无标题'}**",
             "",
             f"🗺️ {kind_label} ({len(children)}个节点)",
@@ -81,10 +81,10 @@ class EventDetailViewMixin:
         if event is None:
             return {"status": "error", "message": "❌ 找不到日程"}
 
-        collection = family.collection
-        title = event.title or "无标题"
+        collection   = family.collection
+        title        = event.title or "无标题"
         remind_times = parse_remind_times(event.remind_times)
-        lines = [f"📋 **{title}**", ""]
+        lines        = [f"📋 **{title}**", ""]
 
         if collection:
             collection_display_id = public_id(collection.get("id"))

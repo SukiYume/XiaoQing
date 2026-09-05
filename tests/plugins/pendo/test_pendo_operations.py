@@ -20,14 +20,14 @@ def test_snooze_without_sent_log_keeps_user_timezone_future_and_confirms_nothing
 
     user_now = datetime.fromisoformat("2030-01-01T09:30:00-08:00")
     monkeypatch.setattr(operations, "now_in_timezone", lambda *_args: user_now)
-    db = MagicMock()
+    db                       = MagicMock()
     db.get_item.return_value = EventItem(
-        id="event-a",
-        title="跨时区提醒",
-        remind_times=["2030-01-01T09:00:00", "2030-01-01T10:00:00"],
+        id           = "event-a",
+        title        = "跨时区提醒",
+        remind_times = ["2030-01-01T09:00:00", "2030-01-01T10:00:00"],
     )
     db.get_last_unconfirmed_remind_time.return_value = None
-    db.update_item.return_value = True
+    db.update_item.return_value                      = True
     reminder_service = MagicMock(db=db)
 
     result = asyncio.run(operations.handle_snooze("owner-a", "event-a 10m", reminder_service))
@@ -64,13 +64,13 @@ def test_confirm_without_sent_log_confirms_nothing() -> None:
 def test_snooze_confirms_only_the_located_log(monkeypatch: pytest.MonkeyPatch) -> None:
     user_now = datetime.fromisoformat("2030-01-01T09:30:00+08:00")
     monkeypatch.setattr(operations, "now_in_timezone", lambda *_args: user_now)
-    db = MagicMock()
+    db                       = MagicMock()
     db.get_item.return_value = EventItem(
-        id="event-a",
-        remind_times=["2030-01-01T09:00:00+08:00", "2030-01-01T10:00:00+08:00"],
+        id           = "event-a",
+        remind_times = ["2030-01-01T09:00:00+08:00", "2030-01-01T10:00:00+08:00"],
     )
     db.get_last_unconfirmed_remind_time.return_value = "2030-01-01T09:00:00+08:00"
-    db.update_item.return_value = True
+    db.update_item.return_value                      = True
     reminder_service = MagicMock(db=db)
     reminder_service.confirm_reminder.return_value = {"status": "success"}
 
@@ -93,13 +93,13 @@ def test_snooze_update_failure_does_not_confirm_old_log(
         "now_in_timezone",
         lambda *_args: datetime.fromisoformat("2030-01-01T09:30:00+08:00"),
     )
-    db = MagicMock()
+    db                       = MagicMock()
     db.get_item.return_value = EventItem(
-        id="event-a",
-        remind_times=["2030-01-01T09:00:00+08:00"],
+        id           = "event-a",
+        remind_times = ["2030-01-01T09:00:00+08:00"],
     )
     db.get_last_unconfirmed_remind_time.return_value = "2030-01-01T09:00:00+08:00"
-    db.update_item.return_value = False
+    db.update_item.return_value                      = False
     reminder_service = MagicMock(db=db)
 
     result = asyncio.run(operations.handle_snooze("owner-a", "event-a 10m", reminder_service))
@@ -117,7 +117,7 @@ def test_operations_reject_ambiguous_arguments_without_database_access() -> None
         operations.handle_confirm("owner-a", "event-a extra", reminder_service, db)
     )
     snooze = asyncio.run(operations.handle_snooze("owner-a", "event-a 10m extra", reminder_service))
-    undo = asyncio.run(operations.handle_undo("owner-a", "five", db))
+    undo   = asyncio.run(operations.handle_undo("owner-a", "five", db))
 
     assert confirm["status"] == snooze["status"] == undo["status"] == "error"
     db.get_item.assert_not_called()
@@ -149,9 +149,9 @@ def test_undo_rejects_ranges_beyond_snapshot_window(minutes: str) -> None:
 
 
 def test_undo_delete_reports_ledger_type() -> None:
-    db = MagicMock()
+    db                                            = MagicMock()
     db.get_latest_undoable_operation.return_value = {"type": "delete"}
-    db.undo_delete.return_value = {
+    db.undo_delete.return_value                   = {
         "status": "success",
         "item": LedgerItem(id="ledger-a", title="午餐"),
     }

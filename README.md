@@ -4,7 +4,7 @@
 
 **基于 OneBot v11 和 Python asyncio 的插件化 QQ 助手**
 
-[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 [![OneBot](https://img.shields.io/badge/OneBot-v11-black?style=flat-square)](https://onebot.dev/)
 [![Documentation](https://img.shields.io/badge/Documentation-online-2ea44f?style=flat-square)](https://paris.escape.ac.cn/note/XiaoQing/)
@@ -51,7 +51,7 @@ XiaoQing 面向回环地址、可信内网或严格反向代理保护的私人�
 
 ### 1. 准备环境
 
-- Python `3.10+`
+- Python `3.11+`
 - 一个 OneBot v11 实现，推荐 [NapCatQQ](https://github.com/NapNeko/NapCatQQ)
 - 可访问 QQ 与所需第三方服务的网络环境
 
@@ -109,14 +109,18 @@ cp config/secrets.json.example config/secrets.json
 
 ### 4. 连接 OneBot
 
-被动 Inbound 模式由 OneBot 向 XiaoQing 推送事件。NapCat HTTP POST 示例：
+被动 Inbound 模式由 OneBot 向 XiaoQing 推送事件。在 NapCat 的 HTTP 事件上报端配置以下请求地址与请求头：
 
-```yaml
-http:
-  post:
-    - url: http://127.0.0.1:12000/event
-      secret: your-secret-token
+```http
+POST /event HTTP/1.1
+Host: 127.0.0.1:12000
+Authorization: Bearer your-secret-token
+Content-Type: application/json
 ```
+
+服务端使用 Bearer 认证。OneBot 的 `secret` / `X-Signature` 属于 HMAC 签名机制，单独配置该字段会收到 401。上报端需要支持自定义 Authorization 请求头；也可选用下方 WebSocket 接入。
+
+标准 HTTP 上报的回复通过 `onebot_http_base` 对应的 OneBot action API 发送，成功回执后才提交插件投递状态；事件响应为 `{}`。需要开启 NapCat 的 HTTP API，并在 XiaoQing 中配置匹配的 OneBot 凭据。开发验收客户端可显式发送 `X-XiaoQing-Response-Mode: actions`，接收自定义 `{"actions": [...]}` 正文并自行负责执行动作。该模式用于本地命令矩阵。
 
 主动 WebSocket 模式由 XiaoQing 连接 OneBot：
 
@@ -265,7 +269,7 @@ Windows 生产启动链为 `scripts/run-bot.vbs → scripts/run-bot-monitor.ps1 
 python -m compileall -q core plugins tests
 python -m pytest -n 2
 python -m ruff check .
-python -m ruff format --check .
+python scripts/format_code.py --check
 python -m mypy core plugins
 git diff --check
 ```
@@ -307,7 +311,7 @@ bash scripts/run_full_uat.sh
 
 1. 确认 OneBot 进程和 XiaoQing 进程均处于运行状态。
 2. 确认 Inbound URL 或主动 WebSocket URI 与双方配置一致。
-3. 确认 OneBot secret 与 `inbound_token` 一致。
+3. 确认上报请求的 Bearer token 与 `inbound_token` 一致，并核对回复通道的 `onebot_token`。
 4. 查看日志中的连接状态、错误码和 request ID。
 5. 收到 `secrets.json` 待确认私聊时，核对字段路径并发送 `/reload` 应用有效候选。
 6. 日志出现 `secrets source is inconsistent` 与 `WebSocket client stopped` 时，检查来源是否缺失、损坏或与 `config.json` 同时变化；随后按停服、保存完整配置来源、重新启动的顺序恢复已确认凭据 revision。

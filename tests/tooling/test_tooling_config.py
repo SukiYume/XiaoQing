@@ -51,14 +51,14 @@ def test_mypy_checks_runtime_trees_without_core_exclusions() -> None:
     """Core 已完成类型迁移，任何新增的文件级豁免都必须被门禁拒绝。"""
 
     config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    mypy = config["tool"]["mypy"]
+    mypy                      = config["tool"]["mypy"]
     core_debt: dict[str, int] = {}
     for pattern in mypy["exclude"]:
         match = re.fullmatch(r"\^core/([A-Za-z0-9_/-]+)\\\.py\$", pattern)
         if match is None:
             continue
         relative_path = f"core/{match.group(1)}.py"
-        path = ROOT / relative_path
+        path          = ROOT / relative_path
         assert path.is_file(), f"mypy core 豁免指向不存在文件: {relative_path}"
         core_debt[relative_path] = len(path.read_text(encoding="utf-8").splitlines())
 

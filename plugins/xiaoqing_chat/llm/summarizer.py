@@ -44,12 +44,12 @@ def _load_cache(data_dir: Path, chat_id: str) -> list[TopicSummary]:
         topic_id = item.topic_id or f"legacy-{idx}-{int(item.updated_at or 0.0)}"
         out.append(
             TopicSummary(
-                topic_id=topic_id,
-                topic=item.topic,
-                keywords=item.keywords,
-                summary=item.summary,
-                key_points=item.key_points,
-                updated_at=item.updated_at,
+                topic_id   = topic_id,
+                topic      = item.topic,
+                keywords   = item.keywords,
+                summary    = item.summary,
+                key_points = item.key_points,
+                updated_at = item.updated_at,
             )
         )
     return out
@@ -108,8 +108,8 @@ def _persist_topic_summary(
     _save_cache(data_dir, chat_id, cache)
     memory_db.bind(data_dir)
     memory_db.upsert_text(
-        doc_id=f"topic:{chat_id}:{summary.topic_id}",
-        text=(
+        doc_id = f"topic:{chat_id}:{summary.topic_id}",
+        text   = (
             f"话题：{summary.topic}\n摘要：{summary.summary}\n要点：\n- "
             + "\n- ".join(summary.key_points)
         ),
@@ -158,20 +158,20 @@ async def maybe_update_topic_summary(
 
     msgs = build_topic_messages(bot_name=bot_name, history=history[-min(40, len(history)) :])
     payload_msgs = [{"role": m.role, "content": m.content} for m in msgs]
-    out = await chat_completions(
-        secrets=secrets,
-        messages=payload_msgs,
-        temperature=min(0.6, temperature),
-        top_p=top_p,
-        max_tokens=max_tokens,
-        timeout_seconds=timeout_seconds,
-        max_retry=max_retry,
-        retry_interval_seconds=retry_interval_seconds,
+    out          = await chat_completions(
+        secrets                = secrets,
+        messages               = payload_msgs,
+        temperature            = min(0.6, temperature),
+        top_p                  = top_p,
+        max_tokens             = max_tokens,
+        timeout_seconds        = timeout_seconds,
+        max_retry              = max_retry,
+        retry_interval_seconds = retry_interval_seconds,
     )
     obj = parse_first_json_object(out)
     if not obj:
         return
-    topic = str(obj.get("topic", "")).strip()
+    topic   = str(obj.get("topic", "")).strip()
     summary = str(obj.get("summary", "")).strip()
     if not topic or not summary:
         return
@@ -182,24 +182,24 @@ async def maybe_update_topic_summary(
     if not isinstance(key_points, list):
         key_points = []
 
-    now = time.time()
+    now      = time.time()
     topic_id = f"{int(now)}"
-    ts = TopicSummary(
-        topic_id=topic_id,
-        topic=topic,
-        keywords=[str(k).strip() for k in keywords if isinstance(k, str) and k.strip()],
-        summary=summary,
-        key_points=[str(k).strip() for k in key_points if isinstance(k, str) and k.strip()],
-        updated_at=now,
+    ts       = TopicSummary(
+        topic_id   = topic_id,
+        topic      = topic,
+        keywords   = [str(k).strip() for k in keywords if isinstance(k, str) and k.strip()],
+        summary    = summary,
+        key_points = [str(k).strip() for k in key_points if isinstance(k, str) and k.strip()],
+        updated_at = now,
     )
     cache.append(ts)
     if max_cache_topics > 0 and len(cache) > max_cache_topics:
         cache = cache[-max_cache_topics:]
     await asyncio.to_thread(
         _persist_topic_summary,
-        data_dir=data_dir,
-        chat_id=chat_id,
-        cache=cache,
-        memory_db=memory_db,
-        summary=ts,
+        data_dir  = data_dir,
+        chat_id   = chat_id,
+        cache     = cache,
+        memory_db = memory_db,
+        summary   = ts,
     )

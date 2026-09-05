@@ -14,7 +14,7 @@ from plugins.xiaoqing_chat.logging_utils import _log_step, sanitize_log_fields
 from plugins.xiaoqing_chat.reply_generator import _log_prompt_audit_metadata
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT = REPOSITORY_ROOT
+ROOT   = REPOSITORY_ROOT
 CANARY = "CR220_XIAOQING_PRIVATE_PROMPT_CANARY"
 
 
@@ -88,9 +88,9 @@ def test_log_step_keeps_stage_and_correlation_but_never_payload(
         _log_step(
             context,
             runtime,
-            chat_id="private-chat-id",
-            step="reply.debug",
-            fields={
+            chat_id = "private-chat-id",
+            step    = "reply.debug",
+            fields  = {
                 "status": "prepared",
                 "request_id": "req-cr220",
                 "task_id": "task-cr220",
@@ -171,20 +171,20 @@ async def test_reset_audit_fingerprints_all_actor_identifiers(
     from plugins.xiaoqing_chat.handlers_internal import handle_internal_impl
 
     chat_id = f"chat-{CANARY}"
-    event = {
+    event   = {
         "message_type": "group",
         "group_id": f"group-{CANARY}",
         "user_id": f"operator-{CANARY}",
     }
     state = SimpleNamespace(
-        pop_persist_task=lambda _chat_id: None,
-        inc_stats=lambda *_args: None,
+        pop_persist_task = lambda _chat_id: None,
+        inc_stats        = lambda *_args: None,
     )
     hctx = SimpleNamespace(
-        chat_id=chat_id,
-        runtime=SimpleNamespace(),
-        state=state,
-        data_dir=Path("test-data"),
+        chat_id  = chat_id,
+        runtime  = SimpleNamespace(),
+        state    = state,
+        data_dir = Path("test-data"),
     )
     context = SimpleNamespace(logger=logging.getLogger("test.cr220.xiaoqing.reset-audit"))
 
@@ -197,11 +197,11 @@ async def test_reset_audit_fingerprints_all_actor_identifiers(
             "确认",
             event,
             context,
-            handler_context_from_event=lambda _event, _context: hctx,
-            get_lock=lambda _chat_id: asyncio.Lock(),
-            reset_chat_session=reset_chat_session,
-            cancel_pending_task=lambda _task: None,
-            is_admin_operator_fn=lambda _event, _context: True,
+            handler_context_from_event = lambda _event, _context: hctx,
+            get_lock                   = lambda _chat_id: asyncio.Lock(),
+            reset_chat_session         = reset_chat_session,
+            cancel_pending_task        = lambda _task: None,
+            is_admin_operator_fn       = lambda _event, _context: True,
         )
 
     logged = "\n".join(record.getMessage() for record in caplog.records)
@@ -226,7 +226,7 @@ def test_identifier_log_paths_have_no_unredacted_direct_logger_arguments(
     path = ROOT / relative_path
     tree = ast.parse(path.read_text(encoding="utf-8"))
     violations: list[str] = []
-    identifier_fragments = ("chat_id", "group_id", "user_id", "operator")
+    identifier_fragments  = ("chat_id", "group_id", "user_id", "operator")
 
     for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
         callable_name = ast.unparse(call.func).lower()

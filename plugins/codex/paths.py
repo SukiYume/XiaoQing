@@ -9,7 +9,7 @@ from pathlib import Path
 from .config import CodexPluginConfig
 
 _WINDOWS_ABS_RE = re.compile(r"^[A-Za-z]:[\\/]")
-MAX_CWD_CHARS = 32_768
+MAX_CWD_CHARS   = 32_768
 
 
 class CwdError(ValueError):

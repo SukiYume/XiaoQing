@@ -36,14 +36,14 @@ def test_category_response_is_an_ordered_isolated_snapshot() -> None:
     """分类响应应保持配置顺序，修改响应不得污染全局分类。"""
 
     payload = get_categories()
-    data = cast(dict[str, list[dict[str, str]]], payload["data"])
+    data    = cast(dict[str, list[dict[str, str]]], payload["data"])
 
     assert data["ledger_expense"] == LEDGER_EXPENSE_CATEGORIES
     assert data["ledger_income"] == LEDGER_INCOME_CATEGORIES
     assert data["ledger_expense"] is not LEDGER_EXPENSE_CATEGORIES
     assert data["ledger_expense"][0] is not LEDGER_EXPENSE_CATEGORIES[0]
 
-    original_name = LEDGER_EXPENSE_CATEGORIES[0]["name"]
+    original_name                     = LEDGER_EXPENSE_CATEGORIES[0]["name"]
     data["ledger_expense"][0]["name"] = "被修改"
     assert LEDGER_EXPENSE_CATEGORIES[0]["name"] == original_name
 
@@ -51,8 +51,8 @@ def test_category_response_is_an_ordered_isolated_snapshot() -> None:
 def test_template_response_copies_prompt_lists_and_preserves_configuration_order() -> None:
     """模板顺序应稳定，提示列表必须与进程级配置解除别名。"""
 
-    payload = get_diary_templates()
-    data = cast(dict[str, list[dict[str, object]]], payload["data"])
+    payload   = get_diary_templates()
+    data      = cast(dict[str, list[dict[str, object]]], payload["data"])
     templates = data["templates"]
 
     assert [template["id"] for template in templates] == list(DIARY_TEMPLATES)
@@ -62,7 +62,7 @@ def test_template_response_copies_prompt_lists_and_preserves_configuration_order
         assert template["prompts"] == DIARY_TEMPLATES[template_id]["prompts"]
         assert template["prompts"] is not DIARY_TEMPLATES[template_id]["prompts"]
 
-    prompts = cast(list[str], templates[0]["prompts"])
+    prompts        = cast(list[str], templates[0]["prompts"])
     original_count = len(DIARY_TEMPLATES[cast(str, templates[0]["id"])]["prompts"])
     prompts.append("不应写回配置")
     assert len(DIARY_TEMPLATES[cast(str, templates[0]["id"])]["prompts"]) == original_count
@@ -72,10 +72,10 @@ def test_mood_response_copies_rows_and_lookup_mappings() -> None:
     """情绪选项及两个查找表都应返回内容一致的独立副本。"""
 
     payload = get_diary_moods()
-    data = cast(dict[str, object], payload["data"])
-    moods = cast(list[dict[str, str]], data["moods"])
-    emojis = cast(dict[str, str], data["mood_emojis"])
-    labels = cast(dict[str, str], data["mood_labels"])
+    data    = cast(dict[str, object], payload["data"])
+    moods   = cast(list[dict[str, str]], data["moods"])
+    emojis  = cast(dict[str, str], data["mood_emojis"])
+    labels  = cast(dict[str, str], data["mood_labels"])
 
     assert moods == DIARY_MOODS
     assert emojis == MOOD_ANALYSIS_CONFIG["mood_emojis"]
@@ -84,8 +84,8 @@ def test_mood_response_copies_rows_and_lookup_mappings() -> None:
     assert emojis is not MOOD_ANALYSIS_CONFIG["mood_emojis"]
     assert labels is not MOOD_ANALYSIS_CONFIG["mood_labels"]
 
-    original_label = DIARY_MOODS[0]["label"]
+    original_label    = DIARY_MOODS[0]["label"]
     moods[0]["label"] = "被修改"
-    emojis["happy"] = "X"
+    emojis["happy"]   = "X"
     assert DIARY_MOODS[0]["label"] == original_label
     assert MOOD_ANALYSIS_CONFIG["mood_emojis"]["happy"] != "X"

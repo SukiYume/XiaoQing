@@ -32,10 +32,10 @@ from tests.helpers.bot_monitor_test_support import (
 def test_log_pump_rotates_both_streams_while_child_remains_running(tmp_path: Path) -> None:
     working_directory = tmp_path / "working directory"
     working_directory.mkdir()
-    stdout_log = tmp_path / "stdout.log"
-    stderr_log = tmp_path / "stderr.log"
+    stdout_log        = tmp_path / "stdout.log"
+    stderr_log        = tmp_path / "stderr.log"
     completion_marker = working_directory / "completed.txt"
-    child = (
+    child             = (
         "import os, pathlib, sys, time\n"
         "marker = pathlib.Path(sys.argv[1])\n"
         "for index in range(400):\n"
@@ -84,15 +84,15 @@ def test_existing_oversized_log_is_streamed_trimmed_and_aliases_are_pruned(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    log_path = tmp_path / "existing.log"
+    log_path      = tmp_path / "existing.log"
     maximum_bytes = 2 * log_pump._COPY_SIZE + 123
-    original = b"prefix" * 1000 + os.urandom(maximum_bytes + 5000)
+    original      = b"prefix" * 1000 + os.urandom(maximum_bytes + 5000)
     log_path.write_bytes(original)
     for suffix in ("0", "00", "01", "1", "2", "3"):
         Path(f"{log_path}.{suffix}").write_bytes(f"backup-{suffix}".encode())
     Path(f"{log_path}.keep").write_text("unrelated", encoding="utf-8")
 
-    original_open = Path.open
+    original_open         = Path.open
     read_sizes: list[int] = []
 
     class GuardedReader:
@@ -116,7 +116,7 @@ def test_existing_oversized_log_is_streamed_trimmed_and_aliases_are_pruned(
 
     def guarded_open(path: Path, *args, **kwargs):
         stream = original_open(path, *args, **kwargs)
-        mode = args[0] if args else kwargs.get("mode", "r")
+        mode   = args[0] if args else kwargs.get("mode", "r")
         if path == log_path and mode == "rb":
             return GuardedReader(stream)
         return stream
@@ -124,8 +124,8 @@ def test_existing_oversized_log_is_streamed_trimmed_and_aliases_are_pruned(
     monkeypatch.setattr(Path, "open", guarded_open)
     with log_pump.BoundedRotatingLog(
         log_path,
-        maximum_bytes=maximum_bytes,
-        backup_count=2,
+        maximum_bytes = maximum_bytes,
+        backup_count  = 2,
     ):
         pass
 
@@ -151,7 +151,7 @@ def test_log_failure_stops_long_running_child_instead_of_discarding_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     original_write = log_pump.BoundedRotatingLog.write
-    failed_once = False
+    failed_once    = False
 
     def fail_first_write(self: log_pump.BoundedRotatingLog, data: bytes) -> None:
         nonlocal failed_once
@@ -161,17 +161,17 @@ def test_log_failure_stops_long_running_child_instead_of_discarding_output(
         original_write(self, data)
 
     monkeypatch.setattr(log_pump.BoundedRotatingLog, "write", fail_first_write)
-    child = "import os, sys, time; os.write(sys.stdout.fileno(), b'output'); time.sleep(60)"
+    child   = "import os, sys, time; os.write(sys.stdout.fileno(), b'output'); time.sleep(60)"
     started = time.monotonic()
 
     with pytest.raises(RuntimeError, match="log pump failed"):
         log_pump.run_process(
             [sys.executable, "-c", child],
-            working_directory=tmp_path,
-            stdout_log=tmp_path / "stdout.log",
-            stderr_log=tmp_path / "stderr.log",
-            maximum_bytes=1024,
-            backup_count=1,
+            working_directory = tmp_path,
+            stdout_log        = tmp_path / "stdout.log",
+            stderr_log        = tmp_path / "stderr.log",
+            maximum_bytes     = 1024,
+            backup_count      = 1,
         )
 
     assert failed_once
@@ -182,10 +182,10 @@ def test_thread_start_failure_reaps_owned_child(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    pid_marker = tmp_path / "child-started.txt"
-    child = _pid_marker_child_source()
+    pid_marker     = tmp_path / "child-started.txt"
+    child          = _pid_marker_child_source()
     original_start = log_pump.threading.Thread.start
-    starts = 0
+    starts         = 0
 
     def fail_second_start(thread: log_pump.threading.Thread) -> None:
         nonlocal starts
@@ -202,11 +202,11 @@ def test_thread_start_failure_reaps_owned_child(
     with pytest.raises(RuntimeError, match="simulated thread start failure"):
         log_pump.run_process(
             [sys.executable, "-c", child, str(pid_marker)],
-            working_directory=tmp_path,
-            stdout_log=tmp_path / "stdout.log",
-            stderr_log=tmp_path / "stderr.log",
-            maximum_bytes=1024,
-            backup_count=1,
+            working_directory = tmp_path,
+            stdout_log        = tmp_path / "stdout.log",
+            stderr_log        = tmp_path / "stderr.log",
+            maximum_bytes     = 1024,
+            backup_count      = 1,
         )
 
     assert pid_marker.is_file()
@@ -218,10 +218,10 @@ def test_second_thread_construction_failure_reaps_owned_child(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    started_marker = tmp_path / "constructor-child-started.txt"
-    child = _pid_marker_child_source()
+    started_marker  = tmp_path / "constructor-child-started.txt"
+    child           = _pid_marker_child_source()
     original_thread = log_pump.threading.Thread
-    constructions = 0
+    constructions   = 0
 
     def fail_second_construction(*args, **kwargs):
         nonlocal constructions
@@ -238,11 +238,11 @@ def test_second_thread_construction_failure_reaps_owned_child(
     with pytest.raises(RuntimeError, match="simulated thread construction failure"):
         log_pump.run_process(
             [sys.executable, "-c", child, str(started_marker)],
-            working_directory=tmp_path,
-            stdout_log=tmp_path / "constructor-stdout.log",
-            stderr_log=tmp_path / "constructor-stderr.log",
-            maximum_bytes=1024,
-            backup_count=1,
+            working_directory = tmp_path,
+            stdout_log        = tmp_path / "constructor-stdout.log",
+            stderr_log        = tmp_path / "constructor-stderr.log",
+            maximum_bytes     = 1024,
+            backup_count      = 1,
         )
 
     assert started_marker.is_file()
@@ -255,7 +255,7 @@ def test_log_failure_terminates_posix_descendant_process_group(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     marker = tmp_path / "grandchild.pid"
-    child = (
+    child  = (
         "import os, pathlib, signal, subprocess, sys, time\n"
         "grandchild = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
         "pathlib.Path(sys.argv[1]).write_text(str(grandchild.pid), encoding='utf-8')\n"
@@ -275,11 +275,11 @@ def test_log_failure_terminates_posix_descendant_process_group(
     with pytest.raises(RuntimeError, match="log pump failed"):
         log_pump.run_process(
             [sys.executable, "-c", child, str(marker)],
-            working_directory=tmp_path,
-            stdout_log=tmp_path / "stdout.log",
-            stderr_log=tmp_path / "stderr.log",
-            maximum_bytes=1024,
-            backup_count=1,
+            working_directory = tmp_path,
+            stdout_log        = tmp_path / "stdout.log",
+            stderr_log        = tmp_path / "stderr.log",
+            maximum_bytes     = 1024,
+            backup_count      = 1,
         )
 
     grandchild_pid = int(marker.read_text(encoding="utf-8"))
@@ -299,7 +299,7 @@ def test_taskkill_failure_is_recorded_and_falls_back_to_direct_termination(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakeProcess:
-        pid = 24680
+        pid        = 24680
         returncode = None
         terminated = False
 
@@ -313,7 +313,7 @@ def test_taskkill_failure_is_recorded_and_falls_back_to_direct_termination(
             assert timeout == log_pump._SHUTDOWN_TIMEOUT_SECONDS
             return 9
 
-    process = FakeProcess()
+    process   = FakeProcess()
     completed = subprocess.CompletedProcess([], 1)
     monkeypatch.setattr(log_pump.subprocess, "run", lambda *_args, **_kwargs: completed)
 
@@ -367,7 +367,7 @@ def test_log_pump_cli_rejects_out_of_range_limits(
 def test_log_pump_cli_rejects_invalid_paths_before_launch(tmp_path: Path) -> None:
     stdout_log = tmp_path / "stdout.log"
     stderr_log = tmp_path / "stderr.log"
-    base = [
+    base       = [
         sys.executable,
         str(LOG_PUMP),
         "--stdout-log",
@@ -385,9 +385,9 @@ def test_log_pump_cli_rejects_invalid_paths_before_launch(tmp_path: Path) -> Non
         "-c",
         "pass",
     ]
-    missing_cwd = list(base)
-    missing_cwd[missing_cwd.index("--cwd") + 1] = str(tmp_path / "missing")
-    shared_log = list(base)
+    missing_cwd                                      = list(base)
+    missing_cwd[missing_cwd.index("--cwd") + 1]      = str(tmp_path / "missing")
+    shared_log                                       = list(base)
     shared_log[shared_log.index("--stderr-log") + 1] = str(stdout_log)
 
     for command in (missing_cwd, shared_log):
@@ -441,7 +441,7 @@ def test_pid_commit_failure_invokes_owned_tree_cleanup() -> None:
     if executable is None:
         pytest.skip("PowerShell is not installed")
     environment = {**os.environ, "XIAOQING_MONITOR_AST_PATH": str(MONITOR)}
-    probe = r"""
+    probe       = r"""
 $tokens = $null
 $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile(

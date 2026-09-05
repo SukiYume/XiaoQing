@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, cast
 from unittest.mock import Mock
 
@@ -19,30 +19,30 @@ def _create_collection(
     db: Database,
     owner_id: str,
     *,
-    title: str = "发布项目",
+    title: str                                  = "发布项目",
     reminder_rules: list[dict[str, int]] | None = None,
 ) -> tuple[str, list[str]]:
     """通过公开路由创建供更新、删除用例复用的两节点集合。"""
 
     created = events_api.create_event_collection(
         body=events_api.EventCollectionCreate(
-            title=title,
-            reminder_rules=(
+            title          = title,
+            reminder_rules = (
                 reminder_rules if reminder_rules is not None else [{"offset_seconds": 0}]
             ),
             children=[
                 events_api.EventCollectionChildCreate(
-                    title="提审",
-                    start_time="2030-05-01T10:00:00",
+                    title      = "提审",
+                    start_time = "2030-05-01T10:00:00",
                 ),
                 events_api.EventCollectionChildCreate(
-                    title="上线",
-                    start_time="2030-05-02T18:00:00",
+                    title      = "上线",
+                    start_time = "2030-05-02T18:00:00",
                 ),
             ],
         ),
-        owner_id=owner_id,
-        db=db,
+        owner_id = owner_id,
+        db       = db,
     )
     data = cast(dict[str, Any], created["data"])
     return str(data["id"]), cast(list[str], data["child_ids"])
@@ -88,8 +88,8 @@ def test_event_reminder_confirmation_route_toggles_only_owned_future_reminder(
 ) -> None:
     """Web 只能提前确认并重新开启当前用户日程中的指定未来提醒。"""
 
-    owner_id = "owner-web-reminder-toggle"
-    event_id = "future-web-reminder"
+    owner_id    = "owner-web-reminder-toggle"
+    event_id    = "future-web-reminder"
     remind_time = "2099-01-01T08:00:00+00:00"
     db.insert_item(
         {
@@ -105,11 +105,11 @@ def test_event_reminder_confirmation_route_toggles_only_owned_future_reminder(
     confirmed = events_api.set_event_reminder_confirmation(
         event_id,
         body=events_api.EventReminderConfirmationUpdate(
-            remind_time=remind_time,
-            confirmed=True,
+            remind_time = remind_time,
+            confirmed   = True,
         ),
-        owner_id=owner_id,
-        db=db,
+        owner_id = owner_id,
+        db       = db,
     )
     assert confirmed["message"] == "提醒已提前确认"
     assert cast(dict[str, Any], confirmed["data"])["reminder"]["status"] == "confirmed"
@@ -117,11 +117,11 @@ def test_event_reminder_confirmation_route_toggles_only_owned_future_reminder(
     reopened = events_api.set_event_reminder_confirmation(
         event_id,
         body=events_api.EventReminderConfirmationUpdate(
-            remind_time=remind_time,
-            confirmed=False,
+            remind_time = remind_time,
+            confirmed   = False,
         ),
-        owner_id=owner_id,
-        db=db,
+        owner_id = owner_id,
+        db       = db,
     )
     assert reopened["message"] == "提醒已重新开启"
     reminder = cast(dict[str, Any], reopened["data"])["reminder"]
@@ -136,11 +136,11 @@ def test_event_reminder_confirmation_route_toggles_only_owned_future_reminder(
             events_api.set_event_reminder_confirmation(
                 event_id,
                 body=events_api.EventReminderConfirmationUpdate(
-                    remind_time=request_time,
-                    confirmed=True,
+                    remind_time = request_time,
+                    confirmed   = True,
                 ),
-                owner_id=request_owner,
-                db=db,
+                owner_id = request_owner,
+                db       = db,
             )
         assert missing.value.status_code == 404
 
@@ -150,8 +150,8 @@ def test_event_reminder_confirmation_route_rejects_expired_or_invalid_time(
 ) -> None:
     """到期提醒和非规范时间不能通过 Web 改写确认状态。"""
 
-    owner_id = "owner-expired-web-reminder"
-    event_id = "expired-web-reminder"
+    owner_id    = "owner-expired-web-reminder"
+    event_id    = "expired-web-reminder"
     remind_time = "2000-01-01T08:00:00+00:00"
     db.insert_item(
         {
@@ -168,11 +168,11 @@ def test_event_reminder_confirmation_route_rejects_expired_or_invalid_time(
         events_api.set_event_reminder_confirmation(
             event_id,
             body=events_api.EventReminderConfirmationUpdate(
-                remind_time=remind_time,
-                confirmed=True,
+                remind_time = remind_time,
+                confirmed   = True,
             ),
-            owner_id=owner_id,
-            db=db,
+            owner_id = owner_id,
+            db       = db,
         )
     assert expired.value.status_code == 409
 
@@ -180,11 +180,11 @@ def test_event_reminder_confirmation_route_rejects_expired_or_invalid_time(
         events_api.set_event_reminder_confirmation(
             event_id,
             body=events_api.EventReminderConfirmationUpdate(
-                remind_time="2000-01-01T08:00:00",
-                confirmed=True,
+                remind_time = "2000-01-01T08:00:00",
+                confirmed   = True,
             ),
-            owner_id=owner_id,
-            db=db,
+            owner_id = owner_id,
+            db       = db,
         )
     assert invalid.value.status_code == 422
 
@@ -193,15 +193,15 @@ def test_collection_create_models_do_not_share_mutable_tag_defaults() -> None:
     """不同请求模型不得共享默认标签列表。"""
 
     first = events_api.EventCollectionCreate(
-        title="第一组",
-        children=[
+        title    = "第一组",
+        children = [
             events_api.EventCollectionChildCreate(title="一", start_time="2030-01-01T10:00:00"),
             events_api.EventCollectionChildCreate(title="二", start_time="2030-01-02T10:00:00"),
         ],
     )
     second = events_api.EventCollectionCreate(
-        title="第二组",
-        children=[
+        title    = "第二组",
+        children = [
             events_api.EventCollectionChildCreate(title="一", start_time="2030-01-01T10:00:00"),
             events_api.EventCollectionChildCreate(title="二", start_time="2030-01-02T10:00:00"),
         ],
@@ -268,26 +268,26 @@ def test_overview_endpoint_forwards_every_filter_and_wraps_the_result(
     monkeypatch.setattr(events_api, "build_events_overview", builder)
 
     response = events_api.get_events_overview(
-        start_date="2030-01-01",
-        end_date="2030-01-31",
-        keyword="发布",
-        category="项目",
-        kind="multi_node",
-        reminder="with",
-        owner_id="overview-owner",
-        db=db,
+        start_date = "2030-01-01",
+        end_date   = "2030-01-31",
+        keyword    = "发布",
+        category   = "项目",
+        kind       = "multi_node",
+        reminder   = "with",
+        owner_id   = "overview-owner",
+        db         = db,
     )
 
     assert response == {"ok": True, "data": overview, "message": ""}
     builder.assert_called_once_with(
-        db=db,
-        owner_id="overview-owner",
-        start_date="2030-01-01",
-        end_date="2030-01-31",
-        keyword="发布",
-        category="项目",
-        kind="multi_node",
-        reminder="with",
+        db         = db,
+        owner_id   = "overview-owner",
+        start_date = "2030-01-01",
+        end_date   = "2030-01-31",
+        keyword    = "发布",
+        category   = "项目",
+        kind       = "multi_node",
+        reminder   = "with",
     )
 
 
@@ -305,11 +305,11 @@ def test_overview_endpoint_translates_invalid_query_to_422(
 
     with pytest.raises(HTTPException) as exc_info:
         events_api.get_events_overview(
-            start_date="2030-01-01",
-            end_date="2030-01-31",
-            reminder="later",
-            owner_id="overview-owner",
-            db=db,
+            start_date = "2030-01-01",
+            end_date   = "2030-01-31",
+            reminder   = "later",
+            owner_id   = "overview-owner",
+            db         = db,
         )
 
     assert exc_info.value.status_code == 422
@@ -326,23 +326,23 @@ def test_create_collection_rejects_wrong_kind_and_too_few_children(db: Database)
     with pytest.raises(HTTPException) as kind_error:
         events_api.create_event_collection(
             body=events_api.EventCollectionCreate(
-                kind="recurring",
-                title="错误类型",
-                children=valid_children,
+                kind     = "recurring",
+                title    = "错误类型",
+                children = valid_children,
             ),
-            owner_id="owner-create-errors",
-            db=db,
+            owner_id = "owner-create-errors",
+            db       = db,
         )
     assert kind_error.value.status_code == 422
 
     with pytest.raises(HTTPException) as child_error:
         events_api.create_event_collection(
             body=events_api.EventCollectionCreate(
-                title="节点不足",
-                children=valid_children[:1],
+                title    = "节点不足",
+                children = valid_children[:1],
             ),
-            owner_id="owner-create-errors",
-            db=db,
+            owner_id = "owner-create-errors",
+            db       = db,
         )
     assert child_error.value.status_code == 422
 
@@ -356,7 +356,7 @@ def test_create_collection_falls_back_when_clock_timezone_has_no_zone_key(
     monkeypatch.setattr(
         events_api,
         "now_in_timezone",
-        lambda _owner_id, _db: datetime(2030, 1, 1, tzinfo=timezone.utc),
+        lambda _owner_id, _db: datetime(2030, 1, 1, tzinfo=UTC),
     )
 
     collection_id, _child_ids = _create_collection(db, "owner-clock-fallback")
@@ -379,28 +379,28 @@ def test_create_collection_normalizes_shared_fields_and_orders_offset_times(
 
     created = events_api.create_event_collection(
         body=events_api.EventCollectionCreate(
-            title="\x00  跨区发布  ",
-            content="\x01  正文  ",
-            category="未分类",
-            location=" 线上 ",
-            tags=["Alpha", "alpha", "二期"],
-            notes="\x02  集合备注  ",
-            children=[
+            title    = "\x00  跨区发布  ",
+            content  = "\x01  正文  ",
+            category = "未分类",
+            location = " 线上 ",
+            tags     = ["Alpha", "alpha", "二期"],
+            notes    = "\x02  集合备注  ",
+            children = [
                 events_api.EventCollectionChildCreate(
-                    title="早发生但日期字符串较大",
-                    start_time="2030-01-02T00:30:00+14:00",
+                    title      = "早发生但日期字符串较大",
+                    start_time = "2030-01-02T00:30:00+14:00",
                 ),
                 events_api.EventCollectionChildCreate(
-                    title="晚发生但日期字符串较小",
-                    start_time="2030-01-01T23:00:00-10:00",
+                    title      = "晚发生但日期字符串较小",
+                    start_time = "2030-01-01T23:00:00-10:00",
                 ),
             ],
         ),
-        owner_id=owner_id,
-        db=db,
+        owner_id = owner_id,
+        db       = db,
     )
     collection_id = str(cast(dict[str, Any], created["data"])["id"])
-    collection = db.get_event_collection(collection_id, owner_id)
+    collection    = db.get_event_collection(collection_id, owner_id)
 
     assert collection is not None
     assert collection["title"] == "跨区发布"
@@ -435,20 +435,20 @@ def test_update_collection_normalizes_metadata_and_all_child_reminders(db: Datab
     response = events_api.update_collection(
         collection_id,
         body=events_api.EventCollectionUpdate(
-            title="\x00  发布项目 v2  ",
-            category="未分类",
-            location=None,
-            tags=["Release", "release", "二期"],
-            notes="\x01  新备注  ",
-            timezone=None,
-            reminder_rules=[
+            title          = "\x00  发布项目 v2  ",
+            category       = "未分类",
+            location       = None,
+            tags           = ["Release", "release", "二期"],
+            notes          = "\x01  新备注  ",
+            timezone       = None,
+            reminder_rules = [
                 {"offset_seconds": 0},
                 {"offset_seconds": 3600},
                 {"offset_seconds": 3600},
             ],
         ),
-        owner_id=owner_id,
-        db=db,
+        owner_id = owner_id,
+        db       = db,
     )
 
     assert response["ok"] is True
@@ -499,8 +499,8 @@ def test_explicit_null_reminder_rules_clear_collection_and_children(db: Database
     events_api.update_collection(
         collection_id,
         body=events_api.EventCollectionUpdate(reminder_rules=None),
-        owner_id=owner_id,
-        db=db,
+        owner_id = owner_id,
+        db       = db,
     )
 
     collection = db.get_event_collection(collection_id, owner_id)
@@ -536,11 +536,11 @@ def test_mixed_update_rolls_back_metadata_and_reminders_when_audit_fails(
         events_api.update_collection(
             collection_id,
             body=events_api.EventCollectionUpdate(
-                title="不应提交的新标题",
-                reminder_rules=[{"offset_seconds": 3600}, {"offset_seconds": 0}],
+                title          = "不应提交的新标题",
+                reminder_rules = [{"offset_seconds": 3600}, {"offset_seconds": 0}],
             ),
-            owner_id=owner_id,
-            db=db,
+            owner_id = owner_id,
+            db       = db,
         )
 
     row = (
@@ -636,7 +636,7 @@ def test_detail_endpoints_return_builder_data_and_translate_missing_records(
     """集合和叶子详情端点都应保留统一信封及明确的 404。"""
 
     collection_detail = {"collection": {"id": "collection-a"}, "children": []}
-    event_detail = {"event": {"id": "event-a"}, "reminder_logs": []}
+    event_detail      = {"event": {"id": "event-a"}, "reminder_logs": []}
     collection_builder = Mock(side_effect=[collection_detail, None])
     event_builder = Mock(side_effect=[event_detail, None])
     monkeypatch.setattr(events_api, "build_event_collection_detail", collection_builder)
@@ -675,8 +675,8 @@ def test_update_collection_translates_repository_races(
         events_api.update_collection(
             collection_id,
             body=events_api.EventCollectionUpdate(category="项目"),
-            owner_id=owner_id,
-            db=db,
+            owner_id = owner_id,
+            db       = db,
         )
     assert lost_header.value.status_code == 404
 
@@ -690,8 +690,8 @@ def test_update_collection_translates_repository_races(
         events_api.update_collection(
             collection_id,
             body=events_api.EventCollectionUpdate(reminder_rules=[]),
-            owner_id=owner_id,
-            db=db,
+            owner_id = owner_id,
+            db       = db,
         )
     assert missing_collection.value.status_code == 404
 
@@ -705,8 +705,8 @@ def test_update_collection_translates_repository_races(
         events_api.update_collection(
             collection_id,
             body=events_api.EventCollectionUpdate(reminder_rules=[]),
-            owner_id=owner_id,
-            db=db,
+            owner_id = owner_id,
+            db       = db,
         )
     assert changed_collection.value.status_code == 409
     assert changed_collection.value.detail == "Event collection changed; reload and retry"
@@ -715,7 +715,7 @@ def test_update_collection_translates_repository_races(
 def test_update_without_collection_start_uses_validation_anchor(db: Database) -> None:
     """旧集合缺少起始时间时，元数据更新不应被共享校验器误拒绝。"""
 
-    owner_id = "owner-no-collection-start"
+    owner_id      = "owner-no-collection-start"
     collection_id = "collection-without-start"
     db.create_event_collection(
         {
@@ -729,8 +729,8 @@ def test_update_without_collection_start_uses_validation_anchor(db: Database) ->
     response = events_api.update_collection(
         collection_id,
         body=events_api.EventCollectionUpdate(title="新集合"),
-        owner_id=owner_id,
-        db=db,
+        owner_id = owner_id,
+        db       = db,
     )
 
     assert response["ok"] is True
@@ -749,9 +749,9 @@ def test_update_collection_distinguishes_empty_request_from_missing_collection(
     with pytest.raises(HTTPException) as empty_error:
         events_api.update_collection(
             collection_id,
-            body=events_api.EventCollectionUpdate(),
-            owner_id=owner_id,
-            db=db,
+            body     = events_api.EventCollectionUpdate(),
+            owner_id = owner_id,
+            db       = db,
         )
     assert empty_error.value.status_code == 422
     assert empty_error.value.detail == "No collection fields to update"
@@ -760,8 +760,8 @@ def test_update_collection_distinguishes_empty_request_from_missing_collection(
         events_api.update_collection(
             "missing-collection",
             body=events_api.EventCollectionUpdate(title="新标题"),
-            owner_id=owner_id,
-            db=db,
+            owner_id = owner_id,
+            db       = db,
         )
     assert missing_error.value.status_code == 404
     assert missing_error.value.detail == "Event collection not found"

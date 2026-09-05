@@ -19,9 +19,9 @@ GROUP_ID = 97531
 def config_db():
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as file:
         db_path = file.name
-    database = Database(db_path)
-    config = database.get_group_config(GROUP_ID)
-    config.enabled = False
+    database             = Database(db_path)
+    config               = database.get_group_config(GROUP_ID)
+    config.enabled       = False
     config.trade_enabled = True
     assert database.update_group_config(config)
     try:
@@ -140,20 +140,20 @@ def test_main_route_fails_closed_and_admin_gets_repair_guidance(config_db):
         ("not-json", GROUP_ID),
     )
     database._get_connection().commit()
-    before = _row(database)
-    original_db = qingpet_main._db_instance
-    original_router = qingpet_main._router
+    before                    = _row(database)
+    original_db               = qingpet_main._db_instance
+    original_router           = qingpet_main._router
     qingpet_main._db_instance = database
-    qingpet_main._router = None
-    event = {"user_id": "ordinary-user", "group_id": GROUP_ID}
+    qingpet_main._router      = None
+    event                     = {"user_id": "ordinary-user", "group_id": GROUP_ID}
     try:
-        ordinary = text_segments_text(asyncio.run(qingpet_main.handle("pet", "状态", event, None)))
+        ordinary   = text_segments_text(asyncio.run(qingpet_main.handle("pet", "状态", event, None)))
         management = text_segments_text(
             asyncio.run(qingpet_main.handle("pet", "管理 配置", event, None))
         )
     finally:
         qingpet_main._db_instance = original_db
-        qingpet_main._router = original_router
+        qingpet_main._router      = original_router
 
     assert "安全停用" in ordinary
     assert "group_configs" in management

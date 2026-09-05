@@ -14,9 +14,9 @@ from core.public_errors import public_error_response
 
 logger = logging.getLogger(__name__)
 
-PLUGIN_NAME = "guess_number"
+PLUGIN_NAME             = "guess_number"
 SESSION_TIMEOUT_SECONDS = 180.0
-MAX_COMMAND_CHARS = 64
+MAX_COMMAND_CHARS       = 64
 MAX_SESSION_INPUT_CHARS = 64
 
 DifficultyKey = Literal["easy", "normal", "hard", "hell"]
@@ -36,10 +36,10 @@ class Difficulty:
     aliases: frozenset[str]
 
 
-EASY = Difficulty("easy", "简单 ⭐", 1, 50, 10, frozenset({"easy", "e", "简单"}))
+EASY   = Difficulty("easy", "简单 ⭐", 1, 50, 10, frozenset({"easy", "e", "简单"}))
 NORMAL = Difficulty("normal", "普通 ⭐⭐", 1, 100, 7, frozenset({"normal", "n", "普通"}))
-HARD = Difficulty("hard", "困难 ⭐⭐⭐", 1, 200, 8, frozenset({"hard", "h", "困难"}))
-HELL = Difficulty(
+HARD   = Difficulty("hard", "困难 ⭐⭐⭐", 1, 200, 8, frozenset({"hard", "h", "困难"}))
+HELL   = Difficulty(
     "hell",
     "地狱 ⭐⭐⭐⭐⭐",
     1,
@@ -47,16 +47,16 @@ HELL = Difficulty(
     10,
     frozenset({"hell", "nightmare", "地狱"}),
 )
-DIFFICULTIES = (EASY, NORMAL, HARD, HELL)
+DIFFICULTIES         = (EASY, NORMAL, HARD, HELL)
 _DIFFICULTY_BY_ALIAS = {
     alias: difficulty for difficulty in DIFFICULTIES for alias in difficulty.aliases
 }
 
-_HELP_ALIASES = frozenset({"help", "帮助", "?"})
-_STATUS_ALIASES = frozenset({"status", "状态", "info", "信息"})
-_RESTART_ALIASES = frozenset({"restart", "重新开始", "重开"})
-_SESSION_STATUS_ALIASES = _STATUS_ALIASES | {"?"}
-_COMMAND_TRIGGERS = frozenset({"猜数字", "guess", "猜"})
+_HELP_ALIASES                                      = frozenset({"help", "帮助", "?"})
+_STATUS_ALIASES                                    = frozenset({"status", "状态", "info", "信息"})
+_RESTART_ALIASES                                   = frozenset({"restart", "重新开始", "重开"})
+_SESSION_STATUS_ALIASES                            = _STATUS_ALIASES | {"?"}
+_COMMAND_TRIGGERS                                  = frozenset({"猜数字", "guess", "猜"})
 _COMMAND_ACTION_BY_ALIAS: dict[str, SessionAction] = {
     **dict.fromkeys(_HELP_ALIASES, "help"),
     **dict.fromkeys(_STATUS_ALIASES, "status"),
@@ -96,7 +96,7 @@ class _GuessNumberContext(Protocol):
     async def create_session(
         self,
         initial_data: dict[str, Any] | None = None,
-        timeout: float | None = None,
+        timeout: float | None               = None,
     ) -> _GameSession: ...
 
     async def get_session(self) -> _GameSession | None: ...
@@ -155,7 +155,7 @@ def _parse_request(args: object) -> CommandRequest:
     if len(tokens) != 1:
         raise GuessNumberCommandError("用法：/猜数字 [简单|普通|困难|地狱|status|restart|help]")
 
-    token = tokens[0].casefold()
+    token  = tokens[0].casefold()
     action = _COMMAND_ACTION_BY_ALIAS.get(token)
     if action is not None:
         return CommandRequest(action)
@@ -186,12 +186,12 @@ def _load_game_state(session: _GameSession) -> GameState:
     if difficulty is None:
         raise InvalidGameState("difficulty is unknown")
 
-    target = _read_state_int(session, "target")
-    minimum = _read_state_int(session, "min")
-    maximum = _read_state_int(session, "max")
-    attempts = _read_state_int(session, "attempts")
+    target       = _read_state_int(session, "target")
+    minimum      = _read_state_int(session, "min")
+    maximum      = _read_state_int(session, "max")
+    attempts     = _read_state_int(session, "attempts")
     max_attempts = _read_state_int(session, "max_attempts")
-    raw_history = session.get("history")
+    raw_history  = session.get("history")
     if (
         type(raw_history) is not list
         or len(raw_history) > difficulty.max_attempts
@@ -211,13 +211,13 @@ def _load_game_state(session: _GameSession) -> GameState:
     if target in history or any(minimum <= guess <= maximum for guess in history):
         raise InvalidGameState("active history contradicts the current range")
     return GameState(
-        target=target,
-        minimum=minimum,
-        maximum=maximum,
-        attempts=attempts,
-        max_attempts=max_attempts,
-        history=history,
-        difficulty=difficulty,
+        target       = target,
+        minimum      = minimum,
+        maximum      = maximum,
+        attempts     = attempts,
+        max_attempts = max_attempts,
+        history      = history,
+        difficulty   = difficulty,
     )
 
 
@@ -407,9 +407,9 @@ async def handle_session(
     if not state.minimum <= guess <= state.maximum:
         return segments(f"⚠️ 请输入 {state.minimum} 到 {state.maximum} 之间的数字！")
 
-    attempts = state.attempts + 1
+    attempts  = state.attempts + 1
     remaining = state.max_attempts - attempts
-    history = (*state.history, guess)
+    history   = (*state.history, guess)
     if guess == state.target:
         await context.end_session()
         logger.info("Game won: difficulty=%s, attempts=%d", state.difficulty.key, attempts)
@@ -439,12 +439,12 @@ async def handle_session(
     if guess < state.target:
         minimum = guess + 1
         maximum = state.maximum
-        hint = "📈 太小了！"
+        hint    = "📈 太小了！"
         session.set("min", minimum)
     else:
         minimum = state.minimum
         maximum = guess - 1
-        hint = "📉 太大了！"
+        hint    = "📉 太大了！"
         session.set("max", maximum)
     return segments(f"{hint}\n剩余次数: {remaining}\n当前范围: {minimum}-{maximum}")
 

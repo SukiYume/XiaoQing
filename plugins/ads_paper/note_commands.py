@@ -56,7 +56,7 @@ async def cmd_note(storage: PaperStorage, args: str, user_id: int) -> Segments:
         lines = [f"📝 论文 {paper_id} 的笔记 ({len(notes)} 条):\n"]
         for i, note in enumerate(notes, 1):
             content = note.get("content", "")
-            time = note.get("time", "")
+            time    = note.get("time", "")
             lines.append(f"  {i}. {content}")
             if time:
                 lines.append(f"     📅 {time}")
@@ -119,7 +119,7 @@ async def cmd_writing(storage: PaperStorage, args: str, user_id: int) -> Segment
         lines = [f"💡 「{section}」灵感箱 ({len(ideas)} 条):\n"]
         for i, idea in enumerate(ideas, 1):
             content = idea.get("content", "")
-            time = idea.get("time", "")
+            time    = idea.get("time", "")
             lines.append(f"  {i}. {content}")
             if time:
                 lines.append(f"     📅 {time}")

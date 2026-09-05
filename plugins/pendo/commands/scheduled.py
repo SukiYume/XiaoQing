@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone, tzinfo
+from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any, Final, Literal, Protocol, cast, runtime_checkable
 
 from core.delivery import DeliveryReceipt, send_with_receipt
@@ -16,6 +16,7 @@ from ..config import PendoConfig
 from ..models.item import EventItem, Item, ItemType, LedgerItem, TaskItem
 from ..services.db import Database
 from ..services.reminder import ReminderService
+from ..utils.currency import currency_label, group_by_currency
 from ..utils.db_ops import (
     get_database,
     get_user_settings_bundle_map,
@@ -30,9 +31,9 @@ from ..utils.time_utils import (
 
 logger = logging.getLogger(__name__)
 
-JsonObject = dict[str, Any]
-ActionList = list[JsonObject]
-SettingsBundle = dict[str, JsonObject]
+JsonObject        = dict[str, Any]
+ActionList        = list[JsonObject]
+SettingsBundle    = dict[str, JsonObject]
 ReminderClaimKind = Literal["initial", "repeat"]
 FinancePeriodKind = Literal["weekly", "monthly"]
 
@@ -105,17 +106,19 @@ class _FinanceSchedule:
 class _FinanceMetrics:
     """单次遍历账目后得到的财务总结指标。"""
 
-    item_count: int = 0
-    total_income: float = 0.0
-    total_expense: float = 0.0
+    currency: str = "CNY"
+    by_currency: dict[str, _FinanceMetrics] = field(default_factory=dict)
+    item_count: int       = 0
+    total_income: float   = 0.0
+    total_expense: float  = 0.0
     total_transfer: float = 0.0
-    transfer_count: int = 0
+    transfer_count: int   = 0
     expense_by_category: dict[str, float] = field(default_factory=dict)
     income_by_category: dict[str, float] = field(default_factory=dict)
     account_flow: dict[str, dict[str, float]] = field(default_factory=dict)
     transfer_flow: dict[str, float] = field(default_factory=dict)
     top_expense: LedgerItem | None = None
-    top_expense_amount: float = 0.0
+    top_expense_amount: float      = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,9 +153,7 @@ _reminder_service_singleton: ReminderService | None = None
 def _next_reminder_retry_at() -> datetime:
     """返回一次投递失败后的最早重试时刻。"""
 
-    return datetime.now(timezone.utc) + timedelta(
-        seconds=PendoConfig.REMINDER_REPEAT_INTERVAL_SECONDS
-    )
+    return datetime.now(UTC) + timedelta(seconds=PendoConfig.REMINDER_REPEAT_INTERVAL_SECONDS)
 
 
 def purge_expired_demo_users(db: Database, now: datetime | None = None) -> int:
@@ -168,20 +169,20 @@ def _parse_reminder_delivery(raw: object) -> _ReminderDelivery | None:
     if not isinstance(raw, Mapping):
         return None
     user_value = raw.get("user_id")
-    message = raw.get("message")
+    message    = raw.get("message")
     if user_value in (None, "") or not isinstance(message, str):
         return None
     claim_kind: ReminderClaimKind = "repeat" if raw.get("claim_kind") == "repeat" else "initial"
-    repeat_count = raw.get("claim_repeat_count", 0)
+    repeat_count                  = raw.get("claim_repeat_count", 0)
     return _ReminderDelivery(
-        user_id=str(user_value),
-        message=message,
-        item_id=str(raw["item_id"]) if raw.get("item_id") else None,
-        remind_time=str(raw["remind_time"]) if raw.get("remind_time") else None,
-        claim_token=str(raw["claim_token"]) if raw.get("claim_token") else None,
-        claim_kind=claim_kind,
-        claim_repeat_count=repeat_count if isinstance(repeat_count, int) else 0,
-        delivery_key=str(raw["delivery_key"]) if raw.get("delivery_key") else None,
+        user_id            = str(user_value),
+        message            = message,
+        item_id            = str(raw["item_id"]) if raw.get("item_id") else None,
+        remind_time        = str(raw["remind_time"]) if raw.get("remind_time") else None,
+        claim_token        = str(raw["claim_token"]) if raw.get("claim_token") else None,
+        claim_kind         = claim_kind,
+        claim_repeat_count = repeat_count if isinstance(repeat_count, int) else 0,
+        delivery_key       = str(raw["delivery_key"]) if raw.get("delivery_key") else None,
     )
 
 
@@ -266,9 +267,9 @@ async def _deliver_reminder(
         await _settle_reminder_delivery(db, delivery, delivered=False)
 
     receipt = DeliveryReceipt(
-        expected_actions=1,
-        commit=confirm,
-        rollback=reject,
+        expected_actions = 1,
+        commit           = confirm,
+        rollback         = reject,
         # 未知结果保持租约占用，等待租约自然过期，避免五分钟后立即重复提醒。
         unknown=lambda: None,
     )
@@ -279,16 +280,16 @@ async def _deliver_reminder(
         public_error_message(
             context,
             exc,
-            logger=logger,
-            component="pendo.scheduled.reminder_delivery",
+            logger    = logger,
+            component = "pendo.scheduled.reminder_delivery",
         )
         return
     if receipt.callback_error is not None:
         public_error_message(
             context,
             receipt.callback_error,
-            logger=logger,
-            component="pendo.scheduled.reminder_settlement",
+            logger    = logger,
+            component = "pendo.scheduled.reminder_settlement",
         )
         return
     if receipt.outcome is False:
@@ -307,7 +308,7 @@ async def check_reminders(context: object) -> ActionList:
     """领取到期提醒，并按 OneBot 的明确确认结果结算租约。"""
 
     global _reminder_service_singleton
-    db = cast(Database, get_database(context))
+    db                   = cast(Database, get_database(context))
     messages: ActionList = []
 
     if _reminder_service_singleton is None or (
@@ -337,9 +338,9 @@ async def _send_daily_briefing_for_user(
     """在单用户边界内领取、投递并标记每日简报。"""
 
     custom_settings = bundle["custom_settings"]
-    user_settings = bundle["settings"]
-    user_now = cast(datetime, get_user_now_from_settings(user_settings, run.current_utc))
-    current_date = user_now.date().isoformat()
+    user_settings   = bundle["settings"]
+    user_now        = cast(datetime, get_user_now_from_settings(user_settings, run.current_utc))
+    current_date    = user_now.date().isoformat()
     if custom_settings.get("last_daily_briefing_date") == current_date:
         return
     if not custom_settings.get("daily_briefing_enabled", True):
@@ -360,10 +361,10 @@ async def _send_daily_briefing_for_user(
     if claim is None:
         return
     try:
-        briefing = await _generate_briefing_content(user_id, run.db)
+        briefing       = await _generate_briefing_content(user_id, run.db)
         delivery_claim = claim
-        claim = None
-        delivered = await _send_claimed_private(
+        claim          = None
+        delivered      = await _send_claimed_private(
             run.context,
             run.messages,
             run.db,
@@ -390,10 +391,10 @@ async def _send_daily_briefing_for_user(
 async def send_daily_briefings(context: object, db: Database) -> ActionList:
     """向到达本地配置时刻且尚未发送的用户投递每日简报。"""
 
-    run = _ScheduleRun(context, db, datetime.now(timezone.utc))
+    run = _ScheduleRun(context, db, datetime.now(UTC))
     try:
         user_ids = await _get_active_user_ids(db)
-        bundles = cast(
+        bundles  = cast(
             dict[str, SettingsBundle],
             await get_user_settings_bundle_map(user_ids, db),
         )
@@ -401,8 +402,8 @@ async def send_daily_briefings(context: object, db: Database) -> ActionList:
         public_error_message(
             context,
             exc,
-            logger=logger,
-            component="pendo.scheduled.daily_briefing",
+            logger    = logger,
+            component = "pendo.scheduled.daily_briefing",
         )
         return run.messages
 
@@ -413,8 +414,8 @@ async def send_daily_briefings(context: object, db: Database) -> ActionList:
             public_error_message(
                 context,
                 exc,
-                logger=logger,
-                component="pendo.scheduled.daily_briefing_user",
+                logger    = logger,
+                component = "pendo.scheduled.daily_briefing_user",
             )
     return run.messages
 
@@ -427,9 +428,9 @@ async def _send_diary_reminder_for_user(
     """在单用户边界内检查日记并投递当日提醒。"""
 
     custom_settings = bundle["custom_settings"]
-    user_settings = bundle["settings"]
-    user_now = cast(datetime, get_user_now_from_settings(user_settings, run.current_utc))
-    current_date = user_now.date().isoformat()
+    user_settings   = bundle["settings"]
+    user_now        = cast(datetime, get_user_now_from_settings(user_settings, run.current_utc))
+    current_date    = user_now.date().isoformat()
     if custom_settings.get("last_diary_remind_date") == current_date:
         return
     if not _is_scheduled_minute(
@@ -462,8 +463,8 @@ async def _send_diary_reminder_for_user(
         return
     try:
         delivery_claim = claim
-        claim = None
-        delivered = await _send_claimed_private(
+        claim          = None
+        delivered      = await _send_claimed_private(
             run.context,
             run.messages,
             run.db,
@@ -489,10 +490,10 @@ async def _send_diary_reminder_for_user(
 async def check_diary_reminders(context: object, db: Database) -> ActionList:
     """在每个用户的本地提醒时刻检查当天是否缺少日记。"""
 
-    run = _ScheduleRun(context, db, datetime.now(timezone.utc))
+    run = _ScheduleRun(context, db, datetime.now(UTC))
     try:
         user_ids = await _get_active_user_ids(db)
-        bundles = cast(
+        bundles  = cast(
             dict[str, SettingsBundle],
             await get_user_settings_bundle_map(user_ids, db),
         )
@@ -500,8 +501,8 @@ async def check_diary_reminders(context: object, db: Database) -> ActionList:
         public_error_message(
             context,
             exc,
-            logger=logger,
-            component="pendo.scheduled.diary_reminder",
+            logger    = logger,
+            component = "pendo.scheduled.diary_reminder",
         )
         return run.messages
 
@@ -512,8 +513,8 @@ async def check_diary_reminders(context: object, db: Database) -> ActionList:
             public_error_message(
                 context,
                 exc,
-                logger=logger,
-                component="pendo.scheduled.diary_reminder_user",
+                logger    = logger,
+                component = "pendo.scheduled.diary_reminder_user",
             )
     return run.messages
 
@@ -570,7 +571,7 @@ async def _send_finance_summary_for_user(
     if bundle["custom_settings"].get(schedule.marker_name) == current_date:
         return
     period = _finance_period(user_now, schedule)
-    claim = await _claim_periodic_delivery(
+    claim  = await _claim_periodic_delivery(
         run.db,
         schedule.task_name,
         user_id,
@@ -583,8 +584,8 @@ async def _send_finance_summary_for_user(
         summary = await _generate_finance_summary_content(run.db, user_id, period)
         if summary:
             delivery_claim = claim
-            claim = None
-            completed = await _send_claimed_private(
+            claim          = None
+            completed      = await _send_claimed_private(
                 run.context,
                 run.messages,
                 run.db,
@@ -593,7 +594,7 @@ async def _send_finance_summary_for_user(
             )
         else:
             completed = await _complete_periodic_delivery(run.db, claim)
-            claim = None
+            claim     = None
         if not completed:
             return
         await run_sync(
@@ -616,10 +617,10 @@ async def _send_finance_summaries(
 ) -> ActionList:
     """共享周报和月报的用户遍历、错误隔离与批量设置读取。"""
 
-    run = _ScheduleRun(context, db, datetime.now(timezone.utc))
+    run = _ScheduleRun(context, db, datetime.now(UTC))
     try:
         user_ids = await _get_active_user_ids(db)
-        bundles = cast(
+        bundles  = cast(
             dict[str, SettingsBundle],
             await get_user_settings_bundle_map(user_ids, db),
         )
@@ -627,8 +628,8 @@ async def _send_finance_summaries(
         public_error_message(
             context,
             exc,
-            logger=logger,
-            component=f"pendo.scheduled.{schedule.component}",
+            logger    = logger,
+            component = f"pendo.scheduled.{schedule.component}",
         )
         return run.messages
 
@@ -639,8 +640,8 @@ async def _send_finance_summaries(
             public_error_message(
                 context,
                 exc,
-                logger=logger,
-                component=f"pendo.scheduled.{schedule.component}_user",
+                logger    = logger,
+                component = f"pendo.scheduled.{schedule.component}_user",
             )
     return run.messages
 
@@ -667,8 +668,8 @@ async def cleanup_expired_demo_data(context: object, db: Database) -> ActionList
         public_error_message(
             context,
             exc,
-            logger=logger,
-            component="pendo.scheduled.demo_cleanup",
+            logger    = logger,
+            component = "pendo.scheduled.demo_cleanup",
         )
     return []
 
@@ -723,13 +724,13 @@ async def _claim_periodic_delivery(
             task_name,
             owner_id,
             period_key,
-            now=current_time.astimezone(timezone.utc),
-            lease_seconds=PendoConfig.REMINDER_CLAIM_LEASE_SECONDS,
+            now           = current_time.astimezone(UTC),
+            lease_seconds = PendoConfig.REMINDER_CLAIM_LEASE_SECONDS,
         ),
     )
     if raw is None:
         return None
-    claim_token = raw.get("claim_token")
+    claim_token  = raw.get("claim_token")
     delivery_key = raw.get("delivery_key")
     if not isinstance(claim_token, str) or not isinstance(delivery_key, str):
         raise ValueError("scheduled delivery claim is missing token or delivery key")
@@ -790,9 +791,9 @@ async def _send_claimed_private(
         await _release_periodic_delivery(db, claim)
 
     receipt = DeliveryReceipt(
-        expected_actions=1,
-        commit=confirm,
-        rollback=reject,
+        expected_actions = 1,
+        commit           = confirm,
+        rollback         = reject,
         # 传输结果未知时不释放租约，避免下一轮立即重复发送。
         unknown=lambda: None,
     )
@@ -803,8 +804,8 @@ async def _send_claimed_private(
             messages,
             claim.owner_id,
             message,
-            delivery_key=claim.delivery_key,
-            receipt=receipt,
+            delivery_key = claim.delivery_key,
+            receipt      = receipt,
         )
     except Exception:
         await receipt.record(False)
@@ -828,7 +829,7 @@ async def _send_private_or_collect(
     user_id: str,
     message: str,
     *,
-    delivery_key: str | None = None,
+    delivery_key: str | None        = None,
     receipt: DeliveryReceipt | None = None,
 ) -> bool | None:
     action = _build_private_action(user_id, message, delivery_key=delivery_key)
@@ -877,10 +878,16 @@ async def _generate_finance_summary_content(
     return _format_finance_summary(metrics, period) if metrics.item_count else ""
 
 
-def _summarize_finance_items(items: list[Item]) -> _FinanceMetrics:
+def _summarize_finance_items(items: Sequence[Item]) -> _FinanceMetrics:
     """单次遍历账目，汇总金额、分类、账户和转账流向。"""
 
-    metrics = _FinanceMetrics()
+    groups = group_by_currency(item for item in items if isinstance(item, LedgerItem))
+    if len(groups) > 1:
+        return _FinanceMetrics(
+            item_count  = sum(len(rows) for rows in groups.values()),
+            by_currency = {code: _summarize_finance_items(rows) for code, rows in groups.items()},
+        )
+    metrics = _FinanceMetrics(currency=next(iter(groups), "CNY"))
     for item in items:
         if not isinstance(item, LedgerItem):
             continue
@@ -889,35 +896,35 @@ def _summarize_finance_items(items: list[Item]) -> _FinanceMetrics:
 
         if item.transaction_type == "income":
             metrics.total_income += amount
-            category = item.ledger_category or "其他"
+            category                             = item.ledger_category or "其他"
             metrics.income_by_category[category] = (
                 metrics.income_by_category.get(category, 0.0) + amount
             )
             account = item.account_name or "现金"
-            flow = metrics.account_flow.setdefault(account, {"income": 0.0, "expense": 0.0})
+            flow    = metrics.account_flow.setdefault(account, {"income": 0.0, "expense": 0.0})
             flow["income"] += amount
             continue
 
         if item.transaction_type == "expense":
             metrics.total_expense += amount
-            category = item.ledger_category or "其他"
+            category                              = item.ledger_category or "其他"
             metrics.expense_by_category[category] = (
                 metrics.expense_by_category.get(category, 0.0) + amount
             )
             account = item.account_name or "现金"
-            flow = metrics.account_flow.setdefault(account, {"income": 0.0, "expense": 0.0})
+            flow    = metrics.account_flow.setdefault(account, {"income": 0.0, "expense": 0.0})
             flow["expense"] += amount
             if metrics.top_expense is None or amount > metrics.top_expense_amount:
-                metrics.top_expense = item
+                metrics.top_expense        = item
                 metrics.top_expense_amount = amount
             continue
 
         if item.transaction_type == "transfer":
             metrics.total_transfer += amount
             metrics.transfer_count += 1
-            source = item.account_name or "现金"
-            destination = item.counter_account_name or "未指定账户"
-            flow_name = f"{source} → {destination}"
+            source                           = item.account_name or "现金"
+            destination                      = item.counter_account_name or "未指定账户"
+            flow_name                        = f"{source} → {destination}"
             metrics.transfer_flow[flow_name] = metrics.transfer_flow.get(flow_name, 0.0) + amount
 
     return metrics
@@ -926,16 +933,22 @@ def _summarize_finance_items(items: list[Item]) -> _FinanceMetrics:
 def _format_finance_summary(metrics: _FinanceMetrics, period: _FinancePeriod) -> str:
     """把已经聚合的财务指标格式化为稳定的中文摘要。"""
 
-    balance = metrics.total_income - metrics.total_expense
+    if metrics.by_currency:
+        return "\n\n".join(
+            f"【{code}】\n{_format_finance_summary(group, period)}"
+            for code, group in metrics.by_currency.items()
+        )
+    label          = currency_label(metrics.currency)
+    balance        = metrics.total_income - metrics.total_expense
     balance_prefix = "+" if balance >= 0 else ""
-    lines = [
+    lines          = [
         period.title,
         f"📅 范围: {period.label}",
         f"🧾 共 {metrics.item_count} 笔流水",
         "",
-        f"💰 收入: ¥{metrics.total_income:.2f}",
-        f"💸 支出: ¥{metrics.total_expense:.2f}",
-        f"📊 结余: {balance_prefix}¥{balance:.2f}",
+        f"💰 收入: {label}{metrics.total_income:.2f}",
+        f"💸 支出: {label}{metrics.total_expense:.2f}",
+        f"📊 结余: {balance_prefix}{label}{balance:.2f}",
     ]
     _append_finance_highlights(lines, metrics, period)
 
@@ -943,36 +956,36 @@ def _format_finance_summary(metrics: _FinanceMetrics, period: _FinancePeriod) ->
         lines.extend(("", "支出前 3 分类:"))
         ranked_categories = sorted(
             metrics.expense_by_category.items(),
-            key=lambda pair: pair[1],
-            reverse=True,
+            key     = lambda pair: pair[1],
+            reverse = True,
         )
         for index, (category, amount) in enumerate(ranked_categories[:3], 1):
-            lines.append(f"  {index}. {category} ¥{amount:.2f}")
+            lines.append(f"  {index}. {category} {label}{amount:.2f}")
 
     if metrics.account_flow:
         lines.extend(("", "账户收支:"))
         ranked_accounts = sorted(
             metrics.account_flow.items(),
-            key=lambda pair: pair[1]["income"] + pair[1]["expense"],
-            reverse=True,
+            key     = lambda pair: pair[1]["income"] + pair[1]["expense"],
+            reverse = True,
         )
         for index, (account, flow) in enumerate(ranked_accounts[:5], 1):
-            net = flow["income"] - flow["expense"]
+            net        = flow["income"] - flow["expense"]
             net_prefix = "+" if net >= 0 else ""
             lines.append(
-                f"  {index}. {account} 收入¥{flow['income']:.2f} "
-                f"支出¥{flow['expense']:.2f} 净额{net_prefix}¥{net:.2f}"
+                f"  {index}. {account} 收入{label}{flow['income']:.2f} "
+                f"支出{label}{flow['expense']:.2f} 净额{net_prefix}{label}{net:.2f}"
             )
 
     if metrics.transfer_flow:
         lines.extend(("", "转账流向:"))
         ranked_transfers = sorted(
             metrics.transfer_flow.items(),
-            key=lambda pair: pair[1],
-            reverse=True,
+            key     = lambda pair: pair[1],
+            reverse = True,
         )
         for index, (flow_name, amount) in enumerate(ranked_transfers[:5], 1):
-            lines.append(f"  {index}. {flow_name} ¥{amount:.2f}")
+            lines.append(f"  {index}. {flow_name} {label}{amount:.2f}")
 
     return "\n".join(lines)
 
@@ -984,27 +997,34 @@ def _append_finance_highlights(
 ) -> None:
     """追加转账合计、主要分类和最大单笔支出。"""
 
+    label = currency_label(metrics.currency)
     if metrics.transfer_count:
-        lines.append(f"🔁 转账: ¥{metrics.total_transfer:.2f}")
+        lines.append(f"🔁 转账: {label}{metrics.total_transfer:.2f}")
 
     top_expense_category = max(
         metrics.expense_by_category.items(),
-        key=lambda pair: pair[1],
-        default=None,
+        key     = lambda pair: pair[1],
+        default = None,
     )
     top_income_category = max(
         metrics.income_by_category.items(),
-        key=lambda pair: pair[1],
-        default=None,
+        key     = lambda pair: pair[1],
+        default = None,
     )
     if top_expense_category:
-        lines.append(f"📂 最大支出分类: {top_expense_category[0]} ¥{top_expense_category[1]:.2f}")
+        lines.append(
+            f"📂 最大支出分类: {top_expense_category[0]} {label}{top_expense_category[1]:.2f}"
+        )
     if top_income_category:
-        lines.append(f"📥 主要收入来源: {top_income_category[0]} ¥{top_income_category[1]:.2f}")
+        lines.append(
+            f"📥 主要收入来源: {top_income_category[0]} {label}{top_income_category[1]:.2f}"
+        )
     if metrics.top_expense is not None:
-        title = metrics.top_expense.title or "未命名支出"
+        title       = metrics.top_expense.title or "未命名支出"
         ledger_date = metrics.top_expense.ledger_date or period.start_date
-        lines.append(f"🔥 最大单笔支出: {title} ¥{metrics.top_expense_amount:.2f} ({ledger_date})")
+        lines.append(
+            f"🔥 最大单笔支出: {title} {label}{metrics.top_expense_amount:.2f} ({ledger_date})"
+        )
 
 
 async def _generate_briefing_content(user_id: str, db: Database) -> str:
@@ -1108,9 +1128,9 @@ def _format_daily_briefing(
     current_dt: datetime,
 ) -> str:
     """格式化每日简报，不执行数据库或网络操作。"""
-    current_date = current_dt.strftime("%Y年%m月%d日")
+    current_date  = current_dt.strftime("%Y年%m月%d日")
     weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-    weekday = weekday_names[current_dt.weekday()]
+    weekday       = weekday_names[current_dt.weekday()]
 
     lines = [f"☀️ 早上好！今天是{current_date} {weekday}", ""]
 
@@ -1129,8 +1149,8 @@ def _format_daily_briefing(
     if tasks:
         lines.append("✅ **今日待办**")
         for task in tasks[:5]:
-            title = task.title or "无标题"
-            priority = task.priority if isinstance(task.priority, int) else 3
+            title         = task.title or "无标题"
+            priority      = task.priority if isinstance(task.priority, int) else 3
             priority_mark = "🔴" if priority <= 2 else "🟡" if priority == 3 else "⚪"
             lines.append(f"  {priority_mark} {title}")
         if len(tasks) > 5:
@@ -1154,8 +1174,8 @@ async def migrate_undone_todos(context: object, db: Database) -> ActionList:
         public_error_message(
             context,
             exc,
-            logger=logger,
-            component="pendo.scheduled.todo_migration",
+            logger    = logger,
+            component = "pendo.scheduled.todo_migration",
         )
         return messages
 
@@ -1163,7 +1183,7 @@ async def migrate_undone_todos(context: object, db: Database) -> ActionList:
         try:
             current_time = now_in_timezone(user_id, db)
             yesterday = (current_time - timedelta(days=1)).date().isoformat()
-            today = current_time.date().isoformat()
+            today          = current_time.date().isoformat()
             migrated_count = cast(
                 int,
                 await run_sync(
@@ -1192,8 +1212,8 @@ async def migrate_undone_todos(context: object, db: Database) -> ActionList:
             public_error_message(
                 context,
                 exc,
-                logger=logger,
-                component="pendo.scheduled.todo_migration_user",
+                logger    = logger,
+                component = "pendo.scheduled.todo_migration_user",
             )
 
     return messages

@@ -19,25 +19,25 @@ _REAL_DOWNLOAD_PHOTO = flickr._download_photo
 
 def _photo(number: int, *, license_id: str = "0") -> FlickrPhoto:
     return FlickrPhoto(
-        photo_id=str(number),
-        owner_id="98765432@N01",
-        owner_name="Astro Photographer",
-        title=f"Night Sky {number}",
-        description=f"Description {number}",
-        license_id=license_id,
-        taken_at="2026-08-18 03:04:05",
-        tags=("night", "sky"),
-        media_url=f"https://live.staticflickr.com/66/{number}_abc_c.jpg",
-        page_url=f"https://www.flickr.com/photos/98765432@N01/{number}/",
+        photo_id    = str(number),
+        owner_id    = "98765432@N01",
+        owner_name  = "Astro Photographer",
+        title       = f"Night Sky {number}",
+        description = f"Description {number}",
+        license_id  = license_id,
+        taken_at    = "2026-08-18 03:04:05",
+        tags        = ("night", "sky"),
+        media_url   = f"https://live.staticflickr.com/66/{number}_abc_c.jpg",
+        page_url    = f"https://www.flickr.com/photos/98765432@N01/{number}/",
     )
 
 
 def _page(count: int = 3) -> FlickrPage:
     return FlickrPage(
-        photos=tuple(_photo(number) for number in range(1, count + 1)),
-        page=1,
-        pages=1,
-        total=count,
+        photos = tuple(_photo(number) for number in range(1, count + 1)),
+        page   = 1,
+        pages  = 1,
+        total  = count,
     )
 
 
@@ -45,15 +45,15 @@ def _page(count: int = 3) -> FlickrPage:
 def context(tmp_path: Path) -> SimpleNamespace:
     return with_settings_reader(
         SimpleNamespace(
-            data_dir=tmp_path,
-            config={},
-            secrets={"plugins": {"flickr": {"api_key": "test-api-key"}}},
-            http_session=None,
-            current_user_id=123,
-            current_group_id=456,
-            logger=MagicMock(),
-            state={},
-            request_id="flickr-test-request",
+            data_dir         = tmp_path,
+            config           = {},
+            secrets          = {"plugins": {"flickr": {"api_key": "test-api-key"}}},
+            http_session     = None,
+            current_user_id  = 123,
+            current_group_id = 456,
+            logger           = MagicMock(),
+            state            = {},
+            request_id       = "flickr-test-request",
         )
     )
 
@@ -204,8 +204,8 @@ async def test_user_and_album_commands_resolve_owner(
     )
     client.resolve_user.assert_awaited_with("example")
     client.album_photos.assert_awaited_once_with(
-        user_id="98765432@N01",
-        album_id="72100000000000000",
+        user_id  = "98765432@N01",
+        album_id = "72100000000000000",
     )
 
 
@@ -217,7 +217,7 @@ async def test_more_advances_without_repeats_and_stops_at_end(
     _client(monkeypatch)
     await flickr.handle("flickr", "", {}, context)
 
-    result = await flickr.handle("flickr", "more 2", {}, context)
+    result  = await flickr.handle("flickr", "more 2", {}, context)
     message = _reply_text(result)
     assert "Night Sky 2" in message
     assert "Night Sky 3" in message
@@ -236,12 +236,12 @@ async def test_session_isolated_by_group_and_user(
     await flickr.handle("flickr", "", {}, context)
 
     context.current_group_id = 999
-    other_group = await flickr.handle("flickr", "more", {}, context)
+    other_group              = await flickr.handle("flickr", "more", {}, context)
     assert "当前没有可继续" in _reply_text(other_group)
 
     context.current_group_id = 456
-    context.current_user_id = 777
-    other_user = await flickr.handle("flickr", "more", {}, context)
+    context.current_user_id  = 777
+    other_user               = await flickr.handle("flickr", "more", {}, context)
     assert "当前没有可继续" in _reply_text(other_user)
 
 
@@ -252,8 +252,8 @@ async def test_expired_session_is_removed(
 ) -> None:
     _client(monkeypatch)
     await flickr.handle("flickr", "", {}, context)
-    runtime = context.state["flickr_runtime"]
-    session = next(iter(runtime["sessions"].values()))
+    runtime            = context.state["flickr_runtime"]
+    session            = next(iter(runtime["sessions"].values()))
     session.expires_at = 0
 
     result = await flickr.handle("flickr", "more", {}, context)
@@ -294,7 +294,7 @@ async def test_configuration_and_api_errors_have_stable_messages(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context.secrets = {}
-    missing = await flickr.handle("flickr", "", {}, context)
+    missing         = await flickr.handle("flickr", "", {}, context)
     assert "Flickr API Key 未配置" in _reply_text(missing)
 
     _client(monkeypatch, interesting=AsyncMock(side_effect=FlickrApiError("100")))
@@ -313,10 +313,10 @@ async def test_image_download_is_validated_cached_and_host_pinned(
     tmp_path: Path,
 ) -> None:
     payload = image_bytes("PNG")
-    fetch = AsyncMock(
+    fetch   = AsyncMock(
         return_value=SimpleNamespace(
-            body=payload,
-            url="https://live.staticflickr.com/66/1_abc_c.jpg",
+            body = payload,
+            url  = "https://live.staticflickr.com/66/1_abc_c.jpg",
         )
     )
     monkeypatch.setattr(flickr, "fetch_public_bytes", fetch)
@@ -327,7 +327,7 @@ async def test_image_download_is_validated_cached_and_host_pinned(
     monkeypatch.setattr(flickr, "run_sync", direct)
     photo = _photo(1)
 
-    first = await _REAL_DOWNLOAD_PHOTO(photo, context)
+    first  = await _REAL_DOWNLOAD_PHOTO(photo, context)
     second = await _REAL_DOWNLOAD_PHOTO(photo, context)
 
     assert first == second

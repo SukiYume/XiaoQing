@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xiaoqing"
-version = "4.2.0"
+version = "4.3.0"
 description = "基于 OneBot 协议和 Python asyncio 的轻量级 QQ 机器人框架，内置向量记忆与行为规划"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [
     {name = "XiaoQing Team"}
 ]
@@ -20,7 +20,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -36,7 +35,6 @@ dependencies = [
     # 3.x 私有 drain 能力经 scheduler_compat 行为探测隔离；不满足时使用公开关闭路径。
     "apscheduler>=3.11,<4",
     "pydantic>=2.5.0",
-    "tomli>=2.0.1; python_version < '3.11'",
     # Pendo Web is enabled by default, so its server dependencies are core.
     "fastapi>=0.110.0",
     "starlette>=0.36.3",
@@ -87,6 +85,7 @@ dev = [
     "aioresponses>=0.7.4",
     "httpx>=0.27.0",
     "ruff>=0.1.0",
+    "pygments>=2.15.0",
     "mypy>=1.0.0",
     "pip-audit>=2.9.0",
     "pip-licenses>=5.0.0",
@@ -260,7 +259,7 @@ exclude_lines = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = [
@@ -279,7 +278,8 @@ select = [
     "UP",     # pyupgrade
 ]
 ignore = [
-    "E501",   # 行宽由 Ruff formatter 统一处理
+    "E501",   # 行宽由项目格式器统一处理
+    "UP042",  # 保留既有 str/Enum 的字符串显示契约，避免格式清理改变公开输出
     "B008",   # do not perform function calls in argument defaults
 ]
 exclude = [

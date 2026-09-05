@@ -7,7 +7,7 @@ from typing import Final
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT: Final = REPOSITORY_ROOT
+ROOT: Final                 = REPOSITORY_ROOT
 CUSTOM_SELECT_CLIENT: Final = (
     ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "components" / "custom_select.js"
 )
@@ -181,8 +181,8 @@ def _run_custom_select_client(script: str) -> None:
     assert_node_esm_contract(
         _custom_select_source_for_test(),
         script,
-        cwd=ROOT,
-        setup=CUSTOM_SELECT_SETUP,
+        cwd   = ROOT,
+        setup = CUSTOM_SELECT_SETUP,
     )
 
 

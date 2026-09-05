@@ -82,7 +82,7 @@ def _handle_coord_sync(args: str, context: PluginContextProtocol) -> str:
         ra_str, dec_str = parts[0], parts[1]
 
         normalized_ra = ra_str.lower()
-        ra_is_hms = any(marker in normalized_ra for marker in (":", "h", "m", "s"))
+        ra_is_hms     = any(marker in normalized_ra for marker in (":", "h", "m", "s"))
         # dec_str 通常是 DMS 或度数，SkyCoord 能自动处理大部分情况
         # 显式指定单位有助于消除歧义
 
@@ -105,7 +105,7 @@ def _handle_coord_sync(args: str, context: PluginContextProtocol) -> str:
 
         ra_hms = coord.ra.to_string(unit=u.hour, sep=":", pad=True, precision=2)
         dec_dms = coord.dec.to_string(unit=u.deg, sep=":", pad=True, precision=1, alwayssign=True)
-        ra_deg = coord.ra.deg
+        ra_deg  = coord.ra.deg
         dec_deg = coord.dec.deg
 
         return (

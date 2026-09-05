@@ -37,7 +37,7 @@ def test_search_http_endpoint_preserves_type_alias_and_query_bounds(db: Database
     app = FastAPI()
     app.include_router(search_api.router)
     app.dependency_overrides[search_api.get_current_user] = lambda: owner_id
-    app.dependency_overrides[search_api.get_db] = lambda: db
+    app.dependency_overrides[search_api.get_db]           = lambda: db
 
     with TestClient(app) as client:
         response = client.get(
@@ -163,11 +163,11 @@ def test_search_route_pages_results_and_preserves_total(db: Database) -> None:
         )
 
     response = search_api.search_items(
-        q="共同关键词",
-        page=2,
-        page_size=1,
-        owner_id=owner_id,
-        db=db,
+        q         = "共同关键词",
+        page      = 2,
+        page_size = 1,
+        owner_id  = owner_id,
+        db        = db,
     )
     data = cast(dict[str, Any], response["data"])
 
@@ -206,7 +206,7 @@ def test_search_route_batches_event_collection_payloads(
             }
         )
 
-    original_batch = db.get_event_collections_by_ids
+    original_batch                     = db.get_event_collections_by_ids
     calls: list[tuple[str, list[str]]] = []
 
     def capture_batch(request_owner: str, collection_ids: list[str]) -> dict[str, dict[str, Any]]:
@@ -228,7 +228,7 @@ def test_event_collection_category_search_trims_legacy_values_and_keeps_total_al
 ) -> None:
     """旧集合分类的首尾空格不能造成搜索总数有值但当前页为空。"""
 
-    owner_id = "owner-search-legacy-category"
+    owner_id      = "owner-search-legacy-category"
     collection_id = db.create_event_collection(
         {
             "id": "legacy-category-collection",
@@ -258,11 +258,11 @@ def test_event_collection_category_search_trims_legacy_values_and_keeps_total_al
         )
 
     response = search_api.search_items(
-        q="旧分类会议",
-        item_type="event",
-        category=" 学术 ",
-        owner_id=owner_id,
-        db=db,
+        q         = "旧分类会议",
+        item_type = "event",
+        category  = " 学术 ",
+        owner_id  = owner_id,
+        db        = db,
     )
     data = cast(dict[str, Any], response["data"])
     rows = cast(list[dict[str, Any]], data["items"])
@@ -304,8 +304,8 @@ def test_database_search_items_matches_additional_text_fields(db: Database) -> N
     by_weather, weather_total = db.search_items_page(
         owner_id,
         "风声",
-        filters={"type": "diary"},
-        limit=10,
+        filters = {"type": "diary"},
+        limit   = 10,
     )
 
     assert location_total == 1
@@ -345,8 +345,8 @@ def test_database_search_preserves_fts_rank_before_newer_like_only_rows(
     results, total = db.search_items_page(
         owner_id,
         "alpha",
-        filters={"type": "note"},
-        limit=10,
+        filters = {"type": "note"},
+        limit   = 10,
     )
 
     assert total == 2
@@ -399,21 +399,21 @@ def test_database_search_items_supports_ledger_category_filter(db: Database) -> 
     results, result_total = db.search_items_page(
         owner_id,
         "消费",
-        filters={"type": "ledger", "ledger_category": "餐饮"},
-        limit=10,
+        filters = {"type": "ledger", "ledger_category": "餐饮"},
+        limit   = 10,
     )
     transfer_results, transfer_total = db.search_items_page(
         owner_id,
         "还款",
-        filters={"type": "ledger", "account_name": "招行信用卡"},
-        limit=10,
+        filters = {"type": "ledger", "account_name": "招行信用卡"},
+        limit   = 10,
     )
     route_response = search_api.search_items(
-        q="消费",
-        item_type="ledger",
-        ledger_category=" 餐饮 ",
-        owner_id=owner_id,
-        db=db,
+        q               = "消费",
+        item_type       = "ledger",
+        ledger_category = " 餐饮 ",
+        owner_id        = owner_id,
+        db              = db,
     )
     route_data = cast(dict[str, Any], route_response["data"])
 
@@ -459,8 +459,8 @@ def test_database_search_items_matches_event_collection_text(db: Database) -> No
     results, total = db.search_items_page(
         owner_id,
         "FRB2026",
-        filters={"type": "event"},
-        limit=10,
+        filters = {"type": "event"},
+        limit   = 10,
     )
 
     assert total == 1
@@ -500,10 +500,10 @@ def test_search_route_adds_event_collection_payload(db: Database) -> None:
     )
 
     result = search_api.search_items(
-        q="导入会议",
-        item_type="event",
-        owner_id=owner_id,
-        db=db,
+        q         = "导入会议",
+        item_type = "event",
+        owner_id  = owner_id,
+        db        = db,
     )
     data = cast(dict[str, Any], result["data"])
     item = cast(list[dict[str, Any]], data["items"])[0]

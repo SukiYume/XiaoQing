@@ -49,7 +49,7 @@ from plugins.xiaoqing_chat import main as xiaoqing_chat
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.pendo_test_support import managed_pendo_database
 
-CANARY = "CR219_SECRET_CANARY"
+CANARY          = "CR219_SECRET_CANARY"
 SENSITIVE_ERROR = (
     f"Authorization: Bearer {CANARY} "
     f"https://user:password@example.test/api?token={CANARY} "
@@ -87,7 +87,7 @@ _PUBLIC_ERROR_PLUGIN_DIRS = (
 
 def test_public_plugin_runtime_never_uses_unredacted_traceback_logging() -> None:
     repo_root = REPOSITORY_ROOT
-    sources = [repo_root / "core" / "dispatcher.py"]
+    sources   = [repo_root / "core" / "dispatcher.py"]
     for plugin_name in _PUBLIC_ERROR_PLUGIN_DIRS:
         sources.extend((repo_root / "plugins" / plugin_name).rglob("*.py"))
 
@@ -122,8 +122,8 @@ class _PublicContext:
 
     def get_settings_snapshot(self):
         return SimpleNamespace(
-            plugin_secrets=lambda _plugin_name: {},
-            plugin_config=lambda _plugin_name: {},
+            plugin_secrets = lambda _plugin_name: {},
+            plugin_config  = lambda _plugin_name: {},
         )
 
 
@@ -160,12 +160,12 @@ async def test_public_plugin_unexpected_errors_never_echo_internal_details(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     request_id = "req-cr219-canary"
-    context = _PublicContext(
-        request_id=request_id,
-        plugin_dir=tmp_path,
-        data_dir=tmp_path,
-        secrets={"plugins": {module.__name__: {"token": CANARY}}},
-        logger=logging.getLogger(f"test.{module.__name__}"),
+    context    = _PublicContext(
+        request_id = request_id,
+        plugin_dir = tmp_path,
+        data_dir   = tmp_path,
+        secrets    = {"plugins": {module.__name__: {"token": CANARY}}},
+        logger     = logging.getLogger(f"test.{module.__name__}"),
     )
     monkeypatch.setattr(
         module,
@@ -207,12 +207,12 @@ async def test_url_parser_unexpected_error_is_redacted_even_without_a_reply(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     request_id = "req-cr219-url-parser"
-    context = SimpleNamespace(
-        request_id=request_id,
-        secrets={"plugins": {"url_parser": {"token": CANARY}}},
-        logger=logging.getLogger("test.cr219.url_parser"),
-        data_dir=tmp_path,
-        http_session=object(),
+    context    = SimpleNamespace(
+        request_id   = request_id,
+        secrets      = {"plugins": {"url_parser": {"token": CANARY}}},
+        logger       = logging.getLogger("test.cr219.url_parser"),
+        data_dir     = tmp_path,
+        http_session = object(),
     )
     monkeypatch.setattr(
         url_parser,
@@ -274,9 +274,9 @@ async def test_nested_pendo_error_decorators_emit_one_safe_record(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     context = SimpleNamespace(
-        request_id="req-cr219-pendo-nested",
-        secrets={"token": CANARY},
-        logger=logging.getLogger("test.cr219.pendo.nested"),
+        request_id = "req-cr219-pendo-nested",
+        secrets    = {"token": CANARY},
+        logger     = logging.getLogger("test.cr219.pendo.nested"),
     )
 
     @handle_command_errors
@@ -310,14 +310,14 @@ async def test_remaining_public_plugins_share_the_same_safe_boundary(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     request_id = f"req-cr219-{plugin_name}"
-    context = SimpleNamespace(
-        request_id=request_id,
-        secrets={"plugins": {plugin_name: {"token": CANARY}}},
-        logger=logging.getLogger(f"test.cr219.{plugin_name}"),
-        data_dir=tmp_path,
-        plugin_dir=tmp_path,
-        state={},
-        http_session=object(),
+    context    = SimpleNamespace(
+        request_id   = request_id,
+        secrets      = {"plugins": {plugin_name: {"token": CANARY}}},
+        logger       = logging.getLogger(f"test.cr219.{plugin_name}"),
+        data_dir     = tmp_path,
+        plugin_dir   = tmp_path,
+        state        = {},
+        http_session = object(),
     )
     error = RuntimeError(SENSITIVE_ERROR)
 
@@ -422,8 +422,8 @@ async def test_pendo_ai_and_llm_degradation_never_logs_raw_exception(
             raise RuntimeError(SENSITIVE_ERROR)
 
     context = SimpleNamespace(
-        request_id="req-cr219-pendo-ai",
-        secrets={
+        request_id = "req-cr219-pendo-ai",
+        secrets    = {
             "plugins": {
                 "pendo": {
                     "api_base": "https://example.test",

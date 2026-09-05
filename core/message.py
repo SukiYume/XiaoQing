@@ -38,7 +38,7 @@ def validate_message_segments(message: list[Any]) -> list[dict[str, Any]]:
                 raise ValueError(f"message segment {index} data must be an object")
         else:
             raw_data = {}
-        segment = dict(item)
+        segment         = dict(item)
         segment["type"] = raw_type.strip()
         segment["data"] = dict(raw_data)
         normalized.append(segment)
@@ -61,10 +61,10 @@ def normalize_inbound_message(event: dict[str, Any]) -> dict[str, Any]:
     the boundary gives all later consumers the standard segment-list contract
     while preserving non-empty segment payloads such as images and mentions.
     """
-    normalized = dict(event)
-    message = normalized.get("message")
+    normalized  = dict(event)
+    message     = normalized.get("message")
     raw_message = normalized.get("raw_message")
-    raw_text = raw_message.strip() if isinstance(raw_message, str) else ""
+    raw_text    = raw_message.strip() if isinstance(raw_message, str) else ""
     if raw_text and message in (None, "", []):
         normalized["message"] = [{"type": "text", "data": {"text": raw_text}}]
     return normalized
@@ -89,25 +89,25 @@ def _has_cq_at(value: Any, self_id: str) -> bool:
 def scan_message(
     message: Any,
     *,
-    self_id: str = "",
+    self_id: str     = "",
     raw_message: str = "",
 ) -> MessageScan:
     """Scan a message payload once and extract text / media / @mention flags."""
     if isinstance(message, str):
         return MessageScan(
-            text=message,
-            has_media=False,
-            is_at_me=_has_cq_at(message, self_id) or _has_cq_at(raw_message, self_id),
+            text      = message,
+            has_media = False,
+            is_at_me  = _has_cq_at(message, self_id) or _has_cq_at(raw_message, self_id),
         )
 
     text_parts: list[str] = []
-    has_media = False
-    is_at_me = False
+    has_media             = False
+    is_at_me              = False
 
     for item in iter_message_segments(message):
         segment_type = item.get("type")
-        raw_data = item.get("data", {})
-        data = raw_data if isinstance(raw_data, Mapping) else {}
+        raw_data     = item.get("data", {})
+        data         = raw_data if isinstance(raw_data, Mapping) else {}
 
         if segment_type == "text":
             text_parts.append(str(data.get("text", "")))
@@ -126,9 +126,9 @@ def scan_message(
         is_at_me = True
 
     return MessageScan(
-        text="".join(text_parts),
-        has_media=has_media,
-        is_at_me=is_at_me,
+        text      = "".join(text_parts),
+        has_media = has_media,
+        is_at_me  = is_at_me,
     )
 
 
@@ -146,7 +146,7 @@ def contains_bot_name(text: str, bot_name: str) -> bool:
 def has_at_mention(
     event_or_message: Any,
     *,
-    self_id: str = "",
+    self_id: str     = "",
     raw_message: str = "",
 ) -> bool:
     message = (
@@ -169,9 +169,9 @@ def compile_bot_name_pattern(bot_name: str) -> re.Pattern[str] | None:
 def strip_message_prefix(
     text: str,
     *,
-    bot_name: str = "",
-    prefixes: tuple[str, ...] | None = None,
-    self_id: str = "",
+    bot_name: str                            = "",
+    prefixes: tuple[str, ...] | None         = None,
+    self_id: str                             = "",
     bot_name_pattern: re.Pattern[str] | None = None,
 ) -> str:
     stripped = text.strip()
@@ -222,39 +222,39 @@ def parse_text_command_context(
     text: str,
     event: dict[str, Any],
     *,
-    bot_name: str = "",
-    prefixes: tuple[str, ...] | None = None,
-    self_id: str = "",
+    bot_name: str                            = "",
+    prefixes: tuple[str, ...] | None         = None,
+    self_id: str                             = "",
     bot_name_pattern: re.Pattern[str] | None = None,
-    message_scan: MessageScan | None = None,
+    message_scan: MessageScan | None         = None,
 ) -> TextCommandContext:
-    prefixes = prefixes or ()
+    prefixes     = prefixes or ()
     message_scan = message_scan or scan_message(
         event.get("message"),
-        self_id=self_id,
-        raw_message=str(event.get("raw_message", "") or ""),
+        self_id     = self_id,
+        raw_message = str(event.get("raw_message", "") or ""),
     )
-    is_at_me = message_scan.is_at_me
+    is_at_me   = message_scan.is_at_me
     clean_text = strip_message_prefix(
         text,
-        bot_name=bot_name,
-        prefixes=prefixes,
-        self_id=self_id,
-        bot_name_pattern=bot_name_pattern,
+        bot_name         = bot_name,
+        prefixes         = prefixes,
+        self_id          = self_id,
+        bot_name_pattern = bot_name_pattern,
     )
-    has_bot_name = contains_bot_name(text, bot_name)
+    has_bot_name       = contains_bot_name(text, bot_name)
     has_command_prefix = any(text.startswith(p) for p in prefixes)
-    has_prefix = has_command_prefix or has_bot_name or is_at_me
-    is_only_bot_name = (text.strip() == bot_name) or (is_at_me and not clean_text)
-    is_url_only = is_clean_text_url_only(clean_text)
+    has_prefix         = has_command_prefix or has_bot_name or is_at_me
+    is_only_bot_name   = (text.strip() == bot_name) or (is_at_me and not clean_text)
+    is_url_only        = is_clean_text_url_only(clean_text)
     return TextCommandContext(
-        clean_text=clean_text,
-        is_at_me=is_at_me,
-        has_bot_name=has_bot_name,
-        has_command_prefix=has_command_prefix,
-        has_prefix=has_prefix,
-        is_only_bot_name=is_only_bot_name,
-        is_url_only=is_url_only,
+        clean_text         = clean_text,
+        is_at_me           = is_at_me,
+        has_bot_name       = has_bot_name,
+        has_command_prefix = has_command_prefix,
+        has_prefix         = has_prefix,
+        is_only_bot_name   = is_only_bot_name,
+        is_url_only        = is_url_only,
     )
 
 

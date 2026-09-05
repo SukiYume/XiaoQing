@@ -13,13 +13,16 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.13"]
     env:
       XIAOQING_REQUIRE_NODE: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python }}
           cache: pip
           cache-dependency-path: requirements.txt
       - uses: actions/setup-node@v4
@@ -27,8 +30,8 @@ jobs:
           node-version: "22"
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
-      - name: Ruff format
-        run: python -m ruff format --check .
+      - name: Project code style
+        run: python scripts/format_code.py --check
       - name: Ruff
         run: python -m ruff check .
       - name: Mypy

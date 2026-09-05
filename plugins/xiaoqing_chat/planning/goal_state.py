@@ -16,8 +16,8 @@ from ..store_base import AsyncKeyedStore, delete_json_artifacts
 
 @dataclass
 class GoalState:
-    ts: float = 0.0
-    goal: str = ""
+    ts: float   = 0.0
+    goal: str   = ""
     source: str = ""
 
 
@@ -32,20 +32,20 @@ class GoalStore(AsyncKeyedStore[GoalState]):
     def get(self, chat_id: str) -> GoalState:
         if chat_id in self._cache:
             return self._cache[chat_id]
-        st = GoalState()
+        st   = GoalState()
         path = self._path(chat_id)
         if path:
             obj = cast(object, self._load_json(path, default=None))
             if isinstance(obj, dict):
                 payload = cast(dict[str, object], obj)
-                ts_raw = payload.get("ts", 0.0)
+                ts_raw  = payload.get("ts", 0.0)
                 if isinstance(ts_raw, (int, float)):
                     st.ts = ts_raw
                 elif isinstance(ts_raw, str):
                     st.ts = float(ts_raw) if ts_raw else 0.0
                 else:
                     st.ts = 0.0
-                st.goal = str(payload.get("goal", "") or "").strip()
+                st.goal   = str(payload.get("goal", "") or "").strip()
                 st.source = str(payload.get("source", "") or "").strip()
         self._cache[chat_id] = st
         return st
@@ -67,7 +67,7 @@ class GoalStore(AsyncKeyedStore[GoalState]):
             g = cut + "…"
         st = GoalState(ts=time.time(), goal=g, source=(source or "").strip())
         self._cache[chat_id] = st
-        path = self._path(chat_id)
+        path                 = self._path(chat_id)
         if path:
             _ = self._save_json(path, {"ts": st.ts, "goal": st.goal, "source": st.source})
         return st
@@ -76,7 +76,7 @@ class GoalStore(AsyncKeyedStore[GoalState]):
         return await asyncio.to_thread(self.set, chat_id, goal=goal, source=source)
 
     def clear(self, chat_id: str) -> None:
-        _ = self._cache.pop(chat_id, None)
+        _    = self._cache.pop(chat_id, None)
         path = self._path(chat_id)
         if path:
             delete_json_artifacts(path)
@@ -90,7 +90,7 @@ def load_latest_topic_and_summary(data_dir: Path, chat_id: str) -> tuple[str, st
     return "", ""
 
 
-_RE_GOAL = re.compile(r"(?:目标|要点|意图)[:：]\s*(.{2,80})")
+_RE_GOAL                 = re.compile(r"(?:目标|要点|意图)[:：]\s*(.{2,80})")
 _LOW_INFORMATION_TURN_RE = re.compile(
     r"^(?:乐+|哈+|哈哈哈*|呵+|嘿+|草+|啊+|哦+|嗯+|噔噔咚|笑死|行|好|qs)$",
     re.IGNORECASE,

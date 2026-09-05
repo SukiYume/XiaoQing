@@ -1,3 +1,4 @@
+# 验证 arXiv 请求的超时、响应大小和错误分类。
 from __future__ import annotations
 
 import ast
@@ -17,9 +18,9 @@ from core.bounded_http import (
 )
 from tests.helpers.paths import REPOSITORY_ROOT
 
-_ARXIV_TODAY = "plugins.arxiv_filter.arxiv_today"
-_STEP2 = "plugins.arxiv_filter.train_model.data_prep.step2_fetch_all_astro_ph"
-_STEP3 = "plugins.arxiv_filter.train_model.data_prep.step3_build_dataset"
+_ARXIV_TODAY       = "plugins.arxiv_filter.arxiv_today"
+_STEP2             = "plugins.arxiv_filter.train_model.data_prep.step2_fetch_all_astro_ph"
+_STEP3             = "plugins.arxiv_filter.train_model.data_prep.step3_build_dataset"
 _XML_ENTITY_CANARY = b"""<?xml version="1.0"?>
 <!DOCTYPE feed [<!ENTITY secret "CR221_ENTITY_SECRET">]>
 <feed xmlns="http://www.w3.org/2005/Atom"><title>&secret;</title></feed>
@@ -62,7 +63,7 @@ def load_with_feedparser(monkeypatch: pytest.MonkeyPatch):
     loaded: list[str] = []
 
     def load(module_name: str, parse: Callable[[bytes], Any]) -> ModuleType:
-        fake_feedparser = ModuleType("feedparser")
+        fake_feedparser       = ModuleType("feedparser")
         fake_feedparser.parse = parse  # type: ignore[attr-defined]
         monkeypatch.setitem(sys.modules, "feedparser", fake_feedparser)
         sys.modules.pop(module_name, None)
@@ -77,8 +78,8 @@ def load_with_feedparser(monkeypatch: pytest.MonkeyPatch):
 
 class _RawBody:
     def __init__(self, chunks: list[bytes]) -> None:
-        self._chunks = chunks
-        self.stream_calls = 0
+        self._chunks                     = chunks
+        self.stream_calls                = 0
         self.decode_content: bool | None = None
 
     def stream(self, _chunk_size: int, *, decode_content: bool) -> Iterator[bytes]:
@@ -90,10 +91,10 @@ class _RawBody:
 class _RequestsResponse:
     def __init__(self, *, body: bytes, content_type: str) -> None:
         self.status_code = 200
-        self.url = "https://arxiv.org/list/astro-ph/new"
-        self.headers = {"Content-Type": content_type}
-        self.raw = _RawBody([body])
-        self.closed = False
+        self.url         = "https://arxiv.org/list/astro-ph/new"
+        self.headers     = {"Content-Type": content_type}
+        self.raw         = _RawBody([body])
+        self.closed      = False
 
     def close(self) -> None:
         self.closed = True
@@ -103,14 +104,14 @@ def _bounded_response(
     body: bytes, content_type: str = "application/atom+xml"
 ) -> BoundedHttpResponse:
     return BoundedHttpResponse(
-        url="https://export.arxiv.org/api/query",
-        status=200,
-        body=body,
-        media_type=content_type,
-        charset="UTF-8",
-        headers={"Content-Type": content_type},
-        wire_bytes=len(body),
-        decoded_bytes=len(body),
+        url           = "https://export.arxiv.org/api/query",
+        status        = 200,
+        body          = body,
+        media_type    = content_type,
+        charset       = "UTF-8",
+        headers       = {"Content-Type": content_type},
+        wire_bytes    = len(body),
+        decoded_bytes = len(body),
     )
 
 
@@ -124,11 +125,11 @@ def test_runtime_html_uses_streamed_wrapper_and_rejects_wire_overflow(
         module,
         "_HTML_BODY_LIMITS",
         BodyLimits(
-            max_wire_bytes=8,
-            max_decoded_bytes=8,
-            max_decompression_ratio=20,
-            ratio_grace_bytes=8,
-            chunk_bytes=4,
+            max_wire_bytes          = 8,
+            max_decoded_bytes       = 8,
+            max_decompression_ratio = 20,
+            ratio_grace_bytes       = 8,
+            chunk_bytes             = 4,
         ),
     )
     response = _RequestsResponse(body=b"123456789", content_type="text/html; charset=UTF-8")
@@ -207,7 +208,7 @@ def test_update_date_uses_explicit_english_month_mapping(
     load_with_feedparser,
 ) -> None:
     module = load_with_feedparser(_ARXIV_TODAY, lambda _body: None)
-    html = _VALID_HTML.replace(b"11 July 2026", b"4 February 2026")
+    html   = _VALID_HTML.replace(b"11 July 2026", b"4 February 2026")
     monkeypatch.setattr(
         module, "_fetch_arxiv_page", lambda *_args: module.BeautifulSoup(html, "html.parser")
     )
@@ -243,14 +244,14 @@ def test_step2_preserves_paging_and_validates_xml_before_feedparser(
             feed=_AttrDict(opensearch_totalresults="1"),
             entries=[
                 _AttrDict(
-                    id="https://arxiv.org/abs/2607.00001v1",
-                    title="  Bounded   transport ",
-                    summary=" Safe   Atom payload. ",
+                    id      = "https://arxiv.org/abs/2607.00001v1",
+                    title   = "  Bounded   transport ",
+                    summary = " Safe   Atom payload. ",
                 )
             ],
         )
 
-    module = load_with_feedparser(_STEP2, parse)
+    module                      = load_with_feedparser(_STEP2, parse)
     calls: list[dict[str, Any]] = []
 
     def fetch(*_args: Any, **kwargs: Any) -> BoundedHttpResponse:
@@ -283,7 +284,7 @@ def test_step2_entity_payload_never_reaches_feedparser(
     load_with_feedparser,
 ) -> None:
     parsed: list[bytes] = []
-    module = load_with_feedparser(_STEP2, lambda body: parsed.append(body))
+    module              = load_with_feedparser(_STEP2, lambda body: parsed.append(body))
     monkeypatch.setattr(module, "RETRY_LIMIT", 1)
     monkeypatch.setattr(
         module,
@@ -316,9 +317,9 @@ def test_step2_resume_preserves_total_results_and_incomplete_state(
     result = module.fetch_month(
         "202607010000",
         "202607312359",
-        initial_papers=previous,
-        start_offset=2000,
-        initial_total_results=4000,
+        initial_papers        = previous,
+        start_offset          = 2000,
+        initial_total_results = 4000,
     )
 
     assert result.completed is False
@@ -331,7 +332,7 @@ def test_step3_preserves_http_400_one_by_one_fallback(
     monkeypatch: pytest.MonkeyPatch,
     load_with_feedparser,
 ) -> None:
-    module = load_with_feedparser(_STEP3, lambda _body: None)
+    module   = load_with_feedparser(_STEP3, lambda _body: None)
     expected = {"2607.00001": {"title": "t", "abstract": "a"}}
 
     def fetch(*_args: Any, **kwargs: Any) -> BoundedHttpResponse:
@@ -350,7 +351,7 @@ def test_step3_entity_payload_never_reaches_feedparser(
     load_with_feedparser,
 ) -> None:
     parsed: list[bytes] = []
-    module = load_with_feedparser(_STEP3, lambda body: parsed.append(body))
+    module              = load_with_feedparser(_STEP3, lambda body: parsed.append(body))
     monkeypatch.setattr(module, "MAX_RETRIES", 1)
     monkeypatch.setattr(
         module,
@@ -373,14 +374,14 @@ def test_step3_single_fetch_preserves_max_results_and_feed_fields(
         return _AttrDict(
             entries=[
                 _AttrDict(
-                    id="https://arxiv.org/abs/2607.00001v1",
-                    title=" Bounded   transport ",
-                    summary=" Safe   Atom payload. ",
+                    id      = "https://arxiv.org/abs/2607.00001v1",
+                    title   = " Bounded   transport ",
+                    summary = " Safe   Atom payload. ",
                 )
             ]
         )
 
-    module = load_with_feedparser(_STEP3, parse)
+    module                      = load_with_feedparser(_STEP3, parse)
     calls: list[dict[str, Any]] = []
 
     def fetch(*_args: Any, **kwargs: Any) -> BoundedHttpResponse:
@@ -406,7 +407,7 @@ def test_step3_single_fetch_preserves_max_results_and_feed_fields(
 
 
 def test_sync_arxiv_paths_forbid_unbounded_requests_and_response_access() -> None:
-    root = REPOSITORY_ROOT
+    root  = REPOSITORY_ROOT
     paths = (
         root / "plugins" / "arxiv_filter" / "arxiv_today.py",
         root

@@ -23,13 +23,13 @@ def _open_session(
     payload: dict[str, Any],
 ):
     session = store.open_session_if_allowed(
-        kind=kind,
-        chat_id=chat_id,
-        payload=payload,
-        timeout_seconds=600,
-        cooldown_seconds=0,
-        max_pending=20,
-        now=time.time(),
+        kind             = kind,
+        chat_id          = chat_id,
+        payload          = payload,
+        timeout_seconds  = 600,
+        cooldown_seconds = 0,
+        max_pending      = 20,
+        now              = time.time(),
     )
     assert session is not None
     return session
@@ -44,7 +44,7 @@ async def test_review_commands_reuse_real_session_ids_and_reject_invalid_mutatio
 
     # 生产 ``_chat_id`` 使用 ``g<群号>``，同时避免 Windows 文件名中的冒号。
     chat_id = "g880721010"
-    store = ReviewStore()
+    store   = ReviewStore()
     store.bind(tmp_path)
     reflection = SimpleNamespace(goal_lock_seconds=600.0, max_avoid_patterns=5)
     hctx = SimpleNamespace(
@@ -74,9 +74,9 @@ async def test_review_commands_reuse_real_session_ids_and_reject_invalid_mutatio
 
     bad_reply = _open_session(
         store,
-        kind="bad_reply_pattern",
-        chat_id=chat_id,
-        payload={"goal": "自然参与群聊", "reason": "连续追问"},
+        kind    = "bad_reply_pattern",
+        chat_id = chat_id,
+        payload = {"goal": "自然参与群聊", "reason": "连续追问"},
     )
     assert "必须提供" in await call(f"answer {bad_reply.session_id}")
     unchanged = store.get_session(bad_reply.session_id)
@@ -103,9 +103,9 @@ async def test_review_commands_reuse_real_session_ids_and_reject_invalid_mutatio
 
     goal_session = _open_session(
         store,
-        kind="goal_strategy",
-        chat_id=chat_id,
-        payload={"goal": "自然聊天", "stats": "参与偏少"},
+        kind    = "goal_strategy",
+        chat_id = chat_id,
+        payload = {"goal": "自然聊天", "stats": "参与偏少"},
     )
     assert "已更新目标" in await call(
         f"answer {goal_session.session_id} goal: 主动参与值得接话的话题"
@@ -127,27 +127,27 @@ async def test_review_commands_reuse_real_session_ids_and_reject_invalid_mutatio
 
     rejected = _open_session(
         store,
-        kind="goal_strategy",
-        chat_id=chat_id,
-        payload={"goal": "保持自然"},
+        kind    = "goal_strategy",
+        chat_id = chat_id,
+        payload = {"goal": "保持自然"},
     )
     assert "已关闭" in await call(f"no {rejected.session_id}")
     assert store.get_session(rejected.session_id) is None
 
     other_chat = _open_session(
         store,
-        kind="goal_strategy",
-        chat_id="gother",
-        payload={"goal": "隔离会话"},
+        kind    = "goal_strategy",
+        chat_id = "gother",
+        payload = {"goal": "隔离会话"},
     )
     assert "不属于当前会话" in await call(f"close {other_chat.session_id}")
     assert store.get_session(other_chat.session_id) is not None
 
     protected = _open_session(
         store,
-        kind="bad_reply_pattern",
-        chat_id=chat_id,
-        payload={"goal": "权限测试"},
+        kind    = "bad_reply_pattern",
+        chat_id = chat_id,
+        payload = {"goal": "权限测试"},
     )
     monkeypatch.setattr(chat_handlers, "_is_admin_operator", lambda _event, _context: False)
     assert "仅 Bot 管理员" in await call(f"close {protected.session_id}")

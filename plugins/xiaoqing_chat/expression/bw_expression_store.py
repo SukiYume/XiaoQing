@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Sequence
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -22,22 +23,42 @@ class ExpressionRecord:
     content_list: list[str] = field(default_factory=list)
     count: int = 1
     last_active_time: float = field(default_factory=lambda: time.time())
-    checked: bool = False
-    rejected: bool = False
+    checked: bool    = False
+    rejected: bool   = False
     modified_by: str = "ai"
+
+
+class ExpressionSnapshot(list[ExpressionRecord]):
+    """随数据一起跨任务或线程传递基线，保存时只提交这次快照的增量。"""
+
+    def __init__(self, records: Sequence[ExpressionRecord]) -> None:
+        super().__init__(deepcopy(list(records)))
+        self.baseline = deepcopy(list(records))
 
 
 class ExpressionStore(StoreBase):
     def __init__(self) -> None:
         super().__init__()
-        self._cache: list[ExpressionRecord] | None = None
-        self._baseline: list[ExpressionRecord] = []
+        self._cache: list[ExpressionRecord] | None                        = None
+        self._baseline_context: ContextVar[list[ExpressionRecord] | None] = ContextVar(
+            "snapshot_baseline", default=None
+        )
+
+    @property
+    def _baseline(self) -> list[ExpressionRecord]:
+        """每个异步学习流程拥有独立快照，跨会话等待期间保持基线配对。"""
+        value = self._baseline_context.get()
+        return value if value is not None else []
+
+    @_baseline.setter
+    def _baseline(self, value: list[ExpressionRecord]) -> None:
+        self._baseline_context.set(value)
 
     def bind(self, data_dir: Path) -> None:
         if self._data_dir == data_dir:
             return
         super().bind(data_dir)
-        self._cache = None
+        self._cache    = None
         self._baseline = []
 
     def _path(self) -> Path | None:
@@ -55,10 +76,10 @@ class ExpressionStore(StoreBase):
         for item in raw:
             if not isinstance(item, dict):
                 continue
-            eid = str(item.get("expression_id", "") or "").strip()
-            chat_id = str(item.get("chat_id", "") or "").strip()
+            eid       = str(item.get("expression_id", "") or "").strip()
+            chat_id   = str(item.get("chat_id", "") or "").strip()
             situation = str(item.get("situation", "") or "").strip()
-            style = str(item.get("style", "") or "").strip()
+            style     = str(item.get("style", "") or "").strip()
             if not eid or not chat_id or not situation or not style:
                 continue
             content_list = item.get("content_list", [])
@@ -66,11 +87,11 @@ class ExpressionStore(StoreBase):
                 content_list = []
             out.append(
                 ExpressionRecord(
-                    expression_id=eid,
-                    chat_id=chat_id,
-                    situation=situation,
-                    style=style,
-                    content_list=[
+                    expression_id = eid,
+                    chat_id       = chat_id,
+                    situation     = situation,
+                    style         = style,
+                    content_list  = [
                         str(value).strip()
                         for value in content_list
                         if isinstance(value, str) and value.strip()
@@ -92,20 +113,19 @@ class ExpressionStore(StoreBase):
             return []
         # 使用 core 的规范路径锁，模块热重载前后的类实例也共享同一把锁。
         with keyed_path_lock(path):
-            if self._cache is None:
-                self._cache = self._read_records()
-                self._baseline = deepcopy(self._cache)
-            return deepcopy(self._cache)
+            self._cache    = self._read_records()
+            self._baseline = deepcopy(self._cache)
+            return ExpressionSnapshot(self._cache)
 
     def clear(self, chat_id: str) -> None:
         """删除一个会话的表达学习记录，并保留其它会话的记录。"""
 
         target = str(chat_id or "").strip()
-        path = self._path()
+        path   = self._path()
         if not target or path is None:
             return
         with keyed_path_lock(path):
-            latest = self._read_records()
+            latest    = self._read_records()
             remaining = [item for item in latest if item.chat_id != target]
             if len(remaining) != len(latest):
                 payload = [asdict(item) for item in remaining]
@@ -113,7 +133,7 @@ class ExpressionStore(StoreBase):
                     "bw_learner", "expressions.json", data=payload
                 ):
                     return
-            self._cache = deepcopy(remaining)
+            self._cache    = deepcopy(remaining)
             self._baseline = deepcopy(remaining)
 
     @staticmethod
@@ -146,23 +166,24 @@ class ExpressionStore(StoreBase):
         ):
             if preserve_rejection and field_name in {"checked", "rejected", "modified_by"}:
                 continue
-            original = getattr(baseline, field_name) if baseline is not None else None
+            original      = getattr(baseline, field_name) if baseline is not None else None
             desired_value = getattr(desired, field_name)
             if baseline is None or desired_value != original:
                 setattr(merged, field_name, desired_value)
         return merged
 
     def save(self, items: Sequence[ExpressionRecord]) -> None:
+        baseline      = items.baseline if isinstance(items, ExpressionSnapshot) else self._baseline
         desired_items = deepcopy(list(items))
-        path = self._path()
+        path          = self._path()
         if path is None:
             return
         with keyed_path_lock(path):
-            latest_items = self._read_records()
-            latest_by_id = {item.expression_id: item for item in latest_items}
-            baseline_by_id = {item.expression_id: item for item in self._baseline}
-            desired_by_id = {item.expression_id: item for item in desired_items}
-            merged_by_id = dict(latest_by_id)
+            latest_items   = self._read_records()
+            latest_by_id   = {item.expression_id: item for item in latest_items}
+            baseline_by_id = {item.expression_id: item for item in baseline}
+            desired_by_id  = {item.expression_id: item for item in desired_items}
+            merged_by_id   = dict(latest_by_id)
             for expression_id, desired in desired_by_id.items():
                 merged_by_id[expression_id] = self._merge_record(
                     latest_by_id.get(expression_id),
@@ -172,17 +193,19 @@ class ExpressionStore(StoreBase):
             for expression_id in set(baseline_by_id) - set(desired_by_id):
                 merged_by_id.pop(expression_id, None)
 
-            desired_order = [item.expression_id for item in desired_items]
+            desired_order    = [item.expression_id for item in desired_items]
             concurrent_order = [
                 item.expression_id
                 for item in latest_items
                 if item.expression_id not in baseline_by_id
                 and item.expression_id not in desired_by_id
             ]
-            order = [*concurrent_order, *desired_order]
+            order        = [*concurrent_order, *desired_order]
             merged_items = [merged_by_id[key] for key in order if key in merged_by_id]
-            payload = [asdict(item) for item in merged_items]
+            payload      = [asdict(item) for item in merged_items]
             if not self._save_json_to_path_parts("bw_learner", "expressions.json", data=payload):
                 return
-            self._cache = deepcopy(merged_items)
+            self._cache    = deepcopy(merged_items)
             self._baseline = deepcopy(merged_items)
+            if isinstance(items, ExpressionSnapshot):
+                items.baseline = deepcopy(desired_items)

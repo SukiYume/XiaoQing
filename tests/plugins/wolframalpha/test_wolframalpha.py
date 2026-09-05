@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -24,9 +23,9 @@ def _context(appid: object = "TEST-APPID") -> SimpleNamespace:
 
     return with_settings_reader(
         SimpleNamespace(
-            secrets={"plugins": {"wolframalpha": {"appid": appid}}},
-            http_session=object(),
-            logger=MagicMock(),
+            secrets      = {"plugins": {"wolframalpha": {"appid": appid}}},
+            http_session = object(),
+            logger       = MagicMock(),
         )
     )
 
@@ -38,14 +37,14 @@ def _response(
     charset: str | None = "utf-8",
 ) -> BoundedHttpResponse:
     return BoundedHttpResponse(
-        url="https://api.wolframalpha.com/test",
-        status=200,
-        body=body,
-        media_type=media_type,
-        charset=charset,
-        headers={"Content-Type": media_type},
-        wire_bytes=len(body),
-        decoded_bytes=len(body),
+        url           = "https://api.wolframalpha.com/test",
+        status        = 200,
+        body          = body,
+        media_type    = media_type,
+        charset       = charset,
+        headers       = {"Content-Type": media_type},
+        wire_bytes    = len(body),
+        decoded_bytes = len(body),
     )
 
 
@@ -62,15 +61,15 @@ class _RawResponse:
     """把有限响应数据暴露为 aiohttp 响应协议。"""
 
     def __init__(self, response: BoundedHttpResponse) -> None:
-        self.status = response.status
-        self.url = response.url
+        self.status  = response.status
+        self.url     = response.url
         content_type = response.media_type or "application/octet-stream"
         if response.charset is not None:
             content_type = f"{content_type}; charset={response.charset}"
-        self.headers = {"Content-Type": content_type}
+        self.headers        = {"Content-Type": content_type}
         self.content_length = len(response.body)
-        self.content = _BodyStream(response.body)
-        self.closed = False
+        self.content        = _BodyStream(response.body)
+        self.closed         = False
 
     async def __aenter__(self):
         return self
@@ -86,7 +85,7 @@ class _Session:
     """记录请求并依次返回协议正确的原始响应。"""
 
     def __init__(self, *responses: BoundedHttpResponse) -> None:
-        self.responses = list(responses)
+        self.responses                                       = list(responses)
         self.calls: list[tuple[str, str, dict[str, object]]] = []
 
     def request(self, method: str, url: str, **kwargs):
@@ -241,8 +240,8 @@ async def test_handle_returns_public_error_for_parser_failure(monkeypatch) -> No
 
 @pytest.mark.asyncio
 async def test_simple_answer_uses_fixed_get_query_timeout_and_limits() -> None:
-    context = _context()
-    session = _Session(_response(b"42", "text/plain"))
+    context              = _context()
+    session              = _Session(_response(b"42", "text/plain"))
     context.http_session = session
 
     result = await wolframalpha._get_answer("6*7", "APPID", context)
@@ -263,7 +262,7 @@ async def test_simple_answer_uses_fixed_get_query_timeout_and_limits() -> None:
 
 @pytest.mark.asyncio
 async def test_simple_answer_handles_empty_and_long_results() -> None:
-    context = _context()
+    context              = _context()
     context.http_session = _Session(_response(b"   ", "text/plain"))
     assert "未找到结果" in str(await wolframalpha._get_answer("x", "APPID", context))
 
@@ -271,7 +270,7 @@ async def test_simple_answer_handles_empty_and_long_results() -> None:
         _response(b"x" * (wolframalpha.MAX_RESULT_TEXT_LENGTH + 1), "text/plain"),
     )
     result = await wolframalpha._get_answer("x", "APPID", context)
-    text = result[0]["data"]["text"]
+    text   = result[0]["data"]["text"]
     assert text.endswith("…")
     assert len(text) < 3_000
 
@@ -292,7 +291,7 @@ async def test_answer_delegates_step_and_complete_modes(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_answer_rejects_missing_http_session() -> None:
-    context = _context()
+    context              = _context()
     context.http_session = None
     assert "HTTP 会话未初始化" in str(await wolframalpha._get_answer("1+1", "APPID", context))
 
@@ -302,7 +301,7 @@ async def test_answer_rejects_missing_http_session() -> None:
     ("exception", "marker"),
     [
         (HttpStatusError(429), "HTTP 429"),
-        (asyncio.TimeoutError(), "查询超时"),
+        (TimeoutError(), "查询超时"),
         (aiohttp.ClientError("network"), "网络错误"),
         (ResponseFormatError("bad response"), "格式异常"),
         (RuntimeError("unexpected"), "XQ-PLUGIN-UNEXPECTED"),

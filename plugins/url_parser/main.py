@@ -31,10 +31,10 @@ from core.safe_http import (
     validate_public_fetch_target,
 )
 
-MessageSegment = dict[str, Any]
+MessageSegment  = dict[str, Any]
 MessageSegments = list[MessageSegment]
-OneBotEvent = dict[str, Any]
-T = TypeVar("T")
+OneBotEvent     = dict[str, Any]
+T               = TypeVar("T")
 
 
 class Context(Protocol):
@@ -55,32 +55,32 @@ class _RunSync(Protocol):
 # ──────────────────── Core 边界与资源上限 ────────────────────
 
 
-segments = cast(Callable[[object], MessageSegments], _core_segments)
+segments      = cast(Callable[[object], MessageSegments], _core_segments)
 image_segment = cast(Callable[[str], MessageSegment], _core_image)
-run_sync = cast(_RunSync, _core_run_sync)
+run_sync      = cast(_RunSync, _core_run_sync)
 
 logger = logging.getLogger(__name__)
 
-MAX_INPUT_URL_LENGTH = 2048
-MAX_HTML_BYTES = 2 * 1024 * 1024
-MAX_TITLE_LENGTH = 200
-MAX_DESC_LENGTH = 100
-MAX_IMAGE_URL_LENGTH = 4096
-MAX_IMAGE_BYTES = 5 * 1024 * 1024
-MAX_IMAGE_PIXELS = 20_000_000
-MAX_IMAGE_FRAMES = 120
+MAX_INPUT_URL_LENGTH    = 2048
+MAX_HTML_BYTES          = 2 * 1024 * 1024
+MAX_TITLE_LENGTH        = 200
+MAX_DESC_LENGTH         = 100
+MAX_IMAGE_URL_LENGTH    = 4096
+MAX_IMAGE_BYTES         = 5 * 1024 * 1024
+MAX_IMAGE_PIXELS        = 20_000_000
+MAX_IMAGE_FRAMES        = 120
 MAX_CONCURRENT_PREVIEWS = 4
-REQUEST_TIMEOUT = 10
+REQUEST_TIMEOUT         = 10
 
 PREVIEW_CACHE_LIMITS = FileCacheLimits(
-    max_entries=128,
-    max_bytes=128 * 1024 * 1024,
-    ttl_seconds=7 * 24 * 60 * 60,
+    max_entries = 128,
+    max_bytes   = 128 * 1024 * 1024,
+    ttl_seconds = 7 * 24 * 60 * 60,
 )
 
-_PREVIEW_EXTENSIONS = (".png", ".webp", ".jpg")
+_PREVIEW_EXTENSIONS      = (".png", ".webp", ".jpg")
 _IMAGE_FORMAT_EXTENSIONS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
-_USER_AGENT = (
+_USER_AGENT              = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/136.0.0.0 Safari/537.36"
@@ -129,7 +129,7 @@ def _parse_preview_html(html: str) -> tuple[str, str, str]:
 
     soup = BeautifulSoup(html, "html.parser")
     raw_title = soup.title.get_text(" ", strip=True) if soup.title is not None else ""
-    title = _compact_text(raw_title, MAX_TITLE_LENGTH)
+    title       = _compact_text(raw_title, MAX_TITLE_LENGTH)
     description = _compact_text(
         _meta_content(
             soup,
@@ -164,15 +164,15 @@ def _detect_image_extension(payload: bytes) -> str:
     """用 core 的逐帧校验返回真实图片格式。"""
 
     limits = ImageValidationLimits(
-        max_bytes=MAX_IMAGE_BYTES,
-        max_pixels=MAX_IMAGE_PIXELS,
-        max_frames=MAX_IMAGE_FRAMES,
+        max_bytes  = MAX_IMAGE_BYTES,
+        max_pixels = MAX_IMAGE_PIXELS,
+        max_frames = MAX_IMAGE_FRAMES,
     )
     try:
         return validate_image_bytes(
             payload,
-            limits=limits,
-            format_extensions=_IMAGE_FORMAT_EXTENSIONS,
+            limits            = limits,
+            format_extensions = _IMAGE_FORMAT_EXTENSIONS,
         ).extension
     except ImageValidationError as exc:
         if exc.reason == "unsupported_format":
@@ -203,9 +203,9 @@ def _validated_cached_preview(
             validate_image_path(
                 path,
                 limits=ImageValidationLimits(
-                    max_bytes=MAX_IMAGE_BYTES,
-                    max_pixels=MAX_IMAGE_PIXELS,
-                    max_frames=MAX_IMAGE_FRAMES,
+                    max_bytes  = MAX_IMAGE_BYTES,
+                    max_pixels = MAX_IMAGE_PIXELS,
+                    max_frames = MAX_IMAGE_FRAMES,
                 ),
                 format_extensions=_IMAGE_FORMAT_EXTENSIONS,
             )
@@ -232,7 +232,7 @@ async def _cache_preview_image(
     try:
         # 缓存命中前仍重新验证目标，避免旧缓存绕过当前 URL/DNS 安全策略。
         await validate_public_fetch_target(image_url)
-        cache = _preview_cache(context)
+        cache  = _preview_cache(context)
         digest = hashlib.sha256(image_url.encode("utf-8")).hexdigest()
         cached = await run_sync(
             _validated_cached_preview,
@@ -244,16 +244,16 @@ async def _cache_preview_image(
 
         fetched = await fetch_public_bytes(
             image_url,
-            headers={"User-Agent": _USER_AGENT},
-            timeout_seconds=REQUEST_TIMEOUT,
-            max_bytes=MAX_IMAGE_BYTES,
-            allowed_content_type_prefixes=("image/",),
-            allowed_schemes=("http", "https"),
+            headers                       = {"User-Agent": _USER_AGENT},
+            timeout_seconds               = REQUEST_TIMEOUT,
+            max_bytes                     = MAX_IMAGE_BYTES,
+            allowed_content_type_prefixes = ("image/",),
+            allowed_schemes               = ("http", "https"),
         )
         if fetched is None or not fetched.body or len(fetched.body) > MAX_IMAGE_BYTES:
             return None
 
-        extension = await run_sync(_detect_image_extension, fetched.body)
+        extension  = await run_sync(_detect_image_extension, fetched.body)
         image_path = await run_sync(cache.put, f"{digest}{extension}", fetched.body)
         return str(image_path) if image_path is not None else None
     except (SafeHttpError, UnsafeUrlError, ValueError) as exc:
@@ -263,8 +263,8 @@ async def _cache_preview_image(
         public_error_message(
             context,
             exc,
-            logger=logger,
-            component="url_parser.preview_image",
+            logger    = logger,
+            component = "url_parser.preview_image",
         )
         return None
 
@@ -274,8 +274,8 @@ async def _build_preview(url: str, context: Context) -> MessageSegments:
 
     fetched = await fetch_public_html(
         url,
-        headers={"User-Agent": _USER_AGENT},
-        timeout_seconds=REQUEST_TIMEOUT,
+        headers         = {"User-Agent": _USER_AGENT},
+        timeout_seconds = REQUEST_TIMEOUT,
     )
     if fetched is None or len(fetched.body) > MAX_HTML_BYTES:
         return []
@@ -328,8 +328,8 @@ async def handle_url(url: str, event: OneBotEvent, context: Context) -> MessageS
         public_error_message(
             context,
             exc,
-            logger=logger,
-            component="url_parser.handle_url",
+            logger    = logger,
+            component = "url_parser.handle_url",
         )
         return []
 

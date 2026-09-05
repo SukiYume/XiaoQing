@@ -248,6 +248,15 @@ Web 后端使用 FastAPI 与 uvicorn，API 前缀为 `/api`，静态前端位于
 
 ---
 
+## 数据一致性与恢复
+
+- Web 完整编辑携带打开表单时的版本号。另一个窗口先保存时，旧窗口收到冲突提示并保留输入，重新读取后可继续编辑。
+- 普通用户可以签发和吊销自己的访问令牌。共享 Web 服务的 `start` 与 `stop` 命令需要机器人管理员权限。
+- 日程省略时区时使用用户设置。Markdown 日期范围与时间显示使用用户时区，具体时间保留 UTC 偏移；Widget 日历同步也保留偏移，手机改变时区后真实时刻保持一致。
+- 修改任务截止时间会重算相对提醒；明确清空提醒会同步清除规则。撤销删除在同一事务恢复条目与待发队列，已发送或已确认历史继续保留。
+- 账目支持三字母币种代码。收支、结余、分类与账户统计按币种分组，各币种金额独立展示。系统当前没有汇率换算功能。Ledger 与 Stats 支持输入三位币种代码，默认 CNY；Dashboard 默认展示 CNY 走势，并列出其他币种汇总；Widget 按币种标注明细与摘要。
+- `.pendo.zip` 每类数据最多 100,000 条，五类条目与日程集合合计最多 600,000 条；导入与导出采用相同记录容量。单个解压成员最多 50 MiB，全部解压成员合计最多 100 MiB，上传最多 100 MiB。Unicode 正文和中文、表情文件名支持往返。
+
 ## 💾 数据模型
 
 运行数据位于 `data/pendo/pendo.db`。主要表如下：
@@ -256,7 +265,7 @@ Web 后端使用 FastAPI 与 uvicorn，API 前缀为 `/api`，静态前端位于
 | --- | --- |
 | `items` | 日程 leaf、待办、笔记、日记和账本主记录 |
 | `event_collections` | 重复日程与多节点日程集合 |
-| `reminder_logs` | 已投递提醒记录 |
+| `reminder_logs` | 提醒队列、投递租约以及发送与确认历史 |
 | `scheduled_delivery_outbox` | 定时消息待办与逐目标确认 |
 | `operation_logs` | 编辑、删除与撤销快照 |
 | `user_settings` | 时区、静默时段、简报和 AI 授权 |
@@ -266,7 +275,7 @@ Web 后端使用 FastAPI 与 uvicorn，API 前缀为 `/api`，静态前端位于
 | `web_session_registry` | 浏览器会话摘要、设备和期限 |
 | `widget_token_registry` | Widget Token 身份、期限与撤销状态 |
 
-所有业务查询按 `user_id` 隔离。数据库使用 WAL、外键、busy timeout、事务和 schema migration。自然语言中的日程钟点先按用户或日程 IANA 时区解释，时间戳按 UTC 保存，展示时转换回对应 IANA 时区。
+所有业务查询按 `owner_id`（所属 QQ 用户）隔离。数据库使用 WAL、外键、busy timeout、事务和 schema migration。自然语言中的日程钟点先按用户或日程 IANA 时区解释，时间戳按 UTC 保存，展示时转换回对应 IANA 时区。
 
 ---
 

@@ -84,11 +84,11 @@ class XiaoQingApp(
     def __init__(
         self,
         root: Path,
-        config_manager: ConfigManager | None = None,
-        router: CommandRouter | None = None,
-        plugin_manager: PluginManager | None = None,
-        dispatcher: Dispatcher | None = None,
-        scheduler: SchedulerManager | None = None,
+        config_manager: ConfigManager | None   = None,
+        router: CommandRouter | None           = None,
+        plugin_manager: PluginManager | None   = None,
+        dispatcher: Dispatcher | None          = None,
+        scheduler: SchedulerManager | None     = None,
         session_manager: SessionManager | None = None,
     ) -> None:
         self.root: Path = root
@@ -99,7 +99,7 @@ class XiaoQingApp(
             root / "config" / "secrets.json",
         )
         self._plugin_settings_cache: dict[tuple[str, int], PluginSettingsSnapshot] = {}
-        self._plugin_settings_cache_revision: int | None = None
+        self._plugin_settings_cache_revision: int | None                           = None
 
         # 初始化日志系统（使用新的日志模块）
         self.log_manager: LogManager = setup_logging(
@@ -111,37 +111,37 @@ class XiaoQingApp(
         self.http_session: aiohttp.ClientSession | None = None
 
         # OneBot 通信
-        self.http_sender: OneBotHttpSender | None = None
-        self.ws_client: OneBotWsClient | None = None
+        self.http_sender: OneBotHttpSender | None   = None
+        self.ws_client: OneBotWsClient | None       = None
         self.inbound_manager: InboundManager | None = None
-        self.identity_service = AppIdentityService()
+        self.identity_service                       = AppIdentityService()
         # Kept as an internal alias for existing diagnostics; ownership and
         # replacement semantics live in AppIdentityService.
         self._admin_set = self.identity_service.admin_ids
 
         # 核心组件
         self.router: CommandRouter = router or CommandRouter()
-        self.plugins_dir: Path = root / "plugins"
-        poll_interval = _coerce_runtime_number(
+        self.plugins_dir: Path     = root / "plugins"
+        poll_interval              = _coerce_runtime_number(
             self.config_manager.config.get("plugin_poll_interval", 3600),
-            key="plugin_poll_interval",
-            default=3600.0,
-            integer=False,
-            minimum=0.01,
-            maximum=86400.0,
+            key     = "plugin_poll_interval",
+            default = 3600.0,
+            integer = False,
+            minimum = 0.01,
+            maximum = 86400.0,
         )
-        context_factory = self._build_plugin_context
-        manager_factory = PluginManager
+        context_factory      = self._build_plugin_context
+        manager_factory      = PluginManager
         configured_data_root = self.config_manager.config.get("data_root")
-        plugin_data_root = (
+        plugin_data_root     = (
             root / "data" if configured_data_root is None else Path(str(configured_data_root))
         )
         self.plugin_manager: PluginManager = plugin_manager or manager_factory(
             self.plugins_dir,
             self.router,
             context_factory,
-            poll_interval=poll_interval,
-            data_root=plugin_data_root,
+            poll_interval = poll_interval,
+            data_root     = plugin_data_root,
         )
         self._configure_plugin_execution(self.config_manager.config)
         self.scheduler: SchedulerManager = scheduler or SchedulerManager(
@@ -152,11 +152,11 @@ class XiaoQingApp(
         # 会话管理器（用于多轮对话）
         session_timeout = _coerce_runtime_number(
             self.config_manager.config.get("session_timeout", DEFAULT_SESSION_TIMEOUT_SEC),
-            key="session_timeout",
-            default=DEFAULT_SESSION_TIMEOUT_SEC,
-            integer=False,
-            minimum=0.001,
-            maximum=604800.0,
+            key     = "session_timeout",
+            default = DEFAULT_SESSION_TIMEOUT_SEC,
+            integer = False,
+            minimum = 0.001,
+            maximum = 604800.0,
         )
         self.session_manager: SessionManager = session_manager or SessionManager(
             default_timeout=session_timeout
@@ -165,14 +165,14 @@ class XiaoQingApp(
         # 消息分发器
         concurrency = _coerce_runtime_number(
             self.config_manager.config.get("max_concurrency", DEFAULT_MAX_CONCURRENCY),
-            key="max_concurrency",
-            default=DEFAULT_MAX_CONCURRENCY,
-            integer=True,
-            minimum=1,
-            maximum=1024,
+            key     = "max_concurrency",
+            default = DEFAULT_MAX_CONCURRENCY,
+            integer = True,
+            minimum = 1,
+            maximum = 1024,
         )
         self._dispatcher_concurrency = concurrency
-        semaphore = AdjustableSemaphore(concurrency)
+        semaphore                    = AdjustableSemaphore(concurrency)
 
         self.dispatcher: Dispatcher = dispatcher or Dispatcher(
             self.router,
@@ -282,9 +282,9 @@ class XiaoQingApp(
 
         return self.identity_service.issue_user_principal(
             event,
-            user_id=user_id,
-            group_id=group_id,
-            is_private=is_private,
+            user_id    = user_id,
+            group_id   = group_id,
+            is_private = is_private,
         )
 
     def _load_admins(self, secrets: Mapping[str, Any] | None = None) -> None:

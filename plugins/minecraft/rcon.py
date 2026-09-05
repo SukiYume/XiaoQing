@@ -13,8 +13,8 @@ from .audit import audit_error_type
 logger = logging.getLogger(__name__)
 
 # Minecraft 按最多 4096 个 Java 字符拆分响应；UTF-8 最坏需要四倍字节空间。
-RCON_MAX_CHUNK_UNITS = 4096
-RCON_MAX_PACKET_BODY_BYTES = RCON_MAX_CHUNK_UNITS * 4 + 10
+RCON_MAX_CHUNK_UNITS            = 4096
+RCON_MAX_PACKET_BODY_BYTES      = RCON_MAX_CHUNK_UNITS * 4 + 10
 RCON_MAX_OUTBOUND_PAYLOAD_BYTES = 4096
 
 
@@ -22,36 +22,36 @@ class PacketType(IntEnum):
     """Source RCON 包类型；认证响应与命令请求共用数值 2。"""
 
     RESPONSE = 0
-    COMMAND = 2
-    LOGIN = 3
+    COMMAND  = 2
+    LOGIN    = 3
 
 
 class RconErrorKind(str, Enum):
     """可安全返回给命令层的失败分类。"""
 
-    INPUT = "input"
-    TRANSPORT = "transport"
-    AUTH = "auth"
-    TIMEOUT = "timeout"
-    PROTOCOL = "protocol"
+    INPUT          = "input"
+    TRANSPORT      = "transport"
+    AUTH           = "auth"
+    TIMEOUT        = "timeout"
+    PROTOCOL       = "protocol"
     RESPONSE_LIMIT = "response_limit"
-    INTERNAL = "internal"
+    INTERNAL       = "internal"
 
 
 @dataclass(frozen=True, slots=True)
 class RconConnectResult:
     success: bool
     error_kind: RconErrorKind | None = None
-    error_message: str = ""
+    error_message: str               = ""
 
 
 @dataclass(frozen=True, slots=True)
 class RconCommandResult:
     success: bool
-    response: str = ""
+    response: str                    = ""
     error_kind: RconErrorKind | None = None
-    error_message: str = ""
-    truncated: bool = False
+    error_message: str               = ""
+    truncated: bool                  = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,7 +86,7 @@ class RconPacket:
         if "\0" in self.payload:
             raise RconProtocolError("RCON payload contains an embedded NUL")
         payload_bytes = self.payload.encode("utf-8")
-        length = 10 + len(payload_bytes)
+        length        = 10 + len(payload_bytes)
         if length > RCON_MAX_PACKET_BODY_BYTES:
             raise RconProtocolError("RCON packet exceeds the safety limit")
         return (
@@ -125,8 +125,8 @@ class RconPacket:
 class RconClient:
     """单连接、串行执行并在失败后自动重建的 Source RCON 客户端。"""
 
-    MAX_PACKET_BYTES = RCON_MAX_PACKET_BODY_BYTES
-    MAX_RESPONSE_BYTES = 1024 * 1024
+    MAX_PACKET_BYTES       = RCON_MAX_PACKET_BODY_BYTES
+    MAX_RESPONSE_BYTES     = 1024 * 1024
     RESPONSE_CHUNK_TIMEOUT = 0.5
 
     def __init__(self, host: str, port: int, password: str, timeout: float = 10.0) -> None:
@@ -154,16 +154,16 @@ class RconClient:
         ):
             raise ValueError("RCON timeout is invalid")
 
-        self.host = host
-        self.port = port
-        self.password = password
-        self.timeout = float(timeout)
+        self.host                                 = host
+        self.port                                 = port
+        self.password                             = password
+        self.timeout                              = float(timeout)
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
-        self._request_id = 0
+        self._request_id                          = 0
         # 建连、认证、命令和关闭共享一把锁，避免并发建连覆盖 reader/writer。
         self._operation_lock = asyncio.Lock()
-        self._connected = False
+        self._connected      = False
 
     @property
     def connected(self) -> bool:
@@ -219,7 +219,7 @@ class RconClient:
             await self._disconnect_locked()
 
     async def _disconnect_locked(self) -> None:
-        was_open = self._connected or self._writer is not None
+        was_open        = self._connected or self._writer is not None
         self._connected = False
         writer, self._writer = self._writer, None
         self._reader = None
@@ -243,9 +243,9 @@ class RconClient:
         input_error = self._validate_command(cmd)
         if input_error:
             return RconCommandResult(
-                success=False,
-                error_kind=RconErrorKind.INPUT,
-                error_message=input_error,
+                success       = False,
+                error_kind    = RconErrorKind.INPUT,
+                error_message = input_error,
             )
 
         async with self._operation_lock:
@@ -253,16 +253,16 @@ class RconClient:
                 connection = await self._connect_locked()
                 if not connection.success:
                     return RconCommandResult(
-                        success=False,
-                        error_kind=connection.error_kind,
-                        error_message=connection.error_message,
+                        success       = False,
+                        error_kind    = connection.error_kind,
+                        error_message = connection.error_message,
                     )
             try:
                 response = await self._send_command(cmd)
                 return RconCommandResult(
-                    success=True,
-                    response=response.payload,
-                    truncated=response.truncated,
+                    success   = True,
+                    response  = response.payload,
+                    truncated = response.truncated,
                 )
             except asyncio.CancelledError:
                 await self._disconnect_locked()
@@ -307,6 +307,9 @@ class RconClient:
             )
         except asyncio.IncompleteReadError as exc:
             raise RconProtocolError("RCON packet body was truncated") from exc
+        except TimeoutError as exc:
+            # 包头已经消费，正文超时会破坏下次命令的协议边界。
+            raise RconProtocolError("RCON packet body timed out") from exc
         response, _remaining = RconPacket.decode(header + body)
         return response
 
@@ -345,8 +348,8 @@ class RconClient:
             raise RconAuthenticationError("RCON password was rejected")
         self._validate_response(
             response,
-            request_id=request_id,
-            packet_type=PacketType.COMMAND,
+            request_id  = request_id,
+            packet_type = PacketType.COMMAND,
         )
         if response.payload:
             raise RconProtocolError("RCON auth response payload must be empty")
@@ -354,7 +357,7 @@ class RconClient:
     @staticmethod
     def _may_have_continuation(payload: str) -> bool:
         payload_bytes = payload.encode("utf-8")
-        java_units = len(payload.encode("utf-16-le")) // 2
+        java_units    = len(payload.encode("utf-16-le")) // 2
         return len(payload_bytes) == RCON_MAX_CHUNK_UNITS or java_units == RCON_MAX_CHUNK_UNITS
 
     async def _send_command(self, payload: str) -> _CollectedResponse:
@@ -363,16 +366,16 @@ class RconClient:
         response = await self._read_packet(self.timeout)
         self._validate_response(
             response,
-            request_id=request_id,
-            packet_type=PacketType.RESPONSE,
+            request_id  = request_id,
+            packet_type = PacketType.RESPONSE,
         )
 
-        payload_parts = [response.payload]
+        payload_parts  = [response.payload]
         response_bytes = len(response.payload.encode("utf-8"))
         if response_bytes > self.MAX_RESPONSE_BYTES:
             raise RconResponseLimitError("RCON cumulative response exceeded the safety limit")
         response_deadline = asyncio.get_running_loop().time() + self.timeout
-        truncated = False
+        truncated         = False
 
         while self._may_have_continuation(response.payload):
             remaining = response_deadline - asyncio.get_running_loop().time()
@@ -382,12 +385,14 @@ class RconClient:
                 response = await self._read_packet(min(self.RESPONSE_CHUNK_TIMEOUT, remaining))
             except TimeoutError:
                 # Minecraft 对“长度恰为整块”的响应不发送额外终止包。
+                # 关闭这条连接，使迟到续包无法污染下一条命令。
+                await self._disconnect_locked()
                 truncated = True
                 break
             self._validate_response(
                 response,
-                request_id=request_id,
-                packet_type=PacketType.RESPONSE,
+                request_id  = request_id,
+                packet_type = PacketType.RESPONSE,
             )
             if not response.payload:
                 break

@@ -10,7 +10,7 @@ from typing import Any
 
 from core.message import contains_bot_name, iter_message_segments
 
-_PRONOUN_RE = r"(?:她|他|它|ta)"
+_PRONOUN_RE                        = r"(?:她|他|它|ta)"
 _RECENT_BOT_ANCHOR_MAX_AGE_SECONDS = 10 * 60
 
 _COREFERENCE_ATTENTION_PATTERNS = tuple(
@@ -28,13 +28,13 @@ _COREFERENCE_ATTENTION_PATTERNS = tuple(
 class AttentionDecision:
     mentioned: bool
     forced: bool
-    force_reason: str = ""
-    command_forced: bool = False
-    private_forced: bool = False
-    direct_mentioned: bool = False
+    force_reason: str             = ""
+    command_forced: bool          = False
+    private_forced: bool          = False
+    direct_mentioned: bool        = False
     pending_bot_name_forced: bool = False
-    reply_to_bot: bool = False
-    coreference_mentioned: bool = False
+    reply_to_bot: bool            = False
+    coreference_mentioned: bool   = False
 
 
 async def decide_attention(
@@ -53,67 +53,67 @@ async def decide_attention(
     """判断本轮是否在呼叫小青；普通群聊插话概率仍由频率控制模块负责。"""
     if command_forced:
         return AttentionDecision(
-            mentioned=True,
-            forced=True,
-            force_reason="command",
-            command_forced=True,
-            direct_mentioned=direct_mentioned,
-            pending_bot_name_forced=pending_bot_name_forced,
+            mentioned               = True,
+            forced                  = True,
+            force_reason            = "command",
+            command_forced          = True,
+            direct_mentioned        = direct_mentioned,
+            pending_bot_name_forced = pending_bot_name_forced,
         )
     if is_private and not enable_private_brain_chat:
         return AttentionDecision(
-            mentioned=True,
-            forced=True,
-            force_reason="private",
-            private_forced=True,
-            direct_mentioned=direct_mentioned,
-            pending_bot_name_forced=pending_bot_name_forced,
+            mentioned               = True,
+            forced                  = True,
+            force_reason            = "private",
+            private_forced          = True,
+            direct_mentioned        = direct_mentioned,
+            pending_bot_name_forced = pending_bot_name_forced,
         )
     if direct_mentioned:
         return AttentionDecision(
-            mentioned=True,
-            forced=True,
-            force_reason="mentioned",
-            direct_mentioned=True,
-            pending_bot_name_forced=pending_bot_name_forced,
+            mentioned               = True,
+            forced                  = True,
+            force_reason            = "mentioned",
+            direct_mentioned        = True,
+            pending_bot_name_forced = pending_bot_name_forced,
         )
     if pending_bot_name_forced:
         return AttentionDecision(
-            mentioned=True,
-            forced=True,
-            force_reason="bot_name_followup",
-            pending_bot_name_forced=True,
+            mentioned               = True,
+            forced                  = True,
+            force_reason            = "bot_name_followup",
+            pending_bot_name_forced = True,
         )
 
     reply_to_bot = await is_reply_to_bot(event=event, state=state, chat_id=chat_id)
     if reply_to_bot:
         return AttentionDecision(
-            mentioned=True,
-            forced=True,
-            force_reason="reply_to_bot",
-            reply_to_bot=True,
+            mentioned    = True,
+            forced       = True,
+            force_reason = "reply_to_bot",
+            reply_to_bot = True,
         )
 
     coreference_mentioned = await is_bot_coreference_mention(
-        text=text,
-        event=event,
-        state=state,
-        chat_id=chat_id,
-        bot_name=bot_name,
+        text     = text,
+        event    = event,
+        state    = state,
+        chat_id  = chat_id,
+        bot_name = bot_name,
     )
     if coreference_mentioned:
         return AttentionDecision(
-            mentioned=True,
-            forced=True,
-            force_reason="coreference_mention",
-            coreference_mentioned=True,
+            mentioned             = True,
+            forced                = True,
+            force_reason          = "coreference_mention",
+            coreference_mentioned = True,
         )
 
     return AttentionDecision(
-        mentioned=False,
-        forced=False,
-        direct_mentioned=False,
-        pending_bot_name_forced=pending_bot_name_forced,
+        mentioned               = False,
+        forced                  = False,
+        direct_mentioned        = False,
+        pending_bot_name_forced = pending_bot_name_forced,
     )
 
 
@@ -130,8 +130,8 @@ async def is_bot_coreference_mention(
     history = await _recent_history(state, chat_id, max_items=8)
     return _has_recent_bot_anchor(
         history,
-        bot_name=bot_name,
-        current_message_id=event.get("message_id"),
+        bot_name           = bot_name,
+        current_message_id = event.get("message_id"),
     )
 
 
@@ -164,7 +164,7 @@ def _normalize_for_coreference(text: str) -> str:
 
 
 async def _recent_history(state: Any, chat_id: str, *, max_items: int) -> list[Any]:
-    store = getattr(state, "memory_store", None)
+    store  = getattr(state, "memory_store", None)
     getter = getattr(store, "get_recent_async", None)
     if not callable(getter):
         return []
@@ -185,7 +185,7 @@ def _has_recent_bot_anchor(
     bot_name: str,
     current_message_id: Any,
 ) -> bool:
-    now = time.time()
+    now        = time.time()
     current_id = str(current_message_id) if current_message_id not in (None, "") else ""
     for msg in reversed(history):
         msg_id = getattr(msg, "message_id", None)
@@ -194,8 +194,8 @@ def _has_recent_bot_anchor(
         ts = float(getattr(msg, "ts", 0.0) or 0.0)
         if ts and now - ts > _RECENT_BOT_ANCHOR_MAX_AGE_SECONDS:
             continue
-        role = str(getattr(msg, "role", "") or "").lower()
-        name = str(getattr(msg, "name", "") or "")
+        role    = str(getattr(msg, "role", "") or "").lower()
+        name    = str(getattr(msg, "name", "") or "")
         content = str(getattr(msg, "content", "") or "")
         if role == "assistant":
             return True
@@ -209,7 +209,7 @@ def _reply_segment_message_ids(event: dict[str, Any]) -> set[str]:
     for segment in iter_message_segments(event.get("message")):
         if str(segment.get("type", "") or "") != "reply":
             continue
-        data = segment.get("data", {}) or {}
+        data   = segment.get("data", {}) or {}
         msg_id = data.get("id") or data.get("message_id")
         if msg_id not in (None, ""):
             ids.add(str(msg_id))

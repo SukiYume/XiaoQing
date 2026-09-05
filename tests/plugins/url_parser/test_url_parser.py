@@ -24,16 +24,16 @@ ROOT = REPOSITORY_ROOT
 def _html_response(
     html: str | bytes,
     *,
-    url: str = "https://example.com/page",
+    url: str            = "https://example.com/page",
     charset: str | None = "utf-8",
 ) -> SafeHttpResponse:
     body = html.encode("utf-8") if isinstance(html, str) else html
     return SafeHttpResponse(
-        url=url,
-        status=200,
-        body=body,
-        charset=charset,
-        headers={"Content-Type": "text/html"},
+        url     = url,
+        status  = 200,
+        body    = body,
+        charset = charset,
+        headers = {"Content-Type": "text/html"},
     )
 
 
@@ -43,22 +43,22 @@ def _image_response(
     content_type: str = "image/png",
 ) -> SafeHttpResponse:
     return SafeHttpResponse(
-        url="https://example.com/assets/final",
-        status=200,
-        body=payload,
-        charset=None,
-        headers={"Content-Type": content_type},
+        url     = "https://example.com/assets/final",
+        status  = 200,
+        body    = payload,
+        charset = None,
+        headers = {"Content-Type": content_type},
     )
 
 
 @pytest.fixture
 def context(tmp_path: Path) -> SimpleNamespace:
     return SimpleNamespace(
-        data_dir=tmp_path,
-        http_session=None,
-        request_id="req-url-preview",
-        secrets={"plugins": {"url_parser": {}}},
-        logger=MagicMock(),
+        data_dir     = tmp_path,
+        http_session = None,
+        request_id   = "req-url-preview",
+        secrets      = {"plugins": {"url_parser": {}}},
+        logger       = MagicMock(),
     )
 
 
@@ -223,8 +223,8 @@ async def test_text_preview_does_not_depend_on_shared_http_session(
     ]
     network.page.assert_awaited_once_with(
         "https://example.com/page",
-        headers={"User-Agent": url_parser._USER_AGENT},
-        timeout_seconds=url_parser.REQUEST_TIMEOUT,
+        headers         = {"User-Agent": url_parser._USER_AGENT},
+        timeout_seconds = url_parser.REQUEST_TIMEOUT,
     )
 
 
@@ -245,21 +245,21 @@ async def test_relative_preview_image_is_validated_cached_and_reused(
     context: SimpleNamespace,
     network: SimpleNamespace,
 ) -> None:
-    page_url = "https://example.com/posts/1"
-    image_url = "https://example.com/assets/cover.jpg"
+    page_url                  = "https://example.com/posts/1"
+    image_url                 = "https://example.com/assets/cover.jpg"
     network.page.return_value = _html_response(
         '<title>With image</title><meta property="og:image" content="/assets/cover.jpg">',
         url=page_url,
     )
     payload = _image_bytes("PNG")
     network.image.return_value = _image_response(payload, content_type="image/jpeg")
-    digest = hashlib.sha256(image_url.encode()).hexdigest()
+    digest    = hashlib.sha256(image_url.encode()).hexdigest()
     cache_dir = context.data_dir / "url_previews"
     cache_dir.mkdir()
     stale_path = cache_dir / f"{digest}.jpg"
     stale_path.write_bytes(b"legacy invalid image")
 
-    first = await url_parser.handle_url("https://example.com/input", {}, context)
+    first  = await url_parser.handle_url("https://example.com/input", {}, context)
     second = await url_parser.handle_url("https://example.com/input", {}, context)
 
     expected_name = f"{digest}.png"
@@ -346,14 +346,14 @@ async def test_unsafe_or_failed_optional_image_keeps_text_preview(
         '<title>Safe text</title><meta property="og:image" content="http://127.0.0.1/a.png">'
     )
     network.validator.side_effect = UnsafeUrlError("private image")
-    result = await url_parser.handle_url("https://example.com", {}, context)
+    result                        = await url_parser.handle_url("https://example.com", {}, context)
     assert len(result) == 1 and result[0]["type"] == "text"
     network.image.assert_not_awaited()
 
-    network.validator.side_effect = None
+    network.validator.side_effect  = None
     network.validator.return_value = (urlsplit("https://example.com/a.png"), ("93.184.216.34",))
-    network.image.side_effect = SafeHttpError("bad image")
-    result = await url_parser.handle_url("https://example.com", {}, context)
+    network.image.side_effect      = SafeHttpError("bad image")
+    result                         = await url_parser.handle_url("https://example.com", {}, context)
     assert len(result) == 1 and result[0]["type"] == "text"
 
 
@@ -367,7 +367,7 @@ async def test_invalid_or_unexpected_optional_image_keeps_text_preview(
         '<title>Text survives</title><meta property="og:image" content="/bad.png">'
     )
     network.image.return_value = _image_response(b"not an image")
-    result = await url_parser.handle_url("https://example.com", {}, context)
+    result                     = await url_parser.handle_url("https://example.com", {}, context)
     assert len(result) == 1 and result[0]["type"] == "text"
 
     network.image.side_effect = RuntimeError("unexpected image failure")
@@ -387,10 +387,10 @@ async def test_empty_oversized_or_uncacheable_image_keeps_text(
         '<title>Text only</title><meta property="og:image" content="/image.png">'
     )
     network.image.return_value = _image_response(b"")
-    result = await url_parser.handle_url("https://example.com", {}, context)
+    result                     = await url_parser.handle_url("https://example.com", {}, context)
     assert len(result) == 1
 
-    payload = _image_bytes()
+    payload                    = _image_bytes()
     network.image.return_value = _image_response(payload)
     monkeypatch.setattr(url_parser, "MAX_IMAGE_BYTES", len(payload) - 1)
     result = await url_parser.handle_url("https://example.com", {}, context)
@@ -444,10 +444,10 @@ async def test_largest_accepted_url_stays_within_message_budget(
     context: SimpleNamespace,
     network: SimpleNamespace,
 ) -> None:
-    prefix = "https://example.com/"
-    url = prefix + "x" * (url_parser.MAX_INPUT_URL_LENGTH - len(prefix))
-    title = "t" * 300
-    description = "d" * 200
+    prefix                    = "https://example.com/"
+    url                       = prefix + "x" * (url_parser.MAX_INPUT_URL_LENGTH - len(prefix))
+    title                     = "t" * 300
+    description               = "d" * 200
     network.page.return_value = _html_response(
         f'<title>{title}</title><meta name="description" content="{description}">'
     )
@@ -464,7 +464,7 @@ async def test_preview_concurrency_is_bounded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     active = 0
-    peak = 0
+    peak   = 0
 
     async def slow_page(url: str, **_kwargs):
         nonlocal active, peak

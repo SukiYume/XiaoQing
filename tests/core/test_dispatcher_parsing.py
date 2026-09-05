@@ -13,13 +13,13 @@ from tests.helpers.dispatcher_test_support import (
     pytest,
 )
 
-dispatcher = _fixture_support.dispatcher
-mock_admin_check = _fixture_support.mock_admin_check
-mock_config_provider = _fixture_support.mock_config_provider
-mock_context_factory = _fixture_support.mock_context_factory
-mock_metrics = _fixture_support.mock_metrics
-mock_router = _fixture_support.mock_router
-mock_session_manager = _fixture_support.mock_session_manager
+dispatcher             = _fixture_support.dispatcher
+mock_admin_check       = _fixture_support.mock_admin_check
+mock_config_provider   = _fixture_support.mock_config_provider
+mock_context_factory   = _fixture_support.mock_context_factory
+mock_metrics           = _fixture_support.mock_metrics
+mock_router            = _fixture_support.mock_router
+mock_session_manager   = _fixture_support.mock_session_manager
 sample_message_context = _fixture_support.sample_message_context
 
 
@@ -37,7 +37,7 @@ class TestMessageParser:
 
         class CountingConfigProvider:
             def __init__(self):
-                self.reads = 0
+                self.reads   = 0
                 self.payload = {
                     "bot_name": "小青",
                     "command_prefixes": ["/"],
@@ -50,8 +50,8 @@ class TestMessageParser:
                 return self.payload
 
         provider = CountingConfigProvider()
-        parser = MessageParser(provider)
-        event = {
+        parser   = MessageParser(provider)
+        event    = {
             "post_type": "message",
             "message_type": "group",
             "user_id": 12345,
@@ -76,7 +76,7 @@ class TestMessageParser:
     def test_parse_group_message(self, mock_config_provider: MagicMock):
         """测试解析群消息"""
         parser = MessageParser(mock_config_provider)
-        event = {
+        event  = {
             "post_type": "message",
             "message_type": "group",
             "user_id": 12345,
@@ -95,7 +95,7 @@ class TestMessageParser:
     def test_parse_private_message(self, mock_config_provider: MagicMock):
         """测试解析私聊消息"""
         parser = MessageParser(mock_config_provider)
-        event = {
+        event  = {
             "post_type": "message",
             "message_type": "private",
             "user_id": 12345,
@@ -113,7 +113,7 @@ class TestMessageParser:
     def test_parse_self_message_returns_none(self, mock_config_provider: MagicMock):
         """测试解析自己的消息返回 None"""
         parser = MessageParser(mock_config_provider)
-        event = {
+        event  = {
             "post_type": "message",
             "message_type": "group",
             "user_id": 11111,  # 和 self_id 相同
@@ -128,7 +128,7 @@ class TestMessageParser:
     def test_parse_empty_message_returns_none(self, mock_config_provider: MagicMock):
         """测试解析空消息返回 None"""
         parser = MessageParser(mock_config_provider)
-        event = {
+        event  = {
             "post_type": "message",
             "message_type": "group",
             "user_id": 12345,
@@ -143,7 +143,7 @@ class TestMessageParser:
         self, mock_config_provider: MagicMock
     ):
         parser = MessageParser(mock_config_provider)
-        event = {
+        event  = {
             "post_type": "message",
             "message_type": "private",
             "user_id": 12345,
@@ -159,7 +159,7 @@ class TestMessageParser:
     def test_parse_image_only_message_keeps_context(self, mock_config_provider: MagicMock):
         """测试纯图片消息不会被 parser 丢弃"""
         parser = MessageParser(mock_config_provider)
-        event = {
+        event  = {
             "post_type": "message",
             "message_type": "group",
             "user_id": 12345,
@@ -179,7 +179,7 @@ class TestMessageParser:
     def test_parse_face_only_message_keeps_context(self, mock_config_provider: MagicMock):
         """测试纯 QQ 表情消息不会被 parser 丢弃"""
         parser = MessageParser(mock_config_provider)
-        event = {
+        event  = {
             "post_type": "message",
             "message_type": "group",
             "user_id": 12345,
@@ -199,7 +199,7 @@ class TestMessageParser:
     def test_parse_at_only_without_media_is_bot_name_only(self, mock_config_provider: MagicMock):
         """测试只 @ 机器人等同于只喊机器人名字"""
         parser = MessageParser(mock_config_provider)
-        event = {
+        event  = {
             "post_type": "message",
             "message_type": "group",
             "user_id": 12345,
@@ -219,7 +219,7 @@ class TestMessageParser:
 
     def test_parse_populates_has_command_prefix(self, mock_config_provider: MagicMock):
         parser = MessageParser(mock_config_provider)
-        ctx = parser.parse(
+        ctx    = parser.parse(
             {
                 "post_type": "message",
                 "message_type": "group",
@@ -236,7 +236,7 @@ class TestMessageParser:
 
     def test_parse_has_prefix_from_bot_name_in_middle(self, mock_config_provider: MagicMock):
         parser = MessageParser(mock_config_provider)
-        ctx = parser.parse(
+        ctx    = parser.parse(
             {
                 "post_type": "message",
                 "message_type": "group",
@@ -253,7 +253,7 @@ class TestMessageParser:
 
     def test_parse_is_url_only_with_bot_name_prefix(self, mock_config_provider: MagicMock):
         parser = MessageParser(mock_config_provider)
-        ctx = parser.parse(
+        ctx    = parser.parse(
             {
                 "post_type": "message",
                 "message_type": "group",
@@ -269,7 +269,7 @@ class TestMessageParser:
 
     def test_parse_url_with_extra_text_is_not_url_only(self, mock_config_provider: MagicMock):
         parser = MessageParser(mock_config_provider)
-        ctx = parser.parse(
+        ctx    = parser.parse(
             {
                 "post_type": "message",
                 "message_type": "group",
@@ -285,7 +285,7 @@ class TestMessageParser:
     def test_parse_at_me_with_empty_text_is_only_bot_name(self, mock_config_provider: MagicMock):
         """@me with no following text yields is_only_bot_name=True and is_url_only=False."""
         parser = MessageParser(mock_config_provider)
-        ctx = parser.parse(
+        ctx    = parser.parse(
             {
                 "post_type": "message",
                 "message_type": "group",
@@ -345,12 +345,12 @@ class TestDispatcherHandleEvent:
     ):
         """URL 仍交给解析器，但签名参数不得进入聊天记忆或日志。"""
         mock_config_provider.config["plugins"]["smalltalk_provider"] = "xiaoqing_chat"
-        mock_config_provider.config["require_bot_name_in_group"] = False
+        mock_config_provider.config["require_bot_name_in_group"]     = False
 
         xq_plugin = MagicMock()
         xq_plugin.module.observe_message = AsyncMock(return_value=[])
 
-        url_plugin = MagicMock()
+        url_plugin                   = MagicMock()
         url_plugin.module.handle_url = AsyncMock(
             return_value=[{"type": "text", "data": {"text": "url ok"}}]
         )
@@ -365,7 +365,7 @@ class TestDispatcherHandleEvent:
         mock_plugin_registry.get = Mock(side_effect=_get_plugin)
 
         signed_url = "https://example.com/file?token=super-secret#private-fragment"
-        event = {
+        event      = {
             "post_type": "message",
             "message_type": "group",
             "user_id": 12345,
@@ -409,13 +409,13 @@ class TestDispatcherHandleEvent:
 
         cmd_handler = AsyncMock(return_value=[{"type": "text", "data": {"text": "command ok"}}])
         spec = CommandSpec(
-            plugin="echo",
-            name="echo",
-            triggers=["echo"],
-            help_text="echo",
-            admin_only=False,
-            handler=cmd_handler,
-            priority=0,
+            plugin     = "echo",
+            name       = "echo",
+            triggers   = ["echo"],
+            help_text  = "echo",
+            admin_only = False,
+            handler    = cmd_handler,
+            priority   = 0,
         )
         mock_router.resolve = Mock(return_value=(spec, "hello"))
 
@@ -446,23 +446,23 @@ class TestDispatcherHandleEvent:
         mock_admin_check: MagicMock,
     ):
         mock_config_provider.config["plugins"]["smalltalk_provider"] = "xiaoqing_chat"
-        mock_admin_check.is_admin.return_value = False
-        xq_plugin = MagicMock()
+        mock_admin_check.is_admin.return_value                       = False
+        xq_plugin                                                    = MagicMock()
         xq_plugin.module.observe_message = AsyncMock(return_value=[])
         mock_plugin_registry.get.side_effect = lambda name: (
             xq_plugin if name == "xiaoqing_chat" else None
         )
         handler = AsyncMock()
-        spec = CommandSpec(
-            plugin="shell",
-            name="shell",
-            triggers=["shell"],
-            help_text="shell",
-            admin_only=True,
-            handler=handler,
+        spec    = CommandSpec(
+            plugin     = "shell",
+            name       = "shell",
+            triggers   = ["shell"],
+            help_text  = "shell",
+            admin_only = True,
+            handler    = handler,
         )
         mock_router.resolve.return_value = (spec, "authorization=Bearer-canary")
-        event = {
+        event                            = {
             "post_type": "message",
             "message_type": "private",
             "user_id": 12345,
@@ -486,8 +486,8 @@ class TestDispatcherHandleEvent:
         mock_router: MagicMock,
     ):
         mock_config_provider.config["plugins"]["smalltalk_provider"] = "xiaoqing_chat"
-        mock_router.resolve.return_value = None
-        xq_plugin = MagicMock()
+        mock_router.resolve.return_value                             = None
+        xq_plugin                                                    = MagicMock()
         xq_plugin.module.observe_message = AsyncMock(return_value=[])
         mock_plugin_registry.get.side_effect = lambda name: (
             xq_plugin if name == "xiaoqing_chat" else None
@@ -517,14 +517,14 @@ class TestDispatcherHandleEvent:
         mock_session_manager: MagicMock,
     ):
         mock_config_provider.config["plugins"]["smalltalk_provider"] = "xiaoqing_chat"
-        mock_router.resolve.return_value = None
-        session = MagicMock()
-        session.plugin_name = "qingssh"
-        mock_session_manager.get.return_value = session
+        mock_router.resolve.return_value                             = None
+        session                                                      = MagicMock()
+        session.plugin_name                                          = "qingssh"
+        mock_session_manager.get.return_value                        = session
 
         xq_plugin = MagicMock()
         xq_plugin.module.observe_message = AsyncMock(return_value=[])
-        ssh_plugin = MagicMock()
+        ssh_plugin                       = MagicMock()
         ssh_plugin.module.handle_session = AsyncMock(
             return_value=[{"type": "text", "data": {"text": "configured"}}]
         )
@@ -557,9 +557,9 @@ class TestDispatcherHandleEvent:
         mock_session_manager: MagicMock,
     ):
         mock_config_provider.config["plugins"]["smalltalk_provider"] = "xiaoqing_chat"
-        mock_router.resolve.return_value = None
-        mock_session_manager.get.return_value = None
-        xq_plugin = MagicMock()
+        mock_router.resolve.return_value                             = None
+        mock_session_manager.get.return_value                        = None
+        xq_plugin                                                    = MagicMock()
         xq_plugin.module.observe_message = AsyncMock(return_value=[])
         xq_plugin.module.handle_smalltalk = AsyncMock(return_value=[])
         mock_plugin_registry.get.side_effect = lambda name: (
@@ -590,13 +590,13 @@ class TestDispatcherHandleEvent:
         mock_router.resolve = Mock(
             return_value=(
                 CommandSpec(
-                    plugin="echo",
-                    name="echo",
-                    triggers=["echo"],
-                    help_text="echo",
-                    admin_only=False,
-                    handler=cmd_handler,
-                    priority=0,
+                    plugin     = "echo",
+                    name       = "echo",
+                    triggers   = ["echo"],
+                    help_text  = "echo",
+                    admin_only = False,
+                    handler    = cmd_handler,
+                    priority   = 0,
                 ),
                 "hello",
             )

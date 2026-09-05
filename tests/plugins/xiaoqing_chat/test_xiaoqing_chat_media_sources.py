@@ -40,7 +40,7 @@ mock_context = _fixture_support.mock_context
 )
 async def test_render_event_media_text_supports_inline_image_sources(mock_context, file_value):
     runtime = _make_media_runtime()
-    event = {
+    event   = {
         "message": [{"type": "image", "data": {"file": file_value, "name": "inline_image.png"}}]
     }
 
@@ -58,7 +58,7 @@ async def test_render_event_media_text_supports_inline_image_sources(mock_contex
 @pytest.mark.asyncio
 async def test_render_event_media_blocks_private_image_url_without_download(mock_context):
     runtime = _make_media_runtime()
-    event = {
+    event   = {
         "message": [
             {
                 "type": "image",
@@ -79,7 +79,7 @@ async def test_render_event_media_blocks_private_image_url_without_download(mock
 async def test_render_event_media_blocks_file_uri_outside_plugin_data_dir(mock_context, tmp_path):
     runtime = _make_media_runtime()
     outside = _write_png(tmp_path / "outside.png")
-    event = {
+    event   = {
         "message": [
             {
                 "type": "image",
@@ -103,7 +103,7 @@ async def test_render_event_media_blocks_file_uri_outside_plugin_data_dir(mock_c
 @pytest.mark.asyncio
 async def test_render_event_media_text_marks_napcat_store_emoji_image(mock_context):
     runtime = _make_media_runtime()
-    event = {
+    event   = {
         "message": [
             {
                 "type": "image",
@@ -137,7 +137,7 @@ async def test_render_event_media_text_marks_napcat_store_emoji_image(mock_conte
 @pytest.mark.asyncio
 async def test_render_event_media_text_transcodes_octet_stream_sticker_for_vision(mock_context):
     runtime = _make_media_runtime()
-    event = {
+    event   = {
         "message": [
             {
                 "type": "image",
@@ -151,13 +151,13 @@ async def test_render_event_media_text_transcodes_octet_stream_sticker_for_visio
         ]
     }
     captured_urls: list[str] = []
-    captured_prompt = ""
+    captured_prompt          = ""
 
     async def _fake_chat_raw(*, messages, **kwargs):
         nonlocal captured_prompt
-        content = messages[1]["content"]
+        content         = messages[1]["content"]
         captured_prompt = content[0]["text"]
-        image_url = content[1]["image_url"]["url"]
+        image_url       = content[1]["image_url"]["url"]
         captured_urls.append(image_url)
         return _raw_media_response(
             '{"kind":"emoji","description":"一只猫皱着脸，配字是苦鲁西","emotion_tags":["委屈","难受"]}'
@@ -186,12 +186,12 @@ def test_prepare_media_for_llm_uses_contact_sheet_for_animated_gif(mock_context)
     from PIL import Image
 
     gif_path = mock_context.data_dir / "animated_probe.gif"
-    payload = _animated_gif_bytes()
+    payload  = _animated_gif_bytes()
     gif_path.write_bytes(payload)
     resolved = SimpleNamespace(
-        mime_type="image/gif",
-        cached_path=gif_path,
-        is_animated=True,
+        mime_type   = "image/gif",
+        cached_path = gif_path,
+        is_animated = True,
     )
 
     prepared = _prepare_media_for_llm(resolved)
@@ -206,10 +206,10 @@ def test_prepare_media_for_llm_uses_contact_sheet_for_animated_gif(mock_context)
 
 def test_prepare_media_for_llm_never_sends_original_when_decode_fails(mock_context):
     image_path = _write_png(mock_context.data_dir / "decode_failure.png")
-    resolved = SimpleNamespace(
-        mime_type="image/png",
-        cached_path=image_path,
-        is_animated=False,
+    resolved   = SimpleNamespace(
+        mime_type   = "image/png",
+        cached_path = image_path,
+        is_animated = False,
     )
 
     with patch("PIL.Image.open", side_effect=OSError("decode failed")):
@@ -220,7 +220,7 @@ def test_prepare_media_for_llm_never_sends_original_when_decode_fails(mock_conte
 @pytest.mark.asyncio
 async def test_render_event_media_text_supports_face_segment(mock_context):
     runtime = _make_media_runtime()
-    event = {
+    event   = {
         "message": [
             {
                 "type": "face",
@@ -243,7 +243,7 @@ async def test_event_media_items_for_memory_preserves_qq_face_identity(mock_cont
     from plugins.xiaoqing_chat.handlers import _event_media_items_for_memory
 
     runtime = _make_media_runtime()
-    event = {
+    event   = {
         "message": [
             {
                 "type": "face",
@@ -273,7 +273,7 @@ async def test_event_media_items_for_memory_preserves_qq_face_identity(mock_cont
 @pytest.mark.asyncio
 async def test_build_effective_user_text_preserves_mixed_media_order(mock_context):
     runtime = _make_media_runtime()
-    event = {
+    event   = {
         "message": [
             {"type": "text", "data": {"text": "看这个"}},
             {"type": "image", "data": {"url": "https://example.com/cat.png"}},
@@ -281,11 +281,11 @@ async def test_build_effective_user_text_preserves_mixed_media_order(mock_contex
         ],
         "_xc_rendered_media_items": [
             RenderedMedia(
-                media_hash="hash-1",
-                kind="image",
-                description="一只猫歪着头",
-                emotion_tags=(),
-                marker="[图片：一只猫歪着头]",
+                media_hash   = "hash-1",
+                kind         = "image",
+                description  = "一只猫歪着头",
+                emotion_tags = (),
+                marker       = "[图片：一只猫歪着头]",
             )
         ],
     }
@@ -293,8 +293,8 @@ async def test_build_effective_user_text_preserves_mixed_media_order(mock_contex
     text = await build_effective_user_text(
         "看这个笑死",
         event,
-        context=mock_context,
-        runtime=runtime,
+        context = mock_context,
+        runtime = runtime,
     )
 
     assert text == "看这个\n[图片：一只猫歪着头]\n笑死"
@@ -303,7 +303,7 @@ async def test_build_effective_user_text_preserves_mixed_media_order(mock_contex
 @pytest.mark.asyncio
 async def test_build_effective_user_text_keeps_media_position_after_prefix_strip(mock_context):
     runtime = _make_media_runtime()
-    event = {
+    event   = {
         "message": [
             {"type": "text", "data": {"text": "小青你看"}},
             {"type": "image", "data": {"url": "https://example.com/cat.png"}},
@@ -311,11 +311,11 @@ async def test_build_effective_user_text_keeps_media_position_after_prefix_strip
         ],
         "_xc_rendered_media_items": [
             RenderedMedia(
-                media_hash="hash-2",
-                kind="image",
-                description="一只猫歪着头",
-                emotion_tags=(),
-                marker="[图片：一只猫歪着头]",
+                media_hash   = "hash-2",
+                kind         = "image",
+                description  = "一只猫歪着头",
+                emotion_tags = (),
+                marker       = "[图片：一只猫歪着头]",
             )
         ],
     }
@@ -323,8 +323,8 @@ async def test_build_effective_user_text_keeps_media_position_after_prefix_strip
     text = await build_effective_user_text(
         "你看这个",
         event,
-        context=mock_context,
-        runtime=runtime,
+        context = mock_context,
+        runtime = runtime,
     )
 
     assert text == "你看\n[图片：一只猫歪着头]\n这个"
@@ -333,7 +333,7 @@ async def test_build_effective_user_text_keeps_media_position_after_prefix_strip
 @pytest.mark.asyncio
 async def test_build_effective_user_text_includes_emoji_detail_context(mock_context):
     runtime = _make_media_runtime()
-    event = {
+    event   = {
         "message": [
             {"type": "text", "data": {"text": "你这"}},
             {
@@ -343,11 +343,11 @@ async def test_build_effective_user_text_includes_emoji_detail_context(mock_cont
         ],
         "_xc_rendered_media_items": [
             RenderedMedia(
-                media_hash="hash-emoji",
-                kind="emoji",
-                description='卡通小鸟倒地，上方对话框写"不愧是你"，下方文字写"我佩服得鹉体投地"',
-                emotion_tags=("佩服", "调侃", "开心"),
-                marker="[表情包：佩服，调侃]",
+                media_hash   = "hash-emoji",
+                kind         = "emoji",
+                description  = '卡通小鸟倒地，上方对话框写"不愧是你"，下方文字写"我佩服得鹉体投地"',
+                emotion_tags = ("佩服", "调侃", "开心"),
+                marker       = "[表情包：佩服，调侃]",
             )
         ],
     }
@@ -355,8 +355,8 @@ async def test_build_effective_user_text_includes_emoji_detail_context(mock_cont
     text = await build_effective_user_text(
         "你这",
         event,
-        context=mock_context,
-        runtime=runtime,
+        context = mock_context,
+        runtime = runtime,
     )
 
     assert (
@@ -368,7 +368,7 @@ async def test_build_effective_user_text_includes_emoji_detail_context(mock_cont
 @pytest.mark.asyncio
 async def test_build_effective_user_text_surfaces_emoji_visible_text_as_quoted_speech(mock_context):
     runtime = _make_media_runtime()
-    event = {
+    event   = {
         "message": [
             {
                 "type": "image",
@@ -377,11 +377,11 @@ async def test_build_effective_user_text_surfaces_emoji_visible_text_as_quoted_s
         ],
         "_xc_rendered_media_items": [
             RenderedMedia(
-                media_hash="hash-emoji",
-                kind="emoji",
-                description="一个猫耳动漫女孩露出惊讶表情，配文字表达疑惑或调侃。，文字内容是“那咋整啊”",
-                emotion_tags=("疑惑", "调侃"),
-                marker="[表情包：疑惑，调侃]",
+                media_hash   = "hash-emoji",
+                kind         = "emoji",
+                description  = "一个猫耳动漫女孩露出惊讶表情，配文字表达疑惑或调侃。，文字内容是“那咋整啊”",
+                emotion_tags = ("疑惑", "调侃"),
+                marker       = "[表情包：疑惑，调侃]",
             )
         ],
     }
@@ -389,8 +389,8 @@ async def test_build_effective_user_text_surfaces_emoji_visible_text_as_quoted_s
     text = await build_effective_user_text(
         "",
         event,
-        context=mock_context,
-        runtime=runtime,
+        context = mock_context,
+        runtime = runtime,
     )
 
     assert text == "[表情包：疑惑，调侃；写着“那咋整啊”]"
@@ -399,7 +399,7 @@ async def test_build_effective_user_text_surfaces_emoji_visible_text_as_quoted_s
 @pytest.mark.asyncio
 async def test_render_event_media_text_strips_face_brackets(mock_context):
     runtime = _make_media_runtime()
-    event = {
+    event   = {
         "message": [
             {
                 "type": "face",
@@ -419,7 +419,7 @@ async def test_render_event_media_text_strips_face_brackets(mock_context):
 @pytest.mark.asyncio
 async def test_render_event_media_text_fetches_mface_image_via_onebot_apis(mock_context):
     runtime = _make_media_runtime()
-    event = {
+    event   = {
         "message_id": 42,
         "message": [
             {
@@ -474,7 +474,7 @@ async def test_render_event_media_text_falls_back_to_store_emoji_summary_when_do
     mock_context,
 ):
     runtime = _make_media_runtime()
-    event = {
+    event   = {
         "message": [
             {
                 "type": "image",
@@ -506,23 +506,23 @@ async def test_load_emoji_library_reuses_existing_metadata(mock_context):
     runtime = _make_media_runtime()
 
     async def _fake_render(file_path, *, context, runtime, prefer_emoji):
-        file_path = Path(file_path)
+        file_path  = Path(file_path)
         media_hash = hashlib.sha256(file_path.read_bytes()).hexdigest()
-        stem = file_path.stem
+        stem       = file_path.stem
         return RenderedMedia(
-            media_hash=media_hash,
-            kind="emoji",
-            description=stem,
-            emotion_tags=(stem,),
-            marker=f"[表情包：{stem}]",
-            cached_path=file_path,
+            media_hash   = media_hash,
+            kind         = "emoji",
+            description  = stem,
+            emotion_tags = (stem,),
+            marker       = f"[表情包：{stem}]",
+            cached_path  = file_path,
         )
 
     with patch(
         "plugins.xiaoqing_chat.media.event_media.render_local_media_file",
         new=AsyncMock(side_effect=_fake_render),
     ) as mock_render:
-        first_entries = await load_emoji_library(mock_context, runtime)
+        first_entries  = await load_emoji_library(mock_context, runtime)
         second_entries = await load_emoji_library(mock_context, runtime)
 
     assert first_entries == []

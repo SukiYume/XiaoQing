@@ -1,3 +1,4 @@
+# 验证聊天数据读取者只观察完整发布的文件快照。
 from __future__ import annotations
 
 import json
@@ -153,7 +154,7 @@ async def test_persisted_scalar_types_are_strictly_normalized(tmp_path: Path) ->
         encoding="utf-8",
     )
 
-    history = await MemoryStore(tmp_path).get_async("chat-1")
+    history      = await MemoryStore(tmp_path).get_async("chat-1")
     action_store = ActionHistoryStore()
     action_store.bind(tmp_path)
     actions = await action_store.get_recent_async("chat-1")

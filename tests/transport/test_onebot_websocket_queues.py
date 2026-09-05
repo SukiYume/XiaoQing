@@ -25,26 +25,26 @@ class TestOneBotWebSocketQueues:
 
         # 私聊事件
         private_event = {"user_id": 12345, "group_id": None}
-        key = client._get_queue_key(private_event)
+        key           = client._get_queue_key(private_event)
         assert key == "user:12345"
 
         # 群聊事件
         group_event = {"user_id": 12345, "group_id": 67890}
-        key = client._get_queue_key(group_event)
+        key         = client._get_queue_key(group_event)
         assert key == "group:67890:user:12345"
 
         # 无 user_id
         no_user_event = {"group_id": 67890}
-        key = client._get_queue_key(no_user_event)
+        key           = client._get_queue_key(no_user_event)
         assert key is None
 
     @pytest.mark.asyncio
     async def test_dispatch_event_respects_pending_semaphore_across_queues(self):
         """测试 max_pending_events 真正限制 handler 执行并发"""
         client = OneBotWsClient("ws://localhost:3000", "", max_pending_events=1)
-        started = asyncio.Event()
-        release = asyncio.Event()
-        current = 0
+        started  = asyncio.Event()
+        release  = asyncio.Event()
+        current  = 0
         max_seen = 0
 
         async def handler(event: dict[str, Any]) -> None:
@@ -69,13 +69,13 @@ class TestOneBotWebSocketQueues:
     @pytest.mark.asyncio
     async def test_drain_queue_restarts_when_event_arrives_during_timeout_exit(self):
         """测试 drain 超时退出窗口内入队的事件不会滞留"""
-        client = OneBotWsClient("ws://localhost:3000", "")
-        key = "user:1"
+        client                                   = OneBotWsClient("ws://localhost:3000", "")
+        key                                      = "user:1"
         queue: asyncio.Queue[_QueuedOneBotEvent] = asyncio.Queue()
-        client._message_queues[key] = queue
-        handled: list[dict[str, Any]] = []
-        real_wait_for = asyncio.wait_for
-        wait_calls = 0
+        client._message_queues[key]              = queue
+        handled: list[dict[str, Any]]            = []
+        real_wait_for                            = asyncio.wait_for
+        wait_calls                               = 0
 
         async def handler(event: dict[str, Any]) -> None:
             handled.append(event)
@@ -88,14 +88,14 @@ class TestOneBotWebSocketQueues:
                     awaitable.close()
                 queue.put_nowait(
                     _QueuedOneBotEvent(
-                        event={"user_id": 1},
-                        auth_state=client._endpoint_auth,
+                        event      = {"user_id": 1},
+                        auth_state = client._endpoint_auth,
                     )
                 )
                 raise asyncio.TimeoutError()
             return await real_wait_for(awaitable, timeout)
 
-        task = asyncio.create_task(client._drain_queue(key, handler))
+        task                     = asyncio.create_task(client._drain_queue(key, handler))
         client._queue_tasks[key] = task
 
         with patch("core.onebot.asyncio.wait_for", side_effect=fake_wait_for):
@@ -107,13 +107,13 @@ class TestOneBotWebSocketQueues:
 
     @pytest.mark.asyncio
     async def test_drain_queue_does_not_suppress_an_unexpected_handler_failure(self, monkeypatch):
-        client = OneBotWsClient("ws://localhost:3000", "")
-        key = "user:unhandled-error"
+        client                                   = OneBotWsClient("ws://localhost:3000", "")
+        key                                      = "user:unhandled-error"
         queue: asyncio.Queue[_QueuedOneBotEvent] = asyncio.Queue()
         queue.put_nowait(
             _QueuedOneBotEvent(
-                event={"user_id": 1},
-                auth_state=client._endpoint_auth,
+                event      = {"user_id": 1},
+                auth_state = client._endpoint_auth,
             )
         )
         client._message_queues[key] = queue
@@ -128,12 +128,12 @@ class TestOneBotWebSocketQueues:
 
     @pytest.mark.asyncio
     async def test_drain_queue_drops_raw_event_without_auth_generation(self):
-        client = OneBotWsClient("ws://localhost:3000", "")
-        key = "user:raw-event"
+        client                    = OneBotWsClient("ws://localhost:3000", "")
+        key                       = "user:raw-event"
         queue: asyncio.Queue[Any] = asyncio.Queue()
         queue.put_nowait({"user_id": 1})
         client._message_queues[key] = queue
-        handler = AsyncMock()
+        handler                     = AsyncMock()
 
         task = asyncio.create_task(client._drain_queue(key, handler))
         for _ in range(10):

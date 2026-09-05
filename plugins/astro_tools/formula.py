@@ -54,7 +54,7 @@ FORMULAS: dict[str, dict[str, str]] = {
     },
     "stellar_luminosity": {
         "name": "主序星质光关系 (Mass-Luminosity)",
-        "formula": "L/L_☉ ≈ (M/M_☉)^α, α ≈ 3.5",
+        "formula": "L/L_☉ ≈ C × (M/M_☉)^α，C 和 α 按质量分段",
         "description": "主序星的光度与质量的经验关系",
         "notes": "对于不同质量范围α有所不同\n使用 calc luminosity <质量> 进行计算",
     },
@@ -87,7 +87,7 @@ def _handle_formula_sync(args: str, context: PluginContextProtocol) -> str:
     if not args or args in {"list", "help", "帮助"}:
         return _get_formula_list()
 
-    parts = args.split(None, 1)
+    parts      = args.split(None, 1)
     subcommand = parts[0]
 
     # 处理计算子命令
@@ -161,17 +161,22 @@ def _handle_calculation(args: str, context: PluginContextProtocol) -> str:
             )
 
         if calc_type == "luminosity":
-            # 分段指数与公式说明保持一致；这里只给出数量级估算。
+            # UNLV IAL 23 的经验关系；分段系数取约数，边界保留小幅跳跃。
+            # 来源：https://www.physics.unlv.edu/~jeffery/astro/ial/ial_023.html
             if mass_solar < 0.43:
-                alpha = 2.3
+                alpha       = 2.3
+                coefficient = 0.23
             elif mass_solar < 2:
-                alpha = 4.0
+                alpha       = 4.0
+                coefficient = 1.0
             elif mass_solar < 20:
-                alpha = 3.5
+                alpha       = 3.5
+                coefficient = 1.5
             else:
-                alpha = 1.0
+                alpha       = 1.0
+                coefficient = 2500.0
 
-            luminosity = mass_solar**alpha
+            luminosity = coefficient * mass_solar**alpha
             if not math.isfinite(luminosity):
                 return "质量超出可计算范围"
             return (
@@ -179,7 +184,8 @@ def _handle_calculation(args: str, context: PluginContextProtocol) -> str:
                 f"质量: {mass_solar} M☉\n"
                 f"估算光度: {luminosity:.3e} L☉\n"
                 f"使用指数: α = {alpha}\n"
-                "备注: 这是基于质光关系 L/L☉ ≈ (M/M☉)^α 的估算"
+                f"归一化系数: C = {coefficient:.6g}\n"
+                "备注: 分段经验近似在边界有小幅跳跃，结果还依赖恒星年龄和金属丰度"
             )
 
         lifetime_years = 1e10 * (mass_solar**-2.5)

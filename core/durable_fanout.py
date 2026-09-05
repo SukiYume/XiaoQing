@@ -9,9 +9,9 @@ from typing import Any, cast
 
 from .atomic_store import AtomicJsonStore
 
-_SCHEMA_VERSION = 1
-_MAX_TARGETS = 1000
-_MAX_SEGMENTS = 1000
+_SCHEMA_VERSION     = 1
+_MAX_TARGETS        = 1000
+_MAX_SEGMENTS       = 1000
 _MAX_EVENT_ID_CHARS = 256
 
 
@@ -92,11 +92,11 @@ class PendingFanout:
 def _decode_pending(value: Any) -> PendingFanout:
     if not isinstance(value, dict):
         raise DurableFanoutStateError("fanout pending state must be an object")
-    event_id = value.get("event_id")
-    payload = value.get("payload")
-    raw_targets = value.get("targets")
+    event_id      = value.get("event_id")
+    payload       = value.get("payload")
+    raw_targets   = value.get("targets")
     raw_delivered = value.get("delivered")
-    commit = value.get("commit")
+    commit        = value.get("commit")
     if not isinstance(event_id, str) or not event_id or len(event_id) > _MAX_EVENT_ID_CHARS:
         raise DurableFanoutStateError("fanout event id is invalid")
     if (
@@ -129,11 +129,11 @@ def _decode_pending(value: Any) -> PendingFanout:
     if not isinstance(commit, dict):
         raise DurableFanoutStateError("fanout commit data must be an object")
     return PendingFanout(
-        event_id=event_id,
-        payload=list(payload),
-        targets=tuple(targets),
-        commit=dict(commit),
-        delivered=set(raw_delivered),
+        event_id  = event_id,
+        payload   = list(payload),
+        targets   = tuple(targets),
+        commit    = dict(commit),
+        delivered = set(raw_delivered),
     )
 
 
@@ -163,10 +163,10 @@ def create_pending(
     commit: dict[str, Any],
 ) -> PendingFanout:
     pending = PendingFanout(
-        event_id=event_id,
-        payload=list(payload),
-        targets=tuple(targets),
-        commit=dict(commit),
+        event_id = event_id,
+        payload  = list(payload),
+        targets  = tuple(targets),
+        commit   = dict(commit),
     )
     save_pending(path, pending)
     return pending

@@ -26,12 +26,12 @@ class LLMModelKwargs(TypedDict):
 class LLMCallConfig:
     """模型 API 调用的通用参数。"""
 
-    timeout_seconds: float = 30.0
-    max_retry: int = 1
+    timeout_seconds: float        = 30.0
+    max_retry: int                = 1
     retry_interval_seconds: float = 0.5
-    temperature: float = 0.7
-    top_p: float = 1.0
-    max_tokens: int = 256
+    temperature: float            = 0.7
+    top_p: float                  = 1.0
+    max_tokens: int               = 256
 
     def to_dict(self) -> LLMRequestControls:
         """以关键字参数形式返回调用控制参数。"""

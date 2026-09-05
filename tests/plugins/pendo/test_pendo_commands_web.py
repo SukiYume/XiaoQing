@@ -19,10 +19,10 @@ class TestBatchDeleteRefactor:
 
         from plugins.pendo.handlers.task import TaskHandler
 
-        db = MagicMock()
+        db                           = MagicMock()
         db.get_item_ids.return_value = ["t1", "t2"]
-        handler = TaskHandler(db)
-        calls = []
+        handler                      = TaskHandler(db)
+        calls                        = []
 
         async def fake_batch(item_ids, owner_id, item_type, action, details_factory=None):
             calls.append((item_ids, owner_id, item_type, action, details_factory))
@@ -43,10 +43,10 @@ class TestBatchDeleteRefactor:
 
         from plugins.pendo.handlers.note import NoteHandler
 
-        db = MagicMock()
+        db                           = MagicMock()
         db.get_item_ids.return_value = ["n1", "n2"]
-        handler = NoteHandler(db)
-        calls = []
+        handler                      = NoteHandler(db)
+        calls                        = []
 
         async def fake_batch(item_ids, owner_id, item_type, action, details_factory=None):
             calls.append((item_ids, owner_id, item_type, action, details_factory))
@@ -78,7 +78,7 @@ class TestCommandValidationRegression:
         db = Database(str(tmp_path / "pendo_note_invalid_category.db"))
         try:
             handler = NoteHandler(db)
-            result = asyncio.run(
+            result  = asyncio.run(
                 handler.create_note(
                     "u-note-validation",
                     "title:bad content body cat:<script>",
@@ -103,7 +103,7 @@ class TestCommandValidationRegression:
         db = Database(str(tmp_path / "pendo_todo_invalid_priority.db"))
         try:
             handler = TaskHandler(db)
-            result = asyncio.run(
+            result  = asyncio.run(
                 handler.add_task(
                     "u-task-validation",
                     "非法优先级 p:9 cat:测试",
@@ -136,12 +136,12 @@ class TestTriggerConflictRegression:
         for item in config["commands"]:
             router.register(
                 CommandSpec(
-                    plugin="pendo",
-                    name=item["name"],
-                    triggers=item["triggers"],
-                    help_text=item["help"],
-                    admin_only=False,
-                    handler=pendo_main.handle,
+                    plugin     = "pendo",
+                    name       = item["name"],
+                    triggers   = item["triggers"],
+                    help_text  = item["help"],
+                    admin_only = False,
+                    handler    = pendo_main.handle,
                 )
             )
 
@@ -191,14 +191,14 @@ class TestSessionRegression:
                 }
 
         context = _Context()
-        cases = (
+        cases   = (
             (PendoConfig.SESSION_TYPE_DIARY_TEMPLATE, "diary"),
             (PendoConfig.SESSION_TYPE_TASK_ADD, "task"),
             (PendoConfig.SESSION_TYPE_LEDGER_ADD, "ledger"),
         )
         for session_type, expected in cases:
             session = {"type": session_type}
-            result = asyncio.run(
+            result  = asyncio.run(
                 session_module.handle_session_message("1001", "下一步", session, context)
             )
             assert result == {"status": "success", "message": expected}
@@ -281,9 +281,9 @@ class TestSessionRegression:
 
         from plugins.pendo.commands import session as session_module
 
-        created = []
+        created      = []
         offset_calls = []
-        end_calls = []
+        end_calls    = []
 
         class _EventHandler:
             async def create_event(self, user_id, parsed_data, context, allow_conflict=False):
@@ -361,13 +361,13 @@ class TestSessionRegression:
         from plugins.pendo import main as pendo_main
 
         end_calls = []
-        routed = []
+        routed    = []
 
         class _Session:
             plugin_name = "pendo"
 
         class _Context:
-            logger = pendo_main.logger
+            logger  = pendo_main.logger
             metrics = None
 
             async def get_session(self):
@@ -408,7 +408,7 @@ class TestSessionRegression:
         from plugins.pendo.commands import session as session_module
 
         create_calls = []
-        end_calls = []
+        end_calls    = []
 
         class _Context:
             async def create_session(self, initial_data=None, timeout=300.0):
@@ -430,10 +430,10 @@ class TestSessionRegression:
                 assert partial is True
                 return {"title": "会议"}
 
-        context = _Context()
+        context  = _Context()
         services = {"event_handler": _EventHandler(), "ai_parser": _AiParser()}
 
-        original_get_cached_services = session_module.get_cached_services
+        original_get_cached_services       = session_module.get_cached_services
         session_module.get_cached_services = lambda _context: services
         try:
             result = asyncio.run(
@@ -464,18 +464,18 @@ class TestOperationAndExportRegression:
         fixed_now = datetime.fromisoformat("2030-01-01T09:30:00+08:00")
         monkeypatch.setattr(operations.TimezoneHelper, "now", lambda tz=None: fixed_now)
 
-        db = MagicMock()
+        db                       = MagicMock()
         db.get_item.return_value = EventItem(
-            id="evt123",
-            title="带时区提醒",
-            remind_times=[
+            id           = "evt123",
+            title        = "带时区提醒",
+            remind_times = [
                 "2030-01-01T08:00:00+08:00",
                 "2030-01-01T10:00:00+08:00",
             ],
         )
         db.get_last_unconfirmed_remind_time.return_value = "2030-01-01T08:00:00+08:00"
 
-        reminder_service = MagicMock()
+        reminder_service                               = MagicMock()
         reminder_service.confirm_reminder.return_value = {"status": "success", "message": "ok"}
 
         result = asyncio.run(handle_confirm("u1", "evt123", reminder_service, db))
@@ -509,20 +509,20 @@ class TestOperationAndExportRegression:
             lambda time_arg, base_time=None, now=None: "2030-01-01T11:00:00+08:00",
         )
 
-        db = MagicMock()
+        db                       = MagicMock()
         db.get_item.return_value = EventItem(
-            id="evt123",
-            title="延后测试",
-            remind_times=[
+            id           = "evt123",
+            title        = "延后测试",
+            remind_times = [
                 "2030-01-01T08:00:00+08:00",
                 "2030-01-01T10:00:00+08:00",
             ],
         )
         db.get_last_unconfirmed_remind_time.return_value = None
-        db.update_item.return_value = True
+        db.update_item.return_value                      = True
 
-        reminder_service = MagicMock()
-        reminder_service.db = db
+        reminder_service                               = MagicMock()
+        reminder_service.db                            = db
         reminder_service.confirm_reminder.return_value = {"status": "success", "message": "ok"}
 
         result = asyncio.run(handle_snooze("u1", "evt123 10m", reminder_service))
@@ -552,45 +552,45 @@ class TestOperationAndExportRegression:
         from plugins.pendo.services.exporter import ExporterService
 
         event_item = SimpleNamespace(
-            id="evt1",
-            type="event",
-            title="项目周会",
-            category="工作",
-            tags=["会议"],
-            created_at="2026-03-10T09:00:00",
-            updated_at="2026-03-10T10:00:00",
-            start_time="2026-03-12T09:30:00",
-            end_time="2026-03-12T10:30:00",
-            location="腾讯会议",
-            remind_times=["2026-03-12T09:00:00"],
-            notes="带上进度表",
-            content="讨论本周排期",
+            id           = "evt1",
+            type         = "event",
+            title        = "项目周会",
+            category     = "工作",
+            tags         = ["会议"],
+            created_at   = "2026-03-10T09:00:00",
+            updated_at   = "2026-03-10T10:00:00",
+            start_time   = "2026-03-12T09:30:00",
+            end_time     = "2026-03-12T10:30:00",
+            location     = "腾讯会议",
+            remind_times = ["2026-03-12T09:00:00"],
+            notes        = "带上进度表",
+            content      = "讨论本周排期",
         )
         task_item = SimpleNamespace(
-            id="todo1",
-            type="task",
-            title="提交周报",
-            category="工作",
-            tags=["例行"],
-            created_at="2026-03-08T08:00:00",
-            updated_at="2026-03-09T08:00:00",
-            plan_date="2026-03-15",
-            deadline_at="2026-03-15T18:00:00",
-            priority=2,
-            status="open",
-            completed_at=None,
-            cancelled_at=None,
-            content="同步给导师和组会群",
+            id           = "todo1",
+            type         = "task",
+            title        = "提交周报",
+            category     = "工作",
+            tags         = ["例行"],
+            created_at   = "2026-03-08T08:00:00",
+            updated_at   = "2026-03-09T08:00:00",
+            plan_date    = "2026-03-15",
+            deadline_at  = "2026-03-15T18:00:00",
+            priority     = 2,
+            status       = "open",
+            completed_at = None,
+            cancelled_at = None,
+            content      = "同步给导师和组会群",
         )
         note_item = SimpleNamespace(
-            id="note1",
-            type="note",
-            title="研究想法",
-            category="灵感",
-            tags=["论文"],
-            created_at="2026-03-11T08:00:00",
-            updated_at="2026-03-11T08:30:00",
-            content="这条不应该被导出到 event,todo 结果里",
+            id         = "note1",
+            type       = "note",
+            title      = "研究想法",
+            category   = "灵感",
+            tags       = ["论文"],
+            created_at = "2026-03-11T08:00:00",
+            updated_at = "2026-03-11T08:30:00",
+            content    = "这条不应该被导出到 event,todo 结果里",
         )
 
         class _Repo:
@@ -605,10 +605,10 @@ class TestOperationAndExportRegression:
                     return [note_item]
                 return []
 
-        _repo = _Repo()
+        _repo              = _Repo()
         _repo.log_transfer = lambda **kwargs: 1
-        service = ExporterService(_repo, tmp_path)
-        result = service.export_markdown(
+        service            = ExporterService(_repo, tmp_path)
+        result             = service.export_markdown(
             "u1",
             "工作档案 2026-03-01..2026-03-31 event,todo",
             {},
@@ -635,15 +635,15 @@ class TestOperationAndExportRegression:
         from plugins.pendo.services.exporter import ExporterService
 
         note_item = SimpleNamespace(
-            id="note1",
-            type="note",
-            title="读书摘录",
-            category="学习",
-            tags=["阅读"],
-            created_at="2026-03-11T08:00:00",
-            updated_at="2026-03-11T08:30:00",
-            content="正文",
-            references=[
+            id         = "note1",
+            type       = "note",
+            title      = "读书摘录",
+            category   = "学习",
+            tags       = ["阅读"],
+            created_at = "2026-03-11T08:00:00",
+            updated_at = "2026-03-11T08:30:00",
+            content    = "正文",
+            references = [
                 {
                     "kind": "item",
                     "id": "1234abcd" + "0" * 24,
@@ -658,10 +658,10 @@ class TestOperationAndExportRegression:
                 assert use_cache is False
                 return [note_item] if filters.get("type") == "note" else []
 
-        _repo = _Repo()
+        _repo              = _Repo()
         _repo.log_transfer = lambda **kwargs: 1
-        service = ExporterService(_repo, tmp_path)
-        result = service.export_markdown("u1", "笔记档案 note", {})
+        service            = ExporterService(_repo, tmp_path)
+        result             = service.export_markdown("u1", "笔记档案 note", {})
 
         assert result["status"] == "success"
         exported = (tmp_path / "u1" / "笔记档案.md").read_text(encoding="utf-8")
@@ -677,7 +677,7 @@ class TestOperationAndExportRegression:
         from plugins.pendo.services.exporter import ExporterService
 
         service = ExporterService(SimpleNamespace(), tmp_path)
-        result = service.export_markdown("u1", "", {})
+        result  = service.export_markdown("u1", "", {})
 
         assert result["status"] == "error"
         assert "请提供导出文件名" in result["message"]
@@ -690,22 +690,22 @@ class TestOperationAndExportRegression:
         from plugins.pendo.services.exporter import ExporterService
 
         event_item = SimpleNamespace(
-            id="conf2026_m01",
-            owner_id="u1",
-            type="event",
-            title="摘要截止",
-            category="未分类",
-            tags=[],
-            created_at="2026-03-01T09:00:00",
-            updated_at="2026-03-01T09:00:00",
-            start_time="2026-03-05T09:00:00",
-            end_time=None,
-            location="",
-            remind_times=[],
-            notes="节点备注",
-            content="",
-            event_collection_id="conf2026",
-            event_collection_kind="multi_node",
+            id                    = "conf2026_m01",
+            owner_id              = "u1",
+            type                  = "event",
+            title                 = "摘要截止",
+            category              = "未分类",
+            tags                  = [],
+            created_at            = "2026-03-01T09:00:00",
+            updated_at            = "2026-03-01T09:00:00",
+            start_time            = "2026-03-05T09:00:00",
+            end_time              = None,
+            location              = "",
+            remind_times          = [],
+            notes                 = "节点备注",
+            content               = "",
+            event_collection_id   = "conf2026",
+            event_collection_kind = "multi_node",
         )
 
         class _Repo:
@@ -723,10 +723,10 @@ class TestOperationAndExportRegression:
                     "notes": "整体备注",
                 }
 
-        _repo = _Repo()
+        _repo              = _Repo()
         _repo.log_transfer = lambda **kwargs: 1
-        service = ExporterService(_repo, tmp_path)
-        result = service.export_markdown("u1", "日程导出 event", {})
+        service            = ExporterService(_repo, tmp_path)
+        result             = service.export_markdown("u1", "日程导出 event", {})
 
         assert result["status"] == "success"
         exported = (tmp_path / "u1" / "日程导出.md").read_text(encoding="utf-8")

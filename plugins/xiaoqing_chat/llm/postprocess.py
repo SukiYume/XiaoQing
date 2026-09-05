@@ -22,7 +22,7 @@ def _strip_prefix(text: str, bot_name: str) -> str:
 
 
 def _normalize(text: str) -> str:
-    s = text.replace("\r\n", "\n").replace("\r", "\n")
+    s      = text.replace("\r\n", "\n").replace("\r", "\n")
     chunks = s.split("```")
     for index in range(0, len(chunks), 2):
         chunks[index] = _RE_MULTI_SPACE.sub(" ", chunks[index])
@@ -45,14 +45,14 @@ def _split_sentences(text: str) -> list[str]:
     if not s:
         return []
 
-    quote_pairs = {"“": "”", "‘": "’", "「": "」", "『": "』"}
-    closing_quotes = set(quote_pairs.values())
+    quote_pairs            = {"“": "”", "‘": "’", "「": "」", "『": "』"}
+    closing_quotes         = set(quote_pairs.values())
     quote_stack: list[str] = []
-    out: list[str] = []
-    start = 0
-    index = 0
+    out: list[str]         = []
+    start                  = 0
+    index                  = 0
     while index < len(s):
-        char = s[index]
+        char         = s[index]
         closed_quote = False
         if char in quote_pairs:
             quote_stack.append(quote_pairs[char])
@@ -106,7 +106,7 @@ def process_llm_response(
 
     splitter: ResponseSplitterConfig = cfg.splitter
     if splitter.enable and enable_splitter:
-        sentences = _split_sentences(text)
+        sentences      = _split_sentences(text)
         out: list[str] = []
         for s in sentences:
             s = _truncate(s, splitter.max_length)

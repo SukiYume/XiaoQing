@@ -26,7 +26,7 @@ _LEGACY_QQ_FACE_LABEL_OVERRIDES: dict[str, tuple[str, ...]] = {
     "279": ("踩",),
 }
 _BUNDLED_QQ_FACE_LABELS: dict[str, tuple[str, ...]] | None = None
-_CATALOG_CACHE_MAX_ENTRIES = 32
+_CATALOG_CACHE_MAX_ENTRIES                                 = 32
 _CATALOG_CACHE: OrderedDict[
     str,
     tuple[tuple[int, int, int, int], list[QQFaceEntry]],
@@ -54,7 +54,7 @@ def _bundled_catalog_path() -> Path:
 def _load_payload(context) -> dict[str, Any]:
     loaded: Any = load_json(_catalog_path(context), default={"entries": {}})
     payload: dict[str, Any] = loaded if isinstance(loaded, dict) else {"entries": {}}
-    entries = payload.get("entries")
+    entries                 = payload.get("entries")
     if not isinstance(entries, dict):
         payload["entries"] = {}
     return payload
@@ -154,7 +154,7 @@ def _placeholder_label(face_id: str) -> str:
 def _normalize_labels(
     values: Any,
     *,
-    face_id: str = "",
+    face_id: str            = "",
     allow_placeholder: bool = False,
 ) -> tuple[str, ...]:
     labels: list[str] = []
@@ -201,12 +201,12 @@ def _entry_from_payload(face_id: str, data: dict[str, Any]) -> QQFaceEntry | Non
         labels = (_placeholder_label(face_id),)
     label = labels[0]
     return QQFaceEntry(
-        face_id=face_id,
-        label=label,
-        aliases=labels,
-        usage_count=_nonnegative_int(data.get("usage_count", 0)),
-        last_used_ts=_nonnegative_float(data.get("last_used_ts", 0.0)),
-        marker=f"[QQ表情：{label}]",
+        face_id      = face_id,
+        label        = label,
+        aliases      = labels,
+        usage_count  = _nonnegative_int(data.get("usage_count", 0)),
+        last_used_ts = _nonnegative_float(data.get("last_used_ts", 0.0)),
+        marker       = f"[QQ表情：{label}]",
     )
 
 
@@ -216,14 +216,14 @@ def record_face_observation(context, *, face_id: Any, label: Any) -> None:
     if not normalized_id or not labels:
         return
 
-    payload = _load_payload(context)
+    payload          = _load_payload(context)
     original_payload = deepcopy(payload)
-    entries = payload.setdefault("entries", {})
-    current = entries.get(normalized_id)
-    existing_labels = _normalize_labels(
+    entries          = payload.setdefault("entries", {})
+    current          = entries.get(normalized_id)
+    existing_labels  = _normalize_labels(
         current.get("labels", []) if isinstance(current, dict) else [],
-        face_id=normalized_id,
-        allow_placeholder=True,
+        face_id           = normalized_id,
+        allow_placeholder = True,
     )
     merged: list[str] = list(existing_labels)
     for item in labels:
@@ -242,7 +242,7 @@ def record_face_observation(context, *, face_id: Any, label: Any) -> None:
 
 
 async def load_qq_face_catalog(context) -> list[QQFaceEntry]:
-    cache_key = _catalog_cache_key(context)
+    cache_key       = _catalog_cache_key(context)
     cache_signature = _catalog_signature(context)
     if cache_key and cache_signature is not None:
         cached = _CATALOG_CACHE.get(cache_key)
@@ -250,12 +250,12 @@ async def load_qq_face_catalog(context) -> list[QQFaceEntry]:
             _CATALOG_CACHE.move_to_end(cache_key)
             return list(cached[1])
 
-    payload = _load_payload(context)
-    original_payload = deepcopy(payload)
-    observed_entries = payload.setdefault("entries", {})
+    payload                = _load_payload(context)
+    original_payload       = deepcopy(payload)
+    observed_entries       = payload.setdefault("entries", {})
     observed_ids: set[str] = set()
 
-    bundled_catalog = _load_bundled_qq_face_labels()
+    bundled_catalog                           = _load_bundled_qq_face_labels()
     merged_entries: dict[str, dict[str, Any]] = {}
     for face_id, labels in bundled_catalog.items():
         merged_entries[face_id] = {"labels": list(labels), "usage_count": 0, "last_used_ts": 0.0}
@@ -281,14 +281,14 @@ async def load_qq_face_catalog(context) -> list[QQFaceEntry]:
             data.get("last_used_ts", existing.get("last_used_ts", 0.0))
         )
 
-    results: list[QQFaceEntry] = []
+    results: list[QQFaceEntry]        = []
     persisted_entries: dict[str, Any] = {}
     for face_id, data in merged_entries.items():
         entry = _entry_from_payload(face_id, data)
         if entry is None:
             continue
         results.append(entry)
-        bundled_labels = bundled_catalog.get(face_id, ())
+        bundled_labels     = bundled_catalog.get(face_id, ())
         has_observed_value = (
             face_id not in bundled_catalog
             or entry.usage_count > 0
@@ -322,11 +322,11 @@ def mark_qq_face_used_by_id(context, face_id: Any, *, label: Any = "") -> None:
     payload = _load_payload(context)
     entries = payload.setdefault("entries", {})
     current = entries.get(normalized_id)
-    labels = list(
+    labels  = list(
         _normalize_labels(
             current.get("labels", []) if isinstance(current, dict) else [],
-            face_id=normalized_id,
-            allow_placeholder=True,
+            face_id           = normalized_id,
+            allow_placeholder = True,
         )
     )
     normalized_labels = _normalize_labels(label, face_id=normalized_id, allow_placeholder=True)

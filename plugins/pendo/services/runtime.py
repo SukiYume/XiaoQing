@@ -1,3 +1,4 @@
+# Pendo 运行期服务：数据库、Web 和重载钩子由同一生命周期持有。
 """State-owning lifecycle boundary for Pendo's database, Web UI and reload hook."""
 
 from __future__ import annotations
@@ -52,10 +53,10 @@ class PendoRuntimeService:
         *,
         web_backend_factory: Callable[[], _WebBackend] = _load_web_backend,
     ) -> None:
-        self._database: Database | None = None
-        self._database_path: Path | None = None
+        self._database: Database | None                     = None
+        self._database_path: Path | None                    = None
         self._config_unsubscribe: Callable[[], None] | None = None
-        self._web_backend_factory = web_backend_factory
+        self._web_backend_factory                           = web_backend_factory
 
     @property
     def database(self) -> Database | None:
@@ -78,7 +79,7 @@ class PendoRuntimeService:
 
         if self._database is not None:
             raise RuntimeError("Pendo runtime database is already initialized")
-        db_path = resolve_database_path(context)
+        db_path  = resolve_database_path(context)
         database = database_factory(str(db_path))
         try:
             self.adopt_database(database, database_path=db_path)
@@ -89,8 +90,8 @@ class PendoRuntimeService:
                 public_error_message(
                     None,
                     cleanup_exc,
-                    logger=logger,
-                    component="pendo.runtime.database_candidate_cleanup",
+                    logger    = logger,
+                    component = "pendo.runtime.database_candidate_cleanup",
                 )
             raise
         return database
@@ -106,7 +107,7 @@ class PendoRuntimeService:
         if self._database is not None and self._database is not database:
             raise RuntimeError("Pendo runtime database is already initialized")
         claim_database_singleton(database)
-        self._database = database
+        self._database      = database
         self._database_path = database_path
 
     def bind_config_subscription(self, unsubscribe: Callable[[], None]) -> bool:
@@ -128,10 +129,10 @@ class PendoRuntimeService:
         """Detach every owned database first, then close each object exactly once."""
 
         owned, self._database = self._database, None
-        self._database_path = None
-        singleton = detach_database_singleton()
+        self._database_path                   = None
+        singleton                             = detach_database_singleton()
         failures: list[RuntimeCleanupFailure] = []
-        seen: set[int] = set()
+        seen: set[int]                        = set()
         for component, database in (
             ("runtime_db", owned),
             ("singleton_db", singleton),

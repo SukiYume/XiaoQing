@@ -28,7 +28,7 @@ ROOT = REPOSITORY_ROOT
 
 def test_readmes_describe_current_state_instead_of_release_history() -> None:
     ignored_parts = {".git", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".venv", "node_modules"}
-    readmes = sorted(
+    readmes       = sorted(
         path
         for path in ROOT.rglob("README*.md")
         if not ignored_parts.intersection(path.relative_to(ROOT).parts)
@@ -112,7 +112,7 @@ def test_root_secret_example_uses_current_standard_glm_api() -> None:
     config = json.loads((ROOT / "config" / "config.json.example").read_text(encoding="utf-8"))
     secrets = json.loads((ROOT / "config" / "secrets.json.example").read_text(encoding="utf-8"))
     provider = config["ai"]["providers"]["zhipu"]
-    model = config["ai"]["models"]["glm-5.2"]
+    model    = config["ai"]["models"]["glm-5.2"]
 
     assert provider["api_base"] == "https://open.bigmodel.cn/api/paas/v4"
     assert provider["endpoint_path"] == "/chat/completions"

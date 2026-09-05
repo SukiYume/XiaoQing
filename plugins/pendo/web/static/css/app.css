@@ -60,7 +60,9 @@ body {
     overflow-x: hidden;
 }
 
-body.sidebar-open {
+/* 侧栏和模态框各自维护状态类，共用背景滚动锁。 */
+body.sidebar-open,
+body.modal-open {
     overflow: hidden;
 }
 
@@ -105,25 +107,24 @@ h1 {
     color: var(--color-text);
 }
 
-h2 {
-    font-size: 20px;
+h2,
+h3,
+h4 {
     font-weight: 600;
     line-height: 1.4;
     color: var(--color-text);
+}
+
+h2 {
+    font-size: 20px;
 }
 
 h3 {
     font-size: 16px;
-    font-weight: 600;
-    line-height: 1.4;
-    color: var(--color-text);
 }
 
 h4 {
     font-size: 14px;
-    font-weight: 600;
-    line-height: 1.4;
-    color: var(--color-text);
 }
 
 p {
@@ -262,7 +263,7 @@ p {
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 12px 12px;
+    padding: 12px;
     border-radius: 18px;
     cursor: pointer;
     color: var(--color-text-secondary);
@@ -1422,16 +1423,18 @@ select:hover:not(:disabled) {
     gap: 12px;
 }
 
-.empty-state p {
+.empty-state p,
+.error-state p {
     font-size: 14px;
-    color: var(--color-text-tertiary);
     max-width: 320px;
 }
 
+.empty-state p {
+    color: var(--color-text-tertiary);
+}
+
 .error-state p {
-    font-size: 14px;
     color: var(--color-text-secondary);
-    max-width: 320px;
 }
 
 /* ============================================================
@@ -1499,6 +1502,7 @@ select:hover:not(:disabled) {
 }
 
 @media (max-width: 768px) {
+    /* 手机抽屉恢复完整文案与宽度，覆盖上方平板图标侧栏规则。 */
     .sidebar {
         transform: translateX(-100%);
         width: var(--sidebar-width);
@@ -1580,6 +1584,7 @@ select:hover:not(:disabled) {
 
     .modal-content {
         margin: 0;
+        /* 旧浏览器使用 vh，支持动态视口的浏览器跟随地址栏高度变化。 */
         max-height: 100vh;
         max-height: 100dvh;
         border-radius: var(--radius) var(--radius) 0 0;
@@ -1675,15 +1680,7 @@ select:hover:not(:disabled) {
 }
 
 /* ============================================================
-   16. 模态框滚动锁
-   ============================================================ */
-/* 模态框组件打开时为 body 添加此类，避免背景页面跟随滚动。 */
-body.modal-open {
-    overflow: hidden;
-}
-
-/* ============================================================
-   17. 回到顶部
+   16. 回到顶部
    ============================================================ */
 #back-to-top {
     --btt-accent: var(--color-dashboard);
@@ -1697,6 +1694,7 @@ body.modal-open {
     width: 38px;
     height: 38px;
     border-radius: 50%;
+    /* 实色为兼容回退；支持 color-mix 时由后续背景声明提供半透明效果。 */
     background-color: var(--btt-accent);
     background: color-mix(in srgb, var(--btt-accent) 68%, transparent);
     color: #ffffff;

@@ -32,7 +32,7 @@ _SUBCOMMANDS = {
     **dict.fromkeys(("delete", "del", "remove", "rm", "删除"), "delete"),
 }
 _POSITIVE_INTEGER_RE = re.compile(r"[1-9][0-9]{0,18}")
-_MAX_JOB_ID = 2**63 - 1
+_MAX_JOB_ID          = 2**63 - 1
 
 
 def _message(text: str) -> list[dict[str, Any]]:
@@ -50,16 +50,16 @@ async def enqueue_arxiv_summary(
     *,
     date: str,
     links: list[str],
-    user_id: int | None = None,
+    user_id: int | None  = None,
     group_id: int | None = None,
 ) -> str:
     """供核心能力调用的唯一 Codex sidecar 操作。"""
     return await enqueue_or_replay_arxiv_summary(
         context,
-        date=date,
-        links=links,
-        user_id=user_id,
-        group_id=group_id,
+        date     = date,
+        links    = links,
+        user_id  = user_id,
+        group_id = group_id,
     )
 
 
@@ -74,10 +74,10 @@ async def enqueue_arxiv_summary_service(
 
     return await enqueue_arxiv_summary(
         context,
-        date=date,
-        links=links,
-        user_id=user_id,
-        group_id=group_id,
+        date     = date,
+        links    = links,
+        user_id  = user_id,
+        group_id = group_id,
     )
 
 
@@ -120,16 +120,16 @@ def _cwd_from_args(parsed: ParsedArgs) -> tuple[str | None, str | None]:
 
     error = _shape_error(
         parsed,
-        minimum_tokens=2,
-        maximum_tokens=3,
-        allowed_options=frozenset({"cwd", "C"}),
+        minimum_tokens  = 2,
+        maximum_tokens  = 3,
+        allowed_options = frozenset({"cwd", "C"}),
     )
     if error:
         return None, error
 
     values = [parsed.opt(key) for key in ("cwd", "C") if parsed.has(key)]
     if len(parsed.tokens) == 3:
-        token = parsed.tokens[2]
+        token   = parsed.tokens[2]
         lowered = token.casefold()
         if lowered.startswith("cwd:") or lowered.startswith("cwd="):
             values.append(token[4:])
@@ -162,8 +162,8 @@ async def _handle_create(
     return await manager.create_session(
         parsed.second,
         cwd,
-        user_id=user_id,
-        group_id=group_id,
+        user_id  = user_id,
+        group_id = group_id,
     )
 
 
@@ -197,9 +197,9 @@ async def _handle_clear(manager: CodexQueueManager, parsed: ParsedArgs) -> str:
 async def _handle_delete(manager: CodexQueueManager, parsed: ParsedArgs) -> str:
     error = _shape_error(
         parsed,
-        minimum_tokens=2,
-        maximum_tokens=2,
-        allowed_options=frozenset({"force", "protected"}),
+        minimum_tokens  = 2,
+        maximum_tokens  = 2,
+        allowed_options = frozenset({"force", "protected"}),
     )
     if error:
         return f"{error}\n用法: /codex delete <name> [--force] [--protected]"
@@ -207,8 +207,8 @@ async def _handle_delete(manager: CodexQueueManager, parsed: ParsedArgs) -> str:
         return "--force 和 --protected 是无值标志。"
     return await manager.delete_session(
         parsed.second,
-        force=parsed.has("force"),
-        allow_protected=parsed.has("protected"),
+        force           = parsed.has("force"),
+        allow_protected = parsed.has("protected"),
     )
 
 
@@ -224,7 +224,7 @@ async def handle(
     if not raw or raw.lower() in {"help", "帮助", "?"}:
         return _message(HELP_TEXT)
 
-    parsed = parse(raw)
+    parsed     = parse(raw)
     subcommand = _SUBCOMMANDS.get(parsed.first.casefold())
     user_id, group_id = _event_user_group(event, context)
     manager = await get_manager(context)
@@ -233,8 +233,8 @@ async def handle(
         message = await _handle_create(
             manager,
             parsed,
-            user_id=user_id,
-            group_id=group_id,
+            user_id  = user_id,
+            group_id = group_id,
         )
         return _message(message)
     if subcommand == "list":
@@ -256,8 +256,8 @@ async def handle(
         await manager.enqueue(
             label,
             prompt,
-            user_id=user_id,
-            group_id=group_id,
-            context=context,
+            user_id  = user_id,
+            group_id = group_id,
+            context  = context,
         )
     )

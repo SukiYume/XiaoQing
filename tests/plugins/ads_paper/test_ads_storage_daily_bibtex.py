@@ -56,7 +56,7 @@ def test_corrupt_storage_is_quarantined_and_never_overwritten(
         mutation(storage)
 
     assert path.read_bytes() == payload
-    digest = hashlib.sha256(payload).hexdigest()[:12]
+    digest     = hashlib.sha256(payload).hexdigest()[:12]
     quarantine = tmp_path / f"{filename}.corrupt-{digest}"
     assert quarantine.read_bytes() == payload
 
@@ -74,10 +74,10 @@ async def test_daily_uses_utc_entry_date_window_and_deterministic_order(
     class Client:
         async def search_papers(self, query, max_results, *, fields, sort):
             captured.update(
-                query=query,
-                max_results=max_results,
-                fields=fields,
-                sort=sort,
+                query       = query,
+                max_results = max_results,
+                fields      = fields,
+                sort        = sort,
             )
             return [
                 {"bibcode": "B", "title": ["Today B"], "entdate": "2026-07-13"},
@@ -97,7 +97,7 @@ async def test_daily_uses_utc_entry_date_window_and_deterministic_order(
 
     monkeypatch.setattr(ai_commands, "_utc_today", lambda: date(2026, 7, 13))
     result = await ai_commands.cmd_daily(Client(), storage, 1)
-    text = result[0]["data"]["text"]
+    text   = result[0]["data"]["text"]
 
     assert captured["query"] == ('("fast radio burst") AND entdate:[2026-07-13 TO NOW]')
     assert captured["sort"] == "entdate desc,bibcode asc"
@@ -129,7 +129,7 @@ _COMPLEX_BIBTEX = r"""
 
 def test_bibtex_parser_preserves_entry_boundaries_with_nested_and_at_values() -> None:
     all_entries = parse_bibtex_entries(_COMPLEX_BIBTEX)
-    entries = citation_entries(_COMPLEX_BIBTEX)
+    entries     = citation_entries(_COMPLEX_BIBTEX)
 
     assert [entry.entry_type for entry in all_entries] == ["string", "article", "inproceedings"]
     assert [entry.citation_key for entry in entries] == ["KeyOne", "KeyTwo"]
@@ -166,7 +166,7 @@ async def test_refs_command_uses_structural_bibtex_entries(tmp_path: Path) -> No
 
     context = SimpleNamespace(request_id=None, secrets={})
     result = await cmd_refs(PaperStorage(tmp_path), context, 1)
-    text = result[0]["data"]["text"]
+    text   = result[0]["data"]["text"]
 
     assert "文献库 (2 条引用)" in text
     assert "A {Nested} Title" in text
@@ -174,7 +174,7 @@ async def test_refs_command_uses_structural_bibtex_entries(tmp_path: Path) -> No
 
 
 def test_invalid_existing_bibtex_blocks_append_without_overwrite(tmp_path: Path) -> None:
-    path = tmp_path / "references_1.bib"
+    path     = tmp_path / "references_1.bib"
     original = b"@article{Broken, title={unfinished}"
     path.write_bytes(original)
     storage = PaperStorage(tmp_path)

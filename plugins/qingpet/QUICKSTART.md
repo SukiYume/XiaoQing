@@ -140,7 +140,7 @@ data/qingpet/qingpet/qingpet.db
 | 次日 00:00 | 每日计数重置与宠物年龄增长 |
 | 周一 10:00 | 周排行奖励与称号结算 |
 
-生产数据验证前先备份 `qingpet.db`、`qingpet.db-wal` 和 `qingpet.db-shm`。
+生产数据验证前使用 SQLite `Connection.backup()` 生成一致备份，备份包含 WAL 中已提交的数据。验证使用备份副本和隔离数据目录。
 
 ---
 

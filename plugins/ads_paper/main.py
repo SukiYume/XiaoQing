@@ -50,7 +50,7 @@ def _get_storage(context: PluginContextProtocol) -> PaperStorage:
     storage = context.state.get("paper_storage")
     if isinstance(storage, PaperStorage):
         return storage
-    storage = PaperStorage(context.data_dir)
+    storage                        = PaperStorage(context.data_dir)
     context.state["paper_storage"] = storage
     return storage
 
@@ -69,7 +69,7 @@ async def handle(
             logger.debug("无参数，显示帮助信息")
             return _show_help()
 
-        subcommand = command_parts[0].casefold()
+        subcommand      = command_parts[0].casefold()
         subcommand_args = command_parts[1] if len(command_parts) == 2 else ""
         logger.info("执行子命令: %s", subcommand)
 
@@ -145,8 +145,8 @@ async def handle(
         return public_error_response(
             context,
             exc,
-            logger=logger,
-            component="ads_paper.handle",
+            logger    = logger,
+            component = "ads_paper.handle",
         )
 
 

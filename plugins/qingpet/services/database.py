@@ -1,9 +1,10 @@
 """QingPet 的 SQLite 模式迁移、领域持久化和原子结算实现。"""
 
 import logging
-import shutil
 import sqlite3
 import threading
+import uuid
+from contextlib import closing
 from pathlib import Path
 
 from .database_actions import AtomicActionRepositoryMixin
@@ -64,15 +65,25 @@ class Database(
     """
 
     def __init__(self, db_path: str) -> None:
-        self.db_path = db_path
-        self._local = threading.local()
-        self._connections_lock = threading.Lock()
+        self.db_path                                                     = db_path
+        self._local                                                      = threading.local()
+        self._connections_lock                                           = threading.Lock()
         self._all_connections: dict[int, tuple[int, sqlite3.Connection]] = {}
-        path = Path(db_path)
+        path                                                             = Path(db_path)
         if path.exists() and path.stat().st_size > 0:
             backup = path.with_suffix(path.suffix + ".pre-migration.bak")
             if not backup.exists():
-                shutil.copy2(path, backup)
+                # SQLite 在线备份同时读取已提交的 WAL，发布前先完成一致快照。
+                temporary = backup.with_suffix(backup.suffix + f".{uuid.uuid4().hex}.tmp")
+                try:
+                    with (
+                        closing(sqlite3.connect(path)) as source,
+                        closing(sqlite3.connect(temporary)) as target,
+                    ):
+                        source.backup(target)
+                    temporary.replace(backup)
+                finally:
+                    temporary.unlink(missing_ok=True)
         self._init_database()
 
     def _get_connection(self) -> sqlite3.Connection:

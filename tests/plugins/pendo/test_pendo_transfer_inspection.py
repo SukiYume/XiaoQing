@@ -36,8 +36,8 @@ def test_execute_import_rejects_oversized_options_header(
 
     response = client.post(
         "/api/transfer/import/execute",
-        headers={**auth_headers, "X-Transfer-Options": "x" * 4097},
-        content=b"unused",
+        headers = {**auth_headers, "X-Transfer-Options": "x" * 4097},
+        content = b"unused",
     )
 
     assert response.status_code == 422
@@ -57,7 +57,7 @@ def test_import_inspect_returns_summary_and_row_errors(client: Any, auth_headers
         "updated_at": "2026-03-20T09:00:00+08:00",
     }
     invalid_task = {"_type": "task", "_schema": 2, "id": "bad"}
-    records = [valid_task, invalid_task]
+    records      = [valid_task, invalid_task]
     content = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in records).encode("utf-8")
     manifest = build_manifest(
         {"types": ["task"], "preset": "all", "start": None, "end": None},
@@ -79,8 +79,8 @@ def test_import_inspect_returns_summary_and_row_errors(client: Any, auth_headers
 
     response = client.post(
         "/api/transfer/import/inspect",
-        headers=auth_headers,
-        content=bundle_bytes,
+        headers = auth_headers,
+        content = bundle_bytes,
     )
 
     assert response.status_code == 200
@@ -130,8 +130,8 @@ def test_import_inspect_detects_already_imported_bundle(
     # 再次预检同一个 bundle
     response = client.post(
         "/api/transfer/import/inspect",
-        headers=auth_headers,
-        content=bundle_bytes,
+        headers = auth_headers,
+        content = bundle_bytes,
     )
     assert response.status_code == 200
     assert response.json()["data"]["already_imported"] is True
@@ -153,7 +153,7 @@ def test_import_inspect_preserves_original_line_number_for_normalization_errors(
             ensure_ascii=False,
         ),
     ]
-    content = ("\n".join(rows) + "\n").encode("utf-8")
+    content  = ("\n".join(rows) + "\n").encode("utf-8")
     manifest = build_manifest(
         {"types": ["task"], "preset": "all", "start": None, "end": None},
         [
@@ -173,8 +173,8 @@ def test_import_inspect_preserves_original_line_number_for_normalization_errors(
 
     response = client.post(
         "/api/transfer/import/inspect",
-        headers=auth_headers,
-        content=buf.getvalue(),
+        headers = auth_headers,
+        content = buf.getvalue(),
     )
 
     assert response.status_code == 200

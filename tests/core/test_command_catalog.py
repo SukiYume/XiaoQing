@@ -39,9 +39,9 @@ from scripts.run_command_matrix import (
 )
 from tests.helpers.paths import REPOSITORY_ROOT
 
-PROJECT_ROOT = REPOSITORY_ROOT
+PROJECT_ROOT     = REPOSITORY_ROOT
 PLUGIN_MANIFESTS = tuple(sorted((PROJECT_ROOT / "plugins").glob("*/plugin.json")))
-MATRIX_POLICY = PROJECT_ROOT / "tests" / "command_matrix_policy.json"
+MATRIX_POLICY    = PROJECT_ROOT / "tests" / "command_matrix_policy.json"
 
 
 def test_event_clients_reserve_disjoint_message_id_ranges() -> None:
@@ -54,7 +54,7 @@ def test_event_clients_reserve_disjoint_message_id_ranges() -> None:
         "timeout": 1.0,
     }
 
-    first = EventClient(**common)
+    first  = EventClient(**common)
     second = EventClient(**common)
 
     assert second._message_seed - first._message_seed >= 1_000_000
@@ -74,19 +74,19 @@ def test_command_matrix_policy_rejects_duplicate_json_keys(tmp_path: Path) -> No
 def test_command_matrix_requires_non_admin_and_isolated_scenario_ids() -> None:
     with pytest.raises(MatrixError, match="不能使用 Bot 管理员 ID"):
         validate_test_id_isolation(
-            user_id=10,
-            group_id=20,
-            scenario_user_id=30,
-            scenario_group_id=40,
-            admin_ids=(10,),
+            user_id           = 10,
+            group_id          = 20,
+            scenario_user_id  = 30,
+            scenario_group_id = 40,
+            admin_ids         = (10,),
         )
     with pytest.raises(MatrixError, match="必须使用独立"):
         validate_test_id_isolation(
-            user_id=10,
-            group_id=20,
-            scenario_user_id=10,
-            scenario_group_id=20,
-            admin_ids=(99,),
+            user_id           = 10,
+            group_id          = 20,
+            scenario_user_id  = 10,
+            scenario_group_id = 20,
+            admin_ids         = (99,),
         )
 
 
@@ -94,12 +94,12 @@ def test_http_event_client_converts_network_failure_but_not_programming_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = EventClient(
-        endpoint="http://127.0.0.1:12000/event",
-        token="test-token",
-        admin_id=1,
-        user_id=2,
-        group_id=3,
-        timeout=1.0,
+        endpoint = "http://127.0.0.1:12000/event",
+        token    = "test-token",
+        admin_id = 1,
+        user_id  = 2,
+        group_id = 3,
+        timeout  = 1.0,
     )
 
     def fail_network(*_args: object, **_kwargs: object) -> object:
@@ -142,8 +142,8 @@ def test_websocket_event_client_uses_real_bearer_transport_and_collects_actions(
             self.receive_count += 1
             if self.receive_count == 1:
                 return SimpleNamespace(
-                    type=WSMsgType.TEXT,
-                    data=json.dumps(
+                    type = WSMsgType.TEXT,
+                    data = json.dumps(
                         {
                             "action": "send_private_msg",
                             "params": {"message": "pong"},
@@ -165,19 +165,19 @@ def test_websocket_event_client_uses_real_bearer_transport_and_collects_actions(
             return False
 
         def ws_connect(self, endpoint: str, *, headers: dict[str, str], timeout: float):
-            captured["endpoint"] = endpoint
-            captured["headers"] = headers
+            captured["endpoint"]        = endpoint
+            captured["headers"]         = headers
             captured["connect_timeout"] = timeout
             return websocket
 
     monkeypatch.setattr("scripts.run_command_matrix.aiohttp.ClientSession", Session)
     client = WebSocketEventClient(
-        endpoint="http://127.0.0.1:12000/ws",
-        token="runtime-token",
-        admin_id=1,
-        user_id=2,
-        group_id=3,
-        timeout=4.5,
+        endpoint = "http://127.0.0.1:12000/ws",
+        token    = "runtime-token",
+        admin_id = 1,
+        user_id  = 2,
+        group_id = 3,
+        timeout  = 4.5,
     )
 
     response = client.send("/echo pong", scope="group", actor="group_owner")
@@ -250,8 +250,8 @@ def _load_catalog() -> _CatalogFixture:
         PluginManifest.model_validate(json.loads(path.read_text(encoding="utf-8")))
         for path in PLUGIN_MANIFESTS
     )
-    roots: list[CommandCatalogNode] = []
-    router = CommandRouter()
+    roots: list[CommandCatalogNode]      = []
+    router                               = CommandRouter()
     invocations: list[CommandInvocation] = []
 
     async def catalog_handler(
@@ -274,15 +274,15 @@ def _load_catalog() -> _CatalogFixture:
             roots.append(root)
             router.register(
                 CommandSpec(
-                    plugin=manifest.name,
-                    name=command.name,
-                    triggers=command.triggers,
-                    help_text=command.help,
-                    admin_only=command.admin_only,
-                    handler=catalog_handler,
-                    priority=command.priority,
-                    usage=command.usage,
-                    catalog=root,
+                    plugin     = manifest.name,
+                    name       = command.name,
+                    triggers   = command.triggers,
+                    help_text  = command.help,
+                    admin_only = command.admin_only,
+                    handler    = catalog_handler,
+                    priority   = command.priority,
+                    usage      = command.usage,
+                    catalog    = root,
                 )
             )
     return _CatalogFixture(manifests, tuple(roots), router, invocations)
@@ -305,7 +305,7 @@ def _runtime_catalog_records(roots: tuple[CommandCatalogNode, ...]) -> list[dict
     records: list[dict[str, Any]] = []
     for root in roots:
         for node in root.walk():
-            record = node.to_dict()
+            record                = node.to_dict()
             record["subcommands"] = [child.code for child in node.children]
             records.append(record)
     return records
@@ -349,7 +349,7 @@ def test_every_plugin_exposes_a_complete_recursive_command_contract() -> None:
 def test_sensitive_command_surfaces_declare_private_contexts() -> None:
     """高权限与个人数据入口必须由发布目录声明私聊边界。"""
 
-    fixture = _load_catalog()
+    fixture              = _load_catalog()
     private_root_plugins = {
         "shell",
         "jupyter",
@@ -362,7 +362,7 @@ def test_sensitive_command_surfaces_declare_private_contexts() -> None:
         if root.plugin in private_root_plugins:
             assert root.contexts == ("private",), root.code
 
-    nodes = {node.code: node for root in fixture.roots for node in root.walk()}
+    nodes                  = {node.code: node for root in fixture.roots for node in root.walk()}
     private_paper_prefixes = (
         "ads_paper.paper.note",
         "ads_paper.paper.writing",
@@ -435,13 +435,13 @@ def test_mobile_help_progressively_discloses_real_pendo_catalog() -> None:
         _format_plugin_menu,
     )
 
-    fixture = _load_catalog()
+    fixture     = _load_catalog()
     pendo_roots = _find_plugin_roots(fixture.roots, "pendo")
     plugin_page = _format_plugin_menu(pendo_roots, page=1)
     todo = _find_exact_catalog_nodes(fixture.roots, "pendo todo")[0]
     todo_page = _format_branch_menu(todo, page=1)
     todo_add = _find_exact_catalog_nodes(fixture.roots, "pendo todo add")[0]
-    detail = _format_command_detail(todo_add)
+    detail   = _format_command_detail(todo_add)
 
     assert "📦 pendo  1/3" in plugin_page
     assert "/pendo event" in plugin_page
@@ -469,13 +469,13 @@ def test_live_matrix_is_generated_from_every_catalog_node_and_alias() -> None:
     """运行态 Runner 必须自动扩展正反例、场景、别名和权限拒绝用例。"""
 
     fixture = _load_catalog()
-    policy = load_policy(MATRIX_POLICY)
+    policy  = load_policy(MATRIX_POLICY)
     assert set(policy["plugins"]) == {manifest.name for manifest in fixture.manifests}
 
     records = _runtime_catalog_records(fixture.roots)
-    cases = build_matrix(records, policy)
-    nodes = tuple(node for root in fixture.roots for node in root.walk())
-    codes = {node.code for node in nodes}
+    cases   = build_matrix(records, policy)
+    nodes   = tuple(node for root in fixture.roots for node in root.walk())
+    codes   = {node.code for node in nodes}
 
     assert {case.code for case in cases if case.kind == "normal"} == codes
     assert {case.code for case in cases if case.kind == "invalid"} == codes
@@ -537,7 +537,7 @@ def test_runtime_catalog_is_read_from_every_help_json_page() -> None:
             assert actor == "bot_admin"
             return EventResponse(200, payload, 1.0)
 
-    client = PagedClient()
+    client  = PagedClient()
     records = fetch_runtime_catalog(client)
     assert [record["code"] for record in records] == ["alpha.one", "beta.two"]
     assert client.messages == ["/help json page 1", "/help json page 2"]
@@ -567,8 +567,8 @@ def test_runtime_result_keeps_contract_and_semantic_strength_separate() -> None:
     )
     normal = MatrixCase(
         **base,
-        kind="normal",
-        semantic_expectation="observable_business_reply",
+        kind                 = "normal",
+        semantic_expectation = "observable_business_reply",
     )
     normal_result = evaluate_response(normal, reply, redactions=())
     assert normal_result["execution_status"] == "passed_runtime_contract"
@@ -576,9 +576,9 @@ def test_runtime_result_keeps_contract_and_semantic_strength_separate() -> None:
 
     strict_invalid = MatrixCase(
         **base,
-        kind="invalid",
-        semantic_expectation="rejected_without_unhandled_exception",
-        invalid_expect_any=("用法", "参数错误"),
+        kind                 = "invalid",
+        semantic_expectation = "rejected_without_unhandled_exception",
+        invalid_expect_any   = ("用法", "参数错误"),
     )
     rejected = evaluate_response(
         strict_invalid,
@@ -675,14 +675,14 @@ class _AdminCheck:
     ) -> PluginPrincipal:
         assert user_id is not None
         sender = _event.get("sender")
-        role = sender.get("role", "unknown") if isinstance(sender, dict) else "unknown"
+        role   = sender.get("role", "unknown") if isinstance(sender, dict) else "unknown"
         return PluginPrincipal(
-            kind="user",
-            user_id=user_id,
-            group_id=group_id,
-            is_bot_admin=self._is_admin,
-            is_private=is_private,
-            group_role="unknown" if is_private else str(role),
+            kind         = "user",
+            user_id      = user_id,
+            group_id     = group_id,
+            is_bot_admin = self._is_admin,
+            is_private   = is_private,
+            group_role   = "unknown" if is_private else str(role),
         )
 
 
@@ -693,6 +693,7 @@ class _Request:
         self.headers = {
             "Authorization": "Bearer catalog-test-token",
             "Content-Type": "application/json",
+            "X-XiaoQing-Response-Mode": "actions",
         }
         self._payload = payload
 
@@ -705,7 +706,7 @@ def _onebot_payload(
     contexts: tuple[str, ...],
     *,
     scope: str | None = None,
-    group_role: str = "owner",
+    group_role: str   = "owner",
 ) -> dict[str, Any]:
     """按最终目录节点允许的场景构造真实 OneBot 消息事件。"""
 
@@ -724,7 +725,7 @@ def _onebot_payload(
     }
     if group_mode:
         payload["group_id"] = 20001
-        payload["sender"] = {"user_id": 10001, "role": group_role}
+        payload["sender"]   = {"user_id": 10001, "role": group_role}
     return payload
 
 
@@ -746,22 +747,22 @@ async def test_every_normal_and_invalid_example_passes_through_event() -> None:
         return context
 
     dispatcher = Dispatcher(
-        router=fixture.router,
-        config_provider=_ConfigProvider(),
-        plugin_registry=_PluginRegistry(),
-        admin_check=_AdminCheck(),
-        build_context=build_context,
-        semaphore=None,
+        router          = fixture.router,
+        config_provider = _ConfigProvider(),
+        plugin_registry = _PluginRegistry(),
+        admin_check     = _AdminCheck(),
+        build_context   = build_context,
+        semaphore       = None,
     )
     server = InboundServer(
-        host="127.0.0.1",
-        port=8765,
-        token="catalog-test-token",
-        handler=dispatcher.handle_event,
-        enable_http=True,
-        enable_ws=False,
-        ws_max_workers=1,
-        ws_queue_size=0,
+        host           = "127.0.0.1",
+        port           = 8765,
+        token          = "catalog-test-token",
+        handler        = dispatcher.handle_event,
+        enable_http    = True,
+        enable_ws      = False,
+        ws_max_workers = 1,
+        ws_queue_size  = 0,
     )
 
     case_count = 0
@@ -774,7 +775,7 @@ async def test_every_normal_and_invalid_example_passes_through_event() -> None:
                 )
                 for kind, example in cases:
                     _spec, expected = _resolve_example(fixture.router, example)
-                    before = len(fixture.invocations)
+                    before   = len(fixture.invocations)
                     response = await server.post_event(
                         _Request(_onebot_payload(example, expected.node.contexts))
                     )
@@ -816,22 +817,22 @@ async def test_catalog_permissions_and_contexts_fail_closed_before_handlers() ->
 
     def make_server(*, is_admin: bool) -> InboundServer:
         dispatcher = Dispatcher(
-            router=fixture.router,
-            config_provider=_ConfigProvider(),
-            plugin_registry=_PluginRegistry(),
+            router          = fixture.router,
+            config_provider = _ConfigProvider(),
+            plugin_registry = _PluginRegistry(),
             admin_check=_AdminCheck(is_admin=is_admin),
-            build_context=build_context,
-            semaphore=None,
+            build_context = build_context,
+            semaphore     = None,
         )
         return InboundServer(
-            host="127.0.0.1",
-            port=8765,
-            token="catalog-test-token",
-            handler=dispatcher.handle_event,
-            enable_http=True,
-            enable_ws=False,
-            ws_max_workers=1,
-            ws_queue_size=0,
+            host           = "127.0.0.1",
+            port           = 8765,
+            token          = "catalog-test-token",
+            handler        = dispatcher.handle_event,
+            enable_http    = True,
+            enable_ws      = False,
+            ws_max_workers = 1,
+            ws_queue_size  = 0,
         )
 
     admin_server = make_server(is_admin=True)
@@ -841,15 +842,15 @@ async def test_catalog_permissions_and_contexts_fail_closed_before_handlers() ->
             for node in root.walk():
                 example = node.examples[0]
                 if node.permission != "public":
-                    before = len(fixture.invocations)
-                    scope = "private" if "private" in node.contexts else "group"
+                    before   = len(fixture.invocations)
+                    scope    = "private" if "private" in node.contexts else "group"
                     response = await user_server.post_event(
                         _Request(
                             _onebot_payload(
                                 example,
                                 node.contexts,
-                                scope=scope,
-                                group_role="member",
+                                scope      = scope,
+                                group_role = "member",
                             )
                         )
                     )
@@ -860,7 +861,7 @@ async def test_catalog_permissions_and_contexts_fail_closed_before_handlers() ->
                     assert len(fixture.invocations) == before
 
                 for denied_scope in {"private", "group"} - set(node.contexts):
-                    before = len(fixture.invocations)
+                    before   = len(fixture.invocations)
                     response = await admin_server.post_event(
                         _Request(
                             _onebot_payload(

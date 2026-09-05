@@ -7,7 +7,7 @@ from typing import Final
 
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT: Final = REPOSITORY_ROOT
+ROOT: Final        = REPOSITORY_ROOT
 STATIC_ROOT: Final = ROOT / "plugins" / "pendo" / "web" / "static"
 
 

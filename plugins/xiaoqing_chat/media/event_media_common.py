@@ -42,7 +42,7 @@ class MediaPayloadTooLarge(ValueError):
 
     def __init__(self, size: int, limit: int) -> None:
         super().__init__(f"media too large: {size} bytes (limit: {limit})")
-        self.size = size
+        self.size  = size
         self.limit = limit
 
 
@@ -50,7 +50,7 @@ def _media_blocking_limiter(loop: asyncio.AbstractEventLoop) -> asyncio.Semaphor
     with _media_blocking_limiters_lock:
         limiter = _media_blocking_limiters.get(loop)
         if limiter is None:
-            limiter = asyncio.Semaphore(_MEDIA_BLOCKING_MAX_CONCURRENCY)
+            limiter                        = asyncio.Semaphore(_MEDIA_BLOCKING_MAX_CONCURRENCY)
             _media_blocking_limiters[loop] = limiter
         return limiter
 
@@ -86,13 +86,13 @@ def _read_file_bounded(path: Path, *, max_bytes: int) -> bytes:
     return payload
 
 
-_SUPPORTED_MEDIA_TYPES = frozenset({"image", "mface", "face"})
+_SUPPORTED_MEDIA_TYPES    = frozenset({"image", "mface", "face"})
 _SUPPORTED_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"})
-_EMOJI_HINT_RE = re.compile(
+_EMOJI_HINT_RE            = re.compile(
     r"(表情|emoji|sticker|meme|梗图|mface|贴纸|无语|开心|委屈|猫猫|商城表情|收藏表情)",
     re.IGNORECASE,
 )
-_GENERIC_MEDIA_HINTS = frozenset({"[图片]", "[动画表情]", "[表情]", "图片", "表情"})
+_GENERIC_MEDIA_HINTS  = frozenset({"[图片]", "[动画表情]", "[表情]", "图片", "表情"})
 _GENERIC_MEDIA_LABELS = frozenset(
     {
         "图片",
@@ -152,8 +152,8 @@ _SOURCE_QUERY_HINTS = (
     "uuid=",
 )
 _MEDIA_ANALYSIS_PROMPT_VERSION = 6
-_RENDER_CACHE_MAX_ENTRIES = 1_000
-_RENDER_CACHE_MAX_BYTES = 4 * 1024 * 1024
+_RENDER_CACHE_MAX_ENTRIES      = 1_000
+_RENDER_CACHE_MAX_BYTES        = 4 * 1024 * 1024
 _MEDIA_DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(total=20, connect=10, sock_read=15)
 _ONEBOT_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=15, connect=5, sock_read=10)
 
@@ -165,8 +165,8 @@ class ResolvedMedia:
     source_name: str
     mime_type: str
     cached_path: Path
-    width: int = 0
-    height: int = 0
+    width: int        = 0
+    height: int       = 0
     is_animated: bool = False
 
 
@@ -178,7 +178,7 @@ class RenderedMedia:
     emotion_tags: tuple[str, ...]
     marker: str
     cached_path: Path | None = None
-    face_id: str = ""
+    face_id: str             = ""
     # 二次分析得到的梗背景/语境说明；不知道就为空字符串，
     # 与 description 分开存放，便于将来重生成 marker。
     cultural_hint: str = ""
@@ -190,9 +190,9 @@ class PreparedMediaForLLM:
     mime_type: str
     transcoded: bool
     source_mime_type: str
-    is_animated: bool = False
+    is_animated: bool   = False
     frame_strategy: str = "original"
-    frame_count: int = 1
+    frame_count: int    = 1
 
 
 @dataclass(frozen=True)
@@ -201,8 +201,8 @@ class MediaAnalysisDraft:
     description: str
     visible_text: str
     emotion_tags: tuple[str, ...]
-    raw_output: str = ""
-    parsed_json: bool = False
+    raw_output: str    = ""
+    parsed_json: bool  = False
     cultural_hint: str = ""
 
 
@@ -260,7 +260,7 @@ def _load_render_cache(
     if not isinstance(loaded, dict):
         return {"items": {}}
     payload = loaded
-    items = payload.get("items")
+    items   = payload.get("items")
     if not isinstance(items, dict):
         payload["items"] = {}
     return payload
@@ -289,9 +289,9 @@ def _serialized_render_cache_size(cache: dict[str, Any]) -> int:
     return len(
         json.dumps(
             cache,
-            ensure_ascii=False,
-            indent=2,
-            allow_nan=False,
+            ensure_ascii = False,
+            indent       = 2,
+            allow_nan    = False,
         ).encode("utf-8")
     )
 
@@ -302,11 +302,11 @@ def _prune_render_cache(
     max_entries: int,
     max_bytes: int,
 ) -> dict[str, Any]:
-    items = cache.get("items")
-    normalized_items = dict(items) if isinstance(items, dict) else {}
+    items                         = cache.get("items")
+    normalized_items              = dict(items) if isinstance(items, dict) else {}
     bounded_cache: dict[str, Any] = {"items": normalized_items}
-    entry_limit = max(0, int(max_entries))
-    byte_limit = max(0, int(max_bytes))
+    entry_limit                   = max(0, int(max_entries))
+    byte_limit                    = max(0, int(max_bytes))
     oldest_first = sorted(normalized_items.items(), key=_render_cache_entry_timestamp)
 
     while len(normalized_items) > entry_limit and oldest_first:
@@ -328,8 +328,8 @@ def write_render_cache_entry(
     source: str,
     quality: str,
     prompt_version: int | None = None,
-    max_entries: int = _RENDER_CACHE_MAX_ENTRIES,
-    max_bytes: int = _RENDER_CACHE_MAX_BYTES,
+    max_entries: int           = _RENDER_CACHE_MAX_ENTRIES,
+    max_bytes: int             = _RENDER_CACHE_MAX_BYTES,
 ) -> None:
     normalized_source = str(source or "").strip() or "fallback"
     if prompt_version is None:
@@ -347,12 +347,12 @@ def write_render_cache_entry(
     }
     with _render_cache_lock(data_dir):
         cache = _load_render_cache(data_dir, max_bytes=max_bytes)
-        items = cache.setdefault("items", {})
+        items                      = cache.setdefault("items", {})
         items[resolved.media_hash] = cache_payload
-        bounded_cache = _prune_render_cache(
+        bounded_cache              = _prune_render_cache(
             cache,
-            max_entries=max_entries,
-            max_bytes=max_bytes,
+            max_entries = max_entries,
+            max_bytes   = max_bytes,
         )
         _save_render_cache(data_dir, bounded_cache)
 
@@ -362,7 +362,7 @@ def _parse_file_uri(value: str) -> Path | None:
     if parsed.scheme != "file":
         return None
     raw_netloc = unquote(parsed.netloc or "")
-    raw_path = unquote(parsed.path or "")
+    raw_path   = unquote(parsed.path or "")
     if raw_netloc and raw_path:
         if re.fullmatch(r"[A-Za-z]:", raw_netloc):
             raw_path = f"{raw_netloc}{raw_path}"
@@ -422,7 +422,7 @@ def _normalize_source_label(value: str) -> str:
         return ""
     if _looks_like_url(value):
         parsed = urlparse(value)
-        name = Path(unquote(parsed.path or "")).stem or ""
+        name   = Path(unquote(parsed.path or "")).stem or ""
         if parsed.query and _looks_like_unusable_source_label(f"{name}?{parsed.query}"):
             return ""
     else:
@@ -445,9 +445,9 @@ def _image_validation_limits(
     """从插件媒体预算构造统一的图片校验边界。"""
 
     return ImageValidationLimits(
-        max_bytes=int(max_bytes),
-        max_pixels=int(max_pixels),
-        max_frames=int(max_frames),
+        max_bytes  = int(max_bytes),
+        max_pixels = int(max_pixels),
+        max_frames = int(max_frames),
     )
 
 
@@ -464,28 +464,28 @@ class ImagePayloadInfo:
 def _inspect_image_payload_details(
     payload: bytes,
     *,
-    fallback_suffix: str = ".png",
+    fallback_suffix: str  = ".png",
     max_bytes: int | None = None,
-    max_pixels: int = 16_000_000,
-    max_frames: int = 120,
+    max_pixels: int       = 16_000_000,
+    max_frames: int       = 120,
 ) -> ImagePayloadInfo:
     try:
         validated = validate_image_bytes(
             payload,
             limits=_image_validation_limits(
-                max_bytes=len(payload) if max_bytes is None else max_bytes,
-                max_pixels=max_pixels,
-                max_frames=max_frames,
+                max_bytes  = len(payload) if max_bytes is None else max_bytes,
+                max_pixels = max_pixels,
+                max_frames = max_frames,
             ),
         )
         suffix = str(validated.extension or fallback_suffix).strip().lower()
         return ImagePayloadInfo(
-            mime_type=_guess_mime_type(Path(f"image{suffix}")),
-            suffix=suffix,
-            width=validated.width,
-            height=validated.height,
-            is_animated=validated.frames > 1,
-            frame_count=validated.frames,
+            mime_type   = _guess_mime_type(Path(f"image{suffix}")),
+            suffix      = suffix,
+            width       = validated.width,
+            height      = validated.height,
+            is_animated = validated.frames > 1,
+            frame_count = validated.frames,
         )
     except Exception as exc:
         raise ValueError("invalid or undecodable image payload") from exc
@@ -495,7 +495,7 @@ def _animation_sample_indexes(frame_count: int) -> list[int]:
     total = max(1, int(frame_count))
     if total <= 1:
         return [0]
-    candidates = [0, total // 2, total - 1]
+    candidates         = [0, total // 2, total - 1]
     indexes: list[int] = []
     for idx in candidates:
         normalized = min(max(0, int(idx)), total - 1)
@@ -509,11 +509,11 @@ def _render_animation_contact_sheet(payload: bytes) -> tuple[bytes, int]:
 
     from PIL import Image
 
-    gap = 8
+    gap            = 8
     frame_max_side = 320
     with Image.open(io.BytesIO(payload)) as image:
-        frame_total = int(getattr(image, "n_frames", 1) or 1)
-        indexes = _animation_sample_indexes(frame_total)
+        frame_total       = int(getattr(image, "n_frames", 1) or 1)
+        indexes           = _animation_sample_indexes(frame_total)
         frames: list[Any] = []
         for idx in indexes:
             image.seek(idx)
@@ -528,10 +528,10 @@ def _render_animation_contact_sheet(payload: bytes) -> tuple[bytes, int]:
         frames[0].save(buffer, format="PNG")
         return buffer.getvalue(), 1
 
-    total_width = sum(frame.width for frame in frames) + gap * (len(frames) - 1)
+    total_width  = sum(frame.width for frame in frames) + gap * (len(frames) - 1)
     total_height = max(frame.height for frame in frames)
-    sheet = Image.new("RGBA", (total_width, total_height), (255, 255, 255, 255))
-    cursor_x = 0
+    sheet        = Image.new("RGBA", (total_width, total_height), (255, 255, 255, 255))
+    cursor_x     = 0
     for frame in frames:
         offset_y = (total_height - frame.height) // 2
         sheet.alpha_composite(frame, (cursor_x, offset_y))
@@ -568,7 +568,7 @@ def _normalize_emotion_tags(value: Any) -> tuple[str, ...]:
 
 
 def _segment_summary_hint(segment: dict[str, Any]) -> str:
-    data = segment.get("data", {}) or {}
+    data    = segment.get("data", {}) or {}
     generic = ""
     for key in ("summary", "text", "name", "key", "emoji_id"):
         value = str(data.get(key, "") or "").strip()
@@ -621,7 +621,7 @@ def _build_marker(kind: str, description: str, emotion_tags: tuple[str, ...]) ->
 
 
 def _build_context_marker(rendered: RenderedMedia) -> str:
-    marker = rendered.marker.strip()
+    marker        = rendered.marker.strip()
     cultural_hint = str(getattr(rendered, "cultural_hint", "") or "").strip()
     if rendered.kind != "emoji" or not marker.startswith("[表情包："):
         return _append_cultural_hint(marker, cultural_hint)
@@ -638,7 +638,7 @@ def _build_context_marker(rendered: RenderedMedia) -> str:
     if visible_text:
         return _append_cultural_hint(f"[表情包：{label}；写着“{visible_text}”]", cultural_hint)
 
-    normalized_label = _normalize_media_label(label)
+    normalized_label       = _normalize_media_label(label)
     normalized_description = _normalize_media_label(clean_desc)
     if not normalized_description or normalized_description == normalized_label:
         return _append_cultural_hint(marker, cultural_hint)
@@ -690,7 +690,7 @@ def split_emoji_visible_text(description: str) -> tuple[str, str]:
     match = _EMOJI_VISIBLE_TEXT_RE.match(text)
     if not match:
         return text, ""
-    clean_desc = (match.group(1) or "").strip()
+    clean_desc   = (match.group(1) or "").strip()
     visible_text = (match.group(2) or "").strip()
     return clean_desc, visible_text
 
@@ -780,7 +780,7 @@ def _is_low_quality_rendered_media(
 def _build_fallback_render(
     resolved: ResolvedMedia,
     *,
-    summary_hint: str = "",
+    summary_hint: str  = "",
     prefer_emoji: bool = False,
 ) -> RenderedMedia:
     if prefer_emoji:
@@ -788,14 +788,14 @@ def _build_fallback_render(
     else:
         kind = _fallback_kind(
             summary_hint or resolved.source_name,
-            width=resolved.width,
-            height=resolved.height,
-            segment_type=resolved.segment_type,
+            width        = resolved.width,
+            height       = resolved.height,
+            segment_type = resolved.segment_type,
         )
     label = _safe_source_name(summary_hint or resolved.source_name)
     if kind == "emoji":
         emotion_tags = _normalize_emotion_tags(label)
-        description = label or "一张聊天表情包"
+        description  = label or "一张聊天表情包"
     else:
         emotion_tags = ()
         # 文件名和传输摘要都不是视觉证据。视觉路由失败时明确标记未理解像素，
@@ -803,33 +803,33 @@ def _build_fallback_render(
         description = "图片内容暂时无法识别"
     marker = _build_marker(kind, description, emotion_tags)
     return RenderedMedia(
-        media_hash=resolved.media_hash,
-        kind=kind,
-        description=description,
-        emotion_tags=emotion_tags,
-        marker=marker,
-        cached_path=resolved.cached_path,
+        media_hash   = resolved.media_hash,
+        kind         = kind,
+        description  = description,
+        emotion_tags = emotion_tags,
+        marker       = marker,
+        cached_path  = resolved.cached_path,
     )
 
 
 def _rendered_media_from_cache(cached: dict[str, Any], *, resolved: ResolvedMedia) -> RenderedMedia:
-    kind = str(cached.get("kind", "") or "").strip() or "image"
-    description = str(cached.get("description", "") or "").strip()
+    kind         = str(cached.get("kind", "") or "").strip() or "image"
+    description  = str(cached.get("description", "") or "").strip()
     emotion_tags = _normalize_emotion_tags(cached.get("emotion_tags"))
-    marker = str(cached.get("marker", "") or "").strip() or _build_marker(
+    marker       = str(cached.get("marker", "") or "").strip() or _build_marker(
         kind, description, emotion_tags
     )
-    face_id = str(cached.get("face_id", "") or "").strip()
+    face_id       = str(cached.get("face_id", "") or "").strip()
     cultural_hint = str(cached.get("cultural_hint", "") or "").strip()
     return RenderedMedia(
-        media_hash=resolved.media_hash,
-        kind=kind,
-        description=description,
-        emotion_tags=emotion_tags,
-        marker=marker,
-        cached_path=resolved.cached_path,
-        face_id=face_id,
-        cultural_hint=cultural_hint,
+        media_hash    = resolved.media_hash,
+        kind          = kind,
+        description   = description,
+        emotion_tags  = emotion_tags,
+        marker        = marker,
+        cached_path   = resolved.cached_path,
+        face_id       = face_id,
+        cultural_hint = cultural_hint,
     )
 
 

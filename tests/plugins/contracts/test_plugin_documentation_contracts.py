@@ -86,7 +86,7 @@ def test_guess_number_docs_follow_session_message_flow() -> None:
 
 
 def test_signin_docs_and_manifest_match_shared_admin_account_model() -> None:
-    readme = _read("signin")
+    readme   = _read("signin")
     manifest = _manifest("signin")
     assert manifest["commands"][0]["admin_only"] is True
     assert all("group_ids" not in schedule for schedule in manifest["schedule"])
@@ -95,7 +95,7 @@ def test_signin_docs_and_manifest_match_shared_admin_account_model() -> None:
 
 
 def test_smalltalk_docs_cover_manifest_commands_and_provider_boundary() -> None:
-    readme = _read("smalltalk")
+    readme   = _read("smalltalk")
     manifest = _manifest("smalltalk")
     assert all(command["admin_only"] for command in manifest["commands"])
     for marker in ("/记忆", "/对话", "/删除对话", "chat.reply", "voice.synthesize_text"):

@@ -28,41 +28,41 @@ class User:
     user_id: str
     group_id: int
 
-    coins: int = 100
+    coins: int             = 100
     friendship_points: int = 0
 
     # 每日计数
-    today_coins_earned: int = 0
-    today_feed_count: int = 0
-    today_clean_count: int = 0
-    today_play_count: int = 0
-    today_train_count: int = 0
-    today_explore_count: int = 0
-    today_visit_count: int = 0
-    today_gift_count: int = 0
+    today_coins_earned: int    = 0
+    today_feed_count: int      = 0
+    today_clean_count: int     = 0
+    today_play_count: int      = 0
+    today_train_count: int     = 0
+    today_explore_count: int   = 0
+    today_visit_count: int     = 0
+    today_gift_count: int      = 0
     today_free_feed_count: int = 0
-    today_message_count: int = 0
+    today_message_count: int   = 0
 
     # 累计计数（用于称号系统）
-    total_feed_count: int = 0
-    total_clean_count: int = 0
-    total_play_count: int = 0
-    total_train_count: int = 0
-    total_explore_count: int = 0
-    total_visit_count: int = 0
-    total_gift_count: int = 0
+    total_feed_count: int      = 0
+    total_clean_count: int     = 0
+    total_play_count: int      = 0
+    total_train_count: int     = 0
+    total_explore_count: int   = 0
+    total_visit_count: int     = 0
+    total_gift_count: int      = 0
     total_free_feed_count: int = 0
-    total_message_count: int = 0
+    total_message_count: int   = 0
 
     # 称号列表
     titles: list[str] = field(default_factory=list)
 
     last_visit_time: datetime | None = None
-    last_gift_time: datetime | None = None
+    last_gift_time: datetime | None  = None
 
     trustee_until: datetime | None = None
 
-    is_banned: bool = False
+    is_banned: bool            = False
     ban_until: datetime | None = None
 
     created_at: datetime = field(default_factory=utc_now)
@@ -113,12 +113,12 @@ class User:
         merged = replace(latest, titles=list(latest.titles))
         for name in self._MERGE_FIELDS:
             original = self._persisted_state[name]
-            desired = getattr(self, name)
+            desired  = getattr(self, name)
             if desired == original:
                 continue
             if name in self._DELTA_FIELDS:
-                latest_value = cast(int, getattr(latest, name))
-                desired_value = cast(int, desired)
+                latest_value   = cast(int, getattr(latest, name))
+                desired_value  = cast(int, desired)
                 original_value = cast(int, original)
                 setattr(merged, name, latest_value + desired_value - original_value)
             elif name == "titles":
@@ -148,10 +148,10 @@ class User:
             raise ValueError("动作增量必须为正数")
 
         today_attr = f"today_{action}_count"
-        current = cast(int, getattr(self, today_attr))
+        current    = cast(int, getattr(self, today_attr))
         setattr(self, today_attr, current + count)
 
-        total_attr = f"total_{action}_count"
+        total_attr    = f"total_{action}_count"
         total_current = cast(int, getattr(self, total_attr))
         setattr(self, total_attr, total_current + count)
 

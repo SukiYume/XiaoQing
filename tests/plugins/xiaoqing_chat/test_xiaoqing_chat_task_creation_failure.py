@@ -1,3 +1,4 @@
+# 验证任务创建失败时回收已申请的状态和资源。
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -23,7 +24,7 @@ def test_spawn_background_task_closes_coroutine_when_create_task_fails():
     state = ChatRuntimeState()
     context = SimpleNamespace(logger=MagicMock())
     captured = []
-    coro = _never_started()
+    coro     = _never_started()
     try:
         with (
             patch("plugins.xiaoqing_chat.task_scheduler._state", return_value=state),
@@ -63,13 +64,13 @@ def test_spawn_background_task_closes_coroutine_when_create_task_fails():
     ],
 )
 def test_persistence_schedulers_close_coroutine_when_create_task_fails(schedule):
-    state = MagicMock()
-    state.get_persist_task.return_value = None
+    state                                = MagicMock()
+    state.get_persist_task.return_value  = None
     state.get_vdb_save_task.return_value = None
-    runtime = SimpleNamespace(
+    runtime                              = SimpleNamespace(
         cfg=SimpleNamespace(
-            io_persist_debounce_seconds=0.0,
-            memory_db_save_debounce_seconds=0.0,
+            io_persist_debounce_seconds     = 0.0,
+            memory_db_save_debounce_seconds = 0.0,
         )
     )
     context = SimpleNamespace(logger=MagicMock())

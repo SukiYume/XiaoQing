@@ -1,3 +1,4 @@
+# 敏感审计：记录进程内可关联的指纹，日志内容保持凭据隔离。
 """Safe, restart-scoped fingerprints for sensitive log metadata.
 
 Administrator tools intentionally accept arbitrary commands and prompts.  The
@@ -16,11 +17,11 @@ import re
 import secrets
 from dataclasses import dataclass
 
-_FINGERPRINT_KEY = secrets.token_bytes(32)
+_FINGERPRINT_KEY       = secrets.token_bytes(32)
 _FINGERPRINT_HEX_CHARS = 24
-_AUDIT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}\Z")
-_AUDIT_LABEL_RE = re.compile(r"[a-z][a-z0-9_.:-]{0,95}\Z")
-_ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,95}\Z")
+_AUDIT_ID_RE           = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}\Z")
+_AUDIT_LABEL_RE        = re.compile(r"[a-z][a-z0-9_.:-]{0,95}\Z")
+_ERROR_TYPE_RE         = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,95}\Z")
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,13 +64,13 @@ def summarize_sensitive(value: str | bytes | bytearray | memoryview) -> Sensitiv
     """
 
     if isinstance(value, str):
-        kind = "text"
+        kind   = "text"
         length = len(value)
         payload = value.encode("utf-8", errors="surrogatepass")
     elif isinstance(value, (bytes, bytearray, memoryview)):
-        kind = "bytes"
+        kind    = "bytes"
         payload = bytes(value)
-        length = len(payload)
+        length  = len(payload)
     else:
         raise TypeError("sensitive audit values must be text or bytes")
 
@@ -79,10 +80,10 @@ def summarize_sensitive(value: str | bytes | bytearray | memoryview) -> Sensitiv
         hashlib.sha256,
     ).hexdigest()[:_FINGERPRINT_HEX_CHARS]
     return SensitiveAuditSummary(
-        kind=kind,
-        length=length,
-        byte_length=len(payload),
-        fingerprint=f"hmac-sha256:{digest}",
+        kind        = kind,
+        length      = length,
+        byte_length = len(payload),
+        fingerprint = f"hmac-sha256:{digest}",
     )
 
 
@@ -91,13 +92,13 @@ def log_sensitive_operation(
     operation: str,
     *,
     status: str,
-    request_id: object = None,
-    job_id: object = None,
+    request_id: object                                   = None,
+    job_id: object                                       = None,
     payload: str | bytes | bytearray | memoryview | None = None,
-    exc: BaseException | None = None,
-    error_type: str = "-",
-    return_code: int | None = None,
-    level: int = logging.INFO,
+    exc: BaseException | None                            = None,
+    error_type: str                                      = "-",
+    return_code: int | None                              = None,
+    level: int                                           = logging.INFO,
 ) -> None:
     """Log safe metadata for an operation without retaining sensitive text.
 
@@ -106,15 +107,15 @@ def log_sensitive_operation(
     """
 
     if payload is None:
-        payload_kind = "none"
-        payload_length = 0
-        payload_bytes = 0
+        payload_kind        = "none"
+        payload_length      = 0
+        payload_bytes       = 0
         payload_fingerprint = "-"
     else:
-        summary = summarize_sensitive(payload)
-        payload_kind = summary.kind
-        payload_length = summary.length
-        payload_bytes = summary.byte_length
+        summary             = summarize_sensitive(payload)
+        payload_kind        = summary.kind
+        payload_length      = summary.length
+        payload_bytes       = summary.byte_length
         payload_fingerprint = summary.fingerprint
     target_logger.log(
         logging.ERROR if exc is not None else level,

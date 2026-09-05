@@ -21,7 +21,7 @@ from tests.helpers.pendo_web_items_test_support import (
 
 def test_database_migration_adds_note_reference_columns_to_old_items_table(tmp_path):
     db_path = tmp_path / "old_note_schema.db"
-    conn = sqlite3.connect(db_path)
+    conn    = sqlite3.connect(db_path)
     try:
         conn.execute(
             """
@@ -107,8 +107,8 @@ def test_database_migration_adds_note_reference_columns_to_old_items_table(tmp_p
 def test_item_update_note_logs_edit_details_for_web_undo():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_note_web_edit_log_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
-    owner_id = "u-note-web-edit-log"
+    db           = Database(str(temp_dir / "pendo.db"))
+    owner_id     = "u-note-web-edit-log"
     items_module = items_api
 
     try:
@@ -148,12 +148,12 @@ def test_item_update_note_logs_edit_details_for_web_undo():
         result = items_module.update_item(
             "note_edit",
             body=items_module.ItemUpdate(
-                content="新正文",
-                references=[{"kind": "item", "id": "task_1"}],
-                related_items=["task_1"],
+                content       = "新正文",
+                references    = [{"kind": "item", "id": "task_1"}],
+                related_items = ["task_1"],
             ),
-            owner_id=owner_id,
-            db=db,
+            owner_id = owner_id,
+            db       = db,
         )
 
         assert result["ok"] is True
@@ -184,8 +184,8 @@ def test_item_update_note_logs_edit_details_for_web_undo():
 def test_item_update_note_preserves_unchanged_missing_reference_for_web_edit():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_note_web_missing_ref_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
-    owner_id = "u-note-web-missing-ref"
+    db           = Database(str(temp_dir / "pendo.db"))
+    owner_id     = "u-note-web-missing-ref"
     items_module = items_api
 
     try:
@@ -217,12 +217,12 @@ def test_item_update_note_preserves_unchanged_missing_reference_for_web_edit():
         result = items_module.update_item(
             "note_dangling_ref",
             body=items_module.ItemUpdate(
-                content="新正文",
-                references=[{"kind": "item", "id": "deleted_task"}],
-                related_items=["deleted_task"],
+                content       = "新正文",
+                references    = [{"kind": "item", "id": "deleted_task"}],
+                related_items = ["deleted_task"],
             ),
-            owner_id=owner_id,
-            db=db,
+            owner_id = owner_id,
+            db       = db,
         )
 
         assert result["ok"] is True
@@ -240,8 +240,8 @@ def test_item_update_note_preserves_unchanged_missing_reference_for_web_edit():
 def test_item_update_note_rejects_new_missing_reference():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_note_web_new_missing_ref_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
-    owner_id = "u-note-web-new-missing-ref"
+    db           = Database(str(temp_dir / "pendo.db"))
+    owner_id     = "u-note-web-new-missing-ref"
     items_module = items_api
 
     try:
@@ -265,11 +265,11 @@ def test_item_update_note_rejects_new_missing_reference():
             items_module.update_item(
                 "note_without_ref",
                 body=items_module.ItemUpdate(
-                    references=[{"kind": "item", "id": "missing_task"}],
-                    related_items=["missing_task"],
+                    references    = [{"kind": "item", "id": "missing_task"}],
+                    related_items = ["missing_task"],
                 ),
-                owner_id=owner_id,
-                db=db,
+                owner_id = owner_id,
+                db       = db,
             )
 
         assert exc_info.value.status_code == 422
@@ -381,7 +381,7 @@ def test_items_api_defaults_diary_entry_time_and_allows_multiple_entries_per_dat
     request,
 ):
     mod = items_api
-    db = Database(str(tmp_path / "pendo_diary_api.db"))
+    db  = Database(str(tmp_path / "pendo_diary_api.db"))
     request.addfinalizer(db.cleanup)
     owner_id = "u-diary-api"
     monkeypatch.setattr(
@@ -390,21 +390,21 @@ def test_items_api_defaults_diary_entry_time_and_allows_multiple_entries_per_dat
         lambda _owner_id, _db: datetime(2026, 4, 29, 21, 30, 45),
     )
     body = mod.ItemCreate(
-        type="diary",
-        title="",
-        content="补写当天记录",
-        diary_date="2026-01-31",
+        type       = "diary",
+        title      = "",
+        content    = "补写当天记录",
+        diary_date = "2026-01-31",
     )
 
     response = mod.create_item(body, owner_id=owner_id, db=db)
     second_response = mod.create_item(
         mod.ItemCreate(
-            type="diary",
-            content="同一天的第二篇",
-            diary_date="2026-01-31",
+            type       = "diary",
+            content    = "同一天的第二篇",
+            diary_date = "2026-01-31",
         ),
-        owner_id=owner_id,
-        db=db,
+        owner_id = owner_id,
+        db       = db,
     )
     saved = db.get_item(response["data"]["id"], owner_id=owner_id)
     second = db.get_item(second_response["data"]["id"], owner_id=owner_id)
@@ -417,7 +417,7 @@ def test_items_api_defaults_diary_entry_time_and_allows_multiple_entries_per_dat
 
 def test_web_item_crud_rolls_back_when_operation_log_write_fails(monkeypatch, tmp_path, request):
     items_module = items_api
-    db = Database(str(tmp_path / "pendo_crud_audit_atomic.db"))
+    db           = Database(str(tmp_path / "pendo_crud_audit_atomic.db"))
     request.addfinalizer(db.cleanup)
     owner_id = "u-crud-audit-atomic"
     db.insert_item(
@@ -439,13 +439,13 @@ def test_web_item_crud_rolls_back_when_operation_log_write_fails(monkeypatch, tm
     with pytest.raises(RuntimeError, match="injected operation log failure"):
         items_module.create_item(
             items_module.ItemCreate(
-                type="note",
-                title="不得留下的新条目",
-                content="正文",
-                category="工作",
+                type     = "note",
+                title    = "不得留下的新条目",
+                content  = "正文",
+                category = "工作",
             ),
-            owner_id=owner_id,
-            db=db,
+            owner_id = owner_id,
+            db       = db,
         )
     assert (
         db.get_connection()
@@ -461,8 +461,8 @@ def test_web_item_crud_rolls_back_when_operation_log_write_fails(monkeypatch, tm
         items_module.update_item(
             "existing-note",
             items_module.ItemUpdate(title="不得提交的新标题", version=0),
-            owner_id=owner_id,
-            db=db,
+            owner_id = owner_id,
+            db       = db,
         )
     row = (
         db.get_connection()
@@ -490,20 +490,20 @@ def test_web_item_crud_rolls_back_when_operation_log_write_fails(monkeypatch, tm
 
 def test_note_reference_limits_return_422_before_database_lookup(tmp_path, request):
     items_module = items_api
-    db = Database(str(tmp_path / "pendo_note_reference_limits.db"))
+    db           = Database(str(tmp_path / "pendo_note_reference_limits.db"))
     request.addfinalizer(db.cleanup)
 
     over_count = [{"kind": "item", "id": f"task-{index}"} for index in range(101)]
     with pytest.raises(items_module.HTTPException) as count_error:
         items_module.create_item(
             items_module.ItemCreate(
-                type="note",
-                title="too many",
-                content="body",
-                references=over_count,
+                type       = "note",
+                title      = "too many",
+                content    = "body",
+                references = over_count,
             ),
-            owner_id="u-note-limits",
-            db=db,
+            owner_id = "u-note-limits",
+            db       = db,
         )
     assert count_error.value.status_code == 422
     assert "cannot exceed 100" in count_error.value.detail
@@ -511,13 +511,13 @@ def test_note_reference_limits_return_422_before_database_lookup(tmp_path, reque
     with pytest.raises(items_module.HTTPException) as byte_error:
         items_module.create_item(
             items_module.ItemCreate(
-                type="note",
-                title="too large",
-                content="body",
-                references=[{"kind": "item", "id": "界" * 22000}],
+                type       = "note",
+                title      = "too large",
+                content    = "body",
+                references = [{"kind": "item", "id": "界" * 22000}],
             ),
-            owner_id="u-note-limits",
-            db=db,
+            owner_id = "u-note-limits",
+            db       = db,
         )
     assert byte_error.value.status_code == 422
     assert "UTF-8 bytes" in byte_error.value.detail
@@ -525,10 +525,10 @@ def test_note_reference_limits_return_422_before_database_lookup(tmp_path, reque
 
 def test_note_reference_resolution_uses_one_owner_scoped_query(tmp_path, request):
     items_module = items_api
-    db = Database(str(tmp_path / "pendo_note_reference_batch.db"))
+    db           = Database(str(tmp_path / "pendo_note_reference_batch.db"))
     request.addfinalizer(db.cleanup)
     owner_id = "u-note-reference-batch"
-    ids = [f"task-{index:03d}" for index in range(40)]
+    ids      = [f"task-{index:03d}" for index in range(40)]
     for item_id in ids:
         db.insert_item(
             {

@@ -6,9 +6,9 @@ import re
 import uuid
 
 INTERNAL_ID_LENGTH = 32
-PUBLIC_ID_LENGTH = 8
+PUBLIC_ID_LENGTH   = 8
 
-_UUID_HEX_RE = re.compile(r"[0-9a-f]{32}\Z", re.IGNORECASE)
+_UUID_HEX_RE  = re.compile(r"[0-9a-f]{32}\Z", re.IGNORECASE)
 _PUBLIC_ID_RE = re.compile(r"[0-9a-f]{8}\Z", re.IGNORECASE)
 
 

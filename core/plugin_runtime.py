@@ -1,3 +1,4 @@
+# 插件运行期控制：执行策略、服务绑定和旧代排空统一收口。
 # mypy: disable-error-code=attr-defined
 """Plugin execution policy, service binding, and runtime drain responsibilities."""
 
@@ -74,7 +75,7 @@ class PluginRuntimeMixin:
             )
             return False
         with self._watch_waiters_lock:
-            changed = parsed != self._poll_interval
+            changed             = parsed != self._poll_interval
             self._poll_interval = parsed
             if not changed:
                 return False
@@ -95,9 +96,9 @@ class PluginRuntimeMixin:
     def configure_execution(self, raw_policy: Mapping[str, Any] | None) -> None:
         """Apply global and per-plugin callback limits from runtime config."""
 
-        raw_policy = raw_policy if isinstance(raw_policy, Mapping) else {}
+        raw_policy             = raw_policy if isinstance(raw_policy, Mapping) else {}
         self._execution_policy = PluginExecutionPolicy.from_mapping(raw_policy)
-        raw_queue_limit = raw_policy.get(
+        raw_queue_limit        = raw_policy.get(
             "global_sync_queue_limit",
             _DEFAULT_GLOBAL_SYNC_QUEUE_LIMIT,
         )
@@ -113,7 +114,7 @@ class PluginRuntimeMixin:
             self._sync_broker.configure(
                 global_queue_limit=self._global_sync_queue_limit,
             )
-        raw_overrides = raw_policy.get("overrides", {})
+        raw_overrides        = raw_policy.get("overrides", {})
         configured_overrides = (
             {
                 str(name): values
@@ -151,8 +152,8 @@ class PluginRuntimeMixin:
         if not broker.drained:
             raise RuntimeError("plugin sync broker still owns undrained callbacks")
         broker = PluginSyncBroker(
-            max_workers=_PLUGIN_SYNC_WORKERS,
-            global_queue_limit=self._global_sync_queue_limit,
+            max_workers        = _PLUGIN_SYNC_WORKERS,
+            global_queue_limit = self._global_sync_queue_limit,
         )
         self._sync_broker = broker
         return broker
@@ -167,9 +168,9 @@ class PluginRuntimeMixin:
 
         return PluginExecutionGate(
             mode,
-            plugin_name=plugin_name,
-            policy=self._execution_policy_for(plugin_name, capabilities),
-            sync_broker=self._ensure_execution_broker(),
+            plugin_name = plugin_name,
+            policy      = self._execution_policy_for(plugin_name, capabilities),
+            sync_broker = self._ensure_execution_broker(),
         )
 
     async def close_execution_broker(
@@ -263,7 +264,7 @@ class PluginRuntimeMixin:
         """Keep code/state/modules alive while an executor callback still runs."""
 
         if plugin is not None:
-            self._plugins[name] = plugin
+            self._plugins[name]   = plugin
             plugin.execution_gate = gate
         self._execution_gates[name] = gate
         self.router.clear_plugin(name)
@@ -289,8 +290,8 @@ class PluginRuntimeMixin:
     ) -> None:
         """Keep an uncertain plugin generation intact behind a closed gate."""
 
-        plugin.execution_gate = gate
-        self._plugins[name] = plugin
+        plugin.execution_gate       = gate
+        self._plugins[name]         = plugin
         self._execution_gates[name] = gate
         self.router.clear_plugin(name)
         self._quarantined_plugins.add(name)
@@ -338,15 +339,15 @@ class PluginRuntimeMixin:
                 name,
                 plugin,
                 gate,
-                phase=phase,
-                reason=reason,
+                phase  = phase,
+                reason = reason,
             )
         else:
             self._quarantine_gate_without_module(
                 name,
                 gate,
-                phase=phase,
-                reason=reason,
+                phase  = phase,
+                reason = reason,
             )
 
     def _purge_generation_modules(
@@ -367,9 +368,9 @@ class PluginRuntimeMixin:
                 plugin,
                 gate,
                 None,
-                phase=phase,
-                reason=f"module purge failed ({type(exc).__name__})",
-                discard_registered_plugin=plugin is None,
+                phase                     = phase,
+                reason                    = f"module purge failed ({type(exc).__name__})",
+                discard_registered_plugin = plugin is None,
             )
             raise
 
@@ -397,9 +398,9 @@ class PluginRuntimeMixin:
                 plugin,
                 gate,
                 None,
-                phase=phase,
-                reason=f"module purge failed ({type(exc).__name__})",
-                discard_registered_plugin=plugin is None,
+                phase                     = phase,
+                reason                    = f"module purge failed ({type(exc).__name__})",
+                discard_registered_plugin = plugin is None,
             )
             raise
 
@@ -462,7 +463,7 @@ class PluginRuntimeMixin:
         close_task = asyncio.create_task(
             self._capture_lifecycle(gate.close(timeout_seconds=close_timeout))
         )
-        interrupted: BaseException | None = None
+        interrupted: BaseException | None         = None
         result: PluginExecutionDrainResult | None = None
 
         while result is None:
@@ -499,9 +500,9 @@ class PluginRuntimeMixin:
                 plugin,
                 gate,
                 result,
-                phase=phase,
-                reason="gate drain did not complete",
-                discard_registered_plugin=discard_registered_plugin,
+                phase                     = phase,
+                reason                    = "gate drain did not complete",
+                discard_registered_plugin = discard_registered_plugin,
             )
         deferred_fatal = gate.consume_deferred_fatal_error()
         if deferred_fatal is not None:
@@ -540,9 +541,9 @@ class PluginRuntimeMixin:
                     f"Declared service callback is unavailable: {service.callback}",
                 )
             bindings[service.name] = LoadedPluginService(
-                owner=definition.name,
-                definition=service,
-                callback=callback,
+                owner      = definition.name,
+                definition = service,
+                callback   = callback,
             )
         return MappingProxyType(bindings)
 

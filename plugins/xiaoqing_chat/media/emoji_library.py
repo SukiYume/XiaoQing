@@ -14,10 +14,11 @@ import time
 from collections import OrderedDict
 from contextlib import suppress
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from core.atomic_store import keyed_path_lock
 from core.image_validation import ImageValidationError, validate_image_path
 from core.plugin_base import ensure_dir, load_json, write_json
 
@@ -29,11 +30,11 @@ from .event_media_common import (
     _run_media_blocking,
 )
 
-_SUPPORTED_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"})
-_PENDING_DIR_NAME = "pending"
-_REJECTED_DIR_NAME = "rejected"
+_SUPPORTED_IMAGE_SUFFIXES     = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"})
+_PENDING_DIR_NAME             = "pending"
+_REJECTED_DIR_NAME            = "rejected"
 _EMOJI_REPAIR_TASKS: set[str] = set()
-_LIBRARY_CACHE_MAX_ENTRIES = 32
+_LIBRARY_CACHE_MAX_ENTRIES    = 32
 _LIBRARY_CACHE: OrderedDict[
     str,
     tuple[tuple[int, int], list[EmojiLibraryEntry]],
@@ -57,9 +58,9 @@ class EmojiLibraryEntry:
     last_used_ts: float
     marker: str
     source_chat_ids: tuple[str, ...] = ()
-    owner_id: str = ""
-    visibility: str = "chat"
-    global_approved: bool = False
+    owner_id: str                    = ""
+    visibility: str                  = "chat"
+    global_approved: bool            = False
 
 
 @dataclass(frozen=True)
@@ -78,7 +79,7 @@ def _emoji_library_task_key(context) -> str:
 
 
 def _to_data_relative_path(context, path: Path) -> str:
-    root = Path(context.data_dir).resolve()
+    root   = Path(context.data_dir).resolve()
     target = path.resolve()
     try:
         return target.relative_to(root).as_posix()
@@ -113,9 +114,9 @@ def _library_cache_key(context) -> str:
 
 def _library_signature(context) -> tuple[int, int] | None:
     library_dir = resolve_emoji_library_dir(context)
-    index_path = library_dir / "index.json"
+    index_path  = library_dir / "index.json"
     try:
-        dir_mtime = library_dir.stat().st_mtime_ns if library_dir.exists() else -1
+        dir_mtime   = library_dir.stat().st_mtime_ns if library_dir.exists() else -1
         index_mtime = index_path.stat().st_mtime_ns if index_path.exists() else -1
     except OSError:
         return None
@@ -177,10 +178,26 @@ def _save_index_if_changed(
     *,
     original_payload: dict[str, Any],
     payload: dict[str, Any],
-) -> None:
-    if payload == original_payload:
-        return
-    _save_index(context, payload)
+) -> tuple[int, int] | None:
+    # 分析可在锁外等待模型；提交只应用本次改动，保留同期收集和使用计数。
+    with keyed_path_lock(_emoji_index_path(context)):
+        latest  = _load_index(context)
+        before  = original_payload.get("entries", {})
+        desired = payload.get("entries", {})
+        merged  = deepcopy(latest)
+        entries = merged.setdefault("entries", {})
+        for key in set(before) | set(desired):
+            if before.get(key) == desired.get(key):
+                continue
+            if entries.get(key) != before.get(key):
+                continue
+            if key in desired:
+                entries[key] = desired[key]
+            else:
+                entries.pop(key, None)
+        if merged != latest:
+            _save_index(context, merged)
+        return _library_signature(context) if merged == payload else None
 
 
 def resolve_emoji_library_dir(context) -> Path:
@@ -217,17 +234,17 @@ def _entry_from_render(
     rendered: RenderedMedia,
     existing: dict[str, Any] | None = None,
 ) -> EmojiLibraryEntry:
-    existing = existing or {}
-    usage_count = int(existing.get("usage_count", 0) or 0)
+    existing     = existing or {}
+    usage_count  = int(existing.get("usage_count", 0) or 0)
     last_used_ts = float(existing.get("last_used_ts", 0.0) or 0.0)
     return EmojiLibraryEntry(
-        media_hash=rendered.media_hash,
-        file_path=_to_data_relative_path(context, file_path),
-        description=rendered.description,
-        emotion_tags=tuple(rendered.emotion_tags),
-        usage_count=usage_count,
-        last_used_ts=last_used_ts,
-        marker=rendered.marker,
+        media_hash   = rendered.media_hash,
+        file_path    = _to_data_relative_path(context, file_path),
+        description  = rendered.description,
+        emotion_tags = tuple(rendered.emotion_tags),
+        usage_count  = usage_count,
+        last_used_ts = last_used_ts,
+        marker       = rendered.marker,
     )
 
 
@@ -293,7 +310,7 @@ def _average_hash(path: Path) -> str:
     if not pixels:
         return ""
     average = sum(int(value) for value in pixels) / len(pixels)
-    bits = "".join("1" if int(value) >= average else "0" for value in pixels)
+    bits    = "".join("1" if int(value) >= average else "0" for value in pixels)
     return f"{int(bits, 2):016x}"
 
 
@@ -308,9 +325,9 @@ def _is_valid_library_image(
         validate_image_path(
             path,
             limits=_image_validation_limits(
-                max_bytes=max_bytes,
-                max_pixels=max_pixels,
-                max_frames=max_frames,
+                max_bytes  = max_bytes,
+                max_pixels = max_pixels,
+                max_frames = max_frames,
             ),
         )
     except (ImageValidationError, OSError):
@@ -347,9 +364,9 @@ def _read_library_snapshot(
 ) -> tuple[dict[str, Any], dict[str, Any], list[_ScannedEmojiFile]]:
     """在有界工作线程中读取表情库快照并计算文件指纹。"""
 
-    payload = _load_index(context)
-    original_payload = deepcopy(payload)
-    existing_entries = payload.setdefault("entries", {})
+    payload                                                = _load_index(context)
+    original_payload                                       = deepcopy(payload)
+    existing_entries                                       = payload.setdefault("entries", {})
     records_by_path: dict[str, tuple[str, dict[str, Any]]] = {}
     for record_key, raw_record in existing_entries.items():
         if not isinstance(raw_record, dict):
@@ -367,35 +384,35 @@ def _read_library_snapshot(
     for file_path in _iter_library_files(library_dir):
         if not _is_valid_library_image(
             file_path,
-            max_bytes=max_bytes,
-            max_pixels=max_pixels,
-            max_frames=max_frames,
+            max_bytes  = max_bytes,
+            max_pixels = max_pixels,
+            max_frames = max_frames,
         ):
             continue
         file_size, file_mtime_ns = _file_identity(file_path)
-        matched = records_by_path.get(str(file_path.resolve()))
-        matched_key = matched[0] if matched else ""
+        matched        = records_by_path.get(str(file_path.resolve()))
+        matched_key    = matched[0] if matched else ""
         matched_record = matched[1] if matched else None
-        unchanged = (
+        unchanged      = (
             matched_record is not None
             and _is_sha256(matched_key)
             and str(matched_record.get("media_hash", matched_key) or "").strip() == matched_key
             and _record_matches_file_identity(matched_record, file_size, file_mtime_ns)
         )
-        media_hash = matched_key if unchanged else _hash_file(file_path)
-        existing = existing_entries.get(media_hash)
+        media_hash      = matched_key if unchanged else _hash_file(file_path)
+        existing        = existing_entries.get(media_hash)
         existing_record = existing if isinstance(existing, dict) else None
         perceptual_hash = str((existing_record or {}).get("perceptual_hash", "") or "").strip()
         if not perceptual_hash:
             perceptual_hash = _average_hash(file_path)
         scanned.append(
             _ScannedEmojiFile(
-                file_path=file_path,
-                media_hash=media_hash,
-                existing_record=existing_record,
-                perceptual_hash=perceptual_hash,
-                file_size=file_size,
-                file_mtime_ns=file_mtime_ns,
+                file_path       = file_path,
+                media_hash      = media_hash,
+                existing_record = existing_record,
+                perceptual_hash = perceptual_hash,
+                file_size       = file_size,
+                file_mtime_ns   = file_mtime_ns,
             )
         )
     return payload, original_payload, scanned
@@ -420,9 +437,9 @@ def _normalize_entry_record(
     source: str,
     perceptual_hash: str,
     touch_collection: bool,
-    source_chat_id: str = "",
-    source_user_id: str = "",
-    file_size: int | None = None,
+    source_chat_id: str       = "",
+    source_user_id: str       = "",
+    file_size: int | None     = None,
     file_mtime_ns: int | None = None,
 ) -> dict[str, Any]:
     """合并条目，同时保留可见范围、所有权和使用历史。
@@ -431,9 +448,9 @@ def _normalize_entry_record(
     提升为全局可见。
     """
 
-    existing = existing or {}
+    existing           = existing or {}
     first_collected_ts = float(existing.get("first_collected_ts", 0.0) or 0.0) or float(time.time())
-    seen_count = int(existing.get("seen_count", 0) or 0)
+    seen_count         = int(existing.get("seen_count", 0) or 0)
     if touch_collection:
         seen_count += 1
     last_collected_ts = float(existing.get("last_collected_ts", 0.0) or 0.0)
@@ -453,7 +470,7 @@ def _normalize_entry_record(
         visibility = "chat"
     global_approved = existing.get("global_approved") is True
     if status != "active":
-        visibility = "chat"
+        visibility      = "chat"
         global_approved = False
     if file_size is None or file_mtime_ns is None:
         try:
@@ -485,15 +502,15 @@ def _normalize_entry_record(
 
 
 def _score_record(record: dict[str, Any]) -> tuple[float, float, float]:
-    usage_count = float(record.get("usage_count", 0) or 0.0)
-    last_used_ts = float(record.get("last_used_ts", 0.0) or 0.0)
+    usage_count       = float(record.get("usage_count", 0) or 0.0)
+    last_used_ts      = float(record.get("last_used_ts", 0.0) or 0.0)
     last_collected_ts = float(record.get("last_collected_ts", 0.0) or 0.0)
-    seen_count = float(record.get("seen_count", 0) or 0.0)
+    seen_count        = float(record.get("seen_count", 0) or 0.0)
     return (usage_count * 3.0 + seen_count, last_used_ts, last_collected_ts)
 
 
 def _remove_library_file(context, record: dict[str, Any]) -> None:
-    file_path = resolve_emoji_file_path(context, str(record.get("file_path", "") or ""))
+    file_path     = resolve_emoji_file_path(context, str(record.get("file_path", "") or ""))
     allowed_roots = _allowed_emoji_target_dirs(context)
     if not allowed_roots:
         return
@@ -572,14 +589,14 @@ def _find_similar_entry(
             continue
         if not _is_valid_library_image(
             candidate_path,
-            max_bytes=int(runtime.cfg.media.max_analyze_bytes),
-            max_pixels=int(runtime.cfg.media.max_image_pixels),
-            max_frames=int(runtime.cfg.media.max_animation_frames),
+            max_bytes  = int(runtime.cfg.media.max_analyze_bytes),
+            max_pixels = int(runtime.cfg.media.max_image_pixels),
+            max_frames = int(runtime.cfg.media.max_animation_frames),
         ):
             continue
         candidate_hash = str(raw_record.get("perceptual_hash", "") or "").strip()
         if not candidate_hash:
-            candidate_hash = _average_hash(candidate_path)
+            candidate_hash                = _average_hash(candidate_path)
             raw_record["perceptual_hash"] = candidate_hash
         if _hamming_distance(perceptual_hash, candidate_hash) <= threshold:
             return str(media_hash), raw_record
@@ -603,7 +620,7 @@ def _prune_auto_entries(
         return
 
     keep_hashes = keep_hashes or set()
-    entries = payload.setdefault("entries", {})
+    entries     = payload.setdefault("entries", {})
     auto_active = [
         (media_hash, record)
         for media_hash, record in entries.items()
@@ -618,8 +635,8 @@ def _prune_auto_entries(
         media_hash
         for media_hash, _record in sorted(
             auto_active,
-            key=lambda item: (_score_record(item[1]), item[0]),
-            reverse=True,
+            key     = lambda item: (_score_record(item[1]), item[0]),
+            reverse = True,
         )[:max_entries]
     }
     survivors.update(keep_hashes)
@@ -657,6 +674,27 @@ def collect_emoji_candidate(
     source_chat_id: str = "",
     source_user_id: str = "",
 ) -> tuple[EmojiLibraryEntry, bool] | None:
+    """序列化文件复制、索引合并及清理，确保并发收集完整提交。"""
+    with keyed_path_lock(_emoji_index_path(context)):
+        return _collect_emoji_candidate_locked(
+            context,
+            runtime,
+            rendered,
+            source_path    = source_path,
+            source_chat_id = source_chat_id,
+            source_user_id = source_user_id,
+        )
+
+
+def _collect_emoji_candidate_locked(
+    context,
+    runtime,
+    rendered: RenderedMedia,
+    *,
+    source_path: Path,
+    source_chat_id: str = "",
+    source_user_id: str = "",
+) -> tuple[EmojiLibraryEntry, bool] | None:
     """以会话级可见范围收集一个符合条件的入站表情。
 
     来源必须是真实文件，分析结果也必须包含可复用的人类语义标签。完全相同或感知
@@ -671,9 +709,9 @@ def collect_emoji_candidate(
         return None
     if not _is_valid_library_image(
         source_path,
-        max_bytes=int(runtime.cfg.media.max_analyze_bytes),
-        max_pixels=int(runtime.cfg.media.max_image_pixels),
-        max_frames=int(runtime.cfg.media.max_animation_frames),
+        max_bytes  = int(runtime.cfg.media.max_analyze_bytes),
+        max_pixels = int(runtime.cfg.media.max_image_pixels),
+        max_frames = int(runtime.cfg.media.max_animation_frames),
     ):
         return None
     if not _is_usable_library_metadata(
@@ -684,24 +722,24 @@ def collect_emoji_candidate(
     library_dir = resolve_emoji_library_dir(context)
 
     ensure_dir(library_dir)
-    payload = _load_index(context)
+    payload          = _load_index(context)
     original_payload = deepcopy(payload)
-    entries = payload.setdefault("entries", {})
-    perceptual_hash = _average_hash(source_path)
-    record_key = rendered.media_hash
-    existing = entries.get(record_key)
+    entries          = payload.setdefault("entries", {})
+    perceptual_hash  = _average_hash(source_path)
+    record_key       = rendered.media_hash
+    existing         = entries.get(record_key)
     if not isinstance(existing, dict):
         similar = _find_similar_entry(
             context,
             runtime,
             entries,
-            perceptual_hash=perceptual_hash,
-            source_chat_id=str(source_chat_id or "").strip(),
+            perceptual_hash = perceptual_hash,
+            source_chat_id  = str(source_chat_id or "").strip(),
         )
         if similar is not None:
             record_key, existing = similar
     existing = existing if isinstance(existing, dict) else None
-    status = "pending" if runtime.cfg.media.emoji_auto_collect_requires_approval else "active"
+    status   = "pending" if runtime.cfg.media.emoji_auto_collect_requires_approval else "active"
     if existing is not None:
         status = _status_from_record(existing)
     source = "auto"
@@ -713,14 +751,24 @@ def collect_emoji_candidate(
     ensure_dir(base_dir)
     target_path = _safe_target_file_path(
         context,
-        existing=existing,
-        base_dir=base_dir,
-        record_key=record_key,
-        suffix=suffix,
+        existing   = existing,
+        base_dir   = base_dir,
+        record_key = record_key,
+        suffix     = suffix,
     )
     is_new = existing is None
     if not target_path.exists():
         _copy_into_library_if_needed(source_path, target_path)
+
+    if existing is not None and record_key != rendered.media_hash:
+        # 相似条目沿用代表图的字节，其内容哈希及语义必须同时沿用。
+        rendered = replace(
+            rendered,
+            media_hash   = record_key,
+            description  = str(existing.get("description", "") or ""),
+            marker       = str(existing.get("marker", "") or ""),
+            emotion_tags = tuple(existing.get("emotion_tags", [])),
+        )
 
     entry = _entry_from_render(
         context,
@@ -729,24 +777,24 @@ def collect_emoji_candidate(
         existing,
     )
     normalized = _normalize_entry_record(
-        context=context,
-        file_path=target_path,
-        entry=entry,
-        existing=existing,
-        status=status,
-        source=source,
-        perceptual_hash=perceptual_hash,
-        touch_collection=True,
-        source_chat_id=source_chat_id,
-        source_user_id=source_user_id,
+        context          = context,
+        file_path        = target_path,
+        entry            = entry,
+        existing         = existing,
+        status           = status,
+        source           = source,
+        perceptual_hash  = perceptual_hash,
+        touch_collection = True,
+        source_chat_id   = source_chat_id,
+        source_user_id   = source_user_id,
     )
     normalized["media_hash"] = record_key
-    entries[record_key] = normalized
+    entries[record_key]      = normalized
     _prune_auto_entries(context, runtime, payload, keep_hashes={record_key})
     _save_index_if_changed(
         context,
-        original_payload=original_payload,
-        payload=payload,
+        original_payload = original_payload,
+        payload          = payload,
     )
     return entry, is_new
 
@@ -769,8 +817,8 @@ def schedule_emoji_library_repair(context, runtime) -> bool:
             await load_emoji_library(
                 context,
                 runtime,
-                repair_invalid=True,
-                schedule_background_repair=False,
+                repair_invalid             = True,
+                schedule_background_repair = False,
             )
         finally:
             _EMOJI_REPAIR_TASKS.discard(task_key)
@@ -787,9 +835,9 @@ async def load_emoji_library(
     context,
     runtime,
     *,
-    repair_invalid: bool = True,
+    repair_invalid: bool             = True,
     schedule_background_repair: bool = False,
-    chat_id: str | None = None,
+    chat_id: str | None              = None,
 ) -> list[EmojiLibraryEntry]:
     """加载有效条目，并可在有界缓存下修复元数据。
 
@@ -800,7 +848,7 @@ async def load_emoji_library(
 
     library_dir = resolve_emoji_library_dir(context)
 
-    cache_key = _library_cache_key(context)
+    cache_key       = _library_cache_key(context)
     cache_signature = await _run_media_blocking(_library_signature, context)
     if (
         repair_invalid
@@ -816,9 +864,9 @@ async def load_emoji_library(
         _read_library_snapshot,
         context,
         library_dir,
-        max_bytes=int(runtime.cfg.media.max_analyze_bytes),
-        max_pixels=int(runtime.cfg.media.max_image_pixels),
-        max_frames=int(runtime.cfg.media.max_animation_frames),
+        max_bytes  = int(runtime.cfg.media.max_analyze_bytes),
+        max_pixels = int(runtime.cfg.media.max_image_pixels),
+        max_frames = int(runtime.cfg.media.max_animation_frames),
     )
     if not scanned_files:
         if payload.get("entries"):
@@ -826,24 +874,24 @@ async def load_emoji_library(
             await _run_media_blocking(
                 _save_index_if_changed,
                 context,
-                original_payload=original_payload,
-                payload=payload,
+                original_payload = original_payload,
+                payload          = payload,
             )
         return []
 
     retained_entries: dict[str, dict[str, Any]] = {}
-    results: list[EmojiLibraryEntry] = []
-    repair_needed = False
+    results: list[EmojiLibraryEntry]            = []
+    repair_needed                               = False
 
     for scanned_file in scanned_files:
-        file_path = scanned_file.file_path
-        media_hash = scanned_file.media_hash
-        existing_record = scanned_file.existing_record
-        existing = existing_record or {}
+        file_path        = scanned_file.file_path
+        media_hash       = scanned_file.media_hash
+        existing_record  = scanned_file.existing_record
+        existing         = existing_record or {}
         physical_pending = _is_pending_library_file(context, file_path)
-        declared_status = str((existing_record or {}).get("status", "") or "").strip().lower()
-        declared_path = str((existing_record or {}).get("file_path", "") or "").strip()
-        path_matches = False
+        declared_status  = str((existing_record or {}).get("status", "") or "").strip().lower()
+        declared_path    = str((existing_record or {}).get("file_path", "") or "").strip()
+        path_matches     = False
         if declared_path:
             try:
                 path_matches = (
@@ -856,8 +904,8 @@ async def load_emoji_library(
             and declared_status in {"active", "pending"}
             and path_matches
         )
-        status = "pending" if physical_pending or not record_valid else declared_status
-        source = _source_from_record(existing_record)
+        status          = "pending" if physical_pending or not record_valid else declared_status
+        source          = _source_from_record(existing_record)
         perceptual_hash = scanned_file.perceptual_hash
         if isinstance(existing, dict) and _is_usable_library_metadata(
             str(existing.get("description", "") or "").strip(),
@@ -865,16 +913,16 @@ async def load_emoji_library(
             tuple(str(item) for item in existing.get("emotion_tags", []) if str(item).strip()),
         ):
             entry = EmojiLibraryEntry(
-                media_hash=media_hash,
-                file_path=_to_data_relative_path(context, file_path),
-                description=str(existing.get("description", "") or "").strip(),
-                emotion_tags=tuple(
+                media_hash   = media_hash,
+                file_path    = _to_data_relative_path(context, file_path),
+                description  = str(existing.get("description", "") or "").strip(),
+                emotion_tags = tuple(
                     str(item) for item in existing.get("emotion_tags", []) if str(item).strip()
                 ),
-                usage_count=int(existing.get("usage_count", 0) or 0),
-                last_used_ts=float(existing.get("last_used_ts", 0.0) or 0.0),
-                marker=str(existing.get("marker", "") or "").strip(),
-                source_chat_ids=tuple(
+                usage_count     = int(existing.get("usage_count", 0) or 0),
+                last_used_ts    = float(existing.get("last_used_ts", 0.0) or 0.0),
+                marker          = str(existing.get("marker", "") or "").strip(),
+                source_chat_ids = tuple(
                     str(item).strip()
                     for item in existing.get("source_chat_ids", [])
                     if str(item).strip()
@@ -884,8 +932,8 @@ async def load_emoji_library(
                     if str(existing.get("source_chat_id", "") or "").strip()
                     else []
                 ),
-                owner_id=str(existing.get("owner_id", "") or "").strip(),
-                visibility=(
+                owner_id   = str(existing.get("owner_id", "") or "").strip(),
+                visibility = (
                     str(existing.get("visibility", "") or "chat").strip().lower()
                     if status == "active"
                     else "chat"
@@ -898,37 +946,37 @@ async def load_emoji_library(
             repair_needed = True
             if not repair_invalid:
                 retained_entries[media_hash] = _normalize_entry_record(
-                    context=context,
-                    file_path=file_path,
-                    entry=EmojiLibraryEntry(
-                        media_hash=media_hash,
-                        file_path=_to_data_relative_path(context, file_path),
-                        description=str((existing or {}).get("description", "") or "").strip(),
-                        emotion_tags=tuple(
+                    context   = context,
+                    file_path = file_path,
+                    entry     = EmojiLibraryEntry(
+                        media_hash   = media_hash,
+                        file_path    = _to_data_relative_path(context, file_path),
+                        description  = str((existing or {}).get("description", "") or "").strip(),
+                        emotion_tags = tuple(
                             str(item)
                             for item in (existing or {}).get("emotion_tags", [])
                             if str(item).strip()
                         ),
-                        usage_count=int((existing or {}).get("usage_count", 0) or 0),
-                        last_used_ts=float((existing or {}).get("last_used_ts", 0.0) or 0.0),
-                        marker=str((existing or {}).get("marker", "") or "").strip(),
+                        usage_count  = int((existing or {}).get("usage_count", 0) or 0),
+                        last_used_ts = float((existing or {}).get("last_used_ts", 0.0) or 0.0),
+                        marker       = str((existing or {}).get("marker", "") or "").strip(),
                     ),
-                    existing=existing_record,
-                    status="pending",
-                    source=source,
-                    perceptual_hash=perceptual_hash,
-                    touch_collection=False,
-                    file_size=scanned_file.file_size,
-                    file_mtime_ns=scanned_file.file_mtime_ns,
+                    existing         = existing_record,
+                    status           = "pending",
+                    source           = source,
+                    perceptual_hash  = perceptual_hash,
+                    touch_collection = False,
+                    file_size        = scanned_file.file_size,
+                    file_mtime_ns    = scanned_file.file_mtime_ns,
                 )
                 continue
             from .event_media import render_local_media_file
 
             rendered = await render_local_media_file(
                 file_path,
-                context=context,
-                runtime=runtime,
-                prefer_emoji=True,
+                context      = context,
+                runtime      = runtime,
+                prefer_emoji = True,
             )
             if rendered is None:
                 continue
@@ -943,48 +991,47 @@ async def load_emoji_library(
                 existing_record,
             )
         normalized_record = _normalize_entry_record(
-            context=context,
-            file_path=file_path,
-            entry=entry,
-            existing=existing_record,
-            status=status,
-            source=source,
-            perceptual_hash=perceptual_hash,
-            touch_collection=False,
-            file_size=scanned_file.file_size,
-            file_mtime_ns=scanned_file.file_mtime_ns,
+            context          = context,
+            file_path        = file_path,
+            entry            = entry,
+            existing         = existing_record,
+            status           = status,
+            source           = source,
+            perceptual_hash  = perceptual_hash,
+            touch_collection = False,
+            file_size        = scanned_file.file_size,
+            file_mtime_ns    = scanned_file.file_mtime_ns,
         )
         retained_entries[entry.media_hash] = normalized_record
         if status == "active":
             results.append(
                 EmojiLibraryEntry(
-                    media_hash=entry.media_hash,
-                    file_path=entry.file_path,
-                    description=entry.description,
-                    emotion_tags=entry.emotion_tags,
-                    usage_count=entry.usage_count,
-                    last_used_ts=entry.last_used_ts,
-                    marker=entry.marker,
-                    source_chat_ids=tuple(normalized_record.get("source_chat_ids", [])),
-                    owner_id=str(normalized_record.get("owner_id", "") or ""),
-                    visibility=str(normalized_record.get("visibility", "chat") or "chat"),
-                    global_approved=normalized_record.get("global_approved") is True,
+                    media_hash      = entry.media_hash,
+                    file_path       = entry.file_path,
+                    description     = entry.description,
+                    emotion_tags    = entry.emotion_tags,
+                    usage_count     = entry.usage_count,
+                    last_used_ts    = entry.last_used_ts,
+                    marker          = entry.marker,
+                    source_chat_ids = tuple(normalized_record.get("source_chat_ids", [])),
+                    owner_id        = str(normalized_record.get("owner_id", "") or ""),
+                    visibility      = str(normalized_record.get("visibility", "chat") or "chat"),
+                    global_approved = normalized_record.get("global_approved") is True,
                 )
             )
 
     payload["entries"] = retained_entries
-    await _run_media_blocking(
+    saved_signature    = await _run_media_blocking(
         _save_index_if_changed,
         context,
-        original_payload=original_payload,
-        payload=payload,
+        original_payload = original_payload,
+        payload          = payload,
     )
     if repair_needed and schedule_background_repair and not repair_invalid:
         schedule_emoji_library_repair(context, runtime)
     if repair_invalid and not schedule_background_repair and cache_key:
-        updated_signature = await _run_media_blocking(_library_signature, context)
-        if updated_signature is not None:
-            _store_library_cache(cache_key, updated_signature, results)
+        if saved_signature is not None:
+            _store_library_cache(cache_key, saved_signature, results)
     return _filter_visible_entries(results, chat_id)
 
 
@@ -1014,6 +1061,11 @@ def mark_emoji_used(context, entry: EmojiLibraryEntry) -> None:
 def mark_emoji_used_by_hash(context, media_hash: str) -> None:
     """更新已有哈希的使用元数据，不创建新记录。"""
 
+    with keyed_path_lock(_emoji_index_path(context)):
+        _mark_emoji_used_locked(context, media_hash)
+
+
+def _mark_emoji_used_locked(context, media_hash: str) -> None:
     normalized_hash = str(media_hash or "").strip()
     if not normalized_hash:
         return
@@ -1022,6 +1074,6 @@ def mark_emoji_used_by_hash(context, media_hash: str) -> None:
     current = entries.get(normalized_hash)
     if not isinstance(current, dict):
         return
-    current["usage_count"] = int(current.get("usage_count", 0) or 0) + 1
+    current["usage_count"]  = int(current.get("usage_count", 0) or 0) + 1
     current["last_used_ts"] = float(time.time())
     _save_index(context, payload)

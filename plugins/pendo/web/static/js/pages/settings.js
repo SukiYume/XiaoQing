@@ -5,7 +5,7 @@ import { errorMessage, isRecord, nonEmptyTextValue as textValue } from '../utils
 import { setUserTimeZone } from '../utils/timezone.js';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
-const CSS_ID = 'pendo-settings-redesign-styles';
+const CSS_ID           = 'pendo-settings-redesign-styles';
 const DEFAULT_SETTINGS = Object.freeze({
     timezone: 'Asia/Shanghai',
     quiet_hours_start: '23:00',
@@ -19,10 +19,10 @@ const DEFAULT_SETTINGS = Object.freeze({
     }),
 });
 
-let _container = null;
-let _settings = null;
-let _saving = false;
-let _loggingOut = false;
+let _container        = null;
+let _settings         = null;
+let _saving           = false;
+let _loggingOut       = false;
 let _lifecycleVersion = 0;
 
 // 数据边界：只接收可解释的后端值，并为旧数据补齐稳定默认值。
@@ -39,7 +39,7 @@ function booleanValue(value, fallback) {
 }
 
 function normalizeToggleSettings(settingsJson) {
-    const raw = isRecord(settingsJson) ? settingsJson : {};
+    const raw    = isRecord(settingsJson) ? settingsJson : {};
     const active = { ...raw };
     delete active.privacy_mode;
     return {
@@ -67,7 +67,7 @@ function normalizeSettings(value) {
 }
 
 function mergeSavedSettings(responseData, payload) {
-    const current = normalizeSettings(_settings);
+    const current    = normalizeSettings(_settings);
     const optimistic = normalizeSettings({
         ...current,
         ...payload,
@@ -233,7 +233,7 @@ function ensureStyles() {
 
 // 渲染函数只消费已归一化状态，所有插值都经过转义。
 function toggleRow(id, title, description, checked) {
-    const safeId = escapeHtml(id);
+    const safeId    = escapeHtml(id);
     const safeTitle = escapeHtml(title);
     return `
         <div class="settings-toggle-row">
@@ -262,7 +262,7 @@ function renderPage() {
     }
 
     const settings = normalizeSettings(_settings);
-    const toggles = settings.settings_json;
+    const toggles  = settings.settings_json;
     _container.innerHTML = `
         <div class="settings-shell">
             <div class="settings-stack">
@@ -410,8 +410,8 @@ async function handleSave() {
     if (_saving || !_container || !_settings) return;
 
     const container = _container;
-    const version = _lifecycleVersion;
-    const payload = collectFormData(container);
+    const version   = _lifecycleVersion;
+    const payload   = collectFormData(container);
     _saving = true;
     renderPage();
     try {
@@ -436,7 +436,7 @@ async function handleLogout() {
     if (_loggingOut || !_container) return;
 
     const container = _container;
-    const version = _lifecycleVersion;
+    const version   = _lifecycleVersion;
     _loggingOut = true;
     renderPage();
     try {

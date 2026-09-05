@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime, timedelta, timezone, tzinfo
+from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any, Final, Protocol, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -55,7 +55,7 @@ class TimezoneHelper:
         if db:
             try:
                 settings = db.get_user_settings(user_id)
-                tz_str = settings.get("timezone", PendoConfig.DEFAULT_TIMEZONE)
+                tz_str   = settings.get("timezone", PendoConfig.DEFAULT_TIMEZONE)
                 return ZoneInfo(tz_str)
             except Exception as exc:
                 logger.warning(
@@ -88,11 +88,11 @@ class TimezoneHelper:
             raise ValueError(
                 "naive datetime is not accepted for storage; supply an explicit timezone"
             )
-        return dt.astimezone(timezone.utc).isoformat()
+        return dt.astimezone(UTC).isoformat()
 
 
 def now_in_timezone(
-    user_id: str | None = None,
+    user_id: str | None                   = None,
     db: UserTimezoneSettingsReader | None = None,
 ) -> datetime:
     """获取用户时区的当前时间"""
@@ -121,7 +121,7 @@ def resolve_source_wall_time(
     for fold in (0, 1):
         aware = parsed.replace(tzinfo=source_zone, fold=fold)
         try:
-            roundtrip = aware.astimezone(timezone.utc).astimezone(source_zone).replace(tzinfo=None)
+            roundtrip = aware.astimezone(UTC).astimezone(source_zone).replace(tzinfo=None)
         except (OverflowError, ValueError) as exc:
             raise ValueError(f"Invalid {field_name}, outside supported datetime range") from exc
         if roundtrip == parsed:
@@ -155,7 +155,7 @@ def normalize_datetime_for_storage(
     try:
         if parsed.utcoffset() is None:
             parsed = resolve_source_wall_time(parsed, field_name, source_zone)
-        return parsed.astimezone(timezone.utc).isoformat(timespec=timespec)
+        return parsed.astimezone(UTC).isoformat(timespec=timespec)
     except (OverflowError, ValueError) as exc:
         if str(exc).startswith(("Ambiguous ", "Nonexistent ", "Invalid ")):
             raise
@@ -165,7 +165,7 @@ def normalize_datetime_for_storage(
 def utc_now_iso(*, timespec: str = "seconds") -> str:
     """Return one canonical UTC-aware timestamp for persistence."""
 
-    return datetime.now(timezone.utc).isoformat(timespec=timespec)
+    return datetime.now(UTC).isoformat(timespec=timespec)
 
 
 def require_canonical_utc_timestamp(value: object, field_name: str) -> None:
@@ -179,7 +179,7 @@ def require_canonical_utc_timestamp(value: object, field_name: str) -> None:
         raise ValueError(f"{field_name} must be a canonical UTC ISO string") from exc
     if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
         raise ValueError(f"{field_name} must use UTC +00:00")
-    canonical = parsed.astimezone(timezone.utc).isoformat(timespec="seconds")
+    canonical = parsed.astimezone(UTC).isoformat(timespec="seconds")
     if value != canonical:
         raise ValueError(f"{field_name} must use canonical second-precision UTC ISO")
 
@@ -213,8 +213,8 @@ def normalize_item_datetimes_for_storage(
     touched.
     """
 
-    normalized = dict(payload)
-    item_type = str(normalized.get("type") or "").strip()
+    normalized  = dict(payload)
+    item_type   = str(normalized.get("type") or "").strip()
     source_zone = user_timezone
     if item_type == "event":
         timezone_name = str(normalized.get("timezone") or user_timezone.key).strip()
@@ -259,7 +259,7 @@ def normalize_event_collection_datetimes_for_storage(
 ) -> dict[str, Any]:
     """Apply the event timestamp contract to a collection header."""
 
-    had_type = "type" in payload
+    had_type   = "type" in payload
     normalized = normalize_item_datetimes_for_storage(
         {**payload, "type": "event"},
         user_timezone,
@@ -291,7 +291,7 @@ def get_user_now_from_settings(settings: dict[str, Any], current_utc: datetime) 
 
 def parse_and_localize(
     dt_str: str,
-    user_id: str | None = None,
+    user_id: str | None                   = None,
     db: UserTimezoneSettingsReader | None = None,
 ) -> datetime:
     """解析时间字符串并本地化"""
@@ -307,8 +307,8 @@ def parse_date_optional(date_str: str, now: datetime | None = None) -> str | Non
     if not date_str or not str(date_str).strip():
         return None
 
-    now = now or datetime.now()
-    text = str(date_str).strip()
+    now     = now or datetime.now()
+    text    = str(date_str).strip()
     lowered = text.lower()
 
     # 相对日期
@@ -414,17 +414,17 @@ def _parse_structured_time_range(text: str) -> tuple[datetime, datetime] | None:
 def _parse_time_range_core(
     time_range: str,
     now: datetime | None = None,
-    default: str = "today",
-    strict: bool = False,
+    default: str         = "today",
+    strict: bool         = False,
 ) -> tuple[datetime, datetime]:
     """核心时间范围解析，返回 (start_dt, end_dt)。
 
     支持: today, tomorrow, week, month, year, 今天, 本周, 本月, 今年,
           lastNd, YYYY, YYYY-MM, YYYY-MM-DD..YYYY-MM-DD
     """
-    now = now or datetime.now()
-    tr = (time_range or default).strip().lower()
-    tr = re.sub(r"\.{3,}", "..", tr)
+    now   = now or datetime.now()
+    tr    = (time_range or default).strip().lower()
+    tr    = re.sub(r"\.{3,}", "..", tr)
     today = _day_range(now)
 
     match = re.fullmatch(r"last(\d+)d", tr)
@@ -489,13 +489,13 @@ def parse_delay_time(
     if not delay_str:
         return None
 
-    now = now or TimezoneHelper.now()
+    now  = now or TimezoneHelper.now()
     text = str(delay_str).strip().lower()
 
     # 相对时间: 1h, 30m, 2d
     match = re.match(r"^(\d+)([hmd])$", text)
     if match:
-        num = int(match.group(1))
+        num  = int(match.group(1))
         unit = match.group(2)
         base = now
         if current_due:

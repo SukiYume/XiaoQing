@@ -16,10 +16,10 @@ def _split_chat_reply(text: str) -> list[str]:
     if not text:
         return []
 
-    lines = text.split("\n")
-    messages = []
+    lines           = text.split("\n")
+    messages        = []
     current_message = []
-    in_code_block = False
+    in_code_block   = False
 
     for line in lines:
         stripped = line.strip()
@@ -31,7 +31,7 @@ def _split_chat_reply(text: str) -> list[str]:
                 current_message.append(line)
                 messages.append("\n".join(current_message).strip())
                 current_message = []
-                in_code_block = False
+                in_code_block   = False
             else:
                 # 代码块开始
                 if current_message:

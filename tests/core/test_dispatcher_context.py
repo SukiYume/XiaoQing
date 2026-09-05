@@ -19,13 +19,13 @@ from tests.helpers.dispatcher_test_support import (
     pytest,
 )
 
-dispatcher = _fixture_support.dispatcher
-mock_admin_check = _fixture_support.mock_admin_check
-mock_config_provider = _fixture_support.mock_config_provider
-mock_context_factory = _fixture_support.mock_context_factory
-mock_metrics = _fixture_support.mock_metrics
-mock_router = _fixture_support.mock_router
-mock_session_manager = _fixture_support.mock_session_manager
+dispatcher             = _fixture_support.dispatcher
+mock_admin_check       = _fixture_support.mock_admin_check
+mock_config_provider   = _fixture_support.mock_config_provider
+mock_context_factory   = _fixture_support.mock_context_factory
+mock_metrics           = _fixture_support.mock_metrics
+mock_router            = _fixture_support.mock_router
+mock_session_manager   = _fixture_support.mock_session_manager
 sample_message_context = _fixture_support.sample_message_context
 
 
@@ -52,7 +52,7 @@ class TestInvokeUrlParser:
         sample_message_context: MessageContext,
         mock_plugin_registry: MagicMock,
     ):
-        mock_plugin = MagicMock()
+        mock_plugin                   = MagicMock()
         mock_plugin.module.handle_url = AsyncMock(
             return_value=[{"type": "text", "data": {"text": "URL handled"}}]
         )
@@ -80,19 +80,19 @@ class TestMessageContext:
     def test_create_message_context(self):
         """测试创建消息上下文"""
         ctx = MessageContext(
-            request_id="test_001",
-            text="/echo hello",
-            clean_text="echo hello",
-            user_id=12345,
-            group_id=67890,
-            is_private=False,
-            has_bot_name=False,
-            has_prefix=True,
-            has_command_prefix=True,
-            is_only_bot_name=False,
-            is_at_me=False,
-            is_url_only=False,
-            event={},
+            request_id         = "test_001",
+            text               = "/echo hello",
+            clean_text         = "echo hello",
+            user_id            = 12345,
+            group_id           = 67890,
+            is_private         = False,
+            has_bot_name       = False,
+            has_prefix         = True,
+            has_command_prefix = True,
+            is_only_bot_name   = False,
+            is_at_me           = False,
+            is_url_only        = False,
+            event              = {},
         )
 
         assert ctx.request_id == "test_001"
@@ -132,10 +132,10 @@ class TestProcessEventLinearFlow:
         self, dispatcher, mock_router, event_template, mock_plugin_registry
     ):
         spec = CommandSpec(
-            plugin="echo",
-            name="echo",
-            triggers=["echo"],
-            help_text="echo",
+            plugin    = "echo",
+            name      = "echo",
+            triggers  = ["echo"],
+            help_text = "echo",
             handler=AsyncMock(return_value=[{"type": "text", "data": {"text": "hi"}}]),
             admin_only=False,
         )
@@ -147,8 +147,8 @@ class TestProcessEventLinearFlow:
     async def test_group_bot_name_in_middle_falls_to_smalltalk(
         self, dispatcher, mock_router, mock_plugin_registry, event_template
     ):
-        mock_router.resolve.return_value = None
-        smalltalk = MagicMock()
+        mock_router.resolve.return_value  = None
+        smalltalk                         = MagicMock()
         smalltalk.module.handle_smalltalk = AsyncMock(
             return_value=[{"type": "text", "data": {"text": "嗯嗯"}}]
         )
@@ -160,7 +160,7 @@ class TestProcessEventLinearFlow:
     async def test_group_url_only_is_blocked_by_process_gate(
         self, dispatcher, mock_plugin_registry, event_template
     ):
-        url_parser = MagicMock()
+        url_parser                   = MagicMock()
         url_parser.module.handle_url = AsyncMock(
             return_value=[{"type": "text", "data": {"text": "parsed"}}]
         )
@@ -176,8 +176,8 @@ class TestProcessEventLinearFlow:
         self, dispatcher, mock_config_provider, mock_plugin_registry, event_template
     ):
         mock_config_provider.config["require_bot_name_in_group"] = False
-        url_parser = MagicMock()
-        url_parser.module.handle_url = AsyncMock(
+        url_parser                                               = MagicMock()
+        url_parser.module.handle_url                             = AsyncMock(
             return_value=[{"type": "text", "data": {"text": "parsed"}}]
         )
         mock_plugin_registry.get.side_effect = lambda name: (
@@ -190,7 +190,7 @@ class TestProcessEventLinearFlow:
     async def test_group_url_with_text_not_url_parser(
         self, dispatcher, mock_plugin_registry, event_template
     ):
-        url_parser = MagicMock()
+        url_parser                   = MagicMock()
         url_parser.module.handle_url = AsyncMock(
             return_value=[{"type": "text", "data": {"text": "x"}}]
         )
@@ -205,8 +205,8 @@ class TestProcessEventLinearFlow:
     async def test_private_plain_text_falls_to_smalltalk(
         self, dispatcher, mock_router, mock_plugin_registry, event_template
     ):
-        mock_router.resolve.return_value = None
-        smalltalk = MagicMock()
+        mock_router.resolve.return_value  = None
+        smalltalk                         = MagicMock()
         smalltalk.module.handle_smalltalk = AsyncMock(
             return_value=[{"type": "text", "data": {"text": "嗯"}}]
         )
@@ -220,7 +220,7 @@ class TestProcessEventLinearFlow:
     async def test_private_url_invokes_url_parser(
         self, dispatcher, mock_plugin_registry, event_template
     ):
-        url_parser = MagicMock()
+        url_parser                   = MagicMock()
         url_parser.module.handle_url = AsyncMock(
             return_value=[{"type": "text", "data": {"text": "p"}}]
         )
@@ -238,8 +238,8 @@ class TestProcessEventLinearFlow:
     ):
         dispatcher.mute_group(67890, 5.0)
         try:
-            mock_router.resolve.return_value = None
-            smalltalk = MagicMock()
+            mock_router.resolve.return_value  = None
+            smalltalk                         = MagicMock()
             smalltalk.module.handle_smalltalk = AsyncMock(
                 return_value=[{"type": "text", "data": {"text": "no"}}]
             )
@@ -255,10 +255,10 @@ class TestProcessEventLinearFlow:
         dispatcher.mute_group(67890, 5.0)
         try:
             spec = CommandSpec(
-                plugin="echo",
-                name="echo",
-                triggers=["echo"],
-                help_text="echo",
+                plugin    = "echo",
+                name      = "echo",
+                triggers  = ["echo"],
+                help_text = "echo",
                 handler=AsyncMock(return_value=[{"type": "text", "data": {"text": "ok"}}]),
                 admin_only=False,
             )
@@ -272,7 +272,7 @@ class TestProcessEventLinearFlow:
     async def test_group_mute_blocks_url(self, dispatcher, mock_plugin_registry, event_template):
         dispatcher.mute_group(67890, 5.0)
         try:
-            url_parser = MagicMock()
+            url_parser                   = MagicMock()
             url_parser.module.handle_url = AsyncMock(
                 return_value=[{"type": "text", "data": {"text": "p"}}]
             )
@@ -291,8 +291,8 @@ class TestProcessEventLinearFlow:
     ):
         mock_config_provider.config["require_bot_name_in_group"] = False
         try:
-            mock_router.resolve.return_value = None
-            smalltalk = MagicMock()
+            mock_router.resolve.return_value  = None
+            smalltalk                         = MagicMock()
             smalltalk.module.handle_smalltalk = AsyncMock(
                 return_value=[{"type": "text", "data": {"text": "ok"}}]
             )
@@ -306,15 +306,15 @@ class TestProcessEventLinearFlow:
     async def test_xiaoqing_provider_receives_group_plain_text_for_own_reply_gate(
         self, dispatcher, mock_router, mock_config_provider, mock_plugin_registry, event_template
     ):
-        mock_config_provider.config["require_bot_name_in_group"] = True
+        mock_config_provider.config["require_bot_name_in_group"]     = True
         mock_config_provider.config["plugins"]["smalltalk_provider"] = "xiaoqing_chat"
-        mock_router.resolve.return_value = None
-        xiaoqing = MagicMock()
+        mock_router.resolve.return_value                             = None
+        xiaoqing                                                     = MagicMock()
         xiaoqing.module.observe_message = AsyncMock(return_value=[])
         xiaoqing.module.handle_smalltalk = AsyncMock(
             return_value=[{"type": "text", "data": {"text": "接一句"}}]
         )
-        generic = MagicMock()
+        generic                         = MagicMock()
         generic.module.handle_smalltalk = AsyncMock(
             return_value=[{"type": "text", "data": {"text": "错误的通用回退"}}]
         )
@@ -339,8 +339,8 @@ class TestProcessEventLinearFlow:
     async def test_unknown_command_hint_only_for_slash_prefix(
         self, dispatcher, mock_router, mock_plugin_registry, event_template
     ):
-        mock_router.resolve.return_value = None
-        smalltalk = MagicMock()
+        mock_router.resolve.return_value  = None
+        smalltalk                         = MagicMock()
         smalltalk.module.handle_smalltalk = AsyncMock(
             return_value=[{"type": "text", "data": {"text": "嗯"}}]
         )
@@ -360,41 +360,41 @@ class TestProcessEventLinearFlow:
     async def test_group_at_mention_triggers_has_prefix(
         self, dispatcher, mock_router, mock_plugin_registry, event_template
     ):
-        mock_router.resolve.return_value = None
-        smalltalk = MagicMock()
+        mock_router.resolve.return_value  = None
+        smalltalk                         = MagicMock()
         smalltalk.module.handle_smalltalk = AsyncMock(
             return_value=[{"type": "text", "data": {"text": "嗯"}}]
         )
         mock_plugin_registry.get.return_value = smalltalk
-        event = event_template(
+        event                                 = event_template(
             message=[
                 {"type": "at", "data": {"qq": "11111"}},
                 {"type": "text", "data": {"text": " 帮我看看"}},
             ]
         )
         event["raw_message"] = "[CQ:at,qq=11111] 帮我看看"
-        result = await dispatcher.handle_event(event)
+        result               = await dispatcher.handle_event(event)
         assert result and result[0]["data"]["text"] == "嗯"
 
     @pytest.mark.asyncio
     async def test_group_at_only_calls_bot_name_only(
         self, dispatcher, mock_plugin_registry, event_template
     ):
-        smalltalk = MagicMock()
+        smalltalk                           = MagicMock()
         smalltalk.module.call_bot_name_only = AsyncMock(
             return_value=[{"type": "text", "data": {"text": "在的"}}]
         )
         mock_plugin_registry.get.return_value = smalltalk
         event = event_template(message=[{"type": "at", "data": {"qq": "11111"}}])
         event["raw_message"] = "[CQ:at,qq=11111]"
-        result = await dispatcher.handle_event(event)
+        result               = await dispatcher.handle_event(event)
         assert result and result[0]["data"]["text"] == "在的"
 
     @pytest.mark.asyncio
     async def test_private_only_bot_name_calls_bot_name_only(
         self, dispatcher, mock_plugin_registry, event_template
     ):
-        smalltalk = MagicMock()
+        smalltalk                           = MagicMock()
         smalltalk.module.call_bot_name_only = AsyncMock(
             return_value=[{"type": "text", "data": {"text": "在的"}}]
         )
@@ -409,11 +409,11 @@ class TestProcessEventLinearFlow:
         self, dispatcher, mock_router, mock_plugin_registry, mock_session_manager, event_template
     ):
         mock_router.resolve.return_value = None
-        session = MagicMock()
-        session.plugin_name = "pendo"
+        session                          = MagicMock()
+        session.plugin_name              = "pendo"
         mock_session_manager.get = AsyncMock(return_value=session)
 
-        pendo = MagicMock()
+        pendo                       = MagicMock()
         pendo.module.handle_session = AsyncMock(
             return_value=[{"type": "text", "data": {"text": "session reply"}}]
         )
@@ -436,7 +436,7 @@ class TestProcessEventLinearFlow:
         mock_session_manager.get = AsyncMock(
             side_effect=AssertionError("routing probes must not touch the session lease")
         )
-        mock_session_manager.peek.side_effect = None
+        mock_session_manager.peek.side_effect  = None
         mock_session_manager.peek.return_value = session
 
         async def update(_user_id, _group_id, callback):
@@ -444,7 +444,7 @@ class TestProcessEventLinearFlow:
             return await result if inspect.isawaitable(result) else result
 
         mock_session_manager.update.side_effect = update
-        loaded = SimpleNamespace(
+        loaded                                  = SimpleNamespace(
             module=SimpleNamespace(
                 handle_session=AsyncMock(
                     return_value=[{"type": "text", "data": {"text": "session reply"}}]
@@ -474,12 +474,12 @@ class TestProcessEventLinearFlow:
         global_handler = AsyncMock(return_value=[{"type": "text", "data": {"text": "global"}}])
         mock_router.resolve.return_value = (
             CommandSpec(
-                plugin="echo",
-                name="echo",
-                triggers=["echo"],
-                help_text="echo",
-                handler=global_handler,
-                admin_only=False,
+                plugin     = "echo",
+                name       = "echo",
+                triggers   = ["echo"],
+                help_text  = "echo",
+                handler    = global_handler,
+                admin_only = False,
             ),
             "from-session",
         )
@@ -506,8 +506,8 @@ class TestProcessEventLinearFlow:
     ):
         session = SimpleNamespace(plugin_name="qingssh", session_id="ssh-session-blank")
         mock_session_manager.get.return_value = session
-        mock_router.resolve.return_value = None
-        session_handler = AsyncMock(
+        mock_router.resolve.return_value      = None
+        session_handler                       = AsyncMock(
             return_value=[{"type": "text", "data": {"text": "default accepted"}}]
         )
         mock_plugin_registry.get.return_value = SimpleNamespace(
@@ -522,25 +522,25 @@ class TestProcessEventLinearFlow:
         assert result == [{"type": "text", "data": {"text": "default accepted"}}]
         session_handler.assert_awaited_once()
 
-        mock_session_manager.get.return_value = None
+        mock_session_manager.get.return_value  = None
         mock_session_manager.peek.return_value = None
-        mock_session_manager.peek.side_effect = None
-        result = await dispatcher.handle_event(event)
+        mock_session_manager.peek.side_effect  = None
+        result                                 = await dispatcher.handle_event(event)
         assert result == []
 
     @pytest.mark.asyncio
     async def test_group_only_bot_name_with_active_session_does_not_preempt(
         self, dispatcher, mock_plugin_registry, mock_session_manager, event_template
     ):
-        session = MagicMock()
+        session             = MagicMock()
         session.plugin_name = "pendo"
         mock_session_manager.get = AsyncMock(return_value=session)
 
-        smalltalk = MagicMock()
+        smalltalk                           = MagicMock()
         smalltalk.module.call_bot_name_only = AsyncMock(
             return_value=[{"type": "text", "data": {"text": "在的"}}]
         )
-        pendo = MagicMock()
+        pendo                       = MagicMock()
         pendo.module.handle_session = AsyncMock(
             return_value=[{"type": "text", "data": {"text": "WRONG"}}]
         )
@@ -558,10 +558,10 @@ class TestProcessEventLinearFlow:
     async def test_command_uses_loaded_plugin_sequential_gate(
         self, dispatcher, mock_router, mock_plugin_registry, event_template
     ):
-        gate = PluginExecutionGate("sequential")
-        entered = asyncio.Event()
-        release = asyncio.Event()
-        active = 0
+        gate       = PluginExecutionGate("sequential")
+        entered    = asyncio.Event()
+        release    = asyncio.Event()
+        active     = 0
         max_active = 0
 
         async def slow_handler(*_args):
@@ -574,13 +574,13 @@ class TestProcessEventLinearFlow:
             return [{"type": "text", "data": {"text": "ok"}}]
 
         spec = CommandSpec(
-            plugin="stateful",
-            name="work",
-            triggers=["work"],
-            help_text="work",
-            handler=slow_handler,
-            admin_only=False,
-            execution_gate=gate,
+            plugin         = "stateful",
+            name           = "work",
+            triggers       = ["work"],
+            help_text      = "work",
+            handler        = slow_handler,
+            admin_only     = False,
+            execution_gate = gate,
         )
         mock_router.resolve.return_value = (spec, "")
         loaded = SimpleNamespace(execution_gate=gate)
@@ -601,10 +601,10 @@ class TestProcessEventLinearFlow:
     async def test_provider_events_use_the_same_sequential_gate(
         self, dispatcher, mock_plugin_registry, sample_message_context
     ):
-        gate = PluginExecutionGate("sequential")
+        gate    = PluginExecutionGate("sequential")
         entered = asyncio.Event()
         release = asyncio.Event()
-        probe = BlockingConcurrencyProbe(entered, release)
+        probe   = BlockingConcurrencyProbe(entered, release)
 
         mock_plugin_registry.get.return_value = SimpleNamespace(
             module=SimpleNamespace(observe_message=probe.run),

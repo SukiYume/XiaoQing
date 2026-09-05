@@ -113,7 +113,7 @@ def handle_status(user_id: str, group_id: int, args: str, db: Database) -> tuple
             pets = db.get_pets_by_user(user_id)
             if pets:
                 user_service = UserService(db)
-                cards = []
+                cards        = []
                 for user_pet in pets:
                     user = user_service.get_or_create_user(user_id, user_pet.group_id)
                     cards.append(f"🏠 群 {user_pet.group_id}\n{format_pet_card(user_pet, user)}")
@@ -122,14 +122,14 @@ def handle_status(user_id: str, group_id: int, args: str, db: Database) -> tuple
 
     # 确保用户存在
     user_service = UserService(db)
-    user = user_service.get_or_create_user(user_id, group_id)
+    user         = user_service.get_or_create_user(user_id, group_id)
 
     # 检查并颁发称号
     new_titles = user_service.check_and_award_titles(user_id, group_id)
     # 重新获取 user 以包含新称号
     if new_titles:
         refreshed_user = db.get_user(user_id, group_id)
-        user = refreshed_user or user_service.get_or_create_user(user_id, group_id)
+        user           = refreshed_user or user_service.get_or_create_user(user_id, group_id)
 
     result = format_pet_card(pet, user)
 
@@ -156,7 +156,7 @@ def handle_feed(
         return False, "你还没有宠物"
 
     user_service = UserService(db)
-    user = user_service.get_or_create_user(user_id, resolved_group_id)
+    user         = user_service.get_or_create_user(user_id, resolved_group_id)
 
     item_id = resolved_args.strip() if resolved_args.strip() else "apple"
 
@@ -167,7 +167,7 @@ def handle_feed(
 
     if success:
         status_text = format_status_text(pet)
-        message = f"{message}\n\n{status_text}"
+        message     = f"{message}\n\n{status_text}"
 
     return success, with_pet_name(pet, message)
 
@@ -190,9 +190,9 @@ def handle_clean(
     if resolved_args.strip():
         return False, "清洁命令不接受额外参数\n用法: /宠物 清洁 [群号]"
 
-    pet_service = PetService(db)
+    pet_service  = PetService(db)
     user_service = UserService(db)
-    user = user_service.get_or_create_user(user_id, resolved_group_id)
+    user         = user_service.get_or_create_user(user_id, resolved_group_id)
 
     success, message, _coins = pet_service.clean_pet(
         pet,
@@ -202,7 +202,7 @@ def handle_clean(
 
     if success:
         status_text = format_status_text(pet)
-        message = f"{message}\n\n{status_text}"
+        message     = f"{message}\n\n{status_text}"
 
     return success, with_pet_name(pet, message)
 
@@ -225,9 +225,9 @@ def handle_play(
     if resolved_args.strip():
         return False, "玩耍命令不接受额外参数\n用法: /宠物 玩耍 [群号]"
 
-    pet_service = PetService(db)
+    pet_service  = PetService(db)
     user_service = UserService(db)
-    user = user_service.get_or_create_user(user_id, resolved_group_id)
+    user         = user_service.get_or_create_user(user_id, resolved_group_id)
 
     success, message, _coins = pet_service.play_with_pet(
         pet,
@@ -237,7 +237,7 @@ def handle_play(
 
     if success:
         status_text = format_status_text(pet)
-        message = f"{message}\n\n{status_text}"
+        message     = f"{message}\n\n{status_text}"
 
     return success, with_pet_name(pet, message)
 
@@ -269,6 +269,6 @@ def handle_wake(user_id: str, group_id: int, args: str, db: Database) -> tuple[b
 
     if success:
         status_text = format_status_text(pet)
-        message = f"{message}\n\n{status_text}"
+        message     = f"{message}\n\n{status_text}"
 
     return success, with_pet_name(pet, message)

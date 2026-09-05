@@ -23,10 +23,10 @@ def build_tool_info_block(
     cooldown_left_seconds: float,
     recent_actions: Sequence[str],
 ) -> str:
-    now = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    now      = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     group_id = event.get("group_id")
-    user_id = event.get("user_id")
-    channel = "私聊" if group_id is None else f"群聊(g{group_id})"
+    user_id  = event.get("user_id")
+    channel  = "私聊" if group_id is None else f"群聊(g{group_id})"
 
     lines: list[str] = []
     lines.append("可用工具信息：")

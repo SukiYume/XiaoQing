@@ -69,10 +69,10 @@ def _format_event_edit_value(value: Any, *, tags: bool = False) -> str:
 
 def format_event_updated(before: Any, after: Any, changed_fields: set[str]) -> str:
     """展示数据库最终状态中的日程编辑差异。"""
-    title = _format_event_edit_value(getattr(after, "title", None))
-    display_id = public_id(getattr(after, "id", ""))
+    title            = _format_event_edit_value(getattr(after, "title", None))
+    display_id       = public_id(getattr(after, "id", ""))
     display_timezone = event_display_timezone(after)
-    lines = [f"✅ 已更新日程: {title}", ""]
+    lines            = [f"✅ 已更新日程: {title}", ""]
 
     scalar_fields = (
         ("title", "🗓️ 标题"),
@@ -111,7 +111,7 @@ def format_event_updated(before: Any, after: Any, changed_fields: set[str]) -> s
 
     if time_changed:
         before_timezone = event_display_timezone(before).key
-        after_timezone = display_timezone.key
+        after_timezone  = display_timezone.key
         if before_timezone == after_timezone:
             lines.append(f"🌐 时区: {after_timezone}")
         else:
@@ -224,7 +224,7 @@ def ensure_event_reminder_rules(
         return normalize_reminder_rules(parsed_data.get("reminder_rules"))
 
     start_time = parsed_data.get("start_time")
-    reminders = remind_times if remind_times is not None else parsed_data.get("remind_times")
+    reminders  = remind_times if remind_times is not None else parsed_data.get("remind_times")
     if start_time and reminders:
         return with_start_time_reminder_rule(derive_reminder_rules(start_time, reminders))
 
@@ -243,7 +243,7 @@ def ensure_start_time_reminder(remind_times: list[str], start_time: str | None) 
 def recalculate_event_reminders(event: Any, updates: dict[str, Any]) -> list[str]:
     """日程开始时间改变时，按原偏移量重算提醒。"""
     reminder_rules = normalize_reminder_rules(getattr(event, "reminder_rules", None) or [])
-    target_start = updates.get("start_time") or getattr(event, "start_time", None)
+    target_start   = updates.get("start_time") or getattr(event, "start_time", None)
     if reminder_rules and target_start:
         return build_remind_times_from_rules(target_start, reminder_rules)
 
@@ -256,10 +256,10 @@ def recalculate_event_reminders(event: Any, updates: dict[str, Any]) -> list[str
     new_start = updates.get("start_time")
     if not new_start:
         remind_times = existing
-        start = event.start_time
+        start        = event.start_time
     else:
         if existing and event.start_time:
-            old_start = datetime.fromisoformat(event.start_time)
+            old_start    = datetime.fromisoformat(event.start_time)
             new_start_dt = datetime.fromisoformat(new_start)
             remind_times = _shift_reminders_for_new_start(old_start, new_start_dt, existing)
         else:
@@ -273,7 +273,7 @@ def format_recurring_event_created(
     title: str, instance_count: int, remind_count: int, collection_id: str
 ) -> str:
     display_id = public_id(collection_id)
-    lines = [
+    lines      = [
         "✅ 已创建日程",
         "",
         f"🗓️ {title}",
@@ -288,12 +288,12 @@ def format_recurring_event_created(
 
 def format_milestone_event_created(event: dict[str, Any]) -> str:
     raw_milestones = event.get("milestones", [])
-    milestones = (
+    milestones     = (
         [milestone for milestone in raw_milestones if isinstance(milestone, dict)]
         if isinstance(raw_milestones, list)
         else []
     )
-    remind_count = len(event.get("remind_times", []))
+    remind_count     = len(event.get("remind_times", []))
     display_timezone = event_display_timezone(event)
 
     lines = [
@@ -376,10 +376,10 @@ def get_remind_status_label(log: dict[str, Any] | None) -> str:
 
 
 def format_event_reminders(event: Any, log_map: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    remind_times = parse_remind_times(getattr(event, "remind_times", []))
-    title = getattr(event, "title", "") or "无标题"
-    start_time = getattr(event, "start_time", "") or ""
-    notes = getattr(event, "notes", None) or ""
+    remind_times     = parse_remind_times(getattr(event, "remind_times", []))
+    title            = getattr(event, "title", "") or "无标题"
+    start_time       = getattr(event, "start_time", "") or ""
+    notes            = getattr(event, "notes", None) or ""
     display_timezone = event_display_timezone(event)
 
     if not remind_times:

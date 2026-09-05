@@ -15,7 +15,7 @@ def get_plugin_runtime_state(
             return runtime_state
         if create:
             # 先保留局部强类型引用，再发布到动态的插件状态字典。
-            runtime_state = {}
+            runtime_state                  = {}
             context.state["pendo_runtime"] = runtime_state
             return runtime_state
     return {}

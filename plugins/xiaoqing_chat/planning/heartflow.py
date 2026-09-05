@@ -16,9 +16,9 @@ from ..store_base import AsyncKeyedStore, delete_json_artifacts
 class HeartflowState:
     """一个会话用于调节回复频率的最小持久状态。"""
 
-    last_user_ts: float = 0.0
-    last_bot_ts: float = 0.0
-    reply_streak: int = 0
+    last_user_ts: float  = 0.0
+    last_bot_ts: float   = 0.0
+    reply_streak: int    = 0
     no_reply_streak: int = 0
 
 
@@ -35,14 +35,14 @@ class HeartflowEngine(AsyncKeyedStore[HeartflowState]):
     def get(self, chat_id: str) -> HeartflowState:
         if chat_id in self._cache:
             return self._cache[chat_id]
-        st = HeartflowState()
+        st   = HeartflowState()
         path = self._path(chat_id)
         if path:
             obj = self._load_json(path, default=None)
             if isinstance(obj, dict):
-                st.last_user_ts = float(obj.get("last_user_ts", 0.0) or 0.0)
-                st.last_bot_ts = float(obj.get("last_bot_ts", 0.0) or 0.0)
-                st.reply_streak = int(obj.get("reply_streak", 0) or 0)
+                st.last_user_ts    = float(obj.get("last_user_ts", 0.0) or 0.0)
+                st.last_bot_ts     = float(obj.get("last_bot_ts", 0.0) or 0.0)
+                st.reply_streak    = int(obj.get("reply_streak", 0) or 0)
                 st.no_reply_streak = int(obj.get("no_reply_streak", 0) or 0)
         self._cache[chat_id] = st
         return st
@@ -69,13 +69,13 @@ class HeartflowEngine(AsyncKeyedStore[HeartflowState]):
         return cast(HeartflowState, await super().get_async(chat_id))
 
     async def on_user_message_async(self, *, chat_id: str) -> HeartflowState:
-        st = await self.get_async(chat_id)
+        st              = await self.get_async(chat_id)
         st.last_user_ts = time.time()
         await asyncio.to_thread(self._save, chat_id)
         return st
 
     async def on_bot_reply_async(self, *, chat_id: str) -> HeartflowState:
-        st = await self.get_async(chat_id)
+        st             = await self.get_async(chat_id)
         st.last_bot_ts = time.time()
         st.reply_streak += 1
         st.no_reply_streak = 0
@@ -104,11 +104,11 @@ class HeartflowEngine(AsyncKeyedStore[HeartflowState]):
         goal: str,
         seconds_since_last_reply: float,
         base: float,
-        weight_question: float = 0.12,
-        weight_goal_match: float = 0.06,
-        weight_short_text: float = -0.08,
+        weight_question: float        = 0.12,
+        weight_goal_match: float      = 0.06,
+        weight_short_text: float      = -0.08,
         weight_no_reply_streak: float = 0.05,
-        weight_long_silence: float = 0.08,
+        weight_long_silence: float    = 0.08,
     ) -> float:
         s = float(base)
         t = (text or "").strip()
@@ -133,24 +133,24 @@ class HeartflowEngine(AsyncKeyedStore[HeartflowState]):
         goal: str,
         seconds_since_last_reply: float,
         base: float,
-        weight_question: float = 0.12,
-        weight_goal_match: float = 0.06,
-        weight_short_text: float = -0.08,
+        weight_question: float        = 0.12,
+        weight_goal_match: float      = 0.06,
+        weight_short_text: float      = -0.08,
         weight_no_reply_streak: float = 0.05,
-        weight_long_silence: float = 0.08,
+        weight_long_silence: float    = 0.08,
     ) -> float:
         """读取当前会话状态并计算归一化软评分。"""
 
         st = await self.get_async(chat_id)
         return self._calculate_score(
             st,
-            text=text,
-            goal=goal,
-            seconds_since_last_reply=seconds_since_last_reply,
-            base=base,
-            weight_question=weight_question,
-            weight_goal_match=weight_goal_match,
-            weight_short_text=weight_short_text,
-            weight_no_reply_streak=weight_no_reply_streak,
-            weight_long_silence=weight_long_silence,
+            text                     = text,
+            goal                     = goal,
+            seconds_since_last_reply = seconds_since_last_reply,
+            base                     = base,
+            weight_question          = weight_question,
+            weight_goal_match        = weight_goal_match,
+            weight_short_text        = weight_short_text,
+            weight_no_reply_streak   = weight_no_reply_streak,
+            weight_long_silence      = weight_long_silence,
         )

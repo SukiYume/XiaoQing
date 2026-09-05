@@ -72,9 +72,9 @@ def _with_scheduled_delivery_contract(db: Any) -> Any:
             "delivery_key": f"delivery:{task_name}:{owner_id}:{period_key}",
         }
 
-    db.claim_scheduled_delivery = claim
+    db.claim_scheduled_delivery    = claim
     db.complete_scheduled_delivery = lambda *_args: True
-    db.release_scheduled_delivery = lambda *_args: True
+    db.release_scheduled_delivery  = lambda *_args: True
     return db
 
 
@@ -165,14 +165,14 @@ class _FakeDb:
 
 def _build_task(task_id: str, category: str, created_at: str):
     return SimpleNamespace(
-        id=task_id,
-        title=task_id,
-        category=category,
-        status="done",
-        priority=3,
-        plan_date=None,
-        deadline_at=None,
-        created_at=created_at,
+        id          = task_id,
+        title       = task_id,
+        category    = category,
+        status      = "done",
+        priority    = 3,
+        plan_date   = None,
+        deadline_at = None,
+        created_at  = created_at,
     )
 
 

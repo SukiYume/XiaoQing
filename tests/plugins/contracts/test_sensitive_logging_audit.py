@@ -1,3 +1,4 @@
+# 验证日志隐藏凭据与任意用户命令中的敏感内容。
 from __future__ import annotations
 
 import ast
@@ -22,13 +23,13 @@ from plugins.qingssh.output_relay import SSHOutputPolicy
 from plugins.qingssh.ssh_manager import SSHManager
 from tests.helpers.paths import REPOSITORY_ROOT
 
-COMMAND_CANARY = "printf CR220_COMMAND_SECRET && token=CR220_TOKEN_SECRET"
-OUTPUT_CANARY = "CR220_REMOTE_RESPONSE_SECRET"
-HOST_CANARY = "cr220-private-host.internal"
-PATH_CANARY = "C:/private/CR220_PATH_SECRET/latest.log"
-ERROR_CANARY = "CR220_EXCEPTION_SECRET"
+COMMAND_CANARY       = "printf CR220_COMMAND_SECRET && token=CR220_TOKEN_SECRET"
+OUTPUT_CANARY        = "CR220_REMOTE_RESPONSE_SECRET"
+HOST_CANARY          = "cr220-private-host.internal"
+PATH_CANARY          = "C:/private/CR220_PATH_SECRET/latest.log"
+ERROR_CANARY         = "CR220_EXCEPTION_SECRET"
 MALICIOUS_REQUEST_ID = "safe\nCR220_REQUEST_SECRET"
-_FINGERPRINT_RE = re.compile(r"hmac-sha256:[0-9a-f]{24}")
+_FINGERPRINT_RE      = re.compile(r"hmac-sha256:[0-9a-f]{24}")
 
 
 class _Session:
@@ -60,7 +61,7 @@ async def test_qingssh_command_and_response_stay_admin_visible_but_not_in_logs(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     actions: list[dict[str, Any]] = []
-    command_seen: list[str] = []
+    command_seen: list[str]       = []
 
     class _Manager:
         data_dir = tmp_path
@@ -85,19 +86,19 @@ async def test_qingssh_command_and_response_stay_admin_visible_but_not_in_logs(
         return True
 
     context = SimpleNamespace(
-        request_id=MALICIOUS_REQUEST_ID,
-        send_action=_send_action,
-        current_user_id=1,
-        current_group_id=None,
+        request_id       = MALICIOUS_REQUEST_ID,
+        send_action      = _send_action,
+        current_user_id  = 1,
+        current_group_id = None,
     )
     policy = SSHOutputPolicy(
-        command_timeout_seconds=0,
-        qq_send_interval_seconds=0,
-        qq_send_timeout_seconds=1,
+        command_timeout_seconds  = 0,
+        qq_send_interval_seconds = 0,
+        qq_send_timeout_seconds  = 1,
     )
     session = _Session()
     job_key = (1, None)
-    job_id = uuid.uuid4().hex
+    job_id  = uuid.uuid4().hex
     session.set(SessionKeys.SERVER_NAME, HOST_CANARY)
     session.set(SessionKeys.CURRENT_TASK, job_id)
 
@@ -117,17 +118,17 @@ async def test_qingssh_command_and_response_stay_admin_visible_but_not_in_logs(
                 1,
                 None,
                 policy,
-                job_key=job_key,
-                job_id=job_id,
-                request_id=MALICIOUS_REQUEST_ID,
+                job_key    = job_key,
+                job_id     = job_id,
+                request_id = MALICIOUS_REQUEST_ID,
             )
         )
         qingssh_session_handlers._register_job(
             qingssh_session_handlers._CommandJob(
-                key=job_key,
-                server_name=HOST_CANARY,
-                job_id=job_id,
-                task=task,
+                key         = job_key,
+                server_name = HOST_CANARY,
+                job_id      = job_id,
+                task        = task,
             )
         )
         await task
@@ -155,20 +156,20 @@ async def test_qingssh_path_and_exception_are_fingerprinted_not_logged(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     context = SimpleNamespace(
-        request_id="req-cr220-ssh-path",
-        logger=logging.getLogger("test.cr220.qingssh.manager"),
-        secrets={"plugins": {"qingssh": {"password": ERROR_CANARY}}},
+        request_id = "req-cr220-ssh-path",
+        logger     = logging.getLogger("test.cr220.qingssh.manager"),
+        secrets    = {"plugins": {"qingssh": {"password": ERROR_CANARY}}},
     )
     manager = SSHManager(tmp_path, context=context)
     manager.is_connected = lambda *_args: True  # type: ignore[method-assign]
-    key = manager.build_connection_key("1", "None", "server")
+    key                  = manager.build_connection_key("1", "None", "server")
 
     class _Client:
         def open_sftp(self):
             raise RuntimeError(ERROR_CANARY)
 
     manager.connections[key] = _Client()
-    local_path = str(tmp_path / "CR220_LOCAL_PATH_SECRET.png")
+    local_path               = str(tmp_path / "CR220_LOCAL_PATH_SECRET.png")
 
     with caplog.at_level(logging.ERROR):
         success, admin_message = await manager.download_file(
@@ -204,15 +205,15 @@ async def test_minecraft_command_response_and_host_stay_out_of_logs(
             self.commands.append(command)
             return RconCommandResult(success=True, response=OUTPUT_CANARY)
 
-    rcon = _Rcon()
+    rcon    = _Rcon()
     manager = minecraft.ConnectionManager()
-    target = DeliveryTarget("private", 7)
+    target  = DeliveryTarget("private", 7)
     await manager.replace_connection(
         minecraft.McConnection(
-            host=HOST_CANARY,
-            port=25575,
-            target=target,
-            rcon_client=rcon,
+            host        = HOST_CANARY,
+            port        = 25575,
+            target      = target,
+            rcon_client = rcon,
         )
     )
     monkeypatch.setattr(minecraft, "_manager", manager)
@@ -320,7 +321,7 @@ class _UnsafeLogArgumentVisitor(ast.NodeVisitor):
     }
 
     def __init__(self, forbidden_names: set[str] | None = None) -> None:
-        self.forbidden_names = forbidden_names or set(self._FORBIDDEN_NAMES)
+        self.forbidden_names  = forbidden_names or set(self._FORBIDDEN_NAMES)
         self.unsafe: set[str] = set()
 
     def visit_Call(self, node: ast.Call) -> None:
@@ -355,7 +356,7 @@ def _assigned_names(target: ast.expr) -> set[str]:
 
 
 def _sensitive_aliases(tree: ast.AST) -> set[str]:
-    aliases = set(_UnsafeLogArgumentVisitor._FORBIDDEN_NAMES)
+    aliases                                      = set(_UnsafeLogArgumentVisitor._FORBIDDEN_NAMES)
     assignments: list[tuple[set[str], ast.expr]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
@@ -438,7 +439,7 @@ def _logging_violations(tree: ast.AST, label: str) -> list[str]:
 
 
 def test_qingssh_and_minecraft_logger_calls_reject_sensitive_ast_arguments() -> None:
-    root = REPOSITORY_ROOT
+    root                  = REPOSITORY_ROOT
     violations: list[str] = []
     for plugin_name in ("qingssh", "minecraft"):
         plugin_root = root / "plugins" / plugin_name

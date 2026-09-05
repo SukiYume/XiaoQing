@@ -20,11 +20,11 @@ ROOT = REPOSITORY_ROOT
 
 class _Context:
     def __init__(self, *, configured: bool = True, with_http: bool = True) -> None:
-        self.request_id = "signin-test-request"
-        self.logger = logging.getLogger("test.signin")
-        self.raw_session = QueuedAiohttpSession()
+        self.request_id   = "signin-test-request"
+        self.logger       = logging.getLogger("test.signin")
+        self.raw_session  = QueuedAiohttpSession()
         self.http_session = self.raw_session if with_http else None
-        platform_config = (
+        platform_config   = (
             {
                 "app_id": "test_app_id",
                 "kdt_id": "test_kdt_id",
@@ -70,9 +70,9 @@ def event() -> dict[str, object]:
 def _queue_success(
     context: _Context,
     *,
-    checkin_id: object = "checkin-123",
-    description: object = "连续签到 3 天",
-    times: object = 5,
+    checkin_id: object     = "checkin-123",
+    description: object    = "连续签到 3 天",
+    times: object          = 5,
     rewards: object | None = None,
 ) -> None:
     if rewards is None:
@@ -117,8 +117,8 @@ async def test_unknown_platform_returns_help(
 
 @pytest.mark.asyncio
 async def test_unknown_platform_echo_is_bounded(context: _Context) -> None:
-    result = await signin.handle("signin", "x" * 500, {}, context)
-    text = text_segments_text(result)
+    result  = await signin.handle("signin", "x" * 500, {}, context)
+    text    = text_segments_text(result)
     visible = text.split("未知平台: ", 1)[1].split("\n", 1)[0]
     assert len(visible) <= 32
     assert "x" * 100 not in text
@@ -212,7 +212,7 @@ async def test_query_and_checkin_provider_failures_are_reported(context: _Contex
 
     _queue_success(context)
     context.raw_session.responses[-1] = aiohttp_json_response({"code": -1, "msg": "今日已签到"})
-    checkin_result = await yingshi.yingshi_sign(context)
+    checkin_result                    = await yingshi.yingshi_sign(context)
     assert "今日已签到" in text_segments_text(checkin_result)
 
 
@@ -308,7 +308,7 @@ async def test_checkin_response_requires_mapping(data: object, context: _Context
 @pytest.mark.asyncio
 async def test_provider_fields_and_rewards_are_bounded(context: _Context) -> None:
     long_text = "x" * 1000
-    rewards = [
+    rewards   = [
         None,
         {
             "isSuccess": True,
@@ -417,8 +417,8 @@ async def test_scheduled_entry_delegates_to_signin(
 
 def test_get_config_accepts_frozen_and_malformed_mappings(context: _Context) -> None:
     context.secrets = ConfigSnapshot(
-        config={},
-        secrets={
+        config  = {},
+        secrets = {
             "plugins": {
                 "signin": {
                     "yingshijufeng": {
@@ -459,7 +459,7 @@ async def test_unexpected_error_uses_public_error_boundary(
 def test_manifest_and_readme_match_runtime_contract() -> None:
     plugin_dir = ROOT / "plugins" / "signin"
     manifest = json.loads((plugin_dir / "plugin.json").read_text(encoding="utf-8"))
-    command = manifest["commands"][0]
+    command  = manifest["commands"][0]
     schedule = manifest["schedule"][0]
     readme = (plugin_dir / "README.md").read_text(encoding="utf-8")
 

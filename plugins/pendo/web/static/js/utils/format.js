@@ -1,4 +1,4 @@
-/** Pendo Web 共享的数据边界、纯日期、文本预览和人民币金额格式化工具。 */
+/** Pendo Web 共享的数据边界、纯日期、文本预览和分币种金额格式化工具。 */
 
 const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -91,7 +91,7 @@ export function previewText(value, maxLength = 100) {
     const text = String(value ?? '').trim();
     if (!text) return '';
 
-    const limit = Number.isInteger(maxLength) && maxLength >= 0 ? maxLength : 100;
+    const limit      = Number.isInteger(maxLength) && maxLength >= 0 ? maxLength : 100;
     const characters = Array.from(text);
     return characters.length <= limit ? text : `${characters.slice(0, limit).join('')}...`;
 }
@@ -104,20 +104,25 @@ export function noteCadenceSubtitle(granularity, rangeLabel) {
     return `按${label}查看每天的笔记输入频率。`;
 }
 
-export function formatAmount(value) {
+function currencyPrefix(currency) {
+    const code = String(currency || 'CNY').trim().toUpperCase();
+    return code === 'CNY' ? '¥' : /^[A-Z]{3}$/.test(code) ? `${code} ` : '未知币种 ';
+}
+
+export function formatAmount(value, currency = 'CNY') {
     const amount = finiteNumber(value);
-    const sign = amount < 0 ? '-' : '';
-    return `${sign}¥${Math.abs(amount).toLocaleString('zh-CN', {
+    const sign   = amount < 0 ? '-' : '';
+    return `${sign}${currencyPrefix(currency)}${Math.abs(amount).toLocaleString('zh-CN', {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
     })}`;
 }
 
-export function formatMoneyCompact(value) {
-    const amount = finiteNumber(value);
-    const sign = amount < 0 ? '-' : '';
+export function formatMoneyCompact(value, currency = 'CNY') {
+    const amount   = finiteNumber(value);
+    const sign     = amount < 0 ? '-' : '';
     const absolute = Math.abs(amount);
-    if (absolute >= 10000) return `${sign}¥${(absolute / 10000).toFixed(1)}万`;
-    if (absolute >= 1000) return `${sign}¥${(absolute / 1000).toFixed(1)}k`;
-    return `${sign}¥${absolute.toFixed(0)}`;
+    if (absolute >= 10000) return `${sign}${currencyPrefix(currency)}${(absolute / 10000).toFixed(1)}万`;
+    if (absolute >= 1000) return `${sign}${currencyPrefix(currency)}${(absolute / 1000).toFixed(1)}k`;
+    return `${sign}${currencyPrefix(currency)}${absolute.toFixed(0)}`;
 }

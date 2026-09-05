@@ -10,7 +10,7 @@ import {
 import { formatZonedDateTime, getUserTimeZone } from '../utils/timezone.js';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
-const CSS_ID = 'pendo-transfer-page-styles';
+const CSS_ID       = 'pendo-transfer-page-styles';
 const TYPE_OPTIONS = [
     { value: 'event', label: '日程', hint: '安排与提醒' },
     { value: 'task', label: '待办', hint: '执行清单' },
@@ -57,19 +57,19 @@ const INVALID_POLICIES = [
         desc: '只导入通过校验的记录。',
     },
 ];
-const TABS = new Set(['export', 'import', 'history']);
-const TYPE_VALUES = new Set(TYPE_OPTIONS.map((item) => item.value));
-const DISPLAY_TYPE_VALUES = new Set([...TYPE_VALUES, 'event_collection']);
-const TYPE_LABELS = new Map(TYPE_OPTIONS.map((item) => [item.value, item.label]));
-const PRESET_VALUES = new Set(PRESETS.map((item) => item.value));
+const TABS                   = new Set(['export', 'import', 'history']);
+const TYPE_VALUES            = new Set(TYPE_OPTIONS.map((item) => item.value));
+const DISPLAY_TYPE_VALUES    = new Set([...TYPE_VALUES, 'event_collection']);
+const TYPE_LABELS            = new Map(TYPE_OPTIONS.map((item) => [item.value, item.label]));
+const PRESET_VALUES          = new Set(PRESETS.map((item) => item.value));
 const CONFLICT_POLICY_VALUES = new Set(CONFLICT_POLICIES.map((item) => item.value));
-const INVALID_POLICY_VALUES = new Set(INVALID_POLICIES.map((item) => item.value));
-const RESULT_KINDS = ['inserted', 'updated', 'skipped', 'failed'];
-const MAX_RENDERED_ERRORS = 100;
-const MAX_RENDERED_RESULTS = 100;
+const INVALID_POLICY_VALUES  = new Set(INVALID_POLICIES.map((item) => item.value));
+const RESULT_KINDS           = ['inserted', 'updated', 'skipped', 'failed'];
+const MAX_RENDERED_ERRORS    = 100;
+const MAX_RENDERED_RESULTS   = 100;
 
 let _container = null;
-let _state = null;
+let _state     = null;
 
 // 所有接口响应先收敛到稳定结构，模板和动作层不再反复判断畸形数据。
 function positiveInteger(value, fallback, maximum = 100) {
@@ -84,7 +84,7 @@ function positiveInteger(value, fallback, maximum = 100) {
 function normalizeTypes(value, includeEventCollection = false) {
     if (!Array.isArray(value)) return [];
     const allowed = includeEventCollection ? DISPLAY_TYPE_VALUES : TYPE_VALUES;
-    const seen = new Set();
+    const seen    = new Set();
     return value.reduce((types, rawType) => {
         const type = textValue(rawType);
         if (allowed.has(type) && !seen.has(type)) {
@@ -130,17 +130,17 @@ function normalizeValidationErrors(value) {
 function normalizeExportPreview(value) {
     if (!isRecord(value)) return null;
     const selection = isRecord(value.selection) ? value.selection : {};
-    const types = normalizeTypes(selection.types);
+    const types     = normalizeTypes(selection.types);
     const rawCounts = isRecord(value.counts) ? value.counts : {};
-    const counts = types.map((type) => ({
+    const counts    = types.map((type) => ({
         type,
         count: nonNegativeInteger(rawCounts[type]),
     }));
     const rawStart = textValue(selection.start);
-    const rawEnd = textValue(selection.end);
-    const start = isValidDateInput(rawStart) ? rawStart : '';
-    const end = isValidDateInput(rawEnd) ? rawEnd : '';
-    const range = start && end && start <= end ? { start, end } : { start: '', end: '' };
+    const rawEnd   = textValue(selection.end);
+    const start    = isValidDateInput(rawStart) ? rawStart : '';
+    const end      = isValidDateInput(rawEnd) ? rawEnd : '';
+    const range    = start && end && start <= end ? { start, end } : { start: '', end: '' };
     return {
         selection: {
             types,
@@ -156,8 +156,8 @@ function normalizeExportPreview(value) {
 function normalizeInspect(value) {
     if (!isRecord(value)) return null;
     const summary = isRecord(value.summary) ? value.summary : {};
-    const counts = isRecord(value.counts) ? value.counts : {};
-    const files = Array.isArray(value.files)
+    const counts  = isRecord(value.counts) ? value.counts : {};
+    const files   = Array.isArray(value.files)
         ? value.files.filter(isRecord).map((file) => {
               const type = textValue(file.type);
               return {
@@ -203,10 +203,10 @@ function normalizeSamplePage(value) {
 
 function normalizeImportResult(value) {
     if (!isRecord(value)) return null;
-    const rawCounts = isRecord(value.counts) ? value.counts : {};
+    const rawCounts  = isRecord(value.counts) ? value.counts : {};
     const rawResults = isRecord(value.results) ? value.results : {};
     const rawDetails = isRecord(value.details) ? value.details : {};
-    const details = {};
+    const details    = {};
     RESULT_KINDS.forEach((kind) => {
         details[kind] = Array.isArray(rawDetails[kind])
             ? rawDetails[kind].map(normalizeSample).filter(Boolean).slice(0, MAX_RENDERED_RESULTS)
@@ -318,12 +318,12 @@ function exportSelection() {
     const state = _state?.export;
     if (!state) return { error: '导出页面已关闭', payload: null, signature: '' };
 
-    const types = normalizeTypes(state.selectedTypes);
-    const preset = PRESET_VALUES.has(state.preset) ? state.preset : 'month';
+    const types       = normalizeTypes(state.selectedTypes);
+    const preset      = PRESET_VALUES.has(state.preset) ? state.preset : 'month';
     const customStart = textValue(state.start);
-    const customEnd = textValue(state.end);
-    let start = null;
-    let end = null;
+    const customEnd   = textValue(state.end);
+    let start         = null;
+    let end           = null;
     if (!types.length) return { error: '至少保留一个导出类别', payload: null, signature: '' };
     if (preset === 'custom') {
         if (!isValidDateInput(customStart) || !isValidDateInput(customEnd)) {
@@ -345,7 +345,7 @@ function exportSelection() {
     }
 
     const timezone = getUserTimeZone();
-    const payload = { types, preset, start, end, timezone };
+    const payload  = { types, preset, start, end, timezone };
     return { error: '', payload, signature: JSON.stringify(payload) };
 }
 
@@ -552,7 +552,7 @@ function renderPage() {
 
 function renderExportTab() {
     const state = _state.export;
-    const busy = state.loading || state.downloading;
+    const busy  = state.loading || state.downloading;
     return `
         <section class="transfer-grid">
             <div class="transfer-card">
@@ -594,7 +594,7 @@ function renderExportTab() {
 
 function renderExportTypeCard(item) {
     const active = _state.export.selectedTypes.includes(item.value);
-    const busy = _state.export.loading || _state.export.downloading;
+    const busy   = _state.export.loading || _state.export.downloading;
     return `<button type="button" class="transfer-type-card ${active ? 'active' : ''}" data-export-type="${item.value}" aria-pressed="${active}" ${busy ? 'disabled' : ''}><div class="transfer-type-title">${item.label}</div><div class="transfer-type-hint">${item.hint}</div></button>`;
 }
 
@@ -627,7 +627,7 @@ function renderExportPreview(preview) {
 
 function renderImportTab() {
     const state = _state.import;
-    const busy = state.inspecting || state.executing;
+    const busy  = state.inspecting || state.executing;
     return `
         <section class="transfer-grid">
             <div class="transfer-card">
@@ -946,8 +946,8 @@ function renderImportInspect(state) {
     if (!state.inspect) {
         return `<div class="transfer-section"><div class="transfer-empty">上传 bundle 并点击"预检文件"后，这里会显示文件摘要、可导入类别、样例记录和校验错误。没有预检结果前，导入按钮会保持禁用。</div></div>`;
     }
-    const inspect = state.inspect;
-    const busy = state.inspecting || state.executing;
+    const inspect      = state.inspect;
+    const busy         = state.inspecting || state.executing;
     const warningsHtml = inspect.warnings.length
         ? `<div class="transfer-section"><div class="transfer-section-label">预检警告</div><div class="transfer-note">${inspect.warnings.map((warning) => escapeHtml(warning)).join('；')}</div></div>`
         : '';
@@ -974,7 +974,7 @@ function renderImportInspect(state) {
 
 function renderValidationErrors(errors, total, emptyMessage) {
     const hiddenCount = Math.max(0, total - errors.length);
-    const rows = errors.length
+    const rows        = errors.length
         ? errors
               .map(
                   (error) =>
@@ -986,10 +986,10 @@ function renderValidationErrors(errors, total, emptyMessage) {
 }
 
 function renderSamplesWithPager(state) {
-    const inspect = state.inspect;
-    const totalSamples = state.paginatedSamples?.total ?? inspect.counts.total_samples;
+    const inspect        = state.inspect;
+    const totalSamples   = state.paginatedSamples?.total ?? inspect.counts.total_samples;
     const displaySamples = state.paginatedSamples?.samples || inspect.samples || [];
-    const samplesHtml = displaySamples.length
+    const samplesHtml    = displaySamples.length
         ? displaySamples
               .map(
                   (sample) =>
@@ -1017,12 +1017,12 @@ function renderSamplesWithPager(state) {
 
 function renderImportStatusBanner(result) {
     const hasFailures = result.results.failed > 0 || result.counts.errors > 0;
-    const processed = result.results.inserted + result.results.updated;
-    const kindClass = hasFailures ? 'warning' : '';
-    const icon = hasFailures ? '!' : '✓';
-    const title = hasFailures ? '导入已完成，但有部分记录未导入' : '导入已完成';
-    const typeText = result.summary.types.map(typeLabel).join('、') || '所选类别';
-    const summary = hasFailures
+    const processed   = result.results.inserted + result.results.updated;
+    const kindClass   = hasFailures ? 'warning' : '';
+    const icon        = hasFailures ? '!' : '✓';
+    const title       = hasFailures ? '导入已完成，但有部分记录未导入' : '导入已完成';
+    const typeText    = result.summary.types.map(typeLabel).join('、') || '所选类别';
+    const summary     = hasFailures
         ? `本次成功处理 ${processed} 条，写入失败 ${result.results.failed} 条，校验错误 ${result.counts.errors} 条。下方保留了可定位的问题明细。`
         : `本次成功处理 ${processed} 条记录，已写入 ${typeText}。下方保留了导入明细。`;
     return `
@@ -1046,7 +1046,7 @@ function renderImportStatusBanner(result) {
 }
 
 function renderImportResult(result) {
-    const typeText = result.summary.types.map(typeLabel).join('、') || '所选类别';
+    const typeText     = result.summary.types.map(typeLabel).join('、') || '所选类别';
     const warningsHtml = result.warnings.length
         ? `<div class="transfer-note">导入警告（${result.warnings.length} 条）：${result.warnings.map((warning) => escapeHtml(warning)).join('；')}</div>`
         : '';
@@ -1119,18 +1119,18 @@ function renderHistoryTab() {
 }
 
 function renderLogRow(log) {
-    const isImport = log.action === 'import';
-    const icon = isImport ? '↓' : '↑';
+    const isImport  = log.action === 'import';
+    const icon      = isImport ? '↓' : '↑';
     const iconClass = isImport ? 'import' : 'export';
-    const label = isImport ? '导入' : '导出';
-    const types = Array.isArray(log.types) ? log.types : [];
+    const label     = isImport ? '导入' : '导出';
+    const types     = Array.isArray(log.types) ? log.types : [];
     const typesText = types.map(typeLabel).join('、') || '未知';
-    const summary = log.result_summary || {};
-    let detail = `${log.record_count || 0} 条记录`;
+    const summary   = log.result_summary || {};
+    let detail      = `${log.record_count || 0} 条记录`;
     if (isImport && log.has_result_counts) {
         detail = `新增 ${summary.inserted}，更新 ${summary.updated || 0}，跳过 ${summary.skipped || 0}`;
     }
-    const time = log.created_at ? formatZonedDateTime(log.created_at, '') : '';
+    const time     = log.created_at ? formatZonedDateTime(log.created_at, '') : '';
     const filename = log.filename ? escapeHtml(log.filename) : '';
     return `
         <div class="transfer-log-row">
@@ -1187,7 +1187,7 @@ function attachExportListeners() {
         };
     });
     const startInput = _container.querySelector('#transfer-export-start');
-    const endInput = _container.querySelector('#transfer-export-end');
+    const endInput   = _container.querySelector('#transfer-export-end');
     if (startInput) {
         startInput.oninput = () => {
             if (!_state.export.loading && !_state.export.downloading) _state.export.start = startInput.value;
@@ -1203,7 +1203,7 @@ function attachExportListeners() {
 }
 
 function attachImportListeners() {
-    const fileInput = _container.querySelector('#transfer-file-input');
+    const fileInput  = _container.querySelector('#transfer-file-input');
     const uploadZone = _container.querySelector('#transfer-upload-zone');
     _container.querySelector('#btn-transfer-pick-file')?.addEventListener('click', () => fileInput?.click());
     if (fileInput) {
@@ -1342,7 +1342,7 @@ async function downloadExport() {
             selection: selection.payload,
         });
         if (!isCurrentState(state) || exportSelection().signature !== selection.signature) return false;
-        const url = URL.createObjectURL(blob);
+        const url  = URL.createObjectURL(blob);
         let anchor = null;
         try {
             anchor = document.createElement('a');
@@ -1414,7 +1414,7 @@ async function inspectImportFile() {
 async function executeImportFile() {
     const state = _state;
     if (!state || state.import.inspecting || state.import.executing) return false;
-    const file = state.import.file;
+    const file    = state.import.file;
     const inspect = state.import.inspect;
     if (!file || !inspect) {
         showToast('请先完成文件预检', 'warning');

@@ -10,7 +10,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from copy import deepcopy
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, ClassVar, cast
 from zoneinfo import ZoneInfo
 
@@ -43,10 +43,10 @@ from .db_auth import WebAuthRepositoryMixin
 from .db_reminders import ReminderRepositoryMixin
 from .db_schema import configure_connection, initialize_schema, reminder_fire_at_utc
 
-logger = logging.getLogger(__name__)
-_CACHE_MISS = object()
+logger                = logging.getLogger(__name__)
+_CACHE_MISS           = object()
 _SQLITE_ID_BATCH_SIZE = 500
-_SQL_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+_SQL_IDENTIFIER       = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
 
 class DuplicateBundleImportError(RuntimeError):
@@ -56,8 +56,8 @@ class DuplicateBundleImportError(RuntimeError):
 class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
     """集中管理 Pendo 的线程连接、事务、缓存和各类持久化操作。"""
 
-    CACHE_TTL = 30
-    CACHE_MAX_SIZE = 1024
+    CACHE_TTL                               = 30
+    CACHE_MAX_SIZE                          = 1024
     ALLOWED_DATE_FIELDS: ClassVar[set[str]] = {
         "start_time",
         "end_time",
@@ -70,8 +70,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         "created_at",
         "ledger_date",
     }
-    _DATE_ONLY_FIELDS = frozenset({"plan_date", "diary_date", "ledger_date"})
-    _TIMESTAMP_FIELDS = frozenset(ALLOWED_DATE_FIELDS - _DATE_ONLY_FIELDS)
+    _DATE_ONLY_FIELDS         = frozenset({"plan_date", "diary_date", "ledger_date"})
+    _TIMESTAMP_FIELDS         = frozenset(ALLOWED_DATE_FIELDS - _DATE_ONLY_FIELDS)
     _LEDGER_AMOUNT_CENTS_EXPR = (
         "COALESCE(amount_cents, CAST(ROUND(COALESCE(amount, 0) * 100.0) AS INTEGER), 0)"
     )
@@ -102,15 +102,15 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         }
     )
     _JSON_OBJECT_FIELDS = frozenset({"context", "ai_meta"})
-    _JSON_FIELDS = _JSON_LIST_FIELDS | _JSON_OBJECT_FIELDS
-    _ITEM_FIELDS = frozenset(
+    _JSON_FIELDS        = _JSON_LIST_FIELDS | _JSON_OBJECT_FIELDS
+    _ITEM_FIELDS        = frozenset(
         field_name
         for item_class in ITEM_TYPE_CLASS_MAP.values()
         for field_name in item_class.__dataclass_fields__
     )
-    _IMMUTABLE_UPDATE_FIELDS = frozenset({"id", "owner_id", "type", "created_at", "version"})
+    _IMMUTABLE_UPDATE_FIELDS      = frozenset({"id", "owner_id", "type", "created_at", "version"})
     _EVENT_COLLECTION_JSON_FIELDS = frozenset({"tags", "context", "reminder_rules"})
-    _EVENT_COLLECTION_FIELDS = frozenset(
+    _EVENT_COLLECTION_FIELDS      = frozenset(
         {
             "id",
             "owner_id",
@@ -161,16 +161,18 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
 
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
-        self._local = threading.local()
+        self._local  = threading.local()
         # 查询连接仍按线程隔离；额外登记连接对象，保证生命周期线程能可靠关闭
         # 已退出工作线程留下的连接。以连接对象身份为键，避免线程 ID 重用冲突。
         self._all_connections: dict[int, tuple[int, sqlite3.Connection]] = {}
-        self._lock = threading.Lock()
-        self._settings_lock = threading.Lock()
+        self._lock                                                       = threading.Lock()
+        self._settings_lock                                              = threading.Lock()
 
         # 使用 OrderedDict 实现 LRU 缓存
         self._cache: OrderedDict[str, tuple[float, Any]] = OrderedDict()
-        self._cache_lock = threading.Lock()
+        self._cache_lock                                 = threading.Lock()
+        self._cache_generation                           = 0
+        self._cache_reads                                = threading.local()
 
         logger.debug("Initializing database at %s", db_path)
         self._init_database()
@@ -190,7 +192,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             conn.row_factory = sqlite3.Row
             self._local.conn = conn
             with self._lock:
-                thread_id = threading.get_ident()
+                thread_id                       = threading.get_ident()
                 self._all_connections[id(conn)] = (thread_id, conn)
         return conn
 
@@ -251,7 +253,14 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
     def _cache_get_or_miss(self, key: str) -> Any:
         """获取缓存；未命中时返回内部 sentinel。"""
         with self._cache_lock:
-            entry = self._cache.get(key)
+            generations = getattr(self._cache_reads, "generations", None)
+            if generations is None:
+                generations = self._cache_reads.generations = {}
+            if len(generations) >= self.CACHE_MAX_SIZE:
+                generations.clear()
+                self._cache_reads.overflowed = True
+            generations[key] = self._cache_generation
+            entry            = self._cache.get(key)
             if entry:
                 ts, val = entry
                 if time.time() - ts <= self.CACHE_TTL:
@@ -265,6 +274,15 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
     def _cache_set(self, key: str, value: Any) -> None:
         """设置缓存（使用 LRU 淘汰策略）"""
         with self._cache_lock:
+            # 查询期间发生写入时丢弃旧快照；下次读取重新访问数据库。
+            fallback = (
+                -1 if getattr(self._cache_reads, "overflowed", False) else self._cache_generation
+            )
+            if (
+                getattr(self._cache_reads, "generations", {}).pop(key, fallback)
+                != self._cache_generation
+            ):
+                return
             # 如果键已存在，先删除（为了更新位置）
             if key in self._cache:
                 del self._cache[key]
@@ -277,6 +295,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
     def cache_clear(self) -> None:
         """清空缓存"""
         with self._cache_lock:
+            self._cache_generation += 1
             self._cache.clear()
 
     def cache_invalidate(self, pattern: str | None = None) -> None:
@@ -286,6 +305,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             pattern: 如果提供，只删除匹配此模式的缓存键；否则清空所有缓存
         """
         with self._cache_lock:
+            self._cache_generation += 1
             if pattern:
                 keys_to_delete = [k for k in self._cache.keys() if pattern in k]
                 for key in keys_to_delete:
@@ -310,10 +330,10 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         *,
         user_id: str,
         action: str,
-        item_type: str | None = None,
-        item_id: str | None = None,
+        item_type: str | None          = None,
+        item_id: str | None            = None,
         details: dict[str, Any] | None = None,
-        created_at: str | None = None,
+        created_at: str | None         = None,
     ) -> int:
         """使用调用方的事务写入操作日志。"""
         if not user_id or not action:
@@ -348,11 +368,11 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             return
         self._log_operation_with_cursor(
             cursor,
-            user_id=str(operation_log.get("user_id") or ""),
-            action=str(operation_log.get("action") or ""),
-            item_type=operation_log.get("item_type", default_item_type),
-            item_id=operation_log.get("item_id", default_item_id),
-            details=operation_log.get("details"),
+            user_id   = str(operation_log.get("user_id") or ""),
+            action    = str(operation_log.get("action") or ""),
+            item_type = operation_log.get("item_type", default_item_type),
+            item_id   = operation_log.get("item_id", default_item_id),
+            details   = operation_log.get("details"),
         )
 
     def insert_item(
@@ -363,7 +383,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         operation_log: dict[str, Any] | None = None,
     ) -> str:
         """插入条目，支持dict或Item dataclass实例"""
-        conn = self.get_connection()
+        conn   = self.get_connection()
         cursor = conn.cursor()
 
         # 在事务外完成数据准备，避免持锁时间过长
@@ -394,8 +414,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             item_dict["timezone"] = user_timezone.key
         item_dict = normalize_item_datetimes_for_storage(item_dict, user_timezone)
 
-        data = self._prepare_data(item_dict)
-        columns = ", ".join(self._quote_col(k) for k in data.keys())
+        data         = self._prepare_data(item_dict)
+        columns      = ", ".join(self._quote_col(k) for k in data.keys())
         placeholders = ", ".join(["?" for _ in data])
 
         # 连接上下文统一管理提交与回滚，避免和 sqlite3 隐式事务冲突。
@@ -409,8 +429,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             self._log_operation_from_spec(
                 cursor,
                 operation_log,
-                default_item_id=item_dict["id"],
-                default_item_type=str(item_dict.get("type") or "") or None,
+                default_item_id   = item_dict["id"],
+                default_item_type = str(item_dict.get("type") or "") or None,
             )
         # 精确失效：只清除与该条目相关的缓存
         self.cache_invalidate(item_dict["id"])
@@ -426,10 +446,10 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         updates: dict[str, Any] | Item,
         owner_id: str | None = None,
         *,
-        expected_version: int | None = None,
-        item_type: str | None = None,
+        expected_version: int | None         = None,
+        item_type: str | None                = None,
         operation_log: dict[str, Any] | None = None,
-        touch: bool = True,
+        touch: bool                          = True,
     ) -> bool:
         """更新条目，支持 dict 或 Item dataclass 实例。"""
         if owner_id:
@@ -437,7 +457,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             if resolved_id is None:
                 return False
             item_id = resolved_id
-        conn = self.get_connection()
+        conn   = self.get_connection()
         cursor = conn.cursor()
 
         # 如果是Item dataclass实例，转换为字典
@@ -470,15 +490,15 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             user_timezone,
         )
         update_dict = {key: normalized_context[key] for key in update_dict}
-        data = self._prepare_data(update_dict)
-        set_clause = ", ".join(f"{self._quote_col(key)} = ?" for key in data)
+        data        = self._prepare_data(update_dict)
+        set_clause  = ", ".join(f"{self._quote_col(key)} = ?" for key in data)
         if touch:
             set_clause = f"{set_clause}, version = version + 1"
 
         # 连接上下文统一管理提交与回滚，避免和 sqlite3 隐式事务冲突。
         affected = 0
         with conn:
-            where = ["id = ?", "deleted = 0"]
+            where             = ["id = ?", "deleted = 0"]
             params: list[Any] = [item_id]
             if owner_id:
                 where.append("owner_id = ?")
@@ -505,8 +525,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 self._log_operation_from_spec(
                     cursor,
                     operation_log,
-                    default_item_id=item_id,
-                    default_item_type=item_type,
+                    default_item_id   = item_id,
+                    default_item_type = item_type,
                 )
 
         if affected > 0:
@@ -544,7 +564,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 if not item_id:
                     raise ValueError("import item requires id")
                 payload["owner_id"] = owner_id
-                validated = validate_item_data(payload)
+                validated           = validate_item_data(payload)
                 validated.setdefault("created_at", utc_now_iso())
                 validated.setdefault("updated_at", utc_now_iso())
                 if str(validated.get("type") or "") == ItemType.EVENT.value and not validated.get(
@@ -552,10 +572,10 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 ):
                     validated["timezone"] = user_timezone.key
                 validated = normalize_item_datetimes_for_storage(validated, user_timezone)
-                data = self._prepare_data(validated)
+                data      = self._prepare_data(validated)
 
                 if action == "insert":
-                    columns = ", ".join(self._quote_col(k) for k in data.keys())
+                    columns      = ", ".join(self._quote_col(k) for k in data.keys())
                     placeholders = ", ".join("?" for _ in data)
                     cursor.execute(
                         f"INSERT INTO items ({columns}) VALUES ({placeholders})",
@@ -596,10 +616,10 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         *,
         owner_id: str,
         action: str,
-        bundle_id: str | None = None,
-        filename: str | None = None,
-        types: list[str] | None = None,
-        record_count: int = 0,
+        bundle_id: str | None                 = None,
+        filename: str | None                  = None,
+        types: list[str] | None               = None,
+        record_count: int                     = 0,
         result_summary: dict[str, Any] | None = None,
     ) -> int:
         cursor.execute(
@@ -629,7 +649,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         """单事务批量插入/更新，用于数据导入"""
         if not operations:
             return []
-        conn = self.get_connection()
+        conn   = self.get_connection()
         cursor = conn.cursor()
 
         with conn:
@@ -656,7 +676,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         types: list[str],
         record_count: int,
         result_summary: dict[str, Any],
-        force: bool = False,
+        force: bool                                                    = False,
         collection_operations: list[tuple[str, dict[str, Any]]] | None = None,
     ) -> None:
         """在同一写事务内导入集合、条目、幂等标记和迁移审计。"""
@@ -672,13 +692,13 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             self._apply_import_item_operations(cursor, conn, operations, owner_id)
             self._log_transfer_with_cursor(
                 cursor,
-                owner_id=owner_id,
-                action="import",
-                bundle_id=bundle_id,
-                filename=filename,
-                types=types,
-                record_count=record_count,
-                result_summary=result_summary,
+                owner_id       = owner_id,
+                action         = "import",
+                bundle_id      = bundle_id,
+                filename       = filename,
+                types          = types,
+                record_count   = record_count,
+                result_summary = result_summary,
             )
 
         self._invalidate_import_caches(owner_id, operations, collection_operations)
@@ -745,10 +765,10 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         operations: list[tuple[str, dict[str, Any]]],
         owner_id: str,
     ) -> None:
-        now = utc_now_iso()
+        now           = utc_now_iso()
         user_timezone = TimezoneHelper.get_user_timezone(owner_id, self)
         for action, payload in operations:
-            collection = dict(payload)
+            collection             = dict(payload)
             collection["owner_id"] = owner_id
             if action == "insert":
                 collection = self._prepare_new_event_collection(
@@ -759,8 +779,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                     collection,
                     user_timezone,
                 )
-                data = self._prepare_event_collection_data(collection)
-                columns = ", ".join(self._quote_col(k) for k in data.keys())
+                data         = self._prepare_event_collection_data(collection)
+                columns      = ", ".join(self._quote_col(k) for k in data.keys())
                 placeholders = ", ".join(["?" for _ in data])
                 cursor.execute(
                     f"INSERT INTO event_collections ({columns}) VALUES ({placeholders})",
@@ -794,28 +814,28 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         item_ids: list[str],
         owner_id: str,
         *,
-        item_type: str | None = None,
-        operation_action: str | None = None,
+        item_type: str | None                                   = None,
+        operation_action: str | None                            = None,
         details_factory: Callable[[str], dict[str, Any]] | None = None,
     ) -> int:
         """原子软删除真实匹配的条目，并同步附属数据和可选审计日志。"""
         unique_ids = list(dict.fromkeys(str(item_id) for item_id in item_ids if item_id))
         if not unique_ids:
             return 0
-        now = utc_now_iso()
-        affected = 0
+        now                    = utc_now_iso()
+        affected               = 0
         deleted_ids: list[str] = []
         with self.transaction(immediate=True) as conn:
-            cursor = conn.cursor()
+            cursor     = conn.cursor()
             active_ids = self._select_owner_item_ids(
                 cursor,
                 owner_id,
                 unique_ids,
-                deleted=False,
-                item_type=item_type,
+                deleted   = False,
+                item_type = item_type,
             )
             for offset in range(0, len(active_ids), _SQLITE_ID_BATCH_SIZE):
-                batch = active_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
+                batch        = active_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
                 placeholders = ",".join("?" for _ in batch)
                 cursor.execute(
                     "UPDATE items SET deleted = 1, deleted_at = ?, updated_at = ?, "
@@ -827,7 +847,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 if cursor.rowcount:
                     deleted_ids.extend(batch)
                 cursor.execute(
-                    f"DELETE FROM reminder_logs WHERE item_id IN ({placeholders})", batch
+                    f"DELETE FROM reminder_logs WHERE item_id IN ({placeholders}) AND sent_at IS NULL AND confirmed_at IS NULL",
+                    batch,
                 )
                 cursor.execute(f"DELETE FROM items_fts WHERE id IN ({placeholders})", batch)
 
@@ -840,12 +861,12 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                     )
                     self._log_operation_with_cursor(
                         cursor,
-                        user_id=owner_id,
-                        action=operation_action,
-                        item_type=item_type,
-                        item_id=item_id,
-                        details=details,
-                        created_at=now,
+                        user_id    = owner_id,
+                        action     = operation_action,
+                        item_type  = item_type,
+                        item_id    = item_id,
+                        details    = details,
+                        created_at = now,
                     )
 
         for iid in deleted_ids:
@@ -860,15 +881,15 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         owner_id: str,
         item_ids: list[str],
         *,
-        deleted: bool | None = None,
+        deleted: bool | None  = None,
         item_type: str | None = None,
     ) -> list[str]:
         """按用户、删除状态和可选类型筛 ID，并保持调用方原有顺序。"""
         matched: set[str] = set()
         for offset in range(0, len(item_ids), _SQLITE_ID_BATCH_SIZE):
-            batch = item_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
-            placeholders = ",".join("?" for _ in batch)
-            where = ["owner_id = ?", f"id IN ({placeholders})"]
+            batch             = item_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
+            placeholders      = ",".join("?" for _ in batch)
+            where             = ["owner_id = ?", f"id IN ({placeholders})"]
             params: list[Any] = [owner_id, *batch]
             if deleted is not None:
                 where.append("deleted = ?")
@@ -945,9 +966,9 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         operation_action: str = "create_event_collection",
     ) -> str:
         """原子创建集合、可选的全部 leaf 条目及对应审计记录。"""
-        now = utc_now_iso()
-        owner_id = str(payload.get("owner_id") or "")
-        user_timezone = TimezoneHelper.get_user_timezone(owner_id, self)
+        now                = utc_now_iso()
+        owner_id           = str(payload.get("owner_id") or "")
+        user_timezone      = TimezoneHelper.get_user_timezone(owner_id, self)
         collection_payload = dict(payload)
         collection_payload.setdefault("timezone", user_timezone.key)
         collection = self._prepare_new_event_collection(collection_payload, now=now)
@@ -956,10 +977,10 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             user_timezone,
         )
 
-        collection_data = self._prepare_event_collection_data(collection)
-        collection_columns = ", ".join(self._quote_col(k) for k in collection_data)
+        collection_data         = self._prepare_event_collection_data(collection)
+        collection_columns      = ", ".join(self._quote_col(k) for k in collection_data)
         collection_placeholders = ", ".join("?" for _ in collection_data)
-        child_ids: list[str] = []
+        child_ids: list[str]    = []
         with self.transaction(immediate=True) as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -984,9 +1005,9 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 item_data.setdefault("updated_at", now)
                 validated = validate_item_data(item_data)
                 validated.setdefault("timezone", str(collection["timezone"]))
-                validated = normalize_item_datetimes_for_storage(validated, user_timezone)
-                prepared = self._prepare_data(validated)
-                columns = ", ".join(self._quote_col(k) for k in prepared)
+                validated    = normalize_item_datetimes_for_storage(validated, user_timezone)
+                prepared     = self._prepare_data(validated)
+                columns      = ", ".join(self._quote_col(k) for k in prepared)
                 placeholders = ", ".join("?" for _ in prepared)
                 cursor.execute(
                     f"INSERT INTO items ({columns}) VALUES ({placeholders})",
@@ -998,12 +1019,12 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 child_ids.append(child_id)
             self._log_operation_with_cursor(
                 cursor,
-                user_id=str(collection["owner_id"]),
-                action=operation_action,
-                item_type=ItemType.EVENT.value,
-                item_id=str(collection["id"]),
-                details={"child_ids": child_ids},
-                created_at=now,
+                user_id    = str(collection["owner_id"]),
+                action     = operation_action,
+                item_type  = ItemType.EVENT.value,
+                item_id    = str(collection["id"]),
+                details    = {"child_ids": child_ids},
+                created_at = now,
             )
         for child_id in child_ids:
             self.cache_invalidate(child_id)
@@ -1020,7 +1041,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         if resolved_id is None:
             return None
         cache_key = self._cache_key("event_collection", resolved_id, owner_id or "*")
-        cached = self._cache_get_or_miss(cache_key)
+        cached    = self._cache_get_or_miss(cache_key)
         if cached is not _CACHE_MISS:
             return cast(dict[str, Any] | None, cached)
 
@@ -1053,9 +1074,9 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         collections: dict[str, dict[str, Any]] = {}
         conn = self.get_connection()
         for offset in range(0, len(unique_ids), _SQLITE_ID_BATCH_SIZE):
-            batch = unique_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
+            batch        = unique_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
             placeholders = ",".join("?" for _ in batch)
-            rows = conn.execute(
+            rows         = conn.execute(
                 f"SELECT * FROM event_collections "
                 f"WHERE owner_id = ? AND deleted = 0 AND id IN ({placeholders})",
                 [owner_id, *batch],
@@ -1064,12 +1085,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 collection = self._row_to_event_collection(row)
                 if collection is None:
                     continue
-                collection_id = str(collection["id"])
+                collection_id              = str(collection["id"])
                 collections[collection_id] = collection
-                self._cache_set(
-                    self._cache_key("event_collection", collection_id, owner_id),
-                    collection,
-                )
         return collections
 
     def update_event_collection(
@@ -1091,7 +1108,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         }
         if not clean_updates:
             return False
-        conn = self.get_connection()
+        conn    = self.get_connection()
         current = conn.execute(
             """
             SELECT timezone FROM event_collections
@@ -1101,16 +1118,16 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         ).fetchone()
         if current is None:
             return False
-        user_timezone = TimezoneHelper.get_user_timezone(owner_id, self)
+        user_timezone               = TimezoneHelper.get_user_timezone(owner_id, self)
         clean_updates["updated_at"] = utc_now_iso()
-        context = {
+        context                     = {
             "timezone": str(current["timezone"] or user_timezone.key),
             **clean_updates,
         }
-        normalized = normalize_event_collection_datetimes_for_storage(context, user_timezone)
+        normalized    = normalize_event_collection_datetimes_for_storage(context, user_timezone)
         clean_updates = {key: normalized[key] for key in clean_updates}
-        data = self._prepare_event_collection_data(clean_updates)
-        set_clause = ", ".join(f"{self._quote_col(key)} = ?" for key in data)
+        data          = self._prepare_event_collection_data(clean_updates)
+        set_clause    = ", ".join(f"{self._quote_col(key)} = ?" for key in data)
 
         with conn:
             cursor = conn.execute(
@@ -1125,8 +1142,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 self._log_operation_from_spec(
                     cursor,
                     operation_log,
-                    default_item_id=collection_id,
-                    default_item_type=ItemType.EVENT.value,
+                    default_item_id   = collection_id,
+                    default_item_type = ItemType.EVENT.value,
                 )
         changed = cursor.rowcount > 0
         if changed:
@@ -1142,7 +1159,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         collection_rules: list[dict[str, int]] | None,
         *,
         collection_updates: dict[str, Any] | None = None,
-        operation_log: dict[str, Any] | None = None,
+        operation_log: dict[str, Any] | None      = None,
     ) -> int:
         """原子更新集合字段、全部节点提醒及对应审计记录。"""
 
@@ -1168,9 +1185,9 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             return 0
 
         item_ids = list(ordered_updates)
-        now = utc_now_iso()
+        now      = utc_now_iso()
         with self.transaction(immediate=True) as conn:
-            cursor = conn.cursor()
+            cursor         = conn.cursor()
             collection_row = cursor.execute(
                 """
                 SELECT timezone FROM event_collections
@@ -1180,7 +1197,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             ).fetchone()
             if collection_row is None:
                 raise ItemNotFoundException(collection_id)
-            user_timezone = TimezoneHelper.get_user_timezone(owner_id, self)
+            user_timezone       = TimezoneHelper.get_user_timezone(owner_id, self)
             collection_timezone = str(collection_row["timezone"] or user_timezone.key)
             if clean_collection_updates:
                 collection_context = {
@@ -1201,9 +1218,9 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
 
             matched_ids: set[str] = set()
             for offset in range(0, len(item_ids), _SQLITE_ID_BATCH_SIZE):
-                batch = item_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
+                batch        = item_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
                 placeholders = ",".join("?" for _ in batch)
-                rows = cursor.execute(
+                rows         = cursor.execute(
                     f"""
                     SELECT id FROM items
                     WHERE owner_id = ? AND type = ? AND deleted = 0
@@ -1267,8 +1284,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             self._log_operation_from_spec(
                 cursor,
                 operation_log,
-                default_item_id=collection_id,
-                default_item_type=ItemType.EVENT.value,
+                default_item_id   = collection_id,
+                default_item_type = ItemType.EVENT.value,
             )
 
         for item_id in item_ids:
@@ -1283,8 +1300,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         if resolved_id is None:
             return []
         collection_id = resolved_id
-        conn = self.get_connection()
-        rows = conn.execute(
+        conn          = self.get_connection()
+        rows          = conn.execute(
             """
             SELECT * FROM items
             WHERE owner_id = ? AND type = ? AND deleted = 0 AND event_collection_id = ?
@@ -1299,14 +1316,14 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         resolved_id = self.resolve_item_id(owner_id, item_id)
         if resolved_id is None:
             return None
-        item_id = resolved_id
-        now = utc_now_iso()
+        item_id                   = resolved_id
+        now                       = utc_now_iso()
         collection_id: str | None = None
-        collection_deleted = False
-        title = ""
+        collection_deleted        = False
+        title                     = ""
         with self.transaction(immediate=True) as conn:
             cursor = conn.cursor()
-            row = cursor.execute(
+            row    = cursor.execute(
                 """
                 SELECT title, event_collection_id, event_collection_kind
                 FROM items
@@ -1355,28 +1372,31 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             )
             if cursor.rowcount != 1:
                 raise RuntimeError(f"event deletion lost item: {item_id}")
-            cursor.execute("DELETE FROM reminder_logs WHERE item_id = ?", (item_id,))
+            cursor.execute(
+                "DELETE FROM reminder_logs WHERE item_id = ? AND sent_at IS NULL AND confirmed_at IS NULL",
+                (item_id,),
+            )
             cursor.execute("DELETE FROM items_fts WHERE id = ?", (item_id,))
 
             if collection_deleted and collection_id:
                 self._log_operation_with_cursor(
                     cursor,
-                    user_id=owner_id,
-                    action="delete_event_collection",
-                    item_type=ItemType.EVENT.value,
-                    item_id=collection_id,
-                    details={"child_ids": [item_id]},
-                    created_at=now,
+                    user_id    = owner_id,
+                    action     = "delete_event_collection",
+                    item_type  = ItemType.EVENT.value,
+                    item_id    = collection_id,
+                    details    = {"child_ids": [item_id]},
+                    created_at = now,
                 )
             else:
                 self._log_operation_with_cursor(
                     cursor,
-                    user_id=owner_id,
-                    action="delete",
-                    item_type=ItemType.EVENT.value,
-                    item_id=item_id,
-                    details={"soft_delete": True},
-                    created_at=now,
+                    user_id    = owner_id,
+                    action     = "delete",
+                    item_type  = ItemType.EVENT.value,
+                    item_id    = item_id,
+                    details    = {"soft_delete": True},
+                    created_at = now,
                 )
 
         self.cache_invalidate(item_id)
@@ -1391,7 +1411,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         collection_id: str,
         owner_id: str,
         *,
-        cascade: bool = True,
+        cascade: bool                        = True,
         operation_log: dict[str, Any] | None = None,
     ) -> bool:
         resolved_id = self.resolve_event_collection_id(owner_id, collection_id)
@@ -1410,7 +1430,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 """,
                 (now, now, collection_id, owner_id),
             )
-            affected = cursor.rowcount
+            affected             = cursor.rowcount
             child_ids: list[str] = []
             if affected and cascade:
                 rows = cursor.execute(
@@ -1430,14 +1450,15 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                     )
                     cursor.execute(f"DELETE FROM items_fts WHERE id IN ({placeholders})", child_ids)
                     cursor.execute(
-                        f"DELETE FROM reminder_logs WHERE item_id IN ({placeholders})", child_ids
+                        f"DELETE FROM reminder_logs WHERE item_id IN ({placeholders}) AND sent_at IS NULL AND confirmed_at IS NULL",
+                        child_ids,
                     )
             if affected:
                 self._log_operation_from_spec(
                     cursor,
                     operation_log,
-                    default_item_id=collection_id,
-                    default_item_type=ItemType.EVENT.value,
+                    default_item_id   = collection_id,
+                    default_item_type = ItemType.EVENT.value,
                 )
         if affected:
             for child_id in child_ids:
@@ -1461,7 +1482,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         if not query:
             return None
 
-        conn = self.get_connection()
+        conn       = self.get_connection()
         exact_rows = conn.execute(
             f"SELECT id FROM {table} "
             "WHERE owner_id = ? AND deleted = 0 AND id = ? COLLATE NOCASE LIMIT 2",
@@ -1476,7 +1497,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             return None
 
         prefix = query.casefold()
-        rows = conn.execute(
+        rows   = conn.execute(
             f"SELECT id FROM {table} "
             "WHERE owner_id = ? AND deleted = 0 AND lower(id) LIKE ? "
             "ORDER BY id",
@@ -1505,12 +1526,12 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         if resolved_id is None:
             return None
         cache_key = self._cache_key("item", resolved_id, owner_id or "*")
-        cached = self._cache_get_or_miss(cache_key)
+        cached    = self._cache_get_or_miss(cache_key)
         if cached is not _CACHE_MISS:
             # 该命名空间只缓存 Item；在动态缓存边界集中收窄一次类型。
             return cast(Item | None, cached)
 
-        conn = self.get_connection()
+        conn   = self.get_connection()
         cursor = conn.cursor()
 
         if owner_id:
@@ -1534,12 +1555,12 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         unique_ids = list(dict.fromkeys(str(item_id) for item_id in item_ids if item_id))
         if not unique_ids:
             return {}
-        conn = self.get_connection()
+        conn                   = self.get_connection()
         items: dict[str, Item] = {}
         for offset in range(0, len(unique_ids), _SQLITE_ID_BATCH_SIZE):
-            batch = unique_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
+            batch        = unique_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
             placeholders = ",".join("?" for _ in batch)
-            rows = conn.execute(
+            rows         = conn.execute(
                 f"SELECT * FROM items WHERE owner_id = ? AND deleted = 0 "
                 f"AND id IN ({placeholders})",
                 [owner_id, *batch],
@@ -1572,9 +1593,9 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
     ) -> tuple[list[str], list[Any]]:
         """为列表、总数和金额汇总构造完全一致的过滤条件。"""
 
-        where = ["owner_id = ?", "deleted = 0"]
+        where             = ["owner_id = ?", "deleted = 0"]
         params: list[Any] = [owner_id]
-        resolved_filters = self._resolve_item_filters(owner_id, filters)
+        resolved_filters  = self._resolve_item_filters(owner_id, filters)
         self._apply_filters(where, params, resolved_filters)
         self._apply_list_only_filters(where, params, resolved_filters)
         return where, params
@@ -1586,7 +1607,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
     ) -> dict[str, Any]:
         """Copy filters and attach the explicit user zone needed by timestamp SQL."""
 
-        resolved = dict(filters or {})
+        resolved   = dict(filters or {})
         date_field = str(resolved.get("date_field") or "")
         sort_field = str(resolved.get("sort_field") or "created_at")
         if date_field in self._TIMESTAMP_FIELDS or sort_field in self._TIMESTAMP_FIELDS:
@@ -1597,8 +1618,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         self,
         owner_id: str,
         filters: dict[str, Any] | None = None,
-        limit: int = 100,
-        offset: int = 0,
+        limit: int                     = 100,
+        offset: int                    = 0,
         *,
         use_cache: bool = True,
     ) -> list[Item]:
@@ -1607,15 +1628,15 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             return []
         if offset < 0:
             raise ValueError("offset must be non-negative")
-        resolved_filters = self._resolve_item_filters(owner_id, filters)
+        resolved_filters      = self._resolve_item_filters(owner_id, filters)
         cache_key: str | None = None
         if use_cache:
             cache_key = self._cache_key("items", owner_id, resolved_filters, limit, offset)
-            cached = self._cache_get_or_miss(cache_key)
+            cached    = self._cache_get_or_miss(cache_key)
             if cached is not _CACHE_MISS:
                 return cast(list[Item], cached)
 
-        conn = self.get_connection()
+        conn   = self.get_connection()
         cursor = conn.cursor()
 
         where, params = self._item_list_conditions(owner_id, resolved_filters)
@@ -1663,7 +1684,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         if limit <= 0:
             return []
         timezone_name = TimezoneHelper.get_user_timezone(owner_id, self).key
-        rows = (
+        rows          = (
             self.get_connection()
             .execute(
                 """
@@ -1727,14 +1748,48 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         )
         return int(row[0] or 0) if row is not None else 0
 
+    def aggregate_ledger_by_currency(
+        self,
+        owner_id: str,
+        filters: dict[str, Any] | None = None,
+    ) -> dict[str, dict[str, float | int]]:
+        """单次 SQL 按币种和交易类型汇总；金额全程以整数分累计。"""
+        resolved = {key: value for key, value in (filters or {}).items() if value is not None}
+        where, params = self._item_list_conditions(owner_id, {**resolved, "type": "ledger"})
+        rows = (
+            self.get_connection()
+            .execute(
+                f"""SELECT COALESCE(NULLIF(UPPER(TRIM(currency)), ''), 'CNY') AS code,
+                       transaction_type, SUM({self._LEDGER_AMOUNT_CENTS_EXPR}), COUNT(*)
+                FROM items WHERE {" AND ".join(where)}
+                GROUP BY code, transaction_type ORDER BY code""",
+                params,
+            )
+            .fetchall()
+        )
+        result: dict[str, dict[str, float | int]] = {}
+        for code, kind, cents, count in rows:
+            totals = result.setdefault(
+                str(code), {"income": 0, "expense": 0, "transfer": 0, "balance": 0, "count": 0}
+            )
+            if kind in {"income", "expense", "transfer"}:
+                totals[str(kind)] = int(cents or 0) / 100
+            totals["count"] += int(count)
+            totals["balance"] = round(totals["income"] - totals["expense"], 2)
+        return result
+
     def aggregate_item_amounts(
         self,
         owner_id: str,
         filters: dict[str, Any] | None = None,
+        *,
+        currency: str = "CNY",
     ) -> dict[str, tuple[int, int]]:
-        """按交易类型汇总过滤结果的整数分金额与条目数。"""
+        """按交易类型汇总单币种金额；缺失币种按历史默认 CNY 解释。"""
 
         where, params = self._item_list_conditions(owner_id, filters)
+        where.append("COALESCE(NULLIF(UPPER(TRIM(currency)), ''), 'CNY') = ?")
+        params.append(currency.strip().upper() or "CNY")
         rows = (
             self.get_connection()
             .execute(
@@ -1762,10 +1817,14 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         self,
         owner_id: str,
         filters: dict[str, Any] | None = None,
+        *,
+        currency: str = "CNY",
     ) -> dict[str, tuple[int, int]]:
-        """按账目日期汇总支出与收入分值，不物化账目行。"""
+        """按账目日期汇总单币种收支分值，不物化账目行。"""
 
         where, params = self._item_list_conditions(owner_id, filters)
+        where.append("COALESCE(NULLIF(UPPER(TRIM(currency)), ''), 'CNY') = ?")
+        params.append(currency.strip().upper() or "CNY")
         rows = (
             self.get_connection()
             .execute(
@@ -1851,7 +1910,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         """把外部排序值收敛到固定列名和 ASC/DESC。"""
         requested_field = str(filters.get("sort_field") or "created_at")
         requested_order = str(filters.get("sort_order") or "DESC").upper()
-        sort_field = (
+        sort_field      = (
             requested_field if requested_field in self._ALLOWED_SORT_FIELDS else "created_at"
         )
         sort_order = requested_order if requested_order in {"ASC", "DESC"} else "DESC"
@@ -1875,14 +1934,14 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         if page_size <= 0:
             raise ValueError("page_size must be positive")
         results: list[Item] = []
-        offset = 0
+        offset              = 0
         while True:
             page = self.get_items(
                 owner_id,
-                filters=filters,
-                limit=page_size,
-                offset=offset,
-                use_cache=False,
+                filters   = filters,
+                limit     = page_size,
+                offset    = offset,
+                use_cache = False,
             )
             results.extend(page)
             if len(page) < page_size:
@@ -1891,7 +1950,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
 
     def get_active_user_ids(self) -> list[str]:
         """返回至少有一条未删除数据的去重用户 ID。"""
-        conn = self.get_connection()
+        conn   = self.get_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT DISTINCT owner_id FROM items WHERE deleted = 0")
         return [str(row[0]) for row in cursor.fetchall()]
@@ -1908,15 +1967,15 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         再次校验每条待办，防止旧快照覆盖已完成、已删除或已改期的状态。
         """
         migrated_ids: list[str] = []
-        item_timestamp = utc_now_iso()
-        settings_timestamp = item_timestamp
-        marker_patch = json.dumps(
+        item_timestamp          = utc_now_iso()
+        settings_timestamp      = item_timestamp
+        marker_patch            = json.dumps(
             {"last_todo_migrate_date": target_date},
             ensure_ascii=False,
         )
 
         with self._settings_lock, self.transaction(immediate=True) as conn:
-            cursor = conn.cursor()
+            cursor       = conn.cursor()
             settings_row = cursor.execute(
                 "SELECT settings_json FROM user_settings WHERE user_id = ?",
                 (user_id,),
@@ -1967,10 +2026,10 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             if migrated_ids:
                 self._log_operation_with_cursor(
                     cursor,
-                    user_id=user_id,
-                    action="migrate_todos",
-                    item_type=ItemType.TASK.value,
-                    details={
+                    user_id   = user_id,
+                    action    = "migrate_todos",
+                    item_type = ItemType.TASK.value,
+                    details   = {
                         "source_date": source_date,
                         "target_date": target_date,
                         "item_ids": migrated_ids,
@@ -2002,7 +2061,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
 
     def get_last_unconfirmed_remind_time(self, item_id: str) -> str | None:
         """返回条目最近一次已发送但未确认的提醒时间。"""
-        conn = self.get_connection()
+        conn   = self.get_connection()
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -2028,9 +2087,9 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         if resolved_id is None:
             return False
         item_id = resolved_id
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        params = [item_id, owner_id]
+        conn    = self.get_connection()
+        cursor  = conn.cursor()
+        params  = [item_id, owner_id]
 
         with conn:
             if soft:
@@ -2044,13 +2103,16 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 cursor.execute("DELETE FROM items WHERE id = ? AND owner_id = ?", params)
             affected = cursor.rowcount
             if affected > 0:
-                cursor.execute("DELETE FROM reminder_logs WHERE item_id = ?", (item_id,))
+                history_filter = " AND sent_at IS NULL AND confirmed_at IS NULL" if soft else ""
+                cursor.execute(
+                    f"DELETE FROM reminder_logs WHERE item_id = ?{history_filter}", (item_id,)
+                )
                 cursor.execute("DELETE FROM items_fts WHERE id = ?", (item_id,))
                 self._log_operation_from_spec(
                     cursor,
                     operation_log,
-                    default_item_id=item_id,
-                    default_item_type=None,
+                    default_item_id   = item_id,
+                    default_item_type = None,
                 )
         if affected > 0:
             self.cache_invalidate(item_id)
@@ -2125,14 +2187,19 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
     ) -> None:
         """将常用过滤条件追加到 where / params"""
         if filters:
+            if filters.get("currency"):
+                where.append(
+                    f"COALESCE(NULLIF(UPPER(TRIM({column_prefix}currency)), ''), 'CNY') = ?"
+                )
+                params.append(str(filters["currency"]).strip().upper())
             for key in self._EXACT_FILTER_FIELDS:
                 if key in filters:
                     column = f"{column_prefix}{key}" if column_prefix else key
                     # 兼容清理规范化前写入的首尾空格，避免下拉框显示出的
                     # 分类值反而筛不到同一批旧条目。
                     trim_value = key in {"category", "ledger_category"}
-                    column = f"TRIM({column})" if trim_value else column
-                    value = str(filters[key]).strip() if trim_value else filters[key]
+                    column     = f"TRIM({column})" if trim_value else column
+                    value      = str(filters[key]).strip() if trim_value else filters[key]
                     where.append(f"{column} = ?")
                     params.append(value)
             if "account_name" in filters:
@@ -2170,10 +2237,10 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 except (TypeError, ValueError) as exc:
                     raise ValueError("timestamp filters require a valid user timezone") from exc
                 start_value = filters.get("start_date")
-                end_value = filters.get("end_date")
+                end_value   = filters.get("end_date")
                 if start_value is not None and end_value is not None:
                     start_at = TimezoneHelper.parse(str(start_value), user_timezone)
-                    end_at = TimezoneHelper.parse(str(end_value), user_timezone)
+                    end_at   = TimezoneHelper.parse(str(end_value), user_timezone)
                     lower_date = (start_at - timedelta(days=2)).date().isoformat()
                     upper_date = (end_at + timedelta(days=2)).date().isoformat()
                     where.append(
@@ -2215,11 +2282,11 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         if any(char in query for char in ("%", "_", "\\")):
             return []
         try:
-            where = ["items_fts MATCH ?", "i.owner_id = ?", "i.deleted = 0"]
+            where             = ["items_fts MATCH ?", "i.owner_id = ?", "i.deleted = 0"]
             params: list[Any] = [query, owner_id]
             self._apply_filters(where, params, filters, column_prefix="i.")
             timezone_name = str((filters or {}).get("_user_timezone") or "")
-            rows = cursor.execute(
+            rows          = cursor.execute(
                 f"""
                 SELECT i.id
                 FROM items_fts
@@ -2246,8 +2313,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         filters: dict[str, Any] | None = None,
     ) -> list[str]:
         """执行搜索并返回按相关性去重后的条目 ID。"""
-        conn = self.get_connection()
-        cursor = conn.cursor()
+        conn    = self.get_connection()
+        cursor  = conn.cursor()
         filters = self._resolve_item_filters(owner_id, filters)
 
         # 清洗搜索关键词
@@ -2260,7 +2327,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         fts_ids = self._search_fts_ids(cursor, owner_id, query, filters)
 
         # LIKE补充搜索（FTS的unicode61分词器对CJK子字符串匹配不完整，需要LIKE兜底）
-        like = self._like_contains_pattern(query)
+        like                  = self._like_contains_pattern(query)
         like_where: list[str] = [
             "owner_id = ?",
             "deleted = 0",
@@ -2343,6 +2410,12 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                     if key in filters:
                         collection_where.append("1 = 0")
 
+            # 集合标题命中的叶节点也须在分页前满足日期和标签条件。
+            remaining_filters = dict(filters or {})
+            remaining_filters.pop("category", None)
+            self._apply_filters(
+                collection_where, collection_params, remaining_filters, column_prefix="i."
+            )
             cursor.execute(
                 f"""
                 SELECT i.id
@@ -2357,7 +2430,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             collection_ids = [row[0] for row in cursor.fetchall()]
 
         # 合并去重：FTS结果优先（按rank排序），再补充LIKE独有的结果
-        seen = set(fts_ids)
+        seen       = set(fts_ids)
         merged_ids = list(fts_ids)
         for lid in like_ids + collection_ids:
             if lid not in seen:
@@ -2376,11 +2449,11 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         if not item_ids:
             return {}
 
-        conn = self.get_connection()
-        base_where = ["owner_id = ?", "deleted = 0"]
+        conn                   = self.get_connection()
+        base_where             = ["owner_id = ?", "deleted = 0"]
         base_params: list[Any] = [owner_id]
-        load_filters = self._resolve_item_filters(owner_id, filters)
-        category_filter = None
+        load_filters           = self._resolve_item_filters(owner_id, filters)
+        category_filter        = None
         if load_filters.get("category") and load_filters.get("type") in (
             None,
             ItemType.EVENT.value,
@@ -2406,10 +2479,10 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
 
         items_by_id: dict[str, Item] = {}
         for offset in range(0, len(item_ids), _SQLITE_ID_BATCH_SIZE):
-            batch = item_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
+            batch        = item_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
             placeholders = ",".join("?" for _ in batch)
-            where = [f"id IN ({placeholders})", *base_where]
-            rows = conn.execute(
+            where        = [f"id IN ({placeholders})", *base_where]
+            rows         = conn.execute(
                 f"SELECT * FROM items WHERE {' AND '.join(where)}",
                 [*batch, *base_params],
             ).fetchall()
@@ -2424,12 +2497,12 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         owner_id: str,
         query: str,
         filters: dict[str, Any] | None = None,
-        limit: int = 100,
-        offset: int = 0,
+        limit: int                     = 100,
+        offset: int                    = 0,
     ) -> tuple[list[Item], int]:
         """全文搜索，返回当前页条目与总匹配数。"""
         page_size = max(0, int(limit))
-        start = max(0, int(offset))
+        start     = max(0, int(offset))
         merged_ids = self._search_item_ids(owner_id, query, filters=filters)
         total = len(merged_ids)
         if not total or page_size <= 0:
@@ -2468,11 +2541,11 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         restorable_ids = self._select_owner_item_ids(cursor, owner_id, requested_ids, deleted=True)
         if not restorable_ids:
             return 0, []
-        now = utc_now_iso()
-        affected = 0
+        now                     = utc_now_iso()
+        affected                = 0
         restored_ids: list[str] = []
         for offset in range(0, len(restorable_ids), _SQLITE_ID_BATCH_SIZE):
-            batch = restorable_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
+            batch        = restorable_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
             placeholders = ",".join("?" for _ in batch)
             cursor.execute(
                 f"""
@@ -2487,6 +2560,10 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 restored_ids.extend(batch)
         for item_id in restored_ids:
             self._refresh_fts(item_id, conn)
+            row = cursor.execute(
+                "SELECT remind_times FROM items WHERE id = ?", (item_id,)
+            ).fetchone()
+            self._sync_reminder_logs(cursor, item_id, json.loads(row["remind_times"] or "[]"))
         return affected, restored_ids
 
     def _load_item_for_undo(
@@ -2551,14 +2628,14 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         unique_ids = list(dict.fromkeys(int(log_id) for log_id in log_ids if log_id))
         if not unique_ids:
             raise ValueError("undo audit requires at least one source log")
-        timestamp = utc_now_iso()
+        timestamp   = utc_now_iso()
         undo_log_id = self._log_operation_with_cursor(
             cursor,
-            user_id=owner_id,
-            action=f"undo_{source_action}",
-            item_type=item_type,
-            item_id=item_id,
-            details={
+            user_id   = owner_id,
+            action    = f"undo_{source_action}",
+            item_type = item_type,
+            item_id   = item_id,
+            details   = {
                 "source_log_ids": unique_ids,
                 "source_action": source_action,
                 "restored_item_ids": list(dict.fromkeys(restored_item_ids)),
@@ -2567,7 +2644,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         )
         marked = 0
         for offset in range(0, len(unique_ids), _SQLITE_ID_BATCH_SIZE):
-            batch = unique_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
+            batch        = unique_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
             placeholders = ",".join("?" for _ in batch)
             cursor.execute(
                 f"""
@@ -2589,7 +2666,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         owner_id: str,
         log_row: sqlite3.Row,
     ) -> dict[str, Any]:
-        action = str(log_row["action"] or "")
+        action  = str(log_row["action"] or "")
         item_id = str(log_row["item_id"] or "")
         details = self._parse_operation_details(log_row["details"])
 
@@ -2626,12 +2703,12 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 )
                 self._mark_operation_logs_undone(
                     cursor,
-                    owner_id=owner_id,
-                    log_ids=[int(log_row["id"])],
-                    source_action=action,
-                    item_type=log_row["item_type"],
-                    item_id=item_id,
-                    restored_item_ids=restored_ids,
+                    owner_id          = owner_id,
+                    log_ids           = [int(log_row["id"])],
+                    source_action     = action,
+                    item_type         = log_row["item_type"],
+                    item_id           = item_id,
+                    restored_item_ids = restored_ids,
                 )
 
             self.cache_clear()
@@ -2648,7 +2725,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
 
         if action in {"delete_task", "delete_note"}:
             params: list[Any] = [owner_id, action, log_row["created_at"]]
-            item_type_clause = ""
+            item_type_clause  = ""
             if log_row["item_type"] is not None:
                 item_type_clause = " AND item_type = ?"
                 params.append(log_row["item_type"])
@@ -2661,7 +2738,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 """,
                 params,
             ).fetchall()
-            log_ids = [int(row["id"]) for row in batch_rows]
+            log_ids  = [int(row["id"]) for row in batch_rows]
             item_ids = [str(row["item_id"]) for row in batch_rows if row["item_id"]]
             with conn:
                 affected, restored_ids = self._restore_deleted_item_ids(
@@ -2669,12 +2746,12 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 )
                 self._mark_operation_logs_undone(
                     cursor,
-                    owner_id=owner_id,
-                    log_ids=log_ids,
-                    source_action=action,
-                    item_type=log_row["item_type"],
-                    item_id=item_id,
-                    restored_item_ids=restored_ids,
+                    owner_id          = owner_id,
+                    log_ids           = log_ids,
+                    source_action     = action,
+                    item_type         = log_row["item_type"],
+                    item_id           = item_id,
+                    restored_item_ids = restored_ids,
                 )
 
             self.cache_clear()
@@ -2695,12 +2772,12 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             )
             self._mark_operation_logs_undone(
                 cursor,
-                owner_id=owner_id,
-                log_ids=[int(log_row["id"])],
-                source_action=action,
-                item_type=log_row["item_type"],
-                item_id=item_id,
-                restored_item_ids=restored_ids,
+                owner_id          = owner_id,
+                log_ids           = [int(log_row["id"])],
+                source_action     = action,
+                item_type         = log_row["item_type"],
+                item_id           = item_id,
+                restored_item_ids = restored_ids,
             )
             item = self._load_item_for_undo(
                 cursor, owner_id, restored_ids[0] if restored_ids else None
@@ -2728,11 +2805,11 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             if affected:
                 self._log_operation_with_cursor(
                     cursor,
-                    user_id=owner_id,
-                    action="undo_delete",
-                    item_type=item.type.value,
-                    item_id=item.id,
-                    details={
+                    user_id   = owner_id,
+                    action    = "undo_delete",
+                    item_type = item.type.value,
+                    item_id   = item.id,
+                    details   = {
                         "source_log_ids": [],
                         "source_action": "unlogged_delete",
                         "restored_item_ids": [item.id],
@@ -2755,7 +2832,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             raise ValueError(
                 f"undo window must be from 1 to {PendoConfig.UNDO_WINDOW_MINUTES} minutes"
             )
-        return (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+        return (datetime.now(UTC) - timedelta(minutes=minutes)).isoformat()
 
     def undo_delete(
         self,
@@ -2763,12 +2840,12 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         minutes: int = PendoConfig.UNDO_WINDOW_MINUTES,
     ) -> dict[str, Any]:
         """撤销删除，按最近一次删除操作恢复单条、批量条目或日程集合。"""
-        conn = self.get_connection()
+        conn   = self.get_connection()
         cursor = conn.cursor()
 
         threshold = self._undo_threshold(minutes)
-        log_row = self._latest_delete_log_row(cursor, owner_id, threshold)
-        item_row = self._latest_deleted_item_row(cursor, owner_id, threshold)
+        log_row   = self._latest_delete_log_row(cursor, owner_id, threshold)
+        item_row  = self._latest_deleted_item_row(cursor, owner_id, threshold)
 
         if not log_row and not item_row:
             return {"status": "error", "message": f"未找到{minutes}分钟内删除的条目"}
@@ -2792,7 +2869,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         从 operation_logs 中查找最近的 edit_* 操作，
         读取其 old_values 快照并写回数据库。
         """
-        conn = self.get_connection()
+        conn   = self.get_connection()
         cursor = conn.cursor()
 
         threshold = self._undo_threshold(minutes)
@@ -2810,9 +2887,9 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         if not row:
             return {"status": "error", "message": f"未找到{minutes}分钟内的编辑操作"}
 
-        log_id = row[0]
+        log_id  = row[0]
         item_id = row[1]
-        action = row[2]
+        action  = row[2]
         details = self._parse_operation_details(row[4])
 
         old_values = details.get("old_values")
@@ -2864,13 +2941,13 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         for field in self._IMMUTABLE_UPDATE_FIELDS:
             restore_values.pop(field, None)
         restore_values["updated_at"] = utc_now_iso()
-        current_row = cursor.execute(
+        current_row                  = cursor.execute(
             "SELECT type, timezone FROM items WHERE id = ? AND owner_id = ? AND deleted = 0",
             (item_ids[0], owner_id),
         ).fetchone()
         if current_row is None:
             raise ItemNotFoundException(item_ids[0])
-        user_timezone = TimezoneHelper.get_user_timezone(owner_id, self)
+        user_timezone         = TimezoneHelper.get_user_timezone(owner_id, self)
         normalization_context = {
             "type": str(current_row["type"] or item_type or ""),
             "timezone": str(current_row["timezone"] or user_timezone.key),
@@ -2881,13 +2958,13 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             user_timezone,
         )
         restore_values = {key: normalized_context[key] for key in restore_values}
-        restore_data = self._prepare_data(restore_values)
-        set_clause = ", ".join(f"{self._quote_col(key)} = ?" for key in restore_data)
-        affected = 0
+        restore_data   = self._prepare_data(restore_values)
+        set_clause     = ", ".join(f"{self._quote_col(key)} = ?" for key in restore_data)
+        affected       = 0
 
         with conn:
             for offset in range(0, len(item_ids), _SQLITE_ID_BATCH_SIZE):
-                batch = item_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
+                batch        = item_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
                 placeholders = ",".join("?" for _ in batch)
                 cursor.execute(
                     f"UPDATE items SET {set_clause}, version = version + 1 "
@@ -2907,12 +2984,12 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                     self._refresh_fts(restored_id, conn)
             self._mark_operation_logs_undone(
                 cursor,
-                owner_id=owner_id,
-                log_ids=[log_id],
-                source_action=source_action,
-                item_type=item_type,
-                item_id=item_ids[0] if len(item_ids) == 1 else None,
-                restored_item_ids=item_ids,
+                owner_id          = owner_id,
+                log_ids           = [log_id],
+                source_action     = source_action,
+                item_type         = item_type,
+                item_id           = item_ids[0] if len(item_ids) == 1 else None,
+                restored_item_ids = item_ids,
             )
 
         for restored_id in item_ids:
@@ -2933,16 +3010,16 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         Returns:
             {'type': 'delete'|'edit'|None, 'time': ISO时间}
         """
-        conn = self.get_connection()
-        cursor = conn.cursor()
+        conn      = self.get_connection()
+        cursor    = conn.cursor()
         threshold = self._undo_threshold(minutes)
 
-        delete_log = self._latest_delete_log_row(cursor, owner_id, threshold)
+        delete_log      = self._latest_delete_log_row(cursor, owner_id, threshold)
         delete_log_time = delete_log["created_at"] if delete_log else None
 
-        delete_row = self._latest_deleted_item_row(cursor, owner_id, threshold)
+        delete_row        = self._latest_deleted_item_row(cursor, owner_id, threshold)
         deleted_item_time = delete_row["deleted_at"] if delete_row else None
-        delete_time = max(
+        delete_time       = max(
             [time_value for time_value in (delete_log_time, deleted_item_time) if time_value],
             default=None,
         )
@@ -2957,8 +3034,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         """,
             (owner_id, threshold),
         )
-        edit_row = cursor.fetchone()
-        edit_id = int(edit_row["id"]) if edit_row else None
+        edit_row  = cursor.fetchone()
+        edit_id   = int(edit_row["id"]) if edit_row else None
         edit_time = edit_row["created_at"] if edit_row else None
 
         if not delete_time and not edit_time:
@@ -2986,8 +3063,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
     def get_events_for_range(self, user_id: str, start_date: str, end_date: str) -> list[EventItem]:
         """按用户时区获取与日期范围重叠的可调度日程 leaf。"""
         user_timezone = TimezoneHelper.get_user_timezone(user_id, self)
-        range_start = TimezoneHelper.parse(start_date, user_timezone)
-        range_end = TimezoneHelper.parse(end_date, user_timezone)
+        range_start   = TimezoneHelper.parse(start_date, user_timezone)
+        range_end     = TimezoneHelper.parse(end_date, user_timezone)
         if range_end < range_start:
             raise ValueError("event range end must not precede start")
 
@@ -2995,15 +3072,15 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         # 全球合法偏移最多可相差 26 小时，因此 SQL 用前后各两天的日期前缀
         # 缩小候选集；最终重叠判定仍在 Python 完成。
         start_day = range_start.date()
-        end_day = range_end.date()
+        end_day   = range_end.date()
         minimum_expanded_day = date.min + timedelta(days=2)
         maximum_expanded_day = date.max - timedelta(days=2)
         lower_day = date.min if start_day < minimum_expanded_day else start_day - timedelta(days=2)
         upper_day = date.max if end_day > maximum_expanded_day else end_day + timedelta(days=2)
         lower_date = lower_day.isoformat()
         upper_date = upper_day.isoformat()
-        conn = self.get_connection()
-        rows = conn.execute(
+        conn       = self.get_connection()
+        rows       = conn.execute(
             f"""
             SELECT * FROM items WHERE owner_id = ? AND type = '{ItemType.EVENT.value}' AND deleted = 0
             AND (event_role IS NULL OR event_role IN ('single', 'multi_node_child', 'recurring_occurrence'))
@@ -3023,7 +3100,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 continue
             try:
                 event_start = TimezoneHelper.parse(item.start_time, user_timezone)
-                event_end = (
+                event_end   = (
                     TimezoneHelper.parse(item.end_time, user_timezone)
                     if item.end_time
                     else event_start
@@ -3048,8 +3125,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         Returns:
             (events, tasks, overdue_tasks) 元组
         """
-        user_timezone = TimezoneHelper.get_user_timezone(user_id, self)
-        today_start = TimezoneHelper.parse(today_iso, user_timezone)
+        user_timezone  = TimezoneHelper.get_user_timezone(user_id, self)
+        today_start    = TimezoneHelper.parse(today_iso, user_timezone)
         tomorrow_start = TimezoneHelper.parse(tomorrow_iso, user_timezone)
         if tomorrow_start <= today_start:
             raise ValueError("briefing end must be after start")
@@ -3065,7 +3142,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         lower_date = (today_start - timedelta(days=2)).date().isoformat()
         upper_date = (tomorrow_start + timedelta(days=2)).date().isoformat()
         cursor = self.get_connection().cursor()
-        rows = cursor.execute(
+        rows   = cursor.execute(
             f"""
             SELECT * FROM items
             WHERE owner_id = ? AND type = '{ItemType.TASK.value}' AND deleted = 0
@@ -3096,7 +3173,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 deadline is not None and today_start <= deadline < tomorrow_start
             ):
                 continue
-            priority = item.priority if isinstance(item.priority, int) else 3
+            priority  = item.priority if isinstance(item.priority, int) else 3
             sort_time = deadline or tomorrow_start
             task_matches.append((priority, sort_time, item.created_at, item))
         task_matches.sort(key=lambda match: match[:3])
@@ -3138,7 +3215,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         Returns:
             是否存在日记
         """
-        conn = self.get_connection()
+        conn   = self.get_connection()
         cursor = conn.cursor()
         cursor.execute(
             f"""
@@ -3180,11 +3257,11 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
     def get_user_settings(self, user_id: str) -> dict[str, Any]:
         """获取用户设置"""
         cache_key = self._cache_key("settings", user_id)
-        cached = self._cache_get_or_miss(cache_key)
+        cached    = self._cache_get_or_miss(cache_key)
         if cached is not _CACHE_MISS:
             return cast(dict[str, Any], cached)
 
-        conn = self.get_connection()
+        conn   = self.get_connection()
         cursor = conn.cursor()
 
         cursor.execute("SELECT * FROM user_settings WHERE user_id = ?", (user_id,))
@@ -3204,7 +3281,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             return {}
 
         results: dict[str, dict[str, Any]] = {}
-        missing_user_ids: list[str] = []
+        missing_user_ids: list[str]        = []
         for user_id in unique_user_ids:
             cached = self._cache_get_or_miss(self._cache_key("settings", user_id))
             if cached is not _CACHE_MISS:
@@ -3215,15 +3292,15 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         if missing_user_ids:
             conn = self.get_connection()
             for offset in range(0, len(missing_user_ids), _SQLITE_ID_BATCH_SIZE):
-                batch = missing_user_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
+                batch        = missing_user_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
                 placeholders = ",".join("?" for _ in batch)
-                rows = conn.execute(
+                rows         = conn.execute(
                     f"SELECT * FROM user_settings WHERE user_id IN ({placeholders})",
                     batch,
                 ).fetchall()
                 for row in rows:
                     settings = self._hydrate_user_settings_row(dict(row))
-                    user_id = str(settings["user_id"])
+                    user_id  = str(settings["user_id"])
                     self._cache_set(self._cache_key("settings", user_id), settings)
                     results[user_id] = settings
 
@@ -3265,7 +3342,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         # 其他进程的设置更新，防止两个 JSON patch 互相覆盖。
         with self._settings_lock, self.transaction(immediate=True) as conn:
             cursor = conn.cursor()
-            row = cursor.execute(
+            row    = cursor.execute(
                 "SELECT * FROM user_settings WHERE user_id = ?", (user_id,)
             ).fetchone()
             current = (
@@ -3273,7 +3350,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 if row
                 else self._default_user_settings(user_id)
             )
-            merged = {**current, **settings}
+            merged           = {**current, **settings}
             timezone_changed = "timezone" in settings and merged.get("timezone") != current.get(
                 "timezone"
             )
@@ -3343,34 +3420,34 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         self,
         user_id: str,
         action: str,
-        item_type: str | None = None,
-        item_id: str | None = None,
+        item_type: str | None          = None,
+        item_id: str | None            = None,
         details: dict[str, Any] | None = None,
     ) -> bool:
         """记录操作日志"""
-        conn = self.get_connection()
+        conn   = self.get_connection()
         cursor = conn.cursor()
         with conn:
             self._log_operation_with_cursor(
                 cursor,
-                user_id=user_id,
-                action=action,
-                item_type=item_type,
-                item_id=item_id,
-                details=details,
+                user_id   = user_id,
+                action    = action,
+                item_type = item_type,
+                item_id   = item_id,
+                details   = details,
             )
         return True
 
     def prune_operation_logs(
         self,
         *,
-        now: datetime | None = None,
-        retention_days: int | None = None,
+        now: datetime | None              = None,
+        retention_days: int | None        = None,
         undo_snapshot_minutes: int | None = None,
     ) -> dict[str, int]:
         """按保留期删除日志，并在撤销窗口结束后擦除正文类快照。"""
 
-        current = now or datetime.now(timezone.utc)
+        current = now or datetime.now(UTC)
         if current.tzinfo is None:
             raise ValueError("operation-log prune time must be timezone-aware")
         retention_days = (
@@ -3385,18 +3462,14 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         )
         if retention_days < 0 or undo_snapshot_minutes < 0:
             raise ValueError("operation-log retention windows must be non-negative")
-        delete_before = (
-            (current - timedelta(days=retention_days)).astimezone(timezone.utc).isoformat()
-        )
+        delete_before = (current - timedelta(days=retention_days)).astimezone(UTC).isoformat()
         redact_before = (
-            (current - timedelta(minutes=undo_snapshot_minutes))
-            .astimezone(timezone.utc)
-            .isoformat()
+            (current - timedelta(minutes=undo_snapshot_minutes)).astimezone(UTC).isoformat()
         )
         redacted = 0
         with self.transaction(immediate=True) as conn:
             cursor = conn.cursor()
-            rows = cursor.execute(
+            rows   = cursor.execute(
                 "SELECT id, details FROM operation_logs WHERE created_at < ? AND details IS NOT NULL",
                 (redact_before,),
             ).fetchall()
@@ -3429,32 +3502,32 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         self,
         owner_id: str,
         action: str,
-        bundle_id: str | None = None,
-        filename: str | None = None,
-        types: list[str] | None = None,
-        record_count: int = 0,
+        bundle_id: str | None                 = None,
+        filename: str | None                  = None,
+        types: list[str] | None               = None,
+        record_count: int                     = 0,
         result_summary: dict[str, Any] | None = None,
     ) -> int:
         """记录数据迁移操作日志，返回日志 ID"""
-        conn = self.get_connection()
+        conn   = self.get_connection()
         cursor = conn.cursor()
         with conn:
             return self._log_transfer_with_cursor(
                 cursor,
-                owner_id=owner_id,
-                action=action,
-                bundle_id=bundle_id,
-                filename=filename,
-                types=types,
-                record_count=record_count,
-                result_summary=result_summary,
+                owner_id       = owner_id,
+                action         = action,
+                bundle_id      = bundle_id,
+                filename       = filename,
+                types          = types,
+                record_count   = record_count,
+                result_summary = result_summary,
             )
 
     def get_transfer_logs(
         self, owner_id: str, limit: int = 50, offset: int = 0
     ) -> list[dict[str, Any]]:
         """查询迁移审计日志"""
-        conn = self.get_connection()
+        conn   = self.get_connection()
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -3466,7 +3539,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             """,
             (owner_id, limit, offset),
         )
-        rows = cursor.fetchall()
+        rows    = cursor.fetchall()
         results = []
         for row in rows:
             entry = dict(row)
@@ -3481,7 +3554,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
 
     def has_imported_bundle(self, owner_id: str, bundle_id: str) -> bool:
         """检查某个 bundle_id 是否已被成功导入过"""
-        conn = self.get_connection()
+        conn   = self.get_connection()
         cursor = conn.cursor()
         cursor.execute(
             "SELECT 1 FROM imported_bundles WHERE owner_id = ? AND bundle_id = ?",
@@ -3566,7 +3639,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         if data.get("notes") is None:
             data["notes"] = ""
 
-        data["deleted"] = bool(data.get("deleted"))
+        data["deleted"]     = bool(data.get("deleted"))
         data["is_favorite"] = normalize_bool_flag(data.get("is_favorite", False))
 
         item_type = data.get("type")
@@ -3580,8 +3653,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 logger.warning("Unknown task status while decoding Pendo row")
                 return None
 
-        item_class = ITEM_TYPE_CLASS_MAP.get(item_type, Item)
-        valid_fields = {field.name for field in item_class.__dataclass_fields__.values()}
+        item_class    = ITEM_TYPE_CLASS_MAP.get(item_type, Item)
+        valid_fields  = {field.name for field in item_class.__dataclass_fields__.values()}
         filtered_data = {key: value for key, value in data.items() if key in valid_fields}
         try:
             return item_class(**filtered_data)
@@ -3624,7 +3697,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
 
         cursor.execute("DELETE FROM items_fts WHERE id = ?", (item_id,))
 
-        tags = item_data.get("tags", [])
+        tags     = item_data.get("tags", [])
         tags_str = " ".join(str(tag) for tag in tags) if isinstance(tags, list) else ""
 
         cursor.execute(
@@ -3643,9 +3716,9 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
 
     def rebuild_fts_index(self, owner_id: str | None = None) -> dict[str, Any]:
         """重建有效条目的 FTS 记录，并删除过期或已删除记录。"""
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        active_clause = "WHERE deleted = 0"
+        conn                     = self.get_connection()
+        cursor                   = conn.cursor()
+        active_clause            = "WHERE deleted = 0"
         active_params: list[Any] = []
         if owner_id:
             active_clause += " AND owner_id = ?"

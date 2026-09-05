@@ -32,15 +32,15 @@ def _bare_app(*, outcomes) -> XiaoQingApp:
 
 
 def _receipt(expected_actions: int = 1):
-    committed = AsyncMock()
+    committed   = AsyncMock()
     rolled_back = AsyncMock()
-    unknown = AsyncMock()
+    unknown     = AsyncMock()
     return (
         DeliveryReceipt(
-            expected_actions=expected_actions,
-            commit=committed,
-            rollback=rolled_back,
-            unknown=unknown,
+            expected_actions = expected_actions,
+            commit           = committed,
+            rollback         = rolled_back,
+            unknown          = unknown,
         ),
         committed,
         rolled_back,
@@ -52,7 +52,7 @@ def test_delivery_receipt_serializes_expected_action_updates() -> None:
     """同步扩容与异步交付共享同一把锁，避免跨线程状态竞态。"""
 
     receipt, _commit, _rollback, _unknown = _receipt()
-    entered = threading.Event()
+    entered  = threading.Event()
     finished = threading.Event()
 
     def add_action() -> None:
@@ -133,7 +133,7 @@ async def test_observer_cancellation_cannot_rollback_delivered_reply() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("outcome", [False, asyncio.TimeoutError("timeout")])
+@pytest.mark.parametrize("outcome", [False, TimeoutError("timeout")])
 async def test_send_action_rolls_back_rejection_and_timeout(outcome) -> None:
     receipt, commit, rollback, _unknown = _receipt()
     app = _bare_app(outcomes=[outcome])
@@ -179,13 +179,13 @@ async def test_partial_multiaction_delivery_rolls_back_logical_reply() -> None:
 @pytest.mark.asyncio
 async def test_delivery_receipt_never_reaches_onebot_transport() -> None:
     receipt, _commit, _rollback, _unknown = _receipt()
-    app = object.__new__(XiaoQingApp)
-    ws_client = MagicMock()
+    app                              = object.__new__(XiaoQingApp)
+    ws_client                        = MagicMock()
     ws_client.connected.return_value = True
     ws_client.send_action = AsyncMock(return_value=True)
-    app.ws_client = ws_client
+    app.ws_client       = ws_client
     app.inbound_manager = None
-    app.http_sender = None
+    app.http_sender     = None
     app._ws_transport_is_trusted = MagicMock(return_value=True)
     action = attach_receipt(
         {"action": "send_group_msg", "params": {"group_id": 1, "message": []}},
@@ -201,8 +201,8 @@ async def test_delivery_receipt_never_reaches_onebot_transport() -> None:
 @pytest.mark.asyncio
 async def test_process_event_carries_delivery_receipt_to_action() -> None:
     receipt, _commit, _rollback, _unknown = _receipt()
-    app = object.__new__(XiaoQingApp)
-    app._stopping = False
+    app            = object.__new__(XiaoQingApp)
+    app._stopping  = False
     app.dispatcher = SimpleNamespace(
         handle_event=AsyncMock(
             return_value=DeliverySegments([{"type": "text", "data": {"text": "hello"}}], receipt)
@@ -268,11 +268,11 @@ async def test_continuous_reply_limit_blocks_exact_next_reply(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cfg = XiaoQingChatConfig(
-        continuous_reply_limit=2,
-        continuous_cooldown_seconds=10.0,
-        min_reply_interval_seconds=0.0,
-        max_replies_per_minute=0,
-        reply_probability_base=1.0,
+        continuous_reply_limit      = 2,
+        continuous_cooldown_seconds = 10.0,
+        min_reply_interval_seconds  = 0.0,
+        max_replies_per_minute      = 0,
+        reply_probability_base      = 1.0,
     )
     cfg.goal.enable_goal = False
     runtime = SimpleNamespace(cfg=cfg)

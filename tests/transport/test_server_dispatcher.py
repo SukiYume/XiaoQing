@@ -25,7 +25,7 @@ from tests.helpers.server_test_support import (
     web,
 )
 
-mock_handler = _fixture_support.mock_handler
+mock_handler  = _fixture_support.mock_handler
 sample_server = _fixture_support.sample_server
 
 
@@ -46,14 +46,14 @@ async def test_http_admission_capacity_and_queued_cancellation_are_bounded():
         8765,
         "token",
         handler,
-        ws_max_workers=1,
-        ws_queue_size=1,
+        ws_max_workers = 1,
+        ws_queue_size  = 1,
     )
 
     def request(marker: str) -> _MockRequest:
-        event = _onebot_message_payload(marker)
+        event           = _onebot_message_payload(marker)
         event["marker"] = marker
-        result = _make_request_with_auth("POST", "/event", "token")
+        result          = _make_request_with_auth("POST", "/event", "token")
         result.json = AsyncMock(return_value=event)
         return result
 
@@ -127,8 +127,8 @@ async def test_queued_cancellation_storm_returns_dispatcher_to_exact_baseline():
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_queued_and_running_old_auth_events_fail_closed_without_poisoning_lane():
-    entered = asyncio.Event()
-    release = asyncio.Event()
+    entered         = asyncio.Event()
+    release         = asyncio.Event()
     seen: list[str] = []
 
     async def handler(event: dict[str, Any]) -> list[dict[str, Any]]:
@@ -142,9 +142,9 @@ async def test_queued_and_running_old_auth_events_fail_closed_without_poisoning_
     server = InboundServer("127.0.0.1", 8765, "old", handler, ws_max_workers=1)
 
     def request(marker: str) -> _MockRequest:
-        event = _onebot_message_payload(marker)
+        event           = _onebot_message_payload(marker)
         event["marker"] = marker
-        result = _make_request_with_auth("POST", "/event", "old")
+        result          = _make_request_with_auth("POST", "/event", "old")
         result.json = AsyncMock(return_value=event)
         return result
 
@@ -186,8 +186,8 @@ async def test_handler_failures_are_task_safe_and_next_same_key_runs(failure_kin
         "sync": sync_handler,
         "invalid": invalid_handler,
     }
-    server = InboundServer("127.0.0.1", 8765, "token", handlers[failure_kind])
-    event = _onebot_message_payload("bad")
+    server  = InboundServer("127.0.0.1", 8765, "token", handlers[failure_kind])
+    event   = _onebot_message_payload("bad")
     request = _make_request_with_auth("POST", "/event", "token")
     request.json = AsyncMock(return_value=event)
 
@@ -197,7 +197,7 @@ async def test_handler_failures_are_task_safe_and_next_same_key_runs(failure_kin
     async def healthy(_event: dict[str, Any]) -> list[dict[str, Any]]:
         return [{"ok": True}]
 
-    server.handler = healthy
+    server.handler  = healthy
     healthy_request = _make_request_with_auth("POST", "/event", "token")
     healthy_request.json = AsyncMock(return_value=_onebot_message_payload("good"))
     succeeded = await asyncio.wait_for(server.post_event(healthy_request), timeout=1)
@@ -210,8 +210,8 @@ async def test_handler_failures_are_task_safe_and_next_same_key_runs(failure_kin
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_hot_lane_yields_to_cold_lane_without_breaking_same_key_fifo():
-    first_entered = asyncio.Event()
-    release = asyncio.Event()
+    first_entered    = asyncio.Event()
+    release          = asyncio.Event()
     calls: list[str] = []
 
     async def handler(event: dict[str, Any]) -> list[dict[str, Any]]:
@@ -228,7 +228,7 @@ async def test_hot_lane_yields_to_cold_lane_without_breaking_same_key_fifo():
     def event(marker: str, user_id: int) -> dict[str, Any]:
         return {"marker": marker, "user_id": user_id}
 
-    first = dispatcher.admit(event("hot-0", 1))
+    first   = dispatcher.admit(event("hot-0", 1))
     waiters = [asyncio.create_task(dispatcher.wait(first))]
     await first_entered.wait()
     for index in range(1, 5):
@@ -277,9 +277,9 @@ async def test_ws_send_failure_is_bounded_and_does_not_poison_same_key(send_fail
         calls.append(int(event["user_id"]))
         return [{"ok": True}]
 
-    server = InboundServer("127.0.0.1", 8765, "token", handler)
+    server                               = InboundServer("127.0.0.1", 8765, "token", handler)
     server._ws_broadcast_timeout_seconds = 0.01
-    never = asyncio.Event()
+    never                                = asyncio.Event()
 
     async def hung_send(_text: str) -> None:
         await never.wait()
@@ -308,7 +308,7 @@ async def test_ws_send_failure_is_bounded_and_does_not_poison_same_key(send_fail
 @pytest.mark.unit
 async def test_ws_frame_after_stop_gate_never_reaches_dispatcher():
     frame_ready = asyncio.Event()
-    prepared = asyncio.Event()
+    prepared    = asyncio.Event()
     handler = AsyncMock(return_value=[])
 
     class DelayedWebSocket:
@@ -327,15 +327,15 @@ async def test_ws_frame_after_stop_gate_never_reaches_dispatcher():
             await frame_ready.wait()
             self.sent = True
             return SimpleNamespace(
-                type=web.WSMsgType.TEXT,
-                data=json.dumps(_onebot_message_payload("late")),
+                type = web.WSMsgType.TEXT,
+                data = json.dumps(_onebot_message_payload("late")),
             )
 
         async def close(self, **_kwargs) -> None:
             return None
 
-    server = InboundServer("127.0.0.1", 8765, "token", handler)
-    ws = DelayedWebSocket()
+    server  = InboundServer("127.0.0.1", 8765, "token", handler)
+    ws      = DelayedWebSocket()
     request = _make_request_with_auth("GET", "/ws", "token")
     with patch("core.server.web.WebSocketResponse", return_value=ws):
         task = asyncio.create_task(server.ws_handler(request))
@@ -386,9 +386,9 @@ async def test_dispatcher_stop_timeout_and_retry_leave_no_event_wait_tasks():
 
     dispatcher = _InboundEventDispatcher(
         resistant,
-        max_workers=1,
-        queue_size=1,
-        drain_timeout_seconds=0.01,
+        max_workers           = 1,
+        queue_size            = 1,
+        drain_timeout_seconds = 0.01,
     )
     await dispatcher.start()
     waiter = asyncio.create_task(dispatcher.dispatch({"user_id": 1}))
@@ -425,9 +425,9 @@ async def test_cancelled_dispatcher_stop_leaves_no_anonymous_drain_waiter():
 
     dispatcher = _InboundEventDispatcher(
         handler,
-        max_workers=1,
-        queue_size=1,
-        drain_timeout_seconds=1,
+        max_workers           = 1,
+        queue_size            = 1,
+        drain_timeout_seconds = 1,
     )
     await dispatcher.start()
     event_task = asyncio.create_task(dispatcher.dispatch({"user_id": 1}))
@@ -453,7 +453,7 @@ async def test_cancelled_dispatcher_stop_leaves_no_anonymous_drain_waiter():
 @pytest.mark.integration
 async def test_standalone_direct_call_can_bind_then_restart_cleanly(unused_tcp_port):
     handler = AsyncMock(return_value=[])
-    server = InboundServer("127.0.0.1", unused_tcp_port, "token", handler)
+    server  = InboundServer("127.0.0.1", unused_tcp_port, "token", handler)
     request = _make_request_with_auth("POST", "/event", "token")
     request.json = AsyncMock(return_value=_onebot_message_payload("direct"))
 
@@ -475,9 +475,9 @@ async def test_standalone_direct_call_can_bind_then_restart_cleanly(unused_tcp_p
 @pytest.mark.unit
 async def test_manager_retains_shared_dispatcher_until_failed_child_stop_retries():
     manager = InboundManager(
-        inbound_http_base="http://127.0.0.1:18080",
-        inbound_ws_uri="ws://127.0.0.1:18081/ws",
-        token="token",
+        inbound_http_base = "http://127.0.0.1:18080",
+        inbound_ws_uri    = "ws://127.0.0.1:18081/ws",
+        token             = "token",
         handler=AsyncMock(return_value=[]),
     )
     first = MagicMock(
@@ -506,14 +506,14 @@ async def test_manager_retains_shared_dispatcher_until_failed_child_stop_retries
 @pytest.mark.unit
 async def test_manager_partial_stop_restores_latest_cross_thread_token():
     manager = InboundManager(
-        inbound_http_base="http://127.0.0.1:18080",
-        inbound_ws_uri="ws://127.0.0.1:18080/ws",
-        token="old",
+        inbound_http_base = "http://127.0.0.1:18080",
+        inbound_ws_uri    = "ws://127.0.0.1:18080/ws",
+        token             = "old",
         handler=AsyncMock(return_value=[]),
     )
     stop_entered = asyncio.Event()
     stop_release = asyncio.Event()
-    attempts = 0
+    attempts     = 0
 
     async def stop_server() -> None:
         nonlocal attempts
@@ -525,8 +525,8 @@ async def test_manager_partial_stop_restores_latest_cross_thread_token():
 
     server = MagicMock(stop=AsyncMock(side_effect=stop_server), update_token=Mock())
     manager.http_server = server
-    manager.ws_server = server
-    manager._running = True
+    manager.ws_server   = server
+    manager._running    = True
 
     stopping = asyncio.create_task(manager.stop())
     await stop_entered.wait()

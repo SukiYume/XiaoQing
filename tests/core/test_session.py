@@ -30,9 +30,9 @@ class TestSession:
     def test_session_creation(self):
         """测试会话创建"""
         session = Session(
-            user_id=12345,
-            group_id=67890,
-            plugin_name="guess_number",
+            user_id     = 12345,
+            group_id    = 67890,
+            plugin_name = "guess_number",
         )
         assert session.user_id == 12345
         assert session.group_id == 67890
@@ -72,10 +72,10 @@ class TestSession:
 
         # 创建一个超短超时的会话
         session = Session(
-            user_id=1,
-            group_id=None,
-            plugin_name="test",
-            timeout=0.05,  # 50ms
+            user_id     = 1,
+            group_id    = None,
+            plugin_name = "test",
+            timeout     = 0.05,  # 50ms
         )
 
         assert not session.is_expired()
@@ -90,10 +90,10 @@ class TestSession:
         import time
 
         session = Session(
-            user_id=1,
-            group_id=None,
-            plugin_name="test",
-            timeout=0.2,  # 200ms
+            user_id     = 1,
+            group_id    = None,
+            plugin_name = "test",
+            timeout     = 0.2,  # 200ms
         )
 
         # 等待一段时间（但不超时）
@@ -121,10 +121,10 @@ class TestSessionManager:
     async def test_create_session(self, session_manager: SessionManager):
         """测试创建会话"""
         session = await session_manager.create(
-            user_id=12345,
-            group_id=67890,
-            plugin_name="guess_number",
-            initial_data={"target": 50},
+            user_id      = 12345,
+            group_id     = 67890,
+            plugin_name  = "guess_number",
+            initial_data = {"target": 50},
         )
 
         assert session.user_id == 12345
@@ -136,9 +136,9 @@ class TestSessionManager:
     async def test_get_session(self, session_manager: SessionManager):
         """测试获取会话"""
         await session_manager.create(
-            user_id=12345,
-            group_id=67890,
-            plugin_name="test",
+            user_id     = 12345,
+            group_id    = 67890,
+            plugin_name = "test",
         )
 
         session = await session_manager.get(12345, 67890)
@@ -155,9 +155,9 @@ class TestSessionManager:
     async def test_delete_session(self, session_manager: SessionManager):
         """测试删除会话"""
         await session_manager.create(
-            user_id=12345,
-            group_id=None,
-            plugin_name="test",
+            user_id     = 12345,
+            group_id    = None,
+            plugin_name = "test",
         )
 
         # 确认存在
@@ -174,10 +174,10 @@ class TestSessionManager:
     async def test_exists_does_not_refresh_session_timeout(self, session_manager: SessionManager):
         """测试 exists 只检查存在性，不刷新会话时间戳"""
         session = await session_manager.create(
-            user_id=12345,
-            group_id=None,
-            plugin_name="test",
-            timeout=10.0,
+            user_id     = 12345,
+            group_id    = None,
+            plugin_name = "test",
+            timeout     = 10.0,
         )
         await asyncio.sleep(0.02)
         before = session.updated_at
@@ -189,10 +189,10 @@ class TestSessionManager:
     async def test_peek_does_not_refresh_session_timeout(self, session_manager: SessionManager):
         """测试 peek 返回会话但不刷新会话时间戳"""
         session = await session_manager.create(
-            user_id=12345,
-            group_id=None,
-            plugin_name="test",
-            timeout=10.0,
+            user_id     = 12345,
+            group_id    = None,
+            plugin_name = "test",
+            timeout     = 10.0,
         )
         await asyncio.sleep(0.02)
         before = session.updated_at
@@ -214,18 +214,18 @@ class TestSessionManager:
         """测试同一用户在不同群的会话隔离"""
         # 用户在群 A 的会话
         await session_manager.create(
-            user_id=12345,
-            group_id=100,
-            plugin_name="game_a",
-            initial_data={"score": 10},
+            user_id      = 12345,
+            group_id     = 100,
+            plugin_name  = "game_a",
+            initial_data = {"score": 10},
         )
 
         # 同一用户在群 B 的会话
         await session_manager.create(
-            user_id=12345,
-            group_id=200,
-            plugin_name="game_b",
-            initial_data={"score": 20},
+            user_id      = 12345,
+            group_id     = 200,
+            plugin_name  = "game_b",
+            initial_data = {"score": 20},
         )
 
         # 验证隔离
@@ -242,20 +242,20 @@ class TestSessionManager:
         """测试私聊会话和群聊会话隔离"""
         # 私聊会话
         await session_manager.create(
-            user_id=12345,
-            group_id=None,
-            plugin_name="private_game",
+            user_id     = 12345,
+            group_id    = None,
+            plugin_name = "private_game",
         )
 
         # 群聊会话
         await session_manager.create(
-            user_id=12345,
-            group_id=100,
-            plugin_name="group_game",
+            user_id     = 12345,
+            group_id    = 100,
+            plugin_name = "group_game",
         )
 
         private = await session_manager.get(12345, None)
-        group = await session_manager.get(12345, 100)
+        group   = await session_manager.get(12345, 100)
 
         assert private.plugin_name == "private_game"
         assert group.plugin_name == "group_game"
@@ -264,17 +264,17 @@ class TestSessionManager:
     async def test_create_overwrites_existing(self, session_manager: SessionManager):
         """测试创建会话会覆盖已存在的会话"""
         await session_manager.create(
-            user_id=12345,
-            group_id=None,
-            plugin_name="old_plugin",
-            initial_data={"old_key": "old_value"},
+            user_id      = 12345,
+            group_id     = None,
+            plugin_name  = "old_plugin",
+            initial_data = {"old_key": "old_value"},
         )
 
         await session_manager.create(
-            user_id=12345,
-            group_id=None,
-            plugin_name="new_plugin",
-            initial_data={"new_key": "new_value"},
+            user_id      = 12345,
+            group_id     = None,
+            plugin_name  = "new_plugin",
+            initial_data = {"new_key": "new_value"},
         )
 
         session = await session_manager.get(12345, None)
@@ -303,18 +303,18 @@ class TestSessionManager:
 
         # 创建一个即将过期的会话
         await session_manager.create(
-            user_id=1,
-            group_id=None,
-            plugin_name="test",
-            timeout=0.01,
+            user_id     = 1,
+            group_id    = None,
+            plugin_name = "test",
+            timeout     = 0.01,
         )
 
         # 创建一个不会过期的会话
         await session_manager.create(
-            user_id=2,
-            group_id=None,
-            plugin_name="test",
-            timeout=300.0,
+            user_id     = 2,
+            group_id    = None,
+            plugin_name = "test",
+            timeout     = 300.0,
         )
 
         # 等待第一个过期
@@ -408,9 +408,9 @@ class TestSessionTimeout:
         await manager.create(1, 1, "test")
         await manager.create(2, 2, "test")
         both_entered = asyncio.Event()
-        release = asyncio.Event()
-        active = 0
-        max_active = 0
+        release      = asyncio.Event()
+        active       = 0
+        max_active   = 0
 
         async def slow_update(_session):
             nonlocal active, max_active
@@ -421,7 +421,7 @@ class TestSessionTimeout:
             await release.wait()
             active -= 1
 
-        first = asyncio.create_task(manager.update(1, 1, slow_update))
+        first  = asyncio.create_task(manager.update(1, 1, slow_update))
         second = asyncio.create_task(manager.update(2, 2, slow_update))
         await both_entered.wait()
         assert max_active == 2
@@ -508,14 +508,14 @@ class TestSessionTransactions:
         await asyncio.sleep(0.001)
 
         returned = await manager.get(1, None)
-        stored = await manager.peek(1, None)
+        stored   = await manager.peek(1, None)
         assert returned is not None and stored is not None
         assert stored.updated_at > before.updated_at
         assert stored.version == before.version
 
         returned.updated_at = 0
-        returned.version = 999
-        unchanged = await manager.peek(1, None)
+        returned.version    = 999
+        unchanged           = await manager.peek(1, None)
         assert unchanged is not None
         assert unchanged.updated_at == stored.updated_at
         assert unchanged.version == stored.version
@@ -564,8 +564,8 @@ class TestSessionTransactions:
         manager = SessionManager()
         await manager.create(1, 2, "test", {"value": 1})
         original = await manager.peek(1, 2)
-        entered = asyncio.Event()
-        blocker = asyncio.Event()
+        entered  = asyncio.Event()
+        blocker  = asyncio.Event()
 
         async def swallow_cancel(session):
             session.set("value", 2)
@@ -597,11 +597,11 @@ class TestSessionTransactions:
             session.set("first", True)
             session.set("second", True)
             session.data["nested"]["values"].append("committed")
-            session.version = 9999
-            session.user_id = 999
-            session.group_id = 999
+            session.version     = 9999
+            session.user_id     = 999
+            session.group_id    = 999
             session.plugin_name = "forged-plugin"
-            session.session_id = "forged"
+            session.session_id  = "forged"
             return "ok"
 
         assert await manager.update(1, 2, mutate) == "ok"
@@ -679,13 +679,13 @@ class TestSessionTransactions:
 
     @pytest.mark.asyncio
     async def test_same_task_reentrant_operations_use_staged_view(self):
-        manager = SessionManager()
+        manager          = SessionManager()
         original_created = await manager.create(1, 2, "old", {"value": 1})
-        staged_ids = []
+        staged_ids       = []
 
         async def replace(session):
             session.data["value"] = 2
-            visible = await manager.get(1, 2)
+            visible               = await manager.get(1, 2)
             assert visible is not None and visible.data["value"] == 2
             visible.data["value"] = 999
             assert (await manager.peek(1, 2)).data["value"] == 2
@@ -700,7 +700,7 @@ class TestSessionTransactions:
             replacement = await manager.create("1", "2", " new ", {"value": 3})
             staged_ids.append(replacement.session_id)
             replacement.data["value"] = 999
-            staged = await manager.get(1, 2)
+            staged                    = await manager.get(1, 2)
             assert staged is not None
             assert staged.plugin_name == "new"
             assert staged.data["value"] == 3
@@ -742,7 +742,7 @@ class TestSessionTransactions:
         manager = SessionManager()
         await manager.create(1, 2, "test", {"value": 1})
         original = await manager.peek(1, 2)
-        entered = asyncio.Event()
+        entered  = asyncio.Event()
 
         async def delete_then_swallow(_session):
             await manager.delete(1, 2)
@@ -782,7 +782,7 @@ class TestSessionTransactions:
             await manager.peek(1, 10),
             await manager.peek(2, 20),
         )
-        both_entered = asyncio.Event()
+        both_entered  = asyncio.Event()
         entered_count = 0
 
         async def cross_update(_session, target_user, target_group):
@@ -821,9 +821,9 @@ class TestSessionTransactions:
     async def test_precreated_task_is_reclaimed_and_never_becomes_transaction_owner(self):
         manager = SessionManager()
         await manager.create(1, 2, "test", {"value": 1})
-        original = await manager.peek(1, 2)
-        child_tasks = []
-        child_views = []
+        original      = await manager.peek(1, 2)
+        child_tasks   = []
+        child_views   = []
         child_started = asyncio.Event()
 
         async def child():
@@ -833,7 +833,7 @@ class TestSessionTransactions:
 
         async def return_scheduled_task(session):
             session.data["value"] = 2
-            task = asyncio.create_task(child())
+            task                  = asyncio.create_task(child())
             child_tasks.append(task)
             await child_started.wait()
             return task
@@ -893,7 +893,7 @@ class TestSessionTransactions:
 
         async def transaction(session):
             session.data["value"] = 2
-            child = asyncio.create_task(manager.peek(1, 2))
+            child                 = asyncio.create_task(manager.peek(1, 2))
             child_tasks.append(child)
             await asyncio.sleep(0)
             assert child.done() is False
@@ -907,7 +907,7 @@ class TestSessionTransactions:
     async def test_repeated_cancellation_cleans_registry_and_key_lock(self):
         manager = SessionManager()
         await manager.create(1, 2, "test", {"value": 1})
-        entered = asyncio.Event()
+        entered        = asyncio.Event()
         cancelled_once = asyncio.Event()
 
         async def stubborn(session):

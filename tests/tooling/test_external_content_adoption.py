@@ -1,3 +1,4 @@
+# 架构回归：外部图片与正文使用公共输入验证边界。
 """Architecture gates for the shared external image and text boundaries."""
 
 from __future__ import annotations

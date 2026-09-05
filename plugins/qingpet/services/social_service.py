@@ -40,7 +40,7 @@ class SocialService:
         group_id: int,
         *,
         opponent_user_id: str | None = None,
-        message_id: str | None = None,
+        message_id: str | None       = None,
     ) -> str:
         request_token = str(message_id or secrets.token_hex(16))
         material = f"{request_token}\0{game_type}\0{group_id}\0{user_id}\0{opponent_user_id or ''}"
@@ -69,17 +69,17 @@ class SocialService:
         message_id: str | None = None,
     ) -> tuple[bool, str]:
         request_token = str(message_id or secrets.token_hex(16))
-        material = f"{request_token}\0{group_id}\0{visitor_user_id}\0{target_user_id}"
-        reference_id = f"pet-visit:v1:{hashlib.sha256(material.encode('utf-8')).hexdigest()}"
-        result = self.db.visit_pet_atomic(
+        material      = f"{request_token}\0{group_id}\0{visitor_user_id}\0{target_user_id}"
+        reference_id  = f"pet-visit:v1:{hashlib.sha256(material.encode('utf-8')).hexdigest()}"
+        result        = self.db.visit_pet_atomic(
             visitor_user_id,
             target_user_id,
             group_id,
-            coin_reward=5,
-            daily_visit_limit=DAILY_LIMITS["visit"],
-            daily_coin_limit=DAILY_LIMITS["coins"],
-            cooldown_seconds=COOLDOWN_TIMES["visit"],
-            reference_id=reference_id,
+            coin_reward       = 5,
+            daily_visit_limit = DAILY_LIMITS["visit"],
+            daily_coin_limit  = DAILY_LIMITS["coins"],
+            cooldown_seconds  = COOLDOWN_TIMES["visit"],
+            reference_id      = reference_id,
         )
         if not result.success:
             return False, result.reason or "访问失败"
@@ -158,7 +158,7 @@ class SocialService:
             return False, "对方没有宠物"
 
         like_limit = DAILY_LIMITS.get("like_per_target", 3)
-        success = self.db.like_pet_atomic(user_id, target_user_id, group_id, like_limit)
+        success    = self.db.like_pet_atomic(user_id, target_user_id, group_id, like_limit)
         if success:
             return True, f"你摸了摸{target_pet.name}，它看起来很开心！👋"
         return False, f"今日对该宠物的点赞次数已达上限({like_limit}次)或操作失败"
@@ -249,24 +249,24 @@ class SocialService:
             npc_choice = random.choice(["rock", "scissors", "paper"])
             if normalized == npc_choice:
                 outcome_text = "平局"
-                coins = config["draw_coins"]
-                exp = 0
+                coins        = config["draw_coins"]
+                exp          = 0
             elif (
                 (normalized == "rock" and npc_choice == "scissors")
                 or (normalized == "scissors" and npc_choice == "paper")
                 or (normalized == "paper" and npc_choice == "rock")
             ):
                 outcome_text = "你赢了"
-                coins = config["win_coins"]
-                exp = config["win_exp"]
+                coins        = config["win_coins"]
+                exp          = config["win_exp"]
             else:
                 outcome_text = "你输了"
-                coins = config["lose_coins"]
-                exp = 0
+                coins        = config["lose_coins"]
+                exp          = 0
             return MinigameOutcome(
-                requested_coins=coins,
-                experience=exp,
-                payload={
+                requested_coins = coins,
+                experience      = exp,
+                payload         = {
                     "player_choice": normalized,
                     "npc_choice": npc_choice,
                     "result": outcome_text,
@@ -281,9 +281,9 @@ class SocialService:
             reference_id=self._minigame_reference(
                 "rock_paper_scissors", user_id, group_id, message_id=message_id
             ),
-            daily_coin_limit=DAILY_LIMITS["coins"],
-            cooldown_seconds=int(config.get("cooldown", 0) or 0),
-            outcome_factory=outcome_factory,
+            daily_coin_limit = DAILY_LIMITS["coins"],
+            cooldown_seconds = int(config.get("cooldown", 0) or 0),
+            outcome_factory  = outcome_factory,
         )
         if not settlement.success:
             return False, settlement.reason or "猜拳结算失败"
@@ -315,23 +315,23 @@ class SocialService:
 
         def outcome_factory(_pet: Pet, _opponent: Pet | None) -> MinigameOutcome:
             player_dice = random.randint(1, 6)
-            pet_dice = random.randint(1, 6)
+            pet_dice    = random.randint(1, 6)
             if player_dice > pet_dice:
                 outcome_text = "你赢了"
-                coins = config["win_coins"]
-                exp = config["win_exp"]
+                coins        = config["win_coins"]
+                exp          = config["win_exp"]
             elif player_dice == pet_dice:
                 outcome_text = "平局"
-                coins = 5
-                exp = 0
+                coins        = 5
+                exp          = 0
             else:
                 outcome_text = "你输了"
-                coins = config["lose_coins"]
-                exp = 0
+                coins        = config["lose_coins"]
+                exp          = 0
             return MinigameOutcome(
-                requested_coins=coins,
-                experience=exp,
-                payload={
+                requested_coins = coins,
+                experience      = exp,
+                payload         = {
                     "player_dice": player_dice,
                     "pet_dice": pet_dice,
                     "result": outcome_text,
@@ -344,9 +344,9 @@ class SocialService:
             group_id,
             "dice",
             reference_id=self._minigame_reference("dice", user_id, group_id, message_id=message_id),
-            daily_coin_limit=DAILY_LIMITS["coins"],
-            cooldown_seconds=int(config.get("cooldown", 0) or 0),
-            outcome_factory=outcome_factory,
+            daily_coin_limit = DAILY_LIMITS["coins"],
+            cooldown_seconds = int(config.get("cooldown", 0) or 0),
+            outcome_factory  = outcome_factory,
         )
         if not settlement.success:
             return False, settlement.reason or "骰子结算失败"
@@ -383,30 +383,30 @@ class SocialService:
         def outcome_factory(pet: Pet, opponent: Pet | None) -> MinigameOutcome:
             if opponent is None:
                 raise RuntimeError("race opponent disappeared")
-            energy_cost = int(config["energy_cost"])
-            my_speed = random.randint(1, 100) + (pet.energy - energy_cost) // 5
+            energy_cost  = int(config["energy_cost"])
+            my_speed     = random.randint(1, 100) + (pet.energy - energy_cost) // 5
             target_speed = random.randint(1, 100) + opponent.energy // 5
             if pet.personality == PetPersonality.LIVELY:
                 my_speed += 10
             if opponent.personality == PetPersonality.LIVELY:
                 target_speed += 10
             if my_speed > target_speed:
-                coins = config["win_coins"]
-                exp = config["win_exp"]
+                coins       = config["win_coins"]
+                exp         = config["win_exp"]
                 outcome_key = "win"
             elif my_speed == target_speed:
-                coins = config["second_coins"]
-                exp = 3
+                coins       = config["second_coins"]
+                exp         = 3
                 outcome_key = "draw"
             else:
-                coins = config["lose_coins"]
-                exp = 2
+                coins       = config["lose_coins"]
+                exp         = 2
                 outcome_key = "lose"
             return MinigameOutcome(
-                requested_coins=coins,
-                experience=exp,
-                energy_cost=energy_cost,
-                payload={
+                requested_coins = coins,
+                experience      = exp,
+                energy_cost     = energy_cost,
+                payload         = {
                     "result": outcome_key,
                     "offered_coins": coins > 0,
                 },
@@ -416,22 +416,22 @@ class SocialService:
             user_id,
             group_id,
             "race",
-            opponent_user_id=target_user_id,
-            reference_id=self._minigame_reference(
+            opponent_user_id = target_user_id,
+            reference_id     = self._minigame_reference(
                 "race",
                 user_id,
                 group_id,
-                opponent_user_id=target_user_id,
-                message_id=message_id,
+                opponent_user_id = target_user_id,
+                message_id       = message_id,
             ),
-            daily_coin_limit=DAILY_LIMITS["coins"],
-            cooldown_seconds=int(config.get("cooldown", 0) or 0),
-            minimum_energy=int(config["energy_cost"]),
-            outcome_factory=outcome_factory,
+            daily_coin_limit = DAILY_LIMITS["coins"],
+            cooldown_seconds = int(config.get("cooldown", 0) or 0),
+            minimum_energy   = int(config["energy_cost"]),
+            outcome_factory  = outcome_factory,
         )
         if not settlement.success:
             return False, settlement.reason or "赛跑结算失败"
-        payload = settlement.payload or {}
+        payload     = settlement.payload or {}
         outcome_key = payload.get("result")
         if outcome_key == "win":
             outcome_text = f"🏆 {settlement.pet_name}赢了！"
@@ -462,11 +462,11 @@ class SocialService:
             return "🏆 展示会已结束（无投票数据）"
 
         medals = ["🥇", "🥈", "🥉"]
-        lines = [f"🏆 **{settlement.title} 结果**", ""]
+        lines  = [f"🏆 **{settlement.title} 结果**", ""]
 
         for index, winner in enumerate(settlement.winners):
             medal = medals[index] if index < len(medals) else f"#{index + 1}"
-            line = f"{medal} {winner.pet_name} ({winner.user_id}) - {winner.vote_count}票"
+            line  = f"{medal} {winner.pet_name} ({winner.user_id}) - {winner.vote_count}票"
             if winner.coins_granted > 0:
                 line += f" +{winner.coins_granted}金币"
             if index == 0:

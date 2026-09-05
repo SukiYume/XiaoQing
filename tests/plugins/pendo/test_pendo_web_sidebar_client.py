@@ -7,7 +7,7 @@ from typing import Final
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT: Final = REPOSITORY_ROOT
+ROOT: Final           = REPOSITORY_ROOT
 SIDEBAR_CLIENT: Final = (
     ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "components" / "sidebar.js"
 )
@@ -156,8 +156,8 @@ def _run_sidebar_client(script: str) -> None:
     assert_node_esm_contract(
         _sidebar_source_for_test(),
         script,
-        cwd=ROOT,
-        setup=SIDEBAR_SETUP,
+        cwd   = ROOT,
+        setup = SIDEBAR_SETUP,
     )
 
 

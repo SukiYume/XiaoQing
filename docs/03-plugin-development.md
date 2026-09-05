@@ -106,9 +106,49 @@ python main.py
 python -m compileall -q plugins/hello
 python -m pytest -q
 python -m ruff check plugins/hello
-python -m ruff format --check plugins/hello
+python scripts/format_code.py --check plugins/hello
 git diff --check
 ```
+
+提交前使用 `python scripts/format_code.py --check` 检查全仓格式。新增插件沿用局部赋值对齐、紧凑表达与关键业务边界中文注释。
+
+---
+
+## 代码与验证约定
+
+项目支持 Python 3.11 及以上版本。Python 代码采用局部赋值对齐、100 列内的紧凑表达和解释业务边界的中文注释。公共 API、数据格式和异常语义由实现与回归测试共同约束。
+
+### 排版
+
+使用 `python scripts/format_code.py` 格式化全部受版本控制及新建的代码文件，使用 `python scripts/format_code.py --check` 执行只读检查。也可在命令后指定文件或目录。Python 格式器先调用 Ruff 收敛表达式布局，再对齐同缩进、相邻逻辑块中的赋值与多行关键字参数；转换前后校验 AST 一致性。JavaScript 与 PowerShell 通过 Pygments 定位声明赋值，并验证转换前后的非空白 token 一致。HTML、CSS、Shell 与 VBS 纳入文件清单并保留原有语法布局。
+
+```python
+owner_id    = event.user_id
+timeout     = settings.timeout
+retry_limit = settings.retry_limit
+```
+
+独立逻辑块用空行分开。条件、调用和容器能在行宽内清晰表达时保持紧凑；复杂表达式保留分行。字符串和注释内容由词法边界保护。JavaScript、HTML 和 PowerShell 保留各语言语法与现有缩进，局部对齐只用于相邻且含义相关的声明。
+
+### 去重与注释
+
+相同状态归属、失败语义和生命周期的实现可以抽取到公共工具。不同协议、资源所有者和事务边界保持明确。删除不可达分支、失效兼容代码与无用导入时，同时核对调用者、清单入口、动态加载和测试引用。
+
+中文注释说明时间与金额单位、取消期间的资源所有权、原子提交顺序、缓存失效、权限边界和兼容约定。函数名已经清晰表达的简单动作可保持简洁。测试注释说明触发条件、预期契约和隔离方式。
+
+### 验证与文档
+
+```bash
+python scripts/format_code.py --check
+python -m ruff check .
+python -m mypy core plugins
+python -m pytest -q -n auto --cov=core --cov=plugins --cov-report=term-missing
+git diff --check
+```
+
+先运行受影响模块和新增回归，再执行全仓库门禁。格式操作校验语法树保持一致，业务修复通过可触发旧问题的行为测试验证。测试数据使用临时目录或临时数据库。
+
+README 描述当前用法和配置；ARCHITECTURE 描述模块职责、数据流与所有权；项目手册描述公共契约。命令、权限和别名与 `plugin.json` 保持一致，跨模块公共约定通过链接引用。审查记录分别维护问题处置、修复批次和最终验证，全部完成后再标记关闭。
 
 ---
 

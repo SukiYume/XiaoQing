@@ -91,7 +91,7 @@ def test_admin_commands_reject_unicode_integer_tokens(
     args: str,
     expected: str,
 ) -> None:
-    db = MagicMock()
+    db      = MagicMock()
     handler = handle_manage_log if args == "²" else handle_manage_activity
 
     success, message = handler("admin", 42, args, db, is_admin=True)
@@ -117,7 +117,7 @@ def _database_snapshot(db: Database) -> dict[str, tuple[tuple[object, ...], ...]
     """抓取全部业务表，确保非法命令连隐蔽的计数和奖励也不会改动。"""
 
     connection = db._get_connection()
-    tables = [
+    tables     = [
         str(row[0])
         for row in connection.execute(
             "SELECT name FROM sqlite_master "
@@ -165,8 +165,8 @@ def test_invalid_arguments_are_rejected_without_database_side_effects(
     expected: str,
 ) -> None:
     group_id = 921_001
-    user_id = "921002"
-    admin = AdminService(qingpet_db)
+    user_id  = "921002"
+    admin    = AdminService(qingpet_db)
     assert admin.enable_plugin(group_id)
     assert admin.set_config(group_id, "trade_enabled", "true")
     assert PetService(qingpet_db).adopt_pet(user_id, group_id, "边界宠")[0]
@@ -188,7 +188,7 @@ def test_catalog_examples_use_real_static_ids_and_explicit_dynamic_placeholders(
     assert "food_basic" not in manifest_text
     assert "hat_basic" not in manifest_text
 
-    root = manifest["commands"][0]
+    root  = manifest["commands"][0]
     nodes = {node["name"]: node for node in root["subcommands"]}
     assert nodes["buy"]["examples"] == ["/宠物 buy apple 2"]
     assert nodes["use"]["examples"] == ["/宠物 use acceleration_card"]

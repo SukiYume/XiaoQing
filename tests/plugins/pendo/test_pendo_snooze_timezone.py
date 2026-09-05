@@ -1,6 +1,7 @@
+# 验证稍后提醒按用户时区计算并保留真实时刻。
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 from plugins.pendo.commands.operations import _parse_snooze_time
@@ -10,9 +11,7 @@ def test_relative_snooze_uses_user_aware_instant_not_server_timezone() -> None:
     user_now = datetime(2030, 7, 1, 9, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
     result = datetime.fromisoformat(_parse_snooze_time("10m", now=user_now))
     assert result.tzinfo is not None
-    assert result.astimezone(timezone.utc) - user_now.astimezone(timezone.utc) == (
-        result - user_now
-    )
+    assert result.astimezone(UTC) - user_now.astimezone(UTC) == (result - user_now)
     assert (result - user_now).total_seconds() == 600
 
 

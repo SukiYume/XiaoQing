@@ -8,7 +8,7 @@
 
 | 项目 | 要求 |
 |---|---|
-| Python | `3.10+`，可通过 `python` 命令调用 |
+| Python | `3.11+`，可通过 `python` 命令调用 |
 | OneBot | OneBot v11 实现，推荐 NapCatQQ |
 | 依赖 | 当前环境可通过 pip 安装 `requirements.txt` |
 | 网络 | 可访问 QQ 与启用插件所需的第三方服务 |
@@ -134,13 +134,11 @@ cp config/secrets.json.example config/secrets.json
 
 ### 被动 Inbound
 
-被动模式由 OneBot 向 XiaoQing 推送事件。NapCat HTTP POST 示例：
+被动模式由 OneBot 向 XiaoQing 推送事件。上报地址设置为 `http://127.0.0.1:12000/event`，并配置以下请求头：
 
-```yaml
-http:
-  post:
-    - url: http://127.0.0.1:12000/event
-      secret: replace-with-a-random-secret
+```http
+Authorization: Bearer replace-with-a-random-secret
+Content-Type: application/json
 ```
 
 XiaoQing 侧配置：
@@ -149,11 +147,14 @@ XiaoQing 侧配置：
 {
   "enable_ws_client": false,
   "enable_inbound_server": true,
+  "onebot_http_base": "http://127.0.0.1:11001",
   "inbound_http_base": "http://127.0.0.1:12000"
 }
 ```
 
 HTTP `/event` 与 WebSocket `/ws` 共享同一 `inbound_token`、会话排序和有界接纳队列。启用任一 Inbound Listener 时，请设置非空 `inbound_token`。
+
+同时开启 OneBot HTTP API，用 `onebot_http_base` 和 `secrets.onebot_token` 配置回复通道。标准上报收到 `{}` 确认，消息通过 action API 实际发送。`secret`/`X-Signature` 单独配置会收到 401；此服务的 HTTP 上报使用 Bearer 请求头。开发矩阵通过 `X-XiaoQing-Response-Mode: actions` 显式选择动作列表响应。
 
 ### 主动 WebSocket
 
@@ -247,7 +248,7 @@ Windows 生产环境重启流程：
 python -m compileall -q core plugins tests
 python -m pytest -n 2
 python -m ruff check .
-python -m ruff format --check .
+python scripts/format_code.py --check
 python -m mypy core plugins
 git diff --check
 ```
@@ -271,7 +272,7 @@ UAT 运行真实服务，覆盖 HTTP/WS 命令矩阵、插件业务场景、Core
 
 1. 确认 OneBot 与 XiaoQing 进程均处于运行状态。
 2. 核对 Inbound URL 或主动 WebSocket URI。
-3. 核对 OneBot secret 与 `inbound_token`。
+3. 核对上报的 Authorization Bearer 请求头与 `inbound_token`，并核对回复通道的 `onebot_token`。
 4. 在日志中查找连接状态、错误码和 request ID。
 5. 收到 secret 待确认通知时，核对字段路径并发送 `/reload`。
 6. 日志同时出现 `secrets source is inconsistent` 和 `WebSocket client stopped` 时，停止服务，确认两个配置文件完整，再重新启动。

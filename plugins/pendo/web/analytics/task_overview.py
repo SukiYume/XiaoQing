@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone, tzinfo
+from datetime import UTC, date, datetime, timedelta, tzinfo
 from typing import Any
 
 from ...models.item import TaskItem, TaskStatus
@@ -70,9 +70,9 @@ class _TaskRecord:
 def _normalize_task(item: TaskItem, user_timezone: tzinfo) -> _TaskRecord:
     """清理任务字段，并按计划日优先、截止日回退计算分桶日期。"""
 
-    plan_day = parse_iso_date(item.plan_date)
+    plan_day                       = parse_iso_date(item.plan_date)
     deadline_sort: datetime | None = None
-    created_sort: datetime | None = None
+    created_sort: datetime | None  = None
     if item.deadline_at:
         try:
             deadline_sort = TimezoneHelper.parse(item.deadline_at, user_timezone)
@@ -82,11 +82,11 @@ def _normalize_task(item: TaskItem, user_timezone: tzinfo) -> _TaskRecord:
         created_sort = TimezoneHelper.parse(item.created_at, user_timezone)
     except (TypeError, ValueError):
         pass
-    deadline_day = deadline_sort.date() if deadline_sort is not None else None
-    plan_date = plan_day.isoformat() if plan_day else None
-    plan_key = plan_date or (deadline_day.isoformat() if deadline_day else "")
+    deadline_day         = deadline_sort.date() if deadline_sort is not None else None
+    plan_date            = plan_day.isoformat() if plan_day else None
+    plan_key             = plan_date or (deadline_day.isoformat() if deadline_day else "")
     raw_priority: object = item.priority
-    priority = (
+    priority             = (
         raw_priority
         if isinstance(raw_priority, int)
         and not isinstance(raw_priority, bool)
@@ -98,28 +98,28 @@ def _normalize_task(item: TaskItem, user_timezone: tzinfo) -> _TaskRecord:
     if status not in {"open", "done", "cancelled"}:
         status = "open"
     raw_version: object = item.version
-    version = (
+    version             = (
         raw_version
         if isinstance(raw_version, int) and not isinstance(raw_version, bool) and raw_version >= 0
         else 0
     )
     return _TaskRecord(
-        id=item.id,
-        title=item.title,
-        content=item.content,
-        category=(item.category or "").strip() or "未分类",
-        status=status,
-        priority=priority,
-        plan_date=plan_date,
-        deadline_at=item.deadline_at,
-        completed_at=item.completed_at,
-        cancelled_at=item.cancelled_at,
-        created_at=item.created_at,
-        updated_at=item.updated_at,
-        version=version,
-        plan_key=plan_key,
-        deadline_sort=deadline_sort,
-        created_sort=created_sort,
+        id            = item.id,
+        title         = item.title,
+        content       = item.content,
+        category      = (item.category or "").strip() or "未分类",
+        status        = status,
+        priority      = priority,
+        plan_date     = plan_date,
+        deadline_at   = item.deadline_at,
+        completed_at  = item.completed_at,
+        cancelled_at  = item.cancelled_at,
+        created_at    = item.created_at,
+        updated_at    = item.updated_at,
+        version       = version,
+        plan_key      = plan_key,
+        deadline_sort = deadline_sort,
+        created_sort  = created_sort,
     )
 
 
@@ -140,8 +140,8 @@ def _task_sort_key(task: _TaskRecord) -> tuple[int, str, datetime, datetime]:
     return (
         task.priority,
         task.plan_key or "9999-12-31",
-        task.deadline_sort or datetime.max.replace(tzinfo=timezone.utc),
-        task.created_sort or datetime.max.replace(tzinfo=timezone.utc),
+        task.deadline_sort or datetime.max.replace(tzinfo=UTC),
+        task.created_sort or datetime.max.replace(tzinfo=UTC),
     )
 
 
@@ -178,7 +178,7 @@ def build_task_widget_overview(
     today_key = today_day.isoformat()
     next_week_key = (today_day + timedelta(days=7)).isoformat()
     timezone_name = TimezoneHelper.get_user_timezone(owner_id, db).key
-    active_cte = f"""
+    active_cte    = f"""
         WITH active AS (
           SELECT id, title, status, plan_date, deadline_at, created_at,
                  {_TASK_PLAN_KEY_SQL} AS plan_key,
@@ -188,7 +188,7 @@ def build_task_widget_overview(
             AND COALESCE(status, 'open') = 'open'
         )
     """
-    conn = db.get_connection()
+    conn        = db.get_connection()
     summary_row = conn.execute(
         active_cte
         + """
@@ -249,13 +249,13 @@ def build_task_overview(
     today_day = _resolve_today(db, owner_id, today)
     today_key = today_day.isoformat()
     next_week_key = (today_day + timedelta(days=7)).isoformat()
-    tasks = _load_all_tasks(db, owner_id)
+    tasks  = _load_all_tasks(db, owner_id)
     active = [task for task in tasks if task.status == "open"]
 
     overdue_tasks: list[_TaskRecord] = []
-    focus_tasks: list[_TaskRecord] = []
+    focus_tasks: list[_TaskRecord]   = []
     up_next_tasks: list[_TaskRecord] = []
-    later_tasks: list[_TaskRecord] = []
+    later_tasks: list[_TaskRecord]   = []
     backlog_tasks: list[_TaskRecord] = []
     for task in active:
         if task.plan_key and task.plan_key < today_key:

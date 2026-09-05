@@ -7,7 +7,7 @@
 import json
 import re
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Final, TypeAlias
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -23,7 +23,7 @@ LEGACY_TASK_FIELDS: Final = frozenset(
     {"due_time", "estimate", "subtasks", "dependencies", "progress"}
 )
 
-LEDGER_TRANSACTION_TYPES: Final = frozenset({"expense", "income", "transfer"})
+LEDGER_TRANSACTION_TYPES: Final        = frozenset({"expense", "income", "transfer"})
 LEDGER_TRANSACTION_TYPE_ALIASES: Final = {
     "out": "expense",
     "expense": "expense",
@@ -35,9 +35,9 @@ LEDGER_TRANSACTION_TYPE_ALIASES: Final = {
     "xfer": "transfer",
     "转账": "transfer",
 }
-LEDGER_DEFAULT_ACCOUNT = "现金"
-LEDGER_DEFAULT_CURRENCY = "CNY"
-MAX_NOTE_REFERENCES = 100
+LEDGER_DEFAULT_ACCOUNT   = "现金"
+LEDGER_DEFAULT_CURRENCY  = "CNY"
+MAX_NOTE_REFERENCES      = 100
 MAX_NOTE_REFERENCE_BYTES = 64 * 1024
 
 COMMON_ITEM_FIELDS = {
@@ -380,7 +380,7 @@ def _normalize_tag_list(value: Any, *, field_name: str) -> list[str]:
         raise ValueError(f"{field_name} must be a list")
 
     tags: list[str] = []
-    seen: set[str] = set()
+    seen: set[str]  = set()
     for raw_tag in value:
         if raw_tag in (None, ""):
             continue
@@ -401,7 +401,7 @@ def _normalize_common_fields(
 ) -> None:
     """原地规范所有条目共享的标题、正文、分类与标签。"""
     if "title" in normalized or not partial:
-        title = str(normalized.get("title") or "")
+        title               = str(normalized.get("title") or "")
         normalized["title"] = validate_title(title) if title_required else sanitize_text(title, 200)
 
     if "content" in normalized or not partial:
@@ -411,7 +411,7 @@ def _normalize_common_fields(
         normalized["content"] = content
 
     if "category" in normalized or not partial:
-        category = str(normalized.get("category") or PendoConfig.DEFAULT_CATEGORY)
+        category               = str(normalized.get("category") or PendoConfig.DEFAULT_CATEGORY)
         normalized["category"] = validate_category(category)
 
     if "tags" in normalized or not partial:
@@ -509,7 +509,7 @@ def parse_ledger_transaction_type(value: Any) -> str | None:
 
 def _normalize_ledger_amount(normalized: dict[str, Any], *, partial: bool) -> None:
     """把输入金额统一为整数分，并维护只用于展示的元镜像。"""
-    has_cents = "amount_cents" in normalized
+    has_cents  = "amount_cents" in normalized
     has_amount = "amount" in normalized
     if partial and not has_cents and not has_amount:
         return
@@ -525,7 +525,7 @@ def _normalize_ledger_amount(normalized: dict[str, Any], *, partial: bool) -> No
     else:
         raise ValueError("Ledger amount must be greater than 0")
     normalized["amount_cents"] = cents
-    normalized["amount"] = ledger_cents_to_amount(cents)
+    normalized["amount"]       = ledger_cents_to_amount(cents)
 
 
 def _normalize_ledger_kind(normalized: dict[str, Any], *, partial: bool) -> str | None:
@@ -534,7 +534,7 @@ def _normalize_ledger_kind(normalized: dict[str, Any], *, partial: bool) -> str 
     if transaction_type is None and not partial:
         transaction_type = "expense"
     if transaction_type is not None:
-        raw_type = str(transaction_type or "").strip().lower()
+        raw_type         = str(transaction_type or "").strip().lower()
         transaction_type = parse_ledger_transaction_type(raw_type) or raw_type
         if transaction_type not in LEDGER_TRANSACTION_TYPES:
             raise ValueError("Invalid ledger transaction type")
@@ -544,7 +544,7 @@ def _normalize_ledger_kind(normalized: dict[str, Any], *, partial: bool) -> str 
     if category is None and not partial:
         category = "转账" if transaction_type == "transfer" else "其他"
     if category is not None:
-        fallback = "转账" if transaction_type == "transfer" else "其他"
+        fallback                      = "转账" if transaction_type == "transfer" else "其他"
         normalized["ledger_category"] = _clean_ledger_text(category, fallback, 60)
     return transaction_type
 
@@ -597,9 +597,9 @@ def _normalize_ledger_accounts(
         raise ValueError("Ledger transfer requires counter_account_name")
     if account_name == counter_name:
         raise ValueError("Ledger transfer accounts must be different")
-    normalized["account_name"] = account_name
+    normalized["account_name"]         = account_name
     normalized["counter_account_name"] = counter_name
-    normalized["ledger_category"] = _clean_ledger_text(
+    normalized["ledger_category"]      = _clean_ledger_text(
         normalized.get("ledger_category"), "转账", 60
     )
 
@@ -625,8 +625,8 @@ def normalize_ledger_fields(data: dict[str, Any], partial: bool = False) -> dict
     _normalize_ledger_date_and_currency(normalized, partial=partial)
     _normalize_ledger_accounts(
         normalized,
-        partial=partial,
-        transaction_type=transaction_type,
+        partial          = partial,
+        transaction_type = transaction_type,
     )
     _normalize_ledger_details(normalized, partial=partial)
     return normalized
@@ -706,13 +706,13 @@ def derive_reminder_rules(start_time: Any, remind_times: Any) -> list[dict[str, 
     if not isinstance(remind_times, list):
         raise ValueError("remind_times must be a list")
 
-    start_dt = _datetime_for_rule_delta(start_time, "start_time")
+    start_dt          = _datetime_for_rule_delta(start_time, "start_time")
     offsets: set[int] = set()
     for value in remind_times:
         if value in (None, ""):
             continue
         remind_dt = _datetime_for_rule_delta(value, "remind_times")
-        offset = int(round((start_dt - remind_dt).total_seconds()))
+        offset    = int(round((start_dt - remind_dt).total_seconds()))
         if offset >= 0:
             offsets.add(offset)
 
@@ -727,7 +727,7 @@ def build_remind_times_from_rules(start_time: Any, reminder_rules: Any) -> list[
     if not rules:
         return []
 
-    start_dt = datetime.fromisoformat(_normalize_iso_datetime(start_time, "start_time"))
+    start_dt     = datetime.fromisoformat(_normalize_iso_datetime(start_time, "start_time"))
     remind_times = [
         (start_dt - timedelta(seconds=rule["offset_seconds"])).isoformat(timespec="seconds")
         for rule in rules
@@ -761,8 +761,8 @@ def _normalize_reminder_fields(
             }
         )
 
-    rules = normalized.get("reminder_rules") or []
-    times = normalized.get("remind_times") or []
+    rules              = normalized.get("reminder_rules") or []
+    times              = normalized.get("remind_times") or []
     explicitly_cleared = (rules_provided and not rules and not times) or (
         times_provided and not times and not rules
     )
@@ -771,7 +771,7 @@ def _normalize_reminder_fields(
     if rules and anchor:
         normalized["remind_times"] = build_remind_times_from_rules(anchor, rules)
     elif times and anchor:
-        derived = derive_reminder_rules(anchor, times)
+        derived                      = derive_reminder_rules(anchor, times)
         normalized["reminder_rules"] = (
             with_start_time_reminder_rule(derived) if include_anchor_rule else derived
         )
@@ -781,10 +781,10 @@ def _normalize_reminder_fields(
         )
     elif explicitly_cleared:
         normalized["reminder_rules"] = []
-        normalized["remind_times"] = []
+        normalized["remind_times"]   = []
     elif not partial and default_rules and anchor:
         normalized["reminder_rules"] = [dict(rule) for rule in default_rules]
-        normalized["remind_times"] = build_remind_times_from_rules(
+        normalized["remind_times"]   = build_remind_times_from_rules(
             anchor,
             normalized["reminder_rules"],
         )
@@ -875,8 +875,8 @@ def _normalize_event_time_fields(normalized: dict[str, Any]) -> None:
         normalized["end_time"] = None
     else:
         normalized["end_time"] = _normalize_iso_datetime(end_time, "end_time")
-        start_dt = datetime.fromisoformat(normalized["start_time"])
-        end_dt = datetime.fromisoformat(normalized["end_time"])
+        start_dt               = datetime.fromisoformat(normalized["start_time"])
+        end_dt                 = datetime.fromisoformat(normalized["end_time"])
         if (start_dt.tzinfo is None) != (end_dt.tzinfo is None):
             raise ValueError("Event start_time and end_time must use matching timezone forms")
         if end_dt <= start_dt:
@@ -893,10 +893,10 @@ def normalize_event_fields(data: dict[str, Any], partial: bool = False) -> dict[
     _normalize_event_time_fields(normalized)
     _normalize_reminder_fields(
         normalized,
-        anchor_field="start_time",
-        partial=partial,
-        include_anchor_rule=True,
-        default_rules=DEFAULT_EVENT_REMINDER_RULES,
+        anchor_field        = "start_time",
+        partial             = partial,
+        include_anchor_rule = True,
+        default_rules       = DEFAULT_EVENT_REMINDER_RULES,
     )
 
     return normalized
@@ -957,14 +957,14 @@ def _sync_task_terminal_timestamps(normalized: dict[str, Any]) -> None:
     status_value = normalized.get("status")
     if status_value == "done":
         if completed_at in (None, ""):
-            normalized["completed_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            normalized["completed_at"] = datetime.now(UTC).isoformat(timespec="seconds")
         else:
             normalized["completed_at"] = _normalize_iso_datetime(completed_at, "completed_at")
         normalized["cancelled_at"] = None
     elif status_value == "cancelled":
         normalized["completed_at"] = None
         if cancelled_at in (None, ""):
-            normalized["cancelled_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            normalized["cancelled_at"] = datetime.now(UTC).isoformat(timespec="seconds")
         else:
             normalized["cancelled_at"] = _normalize_iso_datetime(cancelled_at, "cancelled_at")
     elif status_value is not None:
@@ -981,9 +981,9 @@ def normalize_task_fields(data: dict[str, Any], partial: bool = False) -> dict[s
     _normalize_task_priority_and_status(normalized, partial=partial)
     _normalize_reminder_fields(
         normalized,
-        anchor_field="deadline_at",
-        partial=partial,
-        include_anchor_rule=False,
+        anchor_field        = "deadline_at",
+        partial             = partial,
+        include_anchor_rule = False,
     )
     _sync_task_terminal_timestamps(normalized)
     return normalized
@@ -1012,7 +1012,7 @@ def _normalize_note_references(value: Any) -> list[dict[str, str]]:
         raise ValueError(f"Note references cannot exceed {MAX_NOTE_REFERENCES} entries")
 
     references: list[dict[str, str]] = []
-    seen: set[str] = set()
+    seen: set[str]                   = set()
     for raw_reference in value:
         if not isinstance(raw_reference, dict):
             continue
@@ -1042,7 +1042,7 @@ def _normalize_related_item_ids(value: Any) -> list[str]:
         raise ValueError(f"Note related_items cannot exceed {MAX_NOTE_REFERENCES} entries")
 
     related: list[str] = []
-    seen: set[str] = set()
+    seen: set[str]     = set()
     for raw_id in value:
         related_id = sanitize_text(str(raw_id or ""), 120)
         if related_id and related_id not in seen:
@@ -1074,14 +1074,14 @@ def normalize_note_fields(data: dict[str, Any], partial: bool = False) -> dict[s
     if "related_items" in normalized or not partial:
         normalized["related_items"] = _normalize_related_item_ids(normalized.get("related_items"))
     if "references" in normalized:
-        related_items = normalized.get("related_items")
+        related_items               = normalized.get("related_items")
         normalized["related_items"] = _merge_note_related_ids(
             related_items if isinstance(related_items, list) else [],
             normalized["references"],
         )
 
     if "last_viewed" in normalized:
-        last_viewed = normalized.get("last_viewed")
+        last_viewed               = normalized.get("last_viewed")
         normalized["last_viewed"] = (
             _normalize_iso_datetime(last_viewed, "last_viewed")
             if last_viewed not in (None, "")
@@ -1159,9 +1159,9 @@ def normalize_diary_fields(data: dict[str, Any], partial: bool = False) -> dict[
     normalized = dict(data)
     _normalize_common_fields(
         normalized,
-        partial=partial,
-        title_required=False,
-        content_required=True,
+        partial          = partial,
+        title_required   = False,
+        content_required = True,
     )
     _normalize_diary_context_fields(normalized, partial=partial)
     _normalize_diary_mood_fields(normalized, partial=partial)
@@ -1192,7 +1192,7 @@ def get_allowed_item_fields(item_type: str) -> set[str]:
 
 def normalize_item_fields(data: dict[str, Any], partial: bool = False) -> dict[str, Any]:
     """Normalize a full item payload and reject fields outside the new schema."""
-    item_type = str(data.get("type") or "").strip()
+    item_type  = str(data.get("type") or "").strip()
     normalizer = get_item_normalizer(item_type)
     if not normalizer:
         raise ValueError(f"Unsupported record type: {item_type}")
@@ -1202,6 +1202,6 @@ def normalize_item_fields(data: dict[str, Any], partial: bool = False) -> dict[s
     if unknown:
         raise ValueError(f"Unsupported {item_type} field: {', '.join(unknown)}")
 
-    payload = {key: value for key, value in data.items() if key in allowed}
+    payload         = {key: value for key, value in data.items() if key in allowed}
     payload["type"] = item_type
     return normalizer(payload, partial)

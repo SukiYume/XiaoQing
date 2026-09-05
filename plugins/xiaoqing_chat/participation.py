@@ -15,7 +15,7 @@ _GROUP_INVITATION_RE = re.compile(
     r"(?:你们|大家|各位|群里|有没有人|有人(?:想|愿意|能)|谁(?:来|能|想|愿意))"
 )
 _OPENING_BANTER_RE = re.compile(r"(?:^|[，,。！？!?\s])(?:我宣布|我提议|我建议|我赌|我站\S{0,8}党)")
-_QQ_FACE_TOKEN_RE = re.compile(
+_QQ_FACE_TOKEN_RE  = re.compile(
     r"(?:\[CQ:face(?:,[^\]\r\n]*)?\]|\[QQ表情：[^\]\r\n]+\])",
     re.IGNORECASE,
 )

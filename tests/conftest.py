@@ -44,8 +44,8 @@ def _safe_node_name(value: str) -> str:
     return cleaned or "tmp"
 
 
-PROJECT_TMP_ROOT = ROOT / ".pytest_cache"
-PROJECT_TMP_BASE = PROJECT_TMP_ROOT / "tmp"
+PROJECT_TMP_ROOT    = ROOT / ".pytest_cache"
+PROJECT_TMP_BASE    = PROJECT_TMP_ROOT / "tmp"
 _PROJECT_TMP_RUN_ID = (
     os.environ.get("PYTEST_XDIST_TESTRUNUID") or f"serial-{os.getpid()}-{uuid.uuid4().hex}"
 )
@@ -62,7 +62,7 @@ PROJECT_TMP_RUN_ROOT = (
 def _remove_project_tmp_run_root(path: Path) -> None:
     """只清理当前 worker 的受控根目录，并尽力移除已经空掉的父目录。"""
 
-    base = PROJECT_TMP_BASE.resolve()
+    base   = PROJECT_TMP_BASE.resolve()
     target = path.resolve()
     if target == base or base not in target.parents:
         raise RuntimeError(f"refusing to remove temp path outside worker root: {target}")
@@ -76,8 +76,8 @@ def _remove_project_tmp_run_root(path: Path) -> None:
 
 
 def _project_mkdtemp(
-    suffix: str | None = None,
-    prefix: str | None = None,
+    suffix: str | None                 = None,
+    prefix: str | None                 = None,
     dir: str | os.PathLike[str] | None = None,
 ) -> str:
     base_dir = Path(dir) if dir else PROJECT_TMP_RUN_ROOT
@@ -100,14 +100,14 @@ tempfile.mkdtemp = _project_mkdtemp
 class ProjectTmpPathFactory:
     def __init__(self, base_dir: Path) -> None:
         self._base_dir = base_dir
-        self._counter = 0
+        self._counter  = 0
 
     def getbasetemp(self) -> Path:
         self._base_dir.mkdir(parents=True, exist_ok=True)
         return self._base_dir
 
     def mktemp(self, basename: str, numbered: bool = True) -> Path:
-        base = self.getbasetemp()
+        base      = self.getbasetemp()
         safe_name = _safe_node_name(basename)
         if numbered:
             while True:
@@ -200,15 +200,15 @@ def isolate_process_global_import_hooks() -> Iterator[None]:
     """Keep plugin import guards and dependency stubs from leaking between tests."""
     from core import plugin_manager as plugin_manager_module
 
-    original_meta_path = list(sys.meta_path)
-    original_owners = dict(plugin_manager_module._PLUGIN_NAMESPACE_OWNERS)
-    plugins_package = sys.modules.get("plugins")
+    original_meta_path    = list(sys.meta_path)
+    original_owners       = dict(plugin_manager_module._PLUGIN_NAMESPACE_OWNERS)
+    plugins_package       = sys.modules.get("plugins")
     original_plugins_path = (
         list(plugins_package.__path__)
         if plugins_package is not None and hasattr(plugins_package, "__path__")
         else None
     )
-    dependency_modules = {name: sys.modules.get(name) for name in ("fastapi", "fastapi.responses")}
+    dependency_modules  = {name: sys.modules.get(name) for name in ("fastapi", "fastapi.responses")}
     dependency_presence = {name: name in sys.modules for name in dependency_modules}
     try:
         yield
@@ -366,8 +366,8 @@ def sample_at_event() -> dict[str, Any]:
 @pytest.fixture
 def mock_http_session():
     """Mock HTTP session"""
-    session = AsyncMock()
-    session.get = AsyncMock()
+    session      = AsyncMock()
+    session.get  = AsyncMock()
     session.post = AsyncMock()
     return session
 
@@ -387,28 +387,28 @@ def mock_context_factory():
         plugin_dir: Path,
         data_dir: Path,
         state: dict[str, Any] | None = None,
-        user_id: int | None = None,
-        group_id: int | None = None,
-        request_id: str | None = None,
+        user_id: int | None          = None,
+        group_id: int | None         = None,
+        request_id: str | None       = None,
     ):
         from core.context import PluginContext
 
         return PluginContext(
-            config={"bot_name": "测试"},
-            secrets={"plugins": {}},
-            plugin_name=name,
-            plugin_dir=plugin_dir,
-            data_dir=data_dir,
-            http_session=None,
-            send_action=lambda x: None,
-            reload_config=lambda: None,
-            reload_plugins=lambda: None,
-            get_command_catalog=lambda: (),
-            list_plugins=lambda: ["core", "echo"],
-            current_user_id=user_id,
-            current_group_id=group_id,
-            request_id=request_id,
-            state=state or {},
+            config              = {"bot_name": "测试"},
+            secrets             = {"plugins": {}},
+            plugin_name         = name,
+            plugin_dir          = plugin_dir,
+            data_dir            = data_dir,
+            http_session        = None,
+            send_action         = lambda x: None,
+            reload_config       = lambda: None,
+            reload_plugins      = lambda: None,
+            get_command_catalog = lambda: (),
+            list_plugins        = lambda: ["core", "echo"],
+            current_user_id     = user_id,
+            current_group_id    = group_id,
+            request_id          = request_id,
+            state               = state or {},
         )
 
     return _factory
@@ -442,10 +442,10 @@ def mock_aiohttp_session():
         # 如果没有安装aioresponses，使用基本mock
         from unittest.mock import AsyncMock, MagicMock
 
-        session = MagicMock()
-        session.get = AsyncMock()
-        session.post = AsyncMock()
-        session.put = AsyncMock()
+        session        = MagicMock()
+        session.get    = AsyncMock()
+        session.post   = AsyncMock()
+        session.put    = AsyncMock()
         session.delete = AsyncMock()
         yield session
 
@@ -455,8 +455,8 @@ def mock_websocket():
     """Mock WebSocket connection"""
     from unittest.mock import AsyncMock
 
-    ws = AsyncMock()
-    ws.send = AsyncMock()
+    ws       = AsyncMock()
+    ws.send  = AsyncMock()
     ws.close = AsyncMock()
     ws.recv = AsyncMock(return_value='{"data": {}}')
     return ws
@@ -509,31 +509,31 @@ def sample_router(empty_router):
 
     specs = [
         CommandSpec(
-            plugin="echo",
-            name="echo",
-            triggers=["echo", "回显"],
-            help_text="回显消息",
-            admin_only=False,
-            handler=dummy_handler,
-            priority=0,
+            plugin     = "echo",
+            name       = "echo",
+            triggers   = ["echo", "回显"],
+            help_text  = "回显消息",
+            admin_only = False,
+            handler    = dummy_handler,
+            priority   = 0,
         ),
         CommandSpec(
-            plugin="help",
-            name="help",
-            triggers=["help", "帮助"],
-            help_text="查看帮助",
-            admin_only=False,
-            handler=dummy_handler,
-            priority=0,
+            plugin     = "help",
+            name       = "help",
+            triggers   = ["help", "帮助"],
+            help_text  = "查看帮助",
+            admin_only = False,
+            handler    = dummy_handler,
+            priority   = 0,
         ),
         CommandSpec(
-            plugin="admin",
-            name="reload",
-            triggers=["reload"],
-            help_text="重载配置",
-            admin_only=True,
-            handler=dummy_handler,
-            priority=10,
+            plugin     = "admin",
+            name       = "reload",
+            triggers   = ["reload"],
+            help_text  = "重载配置",
+            admin_only = True,
+            handler    = dummy_handler,
+            priority   = 10,
         ),
     ]
 
@@ -630,7 +630,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     reporter = config.pluginmanager.get_plugin("terminalreporter")
     if reporter is None:
         raise RuntimeError("terminal reporter is required for CI skip enforcement")
-    reports = reporter.stats.get("skipped", ())
+    reports    = reporter.stats.get("skipped", ())
     allowances = load_skip_allowances(ROOT / "tests" / "ci_skip_allowlist.toml")
     violations = unexpected_skips(reports, allowances, platform=current_platform())
     if not violations:

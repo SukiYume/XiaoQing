@@ -29,16 +29,16 @@ def _settle(db: Database, reference_id: str = "visit:test"):
         "visitor",
         "owner",
         GROUP,
-        coin_reward=5,
-        daily_visit_limit=10,
-        daily_coin_limit=500,
-        cooldown_seconds=0,
-        reference_id=reference_id,
+        coin_reward       = 5,
+        daily_visit_limit = 10,
+        daily_coin_limit  = 500,
+        cooldown_seconds  = 0,
+        reference_id      = reference_id,
     )
 
 
 def _state(db: Database) -> tuple:
-    conn = db._get_connection()
+    conn    = db._get_connection()
     visitor = conn.execute(
         "SELECT coins, today_coins_earned, today_visit_count, total_visit_count, last_visit_time "
         "FROM users WHERE user_id = 'visitor' AND group_id = ?",
@@ -68,9 +68,9 @@ def _state(db: Database) -> tuple:
 class _FailingConnection:
     def __init__(self, connection: sqlite3.Connection, fragment: str, occurrence: int = 1):
         self.connection = connection
-        self.fragment = " ".join(fragment.upper().split())
+        self.fragment   = " ".join(fragment.upper().split())
         self.occurrence = occurrence
-        self.matches = 0
+        self.matches    = 0
 
     def execute(self, sql, parameters=()):
         normalized = " ".join(str(sql).upper().split())
@@ -87,7 +87,7 @@ class _FailingConnection:
 class _CommitFailingConnection:
     def __init__(self, connection: sqlite3.Connection):
         self.connection = connection
-        self.failed = False
+        self.failed     = False
 
     def commit(self):
         if not self.failed:
@@ -117,8 +117,8 @@ class _CommitFailingConnection:
 def test_visit_failure_at_each_write_rolls_back_everything(tmp_path, fragment, occurrence):
     db = Database(str(tmp_path / "failure.db"))
     _seed(db)
-    before = _state(db)
-    raw = db._get_connection()
+    before         = _state(db)
+    raw            = db._get_connection()
     db._local.conn = _FailingConnection(raw, fragment, occurrence)
 
     result = _settle(db)
@@ -131,7 +131,7 @@ def test_visit_failure_at_each_write_rolls_back_everything(tmp_path, fragment, o
 def test_visit_commit_failure_rolls_back_everything(tmp_path):
     db = Database(str(tmp_path / "commit-failure.db"))
     _seed(db)
-    before = _state(db)
+    before         = _state(db)
     db._local.conn = _CommitFailingConnection(db._get_connection())
 
     result = _settle(db)
@@ -145,17 +145,17 @@ def test_visit_same_reference_returns_committed_grants_without_double_write(tmp_
     db = Database(str(tmp_path / "idempotent.db"))
     _seed(db)
 
-    first = _settle(db, "visit:same")
+    first  = _settle(db, "visit:same")
     second = _settle(db, "visit:same")
 
     assert first.success is True
     assert second == type(first)(
         True,
-        pet_name="原子宠",
-        visitor_grant=5,
-        target_grant=5,
-        intimacy_grant=1,
-        duplicate=True,
+        pet_name       = "原子宠",
+        visitor_grant  = 5,
+        target_grant   = 5,
+        intimacy_grant = 1,
+        duplicate      = True,
     )
     conn = db._get_connection()
     assert conn.execute("SELECT COUNT(*) FROM visit_settlements").fetchone()[0] == 1
@@ -179,11 +179,11 @@ def test_visit_same_reference_returns_committed_grants_without_double_write(tmp_
 
 
 def test_visit_two_connections_cannot_exceed_daily_quota(tmp_path):
-    path = str(tmp_path / "concurrent.db")
+    path     = str(tmp_path / "concurrent.db")
     first_db = Database(path)
     _seed(first_db)
     second_db = Database(path)
-    barrier = threading.Barrier(2)
+    barrier   = threading.Barrier(2)
 
     def run(db: Database, reference: str):
         barrier.wait(timeout=2)
@@ -191,11 +191,11 @@ def test_visit_two_connections_cannot_exceed_daily_quota(tmp_path):
             "visitor",
             "owner",
             GROUP,
-            coin_reward=5,
-            daily_visit_limit=1,
-            daily_coin_limit=500,
-            cooldown_seconds=0,
-            reference_id=reference,
+            coin_reward       = 5,
+            daily_visit_limit = 1,
+            daily_coin_limit  = 500,
+            cooldown_seconds  = 0,
+            reference_id      = reference,
         )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -260,7 +260,7 @@ def test_visit_reference_is_isolated_by_group(tmp_path):
 def test_visit_rechecks_target_pet_status_inside_transaction(tmp_path):
     db = Database(str(tmp_path / "status.db"))
     _seed(db)
-    pet = db.get_pet("owner", GROUP)
+    pet        = db.get_pet("owner", GROUP)
     pet.status = PetStatus.SICK
     assert db.update_pet(pet)
     before = _state(db)
@@ -278,17 +278,17 @@ def test_main_forwards_message_id_so_delivery_retry_is_idempotent(tmp_path):
     UserService(db).get_or_create_user("visitor", GROUP)
     UserService(db).get_or_create_user("123", GROUP)
     assert PetService(db).adopt_pet("123", GROUP, "消息宠")[0]
-    original_db = qingpet_main._db_instance
-    original_router = qingpet_main._router
+    original_db               = qingpet_main._db_instance
+    original_router           = qingpet_main._router
     qingpet_main._db_instance = db
-    qingpet_main._router = None
-    event = {"user_id": "visitor", "group_id": GROUP, "message_id": 123456}
+    qingpet_main._router      = None
+    event                     = {"user_id": "visitor", "group_id": GROUP, "message_id": 123456}
     try:
-        first = asyncio.run(qingpet_main.handle("pet", "互访 123", event, None))
+        first  = asyncio.run(qingpet_main.handle("pet", "互访 123", event, None))
         second = asyncio.run(qingpet_main.handle("pet", "互访 123", event, None))
     finally:
         qingpet_main._db_instance = original_db
-        qingpet_main._router = original_router
+        qingpet_main._router      = original_router
 
     assert first == second
     assert db._get_connection().execute("SELECT COUNT(*) FROM visit_settlements").fetchone()[0] == 1

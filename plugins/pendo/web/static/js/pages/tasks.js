@@ -20,13 +20,13 @@ import {
 } from '../utils/timezone.js';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss, subscribeDataChanges } from '../utils/ui.js';
 
-const CSS_ID = 'pendo-tasks-redesign-styles';
-const TODAY = () => parseDate(todayInUserTimeZone());
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const TASK_STATUSES = new Set(['open', 'done', 'cancelled']);
-const VIEW_MODES = new Set(['list', 'board']);
+const CSS_ID             = 'pendo-tasks-redesign-styles';
+const TODAY              = () => parseDate(todayInUserTimeZone());
+const ISO_DATE_RE        = /^\d{4}-\d{2}-\d{2}$/;
+const TASK_STATUSES      = new Set(['open', 'done', 'cancelled']);
+const VIEW_MODES         = new Set(['list', 'board']);
 const PLAN_FILTER_VALUES = new Set(['', 'today', 'week', 'month', 'future', 'undated', 'custom']);
-const DEFAULT_FILTERS = Object.freeze({
+const DEFAULT_FILTERS    = Object.freeze({
     search: '',
     plan: '',
     category: '',
@@ -84,16 +84,16 @@ const STATUS_FILTER_OPTIONS = [
     { value: 'cancelled', label: '已取消' },
 ];
 
-let _container = null;
+let _container              = null;
 let _unsubscribeDataChanges = null;
-let _viewMode = 'list';
-let _loading = false;
-let _loadError = '';
-let _overview = null;
-let _dragTaskId = null;
-let _filters = { ...DEFAULT_FILTERS };
-let _loadVersion = 0;
-const _pendingTaskIds = new Set();
+let _viewMode               = 'list';
+let _loading                = false;
+let _loadError              = '';
+let _overview               = null;
+let _dragTaskId             = null;
+let _filters                = { ...DEFAULT_FILTERS };
+let _loadVersion            = 0;
+const _pendingTaskIds       = new Set();
 
 // 数据与错误边界：接口损坏记录不能进入筛选、排序或动作路径。
 function idValue(value) {
@@ -181,7 +181,7 @@ function describePlanDate(value, todayKey = dateKey(TODAY())) {
 
 function normalizePlanRange(start, end) {
     const safeStart = isIsoDate(start) ? start : '';
-    const safeEnd = isIsoDate(end) ? end : '';
+    const safeEnd   = isIsoDate(end) ? end : '';
     if (!safeStart || !safeEnd) return { start: safeStart, end: safeEnd };
     return safeStart <= safeEnd ? { start: safeStart, end: safeEnd } : { start: safeEnd, end: safeStart };
 }
@@ -201,12 +201,12 @@ function planDateMatches(task, filterValue, todayKey = dateKey(TODAY()), customS
     if (filterValue === 'undated') return !planKey;
     if (!planKey) return false;
 
-    const anchor = parseIsoDate(todayKey) || startOfDay(TODAY());
-    const anchorKey = dateKey(anchor);
-    const weekStart = dateKey(firstDayOfWeek(anchor));
-    const weekEnd = dateKey(lastDayOfWeek(anchor));
+    const anchor     = parseIsoDate(todayKey) || startOfDay(TODAY());
+    const anchorKey  = dateKey(anchor);
+    const weekStart  = dateKey(firstDayOfWeek(anchor));
+    const weekEnd    = dateKey(lastDayOfWeek(anchor));
     const monthStart = dateKey(firstDayOfMonth(anchor));
-    const monthEnd = dateKey(lastDayOfMonth(anchor));
+    const monthEnd   = dateKey(lastDayOfMonth(anchor));
     if (filterValue === 'today') return planKey === anchorKey;
     if (filterValue === 'week') return planKey >= weekStart && planKey <= weekEnd;
     if (filterValue === 'month') return planKey >= monthStart && planKey <= monthEnd;
@@ -226,7 +226,7 @@ function formatShortDate(value) {
 }
 
 function defaultTaskPlanDateValue(now = new Date()) {
-    const parts = zonedDateParts(now);
+    const parts  = zonedDateParts(now);
     const target = parseDate(zonedDateKey(now)) || TODAY();
     if ((parts?.hour ?? 0) >= 20) {
         target.setDate(target.getDate() + 1);
@@ -235,11 +235,11 @@ function defaultTaskPlanDateValue(now = new Date()) {
 }
 
 function normalizeTaskPayload(formData, userTimeZone) {
-    const source = isRecord(formData) ? formData : {};
-    const priority = Number(source.priority);
-    const status = textValue(source.status);
-    const planDate = textValue(source.plan_date);
-    const deadline = textValue(source.deadline_at);
+    const source             = isRecord(formData) ? formData : {};
+    const priority           = Number(source.priority);
+    const status             = textValue(source.status);
+    const planDate           = textValue(source.plan_date);
+    const deadline           = textValue(source.deadline_at);
     const normalizedDeadline = deadline ? zonedInputToUtcIso(deadline, userTimeZone) : '';
     if (deadline && !normalizedDeadline) throw new RangeError('请输入有效的截止时间');
 
@@ -262,10 +262,10 @@ function normalizeTask(value) {
     if (!id) return null;
 
     const priority = Number(value.priority);
-    const status = textValue(value.status);
+    const status   = textValue(value.status);
     const planDate = textValue(value.plan_date);
     const deadline = textValue(value.deadline_at);
-    const version = Number(value.version);
+    const version  = Number(value.version);
     return {
         id,
         title: textValue(value.title),
@@ -284,8 +284,8 @@ function normalizeTask(value) {
 }
 
 function normalizeOverview(value) {
-    const source = isRecord(value) && Array.isArray(value.all_tasks) ? value.all_tasks : [];
-    const tasks = [];
+    const source  = isRecord(value) && Array.isArray(value.all_tasks) ? value.all_tasks : [];
+    const tasks   = [];
     const seenIds = new Set();
     source.forEach((item) => {
         const task = normalizeTask(item);
@@ -307,7 +307,7 @@ function emitTaskChanged() {
 function isOverdue(task, today = startOfDay(TODAY())) {
     if (taskStatusBucket(task) !== 'open') return false;
     const planDate = parseIsoDate(taskPlanDateKey(task));
-    const anchor = startOfDay(today) || startOfDay(TODAY());
+    const anchor   = startOfDay(today) || startOfDay(TODAY());
     return planDate ? startOfDay(planDate) < anchor : false;
 }
 
@@ -342,9 +342,9 @@ function sortDone(tasks) {
 }
 
 function filteredTasks() {
-    const tasks = Array.isArray(_overview?.all_tasks) ? _overview.all_tasks : [];
-    const keyword = textValue(_filters.search).toLowerCase();
-    const todayKey = dateKey(TODAY());
+    const tasks         = Array.isArray(_overview?.all_tasks) ? _overview.all_tasks : [];
+    const keyword       = textValue(_filters.search).toLowerCase();
+    const todayKey      = dateKey(TODAY());
     const usePlanFilter = Boolean(_filters.plan);
     return tasks.filter((task) => {
         if (usePlanFilter) {
@@ -370,20 +370,20 @@ function filteredTasks() {
 
 // 筛选后在客户端重新分桶，保证列表、看板和概览数字使用同一份任务集合。
 function deriveDisplayModel(tasks) {
-    const source = Array.isArray(tasks) ? tasks.filter(isRecord) : [];
-    const today = startOfDay(TODAY());
+    const source   = Array.isArray(tasks) ? tasks.filter(isRecord) : [];
+    const today    = startOfDay(TODAY());
     const todayKey = dateKey(today);
     const next7End = new Date(today);
     next7End.setDate(next7End.getDate() + 7);
-    const next7EndKey = dateKey(next7End);
-    const active = source.filter((task) => taskStatusBucket(task) === 'open');
-    const done = source.filter((task) => taskPrimaryStatus(task) === 'done');
-    const cancelled = source.filter((task) => taskPrimaryStatus(task) === 'cancelled');
-    const closed = [...done, ...cancelled];
+    const next7EndKey  = dateKey(next7End);
+    const active       = source.filter((task) => taskStatusBucket(task) === 'open');
+    const done         = source.filter((task) => taskPrimaryStatus(task) === 'done');
+    const cancelled    = source.filter((task) => taskPrimaryStatus(task) === 'cancelled');
+    const closed       = [...done, ...cancelled];
     const overdueTasks = [];
-    const focusTasks = [];
-    const upNextTasks = [];
-    const laterTasks = [];
+    const focusTasks   = [];
+    const upNextTasks  = [];
+    const laterTasks   = [];
     const backlogTasks = [];
 
     active.forEach((task) => {
@@ -753,9 +753,9 @@ function renderHero(model) {
 }
 
 function renderInsights(model) {
-    const summary = model.summary;
+    const summary    = model.summary;
     const completion = Math.round(summary.completion_rate * 100);
-    const maxBar = Math.max(1, ...model.completion_bars.map((item) => item.count || 0));
+    const maxBar     = Math.max(1, ...model.completion_bars.map((item) => item.count || 0));
     return `
         <section class="tasks-layout">
             <div class="tasks-panel">
@@ -899,13 +899,12 @@ function renderFilters(tasks) {
 }
 
 function taskRowHTML(task) {
-    const priority = PRIORITY_INFO[task.priority] || PRIORITY_INFO[3];
+    const priority         = PRIORITY_INFO[task.priority] || PRIORITY_INFO[3];
     const normalizedStatus = taskPrimaryStatus(task);
-    const status = STATUS_META[normalizedStatus] || STATUS_META.open;
-    const textCategory = taskTextCategory(task);
-    const planKey = taskPlanDateKey(task);
-    const scheduleText =
-        taskStatusBucket(task) === 'closed'
+    const status           = STATUS_META[normalizedStatus] || STATUS_META.open;
+    const textCategory     = taskTextCategory(task);
+    const planKey          = taskPlanDateKey(task);
+    const scheduleText     = taskStatusBucket(task) === 'closed'
             ? task.completed_at || task.cancelled_at || task.updated_at
                 ? `${normalizedStatus === 'cancelled' ? '结束于' : '完成于'} · ${formatShortDate(task.completed_at || task.cancelled_at || task.updated_at)}`
                 : normalizedStatus === 'cancelled'
@@ -976,12 +975,12 @@ function renderListView(model) {
 }
 
 function boardCardHTML(task) {
-    const priority = PRIORITY_INFO[task.priority] || PRIORITY_INFO[3];
-    const status = STATUS_META[taskPrimaryStatus(task)] || STATUS_META.open;
+    const priority     = PRIORITY_INFO[task.priority] || PRIORITY_INFO[3];
+    const status       = STATUS_META[taskPrimaryStatus(task)] || STATUS_META.open;
     const textCategory = taskTextCategory(task);
-    const planKey = taskPlanDateKey(task);
-    const taskId = escapeHtml(task.id || '');
-    const pending = _pendingTaskIds.has(task.id);
+    const planKey      = taskPlanDateKey(task);
+    const taskId       = escapeHtml(task.id || '');
+    const pending      = _pendingTaskIds.has(task.id);
     const pendingAttrs = pending ? ' disabled aria-busy="true"' : '';
     return `
         <div class="tasks-board-card" data-task-id="${taskId}" draggable="${!pending}">
@@ -1307,7 +1306,7 @@ function attachListeners() {
             event.stopPropagation();
             const taskId = idValue(actionButton.dataset.id);
             const action = actionButton.dataset.action;
-            const task = (_overview?.all_tasks || []).find((item) => item.id === taskId);
+            const task   = (_overview?.all_tasks || []).find((item) => item.id === taskId);
             if (!task) return;
             if (action === 'edit') {
                 openTaskModal(task);
@@ -1362,7 +1361,7 @@ function attachListeners() {
                 zone.classList.remove('drag-over');
                 const taskId = _dragTaskId || idValue(event.dataTransfer?.getData('text/plain'));
                 const column = zone.dataset.col;
-                const task = (_overview?.all_tasks || []).find((item) => item.id === taskId);
+                const task   = (_overview?.all_tasks || []).find((item) => item.id === taskId);
                 if (!task || !['open', 'closed'].includes(column)) return;
                 const currentStatus = taskPrimaryStatus(task);
                 const nextStatus = column === 'open' ? 'open' : currentStatus === 'open' ? 'done' : currentStatus;

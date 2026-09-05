@@ -31,9 +31,9 @@ from core.plugin_base import segments as _core_segments
 from core.public_errors import public_error_message
 from core.public_errors import public_error_response as _core_public_error_response
 
-MessageSegment = dict[str, Any]
+MessageSegment  = dict[str, Any]
 MessageSegments = list[MessageSegment]
-OneBotEvent = dict[str, Any]
+OneBotEvent     = dict[str, Any]
 
 
 class Context(Protocol):
@@ -45,43 +45,43 @@ class Context(Protocol):
     def get_settings_snapshot(self) -> PluginSettingsSnapshot: ...
 
 
-segments = cast(Callable[[object], MessageSegments], _core_segments)
-record = cast(Callable[[str], MessageSegment], _core_record)
+segments              = cast(Callable[[object], MessageSegments], _core_segments)
+record                = cast(Callable[[str], MessageSegment], _core_record)
 public_error_response = cast(Callable[..., MessageSegments], _core_public_error_response)
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_REGION = "southeastasia"
+DEFAULT_REGION     = "southeastasia"
 DEFAULT_VOICE_NAME = "zh-CN-XiaomoNeural"
-DEFAULT_STYLE = "cheerful"
-DEFAULT_ROLE = "Girl"
+DEFAULT_STYLE      = "cheerful"
+DEFAULT_ROLE       = "Girl"
 
 MAX_TTS_TEXT_LENGTH = 500
-MAX_AUDIO_BYTES = 10 * 1024 * 1024
-MAX_CACHE_BYTES = 256 * 1024 * 1024
-MAX_PROXY_LENGTH = 2_048
+MAX_AUDIO_BYTES     = 10 * 1024 * 1024
+MAX_CACHE_BYTES     = 256 * 1024 * 1024
+MAX_PROXY_LENGTH    = 2_048
 
 _AZURE_API_TIMEOUT = aiohttp.ClientTimeout(total=60, connect=10, sock_read=45)
-_REGION_PATTERN = re.compile(r"[a-z0-9-]{1,32}\Z")
-_VOICE_NAME_PATTERN = re.compile(r"[A-Za-z0-9-]{1,128}\Z")
+_REGION_PATTERN       = re.compile(r"[a-z0-9-]{1,32}\Z")
+_VOICE_NAME_PATTERN   = re.compile(r"[A-Za-z0-9-]{1,128}\Z")
 _VOICE_OPTION_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
-_HELP_ALIASES = frozenset({"help", "帮助"})
-_HELP_TEXT = "🔊 文字转语音\n用法：/语音 <文本>\n别名：/念、/tts\n示例：/语音 你好，我是小青"
+_HELP_ALIASES         = frozenset({"help", "帮助"})
+_HELP_TEXT            = "🔊 文字转语音\n用法：/语音 <文本>\n别名：/念、/tts\n示例：/语音 你好，我是小青"
 
 _VOICE_SEMAPHORE = asyncio.Semaphore(2)
 _TTS_LOCKS = AsyncKeyedLockPool(max_keys=4_096)
 _TTS_CACHE_LIMITS = FileCacheLimits(
-    max_entries=2_048,
-    max_bytes=MAX_CACHE_BYTES,
-    ttl_seconds=7 * 24 * 60 * 60,
+    max_entries = 2_048,
+    max_bytes   = MAX_CACHE_BYTES,
+    ttl_seconds = 7 * 24 * 60 * 60,
 )
 _TTS_BODY_LIMITS = BodyLimits(
-    max_wire_bytes=MAX_AUDIO_BYTES,
-    max_decoded_bytes=MAX_AUDIO_BYTES,
+    max_wire_bytes    = MAX_AUDIO_BYTES,
+    max_decoded_bytes = MAX_AUDIO_BYTES,
 )
 _TTS_MIME = MimePolicy(
-    exact=frozenset({"application/octet-stream"}),
-    type_prefixes=frozenset({"audio/"}),
+    exact         = frozenset({"application/octet-stream"}),
+    type_prefixes = frozenset({"audio/"}),
 )
 
 
@@ -144,7 +144,7 @@ def _get_proxy(config: Mapping[str, object]) -> str | None:
         return None
     try:
         parsed = urlsplit(proxy)
-        port = parsed.port
+        port   = parsed.port
     except ValueError:
         return None
     if (
@@ -162,39 +162,39 @@ def _get_proxy(config: Mapping[str, object]) -> str | None:
 def _get_settings(context: Context) -> _VoiceSettings | None:
     """构造 TTS 配置；缺少订阅密钥时明确返回 ``None``。"""
 
-    config = _get_config(context)
+    config           = _get_config(context)
     subscription_key = _clean_config_text(
         config.get("subscription_key"),
-        default="",
-        max_chars=512,
+        default   = "",
+        max_chars = 512,
     )
     if not subscription_key:
         return None
     return _VoiceSettings(
-        subscription_key=subscription_key,
-        region=_clean_config_text(
+        subscription_key = subscription_key,
+        region           = _clean_config_text(
             config.get("region"),
-            default=DEFAULT_REGION,
-            max_chars=32,
-            pattern=_REGION_PATTERN,
+            default   = DEFAULT_REGION,
+            max_chars = 32,
+            pattern   = _REGION_PATTERN,
         ),
         voice_name=_clean_config_text(
             config.get("voice_name"),
-            default=DEFAULT_VOICE_NAME,
-            max_chars=128,
-            pattern=_VOICE_NAME_PATTERN,
+            default   = DEFAULT_VOICE_NAME,
+            max_chars = 128,
+            pattern   = _VOICE_NAME_PATTERN,
         ),
         style=_clean_config_text(
             config.get("style"),
-            default=DEFAULT_STYLE,
-            max_chars=64,
-            pattern=_VOICE_OPTION_PATTERN,
+            default   = DEFAULT_STYLE,
+            max_chars = 64,
+            pattern   = _VOICE_OPTION_PATTERN,
         ),
         role=_clean_config_text(
             config.get("role"),
-            default=DEFAULT_ROLE,
-            max_chars=64,
-            pattern=_VOICE_OPTION_PATTERN,
+            default   = DEFAULT_ROLE,
+            max_chars = 64,
+            pattern   = _VOICE_OPTION_PATTERN,
         ),
         proxy=_get_proxy(config),
     )
@@ -223,8 +223,8 @@ def _get_cached_audio(cache: BoundedFileCache, filename: str) -> Path | None:
         size = path.stat().st_size
         with path.open("rb") as stream:
             header_buffer = bytearray(3)
-            header_size = stream.readinto(header_buffer)
-            header = bytes(header_buffer[:header_size])
+            header_size   = stream.readinto(header_buffer)
+            header        = bytes(header_buffer[:header_size])
     except OSError:
         return None
     if 3 <= size <= MAX_AUDIO_BYTES and _looks_like_mp3(header):
@@ -259,9 +259,9 @@ async def text_to_speech(text: str, context: Context) -> str | None:
         return None
 
     try:
-        cache_key = _tts_cache_key(normalized_text, settings)
-        filename = f"tts_{cache_key}.mp3"
-        cache = BoundedFileCache(Path(context.data_dir) / "audio", _TTS_CACHE_LIMITS)
+        cache_key   = _tts_cache_key(normalized_text, settings)
+        filename    = f"tts_{cache_key}.mp3"
+        cache       = BoundedFileCache(Path(context.data_dir) / "audio", _TTS_CACHE_LIMITS)
         output_file = await asyncio.to_thread(_get_cached_audio, cache, filename)
         if output_file is not None:
             return str(output_file.resolve())
@@ -276,7 +276,7 @@ async def text_to_speech(text: str, context: Context) -> str | None:
             f"{xml_escape(normalized_text)}"
             "</mstts:express-as></voice></speak>"
         )
-        url = f"https://{settings.region}.tts.speech.microsoft.com/cognitiveservices/v1"
+        url     = f"https://{settings.region}.tts.speech.microsoft.com/cognitiveservices/v1"
         headers = {
             "Ocp-Apim-Subscription-Key": settings.subscription_key,
             "X-Microsoft-OutputFormat": "audio-24khz-96kbitrate-mono-mp3",
@@ -302,11 +302,11 @@ async def text_to_speech(text: str, context: Context) -> str | None:
                         context.http_session,
                         "POST",
                         url,
-                        limits=_TTS_BODY_LIMITS,
-                        mime_policy=_TTS_MIME,
-                        headers=headers,
-                        request_kwargs=request_kwargs,
-                        accept_encoding="identity",
+                        limits          = _TTS_BODY_LIMITS,
+                        mime_policy     = _TTS_MIME,
+                        headers         = headers,
+                        request_kwargs  = request_kwargs,
+                        accept_encoding = "identity",
                     )
                 except HttpStatusError as exc:
                     logger.error("Azure TTS API 返回非成功状态：%s", exc.status)

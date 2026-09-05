@@ -3,14 +3,14 @@
 import { escapeHtml } from './utils/ui.js';
 import { fetchUserTimeZone } from './utils/timezone.js';
 
-const routes = new Map();
+const routes               = new Map();
 const routeChangeCallbacks = new Set();
 
-let contentEl = null;
-let currentLifecycle = null;
-let hashListenerBound = false;
+let contentEl           = null;
+let currentLifecycle    = null;
+let hashListenerBound   = false;
 let requestedNavigation = 0;
-let routeLoadChain = Promise.resolve();
+let routeLoadChain      = Promise.resolve();
 
 export function registerRoute(path, loader) {
     routes.set(path, loader);
@@ -21,10 +21,10 @@ export function navigate(path) {
 }
 
 export function getParams() {
-    const hash = window.location.hash.replace(/^#\/?/, '');
+    const hash       = window.location.hash.replace(/^#\/?/, '');
     const queryIndex = hash.indexOf('?');
-    const path = queryIndex >= 0 ? hash.slice(0, queryIndex) : hash;
-    const params = new URLSearchParams(queryIndex >= 0 ? hash.slice(queryIndex + 1) : '');
+    const path       = queryIndex >= 0 ? hash.slice(0, queryIndex) : hash;
+    const params     = new URLSearchParams(queryIndex >= 0 ? hash.slice(queryIndex + 1) : '');
     return { path: path || 'dashboard', params };
 }
 
@@ -86,7 +86,7 @@ async function loadRoute({ path, params }, navigationId) {
 
 function queueCurrentRoute() {
     const navigationId = ++requestedNavigation;
-    const route = getParams();
+    const route        = getParams();
 
     // 新导航立即让旧页停止监听；异步收尾完成后只装载最后一次请求。
     destroyCurrentPage();

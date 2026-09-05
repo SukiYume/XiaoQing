@@ -151,7 +151,7 @@ PROMPT_END_DECISION = """{persona_text}。刚刚你决定结束一场 QQ {channe
 class PFCPlan:
     action: str
     reason: str
-    thinking: str = ""
+    thinking: str     = ""
     wait_seconds: int = 0
 
 
@@ -207,7 +207,7 @@ def _planner_total_timeout_seconds(secrets: dict[str, Any], timeout_seconds: flo
         profile_count = 1
     else:
         providers = secrets.get("_providers")
-        profiles = (
+        profiles  = (
             {
                 str(item.get("profile") or "").strip()
                 for item in providers.values()
@@ -242,19 +242,19 @@ async def plan_next_action(
     retry_interval_seconds: float,
     current_text: str = "",
 ) -> PFCPlan:
-    model = secrets.get("model", "")
+    model           = secrets.get("model", "")
     fallback_action = "direct_reply" if is_private else "wait"
     if "_ai" in secrets and secrets.get("_ai") is None:
         return PFCPlan(action=fallback_action, reason="ai_route_unavailable")
 
-    persona_text = _build_persona_text(bot_name, personality)
-    goals_str = _goals_to_text(goal_list) or "- 自然聊天"
+    persona_text       = _build_persona_text(bot_name, personality)
+    goals_str          = _goals_to_text(goal_list) or "- 自然聊天"
     knowledge_info_str = _knowledge_to_text(knowledge_list)
-    chat_history_text = build_dialogue_prompt(
+    chat_history_text  = build_dialogue_prompt(
         history, bot_name=bot_name, truncate=True, max_chars=1200
     )
-    time_info = _time_since_last_bot(history)
-    channel = "私聊" if is_private else "群聊"
+    time_info         = _time_since_last_bot(history)
+    channel           = "私聊" if is_private else "群聊"
     participation_cue = ""
     if not is_private and not last_successful_reply_action:
         # 分类器已经排除点给其他人的消息；上游频控也已经完成概率、间隔和限流。
@@ -262,8 +262,8 @@ async def plan_next_action(
         participation_cue = _group_participation_cue(current_text)
         if participation_cue:
             return PFCPlan(
-                action="direct_reply",
-                reason=f"fresh_group_participation:{participation_cue}",
+                action = "direct_reply",
+                reason = f"fresh_group_participation:{participation_cue}",
             )
 
     tpl = (
@@ -279,31 +279,33 @@ async def plan_next_action(
         return t[: max(0, n - 1)].rstrip() + "…"
 
     prompt = tpl.format(
-        persona_text=persona_text,
-        channel=channel,
-        goals_str=goals_str,
-        knowledge_info_str=(_truncate(knowledge_info_str, 480) + "\n")
+        persona_text       = persona_text,
+        channel            = channel,
+        goals_str          = goals_str,
+        knowledge_info_str = (_truncate(knowledge_info_str, 480) + "\n")
         if knowledge_info_str
         else "",
-        action_history_summary=_truncate(action_history_summary, 360) or "（暂无）",
-        last_action_context=_truncate(last_action_context, 360) or "（暂无）",
-        time_since_last_bot_message_info=time_info,
-        timeout_context=timeout_context.strip(),
-        chat_history_text=chat_history_text,
+        action_history_summary           = _truncate(action_history_summary, 360) or "（暂无）",
+        last_action_context              = _truncate(last_action_context, 360) or "（暂无）",
+        time_since_last_bot_message_info = time_info,
+        timeout_context                  = timeout_context.strip(),
+        chat_history_text                = chat_history_text,
     )
+    if current_text.strip():
+        prompt += "\n本轮目标消息：\n" + current_text.strip()
 
     try:
         t0 = time.monotonic()
         resp, _path = await chat_completions_raw_with_fallback_paths(
-            secrets=secrets,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=min(0.7, float(temperature)),
-            top_p=float(top_p),
-            max_tokens=min(400, max(200, int(max_tokens))),
-            timeout_seconds=float(timeout_seconds),
-            total_timeout_seconds=_planner_total_timeout_seconds(secrets, timeout_seconds),
-            max_retry=int(max_retry),
-            retry_interval_seconds=float(retry_interval_seconds),
+            secrets                = secrets,
+            messages               = [{"role": "user", "content": prompt}],
+            temperature            = min(0.7, float(temperature)),
+            top_p                  = float(top_p),
+            max_tokens             = min(400, max(200, int(max_tokens))),
+            timeout_seconds        = float(timeout_seconds),
+            total_timeout_seconds  = _planner_total_timeout_seconds(secrets, timeout_seconds),
+            max_retry              = int(max_retry),
+            retry_interval_seconds = float(retry_interval_seconds),
         )
         _log_planner_step(
             {
@@ -339,23 +341,25 @@ async def plan_next_action(
         str(content),
         "action",
         "reason",
-        default_values={
+        optional_items = ("thinking", "wait_seconds"),
+        default_values = {
             "action": fallback_action,
             "reason": "",
             "thinking": "",
             "wait_seconds": 0,
         },
-        required_types={"action": str, "reason": str},
-        allow_array=False,
+        required_types = {"action": str, "reason": str},
+        allow_array    = False,
     )
     if not ok or not isinstance(obj, dict):
         return PFCPlan(action=fallback_action, reason="planner_invalid_response")
-    act = str(obj.get("action", "") or "").strip().casefold()
-    reason = str(obj.get("reason", "") or "").strip()
-    thinking = str(obj.get("thinking", "") or "").strip()
+    act              = str(obj.get("action", "") or "").strip().casefold()
+    reason           = str(obj.get("reason", "") or "").strip()
+    raw_thinking     = obj.get("thinking", "")
+    thinking         = raw_thinking.strip() if isinstance(raw_thinking, str) else ""
     raw_wait_seconds = obj.get("wait_seconds", 0)
-    wait_seconds = raw_wait_seconds if type(raw_wait_seconds) is int else 0
-    wait_seconds = max(0, min(30, wait_seconds))
+    wait_seconds     = raw_wait_seconds if type(raw_wait_seconds) is int else 0
+    wait_seconds     = max(0, min(30, wait_seconds))
     if act not in _ALLOWED_PLANNER_ACTIONS:
         return PFCPlan(action=fallback_action, reason="planner_invalid_action")
     return PFCPlan(action=act, reason=reason, thinking=thinking, wait_seconds=wait_seconds)
@@ -378,8 +382,8 @@ async def decide_say_bye(
     if "_ai" in secrets and secrets.get("_ai") is None:
         return False, ""
 
-    persona_text = _build_persona_text(bot_name, personality)
-    channel = "私聊" if is_private else "群聊"
+    persona_text      = _build_persona_text(bot_name, personality)
+    channel           = "私聊" if is_private else "群聊"
     chat_history_text = build_dialogue_prompt(
         history, bot_name=bot_name, truncate=True, max_chars=2200
     )
@@ -389,14 +393,14 @@ async def decide_say_bye(
 
     try:
         resp, _ = await chat_completions_raw_with_fallback_paths(
-            secrets=secrets,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=min(0.4, float(temperature)),
-            top_p=float(top_p),
-            max_tokens=min(400, int(max_tokens)),
-            timeout_seconds=float(timeout_seconds),
-            max_retry=int(max_retry),
-            retry_interval_seconds=float(retry_interval_seconds),
+            secrets                = secrets,
+            messages               = [{"role": "user", "content": prompt}],
+            temperature            = min(0.4, float(temperature)),
+            top_p                  = float(top_p),
+            max_tokens             = min(400, int(max_tokens)),
+            timeout_seconds        = float(timeout_seconds),
+            max_retry              = int(max_retry),
+            retry_interval_seconds = float(retry_interval_seconds),
         )
     except Exception:
         return False, ""
@@ -405,9 +409,9 @@ async def decide_say_bye(
         str(content),
         "say_bye",
         "reason",
-        default_values={"say_bye": "no", "reason": ""},
-        required_types={"say_bye": str, "reason": str},
-        allow_array=False,
+        default_values = {"say_bye": "no", "reason": ""},
+        required_types = {"say_bye": str, "reason": str},
+        allow_array    = False,
     )
     if not ok or not isinstance(obj, dict):
         return False, ""

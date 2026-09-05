@@ -26,9 +26,9 @@ def test_run_git_retries_one_known_index_lock_failure(
             subprocess.CompletedProcess([], 0, "abc123\n", ""),
         ]
     )
-    calls: list[list[str]] = []
+    calls: list[list[str]]             = []
     environments: list[dict[str, str]] = []
-    sleeps: list[float] = []
+    sleeps: list[float]                = []
 
     def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         calls.append(command)
@@ -78,7 +78,7 @@ def test_run_git_bounds_diagnostics_and_stops_after_retry_budget(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls = 0
+    calls      = 0
     diagnostic = "fatal: unable to write new index file " + "x" * 3_000
 
     def fake_run(

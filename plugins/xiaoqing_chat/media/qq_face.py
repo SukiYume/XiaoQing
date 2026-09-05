@@ -26,7 +26,7 @@ _GENERIC_FACE_LABELS = frozenset(
 
 
 def _strip_wrapping_brackets(text: str) -> str:
-    pairs = (("[", "]"), ("【", "】"), ("(", ")"), ("（", "）"))
+    pairs   = (("[", "]"), ("【", "】"), ("(", ")"), ("（", "）"))
     cleaned = text.strip()
     while cleaned:
         stripped = cleaned

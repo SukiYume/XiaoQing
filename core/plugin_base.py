@@ -21,12 +21,12 @@ from .plugin_execution import offload_plugin_sync
 
 # 类型别名
 Segments = list[dict[str, Any]]
-Event = dict[str, Any]
-T = TypeVar("T")
+Event    = dict[str, Any]
+T        = TypeVar("T")
 
 logger = logging.getLogger(__name__)
 
-_EXTERNAL_ANSI_PATTERN = re.compile(r"(?:\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~])")
+_EXTERNAL_ANSI_PATTERN    = re.compile(r"(?:\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~])")
 _EXTERNAL_CONTROL_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 
 
@@ -34,7 +34,7 @@ def has_control_characters(
     value: str,
     *,
     allow_formatting_whitespace: bool = False,
-    include_c1: bool = False,
+    include_c1: bool                  = False,
 ) -> bool:
     """判断文本是否含有调用方策略禁止的 C0、DEL 或 C1 控制字符。
 
@@ -79,11 +79,11 @@ def bounded_external_text(
     *,
     max_chars: int,
     max_bytes: int,
-    default: str = "",
-    suffix: str = "…",
+    default: str     = "",
+    suffix: str      = "…",
     strip_ansi: bool = True,
-    strip: bool = True,
-    truncate: bool = True,
+    strip: bool      = True,
+    truncate: bool   = True,
 ) -> str:
     """Turn an untrusted scalar into visible text under character and UTF-8 budgets.
 
@@ -118,9 +118,9 @@ def bounded_external_text(
 
     bounded_suffix = _normalize_external_text(suffix, strip_ansi=True, strip=False)
     bounded_suffix = _utf8_prefix(bounded_suffix[:max_chars], max_bytes)
-    char_budget = max(0, max_chars - len(bounded_suffix))
-    byte_budget = max(0, max_bytes - len(bounded_suffix.encode("utf-8")))
-    prefix = _utf8_prefix(candidate[:char_budget], byte_budget)
+    char_budget    = max(0, max_chars - len(bounded_suffix))
+    byte_budget    = max(0, max_bytes - len(bounded_suffix.encode("utf-8")))
+    prefix         = _utf8_prefix(candidate[:char_budget], byte_budget)
     return prefix + bounded_suffix
 
 
@@ -169,7 +169,7 @@ def emoji(file_path: str, *, summary: str = "") -> dict[str, Any]:
     + `sub_type=emoji`，避免在插件内部把表情包和普通图片折叠成同一语义。
     """
     data: dict[str, Any] = {"file": _to_file_uri(file_path)}
-    summary_text = str(summary or "").strip()
+    summary_text         = str(summary or "").strip()
     if summary_text:
         data["summary"] = summary_text
     return {"type": "emoji", "data": data}
@@ -360,14 +360,14 @@ def split_message_segments(
         return [segs]
 
     chunks: list[Segments] = []
-    current: Segments = []
-    current_text_length = 0
+    current: Segments      = []
+    current_text_length    = 0
 
     def flush() -> None:
         nonlocal current, current_text_length
         if current:
             chunks.append(current)
-        current = []
+        current             = []
         current_text_length = 0
 
     for segment in segs:
@@ -394,14 +394,14 @@ def split_message_segments(
             if len(remaining) <= available:
                 split_at = len(remaining)
             else:
-                newline = remaining.rfind("\n", 0, available + 1)
+                newline  = remaining.rfind("\n", 0, available)
                 split_at = newline + 1 if newline >= 0 else available
 
-            piece = remaining[:split_at]
-            cloned = dict(segment)
-            cloned_data = dict(data)
+            piece               = remaining[:split_at]
+            cloned              = dict(segment)
+            cloned_data         = dict(data)
             cloned_data["text"] = piece
-            cloned["data"] = cloned_data
+            cloned["data"]      = cloned_data
             current.append(cloned)
             current_text_length += len(piece)
             remaining = remaining[split_at:]

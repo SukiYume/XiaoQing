@@ -24,11 +24,11 @@ async def test_event_collection_reminders_batch_all_child_logs(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    db = Database(str(tmp_path / "pendo-event-batch-family.db"))
-    owner_id = "u-event-batch"
-    event_ids = _seed_event_batch_fixture(db, owner_id)
-    handler = EventHandler(db, SimpleNamespace(), SimpleNamespace())
-    original_logs = db.get_reminder_logs_by_item_ids
+    db                           = Database(str(tmp_path / "pendo-event-batch-family.db"))
+    owner_id                     = "u-event-batch"
+    event_ids                    = _seed_event_batch_fixture(db, owner_id)
+    handler                      = EventHandler(db, SimpleNamespace(), SimpleNamespace())
+    original_logs                = db.get_reminder_logs_by_item_ids
     batched_ids: list[list[str]] = []
 
     def counted_logs(request_owner: str, item_ids: list[str]):
@@ -55,13 +55,13 @@ async def test_event_list_batch_query_does_not_block_event_loop(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    db = Database(str(tmp_path / "pendo-event-batch-responsive.db"))
+    db       = Database(str(tmp_path / "pendo-event-batch-responsive.db"))
     owner_id = "u-event-batch"
     _seed_event_batch_fixture(db, owner_id)
-    handler = EventHandler(db, SimpleNamespace(), SimpleNamespace())
+    handler              = EventHandler(db, SimpleNamespace(), SimpleNamespace())
     original_collections = db.get_event_collections_by_ids
-    started = threading.Event()
-    release = threading.Event()
+    started              = threading.Event()
+    release              = threading.Event()
 
     def blocking_collections(request_owner: str, collection_ids: list[str]):
         started.set()
@@ -92,12 +92,12 @@ def test_event_collection_reminder_update_rolls_back_every_child(
     tmp_path: Path,
 ) -> None:
     """系列提醒任一节点失败时，节点和集合头都不得部分提交。"""
-    db = Database(str(tmp_path / "pendo-event-reminder-atomic.db"))
-    owner_id = "u-reminder-atomic"
+    db            = Database(str(tmp_path / "pendo-event-reminder-atomic.db"))
+    owner_id      = "u-reminder-atomic"
     collection_id = "reminder-atomic"
-    child_ids = ["reminder-atomic-m01", "reminder-atomic-m02"]
-    old_rules = [{"offset_seconds": 0}]
-    new_rules = [{"offset_seconds": 3600}, {"offset_seconds": 0}]
+    child_ids     = ["reminder-atomic-m01", "reminder-atomic-m02"]
+    old_rules     = [{"offset_seconds": 0}]
+    new_rules     = [{"offset_seconds": 3600}, {"offset_seconds": 0}]
     try:
         db.create_event_collection(
             {
@@ -126,7 +126,7 @@ def test_event_collection_reminder_update_rolls_back_every_child(
             )
 
         original_sync = db._sync_reminder_logs
-        sync_calls = 0
+        sync_calls    = 0
 
         def fail_second_sync(cursor, item_id, remind_times):
             nonlocal sync_calls
@@ -158,10 +158,10 @@ def test_event_collection_reminder_update_rolls_back_every_child(
 
 
 def test_delete_last_multi_node_child_and_undo_restores_whole_family(tmp_path: Path) -> None:
-    db = Database(str(tmp_path / "pendo-event-last-child-undo.db"))
-    owner_id = "u-last-child"
+    db            = Database(str(tmp_path / "pendo-event-last-child-undo.db"))
+    owner_id      = "u-last-child"
     collection_id = "last-child-collection"
-    child_id = "last-child-event"
+    child_id      = "last-child-event"
     try:
         db.create_event_collection(
             {
@@ -198,7 +198,7 @@ def test_delete_last_multi_node_child_and_undo_restores_whole_family(tmp_path: P
 
 
 def test_event_range_uses_user_timezone_and_two_day_offset_prefilter(tmp_path: Path) -> None:
-    db = Database(str(tmp_path / "pendo-event-offset-range.db"))
+    db       = Database(str(tmp_path / "pendo-event-offset-range.db"))
     owner_id = "u-offset-range"
     try:
         db.update_user_settings(owner_id, {"timezone": "Etc/GMT+12"})
@@ -241,7 +241,7 @@ def test_event_range_uses_user_timezone_and_two_day_offset_prefilter(tmp_path: P
 
 
 def test_recurring_instances_and_time_only_edit_preserve_explicit_offset() -> None:
-    start = datetime.fromisoformat("2030-01-01T09:00:00+08:00")
+    start    = datetime.fromisoformat("2030-01-01T09:00:00+08:00")
     user_now = datetime.fromisoformat("2029-12-31T00:00:00+00:00")
 
     instances, exhausted = EventHandler._expand_recurring_instances(
@@ -270,8 +270,8 @@ def test_recurring_instances_and_time_only_edit_preserve_explicit_offset() -> No
 
 def test_event_wall_time_edit_rejects_dst_gap_and_fold() -> None:
     event = SimpleNamespace(
-        start_time="2030-03-09T14:00:00-05:00",
-        timezone="America/New_York",
+        start_time = "2030-03-09T14:00:00-05:00",
+        timezone   = "America/New_York",
     )
 
     assert EventHandler._normalize_datetime_candidate("2030-03-10 02:30", event) is None
@@ -299,7 +299,7 @@ async def test_invalid_milestone_payload_returns_error_instead_of_crashing() -> 
 async def test_far_future_event_reminder_and_corrupt_time_are_handled_safely(
     tmp_path: Path,
 ) -> None:
-    db = Database(str(tmp_path / "pendo-event-far-reminder.db"))
+    db       = Database(str(tmp_path / "pendo-event-far-reminder.db"))
     owner_id = "u-far-reminder"
     try:
         with pytest.raises(ValueError, match="Invalid remind_times"):
@@ -333,7 +333,7 @@ async def test_far_future_event_reminder_and_corrupt_time_are_handled_safely(
         db.cache_clear()
         handler = EventHandler(db, SimpleNamespace(), SimpleNamespace())
 
-        listed = await handler.list_reminders(owner_id, "2030-01-01", SimpleNamespace())
+        listed    = await handler.list_reminders(owner_id, "2030-01-01", SimpleNamespace())
         confirmed = await handler.confirm_event_reminders(
             owner_id,
             "far-reminder-event all",
@@ -428,7 +428,7 @@ def test_diary_metadata_parser_is_case_insensitive_and_accumulates_tags() -> Non
     from plugins.pendo.handlers.diary import DiaryHandler
 
     handler = DiaryHandler(SimpleNamespace())
-    parsed = handler._parse_diary_text(
+    parsed  = handler._parse_diary_text(
         'TAG:工作,复盘 tag:复盘,生活 WEATHER:"多云 转晴" FAVORITE:TRUE 今天完成整理。'
     )
 
@@ -469,7 +469,7 @@ async def test_diary_template_session_rejects_corrupt_progress() -> None:
             return True
 
     context = _Context()
-    result = await DiaryHandler(SimpleNamespace()).handle_session_message(
+    result  = await DiaryHandler(SimpleNamespace()).handle_session_message(
         "u-corrupt",
         "不应写入",
         context,
@@ -508,7 +508,7 @@ async def test_diary_template_session_uses_scoped_user_identity(
         async def end_session(self):
             return True
 
-    handler = DiaryHandler(SimpleNamespace())
+    handler           = DiaryHandler(SimpleNamespace())
     handler.templates = {
         "review": {"name": "复盘", "prompts": ["今天做了什么？"]},
     }
@@ -541,7 +541,7 @@ async def test_diary_entries_on_same_day_have_deterministic_latest_first_order(
 ) -> None:
     from plugins.pendo.handlers.diary import DiaryHandler
 
-    db = Database(str(tmp_path / "pendo-diary-order.db"))
+    db       = Database(str(tmp_path / "pendo-diary-order.db"))
     owner_id = "u-diary-order"
     try:
         for item_id, entry_time, content in (
@@ -588,10 +588,10 @@ async def test_web_handler_rejects_trailing_subcommand_arguments(
         raise AssertionError("非精确 Web 子命令不应触发运行时动作")
 
     server = SimpleNamespace(
-        get_url=unexpected_call,
-        is_running=unexpected_call,
-        start=unexpected_call,
-        stop=unexpected_call,
+        get_url    = unexpected_call,
+        is_running = unexpected_call,
+        start      = unexpected_call,
+        stop       = unexpected_call,
     )
     monkeypatch.setattr(web_module, "web_server", server)
     monkeypatch.setattr(web_module, "issue_login_code", unexpected_call)
@@ -628,10 +628,10 @@ async def test_web_private_delivery_failure_never_echoes_login_code(
     from plugins.pendo.handlers import web as web_module
 
     server = SimpleNamespace(
-        get_url=lambda: "http://127.0.0.1:12001",
-        is_running=lambda: True,
-        start=lambda _db: True,
-        stop=lambda: True,
+        get_url    = lambda: "http://127.0.0.1:12001",
+        is_running = lambda: True,
+        start      = lambda _db: True,
+        stop       = lambda: True,
     )
 
     async def fail_send(_action: dict[str, Any]) -> bool:
@@ -670,11 +670,11 @@ async def test_web_start_ignores_noncallable_error_reader(
     from plugins.pendo.handlers import web as web_module
 
     server = SimpleNamespace(
-        get_url=lambda: "http://127.0.0.1:12001",
-        is_running=lambda: False,
-        start=lambda _db: False,
-        stop=lambda: True,
-        get_last_error="not-callable",
+        get_url        = lambda: "http://127.0.0.1:12001",
+        is_running     = lambda: False,
+        start          = lambda _db: False,
+        stop           = lambda: True,
+        get_last_error = "not-callable",
     )
     monkeypatch.setattr(web_module, "web_server", server)
     monkeypatch.setattr(
@@ -688,7 +688,9 @@ async def test_web_start_ignores_noncallable_error_reader(
         lambda *_args, **_kwargs: "unused-widget-token",
     )
 
-    result = await web_module.WebHandler(db=None).handle("1001", "start", context=None)
+    result = await web_module.WebHandler(db=None).handle(
+        "1001", "start", context=SimpleNamespace(is_global_admin=lambda _uid: True)
+    )
 
     assert result["status"] == "error"
     assert "服务启动失败" in result["message"]
@@ -725,9 +727,9 @@ async def test_web_handler_offloads_blocking_runtime_calls(
     """网络探测、启停等待和密钥签发不得占用命令事件循环。"""
     from plugins.pendo.handlers import web as web_module
 
-    event_loop_thread = threading.get_ident()
+    event_loop_thread            = threading.get_ident()
     call_threads: dict[str, int] = {}
-    running = False
+    running                      = False
 
     def is_running() -> bool:
         call_threads["is_running"] = threading.get_ident()
@@ -736,13 +738,13 @@ async def test_web_handler_offloads_blocking_runtime_calls(
     def start(_db: Any) -> bool:
         nonlocal running
         call_threads["start"] = threading.get_ident()
-        running = True
+        running               = True
         return True
 
     def stop() -> bool:
         nonlocal running
         call_threads["stop"] = threading.get_ident()
-        running = False
+        running              = False
         return True
 
     def generate_widget(*_args: Any, **_kwargs: Any) -> str:
@@ -753,11 +755,11 @@ async def test_web_handler_offloads_blocking_runtime_calls(
         return True
 
     server = SimpleNamespace(
-        get_url=lambda: "http://127.0.0.1:12001",
-        is_running=is_running,
-        is_managed_running=lambda: running,
-        start=start,
-        stop=stop,
+        get_url            = lambda: "http://127.0.0.1:12001",
+        is_running         = is_running,
+        is_managed_running = lambda: running,
+        start              = start,
+        stop               = stop,
     )
     monkeypatch.setattr(web_module, "web_server", server)
     monkeypatch.setattr(
@@ -767,7 +769,7 @@ async def test_web_handler_offloads_blocking_runtime_calls(
     )
     monkeypatch.setattr(web_module, "generate_widget_token", generate_widget)
     handler = web_module.WebHandler(db=None)
-    context = SimpleNamespace(send_action=send_action)
+    context = SimpleNamespace(send_action=send_action, is_global_admin=lambda _uid: True)
 
     assert (await handler.handle("1001", "start", context=context))["status"] == "success"
     assert (await handler.handle("1001", "widget-token", context=context))["status"] == "success"

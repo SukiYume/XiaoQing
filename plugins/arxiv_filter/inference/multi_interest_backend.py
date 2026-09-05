@@ -78,7 +78,7 @@ class MultiInterestInferenceModel:
         if not isinstance(payload, Mapping):
             raise ValueError("artifacts.joblib must contain a mapping")
         self.artifacts = ModelArtifacts(**payload)
-        artifacts = self.artifacts
+        artifacts      = self.artifacts
         if not isinstance(artifacts.encoder_name, str) or not artifacts.encoder_name.strip():
             raise ValueError("encoder_name must be a non-empty string")
         if type(artifacts.n_interests) is not int or artifacts.n_interests <= 0:
@@ -92,7 +92,7 @@ class MultiInterestInferenceModel:
         ):
             raise ValueError("threshold must be a finite number")
         expected_dim = artifacts.embedding_dim
-        centers = np.asarray(artifacts.interest_centers)
+        centers      = np.asarray(artifacts.interest_centers)
         pos_centroid = np.asarray(artifacts.pos_centroid)
         neg_centroid = (
             None if artifacts.neg_centroid is None else np.asarray(artifacts.neg_centroid)
@@ -132,8 +132,8 @@ class MultiInterestInferenceModel:
             raise ValueError("columns must map strings to strings or null")
 
         sentence_transformer = importlib.import_module("sentence_transformers").SentenceTransformer
-        self.encoder = sentence_transformer(artifacts.encoder_name)
-        encoder_dim = int(self.encoder.get_sentence_embedding_dimension())
+        self.encoder         = sentence_transformer(artifacts.encoder_name)
+        encoder_dim          = int(self.encoder.get_sentence_embedding_dimension())
         if encoder_dim != expected_dim:
             raise ValueError("encoder output dimension does not match model artifacts")
         self._use_fp16 = torch.cuda.is_available()
@@ -156,8 +156,8 @@ class MultiInterestInferenceModel:
         return cast(np.ndarray, emb.astype(np.float32))
 
     def _build_features(self, embeddings: np.ndarray) -> np.ndarray:
-        a = self.artifacts
-        matrix = np.asarray(embeddings)
+        a            = self.artifacts
+        matrix       = np.asarray(embeddings)
         expected_dim = int(np.asarray(a.interest_centers).shape[1])
         if matrix.ndim != 2 or matrix.shape[1] != expected_dim:
             raise ValueError(f"embeddings must have shape (n, {expected_dim})")
@@ -205,8 +205,8 @@ class MultiInterestInferenceModel:
             raise ValueError("unsupported input_mode")
 
         # 解析列名：优先用训练时的列名，fallback 到常见列名
-        cols = self.artifacts.columns
-        title_col = resolve_dataframe_column(df, cols.get("title"), ("Title", "title"))
+        cols         = self.artifacts.columns
+        title_col    = resolve_dataframe_column(df, cols.get("title"), ("Title", "title"))
         abstract_col = None
         if input_mode != "title_only":
             abstract_col = resolve_dataframe_column(
@@ -217,9 +217,9 @@ class MultiInterestInferenceModel:
             if abstract_col is None:
                 raise ValueError("title_abstract input requires an abstract column")
 
-        texts = build_paper_texts(df, title_col, abstract_col)
+        texts      = build_paper_texts(df, title_col, abstract_col)
         embeddings = self.encode_texts(texts)
-        X = self._build_features(embeddings)
+        X          = self._build_features(embeddings)
         # sklearn 的运行时返回是 ndarray，但其泛型在当前 stubs 中退化为 Any。
         return cast(np.ndarray, self.artifacts.classifier.predict_proba(X)[:, 1])
 
@@ -237,10 +237,10 @@ def run_multi_interest_inference(
 
     自动从 params 中读取 model_path、threshold、input_mode。
     """
-    tcfg = load_training_config(params.model_path)
-    runtime_path = resolve_multi_interest_model_path(params.model_path, tcfg)
+    tcfg          = load_training_config(params.model_path)
+    runtime_path  = resolve_multi_interest_model_path(params.model_path, tcfg)
     resolved_path = str(Path(runtime_path).resolve())
-    cache_key = (
+    cache_key     = (
         resolved_path,
         resolve_artifact_fingerprint(params, resolved_path),
         int(params.batch_size),

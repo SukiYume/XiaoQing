@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from .context import PluginContext
     from .plugin_execution import PluginExecutionGate
 
-logger = logging.getLogger(__name__)
+logger  = logging.getLogger(__name__)
 Handler = Callable[[str, str, dict[str, Any], "PluginContext"], Awaitable[list[dict[str, Any]]]]
 
 
@@ -27,10 +27,10 @@ class CommandConflictError(ValueError):
         first: CommandSpec,
         second: CommandSpec,
     ) -> None:
-        self.trigger = trigger
+        self.trigger  = trigger
         self.priority = priority
-        self.first = first
-        self.second = second
+        self.first    = first
+        self.second   = second
         super().__init__(
             "ambiguous command trigger "
             f"{trigger!r} at priority {priority}: "
@@ -49,11 +49,11 @@ class CommandCatalogNode:
     aliases: tuple[str, ...]
     help_text: str
     usage: str
-    match_mode: str = "prefix"
-    permission: str = "public"
-    contexts: tuple[str, ...] = ("private", "group")
-    examples: tuple[str, ...] = ()
-    invalid_examples: tuple[str, ...] = ()
+    match_mode: str                          = "prefix"
+    permission: str                          = "public"
+    contexts: tuple[str, ...]                = ("private", "group")
+    examples: tuple[str, ...]                = ()
+    invalid_examples: tuple[str, ...]        = ()
     children: tuple[CommandCatalogNode, ...] = ()
 
     def walk(self) -> tuple[CommandCatalogNode, ...]:
@@ -96,14 +96,14 @@ class CommandCatalogNode:
 def format_command_catalog(
     root: CommandCatalogNode,
     *,
-    title: str | None = None,
+    title: str | None      = None,
     include_examples: bool = False,
 ) -> str:
     """把一个目录子树渲染成可读帮助；命令码和用法始终完整保留。"""
 
     lines = [title or f"📚 {root.plugin} 命令目录", ""]
     for node in root.walk():
-        depth = max(0, len(node.path) - len(root.path))
+        depth  = max(0, len(node.path) - len(root.path))
         marker = "  " * depth + "•"
         lines.append(f"{marker} [{node.code}] {node.usage}")
         lines.append(f"{'  ' * (depth + 1)}{node.help_text}")
@@ -162,70 +162,70 @@ def build_command_catalog_node(
     command: Mapping[str, Any],
     *,
     parent_code_path: tuple[str, ...] = (),
-    parent_path: tuple[str, ...] = (),
-    parent_permission: str = "public",
-    parent_contexts: tuple[str, ...] = ("private", "group"),
-    root: bool = False,
+    parent_path: tuple[str, ...]      = (),
+    parent_permission: str            = "public",
+    parent_contexts: tuple[str, ...]  = ("private", "group"),
+    root: bool                        = False,
 ) -> CommandCatalogNode:
     """把已校验的 manifest 命令递归展开成 Core 的不可变公开快照。"""
 
     code_name = str(command["name"])
     if root:
         triggers = tuple(str(value) for value in command["triggers"])
-        name = triggers[0]
-        aliases = triggers[1:]
+        name     = triggers[0]
+        aliases  = triggers[1:]
     else:
-        name = code_name
+        name    = code_name
         aliases = tuple(str(value) for value in command.get("aliases", ()))
 
-    code_path = (*parent_code_path, code_name)
-    path = (*parent_path, name)
-    permission = _effective_command_permission(parent_permission, command.get("permission"))
+    code_path         = (*parent_code_path, code_name)
+    path              = (*parent_path, name)
+    permission        = _effective_command_permission(parent_permission, command.get("permission"))
     declared_contexts = command.get("contexts")
     if declared_contexts is None:
         contexts = parent_contexts
     else:
-        allowed = frozenset(str(value) for value in declared_contexts)
+        allowed  = frozenset(str(value) for value in declared_contexts)
         contexts = tuple(value for value in parent_contexts if value in allowed)
     if not contexts:
         raise ValueError(f"command {plugin_name}.{'.'.join(code_path)} has no usable context")
 
-    usage = command.get("usage") or f"/{' '.join(path)}"
+    usage    = command.get("usage") or f"/{' '.join(path)}"
     children = tuple(
         build_command_catalog_node(
             plugin_name,
             child,
-            parent_code_path=code_path,
-            parent_path=path,
-            parent_permission=permission,
-            parent_contexts=contexts,
+            parent_code_path  = code_path,
+            parent_path       = path,
+            parent_permission = permission,
+            parent_contexts   = contexts,
         )
         for child in command.get("subcommands", ())
     )
     return CommandCatalogNode(
-        code=f"{plugin_name}.{'.'.join(code_path)}",
-        plugin=plugin_name,
-        path=path,
-        name=name,
-        aliases=aliases,
-        help_text=str(command["help"]),
-        usage=str(usage),
-        match_mode=str(command.get("match", "prefix")),
-        permission=permission,
-        contexts=contexts,
-        examples=tuple(str(value) for value in command.get("examples", ())),
-        invalid_examples=tuple(str(value) for value in command.get("invalid_examples", ())),
-        children=children,
+        code             = f"{plugin_name}.{'.'.join(code_path)}",
+        plugin           = plugin_name,
+        path             = path,
+        name             = name,
+        aliases          = aliases,
+        help_text        = str(command["help"]),
+        usage            = str(usage),
+        match_mode       = str(command.get("match", "prefix")),
+        permission       = permission,
+        contexts         = contexts,
+        examples         = tuple(str(value) for value in command.get("examples", ())),
+        invalid_examples = tuple(str(value) for value in command.get("invalid_examples", ())),
+        children         = children,
     )
 
 
 def resolve_catalog_invocation(root: CommandCatalogNode, args: str) -> CommandInvocation:
     """从根节点开始最长解析子命令，同时保留每一级之后的参数。"""
 
-    chain = [root]
-    remaining = str(args or "").strip()
+    chain      = [root]
+    remaining  = str(args or "").strip()
     remainders = [remaining]
-    current = root
+    current    = root
     while remaining and current.children:
         parts = remaining.split(maxsplit=1)
         child = current.resolve_child(parts[0])
@@ -281,24 +281,24 @@ class CommandSpec:
     help_text: str
     admin_only: bool
     handler: Handler
-    priority: int = 0  # 优先级，数字越大越先匹配
+    priority: int     = 0  # 优先级，数字越大越先匹配
     usage: str | None = None
     catalog: CommandCatalogNode | None = field(default=None, repr=False, compare=False)
     # 执行门既控制并发，也标识插件加载代数；已解析命令不能迁移到新代数的执行门。
     execution_gate: PluginExecutionGate | None = field(
-        default=None,
-        repr=False,
-        compare=False,
+        default = None,
+        repr    = False,
+        compare = False,
     )
 
 
 class CommandRouter:
     def __init__(self) -> None:
-        self._lock = threading.RLock()
-        self._commands: list[CommandSpec] = []
-        self._ordered_commands: list[CommandSpec] = []
+        self._lock                                                    = threading.RLock()
+        self._commands: list[CommandSpec]                             = []
+        self._ordered_commands: list[CommandSpec]                     = []
         self._trigger_index: dict[str, list[tuple[CommandSpec, str]]] = {}
-        self._index_dirty = True
+        self._index_dirty                                             = True
 
     @staticmethod
     def _command_sort_key(item: CommandSpec) -> tuple[int, int]:
@@ -312,14 +312,14 @@ class CommandRouter:
         owners: dict[tuple[str, int], CommandSpec] = {}
         for spec in commands:
             for trigger in spec.triggers:
-                key = (trigger, spec.priority)
+                key      = (trigger, spec.priority)
                 previous = owners.get(key)
                 if previous is not None:
                     raise CommandConflictError(
-                        trigger=trigger,
-                        priority=spec.priority,
-                        first=previous,
-                        second=spec,
+                        trigger  = trigger,
+                        priority = spec.priority,
+                        first    = previous,
+                        second   = spec,
                     )
                 owners[key] = spec
 
@@ -330,8 +330,8 @@ class CommandRouter:
 
             self._ordered_commands = sorted(
                 self._commands,
-                key=self._command_sort_key,
-                reverse=True,
+                key     = self._command_sort_key,
+                reverse = True,
             )
 
             trigger_index: dict[str, list[tuple[CommandSpec, str]]] = {}
@@ -343,12 +343,12 @@ class CommandRouter:
 
             for candidates in trigger_index.values():
                 candidates.sort(
-                    key=lambda item: (item[0].priority, len(item[1])),
-                    reverse=True,
+                    key     = lambda item: (item[0].priority, len(item[1])),
+                    reverse = True,
                 )
 
             self._trigger_index = trigger_index
-            self._index_dirty = False
+            self._index_dirty   = False
 
     def register(self, spec: CommandSpec) -> None:
         with self._lock:
@@ -420,17 +420,17 @@ class CommandRouter:
                 catalog.append(spec.catalog)
                 continue
             trigger = spec.triggers[0] if spec.triggers else spec.name
-            usage = spec.usage or (f"/{trigger}" if trigger else "")
+            usage   = spec.usage or (f"/{trigger}" if trigger else "")
             catalog.append(
                 CommandCatalogNode(
-                    code=f"{spec.plugin}.{spec.name}",
-                    plugin=spec.plugin,
-                    path=(trigger,),
-                    name=trigger,
-                    aliases=tuple(spec.triggers[1:]),
-                    help_text=spec.help_text,
-                    usage=usage,
-                    permission="bot_admin" if spec.admin_only else "public",
+                    code       = f"{spec.plugin}.{spec.name}",
+                    plugin     = spec.plugin,
+                    path       = (trigger,),
+                    name       = trigger,
+                    aliases    = tuple(spec.triggers[1:]),
+                    help_text  = spec.help_text,
+                    usage      = usage,
+                    permission = "bot_admin" if spec.admin_only else "public",
                 )
             )
         return tuple(sorted(catalog, key=lambda node: (node.plugin, node.code)))

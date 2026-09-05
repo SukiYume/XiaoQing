@@ -95,11 +95,11 @@ _STATUS_LOG_KEYS = {
 }
 
 _CORRELATION_LOG_KEYS = {"request_id", "task_id", "job_id"}
-_TYPE_LOG_KEYS = {"error_type", "exception_type", "rejection_type"}
+_TYPE_LOG_KEYS        = {"error_type", "exception_type", "rejection_type"}
 _REASON_CODE_LOG_KEYS = {"force_reason", "reason_code"}
-_SAFE_STATUS_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]{0,127}\Z")
-_SAFE_REASON_CODE = re.compile(r"[a-z][a-z0-9_.:-]{0,63}\Z")
-_SAFE_CORRELATION_ID = re.compile(r"[A-Za-z0-9_.:-]{1,64}\Z")
+_SAFE_STATUS_TOKEN    = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]{0,127}\Z")
+_SAFE_REASON_CODE     = re.compile(r"[a-z][a-z0-9_.:-]{0,63}\Z")
+_SAFE_CORRELATION_ID  = re.compile(r"[A-Za-z0-9_.:-]{1,64}\Z")
 
 
 def _safe_correlation_id(value: Any) -> str:
@@ -115,10 +115,10 @@ def _redacted_value(value: Any) -> str:
         try:
             payload = json.dumps(
                 value,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-                default=lambda item: f"<type:{type(item).__name__}>",
+                ensure_ascii = False,
+                sort_keys    = True,
+                separators   = (",", ":"),
+                default      = lambda item: f"<type:{type(item).__name__}>",
             )
         except (TypeError, ValueError):
             payload = f"<type:{type(value).__name__}>"
@@ -134,7 +134,7 @@ def sanitize_log_fields(fields: dict[str, Any]) -> dict[str, Any]:
     for raw_key, value in fields.items():
         if value is None:
             continue
-        key = str(raw_key)
+        key     = str(raw_key)
         lowered = key.lower()
         if any(part in lowered for part in _IDENTIFIER_LOG_KEY_PARTS):
             safe[key] = _redacted_value(value)
@@ -144,10 +144,10 @@ def sanitize_log_fields(fields: dict[str, Any]) -> dict[str, Any]:
             type_name = str(value)
             safe[key] = type_name if _SAFE_STATUS_TOKEN.fullmatch(type_name) else "Error"
         elif lowered in _REASON_CODE_LOG_KEYS:
-            reason = str(value)
+            reason    = str(value)
             safe[key] = reason if _SAFE_REASON_CODE.fullmatch(reason) else _redacted_value(reason)
         elif lowered in _STATUS_LOG_KEYS:
-            status = str(value)
+            status    = str(value)
             safe[key] = status if _SAFE_STATUS_TOKEN.fullmatch(status) else _redacted_value(status)
         elif isinstance(value, (bool, int, float)):
             safe[key] = value

@@ -28,7 +28,7 @@ CommandHandler = Callable[
     Awaitable[MessageSegments],
 ]
 
-_MAIN_COMMANDS = {"ssh"}
+_MAIN_COMMANDS                                       = {"ssh"}
 _SUBCOMMAND_ROUTES: dict[str, CommandHandler | None] = {
     "help": None,
     "list": handle_ssh_list,
@@ -147,7 +147,7 @@ async def cleanup(context: Context) -> None:
     except Exception as exc:
         logger.error("SSH job cleanup failed error_type=%s", audit_error_type(exc))
 
-    state = getattr(context, "state", None)
+    state   = getattr(context, "state", None)
     manager = state.get("ssh_manager") if isinstance(state, dict) else None
     if not isinstance(manager, SSHManager):
         return
@@ -175,7 +175,7 @@ async def cleanup_orphans(context: Context) -> None:
         if not context.session_manager:
             return
 
-        sessions = await context.session_manager.get_all_sessions("qingssh")
+        sessions              = await context.session_manager.get_all_sessions("qingssh")
         active_keys: set[str] = set()
         for session in sessions:
             server_name = session.get(SessionKeys.SERVER_NAME)

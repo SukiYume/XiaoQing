@@ -119,13 +119,13 @@ def test_build_task_overview_returns_all_focus_tasks(db: Database) -> None:
         _insert(
             db,
             owner_id,
-            id=f"today-{index}",
-            title=f"今天任务 {index}",
-            category="工作",
-            status="open",
-            priority=3,
-            plan_date="2026-03-26",
-            created_at=f"2026-03-25T09:00:{index:02d}",
+            id         = f"today-{index}",
+            title      = f"今天任务 {index}",
+            category   = "工作",
+            status     = "open",
+            priority   = 3,
+            plan_date  = "2026-03-26",
+            created_at = f"2026-03-25T09:00:{index:02d}",
         )
 
     result = build_task_overview(db=db, owner_id=owner_id, today="2026-03-26")
@@ -144,12 +144,12 @@ def test_build_task_overview_loads_more_than_500_tasks(db: Database) -> None:
         _insert(
             db,
             owner_id,
-            id=f"t{index}",
-            title=f"任务 {index}",
-            category="工作",
-            status="open",
-            priority=3,
-            created_at=f"2026-03-01T00:00:{index % 60:02d}",
+            id         = f"t{index}",
+            title      = f"任务 {index}",
+            category   = "工作",
+            status     = "open",
+            priority   = 3,
+            created_at = f"2026-03-01T00:00:{index % 60:02d}",
         )
 
     result = build_task_overview(db=db, owner_id=owner_id, today="2026-03-26")
@@ -169,10 +169,10 @@ def test_build_task_overview_uses_user_clock_when_today_is_omitted(
     _insert(
         db,
         owner_id,
-        id="today",
-        title="用户今天",
-        status="open",
-        plan_date="2030-01-02",
+        id        = "today",
+        title     = "用户今天",
+        status    = "open",
+        plan_date = "2030-01-02",
     )
 
     def user_now(user_id: str, database: Database) -> datetime:

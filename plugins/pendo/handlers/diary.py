@@ -54,8 +54,8 @@ _DIARY_LIST_FILTER_RE: Final = re.compile(
     r"(?<!\S)(?P<key>mood|cat):(?P<value>\"[^\"]*\"|'[^']*'|\S+)",
     re.IGNORECASE,
 )
-_TRUE_METADATA_VALUES: Final = frozenset({"1", "true", "yes", "y", "on", "是", "收藏"})
-_FALSE_METADATA_VALUES: Final = frozenset({"0", "false", "no", "n", "off", "否", "不收藏"})
+_TRUE_METADATA_VALUES: Final        = frozenset({"1", "true", "yes", "y", "on", "是", "收藏"})
+_FALSE_METADATA_VALUES: Final       = frozenset({"0", "false", "no", "n", "off", "否", "不收藏"})
 _MOOD_EMOJIS: Final[dict[str, str]] = cast(
     dict[str, str], MOOD_ANALYSIS_CONFIG.get("mood_emojis", {})
 )
@@ -79,7 +79,7 @@ class DiaryHandler(DbOpsMixin):
         db: "Database",
         ai_parser: DiaryMoodAnalyzer | None = None,
     ) -> None:
-        self.db = db
+        self.db        = db
         self.ai_parser = ai_parser
         self.templates = cast(dict[str, DiaryTemplate], DIARY_TEMPLATES)
 
@@ -140,7 +140,7 @@ class DiaryHandler(DbOpsMixin):
 
         parts = args.split(maxsplit=1)
         command = parts[0].lower()
-        rest = parts[1] if len(parts) > 1 else ""
+        rest    = parts[1] if len(parts) > 1 else ""
 
         if command == "add":
             return await self.add_diary(user_id, rest, context, group_id)
@@ -176,7 +176,7 @@ class DiaryHandler(DbOpsMixin):
         # 尝试解析第一个参数是否是日期
         parts = args.split(maxsplit=1)
         first_arg = parts[0]
-        rest = parts[1] if len(parts) > 1 else ""
+        rest      = parts[1] if len(parts) > 1 else ""
 
         user_now = await get_user_local_wall_time(user_id, self.db)
         diary_date = parse_date_optional(first_arg, now=user_now)
@@ -186,7 +186,7 @@ class DiaryHandler(DbOpsMixin):
             content_text = rest
         else:
             # 第一个参数不是日期，整个args都是内容
-            diary_date = user_now.strftime("%Y-%m-%d")
+            diary_date   = user_now.strftime("%Y-%m-%d")
             content_text = args
 
         if not content_text:
@@ -211,16 +211,16 @@ class DiaryHandler(DbOpsMixin):
         parsed: dict[str, Any],
         context: PendoContext,
         template_id: str | None = None,
-        group_id: int | None = None,
+        group_id: int | None    = None,
     ) -> CommandMessage:
         """创建日记"""
         user_now = await get_user_local_wall_time(user_id, self.db)
-        content = str(parsed.get("content") or "")
+        content  = str(parsed.get("content") or "")
 
-        manual_mood = parsed.get("mood")
+        manual_mood  = parsed.get("mood")
         manual_score = parsed.get("mood_score")
         if manual_mood or manual_score not in (None, ""):
-            mood = manual_mood
+            mood       = manual_mood
             mood_score = manual_score
         else:
             mood, mood_score = await self._analyze_mood(content, user_id)
@@ -255,7 +255,7 @@ class DiaryHandler(DbOpsMixin):
         entry_time = item_data.get("entry_time") or self._entry_time_for_diary_date(
             user_now, diary_date
         )
-        entry_dt = datetime.fromisoformat(str(entry_time))
+        entry_dt    = datetime.fromisoformat(str(entry_time))
         entry_label = entry_dt.strftime("%H:%M")
 
         if not str(item_data.get("title") or "").strip():
@@ -291,7 +291,7 @@ class DiaryHandler(DbOpsMixin):
         self, user_id: str, date_str: str, context: PendoContext
     ) -> CommandMessage:
         """查看日记"""
-        query = (date_str or "").strip()
+        query    = (date_str or "").strip()
         user_now = await get_user_local_wall_time(user_id, self.db)
         if not query:
             query = user_now.strftime("%Y-%m-%d")
@@ -323,7 +323,7 @@ class DiaryHandler(DbOpsMixin):
             return {"status": "error", "message": f"❌ 找不到日记 {query}"}
 
         diary_date = diary.diary_date or query
-        message = f"📔 **{diary_date} 的日记条目**\n\n"
+        message    = f"📔 **{diary_date} 的日记条目**\n\n"
         message += self._format_diary_entry_detail(diary)
 
         return {"status": "success", "message": message}
@@ -346,7 +346,7 @@ class DiaryHandler(DbOpsMixin):
         except ValueError as exc:
             return {"status": "error", "message": f"❌ {exc}"}
 
-        user_now = await get_user_local_wall_time(user_id, self.db)
+        user_now   = await get_user_local_wall_time(user_id, self.db)
         time_range = filters.time_range or user_now.strftime("%Y-%m")
         try:
             start_date, end_date = parse_diary_range(time_range, now=user_now, strict=True)
@@ -376,7 +376,7 @@ class DiaryHandler(DbOpsMixin):
     @staticmethod
     def _parse_list_filters(raw_query: str) -> DiaryListFilters:
         """从列表命令提取 mood、category 和单个标签筛选。"""
-        query = (raw_query or "").strip()
+        query                    = (raw_query or "").strip()
         metadata: dict[str, str] = {}
         for match in _DIARY_LIST_FILTER_RE.finditer(query):
             value = match.group("value").strip()
@@ -388,15 +388,15 @@ class DiaryHandler(DbOpsMixin):
 
         tag = None
         if tag_match := TAG_TOKEN_RE.search(query):
-            tag = tag_match.group(1)
+            tag   = tag_match.group(1)
             query = f"{query[: tag_match.start()]} {query[tag_match.end() :]}"
 
         mood = normalize_diary_mood(metadata["mood"]) if metadata.get("mood") else None
         return DiaryListFilters(
-            time_range=re.sub(r"\s+", " ", query).strip(),
-            mood=mood,
-            category=metadata.get("cat"),
-            tag=tag,
+            time_range = re.sub(r"\s+", " ", query).strip(),
+            mood       = mood,
+            category   = metadata.get("cat"),
+            tag        = tag,
         )
 
     @staticmethod
@@ -486,7 +486,7 @@ class DiaryHandler(DbOpsMixin):
             return {"status": "error", "message": "❌ 模板不存在"}
 
         diary_date = (await get_user_local_wall_time(user_id, self.db)).strftime("%Y-%m-%d")
-        prompts = template.get("prompts", [])
+        prompts    = template.get("prompts", [])
 
         if not prompts:
             return {"status": "error", "message": "❌ 该模板没有预设问题"}
@@ -518,7 +518,7 @@ class DiaryHandler(DbOpsMixin):
         if not template:
             return {"status": "error", "message": "❌ 模板不存在"}
         prompts = template.get("prompts", [])
-        lines = [f"📋 **{template.get('name', template_id)}** ({diary_date})", ""]
+        lines   = [f"📋 **{template.get('name', template_id)}** ({diary_date})", ""]
         lines.extend(f"{idx}. {prompt}" for idx, prompt in enumerate(prompts, 1))
         lines.append("")
         lines.append("💡 用 /pendo diary add 写下答案，或稍后重试模板引导。")
@@ -530,8 +530,8 @@ class DiaryHandler(DbOpsMixin):
         """校验模板会话状态，记录当前答案并推进到下一题。"""
         raw_prompts = session.get("prompts", [])
         raw_answers = session.get("answers", [])
-        raw_step = session.get("step", 0)
-        prompts = (
+        raw_step    = session.get("step", 0)
+        prompts     = (
             [prompt for prompt in raw_prompts if isinstance(prompt, str) and prompt.strip()]
             if isinstance(raw_prompts, list)
             else []
@@ -554,9 +554,9 @@ class DiaryHandler(DbOpsMixin):
         if step == len(prompts):
             await safe_end_session(context)
 
-            diary_date = session.get("diary_date")
+            diary_date  = session.get("diary_date")
             template_id = session.get("template_id")
-            group_id = session.get("group_id")
+            group_id    = session.get("group_id")
             if (
                 not isinstance(diary_date, str)
                 or not isinstance(template_id, str)
@@ -621,7 +621,7 @@ class DiaryHandler(DbOpsMixin):
         if not args or not args.strip():
             return self._show_template_list()
 
-        arg = args.strip()
+        arg    = args.strip()
         usable = self._get_usable_templates()
 
         # 纯数字按展示编号匹配，其他输入再按名称或模板 ID 匹配。
@@ -669,7 +669,7 @@ class DiaryHandler(DbOpsMixin):
 
     def _show_help(self) -> str:
         """显示日记帮助信息"""
-        usable = self._get_usable_templates()
+        usable        = self._get_usable_templates()
         template_hint = " | ".join(f"{i}.{tpl['name']}" for i, (_, tpl) in enumerate(usable, 1))
 
         return (
@@ -702,12 +702,12 @@ class DiaryHandler(DbOpsMixin):
             if index
             else f"**{diary.title or '日记条目'}**"
         )
-        lines = [title_prefix]
+        lines      = [title_prefix]
         entry_time = self._format_entry_time(diary)
         if entry_time:
             lines.append(f"🕘 时间: {entry_time}")
         if diary.mood:
-            emoji = _MOOD_EMOJIS.get(diary.mood, "😐")
+            emoji     = _MOOD_EMOJIS.get(diary.mood, "😐")
             mood_line = f"{emoji} 情绪: {diary.mood}"
             if diary.mood_score:
                 mood_line += f" ({diary.mood_score}/10)"
@@ -748,12 +748,12 @@ class DiaryHandler(DbOpsMixin):
         }
 
         content_parts: list[str] = []
-        previous_end = 0
+        previous_end             = 0
         for match in _DIARY_METADATA_RE.finditer(text):
             content_parts.extend((text[previous_end : match.start()], " "))
             previous_end = match.end()
-            key = match.group("key").lower()
-            value = match.group("value").strip()
+            key          = match.group("key").lower()
+            value        = match.group("value").strip()
             if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
                 value = value[1:-1].strip()
             if key == "weather":
@@ -765,8 +765,8 @@ class DiaryHandler(DbOpsMixin):
             elif key == "score":
                 result["mood_score"] = value
             elif key in {"tags", "tag"}:
-                new_tags = [item.strip() for item in re.split(r"[,，]", value) if item.strip()]
-                old_tags = result["tags"] if isinstance(result["tags"], list) else []
+                new_tags       = [item.strip() for item in re.split(r"[,，]", value) if item.strip()]
+                old_tags       = result["tags"] if isinstance(result["tags"], list) else []
                 result["tags"] = list(dict.fromkeys([*old_tags, *new_tags]))
             elif key in {"favorite", "fav"}:
                 normalized_value = value.casefold()
@@ -792,8 +792,8 @@ class DiaryHandler(DbOpsMixin):
                 public_error_message(
                     context,
                     exc,
-                    logger=getattr(context, "logger", None) or logger,
-                    component="pendo.diary.mood_fallback",
+                    logger    = getattr(context, "logger", None) or logger,
+                    component = "pendo.diary.mood_fallback",
                 )
 
         return cast(tuple[str | None, int | None], analyze_diary_mood_rule(content))

@@ -108,7 +108,7 @@ def test_widget_token_revocation_is_persistent(tmp_path: Path) -> None:
     from plugins.pendo.services.db import Database
 
     db_path = tmp_path / "pendo.db"
-    first = Database(str(db_path))
+    first   = Database(str(db_path))
     token = generate_widget_token("widget-owner", db=first)
     assert verify_token(token, db=first)["owner_id"] == "widget-owner"
     assert first.revoke_widget_tokens("widget-owner") == 1
@@ -148,7 +148,7 @@ def test_secret_initialization_is_thread_safe(
     """并发首次读取只能生成并落盘一次签名密钥。"""
 
     generation_count = 0
-    count_lock = threading.Lock()
+    count_lock       = threading.Lock()
 
     def slow_token_hex(_size: int) -> str:
         """放大初始化竞争窗口，并记录实际密钥生成次数。"""
@@ -196,7 +196,7 @@ def test_environment_secret_takes_precedence_without_writing_file(
     """环境密钥优先时不得额外创建持久密钥文件。"""
 
     secret_file = tmp_path / "web_token_secret.txt"
-    env_secret = "environment-secret-0123456789abcdef"
+    env_secret  = "environment-secret-0123456789abcdef"
     monkeypatch.setattr(auth_module, "_SECRET_FILE", secret_file)
     monkeypatch.setattr(auth_module, "_SECRET_CACHE", None)
     monkeypatch.setenv("PENDO_WEB_TOKEN_SECRET", env_secret)
@@ -210,7 +210,7 @@ def _sign_invalid_widget_token(
     *,
     db,
     expires_at: int,
-    scope: str | None = "widget:read",
+    scope: str | None    = "widget:read",
     token_id: str | None = "test-widget-token",
 ) -> str:
     """只为验证拒绝路径签发不进入生产注册表的畸形 Widget JWT。"""
@@ -218,7 +218,7 @@ def _sign_invalid_widget_token(
     # 验证端会按数据库目录重新绑定密钥；签发测试样本前使用同一真实绑定路径。
     auth_module.configure_auth_database(db)
     issued_at = int(time.time())
-    payload = {
+    payload   = {
         "owner_id": owner_id,
         "sub": owner_id,
         "typ": "pendo-web",
@@ -239,9 +239,9 @@ def test_widget_token_without_read_scope_is_rejected(temp_db) -> None:
 
     token = _sign_invalid_widget_token(
         "widget-user",
-        db=temp_db,
-        expires_at=int(time.time()) + 60,
-        scope=None,
+        db         = temp_db,
+        expires_at = int(time.time()) + 60,
+        scope      = None,
     )
 
     with pytest.raises(AuthError, match="invalid scope"):
@@ -252,9 +252,9 @@ def test_legacy_widget_token_without_jti_is_rejected(temp_db) -> None:
     auth_module.configure_auth_storage(Path(temp_db.db_path).parent)
     token = _sign_invalid_widget_token(
         "widget-user",
-        db=temp_db,
-        expires_at=int(time.time()) + 60,
-        token_id=None,
+        db         = temp_db,
+        expires_at = int(time.time()) + 60,
+        token_id   = None,
     )
 
     with pytest.raises(AuthError, match="missing jti"):
@@ -266,8 +266,8 @@ def test_expired_invalid_and_tampered_tokens_are_rejected(temp_db) -> None:
 
     expired = _sign_invalid_widget_token(
         "expired-user",
-        db=temp_db,
-        expires_at=int(time.time()) - 1,
+        db         = temp_db,
+        expires_at = int(time.time()) - 1,
     )
     with pytest.raises(AuthError, match="expired"):
         verify_token(expired, db=temp_db)
@@ -341,7 +341,7 @@ def test_login_code_and_browser_session_survive_auth_storage_reopen(
     now = 1_500
     monkeypatch.setattr(time, "time", lambda: float(now))
     db_path = tmp_path / "persistent-pendo.db"
-    first = Database(str(db_path))
+    first   = Database(str(db_path))
     try:
         code = issue_login_code("persistent-owner", db=first)
         session = create_web_session("persistent-owner", db=first)
@@ -433,15 +433,15 @@ def test_login_exchange_revokes_session_when_cookie_write_fails(
 ) -> None:
     """登录码已消费但 Cookie 写入失败时，不得遗留不可达的服务端会话。"""
 
-    code = issue_login_code("cookie-owner")
-    now = time.time()
+    code    = issue_login_code("cookie-owner")
+    now     = time.time()
     session = WebSession(
-        session_id="login-cookie-failure",
-        device_id="login-cookie-device",
-        owner_id="cookie-owner",
-        csrf_token="csrf",
-        created_at=now,
-        expires_at=now + 60,
+        session_id = "login-cookie-failure",
+        device_id  = "login-cookie-device",
+        owner_id   = "cookie-owner",
+        csrf_token = "csrf",
+        created_at = now,
+        expires_at = now + 60,
     )
     revoke_session = Mock()
     monkeypatch.setattr(
@@ -507,15 +507,15 @@ def test_demo_route_caps_browser_session_at_demo_lifetime(
 ) -> None:
     """演示 Cookie 会话不得比数据空间本身活得更久。"""
 
-    now = time.time()
+    now     = time.time()
     session = WebSession(
-        session_id="demo-session",
-        device_id="demo-device",
-        owner_id="demo_web_route",
-        csrf_token="csrf",
-        created_at=now,
-        expires_at=now + 6 * 60 * 60,
-        demo=True,
+        session_id = "demo-session",
+        device_id  = "demo-device",
+        owner_id   = "demo_web_route",
+        csrf_token = "csrf",
+        created_at = now,
+        expires_at = now + 6 * 60 * 60,
+        demo       = True,
     )
     create_session = Mock(return_value=session)
     PendoConfig.configure({"web_demo_enabled": True})
@@ -533,8 +533,8 @@ def test_demo_route_caps_browser_session_at_demo_lifetime(
     assert payload["ok"] is True
     create_session.assert_called_once_with(
         session.owner_id,
-        expires_seconds=6 * 60 * 60,
-        demo=True,
+        expires_seconds = 6 * 60 * 60,
+        demo            = True,
     )
 
 
@@ -543,7 +543,7 @@ def test_demo_route_purges_owner_when_browser_session_creation_fails(
 ) -> None:
     """数据空间已创建但浏览器会话失败时，必须回收临时所有者。"""
 
-    owner_id = "demo_web_session_failure"
+    owner_id    = "demo_web_session_failure"
     purge_owner = Mock()
     PendoConfig.configure({"web_demo_enabled": True})
     monkeypatch.setattr(
@@ -569,18 +569,18 @@ def test_demo_route_revokes_session_and_purges_owner_when_cookie_write_fails(
 ) -> None:
     """Cookie 写入失败时应同时撤销持久会话并清理演示数据。"""
 
-    now = time.time()
+    now     = time.time()
     session = WebSession(
-        session_id="failed-cookie-session",
-        device_id="failed-cookie-device",
-        owner_id="demo_web_cookie_failure",
-        csrf_token="csrf",
-        created_at=now,
-        expires_at=now + 60,
-        demo=True,
+        session_id = "failed-cookie-session",
+        device_id  = "failed-cookie-device",
+        owner_id   = "demo_web_cookie_failure",
+        csrf_token = "csrf",
+        created_at = now,
+        expires_at = now + 60,
+        demo       = True,
     )
     revoke_session = Mock()
-    purge_owner = Mock()
+    purge_owner    = Mock()
     PendoConfig.configure({"web_demo_enabled": True})
     monkeypatch.setattr(
         auth_routes_module,

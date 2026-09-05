@@ -17,9 +17,9 @@ ROOT = REPOSITORY_ROOT
 @pytest.fixture
 def context() -> SimpleNamespace:
     return SimpleNamespace(
-        logger=MagicMock(),
-        request_id="test-choice",
-        secrets={},
+        logger     = MagicMock(),
+        request_id = "test-choice",
+        secrets    = {},
     )
 
 
@@ -130,7 +130,7 @@ class TestMakeChoice:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        rng = MagicMock()
+        rng                      = MagicMock()
         rng.choices.return_value = ["A", "A", "B", "A", "B"]
         monkeypatch.setattr(choice, "_RNG", rng)
 
@@ -144,7 +144,7 @@ class TestMakeChoice:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        rng = MagicMock()
+        rng                     = MagicMock()
         rng.sample.return_value = ["A", "C"]
         monkeypatch.setattr(choice, "_RNG", rng)
 
@@ -186,7 +186,7 @@ class TestMakeChoice:
 
 class TestFormatChoiceResult:
     def test_single_result_is_compact(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        rng = MagicMock()
+        rng                     = MagicMock()
         rng.choice.return_value = "🎲"
         monkeypatch.setattr(choice, "_RNG", rng)
 
@@ -196,7 +196,7 @@ class TestFormatChoiceResult:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        rng = MagicMock()
+        rng                     = MagicMock()
         rng.choice.return_value = "🎯"
         monkeypatch.setattr(choice, "_RNG", rng)
 
@@ -219,9 +219,9 @@ class TestChoiceCommand:
         context: SimpleNamespace,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        rng = MagicMock()
+        rng                      = MagicMock()
         rng.choices.return_value = ["火锅"]
-        rng.choice.return_value = "🎲"
+        rng.choice.return_value  = "🎲"
         monkeypatch.setattr(choice, "_RNG", rng)
 
         result = await choice.handle("choice", "午饭 火锅 火锅 日料", {}, context)
@@ -238,9 +238,9 @@ class TestChoiceCommand:
         context: SimpleNamespace,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        rng = MagicMock()
+        rng                      = MagicMock()
         rng.choices.return_value = ["A", "B", "A", "A", "B"]
-        rng.choice.return_value = "🎯"
+        rng.choice.return_value  = "🎯"
         monkeypatch.setattr(choice, "_RNG", rng)
 
         result = await choice.handle("choice", "抽取 A B -n 5", {}, context)
@@ -253,7 +253,7 @@ class TestChoiceCommand:
         context: SimpleNamespace,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        rng = MagicMock()
+        rng                     = MagicMock()
         rng.sample.return_value = ["A", "B"]
         rng.choice.return_value = "✨"
         monkeypatch.setattr(choice, "_RNG", rng)
@@ -290,7 +290,7 @@ class TestChoiceCommand:
         context: SimpleNamespace,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        rng = MagicMock()
+        rng                     = MagicMock()
         rng.choices.side_effect = RuntimeError("internal detail")
         monkeypatch.setattr(choice, "_RNG", rng)
 

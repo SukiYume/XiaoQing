@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -28,10 +28,10 @@ class _BoundedJsonResponse:
 
     def __init__(self, payload):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.headers = {"Content-Type": "application/json"}
-        self.content = _ChunkedContent(body)
+        self.headers        = {"Content-Type": "application/json"}
+        self.content        = _ChunkedContent(body)
         self.content_length = len(body)
-        self.url = chat.COZE_API_URL
+        self.url            = chat.COZE_API_URL
 
 
 class _BoundedJsonContextManager:
@@ -48,7 +48,7 @@ class _BoundedJsonContextManager:
 class _BoundedJsonSession:
     def __init__(self, *payloads):
         self.payloads = list(payloads)
-        self.calls = []
+        self.calls    = []
 
     def request(self, method, url, **kwargs):
         self.calls.append((method, url, kwargs))
@@ -75,7 +75,7 @@ class TestChatPlugin:
     @pytest.fixture
     def mock_context(self, tmp_path):
         """模拟插件上下文"""
-        context = MagicMock()
+        context         = MagicMock()
         context.secrets = {
             "plugins": {
                 "chat": {
@@ -84,12 +84,12 @@ class TestChatPlugin:
                 }
             }
         }
-        context.logger = MagicMock()
+        context.logger     = MagicMock()
         context.plugin_dir = ROOT / "plugins" / "chat"
-        context.data_dir = tmp_path / "data"
-        context.config = {"timezone": "Asia/Shanghai", "plugins": {"chat": {}}}
-        context.state = {}
-        context.now.return_value = datetime(2026, 7, 14, 12, tzinfo=timezone.utc)
+        context.data_dir   = tmp_path / "data"
+        context.config     = {"timezone": "Asia/Shanghai", "plugins": {"chat": {}}}
+        context.state      = {}
+        context.now.return_value = datetime(2026, 7, 14, 12, tzinfo=UTC)
         context.http_session = _BoundedJsonSession(
             _completed_chat_payload(),
             _answer_messages_payload(),
@@ -123,9 +123,7 @@ class TestChatPlugin:
         assert chat._actor_identity("x" * 129) == (chat._ANONYMOUS_ACTOR, None)
 
     def test_business_date_uses_core_configured_clock(self):
-        context = SimpleNamespace(
-            now=MagicMock(return_value=datetime(2026, 7, 14, 23, tzinfo=timezone.utc))
-        )
+        context = SimpleNamespace(now=MagicMock(return_value=datetime(2026, 7, 14, 23, tzinfo=UTC)))
 
         assert chat._business_date(context) == "2026-07-14"
 
@@ -159,17 +157,17 @@ class TestChatPlugin:
         context = SimpleNamespace(data_dir=tmp_path)
         reservation = await chat._reserve_quota(
             context,
-            actor="user",
-            per_user_limit=1,
-            global_limit=1,
+            actor          = "user",
+            per_user_limit = 1,
+            global_limit   = 1,
         )
         reservation.commit()
         with pytest.raises(chat.ChatQuotaExceeded):
             await chat._reserve_quota(
                 SimpleNamespace(data_dir=tmp_path),
-                actor="user",
-                per_user_limit=1,
-                global_limit=1,
+                actor          = "user",
+                per_user_limit = 1,
+                global_limit   = 1,
             )
 
     @pytest.mark.asyncio
@@ -181,9 +179,9 @@ class TestChatPlugin:
         with pytest.raises(chat.ChatQuotaStateError):
             await chat._reserve_quota(
                 SimpleNamespace(data_dir=tmp_path),
-                actor="user",
-                per_user_limit=10,
-                global_limit=10,
+                actor          = "user",
+                per_user_limit = 10,
+                global_limit   = 10,
             )
 
     @pytest.mark.asyncio
@@ -217,8 +215,8 @@ class TestChatPlugin:
         from core.config import ConfigSnapshot
 
         snapshot = ConfigSnapshot(
-            config={},
-            secrets={
+            config  = {},
+            secrets = {
                 "plugins": {
                     "chat": {
                         "token": "frozen-token",
@@ -281,7 +279,7 @@ class TestChatPlugin:
 
     def test_extract_answer_valid(self, mock_context):
         """测试提取有效答案"""
-        data = {"messages": [{"type": "answer", "content": "这是答案"}]}
+        data   = {"messages": [{"type": "answer", "content": "这是答案"}]}
         answer = chat.extract_answer(data, mock_context)
         assert answer == "这是答案"
 
@@ -299,7 +297,7 @@ class TestChatPlugin:
 
     def test_extract_answer_no_answer(self, mock_context):
         """测试没有答案的情况"""
-        data = {"messages": [{"type": "question", "content": "问题"}]}
+        data   = {"messages": [{"type": "question", "content": "问题"}]}
         answer = chat.extract_answer(data, mock_context)
         assert answer is None
 
@@ -310,13 +308,13 @@ class TestChatPlugin:
 
     def test_extract_answer_invalid_messages(self, mock_context):
         """测试无效messages字段"""
-        data = {"messages": "not a list"}
+        data   = {"messages": "not a list"}
         answer = chat.extract_answer(data, mock_context)
         assert answer is None
 
     def test_extract_answer_empty_content(self, mock_context):
         """测试空答案内容"""
-        data = {"messages": [{"type": "answer", "content": "   "}]}
+        data   = {"messages": [{"type": "answer", "content": "   "}]}
         answer = chat.extract_answer(data, mock_context)
         assert answer is None
 
@@ -333,7 +331,7 @@ class TestChatPlugin:
     @pytest.mark.asyncio
     async def test_call_coze_api_success(self, mock_context):
         """测试成功的API调用"""
-        query = "测试问题"
+        query  = "测试问题"
         config = {"token": "test_token", "bot_id": "test_bot"}
 
         result = await chat.call_coze_api(query, config, mock_context)
@@ -343,7 +341,7 @@ class TestChatPlugin:
     @pytest.mark.asyncio
     async def test_call_coze_api_with_proxy(self, mock_context):
         """测试带代理的API调用"""
-        query = "测试问题"
+        query  = "测试问题"
         config = {"token": "test_token", "bot_id": "test_bot", "proxy": "http://proxy.example.com"}
 
         result = await chat.call_coze_api(query, config, mock_context)
@@ -527,7 +525,7 @@ class TestChatPlugin:
         monkeypatch.setattr(chat, "REQUEST_TIMEOUT", 0.08)
         monkeypatch.setattr(chat, "POLL_INTERVAL_SECONDS", 0)
         calls: list[tuple[str, float]] = []
-        retrieve_cancelled = asyncio.Event()
+        retrieve_cancelled             = asyncio.Event()
 
         async def request(_context, _method, url, *, headers, request_kwargs):
             del headers
@@ -603,7 +601,7 @@ class TestChatPlugin:
 
         mock_context.http_session = MockErrorSession()
 
-        query = "测试问题"
+        query  = "测试问题"
         config = {"token": "invalid_token", "bot_id": "test_bot"}
 
         result = await chat.call_coze_api(query, config, mock_context)
@@ -615,7 +613,7 @@ class TestChatPlugin:
 
         class MockTimeoutContextManager:
             async def __aenter__(self):
-                raise asyncio.TimeoutError()
+                raise TimeoutError()
 
             async def __aexit__(self, *args):
                 pass
@@ -626,7 +624,7 @@ class TestChatPlugin:
 
         mock_context.http_session = MockTimeoutSession()
 
-        query = "测试问题"
+        query  = "测试问题"
         config = {"token": "test_token", "bot_id": "test_bot"}
 
         result = await chat.call_coze_api(query, config, mock_context)
@@ -649,7 +647,7 @@ class TestChatPlugin:
 
         mock_context.http_session = MockExceptionSession()
 
-        query = "测试问题"
+        query  = "测试问题"
         config = {"token": "test_token", "bot_id": "test_bot"}
 
         result = await chat.call_coze_api(query, config, mock_context)
@@ -695,7 +693,7 @@ class TestChatPlugin:
     async def test_handle_invalid_config(self, mock_context, mock_event):
         """测试无效配置"""
         mock_context.secrets = {}
-        result = await chat.handle("chat", "测试问题", mock_event, mock_context)
+        result               = await chat.handle("chat", "测试问题", mock_event, mock_context)
         assert result is not None
         result_text = str(result)
         assert "配置错误" in result_text or "配置" in result_text
@@ -704,7 +702,7 @@ class TestChatPlugin:
     async def test_handle_query_too_long(self, mock_context, mock_event):
         """测试查询过长"""
         long_query = "a" * 2500
-        result = await chat.handle("chat", long_query, mock_event, mock_context)
+        result     = await chat.handle("chat", long_query, mock_event, mock_context)
         assert result is not None
         result_text = str(result)
         assert "过长" in result_text or "字符" in result_text

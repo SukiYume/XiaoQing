@@ -16,7 +16,7 @@ from tests.helpers.xiaoqing_chat_test_support import (
     pytest,
 )
 
-mock_context = _fixture_support.mock_context
+mock_context       = _fixture_support.mock_context
 sample_group_event = _fixture_support.sample_group_event
 
 
@@ -36,45 +36,46 @@ async def test_generate_reply_checker_unexpected_error_logs_error_not_timeout(mo
             goal=SimpleNamespace(enable_goal=False),
             reflection=SimpleNamespace(enable_review_sessions=False),
             debug=SimpleNamespace(show_reply_prompt=False, log_steps=False),
-            max_context_size=20,
-            top_p=0.9,
-            max_tokens=256,
-            timeout_seconds=3.0,
-            reply_check=SimpleNamespace(
-                enable_reply_checker=True,
-                enable_llm_checker=False,
-                max_repeat_compare=5,
-                similarity_threshold=0.9,
-                max_assistant_in_row=3,
-                max_regen=0,
+            max_context_size = 20,
+            top_p            = 0.9,
+            max_tokens       = 256,
+            timeout_seconds  = 3.0,
+            reply_check      = SimpleNamespace(
+                enable_reply_checker = True,
+                enable_llm_checker   = False,
+                max_repeat_compare   = 5,
+                similarity_threshold = 0.9,
+                max_assistant_in_row = 3,
+                max_regen            = 0,
             ),
             postprocess=ResponsePostProcessConfig(),
         )
     )
     _complete_test_runtime_config(runtime)
+    runtime.cfg.reply_check.llm_checker_mode = "risk"
 
     state = MagicMock()
     state.memory_store.get_recent_async = AsyncMock(return_value=[])
     state.goal_store.get_async = AsyncMock(return_value=SimpleNamespace(goal=""))
     state.review_store.bind = Mock()
-    state.inc_stats = Mock()
+    state.inc_stats         = Mock()
 
     fg = SimpleNamespace(
-        timeout_seconds=3.0,
-        max_retry=0,
-        retry_interval_seconds=0.2,
-        to_dict=lambda: {
+        timeout_seconds        = 3.0,
+        max_retry              = 0,
+        retry_interval_seconds = 0.2,
+        to_dict                = lambda: {
             "timeout_seconds": 3.0,
             "max_retry": 0,
             "retry_interval_seconds": 0.2,
         },
     )
     action = PlannedAction(
-        action="reply",
-        think_level=1,
-        reasoning="正常回复",
-        question="",
-        unknown_words=[],
+        action        = "reply",
+        think_level   = 1,
+        reasoning     = "正常回复",
+        question      = "",
+        unknown_words = [],
     )
 
     with ExitStack() as stack:
@@ -186,16 +187,16 @@ async def test_generate_reply_checker_unexpected_error_logs_error_not_timeout(mo
         )
 
         draft = await _generate_reply_draft(
-            text="你好",
-            event={"message_id": 1, "user_id": 1},
-            context=mock_context,
-            runtime=runtime,
-            state=state,
-            forced=False,
-            action=action,
-            plan_reasoning="",
-            bot_name="小青",
-            secrets=None,
+            text           = "你好",
+            event          = {"message_id": 1, "user_id": 1},
+            context        = mock_context,
+            runtime        = runtime,
+            state          = state,
+            forced         = False,
+            action         = action,
+            plan_reasoning = "",
+            bot_name       = "小青",
+            secrets        = None,
         )
     assert draft is not None
     assert draft.text == "这条回复需要检查"
@@ -219,7 +220,7 @@ async def test_handle_internal_reset_cancels_pending_persist_task(
 
     chat_id = "g67890"
     runtime = MagicMock()
-    state = ChatRuntimeState()
+    state   = ChatRuntimeState()
     _bind_all_stores(state, tmp_path)
 
     async def _pending_persist():

@@ -293,14 +293,14 @@ class TestParsedArgs:
 
     def test_repr(self):
         """测试字符串表示"""
-        args = parse("echo hello -v")
+        args     = parse("echo hello -v")
         repr_str = repr(args)
         assert "ParsedArgs" in repr_str
         assert "echo" in repr_str
 
     def test_immutability_of_tokens(self):
         """测试 tokens 列表（虽然可变，但原始不被影响）"""
-        args = parse("one two three")
+        args            = parse("one two three")
         original_tokens = args.tokens.copy()
         args.tokens.append("four")
         # 这是预期的行为 - tokens 是可变列表
@@ -336,7 +336,7 @@ class TestEdgeCases:
     def test_very_long_input(self):
         """测试非常长的输入"""
         long_input = " ".join([f"word{i}" for i in range(1000)])
-        result = parse(long_input)
+        result     = parse(long_input)
         assert len(result.tokens) == 1000
 
     def test_unicode_after_dash_is_positional(self):

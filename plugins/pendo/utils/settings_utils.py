@@ -39,7 +39,7 @@ PLUGIN_SETTINGS_HELP_LINES = (
 
 # 统一的布尔值解析字符串集合，供 _coerce_setting_bool 和 parse_toggle_value 共用
 _TRUTHY = frozenset({"on", "true", "1", "yes", "是", "开启", "开"})
-_FALSY = frozenset({"off", "false", "0", "no", "否", "关闭", "关"})
+_FALSY  = frozenset({"off", "false", "0", "no", "否", "关闭", "关"})
 
 
 def _coerce_setting_bool(value: Any, default: bool) -> bool:

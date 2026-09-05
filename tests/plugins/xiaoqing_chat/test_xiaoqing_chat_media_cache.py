@@ -42,17 +42,17 @@ mock_context = _fixture_support.mock_context
 
 @pytest.mark.asyncio
 async def test_render_local_media_file_uses_render_cache(mock_context):
-    runtime = _make_media_runtime()
+    runtime    = _make_media_runtime()
     image_path = _write_png(mock_context.data_dir / "trip_photo.png")
 
     async def _fake_analyze(resolved, *, context, runtime, prefer_emoji):
         return RenderedMedia(
-            media_hash=resolved.media_hash,
-            kind="image",
-            description="海边落日",
-            emotion_tags=(),
-            marker="[图片：海边落日]",
-            cached_path=resolved.cached_path,
+            media_hash   = resolved.media_hash,
+            kind         = "image",
+            description  = "海边落日",
+            emotion_tags = (),
+            marker       = "[图片：海边落日]",
+            cached_path  = resolved.cached_path,
         )
 
     with patch(
@@ -71,18 +71,18 @@ async def test_render_local_media_file_uses_render_cache(mock_context):
 
 @pytest.mark.asyncio
 async def test_identical_media_analysis_is_single_flight(mock_context):
-    runtime = _make_media_runtime()
+    runtime    = _make_media_runtime()
     image_path = _write_png(mock_context.data_dir / "same-image.png")
 
     async def _fake_analyze(resolved, *, context, runtime, prefer_emoji):
         await asyncio.sleep(0.03)
         return RenderedMedia(
-            media_hash=resolved.media_hash,
-            kind="image",
-            description="白色方块",
-            emotion_tags=(),
-            marker="[图片：白色方块]",
-            cached_path=resolved.cached_path,
+            media_hash   = resolved.media_hash,
+            kind         = "image",
+            description  = "白色方块",
+            emotion_tags = (),
+            marker       = "[图片：白色方块]",
+            cached_path  = resolved.cached_path,
         )
 
     with patch(
@@ -117,14 +117,14 @@ def test_corrupt_image_payload_is_rejected_before_inbox_write(mock_context):
     with pytest.raises(ValueError, match="image"):
         _materialize_resolved_media(
             b"not actually an image",
-            segment_type="image",
-            source_name="corrupt.png",
-            suffix=".png",
-            context=mock_context,
-            max_pixels=16_000_000,
-            max_frames=120,
-            disk_quota_bytes=1024 * 1024,
-            cache_ttl_seconds=3600.0,
+            segment_type      = "image",
+            source_name       = "corrupt.png",
+            suffix            = ".png",
+            context           = mock_context,
+            max_pixels        = 16_000_000,
+            max_frames        = 120,
+            disk_quota_bytes  = 1024 * 1024,
+            cache_ttl_seconds = 3600.0,
         )
 
     assert list((mock_context.data_dir / "media" / "inbox").glob("*")) == []
@@ -145,11 +145,11 @@ def test_image_probe_rejects_decompression_bomb_warning_and_unknown_frames():
 
     with pytest.raises(ValueError, match="frame count unavailable"):
         _validate_image_resource_limits(
-            width=1,
-            height=1,
-            max_pixels=16_000_000,
-            max_frames=120,
-            frame_count=None,
+            width       = 1,
+            height      = 1,
+            max_pixels  = 16_000_000,
+            max_frames  = 120,
+            frame_count = None,
         )
 
 
@@ -159,32 +159,32 @@ def test_render_cache_evicts_old_entries_at_fixed_capacity(mock_context):
     cached_path = _write_png(mock_context.data_dir / "bounded-cache.png")
     for index in range(6):
         media_hash = f"hash-{index}"
-        resolved = ResolvedMedia(
-            media_hash=media_hash,
-            segment_type="image",
-            source_name=media_hash,
-            mime_type="image/png",
-            cached_path=cached_path,
-            width=1,
-            height=1,
-            is_animated=False,
+        resolved   = ResolvedMedia(
+            media_hash   = media_hash,
+            segment_type = "image",
+            source_name  = media_hash,
+            mime_type    = "image/png",
+            cached_path  = cached_path,
+            width        = 1,
+            height       = 1,
+            is_animated  = False,
         )
         rendered = RenderedMedia(
-            media_hash=media_hash,
-            kind="image",
-            description=f"image {index}",
-            emotion_tags=(),
-            marker=f"[图片：image {index}]",
-            cached_path=cached_path,
+            media_hash   = media_hash,
+            kind         = "image",
+            description  = f"image {index}",
+            emotion_tags = (),
+            marker       = f"[图片：image {index}]",
+            cached_path  = cached_path,
         )
         write_render_cache_entry(
             mock_context.data_dir,
             resolved,
             rendered,
-            source="llm",
-            quality="detailed",
-            max_entries=3,
-            max_bytes=1024 * 1024,
+            source      = "llm",
+            quality     = "detailed",
+            max_entries = 3,
+            max_bytes   = 1024 * 1024,
         )
 
     cache_path = mock_context.data_dir / "media" / "render_cache.json"
@@ -197,35 +197,35 @@ def test_render_cache_evicts_entries_until_serialized_size_is_bounded(mock_conte
     from plugins.xiaoqing_chat.media.event_media_common import write_render_cache_entry
 
     cached_path = _write_png(mock_context.data_dir / "byte-bounded-cache.png")
-    max_bytes = 1_024
+    max_bytes   = 1_024
     for index in range(12):
         media_hash = f"large-hash-{index}"
-        resolved = ResolvedMedia(
-            media_hash=media_hash,
-            segment_type="image",
-            source_name=media_hash,
-            mime_type="image/png",
-            cached_path=cached_path,
-            width=1,
-            height=1,
-            is_animated=False,
+        resolved   = ResolvedMedia(
+            media_hash   = media_hash,
+            segment_type = "image",
+            source_name  = media_hash,
+            mime_type    = "image/png",
+            cached_path  = cached_path,
+            width        = 1,
+            height       = 1,
+            is_animated  = False,
         )
         rendered = RenderedMedia(
-            media_hash=media_hash,
-            kind="image",
-            description=f"{index}-" + ("描述" * 120),
-            emotion_tags=(),
-            marker=f"[图片：{index}]",
-            cached_path=cached_path,
+            media_hash   = media_hash,
+            kind         = "image",
+            description  = f"{index}-" + ("描述" * 120),
+            emotion_tags = (),
+            marker       = f"[图片：{index}]",
+            cached_path  = cached_path,
         )
         write_render_cache_entry(
             mock_context.data_dir,
             resolved,
             rendered,
-            source="llm",
-            quality="detailed",
-            max_entries=1_000,
-            max_bytes=max_bytes,
+            source      = "llm",
+            quality     = "detailed",
+            max_entries = 1_000,
+            max_bytes   = max_bytes,
         )
 
     cache_path = mock_context.data_dir / "media" / "render_cache.json"
@@ -250,21 +250,21 @@ def test_concurrent_inbox_writes_cannot_race_past_disk_quota(mock_context):
         return buffer.getvalue()
 
     payloads = [png_bytes("red"), png_bytes("blue")]
-    quota = max(len(payload) for payload in payloads)
-    start = threading.Barrier(len(payloads))
+    quota    = max(len(payload) for payload in payloads)
+    start    = threading.Barrier(len(payloads))
 
     def materialize(payload: bytes, index: int):
         start.wait(timeout=2)
         return _materialize_resolved_media(
             payload,
-            segment_type="image",
-            source_name=f"concurrent-{index}.png",
-            suffix=".png",
-            context=mock_context,
-            max_pixels=16_000_000,
-            max_frames=120,
-            disk_quota_bytes=quota,
-            cache_ttl_seconds=3600.0,
+            segment_type      = "image",
+            source_name       = f"concurrent-{index}.png",
+            suffix            = ".png",
+            context           = mock_context,
+            max_pixels        = 16_000_000,
+            max_frames        = 120,
+            disk_quota_bytes  = quota,
+            cache_ttl_seconds = 3600.0,
         )
 
     def slow_atomic_write(path: Path, payload: bytes) -> None:
@@ -302,8 +302,8 @@ async def test_local_media_applies_pixel_budget_before_analysis(mock_context):
     ):
         rendered = await render_local_media_file(
             image_path,
-            context=mock_context,
-            runtime=runtime,
+            context = mock_context,
+            runtime = runtime,
         )
 
     assert rendered is None
@@ -311,16 +311,16 @@ async def test_local_media_applies_pixel_budget_before_analysis(mock_context):
 
 @pytest.mark.asyncio
 async def test_render_local_media_file_keeps_blocking_read_off_event_loop(mock_context):
-    runtime = _make_media_runtime()
+    runtime    = _make_media_runtime()
     image_path = _write_png(mock_context.data_dir / "slow_read.png")
-    release = threading.Event()
-    real_read = _read_file_bounded
+    release    = threading.Event()
+    real_read  = _read_file_bounded
 
     def slow_read(path: Path, *, max_bytes: int) -> bytes:
         release.wait(timeout=1)
         return real_read(path, max_bytes=max_bytes)
 
-    loop = asyncio.get_running_loop()
+    loop      = asyncio.get_running_loop()
     heartbeat = asyncio.Event()
     loop.call_later(0.02, heartbeat.set)
     fallback_release = threading.Timer(0.5, release.set)
@@ -348,9 +348,9 @@ async def test_render_local_media_file_keeps_blocking_read_off_event_loop(mock_c
 
 @pytest.mark.asyncio
 async def test_media_blocking_work_has_plugin_local_concurrency_limit():
-    release = threading.Event()
-    active = 0
-    peak = 0
+    release    = threading.Event()
+    active     = 0
+    peak       = 0
     state_lock = threading.Lock()
 
     def blocking_operation() -> None:
@@ -379,15 +379,15 @@ async def test_media_blocking_work_has_plugin_local_concurrency_limit():
 @pytest.mark.asyncio
 async def test_llm_media_preparation_reads_cached_file_once(mock_context):
     image_path = _write_png(mock_context.data_dir / "single_read.png")
-    resolved = ResolvedMedia(
-        media_hash=hashlib.sha256(_PNG_BYTES).hexdigest(),
-        segment_type="image",
-        source_name="single read",
-        mime_type="image/png",
-        cached_path=image_path,
-        width=1,
-        height=1,
-        is_animated=False,
+    resolved   = ResolvedMedia(
+        media_hash   = hashlib.sha256(_PNG_BYTES).hexdigest(),
+        segment_type = "image",
+        source_name  = "single read",
+        mime_type    = "image/png",
+        cached_path  = image_path,
+        width        = 1,
+        height       = 1,
+        is_animated  = False,
     )
 
     with (
@@ -442,12 +442,12 @@ async def test_render_local_media_file_refreshes_old_fallback_cache_with_explici
 
     async def _fake_analyze(resolved, *, context, runtime, prefer_emoji):
         return RenderedMedia(
-            media_hash=resolved.media_hash,
-            kind="image",
-            description="一只猫趴在窗边",
-            emotion_tags=("慵懒",),
-            marker="[图片：一只猫趴在窗边]",
-            cached_path=resolved.cached_path,
+            media_hash   = resolved.media_hash,
+            kind         = "image",
+            description  = "一只猫趴在窗边",
+            emotion_tags = ("慵懒",),
+            marker       = "[图片：一只猫趴在窗边]",
+            cached_path  = resolved.cached_path,
         )
 
     with patch(
@@ -507,7 +507,7 @@ async def test_render_local_media_file_keeps_old_fallback_cache_without_explicit
 async def test_render_local_media_file_refreshes_generic_llm_cache_after_prompt_upgrade(
     mock_context,
 ):
-    runtime = _make_media_runtime()
+    runtime    = _make_media_runtime()
     image_path = _write_png(mock_context.data_dir / "sticker_refresh_probe.jpg")
     media_hash = hashlib.sha256(_PNG_BYTES).hexdigest()
     cache_path = mock_context.data_dir / "media" / "render_cache.json"
@@ -532,12 +532,12 @@ async def test_render_local_media_file_refreshes_generic_llm_cache_after_prompt_
 
     async def _fake_analyze(resolved, *, context, runtime, prefer_emoji):
         return RenderedMedia(
-            media_hash=resolved.media_hash,
-            kind="emoji",
-            description="一只猫皱着脸，配字是苦鲁西",
-            emotion_tags=("委屈", "难受"),
-            marker="[表情包：委屈，难受]",
-            cached_path=resolved.cached_path,
+            media_hash   = resolved.media_hash,
+            kind         = "emoji",
+            description  = "一只猫皱着脸，配字是苦鲁西",
+            emotion_tags = ("委屈", "难受"),
+            marker       = "[表情包：委屈，难受]",
+            cached_path  = resolved.cached_path,
         )
 
     with patch(
@@ -585,7 +585,7 @@ def test_parse_marker_accepts_rendered_qq_face_marker_as_outbound_fallback() -> 
 
 @pytest.mark.asyncio
 async def test_resolve_marker_matches_emoji_hint_and_builds_media_part(mock_context):
-    runtime = _make_media_runtime()
+    runtime    = _make_media_runtime()
     image_path = _write_png(mock_context.data_dir / "media" / "library" / "wuyu.png")
     media_hash = hashlib.sha256(image_path.read_bytes()).hexdigest()
     index_path = image_path.parent / "index.json"
@@ -624,19 +624,19 @@ async def test_resolve_marker_matches_emoji_hint_and_builds_media_part(mock_cont
 
 @pytest.mark.asyncio
 async def test_resolve_marker_matches_qq_face_and_image_hints(mock_context):
-    runtime = _make_media_runtime()
+    runtime    = _make_media_runtime()
     image_path = _write_png(mock_context.data_dir / "media" / "reply_images" / "猫举手.png")
 
     face = await resolve_marker(
         parse_marker("来个 [想发QQ表情:狗头]"),
-        context=mock_context,
-        runtime=runtime,
+        context = mock_context,
+        runtime = runtime,
     )
     image = await resolve_marker(
         parse_marker("看这个 [想发图片:猫举手]"),
-        context=mock_context,
-        runtime=runtime,
-        history=[],
+        context = mock_context,
+        runtime = runtime,
+        history = [],
     )
 
     assert face is not None
@@ -644,8 +644,8 @@ async def test_resolve_marker_matches_qq_face_and_image_hints(mock_context):
     assert face.marker == "[QQ表情：狗头]"
     rendered_face = await resolve_marker(
         parse_marker("行吧[QQ表情：捂脸]"),
-        context=mock_context,
-        runtime=runtime,
+        context = mock_context,
+        runtime = runtime,
     )
     assert rendered_face is not None
     assert rendered_face.kind == "qq_face"
@@ -664,8 +664,8 @@ async def test_resolve_image_marker_rejects_history_path_outside_data_root(tmp_p
     context = SimpleNamespace(data_dir=data_root)
     history = [
         SimpleNamespace(
-            role="assistant",
-            parts=(
+            role  = "assistant",
+            parts = (
                 {
                     "kind": "image",
                     "file_path": str(outside_path),
@@ -679,9 +679,9 @@ async def test_resolve_image_marker_rejects_history_path_outside_data_root(tmp_p
 
     resolved = await resolve_marker(
         parsed,
-        context=context,
-        runtime=SimpleNamespace(),
-        history=history,
+        context = context,
+        runtime = SimpleNamespace(),
+        history = history,
     )
 
     assert resolved is None
@@ -690,7 +690,7 @@ async def test_resolve_image_marker_rejects_history_path_outside_data_root(tmp_p
 @pytest.mark.asyncio
 async def test_resolve_marker_returns_none_when_candidate_missing(mock_context):
     runtime = _make_media_runtime()
-    parsed = parse_marker("哈哈 [想发表情:不存在]")
+    parsed  = parse_marker("哈哈 [想发表情:不存在]")
 
     assert parsed is not None
     assert await resolve_marker(parsed, context=mock_context, runtime=runtime) is None
@@ -698,7 +698,7 @@ async def test_resolve_marker_returns_none_when_candidate_missing(mock_context):
 
 @pytest.mark.asyncio
 async def test_load_emoji_library_uses_mtime_cache(mock_context):
-    runtime = _make_media_runtime()
+    runtime    = _make_media_runtime()
     image_path = _write_png(mock_context.data_dir / "media" / "library" / "cached.png")
     media_hash = hashlib.sha256(image_path.read_bytes()).hexdigest()
     (image_path.parent / "index.json").write_text(
@@ -739,7 +739,7 @@ async def test_load_emoji_library_uses_mtime_cache(mock_context):
 async def test_emoji_library_reuses_file_fingerprints_after_index_only_update(mock_context):
     from plugins.xiaoqing_chat.media import emoji_library as library_module
 
-    runtime = _make_media_runtime()
+    runtime    = _make_media_runtime()
     image_path = _write_png(mock_context.data_dir / "media" / "library" / "indexed.png")
     media_hash = hashlib.sha256(image_path.read_bytes()).hexdigest()
     index_path = image_path.parent / "index.json"
@@ -773,9 +773,9 @@ async def test_emoji_library_reuses_file_fingerprints_after_index_only_update(mo
     assert saved["entries"][media_hash]["file_mtime_ns"] == image_path.stat().st_mtime_ns
 
     library_module.mark_emoji_used_by_hash(mock_context, media_hash)
-    event_loop_thread = threading.get_ident()
+    event_loop_thread       = threading.get_ident()
     scan_threads: list[int] = []
-    original_scan = library_module._read_library_snapshot
+    original_scan           = library_module._read_library_snapshot
 
     def observed_scan(*args, **kwargs):
         scan_threads.append(threading.get_ident())
@@ -841,24 +841,24 @@ async def test_qq_face_catalog_cache_is_bounded(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_render_local_media_file_retries_generic_llm_cache_on_next_send(mock_context):
-    runtime = _make_media_runtime()
+    runtime    = _make_media_runtime()
     image_path = _write_png(mock_context.data_dir / "sticker_retry_probe.jpg")
 
     generic_render = RenderedMedia(
-        media_hash="",
-        kind="emoji",
-        description="动画表情",
-        emotion_tags=(),
-        marker="[表情包：动画表情]",
-        cached_path=image_path,
+        media_hash   = "",
+        kind         = "emoji",
+        description  = "动画表情",
+        emotion_tags = (),
+        marker       = "[表情包：动画表情]",
+        cached_path  = image_path,
     )
     detailed_render = RenderedMedia(
-        media_hash="",
-        kind="emoji",
-        description="一只猫皱着脸，配字是苦鲁西",
-        emotion_tags=("委屈", "难受"),
-        marker="[表情包：委屈，难受]",
-        cached_path=image_path,
+        media_hash   = "",
+        kind         = "emoji",
+        description  = "一只猫皱着脸，配字是苦鲁西",
+        emotion_tags = ("委屈", "难受"),
+        marker       = "[表情包：委屈，难受]",
+        cached_path  = image_path,
     )
 
     async def _fake_analyze(resolved, *, context, runtime, prefer_emoji):
@@ -880,15 +880,15 @@ async def test_render_local_media_file_retries_generic_llm_cache_on_next_send(mo
     ) as mock_analyze:
         first = await render_local_media_file(
             image_path,
-            context=mock_context,
-            runtime=runtime,
-            prefer_emoji=True,
+            context      = mock_context,
+            runtime      = runtime,
+            prefer_emoji = True,
         )
         second = await render_local_media_file(
             image_path,
-            context=mock_context,
-            runtime=runtime,
-            prefer_emoji=True,
+            context      = mock_context,
+            runtime      = runtime,
+            prefer_emoji = True,
         )
 
     assert first is not None
@@ -900,9 +900,9 @@ async def test_render_local_media_file_retries_generic_llm_cache_on_next_send(mo
 
 @pytest.mark.asyncio
 async def test_render_event_media_text_falls_back_in_configured_provider_order(mock_context):
-    runtime = _make_media_runtime()
-    vision = mock_context.secrets["plugins"]["xiaoqing_chat"]["vision"]
-    vision["default"] = "glm-4.6v-flash"
+    runtime             = _make_media_runtime()
+    vision              = mock_context.secrets["plugins"]["xiaoqing_chat"]["vision"]
+    vision["default"]   = "glm-4.6v-flash"
     vision["fallbacks"] = ["glm-4.6v", "glm-4v-flash", "glm-4.1v-thinking-flash"]
     vision["providers"] = {
         "glm-4.6v-flash": {

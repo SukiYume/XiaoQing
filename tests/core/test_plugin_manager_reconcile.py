@@ -27,16 +27,16 @@ _isolate_process_global_plugin_import_state = (
 
 @pytest.mark.asyncio
 async def test_reload_plugin_keeps_old_instance_when_fingerprint_fails(tmp_path: Path):
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     definition = _build_definition()
     old_gate = PluginExecutionGate("parallel", plugin_name="demo")
     old_plugin = LoadedPlugin(
-        definition=definition,
-        module=ModuleType("demo.main"),
-        mtime=0.0,
-        execution_gate=old_gate,
+        definition     = definition,
+        module         = ModuleType("demo.main"),
+        mtime          = 0.0,
+        execution_gate = old_gate,
     )
-    manager._plugins["demo"] = old_plugin
+    manager._plugins["demo"]         = old_plugin
     manager._execution_gates["demo"] = old_gate
     manager._load_definition = Mock(return_value=definition)
     manager._authorize_plugin_snapshot = Mock(side_effect=OSError("stat failed"))
@@ -54,9 +54,9 @@ async def test_reload_plugin_keeps_old_instance_when_fingerprint_fails(tmp_path:
 async def test_reload_retires_old_policy_when_replacement_fingerprint_fails(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
-    old_definition = _build_definition()
-    changed_definition = _build_definition()
+    manager                     = _build_manager(tmp_path)
+    old_definition              = _build_definition()
+    changed_definition          = _build_definition()
     changed_definition.commands = [
         {
             "name": "demo",
@@ -65,16 +65,16 @@ async def test_reload_retires_old_policy_when_replacement_fingerprint_fails(
             "admin_only": True,
         }
     ]
-    module = ModuleType("plugins.demo.main")
+    module          = ModuleType("plugins.demo.main")
     module.shutdown = AsyncMock()
     gate = PluginExecutionGate("parallel", plugin_name="demo")
     plugin = LoadedPlugin(
-        definition=old_definition,
-        module=module,
-        mtime=0.0,
-        execution_gate=gate,
+        definition     = old_definition,
+        module         = module,
+        mtime          = 0.0,
+        execution_gate = gate,
     )
-    manager._plugins["demo"] = plugin
+    manager._plugins["demo"]         = plugin
     manager._execution_gates["demo"] = gate
     manager._load_definition = Mock(return_value=changed_definition)
     manager._authorize_plugin_snapshot = Mock(side_effect=OSError("stat denied"))
@@ -93,12 +93,12 @@ async def test_direct_reload_retires_invalid_or_disabled_manifest_fail_closed(
     tmp_path: Path,
     manifest_state: str,
 ) -> None:
-    manager = _build_manager(tmp_path)
-    definition = _build_definition()
+    manager             = _build_manager(tmp_path)
+    definition          = _build_definition()
     definition.commands = [
         {"name": "demo", "triggers": ["demo"], "help": "demo"},
     ]
-    module = ModuleType("plugins.demo.main")
+    module         = ModuleType("plugins.demo.main")
     shutdown_calls = 0
 
     async def handle(command, args, event, context):
@@ -108,16 +108,16 @@ async def test_direct_reload_retires_invalid_or_disabled_manifest_fail_closed(
         nonlocal shutdown_calls
         shutdown_calls += 1
 
-    module.handle = handle
+    module.handle   = handle
     module.shutdown = shutdown
     gate = PluginExecutionGate("parallel", plugin_name="demo")
     plugin = LoadedPlugin(
-        definition=definition,
-        module=module,
-        mtime=0.0,
-        execution_gate=gate,
+        definition     = definition,
+        module         = module,
+        mtime          = 0.0,
+        execution_gate = gate,
     )
-    manager._plugins["demo"] = plugin
+    manager._plugins["demo"]         = plugin
     manager._execution_gates["demo"] = gate
     manager.router.replace_plugin(
         definition.name,
@@ -126,7 +126,7 @@ async def test_direct_reload_retires_invalid_or_disabled_manifest_fail_closed(
     if manifest_state == "invalid":
         manager._load_definition = Mock(return_value=None)
     else:
-        disabled = _build_definition()
+        disabled         = _build_definition()
         disabled.enabled = False
         manager._load_definition = Mock(return_value=disabled)
 
@@ -143,19 +143,19 @@ async def test_direct_reload_retires_invalid_or_disabled_manifest_fail_closed(
 async def test_reconcile_keeps_live_generation_when_required_dependency_is_transiently_missing(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
     (plugin_dir / "plugin.json").write_text("{}", encoding="utf-8")
     definition = _build_definition()
     gate = PluginExecutionGate("parallel", plugin_name="demo")
     plugin = LoadedPlugin(
-        definition=definition,
-        module=ModuleType("plugins.demo.main"),
-        mtime=0.0,
-        execution_gate=gate,
+        definition     = definition,
+        module         = ModuleType("plugins.demo.main"),
+        mtime          = 0.0,
+        execution_gate = gate,
     )
-    manager._plugins["demo"] = plugin
+    manager._plugins["demo"]         = plugin
     manager._execution_gates["demo"] = gate
     manager._load_definition = Mock(return_value=_ManifestRejection("dependency"))
     manager._unload_plugin_once = AsyncMock()
@@ -168,24 +168,24 @@ async def test_reconcile_keeps_live_generation_when_required_dependency_is_trans
 
 @pytest.mark.asyncio
 async def test_reload_plugin_quarantines_old_instance_when_shutdown_fails(tmp_path: Path):
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     definition = _build_definition()
     old_gate = PluginExecutionGate("parallel", plugin_name="demo")
     old_plugin = LoadedPlugin(
-        definition=definition,
-        module=ModuleType("demo.main"),
-        mtime=0.0,
-        execution_gate=old_gate,
+        definition     = definition,
+        module         = ModuleType("demo.main"),
+        mtime          = 0.0,
+        execution_gate = old_gate,
     )
-    manager._plugins["demo"] = old_plugin
+    manager._plugins["demo"]         = old_plugin
     manager._execution_gates["demo"] = old_gate
-    old_state = {"resource": object()}
-    manager._plugin_states["demo"] = old_state
+    old_state                        = {"resource": object()}
+    manager._plugin_states["demo"]   = old_state
     manager._load_definition = Mock(return_value=definition)
     manager._shutdown_plugin_instance = AsyncMock(return_value=False)
     manager._authorize_plugin_snapshot = Mock(return_value=1.0)
     manager._purge_plugin_modules = Mock()
-    manager.router.clear_plugin = Mock()
+    manager.router.clear_plugin   = Mock()
 
     await manager.reload_plugin("demo")
 
@@ -201,11 +201,11 @@ async def test_reload_plugin_quarantines_old_instance_when_shutdown_fails(tmp_pa
 
 @pytest.mark.asyncio
 async def test_reload_plugin_closes_old_gate_before_shutdown(tmp_path: Path):
-    manager = _build_manager(tmp_path)
-    definition = _build_definition()
+    manager          = _build_manager(tmp_path)
+    definition       = _build_definition()
     shutdown_started = asyncio.Event()
     release_shutdown = asyncio.Event()
-    old_module = ModuleType("demo.main")
+    old_module       = ModuleType("demo.main")
 
     async def shutdown():
         shutdown_started.set()
@@ -214,12 +214,12 @@ async def test_reload_plugin_closes_old_gate_before_shutdown(tmp_path: Path):
     old_module.shutdown = shutdown
     old_gate = PluginExecutionGate("parallel", plugin_name="demo")
     old_plugin = LoadedPlugin(
-        definition=definition,
-        module=old_module,
-        mtime=0.0,
-        execution_gate=old_gate,
+        definition     = definition,
+        module         = old_module,
+        mtime          = 0.0,
+        execution_gate = old_gate,
     )
-    manager._plugins["demo"] = old_plugin
+    manager._plugins["demo"]         = old_plugin
     manager._execution_gates["demo"] = old_gate
     manager._load_definition = Mock(return_value=definition)
     manager._authorize_plugin_snapshot = Mock(return_value=1.0)
@@ -229,10 +229,10 @@ async def test_reload_plugin_closes_old_gate_before_shutdown(tmp_path: Path):
 
     async def load_canonical(_plugin_dir, transaction):
         return LoadedPlugin(
-            definition=definition,
-            module=canonical_module,
-            mtime=transaction.mtime,
-            execution_gate=transaction.gate,
+            definition     = definition,
+            module         = canonical_module,
+            mtime          = transaction.mtime,
+            execution_gate = transaction.gate,
         )
 
     manager._load_canonical_candidate = AsyncMock(side_effect=load_canonical)
@@ -260,11 +260,11 @@ async def test_reconcile_unloads_fail_closed_manifest_and_recovers_once(
     tmp_path: Path,
     manifest_failure: str,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
     (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
-    manifest_path = plugin_dir / "plugin.json"
+    manifest_path    = plugin_dir / "plugin.json"
     enabled_manifest = textwrap.dedent(
         """
         {
@@ -296,8 +296,8 @@ async def test_reconcile_unloads_fail_closed_manifest_and_recovers_once(
     )
 
     manager.load_plugin(plugin_dir)
-    original = manager._plugins["demo"]
-    original_gate = original.execution_gate
+    original        = manager._plugins["demo"]
+    original_gate   = original.execution_gate
     original_unload = manager._unload_plugin_once
     manager._unload_plugin_once = AsyncMock(wraps=original_unload)
     assert manager.router.resolve("demo") is not None
@@ -336,7 +336,7 @@ async def test_reconcile_unloads_fail_closed_manifest_and_recovers_once(
     await manager.reconcile_plugins()
 
     replacement = manager._plugins["demo"]
-    resolved = manager.router.resolve("demo")
+    resolved    = manager.router.resolve("demo")
     assert replacement is not original
     assert replacement.execution_gate is not original_gate
     assert resolved is not None
@@ -364,7 +364,7 @@ async def test_reconcile_never_auto_retires_or_replaces_quarantined_plugin(
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
     (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
-    manifest_path = plugin_dir / "plugin.json"
+    manifest_path    = plugin_dir / "plugin.json"
     enabled_manifest = (
         '{"name":"demo","version":"1.0.0","entry":"main.py",'
         '"commands":[{"name":"demo","triggers":["demo"],"help":"demo"}],'
@@ -377,7 +377,7 @@ async def test_reconcile_never_auto_retires_or_replaces_quarantined_plugin(
     )
     manager.load_plugin(plugin_dir)
     quarantined = manager._plugins["demo"]
-    gate = quarantined.execution_gate
+    gate        = quarantined.execution_gate
     assert gate is not None
     quarantined.module.shutdown = AsyncMock(side_effect=RuntimeError("resource still live"))
 
@@ -410,18 +410,18 @@ async def test_reconcile_never_auto_retires_or_replaces_quarantined_plugin(
 async def test_reconcile_cancels_pending_init_when_plugin_directory_disappears(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
     definition = _build_definition()
-    module = ModuleType("plugins.demo.main")
+    module     = ModuleType("plugins.demo.main")
     gate = PluginExecutionGate("parallel", plugin_name="demo")
     init_task = asyncio.create_task(asyncio.sleep(3600))
     manager._init_tasks.append(init_task)
     manager._init_task_plugins[init_task] = "demo"
-    manager._pending_plugins[init_task] = (definition, module, 0.0)
-    manager._execution_gates["demo"] = gate
-    manager._plugin_states["demo"] = {"pending": True}
+    manager._pending_plugins[init_task]   = (definition, module, 0.0)
+    manager._execution_gates["demo"]      = gate
+    manager._plugin_states["demo"]        = {"pending": True}
     plugin_dir.rmdir()
 
     await manager.reconcile_plugins()
@@ -438,7 +438,7 @@ async def test_reconcile_cancels_pending_init_when_plugin_directory_disappears(
 @pytest.mark.asyncio
 async def test_reconcile_calls_are_serialized(tmp_path: Path) -> None:
     manager = _build_manager(tmp_path)
-    probe = _AsyncConcurrencyProbe()
+    probe   = _AsyncConcurrencyProbe()
     manager._reconcile_plugins_once = AsyncMock(side_effect=probe.run)
 
     await asyncio.gather(manager.reconcile_plugins(), manager.reconcile_plugins())
@@ -450,7 +450,7 @@ async def test_reconcile_calls_are_serialized(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_reload_and_reconcile_share_one_lifecycle_lock(tmp_path: Path) -> None:
     manager = _build_manager(tmp_path)
-    probe = _AsyncConcurrencyProbe()
+    probe   = _AsyncConcurrencyProbe()
     manager._reload_plugin_once = AsyncMock(side_effect=probe.run)
     manager._reconcile_plugins_once = AsyncMock(side_effect=probe.run)
 
@@ -467,11 +467,11 @@ async def test_reload_all_stops_before_later_plugins_or_reconcile_on_quarantine(
 ) -> None:
     manager = _build_manager(tmp_path)
     for name in ("blocked", "later"):
-        definition = _build_definition(name)
+        definition             = _build_definition(name)
         manager._plugins[name] = LoadedPlugin(
-            definition=definition,
-            module=ModuleType(f"plugins.{name}.main"),
-            mtime=0.0,
+            definition = definition,
+            module     = ModuleType(f"plugins.{name}.main"),
+            mtime      = 0.0,
         )
 
     async def reload_once(name: str) -> None:
@@ -480,7 +480,7 @@ async def test_reload_all_stops_before_later_plugins_or_reconcile_on_quarantine(
 
     manager._reload_plugin_once = AsyncMock(side_effect=reload_once)
     manager._reconcile_plugins_once = AsyncMock()
-    before_reload = AsyncMock()
+    before_reload                   = AsyncMock()
 
     completed = await manager.reload_all_plugins(before_reload=before_reload)
 
@@ -494,15 +494,15 @@ async def test_reload_all_stops_before_later_plugins_or_reconcile_on_quarantine(
 async def test_reload_all_retires_invalid_plugin_before_later_quarantine(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager     = _build_manager(tmp_path)
     definitions = {name: _build_definition(name) for name in ("a_invalid", "b_blocked")}
     for name, definition in definitions.items():
         gate = PluginExecutionGate("parallel", plugin_name=name)
         manager._plugins[name] = LoadedPlugin(
-            definition=definition,
-            module=ModuleType(f"plugins.{name}.main"),
-            mtime=0.0,
-            execution_gate=gate,
+            definition     = definition,
+            module         = ModuleType(f"plugins.{name}.main"),
+            mtime          = 0.0,
+            execution_gate = gate,
         )
         manager._execution_gates[name] = gate
 
@@ -530,12 +530,12 @@ async def test_reload_all_retires_invalid_plugin_before_later_quarantine(
 
 @pytest.mark.asyncio
 async def test_direct_reload_refuses_quarantined_generation(tmp_path: Path) -> None:
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     definition = _build_definition()
-    plugin = LoadedPlugin(
-        definition=definition,
-        module=ModuleType("plugins.demo.main"),
-        mtime=0.0,
+    plugin     = LoadedPlugin(
+        definition = definition,
+        module     = ModuleType("plugins.demo.main"),
+        mtime      = 0.0,
     )
     manager._plugins["demo"] = plugin
     manager._quarantined_plugins.add("demo")
@@ -551,7 +551,7 @@ async def test_direct_reload_refuses_quarantined_generation(tmp_path: Path) -> N
 async def test_reconcile_quarantines_old_entry_when_new_entry_cannot_import(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
     (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
@@ -568,7 +568,7 @@ async def test_reconcile_quarantines_old_entry_when_new_entry_cannot_import(
     )
     manager.load_plugin(plugin_dir)
     old_plugin = manager._plugins["demo"]
-    old_gate = old_plugin.execution_gate
+    old_gate   = old_plugin.execution_gate
     (plugin_dir / "broken.py").write_text("def broken(:\n", encoding="utf-8")
     manifest_path.write_text(
         manifest_path.read_text(encoding="utf-8").replace("main.py", "broken.py"),
@@ -596,7 +596,7 @@ async def test_reconcile_quarantines_old_entry_when_new_entry_cannot_import(
 async def test_reconcile_retires_changed_policy_when_fingerprint_fails(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
     (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
@@ -608,15 +608,15 @@ async def test_reconcile_retires_changed_policy_when_fingerprint_fails(
         '"enabled":true}',
         encoding="utf-8",
     )
-    old_definition = _build_definition()
-    module = ModuleType("plugins.demo.main")
+    old_definition  = _build_definition()
+    module          = ModuleType("plugins.demo.main")
     module.shutdown = AsyncMock()
     gate = PluginExecutionGate("parallel", plugin_name="demo")
     manager._plugins["demo"] = LoadedPlugin(
-        definition=old_definition,
-        module=module,
-        mtime=0.0,
-        execution_gate=gate,
+        definition     = old_definition,
+        module         = module,
+        mtime          = 0.0,
+        execution_gate = gate,
     )
     manager._execution_gates["demo"] = gate
     manager._capture_plugin_snapshot_async = AsyncMock(side_effect=OSError("stat denied"))
@@ -632,7 +632,7 @@ async def test_reconcile_retires_changed_policy_when_fingerprint_fails(
 async def test_reconcile_detects_definition_change_even_when_fingerprint_matches(
     tmp_path: Path,
 ) -> None:
-    manager = _build_manager(tmp_path)
+    manager    = _build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
     (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
@@ -644,12 +644,12 @@ async def test_reconcile_detects_definition_change_even_when_fingerprint_matches
         '"enabled":true}',
         encoding="utf-8",
     )
-    old_definition = _build_definition()
-    old_mtime = 123
+    old_definition           = _build_definition()
+    old_mtime                = 123
     manager._plugins["demo"] = LoadedPlugin(
-        definition=old_definition,
-        module=ModuleType("plugins.demo.main"),
-        mtime=old_mtime,
+        definition = old_definition,
+        module     = ModuleType("plugins.demo.main"),
+        mtime      = old_mtime,
     )
     manager._capture_plugin_snapshot_async = AsyncMock(return_value=old_mtime)
     manager._reload_plugin_once = AsyncMock()
@@ -664,11 +664,11 @@ async def test_reconcile_detects_definition_change_even_when_fingerprint_matches
 
 @pytest.mark.asyncio
 async def test_reload_cancellation_during_shutdown_quarantines_old(tmp_path: Path):
-    manager = _build_manager(tmp_path)
-    definition = _build_definition()
+    manager          = _build_manager(tmp_path)
+    definition       = _build_definition()
     shutdown_started = asyncio.Event()
     release_shutdown = asyncio.Event()
-    old_module = ModuleType("plugins.demo.main")
+    old_module       = ModuleType("plugins.demo.main")
 
     async def old_shutdown():
         shutdown_started.set()
@@ -677,12 +677,12 @@ async def test_reload_cancellation_during_shutdown_quarantines_old(tmp_path: Pat
     old_module.shutdown = old_shutdown
     old_gate = PluginExecutionGate("parallel", plugin_name="demo")
     old_plugin = LoadedPlugin(
-        definition=definition,
-        module=old_module,
-        mtime=0.0,
-        execution_gate=old_gate,
+        definition     = definition,
+        module         = old_module,
+        mtime          = 0.0,
+        execution_gate = old_gate,
     )
-    manager._plugins["demo"] = old_plugin
+    manager._plugins["demo"]         = old_plugin
     manager._execution_gates["demo"] = old_gate
     manager._load_definition = Mock(return_value=definition)
     manager._authorize_plugin_snapshot = Mock(return_value=1.0)

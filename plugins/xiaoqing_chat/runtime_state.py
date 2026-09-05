@@ -8,6 +8,7 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
+from weakref import WeakValueDictionary
 
 from .config.config import XiaoQingChatConfig
 from .expression.bw_expression_store import ExpressionStore
@@ -34,6 +35,8 @@ class _ChatRuntime:
 @dataclass
 class _PerChatState:
     locks: dict[str, asyncio.Lock] = field(default_factory=dict)
+    # 缓存淘汰后，调用者和等待任务仍可通过弱引用找到同一把锁。
+    live_locks: WeakValueDictionary[str, asyncio.Lock] = field(default_factory=WeakValueDictionary)
     reply_timestamps: dict[str, list[float]] = field(default_factory=dict)
     last_reply_ts: dict[str, float] = field(default_factory=dict)
     last_observe_ts: dict[str, float] = field(default_factory=dict)
@@ -77,31 +80,31 @@ class ChatRuntimeState:
     )
 
     def __init__(self) -> None:
-        self._memory_store = MemoryStore()
-        self._memory_db = MemoryDB()
-        self._media_store = MediaRegistryStore()
-        self._action_history = ActionHistoryStore()
-        self._heartflow = HeartflowEngine()
-        self._goal_store = GoalStore()
-        self._review_store = ReviewStore()
-        self._pfc_state_store = PFCStateStore()
-        self._bw_expr_store = ExpressionStore()
+        self._memory_store     = MemoryStore()
+        self._memory_db        = MemoryDB()
+        self._media_store      = MediaRegistryStore()
+        self._action_history   = ActionHistoryStore()
+        self._heartflow        = HeartflowEngine()
+        self._goal_store       = GoalStore()
+        self._review_store     = ReviewStore()
+        self._pfc_state_store  = PFCStateStore()
+        self._bw_expr_store    = ExpressionStore()
         self._bw_tracker_store = ReflectTrackerStore()
-        self._bw_recorder = MessageRecorder()
-        self._bw_jargon_store = JargonStore()
+        self._bw_recorder      = MessageRecorder()
+        self._bw_jargon_store  = JargonStore()
 
         self._runtime_cache: OrderedDict[str, _ChatRuntime] = OrderedDict()
-        self._runtime_mtime: dict[str, int] = {}
-        self._runtime_revision: dict[str, int] = {}
+        self._runtime_mtime: dict[str, int]                 = {}
+        self._runtime_revision: dict[str, int]              = {}
 
-        self._per_chat = _PerChatState()
-        self._bg_tasks: set[asyncio.Task[Any]] = set()
-        self._bg_tasks_by_key: dict[str, asyncio.Task[Any]] = {}
-        self._vdb_save_task: asyncio.Task[Any] | None = None
-        self._global_active_provider: str | None = None
+        self._per_chat                                       = _PerChatState()
+        self._bg_tasks: set[asyncio.Task[Any]]               = set()
+        self._bg_tasks_by_key: dict[str, asyncio.Task[Any]]  = {}
+        self._vdb_save_task: asyncio.Task[Any] | None        = None
+        self._global_active_provider: str | None             = None
         self._active_provider_by_chat: OrderedDict[str, str] = OrderedDict()
-        self._generation_limiter = GenerationLimiter()
-        self._accepting_background_tasks = True
+        self._generation_limiter                             = GenerationLimiter()
+        self._accepting_background_tasks                     = True
 
     @property
     def memory_store(self) -> MemoryStore:
@@ -155,7 +158,7 @@ class ChatRuntimeState:
     def generation_limiter(self) -> GenerationLimiter:
         return self._generation_limiter
 
-    _MAX_RUNTIME_CACHES = 32
+    _MAX_RUNTIME_CACHES     = 32
     _MAX_PROVIDER_OVERRIDES = 500
 
     def get_runtime(self, config_key: str) -> _ChatRuntime | None:
@@ -173,7 +176,7 @@ class ChatRuntimeState:
     ) -> None:
         self._runtime_cache[config_key] = runtime
         self._runtime_cache.move_to_end(config_key)
-        self._runtime_mtime[config_key] = mtime
+        self._runtime_mtime[config_key]    = mtime
         self._runtime_revision[config_key] = revision
         while len(self._runtime_cache) > self._MAX_RUNTIME_CACHES:
             stale_key, _stale_runtime = self._runtime_cache.popitem(last=False)
@@ -189,10 +192,11 @@ class ChatRuntimeState:
     _MAX_TRACKED_CHATS = 500
 
     def get_lock(self, chat_id: str) -> asyncio.Lock:
-        lock = self._per_chat.locks.get(chat_id)
+        lock = self._per_chat.live_locks.get(chat_id)
         if lock is None:
-            lock = asyncio.Lock()
-            self._per_chat.locks[chat_id] = lock
+            lock                               = asyncio.Lock()
+            self._per_chat.locks[chat_id]      = lock
+            self._per_chat.live_locks[chat_id] = lock
         # 每新增 100 个会话才执行一次定期清理。
         if len(self._per_chat.locks) % 100 == 0:
             self.cleanup_stale_chats()
@@ -200,7 +204,7 @@ class ChatRuntimeState:
 
     def cleanup_stale_chats(self) -> None:
         """淘汰超出上限的会话状态，优先保留近期活跃会话。"""
-        pc = self._per_chat
+        pc                = self._per_chat
         all_ids: set[str] = set()
         for d in (
             pc.locks,
@@ -256,12 +260,12 @@ class ChatRuntimeState:
             if not task.done():
                 task.cancel()
 
-        for cid in list(pc.locks.keys()):
-            if cid not in keep and not pc.locks[cid].locked():
-                del pc.locks[cid]
         for cid in list(self._active_provider_by_chat):
             if cid not in keep:
                 self._active_provider_by_chat.pop(cid, None)
+        for cid in list(pc.locks):
+            if cid not in keep and not pc.locks[cid].locked():
+                del pc.locks[cid]
 
     def get_reply_timestamps(self, chat_id: str) -> list[float]:
         return self._per_chat.reply_timestamps.get(chat_id, [])
@@ -297,7 +301,7 @@ class ChatRuntimeState:
         return self._per_chat.stats.get(chat_id, {"replies": 0, "calls": 0})
 
     def inc_stats(self, chat_id: str, key: str) -> None:
-        d = self._per_chat.stats.setdefault(chat_id, {"replies": 0, "calls": 0})
+        d      = self._per_chat.stats.setdefault(chat_id, {"replies": 0, "calls": 0})
         d[key] = int(d.get(key, 0)) + 1
 
     def get_persist_task(self, chat_id: str) -> asyncio.Task[Any] | None:
@@ -385,7 +389,15 @@ class ChatRuntimeState:
 
     def fetch_and_increment_local_id(self, chat_id: str) -> int:
         """原子读取并递增 local_id，返回递增前的值。"""
-        n = self._per_chat.next_local_id.get(chat_id, 1)
+        n = self._per_chat.next_local_id.get(chat_id)
+        if n is None:
+            # 重启与闲置清理均保留历史，从已有编号继续可避免冷加载去重丢消息。
+            numbers = [
+                int(message.local_id[1:])
+                for message in self.memory_store.get(chat_id)
+                if re.fullmatch(r"m\d+", message.local_id or "")
+            ]
+            n = max(numbers, default=0) + 1
         self._per_chat.next_local_id[chat_id] = n + 1
         return n
 
@@ -409,7 +421,7 @@ class ChatRuntimeState:
     def set_pending_bot_name_call(
         self, chat_id: str, user_id: int | None, *, ttl_seconds: float = 60.0
     ) -> None:
-        expires_at = time.time() + max(0.0, float(ttl_seconds))
+        expires_at                                    = time.time() + max(0.0, float(ttl_seconds))
         self._per_chat.pending_bot_name_call[chat_id] = (user_id, expires_at)
 
     def consume_pending_bot_name_call(
@@ -443,7 +455,7 @@ class ChatRuntimeState:
 
     def get_chat_provider(self, chat_id: str) -> str | None:
         normalized_chat_id = str(chat_id)
-        provider = self._active_provider_by_chat.get(normalized_chat_id)
+        provider           = self._active_provider_by_chat.get(normalized_chat_id)
         if provider is not None:
             self._active_provider_by_chat.move_to_end(normalized_chat_id)
         return provider
@@ -467,7 +479,7 @@ class ChatRuntimeState:
         """按会话、全局、配置默认值的顺序解析服务商，并清理过期覆盖项。"""
 
         ordered_names = tuple(dict.fromkeys(str(name) for name in provider_names if name))
-        valid_names = set(ordered_names)
+        valid_names   = set(ordered_names)
         if self._global_active_provider not in valid_names:
             self._global_active_provider = None
         for scoped_chat_id, provider_name in tuple(self._active_provider_by_chat.items()):
@@ -476,7 +488,7 @@ class ChatRuntimeState:
 
         if chat_id is not None:
             scoped_chat_id = str(chat_id)
-            scoped = self._active_provider_by_chat.get(scoped_chat_id)
+            scoped         = self._active_provider_by_chat.get(scoped_chat_id)
             if scoped in valid_names:
                 self._active_provider_by_chat.move_to_end(scoped_chat_id)
                 return scoped

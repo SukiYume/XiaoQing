@@ -1,3 +1,4 @@
+# 验证各运行期 HTTP 调用点的响应预算与失败契约。
 """CR-221 bounded HTTP contracts for the remaining runtime clients."""
 
 from __future__ import annotations
@@ -24,9 +25,9 @@ ROOT = REPOSITORY_ROOT
 
 class _AsyncContent:
     def __init__(self, chunks: list[bytes], *, fail_on_read: bool = False) -> None:
-        self.chunks = chunks
+        self.chunks       = chunks
         self.fail_on_read = fail_on_read
-        self.reads = 0
+        self.reads        = 0
 
     async def iter_chunked(self, _size: int):
         if self.fail_on_read:
@@ -41,19 +42,19 @@ class _Response:
         self,
         body: bytes,
         *,
-        status: int = 200,
+        status: int              = 200,
         content_type: str | None = "application/json",
-        url: str = "https://provider.example/response",
-        fail_on_read: bool = False,
+        url: str                 = "https://provider.example/response",
+        fail_on_read: bool       = False,
     ) -> None:
-        self.status = status
-        self.url = url
+        self.status                  = status
+        self.url                     = url
         self.headers: dict[str, str] = {}
         if content_type is not None:
             self.headers["Content-Type"] = content_type
         self.content = _AsyncContent([body], fail_on_read=fail_on_read)
         self.content_length = None
-        self.closed = False
+        self.closed         = False
 
     async def __aenter__(self):
         return self
@@ -67,7 +68,7 @@ class _Response:
 
 class _Session:
     def __init__(self, *responses: _Response) -> None:
-        self.responses = list(responses)
+        self.responses                          = list(responses)
         self.calls: list[tuple[str, str, dict]] = []
 
     def request(self, method: str, url: str, **kwargs):
@@ -123,8 +124,8 @@ async def test_yingshi_rejects_mime_and_oversized_bodies() -> None:
 async def test_yingshi_non_success_does_not_read_error_body() -> None:
     response = _Response(
         b"sensitive upstream error" * 1000,
-        status=503,
-        fail_on_read=True,
+        status       = 503,
+        fail_on_read = True,
     )
     with pytest.raises(HttpStatusError):
         await yingshi._get_checkin_id(_Session(response), "a", "k", "t", {})
@@ -161,9 +162,9 @@ async def test_twitter_preserves_explicit_proxy_and_bounds_timeline_json(tmp_pat
     session = _Session(_json_response(payload, url="https://x.com/api"))
     context = with_settings_reader(
         SimpleNamespace(
-            http_session=session,
-            data_dir=tmp_path,
-            secrets={
+            http_session = session,
+            data_dir     = tmp_path,
+            secrets      = {
                 "plugins": {
                     "twitter": {
                         "user_id": "1",
@@ -191,9 +192,9 @@ async def test_twitter_non_success_does_not_read_body(tmp_path: Path) -> None:
     response = _Response(b"huge private error", status=429, fail_on_read=True)
     context = with_settings_reader(
         SimpleNamespace(
-            http_session=_Session(response),
-            data_dir=tmp_path,
-            secrets={"plugins": {"twitter": {"user_id": "123456789"}}},
+            http_session = _Session(response),
+            data_dir     = tmp_path,
+            secrets      = {"plugins": {"twitter": {"user_id": "123456789"}}},
         )
     )
 
@@ -242,8 +243,8 @@ async def test_onebot_private_provider_is_supported_and_bounded() -> None:
     session = _Session(
         _json_response(
             {"status": "ok", "retcode": 0, "data": {"message_id": 9}},
-            content_type=None,
-            url="http://127.0.0.1:5700/send_private_msg",
+            content_type = None,
+            url          = "http://127.0.0.1:5700/send_private_msg",
         )
     )
     sender = OneBotHttpSender("http://127.0.0.1:5700", "token", session)
@@ -278,10 +279,10 @@ async def test_apod_always_uses_pinned_public_fetch_for_configured_url(
     )
     fetch = AsyncMock(
         return_value=SimpleNamespace(
-            url=apod.DEFAULT_APOD_URL,
-            status=200,
-            body=html,
-            headers={"Content-Type": "text/html"},
+            url     = apod.DEFAULT_APOD_URL,
+            status  = 200,
+            body    = html,
+            headers = {"Content-Type": "text/html"},
         )
     )
     monkeypatch.setattr(apod, "fetch_public_html", fetch)
@@ -303,9 +304,9 @@ async def test_apod_always_uses_pinned_public_fetch_for_configured_url(
                 },
                 secrets={},
             ).config,
-            data_dir=tmp_path,
-            http_session=_ExplodingSession(),
-            logger=MagicMock(),
+            data_dir     = tmp_path,
+            http_session = _ExplodingSession(),
+            logger       = MagicMock(),
         )
     )
 
@@ -357,7 +358,7 @@ def _is_transport_response(expression: ast.expr, aliases: set[str]) -> bool:
 
 def _raw_response_body_accesses(tree: ast.AST) -> list[tuple[int, str]]:
     aliases: set[str] = set()
-    changed = True
+    changed           = True
     while changed:
         changed = False
         for node in ast.walk(tree):

@@ -9,14 +9,15 @@ from datetime import date, timedelta
 from typing import Any, Literal, cast
 
 from ...services.db import Database
+from ...utils.currency import currency_code
 from ...utils.time_utils import now_in_timezone
 from ..utils import amount_filter_cents
 
-JsonObject = dict[str, Any]
-SqlParams = list[str | int]
+JsonObject      = dict[str, Any]
+SqlParams       = list[str | int]
 TransactionType = Literal["expense", "income", "transfer"]
-CompareMode = Literal["previous_period", "previous_year_to_date", "none"]
-BucketMode = Literal["day", "month"]
+CompareMode     = Literal["previous_period", "previous_year_to_date", "none"]
+BucketMode      = Literal["day", "month"]
 
 _TRANSACTION_TYPES = frozenset({"expense", "income", "transfer"})
 _COMPARE_MODES = frozenset({"previous_period", "previous_year_to_date", "none"})
@@ -25,7 +26,7 @@ _DELTA_LABELS: dict[CompareMode, str] = {
     "previous_year_to_date": "较去年同期",
     "none": "无对比周期",
 }
-_LEDGER_AMOUNT_EXPR = Database._LEDGER_AMOUNT_CENTS_EXPR
+_LEDGER_AMOUNT_EXPR       = Database._LEDGER_AMOUNT_CENTS_EXPR
 _LEDGER_AMOUNT_TOTAL_EXPR = f"ROUND(COALESCE(SUM({_LEDGER_AMOUNT_EXPR}), 0) / 100.0, 2)"
 
 
@@ -34,13 +35,14 @@ class _LedgerFilters:
     """一次账本洞察查询使用的完整筛选条件。"""
 
     owner_id: str
+    currency: str                            = "CNY"
     transaction_type: TransactionType | None = None
-    category: str | None = None
-    account_name: str | None = None
-    start_date: str | None = None
-    end_date: str | None = None
-    amount_min: float | None = None
-    amount_max: float | None = None
+    category: str | None                     = None
+    account_name: str | None                 = None
+    start_date: str | None                   = None
+    end_date: str | None                     = None
+    amount_min: float | None                 = None
+    amount_max: float | None                 = None
 
 
 def _parse_date(value: str) -> date:
@@ -85,7 +87,8 @@ def _build_ledger_where(filters: _LedgerFilters) -> tuple[list[str], SqlParams]:
     """生成参数化账本查询条件；金额始终以整数分字段比较。"""
 
     where = ["type = 'ledger'", "owner_id = ?", "deleted = 0"]
-    params: SqlParams = [filters.owner_id]
+    where.append("COALESCE(NULLIF(UPPER(TRIM(currency)), ''), 'CNY') = ?")
+    params: SqlParams = [filters.owner_id, filters.currency]
 
     if filters.transaction_type:
         where.append("transaction_type = ?")
@@ -157,10 +160,10 @@ def _build_period_delta(
         return None
 
     start = _parse_date(filters.start_date)
-    end = _parse_date(filters.end_date)
+    end   = _parse_date(filters.end_date)
     if compare_mode == "previous_year_to_date":
         previous_start = _previous_year_day(start)
-        previous_end = _previous_year_day(end)
+        previous_end   = _previous_year_day(end)
     else:
         span_days = (end - start).days + 1
         previous_end = start - timedelta(days=1)
@@ -168,8 +171,8 @@ def _build_period_delta(
 
     previous_filters = replace(
         filters,
-        start_date=previous_start.isoformat(),
-        end_date=previous_end.isoformat(),
+        start_date = previous_start.isoformat(),
+        end_date   = previous_end.isoformat(),
     )
     previous_where, previous_params = _build_ledger_where(previous_filters)
     previous_total = _query_scalar(
@@ -191,17 +194,17 @@ def _build_focus_details(
 
     where, params = _build_ledger_where(filters)
     focus_start = filters.start_date
-    focus_end = filters.end_date
+    focus_end   = filters.end_date
     if not focus_start or not focus_end:
         focus_start, focus_end = _query_bounds(conn, where, params)
     if not focus_start or not focus_end:
         return "day", [], [], []
 
-    start = _parse_date(focus_start)
-    end = _parse_date(focus_end)
+    start                   = _parse_date(focus_start)
+    end                     = _parse_date(focus_end)
     bucket_mode: BucketMode = "day" if (end - start).days <= 62 else "month"
-    bucket_keys = _iter_bucket_keys(start, end, bucket_mode)
-    trend_rows = conn.execute(
+    bucket_keys             = _iter_bucket_keys(start, end, bucket_mode)
+    trend_rows              = conn.execute(
         f"""SELECT ledger_date, ROUND({_LEDGER_AMOUNT_EXPR} / 100.0, 2), created_at, id
             FROM items
             WHERE {" AND ".join(where)} AND ledger_date IS NOT NULL
@@ -210,8 +213,8 @@ def _build_focus_details(
     ).fetchall()
 
     bucket_totals: defaultdict[str, float] = defaultdict(float)
-    bucket_counts: defaultdict[str, int] = defaultdict(int)
-    candle_map: dict[str, JsonObject] = {}
+    bucket_counts: defaultdict[str, int]   = defaultdict(int)
+    candle_map: dict[str, JsonObject]      = {}
     for ledger_date, amount, _created_at, _item_id in trend_rows:
         ledger_day = _parse_date(str(ledger_date))
         key = ledger_day.isoformat() if bucket_mode == "day" else ledger_day.strftime("%Y-%m")
@@ -233,7 +236,7 @@ def _build_focus_details(
             }
             continue
         candle["high"] = max(candle["high"], numeric_amount)
-        candle["low"] = min(candle["low"], numeric_amount)
+        candle["low"]  = min(candle["low"], numeric_amount)
         candle["total"] += numeric_amount
         candle["count"] += 1
         candle["close"] = numeric_amount
@@ -290,13 +293,14 @@ def build_ledger_insights(
     db: Database,
     owner_id: str,
     transaction_type: str | None = None,
-    category: str | None = None,
-    account_name: str | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    amount_min: float | None = None,
-    amount_max: float | None = None,
-    compare_mode: str = "previous_period",
+    category: str | None         = None,
+    account_name: str | None     = None,
+    start_date: str | None       = None,
+    end_date: str | None         = None,
+    amount_min: float | None     = None,
+    amount_max: float | None     = None,
+    compare_mode: str            = "previous_period",
+    currency: str                = "CNY",
 ) -> JsonObject:
     """生成账本页和 Widget 共用的筛选洞察。"""
 
@@ -316,9 +320,9 @@ def build_ledger_insights(
         raise ValueError("amount_min must not be greater than amount_max")
 
     normalized_start = start_date or None
-    normalized_end = end_date or None
-    start_day = _parse_date(normalized_start) if normalized_start else None
-    end_day = _parse_date(normalized_end) if normalized_end else None
+    normalized_end   = end_date or None
+    start_day        = _parse_date(normalized_start) if normalized_start else None
+    end_day          = _parse_date(normalized_end) if normalized_end else None
     if start_day and end_day and start_day > end_day:
         raise ValueError("start_date must not be after end_date")
     if start_day and end_day:
@@ -327,17 +331,18 @@ def build_ledger_insights(
             normalized_end = today.isoformat()
 
     filters = _LedgerFilters(
-        owner_id=owner_id,
-        transaction_type=cast(TransactionType | None, normalized_transaction_type),
-        category=(category or "").strip() or None,
-        account_name=(account_name or "").strip() or None,
-        start_date=normalized_start,
-        end_date=normalized_end,
-        amount_min=amount_min,
-        amount_max=amount_max,
+        owner_id         = owner_id,
+        currency         = currency_code(currency),
+        transaction_type = cast(TransactionType | None, normalized_transaction_type),
+        category         = (category or "").strip() or None,
+        account_name     = (account_name or "").strip() or None,
+        start_date       = normalized_start,
+        end_date         = normalized_end,
+        amount_min       = amount_min,
+        amount_max       = amount_max,
     )
     normalized_compare_mode = cast(CompareMode, compare_mode)
-    conn = db.get_connection()
+    conn                    = db.get_connection()
     base_where, base_params = _build_ledger_where(filters)
     totals_rows = conn.execute(
         f"""SELECT transaction_type, {_LEDGER_AMOUNT_TOTAL_EXPR}, COUNT(*)
@@ -366,15 +371,29 @@ def build_ledger_insights(
     )
     peak_bucket = max(
         (point for point in trend if point["count"]),
-        key=lambda point: point["total"],
-        default=None,
+        key     = lambda point: point["total"],
+        default = None,
     )
 
-    expense_total = round(totals_by_type.get("expense", 0.0), 2)
-    income_total = round(totals_by_type.get("income", 0.0), 2)
-    transfer_total = round(totals_by_type.get("transfer", 0.0), 2)
+    expense_total   = round(totals_by_type.get("expense", 0.0), 2)
+    income_total    = round(totals_by_type.get("income", 0.0), 2)
+    transfer_total  = round(totals_by_type.get("transfer", 0.0), 2)
+    grouped_filters = {
+        "type": "ledger",
+        "date_field": "ledger_date",
+        "start_date": normalized_start,
+        "end_date": normalized_end,
+        "transaction_type": normalized_transaction_type,
+        "category": category,
+        "account_name": account_name,
+        "amount_min": amount_min,
+        "amount_max": amount_max,
+    }
     return {
+        "currency": filters.currency,
+        "by_currency": db.aggregate_ledger_by_currency(owner_id, grouped_filters),
         "summary": {
+            "currency": filters.currency,
             "expense_total": expense_total,
             "income_total": income_total,
             "transfer_total": transfer_total,

@@ -44,8 +44,8 @@ def isolated_manager_globals(monkeypatch: pytest.MonkeyPatch):
         JupyterKernelManager._quarantined_instances.clear()  # noqa: SLF001
     yield
     manager_module.JUPYTER_AVAILABLE = original[0]
-    manager_module.IMPORT_ERROR = original[1]
-    manager_module.KernelManager = original[2]
+    manager_module.IMPORT_ERROR      = original[1]
+    manager_module.KernelManager     = original[2]
     with JupyterKernelManager._instances_lock:  # noqa: SLF001
         JupyterKernelManager._instances.clear()  # noqa: SLF001
         JupyterKernelManager._quarantined_instances.clear()  # noqa: SLF001
@@ -76,15 +76,15 @@ def test_lazy_import_short_circuits_and_can_retry_dependency(monkeypatch) -> Non
     import sys
     from types import ModuleType
 
-    sentinel = object()
+    sentinel                         = object()
     manager_module.JUPYTER_AVAILABLE = True
-    manager_module.KernelManager = sentinel
+    manager_module.KernelManager     = sentinel
     manager_module.lazy_import_jupyter()
     assert manager_module.KernelManager is sentinel
 
     manager_module.JUPYTER_AVAILABLE = False
-    manager_module.KernelManager = None
-    original_import = builtins.__import__
+    manager_module.KernelManager     = None
+    original_import                  = builtins.__import__
 
     def fail_jupyter_import(name: str, *args: Any, **kwargs: Any):
         if name == "jupyter_client":
@@ -96,8 +96,8 @@ def test_lazy_import_short_circuits_and_can_retry_dependency(monkeypatch) -> Non
     assert manager_module.JUPYTER_AVAILABLE is False
     assert manager_module.IMPORT_ERROR == "dependency unavailable"
 
-    fake_module = ModuleType("jupyter_client")
-    fake_manager = type("FakeKernelManager", (), {})
+    fake_module               = ModuleType("jupyter_client")
+    fake_manager              = type("FakeKernelManager", (), {})
     fake_module.KernelManager = fake_manager  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "jupyter_client", fake_module)
     monkeypatch.setattr(builtins, "__import__", original_import)
@@ -118,7 +118,7 @@ def test_output_budget_sanitizes_controls_and_reports_exhaustion() -> None:
 
 
 def test_legacy_cleanup_scan_is_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    manager = JupyterKernelManager(tmp_path)
+    manager               = JupyterKernelManager(tmp_path)
     removed: list[object] = []
 
     class FakeDirectory:
@@ -175,10 +175,10 @@ async def test_async_shutdown_all_propagates_aggregate_failure(tmp_path: Path) -
 
 @pytest.mark.asyncio
 async def test_async_shutdown_cancels_idle_monitor_before_kernel_cleanup(tmp_path: Path) -> None:
-    manager = JupyterKernelManager.get_instance(tmp_path, "user-1")
-    idle_task = asyncio.create_task(asyncio.Event().wait())
-    manager._shutdown_task = idle_task  # noqa: SLF001
-    calls: list[bool] = []
+    manager                 = JupyterKernelManager.get_instance(tmp_path, "user-1")
+    idle_task               = asyncio.create_task(asyncio.Event().wait())
+    manager._shutdown_task  = idle_task  # noqa: SLF001
+    calls: list[bool]       = []
     manager.shutdown_kernel = (  # type: ignore[method-assign]
         lambda cancel_idle_task, **_kwargs: calls.append(cancel_idle_task)
     )
@@ -227,15 +227,15 @@ def test_wait_for_kernel_exit_can_report_still_alive_without_sleeping() -> None:
         JupyterKernelManager._wait_for_kernel_exit(
             SimpleNamespace(is_alive=lambda: True),
             report,
-            stage="wait",
-            timeout=0,
+            stage   = "wait",
+            timeout = 0,
         )
         is True
     )
 
 
 def test_cleanup_retries_resource_cleanup_after_force_kill() -> None:
-    alive = True
+    alive         = True
     cleanup_calls = 0
 
     def is_alive() -> bool:
@@ -254,9 +254,9 @@ def test_cleanup_retries_resource_cleanup_after_force_kill() -> None:
         alive = False
 
     kernel = SimpleNamespace(
-        is_alive=is_alive,
-        shutdown_kernel=shutdown_kernel,
-        cleanup_resources=cleanup_resources,
+        is_alive          = is_alive,
+        shutdown_kernel   = shutdown_kernel,
+        cleanup_resources = cleanup_resources,
         provisioner=SimpleNamespace(kill=kill),
     )
     report = JupyterKernelManager._cleanup_kernel_resources(
@@ -272,16 +272,16 @@ def test_cleanup_retries_resource_cleanup_after_force_kill() -> None:
 def test_status_reports_running_kernel_metadata(tmp_path: Path) -> None:
     manager = JupyterKernelManager(tmp_path)
     manager._km = _alive_kernel(kernel_name="python-test")  # noqa: SLF001
-    manager._started_at = manager_module.time.monotonic() - 3  # noqa: SLF001
+    manager._started_at      = manager_module.time.monotonic() - 3  # noqa: SLF001
     manager._execution_count = 4  # noqa: SLF001
-    status = manager.get_status()
+    status                   = manager.get_status()
     assert status["running"] is True
     assert status["kernel_name"] == "python-test"
     assert status["execution_count"] == 4
 
 
 def test_start_rejects_broken_or_unavailable_manager(tmp_path: Path, monkeypatch) -> None:
-    manager = JupyterKernelManager(tmp_path)
+    manager         = JupyterKernelManager(tmp_path)
     manager._broken = True  # noqa: SLF001
     with pytest.raises(RuntimeError, match="已隔离"):
         manager.start_kernel()
@@ -289,17 +289,17 @@ def test_start_rejects_broken_or_unavailable_manager(tmp_path: Path, monkeypatch
     manager._broken = False  # noqa: SLF001
     monkeypatch.setattr(manager_module, "lazy_import_jupyter", lambda: None)
     manager_module.JUPYTER_AVAILABLE = False
-    manager_module.KernelManager = None
+    manager_module.KernelManager     = None
     with pytest.raises(ImportError, match="依赖未加载"):
         manager.start_kernel()
 
 
 def test_start_returns_immediately_for_live_kernel(tmp_path: Path, monkeypatch) -> None:
-    manager = JupyterKernelManager(tmp_path)
+    manager     = JupyterKernelManager(tmp_path)
     manager._km = _alive_kernel()  # noqa: SLF001
     monkeypatch.setattr(manager_module, "lazy_import_jupyter", lambda: None)
     manager_module.JUPYTER_AVAILABLE = True
-    manager_module.KernelManager = lambda **_kwargs: (_ for _ in ()).throw(
+    manager_module.KernelManager     = lambda **_kwargs: (_ for _ in ()).throw(
         AssertionError("factory must not run")
     )
     assert manager.start_kernel() is True
@@ -307,10 +307,10 @@ def test_start_returns_immediately_for_live_kernel(tmp_path: Path, monkeypatch) 
 
 def test_stale_resources_are_cleaned_before_new_kernel(tmp_path: Path, monkeypatch) -> None:
     manager = JupyterKernelManager(tmp_path)
-    stale = SimpleNamespace(
-        is_alive=lambda: False,
-        shutdown_kernel=lambda **_kwargs: None,
-        cleanup_resources=lambda **_kwargs: None,
+    stale   = SimpleNamespace(
+        is_alive          = lambda: False,
+        shutdown_kernel   = lambda **_kwargs: None,
+        cleanup_resources = lambda **_kwargs: None,
     )
     manager._km = stale  # noqa: SLF001
     manager._kc = SimpleNamespace(stop_channels=lambda: None)  # noqa: SLF001
@@ -333,27 +333,27 @@ def test_stale_resources_are_cleaned_before_new_kernel(tmp_path: Path, monkeypat
             }
 
     kernel = SimpleNamespace(
-        kernel_name="python3",
-        start_kernel=lambda: None,
-        client=lambda: Client(),
-        is_alive=lambda: True,
+        kernel_name  = "python3",
+        start_kernel = lambda: None,
+        client       = lambda: Client(),
+        is_alive     = lambda: True,
     )
     monkeypatch.setattr(manager_module, "lazy_import_jupyter", lambda: None)
     manager_module.JUPYTER_AVAILABLE = True
-    manager_module.KernelManager = lambda **_kwargs: kernel
+    manager_module.KernelManager     = lambda **_kwargs: kernel
 
     assert manager.start_kernel() is True
     assert manager._km is kernel  # noqa: SLF001
 
 
 def test_unconfirmed_stale_resources_quarantine_manager(tmp_path: Path, monkeypatch) -> None:
-    manager = JupyterKernelManager(tmp_path)
+    manager     = JupyterKernelManager(tmp_path)
     manager._km = object()  # noqa: SLF001
     report = KernelCleanupReport("stale", orphan_confirmed_absent=False)
     monkeypatch.setattr(manager, "_cleanup_kernel_resources", lambda *_args, **_kwargs: report)
     monkeypatch.setattr(manager_module, "lazy_import_jupyter", lambda: None)
     manager_module.JUPYTER_AVAILABLE = True
-    manager_module.KernelManager = lambda **_kwargs: object()
+    manager_module.KernelManager     = lambda **_kwargs: object()
 
     with pytest.raises(RuntimeError, match="旧 Jupyter kernel"):
         manager.start_kernel()
@@ -370,10 +370,10 @@ def test_matplotlib_initialization_requires_matching_idle(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_idle_loop_closes_expired_kernel(tmp_path: Path, monkeypatch) -> None:
-    manager = JupyterKernelManager(tmp_path)
-    manager._km = _alive_kernel()  # noqa: SLF001
+    manager                = JupyterKernelManager(tmp_path)
+    manager._km            = _alive_kernel()  # noqa: SLF001
     manager._last_activity = 0  # noqa: SLF001
-    calls: list[bool] = []
+    calls: list[bool]      = []
 
     async def no_wait(_seconds: float) -> None:
         return None
@@ -394,10 +394,10 @@ async def test_idle_loop_does_not_shutdown_an_active_execution(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    manager = JupyterKernelManager(tmp_path)
-    manager._km = _alive_kernel()  # noqa: SLF001
+    manager                = JupyterKernelManager(tmp_path)
+    manager._km            = _alive_kernel()  # noqa: SLF001
     manager._last_activity = 0  # noqa: SLF001
-    calls: list[bool] = []
+    calls: list[bool]      = []
 
     monkeypatch.setattr(manager_module.time, "monotonic", lambda: 1_000.0)
     monkeypatch.setattr(
@@ -466,7 +466,7 @@ async def test_tracked_thread_and_pending_helpers_clear_failures(tmp_path: Path)
 
 @pytest.mark.asyncio
 async def test_cancel_cleanup_handles_finished_idle_and_failed_recovery(tmp_path: Path) -> None:
-    manager = JupyterKernelManager(tmp_path)
+    manager      = JupyterKernelManager(tmp_path)
     idle_message = {
         "msg_type": "status",
         "content": {"execution_state": "idle"},
@@ -475,10 +475,10 @@ async def test_cancel_cleanup_handles_finished_idle_and_failed_recovery(tmp_path
     idle_task = asyncio.create_task(asyncio.sleep(0, result=idle_message))
     await manager._cancel_execution_cleanup(
         state=_ExecutionState(
-            kernel_was_running=True,
-            pending_task=idle_task,
-            pending_kind="read",
-            msg_id="msg",
+            kernel_was_running = True,
+            pending_task       = idle_task,
+            pending_kind       = "read",
+            msg_id             = "msg",
         ),
         audit_id="audit",
     )
@@ -561,17 +561,17 @@ async def test_recovery_requires_message_id_and_clears_failed_task(
 async def test_execute_contains_invalid_message_id_and_submit_failure(tmp_path: Path) -> None:
     def running_manager(path: Path) -> JupyterKernelManager:
         manager = JupyterKernelManager(path)
-        alive = True
+        alive   = True
 
         def shutdown_kernel(**_kwargs: Any) -> None:
             nonlocal alive
             alive = False
 
         manager._km = SimpleNamespace(  # noqa: SLF001
-            is_alive=lambda: alive,
-            interrupt_kernel=lambda: None,
-            shutdown_kernel=shutdown_kernel,
-            cleanup_resources=lambda **_kwargs: None,
+            is_alive          = lambda: alive,
+            interrupt_kernel  = lambda: None,
+            shutdown_kernel   = shutdown_kernel,
+            cleanup_resources = lambda **_kwargs: None,
         )
         manager.ensure_idle_monitor = lambda: None  # type: ignore[method-assign]
         return manager
@@ -583,7 +583,7 @@ async def test_execute_contains_invalid_message_id_and_submit_failure(tmp_path: 
     assert result.error == "执行失败，请稍后重试"
     assert manager.is_running is False
 
-    manager = running_manager(tmp_path / "submit-error")
+    manager     = running_manager(tmp_path / "submit-error")
     manager._kc = SimpleNamespace(  # noqa: SLF001
         execute=lambda _code: (_ for _ in ()).throw(RuntimeError("private submit detail"))
     )
@@ -600,7 +600,7 @@ async def test_interrupt_recovery_fallback_outcomes(
     monkeypatch: pytest.MonkeyPatch,
     outcome: str,
 ) -> None:
-    manager = JupyterKernelManager(tmp_path)
+    manager     = JupyterKernelManager(tmp_path)
     manager._kc = SimpleNamespace(  # noqa: SLF001
         get_iopub_msg=lambda _timeout: (_ for _ in ()).throw(RuntimeError("read failed"))
     )
@@ -620,10 +620,10 @@ async def test_interrupt_recovery_fallback_outcomes(
 
 @pytest.mark.asyncio
 async def test_failed_interrupt_still_runs_recovery(tmp_path: Path, monkeypatch) -> None:
-    manager = JupyterKernelManager(tmp_path)
+    manager     = JupyterKernelManager(tmp_path)
     manager._km = SimpleNamespace(  # noqa: SLF001
-        is_alive=lambda: True,
-        interrupt_kernel=lambda: (_ for _ in ()).throw(RuntimeError("interrupt failed")),
+        is_alive         = lambda: True,
+        interrupt_kernel = lambda: (_ for _ in ()).throw(RuntimeError("interrupt failed")),
     )
     manager._kc = SimpleNamespace(  # noqa: SLF001
         get_iopub_msg=lambda _timeout: (_ for _ in ()).throw(RuntimeError("read failed"))
@@ -641,7 +641,7 @@ def test_shared_png_validator_rejects_malformed_boundaries() -> None:
     duplicate_header = png[:-12] + _png_chunk(b"IHDR", png[16:29]) + _png_chunk(b"IEND", b"")
     assert validate_png_bytes(duplicate_header) is False
 
-    invalid_type = bytearray(_png_chunk(b"IDAT", b"x"))
+    invalid_type      = bytearray(_png_chunk(b"IDAT", b"x"))
     invalid_type[4:8] = b"ID1T"
     assert validate_png_bytes(bytes(invalid_type)) is False
     assert JupyterKernelManager._decode_image("not base64!") is None

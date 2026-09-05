@@ -13,7 +13,7 @@ def render_dialogue(
     messages: Sequence[StoredMessage],
     *,
     bot_name: str,
-    max_lines: int = 30,
+    max_lines: int    = 30,
     max_text_len: int = 200,
 ) -> str:
     """把消息序列渲染为便于阅读的对话文本。"""

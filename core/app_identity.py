@@ -1,3 +1,4 @@
+# 应用身份边界：管理员视图与主体授权随可信配置代发布。
 """Application-owned administrator and principal authority boundary."""
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ class AppIdentityService:
 
     def __init__(self) -> None:
         self._admin_ids: set[int] = set()
-        self._authority = _PrincipalAuthority()
+        self._authority           = _PrincipalAuthority()
 
     @property
     def admin_ids(self) -> set[int]:
@@ -51,7 +52,7 @@ class AppIdentityService:
     ) -> PluginPrincipal:
         """Mint a user principal after binding any verified group role."""
 
-        role = "unknown"
+        role   = "unknown"
         sender = event.get("sender")
         if group_id is not None and isinstance(sender, Mapping):
             sender_user_id = sender.get("user_id")
@@ -67,35 +68,35 @@ class AppIdentityService:
             if sender_matches and candidate_role in {"owner", "admin", "member"}:
                 role = candidate_role
         return self.issue(
-            kind="user",
-            user_id=user_id,
-            group_id=group_id,
-            is_bot_admin=self.is_admin(user_id),
-            is_private=is_private,
-            group_role=role,
+            kind         = "user",
+            user_id      = user_id,
+            group_id     = group_id,
+            is_bot_admin = self.is_admin(user_id),
+            is_private   = is_private,
+            group_role   = role,
         )
 
     def issue(
         self,
         *,
         kind: str,
-        user_id: int | None = None,
-        group_id: int | None = None,
-        is_bot_admin: bool = False,
-        is_private: bool = False,
-        group_role: str = "unknown",
+        user_id: int | None                                 = None,
+        group_id: int | None                                = None,
+        is_bot_admin: bool                                  = False,
+        is_private: bool                                    = False,
+        group_role: str                                     = "unknown",
         delivery_targets: tuple[DeliveryTarget, ...] | None = None,
-        schedule_delivery: ScheduleDeliveryMode | None = None,
+        schedule_delivery: ScheduleDeliveryMode | None      = None,
     ) -> PluginPrincipal:
         return self._authority.issue(
-            kind=kind,
-            user_id=user_id,
-            group_id=group_id,
-            is_bot_admin=is_bot_admin,
-            is_private=is_private,
-            group_role=group_role,
-            delivery_targets=delivery_targets,
-            schedule_delivery=schedule_delivery,
+            kind              = kind,
+            user_id           = user_id,
+            group_id          = group_id,
+            is_bot_admin      = is_bot_admin,
+            is_private        = is_private,
+            group_role        = group_role,
+            delivery_targets  = delivery_targets,
+            schedule_delivery = schedule_delivery,
         )
 
     def owns(self, principal: PluginPrincipal) -> bool:

@@ -1,3 +1,4 @@
+# 架构回归：生产请求统一接入有界 HTTP 工具。
 from __future__ import annotations
 
 import ast
@@ -6,7 +7,7 @@ import pytest
 
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT = REPOSITORY_ROOT
+ROOT                  = REPOSITORY_ROOT
 BOUNDED_RUNTIME_FILES = (
     "core/ai.py",
     "core/onebot.py",
@@ -27,7 +28,7 @@ BOUNDED_RUNTIME_FILES = (
     "plugins/voice/main.py",
     "plugins/wolframalpha/main.py",
 )
-HTTP_VERBS = frozenset({"get", "post", "put", "patch", "delete", "request"})
+HTTP_VERBS        = frozenset({"get", "post", "put", "patch", "delete", "request"})
 HTTP_CLIENT_NAMES = frozenset(
     {
         "aiohttp",

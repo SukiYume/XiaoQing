@@ -1,3 +1,4 @@
+# 验证发行包包含正确许可信息与应有源码。
 """Regression tests for license metadata and source availability."""
 
 from __future__ import annotations

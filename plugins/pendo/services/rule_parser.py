@@ -33,10 +33,10 @@ REPEAT_KEYWORDS: Final[tuple[tuple[str, str], ...]] = (
     ("每个月", "MONTHLY"),
     ("每月", "MONTHLY"),
 )
-NOTE_KEYWORDS: Final = ("想法", "灵感", "点子", "记录", "笔记", "idea")
-EVENT_KEYWORDS: Final = ("会议", "开会", "约", "见面", "活动", "聚会", "上课")
-TASK_KEYWORDS: Final = ("待办", "任务", "完成", "提交", "截止", "deadline", "todo")
-DEADLINE_HINTS: Final = ("到", "截止", "之前", "前")
+NOTE_KEYWORDS: Final            = ("想法", "灵感", "点子", "记录", "笔记", "idea")
+EVENT_KEYWORDS: Final           = ("会议", "开会", "约", "见面", "活动", "聚会", "上课")
+TASK_KEYWORDS: Final            = ("待办", "任务", "完成", "提交", "截止", "deadline", "todo")
+DEADLINE_HINTS: Final           = ("到", "截止", "之前", "前")
 TIME_EXPRESSION_PATTERNS: Final = (
     r"\d{1,2}[点:：]",
     r"今天|明天|后天",
@@ -47,7 +47,7 @@ LOCATION_PATTERNS: Final = (
     r"在([^，,。.！!？?]+?)(开会|见面|会议)",
     r"地点[：:]\s*([^，,。.！!？?]+)",
 )
-REMINDER_UNIT_SECONDS: Final = {"分钟": 60, "小时": 3600, "天": 86400}
+REMINDER_UNIT_SECONDS: Final                      = {"分钟": 60, "小时": 3600, "天": 86400}
 WEEKDAY_CODES: Final[tuple[tuple[str, str], ...]] = (
     ("周一", "MO"),
     ("周二", "TU"),
@@ -71,7 +71,7 @@ class RuleParser:
 
     def parse(self, text: str, user_id: str, *, now: datetime | None = None) -> dict[str, Any]:
         """解析自然语言，返回结构化数据"""
-        item_type = self._detect_type(text)
+        item_type              = self._detect_type(text)
         result: dict[str, Any] = {
             "type": item_type,
             "title": text[:50],
@@ -112,10 +112,10 @@ class RuleParser:
             return
         if item_type == ItemType.TASK:
             deadline_at = time_info.get("deadline_at")
-            start_time = time_info.get("start_time")
+            start_time  = time_info.get("start_time")
             if deadline_at:
                 result["deadline_at"] = deadline_at
-                result["plan_date"] = deadline_at[:10]
+                result["plan_date"]   = deadline_at[:10]
             elif start_time:
                 result["plan_date"] = start_time[:10]
 
@@ -172,11 +172,13 @@ class RuleParser:
                 continue
             target_date = now + timedelta(days=days_offset)
             start_match = re.search(r"(\d{1,2})[点:：](\d{1,2})?", text)
-            start_time = self._clock_on_date(target_date, start_match) or target_date.replace(
+            start_time  = self._clock_on_date(target_date, start_match) or target_date.replace(
                 hour=9, minute=0, second=0, microsecond=0
             )
-            result = {"start_time": start_time.isoformat()}
-            end_match = re.search(r"到\s*(\d{1,2})[点:：](\d{1,2})?", text)
+            result    = {"start_time": start_time.isoformat()}
+            end_match = re.search(
+                r"到\s*(?:凌晨|早上|上午|中午|下午|傍晚|晚上)?\s*(\d{1,2})[点:：](\d{1,2})?", text
+            )
             if end_time := self._clock_on_date(target_date, end_match):
                 result["end_time"] = end_time.isoformat()
             return result
@@ -200,7 +202,16 @@ class RuleParser:
         """把合法的时分匹配应用到指定日期，非法时钟返回 ``None``。"""
         if match is None:
             return None
-        hour = int(match.group(1))
+        hour   = int(match.group(1))
+        prefix = match.string[: match.start(1)]
+        period = re.search(r"(凌晨|早上|上午|中午|下午|傍晚|晚上)\s*$", prefix)
+        if period:
+            if period.group(1) in {"下午", "傍晚", "晚上"} and hour < 12:
+                hour += 12
+            elif period.group(1) in {"凌晨", "早上", "上午"} and hour == 12:
+                hour = 0
+            elif period.group(1) == "中午" and hour < 11:
+                hour += 12
         minute = int(match.group(2) or 0)
         if not 0 <= hour < 24 or not 0 <= minute < 60:
             return None
@@ -261,7 +272,7 @@ class RuleParser:
             return []
 
         reminders: set[str] = set()
-        start_time = datetime.fromisoformat(time_info["start_time"])
+        start_time          = datetime.fromisoformat(time_info["start_time"])
 
         patterns = [
             r"提前(\d+)(分钟|小时|天)",
@@ -270,7 +281,7 @@ class RuleParser:
 
         for pattern in patterns:
             for match in re.finditer(pattern, text):
-                num = int(match.group(1))
+                num  = int(match.group(1))
                 unit = match.group(2)
 
                 remind_time = start_time - timedelta(seconds=num * REMINDER_UNIT_SECONDS[unit])

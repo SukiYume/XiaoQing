@@ -10,8 +10,8 @@ from core.plugin_base import PluginContextProtocol, run_sync
 from core.public_errors import public_error_message
 
 UNIX_TIMESTAMP_MIN_ABS = 100_000_000
-_JD_MIN_ABS = 2_400_000
-_NUMERIC_TIME = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\Z")
+_JD_MIN_ABS            = 2_400_000
+_NUMERIC_TIME          = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\Z")
 
 
 def _build_time_response(label: str, t: Any) -> str:
@@ -57,7 +57,7 @@ def _handle_time_sync(args: str, context: PluginContextProtocol) -> str:
             return _build_time_response("当前天文时间", Time.now())
 
         # 解析子命令
-        parts = args.split(None, 1)
+        parts      = args.split(None, 1)
         subcommand = parts[0].casefold()
 
         # 处理 jd 子命令

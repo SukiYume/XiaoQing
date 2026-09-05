@@ -43,11 +43,11 @@ class AppSchedulingMixin:
             logger.debug("Deferring schedule update for %s during startup", plugin_name)
             return
         if plugin_name == "startup":
-            prefix = "plugin."
+            prefix         = "plugin."
             target_plugins = self.plugin_manager.schedule_definitions()
         else:
-            prefix = f"plugin.{plugin_name}."
-            loaded = self.plugin_manager.get(plugin_name)
+            prefix         = f"plugin.{plugin_name}."
+            loaded         = self.plugin_manager.get(plugin_name)
             target_plugins = [loaded] if loaded else []
 
         jobs: list[ScheduledJobSpec] = []
@@ -71,20 +71,20 @@ class AppSchedulingMixin:
                             f"{entry.handler!r} is missing or not callable"
                         )
                     group_ids = tuple(entry.group_ids) if entry.group_ids is not None else None
-                    job_id = f"plugin.{loaded.definition.name}.{entry.id or entry.handler}"
+                    job_id    = f"plugin.{loaded.definition.name}.{entry.id or entry.handler}"
                     jobs.append(
                         ScheduledJobSpec(
-                            job_id=job_id,
-                            func=functools.partial(
+                            job_id = job_id,
+                            func   = functools.partial(
                                 self._run_job,
                                 handler,
                                 loaded.definition.name,
                                 group_ids,
-                                delivery=entry.delivery,
-                                loaded_plugin=loaded,
+                                delivery      = entry.delivery,
+                                loaded_plugin = loaded,
                             ),
-                            cron=entry.cron,
-                            description=entry.description,
+                            cron        = entry.cron,
+                            description = entry.description,
                         )
                     )
         except Exception:
@@ -101,7 +101,7 @@ class AppSchedulingMixin:
         group_ids: tuple[int, ...] | list[int] | None = None,
         *,
         delivery: ScheduleDeliveryMode = "broadcast",
-        loaded_plugin: Any | None = None,
+        loaded_plugin: Any | None      = None,
     ) -> None:
         """Execute one schedule under the Core-owned delivery contract."""
         if self._stopping:
@@ -124,11 +124,11 @@ class AppSchedulingMixin:
                 )
                 return
         delivery_targets = tuple(DeliveryTarget("group", value) for value in parsed_target_groups)
-        principal = self.identity_service.issue(
-            kind="scheduled_system",
-            is_private=False,
-            delivery_targets=delivery_targets,
-            schedule_delivery=delivery,
+        principal        = self.identity_service.issue(
+            kind              = "scheduled_system",
+            is_private        = False,
+            delivery_targets  = delivery_targets,
+            schedule_delivery = delivery,
         )
         context = self.plugin_manager.build_context(
             plugin_name,

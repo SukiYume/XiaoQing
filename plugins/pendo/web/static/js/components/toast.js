@@ -1,6 +1,6 @@
-const TOAST_TYPES = new Set(['success', 'error', 'info', 'warning']);
+const TOAST_TYPES         = new Set(['success', 'error', 'info', 'warning']);
 const DISPLAY_DURATION_MS = 3000;
-const EXIT_DURATION_MS = 250;
+const EXIT_DURATION_MS    = 250;
 
 /**
  * 显示一条全局提示。
@@ -15,7 +15,7 @@ export function showToast(message, type = 'info') {
     }
 
     const normalizedType = typeof type === 'string' ? type.trim().toLowerCase() : '';
-    const toastType = TOAST_TYPES.has(normalizedType) ? normalizedType : 'info';
+    const toastType      = TOAST_TYPES.has(normalizedType) ? normalizedType : 'info';
 
     const toast = document.createElement('div');
     toast.className = `toast toast-${toastType}`;
@@ -34,7 +34,7 @@ export function showToast(message, type = 'info') {
     // 关闭动作必须幂等：手动关闭后清除自动计时器，只保留一次退场和节点移除。
     let autoDismissTimer;
     let isDismissing = false;
-    const dismiss = () => {
+    const dismiss    = () => {
         if (isDismissing) return;
         isDismissing = true;
         clearTimeout(autoDismissTimer);

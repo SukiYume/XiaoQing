@@ -21,7 +21,7 @@ from tests.helpers.asyncio_tools import BlockingConcurrencyProbe
 @pytest.fixture
 def mock_config_provider():
     """模拟配置提供者"""
-    mock = MagicMock()
+    mock        = MagicMock()
     mock.config = {
         "bot_name": "小青",
         "command_prefixes": ["/"],
@@ -87,7 +87,7 @@ def mock_session_manager():
 @pytest.fixture
 def mock_metrics():
     """模拟指标收集器"""
-    mock = MagicMock()
+    mock                         = MagicMock()
     mock.record_plugin_execution = AsyncMock()
     return mock
 
@@ -96,19 +96,19 @@ def mock_metrics():
 def sample_message_context() -> MessageContext:
     """创建示例消息上下文"""
     return MessageContext(
-        request_id="test_001",
-        text="/echo hello",
-        clean_text="echo hello",
-        user_id=12345,
-        group_id=67890,
-        is_private=False,
-        has_bot_name=False,
-        has_prefix=True,
-        has_command_prefix=True,
-        is_only_bot_name=False,
-        is_at_me=False,
-        is_url_only=False,
-        event={},
+        request_id         = "test_001",
+        text               = "/echo hello",
+        clean_text         = "echo hello",
+        user_id            = 12345,
+        group_id           = 67890,
+        is_private         = False,
+        has_bot_name       = False,
+        has_prefix         = True,
+        has_command_prefix = True,
+        is_only_bot_name   = False,
+        is_at_me           = False,
+        is_url_only        = False,
+        event              = {},
     )
 
 
@@ -125,14 +125,14 @@ def dispatcher(
     """创建 Dispatcher 实例"""
     semaphore = asyncio.Semaphore(10)
     return Dispatcher(
-        router=mock_router,
-        config_provider=mock_config_provider,
-        plugin_registry=mock_plugin_registry,
-        admin_check=mock_admin_check,
-        build_context=mock_context_factory,
-        semaphore=semaphore,
-        session_manager=mock_session_manager,
-        metrics=mock_metrics,
+        router          = mock_router,
+        config_provider = mock_config_provider,
+        plugin_registry = mock_plugin_registry,
+        admin_check     = mock_admin_check,
+        build_context   = mock_context_factory,
+        semaphore       = semaphore,
+        session_manager = mock_session_manager,
+        metrics         = mock_metrics,
     )
 
 

@@ -17,16 +17,16 @@ from core.public_errors import public_error_message
 
 from .convert import hex_to_rgb, validate_cmyk, validate_rgb
 
-MAX_CUSTOM_COLORS_PER_SCOPE = 200
-MAX_CUSTOM_COLOR_FILE_BYTES = 256 * 1024
-MAX_BUILTIN_COLORS = 1_000
+MAX_CUSTOM_COLORS_PER_SCOPE  = 200
+MAX_CUSTOM_COLOR_FILE_BYTES  = 256 * 1024
+MAX_BUILTIN_COLORS           = 1_000
 MAX_BUILTIN_COLOR_FILE_BYTES = 2 * 1024 * 1024
-MAX_COLOR_NAME_CHARS = 64
-MAX_PINYIN_CHARS = 128
-MAX_SCOPE_ID = 2**63 - 1
-_HEX_PATTERN = re.compile(r"#[0-9a-fA-F]{6}")
-_CUSTOM_COLORS_LOCK = threading.RLock()
-_MutationResult = TypeVar("_MutationResult")
+MAX_COLOR_NAME_CHARS         = 64
+MAX_PINYIN_CHARS             = 128
+MAX_SCOPE_ID                 = 2**63 - 1
+_HEX_PATTERN                 = re.compile(r"#[0-9a-fA-F]{6}")
+_CUSTOM_COLORS_LOCK          = threading.RLock()
+_MutationResult              = TypeVar("_MutationResult")
 
 
 class ColorRecord(TypedDict):
@@ -76,17 +76,17 @@ def _normalize_color_record(value: Any) -> ColorRecord:
         raise ValueError("color record must be an object")
     name = _clean_text(
         value.get("name"),
-        label="color name",
-        max_chars=MAX_COLOR_NAME_CHARS,
-        allow_empty=False,
+        label       = "color name",
+        max_chars   = MAX_COLOR_NAME_CHARS,
+        allow_empty = False,
     )
     pinyin = _clean_text(
         value.get("pinyin", ""),
-        label="color pinyin",
-        max_chars=MAX_PINYIN_CHARS,
-        allow_empty=True,
+        label       = "color pinyin",
+        max_chars   = MAX_PINYIN_CHARS,
+        allow_empty = True,
     )
-    rgb_value = value.get("RGB")
+    rgb_value  = value.get("RGB")
     cmyk_value = value.get("CMYK")
     if not isinstance(rgb_value, list) or not validate_rgb(rgb_value)[0]:
         raise ValueError("color record has invalid RGB channels")
@@ -123,7 +123,7 @@ def _normalize_color_list(value: Any, *, max_items: int) -> list[ColorRecord]:
     if len(value) > max_items:
         raise ValueError("color count exceeds item budget")
     colors = [_normalize_color_record(item) for item in value]
-    names = [color["name"] for color in colors]
+    names  = [color["name"] for color in colors]
     if len(names) != len(set(names)):
         raise ValueError("color names must be unique within one library")
     return colors
@@ -154,7 +154,7 @@ def _load_builtin_colors(context: PluginContextProtocol) -> tuple[ColorRecord, .
     if not isinstance(plugin_dir, Path):
         raise ValueError("color plugin_dir must be a Path")
     builtin_file = plugin_dir / "color.json"
-    info = builtin_file.stat()
+    info         = builtin_file.stat()
     return _load_builtin_colors_cached(str(builtin_file), info.st_mtime_ns, info.st_size)
 
 
@@ -206,9 +206,9 @@ def mutate_custom_colors(
 
     custom_file = _custom_file(context)
     with _CUSTOM_COLORS_LOCK:
-        colors = _read_custom_colors(custom_file)
+        colors   = _read_custom_colors(custom_file)
         original = copy.deepcopy(colors)
-        result = callback(colors)
+        result   = callback(colors)
         normalized = _normalize_color_list(colors, max_items=MAX_CUSTOM_COLORS_PER_SCOPE)
         _encoded_custom_colors(normalized)
         if normalized != original:

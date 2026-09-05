@@ -56,13 +56,13 @@ def _set_session_cookie(response: Response, session: WebSession) -> None:
     """写入与服务端会话同寿命、仅同站脚本不可读的 Cookie。"""
 
     response.set_cookie(
-        key=SESSION_COOKIE_NAME,
-        value=session.session_id,
-        max_age=max(1, int(session.expires_at - time.time())),
-        httponly=True,
-        secure=PendoConfig.runtime().web_session_cookie_secure,
-        samesite="strict",
-        path="/",
+        key      = SESSION_COOKIE_NAME,
+        value    = session.session_id,
+        max_age  = max(1, int(session.expires_at - time.time())),
+        httponly = True,
+        secure   = PendoConfig.runtime().web_session_cookie_secure,
+        samesite = "strict",
+        path     = "/",
     )
 
 
@@ -77,8 +77,8 @@ def _create_cookie_session(
 
     session = create_web_session(
         owner_id,
-        expires_seconds=expires_seconds,
-        demo=demo,
+        expires_seconds = expires_seconds,
+        demo            = demo,
     )
     try:
         _set_session_cookie(response, session)
@@ -167,7 +167,7 @@ def get_auth_sessions(
 def revoke_auth_session(
     device_id: str,
     session: WebSession = Depends(get_current_session),
-    owner_id: str = Depends(get_current_user),
+    owner_id: str       = Depends(get_current_user),
 ) -> dict[str, object]:
     """在 Cookie 与 CSRF 校验后撤销当前所有者的指定设备会话。"""
 
@@ -180,16 +180,16 @@ def revoke_auth_session(
 def logout(
     response: Response,
     session: WebSession = Depends(get_current_session),
-    _owner_id: str = Depends(get_current_user),
+    _owner_id: str      = Depends(get_current_user),
 ) -> dict[str, object]:
     """撤销当前服务端会话，并使用相同属性删除浏览器 Cookie。"""
 
     revoke_web_session(session.session_id)
     response.delete_cookie(
-        key=SESSION_COOKIE_NAME,
-        httponly=True,
-        secure=PendoConfig.runtime().web_session_cookie_secure,
-        samesite="strict",
-        path="/",
+        key      = SESSION_COOKIE_NAME,
+        httponly = True,
+        secure   = PendoConfig.runtime().web_session_cookie_secure,
+        samesite = "strict",
+        path     = "/",
     )
     return {"ok": True, "data": {}, "message": ""}

@@ -21,7 +21,7 @@ class MockSession:
         plugin_name: str = guess_number.PLUGIN_NAME,
     ) -> None:
         self.plugin_name = plugin_name
-        self.data = dict(data or {})
+        self.data        = dict(data or {})
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.data.get(key, default)
@@ -32,16 +32,16 @@ class MockSession:
 
 class MockContext:
     def __init__(self, session: MockSession | None = None) -> None:
-        self._session = session
+        self._session                                           = session
         self.created: list[tuple[dict[str, Any], float | None]] = []
-        self.end_calls = 0
-        self.request_id = "guess-number-test"
-        self.secrets: dict[str, Any] = {"plugins": {"guess_number": {}}}
+        self.end_calls                                          = 0
+        self.request_id                                         = "guess-number-test"
+        self.secrets: dict[str, Any]                            = {"plugins": {"guess_number": {}}}
 
     async def create_session(
         self,
         initial_data: dict[str, Any] | None = None,
-        timeout: float | None = None,
+        timeout: float | None               = None,
     ) -> MockSession:
         data = dict(initial_data or {})
         self.created.append((data, timeout))
@@ -53,7 +53,7 @@ class MockContext:
 
     async def end_session(self) -> bool:
         self.end_calls += 1
-        existed = self._session is not None
+        existed       = self._session is not None
         self._session = None
         return existed
 
@@ -70,13 +70,13 @@ def event() -> dict[str, Any]:
 
 def _game_data(
     *,
-    target: int = 50,
-    minimum: int = 1,
-    maximum: int = 100,
-    attempts: int = 0,
+    target: int               = 50,
+    minimum: int              = 1,
+    maximum: int              = 100,
+    attempts: int             = 0,
     history: list[int] | None = None,
-    difficulty: str = "normal",
-    max_attempts: int = 7,
+    difficulty: str           = "normal",
+    max_attempts: int         = 7,
 ) -> dict[str, Any]:
     return {
         "target": target,
@@ -96,21 +96,21 @@ def _text(response: guess_number.Segments) -> str:
 
 def _real_context(tmp_path: Path, manager: SessionManager) -> PluginContext:
     return PluginContext(
-        config={},
-        secrets={},
-        plugin_name=guess_number.PLUGIN_NAME,
-        plugin_dir=tmp_path,
-        data_dir=tmp_path / "data",
-        http_session=None,
-        send_action=AsyncMock(),
-        reload_config=lambda: None,
-        reload_plugins=lambda: None,
-        get_command_catalog=tuple,
-        list_plugins=list,
-        session_manager=manager,
-        current_user_id=123,
-        current_group_id=456,
-        request_id="guess-number-integration",
+        config              = {},
+        secrets             = {},
+        plugin_name         = guess_number.PLUGIN_NAME,
+        plugin_dir          = tmp_path,
+        data_dir            = tmp_path / "data",
+        http_session        = None,
+        send_action         = AsyncMock(),
+        reload_config       = lambda: None,
+        reload_plugins      = lambda: None,
+        get_command_catalog = tuple,
+        list_plugins        = list,
+        session_manager     = manager,
+        current_user_id     = 123,
+        current_group_id    = 456,
+        request_id          = "guess-number-integration",
     )
 
 
@@ -274,11 +274,11 @@ async def test_status_handles_none_valid_and_invalid_sessions(
 
     context._session = MockSession(
         _game_data(
-            target=50,
-            minimum=26,
-            maximum=74,
-            attempts=2,
-            history=[25, 75],
+            target   = 50,
+            minimum  = 26,
+            maximum  = 74,
+            attempts = 2,
+            history  = [25, 75],
         )
     )
     rendered = _text(await guess_number.handle("猜数字", "status", event, context))
@@ -361,21 +361,21 @@ async def test_low_and_high_guesses_update_only_canonical_state(
     low = _text(await guess_number.handle_session("25", event, context, session))
     assert "太小" in low and "26-100" in low
     assert session.data == _game_data(
-        target=50,
-        minimum=26,
-        maximum=100,
-        attempts=1,
-        history=[25],
+        target   = 50,
+        minimum  = 26,
+        maximum  = 100,
+        attempts = 1,
+        history  = [25],
     )
 
     high = _text(await guess_number.handle_session("75", event, context, session))
     assert "太大" in high and "26-74" in high
     assert session.data == _game_data(
-        target=50,
-        minimum=26,
-        maximum=74,
-        attempts=2,
-        history=[25, 75],
+        target   = 50,
+        minimum  = 26,
+        maximum  = 74,
+        attempts = 2,
+        history  = [25, 75],
     )
 
 
@@ -387,7 +387,7 @@ async def test_session_status_uses_same_formatter_without_mutation(
         _game_data(target=50, minimum=26, maximum=74, attempts=2, history=[25, 75])
     )
     context = MockContext(session)
-    before = dict(session.data)
+    before  = dict(session.data)
 
     response = await guess_number.handle_session("info", event, context, session)
 
@@ -404,7 +404,7 @@ async def test_prefixed_session_controls_are_not_swallowed(
         _game_data(target=50, minimum=26, maximum=74, attempts=2, history=[25, 75])
     )
     context = MockContext(session)
-    before = dict(session.data)
+    before  = dict(session.data)
 
     status = await guess_number.handle_session("/猜数字 status", event, context, session)
     assert "26-74" in _text(status)
@@ -427,7 +427,7 @@ async def test_prefixed_session_control_with_extra_arg_is_rejected_without_mutat
 ) -> None:
     session = MockSession(_game_data())
     context = MockContext(session)
-    before = dict(session.data)
+    before  = dict(session.data)
 
     response = await guess_number.handle_session("/猜数字 restart extra", event, context, session)
 
@@ -457,11 +457,11 @@ async def test_last_wrong_guess_ends_game_without_persisting_dead_state(
 ) -> None:
     session = MockSession(
         _game_data(
-            target=50,
-            minimum=7,
-            maximum=100,
-            attempts=6,
-            history=[1, 2, 3, 4, 5, 6],
+            target   = 50,
+            minimum  = 7,
+            maximum  = 100,
+            attempts = 6,
+            history  = [1, 2, 3, 4, 5, 6],
         )
     )
     context = MockContext(session)
@@ -523,10 +523,10 @@ def test_load_game_state_rejects_inconsistent_values(changes: dict[str, Any]) ->
 
 def test_load_game_state_accepts_legacy_alias_and_ignores_old_derived_fields() -> None:
     data = _game_data(
-        target=25,
-        maximum=50,
-        difficulty="easy",
-        max_attempts=10,
+        target       = 25,
+        maximum      = 50,
+        difficulty   = "easy",
+        max_attempts = 10,
     )
     data.update({"remaining": 10, "hint": "1-50"})
     state = guess_number._load_game_state(MockSession(data))
@@ -604,7 +604,7 @@ async def test_real_session_transaction_persists_range_and_reentrant_win(
 async def test_real_foreign_session_survives_restart_command(tmp_path: Path) -> None:
     manager = SessionManager()
     context = _real_context(tmp_path, manager)
-    other = await manager.create(123, 456, "other_plugin", {"keep": True})
+    other   = await manager.create(123, 456, "other_plugin", {"keep": True})
 
     response = await guess_number.handle("猜数字", "restart", {}, context)
 

@@ -192,15 +192,15 @@ def test_search_uses_paged_query_and_batches_event_collection_titles(
     from plugins.pendo.handlers.search import SearchHandler
     from plugins.pendo.models.item import EventItem
 
-    main_thread = threading.get_ident()
+    main_thread           = threading.get_ident()
     calls: dict[str, Any] = {}
-    event = EventItem(
-        id="search-event",
-        owner_id="search-owner",
-        title="子节点\n标题",
-        content="needle content",
-        event_collection_id="search-collection",
-        start_time="2032-01-15T09:00:00",
+    event                 = EventItem(
+        id                  = "search-event",
+        owner_id            = "search-owner",
+        title               = "子节点\n标题",
+        content             = "needle content",
+        event_collection_id = "search-collection",
+        start_time          = "2032-01-15T09:00:00",
     )
 
     class _ItemsRepo:
@@ -248,7 +248,7 @@ def test_search_uses_paged_query_and_batches_event_collection_titles(
 def test_search_handler_reports_exact_total_and_limits_display(tmp_path: Path) -> None:
     from plugins.pendo.handlers.search import SearchHandler
 
-    db = Database(str(tmp_path / "pendo-search-total.db"))
+    db       = Database(str(tmp_path / "pendo-search-total.db"))
     owner_id = "search-total"
     try:
         for index in range(20):
@@ -283,17 +283,17 @@ def test_search_ledger_display_uses_integer_cents_and_remark_preview():
     from plugins.pendo.models.item import LedgerItem
 
     item = LedgerItem(
-        id="search-ledger",
-        owner_id="search-owner",
-        title="超市\n采购",
-        content="",
-        amount=999.99,
-        amount_cents=1234,
-        ledger_date="2032-01-15",
-        ledger_category="餐饮",
-        account_name="现金",
-        merchant="商店",
-        remark="needle\nremark",
+        id              = "search-ledger",
+        owner_id        = "search-owner",
+        title           = "超市\n采购",
+        content         = "",
+        amount          = 999.99,
+        amount_cents    = 1234,
+        ledger_date     = "2032-01-15",
+        ledger_category = "餐饮",
+        account_name    = "现金",
+        merchant        = "商店",
+        remark          = "needle\nremark",
     )
     line = SearchHandler(SimpleNamespace())._format_item_line(
         item,

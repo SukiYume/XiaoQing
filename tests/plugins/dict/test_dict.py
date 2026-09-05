@@ -15,7 +15,7 @@ from plugins.dict import main as dict_plugin
 from tests.helpers.assertions import text_segments_text
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT = REPOSITORY_ROOT
+ROOT       = REPOSITORY_ROOT
 PLUGIN_DIR = ROOT / "plugins" / "dict"
 
 
@@ -115,14 +115,14 @@ async def test_exact_limit_and_page_options_preserve_the_complete_query(
         query: object,
         _context: object,
         exact_match: bool = False,
-        max_results: int = 10,
-        page: int = 1,
+        max_results: int  = 10,
+        page: int         = 1,
     ) -> str:
         captured.update(
-            query=query,
-            exact_match=exact_match,
-            max_results=max_results,
-            page=page,
+            query       = query,
+            exact_match = exact_match,
+            max_results = max_results,
+            page        = page,
         )
         return "ok"
 
@@ -147,8 +147,8 @@ async def test_exact_limit_and_page_options_preserve_the_complete_query(
 def test_page_size_alias_remains_available() -> None:
     assert dict_plugin._parse_request("star --page-size 25") == dict_plugin.DictionaryRequest(
         "query",
-        query="star",
-        max_results=25,
+        query       = "star",
+        max_results = 25,
     )
 
 
@@ -203,9 +203,9 @@ async def test_page_beyond_matches_reports_the_real_range(context: SimpleNamespa
 def test_generated_navigation_command_round_trips_option_like_quoted_query() -> None:
     command = dict_plugin._query_command(
         '-nova\'s "field"',
-        exact_match=True,
-        max_results=20,
-        page=2,
+        exact_match = True,
+        max_results = 20,
+        page        = 2,
     )
 
     assert command == "/dict --exact --size 20 --page 2 -- '-nova'\"'\"'s \"field\"'"
@@ -213,10 +213,10 @@ def test_generated_navigation_command_round_trips_option_like_quoted_query() -> 
         command.removeprefix("/dict ")
     ) == dict_plugin.DictionaryRequest(
         "query",
-        query='-nova\'s "field"',
-        exact_match=True,
-        max_results=20,
-        page=2,
+        query       = '-nova\'s "field"',
+        exact_match = True,
+        max_results = 20,
+        page        = 2,
     )
 
 
@@ -299,9 +299,9 @@ async def test_public_query_api_validates_exact_types(
     result = await dict_plugin.query_astrodict(
         query,
         context,
-        exact_match=exact_match,  # type: ignore[arg-type]
-        max_results=max_results,  # type: ignore[arg-type]
-        page=page,  # type: ignore[arg-type]
+        exact_match = exact_match,  # type: ignore[arg-type]
+        max_results = max_results,  # type: ignore[arg-type]
+        page        = page,  # type: ignore[arg-type]
     )
 
     assert expected in result
@@ -352,7 +352,7 @@ def test_manifest_and_every_packaged_row_are_consistent() -> None:
         "chinese_to_english": 26_770,
     }
     for direction, spec in manifest["files"].items():
-        path = asset_dir / spec["filename"]
+        path    = asset_dir / spec["filename"]
         payload = path.read_bytes()
         assert not payload.startswith(b"\xef\xbb\xbf")
         assert b"\r" not in payload
@@ -419,15 +419,15 @@ def test_dictionary_parser_rejects_malformed_payloads(
 
 
 def test_dictionary_loader_rejects_missing_digest_and_count_mismatches(tmp_path: Path) -> None:
-    missing = tmp_path / "missing.txt"
+    missing      = tmp_path / "missing.txt"
     missing_spec = dict_plugin.ResourceSpec("missing.txt", "0" * 64, 1, 1)
     with pytest.raises(dict_plugin.DictionaryDataError, match="数据校验失败"):
         dict_plugin._load_dictionary(missing, missing_spec, (0, 0, 1))
 
-    path = tmp_path / "dictionary.txt"
-    payload = b"one\ttwo\n"
-    valid_spec = _resource_for_payload(path, payload, 1)
-    info = path.stat()
+    path        = tmp_path / "dictionary.txt"
+    payload     = b"one\ttwo\n"
+    valid_spec  = _resource_for_payload(path, payload, 1)
+    info        = path.stat()
     fingerprint = (info.st_mtime_ns, info.st_ctime_ns, info.st_size)
 
     wrong_digest = dict_plugin.ResourceSpec(path.name, "0" * 64, len(payload), 1)
@@ -460,11 +460,11 @@ def test_resource_manifest_rejects_paths_and_unbounded_sizes() -> None:
         dict_plugin._resource_spec(base, "english_to_chinese")
 
     base["files"]["english_to_chinese"]["filename"] = "dictionary.txt"
-    base["files"]["english_to_chinese"]["bytes"] = dict_plugin.MAX_DICTIONARY_BYTES + 1
+    base["files"]["english_to_chinese"]["bytes"]    = dict_plugin.MAX_DICTIONARY_BYTES + 1
     with pytest.raises(dict_plugin.DictionaryDataError, match="资源清单无效"):
         dict_plugin._resource_spec(base, "english_to_chinese")
 
-    base["schema_version"] = True
+    base["schema_version"]                       = True
     base["files"]["english_to_chinese"]["bytes"] = 1
     with pytest.raises(dict_plugin.DictionaryDataError, match="资源清单无效"):
         dict_plugin._resource_spec(base, "english_to_chinese")

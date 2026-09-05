@@ -22,8 +22,8 @@ from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.planning import pfc_action_planner
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT = REPOSITORY_ROOT
-CANARY = "CR219_INTERNAL_LOG_SECRET"
+ROOT            = REPOSITORY_ROOT
+CANARY          = "CR219_INTERNAL_LOG_SECRET"
 SENSITIVE_ERROR = (
     f"Authorization: Bearer {CANARY} "
     f"https://user:password@example.test/api?token={CANARY} "
@@ -63,7 +63,7 @@ def test_arxiv_internal_request_error_logs_only_type(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    module_name = "plugins.arxiv_filter.arxiv_today"
+    module_name     = "plugins.arxiv_filter.arxiv_today"
     fake_feedparser = ModuleType("feedparser")
     monkeypatch.setitem(sys.modules, "feedparser", fake_feedparser)
     sys.modules.pop(module_name, None)
@@ -119,25 +119,25 @@ async def test_xiaoqing_memory_failure_uses_correlated_public_log(
         Mock(side_effect=RuntimeError(SENSITIVE_ERROR)),
     )
     context = SimpleNamespace(
-        http_session=object(),
-        logger=logging.getLogger("test.cr219.xiaoqing.memory"),
-        request_id="req-cr219-memory",
-        secrets={"token": CANARY},
+        http_session = object(),
+        logger       = logging.getLogger("test.cr219.xiaoqing.memory"),
+        request_id   = "req-cr219-memory",
+        secrets      = {"token": CANARY},
     )
     runtime = SimpleNamespace(cfg=SimpleNamespace(debug=SimpleNamespace(log_steps=False)))
 
     with caplog.at_level(logging.ERROR):
         result = await context_builder._build_memory_block(
-            context=context,
-            runtime=runtime,
-            state=object(),
-            secrets={"token": CANARY},
-            data_dir=tmp_path,
-            chat_id="private-chat",
-            history=[],
-            current_text="hello",
-            planner_question="",
-            bot_name="小青",
+            context          = context,
+            runtime          = runtime,
+            state            = object(),
+            secrets          = {"token": CANARY},
+            data_dir         = tmp_path,
+            chat_id          = "private-chat",
+            history          = [],
+            current_text     = "hello",
+            planner_question = "",
+            bot_name         = "小青",
         )
 
     logged = _log_text(caplog)
@@ -166,9 +166,9 @@ async def test_xiaoqing_shutdown_failures_use_correlated_public_log(
     )
     monkeypatch.setattr(xiaoqing_chat, "_state", Mock(return_value=state))
     context = SimpleNamespace(
-        logger=logging.getLogger("test.cr219.xiaoqing.shutdown"),
-        request_id="req-cr219-shutdown",
-        secrets={"token": CANARY},
+        logger     = logging.getLogger("test.cr219.xiaoqing.shutdown"),
+        request_id = "req-cr219-shutdown",
+        secrets    = {"token": CANARY},
     )
 
     with caplog.at_level(logging.ERROR):
@@ -292,7 +292,7 @@ def test_targeted_exception_log_calls_never_receive_raw_exception_values() -> No
                 callable_name = ast.unparse(call.func)
                 if "log" not in callable_name.lower():
                     continue
-                source = ast.unparse(call)
+                source              = ast.unparse(call)
                 source_without_type = source.replace(
                     f"type({handler.name}).__name__",
                     "",

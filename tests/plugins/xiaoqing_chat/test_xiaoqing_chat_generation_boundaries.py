@@ -26,7 +26,7 @@ def test_is_brain_chat_active_keeps_private_brain_mode_when_forced() -> None:
 async def test_handle_smalltalk_hides_internal_exception_details() -> None:
     from plugins.xiaoqing_chat.handlers import handle_smalltalk
 
-    context = MagicMock()
+    context        = MagicMock()
     context.logger = MagicMock()
 
     event = {
@@ -63,22 +63,22 @@ async def test_build_memory_block_fallback_keeps_global_memory_hits() -> None:
         assert meta_filter is None
         return [
             RetrievedItem(
-                doc_id="knowledge:1",
-                text="全局知识命中",
-                score=0.9,
-                meta={"type": "knowledge"},
+                doc_id = "knowledge:1",
+                text   = "全局知识命中",
+                score  = 0.9,
+                meta   = {"type": "knowledge"},
             )
         ]
 
     memory_db = MemoryDB()
-    cfg = MemoryConfig(
-        planner_question=False,
-        enable_thinking_back_cache=False,
-        top_k=2,
-        min_score=0.1,
-        max_agent_iterations=1,
-        agent_timeout_seconds=1.0,
-        thinking_back_window_seconds=0.0,
+    cfg       = MemoryConfig(
+        planner_question             = False,
+        enable_thinking_back_cache   = False,
+        top_k                        = 2,
+        min_score                    = 0.1,
+        max_agent_iterations         = 1,
+        agent_timeout_seconds        = 1.0,
+        thinking_back_window_seconds = 0.0,
     )
     history = [StoredMessage(role="user", name="Tester", content="你好", ts=1.0)]
 
@@ -89,19 +89,19 @@ async def test_build_memory_block_fallback_keeps_global_memory_hits() -> None:
             fake_react_retrieve,
         )
         block = await build_memory_block(
-            data_dir=Path("."),
-            chat_id="group-1",
-            secrets={},
-            cfg=cfg,
-            bot_name="小青",
-            history=history,
-            current_text="你好",
-            planner_question="问点啥",
-            memory_db=memory_db,
-            temperature=0.7,
-            top_p=0.9,
-            max_tokens=256,
-            timeout_seconds=3.0,
+            data_dir         = Path("."),
+            chat_id          = "group-1",
+            secrets          = {},
+            cfg              = cfg,
+            bot_name         = "小青",
+            history          = history,
+            current_text     = "你好",
+            planner_question = "问点啥",
+            memory_db        = memory_db,
+            temperature      = 0.7,
+            top_p            = 0.9,
+            max_tokens       = 256,
+            timeout_seconds  = 3.0,
         )
 
     assert "全局知识命中" in block
@@ -124,21 +124,21 @@ async def test_build_memory_block_uses_current_text_when_question_generation_fai
         queried.append(question)
         return [
             RetrievedItem(
-                doc_id="topic:1",
-                text="王府井二次元店讨论摘要",
-                score=0.9,
-                meta={"type": "topic_summary", "chat_id": "g1"},
+                doc_id = "topic:1",
+                text   = "王府井二次元店讨论摘要",
+                score  = 0.9,
+                meta   = {"type": "topic_summary", "chat_id": "g1"},
             )
         ]
 
     memory_db = MemoryDB()
-    cfg = MemoryConfig(
-        planner_question=True,
-        enable_thinking_back_cache=False,
-        top_k=2,
-        min_score=0.1,
-        max_agent_iterations=1,
-        agent_timeout_seconds=1.0,
+    cfg       = MemoryConfig(
+        planner_question           = True,
+        enable_thinking_back_cache = False,
+        top_k                      = 2,
+        min_score                  = 0.1,
+        max_agent_iterations       = 1,
+        agent_timeout_seconds      = 1.0,
     )
     history = [StoredMessage(role="user", name="Tester", content="你好", ts=1.0)]
 
@@ -149,19 +149,19 @@ async def test_build_memory_block_uses_current_text_when_question_generation_fai
             fake_react_retrieve,
         )
         block = await build_memory_block(
-            data_dir=Path("."),
-            chat_id="g1",
-            secrets={},
-            cfg=cfg,
-            bot_name="小青",
-            history=history,
-            current_text="王府井以前有二次元店吗",
-            planner_question="",
-            memory_db=memory_db,
-            temperature=0.7,
-            top_p=0.9,
-            max_tokens=256,
-            timeout_seconds=3.0,
+            data_dir         = Path("."),
+            chat_id          = "g1",
+            secrets          = {},
+            cfg              = cfg,
+            bot_name         = "小青",
+            history          = history,
+            current_text     = "王府井以前有二次元店吗",
+            planner_question = "",
+            memory_db        = memory_db,
+            temperature      = 0.7,
+            top_p            = 0.9,
+            max_tokens       = 256,
+            timeout_seconds  = 3.0,
         )
 
     assert queried == ["王府井以前有二次元店吗"]
@@ -174,38 +174,38 @@ async def test_memory_block_is_bounded_so_recent_dialogue_stays_primary() -> Non
     from plugins.xiaoqing_chat.memory.memory_db import MemoryDB, RetrievedItem
     from plugins.xiaoqing_chat.memory.memory_retrieval import build_memory_block
 
-    memory_db = MemoryDB()
+    memory_db       = MemoryDB()
     memory_db.query = MagicMock(
         return_value=[
             RetrievedItem(
-                doc_id="topic:long",
-                text="旧摘要" * 1000,
-                score=1.0,
-                meta={"type": "topic_summary", "chat_id": "g1"},
+                doc_id = "topic:long",
+                text   = "旧摘要" * 1000,
+                score  = 1.0,
+                meta   = {"type": "topic_summary", "chat_id": "g1"},
             )
         ]
     )
     cfg = MemoryConfig(
-        planner_question=False,
-        enable_thinking_back_cache=False,
-        top_k=3,
-        max_block_chars=120,
+        planner_question           = False,
+        enable_thinking_back_cache = False,
+        top_k                      = 3,
+        max_block_chars            = 120,
     )
 
     block = await build_memory_block(
-        data_dir=Path("."),
-        chat_id="g1",
-        secrets={"_ai": None},
-        cfg=cfg,
-        bot_name="小青",
-        history=[],
-        current_text="现在聊什么",
-        planner_question="",
-        memory_db=memory_db,
-        temperature=0.7,
-        top_p=0.9,
-        max_tokens=256,
-        timeout_seconds=3.0,
+        data_dir         = Path("."),
+        chat_id          = "g1",
+        secrets          = {"_ai": None},
+        cfg              = cfg,
+        bot_name         = "小青",
+        history          = [],
+        current_text     = "现在聊什么",
+        planner_question = "",
+        memory_db        = memory_db,
+        temperature      = 0.7,
+        top_p            = 0.9,
+        max_tokens       = 256,
+        timeout_seconds  = 3.0,
     )
 
     assert block.startswith("你回忆起了以下信息：")
@@ -242,13 +242,13 @@ async def test_build_memory_block_does_not_forward_provider_overrides() -> None:
         return []
 
     memory_db = MemoryDB()
-    cfg = MemoryConfig(
-        planner_question=False,
-        enable_thinking_back_cache=False,
-        top_k=2,
-        min_score=0.1,
-        max_agent_iterations=1,
-        agent_timeout_seconds=1.0,
+    cfg       = MemoryConfig(
+        planner_question           = False,
+        enable_thinking_back_cache = False,
+        top_k                      = 2,
+        min_score                  = 0.1,
+        max_agent_iterations       = 1,
+        agent_timeout_seconds      = 1.0,
     )
     history = [StoredMessage(role="user", name="Tester", content="你好", ts=1.0)]
 
@@ -259,19 +259,19 @@ async def test_build_memory_block_does_not_forward_provider_overrides() -> None:
             fake_react_retrieve,
         )
         block = await build_memory_block(
-            data_dir=Path("."),
-            chat_id="g1",
-            secrets={"api_base": "https://example.com", "api_key": "k", "model": "m"},
-            cfg=cfg,
-            bot_name="小青",
-            history=history,
-            current_text="她喜欢吃什么来着",
-            planner_question="她喜欢吃什么来着",
-            memory_db=memory_db,
-            temperature=0.7,
-            top_p=0.9,
-            max_tokens=256,
-            timeout_seconds=3.0,
+            data_dir         = Path("."),
+            chat_id          = "g1",
+            secrets          = {"api_base": "https://example.com", "api_key": "k", "model": "m"},
+            cfg              = cfg,
+            bot_name         = "小青",
+            history          = history,
+            current_text     = "她喜欢吃什么来着",
+            planner_question = "她喜欢吃什么来着",
+            memory_db        = memory_db,
+            temperature      = 0.7,
+            top_p            = 0.9,
+            max_tokens       = 256,
+            timeout_seconds  = 3.0,
         )
 
     assert "喜欢吃辣" in block
@@ -325,24 +325,24 @@ async def test_xiaoqing_gateway_delegates_retry_policy_to_core() -> None:
     service = SimpleNamespace(
         complete=AsyncMock(
             return_value=AICompletionResult(
-                response={"choices": [{"message": {"content": "ok"}}]},
-                profile="primary",
-                provider="provider",
-                model="model",
-                finish_reason="stop",
-                attempts=1,
+                response      = {"choices": [{"message": {"content": "ok"}}]},
+                profile       = "primary",
+                provider      = "provider",
+                model         = "model",
+                finish_reason = "stop",
+                attempts      = 1,
             )
         )
     )
     await complete_raw(
-        secrets={"_ai": service, "_route": "chat"},
-        messages=[{"role": "user", "content": "hi"}],
-        temperature=0.7,
-        top_p=0.9,
-        max_tokens=128,
-        timeout_seconds=3.0,
-        max_retry=2,
-        retry_interval_seconds=0.5,
+        secrets                = {"_ai": service, "_route": "chat"},
+        messages               = [{"role": "user", "content": "hi"}],
+        temperature            = 0.7,
+        top_p                  = 0.9,
+        max_tokens             = 128,
+        timeout_seconds        = 3.0,
+        max_retry              = 2,
+        retry_interval_seconds = 0.5,
     )
 
     kwargs = service.complete.await_args.kwargs
@@ -359,27 +359,27 @@ async def test_gateway_forwards_extra_payload_without_streaming() -> None:
     service = SimpleNamespace(
         complete=AsyncMock(
             return_value=AICompletionResult(
-                response={"choices": [{"message": {"content": "ok"}}]},
-                profile="primary",
-                provider="provider",
-                model="model",
-                finish_reason="stop",
-                attempts=1,
+                response      = {"choices": [{"message": {"content": "ok"}}]},
+                profile       = "primary",
+                provider      = "provider",
+                model         = "model",
+                finish_reason = "stop",
+                attempts      = 1,
             )
         )
     )
     messages = [{"role": "user", "content": "hi"}]
 
     await complete_raw(
-        secrets={"_ai": service, "_route": "chat"},
-        messages=messages,
-        temperature=0.7,
-        top_p=0.9,
-        max_tokens=128,
-        timeout_seconds=3.0,
-        max_retry=0,
-        retry_interval_seconds=0.5,
-        extra_payload={
+        secrets                = {"_ai": service, "_route": "chat"},
+        messages               = messages,
+        temperature            = 0.7,
+        top_p                  = 0.9,
+        max_tokens             = 128,
+        timeout_seconds        = 3.0,
+        max_retry              = 0,
+        retry_interval_seconds = 0.5,
+        extra_payload          = {
             "thinking": {"type": "enabled"},
             "reasoning_effort": "high",
         },
@@ -401,7 +401,7 @@ async def test_xiaoqing_uses_safe_core_model_metadata(tmp_path) -> None:
     from plugins.xiaoqing_chat.helper_utils import _get_ai_route_context
     from plugins.xiaoqing_chat.runtime_state import get_state
 
-    state = get_state()
+    state      = get_state()
     old_active = state.global_active_provider
     state.set_global_provider(None)
     try:
@@ -430,16 +430,16 @@ async def test_xiaoqing_uses_safe_core_model_metadata(tmp_path) -> None:
 
         context = with_settings_reader(
             SimpleNamespace(
-                config=config,
-                secrets={"plugins": {"xiaoqing_chat": {"api_key": "<LEGACY_API_KEY>"}}},
+                config  = config,
+                secrets = {"plugins": {"xiaoqing_chat": {"api_key": "<LEGACY_API_KEY>"}}},
                 capabilities=PluginCapabilities(ai=service),
             )
         )
 
         secrets = _get_ai_route_context(context)
-        loaded = load_xiaoqing_chat_config(
-            context_config=config,
-            plugin_dir=tmp_path,
+        loaded  = load_xiaoqing_chat_config(
+            context_config = config,
+            plugin_dir     = tmp_path,
         )
     finally:
         state.set_global_provider(old_active)

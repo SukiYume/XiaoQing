@@ -13,6 +13,7 @@ from plugins.pendo.utils.identifiers import is_canonical_internal_id
 from plugins.pendo.utils.validators import normalize_item_fields
 from plugins.pendo.web.api import items as items_api
 from tests.helpers.assertions import assert_http_error as _assert_http_error
+from tests.helpers.pendo_ledger_assertions import assert_cny_aggregate
 
 
 def _normalized_item(owner_id: str, item_type: str, **overrides: Any) -> dict[str, Any]:
@@ -137,16 +138,16 @@ def test_categories_and_accounts_trim_and_deduplicate_legacy_values(db: Database
         owner_id,
         "ledger-a",
         "ledger",
-        account_name="现金",
-        counter_account_name="银行卡",
+        account_name         = "现金",
+        counter_account_name = "银行卡",
     )
     second_ledger = _insert_item(
         db,
         owner_id,
         "ledger-b",
         "ledger",
-        account_name="银行卡",
-        counter_account_name="现金",
+        account_name         = "银行卡",
+        counter_account_name = "现金",
     )
     with db.get_connection():
         db.get_connection().execute(
@@ -168,10 +169,10 @@ def test_categories_and_accounts_trim_and_deduplicate_legacy_values(db: Database
     all_categories = items_api.list_categories(owner_id=owner_id, db=db)
     accounts = items_api.list_ledger_accounts(owner_id=owner_id, db=db)
     filtered_items = items_api.list_items(
-        type="note",
-        category=" 工作 ",
-        owner_id=owner_id,
-        db=db,
+        type     = "note",
+        category = " 工作 ",
+        owner_id = owner_id,
+        db       = db,
     )
 
     assert categories == {"ok": True, "data": {"categories": ["工作"]}, "message": ""}
@@ -219,12 +220,12 @@ def test_literal_keyword_filter_and_total_share_exact_semantics(
     _insert_item(db, owner_id, "plain", "note", title="普通文本")
 
     response = items_api.list_items(
-        type="note",
-        keyword=keyword,
-        page=1,
-        page_size=1,
-        owner_id=owner_id,
-        db=db,
+        type      = "note",
+        keyword   = keyword,
+        page      = 1,
+        page_size = 1,
+        owner_id  = owner_id,
+        db        = db,
     )
     data = cast(dict[str, Any], response["data"])
     rows = cast(list[dict[str, Any]], data["items"])
@@ -246,11 +247,11 @@ def test_tag_filter_escapes_wildcards_in_rows_and_total(db: Database) -> None:
         )
 
     response = items_api.list_items(
-        type="note",
-        tags="a%b",
-        page_size=1,
-        owner_id=owner_id,
-        db=db,
+        type      = "note",
+        tags      = "a%b",
+        page_size = 1,
+        owner_id  = owner_id,
+        db        = db,
     )
     data = cast(dict[str, Any], response["data"])
     rows = cast(list[dict[str, Any]], data["items"])
@@ -268,49 +269,52 @@ def test_amount_filters_use_integer_cents_for_list_total_and_aggregate(db: Datab
         owner_id,
         "one-cent",
         "ledger",
-        amount=0.01,
-        transaction_type="expense",
+        amount           = 0.01,
+        transaction_type = "expense",
     )
     _insert_item(
         db,
         owner_id,
         "one-twenty-three",
         "ledger",
-        amount=1.23,
-        transaction_type="income",
+        amount           = 1.23,
+        transaction_type = "income",
     )
     _insert_item(
         db,
         owner_id,
         "two-fifty",
         "ledger",
-        amount=2.5,
-        transaction_type="expense",
+        amount           = 2.5,
+        transaction_type = "expense",
     )
 
     listed = items_api.list_items(
-        amount_min=0.005,
-        amount_max=1.234,
-        page_size=1,
-        owner_id=owner_id,
-        db=db,
+        amount_min = 0.005,
+        amount_max = 1.234,
+        page_size  = 1,
+        owner_id   = owner_id,
+        db         = db,
     )
     listed_data = cast(dict[str, Any], listed["data"])
-    summary = items_api.aggregate_items(
-        amount_min=0.005,
-        amount_max=1.234,
-        owner_id=owner_id,
-        db=db,
+    summary     = items_api.aggregate_items(
+        amount_min = 0.005,
+        amount_max = 1.234,
+        owner_id   = owner_id,
+        db         = db,
     )
 
     assert listed_data["total"] == 2
-    assert cast(dict[str, Any], summary["data"]) == {
-        "income": 1.23,
-        "expense": 0.01,
-        "transfer": 0.0,
-        "balance": 1.22,
-        "count": 2,
-    }
+    assert_cny_aggregate(
+        cast(dict[str, Any], summary["data"]),
+        {
+            "income": 1.23,
+            "expense": 0.01,
+            "transfer": 0.0,
+            "balance": 1.22,
+            "count": 2,
+        },
+    )
 
 
 def test_database_amount_filter_uses_decimal_half_up_rounding(db: Database) -> None:
@@ -321,8 +325,8 @@ def test_database_amount_filter_uses_decimal_half_up_rounding(db: Database) -> N
 
     items = db.get_items(
         owner_id,
-        filters={"type": "ledger", "amount_max": 0.005},
-        use_cache=False,
+        filters   = {"type": "ledger", "amount_max": 0.005},
+        use_cache = False,
     )
 
     assert [item.id for item in items] == ["one-cent-direct"]
@@ -331,15 +335,15 @@ def test_database_amount_filter_uses_decimal_half_up_rounding(db: Database) -> N
 def test_legacy_ledger_amount_fallback_covers_filters_and_aggregates(db: Database) -> None:
     """旧账目缺少 amount_cents 时，统计和金额筛选仍使用 amount。"""
 
-    owner_id = "owner-legacy-amount"
+    owner_id  = "owner-legacy-amount"
     legacy_id = _insert_item(
         db,
         owner_id,
         "legacy-ledger",
         "ledger",
-        amount=12.34,
-        transaction_type="expense",
-        ledger_date="2030-01-02",
+        amount           = 12.34,
+        transaction_type = "expense",
+        ledger_date      = "2030-01-02",
     )
     with db.get_connection():
         db.get_connection().execute(
@@ -349,8 +353,8 @@ def test_legacy_ledger_amount_fallback_covers_filters_and_aggregates(db: Databas
 
     items = db.get_items(
         owner_id,
-        filters={"type": "ledger", "amount_min": 12.34, "amount_max": 12.34},
-        use_cache=False,
+        filters   = {"type": "ledger", "amount_min": 12.34, "amount_max": 12.34},
+        use_cache = False,
     )
     assert [item.id for item in items] == [legacy_id]
     assert db.aggregate_item_amounts(owner_id, {"type": "ledger"}) == {
@@ -370,24 +374,24 @@ def test_aggregate_applies_category_and_counts_unknown_legacy_kinds(db: Database
         owner_id,
         "food-expense",
         "ledger",
-        amount=10,
-        ledger_category="餐饮",
-        transaction_type="expense",
+        amount           = 10,
+        ledger_category  = "餐饮",
+        transaction_type = "expense",
     )
     _insert_item(
         db,
         owner_id,
         "other-expense",
         "ledger",
-        amount=30,
-        ledger_category="其他",
-        transaction_type="expense",
+        amount           = 30,
+        ledger_category  = "其他",
+        transaction_type = "expense",
     )
 
     category_summary = items_api.aggregate_items(
-        category=" 餐饮 ",
-        owner_id=owner_id,
-        db=db,
+        category = " 餐饮 ",
+        owner_id = owner_id,
+        db       = db,
     )
     assert cast(dict[str, Any], category_summary["data"])["expense"] == 10.0
 
@@ -397,17 +401,20 @@ def test_aggregate_applies_category_and_counts_unknown_legacy_kinds(db: Database
             (valid_id,),
         )
     legacy_summary = items_api.aggregate_items(
-        category="餐饮",
-        owner_id=owner_id,
-        db=db,
+        category = "餐饮",
+        owner_id = owner_id,
+        db       = db,
     )
-    assert cast(dict[str, Any], legacy_summary["data"]) == {
-        "income": 0.0,
-        "expense": 0.0,
-        "transfer": 0.0,
-        "balance": 0.0,
-        "count": 1,
-    }
+    assert_cny_aggregate(
+        cast(dict[str, Any], legacy_summary["data"]),
+        {
+            "income": 0.0,
+            "expense": 0.0,
+            "transfer": 0.0,
+            "balance": 0.0,
+            "count": 1,
+        },
+    )
 
 
 @pytest.mark.parametrize(
@@ -437,9 +444,9 @@ def test_aggregate_is_ledger_only_and_validates_transaction_type(db: Database) -
     _assert_http_error(
         422,
         lambda: items_api.aggregate_items(
-            transaction_type="refund",
-            owner_id="owner-aggregate",
-            db=db,
+            transaction_type = "refund",
+            owner_id         = "owner-aggregate",
+            db               = db,
         ),
     )
 
@@ -464,10 +471,10 @@ def test_date_only_event_range_expands_to_the_whole_day(db: Database) -> None:
     )
 
     response = items_api.list_items(
-        type="event",
-        date_range="2030-05-01..2030-05-01",
-        owner_id=owner_id,
-        db=db,
+        type       = "event",
+        date_range = "2030-05-01..2030-05-01",
+        owner_id   = owner_id,
+        db         = db,
     )
     data = cast(dict[str, Any], response["data"])
     rows = cast(list[dict[str, Any]], data["items"])
@@ -537,12 +544,12 @@ def test_item_timestamp_filter_and_sort_use_user_timezone_and_real_instants(
     )
 
     response = items_api.list_items(
-        type="event",
-        date_range="2030-05-02..2030-05-02",
-        sort="start_time",
-        order="asc",
-        owner_id=owner_id,
-        db=db,
+        type       = "event",
+        date_range = "2030-05-02..2030-05-02",
+        sort       = "start_time",
+        order      = "asc",
+        owner_id   = owner_id,
+        db         = db,
     )
     rows = cast(list[dict[str, Any]], cast(dict[str, Any], response["data"])["items"])
 
@@ -593,12 +600,12 @@ def test_create_rejects_cross_type_fields_without_writing(
     """统一创建模型虽接收五类字段，规范化器必须拒绝跨类型混入。"""
 
     owner_id = "owner-cross-type-create"
-    error = _assert_http_error(
+    error    = _assert_http_error(
         422,
         lambda: items_api.create_item(
             items_api.ItemCreate(**payload),
-            owner_id=owner_id,
-            db=db,
+            owner_id = owner_id,
+            db       = db,
         ),
     )
 
@@ -611,12 +618,12 @@ def test_create_dispatches_all_five_types_and_audits_atomically(db: Database) ->
     """一个创建入口应覆盖五类规范化器，并为每次成功写入一条审计。"""
 
     owner_id = "owner-create-all-types"
-    bodies = (
+    bodies   = (
         items_api.ItemCreate(
-            type="event",
-            title="会议",
-            start_time="2030-06-01T09:00:00",
-            end_time="2030-06-01T10:00:00",
+            type       = "event",
+            title      = "会议",
+            start_time = "2030-06-01T09:00:00",
+            end_time   = "2030-06-01T10:00:00",
         ),
         items_api.ItemCreate(type="task", title="提交", plan_date="2030-06-01"),
         items_api.ItemCreate(type="note", title="记录"),
@@ -656,26 +663,26 @@ def test_create_preserves_explicit_diary_time_and_resolves_note_references(db: D
 
     diary_response = items_api.create_item(
         items_api.ItemCreate(
-            type="diary",
-            content="带明确记录时间",
-            diary_date="2030-08-01",
-            entry_time="2030-08-01T13:30:00+00:00",
+            type       = "diary",
+            content    = "带明确记录时间",
+            diary_date = "2030-08-01",
+            entry_time = "2030-08-01T13:30:00+00:00",
         ),
-        owner_id=owner_id,
-        db=db,
+        owner_id = owner_id,
+        db       = db,
     )
     note_response = items_api.create_item(
         items_api.ItemCreate(
-            type="note",
-            title="引用笔记",
-            related_items=[target_id],
+            type          = "note",
+            title         = "引用笔记",
+            related_items = [target_id],
         ),
-        owner_id=owner_id,
-        db=db,
+        owner_id = owner_id,
+        db       = db,
     )
 
     diary_id = str(cast(dict[str, Any], diary_response["data"])["id"])
-    note_id = str(cast(dict[str, Any], note_response["data"])["id"])
+    note_id  = str(cast(dict[str, Any], note_response["data"])["id"])
     diary = db.get_item(diary_id, owner_id=owner_id)
     note = db.get_item(note_id, owner_id=owner_id)
     assert diary is not None and diary.entry_time == "2030-08-01T13:30:00+00:00"
@@ -703,8 +710,8 @@ def test_create_defensively_rejects_a_missing_resolved_type(
         422,
         lambda: items_api.create_item(
             items_api.ItemCreate(type="note", title="不会创建"),
-            owner_id="owner-missing-type",
-            db=db,
+            owner_id = "owner-missing-type",
+            db       = db,
         ),
     )
     assert error.detail == "Item type is required"
@@ -739,8 +746,8 @@ def test_update_rejects_empty_version_only_cross_type_and_stale_requests(db: Dat
         lambda: items_api.update_item(
             "guarded-note",
             items_api.ItemUpdate(title="新标题", version=99),
-            owner_id=owner_id,
-            db=db,
+            owner_id = owner_id,
+            db       = db,
         ),
     )
 
@@ -758,8 +765,8 @@ def test_same_value_update_is_a_noop_without_version_or_audit_change(db: Databas
     response = items_api.update_item(
         "same-note",
         items_api.ItemUpdate(title="相同标题", version=0),
-        owner_id=owner_id,
-        db=db,
+        owner_id = owner_id,
+        db       = db,
     )
 
     assert response["message"] == "无变化"
@@ -781,8 +788,8 @@ def test_ledger_update_accepts_canonical_cents_and_rejects_invalid_note_title(
     response = items_api.update_item(
         "cent-ledger",
         items_api.ItemUpdate(amount=2, amount_cents=345),
-        owner_id=owner_id,
-        db=db,
+        owner_id = owner_id,
+        db       = db,
     )
     assert response["message"] == "更新成功"
     ledger = db.get_item("cent-ledger", owner_id=owner_id)
@@ -795,8 +802,8 @@ def test_ledger_update_accepts_canonical_cents_and_rejects_invalid_note_title(
         lambda: items_api.update_item(
             "invalid-title-note",
             items_api.ItemUpdate(title=""),
-            owner_id=owner_id,
-            db=db,
+            owner_id = owner_id,
+            db       = db,
         ),
     )
 
@@ -805,10 +812,10 @@ def test_blank_choice_filter_is_ignored(db: Database) -> None:
     """仅含空白的枚举查询等同未提供，不应错误推断条目类型。"""
 
     response = items_api.list_items(
-        status="   ",
-        transaction_type=" ",
-        owner_id="owner-blank-filter",
-        db=db,
+        status           = "   ",
+        transaction_type = " ",
+        owner_id         = "owner-blank-filter",
+        db               = db,
     )
     assert cast(dict[str, Any], response["data"])["total"] == 0
 
@@ -824,8 +831,8 @@ def test_update_returns_404_and_reports_corrupt_stored_type(
         lambda: items_api.update_item(
             "missing",
             items_api.ItemUpdate(title="新标题"),
-            owner_id="owner-update-errors",
-            db=db,
+            owner_id = "owner-update-errors",
+            db       = db,
         ),
     )
 
@@ -838,8 +845,8 @@ def test_update_returns_404_and_reports_corrupt_stored_type(
         lambda: items_api.update_item(
             "corrupt",
             items_api.ItemUpdate(title="新标题"),
-            owner_id="owner-update-errors",
-            db=db,
+            owner_id = "owner-update-errors",
+            db       = db,
         ),
     )
     assert error.detail == "Stored item has an unsupported type"
@@ -857,11 +864,11 @@ def test_minimal_event_update_writes_only_the_requested_field(
         owner_id,
         "minimal-event",
         "event",
-        title="旧标题",
-        notes="必须保留",
-        reminder_rules=[{"offset_seconds": 600}],
+        title          = "旧标题",
+        notes          = "必须保留",
+        reminder_rules = [{"offset_seconds": 600}],
     )
-    original_update = db.update_item
+    original_update                  = db.update_item
     captured_updates: dict[str, Any] = {}
 
     def capture_update(item_id: str, updates: Mapping[str, Any], **kwargs: Any) -> bool:
@@ -873,8 +880,8 @@ def test_minimal_event_update_writes_only_the_requested_field(
     response = items_api.update_item(
         "minimal-event",
         items_api.ItemUpdate(title="新标题"),
-        owner_id=owner_id,
-        db=db,
+        owner_id = owner_id,
+        db       = db,
     )
 
     assert response["message"] == "更新成功"
@@ -898,8 +905,8 @@ def test_explicit_null_clears_event_reminders(db: Database) -> None:
     response = items_api.update_item(
         "clear-event",
         items_api.ItemUpdate(reminder_rules=None),
-        owner_id=owner_id,
-        db=db,
+        owner_id = owner_id,
+        db       = db,
     )
 
     assert response["message"] == "更新成功"
@@ -924,8 +931,8 @@ def test_update_and_delete_map_concurrent_disappearance_to_409(
         lambda: items_api.update_item(
             "concurrent-note",
             items_api.ItemUpdate(title="不会落库"),
-            owner_id=owner_id,
-            db=db,
+            owner_id = owner_id,
+            db       = db,
         ),
     )
     monkeypatch.setattr(db, "delete_item", lambda *_args, **_kwargs: False)
@@ -938,7 +945,7 @@ def test_update_and_delete_map_concurrent_disappearance_to_409(
 def test_generic_event_delete_removes_empty_multi_node_collection(db: Database) -> None:
     """通用删除入口也必须维护多节点日程图，不能留下空集合头。"""
 
-    owner_id = "owner-generic-event-delete"
+    owner_id      = "owner-generic-event-delete"
     collection_id = db.create_event_collection(
         {
             "id": "generic-collection",
@@ -952,8 +959,8 @@ def test_generic_event_delete_removes_empty_multi_node_collection(db: Database) 
                 _normalized_item(
                     owner_id,
                     "event",
-                    title="第一节点",
-                    start_time="2030-07-01T09:00:00",
+                    title      = "第一节点",
+                    start_time = "2030-07-01T09:00:00",
                 ),
             ),
             (
@@ -961,8 +968,8 @@ def test_generic_event_delete_removes_empty_multi_node_collection(db: Database) 
                 _normalized_item(
                     owner_id,
                     "event",
-                    title="第二节点",
-                    start_time="2030-07-02T09:00:00",
+                    title      = "第二节点",
+                    start_time = "2030-07-02T09:00:00",
                 ),
             ),
         ],

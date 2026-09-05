@@ -1,3 +1,4 @@
+# 验证动态并发额度调整时等待者、持有者和取消的计数一致性。
 from __future__ import annotations
 
 import asyncio
@@ -95,9 +96,9 @@ async def test_adjustable_semaphore_cancellation_preserves_fifo_capacity() -> No
         await limiter.acquire()
         order.append(index)
 
-    first = asyncio.create_task(acquire(0))
+    first     = asyncio.create_task(acquire(0))
     cancelled = asyncio.create_task(acquire(1))
-    last = asyncio.create_task(acquire(2))
+    last      = asyncio.create_task(acquire(2))
     await asyncio.sleep(0)
 
     cancelled.cancel()

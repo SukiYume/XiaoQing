@@ -74,8 +74,8 @@ class AdjustableSemaphore:
     """
 
     def __init__(self, capacity: int) -> None:
-        self._capacity = self._validate_capacity(capacity)
-        self._in_use = 0
+        self._capacity                             = self._validate_capacity(capacity)
+        self._in_use                               = 0
         self._waiters: deque[asyncio.Future[None]] = deque()
 
     @staticmethod
@@ -104,7 +104,7 @@ class AdjustableSemaphore:
         capacity = self._validate_capacity(capacity)
         if capacity == self._capacity:
             return
-        increased = capacity > self._capacity
+        increased      = capacity > self._capacity
         self._capacity = capacity
         if increased:
             self._wake_waiters()
@@ -223,15 +223,15 @@ class MessageParser:
     """解析消息事件并构建 MessageContext"""
 
     def __init__(self, config_provider: ConfigProvider) -> None:
-        self._config_provider = config_provider
+        self._config_provider                                      = config_provider
         self._prefix_cache_key: tuple[str, tuple[str, ...]] | None = None
-        self._bot_name_pattern: re.Pattern[str] | None = None
-        self._cached_bot_name: str = ""
-        self._cached_prefixes: tuple[str, ...] = ()
+        self._bot_name_pattern: re.Pattern[str] | None             = None
+        self._cached_bot_name: str                                 = ""
+        self._cached_prefixes: tuple[str, ...]                     = ()
         self.refresh_prefix_cache()
 
     def refresh_prefix_cache(self) -> None:
-        config = self._config_provider.config
+        config   = self._config_provider.config
         bot_name = config.get("bot_name", "")
         prefixes = tuple(config.get("command_prefixes", ["/"]))
 
@@ -240,8 +240,8 @@ class MessageParser:
             return
 
         self._prefix_cache_key = cache_key
-        self._cached_bot_name = bot_name
-        self._cached_prefixes = prefixes
+        self._cached_bot_name  = bot_name
+        self._cached_prefixes  = prefixes
         self._bot_name_pattern = compile_bot_name_pattern(bot_name)
 
     def parse(
@@ -251,16 +251,16 @@ class MessageParser:
         allow_empty_session_input: bool = False,
     ) -> MessageContext | None:
         """解析消息事件，构建消息上下文"""
-        bot_name = self._cached_bot_name
-        prefixes = self._cached_prefixes
-        self_id = str(event.get("self_id", "") or "")
+        bot_name     = self._cached_bot_name
+        prefixes     = self._cached_prefixes
+        self_id      = str(event.get("self_id", "") or "")
         message_scan = scan_message(
             event.get("message"),
-            self_id=self_id,
-            raw_message=str(event.get("raw_message", "") or ""),
+            self_id     = self_id,
+            raw_message = str(event.get("raw_message", "") or ""),
         )
-        text = message_scan.text.strip()
-        user_id = event.get("user_id")
+        text     = message_scan.text.strip()
+        user_id  = event.get("user_id")
         group_id = event.get("group_id")
 
         is_empty = not text and not message_scan.has_media and not message_scan.is_at_me
@@ -280,28 +280,28 @@ class MessageParser:
         parsed = parse_text_command_context(
             text,
             event,
-            bot_name=bot_name,
-            prefixes=prefixes,
-            self_id=self_id,
-            bot_name_pattern=self._bot_name_pattern,
-            message_scan=message_scan,
+            bot_name         = bot_name,
+            prefixes         = prefixes,
+            self_id          = self_id,
+            bot_name_pattern = self._bot_name_pattern,
+            message_scan     = message_scan,
         )
 
         return MessageContext(
-            request_id=str(uuid.uuid4())[:8],
-            text=text,
-            clean_text=parsed.clean_text,
-            user_id=user_id,
-            group_id=group_id,
-            is_private=group_id is None,
-            has_bot_name=parsed.has_bot_name,
-            has_prefix=parsed.has_prefix,
-            has_command_prefix=parsed.has_command_prefix,
-            is_only_bot_name=parsed.is_only_bot_name,
-            is_at_me=parsed.is_at_me,
-            is_url_only=parsed.is_url_only,
-            event=event,
-            is_empty=is_empty,
+            request_id         = str(uuid.uuid4())[:8],
+            text               = text,
+            clean_text         = parsed.clean_text,
+            user_id            = user_id,
+            group_id           = group_id,
+            is_private         = group_id is None,
+            has_bot_name       = parsed.has_bot_name,
+            has_prefix         = parsed.has_prefix,
+            has_command_prefix = parsed.has_command_prefix,
+            is_only_bot_name   = parsed.is_only_bot_name,
+            is_at_me           = parsed.is_at_me,
+            is_url_only        = parsed.is_url_only,
+            event              = event,
+            is_empty           = is_empty,
         )
 
 
@@ -330,10 +330,10 @@ class Dispatcher:
         build_context: ContextFactory,
         semaphore: AdjustableSemaphore | asyncio.Semaphore | None,
         session_manager: SessionManager | None = None,
-        metrics: MetricsCollector | None = None,
-        clock: IClock | None = None,
-        random_gen: IRandom | None = None,
-        parser: MessageParser | None = None,
+        metrics: MetricsCollector | None       = None,
+        clock: IClock | None                   = None,
+        random_gen: IRandom | None             = None,
+        parser: MessageParser | None           = None,
     ) -> None:
         """
         初始化分发器
@@ -347,16 +347,16 @@ class Dispatcher:
             semaphore: 并发控制信号量（可选，测试时可为 None）
             session_manager: 会话管理器（可选）
         """
-        self.router = router
+        self.router          = router
         self.config_provider = config_provider
         self.plugin_registry = plugin_registry
-        self.admin_check = admin_check
-        self.build_context = build_context
-        self.semaphore = semaphore
+        self.admin_check     = admin_check
+        self.build_context   = build_context
+        self.semaphore       = semaphore
         self.session_manager = session_manager
-        self.metrics = metrics
-        self.clock = clock or SystemClock()
-        self.random = random_gen or SystemRandom()
+        self.metrics         = metrics
+        self.clock           = clock or SystemClock()
+        self.random          = random_gen or SystemRandom()
         if parser is None:
             self.parser = MessageParser(config_provider)
         else:
@@ -436,9 +436,9 @@ class Dispatcher:
         ):
             raise ValueError("duration_minutes must be a positive finite number")
         duration = float(duration_minutes)
-        now = self.clock.now()
+        now      = self.clock.now()
         self._prune_expired_mutes(now)
-        unmute_time = now + duration * constants.SECONDS_PER_MINUTE
+        unmute_time                  = now + duration * constants.SECONDS_PER_MINUTE
         self._muted_groups[group_id] = unmute_time
         logger.info("Group %s muted for %.1f minutes", group_id, duration)
 
@@ -508,19 +508,19 @@ class Dispatcher:
         )
 
         # Step A: process gate
-        config = self.config_provider.config
+        config           = self.config_provider.config
         require_bot_name = config.get("require_bot_name_in_group", True)
-        should_process = ctx.is_private or (not require_bot_name) or ctx.has_prefix
-        session_checked = False
+        should_process   = ctx.is_private or (not require_bot_name) or ctx.has_prefix
+        session_checked  = False
         if (
             self.session_manager is not None
             and ctx.user_id is not None
             and not ctx.is_only_bot_name
         ):
-            session = await self.session_manager.peek(ctx.user_id, ctx.group_id)
+            session         = await self.session_manager.peek(ctx.user_id, ctx.group_id)
             session_checked = True
             if session is not None:
-                should_process = True
+                should_process     = True
                 ctx.cached_session = session
 
         if ctx.is_empty and ctx.cached_session is None:
@@ -549,7 +549,7 @@ class Dispatcher:
             and ctx.user_id is not None
         ):
             ctx.cached_session = await self.session_manager.peek(ctx.user_id, ctx.group_id)
-            session_checked = True
+            session_checked    = True
 
         observation_skip_reason = self._observation_skip_reason(ctx, resolved)
         if observation_skip_reason is None:
@@ -652,15 +652,15 @@ class Dispatcher:
         if callable(issuer):
             principal = issuer(
                 ctx.event,
-                user_id=ctx.user_id,
-                group_id=ctx.group_id,
-                is_private=ctx.is_private,
+                user_id    = ctx.user_id,
+                group_id   = ctx.group_id,
+                is_private = ctx.is_private,
             )
             if not isinstance(principal, PluginPrincipal):
                 raise TypeError("issue_user_principal must return PluginPrincipal")
             return principal
         role: PluginGroupRole = "unknown"
-        sender = ctx.event.get("sender")
+        sender                = ctx.event.get("sender")
         if ctx.group_id is not None and isinstance(sender, dict):
             sender_user_id = sender.get("user_id")
             try:
@@ -680,12 +680,12 @@ class Dispatcher:
                 elif candidate_role == "member":
                     role = "member"
         return PluginPrincipal(
-            kind="user" if ctx.user_id is not None else "lifecycle",
-            user_id=ctx.user_id,
-            group_id=ctx.group_id,
-            is_bot_admin=self.admin_check.is_admin(ctx.user_id),
-            is_private=ctx.is_private,
-            group_role=role,
+            kind         = "user" if ctx.user_id is not None else "lifecycle",
+            user_id      = ctx.user_id,
+            group_id     = ctx.group_id,
+            is_bot_admin = self.admin_check.is_admin(ctx.user_id),
+            is_private   = ctx.is_private,
+            group_role   = role,
         )
 
     def _build_event_context(self, plugin_name: str, ctx: MessageContext) -> Any:
@@ -718,9 +718,9 @@ class Dispatcher:
 
         context = self._build_event_context(spec.plugin, ctx)
         if spec.catalog is not None:
-            invocation = resolve_catalog_invocation(spec.catalog, args)
+            invocation                 = resolve_catalog_invocation(spec.catalog, args)
             context.command_invocation = invocation
-            required_context = "private" if ctx.is_private else "group"
+            required_context           = "private" if ctx.is_private else "group"
             if required_context not in invocation.node.contexts:
                 return [{"type": "text", "data": {"text": "当前会话类型不支持此命令"}}]
             principal = context.principal
@@ -764,8 +764,8 @@ class Dispatcher:
             return public_error_response(
                 context,
                 exc,
-                logger=logger,
-                component=f"dispatcher.command.{spec.plugin}.{spec.name}",
+                logger    = logger,
+                component = f"dispatcher.command.{spec.plugin}.{spec.name}",
             )
 
     # ============================================================
@@ -776,7 +776,7 @@ class Dispatcher:
         """Apply the plugin's published root-command contexts to continuations."""
 
         required_context = "private" if is_private else "group"
-        roots = tuple(
+        roots            = tuple(
             root for root in self.router.get_command_catalog() if root.plugin == plugin_name
         )
         return not roots or any(required_context in root.contexts for root in roots)
@@ -804,14 +804,14 @@ class Dispatcher:
             if observed is None:
                 return None
             expected_plugin_name = observed.plugin_name
-            expected_session_id = observed.session_id
-            plugin = self.plugin_registry.get(expected_plugin_name)
-            context = self._build_event_context(expected_plugin_name, ctx)
+            expected_session_id  = observed.session_id
+            plugin               = self.plugin_registry.get(expected_plugin_name)
+            context              = self._build_event_context(expected_plugin_name, ctx)
 
             async def close_plugin_session(
                 session: Session,
-                _plugin: Any = plugin,
-                _context: Any = context,
+                _plugin: Any               = plugin,
+                _context: Any              = context,
                 _expected_plugin_name: str = expected_plugin_name,
             ) -> None:
                 if not _plugin or not hasattr(_plugin.module, "close_session"):
@@ -827,16 +827,16 @@ class Dispatcher:
                     public_error_message(
                         _context,
                         exc,
-                        logger=logger,
-                        component=f"dispatcher.session_close.{_expected_plugin_name}",
+                        logger    = logger,
+                        component = f"dispatcher.session_close.{_expected_plugin_name}",
                     )
 
             async def handle_active_session(
                 session: Session,
                 _expected_plugin_name: str = expected_plugin_name,
-                _expected_session_id: str = expected_session_id,
-                _plugin: Any = plugin,
-                _context: Any = context,
+                _expected_session_id: str  = expected_session_id,
+                _plugin: Any               = plugin,
+                _context: Any              = context,
             ) -> list[dict[str, Any]] | None:
                 """Run one continuation under gate -> per-key-lock ordering."""
 
@@ -940,16 +940,16 @@ class Dispatcher:
                 response = public_error_response(
                     context,
                     exc,
-                    logger=logger,
-                    component=f"dispatcher.session.{expected_plugin_name}",
+                    logger    = logger,
+                    component = f"dispatcher.session.{expected_plugin_name}",
                 )
 
                 run_cleanup, run_delete_without_hook = _build_failed_session_transactions(
                     session_manager,
-                    user_id=user_id,
-                    group_id=ctx.group_id,
-                    expected_generation=(expected_plugin_name, expected_session_id),
-                    close_callback=close_plugin_session,
+                    user_id             = user_id,
+                    group_id            = ctx.group_id,
+                    expected_generation = (expected_plugin_name, expected_session_id),
+                    close_callback      = close_plugin_session,
                 )
 
                 try:
@@ -1009,8 +1009,8 @@ class Dispatcher:
             public_error_message(
                 context,
                 exc,
-                logger=logger,
-                component="dispatcher.url_parser",
+                logger    = logger,
+                component = "dispatcher.url_parser",
             )
 
         return None
@@ -1131,7 +1131,7 @@ class Dispatcher:
         context = None
         try:
             context = self._build_event_context(provider, ctx)
-            method = getattr(plugin.module, method_name)
+            method  = getattr(plugin.module, method_name)
 
             async def run_provider() -> Any:
                 return await call_plugin_callback(method, *args, context)
@@ -1150,8 +1150,8 @@ class Dispatcher:
             public_error_message(
                 context or ctx,
                 exc,
-                logger=logger,
-                component=("dispatcher.fallback_provider" if fallback else "dispatcher.provider"),
+                logger    = logger,
+                component = ("dispatcher.fallback_provider" if fallback else "dispatcher.provider"),
             )
             return None
 

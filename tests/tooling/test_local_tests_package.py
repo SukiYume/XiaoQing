@@ -6,7 +6,7 @@ from pathlib import Path
 
 from tests.helpers.paths import REPOSITORY_ROOT
 
-PROJECT_ROOT = REPOSITORY_ROOT
+PROJECT_ROOT     = REPOSITORY_ROOT
 LOCAL_TESTS_INIT = PROJECT_ROOT / "tests" / "__init__.py"
 
 
@@ -20,13 +20,13 @@ def test_subprocess_imports_the_local_tests_package() -> None:
             "print(pathlib.Path(tests.__file__).resolve()); "
             "print(pathlib.Path(tests.helpers.__file__).resolve())",
         ],
-        cwd=PROJECT_ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=30,
+        cwd            = PROJECT_ROOT,
+        check          = True,
+        capture_output = True,
+        text           = True,
+        encoding       = "utf-8",
+        errors         = "replace",
+        timeout        = 30,
     )
 
     package_path, helpers_path = map(Path, result.stdout.splitlines())

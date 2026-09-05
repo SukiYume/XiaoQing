@@ -1,3 +1,4 @@
+# 认证工具：集中处理 Bearer 凭据解析与恒定时间比较。
 """Shared authentication helpers."""
 
 import hmac
