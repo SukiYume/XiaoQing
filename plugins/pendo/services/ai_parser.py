@@ -178,7 +178,7 @@ class AIParser:
   "end_time": "YYYY-MM-DDTHH:MM:SS或null（用户本地墙钟时间，不带时区；多节点milestones时留null）",
   "location": "地点或null",
   "category": "工作|学习|生活|健康|财务|社交",
-  "remind_offsets": ["提前1天", "提前1小时"],
+  "remind_offsets": [],
   "rrule": "RFC5545格式或null",
   "milestones": [
     {{"name": "节点名称", "time": "YYYY-MM-DDTHH:MM:SS（用户本地墙钟时间，不带时区）"}}
@@ -199,6 +199,7 @@ class AIParser:
 - 重复: 每天→FREQ=DAILY, 每周→FREQ=WEEKLY, 每月X号→FREQ=MONTHLY;BYMONTHDAY=X
 - 重复N次→添加;COUNT=N
 - 提醒支持: 分钟/小时/天/周
+- 仅提取用户明确指定的提前提醒；未指定提醒时remind_offsets返回空数组[]，系统会自动添加日程开始时的一次提醒
 - notes提取用户标注为"备注"的内容(URL、说明等)
 
 仅返回JSON。"""
