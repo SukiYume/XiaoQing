@@ -287,6 +287,19 @@ def test_event_reminder_shift_preserves_explicit_empty_reminders() -> None:
     assert shifted == []
 
 
+@pytest.mark.parametrize("extra", [{}, {"remind_times": []}, {"remind_offsets": []}])
+def test_event_default_reminder_is_only_start_time(extra) -> None:
+    from plugins.pendo.handlers.event_support import (
+        ensure_event_reminder_rules,
+        ensure_event_reminders,
+    )
+
+    data      = {"start_time": "2026-09-22T14:00:00+08:00", **extra}
+    reminders = ensure_event_reminders(data)
+    assert reminders == ["2026-09-22T14:00:00+08:00"]
+    assert ensure_event_reminder_rules(data, reminders) == [{"offset_seconds": 0}]
+
+
 def test_event_reminders_parse_json_list_instead_of_string_characters() -> None:
     from plugins.pendo.handlers.event_support import ensure_event_reminders
 

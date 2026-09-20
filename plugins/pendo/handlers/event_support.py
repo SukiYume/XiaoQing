@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Final
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -17,11 +17,6 @@ from ..utils.validators import (
     with_start_time_reminder_rule,
 )
 
-_DEFAULT_REMINDER_OFFSETS = (
-    timedelta(days=1),
-    timedelta(hours=1),
-    timedelta(minutes=10),
-)
 _REMINDER_STATUS_LABELS: Final[dict[str, str]] = {
     "✅": "✅ 已确认",
     "📩": "📩 已发送未确认",
@@ -159,24 +154,6 @@ def has_time(remind_times: list[str], target: str) -> bool:
     return False
 
 
-def default_reminders(start_time: str | None) -> list[str]:
-    """生成提前 1 天、1 小时和 10 分钟的默认提醒。"""
-    if not start_time:
-        return []
-    try:
-        start_dt = datetime.fromisoformat(start_time)
-        if start_dt.tzinfo is None:
-            start_dt = start_dt.replace(tzinfo=TimezoneHelper.DEFAULT_TZ)
-        now = TimezoneHelper.now(start_dt.tzinfo)
-        return [
-            (start_dt - offset).isoformat()
-            for offset in _DEFAULT_REMINDER_OFFSETS
-            if start_dt - offset > now
-        ]
-    except (ValueError, TypeError):
-        return []
-
-
 def _shift_reminders_for_new_start(
     old_start: datetime,
     new_start: datetime,
@@ -210,7 +187,7 @@ def ensure_event_reminders(
     elif parsed_data.get("remind_offsets") and parsed_data.get("start_time") and build_from_offsets:
         remind_times = build_from_offsets(parsed_data["start_time"], parsed_data["remind_offsets"])
     else:
-        remind_times = default_reminders(parsed_data.get("start_time"))
+        remind_times = []
 
     return ensure_start_time_reminder(remind_times, parsed_data.get("start_time"))
 
@@ -263,7 +240,7 @@ def recalculate_event_reminders(event: Any, updates: dict[str, Any]) -> list[str
             new_start_dt = datetime.fromisoformat(new_start)
             remind_times = _shift_reminders_for_new_start(old_start, new_start_dt, existing)
         else:
-            remind_times = default_reminders(new_start)
+            remind_times = []
         start = new_start
 
     return ensure_start_time_reminder(remind_times, start)
