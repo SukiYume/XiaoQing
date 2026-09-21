@@ -197,8 +197,9 @@ def ensure_event_reminder_rules(
     remind_times: list[str] | None = None,
 ) -> list[dict[str, int]]:
     """从解析后日程中得到语义化提醒规则。"""
-    if "reminder_rules" in parsed_data:
-        return normalize_reminder_rules(parsed_data.get("reminder_rules"))
+    rules = normalize_reminder_rules(parsed_data.get("reminder_rules"))
+    if rules:
+        return with_start_time_reminder_rule(rules)
 
     start_time = parsed_data.get("start_time")
     reminders  = remind_times if remind_times is not None else parsed_data.get("remind_times")
