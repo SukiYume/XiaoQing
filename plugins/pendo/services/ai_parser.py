@@ -50,7 +50,7 @@ CHINESE_DIGITS: Final = {
     "八": 8,
     "九": 9,
 }
-OFFSET_NUMBER_PATTERN: Final = r"\d+|[零一二两三四五六七八九十百半]+"
+OFFSET_NUMBER_PATTERN: Final = r"[0-9]+(?:\.[0-9]+)?|[零一二两三四五六七八九十百半]+"
 OFFSET_UNIT_PATTERN: Final   = r"分钟|min|m|小时|hour|h|天|day|d|周|week|w"
 OFFSET_TOKEN_RE: Final       = re.compile(
     rf"({OFFSET_NUMBER_PATTERN})\s*(?:个)?\s*({OFFSET_UNIT_PATTERN})"
@@ -168,7 +168,8 @@ class AIParser:
     # Event专用prompt模板
     PARSE_PROMPT_TEMPLATE: ClassVar[str] = """解析日程信息，提取时间、地点、提醒等字段。
 
-当前时间: {current_date} ({current_weekday})
+当前时间: {current_date} ({current_weekday})，采用用户本地时区
+解析模式: {parse_mode}
 用户输入: {text}
 
 返回JSON:
@@ -187,19 +188,27 @@ class AIParser:
 }}
 
 规则:
-- 相对时间转绝对时间(明天→具体日期)
+- 相对时间以当前时间为基准转绝对时间(明天→具体日期)，编辑时也使用当前日期作为“下周”的基准
+- 一周从周一开始；“下周三”表示下一个自然周的周三。返回前核对日期与星期一致
 - 所有时间都表示用户本地墙钟时间，严禁添加Z、UTC或+/-HH:MM时区后缀
-- 无时间则默认09:00
+- 创建模式下，指定日期且省略钟点时默认09:00；完全未提供日期时start_time留null，交由系统询问
+- 局部模式只返回明确指定或修改的字段；未提及的日期、钟点、标题、分类、提醒、地点等字段全部省略，保留原有值
 - milestones 只用于两个及以上独立时间节点；系统会把每个 milestone 创建成可独立删除、修改、查询的日程节点，并用 title 作为整体日程标题
-- 若用户描述两个及以上具名时间点(如注册截止、会议开始、会议结束等事件节点)，填milestones列表，start_time/end_time留null
+- 若用户描述两个及以上独立事项的具名时间点(如注册截止、材料提交等事件节点)，填milestones列表，start_time/end_time留null
 - 只有一个时间点的截止、申请、提交、面试、会议等普通单次日程必须写入start_time，milestones留空列表[]
 - "提前X天/周/小时提醒"是提醒偏移量，必须放入remind_offsets，绝对不能作为milestones节点
 - 普通单次事件milestones留空列表[]
 - 重复事件: 设置rrule，milestones必须留空列表[]，start_time设为第一次发生的时间
 - 重复: 每天→FREQ=DAILY, 每周→FREQ=WEEKLY, 每月X号→FREQ=MONTHLY;BYMONTHDAY=X
+- 每周指定星期时添加BYDAY=MO/TU/WE/TH/FR/SA/SU；start_time的日期必须符合该星期
 - 重复N次→添加;COUNT=N
+- 重复范围（未来一个月、截至某日）必须体现在COUNT或UNTIL中；COUNT按范围内实际发生次数计算，包含首次；COUNT与UNTIL只使用一个
+- 普通会议的开始与结束使用start_time/end_time；独立事项的具名时间点使用milestones。end_time须晚于start_time
 - 提醒支持: 分钟/小时/天/周
-- 仅提取用户明确指定的提前提醒；未指定提醒时remind_offsets返回空数组[]，系统会自动添加日程开始时的一次提醒
+- remind_offsets必须为字符串数组，每项格式为“提前正整数分钟/小时/天/周”；提前一小时→["提前1小时"]，半小时→["提前30分钟"]，提前一天和一小时→["提前1天", "提前1小时"]
+- 每个数组元素代表一次提醒；提前一小时三十分钟→["提前90分钟"]。禁止输出裸数字、对象、负数、ISO时长（如PT1H）
+- 单次、重复、多节点日程都使用同一remind_offsets字段；该字段应用于每个实例或节点
+- 仅提取用户明确指定的提前提醒；创建模式未指定提醒时remind_offsets返回空数组[]，系统会自动添加日程开始时的一次提醒；局部模式未提及提醒时省略此字段
 - notes提取用户标注为"备注"的内容(URL、说明等)
 
 仅返回JSON。"""
@@ -217,8 +226,8 @@ class AIParser:
 
 规则:
 - 只允许以上 mood
-- 即使内容偏平淡，也应优先判断为 neutral 或 calm，而不是返回空
-- score 表示情绪强度，1 最弱，10 最强
+- 内容偏平淡时优先判断为 neutral 或 calm
+- mood_score 使用1到10的整数，表示情绪强度，1 最弱，10 最强
 - 只返回 JSON，不要解释。"""
 
     def __init__(
@@ -335,7 +344,10 @@ class AIParser:
             current_date, current_weekday = self._prompt_time_context(user_id)
 
             prompt = self.PARSE_PROMPT_TEMPLATE.format(
-                current_date=current_date, current_weekday=current_weekday, text=text
+                current_date    = current_date,
+                current_weekday = current_weekday,
+                text            = text,
+                parse_mode      = "局部模式：省略所有未提及的字段" if partial else "创建模式",
             )
 
             messages = [
@@ -343,7 +355,7 @@ class AIParser:
                 {"role": "user", "content": prompt},
             ]
 
-            response = await self._call_llm(messages)
+            response = await self._call_llm(messages, temperature=0.0)
             if not response:
                 return self._fallback_event_result(source_text, user_id, partial=partial)
 
@@ -438,7 +450,11 @@ class AIParser:
             if value := parsed.get(field):
                 result[field] = str(value)
 
-        offsets    = self._normalize_offset_list(parsed.get("remind_offsets"))
+        offsets = self._normalize_offset_list(parsed.get("remind_offsets"))
+        # 原文中完整、明确的提前提醒优先使用本地解析，避免模型改写单位或漏字段。
+        source_offsets = self._explicit_source_offsets(source_text)
+        if source_offsets:
+            offsets = source_offsets
         milestones = self._normalize_milestones(parsed.get("milestones"))
         self._apply_event_milestones(result, milestones, offsets, user_id)
         self._apply_event_reminders(result, parsed, offsets, user_id)
@@ -517,7 +533,21 @@ class AIParser:
         """只接受 LLM 返回的非空偏移字符串列表。"""
         if not isinstance(value, list):
             return []
-        return [text for raw in value if (text := str(raw or "").strip())]
+        return [raw.strip() for raw in value if isinstance(raw, str) and raw.strip()]
+
+    @staticmethod
+    def _explicit_source_offsets(text: str) -> list[str]:
+        """仅提取完整的提前时长提醒子句，保留复杂表述给 AI 处理。"""
+        token              = rf"(?:{OFFSET_NUMBER_PATTERN})\s*(?:个)?\s*(?:{OFFSET_UNIT_PATTERN})"
+        duration           = rf"{token}(?:\s*{token})*"
+        pattern            = rf"提前\s*({duration}(?:\s*(?:和|以及|、|，|,)\s*(?:提前\s*)?{duration})*)\s*提醒"
+        offsets: list[str] = []
+        for match in re.finditer(pattern, text):
+            prefix = text[max(0, match.start() - 8) : match.start()]
+            if re.search(r"(?:不|别|取消|无需|不用|不要)\s*$", prefix):
+                continue
+            offsets.extend(re.split(r"和|以及|、|，|,", match.group(1)))
+        return offsets
 
     @classmethod
     def _normalize_milestones(cls, value: Any) -> list[dict[str, str]]:
@@ -579,7 +609,11 @@ class AIParser:
             )
 
         if offsets:
-            result["reminder_rules"] = self.build_reminder_rules_from_offsets(offsets)
+            rules = self.build_reminder_rules_from_offsets(offsets)
+            if rules:
+                result["reminder_rules"] = rules
+            else:
+                logger.warning("Pendo reminder offsets invalid: count=%d", len(offsets))
 
     @staticmethod
     def _parse_json_object(response: str) -> dict[str, Any] | None:
@@ -672,12 +706,20 @@ class AIParser:
 
     def _parse_offset(self, offset: str) -> timedelta | None:
         """解析偏移量字符串"""
+        text = str(offset).strip().lower()
+        text = re.sub(r"^提前\s*", "", text)
+        text = re.sub(r"\s*提醒$", "", text).strip()
+        if not text or OFFSET_TOKEN_RE.sub("", text).strip():
+            return None
         seconds = 0.0
-        for match in OFFSET_TOKEN_RE.finditer(str(offset)):
+        for match in OFFSET_TOKEN_RE.finditer(text):
             num = self._parse_chinese_number(match.group(1))
             if num is not None:
                 seconds += num * OFFSET_UNIT_SECONDS[match.group(2)]
-        return timedelta(seconds=seconds) if seconds else None
+        try:
+            return timedelta(seconds=seconds) if seconds else None
+        except OverflowError:
+            return None
 
     @classmethod
     def _parse_chinese_number(cls, text: str) -> float | None:
@@ -692,6 +734,9 @@ class AIParser:
             return None
         if text == "半":
             return 0.5
+
+        if re.fullmatch(r"[0-9]+\.[0-9]+", text):
+            return float(text)
 
         arabic_number = parse_int(text, minimum=0)
         if arabic_number is not None:
