@@ -383,6 +383,47 @@ def test_atomic_collection_create_rolls_back_header_and_children_on_failure(tmp_
         db.cleanup()
 
 
+def test_ai_recurring_event_recovers_explicit_reminders_for_every_child(tmp_path: Path):
+    import asyncio
+    import json
+    from unittest.mock import AsyncMock
+
+    from plugins.pendo.services.ai_parser import AIParser
+
+    db = Database(str(tmp_path / "recurring_ai_reminders.db"))
+    ai = AIParser(db=db)
+    ai._call_llm = AsyncMock(
+        return_value=json.dumps(
+            {
+                "title": "与华为讨论",
+                "start_time": "2030-09-24T16:00:00",
+                "rrule": "FREQ=WEEKLY;BYDAY=TU;COUNT=5",
+                "remind_offsets": ["PT1H"],
+            }
+        )
+    )
+    handler = EventHandler(db=db, ai_parser=ai, reminder_service=_NoConflictReminderService())
+    try:
+        parsed = asyncio.run(
+            ai.parse_event_with_ai(
+                "后面一个月每周二下午4点，跟华为讨论，提前一小时提醒",
+                "u1",
+            )
+        )
+        result = asyncio.run(handler.create_event("u1", parsed, {}))
+        assert result["status"] == "success"
+        children = db.get_collection_events(result["item_id"], "u1")
+        assert len(children) == 5
+        for child in children:
+            assert child.reminder_rules == [{"offset_seconds": 3600}, {"offset_seconds": 0}]
+            assert len(child.remind_times) == 2
+            assert child.remind_times == build_remind_times_from_rules(
+                child.start_time, child.reminder_rules
+            )
+    finally:
+        db.cleanup()
+
+
 def test_create_recurring_event_writes_collection_and_occurrence_leaves(tmp_path: Path):
     import asyncio
 

@@ -287,7 +287,9 @@ def test_event_reminder_shift_preserves_explicit_empty_reminders() -> None:
     assert shifted == []
 
 
-@pytest.mark.parametrize("extra", [{}, {"remind_times": []}, {"remind_offsets": []}])
+@pytest.mark.parametrize(
+    "extra", [{}, {"remind_times": []}, {"remind_offsets": []}, {"reminder_rules": []}]
+)
 def test_event_default_reminder_is_only_start_time(extra) -> None:
     from plugins.pendo.handlers.event_support import (
         ensure_event_reminder_rules,
@@ -662,6 +664,80 @@ def test_ai_parser_builds_semantic_reminder_rules_from_description():
         {"offset_seconds": 6000},
         {"offset_seconds": 0},
     ]
+
+
+@pytest.mark.parametrize(
+    "offset,seconds",
+    [
+        ("提前一小时", 3600),
+        ("提前半小时", 1800),
+        ("1.5h", 5400),
+        ("1H", 3600),
+        ("提前1小时30分钟", 5400),
+        ("PT1H", None),
+        ("-1h", None),
+        ("1小时后", None),
+    ],
+)
+def test_ai_reminder_offset_requires_complete_duration(offset, seconds):
+    delta = AIParser()._parse_offset(offset)
+    assert (delta.total_seconds() if delta else None) == seconds
+
+
+@pytest.mark.parametrize("offsets", [[], ["PT1H"], [60], [{"minutes": 60}], ["提前1天"]])
+def test_ai_reminder_original_instruction_recovers_model_output(offsets):
+    parser = AIParser()
+    result = parser._build_event_result(
+        {"start_time": "2030-09-22T16:00:00", "remind_offsets": offsets},
+        "后面一个月每周二下午4点，跟华为讨论，提前一小时提醒",
+        "reminder-recovery",
+        partial=False,
+    )
+    assert result["reminder_rules"] == [{"offset_seconds": 3600}, {"offset_seconds": 0}]
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("明天开会，提前1天和2小时提醒", ["1天", "2小时"]),
+        ("明天开会，提前1小时30分钟提醒", ["1小时30分钟"]),
+        ("后面一个月每周二下午4点，开会", []),
+        ("不要提前1小时提醒", []),
+        ("提前1天提交报告", []),
+    ],
+)
+def test_ai_reminder_source_extraction_is_limited_to_reminder_clauses(text, expected):
+    assert AIParser._explicit_source_offsets(text) == expected
+
+
+def test_ai_invalid_offsets_do_not_emit_empty_rules():
+    result = AIParser()._build_event_result(
+        {"start_time": "2030-09-22T16:00:00", "remind_offsets": ["PT1H"]},
+        "开会",
+        "invalid-reminder",
+        partial=False,
+    )
+    assert "reminder_rules" not in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("partial", [False, True])
+async def test_ai_event_prompt_separates_modes_and_uses_low_temperature(monkeypatch, partial):
+    parser = AIParser()
+    llm = AsyncMock(return_value='{"location": "会议室"}')
+    monkeypatch.setattr(parser, "_call_llm", llm)
+    result = await parser.parse_event_with_ai(
+        "地点改为会议室", f"prompt-mode-{partial}", partial=partial
+    )
+    args, kwargs = llm.call_args
+    prompt = args[0][1]["content"]
+    assert "局部模式：省略所有未提及的字段" in prompt if partial else "解析模式: 创建模式" in prompt
+    assert "提前1小时" in prompt
+    assert "BYDAY" in prompt
+    assert kwargs["temperature"] == 0.0
+    assert result["location"] == "会议室"
+    assert "start_time" not in result
+    assert "reminder_rules" not in result
 
 
 @pytest.mark.asyncio
