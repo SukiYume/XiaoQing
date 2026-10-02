@@ -496,6 +496,8 @@ async def test_close_parent_failure_does_not_deadlock_or_leave_executing_session
     await context.run_parent(_command_parent("sleep 60", context, manager))
     await asyncio.wait_for(manager.started.wait(), timeout=1)
     close_returned = asyncio.Event()
+    assert context.session is not None
+    job = ssh_session_handlers._COMMAND_JOBS[context.session.get(SessionKeys.CURRENT_TASK)]
 
     async def close_then_fail(working: _SessionStub) -> None:
         await ssh_session_handlers.close_session(context, working)
@@ -515,18 +517,11 @@ async def test_close_parent_failure_does_not_deadlock_or_leave_executing_session
             with pytest.raises(RuntimeError, match="rollback close"):
                 await transaction
 
-        await asyncio.wait_for(
-            _wait_for(
-                lambda: (
-                    context.session is not None
-                    and context.session.get(SessionKeys.STATE) == "connected"
-                    and context.session.get(SessionKeys.CURRENT_TASK) is None
-                    and not ssh_session_handlers._COMMAND_JOBS
-                ),
-                attempts=1000,
-            ),
-            timeout=1,
-        )
+        await asyncio.wait_for(asyncio.gather(job.task, return_exceptions=True), timeout=1)
+        assert context.session is not None
+        assert context.session.get(SessionKeys.STATE) == "connected"
+        assert context.session.get(SessionKeys.CURRENT_TASK) is None
+        assert not ssh_session_handlers._COMMAND_JOBS
         assert manager.disconnects == [("10001", "50001", "srv1")]
         assert manager.close_operations == ["stop", "disconnect"]
     finally:
