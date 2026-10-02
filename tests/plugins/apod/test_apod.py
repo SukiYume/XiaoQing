@@ -15,10 +15,172 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from bs4 import BeautifulSoup
 
 from core.safe_http import SafeHttpError, UnsafeUrlError
 from plugins.apod import main as apod
 from tests.helpers.settings_snapshot import with_settings_reader
+
+# NASA Science 主体结构取自 2026-10-02 首页及其 image-article 页面。
+SCIENCE_APOD_HTML = """
+<html><head><title>APOD - NASA Science</title></head><body>
+<header><img src="https://science.nasa.gov/logo.png">
+<iframe src="https://www.googletagmanager.com/ns.html"></iframe></header>
+<main><h1>Astronomy Picture of the Day</h1>
+<div class="hds-media-detail-hero">
+<p class="media-detail-hero__subtext">Discover the cosmos!</p>
+<div class="media-detail-hero__media">{media}</div>
+<{heading}>The Complete <em>Sharpless</em> Catalog</{heading}>
+<p class="media-detail-hero__description"><strong>Explanation:</strong>
+Today’s <a href="https://example.com/">image</a> contains 313 objects.
+<br><br><strong>APOD's email for image submissions has changed.</strong> Announcement
+<br><strong>Tomorrow's picture:</strong> next image</p>
+<table class="media-detail-hero__meta-table">
+<tr><th>Date:</th><td>October 2, 2026</td></tr>
+<tr><th>{credit_label}</th><td><a href="https://example.com/">Bing Xin</a></td></tr>
+<tr><th>Authors &amp; editors:</th><td>Editors</td></tr>
+</table></div><img src="https://science.nasa.gov/related.jpg"></main>
+<footer><img src="https://science.nasa.gov/footer.png"></footer></body></html>
+"""
+
+SCIENCE_IMAGE = """
+<figure><a href="/image-article/apod-test/">
+<img src="https://assets.science.nasa.gov/large.png?w=4455&amp;h=5592"
+srcset="https://assets.science.nasa.gov/large.png?w=4455&amp;h=5592 4455w,
+https://assets.science.nasa.gov/large.png?w=1224&amp;h=1536 1224w,
+https://assets.science.nasa.gov/large.png?w=1593&amp;h=2000 1593w"></a></figure>
+"""
+
+
+def science_html(media=SCIENCE_IMAGE, heading="h2", credit_label="Credit:"):
+    return SCIENCE_APOD_HTML.format(media=media, heading=heading, credit_label=credit_label)
+
+
+@pytest.mark.parametrize("heading", ["h1", "h2"])
+def test_science_title_and_explanation(mock_context, heading):
+    soup = BeautifulSoup(science_html(heading=heading), "html.parser")
+    assert apod._extract_title(soup, mock_context) == "The Complete Sharpless Catalog"
+    assert (
+        apod.get_explanation(soup, mock_context)
+        == "Explanation: Today’s image contains 313 objects."
+    )
+
+
+@pytest.mark.parametrize("credit_label", ["Credit:", "Credit &amp; Copyright"])
+@pytest.mark.asyncio
+async def test_science_image_message(mock_context, mock_event, monkeypatch, credit_label):
+    fetch = AsyncMock(
+        return_value=SimpleNamespace(
+            url=apod.DEFAULT_APOD_URL,
+            body=science_html(credit_label=credit_label).encode(),
+            charset="utf-8",
+        )
+    )
+    download = AsyncMock(return_value=mock_context.data_dir / "apod.png")
+    monkeypatch.setattr(apod, "fetch_public_html", fetch)
+    monkeypatch.setattr(apod, "_safe_download_image", download)
+    result = await apod.handle("apod", "", mock_event, mock_context)
+    assert result[0]["type"] == "image"
+    message = result[1]["data"]["text"]
+    assert "The Complete Sharpless Catalog" in message
+    assert "Today’s image contains 313 objects." in message
+    assert "日期: October 2, 2026" in message
+    assert "署名: Bing Xin" in message
+    assert "原网址: https://science.nasa.gov/apod/" in message
+    assert "Announcement" not in message and "next image" not in message
+    assert download.await_args.args[0] == "https://assets.science.nasa.gov/large.png?w=1593&h=2000"
+    assert fetch.await_args.args[0] == apod.DEFAULT_APOD_URL
+    assert fetch.await_args.kwargs["allowed_hosts"] == set(apod.NASA_APOD_HOSTS)
+    assert fetch.await_args.kwargs["allow_transparent_proxy_fake_dns"] is True
+
+
+@pytest.mark.parametrize(
+    "media",
+    [
+        '<iframe src="https://www.youtube.com/embed/apod"></iframe><img src="/poster.png">',
+        '<video poster="/poster.png"><source src="https://example.com/apod.mp4"></video>',
+        '<video src="https://example.com/apod.mp4"></video>',
+    ],
+)
+@pytest.mark.asyncio
+async def test_science_video_ignores_tracking_and_posters(mock_context, monkeypatch, media):
+    download = AsyncMock()
+    monkeypatch.setattr(apod, "_safe_download_image", download)
+    result = await apod._render_page(
+        BeautifulSoup(science_html(media=media), "html.parser"),
+        base_url      = apod.DEFAULT_APOD_URL,
+        page_url      = apod.DEFAULT_APOD_URL,
+        images_dir    = mock_context.data_dir / "images",
+        allowed_hosts = apod._allowed_hosts(mock_context),
+        context       = mock_context,
+    )
+    message = result[0]["data"]["text"]
+    assert message.startswith(
+        ("https://www.youtube.com/embed/apod", "https://example.com/apod.mp4")
+    )
+    assert "googletagmanager" not in message
+    assert "日期: October 2, 2026" in message
+    download.assert_not_awaited()
+
+
+@pytest.mark.parametrize("media", ["", '<img src="https://evil.example/payload.jpg">'])
+@pytest.mark.asyncio
+async def test_science_missing_media_preserves_scope(mock_context, media):
+    result = await apod._render_page(
+        BeautifulSoup(science_html(media=media), "html.parser"),
+        base_url      = apod.DEFAULT_APOD_URL,
+        page_url      = apod.DEFAULT_APOD_URL,
+        images_dir    = mock_context.data_dir / "images",
+        allowed_hosts = apod._allowed_hosts(mock_context),
+        context       = mock_context,
+    )
+    assert "不支持" in result[0]["data"]["text"]
+    assert "googletagmanager" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_science_missing_hero_does_not_render_navigation(mock_context):
+    result = await apod._render_page(
+        BeautifulSoup(
+            '<main><img src="/logo.png"><iframe src="https://example.com/tracker"></iframe></main>',
+            "html.parser",
+        ),
+        base_url      = apod.DEFAULT_APOD_URL,
+        page_url      = apod.DEFAULT_APOD_URL,
+        images_dir    = mock_context.data_dir / "images",
+        allowed_hosts = apod._allowed_hosts(mock_context),
+        context       = mock_context,
+    )
+    assert "不支持" in result[0]["data"]["text"]
+
+
+@pytest.mark.parametrize(
+    "url", [apod.LEGACY_APOD_URL, "https://science.nasa.gov/image-article/apod-test/"]
+)
+@pytest.mark.asyncio
+async def test_entry_url_migration_and_custom_page(mock_context, mock_event, monkeypatch, url):
+    mock_context.config["plugins"]["apod"]["url"] = url
+    fetch = AsyncMock(return_value=None)
+    monkeypatch.setattr(apod, "fetch_public_html", fetch)
+    await apod.handle("apod", "", mock_event, mock_context)
+    assert fetch.await_args.args[0] == (
+        apod.DEFAULT_APOD_URL if url == apod.LEGACY_APOD_URL else url
+    )
+
+
+@pytest.mark.parametrize("host", ["science.nasa.gov", "assets.science.nasa.gov", "apod.nasa.gov"])
+def test_nasa_hosts_support_fake_dns(mock_context, host):
+    url = f"https://{host}/apod"
+    assert apod._require_allowed_url(url, mock_context) == url
+    assert apod._allow_transparent_proxy_fake_dns(url)
+    assert not apod._allow_transparent_proxy_fake_dns(f"http://{host}/apod")
+
+
+def test_custom_hosts_keep_public_dns_policy(mock_context):
+    assert not apod._allow_transparent_proxy_fake_dns("https://science.nasa.gov.evil.example/apod")
+    with pytest.raises(UnsafeUrlError):
+        apod._require_allowed_url("https://science.nasa.gov.evil.example/apod", mock_context)
+
 
 # ============================================================
 # Fixtures
@@ -214,7 +376,7 @@ class TestConfig:
             "",
         ]
 
-        assert apod._allowed_hosts(mock_context) == {"apod.nasa.gov", "images.example"}
+        assert apod._allowed_hosts(mock_context) == set(apod.NASA_APOD_HOSTS) | {"images.example"}
 
 
 # ============================================================
@@ -260,7 +422,7 @@ def test_image_selection_prefers_apod_image_path(mock_context) -> None:
     assert (
         apod._find_image_url(
             soup,
-            apod.DEFAULT_APOD_URL,
+            apod.LEGACY_APOD_URL,
             mock_context,
             {"apod.nasa.gov"},
         )
@@ -479,7 +641,7 @@ class TestImageExtraction:
         assert result[0]["type"] == "text"
         message = result[0]["data"]["text"]
         assert "图片暂时下载失败" in message
-        assert "https://apod.nasa.gov/apod/image/apod260201.jpg" in message
+        assert "https://science.nasa.gov/apod/image/apod260201.jpg" in message
         assert "The Galaxy Center" in message
         assert "XQ-PLUGIN-UNEXPECTED" not in message
 
@@ -553,7 +715,7 @@ class TestVideoHandling:
         assert result is not None
         result_text = str(result)
         assert "video" in result_text.lower() or "mp4" in result_text
-        assert "https://apod.nasa.gov/apod/video/apod_video.mp4" in result_text
+        assert "https://science.nasa.gov/apod/video/apod_video.mp4" in result_text
 
     @pytest.mark.asyncio
     async def test_relative_iframe_uses_final_redirect_url(
