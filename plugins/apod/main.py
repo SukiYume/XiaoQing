@@ -247,7 +247,7 @@ def _extract_title(soup: BeautifulSoup | Tag, context: PluginContextProtocol) ->
         if root is not soup or "hds-media-detail-hero" in (root.get("class") or ()):
             heading = root.find(["h1", "h2"])
             if heading is not None and heading.get_text(" ", strip=True):
-                return heading.get_text(" ", strip=True)
+                return str(heading.get_text(" ", strip=True))
         # 策略1: 查找第二个 center 标签
         centers = soup.find_all("center")
         if len(centers) > 1 and centers[1].b:
