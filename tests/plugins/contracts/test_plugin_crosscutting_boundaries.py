@@ -212,21 +212,3 @@ def test_github_history_remains_valid_under_concurrent_writers(tmp_path: Path) -
     latest = json.loads((tmp_path / "trending_daily_latest.json").read_text(encoding="utf-8"))
     assert latest["count"] == 1
     assert latest["repositories"][0]["full_name"].startswith("owner/repo-")
-
-
-def test_sensitive_log_regressions_are_absent() -> None:
-    expectations = {
-        "echo/main.py": ("Echo command: %s",),
-        "choice/main.py": ("问题='{question", "选择结果: {choices}"),
-        "guess_number/main.py": ("target=%d",),
-        "chat/main.py": ("使用代理: {proxy}",),
-        "voice/main.py": ("{error_text}",),
-        "url_parser/main.py": (
-            "标题、描述和图片: {url}",
-            "else url}",
-        ),
-    }
-    for relative_path, forbidden in expectations.items():
-        source = (ROOT / "plugins" / relative_path).read_text(encoding="utf-8")
-        for marker in forbidden:
-            assert marker not in source

@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import json
+import shutil
+import subprocess
 from typing import Final
+
+import pytest
 
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
@@ -134,4 +139,23 @@ def test_format_client_normalizes_shared_api_boundary_values() -> None:
         assert.equal(client.errorMessage('  直接失败  '), '直接失败');
         assert.equal(client.errorMessage({}, '兜底'), '兜底');
         """
+    )
+
+
+def test_browser_formatters_and_insight_units_are_currency_aware():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is needed for browser formatter regression")
+    root = REPOSITORY_ROOT
+    formatter = (root / "plugins/pendo/web/static/js/utils/format.js").as_uri()
+    component = (root / "plugins/pendo/web/static/js/components/ledger_insights.js").as_uri()
+    script = f"\nimport {{ formatAmount, formatMoneyCompact }} from {json.dumps(formatter)};\nimport {{ renderLedgerInsightsPanel }} from {json.dumps(component)};\nconst html = renderLedgerInsightsPanel({{currency:'USD',summary:{{focus_total:200,focus_count:1}},expense_timeline:[{{key:'2026-03-01',total:200,count:1}}],expense_categories:[{{category:'food',total:200,count:1}}]}});\nif (formatAmount(200,'USD') !== 'USD 200.00') throw Error('amount unit');\nif (formatMoneyCompact(200,'USD') !== 'USD 200') throw Error('compact unit');\nif (!html.includes('USD 200') || html.includes('¥')) throw Error('chart unit');\n"
+    subprocess.run(
+        [node, "--input-type=module", "-e", script],
+        check          = True,
+        capture_output = True,
+        text           = True,
+        encoding       = "utf-8",
+        errors         = "replace",
+        timeout        = 15,
     )

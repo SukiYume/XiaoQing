@@ -5,7 +5,6 @@ from __future__ import annotations
 import tests.helpers.pendo_web_transfer_test_support as _fixture_support
 from tests.helpers.pendo_web_transfer_test_support import (
     OWNER_ID,
-    ROOT,
     Any,
     Database,
     DuplicateBundleImportError,
@@ -612,19 +611,3 @@ def test_query_items_for_types_paginates_full_export():
         (OWNER_ID, {"type": "task"}, 1000, 1000),
         (OWNER_ID, {"type": "task"}, 1000, 2000),
     ]
-
-
-def test_transfer_page_sources_register_route_and_header_entry():
-    app_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "app.js").read_text(
-        encoding="utf-8"
-    )
-    transfer_src = (
-        ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "transfer.js"
-    ).read_text(encoding="utf-8")
-    header_src = (
-        ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "components" / "header.js"
-    ).read_text(encoding="utf-8")
-
-    assert "registerRoute('transfer'" in app_src
-    assert "export function render(container)" in transfer_src
-    assert "transfer: '数据迁移'" in header_src

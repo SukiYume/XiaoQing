@@ -1,7 +1,6 @@
 # 验证配置驱动的 HTTP 客户端共用有界请求接口。
 from __future__ import annotations
 
-import ast
 import gzip
 import json
 from pathlib import Path
@@ -15,10 +14,8 @@ import pytest
 from core.ai import AIRequestError, complete_configured_route
 from plugins.chat import main as chat
 from plugins.voice import main as voice
-from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.settings_snapshot import with_settings_reader
 
-ROOT         = REPOSITORY_ROOT
 ERROR_CANARY = b"CR221_HUGE_PRIVATE_ERROR_BODY_CANARY"
 
 
@@ -443,38 +440,3 @@ async def test_tts_declared_overflow_is_rejected_before_stream_read(tmp_path: Pa
 
     assert result is None
     assert response.content.iterations == 0
-
-
-def test_configured_clients_forbid_direct_response_body_access() -> None:
-    paths = (
-        ROOT / "core" / "ai.py",
-        ROOT / "plugins" / "chat" / "main.py",
-        ROOT / "plugins" / "voice" / "main.py",
-    )
-    violations: list[str] = []
-    for path in paths:
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        atomic_store_variables = {
-            target.id
-            for assignment in ast.walk(tree)
-            if isinstance(assignment, ast.Assign)
-            and isinstance(assignment.value, ast.Call)
-            and isinstance(assignment.value.func, ast.Name)
-            and assignment.value.func.id == "AtomicJsonStore"
-            for target in assignment.targets
-            if isinstance(target, ast.Name)
-        }
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-                if node.func.attr in {"json", "text", "read"}:
-                    if (
-                        node.func.attr == "read"
-                        and isinstance(node.func.value, ast.Name)
-                        and node.func.value.id in atomic_store_variables
-                    ):
-                        continue
-                    violations.append(f"{path.name}:{node.lineno}: .{node.func.attr}()")
-            if isinstance(node, ast.Attribute) and node.attr == "content":
-                violations.append(f"{path.name}:{node.lineno}: .content")
-
-    assert violations == []

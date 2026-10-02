@@ -490,11 +490,8 @@ async def test_command_placeholder_and_manifest_match_dispatcher_contract(
     manifest = json.loads(
         (ROOT / "plugins" / "url_parser" / "plugin.json").read_text(encoding="utf-8")
     )
-    readme = (ROOT / "plugins" / "url_parser" / "README.md").read_text(encoding="utf-8")
 
     assert await url_parser.handle("unused", "unused", {}, context) == []
     assert manifest["commands"] == []
     assert manifest["schedule"] == []
     assert manifest["concurrency"] == "parallel"
-    for marker in ("完整的单 URL", "2 MiB", "5 MiB", "128", "7 天", "4"):
-        assert marker in readme

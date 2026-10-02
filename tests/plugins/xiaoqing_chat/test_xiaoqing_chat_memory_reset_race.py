@@ -7,7 +7,15 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from core.plugin_base import write_json as real_write_json
+from plugins.xiaoqing_chat.memory.knowledge_extract import PersonFact, _persist_person_facts
 from plugins.xiaoqing_chat.memory.memory import MemoryStore
+from plugins.xiaoqing_chat.memory.memory_db import MemoryDB
+from plugins.xiaoqing_chat.memory.person_profile import (
+    clear_profiles_and_memory,
+    get_profile_generation,
+    load_profile,
+    update_profile_and_index,
+)
 
 
 def _append(store: MemoryStore, chat_id: str, content: str) -> None:
@@ -83,3 +91,44 @@ def test_new_message_after_reset_starts_new_generation_without_old_history(tmp_p
 
     reloaded = MemoryStore(tmp_path).get(chat_id)
     assert [message.content for message in reloaded] == ["new history"]
+
+
+def test_profile_reset_clears_backups_and_rejects_old_generation(tmp_path):
+    db = MemoryDB()
+    db.bind(tmp_path)
+    generation = get_profile_generation(tmp_path, "g1")
+    update_profile_and_index(
+        data_dir     = tmp_path,
+        memory_db    = db,
+        chat_id      = "g1",
+        subject_id   = 1,
+        subject_name = "u",
+        new_facts    = ["old"],
+    )
+    update_profile_and_index(
+        data_dir     = tmp_path,
+        memory_db    = db,
+        chat_id      = "g1",
+        subject_id   = 1,
+        subject_name = "u",
+        new_facts    = ["older"],
+    )
+    clear_profiles_and_memory(tmp_path, "g1", db)
+    _persist_person_facts(
+        data_dir            = tmp_path,
+        memory_db           = db,
+        chat_id             = "g1",
+        facts               = [PersonFact(1, "u", "stale", "stale")],
+        expected_generation = generation,
+    )
+    assert load_profile(tmp_path, chat_id="g1", subject_id=1) is None
+    assert not list((tmp_path / "person_profiles" / "g1").glob("*.json*"))
+    update_profile_and_index(
+        data_dir     = tmp_path,
+        memory_db    = db,
+        chat_id      = "g1",
+        subject_id   = 1,
+        subject_name = "u",
+        new_facts    = ["new"],
+    )
+    assert load_profile(tmp_path, chat_id="g1", subject_id=1).facts == ["new"]

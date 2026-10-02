@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
+
+from PIL import Image
+
 import tests.helpers.xiaoqing_chat_media_test_support as _fixture_support
+from plugins.xiaoqing_chat.media import emoji_library
 from tests.helpers.xiaoqing_chat_media_test_support import (
     _PNG_BYTES,
     AsyncMock,
@@ -501,3 +507,50 @@ async def test_download_url_bytes_streams_and_enforces_timeout(mock_context):
     assert payload == b"1234"
     assert content_type == "image/png"
     assert fetch.await_args.kwargs["timeout_seconds"] == 20
+
+
+def _collect(context, runtime, path, color, chat="g1"):
+    Image.new("RGB", (24, 24), color).save(path)
+    rendered = RenderedMedia(
+        hashlib.sha256(path.read_bytes()).hexdigest(),
+        "emoji",
+        color,
+        ("开心",),
+        f"[表情包：{color}]",
+    )
+    return emoji_library.collect_emoji_candidate(
+        context, runtime, rendered, source_path=path, source_chat_id=chat
+    )
+
+
+def test_similar_emoji_metadata_matches_retained_image(tmp_path):
+    context = SimpleNamespace(data_dir=tmp_path)
+    runtime = _make_media_runtime(enable_auto_collect_inbound_emoji=True)
+    first, _ = _collect(context, runtime, tmp_path / "red.png", "red")
+    second, created = _collect(context, runtime, tmp_path / "blue.png", "blue")
+    assert not created
+    assert second.description == first.description == "red"
+    assert second.media_hash == first.media_hash
+    with Image.open(emoji_library.resolve_emoji_file_path(context, second.file_path)) as image:
+        assert image.getpixel((0, 0)) == (255, 0, 0)
+
+
+def test_concurrent_emoji_collect_and_stale_repair_preserve_updates(tmp_path):
+    context = SimpleNamespace(data_dir=tmp_path)
+    runtime = _make_media_runtime(enable_auto_collect_inbound_emoji=True)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        jobs = [
+            pool.submit(_collect, context, runtime, tmp_path / f"{color}.png", color, chat)
+            for color, chat in [("red", "g1"), ("blue", "g2")]
+        ]
+        entries = [job.result(timeout=5)[0] for job in jobs]
+    original = emoji_library._load_index(context)
+    assert len(original["entries"]) == 2
+    desired                                                  = deepcopy(original)
+    desired["entries"][entries[0].media_hash]["description"] = "repair"
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda _: emoji_library.mark_emoji_used(context, entries[0]), range(10)))
+    emoji_library._save_index_if_changed(context, original_payload=original, payload=desired)
+    latest = emoji_library._load_index(context)
+    assert len(latest["entries"]) == 2
+    assert latest["entries"][entries[0].media_hash]["usage_count"] == 10

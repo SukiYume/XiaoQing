@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from plugins.xiaoqing_chat.memory.memory_db import MemoryDB
 from plugins.xiaoqing_chat.memory.vector_store import (
     VectorDoc,
     VectorStore,
@@ -156,3 +157,15 @@ def test_vector_store_load_keeps_unique_document_ids(tmp_path):
     store.load(tmp_path, name="memory")
 
     assert store.all_docs() == [VectorDoc(doc_id="same", text="new", meta={"version": 2})]
+
+
+def test_quarantined_memory_cannot_be_queried(tmp_path):
+    db = MemoryDB()
+    db.bind(tmp_path)
+    db.upsert_text(
+        doc_id="bad", text="private fact", meta={"type": "quarantined_person_info", "chat_id": "g1"}
+    )
+    db.upsert_text(
+        doc_id="good", text="private fact", meta={"type": "person_profile", "chat_id": "g1"}
+    )
+    assert [item.doc_id for item in db.query("private fact", chat_id="g1", min_score=0)] == ["good"]

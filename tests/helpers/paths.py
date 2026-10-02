@@ -11,4 +11,3 @@ from pathlib import Path
 TESTS_ROOT      = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = TESTS_ROOT.parent
 PLUGINS_ROOT    = REPOSITORY_ROOT / "plugins"
-SCRIPTS_ROOT    = REPOSITORY_ROOT / "scripts"

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 import json
 import sys
+import threading
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -439,3 +442,99 @@ def test_interrupted_abstract_cache_write_preserves_previous_json(
 
     assert json.loads(cache_path.read_text(encoding="utf-8")) == old_payload
     assert list(tmp_path.glob(".abstract_cache.json.*")) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["claim", "date"])
+async def test_arxiv_cancellation_releases_claim(tmp_path, monkeypatch, stage):
+    from plugins.arxiv_filter import main
+
+    entered, release = (threading.Event(), threading.Event())
+    context = SimpleNamespace(data_dir=tmp_path)
+    monkeypatch.setattr(main, "_scheduled_without_delivery_targets", lambda context: False)
+    monkeypatch.setattr(main, "_business_now", lambda context: datetime(2030, 1, 1, tzinfo=UTC))
+    original = main._claim_send_today
+
+    def delayed_claim(*args):
+        result = original(*args)
+        entered.set()
+        assert release.wait(3)
+        return result
+
+    async def date_call(func, *args):
+        if func is original or func is main._release_claim:
+            return await asyncio.to_thread(func, *args)
+        entered.set()
+        await asyncio.Event().wait()
+
+    if stage == "claim":
+        monkeypatch.setattr(main, "_claim_send_today", delayed_claim)
+    else:
+        monkeypatch.setattr(main, "run_sync", date_call)
+    task = asyncio.create_task(main._check_arxiv_update(context))
+    try:
+        assert await asyncio.to_thread(entered.wait, 3)
+        task.cancel()
+        await asyncio.sleep(0)
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not main._claim_path(tmp_path, "2030-01-01").exists()
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+def test_arxiv_cache_requires_matching_range(tmp_path, monkeypatch):
+    with monkeypatch.context() as scoped:
+        scoped.setitem(sys.modules, "feedparser", SimpleNamespace())
+        module = importlib.import_module(
+            "plugins.arxiv_filter.train_model.data_prep.step2_fetch_all_astro_ph"
+        )
+    monkeypatch.setattr(module, "MONTHLY_DIR", tmp_path)
+    module.save_cache(2401, [], api_start="20240101", api_end="20240110")
+    assert module.is_month_finalized(2401, api_start="20240101", api_end="20240110")
+    assert not module.is_month_finalized(2401, api_start="20240101", api_end="20240131")
+    result = module.FetchResult([], False, 100, 200)
+    module.save_checkpoint(2401, result, api_start="20240101", api_end="20240110")
+    assert module.load_checkpoint(2401, api_start="20240101", api_end="20240131").next_offset == 0
+
+
+@pytest.mark.parametrize("stale", [False, True])
+def test_arxiv_dataset_enforces_current_range(tmp_path, monkeypatch, stale):
+    with monkeypatch.context() as scoped:
+        scoped.setitem(sys.modules, "feedparser", SimpleNamespace())
+        module = importlib.import_module(
+            "plugins.arxiv_filter.train_model.data_prep.step3_build_dataset"
+        )
+    monkeypatch.setattr(module, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(module, "POSITIVE_IDS_CSV", tmp_path / "positive_ids.csv")
+    monkeypatch.setattr(module, "OUTPUT_CSV", tmp_path / "output.csv")
+    (tmp_path / "positive_ids.csv").write_text("arXiv ID\n2401.00001\n")
+    (tmp_path / "date_range.json").write_text(
+        json.dumps({"start": "2024-01-01", "end": "2024-01-31"})
+    )
+    monthly = tmp_path / "monthly"
+    monthly.mkdir()
+    (monthly / "2401.json").write_text(
+        json.dumps(
+            {
+                "completed": True,
+                "query_range": ["202401010000", "202401102359" if stale else "202401312359"],
+                "papers": [
+                    {
+                        "arxiv_id": "2401.00001",
+                        "title": "Review sample",
+                        "abstract": "An isolated astronomy abstract.",
+                    }
+                ],
+            }
+        )
+    )
+    if stale:
+        with pytest.raises(ValueError, match="step 2"):
+            module.main()
+        assert not module.OUTPUT_CSV.exists()
+    else:
+        module.main()
+        assert "2401.00001" in module.OUTPUT_CSV.read_text()

@@ -1,4 +1,5 @@
 import os
+import sqlite3
 from datetime import datetime, timedelta
 
 import pytest
@@ -463,3 +464,67 @@ def test_admin_ban_user_logs_operator_id(qingpet_db):
     logs = admin_service.get_logs(123456, limit=5)
     assert logs
     assert logs[0].user_id == "operator"
+
+
+def test_qingpet_backup_contains_committed_wal(tmp_path):
+    from plugins.qingpet.services.database import Database
+
+    path   = tmp_path / "pet.db"
+    source = sqlite3.connect(path)
+    source.execute("PRAGMA journal_mode=WAL")
+    source.execute("CREATE TABLE review_marker(value INTEGER)")
+    source.commit()
+    source.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    source.execute("INSERT INTO review_marker VALUES (42)")
+    source.commit()
+    database = Database(str(path))
+    try:
+        backup = sqlite3.connect(str(path) + ".pre-migration.bak")
+        try:
+            assert backup.execute("SELECT value FROM review_marker").fetchall() == [(42,)]
+        finally:
+            backup.close()
+    finally:
+        database.cleanup()
+        source.close()
+
+
+def test_qingpet_day_boundary_is_shanghai(monkeypatch):
+    from plugins.qingpet.services import database_clock
+    from plugins.qingpet.utils import time as clock
+
+    for value, expected in [
+        (datetime(2030, 1, 1, 15, 59), "2030-01-01"),
+        (datetime(2030, 1, 1, 16), "2030-01-02"),
+        (datetime(2030, 1, 2), "2030-01-02"),
+    ]:
+        monkeypatch.setattr(database_clock, "now", lambda value=value: value)
+        monkeypatch.setattr(clock, "utc_now", lambda value=value: value)
+        assert database_clock.business_date() == clock.business_date() == expected
+
+
+def test_qingpet_decay_persists_fractional_progress(tmp_path, monkeypatch):
+    from plugins.qingpet.services import pet_service
+    from plugins.qingpet.services.database import Database
+
+    database = Database(str(tmp_path / "decay.db"))
+    base     = datetime(2030, 1, 1)
+    current  = base
+    monkeypatch.setattr(pet_service, "utc_now", lambda: current)
+    service = pet_service.PetService(database)
+    try:
+        for actor in ("a", "b"):
+            assert service.adopt_pet(actor, 1, actor)[0]
+            pet             = database.get_pet(actor, 1)
+            pet.last_update = base
+            assert database.update_pet(pet)
+        for minute in range(1, 21):
+            current = base + timedelta(minutes=minute)
+            service.apply_decay(database.get_pet("a", 1), is_trustee_override=False)
+        service.apply_decay(database.get_pet("b", 1), is_trustee_override=False)
+        a, b = (database.get_pet("a", 1), database.get_pet("b", 1))
+        assert [getattr(a, key) for key in ("hunger", "mood", "clean", "energy", "health")] == [
+            getattr(b, key) for key in ("hunger", "mood", "clean", "energy", "health")
+        ]
+    finally:
+        database.cleanup()

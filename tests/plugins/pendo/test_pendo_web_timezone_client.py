@@ -1,7 +1,13 @@
 """Pendo Web 用户时区读取与墙钟转换回归。"""
 
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Final
 
+import pytest
+
+from plugins.pendo.services.exporter import ExporterService
+from plugins.pendo.web.api.widget import build_widget_calendar
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
 
@@ -94,3 +100,48 @@ def test_timezone_client_rejects_dst_gaps_folds_and_invalid_settings() -> None:
         await assert.rejects(client.fetchUserTimeZone(), /无效的用户时区/);
         """
     )
+
+
+def test_export_and_widget_preserve_instant(db, tmp_path):
+    db.update_user_settings("u", {"timezone": "Asia/Shanghai"})
+    db.insert_item(
+        {
+            "owner_id": "u",
+            "type": "event",
+            "title": "凌晨",
+            "start_time": "2030-01-02T01:00:00+08:00",
+        }
+    )
+    result = ExporterService(db, tmp_path).export_markdown("u", "day 2030-01-02 event", {})
+    assert result["record_count"] == 1
+    assert "2030-01-02 01:00+08:00" in Path(result["file_path"]).read_text(encoding="utf-8")
+    item = build_widget_calendar(db, "u", start_date="2030-01-02", end_date="2030-01-02")["items"][
+        0
+    ]
+    assert (
+        datetime.fromisoformat(item["start_time"]).astimezone(UTC).isoformat()
+        == "2030-01-01T17:00:00+00:00"
+    )
+
+
+@pytest.mark.parametrize("offset", ["-07:00", "-08:00"])
+def test_widget_preserves_each_dst_overlap_instant(db, offset):
+    """夏令时回拨当天两次相同墙钟分别同步到原始真实时刻。"""
+    db.update_user_settings("u", {"timezone": "America/Los_Angeles"})
+    start = f"2026-11-01T01:30:00{offset}"
+    end   = f"2026-11-01T01:45:00{offset}"
+    db.insert_item(
+        {
+            "owner_id": "u",
+            "type": "event",
+            "title": "重复墙钟",
+            "timezone": "America/Los_Angeles",
+            "start_time": start,
+            "end_time": end,
+        }
+    )
+    item = build_widget_calendar(db, "u", start_date="2026-11-01", end_date="2026-11-01")["items"][
+        0
+    ]
+    assert item["start_time"] == start
+    assert item["end_time"] == end

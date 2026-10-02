@@ -64,7 +64,6 @@ def _run_form_client(script: str) -> None:
 def test_form_rendering_escapes_values_and_builds_accessible_single_choice_groups() -> None:
     """所有字段应只转义一次，并为两类按钮组保留唯一选中状态。"""
 
-    assert "case 'tags':" not in FORM_CLIENT.read_text(encoding="utf-8")
     _run_form_client(
         r"""
         const html = client.buildFormHTML([

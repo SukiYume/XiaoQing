@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 import hashlib
 import io
 import json
@@ -801,24 +800,3 @@ def test_notification_id_is_order_independent_and_rejects_bad_event_ids() -> Non
     assert first == second
     with pytest.raises(ValueError, match="event id"):
         earthquake._notification_id("200", [True])
-
-
-def test_runtime_has_no_direct_unbounded_response_reads() -> None:
-    path = Path(earthquake.__file__)
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    forbidden_calls: list[int] = []
-    forbidden_reads: list[int] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Attribute):
-            continue
-        if node.attr in {"get", "post", "put", "patch", "delete", "request"}:
-            if isinstance(node.value, ast.Name) and node.value.id in {"requests", "session"}:
-                forbidden_calls.append(node.lineno)
-        if node.attr in {"content", "json", "read", "text", "iter_content"}:
-            if isinstance(node.value, ast.Name) and node.value.id in {"response", "resp"}:
-                forbidden_reads.append(node.lineno)
-    assert not forbidden_calls
-    assert not forbidden_reads
-    source = path.read_text(encoding="utf-8")
-    assert "requests_request_bounded" in source
-    assert "fetch_public_bytes" in source

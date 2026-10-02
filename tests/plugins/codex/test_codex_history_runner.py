@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import tests.helpers.codex_test_support as _fixture_support
 from tests.helpers.codex_test_support import (
     PNG_BYTES,
     Any,
@@ -26,8 +25,6 @@ from tests.helpers.codex_test_support import (
     pytest,
     time,
 )
-
-reset_codex_manager = _fixture_support.reset_codex_manager
 
 
 @pytest.mark.asyncio
@@ -505,3 +502,26 @@ async def test_maintenance_prunes_orphans_and_expires_only_idle_unprotected_sess
 
     assert not active_job.exists()
     assert not orphan_output.exists()
+
+
+@pytest.mark.parametrize("broken", [[], {"schema_version": 999, "sessions": {}}])
+def test_codex_schema_failure_recovers_valid_backup(tmp_path, broken):
+    from plugins.codex.manager import CodexQueueManager, CodexSession
+    from tests.helpers.codex_test_support import FakeContext, FakeRunner
+
+    context = FakeContext(tmp_path)
+    context.default_cwd.mkdir()
+    manager = CodexQueueManager(context, runner=FakeRunner())
+    manager.sessions["kept"] = CodexSession(
+        label           = "kept",
+        cwd             = str(context.default_cwd),
+        owner_user_id   = 1,
+        target_group_id = None,
+        thread_id       = "review-thread",
+    )
+    manager._rewrite_state_with_backup()
+    manager.sessions_path.write_text(json.dumps(broken))
+    recovered = CodexQueueManager(context, runner=FakeRunner())
+    assert recovered.sessions["kept"].thread_id == "review-thread"
+    backup = json.loads(recovered.sessions_path.with_suffix(".json.bak").read_text())
+    assert backup["sessions"]["kept"]["thread_id"] == "review-thread"

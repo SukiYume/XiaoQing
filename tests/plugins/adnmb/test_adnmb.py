@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 import uuid
 from pathlib import Path
 from typing import ClassVar, cast
@@ -54,17 +55,9 @@ class TestAdnmbRuntimeContract:
 
     def test_public_entrypoints_and_help(self):
         assert adnmb_main.init() is None
-        assert callable(adnmb_main.handle)
         help_text = adnmb_main._get_help()
         assert "A岛" in help_text
         assert "/adnmb" in help_text
-
-    def test_api_contract_is_importable(self):
-        assert {"forum_list", "timeline", "thread", "feed"} <= set(adnmb_adapi.ENDPOINTS)
-        assert adnmb_adapi.API_HOST.startswith("https://")
-        assert callable(adnmb_adapi.Post.from_json)
-        assert callable(adnmb_adapi.Thread.from_json)
-        assert callable(AdnmbClient.get_timeline)
 
     @pytest.mark.asyncio
     async def test_feed_mutation_result_uses_shared_external_text_boundary(
@@ -89,11 +82,6 @@ class TestAdnmbRuntimeContract:
 
 class TestAdnmbPluginJson:
     """测试 ADnMB plugin.json 配置"""
-
-    def test_plugin_json_exists(self):
-        """测试 plugin.json 存在"""
-        plugin_json = ROOT / "plugins" / "adnmb" / "plugin.json"
-        assert plugin_json.exists()
 
     def test_plugin_json_content(self):
         """测试 plugin.json 内容"""
@@ -300,3 +288,13 @@ async def test_adnmb_client_get_passes_timeout(tmp_path):
     assert captured["timeout"] is not None
     assert captured["allow_redirects"] is False
     assert captured["auto_decompress"] is False
+
+
+def test_adnmb_malformed_html_is_bounded():
+    from plugins.adnmb.adapi import Post
+
+    start = time.monotonic()
+    post  = Post.from_json({"content": "<" * 500000})
+    assert len(post.content) == 65536
+    assert time.monotonic() - start < 1
+    assert Post.from_json({"content": "a<b>c</b>"}).content == "ac"

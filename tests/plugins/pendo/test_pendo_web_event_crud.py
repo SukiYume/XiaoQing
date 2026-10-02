@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from plugins.pendo.web.api.items import ItemCreate, create_item
 from tests.helpers.pendo_web_items_test_support import (
     ROOT,
     Database,
@@ -195,3 +196,13 @@ def test_event_reminder_log_sync_preserves_sent_history_but_excludes_removed_rem
     finally:
         db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_event_create_uses_owner_timezone(db):
+    db.update_user_settings("u", {"timezone": "America/Los_Angeles"})
+    create_item(
+        ItemCreate(type="event", title="morning", start_time="2030-01-01T10:00:00"), "u", db
+    )
+    event = db.get_items("u")[0]
+    assert event.timezone == "America/Los_Angeles"
+    assert event.start_time == "2030-01-01T18:00:00+00:00"

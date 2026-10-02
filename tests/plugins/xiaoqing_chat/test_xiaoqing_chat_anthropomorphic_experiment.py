@@ -4,12 +4,6 @@ from pathlib import Path
 from plugins.xiaoqing_chat.experiments import anthropomorphic_group as experiment
 
 
-def test_experiment_module_imports():
-    assert experiment.ExperimentConfig().bot_name == "小青"
-    assert callable(experiment.generate_matrix)
-    assert callable(experiment.score_turn)
-
-
 def test_default_output_dir_is_project_scoped():
     assert experiment._default_output_dir("run-1") == Path(
         "test_reports/runs/plugins/xiaoqing_chat/run-1"

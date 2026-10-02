@@ -17,8 +17,6 @@ from plugins.pendo.config import PendoConfig
 from plugins.pendo.services.db import Database
 from plugins.pendo.utils.identifiers import is_canonical_internal_id
 from plugins.pendo.web.services.transfer_bundle import ParsedBundle
-from tests.helpers.paths import REPOSITORY_ROOT
-from tests.helpers.pendo_client_source import has_js_source
 from tests.helpers.pendo_test_support import reset_pendo_runtime_config
 
 try:
@@ -27,9 +25,6 @@ try:
     from plugins.pendo.web.services import demo_space as demo_space_module
 except ModuleNotFoundError:
     pytest.skip("pendo web demo requires PyJWT", allow_module_level=True)
-
-
-ROOT = REPOSITORY_ROOT
 
 
 @pytest.fixture(autouse=True)
@@ -735,36 +730,3 @@ def test_expired_demo_token_is_rejected_and_demo_data_is_purged(
     assert (
         temp_db.get_user_settings(expired_demo_owner)["settings_json"].get("demo_mode") is not True
     )
-
-
-def test_login_page_sources_offer_demo_entry() -> None:
-    """登录页、浏览器 API 和路由源码应共同保留无本地 Token 的演示入口。"""
-
-    app_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "app.js").read_text(
-        encoding="utf-8"
-    )
-    api_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "api.js").read_text(
-        encoding="utf-8"
-    )
-    html = (ROOT / "plugins" / "pendo" / "web" / "static" / "index.html").read_text(
-        encoding="utf-8"
-    )
-    auth_src = (ROOT / "plugins" / "pendo" / "web" / "api" / "auth_routes.py").read_text(
-        encoding="utf-8"
-    )
-
-    assert "createDemoSession" in app_src
-    assert has_js_source(app_src, "const demoBtn = document.getElementById('login-demo-btn');")
-    assert has_js_source(app_src, "const enterDemo = async () => {")
-    assert has_js_source(app_src, "demoBtn.onclick = enterDemo;")
-    assert "export function createDemoSession()" in api_src
-    assert "'api/auth/demo'" in api_src
-    assert 'id="login-demo-btn"' in html
-    assert re.search(r'id="login-demo-btn"[^>]*>\s*Demo\s*</button>', html)
-    assert '@router.post("/auth/demo")' in auth_src
-    assert "localStorage" not in api_src
-    assert "Authorization" not in api_src
-    assert "credentials: 'same-origin'" in api_src
-    assert "X-CSRF-Token" in api_src
-    assert "exchangeLoginCode" in app_src
-    assert "history.replaceState" in app_src

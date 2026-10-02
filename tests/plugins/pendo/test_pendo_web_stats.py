@@ -10,11 +10,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from plugins.pendo.services.db import Database
+from plugins.pendo.web.analytics.ledger_insights import build_ledger_insights
+from plugins.pendo.web.api import stats
 from plugins.pendo.web.api import stats as stats_api
 from tests.helpers.assertions import assert_http_error as _assert_http_error
-from tests.helpers.paths import REPOSITORY_ROOT
-
-ROOT = REPOSITORY_ROOT
 
 
 def test_stats_router_exposes_only_documented_get_endpoints() -> None:
@@ -879,3 +878,54 @@ def test_activity_heatmap_rejects_invalid_direct_year(db: Database) -> None:
         422,
         lambda: stats_api.activity_heatmap(year=1969, owner_id="u", db=db),
     )
+
+
+@pytest.fixture
+def currency_db(tmp_path):
+    db = Database(str(tmp_path / "currency.db"))
+    for currency, amount in [("CNY", 100), ("USD", 200)]:
+        db.insert_item(
+            {
+                "id": currency,
+                "owner_id": "owner",
+                "type": "ledger",
+                "title": currency,
+                "currency": currency,
+                "amount": amount,
+                "amount_cents": amount * 100,
+                "transaction_type": "expense",
+                "ledger_category": "餐饮",
+                "ledger_date": "2026-03-01",
+            }
+        )
+    yield db
+    db.cleanup()
+
+
+def test_insights_keep_currency_trends_separate(currency_db):
+    result = build_ledger_insights(
+        currency_db, "owner", start_date="2026-03-01", end_date="2026-03-02", currency="USD"
+    )
+    assert result["currency"] == "USD"
+    assert result["summary"]["expense_total"] == 200
+    assert sum(point["total"] for point in result["expense_timeline"]) == 200
+    assert result["by_currency"]["CNY"]["expense"] == 100
+    assert result["by_currency"]["USD"]["expense"] == 200
+
+
+def test_stats_and_comparison_select_one_currency(currency_db, monkeypatch):
+    monkeypatch.setattr(stats, "_today", lambda *_: date(2026, 3, 2))
+    result = stats.ledger_stats(
+        start_date = "2026-03-01",
+        end_date   = "2026-03-02",
+        currency   = "USD",
+        owner_id   = "owner",
+        db         = currency_db,
+    )["data"]
+    assert result["monthly"][0]["expense"] == 200
+    assert result["expense_by_category"][0]["total"] == 200
+    comparison = stats.ledger_comparison(
+        months=3, currency="USD", owner_id="owner", db=currency_db
+    )["data"]
+    assert comparison["currency"] == "USD"
+    assert comparison["months"][-1]["expense"] == 200

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import tests.helpers.server_test_support as _fixture_support
+from core.app_delivery import AppDeliveryMixin
+from core.delivery import DeliveryReceipt
 from core.models import OneBotEvent
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.server_test_support import (
@@ -735,3 +737,52 @@ async def test_server_broadcast_no_sockets(sample_server):
     assert result == BroadcastResult()
     assert result.delivered is False
     assert bool(result) is False
+
+
+@pytest.mark.asyncio
+async def test_http_standard_mode_executes_actions_before_returning():
+    app     = AppDeliveryMixin()
+    actions = [
+        {"action": "send_private_msg", "params": {"user_id": 1, "message": message}}
+        for message in ["chunk1", [{"type": "image", "data": {"file": "review.png"}}]]
+    ]
+    app._collect_actions_for_event = AsyncMock(return_value=actions)
+    app._send_action = AsyncMock(return_value=True)
+    result = await app._handle_inbound_event(
+        {"_source": "inbound_http", "_http_action_delivery": True}
+    )
+    assert result == []
+    assert app._send_action.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_http_standard_mode_exposes_delivery_failure():
+    app = AppDeliveryMixin()
+    app._collect_actions_for_event = AsyncMock(return_value=[{"action": "send_private_msg"}])
+    app._send_action = AsyncMock(return_value=False)
+    with pytest.raises(RuntimeError, match="not acknowledged"):
+        await app._handle_inbound_event({"_source": "inbound_http", "_http_action_delivery": True})
+
+
+@pytest.mark.asyncio
+async def test_http_failure_rolls_back_unattempted_reply_receipts():
+    """前一条回复失败后，后续尚未投递的业务预留必须回滚。"""
+    callbacks = []
+    receipt   = DeliveryReceipt(
+        expected_actions = 1,
+        commit           = lambda: callbacks.append("commit"),
+        rollback         = lambda: callbacks.append("rollback"),
+        unknown          = lambda: callbacks.append("unknown"),
+    )
+    app                            = AppDeliveryMixin()
+    app._collect_actions_for_event = AsyncMock(
+        return_value=[
+            {"action": "send_private_msg"},
+            {"action": "send_private_msg", "_delivery_receipt": receipt},
+        ]
+    )
+    app._send_action = AsyncMock(return_value=False)
+    with pytest.raises(RuntimeError, match="not acknowledged"):
+        await app._handle_inbound_event({"_source": "inbound_http", "_http_action_delivery": True})
+    assert app._send_action.await_count == 1
+    assert callbacks == ["rollback"]

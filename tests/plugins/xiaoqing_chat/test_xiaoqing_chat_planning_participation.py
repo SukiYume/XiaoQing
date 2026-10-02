@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
+from plugins.xiaoqing_chat.config.config import PersonalityConfig
 from tests.helpers.xiaoqing_chat_test_support import (
     AsyncMock,
     MagicMock,
@@ -1170,3 +1171,44 @@ async def test_smalltalk_planner_runs_outside_chat_lock_but_commits_inside(
     assert result == [{"type": "text", "data": {"text": "planner-ok"}}]
     state.pfc_state_store.set_state.assert_called_once()
     mock_schedule_pfc_state_flush.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "seconds,expected", [(15, 15), (99, 30), (-4, 0), (True, 0), ("15", 0), (None, 0)]
+)
+async def test_planner_preserves_optional_wait(monkeypatch, seconds, expected):
+    from plugins.xiaoqing_chat.planning import pfc_action_planner as planner
+
+    response = {
+        "action": "wait",
+        "reason": "wait",
+        "thinking": "user typing",
+        "wait_seconds": seconds,
+    }
+    fake = AsyncMock(
+        return_value=({"choices": [{"message": {"content": json.dumps(response)}}]}, "test")
+    )
+    monkeypatch.setattr(planner, "chat_completions_raw_with_fallback_paths", fake)
+    plan = await planner.plan_next_action(
+        secrets                      = {},
+        bot_name                     = "小青",
+        is_private                   = False,
+        personality                  = PersonalityConfig(),
+        history                      = [],
+        goal_list                    = [],
+        knowledge_list               = [],
+        action_history_summary       = "",
+        last_action_context          = "",
+        timeout_context              = "",
+        last_successful_reply_action = None,
+        temperature                  = 0.5,
+        top_p                        = 0.9,
+        max_tokens                   = 300,
+        timeout_seconds              = 1,
+        max_retry                    = 0,
+        retry_interval_seconds       = 0,
+        current_text                 = "",
+    )
+    assert plan.wait_seconds == expected
+    assert plan.thinking == "user typing"

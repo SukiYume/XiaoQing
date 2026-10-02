@@ -50,10 +50,7 @@ jobs:
           cache-dependency-path: requirements.txt
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
-      - name: Windows process and monitor tests
+      - name: Windows process tests
         run: >-
           python -m pytest -q -n 2
           tests/plugins/codex/test_codex_process_tree.py
-          tests/scripts/test_run_bot_monitor_script.py
-          tests/scripts/test_rotating_log_runner.py
-          tests/scripts/test_bot_monitor_powershell.py

@@ -5,7 +5,10 @@ from __future__ import annotations
 import logging
 
 import tests.helpers.app_test_support as _fixture_support
+from core.app_delivery import AppDeliveryMixin
+from core.app_support import current_action_sink
 from core.constants import MAX_MESSAGE_TEXT_LENGTH
+from core.delivery import DeliveryReceipt, send_with_receipt
 from tests.helpers.app_test_support import (
     AsyncMock,
     BroadcastResult,
@@ -19,8 +22,7 @@ from tests.helpers.app_test_support import (
     pytest,
 )
 
-mock_dependencies = _fixture_support.mock_dependencies
-temp_app_root     = _fixture_support.temp_app_root
+temp_app_root = _fixture_support.temp_app_root
 
 
 @pytest.mark.asyncio
@@ -654,3 +656,51 @@ async def test_app_send_action_propagates_onebot_business_rejection(temp_app_roo
 
     context = app._build_plugin_context("test", Path("/test"), Path("/test"), {})
     assert await context.send_action(action) is False
+
+
+@pytest.mark.asyncio
+async def test_captured_receipt_waits_for_transport_failure():
+    callbacks = []
+    captured  = []
+
+    async def sink(action):
+        captured.append(action)
+
+    receipt = DeliveryReceipt(
+        expected_actions = 1,
+        commit           = lambda: callbacks.append("commit"),
+        rollback         = lambda: callbacks.append("rollback"),
+        unknown          = lambda: callbacks.append("unknown"),
+    )
+    token = current_action_sink.set(sink)
+    try:
+        await send_with_receipt(
+            AppDeliveryMixin()._send_action,
+            {"action": "send_private_msg", "params": {"user_id": 1, "message": "review"}},
+            receipt,
+        )
+    finally:
+        current_action_sink.reset(token)
+    assert len(captured) == 1
+    assert callbacks == []
+    await receipt.record(False)
+    assert callbacks == ["rollback"]
+
+
+@pytest.mark.asyncio
+async def test_receipt_helper_does_not_count_core_partial_success_twice():
+    callbacks = []
+    app       = AppDeliveryMixin()
+    app._send_single_action = AsyncMock(return_value=True)
+    app._notify_outgoing_action_observers = AsyncMock()
+    receipt                               = DeliveryReceipt(
+        expected_actions = 2,
+        commit           = lambda: callbacks.append("commit"),
+        rollback         = lambda: None,
+        unknown          = lambda: None,
+    )
+    action = {"action": "send_private_msg", "params": {"user_id": 1, "message": "review"}}
+    await send_with_receipt(app._send_action, action, receipt)
+    assert callbacks == []
+    await send_with_receipt(app._send_action, action, receipt)
+    assert callbacks == ["commit"]

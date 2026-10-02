@@ -980,10 +980,6 @@ class TestCommandAliases:
 
 
 class TestStructuredCommandCatalog:
-    def test_legacy_help_format_wrappers_are_removed(self):
-        assert not hasattr(bot_core, "_format_catalog_text")
-        assert not hasattr(bot_core, "_format_catalog_node")
-
     def test_plugin_overview_paginates_plugins_instead_of_command_nodes(self):
         roots = tuple(
             _catalog_node(
@@ -1118,13 +1114,10 @@ class TestStructuredCommandCatalog:
         assert tuple(node.code for node in by_alias) == ("bot_core.reload",)
         assert tuple(node.code for node in by_description) == ("chat.chat",)
 
-    @pytest.mark.parametrize("raw", ["page 0", "page abc", "search", "all extra"])
+    @pytest.mark.parametrize(
+        "raw", ["page 0", "page abc", "search", "all extra", "page ²", "all ٣", "页 １２"]
+    )
     def test_rejects_invalid_catalog_requests(self, raw):
-        with pytest.raises(ValueError):
-            bot_core._parse_help_request(raw)
-
-    @pytest.mark.parametrize("raw", ["page ²", "all ٣", "页 １２"])
-    def test_rejects_unicode_page_digits(self, raw):
         with pytest.raises(ValueError):
             bot_core._parse_help_request(raw)
 

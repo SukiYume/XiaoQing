@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from plugins.xiaoqing_chat.memory.memory import MemoryStore
+from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
 
 @pytest.mark.asyncio
@@ -67,3 +68,21 @@ async def test_same_chat_cold_load_remains_singleflight(tmp_path):
 
     assert first == second == []
     assert load_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_evicted_borrowed_lock_and_waiter_keep_identity(monkeypatch):
+    monkeypatch.setattr(ChatRuntimeState, "_MAX_TRACKED_CHATS", 1)
+    state = ChatRuntimeState()
+    old   = state.get_lock("old")
+    state.set_last_observe_ts("new", 100)
+    state.cleanup_stale_chats()
+    assert state.get_lock("old") is old
+    await old.acquire()
+    waiter = asyncio.create_task(old.acquire())
+    await asyncio.sleep(0)
+    old.release()
+    state.cleanup_stale_chats()
+    assert state.get_lock("old") is old
+    await waiter
+    old.release()

@@ -139,8 +139,6 @@ def _connection(
 
 class TestMinecraftMetadata:
     def test_entrypoints_and_help_match_rcon_scope(self) -> None:
-        assert callable(mc_main.handle)
-        assert callable(mc_main.scheduled)
         help_text = mc_main._show_help()
         assert "Minecraft RCON" in help_text
         assert "/mc connect <配置名>" in help_text
@@ -163,10 +161,6 @@ class TestMinecraftMetadata:
         }
         schedule = next(item for item in content["schedule"] if item["id"] == "check_log")
         assert schedule["handler"] == "scheduled"
-
-    def test_removed_test_only_connection_wrappers_stay_absent(self) -> None:
-        for name in ("add_connection", "remove_connection", "has_connection", "connection_count"):
-            assert not hasattr(ConnectionManager, name)
 
 
 class TestMinecraftConfiguration:

@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 from tests.helpers.qingssh_test_support import (
-    EXIT_CODE_TIMEOUT,
     ROOT,
-    SessionKeys,
     json,
     pytest,
     qingssh_main,
@@ -96,24 +94,11 @@ class TestQingsshRuntimeContract:
     """使用真实导入对象验证 SSH 插件公开契约。"""
 
     def test_entrypoints_and_help(self):
-        assert callable(qingssh_main.handle)
-        assert callable(qingssh_main.handle_session)
-        assert callable(qingssh_main.cleanup)
-        assert callable(qingssh_main.shutdown)
-        assert callable(qingssh_main.cleanup_orphans)
         help_text = qingssh_main._show_help()
         assert "SSH 远程控制" in help_text
         assert "/ssh disconnect" in help_text
         assert "showimg <路径或通配符> [--page N]" in help_text
         assert "每页 5 张" in help_text
-
-    def test_runtime_manager_and_config_contract(self):
-        assert ssh_manager_module.SSHManager is not None
-        assert callable(ssh_manager_module.get_manager)
-        assert SessionKeys.SERVER_NAME == "server_name"
-        assert SessionKeys.STEP == "step"
-        assert SessionKeys.SERVER_CONFIG == "server_config"
-        assert EXIT_CODE_TIMEOUT < 0
 
     def test_proxyjump_parser_rejects_local_shells(self):
         assert ssh_manager_module._parse_proxyjump_command(
@@ -135,11 +120,6 @@ class TestQingsshRuntimeContract:
 
 class TestQingsshPluginJson:
     """测试 QingSSH plugin.json 配置"""
-
-    def test_plugin_json_exists(self):
-        """测试 plugin.json 存在"""
-        plugin_json = ROOT / "plugins" / "qingssh" / "plugin.json"
-        assert plugin_json.exists()
 
     def test_plugin_json_content(self):
         """测试 plugin.json 内容"""

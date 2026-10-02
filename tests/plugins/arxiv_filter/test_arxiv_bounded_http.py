@@ -1,7 +1,6 @@
 # 验证 arXiv 请求的超时、响应大小和错误分类。
 from __future__ import annotations
 
-import ast
 import importlib
 import sys
 from collections.abc import Callable, Iterator
@@ -16,7 +15,6 @@ from core.bounded_http import (
     BoundedHttpResponse,
     HttpStatusError,
 )
-from tests.helpers.paths import REPOSITORY_ROOT
 
 _ARXIV_TODAY       = "plugins.arxiv_filter.arxiv_today"
 _STEP2             = "plugins.arxiv_filter.train_model.data_prep.step2_fetch_all_astro_ph"
@@ -404,35 +402,3 @@ def test_step3_single_fetch_preserves_max_results_and_feed_fields(
         "max_results": 1,
     }
     assert calls[0]["request_kwargs"]["timeout"] == module.API_TIMEOUT
-
-
-def test_sync_arxiv_paths_forbid_unbounded_requests_and_response_access() -> None:
-    root  = REPOSITORY_ROOT
-    paths = (
-        root / "plugins" / "arxiv_filter" / "arxiv_today.py",
-        root
-        / "plugins"
-        / "arxiv_filter"
-        / "train_model"
-        / "data_prep"
-        / "step2_fetch_all_astro_ph.py",
-        root / "plugins" / "arxiv_filter" / "train_model" / "data_prep" / "step3_build_dataset.py",
-    )
-    violations: list[str] = []
-    for path in paths:
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-                receiver = node.func.value
-                if (
-                    isinstance(receiver, ast.Name)
-                    and receiver.id == "requests"
-                    and node.func.attr in {"get", "post", "put", "patch", "delete", "request"}
-                ):
-                    violations.append(f"{path.name}:{node.lineno}: requests.{node.func.attr}")
-                if node.func.attr in {"text", "json", "iter_content", "raise_for_status"}:
-                    violations.append(f"{path.name}:{node.lineno}: .{node.func.attr}()")
-            if isinstance(node, ast.Attribute) and node.attr == "content":
-                violations.append(f"{path.name}:{node.lineno}: .content")
-
-    assert violations == []

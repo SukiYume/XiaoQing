@@ -2,6 +2,8 @@
 astro_tools 插件单元测试
 """
 
+import logging
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -402,11 +404,6 @@ class TestAstroToolsErrorHandling:
         assert row.v_magnitude is None
         assert "V星等" not in astro_obj._render_simbad_result("M31", row)
 
-    def test_static_solar_system_text_has_no_one_line_function_shells(self):
-        assert {"sun", "moon"} <= astro_obj.SOLAR_SYSTEM_INFO.keys()
-        assert not hasattr(astro_obj, "_get_sun_info")
-        assert not hasattr(astro_obj, "_get_moon_info")
-
     def test_obj_query_builder_is_pure_local(self, monkeypatch):
         monkeypatch.setattr(
             loaded_modules["obj"],
@@ -419,3 +416,29 @@ class TestAstroToolsErrorHandling:
 
         assert "SELECT TOP 1" in query.upper()
         assert "M31" in query
+
+
+@pytest.mark.parametrize(
+    "source,target,expected",
+    [
+        ("MJy", "Jy", "1e+06"),
+        ("MK", "K", "1e+06"),
+        ("mpc", "pc", "0.001"),
+        ("Jy", "MJy", "1.000000e-06"),
+    ],
+)
+def test_astro_units_preserve_case(source, target, expected):
+    from plugins.astro_tools.convert import _handle_convert_sync
+
+    output = _handle_convert_sync(
+        f"1 {source} {target}", SimpleNamespace(logger=logging.getLogger(__name__))
+    )
+    assert f"= {expected} {target}" in output
+
+
+def test_luminosity_uses_complete_empirical_coefficients():
+    from plugins.astro_tools.formula import _handle_calculation
+
+    context = SimpleNamespace(logger=logging.getLogger(__name__))
+    assert "5.000e+04" in _handle_calculation("luminosity 20", context)
+    assert "5.357e+04" in _handle_calculation("luminosity 19.99", context)

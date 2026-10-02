@@ -57,14 +57,6 @@ def _frb(
 
 
 class TestChimeRuntimeContract:
-    def test_entrypoints_help_and_constants(self) -> None:
-        assert callable(chime.handle)
-        assert callable(chime.scheduled_check)
-        assert "CHIME" in chime.HELP_TEXT
-        assert chime.MAX_DISPLAY_FRBS == 5
-        assert "**" not in chime.HELP_TEXT
-        assert not hasattr(chime, "PULSE_DATE_PATTERN")
-
     def test_data_model_fails_closed_for_empty_payload(self) -> None:
         frb = chime.FRBData("FRB-test", {})
         assert frb.name == "FRB-TEST"

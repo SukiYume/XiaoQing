@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tests.helpers.pendo_web_transfer_test_support as _fixture_support
+from plugins.pendo.web.api.transfer import ExportSelection, _build_bundle_bytes
 from tests.helpers.pendo_web_transfer_test_support import (
     Any,
     Database,
@@ -181,3 +182,37 @@ def test_import_inspect_preserves_original_line_number_for_normalization_errors(
     errors = response.json()["data"]["errors"]
     assert errors[0]["line"] == 1
     assert errors[1]["line"] == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("filename", ["备份.pendo.zip", "📦.zip", "a%20b.zip"])
+async def test_transfer_decodes_uploaded_filename_into_audit(db, filename):
+    """真实导入事务只解码一次文件名，并把 Unicode 原文保存在审计中。"""
+    from urllib.parse import quote
+
+    from starlette.requests import Request
+
+    from plugins.pendo.web.api.transfer import execute_import
+
+    payload = _build_bundle_bytes(
+        {"note": [{"_type": "note", "_schema": 2, "id": "uploaded", "title": "audit"}]},
+        ExportSelection(types=["note"]),
+        None,
+        None,
+    )
+
+    async def receive():
+        return {"type": "http.request", "body": payload, "more_body": False}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/transfer/import/execute",
+            "headers": [(b"x-transfer-filename", quote(filename, safe="").encode("ascii"))],
+        },
+        receive,
+    )
+    result = await execute_import(request, owner_id="u", db=db)
+    assert result["ok"] is True
+    assert db.get_transfer_logs("u")[0]["filename"] == filename

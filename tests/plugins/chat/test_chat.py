@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import threading
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -230,9 +231,6 @@ class TestChatPlugin:
         result = await chat.handle("chat", "冻结配置", {"user_id": 1}, mock_context)
 
         assert "测试回答" in str(result)
-
-    def test_test_only_config_reader_is_removed(self):
-        assert not hasattr(chat, "get_config")
 
     def test_validate_config_valid(self):
         """测试有效配置验证"""
@@ -751,12 +749,34 @@ class TestChatPlugin:
         assert "/chat" in help_text
         assert "**" not in help_text
 
-    def test_constants(self):
-        """测试常量定义"""
-        assert hasattr(chat, "COZE_API_URL")
-        assert hasattr(chat, "REQUEST_TIMEOUT")
-        assert hasattr(chat, "MAX_QUERY_LENGTH")
 
-        assert chat.COZE_API_URL == "https://api.coze.com/v3/chat"
-        assert chat.REQUEST_TIMEOUT == 30
-        assert chat.MAX_QUERY_LENGTH == 2000
+@pytest.mark.asyncio
+async def test_chat_cancel_compensates_quota(tmp_path, monkeypatch):
+    from plugins.chat import main
+
+    context = SimpleNamespace(data_dir=tmp_path, now=lambda: datetime.now(UTC))
+    started, release = (threading.Event(), threading.Event())
+    original = main._reserve_quota_file
+
+    def delayed(*args):
+        started.set()
+        assert release.wait(3)
+        original(*args)
+
+    monkeypatch.setattr(main, "_reserve_quota_file", delayed)
+    task = asyncio.create_task(
+        main._reserve_quota(context, actor="123", per_user_limit=20, global_limit=100)
+    )
+    try:
+        assert await asyncio.to_thread(started.wait, 3)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        state = json.loads(main._quota_path(context).read_text())
+        assert state["total"] == 0 and state["users"] == {}
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)

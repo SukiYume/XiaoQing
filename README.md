@@ -263,6 +263,10 @@ Windows 生产启动链为 `scripts/run-bot.vbs → scripts/run-bot-monitor.ps1 
 
 ## ✅ 开发与测试
 
+测试按当前功能组织：`tests/core` 覆盖核心行为，`tests/transport` 覆盖协议与传输，`tests/plugins/<plugin>` 覆盖插件，`tests/integration` 覆盖组件协作，`tests/tooling` 覆盖测试辅助工具与打包资源。
+
+用例验证输入、输出、状态变化、错误处理、权限、并发和资源生命周期。历史修复用例归入对应功能模块；相同执行流程使用参数化合并。外部服务通过隔离替身提供响应，Web 客户端测试执行实际 JavaScript。断言以运行结果和有效数据契约为依据；文档措辞、注释、固定供应商域名、已删除文件清单和源码实现形式交由代码审查维护。测试中的样例 URL 用于验证解析、配置传递与访问策略。
+
 常用门禁：
 
 ```bash

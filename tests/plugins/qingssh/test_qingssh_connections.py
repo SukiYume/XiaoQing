@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from types import SimpleNamespace
 from typing import ClassVar
 
@@ -954,3 +955,65 @@ async def test_server_config_never_persists_plaintext_password(tmp_path):
     payload = json.loads((tmp_path / "servers.json").read_text(encoding="utf-8"))
     assert "password" not in payload["srv"]
     assert payload["srv"]["password_ref"] in stored
+
+
+@pytest.mark.asyncio
+async def test_qingssh_cancel_owns_opening_channel(tmp_path, monkeypatch):
+    from plugins.qingssh.ssh_manager import SSHManager
+
+    started, release = (threading.Event(), threading.Event())
+    channel = SimpleNamespace(closed=False, executed=False)
+    channel.close              = lambda: setattr(channel, "closed", True)
+    channel.set_combine_stderr = lambda value: None
+    channel.exec_command       = lambda command: setattr(channel, "executed", True)
+
+    def open_session():
+        started.set()
+        assert release.wait(3)
+        return channel
+
+    transport = SimpleNamespace(is_active=lambda: True, open_session=open_session)
+    manager = SSHManager(tmp_path)
+    manager.connections["1:None:example"] = SimpleNamespace(get_transport=lambda: transport)
+    task = asyncio.create_task(
+        manager.execute_command_stream("1", None, "example", "review-only", AsyncMock())
+    )
+    try:
+        assert await asyncio.to_thread(started.wait, 3)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert channel.closed and (not channel.executed)
+        assert not manager.active_channels
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_qingssh_failed_image_delivery_is_reported(tmp_path):
+    from plugins.qingssh.session_handlers import _handle_showimg_command
+
+    async def download(*args, **kwargs):
+        Path(args[4]).write_bytes(b"test")
+        return (True, "ok")
+
+    manager = SimpleNamespace(
+        is_connected=lambda *args: True,
+        list_files=AsyncMock(return_value=(True, ["one.png"])),
+        download_file=download,
+    )
+    context = SimpleNamespace(
+        data_dir         = tmp_path,
+        current_user_id  = 1,
+        current_group_id = None,
+        send_action=AsyncMock(return_value=False),
+    )
+    result = await _handle_showimg_command(
+        "showimg *.png", context, {"server_name": "test", "cwd": "/tmp"}, manager
+    )
+    output = "".join(part.get("data", {}).get("text", "") for part in result)
+    assert "发送 0 张" in output and "投递失败" in output

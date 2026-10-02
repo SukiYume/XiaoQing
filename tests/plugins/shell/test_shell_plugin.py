@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import sys
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -603,18 +605,15 @@ class TestShellHandle:
         assert "无法解析" in text_segments_text(result)
         execute.assert_not_awaited()
 
-    def test_manifest_entry_and_aliases_match_documentation(self):
+    def test_manifest_entry_and_command_authorization(self):
         plugin_dir = ROOT / "plugins" / "shell"
         manifest = json.loads((plugin_dir / "plugin.json").read_text(encoding="utf-8"))
         command = manifest["commands"][0]
-        readme = (plugin_dir / "README.md").read_text(encoding="utf-8")
 
         assert manifest["entry"] == "main.py"
         assert (plugin_dir / manifest["entry"]).is_file()
         assert command["admin_only"] is True
         assert set(command["triggers"]) == {"shell", "sh", "exec"}
-        for trigger in command["triggers"]:
-            assert f"/{trigger}" in readme
 
 
 class TestShellExecutionSafety:
@@ -892,3 +891,41 @@ class TestSmartDecode:
         """测试空字节解码"""
         result = shell_main._smart_decode(b"")
         assert result == ""
+
+
+@pytest.mark.parametrize("parent_exits_before_wait", [False, True])
+def test_shell_timeout_reaps_inherited_pipe_child(tmp_path, monkeypatch, parent_exits_before_wait):
+    from plugins.shell import main as shell
+
+    if parent_exits_before_wait and sys.platform == "win32":
+        pytest.skip("POSIX parent-exit process scheduling")
+    if parent_exits_before_wait:
+        original_spawn = shell._spawn_owned_command
+
+        async def spawn_after_parent_exit(args):
+            proc, job = await original_spawn(args)
+            async with asyncio.timeout(0.5):
+                while proc.returncode is None:
+                    await asyncio.sleep(0.001)
+            return (proc, job)
+
+        monkeypatch.setattr(shell, "_spawn_owned_command", spawn_after_parent_exit)
+    marker = tmp_path / "escaped.txt"
+    child  = (
+        "import time; from pathlib import Path; time.sleep(1); Path("
+        + repr(str(marker))
+        + ").write_text('escaped')"
+    )
+    parent = "import subprocess,sys; subprocess.Popen([sys.executable,'-c'," + repr(child) + "])"
+
+    async def exercise():
+        start = time.monotonic()
+        code, _stdout, _stderr = await shell._execute_command([sys.executable, "-c", parent], 0.2)
+        assert code == -1
+        assert time.monotonic() - start < 0.9
+        await asyncio.sleep(1.05)
+        assert not marker.exists()
+
+    factory = asyncio.ProactorEventLoop if sys.platform == "win32" else asyncio.new_event_loop
+    with asyncio.Runner(loop_factory=factory) as runner:
+        runner.run(exercise())

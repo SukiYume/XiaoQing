@@ -4,13 +4,19 @@ import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
+from aiohttp import ClientSession, web
+from aiohttp.test_utils import TestClient, TestServer
 
+from core.app_delivery import AppDeliveryMixin
+from core.delivery import DeliveryReceipt
 from core.dispatcher import Dispatcher, MessageContext
+from core.onebot import OneBotHttpSender
 from core.plugin_execution import PluginExecutionGate
 from core.router import CommandRouter, CommandSpec
+from core.server import InboundServer
 from core.session import SessionManager
 
 
@@ -622,3 +628,71 @@ class TestDispatcherIntegration:
 
         responses = await dispatcher.handle_event(event)
         assert len(responses) > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retcode, expected_status", [(0, 200), (100, 500)])
+async def test_standard_http_event_reaches_real_action_api(retcode, expected_status):
+    """本机双服务贯通上报、Action POST 和收据，验证协议边界。"""
+    received  = []
+    callbacks = []
+
+    async def action_api(request):
+        received.append(await request.json())
+        assert request.headers["Authorization"] == "Bearer outgoing"
+        return web.json_response(
+            {
+                "status": "ok" if retcode == 0 else "failed",
+                "retcode": retcode,
+                "data": {"message_id": 42},
+            }
+        )
+
+    api_app = web.Application()
+    api_app.router.add_post("/send_private_msg", action_api)
+    async with TestServer(api_app) as upstream, ClientSession() as session:
+        app = AppDeliveryMixin()
+        app.ws_client = None
+        app.inbound_manager = None
+        app.http_sender = OneBotHttpSender(str(upstream.make_url("")), "outgoing", session)
+        app._http_transport_is_trusted = lambda _: True
+        app._claim_inbound_event = AsyncMock(return_value=True)
+        app._notify_outgoing_action_observers = AsyncMock()
+        receipt                               = DeliveryReceipt(
+            expected_actions = 1,
+            commit           = lambda: callbacks.append("commit"),
+            rollback         = lambda: callbacks.append("rollback"),
+            unknown          = lambda: callbacks.append("unknown"),
+        )
+        app._process_event = AsyncMock(
+            return_value={
+                "action": "send_private_msg",
+                "params": {
+                    "user_id": 123,
+                    "message": [{"type": "text", "data": {"text": "review"}}],
+                },
+                "_delivery_receipt": receipt,
+            }
+        )
+        inbound = InboundServer("127.0.0.1", 0, "incoming", app._handle_inbound_event)
+        try:
+            async with TestClient(TestServer(inbound.app)) as client:
+                response = await client.post(
+                    "/event",
+                    headers = {"Authorization": "Bearer incoming"},
+                    json    = {
+                        "post_type": "message",
+                        "message_type": "private",
+                        "user_id": 123,
+                        "message": "/echo review",
+                        "message_id": 1,
+                    },
+                )
+                assert response.status == expected_status
+                if retcode == 0:
+                    assert await response.json() == {}
+        finally:
+            await inbound.stop()
+    assert len(received) == 1
+    assert received[0]["message"][0]["data"]["text"] == "review"
+    assert callbacks == ["commit" if retcode == 0 else "rollback"]
