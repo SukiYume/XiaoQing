@@ -665,6 +665,9 @@ async def test_checker_preserves_generator_context_and_uses_general_evidence_rul
     assert '"suitable":true' not in prompt
     assert "用户邀请的推测可以提出新可能" in prompt
     assert "缺图无需固定告知措辞" in prompt
+    assert "前面对应图片的可靠摘要仍可提供画面依据" in prompt
+    assert "通用知识、作品背景和词义解释按知识准确性判断" in prompt
+    assert "历史含实际图像记录" in materials["图像可用状态"]
     assert result.suitable
 
 

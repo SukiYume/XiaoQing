@@ -151,7 +151,7 @@ _SOURCE_QUERY_HINTS = (
     "cache=",
     "uuid=",
 )
-_MEDIA_ANALYSIS_PROMPT_VERSION = 6
+_MEDIA_ANALYSIS_PROMPT_VERSION = 7
 _RENDER_CACHE_MAX_ENTRIES      = 1_000
 _RENDER_CACHE_MAX_BYTES        = 4 * 1024 * 1024
 _MEDIA_DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(total=20, connect=10, sock_read=15)
