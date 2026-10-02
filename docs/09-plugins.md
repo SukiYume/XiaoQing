@@ -265,7 +265,7 @@ APOD 抓取 NASA 当前 Astronomy Picture of the Day 页面，返回图片或视
 /apod help
 ```
 
-命令使用空参数并固定读取 `https://apod.nasa.gov/apod/astropix.html`。可通过 `config.plugins.apod.url` 与 `allowed_hosts` 设置页面和媒体主机。每天 13:30 向 `default_group_ids` 投递。
+命令使用空参数，默认读取 `https://science.nasa.gov/apod/`，返回图片或视频链接、标题、说明、日期、署名和原页面链接。可通过 `config.plugins.apod.url` 与 `allowed_hosts` 设置页面和附加媒体主机；内置允许 `science.nasa.gov`、`assets.science.nasa.gov` 和 `apod.nasa.gov`，旧 `astropix.html` 入口自动迁移到新首页。每天 13:30 使用 Core `broadcast` 模式向 schedule 的 `group_ids` 投递；字段省略时使用 `default_group_ids`。
 
 页面、重定向和媒体均经过 HTTPS、公网 DNS、响应大小、MIME、尺寸和像素校验；缓存位于 `data/apod/`。[APOD README](../plugins/apod/README.md) 提供完整网络边界。
 

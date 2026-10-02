@@ -36,14 +36,17 @@ HEADERS = {
     "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
 }
 
-DEFAULT_APOD_URL      = "https://apod.nasa.gov/apod/astropix.html"
-DEFAULT_APOD_HOST     = "apod.nasa.gov"
-HTML_TIMEOUT_SECONDS  = 15
-IMAGE_TIMEOUT_SECONDS = 20
-MAX_IMAGE_BYTES       = 12 * 1024 * 1024
-MAX_IMAGE_PIXELS      = 40_000_000
-MAX_IMAGE_FRAMES      = 120
-IMAGE_CACHE_LIMITS    = FileCacheLimits(
+DEFAULT_APOD_URL        = "https://science.nasa.gov/apod/"
+DEFAULT_APOD_HOST       = "science.nasa.gov"
+LEGACY_APOD_URL         = "https://apod.nasa.gov/apod/astropix.html"
+NASA_APOD_HOSTS         = frozenset({DEFAULT_APOD_HOST, "assets.science.nasa.gov", "apod.nasa.gov"})
+MAX_DISPLAY_IMAGE_WIDTH = 1600
+HTML_TIMEOUT_SECONDS    = 15
+IMAGE_TIMEOUT_SECONDS   = 20
+MAX_IMAGE_BYTES         = 12 * 1024 * 1024
+MAX_IMAGE_PIXELS        = 40_000_000
+MAX_IMAGE_FRAMES        = 120
+IMAGE_CACHE_LIMITS      = FileCacheLimits(
     max_entries = 90,
     max_bytes   = 128 * 1024 * 1024,
     ttl_seconds = 120 * 24 * 60 * 60,
@@ -87,7 +90,7 @@ def _allowed_hosts(context: PluginContextProtocol) -> set[str]:
     """合并 NASA 默认域名与管理员显式允许的附加域名。"""
 
     configured = _get_config(context).get("allowed_hosts", [])
-    hosts      = {DEFAULT_APOD_HOST}
+    hosts      = set(NASA_APOD_HOSTS)
     if isinstance(configured, Sequence) and not isinstance(configured, (str, bytes, bytearray)):
         hosts.update(
             host.strip().rstrip(".").lower()
@@ -103,7 +106,7 @@ def _allow_transparent_proxy_fake_dns(url: str) -> bool:
     parsed = urlsplit(url)
     return (
         parsed.scheme.casefold() == "https"
-        and (parsed.hostname or "").rstrip(".").casefold() == DEFAULT_APOD_HOST
+        and (parsed.hostname or "").rstrip(".").casefold() in NASA_APOD_HOSTS
     )
 
 
@@ -174,25 +177,60 @@ async def _safe_download_image(
     return target
 
 
+def _content_root(soup: BeautifulSoup | Tag) -> BeautifulSoup | Tag:
+    """定位 NASA Science 的 APOD 主体；旧页面沿用传入范围。"""
+    if "hds-media-detail-hero" in (soup.get("class") or ()):
+        return soup
+    return soup.select_one(".hds-media-detail-hero") or soup
+
+
+def _image_sources(element: Tag) -> list[str]:
+    """优先使用响应式图片中适合聊天展示的最大尺寸。"""
+    responsive: list[tuple[int, str]] = []
+    srcset                            = element.get("srcset")
+    if isinstance(srcset, str):
+        for entry in srcset.split(","):
+            parts = entry.split()
+            if len(parts) == 2 and parts[1].endswith("w") and parts[1][:-1].isdigit():
+                width = int(parts[1][:-1])
+                if 0 < width <= MAX_DISPLAY_IMAGE_WIDTH:
+                    responsive.append((width, parts[0]))
+    sources = [url for _, url in sorted(responsive, reverse=True)]
+    for attribute in ("src", "data-src"):
+        value = element.get(attribute)
+        if isinstance(value, str) and value.strip():
+            sources.append(value.strip())
+    return sources
+
+
 def _find_image_url(
-    soup: BeautifulSoup,
+    soup: BeautifulSoup | Tag,
     base_url: str,
     context: PluginContextProtocol,
     allowed_hosts: set[str],
 ) -> str | None:
     """Select an APOD image candidate without trusting document order."""
 
+    root  = _content_root(soup)
+    media = root.select_one(".media-detail-hero__media")
+    # 新版页面的媒体范围同时排除导航、站点标识和相关新闻图片。
+    scope                 = media if media is not None else root
     candidates: list[str] = []
     preferred: list[str]  = []
-    for element in soup.find_all("img"):
-        raw_src = element.attrs.get("src")
-        if not isinstance(raw_src, str) or not raw_src.strip():
+    for element in scope.find_all("img"):
+        candidate = None
+        for source in _image_sources(element):
+            resolved = urljoin(base_url, source)
+            try:
+                _require_allowed_url(resolved, context, allowed_hosts=allowed_hosts)
+            except UnsafeUrlError:
+                continue
+            candidate = resolved
+            break
+        if candidate is None:
             continue
-        candidate = urljoin(base_url, raw_src.strip())
-        try:
-            _require_allowed_url(candidate, context, allowed_hosts=allowed_hosts)
-        except UnsafeUrlError:
-            continue
+        if media is not None:
+            return candidate
         candidates.append(candidate)
         path_parts = {part.casefold() for part in urlsplit(candidate).path.split("/") if part}
         if "image" in path_parts:
@@ -202,9 +240,14 @@ def _find_image_url(
     return candidates[0] if len(candidates) == 1 else None
 
 
-def _extract_title(soup: BeautifulSoup, context: PluginContextProtocol) -> str:
+def _extract_title(soup: BeautifulSoup | Tag, context: PluginContextProtocol) -> str:
     """按 APOD 页面结构、通用 ``center``、HTML 标题依次提取标题。"""
     try:
+        root = _content_root(soup)
+        if root is not soup or "hds-media-detail-hero" in (root.get("class") or ()):
+            heading = root.find(["h1", "h2"])
+            if heading is not None and heading.get_text(" ", strip=True):
+                return heading.get_text(" ", strip=True)
         # 策略1: 查找第二个 center 标签
         centers = soup.find_all("center")
         if len(centers) > 1 and centers[1].b:
@@ -228,7 +271,7 @@ def _extract_title(soup: BeautifulSoup, context: PluginContextProtocol) -> str:
 
 
 def get_explanation(
-    soup: BeautifulSoup | None,
+    soup: BeautifulSoup | Tag | None,
     context: PluginContextProtocol,
 ) -> str:
     """从页面提取说明，并移除指向次日内容的页脚。"""
@@ -236,13 +279,15 @@ def get_explanation(
         return NO_EXPLANATION_TEXT
 
     try:
-        paragraphs = soup.find_all("p")
+        root        = _content_root(soup)
+        description = root.select_one(".media-detail-hero__description")
+        if description is not None:
+            return _explanation_text(description)
+        paragraphs = root.find_all("p")
         for paragraph in paragraphs:
-            bold = paragraph.find("b")
-            if bold and bold.string and bold.string.strip() == "Explanation:":
-                explanation = str(paragraph.get_text()).strip()
-                # 移除 "Tomorrow's picture:" 之后的内容
-                return explanation.split("Tomorrow's picture:", 1)[0].strip()
+            bold = paragraph.find(["b", "strong"])
+            if bold and bold.get_text(" ", strip=True) == "Explanation:":
+                return _explanation_text(paragraph)
         return NO_EXPLANATION_TEXT
     except (AttributeError, IndexError) as exc:
         public_error_message(
@@ -252,6 +297,36 @@ def get_explanation(
             component = "apod.parse_explanation",
         )
         return EXPLANATION_UNAVAILABLE
+
+
+def _explanation_text(paragraph: Tag) -> str:
+    """整理正文空白并截断 APOD 公告和次日预告。"""
+    explanation = " ".join(paragraph.get_text(" ", strip=True).split())
+    for marker in ("Tomorrow's picture:", "APOD's email", "APOD's main NASA site"):
+        explanation = explanation.split(marker, 1)[0].strip()
+    return explanation or NO_EXPLANATION_TEXT
+
+
+def _page_details(root: BeautifulSoup | Tag, page_url: str) -> str:
+    """从 APOD 元数据表提取日期、署名，并附上实际页面链接。"""
+    details = []
+    for row in root.select(".media-detail-hero__meta-table tr"):
+        label, value = row.find("th"), row.find("td")
+        if label is None or value is None:
+            continue
+        key = label.get_text(" ", strip=True).rstrip(":").casefold()
+        content = value.get_text(" ", strip=True)
+        if content and key == "date":
+            details.append(f"日期: {content}")
+        elif content and key in {
+            "credit",
+            "credit & copyright",
+            "image credit",
+            "image credit & copyright",
+        }:
+            details.append(f"署名: {content}")
+    details.append(f"原网址: {page_url}")
+    return "\n".join(details)
 
 
 def _tag_source(element: Tag | None) -> str | None:
@@ -340,10 +415,31 @@ async def _render_page(
     allowed_hosts: set[str],
     context: PluginContextProtocol,
 ) -> Segments:
-    """按图片、iframe、video 的优先级把已验证页面转换为消息段。"""
+    """按 APOD 主体结构把已验证页面转换为消息段。"""
 
-    title       = _extract_title(soup, context)
-    explanation = get_explanation(soup, context)
+    root = _content_root(soup)
+    if root is soup and soup.find("main") is not None:
+        return segments(f"今天的 APOD 内容格式不支持，请直接访问: {page_url}")
+    title       = _extract_title(root, context)
+    explanation = get_explanation(root, context) + "\n\n" + _page_details(root, page_url)
+    media       = root.select_one(".media-detail-hero__media")
+    if root is not soup and media is None:
+        return segments(f"{title}\n\n{explanation}\n\nAPOD 媒体暂时无法解析")
+    scope = media if media is not None else root
+
+    # 新版媒体区的视频可能包含海报图片，优先返回实际视频链接。
+    if media is not None:
+        for tag_name, renderer in (("iframe", _render_iframe), ("video", _render_video)):
+            element = media.find(tag_name)
+            if isinstance(element, Tag):
+                return renderer(
+                    element,
+                    base_url    = base_url,
+                    page_url    = page_url,
+                    title       = title,
+                    explanation = explanation,
+                    context     = context,
+                )
 
     image_url = _find_image_url(soup, base_url, context, allowed_hosts)
     if image_url is not None:
@@ -355,7 +451,7 @@ async def _render_page(
             context     = context,
         )
 
-    iframe = soup.find("iframe")
+    iframe = scope.find("iframe")
     if isinstance(iframe, Tag):
         return _render_iframe(
             iframe,
@@ -366,7 +462,7 @@ async def _render_page(
             context     = context,
         )
 
-    video = soup.find("video")
+    video = scope.find("video")
     if isinstance(video, Tag):
         return _render_video(
             video,
@@ -413,7 +509,9 @@ async def handle(
         # 配置只决定入口与额外域名；每次重定向仍由 safe_http 重新校验。
         configured_url = _get_config(context).get("url", DEFAULT_APOD_URL)
         url            = configured_url if isinstance(configured_url, str) else DEFAULT_APOD_URL
-        allowed_hosts  = _allowed_hosts(context)
+        if url.rstrip("/") == LEGACY_APOD_URL:
+            url = DEFAULT_APOD_URL
+        allowed_hosts = _allowed_hosts(context)
         page_url = _require_allowed_url(url, context, allowed_hosts=allowed_hosts)
         response = await fetch_public_html(
             page_url,
@@ -427,11 +525,16 @@ async def handle(
             logger.error(error_msg)
             return segments(error_msg)
 
-        soup = await run_sync(BeautifulSoup, response.body, "html.parser")
+        encoding = (
+            {"from_encoding": getattr(response, "charset", None) or "utf-8"}
+            if isinstance(response.body, bytes)
+            else {}
+        )
+        soup = await run_sync(BeautifulSoup, response.body, "html.parser", **encoding)
         return await _render_page(
             soup,
             base_url      = response.url,
-            page_url      = page_url,
+            page_url      = response.url,
             images_dir    = context.data_dir / "images",
             allowed_hosts = allowed_hosts,
             context       = context,
