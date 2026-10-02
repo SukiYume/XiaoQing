@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from tests.helpers.pendo_test_support import (
     ROOT,
     SimpleNamespace,
@@ -461,3 +463,18 @@ class TestPendoRedesignRegression:
             assert [row.id for row in rows] == ["test_collection_node"]
         finally:
             db.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_web_lifecycle_requires_admin(db, monkeypatch):
+    from plugins.pendo.handlers import web
+
+    calls = []
+    server = SimpleNamespace(stop=lambda: calls.append("stop"), is_managed_running=lambda: True)
+    monkeypatch.setattr(web, "web_server", server)
+    monkeypatch.setattr(web, "issue_login_code", lambda: None)
+    monkeypatch.setattr(web, "generate_widget_token", lambda: None)
+    for context in [None, SimpleNamespace(is_global_admin=lambda _uid: False)]:
+        result = await web.WebHandler(db).handle("123", "stop", context)
+        assert result["status"] == "error"
+    assert calls == []

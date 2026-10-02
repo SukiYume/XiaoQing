@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
@@ -163,3 +163,26 @@ def test_undo_delete_reports_ledger_type() -> None:
         "message": "✅ 已恢复账目: 午餐 (ledger-a)",
     }
     db.undo_delete.assert_called_once_with("owner-a", 3)
+
+
+def test_undo_restores_queue_without_replaying_sent_history(db):
+    now = datetime.now(UTC).replace(microsecond=0)
+    times = [(now + timedelta(minutes=m)).isoformat() for m in [1, 5]]
+    iid = db.insert_item(
+        {"owner_id": "u", "type": "task", "title": "restore", "remind_times": times}
+    )
+    db.get_connection().execute(
+        "UPDATE reminder_logs SET sent_at=?, confirmed_at=? WHERE item_id=? AND remind_time=?",
+        (now.isoformat(), now.isoformat(), iid, times[0]),
+    )
+    db.get_connection().commit()
+    db.delete_item(iid, owner_id="u")
+    assert db.undo_delete("u")["status"] == "success"
+    rows = (
+        db.get_connection()
+        .execute("SELECT * FROM reminder_logs WHERE item_id=? ORDER BY remind_time", (iid,))
+        .fetchall()
+    )
+    assert len(rows) == 2
+    assert rows[0]["sent_at"] is not None
+    assert rows[1]["state"] == "pending"

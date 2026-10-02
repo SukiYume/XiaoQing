@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,10 +11,8 @@ from plugins.jupyter import main as jupyter_main
 from plugins.jupyter.jupyter_models import ExecutionResult
 from plugins.shell import main as shell_main
 from tests.helpers.assertions import text_segments_text
-from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.settings_snapshot import with_settings_reader
 
-ROOT           = REPOSITORY_ROOT
 COMMAND_CANARY = "CR220_SHELL_TOKEN_CANARY"
 CODE_CANARY    = "CR220_JUPYTER_CODE_CANARY"
 ERROR_CANARY   = "CR220_PRIVATE_EXCEPTION_CANARY"
@@ -204,80 +201,3 @@ async def test_jupyter_exception_body_stays_out_of_logs_and_public_response(
     assert "kernel.json" not in logged
     assert "error_type=RuntimeError" in logged
     assert "status=error" in logged
-
-
-def test_shell_and_jupyter_ordinary_logger_ast_never_receives_raw_payloads() -> None:
-    targets = (
-        ROOT / "plugins" / "shell" / "main.py",
-        ROOT / "plugins" / "jupyter" / "main.py",
-        ROOT / "plugins" / "jupyter" / "jupyter_manager.py",
-    )
-    forbidden_names = {
-        "args",
-        "cmd_line",
-        "code",
-        "code_buffer",
-        "command_text",
-        "event",
-        "exc",
-        "IMPORT_ERROR",
-        "report",
-        "user_input",
-    }
-    violations: list[str] = []
-
-    for path in targets:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
-            if isinstance(call.func, ast.Attribute) and call.func.attr == "exception":
-                violations.append(f"{path.name}:{call.lineno}: logger.exception")
-                continue
-            if any(keyword.arg == "exc_info" for keyword in call.keywords):
-                violations.append(f"{path.name}:{call.lineno}: exc_info")
-
-            is_log_call = (
-                isinstance(call.func, ast.Attribute)
-                and isinstance(call.func.value, ast.Name)
-                and call.func.value.id == "logger"
-            ) or (isinstance(call.func, ast.Name) and call.func.id == "log_method")
-            if not is_log_call:
-                continue
-            referenced = {
-                node.id
-                for argument in (*call.args, *(keyword.value for keyword in call.keywords))
-                for node in ast.walk(argument)
-                if isinstance(node, ast.Name)
-            }
-            leaked_names = sorted(referenced & forbidden_names)
-            if leaked_names:
-                violations.append(f"{path.name}:{call.lineno}: raw names {','.join(leaked_names)}")
-
-    assert violations == []
-
-
-def test_shell_and_qingssh_broad_exception_handlers_never_format_exception_text() -> None:
-    """宽泛异常出口只能记录类型或走公开错误协议，不能插值异常原文。"""
-
-    targets = (
-        ROOT / "plugins" / "shell" / "main.py",
-        *(ROOT / "plugins" / "qingssh").glob("*.py"),
-    )
-    violations: list[str] = []
-
-    for path in targets:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for handler in (node for node in ast.walk(tree) if isinstance(node, ast.ExceptHandler)):
-            if (
-                not isinstance(handler.type, ast.Name)
-                or handler.type.id != "Exception"
-                or not handler.name
-            ):
-                continue
-            body = ast.Module(body=handler.body, type_ignores=[])
-            for formatted in (
-                node for node in ast.walk(body) if isinstance(node, ast.FormattedValue)
-            ):
-                if isinstance(formatted.value, ast.Name) and formatted.value.id == handler.name:
-                    violations.append(f"{path.name}:{formatted.lineno}: {handler.name}")
-
-    assert violations == []

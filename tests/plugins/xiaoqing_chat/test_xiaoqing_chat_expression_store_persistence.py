@@ -1,4 +1,7 @@
+import asyncio
 import json
+
+import pytest
 
 from plugins.xiaoqing_chat.expression.bw_expression_store import ExpressionRecord, ExpressionStore
 from plugins.xiaoqing_chat.expression.bw_jargon_store import JargonRecord, JargonStore
@@ -296,3 +299,31 @@ def test_message_recorder_uses_one_normalized_chat_key(tmp_path):
     recorder.end(" chat-1 ")
     assert recorder.try_begin("chat-1") is True
     recorder.end("chat-1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["expression", "jargon"])
+async def test_shared_store_interleaved_snapshots_keep_both_chats(tmp_path, kind):
+    store = ExpressionStore() if kind == "expression" else JargonStore()
+    store.bind(tmp_path)
+    loaded = asyncio.Event()
+    saved  = asyncio.Event()
+
+    async def worker(chat):
+        items = store.load()
+        if chat == "gA":
+            loaded.set()
+            await saved.wait()
+        else:
+            await loaded.wait()
+        if kind == "expression":
+            items.append(ExpressionRecord(chat, chat, "s", "t"))
+        else:
+            items[chat] = JargonRecord(chat, scope_chat_id=chat)
+        await asyncio.to_thread(store.save, items)
+        await asyncio.to_thread(store.save, items)
+        if chat == "gB":
+            saved.set()
+
+    await asyncio.gather(worker("gA"), worker("gB"))
+    assert len(store.load()) == 2

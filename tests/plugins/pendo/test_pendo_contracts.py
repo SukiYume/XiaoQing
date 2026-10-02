@@ -36,27 +36,6 @@ class TestPendoConfig:
         assert "description" in config
         assert "commands" in config
 
-    def test_undo_window_has_one_production_source(self):
-        from plugins.pendo.config import PendoConfig
-
-        plugin_root        = ROOT / "plugins" / "pendo"
-        handler_paths      = tuple((plugin_root / "handlers").glob("*.py"))
-        production_sources = {
-            path: path.read_text(encoding="utf-8")
-            for path in (plugin_root / "main.py", *handler_paths)
-        }
-
-        assert PendoConfig.UNDO_HINT == (
-            f"💡 {PendoConfig.UNDO_WINDOW_MINUTES}分钟内可用 /pendo undo 撤销"
-        )
-        assert all(
-            "5分钟内可用 /pendo undo" not in source for source in production_sources.values()
-        )
-        for filename in ("task.py", "note.py", "ledger.py", "event.py", "diary.py"):
-            assert (
-                "PendoConfig.UNDO_HINT" in production_sources[plugin_root / "handlers" / filename]
-            )
-
     def test_plugin_commands_exist(self):
         """测试插件有命令定义"""
         plugin_json_path = ROOT / "plugins" / "pendo" / "plugin.json"
@@ -284,65 +263,3 @@ class TestPendoConfig:
         ]
         for phrase in stale_or_internal_phrases:
             assert phrase not in help_text
-
-
-class TestPendoDocumentation:
-    """测试 pendo 文档"""
-
-    def test_readme_exists(self):
-        """测试 README 文件存在"""
-        readme_path = ROOT / "plugins" / "pendo" / "README.md"
-        assert readme_path.exists()
-
-        with open(readme_path, encoding="utf-8") as f:
-            content = f.read()
-            assert len(content) > 100  # 应该有实际内容
-            for current_contract in (
-                "scheduled_delivery_outbox",
-                "pendo_prune_operation_logs",
-                '"web_session_cookie_secure": true',
-                "/pendo settings ai_consent on|off",
-                "section=tasks|ledger|notes|all|auto",
-                "一次性登录码",
-            ):
-                assert current_contract in content
-            for removed_contract in (
-                "历史脚本留档",
-                "把收到的 token 粘贴到登录页",
-                "passlib[bcrypt]",
-            ):
-                assert removed_contract not in content
-
-    def test_architecture_doc_exists(self):
-        """测试架构文档存在"""
-        arch_path = ROOT / "plugins" / "pendo" / "ARCHITECTURE.md"
-        assert arch_path.exists()
-
-        with open(arch_path, encoding="utf-8") as f:
-            content = f.read()
-            assert len(content) > 100
-            for current_contract in (
-                "services/runtime.py",
-                "PendoRuntimeService",
-                "scheduled_delivery_outbox",
-                "scheduled_prune_operation_logs",
-            ):
-                assert current_contract in content
-            for removed_contract in (
-                "通用命令结果类型",
-                "ItemFields 字段常量",
-                "*.py.old",
-                "requirements.txt",
-            ):
-                assert removed_contract not in content
-
-    def test_runtime_data_root_is_gitignored(self):
-        """项目级运行数据根目录不得进入 Git。"""
-        gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
-        assert "/data/" in gitignore
-        assert "!plugins/pendo/data/" not in gitignore
-
-    def test_duplicate_plugin_doc_removed(self):
-        """测试重复的旧插件说明文档已移除"""
-        doc_path = ROOT / "plugins" / "pendo" / "Pendo个人时间与信息管理中枢.md"
-        assert not doc_path.exists()

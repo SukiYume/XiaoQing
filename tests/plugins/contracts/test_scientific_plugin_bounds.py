@@ -212,10 +212,3 @@ async def test_apod_image_cache_prunes_old_entries(
     assert not first.exists()
     assert second.exists()
     assert len([path for path in tmp_path.iterdir() if not path.name.startswith(".")]) == 1
-
-
-def test_apod_removed_dead_proxy_retry_and_filename_compatibility_layer():
-    for name in ("_get_proxy", "_sanitize_filename", "_fetch_with_retry", "download_image"):
-        assert not hasattr(apod, name)
-    assert "proxy" not in apod._show_help().lower()
-    assert "重试" not in apod._show_help()

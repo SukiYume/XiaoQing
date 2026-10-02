@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
 from typing import Final
 
 from tests.helpers.node_esm import assert_node_esm_contract
@@ -250,3 +252,22 @@ def test_login_exchange_demo_and_download_keep_their_public_contracts() -> None:
         assert.ok(downloadCalls.every((call) => call.headers['x-csrf-token'] === 'csrf-3'));
         """
     )
+
+
+def test_browser_upload_unicode_and_logout_retry(tmp_path):
+    source = Path("plugins/pendo/web/static/js/api.js").read_text(encoding="utf-8")
+    script = tmp_path / "api.mjs"
+    script.write_text(
+        source
+        + "\nimport assert from 'node:assert/strict';\nlet calls=[];\nlet offline=true;\nglobalThis.fetch=async(path, options)=>{\n calls.push(options.headers);\n if(path.endsWith('/session')) return {ok:true,status:200,json:async()=>({ok:true,data:{owner_id:'u',csrf_token:'token'}})};\n if(path.includes('/transfer') || !offline) return {ok:true,status:200,json:async()=>({ok:true})};\n throw new Error('offline');\n};\nawait getSession();\nfor(const filename of ['备份.pendo.zip','📦.zip','a%20b.zip']) {\n await apiUpload('/transfer/inspect',new Uint8Array(),{'X-Transfer-Filename':filename});\n assert.equal(decodeURIComponent(calls.at(-1).get('X-Transfer-Filename')),filename);\n}\nawait assert.rejects(logout());\nawait assert.rejects(logout());\nassert.equal(calls.at(-1).get('X-CSRF-Token'),'token');\noffline=false;\nawait logout();\nawait apiUpload('/transfer/inspect',new Uint8Array());\nassert.equal(calls.at(-1).get('X-CSRF-Token'),null);\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["node", str(script)],
+        capture_output = True,
+        text           = True,
+        encoding       = "utf-8",
+        errors         = "replace",
+        timeout        = 15,
+    )
+    assert result.returncode == 0, result.stderr

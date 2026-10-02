@@ -16,6 +16,7 @@ from plugins.xiaoqing_chat.memory.knowledge_base import (
 )
 from plugins.xiaoqing_chat.memory.memory_db import MemoryDB
 from plugins.xiaoqing_chat.memory.vector_store import VectorDoc, VectorStore
+from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
 
 def _knowledge_snapshot(db: MemoryDB) -> list[tuple[str, str, dict]]:
@@ -485,3 +486,18 @@ def test_runtime_refreshes_when_settings_revision_changes_without_file_mtime_cha
     assert refreshed is not cached_runtime
     load_config.assert_called_once_with(context_config=settings.config, plugin_dir=plugin_dir)
     state.set_runtime.assert_called_once_with(str(plugin_dir), refreshed, -1, 2)
+
+
+def test_local_ids_survive_restarts_and_idle_reset(tmp_path):
+    for index in range(3):
+        state = ChatRuntimeState()
+        state.memory_store.bind_data_dir(tmp_path)
+        number = state.fetch_and_increment_local_id("g1")
+        assert number == index + 1
+        state.memory_store.append(
+            "g1", role="user", name="u", content=str(index), local_id=f"m{number}"
+        )
+        state.memory_store.persist("g1")
+        state.clear_transient_chat_state("g1")
+        assert state.fetch_and_increment_local_id("g1") == index + 2
+    assert len(state.memory_store.get("g1")) == 3

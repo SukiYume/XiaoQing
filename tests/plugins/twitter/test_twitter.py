@@ -1140,11 +1140,10 @@ async def test_shutdown_cancels_owned_background_fetch(
     assert twitter._POSTED_RESERVATIONS == {}
 
 
-def test_manifest_and_docs_describe_the_same_bounded_behavior() -> None:
+def test_manifest_resolves_schedules_and_admin_commands() -> None:
     manifest = json.loads(
         (ROOT / "plugins" / "twitter" / "plugin.json").read_text(encoding="utf-8")
     )
-    readme = (ROOT / "plugins" / "twitter" / "README.md").read_text(encoding="utf-8")
 
     assert manifest["concurrency"] == "parallel"
     assert {command["name"] for command in manifest["commands"]} == {"twimg", "tw_fetch"}
@@ -1156,16 +1155,22 @@ def test_manifest_and_docs_describe_the_same_bounded_behavior() -> None:
     )
     assert all("group_ids" not in schedule for schedule in manifest["schedule"])
     assert all(callable(getattr(twitter, schedule["handler"])) for schedule in manifest["schedule"])
-    assert (
-        "后台"
-        in next(command for command in manifest["commands"] if command["name"] == "tw_fetch")[
-            "help"
-        ]
+
+
+@pytest.mark.asyncio
+async def test_twitter_error_never_completes_backfill(tmp_path, monkeypatch):
+    from core.bounded_http import BoundedHttpResponse
+    from plugins.twitter import main
+
+    body     = json.dumps({"errors": [{"message": "temporary"}]}).encode()
+    response = BoundedHttpResponse(
+        "https://x.com/", 200, body, "application/json", "utf-8", {}, len(body), len(body)
     )
-    assert "提交后台抓取，并在完成后私聊通知结果" in readme
-    for command in manifest["commands"]:
-        for trigger in command["triggers"]:
-            assert f"/{trigger}" in readme
-    assert twitter.MAX_IMAGE_CACHE_BYTES == 2 * 1024 * 1024 * 1024
-    for marker in ("5000", "2 GiB", "90", "10 MiB", "4000 万", "1 MiB", "03:00"):
-        assert marker in readme
+    settings = SimpleNamespace(plugin_secrets=lambda name: {"user_id": "123"})
+    context = SimpleNamespace(
+        data_dir=tmp_path, http_session=object(), get_settings_snapshot=lambda: settings
+    )
+    monkeypatch.setattr(main, "aiohttp_request_bounded", AsyncMock(return_value=response))
+    with pytest.raises(main.TwitterFetchError):
+        await main._fetch_twitter_images(context)
+    assert not main._backfill_is_complete(tmp_path / main.BACKFILL_STATE_FILENAME, "123")

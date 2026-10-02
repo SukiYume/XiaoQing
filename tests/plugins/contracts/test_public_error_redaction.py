@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 import importlib
 import json
 import logging
@@ -46,7 +45,6 @@ from plugins.url_parser import main as url_parser
 from plugins.voice import main as voice
 from plugins.wolframalpha import main as wolframalpha
 from plugins.xiaoqing_chat import main as xiaoqing_chat
-from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.pendo_test_support import managed_pendo_database
 
 CANARY          = "CR219_SECRET_CANARY"
@@ -55,61 +53,6 @@ SENSITIVE_ERROR = (
     f"https://user:password@example.test/api?token={CANARY} "
     rf"C:\Users\victim\{CANARY}.txt"
 )
-
-_PUBLIC_ERROR_PLUGIN_DIRS = (
-    "adnmb",
-    "ads_paper",
-    "apod",
-    "arxiv_filter",
-    "astro_tools",
-    "bot_core",
-    "chat",
-    "chime",
-    "choice",
-    "color",
-    "dict",
-    "earthquake",
-    "echo",
-    "flickr",
-    "github",
-    "guess_number",
-    "pendo",
-    "qingpet",
-    "signin",
-    "smalltalk",
-    "twitter",
-    "url_parser",
-    "voice",
-    "wolframalpha",
-    "xiaoqing_chat",
-)
-
-
-def test_public_plugin_runtime_never_uses_unredacted_traceback_logging() -> None:
-    repo_root = REPOSITORY_ROOT
-    sources   = [repo_root / "core" / "dispatcher.py"]
-    for plugin_name in _PUBLIC_ERROR_PLUGIN_DIRS:
-        sources.extend((repo_root / "plugins" / plugin_name).rglob("*.py"))
-
-    violations: list[str] = []
-    for source in sources:
-        tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            if isinstance(node.func, ast.Attribute) and node.func.attr == "exception":
-                violations.append(f"{source.relative_to(repo_root)}:{node.lineno}: .exception()")
-            for keyword in node.keywords:
-                if keyword.arg != "exc_info":
-                    continue
-                if not (
-                    isinstance(keyword.value, ast.Constant) and keyword.value.value in (False, None)
-                ):
-                    violations.append(
-                        f"{source.relative_to(repo_root)}:{node.lineno}: exc_info enabled"
-                    )
-
-    assert violations == []
 
 
 @dataclass

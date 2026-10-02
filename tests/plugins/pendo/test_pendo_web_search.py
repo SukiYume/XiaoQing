@@ -510,3 +510,23 @@ def test_search_route_adds_event_collection_payload(db: Database) -> None:
 
     assert item["id"] == "col-import_m01"
     assert cast(dict[str, Any], item["collection"])["title"] == "导入会议"
+
+
+def test_collection_search_filters_before_pagination(db):
+    db.create_event_collection(
+        {"owner_id": "u", "kind": "multi_node", "title": "needle"},
+        children=[
+            ("child", {"title": "leaf", "start_time": "2030-01-01T10:00:00+00:00", "tags": ["x"]})
+        ],
+    )
+    for filters in [
+        {
+            "type": "event",
+            "date_field": "start_time",
+            "start_date": "2031-01-01",
+            "end_date": "2031-02-01",
+        },
+        {"type": "event", "tags": "absent"},
+    ]:
+        items, total = db.search_items_page("u", "needle", filters=filters)
+        assert items == [] and total == 0

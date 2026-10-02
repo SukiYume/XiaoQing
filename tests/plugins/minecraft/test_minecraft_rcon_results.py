@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import struct
+from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -682,3 +684,24 @@ async def test_first_response_chunk_can_exceed_cumulative_limit() -> None:
     result                    = await client.command("list")
     assert result.error_kind is RconErrorKind.RESPONSE_LIMIT
     assert writer.closed is True
+
+
+@pytest.mark.asyncio
+async def test_rcon_partial_continuation_discards_connection():
+    from plugins.minecraft.rcon import PacketType, RconClient, RconPacket
+
+    reader = asyncio.StreamReader()
+    writer = SimpleNamespace(
+        is_closing  = lambda: False,
+        write       = lambda data: None,
+        drain       = AsyncMock(),
+        close       = lambda: None,
+        wait_closed = AsyncMock(),
+    )
+    client = RconClient("localhost", 25575, "fake", timeout=0.1)
+    client.RESPONSE_CHUNK_TIMEOUT = 0.01
+    client._reader, client._writer, client._connected = (reader, writer, True)
+    reader.feed_data(RconPacket(1, PacketType.RESPONSE, "a" * 4096).encode())
+    reader.feed_data(RconPacket(1, PacketType.RESPONSE, "tail").encode()[:8])
+    result = await client.command("list")
+    assert not result.success and (not client.connected)

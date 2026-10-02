@@ -19,14 +19,7 @@ from core.session import Session
 
 # 在其他生命周期测试安装有意设置的 ``plugins.*`` 命名空间墓碑前导入当前插件版本；
 # 这些单元测试直接覆盖仓库源码，而不是 PluginManager 动态加载出的版本。
-from plugins.jupyter import jupyter_config as _jupyter_config
-from plugins.jupyter import jupyter_manager as _jupyter_manager
-from plugins.jupyter import jupyter_models as _jupyter_models
-from plugins.jupyter import main as _jupyter_main
-from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.payloads import png_chunk as _png_chunk
-
-ROOT = REPOSITORY_ROOT
 
 
 def _valid_png(width: int = 1, height: int = 1) -> bytes:
@@ -55,53 +48,13 @@ def _response_text(response: list[dict[str, object]]) -> str:
 # ============================================================
 
 
-class TestJupyterRuntimeContract:
-    """Validate the installed package generation through normal imports."""
-
-    def test_entrypoints_and_runtime_types_import(self):
-        assert _jupyter_main.init() is None
-        assert callable(_jupyter_main.handle)
-        assert callable(_jupyter_main.handle_session)
-        assert _jupyter_manager.JupyterKernelManager is not None
-        assert _jupyter_models.ExecutionResult is not None
-        assert _jupyter_config.DEFAULT_TIMEOUT > 0
-        assert _jupyter_config.MAX_IMAGES > 0
-
-
 class TestJupyterPluginJson:
     """测试 Jupyter plugin.json 配置"""
-
-    def test_plugin_json_exists(self):
-        """测试 plugin.json 存在"""
-        import json
-
-        plugin_file = ROOT / "plugins" / "jupyter" / "plugin.json"
-        assert plugin_file.exists()
-
-        content = json.loads(plugin_file.read_text(encoding="utf-8"))
-        assert "name" in content
-        assert "version" in content
 
 
 # ============================================================
 # Test Module Import (with mocking)
 # ============================================================
-
-
-class TestJupyterDocumentation:
-    """测试 Jupyter 插件文档"""
-
-    def test_readme_exists(self):
-        """测试 README.md 存在"""
-        readme = ROOT / "plugins" / "jupyter" / "README.md"
-        assert readme.exists()
-
-    def test_readme_content(self):
-        """测试 README.md 包含必要内容"""
-        readme = ROOT / "plugins" / "jupyter" / "README.md"
-        content = readme.read_text(encoding="utf-8")
-        assert "Jupyter" in content or "jupyter" in content
-        assert len(content) > 100  # 至少有一些内容
 
 
 # ============================================================

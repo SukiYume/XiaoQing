@@ -1,6 +1,9 @@
+import pytest
+
 from plugins.xiaoqing_chat.config.config import PersonalityConfig
-from plugins.xiaoqing_chat.llm.prompt_builder import build_prompt_messages
+from plugins.xiaoqing_chat.llm.prompt_builder import build_dialogue_prompt, build_prompt_messages
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
+from plugins.xiaoqing_chat.reply_generator import _concise_public_identity
 from plugins.xiaoqing_chat.runtime_state import get_state
 
 
@@ -451,3 +454,25 @@ def test_prompt_builder_does_not_duplicate_current_turn_when_history_already_con
     user_prompt = msgs[1].content
     assert user_prompt.count("[图片：海边落日]") == 1
     assert user_prompt.count("你看这个") == 1
+
+
+def test_history_budget_keeps_latest_correction():
+    history = [StoredMessage("user", "u", i + 1, content="old" * 200) for i in range(11)]
+    history.append(StoredMessage("user", "u", 20, content="LATEST_STOP_PLEASE"))
+    prompt = build_dialogue_prompt(history, bot_name="小青", max_chars=250)
+    assert "LATEST_STOP_PLEASE" in prompt
+
+
+@pytest.mark.parametrize(
+    "identity,expected",
+    [
+        (
+            "你是理工科学生。你对天文有兴趣，你也喜欢猫。",
+            "我是理工科学生。我对天文有兴趣，我也喜欢猫",
+        ),
+        ("二十岁左右，是住校学生。你对天文有兴趣。", "二十岁左右，是住校学生。我对天文有兴趣"),
+        ("我的昵称叫迷你青。朋友说你很活泼。", "我的昵称叫迷你青。朋友说你很活泼"),
+    ],
+)
+def test_public_identity_renders_configured_subject_as_first_person(identity, expected):
+    assert _concise_public_identity(identity) == expected

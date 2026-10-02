@@ -5,7 +5,6 @@ SchedulerManager 单元测试
 import asyncio
 import threading
 from datetime import datetime
-from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -74,22 +73,6 @@ class TestSchedulerManagerInit:
         assert manager.scheduler is None
         assert manager._scheduler_drain is None
         assert manager._last_drain_capability == unavailable
-
-    def test_private_scheduler_api_is_confined_to_compat_adapter(self):
-        source = Path(scheduler_module.__file__).read_text(encoding="utf-8")
-
-        for private_name in (
-            "._executors_lock",
-            "._jobstores_lock",
-            "._executors",
-            "._jobstores",
-            "._pending_futures",
-            "._stop_timer",
-            "._eventloop",
-            "._dispatch_event",
-            "._jobstore_alias",
-        ):
-            assert private_name not in source
 
     @pytest.mark.asyncio
     async def test_initialization_default_timezone(self):

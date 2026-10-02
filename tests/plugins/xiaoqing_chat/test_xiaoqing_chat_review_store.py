@@ -12,6 +12,7 @@ from plugins.xiaoqing_chat.memory import review_sessions
 from plugins.xiaoqing_chat.memory.review_sessions import (
     ReviewPolicy,
     ReviewStore,
+    _load_json_document,
     maybe_push_session,
 )
 
@@ -210,3 +211,23 @@ async def test_review_push_distinguishes_rejection_from_unknown_outcome(
     assert pushed is expected_pushed
     assert session.last_push_ts == expected_timestamp
     assert store.get_session(session.session_id).last_push_ts == expected_timestamp
+
+
+@pytest.mark.parametrize("primary", ["[]", "not json", '{"version": 99}'])
+def test_structural_corruption_recovers_valid_backup(tmp_path, primary):
+    path = tmp_path / "policy.json"
+    path.write_text(primary, encoding="utf-8")
+    backup = path.with_suffix(".json.bak")
+    backup.write_text('{"version": 1, "goal": "keep"}', encoding="utf-8")
+    original = backup.read_bytes()
+
+    def normalize(value):
+        if not isinstance(value, dict) or value.get("version") != 1:
+            raise ValueError("invalid schema")
+        return (value, False)
+
+    result = _load_json_document(
+        path, description="test", default_factory=dict, normalize=normalize
+    )
+    assert result["goal"] == "keep"
+    assert path.read_bytes() == backup.read_bytes() == original

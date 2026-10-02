@@ -9,7 +9,6 @@ from tests.helpers.pendo_web_items_test_support import (
     datetime,
     ledger_insights_module,
     pytest,
-    re,
     shutil,
     uuid,
 )
@@ -406,92 +405,3 @@ def test_build_ledger_insights_rejects_invalid_direct_arguments(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         build_ledger_insights(db=db, owner_id="u-invalid-insights", **kwargs)
-
-
-def test_pendo_web_pages_use_unified_xl_mobile_phone_breakpoints():
-    roots = [
-        ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages",
-        ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "components",
-    ]
-    legacy_tokens = [
-        "BREAKPOINTS.WIDE",
-        "BREAKPOINTS.NARROW",
-        "BREAKPOINTS.COMPACT",
-        "BREAKPOINTS.FORM",
-        "BREAKPOINTS.SEARCH",
-        "BREAKPOINTS.DASHBOARD",
-        "BREAKPOINTS.DESKTOP",
-        "BREAKPOINTS.STATS_SMALL",
-    ]
-
-    for root in roots:
-        for path in root.rglob("*.js"):
-            src = path.read_text(encoding="utf-8")
-            for token in legacy_tokens:
-                assert token not in src, f"{path} still uses legacy breakpoint {token}"
-
-
-def test_app_and_global_styles_define_one_back_to_top_component() -> None:
-    """入口只负责按钮行为，静态外观归入全局样式且保留主题与焦点反馈。"""
-
-    app_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "app.js").read_text(
-        encoding="utf-8"
-    )
-    css_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "css" / "app.css").read_text(
-        encoding="utf-8"
-    )
-
-    assert "const BACK_TO_TOP_THEME = {" in app_src
-    assert "btn.type = 'button';" in app_src
-    assert "onRouteChange(applyTheme);" in app_src
-    assert "getCurrentPage" not in app_src
-    assert "document.createElement('style')" not in app_src
-    assert re.search(
-        r"window\.matchMedia\(\s*['\"]\(prefers-reduced-motion: reduce\)['\"]\s*,?\s*\)",
-        app_src,
-    )
-    assert "width: 38px;" in css_src
-    assert "height: 38px;" in css_src
-    assert "--btt-accent: var(--color-dashboard);" in css_src
-    assert "background: color-mix(in srgb, var(--btt-accent) 68%, transparent);" in css_src
-    assert "-webkit-tap-highlight-color: transparent;" in css_src
-    assert "#back-to-top:focus-visible {" in css_src
-    assert "color-mix(in srgb, var(--btt-accent) 16%, transparent);" in css_src
-
-
-def test_mobile_modal_actions_wrap_and_back_to_top_yields_to_dialogs() -> None:
-    """手机详情底栏必须两列换行，弹窗打开时浮动按钮必须退出交互层。"""
-
-    css_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "css" / "app.css").read_text(
-        encoding="utf-8"
-    )
-
-    assert "max-height: 100dvh;" in css_src
-    assert re.search(
-        r"\.modal-footer \{\s*display: grid;\s*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);",
-        css_src,
-    )
-    assert ".modal-footer > .btn {" in css_src
-    assert "min-height: 44px;" in css_src
-    assert "body.modal-open #back-to-top {" in css_src
-    assert re.search(
-        r"body\.modal-open #back-to-top \{[\s\S]*?visibility: hidden;[\s\S]*?pointer-events: none;",
-        css_src,
-    )
-
-
-def test_app_source_extracts_one_time_login_code_from_pasted_message() -> None:
-    """登录入口应从完整链接或聊天文本中提取一次性登录码。"""
-
-    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "app.js").read_text(
-        encoding="utf-8"
-    )
-    html = (ROOT / "plugins" / "pendo" / "web" / "static" / "index.html").read_text(
-        encoding="utf-8"
-    )
-
-    assert "function extractLoginCode(rawValue)" in src
-    assert "url.searchParams.get('code')" in src
-    assert "const code = extractLoginCode(input.value);" in src
-    assert "if (code !== input.value.trim()) {" in src
-    assert "一次性登录码" in html

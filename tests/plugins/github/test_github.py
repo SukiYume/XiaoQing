@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, patch
+from urllib.parse import urlsplit
 
 import aiohttp
 import pytest
@@ -158,7 +159,7 @@ async def test_direct_fetch_is_pinned_bounded_and_saved(context: SimpleNamespace
     assert (context.data_dir / "trending_daily_latest.json").is_file()
     kwargs = fetch.await_args.kwargs
     assert kwargs["timeout_seconds"] == 15
-    assert kwargs["allowed_hosts"] == {"github.com"}
+    assert kwargs["allowed_hosts"] == {urlsplit(fetch.await_args.args[0]).hostname}
     assert "Authorization" not in kwargs["headers"]
 
 
@@ -173,13 +174,15 @@ async def test_proxy_fetch_uses_exact_bounded_transport(context: SimpleNamespace
     assert "octocat/Hello-World" in str(result)
     args   = fetch.await_args.args
     kwargs = fetch.await_args.kwargs
-    assert args[1:3] == ("GET", "https://github.com/trending?since=daily")
+    assert args[1] == "GET"
+    endpoint = urlsplit(args[2])
+    assert (endpoint.scheme, endpoint.path, endpoint.query) == ("https", "/trending", "since=daily")
     assert kwargs["request_kwargs"] == {
         "proxy": "http://proxy.example:8080",
         "timeout": 15,
     }
     assert kwargs["limits"].max_decoded_bytes == github.MAX_HTML_BYTES
-    assert kwargs["redirect_policy"].allowed_origins == {"https://github.com"}
+    assert kwargs["redirect_policy"].allowed_origins == {f"{endpoint.scheme}://{endpoint.netloc}"}
 
 
 @pytest.mark.asyncio

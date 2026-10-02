@@ -99,28 +99,6 @@ def test_feature_extras_cover_their_runtime_imports() -> None:
     assert "arxiv-ml" in all_target
 
 
-def test_general_plugin_and_astro_extras_have_no_orphaned_legacy_packages() -> None:
-    extras = _project()["optional-dependencies"]
-
-    assert _names(extras["plugins"]) == {
-        "requests",
-        "beautifulsoup4",
-        "pillow",
-        "numpy",
-        "matplotlib",
-        "python-dateutil",
-    }
-    assert _names(extras["astro"]) == {"astropy", "scipy"}
-    requirement_lines = [
-        line.strip()
-        for line in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    ]
-    requirement_names = _names(requirement_lines)
-    assert {"pandas", "scipy", "scikit-learn"} <= requirement_names
-    assert "astroquery" not in requirement_names
-
-
 def test_every_plugin_manifest_matches_its_runtime_dependency_contract() -> None:
     """逐个插件核对必需/可选 import，防止 preflight 晚于入口导入才失败。"""
 

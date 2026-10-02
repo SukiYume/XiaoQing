@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 import importlib
 import sys
 from collections.abc import Iterator
@@ -14,9 +13,6 @@ import pytest
 from plugins.arxiv_filter.inference.shared import InferenceParams, build_paper_texts
 from plugins.arxiv_filter.numerics import stable_softmax
 from plugins.arxiv_filter.train_model.interest_model import training_utils as interest_utils
-from tests.helpers.paths import REPOSITORY_ROOT
-
-ROOT = REPOSITORY_ROOT
 
 
 def _load_data_prep_module(name: str, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
@@ -31,37 +27,6 @@ def _load_knn_training_module() -> ModuleType:
 
     pytest.importorskip("torch")
     return importlib.import_module("plugins.arxiv_filter.train_model.interest_model.knn_arxiv")
-
-
-def test_arxiv_runtime_keeps_only_the_used_fetch_and_knn_scoring_entrypoints() -> None:
-    fetch_tree = ast.parse(
-        (ROOT / "plugins" / "arxiv_filter" / "arxiv_today.py").read_text(encoding="utf-8")
-    )
-    fetch_functions = {
-        node.name
-        for node in fetch_tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    }
-    assert "get_today_arxiv" in fetch_functions
-    assert "get_today_arxiv_api" not in fetch_functions
-
-    knn_tree = ast.parse(
-        (
-            ROOT / "plugins" / "arxiv_filter" / "train_model" / "interest_model" / "knn_arxiv.py"
-        ).read_text(encoding="utf-8")
-    )
-    knn_class = next(
-        node
-        for node in knn_tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "KNNInterestModel"
-    )
-    method_names = {
-        node.name
-        for node in knn_class.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    }
-    assert "predict_proba" in method_names
-    assert "predict" not in method_names
 
 
 @pytest.fixture

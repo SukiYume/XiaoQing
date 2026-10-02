@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import tests.helpers.pendo_web_transfer_test_support as _fixture_support
+from plugins.pendo.web.api.transfer import ExportSelection, _build_bundle_bytes
+from plugins.pendo.web.services.bundle_import import inspect_bundle_bytes
 from tests.helpers.pendo_web_transfer_test_support import (
     OWNER_ID,
     Any,
@@ -958,3 +960,21 @@ def test_export_preview_accepts_supported_presets(
     body = response.json()
     assert body["ok"] is True
     assert body["data"]["selection"]["preset"] == preset
+
+
+def test_bundle_unicode_and_large_export_round_trip():
+    records = [
+        {
+            "_type": "note",
+            "_schema": 2,
+            "id": str(i),
+            "title": "n",
+            "content": "a\u2028b\u2029c\x85d",
+        }
+        for i in range(20001)
+    ]
+    payload = _build_bundle_bytes({"note": records}, ExportSelection(types=["note"]), None, None)
+    _parsed, imported, errors = inspect_bundle_bytes(payload)
+    assert errors == []
+    assert len(imported) == 20001
+    assert all(record["content"] == "a\u2028b\u2029c\x85d" for record in imported)

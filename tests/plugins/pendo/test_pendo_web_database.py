@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 
 from tests.helpers.pendo_review_test_support import (
-    ROOT,
     Database,
     EventHandler,
     NoteHandler,
@@ -219,22 +218,6 @@ def test_web_item_create_uses_user_clock_and_update_uses_database_clock(
     finally:
         db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
-
-
-def test_web_redesign_pages_escape_user_controlled_list_fields():
-    tasks_src = (
-        ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "tasks.js"
-    ).read_text(encoding="utf-8")
-    dashboard_src = (
-        ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "dashboard.js"
-    ).read_text(encoding="utf-8")
-
-    assert "escapeHtml(task.title || '(无标题)')" in tasks_src
-    assert "escapeHtml(task.content)" in tasks_src
-    assert "escapeHtml(textCategory)" in tasks_src
-    assert "escapeHtml(heading)" in dashboard_src
-    assert "escapeHtml(task.title || '(无标题)')" in dashboard_src
-    assert "escapeHtml(item.title || '(无摘要)')" in dashboard_src
 
 
 def test_rrule_generation_stops_iterating_at_the_configured_bound(

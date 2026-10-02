@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 from datetime import UTC
+from pathlib import Path
 
+import pytest
+
+from plugins.pendo.services.db import Database
+from plugins.pendo.services.exporter import ExporterService
+from plugins.pendo.web.api.items import aggregate_items, list_items
 from tests.helpers.pendo_test_support import (
     ROOT,
     SimpleNamespace,
@@ -298,3 +304,77 @@ class TestPendoFinanceSummaries:
 
         assert result is False
         assert messages == []
+
+
+def test_currency_aggregation_keeps_independent_totals(tmp_path):
+    db = Database(str(tmp_path / "currency.db"))
+    try:
+        for code in ("CNY", "USD"):
+            db.insert_item(
+                {
+                    "owner_id": "review",
+                    "type": "ledger",
+                    "title": code,
+                    "amount": 100,
+                    "currency": code,
+                    "transaction_type": "expense",
+                    "ledger_date": "2030-01-01",
+                }
+            )
+        data = aggregate_items(owner_id="review", db=db)["data"]
+        assert data["expense"] == 100
+        assert data["by_currency"]["CNY"]["expense"] == 100
+        assert data["by_currency"]["USD"]["expense"] == 100
+        assert aggregate_items(owner_id="review", db=db, currency="usd")["data"]["expense"] == 100
+        page = list_items(type="ledger", currency="USD", owner_id="review", db=db)["data"]
+        assert page["total"] == 1
+        assert page["items"][0]["currency"] == "USD"
+        assert db.aggregate_ledger_amounts_by_day("review", {"type": "ledger"}, currency="USD")[
+            "2030-01-01"
+        ] == (10000, 0)
+    finally:
+        db.close_all_connections()
+
+
+@pytest.mark.asyncio
+async def test_currency_statistics_keep_independent_amounts(db, tmp_path):
+    from plugins.pendo.commands.scheduled import (
+        _FinancePeriod,
+        _format_finance_summary,
+        _summarize_finance_items,
+    )
+    from plugins.pendo.handlers.ledger import LedgerHandler
+
+    for code in ["CNY", "USD"]:
+        db.insert_item(
+            {
+                "owner_id": "u",
+                "type": "ledger",
+                "title": code,
+                "currency": code,
+                "amount_cents": 10000,
+                "transaction_type": "expense",
+                "ledger_date": "2030-01-01",
+                "ledger_category": "餐饮",
+            }
+        )
+    items   = db.get_items("u")
+    metrics = _summarize_finance_items(items)
+    assert metrics.total_expense == 0
+    assert {code: value.total_expense for code, value in metrics.by_currency.items()} == {
+        "CNY": 100,
+        "USD": 100,
+    }
+    period = _FinancePeriod("2030-01", "2030-01-01", "2030-01-31", "January", "Report")
+    report = _format_finance_summary(metrics, period)
+    assert "¥100.00" in report and "USD 100.00" in report and ("200.00" not in report)
+    handler = LedgerHandler(db)
+    for result in [
+        await handler.summary("u", "2030-01", None),
+        await handler.list_ledger("u", "2030-01 all", None),
+    ]:
+        assert result["status"] == "success"
+        assert "¥100.00" in result["message"] and "USD 100.00" in result["message"]
+        assert "200.00" not in result["message"]
+    result = ExporterService(db, tmp_path).export_markdown("u", "ledger 2030-01 ledger", {})
+    assert "USD 100.00" in Path(result["file_path"]).read_text(encoding="utf-8")

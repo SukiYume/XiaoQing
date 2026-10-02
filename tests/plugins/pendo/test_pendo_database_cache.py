@@ -1,5 +1,7 @@
 """Pendo 缓存行为回归测试。"""
 
+from threading import Event, Thread
+
 import pytest
 
 
@@ -69,3 +71,76 @@ class TestUpdateItemCacheInvalidation:
         items = db.get_items("user1", {"type": "note"}, 100)
         assert len(items) == 1
         assert items[0].title == "新标题"
+
+
+@pytest.mark.parametrize("kind", ["item", "items", "settings", "event_collection"])
+def test_cache_rejects_concurrent_old_snapshot(db, monkeypatch, kind):
+    iid = db.insert_item({"owner_id": "u", "type": "note", "title": "before"})
+    if kind == "event_collection":
+        cid = db.create_event_collection(
+            {"owner_id": "u", "kind": "multi_node", "title": "before"},
+            children=[("child", {"title": "child", "start_time": "2030-01-01T10:00:00+00:00"})],
+        )
+
+        def read():
+            return db.get_event_collection(cid, "u")
+
+        def write():
+            return db.update_event_collection(cid, {"title": "after"}, "u")
+
+        def value(row):
+            return row["title"]
+    elif kind == "settings":
+        db.update_user_settings("u", {"timezone": "Asia/Shanghai"})
+
+        def read():
+            return db.get_user_settings("u")
+
+        def write():
+            return db.update_user_settings("u", {"timezone": "America/Los_Angeles"})
+
+        def value(row):
+            return row["timezone"]
+    elif kind == "items":
+
+        def read():
+            return db.get_items("u")
+
+        def write():
+            return db.update_item(iid, {"title": "after"}, "u")
+
+        def value(rows):
+            return rows[0].title
+    else:
+
+        def read():
+            return db.get_item(iid, "u")
+
+        def write():
+            return db.update_item(iid, {"title": "after"}, "u")
+
+        def value(row):
+            return row.title
+
+    db.cache_clear()
+    fetched, release = (Event(), Event())
+    original = db._cache_set
+
+    def delayed(key, data):
+        from threading import current_thread
+
+        if key.startswith(kind + "|") and current_thread().name == "old-reader":
+            fetched.set()
+            assert release.wait(5)
+        original(key, data)
+
+    monkeypatch.setattr(db, "_cache_set", delayed)
+    thread = Thread(target=read, name="old-reader")
+    thread.start()
+    try:
+        assert fetched.wait(5)
+        write()
+    finally:
+        release.set()
+        thread.join(5)
+    assert value(read()) == ("America/Los_Angeles" if kind == "settings" else "after")

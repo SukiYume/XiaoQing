@@ -12,7 +12,18 @@ from tests.helpers.pendo_leak_guard import (
     enforce_pendo_database_cleanup,
     pendo_test_origin,
 )
-from tests.helpers.pendo_test_support import managed_pendo_database
+from tests.helpers.pendo_test_support import managed_pendo_database, reset_pendo_runtime_config
+
+
+@pytest.fixture(autouse=True)
+def isolate_pendo_runtime_settings():
+    """每个用例使用独立配置代际，关闭时复位 Cookie 与 Web 设置。"""
+
+    reset_pendo_runtime_config()
+    try:
+        yield
+    finally:
+        reset_pendo_runtime_config()
 
 
 @pytest.fixture(name="db")
