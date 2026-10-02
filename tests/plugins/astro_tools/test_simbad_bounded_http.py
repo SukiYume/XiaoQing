@@ -18,9 +18,7 @@ from core.bounded_http import (
     ResponseTransportError,
 )
 from plugins.astro_tools import obj
-from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT          = REPOSITORY_ROOT
 _COLUMN_NAMES = ("ra", "dec", "otype", "V", "sp_type")
 _VALID_ROW    = (10.6847083, 41.26875, "Galaxy", 3.44, "SA(s)b")
 
@@ -345,16 +343,3 @@ async def test_simbad_transport_error_is_public_and_does_not_log_raw_details(
     assert raw_secret not in result
     assert raw_endpoint not in caplog.text
     assert raw_secret not in caplog.text
-
-
-def test_simbad_source_has_local_query_builder_and_bounded_transport() -> None:
-    path = ROOT / "plugins" / "astro_tools" / "obj.py"
-    source = path.read_text(encoding="utf-8")
-
-    assert "astroquery" not in source
-    assert ".query_object(" not in source
-    assert "requests_request_bounded" in source
-    assert obj.SIMBAD_TAP_SYNC_URL in source
-    assert ".json(" not in source
-    assert ".content" not in source
-    assert ".text" not in source

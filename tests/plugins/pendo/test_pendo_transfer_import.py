@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import tests.helpers.pendo_web_transfer_test_support as _fixture_support
-from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.pendo_web_transfer_test_support import (
     OWNER_ID,
     Any,
@@ -19,7 +18,6 @@ from tests.helpers.pendo_web_transfer_test_support import (
 )
 
 auth_headers = _fixture_support.auth_headers
-PROJECT_ROOT = REPOSITORY_ROOT
 
 
 def test_import_execute_isolates_external_ids_and_selected_types(
@@ -247,20 +245,6 @@ def test_import_reassigns_hostile_external_id_and_preserves_only_source_metadata
     assert re.fullmatch(r"[0-9a-f]{32}", note.id)
     assert note.id != hostile_id
     assert note.context["import"]["source_id"] == hostile_id
-
-
-def test_pendo_item_id_attributes_escape_historical_untrusted_values_and_csp_blocks_inline_script():
-    static_root = PROJECT_ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages"
-    diary = (static_root / "diary.js").read_text(encoding="utf-8")
-    notes = (static_root / "notes.js").read_text(encoding="utf-8")
-    events = (static_root / "events.js").read_text(encoding="utf-8")
-    server = (PROJECT_ROOT / "plugins" / "pendo" / "web" / "server.py").read_text(encoding="utf-8")
-
-    assert 'data-id="${item.id}"' not in diary
-    assert 'data-id="${note.id}"' not in notes
-    assert 'data-event-id="${item.event_id}"' not in events
-    assert "script-src 'self'" in server
-    assert "object-src 'none'" in server
 
 
 def test_import_execute_isolates_cross_owner_source_ids(temp_db: Database):

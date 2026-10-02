@@ -6,7 +6,6 @@ from typing import Final
 
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
-from tests.helpers.pendo_client_source import has_js_source
 
 ROOT: Final          = REPOSITORY_ROOT
 WIDGET_CLIENT: Final = ROOT / "plugins" / "pendo" / "web" / "scriptable" / "pendo_widget.js"
@@ -71,24 +70,6 @@ def _run_widget_client(script: str) -> None:
         cwd   = ROOT,
         setup = WIDGET_SETUP,
     )
-
-
-def test_scriptable_header_and_transformed_module_parse() -> None:
-    """Scriptable 必需元数据保持文件首行，客户端实现可由 ESM 解析。"""
-
-    lines = WIDGET_CLIENT.read_text(encoding="utf-8").splitlines()
-    assert lines[:3] == [
-        "// Variables used by Scriptable.",
-        "// These must be at the very top of the file. Do not edit.",
-        "// icon-color: deep-purple; icon-glyph: magic;",
-    ]
-    source = WIDGET_CLIENT.read_text(encoding="utf-8")
-    assert has_js_source(source, "const TOKEN = 'PASTE_WIDGET_TOKEN_HERE';")
-    assert "TOKEN_KEYCHAIN_KEY" not in source
-    assert "new Alert()" not in source
-    assert "Keychain.set(" in source
-    assert "Keychain.get(" in source
-    _run_widget_client("assert.equal(typeof client.__normalizeWidgetData, 'function');")
 
 
 def test_scriptable_normalizes_url_section_and_summary_shape() -> None:

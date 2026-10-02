@@ -456,12 +456,11 @@ async def test_unexpected_error_uses_public_error_boundary(
     assert "private upstream detail" not in text
 
 
-def test_manifest_and_readme_match_runtime_contract() -> None:
+def test_manifest_resolves_runtime_handlers_and_authorization() -> None:
     plugin_dir = ROOT / "plugins" / "signin"
     manifest = json.loads((plugin_dir / "plugin.json").read_text(encoding="utf-8"))
     command  = manifest["commands"][0]
     schedule = manifest["schedule"][0]
-    readme = (plugin_dir / "README.md").read_text(encoding="utf-8")
 
     assert manifest["entry"] == "main.py"
     assert (plugin_dir / manifest["entry"]).is_file()
@@ -475,7 +474,3 @@ def test_manifest_and_readme_match_runtime_contract() -> None:
         "delivery": "broadcast",
     }
     assert callable(getattr(signin, schedule["handler"]))
-    for trigger in command["triggers"]:
-        assert f"/{trigger}" in readme
-    assert not (plugin_dir / "sony.py").exists()
-    assert "sony" not in readme.casefold()

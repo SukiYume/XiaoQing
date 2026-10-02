@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from fastapi import HTTPException
+
+from plugins.pendo.web.api.items import ItemUpdate, update_item
 from tests.helpers.pendo_ledger_assertions import assert_cny_aggregate
 from tests.helpers.pendo_web_items_test_support import (
     ROOT,
@@ -838,3 +841,38 @@ def test_items_list_keyword_matches_extended_fields_and_total_count():
     finally:
         db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+@pytest.mark.parametrize("kind", ["task", "event"])
+@pytest.mark.parametrize("times", [[], ["2030-01-01T09:30:00+00:00"]])
+def test_explicit_reminders_replace_rules(db, kind, times):
+    clock = "deadline_at" if kind == "task" else "start_time"
+    iid   = db.insert_item(
+        {
+            "owner_id": "u",
+            "type": kind,
+            "title": "reminder",
+            clock: "2030-01-01T10:00:00+00:00",
+            "reminder_rules": [{"offset_seconds": 3600}],
+        }
+    )
+    update_item(iid, ItemUpdate(remind_times=times), "u", db)
+    item = db.get_item(iid, "u")
+    assert all(t in item.remind_times for t in times)
+    assert "2030-01-01T09:00:00+00:00" not in item.remind_times
+    if not times:
+        assert item.remind_times == item.reminder_rules == []
+
+
+def test_stale_full_editor_requires_version(db):
+    iid = db.insert_item({"owner_id": "u", "type": "note", "title": "old", "content": "old"})
+    old = db.get_item(iid, "u").version
+    update_item(iid, ItemUpdate(title="new", content="new", version=old), "u", db)
+    for body, status in [
+        (ItemUpdate(title="stale", content="old"), 422),
+        (ItemUpdate(title="stale", content="old", version=old), 409),
+    ]:
+        with pytest.raises(HTTPException) as exc:
+            update_item(iid, body, "u", db)
+        assert exc.value.status_code == status
+    assert db.get_item(iid, "u").content == "new"

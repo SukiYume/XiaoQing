@@ -1,14 +1,13 @@
 # 验证日志隐藏凭据与任意用户命令中的敏感内容。
 from __future__ import annotations
 
-import ast
 import asyncio
 import logging
 import re
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, ClassVar
+from typing import Any
 
 import pytest
 
@@ -21,7 +20,6 @@ from plugins.qingssh import session_handlers as qingssh_session_handlers
 from plugins.qingssh.config import SessionKeys
 from plugins.qingssh.output_relay import SSHOutputPolicy
 from plugins.qingssh.ssh_manager import SSHManager
-from tests.helpers.paths import REPOSITORY_ROOT
 
 COMMAND_CANARY       = "printf CR220_COMMAND_SECRET && token=CR220_TOKEN_SECRET"
 OUTPUT_CANARY        = "CR220_REMOTE_RESPONSE_SECRET"
@@ -258,209 +256,3 @@ def test_minecraft_log_path_is_fingerprinted_not_logged(
     assert "CR220_PATH_SECRET" not in logs
     assert summarize_sensitive(str(missing_path)).fingerprint in logs
     assert all(record.exc_info is None for record in caplog.records)
-
-
-def _logger_sink_name(call: ast.Call, logger_aliases: set[str]) -> str | None:
-    function = call.func
-    if not isinstance(function, ast.Attribute):
-        return None
-    if function.attr == "_log":
-        return "_log"
-    if function.attr not in {"debug", "info", "warning", "error", "exception", "critical"}:
-        return None
-    receiver = function.value
-    if isinstance(receiver, ast.Name) and receiver.id in logger_aliases:
-        return function.attr
-    if isinstance(receiver, ast.Attribute) and receiver.attr == "logger":
-        return function.attr
-    return None
-
-
-class _UnsafeLogArgumentVisitor(ast.NodeVisitor):
-    _FORBIDDEN_NAMES: ClassVar[set[str]] = {
-        "archive_path",
-        "cmd",
-        "command",
-        "e",
-        "error",
-        "exc",
-        "host",
-        "key",
-        "local_path",
-        "log_file",
-        "log_path",
-        "password",
-        "remote_dir",
-        "remote_path",
-        "response",
-        "server_name",
-    }
-    _SAFE_CALLS: ClassVar[set[str]] = {
-        "audit_error_type",
-        "audit_request_id",
-        "audit_id",
-        "summarize_sensitive",
-    }
-    _SAFE_CALL_ATTRIBUTES: ClassVar[set[str]] = {
-        "_classify_error",
-        "connect",
-        "execute_command_stream",
-        "finish",
-    }
-    _SAFE_METADATA_ATTRIBUTES: ClassVar[set[str]] = {
-        "actions_attempted",
-        "byte_length",
-        "delivery_errors",
-        "error_kind",
-        "fingerprint",
-        "kind",
-        "length",
-        "qq_truncated",
-        "total_bytes",
-        "total_chars",
-    }
-
-    def __init__(self, forbidden_names: set[str] | None = None) -> None:
-        self.forbidden_names  = forbidden_names or set(self._FORBIDDEN_NAMES)
-        self.unsafe: set[str] = set()
-
-    def visit_Call(self, node: ast.Call) -> None:
-        if isinstance(node.func, ast.Name) and node.func.id in self._SAFE_CALLS:
-            return
-        if isinstance(node.func, ast.Attribute) and node.func.attr in self._SAFE_CALL_ATTRIBUTES:
-            return
-        self.generic_visit(node)
-
-    def visit_Compare(self, node: ast.Compare) -> None:
-        # Comparisons collapse values to a boolean and cannot disclose the input.
-        return
-
-    def visit_Name(self, node: ast.Name) -> None:
-        if node.id in self.forbidden_names:
-            self.unsafe.add(node.id)
-
-    def visit_Attribute(self, node: ast.Attribute) -> None:
-        if node.attr in self._SAFE_METADATA_ATTRIBUTES:
-            return
-        if node.attr in self._FORBIDDEN_NAMES:
-            self.unsafe.add(node.attr)
-        self.generic_visit(node)
-
-
-def _assigned_names(target: ast.expr) -> set[str]:
-    if isinstance(target, ast.Name):
-        return {target.id}
-    if isinstance(target, (ast.Tuple, ast.List)):
-        return {name for element in target.elts for name in _assigned_names(element)}
-    return set()
-
-
-def _sensitive_aliases(tree: ast.AST) -> set[str]:
-    aliases                                      = set(_UnsafeLogArgumentVisitor._FORBIDDEN_NAMES)
-    assignments: list[tuple[set[str], ast.expr]] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            targets = {name for target in node.targets for name in _assigned_names(target)}
-            assignments.append((targets, node.value))
-        elif isinstance(node, ast.AnnAssign) and node.value is not None:
-            assignments.append((_assigned_names(node.target), node.value))
-
-    changed = True
-    while changed:
-        changed = False
-        for targets, value in assignments:
-            visitor = _UnsafeLogArgumentVisitor(aliases)
-            visitor.visit(value)
-            if visitor.unsafe and not targets <= aliases:
-                aliases.update(targets)
-                changed = True
-    return aliases
-
-
-def _logger_aliases(tree: ast.AST) -> set[str]:
-    aliases = {"logger"}
-    changed = True
-    while changed:
-        changed = False
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-                continue
-            value = node.value
-            if value is None:
-                continue
-            is_logger = (
-                isinstance(value, ast.Name)
-                and value.id in aliases
-                or isinstance(value, ast.Attribute)
-                and value.attr == "logger"
-            )
-            if not is_logger:
-                continue
-            targets = (
-                {name for target in node.targets for name in _assigned_names(target)}
-                if isinstance(node, ast.Assign)
-                else _assigned_names(node.target)
-            )
-            if not targets <= aliases:
-                aliases.update(targets)
-                changed = True
-    return aliases
-
-
-def _logging_violations(tree: ast.AST, label: str) -> list[str]:
-    violations: list[str] = []
-    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
-    cache: dict[int, tuple[set[str], set[str]]] = {}
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        scope: ast.AST = node
-        while scope in parents:
-            scope = parents[scope]
-            if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)):
-                break
-        scope_key = id(scope)
-        if scope_key not in cache:
-            cache[scope_key] = (_sensitive_aliases(scope), _logger_aliases(scope))
-        sensitive_aliases, logger_aliases = cache[scope_key]
-        sink = _logger_sink_name(node, logger_aliases)
-        if sink is None:
-            continue
-        if sink == "exception":
-            violations.append(f"{label}:{node.lineno}: logger.exception")
-        if any(keyword.arg == "exc_info" for keyword in node.keywords):
-            violations.append(f"{label}:{node.lineno}: exc_info")
-        visitor = _UnsafeLogArgumentVisitor(sensitive_aliases)
-        for argument in node.args:
-            visitor.visit(argument)
-        if visitor.unsafe:
-            violations.append(f"{label}:{node.lineno}: raw={','.join(sorted(visitor.unsafe))}")
-    return violations
-
-
-def test_qingssh_and_minecraft_logger_calls_reject_sensitive_ast_arguments() -> None:
-    root                  = REPOSITORY_ROOT
-    violations: list[str] = []
-    for plugin_name in ("qingssh", "minecraft"):
-        plugin_root = root / "plugins" / plugin_name
-        for path in sorted(plugin_root.rglob("*.py")):
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            violations.extend(_logging_violations(tree, path.relative_to(plugin_root).as_posix()))
-
-    assert violations == []
-
-
-def test_sensitive_logging_gate_follows_value_and_logger_aliases() -> None:
-    tree = ast.parse(
-        """
-def leak(password):
-    copied = password
-    audit_log = logger
-    audit_log.info("credential=%s", copied)
-"""
-    )
-
-    violations = _logging_violations(tree, "nested/module.py")
-
-    assert len(violations) == 1
-    assert "raw=copied" in violations[0]

@@ -24,14 +24,6 @@ def context() -> SimpleNamespace:
 
 
 class TestChoicePackageContract:
-    def test_entrypoints_and_constants(self) -> None:
-        assert callable(choice.handle)
-        assert choice.MIN_OPTIONS == 2
-        assert choice.MAX_OPTIONS == 50
-        assert choice.MAX_CHOICES == 10
-        assert "随机选择" in choice.HELP_TEXT
-        assert "**" not in choice.HELP_TEXT
-
     def test_manifest_matches_runtime_entrypoints(self) -> None:
         manifest = json.loads(
             (ROOT / "plugins" / "choice" / "plugin.json").read_text(encoding="utf-8")

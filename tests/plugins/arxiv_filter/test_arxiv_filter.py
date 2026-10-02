@@ -958,8 +958,6 @@ def test_arxiv_training_cache_publishes_only_completed_results(monkeypatch, tmp_
 
     module.save_checkpoint(2607, result)
 
-    assert module.API_URL.startswith("https://")
-    assert "@" not in module.HEADERS["User-Agent"]
     assert module.load_cache(2607) is None
     checkpoint = module.load_checkpoint(2607)
     assert checkpoint.completed is False

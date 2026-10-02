@@ -159,6 +159,7 @@ def main() -> int:
                 ROOT / name.decode("utf-8")
                 for name in tracked.split(b"\0")
                 if Path(name.decode("utf-8")).suffix in SOURCE_SUFFIXES
+                and (ROOT / name.decode("utf-8")).is_file()
             }
         )
 

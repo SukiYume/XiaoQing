@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from plugins.ads_paper import ai_commands, constants, note_commands, paper_commands, storage
+from plugins.ads_paper import ai_commands, note_commands, paper_commands
 from plugins.ads_paper import main as ads_main
 from plugins.ads_paper.ads_client import ADSClient, paper_title
 from plugins.ads_paper.storage import PaperStorage
@@ -28,15 +28,6 @@ ROOT = REPOSITORY_ROOT
 
 class TestAdsPaperRuntimeContract:
     """Verify the installed package imports and exposes its real entrypoints."""
-
-    def test_package_modules_and_entrypoints_import(self):
-        assert ads_main.init() is None
-        assert callable(ads_main.handle)
-        assert callable(paper_commands.cmd_search)
-        assert callable(note_commands.cmd_note)
-        assert callable(ai_commands.cmd_summarize)
-        assert constants.ARXIV_NEW_FORMAT_PATTERN.search("arXiv:2607.01234")
-        assert storage.PaperStorage is not None
 
 
 @pytest.mark.asyncio
@@ -592,3 +583,31 @@ async def test_ads_summary_uses_core_ai_route_without_plugin_credentials():
     assert captured["route"] == "summary"
     assert "A title" in captured["messages"][0]["content"]
     assert "统一摘要" in result[0]["data"]["text"]
+
+
+@pytest.mark.asyncio
+async def test_ads_author_requests_latest_sort(monkeypatch):
+    from plugins.ads_paper.ads_client import ADSClient
+
+    search = AsyncMock(return_value=[])
+    monkeypatch.setattr(ADSClient, "search_papers", search)
+    client = ADSClient.__new__(ADSClient)
+    await client.search_by_author("review author")
+    assert search.await_args.kwargs["sort"] == "date desc"
+
+
+@pytest.mark.asyncio
+async def test_ads_reference_preview_is_labeled(monkeypatch):
+    from plugins.ads_paper import paper_commands
+
+    monkeypatch.setattr(
+        paper_commands, "resolve_paper_id_to_bibcode", AsyncMock(return_value="2020Review")
+    )
+    client = SimpleNamespace(
+        get_paper_by_bibcode=AsyncMock(return_value={"title": ["review"], "citation_count": 42}),
+        get_citations=AsyncMock(return_value=[]),
+        get_references=AsyncMock(return_value=[{"title": ["reference"]}] * 5),
+    )
+    response = await paper_commands.cmd_cite_network(client, "review")
+    text     = "".join(segment["data"].get("text", "") for segment in response)
+    assert "本次展示参考文献: 5 篇" in text

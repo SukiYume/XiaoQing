@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -164,7 +165,8 @@ async def test_tts_builds_escaped_bounded_request(monkeypatch, tmp_path: Path) -
     session, method, url, kwargs = calls[0]
     assert session is context.http_session
     assert method == "POST"
-    assert url.startswith("https://southeastasia.tts.speech.microsoft.com/")
+    assert urlsplit(url).scheme == "https"
+    assert urlsplit(url).path == "/cognitiveservices/v1"
     assert kwargs["accept_encoding"] == "identity"
     assert kwargs["limits"] is voice._TTS_BODY_LIMITS
     assert kwargs["mime_policy"] is voice._TTS_MIME

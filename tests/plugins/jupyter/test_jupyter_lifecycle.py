@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -430,3 +431,31 @@ async def test_kernel_shutdown_command_does_not_claim_success_when_unconfirmed(
     text = response[0]["data"]["text"]
     assert "无法确认" in text
     assert "内核已关闭" not in text
+
+
+@pytest.mark.asyncio
+async def test_jupyter_status_keeps_loop_responsive(tmp_path, monkeypatch):
+    from plugins.jupyter import main
+    from plugins.jupyter.jupyter_manager import JupyterKernelManager
+
+    manager = JupyterKernelManager(tmp_path)
+    acquired, release = (threading.Event(), threading.Event())
+
+    def hold():
+        with manager._lifecycle_lock:
+            acquired.set()
+            release.wait(3)
+
+    thread = threading.Thread(target=hold)
+    thread.start()
+    assert await asyncio.to_thread(acquired.wait, 3)
+    monkeypatch.setattr(JupyterKernelManager, "get_instance", lambda *args: manager)
+    context = SimpleNamespace(data_dir=tmp_path, current_user_id=1, current_group_id=None)
+    task = asyncio.create_task(main._handle_kernel("status", context))
+    try:
+        await asyncio.sleep(0.02)
+        assert not task.done()
+    finally:
+        release.set()
+        await task
+        thread.join()

@@ -472,3 +472,12 @@ class TestSplitMessageSegments:
         """None 消息段"""
         result = split_message_segments(segments(None))
         assert len(result) == 1
+
+
+@pytest.mark.parametrize("length", [1, 10, 3000])
+def test_newline_split_preserves_text_and_length(length):
+    text = "a" * length + "\nb"
+    chunks = split_message_segments([{"type": "text", "data": {"text": text}}], max_length=length)
+    parts = ["".join(segment["data"]["text"] for segment in chunk) for chunk in chunks]
+    assert max(map(len, parts)) <= length
+    assert "".join(parts) == text

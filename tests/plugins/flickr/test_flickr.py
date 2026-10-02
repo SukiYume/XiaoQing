@@ -380,3 +380,16 @@ async def test_unexpected_error_uses_public_redacted_response(
     assert "flickr-test-request" in serialized
     assert "secret-canary-key" not in serialized
     assert "C:\\private" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_flickr_empty_queries_do_not_accumulate_locks(tmp_path):
+    from plugins.flickr import main
+
+    context = SimpleNamespace(state={}, current_user_id=1, current_group_id=None)
+    for user in range(1, 1100):
+        context.current_user_id = user
+        await main._more(1, event={}, context=context)
+    runtime = main._runtime(context)
+    main._prune_runtime(runtime, now=float("inf"))
+    assert runtime["sessions"] == runtime["locks"] == {}

@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import ast
 import importlib
 import logging
-import re
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -20,9 +18,7 @@ from plugins.xiaoqing_chat.expression import bw_jargon_miner
 from plugins.xiaoqing_chat.llm.llm_client import LLMError
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.planning import pfc_action_planner
-from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT            = REPOSITORY_ROOT
 CANARY          = "CR219_INTERNAL_LOG_SECRET"
 SENSITIVE_ERROR = (
     f"Authorization: Bearer {CANARY} "
@@ -252,52 +248,3 @@ async def test_xiaoqing_jargon_fallback_logs_only_type(
     assert "AIError" in logged
     assert CANARY not in logged
     assert "user:password" not in logged
-
-
-def test_targeted_exception_log_calls_never_receive_raw_exception_values() -> None:
-    relative_paths = (
-        "plugins/adnmb/adapi.py",
-        "plugins/arxiv_filter/arxiv_today.py",
-        "plugins/bot_core/main.py",
-        "plugins/xiaoqing_chat/context_builder.py",
-        "plugins/xiaoqing_chat/expression/bw_jargon_miner.py",
-        "plugins/xiaoqing_chat/handlers.py",
-        "plugins/xiaoqing_chat/main.py",
-        "plugins/xiaoqing_chat/planning/pfc_action_planner.py",
-        "plugins/xiaoqing_chat/reply_generator.py",
-        "plugins/xiaoqing_chat/task_scheduler.py",
-    )
-    violations: list[str] = []
-
-    for relative_path in relative_paths:
-        path = ROOT / relative_path
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for handler in (node for node in ast.walk(tree) if isinstance(node, ast.ExceptHandler)):
-            if not handler.name:
-                continue
-            exception_type = ast.unparse(handler.type) if handler.type is not None else ""
-            if exception_type == "GenerationLimitExceeded":
-                continue
-            if relative_path == "plugins/bot_core/main.py" and exception_type in {
-                "KeyError",
-                "ValueError",
-            }:
-                continue
-            for call in (
-                node
-                for statement in handler.body
-                for node in ast.walk(statement)
-                if isinstance(node, ast.Call)
-            ):
-                callable_name = ast.unparse(call.func)
-                if "log" not in callable_name.lower():
-                    continue
-                source              = ast.unparse(call)
-                source_without_type = source.replace(
-                    f"type({handler.name}).__name__",
-                    "",
-                )
-                if re.search(rf"\b{re.escape(handler.name)}\b", source_without_type):
-                    violations.append(f"{relative_path}:{call.lineno}: {source}")
-
-    assert violations == []

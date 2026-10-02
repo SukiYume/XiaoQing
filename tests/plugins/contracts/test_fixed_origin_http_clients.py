@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import logging
-import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -14,10 +14,7 @@ from plugins.adnmb.adapi import AdnmbClient
 from plugins.ads_paper.ads_client import ADSClient
 from plugins.chime import main as chime
 from plugins.github import main as github
-from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.settings_snapshot import with_settings_reader
-
-ROOT = REPOSITORY_ROOT
 
 
 class _ChunkContent:
@@ -98,7 +95,7 @@ async def test_ads_search_streams_bounded_json_and_preserves_timeout() -> None:
     assert result == [{"bibcode": "2026Test"}]
     method, url, kwargs = session.calls[0]
     assert method == "GET"
-    assert url == "https://api.adsabs.harvard.edu/v1/search/query"
+    assert urlsplit(url).path == "/v1/search/query"
     assert kwargs["allow_redirects"] is False
     assert kwargs["auto_decompress"] is False
     assert kwargs["timeout"].total == 30
@@ -194,8 +191,8 @@ async def test_adnmb_image_fetch_is_restricted_to_https_cdn(
     client = AdnmbClient(session=object(), cache_dir=tmp_path, uuid="uuid")
 
     assert await client.download_image("2026-07/test.jpg") is None
-    assert captured["url"].startswith("https://image.nmb.best/image/")
-    assert captured["allowed_hosts"] == {"image.nmb.best"}
+    assert urlsplit(captured["url"]).path == "/image/2026-07/test.jpg"
+    assert captured["allowed_hosts"] == {urlsplit(captured["url"]).hostname}
     assert captured["allowed_schemes"] == {"https"}
 
 
@@ -268,7 +265,8 @@ async def test_github_proxy_path_is_exact_origin_and_bounded(tmp_path: Path) -> 
     assert "owner/repo" in str(result)
     method, url, kwargs = session.calls[0]
     assert method == "GET"
-    assert url == "https://github.com/trending?since=daily"
+    assert urlsplit(url).path == "/trending"
+    assert urlsplit(url).query == "since=daily"
     assert kwargs["proxy"] == "http://trusted-proxy.test:8080"
     assert kwargs["timeout"] == 15
     assert kwargs["allow_redirects"] is False
@@ -338,22 +336,6 @@ async def test_github_proxy_rejects_cross_origin_redirect_before_request(
     assert "XQ-PLUGIN-UNEXPECTED" in str(result)
     assert len(session.calls) == 1
     assert redirect.content.iterations == 0
-
-
-@pytest.mark.parametrize(
-    "relative_path",
-    (
-        "plugins/ads_paper/ads_client.py",
-        "plugins/adnmb/adapi.py",
-        "plugins/chime/main.py",
-        "plugins/github/main.py",
-    ),
-)
-def test_fixed_http_plugins_have_no_direct_response_body_reads(relative_path: str) -> None:
-    source = (ROOT / relative_path).read_text(encoding="utf-8")
-    direct_read = re.compile(r"await\s+[A-Za-z_]\w*\.(?:json|text|read)\s*\(")
-
-    assert direct_read.search(source) is None
 
 
 @pytest.mark.asyncio

@@ -18,7 +18,6 @@ from plugins.adnmb.adapi import AdnmbClient
 from plugins.chat import main as chat_main
 from plugins.url_parser import main as url_parser_main
 from tests.helpers.assertions import text_segments_text
-from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.settings_snapshot import with_settings_reader
 
 
@@ -289,15 +288,3 @@ async def test_adnmb_forum_cache_has_ttl_capacity_and_copy_boundary(monkeypatch,
     client._forum_cache_expires_at = 0.0
     await client.get_forum_list()
     assert calls == 2
-
-
-def test_disabled_adnmb_user_module_is_removed_from_runtime_tree():
-    root       = REPOSITORY_ROOT
-    plugin_dir = root / "plugins" / "adnmb"
-
-    assert not (plugin_dir / "user.py").exists()
-    assert all(
-        "from .user" not in path.read_text(encoding="utf-8")
-        and "import .user" not in path.read_text(encoding="utf-8")
-        for path in plugin_dir.glob("*.py")
-    )

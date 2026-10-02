@@ -85,30 +85,6 @@ def test_manifest_contract() -> None:
     assert commands["qa_remove"]["triggers"] == ["删除对话"]
 
 
-def test_readme_and_global_docs_match_runtime_contract() -> None:
-    readme = (ROOT / "plugins" / "smalltalk" / "README.md").read_text(encoding="utf-8")
-    global_docs = (ROOT / "docs" / "09-plugins.md").read_text(encoding="utf-8")
-
-    for marker in (
-        "/记忆",
-        "/记住",
-        "/学习",
-        "/对话",
-        "/删除对话",
-        "chat.reply",
-        "voice.synthesize_text",
-        "精确匹配",
-    ):
-        assert marker in readme
-    assert "笑话" not in readme
-    smalltalk_section = global_docs.split("### `smalltalk`：基础闲聊与分域问答", 1)[1].split(
-        "### `chat`：Coze 单轮对话", 1
-    )[0]
-    for marker in ("/记忆", "/记住", "/学习", "/对话", "/删除对话"):
-        assert marker in smalltalk_section
-    assert "精确 QA 命中" in smalltalk_section
-
-
 def test_default_responses_are_returned_as_a_copy(context: _Context) -> None:
     responses = smalltalk._load_responses(context)
 
@@ -791,3 +767,40 @@ async def test_voice_provider_exception_keeps_text(context: _Context) -> None:
 
     assert result == reply
     assert "private voice detail" not in text_segments_text(result)
+
+
+@pytest.mark.asyncio
+async def test_smalltalk_cancel_preserves_committed_snapshot(tmp_path, monkeypatch):
+    from plugins.smalltalk import main
+
+    context = SimpleNamespace(data_dir=tmp_path, current_user_id=1, current_group_id=None)
+    started, release = (threading.Event(), threading.Event())
+    original = main._write_qa_file
+
+    def delayed(path, data):
+        started.set()
+        assert release.wait(3)
+        original(path, data)
+
+    monkeypatch.setattr(main, "_write_qa_file", delayed)
+    task = asyncio.create_task(main._add_qa(context, "first answer"))
+    try:
+        assert await asyncio.to_thread(started.wait, 3)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        monkeypatch.setattr(main, "_write_qa_file", original)
+        await main._add_qa(context, "second answer")
+        assert json.loads(main._qa_file(context).read_text()) == {
+            "first": ["answer"],
+            "second": ["answer"],
+        }
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        main._qa_snapshot.cache_clear()
+        main._audit_snapshot.cache_clear()

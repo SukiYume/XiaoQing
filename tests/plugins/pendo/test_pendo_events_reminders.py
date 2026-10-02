@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 
+from plugins.pendo.handlers.event import EventHandler
+from plugins.pendo.services.ai_parser import AIParser
+from plugins.pendo.services.rule_parser import RuleParser
 from tests.helpers.pendo_test_support import (
     ROOT,
     Any,
@@ -1174,3 +1179,36 @@ class TestReminderRegression:
             assert "⏰ 01-26 12:00" in result["message"]
         finally:
             db.cleanup()
+
+
+def test_recurring_count_remains_anchored():
+    instances, _ = EventHandler._expand_recurring_instances(
+        "FREQ=DAILY;COUNT=3",
+        datetime.fromisoformat("2030-01-01T09:00:00+08:00"),
+        datetime.fromisoformat("2030-01-02T12:00:00+08:00"),
+    )
+    assert [d.day for d in instances] == [3]
+
+
+def test_compound_duration_and_explicit_reminder_list():
+    parser = AIParser.__new__(AIParser)
+    assert parser._parse_offset("2小时30分钟").total_seconds() == 9000
+    assert parser.build_reminder_rules_from_description("提前2小时30分钟") == [
+        {"offset_seconds": 9000},
+        {"offset_seconds": 0},
+    ]
+    assert parser.build_reminder_rules_from_description("提前2小时、30分钟") == [
+        {"offset_seconds": 7200},
+        {"offset_seconds": 1800},
+        {"offset_seconds": 0},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("text", "hour"), [("明天下午3点开会", 15), ("明天晚上8点开会", 20), ("明天上午12点开会", 0)]
+)
+def test_rule_parser_preserves_time_period(text, hour):
+    result = RuleParser()._extract_relative_time(
+        text, datetime.fromisoformat("2030-01-01T10:00:00+08:00")
+    )
+    assert datetime.fromisoformat(result["start_time"]).hour == hour

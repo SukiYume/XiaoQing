@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import tests.helpers.onebot_test_support as _fixture_support
+import json
+
 from tests.helpers.onebot_test_support import (
     AsyncMock,
     MagicMock,
@@ -16,8 +17,6 @@ from tests.helpers.onebot_test_support import (
     pytest,
     threading,
 )
-
-bounded_transport_adapter = _fixture_support.bounded_transport_adapter
 
 
 class TestOneBotWebSocketLifecycle:
@@ -566,3 +565,37 @@ class TestOneBotWebSocketLifecycle:
         assert abnormal_result.error is abnormal
         assert ordinary_result.error is ordinary
         assert eof_result.error is None
+
+
+@pytest.mark.asyncio
+async def test_connect_callback_receives_echo_while_listener_runs():
+    frames = asyncio.Queue()
+    client = OneBotWsClient("ws://unused", "", action_response_timeout_seconds=0.5)
+    results = []
+
+    class Socket:
+        async def send(self, payload):
+            request = json.loads(payload)
+            await frames.put(json.dumps({"echo": request["echo"], "status": "ok", "retcode": 0}))
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            frame = await frames.get()
+            if frame is None:
+                raise StopAsyncIteration
+            return frame
+
+    async def connected():
+        results.append(
+            await client.send_action(
+                {"action": "send_group_msg", "params": {"group_id": 1, "message": "review"}}
+            )
+        )
+        await frames.put(None)
+
+    client.set_on_connect(connected)
+    await asyncio.wait_for(client._listen(Socket(), AsyncMock()), timeout=2)
+    assert results == [True]
+    assert not any(task.get_name() == "onebot-on-connect" for task in asyncio.all_tasks())

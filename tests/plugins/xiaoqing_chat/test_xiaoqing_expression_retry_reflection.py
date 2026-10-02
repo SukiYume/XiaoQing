@@ -548,3 +548,39 @@ async def test_expired_reflection_removes_only_that_queue_entry(
 
     assert changed is True
     assert [state.expression_id for state in tracker_store.get_trackers("g1")] == ["second"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rejected,modified", [(False, ""), (True, ""), (False, "revised")])
+async def test_expression_review_allows_empty_modifications(monkeypatch, rejected, modified):
+    from plugins.xiaoqing_chat.expression import bw_expression_learner as learner
+
+    response = {
+        "checked": True,
+        "rejected": rejected,
+        "reason": "reviewed",
+        "modified_situation": modified,
+        "modified_style": "",
+    }
+    monkeypatch.setattr(
+        learner,
+        "chat_completions_raw_with_fallback_paths",
+        AsyncMock(
+            return_value=({"choices": [{"message": {"content": json.dumps(response)}}]}, "test")
+        ),
+    )
+    result = await learner.single_expression_check(
+        secrets                = {},
+        bot_name               = "小青",
+        personality            = PersonalityConfig(),
+        situation              = "s",
+        style                  = "t",
+        temperature            = 0.5,
+        top_p                  = 0.9,
+        max_tokens             = 300,
+        timeout_seconds        = 1,
+        max_retry              = 0,
+        retry_interval_seconds = 0,
+    )
+    assert result[:2] == (True, rejected)
+    assert result[3] == modified
