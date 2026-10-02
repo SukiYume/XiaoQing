@@ -49,7 +49,10 @@ def test_ads_paper_docs_use_current_command_and_secret_keys() -> None:
 
 def test_apod_docs_describe_current_nasa_page_and_empty_argument_contract() -> None:
     readme = _read("apod")
+    assert "https://science.nasa.gov/apod/" in readme
+    assert "assets.science.nasa.gov" in readme
     assert "apod.nasa.gov/apod/astropix.html" in readme
+    assert "会自动切换到新首页" in readme
     assert "`/apod` 使用空参数调用" in readme
     assert "UCL" not in readme
 
