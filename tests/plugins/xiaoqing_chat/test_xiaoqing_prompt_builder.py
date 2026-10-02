@@ -463,6 +463,41 @@ def test_history_budget_keeps_latest_correction():
     assert "LATEST_STOP_PLEASE" in prompt
 
 
+def test_text_followup_keeps_previous_image_evidence():
+    history = [
+        StoredMessage(
+            role  = "user",
+            name  = "群友",
+            ts    = 1700000000.0,
+            parts = (
+                {
+                    "kind": "image",
+                    "description": "街边树木和写着大洗美术馆的招牌",
+                    "marker": "[图片：街边树木和写着大洗美术馆的招牌]",
+                },
+            ),
+        ),
+    ]
+    messages = build_prompt_messages(
+        is_private             = False,
+        bot_name               = "小青",
+        sender_name            = "群友",
+        think_level            = 1,
+        history                = history,
+        current_text           = "大洗工业是什么？",
+        current_image_attached = False,
+        personality            = PersonalityConfig(),
+        keyword_rules          = [],
+        regex_rules            = [],
+        request_id             = "image-followup",
+    )
+    assert "大洗美术馆" in messages[1].content
+    assert "历史含实际图像记录" in messages[0].content
+    assert "历史中成功解析的对应摘要仍然可用" in messages[0].content
+    assert "两处均无可用画面时" in messages[0].content
+    assert "普通常识、作品背景和词义解释" in messages[0].content
+
+
 @pytest.mark.parametrize(
     "identity,expected",
     [
