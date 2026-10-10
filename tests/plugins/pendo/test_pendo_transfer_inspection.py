@@ -30,6 +30,36 @@ def test_bundle_inspection_hides_low_level_validation_details() -> None:
     assert exc_info.value.detail == "导入包格式或内容校验失败"
 
 
+def test_import_inspection_rejects_oversized_content_without_truncating(client, auth_headers):
+    """超长正文进入逐行错误列表，用户原始输入保持完整。"""
+    payload = _build_bundle_bytes(
+        {
+            "note": [
+                {
+                    "_type": "note",
+                    "_schema": 2,
+                    "id": "long-note",
+                    "title": "长正文",
+                    "content": "长" * 50001,
+                }
+            ]
+        },
+        ExportSelection(types=["note"]),
+        None,
+        None,
+    )
+    response = client.post(
+        "/api/transfer/import/inspect",
+        headers = auth_headers,
+        content = payload,
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["counts"]["valid"] == 0
+    assert data["counts"]["errors"] == 1
+    assert data["errors"][0]["line"] == 1
+
+
 def test_execute_import_rejects_oversized_options_header(
     client: Any, auth_headers: dict[str, str]
 ) -> None:

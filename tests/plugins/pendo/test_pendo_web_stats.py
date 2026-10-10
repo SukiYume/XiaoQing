@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from plugins.pendo.services.db import Database
 from plugins.pendo.web.analytics.ledger_insights import build_ledger_insights
+from plugins.pendo.web.api import items as items_api
 from plugins.pendo.web.api import stats
 from plugins.pendo.web.api import stats as stats_api
 from tests.helpers.assertions import assert_http_error as _assert_http_error
@@ -269,10 +270,10 @@ def test_ledger_stats_respects_range_for_totals_categories_and_trend_data(
     assert sum(histogram.values()) == 1
 
 
-def test_ledger_stats_all_range_stops_at_today_and_excludes_future_entries(
+def test_ledger_stats_all_range_includes_future_entries(
     db: Database,
 ) -> None:
-    """“全部”范围以今天为上界，不能把未来流水算作已发生。"""
+    """全部范围覆盖历史与未来流水。"""
 
     owner_id = "u-ledger-all"
     now      = datetime.now()
@@ -297,9 +298,98 @@ def test_ledger_stats_all_range_stops_at_today_and_excludes_future_entries(
 
     data = stats_api.ledger_stats(range_str="all", owner_id=owner_id, db=db)["data"]
 
-    assert data["expense_by_category"] == [{"category": "餐饮", "total": 28}]
-    assert all(item["date"] != future_date for item in data["daily"])
-    assert sum(item["count"] for item in data["expense_amount_histogram"]) == 1
+    assert sum(item["total"] for item in data["expense_by_category"]) == 116
+    assert any(item["date"] == future_date for item in data["daily"])
+    assert sum(item["count"] for item in data["expense_amount_histogram"]) == 2
+
+
+@pytest.mark.parametrize(
+    ("timezone", "timestamp", "local_date"),
+    [
+        ("Asia/Shanghai", "2030-05-01T18:00:00+00:00", "2030-05-02"),
+        ("America/Los_Angeles", "2030-05-02T01:00:00+00:00", "2030-05-01"),
+    ],
+)
+def test_item_date_bounds_use_local_dates_and_independent_event_end(
+    db: Database, timezone: str, timestamp: str, local_date: str
+) -> None:
+    owner = "range-owner"
+    db.update_user_settings(owner, {"timezone": timezone})
+    db.insert_item({"id": "range-note", "type": "note", "owner_id": owner, "created_at": timestamp})
+    db.insert_item({"type": "note", "owner_id": "other", "created_at": "2000-01-01T00:00:00Z"})
+    for identifier, start, end in [
+        ("long", "2030-01-01T10:00:00", "2030-01-31T11:00:00"),
+        ("short", "2030-01-10T10:00:00", "2030-01-11T11:00:00"),
+    ]:
+        db.insert_item(
+            {
+                "id": identifier,
+                "type": "event",
+                "owner_id": owner,
+                "start_time": start,
+                "end_time": end,
+            }
+        )
+    app = FastAPI()
+    app.include_router(items_api.router)
+    app.dependency_overrides[items_api.get_current_user] = lambda: owner
+    app.dependency_overrides[items_api.get_db]           = lambda: db
+    with TestClient(app) as client:
+        bounds = client.get("/items/date-bounds", params={"type": "note"}).json()["data"]
+        assert bounds == {"start": local_date, "end": local_date}
+        listed = client.get(
+            "/items",
+            params={"type": "note", "start_date": bounds["start"], "end_date": bounds["end"]},
+        )
+        assert listed.json()["data"]["total"] == 1
+        event_bounds = client.get("/items/date-bounds", params={"type": "event"}).json()["data"]
+        assert event_bounds == {"start": "2030-01-01", "end": "2030-01-31"}
+        db.update_item(
+            "short", {"start_time": "2031-02-01T10:00:00", "end_time": "2031-02-01T11:00:00"}, owner
+        )
+        assert (
+            client.get("/items/date-bounds", params={"type": "event"}).json()["data"]["end"]
+            == "2031-02-01"
+        )
+        assert client.get("/items/date-bounds", params={"type": "invalid"}).status_code == 422
+
+
+def test_ledger_list_aggregate_insights_share_future_and_currency_bounds(db: Database) -> None:
+    owner = "range-ledger"
+    today = date.today()
+    start, end = (today - timedelta(days=3)).isoformat(), (today + timedelta(days=3)).isoformat()
+    for currency, amount, day in [("CNY", 10, start), ("CNY", 20, end), ("USD", 80, end)]:
+        db.insert_item(
+            {
+                "type": "ledger",
+                "owner_id": owner,
+                "title": currency,
+                "amount": amount,
+                "currency": currency,
+                "transaction_type": "expense",
+                "ledger_date": day,
+            }
+        )
+    app = FastAPI()
+    app.include_router(items_api.router)
+    app.include_router(stats_api.router)
+    app.dependency_overrides[items_api.get_current_user] = lambda: owner
+    app.dependency_overrides[items_api.get_db]           = lambda: db
+    with TestClient(app) as client:
+        for currency, total in [("CNY", 30), ("USD", 80)]:
+            params = {"start_date": start, "end_date": end, "currency": currency}
+            listed = client.get("/items", params={"type": "ledger", **params}).json()["data"]
+            aggregate = client.get("/items/aggregate", params={"type": "ledger", **params}).json()[
+                "data"
+            ]
+            insights = client.get("/stats/ledger/insights", params=params).json()["data"]
+            assert sum(row["amount"] for row in listed["items"]) == total
+            assert aggregate["expense"] == total
+            assert insights["summary"]["expense_total"] == total
+        bounds = client.get(
+            "/items/date-bounds", params={"type": "ledger", "currency": "USD"}
+        ).json()["data"]
+        assert bounds == {"start": end, "end": end}
 
 
 def test_event_stats_filters_range_and_builds_weekday_slot_matrix(db: Database) -> None:
@@ -699,7 +789,7 @@ def test_notes_overview_uses_yearly_cadence_for_cross_year_ranges(db: Database) 
         ("quarter", ("2026-04-01", "2026-05-20")),
         ("year", ("2026-01-01", "2026-05-20")),
         ("last_year", ("2025-01-01", "2025-12-31")),
-        ("all", ("1970-01-01", "2026-05-20")),
+        ("all", ("2026-05-20", "2026-05-20")),
         ("2024-02", ("2024-02-01", "2024-02-29")),
         ("2026-03-01..2026-03-31", ("2026-03-01", "2026-03-31")),
     ),

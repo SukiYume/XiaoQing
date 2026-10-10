@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Final
 
+import pytest
+
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
 
@@ -49,8 +51,10 @@ export {
     fetchData as __fetchData,
     normalizeBaseUrl as __normalizeBaseUrl,
     normalizeWidgetData as __normalizeWidgetData,
+    normalizeCalendarSyncData as __normalizeCalendarSyncData,
     parseDateKey as __parseDateKey,
     parseItemStartDate as __parseItemStartDate,
+    prepareCalendarSyncItems as __prepareCalendarSyncItems,
     resolveWidgetSection as __resolveWidgetSection,
     renderLarge as __renderLarge,
     renderMedium as __renderMedium,
@@ -69,6 +73,38 @@ def _run_widget_client(script: str) -> None:
         script,
         cwd   = ROOT,
         setup = WIDGET_SETUP,
+    )
+
+
+@pytest.mark.parametrize("device_timezone", ["America/Los_Angeles", "Asia/Shanghai", "Asia/Tokyo"])
+def test_calendar_sync_uses_server_absolute_window_across_device_zones(
+    monkeypatch, device_timezone
+):
+    monkeypatch.setenv("TZ", device_timezone)
+    _run_widget_client(
+        r"""
+        for (const sample of [
+            { day: '2030-05-01', start: '2030-05-01T00:00:00+08:00', end: '2030-05-02T00:00:00+08:00', event: '2030-05-01T00:30:00+08:00' },
+            { day: '2030-05-01', start: '2030-05-01T00:00:00-07:00', end: '2030-05-02T00:00:00-07:00', event: '2030-05-01T23:30:00-07:00' },
+            { day: '2030-03-10', start: '2030-03-10T00:00:00-05:00', end: '2030-03-11T00:00:00-04:00', event: '2030-03-10T23:30:00-04:00' },
+        ]) {
+            const data = client.__normalizeCalendarSyncData({
+                start_date: sample.day, end_date: sample.day,
+                window_start: sample.start, window_end: sample.end,
+                items: [{ id: 'edge', title: '窗口边缘', start_time: sample.event }],
+            }, { startKey: sample.day, endKey: sample.day });
+            assert.equal(data.rangeStart.getTime(), Date.parse(sample.start));
+            assert.equal(data.rangeEnd.getTime(), Date.parse(sample.end));
+            const prepared = client.__prepareCalendarSyncItems(data.items, data.rangeStart, data.rangeEnd);
+            assert.equal(prepared.length, 1);
+            assert.equal(prepared[0].startDate.getTime(), Date.parse(sample.event));
+        }
+        assert.throws(() => client.__normalizeCalendarSyncData({
+            start_date: '2030-05-01', end_date: '2030-05-01', items: [],
+        }, { startKey: '2030-05-01', endKey: '2030-05-01' }), /绝对时间窗口/);
+        const userDayWindow = client.__buildCalendarSyncWindow(new Date('2030-05-02T01:00:00Z'), '2030-05-01');
+        assert.equal(userDayWindow.nextCursorKey, '2030-05-01');
+        """
     )
 
 
@@ -627,6 +663,8 @@ def test_scriptable_calendar_cursor_fills_gap_and_advances_after_success() -> No
                     data: {
                         start_date: '2026-07-01',
                         end_date: '2026-09-14',
+                        window_start: '2026-07-01T00:00:00Z',
+                        window_end: '2026-09-15T00:00:00Z',
                         items: [{
                             title: '补齐遗漏日程',
                             day: '2026-08-10',
@@ -663,8 +701,8 @@ def test_scriptable_calendar_cursor_fills_gap_and_advances_after_success() -> No
         assert.equal(__createdEvents.length, 1);
         assert.equal(__createdEvents[0].title, '补齐遗漏日程');
         assert.equal(__calendarQueries.length, 1);
-        assert.equal(__calendarQueries[0].start.getDate(), 1);
-        assert.equal(__calendarQueries[0].end.getDate(), 15);
+        assert.equal(__calendarQueries[0].start.toISOString(), '2026-07-01T00:00:00.000Z');
+        assert.equal(__calendarQueries[0].end.toISOString(), '2026-09-15T00:00:00.000Z');
         assert.equal(Keychain.get(cursorKey), '2026-08-15');
         """
     )
@@ -684,6 +722,7 @@ def test_scriptable_calendar_cursor_does_not_advance_when_target_is_missing() ->
                     ok: true,
                     data: {
                         start_date: '2026-07-01', end_date: '2026-09-14',
+                        window_start: '2026-07-01T00:00:00Z', window_end: '2026-09-15T00:00:00Z',
                         items: [{ title: '待同步', day: '2026-08-10' }],
                     },
                 });
@@ -719,6 +758,7 @@ def test_scriptable_calendar_cursor_does_not_advance_when_update_fails() -> None
                     ok: true,
                     data: {
                         start_date: '2026-07-01', end_date: '2026-09-14',
+                        window_start: '2026-07-01T00:00:00Z', window_end: '2026-09-15T00:00:00Z',
                         items: [{
                             id: 'edited-event',
                             title: '修改后的日程',

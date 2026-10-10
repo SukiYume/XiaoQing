@@ -144,9 +144,11 @@ def test_direct_event_reminder_update_rejects_a_skipped_normalizer(
             )
         ],
     )
+    from plugins.pendo.services import event_collection_mutations
+
     original = db.get_item("guarded-update-family_m01", "guard-owner").remind_times
     monkeypatch.setattr(
-        db_module,
+        event_collection_mutations,
         "normalize_item_datetimes_for_storage",
         lambda payload, _timezone: dict(payload),
     )
@@ -203,7 +205,7 @@ def test_undo_normalizes_legacy_wall_time_snapshot_before_writing(db: Database) 
         "edit_event",
         item_type = "event",
         item_id   = item_id,
-        details   = {"old_values": {"start_time": "2030-01-01T09:00:00"}},
+        details   = {"old_values": {"start_time": "2030-01-01T09:00:00"}, "after_version": 0},
     )
 
     assert db.undo_edit(owner_id)["status"] == "success"

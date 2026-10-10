@@ -11,7 +11,7 @@ import {
     isValidDateInput,
     nonNegativeInteger,
 } from '../utils/format.js';
-import { derivePresetRange, todayRangeKey } from '../utils/date_ranges.js';
+import { derivePresetRange, fetchItemRangeBounds, todayRangeKey } from '../utils/date_ranges.js';
 import {
     bindEnterAction,
     bindFormSubmit,
@@ -68,6 +68,8 @@ let _items                  = [];
 let _total                  = 0;
 let _page                   = 1;
 let _dateFilter             = 'month';
+let _currency               = 'CNY';
+let _allRange               = null;
 let _transactionTypeFilter  = '';
 let _categoryFilter         = '';
 let _accountFilter          = '';
@@ -97,6 +99,8 @@ function dateRangeForFilter(filter) {
         customStart: _customDateStart,
         customEnd: _customDateEnd,
         customFallback: '',
+        allStart: _allRange?.start,
+        allEnd: _allRange?.end,
     });
     if (!range.start || !range.end) return {};
     return {
@@ -160,7 +164,7 @@ function normalizeSummary(value) {
 }
 
 function currentFilterParams() {
-    const params = { ...dateRangeForFilter(_dateFilter), currency: 'CNY' };
+    const params = { ...dateRangeForFilter(_dateFilter), currency: _currency };
     if (_transactionTypeFilter) params.transaction_type = _transactionTypeFilter;
     if (_categoryFilter) params.category = _categoryFilter;
     if (_accountFilter) params.account_name = _accountFilter;
@@ -1243,7 +1247,7 @@ function renderQuickAdd() {
                 ${typeSelect}
             </div>
             <div class="ledger-qa-field ledger-qa-field--amount">
-                <label class="ledger-qa-label" for="qa-amount">金额</label>
+                <label class="ledger-qa-label" for="qa-amount">金额 · ${escapeHtml(_currency)}</label>
                 <input type="number" class="ledger-qa-amount" id="qa-amount" placeholder="0.00" step="0.01" min="0" aria-label="金额">
             </div>
             <div class="ledger-qa-field ledger-qa-field--title">
@@ -1289,6 +1293,13 @@ function renderFilterBar() {
 
     return `
         <div class="ledger-filter-bar" id="ledger-filter-bar">
+            <div class="ledger-filter-item ledger-filter-item--currency">
+                <label for="filter-currency">币种：</label>
+                <div class="ledger-filter-controls">
+                    <input id="filter-currency" class="ledger-custom-date-input" value="${escapeHtml(_currency)}" maxlength="3" size="4" aria-label="账本币种" placeholder="CNY">
+                    <button type="button" id="filter-currency-apply" class="btn btn-secondary">切换</button>
+                </div>
+            </div>
             <div class="ledger-filter-item ledger-filter-item--date${_dateFilter === 'custom' ? ' is-custom' : ''}">
                 <label id="filter-date-label">时段：</label>
                 <div class="ledger-filter-controls">
@@ -1414,52 +1425,26 @@ function renderPage() {
 
     _container.innerHTML = `
         <div class="ledger-page">
-            <section class="ledger-hero">
+            <section class="ledger-hero pendo-page-header">
                 <div class="ledger-hero-copy">
                     <h2>💰 账本</h2>
-                    <p>记录每一笔收支，并查看当前范围内的资金变化。</p>
-                    <div class="ledger-hero-tags">
-                        <span class="ledger-hero-tag">${DATE_FILTER_LABELS[_dateFilter] || '当前范围'}</span>
-                        <span class="ledger-hero-tag">${_total} 条账目</span>
-                        <span class="ledger-hero-tag">${_sortMode === 'amount' ? '按金额排序' : '按时间排序'}</span>
-                    </div>
+                    <p>${DATE_FILTER_LABELS[_dateFilter] || '当前范围'} · ${_total} 条账目 · ${escapeHtml(_currency)}</p>
                 </div>
                 <div class="ledger-page-header">
-                    <span class="ledger-page-header-note">查看当前范围收支分析</span>
+                    <button type="button" class="btn btn-primary" id="ledger-add-top">＋ 记一笔</button>
                 </div>
             </section>
             <div class="ledger-section-stack">
-                ${renderSummaryCards()}
-                <section class="ledger-controls-grid">
-                    <div class="ledger-panel">
-                        <div class="ledger-panel-head">
-                            <div>
-                                <h3>快速记一笔</h3>
-                                <p>快速补记一笔账，同时保留分类和日期信息。</p>
-                            </div>
-                        </div>
-                        <div class="ledger-panel-body">
-                            ${renderQuickAdd()}
-                        </div>
-                    </div>
-                    <div class="ledger-panel">
-                        <div class="ledger-panel-head">
-                            <div>
-                                <h3>筛选范围</h3>
-                                <p>按时间、方向、分类和金额筛选账目。</p>
-                            </div>
-                        </div>
-                        <div class="ledger-panel-body">
-                            ${renderFilterBar()}
-                        </div>
-                    </div>
+                <section class="ledger-panel ledger-filter-panel">
+                    <div class="ledger-panel-body">${renderFilterBar()}</div>
                 </section>
-                ${renderLedgerInsightsPanel(_insightsData)}
+                <details class="pendo-analysis" id="ledger-compose"><summary>快速记一笔</summary>${renderQuickAdd()}</details>
                 <div class="ledger-records-card">
                     ${renderListToolbar()}
                     <div id="ledger-list">${renderList(_items)}</div>
                     <div id="ledger-pagination" class="ledger-pagination"></div>
                 </div>
+                <details class="pendo-analysis"><summary>查看收支分析</summary>${renderSummaryCards()}${renderLedgerInsightsPanel(_insightsData)}</details>
             </div>
         </div>`;
 
@@ -1483,7 +1468,28 @@ function renderPage() {
 
 function attachListeners() {
     if (!_container) return;
-    const root = _container;
+    const root      = _container;
+    const addButton = root.querySelector('#ledger-add-top');
+    if (addButton) addButton.onclick = () => {
+        const editor = root.querySelector('#ledger-compose');
+        if (editor) editor.open = true;
+        root.querySelector('#qa-amount')?.focus();
+    };
+    const currencyInput = root.querySelector('#filter-currency');
+    const applyCurrency = async () => {
+        const currency = String(currencyInput?.value || '').trim().toUpperCase();
+        if (!/^[A-Z]{3}$/.test(currency)) {
+            showToast('请输入三个字母的币种代码，如 CNY、USD', 'warning');
+            return;
+        }
+        _currency = currency;
+        _allRange = null;
+        _page = 1;
+        await loadAndRender();
+    };
+    bindEnterAction(currencyInput, applyCurrency);
+    const currencyApply = root.querySelector('#filter-currency-apply');
+    if (currencyApply) currencyApply.onclick = applyCurrency;
 
     const qaSubmit = root.querySelector('#qa-submit');
     if (qaSubmit) qaSubmit.addEventListener('click', handleQuickAdd);
@@ -1678,7 +1684,7 @@ async function handleQuickAdd() {
             account_name: account,
             counter_account_name: counter,
             merchant,
-            currency: 'CNY',
+            currency: _currency,
         });
         showToast('记录已添加', 'success');
         amountInput.value = '';
@@ -1753,7 +1759,7 @@ export function openDetailModal(item) {
     });
     content.querySelector('#detail-close').onclick = closeModal;
     content.querySelector('#detail-edit').onclick = () => {
-        closeModal();
+        closeModal(content);
         openEditModal(normalizedItem);
     };
 }
@@ -1785,7 +1791,7 @@ function openEditModal(existing) {
     bindFormSubmit(form, saveButton);
     content.querySelector('#modal-cancel').onclick = closeModal;
     content.querySelector('#modal-delete').onclick = async () => {
-        closeModal();
+        closeModal(content);
         await handleDelete(normalizedItem.id);
     };
     let saving = false;
@@ -1827,8 +1833,9 @@ function openEditModal(existing) {
         saveButton.disabled = true;
         try {
             await api.put(`/items/${encodeURIComponent(normalizedItem.id)}`, { ...data, version: normalizedItem.version });
+            _currency = data.currency.trim().toUpperCase();
             showToast('记录已更新', 'success');
-            closeModal();
+            closeModal(content);
             window.dispatchEvent(new CustomEvent('pendo-data-changed', { detail: { type: 'ledger' } }));
         } catch (err) {
             showToast(`更新失败：${err?.message || '未知错误'}`, 'error');
@@ -1873,6 +1880,14 @@ async function loadAndRender(refreshCategories = false) {
     const container      = _container;
     const requestVersion = ++_loadVersion;
     try {
+        if (_dateFilter === 'all') {
+            const filters = currentFilterParams();
+            delete filters.start_date;
+            delete filters.end_date;
+            const bounds = await fetchItemRangeBounds(api, { type: 'ledger', currency: _currency, filters });
+            if (_container !== container || requestVersion !== _loadVersion) return;
+            _allRange = bounds;
+        }
         const fetches = [fetchItems(_page), fetchAggregate(), fetchInsights().catch(() => null)];
         if (refreshCategories) {
             fetches.push(fetchCategories());
@@ -1922,6 +1937,7 @@ export async function render(container) {
     _items = [];
     _total = 0;
     _page = 1;
+    _allRange = null;
     _sortMode = 'date';
     _summaryData = { income: 0, expense: 0, transfer: 0, balance: 0, count: 0 };
     _insightsData = null;

@@ -84,6 +84,55 @@ def test_reminder_claim_is_atomic_and_recovers_after_lease(db):
     )
 
 
+def test_claimed_reminder_survives_initial_window_and_reaches_delivery(db, monkeypatch):
+    owner = "1001"
+    fire = datetime(2030, 1, 1, 9, tzinfo=UTC)
+    db.update_user_settings(owner, {"timezone": "UTC"})
+    item_id = db.insert_item(
+        {
+            "owner_id": owner,
+            "type": "event",
+            "title": "恢复领取中的提醒",
+            "start_time": fire.isoformat(),
+            "remind_times": [fire.isoformat()],
+        }
+    )
+    first = db.claim_reminder(item_id, fire.isoformat(), now=fire + timedelta(seconds=30))
+    assert first
+    assert db.get_due_reminder_items(now=fire + timedelta(seconds=121)) == []
+    recovered_at = fire + timedelta(seconds=151)
+    due = db.get_due_reminder_items(now=recovered_at)
+    assert [item.id for item in due] == [item_id]
+    service = ReminderService(db)
+    monkeypatch.setattr(service, "_current_user_time", lambda _owner: recovered_at)
+    deliveries = service._collect_item_reminders(due[0])
+    assert len(deliveries) == 1
+    assert deliveries[0]["claim_token"] != first
+    assert db.complete_reminder_claim(item_id, fire.isoformat(), deliveries[0]["claim_token"])
+    assert db.get_due_reminder_items(now=recovered_at + timedelta(minutes=1)) == []
+
+
+def test_abandoned_claim_expires_after_recovery_retention(db):
+    fire = datetime(2030, 1, 1, 9, tzinfo=UTC)
+    item_id = db.insert_item(
+        {
+            "owner_id": "1001",
+            "type": "event",
+            "title": "过期恢复",
+            "start_time": fire.isoformat(),
+            "remind_times": [fire.isoformat()],
+        }
+    )
+    assert db.claim_reminder(item_id, fire.isoformat(), now=fire)
+    assert (
+        db.get_due_reminder_items(
+            now=fire + timedelta(seconds=PendoConfig.REMINDER_STALE_AFTER_SECONDS + 1)
+        )
+        == []
+    )
+    assert db.get_reminder_logs(item_id)[0]["user_action"] == "expired"
+
+
 def test_database_update_does_not_mutate_caller_mapping(db):
     item_id = db.insert_item(
         {
@@ -629,7 +678,7 @@ def test_daily_briefing_outbox_prevents_duplicate_after_marker_failure(tmp_path,
 
     generated: list[str] = []
 
-    async def generate(user_id, _db):
+    async def generate(user_id, _db, **_kwargs):
         generated.append(user_id)
         return "daily content"
 
@@ -678,6 +727,129 @@ def test_database_cleanup_closes_connections_created_by_worker_threads(db):
     db.close_all_connections()
 
     assert db._all_connections == {}
+
+
+@pytest.mark.parametrize(
+    ("task", "start", "retry", "period", "routine"),
+    [
+        (
+            "daily_briefing",
+            "2030-01-01T23:59:00+00:00",
+            "2030-01-02T00:01:00+00:00",
+            "2030-01-01",
+            "send_daily_briefings",
+        ),
+        (
+            "diary_reminder",
+            "2030-01-01T23:59:00+00:00",
+            "2030-01-02T00:01:00+00:00",
+            "2030-01-01",
+            "check_diary_reminders",
+        ),
+        (
+            "weekly_finance_summary",
+            "2030-01-06T21:00:00+00:00",
+            "2030-01-07T00:01:00+00:00",
+            "2030-W01",
+            "send_weekly_finance_summaries",
+        ),
+        (
+            "month_end_finance_summary",
+            "2030-03-31T21:00:00+00:00",
+            "2030-04-01T00:01:00+00:00",
+            "2030-03",
+            "send_month_end_finance_summaries",
+        ),
+    ],
+)
+def test_scheduled_retry_preserves_original_period_across_boundary(
+    db,
+    monkeypatch,
+    task,
+    start,
+    retry,
+    period,
+    routine,
+):
+    from plugins.pendo.commands import scheduled
+
+    clock = [datetime.fromisoformat(start)]
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock[0].astimezone(tz) if tz else clock[0].replace(tzinfo=None)
+
+    async def users(_db):
+        return ["1001"]
+
+    async def settings(_users, _db):
+        return {
+            "1001": {
+                "settings": {
+                    "timezone": "UTC",
+                    "daily_report_time": "23:59",
+                    "diary_remind_time": "23:59",
+                },
+                "custom_settings": {},
+            }
+        }
+
+    generated = []
+
+    async def briefing(_user, _db, *, period_date=None):
+        generated.append(period_date)
+        return str(period_date)
+
+    async def finance(_db, _user, finance_period):
+        generated.append(finance_period.key)
+        return finance_period.end_date
+
+    sends = []
+
+    async def send(action):
+        sends.append(action)
+        return len(sends) > 1
+
+    monkeypatch.setattr(scheduled, "datetime", Clock)
+    monkeypatch.setattr(scheduled, "_get_active_user_ids", users)
+    monkeypatch.setattr(scheduled, "get_user_settings_bundle_map", settings)
+    monkeypatch.setattr(scheduled, "_generate_briefing_content", briefing)
+    monkeypatch.setattr(scheduled, "_generate_finance_summary_content", finance)
+    monkeypatch.setattr(scheduled, "save_user_setting", lambda *_args: None)
+    run = getattr(scheduled, routine)
+    context = SimpleNamespace(send_action=send)
+    asyncio.run(run(context, db))
+    assert _read_scheduled_delivery(db, task, "1001", period)["state"] == "failed"
+    clock[0] = datetime.fromisoformat(retry)
+    asyncio.run(run(context, db))
+    asyncio.run(run(context, db))
+    assert len(sends) == 2
+    assert sends[0]["echo"] == sends[1]["echo"]
+    assert _read_scheduled_delivery(db, task, "1001", period)["state"] == "sent"
+    if generated:
+        assert generated == [period, period]
+    else:
+        assert period in sends[1]["params"]["message"][0]["data"]["text"]
+
+
+def test_scheduled_retry_waits_for_lease_and_stops_after_recovery_window(db):
+    now = datetime(2030, 1, 1, tzinfo=UTC)
+    db.claim_scheduled_delivery("daily_briefing", "1001", "2030-01-01", now=now)
+    assert db.get_due_scheduled_delivery_periods("daily_briefing", "1001", now=now) == []
+    assert db.get_due_scheduled_delivery_periods(
+        "daily_briefing",
+        "1001",
+        now=now + timedelta(minutes=3),
+    ) == ["2030-01-01"]
+    assert (
+        db.get_due_scheduled_delivery_periods(
+            "daily_briefing",
+            "1001",
+            now=now + timedelta(hours=25),
+        )
+        == []
+    )
 
 
 def test_connection_registry_preserves_slots_when_worker_thread_ids_are_reused(db, monkeypatch):

@@ -17,6 +17,7 @@ from ..utils.validators import ledger_amount_filter_to_cents
 logger                            = logging.getLogger(__name__)
 _COLLECTION_PAYLOAD_FIELDS: Final = (
     "id",
+    "version",
     "kind",
     "title",
     "category",

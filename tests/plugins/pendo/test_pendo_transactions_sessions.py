@@ -357,6 +357,50 @@ async def test_pendo_handle_session_uses_transaction_argument_and_atomically_rep
 
 
 @pytest.mark.asyncio
+async def test_event_info_keeps_middle_turn_location_until_time_is_provided(db):
+    from plugins.pendo import main as pendo_main
+    from plugins.pendo.config import PendoConfig
+    from plugins.pendo.handlers.event import EventHandler
+
+    manager = SessionManager()
+    await manager.create(
+        1001,
+        None,
+        "pendo",
+        {
+            "type": PendoConfig.SESSION_TYPE_EVENT_INFO,
+            "data": {"title": "三轮会议"},
+        },
+    )
+    parser = AIParser(db=db)
+    parser.parse_event_with_ai = AsyncMock(
+        side_effect=[
+            {"location": "A 会议室"},
+            {"start_time": "2030-01-02T09:00:00"},
+        ]
+    )
+    services                  = _pendo_session_services()
+    services["ai_parser"]     = parser
+    services["event_handler"] = EventHandler(db, parser, ReminderService(db))
+    context                   = _PendoSessionTestContext(manager, services)
+    for text in ("地点是 A 会议室", "时间是 2030-01-02 09:00"):
+        await manager.update(
+            1001,
+            None,
+            lambda session, text=text: pendo_main.handle_session(
+                text,
+                {"user_id": 1001},
+                context,
+                session,
+            ),
+        )
+    events = db.get_all_items("1001", {"type": "event"})
+    assert len(events) == 1
+    assert events[0].location == "A 会议室"
+    assert await manager.peek(1001, None) is None
+
+
+@pytest.mark.asyncio
 async def test_pendo_event_info_replacement_failure_rolls_back_staged_generation():
     from plugins.pendo import main as pendo_main
     from plugins.pendo.config import PendoConfig
@@ -747,7 +791,7 @@ async def test_ai_parser_rule_fallback_preserves_absolute_reminder_times(monkeyp
     monkeypatch.setattr(
         parser.rule_parser,
         "parse",
-        lambda _text, user_id: {
+        lambda _text, user_id, **_kwargs: {
             "type": "event",
             "owner_id": user_id,
             "title": "规则日程",

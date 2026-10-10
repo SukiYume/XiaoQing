@@ -2,6 +2,7 @@ import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
 import { showModal, closeModal, showConfirmModal, safeHtml } from '../components/modal.js';
 import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
+import { initFormInteractions } from '../components/form.js';
 import { derivePresetRange, fetchItemRangeBounds, RANGE_PRESET_OPTIONS, todayRangeKey } from '../utils/date_ranges.js';
 import { isoDate, isValidDateInput, pad2, parseDate } from '../utils/format.js';
 import {
@@ -586,7 +587,7 @@ function renderHero() {
     const summary = _state.overview?.summary || {};
     const range   = currentRange();
     return `
-        <section class="events-hero">
+        <section class="events-hero pendo-page-header">
             <div>
                 <h2>📅 日程</h2>
                 <p>${_state.viewMode === 'calendar' ? `查看 ${range.start} 到 ${range.end} 的月度安排。` : '按时间顺序浏览当前范围内的日程。'}</p>
@@ -940,17 +941,16 @@ async function loadOverview(options = {}) {
     try {
         if (
             _state.viewMode !== 'calendar' &&
-            _state.listRange === 'all' &&
-            (!_state.allRangeStart || !_state.allRangeEnd)
+            _state.listRange === 'all'
         ) {
             const today  = todayRangeKey();
             const bounds = await fetchItemRangeBounds(api, {
                 type: 'event',
+                filters: { category: _state.filters.category, keyword: _state.filters.keyword },
                 sortField: 'start_time',
                 startField: 'start_time',
                 endField: 'end_time',
                 fallbackEnd: today,
-                minimumEnd: today,
             });
             if (_container !== container || requestVersion !== _loadVersion) return;
             _state.allRangeStart = bounds.start;
@@ -1088,7 +1088,8 @@ function editorModalHTML(existing = null, prefillDate = '', userTimeZone) {
                 </div>
                 <div class="events-editor-field full">
                     <label for="events-editor-notes">备注</label>
-                    <textarea id="events-editor-notes" name="notes" placeholder="可选，用来记录背景、材料链接或执行说明">${escapeHtml(existing?.notes || '')}</textarea>
+                    <textarea id="events-editor-notes" name="notes" data-text-limit="50000" placeholder="可选，用来记录背景、材料链接或执行说明">${escapeHtml(existing?.notes || '')}</textarea>
+                    <small class="form-text-count" aria-live="polite"></small>
                 </div>
                 ${
                     existing?.series_id
@@ -1207,6 +1208,7 @@ async function openEventEditor(existing = null, prefillDate = '') {
         `),
     });
 
+    initFormInteractions(content);
     content.querySelector('#events-editor-cancel').onclick = closeModal;
     content.querySelector('#events-add-reminder').onclick = () => {
         content.querySelector('#events-editor-reminders').insertAdjacentHTML('beforeend', reminderRowHTML(''));
@@ -1253,7 +1255,7 @@ async function openEventEditor(existing = null, prefillDate = '') {
                 await api.post('/items', { type: 'event', ...payload });
                 showToast('日程已创建', 'success');
             }
-            closeModal();
+            closeModal(content);
             window.dispatchEvent(new CustomEvent('pendo-data-changed', { detail: { type: 'event' } }));
         } catch (err) {
             showToast(err?.message || '保存失败', 'error');
@@ -1313,7 +1315,8 @@ function collectionEditorHTML(collection = {}) {
             </div>
             <div class="events-editor-field full">
                 <label for="events-collection-notes">备注</label>
-                <textarea id="events-collection-notes" name="notes">${escapeHtml(collection.notes || '')}</textarea>
+                <textarea id="events-collection-notes" name="notes" data-text-limit="50000">${escapeHtml(collection.notes || '')}</textarea>
+                <small class="form-text-count" aria-live="polite"></small>
             </div>
         </form>`;
 }
@@ -1330,6 +1333,7 @@ function openCollectionEditor(collection) {
             <button type="button" class="btn btn-primary" id="events-collection-editor-save">保存</button>
         `),
     });
+    initFormInteractions(content);
     content.querySelector('#events-collection-editor-cancel').onclick = closeModal;
     const saveButton = content.querySelector('#events-collection-editor-save');
     const editorForm = content.querySelector('#events-collection-editor-form');
@@ -1342,6 +1346,7 @@ function openCollectionEditor(collection) {
             return;
         }
         const payload = {
+            version: Number(collection.version),
             title: editorForm.querySelector('[name="title"]')?.value.trim() || '',
             category: editorForm.querySelector('[name="category"]')?.value.trim() || '未分类',
             location: editorForm.querySelector('[name="location"]')?.value.trim() || '',
@@ -1356,7 +1361,7 @@ function openCollectionEditor(collection) {
         try {
             await api.put(`/events/collections/${encodeURIComponent(collectionId)}`, payload);
             showToast('多节点日程已更新', 'success');
-            closeModal();
+            closeModal(content);
             window.dispatchEvent(new CustomEvent('pendo-data-changed', { detail: { type: 'event' } }));
         } catch (err) {
             showToast(`保存失败：${err?.message || '未知错误'}`, 'error');
@@ -1426,11 +1431,11 @@ async function openCollectionDetail(collectionId) {
         });
         content.querySelector('#events-collection-close').onclick = closeModal;
         content.querySelector('#events-collection-edit').onclick = () => {
-            closeModal();
+            closeModal(content);
             openCollectionEditor(collection);
         };
         content.querySelector('#events-collection-delete').onclick = async () => {
-            closeModal();
+            closeModal(content);
             try {
                 await deleteCollection(collection.id, collection.title || '这个日程集合');
             } catch (err) {
@@ -1440,7 +1445,7 @@ async function openCollectionDetail(collectionId) {
         content.addEventListener('click', async (event) => {
             const trigger = event.target.closest('[data-open-detail]');
             if (trigger?.dataset.openDetail) {
-                closeModal();
+                closeModal(content);
                 await openEventDetail(trigger.dataset.openDetail);
             }
         });
@@ -1573,16 +1578,16 @@ export async function openEventDetail(eventId) {
         const groupButton = content.querySelector('#events-detail-group');
         if (groupButton) {
             groupButton.onclick = async () => {
-                closeModal();
+                closeModal(content);
                 await openCollectionDetail(event.collection.id);
             };
         }
         content.querySelector('#events-detail-edit').onclick = () => {
-            closeModal();
+            closeModal(content);
             openEventEditor(event, _state.selectedDate);
         };
         content.querySelector('#events-detail-delete').onclick = async () => {
-            closeModal();
+            closeModal(content);
             try {
                 await deleteEvent(event.id, event.title || '这条日程');
             } catch (err) {
@@ -1641,7 +1646,7 @@ export async function openEventDetail(eventId) {
 
             const trigger = clickEvent.target.closest('[data-open-collection]');
             if (trigger?.dataset.openCollection) {
-                closeModal();
+                closeModal(content);
                 await openCollectionDetail(trigger.dataset.openCollection);
             }
         });

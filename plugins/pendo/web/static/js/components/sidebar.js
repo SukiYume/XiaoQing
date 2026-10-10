@@ -82,6 +82,7 @@ const NAV_SECTIONS = [
 function createNavItem(item) {
     const link = document.createElement('a');
     link.href = `#/${item.path}`;
+    link.tabIndex = 0;
     link.className = 'nav-item';
     link.dataset.path = item.path;
     link.dataset.module = item.path;
@@ -151,38 +152,73 @@ export function renderSidebar(container) {
         });
     });
     sidebar.appendChild(navigation);
+    const closeButton = document.createElement('button');
+    closeButton.type = 'button';
+    closeButton.className = 'sidebar-close btn btn-secondary';
+    closeButton.textContent = '关闭导航';
+    sidebar.appendChild(closeButton);
     container.replaceChildren(backdrop, sidebar);
 
     const mobileMedia   = window.matchMedia(MOBILE_QUERY);
+    let previousFocus   = null;
+    let backgroundInert = false;
+    const background    = document.querySelector('.main-wrapper');
     const setMobileOpen = (open) => {
         const shouldOpen = mobileMedia.matches && Boolean(open);
+        const wasOpen    = sidebar.classList.contains('mobile-open');
+        if (shouldOpen && !wasOpen) {
+            previousFocus = document.activeElement;
+            backgroundInert = Boolean(background?.inert);
+        }
         sidebar.classList.toggle('mobile-open', shouldOpen);
         sidebar.setAttribute('aria-hidden', mobileMedia.matches && !shouldOpen ? 'true' : 'false');
         backdrop.classList.toggle('visible', shouldOpen);
-        backdrop.tabIndex = shouldOpen ? 0 : -1;
+        backdrop.tabIndex = -1;
         backdrop.setAttribute('aria-hidden', shouldOpen ? 'false' : 'true');
         document.body.classList.toggle('sidebar-open', shouldOpen);
+        sidebar.inert = mobileMedia.matches && !shouldOpen;
+        closeButton.hidden = !mobileMedia.matches;
+        if (background) background.inert = shouldOpen ? true : backgroundInert;
 
         const toggleButton = document.querySelector('.header-toggle');
         if (toggleButton) {
             toggleButton.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
             toggleButton.setAttribute('aria-label', shouldOpen ? '关闭导航菜单' : '打开导航菜单');
         }
+        if (shouldOpen && !wasOpen) {
+            const focusNavigation = () => {
+                if (sidebar.classList.contains('mobile-open') && !sidebar.contains(document.activeElement)) {
+                    closeButton.focus();
+                }
+            };
+            focusNavigation();
+            window.setTimeout?.(focusNavigation, 0);
+        }
+        if (!shouldOpen && wasOpen) previousFocus?.focus?.();
     };
     const closeFromUserAction = () => {
         setMobileOpen(false);
-        document.querySelector('.header-toggle')?.focus?.();
     };
 
     backdrop.addEventListener('click', closeFromUserAction);
+    closeButton.addEventListener('click', closeFromUserAction);
     document.addEventListener('pendo:toggle-sidebar', () => {
         setMobileOpen(!sidebar.classList.contains('mobile-open'));
     });
     document.addEventListener('keydown', (event) => {
-        if (event.key !== 'Escape' || event.isComposing) return;
+        if (event.isComposing) return;
         if (!sidebar.classList.contains('mobile-open')) return;
-        event.preventDefault();
-        closeFromUserAction();
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            closeFromUserAction();
+        } else if (event.key === 'Tab') {
+            const links   = [...sidebar.querySelectorAll('.nav-item'), closeButton];
+            const current = links.indexOf(document.activeElement);
+            if (current < 0 || (event.shiftKey && current === 0) || (!event.shiftKey && current === links.length - 1)) {
+                event.preventDefault();
+                (event.shiftKey ? links.at(-1) : links[0]).focus();
+            }
+        }
     });
     mobileMedia.addEventListener('change', () => setMobileOpen(false));
 
@@ -193,11 +229,6 @@ export function renderSidebar(container) {
             if (active) link.setAttribute('aria-current', 'page');
             else link.removeAttribute('aria-current');
         });
-        const restoreMenuFocus =
-            mobileMedia.matches &&
-            sidebar.classList.contains('mobile-open') &&
-            sidebar.contains(document.activeElement);
         setMobileOpen(false);
-        if (restoreMenuFocus) document.querySelector('.header-toggle')?.focus?.();
     });
 }

@@ -38,14 +38,18 @@ const FILTER_TABS       = [
 ];
 const SUGGESTIONS = [
     { label: '找会议', query: '会议', type: 'event' },
-    { label: '找逾期任务', query: '截止', type: 'task' },
+    { label: '找逾期任务', query: '', type: 'task', preset: 'overdue' },
     { label: '找餐饮支出', query: '餐饮', type: 'ledger' },
     { label: '找读书笔记', query: '阅读', type: 'note' },
-    { label: '找最近日记', query: '今天', type: 'diary' },
+    { label: '最近 7 天日记', query: '', type: 'diary', preset: 'recent_diary' },
 ];
+const PRESET_LABELS = { overdue: '逾期未完成待办', recent_diary: '最近 7 天日记' };
+const TASK_STATUS_LABELS = { open: '待完成', done: '已完成', cancelled: '已取消' };
+const MOOD_LABELS = { happy: '开心', sad: '难过', calm: '平静', excited: '兴奋', angry: '生气', tired: '疲惫', anxious: '焦虑', grateful: '感恩', neutral: '普通' };
 
 let _container              = null;
 let _query                  = '';
+let _preset                 = '';
 let _activeType             = '';
 let _activeCategory         = '';
 let _activeCategoryField    = 'category';
@@ -158,7 +162,7 @@ function itemMeta(item) {
     }
     if (item.type === 'task') {
         return [
-            item.status || '',
+            TASK_STATUS_LABELS[item.status] || item.status || '',
             item.priority != null ? `优先级 ${item.priority}` : '',
             item.plan_date ? `计划 ${formatZonedDateTime(item.plan_date, '')}` : '',
             item.deadline_at ? `截止 ${formatZonedDateTime(item.deadline_at, '')}` : '',
@@ -168,7 +172,7 @@ function itemMeta(item) {
     if (item.type === 'ledger') {
         const txType  = item.transaction_type || 'expense';
         const sign    = txType === 'income' ? '+' : txType === 'transfer' ? '↔ ' : '-';
-        const amount  = item.amount != null ? `${sign}¥${item.amount.toFixed(2)}` : '';
+        const amount  = item.amount != null ? `${sign}${item.currency || 'CNY'} ${item.amount.toFixed(2)}` : '';
         const account = txType === 'transfer' && item.counter_account_name
                 ? `${item.account_name || '现金'}→${item.counter_account_name}`
                 : item.account_name || '';
@@ -181,7 +185,7 @@ function itemMeta(item) {
         return [
             entryTime || item.diary_date || '',
             item.weather || '',
-            item.mood ? `心情 ${item.mood}` : '',
+            item.mood ? `心情 ${MOOD_LABELS[item.mood] || item.mood}` : '',
             item.mood_score != null ? `${item.mood_score}/10` : '',
             item.is_favorite ? '收藏' : '',
         ].filter(Boolean);
@@ -372,7 +376,7 @@ function renderSuggestions() {
     return `<div class="search-chip-row" aria-label="搜索建议">${SUGGESTIONS.map(
         (item) => `
         <button type="button" class="search-chip search-suggestion"
-                data-suggest-query="${escapeHtml(item.query)}" data-suggest-type="${escapeHtml(item.type)}">
+                data-suggest-query="${escapeHtml(item.query)}" data-suggest-type="${escapeHtml(item.type)}" data-suggest-preset="${escapeHtml(item.preset || '')}">
             ${escapeHtml(item.label)}
         </button>
     `,
@@ -397,7 +401,7 @@ function renderCategoryChips() {
 }
 
 function renderSummary() {
-    if (!_query.trim() || !_hasSearched) return '';
+    if ((!_query.trim() && !_preset) || !_hasSearched) return '';
     const counts       = resultCounts();
     const activeTypes  = TYPE_ORDER.filter((type) => counts[type]);
     const visibleCount = _results.length;
@@ -407,7 +411,7 @@ function renderSummary() {
         <section class="search-summary">
             <div>
                 <h3>检索结果</h3>
-                <p>“${escapeHtml(_query)}”${summary}，本页覆盖 ${activeTypes.length || 0} 个模块。</p>
+                <p>“${escapeHtml(PRESET_LABELS[_preset] || _query)}”${summary}，本页覆盖 ${activeTypes.length || 0} 个模块。</p>
             </div>
             <div class="search-query-meta">
                 ${_total > PAGE_SIZE ? `<span class="search-pill">第 ${_page} / ${totalPages()} 页</span>` : ''}
@@ -442,7 +446,7 @@ function renderCard(item) {
 function renderResults() {
     if (_loading)
         return '<div class="search-empty" role="status"><div class="search-empty-icon">⏳</div><div>正在搜索...</div></div>';
-    if (!_query.trim()) {
+    if (!_query.trim() && !_preset) {
         return `<div class="search-empty"><div class="search-empty-icon">🔎</div><div>输入关键词开始检索，下面的建议可以直接点。</div></div>`;
     }
     if (_hasSearched && !_results.length) {
@@ -469,7 +473,7 @@ function renderPage() {
     const activeTypes = TYPE_ORDER.filter((type) => typeCounts[type]);
     _container.innerHTML = `
         <div class="search-shell">
-            <section class="search-hero">
+            <section class="search-hero pendo-page-header">
                 <div>
                     <h2><span class="search-hero-icon" aria-hidden="true">🔍</span><span>搜索</span></h2>
                     <p>在日程、待办、记账、笔记和日记中统一搜索。</p>
@@ -580,6 +584,7 @@ async function openResultDetail(item) {
 
 function searchParams(query, page) {
     const params = { q: query, page, page_size: PAGE_SIZE };
+    if (_preset) params.preset = _preset;
     if (_activeType) params.type = _activeType;
     if (_activeCategoryField === 'ledger_category' && _activeCategory) {
         params.ledger_category = _activeCategory;
@@ -591,13 +596,13 @@ function searchParams(query, page) {
 }
 
 function searchSignature(query, page) {
-    return JSON.stringify([query, page, _activeType, _activeCategory, _activeCategoryField, _activeCategoryTypeHint]);
+    return JSON.stringify([query, page, _activeType, _activeCategory, _activeCategoryField, _activeCategoryTypeHint, _preset]);
 }
 
 async function doSearch({ resetPage = false, force = false } = {}) {
     if (resetPage) _page = 1;
     const q = _query.trim();
-    if (!q) {
+    if (!q && !_preset) {
         _searchVersion += 1;
         _query = '';
         _results = [];
@@ -657,6 +662,7 @@ function attachListeners() {
     const input = root.querySelector('#search-input');
     if (input) {
         input.oninput = () => {
+            _preset = '';
             _query = input.value;
         };
         input.onchange = async () => {
@@ -672,6 +678,7 @@ function attachListeners() {
             if (event.key === 'Escape') {
                 event.preventDefault();
                 _query = '';
+                _preset = '';
                 _activeCategory = '';
                 _activeCategoryField = 'category';
                 _activeCategoryTypeHint = '';
@@ -686,10 +693,11 @@ function attachListeners() {
             const nextType      = ITEM_TYPES.has(requestedType) ? requestedType : '';
             if (nextType === _activeType && !_activeCategory) return;
             _activeType = nextType;
+            _preset = '';
             _activeCategory = '';
             _activeCategoryField = 'category';
             _activeCategoryTypeHint = '';
-            if (_query.trim()) await doSearch({ resetPage: true });
+            if (_query.trim() || _preset) await doSearch({ resetPage: true });
             else renderPage();
         };
     });
@@ -705,7 +713,7 @@ function attachListeners() {
             _activeCategory = isSame ? '' : category;
             _activeCategoryField = isSame ? 'category' : field;
             _activeCategoryTypeHint = isSame ? '' : typeHint;
-            if (_query.trim()) await doSearch({ resetPage: true });
+            if (_query.trim() || _preset) await doSearch({ resetPage: true });
             else renderPage();
         };
     });
@@ -713,6 +721,7 @@ function attachListeners() {
     root.querySelectorAll('.search-suggestion[data-suggest-query]').forEach((button) => {
         button.onclick = async () => {
             _query = textValue(button.dataset.suggestQuery).trim();
+            _preset = PRESET_LABELS[button.dataset.suggestPreset] ? button.dataset.suggestPreset : '';
             const requestedType = textValue(button.dataset.suggestType).trim();
             _activeType = ITEM_TYPES.has(requestedType) ? requestedType : '';
             _activeCategory = '';
@@ -750,10 +759,10 @@ export async function render(container) {
     _hasSearched = false;
     _lastSearchSignature = '';
     _unsubscribeDataChanges = subscribeDataChanges(null, async () => {
-        if (!_query.trim() || !_hasSearched) return;
+        if ((!_query.trim() && !_preset) || !_hasSearched) return;
         await doSearch({ force: true });
     });
-    if (_query.trim()) await doSearch({ resetPage: true, force: true });
+    if (_query.trim() || _preset) await doSearch({ resetPage: true, force: true });
     else renderPage();
 }
 
@@ -766,6 +775,7 @@ export function destroy() {
     _total = 0;
     _page = 1;
     _query = '';
+    _preset = '';
     _activeType = '';
     _activeCategory = '';
     _activeCategoryField = 'category';
@@ -778,4 +788,5 @@ export function destroy() {
 export function onRouteEnter(params) {
     const q = params && typeof params.get === 'function' ? params.get('q') : '';
     _query = textValue(q).trim();
+    _preset = '';
 }

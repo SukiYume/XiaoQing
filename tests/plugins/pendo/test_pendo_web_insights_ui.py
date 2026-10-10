@@ -6,8 +6,6 @@ from tests.helpers.pendo_web_items_test_support import (
     ROOT,
     Database,
     build_ledger_insights,
-    datetime,
-    ledger_insights_module,
     pytest,
     shutil,
     uuid,
@@ -308,68 +306,50 @@ def test_build_ledger_insights_month_bucket_orders_candles_by_ledger_date_not_cr
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def test_build_ledger_insights_clips_current_period_visuals_to_user_today(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_ledger_current_period_{uuid.uuid4().hex}"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    db       = Database(str(temp_dir / "pendo.db"))
+def test_build_ledger_insights_preserves_the_complete_selected_period(db: Database) -> None:
+    """列表、汇总和图表采用相同的完整筛选范围。"""
     owner_id = "u-current-period"
 
-    def user_now(user_id: str, database: Database) -> datetime:
-        assert user_id == owner_id
-        assert database is db
-        return datetime.fromisoformat("2026-04-08T10:00:00-12:00")
+    for item in [
+        {
+            "id": "apr-1",
+            "owner_id": owner_id,
+            "type": "ledger",
+            "title": "月初消费",
+            "amount": 48,
+            "transaction_type": "expense",
+            "ledger_category": "餐饮",
+            "ledger_date": "2026-04-01",
+            "created_at": "2026-04-01T09:00:00",
+        },
+        {
+            "id": "apr-8",
+            "owner_id": owner_id,
+            "type": "ledger",
+            "title": "今天消费",
+            "amount": 28,
+            "transaction_type": "expense",
+            "ledger_category": "交通",
+            "ledger_date": "2026-04-08",
+            "created_at": "2026-04-08T09:00:00",
+        },
+    ]:
+        db.insert_item(item)
 
-    monkeypatch.setattr(
-        ledger_insights_module,
-        "now_in_timezone",
-        user_now,
+    result = build_ledger_insights(
+        db         = db,
+        owner_id   = owner_id,
+        start_date = "2026-04-01",
+        end_date   = "2026-04-30",
     )
 
-    try:
-        for item in [
-            {
-                "id": "apr-1",
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "月初消费",
-                "amount": 48,
-                "transaction_type": "expense",
-                "ledger_category": "餐饮",
-                "ledger_date": "2026-04-01",
-                "created_at": "2026-04-01T09:00:00",
-            },
-            {
-                "id": "apr-8",
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "今天消费",
-                "amount": 28,
-                "transaction_type": "expense",
-                "ledger_category": "交通",
-                "ledger_date": "2026-04-08",
-                "created_at": "2026-04-08T09:00:00",
-            },
-        ]:
-            db.insert_item(item)
-
-        result = build_ledger_insights(
-            db         = db,
-            owner_id   = owner_id,
-            start_date = "2026-04-01",
-            end_date   = "2026-04-30",
-        )
-
-        assert result["summary"]["focus_total"] == 76
-        assert result["summary"]["peak_bucket_label"] == "4/1"
-        assert result["expense_timeline"][0]["key"] == "2026-04-01"
-        assert result["expense_timeline"][-1]["key"] == "2026-04-08"
-        assert len(result["expense_timeline"]) == 8
-        assert result["expense_candles"][-1]["key"] == "2026-04-08"
-    finally:
-        db.cleanup()
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    assert result["summary"]["focus_total"] == 76
+    assert result["summary"]["peak_bucket_label"] == "4/1"
+    assert result["expense_timeline"][0]["key"] == "2026-04-01"
+    assert result["expense_timeline"][-1]["key"] == "2026-04-30"
+    assert len(result["expense_timeline"]) == 30
+    assert result["expense_candles"][-1]["key"] == "2026-04-08"
+    assert sum(point["total"] for point in result["expense_timeline"]) == 76
 
 
 def test_build_ledger_insights_keeps_empty_range_peak_blank(db: Database) -> None:

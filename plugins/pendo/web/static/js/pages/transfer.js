@@ -19,34 +19,34 @@ const TYPE_OPTIONS = [
     { value: 'diary', label: '日记', hint: '书写记录' },
 ];
 const PRESETS = [
-    { value: 'week', label: '本周' },
-    { value: 'month', label: '本月' },
-    { value: 'quarter', label: '本季' },
-    { value: 'year', label: '今年' },
+    { value: 'week', label: '本周至今' },
+    { value: 'month', label: '本月至今' },
+    { value: 'quarter', label: '本季至今' },
+    { value: 'year', label: '今年至今' },
     { value: 'last_year', label: '去年' },
     { value: 'custom', label: '自定义' },
-    { value: 'all', label: '全部' },
+    { value: 'all', label: '全部时间' },
 ];
 const CONFLICT_POLICIES = [
     {
         value: 'isolate',
         label: '隔离导入',
-        desc: '在本 bundle 命名空间生成内部 UUID，不与已有来源记录合并。',
+        desc: '为这个备份包建立独立的一组记录，保留已有内容。',
     },
     {
         value: 'skip',
         label: '跳过同来源',
-        desc: '当前用户、同类型且 import.source_id 相同的记录已存在时跳过。',
+        desc: '跳过当前账户中已经导入的同类同来源记录。',
     },
     {
         value: 'overwrite',
         label: '覆盖同来源',
-        desc: '仅覆盖此前导入的同用户、同类型、同来源记录，不按外部 ID 直接定位。',
+        desc: '更新当前账户中此前导入的同类同来源记录。',
     },
     {
         value: 'duplicate',
         label: '生成副本',
-        desc: '始终生成新的内部 UUID，并保留来源 ID 元数据。',
+        desc: '为每条记录创建新的副本，并保留来源信息。',
     },
 ];
 const INVALID_POLICIES = [
@@ -257,7 +257,7 @@ function defaultState() {
         tab: 'export',
         export: {
             selectedTypes: TYPE_OPTIONS.map((item) => item.value),
-            preset: 'month',
+            preset: 'all',
             start: '',
             end: '',
             preview: null,
@@ -528,10 +528,10 @@ function renderPage() {
     _container.innerHTML = `
         <div class="transfer-shell" aria-busy="${busy}">
             <div class="transfer-stack">
-                <section class="transfer-hero">
+                <section class="transfer-hero pendo-page-header">
                     <div class="transfer-kicker">Transfer</div>
                     <h2>数据迁移</h2>
-                    <p>把日程、待办、记账、笔记和日记导出成正式 bundle，或从 bundle 预检后安全导入。这里优先做可回放、可校验、可筛选的迁移，不做模糊文本导入。</p>
+                    <p>备份日程、待办、账本、笔记和日记，也可以预览并导入已有备份包。</p>
                     <div class="transfer-chip-row">
                         <span class="transfer-chip"><code>.pendo.zip</code> 正式格式</span>
                         <span class="transfer-chip">导入前必须预检</span>
@@ -557,7 +557,8 @@ function renderExportTab() {
         <section class="transfer-grid">
             <div class="transfer-card">
                 <h3>导出备份</h3>
-                <p>按类别和时间范围打包数据，生成一个可回放、可校验的 <code>.pendo.zip</code> 文件。建议先预览一次，确认条数和时间口径再下载。</p>
+                <p>完整备份包含全部类别、全部时间的有效记录，也包含未来日程。你可以调整类别和时间范围，预览后下载 <code>.pendo.zip</code> 文件。</p>
+                <button type="button" class="transfer-btn secondary" id="btn-transfer-full-backup" ${busy ? 'disabled' : ''}>选择完整备份</button>
                 <div class="transfer-section">
                     <div class="transfer-section-label">导出类别</div>
                     <div class="transfer-type-grid">${TYPE_OPTIONS.map(renderExportTypeCard).join('')}</div>
@@ -600,7 +601,7 @@ function renderExportTypeCard(item) {
 
 function renderExportPreview(preview) {
     if (!preview) {
-        return `<div class="transfer-section"><div class="transfer-empty">先点"预览导出"。这里会显示命中的类别数量、总条数和本次 bundle 的时间范围，避免下载后才发现口径选错。</div></div>`;
+        return `<div class="transfer-section"><div class="transfer-empty">点击“预览导出”查看记录数量与日期范围。</div></div>`;
     }
     const rangeText =
         preview.selection.start && preview.selection.end
@@ -616,7 +617,7 @@ function renderExportPreview(preview) {
         <div class="transfer-section">
             <div class="transfer-section-label">预览结果</div>
             <div class="transfer-summary-grid three">
-                <article class="transfer-summary-card"><div class="transfer-summary-label">总条数</div><div class="transfer-summary-value">${preview.total}</div><div class="transfer-summary-meta">本次 bundle 预计导出记录总数</div></article>
+                <article class="transfer-summary-card"><div class="transfer-summary-label">总条数</div><div class="transfer-summary-value">${preview.total}</div><div class="transfer-summary-meta">本次备份预计导出的记录总数</div></article>
                 <article class="transfer-summary-card"><div class="transfer-summary-label">类别数</div><div class="transfer-summary-value">${preview.selection.types.length}</div><div class="transfer-summary-meta">当前勾选参与导出的模块</div></article>
                 <article class="transfer-summary-card"><div class="transfer-summary-label">时间范围</div><div class="transfer-summary-value range">${rangeText}</div><div class="transfer-summary-meta">按这个口径打包数据</div></article>
             </div>
@@ -631,14 +632,14 @@ function renderImportTab() {
     return `
         <section class="transfer-grid">
             <div class="transfer-card">
-                <h3>导入 bundle</h3>
+                <h3>导入备份包</h3>
                 <p>先上传 <code>.pendo.zip</code> 做预检，再按需要选中部分类别和冲突策略执行导入。预检不会改数据库，执行导入才会真正写入。最大支持 100 MB、全包 20,000 条记录。</p>
                 <div class="transfer-section">
                     <div class="transfer-upload" id="transfer-upload-zone" aria-busy="${busy}">
                         <div class="transfer-upload-title">拖进来，或手动选择文件</div>
-                        <div class="transfer-upload-hint">只接受 <code>.pendo.zip</code>。预检会先校验 manifest、checksum、schema 和逐行记录合法性。</div>
+                        <div class="transfer-upload-hint">支持 <code>.pendo.zip</code>。预检会检查文件完整性、格式和每条记录。</div>
                         <div class="transfer-file-name">${state.file ? escapeHtml(state.file.name) : '尚未选择文件'}</div>
-                        <input class="transfer-file-input" id="transfer-file-input" type="file" accept=".zip,.pendo.zip" aria-label="选择 Pendo bundle 文件" ${busy ? 'disabled' : ''}>
+                        <input class="transfer-file-input" id="transfer-file-input" type="file" accept=".zip,.pendo.zip" aria-label="选择 Pendo 备份文件" ${busy ? 'disabled' : ''}>
                         <button type="button" class="transfer-btn secondary" id="btn-transfer-pick-file" ${busy ? 'disabled' : ''}>选择文件</button>
                     </div>
                 </div>
@@ -652,7 +653,7 @@ function renderImportTab() {
                 <p>默认隔离导入；跳过/覆盖只匹配当前用户、同类型且此前导入时记录过的同一来源，不会拿外部 ID 直接覆盖现有内部记录。</p>
                 <div class="transfer-section"><div class="transfer-section-label">冲突策略</div>${CONFLICT_POLICIES.map((item) => renderPolicy(item, 'transfer-conflict-policy', state.conflictPolicy)).join('')}</div>
                 <div class="transfer-section"><div class="transfer-section-label">非法记录处理</div>${INVALID_POLICIES.map((item) => renderPolicy(item, 'transfer-invalid-policy', state.invalidPolicy)).join('')}</div>
-                ${state.inspect?.already_imported ? `<div class="transfer-section"><label class="transfer-check"><input type="checkbox" id="transfer-force-reimport" aria-label="强制重新导入" ${state.forceReimport ? 'checked' : ''} ${busy ? 'disabled' : ''}><span>强制重新导入（此 bundle 已导入过）</span></label></div>` : ''}
+                ${state.inspect?.already_imported ? `<div class="transfer-section"><label class="transfer-check"><input type="checkbox" id="transfer-force-reimport" aria-label="强制重新导入" ${state.forceReimport ? 'checked' : ''} ${busy ? 'disabled' : ''}><span>强制重新导入（此备份包已导入过）</span></label></div>` : ''}
                 <div class="transfer-section">
                     <div class="transfer-section-label">导入示例</div>
                     <div class="transfer-note">如果你手里是别的工具导出的 JSON、CSV 或数据库结果，可以先把字段重组到下面这套 bundle 结构，再压缩成 <code>.pendo.zip</code> 导入。示例里的 JSON 做了换行便于阅读，真正的 <code>ndjson</code> 文件需要"一行一条记录"。</div>
@@ -669,8 +670,8 @@ function renderDuplicateBundleWarning() {
             <div class="transfer-status-banner duplicate-warn">
                 <div class="transfer-status-icon" aria-hidden="true">!</div>
                 <div class="transfer-status-copy">
-                    <div class="transfer-status-title">此 bundle 已导入过</div>
-                    <div class="transfer-status-meta">系统检测到这个 bundle 之前已成功导入。如果你确实需要重新导入，请在右侧勾选"强制重新导入"。</div>
+                    <div class="transfer-status-title">此备份包已导入过</div>
+                    <div class="transfer-status-meta">这个备份包已成功导入。再次导入时，请在右侧勾选“强制重新导入”。</div>
                 </div>
                 <div></div>
             </div>
@@ -944,7 +945,7 @@ function renderImportExamples() {
 
 function renderImportInspect(state) {
     if (!state.inspect) {
-        return `<div class="transfer-section"><div class="transfer-empty">上传 bundle 并点击"预检文件"后，这里会显示文件摘要、可导入类别、样例记录和校验错误。没有预检结果前，导入按钮会保持禁用。</div></div>`;
+        return `<div class="transfer-section"><div class="transfer-empty">上传备份包并点击“预检文件”，查看文件摘要、样例记录和校验结果。预检通过后即可导入。</div></div>`;
     }
     const inspect      = state.inspect;
     const busy         = state.inspecting || state.executing;
@@ -957,7 +958,7 @@ function renderImportInspect(state) {
             <div class="transfer-summary-grid three">
                 <article class="transfer-summary-card"><div class="transfer-summary-label">有效记录</div><div class="transfer-summary-value">${inspect.counts.valid}</div><div class="transfer-summary-meta">通过 schema 和字段校验的记录数</div></article>
                 <article class="transfer-summary-card"><div class="transfer-summary-label">错误记录</div><div class="transfer-summary-value">${inspect.counts.errors}</div><div class="transfer-summary-meta">非法记录会在下面展开说明</div></article>
-                <article class="transfer-summary-card"><div class="transfer-summary-label">文件数</div><div class="transfer-summary-value">${inspect.summary.files}</div><div class="transfer-summary-meta">bundle 中实际包含的数据文件数</div></article>
+                <article class="transfer-summary-card"><div class="transfer-summary-label">文件数</div><div class="transfer-summary-value">${inspect.summary.files}</div><div class="transfer-summary-meta">备份包中包含的数据文件数</div></article>
             </div>
         </div>
         <div class="transfer-section"><div class="transfer-section-label">要导入的类别</div><div class="transfer-inline-checks">${inspect.summary.types.map((type) => `<label class="transfer-check"><input type="checkbox" data-import-type="${type}" aria-label="导入${typeLabel(type)}" ${state.selectedTypes.includes(type) ? 'checked' : ''} ${busy ? 'disabled' : ''}><span>${typeLabel(type)}</span></label>`).join('')}</div></div>
@@ -1168,6 +1169,16 @@ function attachExportListeners() {
     _container.querySelectorAll('[data-export-type]').forEach((button) => {
         button.onclick = () => toggleExportType(button.dataset.exportType);
     });
+    const fullBackup = _container.querySelector('#btn-transfer-full-backup');
+    if (fullBackup) fullBackup.onclick = () => {
+        if (_state.export.loading || _state.export.downloading) return;
+        _state.export.selectedTypes = TYPE_OPTIONS.map(item => item.value);
+        _state.export.preset = 'all';
+        _state.export.start = '';
+        _state.export.end = '';
+        _state.export.preview = null;
+        renderPage();
+    };
     _container.querySelectorAll('[data-export-preset]').forEach((button) => {
         button.onclick = () => {
             const preset = button.dataset.exportPreset;

@@ -18,7 +18,12 @@ from core.public_errors import public_error_message
 
 from ..config import MOOD_ANALYSIS_CONFIG
 from ..utils.settings_utils import parse_custom_settings
-from ..utils.time_utils import now_in_timezone, parse_and_localize, parse_remind_times
+from ..utils.time_utils import (
+    TimezoneHelper,
+    now_in_timezone,
+    parse_and_localize,
+    parse_remind_times,
+)
 from ..utils.validators import normalize_reminder_rules
 from .rule_parser import RuleParser
 
@@ -296,7 +301,9 @@ class AIParser:
 
     def parse_natural_language(self, text: str, user_id: str) -> dict[str, Any]:
         """同步规则解析（固定返回 event 类型），也用作 AI 解析的降级路径"""
-        parsed                 = self.rule_parser.parse(text, user_id)
+        user_timezone = TimezoneHelper.get_user_timezone(user_id, self.db)
+        parsed = self.rule_parser.parse(text, user_id, now=self._now(user_timezone))
+        parsed["timezone"]     = user_timezone.key
         parsed["parse_source"] = "rule"
         parsed["type"]         = "event"
         return parsed

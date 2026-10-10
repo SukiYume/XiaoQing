@@ -316,6 +316,15 @@ def build_widget_calendar(
     return {
         "start_date": start_day.isoformat(),
         "end_date": end_day.isoformat(),
+        "timezone": TimezoneHelper.get_user_timezone(owner_id, db).key,
+        "window_start": range_start.replace(
+            tzinfo=TimezoneHelper.get_user_timezone(owner_id, db)
+        ).isoformat(),
+        "window_end": datetime.combine(
+            end_day + timedelta(days=1),
+            datetime.min.time(),
+            tzinfo=TimezoneHelper.get_user_timezone(owner_id, db),
+        ).isoformat(),
         "items": unique_rows,
     }
 

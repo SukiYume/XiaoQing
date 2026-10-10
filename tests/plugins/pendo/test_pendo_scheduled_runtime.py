@@ -168,7 +168,7 @@ class TestScheduledRegression:
         async def fake_get_active_user_ids(_db):
             return ["1001", "1002"]
 
-        async def fake_generate_briefing_content(user_id, _db):
+        async def fake_generate_briefing_content(user_id, _db, **_kwargs):
             return f"briefing:{user_id}"
 
         monkeypatch.setattr(scheduled_module, "datetime", _FixedDateTime)
@@ -227,7 +227,7 @@ class TestScheduledRegression:
         async def fake_get_active_user_ids(_db):
             return ["1001"]
 
-        async def fake_generate_briefing_content(user_id, _db):
+        async def fake_generate_briefing_content(user_id, _db, **_kwargs):
             return f"briefing:{user_id}"
 
         monkeypatch.setattr(scheduled_module, "datetime", _FixedDateTime)
@@ -485,12 +485,12 @@ class TestScheduledRegression:
             "pendo_weekly_finance_summary": (
                 "scheduled_weekly_finance_summary",
                 "targeted",
-                {"day_of_week": "sun", "hour": 21, "minute": 0},
+                {"minute": "*"},
             ),
             "pendo_month_end_finance_summary": (
                 "scheduled_month_end_finance_summary",
                 "targeted",
-                {"day": "last", "hour": 21, "minute": 0},
+                {"minute": "*"},
             ),
             "pendo_cleanup_demo_data": (
                 "scheduled_cleanup_demo_data",

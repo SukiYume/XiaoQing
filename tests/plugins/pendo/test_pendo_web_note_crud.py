@@ -181,6 +181,43 @@ def test_item_update_note_logs_edit_details_for_web_undo():
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def test_long_note_is_rejected_without_truncation_or_saved_changes(db):
+    from fastapi import HTTPException
+
+    long_text = "文" * 50000 + "尾部保留"
+    with pytest.raises(HTTPException) as caught:
+        items_api.create_item(
+            items_api.ItemCreate(type="note", title="长文", content=long_text), "long-owner", db
+        )
+    assert caught.value.status_code == 422
+    assert "50000" in caught.value.detail
+    assert db.get_all_items("long-owner", {"type": "note"}) == []
+    created = items_api.create_item(
+        items_api.ItemCreate(type="note", title="原文", content="原内容"), "long-owner", db
+    )
+    item_id = created["data"]["id"]
+    with pytest.raises(HTTPException) as caught:
+        items_api.update_item(item_id, items_api.ItemUpdate(content=long_text), "long-owner", db)
+    assert caught.value.status_code == 422
+    assert db.get_item(item_id, "long-owner").content == "原内容"
+
+
+def test_note_self_reference_is_rejected_for_full_and_short_ids(db):
+    from fastapi import HTTPException
+
+    created = items_api.create_item(
+        items_api.ItemCreate(type="note", title="笔记"), "self-owner", db
+    )
+    item_id = created["data"]["id"]
+    for reference in (item_id, created["data"]["display_id"]):
+        with pytest.raises(HTTPException) as caught:
+            items_api.update_item(
+                item_id, items_api.ItemUpdate(related_items=[reference]), "self-owner", db
+            )
+        assert caught.value.status_code == 422
+    assert db.get_item(item_id, "self-owner").related_items == []
+
+
 def test_item_update_note_preserves_unchanged_missing_reference_for_web_edit():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_note_web_missing_ref_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)

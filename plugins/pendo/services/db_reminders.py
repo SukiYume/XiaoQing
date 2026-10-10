@@ -142,6 +142,34 @@ class ReminderRepositoryMixin:
         identity   = "\0".join(normalized).encode("utf-8")
         return f"pendo-{hashlib.sha256(identity).hexdigest()}"
 
+    def get_due_scheduled_delivery_periods(
+        self,
+        task_name: str,
+        owner_id: str,
+        *,
+        now: datetime,
+    ) -> list[str]:
+        """读取 24 小时恢复窗口内已尝试且可重试的周期。"""
+        current = self._as_utc(now, "scheduled delivery retry time")
+        now_text = current.isoformat(timespec="seconds")
+        stale_text = (current - timedelta(hours=24)).isoformat(timespec="seconds")
+        rows = (
+            self.get_connection()
+            .execute(
+                """
+            SELECT period_key FROM scheduled_delivery_outbox
+            WHERE task_name = ? AND owner_id = ? AND created_at >= ?
+              AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+              AND (state IN ('pending', 'failed')
+                   OR (state = 'leased' AND (claim_expires_at IS NULL OR claim_expires_at <= ?)))
+            ORDER BY created_at, period_key
+            """,
+                (task_name, owner_id, stale_text, now_text, now_text),
+            )
+            .fetchall()
+        )
+        return [str(row["period_key"]) for row in rows]
+
     def claim_scheduled_delivery(
         self,
         task_name: str,
@@ -687,7 +715,7 @@ class ReminderRepositoryMixin:
         cursor.execute(
             """
             SELECT remind_time, sent_at, confirmed_at, user_action, repeat_count, last_sent_at,
-                   failure_count, next_attempt_at
+                   failure_count, next_attempt_at, state, claim_expires_at
             FROM reminder_logs WHERE item_id = ?
             ORDER BY remind_time
             """,
@@ -746,8 +774,8 @@ class ReminderRepositoryMixin:
                     claim_token = NULL, claim_expires_at = NULL, next_attempt_at = NULL
                 WHERE sent_at IS NULL AND confirmed_at IS NULL AND fire_at_utc IS NOT NULL
                   AND (
-                    (failure_count = 0 AND fire_at_utc < ?)
-                    OR (failure_count > 0 AND fire_at_utc < ?)
+                    (failure_count = 0 AND state != 'claimed' AND fire_at_utc < ?)
+                    OR ((failure_count > 0 OR state = 'claimed') AND fire_at_utc < ?)
                   )
                 """,
                 (now_text, initial_cutoff, retry_cutoff),
@@ -763,8 +791,8 @@ class ReminderRepositoryMixin:
                 WHERE rl.sent_at IS NULL AND rl.confirmed_at IS NULL
                   AND rl.fire_at_utc IS NOT NULL AND rl.fire_at_utc <= ?
                   AND (
-                    (rl.failure_count = 0 AND rl.fire_at_utc >= ?)
-                    OR (rl.failure_count > 0 AND rl.fire_at_utc >= ?)
+                    (rl.failure_count = 0 AND rl.state != 'claimed' AND rl.fire_at_utc >= ?)
+                    OR ((rl.failure_count > 0 OR rl.state = 'claimed') AND rl.fire_at_utc >= ?)
                   )
                   AND (rl.next_attempt_at IS NULL OR rl.next_attempt_at <= ?)
                   AND (

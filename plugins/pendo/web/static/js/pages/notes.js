@@ -328,6 +328,7 @@ async function resolveActiveRange() {
     if (_filters.range !== 'all') return range;
     return fetchItemRangeBounds(api, {
         type: 'note',
+        filters: { ...sharedFilterParams(), ...(_filters.keyword ? { keyword: _filters.keyword } : {}) },
         sortField: 'created_at',
         startField: 'created_at',
         endField: 'created_at',
@@ -745,15 +746,10 @@ async function fetchNotes(page = 1, range = _activeRange) {
 function renderHero() {
     const summary = _overview?.summary || {};
     return `
-        <section class="notes-hero">
+        <section class="notes-hero pendo-page-header">
             <div>
                 <h2>📝 笔记</h2>
-                <p>集中整理灵感、摘录和工作草稿。</p>
-                <div class="notes-hero-tags">
-                    <span class="notes-hero-tag">${escapeHtml(rangeLabel())} ${summary.total_count || 0} 条笔记</span>
-                    <span class="notes-hero-tag">范围尾端近 7 天 ${summary.week_new_count || 0} 条新增</span>
-                    <span class="notes-hero-tag">${escapeHtml(_filters.category || '全部分类')}</span>
-                </div>
+                <p>${escapeHtml(rangeLabel())} ${summary.total_count || 0} 条笔记，集中整理灵感、摘录和草稿。</p>
             </div>
             <div class="notes-hero-actions">
                 <button class="btn btn-primary" id="notes-add-top" type="button">＋ 新建笔记</button>
@@ -1065,7 +1061,7 @@ function renderWorkspaceCollection() {
                     <div class="notes-list-head">
                         <div>
                             <h4 class="notes-list-title">继续浏览</h4>
-                            <p class="notes-list-subtitle">用统一行高查看剩余笔记，优先提升扫读效率。</p>
+                            <p class="notes-list-subtitle">按更新时间查看其余笔记。</p>
                         </div>
                         <div class="note-tag">${rest.length} 条</div>
                     </div>
@@ -1114,6 +1110,9 @@ function renderPage() {
             ${renderHero()}
             <div class="notes-stack">
                 ${renderRangeControls()}
+                ${renderFilters()}
+                ${renderWorkspace()}
+                <details class="pendo-analysis"><summary>查看笔记分析</summary>
                 ${renderSummary()}
                 <section class="notes-layout">
                     <div class="notes-layout-main">
@@ -1124,8 +1123,7 @@ function renderPage() {
                         ${renderCategoryPanel()}
                     </div>
                 </section>
-                ${renderFilters()}
-                ${renderWorkspace()}
+                </details>
             </div>
         </div>
     `;
@@ -1258,13 +1256,13 @@ export function openNoteViewModal(rawNote) {
     const deleteButton = content.querySelector('#note-delete');
     closeButton.onclick = closeModal;
     editButton.onclick = () => {
-        closeModal();
+        closeModal(content);
         openNoteFormModal(note);
     };
     deleteButton.onclick = async () => {
         if (deleteButton.disabled) return;
         deleteButton.disabled = true;
-        closeModal();
+        closeModal(content);
         await confirmAndDeleteNote(note, '返回详情', () => openNoteViewModal(note));
     };
     return content;
@@ -1310,7 +1308,7 @@ function openNoteFormModal(existing = null) {
         deleteButton.onclick = async () => {
             if (deleteButton.disabled) return;
             deleteButton.disabled = true;
-            closeModal();
+            closeModal(content);
             await confirmAndDeleteNote(note, '返回编辑', () => openNoteFormModal(note));
         };
     }
@@ -1344,7 +1342,7 @@ function openNoteFormModal(existing = null) {
                 await api.post('/items', { type: 'note', ...payload });
                 showToast('笔记已创建', 'success');
             }
-            closeModal();
+            closeModal(content);
             dispatchNoteChange();
         } catch (error) {
             showToast(`保存失败：${errorMessage(error)}`, 'error');

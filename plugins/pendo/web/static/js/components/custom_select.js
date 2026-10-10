@@ -225,6 +225,7 @@ export function initCustomSelects(container, callbacks = {}) {
                 case 'Escape':
                     if (isOpen) {
                         event.preventDefault();
+                        event.stopPropagation();
                         closeCustomSelect(selectEl);
                     }
                     break;

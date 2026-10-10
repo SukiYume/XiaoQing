@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from datetime import timedelta
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ...models.item import Item
 from ...services.db import Database
+from ...utils.time_utils import now_in_timezone
 from ...utils.validators import LEDGER_TRANSACTION_TYPES, TASK_STATUSES
 from ..deps import get_current_user, get_db
 from ..utils import (
@@ -104,7 +106,7 @@ def _serialize_results(
 
 @router.get("/search")
 def search_items(
-    q: Annotated[str, Query(min_length=1)],
+    q: str = "",
     item_type: Annotated[str | None, Query(alias="type")] = None,
     category: str | None         = None,
     ledger_category: str | None  = None,
@@ -114,13 +116,14 @@ def search_items(
     merchant: str | None         = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 50,
-    owner_id: str = Depends(get_current_user),
-    db: Database  = Depends(get_db),
+    owner_id: str                                     = Depends(get_current_user),
+    db: Database                                      = Depends(get_db),
+    preset: Literal["overdue", "recent_diary"] | None = None,
 ) -> dict[str, object]:
     """按统一筛选契约返回全文搜索当前页、完整总数和集合摘要。"""
 
     query = str(q or "").strip()
-    if not query:
+    if not query and not preset:
         raise HTTPException(status_code=422, detail="Search query cannot be empty")
     if page < 1 or not 1 <= page_size <= 100:
         raise HTTPException(status_code=422, detail="Invalid pagination")
@@ -133,14 +136,30 @@ def search_items(
         account_name,
         merchant,
     )
+    if preset:
+        expected_type = "task" if preset == "overdue" else "diary"
+        if filters.get("type", expected_type) != expected_type:
+            raise HTTPException(status_code=422, detail="搜索条件与快捷筛选类型冲突")
+        filters["type"] = expected_type
+        today           = now_in_timezone(owner_id, db).date()
+        if preset == "overdue":
+            if filters.get("status", "open") != "open":
+                raise HTTPException(status_code=422, detail="逾期筛选适用于未完成待办")
+            filters.update(status="open", overdue_date=today.isoformat())
+        else:
+            filters.update(
+                date_field="diary_date",
+                start_date=(today - timedelta(days=6)).isoformat(),
+                end_date=today.isoformat(),
+            )
     offset = (page - 1) * page_size
-    results, total = db.search_items_page(
-        owner_id,
-        query,
-        filters = filters,
-        limit   = page_size,
-        offset  = offset,
-    )
+    if query:
+        results, total = db.search_items_page(
+            owner_id, query, filters=filters, limit=page_size, offset=offset
+        )
+    else:
+        results = db.get_items(owner_id, filters=filters, limit=page_size, offset=offset)
+        total = db.count_items(owner_id, filters=filters)
 
     return {
         "ok": True,

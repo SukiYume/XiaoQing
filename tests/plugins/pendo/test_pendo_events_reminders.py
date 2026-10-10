@@ -386,8 +386,8 @@ class TestRecurringEventRegression:
 
         assert result["status"] == "success"
         assert len(inserted_items) == 2
-        assert inserted_items[0].end_time == "2030-01-01T10:30:00"
-        assert inserted_items[1].end_time == "2030-01-02T10:30:00"
+        assert inserted_items[0].end_time == "2030-01-01T10:30:00+08:00"
+        assert inserted_items[1].end_time == "2030-01-02T10:30:00+08:00"
 
     def test_edit_recurring_collection_updates_header_without_shifting_occurrences(self, tmp_path):
         import sys

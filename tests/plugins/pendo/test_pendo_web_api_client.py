@@ -68,6 +68,28 @@ def test_api_client_applies_headers_only_when_the_request_needs_them() -> None:
     )
 
 
+def test_expired_session_emits_one_recovery_event_and_logout_is_idempotent() -> None:
+    _run_api_client(
+        r"""
+        const events = [];
+        globalThis.CustomEvent = class { constructor(type, init) { this.type = type; this.detail = init.detail; } };
+        globalThis.window = { dispatchEvent(event) { events.push(event); } };
+        globalThis.fetch = async (url) => url === 'api/auth/session'
+            ? new Response(JSON.stringify({ ok: true, data: { owner_id: 'owner-1', csrf_token: 'token' } }))
+            : new Response('{}', { status: 401 });
+        await client.getSession();
+        await assert.rejects(client.api.put('/items/x', { title: '草稿' }), { status: 401 });
+        await assert.rejects(client.api.get('/items'), { status: 401 });
+        assert.equal(events.length, 1);
+        assert.equal(events[0].type, 'pendo-session-expired');
+        assert.equal(events[0].detail.ownerId, 'owner-1');
+        await client.logout();
+        await client.logout();
+        assert.equal(events.length, 1);
+        """
+    )
+
+
 def test_failed_session_checks_clear_stale_csrf_state() -> None:
     """不完整响应和网络失败都不能让之前的 CSRF 令牌继续污染后续请求。"""
 
@@ -160,7 +182,7 @@ def test_api_client_normalizes_error_envelopes_and_clears_unauthorized_sessions(
         await assert.rejects(client.api.get('/items'), { message: 'Request failed' });
         await assert.rejects(client.api.get('/items'), { message: '逻辑失败' });
         assert.equal((await client.getSession()).ok, true);
-        await assert.rejects(client.api.post('/items', {}), { message: 'Unauthorized' });
+        await assert.rejects(client.api.post('/items', {}), { message: '登录已失效，请重新登录', status: 401 });
         await client.api.post('/items', {});
         assert.equal(calls.at(-1).headers['x-csrf-token'], undefined);
         """

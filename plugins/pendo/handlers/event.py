@@ -1,9 +1,10 @@
 """日程命令处理器，负责创建、查看、编辑、删除和提醒管理。"""
 
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from itertools import islice
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast
+from zoneinfo import ZoneInfo
 
 from core.plugin_base import run_sync
 
@@ -27,6 +28,7 @@ from ..utils.time_utils import (
     now_in_timezone,
     parse_event_time_range,
     parse_remind_times,
+    resolve_source_wall_time,
     utc_now_iso,
 )
 from ..utils.validators import (
@@ -242,6 +244,10 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         allow_conflict: bool = False,
     ) -> CommandMessage:
         """创建日程"""
+        parsed_data["timezone"] = (
+            str(parsed_data.get("timezone") or "").strip()
+            or TimezoneHelper.get_user_timezone(user_id, self.db).key
+        )
         milestones, milestone_error = self._normalize_milestones(parsed_data.get("milestones"))
         if milestone_error:
             return {"status": "error", "message": milestone_error}
@@ -387,6 +393,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         created_at = utc_now_iso()
         event_item = EventItem(
             owner_id       = user_id,
+            timezone       = parsed_data["timezone"],
             title          = parsed_data.get("title", "无标题日程"),
             content        = parsed_data.get("content", ""),
             start_time     = parsed_data["start_time"],
@@ -419,15 +426,24 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         allow_conflict: bool = False,
     ) -> CommandMessage:
         """创建重复日程"""
-        start_dt = datetime.fromisoformat(parsed_data["start_time"])
-        end_dt   = (
-            datetime.fromisoformat(parsed_data["end_time"]) if parsed_data.get("end_time") else None
-        )
-        duration = end_dt - start_dt if end_dt else None
-        user_now = await run_sync(now_in_timezone, user_id, self.db)
-        instances, exhausted = self._expand_recurring_instances(
-            parsed_data["rrule"], start_dt, user_now
-        )
+        parsed_data.setdefault("timezone", TimezoneHelper.get_user_timezone(user_id, self.db).key)
+        try:
+            event_timezone = ZoneInfo(parsed_data["timezone"])
+            start_dt       = self._recurrence_local_time(parsed_data["start_time"], event_timezone)
+            end_dt         = (
+                self._recurrence_local_time(parsed_data["end_time"], event_timezone)
+                if parsed_data.get("end_time")
+                else None
+            )
+            duration = end_dt - start_dt if end_dt else None
+            user_now = await run_sync(now_in_timezone, user_id, self.db)
+            instances, exhausted = self._expand_recurring_instances(
+                parsed_data["rrule"],
+                start_dt,
+                user_now,
+            )
+        except ValueError as exc:
+            return error_result(f"❌ 重复日程时间无效：{exc}")
 
         if not instances:
             message = (
@@ -481,6 +497,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             instance_end_dt = instance_dt + duration if duration else None
             instance_item   = EventItem(
                 owner_id     = user_id,
+                timezone     = parsed_data["timezone"],
                 title        = parsed_data.get("title", "无标题日程"),
                 content      = parsed_data.get("content", ""),
                 start_time   = instance_dt.isoformat(),
@@ -515,41 +532,73 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         )
         created_ids = [child_id for child_id, _child in children]
 
+        message = format_recurring_event_created(
+            parsed_data.get("title", "无标题"),
+            len(created_ids),
+            len(reminder_rules),
+            collection_id,
+        )
+        if len(instances) == PendoConfig.EVENT_MAX_RRULE_COUNT:
+            message += (
+                f"\n📅 已生成范围：{instances[0]:%Y-%m-%d} 至 {instances[-1]:%Y-%m-%d}"
+                f"\n单次最多生成 {PendoConfig.EVENT_MAX_RRULE_COUNT} 条，后续日期请另行添加重复日程。"
+            )
         return {
             "status": "success",
-            "message": format_recurring_event_created(
-                parsed_data.get("title", "无标题"),
-                len(created_ids),
-                len(reminder_rules),
-                collection_id,
-            ),
+            "message": message,
             "item_id": collection_id,
         }
+
+    @staticmethod
+    def _recurrence_local_time(value: str, event_timezone: ZoneInfo) -> datetime:
+        """把有偏移的瞬时和本地墙钟时间统一到日程 IANA 时区。"""
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            return resolve_source_wall_time(parsed, "recurrence", event_timezone)
+        return parsed.astimezone(event_timezone)
 
     @staticmethod
     def _expand_recurring_instances(
         rule: str, start_dt: datetime, user_now: datetime
     ) -> tuple[list[datetime], bool]:
-        """按起始墙钟时间展开有界重复规则，并恢复原始时区偏移。"""
+        """按日程时区展开有界重复规则，并校验夏令时墙钟时间。"""
         from dateutil.rrule import rrulestr
 
-        start_wall = start_dt.replace(tzinfo=None) if start_dt.tzinfo else start_dt
-        now_wall = (
-            user_now.astimezone(start_dt.tzinfo).replace(tzinfo=None)
-            if start_dt.tzinfo is not None
-            else user_now.replace(tzinfo=None)
-        )
+        if start_dt.tzinfo is None:
+            zone = user_now.tzinfo or TimezoneHelper.DEFAULT_TZ
+            start_dt = start_dt.replace(tzinfo=zone)
+        now_local = user_now.astimezone(start_dt.tzinfo)
+        # 本地 UNTIL 按日程时区解释，UTC UNTIL 保留其绝对边界。
+        until_match = re.search(r"(?<=UNTIL=)(\d{8}(?:T\d{6})?)(?=;|$)", rule)
+        if until_match:
+            until_text = until_match.group(1)
+            until_dt   = datetime.strptime(
+                until_text,
+                "%Y%m%dT%H%M%S" if "T" in until_text else "%Y%m%d",
+            ).replace(tzinfo=start_dt.tzinfo)
+            rule = (
+                rule[: until_match.start()]
+                + until_dt.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
+                + rule[until_match.end() :]
+            )
         # DTSTART 与 COUNT 始终属于原规则，历史实例只在迭代结果中跳过。
-        rrule_obj = rrulestr(rule, dtstart=start_wall)
+        rrule_obj = rrulestr(rule, dtstart=start_dt)
         future = (
-            rrule_obj.xafter(now_wall, inc=False) if start_wall <= now_wall else iter(rrule_obj)
+            rrule_obj.xafter(now_local, inc=False) if start_dt <= now_local else iter(rrule_obj)
         )
         instances = list(islice(future, PendoConfig.EVENT_MAX_RRULE_COUNT))
         if not instances:
             return [], True
-        if start_dt.tzinfo is not None:
-            # dateutil 使用无时区墙钟时间展开规则；写回时恢复用户输入的偏移。
-            instances = [instance.replace(tzinfo=start_dt.tzinfo) for instance in instances]
+        if isinstance(start_dt.tzinfo, ZoneInfo):
+            for instance in instances:
+                try:
+                    resolve_source_wall_time(
+                        instance.replace(tzinfo=None), "recurrence", start_dt.tzinfo
+                    )
+                except ValueError as exc:
+                    raise ValueError(
+                        f"{instance:%Y-%m-%d %H:%M} 在 {start_dt.tzinfo.key} 的夏令时切换中存在歧义或缺失，请调整时间"
+                    ) from exc
         return instances, False
 
     async def _create_milestone_event(
@@ -602,6 +651,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             all_reminders.update(node_reminders)
             node = EventItem(
                 owner_id              = user_id,
+                timezone              = parsed_data["timezone"],
                 title                 = milestone.get("name", "无标题节点"),
                 content               = parsed_data.get("content", ""),
                 start_time            = node_time,
@@ -990,7 +1040,8 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             collection["id"],
             collection_updates,
             user_id,
-            operation_log={
+            expected_version = int(collection["version"]),
+            operation_log    = {
                 "user_id": user_id,
                 "action": "edit_event_collection",
                 "item_type": "event",
@@ -1164,7 +1215,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         now = now_in_timezone(user_id, self.db)
         deleted_count = 0
         pending_updates: dict[str, tuple[list[str], list[dict[str, int]]]] = {}
-        event_versions: dict[str, int] = {}
+        event_versions = {str(event.id): event.version for event in events}
         updated_rules: list[list[dict[str, int]]] = []
         for event in events:
             current_times = parse_remind_times(event.remind_times)
@@ -1202,6 +1253,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
                 user_id,
                 pending_updates,
                 collection_rules,
+                expected_child_versions=event_versions,
             )
         else:
             for event_id, (remind_times, reminder_rules) in pending_updates.items():
@@ -1479,6 +1531,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             user_id,
             child_updates,
             reminder_rules,
+            expected_version=int(collection["version"]),
         )
         return {
             "status": "success",

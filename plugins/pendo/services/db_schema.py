@@ -97,6 +97,7 @@ _ADD_COLUMN_MIGRATIONS = (
     "ALTER TABLE operation_logs ADD COLUMN undone_at TEXT",
     "ALTER TABLE operation_logs ADD COLUMN undo_log_id INTEGER",
     "ALTER TABLE reminder_logs ADD COLUMN fire_at_utc TEXT",
+    "ALTER TABLE event_collections ADD COLUMN version INTEGER NOT NULL DEFAULT 0",
 )
 
 _ITEM_INDEXES = (
@@ -303,7 +304,8 @@ def _create_event_schema(cursor: sqlite3.Cursor) -> None:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             deleted INTEGER DEFAULT 0,
-            deleted_at TEXT
+            deleted_at TEXT,
+            version INTEGER NOT NULL DEFAULT 0
         )
     """)
     cursor.execute(
@@ -508,16 +510,55 @@ def configure_connection(connection: sqlite3.Connection) -> None:
     connection.create_function("pendo_utc_epoch", 2, _sqlite_utc_epoch, deterministic=True)
 
 
+def _create_event_projection_triggers(cursor: sqlite3.Cursor) -> None:
+    """叶子写入同步集合日期范围和版本，覆盖编辑、导入、删除与恢复。"""
+    if (
+        cursor.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'event_collection_projection_update'"
+        ).fetchone()
+        is None
+    ):
+        cursor.execute("""UPDATE event_collections SET
+        start_time = (SELECT MIN(start_time) FROM items WHERE event_collection_id = event_collections.id AND deleted = 0),
+        end_time = (SELECT MAX(COALESCE(end_time, start_time)) FROM items WHERE event_collection_id = event_collections.id AND deleted = 0),
+        version = version + 1
+        WHERE deleted = 0 AND EXISTS (SELECT 1 FROM items WHERE event_collection_id = event_collections.id AND deleted = 0)""")
+    for operation, reference, condition in (
+        ("INSERT", "NEW.event_collection_id", "NEW.event_collection_id IS NOT NULL"),
+        ("DELETE", "OLD.event_collection_id", "OLD.event_collection_id IS NOT NULL"),
+        (
+            "UPDATE",
+            "OLD.event_collection_id, NEW.event_collection_id",
+            "OLD.event_collection_id IS NOT NULL OR NEW.event_collection_id IS NOT NULL",
+        ),
+    ):
+        cursor.execute(f"""
+            CREATE TRIGGER IF NOT EXISTS event_collection_projection_{operation.lower()}
+            AFTER {operation} ON items WHEN {condition}
+            BEGIN
+                UPDATE event_collections SET
+                    start_time = (SELECT MIN(start_time) FROM items
+                                  WHERE event_collection_id = event_collections.id AND deleted = 0),
+                    end_time = (SELECT MAX(COALESCE(end_time, start_time)) FROM items
+                                WHERE event_collection_id = event_collections.id AND deleted = 0),
+                    version = version + 1,
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now')
+                WHERE id IN ({reference}) AND deleted = 0;
+            END
+        """)
+
+
 def initialize_schema(cursor: sqlite3.Cursor) -> None:
     """按依赖顺序在调用方事务内创建表、执行迁移并补齐索引。"""
 
     _create_core_schema(cursor)
     # 审计表必须先存在，后续版本化 ADD COLUMN 才有明确目标。
     _create_audit_schema(cursor)
+    _create_event_schema(cursor)
     _apply_schema_migrations(cursor)
     _create_item_indexes(cursor)
     _create_audit_indexes(cursor)
-    _create_event_schema(cursor)
+    _create_event_projection_triggers(cursor)
     _create_search_schema(cursor)
     _create_reminder_indexes(cursor)
     _create_scheduled_delivery_schema(cursor)

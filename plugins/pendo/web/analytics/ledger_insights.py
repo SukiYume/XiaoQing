@@ -10,7 +10,6 @@ from typing import Any, Literal, cast
 
 from ...services.db import Database
 from ...utils.currency import currency_code
-from ...utils.time_utils import now_in_timezone
 from ..utils import amount_filter_cents
 
 JsonObject      = dict[str, Any]
@@ -325,10 +324,6 @@ def build_ledger_insights(
     end_day          = _parse_date(normalized_end) if normalized_end else None
     if start_day and end_day and start_day > end_day:
         raise ValueError("start_date must not be after end_date")
-    if start_day and end_day:
-        today = now_in_timezone(owner_id, db).date()
-        if start_day <= today <= end_day:
-            normalized_end = today.isoformat()
 
     filters = _LedgerFilters(
         owner_id         = owner_id,
