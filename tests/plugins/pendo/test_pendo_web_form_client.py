@@ -268,3 +268,50 @@ def test_form_interactions_share_one_idempotent_exclusive_button_path() -> None:
         assert.equal(__customInitCalls.length, 2);
         """
     )
+
+
+def test_text_limit_counts_unicode_and_preserves_the_complete_invalid_draft() -> None:
+    """按字符计数，阻止超限提交，同时保留原文和取消操作。"""
+    _run_form_client(
+        r"""
+        const listeners = {};
+        const input = {
+            value: '😀😀', dataset: { textLimit: '2' }, message: '', reports: 0,
+            addEventListener(type, handler) { this[type] = handler; },
+            setCustomValidity(message) { this.message = message; },
+            checkValidity() { return !this.message; },
+            reportValidity() { this.reports++; },
+            nextElementSibling: {
+                textContent: '', classList: { contains: () => true, toggle() {} },
+            },
+        };
+        const root = {
+            querySelectorAll(selector) { return selector === '[data-text-limit]' ? [input] : []; },
+            addEventListener(type, handler) { listeners[type] = handler; },
+        };
+        client.initFormInteractions(root);
+        assert.equal(input.message, '');
+        assert.equal(input.nextElementSibling.textContent, '2 / 2 字');
+        input.value += '文';
+        input.input();
+        let prevented = 0;
+        let stopped = 0;
+        const event = {
+            type: 'click', target: { closest: () => ({ id: 'note-modal-save' }) },
+            preventDefault() { prevented++; },
+            stopImmediatePropagation() { stopped++; },
+        };
+        listeners.click(event);
+        assert.equal(prevented, 1);
+        assert.equal(stopped, 1);
+        assert.equal(input.reports, 1);
+        assert.equal(input.value, '😀😀文');
+        assert.match(input.nextElementSibling.textContent, /3 \/ 2 字.*已超限/);
+        event.target.closest = () => ({ id: 'note-modal-cancel' });
+        listeners.click(event);
+        assert.equal(prevented, 1);
+        input.value = '修好';
+        input.input();
+        assert.equal(input.message, '');
+        """
+    )

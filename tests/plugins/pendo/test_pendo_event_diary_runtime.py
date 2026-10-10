@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from zoneinfo import ZoneInfo
 
 from tests.helpers.pendo_review_test_support import (
     Any,
@@ -17,6 +18,99 @@ from tests.helpers.pendo_review_test_support import (
     pytest,
     threading,
 )
+
+
+@pytest.mark.parametrize("kind", ["single", "recurring", "multi_node"])
+@pytest.mark.parametrize("timezone_name", [None, "America/Los_Angeles"])
+def test_chat_creation_uses_default_or_user_selected_timezone(db, kind, timezone_name):
+    from plugins.pendo.services.ai_parser import AIParser
+
+    if timezone_name:
+        db.update_user_settings("1001", {"timezone": timezone_name})
+    selected = timezone_name or "Asia/Shanghai"
+    parsed   = {"title": "会议", "start_time": "2030-01-02T09:00:00"}
+    if kind == "recurring":
+        parsed["rrule"] = "FREQ=DAILY;COUNT=2"
+    elif kind == "multi_node":
+        parsed["milestones"] = [
+            {"name": "开始", "time": "2030-01-02T09:00:00"},
+            {"name": "结束", "time": "2030-01-02T10:00:00"},
+        ]
+    handler = EventHandler(db, AIParser(db=db), SimpleNamespace())
+    result = asyncio.run(handler.create_event("1001", parsed, {}, allow_conflict=True))
+    assert result["status"] == "success"
+    items = db.get_all_items("1001", {"type": "event"})
+    assert len(items) == (1 if kind == "single" else 2)
+    assert {item.timezone for item in items} == {selected}
+    starts = sorted(
+        datetime.fromisoformat(item.start_time).astimezone(ZoneInfo(selected)) for item in items
+    )
+    assert starts[0].isoformat() == f"2030-01-02T09:00:00{'-08:00' if timezone_name else '+08:00'}"
+
+
+def test_rule_fallback_uses_user_date_at_shanghai_boundary(db):
+    from datetime import UTC
+
+    from plugins.pendo.services.ai_parser import AIParser
+
+    db.update_user_settings("1001", {"timezone": "America/Los_Angeles"})
+    parser = AIParser(
+        db=db, now_factory=lambda tz: datetime(2030, 1, 2, 1, tzinfo=UTC).astimezone(tz)
+    )
+    result = parser.parse_natural_language("明天9点开会", "1001")
+    assert result["start_time"] == "2030-01-02T09:00:00-08:00"
+    assert result["timezone"] == "America/Los_Angeles"
+
+
+@pytest.mark.parametrize("rule", ["FREQ=DAILY;COUNT=3", "FREQ=DAILY;UNTIL=20300311T160000Z"])
+def test_recurrence_keeps_local_hour_across_dst_and_accepts_utc_until(rule):
+    zone  = ZoneInfo("America/Los_Angeles")
+    start = EventHandler._recurrence_local_time("2030-03-09T09:00:00-08:00", zone)
+    instances, exhausted = EventHandler._expand_recurring_instances(
+        rule,
+        start,
+        datetime(2030, 3, 8, tzinfo=zone),
+    )
+    assert exhausted is False
+    assert [item.isoformat() for item in instances] == [
+        "2030-03-09T09:00:00-08:00",
+        "2030-03-10T09:00:00-07:00",
+        "2030-03-11T09:00:00-07:00",
+    ]
+
+
+@pytest.mark.parametrize("start", ["2030-03-09T02:30:00", "2030-11-02T01:30:00"])
+def test_recurrence_reports_dst_gap_and_fold(start):
+    zone = ZoneInfo("America/Los_Angeles")
+    with pytest.raises(ValueError, match="夏令时"):
+        EventHandler._expand_recurring_instances(
+            "FREQ=DAILY;COUNT=3",
+            datetime.fromisoformat(start).replace(tzinfo=zone),
+            datetime(2030, 1, 1, tzinfo=zone),
+        )
+
+
+def test_recurrence_limit_is_visible_in_created_message(db, monkeypatch):
+    from plugins.pendo.config import PendoConfig
+    from plugins.pendo.services.ai_parser import AIParser
+
+    monkeypatch.setattr(PendoConfig, "EVENT_MAX_RRULE_COUNT", 2)
+    handler = EventHandler(db, AIParser(db=db), SimpleNamespace())
+    result = asyncio.run(
+        handler.create_event(
+            "1001",
+            {
+                "title": "每日会议",
+                "start_time": "2030-01-01T09:00:00",
+                "rrule": "FREQ=DAILY;COUNT=4",
+            },
+            {},
+            allow_conflict=True,
+        )
+    )
+    assert result["status"] == "success"
+    assert "2030-01-01 至 2030-01-02" in result["message"]
+    assert "单次最多生成 2 条" in result["message"]
 
 
 @pytest.mark.asyncio
@@ -831,6 +925,7 @@ def test_web_data_helpers_normalize_public_shapes(caplog: pytest.LogCaptureFixtu
         "location": "线上",
         "notes": "备注",
         "display_id": "collection-1",
+        "version": None,
     }
 
     source = {"id": "item-1", 2: "numeric-key"}

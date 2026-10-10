@@ -93,6 +93,7 @@ def test_overview_and_detail_only_publish_fields_used_by_the_page(db: Database) 
         "collection",
         "reminders",
         "series_id",
+        "version",
     }
     assert detail["event"]["reminders"][0]["status"] == "sent"
 

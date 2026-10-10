@@ -167,7 +167,11 @@ class PendoRuntimeService:
 
     def stop_web(self) -> bool:
         try:
-            return bool(self._web_backend_factory().stop())
+            backend = self._web_backend_factory()
+            if backend.stop():
+                return True
+            owned_running = getattr(backend, "is_managed_running", backend.is_running)
+            return not bool(owned_running())
         except Exception as exc:
             public_error_message(None, exc, logger=logger, component="pendo.web.stop")
             return False
@@ -189,5 +193,5 @@ class PendoRuntimeService:
         if after.web_enabled and (not before.web_enabled or endpoint_changed):
             self.start_web(db)
 
-    async def stop_web_async(self) -> None:
-        await asyncio.to_thread(self.stop_web)
+    async def stop_web_async(self) -> bool:
+        return await asyncio.to_thread(self.stop_web)

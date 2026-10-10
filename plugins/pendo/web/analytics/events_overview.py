@@ -454,6 +454,7 @@ def build_event_detail(db: Database, owner_id: str, event_id: str) -> JsonObject
         # 详情只公开展示与单条编辑器实际使用的叶子字段。
         "event": {
             "id": event.id,
+            "version": event.version,
             "display_id": event.display_id,
             "title": event.title or "",
             "category": event.category or "",

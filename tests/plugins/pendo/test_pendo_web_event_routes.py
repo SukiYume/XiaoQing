@@ -10,7 +10,7 @@ from unittest.mock import Mock
 import pytest
 from fastapi import HTTPException
 
-from plugins.pendo.core.exceptions import ItemNotFoundException
+from plugins.pendo.core.exceptions import ItemNotFoundException, ItemVersionConflictException
 from plugins.pendo.services.db import Database
 from plugins.pendo.web.api import events as events_api
 
@@ -61,6 +61,162 @@ def _operation_rows(db: Database, owner_id: str, action: str) -> list[dict[str, 
         (owner_id, action),
     )
     return [dict(row) for row in rows.fetchall()]
+
+
+def test_collection_stale_form_and_changed_child_return_conflict(db):
+    owner = "collection-version"
+    collection_id, children = _create_collection(db, owner)
+    original = db.get_event_collection(collection_id, owner)
+    events_api.update_collection(
+        collection_id,
+        events_api.EventCollectionUpdate(
+            title    = "最新标题",
+            category = "学习",
+            location = "新地点",
+            version  = original["version"],
+        ),
+        owner,
+        db,
+    )
+    with pytest.raises(HTTPException) as caught:
+        events_api.update_collection(
+            collection_id,
+            events_api.EventCollectionUpdate(
+                title    = original["title"],
+                category = original["category"],
+                location = "旧地点",
+                version  = original["version"],
+            ),
+            owner,
+            db,
+        )
+    assert caught.value.status_code == 409
+    assert db.get_event_collection(collection_id, owner)["location"] == "新地点"
+    before_child_edit = db.get_event_collection(collection_id, owner)["version"]
+    db.update_item(children[0], {"title": "节点更新"}, owner)
+    with pytest.raises(HTTPException) as caught:
+        events_api.update_collection(
+            collection_id,
+            events_api.EventCollectionUpdate(
+                reminder_rules = [],
+                version        = before_child_edit,
+            ),
+            owner,
+            db,
+        )
+    assert caught.value.status_code == 409
+
+
+def test_collection_edit_syncs_category_and_restores_all_children_on_undo(db):
+    owner = "collection-undo"
+    collection_id, children = _create_collection(db, owner)
+    original     = db.get_event_collection(collection_id, owner)
+    old_children = {child_id: db.get_item(child_id, owner).to_dict() for child_id in children}
+    events_api.update_collection(
+        collection_id,
+        events_api.EventCollectionUpdate(
+            title          = "新集合标题",
+            category       = "新分类",
+            reminder_rules = [],
+            version        = original["version"],
+        ),
+        owner,
+        db,
+    )
+    assert len(db.get_all_items(owner, {"type": "event", "category": "新分类"})) == 2
+    assert all(db.get_item(child_id, owner).remind_times == [] for child_id in children)
+    result = db.undo_edit(owner)
+    assert result["status"] == "success"
+    assert db.get_event_collection(collection_id, owner)["title"] == original["title"]
+    for child_id in children:
+        item = db.get_item(child_id, owner).to_dict()
+        assert item["category"] == old_children[child_id]["category"]
+        assert item["remind_times"] == old_children[child_id]["remind_times"]
+        assert item["reminder_rules"] == old_children[child_id]["reminder_rules"]
+    assert db.undo_edit(owner)["status"] == "error"
+
+
+def test_collection_edit_undo_refuses_newer_child_mutation(db):
+    owner = "collection-undo-conflict"
+    collection_id, children = _create_collection(db, owner)
+    db.update_event_collection(collection_id, {"category": "学习"}, owner)
+    db.update_item(children[0], {"category": "独立修改"}, owner)
+    assert db.undo_edit(owner)["status"] == "error"
+    assert db.get_item(children[0], owner).category == "独立修改"
+
+
+@pytest.mark.parametrize("change", ["updated", "added", "deleted"])
+def test_bulk_reminder_edit_checks_the_complete_child_snapshot(db, change):
+    """批量提醒提交前完整校验节点集合和各节点版本。"""
+    owner = "collection-reminder-snapshot"
+    collection_id, children = _create_collection(db, owner)
+    versions = {child_id: db.get_item(child_id, owner).version for child_id in children}
+    before   = db.get_item(children[0], owner).remind_times
+    if change == "updated":
+        db.update_item(children[1], {"title": "并发更新"}, owner)
+    elif change == "deleted":
+        db.delete_item(children[1], owner_id=owner)
+    else:
+        db.insert_item(
+            {
+                "owner_id": owner,
+                "type": "event",
+                "title": "新增节点",
+                "start_time": "2030-05-03T10:00:00+08:00",
+                "event_collection_id": collection_id,
+                "event_collection_kind": "multi_node",
+            }
+        )
+    with pytest.raises(ItemVersionConflictException):
+        db.update_event_collection_reminders(
+            collection_id,
+            owner,
+            {children[0]: ([], [])},
+            [],
+            expected_child_versions=versions,
+        )
+    assert db.get_item(children[0], owner).remind_times == before
+
+
+def test_moving_deleting_and_restoring_leaf_refreshes_collection_bounds(db):
+    owner = "collection-range"
+    collection_id, children = _create_collection(db, owner)
+    db.update_item(
+        children[1],
+        {
+            "start_time": "2030-07-05T10:00:00+00:00",
+            "end_time": "2030-07-05T12:00:00+00:00",
+        },
+        owner,
+    )
+    assert db.get_event_collection(collection_id, owner)["end_time"] == "2030-07-05T12:00:00+00:00"
+    db.delete_event_instance(children[1], owner)
+    assert (
+        db.get_event_collection(collection_id, owner)["end_time"]
+        == db.get_item(children[0], owner).start_time
+    )
+    assert db.undo_delete(owner)["status"] == "success"
+    assert db.get_event_collection(collection_id, owner)["end_time"] == "2030-07-05T12:00:00+00:00"
+
+
+def test_event_detail_supplies_version_for_complete_editor_update(db):
+    from plugins.pendo.web.api.items import ItemUpdate, update_item
+
+    owner = "event-detail-edit"
+    _collection_id, children = _create_collection(db, owner)
+    detail   = events_api.get_event_detail(children[0], owner, db)["data"]["event"]
+    response = update_item(
+        children[0],
+        ItemUpdate(
+            title      = "详情修改",
+            start_time = detail["start_time"],
+            version    = detail["version"],
+        ),
+        owner,
+        db,
+    )
+    assert response["ok"] is True
+    assert db.get_item(children[0], owner).title == "详情修改"
 
 
 def test_event_router_registers_only_the_expected_collection_and_detail_paths() -> None:
@@ -436,6 +592,7 @@ def test_update_collection_normalizes_metadata_and_all_child_reminders(db: Datab
         collection_id,
         body=events_api.EventCollectionUpdate(
             title          = "\x00  发布项目 v2  ",
+            version        = db.get_event_collection(collection_id, owner_id)["version"],
             category       = "未分类",
             location       = None,
             tags           = ["Release", "release", "二期"],

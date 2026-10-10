@@ -138,7 +138,7 @@ def _parse_range(range_str: str | None, *, today: date | None = None) -> tuple[s
             date(current_day.year - 1, 1, 1),
             date(current_day.year - 1, 12, 31),
         ),
-        "all": (date(1970, 1, 1), current_day),
+        "all": (current_day, current_day),
     }
     if value in preset_bounds:
         start_day, end_day = preset_bounds[value]
@@ -163,7 +163,11 @@ def _resolve_stats_range(
     start_date: str | None = None,
     end_date: str | None   = None,
     *,
-    today: date | None = None,
+    today: date | None   = None,
+    db: Database | None  = None,
+    owner_id: str        = "",
+    item_type: str       = "",
+    currency: str | None = None,
 ) -> tuple[str, str]:
     """解析路由日期参数，并统一转换为可读的 422 错误。"""
 
@@ -172,6 +176,10 @@ def _resolve_stats_range(
             raise ValueError("start_date 与 end_date 必须同时提供")
         if start_date is not None and end_date is not None:
             return _validate_date_bounds(start_date, end_date)
+        if str(range_str or "").strip() == "all" and db is not None and item_type:
+            bounds = db.get_item_date_bounds(owner_id, item_type, currency=currency)
+            fallback = (today or _today(db, owner_id)).isoformat()
+            return bounds["start"] or fallback, bounds["end"] or fallback
         return _parse_range(range_str, today=today)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -217,7 +225,11 @@ def ledger_stats(
         range_str,
         start_date,
         end_date,
-        today=_today(db, owner_id),
+        today     = _today(db, owner_id),
+        db        = db,
+        owner_id  = owner_id,
+        item_type = "ledger",
+        currency  = currency,
     )
     currency = currency_code(currency)
     conn     = db.get_connection()
@@ -364,7 +376,9 @@ def task_stats(
 ) -> JsonObject:
     """返回任务状态、创建/关闭趋势及未完成任务分布。"""
 
-    start, end = _resolve_stats_range(range_str, today=_today(db, owner_id))
+    start, end = _resolve_stats_range(
+        range_str, today=_today(db, owner_id), db=db, owner_id=owner_id, item_type="task"
+    )
     start_day = date.fromisoformat(start)
     end_day   = date.fromisoformat(end)
     lower_date, upper_date = _coarse_timestamp_dates(start_day, end_day)
@@ -579,7 +593,9 @@ def event_stats(
 ) -> JsonObject:
     """返回日程的周趋势、时段矩阵和分类分布。"""
 
-    start, end = _resolve_stats_range(range_str, today=_today(db, owner_id))
+    start, end = _resolve_stats_range(
+        range_str, today=_today(db, owner_id), db=db, owner_id=owner_id, item_type="event"
+    )
     start_day     = date.fromisoformat(start)
     end_day       = date.fromisoformat(end)
     user_timezone = TimezoneHelper.get_user_timezone(owner_id, db)

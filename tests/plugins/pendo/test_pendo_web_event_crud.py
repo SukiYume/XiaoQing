@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from fastapi import HTTPException
+
 from plugins.pendo.web.api.items import ItemCreate, create_item
 from tests.helpers.pendo_web_items_test_support import (
     ROOT,
@@ -12,6 +14,28 @@ from tests.helpers.pendo_web_items_test_support import (
     shutil,
     uuid,
 )
+
+
+def test_nonexistent_local_event_time_returns_validation_error_for_create_and_edit(db):
+    db.update_user_settings("dst-owner", {"timezone": "America/Los_Angeles"})
+    with pytest.raises(HTTPException) as caught:
+        create_item(
+            ItemCreate(type="event", title="不存在时间", start_time="2030-03-10T02:30:00"),
+            "dst-owner",
+            db,
+        )
+    assert caught.value.status_code == 422
+    assert db.get_all_items("dst-owner", {"type": "event"}) == []
+    created = create_item(
+        ItemCreate(type="event", title="正常", start_time="2030-03-10T09:00:00"), "dst-owner", db
+    )
+    item_id = created["data"]["id"]
+    with pytest.raises(HTTPException) as caught:
+        items_api.update_item(
+            item_id, items_api.ItemUpdate(start_time="2030-03-10T02:30:00"), "dst-owner", db
+        )
+    assert caught.value.status_code == 422
+    assert db.get_item(item_id, "dst-owner").version == 0
 
 
 def test_event_validation_rejects_invalid_merged_update_values():

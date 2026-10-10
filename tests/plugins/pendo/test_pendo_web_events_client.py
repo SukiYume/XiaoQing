@@ -75,6 +75,10 @@ const {{ isoDate, isValidDateInput, pad2, parseDate }} = (() => {{
 }})();
 """
     replacements = (
+        (
+            "import { initFormInteractions } from '../components/form.js';",
+            "const initFormInteractions = () => {};",
+        ),
         ("import { api } from '../api.js';", "const api = globalThis.__api;"),
         (
             "import { showToast } from '../components/toast.js';",

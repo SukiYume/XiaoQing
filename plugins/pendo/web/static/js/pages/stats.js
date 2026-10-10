@@ -51,6 +51,7 @@ let _range                  = 'month';
 let _currency               = 'CNY';
 let _loading                = false;
 let _data                   = null;
+let _resolvedRanges         = null;
 let _customStart            = '';
 let _customEnd              = '';
 let _customDraftStart       = '';
@@ -162,6 +163,10 @@ function deriveRangeDates({
     customEnd = _customEnd,
     today = userTodayKey(),
 } = {}) {
+    if (rangeKey === 'all' && _resolvedRanges) {
+        const ranges = Object.values(_resolvedRanges);
+        return { start: ranges.map(value => value.start).sort()[0], end: ranges.map(value => value.end).sort().at(-1) };
+    }
     return derivePresetRange(rangeKey, {
         today,
         customStart,
@@ -184,7 +189,7 @@ function currentRangeRequest() {
         range,
         today,
         currency: _currency,
-        signature: `${rangeKey}|${range.start}|${range.end}|${_currency}`,
+        signature: rangeKey === 'all' ? `all|${_currency}` : `${rangeKey}|${range.start}|${range.end}|${_currency}`,
     };
 }
 
@@ -1378,11 +1383,12 @@ function ensureStyles() {
 async function fetchAllData({ rangeKey, range, today, currency }) {
     const rangeParam  = buildRequestRangeValue(rangeKey, range);
     const heatmapYear = resolveHeatmapYear(range);
-    const [ledgerRange, notesRange, diaryRange] =
+    const [ledgerRange, notesRange, diaryRange, tasksRange, eventsRange] =
         rangeKey === 'all'
             ? await Promise.all([
                   fetchItemRangeBounds(api, {
                       type: 'ledger',
+                      currency,
                       sortField: 'ledger_date',
                       startField: 'ledger_date',
                       endField: 'ledger_date',
@@ -1402,15 +1408,17 @@ async function fetchAllData({ rangeKey, range, today, currency }) {
                       endField: 'diary_date',
                       fallbackEnd: range.end,
                   }),
+                  fetchItemRangeBounds(api, { type: 'task', fallbackEnd: today }),
+                  fetchItemRangeBounds(api, { type: 'event', fallbackEnd: today }),
               ])
-            : [range, range, range];
+            : [range, range, range, range, range];
     const [ledgerRes, tasksRes, eventsRes, notesRes, diaryRes, heatmapRes, comparisonRes, moodRes] = await Promise.all([
         api.get(
             '/stats/ledger',
             rangeKey === 'all' ? { currency, start_date: ledgerRange.start, end_date: ledgerRange.end } : { currency, range: rangeParam },
         ),
-        api.get('/stats/tasks', { range: rangeParam }),
-        api.get('/stats/events', { range: rangeParam }),
+        api.get('/stats/tasks', { range: `${tasksRange.start}..${tasksRange.end}` }),
+        api.get('/stats/events', { range: `${eventsRange.start}..${eventsRange.end}` }),
         api.get('/stats/notes/overview', {
             start_date: notesRange.start,
             end_date: notesRange.end,
@@ -1428,6 +1436,7 @@ async function fetchAllData({ rangeKey, range, today, currency }) {
     ]);
     const moodData = responseData(moodRes);
     return {
+        ranges: { ledger: ledgerRange, note: notesRange, diary: diaryRange, task: tasksRange, event: eventsRange },
         data: {
             ledger: responseData(ledgerRes),
             tasks: responseData(tasksRes),
@@ -1445,7 +1454,7 @@ async function fetchAllData({ rangeKey, range, today, currency }) {
 // 各业务模块卡片按财务、任务、日程、笔记、日记顺序排列。
 function financeCards() {
     const ledger = _data?.ledger || {};
-    const range = deriveRangeDates();
+    const range = _range === 'all' && _resolvedRanges ? _resolvedRanges.ledger : deriveRangeDates();
     const trend = ledgerTrendSeries(ledger, range);
     const expenseByCategory = sortByNumericDesc(ledger.expense_by_category, 'total');
     const incomeByCategory = sortByNumericDesc(ledger.income_by_category, 'total');
@@ -1914,7 +1923,7 @@ function renderPage() {
     _container.innerHTML = `
         <div class="stats-shell" ${_loading ? 'aria-busy="true"' : ''}>
             <div class="stats-stack">
-                <section class="stats-hero">
+                <section class="stats-hero pendo-page-header">
                     <div>
                         <h2>📊 统计</h2>
                         <p>按时间范围查看财务、任务、日程、笔记和日记的整体变化。</p>
@@ -1927,7 +1936,7 @@ function renderPage() {
                         </div>
                     </div>
                     <div class="stats-range-group">
-                        <label>财务币种 <input id="stats-currency" class="stats-date-field" value="${escapeHtml(_currency)}" maxlength="3" size="4" aria-label="统计币种代码"></label>
+                        <div class="stats-currency-controls"><label>财务币种 <input id="stats-currency" class="stats-date-field" value="${escapeHtml(_currency)}" maxlength="3" size="4" aria-label="统计币种代码"></label><button type="button" class="btn btn-secondary" id="stats-currency-apply">切换</button></div>
                         <div class="stats-chip-row">
                             ${RANGE_PRESET_OPTIONS.map((option) => `<button type="button" class="stats-range-btn${_range === option.key ? ' active' : ''}" data-range="${escapeHtml(option.key)}" aria-pressed="${_range === option.key}">${escapeHtml(option.label)}</button>`).join('')}
                         </div>
@@ -1957,12 +1966,20 @@ function attachListeners() {
     if (!_container) return;
     const container     = _container;
     const currencyInput = container.querySelector('#stats-currency');
-    if (currencyInput) currencyInput.onchange = async () => {
+    const applyCurrency = async () => {
+        if (!currencyInput || _container !== container) return;
         const currency = currencyInput.value.trim().toUpperCase();
         if (!/^[A-Z]{3}$/.test(currency)) { showToast('请输入三位币种代码，如 CNY、USD', 'error'); return; }
+        if (currency === _currency && !_loading) return;
         _currency = currency;
         await loadAndRender();
     };
+    if (currencyInput) {
+        currencyInput.onchange = applyCurrency;
+        bindEnterAction(currencyInput, applyCurrency);
+    }
+    const currencyApply = container.querySelector('#stats-currency-apply');
+    if (currencyApply) currencyApply.onclick = applyCurrency;
     container.querySelectorAll('.stats-range-btn[data-range]').forEach((button) => {
         button.onclick = async () => {
             if (_container !== container) return;
@@ -2031,6 +2048,7 @@ async function loadAndRender() {
         const result = await fetchAllData(request);
         if (!isCurrentLoad(container, version)) return;
         _data = result.data;
+        _resolvedRanges = result.ranges;
         _heatmapData = result.heatmapData;
         _comparisonData = result.comparisonData;
         _moodEmojis = result.moodEmojis;
@@ -2040,6 +2058,7 @@ async function loadAndRender() {
         if (isCurrentLoad(container, version)) {
             if (_dataSignature !== request.signature) {
                 _data = null;
+                _resolvedRanges = null;
                 _heatmapData = null;
                 _comparisonData = null;
                 _moodEmojis = { ...DEFAULT_MOOD_EMOJIS };
@@ -2075,6 +2094,7 @@ export async function render(container) {
     _dataSignature = '';
     _chartSequence = 0;
     _data = null;
+    _resolvedRanges = null;
     _heatmapData = null;
     _comparisonData = null;
     const initialRange = deriveRangeDates();
@@ -2096,6 +2116,7 @@ export function destroy() {
     _dataSignature = '';
     _chartSequence = 0;
     _data = null;
+    _resolvedRanges = null;
     _customStart = '';
     _customEnd = '';
     _customDraftStart = '';

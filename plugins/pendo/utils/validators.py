@@ -168,9 +168,9 @@ def sanitize_text(text: str, max_length: int = 10000) -> str:
     # 转换为字符串
     text = str(text)
 
-    # 限制长度
+    # 明确拒绝超限输入，保留调用方的完整草稿。
     if len(text) > max_length:
-        text = text[:max_length]
+        raise ValueError(f"文本最多允许 {max_length} 个字符，当前为 {len(text)} 个字符")
 
     # 移除控制字符（保留换行和制表符）
     text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)

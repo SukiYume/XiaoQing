@@ -180,7 +180,7 @@ MODAL_SETUP: Final = r"""
                 key: init.key,
                 shiftKey: Boolean(init.shiftKey),
                 isComposing: Boolean(init.isComposing),
-                defaultPrevented: false,
+                defaultPrevented: Boolean(init.defaultPrevented),
                 preventDefault() { this.defaultPrevented = true; },
             };
             for (const callback of [...(listeners.get(type) || [])]) callback(event);
@@ -216,6 +216,21 @@ def _run_modal_client(script: str) -> None:
     )
 
 
+def test_old_modal_completion_preserves_new_instance_and_consumed_escape():
+    _run_modal_client(r"""
+        const oldForm = client.showModal('旧表单', client.safeHtml('<p>旧草稿</p>'));
+        client.closeModal(oldForm);
+        const newForm = client.showModal('新表单', client.safeHtml('<p>新草稿</p>'));
+        client.closeModal(oldForm);
+        assert.equal(newForm.isConnected, true);
+        assert.equal(__overlay.style.display, 'flex');
+        document.emit('keydown', { key: 'Escape', defaultPrevented: true });
+        assert.equal(newForm.isConnected, true);
+        client.closeModal(newForm);
+        assert.equal(__overlay.style.display, 'none');
+    """)
+
+
 def test_modal_requires_branded_content_and_restores_trigger_state() -> None:
     """普通字符串必须拒绝，打开和关闭应同步标题、滚动锁、监听器与焦点。"""
 
@@ -236,7 +251,7 @@ def test_modal_requires_branded_content_and_restores_trigger_state() -> None:
         const bodyNode = new __FakeElement('p');
         bodyNode.textContent = attack;
         const renderedContent = client.showModal(attack, bodyNode, { footer: branded });
-        assert.equal(renderedContent, __content);
+        assert.equal(renderedContent.parentElement, __content);
         assert.equal(renderedContent.querySelector('#modal-title').textContent, attack);
         assert.equal(renderedContent.children[1].children[0], bodyNode);
         assert.equal(renderedContent.querySelector('#footer-action').type, 'button');

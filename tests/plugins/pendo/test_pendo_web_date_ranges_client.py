@@ -111,7 +111,7 @@ def test_date_range_custom_and_fallback_inputs_are_normalized() -> None:
             today: 'not-a-date',
             allStart: 'also-invalid',
             allEnd: '2024-12-31T23:59:59',
-        }), { start: '1970-01-01', end: '2024-12-31' });
+        }), { start: '2024-02-29', end: '2024-12-31' });
         assert.deepEqual(client.derivePresetRange('unknown', { today: 'not-a-date' }), {
             start: '2024-02-29', end: '2024-02-29',
         });
@@ -128,13 +128,7 @@ def test_item_range_bounds_normalize_responses_and_never_reverse_the_range() -> 
         const api = {
             async get(path, params) {
                 calls.push({ path, params });
-                if (params.order === 'asc') {
-                    return { data: { items: [{ start_time: ' 2022-05-01T08:00:00 ' }] } };
-                }
-                return { data: { items: [{
-                    start_time: '2024-03-02T08:00:00',
-                    end_time: '2024-03-03T10:00:00',
-                }] } };
+                return { data: { start: '2022-05-01', end: '2024-03-03' } };
             },
         };
 
@@ -148,26 +142,12 @@ def test_item_range_bounds_normalize_responses_and_never_reverse_the_range() -> 
         }), { start: '2022-05-01', end: '2025-01-01' });
         assert.deepEqual(calls, [
             {
-                path: '/items',
-                params: {
-                    type: 'event', sort: 'start_time', order: 'asc', page: 1, page_size: 1,
-                },
-            },
-            {
-                path: '/items',
-                params: {
-                    type: 'event', sort: 'start_time', order: 'desc', page: 1, page_size: 1,
-                },
+                path: '/items/date-bounds', params: { type: 'event' },
             },
         ]);
 
         const corruptApi = {
-            async get(_path, params) {
-                if (params.order === 'asc') {
-                    return { data: { items: [{ created_at: '2030-01-01' }] } };
-                }
-                return { data: { items: [{ created_at: 42 }] } };
-            },
+            async get() { return { data: { start: '2030-01-01', end: 42 } }; },
         };
         assert.deepEqual(await client.fetchItemRangeBounds(corruptApi, {
             type: 'note', sortField: 'created_at', fallbackEnd: 'bad',

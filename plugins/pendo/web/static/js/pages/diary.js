@@ -715,7 +715,7 @@ function renderHero() {
         ? `${formatDateLabel(summary.busiest_day.date).split(' · ')[0]} · ${summary.busiest_day.words} 字`
         : '本月还没有高峰日';
     return `
-        <section class="diary-hero">
+        <section class="diary-hero pendo-page-header">
             <div>
                 <h2>📔 日记</h2>
                 <p>按月记录每天的心情、天气和当天见闻。</p>
@@ -1166,11 +1166,11 @@ export function openDiaryViewModal(item) {
     });
     content.querySelector('#diary-view-close').onclick = closeModal;
     content.querySelector('#diary-view-edit').onclick = () => {
-        closeModal();
+        closeModal(content);
         openDiaryFormModal(item);
     };
     content.querySelector('#diary-view-delete').onclick = async () => {
-        closeModal();
+        closeModal(content);
         await deleteDiary(item, () => openDiaryViewModal(item));
     };
 }
@@ -1263,7 +1263,7 @@ async function openDiaryFormModal(existing = null, presetDate = null) {
 
         if (isEdit) {
             content.querySelector('#diary-modal-delete').onclick = async () => {
-                closeModal();
+                closeModal(content);
                 await deleteDiary(diary, () => openDiaryFormModal(diary));
             };
         }
@@ -1322,7 +1322,7 @@ async function openDiaryFormModal(existing = null, presetDate = null) {
                     await api.post('/items', { type: 'diary', ...data });
                     showToast('日记已添加', 'success');
                 }
-                closeModal();
+                closeModal(content);
                 _selectedDate = diaryDate;
                 dispatchDiaryChange();
             } catch (error) {

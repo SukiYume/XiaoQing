@@ -92,11 +92,12 @@ SIDEBAR_SETUP: Final = r"""
     const headerToggle = new FakeElement('button');
     headerToggle.className = 'header-toggle';
     const documentBody = new FakeElement('body');
+    const mainWrapper = new FakeElement('div');
     globalThis.document = {
         body: documentBody,
         activeElement: headerToggle,
         createElement: (tagName) => new FakeElement(tagName),
-        querySelector: (selector) => selector === '.header-toggle' ? headerToggle : null,
+        querySelector: (selector) => selector === '.header-toggle' ? headerToggle : selector === '.main-wrapper' ? mainWrapper : null,
         addEventListener(type, callback) {
             if (!documentListeners.has(type)) documentListeners.set(type, []);
             documentListeners.get(type).push(callback);
@@ -105,6 +106,7 @@ SIDEBAR_SETUP: Final = r"""
             const event = {
                 key: init.key,
                 isComposing: Boolean(init.isComposing),
+                shiftKey: Boolean(init.shiftKey),
                 defaultPrevented: false,
                 preventDefault() { this.defaultPrevented = true; },
             };
@@ -138,6 +140,7 @@ SIDEBAR_SETUP: Final = r"""
     globalThis.__FakeElement = FakeElement;
     globalThis.__headerToggle = headerToggle;
     globalThis.__mobileMedia = mobileMedia;
+    globalThis.__mainWrapper = mainWrapper;
 """
 
 
@@ -217,7 +220,17 @@ def test_sidebar_mobile_toggle_escape_and_backdrop_keep_aria_in_sync() -> None:
         assert.equal(sidebar.classList.contains('mobile-open'), true);
         assert.equal(sidebar.getAttribute('aria-hidden'), 'false');
         assert.equal(backdrop.classList.contains('visible'), true);
-        assert.equal(backdrop.tabIndex, 0);
+        assert.equal(backdrop.tabIndex, -1);
+        assert.equal(__mainWrapper.inert, true);
+        assert.equal(sidebar.inert, false);
+        assert.equal(document.activeElement, sidebar.querySelectorAll('.sidebar-close')[0]);
+        document.activeElement = sidebar.querySelectorAll('.nav-item')[0];
+        const wrappedBack = document.emit('keydown', { key: 'Tab', shiftKey: true });
+        assert.equal(wrappedBack.defaultPrevented, true);
+        assert.equal(document.activeElement, sidebar.querySelectorAll('.sidebar-close')[0]);
+        const wrappedForward = document.emit('keydown', { key: 'Tab' });
+        assert.equal(wrappedForward.defaultPrevented, true);
+        assert.equal(document.activeElement, sidebar.querySelectorAll('.nav-item')[0]);
         assert.equal(backdrop.getAttribute('aria-hidden'), 'false');
         assert.equal(document.body.classList.contains('sidebar-open'), true);
         assert.equal(__headerToggle.getAttribute('aria-expanded'), 'true');
@@ -229,6 +242,8 @@ def test_sidebar_mobile_toggle_escape_and_backdrop_keep_aria_in_sync() -> None:
         event = document.emit('keydown', { key: 'Escape' });
         assert.equal(event.defaultPrevented, true);
         assert.equal(sidebar.classList.contains('mobile-open'), false);
+        assert.equal(__mainWrapper.inert, false);
+        assert.equal(sidebar.inert, true);
         assert.equal(__headerToggle.focusCount, 1);
 
         document.emit('pendo:toggle-sidebar');

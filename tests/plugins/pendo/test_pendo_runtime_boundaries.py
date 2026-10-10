@@ -652,6 +652,7 @@ class TestPendoRuntimeBoundaries:
 
         async def fake_stop_web_server_async():
             stopped.append("web")
+            return True
 
         monkeypatch.setattr(pendo_main, "_stop_web_server_async", fake_stop_web_server_async)
         monkeypatch.setattr(pendo_main, "cleanup_reminder_singleton", lambda: None)
@@ -673,6 +674,47 @@ class TestPendoRuntimeBoundaries:
         assert database.cleaned is True
         assert runtime_service.database is None
         assert context.state["pendo_runtime"] == {}
+
+    @pytest.mark.parametrize("asynchronous", [False, True])
+    def test_cleanup_retains_resources_until_web_stops(self, monkeypatch, asynchronous):
+        from plugins.pendo import main as pendo_main
+        from plugins.pendo.services.runtime import PendoRuntimeService
+
+        cleaned = []
+        database = SimpleNamespace(cleanup=lambda: cleaned.append("db"))
+        service = PendoRuntimeService()
+        service.adopt_database(database)
+        stopped = [False]
+
+        async def stop_async():
+            return stopped[0]
+
+        monkeypatch.setattr(pendo_main, "_stop_web_server", lambda: stopped[0])
+        monkeypatch.setattr(pendo_main, "_stop_web_server_async", stop_async)
+        monkeypatch.setattr(
+            pendo_main, "cleanup_reminder_singleton", lambda: cleaned.append("reminder")
+        )
+        runtime = {"services": {"ready": True}, "lifecycle_service": service}
+        context = SimpleNamespace(
+            state={"pendo_runtime": runtime},
+            logger=SimpleNamespace(warning=lambda *args: None, info=lambda *args: None),
+        )
+
+        def cleanup():
+            if asynchronous:
+                asyncio.run(pendo_main.shutdown(context))
+            else:
+                pendo_main.cleanup(context)
+
+        cleanup()
+        assert cleaned == []
+        assert service.database is database
+        assert runtime["services"] == {"ready": True}
+        stopped[0] = True
+        cleanup()
+        assert cleaned == ["db", "reminder"]
+        assert service.database is None
+        assert runtime == {}
 
     def test_run_scheduled_task_swallows_cancelled_error(self):
         from plugins.pendo import main as pendo_main

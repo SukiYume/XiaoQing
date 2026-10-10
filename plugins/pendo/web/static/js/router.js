@@ -10,7 +10,6 @@ let contentEl           = null;
 let currentLifecycle    = null;
 let hashListenerBound   = false;
 let requestedNavigation = 0;
-let routeLoadChain      = Promise.resolve();
 
 export function registerRoute(path, loader) {
     routes.set(path, loader);
@@ -55,16 +54,19 @@ async function loadRoute({ path, params }, navigationId) {
 
     let lifecycle = null;
     try {
-        await fetchUserTimeZone();
+        if (path !== 'settings') await fetchUserTimeZone();
         if (navigationId !== requestedNavigation) return;
         const page = await loader();
         if (navigationId !== requestedNavigation) return;
 
         lifecycle = { page, destroyed: false };
         currentLifecycle = lifecycle;
-        contentEl.innerHTML = '';
+        const pageRoot = document.createElement('div');
+        pageRoot.className = 'route-page';
+        contentEl.replaceChildren(pageRoot);
         await page.onRouteEnter?.(params);
-        await page.render?.(contentEl);
+        if (navigationId !== requestedNavigation) return;
+        await page.render?.(pageRoot);
 
         if (navigationId !== requestedNavigation) {
             if (currentLifecycle === lifecycle) currentLifecycle = null;
@@ -80,7 +82,9 @@ async function loadRoute({ path, params }, navigationId) {
         const message = cause instanceof Error ? cause.message : String(cause ?? '未知错误');
         if (currentLifecycle === lifecycle) currentLifecycle = null;
         destroyLifecycle(lifecycle);
-        contentEl.innerHTML = `<div class="error-state"><p>加载失败：${escapeHtml(message)}</p></div>`;
+        contentEl.innerHTML = `<div class="error-state"><p>加载失败：${escapeHtml(message)}</p><button type="button" class="btn btn-primary" id="route-retry">重新加载</button></div>`;
+        const retry = contentEl.querySelector?.('#route-retry');
+        if (retry) retry.onclick = queueCurrentRoute;
     }
 }
 
@@ -88,17 +92,11 @@ function queueCurrentRoute() {
     const navigationId = ++requestedNavigation;
     const route        = getParams();
 
-    // 新导航立即让旧页停止监听；异步收尾完成后只装载最后一次请求。
+    // 新导航立即独立加载；旧请求只能写入已移出的页面容器。
     destroyCurrentPage();
     contentEl.innerHTML = '<div class="empty-state"><p>加载中…</p></div>';
 
-    const loadLatestRoute = async () => {
-        if (navigationId !== requestedNavigation) return;
-        await loadRoute(route, navigationId);
-    };
-    // 即使此前队列因意外异常拒绝，下一次导航也应能继续工作。
-    routeLoadChain = routeLoadChain.then(loadLatestRoute, loadLatestRoute);
-    return routeLoadChain;
+    return loadRoute(route, navigationId);
 }
 
 function notifyRouteChange() {

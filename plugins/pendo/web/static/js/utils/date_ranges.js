@@ -39,7 +39,7 @@ export function derivePresetRange(
         customStart = '',
         customEnd = '',
         customFallback = 'month',
-        allStart = '1970-01-01',
+        allStart = '',
         allEnd = '',
     } = {},
 ) {
@@ -90,7 +90,7 @@ export function derivePresetRange(
         }
         case 'all':
             return {
-                start: normalizeDateKey(allStart) || '1970-01-01',
+                start: normalizeDateKey(allStart) || todayKey,
                 end: normalizeDateKey(allEnd) || todayKey,
             };
         case 'today':
@@ -99,43 +99,24 @@ export function derivePresetRange(
     }
 }
 
-/** 各取最早和最晚一条记录，得到“全部”筛选所需的稳定日期边界。 */
+/** 服务端按用户时区独立聚合全部记录的首尾日期。 */
 export async function fetchItemRangeBounds(
     apiClient,
     {
         type,
-        sortField,
-        startField = sortField,
-        endField = startField,
+        currency,
+        filters = {},
         fallbackEnd = todayInUserTimeZone(),
         minimumEnd = '',
     },
 ) {
-    const [earliestRes, latestRes] = await Promise.all([
-        apiClient.get('/items', {
-            type,
-            sort: sortField,
-            order: 'asc',
-            page: 1,
-            page_size: 1,
-        }),
-        apiClient.get('/items', {
-            type,
-            sort: sortField,
-            order: 'desc',
-            page: 1,
-            page_size: 1,
-        }),
-    ]);
-    const earliestItem = earliestRes?.data?.items?.[0];
-    const latestItem   = latestRes?.data?.items?.[0];
+    const response = await apiClient.get('/items/date-bounds', { ...filters, type, ...(currency ? { currency } : {}) });
     const fallback     = resolveToday(fallbackEnd).key;
-    const start        = normalizeDateKey(earliestItem?.[startField]) || fallback;
-    const latestStart  = normalizeDateKey(latestItem?.[startField]);
-    let end            = normalizeDateKey(latestItem?.[endField]) || latestStart || fallback;
+    const start        = normalizeDateKey(response?.data?.start) || fallback;
+    let end            = normalizeDateKey(response?.data?.end) || fallback;
 
     // 防止损坏数据、空集合或最小展示日产生反向范围。
-    for (const lowerBound of [latestStart, normalizeDateKey(minimumEnd), start]) {
+    for (const lowerBound of [normalizeDateKey(minimumEnd), start]) {
         if (lowerBound > end) end = lowerBound;
     }
     return { start, end };

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import calendar
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta, tzinfo
+from datetime import UTC, date, datetime, timedelta, tzinfo
 from typing import Any, Final, Literal, Protocol, cast, runtime_checkable
 
 from core.delivery import DeliveryReceipt, send_with_receipt
@@ -330,6 +331,27 @@ async def check_reminders(context: object) -> ActionList:
     return messages
 
 
+async def _periods_to_deliver(
+    run: _ScheduleRun,
+    task_name: str,
+    user_id: str,
+    new_period: str | None,
+) -> list[str]:
+    """首次发送按本地时刻入队，已入队周期按持久化租约恢复。"""
+    periods = cast(
+        list[str],
+        await run_sync(
+            run.db.get_due_scheduled_delivery_periods,
+            task_name,
+            user_id,
+            now=run.current_utc,
+        ),
+    )
+    if new_period is not None and new_period not in periods:
+        periods.append(new_period)
+    return periods
+
+
 async def _send_daily_briefing_for_user(
     run: _ScheduleRun,
     user_id: str,
@@ -341,27 +363,44 @@ async def _send_daily_briefing_for_user(
     user_settings   = bundle["settings"]
     user_now        = cast(datetime, get_user_now_from_settings(user_settings, run.current_utc))
     current_date    = user_now.date().isoformat()
-    if custom_settings.get("last_daily_briefing_date") == current_date:
-        return
     if not custom_settings.get("daily_briefing_enabled", True):
         return
-    if not _is_scheduled_minute(
-        user_now,
-        str(user_settings.get("daily_report_time") or "08:00"),
-    ):
-        return
+    first_due = custom_settings.get(
+        "last_daily_briefing_date"
+    ) != current_date and _is_scheduled_minute(
+        user_now, str(user_settings.get("daily_report_time") or "08:00")
+    )
+    periods = await _periods_to_deliver(
+        run,
+        "daily_briefing",
+        user_id,
+        current_date if first_due else None,
+    )
+    for period_key in periods:
+        await _deliver_daily_briefing(run, user_id, period_key, user_now)
+
+
+async def _deliver_daily_briefing(
+    run: _ScheduleRun,
+    user_id: str,
+    period_key: str,
+    user_now: datetime,
+) -> None:
+    """使用原始简报日期恢复投递，并保留当前租约时钟。"""
 
     claim = await _claim_periodic_delivery(
         run.db,
         "daily_briefing",
         user_id,
-        current_date,
-        user_now,
+        period_key,
+        run.current_utc,
     )
     if claim is None:
         return
     try:
-        briefing       = await _generate_briefing_content(user_id, run.db)
+        briefing = await _generate_briefing_content(user_id, run.db, period_date=period_key)
+        if period_key != user_now.date().isoformat():
+            briefing = f"📬 补发 {period_key} 每日简报\n{briefing}"
         delivery_claim = claim
         claim          = None
         delivered      = await _send_claimed_private(
@@ -378,7 +417,7 @@ async def _send_daily_briefing_for_user(
             save_user_setting,
             user_id,
             "last_daily_briefing_date",
-            current_date,
+            period_key,
             run.db,
         )
         logger.info("Sent daily briefing to user %s", user_id)
@@ -431,56 +470,58 @@ async def _send_diary_reminder_for_user(
     user_settings   = bundle["settings"]
     user_now        = cast(datetime, get_user_now_from_settings(user_settings, run.current_utc))
     current_date    = user_now.date().isoformat()
-    if custom_settings.get("last_diary_remind_date") == current_date:
-        return
-    if not _is_scheduled_minute(
-        user_now,
-        str(user_settings.get("diary_remind_time") or "21:30"),
-    ):
-        return
-    has_diary = cast(
-        bool,
-        await run_sync(run.db.has_diary_for_date, user_id, current_date),
+    first_due       = custom_settings.get(
+        "last_diary_remind_date"
+    ) != current_date and _is_scheduled_minute(
+        user_now, str(user_settings.get("diary_remind_time") or "21:30")
     )
-    if has_diary:
-        await run_sync(
-            save_user_setting,
-            user_id,
-            "last_diary_remind_date",
-            current_date,
-            run.db,
-        )
-        return
+    periods = await _periods_to_deliver(
+        run,
+        "diary_reminder",
+        user_id,
+        current_date if first_due else None,
+    )
+    for period_key in periods:
+        await _deliver_diary_reminder(run, user_id, period_key, current_date)
 
+
+async def _deliver_diary_reminder(
+    run: _ScheduleRun,
+    user_id: str,
+    period_key: str,
+    current_date: str,
+) -> None:
+    """按提醒所属日期检查日记，并在补写后完成原周期。"""
     claim = await _claim_periodic_delivery(
         run.db,
         "diary_reminder",
         user_id,
-        current_date,
-        user_now,
+        period_key,
+        run.current_utc,
     )
     if claim is None:
         return
     try:
-        delivery_claim = claim
-        claim          = None
-        delivered      = await _send_claimed_private(
-            run.context,
-            run.messages,
-            run.db,
-            delivery_claim,
-            "📔 今天还没有写日记哦，记录一下美好的今天吧？\n发送 /pendo diary 开始",
+        has_diary = cast(
+            bool,
+            await run_sync(run.db.has_diary_for_date, user_id, period_key),
         )
-        if not delivered:
-            logger.warning("Diary reminder was not delivery-confirmed for user %s", user_id)
-            return
-        await run_sync(
-            save_user_setting,
-            user_id,
-            "last_diary_remind_date",
-            current_date,
-            run.db,
-        )
+        if has_diary:
+            completed = await _complete_periodic_delivery(run.db, claim)
+            claim     = None
+        else:
+            day_label      = "今天" if period_key == current_date else period_key
+            delivery_claim = claim
+            claim          = None
+            completed      = await _send_claimed_private(
+                run.context,
+                run.messages,
+                run.db,
+                delivery_claim,
+                f"📔 {day_label}还没有写日记，记录一下当天的生活吧。\n发送 /pendo diary 开始",
+            )
+        if completed:
+            await run_sync(save_user_setting, user_id, "last_diary_remind_date", period_key, run.db)
     except Exception:
         if claim is not None:
             await _release_periodic_delivery(run.db, claim)
@@ -567,16 +608,52 @@ async def _send_finance_summary_for_user(
         datetime,
         get_user_now_from_settings(bundle["settings"], run.current_utc),
     )
-    current_date = user_now.date().isoformat()
-    if bundle["custom_settings"].get(schedule.marker_name) == current_date:
-        return
-    period = _finance_period(user_now, schedule)
-    claim  = await _claim_periodic_delivery(
+    current_date  = user_now.date().isoformat()
+    is_period_end = (
+        user_now.weekday() == 6
+        if schedule.kind == "weekly"
+        else (user_now + timedelta(days=1)).month != user_now.month
+    )
+    first_due = (
+        is_period_end
+        and _is_scheduled_minute(user_now, "21:00")
+        and bundle["custom_settings"].get(schedule.marker_name) != current_date
+    )
+    periods = await _periods_to_deliver(
+        run,
+        schedule.task_name,
+        user_id,
+        _finance_period(user_now, schedule).key if first_due else None,
+    )
+    for period_key in periods:
+        if schedule.kind == "weekly":
+            year_text, week_text = period_key.split("-W")
+            period_end = date.fromisocalendar(int(year_text), int(week_text), 7)
+        else:
+            year, month = map(int, period_key.split("-"))
+            period_end = date(year, month, calendar.monthrange(year, month)[1])
+        period_time = user_now.replace(
+            year  = period_end.year,
+            month = period_end.month,
+            day   = period_end.day,
+        )
+        await _deliver_finance_summary(
+            run, user_id, schedule, _finance_period(period_time, schedule)
+        )
+
+
+async def _deliver_finance_summary(
+    run: _ScheduleRun,
+    user_id: str,
+    schedule: _FinanceSchedule,
+    period: _FinancePeriod,
+) -> None:
+    claim = await _claim_periodic_delivery(
         run.db,
         schedule.task_name,
         user_id,
         period.key,
-        user_now,
+        run.current_utc,
     )
     if claim is None:
         return
@@ -601,7 +678,7 @@ async def _send_finance_summary_for_user(
             save_user_setting,
             user_id,
             schedule.marker_name,
-            current_date,
+            period.end_date,
             run.db,
         )
     except Exception:
@@ -1027,10 +1104,20 @@ def _append_finance_highlights(
         )
 
 
-async def _generate_briefing_content(user_id: str, db: Database) -> str:
+async def _generate_briefing_content(
+    user_id: str,
+    db: Database,
+    *,
+    period_date: str | None = None,
+) -> str:
     """批量读取当天条目，并生成用户本地时区的每日简报。"""
 
     user_now = now_in_timezone(user_id, db)
+    if period_date is not None:
+        target_date = date.fromisoformat(period_date)
+        user_now    = user_now.replace(
+            year=target_date.year, month=target_date.month, day=target_date.day
+        )
     today = user_now.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
     tomorrow = today + timedelta(days=1)
     events, tasks, overdue_tasks = cast(

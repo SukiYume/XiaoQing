@@ -4,7 +4,9 @@ const SAFE_METHODS              = new Set(['GET', 'HEAD', 'OPTIONS']);
 const DEFAULT_DOWNLOAD_FILENAME = 'download.bin';
 
 // CSRF 令牌只保存在当前页面内存中，任何会话失效都会立即清空。
-let csrfToken = '';
+let csrfToken              = '';
+let sessionOwnerId         = '';
+let sessionExpiredNotified = false;
 
 function formatErrorDetail(detail) {
     if (Array.isArray(detail)) {
@@ -25,6 +27,8 @@ function rememberSession(data, invalidMessage) {
         return { ok: false, message: invalidMessage };
     }
     csrfToken = nextCsrfToken;
+    sessionOwnerId = ownerId;
+    sessionExpiredNotified = false;
     return {
         ok: true,
         ownerId,
@@ -46,14 +50,32 @@ function sessionHeaders(options = {}) {
 }
 
 async function fetchApi(path, options = {}) {
-    const res = await fetch(`api${path}`, {
-        ...options,
-        headers: sessionHeaders(options),
-        credentials: 'same-origin',
-    });
+    const controller = new AbortController();
+    const isRead     = SAFE_METHODS.has(String(options.method || 'GET').toUpperCase());
+    const timeout    = isRead ? setTimeout(() => controller.abort(), 20000) : null;
+    let res;
+    try {
+        res = await fetch(`api${path}`, {
+            ...options,
+            signal: options.signal || controller.signal,
+            headers: sessionHeaders(options),
+            credentials: 'same-origin',
+        });
+    } catch (error) {
+        if (controller.signal.aborted) throw new Error('请求超时，请重试');
+        throw error;
+    } finally {
+        if (timeout !== null) clearTimeout(timeout);
+    }
     if (res.status === 401) {
         csrfToken = '';
-        throw new Error('Unauthorized');
+        if (sessionOwnerId && !sessionExpiredNotified && typeof window !== 'undefined') {
+            sessionExpiredNotified = true;
+            window.dispatchEvent(new CustomEvent('pendo-session-expired', { detail: { ownerId: sessionOwnerId } }));
+        }
+        const error = new Error('登录已失效，请重新登录');
+        error.status = 401;
+        throw error;
     }
     return res;
 }
@@ -200,6 +222,11 @@ export function createDemoSession() {
 
 export async function logout() {
     // 网络失败保留令牌，用户可以恢复连接后直接重试。
-    await request('/auth/logout', { method: 'POST' });
+    try {
+        await request('/auth/logout', { method: 'POST' });
+    } catch (error) {
+        if (error.status !== 401) throw error;
+    }
     csrfToken = '';
+    sessionOwnerId = '';
 }

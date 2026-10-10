@@ -1508,9 +1508,7 @@ select:hover:not(:disabled) {
         width: var(--sidebar-width);
         box-shadow: var(--shadow-lg);
         visibility: hidden;
-        transition:
-            transform var(--transition),
-            visibility var(--transition);
+        transition: transform var(--transition);
     }
 
     .sidebar.mobile-open {
@@ -1746,4 +1744,75 @@ body.modal-open #back-to-top {
 #back-to-top svg {
     width: 16px;
     height: 16px;
+}
+
+/* 会话恢复保留当前页面和编辑草稿。 */
+.session-recovery {
+    position: fixed;
+    inset: 16px 16px auto auto;
+    z-index: 2000;
+    width: min(480px, calc(100vw - 32px));
+    padding: 16px;
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    background: var(--color-surface);
+    color: var(--color-text);
+    box-shadow: 0 8px 32px rgba(15, 23, 42, .18);
+}
+.session-recovery p { margin: 0 0 10px; font-size: 14px; line-height: 1.6; }
+.session-recovery-actions { display: flex; gap: 8px; }
+.session-recovery-actions input { flex: 1; min-width: 0; }
+.session-recovery .session-recovery-error { margin: 8px 0 0; }
+.sidebar-close { margin: 12px 16px; flex-shrink: 0; }
+.sidebar-close[hidden] { display: none; }
+.stats-currency-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+
+/* 工作页面共用紧凑标题和按需展开的分析区。 */
+.route-page { width: 100%; min-width: 0; }
+#content .pendo-page-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px 20px;
+    padding: 0;
+    margin: 0 0 18px;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+}
+#content .pendo-page-header h2 { margin: 0; font-size: 24px; line-height: 1.4; }
+#content .pendo-page-header p { margin: 6px 0 0; font-size: 14px; line-height: 1.6; color: #475569; }
+#content .pendo-page-header::before, #content .pendo-page-header::after { display: none; }
+.pendo-analysis { padding: 14px 16px; border: 1px solid var(--color-border); border-radius: 12px; background: var(--color-surface); }
+.pendo-analysis > summary { cursor: pointer; font-size: 14px; font-weight: 600; color: #334155; }
+.pendo-analysis[open] > summary { margin-bottom: 16px; }
+.pendo-analysis > summary:focus-visible { outline: 2px solid var(--color-dashboard); outline-offset: 4px; }
+#content :is(.tasks-workspace, .notes-workspace, .ledger-records-card, .settings-panel, .notes-range-panel, .notes-filter-bar, .tasks-filter-bar, .ledger-filter-panel) {
+    border-radius: 12px;
+    box-shadow: none;
+    background: var(--color-surface);
+}
+#content .pendo-analysis :is(.tasks-layout, .notes-layout, .ledger-summary-cards) { margin-top: 14px; }
+#content :is(.tasks-workspace-subtitle, .note-row-meta, .ledger-row-subtitle, .settings-panel p) { color: #475569; }
+#content .ledger-filter-item--currency .ledger-filter-controls { display: flex; flex-wrap: nowrap; gap: 6px; width: 100%; }
+#content .ledger-filter-item--currency #filter-currency { min-width: 0; width: 64px; height: 40px; flex: 1; }
+#content .ledger-filter-item--currency button { flex-shrink: 0; padding-inline: 10px; }
+@media (max-width: 720px) {
+    #content .pendo-page-header h2 { font-size: 22px; }
+    #content .pendo-page-header { align-items: flex-start; }
+    #content .pendo-page-header :is(.tasks-hero-actions, .notes-hero-actions, .ledger-page-header) { margin: 0; }
+    #content .pendo-page-header .tasks-hero-actions { flex-wrap: wrap; }
+    #content .ledger-filter-panel .ledger-panel-body { padding: 12px; }
+    #content .ledger-filter-bar { gap: 12px 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    #content .ledger-filter-item { min-width: 0; }
+    #content .tasks-filter-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    #content .tasks-filter-field:nth-child(-n+2), #content .tasks-filter-field--range { grid-column: 1 / -1; }
+    #content .notes-range-panel { padding: 12px; }
+    #content .notes-range-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+    #content .notes-range-btn { padding: 6px 4px; font-size: 13px; }
+    #content .notes-filter-bar { padding: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 10px; }
+    #content .notes-filter-field:first-child, #content .notes-filter-actions { grid-column: 1 / -1; }
+    #content .notes-filter-actions { justify-content: flex-end; }
 }

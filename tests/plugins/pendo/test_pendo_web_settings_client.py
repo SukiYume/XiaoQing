@@ -224,7 +224,8 @@ def test_settings_render_is_safe_accessible_and_binds_native_buttons() -> None:
 
         assert.ok(root.innerHTML.includes('&lt;script&gt;时区&lt;/script&gt;'));
         assert.ok(!root.innerHTML.includes('<script>时区</script>'));
-        assert.ok(root.innerHTML.includes('提醒关闭'));
+        assert.match(root.innerHTML, /id="toggle-reminder-enabled"[^>]*>/);
+        assert.ok(!/id="toggle-reminder-enabled"[^>]*checked/.test(root.innerHTML));
         assert.equal((root.innerHTML.match(/type="button"/g) || []).length, 3);
         assert.equal(typeof saveButton.onclick, 'function');
         assert.equal(typeof logoutButton.onclick, 'function');
@@ -241,8 +242,8 @@ def test_settings_render_is_safe_accessible_and_binds_native_buttons() -> None:
     )
 
 
-def test_settings_collects_before_render_and_preserves_extension_keys() -> None:
-    """保存载荷应先读取表单，并保留不属于本页面的 JSON 扩展键。"""
+def test_settings_save_preserves_live_draft_and_extension_keys() -> None:
+    """保存期间保留表单输入和 JSON 扩展键。"""
 
     _run_settings_client(
         r"""
@@ -286,7 +287,8 @@ def test_settings_collects_before_render_and_preserves_extension_keys() -> None:
         };
         const first = client.__handleSave();
         const duplicate = client.__handleSave();
-        assert.equal(formCleared, true);
+        assert.equal(formCleared, false);
+        controls['#setting-timezone'].value = 'Asia/Tokyo';
         assert.equal(payloads.length, 1);
         assert.equal(payloads[0].timezone, 'Europe/Paris');
         assert.equal(payloads[0].quiet_hours_end, '06:30');
@@ -300,6 +302,8 @@ def test_settings_collects_before_render_and_preserves_extension_keys() -> None:
             settings_json: { reminder_enabled: 'false' },
         } });
         await Promise.all([first, duplicate]);
+        assert.equal(formCleared, false);
+        assert.equal(controls['#setting-timezone'].value, 'Asia/Tokyo');
         const state = client.__getSettingsTestState();
         assert.equal(state.saving, false);
         assert.equal(state.settings.settings_json.reminder_enabled, false);
@@ -315,7 +319,11 @@ def test_settings_save_failure_recovers_and_destroy_ignores_late_response() -> N
 
     _run_settings_client(
         r"""
-        const root = __makeRoot();
+        const input = __makeControl({ value: 'Asia/Tokyo' });
+        const root = __makeRoot({
+            nodes: { '#setting-timezone': input },
+            onHtml() { input.value = ''; },
+        });
         client.__setSettingsTestState({
             container: root,
             lifecycleVersion: 3,
@@ -326,6 +334,7 @@ def test_settings_save_failure_recovers_and_destroy_ignores_late_response() -> N
         let state = client.__getSettingsTestState();
         assert.equal(state.saving, false);
         assert.equal(state.settings.timezone, 'Asia/Shanghai');
+        assert.equal(input.value, 'Asia/Tokyo');
         assert.deepEqual(__toastCalls.at(-1), ['保存失败：网络失败', 'error']);
 
         __toastCalls.length = 0;
@@ -346,8 +355,8 @@ def test_settings_save_failure_recovers_and_destroy_ignores_late_response() -> N
     )
 
 
-def test_settings_latest_load_wins_and_current_load_failure_uses_defaults() -> None:
-    """快速换页时只接收最新加载；当前加载失败时应显示默认配置并提示。"""
+def test_settings_latest_load_wins_and_current_load_failure_offers_retry() -> None:
+    """最新加载控制页面；加载失败时显示重试入口。"""
 
     _run_settings_client(
         r"""
@@ -371,10 +380,16 @@ def test_settings_latest_load_wins_and_current_load_failure_uses_defaults() -> N
         assert.ok(!newRoot.innerHTML.includes('Asia/Tokyo'));
 
         __api.get = async () => { throw {}; };
-        const failedRoot = __makeRoot();
+        const retry = __makeControl();
+        const failedRoot = __makeRoot({ nodes: { '#settings-retry': retry } });
         await client.render(failedRoot);
-        assert.ok(failedRoot.innerHTML.includes('Asia/Shanghai'));
+        assert.ok(failedRoot.innerHTML.includes('重新加载'));
+        assert.ok(!failedRoot.innerHTML.includes('setting-timezone'));
+        assert.equal(client.__getSettingsTestState().settings, null);
         assert.deepEqual(__toastCalls.at(-1), ['加载设置失败：未知错误', 'error']);
+        __api.get = async () => ({ data: { timezone: 'Asia/Tokyo' } });
+        await retry.onclick();
+        assert.ok(failedRoot.innerHTML.includes('Asia/Tokyo'));
         """
     )
 

@@ -440,8 +440,8 @@ def test_stats_fetches_regular_range_with_declared_params_and_safe_moods() -> No
     )
 
 
-def test_stats_all_range_resolves_three_boundaries_in_parallel() -> None:
-    """全部时间的账本、笔记和日记边界必须并行解析后分别透传。"""
+def test_stats_all_range_resolves_five_boundaries_in_parallel() -> None:
+    """全部时间的五类数据边界并行解析后分别透传。"""
 
     _run_stats_client(
         r"""
@@ -462,15 +462,20 @@ def test_stats_all_range_resolves_three_boundaries_in_parallel() -> None:
             today: '2026-05-20',
         });
         await __flushPromises();
-        assert.equal(pendingBounds.length, 3);
-        assert.deepEqual(pendingBounds.map((item) => item.options.type), ['ledger', 'note', 'diary']);
+        assert.equal(pendingBounds.length, 5);
+        assert.deepEqual(pendingBounds.map((item) => item.options.type), ['ledger', 'note', 'diary', 'task', 'event']);
+        assert.equal(pendingBounds[0].options.currency, 'CNY');
         assert.equal(__apiCalls.length, 0);
 
         pendingBounds[0].resolve({ start: '2020-01-01', end: '2026-05-20' });
         pendingBounds[1].resolve({ start: '2021-02-01', end: '2026-05-19' });
         pendingBounds[2].resolve({ start: '2022-03-01', end: '2026-05-18' });
+        pendingBounds[3].resolve({ start: '2023-01-01', end: '2030-05-18' });
+        pendingBounds[4].resolve({ start: '2024-01-01', end: '2031-05-18' });
         await request;
         const byPath = Object.fromEntries(__apiCalls.map((call) => [call.path, call.params]));
+        assert.deepEqual(byPath['/stats/tasks'], { range: '2023-01-01..2030-05-18' });
+        assert.deepEqual(byPath['/stats/events'], { range: '2024-01-01..2031-05-18' });
         assert.deepEqual(byPath['/stats/ledger'], {
             currency: 'CNY',
             start_date: '2020-01-01', end_date: '2026-05-20',
@@ -629,5 +634,35 @@ def test_stats_render_is_safe_accessible_and_load_failure_recovers() -> None:
         assert.deepEqual(__toastCalls.at(-1), ['加载统计失败：未知错误', 'error']);
         assert.equal(client.__getStatsTestState().loading, false);
         assert.ok(!failedRoot.innerHTML.includes('正在加载统计视图'));
+        """
+    )
+
+
+def test_stats_currency_apply_updates_all_finance_requests_and_bounds() -> None:
+    """显式币种切换同时更新边界、汇总和对比请求。"""
+    _run_stats_client(
+        r"""
+        const input = __makeControl({ value: 'CNY' });
+        const apply = __makeControl();
+        const root = __makeRoot({ nodes: {
+            '#stats-currency': input, '#stats-currency-apply': apply,
+        } });
+        await client.render(root);
+        client.__setStatsTestState({ range: 'all' });
+        input.value = 'usd';
+        await apply.onclick();
+        assert.equal(client.currentRangeRequest().currency, 'USD');
+        assert.equal(__boundsCalls.at(-5).currency, 'USD');
+        const latest = __apiCalls.slice(-8);
+        assert.equal(latest.find(call => call.path === '/stats/ledger').params.currency, 'USD');
+        assert.equal(latest.find(call => call.path === '/stats/ledger/comparison').params.currency, 'USD');
+        const requestCount = __apiCalls.length;
+        await apply.onclick();
+        assert.equal(__apiCalls.length, requestCount);
+        input.value = 'bad currency';
+        await apply.onclick();
+        assert.equal(client.currentRangeRequest().currency, 'USD');
+        assert.ok(__toastCalls.at(-1)[0].includes('三位币种代码'));
+        client.destroy();
         """
     )

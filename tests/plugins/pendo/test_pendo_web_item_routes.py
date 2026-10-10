@@ -55,7 +55,7 @@ def _insert_item(
 
 
 def test_item_router_registers_only_the_expected_paths() -> None:
-    """通用条目模块应只暴露职责明确的八个端点。"""
+    """通用条目模块应只暴露职责明确的九个端点。"""
 
     registered = {
         (route.path, frozenset(getattr(route, "methods", set())))
@@ -65,6 +65,7 @@ def test_item_router_registers_only_the_expected_paths() -> None:
     assert registered == {
         ("/items/aggregate", frozenset({"GET"})),
         ("/items/categories", frozenset({"GET"})),
+        ("/items/date-bounds", frozenset({"GET"})),
         ("/items/ledger/accounts", frozenset({"GET"})),
         ("/items", frozenset({"GET"})),
         ("/items/{item_id}", frozenset({"GET"})),
