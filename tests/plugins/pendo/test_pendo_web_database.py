@@ -154,6 +154,66 @@ def test_undo_edit_marks_source_and_appends_audit_record(tmp_path: Path) -> None
         db.cleanup()
 
 
+@pytest.mark.parametrize(
+    "kind,fields",
+    [
+        ("event", {"start_time": "2030-01-01T09:00:00"}),
+        ("task", {"plan_date": "2030-01-01"}),
+        ("note", {"content": "正文"}),
+        ("diary", {"diary_date": "2030-01-01", "content": "日记"}),
+        (
+            "ledger",
+            {
+                "amount": 1,
+                "amount_cents": 100,
+                "transaction_type": "expense",
+                "ledger_date": "2030-01-01",
+                "ledger_category": "餐饮",
+            },
+        ),
+    ],
+)
+def test_cross_client_edits_undo_in_order_with_versions(db, kind, fields):
+    from plugins.pendo.web.api.items import ItemUpdate, update_item
+
+    owner, item_id = "undo-chain", f"undo-{kind}"
+    db.insert_item({"id": item_id, "owner_id": owner, "type": kind, "title": "原始", **fields})
+    db.update_item(
+        item_id,
+        {"title": "聊天修改"},
+        owner,
+        operation_log={
+            "user_id": owner,
+            "action": f"edit_{kind}",
+            "item_type": kind,
+        },
+    )
+    update_item(item_id, ItemUpdate(title="Web 修改", version=1), owner, db)
+    assert db.undo_edit(owner)["status"] == "success"
+    assert db.get_item(item_id, owner).title == "聊天修改"
+    assert db.undo_edit(owner)["status"] == "success"
+    assert db.get_item(item_id, owner).title == "原始"
+    assert db.get_item(item_id, owner).version == 4
+
+
+def test_undo_preserves_a_later_write_without_an_edit_log(db):
+    owner, item_id = "undo-protected", "note-protected"
+    db.insert_item({"id": item_id, "owner_id": owner, "type": "note", "title": "原始"})
+    db.update_item(
+        item_id,
+        {"title": "聊天修改"},
+        owner,
+        operation_log={
+            "user_id": owner,
+            "action": "edit_note",
+            "item_type": "note",
+        },
+    )
+    db.update_item(item_id, {"title": "导入后的最新内容"}, owner)
+    assert db.undo_edit(owner)["status"] == "error"
+    assert db.get_item(item_id, owner).title == "导入后的最新内容"
+
+
 def test_latest_undoable_operation_uses_log_id_for_same_second(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

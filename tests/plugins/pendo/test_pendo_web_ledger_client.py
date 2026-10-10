@@ -114,17 +114,18 @@ const initCustomSelects = () => {};""",
             format_runtime,
         ),
         (
-            "import { derivePresetRange, todayRangeKey } from '../utils/date_ranges.js';",
+            "import { derivePresetRange, fetchItemRangeBounds, todayRangeKey } from '../utils/date_ranges.js';",
             """const todayRangeKey = () => '2026-03-15';
 const derivePresetRange = (preset, options = {}) => {
     if (preset === 'today') return { start: options.today, end: options.today };
     if (preset === 'custom') return {
         start: options.customStart || '', end: options.customEnd || '',
     };
-    if (preset === 'all') return { start: '1970-01-01', end: options.today };
+    if (preset === 'all') return { start: options.allStart || options.today, end: options.allEnd || options.today };
     if (preset === 'week') return { start: '2026-03-09', end: '2026-03-15' };
     return { start: '2026-03-01', end: '2026-03-31' };
-};""",
+};
+const fetchItemRangeBounds = async (api, options) => (await api.get('/items/date-bounds', options)).data;""",
         ),
         (
             """import {
@@ -203,6 +204,8 @@ export function __setLedgerTestState(state = {}) {
     if ('total' in state) _total = state.total;
     if ('page' in state) _page = state.page;
     if ('dateFilter' in state) _dateFilter = state.dateFilter;
+    if ('allRange' in state) _allRange = state.allRange;
+    if ('currency' in state) _currency = state.currency;
     if ('transactionTypeFilter' in state) {
         _transactionTypeFilter = state.transactionTypeFilter;
     }
@@ -273,12 +276,14 @@ def test_ledger_amount_item_and_summary_boundaries() -> None:
 
 
 def test_ledger_filters_share_validated_range_and_amount_params() -> None:
-    """列表、汇总和洞察应复用同一筛选边界，包括“全部”截止今天。"""
+    """列表、汇总和洞察共用数据边界和所选币种，覆盖未来日期。"""
 
     _run_ledger_client(
         r"""
         client.__setLedgerTestState({
             dateFilter: 'all',
+            allRange: { start: '2020-01-01', end: '2030-06-30' },
+            currency: 'USD',
             transactionTypeFilter: 'expense',
             categoryFilter: '餐饮',
             accountFilter: '微信',
@@ -287,12 +292,12 @@ def test_ledger_filters_share_validated_range_and_amount_params() -> None:
             sortMode: 'amount',
         });
         assert.deepEqual(client.dateRangeForFilter('all'), {
-            start_date: '1970-01-01', end_date: '2026-03-15',
+            start_date: '2020-01-01', end_date: '2030-06-30',
         });
         assert.deepEqual(client.currentFilterParams(), {
-            currency: 'CNY',
-            start_date: '1970-01-01',
-            end_date: '2026-03-15',
+            currency: 'USD',
+            start_date: '2020-01-01',
+            end_date: '2030-06-30',
             transaction_type: 'expense',
             category: '餐饮',
             account_name: '微信',
@@ -328,8 +333,9 @@ def test_ledger_filters_share_validated_range_and_amount_params() -> None:
         assert.equal(insights.expense_total, 18);
         assert.equal(calls.length, 3);
         for (const call of calls) {
-            assert.equal(call.params.start_date, '1970-01-01');
-            assert.equal(call.params.end_date, '2026-03-15');
+            assert.equal(call.params.start_date, '2020-01-01');
+            assert.equal(call.params.end_date, '2030-06-30');
+            assert.equal(call.params.currency, 'USD');
             assert.equal(call.params.amount_min, 10.5);
             assert.equal(call.params.amount_max, 20);
         }

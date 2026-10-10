@@ -72,9 +72,10 @@ def _with_scheduled_delivery_contract(db: Any) -> Any:
             "delivery_key": f"delivery:{task_name}:{owner_id}:{period_key}",
         }
 
-    db.claim_scheduled_delivery    = claim
-    db.complete_scheduled_delivery = lambda *_args: True
-    db.release_scheduled_delivery  = lambda *_args: True
+    db.get_due_scheduled_delivery_periods = lambda *_args, **_kwargs: []
+    db.claim_scheduled_delivery           = claim
+    db.complete_scheduled_delivery        = lambda *_args: True
+    db.release_scheduled_delivery         = lambda *_args: True
     return db
 
 

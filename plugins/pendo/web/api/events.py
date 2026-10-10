@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from ...config import PendoConfig
-from ...core.exceptions import ItemNotFoundException
+from ...core.exceptions import ItemNotFoundException, ItemVersionConflictException
 from ...services.db import Database
 from ...utils.identifiers import new_internal_id, public_id
 from ...utils.settings_utils import resolve_default_category
@@ -66,6 +66,7 @@ class EventCollectionUpdate(BaseModel):  # type: ignore[misc]
     notes: str | None                           = None
     timezone: str | None                        = None
     reminder_rules: list[dict[str, Any]] | None = None
+    version: int | None = Field(default=None, ge=0)
 
 
 class EventReminderConfirmationUpdate(BaseModel):  # type: ignore[misc]
@@ -133,6 +134,7 @@ def _normalize_collection_updates(
     """复用日程规范化器清洗集合字段，不重复维护另一套校验规则。"""
 
     updates = cast(dict[str, Any], body.model_dump(exclude_unset=True))
+    updates.pop("version", None)
     if not updates:
         raise ValueError("No collection fields to update")
 
@@ -296,6 +298,12 @@ def update_collection(
     if collection is None:
         raise HTTPException(status_code=404, detail="Event collection not found")
 
+    current_version = int(collection["version"])
+    if body.version is not None and body.version != current_version:
+        raise HTTPException(status_code=409, detail="日程集合已有更新，请保留草稿并重新加载")
+    requested_fields = set(body.model_dump(exclude_unset=True)) - {"version"}
+    if len(requested_fields) >= 3 and body.version is None:
+        raise HTTPException(status_code=422, detail="完整集合编辑需要版本号")
     local_now        = now_in_timezone(owner_id, db)
     default_timezone = str(getattr(local_now.tzinfo, "key", None) or PendoConfig.DEFAULT_TIMEZONE)
     try:
@@ -330,15 +338,21 @@ def update_collection(
                 child_updates,
                 rules,
                 collection_updates = updates,
+                expected_version   = current_version,
                 operation_log      = operation_log,
             )
         elif not db.update_event_collection(
             collection_id,
             updates,
             owner_id,
-            operation_log=operation_log,
+            expected_version = current_version,
+            operation_log    = operation_log,
         ):
             raise HTTPException(status_code=404, detail="Event collection not found")
+    except ItemVersionConflictException as exc:
+        raise HTTPException(
+            status_code=409, detail="日程集合已有更新，请保留草稿并重新加载"
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ItemNotFoundException as exc:
@@ -354,6 +368,9 @@ def update_collection(
         "data": {
             "id": str(collection["id"]),
             "display_id": public_id(collection["id"]),
+            "version": (db.get_event_collection(str(collection["id"]), owner_id) or {}).get(
+                "version"
+            ),
         },
         "message": "更新成功",
     }

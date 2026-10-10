@@ -33,6 +33,18 @@ ROUTER_SETUP: Final = r"""
         .replaceAll('"', '&quot;')
         .replaceAll("'", '&#039;');
     globalThis.__timeZoneLoads = 0;
+    globalThis.__createContainer = () => {
+        let html = '';
+        let children = [];
+        const retry = { onclick: null };
+        return {
+            get innerHTML() { return children.length ? children.map(child => child.innerHTML).join('') : html; },
+            set innerHTML(value) { html = value; children = []; },
+            replaceChildren(...nodes) { children = nodes; html = ''; },
+            querySelector(selector) { return selector === '#route-retry' && html.includes('route-retry') ? retry : null; },
+        };
+    };
+    globalThis.document = { createElement: () => __createContainer() };
     globalThis.__fetchUserTimeZone = async () => {
         __timeZoneLoads += 1;
         return 'Asia/Shanghai';
@@ -118,7 +130,7 @@ def test_router_uses_one_hash_listener_and_isolates_subscriber_failures() -> Non
             render(container) { container.innerHTML = 'tasks'; },
         }));
 
-        const firstContainer = { innerHTML: '' };
+        const firstContainer = __createContainer();
         await client.init(firstContainer);
         assert.equal(firstContainer.innerHTML, 'dashboard');
         assert.equal(__state.listenerCounts.hashchange, 1);
@@ -134,7 +146,7 @@ def test_router_uses_one_hash_listener_and_isolates_subscriber_failures() -> Non
         await window.listeners.hashchange();
         assert.deepEqual(paths, ['dashboard', 'tasks']);
 
-        const secondContainer = { innerHTML: '' };
+        const secondContainer = __createContainer();
         await client.init(secondContainer);
         assert.equal(secondContainer.innerHTML, 'dashboard');
         assert.equal(__state.listenerCounts.hashchange, 1);
@@ -143,7 +155,7 @@ def test_router_uses_one_hash_listener_and_isolates_subscriber_failures() -> Non
     )
 
 
-def test_router_serializes_async_pages_and_only_loads_the_latest_route() -> None:
+def test_router_isolates_async_pages_and_only_loads_the_latest_route() -> None:
     """快速连续跳转时旧页只清理一次，中间页不装载，最终页独占内容区。"""
 
     _run_router_client(
@@ -183,7 +195,7 @@ def test_router_serializes_async_pages_and_only_loads_the_latest_route() -> None
             };
         });
 
-        const container = { innerHTML: '' };
+        const container = __createContainer();
         window.location.hash = '#/slow';
         const initialNavigation = client.init(container);
         await slowStarted;
@@ -195,6 +207,8 @@ def test_router_serializes_async_pages_and_only_loads_the_latest_route() -> None
 
         window.location.hash = '#/fast?source=latest';
         const fastNavigation = window.listeners.hashchange();
+        await fastNavigation;
+        assert.equal(container.innerHTML, 'fast');
         releaseSlow();
         await Promise.all([initialNavigation, middleNavigation, fastNavigation]);
 
@@ -213,7 +227,7 @@ def test_router_escapes_errors_cleans_pages_and_recovers_a_rejected_queue() -> N
     _run_router_client(
         r"""
         window.location.hash = '#/missing';
-        const initialContainer = { innerHTML: '' };
+        const initialContainer = __createContainer();
         await client.init(initialContainer);
         assert.match(initialContainer.innerHTML, /页面不存在/);
 
@@ -226,6 +240,7 @@ def test_router_escapes_errors_cleans_pages_and_recovers_a_rejected_queue() -> N
         let brittleHtml = '';
         let rejectErrorMarkup = true;
         const brittleContainer = {
+            replaceChildren(child) { brittleHtml = child.innerHTML; },
             get innerHTML() { return brittleHtml; },
             set innerHTML(value) {
                 if (rejectErrorMarkup && value.includes('error-state')) {
@@ -239,7 +254,7 @@ def test_router_escapes_errors_cleans_pages_and_recovers_a_rejected_queue() -> N
         await assert.rejects(client.init(brittleContainer), /container failed/);
         assert.equal(destroyCount, 1);
 
-        const recoveredContainer = { innerHTML: '' };
+        const recoveredContainer = __createContainer();
         await client.init(recoveredContainer);
         assert.equal(destroyCount, 2);
         assert.match(recoveredContainer.innerHTML, /加载失败：&lt;bad&gt;/);
@@ -260,5 +275,32 @@ def test_router_escapes_errors_cleans_pages_and_recovers_a_rejected_queue() -> N
         assert.equal(recoveredContainer.innerHTML, 'safe');
         assert.ok(__state.errors.some((message) => message.includes('页面加载失败')));
         assert.ok(__state.errors.some((message) => message.includes('页面清理失败')));
+        """
+    )
+
+
+def test_router_failed_load_has_a_retry_and_settings_owns_its_loading_state() -> None:
+    """首次加载故障提供重试；设置页独立管理读取和错误态。"""
+    _run_router_client(
+        r"""
+        const root = __createContainer();
+        let attempts = 0;
+        client.registerRoute('recover', async () => {
+            if (++attempts === 1) throw new Error('temporary failure');
+            return { render(container) { container.innerHTML = 'ready'; } };
+        });
+        window.location.hash = '#/recover';
+        await client.init(root);
+        assert.match(root.innerHTML, /temporary failure/);
+        await root.querySelector('#route-retry').onclick();
+        assert.equal(root.innerHTML, 'ready');
+        const previousLoads = __timeZoneLoads;
+        client.registerRoute('settings', async () => ({
+            render(container) { container.innerHTML = 'settings form'; },
+        }));
+        window.location.hash = '#/settings';
+        await window.listeners.hashchange();
+        assert.equal(root.innerHTML, 'settings form');
+        assert.equal(__timeZoneLoads, previousLoads);
         """
     )

@@ -66,6 +66,11 @@ APP_SETUP: Final = r"""
         addEventListener(type, callback) { this.listeners[type] = callback; }
         focus() { this.focusCount += 1; }
         setAttribute(name, value) { this.attributes[name] = value; }
+        querySelector(selector) {
+            this.controls ||= {};
+            return this.controls[selector] ||= new FakeElement(selector);
+        }
+        remove() { __elements.delete(this.id); }
     }
 
     const elementIds = [
@@ -88,7 +93,7 @@ APP_SETUP: Final = r"""
     };
 
     globalThis.window = {
-        location: { href: 'https://pendo.example/' },
+        location: { href: 'https://pendo.example/', reload() { __state.reloads = (__state.reloads || 0) + 1; } },
         history: {
             replaceState: (_state, _title, url) => { __state.replacedUrl = url; },
         },
@@ -171,6 +176,36 @@ def _run_app_client(script: str) -> None:
         script,
         cwd   = ROOT,
         setup = APP_SETUP,
+    )
+
+
+def test_session_recovery_preserves_draft_and_recovers_same_account() -> None:
+    _run_app_client(
+        r"""
+        const draft = __elements.get('content');
+        draft.value = '尚未保存的正文';
+        const expired = window.listeners['pendo-session-expired'];
+        expired({ detail: { ownerId: 'owner-a' } });
+        expired({ detail: { ownerId: 'owner-a' } });
+        assert.equal(__state.appended.length, 1);
+        const panel = __elements.get('session-recovery');
+        panel.querySelector('input').value = 'new-login-code';
+        __state.exchangeBehavior = async () => ({ ok: false, message: '登录码过期' });
+        await panel.querySelector('button').onclick();
+        assert.equal(panel.querySelector('.session-recovery-error').textContent, '登录码过期');
+        assert.equal(draft.value, '尚未保存的正文');
+        __state.exchangeBehavior = async () => ({ ok: true, ownerId: 'owner-a' });
+        await panel.querySelector('button').onclick();
+        assert.equal(__elements.has('session-recovery'), false);
+        assert.equal(draft.value, '尚未保存的正文');
+        assert.equal(__state.reloads || 0, 0);
+        expired({ detail: { ownerId: 'owner-a' } });
+        const changed = __elements.get('session-recovery');
+        changed.querySelector('input').value = 'another-login-code';
+        __state.exchangeBehavior = async () => ({ ok: true, ownerId: 'owner-b' });
+        await changed.querySelector('button').onclick();
+        assert.equal(__state.reloads, 1);
+        """
     )
 
 

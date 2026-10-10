@@ -123,6 +123,7 @@ plugins/*deprecated/
 .codex/
 .playwright-mcp/
 .worktrees/
+/work/
 
 # Temporary files
 *.tmp

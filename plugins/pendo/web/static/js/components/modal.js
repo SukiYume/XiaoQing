@@ -12,9 +12,10 @@ const FOCUSABLE_SELECTOR = [
     '[tabindex]:not([tabindex="-1"])',
 ].join(',');
 
-let modalOpen      = false;
-let currentOnClose = null;
-let previousFocus  = null;
+let modalOpen       = false;
+let currentOnClose  = null;
+let previousFocus   = null;
+let currentInstance = null;
 
 /**
  * 标记已经由调用方完成逐值转义的内部 HTML。
@@ -45,7 +46,8 @@ function appendModalContent(parent, value, label) {
 }
 
 function handleModalKeydown(event) {
-    if (!modalOpen || event.isComposing) return;
+    if (!modalOpen || event.isComposing || event.defaultPrevented) return;
+    if (document.getElementById('session-recovery')) return;
     if (event.key === 'Escape') {
         event.preventDefault();
         closeModal();
@@ -116,7 +118,12 @@ export function showModal(title, contentValue, options = {}) {
     }
 
     const focusTarget = document.activeElement;
-    content.replaceChildren(...children);
+    const instance    = document.createElement('div');
+    instance.className = 'modal-instance';
+    instance.style.display = 'contents';
+    instance.append(...children);
+    content.replaceChildren(instance);
+    currentInstance = instance;
     overlay.style.display = 'flex';
     overlay.setAttribute('aria-labelledby', 'modal-title');
     document.body.classList.add('modal-open');
@@ -130,11 +137,12 @@ export function showModal(title, contentValue, options = {}) {
         if (event.target === overlay) closeModal();
     };
     closeButton.focus();
-    return content;
+    return instance;
 }
 
-export function closeModal() {
+export function closeModal(expectedInstance = null) {
     if (!modalOpen) return;
+    if (expectedInstance instanceof Node && expectedInstance !== currentInstance) return;
 
     const overlay     = document.getElementById('modal-overlay');
     const content     = document.getElementById('modal-content');
@@ -145,6 +153,7 @@ export function closeModal() {
     modalOpen = false;
     currentOnClose = null;
     previousFocus = null;
+    currentInstance = null;
     document.removeEventListener('keydown', handleModalKeydown);
     document.body.classList.remove('modal-open');
     if (overlay) {

@@ -180,7 +180,10 @@ async def handle_event_info_session(
         )
         if not replaced:
             raise RuntimeError("无法把日程补充会话替换为冲突确认会话")
-    elif status != "need_info":
+    elif status == "need_info":
+        pending_data = result.get("data")
+        session.set("data", dict(pending_data) if isinstance(pending_data, dict) else merged)
+    else:
         await safe_end_session(context)
 
     return result

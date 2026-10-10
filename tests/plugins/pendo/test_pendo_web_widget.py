@@ -220,6 +220,35 @@ def test_widget_calendar_sync_returns_gap_and_full_unbounded_item_list(
     ]
 
 
+@pytest.mark.parametrize(
+    ("timezone", "day", "hours"),
+    [
+        ("Asia/Shanghai", "2030-03-10", 24),
+        ("America/Los_Angeles", "2030-03-10", 23),
+        ("America/Los_Angeles", "2030-11-03", 25),
+    ],
+)
+def test_calendar_response_supplies_absolute_account_timezone_window(
+    client, temp_db, timezone, day, hours
+):
+    """返回用户本地自然日的绝对边界，覆盖夏令时两种切换。"""
+    owner = "calendar-window-timezone"
+    temp_db.update_user_settings(owner, {"timezone": timezone})
+    response = client.get(
+        "/api/widget/calendar",
+        params={"start_date": day, "end_date": day},
+        headers=_headers(generate_widget_token(owner, db=temp_db)),
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["timezone"] == timezone
+    start = datetime.fromisoformat(data["window_start"])
+    end   = datetime.fromisoformat(data["window_end"])
+    assert start.date().isoformat() == day
+    assert start.hour == end.hour == 0
+    assert (end - start).total_seconds() == hours * 3600
+
+
 def test_widget_calendar_sync_uses_item_identity_instead_of_title_and_time(
     client: Any,
     temp_db: Database,

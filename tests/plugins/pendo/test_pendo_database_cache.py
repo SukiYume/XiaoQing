@@ -73,24 +73,10 @@ class TestUpdateItemCacheInvalidation:
         assert items[0].title == "新标题"
 
 
-@pytest.mark.parametrize("kind", ["item", "items", "settings", "event_collection"])
+@pytest.mark.parametrize("kind", ["item", "items", "settings"])
 def test_cache_rejects_concurrent_old_snapshot(db, monkeypatch, kind):
     iid = db.insert_item({"owner_id": "u", "type": "note", "title": "before"})
-    if kind == "event_collection":
-        cid = db.create_event_collection(
-            {"owner_id": "u", "kind": "multi_node", "title": "before"},
-            children=[("child", {"title": "child", "start_time": "2030-01-01T10:00:00+00:00"})],
-        )
-
-        def read():
-            return db.get_event_collection(cid, "u")
-
-        def write():
-            return db.update_event_collection(cid, {"title": "after"}, "u")
-
-        def value(row):
-            return row["title"]
-    elif kind == "settings":
+    if kind == "settings":
         db.update_user_settings("u", {"timezone": "Asia/Shanghai"})
 
         def read():
@@ -144,3 +130,15 @@ def test_cache_rejects_concurrent_old_snapshot(db, monkeypatch, kind):
         release.set()
         thread.join(5)
     assert value(read()) == ("America/Los_Angeles" if kind == "settings" else "after")
+
+
+def test_event_collection_reads_fresh_child_projection(db):
+    cid = db.create_event_collection(
+        {"owner_id": "u", "kind": "multi_node", "title": "before"},
+        children=[("child", {"title": "child", "start_time": "2030-01-01T10:00:00+00:00"})],
+    )
+    before = db.get_event_collection(cid, "u")
+    db.update_item("child", {"start_time": "2030-02-01T10:00:00+00:00"}, "u")
+    after = db.get_event_collection(cid, "u")
+    assert after["version"] > before["version"]
+    assert after["start_time"] == "2030-02-01T10:00:00+00:00"

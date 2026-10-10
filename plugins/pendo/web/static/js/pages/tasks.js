@@ -235,10 +235,11 @@ function defaultTaskPlanDateValue(now = new Date()) {
 }
 
 function normalizeTaskPayload(formData, userTimeZone) {
-    const source             = isRecord(formData) ? formData : {};
-    const priority           = Number(source.priority);
-    const status             = textValue(source.status);
-    const planDate           = textValue(source.plan_date);
+    const source   = isRecord(formData) ? formData : {};
+    const priority = Number(source.priority);
+    const status   = textValue(source.status);
+    const planDate = textValue(source.plan_date);
+    if (planDate && !isIsoDate(planDate)) throw new RangeError('请输入有效的计划日期，格式为 YYYY-MM-DD');
     const deadline           = textValue(source.deadline_at);
     const normalizedDeadline = deadline ? zonedInputToUtcIso(deadline, userTimeZone) : '';
     if (deadline && !normalizedDeadline) throw new RangeError('请输入有效的截止时间');
@@ -732,15 +733,10 @@ function renderCategoryOptions(tasks) {
 function renderHero(model) {
     const summary = model.summary;
     return `
-        <section class="tasks-hero">
+        <section class="tasks-hero pendo-page-header">
             <div>
                 <h2>✅ 待办</h2>
-                <p>日期型分类改按计划日期筛选，文字分类单独筛选，状态只保留未完成、已完成、已取消三种口径。</p>
-                <div class="tasks-hero-tags">
-                    <span class="tasks-hero-tag">${summary.active_count} 项未完成</span>
-                    <span class="tasks-hero-tag">${summary.focus_count} 项今天或已滞后</span>
-                    <span class="tasks-hero-tag">${summary.closed_count} 项已结束</span>
-                </div>
+                <p>${summary.active_count} 项待完成，${summary.focus_count} 项安排在今天或已逾期。</p>
             </div>
             <div class="tasks-hero-actions">
                 <div class="tasks-view-toggle" role="group" aria-label="待办视图">
@@ -807,7 +803,7 @@ function renderInsights(model) {
                 <div class="tasks-panel-head">
                     <div>
                         <h3>计划分布</h3>
-                        <p>日期型分类按计划日期展示；文字分类留在筛选器里使用。</p>
+                        <p>按计划日期安排任务，使用分类整理不同事项。</p>
                     </div>
                 </div>
                 <div class="tasks-panel-body">
@@ -969,7 +965,7 @@ function renderListView(model) {
         <div class="tasks-sections">
             ${showActive ? renderSection('今天与滞后', '优先清理今天计划和已经拖后的任务。', model.focus_tasks) : ''}
             ${showActive ? renderSection('未来 7 天', '接下来一周内需要继续跟进的事项。', model.up_next_tasks) : ''}
-            ${showActive ? renderSection('更晚与未安排', '更晚的计划日期，以及尚未放进日期桶的任务。', [...model.later_tasks, ...model.backlog_tasks]) : ''}
+            ${showActive ? renderSection('更晚与未安排', '更晚的计划日期，以及尚未安排日期的任务。', [...model.later_tasks, ...model.backlog_tasks]) : ''}
             ${showClosed ? renderSection('最近结束', '已完成和已取消的任务。', model.closed_recent) : ''}
         </div>`;
 }
@@ -1072,9 +1068,9 @@ function renderPage() {
     _container.innerHTML = `
         <div class="tasks-shell" aria-busy="${_loading}">
             ${renderHero(model)}
-            ${renderInsights(model)}
             ${renderFilters(_overview?.all_tasks || [])}
             ${renderWorkspace(model)}
+            <details class="pendo-analysis"><summary>查看待办分析</summary>${renderInsights(model)}</details>
         </div>
     `;
 
@@ -1154,7 +1150,7 @@ export async function openTaskModal(existing = null) {
         content.querySelector('#task-delete')?.addEventListener('click', async () => {
             if (submitting) return;
             submitting = true;
-            closeModal();
+            closeModal(content);
             const confirmed = await showConfirmModal({
                 title: '删除任务',
                 message: `确定要删除“${task.title || '这个任务'}”吗？删除后会从执行列表和看板里一起移除。`,
@@ -1204,7 +1200,7 @@ export async function openTaskModal(existing = null) {
                 await api.post('/items', { type: 'task', ...payload });
                 showToast('任务已创建', 'success');
             }
-            closeModal();
+            closeModal(content);
             emitTaskChanged();
         } catch (error) {
             showToast(`保存失败：${errorMessage(error)}`, 'error');

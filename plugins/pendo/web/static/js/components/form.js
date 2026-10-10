@@ -55,7 +55,7 @@ export function buildFormHTML(fields) {
                     break;
                 }
                 case 'textarea':
-                    input = `<textarea id="${fieldId}" name="${name}" class="form-input" rows="${escapeAttr(field.rows || 4)}" placeholder="${placeholder}" aria-labelledby="${labelId}"${required}>${escapeHtml(value)}</textarea>`;
+                    input = `<textarea id="${fieldId}" name="${name}" class="form-input" rows="${escapeAttr(field.rows || 4)}" placeholder="${placeholder}" aria-labelledby="${labelId}" data-text-limit="${escapeAttr(field.maxLength || (rawName === 'remark' ? 2000 : 50000))}"${required}>${escapeHtml(value)}</textarea><small class="form-text-count" aria-live="polite"></small>`;
                     break;
                 case 'datetime':
                     input = `<input id="${fieldId}" type="text" name="${name}" class="form-input" value="${escapeAttr(value)}" inputmode="numeric" placeholder="${escapeAttr(placeholderText || 'YYYY-MM-DD HH:mm')}" aria-labelledby="${labelId}"${required}>`;
@@ -173,4 +173,31 @@ export function initFormInteractions(container) {
     initCustomSelects(container);
     initExclusiveButtonGroups(container, '.priority-selector', '.priority-btn');
     initExclusiveButtonGroups(container, '.mood-selector', '.mood-btn');
+    const limited      = [...container.querySelectorAll('[data-text-limit]')];
+    const updateLimits = () => {
+        let valid = true;
+        for (const input of limited) {
+            const count   = [...String(input.value ?? '')].length;
+            const limit   = Number(input.dataset.textLimit);
+            const message = count > limit ? `最多 ${limit} 字，当前 ${count} 字，请缩短内容后保存` : '';
+            input.setCustomValidity?.(message);
+            if (input.nextElementSibling?.classList.contains('form-text-count')) {
+                input.nextElementSibling.textContent = `${count} / ${limit} 字${message ? ' · 已超限' : ''}`;
+                input.nextElementSibling.classList.toggle('text-danger', Boolean(message));
+            }
+            valid = valid && !message;
+        }
+        return valid;
+    };
+    limited.forEach((input) => input.addEventListener('input', updateLimits));
+    updateLimits();
+    const guard = (event) => {
+        if (event.type === 'click' && !/(?:save|submit|create|add)$/.test(event.target?.closest?.('button')?.id || '')) return;
+        if (updateLimits()) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        limited.find((input) => !input.checkValidity())?.reportValidity();
+    };
+    container.addEventListener?.('submit', guard, true);
+    container.addEventListener?.('click', guard, true);
 }

@@ -112,14 +112,15 @@ async def test_daily_marker_is_written_only_after_confirmed_delivery(monkeypatch
             }
         }
 
-    async def content(_user, _db):
+    async def content(_user, _db, **_kwargs):
         return "daily-secret"
 
     saved: list[tuple]     = []
     completed: list[tuple] = []
     released: list[tuple]  = []
     db                     = SimpleNamespace(
-        claim_scheduled_delivery=lambda task, owner, period, **_kwargs: {
+        get_due_scheduled_delivery_periods = lambda *_args, **_kwargs: [],
+        claim_scheduled_delivery           = lambda task, owner, period, **_kwargs: {
             "claim_token": "lease-1",
             "delivery_key": f"{task}:{owner}:{period}",
         },

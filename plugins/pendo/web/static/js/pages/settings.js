@@ -24,6 +24,7 @@ let _settings         = null;
 let _saving           = false;
 let _loggingOut       = false;
 let _lifecycleVersion = 0;
+let _loadError        = '';
 
 // 数据边界：只接收可解释的后端值，并为旧数据补齐稳定默认值。
 function booleanValue(value, fallback) {
@@ -254,10 +255,19 @@ function renderPage() {
     ensureStyles();
     if (!_settings) {
         _container.innerHTML = `
-            <div class="settings-shell" aria-busy="true">
-                <div class="settings-panel" role="status" aria-live="polite"><h3>正在加载设置...</h3></div>
+            <div class="settings-shell" aria-busy="${_loadError ? 'false' : 'true'}">
+                <div class="settings-panel" role="status" aria-live="polite">
+                    <h3>${_loadError ? '设置加载失败' : '正在加载设置...'}</h3>
+                    ${_loadError ? `<p>${escapeHtml(_loadError)}</p><button class="btn btn-primary" id="settings-retry" type="button">重新加载</button>` : ''}
+                </div>
             </div>
         `;
+        const retry = _container.querySelector('#settings-retry');
+        if (retry) retry.onclick = () => {
+            _loadError = '';
+            renderPage();
+            void loadAndRender(_container, _lifecycleVersion);
+        };
         return;
     }
 
@@ -266,33 +276,19 @@ function renderPage() {
     _container.innerHTML = `
         <div class="settings-shell">
             <div class="settings-stack">
-                <section class="settings-hero">
+                <section class="settings-hero pendo-page-header">
                     <div>
                         <h2>⚙️ 设置</h2>
-                        <p>统一管理通知、时区、静默时段和默认设置。</p>
-                        <div class="settings-chip-row settings-hero-tags">
-                            <span class="settings-chip">${escapeHtml(settings.timezone)}</span>
-                            <span class="settings-chip">${escapeHtml(settings.quiet_hours_start)} - ${escapeHtml(settings.quiet_hours_end)}</span>
-                        </div>
+                        <p>管理时区、提醒和默认设置。</p>
                     </div>
-                    <div class="settings-chip-row">
-                        <span class="settings-chip">${toggles.reminder_enabled ? '提醒开启' : '提醒关闭'}</span>
-                        <span class="settings-chip">${toggles.daily_briefing_enabled ? '简报开启' : '简报关闭'}</span>
-                    </div>
-                </section>
-
-                <section class="settings-summary-grid">
-                    <article class="settings-summary-card"><div class="settings-summary-label">静默时段</div><div class="settings-summary-value">${escapeHtml(settings.quiet_hours_start)} - ${escapeHtml(settings.quiet_hours_end)}</div><div class="settings-summary-meta">这段时间内提醒会更克制</div></article>
-                    <article class="settings-summary-card"><div class="settings-summary-label">日报时间</div><div class="settings-summary-value">${escapeHtml(settings.daily_report_time)}</div><div class="settings-summary-meta">每天简报准备在这个时间触发</div></article>
-                    <article class="settings-summary-card"><div class="settings-summary-label">日记提醒</div><div class="settings-summary-value">${escapeHtml(settings.diary_remind_time)}</div><div class="settings-summary-meta">更接近你写日记的真实时刻</div></article>
-                    <article class="settings-summary-card"><div class="settings-summary-label">默认分类</div><div class="settings-summary-value">${escapeHtml(settings.default_category)}</div><div class="settings-summary-meta">新建内容默认归到这里</div></article>
+                    <button type="button" class="btn btn-primary" id="btn-save-settings" ${_saving ? 'disabled aria-busy="true"' : ''}>${_saving ? '保存中...' : '保存设置'}</button>
                 </section>
 
                 <section class="settings-layout">
                     <div class="settings-main-stack">
                         <div class="settings-panel">
                             <h3>时间与默认项</h3>
-                            <p>先把时区和关键时间窗口定准，后续提醒、日报和日记逻辑才会按你的日常节奏工作。</p>
+                            <p>默认时区为 Asia/Shanghai。日程与提醒采用你保存的时区。</p>
                             <div class="settings-form-grid">
                                 <div class="settings-field full">
                                     <label for="setting-timezone">时区</label>
@@ -323,11 +319,11 @@ function renderPage() {
 
                         <section class="settings-panel">
                             <h3>数据迁移</h3>
-                            <p>这里处理导出备份、导入 bundle 和跨设备迁移，不和日常偏好设置混在一起。</p>
+                            <p>导出完整备份，或从备份包导入历史记录。</p>
                             <div class="settings-callout-card settings-transfer-card">
                                 <div class="settings-callout-copy">
                                     <div class="settings-callout-title">打开数据迁移页</div>
-                                    <div class="settings-callout-desc">导出正式 bundle 备份，或从 bundle 预检后按类别导入历史数据。</div>
+                                    <div class="settings-callout-desc">查看导出范围、预检备份内容，并选择需要导入的数据类型。</div>
                                 </div>
                                 <button type="button" class="btn btn-secondary settings-transfer-btn" id="btn-open-transfer">打开页面</button>
                             </div>
@@ -337,7 +333,7 @@ function renderPage() {
                     <div class="settings-side-stack">
                         <section class="settings-panel">
                             <h3>功能开关</h3>
-                            <p>常用开关会直接保存到你的个人设置。</p>
+                            <p>调整后点击页面顶部的“保存设置”。</p>
                             <div class="settings-toggle-list">
                                 ${toggleRow('toggle-reminder-enabled', '提醒通知', '控制事件提醒与待办提醒是否整体启用。', toggles.reminder_enabled)}
                                 ${toggleRow('toggle-daily-report-enabled', '每日简报', '决定是否按配置时间生成每日简报。', toggles.daily_briefing_enabled)}
@@ -360,16 +356,6 @@ function renderPage() {
                     </div>
                 </section>
 
-                <section class="settings-panel settings-save-panel">
-                    <div>
-                        <h3>保存更改</h3>
-                        <p>修改后统一写入当前设置。</p>
-                    </div>
-                    <div class="settings-actions settings-save-actions">
-                        <div class="settings-status" role="status" aria-live="polite">${_saving ? '正在保存设置...' : '保存后会立即返回最新配置。'}</div>
-                        <button type="button" class="btn btn-primary" id="btn-save-settings" ${_saving ? 'disabled aria-busy="true"' : ''}>${_saving ? '保存中...' : '保存设置'}</button>
-                    </div>
-                </section>
             </div>
         </div>
     `;
@@ -413,7 +399,7 @@ async function handleSave() {
     const version   = _lifecycleVersion;
     const payload   = collectFormData(container);
     _saving = true;
-    renderPage();
+    updateActionState(container);
     try {
         const response = await api.put('/settings', payload);
         if (!isCurrentLifecycle(container, version)) return;
@@ -427,7 +413,7 @@ async function handleSave() {
     } finally {
         if (isCurrentLifecycle(container, version)) {
             _saving = false;
-            renderPage();
+            updateActionState(container);
         }
     }
 }
@@ -438,7 +424,7 @@ async function handleLogout() {
     const container = _container;
     const version   = _lifecycleVersion;
     _loggingOut = true;
-    renderPage();
+    updateActionState(container);
     try {
         await logout();
         if (isCurrentLifecycle(container, version)) window.location.reload();
@@ -449,9 +435,19 @@ async function handleLogout() {
     } finally {
         if (isCurrentLifecycle(container, version)) {
             _loggingOut = false;
-            renderPage();
+            updateActionState(container);
         }
     }
+}
+
+function updateActionState(container) {
+    const save = container?.querySelector('#btn-save-settings');
+    if (save) {
+        save.disabled = _saving;
+        save.textContent = _saving ? '保存中…' : '保存设置';
+    }
+    const exit = container?.querySelector('#btn-logout');
+    if (exit) exit.disabled = _loggingOut;
 }
 
 function attachListeners() {
@@ -468,12 +464,15 @@ async function loadAndRender(container, version) {
     try {
         const response = await api.get('/settings');
         if (!isCurrentLifecycle(container, version)) return;
+        if (!isRecord(response?.data)) throw new TypeError('设置响应格式无效');
         _settings = normalizeSettings(response?.data);
+        _loadError = '';
         setUserTimeZone(_settings.timezone);
     } catch (error) {
         if (!isCurrentLifecycle(container, version)) return;
-        _settings = normalizeSettings(null);
-        showToast(`加载设置失败：${errorMessage(error, '未知错误')}`, 'error');
+        _settings = null;
+        _loadError = errorMessage(error, '未知错误');
+        showToast(`加载设置失败：${_loadError}`, 'error');
     }
     if (isCurrentLifecycle(container, version)) renderPage();
 }
@@ -487,6 +486,7 @@ export async function render(container) {
     const version = ++_lifecycleVersion;
     _container = container;
     _settings = null;
+    _loadError = '';
     _saving = false;
     _loggingOut = false;
     renderPage();

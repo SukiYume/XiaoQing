@@ -40,6 +40,61 @@ function extractLoginCode(rawValue) {
     }
 }
 
+function showSessionRecovery(event) {
+    if (document.getElementById('session-recovery')) return;
+    const ownerId = event.detail?.ownerId;
+    const panel   = document.createElement('section');
+    panel.id = 'session-recovery';
+    panel.className = 'session-recovery';
+    panel.setAttribute('role', 'region');
+    panel.setAttribute('aria-label', '恢复登录');
+    panel.innerHTML = `
+        <p role="alert">登录已失效。当前表单内容已保留。请在聊天中发送 pendo web 获取新的登录码。</p>
+        <div class="session-recovery-actions">
+            <input aria-label="新的登录码" autocomplete="off" placeholder="粘贴登录码或登录链接">
+            <button class="btn btn-primary" type="button">恢复登录</button>
+        </div>
+        <p class="session-recovery-error" role="status" aria-live="polite"></p>`;
+    document.body.appendChild(panel);
+    const input   = panel.querySelector('input');
+    const button  = panel.querySelector('button');
+    const error   = panel.querySelector('.session-recovery-error');
+    const restore = async () => {
+        const code = extractLoginCode(input.value);
+        if (!code || button.disabled) return;
+        button.disabled = true;
+        error.textContent = '正在恢复登录…';
+        try {
+            const result = await exchangeLoginCode(code);
+            if (!result.ok) {
+                error.textContent = [400, 401].includes(result.httpStatus)
+                    ? '登录码无效、过期或已使用，请重新获取。'
+                    : result.message || '恢复登录失败，请重试。';
+                return;
+            }
+            if (result.ownerId !== ownerId) {
+                window.location.reload();
+                return;
+            }
+            panel.remove();
+        } catch (cause) {
+            error.textContent = cause?.message || '恢复登录失败，请重试';
+        } finally {
+            button.disabled = false;
+        }
+    };
+    button.onclick = restore;
+    input.onkeydown = (keyEvent) => {
+        if (keyEvent.key === 'Enter' && !keyEvent.isComposing) {
+            keyEvent.preventDefault();
+            void restore();
+        }
+    };
+    input.focus();
+}
+
+window.addEventListener('pendo-session-expired', showSessionRecovery);
+
 async function bootstrap() {
     const url       = new URL(window.location.href);
     const loginCode = url.searchParams.get('code');

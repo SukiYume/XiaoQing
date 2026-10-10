@@ -210,13 +210,19 @@ def _reconfigure_web_server(
     _runtime_service.reconfigure_web(db, before, after)
 
 
-async def _stop_web_server_async() -> None:
-    await _runtime_service.stop_web_async()
+async def _stop_web_server_async() -> bool:
+    return await _runtime_service.stop_web_async()
 
 
 def _cleanup_resources(context=None, *, stop_web: bool) -> None:
     """Release Pendo resources shared by cleanup and shutdown hooks."""
     runtime_service = _get_runtime_service(context)
+
+    if stop_web and not _stop_web_server():
+        _get_logger(context).warning(
+            "Pendo Web remains active; database and runtime resources retained"
+        )
+        return
 
     try:
         runtime_service.unsubscribe_config()
@@ -227,9 +233,6 @@ def _cleanup_resources(context=None, *, stop_web: bool) -> None:
             logger    = getattr(context, "logger", None) or logger,
             component = "pendo.cleanup.config_subscription",
         )
-
-    if stop_web:
-        _stop_web_server()
 
     for failure in runtime_service.close_databases():
         public_error_message(
@@ -271,7 +274,11 @@ def cleanup(context=None) -> None:
 
 async def shutdown(context=None) -> None:
     """插件异步卸载钩子，供应用在 Ctrl+C 时优雅关闭。"""
-    await _stop_web_server_async()
+    if not await _stop_web_server_async():
+        _get_logger(context).warning(
+            "Pendo Web remains active; database and runtime resources retained"
+        )
+        return
     _cleanup_resources(context, stop_web=False)
 
 

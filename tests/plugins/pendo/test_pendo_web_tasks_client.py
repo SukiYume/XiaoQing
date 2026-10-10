@@ -261,11 +261,15 @@ def test_tasks_normalizes_calendar_dates_and_modal_payload() -> None:
 
         assert.throws(() => client.__normalizeTaskPayload({
             title: ' 任务 ', content: ' 备注 ', category: ' ', status: 'broken',
-            priority: '99', plan_date: '2026-02-30', deadline_at: 'bad', extra: 'drop-me',
+            priority: '99', plan_date: '2026-02-28', deadline_at: 'bad', extra: 'drop-me',
         }, 'Asia/Shanghai'), /有效的截止时间/);
-        assert.deepEqual(client.__normalizeTaskPayload({
+        assert.throws(() => client.__normalizeTaskPayload({
             title: ' 任务 ', content: ' 备注 ', category: ' ', status: 'broken',
             priority: '99', plan_date: '2026-02-30', deadline_at: '', extra: 'drop-me',
+        }, 'Asia/Shanghai'), /有效的计划日期/);
+        assert.deepEqual(client.__normalizeTaskPayload({
+            title: ' 任务 ', content: ' 备注 ', category: ' ', status: 'broken',
+            priority: '99', plan_date: '', deadline_at: '', extra: 'drop-me',
         }, 'Asia/Shanghai'), {
             title: '任务', content: '备注', category: '未分类', status: 'open',
             priority: 3, plan_date: null, deadline_at: null,

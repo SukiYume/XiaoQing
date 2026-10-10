@@ -15,7 +15,11 @@ from typing import Any, ClassVar, cast
 from zoneinfo import ZoneInfo
 
 from ..config import PendoConfig
-from ..core.exceptions import AmbiguousIdentifierException, ItemNotFoundException
+from ..core.exceptions import (
+    AmbiguousIdentifierException,
+    ItemNotFoundException,
+    ItemVersionConflictException,
+)
 from ..models.item import (
     ITEM_TYPE_CLASS_MAP,
     EventItem,
@@ -42,6 +46,7 @@ from ..utils.validators import (
 from .db_auth import WebAuthRepositoryMixin
 from .db_reminders import ReminderRepositoryMixin
 from .db_schema import configure_connection, initialize_schema, reminder_fire_at_utc
+from .event_collection_mutations import restore_collection_edit, update_collection
 
 logger                = logging.getLogger(__name__)
 _CACHE_MISS           = object()
@@ -133,12 +138,14 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             "updated_at",
             "deleted",
             "deleted_at",
+            "version",
         }
     )
     _EVENT_COLLECTION_IMPORT_UPDATE_FIELDS = _EVENT_COLLECTION_FIELDS - {
         "id",
         "owner_id",
         "kind",
+        "version",
     }
     _EVENT_COLLECTION_UPDATE_FIELDS = frozenset(
         {
@@ -497,7 +504,15 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
 
         # 连接上下文统一管理提交与回滚，避免和 sqlite3 隐式事务冲突。
         affected = 0
-        with conn:
+        with self.transaction(immediate=True):
+            before_item = self._row_to_item(
+                cursor.execute(
+                    "SELECT * FROM items WHERE id = ? AND deleted = 0",
+                    (item_id,),
+                ).fetchone()
+            )
+            if before_item is None:
+                return False
             where             = ["id = ?", "deleted = 0"]
             params: list[Any] = [item_id]
             if owner_id:
@@ -522,6 +537,19 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             if affected > 0 and self._FTS_FIELDS & update_dict.keys():
                 self._refresh_fts(item_id, conn)
             if affected > 0:
+                if operation_log and str(operation_log.get("action", "")).startswith("edit_"):
+                    before_values  = before_item.to_dict()
+                    changed_fields = set(update_dict) - {"updated_at"}
+                    operation_log  = {
+                        **operation_log,
+                        "details": {
+                            **(operation_log.get("details") or {}),
+                            "old_values": {key: before_values.get(key) for key in changed_fields},
+                            "updates": {key: update_dict[key] for key in changed_fields},
+                            "before_version": before_item.version,
+                            "after_version": before_item.version + int(touch),
+                        },
+                    }
                 self._log_operation_from_spec(
                     cursor,
                     operation_log,
@@ -1040,11 +1068,6 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         )
         if resolved_id is None:
             return None
-        cache_key = self._cache_key("event_collection", resolved_id, owner_id or "*")
-        cached    = self._cache_get_or_miss(cache_key)
-        if cached is not _CACHE_MISS:
-            return cast(dict[str, Any] | None, cached)
-
         conn = self.get_connection()
         if owner_id:
             row = conn.execute(
@@ -1060,8 +1083,6 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 (resolved_id,),
             ).fetchone()
         collection = self._row_to_event_collection(row)
-        if collection is not None:
-            self._cache_set(cache_key, collection)
         return collection
 
     def get_event_collections_by_ids(
@@ -1095,61 +1116,23 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         updates: dict[str, Any],
         owner_id: str,
         *,
+        expected_version: int | None         = None,
         operation_log: dict[str, Any] | None = None,
     ) -> bool:
         resolved_id = self.resolve_event_collection_id(owner_id, collection_id)
         if resolved_id is None:
             return False
-        collection_id = resolved_id
-        clean_updates = {
-            key: value
-            for key, value in updates.items()
-            if key in self._EVENT_COLLECTION_UPDATE_FIELDS
-        }
-        if not clean_updates:
+        if not self._EVENT_COLLECTION_UPDATE_FIELDS.intersection(updates):
             return False
-        conn    = self.get_connection()
-        current = conn.execute(
-            """
-            SELECT timezone FROM event_collections
-            WHERE id = ? AND owner_id = ? AND deleted = 0
-            """,
-            (collection_id, owner_id),
-        ).fetchone()
-        if current is None:
-            return False
-        user_timezone               = TimezoneHelper.get_user_timezone(owner_id, self)
-        clean_updates["updated_at"] = utc_now_iso()
-        context                     = {
-            "timezone": str(current["timezone"] or user_timezone.key),
-            **clean_updates,
-        }
-        normalized    = normalize_event_collection_datetimes_for_storage(context, user_timezone)
-        clean_updates = {key: normalized[key] for key in clean_updates}
-        data          = self._prepare_event_collection_data(clean_updates)
-        set_clause    = ", ".join(f"{self._quote_col(key)} = ?" for key in data)
-
-        with conn:
-            cursor = conn.execute(
-                f"""
-                UPDATE event_collections SET {set_clause}
-                WHERE id = ? AND owner_id = ? AND deleted = 0
-                """,
-                list(data.values()) + [collection_id, owner_id],
-            )
-            if cursor.rowcount:
-                # 内容与审计日志必须同成同败，不能留下无法撤销的半成功修改。
-                self._log_operation_from_spec(
-                    cursor,
-                    operation_log,
-                    default_item_id   = collection_id,
-                    default_item_type = ItemType.EVENT.value,
-                )
-        changed = cursor.rowcount > 0
-        if changed:
-            self.cache_invalidate(collection_id)
-            self.cache_invalidate(f"event_collections|{owner_id}")
-        return changed
+        update_collection(
+            self,
+            resolved_id,
+            owner_id,
+            updates,
+            expected_version = expected_version,
+            operation_log    = operation_log,
+        )
+        return True
 
     def update_event_collection_reminders(
         self,
@@ -1158,142 +1141,28 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         child_updates: dict[str, tuple[list[str], list[dict[str, int]]]],
         collection_rules: list[dict[str, int]] | None,
         *,
-        collection_updates: dict[str, Any] | None = None,
-        operation_log: dict[str, Any] | None      = None,
+        collection_updates: dict[str, Any] | None      = None,
+        expected_version: int | None                   = None,
+        expected_child_versions: dict[str, int] | None = None,
+        operation_log: dict[str, Any] | None           = None,
     ) -> int:
-        """原子更新集合字段、全部节点提醒及对应审计记录。"""
-
+        """按集合版本原子更新共享字段及指定叶子的提醒。"""
         resolved_id = self.resolve_event_collection_id(owner_id, collection_id)
         if resolved_id is None:
             raise ItemNotFoundException(collection_id)
-        collection_id = resolved_id
-
-        ordered_updates = {
-            str(item_id): (list(remind_times), list(reminder_rules))
-            for item_id, (remind_times, reminder_rules) in child_updates.items()
-            if item_id
-        }
-        clean_collection_updates = {
-            key: value
-            for key, value in (collection_updates or {}).items()
-            if key in self._EVENT_COLLECTION_UPDATE_FIELDS
-        }
-        clean_collection_updates.update(
-            {"reminder_rules": list(collection_rules)} if collection_rules is not None else {}
+        updates = dict(collection_updates or {})
+        if collection_rules is not None:
+            updates["reminder_rules"] = collection_rules
+        return update_collection(
+            self,
+            resolved_id,
+            owner_id,
+            updates,
+            child_updates           = child_updates,
+            expected_version        = expected_version,
+            operation_log           = operation_log,
+            expected_child_versions = expected_child_versions,
         )
-        if not ordered_updates and not clean_collection_updates:
-            return 0
-
-        item_ids = list(ordered_updates)
-        now      = utc_now_iso()
-        with self.transaction(immediate=True) as conn:
-            cursor         = conn.cursor()
-            collection_row = cursor.execute(
-                """
-                SELECT timezone FROM event_collections
-                WHERE id = ? AND owner_id = ? AND deleted = 0
-                """,
-                (collection_id, owner_id),
-            ).fetchone()
-            if collection_row is None:
-                raise ItemNotFoundException(collection_id)
-            user_timezone       = TimezoneHelper.get_user_timezone(owner_id, self)
-            collection_timezone = str(collection_row["timezone"] or user_timezone.key)
-            if clean_collection_updates:
-                collection_context = {
-                    "timezone": collection_timezone,
-                    **clean_collection_updates,
-                    "updated_at": now,
-                }
-                normalized_collection = normalize_event_collection_datetimes_for_storage(
-                    collection_context,
-                    user_timezone,
-                )
-                clean_collection_updates = {
-                    key: normalized_collection[key] for key in clean_collection_updates
-                }
-                collection_timezone = str(
-                    normalized_collection.get("timezone") or collection_timezone
-                )
-
-            matched_ids: set[str] = set()
-            for offset in range(0, len(item_ids), _SQLITE_ID_BATCH_SIZE):
-                batch        = item_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
-                placeholders = ",".join("?" for _ in batch)
-                rows         = cursor.execute(
-                    f"""
-                    SELECT id FROM items
-                    WHERE owner_id = ? AND type = ? AND deleted = 0
-                      AND event_collection_id = ? AND id IN ({placeholders})
-                    """,
-                    [owner_id, ItemType.EVENT.value, collection_id, *batch],
-                ).fetchall()
-                matched_ids.update(str(row["id"]) for row in rows)
-            missing_ids = set(item_ids) - matched_ids
-            if missing_ids:
-                raise ItemNotFoundException(min(missing_ids))
-
-            for item_id, (remind_times, reminder_rules) in ordered_updates.items():
-                normalized_child = normalize_item_datetimes_for_storage(
-                    {
-                        "type": ItemType.EVENT.value,
-                        "timezone": collection_timezone,
-                        "remind_times": remind_times,
-                        "updated_at": now,
-                    },
-                    user_timezone,
-                )
-                require_canonical_utc_storage(normalized_child)
-                remind_times = cast(list[str], normalized_child["remind_times"])
-                cursor.execute(
-                    """
-                    UPDATE items
-                    SET remind_times = ?, reminder_rules = ?, updated_at = ?,
-                        version = version + 1
-                    WHERE id = ? AND owner_id = ? AND type = ? AND deleted = 0
-                      AND event_collection_id = ?
-                    """,
-                    (
-                        json.dumps(remind_times, ensure_ascii=False),
-                        json.dumps(reminder_rules, ensure_ascii=False),
-                        now,
-                        item_id,
-                        owner_id,
-                        ItemType.EVENT.value,
-                        collection_id,
-                    ),
-                )
-                if cursor.rowcount != 1:
-                    raise RuntimeError(f"event reminder update lost item: {item_id}")
-                self._sync_reminder_logs(cursor, item_id, remind_times)
-
-            if clean_collection_updates:
-                clean_collection_updates["updated_at"] = now
-                collection_data = self._prepare_event_collection_data(clean_collection_updates)
-                set_clause = ", ".join(f"{self._quote_col(key)} = ?" for key in collection_data)
-                cursor.execute(
-                    f"""
-                    UPDATE event_collections SET {set_clause}
-                    WHERE id = ? AND owner_id = ? AND deleted = 0
-                    """,
-                    [*collection_data.values(), collection_id, owner_id],
-                )
-                if cursor.rowcount != 1:
-                    raise RuntimeError(f"event collection update lost collection: {collection_id}")
-
-            self._log_operation_from_spec(
-                cursor,
-                operation_log,
-                default_item_id   = collection_id,
-                default_item_type = ItemType.EVENT.value,
-            )
-
-        for item_id in item_ids:
-            self.cache_invalidate(item_id)
-        self.cache_invalidate(f"items|{owner_id}")
-        self.cache_invalidate(collection_id)
-        self.cache_invalidate(f"event_collections|{owner_id}")
-        return len(item_ids)
 
     def get_collection_events(self, collection_id: str, owner_id: str) -> list[EventItem]:
         resolved_id = self.resolve_event_collection_id(owner_id, collection_id)
@@ -1657,6 +1526,46 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         if cache_key is not None:
             self._cache_set(cache_key, items)
         return items
+
+    def get_item_date_bounds(
+        self,
+        owner_id: str,
+        item_type: str,
+        *,
+        currency: str | None           = None,
+        filters: dict[str, Any] | None = None,
+    ) -> dict[str, str]:
+        """按用户时区独立聚合有效条目的最早日期与最晚日期。"""
+        fields_by_type = {
+            "event": ("start_time", "COALESCE(NULLIF(end_time, ''), start_time)"),
+            "task": ("plan_date", "created_at", "completed_at", "cancelled_at", "deadline_at"),
+            "note": ("created_at",),
+            "diary": ("diary_date",),
+            "ledger": ("ledger_date",),
+        }
+        fields = fields_by_type.get(item_type)
+        if fields is None:
+            raise ValueError("Unsupported item type")
+        zone                             = TimezoneHelper.get_user_timezone(owner_id, self).key
+        resolved_filters: dict[str, Any] = {**(filters or {}), "type": item_type}
+        if currency:
+            resolved_filters["currency"] = currency
+        where, params = self._item_list_conditions(owner_id, resolved_filters)
+        aggregates = []
+        for field in fields:
+            expression = f"NULLIF(pendo_local_date({field}, ?), '')"
+            aggregates.extend([f"MIN({expression})", f"MAX({expression})"])
+        row = (
+            self.get_connection()
+            .execute(
+                f"SELECT {', '.join(aggregates)} FROM items WHERE {' AND '.join(where)}",
+                [*([zone] * len(aggregates)), *params],
+            )
+            .fetchone()
+        )
+        starts = [str(row[index]) for index in range(0, len(row), 2) if row[index]]
+        ends   = [str(row[index]) for index in range(1, len(row), 2) if row[index]]
+        return {"start": min(starts, default=""), "end": max(ends, default="")}
 
     def get_item_ids(
         self,
@@ -2187,6 +2096,12 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
     ) -> None:
         """将常用过滤条件追加到 where / params"""
         if filters:
+            if filters.get("overdue_date"):
+                where.append(
+                    f"COALESCE(NULLIF(TRIM({column_prefix}plan_date), ''), "
+                    f"NULLIF(pendo_local_date({column_prefix}deadline_at, ?), '')) < ?"
+                )
+                params.extend([filters["_user_timezone"], filters["overdue_date"]])
             if filters.get("currency"):
                 where.append(
                     f"COALESCE(NULLIF(UPPER(TRIM({column_prefix}currency)), ''), 'CNY') = ?"
@@ -2877,7 +2792,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             """
             SELECT id, item_id, action, item_type, details, created_at
             FROM operation_logs
-            WHERE user_id = ? AND action LIKE 'edit_%'
+            WHERE user_id = ? AND (action LIKE 'edit_%' OR action = 'update_event_collection')
                 AND undone_at IS NULL AND created_at >= ?
             ORDER BY created_at DESC, id DESC LIMIT 1
         """,
@@ -2892,9 +2807,15 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         action  = row[2]
         details = self._parse_operation_details(row[4])
 
+        if details.get("target_kind") == "event_collection":
+            return restore_collection_edit(
+                self, owner_id, str(item_id), details, int(log_id), str(action)
+            )
         old_values = details.get("old_values")
         if not isinstance(old_values, dict) or not old_values:
             return {"status": "error", "message": "该编辑操作没有保存旧值快照，无法撤销"}
+        if not isinstance(details.get("after_version"), int):
+            return {"status": "error", "message": "该旧编辑记录缺少版本信息，当前内容已保留"}
 
         instance_ids = details.get("instance_ids", [item_id])
         if not isinstance(instance_ids, list):
@@ -2906,16 +2827,20 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         if not restorable_ids:
             return {"status": "error", "message": "该编辑操作对应的条目已不存在"}
 
-        affected = self._restore_edit_snapshot(
-            conn,
-            cursor,
-            owner_id,
-            restorable_ids,
-            old_values,
-            int(log_id),
-            str(action),
-            row[3],
-        )
+        try:
+            affected = self._restore_edit_snapshot(
+                conn,
+                cursor,
+                owner_id,
+                restorable_ids,
+                old_values,
+                int(log_id),
+                str(action),
+                row[3],
+                details,
+            )
+        except ItemVersionConflictException:
+            return {"status": "error", "message": "条目已有后续修改，请先处理最新操作"}
 
         return {
             "status": "success",
@@ -2935,6 +2860,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         log_id: int,
         source_action: str,
         item_type: str | None,
+        details: dict[str, Any],
     ) -> int:
         """在一个事务内恢复编辑快照并把来源日志标记为已撤销。"""
         restore_values = dict(old_values)
@@ -2962,7 +2888,14 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         set_clause     = ", ".join(f"{self._quote_col(key)} = ?" for key in restore_data)
         affected       = 0
 
-        with conn:
+        with self.transaction(immediate=True):
+            for restored_id in item_ids:
+                version_row = cursor.execute(
+                    "SELECT version FROM items WHERE id = ? AND owner_id = ? AND deleted = 0",
+                    (restored_id, owner_id),
+                ).fetchone()
+                if version_row is None or int(version_row["version"]) != details["after_version"]:
+                    raise ItemVersionConflictException(restored_id)
             for offset in range(0, len(item_ids), _SQLITE_ID_BATCH_SIZE):
                 batch        = item_ids[offset : offset + _SQLITE_ID_BATCH_SIZE]
                 placeholders = ",".join("?" for _ in batch)
@@ -2982,6 +2915,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             if self._FTS_FIELDS & restore_data.keys():
                 for restored_id in item_ids:
                     self._refresh_fts(restored_id, conn)
+            if len(item_ids) == 1:
+                self._rebase_previous_item_edit(cursor, owner_id, item_ids[0], log_id, details)
             self._mark_operation_logs_undone(
                 cursor,
                 owner_id          = owner_id,
@@ -2996,6 +2931,31 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             self.cache_invalidate(restored_id)
         self.cache_invalidate(f"items|{owner_id}")
         return affected
+
+    def _rebase_previous_item_edit(
+        self,
+        cursor: sqlite3.Cursor,
+        owner_id: str,
+        item_id: str,
+        log_id: int,
+        details: dict[str, Any],
+    ) -> None:
+        """把连续撤销衔接到刚恢复的版本，保留独立修改形成的版本断点。"""
+        previous = cursor.execute(
+            "SELECT id, details FROM operation_logs WHERE user_id = ? AND item_id = ? "
+            "AND id < ? AND undone_at IS NULL AND action LIKE 'edit_%' ORDER BY id DESC LIMIT 1",
+            (owner_id, item_id, log_id),
+        ).fetchone()
+        if previous is None:
+            return
+        previous_details = self._parse_operation_details(previous["details"])
+        if previous_details.get("after_version") != details.get("before_version"):
+            return
+        previous_details["after_version"] = details["after_version"] + 1
+        cursor.execute(
+            "UPDATE operation_logs SET details = ? WHERE id = ?",
+            (json.dumps(previous_details, ensure_ascii=False), previous["id"]),
+        )
 
     def get_latest_undoable_operation(
         self,
@@ -3028,7 +2988,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         cursor.execute(
             """
             SELECT id, created_at FROM operation_logs
-            WHERE user_id = ? AND action LIKE 'edit_%'
+            WHERE user_id = ? AND (action LIKE 'edit_%' OR action = 'update_event_collection')
                 AND undone_at IS NULL AND created_at >= ?
             ORDER BY created_at DESC, id DESC LIMIT 1
         """,
@@ -3481,7 +3441,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 if not isinstance(details, dict):
                     continue
                 removed = False
-                for sensitive_key in ("item_data", "old_values", "updates"):
+                for sensitive_key in ("item_data", "old_values", "updates", "children"):
                     if sensitive_key in details:
                         details.pop(sensitive_key, None)
                         removed = True

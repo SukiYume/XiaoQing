@@ -125,12 +125,13 @@ class ReminderService:
         scheduled_time = self._parse_user_time(remind_time, item.owner_id)
         if current_time < scheduled_time:
             return None
-        # 首次见到的提醒只允许落在当前检查窗口内，防止启动时补发多年历史。
-        # 已经实际尝试但投递失败的提醒则允许按退避时间重试；否则 5 分钟退避
-        # 会天然超过 2 分钟检查窗口，记录虽写成待重试却永远不会再被领取。
-        overdue_seconds         = (current_time - scheduled_time).total_seconds()
-        failure_count           = log.get("failure_count", 0) if log else 0
-        is_delivery_retry       = type(failure_count) is int and failure_count > 0
+        # 已领取的提醒在进程中断后仍进入恢复窗口，租约负责阻止并发投递。
+        # 未尝试的历史提醒继续使用较短的首次检查窗口。
+        overdue_seconds   = (current_time - scheduled_time).total_seconds()
+        failure_count     = log.get("failure_count", 0) if log else 0
+        is_delivery_retry = (type(failure_count) is int and failure_count > 0) or bool(
+            log and log.get("state") == "claimed"
+        )
         allowed_overdue_seconds = (
             PendoConfig.REMINDER_STALE_AFTER_SECONDS
             if is_delivery_retry

@@ -637,22 +637,18 @@
             "handler": "scheduled_weekly_finance_summary",
             "delivery": "targeted",
             "cron": {
-                "day_of_week": "sun",
-                "hour": 21,
-                "minute": 0
+                "minute": "*"
             },
-            "description": "每周日 21:00 生成财务总结"
+            "description": "每分钟检查用户本地周日 21:00 财务总结及待重试投递"
         },
         {
             "id": "pendo_month_end_finance_summary",
             "handler": "scheduled_month_end_finance_summary",
             "delivery": "targeted",
             "cron": {
-                "day": "last",
-                "hour": 21,
-                "minute": 0
+                "minute": "*"
             },
-            "description": "每月最后一天 21:00 生成财务总结"
+            "description": "每分钟检查用户本地月末 21:00 财务总结及待重试投递"
         },
         {
             "id": "pendo_cleanup_demo_data",

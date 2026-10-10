@@ -1015,10 +1015,10 @@ function addLocalDays(value, days) {
     return result;
 }
 
-function buildCalendarSyncWindow(currentTime = new Date()) {
+function buildCalendarSyncWindow(currentTime = new Date(), referenceDay = '') {
     const now =
         currentTime instanceof Date && !Number.isNaN(currentTime.getTime()) ? new Date(currentTime) : new Date();
-    const today      = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const today      = parseDateKey(referenceDay)?.date || new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const plannedEnd = addLocalDays(today, CALENDAR_SYNC_LOOKAHEAD_DAYS);
     let lastSuccess  = null;
     if (Keychain.contains(CALENDAR_SYNC_CURSOR_KEY)) {
@@ -1054,9 +1054,17 @@ function normalizeCalendarSyncData(value, window) {
     if (startKey !== window.startKey || endKey !== window.endKey) {
         throw new Error('日历同步响应窗口与请求不一致');
     }
+    const hasOffset  = (text) => /(?:Z|[+-]\d{2}:\d{2})$/.test(String(text || ''));
+    const rangeStart = hasOffset(value.window_start) ? new Date(value.window_start) : null;
+    const rangeEnd   = hasOffset(value.window_end) ? new Date(value.window_end) : null;
+    if (!rangeStart || !rangeEnd || !Number.isFinite(rangeStart.getTime()) || !Number.isFinite(rangeEnd.getTime()) || rangeStart >= rangeEnd) {
+        throw new Error('日历同步响应缺少有效的绝对时间窗口，请更新 Pendo 服务');
+    }
     return {
         startKey,
         endKey,
+        rangeStart,
+        rangeEnd,
         items: normalizeAgendaItems(value.items),
     };
 }
@@ -1322,14 +1330,13 @@ async function applyAgendaItemsToCalendar(items, rangeStart, rangeEnd) {
     return { completed: true, message: formatCalendarSyncCounts(counts) };
 }
 
-async function syncCalendarFromServer(token, currentTime = new Date()) {
+async function syncCalendarFromServer(token, currentTime = new Date(), referenceDay = '') {
     if (!SYNC_CALENDAR_NAME) return '同步已禁用（SYNC_CALENDAR_NAME 为空）';
 
-    const window = buildCalendarSyncWindow(currentTime);
+    const window = buildCalendarSyncWindow(currentTime, referenceDay);
     const data   = await fetchCalendarSyncData(window, token);
-    // 服务端窗口按自然日闭区间定义，Scriptable 的 between 使用右开区间。
-    const rangeEnd = addLocalDays(window.endDate, 1);
-    const result   = await applyAgendaItemsToCalendar(data.items, window.startDate, rangeEnd);
+    // 服务端提供用户时区自然日对应的绝对时间，结束时刻采用右开边界。
+    const result = await applyAgendaItemsToCalendar(data.items, data.rangeStart, data.rangeEnd);
     if (result.completed) {
         Keychain.set(CALENDAR_SYNC_CURSOR_KEY, window.nextCursorKey);
     }
@@ -1391,7 +1398,7 @@ try {
 // 在 Scriptable App 内直接运行时（而非 Widget 渲染），自动执行日历同步
 if (!config.runsInWidget && widgetData) {
     try {
-        const result = await syncCalendarFromServer(widgetToken);
+        const result = await syncCalendarFromServer(widgetToken, new Date(), widgetData.generated_at.slice(0, 10));
         const note   = new Notification();
         note.title = 'Pendo 日历同步';
         note.body = result;

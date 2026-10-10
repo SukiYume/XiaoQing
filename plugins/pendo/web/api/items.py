@@ -511,6 +511,8 @@ def _resolve_note_reference_update(
         )
     else:
         reference_payload = _resolve_note_reference_payload(db, owner_id, reference_payload)
+    if str(current.get("id") or "") in _collect_note_reference_ids(reference_payload):
+        raise ValueError("笔记关联目标需要选择其他条目")
     normalized["references"]    = reference_payload["references"]
     normalized["related_items"] = reference_payload["related_items"]
 
@@ -556,19 +558,15 @@ def _build_update_operation_log(
     current: dict[str, Any],
     updates: dict[str, Any],
 ) -> dict[str, Any]:
-    """构造更新审计；笔记记录可恢复的字段前后值。"""
+    """为所有用户编辑记录前后值，数据库事务补齐实际版本。"""
 
-    note_updates = {
-        field: value
-        for field, value in updates.items()
-        if item_type == "note" and field in NOTE_MUTABLE_FIELDS and field != "last_viewed"
-    }
+    note_updates = {field: value for field, value in updates.items() if field != "last_viewed"}
     if not note_updates:
         return {"user_id": owner_id, "action": "update", "item_type": item_type}
     return {
         "user_id": owner_id,
-        "action": "edit_note",
-        "item_type": "note",
+        "action": f"edit_{item_type}",
+        "item_type": item_type,
         "details": {
             "updates": note_updates,
             "old_values": {field: current.get(field) for field in note_updates if field in current},
@@ -701,6 +699,46 @@ def list_ledger_accounts(
     if not accounts:
         accounts = ["现金"]
     return {"ok": True, "data": {"accounts": accounts}, "message": ""}
+
+
+@router.get("/items/date-bounds")
+def item_date_bounds(
+    type: str,
+    currency: Annotated[str | None, Query(pattern="^[A-Za-z]{3}$")] = None,
+    category: str | None         = None,
+    tags: str | None             = None,
+    keyword: str | None          = None,
+    account_name: str | None     = None,
+    transaction_type: str | None = None,
+    amount_min: float | None     = None,
+    amount_max: float | None     = None,
+    owner_id: str                = Depends(get_current_user),
+    db: Database                 = Depends(get_db),
+) -> dict[str, object]:
+    """返回当前所有者数据的本地自然日边界，覆盖未来记录。"""
+    item_type = normalize_item_type_query(type)
+    if item_type is None:
+        raise HTTPException(status_code=422, detail="type is required")
+    transaction_type = normalize_choice_query(
+        transaction_type, LEDGER_TRANSACTION_TYPES, "transaction_type"
+    )
+    amount_min, amount_max = _normalize_amount_bounds(amount_min, amount_max)
+    filters = {
+        key: value
+        for key, value in (
+            ("tags", str(tags or "").strip() or None),
+            ("keyword", str(keyword or "").strip() or None),
+            ("account_name", str(account_name or "").strip() or None),
+            ("transaction_type", transaction_type),
+            ("amount_min", amount_min),
+            ("amount_max", amount_max),
+        )
+        if value is not None
+    }
+    if category and category.strip():
+        filters[_resolve_category_field(item_type)] = category.strip()
+    bounds = db.get_item_date_bounds(owner_id, item_type, currency=currency, filters=filters)
+    return {"ok": True, "data": bounds, "message": ""}
 
 
 @router.get("/items")
@@ -881,14 +919,17 @@ def create_item(
         entry_label        = TimezoneHelper.parse(entry_time, user_timezone).strftime("%H:%M")
         item_data["title"] = f"{item_data['diary_date']} {entry_label} 日记".strip()
 
-    item_id = db.insert_item(
-        item_data,
-        operation_log={
-            "user_id": owner_id,
-            "action": "create",
-            "item_type": item_type,
-        },
-    )
+    try:
+        item_id = db.insert_item(
+            item_data,
+            operation_log={
+                "user_id": owner_id,
+                "action": "create",
+                "item_type": item_type,
+            },
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return {
         "ok": True,
@@ -971,14 +1012,17 @@ def update_item(
 
     operation_log = _build_update_operation_log(owner_id, item_type, current, updates)
 
-    success = db.update_item(
-        item_id,
-        updates,
-        owner_id         = owner_id,
-        expected_version = current_version,
-        item_type        = item_type,
-        operation_log    = operation_log,
-    )
+    try:
+        success = db.update_item(
+            item_id,
+            updates,
+            owner_id         = owner_id,
+            expected_version = current_version,
+            item_type        = item_type,
+            operation_log    = operation_log,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not success:
         raise HTTPException(
             status_code=409, detail="Item changed by another request; refresh and retry"

@@ -1,5 +1,6 @@
 """Pendo Web 全文搜索的筛选、分页、集合补全与数据库回归。"""
 
+from datetime import timedelta
 from typing import Any, cast
 
 import pytest
@@ -7,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from plugins.pendo.services.db import Database
+from plugins.pendo.utils.time_utils import now_in_timezone
 from plugins.pendo.web.api import search as search_api
 from tests.helpers.assertions import assert_http_error as _assert_http_error
 
@@ -19,6 +21,61 @@ def test_search_router_registers_only_the_search_endpoint() -> None:
         for route in search_api.router.routes
     }
     assert registered == {("/search", frozenset({"GET"}))}
+
+
+def test_search_presets_apply_dates_and_status_without_keyword_matches(db: Database) -> None:
+    owner = "preset-owner"
+    today = now_in_timezone(owner, db).date()
+    yesterday = (today - timedelta(days=1)).isoformat()
+    tomorrow = (today + timedelta(days=1)).isoformat()
+    for identifier, status, plan_date in [
+        ("late", "open", yesterday),
+        ("done", "done", yesterday),
+        ("future", "open", tomorrow),
+    ]:
+        db.insert_item(
+            {
+                "id": identifier,
+                "owner_id": owner,
+                "type": "task",
+                "title": "处理收据",
+                "status": status,
+                "plan_date": plan_date,
+            }
+        )
+    for identifier, day in [
+        ("recent", yesterday),
+        ("old", (today - timedelta(days=8)).isoformat()),
+        ("tomorrow", tomorrow),
+    ]:
+        db.insert_item(
+            {
+                "id": identifier,
+                "owner_id": owner,
+                "type": "diary",
+                "content": "散步记录",
+                "diary_date": day,
+            }
+        )
+    db.insert_item(
+        {"type": "task", "owner_id": "other", "plan_date": yesterday, "title": "其他用户"}
+    )
+    app = FastAPI()
+    app.include_router(search_api.router)
+    app.dependency_overrides[search_api.get_current_user] = lambda: owner
+    app.dependency_overrides[search_api.get_db]           = lambda: db
+    with TestClient(app) as client:
+        late = client.get("/search", params={"preset": "overdue"}).json()["data"]
+        assert [row["id"] for row in late["items"]] == ["late"]
+        recent = client.get("/search", params={"preset": "recent_diary"}).json()["data"]
+        assert [row["id"] for row in recent["items"]] == ["recent"]
+        assert (
+            client.get("/search", params={"preset": "overdue", "type": "note"}).status_code == 422
+        )
+        assert (
+            client.get("/search", params={"preset": "overdue", "q": "收据"}).json()["data"]["total"]
+            == 1
+        )
 
 
 def test_search_http_endpoint_preserves_type_alias_and_query_bounds(db: Database) -> None:
