@@ -5,31 +5,44 @@ from __future__ import annotations
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 
+import pytest
+
+from plugins.qingpet.services import database_clock
 from plugins.qingpet.services.database import Database
 from plugins.qingpet.services.pet_service import PetService
 from plugins.qingpet.services.user_service import UserService
 from plugins.qingpet.utils.constants import GROUP_TASK_TEMPLATES
-from plugins.qingpet.utils.time import utc_now
 
 
-def _today() -> str:
-    return utc_now().strftime("%Y-%m-%d")
+@pytest.fixture(
+    params=[
+        (datetime(2030, 5, 1, 15, 59, 59), "2030-05-01"),
+        (datetime(2030, 5, 1, 16, 0, 0), "2030-05-02"),
+    ],
+    ids=["before-shanghai-midnight", "after-shanghai-midnight"],
+)
+def group_task_date(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> str:
+    """在上海午夜两侧使用固定 UTC 时钟和明确的业务日期。"""
+    now, expected_date = request.param
+    monkeypatch.setattr(database_clock, "now", lambda: now)
+    return expected_date
 
 
-def _rows(db: Database, group_id: int) -> list[sqlite3.Row]:
+def _rows(db: Database, group_id: int, created_date: str) -> list[sqlite3.Row]:
     return (
         db._get_connection()
         .execute(
             """SELECT * FROM group_tasks
            WHERE group_id = ? AND created_date = ? ORDER BY task_type""",
-            (group_id, _today()),
+            (group_id, created_date),
         )
         .fetchall()
     )
 
 
-def test_legacy_group_task_duplicates_are_merged_before_unique_key(tmp_path):
+def test_legacy_group_task_duplicates_are_merged_before_unique_key(tmp_path, group_task_date):
     path = tmp_path / "legacy-group-tasks.db"
     conn = sqlite3.connect(path)
     conn.execute(
@@ -51,9 +64,9 @@ def test_legacy_group_task_duplicates_are_merged_before_unique_key(tmp_path):
             description, created_date, is_completed)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         [
-            (70001, "group_feed", 50, 4, 20, "旧描述", _today(), 0),
-            (70001, "group_feed", 50, 7, 20, "新描述", _today(), 0),
-            (70001, "group_feed", 40, 5, 15, "较小配置", _today(), 0),
+            (70001, "group_feed", 50, 4, 20, "旧描述", group_task_date, 0),
+            (70001, "group_feed", 50, 7, 20, "新描述", group_task_date, 0),
+            (70001, "group_feed", 40, 5, 15, "较小配置", group_task_date, 0),
             (70001, "legacy", 1, 1, 1, "无日期", None, 1),
             (70001, "legacy", 1, 0, 1, "无日期副本", None, 0),
         ],
@@ -68,7 +81,7 @@ def test_legacy_group_task_duplicates_are_merged_before_unique_key(tmp_path):
             .execute(
                 """SELECT * FROM group_tasks
                WHERE group_id = 70001 AND task_type = 'group_feed' AND created_date = ?""",
-                (_today(),),
+                (group_task_date,),
             )
             .fetchall()
         )
@@ -115,7 +128,7 @@ def test_legacy_group_task_duplicates_are_merged_before_unique_key(tmp_path):
         db.cleanup()
 
 
-def test_group_task_initialization_and_increment_roll_back_together(tmp_path):
+def test_group_task_initialization_and_increment_roll_back_together(tmp_path, group_task_date):
     db       = Database(str(tmp_path / "group-task-rollback.db"))
     group_id = 70002
     try:
@@ -140,7 +153,7 @@ def test_group_task_initialization_and_increment_roll_back_together(tmp_path):
             )
             is False
         )
-        assert _rows(db, group_id) == []
+        assert _rows(db, group_id, group_task_date) == []
 
         conn.execute("DROP TRIGGER fail_group_task_increment")
         conn.commit()
@@ -152,14 +165,16 @@ def test_group_task_initialization_and_increment_roll_back_together(tmp_path):
             )
             is True
         )
-        rows = _rows(db, group_id)
+        rows = _rows(db, group_id, group_task_date)
         assert len(rows) == len(GROUP_TASK_TEMPLATES)
         assert next(row for row in rows if row["task_type"] == "group_feed")["current_value"] == 1
     finally:
         db.cleanup()
 
 
-def test_two_database_instances_create_once_and_increment_one_row_per_action(tmp_path):
+def test_two_database_instances_create_once_and_increment_one_row_per_action(
+    tmp_path, group_task_date
+):
     path     = str(tmp_path / "group-task-concurrent.db")
     first    = Database(path)
     second   = Database(path)
@@ -192,7 +207,7 @@ def test_two_database_instances_create_once_and_increment_one_row_per_action(tmp
             results = list(executor.map(increment, keepers))
 
         assert all(result for batch in results for result in batch)
-        rows = _rows(first, group_id)
+        rows = _rows(first, group_id, group_task_date)
         assert len(rows) == len(GROUP_TASK_TEMPLATES)
         feed = next(row for row in rows if row["task_type"] == "group_feed")
         assert feed["current_value"] == 20
@@ -201,7 +216,7 @@ def test_two_database_instances_create_once_and_increment_one_row_per_action(tmp
             .execute(
                 """SELECT COUNT(*) FROM group_tasks
                    WHERE group_id = ? AND task_type = 'group_feed' AND created_date = ?""",
-                (group_id, _today()),
+                (group_id, group_task_date),
             )
             .fetchone()[0]
             == 1
@@ -211,7 +226,9 @@ def test_two_database_instances_create_once_and_increment_one_row_per_action(tmp
         first.cleanup()
 
 
-def test_atomic_pet_action_creates_templates_and_advances_only_selected_task(tmp_path):
+def test_atomic_pet_action_creates_templates_and_advances_only_selected_task(
+    tmp_path, group_task_date
+):
     db       = Database(str(tmp_path / "group-task-pet-action.db"))
     group_id = 70004
     try:
@@ -229,7 +246,7 @@ def test_atomic_pet_action_creates_templates_and_advances_only_selected_task(tmp
             )
             is True
         )
-        rows = _rows(db, group_id)
+        rows = _rows(db, group_id, group_task_date)
         assert len(rows) == len(GROUP_TASK_TEMPLATES)
         progress = {row["task_type"]: row["current_value"] for row in rows}
         assert progress == {
@@ -241,7 +258,7 @@ def test_atomic_pet_action_creates_templates_and_advances_only_selected_task(tmp
         db.cleanup()
 
 
-def test_completed_group_task_reward_can_only_be_claimed_once(tmp_path):
+def test_completed_group_task_reward_can_only_be_claimed_once(tmp_path, group_task_date):
     path     = str(tmp_path / "group-task-claim.db")
     first    = Database(path)
     second   = Database(path)
@@ -253,7 +270,7 @@ def test_completed_group_task_reward_can_only_be_claimed_once(tmp_path):
         first._get_connection().execute(
             """UPDATE group_tasks SET current_value = target_value, is_completed = 1
                WHERE group_id = ? AND task_type = 'group_feed' AND created_date = ?""",
-            (group_id, _today()),
+            (group_id, group_task_date),
         )
         first._get_connection().commit()
 
