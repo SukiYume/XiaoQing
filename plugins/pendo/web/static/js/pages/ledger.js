@@ -310,6 +310,7 @@ function ensureStyles() {
             font-weight: 700;
         }
         .ledger-section-stack {
+            container: ledger-content / inline-size;
             display: flex;
             flex-direction: column;
             gap: 18px;
@@ -376,9 +377,15 @@ function ensureStyles() {
         }
         .ledger-controls-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+            grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 16px;
             align-items: start;
+        }
+        @container ledger-content (min-width: 996px) {
+            .ledger-controls-grid { grid-template-columns: 490px minmax(0, 1fr); }
+        }
+        @container ledger-content (max-width: 655px) {
+            .ledger-controls-grid { grid-template-columns: 1fr; }
         }
         .ledger-panel {
             min-width: 0;
@@ -712,7 +719,6 @@ function ensureStyles() {
             grid-template-columns: repeat(2, minmax(0, 1fr));
             align-items: flex-start;
             gap: 12px 16px;
-            max-width: 456px;
         }
         .ledger-filter-item {
             display: flex;
