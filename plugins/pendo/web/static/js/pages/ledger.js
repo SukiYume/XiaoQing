@@ -314,11 +314,12 @@ function ensureStyles() {
             flex-direction: column;
             gap: 18px;
         }
+        .ledger-analysis-body { display: grid; gap: 16px; }
 
         /* 汇总卡片 */
         .ledger-summary-cards {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, minmax(0, 1fr));
             gap: 14px;
         }
         ${mediaMax(
@@ -330,7 +331,7 @@ function ensureStyles() {
         ${mediaMax(
             BREAKPOINTS.MOBILE,
             `
-            .ledger-summary-cards { grid-template-columns: 1fr; }
+            .ledger-summary-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
         `,
         )}
         .ledger-summary-card {
@@ -375,15 +376,15 @@ function ensureStyles() {
         }
         .ledger-controls-grid {
             display: grid;
-            grid-template-columns: minmax(360px, 1.05fr) minmax(320px, 0.95fr);
+            grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
             gap: 16px;
             align-items: start;
         }
         .ledger-panel {
-            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(255,249,247,0.95));
-            border: 1px solid rgba(239,68,68,0.12);
-            border-radius: 24px;
-            box-shadow: 0 16px 34px rgba(225,82,65,0.05);
+            min-width: 0;
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            border-radius: 12px;
             overflow: visible;
         }
         .ledger-panel-head {
@@ -391,11 +392,11 @@ function ensureStyles() {
             align-items: flex-start;
             justify-content: space-between;
             gap: 12px;
-            padding: 18px 20px 0;
+            padding: 16px 16px 0;
         }
         .ledger-panel-head h3 {
             margin: 0;
-            font-size: 18px;
+            font-size: 16px;
             font-weight: 780;
             color: var(--color-text);
             letter-spacing: -0.02em;
@@ -406,8 +407,11 @@ function ensureStyles() {
             color: var(--color-text-secondary);
         }
         .ledger-panel-body {
-            padding: 16px 20px 20px;
+            padding: 14px 16px 16px;
         }
+        .ledger-compose-toggle { padding: 16px 16px 0; font-size: 16px; font-weight: 700; cursor: pointer; }
+        #ledger-compose:not([open]) .ledger-compose-toggle { padding-bottom: 16px; }
+        .ledger-compose-toggle:focus-visible { outline: 2px solid var(--color-ledger); outline-offset: 3px; }
 
         .ledger-insights-panel {
             display: grid;
@@ -642,7 +646,7 @@ function ensureStyles() {
         .ledger-quick-add {
             display: grid;
             grid-template-columns: repeat(3, minmax(0, 1fr));
-            gap: 14px 16px;
+            gap: 12px;
             align-items: end;
         }
         .ledger-quick-add > * { min-width: 0; }
@@ -706,22 +710,18 @@ function ensureStyles() {
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
             align-items: flex-start;
-            gap: 18px 20px;
+            gap: 12px 16px;
         }
         .ledger-filter-item {
             display: flex;
             flex-direction: column;
             align-items: flex-start;
-            gap: 8px;
+            gap: 6px;
             min-width: 0;
             padding: 0;
             border: none;
             background: transparent;
             border-radius: 0;
-        }
-        .ledger-filter-item--amount {
-            grid-column: 1 / -1;
-            width: 100%;
         }
         .ledger-filter-item--date.is-custom {
             grid-column: 1 / -1;
@@ -734,9 +734,11 @@ function ensureStyles() {
             display: grid;
             grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
             align-items: center;
-            gap: 8px;
+            gap: 6px;
             width: 100%;
+            max-width: 208px;
         }
+        #content .ledger-filter-item--currency .ledger-filter-controls { max-width: 140px; }
         .ledger-filter-bar label {
             font-size: 11px;
             font-weight: 800;
@@ -774,17 +776,16 @@ function ensureStyles() {
             flex: 0 0 auto;
         }
         .ledger-amount-separator { font-size: 12px; color: var(--color-text-secondary); }
-        .ledger-filter-date,
-        .ledger-filter-transaction-type,
-        .ledger-filter-account,
-        .ledger-filter-category {
-            width: 100%;
+        .ledger-filter-bar .ledger-filter-date,
+        .ledger-filter-bar .ledger-filter-transaction-type {
+            width: min(100%, 128px);
             flex: 0 0 auto;
         }
-        .ledger-filter-item--date .pselect,
-        .ledger-filter-item--transaction-type .pselect,
-        .ledger-filter-item--account .pselect,
-        .ledger-filter-item--category .pselect,
+        .ledger-filter-bar .ledger-filter-account,
+        .ledger-filter-bar .ledger-filter-category {
+            width: min(100%, 156px);
+            flex: 0 0 auto;
+        }
         .ledger-filter-item--date .pselect-trigger,
         .ledger-filter-item--transaction-type .pselect-trigger,
         .ledger-filter-item--account .pselect-trigger,
@@ -889,9 +890,8 @@ function ensureStyles() {
         ${mediaMax(
             BREAKPOINTS.XL,
             `
-            .ledger-controls-grid {
-                grid-template-columns: 1fr;
-            }
+            .ledger-quick-add { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .ledger-qa-field--title { grid-column: 1 / -1; }
             .ledger-insights-panel {
                 grid-template-columns: 1fr;
             }
@@ -904,20 +904,14 @@ function ensureStyles() {
                 grid-template-columns: 1fr;
                 padding: 22px 20px;
             }
+            .ledger-summary-card { padding: 12px; gap: 8px; }
+            .ledger-summary-icon { width: 30px; height: 30px; font-size: 18px; }
             .ledger-quick-add {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
                 gap: 12px;
             }
-            .ledger-qa-field--title,
-            .ledger-qa-field--date,
-            .ledger-qa-action {
-                grid-column: 1 / -1;
-            }
             .ledger-page-header {
                 align-items: flex-start;
-            }
-            .ledger-filter-bar {
-                grid-template-columns: 1fr;
             }
             .ledger-pulse-metrics {
                 grid-template-columns: 1fr;
@@ -942,18 +936,6 @@ function ensureStyles() {
                 font-size: clamp(13px, 3.8vw, 17px);
                 font-weight: 600;
             }
-            .ledger-filter-item {
-                width: 100%;
-                flex-wrap: wrap;
-                align-items: flex-start;
-            }
-            .ledger-filter-item--date,
-            .ledger-filter-item--transaction-type,
-            .ledger-filter-item--account,
-            .ledger-filter-item--category,
-            .ledger-filter-item--amount {
-                flex-basis: 100%;
-            }
             .ledger-filter-controls,
             .ledger-filter-range {
                 width: 100%;
@@ -963,26 +945,19 @@ function ensureStyles() {
                 grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
                 align-items: center;
             }
-            .ledger-filter-date,
-            .ledger-filter-transaction-type,
-            .ledger-filter-category {
-                width: 100%;
-            }
             .ledger-filter-range {
                 align-items: stretch;
-                grid-template-columns: 1fr;
+                grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
                 row-gap: 8px;
-            }
-            .ledger-filter-range-sep {
-                display: none;
             }
             .ledger-filter-bar .ledger-custom-date-input,
             .ledger-filter-bar .ledger-amount-input {
                 width: 100%;
-                min-width: 105px;
+                min-width: 0;
                 flex: 1 1 100%;
             }
             .ledger-range-apply {
+                grid-column: 1 / -1;
                 width: 100%;
                 justify-self: stretch;
             }
@@ -991,16 +966,12 @@ function ensureStyles() {
         ${mediaMax(
             BREAKPOINTS.PHONE,
             `
-            .ledger-quick-add {
-                grid-template-columns: 1fr;
-            }
-            .ledger-qa-field--title,
             .ledger-qa-field--date,
             .ledger-qa-action {
-                grid-column: auto;
+                grid-column: 1 / -1;
             }
             .ledger-summary-value {
-                font-size: 26px;
+                font-size: 21px;
             }
         `,
         )}
@@ -1435,16 +1406,25 @@ function renderPage() {
                 </div>
             </section>
             <div class="ledger-section-stack">
-                <section class="ledger-panel ledger-filter-panel">
-                    <div class="ledger-panel-body">${renderFilterBar()}</div>
+                <details class="pendo-analysis" id="ledger-analysis" open>
+                    <summary>收支分析</summary>
+                    <div class="ledger-analysis-body">${renderSummaryCards()}${renderLedgerInsightsPanel(_insightsData)}</div>
+                </details>
+                <section class="ledger-controls-grid">
+                    <section class="ledger-panel ledger-filter-panel">
+                        <div class="ledger-panel-head"><h3>查询</h3></div>
+                        <div class="ledger-panel-body">${renderFilterBar()}</div>
+                    </section>
+                    <details class="ledger-panel" id="ledger-compose" open>
+                        <summary class="ledger-compose-toggle">记一笔</summary>
+                        <div class="ledger-panel-body">${renderQuickAdd()}</div>
+                    </details>
                 </section>
-                <details class="pendo-analysis" id="ledger-compose"><summary>快速记一笔</summary>${renderQuickAdd()}</details>
                 <div class="ledger-records-card">
                     ${renderListToolbar()}
                     <div id="ledger-list">${renderList(_items)}</div>
                     <div id="ledger-pagination" class="ledger-pagination"></div>
                 </div>
-                <details class="pendo-analysis"><summary>查看收支分析</summary>${renderSummaryCards()}${renderLedgerInsightsPanel(_insightsData)}</details>
             </div>
         </div>`;
 
