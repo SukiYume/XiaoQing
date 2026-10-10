@@ -397,6 +397,7 @@ function ensureStyles() {
         .ledger-panel-head h3 {
             margin: 0;
             font-size: 16px;
+            line-height: 1.6;
             font-weight: 780;
             color: var(--color-text);
             letter-spacing: -0.02em;
@@ -711,34 +712,30 @@ function ensureStyles() {
             grid-template-columns: repeat(2, minmax(0, 1fr));
             align-items: flex-start;
             gap: 12px 16px;
+            max-width: 456px;
         }
         .ledger-filter-item {
             display: flex;
             flex-direction: column;
             align-items: flex-start;
-            gap: 6px;
+            gap: 7px;
             min-width: 0;
             padding: 0;
             border: none;
             background: transparent;
             border-radius: 0;
         }
-        .ledger-filter-item--date.is-custom {
-            grid-column: 1 / -1;
-        }
-        .ledger-filter-item--date .ledger-filter-controls,
-        .ledger-filter-item--transaction-type .ledger-filter-controls,
-        .ledger-filter-item--category .ledger-filter-controls,
-        .ledger-filter-item--account .ledger-filter-controls { width: 100%; }
         .ledger-filter-item--amount .ledger-filter-controls {
             display: grid;
             grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
             align-items: center;
             gap: 6px;
             width: 100%;
-            max-width: 208px;
         }
-        #content .ledger-filter-item--currency .ledger-filter-controls { max-width: 140px; }
+        #content .ledger-filter-item--currency button {
+            height: 42px;
+            border-radius: 14px;
+        }
         .ledger-filter-bar label {
             font-size: 11px;
             font-weight: 800;
@@ -758,13 +755,12 @@ function ensureStyles() {
         }
         .ledger-filter-range {
             display: grid;
+            grid-column: 1 / -1;
             grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
             align-items: center;
             gap: 8px;
             min-width: 0;
-            flex: 1 0 100%;
             width: 100%;
-            margin-top: 8px;
         }
         .ledger-filter-range[hidden] { display: none; }
         .ledger-filter-range-sep {
@@ -777,13 +773,10 @@ function ensureStyles() {
         }
         .ledger-amount-separator { font-size: 12px; color: var(--color-text-secondary); }
         .ledger-filter-bar .ledger-filter-date,
-        .ledger-filter-bar .ledger-filter-transaction-type {
-            width: min(100%, 128px);
-            flex: 0 0 auto;
-        }
+        .ledger-filter-bar .ledger-filter-transaction-type,
         .ledger-filter-bar .ledger-filter-account,
         .ledger-filter-bar .ledger-filter-category {
-            width: min(100%, 156px);
+            width: 100%;
             flex: 0 0 auto;
         }
         .ledger-filter-item--date .pselect-trigger,
@@ -793,7 +786,7 @@ function ensureStyles() {
         .ledger-amount-input,
         .ledger-custom-date-input {
             box-sizing: border-box;
-            height: 40px !important;
+            height: 42px !important;
             font-size: 13px;
             padding: 0 12px;
             border: 1px solid rgba(239,68,68,0.16);
@@ -826,7 +819,7 @@ function ensureStyles() {
             border-color: var(--color-border);
         }
         .ledger-range-apply {
-            height: 40px;
+            height: 42px;
             padding: 0 14px;
             min-width: 64px;
             white-space: nowrap;
@@ -871,7 +864,7 @@ function ensureStyles() {
 
         /* 共享下拉框 */
         .ledger-filter-bar .pselect-trigger {
-            height: 40px;
+            height: 42px;
             padding: 0 12px 0 14px;
             border-radius: 14px;
             background: rgba(255,255,255,0.94);
@@ -1265,44 +1258,44 @@ function renderFilterBar() {
     return `
         <div class="ledger-filter-bar" id="ledger-filter-bar">
             <div class="ledger-filter-item ledger-filter-item--currency">
-                <label for="filter-currency">币种：</label>
+                <label for="filter-currency">币种</label>
                 <div class="ledger-filter-controls">
                     <input id="filter-currency" class="ledger-custom-date-input" value="${escapeHtml(_currency)}" maxlength="3" size="4" aria-label="账本币种" placeholder="CNY">
                     <button type="button" id="filter-currency-apply" class="btn btn-secondary">切换</button>
                 </div>
             </div>
-            <div class="ledger-filter-item ledger-filter-item--date${_dateFilter === 'custom' ? ' is-custom' : ''}">
-                <label id="filter-date-label">时段：</label>
+            <div class="ledger-filter-item ledger-filter-item--date">
+                <label id="filter-date-label">时段</label>
                 <div class="ledger-filter-controls">
                     ${renderCustomSelect({ id: 'filter-date', options: DATE_FILTER_OPTIONS, selected: _dateFilter, className: 'pselect-block pselect-theme-ledger ledger-filter-date', labelledBy: 'filter-date-label' })}
-                    <div class="ledger-filter-range" id="filter-custom-range" ${_dateFilter === 'custom' ? '' : 'hidden'}>
-                        <input type="text" class="ledger-custom-date-input" id="filter-date-start" value="${escapeHtml(_customDateStart)}" inputmode="numeric" placeholder="YYYY-MM-DD" aria-label="筛选开始日期">
-                        <span class="ledger-filter-range-sep">至</span>
-                        <input type="text" class="ledger-custom-date-input" id="filter-date-end" value="${escapeHtml(_customDateEnd)}" inputmode="numeric" placeholder="YYYY-MM-DD" aria-label="筛选结束日期">
-                        <button type="button" class="ledger-range-apply" id="filter-date-apply">应用</button>
-                    </div>
                 </div>
             </div>
+            <div class="ledger-filter-range" id="filter-custom-range" ${_dateFilter === 'custom' ? '' : 'hidden'}>
+                <input type="text" class="ledger-custom-date-input" id="filter-date-start" value="${escapeHtml(_customDateStart)}" inputmode="numeric" placeholder="YYYY-MM-DD" aria-label="筛选开始日期">
+                <span class="ledger-filter-range-sep">至</span>
+                <input type="text" class="ledger-custom-date-input" id="filter-date-end" value="${escapeHtml(_customDateEnd)}" inputmode="numeric" placeholder="YYYY-MM-DD" aria-label="筛选结束日期">
+                <button type="button" class="ledger-range-apply" id="filter-date-apply">应用</button>
+            </div>
             <div class="ledger-filter-item ledger-filter-item--transaction-type">
-                <label id="filter-transaction-type-label">类型：</label>
+                <label id="filter-transaction-type-label">类型</label>
                 <div class="ledger-filter-controls">
                     ${renderCustomSelect({ id: 'filter-transaction-type', options: typeOptions, selected: _transactionTypeFilter, className: 'pselect-block pselect-theme-ledger ledger-filter-transaction-type', labelledBy: 'filter-transaction-type-label' })}
                 </div>
             </div>
             <div class="ledger-filter-item ledger-filter-item--account">
-                <label id="filter-account-label">账户：</label>
+                <label id="filter-account-label">账户</label>
                 <div class="ledger-filter-controls">
                     ${renderCustomSelect({ id: 'filter-account', options: accountOptions, selected: _accountFilter, className: 'pselect-block pselect-theme-ledger ledger-filter-account', labelledBy: 'filter-account-label' })}
                 </div>
             </div>
             <div class="ledger-filter-item ledger-filter-item--category">
-                <label id="filter-category-label">分类：</label>
+                <label id="filter-category-label">分类</label>
                 <div class="ledger-filter-controls">
                     ${renderCustomSelect({ id: 'filter-category', options: catOptions, selected: _categoryFilter, className: 'pselect-block pselect-theme-ledger ledger-filter-category', labelledBy: 'filter-category-label' })}
                 </div>
             </div>
             <div class="ledger-filter-item ledger-filter-item--amount">
-                <label>金额：</label>
+                <label>金额</label>
                 <div class="ledger-filter-controls">
                     <input type="number" class="ledger-amount-input" id="filter-amount-min"
                         aria-label="最小金额"
