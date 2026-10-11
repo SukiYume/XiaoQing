@@ -319,23 +319,14 @@ function ensureStyles() {
 
         /* 汇总卡片 */
         .ledger-summary-cards {
-            display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
+            display: flex;
+            flex-wrap: wrap;
             gap: 14px;
         }
-        ${mediaMax(
-            BREAKPOINTS.XL,
-            `
-            .ledger-summary-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        `,
-        )}
-        ${mediaMax(
-            BREAKPOINTS.MOBILE,
-            `
-            .ledger-summary-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-        `,
-        )}
         .ledger-summary-card {
+            flex: 1 1 max-content;
+            min-width: calc((100% - 42px) / 4);
+            max-width: 100%;
             background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(255,249,247,0.94));
             border: 1px solid rgba(239,68,68,0.12);
             border-radius: 22px;
@@ -343,11 +334,16 @@ function ensureStyles() {
             display: grid;
             grid-template-columns: auto minmax(0, 1fr);
             align-items: center;
-            gap: 14px;
+            column-gap: 14px;
+            row-gap: 0;
             box-shadow: 0 14px 30px rgba(225,82,65,0.05);
-            min-width: 0;
+        }
+        @container ledger-content (max-width: 1100px) {
+            .ledger-summary-card { min-width: calc((100% - 14px) / 2); }
         }
         .ledger-summary-icon {
+            grid-column: 1;
+            grid-row: 1 / 3;
             width: 48px;
             height: 48px;
             display: inline-flex;
@@ -359,17 +355,26 @@ function ensureStyles() {
             flex-shrink: 0;
         }
         .ledger-summary-value {
+            grid-column: 2;
+            grid-row: 1;
             font-size: clamp(24px, 2.5vw, 31px);
             font-weight: 820;
-            line-height: 1.04;
+            line-height: 1.2;
             letter-spacing: -0.03em;
             min-width: 0;
-            overflow-wrap: anywhere;
+            max-width: 100%;
+            white-space: nowrap;
+            overflow-x: auto;
+            overflow-y: hidden;
+            scrollbar-width: thin;
+            font-variant-numeric: tabular-nums;
         }
         .ledger-amount-income { color: var(--color-success); }
         .ledger-amount-expense { color: var(--color-ledger); }
         .ledger-amount-transfer { color: var(--color-text); }
         .ledger-summary-label {
+            grid-column: 2;
+            grid-row: 2;
             font-size: 12px;
             font-weight: 700;
             color: var(--color-text-secondary);
@@ -903,8 +908,21 @@ function ensureStyles() {
                 grid-template-columns: 1fr;
                 padding: 22px 20px;
             }
-            .ledger-summary-card { padding: 12px; gap: 8px; }
-            .ledger-summary-icon { width: 30px; height: 30px; font-size: 18px; }
+            .ledger-summary-cards { gap: 10px; }
+            .ledger-summary-card {
+                min-width: calc((100% - 10px) / 2);
+                padding: 12px;
+                grid-template-columns: 24px minmax(0, 1fr);
+                column-gap: 6px;
+                row-gap: 8px;
+            }
+            .ledger-summary-icon { grid-row: 1; width: 24px; height: 24px; font-size: 16px; }
+            .ledger-summary-label { grid-row: 1; margin-top: 0; }
+            .ledger-summary-value {
+                grid-column: 1 / -1;
+                grid-row: 2;
+                font-size: clamp(16px, 4.6vw, 22px);
+            }
             .ledger-quick-add {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
                 gap: 12px;
@@ -968,9 +986,6 @@ function ensureStyles() {
             .ledger-qa-field--date,
             .ledger-qa-action {
                 grid-column: 1 / -1;
-            }
-            .ledger-summary-value {
-                font-size: 21px;
             }
         `,
         )}
@@ -1171,32 +1186,24 @@ function renderSummaryCards() {
     return `
         <div class="ledger-summary-cards">
             <div class="ledger-summary-card">
-                <div class="ledger-summary-icon">📈</div>
-                <div>
-                    <div class="ledger-summary-value ledger-amount-income">${formatAmount(income)}</div>
-                    <div class="ledger-summary-label">收入</div>
-                </div>
+                <div class="ledger-summary-icon" aria-hidden="true">📈</div>
+                <div class="ledger-summary-label">收入</div>
+                <div class="ledger-summary-value ledger-amount-income">${formatAmount(income)}</div>
             </div>
             <div class="ledger-summary-card">
-                <div class="ledger-summary-icon">📉</div>
-                <div>
-                    <div class="ledger-summary-value ledger-amount-expense">${formatAmount(expense)}</div>
-                    <div class="ledger-summary-label">支出</div>
-                </div>
+                <div class="ledger-summary-icon" aria-hidden="true">📉</div>
+                <div class="ledger-summary-label">支出</div>
+                <div class="ledger-summary-value ledger-amount-expense">${formatAmount(expense)}</div>
             </div>
             <div class="ledger-summary-card">
-                <div class="ledger-summary-icon">💰</div>
-                <div>
-                    <div class="ledger-summary-value ${balanceClass}">${formatAmount(balance)}</div>
-                    <div class="ledger-summary-label">结余</div>
-                </div>
+                <div class="ledger-summary-icon" aria-hidden="true">💰</div>
+                <div class="ledger-summary-label">结余</div>
+                <div class="ledger-summary-value ${balanceClass}">${formatAmount(balance)}</div>
             </div>
             <div class="ledger-summary-card">
-                <div class="ledger-summary-icon">🔁</div>
-                <div>
-                    <div class="ledger-summary-value ledger-amount-transfer">${formatAmount(transfer)}</div>
-                    <div class="ledger-summary-label">转账</div>
-                </div>
+                <div class="ledger-summary-icon" aria-hidden="true">🔁</div>
+                <div class="ledger-summary-label">转账</div>
+                <div class="ledger-summary-value ledger-amount-transfer">${formatAmount(transfer)}</div>
             </div>
         </div>`;
 }
