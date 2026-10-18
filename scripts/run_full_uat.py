@@ -351,6 +351,7 @@ def _build_phase_specs(args: argparse.Namespace, output_dir: Path) -> tuple[Phas
                         str(output_dir / "data" / "xiaoqing_chat"),
                         "--output",
                         str(output_dir / "reports" / "xiaoqing-chat-quality.json"),
+                        "--checker-calibration",
                     ),
                     True,
                     "真实模型人设、参与度和长空档话题边界（可能产生费用）",

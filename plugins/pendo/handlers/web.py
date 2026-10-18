@@ -5,6 +5,7 @@ from __future__ import annotations
 from importlib import import_module
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, cast
 
+from core.delivery import SENSITIVE_ACTION_KEY
 from core.plugin_base import build_action, run_sync, segments
 
 from ..config import PendoConfig
@@ -370,6 +371,7 @@ class WebHandler:
         action = build_action(segments(message), recipient_id, None)
         if action is None:
             return False
+        action[SENSITIVE_ACTION_KEY] = True
         # 凭据投递错误不能泄露到群聊回复；取消异常继承 BaseException，仍会正常向上传播。
         try:
             accepted = await context.send_action(action)

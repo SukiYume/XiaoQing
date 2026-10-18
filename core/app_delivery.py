@@ -20,6 +20,7 @@ from .constants import (
 )
 from .delivery import (
     DELIVERY_RECEIPT_KEY,
+    SENSITIVE_ACTION_KEY,
     DeliveryReceipt,
     attach_receipt,
     receipt_from_action,
@@ -298,6 +299,8 @@ class AppDeliveryMixin:
         return tagged
 
     async def _notify_outgoing_action_observers(self, action: dict[str, Any]) -> None:
+        if action.get(SENSITIVE_ACTION_KEY):
+            return
         source_plugin = str(action.get("_source_plugin", "") or "").strip()
         if not source_plugin:
             return
@@ -415,7 +418,7 @@ class AppDeliveryMixin:
         delivery_action = {
             key: value
             for key, value in action.items()
-            if key not in {ACTION_BYPASS_SINK_KEY, DELIVERY_RECEIPT_KEY}
+            if key not in {ACTION_BYPASS_SINK_KEY, DELIVERY_RECEIPT_KEY, SENSITIVE_ACTION_KEY}
         }
 
         def copy_delivery_result() -> None:

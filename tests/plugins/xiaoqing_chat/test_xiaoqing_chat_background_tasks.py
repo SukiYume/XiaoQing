@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
-from plugins.xiaoqing_chat.task_scheduler import _spawn_bg_task
+from plugins.xiaoqing_chat.task_scheduler import spawn_bg_task
 
 
 @pytest.mark.asyncio
@@ -33,8 +33,8 @@ async def test_expensive_per_chat_background_jobs_are_singleflight(task_name):
 
     try:
         with patch("plugins.xiaoqing_chat.task_scheduler._state", return_value=state):
-            _spawn_bg_task(context, blocked_job(), name=task_name)
-            _spawn_bg_task(context, blocked_job(), name=task_name)
+            spawn_bg_task(context, blocked_job(), name=task_name)
+            spawn_bg_task(context, blocked_job(), name=task_name)
             await asyncio.sleep(0)
 
             assert started == 1
@@ -62,7 +62,7 @@ async def test_background_task_registry_rejects_work_above_global_capacity(monke
     try:
         with patch("plugins.xiaoqing_chat.task_scheduler._state", return_value=state):
             for index in range(3):
-                _spawn_bg_task(context, blocked_job(), name=f"facts:g{index}")
+                spawn_bg_task(context, blocked_job(), name=f"facts:g{index}")
             await asyncio.sleep(0)
 
             assert started == 2

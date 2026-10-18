@@ -9,7 +9,7 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from core.atomic_store import keyed_path_lock
+from core.atomic_store import AtomicJsonStore, keyed_path_lock
 
 from ..store_base import StoreBase, coerce_finite_float, coerce_int, coerce_json_bool
 
@@ -127,12 +127,7 @@ class ExpressionStore(StoreBase):
         with keyed_path_lock(path):
             latest    = self._read_records()
             remaining = [item for item in latest if item.chat_id != target]
-            if len(remaining) != len(latest):
-                payload = [asdict(item) for item in remaining]
-                if not self._save_json_to_path_parts(
-                    "bw_learner", "expressions.json", data=payload
-                ):
-                    return
+            AtomicJsonStore(path).write_with_backup([asdict(item) for item in remaining])
             self._cache    = deepcopy(remaining)
             self._baseline = deepcopy(remaining)
 
@@ -185,6 +180,8 @@ class ExpressionStore(StoreBase):
             desired_by_id  = {item.expression_id: item for item in desired_items}
             merged_by_id   = dict(latest_by_id)
             for expression_id, desired in desired_by_id.items():
+                if expression_id in baseline_by_id and expression_id not in latest_by_id:
+                    continue
                 merged_by_id[expression_id] = self._merge_record(
                     latest_by_id.get(expression_id),
                     baseline_by_id.get(expression_id),

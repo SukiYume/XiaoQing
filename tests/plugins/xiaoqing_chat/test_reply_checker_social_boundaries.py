@@ -12,7 +12,6 @@ async def test_social_speculation_has_no_local_keyword_veto_when_semantic_checke
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
     common = {
-        "http_session": None,
         "secrets": {"_ai": None},
         "bot_name": "小青",
         "goal": "自然聊天",
@@ -61,7 +60,6 @@ async def test_proactive_reply_rejects_omitted_subject_life_episode() -> None:
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
     common = {
-        "http_session": None,
         "secrets": {"_ai": None},
         "bot_name": "小青",
         "goal": "自然聊天",
@@ -122,7 +120,7 @@ async def test_risk_mode_enforces_latest_explicit_communication_constraint(
         fake_chat,
     )
     monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.llm_client.extract_response_content",
+        "plugins.xiaoqing_chat.llm.reply_checker.gateway.extract_response_content",
         lambda _resp: (
             '{"suitable":false,"reason":"没有遵守本轮表达约束","need_replan":true,'
             '"severity":"hard","context_coherent":true,"speaker_correct":true,'
@@ -134,7 +132,6 @@ async def test_risk_mode_enforces_latest_explicit_communication_constraint(
     )
 
     result = await check_reply(
-        http_session           = None,
         secrets                = {"_ai": object()},
         bot_name               = "小青",
         reply                  = "先抱抱你，别太难受了。",
@@ -164,7 +161,6 @@ async def test_no_question_request_has_no_local_semantic_veto() -> None:
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
     result = await check_reply(
-        http_session           = None,
         secrets                = {"_ai": None},
         bot_name               = "小青",
         reply                  = "终于交掉了，今晚准备怎么奖励自己？",

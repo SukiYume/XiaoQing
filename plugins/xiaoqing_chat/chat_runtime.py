@@ -1,4 +1,4 @@
-"""提供聊天身份、配置快照、模型路由和消息判定的共享助手。"""
+"""插件运行时访问：配置热加载、AI 路由上下文、模型调用参数、屏蔽规则与会话锁。"""
 
 from __future__ import annotations
 
@@ -7,70 +7,28 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from core.message import contains_bot_name, extract_text, has_at_mention
-
 from .config.config import XiaoQingChatConfig, load_xiaoqing_chat_config
-from .constants import FIND_BY_LOCAL_ID_LIMIT
 from .llm.llm_config import LLMCallConfig
 from .persona import resolve_bot_name
-from .runtime_state import _ChatRuntime
+from .runtime_state import ChatRuntime
 from .runtime_state import get_state as _state
+from .utils.wall_clock import configure_wall_clock
 
 
-def _get_lock(chat_id: str):
+def chat_lock(chat_id: str):
     """取得指定会话的异步锁。"""
     return _state().get_lock(chat_id)
 
 
-def _chat_id(event: dict[str, Any]) -> str:
-    """从 OneBot 事件提取统一会话 ID：群聊以 g 开头，私聊以 u 开头。"""
-    group_id = event.get("group_id")
-    user_id  = event.get("user_id")
-    if group_id not in (None, ""):
-        return f"g{group_id}"
-    if user_id not in (None, ""):
-        return f"u{user_id}"
-    raise ValueError("missing chat identifier: expected group_id or user_id")
-
-
-def _get_bot_name(context: Any) -> str:
+def configured_bot_name(context: Any) -> str:
     """读取并规范化当前机器人名称。"""
     return resolve_bot_name(context.get_settings_snapshot().config.get("bot_name"))
 
 
-def _extract_sender_name(event: dict[str, Any]) -> str:
-    """依次从群名片、昵称和名称字段提取发送者显示名。"""
-    sender = event.get("sender") or {}
-    for key in ("card", "nickname", "name"):
-        v = sender.get(key)
-        if isinstance(v, str) and v.strip():
-            return v.strip()
-    user_id = event.get("user_id")
-    return f"用户{user_id}" if user_id else "用户"
-
-
-def _is_private(event: dict[str, Any]) -> bool:
-    """判断事件是否来自私聊。"""
-    return event.get("group_id") is None
-
-
-def _is_at_me(event: dict[str, Any]) -> bool:
-    """判断消息是否通过 @ 提及机器人。"""
-    self_id = str(event.get("self_id", "") or "")
-    return has_at_mention(event, self_id=self_id)
-
-
-def _has_bot_name(event: dict[str, Any], bot_name: str) -> bool:
-    """判断消息正文是否包含机器人名称。"""
-    if not bot_name:
-        return False
-    text = extract_text(event.get("message")).strip()
-    return contains_bot_name(text, bot_name)
-
-
-def _load_runtime(context: Any) -> _ChatRuntime:
+def load_runtime(context: Any) -> ChatRuntime:
     """加载或返回缓存的运行配置，并按实际加载优先级监听配置文件。"""
-    settings         = context.get_settings_snapshot()
+    settings = context.get_settings_snapshot()
+    configure_wall_clock(settings.config.get("timezone"))
     plugin_dir: Path = context.plugin_dir
     config_key       = str(plugin_dir)
     # 监听器必须观察加载器实际读取的路径；config/ 子目录优先于插件根目录。
@@ -93,28 +51,36 @@ def _load_runtime(context: Any) -> _ChatRuntime:
     ):
         return cached
 
-    cfg = load_xiaoqing_chat_config(context_config=settings.config, plugin_dir=plugin_dir)
-    compiled = []
-    for pattern in cfg.ban_regex:
-        try:
-            compiled.append(re.compile(pattern))
-        except re.error:
-            continue
+    try:
+        cfg = load_xiaoqing_chat_config(context_config=settings.config, plugin_dir=plugin_dir)
+        compiled = []
+        for pattern in cfg.ban_regex:
+            try:
+                compiled.append(re.compile(pattern))
+            except re.error:
+                continue
 
-    runtime = _ChatRuntime(cfg=cfg, compiled_ban_regex=compiled)
-    from .memory.knowledge_base import ensure_knowledge_index
+        runtime = ChatRuntime(cfg=cfg, compiled_ban_regex=compiled)
+        from .memory.knowledge_base import ensure_knowledge_index
 
-    ensure_knowledge_index(
-        memory_db  = state.memory_db,
-        data_dir   = context.data_dir,
-        plugin_dir = plugin_dir,
-        files      = cfg.knowledge.files if cfg.knowledge.enable_knowledge else (),
-    )
+        ensure_knowledge_index(
+            memory_db  = state.memory_db,
+            data_dir   = context.data_dir,
+            plugin_dir = plugin_dir,
+            files      = cfg.knowledge.files if cfg.knowledge.enable_knowledge else (),
+        )
+    except Exception as exc:
+        if cached is None:
+            raise
+        context.logger.warning(
+            "xiaoqing_chat config reload retained previous version: %s", type(exc).__name__
+        )
+        return cached
     state.set_runtime(config_key, runtime, mtime, settings.revision)
     return runtime
 
 
-def _get_ai_route_context(context: Any, *, chat_id: str | None = None) -> dict[str, Any]:
+def ai_route_context(context: Any, *, chat_id: str | None = None) -> dict[str, Any]:
     """返回不含凭据的 AI route 句柄和当前模型选择。
 
     provider 地址、密钥、模型参数和默认 fallback 链都由 core 管理。这里仅把公开模型
@@ -122,8 +88,7 @@ def _get_ai_route_context(context: Any, *, chat_id: str | None = None) -> dict[s
     会按 route 列表自动降级；管理员显式切换后才通过 ``_pinned_model`` 严格固定。
     """
 
-    capabilities = getattr(context, "capabilities", None)
-    ai_service   = getattr(capabilities, "ai", None)
+    ai_service = context.capabilities.ai
     if ai_service is None:
         return {
             "model": "",
@@ -195,7 +160,7 @@ def _get_ai_route_context(context: Any, *, chat_id: str | None = None) -> dict[s
     }
 
 
-def _resolve_llm_config(
+def llm_call_config(
     cfg: XiaoQingChatConfig,
     *,
     foreground: bool = False,
@@ -219,7 +184,7 @@ def _resolve_llm_config(
     )
 
 
-def _should_ignore_text(text: str, runtime: _ChatRuntime) -> bool:
+def is_ignored_text(text: str, runtime: ChatRuntime) -> bool:
     """根据屏蔽词和正则规则判断是否忽略文本。"""
     s = text.strip()
     if not s:
@@ -228,40 +193,3 @@ def _should_ignore_text(text: str, runtime: _ChatRuntime) -> bool:
         if w and w in s:
             return True
     return any(regex.search(s) for regex in runtime.compiled_ban_regex)
-
-
-def _next_local_id(chat_id: str) -> str:
-    n = _state().fetch_and_increment_local_id(chat_id)
-    return f"m{n}"
-
-
-def _find_by_local_id(chat_id: str, local_id: str) -> Any | None:
-    if not local_id:
-        return None
-    for msg in reversed(_state().memory_store.get(chat_id)[-FIND_BY_LOCAL_ID_LIMIT:]):
-        if getattr(msg, "local_id", "") == local_id:
-            return msg
-    return None
-
-
-def _most_recent_user_local_id(chat_id: str) -> str:
-    for msg in reversed(_state().memory_store.get(chat_id)):
-        if msg.role == "user":
-            return getattr(msg, "local_id", "") or ""
-    return ""
-
-
-def _replace_local_ids_with_text(chat_id: str, text: str, *, bot_name: str) -> str:
-    """用位置感知的正则替换，把本地消息 ID（如 m123）转换为可读引用。"""
-    if not text:
-        return ""
-
-    def _repl(match: re.Match[str]) -> str:
-        local_id = match.group(0)
-        msg      = _find_by_local_id(chat_id, local_id)
-        if msg:
-            role_text = "对方" if msg.role == "user" else resolve_bot_name(bot_name)
-            return f"{role_text}说过"
-        return local_id
-
-    return re.sub(r"(?<![A-Za-z0-9_])m\d{1,6}(?![A-Za-z0-9_])", _repl, text)

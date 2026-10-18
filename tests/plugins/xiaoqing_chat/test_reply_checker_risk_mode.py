@@ -53,7 +53,6 @@ async def test_check_reply_uses_general_time_grounding_for_first_person_history(
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
     result = await check_reply(
-        http_session   = None,
         secrets        = {"_ai": None},
         bot_name       = "小青",
         reply          = "我前年在海边住过一阵",
@@ -78,7 +77,6 @@ async def test_check_reply_uses_general_time_grounding_for_first_person_history(
 
     # 群友的自述不能成为角色自己的经历依据。
     repeated_user_claim = await check_reply(
-        http_session   = None,
         secrets        = {"_ai": None},
         bot_name       = "小青",
         reply          = "我前年在海边住过一阵",
@@ -100,7 +98,6 @@ async def test_check_reply_uses_general_time_grounding_for_first_person_history(
     assert repeated_user_claim.severity == "hard"
 
     grounded_claim = await check_reply(
-        http_session   = None,
         secrets        = {"_ai": None},
         bot_name       = "小青",
         reply          = "我前年在海边住过一阵",
@@ -121,7 +118,6 @@ async def test_check_reply_uses_general_time_grounding_for_first_person_history(
     assert grounded_claim.suitable is True
 
     negated_evidence = await check_reply(
-        http_session   = None,
         secrets        = {"_ai": None},
         bot_name       = "小青",
         reply          = "我前年在海边住过一阵",
@@ -140,7 +136,6 @@ async def test_check_reply_uses_general_time_grounding_for_first_person_history(
         retry_interval_seconds = 0.0,
     )
     questioned_evidence = await check_reply(
-        http_session   = None,
         secrets        = {"_ai": None},
         bot_name       = "小青",
         reply          = "我前年在海边住过一阵",
@@ -163,7 +158,6 @@ async def test_check_reply_uses_general_time_grounding_for_first_person_history(
 
     # 当前观点没有过去时间锚点，不能误判成具体往事。
     opinion_not_history = await check_reply(
-        http_session   = None,
         secrets        = {"_ai": None},
         bot_name       = "小青",
         reply          = "我看这件事没那么复杂",
@@ -184,7 +178,6 @@ async def test_check_reply_uses_general_time_grounding_for_first_person_history(
     assert opinion_not_history.suitable is True
 
     current_state = await check_reply(
-        http_session   = None,
         secrets        = {"_ai": None},
         bot_name       = "小青",
         reply          = "我已经不知道怎么接了",
@@ -206,7 +199,6 @@ async def test_check_reply_uses_general_time_grounding_for_first_person_history(
 
     # 闭世界下，否认一段未知经历同样是无依据的人物陈述。
     negated_claim = await check_reply(
-        http_session   = None,
         secrets        = {"_ai": None},
         bot_name       = "小青",
         reply          = "我以前没有接触过这个话题",
@@ -238,7 +230,6 @@ async def test_check_reply_uses_general_person_and_time_structure_for_context_hi
         monkeypatch, [[{"claim": "他之前还一直说不想动", "evidence": ""}], [], []]
     )
     common = {
-        "http_session": None,
         "secrets": {"_ai": object()},
         "bot_name": "小青",
         "goal": "自然聊天",
@@ -286,7 +277,6 @@ async def test_check_reply_rejects_unsupported_relationships_and_experiences() -
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
     common = {
-        "http_session": None,
         "secrets": {"_ai": None},
         "bot_name": "小青",
         "goal": "自然聊天",
@@ -394,7 +384,6 @@ async def test_check_reply_rejects_unsupported_third_party_and_group_state(
         ],
     )
     common = {
-        "http_session": None,
         "secrets": {"_ai": object()},
         "bot_name": "小青",
         "goal": "自然聊天",
@@ -456,7 +445,6 @@ async def test_risk_mode_skips_remote_checker_for_ordinary_knowledge(
     )
 
     result = await check_reply(
-        http_session           = None,
         secrets                = {"_ai": object()},
         bot_name               = "小青",
         reply                  = "水开后下锅，轻轻推开，浮起来后再煮一会儿。",
@@ -492,7 +480,7 @@ async def test_risk_mode_checks_questions_about_unseen_group_state(
         remote,
     )
     monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.llm_client.extract_response_content",
+        "plugins.xiaoqing_chat.llm.reply_checker.gateway.extract_response_content",
         lambda _resp: (
             '{"suitable":true,"reason":"","need_replan":false,"severity":"soft",'
             '"context_coherent":true,"speaker_correct":true,"instruction_followed":true,'
@@ -503,7 +491,6 @@ async def test_risk_mode_checks_questions_about_unseen_group_state(
     )
 
     result = await check_reply(
-        http_session           = None,
         secrets                = {"_ai": object()},
         bot_name               = "小青",
         reply                  = "光看现在这一下判断不了。",
@@ -540,7 +527,6 @@ async def test_risk_mode_does_not_remote_check_open_group_invitation(
     )
 
     result = await check_reply(
-        http_session                  = None,
         secrets                       = {"_ai": object()},
         bot_name                      = "小青",
         reply                         = "早起更难吧，被窝这关就过不了。",
@@ -575,7 +561,6 @@ async def test_open_group_invitation_cannot_invent_a_current_group_consensus(
         monkeypatch, [[{"claim": "群里所有人都喜欢热闹", "evidence": ""}], []]
     )
     common = {
-        "http_session": None,
         "secrets": {"_ai": object()},
         "bot_name": "小青",
         "goal": "自然聊天",
@@ -621,7 +606,7 @@ async def test_risk_mode_semantically_checks_first_person_proactive_reply(
         remote,
     )
     monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.llm_client.extract_response_content",
+        "plugins.xiaoqing_chat.llm.reply_checker.gateway.extract_response_content",
         lambda _resp: (
             '{"suitable":true,"reason":"","need_replan":false,"severity":"soft",'
             '"context_coherent":true,"speaker_correct":true,"instruction_followed":true,'
@@ -632,7 +617,6 @@ async def test_risk_mode_semantically_checks_first_person_proactive_reply(
     )
 
     result = await check_reply(
-        http_session                  = None,
         secrets                       = {"_ai": object()},
         bot_name                      = "小青",
         reply                         = "我偏安静一点，热闹久了脑袋嗡嗡的。",

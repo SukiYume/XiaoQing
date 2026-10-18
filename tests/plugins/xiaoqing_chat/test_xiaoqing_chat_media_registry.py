@@ -39,7 +39,7 @@ async def test_download_url_bytes_rejects_oversized_stream(mock_context):
     from core.safe_http import SafeHttpError
 
     with patch(
-        "plugins.xiaoqing_chat.media.event_media.fetch_public_bytes",
+        "plugins.xiaoqing_chat.media.sources.fetch_public_bytes",
         new=AsyncMock(side_effect=SafeHttpError("media too large")),
     ):
         with pytest.raises(ValueError, match="media too large"):
@@ -327,7 +327,10 @@ def test_media_registry_emoji_marker_surfaces_visible_text_in_quotes() -> None:
     compacted = compact_message_content("[表情包：疑惑，调侃]", media_items)
     rebuilt = resolve_message_content(compacted, media_items, store=None)
 
-    assert rebuilt == "[表情包：疑惑，调侃；写着“那咋整啊”]"
+    # 画面内容和配字同时保留，追问画面细节时才有依据。
+    assert rebuilt == (
+        "[表情包：疑惑，调侃；内容：一个猫耳动漫女孩露出惊讶表情，配文字表达疑惑或调侃。；写着“那咋整啊”]"
+    )
 
 
 @pytest.mark.asyncio
@@ -345,7 +348,7 @@ async def test_render_event_media_falls_back_to_summary_marker_when_image_resolv
     }
 
     with patch(
-        "plugins.xiaoqing_chat.media.event_media._resolve_segment_media",
+        "plugins.xiaoqing_chat.media.event_media.resolve_segment_media",
         new=AsyncMock(side_effect=RuntimeError("boom")),
     ):
         rendered = await render_event_media(event, context=mock_context, runtime=runtime)
@@ -372,7 +375,7 @@ async def test_render_event_media_does_not_treat_failed_image_filename_as_visual
     }
 
     with patch(
-        "plugins.xiaoqing_chat.media.event_media._resolve_segment_media",
+        "plugins.xiaoqing_chat.media.event_media.resolve_segment_media",
         new=AsyncMock(side_effect=RuntimeError("boom")),
     ):
         rendered = await render_event_media(event, context=mock_context, runtime=runtime)
@@ -427,7 +430,7 @@ async def test_build_effective_user_text_reuses_upgraded_registry_marker(mock_co
 
     with (
         patch(
-            "plugins.xiaoqing_chat.media.event_media._resolve_segment_media",
+            "plugins.xiaoqing_chat.media.event_media.resolve_segment_media",
             new=AsyncMock(
                 return_value=ResolvedMedia(
                     media_hash   = "known-hash",
@@ -490,23 +493,23 @@ async def test_render_resolved_media_writes_cache_once_on_cache_miss(mock_contex
 
     with (
         patch(
-            "plugins.xiaoqing_chat.media.event_media._render_cache_lock", return_value=nullcontext()
+            "plugins.xiaoqing_chat.media.event_media.render_cache_lock", return_value=nullcontext()
         ),
         patch(
-            "plugins.xiaoqing_chat.media.event_media._load_render_cache",
+            "plugins.xiaoqing_chat.media.event_media.load_render_cache",
             return_value=first_cache,
         ) as mock_load,
         patch(
-            "plugins.xiaoqing_chat.media.event_media_common._render_cache_lock",
+            "plugins.xiaoqing_chat.media.render_cache.render_cache_lock",
             return_value=nullcontext(),
         ),
         patch(
-            "plugins.xiaoqing_chat.media.event_media_common._load_render_cache",
+            "plugins.xiaoqing_chat.media.render_cache.load_render_cache",
             return_value=second_cache,
         ) as mock_write_load,
-        patch("plugins.xiaoqing_chat.media.event_media_common._save_render_cache") as mock_save,
+        patch("plugins.xiaoqing_chat.media.render_cache._save_render_cache") as mock_save,
         patch(
-            "plugins.xiaoqing_chat.media.event_media._analyze_media_with_llm",
+            "plugins.xiaoqing_chat.media.event_media.analyze_media_with_llm",
             new=AsyncMock(return_value=rendered),
         ),
     ):
@@ -647,7 +650,7 @@ async def test_render_local_media_file_merges_latest_cache_before_save(mock_cont
         )
 
     with patch(
-        "plugins.xiaoqing_chat.media.event_media._analyze_media_with_llm",
+        "plugins.xiaoqing_chat.media.event_media.analyze_media_with_llm",
         new=AsyncMock(side_effect=_fake_analyze),
     ):
         rendered = await render_local_media_file(image_path, context=mock_context, runtime=runtime)
@@ -673,16 +676,16 @@ async def test_observe_message_records_image_only_marker(mock_context):
     }
 
     with (
-        patch("plugins.xiaoqing_chat.handlers._load_runtime", return_value=runtime),
-        patch("plugins.xiaoqing_chat.handlers._get_bound_state", return_value=state),
-        patch("plugins.xiaoqing_chat.handlers._get_lock", return_value=asyncio.Lock()),
+        patch("plugins.xiaoqing_chat.handlers.load_runtime", return_value=runtime),
+        patch("plugins.xiaoqing_chat.handlers.bound_state", return_value=state),
+        patch("plugins.xiaoqing_chat.handlers.chat_lock", return_value=asyncio.Lock()),
         patch(
             "plugins.xiaoqing_chat.handlers.build_effective_user_text",
             new=AsyncMock(return_value="[图片：猫猫在发呆]"),
         ),
-        patch("plugins.xiaoqing_chat.handlers._should_ignore_text", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers.is_ignored_text", return_value=False),
         patch(
-            "plugins.xiaoqing_chat.handlers._ensure_user_message_recorded",
+            "plugins.xiaoqing_chat.handlers.ensure_user_message_recorded",
             new=AsyncMock(return_value="m1"),
         ) as mock_record,
     ):

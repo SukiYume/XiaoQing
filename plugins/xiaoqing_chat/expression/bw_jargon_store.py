@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
-from core.atomic_store import keyed_path_lock
+from core.atomic_store import AtomicJsonStore, keyed_path_lock
 
 from ..store_base import StoreBase, coerce_finite_float, coerce_int, coerce_json_bool
 
@@ -50,10 +50,12 @@ class JargonRecord:
     chat_id_counts: list[list[Any]] = field(default_factory=list)
     is_global: bool           = False
     count: int                = 0
-    is_jargon: bool           = True
     is_complete: bool         = False
     last_inference_count: int = 0
     updated_at: float = field(default_factory=lambda: time.time())
+    usage: str  = ""
+    tone: str   = ""
+    source: str = ""
 
 
 class JargonSnapshot(dict[str, JargonRecord]):
@@ -116,11 +118,13 @@ class JargonStore(StoreBase):
                 content        = content,
                 scope_chat_id  = str(item.get("scope_chat_id", "") or "").strip(),
                 meaning        = str(item.get("meaning", "") or "").strip(),
+                usage          = str(item.get("usage", "") or "").strip(),
+                tone           = str(item.get("tone", "") or "").strip(),
+                source         = str(item.get("source", "") or "").strip(),
                 raw_content    = _string_list(item.get("raw_content")),
                 chat_id_counts = _chat_count_list(item.get("chat_id_counts")),
                 is_global=coerce_json_bool(item.get("is_global"), default=False),
                 count=coerce_int(item.get("count"), default=0, minimum=0),
-                is_jargon=coerce_json_bool(item.get("is_jargon"), default=True),
                 is_complete=coerce_json_bool(item.get("is_complete"), default=False),
                 last_inference_count=coerce_int(
                     item.get("last_inference_count"), default=0, minimum=0
@@ -166,10 +170,7 @@ class JargonStore(StoreBase):
                 remaining[
                     self.key_for(kept.content, "" if kept.is_global else kept.scope_chat_id)
                 ] = kept
-            if remaining != latest:
-                payload = [asdict(item) for item in remaining.values()]
-                if not self._save_json_to_path_parts("bw_learner", "jargon.json", data=payload):
-                    return
+            AtomicJsonStore(path).write_with_backup([asdict(item) for item in remaining.values()])
             self._cache    = deepcopy(remaining)
             self._baseline = deepcopy(remaining)
 
@@ -214,6 +215,8 @@ class JargonStore(StoreBase):
         baseline_counts = cls._count_map(baseline.chat_id_counts if baseline is not None else [])
         desired_counts  = cls._count_map(desired.chat_id_counts)
         for chat_id, desired_count in desired_counts.items():
+            if chat_id in baseline_counts and chat_id not in latest_counts:
+                continue
             delta                  = desired_count - baseline_counts.get(chat_id, 0)
             latest_counts[chat_id] = max(0, latest_counts.get(chat_id, 0) + delta)
         merged.chat_id_counts = [
@@ -228,7 +231,14 @@ class JargonStore(StoreBase):
         baseline_meaning = baseline.meaning if baseline is not None else ""
         if desired.meaning != baseline_meaning and latest.meaning == baseline_meaning:
             merged.meaning = desired.meaning
-        for field_name in ("content", "scope_chat_id", "is_global", "is_jargon"):
+        for field_name in (
+            "content",
+            "scope_chat_id",
+            "is_global",
+            "usage",
+            "tone",
+            "source",
+        ):
             baseline_value = getattr(baseline, field_name) if baseline is not None else None
             desired_value  = getattr(desired, field_name)
             latest_value   = getattr(latest, field_name)
@@ -256,6 +266,8 @@ class JargonStore(StoreBase):
             }
             merged = dict(latest)
             for key, desired_record in desired.items():
+                if key in baseline and key not in latest:
+                    continue
                 merged[key] = self._merge_record(
                     latest.get(key),
                     baseline.get(key),

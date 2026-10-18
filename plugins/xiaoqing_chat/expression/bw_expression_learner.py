@@ -15,12 +15,14 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..config.config import PersonalityConfig
-from ..llm.llm_client import chat_completions_raw_with_fallback_paths
+from ..llm.gateway import chat_completions_raw_with_fallback_paths, extract_response_content
+from ..llm.llm_config import LLMCallConfig
 from ..memory.memory import StoredMessage
 from ..message_parts import render_stored_message
 from ..persona import compose_persona_identity
 from ..planning.pfc_utils import get_items_from_json
 from ..utils.json_parsing import parse_first_json_array, strict_json_bool
+from ..utils.text import clip_text
 from .bw_expression_store import ExpressionRecord, ExpressionStore
 
 _LEARN_PROMPT = """你是对话表达方式学习器。你会从真实用户发言中抽取可迁移的表达特征。
@@ -97,7 +99,7 @@ def _build_dialogue(
     for msg in messages[-max_lines:]:
         if msg.role == "assistant":
             continue
-        lid  = getattr(msg, "local_id", "") or ""
+        lid  = msg.local_id
         sid  = lid or f"t{int(msg.ts or 0)}"
         role = "对方"
         name = msg.name or "用户"
@@ -115,12 +117,7 @@ async def learn_from_messages(
     *,
     secrets: dict[str, Any],
     messages: Sequence[StoredMessage],
-    temperature: float,
-    top_p: float,
-    max_tokens: int,
-    timeout_seconds: float,
-    max_retry: int,
-    retry_interval_seconds: float,
+    llm: LLMCallConfig,
 ) -> list[LearnedExpression]:
     if "_ai" in secrets and secrets.get("_ai") is None:
         return []
@@ -131,17 +128,12 @@ async def learn_from_messages(
 
     prompt = _LEARN_PROMPT.format(dialogue=dialogue)
     resp, _ = await chat_completions_raw_with_fallback_paths(
-        secrets                = secrets,
-        messages               = [{"role": "user", "content": prompt}],
-        temperature            = min(0.7, float(temperature)),
-        top_p                  = float(top_p),
-        max_tokens             = min(900, max(500, int(max_tokens))),
-        timeout_seconds        = float(timeout_seconds),
-        max_retry              = int(max_retry),
-        retry_interval_seconds = float(retry_interval_seconds),
+        secrets  = secrets,
+        messages = [{"role": "user", "content": prompt}],
+        **llm.bounded(max_temperature=0.7, max_tokens=900, min_tokens=500).as_kwargs(),
     )
-    content = (((resp.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
-    arr = parse_first_json_array(str(content))
+    content                      = extract_response_content(resp)
+    arr                          = parse_first_json_array(str(content))
     out: list[LearnedExpression] = []
     for it in arr:
         situation = str(it.get("situation", "") or "").strip()
@@ -149,11 +141,11 @@ async def learn_from_messages(
         source_id = str(it.get("source_id", "") or "").strip()
         if not situation or not style or source_id not in source_ids:
             continue
-        if len(situation) > 80:
-            situation = situation[:77].rstrip() + "…"
-        if len(style) > 80:
-            style = style[:77].rstrip() + "…"
-        out.append(LearnedExpression(situation=situation, style=style, source_id=source_id))
+        out.append(
+            LearnedExpression(
+                situation=clip_text(situation, 80), style=clip_text(style, 80), source_id=source_id
+            )
+        )
     return out[:12]
 
 
@@ -164,12 +156,7 @@ async def single_expression_check(
     personality: PersonalityConfig,
     situation: str,
     style: str,
-    temperature: float,
-    top_p: float,
-    max_tokens: int,
-    timeout_seconds: float,
-    max_retry: int,
-    retry_interval_seconds: float,
+    llm: LLMCallConfig,
 ) -> tuple[bool, bool, str, str, str]:
     if "_ai" in secrets and secrets.get("_ai") is None:
         return False, False, "", "", ""
@@ -179,16 +166,11 @@ async def single_expression_check(
         persona_text=persona_text, situation=situation.strip(), style=style.strip()
     )
     resp, _ = await chat_completions_raw_with_fallback_paths(
-        secrets                = secrets,
-        messages               = [{"role": "user", "content": prompt}],
-        temperature            = min(0.4, float(temperature)),
-        top_p                  = float(top_p),
-        max_tokens             = min(400, int(max_tokens)),
-        timeout_seconds        = float(timeout_seconds),
-        max_retry              = int(max_retry),
-        retry_interval_seconds = float(retry_interval_seconds),
+        secrets  = secrets,
+        messages = [{"role": "user", "content": prompt}],
+        **llm.bounded(max_temperature=0.4, max_tokens=400).as_kwargs(),
     )
-    content = (((resp.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
+    content = extract_response_content(resp)
     ok, obj = get_items_from_json(
         str(content),
         "checked",
@@ -216,6 +198,94 @@ async def single_expression_check(
     return checked, rejected, reason, ms, mt
 
 
+def _closest_expression(
+    items: Sequence[ExpressionRecord], chat_id: str, situation: str, threshold: float
+) -> tuple[ExpressionRecord | None, bool]:
+    """返回本群最相近且达到阈值的有效表达；命中已否决的表达时第二项为 True。"""
+    best: ExpressionRecord | None = None
+    best_score                    = 0.0
+    for ex in items:
+        if ex.chat_id != chat_id:
+            continue
+        score = _similarity(situation, ex.situation)
+        if ex.rejected:
+            if score >= threshold:
+                return None, True
+            continue
+        if score > best_score:
+            best, best_score = ex, score
+    return (best if best_score >= threshold else None), False
+
+
+def _merge_learned(
+    items: list[ExpressionRecord],
+    learned: Sequence[LearnedExpression],
+    *,
+    chat_id: str,
+    threshold: float,
+    now: float,
+) -> tuple[int, dict[str, ExpressionRecord]]:
+    """把新学到的表达并入相近记录或新建记录；被否决过的相近情境不再学习。"""
+    changed                              = 0
+    touched: dict[str, ExpressionRecord] = {}
+    for it in learned:
+        sit, sty = it.situation.strip(), it.style.strip()
+        if not sit or not sty:
+            continue
+        best, rejected_match = _closest_expression(items, chat_id, sit, threshold)
+        if rejected_match:
+            continue
+        if best is None:
+            best = ExpressionRecord(
+                expression_id = _mk_id(chat_id, sit, sty),
+                chat_id       = chat_id,
+                situation     = sit,
+                style         = sty,
+                content_list  = [],
+                count         = 0,
+            )
+            items.append(best)
+        if sty not in best.content_list:
+            best.content_list.append(sty)
+        best.count += 1
+        best.last_active_time = now
+        best.checked          = False
+        best.rejected         = False
+        best.modified_by      = "ai"
+        changed += 1
+        touched[best.expression_id] = best
+    return changed, touched
+
+
+async def _self_review(
+    records: Sequence[ExpressionRecord],
+    *,
+    secrets: dict[str, Any],
+    bot_name: str,
+    personality: PersonalityConfig,
+    llm: LLMCallConfig,
+) -> None:
+    for ex in records:
+        if ex.checked or ex.rejected:
+            continue
+        checked, rejected, _reason, ms, mt = await single_expression_check(
+            secrets     = secrets,
+            bot_name    = bot_name,
+            personality = personality,
+            situation   = ex.situation,
+            style       = ex.style,
+            llm         = llm,
+        )
+        if rejected:
+            ex.checked, ex.rejected, ex.modified_by = False, True, "ai"
+        elif checked:
+            if ms:
+                ex.situation = ms[:80].strip()
+            if mt:
+                ex.style = mt[:80].strip()
+            ex.checked, ex.rejected, ex.modified_by = True, False, "ai"
+
+
 async def upsert_learned(
     *,
     store: ExpressionStore,
@@ -227,106 +297,33 @@ async def upsert_learned(
     secrets: dict[str, Any],
     bot_name: str,
     personality: PersonalityConfig,
-    temperature: float,
-    top_p: float,
-    max_tokens: int,
-    timeout_seconds: float,
-    max_retry: int,
-    retry_interval_seconds: float,
+    llm: LLMCallConfig,
+    expected_generation: str | None = None,
 ) -> int:
-    items                                        = store.load()
-    now                                          = time.time()
-    changed                                      = 0
-    changed_records: dict[str, ExpressionRecord] = {}
-    threshold                                    = float(similarity_threshold)
-
-    for it in learned:
-        sit = it.situation.strip()
-        sty = it.style.strip()
-        if not sit or not sty:
-            continue
-        best: ExpressionRecord | None = None
-        best_score                    = 0.0
-        rejected_match                = False
-        for ex in items:
-            if ex.chat_id != chat_id:
-                continue
-            score = _similarity(sit, ex.situation)
-            if ex.rejected:
-                rejected_match = rejected_match or score >= threshold
-                continue
-            if score > best_score:
-                best       = ex
-                best_score = score
-        if rejected_match:
-            continue
-        if best and best_score >= threshold:
-            if sty not in best.content_list:
-                best.content_list.append(sty)
-            best.count += 1
-            best.last_active_time = now
-            best.checked          = False
-            best.rejected         = False
-            best.modified_by      = "ai"
-            changed += 1
-            changed_records[best.expression_id] = best
-            continue
-
-        rec = ExpressionRecord(
-            expression_id    = _mk_id(chat_id, sit, sty),
-            chat_id          = chat_id,
-            situation        = sit,
-            style            = sty,
-            content_list     = [sty],
-            count            = 1,
-            last_active_time = now,
-            checked          = False,
-            rejected         = False,
-            modified_by      = "ai",
-        )
-        items.append(rec)
-        changed += 1
-        changed_records[rec.expression_id] = rec
-
+    generation = store.generation(chat_id) if expected_generation is None else expected_generation
+    items      = store.load()
+    changed, touched = _merge_learned(
+        items, learned, chat_id=chat_id, threshold=float(similarity_threshold), now=time.time()
+    )
     if not changed:
         return 0
-
     if self_reflect:
         # 同一记录本轮可能被多个候选命中，按 expression_id 去重后至多审核一次。
-        for ex in list(changed_records.values())[-20:]:
-            if ex.checked or ex.rejected:
-                continue
-            checked, rejected, _reason, ms, mt = await single_expression_check(
-                secrets                = secrets,
-                bot_name               = bot_name,
-                personality            = personality,
-                situation              = ex.situation,
-                style                  = ex.style,
-                temperature            = temperature,
-                top_p                  = top_p,
-                max_tokens             = max_tokens,
-                timeout_seconds        = timeout_seconds,
-                max_retry              = max_retry,
-                retry_interval_seconds = retry_interval_seconds,
-            )
-            if rejected:
-                ex.checked     = False
-                ex.rejected    = True
-                ex.modified_by = "ai"
-                continue
-            if checked:
-                if ms:
-                    ex.situation = ms[:80].strip()
-                if mt:
-                    ex.style = mt[:80].strip()
-                ex.checked     = True
-                ex.rejected    = False
-                ex.modified_by = "ai"
+        await _self_review(
+            list(touched.values())[-20:],
+            secrets     = secrets,
+            bot_name    = bot_name,
+            personality = personality,
+            llm         = llm,
+        )
 
     scoped = [item for item in items if item.chat_id == chat_id]
     other  = [item for item in items if item.chat_id != chat_id]
     scoped.sort(key=lambda item: (item.last_active_time, item.count), reverse=True)
     limit = max(0, int(max_store))
     items = other + (scoped[:limit] if limit else [])
-    store.save(items)
+    with store.generation_guard(chat_id, generation) as current:
+        if not current:
+            return 0
+        store.save(items)
     return changed

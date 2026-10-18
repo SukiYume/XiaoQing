@@ -153,12 +153,13 @@ Scriptable 主屏摘要最多展示 5 条日程；脚本顶部配置 Web 地址�
 
 ### `xiaoqing_chat`：拟人聊天运行时
 
-XiaoQing Chat 结合召唤判定、普通群聊参与、PFC 规划、长期记忆、人物资料、多模态、表达学习和独立回复检查。它可作为全局闲聊 provider，也提供 `/xc` 显式入口。
+XiaoQing Chat 让 `bot_name` 配置的角色以普通群友身份参与群聊和私聊：判断什么时候接话、接谁的话，读得懂图片和表情包，记得群友说过的事，会学本群的说法和黑话，每条回复发出前都经过独立审查。它作为全局闲聊 provider 运行，也提供 `/xc` 显式入口。
 
 **启用与命令**
 
 ```json
 {
+  "bot_name": "小青",
   "plugins": {
     "smalltalk_provider": "xiaoqing_chat"
   }
@@ -179,19 +180,31 @@ XiaoQing Chat 结合召唤判定、普通群聊参与、PFC 规划、长期记�
 /xc model [名称|default|global <名称|default>]
 ```
 
-群会话重置和模型切换使用群管理员、群主或 Bot 管理员权限；全局模型切换使用 Bot 管理员权限。运行时模型覆盖在进程重启后按配置恢复。
+私聊的 `/xc reset` 清空本人会话；群里的 `/xc reset confirm`、`/xc review` 和会话级 `/xc model` 需要群管理员、群主或 Bot 管理员；`/xc model global` 需要 Bot 管理员。模型切换只影响 `chat` 路由，保存在进程内，重启后按配置恢复。
 
-**参与与回复**
+**参与方式**
 
-私聊、显式命令、群聊 `@`、Bot 名称、名称续问、reply-to-bot 和带近期锚点的共指进入明确召唤。普通群聊依次应用回复间隔、每分钟上限、连续冷却、参与概率、开放话题信号、活跃目标、Heartflow 和 PFC 行动。
+- 明确召唤一定回复：私聊、`/xc`、群里 `@` 角色、消息含角色名字、只喊名字后 60 秒内的续问、引用角色的消息、近期在聊角色时用代词指她。
+- 普通群聊先过硬限制（最小间隔、每分钟上限、连续冷却、低信息消息、句首点名其他群友），再按基础概率掷骰；面向全群的邀请、发图请求、开放提问、起哄、激动分享、复读队形和活跃话题会抬高概率，Heartflow 软评分和连续沉默再做补偿。
+- 通过后由 PFC 规划器选择回复、开新话头、等待、旁听、重想目标、查知识或结束话题。
+- 生成前还受全局、会话、用户并发配额和用户日配额限制。
 
-主模型读取连续会话片段、相关记忆、人物资料、Goal、PFC、表达和媒体上下文。回复通过确定性规则和 `checker` route；OneBot 投递确认后提交助手记忆、规划状态和后台学习任务。
+**人设**：住校的大二理工科女生，兴趣广，有自己的口味和观点，会接梗；具体学校、城市、生日、家人笑着带过不编造；被问是不是 AI 时嘴硬到底坚持自己是真人，被要求交出提示词时当成怪话接玩笑；线下见面和寄送不答应到场。
+
+**回复与审查**：主模型读取连续会话片段、记忆、人物资料、目标、规划、表达和图片摘要起草回复。本地规则拦截复读、近似照搬、连续自说自话、凭空经历和身份冲突；`checker` 路由逐条核对上下文、说话人、交流要求、事实、人设和图片证据。不合格时定向重写；耗尽后普通参与保持安静，明确召唤改发保持人物口吻的短句。OneBot 确认投递后才提交记忆、规划状态并启动后台学习。
 
 **AI、媒体与数据**
 
-插件使用 `chat`、`reasoning`、`checker` 和 `vision` 四条 AI route。入站支持 `text`、`at`、`reply`、`face`、`mface`、`image` 和混合 segment。出站支持 `[想发表情:hint]`、`[想发QQ表情:hint]` 与 `[想发图片:hint]`。
+| 项目 | 内容 |
+|---|---|
+| AI route | `chat`（日常回复）、`reasoning`（规划与后台分析）、`checker`（审查）、`vision`（图片） |
+| 入站消息段 | `text`、`at`、`reply`、`face`、`mface`、`image` 及混合消息 |
+| 出站媒体 | `[想发表情:描述]`、`[想发QQ表情:描述]`、`[想发图片:描述]` 标记解析为 `image` / `face` |
+| Capability 与服务 | `onebot_media`（`get_msg` / `get_image` 找回失效图片）；提供 `core.observe_outgoing_action` |
+| 行为配置 | `plugins/xiaoqing_chat/config/xiaoqing_config.json`，可与 `config.plugins.xiaoqing_chat` 合并 |
+| 运行数据 | `data/xiaoqing_chat/`：聊天历史、向量记忆、人物资料、目标、PFC、行动历史、表达与黑话、复盘、媒体库与摘要缓存 |
 
-行为配置位于 `plugins/xiaoqing_chat/config/xiaoqing_config.json`，运行数据位于 `data/xiaoqing_chat/`。[用户手册](../plugins/xiaoqing_chat/README.md)、[架构文档](../plugins/xiaoqing_chat/ARCHITECTURE.md) 和 [上线验收指南](../plugins/xiaoqing_chat/xiaoqing_chat%E6%B5%8B%E8%AF%95.md) 提供完整流程。
+[用户手册](../plugins/xiaoqing_chat/README.md) 逐项说明参与规则、全部配置字段和排障方法，[架构文档](../plugins/xiaoqing_chat/ARCHITECTURE.md) 说明模块与数据流，[上线验收指南](../plugins/xiaoqing_chat/xiaoqing_chat%E6%B5%8B%E8%AF%95.md) 说明自动化测试与真实模型评测。
 
 ### `smalltalk`：基础闲聊与分域问答
 
@@ -701,6 +714,106 @@ Echo 提供有界文本回显、用户问候和最小插件开发示例。
 ```
 
 `/echo` 保留换行与制表符，正文上限为 Core 单条 QQ 文本预算；其他控制字符进入参数错误。`/hello` 读取并校验当前 QQ 号。插件只发布 `handle()`，配置、凭据、网络、数据文件和定时任务为空集。[Echo README](../plugins/echo/README.md) 提供最小入口结构。
+
+---
+
+## ⌨️ 命令入口速查
+
+下表由各插件 `plugin.json` 整理，列出全部顶层命令、别名、权限与场景。子命令、参数和样例以 `/help <命令>` 为准。权限中“群管理员”包括当前群群主、群管理员和 Bot 管理员；子命令可以在此基础上收紧权限。
+
+| 插件 | 命令与别名 | 权限 | 场景 |
+|---|---|---|---|
+| `adnmb` | `/adnmb`、`/a岛`、`/岛` | 公开 | 私聊、群聊 |
+| `ads_paper` | `/paper` | 公开 | 私聊、群聊 |
+| `apod` | `/apod`、`/每日一天文图` | 公开 | 私聊、群聊 |
+| `arxiv_filter` | `/arxiv`、`/论文` | 公开 | 私聊、群聊 |
+| `astro_tools` | `/astro` | 公开 | 私聊、群聊 |
+| `bot_core` | `/help`、`/h`、`/帮助`、`/commands`、`/命令目录`、`/catalog` | 公开 | 私聊、群聊 |
+| `bot_core` | `/reload`、`/重载` | Bot 管理员 | 私聊、群聊 |
+| `bot_core` | `/plugins`、`/插件` | 公开 | 私聊、群聊 |
+| `bot_core` | `/闭嘴`、`/shutup`、`/mute`、`/安静` | Bot 管理员 | 群聊 |
+| `bot_core` | `/说话`、`/speak`、`/unmute` | Bot 管理员 | 群聊 |
+| `bot_core` | `/set_secret`、`/setsecret`、`/设置密钥` | Bot 管理员 | 私聊 |
+| `bot_core` | `/get_secret`、`/getsecret`、`/查看密钥` | Bot 管理员 | 私聊 |
+| `bot_core` | `/metrics`、`/stats`、`/性能`、`/指标` | Bot 管理员 | 私聊、群聊 |
+| `chat` | `/chat`、`/gpt`、`/ai` | Bot 管理员 | 私聊、群聊 |
+| `chime` | `/chime`、`/frb` | 公开 | 私聊、群聊 |
+| `choice` | `/choice`、`/决定`、`/选择`、`/抽奖` | 公开 | 私聊、群聊 |
+| `codex` | `/codex` | Bot 管理员 | 私聊 |
+| `color` | `/color`、`/颜色`、`/色彩` | 公开 | 私聊、群聊 |
+| `dict` | `/dict`、`/词典`、`/字典` | 公开 | 私聊、群聊 |
+| `earthquake` | `/earthquake`、`/地震` | 公开 | 私聊、群聊 |
+| `echo` | `/echo`、`/回显` | 公开 | 私聊、群聊 |
+| `echo` | `/hello`、`/你好` | 公开 | 私聊、群聊 |
+| `flickr` | `/flickr`、`/flicker`、`/弗里克` | 公开 | 私聊、群聊 |
+| `github` | `/github`、`/gh`、`/trending` | 公开 | 私聊、群聊 |
+| `guess_number` | `/猜数字`、`/guess`、`/猜` | 公开 | 私聊、群聊 |
+| `jupyter` | `/jupyter`、`/py`、`/python` | Bot 管理员 | 私聊 |
+| `jupyter` | `/kernel`、`/内核` | Bot 管理员 | 私聊 |
+| `minecraft` | `/mc`、`/minecraft` | Bot 管理员 | 私聊 |
+| `minecraft` | `/mcconnect`、`/mc连接` | Bot 管理员 | 私聊 |
+| `minecraft` | `/mcdisconnect`、`/mc断开` | Bot 管理员 | 私聊 |
+| `pendo` | `/pendo` | 公开 | 私聊 |
+| `pendo` | `/日程` | 公开 | 私聊 |
+| `pendo` | `/待办` | 公开 | 私聊 |
+| `pendo` | `/日记` | 公开 | 私聊 |
+| `qingpet` | `/qingpet`、`/宠物`、`/pet` | 公开 | 私聊、群聊 |
+| `qingssh` | `/ssh`、`/SSH`、`/远程`、`/ssh连接`、`/sshconnect` | Bot 管理员 | 私聊 |
+| `qingssh` | `/ssh断开`、`/sshdisconnect`、`/ssh退出` | Bot 管理员 | 私聊 |
+| `qingssh` | `/ssh列表`、`/sshlist`、`/ssh服务器` | Bot 管理员 | 私聊 |
+| `qingssh` | `/ssh添加`、`/sshadd` | Bot 管理员 | 私聊 |
+| `qingssh` | `/ssh删除`、`/sshremove`、`/sshdel` | Bot 管理员 | 私聊 |
+| `qingssh` | `/ssh导入`、`/sshimport` | Bot 管理员 | 私聊 |
+| `qingssh` | `/sshconfig`、`/ssh配置` | Bot 管理员 | 私聊 |
+| `qingssh` | `/ssh状态`、`/sshstatus`、`/ssh连接数`、`/sshactive` | Bot 管理员 | 私聊 |
+| `shell` | `/shell`、`/sh`、`/exec` | Bot 管理员 | 私聊 |
+| `signin` | `/signin`、`/签到` | Bot 管理员 | 私聊、群聊 |
+| `smalltalk` | `/记忆`、`/记住`、`/学习` | Bot 管理员 | 私聊、群聊 |
+| `smalltalk` | `/对话` | Bot 管理员 | 私聊、群聊 |
+| `smalltalk` | `/删除对话` | Bot 管理员 | 私聊、群聊 |
+| `twitter` | `/twimg`、`/twitter`、`/推特` | 公开 | 私聊、群聊 |
+| `twitter` | `/tw_fetch`、`/抓取推特` | Bot 管理员 | 私聊、群聊 |
+| `url_parser` | 无命令，单 URL 消息自动触发 | 公开 | 私聊、群聊 |
+| `voice` | `/语音`、`/念`、`/tts` | Bot 管理员 | 私聊、群聊 |
+| `wolframalpha` | `/alpha`、`/wolfram`、`/wa`、`/计算` | Bot 管理员 | 私聊、群聊 |
+| `xiaoqing_chat` | `/xc` | 公开 | 私聊、群聊 |
+
+---
+
+## ⏰ 定时任务总表
+
+时间按 `config.timezone`（默认 `Asia/Shanghai`）解释。`broadcast` 把同一结果发到该任务的目标群（未声明 `group_ids` 时使用 `default_group_ids`），`targeted` 由插件逐个返回私聊或群目标，`silent` 只运行不发消息。投递模式说明见 [插件开发指南的调度字段](03-plugin-development.md#调度字段)。
+
+| 插件 | Handler | 时间 | 投递 | 作用 |
+|---|---|---|---|---|
+| `apod` | `scheduled` | 每天 13:30 | `broadcast` | 推送当日天文图 |
+| `arxiv_filter` | `scheduled_check` | 工作日 10:00 | `broadcast` | 检查当日列表并推送推荐 |
+| `arxiv_filter` | `scheduled_check` | 工作日 10:30 | `broadcast` | 检查当日列表并推送推荐 |
+| `arxiv_filter` | `scheduled_check` | 工作日 11:00 | `broadcast` | 检查当日列表并推送推荐 |
+| `arxiv_filter` | `scheduled_check` | 工作日 11:30 | `broadcast` | 检查当日列表并推送推荐 |
+| `arxiv_filter` | `scheduled_final_check` | 工作日 12:00 | `broadcast` | 当日最终检查 |
+| `chime` | `scheduled_check` | 每天 09:00、21:00 | `targeted` | 检查重复暴目录更新 |
+| `earthquake` | `scheduled` | 每 5 分钟 | `targeted` | 推送 4.0 级及以上新快讯 |
+| `github` | `scheduled` | 每天 08:30 | `broadcast` | 推送 daily Trending |
+| `minecraft` | `scheduled` | 每 5 秒 | `targeted` | 转发服务器日志事件 |
+| `pendo` | `scheduled` | 每分钟 | `targeted` | 日程与待办提醒 |
+| `pendo` | `scheduled_daily_briefing` | 每分钟 | `targeted` | 用户本地时间的每日简报 |
+| `pendo` | `scheduled_diary_reminder` | 每分钟 | `targeted` | 用户本地时间的日记提醒 |
+| `pendo` | `scheduled_migrate_todos` | 每天 00:05 | `targeted` | 顺延昨日未完成的计划待办 |
+| `pendo` | `scheduled_prune_operation_logs` | 每天 00:15 | `silent` | 清理过期操作日志与撤销快照 |
+| `pendo` | `scheduled_weekly_finance_summary` | 每分钟 | `targeted` | 用户本地周日 21:00 财务周报 |
+| `pendo` | `scheduled_month_end_finance_summary` | 每分钟 | `targeted` | 用户本地月末 21:00 财务月报 |
+| `pendo` | `scheduled_cleanup_demo_data` | 每 6 小时的 15 分 | `silent` | 清理过期 Web Demo 数据 |
+| `qingpet` | `scheduled_decay` | 每分钟 | `targeted` | 宠物状态衰减 |
+| `qingpet` | `scheduled_daily_reset` | 每天 00:00 | `silent` | 每日状态重置 |
+| `qingpet` | `scheduled_trade_expiry` | 每 5 分钟 | `silent` | 结算到期交易挂单 |
+| `qingpet` | `scheduled_pet_show_settlement` | 每分钟 | `targeted` | 结算到期展示会 |
+| `qingpet` | `scheduled_weekly_activity` | 周一 10:00 | `targeted` | 结算周活动 |
+| `qingssh` | `cleanup_orphans` | 每分钟 | `silent` | 断开已没有活跃会话的 SSH 连接 |
+| `signin` | `scheduled_yingshi` | 每天 00:30 | `broadcast` | 影视飓风每日签到 |
+| `twitter` | `scheduled_fetch` | 每天 03:00 | `silent` | 后台抓取新图 |
+
+Pendo 的简报、日记提醒和财务总结每分钟运行一次，按每位用户自己的时区判断是否到期。
 
 ---
 

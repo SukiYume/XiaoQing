@@ -16,39 +16,42 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from ..llm.llm_client import (
+from ..llm.gateway import (
     LLMError,
     chat_completions_raw_with_fallback_paths,
     extract_response_content,
     extract_response_finish_reason,
 )
-from ..media_registry import _quality_score
-from ..task_scheduler import _spawn_bg_task
+from ..media_registry import quality_score
+from ..task_scheduler import spawn_bg_task
 from ..utils.json_parsing import parse_first_json_object, parse_first_json_object_with_status
-from .event_media_common import (
-    _MEDIA_ANALYSIS_PROMPT_VERSION,
+from ..utils.text import clip_text
+from .loading import (
+    inspect_image_payload_details,
+    normalize_source_label,
+    read_file_bounded,
+    render_animation_contact_sheet,
+    run_media_blocking,
+    safe_source_name,
+)
+from .markers import (
+    build_marker,
+    can_use_raw_media_description,
+    fallback_kind,
+    is_generic_media_label,
+    is_low_quality_rendered_media,
+    normalize_emotion_tags,
+    same_rendered_media,
+)
+from .models import (
     MediaAnalysisDraft,
     MediaPayloadTooLarge,
     PreparedMediaForLLM,
     RenderedMedia,
     ResolvedMedia,
-    _build_marker,
-    _can_use_raw_media_description,
-    _fallback_kind,
-    _inspect_image_payload_details,
-    _is_generic_media_label,
-    _is_low_quality_rendered_media,
-    _media_cfg,
-    _media_log,
-    _normalize_emotion_tags,
-    _normalize_source_label,
-    _read_file_bounded,
-    _render_animation_contact_sheet,
-    _run_media_blocking,
-    _safe_source_name,
-    _same_rendered_media,
-    write_render_cache_entry,
 )
+from .render_cache import write_render_cache_entry
+from .settings import MEDIA_ANALYSIS_PROMPT_VERSION, media_config, media_log
 
 _MEDIA_DETAIL_BASE_MAX_TOKENS            = 360
 _MEDIA_DETAIL_TRUNCATED_RETRY_MAX_TOKENS = 720
@@ -72,15 +75,6 @@ def _media_detail_base_max_tokens_for_reason(reason: str) -> int:
     if normalized.endswith("length_truncated"):
         return _MEDIA_DETAIL_TRUNCATED_RETRY_MAX_TOKENS
     return _MEDIA_DETAIL_BASE_MAX_TOKENS
-
-
-def _emoji_refine_timeout_seconds(runtime) -> float:
-    cfg = _media_cfg(runtime)
-    return max(0.0, float(cfg.emoji_refine_timeout_seconds))
-
-
-def _enable_emoji_refine_background(runtime) -> bool:
-    return bool(_media_cfg(runtime).enable_emoji_refine_background)
 
 
 @dataclass(frozen=True)
@@ -139,7 +133,7 @@ def _log_media_provider_fallback(
 ) -> None:
     """审计服务商切换，但不记录凭据或媒体字节。"""
 
-    _media_log(
+    media_log(
         context,
         runtime,
         step   = "media.analyze.provider_fallback",
@@ -170,8 +164,7 @@ def _resolve_media_llm_secret_candidates(context) -> list[dict[str, Any]]:
         "_provider_scope": "none",
         "_vision_enabled": False,
     }
-    capabilities = getattr(context, "capabilities", None)
-    ai_service   = getattr(capabilities, "ai", None)
+    ai_service = context.capabilities.ai
     if ai_service is None:
         return [empty]
     try:
@@ -198,10 +191,6 @@ def _resolve_media_llm_secret_candidates(context) -> list[dict[str, Any]]:
     return candidates or [empty]
 
 
-def _has_media_llm_capability(context) -> bool:
-    return _explicit_media_llm_requested(context)
-
-
 def _looks_like_source_placeholder(
     rendered: RenderedMedia,
     *,
@@ -210,17 +199,17 @@ def _looks_like_source_placeholder(
 ) -> bool:
     if rendered.kind != "image":
         return False
-    full_source_label = _normalize_source_label(summary_hint or resolved.source_name)
+    full_source_label = normalize_source_label(summary_hint or resolved.source_name)
     if not full_source_label:
         return False
     return bool(
         rendered.description == full_source_label
         and rendered.marker
-        == _build_marker(rendered.kind, rendered.description, rendered.emotion_tags)
+        == build_marker(rendered.kind, rendered.description, rendered.emotion_tags)
     )
 
 
-def _should_refresh_cached_render(
+def should_refresh_cached_render(
     cached_rendered: RenderedMedia,
     *,
     cached_source: str,
@@ -233,21 +222,21 @@ def _should_refresh_cached_render(
 ) -> bool:
     """判断缓存条目是否早于当前提示词或质量约束。"""
 
-    if not _has_media_llm_capability(context):
+    if not _explicit_media_llm_requested(context):
         return False
 
     normalized_source = str(cached_source or "").strip().lower()
     if normalized_source == "llm":
-        if cached_quality == "generic" or _is_low_quality_rendered_media(
+        if cached_quality == "generic" or is_low_quality_rendered_media(
             cached_rendered,
             summary_hint = summary_hint,
             resolved     = resolved,
         ):
             return True
-        return cached_prompt_version < _MEDIA_ANALYSIS_PROMPT_VERSION
+        return cached_prompt_version < MEDIA_ANALYSIS_PROMPT_VERSION
     if normalized_source == "fallback":
         return True
-    return _same_rendered_media(
+    return same_rendered_media(
         cached_rendered, fallback_rendered
     ) or _looks_like_source_placeholder(
         cached_rendered,
@@ -271,7 +260,7 @@ def _prepare_media_for_llm(
     source_mime = (
         str(
             resolved.mime_type
-            or _inspect_image_payload_details(
+            or inspect_image_payload_details(
                 payload, fallback_suffix=resolved.cached_path.suffix or ".png"
             ).mime_type
         )
@@ -283,7 +272,7 @@ def _prepare_media_for_llm(
     if source_mime.startswith("image/") and source_mime not in {"image/svg+xml"}:
         try:
             if resolved.is_animated:
-                contact_sheet_payload, frame_count = _render_animation_contact_sheet(payload)
+                contact_sheet_payload, frame_count = render_animation_contact_sheet(payload)
                 return PreparedMediaForLLM(
                     payload          = contact_sheet_payload,
                     mime_type        = "image/png",
@@ -384,7 +373,7 @@ async def _call_media_llm_once(
 ) -> MediaLLMCallResult:
     """发起一次有界视觉请求，只保留可安全脱敏的元数据。"""
 
-    cfg                                   = _media_cfg(runtime)
+    cfg                                   = media_config(runtime)
     effective_max_tokens                  = _media_llm_max_tokens(secrets, max_tokens)
     used_secrets                          = dict(secrets)
     used_secrets["_effective_max_tokens"] = effective_max_tokens
@@ -392,7 +381,6 @@ async def _call_media_llm_once(
         secrets                = secrets,
         route                  = "vision",
         required_modalities    = ("text", "image"),
-        model                  = str(secrets.get("model", "") or ""),
         messages               = messages,
         temperature            = temperature,
         top_p                  = top_p,
@@ -439,7 +427,7 @@ def _parse_detail_analysis_output(
     data, parsed_json = parse_first_json_object_with_status(output)
     kind = str(data.get("kind", "") or "").strip().lower()
     if kind not in {"image", "emoji"}:
-        kind = _fallback_kind(
+        kind = fallback_kind(
             resolved.source_name,
             width        = resolved.width,
             height       = resolved.height,
@@ -465,14 +453,14 @@ def _parse_detail_analysis_output(
     )
     if not description:
         raw_output = str(output or "").strip().strip("`")
-        if _can_use_raw_media_description(raw_output):
+        if can_use_raw_media_description(raw_output):
             description = raw_output
     description  = _merge_visible_text(description, visible_text)
-    emotion_tags = _normalize_emotion_tags(
+    emotion_tags = normalize_emotion_tags(
         data.get("emotion_tags") or data.get("emotions") or data.get("tone_tags")
     )
     if kind == "emoji" and not emotion_tags:
-        emotion_tags = _normalize_emotion_tags(description or visible_text)
+        emotion_tags = normalize_emotion_tags(description or visible_text)
     return MediaAnalysisDraft(
         kind         = kind,
         description  = description.strip(),
@@ -494,30 +482,30 @@ def _finalize_media_analysis(
     kind                  = detail.kind
     used_summary_fallback = False
     if kind == "emoji":
-        if refined and refined.description and not _is_generic_media_label(refined.description):
+        if refined and refined.description and not is_generic_media_label(refined.description):
             description = refined.description
-        elif detail.description and not _is_generic_media_label(detail.description):
+        elif detail.description and not is_generic_media_label(detail.description):
             description = detail.description
         elif refined and refined.description:
             description = refined.description
         elif detail.description:
             description = detail.description
         else:
-            description           = _safe_source_name(resolved.source_name) or "一张表情包"
+            description           = safe_source_name(resolved.source_name) or "一张表情包"
             used_summary_fallback = True
         emotion_tags = (
             refined.emotion_tags if refined and refined.emotion_tags else detail.emotion_tags
         )
         if not emotion_tags:
-            emotion_tags = _normalize_emotion_tags(description or detail.visible_text)
+            emotion_tags = normalize_emotion_tags(description or detail.visible_text)
     else:
         description = detail.description
         if not description:
-            description           = _safe_source_name(resolved.source_name) or "一张图片"
+            description           = safe_source_name(resolved.source_name) or "一张图片"
             used_summary_fallback = True
         emotion_tags = ()
 
-    marker   = _build_marker(kind, description, emotion_tags)
+    marker   = build_marker(kind, description, emotion_tags)
     rendered = RenderedMedia(
         media_hash   = resolved.media_hash,
         kind         = kind,
@@ -528,7 +516,7 @@ def _finalize_media_analysis(
     )
     quality = (
         "generic"
-        if _is_low_quality_rendered_media(
+        if is_low_quality_rendered_media(
             rendered,
             summary_hint = resolved.source_name,
             resolved     = resolved,
@@ -558,9 +546,9 @@ def _semantic_retry_reason(
         return "empty_description"
     if _VISION_REFUSAL_RE.search(str(rendered.description or "")):
         return "vision_refusal"
-    if _is_generic_media_label(rendered.description):
+    if is_generic_media_label(rendered.description):
         return "generic_description"
-    if _is_low_quality_rendered_media(
+    if is_low_quality_rendered_media(
         rendered, summary_hint=resolved.source_name, resolved=resolved
     ):
         return "low_quality_render"
@@ -609,10 +597,10 @@ async def _refine_emoji_analysis_with_llm(
     description = _extract_first_text_value(data, "description", "label", "summary")
     if not description:
         raw_output = str(output or "").strip().strip("`")
-        if _can_use_raw_media_description(raw_output):
+        if can_use_raw_media_description(raw_output):
             description = raw_output
     description  = description.strip()
-    emotion_tags = _normalize_emotion_tags(data.get("emotion_tags") or data.get("emotions"))
+    emotion_tags = normalize_emotion_tags(data.get("emotion_tags") or data.get("emotions"))
     if not emotion_tags:
         emotion_tags = draft.emotion_tags
     return (
@@ -627,7 +615,105 @@ async def _refine_emoji_analysis_with_llm(
     )
 
 
-def _schedule_background_emoji_refine(
+def _rendered_quality(rendered: RenderedMedia) -> float:
+    return quality_score(
+        {
+            "kind": rendered.kind,
+            "description": rendered.description,
+            "marker": rendered.marker,
+            "emotion_tags": rendered.emotion_tags,
+            "file_path": str(rendered.cached_path or ""),
+        }
+    )
+
+
+async def _refine_committed_emoji(
+    rendered: RenderedMedia,
+    resolved: ResolvedMedia,
+    *,
+    context,
+    runtime,
+    timeout: float,
+) -> None:
+    """后台重新分析已提交的表情；只有语义可信且质量明显提升时才覆盖同一哈希的缓存。"""
+
+    media_hash = resolved.media_hash[:12]
+
+    def log(step: str, fields: dict[str, Any], level: str = "info") -> None:
+        media_log(
+            context,
+            runtime,
+            step   = f"media.analyze.refine.background.{step}",
+            fields = {"media_hash": media_hash, **fields},
+            level  = level,
+        )
+
+    detail = MediaAnalysisDraft(
+        kind         = "emoji",
+        description  = rendered.description,
+        visible_text = "",
+        emotion_tags = rendered.emotion_tags,
+        raw_output   = "",
+        parsed_json  = True,
+    )
+    try:
+        refined, provider = await asyncio.wait_for(
+            _refine_emoji_analysis_with_llm(
+                detail, resolved=resolved, context=context, runtime=runtime
+            ),
+            timeout=timeout,
+        )
+    except TimeoutError:
+        log("timeout", {"timeout_seconds": f"{timeout:.3f}"}, "warning")
+        return
+    except Exception as exc:
+        log("fail", {"error_type": type(exc).__name__}, "warning")
+        return
+
+    refined_rendered, used_summary_fallback, quality = _finalize_media_analysis(
+        detail=detail, refined=refined, resolved=resolved
+    )
+    semantic_reason = _semantic_retry_reason(
+        detail                = detail,
+        rendered              = refined_rendered,
+        used_summary_fallback = used_summary_fallback,
+        resolved              = resolved,
+    )
+    if semantic_reason:
+        log(
+            "skip",
+            {"reason_code": semantic_reason, "description": refined_rendered.description},
+            "warning",
+        )
+        return
+    if _rendered_quality(refined_rendered) <= _rendered_quality(rendered) + 0.05:
+        log("skip", {"reason_code": "quality_not_improved", "quality": quality})
+        return
+
+    await run_media_blocking(
+        write_render_cache_entry,
+        context.data_dir,
+        resolved,
+        refined_rendered,
+        source         = "llm",
+        quality        = quality,
+        prompt_version = MEDIA_ANALYSIS_PROMPT_VERSION,
+    )
+    log(
+        "ok",
+        {
+            "provider": provider.get("_provider_name", ""),
+            "model": provider.get("model", ""),
+            "max_tokens": provider.get("_effective_max_tokens", ""),
+            "description": refined_rendered.description,
+            "emotion_tags": "，".join(refined_rendered.emotion_tags),
+            "marker": refined_rendered.marker,
+            "quality": quality,
+        },
+    )
+
+
+def schedule_background_emoji_refine(
     rendered: RenderedMedia,
     resolved: ResolvedMedia,
     *,
@@ -639,145 +725,25 @@ def _schedule_background_emoji_refine(
     当前轮次始终以前台输出为准；延迟结果只能在质量提升时更新同一哈希的缓存条目。
     """
 
-    if rendered.kind != "emoji" or not _enable_emoji_refine_background(runtime):
+    cfg = media_config(runtime)
+    if rendered.kind != "emoji" or not cfg.enable_emoji_refine_background:
         return
-    timeout = _emoji_refine_timeout_seconds(runtime)
+    timeout = max(0.0, float(cfg.emoji_refine_timeout_seconds))
     if timeout <= 0:
         return
-
-    detail = MediaAnalysisDraft(
-        kind         = "emoji",
-        description  = rendered.description,
-        visible_text = "",
-        emotion_tags = rendered.emotion_tags,
-        raw_output   = "",
-        parsed_json  = True,
-    )
-
-    async def _run() -> None:
-        try:
-            refined, refined_provider = await asyncio.wait_for(
-                _refine_emoji_analysis_with_llm(
-                    detail,
-                    resolved = resolved,
-                    context  = context,
-                    runtime  = runtime,
-                ),
-                timeout=timeout,
-            )
-        except TimeoutError:
-            _media_log(
-                context,
-                runtime,
-                step   = "media.analyze.refine.background.timeout",
-                fields = {
-                    "media_hash": resolved.media_hash[:12],
-                    "timeout_seconds": f"{timeout:.3f}",
-                },
-                level="warning",
-            )
-            return
-        except Exception as exc:
-            _media_log(
-                context,
-                runtime,
-                step   = "media.analyze.refine.background.fail",
-                fields = {
-                    "media_hash": resolved.media_hash[:12],
-                    "error_type": type(exc).__name__,
-                },
-                level="warning",
-            )
-            return
-
-        refined_rendered, used_summary_fallback, quality = _finalize_media_analysis(
-            detail   = detail,
-            refined  = refined,
-            resolved = resolved,
-        )
-        semantic_reason = _semantic_retry_reason(
-            detail                = detail,
-            rendered              = refined_rendered,
-            used_summary_fallback = used_summary_fallback,
-            resolved              = resolved,
-        )
-        if semantic_reason:
-            _media_log(
-                context,
-                runtime,
-                step   = "media.analyze.refine.background.skip",
-                fields = {
-                    "media_hash": resolved.media_hash[:12],
-                    "reason_code": semantic_reason,
-                    "description": refined_rendered.description,
-                },
-                level="warning",
-            )
-            return
-
-        refined_quality = _quality_score(
-            {
-                "kind": refined_rendered.kind,
-                "description": refined_rendered.description,
-                "marker": refined_rendered.marker,
-                "emotion_tags": refined_rendered.emotion_tags,
-                "file_path": str(refined_rendered.cached_path or ""),
-            }
-        )
-        committed_quality = _quality_score(
-            {
-                "kind": rendered.kind,
-                "description": rendered.description,
-                "marker": rendered.marker,
-                "emotion_tags": rendered.emotion_tags,
-                "file_path": str(rendered.cached_path or ""),
-            }
-        )
-        if refined_quality <= committed_quality + 0.05:
-            _media_log(
-                context,
-                runtime,
-                step   = "media.analyze.refine.background.skip",
-                fields = {
-                    "media_hash": resolved.media_hash[:12],
-                    "reason_code": "quality_not_improved",
-                    "quality": quality,
-                },
-            )
-            return
-
-        await _run_media_blocking(
-            write_render_cache_entry,
-            context.data_dir,
-            resolved,
-            refined_rendered,
-            source         = "llm",
-            quality        = quality,
-            prompt_version = _MEDIA_ANALYSIS_PROMPT_VERSION,
-        )
-        _media_log(
-            context,
-            runtime,
-            step   = "media.analyze.refine.background.ok",
-            fields = {
-                "provider": refined_provider.get("_provider_name", ""),
-                "model": refined_provider.get("model", ""),
-                "max_tokens": refined_provider.get("_effective_max_tokens", ""),
-                "media_hash": resolved.media_hash[:12],
-                "description": refined_rendered.description,
-                "emotion_tags": "，".join(refined_rendered.emotion_tags),
-                "marker": refined_rendered.marker,
-                "quality": quality,
-            },
-        )
-
-    _media_log(
+    media_log(
         context,
         runtime,
         step   = "media.analyze.refine.background.spawn",
         fields = {"media_hash": resolved.media_hash[:12]},
     )
-    _spawn_bg_task(context, _run(), name=f"media_refine:{resolved.media_hash[:12]}")
+    spawn_bg_task(
+        context,
+        _refine_committed_emoji(
+            rendered, resolved, context=context, runtime=runtime, timeout=timeout
+        ),
+        name=f"media_refine:{resolved.media_hash[:12]}",
+    )
 
 
 def _resolve_media_analysis_candidates(
@@ -788,11 +754,11 @@ def _resolve_media_analysis_candidates(
 ) -> tuple[Any, list[dict[str, Any]]] | None:
     """验证媒体配置，并按优先级返回不含凭据的模型 profile。"""
 
-    cfg             = _media_cfg(runtime)
+    cfg             = media_config(runtime)
     candidates      = _resolve_media_llm_secret_candidates(context)
     primary_secrets = candidates[0] if candidates else {}
     if not any(bool(secrets.get("_vision_enabled")) for secrets in candidates):
-        _media_log(
+        media_log(
             context,
             runtime,
             step   = "media.analyze.skip",
@@ -808,7 +774,7 @@ def _resolve_media_analysis_candidates(
     if complete_candidates:
         return cfg, complete_candidates
 
-    _media_log(
+    media_log(
         context,
         runtime,
         step   = "media.analyze.skip",
@@ -871,13 +837,13 @@ async def _prepare_media_analysis_request(
 ) -> _PreparedMediaAnalysisRequest | None:
     """在调用服务商前加载、限制、规范化并编码媒体。"""
 
-    prepared, image_b64, payload_size = await _run_media_blocking(
+    prepared, image_b64, payload_size = await run_media_blocking(
         _load_and_prepare_media_for_llm,
         resolved,
         max_bytes=int(cfg.max_analyze_bytes),
     )
     if prepared is None:
-        _media_log(
+        media_log(
             context,
             runtime,
             step   = "media.analyze.skip",
@@ -921,7 +887,7 @@ def _log_media_analysis_start(
 ) -> None:
     """记录有界请求元数据，同时排除载荷和凭据。"""
 
-    _media_log(
+    media_log(
         context,
         runtime,
         step   = "media.analyze.start",
@@ -958,7 +924,7 @@ def _log_media_analysis_exception(
 ) -> None:
     """记录清洗后的失败标识，绝不记录异常正文或服务商密钥。"""
 
-    _media_log(
+    media_log(
         context,
         runtime,
         step   = "media.analyze.fail",
@@ -1008,7 +974,7 @@ async def _run_media_analysis_attempt(
         resolved     = resolved,
         prefer_emoji = prefer_emoji,
     )
-    _media_log(
+    media_log(
         context,
         runtime,
         step   = "media.analyze.detail.ok",
@@ -1064,7 +1030,7 @@ def _log_invalid_media_analysis(
         "description": attempt.rendered.description,
         "quality": attempt.quality,
     }
-    _media_log(
+    media_log(
         context,
         runtime,
         step   = "media.analyze.semantic.invalid",
@@ -1072,7 +1038,7 @@ def _log_invalid_media_analysis(
         level  = "warning",
     )
     if will_retry:
-        _media_log(
+        media_log(
             context,
             runtime,
             step   = "media.analyze.provider_retry",
@@ -1093,7 +1059,7 @@ def _log_terminal_semantic_failure(
 ) -> None:
     """记录语义重试耗尽，但不持久化原始输出。"""
 
-    _media_log(
+    media_log(
         context,
         runtime,
         step   = "media.analyze.fail",
@@ -1140,7 +1106,7 @@ async def _commit_media_analysis_attempt(
             )
 
     llm_result = attempt.llm_result
-    _media_log(
+    media_log(
         context,
         runtime,
         step   = "media.analyze.ok",
@@ -1251,7 +1217,7 @@ async def _analyze_media_with_provider(
     return _MediaProviderOutcome()
 
 
-async def _analyze_media_with_llm(
+async def analyze_media_with_llm(
     resolved: ResolvedMedia,
     *,
     context,
@@ -1320,7 +1286,7 @@ def _load_and_prepare_media_for_llm(
     """只读取一次，执行字节上限后再解码、转码和编码。"""
 
     try:
-        payload = _read_file_bounded(resolved.cached_path, max_bytes=max_bytes)
+        payload = read_file_bounded(resolved.cached_path, max_bytes=max_bytes)
     except MediaPayloadTooLarge as exc:
         return None, "", exc.size
     prepared  = _prepare_media_for_llm(resolved, payload)
@@ -1333,12 +1299,12 @@ def _should_extract_cultural_hint(
     detail: MediaAnalysisDraft,
     runtime,
 ) -> bool:
-    cfg = _media_cfg(runtime)
+    cfg = media_config(runtime)
     if not cfg.enable_meme_cultural_hint:
         return False
     if rendered.kind != "emoji":
         return False
-    visible_text = str(getattr(detail, "visible_text", "") or "").strip()
+    visible_text = detail.visible_text.strip()
     description  = str(rendered.description or "").strip()
     return bool(visible_text) or "“" in description or '"' in description
 
@@ -1353,10 +1319,10 @@ async def _extract_cultural_hint(
 ) -> str:
     """在独立超时和输出上限内请求可选的简短梗背景。"""
 
-    cfg     = _media_cfg(runtime)
+    cfg     = media_config(runtime)
     timeout = max(1.0, cfg.meme_cultural_hint_timeout_seconds)
 
-    visible_text = str(getattr(detail, "visible_text", "") or "").strip()
+    visible_text = detail.visible_text.strip()
     description  = str(rendered.description or "").strip()
 
     payload = {
@@ -1388,7 +1354,7 @@ async def _extract_cultural_hint(
             timeout=timeout,
         )
     except TimeoutError:
-        _media_log(
+        media_log(
             context,
             runtime,
             step   = "media.cultural_hint.timeout",
@@ -1400,7 +1366,7 @@ async def _extract_cultural_hint(
         )
         return ""
     except Exception as exc:
-        _media_log(
+        media_log(
             context,
             runtime,
             step   = "media.cultural_hint.fail",
@@ -1416,12 +1382,11 @@ async def _extract_cultural_hint(
     hint = str(data.get("hint", "") or "").strip()
     if not hint:
         return ""
-    if len(hint) > 60:
-        hint = hint[:60].rstrip() + "…"
+    hint           = clip_text(hint, 60)
     refusal_tokens = ("不知道", "不确定", "无法", "无内容", "无梗", "需要更多")
     if any(token in hint for token in refusal_tokens):
         return ""
-    _media_log(
+    media_log(
         context,
         runtime,
         step   = "media.cultural_hint.ok",

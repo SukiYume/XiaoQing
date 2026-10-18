@@ -62,6 +62,17 @@ def test_score_turn_detects_missed_and_over_reply():
     assert over["scores"]["boundary_sense"] == 1
 
 
+def test_open_group_greeting_allows_participation_and_silence():
+    matrix = experiment.generate_matrix(
+        experiment.ExperimentConfig(groups=1, min_users=3, max_users=3, rounds_per_group=1)
+    )
+    turn = matrix["groups"][0]["turns"][0]
+    assert turn["scenario"] == "plain_text"
+    assert turn["expected_action"] == "optional_reply"
+    for reply in ([], [{"type": "text", "data": {"text": "早啊"}}]):
+        assert experiment.score_turn(turn, reply)["failure_tags"] == []
+
+
 def test_score_turn_detects_assistant_tone_and_leak():
     matrix = experiment.generate_matrix(
         experiment.ExperimentConfig(groups=1, min_users=3, max_users=3, rounds_per_group=24)
@@ -261,7 +272,7 @@ def test_real_experiment_context_exposes_ai_route_without_secrets(tmp_path: Path
     }
     secrets = {"ai": {"providers": {"test": {"api_key": "secret-key"}}}}
 
-    context = experiment._make_context(
+    context = experiment.make_experiment_context(
         session    = object(),
         config     = config,
         secrets    = secrets,

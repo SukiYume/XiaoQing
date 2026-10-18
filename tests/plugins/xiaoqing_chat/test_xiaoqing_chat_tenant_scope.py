@@ -1,5 +1,6 @@
 import pytest
 
+from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
 from plugins.xiaoqing_chat.memory.knowledge_extract import maybe_extract_person_facts
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.memory.memory_db import MemoryDB, person_fact_doc_id
@@ -120,7 +121,7 @@ async def test_identical_person_fact_has_independent_chat_scoped_ids_and_deletio
     async def fake_chat_completions(**_kwargs):
         return (
             '{"facts":[{"subject_id":42,"subject_name":"Alice",'
-            '"fact":"喜欢喝茶","evidence":"Alice 说她喜欢喝茶"}]}'
+            '"fact":"喜欢喝茶","evidence":"我喜欢喝茶"}]}'
         )
 
     monkeypatch.setattr(
@@ -131,7 +132,7 @@ async def test_identical_person_fact_has_independent_chat_scoped_ids_and_deletio
         StoredMessage(
             role    = "user",
             name    = "Alice",
-            content = f"消息 {index}",
+            content = "我喜欢喝茶" if index == 19 else f"消息 {index}",
             ts      = float(index),
             user_id = 42,
         )
@@ -144,12 +145,14 @@ async def test_identical_person_fact_has_independent_chat_scoped_ids_and_deletio
         "secrets": {"api_base": "https://example.com", "api_key": "k", "model": "m"},
         "memory_db": db,
         "history": history,
-        "temperature": 0.5,
-        "top_p": 0.9,
-        "max_tokens": 256,
-        "timeout_seconds": 1.0,
-        "max_retry": 0,
-        "retry_interval_seconds": 0.0,
+        "llm": LLMCallConfig(
+            temperature            = 0.5,
+            top_p                  = 0.9,
+            max_tokens             = 256,
+            timeout_seconds        = 1.0,
+            max_retry              = 0,
+            retry_interval_seconds = 0.0,
+        ),
     }
 
     await maybe_extract_person_facts(chat_id="chat-a", **common)

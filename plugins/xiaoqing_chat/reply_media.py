@@ -7,25 +7,25 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, cast
 
 from .media.emoji_library import mark_emoji_used, mark_emoji_used_by_hash
 from .media.event_media import render_event_media
-from .media.event_media_common import RenderedMedia
 from .media.marker_resolver import ResolvedMarker
+from .media.models import RenderedMedia
 from .media.qq_face_catalog import mark_qq_face_used, mark_qq_face_used_by_id
-from .media_registry import upsert_registered_media_items
+from .media_registry import normalize_media_refs, upsert_registered_media_items
 from .message_parts import (
     build_text_message_parts,
-    message_parts_to_legacy,
     normalize_message_parts,
     replace_message_media_parts,
 )
-from .smalltalk_models import _GeneratedSmalltalkTurn
+from .smalltalk_models import GeneratedSmalltalkTurn
+from .task_scheduler import schedule_media_registry_flush
 
 if TYPE_CHECKING:
-    from .runtime_state import ChatRuntimeState, _ChatRuntime
+    from .runtime_state import ChatRuntime, ChatRuntimeState
 
 _MEDIA_PART_KINDS = ("emoji", "qq_face", "image")
 
@@ -33,14 +33,11 @@ _MEDIA_PART_KINDS = ("emoji", "qq_face", "image")
 def _log_media_bookkeeping_failure(context: Any, operation: str, exc: Exception) -> None:
     """媒体旁路统计失败只记类型，不泄露路径或消息内容。"""
 
-    logger = getattr(context, "logger", None)
-    debug  = getattr(logger, "debug", None)
-    if callable(debug):
-        debug(
-            "xiaoqing_chat media bookkeeping failed operation=%s error_type=%s",
-            operation,
-            type(exc).__name__,
-        )
+    context.logger.debug(
+        "xiaoqing_chat media bookkeeping failed operation=%s error_type=%s",
+        operation,
+        type(exc).__name__,
+    )
 
 
 def _first_media_part(
@@ -56,19 +53,19 @@ def _drop_empty(detail: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in detail.items() if value}
 
 
-def _media_action_detail(
+def media_action_detail(
     marker: ResolvedMarker | None,
     parts: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """生成行动历史需要的最小媒体摘要，优先采用已解析 marker。"""
 
     if marker is not None:
-        entry = getattr(marker, "entry", None)
+        entry = marker.entry
         return _drop_empty(
             {
-                "media_kind": str(getattr(marker, "kind", "") or ""),
-                "media_marker": str(getattr(marker, "marker", "") or ""),
-                "media_mode": str(getattr(marker, "mode", "") or ""),
+                "media_kind": marker.kind,
+                "media_marker": marker.marker,
+                "media_mode": marker.mode,
                 "media_hash": str(getattr(entry, "media_hash", "") or ""),
                 "media_key": str(getattr(entry, "media_key", "") or ""),
                 "media_face_id": str(getattr(entry, "face_id", "") or ""),
@@ -121,7 +118,7 @@ def _serialize_rendered_media_items(
     return serialized
 
 
-async def _event_media_items_for_memory(
+async def event_media_items_for_memory(
     event: dict[str, Any], *, context, runtime
 ) -> list[dict[str, Any]]:
     """复用事件级渲染缓存；解析失败时让文字消息继续进入记忆。"""
@@ -139,20 +136,22 @@ async def _event_media_items_for_memory(
     return _serialize_rendered_media_items(rendered_items)
 
 
-def _sync_message_parts_to_registry(
+def sync_message_parts_to_registry(
     state: ChatRuntimeState,
     parts: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None,
     *,
     context: Any,
-    runtime: _ChatRuntime,
-    schedule_media_registry_flush: Callable[[Any, _ChatRuntime], None],
+    runtime: ChatRuntime,
 ) -> tuple[dict[str, Any], ...]:
     """登记 parts 中的媒体引用，并在注册表真正变脏时安排一次刷盘。"""
 
     normalized_parts = cast(tuple[dict[str, Any], ...], normalize_message_parts(parts))
     if not normalized_parts:
         return ()
-    _content, media_items = message_parts_to_legacy(normalized_parts)
+    # 登记完整元数据，否则压缩后的引用会让注册表永远缺少画面描述。
+    media_items = normalize_media_refs(
+        [part for part in normalized_parts if part.get("kind") != "text"]
+    )
     media_store        = state.media_store
     synced_media_items = cast(
         list[dict[str, Any]],
@@ -178,7 +177,7 @@ def _sync_message_parts_to_registry(
     )
 
 
-def _prefix_reply_parts(
+def prefix_reply_parts(
     parts: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None,
     prefix_text: str,
 ) -> tuple[dict[str, Any], ...]:
@@ -199,13 +198,13 @@ def _prefix_reply_parts(
     return cast(tuple[dict[str, Any], ...], normalize_message_parts(merged_parts))
 
 
-def _display_reply_text(generated: _GeneratedSmalltalkTurn) -> str:
-    if generated.reply_output is not None:
-        return str(generated.reply_output.payload.display_text)
+def display_reply_text(generated: GeneratedSmalltalkTurn) -> str:
+    if generated.reply_payload is not None:
+        return str(generated.reply_payload.display_text)
     return str(generated.reply)
 
 
-def _reply_send_prefix(reply_text: str, reply_for_send: str) -> str:
+def reply_send_prefix(reply_text: str, reply_for_send: str) -> str:
     reply     = str(reply_text or "")
     send_text = str(reply_for_send or "")
     if reply and send_text != reply and send_text.endswith(reply):
@@ -213,8 +212,8 @@ def _reply_send_prefix(reply_text: str, reply_for_send: str) -> str:
     return ""
 
 
-def _normalize_generated_reply_state(
-    generated: _GeneratedSmalltalkTurn,
+def normalize_generated_reply_state(
+    generated: GeneratedSmalltalkTurn,
     *,
     reply_text: str,
     reply_parts: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None,
@@ -223,23 +222,23 @@ def _normalize_generated_reply_state(
 
     generated.reply = str(reply_text or "").strip()
     if not generated.reply:
-        generated.reply_parts  = ()
-        generated.reply_output = None
+        generated.reply_parts   = ()
+        generated.reply_payload = None
         return
 
     normalized_parts = normalize_message_parts(reply_parts)
     if not normalized_parts:
         normalized_parts = build_text_message_parts(generated.reply)
 
-    generated.reply_parts  = normalized_parts
-    generated.reply_output = None
+    generated.reply_parts   = normalized_parts
+    generated.reply_payload = None
 
 
-def _mark_reply_media_used(context, generated: _GeneratedSmalltalkTurn) -> None:
+def mark_reply_media_used(context, generated: GeneratedSmalltalkTurn) -> None:
     """登记已送达回复中的媒体；统计失败不反向影响发送结果。"""
 
     marker      = generated.media_marker
-    marker_kind = str(getattr(marker, "kind", "") or "") if marker is not None else ""
+    marker_kind = marker.kind if marker is not None else ""
     reply_parts = normalize_message_parts(generated.reply_parts)
 
     if marker is not None and marker_kind == "emoji":

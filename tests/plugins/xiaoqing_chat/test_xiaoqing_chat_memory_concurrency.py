@@ -15,7 +15,7 @@ async def test_cold_memory_load_keeps_event_loop_responsive(tmp_path):
     store        = MemoryStore(tmp_path)
     load_started = threading.Event()
 
-    def slow_load(_chat_id: str):
+    def slow_load(event_chat_id: str):
         load_started.set()
         time.sleep(0.1)
         return []
@@ -36,7 +36,7 @@ async def test_different_chats_cold_load_concurrently(tmp_path):
     active_loads         = 0
     maximum_active_loads = 0
 
-    def slow_load(_chat_id: str):
+    def slow_load(event_chat_id: str):
         nonlocal active_loads, maximum_active_loads
         with counter_lock:
             active_loads += 1
@@ -57,7 +57,7 @@ async def test_same_chat_cold_load_remains_singleflight(tmp_path):
     store      = MemoryStore(tmp_path)
     load_calls = 0
 
-    def slow_load(_chat_id: str):
+    def slow_load(event_chat_id: str):
         nonlocal load_calls
         load_calls += 1
         time.sleep(0.05)

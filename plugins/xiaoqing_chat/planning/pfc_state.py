@@ -24,6 +24,12 @@ class PFCConversationState:
     planner_skip_until: float = 0.0
     updated_at: float = field(default_factory=lambda: time.time())
 
+    @property
+    def top_goal(self) -> str:
+        """规划器目标列表里排第一的目标文本；没有可用目标时为空。"""
+        first = self.goal_list[0] if self.goal_list else None
+        return str(first.get("goal", "") or "").strip() if isinstance(first, dict) else ""
+
 
 class PFCStateStore(AsyncKeyedStore[PFCConversationState]):
     _MAX_CACHE_SIZE = 200

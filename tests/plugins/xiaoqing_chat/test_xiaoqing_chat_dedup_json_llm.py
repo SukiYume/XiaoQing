@@ -1,5 +1,6 @@
 import pytest
 
+from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
 from plugins.xiaoqing_chat.memory.knowledge_extract import _parse_fact_json
 from plugins.xiaoqing_chat.memory.memory_retrieval import _parse_question_json
 
@@ -92,7 +93,7 @@ def test_json_root_scanner_rejects_trailing_or_unterminated_input(
 
 
 def test_llm_content_extractor_preserves_untrusted_think_prefix() -> None:
-    from plugins.xiaoqing_chat.llm.llm_client import extract_response_content
+    from plugins.xiaoqing_chat.llm.gateway import extract_response_content
 
     data = {
         "choices": [
@@ -110,7 +111,7 @@ def test_llm_content_extractor_preserves_untrusted_think_prefix() -> None:
 
 @pytest.mark.asyncio
 async def test_reply_checker_uses_shared_content_extractor(monkeypatch: pytest.MonkeyPatch) -> None:
-    from plugins.xiaoqing_chat.llm import llm_client
+    from plugins.xiaoqing_chat.llm import gateway
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
     async def fake_raw_with_fallback_paths(**_kwargs):
@@ -132,7 +133,7 @@ async def test_reply_checker_uses_shared_content_extractor(monkeypatch: pytest.M
         )
 
     called             = {"count": 0}
-    original_extractor = llm_client.extract_response_content
+    original_extractor = gateway.extract_response_content
 
     def traced_extractor(data):
         called["count"] += 1
@@ -142,10 +143,9 @@ async def test_reply_checker_uses_shared_content_extractor(monkeypatch: pytest.M
         "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_fallback_paths",
         fake_raw_with_fallback_paths,
     )
-    monkeypatch.setattr(llm_client, "extract_response_content", traced_extractor)
+    monkeypatch.setattr(gateway, "extract_response_content", traced_extractor)
 
     result = await check_reply(
-        http_session           = None,
         secrets                = {"api_base": "https://example.com", "api_key": "k", "model": "m"},
         bot_name               = "小青",
         reply                  = "好的",
@@ -169,12 +169,12 @@ async def test_reply_checker_uses_shared_content_extractor(monkeypatch: pytest.M
 
 
 @pytest.mark.asyncio
-async def test_llm_client_fallback_wrapper_shared_logic_for_content_mode() -> None:
+async def test_gateway_fallback_wrapper_shared_logic_for_content_mode() -> None:
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
     from core.ai import AICompletionResult
-    from plugins.xiaoqing_chat.llm.llm_client import (
+    from plugins.xiaoqing_chat.llm.gateway import (
         chat_completions_raw_with_fallback_paths,
     )
 
@@ -192,7 +192,6 @@ async def test_llm_client_fallback_wrapper_shared_logic_for_content_mode() -> No
     )
     response, used_profile = await chat_completions_raw_with_fallback_paths(
         secrets                = {"_ai": service, "_route": "chat"},
-        model                  = "legacy-display-only",
         messages               = [{"role": "user", "content": "hi"}],
         temperature            = 0.2,
         top_p                  = 0.9,
@@ -208,12 +207,12 @@ async def test_llm_client_fallback_wrapper_shared_logic_for_content_mode() -> No
 
 
 @pytest.mark.asyncio
-async def test_llm_client_fallback_wrapper_stops_on_non_404() -> None:
+async def test_gateway_fallback_wrapper_stops_on_non_404() -> None:
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
     from core.ai import AIRequestError
-    from plugins.xiaoqing_chat.llm.llm_client import (
+    from plugins.xiaoqing_chat.llm.gateway import (
         chat_completions_raw_with_fallback_paths,
     )
 
@@ -241,7 +240,7 @@ async def test_person_fact_extract_skips_empty_llm_response(
 ) -> None:
     from unittest.mock import MagicMock
 
-    from plugins.xiaoqing_chat.llm.llm_client import LLMError
+    from plugins.xiaoqing_chat.llm.gateway import LLMError
     from plugins.xiaoqing_chat.memory.knowledge_extract import maybe_extract_person_facts
     from plugins.xiaoqing_chat.memory.memory import StoredMessage
 
@@ -260,17 +259,19 @@ async def test_person_fact_extract_skips_empty_llm_response(
     memory_db = MagicMock()
 
     await maybe_extract_person_facts(
-        data_dir               = tmp_path,
-        secrets                = {"api_base": "https://example.com", "api_key": "k", "model": "m"},
-        memory_db              = memory_db,
-        chat_id                = "g1",
-        history                = history,
-        temperature            = 0.8,
-        top_p                  = 0.9,
-        max_tokens             = 512,
-        timeout_seconds        = 1.0,
-        max_retry              = 0,
-        retry_interval_seconds = 0.0,
+        data_dir  = tmp_path,
+        secrets   = {"api_base": "https://example.com", "api_key": "k", "model": "m"},
+        memory_db = memory_db,
+        chat_id   = "g1",
+        history   = history,
+        llm       = LLMCallConfig(
+            temperature            = 0.8,
+            top_p                  = 0.9,
+            max_tokens             = 512,
+            timeout_seconds        = 1.0,
+            max_retry              = 0,
+            retry_interval_seconds = 0.0,
+        ),
     )
 
     memory_db.upsert_text.assert_not_called()
@@ -302,12 +303,14 @@ async def test_person_fact_extract_throttle_survives_capped_history(
         "secrets": {"api_base": "https://example.com", "api_key": "k", "model": "m"},
         "memory_db": MagicMock(),
         "chat_id": "g-capped",
-        "temperature": 0.8,
-        "top_p": 0.9,
-        "max_tokens": 512,
-        "timeout_seconds": 1.0,
-        "max_retry": 0,
-        "retry_interval_seconds": 0.0,
+        "llm": LLMCallConfig(
+            temperature            = 0.8,
+            top_p                  = 0.9,
+            max_tokens             = 512,
+            timeout_seconds        = 1.0,
+            max_retry              = 0,
+            retry_interval_seconds = 0.0,
+        ),
     }
 
     await maybe_extract_person_facts(history=history(1, 201), **common)

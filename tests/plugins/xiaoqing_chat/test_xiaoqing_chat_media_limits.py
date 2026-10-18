@@ -20,12 +20,8 @@ from plugins.xiaoqing_chat.media.emoji_library import (
     collect_emoji_candidate,
     load_emoji_library,
 )
-from plugins.xiaoqing_chat.media.event_media import (
-    RenderedMedia,
-    _prune_media_inbox,
-    _validate_image_resource_limits,
-    render_event_media,
-)
+from plugins.xiaoqing_chat.media.event_media import RenderedMedia, render_event_media
+from plugins.xiaoqing_chat.media.sources import _prune_media_inbox, validate_image_resource_limits
 
 _PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
@@ -174,7 +170,7 @@ async def test_media_count_and_resource_limits_are_hard(tmp_path: Path):
     assert len(rendered) == 2
 
     with pytest.raises(ValueError, match="pixel limit"):
-        _validate_image_resource_limits(
+        validate_image_resource_limits(
             width      = 2000,
             height     = 2000,
             max_pixels = 1_000_000,

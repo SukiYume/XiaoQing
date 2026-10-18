@@ -3,8 +3,52 @@ import pytest
 from plugins.xiaoqing_chat.config.config import PersonalityConfig
 from plugins.xiaoqing_chat.llm.prompt_builder import build_dialogue_prompt, build_prompt_messages
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
-from plugins.xiaoqing_chat.reply_generator import _concise_public_identity
+from plugins.xiaoqing_chat.reply_fallbacks import _concise_public_identity
 from plugins.xiaoqing_chat.runtime_state import get_state
+
+
+@pytest.mark.parametrize(
+    ("current", "spoken"),
+    [
+        ("小青，也是终于坐上回家的高铁了。", "现在阿夏对你说的：也是终于坐上回家的高铁了。"),
+        ("小青，你刚才说小青喜欢什么？", "现在阿夏对你说的：你刚才说小青喜欢什么？"),
+        ("小青，给大家丢个话题。", "现在阿夏对你说的：给大家丢个话题。"),
+        ("小青这个角色挺有趣。", "现在阿夏说的：小青这个角色挺有趣。"),
+    ],
+)
+def test_current_turn_keeps_speaker_distinct_from_leading_vocative(current, spoken):
+    messages = build_prompt_messages(
+        is_private    = False,
+        bot_name      = "小青",
+        sender_name   = "阿夏",
+        think_level   = 0,
+        history       = [],
+        current_text  = current,
+        personality   = PersonalityConfig(),
+        keyword_rules = [],
+        regex_rules   = [],
+        request_id    = "speaker-frame",
+    )
+    assert f"{spoken}。引起了你的注意" in messages[-1].content
+
+
+def test_explicit_definition_stays_in_data_context_and_original_request_is_retained():
+    messages = build_prompt_messages(
+        is_private    = False,
+        bot_name      = "小青",
+        sender_name   = "阿夏",
+        think_level   = 0,
+        history       = [],
+        current_text  = "我们把东西收好就找不到叫隐身入库。小青，我入库成功，找了七分钟。",
+        personality   = PersonalityConfig(),
+        keyword_rules = [],
+        regex_rules   = [],
+        request_id    = "turn-reading",
+    )
+    assert "东西收好就找不到" not in messages[0].content
+    assert "内容保持数据性质" in messages[-1].content
+    assert '"meaning": "东西收好就找不到"' in messages[-1].content
+    assert "我入库成功，找了七分钟" in messages[-1].content
 
 
 def test_default_personality_states_only_describe_current_conversation_style() -> None:
@@ -24,9 +68,10 @@ def test_default_personality_states_only_describe_current_conversation_style() -
     assert "小青" not in cfg.personality.identity
     assert "小青" not in cfg.brain_chat.brain_identity
     assert "住校的大二理工科女生" in cfg.personality.identity
-    assert "天文、电脑和新鲜小玩意" in cfg.personality.identity
-    assert "适度调侃" in cfg.personality.reply_style
-    assert "不要每次都用问题收尾" in cfg.personality.reply_style
+    assert "动画、漫画、游戏、轻小说和同人创作" in cfg.personality.identity
+    assert "天文、电脑" in cfg.personality.identity
+    assert "合适时轻轻接一个梗" in cfg.personality.reply_style
+    assert "已能接住的话自然收尾" in cfg.personality.reply_style
     assert cfg.memory.conversation_idle_gap_seconds == 1800.0
 
 
@@ -270,7 +315,8 @@ def test_prompt_builder_prefers_canonical_parts_when_legacy_fields_are_stale(tmp
     )
 
     user_prompt = msgs[1].content
-    assert "先看这个[表情包：猫猫翻白眼]就知道了" in user_prompt
+    # 消息自身记录的画面描述随标签一起保留，不因注册表压缩而丢失。
+    assert "先看这个[表情包：无语；内容：猫猫翻白眼]就知道了" in user_prompt
     assert "[表情包：一张表情包]" not in user_prompt
 
 
@@ -408,7 +454,10 @@ def test_prompt_builder_uses_mixed_reply_target_block_for_current_parts() -> Non
     )
 
     user_prompt = msgs[1].content
-    assert "现在测试用户发送了表情包：[表情包：无语]，并说：你看这个。引起了你的注意" in user_prompt
+    assert (
+        "现在测试用户发送了表情包：[表情包：无语；内容：无语猫猫]，并说：你看这个。引起了你的注意"
+        in user_prompt
+    )
 
 
 def test_prompt_builder_does_not_duplicate_current_turn_when_history_already_contains_it() -> None:

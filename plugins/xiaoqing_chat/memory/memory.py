@@ -30,6 +30,7 @@ class StoredMessage:
     parts: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     content: str = ""
     media_items: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    source_plugin: str = ""
 
     def __post_init__(self) -> None:
         normalized_parts = normalize_message_parts(self.parts)
@@ -41,6 +42,12 @@ class StoredMessage:
         legacy_content, legacy_media = message_parts_to_legacy(normalized_parts)
         object.__setattr__(self, "content", legacy_content)
         object.__setattr__(self, "media_items", _normalize_media_items(legacy_media))
+        object.__setattr__(self, "source_plugin", str(self.source_plugin or "").strip().lower())
+
+
+def is_conversation_reply(message: StoredMessage) -> bool:
+    """识别聊天生成器的发言，旧记录的空来源保持兼容。"""
+    return message.role == "assistant" and message.source_plugin in {"", "xiaoqing_chat"}
 
 
 def _valid_message_ts(value: Any) -> float:
@@ -69,8 +76,8 @@ def active_conversation_suffix(
     if len(items) < 2 or threshold <= 0:
         return items
     for index in range(len(items) - 1, 0, -1):
-        current_ts  = _valid_message_ts(getattr(items[index], "ts", 0.0))
-        previous_ts = _valid_message_ts(getattr(items[index - 1], "ts", 0.0))
+        current_ts  = _valid_message_ts(items[index].ts)
+        previous_ts = _valid_message_ts(items[index - 1].ts)
         if current_ts and previous_ts and current_ts - previous_ts > threshold:
             return items[index:]
     return items
@@ -91,17 +98,17 @@ def idle_gap_before_turn(
     local_id = str(current_local_id or "").strip()
     if local_id:
         for index in range(len(items) - 1, -1, -1):
-            if str(getattr(items[index], "local_id", "") or "").strip() != local_id:
+            if items[index].local_id.strip() != local_id:
                 continue
             if index == 0:
                 return 0.0
-            current_ts  = _valid_message_ts(getattr(items[index], "ts", 0.0))
-            previous_ts = _valid_message_ts(getattr(items[index - 1], "ts", 0.0))
+            current_ts  = _valid_message_ts(items[index].ts)
+            previous_ts = _valid_message_ts(items[index - 1].ts)
             if not current_ts or not previous_ts:
                 return 0.0
             return max(0.0, current_ts - previous_ts)
 
-    previous_ts = _valid_message_ts(getattr(items[-1], "ts", 0.0))
+    previous_ts = _valid_message_ts(items[-1].ts)
     current_ts  = _valid_message_ts(time.time() if now is None else now)
     if not current_ts or not previous_ts:
         return 0.0
@@ -151,6 +158,8 @@ def _serialize_message(message: StoredMessage) -> dict[str, Any]:
         payload["message_id"] = int(message.message_id)
     if message.local_id:
         payload["local_id"] = str(message.local_id)
+    if message.source_plugin:
+        payload["source_plugin"] = message.source_plugin
     return payload
 
 
@@ -250,17 +259,19 @@ class MemoryStore:
         media_items: Any       = None,
         parts: Any             = None,
         ts: float | None       = None,
+        source_plugin: str     = "",
     ) -> None:
         msg = StoredMessage(
-            role        = role,
-            name        = name,
-            user_id     = user_id,
-            message_id  = message_id,
-            local_id    = local_id or "",
-            content     = str(content or ""),
-            media_items = media_items,
-            parts       = normalize_message_parts(parts),
-            ts          = ts if ts is not None else time.time(),
+            role          = role,
+            name          = name,
+            user_id       = user_id,
+            message_id    = message_id,
+            local_id      = local_id or "",
+            content       = str(content or ""),
+            media_items   = media_items,
+            parts         = normalize_message_parts(parts),
+            ts            = ts if ts is not None else time.time(),
+            source_plugin = source_plugin,
         )
         with self._sync_lock:
             self._tombstones.discard(chat_id)
@@ -280,16 +291,17 @@ class MemoryStore:
             history = self._messages.get(chat_id, [])
             for index in range(len(history) - 1, -1, -1):
                 message = history[index]
-                if message.role != "assistant" or message.message_id is not None:
+                if not is_conversation_reply(message) or message.message_id is not None:
                     continue
                 history[index] = StoredMessage(
-                    role       = message.role,
-                    name       = message.name,
-                    ts         = message.ts,
-                    user_id    = message.user_id,
-                    message_id = normalized_id,
-                    local_id   = message.local_id,
-                    parts      = message.parts,
+                    role          = message.role,
+                    name          = message.name,
+                    ts            = message.ts,
+                    user_id       = message.user_id,
+                    message_id    = normalized_id,
+                    local_id      = message.local_id,
+                    parts         = message.parts,
+                    source_plugin = message.source_plugin,
                 )
                 self._generations[chat_id] = self._generations.get(chat_id, 0) + 1
                 self._dirty.add(chat_id)
@@ -417,14 +429,15 @@ class MemoryStore:
             if role and (content or media_items or parts):
                 out.append(
                     StoredMessage(
-                        role        = role,
-                        name        = name,
-                        user_id     = coerce_optional_int(item.get("user_id")),
-                        message_id  = coerce_optional_int(item.get("message_id")),
-                        local_id    = str(item.get("local_id", "") or ""),
-                        parts       = parts,
-                        content     = content,
-                        media_items = media_items,
+                        role          = role,
+                        name          = name,
+                        user_id       = coerce_optional_int(item.get("user_id")),
+                        message_id    = coerce_optional_int(item.get("message_id")),
+                        local_id      = str(item.get("local_id", "") or ""),
+                        parts         = parts,
+                        content       = content,
+                        media_items   = media_items,
+                        source_plugin = str(item.get("source_plugin", "") or ""),
                         ts=coerce_finite_float(item.get("ts"), default=time.time(), minimum=0.0),
                     )
                 )

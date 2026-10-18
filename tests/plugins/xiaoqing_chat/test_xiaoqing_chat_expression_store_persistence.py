@@ -86,7 +86,6 @@ def test_jargon_store_load_save_roundtrip(tmp_path):
                 chat_id_counts       = [["chat-1", 2]],
                 is_global            = True,
                 count                = 2,
-                is_jargon            = True,
                 is_complete          = True,
                 last_inference_count = 1,
                 updated_at           = 456.0,
@@ -138,7 +137,6 @@ def test_jargon_store_normalizes_malformed_record_fields(tmp_path):
     assert record.chat_id_counts == [["chat-1", 2]]
     assert record.is_global is False
     assert record.count == 0
-    assert record.is_jargon is True
     assert record.is_complete is False
     assert record.last_inference_count == 0
     assert record.updated_at > 0

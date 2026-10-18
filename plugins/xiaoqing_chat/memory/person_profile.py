@@ -52,11 +52,8 @@ def clear_profiles_and_memory(data_dir: Path, chat_id: str, memory_db: MemoryDB 
         for path in generation_path.parent.iterdir():
             if path.name.endswith((".json", ".json.bak")) and path.is_file():
                 path.unlink()
-        delete_chat = getattr(memory_db, "delete_chat", None)
-        if callable(delete_chat) and delete_chat(chat_id):
-            save = getattr(memory_db, "save", None)
-            if callable(save):
-                save()
+        if memory_db is not None and memory_db.delete_chat(chat_id):
+            memory_db.save()
 
 
 def load_profile(data_dir: Path, *, chat_id: str, subject_id: int) -> PersonProfile | None:

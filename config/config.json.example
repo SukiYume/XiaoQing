@@ -63,7 +63,7 @@
                 "models": {
                         "deepseek-flash": {
                                 "provider": "deepseek",
-                                "model": "deepseek-v4-flash",
+                                "model": "deepseek-flash",
                                 "modalities": ["text"],
                                 "request_defaults": {
                                         "thinking": {"type": "disabled"}
@@ -71,7 +71,7 @@
                         },
                         "deepseek-flash-thinking": {
                                 "provider": "deepseek",
-                                "model": "deepseek-v4-flash",
+                                "model": "deepseek-flash",
                                 "modalities": ["text"],
                                 "request_defaults": {
                                         "thinking": {"type": "enabled"},
@@ -194,10 +194,10 @@
                                         },
                                         "vision": {
                                                 "models": [
-                                                        "glm-4.6v",
                                                         "glm-4.6v-flash",
+                                                        "glm-4.1v-thinking-flash",
                                                         "glm-4v-flash",
-                                                        "glm-4.1v-thinking-flash"
+                                                        "glm-4.6v"
                                                 ],
                                                 "timeout_seconds": 20,
                                                 "total_timeout_seconds": 70,

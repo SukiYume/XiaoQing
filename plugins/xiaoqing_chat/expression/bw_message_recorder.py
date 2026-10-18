@@ -13,8 +13,9 @@ from pathlib import Path
 from typing import Any
 
 from ..config.config import PersonalityConfig
-from ..logging_utils import _log_step
-from ..memory.memory import MemoryStore
+from ..llm.llm_config import LLMCallConfig
+from ..logging_utils import log_step
+from ..memory.memory import MemoryStore, StoredMessage
 from ..store_base import StoreBase
 from .bw_expression_learner import learn_from_messages, upsert_learned
 from .bw_expression_store import ExpressionStore
@@ -105,6 +106,36 @@ class MessageRecorder(StoreBase):
         self._save()
 
 
+async def _learning_window(
+    step,
+    *,
+    chat_id: str,
+    memory_store: MemoryStore,
+    recorder: MessageRecorder,
+    min_interval_seconds: float,
+    min_messages: int,
+) -> tuple[list[StoredMessage], float] | None:
+    """冻结本轮水位并取出水位之后的新消息；间隔或条数不足时返回 None。"""
+
+    last_ts   = recorder.get_last_time(chat_id)
+    cutoff_ts = time.time()
+    if last_ts > cutoff_ts:
+        # 系统墙钟回拨后不能让未来水位永久封死该会话；回到零水位重新取快照。
+        last_ts = 0.0
+        recorder.set_last_time(chat_id, last_ts)
+    if last_ts and cutoff_ts - last_ts < float(min_interval_seconds):
+        step("bw.learn.skip.interval", {"elapsed_since_last_s": round(cutoff_ts - last_ts, 3)})
+        return None
+    # 水位在 await 之前冻结；读取期间及模型调用期间新到的消息时间戳会大于它，
+    # 因而留给下一轮，不会因为本轮耗时而被跨过去。
+    history = await memory_store.get_async(chat_id)
+    window  = [m for m in history if float(m.ts or 0.0) > last_ts]
+    if len(window) < int(min_messages):
+        step("bw.learn.skip.messages", {"window": len(window), "min_messages": int(min_messages)})
+        return None
+    return window, cutoff_ts
+
+
 async def extract_and_learn(
     *,
     context,
@@ -120,150 +151,76 @@ async def extract_and_learn(
     min_messages: int           = 10,
     self_reflect: bool          = True,
     max_store: int              = 2000,
-    temperature: float,
-    top_p: float,
-    max_tokens: int,
-    timeout_seconds: float,
-    max_retry: int,
-    retry_interval_seconds: float,
+    llm: LLMCallConfig,
 ) -> int:
     """抽取一个冻结的消息窗口，并把表达、黑话和水位作为同轮结果推进。"""
 
+    def step(name: str, fields: dict[str, Any] | None = None) -> None:
+        log_step(context, None, chat_id=chat_id, step=name, fields=fields)
+
     t0 = time.monotonic()
-    _log_step(context, None, chat_id=chat_id, step="bw.learn.start")
+    step("bw.learn.start")
     if not recorder.try_begin(chat_id):
-        _log_step(context, None, chat_id=chat_id, step="bw.learn.skip.inflight")
+        step("bw.learn.skip.inflight")
         return 0
     try:
         recorder.bind(context.data_dir)
-        last_ts   = recorder.get_last_time(chat_id)
-        cutoff_ts = time.time()
-        if last_ts > cutoff_ts:
-            # 系统墙钟回拨后不能让未来水位永久封死该会话；回到零水位重新取快照。
-            last_ts = 0.0
-            recorder.set_last_time(chat_id, last_ts)
-        if last_ts and cutoff_ts - last_ts < float(min_interval_seconds):
-            _log_step(
-                context,
-                None,
-                chat_id = chat_id,
-                step    = "bw.learn.skip.interval",
-                fields  = {"elapsed_since_last_s": round(cutoff_ts - last_ts, 3)},
-            )
-            return 0
-
-        # 水位在 await 之前冻结；读取期间及模型调用期间新到的消息时间戳会大于它，
-        # 因而留给下一轮，不会因为本轮耗时而被跨过去。
-        history = await memory_store.get_async(chat_id)
-        window  = [m for m in history if float(m.ts or 0.0) > last_ts]
-        if len(window) < int(min_messages):
-            _log_step(
-                context,
-                None,
-                chat_id = chat_id,
-                step    = "bw.learn.skip.messages",
-                fields  = {"window": len(window), "min_messages": int(min_messages)},
-            )
-            return 0
-
-        _log_step(
-            context,
-            None,
-            chat_id = chat_id,
-            step    = "bw.learn.extract.start",
-            fields  = {"window": len(window)},
+        generation = recorder.generation(chat_id)
+        frozen     = await _learning_window(
+            step,
+            chat_id              = chat_id,
+            memory_store         = memory_store,
+            recorder             = recorder,
+            min_interval_seconds = min_interval_seconds,
+            min_messages         = min_messages,
         )
-        learned = await learn_from_messages(
-            secrets                = secrets,
-            messages               = window[-80:],
-            temperature            = temperature,
-            top_p                  = top_p,
-            max_tokens             = max_tokens,
-            timeout_seconds        = timeout_seconds,
-            max_retry              = max_retry,
-            retry_interval_seconds = retry_interval_seconds,
-        )
+        if frozen is None:
+            return 0
+        window, cutoff_ts = frozen
+
+        step("bw.learn.extract.start", {"window": len(window)})
+        learned = await learn_from_messages(secrets=secrets, messages=window[-80:], llm=llm)
         if not learned:
-            recorder.set_last_time(chat_id, cutoff_ts)
-            _log_step(
-                context,
-                None,
-                chat_id = chat_id,
-                step    = "bw.learn.extract.empty",
-                fields  = {"elapsed_s": round(time.monotonic() - t0, 3)},
-            )
-            return 0
+            step("bw.learn.extract.empty", {"elapsed_s": round(time.monotonic() - t0, 3)})
 
         expr_store.bind(context.data_dir)
-        _log_step(
-            context,
-            None,
-            chat_id = chat_id,
-            step    = "bw.learn.upsert.start",
-            fields  = {"learned": len(learned)},
-        )
+        step("bw.learn.upsert.start", {"learned": len(learned)})
         changed = int(
             await upsert_learned(
-                store                  = expr_store,
-                chat_id                = chat_id,
-                learned                = learned,
-                self_reflect           = self_reflect,
-                max_store              = max_store,
-                secrets                = secrets,
-                bot_name               = bot_name,
-                personality            = personality,
-                temperature            = temperature,
-                top_p                  = top_p,
-                max_tokens             = max_tokens,
-                timeout_seconds        = timeout_seconds,
-                max_retry              = max_retry,
-                retry_interval_seconds = retry_interval_seconds,
+                store               = expr_store,
+                chat_id             = chat_id,
+                learned             = learned,
+                self_reflect        = self_reflect,
+                max_store           = max_store,
+                secrets             = secrets,
+                bot_name            = bot_name,
+                personality         = personality,
+                llm                 = llm,
+                expected_generation = generation,
             )
         )
-        _log_step(
-            context,
-            None,
-            chat_id = chat_id,
-            step    = "bw.learn.upsert.done",
-            fields  = {"changed": int(changed)},
-        )
+        step("bw.learn.upsert.done", {"changed": changed})
 
         if jargon_store is not None:
             jargon_store.bind(context.data_dir)
-            _log_step(context, None, chat_id=chat_id, step="bw.jargon.mine.start")
+            step("bw.jargon.mine.start")
             changed += int(
                 await mine_jargon(
-                    secrets                = secrets,
-                    store                  = jargon_store,
-                    chat_id                = chat_id,
-                    messages               = window[-60:],
-                    temperature            = temperature,
-                    top_p                  = top_p,
-                    max_tokens             = max_tokens,
-                    timeout_seconds        = timeout_seconds,
-                    max_retry              = max_retry,
-                    retry_interval_seconds = retry_interval_seconds,
-                    bot_name               = bot_name,
+                    secrets             = secrets,
+                    store               = jargon_store,
+                    chat_id             = chat_id,
+                    messages            = window[-60:],
+                    llm                 = llm,
+                    bot_name            = bot_name,
+                    expected_generation = generation,
                 )
             )
-            _log_step(
-                context,
-                None,
-                chat_id = chat_id,
-                step    = "bw.jargon.mine.done",
-                fields  = {"changed_total": int(changed)},
-            )
-        recorder.set_last_time(chat_id, cutoff_ts)
-        _log_step(
-            context,
-            None,
-            chat_id = chat_id,
-            step    = "bw.learn.done",
-            fields  = {
-                "changed": int(changed),
-                "elapsed_s": round(time.monotonic() - t0, 3),
-            },
-        )
+            step("bw.jargon.mine.done", {"changed_total": changed})
+        with recorder.generation_guard(chat_id, generation) as current:
+            if not current:
+                return 0
+            recorder.set_last_time(chat_id, cutoff_ts)
+        step("bw.learn.done", {"changed": changed, "elapsed_s": round(time.monotonic() - t0, 3)})
         return changed
     finally:
         recorder.end(chat_id)

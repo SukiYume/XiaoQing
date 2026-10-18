@@ -11,7 +11,7 @@ from core.sensitive_audit import summarize_sensitive
 from .config.config import XiaoQingChatConfig
 
 if TYPE_CHECKING:
-    from .runtime_state import _ChatRuntime
+    from .runtime_state import ChatRuntime
 
 
 class _InfoLogger(Protocol):
@@ -102,13 +102,13 @@ _SAFE_REASON_CODE     = re.compile(r"[a-z][a-z0-9_.:-]{0,63}\Z")
 _SAFE_CORRELATION_ID  = re.compile(r"[A-Za-z0-9_.:-]{1,64}\Z")
 
 
-def _safe_correlation_id(value: Any) -> str:
+def safe_correlation_id(value: Any) -> str:
     if not isinstance(value, str) or not _SAFE_CORRELATION_ID.fullmatch(value):
         return "-"
     return value
 
 
-def _redacted_value(value: Any) -> str:
+def redacted_value(value: Any) -> str:
     if isinstance(value, (str, bytes, bytearray, memoryview)):
         payload = value
     else:
@@ -137,18 +137,18 @@ def sanitize_log_fields(fields: dict[str, Any]) -> dict[str, Any]:
         key     = str(raw_key)
         lowered = key.lower()
         if any(part in lowered for part in _IDENTIFIER_LOG_KEY_PARTS):
-            safe[key] = _redacted_value(value)
+            safe[key] = redacted_value(value)
         elif lowered in _CORRELATION_LOG_KEYS:
-            safe[key] = _safe_correlation_id(value)
+            safe[key] = safe_correlation_id(value)
         elif lowered in _TYPE_LOG_KEYS:
             type_name = str(value)
             safe[key] = type_name if _SAFE_STATUS_TOKEN.fullmatch(type_name) else "Error"
         elif lowered in _REASON_CODE_LOG_KEYS:
             reason    = str(value)
-            safe[key] = reason if _SAFE_REASON_CODE.fullmatch(reason) else _redacted_value(reason)
+            safe[key] = reason if _SAFE_REASON_CODE.fullmatch(reason) else redacted_value(reason)
         elif lowered in _STATUS_LOG_KEYS:
             status    = str(value)
-            safe[key] = status if _SAFE_STATUS_TOKEN.fullmatch(status) else _redacted_value(status)
+            safe[key] = status if _SAFE_STATUS_TOKEN.fullmatch(status) else redacted_value(status)
         elif isinstance(value, (bool, int, float)):
             safe[key] = value
         elif isinstance(value, dict):
@@ -160,19 +160,19 @@ def sanitize_log_fields(fields: dict[str, Any]) -> dict[str, Any]:
             or "exception" in lowered
             or any(part in lowered for part in _SENSITIVE_LOG_KEY_PARTS)
         ):
-            safe[key] = _redacted_value(value)
+            safe[key] = redacted_value(value)
         elif isinstance(value, str):
             # 未知自由文本默认拒绝记录；新增可观测字段必须先在上方明确分类，
             # 才能把内容写入普通日志。
-            safe[key] = _redacted_value(value)
+            safe[key] = redacted_value(value)
         else:
             safe[key] = f"[type={type(value).__name__}]"
     return safe
 
 
-def _log_step(
+def log_step(
     context: _LogContext,
-    runtime: _ChatRuntime | XiaoQingChatConfig | None,
+    runtime: ChatRuntime | XiaoQingChatConfig | None,
     *,
     chat_id: str,
     step: str,
@@ -190,7 +190,7 @@ def _log_step(
     if not log_enabled:
         return
 
-    payload: dict[str, Any] = {"step": str(step), "chat_id": _redacted_value(chat_id)}
+    payload: dict[str, Any] = {"step": str(step), "chat_id": redacted_value(chat_id)}
     if fields:
         payload.update(sanitize_log_fields(fields))
     try:

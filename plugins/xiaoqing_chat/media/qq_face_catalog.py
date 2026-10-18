@@ -17,7 +17,7 @@ from typing import Any
 
 from core.plugin_base import ensure_dir, load_json, write_json
 
-from .qq_face import _clean_face_text
+from .qq_face import clean_face_text
 
 _LEGACY_QQ_FACE_LABEL_OVERRIDES: dict[str, tuple[str, ...]] = {
     "14": ("微笑",),
@@ -165,7 +165,7 @@ def _normalize_labels(
     else:
         items = [values]
     for item in items:
-        label = _clean_face_text(item)
+        label = clean_face_text(item)
         if not label:
             continue
         if label.startswith("id=") or label == "系统表情":

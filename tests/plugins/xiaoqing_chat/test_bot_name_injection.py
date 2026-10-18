@@ -3,17 +3,16 @@ from unittest.mock import patch
 
 from plugins.xiaoqing_chat.config.config import PersonalityConfig, XiaoQingChatConfig
 from plugins.xiaoqing_chat.expression.expr_utils import render_dialogue
-from plugins.xiaoqing_chat.llm.prompt_builder import build_prompt_messages
-from plugins.xiaoqing_chat.llm.reply_checker import (
-    _heuristic_check,
-    _requires_configured_profile_boundary,
-    _requires_llm_semantic_check,
+from plugins.xiaoqing_chat.llm.local_checks import (
+    heuristic_check,
+    requires_configured_profile_boundary,
+    requires_llm_semantic_check,
 )
+from plugins.xiaoqing_chat.llm.prompt_builder import build_prompt_messages
 from plugins.xiaoqing_chat.main import _help_text
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.persona import compose_persona_identity
-from plugins.xiaoqing_chat.planning.pfc_action_planner import _build_persona_text
-from plugins.xiaoqing_chat.reply_generator import _is_persona_intro_query
+from plugins.xiaoqing_chat.reply_fallbacks import _is_persona_intro_query
 
 
 def test_default_personality_keeps_name_out_of_plugin_config() -> None:
@@ -26,7 +25,7 @@ def test_default_personality_keeps_name_out_of_plugin_config() -> None:
 def test_custom_name_is_injected_into_planner_and_generation_prompt() -> None:
     personality = PersonalityConfig(identity="住校的理工科学生。", states=[])
 
-    persona_text = _build_persona_text("阿澄", personality)
+    persona_text = compose_persona_identity(personality.identity, "阿澄")
     messages     = build_prompt_messages(
         is_private    = False,
         bot_name      = "阿澄",
@@ -54,7 +53,7 @@ def test_custom_name_drives_persona_queries() -> None:
     assert _is_persona_intro_query("阿澄是什么样的人", bot_name="阿澄") is True
     assert _is_persona_intro_query("小青是什么样的人", bot_name="阿澄") is False
     assert (
-        _requires_configured_profile_boundary(
+        requires_configured_profile_boundary(
             "阿澄在哪所大学",
             grounding,
             bot_name="阿澄",
@@ -62,7 +61,7 @@ def test_custom_name_drives_persona_queries() -> None:
         is True
     )
     assert (
-        _requires_configured_profile_boundary(
+        requires_configured_profile_boundary(
             "小青在哪所大学",
             grounding,
             bot_name="阿澄",
@@ -70,7 +69,7 @@ def test_custom_name_drives_persona_queries() -> None:
         is False
     )
     assert (
-        _requires_llm_semantic_check(
+        requires_llm_semantic_check(
             reply        = "我没设定具体学校。",
             current_text = "阿澄多大",
             bot_name     = "阿澄",
@@ -85,7 +84,7 @@ def test_history_uses_current_name_and_keeps_assistant_role_after_rename() -> No
     ]
 
     dialogue = render_dialogue(history, bot_name="阿澄")
-    repeated = _heuristic_check(
+    repeated = heuristic_check(
         reply                = "刚刚说过",
         history              = history,
         max_repeat_compare   = 2,

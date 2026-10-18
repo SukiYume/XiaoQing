@@ -9,13 +9,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from core.atomic_store import keyed_path_lock
 from core.plugin_base import write_json
 
+from ..llm.llm_config import LLMCallConfig
 from ..memory.memory import StoredMessage
 from ..memory.memory_db import MemoryDB
+from ..memory.person_profile import get_profile_generation, profile_generation_path
 from ..memory.topic_summary_cache import load_topic_summary_entries, topic_summary_cache_path
 from ..utils.json_parsing import parse_first_json_object
-from .llm_client import chat_completions
+from .gateway import chat_completions
 from .prompt_builder import ChatMessage, build_dialogue_prompt
 
 
@@ -104,6 +107,26 @@ def _persist_topic_summary(
     cache: list[TopicSummary],
     memory_db: MemoryDB,
     summary: TopicSummary,
+    expected_generation: str | None = None,
+) -> None:
+    with keyed_path_lock(profile_generation_path(data_dir, chat_id)):
+        if (
+            expected_generation is not None
+            and get_profile_generation(data_dir, chat_id) != expected_generation
+        ):
+            return
+        _persist_current_topic_summary(
+            data_dir=data_dir, chat_id=chat_id, cache=cache, memory_db=memory_db, summary=summary
+        )
+
+
+def _persist_current_topic_summary(
+    *,
+    data_dir: Path,
+    chat_id: str,
+    cache: list[TopicSummary],
+    memory_db: MemoryDB,
+    summary: TopicSummary,
 ) -> None:
     _save_cache(data_dir, chat_id, cache)
     memory_db.bind(data_dir)
@@ -131,12 +154,8 @@ async def maybe_update_topic_summary(
     history: Sequence[StoredMessage],
     min_messages_per_update: int,
     max_cache_topics: int,
-    temperature: float,
-    top_p: float,
-    max_tokens: int,
-    timeout_seconds: float,
-    max_retry: int,
-    retry_interval_seconds: float,
+    llm: LLMCallConfig,
+    expected_generation: str | None = None,
 ) -> None:
     """达到增量阈值时生成一次摘要，并原子更新缓存和检索索引。"""
 
@@ -144,12 +163,17 @@ async def maybe_update_topic_summary(
         return
     if len(history) < min_messages_per_update:
         return
+    generation = (
+        get_profile_generation(data_dir, chat_id)
+        if expected_generation is None
+        else expected_generation
+    )
+    if generation != get_profile_generation(data_dir, chat_id):
+        return
     cache = await asyncio.to_thread(_load_cache, data_dir, chat_id)
     if cache:
         last_updated = max((float(t.updated_at or 0.0) for t in cache), default=0.0)
-        observed_since_last = sum(
-            1 for msg in history if float(getattr(msg, "ts", 0.0) or 0.0) > last_updated
-        )
+        observed_since_last = sum(1 for msg in history if float(msg.ts or 0.0) > last_updated)
         if observed_since_last < min_messages_per_update:
             return
 
@@ -161,12 +185,12 @@ async def maybe_update_topic_summary(
     out          = await chat_completions(
         secrets                = secrets,
         messages               = payload_msgs,
-        temperature            = min(0.6, temperature),
-        top_p                  = top_p,
-        max_tokens             = max_tokens,
-        timeout_seconds        = timeout_seconds,
-        max_retry              = max_retry,
-        retry_interval_seconds = retry_interval_seconds,
+        temperature            = min(0.6, llm.temperature),
+        top_p                  = llm.top_p,
+        max_tokens             = llm.max_tokens,
+        timeout_seconds        = llm.timeout_seconds,
+        max_retry              = llm.max_retry,
+        retry_interval_seconds = llm.retry_interval_seconds,
     )
     obj = parse_first_json_object(out)
     if not obj:
@@ -197,9 +221,10 @@ async def maybe_update_topic_summary(
         cache = cache[-max_cache_topics:]
     await asyncio.to_thread(
         _persist_topic_summary,
-        data_dir  = data_dir,
-        chat_id   = chat_id,
-        cache     = cache,
-        memory_db = memory_db,
-        summary   = ts,
+        data_dir            = data_dir,
+        chat_id             = chat_id,
+        cache               = cache,
+        memory_db           = memory_db,
+        summary             = ts,
+        expected_generation = generation,
     )

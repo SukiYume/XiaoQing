@@ -15,7 +15,7 @@ from core.delivery import (
     attach_receipt,
 )
 from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
-from plugins.xiaoqing_chat.frequency_control import _freq_record, _should_reply_decision
+from plugins.xiaoqing_chat.frequency_control import decide_reply, record_reply_frequency
 from plugins.xiaoqing_chat.generation_limiter import (
     GenerationLimiter,
     GenerationLimitExceeded,
@@ -279,17 +279,16 @@ async def test_continuous_reply_limit_blocks_exact_next_reply(
     state = ChatRuntimeState()
     monkeypatch.setattr("plugins.xiaoqing_chat.frequency_control.time.time", lambda: 100.0)
 
-    _freq_record("g1", runtime, state, forced=False)
+    record_reply_frequency("g1", runtime, state, forced=False)
     assert state.get_continuous_reply_count("g1") == 1
     assert state.get_continuous_cooldown_until("g1") == 0.0
 
-    _freq_record("g1", runtime, state, forced=False)
+    record_reply_frequency("g1", runtime, state, forced=False)
     assert state.get_continuous_reply_count("g1") == 0
     assert state.get_continuous_cooldown_until("g1") == 110.0
-    decision = await _should_reply_decision(runtime, state, "g1", "hello", False, False)
-    assert decision.should_reply is False
-    assert decision.reason == "continuous_cooldown"
+    assert await decide_reply(runtime, state, "g1", "hello", False, False) is False
+    assert state.get_reply_gate_decision("g1").reason == "continuous_cooldown"
 
     monkeypatch.setattr("plugins.xiaoqing_chat.frequency_control.time.time", lambda: 111.0)
-    decision = await _should_reply_decision(runtime, state, "g1", "hello", False, False)
-    assert decision.should_reply is True
+    assert await decide_reply(runtime, state, "g1", "hello", False, False) is True
+    assert state.get_reply_gate_decision("g1").reason == "allowed"

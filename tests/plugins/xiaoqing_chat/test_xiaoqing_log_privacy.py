@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
 from plugins.xiaoqing_chat.llm.prompt_builder import ChatMessage
-from plugins.xiaoqing_chat.logging_utils import _log_step, sanitize_log_fields
+from plugins.xiaoqing_chat.logging_utils import log_step, sanitize_log_fields
 from plugins.xiaoqing_chat.reply_generator import _log_prompt_audit_metadata
 
 CANARY = "CR220_XIAOQING_PRIVATE_PROMPT_CANARY"
@@ -82,7 +82,7 @@ def test_log_step_keeps_stage_and_correlation_but_never_payload(
     runtime = SimpleNamespace(cfg=SimpleNamespace(debug=SimpleNamespace(log_steps=True)))
 
     with caplog.at_level(logging.INFO):
-        _log_step(
+        log_step(
             context,
             runtime,
             chat_id = "private-chat-id",
@@ -165,7 +165,7 @@ def test_log_step_rejects_malicious_correlation_ids() -> None:
 async def test_reset_audit_fingerprints_all_actor_identifiers(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from plugins.xiaoqing_chat.handlers_internal import handle_internal_impl
+    from plugins.xiaoqing_chat import commands
 
     chat_id = f"chat-{CANARY}"
     event   = {
@@ -174,7 +174,7 @@ async def test_reset_audit_fingerprints_all_actor_identifiers(
         "user_id": f"operator-{CANARY}",
     }
     state = SimpleNamespace(
-        pop_persist_task = lambda _chat_id: None,
+        pop_persist_task = lambda event_chat_id: None,
         inc_stats        = lambda *_args: None,
     )
     hctx = SimpleNamespace(
@@ -185,21 +185,16 @@ async def test_reset_audit_fingerprints_all_actor_identifiers(
     )
     context = SimpleNamespace(logger=logging.getLogger("test.cr220.xiaoqing.reset-audit"))
 
-    async def reset_chat_session(_state, _chat_id: str, _data_dir: Path) -> None:
+    async def reset_chat_session(_state, event_chat_id: str, _data_dir: Path) -> None:
         return None
 
     with caplog.at_level(logging.INFO):
-        result = await handle_internal_impl(
-            "重置",
-            "确认",
-            event,
-            context,
-            handler_context_from_event = lambda _event, _context: hctx,
-            get_lock                   = lambda _chat_id: asyncio.Lock(),
-            reset_chat_session         = reset_chat_session,
-            cancel_pending_task        = lambda _task: None,
-            is_admin_operator_fn       = lambda _event, _context: True,
-        )
+        with (
+            patch.object(commands.HandlerContext, "from_event", return_value=hctx),
+            patch.object(commands, "reset_chat_session", reset_chat_session),
+            patch.object(commands, "is_admin_operator", return_value=True),
+        ):
+            result = await commands.handle_internal("重置", "确认", event, context)
 
     logged = "\n".join(record.getMessage() for record in caplog.records)
     assert result == [{"type": "text", "data": {"text": "✅ 已重置会话记忆"}}]
