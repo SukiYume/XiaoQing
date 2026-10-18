@@ -695,6 +695,126 @@ async def _read_turn_meaning(
     )
 
 
+def _reading_key(check_input: _LLMCheckInput) -> tuple[str, ...]:
+    """独立阅读只看这些材料；材料相同即可复用同一份阅读。"""
+    return (
+        check_input.bot_name,
+        check_input.current_sender,
+        check_input.current_text,
+        check_input.history_text,
+        check_input.jargon_explanation,
+    )
+
+
+class TurnReadingCache:
+    """本轮对话的独立阅读与候选无关：生成候选时提前发起，重生成时按相同材料复用。
+
+    阅读失败或无效时清空缓存，本次审查照常记为不可用，下一次尝试重新阅读。
+    """
+
+    def __init__(self) -> None:
+        self._key: tuple[str, ...] | None                      = None
+        self._task: asyncio.Task[dict[str, Any] | None] | None = None
+
+    def _launch(
+        self,
+        *,
+        checker_secrets: dict[str, Any],
+        check_input: _LLMCheckInput,
+        request_policy: _LLMRequestPolicy,
+    ) -> asyncio.Task[dict[str, Any] | None]:
+        key = _reading_key(check_input)
+        if self._task is None or self._key != key:
+            self.cancel()
+            self._key  = key
+            self._task = asyncio.create_task(
+                _read_turn_meaning(
+                    checker_secrets = checker_secrets,
+                    check_input     = check_input,
+                    request_policy  = request_policy,
+                )
+            )
+        return self._task
+
+    def prefetch(
+        self,
+        *,
+        secrets: dict[str, Any],
+        bot_name: str,
+        current_text: str,
+        current_sender: str,
+        chat_history_text: str,
+        jargon_explanation: str,
+        max_tokens: int,
+        timeout_seconds: float,
+    ) -> None:
+        """按审查将使用的同一份材料提前发起阅读；材料未变时保留进行中的阅读。"""
+        if "_ai" in secrets and secrets.get("_ai") is None:
+            return
+        self._launch(
+            checker_secrets = _checker_secrets(secrets),
+            check_input     = _LLMCheckInput(
+                bot_name                         = resolve_bot_name(bot_name),
+                reply                            = "",
+                goal                             = "",
+                current_text                     = current_text,
+                policy_text                      = "",
+                grounding_text                   = "",
+                history_text                     = chat_history_text,
+                allow_low_stakes_persona_fiction = False,
+                current_sender                   = current_sender,
+                jargon_explanation               = jargon_explanation,
+            ),
+            request_policy=_LLMRequestPolicy(
+                max_tokens             = max_tokens,
+                timeout_seconds        = timeout_seconds,
+                max_retry              = 0,
+                retry_interval_seconds = 0.2,
+            ),
+        )
+
+    async def read(
+        self,
+        *,
+        checker_secrets: dict[str, Any],
+        check_input: _LLMCheckInput,
+        request_policy: _LLMRequestPolicy,
+    ) -> dict[str, Any] | None:
+        task = self._launch(
+            checker_secrets=checker_secrets, check_input=check_input, request_policy=request_policy
+        )
+        try:
+            # 审查超时只取消这次等待，进行中的阅读留给下一次尝试。
+            reading = await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.cancelled():
+                self._forget(task)
+            raise
+        except Exception:
+            self._forget(task)
+            raise
+        if reading is None:
+            self._forget(task)
+        return reading
+
+    def _forget(self, task: asyncio.Task[dict[str, Any] | None]) -> None:
+        if self._task is task:
+            self._key  = None
+            self._task = None
+
+    def cancel(self) -> None:
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+        self._key  = None
+        self._task = None
+
+    async def aclose(self) -> None:
+        task = self._task
+        self.cancel()
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
+
+
 def _premise_rejection(checks: list[Any], reply: str) -> ReplyCheckResult | None:
     """逐条核对候选的事件前提；协议不完整记为审查不可用，事实前提不成立判硬错误。"""
 
@@ -730,11 +850,13 @@ async def _semantic_turn_check(
     secrets: dict[str, Any],
     check_input: _LLMCheckInput,
     request_policy: _LLMRequestPolicy,
+    turn_reading: TurnReadingCache | None = None,
 ) -> ReplyCheckResult:
     """先独立读取对话，再核对候选的事实前提、事件关系和交流动作。"""
     checker_secrets = _checker_secrets(secrets)
     started         = asyncio.get_running_loop().time()
-    reading         = await _read_turn_meaning(
+    read            = turn_reading.read if turn_reading is not None else _read_turn_meaning
+    reading         = await read(
         checker_secrets=checker_secrets, check_input=check_input, request_policy=request_policy
     )
     if not reading:
@@ -926,6 +1048,7 @@ async def check_reply(
     allow_low_stakes_persona_fiction: bool = False,
     current_sender: str                    = "",
     jargon_explanation: str                = "",
+    turn_reading: TurnReadingCache | None  = None,
 ) -> ReplyCheckResult:
     bot_name         = resolve_bot_name(bot_name)
     heuristic_source = str(heuristic_reply or reply or "").strip()
@@ -976,9 +1099,15 @@ async def check_reply(
     )
 
     async def run_check(*, semantic: bool) -> ReplyCheckResult:
-        check = _semantic_turn_check if semantic else _llm_check
         try:
-            return await check(
+            if semantic:
+                return await _semantic_turn_check(
+                    secrets        = secrets,
+                    check_input    = check_input,
+                    request_policy = request_policy,
+                    turn_reading   = turn_reading,
+                )
+            return await _llm_check(
                 secrets=secrets, check_input=check_input, request_policy=request_policy
             )
         except Exception as exc:

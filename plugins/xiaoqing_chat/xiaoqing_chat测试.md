@@ -67,6 +67,7 @@ python -m pytest -q tests/plugins/xiaoqing_chat
 | 表达学习 | `test_xiaoqing_chat_expression_store_persistence.py`、`test_xiaoqing_expression_retry_reflection.py`、`test_xiaoqing_chat_meme_learning.py` | 表达与黑话的增量合并、反思重试、本群词义优先、明确更正、学习期间重置 |
 | 隔离与隐私 | `test_xiaoqing_chat_tenant_scope.py`、`test_xiaoqing_log_privacy.py`、`test_xiaoqing_chat_audit_regressions.py` | 跨会话隔离、日志脱敏、敏感投递跳过、重置后旧任务失效、行动历史上限 |
 | 配置与运行时 | `test_xiaoqing_chat_runtime_hardening.py`、`test_xiaoqing_chat_cache_lifetimes.py` | 配置校验与加载失败回退、热加载、缓存生命周期 |
+| 回复耗时 | `test_xiaoqing_chat_reply_latency.py` | 本轮阅读与生成并行且材料与审查内阅读一致、重写复用、材料变化重读、失败不复用、审查超时保留阅读、`risk` 模式不预读、发送前延迟扣除已用时间 |
 | 实验与脚本 | `test_xiaoqing_chat_anthropomorphic_experiment.py`、`tests/tooling/test_xiaoqing_chat_quality_script.py` | 拟人实验矩阵与投递回执、质量探针的剧本与机器门禁 |
 
 插件契约测试（日志脱敏、调用参数与签名一致性）位于 `tests/plugins/contracts`，建议一起运行：
