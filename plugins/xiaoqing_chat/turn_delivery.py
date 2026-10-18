@@ -504,18 +504,26 @@ async def _apply_smalltalk_presend_delay(
     )
     if not apply_humanize or not has_outbound_batches:
         return apply_humanize
-    delay = _compute_typing_delay(
+    target = _compute_typing_delay(
         finalization.runtime,
         input_text  = finalization.prepared.text,
         output_text = display_reply_text(finalization.generated),
     )
+    # 读消息和打字的时间从收到消息算起；理解、规划和生成已经花掉的时间不再重复等待。
+    elapsed = max(0.0, time.monotonic() - finalization.started_at)
+    delay   = max(0.0, target - elapsed)
     if delay > 0:
         log_step(
             finalization.context,
             finalization.runtime,
             chat_id = finalization.chat_id,
             step    = "smalltalk.humanize.delay",
-            fields  = {"phase": "pre_send", "delay_s": round(delay, 3)},
+            fields  = {
+                "phase": "pre_send",
+                "delay_s": round(delay, 3),
+                "target_s": round(target, 3),
+                "elapsed_s": round(elapsed, 3),
+            },
         )
         await asyncio.sleep(delay)
     return apply_humanize

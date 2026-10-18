@@ -6,8 +6,6 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-if TYPE_CHECKING:
-    pass
 from .llm.check_result import ReplyCheckResult
 from .llm.postprocess import join_reply
 from .media.marker_resolver import (
@@ -20,6 +18,9 @@ from .message_parts import (
     normalize_message_parts,
 )
 from .reply_payload import build_reply_payload_from_parts
+
+if TYPE_CHECKING:
+    from .llm.reply_checker import TurnReadingCache
 
 
 @dataclass(frozen=True)
@@ -123,6 +124,8 @@ class ReplyAttemptState:
     cached_memory: str | None                   = None
     regen_used: int                             = 0
     extra_check_hint: str                       = ""
+    # 本轮对话的独立阅读与候选无关，各次尝试共用。
+    turn_reading: TurnReadingCache | None = None
 
 
 @dataclass(frozen=True)

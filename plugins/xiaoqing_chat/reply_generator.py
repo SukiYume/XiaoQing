@@ -33,7 +33,7 @@ from .llm.prompt_builder import (
     build_prompt_messages,
     build_recent_media_block,
 )
-from .llm.reply_checker import check_reply
+from .llm.reply_checker import TurnReadingCache, check_reply
 from .logging_utils import log_step, safe_correlation_id
 from .media.marker_resolver import (
     ResolvedMarker,
@@ -447,7 +447,11 @@ def _checker_grounding_text(plan: ReplyGenerationPlan, memory_block: str) -> str
 
 
 async def _run_checker(
-    plan: ReplyGenerationPlan, draft: ReplyDraft, trimmed_history: Any, memory_block: str
+    plan: ReplyGenerationPlan,
+    draft: ReplyDraft,
+    trimmed_history: Any,
+    memory_block: str,
+    turn_reading: TurnReadingCache | None,
 ) -> ReplyCheckResult:
     """调用审查；超时或异常一律记为审查不可用，由调用方按模式决定是否放行。"""
 
@@ -484,6 +488,7 @@ async def _run_checker(
                 llm_checker_mode=cfg.llm_checker_mode,
                 check_omitted_persona_episode=not plan.forced,
                 allow_low_stakes_persona_fiction=allows_low_stakes_persona_fiction(plan.runtime),
+                turn_reading=turn_reading,
             ),
             timeout=timeout + 0.25,
         )
@@ -536,6 +541,7 @@ async def _check_candidate_draft(
     draft: ReplyDraft,
     trimmed_history: Any,
     memory_block: str,
+    turn_reading: TurnReadingCache | None = None,
 ) -> RejectedCandidate | None:
     cfg = plan.runtime.cfg.reply_check
     if not cfg.enable_reply_checker:
@@ -548,7 +554,7 @@ async def _check_candidate_draft(
         fields  = {"llm_checker": cfg.enable_llm_checker},
     )
     check = _apply_unavailable_policy(
-        plan, await _run_checker(plan, draft, trimmed_history, memory_block)
+        plan, await _run_checker(plan, draft, trimmed_history, memory_block, turn_reading)
     )
     log_step(
         plan.context,
@@ -611,6 +617,33 @@ def _shrink_context_after(
     return True
 
 
+def _semantic_reading_cache(plan: ReplyGenerationPlan) -> TurnReadingCache | None:
+    """开启语义审查时为本轮建一份阅读缓存，供审查和重生成共用。"""
+    cfg = plan.runtime.cfg.reply_check
+    if cfg.enable_reply_checker and cfg.enable_llm_checker and cfg.enable_semantic_checker:
+        return TurnReadingCache()
+    return None
+
+
+def _prefetch_turn_reading(
+    plan: ReplyGenerationPlan, attempt: ReplyAttemptState, trimmed_history: Any
+) -> None:
+    """always 模式每条候选都要语义审查，阅读与候选无关，可与生成同时进行。"""
+    cfg = plan.runtime.cfg.reply_check
+    if attempt.turn_reading is None or cfg.llm_checker_mode.strip().lower() != "always":
+        return
+    attempt.turn_reading.prefetch(
+        secrets            = plan.secrets,
+        bot_name           = plan.bot_name,
+        current_text       = plan.text,
+        current_sender     = event_sender_name(plan.event),
+        chat_history_text  = _checker_history_text(plan, trimmed_history),
+        jargon_explanation = plan.jargon_explanation,
+        max_tokens         = cfg.max_tokens,
+        timeout_seconds    = max(0.1, cfg.timeout_seconds),
+    )
+
+
 async def generate_reply_draft(
     *,
     text: str,
@@ -646,13 +679,25 @@ async def generate_reply_draft(
     attempt = ReplyAttemptState(
         max_items         = plan.max_context_size,
         prefetched_memory = prefetched_memory_task,
+        turn_reading      = _semantic_reading_cache(plan),
     )
+    try:
+        return await _generate_checked_draft(plan, attempt)
+    finally:
+        if attempt.turn_reading is not None:
+            await attempt.turn_reading.aclose()
+
+
+async def _generate_checked_draft(
+    plan: ReplyGenerationPlan, attempt: ReplyAttemptState
+) -> ReplyDraft | None:
     while True:
         if _is_turn_stale(plan.chat_id, plan.event):
             log_step(plan.context, plan.runtime, chat_id=plan.chat_id, step="reply.stale.abort")
             return None
         trimmed_history = plan.history[-attempt.max_items :] if attempt.max_items > 0 else []
-        memory_block    = await _load_attempt_memory(plan, attempt, trimmed_history)
+        _prefetch_turn_reading(plan, attempt, trimmed_history)
+        memory_block = await _load_attempt_memory(plan, attempt, trimmed_history)
         if _is_turn_stale(plan.chat_id, plan.event):
             return None
         payload_messages = _build_attempt_messages(plan, attempt, trimmed_history, memory_block)
@@ -680,7 +725,9 @@ async def generate_reply_draft(
                 if not plan.forced:
                     return None
                 raise ReplyRejected("未生成可发送的回复", True)
-            rejected   = await _check_candidate_draft(plan, draft, trimmed_history, memory_block)
+            rejected = await _check_candidate_draft(
+                plan, draft, trimmed_history, memory_block, attempt.turn_reading
+            )
             regen_step = "reply.check.regen"
             if rejected is None:
                 log_step(

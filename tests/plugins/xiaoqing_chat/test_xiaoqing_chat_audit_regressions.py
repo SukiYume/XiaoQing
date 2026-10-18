@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -220,7 +221,7 @@ async def test_new_message_or_reset_prevents_old_reply_commit(tmp_path, change):
             {"group_id": 1, "user_id": 2},
             hctx.context,
             hctx,
-            started_at=0,
+            started_at=time.monotonic(),
         )
     await update
     if change == "reset_before_ack":
