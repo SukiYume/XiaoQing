@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
+from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
+from plugins.xiaoqing_chat.planning.pfc_engine import PFCRunResult
+from plugins.xiaoqing_chat.planning.pfc_state import PFCConversationState
 from tests.helpers.xiaoqing_chat_test_support import (
     AsyncMock,
     MagicMock,
@@ -12,7 +15,9 @@ from tests.helpers.xiaoqing_chat_test_support import (
     _make_hctx,
     asyncio,
     patch,
+    patch_turn,
     pytest,
+    reply_plan,
 )
 
 mock_context       = _fixture_support.mock_context
@@ -37,7 +42,7 @@ async def test_smalltalk_no_reply_preserves_wait_action_name_in_action_history(
     state.inc_stats                       = Mock()
     state.action_history.append           = Mock()
     state.pfc_state_store.get_async       = AsyncMock(
-        return_value=SimpleNamespace(
+        return_value=PFCConversationState(
             chat_id                      = "g67890",
             ignore_until_ts              = 0.0,
             ended                        = False,
@@ -69,26 +74,32 @@ async def test_smalltalk_no_reply_preserves_wait_action_name_in_action_history(
     hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)
     with (
         patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx),
-        patch("plugins.xiaoqing_chat.handlers._get_lock", return_value=lock),
-        patch("plugins.xiaoqing_chat.handlers._should_ignore_text", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers.chat_lock", return_value=lock),
+        patch("plugins.xiaoqing_chat.handlers.is_ignored_text", return_value=False),
         patch(
-            "plugins.xiaoqing_chat.handlers._ensure_user_message_recorded",
+            "plugins.xiaoqing_chat.turn_generation.ensure_user_message_recorded",
             new=AsyncMock(return_value="u1"),
         ),
-        patch("plugins.xiaoqing_chat.handlers._should_reply", new=AsyncMock(return_value=True)),
+        patch("plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=True)),
         patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
-        patch("plugins.xiaoqing_chat.handlers._build_memory_block", new=AsyncMock(return_value="")),
         patch(
-            "plugins.xiaoqing_chat.handlers.run_pfc_once",
+            "plugins.xiaoqing_chat.turn_generation.retrieve_memory_context",
+            new=AsyncMock(return_value=""),
+        ),
+        patch(
+            "plugins.xiaoqing_chat.turn_generation.run_pfc_once",
             new=AsyncMock(
-                return_value=SimpleNamespace(reply="", action="wait", reason="再观察", ended=False)
+                return_value=PFCRunResult(reply="", action="wait", reason="再观察", ended=False)
             ),
         ),
-        patch("plugins.xiaoqing_chat.handlers._most_recent_user_local_id", return_value="u1"),
-        patch("plugins.xiaoqing_chat.handlers._schedule_memory_persist"),
-        patch("plugins.xiaoqing_chat.handlers._schedule_action_history_flush"),
-        patch("plugins.xiaoqing_chat.handlers._schedule_pfc_state_flush"),
-        patch("plugins.xiaoqing_chat.handlers._log_step"),
+        patch(
+            "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
+            return_value="u1",
+        ),
+        patch("plugins.xiaoqing_chat.handlers.schedule_memory_persist"),
+        patch("plugins.xiaoqing_chat.handlers.schedule_action_history_flush"),
+        patch_turn("schedule_pfc_state_flush"),
+        patch("plugins.xiaoqing_chat.handlers.log_step"),
     ):
         result = await _maybe_reply_smalltalk("继续看看", sample_group_event, mock_context)
 
@@ -158,9 +169,9 @@ async def test_generate_reply_forced_soft_rejection_uses_last_contextual_candida
 ):
     from contextlib import ExitStack
 
-    from plugins.xiaoqing_chat.llm.reply_checker import ReplyCheckResult
+    from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
     from plugins.xiaoqing_chat.planning.planned_action import PlannedAction
-    from plugins.xiaoqing_chat.reply_generator import _generate_reply_draft
+    from plugins.xiaoqing_chat.reply_generator import generate_reply_draft
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
@@ -204,16 +215,7 @@ async def test_generate_reply_forced_soft_rejection_uses_last_contextual_candida
     state.review_store.bind = Mock()
     state.inc_stats         = Mock()
 
-    fg = SimpleNamespace(
-        timeout_seconds        = 3.0,
-        max_retry              = 0,
-        retry_interval_seconds = 0.2,
-        to_dict                = lambda: {
-            "timeout_seconds": 3.0,
-            "max_retry": 0,
-            "retry_interval_seconds": 0.2,
-        },
-    )
+    fg = LLMCallConfig(timeout_seconds=3.0, max_retry=0, retry_interval_seconds=0.2)
     action = PlannedAction(
         action        = "reply",
         think_level   = 1,
@@ -224,46 +226,44 @@ async def test_generate_reply_forced_soft_rejection_uses_last_contextual_candida
 
     with ExitStack() as stack:
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._get_bot_name", return_value="小青")
+            patch("plugins.xiaoqing_chat.reply_plan.configured_bot_name", return_value="小青")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._chat_id", return_value="g1")
+            patch("plugins.xiaoqing_chat.reply_plan.event_chat_id", return_value="g1")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._is_private", return_value=False)
+            patch("plugins.xiaoqing_chat.reply_plan.is_private_event", return_value=False)
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator._get_ai_route_context",
+                "plugins.xiaoqing_chat.reply_plan.ai_route_context",
                 return_value={"api_base": "http://test", "api_key": "key", "model": "test-model"},
             )
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._resolve_llm_config", return_value=fg)
+            patch("plugins.xiaoqing_chat.reply_plan.llm_call_config", return_value=fg)
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._build_profile_block", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.sender_profile_context", return_value="")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._build_knowledge_block", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.knowledge_context", return_value="")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._build_expression_block", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.expression_context", return_value="")
+        )
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_plan.jargon_context", return_value="")
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator._build_jargon_explanation", return_value=""
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator._build_memory_block",
+                "plugins.xiaoqing_chat.reply_generator.retrieve_memory_context",
                 new=AsyncMock(return_value=""),
             )
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator._build_tool_info_block",
+                "plugins.xiaoqing_chat.reply_plan.tool_status_context",
                 new=AsyncMock(return_value=""),
             )
         )
@@ -289,11 +289,11 @@ async def test_generate_reply_forced_soft_rejection_uses_last_contextual_candida
             )
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator.join_reply", return_value=candidate)
+            patch("plugins.xiaoqing_chat.reply_draft.join_reply", return_value=candidate)
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator._heuristic_check",
+                "plugins.xiaoqing_chat.reply_generator.heuristic_check",
                 return_value=None,
             )
         )
@@ -311,7 +311,7 @@ async def test_generate_reply_forced_soft_rejection_uses_last_contextual_candida
             )
         )
 
-        draft = await _generate_reply_draft(
+        draft = await generate_reply_draft(
             text           = "请直接说明情况，别反问我。",
             event          = {"group_id": 1, "user_id": 2},
             context        = mock_context,
@@ -329,13 +329,11 @@ async def test_generate_reply_forced_soft_rejection_uses_last_contextual_candida
 
 
 def test_finish_forced_structural_rejection_uses_safe_fallback() -> None:
-    from plugins.xiaoqing_chat.llm.reply_checker import ReplyCheckResult
-    from plugins.xiaoqing_chat.reply_generator import (
-        _finish_rejected_candidate,
-        _RejectedCandidate,
-    )
+    from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
+    from plugins.xiaoqing_chat.reply_draft import RejectedCandidate
+    from plugins.xiaoqing_chat.reply_fallbacks import finish_rejected_candidate
 
-    rejected = _RejectedCandidate(
+    rejected = RejectedCandidate(
         text   = "重复回复",
         result = ReplyCheckResult(
             suitable    = False,
@@ -344,22 +342,22 @@ def test_finish_forced_structural_rejection_uses_safe_fallback() -> None:
         ),
     )
 
-    draft = _finish_rejected_candidate(SimpleNamespace(forced=True), rejected)
+    draft = finish_rejected_candidate(reply_plan(forced=True), rejected)
 
     assert draft is not None
-    assert draft.text == "看到了，我在。"
+    assert draft.text == "等我一下，脑子突然卡壳了"
     assert draft.text != rejected.text
 
 
 def test_finish_forced_persona_grounding_rejection_keeps_conversation_alive(mock_context) -> None:
-    from plugins.xiaoqing_chat.llm.reply_checker import ReplyCheckResult
-    from plugins.xiaoqing_chat.reply_generator import (
-        _PERSONA_GROUNDING_FALLBACKS,
-        _finish_rejected_candidate,
-        _RejectedCandidate,
+    from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
+    from plugins.xiaoqing_chat.reply_draft import RejectedCandidate
+    from plugins.xiaoqing_chat.reply_fallbacks import (
+        PERSONA_GROUNDING_FALLBACKS,
+        finish_rejected_candidate,
     )
 
-    plan = SimpleNamespace(
+    plan = reply_plan(
         forced     = True,
         request_id = "grounding-test",
         text       = "一个要求角色补全未知人物信息的问题",
@@ -378,7 +376,7 @@ def test_finish_forced_persona_grounding_rejection_keeps_conversation_alive(mock
             )
         ),
     )
-    rejected = _RejectedCandidate(
+    rejected = RejectedCandidate(
         text   = "一条无依据的人物信息",
         result = ReplyCheckResult(
             suitable     = False,
@@ -388,23 +386,21 @@ def test_finish_forced_persona_grounding_rejection_keeps_conversation_alive(mock
         ),
     )
 
-    draft = _finish_rejected_candidate(plan, rejected)
+    draft = finish_rejected_candidate(plan, rejected)
 
     assert draft is not None
-    assert draft.text in _PERSONA_GROUNDING_FALLBACKS
+    assert draft.text in PERSONA_GROUNDING_FALLBACKS
     assert rejected.text not in draft.text
     logged_payloads = [str(call.args[1]) for call in mock_context.logger.info.call_args_list]
     assert any("reply.check.exhausted.persona_grounding" in item for item in logged_payloads)
 
 
 def test_finish_persona_grounding_identity_query_uses_only_known_name(mock_context) -> None:
-    from plugins.xiaoqing_chat.llm.reply_checker import ReplyCheckResult
-    from plugins.xiaoqing_chat.reply_generator import (
-        _finish_rejected_candidate,
-        _RejectedCandidate,
-    )
+    from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
+    from plugins.xiaoqing_chat.reply_draft import RejectedCandidate
+    from plugins.xiaoqing_chat.reply_fallbacks import finish_rejected_candidate
 
-    plan = SimpleNamespace(
+    plan = reply_plan(
         forced     = True,
         request_id = "identity-test",
         text       = "你究竟是谁？",
@@ -423,7 +419,7 @@ def test_finish_persona_grounding_identity_query_uses_only_known_name(mock_conte
             )
         ),
     )
-    rejected = _RejectedCandidate(
+    rejected = RejectedCandidate(
         text   = "一条夹带了未知身份细节的回复",
         result = ReplyCheckResult(
             suitable     = False,
@@ -433,7 +429,7 @@ def test_finish_persona_grounding_identity_query_uses_only_known_name(mock_conte
         ),
     )
 
-    draft = _finish_rejected_candidate(plan, rejected)
+    draft = finish_rejected_candidate(plan, rejected)
 
     assert draft is not None
     assert draft.text == "我叫小青。"
@@ -444,12 +440,12 @@ def test_finish_persona_grounding_identity_query_uses_only_known_name(mock_conte
     [
         (
             "小青，你具体在哪所学校、哪个城市、读什么专业？",
-            "当前人设没有设定这些具体资料",
+            "保密",
             False,
         ),
         (
             "小青，说说你是个什么样的人，像群友自我介绍。",
-            "按公开人设来说",
+            "别的慢慢聊就知道啦",
             True,
         ),
     ],
@@ -461,16 +457,14 @@ def test_finish_persona_grounding_uses_configured_persona_fallbacks(
     expected_fragment,
     includes_profile,
 ) -> None:
-    from plugins.xiaoqing_chat.llm.reply_checker import ReplyCheckResult
-    from plugins.xiaoqing_chat.reply_generator import (
-        _finish_rejected_candidate,
-        _RejectedCandidate,
-    )
+    from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
+    from plugins.xiaoqing_chat.reply_draft import RejectedCandidate
+    from plugins.xiaoqing_chat.reply_fallbacks import finish_rejected_candidate
 
     configured_identity = (
         "是一名海边书店店员，喜欢旧唱片；具体学校、专业、城市没有设定，不主动补成真实资料。"
     )
-    plan = SimpleNamespace(
+    plan = reply_plan(
         forced             = True,
         request_id         = "profile-fallback",
         text               = text,
@@ -490,7 +484,7 @@ def test_finish_persona_grounding_uses_configured_persona_fallbacks(
             )
         ),
     )
-    rejected = _RejectedCandidate(
+    rejected = RejectedCandidate(
         text   = "一条越界人物回复",
         result = ReplyCheckResult(
             suitable     = False,
@@ -500,7 +494,7 @@ def test_finish_persona_grounding_uses_configured_persona_fallbacks(
         ),
     )
 
-    draft = _finish_rejected_candidate(plan, rejected)
+    draft = finish_rejected_candidate(plan, rejected)
 
     assert draft is not None
     assert expected_fragment in draft.text
@@ -513,14 +507,14 @@ def test_finish_persona_grounding_uses_configured_persona_fallbacks(
 
 
 def test_finish_context_grounding_uses_varied_evidence_boundary_fallback(mock_context) -> None:
-    from plugins.xiaoqing_chat.llm.reply_checker import ReplyCheckResult
-    from plugins.xiaoqing_chat.reply_generator import (
-        _CONTEXT_GROUNDING_FALLBACKS,
-        _finish_rejected_candidate,
-        _RejectedCandidate,
+    from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
+    from plugins.xiaoqing_chat.reply_draft import RejectedCandidate
+    from plugins.xiaoqing_chat.reply_fallbacks import (
+        CONTEXT_GROUNDING_FALLBACKS,
+        finish_rejected_candidate,
     )
 
-    plan = SimpleNamespace(
+    plan = reply_plan(
         forced     = True,
         request_id = "context-grounding-test",
         text       = "一个要求猜测他人状态的问题",
@@ -539,7 +533,7 @@ def test_finish_context_grounding_uses_varied_evidence_boundary_fallback(mock_co
             )
         ),
     )
-    rejected = _RejectedCandidate(
+    rejected = RejectedCandidate(
         text   = "一条没有依据的他人状态推断",
         result = ReplyCheckResult(
             suitable     = False,
@@ -549,10 +543,10 @@ def test_finish_context_grounding_uses_varied_evidence_boundary_fallback(mock_co
         ),
     )
 
-    draft = _finish_rejected_candidate(plan, rejected)
+    draft = finish_rejected_candidate(plan, rejected)
 
     assert draft is not None
-    assert draft.text in _CONTEXT_GROUNDING_FALLBACKS
+    assert draft.text in CONTEXT_GROUNDING_FALLBACKS
     assert rejected.text not in draft.text
 
 
@@ -572,22 +566,17 @@ def test_finish_context_grounding_uses_varied_evidence_boundary_fallback(mock_co
     ],
 )
 def test_checker_unavailable_persona_guard_uses_general_syntax(text, expected) -> None:
-    from plugins.xiaoqing_chat.reply_generator import (
-        _needs_persona_guard_when_checker_unavailable,
-    )
+    from plugins.xiaoqing_chat.reply_plan import needs_persona_guard_when_checker_unavailable
 
-    assert _needs_persona_guard_when_checker_unavailable(text, bot_name="小青") is expected
+    assert needs_persona_guard_when_checker_unavailable(text, bot_name="小青") is expected
 
 
 def test_persona_grounding_rejection_gets_one_targeted_regeneration(mock_context) -> None:
-    from plugins.xiaoqing_chat.llm.reply_checker import ReplyCheckResult
-    from plugins.xiaoqing_chat.reply_generator import (
-        _queue_reply_regeneration,
-        _RejectedCandidate,
-        _ReplyAttemptState,
-    )
+    from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
+    from plugins.xiaoqing_chat.reply_draft import RejectedCandidate, ReplyAttemptState
+    from plugins.xiaoqing_chat.reply_fallbacks import queue_reply_regeneration
 
-    plan = SimpleNamespace(
+    plan = reply_plan(
         forced   = True,
         bot_name = "小青",
         context  = mock_context,
@@ -599,8 +588,8 @@ def test_persona_grounding_rejection_gets_one_targeted_regeneration(mock_context
             )
         ),
     )
-    attempt = _ReplyAttemptState(max_items=10)
-    rejected = _RejectedCandidate(
+    attempt = ReplyAttemptState(max_items=10)
+    rejected = RejectedCandidate(
         text   = "我以前经常这么做",
         result = ReplyCheckResult(
             suitable     = False,
@@ -610,7 +599,7 @@ def test_persona_grounding_rejection_gets_one_targeted_regeneration(mock_context
         ),
     )
 
-    queued = _queue_reply_regeneration(
+    queued = queue_reply_regeneration(
         plan,
         attempt,
         rejected,
@@ -619,8 +608,36 @@ def test_persona_grounding_rejection_gets_one_targeted_regeneration(mock_context
 
     assert queued is True
     assert attempt.regen_used == 1
-    assert "普通知识" in attempt.extra_check_hint
     assert "句首称呼" in attempt.extra_check_hint
+
+
+def test_soft_style_regeneration_keeps_fact_correction_out_of_the_request(mock_context) -> None:
+    from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
+    from plugins.xiaoqing_chat.reply_draft import RejectedCandidate, ReplyAttemptState
+    from plugins.xiaoqing_chat.reply_fallbacks import queue_reply_regeneration
+
+    plan = reply_plan(
+        context = mock_context,
+        chat_id = "g1",
+        runtime = SimpleNamespace(
+            cfg=SimpleNamespace(
+                debug=SimpleNamespace(log_steps=False),
+                reply_check=SimpleNamespace(max_regen=1),
+            )
+        ),
+    )
+    attempt = ReplyAttemptState(max_items=10)
+    rejected = RejectedCandidate(
+        text   = "外卖袋先替你尝了一口。建议联系平台退款。",
+        result = ReplyCheckResult(False, "保留第一句的笑点，收住额外建议", False, "soft"),
+    )
+    assert queue_reply_regeneration(plan, attempt, rejected, step="test")
+    assert rejected.text in attempt.extra_check_hint
+    assert rejected.result.reason in attempt.extra_check_hint
+    assert "保留贴切的观点、笑点" in attempt.extra_check_hint
+    assert "无依据信息" not in attempt.extra_check_hint
+    assert not queue_reply_regeneration(plan, attempt, rejected, step="test")
+    assert attempt.regen_used == 1
 
 
 def test_postprocess_keeps_quoted_sentence_and_closing_quote_together() -> None:
@@ -641,19 +658,17 @@ def test_postprocess_keeps_quoted_sentence_and_closing_quote_together() -> None:
 
 
 def test_proactive_grounding_exhaustion_prefers_silence_to_full_replan(mock_context) -> None:
-    from plugins.xiaoqing_chat.llm.reply_checker import ReplyCheckResult
-    from plugins.xiaoqing_chat.reply_generator import (
-        _finish_rejected_candidate,
-        _RejectedCandidate,
-    )
+    from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
+    from plugins.xiaoqing_chat.reply_draft import RejectedCandidate
+    from plugins.xiaoqing_chat.reply_fallbacks import finish_rejected_candidate
 
-    plan = SimpleNamespace(
+    plan = reply_plan(
         forced  = False,
         context = mock_context,
         runtime=SimpleNamespace(cfg=SimpleNamespace(debug=SimpleNamespace(log_steps=False))),
         chat_id="group:1",
     )
-    rejected = _RejectedCandidate(
+    rejected = RejectedCandidate(
         text   = "一条无依据的生活片段",
         result = ReplyCheckResult(
             suitable     = False,
@@ -663,4 +678,4 @@ def test_proactive_grounding_exhaustion_prefers_silence_to_full_replan(mock_cont
         ),
     )
 
-    assert _finish_rejected_candidate(plan, rejected) is None
+    assert finish_rejected_candidate(plan, rejected) is None

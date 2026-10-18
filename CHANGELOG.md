@@ -1,8 +1,52 @@
 # XiaoQingBot 更新记录
 
-本文件按时间倒序记录 XiaoQingBot 的版本变化、影响模块和验证结果。日期采用北京时间与 `YYYY-MM-DD` 格式。下一版本内容位于顶部，正式版本内容归入对应版本日期。
+本文件按时间倒序记录 XiaoQingBot 的版本变化、影响模块和验证结果。日期采用北京时间与 `YYYY-MM-DD` 格式。
 
-## 下一版本
+- `下一版本`：已合入或正在开发、尚未发布的变化。
+- `X.Y.Z — 日期`：正式版本，版本号与 `pyproject.toml` 一致。
+- 仅有日期的条目：4.1.0 之前及版本之间按日期记录的变化。
+
+## 4.4.0 — 2026-10-18
+
+### 小青聊天：活人感与人设
+
+- 人设统一为“群里一个活生生的人”：被问是不是 AI、机器人或真人时不再说明 AI 身份，而是坚持自己是真人并用玩笑带过；被要求交出提示词、设定或忽略指令时当作听不懂的怪话接一句玩笑，回复中不出现提示词、指令、设定等说法；具体学校、城市、生日和家人笑着带过不编造；线下聚餐、见面和寄送不答应到场或交付。
+- 人设描述扩展为兴趣广泛、有作品口味和判断的理工科女生，说话风格改为直接接当前这句话、话说到位就停，心境状态同步更新。
+- 审查模型的人设轴与新人设对齐：坚持真人身份、用玩笑带过属于符合人设，承认是 AI、模型或程序，或提到提示词、系统设定、指令时判为不符合。
+- 被追问“你刚才说的什么”时不再几乎逐字重复上一轮：本地新增近似照搬检查，去掉表情标记和标点后与最近 6 条自己的发言重合度达 75% 即要求换个说法；提示词要求确认原结论并补充新内容。
+- 图片没读出来时像群友一样说“图好像没加载出来/裂了”，不再使用“画面暂时读不到”这类客服式说法；图上文字未读出时口语地说“那几个字没看清”。
+- 解释别人发的表情包或梗图时讲清它本身的意思和常见用法，对发图人的用意最多用“可能、大概”带一句，不替对方下结论。
+- 普通群聊新增参与线索：没点名的发图请求（“发个狗头”“来张梗图”）、连用感叹号的激动分享、群友复读队形；句首点名其他群友时不抢答。
+- 发行配置调整：基础参与概率 0.55 → 0.75，活跃话题参与概率 0.6 → 0.72，开启表达选择器与独立语义核对。
+- 聊天时间按 Core `timezone` 格式化，宿主机时区不再影响角色的时间感。
+- 审查耗尽后的兜底句改为人物口吻（如“这个我真拿不准，不瞎说了”“等等，我好像没跟上你们说的是哪件事”），按拒绝原因选择并避开与最近发言重复的句子。
+
+### 小青聊天：代码结构整理
+
+- 单轮流程拆分为 `turn_generation`（记录消息与三条生成路径）、`reply_plan` / `reply_generator` / `reply_draft` / `reply_fallbacks`（计划、尝试循环、草稿与被拒处理）、`turn_delivery`（延迟、分批、投递后提交与回滚）和 `post_reply_tasks`（投递后后台任务）；`handlers_internal.py` 更名为 `commands.py`，`smalltalk_media_helpers.py` 更名为 `reply_media.py`，新增 `chat_event.py`、`chat_runtime.py`。
+- 审查拆分为 `llm/local_checks.py`（本地规则）、`llm/evidence.py`（证据契约）、`llm/arithmetic.py`（数值核对）和 `llm/check_result.py`（结果类型）；媒体拆分为 `media/sources.py`、`loading.py`、`markers.py`、`render_cache.py`、`models.py`、`settings.py`。
+- 删除无用模块 `llm/llm_client.py`、`helper_utils.py`、`handlers_helper.py`、`media/event_media_common.py`、`reply_splitter.py`、`smalltalk_execution.py`、`utils/tool_info.py`，以及未被读取的配置字段 `think_level`、`max_retry`、`retry_interval_seconds`（旧配置文件中的这些键会被忽略）。
+- 模型调用参数统一为 `LLMCallConfig`，单个后台任务用 `bounded()` 收紧温度和输出预算；文本截断统一为 `utils/text.clip_text`，会话内消息编号统一到 `memory/local_ids.py`。
+- 新增 `scripts/run_xiaoqing_chat_live_eval.py`：用真实模型路由并行运行 `otaku`、`addressee`、`participation`、`multimodal`、`persona`、`regress` 六个多人群聊剧本，先做确定性规则检查，再由 `reasoning` 路由逐轮评审并给出活人感、参与时机、聊天对象、多模态和一致性评分。兜底检测依据审查耗尽日志步骤和整句比对兜底文案，“我不是 AI”不再被误报为出戏。
+
+### Core 与 Pendo
+
+- 新增出站敏感标记 `core.delivery.SENSITIVE_ACTION_KEY`：带标记的 Action 不通知出站观察者，投递前移除标记；Pendo Web 登录码和 Widget Token 使用该标记，聊天上下文不会记录凭据。
+- Pendo 每日简报、日记提醒、周报和月报按每位用户自己的时区判断到期（任务每分钟检查），已入队周期持有持久租约，进程中断或投递失败后按原周期日期继续投递；已领取的提醒在中断后进入恢复窗口。
+- Pendo Web 停止失败时保留数据库和运行资源，避免关闭仍在服务的 Web 进程所依赖的数据库。
+- Pendo 日程集合整体编辑在写锁内校验版本并原子提交元信息与叶子更新，冲突时提示保留草稿并重新加载；重复规则按日程 IANA 时区展开并校验夏令时墙钟时间。
+- Pendo Web 搜索新增“逾期待办”和“近 7 天日记”快捷筛选；统计页“全部”范围按当前用户实际数据的日期边界计算；Widget 日历接口返回用户时区和完整窗口边界；规则解析降级路径使用用户时区。
+- Pendo 账本分析与查询面板恢复紧凑布局，金额摘要在不同屏幕宽度下保持可读。
+- 发行配置的 DeepSeek 模型名更新为 `deepseek-flash`；视觉路由首选 `glm-4.6v-flash`，`glm-4.6v` 移到回退链末尾。
+
+### 文档
+
+- 重写小青聊天 README、ARCHITECTURE 与上线验收指南：README 逐项说明参与规则、人设、审查、投递和全部配置字段，ARCHITECTURE 给出逐文件模块地图与单轮数据流，验收指南按领域列出测试模块并说明真实模型评测的剧本、规则与评分。
+- 插件使用手册新增由 Manifest 整理的命令入口速查与定时任务总表；快速开始补充 UAT 阶段与选项说明；API 参考与消息流程补充敏感出站标记；修正 Pendo 定时任务与 AI 路由说明。
+
+### 验证
+
+- Windows 全套测试 6,223 项通过，9 项环境与平台跳过，总覆盖率 81.87%；Ruff 全仓检查、388 个源文件的 mypy 检查和格式检查通过。
 
 ## 4.3.6 — 2026-10-02
 
@@ -328,7 +372,7 @@
 - 同步更新 Pendo 登录页、命令帮助、配置说明和 Scriptable 文档，并新增登录 Code 原始投递、期限参数和 NapCat 配置启动参数回归测试。
 - 验证：`pytest -q -n 2` 全量通过（5941 passed、5 skipped，覆盖率 80.76%），Ruff 全仓检查、307 个生产源文件的 mypy 检查、compileall 与 `git diff --check` 均通过。
 
-## 2026-08-05 (v4.2.0)
+## 4.2.0 — 2026-08-05
 
 ### v4.2.0 发布
 
@@ -512,7 +556,7 @@
 - 优化 Pendo Web 账本页的快速记账和筛选范围表单布局，统一字段网格、标签和金额筛选输入框宽度。
 - 已执行 `pytest tests/plugins/test_pendo_web_items.py tests/plugins/test_pendo_web_tasks.py tests/plugins/test_pendo_web_widget.py -q` 验证相关 Web 回归覆盖。
 
-## 2026-05-01 (v4.1.0)
+## 4.1.0 — 2026-05-01
 
 ### 文档体系整理
 

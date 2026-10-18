@@ -27,7 +27,7 @@ class ActionRecord:
 class ActionHistoryStore:
     """按会话保存动作记录，并采用防抖持久化。
 
-    使用脏标记和防抖写入，而不是每次追加都落盘，避免高频对话中的 I/O 瓶颈。
+    使用脏标记和防抖写入控制高频对话中的 I/O 开销。
     """
 
     def __init__(self) -> None:
@@ -52,6 +52,7 @@ class ActionHistoryStore:
                     loaded               = self._load(chat_id)
                     self._cache[chat_id] = loaded or []
             self._cache[chat_id].append(record)
+            del self._cache[chat_id][:-200]
             self._dirty.add(chat_id)
             self._state_version[chat_id] = self._state_version.get(chat_id, 0) + 1
 
@@ -123,7 +124,7 @@ class ActionHistoryStore:
             return None
 
         out: list[ActionRecord] = []
-        for item in raw:
+        for item in raw[-200:]:
             if not isinstance(item, dict):
                 continue
             detail_raw             = item.get("detail")

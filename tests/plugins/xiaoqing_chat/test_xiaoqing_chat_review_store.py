@@ -15,6 +15,7 @@ from plugins.xiaoqing_chat.memory.review_sessions import (
     _load_json_document,
     maybe_push_session,
 )
+from tests.helpers.xiaoqing_chat_test_support import active_review_sessions
 
 
 def _sessions_path(data_dir: Path) -> Path:
@@ -54,7 +55,7 @@ def test_review_store_recovers_malformed_primary_from_backup(tmp_path: Path) -> 
     store = ReviewStore()
     store.bind(tmp_path)
 
-    sessions = store.list_sessions()
+    sessions = active_review_sessions(store)
 
     assert [session.session_id for session in sessions] == ["session-1"]
     assert json.loads(path.read_text(encoding="utf-8")) == expected
@@ -70,7 +71,7 @@ def test_review_store_quarantines_unrecoverable_primary_before_new_write(tmp_pat
     store = ReviewStore()
     store.bind(tmp_path)
 
-    assert store.list_sessions() == []
+    assert active_review_sessions(store) == []
     quarantined = list(path.parent.glob("sessions.json.corrupt-*"))
     assert len(quarantined) == 1
     assert quarantined[0].read_bytes() == original
@@ -105,7 +106,7 @@ def test_review_store_skips_invalid_entries_and_preserves_original_backup(tmp_pa
     store = ReviewStore()
     store.bind(tmp_path)
 
-    assert [session.session_id for session in store.list_sessions()] == ["valid"]
+    assert [session.session_id for session in active_review_sessions(store)] == ["valid"]
     repaired = json.loads(path.read_text(encoding="utf-8"))
     assert set(repaired["active"]) == {"valid"}
     assert repaired["last_closed"] == {"42:goal_strategy": 5.0}
@@ -165,10 +166,10 @@ def test_review_store_rebind_clears_directory_specific_caches(tmp_path: Path) ->
 
     store = ReviewStore()
     store.bind(first)
-    assert [session.session_id for session in store.list_sessions()] == ["first"]
+    assert [session.session_id for session in active_review_sessions(store)] == ["first"]
 
     store.bind(second)
-    assert [session.session_id for session in store.list_sessions()] == ["second"]
+    assert [session.session_id for session in active_review_sessions(store)] == ["second"]
 
 
 @pytest.mark.asyncio

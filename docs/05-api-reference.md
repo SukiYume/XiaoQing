@@ -168,6 +168,18 @@ await context.send_action(action: dict[str, Any]) -> bool | None
 
 返回 `True` 表示拆分后的全部 Action 已确认交给投递边界，`False` 表示至少一个 Action 已确认失败，`None` 表示传输端可能已经提交 Action 且最终结果未知。结果未知时由业务层保留待确认状态，避免自动重试造成重复消息。
 
+携带登录码、Token 等凭据的消息在发送前设置敏感标记：
+
+```python
+from core.delivery import SENSITIVE_ACTION_KEY
+
+action = build_action(segments(message), user_id, None)
+action[SENSITIVE_ACTION_KEY] = True
+await context.send_action(action)
+```
+
+带标记的 Action 不会交给 `core.observe_outgoing_action` 观察者（例如聊天插件的上下文记录），投递层在序列化前移除该标记和内部收据字段。Pendo 的 Web 登录码与 Widget Token 使用该标记。
+
 ### 配置方法
 
 ```python

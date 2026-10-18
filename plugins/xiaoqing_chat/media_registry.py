@@ -18,11 +18,7 @@ from typing import Any, cast
 
 from core.atomic_store import keyed_path_lock
 
-from .media.event_media_common import (
-    _is_generic_media_label,
-    _normalize_media_label,
-    split_emoji_visible_text,
-)
+from .media.markers import emoji_summary_marker, is_generic_media_label, split_emoji_visible_text
 from .store_base import LockedDirtyStateMixin, StoreBase
 
 _MEDIA_MARKER_RE            = re.compile(r"\[(?:图片|表情包|QQ表情)：[^\]\n]{0,400}\]")
@@ -126,7 +122,7 @@ def normalize_media_refs(items: Sequence[dict[str, Any]] | None) -> list[dict[st
     return normalized
 
 
-def _quality_score(item: dict[str, Any]) -> float:
+def quality_score(item: dict[str, Any]) -> float:
     """估算描述丰富度，供注册表单调升级使用。
 
     该分数只是内部合并启发式，不代表信任或安全等级。
@@ -141,7 +137,7 @@ def _quality_score(item: dict[str, Any]) -> float:
     score = 0.0
     if description:
         score += 1.0
-        if not _is_generic_media_label(description):
+        if not is_generic_media_label(description):
             score += 2.5
         if description not in {"一张图片", "一张表情包"} and not description.startswith(
             "系统表情#"
@@ -186,15 +182,9 @@ def _render_media_marker(item: dict[str, Any]) -> str:
         label_text = "，".join(emotion_tags[:2]).strip()
         if not label_text:
             label_text = _extract_marker_label(marker) or clean_desc or description or "一张表情包"
-        if visible_text:
-            return f"[表情包：{label_text}；写着“{visible_text}”]"
-        if (
-            clean_desc
-            and not _is_generic_media_label(clean_desc)
-            and _normalize_media_label(clean_desc) != _normalize_media_label(label_text)
-        ):
-            return f"[表情包：{label_text}；内容：{clean_desc}]"
-        return f"[表情包：{label_text}]"
+        return emoji_summary_marker(label_text, clean_desc, visible_text) or (
+            f"[表情包：{label_text}]"
+        )
 
     if kind == "image":
         desc_text = description or _extract_marker_label(marker) or "一张图片"
@@ -240,16 +230,12 @@ def resolve_registered_media_items(
     if not normalized_items:
         return []
     if store is not None:
-        resolver = getattr(store, "resolve_media_items", None)
-        if callable(resolver):
-            try:
-                resolved = resolver(normalized_items)
-            except Exception:
-                resolved = None
-            if isinstance(resolved, (list, tuple)):
-                normalized_resolved = normalize_media_refs(resolved)
-                if normalized_resolved:
-                    return normalized_resolved
+        try:
+            resolved = normalize_media_refs(store.resolve_media_items(normalized_items))
+        except Exception:
+            resolved = []
+        if resolved:
+            return resolved
     return normalized_items
 
 
@@ -265,14 +251,11 @@ def upsert_registered_media_items(
     if not normalized_items:
         return []
     if store is not None:
-        upsert = getattr(store, "upsert_media_items", None)
-        if callable(upsert):
-            try:
-                resolved = upsert(normalized_items)
-            except Exception:
-                resolved = None
-            if isinstance(resolved, (list, tuple)):
-                normalized_items = normalize_media_refs(resolved) or normalized_items
+        try:
+            resolved = normalize_media_refs(store.upsert_media_items(normalized_items))
+        except Exception:
+            resolved = []
+        normalized_items = resolved or normalized_items
     return compact_media_items(normalized_items) if compact else normalized_items
 
 
@@ -329,7 +312,7 @@ def _merge_media_record(existing: dict[str, Any], incoming: dict[str, Any]) -> d
     now    = float(time.time())
     merged = dict(existing) if isinstance(existing, dict) else {}
 
-    incoming_score = _quality_score(incoming)
+    incoming_score = quality_score(incoming)
     existing_score = float(merged.get("quality_score", 0.0) or 0.0)
     should_upgrade = incoming_score > existing_score + 0.05
 
@@ -454,12 +437,9 @@ def resolve_message_content(
 
     resolved_items: Sequence[dict[str, Any]] = items
     if store is None:
-        try:
-            from .runtime_state import get_state as _state
+        from .runtime_state import get_state as _state
 
-            store = getattr(_state(), "media_store", None)
-        except Exception:
-            store = None
+        store = _state().media_store
     resolved_items = resolve_registered_media_items(items, store=store) or items
     return rebuild_message_content(content, items, resolved_items=resolved_items)
 

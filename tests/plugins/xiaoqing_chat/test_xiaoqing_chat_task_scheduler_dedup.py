@@ -6,9 +6,9 @@ import pytest
 from plugins.xiaoqing_chat.task_scheduler import (
     _action_flush_tasks,
     _pfc_state_flush_tasks,
-    _schedule_action_history_flush,
-    _schedule_media_registry_flush,
-    _schedule_pfc_state_flush,
+    schedule_action_history_flush,
+    schedule_media_registry_flush,
+    schedule_pfc_state_flush,
 )
 
 
@@ -37,12 +37,12 @@ async def test_schedule_action_history_flush_behavior(mock_context):
         ) as mock_to_thread,
     ):
         # First call
-        _schedule_action_history_flush(mock_context, runtime, chat_id="g1")
+        schedule_action_history_flush(mock_context, runtime, chat_id="g1")
         task1 = _action_flush_tasks.get("g1")
         assert task1 is not None
 
         # Second call should cancel first
-        _schedule_action_history_flush(mock_context, runtime, chat_id="g1")
+        schedule_action_history_flush(mock_context, runtime, chat_id="g1")
         task2 = _action_flush_tasks.get("g1")
         assert task2 is not None
         assert task2 is not task1
@@ -76,12 +76,12 @@ async def test_schedule_pfc_state_flush_behavior(mock_context):
         ) as mock_to_thread,
     ):
         # First call
-        _schedule_pfc_state_flush(mock_context, runtime, chat_id="g1")
+        schedule_pfc_state_flush(mock_context, runtime, chat_id="g1")
         task1 = _pfc_state_flush_tasks.get("g1")
         assert task1 is not None
 
         # Second call should cancel first
-        _schedule_pfc_state_flush(mock_context, runtime, chat_id="g1")
+        schedule_pfc_state_flush(mock_context, runtime, chat_id="g1")
         task2 = _pfc_state_flush_tasks.get("g1")
         assert task2 is not None
         assert task2 is not task1
@@ -116,11 +116,11 @@ async def test_schedule_media_registry_flush_behavior(mock_context):
             new=AsyncMock(side_effect=fake_to_thread),
         ) as mock_to_thread,
     ):
-        _schedule_media_registry_flush(mock_context, runtime)
+        schedule_media_registry_flush(mock_context, runtime)
         task1 = task_scheduler_module._media_registry_flush_task
         assert task1 is not None
 
-        _schedule_media_registry_flush(mock_context, runtime)
+        schedule_media_registry_flush(mock_context, runtime)
         task2 = task_scheduler_module._media_registry_flush_task
         assert task2 is not None
         assert task2 is not task1

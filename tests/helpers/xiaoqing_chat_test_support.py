@@ -4,6 +4,7 @@ import asyncio
 import json
 import tempfile
 import time
+from contextlib import ExitStack, contextmanager
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -60,6 +61,46 @@ def _complete_test_runtime_config(runtime):
     return runtime
 
 
+_STATE_ASYNC_METHODS = {
+    "heartflow": ("on_user_message_async", "on_no_reply_async", "on_bot_reply_async"),
+    "memory_store": ("get_async", "get_recent_async"),
+    "goal_store": ("set_async", "get_async"),
+    "pfc_state_store": ("get_async",),
+    "action_history": ("get_recent_async",),
+}
+
+
+def complete_test_state(state):
+    """让 MagicMock 状态遵守运行时状态的真实接口：异步方法可等待，查询有中性返回。"""
+
+    if not isinstance(state, MagicMock):
+        return state
+    for store_name, methods in _STATE_ASYNC_METHODS.items():
+        store = getattr(state, store_name)
+        for method in methods:
+            if _explicit_test_attribute(store, method) is _MISSING_TEST_CONFIG or not isinstance(
+                getattr(store, method), AsyncMock
+            ):
+                if isinstance(_explicit_test_attribute(store, method), AsyncMock):
+                    continue
+                default = [] if method in {"get_async", "get_recent_async"} else None
+                if store_name in {"goal_store", "pfc_state_store"} and method == "get_async":
+                    default = None
+                setattr(store, method, AsyncMock(return_value=default))
+    neutral = {
+        "consume_pending_bot_name_call": False,
+        "get_reply_gate_decision": None,
+        "get_last_observe_ts": 0.0,
+        "get_last_reply_ts": 0.0,
+        "get_mood_state": "",
+        "pop_persist_task": None,
+    }
+    for name, value in neutral.items():
+        if _explicit_test_attribute(state, name) is _MISSING_TEST_CONFIG:
+            getattr(state, name).return_value = value
+    return state
+
+
 def _make_hctx(
     *,
     runtime,
@@ -73,6 +114,7 @@ def _make_hctx(
 ) -> HandlerContext:
     """Build a HandlerContext without going through from_event."""
     _complete_test_runtime_config(runtime)
+    complete_test_state(state)
     return HandlerContext(
         chat_id  = chat_id,
         runtime  = runtime,
@@ -253,3 +295,77 @@ __all__ = (
     "time",
     "xiaoqing_chat",
 )
+
+
+def reply_plan(**overrides):
+    """构造完整的回复生成计划；测试只需写出与用例相关的字段。"""
+
+    from plugins.xiaoqing_chat.planning.planned_action import PlannedAction
+    from plugins.xiaoqing_chat.reply_plan import ReplyGenerationPlan
+    from plugins.xiaoqing_chat.runtime_state import ChatRuntime
+
+    overrides              = {key: value for key, value in overrides.items() if value is not None}
+    runtime                = overrides.pop("runtime", None) or ChatRuntime(XiaoQingChatConfig(), [])
+    values: dict[str, Any] = {
+        "text": "",
+        "event": {},
+        "context": MagicMock(),
+        "runtime": _complete_test_runtime_config(runtime),
+        "state": MagicMock(),
+        "forced": False,
+        "action": PlannedAction("reply", 0, "", "", []),
+        "bot_name": "小青",
+        "chat_id": "g1",
+        "is_private": False,
+        "history": [],
+        "earlier_history": (),
+        "max_context_size": 10,
+        "chat_temperature": 0.7,
+        "secrets": {},
+        "model": "",
+        "foreground": None,
+        "request_id": "",
+        "profile_block": "",
+        "policy_block": "",
+        "knowledge_block": "",
+        "expression_block": "",
+        "jargon_explanation": "",
+        "keyword_rules": (),
+        "regex_rules": (),
+        "merged_reasoning": "",
+        "effective_goal": "",
+        "tool_info_block": "",
+        "effective_identity": "",
+        "effective_style": "",
+        "state_text": "",
+        "started_at": 0.0,
+    }
+    unknown = set(overrides) - set(values) - {"media_candidates"}
+    if unknown:
+        raise TypeError(f"unknown reply plan fields: {sorted(unknown)}")
+    values.update(overrides)
+    return ReplyGenerationPlan(**values)
+
+
+@contextmanager
+def patch_turn(name: str, **kwargs):
+    """生成与投递模块共用的依赖要两边同时替换，并返回同一个 mock 便于断言。"""
+
+    from plugins.xiaoqing_chat import turn_delivery, turn_generation
+
+    modules = [m for m in (turn_generation, turn_delivery) if hasattr(m, name)]
+    with patch.object(modules[0], name, **kwargs) as mock, ExitStack() as stack:
+        for module in modules[1:]:
+            stack.enter_context(patch.object(module, name, new=mock))
+        yield mock
+
+
+def active_review_sessions(store) -> list[Any]:
+    """读取复盘存储里仍在等待的会话，按创建时间倒序；仅供测试检查落盘状态。"""
+    from plugins.xiaoqing_chat.memory.review_sessions import _decode_session
+
+    active = store._load_sessions_state().get("active", {})
+    if not isinstance(active, dict):
+        return []
+    sessions = [_decode_session(str(sid), obj) for sid, obj in active.items()]
+    return sorted(sessions, key=lambda item: item.created_at, reverse=True)

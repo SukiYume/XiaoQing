@@ -11,7 +11,7 @@ from plugins.xiaoqing_chat.config.config import (
     ReflectionConfig,
     XiaoQingChatConfig,
 )
-from plugins.xiaoqing_chat.context_builder import _build_expression_block
+from plugins.xiaoqing_chat.context_builder import expression_context
 from plugins.xiaoqing_chat.expression.bw_expression_learner import _build_dialogue
 from plugins.xiaoqing_chat.expression.bw_expression_store import ExpressionRecord
 from plugins.xiaoqing_chat.memory.knowledge_extract import build_fact_messages
@@ -49,8 +49,7 @@ def test_config_accepts_safe_zero_disable_values_and_probability_boundaries():
         {
             "reply_probability_base": 0.0,
             "participation_cue_reply_probability": 1.0,
-            "max_retry": 0,
-            "retry_interval_seconds": 0.0,
+            "background_max_retry": 0,
             "io_persist_debounce_seconds": 0.0,
             "media": {
                 "vision_max_retry": 0,
@@ -61,7 +60,7 @@ def test_config_accepts_safe_zero_disable_values_and_probability_boundaries():
 
     assert cfg.reply_probability_base == 0.0
     assert cfg.participation_cue_reply_probability == 1.0
-    assert cfg.max_retry == 0
+    assert cfg.background_max_retry == 0
     assert cfg.io_persist_debounce_seconds == 0.0
 
 
@@ -148,7 +147,7 @@ def test_expression_block_requires_checked_records_when_approval_required(tmp_pa
         )
     )
 
-    block = _build_expression_block(runtime, state, tmp_path, "g1")
+    block = expression_context(runtime, state, tmp_path, "g1")
 
     assert "短促地说一句我去" in block
     assert "好家伙" not in block
@@ -190,7 +189,7 @@ def test_expression_block_never_auto_injects_unchecked_high_count_records(tmp_pa
         )
     )
 
-    block = _build_expression_block(runtime, state, tmp_path, "g1")
+    block = expression_context(runtime, state, tmp_path, "g1")
 
     assert "好家伙" not in block
     assert "哦这样啊" not in block
@@ -200,7 +199,7 @@ def test_expression_block_default_config_requires_approval_for_injection():
     cfg = XiaoQingChatConfig()
 
     assert cfg.reflection.require_approval_for_injection is True
-    assert cfg.expression.enable_expression_selector is False
+    assert cfg.expression.enable_expression_selector is True
     assert cfg.expression.max_injected == 1
 
 
@@ -291,7 +290,7 @@ def test_expression_reflector_can_build_operator_review_action(tmp_path):
 
 
 def test_humanize_typing_delay_scales_with_lengths_and_caps():
-    from plugins.xiaoqing_chat.smalltalk_execution import _compute_typing_delay
+    from plugins.xiaoqing_chat.turn_delivery import _compute_typing_delay
 
     cfg = HumanizeConfig(
         enable_typing_delay     = True,
@@ -313,7 +312,7 @@ def test_humanize_typing_delay_scales_with_lengths_and_caps():
 
 
 def test_humanize_typing_delay_disabled_when_flag_off():
-    from plugins.xiaoqing_chat.smalltalk_execution import _compute_typing_delay
+    from plugins.xiaoqing_chat.turn_delivery import _compute_typing_delay
 
     cfg = HumanizeConfig(enable_typing_delay=False)
     runtime = SimpleNamespace(cfg=SimpleNamespace(humanize=cfg))

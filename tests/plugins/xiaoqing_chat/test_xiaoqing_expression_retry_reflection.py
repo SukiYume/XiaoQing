@@ -24,6 +24,7 @@ from plugins.xiaoqing_chat.expression.bw_reflect_tracker import (
     ReflectTrackerStore,
     tick_reflect_tracker,
 )
+from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
 
 
@@ -72,14 +73,16 @@ async def test_expression_learning_filters_bot_lines_and_bounds_llm_output(
     ]
 
     learned = await expression_learner.learn_from_messages(
-        secrets                = {"api_base": "https://example.test", "api_key": "k", "model": "m"},
-        messages               = messages,
-        temperature            = 9.0,
-        top_p                  = 0.9,
-        max_tokens             = 100,
-        timeout_seconds        = 1,
-        max_retry              = 0,
-        retry_interval_seconds = 0,
+        secrets  = {"api_base": "https://example.test", "api_key": "k", "model": "m"},
+        messages = messages,
+        llm      = LLMCallConfig(
+            temperature            = 9.0,
+            top_p                  = 0.9,
+            max_tokens             = 100,
+            timeout_seconds        = 1,
+            max_retry              = 0,
+            retry_interval_seconds = 0,
+        ),
     )
 
     assert len(learned) == 12
@@ -116,18 +119,20 @@ async def test_expression_upsert_caps_only_target_chat_and_preserves_other_tenan
                 source_id = "m2",
             ),
         ],
-        similarity_threshold   = 0.72,
-        max_store              = 1,
-        self_reflect           = False,
-        secrets                = {},
-        bot_name               = "小青",
-        personality            = PersonalityConfig(),
-        temperature            = 0.5,
-        top_p                  = 0.9,
-        max_tokens             = 500,
-        timeout_seconds        = 1,
-        max_retry              = 0,
-        retry_interval_seconds = 0,
+        similarity_threshold = 0.72,
+        max_store            = 1,
+        self_reflect         = False,
+        secrets              = {},
+        bot_name             = "小青",
+        personality          = PersonalityConfig(),
+        llm                  = LLMCallConfig(
+            temperature            = 0.5,
+            top_p                  = 0.9,
+            max_tokens             = 500,
+            timeout_seconds        = 1,
+            max_retry              = 0,
+            retry_interval_seconds = 0,
+        ),
     )
 
     assert changed == 2
@@ -159,18 +164,20 @@ async def test_expression_upsert_does_not_revive_user_rejected_situation(tmp_pat
                 source_id = "m1",
             )
         ],
-        similarity_threshold   = 0.72,
-        max_store              = 20,
-        self_reflect           = False,
-        secrets                = {},
-        bot_name               = "小青",
-        personality            = PersonalityConfig(),
-        temperature            = 0.5,
-        top_p                  = 0.9,
-        max_tokens             = 500,
-        timeout_seconds        = 1,
-        max_retry              = 0,
-        retry_interval_seconds = 0,
+        similarity_threshold = 0.72,
+        max_store            = 20,
+        self_reflect         = False,
+        secrets              = {},
+        bot_name             = "小青",
+        personality          = PersonalityConfig(),
+        llm                  = LLMCallConfig(
+            temperature            = 0.5,
+            top_p                  = 0.9,
+            max_tokens             = 500,
+            timeout_seconds        = 1,
+            max_retry              = 0,
+            retry_interval_seconds = 0,
+        ),
     )
 
     assert changed == 0
@@ -570,17 +577,19 @@ async def test_expression_review_allows_empty_modifications(monkeypatch, rejecte
         ),
     )
     result = await learner.single_expression_check(
-        secrets                = {},
-        bot_name               = "小青",
-        personality            = PersonalityConfig(),
-        situation              = "s",
-        style                  = "t",
-        temperature            = 0.5,
-        top_p                  = 0.9,
-        max_tokens             = 300,
-        timeout_seconds        = 1,
-        max_retry              = 0,
-        retry_interval_seconds = 0,
+        secrets     = {},
+        bot_name    = "小青",
+        personality = PersonalityConfig(),
+        situation   = "s",
+        style       = "t",
+        llm         = LLMCallConfig(
+            temperature            = 0.5,
+            top_p                  = 0.9,
+            max_tokens             = 300,
+            timeout_seconds        = 1,
+            max_retry              = 0,
+            retry_interval_seconds = 0,
+        ),
     )
     assert result[:2] == (True, rejected)
     assert result[3] == modified

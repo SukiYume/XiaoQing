@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from plugins.xiaoqing_chat import handlers as chat_handlers
+from plugins.xiaoqing_chat import commands as chat_handlers
 from plugins.xiaoqing_chat.memory.review_sessions import ReviewStore
 from tests.helpers.assertions import text_segments_text
 
@@ -64,7 +64,7 @@ async def test_review_commands_reuse_real_session_ids_and_reject_invalid_mutatio
         "from_event",
         staticmethod(lambda _event, _context: hctx),
     )
-    monkeypatch.setattr(chat_handlers, "_is_admin_operator", lambda _event, _context: True)
+    monkeypatch.setattr(chat_handlers, "is_admin_operator", lambda _event, _context: True)
 
     async def call(args: str) -> str:
         return text_segments_text(
@@ -149,7 +149,7 @@ async def test_review_commands_reuse_real_session_ids_and_reject_invalid_mutatio
         chat_id = chat_id,
         payload = {"goal": "权限测试"},
     )
-    monkeypatch.setattr(chat_handlers, "_is_admin_operator", lambda _event, _context: False)
+    monkeypatch.setattr(chat_handlers, "is_admin_operator", lambda _event, _context: False)
     assert "仅 Bot 管理员" in await call(f"close {protected.session_id}")
     assert store.get_session(protected.session_id) is not None
 

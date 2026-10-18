@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
+from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
 from tests.helpers.xiaoqing_chat_test_support import (
     Any,
     AsyncMock,
@@ -23,10 +24,10 @@ sample_group_event = _fixture_support.sample_group_event
 async def test_generate_reply_prefers_planner_goal_over_review_override_goal_store(mock_context):
     from contextlib import ExitStack
 
+    from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
     from plugins.xiaoqing_chat.llm.prompt_builder import ChatMessage
-    from plugins.xiaoqing_chat.llm.reply_checker import ReplyCheckResult
     from plugins.xiaoqing_chat.planning.planned_action import PlannedAction
-    from plugins.xiaoqing_chat.reply_generator import _generate_reply_draft
+    from plugins.xiaoqing_chat.reply_generator import generate_reply_draft
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
@@ -58,16 +59,7 @@ async def test_generate_reply_prefers_planner_goal_over_review_override_goal_sto
     state.review_store.bind = Mock()
     state.inc_stats         = Mock()
 
-    fg = SimpleNamespace(
-        timeout_seconds        = 3.0,
-        max_retry              = 0,
-        retry_interval_seconds = 0.2,
-        to_dict                = lambda: {
-            "timeout_seconds": 3.0,
-            "max_retry": 0,
-            "retry_interval_seconds": 0.2,
-        },
-    )
+    fg = LLMCallConfig(timeout_seconds=3.0, max_retry=0, retry_interval_seconds=0.2)
 
     action = PlannedAction(
         action        = "reply",
@@ -79,72 +71,64 @@ async def test_generate_reply_prefers_planner_goal_over_review_override_goal_sto
 
     with ExitStack() as stack:
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._get_bot_name", return_value="小青")
+            patch("plugins.xiaoqing_chat.reply_plan.configured_bot_name", return_value="小青")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._chat_id", return_value="g1")
+            patch("plugins.xiaoqing_chat.reply_plan.event_chat_id", return_value="g1")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._is_private", return_value=False)
+            patch("plugins.xiaoqing_chat.reply_plan.is_private_event", return_value=False)
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator._get_ai_route_context",
+                "plugins.xiaoqing_chat.reply_plan.ai_route_context",
                 return_value={"api_base": "http://test", "api_key": "key", "model": "test-model"},
             )
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._resolve_llm_config", return_value=fg)
+            patch("plugins.xiaoqing_chat.reply_plan.llm_call_config", return_value=fg)
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._build_profile_block", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.sender_profile_context", return_value="")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._build_knowledge_block", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.knowledge_context", return_value="")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._build_expression_block", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.expression_context", return_value="")
+        )
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_plan.jargon_context", return_value="")
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator._build_jargon_explanation", return_value=""
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator._build_memory_block",
+                "plugins.xiaoqing_chat.reply_generator.retrieve_memory_context",
                 new=AsyncMock(return_value=""),
             )
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator.build_policy_block",
+                "plugins.xiaoqing_chat.reply_plan.build_policy_block",
                 return_value="review-policy",
             )
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator._build_tool_info_block",
+                "plugins.xiaoqing_chat.reply_plan.tool_status_context",
                 new=AsyncMock(return_value=""),
             )
         )
         stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_max_context", return_value=10
-            )
+            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_max_context", return_value=10)
         )
         stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_temperature", return_value=0.7
-            )
+            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_temperature", return_value=0.7)
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator.get_brain_chat_identity", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_identity", return_value="")
         )
         stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_reply_style", return_value=""
-            )
+            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_reply_style", return_value="")
         )
         stack.enter_context(
             patch(
@@ -167,7 +151,7 @@ async def test_generate_reply_prefers_planner_goal_over_review_override_goal_sto
             )
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator.join_reply", return_value="好的")
+            patch("plugins.xiaoqing_chat.reply_draft.join_reply", return_value="好的")
         )
         stack.enter_context(
             patch(
@@ -184,11 +168,11 @@ async def test_generate_reply_prefers_planner_goal_over_review_override_goal_sto
             )
         )
 
-        result = await _generate_reply_draft(
+        result = await generate_reply_draft(
             text           = "那你推荐哪家？",
             event          = {},
             context        = mock_context,
-            runtime        = cast(Any, runtime),
+            runtime        = cast(Any, _complete_test_runtime_config(runtime)),
             state          = state,
             forced         = False,
             action         = action,
@@ -207,12 +191,12 @@ async def test_generate_reply_prefers_planner_goal_over_review_override_goal_sto
 async def test_generate_reply_rebuilds_memory_context_after_request_too_large(mock_context):
     from contextlib import ExitStack
 
-    from plugins.xiaoqing_chat.llm.llm_client import LLMError
+    from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
+    from plugins.xiaoqing_chat.llm.gateway import LLMError
     from plugins.xiaoqing_chat.llm.prompt_builder import ChatMessage
-    from plugins.xiaoqing_chat.llm.reply_checker import ReplyCheckResult
     from plugins.xiaoqing_chat.memory.memory import StoredMessage
     from plugins.xiaoqing_chat.planning.planned_action import PlannedAction
-    from plugins.xiaoqing_chat.reply_generator import _generate_reply_draft
+    from plugins.xiaoqing_chat.reply_generator import generate_reply_draft
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
@@ -251,16 +235,7 @@ async def test_generate_reply_rebuilds_memory_context_after_request_too_large(mo
     state.review_store.bind = Mock()
     state.inc_stats         = Mock()
 
-    fg = SimpleNamespace(
-        timeout_seconds        = 3.0,
-        max_retry              = 0,
-        retry_interval_seconds = 0.2,
-        to_dict                = lambda: {
-            "timeout_seconds": 3.0,
-            "max_retry": 0,
-            "retry_interval_seconds": 0.2,
-        },
-    )
+    fg = LLMCallConfig(timeout_seconds=3.0, max_retry=0, retry_interval_seconds=0.2)
 
     action = PlannedAction(
         action        = "reply",
@@ -288,66 +263,58 @@ async def test_generate_reply_rebuilds_memory_context_after_request_too_large(mo
 
     with ExitStack() as stack:
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._get_bot_name", return_value="小青")
+            patch("plugins.xiaoqing_chat.reply_plan.configured_bot_name", return_value="小青")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._chat_id", return_value="g1")
+            patch("plugins.xiaoqing_chat.reply_plan.event_chat_id", return_value="g1")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._is_private", return_value=False)
+            patch("plugins.xiaoqing_chat.reply_plan.is_private_event", return_value=False)
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator._get_ai_route_context",
+                "plugins.xiaoqing_chat.reply_plan.ai_route_context",
                 return_value={"api_base": "http://test", "api_key": "key", "model": "test-model"},
             )
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._resolve_llm_config", return_value=fg)
+            patch("plugins.xiaoqing_chat.reply_plan.llm_call_config", return_value=fg)
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._build_profile_block", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.sender_profile_context", return_value="")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._build_knowledge_block", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.knowledge_context", return_value="")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._build_expression_block", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.expression_context", return_value="")
+        )
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_plan.jargon_context", return_value="")
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator._build_jargon_explanation", return_value=""
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator._build_memory_block",
+                "plugins.xiaoqing_chat.reply_generator.retrieve_memory_context",
                 new=AsyncMock(side_effect=fake_build_memory_block),
             )
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator._build_tool_info_block",
+                "plugins.xiaoqing_chat.reply_plan.tool_status_context",
                 new=AsyncMock(return_value=""),
             )
         )
         stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_max_context", return_value=4
-            )
+            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_max_context", return_value=4)
         )
         stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_temperature", return_value=0.7
-            )
+            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_temperature", return_value=0.7)
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator.get_brain_chat_identity", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_identity", return_value="")
         )
         stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_reply_style", return_value=""
-            )
+            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_reply_style", return_value="")
         )
         stack.enter_context(
             patch(
@@ -370,7 +337,7 @@ async def test_generate_reply_rebuilds_memory_context_after_request_too_large(mo
             )
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator.join_reply", return_value="好的")
+            patch("plugins.xiaoqing_chat.reply_draft.join_reply", return_value="好的")
         )
         stack.enter_context(
             patch(
@@ -387,7 +354,7 @@ async def test_generate_reply_rebuilds_memory_context_after_request_too_large(mo
             )
         )
 
-        result = await _generate_reply_draft(
+        result = await generate_reply_draft(
             text           = "那你推荐哪家？",
             event          = {},
             context        = mock_context,
@@ -410,10 +377,10 @@ async def test_generate_reply_prefers_plan_reasoning_goal_when_action_reasoning_
 ):
     from contextlib import ExitStack
 
+    from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
     from plugins.xiaoqing_chat.llm.prompt_builder import ChatMessage
-    from plugins.xiaoqing_chat.llm.reply_checker import ReplyCheckResult
     from plugins.xiaoqing_chat.planning.planned_action import PlannedAction
-    from plugins.xiaoqing_chat.reply_generator import _generate_reply_draft
+    from plugins.xiaoqing_chat.reply_generator import generate_reply_draft
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
@@ -445,16 +412,7 @@ async def test_generate_reply_prefers_plan_reasoning_goal_when_action_reasoning_
     state.review_store.bind = Mock()
     state.inc_stats         = Mock()
 
-    fg = SimpleNamespace(
-        timeout_seconds        = 3.0,
-        max_retry              = 0,
-        retry_interval_seconds = 0.2,
-        to_dict                = lambda: {
-            "timeout_seconds": 3.0,
-            "max_retry": 0,
-            "retry_interval_seconds": 0.2,
-        },
-    )
+    fg = LLMCallConfig(timeout_seconds=3.0, max_retry=0, retry_interval_seconds=0.2)
 
     action = PlannedAction(
         action        = "reply",
@@ -466,66 +424,58 @@ async def test_generate_reply_prefers_plan_reasoning_goal_when_action_reasoning_
 
     with ExitStack() as stack:
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._get_bot_name", return_value="小青")
+            patch("plugins.xiaoqing_chat.reply_plan.configured_bot_name", return_value="小青")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._chat_id", return_value="g1")
+            patch("plugins.xiaoqing_chat.reply_plan.event_chat_id", return_value="g1")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._is_private", return_value=False)
+            patch("plugins.xiaoqing_chat.reply_plan.is_private_event", return_value=False)
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator._get_ai_route_context",
+                "plugins.xiaoqing_chat.reply_plan.ai_route_context",
                 return_value={"api_base": "http://test", "api_key": "key", "model": "test-model"},
             )
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._resolve_llm_config", return_value=fg)
+            patch("plugins.xiaoqing_chat.reply_plan.llm_call_config", return_value=fg)
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._build_profile_block", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.sender_profile_context", return_value="")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._build_knowledge_block", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.knowledge_context", return_value="")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._build_expression_block", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.expression_context", return_value="")
+        )
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_plan.jargon_context", return_value="")
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator._build_jargon_explanation", return_value=""
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator._build_memory_block",
+                "plugins.xiaoqing_chat.reply_generator.retrieve_memory_context",
                 new=AsyncMock(return_value=""),
             )
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator._build_tool_info_block",
+                "plugins.xiaoqing_chat.reply_plan.tool_status_context",
                 new=AsyncMock(return_value=""),
             )
         )
         stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_max_context", return_value=10
-            )
+            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_max_context", return_value=10)
         )
         stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_temperature", return_value=0.7
-            )
+            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_temperature", return_value=0.7)
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator.get_brain_chat_identity", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_identity", return_value="")
         )
         stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_reply_style", return_value=""
-            )
+            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_reply_style", return_value="")
         )
         stack.enter_context(
             patch(
@@ -548,7 +498,7 @@ async def test_generate_reply_prefers_plan_reasoning_goal_when_action_reasoning_
             )
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator.join_reply", return_value="好的")
+            patch("plugins.xiaoqing_chat.reply_draft.join_reply", return_value="好的")
         )
         stack.enter_context(
             patch(
@@ -565,7 +515,7 @@ async def test_generate_reply_prefers_plan_reasoning_goal_when_action_reasoning_
             )
         )
 
-        result = await _generate_reply_draft(
+        result = await generate_reply_draft(
             text           = "那你推荐哪家？",
             event          = {},
             context        = mock_context,
@@ -590,7 +540,7 @@ async def test_generate_reply_draft_exposes_canonical_text_parts(mock_context):
     from plugins.xiaoqing_chat.config.config import ResponsePostProcessConfig
     from plugins.xiaoqing_chat.llm.prompt_builder import ChatMessage
     from plugins.xiaoqing_chat.planning.planned_action import PlannedAction
-    from plugins.xiaoqing_chat.reply_generator import _generate_reply_draft
+    from plugins.xiaoqing_chat.reply_generator import generate_reply_draft
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
@@ -622,16 +572,7 @@ async def test_generate_reply_draft_exposes_canonical_text_parts(mock_context):
     state.review_store.bind = Mock()
     state.inc_stats         = Mock()
 
-    fg = SimpleNamespace(
-        timeout_seconds        = 3.0,
-        max_retry              = 0,
-        retry_interval_seconds = 0.2,
-        to_dict                = lambda: {
-            "timeout_seconds": 3.0,
-            "max_retry": 0,
-            "retry_interval_seconds": 0.2,
-        },
-    )
+    fg = LLMCallConfig(timeout_seconds=3.0, max_retry=0, retry_interval_seconds=0.2)
     action = PlannedAction(
         action        = "reply",
         think_level   = 1,
@@ -642,66 +583,58 @@ async def test_generate_reply_draft_exposes_canonical_text_parts(mock_context):
 
     with ExitStack() as stack:
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._get_bot_name", return_value="小青")
+            patch("plugins.xiaoqing_chat.reply_plan.configured_bot_name", return_value="小青")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._chat_id", return_value="g1")
+            patch("plugins.xiaoqing_chat.reply_plan.event_chat_id", return_value="g1")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._is_private", return_value=False)
+            patch("plugins.xiaoqing_chat.reply_plan.is_private_event", return_value=False)
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator._get_ai_route_context",
+                "plugins.xiaoqing_chat.reply_plan.ai_route_context",
                 return_value={"api_base": "http://test", "api_key": "key", "model": "test-model"},
             )
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._resolve_llm_config", return_value=fg)
+            patch("plugins.xiaoqing_chat.reply_plan.llm_call_config", return_value=fg)
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._build_profile_block", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.sender_profile_context", return_value="")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._build_knowledge_block", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.knowledge_context", return_value="")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._build_expression_block", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.expression_context", return_value="")
+        )
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_plan.jargon_context", return_value="")
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator._build_jargon_explanation", return_value=""
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator._build_memory_block",
+                "plugins.xiaoqing_chat.reply_generator.retrieve_memory_context",
                 new=AsyncMock(return_value=""),
             )
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator._build_tool_info_block",
+                "plugins.xiaoqing_chat.reply_plan.tool_status_context",
                 new=AsyncMock(return_value=""),
             )
         )
         stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_max_context", return_value=10
-            )
+            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_max_context", return_value=10)
         )
         stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_temperature", return_value=0.7
-            )
+            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_temperature", return_value=0.7)
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator.get_brain_chat_identity", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_identity", return_value="")
         )
         stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_reply_style", return_value=""
-            )
+            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_reply_style", return_value="")
         )
         stack.enter_context(
             patch(
@@ -719,11 +652,11 @@ async def test_generate_reply_draft_exposes_canonical_text_parts(mock_context):
             )
         )
 
-        draft = await _generate_reply_draft(
+        draft = await generate_reply_draft(
             text           = "你好",
             event          = {"message_id": 1, "user_id": 1},
             context        = mock_context,
-            runtime        = cast(Any, runtime),
+            runtime        = cast(Any, _complete_test_runtime_config(runtime)),
             state          = state,
             forced         = False,
             action         = action,

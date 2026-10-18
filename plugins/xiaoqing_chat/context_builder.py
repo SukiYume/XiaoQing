@@ -3,30 +3,36 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
+from collections.abc import Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.public_errors import public_error_message
 
 if TYPE_CHECKING:
-    from .runtime_state import _ChatRuntime
+    from .runtime_state import ChatRuntime
 
+from .chat_runtime import llm_call_config
 from .constants import (
     EXPRESSION_MAX_INJ_DEFAULT,
     MEMORY_RETRIEVAL_TIMEOUT,
     UNKNOWN_WORDS_MAX,
 )
-from .helper_utils import _resolve_llm_config
-from .logging_utils import _log_step
+from .logging_utils import log_step
+from .memory.memory import is_conversation_reply
 from .memory.memory_retrieval import build_memory_block
 from .memory.person_profile import build_profile_block
-from .utils.tool_info import build_tool_info_block
+from .message_parts import render_stored_message
+from .planning.goal_state import load_latest_topic_and_summary
+from .utils.wall_clock import describe_now, format_local
 
 
-async def _build_memory_block(
+async def retrieve_memory_context(
     *,
     context,
-    runtime: _ChatRuntime,
+    runtime: ChatRuntime,
     state,
     secrets: dict[str, Any],
     data_dir,
@@ -40,7 +46,7 @@ async def _build_memory_block(
     mem_t0       = time.monotonic()
     memory_block = ""
     try:
-        fg = _resolve_llm_config(runtime.cfg, foreground=True)
+        llm = llm_call_config(runtime.cfg, foreground=True)
         memory_block = await asyncio.wait_for(
             build_memory_block(
                 data_dir         = data_dir,
@@ -52,14 +58,11 @@ async def _build_memory_block(
                 current_text     = current_text,
                 planner_question = planner_question,
                 memory_db        = state.memory_db,
-                temperature      = runtime.cfg.temperature,
-                top_p            = runtime.cfg.top_p,
-                max_tokens       = runtime.cfg.max_tokens,
-                timeout_seconds  = fg.timeout_seconds,
+                llm              = llm,
             ),
             timeout=MEMORY_RETRIEVAL_TIMEOUT,
         )
-        _log_step(
+        log_step(
             context,
             runtime,
             chat_id = chat_id,
@@ -71,7 +74,7 @@ async def _build_memory_block(
         )
     except TimeoutError:
         memory_block = ""
-        _log_step(
+        log_step(
             context,
             runtime,
             chat_id = chat_id,
@@ -89,7 +92,7 @@ async def _build_memory_block(
             logger    = context.logger,
             component = "xiaoqing_chat.memory_context",
         )
-        _log_step(
+        log_step(
             context,
             runtime,
             chat_id = chat_id,
@@ -102,18 +105,34 @@ async def _build_memory_block(
     return memory_block
 
 
-def _build_profile_block(state, data_dir, chat_id: str, event: dict[str, Any]) -> str:
+def sender_profile_context(state, data_dir, chat_id: str, event: dict[str, Any]) -> str:
     """读取当前发送者画像并构造上下文片段。"""
     state.memory_db.bind(data_dir)
     return build_profile_block(state.memory_db, chat_id=chat_id, subject_id=event.get("user_id"))
 
 
-def _build_expression_block(runtime: _ChatRuntime, state, data_dir, chat_id: str) -> str:
+def _context_overlap(query: str, description: str) -> int:
+    """用词组和汉字二元组筛选候选，最终语义适配由回复模型判断。"""
+
+    def tokens(value: str) -> set[str]:
+        words = set(re.findall(r"[a-z0-9_]{2,}", value.casefold()))
+        for phrase in re.findall(r"[\u4e00-\u9fff]+", value):
+            words.update(phrase[i : i + 2] for i in range(len(phrase) - 1))
+        return words - {"自己", "这个", "一个", "时候", "可以", "就是", "什么", "我们"}
+
+    return len(tokens(query) & tokens(description))
+
+
+def expression_context(runtime: ChatRuntime, state, data_dir, chat_id: str, text: str = "") -> str:
     if not runtime.cfg.expression.enable_expression_selector:
         return ""
     state.bw_expr_store.bind(data_dir)
     expr_items = state.bw_expr_store.load()
     candidates = []
+    recent     = state.memory_store.get(chat_id)[-8:] if text else []
+    recent_bot = "\n".join(
+        render_stored_message(message) for message in recent if is_conversation_reply(message)
+    )
     for ex in expr_items:
         if ex.rejected:
             continue
@@ -121,11 +140,14 @@ def _build_expression_block(runtime: _ChatRuntime, state, data_dir, chat_id: str
             continue
         require_checked = runtime.cfg.reflection.require_approval_for_injection
         if require_checked and not ex.checked:
-            # “需要审核”必须是硬约束，出现次数不能绕过人工判断。
+            # 表达先通过自动自审或管理员审查，使用次数保持独立。
             continue
-        candidates.append(ex)
-    candidates.sort(key=lambda x: (-x.count, -x.last_active_time))
-    # 即使管理员主动开启选择器，每轮也只给一个提示，避免全局高频口癖淹没上下文。
+        relevance = _context_overlap(text, ex.situation)
+        if text and (relevance == 0 or ex.style in recent_bot):
+            continue
+        candidates.append((relevance, ex))
+    candidates.sort(key=lambda item: (-item[0], -item[1].last_active_time, -item[1].count))
+    # 每轮只给一个贴合语境的表达提示。
     max_inj = min(
         1,
         max(0, int(runtime.cfg.expression.max_injected or EXPRESSION_MAX_INJ_DEFAULT)),
@@ -134,14 +156,14 @@ def _build_expression_block(runtime: _ChatRuntime, state, data_dir, chat_id: str
     if not picked:
         return ""
     lines = []
-    for ex in picked:
+    for _, ex in picked:
         situation = str(ex.situation or "").strip()
         prefix    = "" if situation.startswith("当") else "当"
         lines.append(f"- {prefix}{situation}：{ex.style}")
     return "表达习惯（可参考，别生硬照抄）：\n" + "\n".join(lines)
 
 
-def _build_knowledge_block(runtime: _ChatRuntime, state, text: str) -> str:
+def knowledge_context(runtime: ChatRuntime, state, text: str) -> str:
     """查询全局知识库并构造提示词片段。"""
     if not runtime.cfg.knowledge.enable_knowledge or runtime.cfg.knowledge.top_k <= 0:
         return ""
@@ -159,31 +181,56 @@ def _build_knowledge_block(runtime: _ChatRuntime, state, text: str) -> str:
     return "你掌握的相关知识：\n" + "\n".join(kb_lines) + "\n"
 
 
-def _build_jargon_explanation(state, data_dir, chat_id: str, unknown_words: list[str]) -> str:
-    """优先从长期记忆、再从当前会话黑话库解释未知词。"""
-    if not unknown_words:
-        return ""
-    jargon_db = None
-    items     = []
-    for w in unknown_words[:UNKNOWN_WORDS_MAX]:
-        hits = state.memory_db.query_global(w, top_k=1, min_score=0.0, type_filter="word_def")
-        if hits:
-            items.append(hits[0].text.strip())
-        else:
-            if jargon_db is None:
-                state.bw_jargon_store.bind(data_dir)
-                jargon_db = state.bw_jargon_store.load()
-            rec = jargon_db.get(state.bw_jargon_store.key_for(w, chat_id))
-            if rec is None:
-                rec = jargon_db.get(state.bw_jargon_store.key_for(w))
-            if rec and (rec.is_global or rec.scope_chat_id == chat_id) and rec.meaning:
-                items.append(f"{w}：{rec.meaning}".strip())
+def jargon_context(state, data_dir, chat_id: str, unknown_words: list[str], text: str = "") -> str:
+    """优先读取本群释义，并提供少量可迁移的表达候选。"""
+    state.bw_jargon_store.bind(data_dir)
+    jargon_db  = state.bw_jargon_store.load()
+    recent     = state.memory_store.get(chat_id)[-8:] if text else []
+    recent_bot = "\n".join(
+        render_stored_message(message) for message in recent if is_conversation_reply(message)
+    )
+    scoped = [
+        rec
+        for rec in jargon_db.values()
+        if rec.meaning and (rec.is_global or rec.scope_chat_id == chat_id)
+    ]
+    scoped.sort(
+        key=lambda rec: (
+            rec.content in text,
+            _context_overlap(text, rec.meaning + " " + rec.usage),
+            rec.updated_at,
+        ),
+        reverse=True,
+    )
+    # 小批候选让模型判断场景迁移；近期用过的梗仅在本轮明确提及时重现。
+    candidates = [rec for rec in scoped if rec.content in text or rec.content not in recent_bot]
+    selected   = list(
+        dict.fromkeys([*unknown_words, *[rec.content for rec in candidates[:3] if text]])
+    )
+    items = []
+    for w in selected[:UNKNOWN_WORDS_MAX]:
+        rec = jargon_db.get(state.bw_jargon_store.key_for(w, chat_id)) or jargon_db.get(
+            state.bw_jargon_store.key_for(w)
+        )
+        if rec and (rec.is_global or rec.scope_chat_id == chat_id) and rec.meaning:
+            details = f"{w}：{rec.meaning}"
+            if rec.usage:
+                details += f"；适用场景：{rec.usage}"
+            if rec.tone:
+                details += f"；情绪：{rec.tone}"
+            items.append(details)
+        elif w in unknown_words:
+            hits = state.memory_db.query_global(w, top_k=1, min_score=0.0, type_filter="word_def")
+            items.extend(hit.text.strip() for hit in hits)
     if not items:
         return ""
-    return "黑话/缩写解释：\n- " + "\n- ".join(items)
+    return (
+        "本群梗与缩写候选（先匹配含义和情绪，贴合时最多活用一个；自然回应优先，认真和难过时收住玩笑）：\n- "
+        + "\n- ".join(items)
+    )
 
 
-async def _build_tool_info_block(
+async def tool_status_context(
     state,
     data_dir,
     bot_name: str,
@@ -200,10 +247,10 @@ async def _build_tool_info_block(
     window         = [t for t in state.get_reply_timestamps(chat_id) if now - t < 60.0]
     recent_actions = []
     for r in await state.action_history.get_recent_async(chat_id, max_items=8):
-        ts  = time.strftime("%H:%M:%S", time.localtime(r.ts))
+        ts  = format_local("%H:%M:%S", r.ts)
         tgt = r.local_target or "-"
         recent_actions.append(f"{ts} {r.action} {tgt} {r.reasoning}".strip())
-    return build_tool_info_block(
+    return _format_tool_status(
         data_dir               = data_dir,
         bot_name               = bot_name,
         chat_id                = chat_id,
@@ -215,3 +262,56 @@ async def _build_tool_info_block(
         cooldown_left_seconds  = cooldown_left,
         recent_actions         = recent_actions,
     )
+
+
+def _format_tool_status(
+    *,
+    data_dir: Path,
+    bot_name: str,
+    chat_id: str,
+    event: dict[str, Any],
+    goal: str = "",
+    last_reply_ts: float,
+    replies_last_minute: int,
+    continuous_reply_count: int,
+    cooldown_left_seconds: float,
+    recent_actions: Sequence[str],
+) -> str:
+    now      = describe_now()
+    group_id = event.get("group_id")
+    user_id  = event.get("user_id")
+    channel  = "私聊" if group_id is None else f"群聊(g{group_id})"
+
+    lines: list[str] = []
+    lines.append("可用工具信息：")
+    lines.append(f"- 当前时间：{now}")
+    lines.append(f"- 场景：{channel}")
+    lines.append(f"- 会话：{chat_id}")
+    if user_id is not None:
+        lines.append(f"- 说话人：{user_id}")
+    lines.append(f"- 机器人：{bot_name}")
+    if goal.strip():
+        lines.append(f"- 当前目标：{goal.strip()}")
+
+    since = max(0.0, time.time() - float(last_reply_ts or 0.0)) if last_reply_ts else 0.0
+    lines.append(
+        f"- 频率：距上次回复{since:.0f}s，60秒内回复{int(replies_last_minute)}，连续回复{int(continuous_reply_count)}，冷却剩余{max(0.0, cooldown_left_seconds):.0f}s"
+    )
+
+    topic, summary = load_latest_topic_and_summary(data_dir, chat_id)
+    topic_text = ""
+    if topic and summary:
+        topic_text = f"最新话题：{topic}\n摘要：{summary}"
+    elif topic:
+        topic_text = f"最新话题：{topic}"
+    if topic_text:
+        lines.append("- " + topic_text.replace("\n", "\n  "))
+
+    if recent_actions:
+        lines.append("- 最近动作：")
+        for a in list(recent_actions)[-6:]:
+            a = (a or "").strip()
+            if a:
+                lines.append(f"  - {a}")
+
+    return "\n".join(lines).strip() + "\n"

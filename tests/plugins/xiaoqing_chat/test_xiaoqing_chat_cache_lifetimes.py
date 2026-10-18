@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from plugins.xiaoqing_chat.media.event_media_common import RenderedMedia, ResolvedMedia
+from plugins.xiaoqing_chat.media.models import RenderedMedia, ResolvedMedia
 from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
 

@@ -27,7 +27,7 @@ from .planning.pfc_state import PFCStateStore
 
 
 @dataclass
-class _ChatRuntime:
+class ChatRuntime:
     cfg: XiaoQingChatConfig
     compiled_ban_regex: list[re.Pattern[str]]
 
@@ -93,9 +93,9 @@ class ChatRuntimeState:
         self._bw_recorder      = MessageRecorder()
         self._bw_jargon_store  = JargonStore()
 
-        self._runtime_cache: OrderedDict[str, _ChatRuntime] = OrderedDict()
-        self._runtime_mtime: dict[str, int]                 = {}
-        self._runtime_revision: dict[str, int]              = {}
+        self._runtime_cache: OrderedDict[str, ChatRuntime] = OrderedDict()
+        self._runtime_mtime: dict[str, int]                = {}
+        self._runtime_revision: dict[str, int]             = {}
 
         self._per_chat                                       = _PerChatState()
         self._bg_tasks: set[asyncio.Task[Any]]               = set()
@@ -161,7 +161,7 @@ class ChatRuntimeState:
     _MAX_RUNTIME_CACHES     = 32
     _MAX_PROVIDER_OVERRIDES = 500
 
-    def get_runtime(self, config_key: str) -> _ChatRuntime | None:
+    def get_runtime(self, config_key: str) -> ChatRuntime | None:
         cached = self._runtime_cache.get(config_key)
         if cached is not None:
             self._runtime_cache.move_to_end(config_key)
@@ -170,7 +170,7 @@ class ChatRuntimeState:
     def set_runtime(
         self,
         config_key: str,
-        runtime: _ChatRuntime,
+        runtime: ChatRuntime,
         mtime: int,
         revision: int,
     ) -> None:

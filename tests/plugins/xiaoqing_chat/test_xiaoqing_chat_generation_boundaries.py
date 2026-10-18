@@ -6,13 +6,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
+
 
 def test_is_brain_chat_active_keeps_private_brain_mode_when_forced() -> None:
     from plugins.xiaoqing_chat.brain_chat import is_brain_chat_active
     from plugins.xiaoqing_chat.config.config import BrainChatConfig, XiaoQingChatConfig
-    from plugins.xiaoqing_chat.runtime_state import _ChatRuntime
+    from plugins.xiaoqing_chat.runtime_state import ChatRuntime
 
-    runtime = _ChatRuntime(
+    runtime = ChatRuntime(
         cfg=XiaoQingChatConfig(
             brain_chat=BrainChatConfig(enable_private_brain_chat=True),
         ),
@@ -98,10 +100,7 @@ async def test_build_memory_block_fallback_keeps_global_memory_hits() -> None:
             current_text     = "你好",
             planner_question = "问点啥",
             memory_db        = memory_db,
-            temperature      = 0.7,
-            top_p            = 0.9,
-            max_tokens       = 256,
-            timeout_seconds  = 3.0,
+            llm=LLMCallConfig(temperature=0.7, top_p=0.9, max_tokens=256, timeout_seconds=3.0),
         )
 
     assert "全局知识命中" in block
@@ -158,10 +157,7 @@ async def test_build_memory_block_uses_current_text_when_question_generation_fai
             current_text     = "王府井以前有二次元店吗",
             planner_question = "",
             memory_db        = memory_db,
-            temperature      = 0.7,
-            top_p            = 0.9,
-            max_tokens       = 256,
-            timeout_seconds  = 3.0,
+            llm=LLMCallConfig(temperature=0.7, top_p=0.9, max_tokens=256, timeout_seconds=3.0),
         )
 
     assert queried == ["王府井以前有二次元店吗"]
@@ -202,10 +198,7 @@ async def test_memory_block_is_bounded_so_recent_dialogue_stays_primary() -> Non
         current_text     = "现在聊什么",
         planner_question = "",
         memory_db        = memory_db,
-        temperature      = 0.7,
-        top_p            = 0.9,
-        max_tokens       = 256,
-        timeout_seconds  = 3.0,
+        llm=LLMCallConfig(temperature=0.7, top_p=0.9, max_tokens=256, timeout_seconds=3.0),
     )
 
     assert block.startswith("你回忆起了以下信息：")
@@ -268,10 +261,7 @@ async def test_build_memory_block_does_not_forward_provider_overrides() -> None:
             current_text     = "她喜欢吃什么来着",
             planner_question = "她喜欢吃什么来着",
             memory_db        = memory_db,
-            temperature      = 0.7,
-            top_p            = 0.9,
-            max_tokens       = 256,
-            timeout_seconds  = 3.0,
+            llm=LLMCallConfig(temperature=0.7, top_p=0.9, max_tokens=256, timeout_seconds=3.0),
         )
 
     assert "喜欢吃辣" in block
@@ -279,11 +269,10 @@ async def test_build_memory_block_does_not_forward_provider_overrides() -> None:
 
 
 def test_llm_call_config_contains_only_runtime_controls() -> None:
-    from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
 
     config = LLMCallConfig(timeout_seconds=3.0, max_retry=0, retry_interval_seconds=0.2)
 
-    assert config.to_dict() == {
+    assert config.request_controls() == {
         "timeout_seconds": 3.0,
         "max_retry": 0,
         "retry_interval_seconds": 0.2,
@@ -397,8 +386,8 @@ async def test_gateway_forwards_extra_payload_without_streaming() -> None:
 async def test_xiaoqing_uses_safe_core_model_metadata(tmp_path) -> None:
     from core.ai import AIModelInfo
     from core.interfaces import PluginCapabilities
+    from plugins.xiaoqing_chat.chat_runtime import ai_route_context
     from plugins.xiaoqing_chat.config.config import load_xiaoqing_chat_config
-    from plugins.xiaoqing_chat.helper_utils import _get_ai_route_context
     from plugins.xiaoqing_chat.runtime_state import get_state
 
     state      = get_state()
@@ -436,7 +425,7 @@ async def test_xiaoqing_uses_safe_core_model_metadata(tmp_path) -> None:
             )
         )
 
-        secrets = _get_ai_route_context(context)
+        secrets = ai_route_context(context)
         loaded  = load_xiaoqing_chat_config(
             context_config = config,
             plugin_dir     = tmp_path,

@@ -16,12 +16,11 @@ import pytest
 from core.ai import AIModelInfo
 from core.interfaces import PluginCapabilities
 from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
-from plugins.xiaoqing_chat.llm.llm_client import LLMError
+from plugins.xiaoqing_chat.llm.gateway import LLMError
 from plugins.xiaoqing_chat.media.emoji_library import collect_emoji_candidate, load_emoji_library
 from plugins.xiaoqing_chat.media.event_media import (
     RenderedMedia,
     ResolvedMedia,
-    _download_url_bytes,
     build_effective_user_text,
     render_event_media,
     render_local_media_file,
@@ -33,13 +32,7 @@ from plugins.xiaoqing_chat.media.event_media_analysis import (
     _resolve_media_llm_secret_candidates,
     _semantic_retry_reason,
 )
-from plugins.xiaoqing_chat.media.event_media_common import (
-    MediaAnalysisDraft,
-    MediaPayloadTooLarge,
-    _looks_like_structured_media_text,
-    _read_file_bounded,
-    _run_media_blocking,
-)
+from plugins.xiaoqing_chat.media.loading import read_file_bounded, run_media_blocking
 from plugins.xiaoqing_chat.media.marker_resolver import (
     find_candidate_by_hint,
     marker_media_part,
@@ -48,7 +41,10 @@ from plugins.xiaoqing_chat.media.marker_resolver import (
     strip_outbound_marker_residue,
     text_without_outbound_marker,
 )
+from plugins.xiaoqing_chat.media.markers import looks_like_structured_media_text
+from plugins.xiaoqing_chat.media.models import MediaAnalysisDraft, MediaPayloadTooLarge
 from plugins.xiaoqing_chat.media.qq_face_catalog import load_qq_face_catalog
+from plugins.xiaoqing_chat.media.sources import _download_url_bytes
 from plugins.xiaoqing_chat.media_registry import compact_message_content, resolve_message_content
 from plugins.xiaoqing_chat.message_parts import message_parts_to_legacy
 from plugins.xiaoqing_chat.runtime_state import get_state
@@ -141,8 +137,6 @@ def _make_media_runtime(**media_overrides):
     cfg.temperature                             = 0.7
     cfg.top_p                                   = 0.9
     cfg.max_tokens                              = 256
-    cfg.max_retry                               = 1
-    cfg.retry_interval_seconds                  = 0.2
     cfg.foreground_max_retry                    = 0
     cfg.foreground_retry_interval_seconds       = 0.2
     cfg.background_max_retry                    = 1
@@ -235,16 +229,16 @@ __all__ = (
     "_animated_gif_bytes",
     "_download_url_bytes",
     "_load_and_prepare_media_for_llm",
-    "_looks_like_structured_media_text",
+    "looks_like_structured_media_text",
     "_make_media_runtime",
     "_media_llm_max_tokens",
     "_prepare_media_for_llm",
     "_raw_media_response",
-    "_read_file_bounded",
+    "read_file_bounded",
     "_reply_draft",
     "_reply_draft_with_parts",
     "_resolve_media_llm_secret_candidates",
-    "_run_media_blocking",
+    "run_media_blocking",
     "_semantic_retry_reason",
     "_vision_ai_service",
     "_write_png",

@@ -819,8 +819,8 @@ async def test_scheduled_job_freezes_default_explicit_and_empty_delivery_targets
 async def test_xiaoqing_provider_scope_uses_production_principal_capabilities(
     temp_app_root: Path,
 ):
-    from plugins.xiaoqing_chat.handlers import handle_provider
-    from plugins.xiaoqing_chat.helper_utils import _get_ai_route_context
+    from plugins.xiaoqing_chat.chat_runtime import ai_route_context
+    from plugins.xiaoqing_chat.commands import handle_provider
     from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
     app          = XiaoQingApp(temp_app_root)
@@ -891,13 +891,13 @@ async def test_xiaoqing_provider_scope_uses_production_principal_capabilities(
     state = ChatRuntimeState()
 
     with (
-        patch("plugins.xiaoqing_chat.handlers._state", return_value=state),
-        patch("plugins.xiaoqing_chat.helper_utils._state", return_value=state),
+        patch("plugins.xiaoqing_chat.commands.get_state", return_value=state),
+        patch("plugins.xiaoqing_chat.chat_runtime._state", return_value=state),
     ):
         local_result  = await handle_provider("glm", group_admin_event, group_context)
         denied_global = await handle_provider("global glm", group_admin_event, group_context)
-        group_a = _get_ai_route_context(group_context, chat_id="g100")
-        group_b = _get_ai_route_context(group_context, chat_id="g200")
+        group_a = ai_route_context(group_context, chat_id="g100")
+        group_b = ai_route_context(group_context, chat_id="g200")
 
         bot_admin_event = {
             "user_id": 12345,

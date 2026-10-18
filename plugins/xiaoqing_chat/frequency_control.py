@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import random
 import time
 from dataclasses import dataclass
@@ -10,12 +11,13 @@ from typing import TYPE_CHECKING
 from .constants import is_question
 from .participation import (
     classify_group_participation_cue,
+    is_group_repeat_chain,
     is_group_turn_directed_to_other,
     is_low_information_group_turn,
 )
 
 if TYPE_CHECKING:
-    from .runtime_state import _ChatRuntime
+    from .runtime_state import ChatRuntime
 
 
 @dataclass(frozen=True)
@@ -55,7 +57,7 @@ class ReplyGateDecision:
         return fields
 
 
-def _freq_record(chat_id: str, runtime: _ChatRuntime, state, *, forced: bool) -> None:
+def record_reply_frequency(chat_id: str, runtime: ChatRuntime, state, *, forced: bool) -> None:
     now = time.time()
     state.set_last_reply_ts(chat_id, now)
     timestamps = state.get_reply_timestamps(chat_id)
@@ -75,202 +77,169 @@ def _freq_record(chat_id: str, runtime: _ChatRuntime, state, *, forced: bool) ->
         state.set_continuous_reply_count(chat_id, 0)
 
 
-def _remember_reply_gate_decision(state, chat_id: str, decision: ReplyGateDecision) -> None:
-    has_real_method   = hasattr(type(state), "set_reply_gate_decision")
-    has_test_override = "set_reply_gate_decision" in getattr(state, "__dict__", {})
-    if not (has_real_method or has_test_override):
-        return
-    setter = getattr(state, "set_reply_gate_decision", None)
-    if not callable(setter):
-        return
+async def _repeat_chain_cue(state, chat_id: str, text: str) -> str:
+    """当前消息若在跟前一位群友复读，就作为参与信号；历史不可读时不影响原判断。"""
+
     try:
-        setter(chat_id, decision)
+        recent = await state.memory_store.get_recent_async(chat_id, max_items=4)
     except Exception:
-        return
+        return ""
+    user_texts = [message.content for message in recent if message.role == "user"]
+    # 当前消息通常已先写入历史；去掉末尾的自己再与前一位比较。
+    if user_texts and user_texts[-1].strip() == str(text or "").strip():
+        user_texts = user_texts[:-1]
+    return "repeat_chain" if is_group_repeat_chain(text, user_texts) else ""
 
 
-async def _should_reply_decision(
-    runtime: _ChatRuntime,
-    state,
-    chat_id: str,
-    text: str,
-    is_private: bool,
-    enable_private_brain_chat: bool,
-) -> ReplyGateDecision:
-    """
-    判断普通群聊消息是否应该主动参与。
+def _min_reply_interval(cfg, *, active_topic: bool, followup_question: bool) -> float:
+    interval = float(cfg.min_reply_interval_seconds)
+    if active_topic:
+        # 群聊中连续话题允许更快回复；别人紧接着追问时不再套用普通群聊的长间隔。
+        interval = min(interval, max(0.0, cfg.active_topic_min_reply_interval))
+        if followup_question:
+            interval = min(interval, max(0.0, cfg.active_topic_question_min_reply_interval))
+    return interval
 
-    明确冲机器人来的消息已经由 attention_gate 在 handler 层强制回复。
-    这里只保留硬频控、普通插话概率、heartflow 软加权和静默期补偿。
 
-    Args:
-        runtime: 运行时配置
-        state: 全局状态
-        chat_id: 聊天ID
-        text: 消息文本
-        is_private: 是否私聊
-        enable_private_brain_chat: 是否启用私聊深度对话
+def _hard_limit_reason(cfg, decision: ReplyGateDecision, text: str, *, is_private: bool) -> str:
+    """限流、冷却和明显不该接的消息无论其他信号如何都拦下。"""
 
-    Returns:
-        是否应该回复
-    """
-    now            = time.time()
-    last           = state.get_last_reply_ts(chat_id)
-    cooldown_until = state.get_continuous_cooldown_until(chat_id)
-    cooldown_left  = max(0.0, cooldown_until - now)
-    window         = [t for t in state.get_reply_timestamps(chat_id) if now - t < 60.0]
-    state.set_reply_timestamps(chat_id, window)
-    goal_state = await state.goal_store.get_async(chat_id) if runtime.cfg.goal.enable_goal else None
-    goal       = getattr(goal_state, "goal", "") if goal_state else ""
-    goal_ts    = float(getattr(goal_state, "ts", 0.0) or 0.0) if goal_state else 0.0
-
-    # --- 硬约束：无论其他信号如何，限流和冷却都必须生效。---
-    seconds_since = max(0.0, now - last) if last else 9999.0
-
-    is_active_topic = False
-    if not is_private and goal and (now - goal_ts < 300) and (seconds_since < 300):
-        is_active_topic = True
-    active_followup_question = is_active_topic and is_question(text)
-    participation_cue        = "" if is_private else classify_group_participation_cue(text)
-
-    actual_min_interval = runtime.cfg.min_reply_interval_seconds
-    if is_active_topic:
-        # 群聊中连续话题，允许更快回复
-        active_topic_min_interval = max(
-            0.0,
-            runtime.cfg.active_topic_min_reply_interval,
-        )
-        actual_min_interval = min(actual_min_interval, active_topic_min_interval)
-        if active_followup_question:
-            # 别人紧接着追问上一条回复时，不应仍套用普通群聊的长间隔。
-            question_min_interval = max(
-                0.0,
-                runtime.cfg.active_topic_question_min_reply_interval,
-            )
-            actual_min_interval = min(actual_min_interval, question_min_interval)
-
-    def make_decision(
-        should_reply: bool,
-        reason: str,
-        *,
-        probability: float | None     = None,
-        roll: float | None            = None,
-        no_reply_streak: int          = 0,
-        heartflow_score: float | None = None,
-    ) -> ReplyGateDecision:
-        decision = ReplyGateDecision(
-            should_reply             = should_reply,
-            reason                   = reason,
-            probability              = probability,
-            roll                     = roll,
-            seconds_since_last_reply = seconds_since,
-            min_interval_seconds     = actual_min_interval,
-            replies_last_minute      = len(window),
-            max_replies_per_minute   = runtime.cfg.max_replies_per_minute,
-            cooldown_left_seconds    = cooldown_left,
-            no_reply_streak          = no_reply_streak,
-            heartflow_score          = heartflow_score,
-            active_topic             = is_active_topic,
-            participation_cue        = participation_cue,
-        )
-        _remember_reply_gate_decision(state, chat_id, decision)
-        return decision
-
-    if actual_min_interval > 0 and seconds_since < actual_min_interval:
-        return make_decision(False, "min_interval")
-    if runtime.cfg.max_replies_per_minute > 0 and len(window) >= runtime.cfg.max_replies_per_minute:
-        return make_decision(False, "max_replies_per_minute")
-    if cooldown_left > 0:
-        return make_decision(False, "continuous_cooldown")
+    if decision.min_interval_seconds > 0 and (
+        decision.seconds_since_last_reply < decision.min_interval_seconds
+    ):
+        return "min_interval"
+    if (
+        cfg.max_replies_per_minute > 0
+        and decision.replies_last_minute >= cfg.max_replies_per_minute
+    ):
+        return "max_replies_per_minute"
+    if decision.cooldown_left_seconds > 0:
+        return "continuous_cooldown"
     if not is_private and is_low_information_group_turn(text):
-        return make_decision(False, "low_information")
+        return "low_information"
     if not is_private and is_group_turn_directed_to_other(text):
-        return make_decision(False, "directed_to_other")
+        return "directed_to_other"
+    return ""
 
-    # --- 深度对话模式下跳过概率控制 ---
-    if enable_private_brain_chat and is_private:
-        return make_decision(True, "private_brain_chat")
 
-    # --- 单层概率控制：这里只处理普通参与，明确私聊/点名已在前面放行 ---
-    p = runtime.cfg.reply_probability_base
+def _participation_probability(
+    cfg, *, cue: str, active_topic: bool, followup_question: bool
+) -> float:
+    """普通插话概率；面向全群的线索和活跃话题只抬高到各自的上限，不叠加放大。"""
 
-    if participation_cue:
-        # 明确面向全群的问题、邀请和开场梗值得更稳定地进入 PFC；这里仍只提高
-        # 概率，前面的间隔、每分钟上限和连续回复冷却继续作为硬约束。
-        cue_probability = runtime.cfg.participation_cue_reply_probability
-        p               = max(p, min(1.0, cue_probability))
+    probability = float(cfg.reply_probability_base)
+    if cue:
+        probability = max(probability, min(1.0, cfg.participation_cue_reply_probability))
+    if active_topic:
+        probability = max(probability, min(1.0, cfg.active_topic_reply_probability))
+        if followup_question:
+            # 活跃话题里的明确追问更像连续对话；仍保留小概率静默，PFC 会再判断是否在跟机器人说话。
+            probability = max(probability, min(1.0, cfg.active_topic_question_reply_probability))
+    return probability
 
-    if (not is_private) and is_active_topic:
-        # 使用明确上限而不是按剩余概率大幅增益，避免 0.72 被抬到 0.888 一类过强参与率。
-        active_probability = runtime.cfg.active_topic_reply_probability
-        p                  = max(p, min(1.0, active_probability))
-        if active_followup_question:
-            # 活跃话题里的明确追问更像连续对话，而不是随机插话；仍保留小概率静默，
-            # 后续 PFC 也会再次判断消息是否真的在跟小青说话。
-            question_probability = runtime.cfg.active_topic_question_reply_probability
-            p                    = max(p, min(1.0, question_probability))
 
-    # Heartflow 信号作为概率调整（软加分），不再作为硬门槛
-    hf_score: float | None = None
-    if runtime.cfg.heartflow.enable_heartflow:
-        hf_score = await state.heartflow.score_async(
-            chat_id                  = chat_id,
-            text                     = text,
-            goal                     = goal,
-            seconds_since_last_reply = seconds_since,
-            base                     = runtime.cfg.heartflow.base_score,
-            weight_question          = runtime.cfg.heartflow.weight_question,
-            weight_goal_match        = runtime.cfg.heartflow.weight_goal_match,
-            weight_short_text        = runtime.cfg.heartflow.weight_short_text,
-            weight_no_reply_streak   = runtime.cfg.heartflow.weight_no_reply_streak,
-            weight_long_silence      = runtime.cfg.heartflow.weight_long_silence,
-        )
-        hf_bonus = max(0.0, hf_score - runtime.cfg.heartflow.base_score)
-        p        = p + (1.0 - p) * hf_bonus
-
-    # --- 动态阈值：连续不回复会逐步降低门槛（参考 MaiBot）。---
-    no_reply_streak = (await state.heartflow.get_async(chat_id)).no_reply_streak
-    if no_reply_streak >= 5:
-        p = min(p * 1.4, 0.95)
-    elif no_reply_streak >= 3:
-        p = min(p * 1.2, 0.90)
-
-    p = max(0.0, min(1.0, p))
-
-    roll = random.random()
-    if roll >= p:
-        return make_decision(
-            False,
-            "probability",
-            probability     = p,
-            roll            = roll,
-            no_reply_streak = no_reply_streak,
-            heartflow_score = hf_score,
-        )
-    return make_decision(
-        True,
-        "allowed",
-        probability     = p,
-        roll            = roll,
-        no_reply_streak = no_reply_streak,
-        heartflow_score = hf_score,
+async def _heartflow_score(cfg, state, chat_id: str, text: str, goal: str, since: float) -> float:
+    heartflow = cfg.heartflow
+    score     = await state.heartflow.score_async(
+        chat_id                  = chat_id,
+        text                     = text,
+        goal                     = goal,
+        seconds_since_last_reply = since,
+        base                     = heartflow.base_score,
+        weight_question          = heartflow.weight_question,
+        weight_goal_match        = heartflow.weight_goal_match,
+        weight_short_text        = heartflow.weight_short_text,
+        weight_no_reply_streak   = heartflow.weight_no_reply_streak,
+        weight_long_silence      = heartflow.weight_long_silence,
     )
+    return float(score)
 
 
-async def _should_reply(
-    runtime: _ChatRuntime,
+def _streak_adjusted(probability: float, no_reply_streak: int) -> float:
+    """连续不回复会逐步降低门槛。"""
+    if no_reply_streak >= 5:
+        return min(probability * 1.4, 0.95)
+    if no_reply_streak >= 3:
+        return min(probability * 1.2, 0.90)
+    return probability
+
+
+async def decide_reply(
+    runtime: ChatRuntime,
     state,
     chat_id: str,
     text: str,
     is_private: bool,
     enable_private_brain_chat: bool,
 ) -> bool:
-    decision = await _should_reply_decision(
-        runtime,
-        state,
-        chat_id,
-        text,
-        is_private,
-        enable_private_brain_chat,
+    """判断普通消息是否主动参与，并把决策细节记入运行状态供日志使用。
+
+    明确冲机器人来的消息已经由 attention_gate 在 handler 层强制回复；这里只处理硬频控、
+    普通插话概率、heartflow 软加分和静默期补偿。
+    """
+
+    cfg    = runtime.cfg
+    now    = time.time()
+    last   = state.get_last_reply_ts(chat_id)
+    since  = max(0.0, now - last) if last else 9999.0
+    window = [t for t in state.get_reply_timestamps(chat_id) if now - t < 60.0]
+    state.set_reply_timestamps(chat_id, window)
+    goal_state   = await state.goal_store.get_async(chat_id) if cfg.goal.enable_goal else None
+    goal         = goal_state.goal if goal_state else ""
+    active_topic = bool(
+        not is_private
+        and goal_state is not None
+        and goal
+        and now - float(goal_state.ts) < 300
+        and since < 300
     )
+    followup_question = active_topic and is_question(text)
+    cue               = ""
+    if not is_private:
+        cue = classify_group_participation_cue(text) or await _repeat_chain_cue(
+            state, chat_id, text
+        )
+
+    decision = ReplyGateDecision(
+        should_reply             = False,
+        reason                   = "",
+        seconds_since_last_reply = since,
+        min_interval_seconds     = _min_reply_interval(
+            cfg, active_topic=active_topic, followup_question=followup_question
+        ),
+        replies_last_minute    = len(window),
+        max_replies_per_minute = cfg.max_replies_per_minute,
+        cooldown_left_seconds  = max(0.0, state.get_continuous_cooldown_until(chat_id) - now),
+        active_topic           = active_topic,
+        participation_cue      = cue,
+    )
+    if reason := _hard_limit_reason(cfg, decision, text, is_private=is_private):
+        decision = dataclasses.replace(decision, reason=reason)
+    elif enable_private_brain_chat and is_private:
+        # 深度对话模式下跳过概率控制。
+        decision = dataclasses.replace(decision, should_reply=True, reason="private_brain_chat")
+    else:
+        probability = _participation_probability(
+            cfg, cue=cue, active_topic=active_topic, followup_question=followup_question
+        )
+        score = None
+        if cfg.heartflow.enable_heartflow:
+            # Heartflow 信号作为软加分，不作为硬门槛。
+            score       = await _heartflow_score(cfg, state, chat_id, text, goal, since)
+            probability = probability + (1.0 - probability) * max(
+                0.0, score - cfg.heartflow.base_score
+            )
+        streak      = (await state.heartflow.get_async(chat_id)).no_reply_streak
+        probability = max(0.0, min(1.0, _streak_adjusted(probability, streak)))
+        roll        = random.random()
+        decision    = dataclasses.replace(
+            decision,
+            should_reply    = roll < probability,
+            reason          = "allowed" if roll < probability else "probability",
+            probability     = probability,
+            roll            = roll,
+            no_reply_streak = streak,
+            heartflow_score = score,
+        )
+    state.set_reply_gate_decision(chat_id, decision)
     return decision.should_reply

@@ -9,7 +9,8 @@ from __future__ import annotations
 import asyncio
 import math
 from abc import ABC, abstractmethod
-from contextlib import AbstractContextManager
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from typing import Any, Generic, TypeVar
 
@@ -100,12 +101,6 @@ def delete_json_artifacts(path: Path) -> None:
         raise first_error
 
 
-def load_json_file(path: Path, default: Any = None) -> Any:
-    """通过 core 原子存储协议读取 JSON，并在主文件损坏时恢复备份。"""
-
-    return load_json(path, default=default)
-
-
 class StoreBase:
     """
     存储基类，提供通用的数据目录绑定和文件操作方法。
@@ -116,8 +111,10 @@ class StoreBase:
     def __init__(self) -> None:
         self._data_dir: Path | None = None
 
-    # 子类沿用原有存储接口，底层实现同时供实验工具复用。
-    _load_json = staticmethod(load_json_file)
+    @staticmethod
+    def _load_json(path: Path, default: Any = None) -> Any:
+        """通过 core 原子存储协议读取 JSON，主文件损坏时恢复备份。"""
+        return load_json(path, default)
 
     def bind(self, data_dir: Path) -> None:
         """
@@ -141,6 +138,22 @@ class StoreBase:
         if not self._data_dir:
             return None
         return self._data_dir.joinpath(*parts)
+
+    def generation(self, chat_id: str) -> str:
+        from .memory.person_profile import get_profile_generation
+
+        return get_profile_generation(self._data_dir, chat_id) if self._data_dir else ""
+
+    @contextmanager
+    def generation_guard(self, chat_id: str, expected: str) -> Iterator[bool]:
+        """让后台写入与会话重置共享版本检查和互斥锁。"""
+        from .memory.person_profile import profile_generation_path
+
+        if self._data_dir is None:
+            yield True
+            return
+        with keyed_path_lock(profile_generation_path(self._data_dir, chat_id)):
+            yield self.generation(chat_id) == expected
 
     def _load_json_from_path_parts(self, *parts: str, default: Any = None) -> Any:
         path = self._resolve_path(*parts)
@@ -179,15 +192,12 @@ class AsyncKeyedStore(StoreBase, Generic[T], ABC):
     """统一把按会话键读写的同步存储桥接到异步调用方。"""
 
     @abstractmethod
-    def get(self, _chat_id: str) -> T:
+    def get(self, event_chat_id: str) -> T:
         """同步读取一个会话状态。"""
 
     @abstractmethod
-    def clear(self, _chat_id: str) -> None:
+    def clear(self, event_chat_id: str) -> None:
         """同步清除一个会话状态。"""
 
     async def get_async(self, chat_id: str) -> T:
         return await asyncio.to_thread(self.get, chat_id)
-
-    async def clear_async(self, chat_id: str) -> None:
-        await asyncio.to_thread(self.clear, chat_id)

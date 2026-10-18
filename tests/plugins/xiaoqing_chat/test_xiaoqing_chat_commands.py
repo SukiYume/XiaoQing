@@ -297,11 +297,11 @@ def test_xiaoqing_chat_show_help_contains_all_sections():
 
 @pytest.mark.plugin
 @pytest.mark.asyncio
-async def test_call_bot_name_only_internal(mock_context):
-    """Test call_bot_name_only_internal returns response"""
-    from plugins.xiaoqing_chat.main import call_bot_name_only_internal
+async def test_call_bot_name_only(mock_context):
+    """Test call_bot_name_only returns response"""
+    from plugins.xiaoqing_chat.main import call_bot_name_only
 
-    result = await call_bot_name_only_internal(mock_context)
+    result = await call_bot_name_only(mock_context)
 
     assert isinstance(result, list)
     assert len(result) > 0
@@ -310,28 +310,28 @@ async def test_call_bot_name_only_internal(mock_context):
 
 @pytest.mark.plugin
 @pytest.mark.asyncio
-async def test_call_bot_name_only_internal_uses_configured_replies(mock_context):
-    from plugins.xiaoqing_chat.main import call_bot_name_only_internal
+async def test_call_bot_name_only_uses_configured_replies(mock_context):
+    from plugins.xiaoqing_chat.main import call_bot_name_only
 
     mock_context.config = {
         "bot_name": "小青",
         "plugins": {"xiaoqing_chat": {"bot_name_only_replies": ["收到"]}},
     }
 
-    result = await call_bot_name_only_internal(mock_context)
+    result = await call_bot_name_only(mock_context)
 
     assert result[0]["data"]["text"] == "收到"
 
 
 @pytest.mark.plugin
 @pytest.mark.asyncio
-async def test_call_bot_name_only_internal_varies_response(mock_context):
-    """Test call_bot_name_only_internal can return different responses"""
-    from plugins.xiaoqing_chat.main import call_bot_name_only_internal
+async def test_call_bot_name_only_varies_response(mock_context):
+    """Test call_bot_name_only can return different responses"""
+    from plugins.xiaoqing_chat.main import call_bot_name_only
 
     responses = set()
     for _ in range(20):
-        result = await call_bot_name_only_internal(mock_context)
+        result = await call_bot_name_only(mock_context)
         if result:
             responses.add(result[0]["data"]["text"])
 
@@ -341,14 +341,14 @@ async def test_call_bot_name_only_internal_varies_response(mock_context):
 
 @pytest.mark.plugin
 @pytest.mark.asyncio
-async def test_call_bot_name_only_internal_marks_followup_pending(mock_context):
+async def test_call_bot_name_only_marks_followup_pending(mock_context):
     """Calling only the bot name should force the next same-user group turn."""
-    from plugins.xiaoqing_chat.main import call_bot_name_only_internal
+    from plugins.xiaoqing_chat.main import call_bot_name_only
     from plugins.xiaoqing_chat.runtime_state import get_state, reset_global_state
 
     reset_global_state()
     try:
-        result = await call_bot_name_only_internal(mock_context)
+        result = await call_bot_name_only(mock_context)
 
         assert result
         state = get_state()
@@ -382,12 +382,12 @@ async def test_pending_bot_name_followup_bypasses_reply_gate(mock_context, sampl
     hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)
 
     with (
-        patch("plugins.xiaoqing_chat.handlers._should_ignore_text", return_value=False),
-        patch("plugins.xiaoqing_chat.handlers._is_at_me", return_value=False),
-        patch("plugins.xiaoqing_chat.handlers._has_bot_name", return_value=False),
-        patch("plugins.xiaoqing_chat.handlers._is_private", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers.is_ignored_text", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers.is_bot_mentioned", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers.mentions_bot_name", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers.is_private_event", return_value=False),
         patch(
-            "plugins.xiaoqing_chat.handlers._should_reply", new=AsyncMock(return_value=False)
+            "plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=False)
         ) as gate,
     ):
         prepared = await _prepare_smalltalk_turn("起床了没", event, mock_context, hctx)
@@ -674,7 +674,7 @@ async def test_runtime_cleanup_stale_prefers_recent_observe_activity():
 async def test_action_history_flush_task_entry_removed_after_task_done():
     from plugins.xiaoqing_chat.task_scheduler import (
         _action_flush_tasks,
-        _schedule_action_history_flush,
+        schedule_action_history_flush,
     )
 
     context = MagicMock()
@@ -690,7 +690,7 @@ async def test_action_history_flush_task_entry_removed_after_task_done():
                 new=AsyncMock(return_value=None),
             ),
         ):
-            _schedule_action_history_flush(context, runtime, chat_id="g1")
+            schedule_action_history_flush(context, runtime, chat_id="g1")
             await asyncio.sleep(0)
             await asyncio.sleep(0)
             await asyncio.sleep(0)

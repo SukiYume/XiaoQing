@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from plugins.xiaoqing_chat.config.config import MemoryConfig
+from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.memory.memory_retrieval import (
     _execute_memory_tool,
@@ -47,12 +48,14 @@ def _react_kwargs(*, history: list[StoredMessage] | None = None) -> dict:
         "chat_id": "g1",
         "question": "她之前说喜欢什么？",
         "memory_db": MagicMock(),
-        "temperature": 0.5,
-        "top_p": 0.9,
-        "max_tokens": 256,
-        "timeout_seconds": 1.0,
-        "max_retry": 0,
-        "retry_interval_seconds": 0.0,
+        "llm": LLMCallConfig(
+            temperature            = 0.5,
+            top_p                  = 0.9,
+            max_tokens             = 256,
+            timeout_seconds        = 1.0,
+            max_retry              = 0,
+            retry_interval_seconds = 0.0,
+        ),
     }
 
 
@@ -232,10 +235,7 @@ async def test_memory_direct_miss_skips_agent_for_ordinary_message(
         current_text     = "冻饺子怎么煮",
         planner_question = "",
         memory_db        = memory_db,
-        temperature      = 0.7,
-        top_p            = 0.9,
-        max_tokens       = 256,
-        timeout_seconds  = 3.0,
+        llm=LLMCallConfig(temperature=0.7, top_p=0.9, max_tokens=256, timeout_seconds=3.0),
     )
 
     assert block == ""
@@ -277,10 +277,7 @@ async def test_memory_direct_query_runs_outside_event_loop_thread(monkeypatch, t
         current_text     = "普通消息",
         planner_question = "",
         memory_db        = memory_db,
-        temperature      = 0.7,
-        top_p            = 0.9,
-        max_tokens       = 256,
-        timeout_seconds  = 3.0,
+        llm=LLMCallConfig(temperature=0.7, top_p=0.9, max_tokens=256, timeout_seconds=3.0),
     )
 
     assert observed_threads
@@ -317,10 +314,7 @@ async def test_memory_direct_miss_keeps_agent_for_explicit_recall(
         current_text     = "她之前说过喜欢什么来着",
         planner_question = "",
         memory_db        = memory_db,
-        temperature      = 0.7,
-        top_p            = 0.9,
-        max_tokens       = 256,
-        timeout_seconds  = 3.0,
+        llm=LLMCallConfig(temperature=0.7, top_p=0.9, max_tokens=256, timeout_seconds=3.0),
     )
 
     assert "喜欢清淡口味" in block

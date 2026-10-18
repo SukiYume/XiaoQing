@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
 from core.plugin_base import emoji, face, image, segments
 
+from .llm.postprocess import split_chat_reply
 from .media_registry import MEDIA_PLACEHOLDER_RE, rebuild_message_content
 from .message_parts import (
     message_parts_to_legacy,
     normalize_message_parts,
     template_with_fallback_placeholders,
 )
-from .reply_splitter import _split_chat_reply
+
+# 聊天气泡行尾的单个句号像公文；省略号、连用标点和代码块保持原样。
+_LONE_FULL_STOP_RE = re.compile(r"(?<![。.…])。$", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -84,12 +88,14 @@ def _build_reply_payload_core(
     payload_parts: tuple[dict[str, Any], ...],
 ) -> ReplyPayload:
     template = template_with_fallback_placeholders(reply_template, media_sequence)
-    parts = _split_chat_reply(template) if template else []
+    parts = split_chat_reply(template) if template else []
     outbound_batches: list[list[dict[str, Any]]] = []
     consumed_indexes: set[int] = set()
     for part in parts:
         if not part or not part.strip():
             continue
+        if not part.lstrip().startswith("```"):
+            part = _LONE_FULL_STOP_RE.sub("", part)
         batch_segments, batch_indexes = _build_batch_segments(part, media_sequence)
         if batch_segments:
             outbound_batches.append(batch_segments)

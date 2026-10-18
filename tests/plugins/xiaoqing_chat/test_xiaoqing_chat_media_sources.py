@@ -31,6 +31,92 @@ mock_context = _fixture_support.mock_context
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("recovery_source", ["message", "image_api", "public_url"])
+async def test_ordinary_image_recovers_adapter_identifier(mock_context, recovery_source):
+    from plugins.xiaoqing_chat.media.sources import _resolve_media_bytes
+
+    event      = {"message_id": 42}
+    segment    = {"type": "image", "data": {"file": "image-42.image"}}
+    encoded    = "base64://" + base64.b64encode(_PNG_BYTES).decode("ascii")
+    detail     = {"message": [{"type": "image", "data": {"file": encoded}}]}
+    image_data = (
+        {"file": "C:/outside/adapter-cache.png", "url": "https://example.com/image.png"}
+        if recovery_source == "public_url"
+        else {"base64": base64.b64encode(_PNG_BYTES).decode("ascii")}
+    )
+    media = SimpleNamespace(
+        get_message=AsyncMock(return_value=detail if recovery_source == "message" else {}),
+        get_image=AsyncMock(return_value=image_data),
+    )
+    mock_context.capabilities = PluginCapabilities(onebot_media=media)
+    with patch(
+        "plugins.xiaoqing_chat.media.sources._download_url_bytes",
+        new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
+    ) as download:
+        payload, _, _ = await _resolve_media_bytes(
+            segment, context=mock_context, max_bytes=1024, event=event
+        )
+
+    assert payload == _PNG_BYTES
+    if recovery_source == "message":
+        media.get_image.assert_not_awaited()
+    else:
+        media.get_image.assert_awaited_once_with(file="image-42.image", file_id=None)
+    if recovery_source == "public_url":
+        download.assert_awaited_once_with("https://example.com/image.png", max_bytes=1024)
+
+
+@pytest.mark.asyncio
+async def test_adapter_recovery_retains_size_and_local_path_limits(mock_context):
+    from plugins.xiaoqing_chat.media.sources import _resolve_media_bytes
+
+    segment = {"type": "image", "data": {"file": "image-42.image"}}
+    media   = SimpleNamespace(
+        get_message=AsyncMock(return_value={}),
+        get_image=AsyncMock(return_value={"base64": base64.b64encode(_PNG_BYTES).decode("ascii")}),
+    )
+    mock_context.capabilities = PluginCapabilities(onebot_media=media)
+    with pytest.raises(FileNotFoundError):
+        await _resolve_media_bytes(
+            segment, context=mock_context, max_bytes=8, event={"message_id": 42}
+        )
+    assert media.get_image.await_count == 1
+    media.get_image.reset_mock()
+    segment["data"]["file"] = "C:/outside/adapter-cache.png"
+    with pytest.raises(FileNotFoundError):
+        await _resolve_media_bytes(
+            segment, context=mock_context, max_bytes=1024, event={"message_id": 42}
+        )
+    media.get_image.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ordinary_image_recovery_keeps_multiple_attachments_distinct(mock_context):
+    from plugins.xiaoqing_chat.media.sources import _resolve_media_bytes
+
+    media = SimpleNamespace(
+        get_message=AsyncMock(
+            return_value={
+                "message": [
+                    {"type": "image", "data": {"file": "other-a.image"}},
+                    {"type": "image", "data": {"file": "other-b.image"}},
+                ]
+            }
+        ),
+        get_image=AsyncMock(return_value={}),
+    )
+    mock_context.capabilities = PluginCapabilities(onebot_media=media)
+    with pytest.raises(FileNotFoundError):
+        await _resolve_media_bytes(
+            {"type": "image", "data": {"file": "wanted.image"}},
+            context   = mock_context,
+            max_bytes = 1024,
+            event     = {"message_id": 42},
+        )
+    media.get_image.assert_awaited_once_with(file="wanted.image", file_id=None)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "file_value",
     [
@@ -45,7 +131,7 @@ async def test_render_event_media_text_supports_inline_image_sources(mock_contex
     }
 
     with patch(
-        "plugins.xiaoqing_chat.media.event_media._analyze_media_with_llm",
+        "plugins.xiaoqing_chat.media.event_media.analyze_media_with_llm",
         new=AsyncMock(return_value=None),
     ):
         text = await render_event_media_text(event, context=mock_context, runtime=runtime)
@@ -89,7 +175,7 @@ async def test_render_event_media_blocks_file_uri_outside_plugin_data_dir(mock_c
     }
 
     with patch(
-        "plugins.xiaoqing_chat.media.event_media._analyze_media_with_llm",
+        "plugins.xiaoqing_chat.media.event_media.analyze_media_with_llm",
         new=AsyncMock(side_effect=AssertionError("outside file should not be analyzed")),
     ):
         rendered = await render_event_media(event, context=mock_context, runtime=runtime)
@@ -119,11 +205,11 @@ async def test_render_event_media_text_marks_napcat_store_emoji_image(mock_conte
 
     with (
         patch(
-            "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+            "plugins.xiaoqing_chat.media.sources._download_url_bytes",
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
-            "plugins.xiaoqing_chat.media.event_media._analyze_media_with_llm",
+            "plugins.xiaoqing_chat.media.event_media.analyze_media_with_llm",
             new=AsyncMock(return_value=None),
         ),
     ):
@@ -165,7 +251,7 @@ async def test_render_event_media_text_transcodes_octet_stream_sticker_for_visio
 
     with (
         patch(
-            "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+            "plugins.xiaoqing_chat.media.sources._download_url_bytes",
             new=AsyncMock(return_value=(_animated_gif_bytes(), "application/octet-stream")),
         ),
         patch(
@@ -240,7 +326,7 @@ async def test_render_event_media_text_supports_face_segment(mock_context):
 
 @pytest.mark.asyncio
 async def test_event_media_items_for_memory_preserves_qq_face_identity(mock_context):
-    from plugins.xiaoqing_chat.handlers import _event_media_items_for_memory
+    from plugins.xiaoqing_chat.reply_media import event_media_items_for_memory
 
     runtime = _make_media_runtime()
     event   = {
@@ -255,7 +341,7 @@ async def test_event_media_items_for_memory_preserves_qq_face_identity(mock_cont
         ]
     }
 
-    items = await _event_media_items_for_memory(event, context=mock_context, runtime=runtime)
+    items = await event_media_items_for_memory(event, context=mock_context, runtime=runtime)
 
     assert items == [
         {
@@ -393,7 +479,10 @@ async def test_build_effective_user_text_surfaces_emoji_visible_text_as_quoted_s
         runtime = runtime,
     )
 
-    assert text == "[表情包：疑惑，调侃；写着“那咋整啊”]"
+    # 画面内容和配字同时保留，追问画面细节时才有依据。
+    assert text == (
+        "[表情包：疑惑，调侃；内容：一个猫耳动漫女孩露出惊讶表情，配文字表达疑惑或调侃。；写着“那咋整啊”]"
+    )
 
 
 @pytest.mark.asyncio
@@ -458,7 +547,7 @@ async def test_render_event_media_text_fetches_mface_image_via_onebot_apis(mock_
     mock_context.capabilities = PluginCapabilities(onebot_media=media)
 
     with patch(
-        "plugins.xiaoqing_chat.media.event_media._analyze_media_with_llm",
+        "plugins.xiaoqing_chat.media.event_media.analyze_media_with_llm",
         new=AsyncMock(return_value=None),
     ):
         text = await render_event_media_text(event, context=mock_context, runtime=runtime)
@@ -489,7 +578,7 @@ async def test_render_event_media_text_falls_back_to_store_emoji_summary_when_do
     }
 
     with patch(
-        "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+        "plugins.xiaoqing_chat.media.sources._download_url_bytes",
         new=AsyncMock(side_effect=FileNotFoundError("expired")),
     ):
         text = await render_event_media_text(event, context=mock_context, runtime=runtime)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
+from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
 from tests.helpers.xiaoqing_chat_test_support import (
     AsyncMock,
     MagicMock,
@@ -27,7 +28,7 @@ async def test_generate_reply_checker_unexpected_error_logs_error_not_timeout(mo
     from plugins.xiaoqing_chat.config.config import ResponsePostProcessConfig
     from plugins.xiaoqing_chat.llm.prompt_builder import ChatMessage
     from plugins.xiaoqing_chat.planning.planned_action import PlannedAction
-    from plugins.xiaoqing_chat.reply_generator import _generate_reply_draft
+    from plugins.xiaoqing_chat.reply_generator import generate_reply_draft
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
@@ -60,16 +61,7 @@ async def test_generate_reply_checker_unexpected_error_logs_error_not_timeout(mo
     state.review_store.bind = Mock()
     state.inc_stats         = Mock()
 
-    fg = SimpleNamespace(
-        timeout_seconds        = 3.0,
-        max_retry              = 0,
-        retry_interval_seconds = 0.2,
-        to_dict                = lambda: {
-            "timeout_seconds": 3.0,
-            "max_retry": 0,
-            "retry_interval_seconds": 0.2,
-        },
-    )
+    fg = LLMCallConfig(timeout_seconds=3.0, max_retry=0, retry_interval_seconds=0.2)
     action = PlannedAction(
         action        = "reply",
         think_level   = 1,
@@ -80,69 +72,61 @@ async def test_generate_reply_checker_unexpected_error_logs_error_not_timeout(mo
 
     with ExitStack() as stack:
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._get_bot_name", return_value="小青")
+            patch("plugins.xiaoqing_chat.reply_plan.configured_bot_name", return_value="小青")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._chat_id", return_value="g1")
+            patch("plugins.xiaoqing_chat.reply_plan.event_chat_id", return_value="g1")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._is_private", return_value=False)
+            patch("plugins.xiaoqing_chat.reply_plan.is_private_event", return_value=False)
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator._get_ai_route_context",
+                "plugins.xiaoqing_chat.reply_plan.ai_route_context",
                 return_value={"api_base": "http://test", "api_key": "key", "model": "test-model"},
             )
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._resolve_llm_config", return_value=fg)
+            patch("plugins.xiaoqing_chat.reply_plan.llm_call_config", return_value=fg)
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._build_profile_block", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.sender_profile_context", return_value="")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._build_knowledge_block", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.knowledge_context", return_value="")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._build_expression_block", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.expression_context", return_value="")
+        )
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_plan.jargon_context", return_value="")
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator._build_jargon_explanation", return_value=""
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator._build_memory_block",
+                "plugins.xiaoqing_chat.reply_generator.retrieve_memory_context",
                 new=AsyncMock(return_value=""),
             )
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator._build_tool_info_block",
+                "plugins.xiaoqing_chat.reply_plan.tool_status_context",
                 new=AsyncMock(return_value=""),
             )
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator.build_policy_block", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.build_policy_block", return_value="")
         )
         stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_max_context", return_value=10
-            )
+            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_max_context", return_value=10)
         )
         stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_temperature", return_value=0.7
-            )
+            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_temperature", return_value=0.7)
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator.get_brain_chat_identity", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_identity", return_value="")
         )
         stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_reply_style", return_value=""
-            )
+            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_reply_style", return_value="")
         )
         stack.enter_context(
             patch(
@@ -166,9 +150,7 @@ async def test_generate_reply_checker_unexpected_error_logs_error_not_timeout(mo
             )
         )
         stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.join_reply", return_value="这条回复需要检查"
-            )
+            patch("plugins.xiaoqing_chat.reply_draft.join_reply", return_value="这条回复需要检查")
         )
         stack.enter_context(
             patch(
@@ -182,11 +164,9 @@ async def test_generate_reply_checker_unexpected_error_logs_error_not_timeout(mo
                 new=AsyncMock(side_effect=RuntimeError("checker bug")),
             )
         )
-        mock_log_step = stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._log_step")
-        )
+        mock_log_step = stack.enter_context(patch("plugins.xiaoqing_chat.reply_generator.log_step"))
 
-        draft = await _generate_reply_draft(
+        draft = await generate_reply_draft(
             text           = "你好",
             event          = {"message_id": 1, "user_id": 1},
             context        = mock_context,
@@ -214,14 +194,14 @@ async def test_handle_internal_reset_cancels_pending_persist_task(
 ):
     from contextlib import suppress
 
-    from plugins.xiaoqing_chat.handlers import handle_internal
+    from plugins.xiaoqing_chat.commands import handle_internal
     from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
-    from plugins.xiaoqing_chat.store_binding import _bind_all_stores
+    from plugins.xiaoqing_chat.store_binding import bind_all_stores
 
     chat_id = "g67890"
     runtime = MagicMock()
     state   = ChatRuntimeState()
-    _bind_all_stores(state, tmp_path)
+    bind_all_stores(state, tmp_path)
 
     async def _pending_persist():
         await asyncio.sleep(30)

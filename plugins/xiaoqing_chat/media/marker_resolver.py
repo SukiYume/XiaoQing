@@ -16,13 +16,20 @@ from typing import Any, Literal, TypeVar
 from ..media_registry import MediaRegistryStore, resolve_registered_media_items
 from ..message_parts import normalize_message_parts
 from .emoji_library import EmojiLibraryEntry, load_emoji_library, resolve_emoji_file_path
-from .event_media_common import _SUPPORTED_IMAGE_SUFFIXES
+from .markers import split_emoji_visible_text
+from .models import SUPPORTED_IMAGE_SUFFIXES
 from .qq_face_catalog import QQFaceEntry, load_qq_face_catalog
 
 MediaMarkerKind = Literal["emoji", "qq_face", "image"]
 T               = TypeVar("T")
 
-_OUTBOUND_MARKER_RE = re.compile(r"\[想发(表情|QQ表情|图片)[:：]([^\]\n]{1,12})\]")
+# 提示词要求描述不超过 OUTBOUND_HINT_MAX_CHARS 字，候选名也按这个长度生成；解析端放宽到
+# _OUTBOUND_HINT_PARSE_CHARS，模型照抄候选说明时仍能按描述匹配，不至于整条标记被丢弃。
+OUTBOUND_HINT_MAX_CHARS    = 12
+_OUTBOUND_HINT_PARSE_CHARS = 40
+_OUTBOUND_MARKER_RE        = re.compile(
+    rf"\[想发(表情|QQ表情|图片)[:：]([^\]\n]{{1,{_OUTBOUND_HINT_PARSE_CHARS}}})\]"
+)
 _OUTBOUND_MARKER_RESIDUE_RE = re.compile(r"\[想发[^\]\n]*(?:\]|$)")
 _RENDERED_OUTBOUND_MARKER_RE = re.compile(r"\[(表情包|QQ表情|图片)[:：]([^\]\n]{1,80})\]")
 _TOKEN_PATTERN = r"[\u4e00-\u9fff]{1,4}|[a-z0-9_]+"
@@ -129,6 +136,7 @@ def find_candidate_by_hint(
     hint: str,
     *,
     key_fn: Callable[[T], Sequence[Any]],
+    strict: bool = False,
 ) -> T | None:
     normalized_hint = str(hint or "").strip()
     if not normalized_hint:
@@ -156,6 +164,39 @@ def find_candidate_by_hint(
                     score += 1.0
             if score > 0 and (best is None or score > best[0]):
                 best = (score, entry)
+    if best is not None:
+        return best[1]
+    if strict:
+        return None
+    return _best_character_overlap(candidates, compact_hint, key_fn=key_fn)
+
+
+# 描述里不承载画面含义的字，不参与逐字匹配。
+_HINT_FILLER_CHARS = frozenset("的了着一个张只是在把那这些们和很有点就也都发来去给")
+
+
+def _best_character_overlap(
+    candidates: Sequence[T],
+    compact_hint: str,
+    *,
+    key_fn: Callable[[T], Sequence[Any]],
+) -> T | None:
+    """词块对不上时按实义字重合挑选，“瘫着的猫”能找到画着猫的素材，“笑脸”能找到微笑。
+
+    至少一半实义字出现在同一素材的描述里才算命中，避免靠一个常见字乱发。
+    """
+    hint_chars = {
+        char for char in compact_hint if "一" <= char <= "鿿" and char not in _HINT_FILLER_CHARS
+    }
+    if not hint_chars:
+        return None
+    needed                     = max(1, (len(hint_chars) + 1) // 2)
+    best: tuple[int, T] | None = None
+    for entry in candidates:
+        text = "".join(str(key or "") for key in key_fn(entry))
+        hits = sum(1 for char in hint_chars if char in text)
+        if hits >= needed and (best is None or hits > best[0]):
+            best = (hits, entry)
     return best[1] if best is not None else None
 
 
@@ -169,7 +210,7 @@ def _resolve_authorized_image_path(data_root: Path, raw_path: str | Path) -> Pat
             candidate = root / candidate
         resolved = candidate.resolve(strict=True)
         resolved.relative_to(root)
-        if not resolved.is_file() or resolved.suffix.lower() not in _SUPPORTED_IMAGE_SUFFIXES:
+        if not resolved.is_file() or resolved.suffix.lower() not in SUPPORTED_IMAGE_SUFFIXES:
             return None
         return resolved
     except (OSError, RuntimeError, ValueError):
@@ -238,9 +279,9 @@ def _collect_history_image_entries(
     seen_keys: set[str]              = set()
     entries: list[ImageLibraryEntry] = []
     for message in reversed(history or ()):
-        if str(getattr(message, "role", "") or "").strip() != "assistant":
+        if message.role != "assistant":
             continue
-        for part in normalize_message_parts(getattr(message, "parts", ()) or ()):
+        for part in normalize_message_parts(message.parts):
             if str(part.get("kind", "") or "").strip() != "image":
                 continue
             resolved = resolve_registered_media_items([part], store=media_store)[0]
@@ -278,6 +319,7 @@ async def _resolve_emoji_marker(
     context,
     runtime,
     chat_id: str,
+    strict: bool = False,
 ) -> ResolvedMarker | None:
     entries = await load_emoji_library(context, runtime, chat_id=chat_id)
     entry = find_candidate_by_hint(
@@ -289,6 +331,7 @@ async def _resolve_emoji_marker(
             item.media_hash,
             *tuple(item.emotion_tags),
         ),
+        strict=strict,
     )
     if entry is None:
         return None
@@ -302,12 +345,15 @@ async def _resolve_emoji_marker(
     )
 
 
-async def _resolve_qq_face_marker(parsed: ParsedMarker, *, context) -> ResolvedMarker | None:
+async def _resolve_qq_face_marker(
+    parsed: ParsedMarker, *, context, strict: bool = False
+) -> ResolvedMarker | None:
     entries = await load_qq_face_catalog(context)
     entry   = find_candidate_by_hint(
         entries,
         parsed.hint,
-        key_fn=lambda item: (item.marker, item.label, item.face_id, *tuple(item.aliases)),
+        key_fn = lambda item: (item.marker, item.label, item.face_id, *tuple(item.aliases)),
+        strict = strict,
     )
     if entry is None:
         return None
@@ -362,15 +408,26 @@ async def resolve_marker(
     chat_id: str                           = "",
     media_store: MediaRegistryStore | None = None,
 ) -> ResolvedMarker | None:
+    # 模型常把“捂脸”“吃瓜”写成表情包、把群里的表情包写成 QQ 表情；本类查不到时
+    # 换另一类素材库再找一次，免得整条回复因为类别写错而落空。跨类只认名字或词块
+    # 命中，不用逐字重合，避免“不存在”靠一个“不”字配上“不开心”。
     if parsed.kind == "emoji":
         return await _resolve_emoji_marker(
             parsed,
             context = context,
             runtime = runtime,
             chat_id = chat_id,
-        )
+        ) or await _resolve_qq_face_marker(parsed, context=context, strict=True)
     if parsed.kind == "qq_face":
-        return await _resolve_qq_face_marker(parsed, context=context)
+        return await _resolve_qq_face_marker(parsed, context=context) or (
+            await _resolve_emoji_marker(
+                parsed,
+                context = context,
+                runtime = runtime,
+                chat_id = chat_id,
+                strict  = True,
+            )
+        )
     if parsed.kind == "image":
         return await _resolve_image_marker(
             parsed,
@@ -425,3 +482,56 @@ def marker_media_part(context, resolved: ResolvedMarker) -> dict[str, Any] | Non
             "mode": resolved.mode,
         }
     return None
+
+
+# 内置目录里常用、含义明确的 QQ 表情；模型照这些名字写描述才能稳定命中。
+_COMMON_QQ_FACE_LABELS = (
+    "微笑",
+    "呲牙",
+    "偷笑",
+    "憨笑",
+    "捂脸",
+    "笑哭",
+    "斜眼笑",
+    "doge",
+    "吃瓜",
+    "流汗",
+    "疑问",
+    "裂开",
+    "委屈",
+    "大哭",
+    "害羞",
+    "抱拳",
+    "赞",
+    "鼓掌",
+    "比心",
+    "摸鱼",
+)
+
+
+def _emoji_candidate_label(entry: EmojiLibraryEntry) -> str:
+    """候选写成“名字（说明）”：名字不超过出站描述上限，可直接照抄进标记。"""
+    tags = "，".join(tag for tag in entry.emotion_tags[:2] if tag)
+    clean_desc, visible_text = split_emoji_visible_text(entry.description)
+    name = (visible_text or clean_desc or tags)[:OUTBOUND_HINT_MAX_CHARS].strip()
+    if not name:
+        return ""
+    note = "；".join(part for part in (tags, clean_desc[:20] if visible_text else "") if part)
+    return f"{name}（{note}）" if note and note != name else name
+
+
+async def build_media_candidates_block(
+    context, runtime, *, chat_id: str, max_emoji: int = 8
+) -> str:
+    """列出本群可发的表情包和常用 QQ 表情，让出站描述能对上真实素材。"""
+
+    try:
+        entries = await load_emoji_library(context, runtime, chat_id=chat_id)
+    except Exception:
+        entries = []
+    labels = [label for label in map(_emoji_candidate_label, entries[-max_emoji:]) if label]
+    lines  = ["可发素材（想发时把括号前的名字照抄进描述，括号里是说明；没有合适的就不发）："]
+    if labels:
+        lines.append("- 表情包：" + " | ".join(labels))
+    lines.append("- QQ表情：" + "、".join(_COMMON_QQ_FACE_LABELS))
+    return "\n".join(lines)

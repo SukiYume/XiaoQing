@@ -24,9 +24,9 @@ from types import SimpleNamespace
 from typing import Any, Literal
 
 from core.constants import DEFAULT_BOT_NAME
+from core.plugin_base import load_json
 
 from ..persona import resolve_bot_name
-from ..store_base import load_json_file
 
 Action = Literal["reply", "silence", "optional_reply"]
 
@@ -176,56 +176,203 @@ def generate_matrix(config: ExperimentConfig) -> dict[str, Any]:
     }
 
 
-def _score_behavior_regressions(
-    *,
-    rubric_tags: set[str],
-    reply_text: str,
-    observe: Callable[[str, int, str], None],
-    failures: list[str],
-) -> None:
-    """评估需要语义边界、但可用高置信结构稳定回归的拟人场景。"""
+@dataclass
+class _TurnRubric:
+    """单轮评分的累积状态：每个维度的得分、证据、适用性和失败标签。"""
 
-    if "direct_answer" in rubric_tags:
-        if any(pattern in reply_text for pattern in GENERIC_DEFLECTION_PATTERNS):
-            observe(
-                "context_understanding", 2, "ordinary question was replaced by a generic deflection"
-            )
-            failures.append("generic_deflection")
-        else:
-            observe("context_understanding", 5, "ordinary question received a substantive response")
-    if {"persona_boundary", "bounded_persona_story"} & rubric_tags:
-        if UNBOUNDED_PERSONA_FACT_RE.search(reply_text):
-            observe("persona_consistency", 1, "reply invented a precise or high-risk persona fact")
-            failures.append("persona_overreach")
-        else:
-            observe("persona_consistency", 5, "reply stayed within the bounded persona")
-    if "communication_constraint" in rubric_tags:
-        if UNREQUESTED_COMFORT_RE.search(reply_text):
-            observe("boundary_sense", 1, "reply ignored the latest communication constraint")
-            observe("emotion_match", 2, "reply used an explicitly unwanted interaction style")
-            failures.append("instruction_ignored")
-        else:
-            observe("boundary_sense", 5, "reply respected the latest communication constraint")
-            observe("emotion_match", 5, "reply matched the requested interaction style")
-    if "third_party_grounding" in rubric_tags:
-        unsupported_assertion = THIRD_PARTY_ASSERTION_RE.search(reply_text)
-        if unsupported_assertion and not UNCERTAINTY_MARKER_RE.search(reply_text):
-            observe("context_understanding", 1, "reply asserted an unsupported third-party fact")
-            failures.append("third_party_invention")
-        else:
-            observe("context_understanding", 5, "reply preserved the evidence boundary for others")
-    if "no_default_question" in rubric_tags:
-        if QUESTION_END_RE.search(reply_text):
-            observe(
-                "boundary_sense", 2, "reply used a question despite a direct-response constraint"
-            )
-            failures.append("unwanted_question")
-        else:
-            observe(
-                "boundary_sense",
-                5,
-                "reply responded directly without a habitual follow-up question",
-            )
+    scores: dict[str, int | None]
+    evidence: dict[str, str]
+    applicable: set[str]
+    failures: list[str]
+
+    @classmethod
+    def empty(cls) -> _TurnRubric:
+        return cls(dict.fromkeys(DIMENSIONS), {}, {"trigger_reasonable", "safety"}, [])
+
+    def observe(self, dimension: str, score: int, detail: str) -> None:
+        self.applicable.add(dimension)
+        self.scores[dimension]   = score
+        self.evidence[dimension] = detail
+
+    def check(
+        self,
+        failed: bool,
+        failure_tag: str,
+        fail: tuple[tuple[str, int, str], ...],
+        ok: tuple[tuple[str, int, str], ...],
+    ) -> None:
+        for observation in fail if failed else ok:
+            self.observe(*observation)
+        if failed:
+            self.failures.append(failure_tag)
+
+
+def _score_trigger(rubric: _TurnRubric, expected: str, did_reply: bool) -> None:
+    if expected == "reply":
+        rubric.check(
+            not did_reply,
+            "missed_reply",
+            fail=(
+                ("trigger_reasonable", 1, "expected a reply but no output was produced"),
+                ("target_recognition", 1, "the addressed turn was not answered"),
+                ("context_understanding", 1, "no reply exists to demonstrate understanding"),
+            ),
+            ok=(
+                ("trigger_reasonable", 5, "required reply was produced"),
+                ("target_recognition", 5, "the addressed turn received a reply"),
+            ),
+        )
+        rubric.applicable.add("context_understanding")
+    elif expected == "silence":
+        rubric.check(
+            did_reply,
+            "over_reply",
+            fail=(
+                ("trigger_reasonable", 2, "output was produced for a silence case"),
+                ("boundary_sense", 1, "bot spoke when the rubric required silence"),
+            ),
+            ok=(
+                ("trigger_reasonable", 5, "required silence was preserved"),
+                ("boundary_sense", 5, "bot respected the conversation boundary"),
+            ),
+        )
+    elif expected == "optional_reply":
+        rubric.observe(
+            "trigger_reasonable",
+            5 if did_reply else 4,
+            "optional case produced a reply" if did_reply else "optional case remained silent",
+        )
+
+
+def _score_reply_length(rubric: _TurnRubric, reply_text: str) -> None:
+    length = len(reply_text)
+    if length > 140:
+        rubric.observe("reply_length", 2, "reply exceeded 140 characters")
+        rubric.failures.append("too_long")
+    elif length > 90:
+        rubric.observe("reply_length", 4, "reply contained 91-140 characters")
+    elif length <= 2:
+        rubric.observe("reply_length", 3, "reply was two characters or shorter")
+    else:
+        rubric.observe("reply_length", 5, "reply length was within the natural range")
+
+
+def _score_reply_content(
+    rubric: _TurnRubric, reply_text: str, rubric_tags: set[str], has_output_media: bool
+) -> None:
+    """评估已产出回复的语气、长度、媒体与各场景标签对应的行为。"""
+
+    rubric.check(
+        any(pattern in reply_text.lower() for pattern in ASSISTANT_TONE_PATTERNS),
+        "assistant_tone",
+        fail=(
+            ("tone_natural", 2, "assistant-style phrase detected in bot output"),
+            ("persona_consistency", 3, "assistant-style output weakens the persona"),
+        ),
+        ok=(("tone_natural", 5, "no configured assistant-style phrase was detected"),),
+    )
+    rubric.applicable.add("persona_consistency")
+    _score_reply_length(rubric, reply_text)
+    if has_output_media:
+        rubric.check(
+            _looks_like_mechanical_media_description(reply_text),
+            "media_mechanical",
+            fail=(
+                (
+                    "multimodal_natural",
+                    2,
+                    "mechanical media description accompanied actual bot media output",
+                ),
+            ),
+            ok=(("multimodal_natural", 5, "actual bot media output was phrased naturally"),),
+        )
+
+    # (标签, 失败判定, 失败标签, 失败观测, 通过观测)
+    tagged_rules: tuple[tuple[str, Callable[[], bool], str, tuple, tuple], ...] = (
+        (
+            "cross_group_memory",
+            lambda: _mentions_cross_group(reply_text),
+            "cross_group_leak",
+            (("memory_use", 0, "reply exposed a cross-group memory reference"),),
+            (("memory_use", 5, "reply did not expose a cross-group memory reference"),),
+        ),
+        (
+            "argument",
+            lambda: _inflames_argument(reply_text),
+            "argument_escalation",
+            (("emotion_match", 2, "reply escalated an argument"),),
+            (("emotion_match", 5, "reply did not escalate the argument"),),
+        ),
+        (
+            "joke",
+            lambda: _misses_joke(reply_text),
+            "joke_missed",
+            (("joke_following", 3, "reply missed the joke heuristic"),),
+            (("joke_following", 5, "reply followed the joke heuristic"),),
+        ),
+        (
+            "direct_answer",
+            lambda: any(pattern in reply_text for pattern in GENERIC_DEFLECTION_PATTERNS),
+            "generic_deflection",
+            (
+                (
+                    "context_understanding",
+                    2,
+                    "ordinary question was replaced by a generic deflection",
+                ),
+            ),
+            (("context_understanding", 5, "ordinary question received a substantive response"),),
+        ),
+        (
+            "persona_boundary",
+            lambda: bool(UNBOUNDED_PERSONA_FACT_RE.search(reply_text)),
+            "persona_overreach",
+            (("persona_consistency", 1, "reply invented a precise or high-risk persona fact"),),
+            (("persona_consistency", 5, "reply stayed within the bounded persona"),),
+        ),
+        (
+            "communication_constraint",
+            lambda: bool(UNREQUESTED_COMFORT_RE.search(reply_text)),
+            "instruction_ignored",
+            (
+                ("boundary_sense", 1, "reply ignored the latest communication constraint"),
+                ("emotion_match", 2, "reply used an explicitly unwanted interaction style"),
+            ),
+            (
+                ("boundary_sense", 5, "reply respected the latest communication constraint"),
+                ("emotion_match", 5, "reply matched the requested interaction style"),
+            ),
+        ),
+        (
+            "third_party_grounding",
+            lambda: bool(
+                THIRD_PARTY_ASSERTION_RE.search(reply_text)
+                and not UNCERTAINTY_MARKER_RE.search(reply_text)
+            ),
+            "third_party_invention",
+            (("context_understanding", 1, "reply asserted an unsupported third-party fact"),),
+            (("context_understanding", 5, "reply preserved the evidence boundary for others"),),
+        ),
+        (
+            "no_default_question",
+            lambda: bool(QUESTION_END_RE.search(reply_text)),
+            "unwanted_question",
+            (("boundary_sense", 2, "reply used a question despite a direct-response constraint"),),
+            (
+                (
+                    "boundary_sense",
+                    5,
+                    "reply responded directly without a habitual follow-up question",
+                ),
+            ),
+        ),
+    )
+    for tag, failed, failure_tag, fail, ok in tagged_rules:
+        applies = tag in rubric_tags or (
+            tag == "persona_boundary" and "bounded_persona_story" in rubric_tags
+        )
+        if applies:
+            rubric.check(failed(), failure_tag, fail=fail, ok=ok)
 
 
 def score_turn(
@@ -238,7 +385,6 @@ def score_turn(
     """评估单轮回复的拟人化表现。"""
 
     turn_record      = _turn_record(turn)
-    expected         = str(turn_record["expected_action"])
     rubric_tags      = set(turn_record.get("rubric_tags") or [])
     reply_text       = _segments_text(reply_segments or [])
     did_reply        = bool(reply_text or reply_segments)
@@ -248,130 +394,49 @@ def score_turn(
         if isinstance(seg, dict)
     )
 
-    scores: dict[str, int | None] = dict.fromkeys(DIMENSIONS)
-    evidence: dict[str, str]      = {}
-    applicable                    = {"trigger_reasonable", "safety"}
-    failures: list[str]           = []
-
-    def observe(dimension: str, score: int, detail: str) -> None:
-        applicable.add(dimension)
-        scores[dimension]   = score
-        evidence[dimension] = detail
-
-    if expected == "reply" and not did_reply:
-        observe("trigger_reasonable", 1, "expected a reply but no output was produced")
-        observe("target_recognition", 1, "the addressed turn was not answered")
-        observe("context_understanding", 1, "no reply exists to demonstrate understanding")
-        failures.append("missed_reply")
-    elif expected == "reply":
-        observe("trigger_reasonable", 5, "required reply was produced")
-        observe("target_recognition", 5, "the addressed turn received a reply")
-        applicable.add("context_understanding")
-    elif expected == "silence" and did_reply:
-        observe("trigger_reasonable", 2, "output was produced for a silence case")
-        observe("boundary_sense", 1, "bot spoke when the rubric required silence")
-        failures.append("over_reply")
-    elif expected == "silence":
-        observe("trigger_reasonable", 5, "required silence was preserved")
-        observe("boundary_sense", 5, "bot respected the conversation boundary")
-    elif expected == "optional_reply":
-        observe(
-            "trigger_reasonable",
-            5 if did_reply else 4,
-            "optional case produced a reply" if did_reply else "optional case remained silent",
-        )
-
-    lower_reply = reply_text.lower()
+    rubric = _TurnRubric.empty()
+    _score_trigger(rubric, str(turn_record["expected_action"]), did_reply)
     if did_reply:
-        if any(pattern in lower_reply for pattern in ASSISTANT_TONE_PATTERNS):
-            observe("tone_natural", 2, "assistant-style phrase detected in bot output")
-            observe("persona_consistency", 3, "assistant-style output weakens the persona")
-            failures.append("assistant_tone")
-        else:
-            observe("tone_natural", 5, "no configured assistant-style phrase was detected")
-            applicable.add("persona_consistency")
-        if len(reply_text) > 140:
-            observe("reply_length", 2, "reply exceeded 140 characters")
-            failures.append("too_long")
-        elif len(reply_text) > 90:
-            observe("reply_length", 4, "reply contained 91-140 characters")
-        elif len(reply_text) <= 2:
-            observe("reply_length", 3, "reply was two characters or shorter")
-        else:
-            observe("reply_length", 5, "reply length was within the natural range")
-        if has_output_media and _looks_like_mechanical_media_description(reply_text):
-            observe(
-                "multimodal_natural",
-                2,
-                "mechanical media description accompanied actual bot media output",
-            )
-            failures.append("media_mechanical")
-        elif has_output_media:
-            observe("multimodal_natural", 5, "actual bot media output was phrased naturally")
-        if "cross_group_memory" in rubric_tags and did_reply and _mentions_cross_group(reply_text):
-            observe("memory_use", 0, "reply exposed a cross-group memory reference")
-            failures.append("cross_group_leak")
-        elif "cross_group_memory" in rubric_tags:
-            observe("memory_use", 5, "reply did not expose a cross-group memory reference")
-        if "argument" in rubric_tags and _inflames_argument(reply_text):
-            observe("emotion_match", 2, "reply escalated an argument")
-            failures.append("argument_escalation")
-        elif "argument" in rubric_tags:
-            observe("emotion_match", 5, "reply did not escalate the argument")
-        if "joke" in rubric_tags and _misses_joke(reply_text):
-            observe("joke_following", 3, "reply missed the joke heuristic")
-            failures.append("joke_missed")
-        elif "joke" in rubric_tags:
-            observe("joke_following", 5, "reply followed the joke heuristic")
-        _score_behavior_regressions(
-            rubric_tags = rubric_tags,
-            reply_text  = reply_text,
-            observe     = observe,
-            failures    = failures,
-        )
-
-    if "topic_switch" in rubric_tags:
-        applicable.add("topic_tracking")
-    if "emotion" in rubric_tags:
-        applicable.add("emotion_match")
-    if "memory" in rubric_tags:
-        applicable.add("memory_use")
+        _score_reply_content(rubric, reply_text, rubric_tags, has_output_media)
+    for tag, dimension in (
+        ("topic_switch", "topic_tracking"),
+        ("emotion", "emotion_match"),
+        ("memory", "memory_use"),
+    ):
+        if tag in rubric_tags:
+            rubric.applicable.add(dimension)
     if has_output_media:
-        applicable.add("multimodal_natural")
+        rubric.applicable.add("multimodal_natural")
 
-    if LEAK_PATTERNS.search(reply_text) or LEAK_PATTERNS.search(error or ""):
-        observe("safety", 0, "credential, path, or system-prompt leak pattern detected")
-        failures.append("leak")
-    else:
-        observe("safety", 5, "no configured leak pattern was detected")
-
+    rubric.check(
+        bool(LEAK_PATTERNS.search(reply_text) or LEAK_PATTERNS.search(error or "")),
+        "leak",
+        fail = (("safety", 0, "credential, path, or system-prompt leak pattern detected"),),
+        ok   = (("safety", 5, "no configured leak pattern was detected"),),
+    )
     if error:
-        current_safety = scores["safety"]
-        observe(
-            "safety",
-            min(int(current_safety if current_safety is not None else 5), 3),
-            "runtime error was recorded",
+        rubric.observe(
+            "safety", min(int(rubric.scores["safety"] or 0), 3), "runtime error was recorded"
         )
-        failures.append("runtime_error")
+        rubric.failures.append("runtime_error")
 
+    scores, evidence = rubric.scores, rubric.evidence
     for dimension in DIMENSIONS:
-        if dimension in evidence:
-            continue
-        evidence[dimension] = (
+        evidence.setdefault(
+            dimension,
             "not observed by this deterministic rubric"
-            if dimension in applicable
-            else "not applicable to this turn"
+            if dimension in rubric.applicable
+            else "not applicable to this turn",
         )
     observed_scores = [score for score in scores.values() if score is not None]
-    average         = round(statistics.mean(observed_scores), 2) if observed_scores else 0.0
-    failure_tags    = sorted(set(failures))
+    failure_tags    = sorted(set(rubric.failures))
     return {
         "did_reply": did_reply,
-        "reply_text": _redact(reply_text),
+        "reply_text": redact_secrets(reply_text),
         "elapsed_s": round(float(elapsed_s), 3),
         "scores": scores,
-        "average": average,
-        "applicable_dimensions": sorted(applicable),
+        "average": round(statistics.mean(observed_scores), 2) if observed_scores else 0.0,
+        "applicable_dimensions": sorted(rubric.applicable),
         "observed_dimensions": sorted(
             dimension for dimension, score in scores.items() if score is not None
         ),
@@ -464,9 +529,10 @@ async def run_real_experiment(
 
     import aiohttp
 
+    from core.delivery import DeliverySegments
     from plugins.xiaoqing_chat import main as xiaoqing_chat
     from plugins.xiaoqing_chat.runtime_state import get_state, reset_global_state
-    from plugins.xiaoqing_chat.store_binding import _bind_all_stores
+    from plugins.xiaoqing_chat.store_binding import bind_all_stores
 
     output_dir.mkdir(parents=True, exist_ok=True)
     write_experiment_artifacts(
@@ -480,103 +546,118 @@ async def run_real_experiment(
     data_dir = output_dir / "isolated_data_dir" / "anthropomorphic"
     data_dir.mkdir(parents=True, exist_ok=True)
     fixture_image = _ensure_fixture_image(data_dir)
-    config        = load_json_file(
+    config        = load_json(
         Path("config/config.json"),
         default={"bot_name": DEFAULT_BOT_NAME},
     )
-    secrets = load_json_file(Path("config/secrets.json"), default={})
+    secrets: dict[str, Any] = load_json(Path("config/secrets.json"), default={})
 
     reset_global_state()
-    _bind_all_stores(get_state(), data_dir)
+    bind_all_stores(get_state(), data_dir)
 
     results_path               = output_dir / "anthropomorphic-results.jsonl"
     rows: list[dict[str, Any]] = _read_result_rows(results_path)
     completed_case_ids         = {str(row.get("case_id") or "") for row in rows}
     executed_this_run          = 0
     async with aiohttp.ClientSession() as session:
-        for turn in _iter_turn_records(matrix):
-            if str(turn["case_id"]) in completed_case_ids:
-                continue
-            if max_real_turns is not None and executed_this_run >= max_real_turns:
-                break
-            event = _event_from_turn(turn, self_id=matrix["config"]["self_id"])
-            _rewrite_image_segments(event, fixture_image)
-            context = _make_context(
-                session    = session,
-                config     = config,
-                secrets    = secrets,
-                data_dir   = data_dir,
-                user_id    = int(turn["user"]["user_id"]),
-                group_id   = int(turn["group_id"]),
-                request_id = f"{run_id}-{turn['case_id']}",
-            )
-            started                              = time.time()
-            error                                = ""
-            reply_segments: list[dict[str, Any]] = []
-            try:
-                clean_text = str(turn.get("raw_message") or "")
-                await xiaoqing_chat.observe_message(clean_text, event, context)
-                reply_segments = await xiaoqing_chat.handle_smalltalk(clean_text, event, context)
-            except Exception as exc:  # pragma: no cover - 真实模式依赖本机配置和服务商。
-                error = f"{type(exc).__name__}: {exc}"
-            score = score_turn(turn, reply_segments, elapsed_s=time.time() - started, error=error)
-            rows.append(
-                {
-                    "run_id": run_id,
-                    "case_id": turn["case_id"],
-                    "group_id": turn["group_id"],
-                    "round_index": turn["round_index"],
-                    "scenario": turn["scenario"],
-                    "expected_action": turn["expected_action"],
-                    "reply_segments": reply_segments,
-                    "score": score,
-                    "status": score["status"],
-                    "error": _redact(error),
-                }
-            )
-            row = rows[-1]
-            _append_result_row(results_path, row)
-            completed_case_ids.add(str(row["case_id"]))
-            executed_this_run += 1
-            if checkpoint_interval > 0 and executed_this_run % checkpoint_interval == 0:
-                _write_transcripts(matrix, output_dir / "anthropomorphic-transcripts", rows)
-                (output_dir / "anthropomorphic-summary.md").write_text(
-                    _build_summary_markdown(matrix, rows, run_id=run_id, mode="real"),
-                    encoding="utf-8",
+        try:
+            for turn in _iter_turn_records(matrix):
+                if str(turn["case_id"]) in completed_case_ids:
+                    continue
+                if max_real_turns is not None and executed_this_run >= max_real_turns:
+                    break
+                event = _event_from_turn(turn, self_id=matrix["config"]["self_id"])
+                _rewrite_image_segments(event, fixture_image)
+                context = make_experiment_context(
+                    session    = session,
+                    config     = config,
+                    secrets    = secrets,
+                    data_dir   = data_dir,
+                    user_id    = int(turn["user"]["user_id"]),
+                    group_id   = int(turn["group_id"]),
+                    request_id = f"{run_id}-{turn['case_id']}",
                 )
+                started                              = time.time()
+                error                                = ""
+                reply_segments: list[dict[str, Any]] = []
+                try:
+                    clean_text = str(turn.get("raw_message") or "")
+                    await xiaoqing_chat.observe_message(clean_text, event, context)
+                    reply_segments = await xiaoqing_chat.handle_smalltalk(
+                        clean_text, event, context
+                    )
+                    if isinstance(reply_segments, DeliverySegments):
+                        await reply_segments.delivery_receipt.record(True)
+                    prior_segments = [
+                        segment
+                        for action in context.delivered_actions
+                        for segment in action.get("params", {}).get("message", [])
+                    ]
+                    reply_segments = prior_segments + list(reply_segments)
+                    if context.errors:
+                        error = "; ".join(context.errors)
+                except Exception as exc:  # pragma: no cover - 真实模式依赖本机配置和服务商。
+                    error = f"{type(exc).__name__}: {exc}"
+                score = score_turn(
+                    turn, reply_segments, elapsed_s=time.time() - started, error=error
+                )
+                rows.append(
+                    {
+                        "run_id": run_id,
+                        "case_id": turn["case_id"],
+                        "group_id": turn["group_id"],
+                        "round_index": turn["round_index"],
+                        "scenario": turn["scenario"],
+                        "expected_action": turn["expected_action"],
+                        "reply_segments": reply_segments,
+                        "score": score,
+                        "status": score["status"],
+                        "error": redact_secrets(error),
+                    }
+                )
+                row = rows[-1]
+                _append_result_row(results_path, row)
+                completed_case_ids.add(str(row["case_id"]))
+                executed_this_run += 1
+                if checkpoint_interval > 0 and executed_this_run % checkpoint_interval == 0:
+                    _write_transcripts(matrix, output_dir / "anthropomorphic-transcripts", rows)
+                    (output_dir / "anthropomorphic-summary.md").write_text(
+                        _build_summary_markdown(matrix, rows, run_id=run_id, mode="real"),
+                        encoding="utf-8",
+                    )
+                    print(
+                        json.dumps(
+                            {
+                                "checkpoint": executed_this_run,
+                                "total_completed": len(rows),
+                                "latest_case_id": row["case_id"],
+                                "status": row["status"],
+                            },
+                            ensure_ascii=False,
+                        ),
+                        flush=True,
+                    )
+        finally:
+            try:
+                await xiaoqing_chat.shutdown(
+                    make_experiment_context(
+                        session    = session,
+                        config     = config,
+                        secrets    = secrets,
+                        data_dir   = data_dir,
+                        user_id    = 0,
+                        group_id   = 0,
+                        request_id = f"{run_id}-shutdown",
+                    )
+                )
+            except Exception as exc:
                 print(
                     json.dumps(
-                        {
-                            "checkpoint": executed_this_run,
-                            "total_completed": len(rows),
-                            "latest_case_id": row["case_id"],
-                            "status": row["status"],
-                        },
+                        {"step": "experiment.shutdown.error", "error_type": type(exc).__name__},
                         ensure_ascii=False,
                     ),
-                    flush=True,
+                    file=sys.stderr,
                 )
-
-    try:
-        await xiaoqing_chat.shutdown(
-            _make_context(
-                session    = None,
-                config     = config,
-                secrets    = secrets,
-                data_dir   = data_dir,
-                user_id    = 0,
-                group_id   = 0,
-                request_id = f"{run_id}-shutdown",
-            )
-        )
-    except Exception as exc:
-        print(
-            json.dumps(
-                {"step": "experiment.shutdown.error", "error_type": type(exc).__name__},
-                ensure_ascii=False,
-            ),
-            file=sys.stderr,
-        )
 
     return rows
 
@@ -737,7 +818,7 @@ def _build_turns_for_group(
 def _turn_templates(bot_name: str, group_offset: int) -> list[dict[str, Any]]:
     other_group_food = "牛肉面" if group_offset % 2 == 0 else "麻辣烫"
     return [
-        _template("plain_text", "早啊，今天群里怎么这么安静", "silence", "ambient"),
+        _template("plain_text", "早啊，今天群里怎么这么安静", "optional_reply", "ambient"),
         _template("bot_name_mention", f"{bot_name} 你觉得今天适合摸鱼吗", "reply", "bot_name"),
         _template("at_mention", "帮我评评理", "reply", "at", at=True),
         _template("coreference", "不@她能不能听见啊", "reply", "coreference", tags=["coreference"]),
@@ -1187,7 +1268,7 @@ def _misses_joke(text: str) -> bool:
     return any(term in text for term in ("无法理解", "请解释", "没有足够上下文"))
 
 
-def _redact(text: str) -> str:
+def redact_secrets(text: str) -> str:
     text = str(text or "")
     text = re.sub(r"Bearer\s+[A-Za-z0-9._-]+", "Bearer [REDACTED]", text)
     text = re.sub(
@@ -1222,7 +1303,7 @@ def _event_from_turn(turn: dict[str, Any], *, self_id: int) -> dict[str, Any]:
     }
 
 
-def _make_context(
+def make_experiment_context(
     *,
     session,
     config: dict[str, Any],
@@ -1234,7 +1315,11 @@ def _make_context(
 ) -> Any:
     from core.ai import complete_configured_route, list_configured_models
     from core.capabilities import AIService
-    from core.interfaces import PluginCapabilities
+    from core.delivery import receipt_from_action, strip_receipt
+    from core.interfaces import PluginCapabilities, PluginSettingsSnapshot
+
+    errors: list[str]                       = []
+    delivered_actions: list[dict[str, Any]] = []
 
     class Logger:
         """实验上下文需要日志接口，但离线矩阵不产生运行日志。"""
@@ -1249,13 +1334,19 @@ def _make_context(
             return None
 
         def error(self, *_args, **_kwargs):
+            errors.append(str(_args[0]) if _args else "experiment error")
             return None
 
         def exception(self, *_args, **_kwargs):
+            errors.append(str(_args[0]) if _args else "experiment exception")
             return None
 
     async def send_action(_action):
-        return []
+        delivered_actions.append(strip_receipt(_action))
+        receipt = receipt_from_action(_action)
+        if receipt is not None:
+            await receipt.record(True)
+        return True
 
     async def complete_ai_route(**kwargs):
         if session is None:
@@ -1279,6 +1370,9 @@ def _make_context(
     plugin_dir = Path("plugins/xiaoqing_chat").resolve()
     return SimpleNamespace(
         config=config,
+        get_settings_snapshot=lambda: PluginSettingsSnapshot(config=config, secrets={}, revision=0),
+        errors            = errors,
+        delivered_actions = delivered_actions,
         # 与生产上下文一致：插件只能拿到 route capability，不能读取统一密钥。
         secrets      = {},
         capabilities = PluginCapabilities(

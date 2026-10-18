@@ -10,6 +10,19 @@ from ..utils.json_parsing import (
 )
 
 
+def _has_required_items(
+    record: Any, items: tuple[str, ...], required_types: dict[str, type] | None
+) -> bool:
+    """必填键齐全、类型符合约束，且字符串必填项非空白。"""
+    if not isinstance(record, dict) or not all(k in record for k in items):
+        return False
+    if any(
+        k in record and not isinstance(record[k], tp) for k, tp in (required_types or {}).items()
+    ):
+        return False
+    return not any(isinstance(record.get(k), str) and not record[k].strip() for k in items)
+
+
 def get_items_from_json(
     content: str,
     *items: str,
@@ -18,59 +31,18 @@ def get_items_from_json(
     optional_items: tuple[str, ...]        = (),
     allow_array: bool                      = True,
 ) -> tuple[bool, dict[str, Any] | list[dict[str, Any]]]:
-    s                      = (content or "").strip()
-    result: dict[str, Any] = {}
-    if default_values:
-        result.update(default_values)
+    """解析模型输出的对象或对象数组。
 
+    数组只保留合格的条目，全部不合格时返回失败与默认值；对象在默认值之上合并
+    必填和可选键，失败时也返回已合并的部分结果供调用方兜底。
+    """
+    s = (content or "").strip()
+    result: dict[str, Any] = dict(default_values or {})
     parsed = parse_first_json_value(s) if allow_array else parse_first_json_object(s)
     if isinstance(parsed, list):
-        valid: list[dict[str, Any]] = []
-        for it in parsed:
-            if not all(k in it for k in items):
-                continue
-            if required_types:
-                ok = True
-                for k, tp in required_types.items():
-                    if k in it and not isinstance(it[k], tp):
-                        ok = False
-                        break
-                if not ok:
-                    continue
-            empty = False
-            for k in items:
-                v = it.get(k)
-                if isinstance(v, str) and not v.strip():
-                    empty = True
-                    break
-            if empty:
-                continue
-            valid.append(it)
-        if valid:
-            return True, valid
-        return False, result
-
-    if parsed is None:
-        return False, result
-
+        valid = [it for it in parsed if _has_required_items(it, items, required_types)]
+        return (True, valid) if valid else (False, result)
     if not isinstance(parsed, dict):
         return False, result
-
-    for k in (*items, *optional_items):
-        if k in parsed:
-            result[k] = parsed[k]
-
-    if not all(k in result for k in items):
-        return False, result
-
-    if required_types:
-        for k, tp in required_types.items():
-            if k in result and not isinstance(result[k], tp):
-                return False, result
-
-    for k in items:
-        v = result.get(k)
-        if isinstance(v, str) and not v.strip():
-            return False, result
-
-    return True, result
+    result.update({k: parsed[k] for k in (*items, *optional_items) if k in parsed})
+    return _has_required_items(result, items, required_types), result

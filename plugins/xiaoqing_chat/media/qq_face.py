@@ -44,7 +44,7 @@ def _strip_wrapping_brackets(text: str) -> str:
     return ""
 
 
-def _clean_face_text(value: Any) -> str:
+def clean_face_text(value: Any) -> str:
     text = str(value or "").strip()
     if not text:
         return ""
@@ -61,10 +61,10 @@ def _clean_face_text(value: Any) -> str:
 
 def _extract_label_from_raw(raw: Any) -> str:
     if isinstance(raw, str):
-        return _clean_face_text(raw)
+        return clean_face_text(raw)
     if isinstance(raw, dict):
         for key in _FACE_TEXT_KEYS:
-            label = _clean_face_text(raw.get(key))
+            label = clean_face_text(raw.get(key))
             if label:
                 return label
         for value in raw.values():
@@ -84,7 +84,7 @@ def describe_face_segment(segment: dict[str, Any]) -> str:
     data = segment.get("data", {}) or {}
 
     for key in _FACE_TEXT_KEYS:
-        label = _clean_face_text(data.get(key))
+        label = clean_face_text(data.get(key))
         if label:
             break
     else:

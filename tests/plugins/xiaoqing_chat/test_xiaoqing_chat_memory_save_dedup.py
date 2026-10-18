@@ -404,7 +404,7 @@ def test_runtime_refresh_publishes_an_empty_snapshot_when_knowledge_is_disabled(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from plugins.xiaoqing_chat import helper_utils
+    from plugins.xiaoqing_chat import chat_runtime
 
     plugin_dir = tmp_path / "plugin"
     data_dir   = tmp_path / "data"
@@ -422,9 +422,9 @@ def test_runtime_refresh_publishes_an_empty_snapshot_when_knowledge_is_disabled(
         knowledge=SimpleNamespace(enable_knowledge=False, files=["stale.txt"]),
     )
     ensure = MagicMock(return_value=True)
-    monkeypatch.setattr(helper_utils, "_state", lambda: state)
+    monkeypatch.setattr(chat_runtime, "_state", lambda: state)
     monkeypatch.setattr(
-        helper_utils,
+        chat_runtime,
         "load_xiaoqing_chat_config",
         lambda **_kwargs: config,
     )
@@ -432,7 +432,7 @@ def test_runtime_refresh_publishes_an_empty_snapshot_when_knowledge_is_disabled(
 
     from tests.helpers.settings_snapshot import with_settings_reader
 
-    helper_utils._load_runtime(
+    chat_runtime.load_runtime(
         with_settings_reader(SimpleNamespace(plugin_dir=plugin_dir, data_dir=data_dir, config={}))
     )
 
@@ -448,7 +448,7 @@ def test_runtime_refreshes_when_settings_revision_changes_without_file_mtime_cha
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from plugins.xiaoqing_chat import helper_utils
+    from plugins.xiaoqing_chat import chat_runtime
     from tests.helpers.settings_snapshot import settings_snapshot
 
     plugin_dir = tmp_path / "plugin"
@@ -477,11 +477,11 @@ def test_runtime_refreshes_when_settings_revision_changes_without_file_mtime_cha
         data_dir              = data_dir,
         get_settings_snapshot = lambda: settings,
     )
-    monkeypatch.setattr(helper_utils, "_state", lambda: state)
-    monkeypatch.setattr(helper_utils, "load_xiaoqing_chat_config", load_config)
+    monkeypatch.setattr(chat_runtime, "_state", lambda: state)
+    monkeypatch.setattr(chat_runtime, "load_xiaoqing_chat_config", load_config)
     monkeypatch.setattr(knowledge_base_module, "ensure_knowledge_index", ensure)
 
-    refreshed = helper_utils._load_runtime(context)
+    refreshed = chat_runtime.load_runtime(context)
 
     assert refreshed is not cached_runtime
     load_config.assert_called_once_with(context_config=settings.config, plugin_dir=plugin_dir)
