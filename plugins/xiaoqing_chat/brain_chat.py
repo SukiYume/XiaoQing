@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .runtime_state import _ChatRuntime
+    from .runtime_state import ChatRuntime
 
 
 def is_brain_chat_active(
-    runtime: _ChatRuntime,
+    runtime: ChatRuntime,
     is_private: bool,
 ) -> bool:
     """仅在配置允许的私聊中启用深度对话。"""
@@ -17,7 +17,7 @@ def is_brain_chat_active(
     return bool(is_private and runtime.cfg.brain_chat.enable_private_brain_chat)
 
 
-def get_brain_chat_identity(runtime: _ChatRuntime, is_brain_chat: bool) -> str:
+def get_brain_chat_identity(runtime: ChatRuntime, is_brain_chat: bool) -> str:
     """返回稳定人物底座，并在深度模式下叠加思考方式。
 
     深度模式只改变如何聊，不能替换角色身份；否则进入私聊后会丢掉年龄、
@@ -34,7 +34,7 @@ def get_brain_chat_identity(runtime: _ChatRuntime, is_brain_chat: bool) -> str:
     return base_identity
 
 
-def get_brain_chat_reply_style(runtime: _ChatRuntime, is_brain_chat: bool) -> str:
+def get_brain_chat_reply_style(runtime: ChatRuntime, is_brain_chat: bool) -> str:
     """返回当前模式的回复风格。"""
 
     brain_reply_style = runtime.cfg.brain_chat.brain_reply_style
@@ -44,7 +44,7 @@ def get_brain_chat_reply_style(runtime: _ChatRuntime, is_brain_chat: bool) -> st
 
 
 def get_brain_chat_think_level(
-    runtime: _ChatRuntime,
+    runtime: ChatRuntime,
     is_brain_chat: bool,
     *,
     history_len: int = 0,
@@ -55,21 +55,21 @@ def get_brain_chat_think_level(
     return int(runtime.cfg.planner.resolve_think_level(history_len))
 
 
-def get_brain_chat_max_context(runtime: _ChatRuntime, is_brain_chat: bool) -> int:
+def get_brain_chat_max_context(runtime: ChatRuntime, is_brain_chat: bool) -> int:
     """按当前对话模式返回最大上下文大小。"""
     if is_brain_chat:
         return int(runtime.cfg.brain_chat.brain_max_context_size)
     return int(runtime.cfg.max_context_size)
 
 
-def get_brain_chat_temperature(runtime: _ChatRuntime, is_brain_chat: bool) -> float:
+def get_brain_chat_temperature(runtime: ChatRuntime, is_brain_chat: bool) -> float:
     """按当前对话模式返回生成温度。"""
     if is_brain_chat:
         return float(runtime.cfg.brain_chat.brain_temperature)
     return float(runtime.cfg.temperature)
 
 
-def maybe_add_mode_indicator(reply: str, runtime: _ChatRuntime) -> str:
+def maybe_add_mode_indicator(reply: str, runtime: ChatRuntime) -> str:
     """按配置给非空回复添加深度模式标识。"""
 
     brain_chat_cfg = runtime.cfg.brain_chat

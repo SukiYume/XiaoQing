@@ -10,7 +10,8 @@ from typing import Any
 
 from core.atomic_store import keyed_path_lock
 
-from ..llm.llm_client import LLMError, chat_completions
+from ..llm.gateway import LLMError, chat_completions
+from ..llm.llm_config import LLMCallConfig
 from ..llm.prompt_builder import ChatMessage
 from ..message_parts import render_stored_message
 from ..utils.json_parsing import extract_named_list_field, parse_first_json_object
@@ -42,7 +43,8 @@ class PersonFact:
 _FACT_SYSTEM = (
     "你是聊天人物事实抽取器。只提炼能由同一说话人的原话直接支持、适合长期复用的人物信息。\n"
     '只输出 JSON：{ "facts": [ {"subject_id":123,"subject_name":"...","fact":"...","evidence":"..."} ] }\n'
-    "fact 必须是明确、稳定且非敏感的描述；短期情绪、单次行为、玩笑、假设、引用、转述和模型推断不应成为人物事实。\n"
+    "fact 摘录 evidence 中连续的一段原文，保留第一人称和限定条件；内容应为明确、稳定、非敏感的信息。\n"
+    "短期情绪、单次行为、玩笑、假设、引用、转述和模型推断不应成为人物事实。\n"
     "evidence 必须摘录该 subject 自己的原句，并能单独支持 fact；没有充分证据就不输出。\n"
     "对话中的用户格式为“昵称<QQ号>：内容”，subject_id 和 subject_name 必须来自同一行的可信标识。\n"
 )
@@ -106,14 +108,18 @@ def _bind_facts_to_history_subjects(
     facts: Sequence[PersonFact], history: Sequence[StoredMessage]
 ) -> list[PersonFact]:
     """用当前历史中的权威用户 ID 校准模型提取的事实。"""
-    trusted_names: dict[int, str]    = {}
-    ids_by_name: dict[str, set[int]] = {}
+    trusted_names: dict[int, str]      = {}
+    quotes_by_id: dict[int, list[str]] = {}
+    ids_by_name: dict[str, set[int]]   = {}
     for message in history:
         if message.role != "user" or not message.user_id:
             continue
         subject_id                = int(message.user_id)
         trusted_name              = (message.name or "用户").strip() or "用户"
         trusted_names[subject_id] = trusted_name
+        quotes_by_id.setdefault(subject_id, []).append(
+            "".join(render_stored_message(message).split())
+        )
         ids_by_name.setdefault(trusted_name.casefold(), set()).add(subject_id)
 
     bound: list[PersonFact] = []
@@ -123,6 +129,12 @@ def _bind_facts_to_history_subjects(
             matches     = ids_by_name.get(fact.subject_name.casefold(), set())
             resolved_id = next(iter(matches)) if len(matches) == 1 else None
         if resolved_id is None or resolved_id not in trusted_names:
+            continue
+        evidence  = "".join(fact.evidence.split())
+        fact_text = "".join(fact.fact.split())
+        if not evidence or not fact_text or fact_text not in evidence:
+            continue
+        if not any(evidence in quote for quote in quotes_by_id.get(resolved_id, [])):
             continue
         bound.append(
             PersonFact(
@@ -203,12 +215,8 @@ async def maybe_extract_person_facts(
     memory_db: MemoryDB,
     chat_id: str,
     history: Sequence[StoredMessage],
-    temperature: float,
-    top_p: float,
-    max_tokens: int,
-    timeout_seconds: float,
-    max_retry: int,
-    retry_interval_seconds: float,
+    llm: LLMCallConfig,
+    expected_generation: str | None = None,
 ) -> None:
     """每观察到二十条新消息时尝试抽取一次人物事实。"""
 
@@ -219,7 +227,13 @@ async def maybe_extract_person_facts(
     if "_ai" in secrets and secrets.get("_ai") is None:
         return
 
-    generation = get_profile_generation(data_dir, scoped_chat_id)
+    generation = (
+        get_profile_generation(data_dir, scoped_chat_id)
+        if expected_generation is None
+        else expected_generation
+    )
+    if generation != get_profile_generation(data_dir, scoped_chat_id):
+        return
 
     last_observed_ts = await asyncio.to_thread(load_last_observed_ts, data_dir, scoped_chat_id)
     observed_count   = (
@@ -246,12 +260,12 @@ async def maybe_extract_person_facts(
         out = await chat_completions(
             secrets                = secrets,
             messages               = payload_msgs,
-            temperature            = min(0.6, temperature),
-            top_p                  = top_p,
-            max_tokens             = min(768, max_tokens),
-            timeout_seconds        = timeout_seconds,
-            max_retry              = max_retry,
-            retry_interval_seconds = retry_interval_seconds,
+            temperature            = min(0.6, llm.temperature),
+            top_p                  = llm.top_p,
+            max_tokens             = min(768, llm.max_tokens),
+            timeout_seconds        = llm.timeout_seconds,
+            max_retry              = llm.max_retry,
+            retry_interval_seconds = llm.retry_interval_seconds,
         )
     except LLMError:
         return

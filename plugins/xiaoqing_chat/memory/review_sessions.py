@@ -361,16 +361,6 @@ class ReviewStore(StoreBase):
             self._save_sessions_state(st)
             return removed
 
-    def list_sessions(self) -> list[ReviewSession]:
-        with self._lock:
-            st     = self._load_sessions_state()
-            active = st.get("active", {})
-            if not isinstance(active, dict):
-                return []
-            out = [_decode_session(str(sid), obj) for sid, obj in active.items()]
-            out.sort(key=lambda item: item.created_at, reverse=True)
-            return out
-
     def get_session(self, session_id: str) -> ReviewSession | None:
         with self._lock:
             sid = (session_id or "").strip()

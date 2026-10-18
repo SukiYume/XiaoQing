@@ -93,7 +93,7 @@ cp config/secrets.json.example config/secrets.json
     "models": {
       "deepseek-flash": {
         "provider": "deepseek",
-        "model": "deepseek-v4-flash",
+        "model": "deepseek-flash",
         "modalities": ["text"]
       }
     }
@@ -260,9 +260,28 @@ bash scripts/run_full_uat.sh --plan-only
 bash scripts/run_full_uat.sh
 ```
 
-UAT 运行真实服务，覆盖 HTTP/WS 命令矩阵、插件业务场景、Core 压力恢复、测试套件和静态门禁。报告位于 `test_reports/runs/project/full-uat-*/reports/FULL_UAT_REPORT.md`。
+UAT 用当前环境的解释器启动真实 `python main.py`，把插件数据重定向到本次报告目录，按顺序执行以下阶段，最后优雅停机并逐字节恢复 `config/config.json`：
 
-外部服务场景通过 `--include-external --scenario-fixtures <文件>` 启用，真实聊天质量场景通过 `--include-chat-quality` 启用。
+| 阶段 | 内容 |
+|---|---|
+| `ws-matrix` / `http-matrix` | 通过 WebSocket 与 HTTP Inbound 执行全部 Manifest 命令的正确样例、错误样例、权限和场景 |
+| `core-pressure` | Core 并发、过载与恢复压测 |
+| `compileall` / `ruff` / `mypy` | 与 CI 相同的静态门禁 |
+| `pytest` | 全量测试 |
+| `diff` | `git diff --check` |
+| `chat-quality` | 真实模型聊天质量探针，需要 `--include-chat-quality` 显式开启 |
+
+报告位于 `test_reports/runs/project/full-uat-*/reports/FULL_UAT_REPORT.md`。常用选项：
+
+| 选项 | 作用 |
+|---|---|
+| `--plan-only` | 只输出计划，不启动服务 |
+| `--phases ws-matrix,pytest` | 只执行指定阶段 |
+| `--matrix-plugins <插件>` / `--matrix-codes <命令码前缀>` / `--matrix-kinds <类型>` | 命令矩阵定点复测 |
+| `--include-external --scenario-fixtures <文件>` | 加入依赖外部服务的业务场景 |
+| `--include-chat-quality` | 加入消耗模型额度的聊天质量阶段 |
+| `--output <目录>` | 指定报告目录 |
+| `--recover` | 上次 UAT 被强制终止、配置未恢复时，确认没有服务在运行后执行，恢复配置 |
 
 ---
 

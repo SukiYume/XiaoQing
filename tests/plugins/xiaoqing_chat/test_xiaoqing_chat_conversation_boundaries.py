@@ -64,7 +64,7 @@ def test_active_conversation_suffix_keeps_continuous_turns_and_full_store() -> N
 def test_onebot_event_timestamp_accepts_old_seconds_but_rejects_future_or_boolean(
     monkeypatch,
 ) -> None:
-    from plugins.xiaoqing_chat.handlers import _event_message_timestamp
+    from plugins.xiaoqing_chat.turn_generation import _event_message_timestamp
 
     monkeypatch.setattr("plugins.xiaoqing_chat.handlers.time.time", lambda: 2_000_000.0)
 

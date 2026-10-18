@@ -47,17 +47,17 @@ class TestReplyGate:
         state.heartflow.score_async = AsyncMock(return_value=0.2)
         state.heartflow.get_async = AsyncMock(return_value=SimpleNamespace(no_reply_streak=0))
 
-        from plugins.xiaoqing_chat.frequency_control import _should_reply
+        from plugins.xiaoqing_chat.frequency_control import decide_reply
 
         with patch("plugins.xiaoqing_chat.frequency_control.random") as mock_rand:
             mock_rand.random.return_value = 0.55
-            result = await _should_reply(runtime, state, "g1", "今天天气不错", False, False)
+            result = await decide_reply(runtime, state, "g1", "今天天气不错", False, False)
 
         assert result is True
 
     @pytest.mark.asyncio
     async def test_reply_gate_records_random_skip_reason(self):
-        from plugins.xiaoqing_chat.frequency_control import _should_reply
+        from plugins.xiaoqing_chat.frequency_control import decide_reply
 
         runtime                                          = MagicMock()
         runtime.cfg.reply_probability_base               = 0.6
@@ -76,7 +76,7 @@ class TestReplyGate:
         state.set_reply_gate_decision = Mock()
 
         with patch("plugins.xiaoqing_chat.frequency_control.random.random", return_value=0.99):
-            result = await _should_reply(runtime, state, "g1", "今天天气不错", False, False)
+            result = await decide_reply(runtime, state, "g1", "今天天气不错", False, False)
 
         assert result is False
         decision = state.set_reply_gate_decision.call_args.args[1]
@@ -86,7 +86,7 @@ class TestReplyGate:
 
     @pytest.mark.asyncio
     async def test_reply_gate_skips_standalone_protocol_face_without_planning(self):
-        from plugins.xiaoqing_chat.frequency_control import _should_reply
+        from plugins.xiaoqing_chat.frequency_control import decide_reply
 
         runtime                                = MagicMock()
         runtime.cfg.reply_probability_base     = 1.0
@@ -101,7 +101,7 @@ class TestReplyGate:
         state.get_reply_timestamps.return_value          = []
         state.set_reply_gate_decision                    = Mock()
 
-        result = await _should_reply(
+        result = await decide_reply(
             runtime,
             state,
             "g1",
@@ -117,7 +117,7 @@ class TestReplyGate:
 
     @pytest.mark.asyncio
     async def test_reply_gate_skips_turn_explicitly_addressed_to_another_member(self):
-        from plugins.xiaoqing_chat.frequency_control import _should_reply
+        from plugins.xiaoqing_chat.frequency_control import decide_reply
 
         runtime                                = MagicMock()
         runtime.cfg.reply_probability_base     = 1.0
@@ -132,7 +132,7 @@ class TestReplyGate:
         state.get_reply_timestamps.return_value          = []
         state.set_reply_gate_decision                    = Mock()
 
-        result = await _should_reply(
+        result = await decide_reply(
             runtime,
             state,
             "g1",
@@ -148,7 +148,7 @@ class TestReplyGate:
 
     @pytest.mark.asyncio
     async def test_clear_group_participation_cue_uses_higher_probability(self):
-        from plugins.xiaoqing_chat.frequency_control import _should_reply
+        from plugins.xiaoqing_chat.frequency_control import decide_reply
 
         runtime                                         = MagicMock()
         runtime.cfg.reply_probability_base              = 0.45
@@ -167,7 +167,7 @@ class TestReplyGate:
         state.set_reply_gate_decision = Mock()
 
         with patch("plugins.xiaoqing_chat.frequency_control.random.random", return_value=0.7):
-            result = await _should_reply(
+            result = await decide_reply(
                 runtime,
                 state,
                 "g1",
@@ -183,7 +183,7 @@ class TestReplyGate:
 
     @pytest.mark.asyncio
     async def test_message_directed_to_other_is_rejected_before_probability_roll(self):
-        from plugins.xiaoqing_chat.frequency_control import _should_reply
+        from plugins.xiaoqing_chat.frequency_control import decide_reply
 
         runtime                                         = MagicMock()
         runtime.cfg.reply_probability_base              = 0.45
@@ -202,7 +202,7 @@ class TestReplyGate:
         state.set_reply_gate_decision = Mock()
 
         with patch("plugins.xiaoqing_chat.frequency_control.random.random", return_value=0.7):
-            result = await _should_reply(
+            result = await decide_reply(
                 runtime,
                 state,
                 "g1",
@@ -220,7 +220,7 @@ class TestReplyGate:
 
     @pytest.mark.asyncio
     async def test_reply_gate_records_min_interval_skip_reason(self):
-        from plugins.xiaoqing_chat.frequency_control import _should_reply
+        from plugins.xiaoqing_chat.frequency_control import decide_reply
 
         runtime                                          = MagicMock()
         runtime.cfg.reply_probability_base               = 0.6
@@ -239,7 +239,7 @@ class TestReplyGate:
         state.set_reply_gate_decision = Mock()
 
         with patch("plugins.xiaoqing_chat.frequency_control.time.time", return_value=100.0):
-            result = await _should_reply(runtime, state, "g1", "今天天气不错", False, False)
+            result = await decide_reply(runtime, state, "g1", "今天天气不错", False, False)
 
         assert result is False
         decision = state.set_reply_gate_decision.call_args.args[1]
@@ -249,7 +249,7 @@ class TestReplyGate:
 
     @pytest.mark.asyncio
     async def test_active_topic_min_interval_uses_configured_value(self):
-        from plugins.xiaoqing_chat.frequency_control import _should_reply
+        from plugins.xiaoqing_chat.frequency_control import decide_reply
 
         runtime                                              = MagicMock()
         runtime.cfg.reply_probability_base                   = 0.6
@@ -275,7 +275,7 @@ class TestReplyGate:
         state.set_reply_gate_decision = Mock()
 
         with patch("plugins.xiaoqing_chat.frequency_control.time.time", return_value=100.0):
-            result = await _should_reply(runtime, state, "g1", "继续聊", False, False)
+            result = await decide_reply(runtime, state, "g1", "继续聊", False, False)
 
         assert result is False
         decision = state.set_reply_gate_decision.call_args.args[1]
@@ -287,7 +287,7 @@ class TestReplyGate:
             patch("plugins.xiaoqing_chat.frequency_control.time.time", return_value=100.0),
             patch("plugins.xiaoqing_chat.frequency_control.random.random", return_value=0.0),
         ):
-            result = await _should_reply(runtime, state, "g1", "那为什么会这样？", False, False)
+            result = await decide_reply(runtime, state, "g1", "那为什么会这样？", False, False)
 
         assert result is True
         decision = state.set_reply_gate_decision.call_args.args[1]
@@ -295,7 +295,7 @@ class TestReplyGate:
 
     @pytest.mark.asyncio
     async def test_active_topic_uses_explicit_probability_without_aggressive_boost(self):
-        from plugins.xiaoqing_chat.frequency_control import _should_reply
+        from plugins.xiaoqing_chat.frequency_control import decide_reply
 
         runtime                                              = MagicMock()
         runtime.cfg.reply_probability_base                   = 0.45
@@ -322,7 +322,7 @@ class TestReplyGate:
             patch("plugins.xiaoqing_chat.frequency_control.time.time", return_value=100.0),
             patch("plugins.xiaoqing_chat.frequency_control.random.random", return_value=0.65),
         ):
-            result = await _should_reply(runtime, state, "g1", "继续聊", False, False)
+            result = await decide_reply(runtime, state, "g1", "继续聊", False, False)
 
         assert result is False
         decision = state.set_reply_gate_decision.call_args.args[1]
@@ -334,7 +334,7 @@ class TestReplyGate:
             patch("plugins.xiaoqing_chat.frequency_control.time.time", return_value=100.0),
             patch("plugins.xiaoqing_chat.frequency_control.random.random", return_value=0.85),
         ):
-            result = await _should_reply(runtime, state, "g1", "那为什么会这样？", False, False)
+            result = await decide_reply(runtime, state, "g1", "那为什么会这样？", False, False)
 
         assert result is True
         decision = state.set_reply_gate_decision.call_args.args[1]
@@ -368,11 +368,11 @@ class TestReplyGate:
         state.heartflow.score_async = AsyncMock(return_value=0.32)
         state.heartflow.get_async = AsyncMock(return_value=SimpleNamespace(no_reply_streak=0))
 
-        from plugins.xiaoqing_chat.frequency_control import _should_reply
+        from plugins.xiaoqing_chat.frequency_control import decide_reply
 
         with patch("plugins.xiaoqing_chat.frequency_control.random") as mock_rand:
             mock_rand.random.return_value = 0.67
-            result = await _should_reply(runtime, state, "g1", "今天天气不错", False, False)
+            result = await decide_reply(runtime, state, "g1", "今天天气不错", False, False)
 
         assert result is False
 
@@ -398,11 +398,11 @@ class TestReplyGate:
         state.heartflow.score_async = AsyncMock(return_value=1.0)
         state.heartflow.get_async = AsyncMock(return_value=SimpleNamespace(no_reply_streak=12))
 
-        from plugins.xiaoqing_chat.frequency_control import _should_reply
+        from plugins.xiaoqing_chat.frequency_control import decide_reply
 
         with patch("plugins.xiaoqing_chat.frequency_control.random") as mock_rand:
             mock_rand.random.return_value = 0.3
-            result = await _should_reply(runtime, state, "g1", "哦", False, False)
+            result = await decide_reply(runtime, state, "g1", "哦", False, False)
 
         assert result is True
 

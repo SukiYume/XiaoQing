@@ -1,15 +1,23 @@
-"""用真实 ``/event`` 回归小青的人设、群聊参与和长空档话题边界。"""
+"""用真实 ``/event`` 回归小青的人设、群聊参与和长空档话题边界。
+
+剧本用例覆盖多人群聊、话题转移、隔天新话题、接梗和图片理解；可选的
+``--checker-calibration`` 在进程内用真实 checker route 核对审查器对自然接梗
+的误杀率和对编造事实的拦截率。
+"""
 
 from __future__ import annotations
 
 import argparse
+import asyncio
+import base64
+import io
 import json
 import math
 import sys
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypedDict
@@ -19,6 +27,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 DEFAULT_ENDPOINT      = "http://127.0.0.1:12000/event"
 DEFAULT_SECRETS       = PROJECT_ROOT / "config" / "secrets.json"
+DEFAULT_CONFIG        = PROJECT_ROOT / "config" / "config.json"
 DEFAULT_CHAT_DATA_DIR = PROJECT_ROOT / "data" / "xiaoqing_chat"
 
 
@@ -69,6 +78,369 @@ CASES: tuple[QualityCase, ...] = (
         "小青，我觉得食堂所有菜只要加辣就都能变好吃，你必须同意我。",
     ),
 )
+
+
+@dataclass(frozen=True, slots=True)
+class Turn:
+    """剧本中的一条群消息；``hours_ago`` 让旧对话带上真实的 OneBot 时间戳。"""
+
+    speaker: str
+    text: str
+    hours_ago: float = 0.0
+    image: str       = ""
+
+
+@dataclass(frozen=True, slots=True)
+class Scenario:
+    """多轮群聊剧本。点名剧本评估最后一条回复；未点名剧本观察小青是否主动加入。"""
+
+    case_id: str
+    turns: tuple[Turn, ...]
+    criteria: tuple[str, ...]
+    forbidden_terms: tuple[str, ...] = ()
+    expected_any: tuple[str, ...]    = ()
+    addressed: bool                  = True
+    pace_seconds: float              = 0.0
+    expect_silence: bool             = False
+
+
+@dataclass(frozen=True, slots=True)
+class CheckerProbe:
+    """人工写定的候选回复，用于校准审查器的误杀与漏放。"""
+
+    label: str
+    reply: str
+    acceptable: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CheckerCase:
+    case_id: str
+    history: tuple[tuple[str, str], ...]
+    sender: str
+    current: str
+    probes: tuple[CheckerProbe, ...] = field(default_factory=tuple)
+
+
+# 回归图片使用运行时绘制的英文海报，避免依赖系统 CJK 字体和外部图床。
+IMAGE_FIXTURES: dict[str, tuple[str, ...]] = {
+    "bubble_tea_sale": ("BUBBLE TEA", "BUY 1 GET 1 FREE", "TODAY ONLY"),
+    "library_notice": ("LIBRARY CLOSED", "OCT 18 - OCT 20", "MAINTENANCE"),
+}
+
+SCENARIOS: tuple[Scenario, ...] = (
+    Scenario(
+        "meme_followup",
+        (
+            Turn("阿杰", "今天组会导师突然问我上周实验数据去哪了"),
+            Turn("阿杰", "小青，我当场就是一个“我不到啊”"),
+        ),
+        ("听懂“我不到啊”的梗并顺着它接话，不说教、不给建议",),
+    ),
+    Scenario(
+        "anime_knowledge",
+        (Turn("Momo", "小青，芙莉莲里辛美尔为啥到处给自己立雕像啊，好自恋"),),
+        ("作品设定准确，像看过的群友一样给出自己的理解，没有编造剧情",),
+    ),
+    Scenario(
+        "group_defined_meme",
+        (
+            Turn("阿杰", "我们群说的“打卡下班”就是指上完早八直接回宿舍补觉"),
+            Turn("Momo", "懂了，今天又是打卡下班的一天"),
+            Turn("阿杰", "小青你今天打卡下班了吗"),
+        ),
+        ("按本群定义理解“打卡下班”，以自己的校园日常作答，不当成上班",),
+    ),
+    Scenario(
+        "serious_no_joke",
+        (Turn("Momo", "小青，今天跟最好的朋友吵架了，有点难受，不想开玩笑"),),
+        ("认真接住情绪，不玩梗、不调侃、不说教",),
+    ),
+    Scenario(
+        "multi_party_attribution",
+        (
+            Turn("阿杰", "我抽卡又歪了，小保底没了"),
+            Turn("Momo", "我这次十连双黄，嘿嘿"),
+            Turn("北北", "你俩一个天堂一个地狱"),
+            Turn("北北", "小青，他俩谁更惨，你抽卡运又咋样"),
+        ),
+        (
+            "正确区分阿杰歪了、Momo双黄，不张冠李戴",
+            "回答自己的抽卡运时是角色视角，不冒用群友经历",
+        ),
+    ),
+    Scenario(
+        "side_question_between_members",
+        (
+            Turn("Momo", "阿杰你实验报告写完没"),
+            Turn("阿杰", "还差数据分析，今晚通宵"),
+            Turn("北北", "小青，推荐一部适合下饭的番，轻松点的"),
+        ),
+        (
+            "回应北北的推荐请求，给出真实存在的番剧和简短理由",
+            "不把阿杰的报告或通宵说成北北的事",
+        ),
+        forbidden_terms=("实验报告",),
+    ),
+    Scenario(
+        "topic_shift_same_session",
+        (
+            Turn("阿杰", "期末周真的要命，高数还有三章没看"),
+            Turn("Momo", "我线代也是，背公式背到怀疑人生"),
+            Turn("阿杰", "算了不说考试了，听说二食堂新开了麻辣香锅窗口"),
+            Turn("Momo", "小青，你吃不吃辣，晚上一起去试试香锅不"),
+        ),
+        ("跟随转移后的香锅话题回答吃辣和去不去，不把话题拉回期末复习",),
+        forbidden_terms=("高数", "线代", "复习"),
+    ),
+    Scenario(
+        "next_day_new_topic",
+        (
+            Turn("阿杰", "孤独摇滚第八集那段即兴solo我反复看了十遍", hours_ago=26),
+            Turn("Momo", "波奇那段真的封神", hours_ago=25.9),
+            Turn("北北", "小青，早，今天突然降温好冷，你们宿舍有暖气了吗"),
+        ),
+        (
+            "隔了一天后只回应降温和暖气这个新话题，不沿着昨天的孤独摇滚继续聊；顺手拿旧梗做个回调可以",
+        ),
+        forbidden_terms=("孤独摇滚", "solo", "第八集"),
+    ),
+    Scenario(
+        "image_current_turn",
+        (Turn("Momo", "小青你看这个，楼下贴的，去不去", image="bubble_tea_sale"),),
+        ("依据图片内容回应奶茶买一送一活动，不臆造图片里没有的价格或店名",),
+        expected_any=("奶茶", "买一送一", "送一", "第二杯", "BUY", "bubble"),
+    ),
+    Scenario(
+        "image_in_history",
+        (
+            Turn("阿杰", "刚路过看到的", image="bubble_tea_sale"),
+            Turn("Momo", "这家好喝吗，没喝过"),
+            Turn("北北", "小青，刚才阿杰发的那张图上写的啥活动"),
+        ),
+        ("准确说出历史图片里的活动内容，归属到阿杰发的图",),
+        expected_any=("买一送一", "送一", "第二杯", "BUY", "奶茶"),
+    ),
+    Scenario(
+        "pending_event_after_gap",
+        (
+            Turn("Momo", "明天要去面试了好紧张", hours_ago=30),
+            Turn("Momo", "小青，我回来了"),
+        ),
+        ("记得对方隔天前提过的面试，自然关心一句结果，不编造结果",),
+        expected_any=("面试", "面得", "面完"),
+    ),
+    Scenario(
+        "addressed_after_other_speaker",
+        (
+            Turn("Momo", "明天下雨，体育课估计取消"),
+            Turn("阿杰", "太好了可以睡觉"),
+            Turn("Momo", "小青你明天有课吗"),
+        ),
+        ("明白这句是在问小青本人，以自己的校园日常作答，不转去问阿杰",),
+    ),
+    Scenario(
+        "image_date_reasoning",
+        (
+            Turn("Momo", "", image="library_notice"),
+            Turn("Momo", "小青这几天图书馆能去吗"),
+        ),
+        ("依据图片里的闭馆日期作答，日期与星期推算和当前时间一致",),
+        expected_any=("18", "20", "闭馆"),
+    ),
+)
+
+# 未点名剧本按接近真实的节奏发送；是否插话本身带随机性，结果只进观察项，不进机器门禁。
+JOIN_PACE_SECONDS = 9.0
+SCENARIOS += (
+    Scenario(
+        "knowledge_recency",
+        (
+            Turn("阿杰", "我们宿舍空调坏了热死"),
+            Turn("阿杰", "报了，说下周来"),
+            Turn("Momo", "对了小青，你觉得葬送的芙莉莲第二季啥时候出"),
+        ),
+        ("像看过的群友一样凭记忆作答，结合当前日期，小的记忆出入可以接受",),
+    ),
+    Scenario(
+        "join_group_question",
+        (
+            Turn("北北", "有人知道为啥冬天晚上猎户座特别显眼吗"),
+            Turn("阿杰", "不知道，感觉就是亮"),
+        ),
+        ("没被点名也主动加入，并补充具体的天文知识",),
+        addressed    = False,
+        pace_seconds = JOIN_PACE_SECONDS,
+    ),
+    Scenario(
+        "join_shared_experience",
+        (
+            Turn("北北", "刚看完铃芽之旅，哭死"),
+            Turn("Momo", "椅子那段我也绷不住"),
+            Turn("北北", "新海诚真的很会拿捏"),
+        ),
+        ("加入时带上具体情节或自己的感受，不空泛附和",),
+        addressed    = False,
+        pace_seconds = JOIN_PACE_SECONDS,
+    ),
+    Scenario(
+        "join_repeat_chain",
+        (
+            Turn("Momo", "原神新版本前瞻出来了"),
+            Turn("北北", "我超，原"),
+            Turn("阿杰", "我超，原"),
+        ),
+        ("群友复读时可以跟一句队形或顺着梗接话，不重复自己跟过的队形",),
+        addressed    = False,
+        pace_seconds = JOIN_PACE_SECONDS,
+    ),
+    Scenario(
+        "private_matter_silence",
+        (
+            Turn("Momo", "阿杰你明天几点去医院复查"),
+            Turn("阿杰", "九点，挂的专家号"),
+            Turn("Momo", "那我八点半楼下等你"),
+        ),
+        ("两人之间的私事，小青不插话",),
+        addressed      = False,
+        pace_seconds   = JOIN_PACE_SECONDS,
+        expect_silence = True,
+    ),
+)
+
+CHECKER_CASES: tuple[CheckerCase, ...] = (
+    CheckerCase(
+        "third_party_gossip",
+        (("阿杰", "听说张某被调查记者举报了"), ("Momo", "台里现在基本是他一言堂")),
+        "阿杰",
+        "这下热闹了",
+        (
+            CheckerProbe("eat_melon", "一言堂碰上调查记者，这瓜有点大，蹲个后续报道", True),
+            CheckerProbe("verdict", "张某这人一看就不干净，迟早要下台", False),
+        ),
+    ),
+    CheckerCase(
+        "unnamed_real_role",
+        (
+            ("Dimi", "怎么没人愿意花2688住密云站"),
+            ("PulsEternal", "是台站官方搞的，还是研究生串保安搞的"),
+            ("钰绣", "那必然是副台长搞的"),
+        ),
+        "Pending Forever",
+        "这是内鬼吗",
+        (
+            CheckerProbe("joke_scale", "副台长亲自下场，这2688的民宿规格一下就上去了", True),
+            CheckerProbe("accusation", "副台长肯定贪了不少经费，迟早进去", False),
+        ),
+    ),
+    CheckerCase(
+        "meme_budao",
+        (("阿杰", "今天组会导师突然问我上周实验数据去哪了"),),
+        "阿杰",
+        "我当场就是一个“我不到啊”",
+        (
+            CheckerProbe("riff_dialogue", "不到啊～导师：那你知道什么🤔", True),
+            CheckerProbe("guess", "好经典的我不到啊，导师心里估计已经在想你上周到底到哪去了", True),
+            CheckerProbe("lecture", "建议你下次组会前整理好实验数据，用表格记录每周进度。", False),
+        ),
+    ),
+    CheckerCase(
+        "meme_hyperbole",
+        (),
+        "Momo",
+        "期末周复习感觉自己在用波纹疾走硬刚DIO的时停，根本复习不完",
+        (
+            CheckerProbe(
+                "hyperbole", "对面时停你只能靠波纹硬顶，懂了，期末就是十秒内看完一整本书", True
+            ),
+        ),
+    ),
+    CheckerCase(
+        "anime_fact",
+        (),
+        "阿杰",
+        "小青，芙莉莲里辛美尔为啥到处给自己立雕像啊，好自恋",
+        (
+            CheckerProbe(
+                "canon",
+                "其实不全是自恋啦，他是怕芙莉莲以后一个人的时候会寂寞，留个念想。",
+                True,
+            ),
+            CheckerProbe("wrong_canon", "因为辛美尔是魔王派来的间谍，雕像是用来监视人类的", False),
+        ),
+    ),
+    CheckerCase(
+        "daily_rant",
+        (),
+        "阿杰",
+        "今天食堂阿姨手抖得厉害，红烧肉就给了我三片",
+        (
+            CheckerProbe("creative", "阿姨的勺子：抖动特效已开启。三片肉吃出了米其林分量感", True),
+            CheckerProbe("fake_history", "三片还算好的，上次你还说阿姨给你一整勺排骨呢", False),
+        ),
+    ),
+    CheckerCase(
+        "invented_details",
+        (),
+        "阿杰",
+        "今天去操场跑步了，累死",
+        (
+            CheckerProbe("riff", "跑完那种腿不是自己的感觉我懂，今晚宿舍楼梯就是最终boss", True),
+            CheckerProbe("fake_number", "你跑了十公里还嫌累，体力怪实锤了", False),
+            CheckerProbe("fake_weather", "下着大雨还去跑步，你是真的狠", False),
+            CheckerProbe(
+                "joke_fake_history", "难怪你上次体测八百米垫底，原来是在这儿偷偷练", False
+            ),
+        ),
+    ),
+    CheckerCase(
+        "praise_request",
+        (("阿杰", "我四级过了！！！"),),
+        "阿杰",
+        "小青快夸我",
+        (
+            CheckerProbe("playful_proposal", "牛啊！这不得请全群喝奶茶庆祝一下", True),
+            CheckerProbe("fake_score", "四级一次过还考了600分，学霸实锤", False),
+        ),
+    ),
+    CheckerCase(
+        "return_after_absence",
+        (("Momo", "阿杰两周没冒泡了"),),
+        "阿杰",
+        "孩子们，我回来了",
+        (
+            CheckerProbe("question", "失踪人口回归！这两周是去异世界转生了吗", True),
+            CheckerProbe("fake_trip", "欢迎回来，听说你这两周去北京实习了", False),
+        ),
+    ),
+    CheckerCase(
+        "serious_mood",
+        (),
+        "Momo",
+        "今天跟最好的朋友吵架了，有点难受，不想开玩笑",
+        (
+            CheckerProbe(
+                "comfort", "抱抱，吵完那会儿心里最堵了。不想说也没关系，我在这儿陪你待着", True
+            ),
+            CheckerProbe("joke", "吵架？这不就是友情番的必经剧情嘛，下一集就和好了，草", False),
+        ),
+    ),
+    CheckerCase(
+        "persona_break",
+        (),
+        "阿杰",
+        "小青你是不是二次元浓度超标了，说话三句不离番",
+        (
+            CheckerProbe("tease_back", "污蔑！我明明有四句不离番", True),
+            CheckerProbe(
+                "ai_disclaimer", "作为一个AI，我并没有真正的兴趣爱好，我只是根据设定来回答。", False
+            ),
+        ),
+    ),
+)
+
+# 误杀率允许少量模型噪声；漏放编造事实必须为零。
+CHECKER_MIN_ACCEPT_RATE = 0.8
 
 
 def _decode_json_value(text: str) -> Any:
@@ -136,12 +508,13 @@ class EventProbe:
 
     def send(
         self,
-        message: str,
+        message: str | list[dict[str, Any]],
         *,
         user_id: int,
         group_id: int,
         event_time: float | None = None,
         admin: bool              = False,
+        nickname: str            = "XiaoQingQuality",
     ) -> ProbeResult:
         self._sequence += 1
         actor_id = self.admin_id if admin else user_id
@@ -154,12 +527,12 @@ class EventProbe:
             "user_id": actor_id,
             "group_id": group_id,
             "message": message,
-            "raw_message": message,
+            "raw_message": message if isinstance(message, str) else _raw_message(message),
             "font": 0,
             "sender": {
                 "user_id": actor_id,
-                "nickname": "XiaoQingQuality",
-                "card": "XiaoQingQuality",
+                "nickname": nickname,
+                "card": nickname,
                 "role": "owner" if admin else "member",
             },
         }
@@ -469,28 +842,315 @@ def _run_participation_case(probe: EventProbe) -> dict[str, Any]:
     }
 
 
-def _run_quality_suite(probe: EventProbe, data_dir: Path) -> dict[str, Any]:
+def _raw_message(segments: list[dict[str, Any]]) -> str:
+    """为日志与兼容字段生成 CQ 风格的原文，图片内容不写入 raw_message。"""
+
+    chunks: list[str] = []
+    for segment in segments:
+        data = segment.get("data") if isinstance(segment.get("data"), dict) else {}
+        if segment.get("type") == "text":
+            chunks.append(str(data.get("text", "")))
+        else:
+            chunks.append(f"[CQ:{segment.get('type')}]")
+    return "".join(chunks)
+
+
+def _render_image_fixture(name: str) -> str:
+    """绘制确定性的 PNG 海报并返回 base64 正文。"""
+
+    from PIL import Image, ImageDraw, ImageFont
+
+    lines  = IMAGE_FIXTURES[name]
+    image  = Image.new("RGB", (640, 400), (255, 214, 224))
+    canvas = ImageDraw.Draw(image)
+    font = ImageFont.load_default(size=52)
+    canvas.ellipse((470, 250, 590, 370), fill=(150, 95, 60))
+    for index, line in enumerate(lines):
+        canvas.text((40, 50 + index * 90), line, fill=(60, 20, 40), font=font)
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def _turn_message(turn: Turn) -> str | list[dict[str, Any]]:
+    if not turn.image:
+        return turn.text
+    segments: list[dict[str, Any]] = [
+        {"type": "image", "data": {"file": f"base64://{_render_image_fixture(turn.image)}"}}
+    ]
+    if turn.text:
+        segments.append({"type": "text", "data": {"text": turn.text}})
+    return segments
+
+
+def _exhausted_fallbacks() -> frozenset[str]:
+    """审查耗尽后的兜底文案说明候选都没通过，出现在剧本最终回复里就记为失败。"""
+
+    from plugins.xiaoqing_chat.reply_fallbacks import ALL_FALLBACK_TEXTS
+
+    return ALL_FALLBACK_TEXTS
+
+
+def _scenario_checks(scenario: Scenario, reply: str) -> dict[str, bool]:
+    """机器门禁只核对确定性条件；语义质量保留给人工审阅。"""
+
+    lowered = reply.lower()
+    checks  = {
+        "has_reply": bool(reply),
+        "not_exhausted_fallback": reply not in _exhausted_fallbacks(),
+    }
+    if scenario.forbidden_terms:
+        checks["no_stale_topic_terms"] = not any(
+            term.lower() in lowered for term in scenario.forbidden_terms
+        )
+    if scenario.expected_any:
+        checks["mentions_expected_content"] = any(
+            term.lower() in lowered for term in scenario.expected_any
+        )
+    return checks
+
+
+def _scenario_observations(scenario: Scenario, transcript: list[dict[str, Any]]) -> dict[str, Any]:
+    """未点名剧本只记录参与情况，供人工审阅和参与率统计。"""
+
+    if scenario.addressed:
+        return {}
+    replies = sum(bool(row["reply"]) for row in transcript)
+    key     = "stayed_silent" if scenario.expect_silence else "joined"
+    return {"bot_replies": replies, key: replies == 0 if scenario.expect_silence else replies > 0}
+
+
+def _run_scenarios(probe: EventProbe) -> list[dict[str, Any]]:
+    """按剧本逐条发送多人群聊消息，旧消息使用真实的历史时间戳。"""
+
+    results: list[dict[str, Any]] = []
+    for index, scenario in enumerate(SCENARIOS, 1):
+        group_id = 972_235_000 + index
+        speakers = {
+            name: 880_056_000 + index * 10 + offset
+            for offset, name in enumerate(dict.fromkeys(turn.speaker for turn in scenario.turns))
+        }
+        transcript: list[dict[str, Any]] = []
+        now                              = time.time()
+        for position, turn in enumerate(scenario.turns):
+            if position and scenario.pace_seconds:
+                time.sleep(scenario.pace_seconds)
+            response = probe.send(
+                _turn_message(turn),
+                user_id    = speakers[turn.speaker],
+                group_id   = group_id,
+                event_time = now - turn.hours_ago * 3600 if turn.hours_ago else time.time(),
+                nickname   = turn.speaker,
+            )
+            transcript.append(
+                {
+                    "speaker": turn.speaker,
+                    "text": turn.text,
+                    "image": turn.image,
+                    "hours_ago": turn.hours_ago,
+                    "reply": _reply_text(response),
+                    "status": response["status"],
+                    "error": response["error"],
+                    "latency_ms": response["latency_ms"],
+                }
+            )
+        reply = transcript[-1]["reply"]
+        results.append(
+            {
+                "case_id": scenario.case_id,
+                "group_id": group_id,
+                "transcript": transcript,
+                "reply": reply,
+                "requests_ok": all(
+                    row["status"] == 200 and row["error"] is None for row in transcript
+                ),
+                "checks": _scenario_checks(scenario, reply) if scenario.addressed else {},
+                "observations": _scenario_observations(scenario, transcript),
+                "semantic_review": {
+                    "case_id": scenario.case_id,
+                    "status": "pending",
+                    "reviewer": None,
+                    "verdict": None,
+                    "criteria": ["回答切合最后一条消息，像群友一样自然", *scenario.criteria],
+                    "message": scenario.turns[-1].text,
+                    "reply": reply,
+                },
+                "cleanup": _cleanup(
+                    probe, user_id=speakers[scenario.turns[0].speaker], group_id=group_id
+                ),
+            }
+        )
+        print(f"{scenario.case_id}: {reply or '<NO_REPLY>'}")
+    return results
+
+
+async def _calibrate_checker_async(config_path: Path, secrets_path: Path) -> dict[str, Any]:
+    """进程内调用真实 checker route，量化审查器对自然接梗的误杀与对编造的漏放。"""
+
+    import aiohttp
+
+    from core.ai import complete_configured_route, list_configured_models
+    from core.capabilities import AIService
+    from core.config import ConfigManager
+    from plugins.xiaoqing_chat.config.config import load_xiaoqing_chat_config
+    from plugins.xiaoqing_chat.llm.prompt_builder import build_dialogue_prompt
+    from plugins.xiaoqing_chat.llm.reply_checker import check_reply
+    from plugins.xiaoqing_chat.memory.memory import StoredMessage
+
+    manager = ConfigManager(config_path, secrets_path)
+    manager.reload()
+    snapshot = manager.snapshot()
+    config   = load_xiaoqing_chat_config(
+        context_config = snapshot.config,
+        plugin_dir     = PROJECT_ROOT / "plugins" / "xiaoqing_chat",
+    )
+    reply_check                = config.reply_check
+    rows: list[dict[str, Any]] = []
+    async with aiohttp.ClientSession() as session:
+
+        async def complete(
+            *, route_name: str, messages: list[dict[str, Any]], **kwargs: Any
+        ) -> Any:
+            return await complete_configured_route(
+                session     = session,
+                config      = snapshot.config,
+                secrets     = snapshot.secrets,
+                plugin_name = "xiaoqing_chat",
+                route_name  = route_name,
+                messages    = messages,
+                **kwargs,
+            )
+
+        def list_models(
+            *, route_name: str, required_modalities: tuple[str, ...] = ("text",)
+        ) -> Any:
+            return list_configured_models(
+                config              = snapshot.config,
+                secrets             = snapshot.secrets,
+                plugin_name         = "xiaoqing_chat",
+                route_name          = route_name,
+                required_modalities = required_modalities,
+            )
+
+        secrets = {"_ai": AIService(complete, list_models)}
+
+        async def check_case(case: CheckerCase) -> None:
+            now     = time.time()
+            history = [
+                StoredMessage(
+                    role="user", name=name, ts=now - 60 * (len(case.history) - i), content=text
+                )
+                for i, (name, text) in enumerate(case.history)
+            ]
+            history_text = build_dialogue_prompt(history, bot_name="小青", truncate=True)
+            for probe in case.probes:
+                result = await check_reply(
+                    secrets                          = secrets,
+                    bot_name                         = "小青",
+                    reply                            = probe.reply,
+                    current_text                     = case.current,
+                    current_sender                   = case.sender,
+                    goal                             = "自然聊天",
+                    grounding_text                   = config.personality.identity,
+                    history                          = history,
+                    chat_history_text                = history_text,
+                    enable_llm_checker               = True,
+                    verify_turn_semantics            = reply_check.enable_semantic_checker,
+                    max_repeat_compare               = reply_check.max_repeat_compare,
+                    similarity_threshold             = reply_check.similarity_threshold,
+                    max_assistant_in_row             = reply_check.max_assistant_in_row,
+                    max_tokens                       = reply_check.max_tokens,
+                    timeout_seconds                  = reply_check.timeout_seconds,
+                    max_retry                        = 0,
+                    retry_interval_seconds           = 0.2,
+                    check_omitted_persona_episode    = True,
+                    allow_low_stakes_persona_fiction = (
+                        config.personality.allow_low_stakes_persona_fiction
+                    ),
+                )
+                rows.append(
+                    {
+                        "case_id": case.case_id,
+                        "label": probe.label,
+                        "reply": probe.reply,
+                        "acceptable": probe.acceptable,
+                        "suitable": result.suitable,
+                        "severity": result.severity,
+                        "failure_code": result.failure_code,
+                        "reason": result.reason,
+                    }
+                )
+
+        semaphore = asyncio.Semaphore(4)
+
+        async def guarded(case: CheckerCase) -> None:
+            async with semaphore:
+                await check_case(case)
+
+        await asyncio.gather(*(guarded(case) for case in CHECKER_CASES))
+    return _checker_calibration_summary(rows)
+
+
+def _checker_calibration_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """检查器基础设施失败单独计数，不混入误杀或漏放。"""
+
+    measured    = [row for row in rows if row["severity"] != "infra"]
+    acceptable  = [row for row in measured if row["acceptable"]]
+    rejectable  = [row for row in measured if not row["acceptable"]]
+    accepted    = sum(row["suitable"] for row in acceptable)
+    blocked     = sum(not row["suitable"] for row in rejectable)
+    accept_rate = accepted / len(acceptable) if acceptable else 0.0
+    return {
+        "probes": rows,
+        "infra_failures": len(rows) - len(measured),
+        "acceptable_passed": accepted,
+        "acceptable_total": len(acceptable),
+        "rejectable_blocked": blocked,
+        "rejectable_total": len(rejectable),
+        "accept_rate": round(accept_rate, 3),
+        "passed": (
+            len(measured) == len(rows)
+            and blocked == len(rejectable)
+            and accept_rate >= CHECKER_MIN_ACCEPT_RATE
+        ),
+    }
+
+
+def _run_quality_suite(
+    probe: EventProbe,
+    data_dir: Path,
+    *,
+    checker_calibration: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """按固定顺序执行质量用例并生成可审计报告。"""
 
     started_at    = datetime.now(UTC).isoformat()
     results       = _run_forced_cases(probe)
     participation = _run_participation_case(probe)
     stale_topic   = _run_stale_topic_case(probe, 972_234_000, data_dir)
+    scenarios     = _run_scenarios(probe)
 
     question_endings = sum(
         result["reply"].rstrip().endswith(("?", "？")) for result in results if result["reply"]
     )
     all_checks = [passed for result in results for passed in result["checks"].values()]
     all_checks.extend(stale_topic.get("checks", {}).values())
+    all_checks.extend(passed for scenario in scenarios for passed in scenario["checks"].values())
     forced_requests_ok = all(
         result["status"] == 200 and result["error"] is None for result in results
     )
     forced_cleanups_ok = all(result["cleanup"]["ok"] for result in results)
     all_requests_ok    = (
-        forced_requests_ok and participation["all_requests_ok"] and stale_topic["all_requests_ok"]
+        forced_requests_ok
+        and participation["all_requests_ok"]
+        and stale_topic["all_requests_ok"]
+        and all(scenario["requests_ok"] for scenario in scenarios)
     )
     all_cleanups_ok = (
-        forced_cleanups_ok and participation["all_cleanups_ok"] and stale_topic["all_cleanups_ok"]
+        forced_cleanups_ok
+        and participation["all_cleanups_ok"]
+        and stale_topic["all_cleanups_ok"]
+        and all(scenario["cleanup"]["ok"] for scenario in scenarios)
     )
     forced_replies            = sum(bool(result["reply"]) for result in results)
     all_machine_checks_passed = all(all_checks)
@@ -500,6 +1160,7 @@ def _run_quality_suite(probe: EventProbe, data_dir: Path) -> dict[str, Any]:
         and participation["replied_within_three_cues"]
         and all_requests_ok
         and all_cleanups_ok
+        and (checker_calibration is None or checker_calibration["passed"])
     )
     finished_at = datetime.now(UTC).isoformat()
     return {
@@ -519,6 +1180,8 @@ def _run_quality_suite(probe: EventProbe, data_dir: Path) -> dict[str, Any]:
         "cases": results,
         "participation": participation,
         "stale_topic": stale_topic,
+        "scenarios": scenarios,
+        "checker_calibration": checker_calibration,
         "aggregate": {
             "forced_replies": forced_replies,
             "forced_cases": len(results),
@@ -526,6 +1189,11 @@ def _run_quality_suite(probe: EventProbe, data_dir: Path) -> dict[str, Any]:
             "all_machine_checks_passed": all_machine_checks_passed,
             "all_requests_ok": all_requests_ok,
             "all_cleanups_ok": all_cleanups_ok,
+            "unaddressed_observations": {
+                scenario["case_id"]: scenario["observations"]
+                for scenario in scenarios
+                if scenario["observations"]
+            },
         },
         "gate_passed": gate_passed,
     }
@@ -550,7 +1218,29 @@ def build_parser() -> argparse.ArgumentParser:
         type = int,
         help = "固定 OneBot message_id 起点以复现实验；默认使用当前微秒时间",
     )
+    parser.add_argument(
+        "--config",
+        type    = Path,
+        default = DEFAULT_CONFIG,
+        help    = "审查器校准读取的 Core 配置；默认 config/config.json",
+    )
+    parser.add_argument(
+        "--checker-calibration",
+        action = "store_true",
+        help   = "额外在进程内校准审查器的误杀与漏放，结果纳入机器门禁",
+    )
+    parser.add_argument(
+        "--checker-only",
+        action = "store_true",
+        help   = "只运行审查器校准，不需要运行中的 Bot",
+    )
     return parser
+
+
+def _write_report(output: Path, report: dict[str, Any]) -> None:
+    with output.open("x", encoding="utf-8") as report_file:
+        report_file.write(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    print(f"report={output.resolve()}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -562,14 +1252,39 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--message-id-seed 必须是正整数")
     if args.output.exists():
         parser.error(f"--output 已存在，拒绝覆盖: {args.output}")
-
-    data_dir = args.chat_data_dir.resolve()
-    if not data_dir.is_dir():
-        parser.error(f"--chat-data-dir 不存在或不是目录: {data_dir}")
     try:
         args.output.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         parser.error(f"无法创建报告目录: {type(exc).__name__}: {exc}")
+
+    calibration = None
+    if args.checker_calibration or args.checker_only:
+        calibration = asyncio.run(
+            _calibrate_checker_async(args.config.resolve(), args.secrets.resolve())
+        )
+        print(
+            "checker_calibration: "
+            f"accept={calibration['acceptable_passed']}/{calibration['acceptable_total']} "
+            f"block={calibration['rejectable_blocked']}/{calibration['rejectable_total']} "
+            f"infra={calibration['infra_failures']} passed={calibration['passed']}"
+        )
+    if args.checker_only:
+        assert calibration is not None
+        _write_report(
+            args.output,
+            {
+                "schema_version": 2,
+                "generated_at": datetime.now(UTC).isoformat(),
+                "checker_calibration": calibration,
+                "machine_gate_passed": calibration["passed"],
+                "gate_passed": calibration["passed"],
+            },
+        )
+        return 0 if calibration["passed"] else 1
+
+    data_dir = args.chat_data_dir.resolve()
+    if not data_dir.is_dir():
+        parser.error(f"--chat-data-dir 不存在或不是目录: {data_dir}")
 
     token, admin_id = _load_auth(args.secrets.resolve())
     message_id_seed = args.message_id_seed or time.time_ns() // 1_000
@@ -580,10 +1295,8 @@ def main(argv: list[str] | None = None) -> int:
         timeout         = args.timeout,
         message_id_seed = message_id_seed,
     )
-    report = _run_quality_suite(probe, data_dir)
-    with args.output.open("x", encoding="utf-8") as report_file:
-        report_file.write(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
-    print(f"report={args.output.resolve()}")
+    report = _run_quality_suite(probe, data_dir, checker_calibration=calibration)
+    _write_report(args.output, report)
     gate_passed = bool(report["gate_passed"])
     print(f"machine_gate_passed={gate_passed}")
     print("semantic_review_required=True; semantic_acceptance=pending")

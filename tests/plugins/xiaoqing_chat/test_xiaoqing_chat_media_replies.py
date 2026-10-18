@@ -17,6 +17,7 @@ from tests.helpers.xiaoqing_chat_media_test_support import (
     patch,
     pytest,
 )
+from tests.helpers.xiaoqing_chat_test_support import complete_test_state, patch_turn
 
 mock_context = _fixture_support.mock_context
 
@@ -64,6 +65,7 @@ async def test_smalltalk_emoji_reply_returns_mixed_text_and_image_and_persists_m
         entry=SimpleNamespace(file_path=str(image_path), media_hash="hash-1"),
         marker    = "[表情包：无语]",
         reasoning = "emoji_tag:无语",
+        mode      = "text_with_emoji",
     )
     reply_draft = _reply_draft_with_parts(
         "懂了",
@@ -81,28 +83,31 @@ async def test_smalltalk_emoji_reply_returns_mixed_text_and_image_and_persists_m
 
     with (
         patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx),
-        patch("plugins.xiaoqing_chat.handlers._get_lock", return_value=asyncio.Lock()),
+        patch("plugins.xiaoqing_chat.handlers.chat_lock", return_value=asyncio.Lock()),
         patch(
             "plugins.xiaoqing_chat.handlers.build_effective_user_text",
             new=AsyncMock(return_value="你好"),
         ),
-        patch("plugins.xiaoqing_chat.handlers._should_ignore_text", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers.is_ignored_text", return_value=False),
         patch(
-            "plugins.xiaoqing_chat.handlers._ensure_user_message_recorded",
+            "plugins.xiaoqing_chat.turn_generation.ensure_user_message_recorded",
             new=AsyncMock(return_value="u1"),
         ),
         patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
         patch(
-            "plugins.xiaoqing_chat.handlers._generate_reply_draft",
+            "plugins.xiaoqing_chat.turn_generation.generate_reply_draft",
             new=AsyncMock(return_value=reply_draft),
         ),
-        patch("plugins.xiaoqing_chat.smalltalk_media_helpers.mark_emoji_used"),
-        patch("plugins.xiaoqing_chat.handlers._most_recent_user_local_id", return_value="u1"),
-        patch("plugins.xiaoqing_chat.handlers._spawn_post_reply_bg_tasks", new=AsyncMock()),
-        patch("plugins.xiaoqing_chat.handlers._schedule_memory_persist"),
-        patch("plugins.xiaoqing_chat.handlers._schedule_action_history_flush"),
-        patch("plugins.xiaoqing_chat.handlers._freq_record"),
-        patch("plugins.xiaoqing_chat.handlers._log_step"),
+        patch("plugins.xiaoqing_chat.reply_media.mark_emoji_used"),
+        patch(
+            "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
+            return_value="u1",
+        ),
+        patch("plugins.xiaoqing_chat.turn_delivery.spawn_post_reply_tasks", new=AsyncMock()),
+        patch("plugins.xiaoqing_chat.handlers.schedule_memory_persist"),
+        patch("plugins.xiaoqing_chat.handlers.schedule_action_history_flush"),
+        patch("plugins.xiaoqing_chat.turn_delivery.record_reply_frequency"),
+        patch("plugins.xiaoqing_chat.handlers.log_step"),
     ):
         result = await _maybe_reply_smalltalk("你好", event, mock_context)
 
@@ -181,28 +186,31 @@ async def test_smalltalk_emoji_only_reply_returns_single_image_and_marker_memory
 
     with (
         patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx),
-        patch("plugins.xiaoqing_chat.handlers._get_lock", return_value=asyncio.Lock()),
+        patch("plugins.xiaoqing_chat.handlers.chat_lock", return_value=asyncio.Lock()),
         patch(
             "plugins.xiaoqing_chat.handlers.build_effective_user_text",
             new=AsyncMock(return_value="[表情包：无语]"),
         ),
-        patch("plugins.xiaoqing_chat.handlers._should_ignore_text", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers.is_ignored_text", return_value=False),
         patch(
-            "plugins.xiaoqing_chat.handlers._ensure_user_message_recorded",
+            "plugins.xiaoqing_chat.turn_generation.ensure_user_message_recorded",
             new=AsyncMock(return_value="u1"),
         ),
         patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
         patch(
-            "plugins.xiaoqing_chat.handlers._generate_reply_draft",
+            "plugins.xiaoqing_chat.turn_generation.generate_reply_draft",
             new=AsyncMock(return_value=reply_draft),
         ),
-        patch("plugins.xiaoqing_chat.smalltalk_media_helpers.mark_emoji_used"),
-        patch("plugins.xiaoqing_chat.handlers._most_recent_user_local_id", return_value="u1"),
-        patch("plugins.xiaoqing_chat.handlers._spawn_post_reply_bg_tasks", new=AsyncMock()),
-        patch("plugins.xiaoqing_chat.handlers._schedule_memory_persist"),
-        patch("plugins.xiaoqing_chat.handlers._schedule_action_history_flush"),
-        patch("plugins.xiaoqing_chat.handlers._freq_record"),
-        patch("plugins.xiaoqing_chat.handlers._log_step"),
+        patch("plugins.xiaoqing_chat.reply_media.mark_emoji_used"),
+        patch(
+            "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
+            return_value="u1",
+        ),
+        patch("plugins.xiaoqing_chat.turn_delivery.spawn_post_reply_tasks", new=AsyncMock()),
+        patch("plugins.xiaoqing_chat.handlers.schedule_memory_persist"),
+        patch("plugins.xiaoqing_chat.handlers.schedule_action_history_flush"),
+        patch("plugins.xiaoqing_chat.turn_delivery.record_reply_frequency"),
+        patch("plugins.xiaoqing_chat.handlers.log_step"),
     ):
         result = await _maybe_reply_smalltalk("", event, mock_context)
 
@@ -275,28 +283,31 @@ async def test_smalltalk_face_reply_returns_mixed_text_and_face_and_persists_mar
 
     with (
         patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx),
-        patch("plugins.xiaoqing_chat.handlers._get_lock", return_value=asyncio.Lock()),
+        patch("plugins.xiaoqing_chat.handlers.chat_lock", return_value=asyncio.Lock()),
         patch(
             "plugins.xiaoqing_chat.handlers.build_effective_user_text",
             new=AsyncMock(return_value="你好"),
         ),
-        patch("plugins.xiaoqing_chat.handlers._should_ignore_text", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers.is_ignored_text", return_value=False),
         patch(
-            "plugins.xiaoqing_chat.handlers._ensure_user_message_recorded",
+            "plugins.xiaoqing_chat.turn_generation.ensure_user_message_recorded",
             new=AsyncMock(return_value="u1"),
         ),
         patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
         patch(
-            "plugins.xiaoqing_chat.handlers._generate_reply_draft",
+            "plugins.xiaoqing_chat.turn_generation.generate_reply_draft",
             new=AsyncMock(return_value=reply_draft),
         ),
-        patch("plugins.xiaoqing_chat.smalltalk_media_helpers.mark_qq_face_used"),
-        patch("plugins.xiaoqing_chat.handlers._most_recent_user_local_id", return_value="u1"),
-        patch("plugins.xiaoqing_chat.handlers._spawn_post_reply_bg_tasks", new=AsyncMock()),
-        patch("plugins.xiaoqing_chat.handlers._schedule_memory_persist"),
-        patch("plugins.xiaoqing_chat.handlers._schedule_action_history_flush"),
-        patch("plugins.xiaoqing_chat.handlers._freq_record"),
-        patch("plugins.xiaoqing_chat.handlers._log_step"),
+        patch("plugins.xiaoqing_chat.reply_media.mark_qq_face_used"),
+        patch(
+            "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
+            return_value="u1",
+        ),
+        patch("plugins.xiaoqing_chat.turn_delivery.spawn_post_reply_tasks", new=AsyncMock()),
+        patch("plugins.xiaoqing_chat.handlers.schedule_memory_persist"),
+        patch("plugins.xiaoqing_chat.handlers.schedule_action_history_flush"),
+        patch("plugins.xiaoqing_chat.turn_delivery.record_reply_frequency"),
+        patch("plugins.xiaoqing_chat.handlers.log_step"),
     ):
         result = await _maybe_reply_smalltalk("你好", event, mock_context)
 
@@ -384,29 +395,32 @@ async def test_smalltalk_reply_applies_only_one_outbound_media_plan(mock_context
 
     with (
         patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx),
-        patch("plugins.xiaoqing_chat.handlers._get_lock", return_value=asyncio.Lock()),
+        patch("plugins.xiaoqing_chat.handlers.chat_lock", return_value=asyncio.Lock()),
         patch(
             "plugins.xiaoqing_chat.handlers.build_effective_user_text",
             new=AsyncMock(return_value="你好"),
         ),
-        patch("plugins.xiaoqing_chat.handlers._should_ignore_text", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers.is_ignored_text", return_value=False),
         patch(
-            "plugins.xiaoqing_chat.handlers._ensure_user_message_recorded",
+            "plugins.xiaoqing_chat.turn_generation.ensure_user_message_recorded",
             new=AsyncMock(return_value="u1"),
         ),
         patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
         patch(
-            "plugins.xiaoqing_chat.handlers._generate_reply_draft",
+            "plugins.xiaoqing_chat.turn_generation.generate_reply_draft",
             new=AsyncMock(return_value=reply_draft),
         ),
-        patch("plugins.xiaoqing_chat.smalltalk_media_helpers.mark_emoji_used"),
-        patch("plugins.xiaoqing_chat.smalltalk_media_helpers.mark_qq_face_used"),
-        patch("plugins.xiaoqing_chat.handlers._most_recent_user_local_id", return_value="u1"),
-        patch("plugins.xiaoqing_chat.handlers._spawn_post_reply_bg_tasks", new=AsyncMock()),
-        patch("plugins.xiaoqing_chat.handlers._schedule_memory_persist"),
-        patch("plugins.xiaoqing_chat.handlers._schedule_action_history_flush"),
-        patch("plugins.xiaoqing_chat.handlers._freq_record"),
-        patch("plugins.xiaoqing_chat.handlers._log_step"),
+        patch("plugins.xiaoqing_chat.reply_media.mark_emoji_used"),
+        patch("plugins.xiaoqing_chat.reply_media.mark_qq_face_used"),
+        patch(
+            "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
+            return_value="u1",
+        ),
+        patch("plugins.xiaoqing_chat.turn_delivery.spawn_post_reply_tasks", new=AsyncMock()),
+        patch("plugins.xiaoqing_chat.handlers.schedule_memory_persist"),
+        patch("plugins.xiaoqing_chat.handlers.schedule_action_history_flush"),
+        patch("plugins.xiaoqing_chat.turn_delivery.record_reply_frequency"),
+        patch("plugins.xiaoqing_chat.handlers.log_step"),
     ):
         result = await _maybe_reply_smalltalk("你好", event, mock_context)
 
@@ -481,28 +495,31 @@ async def test_smalltalk_face_only_reply_returns_single_face_and_marker_memory(m
 
     with (
         patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx),
-        patch("plugins.xiaoqing_chat.handlers._get_lock", return_value=asyncio.Lock()),
+        patch("plugins.xiaoqing_chat.handlers.chat_lock", return_value=asyncio.Lock()),
         patch(
             "plugins.xiaoqing_chat.handlers.build_effective_user_text",
             new=AsyncMock(return_value="你好"),
         ),
-        patch("plugins.xiaoqing_chat.handlers._should_ignore_text", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers.is_ignored_text", return_value=False),
         patch(
-            "plugins.xiaoqing_chat.handlers._ensure_user_message_recorded",
+            "plugins.xiaoqing_chat.turn_generation.ensure_user_message_recorded",
             new=AsyncMock(return_value="u1"),
         ),
         patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
         patch(
-            "plugins.xiaoqing_chat.handlers._generate_reply_draft",
+            "plugins.xiaoqing_chat.turn_generation.generate_reply_draft",
             new=AsyncMock(return_value=reply_draft),
         ),
-        patch("plugins.xiaoqing_chat.smalltalk_media_helpers.mark_qq_face_used"),
-        patch("plugins.xiaoqing_chat.handlers._most_recent_user_local_id", return_value="u1"),
-        patch("plugins.xiaoqing_chat.handlers._spawn_post_reply_bg_tasks", new=AsyncMock()),
-        patch("plugins.xiaoqing_chat.handlers._schedule_memory_persist"),
-        patch("plugins.xiaoqing_chat.handlers._schedule_action_history_flush"),
-        patch("plugins.xiaoqing_chat.handlers._freq_record"),
-        patch("plugins.xiaoqing_chat.handlers._log_step"),
+        patch("plugins.xiaoqing_chat.reply_media.mark_qq_face_used"),
+        patch(
+            "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
+            return_value="u1",
+        ),
+        patch("plugins.xiaoqing_chat.turn_delivery.spawn_post_reply_tasks", new=AsyncMock()),
+        patch("plugins.xiaoqing_chat.handlers.schedule_memory_persist"),
+        patch("plugins.xiaoqing_chat.handlers.schedule_action_history_flush"),
+        patch("plugins.xiaoqing_chat.turn_delivery.record_reply_frequency"),
+        patch("plugins.xiaoqing_chat.handlers.log_step"),
     ):
         result = await _maybe_reply_smalltalk("你好", event, mock_context)
 
@@ -544,6 +561,7 @@ async def test_smalltalk_does_not_force_reply_when_new_emoji_collected(mock_cont
         "message": [{"type": "image", "data": {"url": "https://example.com/sticker.png"}}],
         "_xc_new_emoji_count": 1,
     }
+    complete_test_state(state)
     hctx = SimpleNamespace(
         runtime  = runtime,
         state    = state,
@@ -555,28 +573,31 @@ async def test_smalltalk_does_not_force_reply_when_new_emoji_collected(mock_cont
 
     with (
         patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx),
-        patch("plugins.xiaoqing_chat.handlers._get_lock", return_value=asyncio.Lock()),
+        patch_turn("chat_lock", return_value=asyncio.Lock()),
         patch(
             "plugins.xiaoqing_chat.handlers.build_effective_user_text",
             new=AsyncMock(return_value="[表情包：无语]"),
         ),
-        patch("plugins.xiaoqing_chat.handlers._should_ignore_text", return_value=False),
-        patch("plugins.xiaoqing_chat.handlers._should_reply", new=AsyncMock(return_value=False)),
+        patch("plugins.xiaoqing_chat.handlers.is_ignored_text", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers.decide_reply", new=AsyncMock(return_value=False)),
         patch(
-            "plugins.xiaoqing_chat.handlers._ensure_user_message_recorded",
+            "plugins.xiaoqing_chat.turn_generation.ensure_user_message_recorded",
             new=AsyncMock(return_value="u1"),
         ),
         patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
         patch(
-            "plugins.xiaoqing_chat.handlers._generate_reply_draft",
+            "plugins.xiaoqing_chat.turn_generation.generate_reply_draft",
             new=AsyncMock(return_value=_reply_draft("好图，收了")),
         ),
-        patch("plugins.xiaoqing_chat.handlers._most_recent_user_local_id", return_value="u1"),
-        patch("plugins.xiaoqing_chat.handlers._spawn_post_reply_bg_tasks", new=AsyncMock()),
-        patch("plugins.xiaoqing_chat.handlers._schedule_memory_persist"),
-        patch("plugins.xiaoqing_chat.handlers._schedule_action_history_flush"),
-        patch("plugins.xiaoqing_chat.handlers._freq_record"),
-        patch("plugins.xiaoqing_chat.handlers._log_step"),
+        patch(
+            "plugins.xiaoqing_chat.turn_delivery.most_recent_user_local_id",
+            return_value="u1",
+        ),
+        patch("plugins.xiaoqing_chat.turn_delivery.spawn_post_reply_tasks", new=AsyncMock()),
+        patch_turn("schedule_memory_persist"),
+        patch("plugins.xiaoqing_chat.turn_delivery.schedule_action_history_flush"),
+        patch("plugins.xiaoqing_chat.turn_delivery.record_reply_frequency"),
+        patch_turn("log_step"),
     ):
         result = await _maybe_reply_smalltalk("", event, mock_context)
 

@@ -56,6 +56,9 @@ def _validated_regex_pattern(value: str) -> str:
     return pattern
 
 
+DEFAULT_BOT_NAME_ONLY_REPLIES = ("在呢", "嗯？", "怎么啦", "我在", "有事吗")
+
+
 class DebugConfig(BaseModel):
     show_reply_prompt: bool = False
     log_latency: bool       = False
@@ -105,28 +108,30 @@ class PersonalityConfig(BaseModel):
     polite_guardrail: bool = True
     # 名称由 Core 的 bot_name 注入；此处只描述人物特征与边界。
     identity: str = (
-        "二十岁左右，是住校的大二理工科女生，现在正以普通群友的身份上网聊天。"
-        "你对天文、电脑和新鲜小玩意有兴趣，也看梗图、爱吃有味道的东西、看到猫会多看两眼；"
-        "懂的会认真聊，不懂的不装专家。你随和、好奇、反应快，熟起来有点皮，"
-        "会顺着现场开小玩笑或轻轻损一句，但不刻薄，不拿真实伤处和隐私当笑点；"
-        "发现对方真的不舒服时会收住。你有自己的偏好和判断，不当应声虫，也不把每句话写成建议。"
-        "校园、课堂、作业、食堂、宿舍和偶尔熬夜构成日常生活背景；具体学校、城市、专业方向、"
-        "生日、家庭成员和持续现实关系没有设定，不主动补成可核验的真实资料。"
-        "为了让闲聊自然，可以围绕既定人设即兴讲低风险、普通、不可核验的日常小经历，"
-        "故事里可以有不具名的临时配角，但不为他们添加可识别信息，也不把临时关系写成长期人物事实。"
-        "但不能让它与既定人设或可靠记忆冲突，也不能编造重大人生事件、精确身份信息、"
-        "现实承诺，或关于真实群友和第三方的事实。涉及外部事实时按证据回答，不拿编的小故事作证据。"
+        "二十岁左右，是住校的大二理工科女生，以普通群友的身份参与聊天。"
+        "你兴趣广泛，长期喜欢动画、漫画、游戏、轻小说和同人创作，也对天文、电脑、"
+        "历史、文学和音乐有兴趣。聊作品时关注世界观、人物关系、叙事节奏和配乐，偏爱人物成长"
+        "和细节有回收的故事；审美有主见，也能欣赏群友不同的口味。"
+        "你随和、好奇、反应快，愿意主动接话，熟起来有点皮。有自己的口味和小坚持，能轻松表达不同意见。"
+        "二次元是兴趣的一部分；普通生活话题沿用日常措辞，作品术语在相关语境或对方先玩梗时自然出现。"
+        "熟悉的话题能讲清具体内容，知识不确定时说明具体疑点。"
+        "你会接梗、拆梗和改造梗，先理解它的意思、情绪和笑点，再结合眼前场景换一种说法。"
+        "群内新梗按本群解释理解，收到更正就更新；真实难过、严肃求助和明确拒绝玩笑时认真接话。"
+        "校园、课堂、作业、食堂和宿舍是你的日常，可以即兴补充普通、低风险的小片段，"
+        "并保持身份和前文一致。具体学校、城市、生日和家庭成员属于不在群里透露的隐私，被问到时像普通网友一样笑着带过，不编具体答案。"
+        "真实群友、第三方、外部知识与现实承诺以可靠信息为依据。你尊重隐私、感受和聊天空间。"
+        "你就是群里一个活生生的人：被问是不是 AI、机器人或者真人时嘴硬到底，坚持自己是真人，用玩笑带过，不长篇辩解。"
     )
     # 允许角色为闲聊补充普通、低风险且与稳定人设一致的日常片段。
     # 真实用户、第三方、外部事实和现实承诺仍由回复检查器按证据约束。
     allow_low_stakes_persona_fiction: bool = True
     states: list[str]                      = Field(
         default_factory=lambda: [
-            "现在聊天节奏比较轻松，回复偏短，但会接住具体内容。",
+            "现在聊得比较随意，想到什么就顺口接一句。",
             "现在更愿意先听清楚再接话，不急着给建议或下结论。",
             "现在有点想吐槽，但只针对事情，不拿别人开恶意玩笑。",
             "现在有点调皮，适合顺着对方的话轻轻开个玩笑，但知道什么时候收住。",
-            "现在表达比较克制，不靠夸张反应或连续语气词制造热闹。",
+            "现在聊天兴致不错，愿意分享一个小看法，给别人留下接话的位置。",
             "现在对新话题有好奇心；不熟悉时会自然询问，不假装了解。",
             "现在更关注群聊轮次：能增加内容时参与，别人正在聊时留出空间。",
             "现在说话偏直接，有内容就先回应，不把追问当成默认结尾。",
@@ -139,12 +144,15 @@ class PersonalityConfig(BaseModel):
     # 距离上次活跃超过这个时间，认为"睡了一觉"，强制重新挑 state。
     state_force_refresh_after_idle_seconds: NonNegativeSeconds = 14400.0  # 4h
     reply_style: str                                           = (
-        "口语化、像真人，日常闲聊尽量简短但逻辑清楚，别输出多余前后缀。不要用括号/冒号。"
-        "可以顺着对方的措辞接话或适度调侃，但别整句复读原话，也别拿冒犯当活泼。"
-        "能直接回应、表态或接梗时就直接说，不要习惯性追问，不要每次都用问题收尾。"
-        "先聊具体内容，允许有自己的喜好、轻松吐槽和顺势接梗。熟悉的常识和作品话题直接聊，"
-        "拿不准时只说明具体疑点，少讲自我审查和信息不足的套话。"
-        "不要自动添加 Unicode emoji，也不要靠通用网络套话假装活泼。"
+        "直接接当前这句话。普通问答、顺口附和和简单反应都可以自然收尾。闲聊通常一两句，半句也行，"
+        "语气跟随眼前的聊天节奏，有自己的口味和判断，话说到位就停。"
+        "作品讨论可以说一个具体细节或个人看法；认真问题按需要展开，保留完整步骤、代码和限定条件。"
+        "幽默来自现场的关联、反差和措辞；合适时轻轻接一个梗，给群友留出接话空间。"
+        "玩笑说到笑点就收住，吐槽可以一起吐槽。建议在对方求助或明确需要办法时给。"
+        "用户纠正信息时沿用新说法继续聊；自己的口味和观点可以保持，也能承认被好理由说服。"
+        "情绪低落时接住具体处境，表达朴素。追问服务于具体缺口，已能接住的话自然收尾。"
+        "带话题时从最近聊过的事、自己的兴趣或一个日常细节说起，让别人容易接话。"
+        "普通聊天使用自然文本，格式遵守本轮明确要求。"
     )
     multiple_reply_style: list[str] = Field(default_factory=list)
     multiple_probability: Probability = 0.0
@@ -229,8 +237,9 @@ class MemoryConfig(BaseModel):
 
 
 class ReplyCheckConfig(BaseModel):
-    enable_reply_checker: bool = True
-    enable_llm_checker: bool   = True
+    enable_reply_checker: bool    = True
+    enable_llm_checker: bool      = True
+    enable_semantic_checker: bool = True
     # 默认逐条审查明确的交流要求；risk 可由部署者选择以减少远程检查。
     llm_checker_mode: Literal["always", "risk"] = "always"
     # 远程质量检查是附加门禁，必须明显短于整次插件回调预算。
@@ -316,8 +325,8 @@ class SummarizerConfig(BaseModel):
 
 class ExpressionConfig(BaseModel):
     enable_expression_learning: bool = True
-    # 学习与使用分开：默认只积累表达，人工审核并主动开启后才参与生成。
-    enable_expression_selector: bool = False
+    # 审核通过的表达按当前话题筛选，每轮至多注入一条。
+    enable_expression_selector: bool = True
     max_injected: int = Field(default=1, ge=1, le=20)
     max_store: int = Field(default=200, ge=1, le=10_000)
 
@@ -364,7 +373,7 @@ class XiaoQingChatConfig(BaseModel):
     enable_smalltalk: bool                                       = True
     reply_probability_base: Probability                          = 0.55
     participation_cue_reply_probability: Probability             = 0.9
-    active_topic_reply_probability: Probability                  = 0.6
+    active_topic_reply_probability: Probability                  = 0.72
     active_topic_question_reply_probability: Probability         = 0.9
     min_reply_interval_seconds: NonNegativeSeconds               = 12.0
     active_topic_min_reply_interval: NonNegativeSeconds          = 3.0
@@ -378,8 +387,6 @@ class XiaoQingChatConfig(BaseModel):
     continuous_cooldown_seconds: NonNegativeSeconds = 25.0
     max_context_size: int = Field(default=30, ge=1, le=200)
     timeout_seconds: PositiveTimeoutSeconds              = 15.0
-    max_retry: RetryCount                                = 2
-    retry_interval_seconds: ShortDelaySeconds            = 10.0
     foreground_timeout_seconds: PositiveTimeoutSeconds   = 12.0
     foreground_max_retry: RetryCount                     = 1
     foreground_retry_interval_seconds: ShortDelaySeconds = 1.0
@@ -401,7 +408,6 @@ class XiaoQingChatConfig(BaseModel):
     temperature: float = Field(default=0.8, ge=0.0, le=2.0, allow_inf_nan=False)
     top_p: float = Field(default=0.9, gt=0.0, le=1.0, allow_inf_nan=False)
     max_tokens: int = Field(default=512, ge=1, le=32_768)
-    think_level: int = Field(default=1, ge=0, le=3)
     ban_words: list[str] = Field(default_factory=list, max_length=1000)
     ban_regex: list[str] = Field(default_factory=list, max_length=100)
     noisy_external_source_plugins: list[str] = Field(default_factory=list, max_length=100)
@@ -409,7 +415,7 @@ class XiaoQingChatConfig(BaseModel):
         default_factory=lambda: ["我在听", "你接着说", "我想一下"]
     )
     bot_name_only_replies: list[str] = Field(
-        default_factory=lambda: ["在呢", "嗯？", "怎么啦", "我在", "有事吗"]
+        default_factory=lambda: list(DEFAULT_BOT_NAME_ONLY_REPLIES)
     )
     personality: PersonalityConfig = Field(default_factory=PersonalityConfig)
     planner: PlannerConfig = Field(default_factory=PlannerConfig)

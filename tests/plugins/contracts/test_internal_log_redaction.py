@@ -15,7 +15,8 @@ from plugins.xiaoqing_chat import context_builder
 from plugins.xiaoqing_chat import main as xiaoqing_chat
 from plugins.xiaoqing_chat.config.config import PersonalityConfig
 from plugins.xiaoqing_chat.expression import bw_jargon_miner
-from plugins.xiaoqing_chat.llm.llm_client import LLMError
+from plugins.xiaoqing_chat.llm.gateway import LLMError
+from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.planning import pfc_action_planner
 
@@ -111,7 +112,7 @@ async def test_xiaoqing_memory_failure_uses_correlated_public_log(
 ) -> None:
     monkeypatch.setattr(
         context_builder,
-        "_resolve_llm_config",
+        "llm_call_config",
         Mock(side_effect=RuntimeError(SENSITIVE_ERROR)),
     )
     context = SimpleNamespace(
@@ -123,7 +124,7 @@ async def test_xiaoqing_memory_failure_uses_correlated_public_log(
     runtime = SimpleNamespace(cfg=SimpleNamespace(debug=SimpleNamespace(log_steps=False)))
 
     with caplog.at_level(logging.ERROR):
-        result = await context_builder._build_memory_block(
+        result = await context_builder.retrieve_memory_context(
             context          = context,
             runtime          = runtime,
             state            = object(),
@@ -201,12 +202,14 @@ async def test_xiaoqing_internal_llm_fallback_logs_only_type(
             last_action_context="",
             timeout_context="",
             last_successful_reply_action=None,
-            temperature=0.2,
-            top_p=0.8,
-            max_tokens=200,
-            timeout_seconds=1,
-            max_retry=0,
-            retry_interval_seconds=0,
+            llm=LLMCallConfig(
+                temperature            = 0.2,
+                top_p                  = 0.8,
+                max_tokens             = 200,
+                timeout_seconds        = 1,
+                max_retry              = 0,
+                retry_interval_seconds = 0,
+            ),
         )
 
     logged = _log_text(caplog)
@@ -230,17 +233,19 @@ async def test_xiaoqing_jargon_fallback_logs_only_type(
 
     with caplog.at_level(logging.WARNING):
         result = await bw_jargon_miner.mine_jargon(
-            secrets={"api_base": "https://example.test", "api_key": "key", "model": "m"},
-            store=Mock(),
-            chat_id="chat-1",
-            messages=history,
-            bot_name="小青",
-            temperature=0.2,
-            top_p=0.8,
-            max_tokens=500,
-            timeout_seconds=1,
-            max_retry=0,
-            retry_interval_seconds=0,
+            secrets  = {"api_base": "https://example.test", "api_key": "key", "model": "m"},
+            store    = Mock(),
+            chat_id  = "chat-1",
+            messages = history,
+            bot_name = "小青",
+            llm      = LLMCallConfig(
+                temperature            = 0.2,
+                top_p                  = 0.8,
+                max_tokens             = 500,
+                timeout_seconds        = 1,
+                max_retry              = 0,
+                retry_interval_seconds = 0,
+            ),
         )
 
     logged = _log_text(caplog)

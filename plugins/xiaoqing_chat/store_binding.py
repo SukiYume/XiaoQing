@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .runtime_state import get_state
 
-def _bind_all_stores(state, data_dir: Path) -> None:
+
+def bind_all_stores(state, data_dir: Path) -> None:
     """绑定所有存储模块到数据目录"""
     state.memory_store.bind_data_dir(data_dir)
     state.media_store.bind(data_dir)
@@ -19,3 +21,10 @@ def _bind_all_stores(state, data_dir: Path) -> None:
     state.bw_recorder.bind(data_dir)
     state.bw_jargon_store.bind(data_dir)
     state.memory_db.bind(data_dir)
+
+
+def bound_state(context):
+    """返回运行时状态，并确保全部存储已绑定到当前插件数据目录。"""
+    state = get_state()
+    bind_all_stores(state, context.data_dir)
+    return state

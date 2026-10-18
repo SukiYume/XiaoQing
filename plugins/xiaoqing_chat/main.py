@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any, cast
+from typing import Any
 
 from core.plugin_base import segments
 from core.public_errors import public_error_message, public_error_response
@@ -17,9 +17,8 @@ from core.router import (
     resolve_context_command_invocation,
 )
 
-from .handler_context import validate_action_list
-from .handlers import (
-    call_bot_name_only_internal,
+from .chat_runtime import configured_bot_name
+from .commands import (
     handle_config,
     handle_expression,
     handle_internal,
@@ -27,15 +26,14 @@ from .handlers import (
     handle_memory,
     handle_provider,
     handle_review,
+)
+from .handler_context import validate_action_list
+from .handlers import (  # noqa: F401 - Core 按名称调用这些插件入口
+    call_bot_name_only,
     handle_smalltalk,
+    observe_message,
+    observe_outgoing_action,
 )
-from .handlers import (
-    observe_message as observe_message_internal,
-)
-from .handlers import (
-    observe_outgoing_action as observe_outgoing_action_internal,
-)
-from .helper_utils import _get_bot_name
 from .runtime_state import get_state as _state
 
 logger = logging.getLogger(__name__)
@@ -58,12 +56,6 @@ _HANDLERS: dict[str, CommandHandler] = {
 }
 
 
-def _validated_actions(value: object, *, source: str) -> CommandResponse:
-    """跨模块调用在当前渐进类型配置下需要恢复已校验的具体类型。"""
-
-    return cast(CommandResponse, validate_action_list(value, source=source))
-
-
 def _catalog_root(context: Any) -> CommandCatalogNode | None:
     """优先复用 Dispatcher 注入的快照，直接调用时再查同一 Core 目录。"""
 
@@ -76,7 +68,7 @@ def _resolve_invocation(args: str, context: Any) -> CommandInvocation | None:
 
 def _help_text(context: Any) -> str:
     root  = _catalog_root(context)
-    title = f"💬 {_get_bot_name(context)}智能对话"
+    title = f"💬 {configured_bot_name(context)}智能对话"
     if root is None:
         return f"{title}\n\n完整命令目录暂不可用，请使用 /help xiaoqing_chat"
     return format_command_catalog(root, title=f"{title} · 完整命令目录")
@@ -87,13 +79,43 @@ async def init(context=None) -> None:
     state = _state()
     state.start_accepting_background_tasks()
     if context is not None:
-        from .media.event_media_common import _run_media_blocking
-        from .store_binding import _bind_all_stores
+        from .media.loading import run_media_blocking
+        from .store_binding import bind_all_stores
 
-        _bind_all_stores(state, context.data_dir)
-        await _run_media_blocking(state.media_store.load)
-        log = getattr(context, "logger", logger)
+        bind_all_stores(state, context.data_dir)
+        await run_media_blocking(state.media_store.load)
+        log = context.logger
         log.info("XiaoQing Chat plugin initialized")
+
+
+def _route_subcommand(args: str, raw_args: str, context) -> tuple[str, str] | str:
+    """解析 ``(子命令, 剩余参数)``；子命令为空表示当作聊天内容，参数错误时返回提示文本。"""
+    raw_parts = raw_args.split(maxsplit=1)
+    catalog_root = _catalog_root(context)
+    first_node   = catalog_root.resolve_child(raw_parts[0]) if catalog_root else None
+    if len(raw_parts) > 1 and (
+        (first_node is not None and first_node.name == "help")
+        or raw_parts[0].casefold() in {"help", "帮助", "?"}
+    ):
+        usage = first_node.usage if first_node is not None else "/xc help"
+        return f"❌ help 子命令不接受额外参数\n用法: {usage}"
+
+    invocation = _resolve_invocation(args, context)
+    if invocation is None:
+        candidate = raw_parts[0].casefold()
+        action    = candidate if candidate in {*_HANDLERS, "help"} else ""
+        return action, raw_parts[1] if len(raw_parts) > 1 else ""
+    if len(invocation.chain) > 1:
+        return invocation.chain[1].name, invocation.remainder_after(1)
+    candidate_node = invocation.root.resolve_child(raw_parts[0])
+    if (
+        candidate_node is not None
+        and candidate_node.name != "help"
+        and candidate_node.match_mode == "exact"
+        and len(raw_parts) > 1
+    ):
+        return f"❌ 用法: {candidate_node.usage}"
+    return "", ""
 
 
 async def handle(
@@ -106,52 +128,19 @@ async def handle(
     del command  # 保留框架按关键字调用的公开参数名；子命令事实源是 Core 解析后的 args。
     try:
         raw_args = str(args or "").strip()
-        raw_parts = raw_args.split(maxsplit=1)
-        catalog_root = _catalog_root(context)
-        first_node   = (
-            catalog_root.resolve_child(raw_parts[0]) if raw_parts and catalog_root else None
-        )
-        first_is_help = bool(first_node is not None and first_node.name == "help") or bool(
-            raw_parts and raw_parts[0].casefold() in {"help", "帮助", "?"}
-        )
-        if first_is_help and len(raw_parts) > 1:
-            usage = first_node.usage if first_node is not None else "/xc help"
-            return segments(f"❌ help 子命令不接受额外参数\n用法: {usage}")
-
-        invocation = _resolve_invocation(args, context)
-        root       = invocation.root if invocation is not None else None
         if not raw_args:
             return segments(_help_text(context))
-
-        action = (
-            invocation.chain[1].name if invocation is not None and len(invocation.chain) > 1 else ""
-        )
-        rest = invocation.remainder_after(1) if invocation is not None and action else ""
-        if not action and root is None:
-            parts     = raw_parts
-            candidate = parts[0].casefold() if parts else ""
-            action    = candidate if candidate in {*_HANDLERS, "help"} else ""
-            rest      = parts[1] if len(parts) > 1 else ""
-
+        routed = _route_subcommand(args, raw_args, context)
+        if isinstance(routed, str):
+            return segments(routed)
+        action, rest = routed
         if action == "help":
             return segments(_help_text(context))
 
-        if not action and root is not None:
-            parts          = raw_parts
-            candidate_node = root.resolve_child(parts[0]) if parts else None
-            if (
-                candidate_node is not None
-                and candidate_node.name != "help"
-                and candidate_node.match_mode == "exact"
-                and len(parts) > 1
-            ):
-                return segments(f"❌ 用法: {candidate_node.usage}")
-
         handler = _HANDLERS.get(action)
         if handler is not None:
-            return _validated_actions(
-                await handler(rest, event, context),
-                source=f"command:{action}",
+            return validate_action_list(
+                await handler(rest, event, context), source=f"command:{action}"
             )
 
         # 未匹配子命令 → 当作聊天内容（使用 args 而非 raw_message，避免带上 /xc 前缀）
@@ -160,54 +149,16 @@ async def handle(
             return []
         # 显式 /xc 命令 → 标记强制回复，跳过概率判断
         event["_xc_command_forced"] = True
-        return _validated_actions(
-            await handle_smalltalk(text, event, context),
-            source="handle_smalltalk",
-        )
+        return await handle_smalltalk(text, event, context)
 
     except Exception as exc:
-        log = getattr(context, "logger", logger)
+        log = context.logger
         return public_error_response(
             context,
             exc,
             logger    = log,
             component = "xiaoqing_chat.handle",
         )
-
-
-async def call_bot_name_only(context) -> list[dict[str, Any]]:
-    """
-    当消息只有 bot_name 时的随机回复
-
-    注意：此函数由 dispatcher 调用，作为 smalltalk provider 的一部分
-    """
-    return _validated_actions(
-        await call_bot_name_only_internal(context),
-        source="call_bot_name_only_internal",
-    )
-
-
-async def observe_message(clean_text: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
-    return _validated_actions(
-        await observe_message_internal(clean_text, event, context),
-        source="observe_message_internal",
-    )
-
-
-async def observe_outgoing_action(
-    action: dict[str, Any],
-    context,
-    *,
-    source_plugin: str = "",
-) -> list[dict[str, Any]]:
-    return _validated_actions(
-        await observe_outgoing_action_internal(
-            action,
-            context,
-            source_plugin=source_plugin,
-        ),
-        source="observe_outgoing_action_internal",
-    )
 
 
 async def _flush_shutdown_state(context: Any, state: Any, log: logging.Logger) -> None:
@@ -244,7 +195,7 @@ async def _flush_shutdown_state(context: Any, state: Any, log: logging.Logger) -
 async def shutdown(context) -> None:
     """停止新后台工作，完整落盘，再取消后台任务并做最终落盘。"""
 
-    log = getattr(context, "logger", logger)
+    log = context.logger
     log.info("XiaoQing Chat plugin shutting down")
     state = _state()
     state.stop_accepting_background_tasks()

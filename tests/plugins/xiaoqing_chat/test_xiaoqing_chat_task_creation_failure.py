@@ -33,7 +33,7 @@ def test_spawn_background_task_closes_coroutine_when_create_task_fails():
                 side_effect=_reject_task_creation(captured),
             ),
         ):
-            task_scheduler._spawn_bg_task(context, coro, name="facts:g1")
+            task_scheduler.spawn_bg_task(context, coro, name="facts:g1")
 
         assert captured == [coro]
         assert coro.cr_frame is None
@@ -45,14 +45,14 @@ def test_spawn_background_task_closes_coroutine_when_create_task_fails():
 @pytest.mark.parametrize(
     "schedule",
     [
-        lambda context, runtime, state: task_scheduler._schedule_memory_persist(
+        lambda context, runtime, state: task_scheduler.schedule_memory_persist(
             context, runtime, chat_id="g1"
         ),
-        lambda context, runtime, state: task_scheduler._schedule_memory_db_save(context, runtime),
-        lambda context, runtime, state: task_scheduler._schedule_action_history_flush(
+        lambda context, runtime, state: task_scheduler.schedule_memory_db_save(context, runtime),
+        lambda context, runtime, state: task_scheduler.schedule_action_history_flush(
             context, runtime, chat_id="g1"
         ),
-        lambda context, runtime, state: task_scheduler._schedule_media_registry_flush(
+        lambda context, runtime, state: task_scheduler.schedule_media_registry_flush(
             context, runtime
         ),
     ],

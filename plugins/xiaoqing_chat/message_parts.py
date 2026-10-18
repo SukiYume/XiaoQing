@@ -306,6 +306,14 @@ def build_message_parts(
 def message_parts_to_legacy(
     parts: Sequence[dict[str, Any]] | None,
 ) -> tuple[str, list[dict[str, Any]]]:
+    content, media_items = _message_parts_to_full_legacy(parts)
+    return content, compact_media_items(media_items)
+
+
+def _message_parts_to_full_legacy(
+    parts: Sequence[dict[str, Any]] | None,
+) -> tuple[str, list[dict[str, Any]]]:
+    """转换为旧格式正文，媒体条目保留描述等完整元数据。"""
     normalized_parts = normalize_message_parts(parts)
     if not normalized_parts:
         return "", []
@@ -345,10 +353,9 @@ def message_parts_to_legacy(
     if pending_text_prefix:
         visible_chunks.append(pending_text_prefix)
 
-    visible_text          = "".join(visible_chunks)
-    compacted_media_items = compact_media_items(media_items)
-    content               = compact_message_content(visible_text, compacted_media_items)
-    return content, compacted_media_items
+    visible_text = "".join(visible_chunks)
+    content      = compact_message_content(visible_text, media_items)
+    return content, media_items
 
 
 def render_message_parts(
@@ -356,18 +363,13 @@ def render_message_parts(
     *,
     store: Any | None = None,
 ) -> str:
-    content, media_items = message_parts_to_legacy(parts)
+    # 渲染使用完整元数据：注册表缺少描述时，消息自身记录的画面摘要仍然可见。
+    content, media_items = _message_parts_to_full_legacy(parts)
     if not content and not media_items:
         return ""
     return cast(str, resolve_message_content(content, media_items, store=store))
 
 
 def render_stored_message(message: Any, *, store: Any | None = None) -> str:
-    parts = normalize_message_parts(getattr(message, "parts", ()) or ())
-    if not parts:
-        parts = build_message_parts(
-            str(getattr(message, "content", "") or ""),
-            getattr(message, "media_items", ()) or (),
-            store=store,
-        )
-    return render_message_parts(parts, store=store)
+    """StoredMessage 构造时已从旧 content 补齐 parts，这里只需渲染。"""
+    return render_message_parts(message.parts, store=store)

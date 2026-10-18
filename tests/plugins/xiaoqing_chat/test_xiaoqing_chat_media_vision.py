@@ -46,7 +46,8 @@ async def test_render_event_media_text_retries_same_provider_once_on_semantic_fa
     used_models: list[str] = []
     call_count = 0
 
-    async def _fake_chat_raw(*, model, **kwargs):
+    async def _fake_chat_raw(*, secrets, **kwargs):
+        model = secrets["_pinned_model"]
         nonlocal call_count
         used_models.append(model)
         call_count += 1
@@ -60,7 +61,7 @@ async def test_render_event_media_text_retries_same_provider_once_on_semantic_fa
 
     with (
         patch(
-            "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+            "plugins.xiaoqing_chat.media.sources._download_url_bytes",
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
@@ -100,7 +101,7 @@ async def test_render_event_media_text_logs_raw_response_metadata(mock_context):
 
     with (
         patch(
-            "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+            "plugins.xiaoqing_chat.media.sources._download_url_bytes",
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
@@ -149,7 +150,7 @@ async def test_render_event_media_text_preserves_visible_text_for_text_heavy_scr
 
     with (
         patch(
-            "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+            "plugins.xiaoqing_chat.media.sources._download_url_bytes",
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
@@ -209,7 +210,7 @@ async def test_render_event_media_text_retries_when_finish_reason_length(mock_co
 
     with (
         patch(
-            "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+            "plugins.xiaoqing_chat.media.sources._download_url_bytes",
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
@@ -253,7 +254,8 @@ async def test_render_event_media_text_falls_back_after_semantic_retry_exhausted
     event = {"message": [{"type": "image", "data": {"url": "https://example.com/cat_photo.png"}}]}
     used_models: list[str] = []
 
-    async def _fake_chat_raw(*, model, **kwargs):
+    async def _fake_chat_raw(*, secrets, **kwargs):
+        model = secrets["_pinned_model"]
         used_models.append(model)
         if model == "glm-4.6v-flash":
             return _raw_media_response('```json\n{"kind":"image","description":"')
@@ -263,7 +265,7 @@ async def test_render_event_media_text_falls_back_after_semantic_retry_exhausted
 
     with (
         patch(
-            "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+            "plugins.xiaoqing_chat.media.sources._download_url_bytes",
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
@@ -307,7 +309,8 @@ async def test_render_event_media_text_falls_back_immediately_on_request_timeout
     event = {"message": [{"type": "image", "data": {"url": "https://example.com/cat_photo.png"}}]}
     used_models: list[str] = []
 
-    async def _fake_chat_raw(*, model, **kwargs):
+    async def _fake_chat_raw(*, secrets, **kwargs):
+        model = secrets["_pinned_model"]
         used_models.append(model)
         if model == "glm-4.6v-flash":
             raise asyncio.TimeoutError()
@@ -317,7 +320,7 @@ async def test_render_event_media_text_falls_back_immediately_on_request_timeout
 
     with (
         patch(
-            "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+            "plugins.xiaoqing_chat.media.sources._download_url_bytes",
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
@@ -373,7 +376,7 @@ async def test_render_event_media_text_uses_detail_when_emoji_refine_is_generic(
 
     with (
         patch(
-            "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+            "plugins.xiaoqing_chat.media.sources._download_url_bytes",
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
@@ -422,7 +425,7 @@ async def test_render_event_media_text_defers_slow_emoji_refine_and_uses_detail(
 
     with (
         patch(
-            "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+            "plugins.xiaoqing_chat.media.sources._download_url_bytes",
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
@@ -485,7 +488,7 @@ async def test_render_event_media_background_refine_updates_cache(mock_context):
 
     with (
         patch(
-            "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+            "plugins.xiaoqing_chat.media.sources._download_url_bytes",
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
@@ -553,10 +556,10 @@ async def test_background_refine_does_not_replace_equal_quality_foreground(
             "_refine_emoji_analysis_with_llm",
             new=AsyncMock(return_value=(refined, {})),
         ),
-        patch.object(event_media_analysis, "_run_media_blocking", new=write_cache),
-        patch.object(event_media_analysis, "_spawn_bg_task", side_effect=capture_task),
+        patch.object(event_media_analysis, "run_media_blocking", new=write_cache),
+        patch.object(event_media_analysis, "spawn_bg_task", side_effect=capture_task),
     ):
-        event_media_analysis._schedule_background_emoji_refine(
+        event_media_analysis.schedule_background_emoji_refine(
             rendered,
             resolved,
             context = mock_context,
@@ -602,7 +605,7 @@ async def test_render_event_media_text_retries_and_then_falls_back_when_detail_e
 
     with (
         patch(
-            "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+            "plugins.xiaoqing_chat.media.sources._download_url_bytes",
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
@@ -656,7 +659,7 @@ async def test_render_event_media_text_does_not_leak_download_query_into_fallbac
 
     with (
         patch(
-            "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+            "plugins.xiaoqing_chat.media.sources._download_url_bytes",
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
@@ -711,11 +714,11 @@ async def test_render_event_media_text_resolves_remote_url_into_cache(mock_conte
 
     with (
         patch(
-            "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+            "plugins.xiaoqing_chat.media.sources._download_url_bytes",
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
-            "plugins.xiaoqing_chat.media.event_media._analyze_media_with_llm",
+            "plugins.xiaoqing_chat.media.event_media.analyze_media_with_llm",
             new=AsyncMock(return_value=None),
         ),
     ):

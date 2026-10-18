@@ -204,7 +204,7 @@ Manifest `concurrency: sequential` 将该插件入口并发固定为 1；`parall
     "models": {
       "deepseek-flash": {
         "provider": "deepseek",
-        "model": "deepseek-v4-flash",
+        "model": "deepseek-flash",
         "modalities": ["text"],
         "request_defaults": {
           "thinking": {"type": "disabled"}
@@ -332,7 +332,7 @@ Pendo 的五个 Web 字段按配置 revision 原子发布，监听地址变化�
 | `plugins.xiaoqing_chat.ai.default_model_alias` | `/xc model default` 使用的别名 |
 | `plugins.xiaoqing_chat.ai.model_aliases` | 用户别名到 route profile 的映射 |
 
-四条 XiaoQing Chat route 分别拥有模型顺序、单次超时、总超时和重试策略。行为、参与、记忆和表达参数位于 `plugins/xiaoqing_chat/config/xiaoqing_config.json`；[XiaoQing Chat 配置](../plugins/xiaoqing_chat/README.md#行为配置) 逐组说明这些字段。
+四条 XiaoQing Chat route 分别拥有模型顺序、单次超时、总超时和重试策略。发行配置的 `checker` route 通过 `request_defaults.thinking.type = "disabled"` 关闭思考以缩短审查延迟。行为、参与、记忆和表达参数位于 `plugins/xiaoqing_chat/config/xiaoqing_config.json`，也可写在 `config.plugins.xiaoqing_chat` 下，两者合并时文件中的值优先；[XiaoQing Chat 配置](../plugins/xiaoqing_chat/README.md#行为配置) 逐组说明这些字段。
 
 ### QingSSH
 

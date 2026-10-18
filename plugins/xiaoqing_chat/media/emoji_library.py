@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import shutil
 import threading
@@ -22,15 +23,11 @@ from core.atomic_store import keyed_path_lock
 from core.image_validation import ImageValidationError, validate_image_path
 from core.plugin_base import ensure_dir, load_json, write_json
 
-from ..task_scheduler import _spawn_bg_task
-from .event_media_common import (
-    _image_validation_limits,
-    _is_generic_media_label,
-    _looks_like_structured_media_text,
-    _run_media_blocking,
-)
+from ..task_scheduler import spawn_bg_task
+from .loading import image_validation_limits, run_media_blocking
+from .markers import is_generic_media_label, looks_like_structured_media_text
+from .models import SUPPORTED_IMAGE_SUFFIXES
 
-_SUPPORTED_IMAGE_SUFFIXES     = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"})
 _PENDING_DIR_NAME             = "pending"
 _REJECTED_DIR_NAME            = "rejected"
 _EMOJI_REPAIR_TASKS: set[str] = set()
@@ -42,8 +39,8 @@ _LIBRARY_CACHE: OrderedDict[
 _LIBRARY_CACHE_LOCK = threading.RLock()
 
 if TYPE_CHECKING:
-    from ..runtime_state import _ChatRuntime
-    from .event_media_common import RenderedMedia
+    from ..runtime_state import ChatRuntime
+    from .models import RenderedMedia
 
 
 @dataclass(frozen=True)
@@ -213,7 +210,7 @@ def _iter_library_files(root: Path) -> list[Path]:
         path
         for path in root.rglob("*")
         if path.is_file()
-        and path.suffix.lower() in _SUPPORTED_IMAGE_SUFFIXES
+        and path.suffix.lower() in SUPPORTED_IMAGE_SUFFIXES
         and _REJECTED_DIR_NAME not in path.relative_to(root).parts
     ]
     files.sort()
@@ -324,7 +321,7 @@ def _is_valid_library_image(
     try:
         validate_image_path(
             path,
-            limits=_image_validation_limits(
+            limits=image_validation_limits(
                 max_bytes  = max_bytes,
                 max_pixels = max_pixels,
                 max_frames = max_frames,
@@ -605,7 +602,7 @@ def _find_similar_entry(
 
 def _prune_auto_entries(
     context,
-    runtime: _ChatRuntime,
+    runtime: ChatRuntime,
     payload: dict[str, Any],
     *,
     keep_hashes: set[str] | None = None,
@@ -658,11 +655,11 @@ def _is_usable_library_metadata(
 
     if not desc or not mark:
         return False
-    if _is_generic_media_label(desc) or _is_generic_media_label(mark):
+    if is_generic_media_label(desc) or is_generic_media_label(mark):
         return False
-    if _looks_like_structured_media_text(desc) or _looks_like_structured_media_text(mark):
+    if looks_like_structured_media_text(desc) or looks_like_structured_media_text(mark):
         return False
-    return not any(_looks_like_structured_media_text(tag) for tag in tags)
+    return not any(looks_like_structured_media_text(tag) for tag in tags)
 
 
 def collect_emoji_candidate(
@@ -686,6 +683,25 @@ def collect_emoji_candidate(
         )
 
 
+def _is_collectable_emoji(runtime, rendered: RenderedMedia, source_path: Path) -> bool:
+    """开启自动收集、来源是合规图片文件，且分析结果带有可复用的人类语义标签。"""
+    media = runtime.cfg.media
+    return (
+        rendered.kind == "emoji"
+        and media.enable_auto_collect_inbound_emoji
+        and source_path.is_file()
+        and _is_valid_library_image(
+            source_path,
+            max_bytes  = int(media.max_analyze_bytes),
+            max_pixels = int(media.max_image_pixels),
+            max_frames = int(media.max_animation_frames),
+        )
+        and _is_usable_library_metadata(
+            rendered.description, rendered.marker, tuple(rendered.emotion_tags)
+        )
+    )
+
+
 def _collect_emoji_candidate_locked(
     context,
     runtime,
@@ -701,26 +717,9 @@ def _collect_emoji_candidate_locked(
     相似的条目只在同一会话范围内合并，自动收集不会提升条目的可见范围。
     """
 
-    if rendered.kind != "emoji":
+    if not _is_collectable_emoji(runtime, rendered, source_path):
         return None
-    if not runtime.cfg.media.enable_auto_collect_inbound_emoji:
-        return None
-    if not source_path.exists() or not source_path.is_file():
-        return None
-    if not _is_valid_library_image(
-        source_path,
-        max_bytes  = int(runtime.cfg.media.max_analyze_bytes),
-        max_pixels = int(runtime.cfg.media.max_image_pixels),
-        max_frames = int(runtime.cfg.media.max_animation_frames),
-    ):
-        return None
-    if not _is_usable_library_metadata(
-        rendered.description, rendered.marker, tuple(rendered.emotion_tags)
-    ):
-        return None
-
     library_dir = resolve_emoji_library_dir(context)
-
     ensure_dir(library_dir)
     payload          = _load_index(context)
     original_payload = deepcopy(payload)
@@ -739,13 +738,12 @@ def _collect_emoji_candidate_locked(
         if similar is not None:
             record_key, existing = similar
     existing = existing if isinstance(existing, dict) else None
-    status   = "pending" if runtime.cfg.media.emoji_auto_collect_requires_approval else "active"
     if existing is not None:
         status = _status_from_record(existing)
-    source = "auto"
-
+    else:
+        status = "pending" if runtime.cfg.media.emoji_auto_collect_requires_approval else "active"
     suffix = source_path.suffix.lower()
-    if suffix not in _SUPPORTED_IMAGE_SUFFIXES:
+    if suffix not in SUPPORTED_IMAGE_SUFFIXES:
         suffix = ".png"
     base_dir = library_dir if status == "active" else _pending_emoji_library_dir(context)
     ensure_dir(base_dir)
@@ -782,7 +780,7 @@ def _collect_emoji_candidate_locked(
         entry            = entry,
         existing         = existing,
         status           = status,
-        source           = source,
+        source           = "auto",
         perceptual_hash  = perceptual_hash,
         touch_collection = True,
         source_chat_id   = source_chat_id,
@@ -824,11 +822,129 @@ def schedule_emoji_library_repair(context, runtime) -> bool:
             _EMOJI_REPAIR_TASKS.discard(task_key)
 
     try:
-        _spawn_bg_task(context, _run(), name=f"emoji_library_repair:{Path(task_key).name}")
+        spawn_bg_task(context, _run(), name=f"emoji_library_repair:{Path(task_key).name}")
     except Exception:
         _EMOJI_REPAIR_TASKS.discard(task_key)
         raise
     return True
+
+
+def _record_tags(record: dict[str, Any]) -> tuple[str, ...]:
+    return tuple(str(item) for item in record.get("emotion_tags", []) if str(item).strip())
+
+
+def _scanned_file_status(context, scanned: _ScannedEmojiFile) -> str:
+    """索引声明与实际路径一致、且不在待处理目录时才沿用声明状态，否则视为待处理。"""
+
+    record   = scanned.existing_record or {}
+    declared = str(record.get("status", "") or "").strip().lower()
+    path     = str(record.get("file_path", "") or "").strip()
+    try:
+        path_matches = bool(path) and (
+            resolve_emoji_file_path(context, path).resolve() == scanned.file_path.resolve()
+        )
+    except OSError:
+        path_matches = False
+    record_valid = (
+        scanned.existing_record is not None and declared in {"active", "pending"} and path_matches
+    )
+    if _is_pending_library_file(context, scanned.file_path) or not record_valid:
+        return "pending"
+    return declared
+
+
+def _entry_from_index_record(
+    context, scanned: _ScannedEmojiFile, status: str
+) -> EmojiLibraryEntry | None:
+    """索引里已有可用描述时直接构造条目；元数据缺失或不可用时返回 None 交给修复流程。"""
+
+    record      = scanned.existing_record or {}
+    description = str(record.get("description", "") or "").strip()
+    marker      = str(record.get("marker", "") or "").strip()
+    tags        = _record_tags(record)
+    if not _is_usable_library_metadata(description, marker, tags):
+        return None
+    legacy_chat     = str(record.get("source_chat_id", "") or "").strip()
+    source_chat_ids = tuple(
+        str(item).strip() for item in record.get("source_chat_ids", []) if str(item).strip()
+    ) or ((legacy_chat,) if legacy_chat else ())
+    active = status == "active"
+    return EmojiLibraryEntry(
+        media_hash      = scanned.media_hash,
+        file_path       = _to_data_relative_path(context, scanned.file_path),
+        description     = description,
+        emotion_tags    = tags,
+        usage_count     = int(record.get("usage_count", 0) or 0),
+        last_used_ts    = float(record.get("last_used_ts", 0.0) or 0.0),
+        marker          = marker,
+        source_chat_ids = source_chat_ids,
+        owner_id        = str(record.get("owner_id", "") or "").strip(),
+        visibility      = str(record.get("visibility", "") or "chat").strip().lower()
+        if active
+        else "chat",
+        global_approved=record.get("global_approved") is True if active else False,
+    )
+
+
+def _bare_entry(context, scanned: _ScannedEmojiFile) -> EmojiLibraryEntry:
+    """修复前占位用的条目：只保留索引里已有的文字与计数字段。"""
+
+    record = scanned.existing_record or {}
+    return EmojiLibraryEntry(
+        media_hash   = scanned.media_hash,
+        file_path    = _to_data_relative_path(context, scanned.file_path),
+        description  = str(record.get("description", "") or "").strip(),
+        emotion_tags = _record_tags(record),
+        usage_count  = int(record.get("usage_count", 0) or 0),
+        last_used_ts = float(record.get("last_used_ts", 0.0) or 0.0),
+        marker       = str(record.get("marker", "") or "").strip(),
+    )
+
+
+async def _render_library_entry(
+    context, runtime, scanned: _ScannedEmojiFile
+) -> EmojiLibraryEntry | None:
+    """重新分析一张库内图片；分析失败或描述不可用时放弃该文件。"""
+
+    from .event_media import render_local_media_file
+
+    rendered = await render_local_media_file(
+        scanned.file_path, context=context, runtime=runtime, prefer_emoji=True
+    )
+    if rendered is None or not _is_usable_library_metadata(
+        rendered.description, rendered.marker, tuple(rendered.emotion_tags)
+    ):
+        return None
+    return _entry_from_render(context, scanned.file_path, rendered, scanned.existing_record)
+
+
+def _scanned_record(
+    context, scanned: _ScannedEmojiFile, entry: EmojiLibraryEntry, *, status: str, source: str
+) -> dict[str, Any]:
+    return _normalize_entry_record(
+        context          = context,
+        file_path        = scanned.file_path,
+        entry            = entry,
+        existing         = scanned.existing_record,
+        status           = status,
+        source           = source,
+        perceptual_hash  = scanned.perceptual_hash,
+        touch_collection = False,
+        file_size        = scanned.file_size,
+        file_mtime_ns    = scanned.file_mtime_ns,
+    )
+
+
+def _with_record_scope(entry: EmojiLibraryEntry, record: dict[str, Any]) -> EmojiLibraryEntry:
+    """以归一化后的索引记录为准，补齐条目的来源会话、归属与可见范围。"""
+
+    return dataclasses.replace(
+        entry,
+        source_chat_ids = tuple(record.get("source_chat_ids", [])),
+        owner_id        = str(record.get("owner_id", "") or ""),
+        visibility      = str(record.get("visibility", "chat") or "chat"),
+        global_approved = record.get("global_approved") is True,
+    )
 
 
 async def load_emoji_library(
@@ -849,7 +965,7 @@ async def load_emoji_library(
     library_dir = resolve_emoji_library_dir(context)
 
     cache_key       = _library_cache_key(context)
-    cache_signature = await _run_media_blocking(_library_signature, context)
+    cache_signature = await run_media_blocking(_library_signature, context)
     if (
         repair_invalid
         and not schedule_background_repair
@@ -860,7 +976,7 @@ async def load_emoji_library(
         if cached is not None:
             return _filter_visible_entries(cached, chat_id)
 
-    payload, original_payload, scanned_files = await _run_media_blocking(
+    payload, original_payload, scanned_files = await run_media_blocking(
         _read_library_snapshot,
         context,
         library_dir,
@@ -871,7 +987,7 @@ async def load_emoji_library(
     if not scanned_files:
         if payload.get("entries"):
             payload["entries"] = {}
-            await _run_media_blocking(
+            await run_media_blocking(
                 _save_index_if_changed,
                 context,
                 original_payload = original_payload,
@@ -882,146 +998,28 @@ async def load_emoji_library(
     retained_entries: dict[str, dict[str, Any]] = {}
     results: list[EmojiLibraryEntry]            = []
     repair_needed                               = False
-
-    for scanned_file in scanned_files:
-        file_path        = scanned_file.file_path
-        media_hash       = scanned_file.media_hash
-        existing_record  = scanned_file.existing_record
-        existing         = existing_record or {}
-        physical_pending = _is_pending_library_file(context, file_path)
-        declared_status  = str((existing_record or {}).get("status", "") or "").strip().lower()
-        declared_path    = str((existing_record or {}).get("file_path", "") or "").strip()
-        path_matches     = False
-        if declared_path:
-            try:
-                path_matches = (
-                    resolve_emoji_file_path(context, declared_path).resolve() == file_path.resolve()
-                )
-            except OSError:
-                path_matches = False
-        record_valid = (
-            existing_record is not None
-            and declared_status in {"active", "pending"}
-            and path_matches
-        )
-        status          = "pending" if physical_pending or not record_valid else declared_status
-        source          = _source_from_record(existing_record)
-        perceptual_hash = scanned_file.perceptual_hash
-        if isinstance(existing, dict) and _is_usable_library_metadata(
-            str(existing.get("description", "") or "").strip(),
-            str(existing.get("marker", "") or "").strip(),
-            tuple(str(item) for item in existing.get("emotion_tags", []) if str(item).strip()),
-        ):
-            entry = EmojiLibraryEntry(
-                media_hash   = media_hash,
-                file_path    = _to_data_relative_path(context, file_path),
-                description  = str(existing.get("description", "") or "").strip(),
-                emotion_tags = tuple(
-                    str(item) for item in existing.get("emotion_tags", []) if str(item).strip()
-                ),
-                usage_count     = int(existing.get("usage_count", 0) or 0),
-                last_used_ts    = float(existing.get("last_used_ts", 0.0) or 0.0),
-                marker          = str(existing.get("marker", "") or "").strip(),
-                source_chat_ids = tuple(
-                    str(item).strip()
-                    for item in existing.get("source_chat_ids", [])
-                    if str(item).strip()
-                )
-                or tuple(
-                    [str(existing.get("source_chat_id", "") or "").strip()]
-                    if str(existing.get("source_chat_id", "") or "").strip()
-                    else []
-                ),
-                owner_id   = str(existing.get("owner_id", "") or "").strip(),
-                visibility = (
-                    str(existing.get("visibility", "") or "chat").strip().lower()
-                    if status == "active"
-                    else "chat"
-                ),
-                global_approved=(
-                    existing.get("global_approved") is True if status == "active" else False
-                ),
-            )
-        else:
+    for scanned in scanned_files:
+        status = _scanned_file_status(context, scanned)
+        source = _source_from_record(scanned.existing_record)
+        entry  = _entry_from_index_record(context, scanned, status)
+        if entry is None:
             repair_needed = True
             if not repair_invalid:
-                retained_entries[media_hash] = _normalize_entry_record(
-                    context   = context,
-                    file_path = file_path,
-                    entry     = EmojiLibraryEntry(
-                        media_hash   = media_hash,
-                        file_path    = _to_data_relative_path(context, file_path),
-                        description  = str((existing or {}).get("description", "") or "").strip(),
-                        emotion_tags = tuple(
-                            str(item)
-                            for item in (existing or {}).get("emotion_tags", [])
-                            if str(item).strip()
-                        ),
-                        usage_count  = int((existing or {}).get("usage_count", 0) or 0),
-                        last_used_ts = float((existing or {}).get("last_used_ts", 0.0) or 0.0),
-                        marker       = str((existing or {}).get("marker", "") or "").strip(),
-                    ),
-                    existing         = existing_record,
-                    status           = "pending",
-                    source           = source,
-                    perceptual_hash  = perceptual_hash,
-                    touch_collection = False,
-                    file_size        = scanned_file.file_size,
-                    file_mtime_ns    = scanned_file.file_mtime_ns,
+                # 只读加载不重新分析，元数据缺失的文件以待处理状态保留在索引中。
+                retained_entries[scanned.media_hash] = _scanned_record(
+                    context, scanned, _bare_entry(context, scanned), status="pending", source=source
                 )
                 continue
-            from .event_media import render_local_media_file
-
-            rendered = await render_local_media_file(
-                file_path,
-                context      = context,
-                runtime      = runtime,
-                prefer_emoji = True,
-            )
-            if rendered is None:
+            entry = await _render_library_entry(context, runtime, scanned)
+            if entry is None:
                 continue
-            if not _is_usable_library_metadata(
-                rendered.description, rendered.marker, tuple(rendered.emotion_tags)
-            ):
-                continue
-            entry = _entry_from_render(
-                context,
-                file_path,
-                rendered,
-                existing_record,
-            )
-        normalized_record = _normalize_entry_record(
-            context          = context,
-            file_path        = file_path,
-            entry            = entry,
-            existing         = existing_record,
-            status           = status,
-            source           = source,
-            perceptual_hash  = perceptual_hash,
-            touch_collection = False,
-            file_size        = scanned_file.file_size,
-            file_mtime_ns    = scanned_file.file_mtime_ns,
-        )
-        retained_entries[entry.media_hash] = normalized_record
+        record = _scanned_record(context, scanned, entry, status=status, source=source)
+        retained_entries[entry.media_hash] = record
         if status == "active":
-            results.append(
-                EmojiLibraryEntry(
-                    media_hash      = entry.media_hash,
-                    file_path       = entry.file_path,
-                    description     = entry.description,
-                    emotion_tags    = entry.emotion_tags,
-                    usage_count     = entry.usage_count,
-                    last_used_ts    = entry.last_used_ts,
-                    marker          = entry.marker,
-                    source_chat_ids = tuple(normalized_record.get("source_chat_ids", [])),
-                    owner_id        = str(normalized_record.get("owner_id", "") or ""),
-                    visibility      = str(normalized_record.get("visibility", "chat") or "chat"),
-                    global_approved = normalized_record.get("global_approved") is True,
-                )
-            )
+            results.append(_with_record_scope(entry, record))
 
     payload["entries"] = retained_entries
-    saved_signature    = await _run_media_blocking(
+    saved_signature    = await run_media_blocking(
         _save_index_if_changed,
         context,
         original_payload = original_payload,

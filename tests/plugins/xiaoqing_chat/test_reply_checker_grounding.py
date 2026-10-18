@@ -7,12 +7,229 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import plugins.xiaoqing_chat.llm.arithmetic as arithmetic_mod
 from plugins.xiaoqing_chat.llm import reply_checker as checker
+from plugins.xiaoqing_chat.llm.communication_constraints import explicit_output_allocation
 from plugins.xiaoqing_chat.llm.media_evidence import event_has_current_image, image_evidence_block
 
 # Stub out aiohttp only when it is not installed in the local test environment.
 if "aiohttp" not in sys.modules and importlib.util.find_spec("aiohttp") is None:
     sys.modules["aiohttp"] = MagicMock()
+
+
+@pytest.mark.parametrize(
+    "claim,evidence,expected",
+    [
+        ("花三十块省五块", "为了免配送费又加了三十块吃的", False),
+        ("等了十五分钟", "已经等了五分钟", False),
+        ("走了一千米", "走了一公里", True),
+        ("等了120分钟", "等了两小时", True),
+        ("共花了八十元", "前面花了30元，又花了五十块", True),
+        ("多花二十块", "本来三十块，后来五十块", True),
+        ("省五元", "消费三十元，另一条只给了五分钟", False),
+        ("等了半小时", "已经等了三十分钟", True),
+        ("一百二十五元", "账单125元", True),
+        ("这猫很得意", "看到一只猫", True),
+        ("期末就是十秒内看完一整本书", "期末周复习根本复习不完", True),
+        ("十秒内看完", "看了五分钟", False),
+    ],
+)
+def test_factual_measurements_require_matching_source_values(claim, evidence, expected):
+    assert arithmetic_mod.measured_values_are_supported(claim, evidence) is expected
+
+
+@pytest.mark.parametrize("identifier,expected", [("h1", True), ("invented", False)])
+def test_context_evidence_uses_verified_message_identifiers(identifier, expected):
+    result = checker._interpret_checker_response(
+        content=_response(context_claims=[{"claim": "饭已经到了", "source_ids": [identifier]}]),
+        reply                            = "饭已经到了。",
+        current_text                     = "接一句",
+        history_text                     = "[m1] 12:01,阿白：小青，饭已经到了。",
+        grounding_text                   = "",
+        bot_name                         = "小青",
+        allow_low_stakes_persona_fiction = False,
+        source_records                   = {"h1": "12:01,阿白：小青，饭已经到了。", "current": "接一句"},
+    )
+    assert result.suitable is expected
+    if not expected:
+        assert result.failure_code == "context_grounding"
+
+
+def test_invented_amount_is_rejected_even_with_valid_source_id_and_positive_verdict():
+    result = checker._interpret_checker_response(
+        content=_response(context_claims=[{"claim": "花三十块省五块", "source_ids": ["h1"]}]),
+        reply                            = "花三十块省五块，这账算得妙。",
+        current_text                     = "评价这波省钱",
+        history_text                     = "阿夏：为了免配送费又加了三十块吃的。",
+        grounding_text                   = "",
+        bot_name                         = "小青",
+        allow_low_stakes_persona_fiction = False,
+        source_records                   = {"h1": "阿夏：为了免配送费又加了三十块吃的。"},
+    )
+    assert result.is_hard
+    assert result.failure_code == "context_grounding"
+    assert "测量值" in result.reason
+
+
+def test_claim_quoted_from_user_input_does_not_reject_candidate():
+    current = "今天跟最好的朋友吵架了，有点难受，不想开玩笑"
+    result  = checker._interpret_checker_response(
+        content=_response(
+            context_claims=[{"claim": "今天跟最好的朋友吵架了", "source_ids": ["current"]}]
+        ),
+        reply                            = "抱抱，吵完那会儿心里最堵了，我陪你待着。",
+        current_text                     = current,
+        history_text                     = "",
+        grounding_text                   = "",
+        bot_name                         = "小青",
+        allow_low_stakes_persona_fiction = True,
+        source_records                   = {"current": current},
+    )
+    assert result.suitable is True
+    assert result.context_claim_count == 0
+
+
+@pytest.mark.parametrize(
+    "text,quantity,scope",
+    [
+        ("给三个人一个轻松的二选一，你也选一个。", "一个", "向这些受众共同交付"),
+        ("给三个人各一个话题。", "一个", "每人分别交付"),
+        ("为五个人两条建议。", "两条", "向这些受众共同交付"),
+        ("给两个人每人三道练习题。", "三道", "每人分别交付"),
+    ],
+)
+def test_audience_quantity_is_separate_from_output_quantity(text, quantity, scope):
+    result = explicit_output_allocation(text)
+    assert result["条目数量原文"] == quantity
+    assert result["分配范围"] == scope
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "给大家丢个话题",
+        "我给三个人买了饭",
+        "“给三个人一个话题”这句怎么翻译",
+        "不要给三个人一个话题",
+    ],
+)
+def test_allocation_hint_requires_explicit_unquoted_grammar(text):
+    assert explicit_output_allocation(text) == {}
+
+
+@pytest.mark.parametrize(
+    "missing_field", ["image_evidence_respected", "visual_scan_complete", "visual_claims"]
+)
+def test_confirmed_hard_rejection_survives_incomplete_visual_protocol(missing_field):
+    payload = json.loads(_response(instruction_followed=False, suitable=False, need_replan=True))
+    del payload[missing_field]
+    result = checker._interpret_checker_response(
+        content                          = json.dumps(payload),
+        reply                            = "你先起一个，我来评价。",
+        current_text                     = "给我的绿萝起个名。",
+        history_text                     = "",
+        grounding_text                   = "",
+        bot_name                         = "小青",
+        allow_low_stakes_persona_fiction = False,
+        image_evidence_required          = True,
+    )
+    assert result.is_hard
+    assert result.failure_code == "instruction_following"
+
+
+def test_explicit_local_definitions_preserve_original_state_and_latest_correction():
+    records = {
+        "h1": "10:20, 阿梨：我们把标题写好、正文没写，叫空箱发货。",
+        "h2": "10:21, 阿夏：我空箱发货二十分钟了。",
+        "h3": "10:22, 阿白：我们管把任务改名三次叫任务进化。",
+        "current": "我们把标题写好、正文没写、尚未发送，叫空箱发货。",
+    }
+    definitions = {item["term"]: item for item in checker._explicit_term_definitions(records)}
+    assert definitions["空箱发货"]["meaning"] == "标题写好、正文没写、尚未发送"
+    assert definitions["空箱发货"]["source_ids"] == ["current"]
+    assert definitions["任务进化"]["meaning"] == "任务改名三次"
+    assert checker.definition_source_ids(records) == ["h1", "h3", "current"]
+
+
+@pytest.mark.parametrize(
+    "claim,identifiers,expected",
+    [
+        ("阿梨标题写好了，正文没写", ["h1"], False),
+        ("阿梨标题写好了，正文没写", ["h1", "h3"], False),
+        ("阿梨标题写好了，正文没写", ["h1", "h4"], True),
+        ("阿夏标题写好了，正文没写", ["h1", "h2"], True),
+        ("阿梨把这种状态叫空箱发货", ["h1"], True),
+    ],
+)
+def test_definition_authorship_requires_actual_personal_state_evidence(
+    claim, identifiers, expected
+):
+    records = {
+        "h1": "10:20, 阿梨：我们把标题写好、正文没写叫空箱发货。",
+        "h2": "10:21, 阿夏：我空箱发货二十分钟了。",
+        "h3": "10:22, 小青(你)：阿梨标题写好了，正文没写。",
+        "h4": "10:23, 阿梨：我也只写好了标题，正文没写。",
+    }
+    assert (
+        checker.definition_author_claim_supported(
+            claim, identifiers, records, bot_name="小青", current_sender="阿禾"
+        )
+        is expected
+    )
+
+
+@pytest.mark.asyncio
+async def test_turn_reading_keeps_explicit_definition_and_removes_unbacked_author_state(
+    monkeypatch,
+):
+    remote = AsyncMock(
+        return_value=_remote_json(
+            _turn_reading(
+                meaning     = "阿梨的标题写好了，正文没写。",
+                intent      = "为阿梨写进度牌。",
+                facts       = [{"fact": "阿梨说把这种情况叫空箱发货", "source_ids": ["h1"]}],
+                local_terms = [{"term": "空箱发货", "meaning": "邮件已经发送", "source_ids": ["h1"]}],
+            )
+        )
+    )
+    monkeypatch.setattr(checker, "_request_checker_completion", remote)
+    result = await checker._read_turn_meaning(
+        checker_secrets = {},
+        check_input     = checker._LLMCheckInput(
+            "小青",
+            "",
+            "聊天",
+            "给他俩各写一个进度牌",
+            "",
+            "",
+            "阿梨：我们把标题写好、正文没写叫空箱发货。\n阿夏：我空箱发货二十分钟了。",
+            True,
+            current_sender="阿禾",
+        ),
+        request_policy=checker._LLMRequestPolicy(1024, 2, 0, 0),
+    )
+    assert result["local_terms"][0]["meaning"] == "标题写好、正文没写"
+    assert result["facts"] == []
+    assert result["meaning"] == "阿禾：给他俩各写一个进度牌"
+
+
+@pytest.mark.asyncio
+async def test_legacy_string_facts_are_excluded_from_cited_reading(monkeypatch):
+    remote = AsyncMock(return_value=_remote_json(_turn_reading(facts=["用户花了十二元。"])))
+    monkeypatch.setattr(checker, "_request_checker_completion", remote)
+    result = await checker._read_turn_meaning(
+        checker_secrets = {},
+        check_input     = checker._LLMCheckInput(
+            "小青", "", "聊天", "为满减多花十二元", "", "", "", True, current_sender="阿夏"
+        ),
+        request_policy=checker._LLMRequestPolicy(1024, 2, 0, 0),
+    )
+    assert result is not None
+    assert result["facts"] == []
+    assert (
+        json.loads(remote.call_args.kwargs["materials"])["消息原文"]["current"]
+        == "为满减多花十二元"
+    )
 
 
 @pytest.mark.asyncio
@@ -73,11 +290,10 @@ async def test_checker_requires_direct_grounding_for_each_persona_claim(
         fake_chat,
     )
     monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.llm_client.extract_response_content",
+        "plugins.xiaoqing_chat.llm.reply_checker.gateway.extract_response_content",
         lambda _resp: outputs.pop(0),
     )
     common = {
-        "http_session": None,
         "secrets": {"_ai": object()},
         "bot_name": "小青",
         "goal": "自然聊天",
@@ -169,11 +385,10 @@ async def test_checker_allows_bounded_persona_story_but_rejects_persona_overreac
         fake_chat,
     )
     monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.llm_client.extract_response_content",
+        "plugins.xiaoqing_chat.llm.reply_checker.gateway.extract_response_content",
         lambda _resp: outputs.pop(0),
     )
     common = {
-        "http_session": None,
         "secrets": {"_ai": object()},
         "bot_name": "小青",
         "goal": "自然聊天",
@@ -220,7 +435,6 @@ async def test_checker_forces_boundary_for_profile_fields_declared_unset() -> No
 
     identity = XiaoQingChatConfig().personality.identity
     result   = await check_reply(
-        http_session                     = None,
         secrets                          = {"_ai": None},
         bot_name                         = "小青",
         reply                            = "我读普通二本，专业和电子沾边，城市在南方。",
@@ -252,7 +466,6 @@ async def test_checker_rejects_story_address_that_conflicts_with_stable_gender()
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
     common = {
-        "http_session": None,
         "secrets": {"_ai": None},
         "bot_name": "小青",
         "goal": "分享日常",
@@ -294,7 +507,6 @@ async def test_persona_story_permission_never_relaxes_third_party_grounding(
 
     remote = _semantic_outputs(monkeypatch, [[{"claim": "小何平时就是不爱说话", "evidence": ""}]])
     result = await check_reply(
-        http_session                     = None,
         secrets                          = {"_ai": object()},
         bot_name                         = "小青",
         reply                            = "小何平时就是不爱说话。",
@@ -375,11 +587,10 @@ async def test_checker_requires_direct_dialogue_evidence_for_context_claims(
         fake_chat,
     )
     monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.llm_client.extract_response_content",
+        "plugins.xiaoqing_chat.llm.reply_checker.gateway.extract_response_content",
         lambda _resp: outputs.pop(0),
     )
     common = {
-        "http_session": None,
         "secrets": {"_ai": object()},
         "bot_name": "小青",
         "goal": "自然聊天",
@@ -443,7 +654,7 @@ async def test_checker_fails_closed_when_context_scan_is_incomplete(
         fake_chat,
     )
     monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.llm_client.extract_response_content",
+        "plugins.xiaoqing_chat.llm.reply_checker.gateway.extract_response_content",
         lambda _resp: (
             '{"suitable":true,"reason":"","need_replan":false,'
             '"persona_grounded":true,"persona_scan_complete":true,"persona_claims":[]}'
@@ -451,7 +662,6 @@ async def test_checker_fails_closed_when_context_scan_is_incomplete(
     )
 
     result = await check_reply(
-        http_session           = None,
         secrets                = {"_ai": object()},
         bot_name               = "小青",
         reply                  = "一条候选回复",
@@ -489,7 +699,7 @@ async def test_checker_fails_closed_when_persona_scan_is_incomplete(
         fake_chat,
     )
     monkeypatch.setattr(
-        "plugins.xiaoqing_chat.llm.reply_checker.llm_client.extract_response_content",
+        "plugins.xiaoqing_chat.llm.reply_checker.gateway.extract_response_content",
         lambda _resp: (
             '{"suitable":true,"reason":"","need_replan":false,'
             '"persona_grounded":true,"persona_claims":[]}'
@@ -497,7 +707,6 @@ async def test_checker_fails_closed_when_persona_scan_is_incomplete(
     )
 
     result = await check_reply(
-        http_session           = None,
         secrets                = {"_ai": object()},
         bot_name               = "小青",
         reply                  = "一条候选回复",
@@ -578,7 +787,6 @@ def _response(**changes):
 
 def _options(**changes):
     values = {
-        "http_session": None,
         "secrets": {},
         "bot_name": "小青",
         "goal": "回答当前问题",
@@ -596,6 +804,394 @@ def _options(**changes):
     }
     values.update(changes)
     return values
+
+
+@pytest.mark.parametrize("as_string", [False, True])
+@pytest.mark.parametrize("suitable", [True, False])
+def test_checker_accepts_known_json_object_envelope_without_losing_rejection(suitable, as_string):
+    payload = json.loads(
+        _response(suitable=suitable, need_replan=not suitable, instruction_followed=suitable)
+    )
+    # 实测模型也会把正文序列化成字符串放进 content。
+    body = json.dumps(payload, ensure_ascii=False) if as_string else payload
+    result = checker._interpret_checker_response(
+        content                          = json.dumps({"type": "json_object", "content": body}),
+        reply                            = "来一个，我先站队。",
+        current_text                     = "小青，抛个话题。",
+        history_text                     = "",
+        grounding_text                   = "",
+        bot_name                         = "小青",
+        allow_low_stakes_persona_fiction = True,
+    )
+    assert result.suitable is suitable
+    if not suitable:
+        assert result.is_hard
+        assert result.failure_code == "instruction_following"
+
+
+@pytest.mark.asyncio
+async def test_semantic_check_blocks_stance_reversal_when_general_review_passes(monkeypatch):
+    general = AsyncMock(return_value=checker.ReplyCheckResult(True, "", False, "soft"))
+    monkeypatch.setattr(checker, "_llm_check", general)
+    semantic_payload = json.dumps(
+        {
+            "context_coherent": False,
+            "speaker_correct": True,
+            "instruction_followed": True,
+            "reason": "前一轮选择与候选反转",
+            "scan_complete": True,
+            "premise_checks": [],
+            "quantity_checks": [],
+        }
+    )
+    remote = AsyncMock(
+        side_effect=[
+            _remote_json(_turn_reading()),
+            ({"choices": [{"message": {"content": semantic_payload}}]}, "test"),
+        ]
+    )
+    monkeypatch.setattr(checker, "_request_checker_completion", remote)
+    result = await checker.check_reply(
+        reply                 = "咸党加一。",
+        current_text          = "我跟你反着选。",
+        verify_turn_semantics = True,
+        **_options(llm_checker_mode="always", chat_history_text="小青(你)：我选甜的。"),
+    )
+    assert result.is_hard
+    assert result.failure_code == "context_grounding"
+    general.assert_awaited_once()
+    materials = json.loads(remote.call_args.kwargs["materials"])
+    assert materials["候选作者"] == "小青"
+    assert materials["最近对话"] == "小青(你)：我选甜的。"
+    first_materials = json.loads(remote.call_args_list[0].kwargs["materials"])
+    assert "候选回复" not in first_materials
+    assert "咸党加一" not in json.dumps(first_materials, ensure_ascii=False)
+    assert materials["独立阅读结果"] == _turn_reading()
+    assert (
+        remote.call_args_list[1].kwargs["request_policy"].timeout_seconds
+        < remote.call_args_list[0].kwargs["request_policy"].timeout_seconds
+    )
+
+
+def _remote_json(payload):
+    return {"choices": [{"message": {"content": json.dumps(payload, ensure_ascii=False)}}]}, "test"
+
+
+def _turn_reading(**changes):
+    payload = {
+        "meaning": "用户选择与角色相反的口味",
+        "intent": "表达自己的选择",
+        "bot_stance": "甜味",
+        "facts": [],
+        "local_terms": [],
+        "unresolved": [],
+    }
+    payload.update(changes)
+    return payload
+
+
+@pytest.mark.parametrize(
+    "evidence,expected",
+    [
+        ("阿夏：线已经还了", True),
+        ("阿夏: 线 已经还了", True),
+        ("阿白：线已经还了", False),
+        ("阿夏：线还没还", False),
+        ("阿夏：线已经还了两根", False),
+    ],
+)
+def test_evidence_format_normalization_preserves_speaker_polarity_and_quantity(evidence, expected):
+    assert checker.evidence_is_visible(evidence, "阿夏: 线已经还了。") is expected
+
+
+@pytest.mark.parametrize(
+    "evidence,expected",
+    [
+        ("阿梨：装修半小时，正文还是空的。", True),
+        ("阿梨：装修半小时，正文还是空的。\n阿夏：我写了两行。", True),
+        ("阿夏：装修半小时，正文还是空的。", False),
+        ("阿梨：装修半小时，正文还是空的。\n阿夏：我写了三行。", False),
+    ],
+)
+def test_composite_evidence_keeps_each_quotation_bound_to_its_speaker(evidence, expected):
+    source = "[m91]09:15, 阿梨: 小青，装修半小时，正文还是空的。\n[m92]09:16, 阿夏: 我写了两行。"
+    assert checker.evidence_is_visible(evidence, source) is expected
+
+
+@pytest.mark.asyncio
+async def test_turn_reading_uses_one_source_id_namespace_and_restores_evidence(monkeypatch):
+    payload = _turn_reading(facts=[{"fact": "线已归还", "source_ids": ["h1"]}])
+    remote = AsyncMock(return_value=_remote_json(payload))
+    monkeypatch.setattr(checker, "_request_checker_completion", remote)
+    reading = await checker._read_turn_meaning(
+        checker_secrets = {},
+        check_input     = checker._LLMCheckInput(
+            "小青",
+            "候选不参加阅读",
+            "回答",
+            "还差什么？",
+            "",
+            "",
+            "[m95]08:15, 阿梨: 线已经还了。",
+            True,
+        ),
+        request_policy=checker._LLMRequestPolicy(1024, 1, 0, 0),
+    )
+    materials = json.loads(remote.call_args.kwargs["materials"])
+    assert materials["消息原文"] == {"h1": "08:15, 阿梨: 线已经还了。", "current": "还差什么？"}
+    assert reading["facts"][0]["evidence"] == ["08:15, 阿梨: 线已经还了。"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("supported,consistent", [(False, True), (True, False)])
+async def test_semantic_premise_rejection_overrides_all_true_summary(
+    monkeypatch, supported, consistent
+):
+    reading = _turn_reading(
+        meaning     = "用户收好U盘后持续寻找七分钟，目前仍未找到",
+        facts       = [{"fact": "用户已找了七分钟", "source_ids": ["current"]}],
+        local_terms = [{"term": "隐身入库", "meaning": "一收好就找不到", "source_ids": ["h1"]}],
+    )
+    verdict = {
+        "scan_complete": True,
+        "premise_checks": [
+            {
+                "fragment": "七分钟才入库",
+                "literal": "收好U盘花了七分钟",
+                "supported": supported,
+                "consistent": consistent,
+            }
+        ],
+        "context_coherent": True,
+        "speaker_correct": True,
+        "instruction_followed": True,
+    }
+    remote = AsyncMock(side_effect=[_remote_json(reading), _remote_json(verdict)])
+    monkeypatch.setattr(checker, "_request_checker_completion", remote)
+    result = await checker._semantic_turn_check(
+        secrets     = {"_ai": object(), "_route": "chat", "_pinned_model": "chat-only"},
+        check_input = checker._LLMCheckInput(
+            bot_name                         = "小青",
+            reply                            = "七分钟才入库，业务有点慢。",
+            goal                             = "接梗",
+            current_text                     = "入库成功，找了七分钟。",
+            policy_text                      = "",
+            grounding_text                   = "",
+            history_text                     = "阿梨：隐身入库是一收好就找不到。",
+            allow_low_stakes_persona_fiction = True,
+            current_sender                   = "阿夏",
+            jargon_explanation               = "本群：入库沿用隐身入库的含义。",
+        ),
+        request_policy=checker._LLMRequestPolicy(1024, 2, 0, 0),
+    )
+    assert result.is_hard
+    assert result.failure_code == "context_grounding"
+    assert "七分钟才入库" in result.reason
+    first = json.loads(remote.call_args_list[0].kwargs["materials"])
+    last  = json.loads(remote.call_args_list[-1].kwargs["materials"])
+    assert first["当前发言者"] == last["当前发言者"] == "阿夏"
+    assert first["消息原文"]["jargon"] == last["本群用语参考"] == "本群：入库沿用隐身入库的含义。"
+    assert "七分钟才入库" not in json.dumps(first, ensure_ascii=False)
+    assert all(
+        call.kwargs["checker_secrets"]["_route"] == "checker" for call in remote.call_args_list
+    )
+    assert all(
+        call.kwargs["checker_secrets"]["_pinned_model"] is None for call in remote.call_args_list
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kind,supported,consistent,expected_ok",
+    [
+        ("creative", False, True, True),
+        ("creative", False, False, False),
+        ("persona", False, False, True),
+        ("knowledge", False, False, True),
+        ("fact", False, True, False),
+        ("", False, True, False),
+    ],
+)
+async def test_semantic_premise_kind_scopes_the_support_requirement(
+    monkeypatch, kind, supported, consistent, expected_ok
+):
+    reading = _turn_reading(
+        meaning     = "阿杰两周没在群里说话，现在回来打招呼",
+        facts       = [{"fact": "阿杰两周没冒泡", "source_ids": ["h1"]}],
+        local_terms = [],
+    )
+    premise = {
+        "fragment": "这两周是去异世界转生了吗",
+        "literal": "猜测阿杰这两周去异世界转生",
+        "supported": supported,
+        "consistent": consistent,
+    }
+    if kind:
+        premise["kind"] = kind
+    verdict = {
+        "scan_complete": True,
+        "premise_checks": [premise],
+        "context_coherent": True,
+        "speaker_correct": True,
+        "instruction_followed": True,
+    }
+    remote = AsyncMock(side_effect=[_remote_json(reading), _remote_json(verdict)])
+    monkeypatch.setattr(checker, "_request_checker_completion", remote)
+    result = await checker._semantic_turn_check(
+        secrets     = {"_ai": object()},
+        check_input = checker._LLMCheckInput(
+            bot_name                         = "小青",
+            reply                            = "失踪人口回归！这两周是去异世界转生了吗",
+            goal                             = "接梗",
+            current_text                     = "孩子们，我回来了",
+            policy_text                      = "",
+            grounding_text                   = "",
+            history_text                     = "Momo：阿杰两周没冒泡了",
+            allow_low_stakes_persona_fiction = True,
+            current_sender                   = "阿杰",
+        ),
+        request_policy=checker._LLMRequestPolicy(1024, 2, 0, 0),
+    )
+    assert result.suitable is expected_ok
+    if not expected_ok:
+        assert result.failure_code == "context_grounding"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reading",
+    [
+        _turn_reading(facts=[{"fact": "用户买了薯片", "source_ids": ["invented"]}]),
+        _turn_reading(local_terms=[{"term": "隐身入库", "meaning": "找到物品", "source_ids": []}]),
+        _turn_reading(facts="漏扫"),
+        _turn_reading(unresolved=[False]),
+        _turn_reading(meaning=[]),
+    ],
+)
+async def test_semantic_reading_requires_original_sources_before_comparing(monkeypatch, reading):
+    remote = AsyncMock(return_value=_remote_json(reading))
+    monkeypatch.setattr(checker, "_request_checker_completion", remote)
+    result = await checker._semantic_turn_check(
+        secrets     = {},
+        check_input = checker._LLMCheckInput(
+            "小青", "给你两袋薯片。", "聊天", "省了运费", "", "", "", True
+        ),
+        request_policy=checker._LLMRequestPolicy(1024, 2, 0, 0),
+    )
+    assert result.severity == "infra"
+    remote.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "check",
+    [
+        {"fragment": "未出现的候选", "literal": "一个前提", "supported": True, "consistent": True},
+        {"fragment": "我听着", "literal": "一个前提", "supported": "yes", "consistent": True},
+        {"fragment": "我听着", "literal": "", "supported": True, "consistent": True},
+    ],
+)
+async def test_semantic_premise_protocol_errors_remain_infrastructure_failures(monkeypatch, check):
+    verdict = {
+        "scan_complete": True,
+        "premise_checks": [check],
+        "context_coherent": True,
+        "speaker_correct": True,
+        "instruction_followed": True,
+    }
+    remote = AsyncMock(side_effect=[_remote_json(_turn_reading()), _remote_json(verdict)])
+    monkeypatch.setattr(checker, "_request_checker_completion", remote)
+    result = await checker._semantic_turn_check(
+        secrets     = {},
+        check_input = checker._LLMCheckInput(
+            "小青", "我听着。", "陪伴", "陪我待会儿", "", "", "", True
+        ),
+        request_policy=checker._LLMRequestPolicy(1024, 2, 0, 0),
+    )
+    assert result.severity == "infra"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked_stage", [0, 1])
+async def test_semantic_cancellation_reaches_either_request_stage(monkeypatch, blocked_stage):
+    import asyncio
+
+    entered   = asyncio.Event()
+    cancelled = []
+    calls     = 0
+
+    async def remote(**_kwargs):
+        nonlocal calls
+        stage = calls
+        calls += 1
+        if stage < blocked_stage:
+            return _remote_json(_turn_reading())
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.append(stage)
+
+    monkeypatch.setattr(checker, "_request_checker_completion", remote)
+    task = asyncio.create_task(
+        checker._semantic_turn_check(
+            secrets     = {},
+            check_input = checker._LLMCheckInput(
+                "小青", "我听着。", "陪伴", "陪我待会儿", "", "", "", True
+            ),
+            request_policy=checker._LLMRequestPolicy(1024, 2, 0, 0),
+        )
+    )
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert cancelled == [blocked_stage]
+
+
+@pytest.mark.asyncio
+async def test_parallel_checks_preserve_evidence_rejection_if_semantic_check_fails(monkeypatch):
+    rejected = checker.ReplyCheckResult(False, "缺少人物依据", True, "hard", "persona_grounding")
+    monkeypatch.setattr(checker, "_llm_check", AsyncMock(return_value=rejected))
+    monkeypatch.setattr(checker, "_semantic_turn_check", AsyncMock(side_effect=TimeoutError))
+    result = await checker.check_reply(
+        reply                 = "今天有点困。",
+        current_text          = "小青聊一句。",
+        verify_turn_semantics = True,
+        **_options(llm_checker_mode="always"),
+    )
+    assert result is rejected
+
+
+@pytest.mark.asyncio
+async def test_parallel_checker_cancellation_stops_both_requests(monkeypatch):
+    import asyncio
+
+    started   = [asyncio.Event(), asyncio.Event()]
+    cancelled = []
+
+    async def pending(index, **_kwargs):
+        started[index].set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.append(index)
+
+    monkeypatch.setattr(checker, "_llm_check", lambda **kwargs: pending(0, **kwargs))
+    monkeypatch.setattr(checker, "_semantic_turn_check", lambda **kwargs: pending(1, **kwargs))
+    task = asyncio.create_task(
+        checker.check_reply(
+            reply                 = "我听着。",
+            current_text          = "小青聊一句。",
+            verify_turn_semantics = True,
+            **_options(llm_checker_mode="always"),
+        )
+    )
+    await asyncio.gather(*(event.wait() for event in started))
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert sorted(cancelled) == [0, 1]
 
 
 def test_image_evidence_comes_from_structured_attachments():
@@ -660,15 +1256,56 @@ async def test_checker_preserves_generator_context_and_uses_general_evidence_rul
     materials = json.loads(remote.call_args.kwargs["materials"])
     assert materials["最近对话"] == history
     assert materials["当前最新用户消息"] == current
-    assert materials["受控人物资料"] == grounding
+    assert materials["受控人物资料"].endswith(grounding)
+    assert checker.PERSONA_RUNTIME_FACTS in materials["受控人物资料"]
     assert history not in prompt and current not in prompt
     assert '"suitable":true' not in prompt
-    assert "用户邀请的推测可以提出新可能" in prompt
-    assert "缺图无需固定告知措辞" in prompt
-    assert "前面对应图片的可靠摘要仍可提供画面依据" in prompt
-    assert "通用知识、作品背景和词义解释按知识准确性判断" in prompt
+    assert "推测保留条件和不确定性" in prompt
+    assert "缺少画面时保留缺口" in prompt
+    assert "当前或历史图片的可靠摘要" in prompt
+    assert "核对通用知识、作品设定、名称对应和词义的准确性" in prompt
     assert "历史含实际图像记录" in materials["图像可用状态"]
     assert result.suitable
+
+
+@pytest.mark.asyncio
+async def test_ai_identity_uses_controlled_runtime_facts_as_evidence(monkeypatch):
+    reply  = "我是AI，用小青这个角色在群里聊天。"
+    remote = AsyncMock(
+        return_value=(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": _response(
+                                persona_claims=[
+                                    {"claim": reply, "evidence": checker.PERSONA_RUNTIME_FACTS}
+                                ],
+                            )
+                        }
+                    }
+                ]
+            },
+            "test",
+        )
+    )
+    monkeypatch.setattr(checker, "_request_checker_completion", remote)
+    result = await checker._llm_check(
+        secrets     = {},
+        check_input = checker._LLMCheckInput(
+            "小青",
+            reply,
+            "回答身份",
+            "你是真人还是AI？",
+            "",
+            "大二理工科女生。",
+            "",
+            False,
+        ),
+        request_policy=checker._LLMRequestPolicy(1024, 1, 0, 0),
+    )
+    assert result.suitable
+    assert result.persona_claim_count == 1
 
 
 @pytest.mark.parametrize("reply", ["墙壁偏浅米白，接近暖灰。", "这个配色和表情看着很有趣。"])

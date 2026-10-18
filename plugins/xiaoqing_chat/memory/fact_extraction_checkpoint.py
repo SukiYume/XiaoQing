@@ -23,7 +23,7 @@ def _checkpoint_path(data_dir: Path, chat_id: str) -> Path:
 
 def _message_timestamp(message: Any) -> float:
     try:
-        value = float(getattr(message, "ts", 0.0) or 0.0)
+        value = float(message.ts or 0.0)
     except (TypeError, ValueError):
         return 0.0
     return value if math.isfinite(value) and value > 0 else 0.0

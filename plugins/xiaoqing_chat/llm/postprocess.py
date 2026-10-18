@@ -1,13 +1,71 @@
-"""把模型文本规范化为有界、可分段发送的聊天回复。"""
+"""保留模型回复内容，并按自然边界组织发送段落。"""
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Sequence
 
 from ..config.config import ResponsePostProcessConfig, ResponseSplitterConfig
 
-_RE_MULTI_SPACE = re.compile(r"[ \t]{2,}")
+_RE_MULTI_SPACE      = re.compile(r"[ \t]{2,}")
+_SENTENCE_TAIL_CHARS = frozenset("。！？!?～~…")
+
+
+def split_chat_reply(text: str) -> list[str]:
+    """
+    将聊天回复按连贯文本块拆分成多条消息，同时保护代码块不被拆分
+
+    Args:
+        text: 完整的聊天回复文本
+
+    Returns:
+        拆分后的消息列表
+    """
+    if not text:
+        return []
+
+    lines           = text.split("\n")
+    messages        = []
+    current_message = []
+    in_code_block   = False
+
+    for line in lines:
+        stripped = line.strip()
+
+        # 处理代码块标记
+        if stripped.startswith("```"):
+            if in_code_block:
+                # 代码块结束
+                current_message.append(line)
+                messages.append("\n".join(current_message).strip())
+                current_message = []
+                in_code_block   = False
+            else:
+                # 代码块开始
+                if current_message:
+                    messages.append("\n".join(current_message).strip())
+                    current_message = []
+                in_code_block = True
+                current_message.append(line)
+            continue
+
+        if in_code_block:
+            current_message.append(line)
+        else:
+            # 普通文本，遇到空行则拆分
+            if not stripped:
+                if current_message:
+                    messages.append("\n".join(current_message).strip())
+                    current_message = []
+            else:
+                current_message.append(line)
+
+    # 处理未闭合的代码块或普通最后一段
+    if current_message:
+        messages.append("\n".join(current_message).strip())
+
+    return [m for m in messages if m]
 
 
 def _strip_prefix(text: str, bot_name: str) -> str:
@@ -30,20 +88,12 @@ def _normalize(text: str) -> str:
     return "```".join(chunks).strip()
 
 
-def _truncate(text: str, max_length: int) -> str:
-    if max_length <= 0:
-        return ""
-    if len(text) <= max_length:
-        return text
-    if max_length == 1:
-        return "…"
-    return text[: max_length - 1].rstrip() + "…"
-
-
-def _split_sentences(text: str) -> list[str]:
+def split_sentences(text: str) -> list[str]:
     s = text.strip()
     if not s:
         return []
+    if "```" in s:
+        return split_chat_reply(s)
 
     quote_pairs            = {"“": "”", "‘": "’", "「": "」", "『": "』"}
     closing_quotes         = set(quote_pairs.values())
@@ -74,7 +124,8 @@ def _split_sentences(text: str) -> list[str]:
             continue
 
         end = index + 1
-        while end < len(s) and s[end] in closing_quotes | {'"'}:
+        # 连用的句末标点和语气尾巴属于同一句，例如“！！！”“？！”“。～”。
+        while end < len(s) and s[end] in _SENTENCE_TAIL_CHARS | closing_quotes | {'"'}:
             end += 1
         sentence = s[start:end].strip()
         if sentence:
@@ -95,7 +146,17 @@ def process_llm_response(
     bot_name: str,
     enable_splitter: bool = True,
 ) -> list[str]:
-    text = response_text or ""
+    text            = response_text or ""
+    structured_text = (
+        _strip_prefix(text, bot_name=bot_name) if cfg.enable_response_post_process else text.strip()
+    )
+    if structured_text.startswith(("{", "[")):
+        try:
+            json.loads(structured_text)
+        except ValueError:
+            pass
+        else:
+            return [structured_text]
     if cfg.enable_response_post_process:
         text = _strip_prefix(text, bot_name=bot_name)
         text = text.strip().strip('"').strip("'").strip()
@@ -106,18 +167,23 @@ def process_llm_response(
 
     splitter: ResponseSplitterConfig = cfg.splitter
     if splitter.enable and enable_splitter:
-        sentences      = _split_sentences(text)
-        out: list[str] = []
-        for s in sentences:
-            s = _truncate(s, splitter.max_length)
-            if s:
-                out.append(s)
-            if len(out) >= splitter.max_sentence_num:
-                break
-        return out
+        sentences = []
+        for sentence in split_sentences(text):
+            while "```" not in sentence and len(sentence) > splitter.max_length:
+                boundary = max(sentence.rfind(mark, 0, splitter.max_length) for mark in "，,；;\n ")
+                if boundary < splitter.max_length // 2:
+                    break
+                sentences.append(sentence[: boundary + 1].strip())
+                sentence = sentence[boundary + 1 :].strip()
+            if sentence:
+                sentences.append(sentence)
+        # 分段数量限制消息气泡数；剩余内容完整收进最后一条。
+        limit = max(1, splitter.max_sentence_num)
+        if len(sentences) > limit:
+            sentences = sentences[: limit - 1] + ["\n".join(sentences[limit - 1 :])]
+        return sentences
 
-    text = _truncate(text, splitter.max_length)
-    return [text] if text else []
+    return [text]
 
 
 def join_reply(parts: Sequence[str]) -> str:

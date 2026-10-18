@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..llm.llm_client import chat_completions_raw_with_fallback_paths
+from ..llm.gateway import chat_completions_raw_with_fallback_paths, extract_response_content
 from ..memory.memory import MemoryStore
 from ..store_base import StoreBase
 from ..utils.json_parsing import parse_first_json_object
@@ -210,6 +210,29 @@ def _find_expression(
     return None
 
 
+def _apply_operator_judgment(expr: ExpressionRecord, verdict: dict[str, Any]) -> bool:
+    """按管理员后续发言的判定更新表达；ignore 或无法识别时返回 False，继续观察。"""
+    judgment            = str(verdict.get("judgment", "") or "").strip().lower()
+    corrected_situation = str(verdict.get("corrected_situation", "") or "").strip()
+    corrected_style     = str(verdict.get("corrected_style", "") or "").strip()
+    if judgment not in {"approve", "reject"}:
+        return False
+    expr.modified_by = "user"
+    if judgment == "reject" and not (corrected_situation or corrected_style):
+        expr.checked  = False
+        expr.rejected = True
+        return True
+    # 认可，或否定但给出了更正：更正后的表达视为已审核通过。
+    if judgment == "reject":
+        if corrected_situation:
+            expr.situation = corrected_situation[:80].strip()
+        if corrected_style:
+            expr.style = corrected_style[:80].strip()
+    expr.checked  = True
+    expr.rejected = False
+    return True
+
+
 async def _tick_reflect_tracker_once(
     *,
     operator_chat_id: str,
@@ -229,14 +252,13 @@ async def _tick_reflect_tracker_once(
         tracker_store.remove_tracker(operator_chat_id, tracker.expression_id)
         return True
 
-    history  = await memory_store.get_async(operator_chat_id)
-    new_msgs = [
+    since_tracker = [
         message
-        for message in history
-        if message.role == "user"
-        and float(message.ts or 0.0) >= tracker.created_time
+        for message in await memory_store.get_async(operator_chat_id)
+        if float(message.ts or 0.0) >= tracker.created_time
         and float(message.ts or 0.0) > tracker.last_consumed_time
     ]
+    new_msgs = [message for message in since_tracker if message.role == "user"]
     if len(new_msgs) > int(max_message_count):
         tracker_store.remove_tracker(operator_chat_id, tracker.expression_id)
         return True
@@ -255,15 +277,7 @@ async def _tick_reflect_tracker_once(
     if "_ai" in secrets and secrets.get("_ai") is None:
         return False
 
-    context_block = render_dialogue(
-        [
-            message
-            for message in history
-            if float(message.ts or 0.0) >= tracker.created_time
-            and float(message.ts or 0.0) > tracker.last_consumed_time
-        ],
-        bot_name=bot_name,
-    )
+    context_block = render_dialogue(since_tracker, bot_name=bot_name)
     if not context_block:
         return False
 
@@ -280,35 +294,9 @@ async def _tick_reflect_tracker_once(
         max_retry              = int(max_retry),
         retry_interval_seconds = float(retry_interval_seconds),
     )
-    content = (((resp.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
-    obj = parse_first_json_object(str(content)) or {}
-    judgment = str(obj.get("judgment", "") or "").strip().lower()
-    corrected_situation = str(obj.get("corrected_situation", "") or "").strip()
-    corrected_style = str(obj.get("corrected_style", "") or "").strip()
-
-    resolved = False
-    if judgment == "approve":
-        expr.checked     = True
-        expr.rejected    = False
-        expr.modified_by = "user"
-        resolved         = True
-    elif judgment == "reject":
-        if corrected_situation or corrected_style:
-            if corrected_situation:
-                expr.situation = corrected_situation[:80].strip()
-            if corrected_style:
-                expr.style = corrected_style[:80].strip()
-            expr.checked     = True
-            expr.rejected    = False
-            expr.modified_by = "user"
-        else:
-            expr.checked     = False
-            expr.rejected    = True
-            expr.modified_by = "user"
-        resolved = True
-    elif judgment == "ignore":
-        resolved = False
-
+    resolved = _apply_operator_judgment(
+        expr, parse_first_json_object(extract_response_content(resp)) or {}
+    )
     if resolved:
         expr_store.save(expr_items)
         tracker_store.consume_tracker(

@@ -50,7 +50,7 @@ APOD 插件抓取 NASA Astronomy Picture of the Day 当前页面，返回图片�
 
 `url` 和 `allowed_hosts` 均可省略。内置主机白名单包含 `science.nasa.gov`、`assets.science.nasa.gov` 和 `apod.nasa.gov`，`allowed_hosts` 用于增加其他可信主机。配置中的旧入口 `https://apod.nasa.gov/apod/astropix.html` 会自动切换到新首页。管理员指定的其他页面继续使用原配置地址，包括新版历史 `image-article` 页面。
 
-## 页面解析
+## 🌐 页面解析
 
 新版页面使用 `.hds-media-detail-hero` 作为 APOD 主体。插件从主体内的 `h1` 或 `h2` 提取作品标题，从 `.media-detail-hero__description` 提取说明，从 `.media-detail-hero__meta-table` 提取日期和署名。正文会截断投稿公告、迁移公告和次日预告。
 

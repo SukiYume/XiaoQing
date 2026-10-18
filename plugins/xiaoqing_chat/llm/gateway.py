@@ -1,7 +1,8 @@
 """xiaoqing_chat 到 core AI capability 的薄适配层。
 
 插件内部仍然可以针对主回复、规划、记忆和视觉任务设置不同的温度与 token 预算，
-但 provider 凭据、模型链和跨模型 fallback 全部由 core route 统一处理。
+但 provider 凭据、模型链和跨模型 fallback 全部由 core route 统一处理。本模块同时
+提供 OpenAI 兼容响应的文本与结束原因提取。
 """
 
 from __future__ import annotations
@@ -10,7 +11,10 @@ from collections.abc import Mapping
 from typing import Any, cast
 
 from core.ai import AICompletionResult, AIConfigError
+from core.ai import AIError as LLMError
 from core.interfaces import AICapability
+
+from ..utils.json_parsing import normalize_response_content
 
 
 def _service(secrets: Mapping[str, Any]) -> AICapability:
@@ -94,15 +98,31 @@ async def chat_completions_raw_with_fallback_paths(
 ) -> tuple[dict[str, Any], str]:
     """返回原始响应及实际命中的模型 profile。"""
 
-    # ``model`` 只供旧的测试/日志钩子读取；真实模型由 route 决定，插件不能覆盖。
-    kwargs.pop("model", None)
     result = await complete_raw(**kwargs)
     return result.response, result.profile
 
 
+def extract_response_content(data: dict[str, Any]) -> str:
+    """提取并规范化第一段助手文本。"""
+
+    content = normalize_response_content(data)
+    return content if isinstance(content, str) else ""
+
+
+def extract_response_finish_reason(data: dict[str, Any]) -> str:
+    """提取第一项 choice 的结束原因，畸形响应或缺失时返回空串。"""
+
+    choices = data.get("choices") or []
+    choice  = choices[0] if isinstance(choices, list) and choices else None
+    return str(choice.get("finish_reason") or "").strip() if isinstance(choice, dict) else ""
+
+
 __all__ = [
+    "LLMError",
     "chat_completions",
     "chat_completions_raw_with_fallback_paths",
     "chat_completions_with_fallback_paths",
     "complete_raw",
+    "extract_response_content",
+    "extract_response_finish_reason",
 ]

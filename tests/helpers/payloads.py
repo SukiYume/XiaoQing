@@ -5,7 +5,6 @@ from __future__ import annotations
 import io
 import struct
 import zlib
-from types import SimpleNamespace
 
 
 def png_chunk(chunk_type: bytes, data: bytes) -> bytes:
@@ -28,9 +27,10 @@ def image_bytes(
     return output.getvalue()
 
 
-def text_reply_draft(text: str) -> SimpleNamespace:
+def text_reply_draft(text: str):
     """按 xiaoqing_chat 当前回复草稿契约构造纯文本载荷。"""
 
     from plugins.xiaoqing_chat.message_parts import build_text_message_parts
+    from plugins.xiaoqing_chat.reply_draft import ReplyDraft
 
-    return SimpleNamespace(text=text, parts=build_text_message_parts(text))
+    return ReplyDraft(text=text, text_parts=(text,), parts=build_text_message_parts(text))

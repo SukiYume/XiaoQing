@@ -10,10 +10,14 @@ from typing import TYPE_CHECKING, Any, cast
 
 from core.public_errors import public_error_response
 
+from .chat_event import event_chat_id
+from .chat_runtime import ai_route_context, configured_bot_name, load_runtime
+from .store_binding import bound_state
+
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from .runtime_state import ChatRuntimeState, _ChatRuntime
+    from .runtime_state import ChatRuntime, ChatRuntimeState
 
 ActionList = list[dict[str, Any]]
 
@@ -31,7 +35,7 @@ class HandlerContext:
     """入口处一次性解析出的不可变请求上下文。"""
 
     chat_id: str
-    runtime: _ChatRuntime
+    runtime: ChatRuntime
     state: ChatRuntimeState
     secrets: dict[str, Any]
     data_dir: Path
@@ -44,28 +48,18 @@ class HandlerContext:
         event: dict[str, Any],
         context: Any,
         *,
-        runtime: _ChatRuntime | None = None,
+        runtime: ChatRuntime | None = None,
     ) -> HandlerContext:
-        from .helper_utils import (
-            _chat_id,
-            _get_ai_route_context,
-            _get_bot_name,
-            _load_runtime,
-        )
-        from .runtime_state import get_state as _state
-        from .store_binding import _bind_all_stores
-
-        runtime = runtime or _load_runtime(context)
-        state   = _state()
-        _bind_all_stores(state, context.data_dir)
-        chat_id = _chat_id(event)
+        runtime = runtime or load_runtime(context)
+        state   = bound_state(context)
+        chat_id = event_chat_id(event)
         return cls(
             chat_id = chat_id,
             runtime = runtime,
             state   = state,
-            secrets=_get_ai_route_context(context, chat_id=chat_id),
+            secrets=ai_route_context(context, chat_id=chat_id),
             data_dir = context.data_dir,
-            bot_name = _get_bot_name(context),
+            bot_name = configured_bot_name(context),
             context  = context,
         )
 
@@ -84,7 +78,7 @@ def handle_errors(fn):
             return public_error_response(
                 context,
                 exc,
-                logger    = getattr(context, "logger", logger),
+                logger    = getattr(context, "logger", None),
                 component = f"xiaoqing_chat.handler.{fn.__name__}",
             )
 

@@ -52,7 +52,28 @@ python -m compileall -q plugins/xiaoqing_chat
 python -m pytest -q tests/plugins/xiaoqing_chat
 ```
 
-这组测试覆盖命令、召唤、参与、规划、回复生成、媒体、记忆、租户范围、原子存储、后台任务和关闭流程。
+测试全部使用隔离目录、模型替身和受控任务，不访问真实模型和 QQ。按领域分布如下：
+
+| 领域 | 测试模块 | 覆盖内容 |
+|---|---|---|
+| 命令与权限 | `test_xiaoqing_chat_commands.py`、`test_xiaoqing_chat_provider_scope.py`、`test_xiaoqing_chat_review_lifecycle.py` | `/xc` 全部子命令、别名、参数错误、群管理员与 Bot 管理员权限、会话与全局模型覆盖、复盘会话 ID |
+| 召唤与参与 | `test_xiaoqing_chat_planning_participation.py`、`test_xiaoqing_chat_reply_gate.py`、`test_xiaoqing_delivery_limiter_frequency.py`、`test_xiaoqing_chat_humanlike_delivery.py` | 明确召唤、共指、参与线索、点名他人、低信息消息、频控、生成配额、复读队形、称呼与时区 |
+| 规划与目标 | `test_xiaoqing_chat_goal_reset.py`、`test_xiaoqing_planning_retrieval_scoring.py`、`test_xiaoqing_chat_conversation_boundaries.py` | PFC 动作、目标同步、长空档切换、检索评分 |
+| 生成 | `test_xiaoqing_prompt_builder.py`、`test_xiaoqing_chat_reply_generation*.py`、`test_xiaoqing_chat_generation_boundaries.py`、`test_bot_name_injection.py` | 提示词结构、名字注入、上下文超限重建、复核超时降级、网关与公开错误 |
+| 审查 | `test_reply_checker.py`、`test_reply_checker_grounding.py`、`test_reply_checker_risk_mode.py`、`test_reply_checker_social_boundaries.py`、`test_xiaoqing_chat_reply_completion.py` | 本地规则（复读、近似照搬、连续发言、凭空经历）、语义审查各轴、证据契约、`always` / `risk` 模式、人设（坚持真人身份）、缺图话术、定向重写与兜底 |
+| 投递与生命周期 | `test_xiaoqing_chat_turn_lifecycle.py`、`test_xiaoqing_reply_payload.py`、`test_xiaoqing_chat_shutdown.py`、`test_xiaoqing_chat_background_tasks.py`、`test_xiaoqing_chat_task_*.py` | 投递确认后提交、过期丢弃、回滚、分批、后台任务创建失败与去重、关闭等待 |
+| 媒体 | `test_xiaoqing_chat_media_*.py`、`test_xiaoqing_chat_emoji_library.py` | 消息段解析、来源与 OneBot 补取、大小/像素/帧数上限、视觉重试与降级、摘要缓存、表情库、出站标记 |
+| 记忆与存储 | `test_xiaoqing_chat_memory_*.py`、`test_xiaoqing_chat_vector_store_validation.py`、`test_xiaoqing_chat_atomic_readers.py`、`test_xiaoqing_chat_store_base_helpers.py`、`test_xiaoqing_chat_cache_*.py`、`test_xiaoqing_chat_thinking_back.py`、`test_xiaoqing_chat_review_store.py`、`test_xiaoqing_chat_dedup_json_llm.py` | 原子读写、备份恢复、损坏输入、并发保存、重置竞态、向量索引一致性、缓存过期、模型 JSON 修复 |
+| 表达学习 | `test_xiaoqing_chat_expression_store_persistence.py`、`test_xiaoqing_expression_retry_reflection.py`、`test_xiaoqing_chat_meme_learning.py` | 表达与黑话的增量合并、反思重试、本群词义优先、明确更正、学习期间重置 |
+| 隔离与隐私 | `test_xiaoqing_chat_tenant_scope.py`、`test_xiaoqing_log_privacy.py`、`test_xiaoqing_chat_audit_regressions.py` | 跨会话隔离、日志脱敏、敏感投递跳过、重置后旧任务失效、行动历史上限 |
+| 配置与运行时 | `test_xiaoqing_chat_runtime_hardening.py`、`test_xiaoqing_chat_cache_lifetimes.py` | 配置校验与加载失败回退、热加载、缓存生命周期 |
+| 实验与脚本 | `test_xiaoqing_chat_anthropomorphic_experiment.py`、`tests/tooling/test_xiaoqing_chat_quality_script.py` | 拟人实验矩阵与投递回执、质量探针的剧本与机器门禁 |
+
+插件契约测试（日志脱敏、调用参数与签名一致性）位于 `tests/plugins/contracts`，建议一起运行：
+
+```bash
+python -m pytest tests/plugins/xiaoqing_chat tests/plugins/contracts -q
+```
 
 ### 项目级 UAT 计划
 
@@ -243,7 +264,7 @@ python scripts/run_full_uat.py \
 
 ```bash
 python scripts/run_xiaoqing_chat_quality.py \
-  --endpoint http://127.0.0.1:12000/onebot \
+  --endpoint http://127.0.0.1:12000/event \
   --chat-data-dir test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/data/xiaoqing_chat \
   --output test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/quality.json
 ```
@@ -260,7 +281,46 @@ python -m plugins.xiaoqing_chat.experiments.anthropomorphic_group \
   --rounds-per-group 150
 ```
 
-实验产物包括矩阵、JSONL 结果、群聊 transcript 和摘要。`--seed` 固定工作负载，`--max-real-turns` 控制远程调用规模。
+`--mode` 有三种取值：`matrix` 只生成实验矩阵，`dry-run` 不调用插件，生成可复现的占位结果来检查实验框架与评分，`real` 调用真实模型。实验产物包括矩阵（`anthropomorphic-group-matrix.json`）、JSONL 结果、群聊 transcript 和摘要，默认写入 `test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/`，也可用 `--output-dir` 指定。`--seed` 固定工作负载，`--groups`、`--min-users`、`--max-users`、`--rounds-per-group` 控制规模，`--max-real-turns` 限制远程调用轮数，`--checkpoint-interval` 控制断点保存间隔。
+
+### 多人群聊综合评测
+
+```bash
+python scripts/run_xiaoqing_chat_live_eval.py                  # 全部剧本并行 + 模型评审
+python scripts/run_xiaoqing_chat_live_eval.py --suite otaku     # 只跑指定剧本，可重复
+python scripts/run_xiaoqing_chat_live_eval.py --judge-only <DIR>
+```
+
+不需要启动 Bot。脚本读取 `config/config.json` 和 `config/secrets.json` 的真实模型路由，每个剧本在独立数据目录里走完整的 `observe_message()` → `handle_smalltalk()` 链路，发送模拟为成功回执，不接触线上数据和 QQ 群。五位虚拟群友（阿夏、阿禾、阿白、阿梨、阿柚）按剧本里的节奏发言，可带图片、表情包、QQ 表情、`@` 和引用。
+
+| 剧本 | 关注点 |
+|---|---|
+| `otaku` | 活人感：二次元群日常、接梗、立场、被问是不是 AI、复读 |
+| `addressee` | 聊天对象：并行话题、点名他人、`@` 他人、同时点名、被评价 |
+| `participation` | 参与度：情绪、喜报、刷屏、冷场、邀约、发图请求 |
+| `multimodal` | 多模态：读图、表情包含义、指代旧图、发表情、坏图、没发过的图 |
+| `persona` | 人设与边界：个人问题、偏好记忆与回忆（如“你刚才说你喜欢猫还是狗来着”）、知识、套提示词、长文请求 |
+| `regress` | 计算与出站素材的回归点，例如价格换算、应发出表情包的轮次 |
+
+每轮先做确定性规则检查，发现项写入报告：
+
+| 规则 | 含义 |
+|---|---|
+| `missed_reply` | 剧本要求回复却没回 |
+| `intrusion` | 剧本要求安静却插话 |
+| `fallback` | 审查耗尽后用了兜底句（按 `reply.check.exhausted.*` 步骤或整句比对 `ALL_FALLBACK_TEXTS`） |
+| `breaks_character` | 承认自己是 AI 或提到提示词等 |
+| `markdown` | 普通聊天里出现 Markdown 格式 |
+| `too_long` | 单轮超过 90 字 |
+| `verbatim_repeat` | 原样重复自己说过的话 |
+| `checker_rejected` / `checker_infra` | 候选被审查拒绝 / 审查模型不可用 |
+| `exception` / `slow` | 链路异常 / 单轮超过 40 秒 |
+
+随后由 `reasoning` 路由担任评审，按剧本写给评审看的预期（`note`，不进入角色上下文）逐轮点评，并给出五个 1～5 分：`humanlike`（活人感）、`participation`（参与时机）、`addressee`（聊天对象）、`multimodal`（多模态，无图剧本为空）、`consistency`（前后一致）。
+
+结果写入 `test_reports/runs/plugins/xiaoqing_chat/<时间>-liveeval-<commit>/`：每个剧本一个 JSONL（逐轮输入、回复、审查记录、步骤日志），以及汇总的 `summary.json` 和 `report.md`。`--seed` 固定随机过程，`--no-judge` 只跑剧本和规则检查，`--judge-only <DIR>` 对已有结果重新评审，`--out-dir` 指定输出目录。
+
+评分偏低时先读对应轮次的 JSONL：剧本素材本身有歧义（例如测试图片过于抽象）时应修正剧本或素材，而不是改插件。
 
 ### 真实群聊剧本
 
@@ -349,7 +409,7 @@ python -m plugins.xiaoqing_chat.experiments.anthropomorphic_group \
 
 交流约束通过独立阅读完整输入与回复验收，覆盖直接追问、间接陈述、引用、条件句及同义改写。质量探针保留人工复核材料，`machine_gate_passed` 只代表机器指标，`semantic_review_required` 标记独立语义复核需求；复核前 `semantic_acceptance_passed` 保持空值。
 
-缺图用例使用纯文字事件指向具体截图，核对回复明确说明未知画面，并检查颜色、布局、文字和物体陈述的证据。历史真实图片作为独立正例，验证回指仍可使用对应摘要。陈旧话题探针的 `current_turn_discloses_missing_image` 同时记录缺图告知，旧话题排除保持独立检查。
+缺图用例使用纯文字事件指向具体截图，核对回复像群友一样随口说图没加载出来或裂了（不使用“画面读取不到”之类的客服说法），不附和用户对未知画面的评价，并检查颜色、布局、文字和物体陈述的证据。历史真实图片作为独立正例，验证回指仍可使用对应摘要。陈旧话题探针的 `current_turn_discloses_missing_image` 同时记录缺图告知，旧话题排除保持独立检查。
 
 ### 媒体
 
@@ -449,9 +509,3 @@ python -m plugins.xiaoqing_chat.experiments.anthropomorphic_group \
 - 测试负责人和完成时间。
 
 最终结论基于本轮报告中的实际证据。后续复测使用新的 `RUN_ID`，并在缺陷表中关联原缺陷与修复提交。
-
-## 完整审查回归
-
-`tests/plugins/xiaoqing_chat/test_review_xchat_regressions.py` 使用临时目录、模型替身和受控任务验证以下边界：关闭时任务存活、错误结构配合有效备份、锁淘汰与等待者身份、隔离记忆不可见、连续重启后的消息编号、人物档案重置代际、长历史最新消息、等待时长类型与范围、自审空修改字段、跨会话学习快照、相似表情元数据以及并发表情索引更新。
-
-执行 `python -m pytest tests/plugins/xiaoqing_chat -q` 可同时运行插件既有测试及上述回归。真实 QQ 投递、外部模型行为和上线表现使用本文前述验收步骤单独记录。

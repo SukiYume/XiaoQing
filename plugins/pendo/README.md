@@ -248,7 +248,7 @@ Web 后端使用 FastAPI 与 uvicorn，API 前缀为 `/api`，静态前端位于
 
 ---
 
-## 数据一致性与恢复
+## 💾 数据一致性与恢复
 
 - Web 完整编辑携带打开表单时的版本号。另一个窗口先保存时，旧窗口收到冲突提示并保留输入，重新读取后可继续编辑。
 - 普通用户可以签发和吊销自己的访问令牌。共享 Web 服务的 `start` 与 `stop` 命令需要机器人管理员权限。
@@ -288,11 +288,11 @@ Web 后端使用 FastAPI 与 uvicorn，API 前缀为 `/api`，静态前端位于
 | `pendo_diary_reminder` | 每分钟 | `targeted` 私聊 | 检查用户本地日记提醒时间 |
 | `pendo_migrate_todos` | 每天 00:05 | `targeted` 私聊 | 顺延昨日 open 计划待办并通知所有者 |
 | `pendo_prune_operation_logs` | 每天 00:15 | `silent` | 清理过期操作日志与撤销快照 |
-| `pendo_weekly_finance_summary` | 每周日 21:00 | `targeted` 私聊 | 财务周报 |
-| `pendo_month_end_finance_summary` | 每月最后一天 21:00 | `targeted` 私聊 | 财务月报 |
-| `pendo_cleanup_demo_data` | 每 6 小时 | `silent` | 清理过期 Demo 数据 |
+| `pendo_weekly_finance_summary` | 每分钟 | `targeted` 私聊 | 用户本地时区周日 21:00 的财务周报 |
+| `pendo_month_end_finance_summary` | 每分钟 | `targeted` 私聊 | 用户本地时区月末 21:00 的财务月报 |
+| `pendo_cleanup_demo_data` | 每 6 小时的 15 分 | `silent` | 清理过期 Demo 数据 |
 
-定时消息通过 `scheduled_delivery_outbox` 保存待办状态，并按目标确认结果推进投递。静默任务由 Core 保持零消息投递。
+每日简报、日记提醒和财务总结都按每位用户自己的时区判断到期：任务每分钟运行一次，到达用户本地时刻后把该周期写入 `scheduled_delivery_outbox`。已入队周期持有持久租约，进程中断或投递失败后按原周期日期继续投递，日记提醒按所属日期检查是否已经补写。日程与待办提醒在领取后同样进入恢复窗口，租约阻止并发重复投递。静默任务由 Core 保持零消息投递。
 
 ---
 
@@ -300,7 +300,7 @@ Web 后端使用 FastAPI 与 uvicorn，API 前缀为 `/api`，静态前端位于
 
 Pendo 依赖 `python-dateutil`、`fastapi`、`uvicorn`、`PyJWT`、`pydantic` 和 `starlette`。项目常规安装会包含这些运行依赖。
 
-Web 签名 secret 可通过环境变量 `PENDO_WEB_TOKEN_SECRET` 提供。AI 分析使用 Core 的 OpenAI 兼容配置，并受用户 `ai_consent` 控制。
+Web 签名 secret 优先读取环境变量 `PENDO_WEB_TOKEN_SECRET`；未设置时，Pendo 在自己的数据目录生成并保存一个随机密钥，重启后继续使用同一密钥。自然语言解析和日记分析使用 Core AI 注册表中的 `plugins.pendo.ai.routes.parse` 模型链（发行配置为 `deepseek-flash → glm-5.2`），日记正文的外部分析受用户 `ai_consent` 设置控制。
 
 ---
 

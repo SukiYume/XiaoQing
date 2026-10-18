@@ -17,7 +17,6 @@ from tests.helpers.xiaoqing_chat_media_test_support import (
     RenderedMedia,
     SimpleNamespace,
     _download_url_bytes,
-    _looks_like_structured_media_text,
     _make_media_runtime,
     _media_llm_max_tokens,
     _raw_media_response,
@@ -27,6 +26,7 @@ from tests.helpers.xiaoqing_chat_media_test_support import (
     hashlib,
     json,
     load_emoji_library,
+    looks_like_structured_media_text,
     patch,
     pytest,
     render_event_media_text,
@@ -391,9 +391,9 @@ def test_collect_emoji_candidate_dedups_visually_identical_auto_entries(mock_con
 
 
 def test_structured_media_text_detector_flags_think_and_json_noise():
-    assert _looks_like_structured_media_text("<think>先分析一下</think>")
-    assert _looks_like_structured_media_text('json\n{"kind":"emoji"}')
-    assert not _looks_like_structured_media_text("一只黑色小鸟站着，眼神疑惑")
+    assert looks_like_structured_media_text("<think>先分析一下</think>")
+    assert looks_like_structured_media_text('json\n{"kind":"emoji"}')
+    assert not looks_like_structured_media_text("一只黑色小鸟站着，眼神疑惑")
 
 
 def test_media_llm_max_tokens_expands_for_thinking_models():
@@ -478,7 +478,7 @@ async def test_render_event_media_text_ignores_legacy_vision_extra_payload(mock_
     event = {"message": [{"type": "image", "data": {"url": "https://example.com/cat_photo.png"}}]}
     with (
         patch(
-            "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+            "plugins.xiaoqing_chat.media.sources._download_url_bytes",
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(
@@ -496,7 +496,7 @@ async def test_render_event_media_text_ignores_legacy_vision_extra_payload(mock_
 async def test_download_url_bytes_streams_and_enforces_timeout(mock_context):
     response = SimpleNamespace(body=b"1234", headers={"Content-Type": "image/png"})
     with patch(
-        "plugins.xiaoqing_chat.media.event_media.fetch_public_bytes",
+        "plugins.xiaoqing_chat.media.sources.fetch_public_bytes",
         new=AsyncMock(return_value=response),
     ) as fetch:
         payload, content_type = await _download_url_bytes(

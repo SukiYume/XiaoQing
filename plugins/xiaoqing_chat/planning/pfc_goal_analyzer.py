@@ -6,7 +6,8 @@ from collections.abc import Sequence
 from typing import Any
 
 from ..config.config import PersonalityConfig
-from ..llm.llm_client import chat_completions_raw_with_fallback_paths
+from ..llm.gateway import chat_completions_raw_with_fallback_paths, extract_response_content
+from ..llm.llm_config import LLMCallConfig
 from ..llm.prompt_builder import build_dialogue_prompt
 from ..memory.memory import StoredMessage
 from ..persona import compose_persona_identity
@@ -21,12 +22,7 @@ async def analyze_goals(
     history: Sequence[StoredMessage],
     current_goal_list: Sequence[dict[str, Any]],
     action_history_text: str,
-    temperature: float,
-    top_p: float,
-    max_tokens: int,
-    timeout_seconds: float,
-    max_retry: int,
-    retry_interval_seconds: float,
+    llm: LLMCallConfig,
 ) -> list[dict[str, Any]]:
     """返回最多五个有当前对话证据的目标；失败时保留原目标。"""
 
@@ -76,18 +72,13 @@ async def analyze_goals(
 
     try:
         resp, _path = await chat_completions_raw_with_fallback_paths(
-            secrets                = secrets,
-            messages               = [{"role": "user", "content": prompt}],
-            temperature            = min(0.7, float(temperature)),
-            top_p                  = float(top_p),
-            max_tokens             = min(1200, max(700, int(max_tokens))),
-            timeout_seconds        = float(timeout_seconds),
-            max_retry              = int(max_retry),
-            retry_interval_seconds = float(retry_interval_seconds),
+            secrets  = secrets,
+            messages = [{"role": "user", "content": prompt}],
+            **llm.bounded(max_temperature=0.7, max_tokens=1200, min_tokens=700).as_kwargs(),
         )
     except Exception:
         return list(current_goal_list)
-    content = (((resp.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
+    content = extract_response_content(resp)
     ok, result = get_items_from_json(
         str(content),
         "goal",

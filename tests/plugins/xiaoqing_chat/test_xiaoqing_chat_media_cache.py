@@ -16,8 +16,6 @@ from tests.helpers.xiaoqing_chat_media_test_support import (
     _load_and_prepare_media_for_llm,
     _make_media_runtime,
     _raw_media_response,
-    _read_file_bounded,
-    _run_media_blocking,
     _write_png,
     asyncio,
     find_candidate_by_hint,
@@ -29,9 +27,11 @@ from tests.helpers.xiaoqing_chat_media_test_support import (
     parse_marker,
     patch,
     pytest,
+    read_file_bounded,
     render_event_media_text,
     render_local_media_file,
     resolve_marker,
+    run_media_blocking,
     strip_outbound_marker_residue,
     text_without_outbound_marker,
     threading,
@@ -56,7 +56,7 @@ async def test_render_local_media_file_uses_render_cache(mock_context):
         )
 
     with patch(
-        "plugins.xiaoqing_chat.media.event_media._analyze_media_with_llm",
+        "plugins.xiaoqing_chat.media.event_media.analyze_media_with_llm",
         new=AsyncMock(side_effect=_fake_analyze),
     ) as mock_analyze:
         first = await render_local_media_file(image_path, context=mock_context, runtime=runtime)
@@ -86,7 +86,7 @@ async def test_identical_media_analysis_is_single_flight(mock_context):
         )
 
     with patch(
-        "plugins.xiaoqing_chat.media.event_media._analyze_media_with_llm",
+        "plugins.xiaoqing_chat.media.event_media.analyze_media_with_llm",
         new=AsyncMock(side_effect=_fake_analyze),
     ) as mock_analyze:
         first, second = await asyncio.gather(
@@ -105,14 +105,14 @@ def test_bounded_media_read_rejects_oversize_from_stat_before_open(tmp_path: Pat
 
     with patch.object(Path, "open", side_effect=AssertionError("must reject before read")):
         with pytest.raises(MediaPayloadTooLarge) as raised:
-            _read_file_bounded(image_path, max_bytes=8)
+            read_file_bounded(image_path, max_bytes=8)
 
     assert raised.value.size == 32
     assert raised.value.limit == 8
 
 
 def test_corrupt_image_payload_is_rejected_before_inbox_write(mock_context):
-    from plugins.xiaoqing_chat.media.event_media import _materialize_resolved_media
+    from plugins.xiaoqing_chat.media.sources import _materialize_resolved_media
 
     with pytest.raises(ValueError, match="image"):
         _materialize_resolved_media(
@@ -133,18 +133,18 @@ def test_corrupt_image_payload_is_rejected_before_inbox_write(mock_context):
 def test_image_probe_rejects_decompression_bomb_warning_and_unknown_frames():
     from PIL import Image
 
-    from plugins.xiaoqing_chat.media.event_media import _validate_image_resource_limits
-    from plugins.xiaoqing_chat.media.event_media_common import _inspect_image_payload_details
+    from plugins.xiaoqing_chat.media.loading import inspect_image_payload_details
+    from plugins.xiaoqing_chat.media.sources import validate_image_resource_limits
 
     with patch(
         "PIL.Image.open",
         side_effect=Image.DecompressionBombWarning("decompression bomb"),
     ):
         with pytest.raises(ValueError, match="image"):
-            _inspect_image_payload_details(_PNG_BYTES)
+            inspect_image_payload_details(_PNG_BYTES)
 
     with pytest.raises(ValueError, match="frame count unavailable"):
-        _validate_image_resource_limits(
+        validate_image_resource_limits(
             width       = 1,
             height      = 1,
             max_pixels  = 16_000_000,
@@ -154,7 +154,7 @@ def test_image_probe_rejects_decompression_bomb_warning_and_unknown_frames():
 
 
 def test_render_cache_evicts_old_entries_at_fixed_capacity(mock_context):
-    from plugins.xiaoqing_chat.media.event_media_common import write_render_cache_entry
+    from plugins.xiaoqing_chat.media.render_cache import write_render_cache_entry
 
     cached_path = _write_png(mock_context.data_dir / "bounded-cache.png")
     for index in range(6):
@@ -194,7 +194,7 @@ def test_render_cache_evicts_old_entries_at_fixed_capacity(mock_context):
 
 
 def test_render_cache_evicts_entries_until_serialized_size_is_bounded(mock_context):
-    from plugins.xiaoqing_chat.media.event_media_common import write_render_cache_entry
+    from plugins.xiaoqing_chat.media.render_cache import write_render_cache_entry
 
     cached_path = _write_png(mock_context.data_dir / "byte-bounded-cache.png")
     max_bytes   = 1_024
@@ -242,7 +242,7 @@ def test_concurrent_inbox_writes_cannot_race_past_disk_quota(mock_context):
     from PIL import Image
 
     from core.atomic_store import atomic_write_bytes as real_atomic_write_bytes
-    from plugins.xiaoqing_chat.media.event_media import _materialize_resolved_media
+    from plugins.xiaoqing_chat.media.sources import _materialize_resolved_media
 
     def png_bytes(color: str) -> bytes:
         buffer = BytesIO()
@@ -273,7 +273,7 @@ def test_concurrent_inbox_writes_cannot_race_past_disk_quota(mock_context):
 
     with (
         patch(
-            "plugins.xiaoqing_chat.media.event_media.atomic_write_bytes",
+            "plugins.xiaoqing_chat.media.sources.atomic_write_bytes",
             side_effect=slow_atomic_write,
         ),
         ThreadPoolExecutor(max_workers=2) as executor,
@@ -297,7 +297,7 @@ async def test_local_media_applies_pixel_budget_before_analysis(mock_context):
     runtime = _make_media_runtime(max_image_pixels=1)
 
     with patch(
-        "plugins.xiaoqing_chat.media.event_media._analyze_media_with_llm",
+        "plugins.xiaoqing_chat.media.event_media.analyze_media_with_llm",
         new=AsyncMock(side_effect=AssertionError("oversize image must not reach analysis")),
     ):
         rendered = await render_local_media_file(
@@ -314,7 +314,7 @@ async def test_render_local_media_file_keeps_blocking_read_off_event_loop(mock_c
     runtime    = _make_media_runtime()
     image_path = _write_png(mock_context.data_dir / "slow_read.png")
     release    = threading.Event()
-    real_read  = _read_file_bounded
+    real_read  = read_file_bounded
 
     def slow_read(path: Path, *, max_bytes: int) -> bytes:
         release.wait(timeout=1)
@@ -328,7 +328,7 @@ async def test_render_local_media_file_keeps_blocking_read_off_event_loop(mock_c
     started_at = loop.time()
     try:
         with patch(
-            "plugins.xiaoqing_chat.media.event_media._read_file_bounded",
+            "plugins.xiaoqing_chat.media.sources.read_file_bounded",
             side_effect=slow_read,
         ):
             render_task = asyncio.create_task(
@@ -364,7 +364,7 @@ async def test_media_blocking_work_has_plugin_local_concurrency_limit():
             with state_lock:
                 active -= 1
 
-    tasks = [asyncio.create_task(_run_media_blocking(blocking_operation)) for _ in range(8)]
+    tasks = [asyncio.create_task(run_media_blocking(blocking_operation)) for _ in range(8)]
     try:
         for _ in range(100):
             if peak == 2:
@@ -392,8 +392,8 @@ async def test_llm_media_preparation_reads_cached_file_once(mock_context):
 
     with (
         patch(
-            "plugins.xiaoqing_chat.media.event_media_analysis._read_file_bounded",
-            wraps=_read_file_bounded,
+            "plugins.xiaoqing_chat.media.event_media_analysis.read_file_bounded",
+            wraps=read_file_bounded,
         ) as bounded_read,
         patch.object(
             Path,
@@ -401,7 +401,7 @@ async def test_llm_media_preparation_reads_cached_file_once(mock_context):
             side_effect=AssertionError("preparation must reuse the bounded read payload"),
         ),
     ):
-        prepared, image_b64, source_size = await _run_media_blocking(
+        prepared, image_b64, source_size = await run_media_blocking(
             _load_and_prepare_media_for_llm,
             resolved,
             max_bytes=1024,
@@ -451,7 +451,7 @@ async def test_render_local_media_file_refreshes_old_fallback_cache_with_explici
         )
 
     with patch(
-        "plugins.xiaoqing_chat.media.event_media._analyze_media_with_llm",
+        "plugins.xiaoqing_chat.media.event_media.analyze_media_with_llm",
         new=AsyncMock(side_effect=_fake_analyze),
     ) as mock_analyze:
         rendered = await render_local_media_file(image_path, context=mock_context, runtime=runtime)
@@ -493,7 +493,7 @@ async def test_render_local_media_file_keeps_old_fallback_cache_without_explicit
     )
 
     with patch(
-        "plugins.xiaoqing_chat.media.event_media._analyze_media_with_llm",
+        "plugins.xiaoqing_chat.media.event_media.analyze_media_with_llm",
         new=AsyncMock(side_effect=AssertionError("should reuse cache")),
     ) as mock_analyze:
         rendered = await render_local_media_file(image_path, context=mock_context, runtime=runtime)
@@ -541,7 +541,7 @@ async def test_render_local_media_file_refreshes_generic_llm_cache_after_prompt_
         )
 
     with patch(
-        "plugins.xiaoqing_chat.media.event_media._analyze_media_with_llm",
+        "plugins.xiaoqing_chat.media.event_media.analyze_media_with_llm",
         new=AsyncMock(side_effect=_fake_analyze),
     ) as mock_analyze:
         rendered = await render_local_media_file(
@@ -567,7 +567,7 @@ def test_parse_marker_accepts_first_valid_marker_and_cleans_residue() -> None:
     assert text_without_outbound_marker("哈哈 [想发表情:笑哭] [想发QQ表情:狗头]") == "哈哈"
     assert strip_outbound_marker_residue("行吧 [想发表情:笑哭") == "行吧"
     assert strip_outbound_marker_residue("行吧[QQ表情：捂脸][图片：猫]") == "行吧"
-    assert parse_marker("[想发表情:这个描述真的太长了吧超过十二字]") is None
+    assert parse_marker("[想发表情:" + "很长的描述" * 9 + "]") is None
 
 
 def test_candidate_hint_does_not_treat_number_as_unpublished_list_index() -> None:
@@ -694,6 +694,17 @@ async def test_resolve_marker_returns_none_when_candidate_missing(mock_context):
 
     assert parsed is not None
     assert await resolve_marker(parsed, context=mock_context, runtime=runtime) is None
+
+
+@pytest.mark.asyncio
+async def test_sticker_marker_naming_a_qq_face_sends_that_face(mock_context):
+    runtime = _make_media_runtime()
+    parsed  = parse_marker("[想发表情:捂脸]")
+
+    assert parsed is not None
+    resolved = await resolve_marker(parsed, context=mock_context, runtime=runtime)
+    assert resolved is not None and resolved.kind == "qq_face"
+    assert "捂脸" in resolved.marker
 
 
 @pytest.mark.asyncio
@@ -875,7 +886,7 @@ async def test_render_local_media_file_retries_generic_llm_cache_on_next_send(mo
     _fake_analyze.calls = 0
 
     with patch(
-        "plugins.xiaoqing_chat.media.event_media._analyze_media_with_llm",
+        "plugins.xiaoqing_chat.media.event_media.analyze_media_with_llm",
         new=AsyncMock(side_effect=_fake_analyze),
     ) as mock_analyze:
         first = await render_local_media_file(
@@ -944,7 +955,9 @@ async def test_render_event_media_text_falls_back_in_configured_provider_order(m
     }
     used_models: list[str] = []
 
-    async def _fake_chat_raw(*, model, messages, **kwargs):
+    async def _fake_chat_raw(*, secrets, messages, **kwargs):
+        # 实际生效的是候选上固定的 profile，而不是展示用的 model 字段。
+        model = secrets["_pinned_model"]
         used_models.append(model)
         if model in {"glm-4.6v-flash", "glm-4.6v"}:
             raise LLMError('retryable_http_429:{"error":{"code":"1305","message":"busy"}}')
@@ -970,7 +983,7 @@ async def test_render_event_media_text_falls_back_in_configured_provider_order(m
 
     with (
         patch(
-            "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+            "plugins.xiaoqing_chat.media.sources._download_url_bytes",
             new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
         ),
         patch(

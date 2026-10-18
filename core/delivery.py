@@ -15,6 +15,7 @@ from .message import validate_message_segments
 logger = logging.getLogger(__name__)
 
 DELIVERY_RECEIPT_KEY = "_delivery_receipt"
+SENSITIVE_ACTION_KEY = "_sensitive_action"
 DeliveryCallback     = Callable[[], Awaitable[None] | None]
 
 
@@ -222,9 +223,13 @@ async def send_with_receipt(
 
 
 def strip_receipt(action: dict[str, Any]) -> dict[str, Any]:
-    """复制并移除内部 receipt，防止 transport 序列化内部回调对象。"""
+    """复制动作并移除投递收据和敏感标记，供 transport 序列化。"""
 
-    return {key: value for key, value in action.items() if key != DELIVERY_RECEIPT_KEY}
+    return {
+        key: value
+        for key, value in action.items()
+        if key not in {DELIVERY_RECEIPT_KEY, SENSITIVE_ACTION_KEY}
+    }
 
 
 async def resolve_action_handoff(action: dict[str, Any], *, delivered: bool) -> dict[str, Any]:

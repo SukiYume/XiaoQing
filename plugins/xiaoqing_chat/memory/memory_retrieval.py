@@ -14,15 +14,17 @@ import logging
 import re
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from ..config.config import MemoryConfig
-from ..llm.llm_client import chat_completions_raw_with_fallback_paths
+from ..llm.gateway import chat_completions_raw_with_fallback_paths, extract_response_content
+from ..llm.llm_config import LLMCallConfig
 from ..llm.prompt_builder import ChatMessage, build_dialogue_prompt
 from ..message_parts import render_stored_message
 from ..utils.json_parsing import parse_first_json_object
+from ..utils.text import clip_text
 from .memory import StoredMessage
 from .memory_db import MemoryDB, RetrievedItem
 from .thinking_back import append_record, get_cached_answer
@@ -366,7 +368,7 @@ def _tool_query_chat_history(
         if not text:
             continue
         if q in text.lower():
-            lid    = getattr(msg, "local_id", "") or ""
+            lid    = msg.local_id
             prefix = f"{lid} " if lid else ""
             out.append(f"{prefix}{msg.role}:{msg.name}<{msg.user_id}>:{text}")
         if len(out) >= limit:
@@ -472,17 +474,51 @@ def _bounded_memory_text(text: str, cfg: MemoryConfig) -> str:
     """限制长期记忆在主提示词中的体积，确保近期对话保持主导。"""
 
     value = str(text or "").strip()
-    limit = max(0, cfg.max_block_chars)
-    if limit <= 0 or len(value) <= limit:
-        return value
-    if limit == 1:
-        return "…"
-    return value[: limit - 1].rstrip() + "…"
+    # max_block_chars=0 表示不限制体积。
+    return clip_text(value, cfg.max_block_chars) if cfg.max_block_chars > 0 else value
 
 
 def _format_memory_items(items: Sequence[RetrievedItem], cfg: MemoryConfig) -> str:
     lines = [f"- {it.text.strip()}" for it in items if str(it.text or "").strip()]
     return _bounded_memory_text("\n".join(lines), cfg)
+
+
+def _assistant_tool_call_message(tool_calls: Sequence[Any]) -> dict[str, Any]:
+    return {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": call.call_id,
+                "type": "function",
+                "function": {
+                    "name": call.name,
+                    "arguments": json.dumps(call.arguments, ensure_ascii=False),
+                },
+            }
+            for call in tool_calls
+        ],
+    }
+
+
+async def _run_memory_tool_call(
+    call: Any, tool_impl: dict[str, ToolFunc], *, has_evidence: bool
+) -> dict[str, Any]:
+    """执行一次工具调用；found_answer 必须在已取得非空检索证据后才被接受。"""
+    if call.name == "found_answer":
+        if not has_evidence:
+            return {"error": "memory_evidence_required"}
+        return {"done": True, "final": str(call.arguments.get("answer", "")).strip()}
+    if call.name == "not_enough_info":
+        return {"done": True, "final": ""}
+    fn = tool_impl.get(call.name)
+    if not fn:
+        return {"error": "unknown_memory_tool"}
+    return await asyncio.to_thread(_execute_memory_tool, fn, call.arguments)
+
+
+def _has_retrieval_evidence(result: dict[str, Any]) -> bool:
+    return any(isinstance(result.get(key), list) and result[key] for key in ("items", "snippets"))
 
 
 async def react_retrieve(
@@ -493,12 +529,7 @@ async def react_retrieve(
     chat_id: str,
     question: str,
     memory_db: MemoryDB,
-    temperature: float,
-    top_p: float,
-    max_tokens: int,
-    timeout_seconds: float,
-    max_retry: int,
-    retry_interval_seconds: float,
+    llm: LLMCallConfig,
 ) -> str:
     """执行有界工具循环；只有非空检索证据可以授权最终答案。"""
 
@@ -513,16 +544,8 @@ async def react_retrieve(
         "query_person_info": lambda a: _tool_query_db(
             memory_db, a, type_filter="person_info", chat_id=chat_id
         ),
-        "query_words": lambda a: _tool_query_global_db(
-            memory_db,
-            a,
-            type_filter="word_def",
-        ),
-        "query_knowledge": lambda a: _tool_query_global_db(
-            memory_db,
-            a,
-            type_filter="knowledge",
-        ),
+        "query_words": lambda a: _tool_query_global_db(memory_db, a, type_filter="word_def"),
+        "query_knowledge": lambda a: _tool_query_global_db(memory_db, a, type_filter="knowledge"),
         "query_person_profile": lambda a: _tool_get_person_profile(memory_db, a, chat_id=chat_id),
     }
 
@@ -531,70 +554,34 @@ async def react_retrieve(
     api_call_count = 0
     has_evidence   = False
 
+    def log_done(suffix: str = "") -> None:
+        _logger.info(
+            "memory_retrieval agent api_calls=%d elapsed=%.2fs%s",
+            api_call_count,
+            time.monotonic() - started,
+            suffix,
+        )
+
     for _ in range(max(1, int(cfg.max_agent_iterations))):
         if time.monotonic() - started > float(cfg.agent_timeout_seconds):
             break
         api_call_count += 1
         resp, _ = await chat_completions_raw_with_fallback_paths(
-            secrets                = secrets,
-            messages               = messages,
-            temperature            = min(0.4, temperature),
-            top_p                  = top_p,
-            max_tokens             = min(768, max_tokens),
-            timeout_seconds        = timeout_seconds,
-            max_retry              = max_retry,
-            retry_interval_seconds = retry_interval_seconds,
-            tools                  = _tools_schema(),
-            tool_choice            = "auto",
+            secrets     = secrets,
+            messages    = messages,
+            tools       = _tools_schema(),
+            tool_choice = "auto",
+            **llm.bounded(max_temperature=0.4, max_tokens=768).as_kwargs(),
         )
         tool_calls = _extract_tool_calls(resp)
         if not tool_calls:
-            content = (((resp.get("choices") or [{}])[0] or {}).get("message") or {}).get(
-                "content"
-            ) or ""
-            return str(content).strip() if has_evidence else ""
+            return extract_response_content(resp).strip() if has_evidence else ""
 
-        messages.append(
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": call.call_id,
-                        "type": "function",
-                        "function": {
-                            "name": call.name,
-                            "arguments": json.dumps(call.arguments, ensure_ascii=False),
-                        },
-                    }
-                    for call in tool_calls
-                ],
-            }
-        )
-
+        messages.append(_assistant_tool_call_message(tool_calls))
         final: str | None = None
         for call in tool_calls:
-            fn = tool_impl.get(call.name)
-            result: dict[str, Any]
-            if call.name == "found_answer":
-                if has_evidence:
-                    result = {
-                        "done": True,
-                        "final": str(call.arguments.get("answer", "")).strip(),
-                    }
-                else:
-                    result = {"error": "memory_evidence_required"}
-            elif call.name == "not_enough_info":
-                result = {"done": True, "final": ""}
-            elif not fn:
-                result = {"error": "unknown_memory_tool"}
-            else:
-                result = await asyncio.to_thread(_execute_memory_tool, fn, call.arguments)
-                for result_key in ("items", "snippets"):
-                    values = result.get(result_key)
-                    if isinstance(values, list) and values:
-                        has_evidence = True
-                        break
+            result = await _run_memory_tool_call(call, tool_impl, has_evidence=has_evidence)
+            has_evidence = has_evidence or _has_retrieval_evidence(result)
             if result.get("done") is True and isinstance(result.get("final"), str):
                 final = result["final"]
             messages.append(
@@ -606,20 +593,11 @@ async def react_retrieve(
                 }
             )
         if final is not None:
-            _logger.info(
-                "memory_retrieval agent api_calls=%d elapsed=%.2fs",
-                api_call_count,
-                time.monotonic() - started,
-            )
+            log_done()
             return final
-
         await asyncio.sleep(0)
 
-    _logger.info(
-        "memory_retrieval agent api_calls=%d elapsed=%.2fs (exhausted)",
-        api_call_count,
-        time.monotonic() - started,
-    )
+    log_done(" (exhausted)")
     return ""
 
 
@@ -652,6 +630,66 @@ def _needs_memory_agent(text: str) -> bool:
     )
 
 
+_MEMORY_PREFIX      = "你回忆起了以下信息：\n"
+_MEMORY_SOFT_BUDGET = 4.0
+
+
+async def _retrieval_question(
+    *,
+    secrets: dict[str, Any],
+    cfg: MemoryConfig,
+    bot_name: str,
+    history: Sequence[StoredMessage],
+    current_text: str,
+    planner_question: str,
+    llm: LLMCallConfig,
+) -> str:
+    """优先用规划器的问题，其次是简短的当前消息，再让模型生成检索问题，最后截断当前消息。"""
+
+    current_query = str(current_text or "").strip()
+    question      = planner_question.strip()
+    if not question and current_query and len(current_query) <= 120:
+        question = current_query
+    if not question and cfg.planner_question:
+        msgs = build_question_messages(
+            bot_name=bot_name, history=history, current_text=current_text
+        )
+        try:
+            raw, _ = await asyncio.wait_for(
+                chat_completions_raw_with_fallback_paths(
+                    secrets       = secrets,
+                    messages      = [{"role": m.role, "content": m.content} for m in msgs],
+                    extra_payload = {"response_format": {"type": "json_object"}},
+                    **replace(
+                        llm.bounded(max_temperature=0.5, max_tokens=256),
+                        timeout_seconds        = min(3.0, float(llm.timeout_seconds)),
+                        max_retry              = 0,
+                        retry_interval_seconds = 0.2,
+                    ).as_kwargs(),
+                ),
+                timeout=min(2.0, _MEMORY_SOFT_BUDGET),
+            )
+            question = _parse_question_json(extract_response_content(raw))
+        except Exception:
+            question = ""
+    return question or current_query[:240].rstrip()
+
+
+async def _remember_answer(
+    data_dir: Path, chat_id: str, question: str, answer: str, cfg: MemoryConfig
+) -> str:
+    if cfg.enable_thinking_back_cache:
+        await asyncio.to_thread(
+            append_record,
+            data_dir    = data_dir,
+            chat_id     = chat_id,
+            question    = question,
+            answer      = answer,
+            max_entries = int(cfg.thinking_back_max_entries or 200),
+        )
+    return f"{_MEMORY_PREFIX}{answer}\n"
+
+
 async def build_memory_block(
     *,
     data_dir: Path,
@@ -663,52 +701,21 @@ async def build_memory_block(
     current_text: str,
     planner_question: str,
     memory_db: MemoryDB,
-    temperature: float,
-    top_p: float,
-    max_tokens: int,
-    timeout_seconds: float,
+    llm: LLMCallConfig,
 ) -> str:
     """按“缓存 → 直接向量命中 → 有证据工具代理”顺序构造有界记忆块。"""
 
     if not cfg.enable_memory_retrieval:
         return ""
-    soft_budget               = 4.0
-    explicit_planner_question = planner_question.strip()
-    question                  = explicit_planner_question
-    current_query             = str(current_text or "").strip()
-    if not question and current_query and len(current_query) <= 120:
-        question = current_query
-    if not question and cfg.planner_question:
-        msgs = build_question_messages(
-            bot_name=bot_name, history=history, current_text=current_text
-        )
-        payload_msgs = [{"role": m.role, "content": m.content} for m in msgs]
-        try:
-            raw, _ = await asyncio.wait_for(
-                chat_completions_raw_with_fallback_paths(
-                    secrets                = secrets,
-                    messages               = payload_msgs,
-                    temperature            = min(0.5, temperature),
-                    top_p                  = top_p,
-                    max_tokens             = min(256, max_tokens),
-                    timeout_seconds        = min(3.0, float(timeout_seconds)),
-                    max_retry              = 0,
-                    retry_interval_seconds = 0.2,
-                    extra_payload          = {"response_format": {"type": "json_object"}},
-                ),
-                timeout=min(2.0, soft_budget),
-            )
-            content = (((raw.get("choices") or [{}])[0] or {}).get("message") or {}).get(
-                "content"
-            ) or ""
-            question = _parse_question_json(str(content))
-        except Exception:
-            question = ""
-
-    if not question:
-        question = current_query
-        if len(question) > 240:
-            question = question[:240].rstrip()
+    question = await _retrieval_question(
+        secrets          = secrets,
+        cfg              = cfg,
+        bot_name         = bot_name,
+        history          = history,
+        current_text     = current_text,
+        planner_question = planner_question,
+        llm              = llm,
+    )
     if not question:
         return ""
 
@@ -721,67 +728,44 @@ async def build_memory_block(
             window_seconds = float(cfg.thinking_back_window_seconds or 0.0),
         )
         if cached:
-            return f"你回忆起了以下信息：\n{_bounded_memory_text(cached, cfg)}\n"
+            return f"{_MEMORY_PREFIX}{_bounded_memory_text(cached, cfg)}\n"
 
     direct_items = await asyncio.to_thread(
-        _query_direct_memory_items,
-        memory_db,
-        question,
-        cfg     = cfg,
-        chat_id = chat_id,
+        _query_direct_memory_items, memory_db, question, cfg=cfg, chat_id=chat_id
     )
     direct_answer = _format_memory_items(direct_items, cfg)
     if direct_answer:
-        if cfg.enable_thinking_back_cache:
-            await asyncio.to_thread(
-                append_record,
-                data_dir    = data_dir,
-                chat_id     = chat_id,
-                question    = question,
-                answer      = direct_answer,
-                max_entries = int(cfg.thinking_back_max_entries or 200),
-            )
-        return f"你回忆起了以下信息：\n{direct_answer}\n"
+        return await _remember_answer(data_dir, chat_id, question, direct_answer, cfg)
 
     if (
-        bool(getattr(cfg, "agent_on_direct_miss_requires_reference", False))
-        and not explicit_planner_question
+        cfg.agent_on_direct_miss_requires_reference
+        and not planner_question.strip()
         and not _needs_memory_agent(f"{current_text}\n{question}")
     ):
         return ""
-
-    answer = ""
     try:
         answer = await asyncio.wait_for(
             react_retrieve(
-                secrets                = secrets,
-                cfg                    = cfg,
-                history                = history,
-                chat_id                = chat_id,
-                question               = question,
-                memory_db              = memory_db,
-                temperature            = temperature,
-                top_p                  = top_p,
-                max_tokens             = max_tokens,
-                timeout_seconds        = min(4.0, float(timeout_seconds)),
-                max_retry              = 0,
-                retry_interval_seconds = 0.2,
+                secrets   = secrets,
+                cfg       = cfg,
+                history   = history,
+                chat_id   = chat_id,
+                question  = question,
+                memory_db = memory_db,
+                llm       = replace(
+                    llm,
+                    timeout_seconds        = min(4.0, float(llm.timeout_seconds)),
+                    max_retry              = 0,
+                    retry_interval_seconds = 0.2,
+                ),
             ),
-            timeout=float(soft_budget),
+            timeout=_MEMORY_SOFT_BUDGET,
         )
     except Exception:
         answer = ""
     answer = (answer or "").strip()
     if not answer:
         return ""
-    answer = _bounded_memory_text(answer, cfg)
-    if cfg.enable_thinking_back_cache:
-        await asyncio.to_thread(
-            append_record,
-            data_dir    = data_dir,
-            chat_id     = chat_id,
-            question    = question,
-            answer      = answer,
-            max_entries = int(cfg.thinking_back_max_entries or 200),
-        )
-    return f"你回忆起了以下信息：\n{answer}\n"
+    return await _remember_answer(
+        data_dir, chat_id, question, _bounded_memory_text(answer, cfg), cfg
+    )

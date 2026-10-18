@@ -259,6 +259,10 @@ Core 将字符串转换为文本段，将消息段转换为当前用户或群的
 
 主动 WebSocket 连接或 Inbound WebSocket 会话可承载 Action。广播路径受 worker 数量、队列和单连接预算控制。
 
+### 出站观察
+
+非敏感的插件出站 Action 会通知 `core.observe_outgoing_action` 服务的提供者（当前为 `xiaoqing_chat`），让聊天上下文看到其他插件以 Bot 身份发出的通知。设置了 `SENSITIVE_ACTION_KEY` 的 Action（如 Pendo 登录码）跳过观察，标记在传输前移除。
+
 ### 回执
 
 Delivery 层将投递结果返回给回执对象。需要 commit-after-ack 的插件在发送成功后提交提醒、任务或通知状态。
