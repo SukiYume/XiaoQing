@@ -317,7 +317,7 @@ python main.py
 | 图片证据 | 视觉描述有摘要或用户文字支持，不假装看过没读出的图 |
 | 不套模板 | 不是千篇一律的客套话 |
 
-开启 `enable_semantic_checker` 时，另有一次“只读原话”的独立阅读，与候选比较动作主体、时间归属、完成状态、新词含义和双方立场。两路审查并行，共用 `reply_check.timeout_seconds`（默认 30 秒）。
+开启 `enable_semantic_checker` 时，另有一次“只读原话”的独立阅读，与候选比较动作主体、时间归属、完成状态、新词含义和双方立场。两路候选审查并行，共用 `reply_check.timeout_seconds`（默认 30 秒）。独立阅读使用原始对话材料，`always` 模式下与候选生成并行执行，重写时复用材料相同的阅读结果；语义审查拿到阅读结果后继续比较候选。
 
 **审查结果**：问题分为 hard（事实、来源、人设、图片证据等硬错误）和 soft（语气、节奏、措辞）。确认的问题按原因生成定向重写提示，最多重写 `max_regen` 次；普通参与还可以让规划器重新规划 `max_replan` 次。重写次数用完后：
 
@@ -335,7 +335,7 @@ python main.py
 ## 📤 投递
 
 - **分段**：`postprocess.splitter` 按自然边界把长回复拆成至多 `max_sentence_num` 个气泡（每个建议不超过 `max_length` 字）。代码块保持完整，超出气泡数的内容并入最后一条，正文不截断。
-- **打字延迟**（`humanize`）：按阅读和打字速度计算发送前的等待（上限 `max_total_delay_seconds`），气泡之间间隔 `interbubble_min_seconds`～`interbubble_max_seconds`。明确召唤默认不加延迟（`apply_to_forced: false`）。
+- **打字延迟**（`humanize`）：按阅读和打字速度算出从收到消息到发出的目标时长（上限 `max_total_delay_seconds`），扣掉理解、规划、生成和审查已经花掉的时间后，只补等剩余部分；已经超过目标就立即发送。气泡之间间隔 `interbubble_min_seconds`～`interbubble_max_seconds`。明确召唤默认不加延迟（`apply_to_forced: false`）。
 - **过期丢弃**：等待期间同一会话来了新消息或被重置时，旧回复在发送前丢弃。
 - **提交时机**：OneBot 确认发送成功后，依次写入角色的聊天记录、PFC、目标、Heartflow、行动历史，并启动摘要、人物事实提取和表达学习等后台任务。发送被拒或失败时丢弃这一轮的待提交状态，下一轮仍基于已确认的记录。
 

@@ -63,7 +63,7 @@ xiaoqing_chat
 | `smalltalk_models.py` | `PreparedSmalltalkTurn`、`GeneratedSmalltalkTurn` 阶段模型 |
 | `turn_generation.py` | 会话锁内记录用户消息；锁外按强制 / PFC / 直接三条路径生成 |
 | `reply_plan.py` | `ReplyGenerationPlan`：一次性收集上下文块、反应规则、规划目标和人设边界 |
-| `reply_generator.py` | 生成尝试循环：请求、本地预检、媒体解析、审查、上下文收缩 |
+| `reply_generator.py` | 生成尝试循环：预读本轮、请求、本地预检、媒体解析、审查、上下文收缩 |
 | `reply_draft.py` | 回复草稿、分段规范化、出站媒体附加、尝试状态 |
 | `reply_fallbacks.py` | 被拒后的定向重写提示和明确召唤兜底句（`ALL_FALLBACK_TEXTS`） |
 | `turn_delivery.py` | 打字延迟、过期丢弃、分批外发、投递后提交与回滚 |
@@ -90,7 +90,7 @@ xiaoqing_chat
 | `communication_constraints.py` | 原话中的交流要求（停聊、句数、条目数）与群内定义 |
 | `media_evidence.py` | 图片证据块：附件状态、缺图说明；`INBOUND_MEDIA_MARKER_RE`、`marker_visible_speech` |
 | `local_checks.py` | 本地规则：复读、近似照搬、连续发言、凭空经历、身份一致性、纯媒体回复，以及是否需要语义审查 |
-| `reply_checker.py` | 审查入口：本地规则 → 审查模型 → 证据契约解释 |
+| `reply_checker.py` | 审查入口：本地规则 → 审查模型 → 证据契约解释；`TurnReadingCache` 缓存本轮独立阅读 |
 | `evidence.py` | 证据契约：审查模型列出的陈述必须能在原文找到出处，并保持主体与语气 |
 | `arithmetic.py` | 数值依据：份数、折扣、单位换算与两项加减 |
 | `check_result.py` | `ReplyCheckResult`、`ReplyRejected` 与标准拒绝结果 |
@@ -212,6 +212,7 @@ turn_generation.generate_smalltalk_turn
          │
          ▼
        reply_plan.build → reply_generator 尝试循环
+         ├─ 预读本轮（always 模式，与生成并行，各次尝试共用）
          ├─ prompt_builder → gateway(chat) → postprocess
          ├─ marker_resolver 解析媒体意图
          ├─ reply_checker：本地规则 + 语义审查
@@ -220,7 +221,7 @@ turn_generation.generate_smalltalk_turn
   ▼
 turn_delivery.finalize_smalltalk_turn
   ├─ 过期检查（打字期间的新消息、会话重置）
-  ├─ 打字延迟，分批发送，气泡间隔
+  ├─ 打字延迟（目标时长扣除已用时间），分批发送，气泡间隔
   ├─ 投递回执确认 → 提交：助手消息、PFC、目标、Heartflow、行动历史
   │                 → post_reply_tasks：摘要、事实提取、表达学习、策略复盘
   └─ 投递拒绝 / 异常 → 回滚待提交状态
@@ -303,7 +304,9 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 | 图片证据 | `image_evidence_respected`、`visual_claims` |
 | 模板化 | `non_template` |
 
-`llm/evidence.py` 按原文核对每条陈述的出处、主体与语气；`llm/arithmetic.py` 核对数值推导。`enable_semantic_checker` 开启时，另有一次只接收原话的独立阅读，再与候选比较立场、主体、时间和完成状态。两路并行，共用 `reply_check.timeout_seconds`，取消会传播到两路请求；任一路确认的硬错误都会生效，`json_object` 外层封装的结论同样解析。
+`llm/evidence.py` 按原文核对每条陈述的出处、主体与语气；`llm/arithmetic.py` 核对数值推导。`enable_semantic_checker` 开启时，另有一次只接收原话的独立阅读，再与候选比较立场、主体、时间和完成状态。两路候选审查并行执行，共用 `reply_check.timeout_seconds`；独立阅读的超时复用与任务回收由 `TurnReadingCache` 管理。任一路确认的硬错误都会生效，`json_object` 外层封装的结论同样解析。
+
+独立阅读的材料只有对话原文、当前消息、发言者、本群用语和角色名，与候选无关。`TurnReadingCache` 按这组材料缓存一份阅读：`always` 模式下 `reply_generator` 在请求候选前发起预读，语义审查等待这份结果后只做候选比较；重写时材料不变即复用，上下文缩减或材料变化时重新阅读。审查超时只取消本次等待，进行中的阅读留给下一次尝试；阅读失败或无效时本次审查记为不可用，并清空缓存，下次重新阅读。生成结束时取消并回收未用完的阅读。`risk` 模式不预读，只在需要远程审查时阅读，重写时同样复用。
 
 图像证据由 `llm/media_evidence.py` 统一提供给生成与审查，区分“附件存在”和“画面已读出”。缺图时的说明要求像群友一样随口说图没加载出来，不使用画面、读取、解析这类说法；附和用户对未知画面的评价也算确认画面。
 
