@@ -350,7 +350,8 @@ function filteredTasks() {
     return tasks.filter((task) => {
         if (usePlanFilter) {
             if (!planDateMatches(task, _filters.plan, todayKey, _filters.customStart, _filters.customEnd)) return false;
-        } else if (_filters.category && taskTextCategory(task) !== _filters.category) {
+        }
+        if (_filters.category && taskTextCategory(task) !== _filters.category) {
             return false;
         }
         if (_filters.status && taskPrimaryStatus(task) !== _filters.status) return false;
@@ -454,7 +455,7 @@ function deriveDisplayModel(tasks) {
         up_next_tasks: sortTasks(upNextTasks),
         later_tasks: sortTasks(laterTasks),
         backlog_tasks: sortTasks(backlogTasks),
-        closed_recent: sortDone(closed).slice(0, 8),
+        closed_tasks: sortDone(closed),
         plan_load: planLoad,
         text_category_count: textCategoryCount,
         completion_bars: completionDays,
@@ -966,7 +967,7 @@ function renderListView(model) {
             ${showActive ? renderSection('今天与滞后', '优先清理今天计划和已经拖后的任务。', model.focus_tasks) : ''}
             ${showActive ? renderSection('未来 7 天', '接下来一周内需要继续跟进的事项。', model.up_next_tasks) : ''}
             ${showActive ? renderSection('更晚与未安排', '更晚的计划日期，以及尚未安排日期的任务。', [...model.later_tasks, ...model.backlog_tasks]) : ''}
-            ${showClosed ? renderSection('最近结束', '已完成和已取消的任务。', model.closed_recent) : ''}
+            ${showClosed ? renderSection('已结束', '全部匹配的已完成和已取消任务，按结束时间从近到远排列。', model.closed_tasks) : ''}
         </div>`;
 }
 
@@ -1220,9 +1221,7 @@ function attachListeners() {
     const handlePlanChange = (value) => {
         const plan = PLAN_FILTER_VALUES.has(value) ? value : '';
         _filters.plan = plan;
-        if (plan) {
-            _filters.category = '';
-        } else {
+        if (!plan) {
             _filters.customStart = '';
             _filters.customEnd = '';
         }
@@ -1240,11 +1239,6 @@ function attachListeners() {
             const categories = new Set(renderCategoryOptions(_overview?.all_tasks).map((option) => option.value));
             const category = categories.has(value) ? value : '';
             _filters.category = category;
-            if (category) {
-                _filters.plan = '';
-                _filters.customStart = '';
-                _filters.customEnd = '';
-            }
             renderPage();
         },
         'tasks-filter-status': (value) => {

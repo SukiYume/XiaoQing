@@ -133,8 +133,27 @@ export function showModal(title, contentValue, options = {}) {
     modalOpen = true;
 
     closeButton.onclick = closeModal;
+    // 一次遮罩点击的按下和松开都须位于遮罩，保护框内拖选和拖动。
+    let backdropPointer = null;
+    let backdropClick   = false;
+    overlay.onpointerdown = (event) => {
+        backdropPointer = event.target === overlay && event.button === 0
+            ? event.pointerId : null;
+        backdropClick = false;
+    };
+    overlay.onpointerup = (event) => {
+        backdropClick = backdropPointer !== null
+            && event.pointerId === backdropPointer && event.target === overlay;
+        backdropPointer = null;
+    };
+    overlay.onpointercancel = () => {
+        backdropPointer = null;
+        backdropClick = false;
+    };
     overlay.onclick = (event) => {
-        if (event.target === overlay) closeModal();
+        const shouldClose = backdropClick && event.target === overlay;
+        backdropClick = false;
+        if (shouldClose) closeModal();
     };
     closeButton.focus();
     return instance;
@@ -159,6 +178,9 @@ export function closeModal(expectedInstance = null) {
     if (overlay) {
         overlay.style.display = 'none';
         overlay.onclick = null;
+        overlay.onpointerdown = null;
+        overlay.onpointerup = null;
+        overlay.onpointercancel = null;
         overlay.removeAttribute('aria-labelledby');
     }
     content?.replaceChildren();
