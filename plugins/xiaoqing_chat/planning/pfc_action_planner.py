@@ -26,6 +26,9 @@ from .pfc_utils import get_items_from_json
 
 _logger = logging.getLogger("plugin.xiaoqing_chat")
 
+# 问句距离上一位群友的发言在这个时间内，视为在接对方的话。
+_EXCHANGE_FOLLOWUP_SECONDS = 90.0
+
 _ALLOWED_PLANNER_ACTIONS = frozenset(
     {
         "block_and_ignore",
@@ -92,7 +95,7 @@ PROMPT_INITIAL_REPLY_COMPACT = (
 {goals_str}
 
 【决策指导——请逐条思考】
-1. 先判断最新消息的说话人、目标对象和它与前文的关系，不把别人之间的互动误当成在叫你
+1. 先判断最新消息的说话人、目标对象和它与前文的关系，不把别人之间的互动误当成在叫你；消息里写着“@某人”就是在叫那个人，@的不是你时不要替对方回答
 2. 你是活跃的群友，没被点名也可以加入：能补充相关的看法、知识、自己的经历，或接住笑点和情绪时，选择 direct_reply
 3. 群友正在接连复读同一句时，跟一句队形算接梗，可以 direct_reply；除此之外只能复述、空泛附和、转述别人之间谁在问谁，或重复追问时，选择 wait 或 listening；面向全群的交流信号不自动等于必须回复，话题已收尾、别人正在一对一说事或你刚连续发过言时也留出空间
 4. 对方明确追问你、纠正你或延续你刚才的话时，通常适合继续；明确拒聊、厌烦或转向别人时，应留出空间
@@ -116,7 +119,7 @@ PROMPT_FOLLOW_UP_COMPACT = (
 {goals_str}
 
 【决策指导——请逐条思考】
-1. 先判断最新消息是否在回应、追问或纠正你；如果不是，再判断它是否面向全群以及你能否补充新内容
+1. 先判断最新消息是否在回应、追问或纠正你；如果不是，再判断它是否面向全群以及你能否补充新内容。“@某人”是在叫那个人，@的不是你时不要替对方回答
 2. 你刚刚已经发过消息，默认给其他人留出轮次；只有对话确实需要你继续承接时才再次发言。群友接连复读同一句时，跟一句队形属于接梗，不算抢话；你已经跟过同一句就不再跟
 3. 不以有没有 @、消息长短或是否包含问号作为单一依据，要综合对象、相关性、时机和新增内容
 4. 对方继续交流时可以回应；出现拒聊、厌烦、自然收尾或话题已被别人接住时，选择 wait、listening 或 end_conversation
@@ -197,6 +200,21 @@ def _time_since_last_bot(history: Sequence[StoredMessage]) -> str:
             return f"提示：你上一条成功发送的消息是在 {diff:.1f} 秒前。\n"
         return ""
     return ""
+
+
+def _follows_another_speaker(history: Sequence[StoredMessage]) -> bool:
+    """本轮消息是否紧跟另一位群友的发言；历史末条即本轮消息。"""
+
+    if len(history) < 2:
+        return False
+    current, previous = history[-1], history[-2]
+    if current.role != "user" or previous.role != "user":
+        return False
+    if current.user_id is None or previous.user_id in (None, current.user_id):
+        return False
+    if not current.ts or not previous.ts:
+        return False
+    return 0.0 <= float(current.ts) - float(previous.ts) <= _EXCHANGE_FOLLOWUP_SECONDS
 
 
 def _planner_total_timeout_seconds(secrets: dict[str, Any], timeout_seconds: float) -> float:
@@ -284,6 +302,9 @@ async def plan_next_action(
         # 分类器已经排除点给其他人的消息；上游频控也已经完成概率、间隔和限流。
         # 新鲜轮次里的明确全群邀请直接回复，避免规划器仅凭“没点名”再次否决。
         participation_cue = _group_participation_cue(current_text)
+        if participation_cue == "open_question" and _follows_another_speaker(history):
+            # 紧接着别人说的问句多半是在接对方的话（“藤子 ban 吗？”），谁问谁交给规划器判断。
+            participation_cue = ""
         if participation_cue:
             return PFCPlan(
                 action = "direct_reply",

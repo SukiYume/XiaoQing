@@ -16,6 +16,7 @@ from typing import Any, cast
 
 from core.message import iter_message_segments
 
+from ..chat_event import mention_text_segments
 from ..media_registry import resolve_registered_media_items
 from ..message_parts import build_text_message_parts, normalize_message_parts
 from .emoji_library import collect_emoji_candidate
@@ -489,7 +490,7 @@ def _compose_effective_user_text(
 ) -> str:
     """按原始消息顺序交错组合清洗文本与渲染标记。"""
 
-    segments = list(iter_message_segments(event))
+    segments = mention_text_segments(event)
     if not segments:
         return (clean_text or "").strip()
 
@@ -568,7 +569,7 @@ def _compose_effective_user_parts(
 ) -> tuple[dict[str, Any], ...]:
     """在保留清洗后片段顺序的同时构造结构化模型输入。"""
 
-    segments = list(iter_message_segments(event))
+    segments = mention_text_segments(event)
     if not segments:
         return cast(
             tuple[dict[str, Any], ...],

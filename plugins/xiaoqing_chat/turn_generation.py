@@ -53,16 +53,6 @@ def _fallback_idle_reply(runtime: ChatRuntime) -> str:
     return random.choice(candidates)
 
 
-async def _execute_planner_wait(result: PFCRunResult) -> None:
-    """在生成层执行一次规划等待，期间不持有会话锁。"""
-    action = result.action.strip()
-    if action not in {"wait", "listening"} or result.reply.strip():
-        return
-    wait_seconds = min(30.0, max(0.0, float(result.wait_seconds)))
-    if wait_seconds > 0:
-        await asyncio.sleep(wait_seconds)
-
-
 async def commit_planner_snapshot(state, runtime: ChatRuntime, chat_id: str, snapshot) -> None:
     """写回规划器快照，并让会话目标跟随规划器排第一的目标；调用方持有会话锁。"""
 
@@ -218,9 +208,11 @@ class _TurnGenerator:
             state_override  = generated.pfc_state_snapshot,
             persist_state   = False,
         )
+        # wait / listening 直接按不发言结束本轮，不在这里睡 wait_seconds：Core 按“群 + 用户”
+        # 串行处理事件，这里每睡一秒，同一个人接着发的消息就晚一秒进来；本轮还占着生成
+        # 配额，别人的新消息进来也会被挡掉。下一条消息自然会触发新一轮判断。
         generated.pfc_result = result
-        await _execute_planner_wait(result)
-        generated.reply = (result.reply or "").strip()
+        generated.reply      = (result.reply or "").strip()
         self.log(
             "smalltalk.pfc.done",
             {

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -12,9 +12,7 @@ from plugins.xiaoqing_chat.memory.memory_db import RetrievedItem
 from plugins.xiaoqing_chat.memory.memory_retrieval import _query_direct_memory_items
 from plugins.xiaoqing_chat.planning.heartflow import HeartflowEngine, HeartflowState
 from plugins.xiaoqing_chat.planning.pfc_action_planner import plan_next_action
-from plugins.xiaoqing_chat.planning.pfc_engine import PFCRunResult
 from plugins.xiaoqing_chat.planning.pfc_utils import get_items_from_json
-from plugins.xiaoqing_chat.turn_generation import _execute_planner_wait
 from plugins.xiaoqing_chat.utils.json_parsing import (
     parse_first_json_array,
     parse_first_json_object,
@@ -101,25 +99,6 @@ async def test_compact_planner_prompt_keeps_all_computed_context(
     for sentinel in ("目标哨兵", "知识哨兵", "行动概要哨兵", "上次行动哨兵", "超时哨兵"):
         assert sentinel in prompt
     assert captured["total_timeout_seconds"] == pytest.approx(2.3)
-
-
-@pytest.mark.asyncio
-async def test_generation_layer_executes_propagated_planner_wait(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    sleep = AsyncMock()
-    monkeypatch.setattr("plugins.xiaoqing_chat.turn_generation.asyncio.sleep", sleep)
-    result = PFCRunResult(
-        reply        = "",
-        action       = "wait",
-        reason       = "give the user space",
-        ended        = False,
-        wait_seconds = 12.5,
-    )
-
-    await _execute_planner_wait(result)
-
-    sleep.assert_awaited_once_with(12.5)
 
 
 def test_direct_memory_query_strictly_reranks_and_limits_top_k() -> None:
