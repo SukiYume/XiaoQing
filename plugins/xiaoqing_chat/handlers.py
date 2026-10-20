@@ -21,7 +21,17 @@ from .attention_gate import decide_attention
 from .brain_chat import (
     is_brain_chat_active,
 )
-from .chat_event import event_chat_id, is_bot_mentioned, is_private_event, mentions_bot_name
+from .chat_event import (
+    EVERYONE_MENTION_ID,
+    EVERYONE_MENTION_LABEL,
+    MENTION_LABELS_KEY,
+    event_chat_id,
+    is_bot_mentioned,
+    is_private_event,
+    mentions_bot_name,
+    other_mentions,
+    text_with_mentions,
+)
 from .chat_runtime import (
     chat_lock,
     configured_bot_name,
@@ -34,7 +44,7 @@ from .config.config import DEFAULT_BOT_NAME_ONLY_REPLIES
 from .expression.bw_expression_reflector import maybe_ask_for_reflection
 from .expression.bw_reflect_tracker import tick_reflect_tracker
 from .frequency_control import decide_reply
-from .generation_limiter import GenerationLimitExceeded
+from .generation_limiter import CHAT_SUPERSEDED, GenerationLimitExceeded
 from .handler_context import HandlerContext
 from .llm.check_result import ReplyRejected
 from .llm.communication_constraints import requests_silence
@@ -112,6 +122,8 @@ _SENSITIVE_EXTERNAL_TEXT_RE = re.compile(
 )
 
 _BOT_NAME_ONLY_FOLLOWUP_TTL_SECONDS = 60.0
+# 同一会话已有一轮在生成时，新一轮最多排队这么久；旧一轮看到新消息会在下一个检查点退出。
+_CHAT_GENERATION_QUEUE_SECONDS = 20.0
 
 
 def _should_skip_external_bot_memory(text: str, source_plugin: str, cfg: Any | None = None) -> bool:
@@ -275,6 +287,8 @@ def _chat_text_with_addressee(clean_text: str, event: dict[str, Any], bot_name: 
     """恢复 Core 为命令路由剥掉的句首称呼，聊天历史才能分清这句话是对谁说的。"""
 
     text = str(clean_text or "").strip()
+    if event.get(MENTION_LABELS_KEY):
+        text = text_with_mentions(event) or text
     if not text or not bot_name or text.startswith(bot_name):
         return text
     raw_text = (
@@ -284,6 +298,36 @@ def _chat_text_with_addressee(clean_text: str, event: dict[str, Any], bot_name: 
     if raw_text.startswith(bot_name) or is_bot_mentioned(event):
         return f"{bot_name}，{text}"
     return text
+
+
+async def _label_other_mentions(event: dict[str, Any], state, chat_id: str) -> None:
+    """给本轮 @ 的其他成员取展示名：优先用段内名字，其次用群里最近的发言名。"""
+
+    if MENTION_LABELS_KEY in event:
+        return
+    mentions = other_mentions(event)
+    if not mentions:
+        event[MENTION_LABELS_KEY] = {}
+        return
+    known: dict[str, str] = {}
+    if any(not name and target != EVERYONE_MENTION_ID for target, name in mentions):
+        for message in await state.memory_store.get_recent_async(chat_id, max_items=200):
+            if message.role == "user" and message.user_id is not None and message.name:
+                known[str(message.user_id)] = message.name
+    labels: dict[str, str] = {}
+    for target, name in mentions:
+        if target == EVERYONE_MENTION_ID:
+            labels[target] = EVERYONE_MENTION_LABEL
+        else:
+            labels[target] = f"@{name or known.get(target) or f'用户{target}'}"
+    event[MENTION_LABELS_KEY] = labels
+
+
+async def _chat_text_for_turn(
+    clean_text: str, event: dict[str, Any], bot_name: str, state, chat_id: str
+) -> str:
+    await _label_other_mentions(event, state, chat_id)
+    return _chat_text_with_addressee(clean_text, event, bot_name)
 
 
 def _command_token(text: str) -> str:
@@ -322,8 +366,12 @@ async def observe_message(clean_text: str, event: dict[str, Any], context) -> li
         if _is_prefixed_xc_command_observation(clean_text, event, context):
             return []
 
-        text = await build_effective_user_text(
-            _chat_text_with_addressee(clean_text, event, configured_bot_name(context)),
+        chat_id = event_chat_id(event)
+        state   = bound_state(context)
+        text    = await build_effective_user_text(
+            await _chat_text_for_turn(
+                clean_text, event, configured_bot_name(context), state, chat_id
+            ),
             event,
             context = context,
             runtime = runtime,
@@ -333,8 +381,6 @@ async def observe_message(clean_text: str, event: dict[str, Any], context) -> li
         if is_ignored_text(text, runtime):
             return []
 
-        chat_id = event_chat_id(event)
-        state   = bound_state(context)
         async with chat_lock(chat_id):
             await ensure_user_message_recorded(text, event, context, runtime, state=state)
     except Exception as exc:
@@ -585,7 +631,7 @@ async def _prepare_smalltalk_turn(
 
     runtime, state, chat_id = hctx.runtime, hctx.state, hctx.chat_id
     text = await build_effective_user_text(
-        _chat_text_with_addressee(clean_text, event, hctx.bot_name),
+        await _chat_text_for_turn(clean_text, event, hctx.bot_name, state, chat_id),
         event,
         context = context,
         runtime = runtime,
@@ -663,6 +709,7 @@ async def _maybe_reply_smalltalk(
             max_per_chat               = max(0, runtime.cfg.max_generation_inflight_per_chat),
             max_per_user               = max(0, runtime.cfg.max_generation_inflight_per_user),
             max_calls_per_user_per_day = max(0, runtime.cfg.max_generation_calls_per_user_per_day),
+            chat_wait_seconds          = _CHAT_GENERATION_QUEUE_SECONDS,
         ):
             generated = await generate_smalltalk_turn(prepared, event, context, hctx)
             return await finalize_smalltalk_turn(
@@ -681,7 +728,10 @@ async def _maybe_reply_smalltalk(
             step    = "smalltalk.generation_limited",
             fields  = {"limit": str(exc), "forced": prepared.forced},
         )
-        return segments("消息有点多，我缓一下再回") if prepared.forced else []
+        # 被同会话更新的消息顶替时由新一轮接手，不再发忙碌提示。
+        if not prepared.forced or str(exc) == CHAT_SUPERSEDED:
+            return []
+        return segments("消息有点多，我缓一下再回")
 
 
 async def call_bot_name_only(context) -> list[dict[str, Any]]:

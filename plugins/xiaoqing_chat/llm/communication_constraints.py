@@ -83,6 +83,15 @@ def forbids_followup_questions(text: str) -> bool:
     return _NO_QUESTION_REQUEST.search(text) is not None
 
 
+# “不是叫你”“@的不是你”：告诉机器人刚才那句不是对它说的，句子到此结束才算。
+_NOT_ADDRESSED_TO_YOU_RE = re.compile(
+    r"(?:(?:不是|没有?|并没有?)(?:在)?(?:叫|喊|找|问|说|艾特|@|at|cue)你"
+    r"|(?:叫|喊|找|问|说|艾特|@|at|cue)的(?:人)?不是你)"
+    r"(?=[啦了哈呀啊哦喔噢嗷]*(?:[，。！!,.~～…\s]|$))",
+    re.IGNORECASE,
+)
+
+
 def requests_silence(text: str) -> bool:
     """识别当前说话人明确提出的停聊或安静请求。"""
     direct = _without_quotes(text)
@@ -97,6 +106,7 @@ def requests_silence(text: str) -> bool:
             r"|(?:我(?:只)?想|让我)(?:先)?(?:安静(?:待)?(?:一会儿?|会儿?)|静一静|静静)",
             direct,
         )
+        or _NOT_ADDRESSED_TO_YOU_RE.search(direct)
     )
 
 

@@ -199,7 +199,7 @@ handle_smalltalk → _prepare_smalltalk_turn
   └─ PreparedSmalltalkTurn
   │
   ▼
-generation_limiter.admit                    全局 / 会话 / 用户 / 日配额
+generation_limiter.admit                    全局 / 会话 / 用户 / 日配额；会话配额排队，最新一轮优先
   │
   ▼
 turn_generation.generate_smalltalk_turn
@@ -227,7 +227,7 @@ turn_delivery.finalize_smalltalk_turn
   └─ 投递拒绝 / 异常 → 回滚待提交状态
 ```
 
-阶段之间只传递 `PreparedSmalltalkTurn`、`GeneratedSmalltalkTurn` 和 `ReplyPayload`，不共享松散字典。规划等待（`wait`）在生成层执行，期间不持有会话锁。被审查拒绝的普通参与轮次会写回 PFC 快照，让下一轮从新状态出发。
+阶段之间只传递 `PreparedSmalltalkTurn`、`GeneratedSmalltalkTurn` 和 `ReplyPayload`，不共享松散字典。规划器选择 `wait` / `listening` 时本轮立即以不发言结束，不在 handler 里等待：Core 按“群 + 用户”串行处理事件，等待会推迟同一个人后续消息的处理，还会占住会话生成配额。被审查拒绝的普通参与轮次会写回 PFC 快照，让下一轮从新状态出发。
 
 ---
 
@@ -251,6 +251,8 @@ turn_delivery.finalize_smalltalk_turn
 4. `_streak_adjusted`：连续沉默 3 轮 ×1.2（≤ 0.90），5 轮 ×1.4（≤ 0.95）。
 5. 掷骰，结果与概率、掷值、沉默轮数一起写入 `ReplyGateDecision`，`smalltalk.no_reply` 日志直接输出这些字段。
 
+Core 提取正文时只保留文本段。`handlers._label_other_mentions` 把 `@` 其他成员的段落按原位置还原为 `@名字` 再进入有效文本、媒体合成和历史，硬限制、参与线索、规划器和回复提示都依据这份文本判断这句话在叫谁。
+
 私聊深度对话模式跳过第 2～4 步。通过后，规划开启时进入 PFC，关闭时直接起草；参与线索只影响概率，不改变路径。
 
 ---
@@ -262,7 +264,7 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 | 动作 | 结果 |
 |---|---|
 | `direct_reply` / `send_new_message` | 回调 `_TurnGenerator.planner_reply` 按动作模式起草 |
-| `wait` / `listening` | 不发言；`wait` 在生成层等待后结束本轮 |
+| `wait` / `listening` | 不发言，本轮立即结束；`wait_seconds` 只写入日志 |
 | `rethink_goal` | `pfc_goal_analyzer` 更新目标 |
 | `fetch_knowledge` | 检索知识库后再规划 |
 | `end_conversation` | 结束话题，状态置为 ended |
