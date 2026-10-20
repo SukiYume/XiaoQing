@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.message import contains_bot_name, extract_text, has_at_mention
+from core.message import contains_bot_name, extract_text, has_at_mention, iter_message_segments
+
+# 本轮 @ 对象的展示文本，由 handlers 按 QQ 号写入事件，媒体合成与历史记录共用。
+MENTION_LABELS_KEY     = "_xc_mention_labels"
+EVERYONE_MENTION_ID    = "all"
+EVERYONE_MENTION_LABEL = "@全体成员"
 
 
 def event_chat_id(event: dict[str, Any]) -> str:
@@ -46,3 +51,59 @@ def mentions_bot_name(event: dict[str, Any], bot_name: str) -> bool:
         return False
     text = extract_text(event.get("message")).strip()
     return contains_bot_name(text, bot_name)
+
+
+def other_mentions(event: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+    """按出现顺序返回 @ 的其他对象 ``(QQ 号, 段内名字)``；@机器人自己不算。
+
+    Core 提取正文时只保留文本段，@ 段会整段丢掉；不在这里取回，"@别人 喂"
+    到了聊天里就只剩一句"喂"。
+    """
+
+    self_id                      = str(event.get("self_id", "") or "")
+    found: list[tuple[str, str]] = []
+    for segment in iter_message_segments(event):
+        if str(segment.get("type", "") or "") != "at":
+            continue
+        data   = segment.get("data", {}) or {}
+        target = str(data.get("qq", "") or "").strip()
+        if not target or target == self_id:
+            continue
+        name = str(data.get("name", "") or "").strip().lstrip("@").strip()
+        found.append((target, name))
+    return tuple(found)
+
+
+def mention_text_segments(event: dict[str, Any]) -> list[dict[str, Any]]:
+    """把已命名的 @ 段换成文本段，其余片段原样保留顺序。"""
+
+    labels   = event.get(MENTION_LABELS_KEY)
+    segments = list(iter_message_segments(event))
+    if not isinstance(labels, dict) or not labels:
+        return segments
+    rendered: list[dict[str, Any]] = []
+    after_label                    = False
+    for segment in segments:
+        segment_type = str(segment.get("type", "") or "")
+        data         = segment.get("data", {}) or {}
+        target       = str(data.get("qq", "") or "").strip()
+        if segment_type == "at" and target in labels:
+            rendered.append({"type": "text", "data": {"text": f"{labels[target]} "}})
+            after_label = True
+            continue
+        if after_label and segment_type == "text":
+            # QQ 在 @ 后面自带一个空格，标签已经补过，避免拼出两个。
+            segment = {**segment, "data": {**data, "text": str(data.get("text", "")).lstrip()}}
+        after_label = False
+        rendered.append(segment)
+    return rendered
+
+
+def text_with_mentions(event: dict[str, Any]) -> str:
+    """消息正文连同 @ 对象一起按原顺序拼出。"""
+
+    return "".join(
+        str((segment.get("data", {}) or {}).get("text", ""))
+        for segment in mention_text_segments(event)
+        if str(segment.get("type", "") or "") == "text"
+    ).strip()

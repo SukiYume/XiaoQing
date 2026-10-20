@@ -154,12 +154,12 @@ python main.py
    - 最近 60 秒已回复 `max_replies_per_minute` 次。
    - 连续回复达到 `continuous_reply_limit` 后的 `continuous_cooldown_seconds` 冷却期内。
    - 低信息消息：只有 QQ 表情码、无内容的媒体占位和标点。
-   - 句首明确点名其他群友，例如 `阿梨你…`、`@某人 …`、`张老师，…`。
+   - 句首明确点名其他群友，例如 `阿梨你…`、`@某人 …`、`张老师，…`。`@` 段以 `@名字` 写进本轮文本和聊天记录，只 `@` 别人不说话也算。
 2. **参与概率**：从 `reply_probability_base` 出发，满足以下情况时抬高到对应上限（取最大值，不叠加）：
 
    | 信号 | 识别方式 | 概率上限 |
    |---|---|---|
-   | 面向全群的邀请 | `大家`、`你们`、`有没有人`、`谁来`… | `participation_cue_reply_probability` |
+   | 面向全群的邀请 | `大家`、`你们`、`有没有人`、`谁来`、`@全体成员`、`群里有没有人`… | `participation_cue_reply_probability` |
    | 没点名的发图请求 | `发个狗头`、`来张梗图`、`整点表情包` | 同上 |
    | 开放提问 | 问句 | 同上 |
    | 开场起哄 | `我宣布`、`我提议`、`我赌`、`我站…党` | 同上 |
@@ -167,6 +167,8 @@ python main.py
    | 复读队形 | 和上一位群友发了同一句短消息 | 同上 |
    | 活跃话题 | 当前目标 5 分钟内更新过，且角色 5 分钟内发过言 | `active_topic_reply_probability` |
    | 活跃话题里的追问 | 活跃话题 + 问句 | `active_topic_question_reply_probability` |
+
+   前六种线索只看 4～80 字的消息，句中 `@` 了其他群友时也不算；大段说明和报告交给规划器读完再判断。
 
 3. **Heartflow 软加分**（`heartflow.enable_heartflow`）：根据问句、与目标的相关度、消息长短、连续沉默轮数和距上次发言的时长给出评分，高于 `base_score` 的部分按比例抬高概率。
 4. **沉默补偿**：连续 3 轮没回复时概率 ×1.2（上限 0.90），连续 5 轮时 ×1.4（上限 0.95）。
@@ -176,15 +178,17 @@ python main.py
    |---|---|
    | `direct_reply` | 回应当前消息 |
    | `send_new_message` | 主动开一个新话头 |
-   | `listening` / `wait` | 先听，不说话；`wait` 会等待一小段时间再判断 |
+   | `listening` / `wait` | 先听，不说话，本轮立即结束；下一条消息到来时重新判断 |
    | `rethink_goal` | 重新分析当前会话目标 |
    | `fetch_knowledge` | 先检索知识库再决定 |
    | `end_conversation` | 结束当前话题 |
    | `block_and_ignore` | 忽略明显恶意或刷屏的消息 |
 
+   角色还没接话的新鲜轮次里，命中面向全群线索的消息跳过规划直接回复；问句如果紧跟另一位群友 90 秒内的发言，多半是在接对方的话，仍交给规划器判断谁在问谁。
+
    规划器连续失败时进入退避：`pfc_planner_fail_window_seconds` 内失败 `pfc_planner_fail_threshold` 次后暂停 `pfc_planner_backoff_seconds` 秒。规划关闭时，通过概率的消息直接生成回复。
 
-另外两种情况本轮直接保持安静，明确召唤也不例外：发言人明确要求别回（如“别回了”“不用回复”“别插话”“不要打扰我”“让我静一静”，带问句或后续请求的除外），以及消息命中 `ban_words` / `ban_regex`。
+另外两种情况本轮直接保持安静，明确召唤也不例外：发言人明确要求别回（如“别回了”“不用回复”“别插话”“不要打扰我”“让我静一静”，或告诉角色“不是叫你”“@的不是你”，带问句或后续请求的除外），以及消息命中 `ban_words` / `ban_regex`。
 
 ### 生成配额
 
@@ -197,7 +201,9 @@ python main.py
 | `max_generation_inflight_per_user` | 1 | 单个用户同时进行的生成数 |
 | `max_generation_calls_per_user_per_day` | 200 | 单个用户每 24 小时的生成次数 |
 
-超出配额时，明确召唤回复 `消息有点多，我缓一下再回`，普通参与保持安静。
+同一会话已有一轮在生成时，新一轮排队等待会话配额，最多 20 秒；排队期间又来了更新的消息，就让给更新的那一轮（`limit=chat_superseded`）。旧一轮看到会话里有了新消息，会在下一个检查点放弃。
+
+等待超时或超出全局、用户、日配额时，明确召唤回复 `消息有点多，我缓一下再回`，普通参与保持安静；被更新消息顶替的轮次一律保持安静。
 
 ---
 
@@ -228,7 +234,7 @@ python main.py
 | 消息段 | 处理 |
 |---|---|
 | `text` | 文本 |
-| `at` | 点名对象；`@` 角色属于明确召唤 |
+| `at` | 点名对象；`@` 角色属于明确召唤；`@` 其他成员按原位置写成 `@名字`（优先段内名字，其次该成员在群里最近的显示名），`@全体成员` 视为面向全群 |
 | `reply` | 引用关系；按被引用的 `message_id` 在会话历史中查找，引用角色的消息属于明确召唤 |
 | `face` | QQ 原生表情，按内置目录和运行时观察记录转成可读名称 |
 | `mface` | NapCat 商城表情包，下载后分析并可收入表情库 |
@@ -493,7 +499,7 @@ python scripts/run_xiaoqing_chat_live_eval.py             # 真实模型多人�
 1. 确认 `plugins.smalltalk_provider` 是 `xiaoqing_chat`，当前群没有被 `/闭嘴`。
 2. `/xc config` 查看频控与概率。
 3. 搜索 `smalltalk.no_reply`：`reason` 为 `min_interval`、`max_replies_per_minute`、`continuous_cooldown`、`low_information`、`directed_to_other` 表示被硬限制拦下，`probability` 表示没掷中，日志同时给出概率、掷值和沉默轮数。
-4. 搜索 `smalltalk.pfc.done` 查看规划器选择的动作；`smalltalk.generation_limited` 表示配额不足。
+4. 搜索 `smalltalk.pfc.done` 查看规划器选择的动作；`smalltalk.generation_limited` 表示配额不足，`limit=chat_superseded` 表示排队时被同会话更新的消息顶替。
 5. 回复太多时调低 `reply_probability_base`、`participation_cue_reply_probability`，或调高 `min_reply_interval_seconds`。
 
 ### 被叫了却没回
