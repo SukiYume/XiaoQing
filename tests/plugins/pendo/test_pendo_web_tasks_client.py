@@ -122,7 +122,7 @@ const initFormInteractions = () => {};""",
             "import { renderCustomSelect, initCustomSelects } "
             "from '../components/custom_select.js';",
             r"""const renderCustomSelect = ({ id }) => `<div data-select="${id}"></div>`;
-const initCustomSelects = () => {};""",
+const initCustomSelects = (root, handlers) => { globalThis.__selectHandlers = handlers; };""",
         ),
         (
             """import {
@@ -344,13 +344,61 @@ def test_tasks_filters_against_supplied_anchor_and_derives_used_model_only() -> 
         });
         assert.deepEqual(model.focus_tasks.map((task) => task.id), ['late', 'today']);
         assert.deepEqual(model.up_next_tasks.map((task) => task.id), ['next']);
-        assert.deepEqual(model.closed_recent.map((task) => task.id), ['cancel', 'done']);
+        assert.deepEqual(model.closed_tasks.map((task) => task.id), ['cancel', 'done']);
         assert.deepEqual(Object.keys(model.board_columns), ['open', 'closed']);
         assert.equal(model.text_category_count, 2);
         assert.equal(model.match_count, 7);
         assert.equal('category_load' in model, false);
         assert.equal('done_today_count' in model.summary, false);
         assert.equal(model.completion_bars.at(-1).count, 1);
+        """
+    )
+
+
+def test_tasks_list_keeps_full_history_and_combines_filters() -> None:
+    """两种视图均展示完整历史，日期、分类、状态和搜索共同筛选。"""
+
+    _run_tasks_client(
+        r"""
+        const tasks = Array.from({ length: 24 }, (_, index) => ({
+            id: `history-${index}`,
+            title: `历史任务-${index}`,
+            status: index % 2 ? 'cancelled' : 'done',
+            category: index < 20 ? '工作' : '生活',
+            plan_date: index < 18 ? '2026-05-20' : '2026-04-01',
+            updated_at: `2026-05-${String(index + 1).padStart(2, '0')}T00:00:00Z`,
+        }));
+        const root = __makeRoot();
+        client.__setTasksTestState({
+            container: root, overview: { all_tasks: tasks },
+            loading: false, loadError: '', viewMode: 'list', filters: {},
+        });
+        client.__renderPage();
+        for (const task of tasks) assert.ok(root.innerHTML.includes(task.title));
+        assert.ok(root.innerHTML.includes('24 项匹配'));
+        assert.ok(root.innerHTML.includes('已结束'));
+        const model = client.__deriveDisplayModel(tasks);
+        assert.equal(model.closed_tasks.length, 24);
+        assert.deepEqual(model.closed_tasks, model.board_columns.closed);
+        assert.equal(model.closed_tasks[0].id, 'history-23');
+
+        __selectHandlers['tasks-filter-category']('工作');
+        __selectHandlers['tasks-filter-plan']('today');
+        assert.equal(client.__getTasksTestState().filters.category, '工作');
+        __selectHandlers['tasks-filter-category']('工作');
+        assert.equal(client.__getTasksTestState().filters.plan, 'today');
+        __selectHandlers['tasks-filter-status']('done');
+        assert.ok(root.innerHTML.includes('9 项匹配'));
+        assert.ok(root.innerHTML.includes('历史任务-0'));
+        assert.ok(!root.innerHTML.includes('历史任务-18'));
+        assert.ok(!root.innerHTML.includes('历史任务-23'));
+
+        client.__setTasksTestState({ filters: {
+            category: '生活', status: 'cancelled', search: '历史任务-23',
+        } });
+        client.__renderPage();
+        assert.ok(root.innerHTML.includes('1 项匹配'));
+        assert.ok(root.innerHTML.includes('历史任务-23'));
         """
     )
 
