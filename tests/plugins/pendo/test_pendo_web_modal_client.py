@@ -311,6 +311,8 @@ def test_modal_traps_focus_and_preserves_reentrant_close_callbacks() -> None:
 
         __overlay.click(__content);
         assert.equal(__overlay.style.display, 'flex');
+        __overlay.onpointerdown({ target: __overlay, button: 0, pointerId: 1 });
+        __overlay.onpointerup({ target: __overlay, pointerId: 1 });
         __overlay.click(__overlay);
         assert.deepEqual(calls, ['first']);
         assert.equal(__content.querySelector('#modal-title').textContent, 'second');
@@ -339,6 +341,40 @@ def test_modal_traps_focus_and_preserves_reentrant_close_callbacks() -> None:
         assert.equal(__overlay.style.display, 'flex');
         event = document.emit('keydown', { key: 'Escape' });
         assert.equal(event.defaultPrevented, true);
+        assert.equal(__overlay.style.display, 'none');
+        """
+    )
+
+
+def test_modal_preserves_inside_drags_and_cancelled_pointer_gestures() -> None:
+    """框内外拖动及取消手势保留弹窗，完整遮罩点击关闭弹窗。"""
+
+    _run_modal_client(
+        r"""
+        client.showModal('编辑', new __FakeElement('input'));
+        const gesture = (start, end, cancel = false, button = 0) => {
+            __overlay.onpointerdown({ target: start, button, pointerId: 1 });
+            if (cancel) __overlay.onpointercancel();
+            __overlay.onpointerup({ target: end, pointerId: 1 });
+            __overlay.click(__overlay);
+        };
+        gesture(__content, __overlay);
+        assert.equal(__overlay.style.display, 'flex');
+        gesture(__overlay, __content);
+        assert.equal(__overlay.style.display, 'flex');
+        gesture(__overlay, __overlay, true);
+        assert.equal(__overlay.style.display, 'flex');
+        gesture(__overlay, __overlay, false, 2);
+        assert.equal(__overlay.style.display, 'flex');
+        gesture(__overlay, __overlay);
+        assert.equal(__overlay.style.display, 'none');
+        assert.equal(__overlay.onpointerdown, null);
+        assert.equal(__overlay.onpointerup, null);
+        assert.equal(__overlay.onpointercancel, null);
+        client.showModal('下一次', new __FakeElement('input'));
+        __overlay.click(__overlay);
+        assert.equal(__overlay.style.display, 'flex');
+        __content.querySelector('.modal-close').click();
         assert.equal(__overlay.style.display, 'none');
         """
     )
