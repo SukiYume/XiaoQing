@@ -203,13 +203,14 @@ class TestChatPlugin:
         assert "测试回答" in str(result)
         assert mock_context.http_session.calls
 
-    def test_manifest_defaults_paid_chat_to_admin_only(self):
+    def test_manifest_opens_chat_to_everyone_under_daily_quota(self):
         import json
 
         manifest = json.loads(
             (ROOT / "plugins" / "chat" / "plugin.json").read_text(encoding="utf-8")
         )
-        assert manifest["commands"][0]["admin_only"] is True
+        # 所有人可用，花费由每人、全局的每日额度约束。
+        assert "admin_only" not in manifest["commands"][0]
 
     @pytest.mark.asyncio
     async def test_frozen_snapshot_config_supports_complete_call_chain(self, mock_context):

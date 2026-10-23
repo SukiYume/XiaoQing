@@ -28,14 +28,14 @@ QQ ↔ OneBot 实现 ↔ XiaoQing Core ↔ 插件
 | 领域 | 代表插件 | 能力 |
 |---|---|---|
 | Core 管理 | `bot_core` | 分层帮助、插件列表、重载、群静音、secret 管理、运行指标 |
-| 智能聊天 | `xiaoqing_chat`, `smalltalk`, `chat`, `voice` | 多模态聊天、群聊参与、基础问答、TTS |
+| 智能聊天 | `xiaoqing_chat`, `xiaoqing_agent`, `smalltalk`, `chat`, `voice` | 多模态聊天、群聊参与、任务代理、基础问答、TTS |
 | 个人管理 | `pendo` | 日程、待办、笔记、日记、账本、提醒、Web、小组件 |
 | 天文科研 | `apod`, `arxiv_filter`, `ads_paper`, `astro_tools`, `dict`, `chime` | 天文图、论文筛选、文献检索、计算、词典、FRB 数据 |
 | 执行与运维 | `codex`, `shell`, `qingssh`, `jupyter`, `minecraft` | 后台代理、受控终端、SSH、Python REPL、RCON |
 | 内容与服务 | `url_parser`, `github`, `earthquake`, `flickr`, `twitter`, `signin`, `adnmb` | 链接解析、趋势、快讯、公共摄影、媒体提取、签到、社区浏览 |
 | 工具与娱乐 | `choice`, `color`, `wolframalpha`, `guess_number`, `qingpet`, `echo` | 随机选择、颜色、计算、游戏、宠物、回显 |
 
-以上共 30 个插件。[插件使用手册](09-plugins.md) 介绍每个插件的命令、配置和数据，并提供全部命令入口速查与定时任务总表。
+以上共 31 个插件。[插件使用手册](09-plugins.md) 介绍每个插件的命令、配置和数据，并提供全部命令入口速查与定时任务总表。
 
 ---
 
@@ -69,6 +69,8 @@ Manifest 中的命令树是运行时命令目录的权威来源。Core 由同一
 - 权限与场景校验
 - 示例和错误示例测试
 
+谁能在哪里用哪条命令只在这里声明，由 Core 的 `command_access` 统一判断：命令执行、会话每次继续，以及 Core 签发的派生能力（如 agent 的本机工具、SSH、Codex 跟随 `/shell`、`/ssh`、`/codex`）用的是同一处判断，插件代码不自己判断管理员。
+
 帮助系统支持逐层浏览：
 
 ```text
@@ -86,7 +88,7 @@ OneBot 消息由有序消息段组成。常见类型包括 `text`、`image`、`r
 
 框架 Session 适合需要用户连续输入的短期交互，例如表单、猜数字、SSH 和 Jupyter REPL。Session 按会话键串行处理，并通过快照事务提交状态。
 
-插件后台队列适合 Codex 等长任务。任务独立运行，完成后通过主动投递能力回传结果。
+插件后台队列适合 Codex、XiaoQing Agent 任务等长任务。任务独立运行，完成后通过主动投递能力回传结果；需要“发出才算数”的业务状态通过发送回执在确认投递后提交。
 
 ### 配置与数据
 
@@ -164,7 +166,7 @@ Core 的内部职责进一步分布在以下模块组：
 
 ### 单一事实来源
 
-- Manifest 定义命令和插件元数据。
+- Manifest 定义命令、插件元数据和权限（谁能在哪里用，只在这里声明）。
 - 配置示例定义公开配置结构。
 - `PluginContextProtocol` 定义插件公开上下文。
 - 插件数据目录定义运行状态所有权。

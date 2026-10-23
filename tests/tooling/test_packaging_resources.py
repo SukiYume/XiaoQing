@@ -12,13 +12,19 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - Python 3.10 CI
     import tomli as tomllib
 
-ROOT                         = REPOSITORY_ROOT
-_SOURCE_OR_DOCUMENT_SUFFIXES = {".md", ".py", ".pyi"}
+ROOT             = REPOSITORY_ROOT
+_SOURCE_SUFFIXES = {".py", ".pyi"}
 
 
 def _pyproject() -> dict[str, object]:
     with (ROOT / "pyproject.toml").open("rb") as file:
         return tomllib.load(file)
+
+
+def _is_plugin_document(path: Path) -> bool:
+    """插件根目录下的 Markdown 是说明文档；包里更深处的 Markdown（如人设卡）是运行时资源。"""
+
+    return path.suffix.lower() == ".md" and len(path.parts) == 3
 
 
 def _tracked_plugin_assets() -> set[str]:
@@ -35,7 +41,9 @@ def _tracked_plugin_assets() -> set[str]:
             "--",
             "plugins",
         ).split("\0")
-        if path and Path(path).suffix.lower() not in _SOURCE_OR_DOCUMENT_SUFFIXES
+        if path
+        and Path(path).suffix.lower() not in _SOURCE_SUFFIXES
+        and not _is_plugin_document(Path(path))
     }
 
 

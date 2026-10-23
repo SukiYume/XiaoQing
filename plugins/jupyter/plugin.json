@@ -3,7 +3,7 @@
     "version": "3.1.0",
     "description": "按用户与会话场景隔离的有界 Jupyter 代码执行器",
     "entry": "main.py",
-    "capabilities": ["admin_sessions", "execution_timeout_exempt"],
+    "capabilities": ["execution_timeout_exempt"],
     "commands": [
         {
             "name": "jupyter",
@@ -14,7 +14,6 @@
             ],
             "help": "执行 Python 代码或启动 REPL | /py <代码> | /py repl",
             "admin_only": true,
-            "contexts": ["private"],
             "priority": 10,
             "usage": "/py [-t 0.1-600] <Python代码> | /py repl",
             "examples": ["/py print(1 + 1)", "/py -t 30 print('ok')"],
@@ -48,7 +47,6 @@
             ],
             "help": "管理隔离内核 | /kernel [status|start|restart|shutdown]",
             "admin_only": true,
-            "contexts": ["private"],
             "usage": "/kernel [status|start|restart|shutdown]",
             "examples": ["/kernel"],
             "invalid_examples": ["/kernel unknown"],

@@ -120,14 +120,11 @@ async def enqueue_or_replay_arxiv_summary(
         group_id if group_id is not None else getattr(context, "current_group_id", None),
         field_name="group_id",
     )
-    principal        = getattr(context, "principal", None)
-    capabilities     = getattr(context, "capabilities", None)
-    is_system        = bool(capabilities is not None and getattr(capabilities, "is_system", False))
-    is_current_admin = False
-    if principal is not None and getattr(capabilities, "is_bot_admin", False):
-        is_current_admin = principal.user_id is not None and principal.user_id == effective_user_id
-    if not is_system and not is_current_admin:
-        raise PermissionError("Codex arXiv sidecar requires current admin authorization")
+    # 谁能触发由 Core 按 /codex 的声明决定（系统定时任务除外），能力只在通过时发出；
+    # 这里只决定结果发到哪里。
+    principal         = getattr(context, "principal", None)
+    capabilities      = getattr(context, "capabilities", None)
+    is_system         = bool(capabilities is not None and getattr(capabilities, "is_system", False))
     principal_targets = tuple(getattr(principal, "delivery_targets", ()))
     if is_system:
         delivery_targets = principal_targets
@@ -272,7 +269,7 @@ class ArxivSummaryAddon:
                         )
                         return (
                             f"已投递 {date} arXiv 初始化和总结任务: "
-                            f"`{label}` #{init_job.job_id} -> #{job.job_id}"
+                            f"{label} #{init_job.job_id} -> #{job.job_id}"
                         )
                     logger.info(
                         "arXiv summary queued: label=%s date=%s job=%s links=%d",
@@ -281,7 +278,7 @@ class ArxivSummaryAddon:
                         job.job_id,
                         len(normalized_links),
                     )
-                    return f"已投递 {date} arXiv 总结任务: `{label}` #{job.job_id}"
+                    return f"已投递 {date} arXiv 总结任务: {label} #{job.job_id}"
 
         existing_message = replay_message or inflight_message
         if existing_message is None:

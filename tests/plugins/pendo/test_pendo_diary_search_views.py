@@ -270,7 +270,7 @@ def test_search_handler_reports_exact_total_and_limits_display(tmp_path: Path) -
         )
         assert result["status"] == "success"
         assert "命中: 20 条" in result["message"]
-        assert result["message"].count("ID: `") == 15
+        assert result["message"].count("ID: ") == 15
         assert "...还有 5 条结果" in result["message"]
     finally:
         db.cleanup()

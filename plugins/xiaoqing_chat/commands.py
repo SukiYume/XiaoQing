@@ -67,36 +67,6 @@ async def reset_transient_conversation_state(state, chat_id: str, data_dir: Path
     state.clear_transient_chat_state(chat_id)
 
 
-def _matching_user_principal(event: dict[str, Any], context) -> Any | None:
-    """返回与事件用户一致的 Principal；事件字段不能单独构成授权依据。"""
-    principal = getattr(context, "principal", None) if context is not None else None
-    if principal is None or getattr(principal, "kind", None) != "user":
-        return None
-    event_user_id = event.get("user_id")
-    if event_user_id is None:
-        return None
-    try:
-        if int(getattr(principal, "user_id", 0)) != int(event_user_id):
-            return None
-    except (TypeError, ValueError):
-        return None
-    return principal
-
-
-def _principal_matches_event_scope(principal: Any, event: dict[str, Any]) -> bool:
-    event_group_id = event.get("group_id")
-    if event_group_id in (None, ""):
-        return getattr(principal, "group_id", None) is None and bool(
-            getattr(principal, "is_private", False)
-        )
-    try:
-        return int(getattr(principal, "group_id", 0)) == int(event_group_id) and not getattr(
-            principal, "is_private", False
-        )
-    except (TypeError, ValueError):
-        return False
-
-
 def _visible_jargons(jargons: Mapping[Any, Any], chat_id: str) -> list[Any]:
     """统一统计页与黑话页的会话可见范围，避免两个入口口径漂移。"""
     return [
@@ -104,29 +74,6 @@ def _visible_jargons(jargons: Mapping[Any, Any], chat_id: str) -> list[Any]:
         for item in jargons.values()
         if item.is_global or any(str(pair[0]) == chat_id for pair in item.chat_id_counts if pair)
     ]
-
-
-def is_admin_operator(event: dict[str, Any], context) -> bool:
-    principal = _matching_user_principal(event, context)
-    if principal is None or not _principal_matches_event_scope(principal, event):
-        return False
-
-    event_group_id = event.get("group_id")
-    if event_group_id in (None, ""):
-        return is_global_admin_operator(event, context)
-
-    if is_global_admin_operator(event, context):
-        return True
-    can_manage_group = getattr(principal, "can_manage_group", None)
-    return bool(callable(can_manage_group) and can_manage_group(event_group_id))
-
-
-def is_global_admin_operator(event: dict[str, Any], context) -> bool:
-    principal    = _matching_user_principal(event, context)
-    capabilities = getattr(context, "capabilities", None) if context is not None else None
-    if principal is None or not getattr(capabilities, "is_bot_admin", False):
-        return False
-    return _principal_matches_event_scope(principal, event)
 
 
 @handle_errors
@@ -137,7 +84,7 @@ async def handle_internal(
     chat_id, runtime, state = hctx.chat_id, hctx.runtime, hctx.state
 
     if command == "统计":
-        lines = ["📊 **会话统计**\n"]
+        lines = ["📊 会话统计\n"]
 
         mem_msgs = await state.memory_store.get_async(chat_id)
         lines.append(f"• 上下文消息数: {len(mem_msgs) if mem_msgs else 0}")
@@ -154,7 +101,7 @@ async def handle_internal(
         lines.append(f"• 近期行动记录: {len(recent_actions)}")
 
         run_stats = state.get_stats(chat_id)
-        lines.append("\n**本次运行 (重启后重置):**")
+        lines.append("\n本次运行 (重启后重置):")
         lines.append(f"• 回复数: {run_stats.get('replies', 0)}")
         lines.append(f"• 重置数: {run_stats.get('resets', 0)}")
         return segments("\n".join(lines))
@@ -162,16 +109,12 @@ async def handle_internal(
     if command == "重置":
         is_group_reset = event.get("group_id") not in (None, "")
         confirmation   = str(args or "").strip().casefold()
-        if is_group_reset:
-            if not is_admin_operator(event, context):
-                return segments(
-                    "❌ 群会话重置仅限 Bot 管理员、群管理员或群主执行；普通成员不能清除群共享状态。"
-                )
-            if confirmation not in {"确认", "confirm"}:
-                return segments(
-                    f"⚠️ 此操作会清空本群中与{hctx.bot_name}相关的共享上下文、目标、学习状态和行动记录。\n"
-                    "确认无误后请发送：/xc 重置 确认"
-                )
+        # 群里真正清空要走 reset confirm，它在 plugin.json 里只给群管理员，Core 在调用前检查。
+        if is_group_reset and confirmation not in {"确认", "confirm"}:
+            return segments(
+                f"⚠️ 此操作会清空本群中与{hctx.bot_name}相关的共享上下文、目标、学习状态和行动记录。\n"
+                "确认无误后请群主、群管理员或 Bot 管理员发送：/xc 重置 确认"
+            )
 
         pending = state.pop_persist_task(chat_id)
         if pending is not None and not pending.done():
@@ -192,7 +135,7 @@ async def handle_internal(
         current   = runtime.cfg.brain_chat.enable_private_brain_chat
         status    = "✅ 已启用" if current else "❌ 未启用"
         mode_desc = (
-            f"🧠 **深度对话模式**\n\n"
+            f"🧠 深度对话模式\n\n"
             f"状态: {status}\n"
             f"说明: 深度对话模式提供更智能、更深入的对话体验。\n"
             f"- 更大的上下文窗口 ({runtime.cfg.brain_chat.brain_max_context_size} 条)\n"
@@ -213,8 +156,8 @@ async def handle_config(_args: str, event: dict[str, Any], context) -> list[dict
     cfg = runtime.cfg
 
     lines = [
-        "⚙️ **插件配置概要**\n",
-        "**基础配置:**",
+        "⚙️ 插件配置概要\n",
+        "基础配置:",
         f"• 普通群聊插话概率: {cfg.reply_probability_base:.0%}",
         f"• 最小回复间隔: {cfg.min_reply_interval_seconds} 秒",
         f"• 每分钟最大回复数: {cfg.max_replies_per_minute}",
@@ -223,21 +166,21 @@ async def handle_config(_args: str, event: dict[str, Any], context) -> list[dict
         f"• 最大 token 数: {cfg.max_tokens}",
     ]
 
-    lines.append("\n**记忆系统:**")
+    lines.append("\n记忆系统:")
     lines.append(
         f"• 记忆检索: {'✅ 已启用' if cfg.memory.enable_memory_retrieval else '❌ 未启用'}"
     )
     lines.append(f"• 最大检索数: {cfg.memory.top_k}")
     lines.append(f"• 最小相似度: {cfg.memory.min_score}")
 
-    lines.append("\n**表达学习:**")
+    lines.append("\n表达学习:")
     lines.append(
         f"• 表达学习: {'✅ 已启用' if cfg.expression.enable_expression_learning else '❌ 未启用'}"
     )
     lines.append(f"• 最大注入数: {cfg.expression.max_injected}")
     lines.append(f"• 最大存储数: {cfg.expression.max_store}")
 
-    lines.append("\n**深度对话模式:**")
+    lines.append("\n深度对话模式:")
     brain_status = "✅ 已启用" if cfg.brain_chat.enable_private_brain_chat else "❌ 未启用"
     lines.append(f"• 状态: {brain_status}")
     if cfg.brain_chat.enable_private_brain_chat:
@@ -246,15 +189,13 @@ async def handle_config(_args: str, event: dict[str, Any], context) -> list[dict
 
     model_alias = secrets.get("_provider_name", "?")
     model_name  = secrets.get("model", "?")
-    lines.append(f"\n**当前 LLM 模型:** {model_alias} ({model_name})")
-    lines.append("\n**提示:** 模型路由由 config/config.json 统一配置")
+    lines.append(f"\n当前 LLM 模型: {model_alias} ({model_name})")
+    lines.append("\n提示: 模型路由由 config/config.json 统一配置")
     return segments("\n".join(lines))
 
 
 @handle_errors
 async def handle_review(args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
-    if not is_admin_operator(event, context):
-        return segments("❌ 仅 Bot 管理员、群管理员或群主可处理审查会话")
     parts = str(args or "").strip().split(maxsplit=2)
     if len(parts) < 2 or parts[0].casefold() not in {"ok", "no", "answer", "close"}:
         return segments("用法：/xc 审查 <ok|no|answer|close> <会话ID> [内容]")
@@ -295,9 +236,7 @@ async def handle_review(args: str, event: dict[str, Any], context) -> list[dict[
 async def handle_memory(args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
     query = args.strip() if args else ""
     if not query:
-        return segments(
-            "🔍 **记忆检索**\n\n使用方法: /xc 记忆 <关键词>\n\n示例: /xc 记忆 喜欢的食物"
-        )
+        return segments("🔍 记忆检索\n\n使用方法: /xc 记忆 <关键词>\n\n示例: /xc 记忆 喜欢的食物")
 
     hctx = HandlerContext.from_event(event, context)
     runtime, state = hctx.runtime, hctx.state
@@ -313,12 +252,12 @@ async def handle_memory(args: str, event: dict[str, Any], context) -> list[dict[
         min_score = runtime.cfg.memory.min_score,
     )
     if not results:
-        return segments(f"🔍 **记忆检索结果**\n\n关键词: {query}\n\n未找到相关记忆")
+        return segments(f"🔍 记忆检索结果\n\n关键词: {query}\n\n未找到相关记忆")
 
-    lines = [f"🔍 **记忆检索结果**\n\n关键词: {query}\n"]
+    lines = [f"🔍 记忆检索结果\n\n关键词: {query}\n"]
     for i, item in enumerate(results, 1):
         score = item.score * 100
-        lines.append(f"**{i}.** (相关度: {score:.1f}%)")
+        lines.append(f"{i}. (相关度: {score:.1f}%)")
         lines.append(f"{item.text}\n")
     return segments("\n".join(lines))
 
@@ -332,13 +271,13 @@ async def handle_expression(_args: str, event: dict[str, Any], context) -> list[
 
     if not expressions:
         return segments(
-            f"💬 **表达学习**\n\n还没有学到任何表达方式\n\n继续聊天，{hctx.bot_name}会从对话中学习表达风格"
+            f"💬 表达学习\n\n还没有学到任何表达方式\n\n继续聊天，{hctx.bot_name}会从对话中学习表达风格"
         )
 
     expressions.sort(key=lambda x: (x.count, x.last_active_time), reverse=True)
-    lines = ["💬 **学到的表达方式**\n", f"共 {len(expressions)} 条记录\n"]
+    lines = ["💬 学到的表达方式\n", f"共 {len(expressions)} 条记录\n"]
     for i, expr in enumerate(expressions[:10], 1):
-        lines.append(f"**{i}.** [{expr.style}] {expr.situation}")
+        lines.append(f"{i}. [{expr.style}] {expr.situation}")
         if expr.content_list:
             lines.append(f"   示例: {', '.join(expr.content_list[:3])}")
         lines.append(f"   使用次数: {expr.count}\n")
@@ -355,7 +294,7 @@ async def handle_jargon(_args: str, event: dict[str, Any], context) -> list[dict
     jargons      = jargon_store.load()
     if not jargons:
         return segments(
-            f"🏴‍☠️ **黑话学习**\n\n还没有学到任何黑话\n\n继续聊天，{hctx.bot_name}会从对话中学习独特的词汇"
+            f"🏴‍☠️ 黑话学习\n\n还没有学到任何黑话\n\n继续聊天，{hctx.bot_name}会从对话中学习独特的词汇"
         )
 
     jargon_list = sorted(
@@ -363,22 +302,22 @@ async def handle_jargon(_args: str, event: dict[str, Any], context) -> list[dict
         key     = lambda x: x.count,
         reverse = True,
     )
-    lines = ["🏴‍☠️ **学到的黑话**\n", f"共 {len(jargon_list)} 条记录\n"]
+    lines = ["🏴‍☠️ 学到的黑话\n", f"共 {len(jargon_list)} 条记录\n"]
     for i, jar in enumerate(jargon_list[:15], 1):
         meaning_str = f" - {jar.meaning}" if jar.meaning else ""
-        lines.append(f"**{i}.** {jar.content}{meaning_str} (次数: {jar.count})")
+        lines.append(f"{i}. {jar.content}{meaning_str} (次数: {jar.count})")
     if len(jargon_list) > 15:
         lines.append(f"\n... 还有 {len(jargon_list) - 15} 条记录")
     return segments("\n".join(lines))
 
 
 def _provider_listing(state, chat_id: str, providers: Mapping[str, Any], current: str) -> str:
-    lines = ["🤖 **LLM 模型**\n"]
+    lines = ["🤖 LLM 模型\n"]
     for name, pcfg in providers.items():
         if isinstance(pcfg, Mapping):
             marker = " ✅" if current == name else ""
             lines.append(
-                f"• **{name}** ({pcfg.get('model', '?')} / {pcfg.get('provider', '?')}){marker}"
+                f"• {name} ({pcfg.get('model', '?')} / {pcfg.get('provider', '?')}){marker}"
             )
     if not providers:
         lines.append("(当前路由未配置任何模型)")
@@ -410,12 +349,8 @@ async def handle_provider(args: str, event: dict[str, Any], context) -> list[dic
     if global_scope:
         if len(parts) != 2 or not parts[1].strip():
             return segments("用法: /xc 模型 global <名称|default>")
-        if not is_global_admin_operator(event, context):
-            return segments("❌ 只有 Bot 全局管理员可切换全局 LLM 模型")
         selection = parts[1].strip()
     else:
-        if not is_admin_operator(event, context):
-            return segments("❌ 仅 Bot 管理员、当前群管理员或群主可切换本会话模型")
         selection = target
 
     def apply(name: str | None) -> None:
@@ -432,7 +367,7 @@ async def handle_provider(args: str, event: dict[str, Any], context) -> list[dic
         )
         model = providers.get(effective, {}).get("model", "?")
         return segments(
-            f"✅ 已清除{scope}覆盖；当前生效 **{effective}** ({model})"
+            f"✅ 已清除{scope}覆盖；当前生效 {effective} ({model})"
             "\n此切换仅在本次 Bot 运行期间有效。"
         )
     if selection not in providers:
@@ -440,6 +375,6 @@ async def handle_provider(args: str, event: dict[str, Any], context) -> list[dic
         return segments(f"❌ 未知模型别名 '{selection}'\n可用: {available}")
     apply(selection)
     return segments(
-        f"✅ 已将{scope}模型切换到 **{selection}** ({providers[selection].get('model', '?')})"
+        f"✅ 已将{scope}模型切换到 {selection} ({providers[selection].get('model', '?')})"
         "\n此切换仅在本次 Bot 运行期间有效。"
     )

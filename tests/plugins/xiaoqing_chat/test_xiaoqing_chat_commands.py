@@ -376,7 +376,7 @@ async def test_pending_bot_name_followup_bypasses_reply_gate(mock_context, sampl
             goal=SimpleNamespace(enable_goal=False),
             reflection=SimpleNamespace(enable_expression_reflection=False),
             brain_chat=SimpleNamespace(enable_private_brain_chat=False),
-            personality=SimpleNamespace(states=[], state_probability=0.0),
+            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
         )
     )
     hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)

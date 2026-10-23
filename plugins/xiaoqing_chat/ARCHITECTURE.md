@@ -22,6 +22,7 @@ XiaoQing Core
   ├─ Router ─────────────── /xc ─────────────────────────┐
   ├─ Dispatcher ─────────── observe_message / handle_smalltalk / call_bot_name_only
   ├─ Core service ───────── core.observe_outgoing_action │
+  ├─ 服务调用 ───────────── agent.handle_turn / agent.report_delivery → xiaoqing_agent
   ├─ AI capability ──────── chat / reasoning / checker / vision
   ├─ onebot_media ───────── get_msg / get_image         │
   └─ Delivery ───────────── ordered batches + receipt    │
@@ -47,9 +48,10 @@ xiaoqing_chat
 
 | 模块 | 职责 |
 |---|---|
-| `plugin.json` | Manifest：`/xc` 命令树、`onebot_media` capability、`core.observe_outgoing_action` 服务、热加载文件 |
+| `plugin.json` | Manifest：`/xc` 命令树、`onebot_media` capability、`core.observe_outgoing_action` 服务、使用 `agent.handle_turn` 与 `agent.report_delivery`、热加载文件 |
 | `main.py` | 生命周期（`init` / `shutdown`）、`/xc` 子命令路由、Core 观察入口 |
 | `handlers.py` | 消息观察、闲聊门控、单轮编排与生成配额；`call_bot_name_only`、`observe_outgoing_action` |
+| `agent_bridge.py` | 明确召唤时把这一轮交给 `xiaoqing_agent` 判断（decide），同时照常生成聊天回复；接手则放弃生成、让出会话生成名额，执行（act）并把回复连同消息 ID 写入聊天记录、向 agent 回报是否发出；否则用已生成的回复 |
 | `commands.py` | `/xc` 管理子命令：统计、重置、配置、记忆、表达、黑话、审查、模型切换 |
 | `handler_context.py` | 单轮复用的上下文快照（runtime、state、chat_id、bot_name、secrets）与 `handle_errors` 装饰器 |
 | `chat_event.py` | 从 OneBot 事件读取会话 ID、发送者和对角色的称呼 |
@@ -58,8 +60,8 @@ xiaoqing_chat
 | `participation.py` | 普通群聊线索：全群邀请、发图请求、开放提问、起哄、激动分享、复读；低信息与点名他人 |
 | `frequency_control.py` | 硬频控、参与概率、Heartflow 软加分、沉默补偿，记录 `ReplyGateDecision` |
 | `generation_limiter.py` | 全局、会话、用户并发配额与用户日配额 |
-| `brain_chat.py` | 私聊深度对话：人格叠加、思考等级、上下文长度和温度 |
-| `persona.py` | 名字解析、人格组合、`PERSONA_RUNTIME_FACTS` 运行时人设事实 |
+| `brain_chat.py` | 私聊深度对话：在说话方式后追加人设卡的〔深度对话〕一节，思考等级、上下文长度和温度 |
+| `persona.py` | 名字解析；解析人设卡（`config/persona.md`），按标记取出人物事实、聊天说话方式与示例、agent 办事部分和心境 |
 | `smalltalk_models.py` | `PreparedSmalltalkTurn`、`GeneratedSmalltalkTurn` 阶段模型 |
 | `turn_generation.py` | 会话锁内记录用户消息；锁外按强制 / PFC / 直接三条路径生成 |
 | `reply_plan.py` | `ReplyGenerationPlan`：一次性收集上下文块、反应规则、规划目标和人设边界 |
@@ -87,10 +89,10 @@ xiaoqing_chat
 | `llm_config.py` | `LLMCallConfig`：超时、重试与采样参数；`bounded()` 收紧温度和输出预算，`as_kwargs()` 传给网关 |
 | `prompt_builder.py` | 按人物边界、对话历史和当前媒体构建回复提示 |
 | `postprocess.py` | 保留回复内容，按自然边界组织气泡 |
-| `communication_constraints.py` | 原话中的交流要求（停聊、句数、条目数）与群内定义 |
+| `communication_constraints.py` | 原话中的交流要求（停聊、句数、条目数、篇幅字数）与群内定义 |
 | `media_evidence.py` | 图片证据块：附件状态、缺图说明；`INBOUND_MEDIA_MARKER_RE`、`marker_visible_speech` |
 | `local_checks.py` | 本地规则：复读、近似照搬、连续发言、凭空经历、身份一致性、纯媒体回复，以及是否需要语义审查 |
-| `reply_checker.py` | 审查入口：本地规则 → 审查模型 → 证据契约解释；`TurnReadingCache` 缓存本轮独立阅读 |
+| `reply_checker.py` | 审查入口：本地规则 → 审查模型 → 证据契约解释 → 明确篇幅要求的本地字数核对（其他都通过后才看，不够按 soft 处理）；`TurnReadingCache` 缓存本轮独立阅读 |
 | `evidence.py` | 证据契约：审查模型列出的陈述必须能在原文找到出处，并保持主体与语气 |
 | `arithmetic.py` | 数值依据：份数、折扣、单位换算与两项加减 |
 | `check_result.py` | `ReplyCheckResult`、`ReplyRejected` 与标准拒绝结果 |
@@ -174,7 +176,7 @@ xiaoqing_chat
 | `call_bot_name_only(context)` | Dispatcher | 只喊名字时的短应答，并登记 60 秒名字续问 |
 | `observe_message(clean_text, event, context)` | Dispatcher | 记录入站消息与原始消息段 |
 | `handle_smalltalk(clean_text, event, context)` | Dispatcher | 闲聊决策与回复链路 |
-| `observe_outgoing_action(action, context)` | Core service | 记录其他插件以角色身份发出的消息；带敏感标记的动作直接跳过 |
+| `observe_outgoing_action(action, context)` | Core service | 记录其他插件以角色身份发出的消息；本插件自己的回复已在回执提交时连同消息 ID 记下，这里跳过；带敏感标记的动作直接跳过 |
 | `shutdown(context)` | PluginManager | 停止接收任务、刷盘、取消并等待后台任务 |
 
 ---
@@ -197,6 +199,12 @@ handle_smalltalk → _prepare_smalltalk_turn
   ├─ frequency_control.decide_reply         普通参与：硬频控 → 概率 → Heartflow → 沉默补偿
   ├─ 记录本轮观察到的目标
   └─ PreparedSmalltalkTurn
+  │
+  ▼
+agent_bridge（明确召唤且 agent 已开启时）
+  ├─ agent decide 与下面的聊天生成同时开始
+  ├─ 判断为闲聊 / agent 不可用 → 继续用生成好的回复
+  └─ agent 接手 → 放弃生成并让出名额 → agent act → 回复带回执返回 Core
   │
   ▼
 generation_limiter.admit                    全局 / 会话 / 用户 / 日配额；会话配额排队，最新一轮优先
@@ -222,7 +230,7 @@ turn_generation.generate_smalltalk_turn
 turn_delivery.finalize_smalltalk_turn
   ├─ 过期检查（打字期间的新消息、会话重置）
   ├─ 打字延迟（目标时长扣除已用时间），分批发送，气泡间隔
-  ├─ 投递回执确认 → 提交：助手消息、PFC、目标、Heartflow、行动历史
+  ├─ 投递回执确认 → 提交：助手消息（连同回执收集的全部消息 ID）、PFC、目标、Heartflow、行动历史
   │                 → post_reply_tasks：摘要、事实提取、表达学习、策略复盘
   └─ 投递拒绝 / 异常 → 回滚待提交状态
 ```
@@ -363,6 +371,7 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 | 规则 | 实现 |
 |---|---|
 | 消息编号 | 首次分配时读取已有历史的最大 `mN`，覆盖重启、闲置重置和缓存淘汰后的续写 |
+| QQ 消息 ID | 角色发言在投递回执提交时连同全部消息 ID 写入（`message_id` 为第一条，`extra_message_ids` 为拆分后的其余各条），不事后回填；引用判断检查记录的全部 ID |
 | 会话锁 | 锁缓存 + 弱引用注册表；缓存淘汰后持有者与等待者仍共享原锁 |
 | 重置代际 | 人物资料目录的 `.generation` 标记；重置在共享路径锁内更新标记、清理 JSON 与备份、删除向量记录；后台任务在远程调用前记录代际，提交时核对 |
 | 表达与黑话 | 加载结果携带基线，保存时以基线向最新磁盘状态合并增量 |
@@ -382,12 +391,13 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 |---|---|
 | `config/config.json` → `bot_name` | 角色名字 |
 | `config/config.json` → `plugins.xiaoqing_chat` | AI route、模型别名；也可写行为字段 |
-| `plugins/xiaoqing_chat/config/xiaoqing_config.json` | 行为、频控、规划、记忆、媒体、人设、调试（与上一项合并，文件优先） |
+| `plugins/xiaoqing_chat/config/xiaoqing_config.json` | 行为、频控、规划、记忆、媒体、人设开关、调试（与上一项合并，文件优先） |
+| `plugins/xiaoqing_chat/config/persona.md`（或 `personality.persona_file`） | 人设卡：人物事实、说话方式、回复示例、心境 |
 | `config/secrets.json` | Provider API Key |
 
-`chat_runtime.py` 读取 Core 原子快照并维护文件热加载缓存；`config/config.py` 校验字段范围与交叉约束（如单会话、单用户并发不超过全局并发，规划超时不超过 `timeout_seconds`）。每轮只使用自己的快照。
+`chat_runtime.py` 读取 Core 原子快照并维护文件热加载缓存（配置文件或人设卡任一改动都会重新加载）；`config/config.py` 校验字段范围与交叉约束（如单会话、单用户并发不超过全局并发，规划超时不超过 `timeout_seconds`）。每轮只使用自己的快照。
 
-`persona.py` 把快照中的 `bot_name` 注入规划、生成、审查和学习链路；人物配置不写名字。历史中的角色消息按 `assistant` 角色存储，渲染时使用当前名字。
+人设卡在加载配置时读入 `PersonalityConfig.card`。不带标记的人物事实交给规划、表达学习和审查（作为受控人物资料）；生成时人物事实放在系统提示开头，〔聊天〕各节（说话方式、示例）放在系统提示末尾、离对话最近；agent 交接时只交人物事实和〔办事〕各节。`persona.py` 把快照中的 `bot_name` 填进人设卡的 `{{name}}`；人设卡不写名字。历史中的角色消息按 `assistant` 角色存储，渲染时使用当前名字。
 
 ---
 
@@ -418,7 +428,7 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 | 频控与概率 | `frequency_control.py` |
 | 规划 | `planning/` |
 | 生成上下文 | `context_builder.py`、`reply_plan.py`、`llm/prompt_builder.py` |
-| 人设事实 | `persona.py`、`config/config.py` 的 `PersonalityConfig` |
+| 人设 | `config/persona.md`（人设卡）、`persona.py`、`config/config.py` 的 `PersonalityConfig` |
 | 审查规则 | `llm/local_checks.py`（本地）、`llm/reply_checker.py`（语义） |
 | 被拒后的处理 | `reply_fallbacks.py` |
 | 入站媒体 | `media/event_media.py`、`media/sources.py`、`media/event_media_analysis.py` |

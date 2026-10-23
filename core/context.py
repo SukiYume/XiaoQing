@@ -210,14 +210,6 @@ class PluginContext:
             return []
         return list(groups)
 
-    def is_global_admin(self, user_id: int | None = None) -> bool:
-        """核验当前操作者，不向插件暴露全局管理员名单。"""
-
-        actor = self.current_user_id if user_id is None else user_id
-        if type(actor) is not int or type(self.principal.user_id) is not int:
-            return False
-        return actor == self.principal.user_id and self.capabilities.is_bot_admin
-
     def get_secret(self, path: str) -> Any:
         if self.secret_reader is not None:
             return self.secret_reader(path)

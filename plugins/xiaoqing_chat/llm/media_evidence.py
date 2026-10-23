@@ -3,10 +3,13 @@
 import re
 from typing import Any
 
-from ..constants import GENERIC_MEDIA_LABELS
+from ..constants import GENERIC_MEDIA_LABELS, MEDIA_SUMMARY_MAX_CHARS
 
 # 入站媒体在对话文本里渲染成 ``[图片：摘要]`` 这类标记，第 1 组为媒体类型，第 2 组为摘要。
-INBOUND_MEDIA_MARKER_RE = re.compile(r"\[(图片|表情包|QQ表情)：([^\]\n]{1,400})\]")
+# 长度上限比摘要上限多留出表情包梗背景的余量。
+INBOUND_MEDIA_MARKER_RE = re.compile(
+    rf"\[(图片|表情包|QQ表情)：([^\]\n]{{1,{MEDIA_SUMMARY_MAX_CHARS + 200}}})\]"
+)
 
 _VISIBLE_SPEECH_RES = tuple(
     re.compile(pattern)
@@ -83,8 +86,9 @@ def image_evidence_block(attached: bool | None, *, history_available: bool = Fal
         "当前文字消息没有重复附图时，历史中成功解析的对应摘要仍然可用，直接据此接话。"
         "用户要求评价或确认具体图片时，核对当前附件和对应历史摘要；两处均无可用画面时，"
         "像群友一样随口说一句图没加载出来或者裂了，保持对画面的未知，不用画面、读取、解析这类说法；附和用户的视觉评价也属于确认画面。"
-        "摘要只够支持部分判断时，先回答看清的内容，只对尚不清楚的细节保留疑问。"
-        "摘要里没有图上的文字时，口语地说那几个字没看清；字迹模糊、被遮挡等画面原因需要摘要明确支持。"
+        "成功解析的摘要就是你看到的画面和文字，直接拿来接话和回答，不说没看清、看不太清或没加载出来；"
+        "只有摘要标了〔看不清〕的位置，或被问到摘要里确实没有的细节，才口语地说那一处没看清，其余照常回答；"
+        "字迹模糊、被遮挡等画面原因需要摘要明确支持。"
         "仅依据用户文字接话时明确归因于其描述，避免暗示亲眼看过；用户要求基于文字创作、"
         "复述、翻译以及概念和编程问题可以直接完成，无需追加缺图声明。"
     )

@@ -26,13 +26,15 @@ import uuid
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pydantic import ValidationError
 
 from . import constants
 from .clock import IClock, IRandom, SystemClock, SystemRandom
+from .delivery import DeliveryReceipt, DeliverySegments
 from .interfaces import (
+    COMMAND_RUNNER_EVENT_KEY,
     AdminCheck,
     ConfigProvider,
     ContextFactory,
@@ -56,7 +58,12 @@ from .plugin_execution import (
     invoke_loaded_plugin,
 )
 from .public_errors import public_error_message, public_error_response
-from .router import CommandRouter, resolve_catalog_invocation
+from .router import (
+    CommandCatalogNode,
+    CommandRouter,
+    command_access,
+    resolve_catalog_invocation,
+)
 from .safe_http import UnsafeUrlError, redact_url_for_log, validate_public_url
 
 if TYPE_CHECKING:
@@ -194,6 +201,32 @@ def _build_failed_session_transactions(
 # ============================================================
 # 数据类
 # ============================================================
+
+
+_CQ_AT_RE = re.compile(r"\[CQ:at,qq=(\d{1,20}|all)\]")
+
+
+def _split_cq_mentions(text: str) -> tuple[str, list[dict[str, Any]]]:
+    """把命令文本里的 ``[CQ:at,qq=…]`` 拆成 at 段，路由文本与真实消息一样不含 @。"""
+
+    mentions = [{"type": "at", "data": {"qq": qq}} for qq in _CQ_AT_RE.findall(text)]
+    if not mentions:
+        return text, []
+    return " ".join(_CQ_AT_RE.sub(" ", text).split()), mentions
+
+
+def _refusal_text(node: CommandCatalogNode, refusal: str, *, is_private: bool, runner: bool) -> str:
+    """``command_access`` 拒绝时的回复；agent 代为执行时说清只能在哪里用，免得模型换别名反复重试。"""
+
+    if refusal == "context":
+        if not runner:
+            return "当前会话类型不支持此命令"
+        allowed = "私聊" if "private" in node.contexts else "群聊"
+        current = "私聊" if is_private else "群聊"
+        return f"/{' '.join(node.path)} 只能在{allowed}里使用，当前是{current}，这里不能执行。"
+    if refusal == "group_admin":
+        return "需要当前群管理员或群主权限"
+    return "权限不足"
 
 
 @dataclass
@@ -701,8 +734,13 @@ class Dispatcher:
         self,
         resolved: tuple[Any, str],
         ctx: MessageContext,
+        *,
+        session_manager: SessionManager | None = None,
     ) -> list[dict[str, Any]] | None:
-        """Execute a matched command (router-resolved)."""
+        """Execute a matched command (router-resolved).
+
+        ``session_manager`` 替换插件 Context 的会话空间，供命令执行器隔离交互会话。
+        """
         spec, args = resolved
         logger.info(
             "[%s] Command matched: %s.%s (args_length=%s)",
@@ -712,24 +750,31 @@ class Dispatcher:
             len(args),
         )
 
-        if spec.admin_only and not self.admin_check.is_admin(ctx.user_id):
-            logger.warning("[%s] Permission denied for user %s", ctx.request_id, ctx.user_id)
-            return [{"type": "text", "data": {"text": "权限不足"}}]
-
         context = self._build_event_context(spec.plugin, ctx)
+        if session_manager is not None:
+            context.session_manager = session_manager
         if spec.catalog is not None:
             invocation                 = resolve_catalog_invocation(spec.catalog, args)
             context.command_invocation = invocation
-            required_context           = "private" if ctx.is_private else "group"
-            if required_context not in invocation.node.contexts:
-                return [{"type": "text", "data": {"text": "当前会话类型不支持此命令"}}]
-            principal = context.principal
-            if invocation.node.permission == "bot_admin" and not principal.is_bot_admin:
-                return [{"type": "text", "data": {"text": "权限不足"}}]
-            if invocation.node.permission == "group_admin" and not (
-                principal.is_bot_admin or principal.can_manage_group(ctx.group_id)
-            ):
-                return [{"type": "text", "data": {"text": "需要当前群管理员或群主权限"}}]
+            refusal                    = command_access(invocation.node, context.principal)
+            if refusal is not None:
+                logger.warning(
+                    "[%s] Command refused: %s reason=%s",
+                    ctx.request_id,
+                    invocation.node.code,
+                    refusal,
+                )
+                text = _refusal_text(
+                    invocation.node,
+                    refusal,
+                    is_private = ctx.is_private,
+                    runner     = bool(ctx.event.get(COMMAND_RUNNER_EVENT_KEY)),
+                )
+                return [{"type": "text", "data": {"text": text}}]
+        elif spec.admin_only and not self.admin_check.is_admin(ctx.user_id):
+            # 只有不经 manifest 注册的命令没有目录节点；它们只声明了 admin_only。
+            logger.warning("[%s] Permission denied for user %s", ctx.request_id, ctx.user_id)
+            return [{"type": "text", "data": {"text": "权限不足"}}]
         start_time = time.perf_counter()
         try:
 
@@ -768,18 +813,183 @@ class Dispatcher:
                 component = f"dispatcher.command.{spec.plugin}.{spec.name}",
             )
 
+    async def run_command_text(
+        self,
+        command_text: str,
+        *,
+        user_id: int,
+        group_id: int | None,
+        request_id: str | None,
+        excluded_plugins: frozenset[str] = frozenset(),
+        caller_plugin: str               = "",
+        group_role: str                  = "unknown",
+        sender_name: str                 = "",
+        operation_id: str                = "",
+    ) -> list[dict[str, Any]]:
+        """以指定用户身份执行一条命令文本，供 Core 签发的命令能力复用 Step E。
+
+        只经过命令匹配、权限与场景校验和插件执行 gate；不观察消息、不进入会话、
+        不回落闲聊。命令新开的交互会话会被立即收回，避免调用方的下一条消息被会话接走。
+        ``group_role`` 沿用发起这一轮的真实消息里的群身份，群管理员命令和本人直接发送时
+        一样判断；``sender_name`` 是这条消息里的显示名，命令需要显示是谁时（如 ``/mc say``）
+        和本人发送时一样。``operation_id`` 区分同一轮里的每次调用：插件按请求 ID 防重复
+        结算时，两次独立调用不会被当成同一次重复提交。命令返回的发送回执原样交回调用方。
+        """
+
+        text     = str(command_text or "").strip()
+        prefixes = [
+            str(item)
+            for item in self.config_provider.config.get("command_prefixes", ["/"]) or ["/"]
+        ]
+        used = next((item for item in prefixes if item), "/")
+        for prefix_text in prefixes:
+            if prefix_text and text.startswith(prefix_text):
+                text = text[len(prefix_text) :].lstrip()
+                used = prefix_text
+                break
+        text, mention_segments = _split_cq_mentions(text)
+        if not text:
+            return [{"type": "text", "data": {"text": "命令为空"}}]
+        resolved = self.router.resolve(text)
+        if resolved is None:
+            safe_cmd = Dispatcher._truncate_text(text.split()[0], max_len=20)
+            return [{"type": "text", "data": {"text": f"❓ 未知命令: /{safe_cmd}"}}]
+        spec, _args = resolved
+        if spec.plugin in excluded_plugins:
+            return [{"type": "text", "data": {"text": f"不能从这里调用 /{spec.name}"}}]
+
+        is_private = group_id is None
+
+        # 事件正文保留命令前缀，与用户直接发送时一致；插件会据此区分命令与会话输入。
+        raw_text               = f"{used}{text}"
+        sender: dict[str, Any] = {"user_id": user_id}
+        if sender_name:
+            sender["nickname"] = sender_name
+        if not is_private and group_role in {"owner", "admin", "member"}:
+            sender["role"] = group_role
+        event: dict[str, Any] = {
+            "post_type": "message",
+            "message_type": "private" if is_private else "group",
+            "user_id": user_id,
+            "message": [{"type": "text", "data": {"text": raw_text}}, *mention_segments],
+            "raw_message": raw_text,
+            "sender": sender,
+            COMMAND_RUNNER_EVENT_KEY: caller_plugin or "core",
+        }
+        if group_id is not None:
+            event["group_id"] = group_id
+        ctx = MessageContext(
+            request_id=f"{request_id or 'core'}.command.{operation_id or uuid.uuid4().hex[:12]}",
+            text=raw_text,
+            clean_text=text,
+            user_id=user_id,
+            group_id=group_id,
+            is_private=is_private,
+            has_bot_name=False,
+            has_prefix=True,
+            has_command_prefix=True,
+            is_only_bot_name=False,
+            is_at_me=False,
+            is_url_only=False,
+            event=event,
+        )
+        # 命令在一次性的会话空间里执行：插件看不到用户正在进行的交互，命令新开的会话
+        # 也不会替换用户原有会话或接走用户之后的消息。
+        from .session import SessionManager
+
+        sandbox = SessionManager()
+        result = await self._execute_command(resolved, ctx, session_manager=sandbox) or []
+        opened = await sandbox.peek(user_id, group_id)
+        if opened is not None:
+            logger.info(
+                "[%s] Interactive session from command runner discarded: plugin=%s",
+                ctx.request_id,
+                opened.plugin_name,
+            )
+            await self._close_runner_session(opened, ctx, sandbox)
+            note = {
+                "type": "text",
+                "data": {
+                    "text": "（这条命令停在了等待回复的交互步骤，操作没有完成，会话已结束。请改用一次性写法，比如补全参数或使用跳过确认的选项；需要发起人决定的，先把情况告诉发起人。）"
+                },
+            }
+            receipt = getattr(result, "delivery_receipt", None)
+            result  = (
+                DeliverySegments([*result, note], receipt)
+                if isinstance(receipt, DeliveryReceipt)
+                else [*result, note]
+            )
+        return result
+
+    async def _close_runner_session(
+        self,
+        opened: Session,
+        ctx: MessageContext,
+        sandbox: SessionManager,
+    ) -> None:
+        """结束命令执行器里新开的会话：和用户发“退出”一样先交给插件的 ``close_session``
+        收回连接、后台任务等资源，再删除会话。"""
+
+        user_id = cast(int, ctx.user_id)
+        plugin  = self.plugin_registry.get(opened.plugin_name)
+        if (
+            plugin is None
+            or getattr(getattr(plugin, "module", None), "close_session", None) is None
+        ):
+            await sandbox.delete(user_id, ctx.group_id)
+            return
+        context                 = self._build_event_context(opened.plugin_name, ctx)
+        context.session_manager = sandbox
+        component               = f"dispatcher.runner_session_close.{opened.plugin_name}"
+
+        async def close(session: Session) -> bool:
+            await self._close_plugin_session(
+                plugin, ctx.event, context, session, component=component
+            )
+            return await sandbox.delete(user_id, ctx.group_id)
+
+        async def run_close() -> bool | None:
+            return await sandbox.update(user_id, ctx.group_id, close)
+
+        try:
+            await invoke_loaded_plugin(plugin, run_close)
+        except Exception as exc:
+            public_error_message(context, exc, logger=logger, component=component)
+        await sandbox.delete(user_id, ctx.group_id)
+
+    async def _close_plugin_session(
+        self,
+        plugin: Any,
+        event: dict[str, Any],
+        context: Any,
+        session: Session,
+        *,
+        component: str,
+    ) -> None:
+        """交给插件的 ``close_session`` 收回连接、后台任务等资源；插件出错只记录，会话照常结束。"""
+
+        hook = getattr(getattr(plugin, "module", None), "close_session", None)
+        if hook is None:
+            return
+        try:
+            await call_plugin_callback(hook, event, context, session)
+        except Exception as exc:
+            public_error_message(context, exc, logger=logger, component=component)
+
     # ============================================================
     # 会话处理
     # ============================================================
 
-    def _session_context_is_allowed(self, plugin_name: str, *, is_private: bool) -> bool:
-        """Apply the plugin's published root-command contexts to continuations."""
+    def _session_still_usable(self, plugin_name: str, principal: PluginPrincipal) -> bool:
+        """会话每次继续前复核：此人此刻在这里至少还能用这个插件的一条顶层命令。
 
-        required_context = "private" if is_private else "group"
-        roots            = tuple(
+        和命令同一处判断（``command_access``）：场景不再允许或权限被撤销时会话关闭。
+        """
+
+        roots = tuple(
             root for root in self.router.get_command_catalog() if root.plugin == plugin_name
         )
-        return not roots or any(required_context in root.contexts for root in roots)
+        return not roots or any(command_access(root, principal) is None for root in roots)
 
     async def _try_handle_session(self, ctx: MessageContext) -> list[dict[str, Any]] | None:
         """
@@ -814,22 +1024,13 @@ class Dispatcher:
                 _context: Any              = context,
                 _expected_plugin_name: str = expected_plugin_name,
             ) -> None:
-                if not _plugin or not hasattr(_plugin.module, "close_session"):
-                    return
-                try:
-                    await call_plugin_callback(
-                        _plugin.module.close_session,
-                        ctx.event,
-                        _context,
-                        session,
-                    )
-                except Exception as exc:
-                    public_error_message(
-                        _context,
-                        exc,
-                        logger    = logger,
-                        component = f"dispatcher.session_close.{_expected_plugin_name}",
-                    )
+                await self._close_plugin_session(
+                    _plugin,
+                    ctx.event,
+                    _context,
+                    session,
+                    component=f"dispatcher.session_close.{_expected_plugin_name}",
+                )
 
             async def handle_active_session(
                 session: Session,
@@ -852,14 +1053,14 @@ class Dispatcher:
                     _expected_plugin_name,
                 )
 
-                if not self._session_context_is_allowed(
+                if not self._session_still_usable(
                     _expected_plugin_name,
-                    is_private=ctx.is_private,
+                    self._principal_for_event(ctx),
                 ):
                     await close_plugin_session(session)
                     await session_manager.delete(user_id, ctx.group_id)
                     logger.warning(
-                        "[%s] Closed session outside published context plugin=%s context=%s",
+                        "[%s] Closed session the user can no longer use plugin=%s context=%s",
                         ctx.request_id,
                         _expected_plugin_name,
                         "private" if ctx.is_private else "group",
@@ -867,23 +1068,9 @@ class Dispatcher:
                     return [
                         {
                             "type": "text",
-                            "data": {"text": "当前会话类型不再受支持，会话已关闭"},
+                            "data": {"text": "你在这里已经不能再用这个功能，会话已关闭"},
                         }
                     ]
-
-                if self.plugin_registry.has_capability(
-                    _expected_plugin_name,
-                    "admin_sessions",
-                ) is True and not self.admin_check.is_admin(user_id):
-                    await close_plugin_session(session)
-                    await session_manager.delete(user_id, ctx.group_id)
-                    logger.warning(
-                        "[%s] Revoked privileged session plugin=%s user=%s",
-                        ctx.request_id,
-                        _expected_plugin_name,
-                        user_id,
-                    )
-                    return [{"type": "text", "data": {"text": "权限已变更，高权限会话已关闭"}}]
 
                 # end_session()/delete() re-enters this same key from the same
                 # operation task, so it cannot race another continuation.

@@ -493,8 +493,11 @@ class TestPluginManifest:
         ).capabilities == ["secret_admin"]
         assert PluginManifest(
             name         = "codex",
-            capabilities = ["admin_sessions", "execution_timeout_exempt"],
-        ).capabilities == ["admin_sessions", "execution_timeout_exempt"]
+            capabilities = ["execution_timeout_exempt"],
+        ).capabilities == ["execution_timeout_exempt"]
+        # 会话权限跟随命令声明，不再有单独的 admin_sessions。
+        with pytest.raises(ValidationError):
+            PluginManifest(name="codex", capabilities=["admin_sessions"])
 
         for payload in (
             {"name": "other", "capabilities": ["secret_admin"]},

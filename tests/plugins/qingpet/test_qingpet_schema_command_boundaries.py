@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from core.interfaces import PluginCapabilities, PluginPrincipal
+from core.router import command_access
 from plugins.qingpet import main as qingpet_main
 from plugins.qingpet.commands.admin_commands import (
     handle_manage_activity,
@@ -219,35 +220,30 @@ def test_admin_command_uses_core_principal_for_current_group(role, is_bot_admin)
 
 
 @pytest.mark.parametrize(
-    "principal",
+    ("principal", "allowed"),
     [
-        PluginPrincipal(kind="user", user_id=999, group_id=10001, group_role="owner"),
-        PluginPrincipal(kind="user", user_id=123456789, group_id=10002, group_role="admin"),
-        PluginPrincipal(kind="user", user_id=123456789, group_id=10001, group_role="member"),
-        PluginPrincipal(
-            kind         = "user",
-            user_id      = 123456789,
-            group_id     = 10001,
-            is_bot_admin = True,
-            group_role   = "member",
+        (PluginPrincipal(kind="user", user_id=1, group_id=10001, group_role="owner"), True),
+        (PluginPrincipal(kind="user", user_id=1, group_id=10001, group_role="admin"), True),
+        (
+            PluginPrincipal(
+                kind         = "user",
+                user_id      = 1,
+                group_id     = 10001,
+                is_bot_admin = True,
+                group_role   = "member",
+            ),
+            True,
         ),
-        PluginPrincipal(kind="lifecycle"),
+        (PluginPrincipal(kind="user", user_id=1, group_id=10001, group_role="member"), False),
+        (PluginPrincipal(kind="user", user_id=1, is_private=True), False),
     ],
 )
-def test_admin_command_rejects_mismatched_or_unprivileged_principal(principal):
-    temp_db, db_path = _make_temp_db()
-    try:
-        ok, _msg = qingpet_main._handle_admin_command(
-            "123456789",
-            10001,
-            "开启",
-            temp_db,
-            context=_PrincipalContext(principal),
-        )
-    finally:
-        _cleanup_temp_db(temp_db, db_path)
+def test_admin_commands_are_declared_for_group_managers(principal, allowed):
+    """谁能用管理命令写在 plugin.json 里，由 Core 的 command_access 在调用插件前统一判断。"""
 
-    assert ok is False
+    admin = qingpet_main._catalog_root(None).resolve_child("admin")
+    assert admin is not None and admin.permission == "group_admin"
+    assert (command_access(admin, principal) is None) is allowed
 
 
 def test_private_backpack_uses_real_group_scope_and_private_rate_bucket():
@@ -977,7 +973,7 @@ def test_private_task_claim_uses_the_group_prefix(monkeypatch):
 def test_admin_commands_reject_malformed_arguments(handler, arguments):
     temp_db, db_path = _make_temp_db()
     try:
-        ok, _message = handler("admin", 70027, arguments, temp_db, True)
+        ok, _message = handler("admin", 70027, arguments, temp_db)
     finally:
         _cleanup_temp_db(temp_db, db_path)
 
@@ -988,7 +984,7 @@ def test_admin_commands_reject_malformed_arguments(handler, arguments):
 def test_activity_creation_rejects_unreachable_or_empty_progress(arguments):
     temp_db, db_path = _make_temp_db()
     try:
-        ok, _message = handle_manage_activity("admin", 70028, arguments, temp_db, True)
+        ok, _message = handle_manage_activity("admin", 70028, arguments, temp_db)
         activities = temp_db.get_active_activities(70028)
     finally:
         _cleanup_temp_db(temp_db, db_path)

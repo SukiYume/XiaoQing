@@ -137,6 +137,18 @@ def extract_text(message: Any) -> str:
     return scan_message(message).text
 
 
+def sender_display_name(sender: Any) -> str:
+    """消息发送者在群里显示的名字：群名片、昵称、名称依次取第一个非空的；都没有时为空串。"""
+
+    if not isinstance(sender, dict):
+        return ""
+    for key in ("card", "nickname", "name"):
+        value = sender.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 def contains_bot_name(text: str, bot_name: str) -> bool:
     if not text or not bot_name:
         return False

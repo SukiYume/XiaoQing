@@ -194,7 +194,7 @@ def handle_backpack(user_id: str, group_id: int, args: str, db: Database) -> tup
             # 历史背包可能残留已下架 ID；保留可见性，便于管理员排查数据。
             items_list.append(f"• [{item_id}] 未知道具 x{count}")
 
-    return True, "📦 **背包内容**\n\n" + "\n".join(items_list)
+    return True, "📦 背包内容\n\n" + "\n".join(items_list)
 
 
 def handle_shop(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
@@ -223,7 +223,7 @@ def handle_shop(user_id: str, group_id: int, args: str, db: Database) -> tuple[b
             f"• [{item_id}] {item.name} ({item.rarity.value}) - {item.price}金币\n  效果: {effect_str}"
         )
 
-    return True, "🛒 **道具商店**\n\n使用 /宠物 购买 <道具ID/名字> [数量] 购买\n\n" + "\n\n".join(
+    return True, "🛒 道具商店\n\n使用 /宠物 购买 <道具ID/名字> [数量] 购买\n\n" + "\n\n".join(
         shop_list
     )
 
@@ -415,9 +415,9 @@ def handle_activity(user_id: str, group_id: int, args: str, db: Database) -> tup
 
     activities = db.get_active_activities(group_id)
     if not activities:
-        return True, "🎉 **群活动**\n\n当前暂无进行中的活动\n敬请期待！"
+        return True, "🎉 群活动\n\n当前暂无进行中的活动\n敬请期待！"
 
-    lines = ["🎉 **群活动**", ""]
+    lines = ["🎉 群活动", ""]
     for act in activities:
         title    = act.get("title", act.get("activity_type", "未知活动"))
         desc     = act.get("description", "")
@@ -426,7 +426,7 @@ def handle_activity(user_id: str, group_id: int, args: str, db: Database) -> tup
         reward   = act.get("reward_coins", 0)
         progress = min(100, int(current / target * 100)) if target > 0 else 0
 
-        lines.append(f"📌 **#{act['id']} {title}**")
+        lines.append(f"📌 #{act['id']} {title}")
         if desc:
             lines.append(f"  {desc}")
         lines.extend(
@@ -472,7 +472,7 @@ def handle_task(user_id: str, group_id: int, args: str, db: Database) -> tuple[b
         return True, with_pet_name(pet, "暂无可领取的任务奖励（未完成或已领取）")
 
     tasks         = db.get_or_create_daily_tasks(user_id, resolved_group_id)
-    lines         = ["📋 **每日任务**", ""]
+    lines         = ["📋 每日任务", ""]
     all_completed = True
     for task in tasks:
         task_type = task["task_type"]
@@ -518,7 +518,7 @@ def handle_group_task(user_id: str, group_id: int, args: str, db: Database) -> t
         if not claimed:
             return False, "暂无可领取的群任务奖励（未完成或已领取）"
         return True, f"🎁 已领取群任务奖励：{total}金币\n" + "\n".join(claimed)
-    lines = ["📋 **今日群任务**"]
+    lines = ["📋 今日群任务"]
     for task in tasks:
         done = int(task["current_value"]) >= int(task["target_value"])
         lines.append(
@@ -572,7 +572,7 @@ def handle_minigame(
     """路由宠物小游戏命令。"""
     if not args.strip():
         return True, (
-            "🎮 **小游戏**\n\n"
+            "🎮 小游戏\n\n"
             "• /宠物 游戏 猜拳 <石头/剪刀/布> - 猜拳\n"
             "• /宠物 游戏 骰子 - 骰子比大小\n"
             "• /宠物 游戏 赛跑 @QQ号 - 宠物赛跑\n"

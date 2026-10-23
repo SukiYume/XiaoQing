@@ -40,7 +40,7 @@ class TestDiaryViewRegression:
 
             assert result["status"] == "success"
             assert "2026-03-28 的日记条目" in result["message"]
-            assert "`82d34407`" in result["message"]
+            assert "82d34407" in result["message"]
             assert "今天周六，十点多醒来" in result["message"]
         finally:
             db.cleanup()

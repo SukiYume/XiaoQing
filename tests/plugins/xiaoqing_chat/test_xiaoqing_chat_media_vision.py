@@ -165,7 +165,11 @@ async def test_render_event_media_text_preserves_visible_text_for_text_heavy_scr
     assert "只记录画面中可以直接观察或清晰读取的信息" in prompt
     assert "不要把审美评价、幽默效果、文化含义、人物动机或聊天意图写成可见事实" in prompt
     assert all(marker not in prompt for marker in ("例如", "比如", "示例："))
-    assert captured["max_tokens"] >= 320
+    # 文字为主的截图逐句转写，关键信息照原样保留，界面元素不转写，看不清的字原位标出。
+    assert "照原样保留" in prompt
+    assert "界面元素" in prompt
+    assert "〔看不清〕" in prompt
+    assert captured["max_tokens"] >= 800
     assert "射击训练误燃干草" in text
     assert "5小时" in text
     assert "熊袭击导致队员受伤" in text
@@ -221,7 +225,7 @@ async def test_render_event_media_text_retries_when_finish_reason_length(mock_co
         text = await render_event_media_text(event, context=mock_context, runtime=runtime)
 
     assert calls == 2
-    assert max_tokens_seen == [360, 720]
+    assert max_tokens_seen == [800, 1600]
     assert "遇熊袭击" in text
     warning_lines = "\n".join(
         str(call.args[1]) if len(call.args) > 1 else ""
@@ -229,6 +233,64 @@ async def test_render_event_media_text_retries_when_finish_reason_length(mock_co
     )
     assert '"reason_code": "length_truncated"' in warning_lines
     assert '"step": "media.analyze.provider_retry"' in warning_lines
+
+
+@pytest.mark.asyncio
+async def test_text_on_the_image_is_not_mistaken_for_a_vision_refusal(mock_context):
+    """图上写着“无法访问”、带下载参数的网址，都是图的内容；读出来的结果照常采用。"""
+
+    runtime = _make_media_runtime()
+    event   = {"message": [{"type": "image", "data": {"url": "https://example.com/notice.png"}}]}
+    calls   = 0
+
+    async def _fake_chat_raw(**kwargs):
+        nonlocal calls
+        calls += 1
+        return _raw_media_response(
+            json.dumps(
+                {
+                    "kind": "image",
+                    "description": "网页通知截图，蓝色标题栏。",
+                    "visible_text": "系统维护通知\n10月25日 0:00-6:00 图书馆数据库无法访问，"
+                    "https://lib.example.edu/download?appid=lib 同步停用",
+                    "emotion_tags": [],
+                },
+                ensure_ascii=False,
+            )
+        )
+
+    with (
+        patch(
+            "plugins.xiaoqing_chat.media.sources._download_url_bytes",
+            new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
+        ),
+        patch(
+            "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+            new=AsyncMock(side_effect=_fake_chat_raw),
+        ),
+    ):
+        text = await render_event_media_text(event, context=mock_context, runtime=runtime)
+
+    assert calls == 1
+    assert "图书馆数据库无法访问" in text
+    assert "download?appid=lib" in text
+    assert "网页通知截图，蓝色标题栏，文字内容是“系统维护通知 10月25日" in text
+
+
+def test_merged_summary_stays_one_bounded_marker():
+    from plugins.xiaoqing_chat.constants import MEDIA_SUMMARY_MAX_CHARS
+    from plugins.xiaoqing_chat.llm.media_evidence import INBOUND_MEDIA_MARKER_RE
+    from plugins.xiaoqing_chat.media.event_media_analysis import _merge_visible_text
+    from plugins.xiaoqing_chat.media.markers import build_marker, split_visible_text
+
+    summary = _merge_visible_text("网页通知截图。", "[附件]\n" + "报名截止11月7日。" * 300)
+
+    assert len(summary) <= MEDIA_SUMMARY_MAX_CHARS
+    assert not any(char in summary for char in "\n[]")
+    assert summary.startswith("网页通知截图，文字内容是“［附件］ 报名截止11月7日。")
+    assert summary.endswith("…”")
+    assert INBOUND_MEDIA_MARKER_RE.fullmatch(build_marker("image", summary, ()))
+    assert split_visible_text(summary)[0] == "网页通知截图"
 
 
 @pytest.mark.asyncio

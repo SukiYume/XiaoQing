@@ -73,7 +73,7 @@ def handle_dress(user_id: str, group_id: int, args: str, db: Database) -> tuple[
 
 def _show_dress_help() -> tuple[bool, str]:
     return True, (
-        "👗 **装扮系统**\n\n"
+        "👗 装扮系统\n\n"
         "• /宠物 装扮 查看 - 查看当前装扮\n"
         "• /宠物 装扮 商店 - 查看装扮商店\n"
         "• /宠物 装扮 购买 <装扮ID> - 购买装扮\n"
@@ -87,7 +87,7 @@ def _dress_view(user_id: str, group_id: int, db: Database) -> tuple[bool, str]:
     if pet is None:
         return False, "你还没有宠物"
 
-    lines = [f"👗 **{pet.name}的装扮**", ""]
+    lines = [f"👗 {pet.name}的装扮", ""]
     for slot_name, item_id in pet.get_dress_slots().items():
         item = DEFAULT_DRESS_ITEMS.get(item_id) if item_id else None
         if item is None:
@@ -115,9 +115,9 @@ def _dress_shop() -> tuple[bool, str]:
         slot_name = item["slot"].value
         by_slot.setdefault(slot_name, []).append((item_id, item))
 
-    lines = ["👗 **装扮商店**", "", "使用 /宠物 装扮 购买 <ID> 购买", ""]
+    lines = ["👗 装扮商店", "", "使用 /宠物 装扮 购买 <ID> 购买", ""]
     for slot_name, items in by_slot.items():
-        lines.append(f"📌 **{slot_name}**")
+        lines.append(f"📌 {slot_name}")
         for item_id, item in items:
             currency   = item.get("currency", "coins")
             price_icon = "💰" if currency == "coins" else "❤️"
@@ -214,7 +214,7 @@ def handle_trade(user_id: str, group_id: int, args: str, db: Database) -> tuple[
 
     if not args.strip():
         return True, (
-            "🏪 **交易市场**\n\n"
+            "🏪 交易市场\n\n"
             "• /宠物 交易 列表 - 查看挂单\n"
             "• /宠物 交易 挂单 <道具ID> <数量> <价格> - 上架\n"
             "• /宠物 交易 购买 <订单号> - 购买\n"
@@ -244,7 +244,7 @@ def _trade_list(group_id: int, db: Database) -> tuple[bool, str]:
     if not listings:
         return True, "🏪 当前没有挂单"
 
-    lines        = ["🏪 **交易市场**", ""]
+    lines        = ["🏪 交易市场", ""]
     item_service = ItemService(db)
     for listing in listings:
         item = item_service.get_item(listing["item_id"])
@@ -365,13 +365,11 @@ def _show_info(group_id: int, db: Database) -> tuple[bool, str]:
     show = db.get_active_pet_show(group_id)
     if show is None:
         return True, (
-            "🏆 **宠物展示会**\n\n"
-            "当前没有进行中的展示会\n"
-            "管理员可使用 /宠物 管理 公告 展示会 来开启"
+            "🏆 宠物展示会\n\n当前没有进行中的展示会\n管理员可使用 /宠物 管理 公告 展示会 来开启"
         )
 
     votes = db.get_pet_show_votes(show["id"])
-    lines = [f"🏆 **{show['title']}**", "", f"截止时间: {show['end_time']}", ""]
+    lines = [f"🏆 {show['title']}", "", f"截止时间: {show['end_time']}", ""]
 
     if votes:
         lines.append("当前排名:")
@@ -419,12 +417,8 @@ def _show_vote(user_id: str, group_id: int, args: str, db: Database) -> tuple[bo
 # ──────────────────── 管理命令: 删除、公告 ────────────────────
 
 
-def handle_manage_delete(
-    user_id: str, group_id: int, args: str, db: Database, is_admin: bool = False
-) -> tuple[bool, str]:
+def handle_manage_delete(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     """经管理员授权后删除指定用户的宠物。"""
-    if not is_admin:
-        return False, "⚠️ 该操作需要管理员权限"
 
     match = re.fullmatch(r"@?(\d+)(?:\s+(确认|confirm))?", args.strip(), re.IGNORECASE)
     if not match:
@@ -447,15 +441,13 @@ def handle_manage_delete(
 
 
 def handle_manage_announce(
-    user_id: str, group_id: int, args: str, db: Database, is_admin: bool = False
+    user_id: str, group_id: int, args: str, db: Database
 ) -> tuple[bool, str]:
     """经管理员授权后开启或结束宠物展示会。"""
-    if not is_admin:
-        return False, "⚠️ 该操作需要管理员权限"
 
     if not args.strip():
         return True, (
-            "📢 **管理公告**\n\n"
+            "📢 管理公告\n\n"
             "• /宠物 管理 公告 展示会 [标题] - 开启宠物展示会\n"
             "• /宠物 管理 公告 结束展示会 - 结束展示会并发放奖励"
         )
@@ -473,7 +465,7 @@ def handle_manage_announce(
         show_id = db.create_pet_show(group_id, title, PET_SHOW_CONFIG["duration_hours"])
         if show_id is not None:
             return True, (
-                f"🏆 **{title}** 已开启！\n\n"
+                f"🏆 {title} 已开启！\n\n"
                 f"持续时间: {PET_SHOW_CONFIG['duration_hours']}小时\n"
                 f"投票: /宠物 展示 投票 @QQ号\n"
                 f"每人最多{PET_SHOW_CONFIG['max_votes_per_user']}票"

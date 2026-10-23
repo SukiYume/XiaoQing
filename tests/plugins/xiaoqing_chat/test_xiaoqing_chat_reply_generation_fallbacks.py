@@ -7,6 +7,7 @@ from contextlib import ExitStack
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
+from plugins.xiaoqing_chat.persona import PersonaCard
 from tests.helpers.xiaoqing_chat_test_support import (
     AsyncMock,
     MagicMock,
@@ -84,16 +85,9 @@ async def test_generate_reply_checker_timeout_allows_non_forced_reply(mock_conte
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
-            personality=SimpleNamespace(
-                multiple_reply_style = [],
-                multiple_probability = 0.0,
-                identity             = "",
-                reply_style          = "",
-            ),
+            personality=SimpleNamespace(card=PersonaCard()),
             keyword_reaction=SimpleNamespace(keyword_rules=[], regex_rules=[]),
             brain_chat=SimpleNamespace(
-                brain_identity         = "",
-                brain_reply_style      = "",
                 brain_max_context_size = None,
                 brain_temperature      = None,
             ),
@@ -241,6 +235,7 @@ def test_context_grounding_failure_reports_unavailable_reply(mock_context) -> No
         forced     = True,
         request_id = "opinion-fallback",
         text       = "我觉得所有方案只要加缓存就都能变快，你必须同意我。",
+        event      = {},
         history    = [],
         bot_name   = "小青",
         chat_id    = "group:1",
@@ -271,3 +266,85 @@ def test_context_grounding_failure_reports_unavailable_reply(mock_context) -> No
 
     assert draft is not None
     assert draft.text == "等等，我好像没跟上你们说的是哪件事"
+
+
+_NOTICE_MARKER = (
+    "[图片：网页通知截图，文字内容是“报名截止时间：以系统岗位发布页面为准，有什么问题联系人事处”]"
+)
+
+
+@pytest.mark.parametrize(
+    "readable,text,expected",
+    [
+        # 只发了图：图上文字里的“什么”不算用户在提问，读出来了就说看到了。
+        (True, _NOTICE_MARKER, "看到啦"),
+        (True, f"小青 这个几号截止？{_NOTICE_MARKER}", "这个我不敢打包票，先不乱说"),
+        (False, "[图片：图片内容读取失败]", "图我这边没刷出来诶"),
+    ],
+    ids=["shared", "asked", "unreadable"],
+)
+def test_media_rejection_fallback_never_contradicts_the_reading(
+    mock_context, readable, text, expected
+):
+    from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
+    from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
+    from plugins.xiaoqing_chat.reply_draft import RejectedCandidate
+    from plugins.xiaoqing_chat.reply_fallbacks import finish_rejected_candidate
+
+    plan = reply_plan(
+        forced  = True,
+        text    = text,
+        context = mock_context,
+        runtime=SimpleNamespace(cfg=XiaoQingChatConfig()),
+        event={
+            "message": [{"type": "image", "data": {}}],
+            "_xc_effective_user_parts": [
+                {
+                    "kind": "image",
+                    "description": "国家天文台博士后评聘通知" if readable else "图片内容读取失败",
+                }
+            ],
+        },
+    )
+    rejected = RejectedCandidate(
+        text   = "图片上是明年夏天截止",
+        result = ReplyCheckResult(False, "图片只写以系统页面为准", True, "hard", "media_grounding"),
+    )
+    draft = finish_rejected_candidate(plan, rejected)
+
+    assert draft is not None
+    assert draft.text == expected
+    assert "没看清" not in draft.text
+
+
+def test_context_rejection_on_a_read_image_does_not_claim_losing_the_thread(mock_context):
+    """实测：只@小青发了通知截图，审查把“咱本科的看看就好”当成无出处的群聊事实拦下。
+
+    图已经读出来，兜底不能说“没跟上你们说的是哪件事”。
+    """
+    from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
+    from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
+    from plugins.xiaoqing_chat.reply_draft import RejectedCandidate
+    from plugins.xiaoqing_chat.reply_fallbacks import finish_rejected_candidate
+
+    plan = reply_plan(
+        forced  = True,
+        text    = "[图片：网页通知截图，文字内容是“现面向在读研究生招聘冬季学期课程助教”]",
+        context = mock_context,
+        runtime=SimpleNamespace(cfg=XiaoQingChatConfig()),
+        event={
+            "message": [{"type": "image", "data": {}}],
+            "_xc_effective_user_parts": [{"kind": "image", "description": "研究生助教招聘通知"}],
+        },
+    )
+    rejected = RejectedCandidate(
+        text   = "助教招的是研究生吧，咱本科的看看就好",
+        result = ReplyCheckResult(
+            False, "对话事实的引用或具体测量值缺少原文依据。", True, "hard", "context_grounding"
+        ),
+    )
+
+    draft = finish_rejected_candidate(plan, rejected)
+
+    assert draft is not None
+    assert draft.text == "看到啦"

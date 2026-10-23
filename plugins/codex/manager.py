@@ -207,6 +207,7 @@ class CodexQueueManager:
         self.shutting_down = False
         self.lock = asyncio.Lock()
         self.global_sem = AdjustableSemaphore(self.config.max_parallel_jobs)
+        self.agent_tasks: set[asyncio.Task[dict[str, Any]]] = set()
         self._load()
 
     async def reconfigure(
@@ -660,14 +661,14 @@ class CodexQueueManager:
         queued_count = sum(1 for queued in queue if not queued.metadata.get("queue_overhead"))
         if queued_count >= self.config.emergency_queue_limit:
             raise RuntimeError(
-                f"会话 `{session.label}` 达到进程保护紧急队列上限 "
+                f"会话 {session.label} 达到进程保护紧急队列上限 "
                 f"{self.config.emergency_queue_limit}。"
             )
         if disk_usage_bytes >= self.config.emergency_disk_bytes:
             raise RuntimeError("Codex 数据目录达到紧急磁盘保护阈值，请清理制品或提高配置。")
         if queued_count >= self.config.per_session_queue_limit:
             raise RuntimeError(
-                f"会话 `{session.label}` 已达到队列上限 {self.config.per_session_queue_limit}。"
+                f"会话 {session.label} 已达到队列上限 {self.config.per_session_queue_limit}。"
             )
         if len(prompt) > self.config.max_prompt_chars:
             raise RuntimeError(f"任务内容超过 {self.config.max_prompt_chars} 字符上限。")
@@ -771,7 +772,7 @@ class CodexQueueManager:
                 user_id  = user_id,
                 group_id = group_id,
             )
-        return f"已创建 Codex 会话 `{label}`\n工作目录名称: {_public_path_name(cwd)}"
+        return f"已创建 Codex 会话 {label}\n工作目录名称: {_public_path_name(cwd)}"
 
     async def enqueue(
         self,
@@ -811,10 +812,122 @@ class CodexQueueManager:
             except RuntimeError as exc:
                 return str(exc)
             if tasks_ahead:
-                return (
-                    f"已加入 Codex 队列: `{label}` #{job.job_id}\n前面还有 {tasks_ahead} 个任务。"
+                return f"已加入 Codex 队列: {label} #{job.job_id}\n前面还有 {tasks_ahead} 个任务。"
+            return f"已收到 Codex 任务: {label} #{job.job_id}\n开始后台执行。"
+
+    def start_agent_task(
+        self, label: str, prompt: str, **kwargs: Any
+    ) -> asyncio.Task[dict[str, Any]]:
+        """启动 agent 任务并交回 Task；等待在 Codex 插件执行通道之外进行。"""
+
+        task = asyncio.create_task(
+            self.run_agent_task(label, prompt, **kwargs),
+            name=f"codex-agent-task:{label}",
+        )
+        self.agent_tasks.add(task)
+        task.add_done_callback(self.agent_tasks.discard)
+        return task
+
+    async def run_agent_task(
+        self,
+        label: str,
+        prompt: str,
+        *,
+        cwd_text: str | None,
+        timeout_seconds: float,
+        user_id: int | None,
+        group_id: int | None,
+        context: PluginContextProtocol,
+    ) -> dict[str, Any]:
+        """为 xiaoqing_agent 执行一次 Codex 任务并等待结束；结果交还调用方，不直接投递。
+
+        会话不存在时按 ``cwd_text`` 创建，已存在时沿用原工作目录和 Codex thread。
+        等待超时或调用方取消时同步取消该任务，避免后台残留无人认领的执行。
+        """
+
+        label  = label.strip()
+        prompt = prompt.strip()
+        if re.fullmatch(LABEL_PATTERN, label) is None:
+            return {"status": "error", "error": "会话名只能使用 1-32 位字母、数字、下划线或横线。"}
+        if not prompt:
+            return {"status": "error", "error": "任务内容不能为空。"}
+
+        async with self.lock:
+            exists = label in self.sessions
+        if not exists:
+            message = await self.create_session(
+                label,
+                cwd_text,
+                user_id  = user_id,
+                group_id = group_id,
+            )
+            async with self.lock:
+                exists = label in self.sessions
+            if not exists:
+                return {"status": "error", "error": message}
+
+        disk_usage_bytes = await self._measure_disk_usage_bytes(
+            max_bytes=self.config.emergency_disk_bytes
+        )
+        async with self.lock:
+            session = self.sessions.get(label)
+            if session is None:
+                return {"status": "error", "error": f"Codex 会话不存在: {label}"}
+            try:
+                job, _tasks_ahead = self._enqueue_job_locked(
+                    session,
+                    prompt,
+                    user_id          = user_id,
+                    group_id         = group_id,
+                    context          = context,
+                    metadata         = {"source": "xiaoqing_agent", "suppress_delivery": True},
+                    disk_usage_bytes = disk_usage_bytes,
                 )
-            return f"已收到 Codex 任务: `{label}` #{job.job_id}\n开始后台执行。"
+            except RuntimeError as exc:
+                return {"status": "error", "error": str(exc)}
+            session_cwd = session.cwd
+
+        wait_timed_out = False
+        try:
+            await asyncio.wait_for(job.finished_event.wait(), timeout=timeout_seconds)
+        except TimeoutError:
+            wait_timed_out = True
+            await self._cancel_agent_job(label, job)
+        except asyncio.CancelledError:
+            await asyncio.shield(self._cancel_agent_job(label, job))
+            raise
+
+        result = job.result
+        return {
+            "status": "timeout" if wait_timed_out else job.status,
+            "session": label,
+            "job_id": job.job_id,
+            "cwd": session_cwd,
+            "exit_code": result.exit_code if result is not None else None,
+            "timed_out": wait_timed_out or bool(result is not None and result.timed_out),
+            "final_text": result.final_text if result is not None else "",
+            "stderr_tail": (
+                result.stderr_tail
+                if result is not None and result.exit_code not in (0, None)
+                else ""
+            ),
+            "images": [artifact.absolute_path for artifact in job.image_artifacts],
+        }
+
+    async def _cancel_agent_job(self, label: str, job: RuntimeJob) -> None:
+        """排队中的任务直接出队；已认领的任务走统一的进程树取消。"""
+
+        async with self.lock:
+            queue = self.queues.get(label)
+            if queue is not None and job in queue:
+                queue.remove(job)
+                self._mark_job_cancelled(job)
+                self._append_history(
+                    label,
+                    {"type": "job.cancelled", "job_id": job.job_id, "status": "queued"},
+                )
+                return
+        await self._cancel_runtime_job(job)
 
     def _ensure_worker_locked(self, label: str) -> None:
         if self.shutting_down or label in self.tombstones:
@@ -1441,7 +1554,7 @@ class CodexQueueManager:
                     continue
                 running = self.running.get(item)
                 queue   = self.queues.get(item, deque())
-                lines.append(f"`{item}` cwd={_public_path_name(session.cwd)}")
+                lines.append(f"{item} cwd={_public_path_name(session.cwd)}")
                 lines.append(f"上下文: {'已创建' if session.thread_id else '未开始'}")
                 lines.append(f"运行中: {'#' + str(running.job_id) if running else '无'}")
                 lines.append(f"排队数: {len(queue)}")
@@ -1530,17 +1643,17 @@ class CodexQueueManager:
                                 "status": "queued",
                             },
                         )
-                        return f"已移除排队任务: `{label}` #{job_id}"
+                        return f"已移除排队任务: {label} #{job_id}"
             job = self.running.get(label)
             if job_id is not None and (job is None or job.job_id != job_id):
-                return f"没有找到任务: `{label}` #{job_id}"
+                return f"没有找到任务: {label} #{job_id}"
             if job is None:
-                return f"`{label}` 当前没有运行中的任务。"
+                return f"{label} 当前没有运行中的任务。"
 
         settled = await self._cancel_runtime_job(job)
         if settled:
-            return f"已取消 Codex 任务: `{label}` #{job.job_id}"
-        return f"已请求取消 Codex 任务: `{label}` #{job.job_id}，任务仍在收敛中。"
+            return f"已取消 Codex 任务: {label} #{job.job_id}"
+        return f"已请求取消 Codex 任务: {label} #{job.job_id}，任务仍在收敛中。"
 
     async def clear_queue(self, label: str) -> str:
         async with self.lock:
@@ -1559,7 +1672,7 @@ class CodexQueueManager:
                     },
                 )
             queue.clear()
-            return f"已清空 `{label}` 的排队任务 {count} 个。"
+            return f"已清空 {label} 的排队任务 {count} 个。"
 
     async def delete_session(
         self,
@@ -1572,10 +1685,10 @@ class CodexQueueManager:
             if label not in self.sessions:
                 return f"Codex 会话不存在: {label}"
             if self._is_protected_session(label) and not (force and allow_protected):
-                return f"`{label}` 是受保护的 Codex 会话，删除需同时使用 --force --protected。"
+                return f"{label} 是受保护的 Codex 会话，删除需同时使用 --force --protected。"
             running = self.running.get(label)
             if running and not force:
-                return f"`{label}` 有任务运行中，先 /codex cancel {label}，或使用 /codex delete {label} --force。"
+                return f"{label} 有任务运行中，先 /codex cancel {label}，或使用 /codex delete {label} --force。"
             queued = len(self.queues.get(label, ()))
             self.tombstones.add(label)
             queue = self.queues.get(label, deque())
@@ -1610,7 +1723,7 @@ class CodexQueueManager:
             )
             archive_path = self._archive_session_dir_locked(label)
         suffix = f"\n历史已归档文件夹: {archive_path.name}" if archive_path else ""
-        return f"已删除 Codex 会话 `{label}`，同时丢弃排队任务 {queued} 个。{suffix}"
+        return f"已删除 Codex 会话 {label}，同时丢弃排队任务 {queued} 个。{suffix}"
 
     async def shutdown(self) -> None:
         async with self.lock:
@@ -1640,6 +1753,11 @@ class CodexQueueManager:
                         if not task.done():
                             task.cancel()
                     await asyncio.gather(*pending, return_exceptions=True)
+        waiting = [agent_task for agent_task in self.agent_tasks if not agent_task.done()]
+        for agent_task in waiting:
+            agent_task.cancel()
+        if waiting:
+            await asyncio.gather(*waiting, return_exceptions=True)
         async with self.lock:
             self.workers.clear()
             self.running.clear()

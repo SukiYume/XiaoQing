@@ -93,7 +93,22 @@ nodeid = "tests/plugins/earthquake/test_earthquake.py::test_animated_webp_is_rej
 reason = "Pillow has no WebP support"
 platforms = ["all"]
 
-# Windows process-tree integration requires a Windows runner.
+# Platform-specific execution and decoding require matching runners.
+[[allow]]
+nodeid = "tests/core/test_process_tree.py::test_smart_decode_falls_back_to_gbk_on_windows"
+reason = "GBK 回退只用于 Windows 本地程序输出"
+platforms = ["posix"]
+
+[[allow]]
+nodeid = "tests/core/test_process_tree.py::test_smart_decode_replaces_unknown_bytes_on_posix"
+reason = "POSIX 没有 GBK 回退"
+platforms = ["windows"]
+
+[[allow]]
+nodeid = "tests/plugins/xiaoqing_agent/test_xiaoqing_agent_shells.py::test_windows_auto_shell_skips_the_wsl_launcher"
+reason = "WSL 启动器只存在于 Windows"
+platforms = ["posix"]
+
 [[allow]]
 nodeid = "tests/plugins/codex/test_codex_process_tree.py::test_real_windows_parent_child_and_grandchild_are_reaped"
 reason = "Windows process-tree integration test"

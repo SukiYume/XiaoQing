@@ -1,17 +1,17 @@
 """Shell 插件的配置、解析、执行与资源回收测试。"""
 
-import asyncio
 import json
 import sys
-import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from core.process_tree import ProcessResult
 from plugins.shell import config as shell_config
 from plugins.shell import main as shell_main
 from tests.helpers.assertions import text_segments_text
+from tests.helpers.asyncio_tools import run_with_subprocess_loop
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.settings_snapshot import with_settings_reader
 
@@ -43,31 +43,6 @@ def mock_event():
         "message_type": "group",
         "group_id": 67890,
     }
-
-
-@pytest.fixture
-def pending_process():
-    """在异步测试的事件循环内创建持续运行的假进程。"""
-
-    def create():
-        proc            = MagicMock()
-        proc.returncode = None
-        proc.stdout     = asyncio.StreamReader()
-        proc.stderr     = asyncio.StreamReader()
-
-        async def wait_forever():
-            await asyncio.Event().wait()
-
-        proc.wait = wait_forever
-        return proc
-
-    return create
-
-
-def _finish_pending_process(proc, returncode: int = -9) -> None:
-    proc.returncode = returncode
-    proc.stdout.feed_eof()
-    proc.stderr.feed_eof()
 
 
 class TestShellConfig:
@@ -616,316 +591,48 @@ class TestShellHandle:
         assert set(command["triggers"]) == {"shell", "sh", "exec"}
 
 
-class TestShellExecutionSafety:
-    """子进程资源限制和跨平台终止语义。"""
-
-    @pytest.fixture(autouse=True)
-    def fake_job_for_mock_process(self, monkeypatch):
-        # 本组使用内存进程；真实 Windows Job 在独立集成回归中验证。
-        monkeypatch.setattr(shell_main, "_attach_windows_job", AsyncMock(return_value=None))
+class TestShellExecution:
+    """进程树归属、输出预算和超时回收在 ``core.process_tree``（见 tests/core/test_process_tree.py）；
+    这里只验证 /shell 怎样把执行结局写成返回码和提示。"""
 
     @pytest.mark.asyncio
-    async def test_execute_command_starts_in_own_process_group(self):
-        captured = {}
-
-        class _Proc:
-            returncode = 0
-
-            def __init__(self):
-                self.stdout = asyncio.StreamReader()
-                self.stderr = asyncio.StreamReader()
-                self.stdout.feed_data(b"ok")
-                self.stdout.feed_eof()
-                self.stderr.feed_eof()
-
-            async def wait(self):
-                return 0
-
-        async def fake_create_subprocess_exec(*args, **kwargs):
-            captured.update(kwargs)
-            return _Proc()
-
-        with patch.object(
-            shell_main.asyncio,
-            "create_subprocess_exec",
-            new=AsyncMock(side_effect=fake_create_subprocess_exec),
-        ):
-            code, stdout, stderr = await shell_main._execute_command(["echo", "ok"], 1)
-
-        assert code == 0
-        assert stdout == "ok"
-        assert stderr == ""
-        expected_stdin = (
-            asyncio.subprocess.PIPE
-            if shell_main.sys.platform == "win32"
-            else asyncio.subprocess.DEVNULL
-        )
-        assert captured["stdin"] is expected_stdin
-        if shell_main.sys.platform == "win32":
-            assert captured.get("creationflags", 0) != 0
-        else:
-            assert captured.get("start_new_session") is True
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("args,timeout", [([], 1), (["echo"], 0), (["echo"], float("inf"))])
-    async def test_execute_command_rejects_invalid_runtime_contract(self, args, timeout):
-        with pytest.raises(ValueError):
-            await shell_main._execute_command(args, timeout)
-
-    @pytest.mark.asyncio
-    async def test_execute_command_timeout_terminates_process_tree(self, pending_process):
-        proc = pending_process()
-
-        async def terminate(_proc):
-            _finish_pending_process(proc)
-
-        with (
-            patch.object(
-                shell_main.asyncio,
-                "create_subprocess_exec",
-                new=AsyncMock(return_value=proc),
+    @pytest.mark.parametrize(
+        ("result", "expected_code", "notice"),
+        [
+            (ProcessResult(3, "out", "err"), 3, None),
+            (ProcessResult(0, "out", ""), 0, None),
+            (
+                ProcessResult(None, "out", "err", timed_out=True),
+                shell_main._EXIT_TIMEOUT,
+                "命令执行超时（2秒）",
             ),
-            patch.object(
-                shell_main, "_terminate_process_tree", new=AsyncMock(side_effect=terminate)
-            ) as mock_terminate,
-        ):
-            code, stdout, stderr = await shell_main._execute_command(["echo", "ok"], 0.01)
-
-        assert code == -1
-        assert stdout == ""
-        assert "超时" in stderr
-        mock_terminate.assert_awaited_once_with(proc)
-
-    @pytest.mark.asyncio
-    async def test_execute_command_output_limit_terminates_process_tree(
-        self,
-        monkeypatch,
-        pending_process,
-    ):
-        proc = pending_process()
-        proc.stdout.feed_data(b"x" * (64 * 1024 + 1))
-
-        async def terminate(_proc):
-            _finish_pending_process(proc)
-
-        monkeypatch.setattr(
-            shell_main.asyncio,
-            "create_subprocess_exec",
-            AsyncMock(return_value=proc),
-        )
-        terminate_mock = AsyncMock(side_effect=terminate)
-        monkeypatch.setattr(shell_main, "_terminate_process_tree", terminate_mock)
-
-        code, stdout, stderr = await shell_main._execute_command(["echo", "ok"], 1)
-
-        assert code == -2
-        assert len(stdout.encode()) <= 64 * 1024
-        assert "安全上限" in stderr
-        terminate_mock.assert_awaited_once_with(proc)
-
-    @pytest.mark.asyncio
-    async def test_stdout_and_stderr_share_capture_limit(self, monkeypatch, pending_process):
-        proc = pending_process()
-        proc.stdout.feed_data(b"o" * (40 * 1024))
-        proc.stderr.feed_data(b"e" * (40 * 1024))
-
-        async def terminate(_proc):
-            _finish_pending_process(proc)
-
-        monkeypatch.setattr(
-            shell_main.asyncio,
-            "create_subprocess_exec",
-            AsyncMock(return_value=proc),
-        )
-        monkeypatch.setattr(
-            shell_main,
-            "_terminate_process_tree",
-            AsyncMock(side_effect=terminate),
-        )
-
-        code, stdout, stderr = await shell_main._execute_command(["echo", "ok"], 1)
-
-        assert code == shell_main._EXIT_OUTPUT_LIMIT
-        assert len(stdout.encode()) + len(stderr.split("\n", 1)[0].encode()) <= 64 * 1024
-
-    @pytest.mark.asyncio
-    async def test_execute_command_cancellation_terminates_process_tree(
-        self,
-        monkeypatch,
-        pending_process,
-    ):
-        proc = pending_process()
-
-        async def terminate(_proc):
-            _finish_pending_process(proc)
-
-        monkeypatch.setattr(
-            shell_main.asyncio,
-            "create_subprocess_exec",
-            AsyncMock(return_value=proc),
-        )
-        terminate_mock = AsyncMock(side_effect=terminate)
-        monkeypatch.setattr(shell_main, "_terminate_process_tree", terminate_mock)
-        task = asyncio.create_task(shell_main._execute_command(["sleep", "10"], 30))
-        await asyncio.sleep(0)
-        task.cancel()
-
-        with pytest.raises(asyncio.CancelledError):
-            await task
-
-        terminate_mock.assert_awaited_once_with(proc)
-
-    @pytest.mark.asyncio
-    async def test_repeated_cancellation_still_finishes_process_cleanup(
-        self,
-        monkeypatch,
-        pending_process,
-    ):
-        proc            = pending_process()
-        cleanup_started = asyncio.Event()
-        release_cleanup = asyncio.Event()
-
-        async def terminate(_proc):
-            cleanup_started.set()
-            await release_cleanup.wait()
-            _finish_pending_process(proc)
-
-        monkeypatch.setattr(
-            shell_main.asyncio,
-            "create_subprocess_exec",
-            AsyncMock(return_value=proc),
-        )
-        terminate_mock = AsyncMock(side_effect=terminate)
-        monkeypatch.setattr(shell_main, "_terminate_process_tree", terminate_mock)
-        task = asyncio.create_task(shell_main._execute_command(["sleep", "10"], 30))
-        await asyncio.sleep(0)
-        task.cancel()
-        await cleanup_started.wait()
-        task.cancel()
-        release_cleanup.set()
-
-        with pytest.raises(asyncio.CancelledError):
-            await task
-
-        terminate_mock.assert_awaited_once_with(proc)
-
-    @pytest.mark.asyncio
-    async def test_windows_taskkill_failure_falls_back_to_direct_kill(self, monkeypatch):
-        proc = MagicMock(pid=123, returncode=None)
-        proc.wait = AsyncMock(return_value=-9)
-        killer = MagicMock(returncode=1)
-        killer.communicate = AsyncMock(return_value=(b"", b""))
-        monkeypatch.setattr(shell_main.sys, "platform", "win32")
-        monkeypatch.setattr(
-            shell_main.asyncio,
-            "create_subprocess_exec",
-            AsyncMock(return_value=killer),
-        )
-
-        await shell_main._terminate_process_tree(proc)
-
-        proc.kill.assert_called_once_with()
-
-    @pytest.mark.asyncio
-    async def test_windows_taskkill_success_does_not_kill_process_twice(self, monkeypatch):
-        proc = MagicMock(pid=123, returncode=None)
-        proc.wait = AsyncMock(return_value=0)
-        killer = MagicMock(returncode=0)
-        killer.communicate = AsyncMock(return_value=(b"", b""))
-        monkeypatch.setattr(shell_main.sys, "platform", "win32")
-        monkeypatch.setattr(
-            shell_main.asyncio,
-            "create_subprocess_exec",
-            AsyncMock(return_value=killer),
-        )
-
-        await shell_main._terminate_process_tree(proc)
-
-        proc.kill.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_posix_group_kill_failure_falls_back_to_direct_kill(self, monkeypatch):
-        proc = MagicMock(pid=123, returncode=None)
-        proc.wait = AsyncMock(return_value=-9)
-        monkeypatch.setattr(shell_main.sys, "platform", "linux")
-        monkeypatch.setattr(shell_main.signal, "SIGKILL", 9, raising=False)
-        monkeypatch.setattr(
-            shell_main.os,
-            "killpg",
-            MagicMock(side_effect=PermissionError),
-            raising=False,
-        )
-
-        await shell_main._terminate_process_tree(proc)
-
-        proc.kill.assert_called_once_with()
-
-
-class TestSmartDecode:
-    """智能解码测试"""
-
-    def test_decode_utf8(self):
-        """测试 UTF-8 解码"""
-        data   = b"hello"
-        result = shell_main._smart_decode(data)
-        assert result == "hello"
-
-    def test_decode_gbk(self, monkeypatch):
-        """测试 GBK 解码"""
-        monkeypatch.setattr(shell_main.sys, "platform", "win32")
-        data   = "你好".encode("gbk")
-        result = shell_main._smart_decode(data)
-        assert result == "你好"
-
-    def test_windows_utf8_is_not_misdecoded_as_gbk(self, monkeypatch):
-        monkeypatch.setattr(shell_main.sys, "platform", "win32")
-
-        assert shell_main._smart_decode("你好".encode()) == "你好"
-
-    def test_unknown_posix_bytes_fall_back_without_failure(self, monkeypatch):
-        monkeypatch.setattr(shell_main.sys, "platform", "linux")
-
-        assert shell_main._smart_decode(b"\xff") == "ÿ"
-
-    def test_decode_empty(self):
-        """测试空字节解码"""
-        result = shell_main._smart_decode(b"")
-        assert result == ""
-
-
-@pytest.mark.parametrize("parent_exits_before_wait", [False, True])
-def test_shell_timeout_reaps_inherited_pipe_child(tmp_path, monkeypatch, parent_exits_before_wait):
-    from plugins.shell import main as shell
-
-    if parent_exits_before_wait and sys.platform == "win32":
-        pytest.skip("POSIX parent-exit process scheduling")
-    if parent_exits_before_wait:
-        original_spawn = shell._spawn_owned_command
-
-        async def spawn_after_parent_exit(args):
-            proc, job = await original_spawn(args)
-            async with asyncio.timeout(0.5):
-                while proc.returncode is None:
-                    await asyncio.sleep(0.001)
-            return (proc, job)
-
-        monkeypatch.setattr(shell, "_spawn_owned_command", spawn_after_parent_exit)
-    marker = tmp_path / "escaped.txt"
-    child  = (
-        "import time; from pathlib import Path; time.sleep(1); Path("
-        + repr(str(marker))
-        + ").write_text('escaped')"
+            (
+                ProcessResult(None, "out", "", output_limited=True),
+                shell_main._EXIT_OUTPUT_LIMIT,
+                "字节安全上限，已终止进程树",
+            ),
+        ],
     )
-    parent = "import subprocess,sys; subprocess.Popen([sys.executable,'-c'," + repr(child) + "])"
+    async def test_results_map_to_codes_and_notices(
+        self, monkeypatch, result, expected_code, notice
+    ):
+        run = AsyncMock(return_value=result)
+        monkeypatch.setattr(shell_main, "run_process", run)
 
-    async def exercise():
-        start = time.monotonic()
-        code, _stdout, _stderr = await shell._execute_command([sys.executable, "-c", parent], 0.2)
-        assert code == -1
-        assert time.monotonic() - start < 0.9
-        await asyncio.sleep(1.05)
-        assert not marker.exists()
+        code, stdout, stderr = await shell_main._execute_command(["echo", "ok"], 2)
 
-    factory = asyncio.ProactorEventLoop if sys.platform == "win32" else asyncio.new_event_loop
-    with asyncio.Runner(loop_factory=factory) as runner:
-        runner.run(exercise())
+        assert code == expected_code and stdout == "out"
+        assert run.call_args.kwargs["max_capture_bytes"] == shell_main._MAX_CAPTURE_BYTES
+        if notice is None:
+            assert stderr == result.stderr
+        else:
+            assert notice in stderr
+
+    def test_a_real_command_runs_end_to_end(self):
+        async def exercise():
+            code, stdout, stderr = await shell_main._execute_command(
+                [sys.executable, "-c", "print('ok')"], 30
+            )
+            assert (code, stdout.strip(), stderr) == (0, "ok", "")
+
+        run_with_subprocess_loop(exercise)

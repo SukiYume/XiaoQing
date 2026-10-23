@@ -4,7 +4,6 @@
     "enabled": true,
     "description": "Minecraft 服务器通信插件 - 支持多服务器连接、RCON命令执行和状态查询",
     "entry": "main.py",
-    "capabilities": ["admin_sessions"],
     "commands": [
         {
             "name": "mc",
@@ -12,22 +11,21 @@
                 "mc",
                 "minecraft"
             ],
-            "help": "Minecraft RCON 工具 | /mc help 查看详细帮助",
-            "admin_only": true,
-            "contexts": ["private"],
-            "usage": "/mc <help|connect|disconnect|status|服务器命令>",
+            "help": "Minecraft 服务器聊天与 RCON | /mc help 查看详细帮助",
+            "usage": "/mc <help|say|tell|list|status|run|connect|disconnect> [参数]",
             "examples": [
                 "/mc status",
                 "/mc list",
                 "/mc say 大家好",
                 "/mc tell Steve 你好"
             ],
-            "invalid_examples": ["/mc connect"],
+            "invalid_examples": ["/mc connect", "/mc say"],
             "subcommands": [
                 {
                     "name": "connect",
                     "aliases": ["连接"],
-                    "help": "连接清单中的服务器配置",
+                    "help": "为本会话连接清单中的服务器配置",
+                    "permission": "bot_admin",
                     "usage": "/mc connect <配置名>",
                     "examples": ["/mc connect default"],
                     "invalid_examples": ["/mc connect"]
@@ -35,7 +33,8 @@
                 {
                     "name": "disconnect",
                     "aliases": ["断开"],
-                    "help": "断开当前会话目标的服务器连接",
+                    "help": "断开本会话的服务器连接",
+                    "permission": "bot_admin",
                     "usage": "/mc disconnect",
                     "match": "exact",
                     "examples": ["/mc disconnect"],
@@ -49,6 +48,37 @@
                     "match": "exact",
                     "examples": ["/mc status"],
                     "invalid_examples": ["/mc status extra"]
+                },
+                {
+                    "name": "list",
+                    "help": "查看在线玩家",
+                    "usage": "/mc list",
+                    "match": "exact",
+                    "examples": ["/mc list"],
+                    "invalid_examples": ["/mc list extra"]
+                },
+                {
+                    "name": "say",
+                    "help": "用自己的 QQ 名字对游戏里所有人说",
+                    "usage": "/mc say <消息>",
+                    "examples": ["/mc say 大家好"],
+                    "invalid_examples": ["/mc say"]
+                },
+                {
+                    "name": "tell",
+                    "help": "悄悄对一名在线玩家说",
+                    "usage": "/mc tell <玩家名> <消息>",
+                    "examples": ["/mc tell Steve 你好"],
+                    "invalid_examples": ["/mc tell Steve"]
+                },
+                {
+                    "name": "run",
+                    "aliases": ["执行"],
+                    "help": "原样执行一条服务器命令",
+                    "usage": "/mc run <服务器命令>",
+                    "permission": "bot_admin",
+                    "examples": ["/mc run time set day"],
+                    "invalid_examples": ["/mc run"]
                 },
                 {
                     "name": "help",
@@ -69,7 +99,6 @@
             ],
             "help": "连接 MC 服务器 | /mcconnect <配置名>",
             "admin_only": true,
-            "contexts": ["private"],
             "priority": 1,
             "usage": "/mcconnect <配置名>",
             "examples": ["/mcconnect default"],
@@ -83,7 +112,6 @@
             ],
             "help": "断开当前 MC 服务器连接 | /mc disconnect",
             "admin_only": true,
-            "contexts": ["private"],
             "priority": 1,
             "usage": "/mcdisconnect",
             "examples": ["/mcdisconnect"],

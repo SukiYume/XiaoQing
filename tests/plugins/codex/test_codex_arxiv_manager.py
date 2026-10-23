@@ -244,21 +244,12 @@ async def test_same_date_replays_only_when_canonical_link_set_matches(
 
 
 @pytest.mark.asyncio
-async def test_arxiv_summary_public_entrypoint_rejects_unprivileged_or_wrong_context(
+async def test_arxiv_summary_public_entrypoint_rejects_wrong_context(
     tmp_path: Path,
 ):
+    # 谁能触发由 Core 按 /codex 的声明在发出能力时决定；这里只检查调用落在 Codex 自己的上下文里。
     context = FakeContext(tmp_path)
     context.principal = PluginPrincipal(kind="user", user_id=1, is_private=True)
-
-    with pytest.raises(PermissionError, match="authorization"):
-        await codex_arxiv_summary.enqueue_or_replay_arxiv_summary(
-            context,
-            date     = "2026-05-19",
-            links    = ["https://arxiv.org/abs/2605.16917"],
-            user_id  = 1,
-            group_id = 2,
-        )
-
     context.capabilities = PluginCapabilities(is_bot_admin=True)
     context.plugin_name = "arxiv_filter"
     with pytest.raises(PermissionError, match="Codex-scoped"):

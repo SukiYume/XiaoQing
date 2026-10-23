@@ -16,7 +16,7 @@ from typing import Any, Literal, TypeVar
 from ..media_registry import MediaRegistryStore, resolve_registered_media_items
 from ..message_parts import normalize_message_parts
 from .emoji_library import EmojiLibraryEntry, load_emoji_library, resolve_emoji_file_path
-from .markers import split_emoji_visible_text
+from .markers import split_visible_text
 from .models import SUPPORTED_IMAGE_SUFFIXES
 from .qq_face_catalog import QQFaceEntry, load_qq_face_catalog
 
@@ -512,7 +512,7 @@ _COMMON_QQ_FACE_LABELS = (
 def _emoji_candidate_label(entry: EmojiLibraryEntry) -> str:
     """候选写成“名字（说明）”：名字不超过出站描述上限，可直接照抄进标记。"""
     tags = "，".join(tag for tag in entry.emotion_tags[:2] if tag)
-    clean_desc, visible_text = split_emoji_visible_text(entry.description)
+    clean_desc, visible_text = split_visible_text(entry.description)
     name = (visible_text or clean_desc or tags)[:OUTBOUND_HINT_MAX_CHARS].strip()
     if not name:
         return ""

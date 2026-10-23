@@ -192,7 +192,6 @@ async def test_reset_audit_fingerprints_all_actor_identifiers(
         with (
             patch.object(commands.HandlerContext, "from_event", return_value=hctx),
             patch.object(commands, "reset_chat_session", reset_chat_session),
-            patch.object(commands, "is_admin_operator", return_value=True),
         ):
             result = await commands.handle_internal("重置", "确认", event, context)
 

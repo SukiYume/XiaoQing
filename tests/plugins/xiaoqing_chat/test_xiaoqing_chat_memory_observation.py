@@ -48,7 +48,6 @@ async def test_external_source_survives_reload_and_keeps_chat_turn_boundaries(tm
     history = await loaded.get_async("g1")
 
     assert all(message.source_plugin == "earthquake" for message in history)
-    assert not loaded.attach_latest_assistant_message_id("g1", 99)
     rendered = build_dialogue_prompt(history, bot_name="小青", truncate=False)
     assert "小青[插件通知:earthquake]" in rendered
     assert "小青(你)" not in rendered
@@ -66,10 +65,18 @@ async def test_external_source_survives_reload_and_keeps_chat_turn_boundaries(tm
         is None
     )
 
-    loaded.append("g1", role="assistant", name="小青", content="这天气真会挑日子", ts=108)
-    assert loaded.attach_latest_assistant_message_id("g1", 100)
-    history = loaded.get("g1")
+    loaded.append(
+        "g1",
+        role        = "assistant",
+        name        = "小青",
+        content     = "这天气真会挑日子",
+        ts          = 108,
+        message_ids = (100, 101),
+    )
+    loaded.persist("g1")
+    history = await MemoryStore(tmp_path).get_async("g1")
     assert history[-1].message_id == 100
+    assert history[-1].remote_ids() == (100, 101)
     assert _seconds_since_last_assistant(history, now=110) == 2.0
     assert (
         heuristic_check(
@@ -773,6 +780,57 @@ async def test_observe_outgoing_action_records_external_plugin_text_only(mock_co
     assert "[图片" not in content
     assert media_items == []
     state.heartflow.on_bot_reply_async.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_long_agent_results_are_kept_shortened_but_other_long_output_is_skipped(
+    mock_context,
+):
+    """agent 的结果是小青说的话：截短记下，群友只引用它接着说时也能认出来。"""
+
+    from core.interfaces import ACTION_RESULT_MESSAGE_ID_KEY
+    from plugins.xiaoqing_chat.handlers import observe_outgoing_action
+
+    runtime = SimpleNamespace(
+        cfg=SimpleNamespace(enable_smalltalk=True, ban_words=[]),
+        compiled_ban_regex=[],
+    )
+    _complete_test_runtime_config(runtime)
+    state                       = MagicMock()
+    state.memory_store.append   = Mock()
+    state.action_history.append = Mock()
+
+    def long_result() -> dict:
+        return {
+            "action": "send_group_msg",
+            "params": {
+                "group_id": 67890,
+                "message": [
+                    {"type": "at", "data": {"qq": "30003"}},
+                    {"type": "text", "data": {"text": " "}},
+                    {"type": "text", "data": {"text": "结果" * 800}},
+                ],
+            },
+            ACTION_RESULT_MESSAGE_ID_KEY: 4242,
+        }
+
+    with (
+        patch("plugins.xiaoqing_chat.handlers.load_runtime", return_value=runtime),
+        patch("plugins.xiaoqing_chat.handlers.bound_state", return_value=state),
+        patch("plugins.xiaoqing_chat.handlers.chat_lock", return_value=asyncio.Lock()),
+        patch("plugins.xiaoqing_chat.handlers.allocate_local_id", return_value="m-agent"),
+        patch("plugins.xiaoqing_chat.handlers.schedule_memory_persist"),
+        patch("plugins.xiaoqing_chat.handlers.schedule_action_history_flush"),
+    ):
+        await observe_outgoing_action(long_result(), mock_context, source_plugin="arxiv_filter")
+        state.memory_store.append.assert_not_called()
+        await observe_outgoing_action(long_result(), mock_context, source_plugin="xiaoqing_agent")
+
+    append_kwargs = state.memory_store.append.call_args.kwargs
+    assert append_kwargs["message_id"] == 4242
+    assert append_kwargs["source_plugin"] == "xiaoqing_agent"
+    content, _media = message_parts_to_legacy(append_kwargs["parts"])
+    assert content.startswith("结果结果") and len(content) <= 1000
 
 
 @pytest.mark.asyncio

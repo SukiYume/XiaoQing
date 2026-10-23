@@ -41,7 +41,10 @@ _BRACKET_MARKER_RE = re.compile(r"\[[^\]\n]*\]")
 # 去掉表情标记和标点后仍有这么高的重合，说明只是把旧句子改了几个字。
 _NEAR_COPY_RATIO     = 0.75
 _NEAR_COPY_MIN_CHARS = 12
-_NEAR_COPY_LOOK_BACK = 6
+# 短回复碰巧重合几个字更常见，要更高的重合才算照搬；“草”“晚安”这种再短的不比。
+_SHORT_COPY_RATIO     = 0.8
+_SHORT_COPY_MIN_CHARS = 8
+_NEAR_COPY_LOOK_BACK  = 6
 
 
 def _content_key(text: str) -> str:
@@ -50,10 +53,11 @@ def _content_key(text: str) -> str:
 
 def _near_copy_of_recent(reply: str, bot_msgs: Sequence[str]) -> bool:
     key = _content_key(reply)
-    if len(key) < _NEAR_COPY_MIN_CHARS:
+    if len(key) < _SHORT_COPY_MIN_CHARS:
         return False
+    threshold = _NEAR_COPY_RATIO if len(key) >= _NEAR_COPY_MIN_CHARS else _SHORT_COPY_RATIO
     return any(
-        difflib.SequenceMatcher(None, key, _content_key(previous)).ratio() >= _NEAR_COPY_RATIO
+        difflib.SequenceMatcher(None, key, _content_key(previous)).ratio() >= threshold
         for previous in bot_msgs[:_NEAR_COPY_LOOK_BACK]
     )
 
@@ -418,16 +422,17 @@ _DURABLE_PERSONA_QUESTION_TAIL = (
 )
 
 
-_UNSET_PRECISE_PERSONA_QUERY_TAIL = (
-    r"[^，。！？；;\n]{0,30}"
-    r"(?:哪所(?:学校|大学|学院)|哪个城市|哪里人|老家|住哪|具体住址|"
-    r"什么专业|哪个专业|专业方向|生日|家庭|父母|家人|对象|伴侣)"
+# 人设里声明“不透露 / 没有设定”的句子；只有这些句子点名的资料才按保密处理。
+_PRIVATE_PROFILE_POLICY_RE = re.compile(
+    r"[^。；;\n]*(?:没有设定|未设定|不主动补|不能添加|不能编造|不在群里透露|不透露|保密)[^。；;\n]*"
 )
-
-
-_UNSET_PERSONA_POLICY_RE = re.compile(
-    r"(?:具体学校|学校、城市|精确学校)[^。；;\n]{0,80}"
-    r"(?:没有设定|未设定|不主动补|不能添加|不能编造|不在群里透露|不透露|保密)"
+# （保密句里点名的资料，追问这项资料的说法）
+_PRIVATE_PROFILE_FIELDS = (
+    ("学校", r"哪所(?:学校|大学|学院)|哪个学校|在哪上学"),
+    ("城市", r"哪个城市|哪里人|老家|住哪|具体住址"),
+    ("生日", r"生日"),
+    ("家", r"家庭|父母|家人"),
+    ("对象", r"对象|伴侣"),
 )
 
 
@@ -504,14 +509,17 @@ def requires_configured_profile_boundary(
     *,
     bot_name: str,
 ) -> bool:
-    """判断用户是否追问了当前人设明确保留为空的可核验资料。"""
+    """判断用户是否追问了当前人设明确保留为空的可核验资料。
 
-    return bool(
-        re.search(
-            persona_subject_pattern(bot_name) + _UNSET_PRECISE_PERSONA_QUERY_TAIL,
-            normalize_text(current_text),
-        )
-        and _UNSET_PERSONA_POLICY_RE.search(str(grounding_text or ""))
+    只看人设保密句里点名的那几项：人设写明了单位或学校时，问学校就照人设答，不算越界。
+    """
+
+    policy   = "。".join(_PRIVATE_PROFILE_POLICY_RE.findall(str(grounding_text or "")))
+    question = normalize_text(current_text)
+    subject  = persona_subject_pattern(bot_name)
+    return any(
+        keyword in policy and re.search(f"{subject}[^，。！？；;\\n]{{0,30}}(?:{asked})", question)
+        for keyword, asked in _PRIVATE_PROFILE_FIELDS
     )
 
 

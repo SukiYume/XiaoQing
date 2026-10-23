@@ -150,10 +150,7 @@ class WebHandler:
             return await self._generate_widget_token(user_id, context, widget_token_generator)
         if command in {"widget-revoke", "widget_revoke", "widget revoke"}:
             return await self._revoke_widget_tokens(user_id)
-        if command in {"start", "stop"} and (
-            context is None or not context.is_global_admin(int(user_id))
-        ):
-            return {"status": "error", "message": "❌ 只有机器人管理员可以启动或停止共享 Web 服务"}
+        # start、stop 在 plugin.json 里只给 Bot 管理员，Core 在调用插件前就检查过了。
         if command == "start":
             return await self._start(server)
         if command == "stop":

@@ -110,6 +110,9 @@ EXPRESSION_LEARN_MIN_INTERVAL = 90.0
 EXPRESSION_LEARN_MIN_MESSAGES = 10
 
 
+# 读图摘要（画面描述加图上文字）整段写进聊天记录的 [图片：…] 标记，超出部分截掉。
+MEDIA_SUMMARY_MAX_CHARS = 1000
+
 # 只说明“有媒体”而没有可读内容的标签；这类消息不提供可接的话题。
 GENERIC_MEDIA_LABELS = frozenset(
     {

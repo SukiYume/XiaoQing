@@ -5,6 +5,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from core.args import tokenize
+from core.interfaces import COMMAND_RUNNER_EVENT_KEY
 from core.sensitive_audit import summarize_sensitive
 
 from .audit import audit_request_id
@@ -188,6 +189,13 @@ async def handle_ssh_main(
         is_valid, error_msg = validate_username(username_override)
         if not is_valid:
             return segments(format_error(error_msg))
+
+    if event.get(COMMAND_RUNNER_EVENT_KEY):
+        # 交互连接按“用户 + 会话 + 服务器”登记：替调用方连接会顶掉本人正在用的同名连接。
+        return segments(
+            "❌ /ssh 交互连接只接受真人消息。agent 请用 ssh_run，一次性连接执行，"
+            "不会占用或替换本人的 /ssh 会话。"
+        )
 
     return await _connect_to_server(
         server_name, context, manager, username_override=username_override

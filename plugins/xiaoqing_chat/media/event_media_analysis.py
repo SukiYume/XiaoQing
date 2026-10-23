@@ -16,6 +16,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from ..constants import MEDIA_SUMMARY_MAX_CHARS
 from ..llm.gateway import (
     LLMError,
     chat_completions_raw_with_fallback_paths,
@@ -42,6 +43,7 @@ from .markers import (
     is_low_quality_rendered_media,
     normalize_emotion_tags,
     same_rendered_media,
+    split_visible_text,
 )
 from .models import (
     MediaAnalysisDraft,
@@ -53,10 +55,13 @@ from .models import (
 from .render_cache import write_render_cache_entry
 from .settings import MEDIA_ANALYSIS_PROMPT_VERSION, media_config, media_log
 
-_MEDIA_DETAIL_BASE_MAX_TOKENS            = 360
-_MEDIA_DETAIL_TRUNCATED_RETRY_MAX_TOKENS = 720
-_MEDIA_SEMANTIC_RETRY_LIMIT              = 1
-_VISION_REFUSAL_RE                       = re.compile(
+# 文字为主的截图要逐句转写，输出预算按一千字上下的转写留足；被截断的输出整份作废重试。
+_MEDIA_DETAIL_BASE_MAX_TOKENS            = 800
+_MEDIA_DETAIL_TRUNCATED_RETRY_MAX_TOKENS = 1600
+# 提示词里给转写定的篇幅，低于摘要上限，留出画面描述的位置。
+_VISIBLE_TEXT_PROMPT_CHARS  = 800
+_MEDIA_SEMANTIC_RETRY_LIMIT = 1
+_VISION_REFUSAL_RE          = re.compile(
     r"(?:无法|不能|没法|未能|暂时无法)(?:查看|读取|识别|访问|打开|看到)|"
     r"(?:看不到|没看到|图片缺失|图像缺失|未提供图片|没有提供图片|图片打不开)"
 )
@@ -320,18 +325,20 @@ def _extract_first_text_value(data: dict[str, Any], *keys: str) -> str:
     return ""
 
 
+def _summary_line(value: str) -> str:
+    # 摘要放进单行的 [图片：…] 标记：换行压成空格，方括号换成全角，免得提前收尾。
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    return text.replace("[", "［").replace("]", "］")
+
+
 def _merge_visible_text(description: str, visible_text: str) -> str:
-    desc = str(description or "").strip()
-    text = re.sub(r"\s+", " ", str(visible_text or "").strip())
-    if not text:
-        return desc
-    normalized_desc = re.sub(r"\s+", "", desc)
-    normalized_text = re.sub(r"\s+", "", text)
-    if normalized_text and normalized_text in normalized_desc:
-        return desc
-    if desc:
-        return f"{desc}，文字内容是“{text}”"
-    return f"文字内容是“{text}”"
+    desc = _summary_line(description)
+    text = _summary_line(visible_text)
+    if not text or re.sub(r"\s+", "", text) in re.sub(r"\s+", "", desc):
+        return clip_text(desc, MEDIA_SUMMARY_MAX_CHARS)
+    desc   = clip_text(desc, MEDIA_SUMMARY_MAX_CHARS // 3).rstrip("。.，,；;、 ")
+    prefix = f"{desc}，文字内容是“" if desc else "文字内容是“"
+    return f"{prefix}{clip_text(text, MEDIA_SUMMARY_MAX_CHARS - len(prefix) - 1)}”"
 
 
 async def _call_media_llm(
@@ -544,7 +551,9 @@ def _semantic_retry_reason(
         return "summary_fallback"
     if not str(rendered.description or "").strip():
         return "empty_description"
-    if _VISION_REFUSAL_RE.search(str(rendered.description or "")):
+    # 拒答只看模型自己的描述；图上转写的文字本身可能就写着“无法访问”。
+    scene, _text = split_visible_text(rendered.description)
+    if _VISION_REFUSAL_RE.search(scene):
         return "vision_refusal"
     if is_generic_media_label(rendered.description):
         return "generic_description"
@@ -797,19 +806,23 @@ def _build_media_analysis_prompt(
     """构造稳定的视觉提示词，并包含来源特定指引。"""
 
     prompt = (
-        "请把这张聊天图片分析成 JSON。"
-        "只输出 JSON，不要额外解释。"
+        "这张图片是聊天里有人发的，请把它分析成 JSON，只输出 JSON，不要额外解释。"
         '格式: {"kind":"image|emoji","description":"...","visible_text":"...","emotion_tags":["..."]}。'
-        "description 只记录画面中可以直接观察或清晰读取的信息，并区分主体、动作、构图和文字；"
-        "不要把审美评价、幽默效果、文化含义、人物动机或聊天意图写成可见事实。"
-        "无法确认某种解释时，保留客观细节而不是猜测。"
-        "visible_text 摘录最关键的清晰文字；文字较多时保留理解内容所需的主干，不虚构缺失部分。"
-        "聊天截图优先保留发言内容和照片中的招牌文字，界面按钮与成员列表可简略。"
-        "没有读出文字时 visible_text 填空字符串，读取状态写在 description 中。"
+        "聊天这边看不到原图，之后的回复和追问只能依据这份结果：图上看得清的信息不要省略，看不清的不要编。\n"
+        "description 用一两句话写清这是什么图（照片、聊天截图、网页或文档截图、海报、表格、表情包等），"
+        "以及画面主体、动作、场景和布局；画里的东西认得出就直接写名称，认不准时再写颜色、形状这些外观。"
+        "只记录画面中可以直接观察或清晰读取的信息，"
+        "不要把审美评价、幽默效果、文化含义、人物动机或聊天意图写成可见事实；"
+        "也不能只复述媒介类型或文件格式。图上的文字写进 visible_text，description 不再抄一遍。\n"
+        "visible_text 按阅读顺序转写图上看得清的文字。"
+        "通知、公告、文档、表格、海报这类以文字为主的图逐句转写正文，"
+        "标题、日期、时间、地点、人名、金额和其他数字、要求、联系方式、网址、落款照原样保留，不改写、不概括；"
+        "聊天截图保留每条发言的发言人和内容；照片保留招牌、标签上的文字；"
+        "网页和应用的界面元素（导航栏、面包屑、按钮、字号切换、浏览量、页码、状态栏）不转写。"
+        f"文字超过 {_VISIBLE_TEXT_PROMPT_CHARS} 字时先删套话和重复内容，上面这些关键信息不能删。"
+        "个别字看不清时在原位置写〔看不清〕，其余照常转写；图上没有文字时 visible_text 填空字符串。\n"
         "kind 根据图片在聊天中的实际形式选择 image 或 emoji，不根据你是否理解其含义来选择。"
         "emotion_tags 只放 0 到 4 个能由可见表情、姿态或文字语气直接支持的简短标签。"
-        "description 必须包含有辨识度的画面内容，不能只复述媒介类型或文件格式。"
-        "如果图里有清晰文字，description 和 visible_text 里至少要有一个包含这些文字的核心信息。"
     )
     if prefer_emoji:
         prompt += (

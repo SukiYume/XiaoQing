@@ -1051,7 +1051,7 @@ async def _calibrate_checker_async(config_path: Path, secrets_path: Path) -> dic
                     current_text                     = case.current,
                     current_sender                   = case.sender,
                     goal                             = "自然聊天",
-                    grounding_text                   = config.personality.identity,
+                    grounding_text                   = config.personality.card.facts("小青"),
                     history                          = history,
                     chat_history_text                = history_text,
                     enable_llm_checker               = True,

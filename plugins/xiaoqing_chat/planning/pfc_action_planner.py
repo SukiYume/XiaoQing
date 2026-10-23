@@ -20,7 +20,6 @@ from ..llm.llm_config import LLMCallConfig
 from ..llm.prompt_builder import build_dialogue_prompt
 from ..memory.memory import StoredMessage, is_conversation_reply
 from ..participation import classify_group_participation_cue as _group_participation_cue
-from ..persona import compose_persona_identity
 from ..utils.text import clip_text
 from .pfc_utils import get_items_from_json
 
@@ -289,7 +288,7 @@ async def plan_next_action(
     if "_ai" in secrets and secrets.get("_ai") is None:
         return PFCPlan(action=fallback_action, reason="ai_route_unavailable")
 
-    persona_text       = compose_persona_identity(personality.identity, bot_name)
+    persona_text       = personality.card.facts(bot_name)
     goals_str          = _goals_to_text(goal_list) or "- 自然聊天"
     knowledge_info_str = _knowledge_to_text(knowledge_list)
     chat_history_text  = build_dialogue_prompt(
@@ -385,7 +384,7 @@ async def decide_say_bye(
     if "_ai" in secrets and secrets.get("_ai") is None:
         return False, ""
 
-    persona_text      = compose_persona_identity(personality.identity, bot_name)
+    persona_text      = personality.card.facts(bot_name)
     channel           = "私聊" if is_private else "群聊"
     chat_history_text = build_dialogue_prompt(
         history, bot_name=bot_name, truncate=True, max_chars=2200

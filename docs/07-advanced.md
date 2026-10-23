@@ -1,6 +1,6 @@
 # 🧠 07 - 高级主题
 
-本章面向需要扩展长任务、调度、声明式服务、内嵌 Web、缓存、并发和生产运行方式的开发者。基础插件流程见 [插件开发指南](03-plugin-development.md)。
+本章面向需要扩展权限、长任务、调度、声明式服务、内嵌 Web、缓存、并发和生产运行方式的开发者。基础插件流程见 [插件开发指南](03-plugin-development.md)。
 
 ---
 
@@ -16,6 +16,27 @@
 | `plugins/codex/runner.py` | `process._transport.get_pipe_transport` | 子进程管道回收 | 属性与类型探针、异常隔离、进程树回收 |
 
 依赖升级流程包含私有 API 探针测试和完整关闭场景。
+
+---
+
+## 🔐 权限模型
+
+权限只有一套：谁能在哪里用哪条命令，只写在各插件 `plugin.json` 的命令节点里，只由 Core 的 `core.router.command_access` 判断。
+
+| 声明 | 含义 |
+|---|---|
+| `admin_only: true` | 顶层命令只给 Bot 管理员，归一化为 `permission: bot_admin` |
+| `permission` | `public`、`group_admin`（当前群群主、群管理员和 Bot 管理员）或 `bot_admin`；子节点只能收紧 |
+| `contexts` | `private`、`group`；子节点取父子交集 |
+
+调用这一处判断的地方：
+
+- 命令执行：真人消息和 agent 代为执行的命令（`command_runner`）走同一处检查。
+- 会话继续：每条后续消息前复核此人此刻仍能用会话所属插件的至少一条顶层命令，否则关闭会话。
+- Core 签发的派生能力：密钥管理跟随 `/set_secret`，arXiv 的 Codex 摘要跟随 `/codex`，agent 的本机工具、SSH、Codex 跟随 `/shell`、`/ssh`、`/codex`；每次调用按当前配置复核。
+- agent 给模型看的命令清单。
+
+插件代码不自己判断管理员。命令里需要不同权限的分支，声明成单独的子命令，比如 `/mc run`（Bot 管理员）与公开的 `/mc say`、`/xc reset confirm`（群管理员，仅群聊）与私聊可用的 `/xc reset`；处理时确认调用是从这个子命令进来的（比如 color 的写入只认 `add`、`delete` 节点）。`context.capabilities.is_bot_admin` 只用于对象层面的规则，例如只有发起人或 Bot 管理员能停止某个 agent 任务。
 
 ---
 
@@ -55,7 +76,7 @@ async def handle_session(text, event, context, session):
     return segments(f"收到：{value}")
 ```
 
-会话 callback 处理单一会话键。跨用户或跨群协调在 callback 外完成，并通过业务数据库或专用锁提交。
+会话 callback 处理单一会话键。跨用户或跨群协调在 callback 外完成，并通过业务数据库或专用锁提交。会话每次继续前按上面的权限模型复核，撤权或场景不再允许时 Core 关闭会话并调用插件的 `close_session` 收尾。
 
 ---
 
@@ -86,7 +107,7 @@ async def handle_session(text, event, context, session):
 - 插件卸载排空时间
 - 主动发送回执与业务状态提交顺序
 
-Codex 插件提供该模式的完整实现。
+Codex 插件和 XiaoQing Agent 提供该模式的完整实现。agent 还示范了回执的转交：它调用的命令若带发送回执（比如取图占用的图片），回执随附件实际发出时结算，没发出或任务结束时释放。
 
 ---
 
@@ -239,7 +260,7 @@ Provider 可组合以下阶段：
 - 消息段发送
 - 记忆与表达学习
 
-命令、URL、Session 与普通聊天在 Dispatcher 中拥有独立阶段。Provider 专注普通聊天候选消息。
+命令、URL、Session 与普通聊天在 Dispatcher 中拥有独立阶段。Provider 专注普通聊天候选消息。`xiaoqing_chat` 在明确召唤时经 `agent.handle_turn` 把这一轮交给 `xiaoqing_agent` 判断，判断与聊天生成同时进行，agent 接手时放弃这次生成。
 
 ---
 

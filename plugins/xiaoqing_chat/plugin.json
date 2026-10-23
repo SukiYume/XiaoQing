@@ -5,6 +5,7 @@
   "entry": "main.py",
   "concurrency": "parallel",
   "capabilities": ["onebot_media"],
+  "uses_services": ["agent.handle_turn", "agent.report_delivery"],
   "services": [
     {
       "name": "core.observe_outgoing_action",
@@ -39,10 +40,23 @@
         {
           "name": "reset",
           "aliases": ["重置", "清空"],
-          "help": "私聊重置自己的会话；群聊需管理员并二次确认",
+          "help": "私聊重置自己的会话；群里由群管理员用 /xc reset confirm 确认后清空",
           "usage": "/xc reset [确认|confirm]",
           "examples": ["/xc reset", "/xc reset confirm"],
-          "invalid_examples": ["/xc reset maybe"]
+          "invalid_examples": ["/xc reset maybe"],
+          "subcommands": [
+            {
+              "name": "confirm",
+              "aliases": ["确认"],
+              "help": "确认清空本群与小青相关的共享状态",
+              "usage": "/xc reset confirm",
+              "permission": "group_admin",
+              "contexts": ["group"],
+              "match": "exact",
+              "examples": ["/xc reset confirm"],
+              "invalid_examples": ["/xc reset confirm extra"]
+            }
+          ]
         },
         {
           "name": "stats",
@@ -139,8 +153,9 @@
         {
           "name": "model",
           "aliases": ["模型", "provider", "供应商"],
-          "help": "查看回退链，或由管理员固定当前会话/全局模型",
+          "help": "查看回退链，或固定当前会话/全局模型",
           "usage": "/xc model [名称|default|global <名称|default>]",
+          "permission": "group_admin",
           "examples": ["/xc model", "/xc model default"],
           "invalid_examples": ["/xc model global"],
           "subcommands": [
@@ -149,7 +164,6 @@
               "aliases": ["默认", "reset"],
               "help": "清除当前会话的模型固定设置",
               "usage": "/xc model default",
-              "permission": "group_admin",
               "match": "exact",
               "examples": ["/xc model default"],
               "invalid_examples": ["/xc model default extra"]

@@ -2,12 +2,13 @@
 
 import logging
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 from core.router import resolve_context_command_invocation
 
 from . import session_handlers
 from .audit import audit_error_type
-from .config import SessionKeys
+from .config import COMMAND_TIMEOUT, SessionKeys
 from .handlers import (
     handle_ssh_add,
     handle_ssh_config_list,
@@ -139,6 +140,31 @@ async def close_session(event: OneBotEvent, context: Context, session: Session) 
     await session_handlers.close_session(context, session)
 
 
+async def agent_command_service(request: dict[str, Any], context: Context) -> Any:
+    """xiaoqing_agent 的固定 SSH 入口：列出服务器，或用一次性连接执行一条命令。"""
+
+    manager = await get_manager(context)
+    if request.get("op") == "list":
+        return manager.list_server_summaries()
+    if request.get("op") != "run":
+        raise ValueError("unsupported QingSSH agent operation")
+    server = str(request.get("server") or "").strip()
+    if manager.get_server(server) is None:
+        return {
+            "ok": False,
+            "exit_code": None,
+            "output": f"未找到服务器: {server}；可用: {', '.join(sorted(manager.servers)) or '无'}",
+            "timed_out": False,
+        }
+    # 远端命令可能运行很久：QingSSH 是串行插件，这里只启动并交回 Task，由调用方在
+    # 插件执行通道外等待，其他用户的 /ssh 和 agent 请求不会被它挡住。
+    return manager.start_service_command(
+        server,
+        str(request.get("command") or ""),
+        timeout=float(request.get("timeout_seconds") or COMMAND_TIMEOUT),
+    )
+
+
 async def cleanup(context: Context) -> None:
     """先排空后台任务，再关闭已经创建的管理器。"""
 
@@ -176,7 +202,7 @@ async def cleanup_orphans(context: Context) -> None:
             return
 
         sessions              = await context.session_manager.get_all_sessions("qingssh")
-        active_keys: set[str] = set()
+        active_keys: set[str] = set(manager.service_connection_keys)
         for session in sessions:
             server_name = session.get(SessionKeys.SERVER_NAME)
             if isinstance(server_name, str) and server_name:

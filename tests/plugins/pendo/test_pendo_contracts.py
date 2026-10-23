@@ -76,11 +76,11 @@ class TestPendoConfig:
         overview   = _show_help()
         event_help = _show_help("event")
 
-        assert "🧭 **可用命令**" in overview
+        assert "🧭 可用命令" in overview
         assert "• /pendo event" in overview
         assert "💡 查看详细用法" in overview
-        assert "━━ 🗓️ **日程管理 (Event)**" not in overview
-        assert "━━ 🗓️ **日程管理 (Event)**" in event_help
+        assert "━━ 🗓️ 日程管理 (Event)" not in overview
+        assert "━━ 🗓️ 日程管理 (Event)" in event_help
         assert "/pendo event add 3月8日下午两点，国自然截止" in event_help
 
     def test_show_help_for_subcommand_only_renders_requested_section(self):
@@ -93,16 +93,16 @@ class TestPendoConfig:
 
         help_text = _show_help("event")
 
-        assert "🧭 输入 `/pendo` 查看完整总览" in help_text
-        assert "`/pendo help <模块>`" in help_text
-        assert "━━ 🗓️ **日程管理 (Event)**" in help_text
+        assert "🧭 输入 /pendo 查看完整总览" in help_text
+        assert "/pendo help <模块>" in help_text
+        assert "━━ 🗓️ 日程管理 (Event)" in help_text
         assert "先用 view 集合ID 查看节点ID，再编辑具体节点" in help_text
         assert "集合ID只编辑整体标题、分类、地点、备注，不修改某个节点时间" in help_text
         assert "/pendo event edit a1b2c3d4 改到4月22日12:43" in help_text
         assert "/pendo event edit 80efbef6 标题改为FAST会议行程" in help_text
         assert "多节点事件可直接写“节点名 + 改成/改到 + 新时间”" not in help_text
         assert "/pendo event reminders delete <id> <all|today|future|提醒时间>" in help_text
-        assert "━━ ✅ **待办事项 (Todo)**" not in help_text
+        assert "━━ ✅ 待办事项 (Todo)" not in help_text
 
     def test_command_router_help_uses_detailed_provider_for_subcommands(self):
         """测试 /pendo help event 复用 main.py 的详细帮助，而不是旧路由摘要。"""
@@ -129,15 +129,15 @@ class TestPendoConfig:
         )
 
         event_help = router.get_help_message("event")
-        assert "━━ 🗓️ **日程管理 (Event)**" in event_help
+        assert "━━ 🗓️ 日程管理 (Event)" in event_help
         assert "/pendo event reminders delete <id> <all|today|future|提醒时间>" in event_help
         assert "📖 event - 管理日程" not in event_help
 
         reminder_help = router.get_help_message("reminder")
-        assert "━━ ⏰ **提醒操作**" in reminder_help
+        assert "━━ ⏰ 提醒操作" in reminder_help
 
         alias_help = router.get_help_message("confirm")
-        assert "━━ ⏰ **提醒操作**" in alias_help
+        assert "━━ ⏰ 提醒操作" in alias_help
         assert "/pendo event reminders set/delete/confirm <id> ..." in alias_help
 
         assert router.alias_map["calendar"] == "event"
@@ -154,7 +154,7 @@ class TestPendoConfig:
         from plugins.pendo.main import HELP_MAP, _show_help
 
         overview = _show_help()
-        assert "🧭 **可用命令**" in overview
+        assert "🧭 可用命令" in overview
         assert "/pendo export <文件名> [范围] [类型]" not in overview
 
         # 直接遍历生产帮助注册表的插入顺序，避免测试专用常量与真实章节
@@ -227,8 +227,8 @@ class TestPendoConfig:
             "/pendo settings ai_consent on/off",
             "/pendo web widget-token",
             "/pendo web status",
-            "别名: `task`, `t`, `待办`, `任务`",
-            "别名: `bill`, `finance`, `记账`, `账单`",
+            "别名: task, t, 待办, 任务",
+            "别名: bill, finance, 记账, 账单",
         ]
 
         for fragment in expected_fragments:

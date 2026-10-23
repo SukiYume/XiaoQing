@@ -18,7 +18,7 @@ from typing import Any, cast
 
 from core.atomic_store import keyed_path_lock
 
-from .media.markers import emoji_summary_marker, is_generic_media_label, split_emoji_visible_text
+from .media.markers import emoji_summary_marker, is_generic_media_label, split_visible_text
 from .store_base import LockedDirtyStateMixin, StoreBase
 
 _MEDIA_MARKER_RE            = re.compile(r"\[(?:图片|表情包|QQ表情)：[^\]\n]{0,400}\]")
@@ -178,7 +178,7 @@ def _render_media_marker(item: dict[str, Any]) -> str:
         return f"[QQ表情：{resolved_label}]" if resolved_label else marker
 
     if kind == "emoji":
-        clean_desc, visible_text = split_emoji_visible_text(description)
+        clean_desc, visible_text = split_visible_text(description)
         label_text = "，".join(emotion_tags[:2]).strip()
         if not label_text:
             label_text = _extract_marker_label(marker) or clean_desc or description or "一张表情包"

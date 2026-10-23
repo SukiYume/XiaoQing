@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from .config import materialize_snapshot_value
+from .delivery import DeliverySegments
 
 if TYPE_CHECKING:
     from .ai import AICompletionResult, AIModelInfo
@@ -131,6 +133,205 @@ class CodexArxivSummaryService:
             date  = normalized_date,
             links = list(links),
         )
+
+
+# 小青 agent 的能力和对应命令同一套权限：每次调用时重新确认发起人此刻仍有这项权限。
+_AGENT_UNAUTHORIZED    = "agent capability is no longer authorized for this user"
+_MAX_AGENT_TIMEOUT     = 86400.0
+_MAX_COMMAND_CHARS     = 4000
+_MAX_SENDER_NAME_CHARS = 64
+_OPERATION_ID          = re.compile(r"[A-Za-z0-9._-]{1,64}")
+
+
+def _agent_timeout(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("agent timeout must be a number of seconds")
+    seconds = float(value)
+    if not 0 < seconds <= _MAX_AGENT_TIMEOUT:
+        raise ValueError("agent timeout must be within (0, 86400] seconds")
+    return seconds
+
+
+def _cancel_returned_work(call: asyncio.Future[Any]) -> None:
+    if call.cancelled() or call.exception() is not None:
+        return
+    result = call.result()
+    if isinstance(result, asyncio.Future):
+        result.cancel()
+
+
+async def _invoke_settled(
+    invoke: Callable[[dict[str, Any]], Awaitable[Any]],
+    request: dict[str, Any],
+) -> Any:
+    """调用服务；服务可以交回 Future，把耗时等待留在提供方插件的执行通道之外。
+
+    串行插件（如 QingSSH）若在服务回调里等远端命令结束，会占住整个插件；提供方
+    只在通道内启动工作并交回 Future，这里在通道外等它。调用方被取消时，不论取消
+    落在通道内还是等待阶段，交回的工作都一并取消。通道内的调用本身很短，不打断它：
+    打断会让已经启动的工作丢在通道里，没人能再取消。
+    """
+
+    call = asyncio.ensure_future(invoke(request))
+    try:
+        result = await asyncio.shield(call)
+    except asyncio.CancelledError:
+        call.add_done_callback(_cancel_returned_work)
+        raise
+    if not isinstance(result, asyncio.Future):
+        return result
+    try:
+        return await result
+    except asyncio.CancelledError:
+        result.cancel()
+        raise
+
+
+def _require(authorized: Callable[[], bool]) -> None:
+    """每次调用前复核：发起人此刻仍有这项能力对应的命令权限。"""
+
+    if not authorized():
+        raise PermissionError(_AGENT_UNAUTHORIZED)
+
+
+def _required_text(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{label} is required")
+    return value.strip()
+
+
+@dataclass(frozen=True)
+class AgentTurnService:
+    """xiaoqing_chat → xiaoqing_agent 的固定桥；返回 ``None`` 表示本轮照常聊天。"""
+
+    _authorized: Callable[[], bool]
+    _invoke: Callable[[dict[str, Any]], Awaitable[Any]]
+    _report: Callable[[dict[str, Any]], Awaitable[Any]] | None = None
+
+    async def handle_turn(self, turn: dict[str, Any]) -> dict[str, Any] | None:
+        _require(self._authorized)
+        if not isinstance(turn, Mapping):
+            raise TypeError("agent turn must be a mapping")
+        result = await self._invoke(dict(turn))
+        if result is None:
+            return None
+        if not isinstance(result, dict):
+            raise TypeError("agent turn result must be a mapping or None")
+        return result
+
+    async def report_delivery(self, task_id: str, delivered: bool | None) -> None:
+        """把当轮回复的发送结果交还 agent；调用方没有声明这条桥时什么也不做。"""
+
+        if self._report is None:
+            return
+        _require(self._authorized)
+        if delivered is not None and not isinstance(delivered, bool):
+            raise TypeError("delivery result must be True, False or None")
+        await self._report({"task_id": _required_text(task_id, "task id"), "delivered": delivered})
+
+
+@dataclass(frozen=True)
+class CodexAgentTaskService:
+    """xiaoqing_agent → codex：提交一个任务并等到它结束。"""
+
+    _authorized: Callable[[], bool]
+    _invoke: Callable[[dict[str, Any]], Awaitable[Any]]
+
+    async def run_task(
+        self,
+        *,
+        session: str,
+        prompt: str,
+        cwd: str | None,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        _require(self._authorized)
+        if cwd is not None and not isinstance(cwd, str):
+            raise ValueError("Codex cwd must be a string or None")
+        result = await _invoke_settled(
+            self._invoke,
+            {
+                "session": _required_text(session, "Codex session"),
+                "prompt": _required_text(prompt, "Codex prompt"),
+                "cwd": (cwd.strip() or None) if isinstance(cwd, str) else None,
+                "timeout_seconds": _agent_timeout(timeout_seconds),
+            },
+        )
+        if not isinstance(result, dict):
+            raise TypeError("Codex agent task result must be a mapping")
+        return result
+
+
+@dataclass(frozen=True)
+class SSHAgentCommandService:
+    """xiaoqing_agent → qingssh：列出服务器或执行一次性远端命令。"""
+
+    _authorized: Callable[[], bool]
+    _invoke: Callable[[dict[str, Any]], Awaitable[Any]]
+
+    async def list_servers(self) -> list[dict[str, Any]]:
+        _require(self._authorized)
+        result = await self._invoke({"op": "list"})
+        if not isinstance(result, list) or any(not isinstance(item, dict) for item in result):
+            raise TypeError("SSH server listing must be a list of mappings")
+        return result
+
+    async def run(
+        self,
+        *,
+        server: str,
+        command: str,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        _require(self._authorized)
+        result = await _invoke_settled(
+            self._invoke,
+            {
+                "op": "run",
+                "server": _required_text(server, "SSH server"),
+                "command": _required_text(command, "SSH command"),
+                "timeout_seconds": _agent_timeout(timeout_seconds),
+            },
+        )
+        if not isinstance(result, dict):
+            raise TypeError("SSH agent command result must be a mapping")
+        return result
+
+
+@dataclass(frozen=True)
+class LocalToolsService:
+    """agent 的本机工具（代码执行、文件读写）每次调用前复核发起人仍是 Bot 管理员。"""
+
+    _authorized: Callable[[], bool]
+
+    def ensure_authorized(self) -> None:
+        _require(self._authorized)
+
+
+@dataclass(frozen=True)
+class CommandRunnerService:
+    """以发起人身份执行一条已发布命令，权限与场景和本人直接发送时相同；不经过会话、闲聊和 URL 阶段。"""
+
+    _authorized: Callable[[], bool]
+    _run: Callable[..., Awaitable[list[dict[str, Any]]]]
+
+    async def run(
+        self,
+        command_text: str,
+        *,
+        sender_name: str  = "",
+        operation_id: str = "",
+    ) -> list[dict[str, Any]]:
+        _require(self._authorized)
+        text = _required_text(command_text, "command text")
+        if len(text) > _MAX_COMMAND_CHARS:
+            raise ValueError(f"command text must not exceed {_MAX_COMMAND_CHARS} characters")
+        if operation_id and _OPERATION_ID.fullmatch(operation_id) is None:
+            raise ValueError("operation id must be 1-64 letters, digits, '.', '_' or '-'")
+        name = " ".join(str(sender_name or "").split())[:_MAX_SENDER_NAME_CHARS]
+        result = await self._run(text, sender_name=name, operation_id=operation_id)
+        # 命令带着发送回执（比如取图的预留）时原样交回，由调用方随实际发送结算。
+        return result if isinstance(result, DeliverySegments) else list(result)
 
 
 @dataclass(frozen=True)

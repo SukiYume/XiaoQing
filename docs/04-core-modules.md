@@ -28,12 +28,12 @@
 
 | 模块 | 职责 |
 |---|---|
-| `message.py` | OneBot 消息段标准化、文本提取和消息属性解析 |
-| `dispatcher.py` | `MessageContext` 构建、A–G 流程、Session 与插件调用 |
-| `router.py` | Manifest 命令树、触发词索引、子命令解析和冲突检测 |
+| `message.py` | OneBot 消息段标准化、文本提取、发送者显示名和消息属性解析 |
+| `dispatcher.py` | `MessageContext` 构建、A–G 流程、Session 与插件调用；`run_command_text` 是 agent 的命令执行器 |
+| `router.py` | Manifest 命令树、触发词索引、子命令解析和冲突检测；`command_access` 是全项目唯一的命令权限判断 |
 | `args.py` | `ParsedArgs` token 与选项解析 |
 | `models.py` | OneBot、Manifest、命令、服务和配置数据模型 |
-| `auth.py` | Bot 管理员、群管理员和命令权限判断 |
+| `auth.py` | Inbound Bearer 凭据解析与恒定时间比较 |
 | `public_errors.py` | 内部异常到公开错误码和 request ID 的映射 |
 
 Dispatcher 的固定流程为：处理门控、URL、Bot 名称、会话、命令、命令兜底、闲聊。Router 从已验证 Manifest 构建只读命令目录，并把解析结果放入插件 Context。
@@ -69,8 +69,8 @@ Python 模块依赖在导入前验证。命令触发词冲突在发布命令目�
 |---|---|
 | `context.py` | `PluginContext` 实现、作用域视图和便捷方法 |
 | `interfaces.py` | Protocol、principal、capability 和跨模块接口 |
-| `capabilities.py` | Core 签发能力的具体实现 |
-| `plugin_base.py` | 消息段、Action、同步任务、文件和拆分工具 |
+| `capabilities.py` | Core 签发能力的具体实现，含 agent 的命令执行器、本机工具授权与 Codex、SSH 桥 |
+| `plugin_base.py` | 消息段、Action、同步任务、文件和拆分工具；`file://` URI 与本地路径互转 |
 
 Context 由当前插件名、用户、群、request ID 和 principal 共同确定。普通插件获得当前命名空间的配置与 secret；Manifest capability 对应 Core 维护的窄特权对象。
 
@@ -114,6 +114,7 @@ Inbound HTTP 与 WebSocket 使用同一鉴权和会话排序。出站远程内�
 | `ai.py` | Provider、模型 profile、插件 route、重试、fallback 和总预算 |
 | `sensitive_audit.py` | 敏感字段审计、摘要和脱敏 |
 | `atomic_store.py` | JSON 与字节数据的原子写入和恢复 |
+| `process_tree.py`、`windows_job.py` | 插件执行外部命令：独立进程树（Windows Job 对象 / POSIX 进程组）、stdout 与 stderr 共享输出预算、超时与取消时整树回收；`/shell` 和小青 agent 共用 |
 | `bounded_file_cache.py` | TTL、LRU、条目数和字节数受限的磁盘缓存 |
 
 配置分为公开配置和 secrets。应用层按 revision 发布快照。AI Service 从同一 revision 解析 provider、模型、插件 route 和凭据。
@@ -149,7 +150,7 @@ Inbound HTTP 与 WebSocket 使用同一鉴权和会话排序。出站远程内�
 
 资源创建和回收由同一所有权边界配对。应用关闭按依赖关系逆序执行。
 
-`DeliveryReceipt` 跟踪一个逻辑回复所需的全部物理 Action。动作进入收集队列时保留待结算状态，实际传输的成功、失败和未知结果分别决定提交、回滚与未知处理。Core 接管的收据由传输层计数，插件发送帮助器保留同一结算权，避免拆分消息重复累计成功。标准 HTTP 上报完成真实 Action 投递后才返回事件确认。
+`DeliveryReceipt` 跟踪一个逻辑回复所需的全部物理 Action。动作进入收集队列时保留待结算状态，实际传输的成功、失败和未知结果分别决定提交、回滚与未知处理。Core 接管的收据由传输层计数，插件发送帮助器保留同一结算权，避免拆分消息重复累计成功。每条物理消息确认发出后，传输层先登记它的消息 ID 再记下结果，提交回调从 `message_ids` 读到整条回复的全部 ID。标准 HTTP 上报完成真实 Action 投递后才返回事件确认。
 
 主动 WebSocket 的连接通知与读循环并发运行，通知中的 Action 可以通过持续运行的读循环接收 echo。连接结束时统一回收通知任务与待响应请求。
 
@@ -162,6 +163,9 @@ Inbound HTTP 与 WebSocket 使用同一鉴权和会话排序。出站远程内�
 | OneBot 连接与重连 | `onebot.py` | `app_config_apply.py`, `app_lifecycle.py` |
 | Inbound 鉴权与端口 | `server.py` | `inbound_policy.py`, `app_ingress.py` |
 | 命令匹配 | `router.py` | `dispatcher.py`, `models.py` |
+| 命令或会话被拒（权限、场景） | `router.py` 的 `command_access` | 对应插件 `plugin.json` |
+| Core 签发的能力缺失 | `app_plugin_context.py` | 对应命令的 `plugin.json` |
+| agent 代为执行命令 | `dispatcher.py` 的 `run_command_text` | `app_plugin_context.py`, `plugins/xiaoqing_agent/tools.py` |
 | 群聊参与 | `dispatcher.py` | Smalltalk Provider 插件 |
 | 插件加载与重载 | `plugin_watcher.py` | `plugin_generation.py`, `plugin_runtime.py` |
 | 插件超时与过载 | `plugin_execution.py` | `dispatcher.py` |

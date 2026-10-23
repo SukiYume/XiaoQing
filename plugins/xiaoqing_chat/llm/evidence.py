@@ -309,22 +309,22 @@ def definition_author_claim_supported(
     return True
 
 
+def _canonical_evidence(value: str) -> str:
+    punctuation = str.maketrans("：，；！？“”‘’", ":,;!?\"\"''")
+    return "".join(value.translate(punctuation).split())
+
+
 def evidence_is_visible(evidence: str, source: str) -> bool:
     """引用允许全半角标点和排版空白变化，事实文字保持一致。"""
-    punctuation = str.maketrans("：，；！？“”‘’", ":,;!?\"\"''")
-
-    def canonical(value: str) -> str:
-        return "".join(value.translate(punctuation).split())
-
     if not evidence.strip():
         return False
-    normalized_source = canonical(source)
-    if canonical(evidence) in normalized_source:
+    normalized_source = _canonical_evidence(source)
+    if _canonical_evidence(evidence) in normalized_source:
         return True
     # 多条来源可以分别引用。引用中的人名前缀与原始消息作者保持一致，正文可取连续片段。
     speaker_line = re.compile(r"^(?:\[[^\]\n]{1,96}\])?(?:\d{1,2}:\d{2},)?([^:\n]{1,80}):(.*)$")
-    source_lines = [canonical(line) for line in source.splitlines() if line.strip()]
-    for quoted in (canonical(line) for line in evidence.splitlines() if line.strip()):
+    source_lines = [_canonical_evidence(line) for line in source.splitlines() if line.strip()]
+    for quoted in (_canonical_evidence(line) for line in evidence.splitlines() if line.strip()):
         if quoted in normalized_source:
             continue
         match = speaker_line.match(quoted)
@@ -338,3 +338,15 @@ def evidence_is_visible(evidence: str, source: str) -> bool:
         ):
             return False
     return True
+
+
+# 审查模型摘引时常用省略号、斜杠或引号把几处原文拼在一起，也会调换前后顺序。
+_EVIDENCE_SPLICE_RE = re.compile(r"…+|\.{3,}|[/／|｜“”\"「」『』]")
+
+
+def spliced_evidence_is_visible(evidence: str, source: str) -> bool:
+    """逐段核对拼接引用：拆开后每一段都须是这条来源里的原文，不要求原顺序。"""
+    fragments         = [_canonical_evidence(part) for part in _EVIDENCE_SPLICE_RE.split(evidence)]
+    fragments         = [fragment for fragment in fragments if fragment]
+    normalized_source = _canonical_evidence(source)
+    return bool(fragments) and all(fragment in normalized_source for fragment in fragments)

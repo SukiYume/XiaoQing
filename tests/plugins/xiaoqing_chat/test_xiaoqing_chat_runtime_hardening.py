@@ -16,6 +16,7 @@ from plugins.xiaoqing_chat.expression.bw_expression_learner import _build_dialog
 from plugins.xiaoqing_chat.expression.bw_expression_store import ExpressionRecord
 from plugins.xiaoqing_chat.memory.knowledge_extract import build_fact_messages
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
+from plugins.xiaoqing_chat.persona import PersonaCard
 
 
 @pytest.mark.parametrize(
@@ -362,11 +363,11 @@ def test_refresh_mood_state_resets_after_long_idle():
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
             personality=PersonalityConfig(
-                states                                 = ["现在心情不错", "刚吃完饭"],
-                state_probability                      = 1.0,  # 强制进入重摇分支
-                state_force_refresh_after_idle_seconds = 14400,
-                state_min_duration_seconds             = 7200,
-                state_max_duration_seconds             = 21600,
+                card=PersonaCard.parse("## 心境〔心境〕\n- 现在心情不错\n- 刚吃完饭"),
+                state_probability=1.0,  # 强制进入重摇分支
+                state_force_refresh_after_idle_seconds=14400,
+                state_min_duration_seconds=7200,
+                state_max_duration_seconds=21600,
             )
         )
     )

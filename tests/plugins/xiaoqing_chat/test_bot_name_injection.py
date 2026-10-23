@@ -11,21 +11,24 @@ from plugins.xiaoqing_chat.llm.local_checks import (
 from plugins.xiaoqing_chat.llm.prompt_builder import build_prompt_messages
 from plugins.xiaoqing_chat.main import _help_text
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
-from plugins.xiaoqing_chat.persona import compose_persona_identity
+from plugins.xiaoqing_chat.persona import SCOPE_CHAT, SCOPE_DEEP, PersonaCard
 from plugins.xiaoqing_chat.reply_fallbacks import _is_persona_intro_query
 
 
-def test_default_personality_keeps_name_out_of_plugin_config() -> None:
-    cfg = XiaoQingChatConfig()
+def test_default_persona_card_takes_the_configured_name() -> None:
+    card = XiaoQingChatConfig().personality.card
 
-    assert "小青" not in cfg.personality.identity
-    assert "小青" not in cfg.brain_chat.brain_identity
+    rendered = (
+        card.for_agent("阿澄") + card.scoped(SCOPE_CHAT, "阿澄") + card.scoped(SCOPE_DEEP, "阿澄")
+    )
+    assert "小青" not in rendered and "{{name}}" not in rendered
+    assert rendered.startswith("你的名字是阿澄。")
 
 
 def test_custom_name_is_injected_into_planner_and_generation_prompt() -> None:
-    personality = PersonalityConfig(identity="住校的理工科学生。", states=[])
+    personality = PersonalityConfig(card=PersonaCard.parse("## 你是谁\n- 住校的理工科学生。"))
 
-    persona_text = compose_persona_identity(personality.identity, "阿澄")
+    persona_text = personality.card.facts("阿澄")
     messages     = build_prompt_messages(
         is_private    = False,
         bot_name      = "阿澄",
@@ -40,10 +43,8 @@ def test_custom_name_is_injected_into_planner_and_generation_prompt() -> None:
     )
     system_prompt = messages[0].content
 
-    assert persona_text == "你的名字是阿澄，住校的理工科学生。"
-    assert "- 名字：阿澄" in system_prompt
-    assert "- 已知人设：住校的理工科学生。" in system_prompt
-    assert "小青" not in persona_text
+    assert persona_text == "你的名字是阿澄。\n\n## 你是谁\n- 住校的理工科学生。"
+    assert persona_text in system_prompt
     assert "小青" not in system_prompt
 
 
@@ -98,8 +99,10 @@ def test_history_uses_current_name_and_keeps_assistant_role_after_rename() -> No
     assert repeated.suitable is False
 
 
-def test_persona_composer_uses_only_current_name() -> None:
-    assert compose_persona_identity("喜欢天文。", "阿澄") == "你的名字是阿澄，喜欢天文。"
+def test_persona_card_uses_only_current_name() -> None:
+    card = PersonaCard.parse("## 回复示例〔聊天〕\n群友：{{name}}在吗\n可以：在")
+
+    assert card.scoped(SCOPE_CHAT, "阿澄") == "## 回复示例\n群友：阿澄在吗\n可以：在"
 
 
 def test_plugin_help_uses_current_name() -> None:

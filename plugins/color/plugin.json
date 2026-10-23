@@ -92,7 +92,7 @@
                 },
                 {
                     "name": "add",
-                    "aliases": ["write", "添加", "-w", "--write"],
+                    "aliases": ["write", "添加", "新增", "-w", "--write"],
                     "help": "向当前作用域写入自定义颜色",
                     "usage": "/color add <名称> <R> <G> <B> | /color add <名称> <#HEX>",
                     "permission": "bot_admin",

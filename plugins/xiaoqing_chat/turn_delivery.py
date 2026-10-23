@@ -146,18 +146,21 @@ async def _record_bot_reply(
     reasoning: str,
     detail: dict[str, Any],
     parts: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None = None,
+    message_ids: tuple[Any, ...]                                    = (),
 ) -> list[Any]:
     """将助手回复写入记忆和动作历史，并返回最新历史快照。
 
+    ``message_ids`` 是这条回复发出后的全部 QQ 消息 ID（来自发送回执），和记录一起写入。
     调用方必须已经持有 ``chat_id`` 对应的异步锁。
     """
     assistant_local_id = allocate_local_id(chat_id)
     state.memory_store.append(
         chat_id,
-        role     = "assistant",
-        name     = bot_name,
-        local_id = assistant_local_id,
-        parts    = parts,
+        role        = "assistant",
+        name        = bot_name,
+        local_id    = assistant_local_id,
+        parts       = parts,
+        message_ids = message_ids,
     )
     schedule_memory_persist(context, runtime, chat_id=chat_id)
     log_step(
@@ -346,6 +349,7 @@ def _smalltalk_outbound_batches(finalization: _SmalltalkFinalization) -> list[An
 async def _record_delivered_reply(
     finalization: _SmalltalkFinalization,
     reply_parts,
+    message_ids: tuple[Any, ...],
 ) -> list[Any]:
     """只记录已经确认对外投递成功的回复。"""
 
@@ -382,19 +386,21 @@ async def _record_delivered_reply(
 
     return await _record_bot_reply(
         *common_args,
-        forced     = forced,
-        action_str = action_str,
-        reasoning  = reasoning,
-        detail     = detail,
-        parts      = reply_parts,
+        forced      = forced,
+        action_str  = action_str,
+        reasoning   = reasoning,
+        detail      = detail,
+        parts       = reply_parts,
+        message_ids = message_ids,
     )
 
 
 async def _commit_smalltalk_delivery(
     finalization: _SmalltalkFinalization,
     reply_parts,
+    message_ids: tuple[Any, ...] = (),
 ) -> None:
-    """仅在全部外发动作成功后提交内部状态。"""
+    """仅在全部外发动作成功后提交内部状态；消息 ID 随记录一起写入。"""
 
     should_flush_pfc            = False
     history_snapshot: list[Any] = []
@@ -410,7 +416,11 @@ async def _commit_smalltalk_delivery(
             latest_local_id = most_recent_user_local_id(finalization.chat_id)
             if latest_local_id == finalization.generated.local_id:
                 should_flush_pfc = await _apply_generated_pfc_state(finalization)
-            history_snapshot = await _record_delivered_reply(finalization, reply_parts)
+            history_snapshot = await _record_delivered_reply(
+                finalization,
+                reply_parts,
+                message_ids,
+            )
     finally:
         if should_flush_pfc:
             schedule_pfc_state_flush(
@@ -480,18 +490,20 @@ def _build_smalltalk_delivery_receipt(
     batch_count: int,
 ) -> DeliveryReceipt:
     async def commit() -> None:
-        await _commit_smalltalk_delivery(finalization, reply_parts)
+        # 回执收齐了这条回复每一批发出后的消息 ID，记录和真实消息一一对应。
+        await _commit_smalltalk_delivery(finalization, reply_parts, receipt.message_ids)
 
     async def rollback() -> None:
         await _rollback_smalltalk_delivery(finalization, batch_count=batch_count)
 
-    return DeliveryReceipt(
+    receipt = DeliveryReceipt(
         expected_actions = batch_count,
         commit           = commit,
         rollback         = rollback,
         # 已提交但回执丢失时保留本轮记忆，避免可能已看到的回复从上下文消失。
         unknown=commit,
     )
+    return receipt
 
 
 async def _apply_smalltalk_presend_delay(

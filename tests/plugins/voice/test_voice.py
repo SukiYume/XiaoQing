@@ -74,7 +74,7 @@ def test_static_metadata() -> None:
     command = manifest["commands"][0]
     assert command["name"] == "tts"
     assert command["triggers"] == ["语音", "念", "tts"]
-    assert command["admin_only"] is True
+    assert "admin_only" not in command
     assert command["usage"] == "/语音 <文本>"
     assert command["subcommands"][0]["name"] == "help"
     assert manifest["services"][0]["callback"] == "convert_text_to_voice"

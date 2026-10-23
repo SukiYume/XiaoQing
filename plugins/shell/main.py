@@ -6,8 +6,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import logging
 import math
 import ntpath
@@ -15,17 +13,15 @@ import os
 import re
 import shlex
 import shutil
-import signal
-import subprocess
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Protocol, cast
 
 from core.interfaces import PluginSettingsSnapshot
 from core.plugin_base import head_tail_preview
 from core.plugin_base import segments as _core_segments
+from core.process_tree import run_process
 from core.public_errors import public_error_response
 from core.sensitive_audit import log_sensitive_operation, safe_audit_id
 
@@ -46,7 +42,6 @@ _URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
 _WINDOWS_DRIVE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
 _DANGEROUS_REGEXES = tuple(re.compile(pattern, re.IGNORECASE) for pattern in DANGEROUS_PATTERNS)
 _MAX_CAPTURE_BYTES = max(64 * 1024, MAX_OUTPUT_LENGTH * 4)
-_PROCESS_STOP_TIMEOUT = 5.0
 _EXIT_TIMEOUT = -1
 _EXIT_OUTPUT_LIMIT = -2
 _TERMINAL_DIRECT = "direct"
@@ -383,245 +378,20 @@ def _command_not_found_message(command: str) -> str:
     return "\n".join(lines)
 
 
-def _smart_decode(data: bytes) -> str:
-    """优先保留 UTF-8；Windows 本地命令再回退到 GBK。"""
-
-    if not data:
-        return ""
-
-    encodings = ("utf-8", "gbk") if sys.platform == "win32" else ("utf-8",)
-    for encoding in encodings:
-        try:
-            return data.decode(encoding)
-        except UnicodeDecodeError:
-            continue
-
-    return data.decode("latin-1")
-
-
-# ──────────────────── 子进程执行与回收 ────────────────────
-
-
-def _subprocess_group_kwargs() -> dict[str, Any]:
-    """让每条命令拥有可整体终止的独立进程组。"""
-
-    if sys.platform == "win32":
-        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        return {"creationflags": creationflags} if creationflags else {}
-    return {"start_new_session": True}
-
-
-async def _wait_for_process_exit(
-    proc: asyncio.subprocess.Process,
-    timeout: float = _PROCESS_STOP_TIMEOUT,
-) -> bool:
-    try:
-        await asyncio.wait_for(proc.wait(), timeout=timeout)
-    except (TimeoutError, OSError):
-        return False
-    return True
-
-
-async def _kill_process_directly(proc: asyncio.subprocess.Process) -> None:
-    """尽力终止单个进程，并为回收设置有限等待。"""
-
-    if proc.returncode is None:
-        with contextlib.suppress(OSError, AttributeError):
-            proc.kill()
-    await _wait_for_process_exit(proc)
-
-
-async def _terminate_process_tree(proc: asyncio.subprocess.Process) -> None:
-    """终止命令进程树；平台工具失败时回退到直接终止子进程。"""
-
-    if sys.platform == "win32":
-        killer: asyncio.subprocess.Process | None = None
-        try:
-            killer = await asyncio.create_subprocess_exec(
-                "taskkill",
-                "/PID",
-                str(proc.pid),
-                "/T",
-                "/F",
-                stdout = asyncio.subprocess.DEVNULL,
-                stderr = asyncio.subprocess.DEVNULL,
-            )
-            await asyncio.wait_for(killer.communicate(), timeout=_PROCESS_STOP_TIMEOUT)
-            if killer.returncode == 0 and await _wait_for_process_exit(proc):
-                return
-        except Exception:
-            await _kill_process_directly(proc)
-            return
-        finally:
-            if killer is not None and killer.returncode is None:
-                await _kill_process_directly(killer)
-        await _kill_process_directly(proc)
-        return
-
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        if not await _wait_for_process_exit(proc):
-            await _kill_process_directly(proc)
-        return
-    except OSError:
-        await _kill_process_directly(proc)
-        return
-    if not await _wait_for_process_exit(proc):
-        await _kill_process_directly(proc)
-
-
-async def _attach_windows_job(proc: asyncio.subprocess.Process) -> Any:
-    """登记启动门控进程，随后允许其创建命令树。"""
-    from .windows_job import WindowsJob
-
-    job = WindowsJob(proc.pid)
-    try:
-        assert proc.stdin is not None
-        proc.stdin.write(b"1")
-        await proc.stdin.drain()
-        proc.stdin.close()
-    except BaseException:
-        job.close()
-        raise
-    return job
-
-
-async def _spawn_owned_command(args: list[str]) -> tuple[asyncio.subprocess.Process, Any]:
-    """创建带平台进程树归属的命令，启动失败时回收已创建的根进程。"""
-    windows_job = None
-    launch_args = args
-    if sys.platform == "win32":
-        launch_args = [sys.executable, str(Path(__file__).with_name("windows_job.py")), *args]
-    proc = await asyncio.create_subprocess_exec(
-        *launch_args,
-        stdin  = asyncio.subprocess.PIPE if sys.platform == "win32" else asyncio.subprocess.DEVNULL,
-        stdout = asyncio.subprocess.PIPE,
-        stderr = asyncio.subprocess.PIPE,
-        **_subprocess_group_kwargs(),
-    )
-    if sys.platform == "win32":
-        try:
-            windows_job = await _attach_windows_job(proc)
-        except BaseException:
-            if windows_job is not None:
-                windows_job.close()
-            await _kill_process_directly(proc)
-            raise
-    return proc, windows_job
+# ──────────────────── 子进程执行 ────────────────────
 
 
 async def _execute_command(args: list[str], timeout: float) -> tuple[int, str, str]:
-    """异步执行命令，返回 ``(返回码, stdout, stderr)``。"""
+    """异步执行命令，返回 ``(返回码, stdout, stderr)``；进程树归属与回收见 ``core.process_tree``。"""
 
-    if not args:
-        raise ValueError("command arguments must not be empty")
-    if not math.isfinite(timeout) or timeout <= 0:
-        raise ValueError("command timeout must be finite and positive")
-    proc, windows_job = await _spawn_owned_command(args)
-    command_deadline = asyncio.get_running_loop().time() + timeout
-
-    overflow       = asyncio.Event()
-    captured_bytes = 0
-
-    async def terminate_owned() -> None:
-        if windows_job is not None:
-            windows_job.close()
-            if not await _wait_for_process_exit(proc):
-                await _kill_process_directly(proc)
-        else:
-            await _terminate_process_tree(proc)
-
-    async def read_limited(stream: asyncio.StreamReader | None) -> bytes:
-        nonlocal captured_bytes
-        if stream is None:
-            return b""
-        chunks: list[bytes] = []
-        while True:
-            chunk = await stream.read(8192)
-            if not chunk:
-                break
-            remaining = _MAX_CAPTURE_BYTES - captured_bytes
-            if remaining > 0:
-                chunks.append(chunk[:remaining])
-                captured_bytes += min(len(chunk), remaining)
-            if len(chunk) > remaining or captured_bytes >= _MAX_CAPTURE_BYTES:
-                overflow.set()
-                break
-        return b"".join(chunks)
-
-    stdout_task   = asyncio.create_task(read_limited(proc.stdout))
-    stderr_task   = asyncio.create_task(read_limited(proc.stderr))
-    wait_task     = asyncio.create_task(proc.wait())
-    overflow_task = asyncio.create_task(overflow.wait())
-    status        = 0
-    message       = ""
-
-    try:
-        done, _pending = await asyncio.wait(
-            {wait_task, overflow_task},
-            timeout     = timeout,
-            return_when = asyncio.FIRST_COMPLETED,
-        )
-        if overflow_task in done and overflow.is_set():
-            status  = _EXIT_OUTPUT_LIMIT
-            message = f"输出超过 {_MAX_CAPTURE_BYTES} 字节安全上限，已终止进程树"
-            await terminate_owned()
-        elif wait_task not in done:
-            status  = _EXIT_TIMEOUT
-            message = f"命令执行超时（{timeout:g}秒）"
-            await terminate_owned()
-
-        if status != 0 and windows_job is not None:
-            windows_job.close()
-        try:
-            # 父进程可能先于 wait 任务退出；继承管道的子进程仍受原命令预算约束。
-            # 已触发终止时使用独立收尾预算，正常路径不能额外获得五秒执行时间。
-            drain_timeout = (
-                _PROCESS_STOP_TIMEOUT
-                if status != 0
-                else min(
-                    _PROCESS_STOP_TIMEOUT,
-                    max(0.0, command_deadline - asyncio.get_running_loop().time()),
-                )
-            )
-            async with asyncio.timeout(drain_timeout):
-                stdout_bytes, stderr_bytes = await asyncio.gather(stdout_task, stderr_task)
-        except TimeoutError:
-            if windows_job is not None:
-                windows_job.close()
-            await terminate_owned()
-            return _EXIT_TIMEOUT, "", "命令输出管道回收超时，已终止进程树"
-        if status == 0 and overflow.is_set():
-            status  = _EXIT_OUTPUT_LIMIT
-            message = f"输出超过 {_MAX_CAPTURE_BYTES} 字节安全上限"
-        if status == 0:
-            status = proc.returncode or 0
-        stderr_str = _smart_decode(stderr_bytes)
-        if message:
-            stderr_str = f"{stderr_str}\n{message}".strip()
-        return status, _smart_decode(stdout_bytes), stderr_str
-    except asyncio.CancelledError:
-        cleanup = asyncio.create_task(terminate_owned())
-        while not cleanup.done():
-            try:
-                await asyncio.shield(cleanup)
-            except asyncio.CancelledError:
-                continue
-        cleanup.result()
-        raise
-    finally:
-        if windows_job is not None:
-            windows_job.close()
-        overflow_task.cancel()
-        if proc.returncode is None:
-            await terminate_owned()
-        for task in (stdout_task, stderr_task, wait_task, overflow_task):
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(
-            stdout_task, stderr_task, wait_task, overflow_task, return_exceptions=True
-        )
+    result = await run_process(args, timeout=timeout, max_capture_bytes=_MAX_CAPTURE_BYTES)
+    if result.output_limited:
+        notice = f"输出超过 {_MAX_CAPTURE_BYTES} 字节安全上限，已终止进程树"
+        return _EXIT_OUTPUT_LIMIT, result.stdout, f"{result.stderr}\n{notice}".strip()
+    if result.timed_out:
+        notice = f"命令执行超时（{timeout:g}秒）"
+        return _EXIT_TIMEOUT, result.stdout, f"{result.stderr}\n{notice}".strip()
+    return result.exit_code or 0, result.stdout, result.stderr
 
 
 def _truncate(text: str, max_len: int = MAX_OUTPUT_LENGTH) -> str:
@@ -776,7 +546,7 @@ def _show_help(context: ShellContext) -> str:
         "• QQ 中建议使用 /，例如 C:/workspace/example.py\n"
         "• 含空格的路径必须加引号\n"
         "\n"
-        "⚠️ 仅限管理员私聊；启用列表不是安全沙箱。"
+        "⚠️ 仅限 Bot 管理员，群里的输出全群可见；启用列表不是安全沙箱。"
     )
 
 

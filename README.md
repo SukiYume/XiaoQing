@@ -21,7 +21,7 @@ XiaoQingBot 面向长期运行的私人 QQ 助手场景。Core 负责 OneBot 接
 
 两个核心插件覆盖主要日常场景：
 
-- `xiaoqing_chat`：多模态拟人聊天，支持群聊参与、私聊、图片、表情、引用、长期记忆、行为规划和表达学习。
+- `xiaoqing_chat`：多模态拟人聊天，支持群聊参与、私聊、图片、表情、引用、长期记忆、行为规划和表达学习。开启 `xiaoqing_agent` 后，叫小青做事时她会按你的权限用工具真正动手完成。
 - `pendo`：个人时间与信息管理，支持日程、待办、笔记、日记、账本、提醒、搜索、统计、Web 控制台和 iPhone Scriptable 小组件。
 
 XiaoQing 面向回环地址、可信内网或严格反向代理保护的私人服务。插件采用受信任代码模型，与 Bot 共享 Python 进程和操作系统权限。请安装经过审查的第一方插件或可信插件。
@@ -37,6 +37,7 @@ XiaoQing 面向回环地址、可信内网或严格反向代理保护的私人�
 | 插件系统 | 每个插件拥有独立 Manifest、配置命名空间、数据目录和生命周期 |
 | 执行治理 | 插件入口与同步任务使用有界队列、按插件并发控制和公平调度 |
 | 命令目录 | Manifest 统一提供命令层级、别名、权限、场景、样例和帮助内容 |
+| 权限 | 谁能在哪里用哪条命令只在 Manifest 声明，Core 用同一处判断命令、会话和派生能力 |
 | 多轮会话 | 按会话键串行、快照隔离、事务提交，适合表单、游戏、REPL 和 SSH |
 | 后台任务 | 插件通过主动发送能力回传长任务的文字、图片和文件结果 |
 | 定时任务 | Manifest 声明 cron、投递模式与群目标，Core 统一调度、校验和发送 |
@@ -193,6 +194,12 @@ python main.py
 - [使用说明](plugins/xiaoqing_chat/README.md)
 - [架构说明](plugins/xiaoqing_chat/ARCHITECTURE.md)
 
+### xiaoqing_agent
+
+`xiaoqing_agent` 在有人叫小青做事时接手：判断是否需要动手，然后按发起人自己的权限真实执行（已有 XiaoQing 命令按各自权限可用；Python、Shell、QingSSH 和 Codex 跟随 `/shell`、`/ssh`、`/codex` 的声明，这几条命令只给 Bot 管理员），做完以小青的口吻回复，长任务在后台完成后主动发回。默认关闭，在 `config.plugins.xiaoqing_agent.enabled` 开启；关闭时 `xiaoqing_chat` 行为不变。
+
+- [使用说明](plugins/xiaoqing_agent/README.md)
+
 ### Pendo
 
 Pendo 通过统一数据模型管理日程、待办、笔记、日记、账本和提醒。聊天命令、Web 控制台与 Scriptable 小组件共享同一份 SQLite 数据。
@@ -207,7 +214,7 @@ Pendo 通过统一数据模型管理日程、待办、笔记、日记、账本�
 
 `codex` 维护独立的后台会话和任务队列。同一标签内任务串行执行，各标签按 `max_parallel_jobs` 并行执行，完成结果通过 OneBot 主动回传。
 
-`arxiv_filter` 发送当日筛选结果，并将 positive 论文交给 Codex `astro-ph` 会话生成摘要。源列表日期和规范化论文链接集合共同标识一次摘要任务。
+`arxiv_filter` 发送当日筛选结果；定时推送或能用 `/codex` 的人触发时，将 positive 论文交给 Codex `astro-ph` 会话生成摘要。源列表日期和规范化论文链接集合共同标识一次摘要任务。
 
 - [Codex 插件](plugins/codex/README.md)
 - [arXiv Filter 插件](plugins/arxiv_filter/README.md)

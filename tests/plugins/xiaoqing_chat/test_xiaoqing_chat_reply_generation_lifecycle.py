@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
+from plugins.xiaoqing_chat.persona import PersonaCard
 from tests.helpers.xiaoqing_chat_test_support import (
     AsyncMock,
     MagicMock,
@@ -32,7 +33,7 @@ async def test_generate_reply_checker_unexpected_error_logs_error_not_timeout(mo
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
-            personality=SimpleNamespace(multiple_reply_style=[], multiple_probability=0.0),
+            personality=SimpleNamespace(card=PersonaCard()),
             keyword_reaction=SimpleNamespace(keyword_rules=[], regex_rules=[]),
             goal=SimpleNamespace(enable_goal=False),
             reflection=SimpleNamespace(enable_review_sessions=False),
@@ -123,10 +124,7 @@ async def test_generate_reply_checker_unexpected_error_logs_error_not_timeout(mo
             patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_temperature", return_value=0.7)
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_identity", return_value="")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_reply_style", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.persona_reply_style", return_value="")
         )
         stack.enter_context(
             patch(

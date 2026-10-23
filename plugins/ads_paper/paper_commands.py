@@ -112,7 +112,7 @@ async def cmd_cite(client: ADSClient, args: str) -> Segments:
     if not bibtex:
         return segments(f"❌ 无法获取 BibTeX: {bibcode}")
 
-    lines = ["📎 BibTeX 引用:\n", "```", bibtex, "```"]
+    lines = ["📎 BibTeX 引用:\n", bibtex]
     return segments("\n".join(lines))
 
 

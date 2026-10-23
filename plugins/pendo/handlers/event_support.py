@@ -259,7 +259,7 @@ def format_recurring_event_created(
     ]
     if remind_count:
         lines.append(f"⏰ 每项已设置 {remind_count} 个提醒")
-    lines.append(f"\n`{display_id}`")
+    lines.append(f"\n{display_id}")
     lines.append(f"\n💡 用 /pendo event reminders {display_id} 查看所有实例提醒")
     return "\n".join(lines)
 
@@ -294,7 +294,7 @@ def format_milestone_event_created(event: dict[str, Any]) -> str:
         lines.append(f"🔔 已设置 {remind_count} 个提醒")
 
     display_id = public_id(event["id"])
-    lines.append(f"\n`{display_id}`")
+    lines.append(f"\n{display_id}")
     lines.append(f"\n💡 用 /pendo event reminders {display_id} 查看提醒")
     return "\n".join(lines)
 
@@ -319,7 +319,7 @@ def format_event_created(event: dict[str, Any]) -> str:
     if remind_count:
         lines.append(f"🔔 已设置 {remind_count} 个提醒")
     display_id = public_id(event["id"])
-    lines.append(f"\n`{display_id}`")
+    lines.append(f"\n{display_id}")
     lines.append(f"\n💡 用 /pendo event reminders {display_id} 查看提醒")
     return "\n".join(lines)
 
@@ -364,7 +364,7 @@ def format_event_reminders(event: Any, log_map: dict[str, dict[str, Any]]) -> di
         return {"status": "info", "message": f"🔔 日程: {title}\n\n未设置提醒"}
 
     builder = MessageBuilder()
-    builder.add_line(f"🔔 **{title}** 的提醒列表")
+    builder.add_line(f"🔔 {title} 的提醒列表")
     event_time_str = ItemFormatter.format_datetime(
         start_time, "%m月%d日 %H:%M", tz=display_timezone
     )
@@ -377,6 +377,6 @@ def format_event_reminders(event: Any, log_map: dict[str, dict[str, Any]]) -> di
     for index, remind_time in enumerate(remind_times, 1):
         time_str = ItemFormatter.format_datetime(remind_time, "%m月%d日 %H:%M", tz=display_timezone)
         status = get_remind_status_label(log_map.get(remind_time))
-        builder.add_line(f"⏰ **提醒 {index}**: {time_str}  {status}")
+        builder.add_line(f"⏰ 提醒 {index}: {time_str}  {status}")
 
     return {"status": "success", "message": builder.build()}

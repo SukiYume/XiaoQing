@@ -129,7 +129,7 @@ def format_plugin_settings_message(settings: dict[str, Any]) -> str:
         DEFAULT_SETTINGS_JSON["ai_sensitive_data_consent"],
     )
 
-    lines = ["⚙️ **当前设置**"]
+    lines = ["⚙️ 当前设置"]
     lines.append(f"\n🌍 时区: {settings.get('timezone', PendoConfig.DEFAULT_TIMEZONE)}")
     lines.append(
         f"🔕 静默时段: {settings.get('quiet_hours_start', PendoConfig.DEFAULT_QUIET_HOURS_START)} - "
@@ -145,7 +145,7 @@ def format_plugin_settings_message(settings: dict[str, Any]) -> str:
     )
     lines.append(f"🤖 日记 AI 数据共享: {'允许' if ai_consent_on else '禁止'}")
 
-    lines.append("\n**修改设置:**")
+    lines.append("\n修改设置:")
     lines.extend(PLUGIN_SETTINGS_HELP_LINES[1:])
     return "\n".join(lines)
 

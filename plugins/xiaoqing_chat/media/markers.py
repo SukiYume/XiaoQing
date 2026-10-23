@@ -131,7 +131,7 @@ def build_context_marker(rendered: RenderedMedia) -> str:
     if not label:
         return _append_cultural_hint(marker, cultural_hint)
 
-    clean_desc, visible_text = split_emoji_visible_text(description)
+    clean_desc, visible_text = split_visible_text(description)
     rendered_marker = emoji_summary_marker(label, clean_desc, visible_text)
     return _append_cultural_hint(rendered_marker or marker, cultural_hint)
 
@@ -189,10 +189,10 @@ def is_generic_media_label(value: str) -> bool:
     return normalized in GENERIC_MEDIA_LABELS
 
 
-_EMOJI_VISIBLE_TEXT_RE = re.compile(r"^(?:(.+?)，)?文字内容是“(.+?)”$")
+_VISIBLE_TEXT_RE = re.compile(r"^(?:(.+?)，)?文字内容是“(.+?)”$")
 
 
-def split_emoji_visible_text(description: str) -> tuple[str, str]:
+def split_visible_text(description: str) -> tuple[str, str]:
     """把 ``描述，文字内容是“X”`` 拆成（清洁描述，可见文字）。
 
     不含该后缀时返回原描述和空的可见文字。
@@ -200,7 +200,7 @@ def split_emoji_visible_text(description: str) -> tuple[str, str]:
     text = str(description or "").strip()
     if not text:
         return "", ""
-    match = _EMOJI_VISIBLE_TEXT_RE.match(text)
+    match = _VISIBLE_TEXT_RE.match(text)
     if not match:
         return text, ""
     clean_desc   = (match.group(1) or "").strip()
@@ -261,7 +261,8 @@ def is_low_quality_rendered_media(
 ) -> bool:
     if looks_like_structured_media_text(rendered.description):
         return True
-    if looks_like_unusable_source_label(rendered.description):
+    # 来源标签只看模型自己的描述；图上转写的网址可以带任何参数。
+    if looks_like_unusable_source_label(split_visible_text(rendered.description)[0]):
         return True
     if looks_like_structured_media_text(rendered.marker):
         return True
