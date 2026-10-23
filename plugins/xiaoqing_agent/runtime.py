@@ -383,7 +383,8 @@ class AgentRuntime:
         task.inline_waiter              = waiter
         returned                        = False
         try:
-            outcome = await asyncio.wait_for(asyncio.shield(waiter), timeout=seconds)
+            async with asyncio.timeout(seconds):
+                outcome = await asyncio.shield(waiter)
             returned = True
             return outcome
         except TimeoutError:

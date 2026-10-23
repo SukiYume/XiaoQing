@@ -159,6 +159,7 @@ def test_smart_decode_keeps_utf8_when_budget_cuts_a_character() -> None:
 @pytest.mark.skipif(sys.platform != "win32", reason="GBK 回退只用于 Windows 本地程序输出")
 def test_smart_decode_falls_back_to_gbk_on_windows() -> None:
     assert smart_decode("驱动器 C 中的卷".encode("gbk")) == "驱动器 C 中的卷"
+    assert smart_decode("中".encode("gbk")) == "中"
 
 
 @pytest.mark.slow
@@ -201,6 +202,6 @@ def test_a_child_holding_pipes_gets_no_time_past_the_deadline(tmp_path: Path) ->
     run_with_subprocess_loop(scenario)
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX 没有 GBK 回退")
-def test_smart_decode_replaces_unknown_bytes_on_posix() -> None:
+def test_smart_decode_replaces_unknown_bytes() -> None:
     assert smart_decode(b"\xff") == "\ufffd"
+    assert smart_decode(b"prefix\xff") == "prefix\ufffd"
