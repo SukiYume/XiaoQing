@@ -58,7 +58,7 @@ class UserService:
         if not titles:
             return "🏅 暂无称号\n\n继续努力，解锁更多称号吧！"
 
-        lines = ["🏅 **我的称号**", ""]
+        lines = ["🏅 我的称号", ""]
         for title in titles:
             title_config = TITLES.get(title)
             description  = title_config["description"] if title_config is not None else ""

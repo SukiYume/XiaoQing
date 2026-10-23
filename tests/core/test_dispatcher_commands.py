@@ -280,7 +280,9 @@ async def test_session_continuation_obeys_published_command_contexts(
 
     result = await dispatcher._try_handle_session(sample_message_context)
 
-    assert result == [{"type": "text", "data": {"text": "当前会话类型不再受支持，会话已关闭"}}]
+    assert result == [
+        {"type": "text", "data": {"text": "你在这里已经不能再用这个功能，会话已关闭"}}
+    ]
     close_session.assert_awaited_once()
     mock_session_manager.delete.assert_awaited_once_with(
         sample_message_context.user_id,
@@ -290,7 +292,7 @@ async def test_session_continuation_obeys_published_command_contexts(
 
 
 @pytest.mark.asyncio
-async def test_admin_session_recheck_uses_manifest_capability_not_plugin_name(
+async def test_session_closes_once_the_user_loses_the_commands_permission(
     dispatcher: Dispatcher,
     sample_message_context: MessageContext,
     mock_plugin_registry: MagicMock,
@@ -298,13 +300,14 @@ async def test_admin_session_recheck_uses_manifest_capability_not_plugin_name(
     mock_session_manager: MagicMock,
     mock_admin_check: MagicMock,
 ) -> None:
+    """会话每次继续都和命令同一处判断：plugin.json 声明只给 Bot 管理员，撤权后会话关闭。"""
+
     plugin_name = "declared_privileged_tool"
     session = SimpleNamespace(plugin_name=plugin_name, session_id="session-privileged")
     mock_session_manager.get.return_value = session
     mock_session_manager.delete = AsyncMock(return_value=True)
-    mock_admin_check.is_admin.return_value           = False
-    mock_plugin_registry.has_capability.return_value = True
-    close_session                                    = AsyncMock()
+    mock_admin_check.is_admin.return_value = False
+    close_session                          = AsyncMock()
     handle_session = AsyncMock(return_value=[{"type": "text", "data": {"text": "secret"}}])
     mock_plugin_registry.get.return_value = SimpleNamespace(
         module=SimpleNamespace(close_session=close_session, handle_session=handle_session),
@@ -312,27 +315,35 @@ async def test_admin_session_recheck_uses_manifest_capability_not_plugin_name(
     )
     mock_router.get_command_catalog.return_value = (
         CommandCatalogNode(
-            code      = f"{plugin_name}.run",
-            plugin    = plugin_name,
-            path      = ("run",),
-            name      = "run",
-            aliases   = (),
-            help_text = "run",
-            usage     = "/run",
-            contexts  = ("group",),
+            code       = f"{plugin_name}.run",
+            plugin     = plugin_name,
+            path       = ("run",),
+            name       = "run",
+            aliases    = (),
+            help_text  = "run",
+            usage      = "/run",
+            permission = "bot_admin",
+            contexts   = ("group",),
         ),
     )
 
     result = await dispatcher._try_handle_session(sample_message_context)
 
-    assert result == [{"type": "text", "data": {"text": "权限已变更，高权限会话已关闭"}}]
-    mock_plugin_registry.has_capability.assert_called_with(plugin_name, "admin_sessions")
+    assert result == [
+        {"type": "text", "data": {"text": "你在这里已经不能再用这个功能，会话已关闭"}}
+    ]
     close_session.assert_awaited_once()
     handle_session.assert_not_awaited()
 
+    mock_admin_check.is_admin.return_value = True
+    close_session.reset_mock()
+    result = await dispatcher._try_handle_session(sample_message_context)
+    assert result == [{"type": "text", "data": {"text": "secret"}}]
+    close_session.assert_not_awaited()
+
 
 @pytest.mark.asyncio
-async def test_admin_plugin_name_without_manifest_capability_does_not_change_session_policy(
+async def test_session_policy_follows_the_published_permission_not_the_plugin_name(
     dispatcher: Dispatcher,
     sample_message_context: MessageContext,
     mock_plugin_registry: MagicMock,
@@ -342,9 +353,8 @@ async def test_admin_plugin_name_without_manifest_capability_does_not_change_ses
 ) -> None:
     plugin_name = "qingssh"
     session = SimpleNamespace(plugin_name=plugin_name, session_id="session-name-only")
-    mock_session_manager.get.return_value            = session
-    mock_admin_check.is_admin.return_value           = False
-    mock_plugin_registry.has_capability.return_value = False
+    mock_session_manager.get.return_value  = session
+    mock_admin_check.is_admin.return_value = False
     handle_session = AsyncMock(return_value=[{"type": "text", "data": {"text": "continued"}}])
     mock_plugin_registry.get.return_value = SimpleNamespace(
         module=SimpleNamespace(handle_session=handle_session),

@@ -210,18 +210,10 @@ class TestPluginContextAccess:
         with pytest.raises(TypeError):
             sample_context.secrets["plugins"]["echo"]["api_key"] = "changed"
 
-    def test_admin_check_uses_issued_principal_and_capability(
-        self,
-        sample_context: PluginContext,
-    ):
-        assert sample_context.is_global_admin() is True
-        assert sample_context.is_global_admin(12345) is True
-        assert sample_context.is_global_admin(99999) is False
-        assert sample_context.is_global_admin(True) is False
-        assert sample_context.is_global_admin("12345") is False  # type: ignore[arg-type]
+    def test_context_offers_no_private_admin_check(self, sample_context: PluginContext):
+        """谁能用什么只写在 plugin.json 里、由 Core 判断；插件上下文不再提供自己判断管理员的入口。"""
 
-        sample_context.capabilities = PluginCapabilities(is_bot_admin=False)
-        assert sample_context.is_global_admin() is False
+        assert not hasattr(sample_context, "is_global_admin")
 
     def test_state_access(self, sample_context: PluginContext):
         """测试状态访问"""

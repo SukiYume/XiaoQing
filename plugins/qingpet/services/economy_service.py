@@ -51,7 +51,7 @@ class EconomyService:
         """生成管理员命令使用的群统计文本。"""
         stats = self.get_group_stats(group_id)
         lines = [
-            "📊 **群宠物统计**",
+            "📊 群宠物统计",
             "",
             f"🐾 宠物总数: {stats['total_pets']}",
             f"👥 今日活跃: {stats['active_today']}",

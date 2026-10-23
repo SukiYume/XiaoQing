@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from tests.helpers.pendo_test_support import (
     ROOT,
     SimpleNamespace,
@@ -155,11 +153,7 @@ class TestPendoWebHandler:
         web_module = importlib.import_module("plugins.pendo.handlers.web")
 
         handler = web_module.WebHandler(db=None)
-        result = asyncio.run(
-            handler.handle(
-                "1001", "start", context=types.SimpleNamespace(is_global_admin=lambda _uid: True)
-            )
-        )
+        result = asyncio.run(handler.handle("1001", "start", context=types.SimpleNamespace()))
 
         assert result["status"] == "error"
         assert "服务启动失败" in result["message"]
@@ -188,11 +182,7 @@ class TestPendoWebHandler:
         web_module = importlib.import_module("plugins.pendo.handlers.web")
 
         handler = web_module.WebHandler(db=None)
-        result = asyncio.run(
-            handler.handle(
-                "1001", "stop", context=types.SimpleNamespace(is_global_admin=lambda _uid: True)
-            )
-        )
+        result = asyncio.run(handler.handle("1001", "stop", context=types.SimpleNamespace()))
 
         assert result["status"] == "success"
         assert "外部服务" in result["message"]
@@ -465,16 +455,20 @@ class TestPendoRedesignRegression:
             db.cleanup()
 
 
-@pytest.mark.asyncio
-async def test_web_lifecycle_requires_admin(db, monkeypatch):
-    from plugins.pendo.handlers import web
+def test_web_lifecycle_is_declared_for_bot_admins():
+    """启动、停止共享 Web 服务只给 Bot 管理员：写在 plugin.json 里，由 Core 统一检查。"""
 
-    calls = []
-    server = SimpleNamespace(stop=lambda: calls.append("stop"), is_managed_running=lambda: True)
-    monkeypatch.setattr(web, "web_server", server)
-    monkeypatch.setattr(web, "issue_login_code", lambda: None)
-    monkeypatch.setattr(web, "generate_widget_token", lambda: None)
-    for context in [None, SimpleNamespace(is_global_admin=lambda _uid: False)]:
-        result = await web.WebHandler(db).handle("123", "stop", context)
-        assert result["status"] == "error"
-    assert calls == []
+    import json
+
+    from core.router import build_command_catalog_node
+    from tests.helpers.paths import REPOSITORY_ROOT
+
+    manifest = json.loads(
+        (REPOSITORY_ROOT / "plugins" / "pendo" / "plugin.json").read_text(encoding="utf-8")
+    )
+    root = build_command_catalog_node("pendo", manifest["commands"][0], root=True)
+    web = root.resolve_child("web")
+    assert web is not None and web.permission == "public"
+    for action in ("start", "stop"):
+        node = web.resolve_child(action)
+        assert node is not None and node.permission == "bot_admin", action

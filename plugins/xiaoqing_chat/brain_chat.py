@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from .persona import SCOPE_CHAT, SCOPE_DEEP
+
 if TYPE_CHECKING:
     from .runtime_state import ChatRuntime
 
@@ -17,30 +19,14 @@ def is_brain_chat_active(
     return bool(is_private and runtime.cfg.brain_chat.enable_private_brain_chat)
 
 
-def get_brain_chat_identity(runtime: ChatRuntime, is_brain_chat: bool) -> str:
-    """返回稳定人物底座，并在深度模式下叠加思考方式。
+def persona_reply_style(runtime: ChatRuntime, is_brain_chat: bool, bot_name: str) -> str:
+    """人设卡里聊天用的说话方式和示例；深度模式只追加〔深度对话〕一节，不换人。"""
 
-    深度模式只改变如何聊，不能替换角色身份；否则进入私聊后会丢掉年龄、
-    兴趣和人物边界，形成两个互不一致的“小青”。
-    """
-
-    base_identity  = str(runtime.cfg.personality.identity or "").strip()
-    brain_identity = runtime.cfg.brain_chat.brain_identity
-    if is_brain_chat and brain_identity:
-        supplement = str(brain_identity or "").strip()
-        if base_identity:
-            return f"{base_identity}\n深度对话方式补充：{supplement}"
-        return supplement
-    return base_identity
-
-
-def get_brain_chat_reply_style(runtime: ChatRuntime, is_brain_chat: bool) -> str:
-    """返回当前模式的回复风格。"""
-
-    brain_reply_style = runtime.cfg.brain_chat.brain_reply_style
-    if is_brain_chat and brain_reply_style:
-        return str(brain_reply_style)
-    return str(runtime.cfg.personality.reply_style)
+    card  = runtime.cfg.personality.card
+    parts = [card.scoped(SCOPE_CHAT, bot_name)]
+    if is_brain_chat:
+        parts.append(card.scoped(SCOPE_DEEP, bot_name))
+    return "\n\n".join(part for part in parts if part)
 
 
 def get_brain_chat_think_level(

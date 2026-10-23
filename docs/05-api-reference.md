@@ -93,6 +93,22 @@ head_tail_preview(text: str, max_chars: int, *, marker: str) -> str
 
 这些函数用于第三方响应、终端输出、标题和日志摘要的字符、字节与控制字符边界。
 
+```python
+file_uri_to_path(value: str) -> Path | None
+```
+
+把消息段里的 `file://` URI 还原成本地路径（兼容 `file:///C:/x`、`file://C:/x`、`file://localhost/x` 和 UNC），不是 file URI 时返回 `None`；`image()`、`record()` 生成 URI 的方向由 Core 处理。
+
+### 外部命令
+
+```python
+from core.process_tree import ProcessResult, run_process
+
+result = await run_process(argv, timeout=30, cwd=workdir, max_capture_bytes=64 * 1024)
+```
+
+命令在独立进程树里执行（Windows 用 Job 对象，POSIX 用进程组）；stdout 与 stderr 共用捕获预算，超时、超出预算或调用方取消时整树回收，命令自己退出后留下的后台子进程也会收掉，不会借收尾多跑。`ProcessResult` 含 `exit_code`（被终止时为 `None`）、`stdout`、`stderr`、`timed_out`、`output_limited`。
+
 ### 异步工具
 
 ```python
@@ -221,10 +237,9 @@ Context 返回的快照已限定到当前插件可见范围。插件在一次业
 
 `DeliveryTarget.kind` 为 `private` 或 `group`，`target_id` 为正整数。`principal.is_system` 标识调度主体，`principal.can_manage_group(group_id)` 校验当前用户是否可管理指定群。
 
-### 身份与静音方法
+### 静音方法
 
 ```python
-context.is_global_admin(user_id: int | None = None) -> bool
 context.mute_group(group_id: int, duration_minutes: float) -> None
 context.unmute_group(group_id: int) -> bool
 context.is_group_muted(group_id: int) -> bool
@@ -242,7 +257,7 @@ context.get_command_catalog() -> tuple[CommandCatalogNode, ...]
 context.list_plugins() -> list[str]
 ```
 
-这些方法属于受信任插件的进程内 API，已加载插件可直接调用。Bot Core 的用户命令在 Router 中执行 Bot 管理员和私聊权限校验；部署者通过插件来源审查保护代码调用边界。
+这些方法属于受信任插件的进程内 API，已加载插件可直接调用。Bot Core 的用户命令按 Manifest 声明，由 Dispatcher 在调用前用 `command_access` 校验 Bot 管理员与私聊场景；部署者通过插件来源审查保护代码调用边界。
 
 ---
 
@@ -252,14 +267,19 @@ context.list_plugins() -> list[str]
 
 | 属性 | 用途 |
 |---|---|
-| `is_bot_admin` | 当前 principal 的 Bot 管理员状态 |
+| `is_bot_admin` | 当前 principal 的 Bot 管理员状态；只用于对象层面的规则，命令权限由 Manifest 声明、Core 判断 |
 | `is_system` | 调度调用状态 |
-| `secret_admin` | Bot Core 的敏感配置管理 |
+| `secret_admin` | Bot Core 的敏感配置管理（跟随 `/set_secret` 的声明，每次调用复核） |
 | `onebot_media` | XiaoQing Chat 的 OneBot 媒体查询 |
 | `config_subscription` | Pendo 的配置 revision 订阅 |
-| `codex_arxiv_summary` | arXiv Filter 到 Codex 摘要服务 |
+| `codex_arxiv_summary` | arXiv Filter 到 Codex 摘要服务（定时任务可用；用户触发时跟随 `/codex` 的声明） |
 | `voice_synthesis` | Smalltalk 到 Voice 合成服务 |
 | `chat_reply` | Smalltalk 到 Chat 回复服务 |
+| `agent_turn` | XiaoQing Chat 到 XiaoQing Agent 的一轮交接（用户消息；可分判断与执行两步），并回报当轮回复是否发出 |
+| `codex_agent` | XiaoQing Agent 到 Codex 的同步任务（跟随 `/codex` 的声明，每次调用复核） |
+| `ssh_agent` | XiaoQing Agent 到 QingSSH 的服务器列表与一次性命令（跟随 `/ssh` 的声明，每次调用复核） |
+| `command_runner` | XiaoQing Agent 以发起人身份执行已发布命令，权限与场景检查同本人直接发送；`run(text, *, sender_name, operation_id)` 原样返回命令的 `DeliverySegments`，由调用方结算回执 |
+| `local_tools` | XiaoQing Agent 在本机执行代码、读写文件前的授权确认（跟随 `/shell` 的声明，每次调用复核） |
 | `ai` | 当前插件的统一 AI route |
 
 `is_bot_admin` 与 `is_system` 始终提供布尔值。应用签发的 Context 始终提供 `ai` 服务，具体调用由当前插件的 route、provider、model 和凭据配置决定。其余可选服务根据 Manifest 的 `capabilities`、`uses_services`、服务绑定和当前 principal 签发，条件未满足时属性值为 `None`。协议将服务属性声明为可选值，便于最小 Context 实现和测试替身表达不可用状态。
@@ -359,6 +379,29 @@ node.to_dict() -> dict[str, Any]
 | `node` | `CommandCatalogNode` | 最深匹配节点 |
 | `arguments` | `str` | 最深节点后的业务参数 |
 | `remainder_after(depth)` | `str` | 指定路径深度后的余串，根节点深度为 0 |
+
+### `command_access()`
+
+```python
+from core.router import command_access
+
+command_access(node, principal, *, is_bot_admin=None) -> str | None
+```
+
+全项目唯一的命令权限判断：按节点的 `permission` 与 `contexts` 判断此人能否在当前私聊或群里使用。能用时返回 `None`，否则返回 `"bot_admin"`、`"group_admin"`（没有权限）或 `"context"`（有权限但当前场景不能用）。先判断权限再判断场景。`is_bot_admin` 给出时代替签发时的快照，供长任务按当前配置复核。命令执行、会话继续、Core 签发的派生能力和 agent 的命令清单都调用它。
+
+---
+
+## 📌 发送回执（`core.delivery`）
+
+| 接口 | 说明 |
+|---|---|
+| `DeliveryReceipt(expected_actions, commit, rollback, unknown)` | 一个逻辑回复的回执；全部物理消息确认后调用 `commit`，明确失败调用 `rollback`，结果未知调用 `unknown`，至多结算一次 |
+| `receipt.record(delivered)` | 记录一次传输结果：`True`、`False` 或 `None`（未知） |
+| `receipt.message_ids` | 已确认发出的各条物理消息 ID，按发送顺序；长回复被拆成几条时每条都有，提交回调里读取 |
+| `receipt.resolved` / `committed` / `outcome` | 是否已结算、提交回调是否成功、最终三态结果 |
+| `DeliverySegments(values, receipt)` | 带回执的消息段；插件入口返回它，Core 随实际投递结算 |
+| `send_with_receipt(send_action, action, receipt)` | 主动发送一条带回执的 Action，并确保结果恰好结算一次 |
 
 ---
 
@@ -461,6 +504,8 @@ async def handle(
 ) -> Segments | list[dict[str, Any]] | str | None: ...
 ```
 
+各入口返回的消息段都可以是带回执的 `DeliverySegments`。
+
 ### 会话
 
 ```python
@@ -537,7 +582,7 @@ event.get("raw_message")
 event.get("sender")
 ```
 
-`event["message"]` 在 Core 入口完成消息段标准化。插件可结合 `core.message` 工具提取文本和媒体段。
+`event["message"]` 在 Core 入口完成消息段标准化。插件可结合 `core.message` 工具提取文本和媒体段；`sender_display_name(event["sender"])` 取发送者显示名（群名片、昵称、名称依次取第一个非空的）。
 
 ---
 

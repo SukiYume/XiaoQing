@@ -48,16 +48,22 @@
                     "subcommands": [
                         {
                             "name": "add",
-                            "help": "用自然语言添加日程",
-                            "usage": "/pendo event add <内容>",
-                            "examples": ["/pendo event add 明天上午九点开组会，提前30分钟提醒"],
+                            "help": "用自然语言添加日程；时间冲突时会请你确认，加 --force 直接创建",
+                            "usage": "/pendo event add <内容> [--force]",
+                            "examples": [
+                                "/pendo event add 明天上午九点开组会，提前30分钟提醒",
+                                "/pendo event add 明天上午九点开组会 --force"
+                            ],
                             "invalid_examples": ["/pendo event add"]
                         },
                         {
                             "name": "list",
                             "help": "按日期范围、分类或标签列出日程",
                             "usage": "/pendo event list [范围] [cat:分类] [#标签]",
-                            "examples": ["/pendo event list week cat:工作"],
+                            "examples": [
+                                "/pendo event list week cat:工作",
+                                "/pendo event list 2026-10-21..2026-10-28"
+                            ],
                             "invalid_examples": ["/pendo event list 2026-99-99"]
                         },
                         {
@@ -132,9 +138,12 @@
                     "subcommands": [
                         {
                             "name": "add",
-                            "help": "交互式或快捷添加待办",
-                            "usage": "/pendo todo add [内容] [plan:日期] [deadline:时间] [cat:分类] [p:1-5]",
-                            "examples": ["/pendo todo add 写周报 cat:工作 p:2 plan:2026-08-01"],
+                            "help": "交互式或快捷添加待办；优先级 p:1 紧急、p:2 高、p:3 中（默认）、p:4 低、p:5 最低",
+                            "usage": "/pendo todo add [内容] [plan:YYYY-MM-DD] [deadline:YYYY-MM-DDTHH:MM] [cat:分类] [p:1紧急-5最低]",
+                            "examples": [
+                                "/pendo todo add 写周报 cat:工作 p:2 plan:2026-08-01",
+                                "/pendo todo add 交周报 deadline:2026-08-01T15:00"
+                            ],
                             "invalid_examples": ["/pendo todo add 写周报 p:9"]
                         },
                         {
@@ -174,9 +183,12 @@
                         },
                         {
                             "name": "edit",
-                            "help": "编辑待办内容与字段",
-                            "usage": "/pendo todo edit <id> <内容>",
-                            "examples": ["/pendo todo edit todo_123 deadline:2026-08-01T18:00"],
+                            "help": "编辑待办内容与字段；字段与添加相同，优先级 p:1 紧急到 p:5 最低",
+                            "usage": "/pendo todo edit <id> <内容> [plan:] [deadline:] [cat:] [p:1紧急-5最低]",
+                            "examples": [
+                                "/pendo todo edit todo_123 deadline:2026-08-01T18:00",
+                                "/pendo todo edit todo_123 p:2"
+                            ],
                             "invalid_examples": ["/pendo todo edit todo_123"]
                         },
                         {
@@ -311,7 +323,10 @@
                     "aliases": ["s", "搜索", "查找"],
                     "help": "跨日程、待办、笔记、日记和账本搜索",
                     "usage": "/pendo search <关键词> [type:] [range:] [status:] [transaction_type:] [category:]",
-                    "examples": ["/pendo search 会议 type:event range:month"],
+                    "examples": [
+                        "/pendo search 会议 type:event range:month",
+                        "/pendo search 工资 type:ledger range:2026-09"
+                    ],
                     "invalid_examples": ["/pendo search"]
                 },
                 {
@@ -340,7 +355,10 @@
                             "name": "list",
                             "help": "按范围、类型、分类或账户列出账目",
                             "usage": "/pendo ledger list [范围] [type:] [cat:] [account:] [all|page:n]",
-                            "examples": ["/pendo ledger list month type:expense"],
+                            "examples": [
+                                "/pendo ledger list month type:expense",
+                                "/pendo ledger list 2026-09 type:income cat:工资"
+                            ],
                             "invalid_examples": ["/pendo ledger list page:zero"]
                         },
                         {
@@ -368,7 +386,10 @@
                             "name": "summary",
                             "help": "生成指定范围的收支总结",
                             "usage": "/pendo ledger summary [范围]",
-                            "examples": ["/pendo ledger summary month"],
+                            "examples": [
+                                "/pendo ledger summary month",
+                                "/pendo ledger summary 2026-09"
+                            ],
                             "invalid_examples": ["/pendo ledger summary 2026-99"]
                         }
                     ]

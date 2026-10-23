@@ -192,7 +192,7 @@ async def cmd_ref_add(
         if not await asyncio.to_thread(storage.add_reference, user_id, bibcode, bibtex):
             return segments(f"⚠️ 该引用已在文献库中 (Bibcode: {bibcode})")
 
-        lines = ["✅ 已添加到文献库\n", "📎 BibTeX:\n", "```", bibtex, "```"]
+        lines = ["✅ 已添加到文献库\n", "📎 BibTeX:\n", bibtex]
         return segments("\n".join(lines))
     except Exception as exc:
         return public_error_response(

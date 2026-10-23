@@ -88,6 +88,9 @@ ScheduleDeliveryMode = Literal["broadcast", "targeted", "silent"]
 # Keep the names here so producers and consumers cannot drift on magic keys.
 ACTION_BYPASS_SINK_KEY       = "_bypass_sink"
 ACTION_RESULT_MESSAGE_ID_KEY = "_result_message_id"
+# Command-runner events carry the calling plugin's name so handlers can tell a
+# tool call from a person typing the same command.
+COMMAND_RUNNER_EVENT_KEY = "_command_runner"
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,6 +266,66 @@ class ChatReplyCapability(Protocol):
     ) -> list[dict[str, Any]]: ...
 
 
+class AgentTurnCapability(Protocol):
+    """xiaoqing_chat 把叫小青的一轮交给 xiaoqing_agent；``None`` 表示照常聊天。"""
+
+    async def handle_turn(self, turn: dict[str, Any]) -> dict[str, Any] | None: ...
+
+    async def report_delivery(self, task_id: str, delivered: bool | None) -> None:
+        """当轮回复发出后告诉 agent 结果：``True`` 发出、``False`` 失败、``None`` 未知。"""
+
+
+class CodexAgentTaskCapability(Protocol):
+    """xiaoqing_agent 提交一个 Codex 任务并等待其文本与图片结果。"""
+
+    async def run_task(
+        self,
+        *,
+        session: str,
+        prompt: str,
+        cwd: str | None,
+        timeout_seconds: float,
+    ) -> dict[str, Any]: ...
+
+
+class SSHAgentCommandCapability(Protocol):
+    """xiaoqing_agent 列出 QingSSH 服务器，或在其中一台上执行一次性命令。"""
+
+    async def list_servers(self) -> list[dict[str, Any]]: ...
+
+    async def run(
+        self,
+        *,
+        server: str,
+        command: str,
+        timeout_seconds: float,
+    ) -> dict[str, Any]: ...
+
+
+class CommandRunnerCapability(Protocol):
+    """以发起人身份执行一条已发布的 XiaoQing 命令并取回其回复段。"""
+
+    async def run(
+        self,
+        command_text: str,
+        *,
+        sender_name: str  = "",
+        operation_id: str = "",
+    ) -> list[dict[str, Any]]:
+        """执行一条命令；返回的回复段若带发送回执（``DeliverySegments``），调用方负责结算。
+
+        ``sender_name`` 是发起人在原消息里的显示名，只用于命令里显示是谁，不参与权限判断；
+        ``operation_id`` 标识这一次调用，插件据此区分独立的两次调用和同一次调用的重试。
+        """
+
+
+class LocalToolsCapability(Protocol):
+    """agent 在本机执行代码、读写文件前的授权确认；和 ``/shell`` 一样只给 Bot 管理员。"""
+
+    def ensure_authorized(self) -> None:
+        """发起人此刻已不是 Bot 管理员时抛出 ``PermissionError``。"""
+
+
 class AICapability(Protocol):
     async def complete(
         self,
@@ -301,6 +364,11 @@ class PluginCapabilities:
     codex_arxiv_summary: CodexArxivSummaryCapability | None = None
     voice_synthesis: VoiceSynthesisCapability | None        = None
     chat_reply: ChatReplyCapability | None                  = None
+    agent_turn: AgentTurnCapability | None                  = None
+    codex_agent: CodexAgentTaskCapability | None            = None
+    ssh_agent: SSHAgentCommandCapability | None             = None
+    command_runner: CommandRunnerCapability | None          = None
+    local_tools: LocalToolsCapability | None                = None
     ai: AICapability | None                                 = None
 
 
@@ -364,8 +432,6 @@ class PluginContextProtocol(PluginConfig, PluginRuntime, SessionAccess, Protocol
     def get_secret(self, path: str) -> Any: ...
 
     def default_groups(self) -> list[int]: ...
-
-    def is_global_admin(self, user_id: int | None = None) -> bool: ...
 
     def mute_group(self, group_id: int, duration_minutes: float) -> None: ...
 

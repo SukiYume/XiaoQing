@@ -782,9 +782,7 @@ async def test_web_start_ignores_noncallable_error_reader(
         lambda *_args, **_kwargs: "unused-widget-token",
     )
 
-    result = await web_module.WebHandler(db=None).handle(
-        "1001", "start", context=SimpleNamespace(is_global_admin=lambda _uid: True)
-    )
+    result = await web_module.WebHandler(db=None).handle("1001", "start", context=SimpleNamespace())
 
     assert result["status"] == "error"
     assert "服务启动失败" in result["message"]
@@ -863,7 +861,7 @@ async def test_web_handler_offloads_blocking_runtime_calls(
     )
     monkeypatch.setattr(web_module, "generate_widget_token", generate_widget)
     handler = web_module.WebHandler(db=None)
-    context = SimpleNamespace(send_action=send_action, is_global_admin=lambda _uid: True)
+    context = SimpleNamespace(send_action=send_action)
 
     assert (await handler.handle("1001", "start", context=context))["status"] == "success"
     assert (await handler.handle("1001", "widget-token", context=context))["status"] == "success"

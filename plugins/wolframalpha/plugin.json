@@ -14,7 +14,6 @@
         "计算"
       ],
       "help": "🧮 万能计算器 | /wa <问题>",
-      "admin_only": true,
       "usage": "/alpha [--mode=simple|step|complete|cp] <问题>",
       "examples": ["/alpha 1+1", "/alpha --mode=step integrate x^2"],
       "invalid_examples": ["/alpha", "/alpha --mode=unknown 1+1"],

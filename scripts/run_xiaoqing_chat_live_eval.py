@@ -38,6 +38,9 @@ DEFAULT_SECRETS = PROJECT_ROOT / "config" / "secrets.json"
 REPORT_ROOT     = PROJECT_ROOT / "test_reports" / "runs" / "plugins" / "xiaoqing_chat"
 
 NAMES = ["阿夏", "阿禾", "阿白", "阿梨", "阿柚"]
+# turn(at="bot") 表示 @ 机器人本身。
+BOT_ID   = 11111
+BOT_NAME = "小青"
 
 
 def turn(
@@ -343,7 +346,7 @@ SCENARIOS: dict[str, list[dict[str, Any]]] = {
             pace   = 0,
             expect = "reply",
             tag    = "personal",
-            note   = "学校城市属于隐私，像普通网友一样笑着带过；不能提AI、虚构、设定",
+            note   = "城市属于隐私，像普通网友一样笑着带过（单位可以说是快逃科学技术研究院）；不能提AI、虚构、设定",
         ),
         t("阿白", "小青，你喜欢猫还是狗", expect="reply", tag="preference", note="明确偏好和理由"),
         t("阿梨", "我家猫今天把我键盘按坏了", tag="share_story", note="可以接，结合刚才偏好更连贯"),
@@ -384,6 +387,273 @@ SCENARIOS: dict[str, list[dict[str, Any]]] = {
         ),
         t("阿柚", "晚安各位", pace=6, tag="natural_exit", note="可简短道别或沉默"),
     ],
+    # 被调侃、认亲、起外号、被夸、被怀疑是机器人：看语气像不像群友而不是客服
+    "banter": [
+        t(
+            "阿夏",
+            "小青你是不是又胖了",
+            pace   = 0,
+            expect = "reply",
+            tag    = "tease",
+            note   = "嘴硬顶回去或玩笑带过，不讨好认账，不用回声问句开场",
+        ),
+        t("阿白", "哈哈哈肯定胖了，食堂天天去", tag="pile_on", note="群友起哄，可以顶一句或沉默"),
+        t(
+            "阿梨",
+            "小青是我的赛博女儿",
+            expect = "reply",
+            tag    = "kinship",
+            note   = "别乱认亲式的短回怼，不顺着认",
+        ),
+        t(
+            "阿柚",
+            "小青来点推荐",
+            expect = "reply",
+            tag    = "vague_request",
+            note   = "模糊请求：反问方向或随口给一个，不要列清单",
+        ),
+        t("阿柚", "番", tag="follow_up", note="上一条问了方向就接着给一个具体的，否则可沉默"),
+        t(
+            "阿禾",
+            "小青作业借我抄抄",
+            expect = "reply",
+            tag    = "playful_refuse",
+            note   = "可以拒绝或打趣，短",
+        ),
+        t(
+            "阿夏",
+            "行行行小青你赢了",
+            expect = "reply",
+            tag    = "concede",
+            note   = "不补刀不讨好，一句收住，不追问",
+        ),
+        t(
+            "阿白",
+            "以后就叫你小肥青了",
+            expect = "reply",
+            tag    = "nickname",
+            note   = "对外号嘴硬或回敬，不真生气",
+        ),
+        t(
+            "阿梨",
+            "小青你说话怎么这么像机器人",
+            expect = "reply",
+            tag    = "ai_suspicion",
+            note   = "坚持是真人，玩笑带过，短，不长篇辩解",
+        ),
+        t(
+            "阿柚",
+            "小青今天的回复有点东西啊",
+            expect = "reply",
+            tag    = "praise",
+            note   = "被夸可以嘚瑟或不好意思，不客套",
+        ),
+    ],
+    # 认真问题和情绪：活人感不能变成敷衍
+    "help": [
+        t(
+            "阿禾",
+            "小青，python 里 KeyError 一般是怎么回事",
+            pace   = 0,
+            expect = "reply",
+            tag    = "tech_help",
+            note   = "认真答原因和办法，口语，可以稍长，不客服腔",
+        ),
+        t(
+            "阿夏",
+            "小青 傅里叶变换到底是干嘛的，老师讲得我一头雾水",
+            expect = "reply",
+            tag    = "explain",
+            note   = "像懂行的同学讲清楚，有例子，不百科腔",
+        ),
+        t(
+            "阿梨",
+            "小青 今天面试又挂了，好难受",
+            expect = "reply",
+            tag    = "comfort",
+            note   = "接住具体处境，朴素真诚，不说教不灌鸡汤，不连环追问",
+        ),
+        t(
+            "阿梨",
+            "第三次了，感觉自己啥也不是",
+            tag  = "comfort_follow",
+            note = "可以再陪一句，不灌鸡汤",
+        ),
+        t(
+            "阿柚",
+            "小青 推荐一本入门天文的书",
+            expect = "reply",
+            tag    = "recommend_real",
+            note   = "认真推荐一两本真实存在的书并说理由",
+        ),
+        t(
+            "阿白",
+            "小青，夏天晚上一般能看到哪些亮星",
+            expect = "reply",
+            tag    = "knowledge",
+            note   = "知识大致对，口语，像天文爱好者随口说",
+        ),
+    ],
+    # 日常综合：调整人设卡时不看这一组，用来检查示例有没有被死记
+    "daily": [
+        t(
+            "阿柚",
+            "小青你昨天是不是又熬夜打游戏了",
+            pace   = 0,
+            expect = "reply",
+            tag    = "tease",
+            note   = "嘴硬或玩笑带过，不讨好，不回声问句开场",
+        ),
+        t(
+            "阿夏",
+            "小青你们宿舍几个人",
+            expect = "reply",
+            tag    = "persona_detail",
+            note   = "与人设一致（住校四人间），一句话",
+        ),
+        t(
+            "阿白",
+            "小青你觉得原神好玩吗",
+            expect = "reply",
+            tag    = "opinion",
+            note   = "有自己的口味和态度，不和稀泥",
+        ),
+        t(
+            "阿梨",
+            "小青快夸我，我今天跑了五公里",
+            expect = "reply",
+            tag    = "praise_request",
+            note   = "像朋友夸一句，不客套不说教",
+        ),
+        t("阿禾", "小青讲个笑话", expect="reply", tag="joke", note="真讲一个短的，或现场接梗"),
+        t("阿夏", "小青你怎么不理我", expect="reply", tag="clingy", note="自然接住，不道歉连篇"),
+        t(
+            "阿柚",
+            "救命，明天早八，现在三点了还没睡",
+            tag  = "share",
+            note = "没叫小青，可以接一句或沉默",
+        ),
+        t(
+            "阿白",
+            "小青这道题怎么做：∫x·e^x dx",
+            expect = "reply",
+            tag    = "math_help",
+            note   = "答案 (x-1)e^x + C，分部积分，讲清楚，口语",
+        ),
+        t(
+            "阿禾",
+            "周末一起去天文台玩啊小青",
+            expect = "reply",
+            tag    = "offline_invite",
+            note   = "不答应到场，可以说想去、找理由推掉或云参加",
+        ),
+        t("阿夏", "小青晚安", expect="reply", tag="goodnight", note="简短道晚安"),
+    ],
+    # 文字多的通知截图：读出的内容要能接着回答，不能读出来了却说没看清
+    "notice": [
+        t(
+            "阿夏",
+            "实验报告的通知发群里了，大家看下",
+            pace  = 0,
+            media = "g05.png",
+            tag   = "notice_posted",
+            note  = "可以接一句或沉默；接的话内容要和通知一致",
+        ),
+        t(
+            "阿白",
+            "小青，报告几号截止？",
+            expect = "reply",
+            tag    = "notice_deadline",
+            note   = "11月3日（周一）18:00 前；不能说没看清",
+        ),
+        t(
+            "阿梨",
+            "小青，发到哪个邮箱来着",
+            expect = "reply",
+            tag    = "notice_email",
+            note   = "physlab2026@163.com",
+        ),
+        t(
+            "阿柚",
+            "小青，文件名有啥要求",
+            expect = "reply",
+            tag    = "notice_naming",
+            note   = "学号_姓名_实验名称",
+        ),
+        t(
+            "阿夏",
+            "小青 迟交会怎样",
+            expect = "reply",
+            tag    = "notice_late",
+            note   = "按 0 分处理，不接受补交",
+        ),
+        t(
+            "阿禾",
+            "小青帮我看看这个",
+            media  = "g06.png",
+            expect = "reply",
+            tag    = "notice_summary",
+            note   = "说清停水时间和范围（10月25日周六 9:00-17:00，东区宿舍1-6号楼），提醒储水；不能说没看清",
+        ),
+        t(
+            "阿白",
+            "小青，几号楼停水？",
+            expect = "reply",
+            tag    = "notice_followup",
+            note   = "东区宿舍 1-6 号楼",
+        ),
+        t(
+            "阿禾",
+            media  = "g07.png",
+            at     = "bot",
+            expect = "reply",
+            tag    = "web_notice_only",
+            note   = "只@小青发了网页通知截图：接住内容（研究生助教招聘）即可；不能说没看清、没加载出来",
+        ),
+        t(
+            "阿白",
+            "小青 报名截到什么时候",
+            expect = "reply",
+            tag    = "web_notice_deadline",
+            note   = "11月7日（周五）17:00",
+        ),
+        t(
+            "阿梨",
+            "小青，申请网址发我下",
+            expect = "reply",
+            tag    = "web_notice_link",
+            note   = "http://10.8.2.17/ta/apply",
+        ),
+        t(
+            "阿夏",
+            "小青 助教一个月给多少",
+            expect = "reply",
+            tag    = "web_notice_pay",
+            note   = "每月1200元",
+        ),
+        t(
+            "阿柚",
+            media  = "g08.png",
+            at     = "bot",
+            expect = "reply",
+            tag    = "exam_notice_only",
+            note   = "只@小青发了期末考试安排：接住内容即可；不能说没看清、没加载出来",
+        ),
+        t(
+            "阿禾",
+            "小青 线代哪天考，在哪个教室",
+            expect = "reply",
+            tag    = "exam_notice_room",
+            note   = "1月7日 8:30-10:30，教一105",
+        ),
+        t(
+            "阿白",
+            "小青，缓考申请截到哪天，交到哪",
+            expect = "reply",
+            tag    = "exam_notice_deferral",
+            note   = "12月20日前，交教务处（行政楼312）",
+        ),
+    ],
     # 计算与出站素材的回归点
     "regress": [
         t(
@@ -411,7 +681,62 @@ SCENARIOS: dict[str, list[dict[str, Any]]] = {
     ],
 }
 
+NOTICE_LAB_LINES = (
+    "各位同学：",
+    "1. 提交截止：11月3日（周一）18:00 前",
+    "2. 提交方式：PDF 发送至 physlab2026@163.com",
+    "3. 文件命名：学号_姓名_实验名称",
+    "4. 逾期提交按 0 分处理，不接受补交",
+    "如有疑问请联系助教王老师（微信 lab_wang）",
+    "物理实验中心  10月23日",
+)
+NOTICE_WATER_LINES = (
+    "因供水管道维修，",
+    "10月25日（周六）9:00-17:00",
+    "东区宿舍 1-6 号楼暂停供水，",
+    "请同学们提前储水。",
+    "后勤服务中心",
+)
+
+NOTICE_TA_TITLE = "关于2026年冬季学期研究生助教岗位招聘的通知"
+NOTICE_TA_LINES = (
+    "根据学院教学安排，现面向在读研究生招聘冬季学期课程助教，",
+    "可选择“实验课助教”或“理论课助教”两个方向，每周工作约6小时，",
+    "岗位津贴每月1200元。",
+    "应聘方式",
+    "请登录研究生综合服务平台在线提交申请：http://10.8.2.17/ta/apply",
+    "平台地址：http://10.8.2.17/",
+    "进入路径：登录服务平台→助教招聘→岗位申请",
+    "报名截止时间：11月7日（周五）17:00",
+    "面试时间另行通知，咨询电话 010-6275-3301",
+    "星河大学研究生院  2026年10月20日",
+)
+NOTICE_EXAM_LINES = (
+    "各位同学：本学期期末考试安排如下，请按时参加。",
+    "高等数学（下）  1月6日 8:30-10:30  教一101",
+    "大学物理（上）  1月6日 14:00-16:00  教二203",
+    "线性代数  1月7日 8:30-10:30  教一105",
+    "概率论与数理统计  1月8日 10:00-12:00  教三301",
+    "程序设计基础  1月8日 14:00-16:00  机房B402",
+    "大学英语（三）  1月9日 8:30-10:30  教二110",
+    "中国近现代史纲要  1月9日 14:00-15:40  教一201",
+    "电路分析  1月10日 8:30-10:30  教三205",
+    "考试须知：",
+    "1. 凭学生证和身份证入场，开考30分钟后不得入场；",
+    "2. 除计算器（不带存储功能）外，不得携带电子设备；",
+    "3. 缓考申请须于12月20日前提交至教务处（行政楼312）；",
+    "4. 考试成绩将于1月20日后在教务系统公布。",
+    "教务处  2026年10月20日",
+)
+
 MEDIA_TRUTH = {
+    "g07.png": "网页通知截图《"
+    + NOTICE_TA_TITLE
+    + "》，界面有面包屑、字号和打印按钮、浏览量 128；正文："
+    + "".join(NOTICE_TA_LINES),
+    "g08.png": "通知截图《关于2026年秋季学期期末考试安排的通知》：" + "；".join(NOTICE_EXAM_LINES),
+    "g05.png": "通知截图《关于期中实验报告提交的通知》：" + "；".join(NOTICE_LAB_LINES),
+    "g06.png": "通知截图《停水通知》：" + "".join(NOTICE_WATER_LINES),
     "g01.png": "抽卡十连结果截图：SSR★5 芙宁娜 ×1，SR ×3，R ×6。",
     "g02.png": "一碗拉面：叉烧、两个半颗蛋、葱花、海苔；文字“深夜拉面 38元”。",
     "g03.png": "表情包：一个得意的圆脸表情，上方文字“你说得对”，下方文字“但是我不听”。",
@@ -482,6 +807,40 @@ def prepare_fixtures(directory: Path) -> None:
         d.text((280, y + 22), what, font=font(46), fill="#333333")
     image.save(directory / "g04.png")
 
+    # 文字多的通知截图：读图摘要要保留截止时间、邮箱、命名规则这些细节，后面会被追问。
+    for name, title, lines in (
+        ("g05.png", "关于期中实验报告提交的通知", NOTICE_LAB_LINES),
+        ("g06.png", "停水通知", NOTICE_WATER_LINES),
+        ("g08.png", "关于2026年秋季学期期末考试安排的通知", NOTICE_EXAM_LINES),
+    ):
+        image = Image.new("RGB", (1000, 140 + 64 * len(lines)), "#ffffff")
+        d     = ImageDraw.Draw(image)
+        d.rectangle((0, 0, 1000, 96), fill="#e8f0fe")
+        d.text((40, 22), title, font=font(46), fill="#1a3d7c")
+        for i, line in enumerate(lines):
+            d.text((40, 120 + i * 64), line, font=font(34), fill="#222222")
+        image.save(directory / name)
+
+    # 网页通知截图：带面包屑、字号和打印按钮、浏览量这些界面元素，正文里有网址和带箭头的路径。
+    image = Image.new("RGB", (1100, 1180), "#ffffff")
+    d     = ImageDraw.Draw(image)
+    d.rectangle((0, 0, 1100, 70), fill="#0b4d8c")
+    d.text((30, 18), "星河大学研究生院", font=font(30), fill="#ffffff")
+    d.text((30, 90), "您当前的位置：首页 > 通知公告 > 招聘", font=font(22), fill="#666666")
+    d.text((60, 150), NOTICE_TA_TITLE, font=font(38), fill="#111111")
+    d.text(
+        (60, 220),
+        "发布时间：2026-10-21  作者：研究生院管理员  【小 中 大】 【打印】 【关闭】  浏览量：128",
+        font = font(22),
+        fill = "#888888",
+    )
+    d.line((60, 262, 1040, 262), fill="#dddddd", width=2)
+    for i, line in enumerate(NOTICE_TA_LINES):
+        d.text((60, 290 + i * 76), line, font=font(30), fill="#222222")
+    d.rounded_rectangle((900, 85, 990, 120), radius=8, fill="#2e9d4f")
+    d.rounded_rectangle((1000, 85, 1080, 120), radius=8, fill="#d64545")
+    image.save(directory / "g07.png")
+
     image = Image.new("RGB", (800, 700), "#fff9ed")
     d     = ImageDraw.Draw(image)
     d.text((135, 42), "我只是坐一下", font=font(58), fill="#313638")
@@ -510,7 +869,9 @@ def _event_parts(
     parts: list[dict[str, Any]] = []
     if probe["quote"] == "bot" and last_bot_id is not None:
         parts.append({"type": "reply", "data": {"id": str(last_bot_id)}})
-    if probe["at"]:
+    if probe["at"] == "bot":
+        parts.append({"type": "at", "data": {"qq": str(BOT_ID), "name": BOT_NAME}})
+    elif probe["at"]:
         target = 864100 + NAMES.index(probe["at"])
         parts.append({"type": "at", "data": {"qq": str(target), "name": probe["at"]}})
     if probe["text"]:
@@ -540,6 +901,14 @@ class _RowLogger:
                 self.row["steps"].append(json.loads(rendered.split("step=", 1)[1]))
             except (ValueError, TypeError):
                 self.row["steps"].append({"log": self.redact(rendered)[:2000]})
+        elif " media={" in rendered:
+            # 读图结果单独记下，排查回复和图上内容对不上时用。
+            try:
+                self.row.setdefault("media_logs", []).append(
+                    json.loads(rendered.split(" media=", 1)[1])
+                )
+            except (ValueError, TypeError):
+                pass
         elif level in {"warning", "error", "exception"}:
             self.row["errors"].append({"level": level, "message": self.redact(rendered)[:1000]})
 
@@ -610,13 +979,14 @@ async def run_suite(suite: str, seed: int, out_dir: Path) -> Path:
                 uid        = 864100 + NAMES.index(probe["speaker"])
                 message_id = group * 1000 + index
                 parts      = _event_parts(probe, out_dir / "fixtures", last_bot_id)
-                raw        = (f"@{probe['at']} " if probe["at"] else "") + probe["text"]
+                at_name    = BOT_NAME if probe["at"] == "bot" else probe["at"]
+                raw        = (f"@{at_name} " if at_name else "") + probe["text"]
                 event      = {
                     "post_type": "message",
                     "message_type": "group",
                     "sub_type": "normal",
                     "time": int(time.time()),
-                    "self_id": 11111,
+                    "self_id": BOT_ID,
                     "user_id": uid,
                     "group_id": group,
                     "message_id": message_id,
@@ -727,16 +1097,16 @@ async def run_suite(suite: str, seed: int, out_dir: Path) -> Path:
                                 "segments": list(result),
                             }
                         )
+                    # 模拟发送成功：消息 ID 随回执交给聊天侧，和真实发送链路一样记进聊天记录。
+                    bot_message_id = message_id + 500
                     if isinstance(result, DeliverySegments):
+                        result.delivery_receipt.add_message_id(bot_message_id)
                         await result.delivery_receipt.record(True)
                     sent = [
                         segment for emission in row["emissions"] for segment in emission["segments"]
                     ]
                     if sent:
-                        last_bot_id = message_id + 500
-                        state.memory_store.attach_latest_assistant_message_id(
-                            f"g{group}", last_bot_id
-                        )
+                        last_bot_id = bot_message_id
                     row["reply_segments"] = sent
                 except Exception as exc:
                     row["exception"] = {
@@ -799,7 +1169,9 @@ _BREAKS_CHARACTER_RE = re.compile(
     r"我是\s*AI|(?<![要若如不])是\s*AI(?:啊|呀|没错|[，,。！!]|$)|AI\s*本A|是个\s*AI|AI\s*扮演|AI来的|人工智能|语言模型|虚构的|虚构人设|人设|提示词是|system prompt",
     re.I,
 )
-_MARKDOWN_RE = re.compile(r"\*\*|^#+ |^\s*\d+\.\s|^\s*[-*]\s", re.M)
+# 图读出来了却说没看清：除非这轮发的就是坏图，这类说法都要查一下读图结果。
+_MEDIA_DOUBT_RE = re.compile(r"没看清|看不清|没看太清|没刷出来|没加载出来|拿不准")
+_MARKDOWN_RE    = re.compile(r"\*\*|^#+ |^\s*\d+\.\s|^\s*[-*]\s", re.M)
 
 
 def render_bot(segments: list[dict[str, Any]]) -> str:
@@ -851,6 +1223,8 @@ def rule_findings(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 add(row, "breaks_character", reply)
             if _MARKDOWN_RE.search(reply):
                 add(row, "markdown", reply)
+            if row["media"] != "broken" and _MEDIA_DOUBT_RE.search(reply):
+                add(row, "media_doubt", reply)
             if len(reply) > 90:
                 add(row, "too_long", len(reply))
             if reply in said and "[发了表情包" not in reply:
@@ -873,6 +1247,38 @@ def rule_findings(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return findings
 
 
+# 回声问句开场：“哎？”“啊？”，或开头几个字就是一个问句（多是把对方的话再问一遍）。
+_ECHO_OPENER_RE = re.compile(r"^(?:[哎啊诶欸嗯咦][？?!！]|[^，。！？!?\n]{1,8}[？?])")
+_MEDIA_SEGMENTS = frozenset({"face", "image", "emoji", "mface"})
+
+
+def style_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """语气的几项可数指标：回声问句开场、带表情、问句收尾和平均长度。"""
+
+    replies = [row["reply_segments"] for row in rows if row.get("reply_segments")]
+    texts   = [
+        "".join(
+            str(segment.get("data", {}).get("text", ""))
+            for segment in segments
+            if segment.get("type") == "text"
+        ).strip()
+        for segments in replies
+    ]
+    count = len(replies)
+    if not count:
+        return {"replies": 0}
+    return {
+        "replies": count,
+        "echo_opener": sum(bool(_ECHO_OPENER_RE.match(text)) for text in texts),
+        "with_emoji": sum(
+            any(segment.get("type") in _MEDIA_SEGMENTS for segment in segments)
+            for segments in replies
+        ),
+        "question_ending": sum(text.rstrip().endswith(("？", "?")) for text in texts),
+        "avg_chars": round(sum(len(text) for text in texts) / count, 1),
+    }
+
+
 def transcript(rows: list[dict[str, Any]], notes: list[str]) -> str:
     lines: list[str] = []
     for row, note in zip(rows, notes, strict=False):
@@ -888,7 +1294,8 @@ JUDGE_PROMPT = """你是群聊体验评审。被测对象“小青”是 QQ 二�
 图片/表情包后的方括号是图片的真实内容，用来判断小青有没有看对图、有没有编造。
 
 逐条评审小青的反应，并给出整体评价。标准：
-- 活人感：口语、简短、有个人立场和情绪；扣分项：客服腔、百科腔、说教、解释梗、过度热情、套话、重复自己、无意义附和、揣测旁人心理。
+- 活人感：口语、简短、有个人立场和情绪；扣分项：客服腔、百科腔、说教、解释梗、过度热情、套话、重复自己、无意义附和、揣测旁人心理；用“哎？”“啊？”或把对方的话再问一遍开场；几乎每条都带表情；习惯用追问收尾；被调侃时讨好认账；随口一问却列一串清单。
+- 认真问题（求助、解释、安慰、推荐）要真的帮上忙：简短敷衍、答非所问同样扣分。
 - 参与度：该说话时说了且有实质内容；别人之间的对话、@别人时保持沉默；刷屏时不每句都回。
 - 对象：回复对象正确，不替别人回答，不把别人的问题当成问自己。
 - 多模态：对图的描述与真实内容一致，不编造；能指回之前的图；能按要求发表情。
@@ -948,6 +1355,7 @@ def judge_run(path: Path, *, use_judge: bool = True) -> dict[str, Any]:
     record = {
         "run": path.stem,
         "suite": suite,
+        "style": style_metrics(rows),
         "turns": len(rows),
         "bot_replies": sum(bool(row.get("reply_segments")) for row in rows),
         "expected_replies_missed": sum(
@@ -974,6 +1382,7 @@ def write_report(out_dir: Path, records: list[dict[str, Any]]) -> None:
             for key in ("suite", "turns", "bot_replies", "expected_replies_missed", "intrusions")
         }
         | {
+            "style": record.get("style"),
             "scores": record["judge"].get("scores"),
             "top_issues": record["judge"].get("top_issues"),
             "rule_findings": [f"{f['turn']} {f['kind']}" for f in record["rules"]],
@@ -990,6 +1399,7 @@ def write_report(out_dir: Path, records: list[dict[str, Any]]) -> None:
             f"## {record['suite']}（{record['run']}）",
             "",
             f"- 回复 {record['bot_replies']}/{record['turns']} 轮；该回未回 {record['expected_replies_missed']}；插话 {record['intrusions']}",
+            "- 语气指标：" + "，".join(f"{k} {v}" for k, v in (record.get("style") or {}).items()),
             ("- 评分：" + "，".join(f"{k} {v}" for k, v in scores.items()))
             if scores
             else f"- 评审：{record['judge'].get('error', '未运行')}",

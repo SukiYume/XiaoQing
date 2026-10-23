@@ -11,12 +11,8 @@ from ..services.economy_service import EconomyService
 _ACTIVITY_TYPES = ("feed", "clean", "play", "train", "explore")
 
 
-def handle_manage_enable(
-    user_id: str, group_id: int, args: str, db: Database, is_admin: bool = False
-) -> tuple[bool, str]:
+def handle_manage_enable(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     """经管理员授权后为当前群开启插件。"""
-    if not is_admin:
-        return False, "⚠️ 该操作需要管理员权限"
     if args.strip():
         return False, "用法: /宠物 管理 开启"
 
@@ -29,12 +25,8 @@ def handle_manage_enable(
     return False, "启用失败"
 
 
-def handle_manage_disable(
-    user_id: str, group_id: int, args: str, db: Database, is_admin: bool = False
-) -> tuple[bool, str]:
+def handle_manage_disable(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     """经管理员授权后为当前群关闭插件。"""
-    if not is_admin:
-        return False, "⚠️ 该操作需要管理员权限"
     if args.strip():
         return False, "用法: /宠物 管理 关闭"
 
@@ -47,12 +39,8 @@ def handle_manage_disable(
     return False, "禁用失败"
 
 
-def handle_manage_config(
-    user_id: str, group_id: int, args: str, db: Database, is_admin: bool = False
-) -> tuple[bool, str]:
+def handle_manage_config(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     """经管理员授权后查看或修改群配置。"""
-    if not is_admin:
-        return False, "⚠️ 该操作需要管理员权限"
 
     admin_service = AdminService(db)
 
@@ -60,7 +48,7 @@ def handle_manage_config(
     if not raw_args or raw_args == "查看":
         config = admin_service.get_config(group_id)
         lines  = [
-            f"⚙️ **群配置 ({config.group_id})**",
+            f"⚙️ 群配置 ({config.group_id})",
             "",
             f"• 插件状态: {'启用' if config.enabled else '禁用'}",
             f"• 经济倍率: {config.economy_multiplier}x",
@@ -95,12 +83,8 @@ def handle_manage_config(
     return False, "未知操作，可用操作: 查看, 设置"
 
 
-def handle_manage_reset(
-    user_id: str, group_id: int, args: str, db: Database, is_admin: bool = False
-) -> tuple[bool, str]:
+def handle_manage_reset(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     """经管理员授权后重置指定用户的宠物。"""
-    if not is_admin:
-        return False, "⚠️ 该操作需要管理员权限"
 
     match = re.fullmatch(r"@?(\d+)(?:\s+(确认|confirm))?", args.strip(), re.IGNORECASE)
     if not match:
@@ -125,12 +109,8 @@ def handle_manage_reset(
     return False, "重置失败，用户可能不存在"
 
 
-def handle_manage_ban(
-    user_id: str, group_id: int, args: str, db: Database, is_admin: bool = False
-) -> tuple[bool, str]:
+def handle_manage_ban(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     """经管理员授权后在当前群封禁用户。"""
-    if not is_admin:
-        return False, "⚠️ 该操作需要管理员权限"
 
     match = re.fullmatch(r"@?(\d+)\s+([1-9]\d*)", args.strip())
     if not match:
@@ -147,12 +127,8 @@ def handle_manage_ban(
     return False, "封禁失败"
 
 
-def handle_manage_unban(
-    user_id: str, group_id: int, args: str, db: Database, is_admin: bool = False
-) -> tuple[bool, str]:
+def handle_manage_unban(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     """经管理员授权后解除当前群的用户封禁。"""
-    if not is_admin:
-        return False, "⚠️ 该操作需要管理员权限"
 
     match = re.fullmatch(r"@?(\d+)", args.strip())
     if not match:
@@ -168,12 +144,8 @@ def handle_manage_unban(
     return False, "解封失败"
 
 
-def handle_manage_log(
-    user_id: str, group_id: int, args: str, db: Database, is_admin: bool = False
-) -> tuple[bool, str]:
+def handle_manage_log(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     """查看当前群最近的管理员操作日志。"""
-    if not is_admin:
-        return False, "⚠️ 该操作需要管理员权限"
 
     limit      = 20
     limit_text = args.strip()
@@ -189,7 +161,7 @@ def handle_manage_log(
     if not logs:
         return True, "📋 暂无操作日志"
 
-    lines = [f"📋 **操作日志** (最近{len(logs)}条)", ""]
+    lines = [f"📋 操作日志 (最近{len(logs)}条)", ""]
     for log in logs:
         lines.append(f"• {log.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
         lines.append(f"  操作者: {log.user_id}")
@@ -203,12 +175,8 @@ def handle_manage_log(
     return True, "\n".join(lines)
 
 
-def handle_manage_stats(
-    user_id: str, group_id: int, args: str, db: Database, is_admin: bool = False
-) -> tuple[bool, str]:
+def handle_manage_stats(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     """查看当前群的聚合宠物统计数据。"""
-    if not is_admin:
-        return False, "⚠️ 该操作需要管理员权限"
     if args.strip():
         return False, "用法: /宠物 管理 统计"
 
@@ -217,11 +185,9 @@ def handle_manage_stats(
 
 
 def handle_manage_activity(
-    user_id: str, group_id: int, args: str, db: Database, is_admin: bool = False
+    user_id: str, group_id: int, args: str, db: Database
 ) -> tuple[bool, str]:
     """创建会随宠物行为推进的限时群活动。"""
-    if not is_admin:
-        return False, "⚠️ 该操作需要管理员权限"
     parts = args.strip().split(maxsplit=4)
     if len(parts) < 4 or parts[0] not in {"创建", "create"}:
         return False, (

@@ -13,7 +13,7 @@ from typing import Any
 from urllib.parse import unquote_to_bytes, urlparse
 
 from core.atomic_store import keyed_path_lock
-from core.plugin_base import atomic_write_bytes, ensure_dir
+from core.plugin_base import atomic_write_bytes, ensure_dir, file_uri_to_path
 from core.safe_http import SafeHttpError, fetch_public_bytes
 
 from .loading import (
@@ -21,7 +21,6 @@ from .loading import (
     looks_like_base64_source,
     looks_like_data_url,
     looks_like_url,
-    parse_file_uri,
     read_file_bounded,
     run_media_blocking,
     safe_source_name,
@@ -309,7 +308,7 @@ def _resolve_media_source_path(value: str, *, context: Any | None = None) -> Pat
         return None
     if looks_like_base64_source(value) or looks_like_data_url(value) or looks_like_url(value):
         return None
-    path: Path | None = parse_file_uri(value) if value.startswith("file://") else Path(value)
+    path: Path | None = file_uri_to_path(value) if value.startswith("file://") else Path(value)
     if path is None:
         return None
     try:
@@ -385,7 +384,7 @@ def _segment_suffix_hint(segment: dict[str, Any]) -> str:
         if not value or looks_like_base64_source(value) or looks_like_data_url(value):
             continue
         if value.startswith("file://"):
-            parsed = parse_file_uri(value)
+            parsed = file_uri_to_path(value)
             if parsed is not None and parsed.suffix:
                 return parsed.suffix
             continue

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Any, cast
 
@@ -78,6 +79,28 @@ async def enqueue_arxiv_summary_service(
         links    = links,
         user_id  = user_id,
         group_id = group_id,
+    )
+
+
+async def agent_task_service(
+    request: dict[str, Any],
+    context: PluginContextProtocol,
+) -> asyncio.Task[dict[str, Any]]:
+    """xiaoqing_agent 的固定 Codex 入口：提交任务并交回 Task，结束后得到文本与图片路径。
+
+    Codex 任务常要几分钟；在插件执行通道里等待会占住通道，所以只在这里启动。
+    """
+
+    user_id, group_id = _event_user_group({}, context)
+    manager = await get_manager(context)
+    return manager.start_agent_task(
+        str(request.get("session") or ""),
+        str(request.get("prompt") or ""),
+        cwd_text        = request.get("cwd") if isinstance(request.get("cwd"), str) else None,
+        timeout_seconds = float(request.get("timeout_seconds") or 0) or 600.0,
+        user_id         = user_id,
+        group_id        = group_id,
+        context         = context,
     )
 
 

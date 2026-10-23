@@ -19,7 +19,6 @@ from ..llm.gateway import chat_completions_raw_with_fallback_paths, extract_resp
 from ..llm.llm_config import LLMCallConfig
 from ..memory.memory import StoredMessage
 from ..message_parts import render_stored_message
-from ..persona import compose_persona_identity
 from ..planning.pfc_utils import get_items_from_json
 from ..utils.json_parsing import parse_first_json_array, strict_json_bool
 from ..utils.text import clip_text
@@ -161,7 +160,7 @@ async def single_expression_check(
     if "_ai" in secrets and secrets.get("_ai") is None:
         return False, False, "", "", ""
 
-    persona_text = compose_persona_identity(personality.identity, bot_name)
+    persona_text = personality.card.facts(bot_name)
     prompt       = _SINGLE_CHECK_PROMPT.format(
         persona_text=persona_text, situation=situation.strip(), style=style.strip()
     )

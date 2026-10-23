@@ -4,8 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import functools
-from collections.abc import Awaitable, Callable
+import sys
+from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any
+
+
+def run_with_subprocess_loop(coroutine_factory: Callable[[], Coroutine[Any, Any, Any]]) -> None:
+    """真实子进程需要 Proactor 循环；测试默认的 Selector 循环在 Windows 上不支持子进程。"""
+
+    factory = asyncio.ProactorEventLoop if sys.platform == "win32" else asyncio.new_event_loop
+    with asyncio.Runner(loop_factory=factory) as runner:
+        runner.run(coroutine_factory())
 
 
 async def wait_for_cancellation_then_release(

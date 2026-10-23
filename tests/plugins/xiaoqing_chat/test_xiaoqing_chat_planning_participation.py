@@ -94,7 +94,7 @@ async def test_smalltalk_goal_path_uses_async_goal_store(mock_context, sample_gr
             ),
             brain_chat=SimpleNamespace(enable_private_brain_chat=False),
             planner=SimpleNamespace(resolve_think_level=lambda history_len=0: 0),
-            personality=SimpleNamespace(states=[], state_probability=0.0),
+            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
             debug=SimpleNamespace(log_latency=False),
         )
     )
@@ -932,6 +932,24 @@ async def test_spawn_post_reply_bg_tasks_uses_async_goal_and_action_history_read
 
 
 @pytest.mark.asyncio
+def _xc_reset_confirm_node():
+    import json
+
+    from core.router import build_command_catalog_node
+    from tests.helpers.paths import REPOSITORY_ROOT
+
+    manifest = json.loads(
+        (REPOSITORY_ROOT / "plugins" / "xiaoqing_chat" / "plugin.json").read_text(encoding="utf-8")
+    )
+    root = build_command_catalog_node("xiaoqing_chat", manifest["commands"][0], root=True)
+    reset = root.resolve_child("reset")
+    assert reset is not None and reset.permission == "public"
+    confirm = reset.resolve_child("确认")
+    assert confirm is not None
+    return confirm
+
+
+@pytest.mark.asyncio
 async def test_group_reset_requires_admin_confirmation_and_writes_audit_log(mock_context):
     from plugins.xiaoqing_chat import commands
 
@@ -949,24 +967,23 @@ async def test_group_reset_requires_admin_confirmation_and_writes_audit_log(mock
     reset_chat_session = AsyncMock()
     event              = {"message_type": "group", "group_id": 67890, "user_id": 12345}
 
-    async def call_reset(args: str, is_admin: bool):
+    async def call_reset(args: str):
         with (
             patch.object(commands.HandlerContext, "from_event", return_value=hctx),
             patch.object(commands, "reset_chat_session", reset_chat_session),
-            patch.object(commands, "is_admin_operator", return_value=is_admin),
         ):
             return await commands.handle_internal("重置", args, event, mock_context)
 
-    denied = await call_reset("确认", is_admin=False)
-    assert "仅限" in denied[0]["data"]["text"]
-    reset_chat_session.assert_not_awaited()
+    # 确认这一步谁能做写在 plugin.json 里：只给群管理员，且只在群里。
+    confirm = _xc_reset_confirm_node()
+    assert confirm.permission == "group_admin" and confirm.contexts == ("group",)
 
-    preview = await call_reset("", is_admin=True)
+    preview = await call_reset("")
     assert "会清空本群" in preview[0]["data"]["text"]
     assert "/xc 重置 确认" in preview[0]["data"]["text"]
     reset_chat_session.assert_not_awaited()
 
-    completed = await call_reset("确认", is_admin=True)
+    completed = await call_reset("确认")
     assert completed == [{"type": "text", "data": {"text": "✅ 已重置会话记忆"}}]
     reset_chat_session.assert_awaited_once_with(state, "g67890", data_dir)
     state.inc_stats.assert_called_once_with("g67890", "resets")
@@ -988,7 +1005,6 @@ async def test_private_reset_remains_limited_to_callers_private_scope(mock_conte
     with (
         patch.object(commands.HandlerContext, "from_event", return_value=hctx),
         patch.object(commands, "reset_chat_session", reset_chat_session),
-        patch.object(commands, "is_admin_operator", return_value=False),
     ):
         result = await commands.handle_internal("重置", "", event, mock_context)
 
@@ -1121,7 +1137,7 @@ async def test_smalltalk_planner_runs_outside_chat_lock_but_commits_inside(
             brain_chat=SimpleNamespace(enable_private_brain_chat=False),
             max_context_size=10,
             planner=SimpleNamespace(resolve_think_level=lambda history_len=0: 0),
-            personality=SimpleNamespace(states=[], state_probability=0.0),
+            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
             debug=SimpleNamespace(log_latency=False),
         )
     )

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import functools
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -15,12 +15,17 @@ from .ai import (
     list_configured_models,
 )
 from .capabilities import (
+    AgentTurnService,
     AIService,
     ChatReplyService,
+    CodexAgentTaskService,
     CodexArxivSummaryService,
+    CommandRunnerService,
     ConfigSubscriptionService,
+    LocalToolsService,
     OneBotMediaService,
     SecretAdminService,
+    SSHAgentCommandService,
     VoiceSynthesisService,
 )
 from .context import PluginContext, _scoped_plugin_config, _scoped_plugin_secrets
@@ -30,6 +35,7 @@ from .interfaces import (
     PluginSettingsSnapshot,
 )
 from .plugin_execution import call_plugin_callback, invoke_loaded_plugin
+from .router import command_access
 
 logger = logging.getLogger(__name__)
 
@@ -263,16 +269,131 @@ class AppPluginContextMixin:
         return await invoke_loaded_plugin(loaded, operation)
 
     def _codex_arxiv_authorized(self, principal: PluginPrincipal) -> bool:
-        if not self.identity_service.owns(principal):
-            return False
+        """定时推荐由系统发起；用户触发时和 ``/codex`` 同权限。"""
+
         if principal.is_system:
-            return True
+            return self.identity_service.owns(principal)
+        return self._may_use_command(principal, "codex.codex")
+
+    def _agent_user_authorized(self, principal: PluginPrincipal) -> bool:
+        """agent 只替真实发消息的用户做事；能做什么由下面各项能力对应的命令权限决定。"""
+
         return (
-            principal.kind == "user"
+            self.identity_service.owns(principal)
+            and principal.kind == "user"
             and principal.user_id is not None
-            and principal.is_bot_admin
-            and self.is_admin(principal.user_id)
         )
+
+    def _may_use_command(self, principal: PluginPrincipal, code: str) -> bool:
+        """此人此刻在这里能不能用某条已发布命令。
+
+        和命令执行同一处判断（``command_access``），Bot 管理员身份按当前配置；Core 发出的
+        能力（agent 的本机工具、SSH、Codex，密钥管理，arXiv 的 Codex 摘要）都由对应命令的
+        plugin.json 声明决定，每次调用前复核。
+        """
+
+        if not self._agent_user_authorized(principal):
+            return False
+        node = next(
+            (
+                node
+                for root in self.router.get_command_catalog()
+                for node in root.walk()
+                if node.code == code
+            ),
+            None,
+        )
+        return (
+            node is not None
+            and command_access(node, principal, is_bot_admin=self.is_admin(principal.user_id))
+            is None
+        )
+
+    async def _run_agent_command(
+        self,
+        command_text: str,
+        *,
+        sender_name: str  = "",
+        operation_id: str = "",
+        caller_plugin: str,
+        principal: PluginPrincipal,
+        request_id: str | None,
+    ) -> list[dict[str, Any]]:
+        if not self._agent_user_authorized(principal):
+            raise PermissionError("agent capability requires a user principal")
+        return await self.dispatcher.run_command_text(
+            command_text,
+            user_id          = cast(int, principal.user_id),
+            group_id         = principal.group_id,
+            request_id       = request_id,
+            excluded_plugins = frozenset({caller_plugin}),
+            caller_plugin    = caller_plugin,
+            group_role       = principal.group_role,
+            sender_name      = sender_name,
+            operation_id     = operation_id,
+        )
+
+    def _build_agent_capabilities(
+        self,
+        plugin_name: str,
+        principal: PluginPrincipal,
+        request_id: str | None,
+        *,
+        declared_capabilities: frozenset[str],
+        uses_services: frozenset[str],
+    ) -> dict[str, Any]:
+        """agent 能力和对应命令同一套权限，每次调用都重新确认。
+
+        对话入口和命令执行签发给每个用户，命令照常按各自声明的权限与场景检查，和本人
+        直接发送时一样；本机代码执行与文件读写跟随 ``/shell``，SSH 跟随 ``/ssh``，Codex
+        跟随 ``/codex``，都按这几条命令在 plugin.json 里的声明判断。
+        """
+
+        if not self._agent_user_authorized(principal):
+            return {}
+        authorized = functools.partial(self._agent_user_authorized, principal)
+        local      = functools.partial(self._may_use_command, principal, "shell.shell")
+        ssh        = functools.partial(self._may_use_command, principal, "qingssh.ssh")
+        codex      = functools.partial(self._may_use_command, principal, "codex.codex")
+
+        def declared(service_name: str) -> Callable[[dict[str, Any]], Awaitable[Any]]:
+            async def invoke(payload: dict[str, Any]) -> Any:
+                return await self._invoke_declared_service(
+                    caller_plugin = plugin_name,
+                    service_name  = service_name,
+                    principal     = principal,
+                    request_id    = request_id,
+                    args          = (payload,),
+                )
+
+            return invoke
+
+        granted: dict[str, Any] = {}
+        if "agent.handle_turn" in uses_services:
+            granted["agent_turn"] = AgentTurnService(
+                authorized,
+                declared("agent.handle_turn"),
+                declared("agent.report_delivery")
+                if "agent.report_delivery" in uses_services
+                else None,
+            )
+        if "codex.agent_task" in uses_services and codex():
+            granted["codex_agent"] = CodexAgentTaskService(codex, declared("codex.agent_task"))
+        if "qingssh.agent_command" in uses_services and ssh():
+            granted["ssh_agent"] = SSHAgentCommandService(ssh, declared("qingssh.agent_command"))
+        if "local_tools" in declared_capabilities and local():
+            granted["local_tools"] = LocalToolsService(local)
+        if "command_runner" in declared_capabilities:
+            granted["command_runner"] = CommandRunnerService(
+                authorized,
+                functools.partial(
+                    self._run_agent_command,
+                    caller_plugin = plugin_name,
+                    principal     = principal,
+                    request_id    = request_id,
+                ),
+            )
+        return granted
 
     async def _enqueue_codex_arxiv_summary(
         self,
@@ -314,16 +435,15 @@ class AppPluginContextMixin:
             and self.identity_service.owns(principal)
             and self.is_admin(principal.user_id)
         )
-        secret_admin = None
-        if "secret_admin" in declared_capabilities and is_bot_admin and principal.is_private:
+        secret_admin       = None
+        may_manage_secrets = functools.partial(
+            self._may_use_command, principal, "bot_core.set_secret"
+        )
+        if "secret_admin" in declared_capabilities and may_manage_secrets():
             secret_admin = SecretAdminService(
-                _authorized=lambda: (
-                    principal.user_id is not None
-                    and principal.is_private
-                    and self.is_admin(principal.user_id)
-                ),
-                _snapshot = lambda: self.config_manager.snapshot().secrets,
-                _writer   = self.config_manager.update_secret,
+                _authorized = may_manage_secrets,
+                _snapshot   = lambda: self.config_manager.snapshot().secrets,
+                _writer     = self.config_manager.update_secret,
             )
 
         onebot_media = None
@@ -344,7 +464,9 @@ class AppPluginContextMixin:
             config_subscription = ConfigSubscriptionService(subscribe)
 
         codex_arxiv_summary = None
-        if "codex.enqueue_arxiv_summary" in uses_services and (is_system or is_bot_admin):
+        if "codex.enqueue_arxiv_summary" in uses_services and self._codex_arxiv_authorized(
+            principal
+        ):
             codex_arxiv_summary = CodexArxivSummaryService(
                 _authorized = lambda: self._codex_arxiv_authorized(principal),
                 _enqueue    = functools.partial(
@@ -463,6 +585,13 @@ class AppPluginContextMixin:
             voice_synthesis     = voice_synthesis,
             chat_reply          = chat_reply,
             ai                  = AIService(complete_ai_route, list_ai_models),
+            **self._build_agent_capabilities(
+                plugin_name,
+                principal,
+                request_id,
+                declared_capabilities = declared_capabilities,
+                uses_services         = uses_services,
+            ),
         )
 
     def _plugin_config_view(

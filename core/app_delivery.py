@@ -262,6 +262,9 @@ class AppDeliveryMixin:
                     await asyncio.shield(receipt.record(False))
                 raise
             if receipt is not None and not captured_by_sink:
+                if sent is True:
+                    # 拆分后的每一条都登记消息 ID，提交回调拿到整条回复的全部 ID。
+                    receipt.add_message_id(act.get(ACTION_RESULT_MESSAGE_ID_KEY))
                 # The transport result is the delivery boundary.  Observer
                 # cancellation/failure after this point must not roll back a
                 # reply that OneBot already accepted.

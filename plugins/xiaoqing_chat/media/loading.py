@@ -104,26 +104,6 @@ _SOURCE_QUERY_HINTS = (
 )
 
 
-def parse_file_uri(value: str) -> Path | None:
-    parsed = urlparse(value)
-    if parsed.scheme != "file":
-        return None
-    raw_netloc = unquote(parsed.netloc or "")
-    raw_path   = unquote(parsed.path or "")
-    if raw_netloc and raw_path:
-        if re.fullmatch(r"[A-Za-z]:", raw_netloc):
-            raw_path = f"{raw_netloc}{raw_path}"
-        else:
-            raw_path = f"//{raw_netloc}{raw_path}"
-    elif raw_netloc and not raw_path:
-        raw_path = raw_netloc
-    if not raw_path:
-        return None
-    if raw_path.startswith("/") and len(raw_path) > 2 and raw_path[2] == ":":
-        raw_path = raw_path[1:]
-    return Path(raw_path)
-
-
 def looks_like_url(value: str) -> bool:
     return value.startswith(("http://", "https://"))
 

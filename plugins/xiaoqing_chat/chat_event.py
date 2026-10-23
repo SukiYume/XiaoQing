@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.message import contains_bot_name, extract_text, has_at_mention, iter_message_segments
+from core.message import (
+    contains_bot_name,
+    extract_text,
+    has_at_mention,
+    iter_message_segments,
+    sender_display_name,
+)
 
 # 本轮 @ 对象的展示文本，由 handlers 按 QQ 号写入事件，媒体合成与历史记录共用。
 MENTION_LABELS_KEY     = "_xc_mention_labels"
@@ -24,12 +30,10 @@ def event_chat_id(event: dict[str, Any]) -> str:
 
 
 def event_sender_name(event: dict[str, Any]) -> str:
-    """依次从群名片、昵称和名称字段提取发送者显示名。"""
-    sender = event.get("sender") or {}
-    for key in ("card", "nickname", "name"):
-        v = sender.get(key)
-        if isinstance(v, str) and v.strip():
-            return v.strip()
+    """发送者显示名；没有名片和昵称时用“用户+QQ号”。"""
+    name = sender_display_name(event.get("sender"))
+    if name:
+        return name
     user_id = event.get("user_id")
     return f"用户{user_id}" if user_id else "用户"
 

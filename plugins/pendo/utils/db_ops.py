@@ -253,16 +253,16 @@ class DbOpsMixin:
         if item_type == ItemType.DIARY.value:
             diary_date = getattr(item, "diary_date", None)
             if diary_date:
-                return f"`/pendo diary view {item_id}` 或 `/pendo diary view {diary_date}`"
-            return f"`/pendo diary view {item_id}`"
+                return f"/pendo diary view {item_id} 或 /pendo diary view {diary_date}"
+            return f"/pendo diary view {item_id}"
 
         commands = {
-            ItemType.EVENT.value: f"`/pendo event view {item_id}`",
-            ItemType.TASK.value: f"`/pendo todo view {item_id}`",
-            ItemType.NOTE.value: f"`/pendo note view {item_id}`",
-            ItemType.LEDGER.value: f"`/pendo ledger view {item_id}`",
+            ItemType.EVENT.value: f"/pendo event view {item_id}",
+            ItemType.TASK.value: f"/pendo todo view {item_id}",
+            ItemType.NOTE.value: f"/pendo note view {item_id}",
+            ItemType.LEDGER.value: f"/pendo ledger view {item_id}",
         }
-        return commands.get(item_type, f"`/pendo search {item_id}`")
+        return commands.get(item_type, f"/pendo search {item_id}")
 
     @classmethod
     def _build_wrong_type_message(
@@ -273,7 +273,7 @@ class DbOpsMixin:
         command    = cls._build_view_hint_for_item(item)
         return {
             "status": "success",
-            "message": f"💡 `{query_id}` 不是{expected_label}ID，它属于{type_label}\n\n请使用 {command}",
+            "message": f"💡 {query_id} 不是{expected_label}ID，它属于{type_label}\n\n请使用 {command}",
         }
 
     async def _db_get_typed_item_or_message(

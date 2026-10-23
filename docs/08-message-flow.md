@@ -138,7 +138,7 @@ Step A 根据以下信号决定消息是否进入业务流程：
 await plugin.handle_session(text, event, context, session)
 ```
 
-同一会话键串行执行。插件通过 `update_session()` 提交工作副本，或通过 `end_session()` 结束流程。
+同一会话键串行执行。插件通过 `update_session()` 提交工作副本，或通过 `end_session()` 结束流程。调用前用 `command_access` 复核此人此刻仍能用会话所属插件的至少一条顶层命令；撤权或场景不再允许时关闭会话并回复说明。
 
 ### E. 命令
 
@@ -156,11 +156,10 @@ Router 从命令目录解析顶层触发词和递归子命令：
 调用前完成：
 
 1. 命令与别名匹配
-2. 子命令上下文继承
-3. 私聊或群聊场景校验
-4. Bot 管理员或群管理员权限校验
-5. 插件代际授权
-6. 插件执行 gate 接纳
+2. 子命令权限与场景继承
+3. `command_access` 校验：先权限（`bot_admin` / `group_admin`），再场景（私聊 / 群聊）；全项目只有这一处权限判断
+4. 插件代际授权
+5. 插件执行 gate 接纳
 
 解析结果通过 `context.command_invocation` 传给插件。
 
@@ -170,9 +169,11 @@ Router 从命令目录解析顶层触发词和递归子命令：
 
 ### G. Smalltalk Provider
 
-普通聊天候选消息进入配置的 `smalltalk_provider`。`xiaoqing_chat` 可在内部执行 attention、频率控制、行为规划、AI 生成和 reply checker。
+普通聊天候选消息进入配置的 `smalltalk_provider`。`xiaoqing_chat` 可在内部执行 attention、频率控制、行为规划、AI 生成和 reply checker。有人明确召唤小青时，`xiaoqing_chat` 经 `agent.handle_turn` 让 `xiaoqing_agent` 判断是否需要动手做事（能用哪些工具由发起人的权限决定），同时照常生成聊天回复：判断为闲聊就用这份回复，agent 接手则放弃它；agent 未开启、判断为闲聊或调用失败时继续原流程。
 
 观察入口接收普通聊天候选消息。命令、URL、Session 和命令前缀文本在前述阶段完成处理。
+
+agent 执行任务时调用的命令走 `Dispatcher.run_command_text`：以发起人身份、只走 Step E，与本人直接发送同一处权限与场景检查；在一次性的会话空间里执行，命令新开的会话先交给插件的 `close_session` 收尾再丢弃；每次调用带独立的操作标识（请求 ID 为 `原请求ID.command.<操作标识>`）；命令返回的 `DeliverySegments` 连同回执原样交回 agent。
 
 ---
 
@@ -240,6 +241,7 @@ Session 由单个插件拥有。插件名用于选择 `handle_session()`，用�
 
 - 字符串
 - OneBot 消息段列表
+- 带发送回执的消息段 `DeliverySegments`
 - OneBot Action 列表
 - 空结果
 
@@ -261,11 +263,11 @@ Core 将字符串转换为文本段，将消息段转换为当前用户或群的
 
 ### 出站观察
 
-非敏感的插件出站 Action 会通知 `core.observe_outgoing_action` 服务的提供者（当前为 `xiaoqing_chat`），让聊天上下文看到其他插件以 Bot 身份发出的通知。设置了 `SENSITIVE_ACTION_KEY` 的 Action（如 Pendo 登录码）跳过观察，标记在传输前移除。
+非敏感的插件出站 Action 会通知 `core.observe_outgoing_action` 服务的提供者（当前为 `xiaoqing_chat`），让聊天上下文看到其他插件以 Bot 身份发出的通知；`xiaoqing_chat` 自己的回复已在回执提交时记下，这里跳过。设置了 `SENSITIVE_ACTION_KEY` 的 Action（如 Pendo 登录码）跳过观察，标记在传输前移除。
 
 ### 回执
 
-Delivery 层将投递结果返回给回执对象。需要 commit-after-ack 的插件在发送成功后提交提醒、任务或通知状态。
+Delivery 层将投递结果返回给回执对象。需要 commit-after-ack 的插件在发送成功后提交提醒、任务或通知状态。长消息被拆成几条时，每条确认发出后先登记它的消息 ID 再记下结果；全部确认后提交回调从 `message_ids` 读到整条回复的全部 ID，`xiaoqing_chat` 据此把角色发言和真实消息一一对应，群友引用其中任何一条都能被识别。
 
 事件作用域中的 action sink 只暂存动作，并持有后续结算权。`send_with_receipt` 观察到暂存状态时保持收据待定；最终传输成功、明确失败和结果未知分别进入对应回调。主动 WebSocket 的上线通知与读循环并发运行，echo 回执由读循环消费，通知任务随连接断开回收。
 
@@ -331,6 +333,8 @@ Listener、token、管理员状态与插件 Context 按 revision 发布。队列
 | 事件与消息段模型 | `core/models.py`, `core/message.py` |
 | MessageContext 与 A–G 流程 | `core/dispatcher.py` |
 | 命令目录与解析 | `core/router.py` |
+| 权限与场景判断 | `core/router.py` 的 `command_access` |
+| agent 命令执行器 | `core/dispatcher.py` 的 `run_command_text` |
 | Session | `core/session.py` |
 | 插件代与执行 | `core/plugin_generation.py`, `core/plugin_runtime.py`, `core/plugin_execution.py` |
 | 出站回执 | `core/delivery.py`, `core/app_delivery.py` |

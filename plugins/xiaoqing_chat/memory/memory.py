@@ -31,6 +31,14 @@ class StoredMessage:
     content: str = ""
     media_items: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     source_plugin: str = ""
+    # 长回复拆成几条发出时，除 ``message_id``（第一条）外其余各条的 QQ 消息 ID。
+    extra_message_ids: tuple[int, ...] = ()
+
+    def remote_ids(self) -> tuple[int, ...]:
+        """这条记录对应的全部 QQ 消息 ID；引用其中任何一条都算引用这条记录。"""
+
+        first = (self.message_id,) if self.message_id is not None else ()
+        return first + self.extra_message_ids
 
     def __post_init__(self) -> None:
         normalized_parts = normalize_message_parts(self.parts)
@@ -43,11 +51,25 @@ class StoredMessage:
         object.__setattr__(self, "content", legacy_content)
         object.__setattr__(self, "media_items", _normalize_media_items(legacy_media))
         object.__setattr__(self, "source_plugin", str(self.source_plugin or "").strip().lower())
+        object.__setattr__(self, "extra_message_ids", _message_ids(self.extra_message_ids))
 
 
 def is_conversation_reply(message: StoredMessage) -> bool:
     """识别聊天生成器的发言，旧记录的空来源保持兼容。"""
     return message.role == "assistant" and message.source_plugin in {"", "xiaoqing_chat"}
+
+
+def _message_ids(values: Any) -> tuple[int, ...]:
+    """规整成整数消息 ID 元组；不是列表或元组、或不能转成整数的项都丢掉。"""
+
+    if not isinstance(values, (list, tuple)):
+        return ()
+    ids: list[int] = []
+    for value in values:
+        coerced = coerce_optional_int(value)
+        if coerced is not None and coerced not in ids:
+            ids.append(coerced)
+    return tuple(ids)
 
 
 def _valid_message_ts(value: Any) -> float:
@@ -156,6 +178,8 @@ def _serialize_message(message: StoredMessage) -> dict[str, Any]:
         payload["user_id"] = int(message.user_id)
     if message.message_id is not None:
         payload["message_id"] = int(message.message_id)
+    if message.extra_message_ids:
+        payload["extra_message_ids"] = list(message.extra_message_ids)
     if message.local_id:
         payload["local_id"] = str(message.local_id)
     if message.source_plugin:
@@ -260,18 +284,25 @@ class MemoryStore:
         parts: Any             = None,
         ts: float | None       = None,
         source_plugin: str     = "",
+        message_ids: Any       = (),
     ) -> None:
+        """``message_ids`` 是这条记录发出后的全部 QQ 消息 ID（拆成几条发出时有多个）。"""
+
+        remote = _message_ids(message_ids)
+        if message_id is None and remote:
+            message_id, remote = remote[0], remote[1:]
         msg = StoredMessage(
-            role          = role,
-            name          = name,
-            user_id       = user_id,
-            message_id    = message_id,
-            local_id      = local_id or "",
-            content       = str(content or ""),
-            media_items   = media_items,
-            parts         = normalize_message_parts(parts),
-            ts            = ts if ts is not None else time.time(),
-            source_plugin = source_plugin,
+            role              = role,
+            name              = name,
+            user_id           = user_id,
+            message_id        = message_id,
+            local_id          = local_id or "",
+            content           = str(content or ""),
+            media_items       = media_items,
+            parts             = normalize_message_parts(parts),
+            ts                = ts if ts is not None else time.time(),
+            source_plugin     = source_plugin,
+            extra_message_ids = tuple(item for item in remote if item != message_id),
         )
         with self._sync_lock:
             self._tombstones.discard(chat_id)
@@ -281,32 +312,6 @@ class MemoryStore:
             self._dirty.add(chat_id)
             if len(history) > MAX_CACHED_MESSAGES_PER_CHAT:
                 del history[:-MAX_CACHED_MESSAGES_PER_CHAT]
-
-    def attach_latest_assistant_message_id(self, chat_id: str, message_id: Any) -> bool:
-        try:
-            normalized_id = int(message_id)
-        except (TypeError, ValueError):
-            return False
-        with self._sync_lock:
-            history = self._messages.get(chat_id, [])
-            for index in range(len(history) - 1, -1, -1):
-                message = history[index]
-                if not is_conversation_reply(message) or message.message_id is not None:
-                    continue
-                history[index] = StoredMessage(
-                    role          = message.role,
-                    name          = message.name,
-                    ts            = message.ts,
-                    user_id       = message.user_id,
-                    message_id    = normalized_id,
-                    local_id      = message.local_id,
-                    parts         = message.parts,
-                    source_plugin = message.source_plugin,
-                )
-                self._generations[chat_id] = self._generations.get(chat_id, 0) + 1
-                self._dirty.add(chat_id)
-                return True
-        return False
 
     def get(self, chat_id: str) -> list[StoredMessage]:
         with self._sync_lock:
@@ -439,6 +444,7 @@ class MemoryStore:
                         media_items   = media_items,
                         source_plugin = str(item.get("source_plugin", "") or ""),
                         ts=coerce_finite_float(item.get("ts"), default=time.time(), minimum=0.0),
+                        extra_message_ids=_message_ids(item.get("extra_message_ids")),
                     )
                 )
         return out

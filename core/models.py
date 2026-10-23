@@ -394,12 +394,17 @@ PluginServiceName = Literal[
     "chat.reply",
     "codex.enqueue_arxiv_summary",
     "core.observe_outgoing_action",
+    "agent.handle_turn",
+    "agent.report_delivery",
+    "codex.agent_task",
+    "qingssh.agent_command",
 ]
 
 PluginCapabilityName = Literal[
-    "admin_sessions",
+    "command_runner",
     "config_subscription",
     "execution_timeout_exempt",
+    "local_tools",
     "onebot_media",
     "secret_admin",
 ]
@@ -456,12 +461,18 @@ _SERVICE_CONTRACTS: dict[
         frozenset({"core"}),
         None,
     ),
+    # 小青 agent 的桥：聊天把一轮交给 agent 并回报当轮回复是否发出，agent 再借用 Codex 与 SSH。
+    "agent.handle_turn": ("xiaoqing_agent", frozenset({"xiaoqing_chat"}), None),
+    "agent.report_delivery": ("xiaoqing_agent", frozenset({"xiaoqing_chat"}), None),
+    "codex.agent_task": ("codex", frozenset({"xiaoqing_agent"}), None),
+    "qingssh.agent_command": ("qingssh", frozenset({"xiaoqing_agent"}), None),
 }
 
 _CAPABILITY_CONTRACTS: dict[PluginCapabilityName, frozenset[str]] = {
-    "admin_sessions": frozenset({"codex", "jupyter", "minecraft", "qingssh", "shell"}),
+    "command_runner": frozenset({"xiaoqing_agent"}),
     "config_subscription": frozenset({"pendo"}),
     "execution_timeout_exempt": frozenset({"codex", "jupyter", "qingssh", "shell"}),
+    "local_tools": frozenset({"xiaoqing_agent"}),
     "onebot_media": frozenset({"xiaoqing_chat"}),
     "secret_admin": frozenset({"bot_core"}),
 }

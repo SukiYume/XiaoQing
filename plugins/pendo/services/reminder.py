@@ -409,9 +409,9 @@ class ReminderService:
         title = item.title or "无标题"
         if repeat_count is not None:
             max_repeats = PendoConfig.REMINDER_MAX_REPEATS
-            header      = f"⏰ **提醒 (第{repeat_count + 1}次，共{max_repeats + 1}次)**"
+            header      = f"⏰ 提醒 (第{repeat_count + 1}次，共{max_repeats + 1}次)"
         else:
-            header = "⏰ **提醒**"
+            header = "⏰ 提醒"
         lines = [header]
 
         collection = (

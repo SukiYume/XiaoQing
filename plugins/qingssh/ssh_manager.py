@@ -36,6 +36,9 @@ from .config import (
     MAX_OUTPUT_LENGTH,
 )
 
+# agent 一次性命令的输出预算；调用方会再按自己的上下文预算截断。
+SERVICE_OUTPUT_CHARS = 32_000
+
 # Paramiko 是可选依赖；未安装时仍允许框架发现并加载插件。
 try:
     import paramiko
@@ -333,8 +336,12 @@ def _open_command_channel(
         if use_pty:
             ch.get_pty()
         ch.set_combine_stderr(True)
+        # setsid 让命令独占进程组，停止时能整组收回；Git Bash 和 macOS 没有 setsid，
+        # 退回普通后台进程，停止时只能直接结束该进程。
+        quoted  = shlex.quote(command)
         wrapped = (
-            f"setsid sh -c {shlex.quote(command)} & pid=$!; "
+            f"if command -v setsid >/dev/null 2>&1; then setsid sh -c {quoted} & "
+            f"else sh -c {quoted} & fi; pid=$!; "
             'printf \'__XQ_PID__%s\\n\' "$pid"; wait "$pid"'
         )
         if cancelled.is_set():
@@ -367,7 +374,10 @@ class SSHManager:
         self._termination_lock_users: dict[str, int]     = {}
         self._connection_registry_lock                   = asyncio.Lock()
         self._pending_connection_keys: set[str]          = set()
-        self._initialized                                = False
+        # xiaoqing_agent 的一次性连接不属于任何会话，孤儿清理必须跳过它们。
+        self.service_connection_keys: set[str]                 = set()
+        self._service_tasks: set[asyncio.Task[dict[str, Any]]] = set()
+        self._initialized                                      = False
 
     @property
     def context(self) -> Any | None:
@@ -1405,7 +1415,10 @@ class SSHManager:
             if remote_pid is not None and client is not None:
                 for signal_name in ("TERM", "KILL"):
                     signal_attempted = True
-                    command          = f"kill -{signal_name} -- -{remote_pid}"
+                    command          = (
+                        f"kill -{signal_name} -- -{remote_pid} 2>/dev/null"
+                        f" || kill -{signal_name} {remote_pid}"
+                    )
                     try:
                         await asyncio.wait_for(
                             asyncio.to_thread(client.exec_command, command),
@@ -1673,6 +1686,90 @@ class SSHManager:
                 component="qingssh.execute",
             )
 
+    def list_server_summaries(self) -> list[dict[str, Any]]:
+        """返回不含认证材料的服务器摘要，供 agent 选择目标。"""
+
+        summaries: list[dict[str, Any]] = []
+        for name, config in sorted(self.servers.items()):
+            summaries.append(
+                {
+                    "name": name,
+                    "host": str(config.get("host", "") or ""),
+                    "port": config.get("port"),
+                    "username": str(config.get("username", "") or ""),
+                    "via_jump": bool(config.get("proxycommand") or config.get("proxyjump")),
+                }
+            )
+        return summaries
+
+    def start_service_command(
+        self,
+        name: str,
+        command: str,
+        *,
+        timeout: float,
+    ) -> asyncio.Task[dict[str, Any]]:
+        """在后台启动一次性命令并交回 Task；插件串行执行通道不必等远端命令结束。"""
+
+        task = asyncio.create_task(
+            self.run_service_command(name, command, timeout=timeout),
+            name=f"qingssh-agent-command:{name}",
+        )
+        self._service_tasks.add(task)
+        task.add_done_callback(self._service_tasks.discard)
+        return task
+
+    async def run_service_command(
+        self,
+        name: str,
+        command: str,
+        *,
+        timeout: float,
+        max_output_chars: int = SERVICE_OUTPUT_CHARS,
+    ) -> dict[str, Any]:
+        """用独立的一次性连接执行命令，结束后立即断开，不占用任何用户会话。"""
+
+        owner = f"agent-{uuid.uuid4().hex[:12]}"
+        key   = self.build_connection_key(owner, None, name)
+        self.service_connection_keys.add(key)
+        chunks: list[str] = []
+        captured          = 0
+        truncated         = False
+
+        async def collector(text: str) -> None:
+            nonlocal captured, truncated
+            remaining = max_output_chars - captured
+            if remaining <= 0:
+                truncated = truncated or bool(text)
+                return
+            piece = text[:remaining]
+            chunks.append(piece)
+            captured += len(piece)
+            truncated = truncated or len(text) > remaining
+
+        try:
+            connected, message = await self.connect(owner, None, name)
+            if not connected:
+                return {"ok": False, "exit_code": None, "output": message, "timed_out": False}
+            exit_code = await self.execute_command_stream(
+                owner,
+                None,
+                name,
+                command,
+                collector,
+                timeout=timeout,
+            )
+            return {
+                "ok": exit_code == 0,
+                "exit_code": exit_code,
+                "output": "".join(chunks),
+                "truncated": truncated,
+                "timed_out": exit_code == EXIT_CODE_TIMEOUT,
+            }
+        finally:
+            self.disconnect(owner, None, name)
+            self.service_connection_keys.discard(key)
+
     # ──────────────────── SFTP 文件读取 ────────────────────
 
     async def download_file(
@@ -1814,6 +1911,11 @@ class SSHManager:
         self.active_channels.clear()
 
     async def shutdown(self) -> None:
+        pending = list(self._service_tasks)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
         await asyncio.to_thread(self.close_all)
 
 

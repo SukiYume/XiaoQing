@@ -11,6 +11,7 @@ import plugins.xiaoqing_chat.llm.arithmetic as arithmetic_mod
 from plugins.xiaoqing_chat.llm import reply_checker as checker
 from plugins.xiaoqing_chat.llm.communication_constraints import explicit_output_allocation
 from plugins.xiaoqing_chat.llm.media_evidence import event_has_current_image, image_evidence_block
+from plugins.xiaoqing_chat.persona import bundled_persona_card
 
 # Stub out aiohttp only when it is not installed in the local test environment.
 if "aiohttp" not in sys.modules and importlib.util.find_spec("aiohttp") is None:
@@ -433,7 +434,7 @@ async def test_checker_forces_boundary_for_profile_fields_declared_unset() -> No
     from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
-    identity = XiaoQingChatConfig().personality.identity
+    identity = XiaoQingChatConfig().personality.card.facts("小青")
     result   = await check_reply(
         secrets                          = {"_ai": None},
         bot_name                         = "小青",
@@ -471,7 +472,7 @@ async def test_checker_rejects_story_address_that_conflicts_with_stable_gender()
         "goal": "分享日常",
         "current_text": "大家今天遇到什么离谱事了？",
         "policy_text": "",
-        "grounding_text": XiaoQingChatConfig().personality.identity,
+        "grounding_text": XiaoQingChatConfig().personality.card.facts("小青"),
         "history": [],
         "chat_history_text": "Alice: 大家今天遇到什么离谱事了？",
         "enable_llm_checker": False,
@@ -1257,7 +1258,8 @@ async def test_checker_preserves_generator_context_and_uses_general_evidence_rul
     assert materials["最近对话"] == history
     assert materials["当前最新用户消息"] == current
     assert materials["受控人物资料"].endswith(grounding)
-    assert checker.PERSONA_RUNTIME_FACTS in materials["受控人物资料"]
+    # 人物边界来自受控人物资料（人设卡的人物事实），不再另附一份。
+    assert "人物边界以受控人物资料为准" in prompt
     assert history not in prompt and current not in prompt
     assert '"suitable":true' not in prompt
     assert "推测保留条件和不确定性" in prompt
@@ -1269,8 +1271,11 @@ async def test_checker_preserves_generator_context_and_uses_general_evidence_rul
 
 
 @pytest.mark.asyncio
-async def test_ai_identity_uses_controlled_runtime_facts_as_evidence(monkeypatch):
-    reply  = "我是AI，用小青这个角色在群里聊天。"
+async def test_ai_identity_uses_persona_card_facts_as_evidence(monkeypatch):
+    reply    = "我是AI，用小青这个角色在群里聊天。"
+    facts    = bundled_persona_card().facts("小青")
+    evidence = "坚持自己是真人"
+    assert evidence in facts
     remote = AsyncMock(
         return_value=(
             {
@@ -1278,9 +1283,7 @@ async def test_ai_identity_uses_controlled_runtime_facts_as_evidence(monkeypatch
                     {
                         "message": {
                             "content": _response(
-                                persona_claims=[
-                                    {"claim": reply, "evidence": checker.PERSONA_RUNTIME_FACTS}
-                                ],
+                                persona_claims=[{"claim": reply, "evidence": evidence}],
                             )
                         }
                     }
@@ -1298,7 +1301,7 @@ async def test_ai_identity_uses_controlled_runtime_facts_as_evidence(monkeypatch
             "回答身份",
             "你是真人还是AI？",
             "",
-            "大二理工科女生。",
+            facts,
             "",
             False,
         ),
@@ -1342,6 +1345,69 @@ def test_visual_semantic_paraphrase_keeps_real_description_evidence(source):
         image_evidence_required          = True,
     )
     assert result.suitable
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        "标题为“关于全职在站博士后聘用岗位分级评聘的通知”的文档……落款“中国科学院国家天文台 2026年10月16日”",
+        "标题为“关于全职在站博士后聘用岗位分级评聘的通知”的文档...落款“中国科学院国家天文台 2026年10月16日”",
+        [
+            "标题为“关于全职在站博士后聘用岗位分级评聘的通知”的文档",
+            "落款“中国科学院国家天文台 2026年10月16日”",
+        ],
+        "关于全职在站博士后聘用岗位分级评聘的通知 / 中国科学院国家天文台",
+        "“中国科学院国家天文台”",
+    ],
+)
+@pytest.mark.parametrize("in_history", [False, True])
+def test_visual_notice_accepts_verified_excerpt_citations(evidence, in_history):
+    reply = "天文台的通知，看着还挺正式的"
+    # 实测原样：摘要写“底部有“…”落款”，审查模型引成“落款“…””，词序调换但每段都是原文。
+    source = (
+        "[图片：页面显示一份标题为“关于全职在站博士后聘用岗位分级评聘的通知”的文档，"
+        "发布时间为2026-10-21，文档内容包含评聘工作说明，"
+        "底部有“中国科学院国家天文台 2026年10月16日”落款。]"
+    )
+    result = checker._interpret_checker_response(
+        content=_response(visual_claims=[{"claim": reply, "evidence": evidence}]),
+        reply                            = reply,
+        current_text                     = "说说刚才那张图" if in_history else source,
+        history_text                     = f"[m1]17:58, 用户: {source}" if in_history else "",
+        grounding_text                   = "",
+        bot_name                         = "小青",
+        allow_low_stakes_persona_fiction = True,
+        image_evidence_required          = True,
+    )
+    assert result.suitable
+    assert result.context_claim_count == 1
+
+
+@pytest.mark.parametrize(
+    "evidence,current,history",
+    [
+        ("红色标题……落款国家天文台", "[图片：蓝色标题，正文，落款国家天文台]", ""),
+        ("落款“国家天文台”/红色标题", "[图片：蓝色标题，正文，落款国家天文台]", ""),
+        ("蓝色标题……落款国家天文台", "[图片：蓝色标题]", "另一张图片：落款国家天文台"),
+        ("……", "[图片：蓝色标题，落款国家天文台]", ""),
+        (["蓝色标题", "红色落款"], "[图片：蓝色标题，落款国家天文台]", ""),
+        ([], "[图片：蓝色标题，落款国家天文台]", ""),
+    ],
+)
+def test_visual_excerpt_citations_reject_unverified_fragments(evidence, current, history):
+    reply  = "天文台的通知"
+    result = checker._interpret_checker_response(
+        content=_response(visual_claims=[{"claim": reply, "evidence": evidence}]),
+        reply                            = reply,
+        current_text                     = current,
+        history_text                     = history,
+        grounding_text                   = "",
+        bot_name                         = "小青",
+        allow_low_stakes_persona_fiction = True,
+        image_evidence_required          = True,
+    )
+    assert result.failure_code == "media_grounding"
+    assert result.is_hard
 
 
 def test_legacy_all_true_payload_without_visual_scan_is_infrastructure_failure():

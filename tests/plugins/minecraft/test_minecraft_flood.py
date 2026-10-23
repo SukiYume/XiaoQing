@@ -322,13 +322,33 @@ async def test_group_target_builds_group_action(
 ) -> None:
     monitor = _StaticMonitor([_batch([_event(1)])])
     await reset_minecraft_runtime.replace_connection(_connection(88, monitor, kind="group"))
-    context = SimpleNamespace(send_action=AsyncMock(return_value=True))
+    context = SimpleNamespace(
+        send_action=AsyncMock(return_value=True),
+        principal=SimpleNamespace(delivery_targets=(DeliveryTarget("group", 88),)),
+    )
 
     await mc_main.scheduled(cast(Any, context))
 
     action = context.send_action.await_args.args[0]
     assert action["action"] == "send_group_msg"
     assert action["params"]["group_id"] == 88
+
+
+@pytest.mark.asyncio
+async def test_group_outside_schedule_targets_is_not_polled(
+    reset_minecraft_runtime: ConnectionManager,
+) -> None:
+    monitor = _StaticMonitor([_batch([_event(1)])])
+    await reset_minecraft_runtime.replace_connection(_connection(89, monitor, kind="group"))
+    context = SimpleNamespace(
+        send_action=AsyncMock(return_value=True),
+        principal=SimpleNamespace(delivery_targets=(DeliveryTarget("group", 88),)),
+    )
+
+    await mc_main.scheduled(cast(Any, context))
+
+    context.send_action.assert_not_awaited()
+    assert not monitor.committed
 
 
 @pytest.mark.asyncio

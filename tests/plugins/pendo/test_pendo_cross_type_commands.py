@@ -267,7 +267,7 @@ class TestCrossTypeCommandRegression:
 
             view = asyncio.run(handler.view_note("u1", result["item_id"], SimpleNamespace()))
             assert "关联条目" in view["message"]
-            assert "日程: 晨会 `evt12345`" in view["message"]
+            assert "日程: 晨会 evt12345" in view["message"]
         finally:
             db.cleanup()
 
@@ -325,7 +325,7 @@ class TestCrossTypeCommandRegression:
             assert updated.tags == ["新增"]
             assert linked.related_items == ["note_main"]
             assert "被这些笔记引用" in view["message"]
-            assert "引用笔记 `note_ref`" in view["message"]
+            assert "引用笔记 note_ref" in view["message"]
         finally:
             db.cleanup()
 

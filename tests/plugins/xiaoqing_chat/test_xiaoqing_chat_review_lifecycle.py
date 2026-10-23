@@ -64,7 +64,6 @@ async def test_review_commands_reuse_real_session_ids_and_reject_invalid_mutatio
         "from_event",
         staticmethod(lambda _event, _context: hctx),
     )
-    monkeypatch.setattr(chat_handlers, "is_admin_operator", lambda _event, _context: True)
 
     async def call(args: str) -> str:
         return text_segments_text(
@@ -143,15 +142,4 @@ async def test_review_commands_reuse_real_session_ids_and_reject_invalid_mutatio
     assert "不属于当前会话" in await call(f"close {other_chat.session_id}")
     assert store.get_session(other_chat.session_id) is not None
 
-    protected = _open_session(
-        store,
-        kind    = "bad_reply_pattern",
-        chat_id = chat_id,
-        payload = {"goal": "权限测试"},
-    )
-    monkeypatch.setattr(chat_handlers, "is_admin_operator", lambda _event, _context: False)
-    assert "仅 Bot 管理员" in await call(f"close {protected.session_id}")
-    assert store.get_session(protected.session_id) is not None
-
     assert store.close_session(other_chat.session_id)
-    assert store.close_session(protected.session_id)

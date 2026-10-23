@@ -13,7 +13,6 @@ from tests.helpers.xiaoqing_chat_test_support import (
     _ack_reply_delivery,
     _make_hctx,
     _reply_draft,
-    _set_context_principal,
     asyncio,
     patch,
     patch_turn,
@@ -67,7 +66,7 @@ async def test_smalltalk_rejection_persists_updated_pfc_state_and_cancels_specul
             brain_chat=SimpleNamespace(enable_private_brain_chat=False),
             max_context_size=6,
             planner=SimpleNamespace(resolve_think_level=lambda history_len=0: 0),
-            personality=SimpleNamespace(states=[], state_probability=0.0),
+            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
             debug=SimpleNamespace(log_latency=False),
         )
     )
@@ -152,7 +151,7 @@ async def test_smalltalk_forced_reply_generation_runs_outside_chat_lock_but_comm
             ),
             brain_chat=SimpleNamespace(enable_private_brain_chat=False),
             planner=SimpleNamespace(resolve_think_level=lambda history_len=0: 0),
-            personality=SimpleNamespace(states=[], state_probability=0.0),
+            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
             debug=SimpleNamespace(log_latency=False),
         )
     )
@@ -248,7 +247,7 @@ async def test_smalltalk_stale_generation_is_dropped_before_commit(
             brain_chat=SimpleNamespace(enable_private_brain_chat=False),
             max_context_size=10,
             planner=SimpleNamespace(resolve_think_level=lambda history_len=0: 0),
-            personality=SimpleNamespace(states=[], state_probability=0.0),
+            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
             debug=SimpleNamespace(log_latency=False),
         )
     )
@@ -349,7 +348,7 @@ async def test_smalltalk_no_reply_current_turn_schedules_pfc_state_flush(
             brain_chat=SimpleNamespace(enable_private_brain_chat=False),
             max_context_size=10,
             planner=SimpleNamespace(resolve_think_level=lambda history_len=0: 0),
-            personality=SimpleNamespace(states=[], state_probability=0.0),
+            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
             debug=SimpleNamespace(log_latency=False),
         )
     )
@@ -456,7 +455,7 @@ async def test_smalltalk_schedules_pfc_flush_even_if_post_commit_reply_record_fa
             brain_chat=SimpleNamespace(enable_private_brain_chat=False),
             max_context_size=10,
             planner=SimpleNamespace(resolve_think_level=lambda history_len=0: 0),
-            personality=SimpleNamespace(states=[], state_probability=0.0),
+            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
             debug=SimpleNamespace(log_latency=False),
         )
     )
@@ -563,7 +562,7 @@ async def test_smalltalk_schedules_pfc_flush_even_if_post_commit_no_reply_hook_f
             brain_chat=SimpleNamespace(enable_private_brain_chat=False),
             max_context_size=10,
             planner=SimpleNamespace(resolve_think_level=lambda history_len=0: 0),
-            personality=SimpleNamespace(states=[], state_probability=0.0),
+            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
             debug=SimpleNamespace(log_latency=False),
         )
     )
@@ -648,7 +647,7 @@ async def test_mode_indicator_only_applies_in_brain_chat(mock_context, sample_gr
                 brain_mode_indicator      = "[brain]",
             ),
             planner=SimpleNamespace(resolve_think_level=lambda history_len=0: 0),
-            personality=SimpleNamespace(states=[], state_probability=0.0),
+            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
             debug=SimpleNamespace(log_latency=False),
         )
     )
@@ -716,7 +715,7 @@ async def test_mode_indicator_is_emitted_when_brain_chat_is_active(
                 brain_mode_indicator      = "[brain]",
             ),
             planner=SimpleNamespace(resolve_think_level=lambda history_len=0: 0),
-            personality=SimpleNamespace(states=[], state_probability=0.0),
+            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
             debug=SimpleNamespace(log_latency=False),
         )
     )
@@ -751,19 +750,3 @@ async def test_mode_indicator_is_emitted_when_brain_chat_is_active(
 
     assert result == [{"type": "text", "data": {"text": "[brain]\nok"}}]
     mock_context.send_action.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_handle_provider_denies_switch_for_non_admin(mock_context, sample_group_event):
-    from plugins.xiaoqing_chat.commands import handle_provider
-    from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
-
-    state                = ChatRuntimeState()
-    mock_context.secrets = {}
-    _set_context_principal(mock_context, sample_group_event, group_role="member")
-
-    with patch("plugins.xiaoqing_chat.handlers._state", return_value=state):
-        result = await handle_provider("glm", sample_group_event, mock_context)
-
-    assert state.get_chat_provider("g67890") is None
-    assert "管理员" in result[0]["data"]["text"]

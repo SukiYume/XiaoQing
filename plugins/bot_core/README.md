@@ -9,7 +9,7 @@ Bot Core 提供命令帮助、运行时重载、插件列表、群静音、敏�
 - `/help` 与 `/plugins` 面向群聊和私聊用户。
 - `/reload` 与 `/metrics` 需要 Bot 管理员身份。
 - 群静音命令需要 Bot 管理员身份和群聊场景。
-- secret 命令需要 Bot 全局管理员私聊与 `secret_admin` capability。
+- secret 命令只给 Bot 管理员、只能私聊用；`secret_admin` capability 由 Core 按 `/set_secret` 的声明签发给能用它的人。
 
 ---
 
@@ -23,8 +23,8 @@ Bot Core 提供命令帮助、运行时重载、插件列表、群静音、敏�
 | `/plugins` | 公开 | 已加载插件列表 |
 | `/闭嘴 [时长]` | Bot 管理员群聊 | 暂停当前群普通回复 |
 | `/说话` | Bot 管理员群聊 | 恢复当前群普通回复 |
-| `/set_secret <路径> <值>` | 全局管理员私聊 | 更新已有 secret 路径 |
-| `/get_secret <路径>` | 全局管理员私聊 | 查看脱敏值或对象键名 |
+| `/set_secret <路径> <值>` | Bot 管理员私聊 | 更新已有 secret 路径 |
+| `/get_secret <路径>` | Bot 管理员私聊 | 查看脱敏值或对象键名 |
 | `/metrics` | Bot 管理员 | 运行时间、调用量、成功率和慢插件 |
 
 <!-- manifest-command-aliases:start -->

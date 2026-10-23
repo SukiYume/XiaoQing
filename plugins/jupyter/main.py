@@ -265,7 +265,7 @@ def _build_result_segments(
     response: Segments = []
     if header:
         response.append(text(header))
-    response.append(text(f"```\n{result.format_output()}\n```"))
+    response.append(text(result.format_output()))
 
     total_image_bytes = 0
     for image_data in result.images[:MAX_IMAGES]:
@@ -459,7 +459,7 @@ async def _start_repl_session(context: PluginContextProtocol) -> Segments:
             tail = "\n".join(state.lines[-5:]) if state.lines else "（空）"
             return segments(
                 "📝 你已在 Jupyter REPL 会话中\n"
-                f"当前缓冲区（最后 5 行）:\n```python\n{_code_preview(tail)}\n```\n\n"
+                f"当前缓冲区（最后 5 行）:\n{_code_preview(tail)}\n\n"
                 "继续输入代码，或输入 run/show/clear；发送「退出」结束会话"
             )
 
@@ -572,7 +572,7 @@ async def handle_session(
             return segments("📄 缓冲区为空")
         return segments(
             f"📄 当前缓冲区 ({len(state.lines)} 行):\n"
-            f"```python\n{_code_preview(state.code)}\n```\n\n"
+            f"{_code_preview(state.code)}\n\n"
             "输入 run 执行，clear 清空"
         )
     if action == "help":

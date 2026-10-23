@@ -42,7 +42,7 @@ class EventDetailViewMixin:
         """格式化日程集合及其节点摘要。"""
         kind_label = "多时间节点事件" if collection.get("kind") == "multi_node" else "重复日程"
         lines      = [
-            f"📋 **{collection.get('title') or '无标题'}**",
+            f"📋 {collection.get('title') or '无标题'}",
             "",
             f"🗺️ {kind_label} ({len(children)}个节点)",
         ]
@@ -64,12 +64,12 @@ class EventDetailViewMixin:
         lines.append("")
         for child in children:
             child_time = cls._format_full_time_range(child.start_time, child.end_time, child)
-            lines.append(f"  📌 {child_time} {child.title or '无标题'} `{child.display_id}`")
+            lines.append(f"  📌 {child_time} {child.title or '无标题'} {child.display_id}")
         collection_display_id = public_id(collection["id"])
         lines.extend(
             [
                 "",
-                f"`{collection_display_id}`",
+                f"{collection_display_id}",
                 f"💡 /pendo event edit {collection_display_id} <内容> 编辑标题/元信息",
             ]
         )
@@ -84,11 +84,11 @@ class EventDetailViewMixin:
         collection   = family.collection
         title        = event.title or "无标题"
         remind_times = parse_remind_times(event.remind_times)
-        lines        = [f"📋 **{title}**", ""]
+        lines        = [f"📋 {title}", ""]
 
         if collection:
             collection_display_id = public_id(collection.get("id"))
-            lines.append(f"🗓️ 所属: {collection.get('title') or '无标题'} `{collection_display_id}`")
+            lines.append(f"🗓️ 所属: {collection.get('title') or '无标题'} {collection_display_id}")
             lines.append("📌 节点日程" if collection.get("kind") == "multi_node" else "🔄 重复实例")
         else:
             lines.append("📆 单次事件")
@@ -98,7 +98,7 @@ class EventDetailViewMixin:
         self._append_reminder_preview(lines, remind_times, event)
         self._append_sibling_summary(lines, event, family.children if collection else [])
 
-        lines.append(f"\n`{event.display_id}`")
+        lines.append(f"\n{event.display_id}")
         lines.append(
             f"💡 /pendo event reminders {event.display_id} | "
             f"/pendo event edit {event.display_id} <内容>"
@@ -178,4 +178,4 @@ class EventDetailViewMixin:
                 sibling.end_time,
                 sibling,
             )
-            lines.append(f"  • {sibling_time} {sibling.title or '无标题'} `{sibling.display_id}`")
+            lines.append(f"  • {sibling_time} {sibling.title or '无标题'} {sibling.display_id}")

@@ -153,7 +153,7 @@ async def handle(
 def _show_help() -> Segments:
     """显示帮助信息"""
     help_text = (
-        "📚 **论文与文献管理助手**\n\n"
+        "📚 论文与文献管理助手\n\n"
         "📖 论文搜索:\n"
         "  /paper search <关键词>      - 搜索论文\n"
         "  /paper author <作者>        - 查找作者论文\n"

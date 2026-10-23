@@ -3,7 +3,7 @@
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, tzinfo
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict, cast
 
 from core.plugin_base import run_sync
@@ -18,7 +18,12 @@ from ..utils.error_handlers import handle_command_errors
 from ..utils.formatters import TAG_TOKEN_RE, ItemFormatter
 from ..utils.identifiers import public_id
 from ..utils.session_utils import safe_create_session, safe_end_session
-from ..utils.time_utils import get_user_local_wall_time, parse_date_optional, parse_diary_range
+from ..utils.time_utils import (
+    TimezoneHelper,
+    get_user_local_wall_time,
+    parse_date_optional,
+    parse_diary_range,
+)
 from ..utils.validators import normalize_diary_fields, normalize_diary_mood
 
 logger = logging.getLogger(__name__)
@@ -282,7 +287,7 @@ class DiaryHandler(DbOpsMixin):
             message += f"🌤️ 天气: {diary_item.weather}\n"
         if diary_item.location:
             message += f"📍 地点: {diary_item.location}\n"
-        message += f"`{public_id(item_id)}`\n\n"
+        message += f"{public_id(item_id)}\n\n"
         message += f"💡 用 /pendo diary view {diary_date} 查看当天所有记录"
 
         return {"status": "success", "message": message, "item_id": item_id}
@@ -308,9 +313,10 @@ class DiaryHandler(DbOpsMixin):
                     "status": "success",
                     "message": f"📔 您还没有写 {query_date} 的日记\n\n💡 用 /pendo diary add {query_date} <内容> 开始写",
                 }
-            message = f"📔 **{query_date} 的日记** ({len(entries)} 条)\n\n"
+            zone    = await self._user_zone(user_id)
+            message = f"📔 {query_date} 的日记 ({len(entries)} 条)\n\n"
             for index, entry in enumerate(entries, 1):
-                message += self._format_diary_entry_detail(entry, index=index)
+                message += self._format_diary_entry_detail(entry, index=index, zone=zone)
                 if index < len(entries):
                     message += "\n---\n\n"
             return {"status": "success", "message": message}
@@ -323,8 +329,8 @@ class DiaryHandler(DbOpsMixin):
             return {"status": "error", "message": f"❌ 找不到日记 {query}"}
 
         diary_date = diary.diary_date or query
-        message    = f"📔 **{diary_date} 的日记条目**\n\n"
-        message += self._format_diary_entry_detail(diary)
+        message    = f"📔 {diary_date} 的日记条目\n\n"
+        message += self._format_diary_entry_detail(diary, zone=await self._user_zone(user_id))
 
         return {"status": "success", "message": message}
 
@@ -371,7 +377,7 @@ class DiaryHandler(DbOpsMixin):
                 "message": f"📔 {time_range}{filter_suffix} 没有日记\n\n💡 用 /pendo diary add [日期] <内容> 开始写日记",
             }
 
-        return self._format_diary_list(diaries, filter_suffix)
+        return self._format_diary_list(diaries, filter_suffix, await self._user_zone(user_id))
 
     @staticmethod
     def _parse_list_filters(raw_query: str) -> DiaryListFilters:
@@ -408,9 +414,14 @@ class DiaryHandler(DbOpsMixin):
             return False
         return not filters.tag or filters.tag in (diary.tags or [])
 
-    def _format_diary_list(self, diaries: list[DiaryItem], filter_suffix: str) -> CommandMessage:
+    def _format_diary_list(
+        self,
+        diaries: list[DiaryItem],
+        filter_suffix: str,
+        zone: tzinfo | None = None,
+    ) -> CommandMessage:
         """格式化已经排序和筛选的日记列表。"""
-        lines = [f"📔 **日记列表**{filter_suffix} (共{len(diaries)}篇)", ""]
+        lines = [f"📔 日记列表{filter_suffix} (共{len(diaries)}篇)", ""]
         for diary in diaries:
             content_preview = ItemFormatter.truncate_content(
                 diary.content or "",
@@ -419,9 +430,9 @@ class DiaryHandler(DbOpsMixin):
             lines.extend(
                 (
                     f"{_MOOD_EMOJIS.get(diary.mood or '', '📝')} "
-                    f"**{diary.diary_date or ''} {self._format_entry_time(diary)}**",
+                    f"**{diary.diary_date or ''} {self._format_entry_time(diary, zone)}**",
                     f"  _{content_preview}_",
-                    f"  `{diary.display_id}`",
+                    f"  {diary.display_id}",
                     "",
                 )
             )
@@ -443,13 +454,14 @@ class DiaryHandler(DbOpsMixin):
             if not entries:
                 return {"status": "error", "message": f"❌ 没有找到 {query_date} 的日记"}
             if len(entries) > 1:
+                zone  = await self._user_zone(user_id)
                 lines = [f"❌ {query_date} 有 {len(entries)} 条日记，请按 ID 删除："]
                 for entry in entries:
                     preview = ItemFormatter.truncate_content(
                         entry.content or "", PendoConfig.SEARCH_CONTENT_PREVIEW_LENGTH
                     )
                     lines.append(
-                        f"• `{entry.display_id}` {self._format_entry_time(entry)} {preview}"
+                        f"• {entry.display_id} {self._format_entry_time(entry, zone)} {preview}"
                     )
                 return {"status": "error", "message": "\n".join(lines)}
             dated_diary = entries[0]
@@ -508,7 +520,7 @@ class DiaryHandler(DbOpsMixin):
             first_question = prompts[0]
             return {
                 "status": "success",
-                "message": f"📋 **开始写{template['name']}** ({diary_date})\n\n1/{len(prompts)}: {first_question}\n\n(发送 '退出' 可随时结束)",
+                "message": f"📋 开始写{template['name']} ({diary_date})\n\n1/{len(prompts)}: {first_question}\n\n(发送 '退出' 可随时结束)",
             }
         return self._format_template_fallback(template_id, diary_date)
 
@@ -518,7 +530,7 @@ class DiaryHandler(DbOpsMixin):
         if not template:
             return {"status": "error", "message": "❌ 模板不存在"}
         prompts = template.get("prompts", [])
-        lines   = [f"📋 **{template.get('name', template_id)}** ({diary_date})", ""]
+        lines   = [f"📋 {template.get('name', template_id)} ({diary_date})", ""]
         lines.extend(f"{idx}. {prompt}" for idx, prompt in enumerate(prompts, 1))
         lines.append("")
         lines.append("💡 用 /pendo diary add 写下答案，或稍后重试模板引导。")
@@ -654,10 +666,10 @@ class DiaryHandler(DbOpsMixin):
         """显示模板列表"""
         usable = self._get_usable_templates()
 
-        message = "📋 **日记模板**\n\n"
+        message = "📋 日记模板\n\n"
         for i, (_tid, tpl) in enumerate(usable, 1):
             prompts = tpl.get("prompts", [])
-            message += f"**{i}. {tpl['name']}**\n"
+            message += f"{i}. {tpl['name']}\n"
             for prompt in prompts[:2]:
                 message += f"  • {prompt}\n"
             if len(prompts) > 2:
@@ -673,37 +685,50 @@ class DiaryHandler(DbOpsMixin):
         template_hint = " | ".join(f"{i}.{tpl['name']}" for i, (_, tpl) in enumerate(usable, 1))
 
         return (
-            "📔 **日记帮助**\n\n"
-            "**写日记:**\n"
+            "📔 日记帮助\n\n"
+            "写日记:\n"
             "• /pendo diary add <内容> - 写今天的日记\n"
             "• /pendo diary add <日期> <内容> - 写指定日期\n"
             "  同一天可写多条，系统会按时间排序\n\n"
-            "**模板写日记:**\n"
+            "模板写日记:\n"
             f"• /pendo diary template <编号> - 模板引导写日记\n"
             f"  可选: {template_hint}\n\n"
-            "**查看:**\n"
+            "查看:\n"
             "• /pendo diary list [范围] [mood:情绪] [cat:分类] [#标签] - 日记列表(默认本月)\n"
             "  范围: today, tomorrow, week, month, year, YYYY-MM, last7d/last30d, start..end\n"
             "• /pendo diary view [日期|ID] - 查看详情\n\n"
-            "**其他:**\n"
+            "其他:\n"
             "• /pendo diary delete <日期|ID> - 删除日记"
         )
 
-    def _format_entry_time(self, diary: DiaryItem) -> str:
+    async def _user_zone(self, user_id: str) -> tzinfo:
+        return cast(tzinfo, await run_sync(TimezoneHelper.get_user_timezone, user_id, self.db))
+
+    @staticmethod
+    def _format_entry_time(diary: DiaryItem, zone: tzinfo | None = None) -> str:
+        """存储层把时刻统一为 UTC；展示时换回用户时区，否则会差出整段时差。"""
+
         raw = diary.entry_time or diary.created_at or ""
         try:
-            return datetime.fromisoformat(str(raw)).strftime("%H:%M")
+            moment = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
         except ValueError:
             return ""
+        if moment.tzinfo is not None and zone is not None:
+            moment = moment.astimezone(zone)
+        return moment.strftime("%H:%M")
 
-    def _format_diary_entry_detail(self, diary: DiaryItem, *, index: int | None = None) -> str:
+    def _format_diary_entry_detail(
+        self,
+        diary: DiaryItem,
+        *,
+        index: int | None   = None,
+        zone: tzinfo | None = None,
+    ) -> str:
         title_prefix = (
-            f"**{index}. {diary.title or '日记条目'}**"
-            if index
-            else f"**{diary.title or '日记条目'}**"
+            f"{index}. {diary.title or '日记条目'}" if index else f"{diary.title or '日记条目'}"
         )
         lines      = [title_prefix]
-        entry_time = self._format_entry_time(diary)
+        entry_time = self._format_entry_time(diary, zone)
         if entry_time:
             lines.append(f"🕘 时间: {entry_time}")
         if diary.mood:
@@ -720,7 +745,7 @@ class DiaryHandler(DbOpsMixin):
             lines.append("⭐ 收藏")
         if diary.template_answers:
             lines.append(f"📋 模板: {diary.template_id or '未命名模板'}")
-        lines.append(f"`{diary.display_id}`")
+        lines.append(f"{diary.display_id}")
         lines.append("")
         lines.append(diary.content or "")
         return "\n".join(lines)

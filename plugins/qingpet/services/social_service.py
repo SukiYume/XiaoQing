@@ -198,7 +198,7 @@ class SocialService:
         if not messages:
             return True, "📝 暂无留言"
 
-        lines = ["📝 **留言板**", ""]
+        lines = ["📝 留言板", ""]
         for msg in messages:
             created = msg.get("created_at", "未知时间")
             if isinstance(created, str) and len(created) > 16:
@@ -290,12 +290,12 @@ class SocialService:
         payload = settlement.payload or {}
 
         lines = [
-            "✊✌️✋ **猜拳**",
+            "✊✌️✋ 猜拳",
             "",
             f"你出了：{_RPS_NAMES[str(payload['player_choice'])]}",
             f"{settlement.pet_name}出了：{_RPS_NAMES[str(payload['npc_choice'])]}",
             "",
-            f"**{payload['result']}！**",
+            f"{payload['result']}！",
         ]
         message = "\n".join(lines) + self._reward_suffix(
             settlement,
@@ -353,12 +353,12 @@ class SocialService:
         payload = settlement.payload or {}
 
         lines = [
-            "🎲 **骰子**",
+            "🎲 骰子",
             "",
             f"你掷出了：{payload['player_dice']}",
             f"{settlement.pet_name}掷出了：{payload['pet_dice']}",
             "",
-            f"**{payload['result']}！**",
+            f"{payload['result']}！",
         ]
         message = "\n".join(lines) + self._reward_suffix(
             settlement,
@@ -441,7 +441,7 @@ class SocialService:
             outcome_text = f"😔 {settlement.opponent_pet_name}赢了！"
 
         message = (
-            f"🏃 **宠物赛跑**\n\n"
+            f"🏃 宠物赛跑\n\n"
             f"{settlement.pet_name} 🆚 {settlement.opponent_pet_name}\n\n"
             f"{outcome_text}"
         ) + self._reward_suffix(
@@ -462,7 +462,7 @@ class SocialService:
             return "🏆 展示会已结束（无投票数据）"
 
         medals = ["🥇", "🥈", "🥉"]
-        lines  = [f"🏆 **{settlement.title} 结果**", ""]
+        lines  = [f"🏆 {settlement.title} 结果", ""]
 
         for index, winner in enumerate(settlement.winners):
             medal = medals[index] if index < len(medals) else f"#{index + 1}"

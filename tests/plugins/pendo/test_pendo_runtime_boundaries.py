@@ -482,7 +482,7 @@ class TestPendoRuntimeBoundaries:
         overview    = pendo_main._show_help("")
         export_help = pendo_main._show_help("export")
 
-        assert "🧭 **可用命令**" in overview
+        assert "🧭 可用命令" in overview
         assert "• /pendo event" in overview
         assert "/pendo export <文件名>" not in overview
         assert "多节点事件会生成" not in overview
@@ -758,7 +758,7 @@ class TestPendoRuntimeBoundaries:
 
         assert result["status"] == "success"
         message = result["message"]
-        assert "📂 **work**" in message
-        assert "`w3`" in message
-        assert "`w7`" in message
-        assert "`w1`" not in message
+        assert "📂 work" in message
+        assert "w3" in message
+        assert "w7" in message
+        assert "w1" not in message

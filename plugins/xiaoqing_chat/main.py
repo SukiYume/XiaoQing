@@ -7,6 +7,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from core.interfaces import COMMAND_RUNNER_EVENT_KEY
 from core.plugin_base import segments
 from core.public_errors import public_error_message, public_error_response
 from core.router import (
@@ -147,6 +148,9 @@ async def handle(
         text = raw_args
         if not text:
             return []
+        if event.get(COMMAND_RUNNER_EVENT_KEY):
+            # 插件调用命令不是有人在说话：不能写进聊天记忆，也不能再转回 agent 形成循环。
+            return segments("/xc 的聊天入口只接受真人消息，不能作为工具调用。")
         # 显式 /xc 命令 → 标记强制回复，跳过概率判断
         event["_xc_command_forced"] = True
         return await handle_smalltalk(text, event, context)

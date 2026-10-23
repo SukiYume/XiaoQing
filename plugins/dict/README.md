@@ -85,8 +85,7 @@
 在仓库根目录运行：
 
 ```bash
-python -m pytest -q tests/plugins/dict/test_dict.py \
-  tests/plugins/contracts/test_dict_color_contracts.py
+python -m pytest -q tests/plugins/dict/test_dict.py
 python -m ruff check plugins/dict
 python -m mypy plugins/dict
 ```

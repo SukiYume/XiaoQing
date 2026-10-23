@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
+from plugins.xiaoqing_chat.persona import PersonaCard
 from plugins.xiaoqing_chat.planning.pfc_engine import PFCRunResult
 from plugins.xiaoqing_chat.planning.pfc_state import PFCConversationState
 from tests.helpers.xiaoqing_chat_test_support import (
@@ -66,7 +67,7 @@ async def test_smalltalk_no_reply_preserves_wait_action_name_in_action_history(
             brain_chat=SimpleNamespace(enable_private_brain_chat=False),
             max_context_size=10,
             planner=SimpleNamespace(resolve_think_level=lambda history_len=0: 0),
-            personality=SimpleNamespace(states=[], state_probability=0.0),
+            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
             debug=SimpleNamespace(log_latency=False),
         )
     )
@@ -175,16 +176,9 @@ async def test_generate_reply_forced_soft_rejection_uses_last_contextual_candida
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
-            personality=SimpleNamespace(
-                multiple_reply_style = [],
-                multiple_probability = 0.0,
-                identity             = "",
-                reply_style          = "",
-            ),
+            personality=SimpleNamespace(card=PersonaCard()),
             keyword_reaction=SimpleNamespace(keyword_rules=[], regex_rules=[]),
             brain_chat=SimpleNamespace(
-                brain_identity         = "",
-                brain_reply_style      = "",
                 brain_max_context_size = None,
                 brain_temperature      = None,
             ),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tests.helpers.app_test_support as _fixture_support
+from core.router import build_command_catalog_node, command_access
 from tests.helpers.app_test_support import (
     Any,
     AsyncMock,
@@ -16,6 +17,7 @@ from tests.helpers.app_test_support import (
     SimpleNamespace,
     XiaoQingApp,
     _plugin_context_for,
+    _publish_command,
     _register_test_loaded_plugin,
     _set_app_config,
     copy,
@@ -23,6 +25,7 @@ from tests.helpers.app_test_support import (
     patch,
     pytest,
 )
+from tests.helpers.paths import REPOSITORY_ROOT
 
 mock_dependencies = _fixture_support.mock_dependencies
 temp_app_root     = _fixture_support.temp_app_root
@@ -44,6 +47,7 @@ def test_app_grants_only_plugin_scoped_capabilities(temp_app_root: Path):
     app.config_manager.secrets_path.write_text(json.dumps(secrets), encoding="utf-8")
     app.config_manager.reload()
     app._load_admins(secrets)
+    _publish_command(app, "bot_core", "set_secret", permission="bot_admin", contexts=("private",))
     principal = app.issue_user_principal(
         {"user_id": 12345},
         user_id    = 12345,
@@ -209,7 +213,8 @@ def test_app_rejects_forged_copied_and_mismatched_principals(temp_app_root: Path
 
 @pytest.mark.unit
 def test_app_recomputes_admin_capability_after_revocation(temp_app_root: Path):
-    app       = XiaoQingApp(temp_app_root)
+    app = XiaoQingApp(temp_app_root)
+    _publish_command(app, "bot_core", "set_secret", permission="bot_admin", contexts=("private",))
     principal = app.issue_user_principal(
         {"user_id": 12345},
         user_id    = 12345,
@@ -330,6 +335,7 @@ async def test_bot_core_secret_admin_works_with_production_context(temp_app_root
         capabilities = frozenset({"secret_admin"}),
     )
     _register_test_loaded_plugin(app, definition, bot_core)
+    _publish_command(app, "bot_core", "set_secret", permission="bot_admin", contexts=("private",))
     context = app.plugin_manager.build_context(
         "bot_core",
         user_id   = 12345,
@@ -636,6 +642,7 @@ async def test_arxiv_codex_capability_uses_real_target_context_and_rechecks_admi
         ),
     )
     _register_test_loaded_plugin(app, definition, module)
+    _publish_command(app, "codex", "codex", permission="bot_admin")
     source = _plugin_context_for(
         app,
         "arxiv_filter",
@@ -676,7 +683,8 @@ async def test_arxiv_codex_capability_uses_real_target_context_and_rechecks_admi
 async def test_arxiv_codex_capability_is_source_scoped_and_resolves_current_loaded_gate(
     temp_app_root: Path,
 ):
-    app       = XiaoQingApp(temp_app_root)
+    app = XiaoQingApp(temp_app_root)
+    _publish_command(app, "codex", "codex", permission="bot_admin")
     principal = app.issue_user_principal(
         {"user_id": 12345},
         user_id    = 12345,
@@ -733,6 +741,8 @@ async def test_arxiv_codex_capability_is_source_scoped_and_resolves_current_load
             ),
         )
         _register_test_loaded_plugin(app, definition, module)
+        # 测试里的插件定义没有命令；和生产一样重新发布 /codex，授权跟着它走。
+        _publish_command(app, "codex", "codex", permission="bot_admin")
 
     install("first")
     assert (
@@ -894,8 +904,7 @@ async def test_xiaoqing_provider_scope_uses_production_principal_capabilities(
         patch("plugins.xiaoqing_chat.commands.get_state", return_value=state),
         patch("plugins.xiaoqing_chat.chat_runtime._state", return_value=state),
     ):
-        local_result  = await handle_provider("glm", group_admin_event, group_context)
-        denied_global = await handle_provider("global glm", group_admin_event, group_context)
+        local_result = await handle_provider("glm", group_admin_event, group_context)
         group_a = ai_route_context(group_context, chat_id="g100")
         group_b = ai_route_context(group_context, chat_id="g200")
 
@@ -920,7 +929,14 @@ async def test_xiaoqing_provider_scope_uses_production_principal_capabilities(
         global_result = await handle_provider("global glm", bot_admin_event, bot_context)
 
     assert "当前会话模型" in local_result[0]["data"]["text"]
-    assert "Bot 全局管理员" in denied_global[0]["data"]["text"]
+    # 全局切换只给 Bot 管理员：写在 plugin.json 里，Core 用签发的身份在调用插件前判断。
+    manifest = json.loads(
+        (REPOSITORY_ROOT / "plugins" / "xiaoqing_chat" / "plugin.json").read_text(encoding="utf-8")
+    )
+    xc_root = build_command_catalog_node("xiaoqing_chat", manifest["commands"][0], root=True)
+    global_node = xc_root.resolve_child("model").resolve_child("global")
+    assert command_access(global_node, group_admin) == "bot_admin"
+    assert command_access(global_node, bot_admin) is None
     assert group_a["_provider_name"] == "glm"
     assert group_b["_provider_name"] == "deepseek"
     assert "全局运行时模型" in global_result[0]["data"]["text"]

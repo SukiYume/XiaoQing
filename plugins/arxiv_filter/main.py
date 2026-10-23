@@ -310,7 +310,7 @@ async def handle(
         source_date = await _latest_arxiv_source_date(context)
         return await _run_filter(
             context,
-            allow_codex_sidecar = _is_admin_user(context, event.get("user_id")),
+            allow_codex_sidecar = _codex_summary_granted(context),
             source_date         = source_date,
         )
 
@@ -332,17 +332,11 @@ async def shutdown(context: PluginContextProtocol) -> None:
     _MODEL_FINGERPRINT_CACHE.clear()
 
 
-def _is_admin_user(context: PluginContextProtocol, user_id: object) -> bool:
-    is_global_admin = getattr(context, "is_global_admin", None)
-    if callable(is_global_admin):
-        return bool(is_global_admin(user_id))
-    principal    = getattr(context, "principal", None)
+def _codex_summary_granted(context: PluginContextProtocol) -> bool:
+    """Core 只在此人此刻能用 ``/codex``（plugin.json 声明）时发出 Codex 摘要能力。"""
+
     capabilities = getattr(context, "capabilities", None)
-    if principal is None or not getattr(capabilities, "is_bot_admin", False):
-        return False
-    if type(principal.user_id) is not int or type(user_id) is not int:
-        return False
-    return principal.user_id == user_id
+    return getattr(capabilities, "codex_arxiv_summary", None) is not None
 
 
 def _scheduled_without_delivery_targets(context: PluginContextProtocol) -> bool:

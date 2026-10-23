@@ -739,6 +739,28 @@ async def test_qingssh_main_does_not_replace_another_plugin_session(
 
 
 @pytest.mark.asyncio
+async def test_qingssh_interactive_connect_refuses_the_agent_command_runner(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """交互连接按“用户 + 会话 + 服务器”登记，替 agent 连接会顶掉本人正在用的同名连接。"""
+
+    from core.interfaces import COMMAND_RUNNER_EVENT_KEY
+    from plugins.qingssh import handlers as handlers_module
+
+    context = with_settings_reader(Mock(current_user_id=10001, current_group_id=50001))
+    context.get_session = AsyncMock(return_value=None)
+    manager = Mock()
+    monkeypatch.setattr(handlers_module, "PARAMIKO_AVAILABLE", True)
+
+    result = await handlers_module.handle_ssh_main(
+        "srv", {COMMAND_RUNNER_EVENT_KEY: "xiaoqing_agent"}, context, manager
+    )
+
+    assert "ssh_run" in result[0]["data"]["text"]
+    manager.connect.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_qingssh_quick_add_rejects_surplus_arguments():
     from plugins.qingssh import handlers as handlers_module
 

@@ -12,10 +12,9 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from .runtime_state import ChatRuntime
 from .brain_chat import (
-    get_brain_chat_identity,
     get_brain_chat_max_context,
-    get_brain_chat_reply_style,
     get_brain_chat_temperature,
+    persona_reply_style,
 )
 from .chat_event import event_chat_id, is_private_event
 from .chat_runtime import ai_route_context, configured_bot_name, llm_call_config
@@ -26,6 +25,8 @@ from .context_builder import (
     sender_profile_context,
     tool_status_context,
 )
+from .llm.communication_constraints import requested_char_count
+from .llm.llm_config import LLMCallConfig
 from .logging_utils import log_step
 from .media.marker_resolver import (
     build_media_candidates_block,
@@ -151,6 +152,8 @@ class ReplyGenerationPlan:
     state_text: str
     started_at: float
     media_candidates: str = ""
+    # 只对这一条的额外要求（比如告别收尾），叠加在人设的说话方式之后。
+    turn_note: str = ""
 
 
 def _load_reply_context_blocks(
@@ -219,14 +222,14 @@ async def _load_reply_history(
     return active, tuple(recent[: len(recent) - len(active)][-6:])
 
 
-def _sample_alternate_style(runtime: ChatRuntime) -> str:
-    """按配置概率抽一条备选回复风格；未抽中返回空串，沿用默认风格。"""
-    personality = runtime.cfg.personality
-    if personality.multiple_reply_style and random.random() < max(
-        0.0, min(1.0, personality.multiple_probability)
-    ):
-        return random.choice(personality.multiple_reply_style).strip()
-    return ""
+def foreground_call_config(runtime: ChatRuntime, text: str) -> LLMCallConfig:
+    """前台生成的调用参数；对方明确要长文时（“写个800字的检讨”）按字数放宽输出预算和超时。"""
+
+    foreground = llm_call_config(runtime.cfg, foreground=True)
+    length = requested_char_count(text)
+    if length is not None and length.mode != "at_most":
+        return foreground.with_room_for(length.count)
+    return foreground
 
 
 async def prepare_reply_generation(
@@ -241,7 +244,7 @@ async def prepare_reply_generation(
     plan_reasoning: str,
     bot_name: str,
     secrets: dict[str, Any] | None,
-    reply_style_override: str,
+    turn_note: str,
     state_text: str,
     is_brain_chat: bool,
 ) -> ReplyGenerationPlan:
@@ -268,7 +271,7 @@ async def prepare_reply_generation(
     )
 
     resolved_secrets = dict(secrets or ai_route_context(context, chat_id=chat_id))
-    foreground = llm_call_config(runtime.cfg, foreground=True)
+    foreground = foreground_call_config(runtime, text)
     request_id = str(context.request_id or "")
     (
         profile_block,
@@ -302,7 +305,6 @@ async def prepare_reply_generation(
             step    = "reply.expression.pick",
             fields  = {"picked": len(expression_block)},
         )
-    style_override = reply_style_override.strip() or _sample_alternate_style(runtime)
     keyword_rules, regex_rules = _select_reaction_rules(runtime, text)
 
     merged_reasoning = _merge_planner_reasoning(action.reasoning, plan_reasoning)
@@ -352,9 +354,10 @@ async def prepare_reply_generation(
         merged_reasoning   = merged_reasoning,
         effective_goal     = effective_goal,
         tool_info_block    = tool_info_block,
-        effective_identity = get_brain_chat_identity(runtime, is_brain_chat),
-        effective_style    = style_override or get_brain_chat_reply_style(runtime, is_brain_chat),
+        effective_identity = runtime.cfg.personality.card.facts(bot_name),
+        effective_style    = persona_reply_style(runtime, is_brain_chat, bot_name),
         state_text         = state_text,
         started_at         = started_at,
         media_candidates   = media_candidates,
+        turn_note          = turn_note.strip(),
     )

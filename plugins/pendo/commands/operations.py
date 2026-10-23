@@ -74,7 +74,7 @@ def _confirmed_item_message(item: Item, item_id: str, now: datetime) -> str:
     reminder_note = f"后续还有 {future_count} 个提醒" if future_count else "没有更多提醒了"
     return (
         f"✅ 已确认{icon} {item.title or '无标题'}\n\n"
-        f"`{public_id(item_id)}`\n\n💡 此次提醒已确认，{reminder_note}"
+        f"{public_id(item_id)}\n\n💡 此次提醒已确认，{reminder_note}"
     )
 
 

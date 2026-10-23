@@ -334,6 +334,24 @@ Pendo 的五个 Web 字段按配置 revision 原子发布，监听地址变化�
 
 四条 XiaoQing Chat route 分别拥有模型顺序、单次超时、总超时和重试策略。发行配置的 `checker` route 通过 `request_defaults.thinking.type = "disabled"` 关闭思考以缩短审查延迟。行为、参与、记忆和表达参数位于 `plugins/xiaoqing_chat/config/xiaoqing_config.json`，也可写在 `config.plugins.xiaoqing_chat` 下，两者合并时文件中的值优先；[XiaoQing Chat 配置](../plugins/xiaoqing_chat/README.md#行为配置) 逐组说明这些字段。
 
+### XiaoQing Agent
+
+有人叫小青做事时的任务代理，所有人可用、能力按各自权限，默认关闭：
+
+| 路径 | 默认 | 说明 |
+|---|---|---|
+| `plugins.xiaoqing_agent.enabled` | `false` | 总开关；关闭时 `xiaoqing_chat` 照常回复，与没有安装 agent 时一致，修改后下一条消息生效 |
+| `plugins.xiaoqing_agent.ai.routes.agent` | 必填 | 执行 route，模型需支持 `tools` 调用 |
+| `plugins.xiaoqing_agent.ai.routes.triage` | 复用 `agent` | “聊天还是做事”判断 route，建议快速、关闭思考的模型 |
+| `plugins.xiaoqing_agent.inline_wait_seconds` | `12` | 当轮等待结果的秒数，超出后先回一句再后台交付 |
+| `plugins.xiaoqing_agent.task_timeout_seconds` | `1800` | 单个任务总时长 |
+| `plugins.xiaoqing_agent.max_steps` | `40` | 单个任务的模型轮数 |
+| `plugins.xiaoqing_agent.max_admin_tasks` | `3` | Bot 管理员的任务同时运行数 |
+| `plugins.xiaoqing_agent.max_member_tasks` | `4` | 其他人的任务合计同时运行数；`0` 表示只有 Bot 管理员能用 |
+| `plugins.xiaoqing_agent.max_tasks_per_member` | `1` | 其他人每人同时运行的任务数 |
+
+agent 能做的就是发起人自己直接发命令能做的：命令按各自权限检查，Python、Shell、文件读写、SSH、Codex 分别跟随 `/shell`、`/ssh`、`/codex` 在 plugin.json 里的声明（这几条命令只给 Bot 管理员）。全部字段、工具与数据目录见 [XiaoQing Agent](../plugins/xiaoqing_agent/README.md#开启)。
+
 ### QingSSH
 
 公开预算字段位于 `plugins.qingssh`：
@@ -375,7 +393,7 @@ Pendo 的五个 Web 字段按配置 revision 原子发布，监听地址变化�
 | `plugins.shell.terminal.executable` | Git Bash 绝对路径 | `git-bash` 后端的解释器路径 |
 | `plugins.smalltalk.voice_probability` | `0` | 纯文本闲聊转语音概率，范围 `0..1` |
 
-Shell 命令启用列表、工作目录与审计开关位于 `secrets.plugins.shell`；[Shell 配置](../plugins/shell/README.md#终端配置) 说明两种后端。[插件使用手册](09-plugins.md) 说明全部 30 个插件的配置入口与数据位置。
+Shell 命令启用列表、工作目录与审计开关位于 `secrets.plugins.shell`；[Shell 配置](../plugins/shell/README.md#终端配置) 说明两种后端。[插件使用手册](09-plugins.md) 说明全部 31 个插件的配置入口与数据位置。
 
 ---
 

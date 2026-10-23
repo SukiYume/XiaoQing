@@ -26,6 +26,7 @@ from core.delivery import DeliveryReceipt, DeliverySegments
 from core.interfaces import DeliveryTarget, PluginPrincipal
 from core.onebot import OneBotActionOutcomeUnknown
 from core.plugin_manager import LoadedPlugin, PluginDefinition, PluginServiceDefinition
+from core.router import CommandSpec, build_command_catalog_node
 from core.server import BroadcastResult, InboundManager
 from tests.helpers.asyncio_tools import (
     BlockingConcurrencyProbe,
@@ -142,6 +143,43 @@ def _register_test_loaded_plugin(
     app.plugin_manager._register_loaded_plugin(definition, module, 0.0)
 
 
+def _publish_command(
+    app: XiaoQingApp,
+    plugin: str,
+    name: str,
+    *,
+    permission: str           = "public",
+    contexts: tuple[str, ...] = ("private", "group"),
+) -> None:
+    """在测试应用的命令目录里发布一条命令；Core 发出的能力按对应命令的声明授权。"""
+
+    async def unused(_command, _args, _event, _context):
+        raise AssertionError("published test command is not executed")
+
+    catalog = build_command_catalog_node(
+        plugin,
+        {
+            "name": name,
+            "triggers": [name],
+            "help": "测试命令",
+            "permission": permission,
+            "contexts": list(contexts),
+        },
+        root=True,
+    )
+    app.router.register(
+        CommandSpec(
+            plugin     = plugin,
+            name       = name,
+            triggers   = [name],
+            help_text  = "测试命令",
+            admin_only = permission == "bot_admin",
+            handler    = unused,
+            catalog    = catalog,
+        )
+    )
+
+
 __all__ = (
     "Any",
     "ApplicationLifecycleFatalError",
@@ -168,6 +206,7 @@ __all__ = (
     "XiaoQingApp",
     "_onebot_credentials",
     "_plugin_context_for",
+    "_publish_command",
     "_register_test_loaded_plugin",
     "_set_app_config",
     "asyncio",

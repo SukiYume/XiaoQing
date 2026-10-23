@@ -1,6 +1,6 @@
 # 🧮 Wolfram|Alpha
 
-`wolframalpha` 通过固定 Wolfram|Alpha HTTPS API 执行数学、物理、化学、单位换算和公开数据查询。Manifest 将命令限定为 Bot 管理员入口。
+`wolframalpha` 通过固定 Wolfram|Alpha HTTPS API 执行数学、物理、化学、单位换算和公开数据查询。所有人都可以在私聊和群聊里使用。
 
 ---
 

@@ -126,23 +126,31 @@ def test_every_plugin_exposes_a_complete_recursive_command_contract() -> None:
                 assert invocation.root is root
 
 
-def test_sensitive_command_surfaces_declare_private_contexts() -> None:
-    """高权限与个人数据入口必须由发布目录声明私聊边界。"""
+def test_sensitive_command_surfaces_declare_their_boundaries() -> None:
+    """个人数据入口由发布目录声明私聊边界；本机与服务器执行入口群里也能用，但只给 Bot 管理员。"""
 
-    fixture              = _load_catalog()
-    private_root_plugins = {
-        "shell",
-        "jupyter",
-        "qingssh",
-        "codex",
-        "minecraft",
-        "pendo",
-    }
+    fixture = _load_catalog()
     for root in fixture.roots:
-        if root.plugin in private_root_plugins:
+        if root.plugin == "pendo":
             assert root.contexts == ("private",), root.code
+        if root.plugin in {"shell", "jupyter", "qingssh", "codex"}:
+            assert root.permission == "bot_admin", root.code
+            assert root.contexts == ("private", "group"), root.code
 
-    nodes                  = {node.code: node for root in fixture.roots for node in root.walk()}
+    nodes = {node.code: node for root in fixture.roots for node in root.walk()}
+    # Minecraft 群里所有人都能聊天和看在线玩家；连接、断开和原样服务器命令只给 Bot 管理员。
+    for code in ("minecraft.mc.say", "minecraft.mc.tell", "minecraft.mc.list", "minecraft.mc"):
+        assert nodes[code].permission == "public", code
+        assert nodes[code].contexts == ("private", "group"), code
+    for code in (
+        "minecraft.mc.connect",
+        "minecraft.mc.disconnect",
+        "minecraft.mc.run",
+        "minecraft.mcconnect",
+        "minecraft.mcdisconnect",
+    ):
+        assert nodes[code].permission == "bot_admin", code
+
     private_paper_prefixes = (
         "ads_paper.paper.note",
         "ads_paper.paper.writing",

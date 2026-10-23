@@ -3,6 +3,7 @@ import pytest
 from plugins.xiaoqing_chat.config.config import PersonalityConfig
 from plugins.xiaoqing_chat.llm.prompt_builder import build_dialogue_prompt, build_prompt_messages
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
+from plugins.xiaoqing_chat.persona import SCOPE_CHAT, SCOPE_DEEP, PersonaCard
 from plugins.xiaoqing_chat.reply_fallbacks import _concise_public_identity
 from plugins.xiaoqing_chat.runtime_state import get_state
 
@@ -32,6 +33,9 @@ def test_current_turn_keeps_speaker_distinct_from_leading_vocative(current, spok
     assert f"{spoken}。引起了你的注意" in messages[-1].content
 
 
+_CARD = PersonaCard.parse("## 你是谁\n- 住校的理工科学生。\n\n## 说话方式〔聊天〕\n- 口语化")
+
+
 def test_explicit_definition_stays_in_data_context_and_original_request_is_retained():
     messages = build_prompt_messages(
         is_private    = False,
@@ -51,37 +55,34 @@ def test_explicit_definition_stays_in_data_context_and_original_request_is_retai
     assert "我入库成功，找了七分钟" in messages[-1].content
 
 
-def test_default_personality_states_only_describe_current_conversation_style() -> None:
+def test_default_persona_card_moods_only_describe_current_conversation_style() -> None:
     from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
 
-    cfg = XiaoQingChatConfig()
-    assert cfg.personality.states
-    assert all(state.startswith("现在") for state in cfg.personality.states)
+    cfg   = XiaoQingChatConfig()
+    moods = cfg.personality.card.moods
+    assert moods
+    assert all(mood.startswith("现在") for mood in moods)
     assert all(
-        marker not in state
-        for state in cfg.personality.states
+        marker not in mood
+        for mood in moods
         for marker in ("曾经", "上次", "去年", "最近", "刚刚", "已经")
     )
     assert cfg.fallback_idle_replies == ["我在听", "你接着说", "我想一下"]
-    assert "不为了显得深入而强行升华" in cfg.brain_chat.brain_identity
     assert cfg.personality.allow_low_stakes_persona_fiction is True
-    assert "小青" not in cfg.personality.identity
-    assert "小青" not in cfg.brain_chat.brain_identity
-    assert "住校的大二理工科女生" in cfg.personality.identity
-    assert "动画、漫画、游戏、轻小说和同人创作" in cfg.personality.identity
-    assert "天文、电脑" in cfg.personality.identity
-    assert "合适时轻轻接一个梗" in cfg.personality.reply_style
-    assert "已能接住的话自然收尾" in cfg.personality.reply_style
+    facts = cfg.personality.card.facts("小青")
+    assert "女生" in facts and "大二" in facts and "物理" in facts
+    assert "动画" in facts and "天文" in facts
+    chat = cfg.personality.card.scoped(SCOPE_CHAT, "小青")
+    assert "接梗往前推一步" in chat and "真想知道才问" in chat
+    assert "不为了显得深入而升华" in cfg.personality.card.scoped(SCOPE_DEEP, "小青")
     assert cfg.memory.conversation_idle_gap_seconds == 1800.0
 
 
 def test_prompt_builder_discourages_repetitive_clarifying_questions() -> None:
     personality = PersonalityConfig(
         polite_guardrail  = True,
-        identity          = "住校的理工科学生。",
-        states            = [],
+        card              = _CARD,
         state_probability = 0.0,
-        reply_style       = "口语化",
     )
 
     msgs = build_prompt_messages(
@@ -100,7 +101,8 @@ def test_prompt_builder_discourages_repetitive_clarifying_questions() -> None:
     system_prompt = msgs[0].content
     assert msgs[0].role == "system"
     assert msgs[1].role == "user"
-    assert personality.identity in system_prompt
+    assert "住校的理工科学生。" in system_prompt
+    assert "- 口语化" in system_prompt
     assert "放弃下载了，太大了" in msgs[1].content
     assert "放弃下载了，太大了" not in system_prompt
     assert "测试用户" in msgs[1].content
@@ -108,9 +110,8 @@ def test_prompt_builder_discourages_repetitive_clarifying_questions() -> None:
 
 def test_prompt_builder_can_disable_persona_story_creation() -> None:
     personality = PersonalityConfig(
-        identity                         = "住校的理工科学生。",
+        card                             = _CARD,
         allow_low_stakes_persona_fiction = False,
-        states                           = [],
     )
 
     msgs = build_prompt_messages(
@@ -132,26 +133,25 @@ def test_prompt_builder_can_disable_persona_story_creation() -> None:
 
 
 def test_brain_chat_keeps_base_persona_and_adds_mode_rules() -> None:
-    from plugins.xiaoqing_chat.brain_chat import get_brain_chat_identity
+    from plugins.xiaoqing_chat.brain_chat import persona_reply_style
     from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
 
     cfg     = XiaoQingChatConfig()
     runtime = type("Runtime", (), {"cfg": cfg})()
+    card    = cfg.personality.card
 
-    identity = get_brain_chat_identity(runtime, True)
-
-    assert cfg.personality.identity in identity
-    assert cfg.brain_chat.brain_identity in identity
-    assert "深度对话方式补充" in identity
+    # 深度模式只在聊天说话方式之后追加〔深度对话〕一节，人还是同一个。
+    assert persona_reply_style(runtime, False, "小青") == card.scoped(SCOPE_CHAT, "小青")
+    deep = persona_reply_style(runtime, True, "小青")
+    assert deep.startswith(card.scoped(SCOPE_CHAT, "小青"))
+    assert deep.endswith(card.scoped(SCOPE_DEEP, "小青"))
 
 
 def test_prompt_builder_does_not_include_user_id_in_name() -> None:
     personality = PersonalityConfig(
         polite_guardrail  = True,
-        identity          = "住校的理工科学生。",
-        states            = [],
+        card              = _CARD,
         state_probability = 0.0,
-        reply_style       = "口语化",
     )
 
     msgs = build_prompt_messages(
@@ -182,10 +182,8 @@ def test_prompt_builder_does_not_include_user_id_in_name() -> None:
 def test_prompt_builder_treats_media_markers_as_real_content() -> None:
     personality = PersonalityConfig(
         polite_guardrail  = True,
-        identity          = "住校的理工科学生。",
-        states            = [],
+        card              = _CARD,
         state_probability = 0.0,
-        reply_style       = "口语化",
     )
 
     msgs = build_prompt_messages(
@@ -212,10 +210,8 @@ def test_prompt_builder_treats_media_markers_as_real_content() -> None:
 def test_prompt_builder_rehydrates_media_marker_from_registry(tmp_path) -> None:
     personality = PersonalityConfig(
         polite_guardrail  = True,
-        identity          = "住校的理工科学生。",
-        states            = [],
+        card              = _CARD,
         state_probability = 0.0,
-        reply_style       = "口语化",
     )
     state = get_state()
     state.media_store.bind(tmp_path)
@@ -268,10 +264,8 @@ def test_prompt_builder_rehydrates_media_marker_from_registry(tmp_path) -> None:
 def test_prompt_builder_prefers_canonical_parts_when_legacy_fields_are_stale(tmp_path) -> None:
     personality = PersonalityConfig(
         polite_guardrail  = True,
-        identity          = "住校的理工科学生。",
-        states            = [],
+        card              = _CARD,
         state_probability = 0.0,
-        reply_style       = "口语化",
     )
     state = get_state()
     state.media_store.bind(tmp_path)
@@ -323,10 +317,8 @@ def test_prompt_builder_prefers_canonical_parts_when_legacy_fields_are_stale(tmp
 def test_prompt_builder_uses_media_only_reply_target_block_for_current_parts() -> None:
     personality = PersonalityConfig(
         polite_guardrail  = True,
-        identity          = "住校的理工科学生。",
-        states            = [],
+        card              = _CARD,
         state_probability = 0.0,
-        reply_style       = "口语化",
     )
 
     msgs = build_prompt_messages(
@@ -357,10 +349,8 @@ def test_prompt_builder_uses_media_only_reply_target_block_for_current_parts() -
 def test_prompt_builder_treats_media_only_emoji_text_as_user_speech() -> None:
     personality = PersonalityConfig(
         polite_guardrail  = True,
-        identity          = "住校的理工科学生。",
-        states            = [],
+        card              = _CARD,
         state_probability = 0.0,
-        reply_style       = "口语化",
     )
 
     msgs = build_prompt_messages(
@@ -392,10 +382,8 @@ def test_prompt_builder_treats_media_only_emoji_text_as_user_speech() -> None:
 def test_prompt_builder_treats_media_only_qq_face_as_tone() -> None:
     personality = PersonalityConfig(
         polite_guardrail  = True,
-        identity          = "住校的理工科学生。",
-        states            = [],
+        card              = _CARD,
         state_probability = 0.0,
-        reply_style       = "口语化",
     )
 
     msgs = build_prompt_messages(
@@ -426,10 +414,8 @@ def test_prompt_builder_treats_media_only_qq_face_as_tone() -> None:
 def test_prompt_builder_uses_mixed_reply_target_block_for_current_parts() -> None:
     personality = PersonalityConfig(
         polite_guardrail  = True,
-        identity          = "住校的理工科学生。",
-        states            = [],
+        card              = _CARD,
         state_probability = 0.0,
-        reply_style       = "口语化",
     )
 
     msgs = build_prompt_messages(
@@ -463,10 +449,8 @@ def test_prompt_builder_uses_mixed_reply_target_block_for_current_parts() -> Non
 def test_prompt_builder_does_not_duplicate_current_turn_when_history_already_contains_it() -> None:
     personality = PersonalityConfig(
         polite_guardrail  = True,
-        identity          = "住校的理工科学生。",
-        states            = [],
+        card              = _CARD,
         state_probability = 0.0,
-        reply_style       = "口语化",
     )
 
     current_parts = (

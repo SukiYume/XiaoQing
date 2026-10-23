@@ -9,10 +9,18 @@ from typing import Any
 
 from .config.config import XiaoQingChatConfig, load_xiaoqing_chat_config
 from .llm.llm_config import LLMCallConfig
-from .persona import resolve_bot_name
+from .persona import persona_card_path, resolve_bot_name
 from .runtime_state import ChatRuntime
 from .runtime_state import get_state as _state
 from .utils.wall_clock import configure_wall_clock
+
+
+def _mtime_ns(path: Path) -> int:
+    return path.stat().st_mtime_ns if path.exists() else -1
+
+
+def _persona_mtime(plugin_dir: Path, cfg: XiaoQingChatConfig) -> int:
+    return _mtime_ns(persona_card_path(plugin_dir, cfg.personality.persona_file))
 
 
 def chat_lock(chat_id: str):
@@ -40,19 +48,23 @@ def load_runtime(context: Any) -> ChatRuntime:
         config_path = config_path_root
     else:
         config_path = config_path_sub  # 文件尚不存在时仍监听约定路径。
-    mtime = config_path.stat().st_mtime_ns if config_path.exists() else -1
+    config_mtime = _mtime_ns(config_path)
 
     state  = _state()
     cached = state.get_runtime(config_key)
+    # 改配置文件或人设卡都在下一条消息生效。
     if (
         cached is not None
-        and state.get_runtime_mtime(config_key) == mtime
         and state.get_runtime_revision(config_key) == settings.revision
+        and state.get_runtime_mtime(config_key)
+        == (config_mtime, _persona_mtime(plugin_dir, cached.cfg))
     ):
         return cached
 
     try:
-        cfg = load_xiaoqing_chat_config(context_config=settings.config, plugin_dir=plugin_dir)
+        cfg = load_xiaoqing_chat_config(
+            context_config=settings.config, plugin_dir=plugin_dir, logger=context.logger
+        )
         compiled = []
         for pattern in cfg.ban_regex:
             try:
@@ -76,7 +88,9 @@ def load_runtime(context: Any) -> ChatRuntime:
             "xiaoqing_chat config reload retained previous version: %s", type(exc).__name__
         )
         return cached
-    state.set_runtime(config_key, runtime, mtime, settings.revision)
+    state.set_runtime(
+        config_key, runtime, (config_mtime, _persona_mtime(plugin_dir, cfg)), settings.revision
+    )
     return runtime
 
 

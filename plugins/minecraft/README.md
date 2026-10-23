@@ -1,12 +1,12 @@
 # ⛏️ Minecraft
 
-`minecraft` 让 Bot 管理员通过 QQ 私聊连接 Minecraft Java Edition RCON，并把本机可读的服务器日志事件转发到发起连接的私聊。Java 服务进程由部署工具负责管理。
+`minecraft` 让 Bot 管理员在 QQ 私聊或群里连接 Minecraft Java Edition RCON，并把本机可读的服务器日志事件转发到这个私聊或群。连上之后，群里所有人都能和游戏里的玩家聊天。Java 服务进程由部署工具负责管理。
 
 ---
 
 ## 🔐 权限与命令
 
-三个 Manifest 命令均为管理员私聊入口。
+三个 Manifest 命令私聊和群聊都能用。连接、断开和 `/mc run` 服务器命令只给 Bot 管理员（都写在 plugin.json 的子命令声明里，由 Core 检查）；`/mc say`、`/mc tell`、`/mc list`、`/mc status`、`/mc help` 所有人可用，使用的是当前私聊或群的连接。
 
 <!-- manifest-command-aliases:start -->
 | 功能 | 推荐入口 | Manifest 等价别名 |
@@ -20,15 +20,16 @@
 | --- | --- |
 | `/mc help` | 显示本地帮助 |
 | `/mc connect <配置名>` | 读取本地 profile 并连接 |
-| `/mc status` | 查看当前私聊的连接和日志监控状态 |
-| `/mc <服务器命令>` | 执行完整 RCON 命令 |
-| `/mc say <消息>` | 向全部在线玩家广播 |
-| `/mc tell <玩家名> <消息>` | 向指定玩家发送私信 |
-| `/mc disconnect` | 关闭当前私聊的连接 |
+| `/mc status` | 查看本会话的连接和日志监控状态 |
+| `/mc list` | 查看在线玩家（所有人） |
+| `/mc say <消息>` | 用自己的 QQ 名字对全部在线玩家说（所有人） |
+| `/mc tell <玩家名> <消息>` | 悄悄对一名玩家说（所有人） |
+| `/mc run <服务器命令>` | 原样执行一条 RCON 命令（Bot 管理员） |
+| `/mc disconnect` | 关闭本会话的连接 |
 | `/mcconnect <配置名>` | 等价于 `/mc connect <配置名>` |
 | `/mcdisconnect` | 等价于 `/mc disconnect` |
 
-`say`、`tell` 和 `tellraw` 属于 Minecraft 服务端命令。插件会把 `/mc` 后的完整内容通过 RCON 发送。
+`/mc say` 与 `/mc tell` 以 `tellraw` 文本组件发出，游戏里显示为 `[QQ] <QQ 名字> 消息`；消息合并为一行，最长 256 个字符，其中的 `@a`、`@e` 等目标选择器和命令都只当文字。`/mc tell` 的玩家名限 1～16 个字母、数字或下划线。其他内容由 Bot 管理员原样通过 RCON 发送。
 
 ---
 
@@ -91,7 +92,7 @@ Minecraft 服务端需要启用 RCON，并使用与 profile 一致的端口和�
 
 ## 🔐 连接与响应边界
 
-- 每名私聊管理员拥有独立连接；重连会原子发布新连接并关闭旧连接；
+- 每个私聊或群拥有独立连接；重连会原子发布新连接并关闭旧连接；
 - 单连接内的建连、认证、命令和关闭按顺序执行；
 - 命令长度上限为 4096 UTF-8 字节；
 - 协议校验覆盖小端长度、请求 ID、包类型、双 NUL、UTF-8 和累计响应；
@@ -112,7 +113,7 @@ Minecraft 服务端需要启用 RCON，并使用与 profile 一致的端口和�
 - 玩家死亡；
 - 玩家进度。
 
-消息发送到发起连接的 QQ 私聊。初次启用从文件末尾建立游标，后续进度保存在：
+消息发送到连接所属的私聊或群。群只有在 `default_group_ids`（`check_log` 定时任务的目标群）里才会收到转发：其他群连接时会说明不转发日志、只能用命令；连接后从目标群里移除的群暂停轮询。初次启用从文件末尾建立游标，后续进度保存在：
 
 ```text
 data/minecraft/log_cursors/

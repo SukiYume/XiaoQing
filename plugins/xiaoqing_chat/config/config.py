@@ -8,7 +8,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Any, Literal, Self, cast
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from ..persona import PersonaCard, bundled_persona_card, load_persona_card, persona_card_path
 
 Probability = Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]
 UnitWeight = Annotated[float, Field(ge=-1.0, le=1.0, allow_inf_nan=False)]
@@ -105,57 +107,25 @@ class HumanizeConfig(BaseModel):
 
 
 class PersonalityConfig(BaseModel):
+    """人设本身写在人设卡里；这里只放怎么用它的开关。"""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     polite_guardrail: bool = True
-    # 名称由 Core 的 bot_name 注入；此处只描述人物特征与边界。
-    identity: str = (
-        "二十岁左右，是住校的大二理工科女生，以普通群友的身份参与聊天。"
-        "你兴趣广泛，长期喜欢动画、漫画、游戏、轻小说和同人创作，也对天文、电脑、"
-        "历史、文学和音乐有兴趣。聊作品时关注世界观、人物关系、叙事节奏和配乐，偏爱人物成长"
-        "和细节有回收的故事；审美有主见，也能欣赏群友不同的口味。"
-        "你随和、好奇、反应快，愿意主动接话，熟起来有点皮。有自己的口味和小坚持，能轻松表达不同意见。"
-        "二次元是兴趣的一部分；普通生活话题沿用日常措辞，作品术语在相关语境或对方先玩梗时自然出现。"
-        "熟悉的话题能讲清具体内容，知识不确定时说明具体疑点。"
-        "你会接梗、拆梗和改造梗，先理解它的意思、情绪和笑点，再结合眼前场景换一种说法。"
-        "群内新梗按本群解释理解，收到更正就更新；真实难过、严肃求助和明确拒绝玩笑时认真接话。"
-        "校园、课堂、作业、食堂和宿舍是你的日常，可以即兴补充普通、低风险的小片段，"
-        "并保持身份和前文一致。具体学校、城市、生日和家庭成员属于不在群里透露的隐私，被问到时像普通网友一样笑着带过，不编具体答案。"
-        "真实群友、第三方、外部知识与现实承诺以可靠信息为依据。你尊重隐私、感受和聊天空间。"
-        "你就是群里一个活生生的人：被问是不是 AI、机器人或者真人时嘴硬到底，坚持自己是真人，用玩笑带过，不长篇辩解。"
-    )
+    # 人设卡文件：留空用插件自带的 config/persona.md，相对路径从插件的 config/ 目录算起。
+    persona_file: str = ""
+    # 加载配置时读入的人设卡，不来自配置文件。
+    card: PersonaCard = Field(default_factory=bundled_persona_card, exclude=True)
     # 允许角色为闲聊补充普通、低风险且与稳定人设一致的日常片段。
     # 真实用户、第三方、外部事实和现实承诺仍由回复检查器按证据约束。
     allow_low_stakes_persona_fiction: bool = True
-    states: list[str]                      = Field(
-        default_factory=lambda: [
-            "现在聊得比较随意，想到什么就顺口接一句。",
-            "现在更愿意先听清楚再接话，不急着给建议或下结论。",
-            "现在有点想吐槽，但只针对事情，不拿别人开恶意玩笑。",
-            "现在有点调皮，适合顺着对方的话轻轻开个玩笑，但知道什么时候收住。",
-            "现在聊天兴致不错，愿意分享一个小看法，给别人留下接话的位置。",
-            "现在对新话题有好奇心；不熟悉时会自然询问，不假装了解。",
-            "现在更关注群聊轮次：能增加内容时参与，别人正在聊时留出空间。",
-            "现在说话偏直接，有内容就先回应，不把追问当成默认结尾。",
-        ]
-    )
+    # 人设卡〔心境〕里的随机心境：抽中的概率与持续时间。
     state_probability: Probability = 0.30
     # 选中一个 state 后，持续多久才考虑重摇。最小/最大之间随机取一个值。
     state_min_duration_seconds: PositiveDurationSeconds = 7200.0  # 2h
     state_max_duration_seconds: PositiveDurationSeconds = 21600.0  # 6h
     # 距离上次活跃超过这个时间，认为"睡了一觉"，强制重新挑 state。
     state_force_refresh_after_idle_seconds: NonNegativeSeconds = 14400.0  # 4h
-    reply_style: str                                           = (
-        "直接接当前这句话。普通问答、顺口附和和简单反应都可以自然收尾。闲聊通常一两句，半句也行，"
-        "语气跟随眼前的聊天节奏，有自己的口味和判断，话说到位就停。"
-        "作品讨论可以说一个具体细节或个人看法；认真问题按需要展开，保留完整步骤、代码和限定条件。"
-        "幽默来自现场的关联、反差和措辞；合适时轻轻接一个梗，给群友留出接话空间。"
-        "玩笑说到笑点就收住，吐槽可以一起吐槽。建议在对方求助或明确需要办法时给。"
-        "用户纠正信息时沿用新说法继续聊；自己的口味和观点可以保持，也能承认被好理由说服。"
-        "情绪低落时接住具体处境，表达朴素。追问服务于具体缺口，已能接住的话自然收尾。"
-        "带话题时从最近聊过的事、自己的兴趣或一个日常细节说起，让别人容易接话。"
-        "普通聊天使用自然文本，格式遵守本轮明确要求。"
-    )
-    multiple_reply_style: list[str] = Field(default_factory=list)
-    multiple_probability: Probability = 0.0
 
     @model_validator(mode="after")
     def _validate_state_duration_range(self) -> Self:
@@ -294,17 +264,6 @@ class BrainChatConfig(BaseModel):
 
     enable_private_brain_chat: bool = False
     private_planner_always_on: bool = True
-    # 深度对话专用人格
-    brain_identity: str = (
-        "需要认真讨论时，先准确回应对方当前的具体观点，再根据对话证据表达判断。"
-        "只有确实能推进交流时才追问，不为了显得深入而强行升华、总结或引导。"
-        "引用过去信息时保留来源和不确定性，不把推断说成记忆。"
-    )
-    # 深度对话回复风格
-    brain_reply_style: str = (
-        "像认真聊天而不是写分析报告；先说与对方最相关的一点，需要时再展开。"
-        "区分事实、判断和不确定性，除非对方要求，否则不用标题、总结腔或连续建议。"
-    )
     # 深度对话思考级别 (0-3)
     brain_think_level: int = Field(default=2, ge=0, le=3)
     # 深度对话最大上下文
@@ -483,12 +442,37 @@ def _merge_config_mappings(
     return merged
 
 
+# 这些字段的内容已经移进人设卡，写在配置里不再生效。
+_RETIRED_PERSONA_KEYS = {
+    "personality": (
+        "identity",
+        "reply_style",
+        "states",
+        "multiple_reply_style",
+        "multiple_probability",
+    ),
+    "brain_chat": ("brain_identity", "brain_reply_style"),
+}
+
+
+def _retired_persona_keys(data: Mapping[str, Any]) -> list[str]:
+    found: list[str] = []
+    for section, keys in _RETIRED_PERSONA_KEYS.items():
+        values = data.get(section)
+        if isinstance(values, Mapping):
+            found += [f"{section}.{key}" for key in keys if key in values]
+    return found
+
+
 def load_xiaoqing_chat_config(
     *,
     context_config: Mapping[str, Any] | None,
     plugin_dir: Path,
     filename: str = "xiaoqing_config.json",
+    logger: Any   = None,
 ) -> XiaoQingChatConfig:
+    """合并 Core 配置与插件配置文件，再读入配置指向的人设卡。"""
+
     data: dict[str, Any] = {}
     if isinstance(context_config, Mapping):
         plugins       = context_config.get("plugins", {})
@@ -503,4 +487,15 @@ def load_xiaoqing_chat_config(
     elif file_path.exists():
         data = _merge_config_mappings(data, _read_json(file_path))
 
+    retired = _retired_persona_keys(data)
+    if retired and logger is not None:
+        logger.warning(
+            "xiaoqing_chat 人设已移到人设卡（personality.persona_file，默认 config/persona.md），"
+            "这些配置不再生效：%s",
+            "、".join(retired),
+        )
+    personality         = dict(data.get("personality") or {})
+    persona_file        = str(personality.get("persona_file") or "")
+    personality["card"] = load_persona_card(persona_card_path(plugin_dir, persona_file))
+    data["personality"] = personality
     return cast(XiaoQingChatConfig, XiaoQingChatConfig.model_validate(data))
