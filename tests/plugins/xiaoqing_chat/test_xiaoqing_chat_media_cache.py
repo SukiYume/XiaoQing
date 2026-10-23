@@ -311,38 +311,24 @@ async def test_local_media_applies_pixel_budget_before_analysis(mock_context):
 
 @pytest.mark.asyncio
 async def test_render_local_media_file_keeps_blocking_read_off_event_loop(mock_context):
-    runtime    = _make_media_runtime()
-    image_path = _write_png(mock_context.data_dir / "slow_read.png")
-    release    = threading.Event()
-    real_read  = read_file_bounded
+    runtime                    = _make_media_runtime()
+    image_path                 = _write_png(mock_context.data_dir / "slow_read.png")
+    real_read                  = read_file_bounded
+    loop_thread_id             = threading.get_ident()
+    read_thread_ids: list[int] = []
 
-    def slow_read(path: Path, *, max_bytes: int) -> bytes:
-        release.wait(timeout=1)
+    def tracked_read(path: Path, *, max_bytes: int) -> bytes:
+        read_thread_ids.append(threading.get_ident())
         return real_read(path, max_bytes=max_bytes)
 
-    loop      = asyncio.get_running_loop()
-    heartbeat = asyncio.Event()
-    loop.call_later(0.02, heartbeat.set)
-    fallback_release = threading.Timer(0.5, release.set)
-    fallback_release.start()
-    started_at = loop.time()
-    try:
-        with patch(
-            "plugins.xiaoqing_chat.media.sources.read_file_bounded",
-            side_effect=slow_read,
-        ):
-            render_task = asyncio.create_task(
-                render_local_media_file(image_path, context=mock_context, runtime=runtime)
-            )
-            await asyncio.wait_for(heartbeat.wait(), timeout=0.75)
-            heartbeat_delay = loop.time() - started_at
-            release.set()
-            rendered = await asyncio.wait_for(render_task, timeout=1)
-    finally:
-        release.set()
-        fallback_release.cancel()
+    with patch(
+        "plugins.xiaoqing_chat.media.event_media.read_file_bounded",
+        side_effect=tracked_read,
+    ):
+        rendered = await render_local_media_file(image_path, context=mock_context, runtime=runtime)
 
-    assert heartbeat_delay < 0.2
+    assert read_thread_ids
+    assert all(thread_id != loop_thread_id for thread_id in read_thread_ids)
     assert rendered is not None
 
 
