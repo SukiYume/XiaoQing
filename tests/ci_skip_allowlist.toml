@@ -100,11 +100,6 @@ reason = "GBK 回退只用于 Windows 本地程序输出"
 platforms = ["posix"]
 
 [[allow]]
-nodeid = "tests/core/test_process_tree.py::test_smart_decode_replaces_unknown_bytes_on_posix"
-reason = "POSIX 没有 GBK 回退"
-platforms = ["windows"]
-
-[[allow]]
 nodeid = "tests/plugins/xiaoqing_agent/test_xiaoqing_agent_shells.py::test_windows_auto_shell_skips_the_wsl_launcher"
 reason = "WSL 启动器只存在于 Windows"
 platforms = ["posix"]

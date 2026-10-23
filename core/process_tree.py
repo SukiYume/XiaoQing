@@ -45,7 +45,7 @@ def smart_decode(data: bytes) -> str:
         return data.decode("utf-8")
     except UnicodeDecodeError as exc:
         # 输出预算可能截断在一个多字节字符中间，不能因此整段改用 GBK 解读。
-        if exc.start >= len(data) - 3:
+        if exc.reason == "unexpected end of data" and exc.end == len(data):
             return data[: exc.start].decode("utf-8", errors="replace")
     if sys.platform == "win32":
         try:
