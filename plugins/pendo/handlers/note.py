@@ -283,7 +283,7 @@ class NoteHandler(DbOpsMixin):
         if tags_str:
             message += f"🏷️ 标签: {tags_str}\n"
         display_id = public_id(item_id)
-        message += f"`{display_id}`\n\n"
+        message += f"{display_id}\n\n"
         message += f"💡 用 /pendo note view {display_id} 查看详情"
 
         return {"status": "success", "message": message, "item_id": item_id}
@@ -715,14 +715,14 @@ class NoteHandler(DbOpsMixin):
         for note in notes:
             grouped.setdefault(note.category or "未分类", []).append(note)
 
-        lines = ["**分类概览**", ""]
+        lines = ["分类概览", ""]
         for category in sorted(grouped, key=str.casefold):
             category_notes = grouped[category]
             tags           = {tag for note in category_notes for tag in (note.tags or [])}
             tag_text       = (
                 f" {ItemFormatter.format_tags(sorted(tags, key=str.casefold))}" if tags else ""
             )
-            lines.append(f"📂 **{category}** ({len(category_notes)}项){tag_text}")
+            lines.append(f"📂 {category} ({len(category_notes)}项){tag_text}")
         lines.extend(("", "💡 用 /pendo note list <分类名> 查看该分类的笔记"))
         return "\n".join(lines)
 
@@ -743,7 +743,7 @@ class NoteHandler(DbOpsMixin):
             metadata = f"📂 {note.category or '未分类'}"
             if tags:
                 metadata += f" | 🏷️ {tags}"
-            lines.extend((f"{index}. {title}", f"   {metadata}", f"   `{note.display_id}`", ""))
+            lines.extend((f"{index}. {title}", f"   {metadata}", f"   {note.display_id}", ""))
         if has_more:
             lines.append(f"... (使用 'all' 显示全部或 'page:{filters.page + 1}' 查看下一页)")
         return "\n".join(lines).rstrip()
@@ -774,7 +774,7 @@ class NoteHandler(DbOpsMixin):
         if not notes:
             return {"status": "success", "message": f"📝 没有找到笔记{filter_text}"}
 
-        message       = f"📝 **笔记列表**{filter_text} (共{len(notes)}项)\n\n"
+        message       = f"📝 笔记列表{filter_text} (共{len(notes)}项)\n\n"
         overview_only = (
             not filters.has_semantic_filter and not filters.show_all and not filters.page_explicit
         )
@@ -819,7 +819,7 @@ class NoteHandler(DbOpsMixin):
             touch            = False,
         )
 
-        message = f"📝 **{note.title or '无标题'}**\n\n"
+        message = f"📝 {note.title or '无标题'}\n\n"
 
         display_timezone = await run_sync(
             TimezoneHelper.get_user_timezone,
@@ -842,20 +842,20 @@ class NoteHandler(DbOpsMixin):
         message += note.content or ""
 
         if note.references:
-            message += "\n\n---\n\n🔗 **关联条目**\n"
+            message += "\n\n---\n\n🔗 关联条目\n"
             for ref in note.references[:10]:
                 if not isinstance(ref, dict):
                     continue
                 ref_id    = ref.get("id", "")
                 ref_type  = self._type_label(str(ref.get("type") or ""))
                 ref_title = ref.get("title") or "无标题"
-                message += f"• {ref_type}: {ref_title} `{public_id(ref_id)}`\n"
+                message += f"• {ref_type}: {ref_title} {public_id(ref_id)}\n"
 
         backlinks = await self._find_note_backlinks(user_id, note_id)
         if backlinks:
-            message += "\n↩️ **被这些笔记引用**\n"
+            message += "\n↩️ 被这些笔记引用\n"
             for backlink in backlinks:
-                message += f"• {backlink.title or '无标题'} `{backlink.display_id}`\n"
+                message += f"• {backlink.title or '无标题'} {backlink.display_id}\n"
 
         return {"status": "success", "message": message}
 
@@ -1142,7 +1142,7 @@ class NoteHandler(DbOpsMixin):
             "status": "success",
             "message": (
                 f"✅ 已关联 {self._type_label(str(ref.get('type') or ''))}: "
-                f"{ref.get('title') or '无标题'} `{public_id(ref.get('id'))}`"
+                f"{ref.get('title') or '无标题'} {public_id(ref.get('id'))}"
             ),
         }
 

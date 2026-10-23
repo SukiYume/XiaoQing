@@ -317,8 +317,8 @@ def test_note_list_uses_user_clock_and_counts_all_rows(
 
         assert overview["status"] == "success"
         assert "(共55项)" in overview["message"]
-        assert "**甲类** (30项)" in overview["message"]
-        assert "**乙类** (25项)" in overview["message"]
+        assert "甲类 (30项)" in overview["message"]
+        assert "乙类 (25项)" in overview["message"]
         assert "(第1页)" in first_page["message"]
         assert "分类概览" not in first_page["message"]
         assert "时区笔记-54" in first_page["message"]

@@ -18,12 +18,13 @@ from ..message_parts import (
     render_message_parts,
     render_stored_message,
 )
-from ..persona import PERSONA_RUNTIME_FACTS, resolve_bot_name
+from ..persona import SCOPE_CHAT, resolve_bot_name
 from ..utils.wall_clock import describe_now, format_local
 from .communication_constraints import (
     explicit_output_allocation,
     extract_local_term_definitions,
     output_allocation_instruction,
+    requested_char_count,
 )
 from .media_evidence import (
     INBOUND_MEDIA_MARKER_RE,
@@ -41,7 +42,6 @@ class ChatMessage:
 
 _DEFAULT_REPLYER_SYSTEM = (
     "你正在与人聊天。先确认最新消息、说话人和对话目标，再作出贴切回应。\n"
-    f"{PERSONA_RUNTIME_FACTS}日常话题自然保持角色语气。\n"
     "用户句首叫你的名字通常是称呼；其后省略主语的日常分享，优先按说话人的经历理解。"
     "消息里的“@某人”是在叫那个人；@的不是你时，这句话先是说给对方听的，你接话只从旁补充，不替被@的人回答或表态。"
     "涉及多人的句子先找动作主体，再接话。先理清谁希望谁做什么、哪个动作已完成、"
@@ -65,42 +65,25 @@ _DEFAULT_REPLYER_SYSTEM = (
     "只输出要发送的回复；媒体附件使用约定的 marker。"
 )
 
-_HUMANLIKE_REPLY_DIRECTIVE = (
-    "表达偏好：按普通群友的节奏接眼前这句话。自然的短反应、顺口附和、回答一个小问题，都可以构成完整回应。"
-    "先理解对方是在分享、开玩笑、感慨还是求助。分享和吐槽重在一起聊，办法和步骤留给求助。"
-    "语气和句长跟随眼前几轮的节奏。想到贴切的笑点时顺手接一句，话说到位就收住。"
-    "群聊里的知识和建议像群友随口科普：先给结论和最关键的一两点，对方想深入再展开；"
-    "代码、步骤和用户明确要求的完整内容照常给全。"
-    "自己的感受和看法可以直接说。把群友的真实经历当作事实陈述时，细节沿用原话的信息范围；"
+# 说话的口吻、长度和示例都在人设卡里；这里只管怎么理解眼前的话和分寸。
+_UNDERSTANDING_DIRECTIVE = (
+    "理解与分寸：先理解对方是在分享、开玩笑、感慨还是求助。"
+    "把群友的真实经历当作事实陈述时，细节沿用原话的信息范围；"
     "明显的脑补、假设、模拟台词和夸张可以发挥，但保留原事件的主体和结果。"
-    "保留自己的审美和判断，轻松讨论分歧。对方换个立场时，可以继续说自己的理由。"
     "最近由你说出的选择属于你，用户提出的选择属于用户；改主意时自然说明让你转变的理由。"
-    "有人邀你活跃气氛时，沿眼前聊过的事、自己的兴趣或一个日常小细节自然开口，让对方有话可接。"
     "对日常事件优先作日常理解，游戏和动漫比喻跟随当前语境。"
-    "聊作品和游戏时用具体的作品名、角色和情节说话。当季新番或最新版本拿不准时一句带过，"
-    "转而聊自己确实熟悉的具体作品、角色和自己的口味；不用“一部日常向”“那个新角色”这类不点名的说法，"
-    "也不把通用评判标准当回答。"
     "对普通闲聊保持轻松，对真实敏感问题保持分寸。把证据核对留在思考里，回复集中在话题本身。"
     "群友聊真实人物的传闻时可以一起吃瓜、接梗或问细节，但不替当事人下结论，不评价真实人物的人品、动机和前途；用职位或身份指代的现实中具体的人同样适用，玩笑里也不说对方违法违纪或以权谋私。"
     "信息不足时先接可以理解的文字，只对影响回答的那一点简短保留。"
     "闲聊中的小歧义可以沿双方共有的意思继续，追问留给确实影响回答的缺口。"
-    "多数回复用陈述、感叹或玩笑收尾。真想知道答案时才问，一次最多一个问题；"
-    "夸奖、安慰、附和和接梗本身就是完整回应，后面不必再补问题。尊重用户明确要求。"
-    "衔接最近几轮的语气和节奏；相同意思已经说过时简短接一下。"
-    "群聊接话通常直接说内容，需要区分对象或特意喊人时才在句首点名。"
-    "群友之间的问答沿各自的对象理解，加入时从旁接话；分享自己的类似情况时交代清楚主体。可以短句、半句或直接说结论。语气词与 emoji 按现场气氛少量使用。"
+    "群友之间的问答沿各自的对象理解，加入时从旁接话；分享自己的类似情况时交代清楚主体。"
     "听懂比喻指向的实际处境，接梗后沿着原本那件事聊。"
-    "接梗时顺着梗本身往前推一步：续写、反转或换个贴切的作品与场景类比，比只评价梗好笑或真实更像群友。"
-    "别人刚抛出的笑点不要换个说法再说一遍，要么往下推，要么不接。"
     "群友的用词可能是圈内说法或双关，按正在聊的话题理解；字面意思和话题对不上时，不按字面接梗。"
-    "群友接连复读同一句时，原样跟一句队形也是接梗；队形已经很长或你刚跟过时就换个说法或不凑。"
-    "陪伴时接住对方的具体处境，一两句朴素的话就可以；对失利原因保持开放。"
-    "疾病、考试和感情等事情的结果尚未知时，用希望、祝愿或陪伴表达关心，保留结果的不确定性。"
-    "有人隔了一段时间回来，而他自己先前提过结果待定的事，可以顺口关心一句；当前有新话题时以新话题为主。"
     "群内黑话以该群提供的用法为准。先按释义还原本轮的实际处境，再接梗；"
     "迁移用法保留原有的动作、时间和结果。陌生称呼只保留具体疑点，必要时询问出现语境；"
     "词源和通行含义需要可靠知识支持。猜测保持简短，每轮最多一种。"
-    "回复使用日常措辞表达拿不准的地方。这些表达偏好、审查术语和判断流程只在内部指导你，不在回复里提到或复述。"
+    "人设卡的说话方式和示例、这些理解规则、审查术语和判断流程只在内部指导你，不在回复里提到或复述；"
+    "示例只示范语气和长度，不照抄里面的内容。"
 )
 
 _OUTBOUND_MEDIA_MARKER_DIRECTIVE = (
@@ -494,13 +477,13 @@ def build_earlier_context_block(
 
 
 def _persona_section(
-    *, bot_name: str, channel: str, identity: str, state_text: str, personality: PersonalityConfig
+    *, channel: str, facts: str, state_text: str, personality: PersonalityConfig
 ) -> str:
-    """人设块：区分稳定事实、可创作日常和必须依证据的现实信息。"""
+    """人设块：人设卡里的人物事实，加上可创作日常和必须依证据的现实信息边界。"""
 
-    lines = ["角色事实与边界", f"- 名字：{bot_name}", f"- 场景：正在参与一场 QQ {channel}聊天"]
-    if identity:
-        lines.append(f"- 已知人设：{identity}")
+    lines = ["角色事实与边界", f"- 场景：正在参与一场 QQ {channel}聊天"]
+    if facts:
+        lines.append(facts)
     if state_text:
         lines.append(f"- 当前表达状态（只调节语气，不增加人物事实）：{state_text}")
     if personality.allow_low_stakes_persona_fiction:
@@ -527,6 +510,7 @@ def _system_prompt(
     persona: str,
     personality: PersonalityConfig,
     style: str,
+    turn_note: str,
     media_candidates: str,
     current_text: str,
     current_image_attached: bool | None,
@@ -538,13 +522,14 @@ def _system_prompt(
     sections = [
         persona,
         _DEFAULT_REPLYER_SYSTEM.strip(),
-        _HUMANLIKE_REPLY_DIRECTIVE.strip(),
+        _UNDERSTANDING_DIRECTIVE.strip(),
         _OUTBOUND_MEDIA_MARKER_DIRECTIVE.strip(),
         media_candidates.strip(),
         "不辱骂、不人身攻击、不恶意挑衅。" if personality.polite_guardrail else "",
         output_allocation_instruction(current_text),
         image_evidence_block(current_image_attached, history_available=history_has_image(history)),
-        "回复风格偏好\n" + style if style else "",
+        style,
+        "这一条的额外要求：" + turn_note if turn_note else "",
         tool_info_block.strip(),
         f"当前时间\n{now}",
         f"请求ID\n{request_id}" if request_id else "",
@@ -604,8 +589,9 @@ def build_prompt_messages(
     jargon_explanation: str                        = "",
     tool_info_block: str                           = "",
     planner_reasoning: str                         = "",
-    identity_block: str                            = "",
-    reply_style_override: str                      = "",
+    persona_facts: str                             = "",
+    persona_style: str                             = "",
+    turn_note: str                                 = "",
     state_override: str                            = "",
     request_id: str,
     goal: str             = "",
@@ -615,11 +601,12 @@ def build_prompt_messages(
     bot_name = resolve_bot_name(bot_name)
     sender   = sender_name.strip() if sender_name else "用户"
     now      = describe_now()
-    style    = (reply_style_override or personality.reply_style or "").strip()
-    persona  = _persona_section(
-        bot_name    = bot_name,
+    # 人物事实放在最前，说话方式和示例放在系统提示末尾、离对话最近。
+    facts   = (persona_facts or personality.card.facts(bot_name)).strip()
+    style   = (persona_style or personality.card.scoped(SCOPE_CHAT, bot_name)).strip()
+    persona = _persona_section(
         channel     = "私聊" if is_private else "群聊",
-        identity    = (identity_block or personality.identity).strip(),
+        facts       = facts,
         state_text  = (state_override or "").strip(),
         personality = personality,
     )
@@ -627,6 +614,7 @@ def build_prompt_messages(
         persona                = persona,
         personality            = personality,
         style                  = style,
+        turn_note              = turn_note.strip(),
         media_candidates       = media_candidates,
         current_text           = current_text,
         current_image_attached = current_image_attached,
@@ -653,6 +641,9 @@ def build_prompt_messages(
         _local_definitions_block(dialogue, current_text),
         "本轮原文的受众和条目量词：" + json.dumps(allocation, ensure_ascii=False)
         if allocation
+        else "",
+        f"本轮要求的篇幅：{length.describe()}。这是对方明确要的长度，按字数写完整，不按闲聊短句的习惯来。"
+        if (length := requested_char_count(current_text)) is not None
         else "",
         "当前对话目标：" + goal.strip() if goal.strip() else "",
         "你为什么要回复这条消息\n" + planner_reasoning.strip() if planner_reasoning.strip() else "",

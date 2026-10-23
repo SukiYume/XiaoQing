@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from ..config.config import MediaConfig
     from ..runtime_state import ChatRuntime
 
-MEDIA_ANALYSIS_PROMPT_VERSION = 7
+MEDIA_ANALYSIS_PROMPT_VERSION = 8
 
 
 MEDIA_DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(total=20, connect=10, sock_read=15)

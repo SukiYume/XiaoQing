@@ -61,6 +61,15 @@ if TYPE_CHECKING:
 
 TIME_RANGE_KEYWORDS = frozenset({"today", "tomorrow", "week", "month", "year"})
 TIME_RANGE_RE       = re.compile(r"^(last\d+d|\d{4}|\d{4}-\d{2}|\d{4}-\d{2}-\d{2}|\d{2}-\d{2})$")
+FORCE_FLAG_RE       = re.compile(r"(?:^|\s)--force(?=\s|$)")
+
+
+def _split_force_flag(text: str) -> tuple[str, bool]:
+    """拆出独立的 ``--force`` 标记；它只在调用方已经知道冲突时跳过确认。"""
+
+    if not FORCE_FLAG_RE.search(text or ""):
+        return text, False
+    return " ".join(FORCE_FLAG_RE.sub(" ", text).split()), True
 
 
 class EventAIParserProtocol(Protocol):
@@ -197,7 +206,8 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
     async def add_event(
         self, user_id: str, text: str, context: PendoContext, group_id: int | None = None
     ) -> CommandMessage:
-        """从文本添加日程"""
+        """从文本添加日程；``--force`` 表示已经知道时间冲突，直接创建不再确认。"""
+        text, force = _split_force_flag(text)
         if not text:
             return {
                 "status": "error",
@@ -209,7 +219,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         if group_id:
             parsed["context"] = {"group_id": group_id}
 
-        result = await self.create_event(user_id, parsed, context)
+        result = await self.create_event(user_id, parsed, context, allow_conflict=force)
 
         # 处理需要补充信息的情况
         if result.get("status") == "need_info":
@@ -759,7 +769,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
     @classmethod
     def _format_day_header(cls, target_dt: datetime, current_dt: datetime) -> str:
         weekday = CN_WEEKDAYS[target_dt.weekday()]
-        return f"**{target_dt.strftime('%m月%d日')} {weekday}** - {cls._format_day_delta(target_dt, current_dt)}"
+        return f"{target_dt.strftime('%m月%d日')} {weekday} - {cls._format_day_delta(target_dt, current_dt)}"
 
     @staticmethod
     def _format_simple_list_item(
@@ -779,7 +789,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         text = f"• {time_str} {event.title or '无标题'}"
         if event.location:
             text += f" @ {ItemFormatter.truncate_content(event.location, 15)}"
-        text += f" `{event.display_id}`\n"
+        text += f" {event.display_id}\n"
         return date_str, text
 
     @staticmethod
@@ -802,7 +812,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         text             = f"• {time_str} {collection_title} · {event.title or '无标题'} {marker}"
         if event.location:
             text += f" @ {ItemFormatter.truncate_content(event.location, 15)}"
-        text += f" `{event.display_id}`\n"
+        text += f" {event.display_id}\n"
         return date_str, text
 
     @staticmethod
@@ -960,7 +970,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
                 "message": f"🗓️ {title}{filter_suffix} 没有日程安排\n\n💡 用 /pendo event add <内容> 添加日程",
             }
 
-        message                  = f"🗓️ **{title}**{filter_suffix} (共{len(events)}项)\n"
+        message                  = f"🗓️ {title}{filter_suffix} (共{len(events)}项)\n"
         current_date: str | None = None
 
         for event in events:
@@ -1239,7 +1249,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         if deleted_count == 0:
             return {
                 "status": "warning",
-                "message": f"⚠️ 没有找到匹配 `{selector}` 的提醒",
+                "message": f"⚠️ 没有找到匹配 {selector} 的提醒",
             }
 
         if collection_id is not None:
@@ -1306,7 +1316,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         if not matched:
             return {
                 "status": "warning",
-                "message": f"⚠️ 没有找到匹配 `{selector}` 的提醒",
+                "message": f"⚠️ 没有找到匹配 {selector} 的提醒",
             }
 
         confirmed_count = 0
@@ -1616,7 +1626,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             user_id,
             reminder_events,
         )
-        message          = f"🔔 **{title}** (共{len(event_reminders)}项)\n"
+        message          = f"🔔 {title} (共{len(event_reminders)}项)\n"
         display_timezone = current_dt.tzinfo or TimezoneHelper.DEFAULT_TZ
         for event, remind_times in event_reminders:
             log_map  = log_maps.get(str(event.id), {})
@@ -1628,7 +1638,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
                 collection = collection_map.get(cast(str, event.event_collection_id))
                 if collection:
                     display_title = f"{collection.get('title') or '无标题'} · {display_title}"
-            message += f"\n🗓️ {time_str} {display_title} `{event.display_id}`\n"
+            message += f"\n🗓️ {time_str} {display_title} {event.display_id}\n"
             for t in remind_times:
                 t_str = ItemFormatter.format_datetime(t, "%m-%d %H:%M", tz=display_timezone)
                 status = get_remind_status(log_map.get(t))
@@ -1706,7 +1716,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
 
         builder          = MessageBuilder()
         display_timezone = event_display_timezone(event)
-        builder.add_line(f"🔔 **{collection.get('title') or '无标题'}**")
+        builder.add_line(f"🔔 {collection.get('title') or '无标题'}")
         builder.add_line(f"📌 {event.title or '无标题'}")
         builder.add_line(
             f"🗓️ 节点时间: {ItemFormatter.format_datetime(event.start_time or '', '%m月%d日 %H:%M', tz=display_timezone)}"
@@ -1717,7 +1727,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
                 remind_time, "%m月%d日 %H:%M", tz=display_timezone
             )
             status = get_remind_status_label(log_map.get(remind_time))
-            builder.add_line(f"⏰ **提醒 {index}**: {time_str}  {status}")
+            builder.add_line(f"⏰ 提醒 {index}: {time_str}  {status}")
         return {"status": "success", "message": builder.build()}
 
     def _format_collection_reminders(
@@ -1729,7 +1739,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         if not collection:
             return {"status": "error", "message": "❌ 找不到日程集合"}
         builder = MessageBuilder()
-        builder.add_line(f"🔔 **{collection.get('title') or '无标题'}** 的提醒列表")
+        builder.add_line(f"🔔 {collection.get('title') or '无标题'} 的提醒列表")
         builder.add_line(f"📊 共 {len(family.children)} 个节点")
         builder.add_line("─" * 30)
         for index, child in enumerate(family.children, 1):
@@ -1739,7 +1749,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             child_time       = ItemFormatter.format_datetime(
                 child.start_time or "", "%m月%d日 %H:%M", tz=display_timezone
             )
-            builder.add_line(f"**{index}.** 📌 {child_time} {child.title or '无标题'}")
+            builder.add_line(f"{index}. 📌 {child_time} {child.title or '无标题'}")
             if not remind_times:
                 builder.add_line("     ⏰ 无提醒")
             else:
@@ -1750,7 +1760,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
                     )
                     status = get_remind_status(log_map.get(remind_time))
                     builder.add_line(f"     ⏰ {formatted_time} {status}")
-            builder.add_line(f"     🆔 `{child.display_id}`")
+            builder.add_line(f"     🆔 {child.display_id}")
         return {"status": "success", "message": builder.build()}
 
     # ==================== 辅助方法 ====================

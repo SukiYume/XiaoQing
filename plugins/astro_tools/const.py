@@ -7,7 +7,7 @@ from core.public_errors import public_error_message
 
 _CONST_HELP = (
     "🔢 可用常数列表\n\n"
-    "**基本物理常数:**\n"
+    "基本物理常数:\n"
     "c, speed - 光速\n"
     "g, gravity - 引力常数\n"
     "h, planck - 普朗克常数\n"
@@ -15,7 +15,7 @@ _CONST_HELP = (
     "sigma, stefan - 斯特藩-玻尔兹曼常数\n"
     "me - 电子质量\n"
     "mp - 质子质量\n\n"
-    "**天文常数:**\n"
+    "天文常数:\n"
     "m_sun - 太阳质量\n"
     "r_sun - 太阳半径\n"
     "l_sun - 太阳光度\n"

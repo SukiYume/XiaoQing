@@ -1,6 +1,6 @@
 # 💬 Chat
 
-`chat` 通过 Coze API v3 提供单轮 AI 对话。命令面向 Bot 管理员，插件同时发布 `chat.reply` 服务，供清单授权的 `smalltalk` 插件调用。
+`chat` 通过 Coze API v3 提供单轮 AI 对话。命令所有人都能用，花费由下文的每人与全局每日额度约束；插件同时发布 `chat.reply` 服务，供清单授权的 `smalltalk` 插件调用。
 
 ---
 
@@ -114,6 +114,5 @@ python -m mypy plugins/chat
 python -m pytest -q tests/plugins/chat/test_chat.py \
   tests/plugins/contracts/test_public_error_redaction.py \
   tests/plugins/contracts/test_configured_http_clients.py \
-  tests/plugins/contracts/test_plugin_resource_lifecycle.py \
-  tests/tooling/test_bounded_http_adoption.py
+  tests/plugins/contracts/test_plugin_resource_lifecycle.py
 ```

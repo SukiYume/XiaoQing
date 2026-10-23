@@ -207,13 +207,14 @@ def _build_attempt_messages(
             plan.merged_reasoning,
             bot_name=plan.bot_name,
         ),
-        identity_block       = plan.effective_identity,
-        reply_style_override = plan.effective_style,
-        state_override       = plan.state_text,
-        request_id           = plan.request_id,
-        goal                 = plan.effective_goal,
-        earlier_context      = _earlier_context(plan),
-        media_candidates     = plan.media_candidates,
+        persona_facts    = plan.effective_identity,
+        persona_style    = plan.effective_style,
+        turn_note        = plan.turn_note,
+        state_override   = plan.state_text,
+        request_id       = plan.request_id,
+        goal             = plan.effective_goal,
+        earlier_context  = _earlier_context(plan),
+        media_candidates = plan.media_candidates,
     )
     if attempt.extra_check_hint:
         messages.append(ChatMessage(role="user", content=attempt.extra_check_hint))
@@ -227,10 +228,11 @@ async def _request_reply_candidate(
     plan: ReplyGenerationPlan,
     payload_messages: list[dict[str, str]],
 ) -> str | None:
-    foreground         = plan.foreground
-    request_secrets    = plan.secrets
-    route_name         = str(plan.secrets.get("_route") or "chat")
-    request_max_tokens = int(plan.runtime.cfg.max_tokens)
+    foreground      = plan.foreground
+    request_secrets = plan.secrets
+    route_name      = str(plan.secrets.get("_route") or "chat")
+    # 计划里的输出预算会为明确要求的长文放宽（见 reply_plan），不低于配置值。
+    request_max_tokens = max(int(plan.runtime.cfg.max_tokens), int(foreground.max_tokens))
     if (
         plan.secrets.get("_ai") is not None
         and not plan.secrets.get("_pinned_model")
@@ -656,25 +658,25 @@ async def generate_reply_draft(
     plan_reasoning: str,
     bot_name: str                                    = "",
     secrets: dict[str, Any] | None                   = None,
-    reply_style_override: str                        = "",
+    turn_note: str                                   = "",
     state_text: str                                  = "",
     is_brain_chat: bool                              = False,
     prefetched_memory_task: asyncio.Task[str] | None = None,
 ) -> ReplyDraft | None:
     plan = await prepare_reply_generation(
-        text                 = text,
-        event                = event,
-        context              = context,
-        runtime              = runtime,
-        state                = state,
-        forced               = forced,
-        action               = action,
-        plan_reasoning       = plan_reasoning,
-        bot_name             = bot_name,
-        secrets              = secrets,
-        reply_style_override = reply_style_override,
-        state_text           = state_text,
-        is_brain_chat        = is_brain_chat,
+        text           = text,
+        event          = event,
+        context        = context,
+        runtime        = runtime,
+        state          = state,
+        forced         = forced,
+        action         = action,
+        plan_reasoning = plan_reasoning,
+        bot_name       = bot_name,
+        secrets        = secrets,
+        turn_note      = turn_note,
+        state_text     = state_text,
+        is_brain_chat  = is_brain_chat,
     )
     attempt = ReplyAttemptState(
         max_items         = plan.max_context_size,

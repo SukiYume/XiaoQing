@@ -243,7 +243,7 @@ async def test_profile_question_uses_semantic_checker_for_natural_boundary():
             goal                             = "自然聊天",
             current_text                     = "小青，你在哪所大学？",
             policy_text                      = "",
-            grounding_text                   = XiaoQingChatConfig().personality.identity,
+            grounding_text                   = XiaoQingChatConfig().personality.card.facts("小青"),
             history                          = [],
             chat_history_text                = "用户：小青，你在哪所大学？",
             enable_llm_checker               = True,

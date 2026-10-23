@@ -1,4 +1,8 @@
-"""Windows 命令树的 Job 所有权与启动握手。"""
+"""Windows 命令树的 Job 所有权与启动握手。
+
+既是 ``process_tree`` 用的模块，也是启动门控脚本：命令先由本脚本作为父进程启动，
+等管理者把它放进 Job 后才放行真正的命令，进程树从第一刻起就归 Job 所有。
+"""
 
 from __future__ import annotations
 

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .context import PluginContext
+    from .interfaces import PluginPrincipal
     from .plugin_execution import PluginExecutionGate
 
 logger  = logging.getLogger(__name__)
@@ -144,6 +145,32 @@ class CommandInvocation:
         if depth < 0 or depth >= len(self.remainders):
             raise IndexError("command invocation depth is out of range")
         return self.remainders[depth]
+
+
+def command_access(
+    node: CommandCatalogNode,
+    principal: PluginPrincipal,
+    *,
+    is_bot_admin: bool | None = None,
+) -> str | None:
+    """全项目唯一的命令权限判断：谁能在哪里用哪条命令，只看 plugin.json 声明的场景与权限。
+
+    能用时返回 ``None``，否则返回原因：``"bot_admin"``、``"group_admin"``（没有权限），或
+    ``"context"``（有权限，但当前私聊或群不能用）。先看权限再看场景，所以 ``"context"`` 也
+    说明这个人有权限。真人消息、agent 代为执行的命令、会话继续和 agent 工具的授权都走这里。
+    ``is_bot_admin`` 给出时代替签发时的快照，供长任务每次调用前按当前配置复核。
+    """
+
+    admin = principal.is_bot_admin if is_bot_admin is None else is_bot_admin
+    if node.permission == "bot_admin" and not admin:
+        return "bot_admin"
+    if node.permission == "group_admin" and not (
+        admin or principal.can_manage_group(principal.group_id)
+    ):
+        return "group_admin"
+    if ("private" if principal.is_private else "group") not in node.contexts:
+        return "context"
+    return None
 
 
 def _effective_command_permission(parent: str, declared: object) -> str:

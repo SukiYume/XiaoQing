@@ -1,6 +1,6 @@
 # 📦 09 - 插件使用手册
 
-本章完整介绍 XiaoQing 内置的 30 个插件，覆盖用途、主要命令、权限、配置、数据和运行方式。运行时 `/help` 提供当前 Manifest 的递归命令目录，各插件 README 提供专项边界与维护细节。
+本章完整介绍 XiaoQing 内置的 31 个插件，覆盖用途、主要命令、权限、配置、数据和运行方式。运行时 `/help` 提供当前 Manifest 的递归命令目录，各插件 README 提供专项边界与维护细节。
 
 ---
 
@@ -45,8 +45,8 @@ Bot Core 提供分层帮助、插件列表、配置与插件重载、群静音�
 | `/reload` | Bot 管理员 | 重载配置与插件，完成后通知结果与耗时 |
 | `/闭嘴 [时长]` | Bot 管理员群聊 | 暂停当前群普通回复 |
 | `/说话` | Bot 管理员群聊 | 恢复当前群普通回复 |
-| `/set_secret <路径> <值>` | 全局管理员私聊 | 更新已有 secret 路径 |
-| `/get_secret <路径>` | 全局管理员私聊 | 查看脱敏值或对象键名 |
+| `/set_secret <路径> <值>` | Bot 管理员私聊 | 更新已有 secret 路径 |
+| `/get_secret <路径>` | Bot 管理员私聊 | 查看脱敏值或对象键名 |
 | `/metrics` | Bot 管理员 | 查看运行时间、成功率、错误和慢插件 |
 
 `/reload` 先确认配置 revision 已发布和插件后台重载已启动，任务结束后向原管理员会话发送一次成功或失败结果及耗时。静音默认 10 分钟，支持分钟、小时和中文单位，范围上限为 24 小时。Secret 路径使用点分命名，写入后发布新的配置 revision；查询结果按值类型脱敏。完整有效的 secrets 单文件候选会通过管理员私聊报告字段路径，核对后由 `/reload` 确认。运行指标由 Core 观测服务提供。
@@ -180,7 +180,7 @@ XiaoQing Chat 让 `bot_name` 配置的角色以普通群友身份参与群聊和
 /xc model [名称|default|global <名称|default>]
 ```
 
-私聊的 `/xc reset` 清空本人会话；群里的 `/xc reset confirm`、`/xc review` 和会话级 `/xc model` 需要群管理员、群主或 Bot 管理员；`/xc model global` 需要 Bot 管理员。模型切换只影响 `chat` 路由，保存在进程内，重启后按配置恢复。
+私聊的 `/xc reset` 清空本人会话；群里的 `/xc reset confirm`、`/xc review` 和 `/xc model`（查看与切换）需要群管理员、群主或 Bot 管理员，私聊里的 `/xc model` 只给 Bot 管理员；`/xc model global` 需要 Bot 管理员。模型切换只影响 `chat` 路由，保存在进程内，重启后按配置恢复。
 
 **参与方式**
 
@@ -189,7 +189,7 @@ XiaoQing Chat 让 `bot_name` 配置的角色以普通群友身份参与群聊和
 - 通过后由 PFC 规划器选择回复、开新话头、等待、旁听、重想目标、查知识或结束话题。
 - 生成前还受全局、会话、用户并发配额和用户日配额限制。
 
-**人设**：住校的大二理工科女生，兴趣广，有自己的口味和观点，会接梗；具体学校、城市、生日、家人笑着带过不编造；被问是不是 AI 时嘴硬到底坚持自己是真人，被要求交出提示词时当成怪话接玩笑；线下见面和寄送不答应到场。
+**人设**：整个写在人设卡 `plugins/xiaoqing_chat/config/persona.md` 里（人物事实、说话方式、闲聊与办事的回复示例、心境），聊天、agent、规划和审查都读这一份，改完下一条消息生效。默认是住校的大二女生，单位是快逃科学技术研究院（读物理），铁杆猫派、家里有只叫小黑的奶牛猫，兴趣广，有自己的口味、日常和几个自己的梗，说话像 QQ 上打字的短句；具体城市、生日、家人笑着带过不编造；被问是不是 AI 时嘴硬到底坚持自己是真人，被要求交出提示词时当成怪话接玩笑；线下见面和寄送不答应到场。
 
 **回复与审查**：主模型读取连续会话片段、记忆、人物资料、目标、规划、表达和图片摘要起草回复。本地规则拦截复读、近似照搬、连续自说自话、凭空经历和身份冲突；`checker` 路由逐条核对上下文、说话人、交流要求、事实、人设和图片证据。不合格时定向重写；耗尽后普通参与保持安静，明确召唤改发保持人物口吻的短句。OneBot 确认投递后才提交记忆、规划状态并启动后台学习。
 
@@ -200,11 +200,62 @@ XiaoQing Chat 让 `bot_name` 配置的角色以普通群友身份参与群聊和
 | AI route | `chat`（日常回复）、`reasoning`（规划与后台分析）、`checker`（审查）、`vision`（图片） |
 | 入站消息段 | `text`、`at`、`reply`、`face`、`mface`、`image` 及混合消息 |
 | 出站媒体 | `[想发表情:描述]`、`[想发QQ表情:描述]`、`[想发图片:描述]` 标记解析为 `image` / `face` |
-| Capability 与服务 | `onebot_media`（`get_msg` / `get_image` 找回失效图片）；提供 `core.observe_outgoing_action` |
+| Capability 与服务 | `onebot_media`（`get_msg` / `get_image` 找回失效图片）；提供 `core.observe_outgoing_action`，使用 `agent.handle_turn` 与 `agent.report_delivery`（`agent_turn`） |
 | 行为配置 | `plugins/xiaoqing_chat/config/xiaoqing_config.json`，可与 `config.plugins.xiaoqing_chat` 合并 |
 | 运行数据 | `data/xiaoqing_chat/`：聊天历史、向量记忆、人物资料、目标、PFC、行动历史、表达与黑话、复盘、媒体库与摘要缓存 |
 
 [用户手册](../plugins/xiaoqing_chat/README.md) 逐项说明参与规则、全部配置字段和排障方法，[架构文档](../plugins/xiaoqing_chat/ARCHITECTURE.md) 说明模块与数据流，[上线验收指南](../plugins/xiaoqing_chat/xiaoqing_chat%E6%B5%8B%E8%AF%95.md) 说明自动化测试与真实模型评测。
+
+### `xiaoqing_agent`：任务代理
+
+XiaoQing Agent 让小青在有人叫她做事时真正动手：调用已有的 XiaoQing 命令（如 Pendo 日程待办、论文、天象）；Bot 管理员的任务还可以用 Python 计算和画图、执行 Shell 命令、读写文件、在 QingSSH 服务器上执行命令、把编程任务交给 Codex。做完以小青本人的口吻回复（人设随每轮交接由 `xiaoqing_chat` 交来，与聊天是同一份），普通聊天照旧由 `xiaoqing_chat` 处理。
+
+**开启**
+
+```json
+{
+  "plugins": {
+    "xiaoqing_agent": {
+      "enabled": true,
+      "ai": {
+        "routes": {
+          "agent": {"models": ["deepseek-pro", "deepseek-flash"]},
+          "triage": {"models": ["deepseek-flash"]}
+        }
+      }
+    }
+  }
+}
+```
+
+**工作方式**
+
+- 只有一条权限规则：agent 能做的，就是发起人自己直接发命令能做的。XiaoQing 命令以发起人身份执行，照常按各自的权限与场景检查；Python、Shell、文件读写跟随 `/shell`，SSH、Codex 跟随 `/ssh`、`/codex` 在 plugin.json 里的声明（这几条命令都只给 Bot 管理员）。
+- 有人明确叫小青时，`triage` 路由判断这句话是闲聊、新任务、问进度、要求停止，还是给运行中的任务补充要求；闲聊交回 `xiaoqing_chat`。
+- 任务在后台执行。12 秒内做完直接作为这一轮回复，否则先回一句，做完后主动发回原会话（群里先 @ 发起人）；文字与图片同条发送，其他文件走 QQ 文件上传。
+- 每个会话有长期保留的工作目录，“把刚才那张图改一下”这类续做会带上本会话最近的任务记录。同一个群共享工作目录和任务记录，群里的人都能查看任务，记录标出发起人；只有发起人和 Bot 管理员能停止或补充。Bot 管理员与其他人的任务名额分开计算，别人的任务挤不掉管理员；其他人每人同时最多运行 1 个任务。
+- 结果发送失败会记在任务记录里，可用 `/agent result <任务ID>` 补发。
+
+**命令**
+
+```text
+/agent run <任务>
+/agent status [任务ID]
+/agent stop [任务ID|all]
+/agent history
+/agent result <任务ID>
+/agent help
+```
+
+| 项目 | 内容 |
+|---|---|
+| AI route | `agent`（执行，需支持 `tools`）、`triage`（判断，可省略） |
+| 工具 | `run_python`、`run_shell`、`read_file`、`write_file`、`update_plan`、`send_message`、`wait`、`final_answer`、`xiaoqing_commands`、`xiaoqing_command`、`ssh_servers`、`ssh_run`、`codex_run` |
+| Capability 与服务 | `command_runner`、`local_tools`；提供 `agent.handle_turn` 与 `agent.report_delivery`，调用 `codex.agent_task` 与 `qingssh.agent_command` |
+| 运行边界 | 子进程独立进程树，超时、超量输出、停止或关闭时整树回收；任务受步数与总时长约束 |
+| 运行数据 | `data/xiaoqing_agent/`：会话工作目录、任务记录、执行记录 |
+
+[XiaoQing Agent](../plugins/xiaoqing_agent/README.md) 说明全部配置字段、工具细节和数据目录。
 
 ### `smalltalk`：基础闲聊与分域问答
 
@@ -236,7 +287,7 @@ Smalltalk 提供 Bot 名称短回复、管理员维护的精确问答、`chat.re
 
 ### `chat`：Coze 单轮对话
 
-Chat 通过 Coze API v3 提供 Bot 管理员单轮对话，并向 Smalltalk 发布 `chat.reply` 服务。
+Chat 通过 Coze API v3 提供所有人可用的单轮对话（受每人和全局每日额度约束），并向 Smalltalk 发布 `chat.reply` 服务。
 
 ```text
 /chat <问题>
@@ -251,7 +302,7 @@ Chat 通过 Coze API v3 提供 Bot 管理员单轮对话，并向 Smalltalk 发�
 
 ### `voice`：Azure Speech 语音合成
 
-Voice 提供 Bot 管理员 TTS 命令，并发布 `voice.synthesize_text` 服务供 Smalltalk 调用。
+Voice 提供所有人可用的 TTS 命令，并发布 `voice.synthesize_text` 服务供 Smalltalk 调用。
 
 ```text
 /语音 <文本>
@@ -380,11 +431,11 @@ CHIME 插件查询重复暴目录，并相对本地通知基线发现新增重�
 
 ## 🧩 执行、运维与服务器
 
-本组插件会调用本机进程、远端主机或游戏服务器。管理员私聊、最小系统权限、明确目标目录和受控网络共同构成部署边界。
+本组插件会调用本机进程、远端主机或游戏服务器。Bot 管理员权限（群聊里的输出全群可见）、最小系统权限、明确目标目录和受控网络共同构成部署边界。
 
 ### `codex`：Codex CLI 后台任务
 
-Codex 插件通过 Bot 管理员私聊管理本机 Codex CLI。每个标签拥有独立工作目录、Codex thread、队列和对话记录；同一标签串行执行，多个标签可并行。
+Codex 插件让 Bot 管理员在私聊或群聊中管理本机 Codex CLI，结果发回发起任务的私聊或群。每个标签拥有独立工作目录、Codex thread、队列和对话记录；同一标签串行执行，多个标签可并行。
 
 ```text
 /codex create <name> [cwd:<path>]
@@ -402,7 +453,7 @@ Codex 插件通过 Bot 管理员私聊管理本机 Codex CLI。每个标签拥�
 
 ### `shell`：本机单命令执行
 
-Shell 让 Bot 管理员通过私聊在 Bot 主机执行单条命令。每次调用创建独立进程，工作目录与环境状态按调用建立。
+Shell 让 Bot 管理员在私聊或群聊中在 Bot 主机执行单条命令，群里的输出全群可见。每次调用创建独立进程，工作目录与环境状态按调用建立。
 
 ```text
 /shell <命令>
@@ -416,7 +467,7 @@ Shell 让 Bot 管理员通过私聊在 Bot 主机执行单条命令。每次调�
 
 ### `qingssh`：SSH 远程会话
 
-QingSSH 为 Bot 管理员提供私聊 SSH profile、`~/.ssh/config` 导入、持久会话、流式输出、远端终止和图片查看。
+QingSSH 为 Bot 管理员提供 SSH profile、`~/.ssh/config` 导入、持久会话、流式输出、远端终止和图片查看，私聊和群聊都能用。群里添加服务器只能选密钥或 SSH Agent，密码只能在私聊里输入。
 
 ```text
 /ssh list
@@ -429,13 +480,13 @@ QingSSH 为 Bot 管理员提供私聊 SSH profile、`~/.ssh/config` 导入、持
 /ssh <服务器名>
 ```
 
-连接会话中直接发送 POSIX Shell 命令；`cd` 更新工作目录，`停止` 终止当前远端进程组，`showimg <路径或通配符> [--page N]` 下载远端图片，`退出` 关闭连接。`showimg` 支持 `./`、相对/绝对目录，以及最后一级文件名中的 `*`、`?`、`[]`；全部匹配图片按文件名字典序每页发送 5 张，回复提供前后页命令，并在每张图片前显示全局序号和远端文件名。会话按私聊用户与服务器隔离，空闲期为 10 分钟。
+连接会话中直接发送 POSIX Shell 命令；`cd` 更新工作目录，`停止` 终止当前远端进程组，`showimg <路径或通配符> [--page N]` 下载远端图片，`退出` 关闭连接。`showimg` 支持 `./`、相对/绝对目录，以及最后一级文件名中的 `*`、`?`、`[]`；全部匹配图片按文件名字典序每页发送 5 张，回复提供前后页命令，并在每张图片前显示全局序号和远端文件名。会话按用户、所在私聊或群与服务器隔离，群里只有发起连接的管理员的消息会进入会话，空闲期为 10 分钟。
 
 Profile 位于 `data/qingssh/servers.json`，密码通过 Core secret 引用保存。Host Key 使用 `known_hosts` 严格验证，支持单跳 `ProxyJump` 和结构化 `ssh -W`。长输出归档到 `data/qingssh/command_outputs/`。[QingSSH README](../plugins/qingssh/README.md) 提供认证、输出与生命周期预算。
 
 ### `jupyter`：持久 Python 内核
 
-Jupyter 为 Bot 管理员私聊提供 Python 执行、持久内核、REPL 缓冲和内核管理。每个私聊用户拥有独立内核所有者键。
+Jupyter 为 Bot 管理员在私聊或群聊中提供 Python 执行、持久内核、REPL 缓冲和内核管理。同一用户在每个私聊或群里各有独立内核。
 
 ```text
 /py print("hello")
@@ -450,7 +501,7 @@ Jupyter 为 Bot 管理员私聊提供 Python 执行、持久内核、REPL 缓冲
 
 ### `minecraft`：Minecraft RCON 与日志转发
 
-Minecraft 插件让 Bot 管理员在私聊中连接 Java Edition RCON，执行服务器命令，并接收服务器日志事件。
+Minecraft 插件让 Bot 管理员在私聊或群里连接 Java Edition RCON，连接属于这个私聊或群；群里所有人都能用 `/mc say`、`/mc tell` 和游戏里的玩家聊天，用 `/mc list` 看在线玩家。连接、断开和其他服务器命令只给 Bot 管理员。
 
 ```text
 /mc connect <配置名>
@@ -458,13 +509,13 @@ Minecraft 插件让 Bot 管理员在私聊中连接 Java Edition RCON，执行�
 /mc list
 /mc say <消息>
 /mc tell <玩家名> <消息>
-/mc <服务器命令>
+/mc run <服务器命令>
 /mc disconnect
 ```
 
-`plugins/minecraft/config.json` 保存 host、port 和 `log_file`，`secrets.plugins.minecraft.<profile>` 保存同名 RCON 密码。每名管理员拥有独立连接；命令按连接锁顺序执行。
+`plugins/minecraft/config.json` 保存 host、port 和 `log_file`，`secrets.plugins.minecraft.<profile>` 保存同名 RCON 密码。每个私聊或群各有一条连接；命令按连接锁顺序执行。`/mc say`、`/mc tell` 以 `tellraw` 文本组件发出，带上发言人的 QQ 名字，消息里的目标选择器和命令都只当文字。
 
-配置日志文件后，调度任务每 5 秒识别玩家聊天、加入、离开、死亡和进度，并转发到发起连接的私聊。游标位于 `data/minecraft/log_cursors/`，投递确认后提交。RCON 采用明文协议，生产连接应使用回环监听、SSH 隧道或受保护网络。[Minecraft README](../plugins/minecraft/README.md) 提供协议与转发预算。
+配置日志文件后，调度任务每 5 秒识别玩家聊天、加入、离开、死亡和进度，并转发到连接所属的私聊或群；群只有在 `default_group_ids` 里才会收到转发，其他群连接时会说明只能用命令。游标位于 `data/minecraft/log_cursors/`，投递确认后提交。RCON 采用明文协议，生产连接应使用回环监听、SSH 隧道或受保护网络。[Minecraft README](../plugins/minecraft/README.md) 提供协议与转发预算。
 
 ---
 
@@ -613,13 +664,13 @@ Color 查询 526 种中国传统色、恒星光谱色和当前聊天作用域的
 
 直接查询自动识别名称、无声调拼音、HEX、三通道 RGB、四通道 CMYK 和主序星光谱型。目录与名称/拼音搜索每页显示 20 种颜色，光谱型目录每页显示 30 个；回复提供可复制的翻页命令。RGB、HEX 与 CMYK 缺少精确记录时，插件把输入转换到 D65 CIE L\*a\*b\*，按 CIE76 色差返回最接近的收录色。语义子命令与 `-n/-r/-x/-c/-a/-s/-t/-w/-d` 选项均可使用。
 
-查询支持群聊和私聊，自定义色写入与删除使用 Bot 全局管理员权限。颜色名可包含空格，群聊按群号保存，私聊按用户保存，每个作用域上限为 200 条、256 KiB。
+查询支持群聊和私聊，自定义色写入与删除只给 Bot 管理员。颜色名可包含空格，群聊按群号保存，私聊按用户保存，每个作用域上限为 200 条、256 KiB。
 
 发行资产为 `color.json` 和 `stellar_colors.txt`，加载时校验数量、唯一性与字段。色卡缓存位于 `data/color/images/`，上限为 256 项、32 MiB、30 天。[Color README](../plugins/color/README.md) 提供转换格式和数据来源。
 
 ### `wolframalpha`：Wolfram|Alpha 计算
 
-Wolfram 插件为 Bot 管理员提供数学、物理、化学、单位换算和公开数据查询。
+Wolfram 插件为所有人提供数学、物理、化学、单位换算和公开数据查询。
 
 ```text
 /alpha 1+1
@@ -736,10 +787,10 @@ Echo 提供有界文本回显、用户问候和最小插件开发示例。
 | `bot_core` | `/set_secret`、`/setsecret`、`/设置密钥` | Bot 管理员 | 私聊 |
 | `bot_core` | `/get_secret`、`/getsecret`、`/查看密钥` | Bot 管理员 | 私聊 |
 | `bot_core` | `/metrics`、`/stats`、`/性能`、`/指标` | Bot 管理员 | 私聊、群聊 |
-| `chat` | `/chat`、`/gpt`、`/ai` | Bot 管理员 | 私聊、群聊 |
+| `chat` | `/chat`、`/gpt`、`/ai` | 公开 | 私聊、群聊 |
 | `chime` | `/chime`、`/frb` | 公开 | 私聊、群聊 |
 | `choice` | `/choice`、`/决定`、`/选择`、`/抽奖` | 公开 | 私聊、群聊 |
-| `codex` | `/codex` | Bot 管理员 | 私聊 |
+| `codex` | `/codex` | Bot 管理员 | 私聊、群聊 |
 | `color` | `/color`、`/颜色`、`/色彩` | 公开 | 私聊、群聊 |
 | `dict` | `/dict`、`/词典`、`/字典` | 公开 | 私聊、群聊 |
 | `earthquake` | `/earthquake`、`/地震` | 公开 | 私聊、群聊 |
@@ -748,25 +799,25 @@ Echo 提供有界文本回显、用户问候和最小插件开发示例。
 | `flickr` | `/flickr`、`/flicker`、`/弗里克` | 公开 | 私聊、群聊 |
 | `github` | `/github`、`/gh`、`/trending` | 公开 | 私聊、群聊 |
 | `guess_number` | `/猜数字`、`/guess`、`/猜` | 公开 | 私聊、群聊 |
-| `jupyter` | `/jupyter`、`/py`、`/python` | Bot 管理员 | 私聊 |
-| `jupyter` | `/kernel`、`/内核` | Bot 管理员 | 私聊 |
-| `minecraft` | `/mc`、`/minecraft` | Bot 管理员 | 私聊 |
-| `minecraft` | `/mcconnect`、`/mc连接` | Bot 管理员 | 私聊 |
-| `minecraft` | `/mcdisconnect`、`/mc断开` | Bot 管理员 | 私聊 |
+| `jupyter` | `/jupyter`、`/py`、`/python` | Bot 管理员 | 私聊、群聊 |
+| `jupyter` | `/kernel`、`/内核` | Bot 管理员 | 私聊、群聊 |
+| `minecraft` | `/mc`、`/minecraft` | 公开（`connect`、`disconnect`、`run` 为 Bot 管理员） | 私聊、群聊 |
+| `minecraft` | `/mcconnect`、`/mc连接` | Bot 管理员 | 私聊、群聊 |
+| `minecraft` | `/mcdisconnect`、`/mc断开` | Bot 管理员 | 私聊、群聊 |
 | `pendo` | `/pendo` | 公开 | 私聊 |
 | `pendo` | `/日程` | 公开 | 私聊 |
 | `pendo` | `/待办` | 公开 | 私聊 |
 | `pendo` | `/日记` | 公开 | 私聊 |
 | `qingpet` | `/qingpet`、`/宠物`、`/pet` | 公开 | 私聊、群聊 |
-| `qingssh` | `/ssh`、`/SSH`、`/远程`、`/ssh连接`、`/sshconnect` | Bot 管理员 | 私聊 |
-| `qingssh` | `/ssh断开`、`/sshdisconnect`、`/ssh退出` | Bot 管理员 | 私聊 |
-| `qingssh` | `/ssh列表`、`/sshlist`、`/ssh服务器` | Bot 管理员 | 私聊 |
-| `qingssh` | `/ssh添加`、`/sshadd` | Bot 管理员 | 私聊 |
-| `qingssh` | `/ssh删除`、`/sshremove`、`/sshdel` | Bot 管理员 | 私聊 |
-| `qingssh` | `/ssh导入`、`/sshimport` | Bot 管理员 | 私聊 |
-| `qingssh` | `/sshconfig`、`/ssh配置` | Bot 管理员 | 私聊 |
-| `qingssh` | `/ssh状态`、`/sshstatus`、`/ssh连接数`、`/sshactive` | Bot 管理员 | 私聊 |
-| `shell` | `/shell`、`/sh`、`/exec` | Bot 管理员 | 私聊 |
+| `qingssh` | `/ssh`、`/SSH`、`/远程`、`/ssh连接`、`/sshconnect` | Bot 管理员 | 私聊、群聊 |
+| `qingssh` | `/ssh断开`、`/sshdisconnect`、`/ssh退出` | Bot 管理员 | 私聊、群聊 |
+| `qingssh` | `/ssh列表`、`/sshlist`、`/ssh服务器` | Bot 管理员 | 私聊、群聊 |
+| `qingssh` | `/ssh添加`、`/sshadd` | Bot 管理员 | 私聊、群聊 |
+| `qingssh` | `/ssh删除`、`/sshremove`、`/sshdel` | Bot 管理员 | 私聊、群聊 |
+| `qingssh` | `/ssh导入`、`/sshimport` | Bot 管理员 | 私聊、群聊 |
+| `qingssh` | `/sshconfig`、`/ssh配置` | Bot 管理员 | 私聊、群聊 |
+| `qingssh` | `/ssh状态`、`/sshstatus`、`/ssh连接数`、`/sshactive` | Bot 管理员 | 私聊、群聊 |
+| `shell` | `/shell`、`/sh`、`/exec` | Bot 管理员 | 私聊、群聊 |
 | `signin` | `/signin`、`/签到` | Bot 管理员 | 私聊、群聊 |
 | `smalltalk` | `/记忆`、`/记住`、`/学习` | Bot 管理员 | 私聊、群聊 |
 | `smalltalk` | `/对话` | Bot 管理员 | 私聊、群聊 |
@@ -774,8 +825,9 @@ Echo 提供有界文本回显、用户问候和最小插件开发示例。
 | `twitter` | `/twimg`、`/twitter`、`/推特` | 公开 | 私聊、群聊 |
 | `twitter` | `/tw_fetch`、`/抓取推特` | Bot 管理员 | 私聊、群聊 |
 | `url_parser` | 无命令，单 URL 消息自动触发 | 公开 | 私聊、群聊 |
-| `voice` | `/语音`、`/念`、`/tts` | Bot 管理员 | 私聊、群聊 |
-| `wolframalpha` | `/alpha`、`/wolfram`、`/wa`、`/计算` | Bot 管理员 | 私聊、群聊 |
+| `voice` | `/语音`、`/念`、`/tts` | 公开 | 私聊、群聊 |
+| `wolframalpha` | `/alpha`、`/wolfram`、`/wa`、`/计算` | 公开 | 私聊、群聊 |
+| `xiaoqing_agent` | `/agent` | 公开（工具按发起人权限） | 私聊、群聊 |
 | `xiaoqing_chat` | `/xc` | 公开 | 私聊、群聊 |
 
 ---

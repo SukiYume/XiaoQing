@@ -10,6 +10,8 @@ from .llm.local_checks import (
     requires_configured_profile_boundary,
 )
 from .llm.media_evidence import (
+    INBOUND_MEDIA_MARKER_RE,
+    event_has_current_image,
     event_media_all_unreadable,
 )
 from .logging_utils import log_step
@@ -60,10 +62,11 @@ NOT_READY_FALLBACK = "等我一下，脑子突然卡壳了"
 PRESENCE_FALLBACK  = "在呢在呢"
 UNSURE_FALLBACK    = "这个我真拿不准，不瞎说了"
 UNSURE_ALTERNATE   = "这个我还是说不准，先不乱讲"
-# 图确实没读出来时才说没刷出来；读出了内容却答不稳，只承认这处没看清。
-MEDIA_UNREADABLE_FALLBACK = "图我这边没刷出来诶"
-MEDIA_UNSURE_FALLBACK     = "图上这处我没看太清，不乱说了"
-MEDIA_UNSURE_ALTERNATE    = "这个细节我还是没看清，不瞎猜了"
+# 图确实没读出来才说加载问题。读出来了就不能再说没看清：只是发图就说看到了，
+# 被问到具体内容又答不稳时，只承认这一点不敢肯定。
+MEDIA_UNREADABLE_FALLBACKS = ("图我这边没刷出来诶", "图好像裂了，我这边打不开")
+MEDIA_SEEN_FALLBACKS       = ("看到啦", "嗯嗯，看到了")
+MEDIA_UNSURE_FALLBACKS     = ("这个我不敢打包票，先不乱说", "这点我说不准，先不乱讲")
 
 # 质量评估据此识别“审查耗尽后才发出”的回复。
 ALL_FALLBACK_TEXTS = frozenset(
@@ -74,9 +77,9 @@ ALL_FALLBACK_TEXTS = frozenset(
         PRESENCE_FALLBACK,
         UNSURE_FALLBACK,
         UNSURE_ALTERNATE,
-        MEDIA_UNREADABLE_FALLBACK,
-        MEDIA_UNSURE_FALLBACK,
-        MEDIA_UNSURE_ALTERNATE,
+        *MEDIA_UNREADABLE_FALLBACKS,
+        *MEDIA_SEEN_FALLBACKS,
+        *MEDIA_UNSURE_FALLBACKS,
     )
 )
 
@@ -121,7 +124,14 @@ def queue_reply_regeneration(
         "习惯、愿望、动机或背景替换原陈述；只承接可见输入明确支持的内容，并保留"
         "来源与不确定性。"
     )
-    if not rejected.result.is_hard:
+    # 没照用户明确要求做（比如篇幅不够）按要求改，不套用“短句留白”的语气修正。
+    follows_request = rejected.result.failure_code == "instruction_following"
+    if follows_request:
+        correction = (
+            "重新读取最新用户消息对本轮表达方式的明确要求，并在内容和语气上都遵守；"
+            "不要用善意、安慰、玩笑或话题推进覆盖用户刚说的边界。"
+        )
+    elif not rejected.result.is_hard:
         correction = (
             "本轮调整只针对审核指出的语气、节奏或措辞问题。保留贴切的观点、笑点、"
             "人设和已确认内容，用更自然的群友口吻接住当前话题；短句和留白都可以。"
@@ -168,15 +178,10 @@ def queue_reply_regeneration(
             "已知事实保留来源与确定性，新增表达可以是态度、比喻形象或用户邀请的条件式推测。"
             "接住当前可理解的内容，只对影响回答的具体疑点作简短说明。"
         )
-    elif rejected.result.failure_code == "instruction_following":
-        correction = (
-            "重新读取最新用户消息对本轮表达方式的明确要求，并在内容和语气上都遵守；"
-            "不要用善意、安慰、玩笑或话题推进覆盖用户刚说的边界。"
-        )
     attempt.extra_check_hint = (
         f'上一条候选回复"{rejected.text}"被检查拒绝:{rejected.result.reason}。\n'
         f"请修正上面指出的具体问题。{correction}"
-        "回复集中于最新话题，给其他群友留出接话空间。"
+        + ("" if follows_request else "回复集中于最新话题，给其他群友留出接话空间。")
     ).strip()
     log_step(
         plan.context,
@@ -217,25 +222,34 @@ def _persona_fallback_texts(plan: ReplyGenerationPlan) -> tuple[str, ...]:
     return tuple(PERSONA_GROUNDING_FALLBACKS[(start + offset) % count] for offset in range(count))
 
 
+def _asks_question(plan: ReplyGenerationPlan) -> bool:
+    # 只看用户自己说的话；图上转写的文字里有“什么”“几点”不代表用户在问。
+    return bool(QUESTION_FORM_RE.search(INBOUND_MEDIA_MARKER_RE.sub("", str(plan.text or ""))))
+
+
 def _forced_fallback_texts(
     plan: ReplyGenerationPlan, failure_code: str
 ) -> tuple[tuple[str, ...], str]:
     """按拒绝原因挑一组兜底句，返回 (候选句, 日志步骤名)。"""
-    if failure_code == "media_grounding":
-        unreadable = isinstance(plan.event, dict) and event_media_all_unreadable(plan.event)
-        first      = MEDIA_UNREADABLE_FALLBACK if unreadable else MEDIA_UNSURE_FALLBACK
-        # 刚用过的兜底会被复读检查拦下，备选句保证连续追问时不退化成“在呢在呢”。
-        return (
-            first,
-            MEDIA_UNSURE_ALTERNATE,
-            UNSURE_FALLBACK,
-        ), "reply.check.exhausted.media_grounding"
+    step          = "reply.check.exhausted.forced_fallback"
+    current_image = isinstance(plan.event, dict) and event_has_current_image(plan.event)
+    # 这轮发了图时，接不上上下文的兜底（“没跟上你们说的是哪件事”）同样会和读出来的图对不上。
+    if failure_code == "media_grounding" or (failure_code == "context_grounding" and current_image):
+        # 刚用过的兜底会被复读检查拦下，每组都备一句，连续几轮时不退化成“在呢在呢”。
+        if current_image and event_media_all_unreadable(plan.event):
+            texts = MEDIA_UNREADABLE_FALLBACKS
+        elif _asks_question(plan):
+            texts = MEDIA_UNSURE_FALLBACKS
+        else:
+            texts = MEDIA_SEEN_FALLBACKS
+        if failure_code == "media_grounding":
+            step = "reply.check.exhausted.media_grounding"
+        return texts, step
     if failure_code == "persona_grounding":
         return _persona_fallback_texts(plan), "reply.check.exhausted.persona_grounding"
-    step = "reply.check.exhausted.forced_fallback"
     if failure_code == "instruction_following":
         return (NOT_READY_FALLBACK,), step
-    if QUESTION_FORM_RE.search(plan.text):
+    if _asks_question(plan):
         # 被问到却答不稳时，承认拿不准比说“没跟上”更贴切。
         return (UNSURE_FALLBACK, UNSURE_ALTERNATE), step
     if failure_code == "context_grounding":

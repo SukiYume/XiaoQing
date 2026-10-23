@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
+
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
+from core.router import build_command_catalog_node, command_access
 from plugins.xiaoqing_chat.planning.pfc_engine import PFCRunResult
 from plugins.xiaoqing_chat.planning.pfc_state import PFCConversationState
+from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.settings_snapshot import with_settings_reader
 from tests.helpers.xiaoqing_chat_test_support import (
     Any,
@@ -28,7 +32,7 @@ sample_group_event = _fixture_support.sample_group_event
 
 
 @pytest.mark.asyncio
-async def test_handle_provider_list_mode_remains_public(mock_context, sample_group_event):
+async def test_handle_provider_list_mode_shows_the_fallback_chain(mock_context, sample_group_event):
     from core.config import ConfigSnapshot
     from plugins.xiaoqing_chat.commands import handle_provider
     from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
@@ -38,7 +42,7 @@ async def test_handle_provider_list_mode_remains_public(mock_context, sample_gro
         config  = {},
         secrets = {},
     ).secrets
-    _set_context_principal(mock_context, sample_group_event, group_role="member")
+    _set_context_principal(mock_context, sample_group_event, group_role="admin")
 
     with patch("plugins.xiaoqing_chat.commands.get_state", return_value=state):
         result = await handle_provider("", sample_group_event, mock_context)
@@ -76,27 +80,73 @@ async def test_handle_provider_group_admin_switch_is_scoped_to_current_group(
     assert "已将当前会话模型切换到" in result[0]["data"]["text"]
 
 
+def _xc_node(*path: str):
+    manifest = json.loads(
+        (REPOSITORY_ROOT / "plugins" / "xiaoqing_chat" / "plugin.json").read_text(encoding="utf-8")
+    )
+    node = build_command_catalog_node("xiaoqing_chat", manifest["commands"][0], root=True)
+    for name in path:
+        node = node.resolve_child(name)
+        assert node is not None, path
+    return node
+
+
+def _group_user(role: str, *, admin: bool = False) -> PluginPrincipal:
+    return PluginPrincipal(
+        kind         = "user",
+        user_id      = 12345,
+        group_id     = 67890,
+        is_bot_admin = admin,
+        group_role   = role,
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "principal", "allowed"),
+    [
+        (("model",), _group_user("owner"), True),
+        (("model",), _group_user("admin"), True),
+        (("model",), _group_user("member"), False),
+        (("model",), _group_user("unknown"), False),
+        (("model",), _group_user("member", admin=True), True),
+        (("model",), PluginPrincipal(kind="user", user_id=12345, is_private=True), False),
+        (
+            ("model",),
+            PluginPrincipal(kind="user", user_id=12345, is_private=True, is_bot_admin=True),
+            True,
+        ),
+        (("model", "global"), _group_user("owner"), False),
+        (("model", "global"), _group_user("member", admin=True), True),
+    ],
+)
+def test_model_switching_permission_is_declared_in_the_manifest(path, principal, allowed):
+    """谁能查看和切换模型写在 plugin.json 里，由 Core 的 command_access 在调用插件前判断。"""
+
+    assert (command_access(_xc_node(*path), principal) is None) is allowed
+
+
 @pytest.mark.asyncio
-async def test_handle_provider_global_scope_requires_bot_admin(mock_context, sample_group_event):
+async def test_handle_provider_global_switch_is_separate_from_session_switch(
+    mock_context,
+    sample_group_event,
+):
     from plugins.xiaoqing_chat.chat_runtime import ai_route_context
     from plugins.xiaoqing_chat.commands import handle_provider
     from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
     state                = ChatRuntimeState()
     mock_context.secrets = {}
-    _set_context_principal(mock_context, sample_group_event, group_role="owner")
+    _set_context_principal(
+        mock_context,
+        sample_group_event,
+        group_role   = "member",
+        is_bot_admin = True,
+    )
 
     with (
         patch("plugins.xiaoqing_chat.commands.get_state", return_value=state),
         patch("plugins.xiaoqing_chat.chat_runtime._state", return_value=state),
     ):
-        denied = await handle_provider("global glm", sample_group_event, mock_context)
-        _set_context_principal(
-            mock_context,
-            sample_group_event,
-            group_role   = "member",
-            is_bot_admin = True,
-        )
         allowed = await handle_provider("global glm", sample_group_event, mock_context)
         other_group = ai_route_context(mock_context, chat_id="g99999")
         await handle_provider("deepseek", sample_group_event, mock_context)
@@ -106,82 +156,12 @@ async def test_handle_provider_global_scope_requires_bot_admin(mock_context, sam
         await handle_provider("global default", sample_group_event, mock_context)
         reset_global = ai_route_context(mock_context, chat_id="g99999")
 
-    assert "Bot 全局管理员" in denied[0]["data"]["text"]
     assert "全局运行时模型" in allowed[0]["data"]["text"]
     assert other_group["_provider_name"] == "glm"
     assert local["_provider_name"] == "deepseek"
     assert inherited["_provider_name"] == "glm"
     assert reset_global["_provider_name"] == "deepseek"
     assert state.global_active_provider is None
-
-
-@pytest.mark.asyncio
-async def test_handle_provider_private_chat_requires_bot_admin(
-    mock_context,
-    sample_private_event,
-):
-    from plugins.xiaoqing_chat.commands import handle_provider
-    from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
-
-    state                = ChatRuntimeState()
-    mock_context.secrets = {}
-    _set_context_principal(mock_context, sample_private_event)
-
-    with patch("plugins.xiaoqing_chat.commands.get_state", return_value=state):
-        denied = await handle_provider("glm", sample_private_event, mock_context)
-        _set_context_principal(mock_context, sample_private_event, is_bot_admin=True)
-        allowed = await handle_provider("glm", sample_private_event, mock_context)
-
-    assert "管理员" in denied[0]["data"]["text"]
-    assert "已将当前会话模型切换到" in allowed[0]["data"]["text"]
-    assert state.get_chat_provider(f"u{sample_private_event['user_id']}") == "glm"
-
-
-@pytest.mark.asyncio
-async def test_handle_provider_does_not_trust_raw_sender_role(
-    mock_context,
-    sample_group_event,
-):
-    from plugins.xiaoqing_chat.commands import handle_provider
-    from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
-
-    state = ChatRuntimeState()
-    event = dict(sample_group_event)
-    event["sender"] = dict(sample_group_event["sender"], role="owner")
-    mock_context.secrets = {}
-    _set_context_principal(mock_context, event, group_role="unknown")
-
-    with patch("plugins.xiaoqing_chat.commands.get_state", return_value=state):
-        result = await handle_provider("glm", event, mock_context)
-
-    assert "管理员" in result[0]["data"]["text"]
-    assert state.get_chat_provider("g67890") is None
-
-
-@pytest.mark.asyncio
-async def test_handle_provider_rejects_private_principal_in_group_scope(
-    mock_context,
-    sample_group_event,
-):
-    from plugins.xiaoqing_chat.commands import handle_provider
-    from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
-
-    state                  = ChatRuntimeState()
-    mock_context.secrets   = {}
-    mock_context.principal = SimpleNamespace(
-        kind       = "user",
-        user_id    = sample_group_event["user_id"],
-        group_id   = sample_group_event["group_id"],
-        is_private = True,
-        group_role = "owner",
-    )
-    mock_context.capabilities = PluginCapabilities(ai=_provider_test_ai())
-
-    with patch("plugins.xiaoqing_chat.commands.get_state", return_value=state):
-        result = await handle_provider("glm", sample_group_event, mock_context)
-
-    assert "管理员" in result[0]["data"]["text"]
-    assert state.get_chat_provider("g67890") is None
 
 
 @pytest.mark.asyncio
@@ -316,7 +296,7 @@ async def test_smalltalk_new_user_turn_clears_sticky_pfc_ended_before_planner_ru
             brain_chat=SimpleNamespace(enable_private_brain_chat=False),
             max_context_size=10,
             planner=SimpleNamespace(resolve_think_level=lambda history_len=0: 0),
-            personality=SimpleNamespace(states=[], state_probability=0.0),
+            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
             debug=SimpleNamespace(log_latency=False),
         )
     )

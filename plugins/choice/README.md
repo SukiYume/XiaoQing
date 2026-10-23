@@ -83,6 +83,5 @@
 python -m ruff check plugins/choice tests/plugins/choice/test_choice.py
 python -m mypy plugins/choice
 python -m pytest -q tests/plugins/choice/test_choice.py \
-  tests/plugins/contracts/test_plugin_documentation_contracts.py \
   tests/plugins/contracts/test_public_error_redaction.py
 ```

@@ -1222,7 +1222,7 @@ def _format_daily_briefing(
     lines = [f"☀️ 早上好！今天是{current_date} {weekday}", ""]
 
     if events:
-        lines.append("🗓️ **今日日程**")
+        lines.append("🗓️ 今日日程")
         for event in events[:5]:
             location = f" @{event.location}" if event.location else ""
             lines.append(f"  • {event.time_text} {event.title}{location}")
@@ -1234,7 +1234,7 @@ def _format_daily_briefing(
         lines.append("")
 
     if tasks:
-        lines.append("✅ **今日待办**")
+        lines.append("✅ 今日待办")
         for task in tasks[:5]:
             title         = task.title or "无标题"
             priority      = task.priority if isinstance(task.priority, int) else 3

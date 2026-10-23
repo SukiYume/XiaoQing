@@ -47,7 +47,7 @@ def _progress_bar(value: int, max_val: int = MAX_STAT_VALUE, length: int = 10) -
 def format_pet_card(pet: Pet, user: User | None = None) -> str:
     """生成包含宠物属性、装扮和可选用户资产的状态卡。"""
     lines = [
-        f"🐾 **{pet.name}** {_STAGE_EMOJI.get(pet.stage, '🐾')}",
+        f"🐾 {pet.name} {_STAGE_EMOJI.get(pet.stage, '🐾')}",
         "═" * 20,
         f"• 阶段: {pet.stage.value} ({pet.form})",
         f"• 性格: {pet.personality.value}",
@@ -70,7 +70,7 @@ def format_pet_card(pet: Pet, user: User | None = None) -> str:
             f"• 经验值: {pet.experience}",
             f"• 点赞: {pet.likes}",
             "",
-            "📊 **属性**",
+            "📊 属性",
             f"  饥饿: {_progress_bar(pet.hunger)}",
             f"  心情: {_progress_bar(pet.mood)}",
             f"  清洁: {_progress_bar(pet.clean)}",
@@ -86,7 +86,7 @@ def format_pet_card(pet: Pet, user: User | None = None) -> str:
         if item_id in DEFAULT_DRESS_ITEMS
     ]
     if equipped:
-        lines.extend(["", "👗 **装扮**"])
+        lines.extend(["", "👗 装扮"])
         for slot_name, item_id in equipped:
             slot_emoji = _DRESS_SLOT_EMOJI.get(slot_name, "🔸")
             lines.append(f"  {slot_emoji} {slot_name}: {DEFAULT_DRESS_ITEMS[item_id]['name']}")
@@ -98,7 +98,7 @@ def format_pet_card(pet: Pet, user: User | None = None) -> str:
         lines.extend(
             [
                 "",
-                "💰 **用户信息**",
+                "💰 用户信息",
                 f"  🪙 金币: {user.coins}",
                 f"  ❤️ 友情点: {user.friendship_points}",
             ]

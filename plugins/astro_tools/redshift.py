@@ -54,18 +54,18 @@ def _handle_redshift_sync(args: str, context: PluginContextProtocol) -> str:
         result_lines       = [
             "🌌 红移计算 (Planck 2018)",
             "",
-            f"**输入红移: z = {z}**",
+            f"输入红移: z = {z}",
             "",
-            "**距离:**",
+            "距离:",
             f"光度距离: {d_L.to(distance_unit):.{distance_precision}f}",
             f"角直径距离: {d_A.to(distance_unit):.{distance_precision}f}",
             f"共动距离: {d_C.to(distance_unit):.{distance_precision}f}",
             "",
-            "**时间:**",
+            "时间:",
             f"光行时: {t_lookback.to(u.Gyr):.3f}",
             f"宇宙年龄(当时): {age_at_z.to(u.Gyr):.3f}",
             "",
-            "**其他参数:**",
+            "其他参数:",
             f"尺度因子: a = 1/(1+z) = {1 / (1 + z):.6f}",
         ]
 

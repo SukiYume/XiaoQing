@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
+from plugins.xiaoqing_chat.persona import PersonaCard
 from tests.helpers.xiaoqing_chat_test_support import (
     Any,
     AsyncMock,
@@ -31,7 +32,7 @@ async def test_generate_reply_prefers_planner_goal_over_review_override_goal_sto
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
-            personality=SimpleNamespace(multiple_reply_style=[], multiple_probability=0.0),
+            personality=SimpleNamespace(card=PersonaCard()),
             keyword_reaction=SimpleNamespace(keyword_rules=[], regex_rules=[]),
             goal=SimpleNamespace(enable_goal=True),
             reflection=SimpleNamespace(enable_review_sessions=True),
@@ -125,10 +126,7 @@ async def test_generate_reply_prefers_planner_goal_over_review_override_goal_sto
             patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_temperature", return_value=0.7)
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_identity", return_value="")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_reply_style", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.persona_reply_style", return_value="")
         )
         stack.enter_context(
             patch(
@@ -200,7 +198,7 @@ async def test_generate_reply_rebuilds_memory_context_after_request_too_large(mo
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
-            personality=SimpleNamespace(multiple_reply_style=[], multiple_probability=0.0),
+            personality=SimpleNamespace(card=PersonaCard()),
             keyword_reaction=SimpleNamespace(keyword_rules=[], regex_rules=[]),
             goal=SimpleNamespace(enable_goal=False),
             reflection=SimpleNamespace(enable_review_sessions=False),
@@ -311,10 +309,7 @@ async def test_generate_reply_rebuilds_memory_context_after_request_too_large(mo
             patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_temperature", return_value=0.7)
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_identity", return_value="")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_reply_style", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.persona_reply_style", return_value="")
         )
         stack.enter_context(
             patch(
@@ -384,7 +379,7 @@ async def test_generate_reply_prefers_plan_reasoning_goal_when_action_reasoning_
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
-            personality=SimpleNamespace(multiple_reply_style=[], multiple_probability=0.0),
+            personality=SimpleNamespace(card=PersonaCard()),
             keyword_reaction=SimpleNamespace(keyword_rules=[], regex_rules=[]),
             goal=SimpleNamespace(enable_goal=True),
             reflection=SimpleNamespace(enable_review_sessions=False),
@@ -472,10 +467,7 @@ async def test_generate_reply_prefers_plan_reasoning_goal_when_action_reasoning_
             patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_temperature", return_value=0.7)
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_identity", return_value="")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_reply_style", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.persona_reply_style", return_value="")
         )
         stack.enter_context(
             patch(
@@ -544,7 +536,7 @@ async def test_generate_reply_draft_exposes_canonical_text_parts(mock_context):
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
-            personality=SimpleNamespace(multiple_reply_style=[], multiple_probability=0.0),
+            personality=SimpleNamespace(card=PersonaCard()),
             keyword_reaction=SimpleNamespace(keyword_rules=[], regex_rules=[]),
             goal=SimpleNamespace(enable_goal=False),
             reflection=SimpleNamespace(enable_review_sessions=False),
@@ -631,10 +623,7 @@ async def test_generate_reply_draft_exposes_canonical_text_parts(mock_context):
             patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_temperature", return_value=0.7)
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_identity", return_value="")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_reply_style", return_value="")
+            patch("plugins.xiaoqing_chat.reply_plan.persona_reply_style", return_value="")
         )
         stack.enter_context(
             patch(

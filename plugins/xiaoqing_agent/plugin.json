@@ -1,0 +1,87 @@
+{
+    "name": "xiaoqing_agent",
+    "version": "1.0.0",
+    "description": "小青 agent：有人叫小青做事时，按发起人自己的权限用已有命令动手完成；Bot 管理员还能用 Python、Shell、SSH 和 Codex",
+    "author": "XiaoQing",
+    "entry": "main.py",
+    "concurrency": "parallel",
+    "capabilities": ["command_runner", "local_tools"],
+    "services": [
+        {
+            "name": "agent.handle_turn",
+            "callback": "handle_turn",
+            "callers": ["xiaoqing_chat"]
+        },
+        {
+            "name": "agent.report_delivery",
+            "callback": "report_delivery",
+            "callers": ["xiaoqing_chat"]
+        }
+    ],
+    "uses_services": ["codex.agent_task", "qingssh.agent_command"],
+    "commands": [
+        {
+            "name": "agent",
+            "triggers": ["agent"],
+            "help": "小青 agent：直接执行任务、查看进度、停止任务和查看记录",
+            "usage": "/agent <run|status|stop|history|result|help> [参数]",
+            "contexts": ["private", "group"],
+            "examples": ["/agent status"],
+            "invalid_examples": ["/agent unknown-command"],
+            "subcommands": [
+                {
+                    "name": "run",
+                    "aliases": ["执行"],
+                    "help": "跳过判断，直接把内容作为任务执行",
+                    "usage": "/agent run <任务>",
+                    "examples": ["/agent run 算一下 2 的 100 次方"],
+                    "invalid_examples": ["/agent run"]
+                },
+                {
+                    "name": "status",
+                    "aliases": ["状态"],
+                    "help": "查看运行中的任务、计划和当前步骤",
+                    "usage": "/agent status [任务ID]",
+                    "examples": ["/agent status"],
+                    "invalid_examples": ["/agent status a1b2c3 extra"]
+                },
+                {
+                    "name": "stop",
+                    "aliases": ["停止", "cancel"],
+                    "help": "停止你发起的运行中任务（Bot 管理员可停止任何任务）；不带参数时只在恰好一个任务时停止它，全部停止用 all",
+                    "usage": "/agent stop [任务ID|all]",
+                    "examples": ["/agent stop all"],
+                    "invalid_examples": ["/agent stop a1b2c3 extra"]
+                },
+                {
+                    "name": "history",
+                    "aliases": ["历史"],
+                    "help": "查看本会话最近的任务记录",
+                    "usage": "/agent history",
+                    "match": "exact",
+                    "examples": ["/agent history"],
+                    "invalid_examples": ["/agent history extra"]
+                },
+                {
+                    "name": "result",
+                    "aliases": ["结果"],
+                    "help": "重新发送本会话某个已结束任务的结果",
+                    "usage": "/agent result <任务ID>",
+                    "examples": ["/agent result a1b2c3"],
+                    "invalid_examples": ["/agent result"]
+                },
+                {
+                    "name": "help",
+                    "aliases": ["帮助", "?"],
+                    "help": "显示 agent 用法",
+                    "usage": "/agent help",
+                    "match": "exact",
+                    "examples": ["/agent help"],
+                    "invalid_examples": ["/agent help extra"]
+                }
+            ]
+        }
+    ],
+    "schedule": [],
+    "dependencies": []
+}

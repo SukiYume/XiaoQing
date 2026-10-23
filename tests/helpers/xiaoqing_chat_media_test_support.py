@@ -147,7 +147,6 @@ def _make_media_runtime(**media_overrides):
     cfg.brain_chat.enable_private_brain_chat    = False
     cfg.brain_chat.show_mode_indicator          = False
     cfg.brain_chat.brain_mode_indicator         = "[brain]"
-    cfg.personality.states                      = []
     cfg.personality.state_probability           = 0.0
     return SimpleNamespace(cfg=cfg)
 

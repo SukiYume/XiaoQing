@@ -40,9 +40,10 @@ class _Context:
         self.request_id = "mc-test-request"
         self.send_action = AsyncMock(return_value=True)
         self.secrets = {"plugins": {"minecraft": {profile: password}}}
+        self.config  = {"default_group_ids": [GROUP_TARGET.target_id]}
 
     def get_settings_snapshot(self):
-        return settings_snapshot(secrets=self.secrets)
+        return settings_snapshot(config=self.config, secrets=self.secrets)
 
 
 class _FakeRconClient:
@@ -145,20 +146,27 @@ class TestMinecraftMetadata:
         assert "/mc say <消息>" in help_text
         assert "/mc say 大家好" in help_text
         assert "/mc tell <玩家名> <消息>" in help_text
-        assert "玩家聊天、加入和离开等事件会转发到当前 QQ 私聊" in help_text
+        assert "/mc list" in help_text
+        assert "玩家聊天、加入和离开等事件会转发到这个私聊或群" in help_text
         assert "start" not in help_text
 
-    def test_manifest_commands_are_admin_only_and_scheduled(self) -> None:
+    def test_manifest_opens_chat_to_everyone_and_keeps_control_for_admins(self) -> None:
         content = json.loads(
             (ROOT / "plugins" / "minecraft" / "plugin.json").read_text(encoding="utf-8")
         )
         assert content["name"] == "minecraft"
-        assert all(command["admin_only"] is True for command in content["commands"])
-        assert {command["name"] for command in content["commands"]} == {
-            "mc",
-            "mcconnect",
-            "mcdisconnect",
-        }
+        commands = {command["name"]: command for command in content["commands"]}
+        assert set(commands) == {"mc", "mcconnect", "mcdisconnect"}
+        assert "admin_only" not in commands["mc"]
+        assert commands["mcconnect"]["admin_only"] is True
+        assert commands["mcdisconnect"]["admin_only"] is True
+        assert all("contexts" not in command for command in commands.values())
+        subcommands = {item["name"]: item for item in commands["mc"]["subcommands"]}
+        # 谁能做什么全在这里声明，插件代码不再自己判断管理员。
+        for name in ("connect", "disconnect", "run"):
+            assert subcommands[name]["permission"] == "bot_admin", name
+        for name in ("say", "tell", "list", "status", "help"):
+            assert "permission" not in subcommands[name], name
         schedule = next(item for item in content["schedule"] if item["id"] == "check_log")
         assert schedule["handler"] == "scheduled"
 
@@ -465,6 +473,71 @@ class TestMinecraftCommands:
     async def test_legacy_command_rejects_invalid_target(self, tmp_path: Path) -> None:
         result = await mc_main.handle("mcconnect", "default", {"user_id": 0}, _context(tmp_path))
         assert "无法识别" in result[0]["data"]["text"]
+
+    @pytest.mark.asyncio
+    async def test_chat_goes_in_as_text_and_server_commands_need_the_run_node(
+        self,
+        reset_minecraft_runtime: ConnectionManager,
+        tmp_path: Path,
+    ) -> None:
+        client = _FakeRconClient("group", 25575, "p")
+        client.command_result = RconCommandResult(True, response="")
+        await reset_minecraft_runtime.replace_connection(_connection(GROUP_TARGET, client=client))
+        member = _context(tmp_path)
+        event  = {
+            "user_id": 30001,
+            "group_id": GROUP_TARGET.target_id,
+            "sender": {"card": "阿青", "nickname": "qing"},
+        }
+
+        said = await mc_main.handle("mc", 'say 大家好 @e\n/op me "引号"', event, member)
+        told = await mc_main.handle("mc", "tell Steve 来挖矿", event, member)
+        bad  = await mc_main.handle("mc", "tell @a 你好", event, member)
+        bare = await mc_main.handle("mc", "op Steve", event, member)
+
+        assert said[0]["data"]["text"] == "✅ 已发到游戏"
+        assert told[0]["data"]["text"] == "✅ 已悄悄发给 Steve"
+        assert bad[0]["data"]["text"].startswith("用法: /mc tell")
+        # 不再把未知内容当服务器命令：要执行就走 /mc run，它在 plugin.json 里只给 Bot 管理员。
+        assert "/mc run" in bare[0]["data"]["text"]
+        say_command, tell_command = client.commands
+        _, target, component = say_command.split(" ", 2)
+        assert target == "@a"
+        # 发言整体是一个文本组件：@e、换行后的“命令”和引号都只是文字。
+        assert json.loads(component) == [
+            "",
+            {"text": "[QQ] ", "color": "aqua"},
+            {"text": '<阿青> 大家好 @e /op me "引号"'},
+        ]
+        assert tell_command.startswith("tellraw Steve ")
+        assert "<阿青> 悄悄对你说: 来挖矿" in tell_command
+
+        client.command_result = RconCommandResult(True, response="There are 1 of 20: Steve")
+        listed = await mc_main.handle("mc", "list", event, member)
+        ran    = await mc_main.handle("mc", "run time set day", event, member)
+        usage  = await mc_main.handle("mc", "run", event, member)
+        assert "There are 1 of 20" in listed[0]["data"]["text"]
+        assert "There are 1 of 20" in ran[0]["data"]["text"]
+        assert usage[0]["data"]["text"] == "用法: /mc run <服务器命令>"
+        assert client.commands[2:] == ["list", "time set day"]
+
+    @pytest.mark.asyncio
+    async def test_group_connection_forwards_logs_only_to_push_target_groups(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        reset_minecraft_runtime: ConnectionManager,
+    ) -> None:
+        (tmp_path / "latest.log").write_text("old history\n", encoding="utf-8")
+        _write_config(tmp_path, _server_config(log_file="latest.log"))
+        monkeypatch.setattr(mc_main, "RconClient", _FakeRconClient)
+        other = DeliveryTarget("group", 20002)
+
+        result = await mc_main._handle_connect("default", other, _context(tmp_path))
+
+        conn = reset_minecraft_runtime.get_connection(other)
+        assert "不在定时推送的目标群" in result[0]["data"]["text"]
+        assert conn is not None and conn.log_monitor is None
 
     @pytest.mark.asyncio
     async def test_command_success_empty_failure_and_target_isolation(

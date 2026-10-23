@@ -33,9 +33,9 @@ ruff>=0.1.0
 pygments>=2.15.0
 mypy>=1.0.0
 
-# 可选：Jupyter 插件执行内核
-# jupyter-client>=8.6.0
-# ipykernel>=6.29.0
+# Jupyter 插件执行内核
+jupyter-client>=8.6.0
+ipykernel>=6.29.0
 
 # 可选：arxiv_filter 本地模型推理与训练
 # torch>=2.0.0

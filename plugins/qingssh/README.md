@@ -1,12 +1,12 @@
 # 🔐 QingSSH
 
-QingSSH 为 Bot 管理员提供私聊 SSH 远程控制，支持保存服务器、导入 `~/.ssh/config`、持久会话、流式命令输出、远端命令终止和图片查看。
+QingSSH 为 Bot 管理员提供 SSH 远程控制（私聊和群聊都能用），支持保存服务器、导入 `~/.ssh/config`、持久会话、流式命令输出、远端命令终止和图片查看。
 
 ---
 
 ## 🔐 权限与依赖
 
-全部 Manifest 入口均为管理员私聊命令。安装 SSH 后端：
+全部 Manifest 入口均为 Bot 管理员命令，私聊和群聊都能用；群里的命令输出全群可见。安装 SSH 后端：
 
 ```bash
 pip install paramiko
@@ -72,7 +72,7 @@ data/qingssh/servers.json
 }
 ```
 
-`auth_type` 接受 `agent`、`key` 和 `password`。密码通过管理员私聊的 `/ssh add` 引导输入，由 Core 密钥存储保存；`servers.json` 记录插件生成的 `password_ref`。配置写入和 secret 写入采用补偿式事务，任一步异常都会收敛已创建资源。
+`auth_type` 接受 `agent`、`key` 和 `password`。密码通过管理员私聊的 `/ssh add` 引导输入（群里添加服务器只能选密钥或 SSH Agent，选密码会被拒绝），由 Core 密钥存储保存；`servers.json` 记录插件生成的 `password_ref`。配置写入和 secret 写入采用补偿式事务，任一步异常都会收敛已创建资源。
 
 主机名、端口、用户名、服务器别名和路径均执行长度、字符与范围校验。
 
@@ -93,7 +93,7 @@ Host Key 始终通过 `~/.ssh/known_hosts` 严格验证。新主机与指纹变�
 
 ## 💬 会话操作
 
-连接成功后，私聊进入 Core Session。直接发送文本即可执行远端命令：
+连接成功后，当前私聊或群里发起连接的管理员进入 Core Session，群里其他人的消息不受影响。直接发送文本即可执行远端命令：
 
 ```text
 pwd
@@ -112,11 +112,11 @@ help
 | `停止` | 终止当前远端命令进程组 |
 | `退出`、`取消`、`exit`、`quit`、`q` | 关闭会话与 SSH 连接 |
 
-会话按“私聊用户 + 服务器”隔离，空闲期为 10 分钟。每个后台命令具有唯一 `job_id`，会话事务提交后才启动 SSH 通道。任务完成时按 `job_id` 原子更新状态。
+会话按“用户 + 私聊或群 + 服务器”隔离，空闲期为 10 分钟。每个后台命令具有唯一 `job_id`，会话事务提交后才启动 SSH 通道。任务完成时按 `job_id` 原子更新状态。
 
 `停止` 先向远端进程组发送 `TERM`，随后按需要发送 `KILL`，并清理本地通道。远端 PID 已确认时返回终止状态；PID 握手进行期间返回远端状态待确认提示。
 
-目标系统需要提供 POSIX `sh`、`setsid` 和 `kill`。
+目标系统需要提供 POSIX `sh` 和 `kill`。有 `setsid` 时（Linux）命令独占进程组，`停止` 整组收回；没有 `setsid` 的主机（macOS、Windows 上的 OpenSSH + Git Bash）退回普通后台进程，`停止` 直接结束该进程，它另外派生的子进程可能需要手动清理。
 
 ---
 
@@ -181,7 +181,17 @@ SFTP 下载到临时文件，经 OneBot action 接收后清理；发送异常与
 
 ## ⏰ 生命周期
 
-插件首次使用时创建 `SSHManager`。每分钟的 `cleanup_orphans` 以 Core `silent` 模式对比 Core Session 与活动连接，回收失去会话所有者的连接。卸载、重载或 Bot 关闭时，`shutdown()` 收敛活动命令、SSH 连接、跳板连接、SFTP 和临时归档。
+插件首次使用时创建 `SSHManager`。每分钟的 `cleanup_orphans` 以 Core `silent` 模式对比 Core Session 与活动连接，回收失去会话所有者的连接；小青 agent 的一次性连接不属于任何会话，清理时跳过。卸载、重载或 Bot 关闭时，`shutdown()` 收敛活动命令、SSH 连接、跳板连接、SFTP 和临时归档。
+
+---
+
+## 🛠 小青 agent 命令
+
+`xiaoqing_agent` 通过 `qingssh.agent_command` 服务列出服务器摘要（名称、主机、端口、用户名，不含认证材料），或在一台服务器上执行一条命令。服务按 `/ssh` 在 plugin.json 里的声明签发给能用 `/ssh` 的发起人（`/ssh` 只给 Bot 管理员）。
+
+- 每次执行新建一条独立连接，执行完立即断开，不占用管理员的 `/ssh` 会话；输出上限 32,000 字符。
+- 超时或任务停止时按普通命令的终止流程收回远端进程。
+- 远端命令与交互会话使用同一套包装：有 `setsid` 时独占进程组，没有时退回普通后台进程。
 
 ---
 

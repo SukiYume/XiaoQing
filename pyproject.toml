@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xiaoqing"
-version = "4.4.3"
+version = "4.5.0"
 description = "基于 OneBot 协议和 Python asyncio 的轻量级 QQ 机器人框架，内置向量记忆与行为规划"
 readme = "README.md"
 license = "MIT"
@@ -185,6 +185,7 @@ packages = [
     "plugins.url_parser",
     "plugins.voice",
     "plugins.wolframalpha",
+    "plugins.xiaoqing_agent",
     "plugins.xiaoqing_chat",
     "plugins.xiaoqing_chat.config",
     "plugins.xiaoqing_chat.expression",
@@ -209,7 +210,7 @@ packages = [
     "static/js/*/*.js",
 ]
 "plugins.pendo.web.services" = ["assets/*.zip"]
-"plugins.xiaoqing_chat.config" = ["xiaoqing_config.json"]
+"plugins.xiaoqing_chat.config" = ["xiaoqing_config.json", "persona.md"]
 "plugins.xiaoqing_chat.media" = ["qq_face_builtin_catalog.json"]
 
 # ============================================================

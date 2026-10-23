@@ -1,6 +1,6 @@
 # 🎙️ Azure Voice
 
-`voice` 通过 Azure Speech 提供管理员文字转语音命令，并向 Manifest 授权的插件发布 `voice.synthesize_text` 服务。
+`voice` 通过 Azure Speech 提供所有人可用的文字转语音命令，并向 Manifest 授权的插件发布 `voice.synthesize_text` 服务。
 
 ---
 
@@ -13,7 +13,7 @@
 /语音 help
 ```
 
-命令文本长度范围为 1～500 个字符，返回 OneBot `record` 消息段。Manifest 将命令标记为 Bot 管理员入口。
+命令文本长度范围为 1～500 个字符，返回 OneBot `record` 消息段。命令对所有人开放，没有按人限次，每次调用都计入 Azure 用量。
 
 服务契约：
 

@@ -301,7 +301,7 @@ class TestScheduledRegression:
 
             briefing = asyncio.run(scheduled_module._generate_briefing_content("u1", db))
 
-            assert "🗓️ **今日日程**" in briefing
+            assert "🗓️ 今日日程" in briefing
             assert "10:30 学术会议 · 主会场报告" in briefing
             assert "报到" not in briefing
             assert "闭幕" not in briefing

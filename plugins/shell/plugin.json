@@ -3,7 +3,7 @@
     "version": "2.1.0",
     "description": "管理员本地命令执行插件 - 支持 direct/Git Bash 终端、命令启用列表、超时和输出限制",
     "entry": "main.py",
-    "capabilities": ["admin_sessions", "execution_timeout_exempt"],
+    "capabilities": ["execution_timeout_exempt"],
     "commands": [
         {
             "name": "shell",
@@ -14,7 +14,6 @@
             ],
             "help": "💻 执行本地命令 | /shell help 查看权限边界和使用说明",
             "admin_only": true,
-            "contexts": ["private"],
             "priority": 20,
             "usage": "/shell <启用的本地命令>",
             "examples": ["/shell python --version"],

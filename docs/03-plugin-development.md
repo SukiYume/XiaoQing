@@ -497,10 +497,11 @@ context.logger.info("处理完成")
 
 `context.state` 是当前插件代共享的内存字典，适合缓存和任务注册表。持久状态写入 `context.data_dir`。
 
-### 管理员与静音
+### 权限与静音
+
+谁能在哪里用哪条命令只写在 `plugin.json` 的 `admin_only`、`permission` 和 `contexts` 里，由 Core 在调用插件前统一判断（`core.router.command_access`）；插件代码不自己判断管理员。命令里需要区分权限的分支（比如只给管理员的写操作）声明成单独的子命令，并在处理时确认调用是从这个子命令进来的。
 
 ```python
-context.is_global_admin()
 context.mute_group(group_id, duration_minutes=30)
 context.unmute_group(group_id)
 context.is_group_muted(group_id)
@@ -518,7 +519,7 @@ is_admin = context.capabilities.is_bot_admin
 is_scheduled = context.capabilities.is_system
 ```
 
-`context.principal` 保存用户、群、会话类型和投递目标。`context.capabilities` 保存 Core 按插件声明与当前身份签发的窄能力。主动 OneBot Action 使用 `await context.send_action(action)`；管理型插件可通过自身命令权限调用 `context.reload_config()` 或 `context.reload_plugins()`。完整签名与 capability 属性见 [API 参考](05-api-reference.md#plugincontext)。
+`context.principal` 保存用户、群、会话类型和投递目标。`context.capabilities` 保存 Core 按插件声明与当前身份签发的窄能力。`is_bot_admin` 只用于对象层面的规则（比如只有发起人或 Bot 管理员能停止某个任务），命令能不能用由 Manifest 声明、Core 判断。主动 OneBot Action 使用 `await context.send_action(action)`；管理型插件可通过自身命令权限调用 `context.reload_config()` 或 `context.reload_plugins()`。完整签名与 capability 属性见 [API 参考](05-api-reference.md#plugincontext)。
 
 ---
 
@@ -554,7 +555,7 @@ await context.end_session()
 active = await context.has_session()
 ```
 
-同一会话键串行执行。群聊键由群 ID 与用户 ID 组成，私聊键由用户 ID 组成。Session 超时后结束；后续业务可再次调用 `create_session()` 开始新流程。
+同一会话键串行执行。群聊键由群 ID 与用户 ID 组成，私聊键由用户 ID 组成。Session 超时后结束；后续业务可再次调用 `create_session()` 开始新流程。每次继续前 Core 复核此人此刻仍能用这个插件的至少一条顶层命令（同一处权限判断），撤权或场景不再允许时会话关闭。
 
 ---
 
@@ -577,14 +578,36 @@ voice = record(str(Path("voice.mp3").resolve()))
 plain = segments("完成")
 ```
 
+QQ 不渲染 Markdown，回复文字用纯文本：不写 `**加粗**`、反引号、代码块和 `#` 标题，需要强调时用 emoji 或单独成行。导出成 `.md` 文件的内容和发给模型的提示词不受此限。
+
 入口返回值支持：
 
 - 字符串
 - OneBot 消息段列表
+- 带发送回执的消息段 `DeliverySegments`
 - Action 列表
 - `None`，表示该调用不返回消息
 
-长文本使用 `split_message_segments()` 按消息段边界拆分。出站文件与远程媒体遵循 Core 的类型、大小、路径和网络预算。
+业务状态要等消息真正发出才提交时，返回 `DeliverySegments` 并附上 `DeliveryReceipt`：
+
+```python
+from core.delivery import DeliveryReceipt, DeliverySegments
+
+
+def commit() -> None:
+    mark_sent(receipt.message_ids)  # 发出后各条消息的 ID；长回复被拆成几条时每条都有
+
+
+receipt = DeliveryReceipt(
+    expected_actions = 1,
+    commit           = commit,
+    rollback         = release_reservation,
+    unknown          = commit,
+)
+return DeliverySegments(reply, receipt)
+```
+
+Core 等全部物理消息确认后调用 `commit`，明确失败调用 `rollback`，结果未知调用 `unknown`；回调都至多执行一次。主动发送使用 `send_with_receipt(context.send_action, action, receipt)`。长文本由 Core 按消息段边界自动拆分，也可用 `split_message_segments()` 自行拆分。出站文件与远程媒体遵循 Core 的类型、大小、路径和网络预算。
 
 ---
 
@@ -746,13 +769,16 @@ write_json(data_file, state)
 | `callers` | Core 服务表规定的调用插件集合 |
 | `required_capability` | 特定桥接需要的附加 capability，普通服务省略 |
 
-当前服务集合为 `voice.synthesize_text`、`chat.reply`、`codex.enqueue_arxiv_summary` 和 `core.observe_outgoing_action`。Core 按服务名核验固定所有者和调用方。
+当前服务集合为 `voice.synthesize_text`、`chat.reply`、`codex.enqueue_arxiv_summary`、`core.observe_outgoing_action`，以及小青 agent 的四条桥：`agent.handle_turn` 与 `agent.report_delivery`（`xiaoqing_agent` 提供，`xiaoqing_chat` 调用，后者回报当轮回复是否发出）、`codex.agent_task` 与 `qingssh.agent_command`（分别由 `codex`、`qingssh` 提供，`xiaoqing_agent` 调用）。Core 按服务名核验固定所有者和调用方；`agent.handle_turn` 与 `command_runner` 签发给用户消息的上下文，`command_runner` 以发起人身份执行命令、照常按各命令的权限与场景检查；`codex.agent_task`、`qingssh.agent_command` 和本机工具授权 `local_tools` 分别按 `/codex`、`/ssh`、`/shell` 在 plugin.json 里的声明签发，每次调用都会复核。`codex.agent_task` 与 `qingssh.agent_command` 的执行请求可以只在插件执行通道内启动工作并返回 `asyncio.Task`，Core 在通道外等待结果，调用方取消时一并取消该 Task；这样串行插件不会被一条长命令占住。`command_runner` 在一次性的会话空间里执行命令，不读取也不替换用户正在进行的交互会话；命令新开的会话先交给插件的 `close_session` 回收资源再丢弃；命令返回的 `DeliverySegments` 连同发送回执原样交回调用方，由它随实际发送结算，`run(..., operation_id=...)` 让每次调用有独立的请求 ID。发送回执在提交前收集这条回复每条物理消息的 ID（`DeliveryReceipt.message_ids`，长回复被拆成几条时每条都有），插件在提交回调里把状态和真实消息对应起来，不必事后回填。
+
+Core 发出的能力和会话一样不另设权限：密钥管理跟随 `/set_secret`，arXiv 的 Codex 摘要跟随 `/codex`，会话每次继续前复核此人此刻仍能用这个插件的至少一条顶层命令（撤权或场景不再允许时会话关闭）。全部经过 `core.router.command_access`，与命令执行是同一处判断。
 
 Manifest capability 集合：
 
 | 名称 | 用途 |
 |---|---|
-| `admin_sessions` | 高权限会话在管理员身份变化时收口 |
+| `command_runner` | 以发起人身份执行已发布命令，权限与场景检查同本人直接发送（仅 `xiaoqing_agent`） |
+| `local_tools` | 本机执行代码、读写文件前向 Core 复核发起人仍能用 `/shell`（仅 `xiaoqing_agent`） |
 | `config_subscription` | 接收当前插件配置 revision |
 | `execution_timeout_exempt` | 由插件生命周期控制长任务超时 |
 | `onebot_media` | 查询受控 OneBot 消息与媒体 |

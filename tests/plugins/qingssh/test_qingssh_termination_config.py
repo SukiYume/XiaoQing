@@ -56,7 +56,7 @@ async def test_remote_stop_uses_control_channel_and_process_group(tmp_path):
 
     assert termination.remote_confirmed is True
     assert termination.local_cleaned is True
-    assert client.commands == ["kill -TERM -- -321"]
+    assert client.commands == ["kill -TERM -- -321 2>/dev/null || kill -TERM 321"]
     assert channel.closed is True
     assert key not in manager.active_channels
 
@@ -156,7 +156,10 @@ async def test_remote_stop_signal_failures_still_close_and_unregister(tmp_path):
 
     assert termination.remote_unknown is True
     assert termination.signal_attempted is True
-    assert client.commands == ["kill -TERM -- -321", "kill -KILL -- -321"]
+    assert client.commands == [
+        "kill -TERM -- -321 2>/dev/null || kill -TERM 321",
+        "kill -KILL -- -321 2>/dev/null || kill -KILL 321",
+    ]
     assert channel.closed is True
     assert key not in manager.active_channels
 

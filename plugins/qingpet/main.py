@@ -796,7 +796,8 @@ def _handle_admin_command(
     """
     管理命令路由。
 
-    所有改变群状态的分支都必须先通过管理员身份校验。
+    谁能用由 plugin.json 里 admin 的声明决定（当前群的群主、群管理员或 Bot 管理员），
+    Core 在调用插件前就检查过了，这里只负责分派。
     """
     parsed = _split_command(args)
 
@@ -820,21 +821,9 @@ def _handle_admin_command(
         child      = admin_node.resolve_child(action) if admin_node is not None else None
         action     = child.name if child is not None else action.casefold()
 
-    # 只信任 core 基于已认证事件签发的主体，不回退到插件私有密钥或测试字段。
-    principal = getattr(context, "principal", None) if context is not None else None
-    try:
-        same_actor = principal is not None and int(principal.user_id) == int(user_id)
-    except (TypeError, ValueError):
-        same_actor = False
-    capabilities     = getattr(context, "capabilities", None) if context is not None else None
-    is_global_admin  = bool(getattr(capabilities, "is_bot_admin", False))
-    can_manage_group = getattr(principal, "can_manage_group", None)
-    is_group_manager = bool(can_manage_group(group_id)) if callable(can_manage_group) else False
-    is_admin         = bool(same_actor and (is_global_admin or is_group_manager))
-
     handler = _ADMIN_HANDLERS.get(action)
     if handler is not None:
-        success, message = handler(user_id, group_id, rest_args, db, is_admin)
+        success, message = handler(user_id, group_id, rest_args, db)
         return bool(success), str(message)
 
     return (
@@ -1007,7 +996,7 @@ async def scheduled_weekly_activity(context) -> list[ScheduledDelivery]:
             settled_groups += 1
 
             if settlement.winners:
-                lines = ["🎉 **本周活动结算**", ""]
+                lines = ["🎉 本周活动结算", ""]
                 for index, winner in enumerate(settlement.winners):
                     line = (
                         f"{_SHOW_MEDALS[index]} {winner.pet_name} "

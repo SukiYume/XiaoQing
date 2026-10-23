@@ -634,7 +634,7 @@ class LedgerHandler(DbOpsMixin):
             f"📝 摘要：{normalized.get('title', '')}\n"
             f"{'🏷️ 商户：' + merchant + chr(10) if merchant else ''}"
             f"📅 日期：{normalized['ledger_date']}\n"
-            f"🔖 ID：`{public_id(item_id)}`"
+            f"🔖 ID：{public_id(item_id)}"
         )
 
         return {"status": "success", "message": message, "item_id": item_id}
@@ -881,7 +881,7 @@ class LedgerHandler(DbOpsMixin):
             f"{_transaction_sign(transaction_type)}{currency_label(item.currency)}{_format_cents(item.amount_cents)}  "
             f"{_get_category_icon(item.ledger_category)}{item.ledger_category}{title_text}\n"
             f"  📅 {item.ledger_date or ''} | 🏦 {account_text}{merchant_text} | "
-            f"ID `{item.display_id}`"
+            f"ID {item.display_id}"
         )
 
     @staticmethod
@@ -896,7 +896,7 @@ class LedgerHandler(DbOpsMixin):
         if not maxima:
             return ""
 
-        lines = ["📊 **各分类最大单笔**"]
+        lines = ["📊 各分类最大单笔"]
         for (_code, category), item in sorted(
             maxima.items(), key=lambda pair: (pair[0][0], -pair[1].amount_cents, pair[0][1])
         ):
@@ -951,7 +951,7 @@ class LedgerHandler(DbOpsMixin):
         if not items:
             return {
                 "status": "success",
-                "message": f"💰 **{range_label}账目**{filter_suffix}\n\n暂无记录",
+                "message": f"💰 {range_label}账目{filter_suffix}\n\n暂无记录",
             }
 
         items.sort(
@@ -1030,14 +1030,14 @@ class LedgerHandler(DbOpsMixin):
         account_text = f"{account} → {counter}" if tx_type == "transfer" and counter else account
 
         message = (
-            f"💰 **账目详情**\n\n"
+            f"💰 账目详情\n\n"
             f"{icon} {_transaction_type_label(tx_type)} "
             f"{currency_label(item.currency)}{_format_cents(item.amount_cents)} {item.currency or 'CNY'}\n"
             f"{cat_icon} 分类：{item.ledger_category}\n"
             f"🏦 账户：{account_text}\n"
             f"📝 描述：{item.title or '无'}\n"
             f"📅 日期：{item.ledger_date or '未知'}\n"
-            f"🔖 ID：`{item.display_id}`\n"
+            f"🔖 ID：{item.display_id}\n"
             f"⏰ 创建：{ItemFormatter.format_datetime(item.created_at, tz=display_timezone)}"
         )
 
@@ -1181,7 +1181,7 @@ class LedgerHandler(DbOpsMixin):
         return {
             "status": "success",
             "message": (
-                f"✅ 已更新账目 `{item.display_id}`\n\n{changes}\n\n💡 /pendo undo 可撤销编辑"
+                f"✅ 已更新账目 {item.display_id}\n\n{changes}\n\n💡 /pendo undo 可撤销编辑"
             ),
         }
 
@@ -1248,7 +1248,7 @@ class LedgerHandler(DbOpsMixin):
         items = await self._load_ledger_items(user_id, start_date, end_date)
 
         if not items:
-            return {"status": "success", "message": f"📊 **{range_label}收支汇总**\n\n暂无记录"}
+            return {"status": "success", "message": f"📊 {range_label}收支汇总\n\n暂无记录"}
 
         groups  = group_by_currency(items)
         message = "\n\n".join(

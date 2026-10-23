@@ -222,9 +222,9 @@ def _get_formula_list() -> str:
     )
     return (
         "📜 天文公式工具\n\n"
-        "**可用公式:**\n"
+        "可用公式:\n"
         f"{keys_list}\n\n"
-        "**进行计算:**\n"
+        "进行计算:\n"
         "/astro formula calc schwarzschild <质量(M☉)> - 计算史瓦西半径\n"
         "/astro formula calc luminosity <质量(M☉)> - 估算主序星光度\n"
         "/astro formula calc lifetime <质量(M☉)> - 估算主序星寿命\n\n"

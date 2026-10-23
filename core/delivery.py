@@ -44,6 +44,7 @@ class DeliveryReceipt:
         self._outcome: bool | None                 = None
         self._callback_error: BaseException | None = None
         self._handoff_pending                      = False
+        self._message_ids: list[Any]               = []
 
     def defer_to_transport(self) -> None:
         """将收据结算交给 Core 或暂存队列拥有的实际传输边界。"""
@@ -90,6 +91,26 @@ class DeliveryReceipt:
 
         with self._lock:
             return self._callback_error
+
+    @property
+    def message_ids(self) -> tuple[Any, ...]:
+        """已确认发出的各条物理消息的 ID，按发送顺序；提交回调里读取。"""
+
+        with self._lock:
+            return tuple(self._message_ids)
+
+    def add_message_id(self, message_id: Any) -> None:
+        """登记一条物理消息发出后的 ID；Core 在记下这条的发送结果之前调用。
+
+        长回复会被拆成几条发出，提交回调拿到的是整条回复的全部 ID，插件据此把记录和
+        真实消息一一对应，不必事后按“最近一条”去猜。
+        """
+
+        if message_id in (None, ""):
+            return
+        with self._lock:
+            if not self._resolved:
+                self._message_ids.append(message_id)
 
     def add_expected_actions(self, count: int) -> None:
         """在开始投递前登记拆分产生的额外 action，避免过早提交状态。"""

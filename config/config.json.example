@@ -163,6 +163,25 @@
                                 }
                         }
                 },
+                "xiaoqing_agent": {
+                        "enabled": false,
+                        "ai": {
+                                "routes": {
+                                        "agent": {
+                                                "models": ["deepseek-pro", "deepseek-flash"],
+                                                "timeout_seconds": 180,
+                                                "total_timeout_seconds": 400,
+                                                "max_retry": 1
+                                        },
+                                        "triage": {
+                                                "models": ["deepseek-flash", "glm-5.2"],
+                                                "timeout_seconds": 15,
+                                                "total_timeout_seconds": 20,
+                                                "max_retry": 1
+                                        }
+                                }
+                        }
+                },
                 "xiaoqing_chat": {
                         "ai": {
                                 "default_model_alias": "deepseek",

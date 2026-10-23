@@ -15,6 +15,7 @@ from typing import Any, cast
 from core.args import parse
 from core.delivery import DeliveryReceipt, send_with_receipt
 from core.interfaces import DeliveryTarget, PluginContextProtocol
+from core.message import sender_display_name
 from core.plugin_base import Segments, bounded_external_text, build_action, run_sync, segments
 from core.sensitive_audit import summarize_sensitive
 
@@ -41,7 +42,14 @@ MC_MAX_RESPONSE_BYTES    = 12 * 1024
 MC_MAX_EVENT_FIELD_CHARS = 600
 MC_MAX_EVENT_FIELD_BYTES = 2400
 
+# QQ 用户经 /mc say、/mc tell 发进游戏的文字与署名边界。
+MC_MAX_CHAT_CHARS   = 256
+MC_MAX_CHAT_BYTES   = 1024
+MC_MAX_SENDER_CHARS = 24
+MC_MAX_SENDER_BYTES = 96
+
 _PROFILE_PATTERN = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
+_PLAYER_PATTERN  = re.compile(r"[A-Za-z0-9_]{1,16}\Z")
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,15 +108,20 @@ def _show_help() -> str:
     return (
         "🎮 Minecraft RCON 插件\n"
         "\n"
-        "/mc connect <配置名>  连接本地配置的服务器\n"
-        "/mc disconnect  断开当前私聊连接\n"
-        "/mc status  查看连接和日志监控状态\n"
-        "/mc <服务器命令>  执行命令，例如 /mc list\n"
-        "/mc say <消息>  广播，例如 /mc say 大家好\n"
-        "/mc tell <玩家名> <消息>  向玩家发送私信\n"
+        "所有人：\n"
+        "/mc say <消息>  用你的 QQ 名字对游戏里所有人说，例如 /mc say 大家好\n"
+        "/mc tell <玩家名> <消息>  悄悄对一名玩家说\n"
+        "/mc list  查看在线玩家\n"
+        "/mc status  查看本会话的连接和日志监控状态\n"
         "/mc help  显示帮助\n"
         "\n"
-        "日志监控启用后，玩家聊天、加入和离开等事件会转发到当前 QQ 私聊。"
+        "Bot 管理员：\n"
+        "/mc connect <配置名>  为本会话连接本地配置的服务器\n"
+        "/mc disconnect  断开本会话的连接\n"
+        "/mc run <服务器命令>  原样执行一条服务器命令，例如 /mc run time set day\n"
+        "\n"
+        "连接属于发起连接的私聊或群。日志监控启用后，"
+        "玩家聊天、加入和离开等事件会转发到这个私聊或群。"
     )
 
 
@@ -314,7 +327,98 @@ async def _dispatch_mc_command(
         if len(parsed) != 1 or parsed.options:
             return segments("用法: /mc status")
         return _handle_status_command(target, context)
-    return await _handle_mc_command(args, target, context)
+    if subcommand == "list":
+        if len(parsed) != 1 or parsed.options:
+            return segments("用法: /mc list")
+        return await _handle_mc_command("list", target, context)
+    if subcommand == "say":
+        return await _handle_say(args, event, target, context)
+    if subcommand == "tell":
+        return await _handle_tell(args, event, target, context)
+    if subcommand in {"run", "执行"}:
+        # 谁能执行由 plugin.json 里 run 的声明决定，Core 在调用插件前就检查过了。
+        parts = args.strip().split(maxsplit=1)
+        if len(parts) < 2:
+            return segments("用法: /mc run <服务器命令>")
+        return await _handle_mc_command(parts[1], target, context)
+    return segments(
+        "❓ 没有这个用法。聊天用 /mc say、/mc tell，服务器命令用 /mc run <命令>；/mc help 查看全部"
+    )
+
+
+def _chat_text(raw: object, *, max_chars: int, max_bytes: int, default: str = "") -> str:
+    return bounded_external_text(
+        " ".join(str(raw or "").split()),
+        max_chars = max_chars,
+        max_bytes = max_bytes,
+        default   = default,
+    )
+
+
+def _chat_component(event: dict[str, Any], message: str, *, whisper: bool = False) -> str:
+    """QQ 发言作为 tellraw 文本组件发出：带上 QQ 名字，内容不会被当成命令或目标选择器。"""
+
+    name = _chat_text(
+        sender_display_name(event.get("sender")) or event.get("user_id"),
+        max_chars = MC_MAX_SENDER_CHARS,
+        max_bytes = MC_MAX_SENDER_BYTES,
+        default   = "QQ 用户",
+    )
+    body = (
+        {"text": f"<{name}> 悄悄对你说: {message}", "color": "gray"}
+        if whisper
+        else {"text": f"<{name}> {message}"}
+    )
+    return json.dumps(
+        ["", {"text": "[QQ] ", "color": "aqua"}, body],
+        ensure_ascii = False,
+        separators   = (",", ":"),
+    )
+
+
+async def _handle_say(
+    args: str,
+    event: dict[str, Any],
+    target: DeliveryTarget,
+    context: PluginContextProtocol,
+) -> Segments:
+    parts = args.strip().split(maxsplit=1)
+    message = _chat_text(
+        parts[1] if len(parts) > 1 else "",
+        max_chars = MC_MAX_CHAT_CHARS,
+        max_bytes = MC_MAX_CHAT_BYTES,
+    )
+    if not message:
+        return segments("用法: /mc say <消息>")
+    return await _handle_mc_command(
+        f"tellraw @a {_chat_component(event, message)}",
+        target,
+        context,
+        empty_reply="✅ 已发到游戏",
+    )
+
+
+async def _handle_tell(
+    args: str,
+    event: dict[str, Any],
+    target: DeliveryTarget,
+    context: PluginContextProtocol,
+) -> Segments:
+    parts = args.strip().split(maxsplit=2)
+    player  = parts[1] if len(parts) > 1 else ""
+    message = _chat_text(
+        parts[2] if len(parts) > 2 else "",
+        max_chars = MC_MAX_CHAT_CHARS,
+        max_bytes = MC_MAX_CHAT_BYTES,
+    )
+    if not message or _PLAYER_PATTERN.fullmatch(player) is None:
+        return segments("用法: /mc tell <玩家名> <消息>（玩家名为 1 至 16 个字母、数字或下划线）")
+    return await _handle_mc_command(
+        f"tellraw {player} {_chat_component(event, message, whisper=True)}",
+        target,
+        context,
+        empty_reply=f"✅ 已悄悄发给 {player}",
+    )
 
 
 async def _handle_connect(
@@ -362,7 +466,8 @@ async def _handle_connect(
         )
         return segments(f"❌ {connect_result.error_message}")
 
-    monitor = _create_log_monitor(server, target, context)
+    forward_blocked = target.kind == "group" and not _group_receives_logs(context, target.target_id)
+    monitor         = None if forward_blocked else _create_log_monitor(server, target, context)
     await _manager.replace_connection(
         McConnection(
             host        = server.host,
@@ -384,11 +489,29 @@ async def _handle_connect(
 
     if monitor is not None:
         log_status = "✅ 已启用"
-    elif server.log_file:
-        log_status = "⚠️ 配置路径不可用，已仅连接 RCON"
-    else:
+    elif not server.log_file:
         log_status = "未配置"
+    elif forward_blocked:
+        log_status = "⚠️ 本群不在定时推送的目标群（default_group_ids）里，游戏消息不会转发到这里"
+    else:
+        log_status = "⚠️ 配置路径不可用，已仅连接 RCON"
     return segments(f"✅ 已连接到 {server.host}:{server.port}\n📝 日志监控: {log_status}")
+
+
+def _group_receives_logs(context: PluginContextProtocol, group_id: int) -> bool:
+    """日志由 check_log 定时任务转发；它没有声明 group_ids，Core 只允许发往 default_group_ids。"""
+
+    group_ids = context.get_settings_snapshot().config.get("default_group_ids")
+    return isinstance(group_ids, (list, tuple)) and group_id in group_ids
+
+
+def _schedule_reaches(context: PluginContextProtocol, conn: McConnection) -> bool:
+    """连接后目标群配置变了时先不轮询这个群，免得每 5 秒重发一批会被 Core 拒绝的消息。"""
+
+    if conn.target.kind != "group":
+        return True
+    principal = getattr(context, "principal", None)
+    return conn.target in tuple(getattr(principal, "delivery_targets", ()))
 
 
 async def _handle_disconnect(
@@ -409,10 +532,12 @@ async def _handle_mc_command(
     args: str,
     target: DeliveryTarget,
     context: PluginContextProtocol,
+    *,
+    empty_reply: str = "✅ 命令执行成功（空响应）",
 ) -> Segments:
     conn = _manager.get_connection(target)
     if conn is None:
-        return segments("❌ 未连接到服务器，请先使用 /mc connect 连接")
+        return segments("❌ 未连接到服务器，请 Bot 管理员先使用 /mc connect 连接")
     if conn.rcon_client is None:
         return segments("❌ RCON 连接已关闭，请重新连接")
 
@@ -469,7 +594,7 @@ async def _handle_mc_command(
         response_audit.fingerprint,
     )
     if not result.response:
-        return segments("✅ 命令执行成功（空响应）")
+        return segments(empty_reply)
     truncation_warning = "\n⚠️ 响应可能不完整（续包等待超时）" if result.truncated else ""
     response           = bounded_external_text(
         result.response,
@@ -682,7 +807,7 @@ async def _deliver_log_batch(
 
 async def _run_scheduled(context: PluginContextProtocol) -> None:
     global _delivery_cursor
-    connections = _manager.all_connections()
+    connections = [conn for conn in _manager.all_connections() if _schedule_reaches(context, conn)]
     if not connections:
         return
 

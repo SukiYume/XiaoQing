@@ -66,7 +66,7 @@ async def commit_planner_snapshot(state, runtime: ChatRuntime, chat_id: str, sna
 
 
 # 规划器要求“告别”或“再补一条”时附加的语气约束。
-_PLANNER_MODE_STYLES = {
+_PLANNER_MODE_NOTES = {
     "say_goodbye": "说一句很短很自然的告别收尾，不要延伸话题。",
     "send_new_message": "你刚发过一条消息，如果要继续发一条新消息，短一点，别轰炸。",
 }
@@ -127,7 +127,7 @@ class _TurnGenerator:
         forced: bool,
         reasoning: str,
         plan_reasoning: str,
-        style_override: str = "",
+        turn_note: str = "",
     ) -> tuple[str, tuple[dict[str, Any], ...], Any]:
         hctx = self.hctx
         return await _generate_reply_result(
@@ -147,7 +147,7 @@ class _TurnGenerator:
             plan_reasoning         = plan_reasoning,
             bot_name               = hctx.bot_name,
             secrets                = hctx.secrets,
-            reply_style_override   = style_override,
+            turn_note              = turn_note,
             state_text             = self.prepared.mood_text,
             is_brain_chat          = self.prepared.brain_chat_active,
             prefetched_memory_task = self.generated.speculative_memory_task,
@@ -173,7 +173,7 @@ class _TurnGenerator:
             forced         = self.prepared.forced,
             reasoning      = planner_reason,
             plan_reasoning = plan_reasoning,
-            style_override = _PLANNER_MODE_STYLES.get(mode, ""),
+            turn_note      = _PLANNER_MODE_NOTES.get(mode, ""),
         )
         return reply or ""
 

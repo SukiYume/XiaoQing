@@ -94,7 +94,7 @@ def test_admin_commands_reject_unicode_integer_tokens(
     db      = MagicMock()
     handler = handle_manage_log if args == "²" else handle_manage_activity
 
-    success, message = handler("admin", 42, args, db, is_admin=True)
+    success, message = handler("admin", 42, args, db)
 
     assert success is False
     assert expected in message

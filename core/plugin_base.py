@@ -13,6 +13,7 @@ import re
 from collections.abc import Awaitable, Callable, Iterable
 from pathlib import Path
 from typing import Any, TypeVar, cast, overload
+from urllib.parse import unquote, urlparse
 
 from .atomic_store import AtomicJsonStore, atomic_write_bytes, atomic_write_text
 from .constants import MAX_MESSAGE_TEXT_LENGTH
@@ -155,6 +156,29 @@ def _to_file_uri(file_path: str) -> str:
     if not p.is_absolute():
         p = p.resolve()
     return p.as_uri()
+
+
+def file_uri_to_path(value: str) -> Path | None:
+    """把 ``file://`` URI 还原成本地路径；不是 file URI 时返回 ``None``。
+
+    兼容常见写法：``file:///C:/x``、``file://C:/x``、``file://localhost/x`` 和 UNC
+    ``file://server/share/x``。
+    """
+
+    parsed = urlparse(str(value or "").strip())
+    if parsed.scheme.lower() != "file":
+        return None
+    host = unquote(parsed.netloc or "")
+    path = unquote(parsed.path or "")
+    if host.lower() == "localhost":
+        host = ""
+    if re.fullmatch(r"[A-Za-z]:", host) or (host and not path):
+        path, host = host + path, ""
+    if host:
+        path = f"//{host}{path}"
+    if re.match(r"^/[A-Za-z]:", path):
+        path = path[1:]
+    return Path(path) if path else None
 
 
 def image(file_path: str) -> dict[str, Any]:
@@ -425,6 +449,7 @@ __all__ = [
     "build_action",
     "split_message_segments",
     "head_tail_preview",
+    "file_uri_to_path",
     # 异步工具
     "run_sync",
     # 文件工具

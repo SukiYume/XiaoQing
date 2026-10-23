@@ -111,13 +111,13 @@ def _handle_coord_sync(args: str, context: PluginContextProtocol) -> str:
         return (
             f"🌐 坐标转换结果\n"
             f"输入: {ra_str} {dec_str}\n\n"
-            f"**赤道坐标 (ICRS):**\n"
+            f"赤道坐标 (ICRS):\n"
             f"RA: {ra_hms} ({ra_deg:.6f}°)\n"
             f"Dec: {dec_dms} ({dec_deg:.6f}°)\n\n"
-            f"**银道坐标:**\n"
+            f"银道坐标:\n"
             f"l: {galactic_coord.l.deg:.6f}°\n"
             f"b: {galactic_coord.b.deg:.6f}°\n\n"
-            f"**黄道坐标:**\n"
+            f"黄道坐标:\n"
             f"λ: {ecliptic_coord.lon.deg:.6f}°\n"
             f"β: {ecliptic_coord.lat.deg:.6f}°"
         )

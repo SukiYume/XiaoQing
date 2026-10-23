@@ -64,9 +64,9 @@ class TestReminderBackfillRegression:
             )
 
             assert result["status"] == "success"
-            assert "**01月03日 周四** - 2天后" in result["message"]
+            assert "01月03日 周四 - 2天后" in result["message"]
             assert "• 09:00 - 10:00 未来会议" in result["message"]
-            assert "**12月30日 周日** - 2天前" in result["message"]
+            assert "12月30日 周日 - 2天前" in result["message"]
             assert "• 09:00 - 10:00 过去会议" in result["message"]
         finally:
             db.cleanup()

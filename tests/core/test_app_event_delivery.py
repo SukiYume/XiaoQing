@@ -704,3 +704,89 @@ async def test_receipt_helper_does_not_count_core_partial_success_twice():
     assert callbacks == []
     await send_with_receipt(app._send_action, action, receipt)
     assert callbacks == ["commit"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_reply_commit_sees_every_message_id_of_a_split_reply(temp_app_root: Path):
+    """长回复被拆成几条发出：提交回调拿到每一条的消息 ID，插件据此把记录和真实消息对上。
+
+    走真实的分发、拆分与发送链路，只把 OneBot 连接换成会回传消息 ID 的假连接；不依赖来源
+    标记，命令入口（如 ``/xc <内容>``）返回的回复同样适用。
+    """
+    import json
+
+    from core.constants import MAX_MESSAGE_TEXT_LENGTH
+    from core.delivery import DeliverySegments
+    from core.interfaces import ACTION_RESULT_MESSAGE_ID_KEY
+    from tests.helpers.app_test_support import (
+        ModuleType,
+        PluginDefinition,
+        _register_test_loaded_plugin,
+    )
+
+    config_path = temp_app_root / "config" / "config.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["plugins"] = {"smalltalk_provider": "xiaoqing_chat"}
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    app             = XiaoQingApp(temp_app_root)
+    committed: list = []
+
+    async def handle_smalltalk(_text, _event, _context):
+        receipt: DeliveryReceipt
+
+        def commit() -> None:
+            committed.append(receipt.message_ids)
+
+        receipt = DeliveryReceipt(
+            expected_actions = 1,
+            commit           = commit,
+            rollback         = lambda: committed.append("rollback"),
+            unknown          = lambda: committed.append("unknown"),
+        )
+        long_text = "长" * (MAX_MESSAGE_TEXT_LENGTH + 10)
+        return DeliverySegments([{"type": "text", "data": {"text": long_text}}], receipt)
+
+    module                  = ModuleType("plugins.xiaoqing_chat.main")
+    module.handle_smalltalk = handle_smalltalk  # type: ignore[attr-defined]
+    _register_test_loaded_plugin(
+        app,
+        PluginDefinition(
+            name        = "xiaoqing_chat",
+            version     = "1.0.0",
+            entry       = "main.py",
+            commands    = [],
+            schedule    = [],
+            concurrency = "parallel",
+        ),
+        module,
+    )
+    next_id = iter((4242, 4243))
+
+    async def send(action):
+        action[ACTION_RESULT_MESSAGE_ID_KEY] = next(next_id)
+        return True
+
+    app.ws_client                     = MagicMock()
+    app.ws_client.credentials_trusted = True
+    app.ws_client.connected = Mock(return_value=True)
+    app.ws_client.send_action = AsyncMock(side_effect=send)
+
+    from unittest.mock import patch
+
+    with patch("core.app_delivery.MESSAGE_SPLIT_DELAY", 0):
+        await app._handle_upstream_event(
+            {
+                "post_type": "message",
+                "message_type": "private",
+                "sub_type": "friend",
+                "user_id": 12345,
+                "self_id": 11111,
+                "message_id": 7,
+                "message": "在吗",
+                "raw_message": "在吗",
+            }
+        )
+
+    assert app.ws_client.send_action.await_count == 2
+    assert committed == [(4242, 4243)]

@@ -94,8 +94,9 @@ class ChatRuntimeState:
         self._bw_jargon_store  = JargonStore()
 
         self._runtime_cache: OrderedDict[str, ChatRuntime] = OrderedDict()
-        self._runtime_mtime: dict[str, int]                = {}
-        self._runtime_revision: dict[str, int]             = {}
+        # 配置文件和人设卡的修改时间，任何一个变了就重新加载。
+        self._runtime_mtime: dict[str, tuple[int, int]] = {}
+        self._runtime_revision: dict[str, int]          = {}
 
         self._per_chat                                       = _PerChatState()
         self._bg_tasks: set[asyncio.Task[Any]]               = set()
@@ -171,7 +172,7 @@ class ChatRuntimeState:
         self,
         config_key: str,
         runtime: ChatRuntime,
-        mtime: int,
+        mtime: tuple[int, int],
         revision: int,
     ) -> None:
         self._runtime_cache[config_key] = runtime
@@ -183,7 +184,7 @@ class ChatRuntimeState:
             self._runtime_mtime.pop(stale_key, None)
             self._runtime_revision.pop(stale_key, None)
 
-    def get_runtime_mtime(self, config_key: str) -> int | None:
+    def get_runtime_mtime(self, config_key: str) -> tuple[int, int] | None:
         return self._runtime_mtime.get(config_key)
 
     def get_runtime_revision(self, config_key: str) -> int | None:

@@ -260,13 +260,17 @@ class TestHandle:
             )
 
     @pytest.mark.asyncio
-    async def test_handle_enables_codex_sidecar_only_for_current_bot_admin(
+    async def test_handle_enables_codex_sidecar_only_when_core_grants_it(
         self,
         mock_context,
         mock_event,
     ):
+        # 能不能附带 Codex 摘要由 Core 按 /codex 的声明决定，插件只看能力是否发出。
         mock_context.principal = PluginPrincipal(kind="user", user_id=12345, group_id=123456789)
-        mock_context.capabilities = PluginCapabilities(is_bot_admin=True)
+        mock_context.capabilities = PluginCapabilities(
+            is_bot_admin        = True,
+            codex_arxiv_summary = object(),
+        )
         with (
             patch.object(
                 arxiv_filter,
@@ -286,7 +290,7 @@ class TestHandle:
             "source_date": "2026-08-06",
         }
 
-        mock_event["user_id"] = 99999
+        mock_context.capabilities = PluginCapabilities(is_bot_admin=True)
         with (
             patch.object(
                 arxiv_filter,
@@ -302,13 +306,6 @@ class TestHandle:
             await arxiv_filter.handle("arxiv", "", mock_event, mock_context)
 
         assert mock_run.await_args.kwargs["allow_codex_sidecar"] is False
-
-    def test_admin_identity_rejects_string_and_boolean_ids(self, mock_context):
-        mock_context.principal = PluginPrincipal(kind="user", user_id=12345)
-        mock_context.capabilities = PluginCapabilities(is_bot_admin=True)
-
-        assert arxiv_filter._is_admin_user(mock_context, "12345") is False
-        assert arxiv_filter._is_admin_user(mock_context, True) is False
 
     @pytest.mark.asyncio
     async def test_handle_exception(self, mock_context, mock_event):

@@ -789,13 +789,13 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
         return _success_message(
             "\n".join(
                 [
-                    "📥 **导入 (Import)**",
+                    "📥 导入 (Import)",
                     "",
-                    "命令聊天入口不能安全上传 `.pendo.zip` 文件；请使用 Web 数据迁移页完成预检和导入。",
+                    "命令聊天入口不能安全上传 .pendo.zip 文件；请使用 Web 数据迁移页完成预检和导入。",
                     "",
-                    "1. 发送 `/pendo web token` 获取一次性登录 Code",
+                    "1. 发送 /pendo web token 获取一次性登录 Code",
                     f"2. 打开 Web UI: http://{runtime.web_host}:{runtime.web_port}/#/transfer",
-                    "3. 在“导入”页上传 `.pendo.zip`，先预检，再执行导入",
+                    "3. 在“导入”页上传 .pendo.zip，先预检，再执行导入",
                     "",
                     "聊天命令不接收本地文件路径，避免误读服务器文件或路径穿越风险。",
                     "支持类型: event、task/todo、note、diary、ledger，以及多节点/重复日程的 event_collection。",
@@ -859,9 +859,9 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
 # ============================================================
 
 HELP_MAP = {
-    "header": "🗓️ **Pendo · 个人时间与信息管理中枢**",
+    "header": "🗓️ Pendo · 个人时间与信息管理中枢",
     "quick": [
-        "⚡ **快速记录**",
+        "⚡ 快速记录",
         "• /pendo event add <内容> - 添加单次/重复/多节点日程(AI解析)",
         "  - 例: /pendo event add 明天9点组会，提前30分钟提醒",
         "• /pendo todo add - 交互式添加待办(内容 + 计划日期)",
@@ -876,9 +876,9 @@ HELP_MAP = {
         "  - 例: /pendo ledger quick 35.5 午饭 cat:餐饮 account:微信",
     ],
     "event": [
-        "🗓️ **日程管理 (Event)**",
-        "  - 别名: `e`, `calendar`, `日程`, `事件`",
-        "• /pendo event add <内容> - 添加日程(AI解析单次/重复/多节点)",
+        "🗓️ 日程管理 (Event)",
+        "  - 别名: e, calendar, 日程, 事件",
+        "• /pendo event add <内容> [--force] - 添加日程(AI解析单次/重复/多节点；--force 时间冲突也直接创建)",
         "  - 例: /pendo event add 3月8日下午两点，国自然截止，提前一周和一天提醒",
         "  - 例: /pendo event add 每月18号上午十点，公积金提取，重复7个月",
         "  - 例: /pendo event add 5月1日9点出发、14点入住、5月3日18点返程，杭州团建，提前2小时提醒",
@@ -911,8 +911,8 @@ HELP_MAP = {
         "  - 例: /pendo event reminders confirm abc12345 today",
     ],
     "todo": [
-        "✅ **待办事项 (Todo)**",
-        "  - 别名: `task`, `t`, `待办`, `任务`",
+        "✅ 待办事项 (Todo)",
+        "  - 别名: task, t, 待办, 任务",
         "• /pendo todo add - 交互式添加待办，只询问内容和计划日期",
         "• /pendo todo add <内容> [plan:YYYY-MM-DD] [deadline:YYYY-MM-DDTHH:MM] [remind:YYYY-MM-DDTHH:MM[,YYYY-MM-DDTHH:MM]] [cat:分类] [p:1-5] [#标签] - 快捷添加待办，可带高级参数",
         "  - 默认计划到今天，晚上8点后自动计划到明天",
@@ -941,8 +941,8 @@ HELP_MAP = {
         "  - 例: /pendo todo edit abc12345 deadline:2026-05-01T24:00",
     ],
     "note": [
-        "📝 **笔记 (Note)**",
-        "  - 别名: `n`, `idea`, `笔记`, `想法`, `灵感`",
+        "📝 笔记 (Note)",
+        "  - 别名: n, idea, 笔记, 想法, 灵感",
         "• /pendo note add <内容> [cat:分类] [#标签] [ref:条目ID] - 记录笔记",
         "  - 例: /pendo note add 直接折叠找脉冲星 cat:工作 #文章",
         "• /pendo note add title:<标题> content <正文> [cat:分类] [#标签] - 指定标题和正文",
@@ -978,8 +978,8 @@ HELP_MAP = {
         "  - 例: /pendo note delete cat:临时",
     ],
     "diary": [
-        "📔 **日记 (Diary)**",
-        "  - 别名: `d`, `journal`, `日记`",
+        "📔 日记 (Diary)",
+        "  - 别名: d, journal, 日记",
         "• /pendo diary add [日期] <内容> [weather:xxx] [location:xxx] [mood:happy] [score:1-10] [tags:a,b] [favorite:true]",
         "  - 无日期则写今天；同一天可写多篇独立条目，按记录时间排序",
         "  - 心情可用: happy/calm/excited/sad/angry/tired/anxious/grateful/neutral",
@@ -997,8 +997,8 @@ HELP_MAP = {
         "  - 例: /pendo diary delete abc12345",
     ],
     "ledger": [
-        "💰 **记账 (Ledger)**",
-        "  - 别名: `bill`, `finance`, `记账`, `账单`",
+        "💰 记账 (Ledger)",
+        "  - 别名: bill, finance, 记账, 账单",
         "• /pendo ledger add - 交互式记账；金额和描述手动输入，类型/账户/分类可选编号",
         "• /pendo ledger add <金额> <描述> [cat:分类] [in|out|transfer|type:expense/income/transfer] [account:账户] [to:账户] [merchant:商户] [date:YYYY-MM-DD] [remark:备注] - 快捷记账",
         "• /pendo ledger quick <金额> <描述> [cat:分类] [in|out|transfer|type:expense/income/transfer] [account:账户] [to:账户] [merchant:商户] [date:YYYY-MM-DD] [remark:备注] - 快速记账",
@@ -1022,7 +1022,7 @@ HELP_MAP = {
         "  - 例: /pendo ledger summary 2026-03",
     ],
     "search": [
-        "🔎 **搜索 (Search)**",
+        "🔎 搜索 (Search)",
         "• /pendo search <关键词> [#标签] - 全文搜索(标题/内容/备注/分类)",
         "• 筛选: type=event/task/note/diary/ledger range=today/week(本周)/month(本月)/year(今年)/last7d/last30d/YYYY-MM/start..end",
         "• 待办筛选: status=open/done/cancelled",
@@ -1034,7 +1034,7 @@ HELP_MAP = {
         "  - 例: /pendo search 周报 #复盘",
     ],
     "reminder": [
-        "⏰ **提醒操作**",
+        "⏰ 提醒操作",
         "• /pendo confirm <id> - 确认刚收到的那条提醒",
         "• /pendo snooze <id> <时间> - 延后刚收到的提醒",
         "  - 时间格式: 10m, 10min, 1h, 1d, 19:00",
@@ -1043,7 +1043,7 @@ HELP_MAP = {
         "• 管理未来提醒: /pendo event reminders set/delete/confirm <id> ...",
     ],
     "export": [
-        "📤 **导出 (Export)**",
+        "📤 导出 (Export)",
         "• /pendo export <文件名> [范围] [类型] - 导出 Markdown 并私聊发送文件",
         "  - 范围: all, today, tomorrow, week(本周), month(本月), year(今年), YYYY, YYYY-MM, YYYY-MM-DD, last7d/last30d, start..end",
         "  - 类型: all, event, todo/task, note, ledger, diary，可用逗号组合",
@@ -1054,7 +1054,7 @@ HELP_MAP = {
         "  - 例: /pendo export 账本快照 2026-03 ledger",
     ],
     "import": [
-        "📥 **导入 (Import)**",
+        "📥 导入 (Import)",
         "• /pendo import - 查看 Web 导入入口和支持格式",
         "  - 聊天命令不接收本地文件路径，避免误读服务器文件或路径穿越风险",
         "  - 请使用 Web 数据迁移页上传 .pendo.zip，页面会先做预检再写入数据库",
@@ -1064,11 +1064,11 @@ HELP_MAP = {
         "  - 例: /pendo web token",
     ],
     "settings": [
-        "⚙️ **设置 (Settings)**",
+        "⚙️ 设置 (Settings)",
         *PLUGIN_SETTINGS_HELP_LINES,
     ],
     "web": [
-        "🌐 **Web UI 管理 (Web)**",
+        "🌐 Web UI 管理 (Web)",
         "• /pendo web token  - 生成一次性登录 Code（Code 单独发送）",
         "• /pendo web widget-token - 生成 Scriptable 小组件令牌",
         "• /pendo web start  - 启动 Web 服务",
@@ -1077,7 +1077,7 @@ HELP_MAP = {
         "  - 例: /pendo web status",
     ],
     "common": [
-        "↩️ **其他操作**",
+        "↩️ 其他操作",
         f"• /pendo undo [分钟] - 撤销最近一次删除或编辑 (最多{PendoConfig.UNDO_WINDOW_MINUTES}分钟)",
         "  - 例: /pendo undo",
         "  - 例: /pendo undo 3",
@@ -1096,7 +1096,7 @@ def _render_help_section(key: str) -> list[str]:
 
 
 def _show_help_overview() -> str:
-    lines = [str(HELP_MAP["header"]), "", "🧭 **可用命令**"]
+    lines = [str(HELP_MAP["header"]), "", "🧭 可用命令"]
     lines.extend(
         f"• /pendo {command.name} - {command.help_text}"
         for command in _local_catalog_root().children
@@ -1104,8 +1104,8 @@ def _show_help_overview() -> str:
     lines.extend(
         [
             "",
-            "💡 查看详细用法：`/pendo help <命令>`；完整命令码：`/help pendo`",
-            "例: `/pendo event`、`/pendo todo`、`/pendo export`",
+            "💡 查看详细用法：/pendo help <命令>；完整命令码：/help pendo",
+            "例: /pendo event、/pendo todo、/pendo export",
         ]
     )
     return "\n".join(lines)
@@ -1139,7 +1139,7 @@ def _show_help(subcommand: str = "") -> str:
         parts: list[str] = [
             str(HELP_MAP["header"]),
             "",
-            "🧭 输入 `/pendo` 查看完整总览，输入 `/pendo help <模块>` 查看对应帮助",
+            "🧭 输入 /pendo 查看完整总览，输入 /pendo help <模块> 查看对应帮助",
             "",
         ]
         parts.extend(_render_help_section(target_key))

@@ -15,9 +15,9 @@
 | [04 - Core 模块](04-core-modules.md) | `core/` 模块职责与协作关系 | 框架维护者 |
 | [05 - API 参考](05-api-reference.md) | PluginContext、消息段、会话和插件入口签名 | 插件开发者 |
 | [06 - 配置详解](06-configuration.md) | 配置字段、secrets、AI 路由、网络安全和热重载 | 部署者、管理员 |
-| [07 - 高级主题](07-advanced.md) | 后台任务、调度、服务能力、性能和部署模式 | 高级开发者 |
+| [07 - 高级主题](07-advanced.md) | 权限模型、后台任务、调度、服务能力、性能和部署模式 | 高级开发者 |
 | [08 - 消息流程](08-message-flow.md) | OneBot 事件从接收到回复的完整路径 | 排障人员、框架维护者 |
-| [09 - 插件使用手册](09-plugins.md) | 30 个内置插件的用途、命令、配置与数据，命令入口速查和定时任务总表 | 用户、管理员 |
+| [09 - 插件使用手册](09-plugins.md) | 31 个内置插件的用途、命令、配置与数据，命令入口速查和定时任务总表 | 用户、管理员 |
 | [Pendo Scriptable 小组件](pendo-scriptable-widget.md) | iPhone 小组件鉴权、脚本和设置步骤 | Pendo 用户 |
 | [更新记录](../CHANGELOG.md) | 各版本的功能变化、影响范围和验证结果 | 用户、维护者 |
 
@@ -53,6 +53,7 @@
 | 插件 | 使用说明 | 架构说明 |
 |---|---|---|
 | `xiaoqing_chat` | [README](../plugins/xiaoqing_chat/README.md) | [ARCHITECTURE](../plugins/xiaoqing_chat/ARCHITECTURE.md) |
+| `xiaoqing_agent` | [README](../plugins/xiaoqing_agent/README.md) | README 内含模块结构、运行边界与数据说明 |
 | `pendo` | [README](../plugins/pendo/README.md) | [ARCHITECTURE](../plugins/pendo/ARCHITECTURE.md) |
 
 其他插件均在各自目录提供 `README.md`；[插件目录](09-plugins.md) 提供统一入口。
@@ -65,7 +66,7 @@
 - `docs/00-09` 分别维护一个明确主题。
 - 插件 README 面向插件用户和部署者。
 - 插件 ARCHITECTURE 面向插件维护者。
-- 命令 Manifest 是运行时帮助、权限、场景和样例的权威来源。
+- 命令 Manifest 是运行时帮助、权限、场景和样例的权威来源；权限只在这里声明，由 Core 统一判断。
 - 所有 README 只描述当前能力、使用方法和运行契约；版本变化、一次性迁移与发布验证统一写入 Changelog。
 - Changelog 记录版本变化与验证结果。
 

@@ -14,6 +14,7 @@ import pytest
 from PIL import Image
 
 from core.bounded_file_cache import FileCacheLimits
+from core.router import build_command_catalog_node
 from plugins.color import convert as color_convert
 from plugins.color import data_manager as color_data
 from plugins.color import data_manager as color_data_manager
@@ -26,6 +27,14 @@ from tests.helpers.assertions import text_segments_text
 from tests.helpers.paths import REPOSITORY_ROOT
 
 ROOT = REPOSITORY_ROOT
+# 和生产一样从 plugin.json 发布的命令目录；插件按它判断写入是不是走了 add、delete 节点。
+COLOR_ROOT = build_command_catalog_node(
+    "color",
+    json.loads((ROOT / "plugins" / "color" / "plugin.json").read_text(encoding="utf-8"))[
+        "commands"
+    ][0],
+    root=True,
+)
 
 # ============================================================
 # convert 模块测试
@@ -404,13 +413,14 @@ class TestColorHandleFixes:
 
     @staticmethod
     def _context(tmp_path, *, admin=False):
+        del admin  # 谁能写由 Core 按 plugin.json 检查，插件里不再判断。
         return SimpleNamespace(
-            plugin_dir       = ROOT / "plugins" / "color",
-            data_dir         = tmp_path,
-            current_group_id = 1001,
-            current_user_id  = 42,
-            logger           = MagicMock(),
-            is_global_admin=lambda user_id=None: admin and user_id == 42,
+            plugin_dir          = ROOT / "plugins" / "color",
+            data_dir            = tmp_path,
+            current_group_id    = 1001,
+            current_user_id     = 42,
+            logger              = MagicMock(),
+            get_command_catalog = lambda: (COLOR_ROOT,),
         )
 
     @pytest.mark.asyncio
@@ -776,46 +786,47 @@ ROOT = REPOSITORY_ROOT
 
 
 def _color_context(tmp_path: Path, *, admin: bool) -> SimpleNamespace:
-    actor = 42
+    del admin  # 谁能写由 Core 按 plugin.json 检查，插件里不再判断。
     return SimpleNamespace(
-        current_group_id = 1001,
-        current_user_id  = actor,
-        data_dir         = tmp_path / "color-data",
-        is_global_admin=lambda user_id=None: admin and int(user_id) == actor,
-        logger     = MagicMock(),
-        plugin_dir = ROOT / "plugins" / "color",
+        current_group_id    = 1001,
+        current_user_id     = 42,
+        data_dir            = tmp_path / "color-data",
+        logger              = MagicMock(),
+        plugin_dir          = ROOT / "plugins" / "color",
+        get_command_catalog = lambda: (COLOR_ROOT,),
     )
 
 
+def test_color_mutations_are_declared_for_bot_admins_in_the_manifest():
+    nodes = {node.name: node for node in COLOR_ROOT.children}
+    assert nodes["add"].permission == "bot_admin"
+    assert nodes["delete"].permission == "bot_admin"
+    # 解析器认的每个写入、删除词都是这两个节点的别名，Core 才能在调用插件前拦下。
+    for word in ("add", "write", "添加", "新增", "-w", "--write"):
+        assert COLOR_ROOT.resolve_child(word) is nodes["add"], word
+    for word in ("delete", "del", "remove", "删除", "-d", "--delete"):
+        assert COLOR_ROOT.resolve_child(word) is nodes["delete"], word
+
+
 @pytest.mark.asyncio
-async def test_color_mutations_require_current_authenticated_bot_admin(monkeypatch, tmp_path):
+async def test_color_mutations_only_run_through_the_declared_nodes(monkeypatch, tmp_path):
     context = _color_context(tmp_path, admin=False)
 
     async def no_image(*_args, **_kwargs):
         return None
 
     monkeypatch.setattr(color_main.image_gen, "generate_color_image", no_image)
-    denied = await color_main.handle(
-        "color", "-w 审核红 1 2 3", {"user_id": 42, "group_id": 1001}, context
-    )
-    assert "只有 Bot 全局管理员" in text_segments_text(denied)
+    event = {"user_id": 42, "group_id": 1001}
+    # 选项写在后面时 Core 解析到的是根命令（所有人可用），插件不能把它当成写入。
+    bypass = await color_main.handle("color", "审核红 -w 1 2 3", event, context)
+    assert "/color add" in text_segments_text(bypass)
     assert not color_data._custom_file(context).exists()
-    context.is_global_admin = lambda user_id=None: int(user_id) == 42
-    added = await color_main.handle(
-        "color", "-w 审核红 1 2 3", {"user_id": 42, "group_id": 1001}, context
-    )
+
+    added = await color_main.handle("color", "新增 审核红 1 2 3", event, context)
     assert "添加成功" in text_segments_text(added)
-    assert color_data._custom_file(context).is_file()
-    context.is_global_admin = lambda _user_id=None: False
-    visible = await color_main.handle(
-        "color", "-n 审核红", {"user_id": 99, "group_id": 1001}, context
-    )
-    denied_delete = await color_main.handle(
-        "color", "-d 审核红", {"user_id": 99, "group_id": 1001}, context
-    )
-    assert "审核红" in text_segments_text(visible)
-    assert "只有 Bot 全局管理员" in text_segments_text(denied_delete)
-    assert any(color["name"] == "审核红" for color in color_data.load_custom_colors(context))
+    deleted = await color_main.handle("color", "-d 审核红", event, context)
+    assert "审核红" in text_segments_text(deleted)
+    assert not any(color["name"] == "审核红" for color in color_data.load_custom_colors(context))
 
 
 def test_color_custom_store_rejects_oversized_manual_scope_file(tmp_path):

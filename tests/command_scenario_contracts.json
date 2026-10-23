@@ -530,6 +530,16 @@
       "dynamic_codes": [],
       "regression_codes": []
     },
+    "xiaoqing_agent": {
+      "state_model": "async_job",
+      "reason": "run 会启动调用模型与本地进程的后台任务，stop 回收该任务；只用回归测试覆盖，不在命令矩阵里真实执行",
+      "test_files": [
+        "tests/plugins/xiaoqing_agent/test_xiaoqing_agent_main.py",
+        "tests/plugins/xiaoqing_agent/test_xiaoqing_agent_runtime.py"
+      ],
+      "dynamic_codes": ["xiaoqing_agent.agent.run", "xiaoqing_agent.agent.stop"],
+      "regression_codes": ["xiaoqing_agent.agent.run", "xiaoqing_agent.agent.stop"]
+    },
     "xiaoqing_chat": {
       "state_model": "external_session",
       "reason": "群聊记忆、脑内状态、复盘会话、模型覆盖和重置均跨消息存在",
@@ -826,7 +836,7 @@
         "pendo.pendo.todo.delete"
       ],
       "steps": [
-        {"id":"create","code":"pendo.pendo.todo.add","message":"/pendo todo add TODO-{{run_id}} plan:2037-01-10 deadline:2037-01-10T18:00 remind:2037-01-10T17:00 cat:MATRIX p:2 #初始","expect_all":["已添加待办","TODO-{{run_id}}","MATRIX"],"captures":{"todo_id":"`([0-9a-f]{8})`"}},
+        {"id":"create","code":"pendo.pendo.todo.add","message":"/pendo todo add TODO-{{run_id}} plan:2037-01-10 deadline:2037-01-10T18:00 remind:2037-01-10T17:00 cat:MATRIX p:2 #初始","expect_all":["已添加待办","TODO-{{run_id}}","MATRIX"],"captures":{"todo_id":"(?<![0-9A-Za-z])([0-9a-f]{8})(?![0-9A-Za-z])"}},
         {"id":"view","code":"pendo.pendo.todo.view","message":"/pendo todo view {{todo_id}}","expect_all":["{{todo_id}}","TODO-{{run_id}}","2037-01-10","MATRIX","初始"]},
         {"id":"invalid_edit","code":"pendo.pendo.todo.edit","message":"/pendo todo edit {{todo_id}} plan:not-a-date","expect_any":["无效","无法","错误"]},
         {"id":"unchanged_after_invalid","code":"pendo.pendo.todo.view","message":"/pendo todo view {{todo_id}}","expect_all":["TODO-{{run_id}}","2037-01-10","MATRIX","初始"]},
@@ -863,8 +873,8 @@
         "pendo.pendo.note.delete"
       ],
       "steps": [
-        {"id":"target","code":"pendo.pendo.note.add","message":"/pendo note add TARGET-{{run_id}} cat:MATRIX #目标","expect_all":["已记录笔记"],"captures":{"target_id":"`([0-9a-f]{8})`"}},
-        {"id":"create","code":"pendo.pendo.note.add","message":"/pendo note add title:NOTE-{{run_id}} content 初始正文 cat:MATRIX #初始 ref:{{target_id}}","expect_all":["已记录笔记","NOTE-{{run_id}}"],"captures":{"note_id":"`([0-9a-f]{8})`"}},
+        {"id":"target","code":"pendo.pendo.note.add","message":"/pendo note add TARGET-{{run_id}} cat:MATRIX #目标","expect_all":["已记录笔记"],"captures":{"target_id":"(?<![0-9A-Za-z])([0-9a-f]{8})(?![0-9A-Za-z])"}},
+        {"id":"create","code":"pendo.pendo.note.add","message":"/pendo note add title:NOTE-{{run_id}} content 初始正文 cat:MATRIX #初始 ref:{{target_id}}","expect_all":["已记录笔记","NOTE-{{run_id}}"],"captures":{"note_id":"(?<![0-9A-Za-z])([0-9a-f]{8})(?![0-9A-Za-z])"}},
         {"id":"view","code":"pendo.pendo.note.view","message":"/pendo note view {{note_id}}","expect_all":["NOTE-{{run_id}}","初始正文","{{target_id}}"]},
         {"id":"invalid_link","code":"pendo.pendo.note.link","message":"/pendo note link {{note_id}} {{note_id}}","expect_all":["不能关联自身"]},
         {"id":"unchanged","code":"pendo.pendo.note.view","message":"/pendo note view {{note_id}}","expect_all":["NOTE-{{run_id}}","初始正文","{{target_id}}"]},
@@ -891,7 +901,7 @@
       "covers": ["pendo.pendo.diary.add", "pendo.pendo.diary.list", "pendo.pendo.diary.view", "pendo.pendo.diary.delete"],
       "steps": [
         {"id":"invalid_boolean","code":"pendo.pendo.diary.add","message":"/pendo diary add 2037-03-12 BAD-{{run_id}} favorite:maybe","expect_all":["favorite","true/false"]},
-        {"id":"create","code":"pendo.pendo.diary.add","message":"/pendo diary add 2037-03-12 DIARY-{{run_id}} weather:晴 location:MATRIX_LAB mood:happy score:8 tags:矩阵,测试 favorite:true","expect_all":["已记录","2037-03-12","MATRIX_LAB"],"captures":{"diary_id":"`([0-9a-f]{8})`"}},
+        {"id":"create","code":"pendo.pendo.diary.add","message":"/pendo diary add 2037-03-12 DIARY-{{run_id}} weather:晴 location:MATRIX_LAB mood:happy score:8 tags:矩阵,测试 favorite:true","expect_all":["已记录","2037-03-12","MATRIX_LAB"],"captures":{"diary_id":"(?<![0-9A-Za-z])([0-9a-f]{8})(?![0-9A-Za-z])"}},
         {"id":"view_id","code":"pendo.pendo.diary.view","message":"/pendo diary view {{diary_id}}","expect_all":["DIARY-{{run_id}}","happy","8/10","晴","MATRIX_LAB","收藏"]},
         {"id":"view_date","code":"pendo.pendo.diary.view","message":"/pendo diary view 2037-03-12","expect_all":["DIARY-{{run_id}}","{{diary_id}}"]},
         {"id":"list","code":"pendo.pendo.diary.list","message":"/pendo diary list 2037-03 mood:happy #矩阵","expect_all":["DIARY-{{run_id}}","{{diary_id}}"],"reject_any":["BAD-{{run_id}}","XQ-PLUGIN-UNEXPECTED"]},
@@ -919,7 +929,7 @@
         "pendo.pendo.ledger.summary"
       ],
       "steps": [
-        {"id":"create_expense","code":"pendo.pendo.ledger.add","message":"/pendo ledger add 35.50 EXPENSE-{{run_id}} type:expense cat:餐饮 account:微信 merchant:食堂 date:2037-04-02 remark:午餐 currency:CNY","expect_all":["记账成功","支出","35.50","餐饮","微信","食堂"],"captures":{"ledger_id":"`([0-9a-f]{8})`"}},
+        {"id":"create_expense","code":"pendo.pendo.ledger.add","message":"/pendo ledger add 35.50 EXPENSE-{{run_id}} type:expense cat:餐饮 account:微信 merchant:食堂 date:2037-04-02 remark:午餐 currency:CNY","expect_all":["记账成功","支出","35.50","餐饮","微信","食堂"],"captures":{"ledger_id":"(?<![0-9A-Za-z])([0-9a-f]{8})(?![0-9A-Za-z])"}},
         {"id":"invalid_to","code":"pendo.pendo.ledger.edit","message":"/pendo ledger edit {{ledger_id}} to:银行卡","expect_all":["只有转账账目"]},
         {"id":"unchanged_expense","code":"pendo.pendo.ledger.view","message":"/pendo ledger view {{ledger_id}}","expect_all":["支出","35.50","餐饮","微信","EXPENSE-{{run_id}}"],"reject_any":["银行卡","XQ-PLUGIN-UNEXPECTED"]},
         {"id":"edit_transfer","code":"pendo.pendo.ledger.edit","message":"/pendo ledger edit {{ledger_id}} amount:99.99 title:TRANSFER-{{run_id}} cat:转账 type:transfer account:微信 to:银行卡 merchant:本人 date:2037-04-03 remark:全字段 currency:CNY","expect_all":["已更新账目","99.99","转账","银行卡"]},
@@ -928,7 +938,7 @@
         {"id":"view_income","code":"pendo.pendo.ledger.view","message":"/pendo ledger view {{ledger_id}}","expect_all":["收入","99.99","工资","银行卡","单位"],"reject_any":["微信 → 银行卡","XQ-PLUGIN-UNEXPECTED"]},
         {"id":"list","code":"pendo.pendo.ledger.list","message":"/pendo ledger list 2037-04 type:income account:银行卡","expect_all":["{{ledger_id}}","TRANSFER-{{run_id}}"]},
         {"id":"summary","code":"pendo.pendo.ledger.summary","message":"/pendo ledger summary 2037-04","expect_all":["99.99"],"expect_any":["收入","汇总"]},
-        {"id":"quick_create","code":"pendo.pendo.ledger.quick","message":"/pendo ledger quick 1.23 QUICK-{{run_id}} type:expense cat:测试 account:现金 date:2037-04-04","expect_all":["记账成功","1.23","QUICK-{{run_id}}"],"captures":{"quick_ledger_id":"`([0-9a-f]{8})`"}},
+        {"id":"quick_create","code":"pendo.pendo.ledger.quick","message":"/pendo ledger quick 1.23 QUICK-{{run_id}} type:expense cat:测试 account:现金 date:2037-04-04","expect_all":["记账成功","1.23","QUICK-{{run_id}}"],"captures":{"quick_ledger_id":"(?<![0-9A-Za-z])([0-9a-f]{8})(?![0-9A-Za-z])"}},
         {"id":"quick_delete","code":"pendo.pendo.ledger.delete","message":"/pendo ledger delete {{quick_ledger_id}}","expect_all":["已删除"],"cleanup":true},
         {"id":"delete","code":"pendo.pendo.ledger.delete","message":"/pendo ledger delete {{ledger_id}}","expect_all":["已删除"],"cleanup":true},
         {"id":"absent","code":"pendo.pendo.ledger.view","message":"/pendo ledger view {{ledger_id}}","expect_any":["找不到","不存在"],"reject_any":["TRANSFER-{{run_id}}","XQ-PLUGIN-UNEXPECTED"],"cleanup":true}
@@ -956,7 +966,7 @@
         "pendo.pendo.event.reminders.list"
       ],
       "steps": [
-        {"id":"create","code":"pendo.pendo.event.add","message":"/pendo event add 2037年5月1日上午9点到10点，在MATRIX_LAB举行，标题为SINGLE-{{run_id}}，分类为工作，备注带电脑，提前1小时提醒","expect_any":["已创建","已添加","日程"],"captures":{"single_event_id":"`([0-9a-f]{8})`"}},
+        {"id":"create","code":"pendo.pendo.event.add","message":"/pendo event add 2037年5月1日上午9点到10点，在MATRIX_LAB举行，标题为SINGLE-{{run_id}}，分类为工作，备注带电脑，提前1小时提醒","expect_any":["已创建","已添加","日程"],"captures":{"single_event_id":"(?<![0-9A-Za-z])([0-9a-f]{8})(?![0-9A-Za-z])"}},
         {"id":"view","code":"pendo.pendo.event.view","message":"/pendo event view {{single_event_id}}","expect_all":["SINGLE-{{run_id}}","MATRIX_LAB","带电脑"]},
         {"id":"invalid_edit","code":"pendo.pendo.event.edit","message":"/pendo event edit {{single_event_id}}","expect_all":["用法"]},
         {"id":"unchanged","code":"pendo.pendo.event.view","message":"/pendo event view {{single_event_id}}","expect_all":["SINGLE-{{run_id}}","MATRIX_LAB","带电脑"]},
@@ -997,8 +1007,8 @@
         "pendo.pendo.event.reminders.set"
       ],
       "steps": [
-        {"id":"create","code":"pendo.pendo.event.add","message":"/pendo event add 从2037年6月1日起每天上午9点，标题为RECUR-{{run_id}}，重复3次，在MATRIX_ONLINE，备注每日同步，提前30分钟提醒","expect_any":["重复","3","日程"],"captures":{"recurring_collection_id":"`([0-9a-f]{8})`"}},
-        {"id":"view_collection","code":"pendo.pendo.event.view","message":"/pendo event view {{recurring_collection_id}}","expect_all":["RECUR-{{run_id}}","MATRIX_ONLINE"],"captures":{"recurring_child_id":"📌 [^\n]*`([0-9a-f]{8})`"}},
+        {"id":"create","code":"pendo.pendo.event.add","message":"/pendo event add 从2037年6月1日起每天上午9点，标题为RECUR-{{run_id}}，重复3次，在MATRIX_ONLINE，备注每日同步，提前30分钟提醒","expect_any":["重复","3","日程"],"captures":{"recurring_collection_id":"(?<![0-9A-Za-z])([0-9a-f]{8})(?![0-9A-Za-z])"}},
+        {"id":"view_collection","code":"pendo.pendo.event.view","message":"/pendo event view {{recurring_collection_id}}","expect_all":["RECUR-{{run_id}}","MATRIX_ONLINE"],"captures":{"recurring_child_id":"📌 [^\n]*(?<![0-9A-Za-z])([0-9a-f]{8})(?![0-9A-Za-z])"}},
         {"id":"invalid_collection_time","code":"pendo.pendo.event.edit","message":"/pendo event edit {{recurring_collection_id}} 时间改到2037-06-20 12:00","expect_any":["未识别","集合元信息"]},
         {"id":"edit_collection","code":"pendo.pendo.event.edit","message":"/pendo event edit {{recurring_collection_id}} 标题改为RECUR-EDIT-{{run_id}}，地点改到MATRIX_RECUR_ROOM，分类改为发布，备注改为集合备注","expect_all":["已更新日程集合"]},
         {"id":"view_collection_edited","code":"pendo.pendo.event.view","message":"/pendo event view {{recurring_collection_id}}","expect_all":["RECUR-EDIT-{{run_id}}","MATRIX_RECUR_ROOM","集合备注"]},
@@ -1034,8 +1044,8 @@
         "pendo.pendo.event.reminders.set"
       ],
       "steps": [
-        {"id":"create","code":"pendo.pendo.event.add","message":"/pendo event add 2037年7月1日9点提审、7月2日12点灰度、7月3日18点全量，标题为MULTI-{{run_id}}，地点MATRIX_HQ，备注发布流程，提前1小时提醒","expect_any":["节点","3","日程"],"captures":{"multi_collection_id":"`([0-9a-f]{8})`"}},
-        {"id":"view_collection_first","code":"pendo.pendo.event.view","message":"/pendo event view {{multi_collection_id}}","expect_all":["MULTI-{{run_id}}","MATRIX_HQ","提审","灰度","全量"],"captures":{"multi_first_id":"提审[^\n]*`([0-9a-f]{8})`","multi_middle_id":"灰度[^\n]*`([0-9a-f]{8})`","multi_last_id":"全量[^\n]*`([0-9a-f]{8})`"}},
+        {"id":"create","code":"pendo.pendo.event.add","message":"/pendo event add 2037年7月1日9点提审、7月2日12点灰度、7月3日18点全量，标题为MULTI-{{run_id}}，地点MATRIX_HQ，备注发布流程，提前1小时提醒","expect_any":["节点","3","日程"],"captures":{"multi_collection_id":"(?<![0-9A-Za-z])([0-9a-f]{8})(?![0-9A-Za-z])"}},
+        {"id":"view_collection_first","code":"pendo.pendo.event.view","message":"/pendo event view {{multi_collection_id}}","expect_all":["MULTI-{{run_id}}","MATRIX_HQ","提审","灰度","全量"],"captures":{"multi_first_id":"提审[^\n]*(?<![0-9A-Za-z])([0-9a-f]{8})(?![0-9A-Za-z])","multi_middle_id":"灰度[^\n]*(?<![0-9A-Za-z])([0-9a-f]{8})(?![0-9A-Za-z])","multi_last_id":"全量[^\n]*(?<![0-9A-Za-z])([0-9a-f]{8})(?![0-9A-Za-z])"}},
         {"id":"view_collection_middle","code":"pendo.pendo.event.view","message":"/pendo event view {{multi_middle_id}}","expect_all":["灰度","{{multi_collection_id}}"]},
         {"id":"view_collection_last","code":"pendo.pendo.event.view","message":"/pendo event view {{multi_last_id}}","expect_all":["全量","{{multi_collection_id}}"]},
         {"id":"edit_collection","code":"pendo.pendo.event.edit","message":"/pendo event edit {{multi_collection_id}} 标题改为MULTI-EDIT-{{run_id}}，地点改到MATRIX_HQ2，分类改为发布，备注改为集合备注","expect_all":["已更新日程集合"]},

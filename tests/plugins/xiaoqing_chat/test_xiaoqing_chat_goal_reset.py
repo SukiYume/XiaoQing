@@ -92,7 +92,7 @@ async def test_smalltalk_direct_reply_uses_dynamic_history_think_level_when_plan
                 enable_planner=False,
                 resolve_think_level=lambda history_len=0: 2 if history_len >= 3 else 0,
             ),
-            personality=SimpleNamespace(states=[], state_probability=0.0),
+            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
             debug=SimpleNamespace(log_latency=False),
         )
     )
@@ -197,7 +197,7 @@ async def test_smalltalk_private_brain_chat_keeps_planner_when_private_always_on
                 enable_planner=False,
                 resolve_think_level=lambda history_len=0: 0,
             ),
-            personality=SimpleNamespace(states=[], state_probability=0.0),
+            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
             debug=SimpleNamespace(log_latency=False),
         )
     )
@@ -276,7 +276,7 @@ async def test_smalltalk_finalize_defers_post_reply_tasks_and_media_marking_to_b
             planner=SimpleNamespace(
                 enable_planner=False, resolve_think_level=lambda history_len=0: 0
             ),
-            personality=SimpleNamespace(states=[], state_probability=0.0),
+            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
             debug=SimpleNamespace(log_latency=False),
         )
     )
@@ -368,7 +368,7 @@ async def test_prepare_smalltalk_turn_forces_reply_when_bot_name_is_mentioned(
                 enable_review_sessions       = False,
             ),
             brain_chat=SimpleNamespace(enable_private_brain_chat=False),
-            personality=SimpleNamespace(states=[], state_probability=0.0),
+            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
         )
     )
     hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)
@@ -434,7 +434,7 @@ async def test_prepare_smalltalk_turn_forces_reply_when_recent_coreference_menti
                 enable_review_sessions       = False,
             ),
             brain_chat=SimpleNamespace(enable_private_brain_chat=False),
-            personality=SimpleNamespace(states=[], state_probability=0.0),
+            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
         )
     )
     hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)
@@ -497,7 +497,7 @@ async def test_prepare_smalltalk_turn_does_not_force_coreference_without_bot_anc
                 enable_review_sessions       = False,
             ),
             brain_chat=SimpleNamespace(enable_private_brain_chat=False),
-            personality=SimpleNamespace(states=[], state_probability=0.0),
+            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
         )
     )
     hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)
@@ -561,7 +561,7 @@ async def test_smalltalk_commit_syncs_goal_store_to_top_planner_goal_after_state
             brain_chat=SimpleNamespace(enable_private_brain_chat=False),
             max_context_size=10,
             planner=SimpleNamespace(resolve_think_level=lambda history_len=0: 0),
-            personality=SimpleNamespace(states=[], state_probability=0.0),
+            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
             debug=SimpleNamespace(log_latency=False),
         )
     )
@@ -661,7 +661,7 @@ async def test_smalltalk_commit_clears_goal_store_when_planner_goal_list_becomes
             brain_chat=SimpleNamespace(enable_private_brain_chat=False),
             max_context_size=10,
             planner=SimpleNamespace(resolve_think_level=lambda history_len=0: 0),
-            personality=SimpleNamespace(states=[], state_probability=0.0),
+            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
             debug=SimpleNamespace(log_latency=False),
         )
     )
@@ -756,7 +756,7 @@ async def test_smalltalk_pre_gate_clears_goal_store_when_no_goal_is_derived(
                 enable_expression_reflection=False, enable_review_sessions=False
             ),
             brain_chat=SimpleNamespace(enable_private_brain_chat=False),
-            personality=SimpleNamespace(states=[], state_probability=0.0),
+            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
         )
     )
 
@@ -1093,7 +1093,7 @@ async def test_smalltalk_action_history_preserves_real_planner_action_name(
             brain_chat=SimpleNamespace(enable_private_brain_chat=False),
             max_context_size=10,
             planner=SimpleNamespace(resolve_think_level=lambda history_len=0: 0),
-            personality=SimpleNamespace(states=[], state_probability=0.0),
+            personality=SimpleNamespace(card=SimpleNamespace(moods=()), state_probability=0.0),
             debug=SimpleNamespace(log_latency=False),
         )
     )

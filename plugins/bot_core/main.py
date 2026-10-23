@@ -92,20 +92,11 @@ def mask_secret(value: Any) -> str:
 def _secret_admin_capability(
     context: PluginContextProtocol,
 ) -> SecretAdminCapability | None:
-    """仅为可信 Bot 管理员私聊返回全局密钥管理能力。"""
+    """全局密钥管理能力；Core 只在此人此刻能用 ``/set_secret``（plugin.json 声明）时发出。"""
 
-    principal    = getattr(context, "principal", None)
-    capabilities = getattr(context, "capabilities", None)
-    capability   = getattr(capabilities, "secret_admin", None)
-    if (
-        principal is None
-        or not getattr(capabilities, "is_bot_admin", False)
-        or not getattr(principal, "is_private", False)
-        or capability is None
-    ):
-        return None
-    # 兼容测试替身和旧插件上下文的结构探测；通过上述门禁后只按窄能力协议使用。
-    return cast(SecretAdminCapability, capability)
+    capability = getattr(getattr(context, "capabilities", None), "secret_admin", None)
+    # 兼容测试替身和旧插件上下文的结构探测；拿到后只按窄能力协议使用。
+    return cast(SecretAdminCapability, capability) if capability is not None else None
 
 
 def _reject_json_constant(constant: str) -> NoReturn:

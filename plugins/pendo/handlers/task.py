@@ -525,7 +525,7 @@ class TaskHandler(DbOpsMixin):
         if tags:
             lines.append(f"🏷️ 标签: {ItemFormatter.format_tags(tags)}")
         display_id = public_id(item_id)
-        lines.extend((f"`{display_id}`", "", f"💡 用 /pendo todo done {display_id} 完成"))
+        lines.extend((f"{display_id}", "", f"💡 用 /pendo todo done {display_id} 完成"))
         return {"status": "success", "message": "\n".join(lines), "item_id": item_id}
 
     async def _step_task_title(
@@ -796,7 +796,7 @@ class TaskHandler(DbOpsMixin):
         if not tasks:
             return {
                 "status": "success",
-                "message": "📝 **待办列表**\n\n暂无待办事项\n\n💡 用 /pendo todo add 交互式添加，或用 /pendo todo add <内容> 快捷添加",
+                "message": "📝 待办列表\n\n暂无待办事项\n\n💡 用 /pendo todo add 交互式添加，或用 /pendo todo add <内容> 快捷添加",
             }
 
         categories: dict[str, dict[str, int]] = {}
@@ -809,14 +809,14 @@ class TaskHandler(DbOpsMixin):
             )
             stats[bucket] += 1
 
-        lines = ["📝 **待办分类列表**", ""]
+        lines = ["📝 待办分类列表", ""]
         for cat in sorted(categories):
             stats  = categories[cat]
             total  = stats["done"] + stats["open"] + stats["cancelled"]
             detail = f"{stats['open']}未完成/{stats['done']}完成"
             if stats["cancelled"]:
                 detail += f"/{stats['cancelled']}取消"
-            lines.append(f"📂 **{cat}** ({detail}/{total}总)")
+            lines.append(f"📂 {cat} ({detail}/{total}总)")
 
         lines.extend(
             (
@@ -979,7 +979,7 @@ class TaskHandler(DbOpsMixin):
 
         label = self._task_list_label(options, time_label)
         if not tasks:
-            return {"status": "success", "message": f"📝 **{label}** 的待办\n\n暂无待办事项"}
+            return {"status": "success", "message": f"📝 {label} 的待办\n\n暂无待办事项"}
 
         page_size = PendoConfig.LIST_PAGE_SIZE
         if not options.show_all and (options.page - 1) * page_size >= len(tasks):
@@ -1020,7 +1020,7 @@ class TaskHandler(DbOpsMixin):
                 )
                 schedule += f"  ⏰ {deadline}"
             lines.append(f"{indent}   {schedule}")
-        lines.append(f"{indent}   `{public_id(getattr(task, 'id', ''))}`")
+        lines.append(f"{indent}   {public_id(getattr(task, 'id', ''))}")
         return lines
 
     def _format_flat_task_list(
@@ -1033,7 +1033,7 @@ class TaskHandler(DbOpsMixin):
         """格式化普通列表，并显示精确总数和下一页提示。"""
         page_size = PendoConfig.LIST_PAGE_SIZE
         display, page_info, has_more = paginate(tasks, options.page, page_size, options.show_all)
-        lines = [f"📝 **{label}** 的待办 (共{len(tasks)}项){page_info}", ""]
+        lines = [f"📝 {label} 的待办 (共{len(tasks)}项){page_info}", ""]
         start = 0 if options.show_all else (options.page - 1) * page_size
         for index, task in enumerate(display, start + 1):
             lines.extend(
@@ -1077,7 +1077,7 @@ class TaskHandler(DbOpsMixin):
             if category != current_category:
                 if current_category is not None:
                     lines.append("")
-                lines.append(f"📂 **{category}** ({len(categories[category])}项)")
+                lines.append(f"📂 {category} ({len(categories[category])}项)")
                 current_category = category
             lines.extend(
                 self._task_list_entry_lines(
@@ -1111,7 +1111,7 @@ class TaskHandler(DbOpsMixin):
     ) -> str:
         """格式化待办详情，标题保持单行，正文保留原有段落。"""
         status = _task_status_value(task)
-        lines  = [f"📝 **{single_line_text(task.title) or '无标题'}**", ""]
+        lines  = [f"📝 {single_line_text(task.title) or '无标题'}", ""]
         lines.append(f"{ItemFormatter.format_status_icon(status)} 状态: {cls._status_text(status)}")
         lines.append(
             f"{ItemFormatter.format_priority_icon(task.priority)} "
@@ -1140,7 +1140,7 @@ class TaskHandler(DbOpsMixin):
         display_id = public_id(getattr(task, "id", ""))
         lines.extend(
             (
-                f"`{display_id}`",
+                f"{display_id}",
                 f"💡 /pendo todo done {display_id} | /pendo todo cancel {display_id} | "
                 f"/pendo todo edit {display_id} <内容>",
             )

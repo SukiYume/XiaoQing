@@ -105,7 +105,7 @@ def test_manifest_contract() -> None:
     command = manifest["commands"][0]
     assert command["name"] == "alpha"
     assert command["triggers"] == ["alpha", "wolfram", "wa", "计算"]
-    assert command["admin_only"] is True
+    assert "admin_only" not in command
     assert command["usage"].startswith("/alpha")
     assert command["subcommands"][0]["name"] == "help"
 

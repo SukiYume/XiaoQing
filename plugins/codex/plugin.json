@@ -4,7 +4,7 @@
     "description": "有界、可取消的 Codex CLI 后台会话队列",
     "entry": "main.py",
     "concurrency": "parallel",
-    "capabilities": ["admin_sessions", "execution_timeout_exempt"],
+    "capabilities": ["execution_timeout_exempt"],
     "services": [
         {
             "name": "codex.enqueue_arxiv_summary",
@@ -13,6 +13,13 @@
                 "arxiv_filter"
             ],
             "required_capability": "codex_arxiv_summary"
+        },
+        {
+            "name": "codex.agent_task",
+            "callback": "agent_task_service",
+            "callers": [
+                "xiaoqing_agent"
+            ]
         }
     ],
     "commands": [
@@ -23,7 +30,6 @@
             ],
             "help": "Codex 会话队列 | /codex help",
             "admin_only": true,
-            "contexts": ["private"],
             "usage": "/codex <会话名> <任务> | /codex <子命令>",
             "examples": ["/codex research 检查当前测试失败"],
             "invalid_examples": ["/codex only-session-name"],

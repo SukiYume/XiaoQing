@@ -11,8 +11,6 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from itertools import chain
 from pathlib import Path
-from urllib.parse import unquote, urlparse
-from urllib.request import url2pathname
 
 from core.image_validation import (
     ImageValidationError,
@@ -20,6 +18,7 @@ from core.image_validation import (
     stat_identity,
     validate_image_fd,
 )
+from core.plugin_base import file_uri_to_path
 
 IMAGE_EXTENSIONS          = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 MARKDOWN_IMAGE_RE         = re.compile(r"!\[[^\]]*\]\(([^)\n]+)\)")
@@ -111,16 +110,6 @@ def _clean_path_text(value: str) -> str:
     return text.rstrip(".,;，；。")
 
 
-def _path_from_file_uri(value: str) -> Path | None:
-    parsed = urlparse(value)
-    if parsed.scheme.lower() != "file":
-        return None
-    path_text = parsed.path
-    if parsed.netloc and parsed.netloc.lower() != "localhost":
-        path_text = f"//{parsed.netloc}{path_text}"
-    return Path(url2pathname(unquote(path_text)))
-
-
 def _is_within(path: Path, root: Path) -> bool:
     try:
         path.resolve().relative_to(root.resolve())
@@ -146,7 +135,7 @@ def _candidate_paths(raw_value: str, *, cwd: Path, artifact_dir: Path) -> list[P
     lowered = value.lower()
     if lowered.startswith(("http://", "https://")):
         return []
-    file_uri_path = _path_from_file_uri(value)
+    file_uri_path = file_uri_to_path(value)
     if file_uri_path is not None:
         return [file_uri_path]
 

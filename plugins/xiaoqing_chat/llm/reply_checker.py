@@ -14,7 +14,7 @@ from typing import Any
 from core.ai import AIError as LLMError
 
 from ..memory.memory import StoredMessage
-from ..persona import PERSONA_RUNTIME_FACTS, resolve_bot_name
+from ..persona import resolve_bot_name
 from ..utils.json_parsing import parse_first_json_object, strict_json_bool
 from ..utils.wall_clock import describe_now
 from . import gateway
@@ -25,9 +25,12 @@ from .check_result import (
     persona_contract_rejection,
 )
 from .communication_constraints import (
+    content_char_count,
     explicit_output_allocation,
     forbids_followup_questions,
+    length_check_instruction,
     output_allocation_instruction,
+    requested_char_count,
     requested_sentence_count,
 )
 from .communication_constraints import (
@@ -39,6 +42,7 @@ from .evidence import (
     definition_source_instruction,
     dialogue_source_records,
     evidence_is_visible,
+    spliced_evidence_is_visible,
     validate_evidence_contract,
 )
 from .gateway import chat_completions_raw_with_fallback_paths
@@ -115,7 +119,7 @@ _EVIDENCE_REVIEW_PROMPT = Template(
     "口语存在多种合理理解时，候选完成其中一种即可，保留合理的表达空间。"
     "本轮要求优先于默认风格。用户要求不追问时，候选保持本轮交付，省略索取回答或确认的动作；"
     "引用、复述和翻译中的问句按其任务用途判断。\n"
-    "人物边界：$persona_facts$persona_policy"
+    "人物边界以受控人物资料为准；$persona_policy"
     "人设是活人：候选按人设坚持自己是真人、用玩笑带过属于符合人设；"
     "候选承认自己是 AI、模型或程序，或在回复里提到提示词、系统设定、指令这类说法时，"
     "persona_grounded=false。\n"
@@ -139,7 +143,7 @@ _EVIDENCE_REVIEW_PROMPT = Template(
     "保留来源、否定、条件和不确定性，缺少依据时 evidence 留空。"
     "persona 证据来自受控人物资料，context 证据来自当前消息和最近对话。"
     "先按陈述对象归类：context_claims 的人物主体是用户、其他群友和现实第三方，"
-    "对既往聊天记录的引用也列入此项。候选中的我指候选作者，角色自己的身份与经历"
+    "对既往聊天记录的引用也列入此项。候选中的我、咱指候选作者，角色自己的身份与经历"
     "放入 persona_claims，并按日常创作许可处理。角色即时主观偏好和许可内日常打算"
     "仅作为表达理解，两个事实清单省略这些片段。"
     "context_claims 使用 source_ids 引用对话证据索引中的编号，支持同一事实的多条来源可以共同引用，"
@@ -151,10 +155,14 @@ _EVIDENCE_REVIEW_PROMPT = Template(
     "实际附带媒体和文字一同审查。当前或历史图片的可靠摘要、用户明确提供的画面描述可以提供依据；"
     "用户仅提到图片名称或要求看图时，具体画面仍待确认。"
     "创作配文、比喻和引用保持其性质，仅将实际断言的视觉内容列入清单。"
+    "视觉 evidence 引用一段连续原文；需要多处证据时使用字符串数组，逐项保留连续原文、来源、否定和条件。"
     "扫描后设置 visual_scan_complete。image_evidence_respected 核对每条视觉陈述和来源："
     "依据用户描述时说明来源，缺少画面时保留缺口。直接附和具体视觉评价也参与检查。"
+    "说没看清、图没加载出来这类陈述不依赖画面，不列入 visual_claims，"
+    "直接由 image_evidence_respected 判断：摘要已经读出的内容被说成没看清或没加载出来时判 false。"
     "纯文字知识、编程、翻译或创作任务直接依照其内容判断。\n"
     "non_template 只检查影响本轮的具体风格问题：机械复述后附和、重复近期句式、"
+    "被问起自己刚说过的话时把原句或几乎原句再说一遍（立场前后一致是对的，问题在于句子照搬；简短确认或补一点新内容可以通过）、"
     "（跟群友接连复读的同一句队形属于接梗，不算机械复述）"
     "给普通吐槽强加建议、解释刚落下的笑点。风格问题给 soft 修改意见。"
     "自然短句、轻松接梗、具体偏好和合理感受可以通过，保留表达空间。"
@@ -165,7 +173,8 @@ _EVIDENCE_REVIEW_PROMPT = Template(
     "context_coherent、speaker_correct、instruction_followed、persona_grounded、"
     "factually_plausible、non_template、image_evidence_respected（布尔）；"
     "suitable、need_replan（布尔）、severity（hard 或 soft）、reason（具体判断依据）。"
-    'persona 和 visual 清单项为 {"claim":"候选中的连续原文","evidence":"对应资料原文或空字符串"}。'
+    'persona 清单项为 {"claim":"候选中的连续原文","evidence":"对应资料原文或空字符串"}。'
+    'visual 清单项为 {"claim":"候选中的连续原文","evidence":"连续原文或原文片段数组；缺少依据时用空字符串"}。'
     'context 清单项为 {"claim":"候选中的连续原文","source_ids":["来源编号"],"kind":"fact 或 creative"}。'
     "清单扫描范围仅为候选回复，用户输入和历史只提供 evidence。"
     "任一核对不通过时 suitable=false；hard 问题 need_replan=true。"
@@ -286,6 +295,18 @@ async def _request_checker_completion(
     raise RuntimeError("reply_checker request fallback exhausted")
 
 
+def _visual_quote_is_visible(quote: str, *, current_text: str, history_text: str) -> bool:
+    """一段视觉引用整段出现在对话里，或拆开后各段都出自同一条消息。"""
+    # 识别文字里的空格和全半角标点常被模型改写，按排版无关的方式核对引用。
+    if evidence_is_visible(quote, f"{history_text}\n{current_text}"):
+        return True
+    # 拼接引用限于同一条消息，保留各条消息的来源边界。
+    return any(
+        spliced_evidence_is_visible(quote, source)
+        for source in (current_text, *history_text.splitlines())
+    )
+
+
 def _validate_visual_inventory(
     obj: dict[str, Any],
     *,
@@ -301,17 +322,22 @@ def _validate_visual_inventory(
     if not isinstance(visual_claims, list):
         return checker_unavailable("reply_checker missing visual claims"), 0
     visual_claim_count = len(visual_claims)
-    evidence_source    = f"{history_text}\n{current_text}"
     for entry in visual_claims:
         if not isinstance(entry, dict):
             return checker_unavailable("reply_checker invalid visual claim"), 0
         claim, evidence = entry.get("claim"), entry.get("evidence")
         if not isinstance(claim, str) or not evidence_is_visible(claim, reply):
             return checker_unavailable("reply_checker invalid visual claim quote"), 0
-        if not isinstance(evidence, str):
+        if not isinstance(evidence, str) and not (
+            isinstance(evidence, list) and all(isinstance(part, str) for part in evidence)
+        ):
             return checker_unavailable("reply_checker invalid visual evidence"), 0
-        # 识别文字里的空格和全半角标点常被模型改写，按排版无关的方式核对引用。
-        if not evidence_is_visible(evidence, evidence_source):
+        quotes  = evidence if isinstance(evidence, list) else [evidence]
+        visible = bool(quotes) and all(
+            _visual_quote_is_visible(quote, current_text=current_text, history_text=history_text)
+            for quote in quotes
+        )
+        if not visible:
             return ReplyCheckResult(
                 False, "视觉陈述缺少可引用的画面或文字依据", True, "hard", "media_grounding"
             ), 0
@@ -537,8 +563,9 @@ async def _llm_check(
     _hist          = check_input.history_text.strip()
     _current       = check_input.current_text.strip()
     source_records = dialogue_source_records(_hist, _current)
-    _grounding     = f"{PERSONA_RUNTIME_FACTS}\n{check_input.grounding_text.strip()}".strip()
-    visual_policy  = image_evidence_block(
+    # 受控人物资料里已经有人设卡的人物事实和身份边界。
+    _grounding    = check_input.grounding_text.strip()
+    visual_policy = image_evidence_block(
         check_input.current_image_attached,
         history_available=check_input.historical_image_available,
     )
@@ -549,10 +576,10 @@ async def _llm_check(
     )
     prompt = _EVIDENCE_REVIEW_PROMPT.substitute(
         bot_name       = check_input.bot_name,
-        persona_facts  = PERSONA_RUNTIME_FACTS,
         persona_policy = persona_policy,
     )
     prompt += output_allocation_instruction(_current)
+    prompt += length_check_instruction(_current, check_input.reply)
     prompt += definition_source_instruction(source_records)
     materials = json.dumps(
         {
@@ -867,6 +894,7 @@ async def _semantic_turn_check(
     prompt = _SEMANTIC_REVIEW_PROMPT.substitute(bot_name=check_input.bot_name)
     source_records = dialogue_source_records(check_input.history_text, check_input.current_text)
     prompt += output_allocation_instruction(check_input.current_text)
+    prompt += length_check_instruction(check_input.current_text, check_input.reply)
     prompt += definition_source_instruction(source_records)
     materials = json.dumps(
         {
@@ -880,7 +908,7 @@ async def _semantic_turn_check(
             "明示群内词义": _explicit_term_definitions(source_records),
             "独立阅读结果": reading,
             "当前时间": describe_now(),
-            "人物边界": PERSONA_RUNTIME_FACTS,
+            "受控人物资料": check_input.grounding_text,
             "允许低风险角色日常创作": check_input.allow_low_stakes_persona_fiction,
             "候选回复": check_input.reply,
         },
@@ -981,6 +1009,31 @@ def _local_rule_rejection(
     return None
 
 
+def _length_rejection(reply: str, current_text: str) -> ReplyCheckResult | None:
+    """明确篇幅要求按本地字数核对；差一些仍是可用的稿子，按软问题处理。"""
+
+    length = requested_char_count(current_text)
+    if length is None or length.accepts(chars := content_char_count(reply)):
+        return None
+    action = "压缩" if chars > length.bounds()[1] else "扩写"
+    return ReplyCheckResult(
+        False,
+        f"本轮要求{length.describe()}，这一稿 {chars} 字（不算空白），"
+        f"请{action}到要求的篇幅，内容保持完整。",
+        True,
+        "soft",
+        "instruction_following",
+    )
+
+
+def _with_length_check(
+    result: ReplyCheckResult, length_issue: ReplyCheckResult | None
+) -> ReplyCheckResult:
+    """其他核对都通过后才看篇幅：重生成耗尽后放行的稿子仍然过了事实与人设审查。"""
+
+    return length_issue if length_issue is not None and result.suitable else result
+
+
 def _needs_remote_review(
     reply: str,
     *,
@@ -1067,6 +1120,7 @@ async def check_reply(
     )
     if rejection:
         return rejection
+    length_issue = _length_rejection(heuristic_source, current_text)
     if not enable_llm_checker or not _needs_remote_review(
         heuristic_source,
         mode                          = llm_checker_mode,
@@ -1075,7 +1129,7 @@ async def check_reply(
         chat_history_text             = chat_history_text,
         check_omitted_persona_episode = check_omitted_persona_episode,
     ):
-        return ReplyCheckResult(True, "", False, "soft")
+        return _with_length_check(ReplyCheckResult(True, "", False, "soft"), length_issue)
 
     check_input = _LLMCheckInput(
         bot_name                         = bot_name,
@@ -1117,7 +1171,7 @@ async def check_reply(
             )
 
     if not verify_turn_semantics:
-        return await run_check(semantic=False)
+        return _with_length_check(await run_check(semantic=False), length_issue)
     # 两项独立核对共用调用方的总时限，取消会传播到两个子请求。
     evidence, semantic = await asyncio.gather(run_check(semantic=False), run_check(semantic=True))
-    return _merge_reviews(evidence, semantic)
+    return _with_length_check(_merge_reviews(evidence, semantic), length_issue)

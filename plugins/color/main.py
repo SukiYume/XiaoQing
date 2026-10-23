@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import secrets
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -14,6 +14,7 @@ from core.args import FLAG_VALUE, ParsedArgs, parse, parse_int, quote_token, tok
 from core.interfaces import PluginContextProtocol
 from core.plugin_base import has_control_characters, image, segments, text
 from core.public_errors import public_error_response
+from core.router import resolve_context_command_invocation
 
 from . import convert, data_manager, image_gen, query, stellar
 from .data_manager import ColorRecord
@@ -339,20 +340,14 @@ def _parse_request(args: str) -> ColorRequest:
     )
 
 
-def _can_manage_custom_colors(
-    event: Mapping[str, Any],
-    context: PluginContextProtocol,
-) -> bool:
-    user_id = event.get("user_id")
-    if type(user_id) is not int or user_id <= 0:
-        return False
-    checker = getattr(context, "is_global_admin", None)
-    if not callable(checker):
-        return False
-    try:
-        return checker(user_id) is True
-    except Exception:
-        return False
+def _through_mutation_node(context: PluginContextProtocol, args: str) -> bool:
+    """添加和删除只认 plugin.json 里的 add、delete 节点；谁能用它们由 Core 按声明检查。
+
+    选项写在后面（``/color 红 -w ...``）时 Core 解析到的是根命令，这里拒绝而不是放行。
+    """
+
+    invocation = resolve_context_command_invocation(context, "color.color", args)
+    return invocation is not None and invocation.node.name in {"add", "delete"}
 
 
 def _image_dir(context: PluginContextProtocol) -> Path:
@@ -724,7 +719,6 @@ async def _delete_custom_color(name: str, context: PluginContextProtocol) -> Mes
 async def _handle_palette_request(
     request: ColorRequest,
     colors: Sequence[ColorRecord],
-    event: Mapping[str, Any],
     context: PluginContextProtocol,
 ) -> Messages:
     if request.action == "catalog":
@@ -745,8 +739,6 @@ async def _handle_palette_request(
         return await _handle_cmyk(request, colors, context)
     if request.action == "keyword":
         return _handle_keyword(request, colors)
-    if request.action in {"write", "delete"} and not _can_manage_custom_colors(event, context):
-        return segments("❌ 只有 Bot 全局管理员可以修改当前会话的自定义颜色库")
     if request.action == "write":
         return await _add_custom_color(request.value, colors, context)
     if request.action == "delete":
@@ -772,6 +764,10 @@ async def handle(
         )
         if request.action == "help":
             return segments(HELP_TEXT)
+        if request.action in {"write", "delete"} and not _through_mutation_node(context, args):
+            return segments(
+                "❌ 添加或删除自定义颜色请用 /color add <名称> <颜色> 或 /color delete <名称>"
+            )
         if request.action == "spectype":
             return stellar.list_spectral_types(request.value, context, page=request.page)
         if request.action == "stellar":
@@ -782,7 +778,7 @@ async def handle(
         colors = await data_manager.load_colors_async(context)
         if not colors:
             return segments("❌ 颜色数据加载失败，请检查插件资源")
-        return await _handle_palette_request(request, colors, event, context)
+        return await _handle_palette_request(request, colors, context)
     except ColorInputError as exc:
         return segments(f"❌ {exc}")
     except Exception as exc:

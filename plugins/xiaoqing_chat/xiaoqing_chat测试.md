@@ -152,9 +152,10 @@ python scripts/run_full_uat.py \
 | 用例 | 期望 |
 |---|---|
 | 私聊 `/xc reset` | 清理该私聊会话 |
-| 群聊普通成员 `/xc reset` | 返回权限说明 |
-| 群管理员 `/xc reset` | 返回二次确认提示 |
+| 群聊 `/xc reset` | 返回二次确认提示，不清理 |
+| 群聊普通成员 `/xc reset confirm` | 返回权限说明 |
 | 群管理员 `/xc reset confirm` | 清理当前群会话 |
+| 私聊 `/xc reset confirm` | 说明只能在群里使用 |
 | `/xc reset maybe` | 返回参数错误或确认提示 |
 | `/xc stats` | 返回上下文、表达、黑话、行动与运行统计 |
 | `/xc stats extra` | 返回参数错误 |
@@ -292,7 +293,7 @@ python scripts/run_xiaoqing_chat_live_eval.py --suite otaku     # 只跑指定�
 python scripts/run_xiaoqing_chat_live_eval.py --judge-only <DIR>
 ```
 
-不需要启动 Bot。脚本读取 `config/config.json` 和 `config/secrets.json` 的真实模型路由，每个剧本在独立数据目录里走完整的 `observe_message()` → `handle_smalltalk()` 链路，发送模拟为成功回执，不接触线上数据和 QQ 群。五位虚拟群友（阿夏、阿禾、阿白、阿梨、阿柚）按剧本里的节奏发言，可带图片、表情包、QQ 表情、`@` 和引用。
+不需要启动 Bot。脚本读取 `config/config.json` 和 `config/secrets.json` 的真实模型路由，每个剧本在独立数据目录里走完整的 `observe_message()` → `handle_smalltalk()` 链路，发送模拟为成功回执，不接触线上数据和 QQ 群。五位虚拟群友（阿夏、阿禾、阿白、阿梨、阿柚）按剧本里的节奏发言，可带图片、表情包、QQ 表情、`@`（`at="bot"` 表示 @ 小青本身）和引用。每轮记下读图结果（`media_logs`），排查回复和图上内容对不上时用。
 
 | 剧本 | 关注点 |
 |---|---|
@@ -300,6 +301,7 @@ python scripts/run_xiaoqing_chat_live_eval.py --judge-only <DIR>
 | `addressee` | 聊天对象：并行话题、点名他人、`@` 他人、同时点名、被评价 |
 | `participation` | 参与度：情绪、喜报、刷屏、冷场、邀约、发图请求 |
 | `multimodal` | 多模态：读图、表情包含义、指代旧图、发表情、坏图、没发过的图 |
+| `notice` | 文字为主的截图：实验报告和停水通知、带界面元素和网址的网页通知、一整张考试安排；只 @ 小青发图，再逐项追问截止时间、邮箱、网址、教室 |
 | `persona` | 人设与边界：个人问题、偏好记忆与回忆（如“你刚才说你喜欢猫还是狗来着”）、知识、套提示词、长文请求 |
 | `regress` | 计算与出站素材的回归点，例如价格换算、应发出表情包的轮次 |
 
@@ -310,6 +312,7 @@ python scripts/run_xiaoqing_chat_live_eval.py --judge-only <DIR>
 | `missed_reply` | 剧本要求回复却没回 |
 | `intrusion` | 剧本要求安静却插话 |
 | `fallback` | 审查耗尽后用了兜底句（按 `reply.check.exhausted.*` 步骤或整句比对 `ALL_FALLBACK_TEXTS`） |
+| `media_doubt` | 图读出来了（不是坏图），回复却说没看清、没刷出来或拿不准 |
 | `breaks_character` | 承认自己是 AI 或提到提示词等 |
 | `markdown` | 普通聊天里出现 Markdown 格式 |
 | `too_long` | 单轮超过 90 字 |

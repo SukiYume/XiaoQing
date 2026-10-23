@@ -16,7 +16,6 @@
       "name": "chat",
       "triggers": ["chat", "gpt", "ai"],
       "help": "与 AI 进行单轮对话 | /chat <问题>",
-      "admin_only": true,
       "usage": "/chat <问题>",
       "examples": ["/chat 用三句话解释快速射电暴"],
       "invalid_examples": ["/chat"],

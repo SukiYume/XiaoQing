@@ -123,7 +123,7 @@ _AI_CONSENT_SPEC: Final = _SettingSpec(
         "⚙️ AI 日记数据共享设置已更新\n"
         + (
             "✅ 已同意：日记正文可发送给当前配置的第三方 AI 服务进行情绪分析。"
-            "可随时用 `ai_consent off` 撤回。"
+            "可随时用 ai_consent off 撤回。"
             if allowed
             else "🔒 已关闭：日记正文不会发送给外部 AI，系统仅使用本地规则分析。"
         )

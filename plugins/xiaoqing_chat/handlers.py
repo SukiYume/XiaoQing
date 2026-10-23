@@ -17,6 +17,12 @@ from core.message import extract_text
 from core.plugin_base import segments
 from core.public_errors import public_error_message, public_error_response
 
+from .agent_bridge import (
+    AGENT_PLUGIN,
+    MAX_AGENT_MEMORY_CHARS,
+    agent_may_take_over,
+    answer_with_agent_or_chat,
+)
 from .attention_gate import decide_attention
 from .brain_chat import (
     is_brain_chat_active,
@@ -82,8 +88,8 @@ def _refresh_mood_state(runtime, state, chat_id: str) -> str:
     - 没有可用 mood → 按 state_probability 摇是否进入某个 state；
       命中后随机一个时长（在 [min,max] 之间），写入 state 缓存。
     """
-    cfg    = runtime.cfg.personality
-    states = [str(item) for item in cfg.states]
+    cfg               = runtime.cfg.personality
+    states: list[str] = list(cfg.card.moods)
     if not states:
         return ""
 
@@ -442,8 +448,14 @@ async def observe_outgoing_action(
         event = _outgoing_action_chat_event(action)
         if event is None:
             return []
+        if str(source_plugin or "").strip() == "xiaoqing_chat":
+            # 聊天自己的回复在发送回执提交时已经连同消息 ID 记下；审查提示等其他外发不进对话。
+            return []
 
         text = _outgoing_action_text(action)
+        if str(source_plugin or "").strip() == AGENT_PLUGIN:
+            # 群友常常只引用结果接着说；记不下这条，就认不出那是在跟小青说话。
+            text = text[:MAX_AGENT_MEMORY_CHARS]
         if is_ignored_text(text, runtime):
             return []
         if _should_skip_external_bot_memory(text, source_plugin, runtime.cfg):
@@ -453,13 +465,7 @@ async def observe_outgoing_action(
         state   = bound_state(context)
         async with chat_lock(chat_id):
             result_message_id = action.get(ACTION_RESULT_MESSAGE_ID_KEY)
-            if str(source_plugin or "").strip() == "xiaoqing_chat":
-                if state.memory_store.attach_latest_assistant_message_id(
-                    chat_id, result_message_id
-                ):
-                    schedule_memory_persist(context, runtime, chat_id=chat_id)
-                return []
-            local_id = allocate_local_id(chat_id)
+            local_id          = allocate_local_id(chat_id)
             state.memory_store.append(
                 chat_id,
                 role          = "assistant",
@@ -700,6 +706,29 @@ async def _maybe_reply_smalltalk(
     if prepared is None:
         return []
 
+    async def chat(deciding: asyncio.Task[Any] | None) -> list[dict[str, Any]]:
+        return await _reply_with_chat(
+            prepared, event, context, hctx, started_at=t0, deciding=deciding
+        )
+
+    # 明确叫小青时让 agent 判断要不要动手，同时照常生成聊天回复；它不接手就用聊天回复。
+    if agent_may_take_over(prepared, event, context):
+        return await answer_with_agent_or_chat(prepared, event, context, hctx, chat)
+    return await chat(None)
+
+
+async def _reply_with_chat(
+    prepared: PreparedSmalltalkTurn,
+    event: dict[str, Any],
+    context,
+    hctx: HandlerContext,
+    *,
+    started_at: float,
+    deciding: asyncio.Task[Any] | None,
+) -> list[dict[str, Any]]:
+    """在生成名额内生成并投递聊天回复；``deciding`` 是同时进行的 agent 判断。"""
+
+    runtime    = hctx.runtime
     user_scope = str(event.get("user_id") or "anonymous")
     try:
         async with hctx.state.generation_limiter.admit(
@@ -712,13 +741,17 @@ async def _maybe_reply_smalltalk(
             chat_wait_seconds          = _CHAT_GENERATION_QUEUE_SECONDS,
         ):
             generated = await generate_smalltalk_turn(prepared, event, context, hctx)
+            if deciding is not None and await asyncio.shield(deciding) is not None:
+                # 生成比 agent 的判断先完成，而 agent 要接手：这次的聊天回复不发。
+                generated.cancel_speculative_memory()
+                return []
             return await finalize_smalltalk_turn(
                 prepared,
                 generated,
                 event,
                 context,
                 hctx,
-                started_at=t0,
+                started_at=started_at,
             )
     except GenerationLimitExceeded as exc:
         log_step(

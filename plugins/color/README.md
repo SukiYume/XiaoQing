@@ -65,7 +65,7 @@ RGB 和 CMYK 接受逗号或空格分隔。三组整数自动按 RGB 处理，�
 
 ## 🎨 自定义颜色
 
-群聊使用群作用域，私聊使用当前用户作用域。Bot 全局管理员负责写入和删除，同一作用域的成员可查询：
+群聊使用群作用域，私聊使用当前用户作用域。写入和删除只走 `add`、`delete` 子命令（含 `-w`、`-d` 等别名），它们在 plugin.json 里只给 Bot 管理员，由 Core 检查；把 `-w` 写在其他参数后面不会当成写入。同一作用域的成员可查询：
 
 ```text
 data/color/custom_colors_group_<群号>.json
@@ -103,7 +103,7 @@ data/color/custom_colors_private_<用户号>.json
 | 不知道颜色名称 | 使用 `/color list` 浏览，或 `/color search <关键词>` 搜索名称/拼音 |
 | 提示参数冲突 | 优先使用直接查询或一个可读子命令，并把 `-p` 放在具体颜色查询之后 |
 | 页码超出范围 | 按回复中的实际总页数重试；颜色搜索使用 `--page` |
-| 自定义色写入被拒绝 | 核对 Bot 全局管理员身份、作用域 ID、名称和容量上限 |
+| 自定义色写入被拒绝 | 核对 Bot 管理员身份、作用域 ID、名称和容量上限 |
 | 色卡生成失败 | 安装 `matplotlib` 与 `numpy`，检查数据目录写权限 |
 | 资源校验失败 | 核对发行版中的 `color.json` 和 `stellar_colors.txt` |
 
@@ -114,8 +114,7 @@ data/color/custom_colors_private_<用户号>.json
 在仓库根目录运行：
 
 ```bash
-python -m pytest -q tests/plugins/color/test_color_plugin.py \
-  tests/plugins/contracts/test_dict_color_contracts.py
+python -m pytest -q tests/plugins/color/test_color_plugin.py
 python -m ruff check plugins/color
 python -m mypy plugins/color
 ```

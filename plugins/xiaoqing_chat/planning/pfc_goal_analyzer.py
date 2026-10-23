@@ -10,7 +10,6 @@ from ..llm.gateway import chat_completions_raw_with_fallback_paths, extract_resp
 from ..llm.llm_config import LLMCallConfig
 from ..llm.prompt_builder import build_dialogue_prompt
 from ..memory.memory import StoredMessage
-from ..persona import compose_persona_identity
 from .pfc_utils import get_items_from_json
 
 
@@ -29,7 +28,7 @@ async def analyze_goals(
     if "_ai" in secrets and secrets.get("_ai") is None:
         return list(current_goal_list)
 
-    persona_text = compose_persona_identity(personality.identity, bot_name)
+    persona_text = personality.card.facts(bot_name)
 
     goals_str = ""
     if current_goal_list:

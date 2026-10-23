@@ -16,6 +16,7 @@ from plugins.xiaoqing_chat.memory.knowledge_base import (
 )
 from plugins.xiaoqing_chat.memory.memory_db import MemoryDB
 from plugins.xiaoqing_chat.memory.vector_store import VectorDoc, VectorStore
+from plugins.xiaoqing_chat.persona import BUNDLED_PERSONA_FILE
 from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
 
@@ -420,6 +421,7 @@ def test_runtime_refresh_publishes_an_empty_snapshot_when_knowledge_is_disabled(
     config = SimpleNamespace(
         ban_regex=[],
         knowledge=SimpleNamespace(enable_knowledge=False, files=["stale.txt"]),
+        personality=SimpleNamespace(persona_file=""),
     )
     ensure = MagicMock(return_value=True)
     monkeypatch.setattr(chat_runtime, "_state", lambda: state)
@@ -433,7 +435,9 @@ def test_runtime_refresh_publishes_an_empty_snapshot_when_knowledge_is_disabled(
     from tests.helpers.settings_snapshot import with_settings_reader
 
     chat_runtime.load_runtime(
-        with_settings_reader(SimpleNamespace(plugin_dir=plugin_dir, data_dir=data_dir, config={}))
+        with_settings_reader(
+            SimpleNamespace(plugin_dir=plugin_dir, data_dir=data_dir, config={}, logger=MagicMock())
+        )
     )
 
     ensure.assert_called_once_with(
@@ -465,6 +469,7 @@ def test_runtime_refreshes_when_settings_revision_changes_without_file_mtime_cha
     config = SimpleNamespace(
         ban_regex=[],
         knowledge=SimpleNamespace(enable_knowledge=False, files=[]),
+        personality=SimpleNamespace(persona_file=""),
     )
     load_config = MagicMock(return_value=config)
     ensure = MagicMock(return_value=True)
@@ -476,6 +481,7 @@ def test_runtime_refreshes_when_settings_revision_changes_without_file_mtime_cha
         plugin_dir            = plugin_dir,
         data_dir              = data_dir,
         get_settings_snapshot = lambda: settings,
+        logger                = MagicMock(),
     )
     monkeypatch.setattr(chat_runtime, "_state", lambda: state)
     monkeypatch.setattr(chat_runtime, "load_xiaoqing_chat_config", load_config)
@@ -484,8 +490,12 @@ def test_runtime_refreshes_when_settings_revision_changes_without_file_mtime_cha
     refreshed = chat_runtime.load_runtime(context)
 
     assert refreshed is not cached_runtime
-    load_config.assert_called_once_with(context_config=settings.config, plugin_dir=plugin_dir)
-    state.set_runtime.assert_called_once_with(str(plugin_dir), refreshed, -1, 2)
+    load_config.assert_called_once_with(
+        context_config=settings.config, plugin_dir=plugin_dir, logger=context.logger
+    )
+    # 缓存戳是配置文件和人设卡（这里用插件自带的）各自的修改时间。
+    persona_mtime = BUNDLED_PERSONA_FILE.stat().st_mtime_ns
+    state.set_runtime.assert_called_once_with(str(plugin_dir), refreshed, (-1, persona_mtime), 2)
 
 
 def test_local_ids_survive_restarts_and_idle_reset(tmp_path):

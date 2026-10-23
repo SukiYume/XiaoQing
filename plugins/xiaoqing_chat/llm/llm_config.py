@@ -5,6 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import TypedDict
 
+# 明确要求长文时输出预算的上限（按每字 1.5 个 token 算约五千字）。
+_LONG_OUTPUT_MAX_TOKENS = 8192
+
 
 class LLMRequestControls(TypedDict):
     """超时与重试关键字参数。"""
@@ -43,6 +46,15 @@ class LLMCallConfig:
             "max_retry": self.max_retry,
             "retry_interval_seconds": self.retry_interval_seconds,
         }
+
+    def with_room_for(self, chars: int) -> LLMCallConfig:
+        """对方明确要长文时放宽输出预算和超时，按每字约 1.5 个 token 留足余量。"""
+        tokens = min(_LONG_OUTPUT_MAX_TOKENS, int(chars * 1.5) + 200)
+        return replace(
+            self,
+            max_tokens      = max(int(self.max_tokens), tokens),
+            timeout_seconds = max(float(self.timeout_seconds), min(90.0, 10.0 + chars / 60)),
+        )
 
     def bounded(
         self, *, max_temperature: float, max_tokens: int, min_tokens: int = 0
