@@ -169,12 +169,9 @@ def _resolve_showimg_listing(pattern: str, cwd: str | None) -> tuple[str, str]:
 
     if not directory:
         return cwd or ".", filename_pattern
-    if posixpath.isabs(directory):
-        remote_dir = posixpath.normpath(directory)
-    elif cwd:
-        remote_dir = posixpath.normpath(posixpath.join(cwd, directory))
-    else:
-        remote_dir = posixpath.normpath(directory)
+    if cwd and not posixpath.isabs(directory):
+        directory = posixpath.join(cwd, directory)
+    remote_dir = posixpath.normpath(directory)
     return remote_dir or "/", filename_pattern
 
 

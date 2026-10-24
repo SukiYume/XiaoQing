@@ -12,6 +12,11 @@ from core.public_errors import public_error_message
 UNIX_TIMESTAMP_MIN_ABS = 100_000_000
 _JD_MIN_ABS            = 2_400_000
 _NUMERIC_TIME          = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\Z")
+_EXPLICIT_TIME_FORMATS = {
+    "jd": ("JD", "儒略日数值", "2460419.5"),
+    "mjd": ("MJD", "修正儒略日数值", "60419.5"),
+    "unix": ("Unix", " Unix 时间戳", "1706616000"),
+}
 
 
 def _build_time_response(label: str, t: Any) -> str:
@@ -60,36 +65,15 @@ def _handle_time_sync(args: str, context: PluginContextProtocol) -> str:
         parts      = args.split(None, 1)
         subcommand = parts[0].casefold()
 
-        # 处理 jd 子命令
-        if subcommand == "jd":
+        if subcommand in _EXPLICIT_TIME_FORMATS:
+            label, description, example = _EXPLICIT_TIME_FORMATS[subcommand]
             if len(parts) < 2:
-                return "请提供儒略日数值\n示例: /astro time jd 2460419.5"
+                return f"请提供{description}\n示例: /astro time {subcommand} {example}"
             try:
-                jd_val = _finite_float(parts[1])
-                t = Time(jd_val, format="jd")
-                return _build_time_response(f"JD {jd_val}", t)
+                value = _finite_float(parts[1])
+                return _build_time_response(f"{label} {value}", Time(value, format=subcommand))
             except (ValueError, OverflowError):
-                return "无效的儒略日数值"
-
-        # 处理 mjd 子命令
-        if subcommand == "mjd":
-            if len(parts) < 2:
-                return "请提供修正儒略日数值\n示例: /astro time mjd 60419.5"
-            try:
-                mjd_val = _finite_float(parts[1])
-                t = Time(mjd_val, format="mjd")
-                return _build_time_response(f"MJD {mjd_val}", t)
-            except (ValueError, OverflowError):
-                return "无效的修正儒略日数值"
-
-        if subcommand == "unix":
-            if len(parts) < 2:
-                return "请提供 Unix 时间戳\n示例: /astro time unix 1706616000"
-            try:
-                unix_value = _finite_float(parts[1])
-                return _build_time_response(f"Unix {unix_value}", Time(unix_value, format="unix"))
-            except (ValueError, OverflowError):
-                return "无效的 Unix 时间戳"
+                return f"无效的{description}"
 
         # 处理一般的时间格式（单个数字依次识别 Unix / JD / MJD）
         numeric_match = _NUMERIC_TIME.fullmatch(args)

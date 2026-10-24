@@ -1054,15 +1054,14 @@ class _PluginLoadTransaction:
     definition: PluginDefinition
     gate: PluginExecutionGate
     mtime: float
-    track_init_task: bool               = True
-    import_attempted: bool              = False
-    import_completed: bool              = False
-    uncertain_external_code: bool       = False
-    unowned_canonical_namespace: bool   = False
-    namespace_claim_new: bool           = False
-    authorized_entry: Path | None       = None
-    module: ModuleType | None           = None
-    init_task: asyncio.Task[Any] | None = None
+    track_init_task: bool             = True
+    import_attempted: bool            = False
+    import_completed: bool            = False
+    uncertain_external_code: bool     = False
+    unowned_canonical_namespace: bool = False
+    namespace_claim_new: bool         = False
+    authorized_entry: Path | None     = None
+    module: ModuleType | None         = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -154,7 +154,7 @@ class AppConfigApplyMixin:
             if accepted is not None and snapshot == accepted:
                 # ConfigManager.snapshot() may materialize another immutable
                 # object for the same revision.  Equality is the publication
-                # identity here; treating object identity as a new generation
+                # identity here. Treating object identity as a new generation
                 # can cancel the only task that is able to converge revocation.
                 snapshot                = accepted
                 new_security_generation = False
@@ -440,7 +440,7 @@ class AppConfigApplyMixin:
             scheduler = self.scheduler.scheduler
             if scheduler is None or not bool(getattr(scheduler, "running", False)):
                 # A pre-start synchronous reload can safely update the lazy
-                # factory input; the next start will create the right zone.
+                # factory input. The next start will create the right zone.
                 self.scheduler.timezone = timezone
                 return
             if timezone != self.scheduler.timezone:

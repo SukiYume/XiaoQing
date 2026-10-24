@@ -1,5 +1,7 @@
 # 📅 Pendo
 
+中文 | [English](README.en.md)
+
 Pendo 是 XiaoQing 的个人时间与信息管理插件，统一管理日程、待办、笔记、日记、账本、提醒、搜索和数据导入导出。聊天命令适合快速记录与查询，Web 控制台适合集中编辑、统计和批量传输，Scriptable 小组件适合展示 iPhone 主屏摘要。
 
 全部 Pendo 命令限定为私聊场景。
@@ -50,7 +52,7 @@ Manifest 还提供 `/日程`、`/待办` 和 `/日记` 三个私聊快捷入口�
 /pendo event reminders confirm <id> [today|future|all|提醒时间]
 ```
 
-`e`、`calendar`、`日程`、`事件` 是 `event` 的别名。单次日程对应一个 leaf；重复日程和多节点日程由 `event_collections` 组织多个 leaf。集合 ID 面向整体操作，leaf ID 面向 occurrence 或单个节点。
+`e`、`calendar`、`日程`、`事件` 是 `event` 的别名。单次日程对应一个 leaf。重复日程和多节点日程由 `event_collections` 组织多个 leaf。集合 ID 面向整体操作，leaf ID 面向 occurrence 或单个节点。
 
 ---
 
@@ -103,7 +105,7 @@ Manifest 还提供 `/日程`、`/待办` 和 `/日记` 三个私聊快捷入口�
 /pendo diary delete <日期|ID>
 ```
 
-`d`、`journal`、`日记` 是 `diary` 的别名。同一天可以保存多篇日记；`diary_date` 表示归属日期，`entry_time` 表示记录时刻，模板回答保存在 `template_answers`。
+`d`、`journal`、`日记` 是 `diary` 的别名。同一天可以保存多篇日记。`diary_date` 表示归属日期，`entry_time` 表示记录时刻，模板回答保存在 `template_answers`。
 
 ---
 
@@ -120,7 +122,7 @@ Manifest 还提供 `/日程`、`/待办` 和 `/日记` 三个私聊快捷入口�
 /pendo ledger summary [范围]
 ```
 
-`bill`、`finance`、`记账`、`账单` 是 `ledger` 的别名。空参数的 `ledger add` 会启动多轮会话；金额和描述由用户填写，交易类型、账户和分类可按编号选择。`amount_cents` 是统计主字段，`amount` 是展示镜像。转账使用 `transaction_type=transfer`。
+`bill`、`finance`、`记账`、`账单` 是 `ledger` 的别名。空参数的 `ledger add` 会启动多轮会话。金额和描述由用户填写，交易类型、账户和分类可按编号选择。`amount_cents` 是统计主字段，`amount` 是展示镜像。转账使用 `transaction_type=transfer`。
 
 ---
 
@@ -141,11 +143,11 @@ Manifest 还提供 `/日程`、`/待办` 和 `/日记` 三个私聊快捷入口�
 /pendo settings ai_consent on|off
 ```
 
-`config` 和 `setting` 是 `settings` 的别名。操作快照保留 5 分钟，`undo` 可将查询窗口缩小到 1～5 分钟。`ai_consent` 控制日记正文向已配置外部 AI 的发送授权，默认值为 `off`；本地规则始终可用。
+`config` 和 `setting` 是 `settings` 的别名。操作快照保留 5 分钟，`undo` 可将查询窗口缩小到 1～5 分钟。`ai_consent` 控制日记正文向已配置外部 AI 的发送授权，默认值为 `off`。本地规则始终可用。
 
-日程与待办提醒通过 OneBot 私聊发送给条目所有者。条目写入与编辑会同步生成以 `fire_at_utc` 查询的提醒队列行，提醒键使用秒级 UTC。
+日程与待办提醒通过 OneBot 私聊发送给条目所有者。条目写入与编辑会同步生成以 `fire_at_utc` 查询的提醒队列行。提醒键使用秒级 UTC。
 
-Web 控制台的日程详情按提醒点提供“提前确认”和“重新开启”操作。按钮仅在提醒触发前可用；提前确认会停止该提醒的首次与重复投递，重新开启会恢复原触发时刻的待发送状态。
+Web 控制台的日程详情按提醒点提供“提前确认”和“重新开启”操作。按钮仅在提醒触发前可用。提前确认会停止该提醒的首次与重复投递，重新开启会恢复原触发时刻的待发送状态。
 
 ---
 
@@ -194,7 +196,7 @@ TLS 反向代理场景使用以下 Cookie 设置：
 
 ### 登录 Code 与浏览器会话
 
-`/pendo web token` 返回一次性登录码（Code）。Code 有效期为 7 天，成功兑换后创建 7 天 HttpOnly Cookie 会话。Code 摘要与浏览器会话摘要均保存在现有 `pendo.db`，Bot 与 Web 服务重启会继续使用有效记录。
+`/pendo web token` 返回一次性登录码（Code）。Code 有效期为 7 天。成功兑换后创建 7 天 HttpOnly Cookie 会话。Code 摘要与浏览器会话摘要均保存在现有 `pendo.db`，Bot 与 Web 服务重启会继续使用有效记录。
 
 浏览器会话支持设备列表、指定设备撤销和当前会话退出。服务端保存摘要、所有者、设备标识、创建时间、到期时间与最近使用时间。
 
@@ -210,7 +212,7 @@ GET /api/widget/calendar?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
 Authorization: Bearer <widget_token>
 ```
 
-摘要接口返回最多 5 条近期日程。日历接口返回最长 3660 天闭区间内的完整日程；Scriptable 每次至少回看过去 30 天，并在成功游标更早时补齐间隔。脚本按 Pendo 条目 ID 原地新增、更新和清理托管事件，在 Keychain 中保存同步游标，并在源码顶部读取 Web 地址与 Widget Token。Scriptable 脚本位于 `plugins/pendo/web/scriptable/pendo_widget.js`，配置方式见 [Scriptable 小组件指南](../../docs/pendo-scriptable-widget.md)。
+摘要接口返回最多 5 条近期日程。日历接口返回最长 3660 天闭区间内的完整日程。Scriptable 每次至少回看过去 30 天。成功游标更早时，脚本补齐间隔。脚本按 Pendo 条目 ID 原地新增、更新和清理托管事件。Keychain 保存同步游标。脚本从源码顶部读取 Web 地址与 Widget Token。脚本位于 `plugins/pendo/web/scriptable/pendo_widget.js`。配置方式见 [Scriptable 小组件指南](../../docs/pendo-scriptable-widget.md)。
 
 ### 页面
 
@@ -227,7 +229,7 @@ Authorization: Bearer <widget_token>
 | Settings | 用户设置和登录设备 |
 | Transfer | Bundle 导入导出、预览、冲突策略和日志 |
 
-手机端页面保持单列内容流。Events 与 Diary 月历使用七列紧凑视图；Ledger 明细保持横向紧凑排列，分类标签与账户信息对齐；详情弹窗的操作栏按两列换行，并在底部安全区内完整显示。
+手机端页面保持单列内容流。Events 与 Diary 月历使用七列紧凑视图。Ledger 明细保持横向紧凑排列，分类标签与账户信息对齐。详情弹窗的操作栏按两列换行，并在底部安全区内完整显示。
 
 Web 后端使用 FastAPI 与 uvicorn，API 前缀为 `/api`，静态前端位于 `plugins/pendo/web/static/`。
 
@@ -252,10 +254,10 @@ Web 后端使用 FastAPI 与 uvicorn，API 前缀为 `/api`，静态前端位于
 
 - Web 完整编辑携带打开表单时的版本号。另一个窗口先保存时，旧窗口收到冲突提示并保留输入，重新读取后可继续编辑。
 - 普通用户可以签发和吊销自己的访问令牌。共享 Web 服务的 `start` 与 `stop` 命令需要机器人管理员权限。
-- 日程省略时区时使用用户设置。Markdown 日期范围与时间显示使用用户时区，具体时间保留 UTC 偏移；Widget 日历同步也保留偏移，手机改变时区后真实时刻保持一致。
-- 修改任务截止时间会重算相对提醒；明确清空提醒会同步清除规则。撤销删除在同一事务恢复条目与待发队列，已发送或已确认历史继续保留。
-- 账目支持三字母币种代码。收支、结余、分类与账户统计按币种分组，各币种金额独立展示。系统当前没有汇率换算功能。Ledger 与 Stats 支持输入三位币种代码，默认 CNY；Dashboard 默认展示 CNY 走势，并列出其他币种汇总；Widget 按币种标注明细与摘要。
-- `.pendo.zip` 每类数据最多 100,000 条，五类条目与日程集合合计最多 600,000 条；导入与导出采用相同记录容量。单个解压成员最多 50 MiB，全部解压成员合计最多 100 MiB，上传最多 100 MiB。Unicode 正文和中文、表情文件名支持往返。
+- 日程省略时区时使用用户设置。Markdown 日期范围与时间显示使用用户时区，具体时间保留 UTC 偏移。Widget 日历同步也保留偏移，手机改变时区后真实时刻保持一致。
+- 修改任务截止时间会重算相对提醒。明确清空提醒会同步清除规则。撤销删除在同一事务恢复条目与待发队列，已发送或已确认历史继续保留。
+- 账目支持三字母币种代码。收支、结余、分类与账户统计按币种分组，各币种金额独立展示。系统当前没有汇率换算功能。Ledger 与 Stats 支持输入三位币种代码，默认 CNY。Dashboard 默认展示 CNY 走势，并列出其他币种汇总。Widget 按币种标注明细与摘要。
+- `.pendo.zip` 每类数据最多 100,000 条，五类条目与日程集合合计最多 600,000 条。导入与导出采用相同记录容量。单个解压成员最多 50 MiB，全部解压成员合计最多 100 MiB，上传最多 100 MiB。Unicode 正文和中文、表情文件名支持往返。
 
 ## 💾 数据模型
 
@@ -300,7 +302,7 @@ Web 后端使用 FastAPI 与 uvicorn，API 前缀为 `/api`，静态前端位于
 
 Pendo 依赖 `python-dateutil`、`fastapi`、`uvicorn`、`PyJWT`、`pydantic` 和 `starlette`。项目常规安装会包含这些运行依赖。
 
-Web 签名 secret 优先读取环境变量 `PENDO_WEB_TOKEN_SECRET`；未设置时，Pendo 在自己的数据目录生成并保存一个随机密钥，重启后继续使用同一密钥。自然语言解析和日记分析使用 Core AI 注册表中的 `plugins.pendo.ai.routes.parse` 模型链（发行配置为 `deepseek-flash → glm-5.2`），日记正文的外部分析受用户 `ai_consent` 设置控制。
+Web 签名 secret 优先读取环境变量 `PENDO_WEB_TOKEN_SECRET`。未设置时，Pendo 在自己的数据目录生成并保存一个随机密钥。重启后继续使用同一密钥。自然语言解析和日记分析使用 Core AI 注册表中的 `plugins.pendo.ai.routes.parse` 模型链（发行配置为 `deepseek-flash → glm-5.2`），日记正文的外部分析受用户 `ai_consent` 设置控制。
 
 ---
 

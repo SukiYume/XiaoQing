@@ -9,7 +9,6 @@ import {
     isRecord,
     isValidDateInput,
     noteCadenceSubtitle,
-    pad2,
     records as safeRecords,
 } from '../utils/format.js';
 import { derivePresetRange, fetchItemRangeBounds, RANGE_PRESET_OPTIONS, todayRangeKey } from '../utils/date_ranges.js';
@@ -841,7 +840,7 @@ function renderComparisonBars(months) {
     `;
 }
 
-// 洞察文本只拼接页面计算结果；来自接口的标签必须先转义。
+// 洞察文本只拼接页面计算结果。来自接口的标签必须先转义。
 function generateInsights(data) {
     const insights          = [];
     const ledger            = data?.ledger || {};

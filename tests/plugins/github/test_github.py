@@ -180,6 +180,7 @@ async def test_proxy_fetch_uses_exact_bounded_transport(context: SimpleNamespace
     assert kwargs["request_kwargs"] == {
         "proxy": "http://proxy.example:8080",
         "timeout": 15,
+        "max_field_size": 32 * 1024,
     }
     assert kwargs["limits"].max_decoded_bytes == github.MAX_HTML_BYTES
     assert kwargs["redirect_policy"].allowed_origins == {f"{endpoint.scheme}://{endpoint.netloc}"}

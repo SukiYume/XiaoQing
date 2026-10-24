@@ -17,7 +17,6 @@ from plugins.pendo.config import PendoConfig
 from plugins.pendo.services.db import Database
 from plugins.pendo.utils.identifiers import is_canonical_internal_id
 from plugins.pendo.web.services.transfer_bundle import ParsedBundle
-from tests.helpers.pendo_test_support import reset_pendo_runtime_config
 
 try:
     from plugins.pendo.web.auth import AuthError, create_web_session, issue_login_code
@@ -29,12 +28,10 @@ except ModuleNotFoundError:
 
 @pytest.fixture(autouse=True)
 def reset_pendo_config_state() -> Iterator[None]:
-    """隔离每个用例修改的 Web 配置和进程内演示限流状态。"""
+    """隔离每个用例修改的进程内演示限流状态。"""
 
-    reset_pendo_runtime_config()
     demo_space_module._DEMO_REQUESTS.clear()
     yield
-    reset_pendo_runtime_config()
     demo_space_module._DEMO_REQUESTS.clear()
 
 

@@ -148,24 +148,12 @@ def _parse_tokens(tokens_list: list[str]) -> tuple[list[str], dict[str, str]]:
 
         if options_enabled and token == "--":
             options_enabled = False
-        elif options_enabled and _LONG_OPTION_PATTERN.fullmatch(token):
-            # 长选项
-            key, eq, value = token[2:].partition("=")
+        elif options_enabled and _is_option_token(token):
+            prefix_length = 2 if token.startswith("--") else 1
+            key, eq, value = token[prefix_length:].partition("=")
             if eq:
                 options[key] = value
             elif (
-                idx + 1 < len(tokens_list)
-                and tokens_list[idx + 1] != "--"
-                and not _is_option_token(tokens_list[idx + 1])
-            ):
-                options[key] = tokens_list[idx + 1]
-                idx += 1
-            else:
-                options[key] = FLAG_VALUE
-        elif options_enabled and _SHORT_OPTION_PATTERN.fullmatch(token):
-            # 单字母短选项
-            key = token[1:]
-            if (
                 idx + 1 < len(tokens_list)
                 and tokens_list[idx + 1] != "--"
                 and not _is_option_token(tokens_list[idx + 1])

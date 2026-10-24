@@ -15,20 +15,12 @@ import pytest
 from core.bounded_file_cache import BoundedFileCache, FileCacheLimits
 from core.safe_http import SafeHttpResponse
 from plugins.twitter import main as twitter
+from tests.helpers.http import AiohttpBodyStream, QueuedAiohttpSession
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.payloads import image_bytes as _image_bytes
 from tests.helpers.settings_snapshot import with_settings_reader
 
 ROOT = REPOSITORY_ROOT
-
-
-class _AsyncContent:
-    def __init__(self, body: bytes) -> None:
-        self.body = body
-
-    async def iter_chunked(self, size: int):
-        for offset in range(0, len(self.body), max(1, size)):
-            yield self.body[offset : offset + size]
 
 
 class _Response:
@@ -43,7 +35,7 @@ class _Response:
         self.url            = twitter._TIMELINE_URL
         self.headers        = {"Content-Type": content_type}
         self.content_length = None
-        self.content        = _AsyncContent(body)
+        self.content        = AiohttpBodyStream(body)
         self.closed         = False
 
     async def __aenter__(self):
@@ -54,16 +46,6 @@ class _Response:
 
     def close(self) -> None:
         self.closed = True
-
-
-class _Session:
-    def __init__(self, *responses: _Response) -> None:
-        self.responses                          = list(responses)
-        self.calls: list[tuple[str, str, dict]] = []
-
-    def request(self, method: str, url: str, **kwargs):
-        self.calls.append((method, url, kwargs))
-        return self.responses.pop(0)
 
 
 class _RaisingSession:
@@ -310,14 +292,14 @@ async def test_timeline_request_uses_bounded_get_and_extracts_entries(
         {"entryId": "cursor-bottom-next", "content": {"value": "next-token"}},
         {"entryId": "cursor-bottom-later", "content": {"value": "ignored"}},
     ]
-    session              = _Session(_json_response(_timeline_payload(entries)))
+    session              = QueuedAiohttpSession(_json_response(_timeline_payload(entries)))
     context.http_session = session
 
     tweets, cursor, has_next = await twitter._fetch_timeline(context, 'cursor"\\value')
 
     assert tweets == [entries[1]]
     assert (cursor, has_next) == ("next-token", True)
-    method, url, kwargs = session.calls[0]
+    method, url, kwargs = session.requests[0]
     assert (method, url) == ("GET", twitter._TIMELINE_URL)
     assert kwargs["allow_redirects"] is False
     assert kwargs["auto_decompress"] is False
@@ -350,11 +332,11 @@ async def test_timeline_ignores_invalid_cursor_and_malformed_instructions(
             }
         }
     }
-    session              = _Session(_json_response(payload))
+    session              = QueuedAiohttpSession(_json_response(payload))
     context.http_session = session
 
     assert await twitter._fetch_timeline(context, "bad\ncursor") == ([], None, False)
-    variables = json.loads(session.calls[0][2]["params"]["variables"])
+    variables = json.loads(session.requests[0][2]["params"]["variables"])
     assert "cursor" not in variables
 
 
@@ -375,7 +357,7 @@ async def test_timeline_malformed_shapes_fail_closed(
     payload: object,
     is_format_error: bool,
 ) -> None:
-    context.http_session = _Session(_json_response(payload))
+    context.http_session = QueuedAiohttpSession(_json_response(payload))
     if is_format_error:
         with pytest.raises(twitter.TwitterFetchError, match="request failed"):
             await twitter._fetch_timeline(context)
@@ -385,7 +367,7 @@ async def test_timeline_malformed_shapes_fail_closed(
 
 @pytest.mark.asyncio
 async def test_timeline_http_and_transport_errors_are_reported(context: SimpleNamespace) -> None:
-    context.http_session = _Session(_json_response({"private": "detail"}, status=429))
+    context.http_session = QueuedAiohttpSession(_json_response({"private": "detail"}, status=429))
     with pytest.raises(twitter.TwitterFetchError, match="HTTP 429"):
         await twitter._fetch_timeline(context)
 
@@ -504,13 +486,13 @@ async def test_media_fetch_uses_configured_proxy_with_bounded_reader(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     payload = _image_bytes()
-    context.http_session = _Session(_Response(payload, content_type="image/png"))
+    context.http_session = QueuedAiohttpSession(_Response(payload, content_type="image/png"))
     public_fetch = AsyncMock()
     monkeypatch.setattr(twitter, "fetch_public_bytes", public_fetch)
 
     url = "https://pbs.twimg.com/media/a.png"
     assert await twitter._fetch_media_bytes(url, context) == payload
-    method, requested_url, options = context.http_session.calls[0]
+    method, requested_url, options = context.http_session.requests[0]
     assert (method, requested_url) == ("GET", url)
     assert options["proxy"] == "http://proxy.example.com:8080"
     assert options["timeout"] == twitter.REQUEST_TIMEOUT_SECONDS

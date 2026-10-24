@@ -104,8 +104,8 @@ class PluginWatcherMixin:
             resolve_plugin_root(self.plugins_dir, path)
         except PluginPathError as exc:
             # Preserve the watcher's distinction between an unsafe path and a
-            # transient metadata failure.  The former is positively rejected;
-            # the latter remains uncertain until a later scan can classify it.
+            # transient metadata failure.  The former is positively rejected.
+            # The latter remains uncertain until a later scan can classify it.
             cause = exc.__cause__
             if isinstance(cause, OSError):
                 raise cause from exc
@@ -456,7 +456,7 @@ class PluginWatcherMixin:
             return
         if definition is None:
             # Test doubles and older embedders may still represent a rejected
-            # manifest as None; retain the fail-closed retirement behavior.
+            # manifest as None. Retain the fail-closed retirement behavior.
             if self._has_plugin_runtime(directory_name):
                 logger.warning(
                     "Unloading plugin %s because its manifest is unavailable or invalid",
@@ -681,7 +681,7 @@ class PluginWatcherMixin:
         try:
             while True:
                 # Clear before snapshotting: an update before the clear is
-                # represented by the new revision/value; an update after it
+                # represented by the new revision/value. An update after it
                 # sets the event and interrupts this exact wait.
                 wakeup.clear()
                 interval, revision = self._watch_poll_snapshot()
@@ -720,11 +720,11 @@ class PluginWatcherMixin:
                 description="plugin manifest",
             )
             # Anchor the snapshot to the file descriptor we actually read.
-            # A path-level stat followed by ``read_bytes`` permits an ABA
-            # replacement: validation can observe file A, the open can read B,
-            # and the final path check can observe A again.  The descriptor's
-            # identity closes that window and the extra byte keeps allocation
-            # bounded while still distinguishing an oversized manifest.
+            # A path-level stat followed by ``read_bytes`` permits an ABA change.
+            # Validation can see file A. The open can read file B.
+            # The final path check can see file A again.
+            # Descriptor identity closes this window.
+            # One extra byte identifies oversized manifests with bounded memory.
             with definition_path.open("rb") as handle:
                 opened   = os.fstat(handle.fileno())
                 payload  = handle.read(_MAX_PLUGIN_MANIFEST_BYTES + 1)
@@ -799,8 +799,8 @@ class PluginWatcherMixin:
         try:
             data = json.loads(payload.decode("utf-8"))
         except Exception as exc:
-            # Runtime authorization must reflect the current primary manifest;
-            # an older AtomicJsonStore backup must never silently re-enable it.
+            # Runtime authorization must reflect the current primary manifest.
+            # An older AtomicJsonStore backup must never silently re-enable it.
             self._log_manifest_issue(
                 "invalid",
                 logging.ERROR,
@@ -1282,8 +1282,6 @@ class PluginWatcherMixin:
                 )
             )
         )
-        if transaction is not None:
-            transaction.init_task = init_task
         if transaction is None or transaction.track_init_task:
             self._init_tasks.append(init_task)
             self._init_task_plugins[init_task] = definition.name
@@ -1584,7 +1582,7 @@ class PluginWatcherMixin:
                     relative = path.relative_to(plugin_root).as_posix()
                     if is_link_like(metadata):
                         # Linked resource trees are outside the immutable code
-                        # inventory.  Never descend through them; an entry or
+                        # inventory.  Never descend through them. An entry or
                         # explicit watch file that targets one is rejected by
                         # its own strict resolver below.
                         continue
@@ -1620,8 +1618,8 @@ class PluginWatcherMixin:
                 sorted(child_directories, key=lambda item: item.name, reverse=True)
             )
 
-        # Bind the fingerprint to the manifest-authorized entry explicitly;
-        # never rely on a broad walk having happened to include it.
+        # Bind the fingerprint to the manifest-authorized entry explicitly.
+        # Never rely on a broad walk having happened to include it.
         entry_path    = resolve_plugin_entry(self.plugins_dir, plugin_dir, definition.entry)
         manifest_path = resolve_contained_regular_file(
             plugin_root,

@@ -168,12 +168,11 @@ def _redact_known_secrets(text: str, secrets: tuple[str, ...]) -> str:
     if not text or not secrets:
         return text
 
-    # Mark matches against the original text and render them in one pass.  A
-    # sequence of ``str.replace`` calls is unsafe here: a later short secret
-    # can match text inside the replacement marker, while the previous
-    # word-boundary approach failed to cover punctuation-bearing secrets such
-    # as ``a-``.  The bounded input makes this mask predictable in both memory
-    # and runtime while covering overlapping matches of every non-empty value.
+    # Mark matches in the original text and render the result in one pass.
+    # Repeated ``str.replace`` calls can match short secrets inside replacement
+    # markers. Word-boundary checks can miss secrets with punctuation, such as
+    # ``a-``. Bounded input limits the memory and runtime of this mask.
+    # The mask covers overlapping matches of every nonempty value.
     redacted = bytearray(len(text))
     for secret in secrets:
         if not secret:

@@ -31,8 +31,8 @@ class BoundedFileCache:
     Each operation enumerates the dedicated directory and stats its visible
     regular files while holding the process-local path lock.  That intentional
     O(n) work keeps TTL/LRU/byte limits correct even when callers construct
-    separate cache instances or another worker has changed the directory;
-    cache limits should therefore stay in the low-thousands range, and large
+    separate cache instances or another worker has changed the directory.
+    Cache limits should therefore stay in the low-thousands range, and large
     cache directories should use the explicit ``prune()`` maintenance path.
     """
 

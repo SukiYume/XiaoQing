@@ -255,7 +255,7 @@ function normalizeTaskPayload(formData, userTimeZone) {
     };
 }
 
-// 概览接口只需要 all_tasks；在这里统一字段类型并去重，后续渲染无需反复防御。
+// 概览接口只需要 all_tasks。在这里统一字段类型并去重，后续渲染无需反复防御。
 function normalizeTask(value) {
     if (!isRecord(value)) return null;
 
@@ -724,7 +724,7 @@ async function fetchOverview() {
     return normalizeOverview(res?.data);
 }
 
-// 以下模板只接收规范化后的任务；所有用户文本仍在插值点显式转义。
+// 以下模板只接收规范化后的任务。所有用户文本仍在插值点显式转义。
 function renderCategoryOptions(tasks) {
     const source = Array.isArray(tasks) ? tasks : [];
     const categories = [...new Set(source.map((task) => taskTextCategory(task)).filter(Boolean))].sort();
@@ -1361,7 +1361,7 @@ function attachListeners() {
     }
 }
 
-// 递增版本号实现 latest-wins；路由销毁也会递增版本，使迟到响应自动失效。
+// 递增版本号实现 latest-wins。路由销毁也会递增版本，使迟到响应自动失效。
 async function loadAndRender() {
     const loadVersion = ++_loadVersion;
     _loading = true;

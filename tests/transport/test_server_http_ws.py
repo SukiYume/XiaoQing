@@ -532,7 +532,7 @@ async def test_server_post_event_normalizes_raw_message_only_payload(sample_serv
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_server_reuses_canonical_payload_without_second_pydantic_validation(sample_server):
-    """The transport validates once; Dispatcher must reuse that detached payload."""
+    """The transport validates once. Dispatcher must reuse that detached payload."""
     sample_server.handler = AsyncMock(return_value=[])
     request = _make_request_with_auth("POST", "/event", "test_token")
     request.json = AsyncMock(return_value=_onebot_message_payload())

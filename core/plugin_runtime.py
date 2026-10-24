@@ -89,7 +89,7 @@ class PluginRuntimeMixin:
             except RuntimeError:
                 # A generation can unregister while a cross-thread config
                 # update is publishing.  Its finally block remains the owner
-                # of cleanup; the next generation snapshots the latest value.
+                # of cleanup. The next generation snapshots the latest value.
                 continue
         return changed
 
@@ -358,7 +358,7 @@ class PluginRuntimeMixin:
         *,
         phase: str,
     ) -> dict[str, ModuleType]:
-        """Purge before dropping lifecycle ownership; quarantine on any failure."""
+        """Purge before dropping lifecycle ownership. Quarantine on any failure."""
 
         try:
             return self._purge_plugin_modules(name)

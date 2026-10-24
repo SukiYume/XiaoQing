@@ -232,11 +232,10 @@ def validate_image_bytes(
 ) -> ValidatedImage:
     """Validate container integrity and fully decode every bounded image frame.
 
-    ``Image.verify()`` and a second decode are both intentional: the first checks
-    structural integrity and invalidates its Pillow object, while the second proves
-    the pixels of every permitted frame can actually be decoded. Known containers
-    are also required to end at their real terminator so trailing polyglot bytes do
-    not survive validation.
+    ``Image.verify()`` examines structural integrity and invalidates its Pillow
+    object. A second decode validates the pixels of every permitted frame.
+    Known containers must end at their actual terminator. This requirement
+    rejects trailing bytes that can encode another file format.
     """
 
     if type(payload) is not bytes:

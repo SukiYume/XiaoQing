@@ -81,7 +81,6 @@ async def test_reload_cancellation_promptly_cancels_candidate_init(tmp_path: Pat
         transaction.import_completed = True
         transaction.module           = candidate_module
         init_task                    = asyncio.create_task(manager._capture_lifecycle(initialize()))
-        transaction.init_task        = init_task
         return candidate_module, init_task
 
     manager._load_module = Mock(side_effect=load_module)
@@ -539,8 +538,8 @@ async def test_reload_restore_revalidates_authorization_after_blocked_old_init(
     old_plugin = LoadedPlugin(
         definition = definition,
         module     = old_module,
-        # This synthetic fixture deliberately has no complete package graph;
-        # real source-backed generations are covered by the canonical reload
+        # This synthetic fixture deliberately has no complete package graph.
+        # Real source-backed generations are covered by the canonical reload
         # tests below.
         mtime          = 0.0,
         execution_gate = old_gate,

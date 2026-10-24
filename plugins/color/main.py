@@ -468,14 +468,17 @@ async def _handle_name(
 
 
 async def _nearest_color_response(
-    color: ColorRecord,
+    colors: Sequence[ColorRecord],
     *,
     input_label: str,
     input_rgb: list[int],
-    distance: float,
     picture: bool,
     context: PluginContextProtocol,
 ) -> Messages:
+    nearest = query.find_nearest_by_rgb(colors, input_rgb)
+    if nearest is None:
+        raise RuntimeError("color palette is empty")
+    color, distance = nearest
     result = [
         text(
             "🎯 最接近的收录色（近似匹配）\n"
@@ -507,15 +510,10 @@ async def _handle_rgb(
     logger.info("RGB 查询: exact=%s", exact is not None)
     if exact is not None:
         return await _found_color_response(exact, picture=request.picture, context=context)
-    nearest = query.find_nearest_by_rgb(colors, rgb)
-    if nearest is None:
-        raise RuntimeError("color palette is empty")
-    color, distance = nearest
     return await _nearest_color_response(
-        color,
+        colors,
         input_label = f"RGB {', '.join(str(channel) for channel in rgb)}",
         input_rgb   = rgb,
-        distance    = distance,
         picture     = request.picture,
         context     = context,
     )
@@ -535,15 +533,10 @@ async def _handle_hex(
     logger.info("HEX 查询: exact=%s", color is not None)
     if color is not None:
         return await _found_color_response(color, picture=request.picture, context=context)
-    nearest = query.find_nearest_by_rgb(colors, rgb)
-    if nearest is None:
-        raise RuntimeError("color palette is empty")
-    color, distance = nearest
     return await _nearest_color_response(
-        color,
+        colors,
         input_label = f"HEX {normalized}",
         input_rgb   = rgb,
-        distance    = distance,
         picture     = request.picture,
         context     = context,
     )
@@ -559,16 +552,11 @@ async def _handle_cmyk(
     logger.info("CMYK 查询: exact=%s", exact is not None)
     if exact is not None:
         return await _found_color_response(exact, picture=request.picture, context=context)
-    rgb     = convert.cmyk_to_rgb(cmyk)
-    nearest = query.find_nearest_by_rgb(colors, rgb)
-    if nearest is None:
-        raise RuntimeError("color palette is empty")
-    color, distance = nearest
+    rgb = convert.cmyk_to_rgb(cmyk)
     return await _nearest_color_response(
-        color,
+        colors,
         input_label = f"CMYK {', '.join(str(channel) for channel in cmyk)}",
         input_rgb   = rgb,
-        distance    = distance,
         picture     = request.picture,
         context     = context,
     )

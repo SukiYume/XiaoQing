@@ -657,8 +657,8 @@ class PluginSyncBroker:
                 fatal = self._defer_fatal_locked(job)
                 if not job.delivered and job.delivery_pending:
                     # The worker finished first, but its owner-loop delivery is
-                    # still queued.  Cancellation now owns terminal cleanup;
-                    # the already-queued callback becomes an idempotent no-op.
+                    # still queued.  Cancellation now owns terminal cleanup.
+                    # The already-queued callback becomes an idempotent no-op.
                     job.delivered                = True
                     job.delivery_pending         = False
                     self._pending_delivery_count = max(
@@ -984,10 +984,10 @@ class PluginExecutionGate:
         """Drop terminal tracker entries that have no broker delivery owner.
 
         Production worker futures are registered by ``PluginSyncBroker`` and
-        remain tracked until its result delivery is complete.  A lifecycle
-        retry must nevertheless be able to recover from a terminal orphan
-        entry (for example, state reconstructed after an interrupted import)
-        instead of reporting the same already-finished callback forever.
+        remain tracked until its result delivery is complete. A lifecycle retry
+        removes terminal entries that have lost their delivery owner.
+        An interrupted import can leave such an entry in reconstructed state.
+        Removal permits recovery after the callback has finished.
         """
 
         with self._sync_futures_lock:

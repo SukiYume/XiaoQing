@@ -1,12 +1,14 @@
 # 🤖 Codex
 
-`codex` 通过 QQ 私聊或群聊管理本机 Codex CLI 后台任务，结果发回发起任务的私聊或群。每个会话标签保存独立的工作目录、Codex thread、任务队列和对话记录；同一标签串行执行，不同标签可并行执行。
+中文 | [English](README.en.md)
+
+`codex` 通过 QQ 私聊或群聊管理本机 Codex CLI 后台任务，结果发回发起任务的私聊或群。每个会话标签保存独立的工作目录、Codex thread、任务队列和对话记录。同一标签串行执行，不同标签可并行执行。
 
 ---
 
 ## 🔐 权限与运行边界
 
-Manifest 将 `/codex` 标记为 `admin_only: true`，私聊和群聊都能用；群里的任务进度和结果全群可见。可用用户来自 `config/secrets.json` 的 `admin_user_ids`。
+Manifest 将 `/codex` 标记为 `admin_only: true`，支持私聊和群聊。群里的任务进度和结果全群可见。可用用户来自 `config/secrets.json` 的 `admin_user_ids`。
 
 Codex CLI 以 Bot 进程身份启动，文件系统权限由 Bot 账户、`sandbox`、`approval_policy` 和工作目录共同决定。`danger-full-access` 会授予 CLI Bot 账户可达的文件系统权限。生产配置建议采用受控的 `allowed_cwd_roots`、可信管理员列表和专用工作目录。
 
@@ -33,12 +35,12 @@ Codex CLI 以 Bot 进程身份启动，文件系统权限由 Bot 账户、`sandb
 
 子命令别名：
 
-- `create`：`new`、`创建`；
-- `list`：`ls`、`列表`；
-- `status`：`状态`；
-- `cancel`：`stop`、`取消`、`停止`；
-- `clear`：`清空`；
-- `delete`：`del`、`remove`、`rm`、`删除`；
+- `create`：`new`、`创建`。
+- `list`：`ls`、`列表`。
+- `status`：`状态`。
+- `cancel`：`stop`、`取消`、`停止`。
+- `clear`：`清空`。
+- `delete`：`del`、`remove`、`rm`、`删除`。
 - `help`：`帮助`、`?`。
 
 Windows 路径建议使用 `/`，例如 `C:/workspace/project`。Linux 和 macOS 使用对应的绝对路径。
@@ -73,7 +75,7 @@ Windows 路径建议使用 `/`，例如 `C:/workspace/project`。Linux 和 macOS
 }
 ```
 
-省略 `default_cwd` 时，插件使用 `data/codex/workspaces/`。省略 `allowed_cwd_roots` 时，该列表包含默认工作目录。`sandbox` 接受 `read-only`、`workspace-write`、`danger-full-access`；`approval_policy` 接受 `untrusted`、`on-failure`、`on-request`、`never`。
+省略 `default_cwd` 时，插件使用 `data/codex/workspaces/`。省略 `allowed_cwd_roots` 时，该列表包含默认工作目录。`sandbox` 接受 `read-only`、`workspace-write`、`danger-full-access`。`approval_policy` 接受 `untrusted`、`on-failure`、`on-request`、`never`。
 
 ---
 
@@ -104,12 +106,12 @@ Windows 路径建议使用 `/`，例如 `C:/workspace/project`。Linux 和 macOS
 
 插件会把版本号、PDF 后缀和查询参数统一为 HTTPS abs 链接，并以“源列表日期 + 规范化链接集合”作为任务身份：
 
-- 已有成功结果：重发历史总结；
-- 已有排队或运行任务：发送当前状态；
-- 同一日期出现新链接集合：创建新任务；
+- 已有成功结果：重发历史总结。
+- 已有排队或运行任务：发送当前状态。
+- 同一日期出现新链接集合：创建新任务。
 - 已有失败记录：再次创建总结任务。
 
-首次使用会话时，插件先提交一条内部初始化任务建立摘要规则，再提交当天总结。每次总结任务都要求 Codex 读取 `arxiv_summary.methodology` 指向的方法文件。`astro-ph` 自动加入受保护会话列表；删除该会话使用：
+首次使用会话时，插件先提交一条内部初始化任务建立摘要规则，再提交当天总结。每次总结任务都要求 Codex 读取 `arxiv_summary.methodology` 指向的方法文件。`astro-ph` 自动加入受保护会话列表。删除该会话使用：
 
 ```text
 /codex delete astro-ph --force --protected
@@ -119,9 +121,9 @@ Windows 路径建议使用 `/`，例如 `C:/workspace/project`。Linux 和 macOS
 
 ## 🛠 小青 agent 任务
 
-`xiaoqing_agent` 通过 `codex.agent_task` 服务把编程任务交给 Codex 并等待结束。服务按 `/codex` 在 plugin.json 里的声明签发给能用 `/codex` 的发起人（`/codex` 只给 Bot 管理员）。
+`xiaoqing_agent` 通过 `codex.agent_task` 服务把编程任务交给 Codex 并等待结束。服务按 `/codex` 在 plugin.json 里的声明签发给能用 `/codex` 的发起人（`/codex` 需要 Bot 管理员权限）。
 
-- 每个 QQ 会话使用一个名为 `agent-<会话>` 的 Codex 会话，后续任务沿用同一个 thread；会话不存在时按请求的 `cwd`（须在 `allowed_cwd_roots` 内）或默认工作目录创建。
+- 每个 QQ 会话使用一个名为 `agent-<会话>` 的 Codex 会话，后续任务沿用同一个 thread。会话不存在时按请求的 `cwd`（须在 `allowed_cwd_roots` 内）或默认工作目录创建。
 - 任务带 `suppress_delivery` 标记，结果文本与图片产物路径交还 agent，由 agent 转述，Codex 不单独往聊天里发送。
 - agent 等待超时或任务被停止时，排队中的任务直接出队，运行中的任务走统一的进程树取消。
 
@@ -143,7 +145,7 @@ Windows 路径建议使用 `/`，例如 `C:/workspace/project`。Linux 和 macOS
 | `deleted_sessions/<name>-<time>/` | 删除会话后的历史归档 |
 | `outputs/` | Codex CLI 临时输出 |
 
-状态文件采用版本化字段白名单。加载时依次验证主文件与 `.bak` 的语法、结构、字段和路径；主文件无效且备份有效时恢复备份。主副本均不可用的快照进入 `quarantine/`，运行时以安全状态继续启动。删除会话会移动历史目录；重建同名会话会创建新的记录链。
+状态文件采用版本化字段白名单。加载时依次验证主文件与 `.bak` 的语法、结构、字段和路径。主文件无效且备份有效时恢复备份。主副本均不可用的快照进入 `quarantine/`。运行时以安全状态继续启动。删除会话会移动历史目录。重建同名会话会创建新的记录链。
 
 ---
 

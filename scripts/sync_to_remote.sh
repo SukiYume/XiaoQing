@@ -71,7 +71,7 @@ die() {
     exit 1
 }
 
-# Git Bash/Linux 通常提供 sha256sum，macOS 默认提供 shasum；OpenSSL 作为
+# Git Bash/Linux 通常提供 sha256sum，macOS 默认提供 shasum。OpenSSL 作为
 # 最后回退。统一只输出小写摘要，供同步后的远端逐文件校验使用。
 sha256_file() {
     local digest output

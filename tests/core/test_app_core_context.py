@@ -190,7 +190,7 @@ def test_app_load_admins_rejects_unsafe_shapes(
 
     app._load_admins({"admin_user_ids": raw_ids})
 
-    assert app._admin_set == set()
+    assert app.identity_service.admin_ids == set()
 
 
 def test_app_load_admins_accepts_positive_ints_and_decimal_strings(
@@ -200,7 +200,7 @@ def test_app_load_admins_accepts_positive_ints_and_decimal_strings(
 
     app._load_admins({"admin_user_ids": (12345, "67890", "12345")})
 
-    assert app._admin_set == {12345, 67890}
+    assert app.identity_service.admin_ids == {12345, 67890}
 
 
 @pytest.mark.unit

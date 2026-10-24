@@ -134,21 +134,37 @@ class PaperStorage:
                 )
                 return False
 
-    # 论文笔记 ---------------------------------------------------------
-
-    def add_paper_note(self, paper_id: str, content: str, user_id: int) -> bool:
+    def _add_text_record(self, path: Path, key: str, content: str, user_id: int) -> bool:
+        """在同一锁内追加带作者和时间的文本记录。"""
         with self._lock:
-            data = self._load_json(self.notes_file)
-            if paper_id not in data:
-                data[paper_id] = []
-
-            note = {
+            data   = self._load_json(path)
+            record = {
                 "content": content.strip(),
                 "time": datetime.now().strftime(DATETIME_FORMAT),
                 "user": user_id,
             }
-            data[paper_id].append(note)
-            return self._save_json(self.notes_file, data)
+            data.setdefault(key, []).append(record)
+            return self._save_json(path, data)
+
+    def _delete_text_record(self, path: Path, key: str, index: int, user_id: int) -> bool:
+        """按当前用户可见的序号删除一条文本记录。"""
+        with self._lock:
+            data = self._load_json(path)
+            if key not in data:
+                return False
+            records       = data[key]
+            owned_indices = [i for i, record in enumerate(records) if _owned_by(record, user_id)]
+            if index < 0 or index >= len(owned_indices):
+                return False
+            records.pop(owned_indices[index])
+            if not records:
+                del data[key]
+            return self._save_json(path, data)
+
+    # 论文笔记 ---------------------------------------------------------
+
+    def add_paper_note(self, paper_id: str, content: str, user_id: int) -> bool:
+        return self._add_text_record(self.notes_file, paper_id, content, user_id)
 
     def get_paper_notes(self, paper_id: str, user_id: int) -> list[dict[str, Any]]:
         data  = self._load_json(self.notes_file)
@@ -156,37 +172,12 @@ class PaperStorage:
         return [note for note in notes if _owned_by(note, user_id)]
 
     def delete_paper_note(self, paper_id: str, index: int, user_id: int) -> bool:
-        with self._lock:
-            data = self._load_json(self.notes_file)
-            if paper_id not in data:
-                return False
-
-            notes          = data[paper_id]
-            target_indices = [i for i, note in enumerate(notes) if _owned_by(note, user_id)]
-            if index < 0 or index >= len(target_indices):
-                return False
-
-            notes.pop(target_indices[index])
-            if not notes:
-                del data[paper_id]
-
-            return self._save_json(self.notes_file, data)
+        return self._delete_text_record(self.notes_file, paper_id, index, user_id)
 
     # 写作灵感 ---------------------------------------------------------
 
     def add_writing_idea(self, section: str, content: str, user_id: int) -> bool:
-        with self._lock:
-            data = self._load_json(self.writing_file)
-            if section not in data:
-                data[section] = []
-
-            idea = {
-                "content": content.strip(),
-                "time": datetime.now().strftime(DATETIME_FORMAT),
-                "user": user_id,
-            }
-            data[section].append(idea)
-            return self._save_json(self.writing_file, data)
+        return self._add_text_record(self.writing_file, section, content, user_id)
 
     def get_writing_ideas(self, section: str, user_id: int) -> list[dict[str, Any]]:
         data = self._load_json(self.writing_file)
@@ -201,23 +192,7 @@ class PaperStorage:
         ]
 
     def delete_writing_idea(self, section: str, index: int, user_id: int) -> bool:
-        with self._lock:
-            data = self._load_json(self.writing_file)
-            if section not in data:
-                return False
-
-            ideas         = data[section]
-            owned_indices = [
-                position for position, idea in enumerate(ideas) if _owned_by(idea, user_id)
-            ]
-            if index < 0 or index >= len(owned_indices):
-                return False
-
-            ideas.pop(owned_indices[index])
-            if not ideas:
-                del data[section]
-
-            return self._save_json(self.writing_file, data)
+        return self._delete_text_record(self.writing_file, section, index, user_id)
 
     # 研究主题 ---------------------------------------------------------
 

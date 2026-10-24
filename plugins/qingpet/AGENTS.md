@@ -1,5 +1,7 @@
 # 🛠️ QingPet 维护约定
 
+中文 | [English](AGENTS.en.md)
+
 本文件适用于 `plugins/qingpet/` 下的代码、测试和文档修改。功能现状见 [README.md](README.md)，首次部署验收见 [QUICKSTART.md](QUICKSTART.md)。
 
 ---
@@ -35,7 +37,7 @@
 | 其他 `services/` | 宠物、用户、道具、社交、经济和管理用例 |
 | `utils/` | 路由、校验、格式化、时间和常量 |
 
-命令模块负责消费输入和组织回复；领域 service 负责业务规则；repository 负责数据库读写。跨模块用例通过 service 方法组合。
+命令模块负责消费输入和组织回复。领域 service 负责业务规则。repository 负责数据库读写。跨模块用例通过 service 方法组合。
 
 ---
 
@@ -50,7 +52,7 @@ data/qingpet/qingpet/qingpet.db
 开发与测试遵循以下约定：
 
 - 测试使用 `tmp_path` 创建独立 SQLite 数据库；
-- 数据迁移先使用 SQLite `Connection.backup()` 在线备份生成一致快照，快照包含 WAL 中已提交的数据，再在快照副本上验证；
+- 数据迁移先使用 SQLite `Connection.backup()` 在线备份生成一致快照。快照包含 WAL 中已提交的数据。随后在快照副本上验证；
 - 清理脚本的目标限定为测试目录、缓存目录或显式传入路径；
 - Schema 变更采用兼容 migration，并添加已有数据库升级测试；
 - 资产与状态修复通过事务 service 和审计记录执行；
@@ -76,7 +78,7 @@ data/qingpet/qingpet/qingpet.db
 - 交易挂单、购买、撤单与到期退还；
 - 每日重置、周结算和资产快照。
 
-来自 OneBot 的可重投操作使用稳定请求身份。数据库唯一约束或幂等记录保存首次结果，后续同身份调用重放结果。事务测试应覆盖成功、业务拒绝、异常回滚、并发竞争和重复投递。
+来自 OneBot 的可重投操作使用稳定请求身份。数据库唯一约束或幂等记录保存首次结果。后续同身份调用返回已保存的结果。事务测试应覆盖成功、业务拒绝、异常回滚、并发竞争和重复投递。
 
 ---
 

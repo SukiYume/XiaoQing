@@ -791,7 +791,7 @@ class OneBotWsClient:
                 loop.call_soon_threadsafe(invalidate_previous_generation)
             except RuntimeError:
                 # The loop can close after ``is_closed`` above.  The atomic
-                # generation swap already rejects the old connection; clear
+                # generation swap already rejects the old connection. Clear
                 # its local publication as the only thread-safe convergence
                 # available once its owning loop can no longer run callbacks.
                 with self._auth_state_lock:
@@ -855,7 +855,7 @@ class OneBotWsClient:
         try:
             # Token creation is the action's linearization point.  No external
             # WebSocket code runs while this threading lock is held: rotation
-            # before this point rejects the claim; rotation afterwards cannot
+            # before this point rejects the claim. Rotation afterwards cannot
             # make a possibly-sent action safe to retry on another transport.
             with self._auth_state_lock:
                 if self._event_loop is None:
@@ -936,7 +936,7 @@ class OneBotWsClient:
         *,
         auth_state: _EndpointAuthState | None = None,
     ) -> bool:
-        """Resolve a pending action by echo; action responses never reach plugins."""
+        """Resolve a pending action by echo. Action responses never reach plugins."""
         if not self._is_action_response(event):
             return False
         echo = event.get("echo")

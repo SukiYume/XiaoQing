@@ -1,11 +1,11 @@
 # 调度兼容适配：先探测停止与排空能力，再选择受支持的关闭路径。
 """Capability-gated APScheduler shutdown integration.
 
-APScheduler 3.x does not expose a public API that both stops new scheduling
-and retains ownership of every running asyncio Future until it is truly done.
-The adapter below contains the small private-API surface needed for that
-stronger drain.  Callers must probe the concrete scheduler first and fall back
-to APScheduler's public shutdown contract when the layout is unavailable.
+The required shutdown stops new scheduling and retains each active asyncio
+Future until completion. APScheduler 3.x requires private APIs for this combined
+operation. This adapter contains those private API calls.
+Callers first test the actual scheduler. If its layout is unavailable, callers
+use the public APScheduler shutdown contract.
 """
 
 from __future__ import annotations

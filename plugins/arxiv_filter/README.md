@@ -1,5 +1,7 @@
 # 📡 arXiv Filter
 
+中文 | [English](README.en.md)
+
 arXiv Filter 获取 `astro-ph/new` 源列表，使用本地兴趣模型筛选论文，发送推荐列表，并将 positive 论文交给 Codex `astro-ph` 会话生成中文 Markdown 摘要。
 
 ---
@@ -40,9 +42,9 @@ Codex 摘要任务使用以下复合身份：
 源列表日期 + 规范化论文链接集合
 ```
 
-相同身份可复用成功摘要或运行中任务；同日论文集合变化会创建新任务。源日期校验异常时，论文列表路径继续返回结果，摘要侧路进入跳过状态并记录日志。
+相同身份可复用成功摘要或运行中任务。同日论文集合变化会创建新任务。源日期校验异常时，论文列表路径继续返回结果，摘要侧路进入跳过状态并记录日志。
 
-论文列表与摘要使用独立消息链路：列表先发送，Codex 在后台完成摘要并单独回传。摘要会话、工作目录和方法文件由 `config.plugins.codex.arxiv_summary` 配置，默认会话为 `astro-ph`，默认方法文件为 `arxiv-summary-methodology.md`。
+论文列表与摘要使用独立消息链路：列表先发送，Codex 在后台完成摘要并单独回传。摘要会话、工作目录和方法文件由 `config.plugins.codex.arxiv_summary` 配置。默认会话为 `astro-ph`。默认方法文件为 `arxiv-summary-methodology.md`。
 
 ---
 
@@ -146,7 +148,7 @@ data/arxiv_filter/
 
 模型资产位于配置路径，运行状态位于插件数据目录，两类文件采用独立备份与部署流程。
 
-训练数据准备的月度缓存保存 `papers`、完整 `query_range` 和 `completed`，断点也绑定相同查询范围。修改 `date_range.json` 后，范围不匹配的月份会重新抓取；`step3` 只合并当前范围内已完成且身份匹配的缓存。旧列表格式缓存需要先重新运行 `step2`。
+训练数据准备的月度缓存保存 `papers`、完整 `query_range` 和 `completed`，断点也绑定相同查询范围。修改 `date_range.json` 后，范围不匹配的月份会重新抓取。`step3` 只合并当前范围内已完成且身份匹配的缓存。旧列表格式缓存需要先重新运行 `step2`。
 
 ---
 

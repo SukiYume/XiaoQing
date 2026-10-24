@@ -228,11 +228,7 @@ def resolve_model_path(model_path: str | None = None) -> str:
         "best_model_title",
     ]
 
-    seen: set[str] = set()
     for candidate in candidates:
-        if candidate in seen:
-            continue
-        seen.add(candidate)
         resolved = _join_plugin_path(candidate)
         if os.path.isdir(resolved):
             return resolved

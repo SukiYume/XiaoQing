@@ -362,7 +362,7 @@ function renderPage() {
     attachListeners();
 }
 
-// 表单读取先于重渲染；缺失控件回退到当前值，避免意外清空设置。
+// 表单读取先于重渲染。缺失控件回退到当前值，避免意外清空设置。
 function collectFormData(container = _container) {
     if (!container || typeof container.querySelector !== 'function') {
         throw new TypeError('设置页面尚未挂载');

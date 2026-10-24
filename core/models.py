@@ -481,8 +481,8 @@ _CAPABILITY_CONTRACTS: dict[PluginCapabilityName, frozenset[str]] = {
 class PluginManifest(BaseModel):
     """Versioned, strict manifest for a plugin's runtime contract.
 
-    `description` and `author` are operational metadata emitted at load time;
-    `dependencies` names importable Python modules, not plugin load-order edges.
+    `description` and `author` supply operational metadata at load time.
+    `dependencies` lists Python modules that the plugin must be able to import.
     """
 
     model_config = ConfigDict(extra="forbid")

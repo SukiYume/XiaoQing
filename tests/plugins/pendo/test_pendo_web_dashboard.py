@@ -39,28 +39,6 @@ def test_dashboard_endpoint_forwards_database_and_current_owner(
     build_overview.assert_called_once_with(db=db, owner_id="owner-a")
 
 
-@pytest.fixture
-def currency_db(tmp_path):
-    db = Database(str(tmp_path / "currency.db"))
-    for currency, amount in [("CNY", 100), ("USD", 200)]:
-        db.insert_item(
-            {
-                "id": currency,
-                "owner_id": "owner",
-                "type": "ledger",
-                "title": currency,
-                "currency": currency,
-                "amount": amount,
-                "amount_cents": amount * 100,
-                "transaction_type": "expense",
-                "ledger_category": "餐饮",
-                "ledger_date": "2026-03-01",
-            }
-        )
-    yield db
-    db.cleanup()
-
-
 def test_dashboard_and_widget_show_currency_specific_totals(currency_db):
     now       = datetime(2026, 3, 2, 10)
     dashboard = build_dashboard_overview(currency_db, "owner", now)

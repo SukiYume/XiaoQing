@@ -563,7 +563,7 @@ async def test_close_cancels_only_the_exact_session_generation(
         assert not current_task.done()
         assert session.get(SessionKeys.STATE) == "connected"
         assert session.get(SessionKeys.CURRENT_TASK) is None
-        # This synthetic task has no QingSSH finalizer; production workers
+        # This synthetic task has no QingSSH finalizer. Production workers
         # compare-and-remove their own entry after cancellation.
         assert old_job.job_id in ssh_session_handlers._COMMAND_JOBS
         assert current_job.job_id in ssh_session_handlers._COMMAND_JOBS

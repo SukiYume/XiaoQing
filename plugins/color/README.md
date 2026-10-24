@@ -1,5 +1,7 @@
 # 🎨 Color
 
+中文 | [English](README.en.md)
+
 `color` 查询 526 种中国传统色、恒星光谱色和当前聊天作用域的管理员自定义色，并可生成 PNG 色卡。
 
 ---
@@ -29,7 +31,7 @@ RGB 和 CMYK 接受逗号或空格分隔。三组整数自动按 RGB 处理，�
 
 添加自定义色时，解析器优先识别末尾完整的三整数 RGB，例如 `/color add 深蓝 0 0 255`。单独的三位 HEX 仍按 HEX 处理。
 
-`-n/-r/-x/-c/-a/-s/-t/-w/-d` 与对应长选项均可使用；`-p` 与 `--picture` 都是图片选项。分页统一使用位置页码或 `--page`，`-l/--list` 用于浏览颜色目录。
+`-n/-r/-x/-c/-a/-s/-t/-w/-d` 与对应长选项均可使用。`-p` 与 `--picture` 都是图片选项。分页统一使用位置页码或 `--page`，`-l/--list` 用于浏览颜色目录。
 
 ---
 
@@ -59,31 +61,31 @@ RGB 和 CMYK 接受逗号或空格分隔。三组整数自动按 RGB 处理，�
 | `plugins/color/color.json` | 526 条传统色；校验名称、拼音、RGB、HEX、CMYK、条目数和名称唯一性 |
 | `plugins/color/stellar_colors.txt` | 105 行主序星温度网格；校验表头、行数、行长、数值范围和 HEX 格式 |
 
-恒星色数据来自 Harre 与 Heller 的 *Digital color codes of stars*：[DOI 10.1002/asna.202113868](https://doi.org/10.1002/asna.202113868)、[arXiv:2101.06254](https://arxiv.org/abs/2101.06254)。精确光谱型查询按源表顺序显示第一条温度采样，并给出该类型的温度范围；光谱型目录每页显示 30 个。
+恒星色数据来自 Harre 与 Heller 的 *Digital color codes of stars*：[DOI 10.1002/asna.202113868](https://doi.org/10.1002/asna.202113868)、[arXiv:2101.06254](https://arxiv.org/abs/2101.06254)。精确光谱型查询按源表顺序显示第一条温度采样，并给出该类型的温度范围。光谱型目录每页显示 30 个。
 
 ---
 
 ## 🎨 自定义颜色
 
-群聊使用群作用域，私聊使用当前用户作用域。写入和删除只走 `add`、`delete` 子命令（含 `-w`、`-d` 等别名），它们在 plugin.json 里只给 Bot 管理员，由 Core 检查；把 `-w` 写在其他参数后面不会当成写入。同一作用域的成员可查询：
+群聊使用群作用域，私聊使用当前用户作用域。写入和删除只走 `add`、`delete` 子命令（含 `-w`、`-d` 等别名），它们在 plugin.json 里需要 Bot 管理员权限，由 Core 检查。把 `-w` 写在其他参数后面不会当成写入。同一作用域的成员可查询：
 
 ```text
 data/color/custom_colors_group_<群号>.json
 data/color/custom_colors_private_<用户号>.json
 ```
 
-每个作用域最多保存 200 条、256 KiB。颜色名为 1～64 个字符；包含空格时使用引号，例如 `/color add "品牌 蓝" #3366ff`。写入过程由进程锁和原子替换保护，文件结构异常时保留原文件供排障。
+每个作用域最多保存 200 条、256 KiB。颜色名为 1～64 个字符。包含空格时使用引号，例如 `/color add "品牌 蓝" #3366ff`。写入过程由进程锁和原子替换保护，文件结构异常时保留原文件供排障。
 
 ---
 
 ## 🔐 输入与转换
 
-- RGB：三个 0～255 的 ASCII 整数；
-- CMYK：四个 0～100 的 ASCII 整数；
-- HEX：`RGB`、`#RGB`、`RRGGBB` 或 `#RRGGBB`；
-- 自定义色 CMYK：按标准设备无关公式换算并四舍五入；
-- RGB/HEX 未精确命中时：在 D65 CIE L\*a\*b\* 中按 CIE76 色差寻找最接近的收录色；
-- CMYK 未精确命中时：先按标准设备无关近似转换到 sRGB，再执行同一感知色差匹配；
+- RGB：三个 0～255 的 ASCII 整数。
+- CMYK：四个 0～100 的 ASCII 整数。
+- HEX：`RGB`、`#RGB`、`RRGGBB` 或 `#RRGGBB`。
+- 自定义色 CMYK：按标准设备无关公式换算并四舍五入。
+- RGB/HEX 未精确命中时：在 D65 CIE L\*a\*b\* 中按 CIE76 色差寻找最接近的收录色。
+- CMYK 未精确命中时：先按标准设备无关近似转换到 sRGB，再执行同一感知色差匹配。
 - 外部文本：执行长度、控制字符和参数冲突校验。
 
 ---

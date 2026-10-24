@@ -4,7 +4,7 @@
 
 监控器使用仓库级互斥量和 PID 文件保证单实例，通过有上限的退避重启异常退出
 的子进程，并把 stdout/stderr 轮转交给 Python 日志泵。NapCat QQ 账号和可选
-Bot 进程设置来自 config/config.json；-Stop 模式通过相同的进程身份和互斥量
+Bot 进程设置来自 config/config.json。-Stop 模式通过相同的进程身份和互斥量
 安全收口本仓库的进程树。脚本不内置生产环境专属值。
 #>
 
@@ -63,7 +63,7 @@ function Read-LauncherConfig {
     param([string]$Path)
 
     try {
-        # Windows PowerShell 5.1 对无 BOM 文件的默认编码不是 UTF-8；这里显式
+        # Windows PowerShell 5.1 按系统默认编码读取无 BOM 文件。此处显式
         # 指定编码，避免配置中其他中文字段被错误解码后连带破坏 JSON 解析。
         $config = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
     } catch {
@@ -364,7 +364,7 @@ function Get-TrackedProcessFromFile {
         return $null
     }
 
-    # 文件系统读取失败不是“旧 PID”，不能吞掉后继续操作未验证的进程身份。
+    # 文件系统读取失败时终止身份检查，并保留错误。后续进程操作需要已验证的身份。
     try {
         $savedText = [IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8)
     } catch {
@@ -391,7 +391,7 @@ function Get-TrackedProcessFromFile {
         return $null
     }
 
-    # 先吸收短暂的 CIM/WMI 空值；持续查询失败或命令行不可读时仍失败关闭，
+    # 先吸收短暂的 CIM/WMI 空值。持续查询失败或命令行不可读时仍失败关闭，
     # 避免把权限问题当成旧 PID，也避免误停复用该 PID 的其他进程。
     $process = Get-CimProcessWithReadableCommandLine `
         -ProcessId $processId `
@@ -487,7 +487,7 @@ function Stop-OwnedProcessTree {
             return
         }
     } catch {
-        # 该句柄仍属于本次启动尝试；无法读取状态时继续执行回收。
+        # 该句柄仍属于本次启动尝试。无法读取状态时继续执行回收。
     }
 
     $treeCleanupError = $null
@@ -649,7 +649,7 @@ function Stop-XiaoQingService {
 
     try {
         if (-not $ownsMutex) {
-            # 优先使用监控器自己登记的 PID；旧版本没有该文件时，再按脚本绝对
+            # 优先使用监控器自己登记的 PID。旧版本没有该文件时，再按脚本绝对
             # 路径扫描。两条路径都会在 taskkill 前重新校验命令行身份。
             $trackedMonitor = Get-TrackedMonitorProcess
             if ($null -ne $trackedMonitor) {
@@ -782,7 +782,7 @@ function Test-NapCatRunning {
             -ErrorAction Stop
     )
     foreach ($process in $processes) {
-        # 同名进程存在但命令行不可读时，无法排除它就是目标 NapCat；失败关闭
+        # 同名进程存在但命令行不可读时，无法排除它就是目标 NapCat。失败关闭
         # 比继续启动第二份登录实例更安全。
         if ([string]::IsNullOrWhiteSpace([string]$process.CommandLine)) {
             throw "Unable to verify command line for a running $expectedName process"
@@ -846,7 +846,7 @@ function Invoke-ElevatedStop {
 
     $elevated = $null
     try {
-        # ShellExecute 的 runas 动词会显示系统 UAC；提升后的脚本仍会重新读取
+        # ShellExecute 的 runas 动词会显示系统 UAC。提升后的脚本仍会重新读取
         # PID、校验命令行和排除本次 -Stop 调用，不会把提升当作身份凭据。
         $elevated = Start-Process `
             -FilePath $powerShellExecutable `

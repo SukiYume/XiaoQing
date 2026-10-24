@@ -331,9 +331,6 @@ class CommandRouter:
     def _command_sort_key(item: CommandSpec) -> tuple[int, int]:
         return item.priority, max((len(t) for t in item.triggers), default=0)
 
-    def _mark_index_dirty(self) -> None:
-        self._index_dirty = True
-
     @staticmethod
     def _validate_unambiguous(commands: list[CommandSpec]) -> None:
         owners: dict[tuple[str, int], CommandSpec] = {}
@@ -381,8 +378,8 @@ class CommandRouter:
         with self._lock:
             replacement = [*self._commands, spec]
             self._validate_unambiguous(replacement)
-            self._commands = replacement
-            self._mark_index_dirty()
+            self._commands    = replacement
+            self._index_dirty = True
 
     def replace_plugin(
         self,
@@ -396,8 +393,8 @@ class CommandRouter:
             replacement = [command for command in self._commands if command.plugin != plugin_name]
             replacement.extend(specs)
             self._validate_unambiguous(replacement)
-            self._commands = replacement
-            self._mark_index_dirty()
+            self._commands    = replacement
+            self._index_dirty = True
             return previous
 
     def clear_plugin(self, plugin_name: str) -> None:

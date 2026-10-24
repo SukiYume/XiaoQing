@@ -91,7 +91,7 @@ def bounded_external_text(
     Containers, booleans and non-finite floats are rejected instead of stringified.
     ANSI terminal sequences and C0/C1 controls are removed before either budget is
     measured. Set ``truncate=False`` for protocol fields where a partial value would
-    be misleading; those fields fall back to ``default`` instead.
+    be misleading. Those fields fall back to ``default`` instead.
     """
 
     for name, limit in (("max_chars", max_chars), ("max_bytes", max_bytes)):
@@ -336,9 +336,7 @@ def load_json(
         )
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         logger.error("Failed to parse JSON %s: %s", path, exc)
-        if raise_on_error:
-            raise
-        return fallback
+        raise
 
 
 def write_json(path: Path, data: Any) -> None:

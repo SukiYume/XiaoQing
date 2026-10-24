@@ -1,6 +1,9 @@
 # 🧠 07 - 高级主题
 
-本章面向需要扩展权限、长任务、调度、声明式服务、内嵌 Web、缓存、并发和生产运行方式的开发者。基础插件流程见 [插件开发指南](03-plugin-development.md)。
+中文 | [English](07-advanced.en.md)
+
+本章面向需要扩展权限、长任务、调度、声明式服务、内嵌 Web、缓存、并发和生产运行方式的开发者。
+基础插件流程见 [插件开发指南](03-plugin-development.md)。
 
 ---
 
@@ -21,13 +24,13 @@
 
 ## 🔐 权限模型
 
-权限只有一套：谁能在哪里用哪条命令，只写在各插件 `plugin.json` 的命令节点里，只由 Core 的 `core.router.command_access` 判断。
+项目使用一套命令权限。各插件的 `plugin.json` 命令节点声明使用者和使用场景。Core 的 `core.router.command_access` 统一检查这些声明。
 
 | 声明 | 含义 |
 |---|---|
 | `admin_only: true` | 顶层命令只给 Bot 管理员，归一化为 `permission: bot_admin` |
-| `permission` | `public`、`group_admin`（当前群群主、群管理员和 Bot 管理员）或 `bot_admin`；子节点只能收紧 |
-| `contexts` | `private`、`group`；子节点取父子交集 |
+| `permission` | `public`、`group_admin`（当前群群主、群管理员和 Bot 管理员）或 `bot_admin`。子节点只能收紧 |
+| `contexts` | `private`、`group`。子节点取父子交集 |
 
 调用这一处判断的地方：
 
@@ -36,7 +39,10 @@
 - Core 签发的派生能力：密钥管理跟随 `/set_secret`，arXiv 的 Codex 摘要跟随 `/codex`，agent 的本机工具、SSH、Codex 跟随 `/shell`、`/ssh`、`/codex`；每次调用按当前配置复核。
 - agent 给模型看的命令清单。
 
-插件代码不自己判断管理员。命令里需要不同权限的分支，声明成单独的子命令，比如 `/mc run`（Bot 管理员）与公开的 `/mc say`、`/xc reset confirm`（群管理员，仅群聊）与私聊可用的 `/xc reset`；处理时确认调用是从这个子命令进来的（比如 color 的写入只认 `add`、`delete` 节点）。`context.capabilities.is_bot_admin` 只用于对象层面的规则，例如只有发起人或 Bot 管理员能停止某个 agent 任务。
+插件代码将管理员检查交给 Core。
+命令里需要不同权限的分支，声明成单独的子命令，比如 `/mc run`（Bot 管理员）与公开的 `/mc say`、`/xc reset confirm`（群管理员，仅群聊）与私聊可用的 `/xc reset`。
+处理时确认调用是从这个子命令进来的（比如 color 的写入只认 `add`、`delete` 节点）。
+`context.capabilities.is_bot_admin` 只用于对象层面的规则，例如只有发起人或 Bot 管理员能停止某个 agent 任务。
 
 ---
 
@@ -76,7 +82,9 @@ async def handle_session(text, event, context, session):
     return segments(f"收到：{value}")
 ```
 
-会话 callback 处理单一会话键。跨用户或跨群协调在 callback 外完成，并通过业务数据库或专用锁提交。会话每次继续前按上面的权限模型复核，撤权或场景不再允许时 Core 关闭会话并调用插件的 `close_session` 收尾。
+会话 callback 处理单一会话键。
+跨用户或跨群协调在 callback 外完成，并通过业务数据库或专用锁提交。
+会话每次继续前按上面的权限模型复核，撤权或场景不再允许时 Core 关闭会话并调用插件的 `close_session` 收尾。
 
 ---
 
@@ -107,7 +115,8 @@ async def handle_session(text, event, context, session):
 - 插件卸载排空时间
 - 主动发送回执与业务状态提交顺序
 
-Codex 插件和 XiaoQing Agent 提供该模式的完整实现。agent 还示范了回执的转交：它调用的命令若带发送回执（比如取图占用的图片），回执随附件实际发出时结算，没发出或任务结束时释放。
+Codex 插件和 XiaoQing Agent 提供该模式的完整实现。
+agent 还示范了回执的转交：它调用的命令若带发送回执（比如取图占用的图片），回执随附件实际发出时结算，没发出或任务结束时释放。
 
 ---
 
@@ -138,7 +147,11 @@ async def scheduled_daily(context):
     return segments("今日摘要")
 ```
 
-Core 在任务到期时解析每个 schedule 的投递模式与目标群。`broadcast` 将统一结果发送到全部目标群，`targeted` 校验并发送 `ScheduledDelivery` 目标结果，`silent` 只运行任务。`group_ids` 列表按声明顺序生效；字段省略或为 `null` 时使用全局 `default_group_ids`。需要逐目标管理回执的处理器可通过 `context.default_groups()` 读取同一解析结果。
+Core 在任务到期时解析每个 schedule 的投递模式与目标群。
+`broadcast` 将统一结果发送到全部目标群，`targeted` 校验并发送 `ScheduledDelivery` 目标结果，`silent` 只运行任务。
+`group_ids` 列表按声明顺序生效。
+字段省略或为 `null` 时使用全局 `default_group_ids`。
+需要逐目标管理回执的处理器可通过 `context.default_groups()` 读取同一解析结果。
 
 常用 CronTrigger 字段：
 
@@ -149,7 +162,8 @@ Core 在任务到期时解析每个 schedule 的投递模式与目标群。`broa
 | 工作日 09:00 | `{"day_of_week": "mon-fri", "hour": 9}` |
 | 每月 1 日 | `{"day": 1, "hour": 0}` |
 
-多目标业务通知可使用 `durable_fanout.py` 记录每个目标的投递进度。计划任务更新与插件代际采用同一发布边界。
+多目标业务通知可使用 `durable_fanout.py` 记录每个目标的投递进度。
+计划任务更新与插件代际采用同一发布边界。
 
 ---
 
@@ -177,7 +191,8 @@ Core 维护封闭服务表，Manifest 声明所有者和调用方：
 }
 ```
 
-Core 校验服务名、所有者、调用方、callback 和所需 capability。服务调用进入提供插件的执行 gate，并受代际排空保护。
+Core 校验服务名、所有者、调用方、callback 和所需 capability。
+服务调用进入提供插件的执行 gate，并受代际排空保护。
 
 新增服务桥接需要同步更新：
 
@@ -228,7 +243,8 @@ Pendo 的 [架构说明](../plugins/pendo/ARCHITECTURE.md) 展示完整实例。
 
 ## 🌐 URL 处理扩展
 
-URL Parser 在 Dispatcher 的 URL 阶段接收单 URL 消息。处理流程：
+URL Parser 在 Dispatcher 的 URL 阶段接收单 URL 消息。
+处理流程：
 
 1. 规范化 URL。
 2. 校验 scheme、DNS、目标网段和重定向。
@@ -243,7 +259,8 @@ URL Parser 在 Dispatcher 的 URL 阶段接收单 URL 消息。处理流程：
 
 ## 💬 Smalltalk Provider
 
-`plugins.smalltalk_provider` 选择全局闲聊插件。Provider 实现：
+`plugins.smalltalk_provider` 选择全局闲聊插件。
+Provider 实现：
 
 ```python
 async def handle_smalltalk(text, event, context): ...
@@ -260,7 +277,9 @@ Provider 可组合以下阶段：
 - 消息段发送
 - 记忆与表达学习
 
-命令、URL、Session 与普通聊天在 Dispatcher 中拥有独立阶段。Provider 专注普通聊天候选消息。`xiaoqing_chat` 在明确召唤时经 `agent.handle_turn` 把这一轮交给 `xiaoqing_agent` 判断，判断与聊天生成同时进行，agent 接手时放弃这次生成。
+命令、URL、Session 与普通聊天在 Dispatcher 中拥有独立阶段。
+Provider 专注普通聊天候选消息。
+`xiaoqing_chat` 在明确召唤时经 `agent.handle_turn` 把这一轮交给 `xiaoqing_agent` 判断，判断与聊天生成同时进行，agent 接手时放弃这次生成。
 
 ---
 
@@ -281,7 +300,8 @@ results = await gather_bounded(
 )
 ```
 
-后台队列、HTTP 连接池、缓存、文件读取和输出均应设置容量或字节预算。过载场景返回插件公开错误，并保留 request ID。
+后台队列、HTTP 连接池、缓存、文件读取和输出均应设置容量或字节预算。
+过载场景返回插件公开错误，并保留 request ID。
 
 ---
 
@@ -289,7 +309,8 @@ results = await gather_bounded(
 
 ### 内存缓存
 
-`context.state` 适合插件代内缓存、任务引用和已解析配置。插件重载时由新代重新构建。
+`context.state` 适合插件代内缓存、任务引用和已解析配置。
+插件重载时由新代重新构建。
 
 ### 磁盘缓存
 
@@ -301,7 +322,8 @@ results = await gather_bounded(
 - 总字节上限
 - 原子元数据写入
 
-缓存键使用规范化输入摘要。业务数据库与缓存采用各自的目录和恢复策略。
+缓存键使用规范化输入摘要。
+业务数据库与缓存采用各自的目录和恢复策略。
 
 ### 数据库
 
@@ -328,7 +350,8 @@ SQLite 插件推荐：
 | 后台任务 | 状态机、取消、进程树回收和重启恢复 |
 | 生命周期 | 创建者回收资源，应用逆序关闭 |
 
-插件日志记录业务标识、阶段、上游状态和 request ID。用户回复使用稳定公开错误码。
+插件日志记录业务标识、阶段、上游状态和 request ID。
+用户回复使用稳定公开错误码。
 
 ---
 
@@ -371,9 +394,16 @@ scripts/run-bot.vbs
   → scripts/run_process_with_rotating_logs.py
 ```
 
-双击 `scripts/stop-bot.vbs` 可停止该启动链管理的监控器、Bot 和 NapCat。停服模式持有同一仓库级互斥量，并在结束进程前复核 PID、进程名与绝对命令路径。CIM 身份读取经过三次短重试；提升权限创建的进程由一次 UAC 提升后的停止实例重新验证并回收。完成提示出现后可双击 `scripts/run-bot.vbs` 重启。
+双击 `scripts/stop-bot.vbs` 可停止该启动链管理的监控器、Bot 和 NapCat。
+停服模式持有同一仓库级互斥量，并在结束进程前复核 PID、进程名与绝对命令路径。
+CIM 身份读取经过三次短重试。
+提升权限创建的进程由一次 UAC 提升后的停止实例重新验证并回收。
+完成提示出现后可双击 `scripts/run-bot.vbs` 重启。
 
-生产运行实例通过 `/set_secret` 管理已有 secret 路径。完整有效的 secrets 单文件外部变更由 watcher 暂存，当前管理员收到字段路径摘要后使用 `/reload` 确认。公开配置变更和双来源整体替换安排在停服窗口内；部署文件更新完成后重新启动，使公开配置与 secrets 在启动阶段组成已确认 revision。
+生产运行实例通过 `/set_secret` 管理已有 secret 路径。
+完整有效的 secrets 单文件外部变更由 watcher 暂存，当前管理员收到字段路径摘要后使用 `/reload` 确认。
+公开配置变更和双来源整体替换安排在停服窗口内。
+部署文件更新完成后重新启动，使公开配置与 secrets 在启动阶段组成已确认 revision。
 
 ### systemd
 
@@ -393,11 +423,14 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-将 `WorkingDirectory` 替换为实际项目目录。服务管理器提供可用的 `python`、依赖包与运行账户；项目启动入口保持为 `python main.py`。
+将 `WorkingDirectory` 替换为实际项目目录。
+服务管理器提供可用的 `python`、依赖包与运行账户。
+项目启动入口保持为 `python main.py`。
 
 ### Docker
 
-仓库 `Dockerfile` 提供容器构建入口。部署时挂载 `config/`、`data/` 与 `logs/`，并将 Inbound 端口连接到受控代理网络。
+仓库 `Dockerfile` 提供容器构建入口。
+部署时挂载 `config/`、`data/` 与 `logs/`，并将 Inbound 端口连接到受控代理网络。
 
 生产环境应为 Bot 进程设置专用用户、最小文件权限、明确网络出口、日志轮转、数据备份和健康检查。
 

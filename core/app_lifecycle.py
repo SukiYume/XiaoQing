@@ -269,10 +269,10 @@ class AppLifecycleMixin:
             _run_background_operation(self._cleanup_sessions_loop)
         )
 
-        # Build every authentication holder from one immutable snapshot.  A
-        # security publication can run from another thread (or re-enter a
-        # patched factory in tests), so retry until one owner survives every
-        # await and publication boundary.
+        # Build every authentication holder from one immutable snapshot.
+        # Another thread can publish security state during this operation.
+        # A patched test factory can also publish state during re-entry.
+        # Retry until one owner remains current across each await and publication.
         ownership_started_at = time.monotonic()
         ownership_attempt    = 0
         while not self._stopping:
@@ -347,7 +347,7 @@ class AppLifecycleMixin:
             return
 
         # Start the watcher only after all startup auth holders are safely
-        # published; it can no longer overtake provisional startup objects.
+        # published. It can no longer overtake provisional startup objects.
         self._config_watch_task = asyncio.create_task(
             _run_background_operation(self.config_manager.watch)
         )
@@ -557,7 +557,7 @@ class AppLifecycleMixin:
                 if quarantined_error is not None:
                     # The candidate already failed one cleanup attempt in the
                     # operation that triggered this rollback.  Preserve that
-                    # failure and ownership; a later explicit stop retries it.
+                    # failure and ownership. A later explicit stop retries it.
                     failed.append((manager, quarantined_error))
                     continue
                 try:

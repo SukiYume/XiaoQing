@@ -123,9 +123,9 @@ def _looks_like_noncanonical_ipv4(host: str) -> bool:
     """Reject integer, octal and hexadecimal IPv4 spellings before DNS.
 
     Different resolvers disagree on forms such as ``2130706433`` and
-    ``0x7f000001``.  Treating them as hostnames could turn a textual check into
-    a loopback connection on one platform, so only canonical dotted-decimal
-    literals are accepted as IPv4 addresses.
+    ``0x7f000001``. A resolver can interpret these hostnames as loopback addresses
+    after text validation. IPv4 input therefore requires canonical dotted-decimal
+    notation.
     """
 
     if re.fullmatch(r"(?:0x[0-9a-f]+|\d+)", host, flags=re.IGNORECASE):

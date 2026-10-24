@@ -1,6 +1,6 @@
 version = 1
 
-# Optional local-ML extras are intentionally outside requirements.txt.
+# Optional local machine learning dependencies are separate from requirements.txt.
 [[allow]]
 nodeid = "tests/plugins/arxiv_filter/test_arxiv_filter.py::TestInferenceBackendCaching::test_transformers_backend_caches_model_objects"
 reason = "could not import *"
@@ -36,7 +36,7 @@ nodeid = "tests/plugins/arxiv_filter/test_arxiv_training_utils.py::test_knn_trai
 reason = "could not import *"
 platforms = ["all"]
 
-# Filesystem link capabilities differ by host policy even on supported runners.
+# Supported runners can have different host policies for filesystem links.
 [[allow]]
 nodeid = "tests/core/test_plugin_manager_import_safety.py::test_runtime_rejects_entry_symlink_without_executing_its_target"
 reason = "symbolic links are unavailable: *"
@@ -77,7 +77,7 @@ nodeid = "tests/plugins/github/test_github.py::test_save_history_refuses_symlink
 reason = "directory symlinks are unavailable: *"
 platforms = ["all"]
 
-# WebP support is an optional Pillow build capability.
+# Pillow builds can include optional WebP support.
 [[allow]]
 nodeid = "tests/plugins/earthquake/test_earthquake.py::test_valid_single_frame_image_formats[WEBP-*]"
 reason = "Pillow has no WebP support"
@@ -93,7 +93,7 @@ nodeid = "tests/plugins/earthquake/test_earthquake.py::test_animated_webp_is_rej
 reason = "Pillow has no WebP support"
 platforms = ["all"]
 
-# Platform-specific execution and decoding require matching runners.
+# Runners for the applicable platform are necessary for execution and decoding tests.
 [[allow]]
 nodeid = "tests/core/test_process_tree.py::test_smart_decode_falls_back_to_gbk_on_windows"
 reason = "GBK 回退只用于 Windows 本地程序输出"

@@ -384,8 +384,8 @@ async def handle_session(
     """Handle one continuation using the transaction-local Session supplied by core.
 
     This entrypoint deliberately has no catch-all command decorator.  Expected
-    Pendo business and input errors are converted to user-facing messages;
-    unexpected failures escape to Dispatcher so SessionManager can roll back
+    Pendo business and input errors are converted to user-facing messages.
+    Unexpected failures escape to Dispatcher so SessionManager can roll back
     every mutation made to its isolated working copy.
     """
 

@@ -784,8 +784,7 @@ async def test_app_on_ws_connected(temp_app_root: Path):
     # Set default groups (update internal config directly for test)
     _set_app_config(app, default_group_ids=[123, 456])
 
-    # Also update via config property just in case (though it's read-only usually, this updates the temp dict if property logic changed)
-    # But strictly speaking we need to update what ConfigManager returns.
+    # The helper updates the configuration returned by ConfigManager.
 
     # Mock ws_client
     app.ws_client             = MagicMock()

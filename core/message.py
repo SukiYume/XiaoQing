@@ -17,7 +17,7 @@ class ValidatedInboundEvent(dict[str, Any]):
 
     The server passes this same mapping through the inbound queue, so consumers may
     append private, internal fields in place.  It is detached from the transport
-    request and each accepted payload has its own mapping; it is not an immutable
+    request and each accepted payload has its own mapping. It is not an immutable
     snapshot.
     """
 

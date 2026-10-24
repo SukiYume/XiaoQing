@@ -115,9 +115,6 @@ class XiaoQingApp(
         self.ws_client: OneBotWsClient | None       = None
         self.inbound_manager: InboundManager | None = None
         self.identity_service                       = AppIdentityService()
-        # Kept as an internal alias for existing diagnostics; ownership and
-        # replacement semantics live in AppIdentityService.
-        self._admin_set = self.identity_service.admin_ids
 
         # 核心组件
         self.router: CommandRouter = router or CommandRouter()
@@ -130,16 +127,14 @@ class XiaoQingApp(
             minimum = 0.01,
             maximum = 86400.0,
         )
-        context_factory      = self._build_plugin_context
-        manager_factory      = PluginManager
         configured_data_root = self.config_manager.config.get("data_root")
         plugin_data_root     = (
             root / "data" if configured_data_root is None else Path(str(configured_data_root))
         )
-        self.plugin_manager: PluginManager = plugin_manager or manager_factory(
+        self.plugin_manager: PluginManager = plugin_manager or PluginManager(
             self.plugins_dir,
             self.router,
-            context_factory,
+            self._build_plugin_context,
             poll_interval = poll_interval,
             data_root     = plugin_data_root,
         )

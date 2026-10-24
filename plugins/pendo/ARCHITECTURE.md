@@ -1,17 +1,19 @@
 # 🏗️ Pendo 架构
 
+中文 | [English](ARCHITECTURE.en.md)
+
 本文面向 Pendo 维护者，说明插件的运行时所有权、命令路由、业务服务、SQLite 存储、调度、Web API 和扩展流程。用户操作见 [README.md](README.md)。
 
 ---
 
 ## 🏗️ 设计目标
 
-- 聊天端、Web 端和定时任务共享同一业务模型与数据库；
-- 每条业务数据按 `owner_id` 隔离；
-- 时间戳按 UTC 存储，并按用户 IANA 时区展示；
-- 生命周期资源由单一服务获取和释放；
-- 外部输入在路由、模型和存储边界逐层校验；
-- 发送任务通过持久化 outbox 与确认回执推进；
+- 聊天端、Web 端和定时任务共享同一业务模型与数据库。
+- 每条业务数据按 `owner_id` 隔离。
+- 时间戳按 UTC 存储。显示时使用用户 IANA 时区。
+- 生命周期资源由单一服务获取和释放。
+- 外部输入在路由、模型和存储边界逐层校验。
+- 发送任务通过持久化 outbox 与确认回执推进。
 - Web 身份凭据以摘要形式保存在业务数据库中。
 
 ---
@@ -39,7 +41,7 @@ flowchart TD
 | `commands/` | 顶层操作、设置、Session 续步和定时业务编排 |
 | `handlers/` | 各业务模块的参数解析与用例编排 |
 | `models/` | 条目数据类、枚举和序列化模型 |
-| `services/` | 存储、提醒、日程图、导出、AI 解析和生命周期资源；`services/runtime.py` 提供 `PendoRuntimeService` |
+| `services/` | 存储、提醒、日程图、导出、AI 解析和生命周期资源。`services/runtime.py` 提供 `PendoRuntimeService` |
 | `utils/` | 校验、格式化、时区、设置与数据库辅助函数 |
 | `web/` | FastAPI 路由、认证、分析、Bundle 传输、Demo 服务和静态 SPA |
 
@@ -51,29 +53,29 @@ flowchart TD
 
 ### 初始化
 
-1. `main.init()` 从 Core 取得原子配置快照；
-2. `PendoConfig.configure()` 校验并发布运行设置；
-3. `PendoRuntimeService.open_database()` 解析 `context.data_dir/pendo.db`；
-4. `Database` 初始化连接配置与 schema migration；
-5. runtime service 取得数据库 singleton 所有权；
-6. 配置订阅回调绑定到当前插件代；
+1. `main.init()` 从 Core 取得原子配置快照。
+2. `PendoConfig.configure()` 校验并发布运行设置。
+3. `PendoRuntimeService.open_database()` 解析 `context.data_dir/pendo.db`。
+4. `Database` 初始化连接配置与 schema migration。
+5. runtime service 取得数据库 singleton 所有权。
+6. 配置订阅回调绑定到当前插件代。
 7. `web_enabled` 为真时启动 Web 线程。
 
 `context.state["pendo_runtime"]` 保存当前上下文可见的 lifecycle service 与业务服务集合。模块级 runtime service 负责资源所有权，Context 状态负责将所有权发布给入口和回调。
 
 ### 配置热重载
 
-配置回调按修订号读取完整快照。新设置校验成功后一次发布。Web 的 `enabled`、`host` 或 `port` 变化会触发有序停止与启动；数据库实例和业务请求继续使用同一代已发布设置。
+配置回调按修订号读取完整快照。新设置校验成功后一次发布。Web 的 `enabled`、`host` 或 `port` 变化会触发有序停止与启动。数据库实例和业务请求继续使用同一代已发布设置。
 
 ### 关闭
 
 `main.shutdown()` 按以下顺序收敛资源：
 
-1. 取消配置订阅；
-2. 停止 Web 线程；
-3. 清理提醒 singleton；
-4. 摘除数据库 singleton；
-5. 关闭 runtime service 登记的全部 SQLite 连接；
+1. 取消配置订阅。
+2. 停止 Web 线程。
+3. 清理提醒 singleton。
+4. 摘除数据库 singleton。
+5. 关闭 runtime service 登记的全部 SQLite 连接。
 6. 清空当前插件代 Context 状态。
 
 清理步骤会汇总组件级异常，并继续处理其余已拥有资源。
@@ -113,11 +115,11 @@ sequenceDiagram
 
 待办、账本和日记等多轮交互使用 Core Session：
 
-1. handler 创建带 `plugin_name=pendo` 的 Session；
-2. Session 数据保存操作类型、当前步骤和已收集字段；
-3. Core 按用户与聊天作用域串行提交后续消息；
-4. `main.handle_session()` 委托 `commands/session.py`；
-5. 模块 handler 校验本步输入并更新状态；
+1. handler 创建带 `plugin_name=pendo` 的 Session。
+2. Session 数据保存操作类型、当前步骤和已收集字段。
+3. Core 按用户与聊天作用域串行提交后续消息。
+4. `main.handle_session()` 委托 `commands/session.py`。
+5. 模块 handler 校验本步输入并更新状态。
 6. 完成、退出、超时或状态校验异常时结束 Session。
 
 一行命令与多轮会话最终调用同一模型校验和数据库写入路径。
@@ -138,9 +140,9 @@ sequenceDiagram
 
 日程处理器内部按职责分为：
 
-- `event.py`：入口、提醒操作和跨模块编排；
-- `event_editing.py`：编辑、删除与集合修改；
-- `event_views.py`：列表、详情和展示查询；
+- `event.py`：入口、提醒操作和跨模块编排。
+- `event_editing.py`：编辑、删除与集合修改。
+- `event_views.py`：列表、详情和展示查询。
 - `event_support.py`：共享解析和格式化辅助。
 
 ---
@@ -151,12 +153,12 @@ sequenceDiagram
 
 ### 连接与事务
 
-- 每个工作线程使用独立 SQLite 连接；
-- 连接统一启用 WAL、`synchronous=NORMAL`、外键与 busy timeout；
-- runtime service 登记连接对象，关闭阶段逐个回收；
-- 写操作通过显式事务和数据库锁保持一致性；
-- 条目和用户设置包含 `version` 字段，用于乐观并发控制；
-- 查询缓存采用 30 秒 TTL、1024 项 LRU，并在相关写入后失效。读取开始时记录缓存代数；数据库查询完成后，回填校验代数，避免写入后被旧查询覆盖。批量集合查询直接返回查询结果，避免重复缓存预热。
+- 每个工作线程使用独立 SQLite 连接。
+- 连接统一启用 WAL、`synchronous=NORMAL`、外键与 busy timeout。
+- runtime service 登记连接对象，关闭阶段逐个回收。
+- 写操作通过显式事务和数据库锁保持一致性。
+- 条目和用户设置包含 `version` 字段，用于乐观并发控制。
+- 查询缓存采用 30 秒 TTL、1024 项 LRU，并在相关写入后失效。读取开始时记录缓存代数。数据库查询完成后，回填校验代数，避免写入后被旧查询覆盖。批量集合查询直接返回查询结果，避免重复缓存预热。
 
 ### Schema
 
@@ -178,7 +180,7 @@ sequenceDiagram
 
 ### 时间与金额
 
-完整时刻采用规范 UTC 字符串；`plan_date`、`diary_date` 和 `ledger_date` 使用日期值。API 与命令边界通过 `TimezoneHelper` 转换用户本地时间。自然语言解析结果中的年月日和钟点属于本地墙钟字段，AI 输出进入业务模型时清除自行附加的时区偏移，再由用户或日程 IANA 时区解析为唯一时刻。
+完整时刻采用规范 UTC 字符串。`plan_date`、`diary_date` 和 `ledger_date` 使用日期值。API 与命令边界通过 `TimezoneHelper` 转换用户本地时间。自然语言解析结果中的年月日和钟点属于本地墙钟字段，AI 输出进入业务模型时清除自行附加的时区偏移。随后由用户或日程 IANA 时区解析为唯一时刻。
 
 账本以 `amount_cents` 作为整数统计字段，`amount` 用于展示。导入流程会规范化两个字段。
 
@@ -194,9 +196,9 @@ sequenceDiagram
 
 ### 更新与恢复契约
 
-Web 完整编辑表单携带 `version`。服务端先校验读取版本，再在存储事务中检查版本；冲突返回 409，遗漏完整编辑版本返回 422。前端失败分支保留弹窗输入。绝对提醒 `remind_times` 被显式提交时清除存量规则，再执行完整规范化；同时提交规则时按显式规则计算。截止时间修改合并当前规则后重建队列。
+Web 完整编辑表单携带 `version`。服务端先校验读取版本，再在存储事务中检查版本。冲突返回 409，遗漏完整编辑版本返回 422。前端失败分支保留弹窗输入。绝对提醒 `remind_times` 被显式提交时清除存量规则，再执行完整规范化。同时提交规则时按显式规则计算。截止时间修改合并当前规则后重建队列。
 
-软删除清除待发队列并保留已发送、已确认历史。撤销删除在同一事务恢复条目、全文索引和提醒队列；已完成历史的唯一键避免重复初次投递。重复日程持续使用原始 `DTSTART` 和 `COUNT`，历史实例在展开结果中过滤。
+软删除清除待发队列并保留已发送、已确认历史。撤销删除在同一事务恢复条目、全文索引和提醒队列。已完成历史的唯一键避免重复初次投递。重复日程持续使用原始 `DTSTART` 和 `COUNT`，历史实例在展开结果中过滤。
 
 `utils/currency.py` 提供币种标准化、标签与分组函数。聊天统计、定时摘要和 Web 聚合先按币种分组，再计算收支和分类指标。各币种保留独立计量，汇率转换需要单独的数据来源与业务契约。
 
@@ -204,16 +206,16 @@ Web 完整编辑表单携带 `version`。服务端先校验读取版本，再在
 
 提醒处理分为发现、声明、发送和确认四个阶段：
 
-1. 查询到期提醒；
-2. 在 `reminder_logs` 中取得有期限的 claim；
-3. 按条目所有者构造 `send_private_msg`，目标固定为数值 QQ 用户；
+1. 查询到期提醒。
+2. 在 `reminder_logs` 中取得有期限的 claim。
+3. 按条目所有者构造 `send_private_msg`，目标固定为数值 QQ 用户。
 4. 根据 OneBot 回执完成或释放 claim。
 
 claim 记录 token、到期时刻、下一次尝试时刻和失败次数。条目写入边界通过 `_sync_reminder_logs` 同步 `items.remind_times` 与 `reminder_logs`，并写入规范 `fire_at_utc`。Schema 初始化负责表、列与查询索引，调度查询严格使用秒级 UTC。该模型支持多个调度 tick 与进程重启。
 
-Web 日程详情通过单条提醒确认端点切换未到期提醒。`ReminderRepositoryMixin` 在即时事务中同时校验所有者、日程类型、提醒归属和触发时刻；提前确认写入 `preconfirmed` 状态并清理 claim，重新开启恢复同一提醒行为 `pending`。到期时刻由服务端 UTC 判断，浏览器按钮同步进入禁用状态。
+Web 日程详情通过单条提醒确认端点切换未到期提醒。`ReminderRepositoryMixin` 在即时事务中同时校验所有者、日程类型、提醒归属和触发时刻。提前确认写入 `preconfirmed` 状态并清理 claim，重新开启恢复同一提醒行为 `pending`。到期时刻由服务端 UTC 判断，浏览器按钮同步进入禁用状态。
 
-每日简报、日记提示和财务摘要等周期消息使用 `scheduled_delivery_outbox` 保存周期 claim 与回执状态，并在 Core `targeted` 模式下投递用户私聊。`commands/scheduled.py` 还编排待办顺延、日志清理和 Demo 数据回收；日志与 Demo 清理使用 Core `silent` 模式。Manifest 的 `pendo_prune_operation_logs` 绑定 `scheduled_prune_operation_logs`，每日清理过期操作日志与撤销快照。
+每日简报、日记提示和财务摘要使用 `scheduled_delivery_outbox` 保存周期 claim 与回执状态。Core 使用 `targeted` 模式向用户私聊投递。`commands/scheduled.py` 还编排待办顺延、日志清理和 Demo 数据回收。日志与 Demo 清理使用 Core `silent` 模式。Manifest 的 `pendo_prune_operation_logs` 绑定 `scheduled_prune_operation_logs`。该任务每日清理过期操作日志与撤销快照。
 
 ---
 
@@ -240,23 +242,23 @@ API 返回统一 `ok`、`message`、`error_code` 结构。安全头包括 CSP、
 
 ### 浏览器会话
 
-1. QQ 私聊生成随机登录 Code；
-2. 服务端在 `login_code_registry` 保存 Code 摘要和 7 天期限；
-3. 浏览器提交 Code；
-4. 事务消费 Code 并创建 7 天随机 Session；
-5. 浏览器收到 HttpOnly Cookie；
-6. 后续请求按 Session 摘要查询 `web_session_registry`；
+1. QQ 私聊生成随机登录 Code。
+2. 服务端在 `login_code_registry` 保存 Code 摘要和 7 天期限。
+3. 浏览器提交 Code。
+4. 事务消费 Code 并创建 7 天随机 Session。
+5. 浏览器收到 HttpOnly Cookie。
+6. 后续请求按 Session 摘要查询 `web_session_registry`。
 7. 退出或设备撤销会删除对应注册记录。
 
 ### Widget Token
 
-1. QQ 私聊生成 365 天 JWT；
-2. JWT 包含 owner、token ID、签发时间、到期时间和 widget scope；
-3. `widget_token_registry` 保存 token ID、owner、期限和撤销状态；
-4. `/api/widget/*` 同时校验 JWT 签名、scope、期限和注册表状态；
+1. QQ 私聊生成 365 天 JWT。
+2. JWT 包含 owner、token ID、签发时间、到期时间和 widget scope。
+3. `widget_token_registry` 保存 token ID、owner、期限和撤销状态。
+4. `/api/widget/*` 同时校验 JWT 签名、scope、期限和注册表状态。
 5. 撤销操作更新当前 owner 的有效记录。
 
-`/api/widget/summary` 提供最多 5 条日程和主屏面板；`/api/widget/calendar` 提供最长 3660 天闭区间内的完整日程。Scriptable 在源码顶部读取 Web 地址与 Widget Token，在 Keychain 保存上次成功运行日。日历同步始终至少回看过去 30 天并查询到未来 30 天，游标更早时同时补齐间隔；每次读取一个服务端窗口和一个 iOS 目标日历窗口，以 Pendo 条目 ID 原地新增、更新和清理带同步标记的托管事件，并在全部对账成功后推进游标。
+`/api/widget/summary` 提供最多 5 条日程和主屏面板。`/api/widget/calendar` 提供最长 3660 天闭区间内的完整日程。Scriptable 从源码顶部读取 Web 地址与 Widget Token。Keychain 保存上次成功运行日。同步至少回看过去 30 天，并查询未来 30 天。游标更早时，脚本补齐间隔。每次读取一个服务端窗口和一个 iOS 目标日历窗口。脚本以 Pendo 条目 ID 原地新增、更新和清理带同步标记的托管事件。全部对账成功后，脚本推进游标。
 
 两类凭据使用相同的秒级期限计算约定，并拥有独立的认证依赖和权限范围。
 
@@ -266,28 +268,28 @@ API 返回统一 `ok`、`message`、`error_code` 结构。安全头包括 CSP、
 
 传输包按 LF 分隔 NDJSON 记录，JSON 字符串中的 U+2028、U+2029 等 Unicode 字符保留原值。每个数据文件最多 100,000 条，六类成员合计最多 600,000 条，导入与导出共享容量。上传文件名通过 UTF-8 百分号编码进入 `X-Transfer-Filename`，服务端解码后写入审计。
 
-Markdown 导出使用调用用户的时区上下文；日期范围与渲染采用同一时区，时间字符串包含偏移。Widget 日历字段提供带偏移的 ISO 时间，展示日期仍使用用户自然日。
+Markdown 导出使用调用用户的时区上下文。日期范围与渲染采用同一时区，时间字符串包含偏移。Widget 日历字段提供带偏移的 ISO 时间，展示日期仍使用用户自然日。
 
 `web/services/transfer_bundle.py` 负责导出版本化 `.pendo.zip`，`bundle_import.py` 负责检查、样例预览和事务执行。导入过程包括：
 
-1. 校验 ZIP 条目、大小、路径和 manifest；
-2. 校验文件 SHA-256 与 JSON 结构；
-3. 将所有 owner 字段绑定到当前会话用户；
-4. 解析引用关系与跨条目 ID；
-5. 应用跳过、覆盖或副本策略；
-6. 在事务中写入业务表与 Bundle 身份；
+1. 校验 ZIP 条目、大小、路径和 manifest。
+2. 校验文件 SHA-256 与 JSON 结构。
+3. 将所有 owner 字段绑定到当前会话用户。
+4. 解析引用关系与跨条目 ID。
+5. 应用跳过、覆盖或副本策略。
+6. 在事务中写入业务表与 Bundle 身份。
 7. 记录 `transfer_logs`。
 
 聊天端 `ExporterService` 生成 Markdown 档案，并通过 Core 文件发送能力投递。
 
 ## 🔐 并发边界
 
-- Core 按插件 Manifest 执行 Pendo 命令；
-- Core Session 对同一用户与聊天作用域串行提交；
-- SQLite 写事务保护跨线程一致性；
-- Database 为设置、缓存和连接登记使用独立锁；
-- Web server 状态由模块级重入锁保护；
-- 调度任务依靠提醒 claim、outbox 和数据库约束协调；
+- Core 按插件 Manifest 执行 Pendo 命令。
+- Core Session 对同一用户与聊天作用域串行提交。
+- SQLite 写事务保护跨线程一致性。
+- Database 为设置、缓存和连接登记使用独立锁。
+- Web server 状态由模块级重入锁保护。
+- 调度任务依靠提醒 claim、outbox 和数据库约束协调。
 - runtime service 控制数据库、订阅和 Web 的单一所有者。
 
 ---
@@ -296,27 +298,27 @@ Markdown 导出使用调用用户的时区上下文；日期范围与渲染采�
 
 ### 扩展业务命令
 
-1. 在 `plugin.json` 增加命令目录节点；
-2. 在对应 handler 实现参数解析与业务用例；
-3. 在 `main.py` 的 handler 映射中注册顶层模块；
-4. 复用模型校验、时区和数据库事务；
-5. 更新 README 的用户命令；
+1. 在 `plugin.json` 增加命令目录节点。
+2. 在对应 handler 实现参数解析与业务用例。
+3. 在 `main.py` 的 handler 映射中注册顶层模块。
+4. 复用模型校验、时区和数据库事务。
+5. 更新 README 的用户命令。
 6. 添加正常、边界、权限、错误和并发测试。
 
 ### 扩展数据字段
 
-1. 更新 `models/item.py`；
-2. 在 `services/db_schema.py` 增加版本化 migration；
-3. 更新数据库序列化与反序列化；
-4. 更新命令、Web API、搜索与 Bundle；
+1. 更新 `models/item.py`。
+2. 在 `services/db_schema.py` 增加版本化 migration。
+3. 更新数据库序列化与反序列化。
+4. 更新命令、Web API、搜索与 Bundle。
 5. 覆盖 schema migration、往返序列化和并发更新测试。
 
 ### 扩展 Web 能力
 
-1. 在 `web/api/` 定义严格请求模型与路由；
-2. 从 `web/deps.py` 取得数据库和认证会话；
-3. 把复合用例放入 `web/services/` 或共享业务 service；
-4. 在 `web/static/js/pages/` 增加页面模块；
+1. 在 `web/api/` 定义严格请求模型与路由。
+2. 从 `web/deps.py` 取得数据库和认证会话。
+3. 把复合用例放入 `web/services/` 或共享业务 service。
+4. 在 `web/static/js/pages/` 增加页面模块。
 5. 添加 API、权限、租户隔离和浏览器行为测试。
 
 ---
