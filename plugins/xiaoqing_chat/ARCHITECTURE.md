@@ -1,5 +1,7 @@
 # 🏗️ xiaoqing_chat 架构
 
+中文 | [English](ARCHITECTURE.en.md)
+
 本文面向插件维护者，说明 `xiaoqing_chat` 的模块划分、单轮数据流、回复审查、状态提交和持久化规则。功能、命令和配置字段见 [README.md](README.md)，测试与验收见 [xiaoqing_chat测试.md](xiaoqing_chat%E6%B5%8B%E8%AF%95.md)。
 
 ---
@@ -50,20 +52,20 @@ xiaoqing_chat
 |---|---|
 | `plugin.json` | Manifest：`/xc` 命令树、`onebot_media` capability、`core.observe_outgoing_action` 服务、使用 `agent.handle_turn` 与 `agent.report_delivery`、热加载文件 |
 | `main.py` | 生命周期（`init` / `shutdown`）、`/xc` 子命令路由、Core 观察入口 |
-| `handlers.py` | 消息观察、闲聊门控、单轮编排与生成配额；`call_bot_name_only`、`observe_outgoing_action` |
-| `agent_bridge.py` | 明确召唤时把这一轮交给 `xiaoqing_agent` 判断（decide），同时照常生成聊天回复；接手则放弃生成、让出会话生成名额，执行（act）并把回复连同消息 ID 写入聊天记录、向 agent 回报是否发出；否则用已生成的回复 |
+| `handlers.py` | 消息观察、闲聊门控、单轮编排与生成配额。`call_bot_name_only`、`observe_outgoing_action` |
+| `agent_bridge.py` | 明确召唤时把这一轮交给 `xiaoqing_agent` 判断（decide），同时照常生成聊天回复。接手则放弃生成、让出会话生成名额，执行（act）并把回复连同消息 ID 写入聊天记录、向 agent 回报是否发出。否则用已生成的回复 |
 | `commands.py` | `/xc` 管理子命令：统计、重置、配置、记忆、表达、黑话、审查、模型切换 |
 | `handler_context.py` | 单轮复用的上下文快照（runtime、state、chat_id、bot_name、secrets）与 `handle_errors` 装饰器 |
 | `chat_event.py` | 从 OneBot 事件读取会话 ID、发送者和对角色的称呼 |
 | `chat_runtime.py` | 配置热加载、AI route 上下文、`llm_call_config`、屏蔽规则与会话锁 |
 | `attention_gate.py` | 明确召唤：`@`、名字、名字续问、引用角色、上下文共指 |
-| `participation.py` | 普通群聊线索：全群邀请、发图请求、开放提问、起哄、激动分享、复读；低信息与点名他人 |
+| `participation.py` | 普通群聊线索：全群邀请、发图请求、开放提问、起哄、激动分享、复读。低信息与点名他人 |
 | `frequency_control.py` | 硬频控、参与概率、Heartflow 软加分、沉默补偿，记录 `ReplyGateDecision` |
 | `generation_limiter.py` | 全局、会话、用户并发配额与用户日配额 |
 | `brain_chat.py` | 私聊深度对话：在说话方式后追加人设卡的〔深度对话〕一节，思考等级、上下文长度和温度 |
-| `persona.py` | 名字解析；解析人设卡（`config/persona.md`），按标记取出人物事实、聊天说话方式与示例、agent 办事部分和心境 |
+| `persona.py` | 名字解析。解析人设卡（`config/persona.md`），按标记取出人物事实、聊天说话方式与示例、agent 办事部分和心境 |
 | `smalltalk_models.py` | `PreparedSmalltalkTurn`、`GeneratedSmalltalkTurn` 阶段模型 |
-| `turn_generation.py` | 会话锁内记录用户消息；锁外按强制 / PFC / 直接三条路径生成 |
+| `turn_generation.py` | 会话锁内记录用户消息。锁外按强制 / PFC / 直接三条路径生成 |
 | `reply_plan.py` | `ReplyGenerationPlan`：一次性收集上下文块、反应规则、规划目标和人设边界 |
 | `reply_generator.py` | 生成尝试循环：预读本轮、请求、本地预检、媒体解析、审查、上下文收缩 |
 | `reply_draft.py` | 回复草稿、分段规范化、出站媒体附加、尝试状态 |
@@ -77,7 +79,7 @@ xiaoqing_chat
 | `context_builder.py` | 记忆、人物资料、知识、表达和工具上下文 |
 | `runtime_state.py` | 插件级存储、会话状态、后台任务、生成配额与模型覆盖 |
 | `task_scheduler.py` | 后台任务登记、防抖刷盘与关闭收尾 |
-| `store_base.py` / `store_binding.py` | JSON store 公共协议；把全部 store 绑定到 `context.data_dir` |
+| `store_base.py` / `store_binding.py` | JSON store 公共协议。把全部 store 绑定到 `context.data_dir` |
 | `logging_utils.py` | `log_step` 结构化日志与脱敏 |
 | `constants.py` | 跨模块稳定边界常量 |
 
@@ -86,13 +88,13 @@ xiaoqing_chat
 | 模块 | 职责 |
 |---|---|
 | `gateway.py` | 到 Core AI capability 的薄适配：路由、固定模型、响应提取 |
-| `llm_config.py` | `LLMCallConfig`：超时、重试与采样参数；`bounded()` 收紧温度和输出预算，`as_kwargs()` 传给网关 |
+| `llm_config.py` | `LLMCallConfig`：超时、重试与采样参数。`bounded()` 收紧温度和输出预算，`as_kwargs()` 传给网关 |
 | `prompt_builder.py` | 按人物边界、对话历史和当前媒体构建回复提示 |
 | `postprocess.py` | 保留回复内容，按自然边界组织气泡 |
 | `communication_constraints.py` | 原话中的交流要求（停聊、句数、条目数、篇幅字数）与群内定义 |
-| `media_evidence.py` | 图片证据块：附件状态、缺图说明；`INBOUND_MEDIA_MARKER_RE`、`marker_visible_speech` |
+| `media_evidence.py` | 图片证据块：附件状态、缺图说明。`INBOUND_MEDIA_MARKER_RE`、`marker_visible_speech` |
 | `local_checks.py` | 本地规则：复读、近似照搬、连续发言、凭空经历、身份一致性、纯媒体回复，以及是否需要语义审查 |
-| `reply_checker.py` | 审查入口：本地规则 → 审查模型 → 证据契约解释 → 明确篇幅要求的本地字数核对（其他都通过后才看，不够按 soft 处理）；`TurnReadingCache` 缓存本轮独立阅读 |
+| `reply_checker.py` | 审查入口：本地规则 → 审查模型 → 证据契约解释 → 明确篇幅要求的本地字数核对（其他都通过后才看，不够按 soft 处理）。`TurnReadingCache` 缓存本轮独立阅读 |
 | `evidence.py` | 证据契约：审查模型列出的陈述必须能在原文找到出处，并保持主体与语气 |
 | `arithmetic.py` | 数值依据：份数、折扣、单位换算与两项加减 |
 | `check_result.py` | `ReplyCheckResult`、`ReplyRejected` 与标准拒绝结果 |
@@ -152,10 +154,10 @@ xiaoqing_chat
 | `loading.py` | 阻塞任务限流、有界读文件、来源识别、图片检测、动图拼帧 |
 | `markers.py` | `[图片：…]` / `[表情包：…]` 标记、描述质量判断与降级描述 |
 | `render_cache.py` | 按媒体哈希缓存摘要，带容量、过期与提示词版本校验 |
-| `models.py` / `settings.py` | 数据类型、支持范围；媒体配置读取与收件目录 |
+| `models.py` / `settings.py` | 数据类型、支持范围。媒体配置读取与收件目录 |
 | `emoji_library.py` | 按隐私范围隔离的表情库，派生元数据修复 |
 | `marker_resolver.py` | 解析出站媒体意图并绑定到已授权的真实素材 |
-| `qq_face.py` / `qq_face_catalog.py` | QQ 表情描述；内置目录与运行时观察的合并 |
+| `qq_face.py` / `qq_face_catalog.py` | QQ 表情描述。内置目录与运行时观察的合并 |
 
 ### 其他
 
@@ -172,11 +174,11 @@ xiaoqing_chat
 | 入口 | 调用方 | 职责 |
 |---|---|---|
 | `init(context)` | PluginManager | 开放后台任务、绑定 store、加载媒体注册表 |
-| `handle(command, args, event, context)` | Router | `/xc` 命令；非子命令的内容作为明确召唤交给 `handle_smalltalk` |
+| `handle(command, args, event, context)` | Router | `/xc` 命令。非子命令的内容作为明确召唤交给 `handle_smalltalk` |
 | `call_bot_name_only(context)` | Dispatcher | 只喊名字时的短应答，并登记 60 秒名字续问 |
 | `observe_message(clean_text, event, context)` | Dispatcher | 记录入站消息与原始消息段 |
 | `handle_smalltalk(clean_text, event, context)` | Dispatcher | 闲聊决策与回复链路 |
-| `observe_outgoing_action(action, context)` | Core service | 记录其他插件以角色身份发出的消息；本插件自己的回复已在回执提交时连同消息 ID 记下，这里跳过；带敏感标记的动作直接跳过 |
+| `observe_outgoing_action(action, context)` | Core service | 记录其他插件以角色身份发出的消息。本插件自己的回复已在回执提交时连同消息 ID 记下，这里跳过。带敏感标记的动作直接跳过 |
 | `shutdown(context)` | PluginManager | 停止接收任务、刷盘、取消并等待后台任务 |
 
 ---
@@ -235,7 +237,7 @@ turn_delivery.finalize_smalltalk_turn
   └─ 投递拒绝 / 异常 → 回滚待提交状态
 ```
 
-阶段之间只传递 `PreparedSmalltalkTurn`、`GeneratedSmalltalkTurn` 和 `ReplyPayload`，不共享松散字典。规划器选择 `wait` / `listening` 时本轮立即以不发言结束，不在 handler 里等待：Core 按“群 + 用户”串行处理事件，等待会推迟同一个人后续消息的处理，还会占住会话生成配额。被审查拒绝的普通参与轮次会写回 PFC 快照，让下一轮从新状态出发。
+阶段之间通过 `PreparedSmalltalkTurn`、`GeneratedSmalltalkTurn` 和 `ReplyPayload` 模型传递数据。规划器选择 `wait` / `listening` 时本轮立即以不发言结束，Core 按“群 + 用户”串行处理事件。handler 内等待会推迟同一个人后续消息的处理，并占住会话生成配额。被审查拒绝的普通参与轮次会写回 PFC 快照，让下一轮从新状态出发。
 
 ---
 
@@ -254,14 +256,14 @@ turn_delivery.finalize_smalltalk_turn
 普通参与由 `frequency_control.decide_reply` 决定，顺序固定：
 
 1. `_hard_limit_reason`：最小间隔（活跃话题与追问使用更短的间隔）、每分钟上限、连续冷却、低信息、点名他人。
-2. `_participation_probability`：基础概率；参与线索、活跃话题、活跃话题追问分别抬到各自上限，取最大值。
+2. `_participation_probability`：基础概率。参与线索、活跃话题、活跃话题追问分别抬到各自上限，取最大值。
 3. Heartflow：`score - base_score` 的正值部分按 `probability + (1 - probability) × Δ` 抬高。
 4. `_streak_adjusted`：连续沉默 3 轮 ×1.2（≤ 0.90），5 轮 ×1.4（≤ 0.95）。
 5. 掷骰，结果与概率、掷值、沉默轮数一起写入 `ReplyGateDecision`，`smalltalk.no_reply` 日志直接输出这些字段。
 
 Core 提取正文时只保留文本段。`handlers._label_other_mentions` 把 `@` 其他成员的段落按原位置还原为 `@名字` 再进入有效文本、媒体合成和历史，硬限制、参与线索、规划器和回复提示都依据这份文本判断这句话在叫谁。
 
-私聊深度对话模式跳过第 2～4 步。通过后，规划开启时进入 PFC，关闭时直接起草；参与线索只影响概率，不改变路径。
+私聊深度对话模式跳过第 2～4 步。通过后，规划开启时进入 PFC，关闭时直接起草。参与线索只影响概率，不改变路径。
 
 ---
 
@@ -272,7 +274,7 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 | 动作 | 结果 |
 |---|---|
 | `direct_reply` / `send_new_message` | 回调 `_TurnGenerator.planner_reply` 按动作模式起草 |
-| `wait` / `listening` | 不发言，本轮立即结束；`wait_seconds` 只写入日志 |
+| `wait` / `listening` | 不发言，本轮立即结束。`wait_seconds` 只写入日志 |
 | `rethink_goal` | `pfc_goal_analyzer` 更新目标 |
 | `fetch_knowledge` | 检索知识库后再规划 |
 | `end_conversation` | 结束话题，状态置为 ended |
@@ -283,9 +285,9 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 起草由 `reply_plan.py` 与 `reply_generator.py` 完成：
 
 1. `ReplyGenerationPlan` 一次性收集：近期历史、记忆与人物资料（`context_builder`）、表达与黑话、知识、关键词反应规则、规划目标、人设边界和前台调用参数。每次重试复用同一份计划。
-2. `llm/prompt_builder.py` 生成消息列表；`llm/gateway.py` 通过当前插件的 AI capability 调用 `chat` 路由，会话或全局模型覆盖通过 `pinned_model` 生效。
-3. `llm/postprocess.py` 清理并分段；`media/marker_resolver.py` 解析 `[想发…]` 标记。
-4. `llm/reply_checker.py` 审查；被拒后由 `reply_fallbacks.py` 选择下一步。
+2. `llm/prompt_builder.py` 生成消息列表。`llm/gateway.py` 通过当前插件的 AI capability 调用 `chat` 路由，会话或全局模型覆盖通过 `pinned_model` 生效。
+3. `llm/postprocess.py` 清理并分段。`media/marker_resolver.py` 解析 `[想发…]` 标记。
+4. `llm/reply_checker.py` 审查。被拒后由 `reply_fallbacks.py` 选择下一步。
 5. 上游返回 `request_too_large` 时把历史减半并作废已取的记忆，再试一次。
 
 后台任务统一使用 `llm_call_config(cfg, foreground=False)` 生成的 `LLMCallConfig`，单个任务用 `bounded(max_temperature, max_tokens, min_tokens)` 收紧采样与输出预算。凭据、HTTP、超时、重试和 profile 回退都在 Core AI capability 内完成。
@@ -296,7 +298,7 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 
 ### 本地规则（`llm/local_checks.py`）
 
-`heuristic_check` 依次检查：空回复；与最近 `max_repeat_compare` 条角色消息完全相同或相似度 ≥ `similarity_threshold`；原样复述自己刚说过的整句（≥ 8 字）；去掉 `[…]` 标记和标点后与最近 6 条角色消息的相似度 ≥ 0.75（`_near_copy_of_recent`，至少 12 字）；连续 `max_assistant_in_row` 条角色发言。只发一个媒体时跳过复读比较。
+`heuristic_check` 依次检查：空回复。与最近 `max_repeat_compare` 条角色消息完全相同或相似度 ≥ `similarity_threshold`。原样复述自己刚说过的整句（≥ 8 字）。去掉 `[…]` 标记和标点后与最近 6 条角色消息的相似度 ≥ 0.75（`_near_copy_of_recent`，至少 12 字）。连续 `max_assistant_in_row` 条角色发言。只发一个媒体时跳过复读比较。
 
 其他规则：`grounded_self_history_check`（角色自称的经历、关系、近况需要依据）、`grounded_context_history_check`（群友经历需要依据）、`persona_identity_consistency_check`（性别等身份表述与人设一致）、`media_meta_reply_check`（只发媒体却在答需要文字的问题）。`requires_llm_semantic_check` 决定 `risk` 模式下是否需要语义审查。
 
@@ -310,29 +312,29 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 | 说话人 | `speaker_correct` |
 | 交流要求 | `instruction_followed` |
 | 事实 | `factually_plausible` |
-| 人设 | `persona_grounded`、`persona_claims`：按人设坚持真人身份、用玩笑带过属于符合人设；承认是 AI / 模型 / 程序，或提到提示词、系统设定、指令时为 false |
+| 人设 | `persona_grounded`、`persona_claims`：按人设坚持真人身份、用玩笑带过属于符合人设。承认是 AI / 模型 / 程序，或提到提示词、系统设定、指令时为 false |
 | 图片证据 | `image_evidence_respected`、`visual_claims` |
 | 模板化 | `non_template` |
 
-`llm/evidence.py` 按原文核对每条陈述的出处、主体与语气；`llm/arithmetic.py` 核对数值推导。`enable_semantic_checker` 开启时，另有一次只接收原话的独立阅读，再与候选比较立场、主体、时间和完成状态。两路候选审查并行执行，共用 `reply_check.timeout_seconds`；独立阅读的超时复用与任务回收由 `TurnReadingCache` 管理。任一路确认的硬错误都会生效，`json_object` 外层封装的结论同样解析。
+`llm/evidence.py` 按原文核对每条陈述的出处、主体与语气。`llm/arithmetic.py` 核对数值推导。`enable_semantic_checker` 开启时，另有一次只接收原话的独立阅读，再与候选比较立场、主体、时间和完成状态。两路候选审查并行执行，共用 `reply_check.timeout_seconds`。独立阅读的超时复用与任务回收由 `TurnReadingCache` 管理。任一路确认的硬错误都会生效，`json_object` 外层封装的结论同样解析。
 
-独立阅读的材料只有对话原文、当前消息、发言者、本群用语和角色名，与候选无关。`TurnReadingCache` 按这组材料缓存一份阅读：`always` 模式下 `reply_generator` 在请求候选前发起预读，语义审查等待这份结果后只做候选比较；重写时材料不变即复用，上下文缩减或材料变化时重新阅读。审查超时只取消本次等待，进行中的阅读留给下一次尝试；阅读失败或无效时本次审查记为不可用，并清空缓存，下次重新阅读。生成结束时取消并回收未用完的阅读。`risk` 模式不预读，只在需要远程审查时阅读，重写时同样复用。
+独立阅读使用对话原文、当前消息、发言者、本群用语和角色名。候选内容独立于这些材料。`TurnReadingCache` 按材料缓存一份阅读。`always` 模式下，`reply_generator` 在请求候选前启动预读。语义审查等待阅读结果，再比较候选。重写时材料相同则复用。上下文缩减或材料变化时重新阅读。审查超时取消本次等待，进行中的阅读留给下一次尝试。阅读失败或无效时，当前审查记为不可用并清空缓存。下一次尝试重新阅读。生成结束时取消并回收剩余阅读任务。`risk` 模式在需要远程审查时启动阅读，重写时复用。
 
-图像证据由 `llm/media_evidence.py` 统一提供给生成与审查，区分“附件存在”和“画面已读出”。缺图时的说明要求像群友一样随口说图没加载出来，不使用画面、读取、解析这类说法；附和用户对未知画面的评价也算确认画面。
+图像证据由 `llm/media_evidence.py` 统一提供给生成与审查，区分“附件存在”和“画面已读出”。缺图时的说明要求像群友一样随口说图没加载出来，不使用画面、读取、解析这类说法。附和用户对未知画面的评价也算确认画面。
 
 ### 不可用策略
 
 审查模型不可用时结果为 `severity="infra"`、`failure_code="checker_unavailable"`：
 
 - `always`：不发送未审查的候选。明确召唤回复 `NOT_READY_FALLBACK`，普通参与安静。
-- `risk`：放行通过本地规则的候选；未开启低风险人设发挥且问题涉及人设时，按 `persona_grounding` 拒绝。
+- `risk`：放行通过本地规则的候选。未开启低风险人设发挥且问题涉及人设时，按 `persona_grounding` 拒绝。
 
 ### 重写与兜底（`reply_fallbacks.py`）
 
 | 情况 | 处理 |
 |---|---|
 | 还有重写次数 | 按 `failure_code` 生成定向修正提示（soft 只调语气措辞，hard 只承接可见依据） |
-| 普通参与，耗尽 | `persona_grounding` / `context_grounding` / `instruction_following` 安静；其他需要重规划的问题抛出 `ReplyRejected` 交给 PFC；不需要重规划时安静 |
+| 普通参与，耗尽 | `persona_grounding` / `context_grounding` / `instruction_following` 安静。其他需要重规划的问题抛出 `ReplyRejected` 交给 PFC。不需要重规划时安静 |
 | 明确召唤，耗尽，只剩 soft 且本地规则通过 | 接受该候选（`reply.check.exhausted.accept`） |
 | 明确召唤，耗尽，仍有 hard | 按原因选择兜底句（`reply.check.exhausted.forced_fallback`），跳过与最近发言重复的句子，最后退到 `PRESENCE_FALLBACK` |
 
@@ -344,13 +346,13 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 
 ### 入站
 
-`media/event_media.py` 验证来源，按原始顺序重建 `text`、`at`、`reply`、`face`、`mface`、`image`。`media/sources.py` 取字节：事件 URL、data URL / base64、授权本地路径，失效时通过 `onebot_media` capability 调用 `get_msg` / `get_image`（多附件按文件标识匹配）。`media/loading.py` 有界读取和解码，`media/event_media_analysis.py` 调用 `vision` 路由；梗图额外请求一次梗背景提示。摘要按媒体哈希写入 `media/render_cache.py`，提示词版本变化时失效重算。
+`media/event_media.py` 验证来源，按原始顺序重建 `text`、`at`、`reply`、`face`、`mface`、`image`。`media/sources.py` 取字节：事件 URL、data URL / base64、授权本地路径，失效时通过 `onebot_media` capability 调用 `get_msg` / `get_image`（多附件按文件标识匹配）。`media/loading.py` 有界读取和解码，`media/event_media_analysis.py` 调用 `vision` 路由。梗图额外请求一次梗背景提示。摘要按媒体哈希写入 `media/render_cache.py`，提示词版本变化时失效重算。
 
-所有媒体受字节数、像素、动图帧数、超时、重试和收件区配额约束。表情包进入按隐私范围隔离的 `emoji_library`，相似图按感知哈希合并；`media_registry` 为历史保留稳定引用，历史图片在窗口截短后仍以摘要形式提供给后续追问。
+所有媒体受字节数、像素、动图帧数、超时、重试和收件区配额约束。表情包进入按隐私范围隔离的 `emoji_library`，相似图按感知哈希合并。`media_registry` 为历史保留稳定引用，历史图片在窗口截短后仍以摘要形式提供给后续追问。
 
 ### 出站
 
-`media/marker_resolver.py` 解析 `[想发表情:…]`、`[想发QQ表情:…]`、`[想发图片:…]`，从表情库、图片库、历史媒体和 QQ 表情目录中选择已授权素材；没有匹配时移除标记。`reply_payload.py` 编排有序批次，`reply_media.py` 在投递确认后记录素材使用。
+`media/marker_resolver.py` 解析 `[想发表情:…]`、`[想发QQ表情:…]`、`[想发图片:…]`，从表情库、图片库、历史媒体和 QQ 表情目录中选择已授权素材。没有匹配时移除标记。`reply_payload.py` 编排有序批次，`reply_media.py` 在投递确认后记录素材使用。
 
 ---
 
@@ -366,22 +368,22 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 
 ### 持久化
 
-所有 store 继承 `store_base.py`，由 `store_binding.py` 绑定到 `context.data_dir`，通过 Core 原子存储发布并保留 `.bak`。读取时校验对象根、整数、有限浮点、布尔和集合元素；主文件损坏时恢复有效备份，主备都不可用时隔离损坏文件。`io_persist_debounce_seconds` 和 `memory_db_save_debounce_seconds` 控制防抖。
+所有 store 继承 `store_base.py`，由 `store_binding.py` 绑定到 `context.data_dir`，通过 Core 原子存储发布并保留 `.bak`。读取时校验对象根、整数、有限浮点、布尔和集合元素。主文件损坏时恢复有效备份，主备都不可用时隔离损坏文件。`io_persist_debounce_seconds` 和 `memory_db_save_debounce_seconds` 控制防抖。
 
 | 规则 | 实现 |
 |---|---|
 | 消息编号 | 首次分配时读取已有历史的最大 `mN`，覆盖重启、闲置重置和缓存淘汰后的续写 |
-| QQ 消息 ID | 角色发言在投递回执提交时连同全部消息 ID 写入（`message_id` 为第一条，`extra_message_ids` 为拆分后的其余各条），不事后回填；引用判断检查记录的全部 ID |
-| 会话锁 | 锁缓存 + 弱引用注册表；缓存淘汰后持有者与等待者仍共享原锁 |
-| 重置代际 | 人物资料目录的 `.generation` 标记；重置在共享路径锁内更新标记、清理 JSON 与备份、删除向量记录；后台任务在远程调用前记录代际，提交时核对 |
+| QQ 消息 ID | 角色发言在投递回执提交时连同全部消息 ID 写入（`message_id` 为第一条，`extra_message_ids` 为拆分后的其余各条），不事后回填。引用判断检查记录的全部 ID |
+| 会话锁 | 锁缓存 + 弱引用注册表。缓存淘汰后持有者与等待者仍共享原锁 |
+| 重置代际 | 人物资料目录的 `.generation` 标记。重置在共享路径锁内更新标记、清理 JSON 与备份、删除向量记录。后台任务在远程调用前记录代际，提交时核对 |
 | 表达与黑话 | 加载结果携带基线，保存时以基线向最新磁盘状态合并增量 |
-| 表情库 | 收集和使用计数在索引路径锁内提交；耗时修复在锁外分析，按旧快照校验后提交差量 |
+| 表情库 | 收集和使用计数在索引路径锁内提交。耗时修复在锁外分析，按旧快照校验后提交差量 |
 | 隔离记忆 | 面向聊天的记忆查询统一排除 `quarantined_` 类型 |
 | 连续会话边界 | 到达 `conversation_idle_gap_seconds` 时保留原始历史，目标、PFC、行动历史、近期回想和话题摘要切换到新片段 |
 
 ### 关闭
 
-`shutdown()` 先停止接收新任务并刷盘，再取消后台任务并等待至多 2 秒。全部结束后执行最终刷盘；仍有任务存活时抛出 `TimeoutError`，由 Core 生命周期记录关闭失败。Core 的关闭预算由所有插件共享。
+`shutdown()` 先停止接收新任务并刷盘，再取消后台任务并等待至多 2 秒。全部结束后执行最终刷盘。仍有任务存活时抛出 `TimeoutError`，由 Core 生命周期记录关闭失败。Core 的关闭预算由所有插件共享。
 
 ---
 
@@ -390,14 +392,14 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 | 来源 | 内容 |
 |---|---|
 | `config/config.json` → `bot_name` | 角色名字 |
-| `config/config.json` → `plugins.xiaoqing_chat` | AI route、模型别名；也可写行为字段 |
+| `config/config.json` → `plugins.xiaoqing_chat` | AI route、模型别名。也可写行为字段 |
 | `plugins/xiaoqing_chat/config/xiaoqing_config.json` | 行为、频控、规划、记忆、媒体、人设开关、调试（与上一项合并，文件优先） |
 | `plugins/xiaoqing_chat/config/persona.md`（或 `personality.persona_file`） | 人设卡：人物事实、说话方式、回复示例、心境 |
 | `config/secrets.json` | Provider API Key |
 
-`chat_runtime.py` 读取 Core 原子快照并维护文件热加载缓存（配置文件或人设卡任一改动都会重新加载）；`config/config.py` 校验字段范围与交叉约束（如单会话、单用户并发不超过全局并发，规划超时不超过 `timeout_seconds`）。每轮只使用自己的快照。
+`chat_runtime.py` 读取 Core 原子快照并维护文件热加载缓存（配置文件或人设卡任一改动都会重新加载）。`config/config.py` 校验字段范围与交叉约束（如单会话、单用户并发不超过全局并发，规划超时不超过 `timeout_seconds`）。每轮只使用自己的快照。
 
-人设卡在加载配置时读入 `PersonalityConfig.card`。不带标记的人物事实交给规划、表达学习和审查（作为受控人物资料）；生成时人物事实放在系统提示开头，〔聊天〕各节（说话方式、示例）放在系统提示末尾、离对话最近；agent 交接时只交人物事实和〔办事〕各节。`persona.py` 把快照中的 `bot_name` 填进人设卡的 `{{name}}`；人设卡不写名字。历史中的角色消息按 `assistant` 角色存储，渲染时使用当前名字。
+人设卡在加载配置时读入 `PersonalityConfig.card`。不带标记的人物事实交给规划、表达学习和审查（作为受控人物资料）。生成时人物事实放在系统提示开头，〔聊天〕各节（说话方式、示例）放在系统提示末尾、离对话最近。agent 交接时只交人物事实和〔办事〕各节。`persona.py` 把快照中的 `bot_name` 填进人设卡的 `{{name}}`。人设卡不写名字。历史中的角色消息按 `assistant` 角色存储，渲染时使用当前名字。
 
 ---
 
@@ -437,4 +439,4 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 | 表达与黑话 | `expression/` |
 | 持久化 | `store_base.py` |
 
-新增领域入口配套单元测试；跨层流程配套 `handle_smalltalk()` 级测试或真实模型评测剧本；持久化变更配套损坏输入、并发和重启测试。见 [xiaoqing_chat测试.md](xiaoqing_chat%E6%B5%8B%E8%AF%95.md)。
+新增领域入口配套单元测试。跨层流程配套 `handle_smalltalk()` 级测试或真实模型评测剧本。持久化变更配套损坏输入、并发和重启测试。见 [xiaoqing_chat测试.md](xiaoqing_chat%E6%B5%8B%E8%AF%95.md)。

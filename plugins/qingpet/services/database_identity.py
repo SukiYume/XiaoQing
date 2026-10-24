@@ -370,56 +370,7 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
                 conn.rollback()
                 return False
             merged = user.merged_onto(self._row_to_user(row))
-            cursor = conn.execute(
-                """
-                UPDATE users SET
-                    coins = ?, friendship_points = ?,
-                    today_coins_earned = ?, today_feed_count = ?, today_clean_count = ?,
-                    today_play_count = ?, today_train_count = ?, today_explore_count = ?,
-                    today_visit_count = ?, today_gift_count = ?, today_free_feed_count = ?, today_message_count = ?,
-                    total_feed_count = ?, total_clean_count = ?, total_play_count = ?,
-                    total_train_count = ?, total_explore_count = ?, total_visit_count = ?,
-                    total_gift_count = ?, total_free_feed_count = ?, total_message_count = ?, titles = ?,
-                    last_visit_time = ?, last_gift_time = ?,
-                    trustee_until = ?, is_banned = ?, ban_until = ?, last_active = ?,
-                    version = version + 1
-                WHERE user_id = ? AND group_id = ? AND version = ?
-            """,
-                (
-                    merged.coins,
-                    merged.friendship_points,
-                    merged.today_coins_earned,
-                    merged.today_feed_count,
-                    merged.today_clean_count,
-                    merged.today_play_count,
-                    merged.today_train_count,
-                    merged.today_explore_count,
-                    merged.today_visit_count,
-                    merged.today_gift_count,
-                    merged.today_free_feed_count,
-                    merged.today_message_count,
-                    merged.total_feed_count,
-                    merged.total_clean_count,
-                    merged.total_play_count,
-                    merged.total_train_count,
-                    merged.total_explore_count,
-                    merged.total_visit_count,
-                    merged.total_gift_count,
-                    merged.total_free_feed_count,
-                    merged.total_message_count,
-                    json.dumps(merged.titles),
-                    merged.last_visit_time.isoformat() if merged.last_visit_time else None,
-                    merged.last_gift_time.isoformat() if merged.last_gift_time else None,
-                    merged.trustee_until.isoformat() if merged.trustee_until else None,
-                    int(merged.is_banned),
-                    merged.ban_until.isoformat() if merged.ban_until else None,
-                    merged.last_active.isoformat(),
-                    merged.user_id,
-                    merged.group_id,
-                    merged.version,
-                ),
-            )
-            if cursor.rowcount != 1:
+            if not self._write_user_in_transaction(conn, merged):
                 conn.rollback()
                 return False
             stored_coins = int(
@@ -438,7 +389,6 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
             )
             conn.commit()
             merged.coins = stored_coins
-            merged.version += 1
             user.__dict__.update(merged.__dict__)
             user.mark_persisted()
             return True

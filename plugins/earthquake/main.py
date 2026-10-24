@@ -359,7 +359,6 @@ def _save_since(context: _EarthquakeContext, since_id: str | int) -> None:
 
     normalized = _validate_since_payload({"since_id": since_id})
     path       = _since_path(context)
-    path.parent.mkdir(parents=True, exist_ok=True)
     write_json(path, {"since_id": normalized})
     write_json(_checkpoint_path(context), {"since_id": normalized})
 

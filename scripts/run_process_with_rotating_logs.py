@@ -321,14 +321,7 @@ def _join_pump_threads(
     if not alive:
         return
 
-    try:
-        _, cleanup_error = _terminate_process_tree(process)
-        if cleanup_error is not None:
-            errors.append(cleanup_error)
-    # 清理阶段必须聚合所有资源错误，继续关闭管道并尝试回收泵线程。
-    except Exception as exc:  # noqa: BLE001
-        errors.append(exc)
-    _close_process_pipes(process, errors)
+    _stop_process_and_close_pipes(process, errors)
     for thread in alive:
         thread.join(1.0)
     still_alive = [thread.name for thread in alive if thread.is_alive()]
@@ -348,11 +341,12 @@ def _close_process_pipes(
                 errors.append(exc)
 
 
-def _cleanup_owned_process(
+def _stop_process_and_close_pipes(
     process: subprocess.Popen[bytes],
-    threads: Sequence[threading.Thread],
     errors: list[Exception],
 ) -> None:
+    """聚合进程树终止错误，并继续关闭两条输出管道。"""
+
     try:
         _, cleanup_error = _terminate_process_tree(process)
         if cleanup_error is not None:
@@ -360,6 +354,14 @@ def _cleanup_owned_process(
     except Exception as exc:  # noqa: BLE001
         errors.append(exc)
     _close_process_pipes(process, errors)
+
+
+def _cleanup_owned_process(
+    process: subprocess.Popen[bytes],
+    threads: Sequence[threading.Thread],
+    errors: list[Exception],
+) -> None:
+    _stop_process_and_close_pipes(process, errors)
     _join_pump_threads(threads, process, errors)
 
 

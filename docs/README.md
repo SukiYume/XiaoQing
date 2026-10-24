@@ -1,6 +1,9 @@
 # 📚 XiaoQingBot 文档目录
 
-本目录是 XiaoQingBot 的项目手册。文档按“认识项目 → 启动服务 → 理解架构 → 开发插件 → 查询接口与配置 → 深入运行机制 → 使用插件”的顺序组织。
+中文 | [English](README.en.md)
+
+本目录保存 XiaoQingBot 项目手册。
+文档按“认识项目 → 启动服务 → 理解架构 → 开发插件 → 查询接口与配置 → 深入运行机制 → 使用插件”的顺序组织。
 
 ---
 
@@ -56,7 +59,8 @@
 | `xiaoqing_agent` | [README](../plugins/xiaoqing_agent/README.md) | README 内含模块结构、运行边界与数据说明 |
 | `pendo` | [README](../plugins/pendo/README.md) | [ARCHITECTURE](../plugins/pendo/ARCHITECTURE.md) |
 
-其他插件均在各自目录提供 `README.md`；[插件目录](09-plugins.md) 提供统一入口。
+其他插件均在各自目录提供 `README.md`。
+[插件目录](09-plugins.md) 提供统一入口。
 
 ---
 
@@ -66,7 +70,7 @@
 - `docs/00-09` 分别维护一个明确主题。
 - 插件 README 面向插件用户和部署者。
 - 插件 ARCHITECTURE 面向插件维护者。
-- 命令 Manifest 是运行时帮助、权限、场景和样例的权威来源；权限只在这里声明，由 Core 统一判断。
+- 命令 Manifest 定义运行时帮助、权限、场景和样例。维护者在 Manifest 中声明权限。Core 统一检查权限。
 - 所有 README 只描述当前能力、使用方法和运行契约；版本变化、一次性迁移与发布验证统一写入 Changelog。
 - Changelog 记录版本变化与验证结果。
 

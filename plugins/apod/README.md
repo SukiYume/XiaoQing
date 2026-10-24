@@ -1,5 +1,7 @@
 # 🌌 APOD 每日天文图
 
+[English](README.en.md)
+
 APOD 插件抓取 NASA Astronomy Picture of the Day 当前页面，返回图片或视频链接、标题、说明、日期、署名和原页面链接。
 
 ---
@@ -60,7 +62,11 @@ APOD 插件抓取 NASA Astronomy Picture of the Day 当前页面，返回图片�
 
 ## 🔐 数据与网络边界
 
-缓存位于 `data/apod/images/`。页面与媒体请求使用 HTTPS，重定向会重新校验 DNS 与 `allowed_hosts`。上述三个 NASA 内置主机可使用 Clash 透明代理的保留 fake-IP 地址，请求使用安全校验阶段确定的解析地址并验证 TLS 主机名；全局安全层拒绝其余非公网地址。管理员增加的主机使用公网 DNS 校验。HTML、图片字节、MIME、尺寸和像素均使用有界校验，缓存名根据最终 URL 的 SHA-256 生成。
+缓存位于 `data/apod/images/`。页面与媒体请求使用 HTTPS。每次重定向都会重新校验 DNS 与 `allowed_hosts`。
+
+上述三个 NASA 内置主机可使用 Clash 透明代理的保留 fake-IP 地址。请求使用安全校验阶段确定的解析地址，并验证 TLS 主机名。全局安全层拒绝其余非公网地址。管理员增加的主机需要通过公网 DNS 校验。
+
+HTML、图片字节、MIME、尺寸和像素均有校验限制。缓存名使用最终 URL 的 SHA-256 摘要。
 
 ---
 

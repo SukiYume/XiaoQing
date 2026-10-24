@@ -1,5 +1,7 @@
 # 📱 Pendo Scriptable 小组件
 
+中文 | [English](pendo-scriptable-widget.en.md)
+
 Pendo 提供 iPhone Scriptable 只读摘要，将近期日程、待办、财务或笔记显示在主屏。
 
 ---
@@ -10,24 +12,27 @@ Pendo 提供 iPhone Scriptable 只读摘要，将近期日程、待办、财务�
 |---|---|
 | 摘要接口 | `GET /api/widget/summary` |
 | 日历对账接口 | `GET /api/widget/calendar?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD` |
-| 模块参数 | `section=tasks|ledger|notes|all|auto` |
+| 模块参数 | `section=tasks\|ledger\|notes\|all\|auto` |
 | 鉴权 | `Authorization: Bearer <widget_token>` |
 | 权限范围 | `GET /api/widget/*` |
 | 默认期限 | 365 天 |
 
-`tasks`、`ledger` 与 `notes` 返回日程和一个指定面板，`all` 返回日程及三个面板。`auto` 按小时在 `tasks → ledger → notes` 之间轮换。Widget Token 是只读 Bearer 凭据，与浏览器 Cookie 会话使用独立权限范围。
+`tasks`、`ledger` 与 `notes` 返回日程和一个指定面板，`all` 返回日程及三个面板。
+`auto` 按小时在 `tasks → ledger → notes` 之间轮换。
+Widget Token 是只读 Bearer 凭据，与浏览器 Cookie 会话使用独立权限范围。
 
 ---
 
 ## 📌 生成与吊销 Token
 
-在管理员私聊中执行：
+在 QQ 私聊中执行：
 
 ```text
 /pendo web widget-token
 ```
 
-默认期限由 `WEB_WIDGET_TOKEN_EXPIRE_SECONDS` 定义。每次签发生成独立 `jti`，服务端在 `pendo.db` 中保存摘要、用户、签发时间和绝对到期时间。
+默认期限由 `WEB_WIDGET_TOKEN_EXPIRE_SECONDS` 定义。
+每次签发生成独立 `jti`，服务端在 `pendo.db` 中保存摘要、用户、签发时间和绝对到期时间。
 
 吊销当前用户的 Widget Token：
 
@@ -59,13 +64,16 @@ const TOKEN = 'PASTE_WIDGET_TOKEN_HERE';
 - 本机：`http://127.0.0.1:12001`
 - 反向代理子路径：`https://example.com/pendo`
 
-`TOKEN` 填写 `/pendo web widget-token` 返回的完整值。接口返回 401 时，在 QQ 私聊生成新 Token，并替换脚本顶部的 `TOKEN`。
+`TOKEN` 填写 `/pendo web widget-token` 返回的完整值。
+接口返回 401 时，在 QQ 私聊生成新 Token，并替换脚本顶部的 `TOKEN`。
 
 ---
 
 ## 📌 摘要布局
 
-日程范围为未来 30 天，最多返回 5 条；待办、财务和笔记面板各自最多返回 5 条。三种组件尺寸使用以下固定数据与布局契约：
+日程范围为未来 30 天，最多返回 5 条。
+待办、财务和笔记面板各自最多返回 5 条。
+三种组件尺寸使用以下固定数据与布局契约：
 
 | 尺寸 | 请求参数 | 展示内容 |
 |---|---|---|
@@ -73,9 +81,14 @@ const TOKEN = 'PASTE_WIDGET_TOKEN_HERE';
 | `medium` | 读取组件参数 `tasks`、`ledger`、`notes` 或 `auto` | 左侧日程，右侧一个面板 |
 | `large` | 固定请求 `section=all` | 日程、待办、财务、笔记四个区域 |
 
-`small` 与 `large` 使用固定 section；组件参数只控制 `medium`。非法或空的 medium 参数回退为 `auto`。三种尺寸共享标题、时间、正文和状态字号层级。
+`small` 与 `large` 使用固定 section。
+组件参数只控制 `medium`。
+非法或空的 medium 参数回退为 `auto`。
+三种尺寸共享标题、时间、正文和状态字号层级。
 
-财务摘要按币种分别返回和展示收入、支出及余额，金额保留对应币种标识。当前接口提供原币汇总；汇率换算需要额外的数据来源与规则。
+财务摘要按币种分别返回和展示收入、支出及余额，金额保留对应币种标识。
+当前接口提供原币汇总。
+汇率换算需要额外的数据来源与规则。
 
 ---
 
@@ -102,9 +115,14 @@ const TOKEN = 'PASTE_WIDGET_TOKEN_HERE';
 const SYNC_CALENDAR_NAME = 'Pendo';
 ```
 
-在系统日历 App 中创建同名且可写的日历，并允许 Scriptable 访问日历。将 `SYNC_CALENDAR_NAME` 设为空字符串可关闭同步。
+在系统日历 App 中创建同名且可写的日历，并允许 Scriptable 访问日历。
+将 `SYNC_CALENDAR_NAME` 设为空字符串可关闭同步。
 
-同步仅在 Scriptable App 内直接运行脚本时执行，主屏组件刷新只读取最多 5 条的摘要。直接运行会通过日历接口取得完整窗口。带 `Pendo-ID` 标记的事件按条目 ID 识别；带同步标记但尚无 ID 的旧事件可按“标题 + 开始时间”认领一次。无同步标记的用户事件不会被修改或删除。
+同步仅在 Scriptable App 内直接运行脚本时执行，主屏组件刷新只读取最多 5 条的摘要。
+直接运行会通过日历接口取得完整窗口。
+带 `Pendo-ID` 标记的事件按条目 ID 识别。
+带同步标记但尚无 ID 的旧事件可按“标题 + 开始时间”认领一次。
+无同步标记的用户事件保持原有内容和存在状态。
 
 同步窗口由 Keychain 中的成功日游标控制：
 
@@ -116,7 +134,9 @@ const SYNC_CALENDAR_NAME = 'Pendo';
 
 日历写入采用按 Pendo-ID 对账策略：
 
-有时刻的日程通过带 UTC 偏移的 ISO 时间表示真实时刻，设备按该时刻写入日历。服务端使用日程时间轴生成偏移，覆盖用户与设备时区不同以及夏令时回拨的重复墙钟时间。全天日程保留纯日期语义。
+有时刻的日程通过带 UTC 偏移的 ISO 时间表示真实时刻，设备按该时刻写入日历。
+服务端使用日程时间轴生成偏移，覆盖用户与设备时区不同以及夏令时回拨的重复墙钟时间。
+全天日程保留纯日期语义。
 
 - 有明确时间的日程默认持续 1 小时；有效结束时间优先使用接口值。
 - 仅含日期的日程写为持续 1 天的全天事件。
@@ -125,7 +145,8 @@ const SYNC_CALENDAR_NAME = 'Pendo';
 - 本次完整窗口内，服务端已删除或已移出窗口的托管事件会被删除，同一 `Pendo-ID` 的重复副本也会清理。
 - 只有同时带同步标记和 `Pendo-ID` 的事件参与自动删除；无标记事件、无 ID 旧事件和窗口外事件保持原状。
 
-直接运行结束后，Scriptable 通过通知和控制台输出新增、更新、删除、未变化与跳过数量。目标日历缺失时，通知提示需要创建的日历名称。
+直接运行结束后，Scriptable 通过通知和控制台输出新增、更新、删除、未变化与跳过数量。
+目标日历缺失时，通知提示需要创建的日历名称。
 
 ---
 

@@ -506,8 +506,8 @@ class PluginManager(
                     raise PluginPathError(
                         f"cannot release an active plugin source finder: {plugin_name}"
                     )
-            # Replace the inactive generation finder before dropping ownership;
-            # there is never a list position where PathFinder can rediscover
+            # Replace the inactive generation finder before dropping ownership.
+            # There is never a list position where PathFinder can rediscover
             # source from ``plugins.__path__``.
             _install_namespace_tombstone_locked(replace=finder)
             self._source_finders.pop(plugin_name, None)
@@ -671,7 +671,7 @@ class PluginManager(
         ``exec_module`` finishes before importlib performs its final cache and
         parent-attribute updates.  Waiting for each module lock, without holding
         our own import lock, closes that tail window.  The daemon worker gives
-        hostile module hooks a bounded opportunity to finish; a timeout leaves
+        hostile module hooks a bounded opportunity to finish. A timeout leaves
         the finder tombstone and namespace claim intact for quarantine.
         """
 

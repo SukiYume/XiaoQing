@@ -203,7 +203,7 @@ export function zonedInstantEpoch(value, timeZone = '') {
     }
 }
 
-/** 把 ISO 时刻显示为指定 IANA 时区的 datetime-local 值；旧朴素值保持原墙钟。 */
+/** 把 ISO 时刻显示为指定 IANA 时区的 datetime-local 值。旧朴素值保持原墙钟。 */
 export function zonedDateTimeToInput(value, timeZone = '') {
     const text = String(value ?? '').trim();
     if (!text) return '';

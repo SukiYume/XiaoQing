@@ -5,7 +5,7 @@ const EXIT_DURATION_MS    = 250;
 /**
  * 显示一条全局提示。
  *
- * 消息使用原生文本节点渲染，避免把接口错误或用户输入解释为 HTML；提示类型也只允许
+ * 消息使用原生文本节点渲染，避免把接口错误或用户输入解释为 HTML。提示类型也只允许
  * 使用已有样式，未知值统一回退为普通信息提示。
  */
 export function showToast(message, type = 'info') {

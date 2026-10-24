@@ -9,9 +9,3 @@ def replace_js_source(source: str, original: str, replacement: str) -> str:
     updated, count = re.subn(pattern, lambda _match: replacement, source)
     assert count == 1, f"Expected one JavaScript source match, found {count}: {original}"
     return updated
-
-
-def has_js_source(source: str, fragment: str) -> bool:
-    """只忽略格式空白，继续校验声明、常量和表达式本身。"""
-    pattern = r"\s+".join(re.escape(part) for part in fragment.split())
-    return re.search(pattern, source) is not None

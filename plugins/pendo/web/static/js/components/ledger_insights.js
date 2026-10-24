@@ -49,7 +49,7 @@ function pickEvenAxisIndexes(length, maxLabels) {
         return Array.from({ length: safeLength }, (_, index) => index);
     }
 
-    // 按整段比例取样，始终保留首尾标签；旧的向上取整步长会漏掉末尾。
+    // 按整段比例取样，始终保留首尾标签。旧的向上取整步长会漏掉末尾。
     return Array.from({ length: labelCount }, (_, index) => Math.round((index * (safeLength - 1)) / (labelCount - 1)));
 }
 
@@ -309,7 +309,7 @@ function buildCandleSvg(candles, rangeKeys, currency) {
     const minValue    = Math.min(...candles.map((item) => item.low), 0);
     const spread      = Math.max(maxValue - minValue, 1);
 
-    // 时间线包含零支出日期；追加意外缺失的蜡烛键，避免坐标落到视图之外。
+    // 时间线包含零支出日期。追加意外缺失的蜡烛键，避免坐标落到视图之外。
     const domainKeys = [
         ...new Set([
             ...asArray(rangeKeys)

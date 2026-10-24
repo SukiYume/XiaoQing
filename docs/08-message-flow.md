@@ -1,6 +1,8 @@
 # 🔄 08 - 消息处理流程
 
-本章跟踪一条 OneBot 事件从网络接入到消息发送的完整路径，适合排查连接、路由、会话、插件调用和回复投递问题。
+中文 | [English](08-message-flow.en.md)
+
+本章跟踪 OneBot 事件从网络接入到消息投递的完整路径。维护者可据此排查连接、路由、会话、插件调用和回复投递问题。
 
 ---
 
@@ -40,7 +42,8 @@ OneBot Event
 
 ### 主动 WebSocket
 
-`OneBotWsClient` 连接 `onebot_ws_uri`，读取事件 JSON，并将其交给同一应用分发入口。连接任务负责退避、抖动、配置切换和关闭回收。
+`OneBotWsClient` 连接 `onebot_ws_uri`，读取事件 JSON，并将其交给同一应用分发入口。
+连接任务负责退避、抖动、配置切换和关闭回收。
 
 ---
 
@@ -65,13 +68,15 @@ OneBot Event
 }
 ```
 
-字符串消息与消息段列表会归一为标准消息段。`core.message` 提取文本、引用、@、图片、face、mface 和其他媒体信号。
+字符串消息与消息段列表会归一为标准消息段。
+`core.message` 提取文本、引用、@、图片、face、mface 和其他媒体信号。
 
 ---
 
 ## 🧩 3. MessageContext
 
-Dispatcher 从事件构建 `MessageContext`。关键字段：
+Dispatcher 从事件构建 `MessageContext`。
+关键字段：
 
 | 字段 | 说明 |
 |---|---|
@@ -89,7 +94,8 @@ Dispatcher 从事件构建 `MessageContext`。关键字段：
 | `principal` | 用户、群角色和管理员能力 |
 | `request_id` | 请求追踪 ID |
 
-Bot 名称和命令前缀按配置顺序处理。例如：
+Bot 名称和命令前缀按配置顺序处理。
+例如：
 
 ```text
 输入：小青 /help pendo
@@ -112,7 +118,8 @@ Step A 根据以下信号决定消息是否进入业务流程：
 - 配置允许的群聊普通消息
 - Smalltalk Provider 的观察需求
 
-群聊静音状态在此阶段参与普通聊天与 URL 路径判断。命令与会话按各自权限和场景继续处理。
+群聊静音状态在此阶段参与普通聊天与 URL 路径判断。
+命令与会话按各自权限和场景继续处理。
 
 ---
 
@@ -124,7 +131,8 @@ Step A 根据以下信号决定消息是否进入业务流程：
 
 ### B. URL 解析
 
-`clean_text` 是单个 HTTP/HTTPS URL 时，Dispatcher 调用 URL Provider。URL 先通过安全网络边界，再进入内容提取。
+`clean_text` 是单个 HTTP/HTTPS URL 时，Dispatcher 调用 URL Provider。
+URL 先通过安全网络边界，再进入内容提取。
 
 ### C. Bot 名称回应
 
@@ -138,7 +146,10 @@ Step A 根据以下信号决定消息是否进入业务流程：
 await plugin.handle_session(text, event, context, session)
 ```
 
-同一会话键串行执行。插件通过 `update_session()` 提交工作副本，或通过 `end_session()` 结束流程。调用前用 `command_access` 复核此人此刻仍能用会话所属插件的至少一条顶层命令；撤权或场景不再允许时关闭会话并回复说明。
+同一会话键的请求串行执行。
+插件通过 `update_session()` 提交工作副本，或通过 `end_session()` 结束流程。
+调用前用 `command_access` 复核此人此刻仍能用会话所属插件的至少一条顶层命令。
+撤权或场景不再允许时关闭会话并回复说明。
 
 ### E. 命令
 
@@ -169,17 +180,25 @@ Router 从命令目录解析顶层触发词和递归子命令：
 
 ### G. Smalltalk Provider
 
-普通聊天候选消息进入配置的 `smalltalk_provider`。`xiaoqing_chat` 可在内部执行 attention、频率控制、行为规划、AI 生成和 reply checker。有人明确召唤小青时，`xiaoqing_chat` 经 `agent.handle_turn` 让 `xiaoqing_agent` 判断是否需要动手做事（能用哪些工具由发起人的权限决定），同时照常生成聊天回复：判断为闲聊就用这份回复，agent 接手则放弃它；agent 未开启、判断为闲聊或调用失败时继续原流程。
+普通聊天候选消息进入配置的 `smalltalk_provider`。
+`xiaoqing_chat` 可在内部执行 attention、频率控制、行为规划、AI 生成和 reply checker。
+有人明确召唤小青时，`xiaoqing_chat` 经 `agent.handle_turn` 让 `xiaoqing_agent` 判断是否需要动手做事（能用哪些工具由发起人的权限决定），同时照常生成聊天回复：判断为闲聊就用这份回复，agent 接手则放弃它。
+agent 未开启、判断为闲聊或调用失败时继续原流程。
 
-观察入口接收普通聊天候选消息。命令、URL、Session 和命令前缀文本在前述阶段完成处理。
+观察入口接收普通聊天候选消息。
+命令、URL、Session 和命令前缀文本在前述阶段完成处理。
 
-agent 执行任务时调用的命令走 `Dispatcher.run_command_text`：以发起人身份、只走 Step E，与本人直接发送同一处权限与场景检查；在一次性的会话空间里执行，命令新开的会话先交给插件的 `close_session` 收尾再丢弃；每次调用带独立的操作标识（请求 ID 为 `原请求ID.command.<操作标识>`）；命令返回的 `DeliverySegments` 连同回执原样交回 agent。
+agent 执行任务时调用的命令走 `Dispatcher.run_command_text`：以发起人身份、只走 Step E，与本人直接发送同一处权限与场景检查。
+在一次性的会话空间里执行，命令新开的会话先交给插件的 `close_session` 收尾再丢弃。
+每次调用带独立的操作标识（请求 ID 为 `原请求ID.command.<操作标识>`）。
+命令返回的 `DeliverySegments` 连同回执原样交回 agent。
 
 ---
 
 ## 🔄 6. Router
 
-Router 的命令目录来自已验证 Manifest。每个节点包含：
+Router 的命令目录来自已验证 Manifest。
+每个节点包含：
 
 - 稳定 code
 - 规范名与别名
@@ -189,7 +208,8 @@ Router 的命令目录来自已验证 Manifest。每个节点包含：
 - 正确样例与错误样例
 - 直接子节点
 
-启动和插件重载时，Router 检测同优先级顶层触发词冲突。目录发布完成后保持只读，`/help`、JSON 导出、权限校验和插件调用共享同一份数据。
+启动和插件重载时，Router 检测同优先级顶层触发词冲突。
+目录发布完成后保持只读，`/help`、JSON 导出、权限校验和插件调用共享同一份数据。
 
 ---
 
@@ -213,13 +233,15 @@ create_session()
   → end_session() 或空闲超时结束
 ```
 
-Session 由单个插件拥有。插件名用于选择 `handle_session()`，用户键用于串行与隔离。
+Session 由单个插件拥有。
+插件名用于选择 `handle_session()`，用户键用于串行与隔离。
 
 ---
 
 ## 🧩 8. 插件执行
 
-命令、Session、Smalltalk、URL、调度和声明式服务调用都进入插件运行时授权。执行链：
+命令、Session、Smalltalk、URL、调度和声明式服务调用都进入插件运行时授权。
+执行链：
 
 ```text
 插件代授权
@@ -231,7 +253,8 @@ Session 由单个插件拥有。插件名用于选择 `handle_session()`，用�
   → generation release
 ```
 
-`parallel` 插件按配置并发，`sequential` 插件单并发。同步函数通过 `run_sync()` 进入独立同步预算。
+`parallel` 插件按配置并发，`sequential` 插件单并发。
+同步函数通过 `run_sync()` 进入独立同步预算。
 
 ---
 
@@ -255,21 +278,32 @@ Core 将字符串转换为文本段，将消息段转换为当前用户或群的
 
 `OneBotHttpSender` 向 `onebot_http_base` 发送 OneBot Action，并使用可选 `onebot_token`。
 
-标准 HTTP 事件上报也使用该实际投递通道，事件响应为 `{}`。开发客户端显式设置 `X-XiaoQing-Response-Mode: actions` 后获得动作列表，由客户端执行后续投递。HTTP 上报的 Bearer 凭据与 OneBot action API 凭据分别配置。
+标准 HTTP 事件上报也使用该实际投递通道，事件响应为 `{}`。
+开发客户端显式设置 `X-XiaoQing-Response-Mode: actions` 后获得动作列表，由客户端执行后续投递。
+HTTP 上报的 Bearer 凭据与 OneBot action API 凭据分别配置。
 
 ### WebSocket Action
 
-主动 WebSocket 连接或 Inbound WebSocket 会话可承载 Action。广播路径受 worker 数量、队列和单连接预算控制。
+主动 WebSocket 连接或 Inbound WebSocket 会话可承载 Action。
+广播路径受 worker 数量、队列和单连接预算控制。
 
 ### 出站观察
 
-非敏感的插件出站 Action 会通知 `core.observe_outgoing_action` 服务的提供者（当前为 `xiaoqing_chat`），让聊天上下文看到其他插件以 Bot 身份发出的通知；`xiaoqing_chat` 自己的回复已在回执提交时记下，这里跳过。设置了 `SENSITIVE_ACTION_KEY` 的 Action（如 Pendo 登录码）跳过观察，标记在传输前移除。
+非敏感的插件出站 Action 会通知 `core.observe_outgoing_action` 服务的提供者（当前为 `xiaoqing_chat`），让聊天上下文看到其他插件以 Bot 身份发出的通知。
+`xiaoqing_chat` 自己的回复已在回执提交时记下，这里跳过。
+设置了 `SENSITIVE_ACTION_KEY` 的 Action（如 Pendo 登录码）跳过观察，标记在传输前移除。
 
 ### 回执
 
-Delivery 层将投递结果返回给回执对象。需要 commit-after-ack 的插件在发送成功后提交提醒、任务或通知状态。长消息被拆成几条时，每条确认发出后先登记它的消息 ID 再记下结果；全部确认后提交回调从 `message_ids` 读到整条回复的全部 ID，`xiaoqing_chat` 据此把角色发言和真实消息一一对应，群友引用其中任何一条都能被识别。
+Delivery 层将投递结果返回给回执对象。
+需要 commit-after-ack 的插件在发送成功后提交提醒、任务或通知状态。
+长消息被拆成几条时，每条确认发出后先登记它的消息 ID 再记下结果。
+全部确认后提交回调从 `message_ids` 读到整条回复的全部 ID，`xiaoqing_chat` 据此把角色发言和真实消息一一对应，群友引用其中任何一条都能被识别。
 
-事件作用域中的 action sink 只暂存动作，并持有后续结算权。`send_with_receipt` 观察到暂存状态时保持收据待定；最终传输成功、明确失败和结果未知分别进入对应回调。主动 WebSocket 的上线通知与读循环并发运行，echo 回执由读循环消费，通知任务随连接断开回收。
+事件作用域中的 action sink 只暂存动作，并持有后续结算权。
+`send_with_receipt` 观察到暂存状态时保持收据待定。
+最终传输成功、明确失败和结果未知分别进入对应回调。
+主动 WebSocket 的上线通知与读循环并发运行，echo 回执由读循环消费，通知任务随连接断开回收。
 
 ---
 
@@ -296,13 +330,16 @@ HTTP 与 WebSocket 入口共享按会话键调度器：
 
 ### 配置切换
 
-Listener、token、管理员状态与插件 Context 按 revision 发布。队列项在执行前复验当前授权状态。
+Listener、token、管理员状态与插件 Context 按 revision 发布。
+队列项在执行前复验当前授权状态。
 
 ---
 
 ## 💬 12. 静音语义
 
-`/闭嘴` 为当前群设置普通回复暂停时间，`/说话` 清除该状态。静音影响普通聊天和 URL 自动解析；管理员命令、允许的业务命令与活动 Session 继续按自身契约处理。
+`/闭嘴` 为当前群设置普通回复暂停时间，`/说话` 清除该状态。
+静音影响普通聊天和 URL 自动解析。
+管理员命令、允许的业务命令与活动 Session 继续按自身契约处理。
 
 `context.get_mute_remaining(group_id)` 返回分钟。
 
@@ -310,7 +347,8 @@ Listener、token、管理员状态与插件 Context 按 revision 发布。队列
 
 ## 🩺 13. 观测与排障
 
-每轮事件关联 request ID。建议按以下顺序检查日志：
+每轮事件关联 request ID。
+建议按以下顺序检查日志：
 
 1. Inbound 或主动 WebSocket 接收记录
 2. token 与事件模型校验

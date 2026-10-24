@@ -1692,7 +1692,7 @@ select:hover:not(:disabled) {
     width: 38px;
     height: 38px;
     border-radius: 50%;
-    /* 实色为兼容回退；支持 color-mix 时由后续背景声明提供半透明效果。 */
+    /* 实色为兼容回退。支持 color-mix 时由后续背景声明提供半透明效果。 */
     background-color: var(--btt-accent);
     background: color-mix(in srgb, var(--btt-accent) 68%, transparent);
     color: #ffffff;

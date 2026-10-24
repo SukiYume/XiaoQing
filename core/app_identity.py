@@ -22,7 +22,7 @@ class AppIdentityService:
 
     @property
     def admin_ids(self) -> set[int]:
-        """Return the live set used by legacy internal diagnostics and tests."""
+        """Return current administrator IDs for application-owned operations."""
 
         return self._admin_ids
 

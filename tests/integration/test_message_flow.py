@@ -232,7 +232,7 @@ class TestMessageFlow:
         }
 
         responses = await dispatcher.handle_event(event)
-        # Session exists but plugin doesn't handle it - returns empty or exit message
+        # The plugin returns an empty or exit message for the existing session.
         assert responses is not None
 
     @pytest.mark.asyncio

@@ -6,14 +6,6 @@ from types import SimpleNamespace
 import pytest
 
 from plugins.pendo.web import server as web_server
-from tests.helpers.pendo_test_support import reset_pendo_runtime_config
-
-
-@pytest.fixture(autouse=True)
-def _reset_runtime_config():
-    reset_pendo_runtime_config()
-    yield
-    reset_pendo_runtime_config()
 
 
 class _FakeThread:

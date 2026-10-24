@@ -784,7 +784,7 @@ class ConfigManager:
         config: Mapping[str, Any],
         secrets: Mapping[str, Any],
     ) -> None:
-        """Install detached internal copies; callers cannot retain a mutable alias."""
+        """Install detached internal copies. Callers cannot retain a mutable alias."""
 
         config_view  = _freeze_config_mapping(config)
         secrets_view = _freeze_config_mapping(secrets)
@@ -1195,7 +1195,7 @@ class ConfigManager:
             return self._revision
 
     async def watch(self, interval: float = 2.0) -> None:
-        """Poll strict content outcomes; worker threads never publish state."""
+        """Poll strict content outcomes. Worker threads never publish state."""
 
         if (
             isinstance(interval, bool)
@@ -1327,7 +1327,7 @@ class ConfigManager:
         Plain files carry no shared generation or transactional envelope.  A
         watcher therefore cannot prove that two externally staged writes belong
         together.  New valid secret bytes remain fail-closed until ``reload()``
-        explicitly confirms them; previously confirmed bytes may recover after
+        explicitly confirms them. Previously confirmed bytes may recover after
         a transient watcher failure.
         """
 
@@ -1715,7 +1715,7 @@ class ConfigManager:
         Managed writers are serialized by the keyed lock.  Pre/post identity and
         content checks make an external replace, delete, or observed same-inode
         overwrite fail closed.  No portable advisory lock can stop a deliberately
-        non-cooperating process from writing after the final check; the watcher
+        non-cooperating process from writing after the final check. The watcher
         treats any later external secret content as unconfirmed and revokes it.
         A crash may leave this file invalid, which the strict reader also handles
         fail closed.

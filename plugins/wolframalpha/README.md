@@ -1,5 +1,7 @@
 # 🧮 Wolfram|Alpha
 
+中文 | [English](README.en.md)
+
 `wolframalpha` 通过固定 Wolfram|Alpha HTTPS API 执行数学、物理、化学、单位换算和公开数据查询。所有人都可以在私聊和群聊里使用。
 
 ---
@@ -47,13 +49,13 @@ App ID 接受 1～128 个字母、数字、连字符或下划线。该值保存�
 
 ## 🌐 请求流程
 
-- `simple` 请求 `https://api.wolframalpha.com/v1/result`；
-- `step` 与 `complete` 请求 `https://api.wolframalpha.com/v2/query`；
-- 三种模式均使用 GET、固定域名、30 秒总超时和有界客户端；
-- App ID 作为请求参数传给客户端；
+- `simple` 请求 `https://api.wolframalpha.com/v1/result`。
+- `step` 与 `complete` 请求 `https://api.wolframalpha.com/v2/query`。
+- 三种模式均使用 GET、固定域名、30 秒总超时和有界客户端。
+- App ID 作为请求参数传给客户端。
 - 全插件最多同时执行 2 个 Wolfram 请求。
 
-请求 URL 与参数保留在普通日志边界之外，日志记录模式、状态、响应长度和错误类别。
+请求 URL 与参数保留在普通日志边界之外。日志记录模式、状态、响应长度和错误类别。
 
 ---
 

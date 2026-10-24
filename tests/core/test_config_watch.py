@@ -471,7 +471,7 @@ class TestConfigManagerWatch:
             if read_calls == 3:
                 # No finite sequence of rereads can eliminate an uncooperative
                 # external write immediately after the last read.  The third
-                # stable read is reload()'s linearization point; this deliberately
+                # stable read is reload()'s linearization point. This deliberately
                 # does not claim cross-process atomicity.
                 secrets_file.unlink()
             return sources

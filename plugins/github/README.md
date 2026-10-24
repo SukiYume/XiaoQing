@@ -1,5 +1,7 @@
 # 🐙 GitHub Trending
 
+[English](README.en.md)
+
 `github` 读取 [GitHub 官方 Trending 页面](https://github.com/trending)，展示每日、每周和每月热门仓库。
 
 ---
@@ -42,7 +44,7 @@ Trending 页面结构变化时，维护者需要同步更新解析规则和测�
 
 ## ⏰ 定时任务与历史
 
-Manifest 每天 08:30 按调度器时区以 Core `broadcast` 模式运行 `scheduled`，Core 负责把结果投递到该 schedule 的目标群。成功抓取后会写入：
+Manifest 每天 08:30 按调度器时区运行 `scheduled`。任务使用 Core `broadcast` 模式。Core 把结果投递到该 schedule 的目标群。成功抓取后，插件写入以下文件：
 
 ```text
 data/github/trending_<range>_latest.json

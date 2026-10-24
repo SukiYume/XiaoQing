@@ -14,7 +14,6 @@ import pytest
 from fastapi import HTTPException, Request, Response
 
 from plugins.pendo.config import PendoConfig
-from tests.helpers.pendo_test_support import reset_pendo_runtime_config
 
 try:
     from plugins.pendo.web import auth as auth_module
@@ -51,11 +50,9 @@ def _reset_persistent_auth_state(
     auth_db = Database(str(temp_data_dir / "pendo.db"))
     monkeypatch.delenv("PENDO_WEB_TOKEN_SECRET", raising=False)
     auth_module.configure_auth_database(auth_db)
-    reset_pendo_runtime_config()
     try:
         yield
     finally:
-        reset_pendo_runtime_config()
         with auth_module._AUTH_LOCK:
             auth_module._AUTH_DATABASE = None
         auth_db.cleanup()

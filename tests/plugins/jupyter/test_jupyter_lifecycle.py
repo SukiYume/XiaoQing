@@ -64,12 +64,10 @@ class FakeKernel:
         self.fail_shutdown   = fail_shutdown
         self.block_start     = block_start
         self.alive           = False
-        self.start_calls     = 0
         self.shutdown_calls  = 0
         self.cleanup_calls   = 0
 
     def start_kernel(self) -> None:
-        self.start_calls += 1
         self.alive = True
         if self.block_start is not None:
             entered, release = self.block_start

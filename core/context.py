@@ -346,7 +346,7 @@ class PluginContext:
         """Atomically update the current user's session through a callback.
 
         The callback receives a private working copy and may be async.  Only a
-        successful return is committed; exceptions and cancellation roll back
+        successful return is committed. Exceptions and cancellation roll back
         both data and metadata.  Snapshots returned by :meth:`get_session` are
         read-only in the persistence sense and cannot be used to write back.
         """

@@ -113,7 +113,7 @@ class SchedulerManager:
         self._started  = True
 
     def ensure_started(self) -> None:
-        """Ensure scheduler is initialized and started (requires event loop)"""
+        """Start the scheduler if necessary. An active event loop is necessary."""
         if not self._started:
             self._init_scheduler()
 

@@ -775,7 +775,7 @@ def _requests_deadline_timeout(configured: Any, *, remaining_seconds: float) -> 
 
     ``requests`` otherwise gives every redirect the original timeout again.
     urllib3's ``total`` timeout also subtracts connection time from the first
-    response read; the explicit deadline checks between streamed chunks cover
+    response read. The explicit deadline checks between streamed chunks cover
     slow-drip responses across subsequent reads.
     """
 
@@ -850,7 +850,7 @@ def parse_bounded_json(
 
     The raw-text preflight, ``json.loads`` and parsed-tree validation are three
     intentional passes over untrusted input.  They enforce different limits
-    before recursion, during syntax decoding and after materialization; do not
+    before recursion, during syntax decoding and after materialization. Do not
     replace them with a provider-specific fast path at this security boundary.
     """
 

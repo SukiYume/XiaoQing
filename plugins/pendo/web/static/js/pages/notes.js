@@ -197,7 +197,7 @@ function noteWordCount(note) {
     return textValue(note?.content).trim().length;
 }
 
-// 只支持页面需要的 Markdown 子集；先转义原文，再添加受控标签，避免正文注入 HTML。
+// 只支持页面需要的 Markdown 子集。先转义原文，再添加受控标签，避免正文注入 HTML。
 function renderInlineMarkdown(text) {
     let html = escapeHtml(textValue(text));
     html = html.replace(/`([^`]+)`/g, '<code>$1</code>');

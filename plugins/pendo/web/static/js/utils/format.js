@@ -28,7 +28,7 @@ export function nonNegativeInteger(value) {
     return Math.max(0, Math.trunc(finiteNumber(value)));
 }
 
-/** 保留接口中的标量文本语义；对象和数组一律回退。 */
+/** 保留接口中的标量文本语义。对象和数组一律回退。 */
 export function textValue(value, fallback = '') {
     if (typeof value === 'string') return value;
     if (typeof value === 'number' || typeof value === 'boolean') return String(value);

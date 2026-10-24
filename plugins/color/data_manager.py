@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, TypedDict, TypeVar, cast
 
 from core.interfaces import PluginContextProtocol
-from core.plugin_base import ensure_dir, has_control_characters, load_json, run_sync, write_json
+from core.plugin_base import has_control_characters, load_json, run_sync, write_json
 from core.public_errors import public_error_message
 
 from .convert import hex_to_rgb, validate_cmyk, validate_rgb
@@ -212,7 +212,6 @@ def mutate_custom_colors(
         normalized = _normalize_color_list(colors, max_items=MAX_CUSTOM_COLORS_PER_SCOPE)
         _encoded_custom_colors(normalized)
         if normalized != original:
-            ensure_dir(custom_file.parent)
             write_json(custom_file, normalized)
         return result
 

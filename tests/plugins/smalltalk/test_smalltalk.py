@@ -775,14 +775,14 @@ async def test_smalltalk_cancel_preserves_committed_snapshot(tmp_path, monkeypat
 
     context = SimpleNamespace(data_dir=tmp_path, current_user_id=1, current_group_id=None)
     started, release = (threading.Event(), threading.Event())
-    original = main._write_qa_file
+    original = main._write_json
 
     def delayed(path, data):
         started.set()
         assert release.wait(3)
         original(path, data)
 
-    monkeypatch.setattr(main, "_write_qa_file", delayed)
+    monkeypatch.setattr(main, "_write_json", delayed)
     task = asyncio.create_task(main._add_qa(context, "first answer"))
     try:
         assert await asyncio.to_thread(started.wait, 3)
@@ -793,7 +793,7 @@ async def test_smalltalk_cancel_preserves_committed_snapshot(tmp_path, monkeypat
         release.set()
         with pytest.raises(asyncio.CancelledError):
             await task
-        monkeypatch.setattr(main, "_write_qa_file", original)
+        monkeypatch.setattr(main, "_write_json", original)
         await main._add_qa(context, "second answer")
         assert json.loads(main._qa_file(context).read_text()) == {
             "first": ["answer"],

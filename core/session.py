@@ -7,10 +7,10 @@ second clone only after the callback has completed successfully.
 
 Depth/node limits and explicit cycle checks keep plugin-controlled state from
 turning snapshot creation into unbounded recursion or memory growth.  Custom
-``__deepcopy__`` hooks are never executed.  Cancellation is funneled through a
-single scheduled transaction Future: the caller may be cancelled, but commit
-or rollback is decided only after that Future has been cancelled and drained,
-so no background callback can publish state after its request has returned.
+``__deepcopy__`` hooks are never executed.  Cancellation uses a single scheduled transaction Future.
+The caller can be cancelled. The transaction Future must be cancelled and drained
+before the commit or rollback decision. This sequence prevents background
+callbacks from publishing state after the request returns.
 
 会话值始终是管理器私有对象，读接口只返回有界深拷贝；同一用户/群组键的更新串行化，
 回调只能修改事务工作副本。提交必须在回调（包括取消清理）完全结束后一次性替换原值，
@@ -26,7 +26,6 @@ import math
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeVar, overload
 
@@ -49,12 +48,11 @@ def _clone_session_value(
 ) -> Any:
     """Clone the supported session value tree without invoking user hooks.
 
-    ``copy.deepcopy`` delegates to arbitrary ``__deepcopy__`` implementations;
-    such a hook may legally return the original mutable object and silently
-    defeat both snapshot isolation and transaction rollback.  Session state is
-    intentionally a bounded, JSON-like value tree, so clone its concrete built-
-    in containers directly and reject custom objects instead of executing their
-    copy protocol.
+    ``copy.deepcopy`` delegates to arbitrary ``__deepcopy__`` implementations.
+    Such a hook may legally return the original mutable object and silently
+    defeat both snapshot isolation and transaction rollback. Session state is
+    a bounded, JSON-like value tree. Clone its built-in containers directly.
+    Reject custom objects at this boundary.
     """
 
     nodes[0] += 1
@@ -298,11 +296,13 @@ class SessionManager:
     """Store sessions with per-key serializable update transactions.
 
     A transaction registry is keyed by the exact ``(asyncio.Task, key)`` pair.
-    This lets the callback re-enter read/create/delete APIs without deadlocking,
-    while child tasks do not inherit the staged view and wait for the key lock.
-    A callback may only re-enter operations for its own key: acquiring another
-    session key while the first remains locked can create an ABBA deadlock, so
-    cross-key access fails fast and must be coordinated outside ``update``.
+    The callback can safely re-enter the read, create, and delete APIs.
+    Child tasks wait for the key lock and read the committed view.
+    A callback can re-enter operations for its own key only.
+
+    A second key lock can cause an ABBA deadlock while the first lock is held.
+    Access to another key fails immediately. Coordination between keys occurs
+    outside ``update``.
     """
 
     def __init__(self, default_timeout: float = 300.0) -> None:
@@ -413,11 +413,6 @@ class SessionManager:
     def _clone_optional(session: Session | None) -> Session | None:
         return None if session is None else SessionManager._clone(session)
 
-    @asynccontextmanager
-    async def _lock_key(self, key: SessionKey):
-        async with self._key_lock_pool.hold(key):
-            yield
-
     async def _get_active_locked(self, key: SessionKey) -> Session | None:
         """Return the private stored value while the per-key lock is held."""
 
@@ -478,7 +473,7 @@ class SessionManager:
             transaction.replaced = True
             return returned
 
-        async with self._lock_key(key):
+        async with self._key_lock_pool.hold(key):
             async with self._lock:
                 self._sessions[key] = session
             logger.debug(
@@ -499,7 +494,7 @@ class SessionManager:
         if transaction is not None:
             return self._clone_optional(transaction.working)
 
-        async with self._lock_key(key):
+        async with self._key_lock_pool.hold(key):
             session = await self._get_active_locked(key)
             if session is None:
                 return None
@@ -516,17 +511,18 @@ class SessionManager:
         if transaction is not None:
             return self._clone_optional(transaction.working)
 
-        async with self._lock_key(key):
+        async with self._key_lock_pool.hold(key):
             return self._clone_optional(await self._get_active_locked(key))
 
     async def _await_transaction_future(self, future: asyncio.Future[T]) -> T:
         """Await a callback without allowing it to swallow caller cancellation.
 
         ``Task.cancelling()`` and ``Task.uncancel()`` do not exist on Python
-        3.10.  Shielding gives this manager an explicit cancellation boundary:
-        a cancellation of the update task is recorded here, forwarded to the
-        callback, and re-raised after callback cleanup even if the callback
-        catches ``CancelledError`` and returns normally.
+        3.10. Shielding gives this manager an explicit cancellation boundary.
+        The manager records cancellation of the update task and forwards it to
+        the callback. After callback cleanup, the manager raises cancellation
+        again. This also applies when the callback catches ``CancelledError``
+        and returns normally.
         """
 
         cancellation: asyncio.CancelledError | None = None
@@ -569,7 +565,7 @@ class SessionManager:
 
         Synchronous callbacks need the same cancellation boundary as async
         callbacks.  A callback can cancel its own current task and return
-        without another await; the explicit checkpoint delivers that pending
+        without another await. The explicit checkpoint delivers that pending
         cancellation before the manager may publish the working copy.  This
         remains compatible with Python 3.10 and does not depend on
         ``Task.cancelling`` or ``Task.uncancel``.
@@ -605,7 +601,7 @@ class SessionManager:
                 await asyncio.shield(future)
             except asyncio.CancelledError as exc:
                 # A CancelledError from the now-terminal child is expected.
-                # If it is still live, this task itself was cancelled; remember
+                # If it is still live, this task itself was cancelled. Remember
                 # that request, forward it, and continue draining.
                 if future.done():
                     break
@@ -661,7 +657,7 @@ class SessionManager:
         if self._current_transaction(key) is not None:
             raise RuntimeError("nested session update for the same key is not allowed")
 
-        async with self._lock_key(key):
+        async with self._key_lock_pool.hold(key):
             original = await self._get_active_locked(key)
             if original is None:
                 return None
@@ -697,7 +693,7 @@ class SessionManager:
             transaction.working = None
             return True
 
-        async with self._lock_key(key):
+        async with self._key_lock_pool.hold(key):
             async with self._lock:
                 if key not in self._sessions:
                     return False
@@ -713,7 +709,7 @@ class SessionManager:
         transaction = self._current_transaction(key)
         if transaction is not None:
             return transaction.working is not None
-        async with self._lock_key(key):
+        async with self._key_lock_pool.hold(key):
             return await self._get_active_locked(key) is not None
 
     async def cleanup_expired(self) -> int:
@@ -725,7 +721,7 @@ class SessionManager:
 
         expired_keys: list[SessionKey] = []
         for key in keys:
-            async with self._lock_key(key):
+            async with self._key_lock_pool.hold(key):
                 async with self._lock:
                     session = self._sessions.get(key)
                     if session is not None and session.is_expired():
@@ -752,7 +748,7 @@ class SessionManager:
 
         keys_to_remove: list[SessionKey] = []
         for key in candidate_keys:
-            async with self._lock_key(key):
+            async with self._key_lock_pool.hold(key):
                 async with self._lock:
                     session = self._sessions.get(key)
                     if session is not None and session.plugin_name == normalized_plugin:

@@ -41,6 +41,28 @@ def temp_db(db):
     return db
 
 
+@pytest.fixture
+def currency_db(db):
+    """为看板、统计与小组件提供独立的人民币和美元账目。"""
+
+    for currency, amount in [("CNY", 100), ("USD", 200)]:
+        db.insert_item(
+            {
+                "id": currency,
+                "owner_id": "owner",
+                "type": "ledger",
+                "title": currency,
+                "currency": currency,
+                "amount": amount,
+                "amount_cents": amount * 100,
+                "transaction_type": "expense",
+                "ledger_category": "餐饮",
+                "ledger_date": "2026-03-01",
+            }
+        )
+    return db
+
+
 @functools.lru_cache(maxsize=1)
 def _pendo_web_test_dependencies():
     """只解析一次 Web 依赖，避免模块隔离测试污染后续 fixture。"""

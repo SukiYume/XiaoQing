@@ -17,6 +17,7 @@ from plugins.apod import main as apod
 from plugins.signin import yingshi
 from plugins.twitter import main as twitter
 from plugins.wolframalpha import main as wolframalpha
+from tests.helpers.http import QueuedAiohttpSession
 from tests.helpers.settings_snapshot import with_settings_reader
 
 
@@ -63,16 +64,6 @@ class _Response:
         self.closed = True
 
 
-class _Session:
-    def __init__(self, *responses: _Response) -> None:
-        self.responses                          = list(responses)
-        self.calls: list[tuple[str, str, dict]] = []
-
-    def request(self, method: str, url: str, **kwargs):
-        self.calls.append((method, url, kwargs))
-        return self.responses.pop(0)
-
-
 def _json_response(payload, **kwargs) -> _Response:
     return _Response(json.dumps(payload).encode("utf-8"), **kwargs)
 
@@ -86,7 +77,7 @@ def _assert_transport_guards(call: tuple[str, str, dict]) -> None:
 
 @pytest.mark.asyncio
 async def test_yingshi_uses_bounded_json_and_transport_guards() -> None:
-    session = _Session(_json_response({"code": 0, "data": {"checkInId": "cid"}}))
+    session = QueuedAiohttpSession(_json_response({"code": 0, "data": {"checkInId": "cid"}}))
 
     ok, checkin_id, _message = await yingshi._get_checkin_id(
         session,
@@ -97,13 +88,13 @@ async def test_yingshi_uses_bounded_json_and_transport_guards() -> None:
     )
 
     assert (ok, checkin_id) == (True, "cid")
-    _assert_transport_guards(session.calls[0])
-    assert session.calls[0][2]["headers"]["Authorization"] == "Bearer secret-token"
+    _assert_transport_guards(session.requests[0])
+    assert session.requests[0][2]["headers"]["Authorization"] == "Bearer secret-token"
 
 
 @pytest.mark.asyncio
 async def test_yingshi_rejects_mime_and_oversized_bodies() -> None:
-    wrong_mime = _Session(
+    wrong_mime = QueuedAiohttpSession(
         _json_response(
             {"code": 0},
             content_type="text/html",
@@ -112,7 +103,7 @@ async def test_yingshi_rejects_mime_and_oversized_bodies() -> None:
     with pytest.raises(ResponseFormatError):
         await yingshi._get_checkin_id(wrong_mime, "a", "k", "t", {})
 
-    oversized = _Session(_Response(b"x" * (512 * 1024 + 1)))
+    oversized = QueuedAiohttpSession(_Response(b"x" * (512 * 1024 + 1)))
     with pytest.raises(ResponseLimitError):
         await yingshi._get_checkin_id(oversized, "a", "k", "t", {})
 
@@ -125,7 +116,7 @@ async def test_yingshi_non_success_does_not_read_error_body() -> None:
         fail_on_read = True,
     )
     with pytest.raises(HttpStatusError):
-        await yingshi._get_checkin_id(_Session(response), "a", "k", "t", {})
+        await yingshi._get_checkin_id(QueuedAiohttpSession(response), "a", "k", "t", {})
     assert response.content.reads == 0
     assert response.closed is True
 
@@ -156,7 +147,7 @@ async def test_twitter_preserves_explicit_proxy_and_bounds_timeline_json(tmp_pat
             }
         }
     }
-    session = _Session(_json_response(payload, url="https://x.com/api"))
+    session = QueuedAiohttpSession(_json_response(payload, url="https://x.com/api"))
     context = with_settings_reader(
         SimpleNamespace(
             http_session = session,
@@ -178,8 +169,8 @@ async def test_twitter_preserves_explicit_proxy_and_bounds_timeline_json(tmp_pat
 
     assert [item["entryId"] for item in tweets] == ["tweet-1"]
     assert (cursor, has_next) == ("next", True)
-    _assert_transport_guards(session.calls[0])
-    kwargs = session.calls[0][2]
+    _assert_transport_guards(session.requests[0])
+    kwargs = session.requests[0][2]
     assert kwargs["proxy"] == "http://127.0.0.1:7890"
     assert kwargs["cookies"] == {"ct0": "csrf"}
 
@@ -189,7 +180,7 @@ async def test_twitter_non_success_does_not_read_body(tmp_path: Path) -> None:
     response = _Response(b"huge private error", status=429, fail_on_read=True)
     context = with_settings_reader(
         SimpleNamespace(
-            http_session = _Session(response),
+            http_session = QueuedAiohttpSession(response),
             data_dir     = tmp_path,
             secrets      = {"plugins": {"twitter": {"user_id": "123456789"}}},
         )
@@ -204,12 +195,12 @@ async def test_twitter_non_success_does_not_read_body(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_wolframalpha_text_xml_and_json_use_bounded_contract() -> None:
-    text_session = _Session(_Response(b"42", content_type="text/plain; charset=utf-8"))
+    text_session = QueuedAiohttpSession(_Response(b"42", content_type="text/plain; charset=utf-8"))
     context = SimpleNamespace(http_session=text_session)
     assert "42" in str(await wolframalpha._get_answer("6*7", "appid", context))
-    _assert_transport_guards(text_session.calls[0])
+    _assert_transport_guards(text_session.requests[0])
 
-    xml_session = _Session(
+    xml_session = QueuedAiohttpSession(
         _Response(
             b"<queryresult><pod><plaintext>Step one</plaintext></pod></queryresult>",
             content_type="application/xml",
@@ -217,7 +208,7 @@ async def test_wolframalpha_text_xml_and_json_use_bounded_contract() -> None:
     )
     assert "Step one" in await wolframalpha._query_step("x", "appid", xml_session)
 
-    json_session = _Session(
+    json_session = QueuedAiohttpSession(
         _json_response({"queryresult": {"pods": [{"subpods": [{"plaintext": "complete"}]}]}})
     )
     assert await wolframalpha._query_complete("x", "appid", json_session) == "complete"
@@ -225,7 +216,7 @@ async def test_wolframalpha_text_xml_and_json_use_bounded_contract() -> None:
 
 @pytest.mark.asyncio
 async def test_wolframalpha_rejects_entity_bearing_xml() -> None:
-    session = _Session(
+    session = QueuedAiohttpSession(
         _Response(
             b'<!DOCTYPE x [<!ENTITY payload "boom">]><queryresult>&payload;</queryresult>',
             content_type="application/xml",
@@ -237,7 +228,7 @@ async def test_wolframalpha_rejects_entity_bearing_xml() -> None:
 
 @pytest.mark.asyncio
 async def test_onebot_private_provider_is_supported_and_bounded() -> None:
-    session = _Session(
+    session = QueuedAiohttpSession(
         _json_response(
             {"status": "ok", "retcode": 0, "data": {"message_id": 9}},
             content_type = None,
@@ -251,14 +242,16 @@ async def test_onebot_private_provider_is_supported_and_bounded() -> None:
     )
 
     assert result == {"status": "ok", "retcode": 0, "data": {"message_id": 9}}
-    assert session.calls[0][1] == "http://127.0.0.1:5700/send_private_msg"
-    _assert_transport_guards(session.calls[0])
+    assert session.requests[0][1] == "http://127.0.0.1:5700/send_private_msg"
+    _assert_transport_guards(session.requests[0])
 
 
 @pytest.mark.asyncio
 async def test_onebot_non_success_does_not_read_body() -> None:
     response = _Response(b"private failure", status=500, fail_on_read=True)
-    sender = OneBotHttpSender("http://onebot.internal:5700", "token", _Session(response))
+    sender = OneBotHttpSender(
+        "http://onebot.internal:5700", "token", QueuedAiohttpSession(response)
+    )
 
     assert await sender.request_action({"action": "get_status", "params": {}}) is None
     assert response.content.reads == 0

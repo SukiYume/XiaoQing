@@ -432,6 +432,63 @@ async def test_timed_async_decorator_records_and_propagates_cancellation():
     assert command_stats["test_plugin.test_cmd"]["cancelled"] == 1
 
 
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_timed_async_concurrent_calls_keep_separate_timers(monkeypatch):
+    collector = MetricsCollector()
+    ticks     = iter((10.0, 20.0, 23.0, 25.0))
+    monkeypatch.setattr(
+        "core.metrics.time", SimpleNamespace(perf_counter=lambda: next(ticks), time=lambda: 1000.0)
+    )
+    started = [asyncio.Event(), asyncio.Event()]
+    release = [asyncio.Event(), asyncio.Event()]
+
+    @timed_async(collector, "plugin", "command")
+    async def operation(index, *, result):
+        started[index].set()
+        await release[index].wait()
+        return result
+
+    first = asyncio.create_task(operation(0, result="first"))
+    await started[0].wait()
+    second = asyncio.create_task(operation(1, result="second"))
+    await started[1].wait()
+    release[1].set()
+    assert await second == "second"
+    release[0].set()
+    assert await first == "first"
+
+    stats = await collector.get_plugin_stats("plugin")
+    assert stats["total_calls"] == 2
+    assert stats["total_time"] == 18.0
+    assert stats["min_time"] == 3.0
+    assert stats["max_time"] == 15.0
+    assert operation.__name__ == "operation"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_timed_async_records_and_propagates_fatal_errors():
+    class FatalError(BaseException):
+        pass
+
+    collector = MetricsCollector()
+    failure   = FatalError("fatal")
+
+    @timed_async(collector, "plugin", "command")
+    async def operation():
+        raise failure
+
+    with pytest.raises(FatalError) as caught:
+        await operation()
+
+    assert caught.value is failure
+    stats = await collector.get_plugin_stats("plugin")
+    assert stats["total_calls"] == 1
+    assert stats["errors"] == 1
+    assert stats["cancelled"] == 0
+
+
 # ============================================================
 # ExecutionTimer Tests
 # ============================================================

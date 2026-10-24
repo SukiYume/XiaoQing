@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xiaoqing"
-version = "4.5.0"
+version = "4.5.1"
 description = "基于 OneBot 协议和 Python asyncio 的轻量级 QQ 机器人框架，内置向量记忆与行为规划"
 readme = "README.md"
 license = "MIT"
@@ -32,10 +32,10 @@ classifiers = [
 dependencies = [
     "aiohttp>=3.8.0",
     "websockets>=11.0",
-    # 3.x 私有 drain 能力经 scheduler_compat 行为探测隔离；不满足时使用公开关闭路径。
+    # 3.x 私有 drain 能力经 scheduler_compat 行为探测隔离。不满足时使用公开关闭路径。
     "apscheduler>=3.11,<4",
     "pydantic>=2.5.0",
-    # Pendo Web is enabled by default, so its server dependencies are core.
+    # Pendo Web is enabled by default. Its server dependencies are core dependencies.
     "fastapi>=0.110.0",
     "starlette>=0.36.3",
     "uvicorn>=0.29.0",
@@ -92,8 +92,8 @@ dev = [
     "uv==0.11.28",
 ]
 
-# Explicit feature extras. `web` repeats the default-on dependencies so
-# `pip install xiaoqing[web]` remains a discoverable, stable install target.
+# Explicit feature extras. `web` includes the dependencies enabled by default.
+# `pip install xiaoqing[web]` remains a stable installation command.
 web = [
     "fastapi>=0.110.0",
     "starlette>=0.36.3",
@@ -299,8 +299,8 @@ warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
 check_untyped_defs = true
-# 默认检查全部生产代码；下面的逐文件排除清单只登记尚未清零的插件类型债务。
-# 插件树迁移期间使用 skip，避免把动态插件导入债务伪装成绿灯；core 在下方
+# 默认检查全部生产代码。下面的逐文件排除清单只登记尚未清零的插件类型债务。
+# 插件树迁移期间使用 skip，避免把动态插件导入债务伪装成绿灯。core 在下方
 # override 中完整恢复 normal。新增 Core 代码会自动进入门禁。
 follow_imports = "skip"
 files = [

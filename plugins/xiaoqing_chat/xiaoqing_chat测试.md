@@ -1,5 +1,7 @@
 # ✅ xiaoqing_chat 上线验收指南
 
+中文 | [English](xiaoqing_chat测试.en.md)
+
 本文面向测试人员与发布维护者，提供一套可重复执行的 `xiaoqing_chat` 上线验收流程。验收覆盖自动化测试、OneBot 入口、命令参数、群聊参与、多模态、记忆、AI route、安全、并发和关闭生命周期。
 
 ---
@@ -160,7 +162,7 @@ python scripts/run_full_uat.py \
 | `/xc stats` | 返回上下文、表达、黑话、行动与运行统计 |
 | `/xc stats extra` | 返回参数错误 |
 
-重置前写入短期历史、长期记忆、Goal、PFC、行动记录、表达、黑话和反思状态；重置后逐项核对当前 chat 范围。
+重置前写入短期历史、长期记忆、Goal、PFC、行动记录、表达、黑话和反思状态。重置后逐项核对当前 chat 范围。
 
 ### 状态查询
 
@@ -271,7 +273,7 @@ python scripts/run_xiaoqing_chat_quality.py \
   --output test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/quality.json
 ```
 
-该端口对应专用测试 Bot。`--chat-data-dir` 指向这个 Bot 实际使用的隔离插件数据目录，运行前确认目录已经创建。探针使用 `X-XiaoQing-Response-Mode: actions` 获取调试动作预览；普通 OneBot HTTP 事件响应为空对象，动作端回执提供实际投递证据。报告文件使用新路径，脚本会保护已有报告。
+该端口对应专用测试 Bot。`--chat-data-dir` 指向这个 Bot 实际使用的隔离插件数据目录，运行前确认目录已经创建。探针使用 `X-XiaoQing-Response-Mode: actions` 获取调试动作预览。普通 OneBot HTTP 事件响应为空对象，动作端回执提供实际投递证据。报告文件使用新路径，脚本会保护已有报告。
 
 ### 拟人大群实验
 
@@ -293,7 +295,7 @@ python scripts/run_xiaoqing_chat_live_eval.py --suite otaku     # 只跑指定�
 python scripts/run_xiaoqing_chat_live_eval.py --judge-only <DIR>
 ```
 
-不需要启动 Bot。脚本读取 `config/config.json` 和 `config/secrets.json` 的真实模型路由，每个剧本在独立数据目录里走完整的 `observe_message()` → `handle_smalltalk()` 链路，发送模拟为成功回执，不接触线上数据和 QQ 群。五位虚拟群友（阿夏、阿禾、阿白、阿梨、阿柚）按剧本里的节奏发言，可带图片、表情包、QQ 表情、`@`（`at="bot"` 表示 @ 小青本身）和引用。每轮记下读图结果（`media_logs`），排查回复和图上内容对不上时用。
+脚本独立运行。脚本读取 `config/config.json` 和 `config/secrets.json` 中的真实模型路由。每个剧本使用独立数据目录，并执行完整的 `observe_message()` → `handle_smalltalk()` 链路。发送使用模拟成功回执。线上数据和 QQ 群保持隔离。五位虚拟群友（阿夏、阿禾、阿白、阿梨、阿柚）按剧本节奏发言。消息可以包含图片、表情包、QQ 表情、`@` 和引用。`at="bot"` 表示 @ 小青。每轮在 `media_logs` 中记录读图结果，用于排查回复与图片内容的差异。
 
 | 剧本 | 关注点 |
 |---|---|
@@ -301,7 +303,7 @@ python scripts/run_xiaoqing_chat_live_eval.py --judge-only <DIR>
 | `addressee` | 聊天对象：并行话题、点名他人、`@` 他人、同时点名、被评价 |
 | `participation` | 参与度：情绪、喜报、刷屏、冷场、邀约、发图请求 |
 | `multimodal` | 多模态：读图、表情包含义、指代旧图、发表情、坏图、没发过的图 |
-| `notice` | 文字为主的截图：实验报告和停水通知、带界面元素和网址的网页通知、一整张考试安排；只 @ 小青发图，再逐项追问截止时间、邮箱、网址、教室 |
+| `notice` | 文字为主的截图：实验报告和停水通知、带界面元素和网址的网页通知、一整张考试安排。只 @ 小青发图，再逐项追问截止时间、邮箱、网址、教室 |
 | `persona` | 人设与边界：个人问题、偏好记忆与回忆（如“你刚才说你喜欢猫还是狗来着”）、知识、套提示词、长文请求 |
 | `regress` | 计算与出站素材的回归点，例如价格换算、应发出表情包的轮次 |
 
@@ -312,7 +314,7 @@ python scripts/run_xiaoqing_chat_live_eval.py --judge-only <DIR>
 | `missed_reply` | 剧本要求回复却没回 |
 | `intrusion` | 剧本要求安静却插话 |
 | `fallback` | 审查耗尽后用了兜底句（按 `reply.check.exhausted.*` 步骤或整句比对 `ALL_FALLBACK_TEXTS`） |
-| `media_doubt` | 图读出来了（不是坏图），回复却说没看清、没刷出来或拿不准 |
+| `media_doubt` | 图已成功读取，回复仍声称没看清、没刷出来或拿不准 |
 | `breaks_character` | 承认自己是 AI 或提到提示词等 |
 | `markdown` | 普通聊天里出现 Markdown 格式 |
 | `too_long` | 单轮超过 90 字 |
@@ -324,7 +326,7 @@ python scripts/run_xiaoqing_chat_live_eval.py --judge-only <DIR>
 
 结果写入 `test_reports/runs/plugins/xiaoqing_chat/<时间>-liveeval-<commit>/`：每个剧本一个 JSONL（逐轮输入、回复、审查记录、步骤日志），以及汇总的 `summary.json` 和 `report.md`。`--seed` 固定随机过程，`--no-judge` 只跑剧本和规则检查，`--judge-only <DIR>` 对已有结果重新评审，`--out-dir` 指定输出目录。
 
-评分偏低时先读对应轮次的 JSONL：剧本素材本身有歧义（例如测试图片过于抽象）时应修正剧本或素材，而不是改插件。
+评分偏低时先读对应轮次的 JSONL：剧本素材本身有歧义时，应修正剧本或素材。例如，测试图片过于抽象会影响评审。
 
 ### 真实群聊剧本
 
@@ -411,7 +413,7 @@ python scripts/run_xiaoqing_chat_live_eval.py --judge-only <DIR>
 
 覆盖确定性 hard、确定性 soft、语义 hard、语义 soft、重生成、重规划、主动参与耗尽和明确召唤耗尽。每个用例核对候选状态与最终提交状态。
 
-交流约束通过独立阅读完整输入与回复验收，覆盖直接追问、间接陈述、引用、条件句及同义改写。质量探针保留人工复核材料，`machine_gate_passed` 只代表机器指标，`semantic_review_required` 标记独立语义复核需求；复核前 `semantic_acceptance_passed` 保持空值。
+交流约束通过独立阅读完整输入与回复验收，覆盖直接追问、间接陈述、引用、条件句及同义改写。质量探针保留人工复核材料，`machine_gate_passed` 只代表机器指标，`semantic_review_required` 标记独立语义复核需求。复核前 `semantic_acceptance_passed` 保持空值。
 
 缺图用例使用纯文字事件指向具体截图，核对回复像群友一样随口说图没加载出来或裂了（不使用“画面读取不到”之类的客服说法），不附和用户对未知画面的评价，并检查颜色、布局、文字和物体陈述的证据。历史真实图片作为独立正例，验证回指仍可使用对应摘要。陈旧话题探针的 `current_turn_discloses_missing_image` 同时记录缺图告知，旧话题排除保持独立检查。
 
