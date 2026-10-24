@@ -25,7 +25,7 @@ fi
 printf 'Cleaning Python cache files under %s ...\n' "$REPO_ROOT"
 
 # GNU/Git Bash find 使用 -xdev，macOS/BSD find 使用前置 -x。两者都不可用时
-# 仍不跟随目录符号链接，并明确告警；仓库根和删除类型仍由其余门禁约束。
+# 仍不跟随目录符号链接，并明确告警。仓库根和删除类型仍由其余门禁约束。
 find_style="none"
 if command find "$REPO_ROOT" -xdev -prune >/dev/null 2>&1; then
     find_style="gnu"
@@ -43,7 +43,7 @@ find_repo() {
     esac
 }
 
-# 本地归档、虚拟环境、日志和新旧两套插件运行数据都保留；测试报告继续扫描，
+# 本地归档、虚拟环境、日志和新旧两套插件运行数据都保留。测试报告继续扫描，
 # 但只会删除明确列出的 Python/测试缓存类型。
 readonly -a PRUNE_EXPRESSION=(
     '('

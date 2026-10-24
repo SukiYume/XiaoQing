@@ -1,6 +1,9 @@
 # 🏗️ 02 - 系统架构
 
-本章说明 XiaoQing Core 的运行时组件、所有权、生命周期和主要数据流。公开插件接口见 [API 参考](05-api-reference.md)，逐模块索引见 [Core 模块](04-core-modules.md)。
+中文 | [English](02-architecture.en.md)
+
+本章说明 XiaoQing Core 的运行时组件、所有权、生命周期和主要数据流。
+公开插件接口见 [API 参考](05-api-reference.md)，逐模块索引见 [Core 模块](04-core-modules.md)。
 
 ---
 
@@ -33,13 +36,16 @@
                            └────────────────────┘
 ```
 
-Core 采用单进程异步架构。插件是受信任 Python 扩展，共享进程和系统权限。插件执行 gate、代际发布和能力作用域负责可用性、生命周期与接口组织。
+Core 采用单进程异步架构。
+插件是受信任 Python 扩展，共享进程和系统权限。
+插件执行 gate、代际发布和能力作用域负责可用性、生命周期与接口组织。
 
 ---
 
 ## 🧩 应用门面与内部服务
 
-`XiaoQingApp` 是进程级稳定门面。`core/app.py` 负责组件装配和少量公开入口，内部服务按职责分布在 `app_*` 模块：
+`XiaoQingApp` 是进程级稳定门面。
+`core/app.py` 负责组件装配和少量公开入口，内部服务按职责分布在 `app_*` 模块：
 
 | 模块 | 职责 |
 |---|---|
@@ -52,13 +58,15 @@ Core 采用单进程异步架构。插件是受信任 Python 扩展，共享进�
 | `app_scheduling.py` | 插件排程发布与撤销 |
 | `app_plugin_watch.py` | 插件文件 watcher 监督与重启 |
 
-这些模块共享同一 `XiaoQingApp` 实例和进程生命周期。职责拆分用于单元测试、所有权追踪和局部维护。
+这些模块共享同一 `XiaoQingApp` 实例和进程生命周期。
+职责拆分用于单元测试、所有权追踪和局部维护。
 
 ---
 
 ## ⚙️ 配置发布
 
-`ConfigManager` 读取 `config.json` 与 `secrets.json`，并生成带 revision 的只读快照。应用层按单一提交顺序发布以下状态：
+`ConfigManager` 读取 `config.json` 与 `secrets.json`，并生成带 revision 的只读快照。
+应用层按单一提交顺序发布以下状态：
 
 1. 校验公开配置与敏感来源状态。
 2. 解析管理员、Inbound token 和 OneBot token。
@@ -66,7 +74,13 @@ Core 采用单进程异步架构。插件是受信任 Python 扩展，共享进�
 4. 重协商 Inbound 和主动 WebSocket 连接。
 5. 发布调度与插件相关运行参数。
 
-普通配置使用 last-known-good 快照；配置 watcher 会发布通过校验的公开配置来源。敏感配置使用 fail-closed 快照：删除、损坏、不可读或与新公开配置尚未确认配对的 secrets 会立即撤销网络凭据与管理员视图。`ConfigManager` 管理的 secret 事务在持锁写入后直接发布已确认 revision。公开配置与当前已确认签名一致且运行代可信时，完整有效的外部 secrets 单文件变更进入待确认候选，已确认快照继续服务，候选隔离于插件、管理员和网络认证视图；Core 仅把字段路径差异私聊给当前管理员，随后由 `/reload` 重新读取磁盘并原子发布。公开配置变更与双来源部署由停服启动流程或独立可信 Inbound 完成确认。
+普通配置使用 last-known-good 快照。
+配置 watcher 会发布通过校验的公开配置来源。
+敏感配置使用 fail-closed 快照：删除、损坏、不可读或与新公开配置尚未确认配对的 secrets 会立即撤销网络凭据与管理员视图。
+`ConfigManager` 管理的 secret 事务在持锁写入后直接发布已确认 revision。
+公开配置与当前已确认签名一致且运行代可信时，完整有效的外部 secrets 单文件变更进入待确认候选，已确认快照继续服务，候选隔离于插件、管理员和网络认证视图。
+Core 仅把字段路径差异私聊给当前管理员，随后由 `/reload` 重新读取磁盘并原子发布。
+公开配置变更与双来源部署由停服启动流程或独立可信 Inbound 完成确认。
 
 ---
 
@@ -81,13 +95,17 @@ Core 采用单进程异步架构。插件是受信任 Python 扩展，共享进�
 - `GET /health`
 - `GET /metrics`
 
-HTTP 与 WebSocket Inbound 共享鉴权策略、会话键、接纳队列和排序规则。配置切换先创建候选 Listener，完成验证后提交新代，再排空旧代。
+HTTP 与 WebSocket Inbound 共享鉴权策略、会话键、接纳队列和排序规则。
+配置切换先创建候选 Listener，完成验证后提交新代，再排空旧代。
 
-标准 HTTP 上报的回复进入 OneBot action API，并在实际确认后返回 `{}`。开发客户端可显式选择 `X-XiaoQing-Response-Mode: actions` 协议，接收待执行动作列表。入站 Bearer token 与出站 OneBot token 分别管理。
+标准 HTTP 上报的回复进入 OneBot action API，并在实际确认后返回 `{}`。
+开发客户端可显式选择 `X-XiaoQing-Response-Mode: actions` 协议，接收待执行动作列表。
+入站 Bearer token 与出站 OneBot token 分别管理。
 
 ### 主动 WebSocket Client
 
-`onebot.py` 的 WebSocket Client 主动连接 OneBot，接收事件并发送 Action。连接管理包含有界指数退避、抖动、稳定窗口和配置变更唤醒。
+`onebot.py` 的 WebSocket Client 主动连接 OneBot，接收事件并发送 Action。
+连接管理包含有界指数退避、抖动、稳定窗口和配置变更唤醒。
 
 ### 出站发送
 
@@ -100,9 +118,14 @@ HTTP 与 WebSocket Inbound 共享鉴权策略、会话键、接纳队列和排�
   → 发送结果 / 回执
 ```
 
-发送回执支持插件在成功投递后提交业务状态。长消息被拆成几条发出时，回执等全部物理消息确认后才提交，并按顺序收集每一条的消息 ID（`message_ids`），插件在提交回调里把业务记录和真实消息对应起来。图片和文件在发送前经过路径、大小、类型和读取预算校验。
+发送回执支持插件在成功投递后提交业务状态。
+长消息被拆成几条发出时，回执等全部物理消息确认后才提交，并按顺序收集每一条的消息 ID（`message_ids`），插件在提交回调里把业务记录和真实消息对应起来。
+图片和文件在发送前经过路径、大小、类型和读取预算校验。
 
-事件暂存队列拥有所收集动作的后续结算权；暂存成功保持收据待定。WebSocket 上线回调与接收循环并发运行，回调等待的 echo 由该循环处理。连接关闭时统一取消和等待所属回调任务。
+事件暂存队列拥有所收集动作的后续结算权。
+暂存成功保持收据待定。
+WebSocket 上线回调与接收循环并发运行，回调等待的 echo 由该循环处理。
+连接关闭时统一取消和等待所属回调任务。
 
 ---
 
@@ -118,7 +141,10 @@ HTTP 与 WebSocket Inbound 共享鉴权策略、会话键、接纳队列和排�
 6. 命令兜底提示
 7. Smalltalk Provider
 
-`Router` 使用 Manifest 构建的只读命令目录完成触发词匹配和子命令解析；Dispatcher 在调用插件前用 `command_access` 校验权限与场景。这是全项目唯一的权限判断：会话每次继续前的复核、Core 签发的派生能力和 agent 给模型看的命令清单都调用它，插件代码不自己判断管理员。启动阶段会检测同优先级触发词冲突并报告错误。
+`Router` 使用 Manifest 构建的只读命令目录完成触发词匹配和子命令解析。
+Dispatcher 在调用插件前用 `command_access` 校验权限与场景。
+这是全项目统一的权限判断函数。会话继续前的复核、Core 派生能力和 agent 的模型可见命令清单均调用此函数。插件代码将管理员检查交给 Core。
+启动阶段会检测同优先级触发词冲突并报告错误。
 
 [消息处理流程](08-message-flow.md) 说明每个阶段的输入、短路条件和观测点。
 
@@ -140,15 +166,21 @@ HTTP 与 WebSocket Inbound 共享鉴权策略、会话键、接纳队列和排�
 
 ### 代际发布
 
-每次加载或热重载产生一个插件代。候选代完成校验与初始化后提交为活动代，退役代进入请求排空。资源按创建顺序逆序回收。
+每次加载或热重载产生一个插件代。
+候选代完成校验与初始化后提交为活动代，退役代进入请求排空。
+资源按创建顺序逆序回收。
 
 ### 文件监视
 
-插件 watcher 对 Python 源码、插件根 JSON 和 Manifest `watch_files` 建立稳定快照。当前解释器通过 module-lock 能力探针后可执行热重载；restart-only 模式通过进程重启应用源码变化。
+插件 watcher 对 Python 源码、插件根 JSON 和 Manifest `watch_files` 建立稳定快照。
+当前解释器通过 module-lock 能力探针后可执行热重载。
+restart-only 模式通过进程重启应用源码变化。
 
 ### 执行治理
 
-每个插件拥有独立入口并发、排队、超时、熔断和同步任务预算。同步阻塞库通过 `run_sync()` 进入共享 worker 与按插件 bulkhead。全局调度器在插件之间公平选择任务。
+每个插件拥有独立入口并发、排队、超时、熔断和同步任务预算。
+同步阻塞库通过 `run_sync()` 进入共享 worker 与按插件 bulkhead。
+全局调度器在插件之间公平选择任务。
 
 Manifest `concurrency` 控制命令入口模式：
 
@@ -159,7 +191,8 @@ Manifest `concurrency` 控制命令入口模式：
 
 ## 🧩 插件 Context 与能力
 
-Core 为每个插件签发窄 Context。主要能力包括：
+Core 为每个插件签发窄 Context。
+主要能力包括：
 
 - 当前插件的公开配置与 secret 快照
 - 私有数据目录与插件代内 runtime 状态
@@ -170,7 +203,9 @@ Core 为每个插件签发窄 Context。主要能力包括：
 - 声明式服务调用
 - 调度与静音查询
 
-Context 通过 capability 对象表达权限。敏感状态保留在 Core 所有权内，插件获得完成自身任务所需的作用域视图。派生能力跟随对应命令的 Manifest 声明签发，并在每次调用时按当前配置复核：密钥管理跟随 `/set_secret`，arXiv 的 Codex 摘要跟随 `/codex`，agent 的本机工具、SSH、Codex 跟随 `/shell`、`/ssh`、`/codex`。
+Context 通过 capability 对象表达权限。
+敏感状态保留在 Core 所有权内，插件获得完成自身任务所需的作用域视图。
+派生能力跟随对应命令的 Manifest 声明签发，并在每次调用时按当前配置复核：密钥管理跟随 `/set_secret`，arXiv 的 Codex 摘要跟随 `/codex`，agent 的本机工具、SSH、Codex 跟随 `/shell`、`/ssh`、`/codex`。
 
 ---
 
@@ -181,25 +216,38 @@ Context 通过 capability 对象表达权限。敏感状态保留在 Core 所有
 - 私聊：用户 ID
 - 群聊：群 ID + 用户 ID
 
-同一会话键按接纳顺序串行执行。处理函数读取会话快照，并通过原子 callback 提交状态。异常与取消会保留已提交状态的一致性。每次继续前，Dispatcher 用 `command_access` 复核此人此刻在这里至少还能用该插件的一条顶层命令；撤权或场景不再允许时会话关闭。
+同一会话键按接纳顺序串行执行。
+处理函数读取会话快照，并通过原子 callback 提交状态。
+异常与取消会保留已提交状态的一致性。
+每次继续前，Dispatcher 用 `command_access` 复核此人此刻在这里至少还能用该插件的一条顶层命令。
+撤权或场景不再允许时会话关闭。
 
-Session 适合用户驱动的短交互。Codex、XiaoQing Agent 等长任务使用插件内部队列和主动发送能力。
+Session 适合用户驱动的短交互。
+Codex、XiaoQing Agent 等长任务使用插件内部队列和主动发送能力。
 
 ---
 
 ## 💾 调度与持久投递
 
-`SchedulerManager` 从 Manifest `schedule` 读取 cron、投递模式和群目标，按插件代注册 handler。`app_scheduling.py` 执行 `broadcast`、`targeted` 与 `silent` 契约，统一校验目标并进入 OneBot 投递边界。`durable_fanout.py` 为多目标通知记录持久进度，进程重启后从检查点继续。
+`SchedulerManager` 从 Manifest `schedule` 读取 cron、投递模式和群目标，按插件代注册 handler。
+`app_scheduling.py` 执行 `broadcast`、`targeted` 与 `silent` 契约，统一校验目标并进入 OneBot 投递边界。
+`durable_fanout.py` 为多目标通知记录持久进度，进程重启后从检查点继续。
 
-插件排程发布与插件代绑定。卸载或重载时，旧代排程先停止触发，再进入资源排空。
+插件排程发布与插件代绑定。
+卸载或重载时，旧代排程先停止触发，再进入资源排空。
 
 ---
 
 ## 🧩 插件内嵌服务
 
-复合插件可在 `init()` 中创建内部服务，并在 `shutdown()` 中关闭资源。Pendo 使用该模式管理 FastAPI、SQLite、前端资源、提醒调度和聊天命令。
+复合插件可在 `init()` 中创建内部服务，并在 `shutdown()` 中关闭资源。
+Pendo 使用该模式管理 FastAPI、SQLite、前端资源、提醒调度和聊天命令。
 
-关闭结果通过 `App.shutdown_errors` 暴露为只读快照。入口等待 `App.stop()` 完成后检查该快照；存在资源收敛错误时，进程以失败状态退出。运行验收同时检查退出状态、关闭完成日志和端口释放。聊天插件在共享关闭预算内取消后台等待，并为取消收尾和最终刷盘保留时间。
+关闭结果通过 `App.shutdown_errors` 暴露为只读快照。
+入口等待 `App.stop()` 完成后检查该快照。
+存在资源收敛错误时，进程以失败状态退出。
+运行验收同时检查退出状态、关闭完成日志和端口释放。
+聊天插件在共享关闭预算内取消后台等待，并为取消收尾和最终刷盘保留时间。
 
 内嵌服务遵循以下所有权：
 
@@ -212,7 +260,7 @@ Session 适合用户驱动的短交互。Codex、XiaoQing Agent 等长任务使�
 
 ## 🤖 小青 agent 的跨插件协作
 
-`xiaoqing_agent` 不直接导入其他插件，全部经 Core 的服务表和 capability 协作：
+`xiaoqing_agent` 通过 Core 服务表和 capability 与其他插件协作：
 
 ```text
 xiaoqing_chat ──agent.handle_turn（decide / act）──► xiaoqing_agent

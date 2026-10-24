@@ -69,7 +69,7 @@ async def _finalize_http_action_response(
 
     Constructing an aiohttp ``Response`` does not write any bytes.  For real
     aiohttp requests this helper prepares the response and completes
-    ``write_eof`` before acknowledging delivery; disconnects and serialization
+    ``write_eof`` before acknowledging delivery. Disconnects and serialization
     failures roll back every attached receipt.
     """
 
@@ -229,7 +229,7 @@ class _InboundEventLane:
 
 @dataclass(frozen=True, slots=True)
 class _InboundHandlerOutcome:
-    """A task-safe handler result; raw BaseException never escapes its child task."""
+    """A task-safe handler result. Raw BaseException never escapes its child task."""
 
     actions: Any                = None
     error: BaseException | None = None
@@ -245,12 +245,13 @@ class _WebSocketSendOutcome:
 class _InboundEventDispatcher:
     """Bounded, fair, per-session FIFO dispatcher shared by HTTP and WS.
 
-    ``admit`` is the core linearization point.  It runs synchronously on the
-    owner event loop after transport authentication and parsing, assigns a
-    monotonically increasing sequence, and appends the ticket to exactly one
-    keyed lane.  A lane has at most one running handler, while independent
-    lanes may consume separate workers.  Completed hot lanes are appended to
-    the back of the ready queue, so a cold lane cannot be starved.
+    ``admit`` is the core linearization point. It runs synchronously on the
+    owner event loop after transport authentication and parsing.
+    It assigns a monotonically increasing sequence and adds the ticket to one
+    keyed lane. Each lane has at most one active handler.
+
+    Independent lanes can use separate workers. After completion, busy lanes
+    return to the back of the ready queue. Other lanes can then run.
     """
 
     def __init__(
@@ -265,7 +266,7 @@ class _InboundEventDispatcher:
         self._handler     = handler
         self._max_workers = max(1, int(max_workers))
         self._queue_size  = max(0, int(queue_size))
-        # queue_size is the waiting backlog; running workers are additional
+        # queue_size is the waiting backlog. Running workers are additional
         # bounded slots.  Even queue_size=0 is therefore bounded, not unlimited.
         self._capacity              = self._max_workers + self._queue_size
         self._drain_timeout_seconds = max(0.01, float(drain_timeout_seconds))
@@ -418,7 +419,7 @@ class _InboundEventDispatcher:
             try:
                 ticket.result.exception()
             except BaseException:
-                # Retrieving is sufficient; the transport intentionally drops
+                # Retrieving is sufficient. The transport intentionally drops
                 # a revoked/stopped result and must not re-raise it.
                 pass
 
@@ -566,8 +567,8 @@ class _InboundEventDispatcher:
                 lane.running = None
             self._decrement_inflight()
             if lane.pending:
-                # The current worker immediately loops over the ready queue;
-                # spawning here would create one throwaway task per same-key
+                # The current worker immediately loops over the ready queue.
+                # Spawning here would create one throwaway task per same-key
                 # event.  If this worker is cancelled, _worker_done repairs
                 # the ready queue with a replacement.
                 self._schedule_lane(ticket.key, lane, spawn_worker=False)
@@ -803,8 +804,8 @@ class InboundServer:
         # 活跃的 WebSocket 连接集合
         self._active_sockets: set[web.WebSocketResponse]                         = set()
         self._socket_auth_states: dict[web.WebSocketResponse, _InboundAuthState] = {}
-        # A constructed server may be invoked directly by embedders/tests;
-        # network admission is still impossible until ``start`` binds a site.
+        # A constructed server may be invoked directly by embedders/tests.
+        # Network admission is still impossible until ``start`` binds a site.
         self._accepting_events                             = True
         self._active_handler_tasks: set[asyncio.Task[Any]] = set()
 
@@ -906,7 +907,7 @@ class InboundServer:
         except RuntimeError:
             # Runtime updates are performed on the owning event loop.  If an
             # embedder calls from another thread, generation checks still
-            # revoke subsequent frames; physical close happens on the next
+            # revoke subsequent frames. Physical close happens on the next
             # socket activity or server shutdown.
             logger.warning("Unable to schedule revoked WebSocket close outside the event loop")
             return
@@ -1346,8 +1347,8 @@ class InboundServer:
                         continue
                     assert normalized is not None
                     normalized["_source"] = "inbound_ws"
-                    # This is immediately adjacent to dispatcher admission;
-                    # stop cannot interleave in the same event-loop turn.
+                    # This is immediately adjacent to dispatcher admission.
+                    # Stop cannot interleave in the same event-loop turn.
                     if not self._accepting_events:
                         break
                     if not self._auth_is_current(connection_auth):

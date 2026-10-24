@@ -145,7 +145,7 @@ async def test_lightyear_constant_has_quantity_semantics() -> None:
 async def test_simbad_total_deadline_returns_without_global_lock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Warm the optional scientific imports; the assertion below measures the
+    # Warm the optional scientific imports. The assertion below measures the
     # network deadline rather than first-import cost.
     from astropy import units as _units  # noqa: F401
     from astropy.coordinates import SkyCoord as _SkyCoord  # noqa: F401

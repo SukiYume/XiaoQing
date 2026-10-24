@@ -692,7 +692,7 @@ def normalize_reminder_rules(value: Any) -> list[dict[str, int]]:
 
 
 def with_start_time_reminder_rule(rules: Any) -> list[dict[str, int]]:
-    """Normalize rules and ensure the event start itself is included."""
+    """Normalize reminder rules. Include a reminder at the event start."""
     normalized = normalize_reminder_rules(rules)
     if not any(rule["offset_seconds"] == 0 for rule in normalized):
         normalized.append({"offset_seconds": 0})

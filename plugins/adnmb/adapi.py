@@ -174,7 +174,7 @@ class AdnmbClient:
         return self._closed
 
     def close(self) -> None:
-        """Clear wrapper-owned caches; the application owns ``session``."""
+        """Clear wrapper-owned caches. The application owns ``session``."""
         self._forum_cache            = None
         self._forum_cache_expires_at = 0.0
         self._closed                 = True

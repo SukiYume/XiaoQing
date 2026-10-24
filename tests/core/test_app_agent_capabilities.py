@@ -154,7 +154,7 @@ async def test_agent_turn_reaches_agent_with_the_speakers_principal(
         await capability.handle_turn(["not", "a", "mapping"])
 
     # 不再是 Bot 管理员也照样交给 agent：能做什么由 agent 按发起人的权限决定。
-    app._admin_set.clear()
+    app.identity_service.load_admins({})
     await capability.handle_turn({"text": "再画一个"})
     assert len(seen) == 2 and seen[-1][1].capabilities.is_bot_admin is False
 
@@ -259,7 +259,7 @@ async def test_codex_and_ssh_agent_services_validate_and_forward_requests(
         await agent.capabilities.ssh_agent.run(server="lab", command=" ", timeout_seconds=30)
 
     # 签发后撤掉管理员：和直接用 /codex、/ssh 一样，下一次调用就不再放行。
-    app._admin_set.clear()
+    app.identity_service.load_admins({})
     with pytest.raises(PermissionError):
         await agent.capabilities.ssh_agent.list_servers()
     with pytest.raises(PermissionError):
@@ -352,7 +352,7 @@ async def test_command_runner_executes_published_commands_as_the_speaker(
         await runner.run("   ")
 
     # 撤掉管理员后命令照样执行，但身份跟着变：插件看到的不再是 Bot 管理员。
-    app._admin_set.clear()
+    app.identity_service.load_admins({})
     assert (await runner.run("/echo again"))[0]["data"]["text"] == "echo:again"
     assert calls[-1][3].capabilities.is_bot_admin is False
 
@@ -729,7 +729,7 @@ async def test_local_tools_follow_the_shell_permission_and_are_rechecked(
     assert tools is not None
     tools.ensure_authorized()
 
-    app._admin_set.clear()
+    app.identity_service.load_admins({})
     with pytest.raises(PermissionError):
         tools.ensure_authorized()
 

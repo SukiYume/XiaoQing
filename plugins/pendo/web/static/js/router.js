@@ -92,7 +92,7 @@ function queueCurrentRoute() {
     const navigationId = ++requestedNavigation;
     const route        = getParams();
 
-    // 新导航立即独立加载；旧请求只能写入已移出的页面容器。
+    // 新导航立即独立加载。旧请求只能写入已移出的页面容器。
     destroyCurrentPage();
     contentEl.innerHTML = '<div class="empty-state"><p>加载中…</p></div>';
 

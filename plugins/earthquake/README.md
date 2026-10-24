@@ -1,6 +1,8 @@
 # 🌍 Earthquake
 
-`earthquake` 从[中国地震台网速报微博](https://www.weibo.com/ceic)读取近期地震快讯。手动命令查询最新记录，定时任务向 Core 为该 schedule 解析出的目标群投递 4.0 级及以上的新快讯。
+[English](README.en.md)
+
+`earthquake` 从[中国地震台网速报微博](https://www.weibo.com/ceic)读取近期地震快讯。手动命令查询最新记录。定时任务投递 4.0 级及以上的新快讯。Core 为该 schedule 解析目标群。
 
 ---
 
@@ -47,7 +49,7 @@ Manifest 每 5 分钟以 Core `targeted` 模式运行一次 `scheduled`：
 | `earthquake_delivery.json` | 待办事件与逐目标进度 |
 | `EarthquakeFigures/` | 校验后的图片缓存 |
 
-游标文件采用有界 JSON 格式。结构异常的文件会原子移动为 `*.corrupt-*` 取证副本，插件随后从有效检查点恢复。图片缓存按内容哈希命名，最多 64 项、64 MiB，保留期为 30 天。
+游标文件使用具有资源限制的 JSON 格式。插件将结构异常的文件原子移动为 `*.corrupt-*` 取证副本。随后，插件从有效检查点恢复。图片缓存使用内容哈希命名。缓存最多保留 64 项、64 MiB，保留期为 30 天。
 
 ---
 

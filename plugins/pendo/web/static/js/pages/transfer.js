@@ -516,7 +516,7 @@ function ensureStyles() {
     );
 }
 
-// 页面模板只读取规范化后的状态；所有外部文本都在插入 HTML 前转义。
+// 页面模板只读取规范化后的状态。所有外部文本都在插入 HTML 前转义。
 function renderPage() {
     if (!_container || !_state) return;
     ensureStyles();
@@ -1551,7 +1551,7 @@ async function loadHistory() {
     }
 }
 
-// 路由生命周期只保留当前页面状态；销毁后，迟到的请求会被 isCurrentState 拦截。
+// 路由生命周期只保留当前页面状态。销毁后，迟到的请求会被 isCurrentState 拦截。
 export function render(container) {
     _container = container;
     _state = defaultState();

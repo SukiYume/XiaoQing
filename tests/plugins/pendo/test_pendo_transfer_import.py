@@ -87,7 +87,7 @@ def test_import_execute_isolates_external_ids_and_selected_types(
     assert temp_db.get_item("note_subset", owner_id=OWNER_ID) is None
 
     # Overwrite targets only a same-owner/type record previously imported with
-    # this provenance source ID; it never treats the external ID as a DB key.
+    # this provenance source ID. It never treats the external ID as a DB key.
     overwrite_bundle = _build_sample_bundle_bytes(
         {
             "task": [

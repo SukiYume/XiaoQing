@@ -1,5 +1,7 @@
 # 🚀 QingPet 快速开始
 
+中文 | [English](QUICKSTART.en.md)
+
 本指南面向首次部署者，用一组 QQ 群命令完成权限、数据库、养成、社交和定时任务的基础验收。完整玩法见 [README.md](README.md)。
 
 ---
@@ -29,7 +31,7 @@ data/qingpet/qingpet/qingpet.db
 /宠物 管理 配置 查看
 ```
 
-配置返回应包含 `enabled`、经济倍率、衰减倍率、交易开关、自然触发开关和活动开关。
+配置回复应包含 `enabled`、经济倍率和衰减倍率。回复还应包含交易开关、自然触发开关和活动开关。
 
 ---
 
@@ -140,7 +142,7 @@ data/qingpet/qingpet/qingpet.db
 | 次日 00:00 | 每日计数重置与宠物年龄增长 |
 | 周一 10:00 | 周排行奖励与称号结算 |
 
-生产数据验证前使用 SQLite `Connection.backup()` 生成一致备份，备份包含 WAL 中已提交的数据。验证使用备份副本和隔离数据目录。
+验证生产数据前，使用 SQLite `Connection.backup()` 生成一致备份。备份包含 WAL 中已提交的数据。验证使用备份副本和隔离数据目录。
 
 ---
 

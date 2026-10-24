@@ -6,7 +6,6 @@ import asyncio
 import copy
 import json
 from collections.abc import Callable
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -130,10 +129,6 @@ class FakeAgentContext:
             group_role=group_role if group_id is not None else "unknown",  # type: ignore[arg-type]
         )
         self.send_results: list[bool | None] = []
-
-    def with_capabilities(self, **updates: Any) -> FakeAgentContext:
-        self.capabilities = replace(self.capabilities, **updates)
-        return self
 
     def get_settings_snapshot(self) -> PluginSettingsSnapshot:
         plugin = {**self.agent_config, **self.extra_config}

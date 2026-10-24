@@ -1,5 +1,7 @@
 # 💬 Smalltalk
 
+中文 | [English](README.en.md)
+
 `smalltalk` 提供机器人名字短回复、管理员维护的精确问答，以及通过 `chat.reply` 服务生成的基础闲聊。可选的 `voice.synthesize_text` 服务会按概率把纯文本回复转换为语音。
 
 ---
@@ -51,7 +53,7 @@ data/smalltalk/QA_audit.json
 
 主文件更新由进程内锁和原子写保护。变更审计最多保存 5000 条，记录操作与问题摘要。群号和用户号校验在作用域创建前完成。
 
-磁盘提交与内存缓存发布属于同一次更新事务。调用取消后，已经开始的线程写入完成缓存发布再释放作用域锁，下一次编辑读取最新状态。
+磁盘提交与内存缓存发布属于同一次更新事务。调用取消后，已经开始的线程写入完成缓存发布再释放作用域锁。下一次编辑读取最新状态。
 
 ---
 
@@ -59,8 +61,8 @@ data/smalltalk/QA_audit.json
 
 只喊机器人名字时，插件按以下顺序选择回复集合：
 
-1. `data/smalltalk/小青.json` 的 `小青` 数组；
-2. `data/smalltalk/responses.json` 的 `responses` 数组；
+1. `data/smalltalk/小青.json` 的 `小青` 数组。
+2. `data/smalltalk/responses.json` 的 `responses` 数组。
 3. 内置短回复。
 
 每个集合最多接收 200 条唯一非空字符串，单条上限为 1000 个字符。加载器会过滤结构、类型、长度和重复值。
@@ -71,7 +73,7 @@ data/smalltalk/QA_audit.json
 
 精确 QA 命中时直接返回本地回答。其余闲聊通过 Core 签发的 `context.capabilities.chat_reply` 调用 `chat.reply`，并传递当前 `user_id` 与 `group_id` actor 字段。
 
-服务权限由 `smalltalk` Manifest 的 `uses_services` 和 `chat` Manifest 的调用者白名单共同约束。provider 异常或消息段校验异常时，用户收到固定降级提示，日志记录脱敏错误类别。
+服务权限由 `smalltalk` Manifest 的 `uses_services` 和 `chat` Manifest 的调用者白名单共同约束。provider 异常或消息段校验异常时，用户收到固定降级提示。日志记录脱敏错误类别。
 
 ---
 
@@ -89,7 +91,7 @@ data/smalltalk/QA_audit.json
 }
 ```
 
-字段接受 0～1 的有限数字，默认值为 `0.2`。命中概率且回复是 3000 字符以内的纯文本时，插件调用 `voice.synthesize_text`。混合媒体与语音服务异常会保留原文本回复。
+字段接受 0～1 的有限数字。默认值为 `0.2`。命中概率且回复是 3000 字符以内的纯文本时，插件调用 `voice.synthesize_text`。混合媒体与语音服务异常会保留原文本回复。
 
 ---
 

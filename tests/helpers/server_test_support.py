@@ -104,17 +104,7 @@ def mock_handler():
 @pytest.fixture
 def sample_server(mock_handler):
     """Create a sample InboundServer for testing"""
-    return InboundServer(
-        host           = "127.0.0.1",
-        port           = 8765,
-        token          = "test_token",
-        handler        = mock_handler,
-        enable_http    = True,
-        enable_ws      = True,
-        ws_path        = "/ws",
-        ws_max_workers = 2,
-        ws_queue_size  = 10,
-    )
+    return _make_server(mock_handler, 8765)
 
 
 def _make_server(mock_handler, port: int) -> InboundServer:

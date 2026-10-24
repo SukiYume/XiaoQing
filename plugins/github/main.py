@@ -257,7 +257,7 @@ async def _download_trending_html(context: _GitHubContext, time_range: TimeRange
             mime_policy     = HTML_MIME_POLICY,
             redirect_policy = _GITHUB_PROXY_REDIRECTS,
             headers         = _REQUEST_HEADERS,
-            request_kwargs  = {"proxy": proxy, "timeout": 15},
+            request_kwargs  = {"proxy": proxy, "timeout": 15, "max_field_size": 32 * 1024},
         )
         body    = response.body
         charset = response.charset

@@ -1,6 +1,9 @@
 # 🚀 01 - 快速开始
 
-本章从全新源码目录开始，完成依赖安装、配置创建、OneBot 接入、服务启动和首次验证。命令示例适用于 Git Bash、macOS 和 Linux。
+中文 | [English](01-getting-started.en.md)
+
+本章从全新源码目录开始，完成依赖安装、配置创建、OneBot 接入、服务启动和首次验证。
+命令示例适用于 Git Bash、macOS 和 Linux。
 
 ---
 
@@ -13,7 +16,8 @@
 | 依赖 | 当前环境可通过 pip 安装 `requirements.txt` |
 | 网络 | 可访问 QQ 与启用插件所需的第三方服务 |
 
-Python 环境、虚拟环境和依赖安装方式由使用者管理。XiaoQing 的统一启动命令为 `python main.py`。
+Python 环境、虚拟环境和依赖安装方式由使用者管理。
+XiaoQing 的统一启动命令为 `python main.py`。
 
 ---
 
@@ -25,7 +29,8 @@ cd XiaoQing
 python -m pip install -r requirements.txt
 ```
 
-根依赖清单覆盖 Core、默认插件和 Pendo Web。以下能力需要额外运行资源：
+根依赖清单覆盖 Core、默认插件和 Pendo Web。
+以下能力需要额外运行资源：
 
 - Jupyter 插件需要可用的 Jupyter kernel。
 - arXiv Filter 的本地推理需要 `plugins/arxiv_filter/best_model/` 模型资产。
@@ -73,9 +78,15 @@ cp config/secrets.json.example config/secrets.json
 }
 ```
 
-将 `config/secrets.json` 保存在部署主机，并为文件设置与 Bot 进程相匹配的读取权限。项目的 Git 忽略规则覆盖正式 secrets 文件。
+将 `config/secrets.json` 保存在部署主机，并为文件设置与 Bot 进程相匹配的读取权限。
+项目的 Git 忽略规则覆盖正式 secrets 文件。
 
-首次部署在启动前写入完整配置。服务运行期间可在管理员私聊中用 `/set_secret <已有路径> <值>` 提交单项敏感配置。新增路径可直接写入完整、有效的 `secrets.json`；当 `config.json` 保持当前已确认版本时，watcher 暂存候选并私聊当前管理员列出字段增删改，凭据值始终隐藏。核对通知后发送 `/reload` 确认并应用。修改 `config.json` 或同时替换两个来源时，先停止服务，保存完整文件，再启动新进程。
+首次部署在启动前写入完整配置。
+服务运行期间可在管理员私聊中用 `/set_secret <已有路径> <值>` 提交单项敏感配置。
+新增路径可直接写入完整、有效的 `secrets.json`。
+当 `config.json` 保持当前已确认版本时，watcher 暂存候选。Core 私聊当前管理员，列出新增、删除和修改的字段路径。所有凭据值保持隐藏。
+核对通知后发送 `/reload` 确认并应用。
+修改 `config.json` 或同时替换两个来源时，先停止服务，保存完整文件，再启动新进程。
 
 ### AI 插件配置
 
@@ -134,7 +145,8 @@ cp config/secrets.json.example config/secrets.json
 
 ### 被动 Inbound
 
-被动模式由 OneBot 向 XiaoQing 推送事件。上报地址设置为 `http://127.0.0.1:12000/event`，并配置以下请求头：
+被动模式由 OneBot 向 XiaoQing 推送事件。
+上报地址设置为 `http://127.0.0.1:12000/event`，并配置以下请求头：
 
 ```http
 Authorization: Bearer replace-with-a-random-secret
@@ -152,9 +164,14 @@ XiaoQing 侧配置：
 }
 ```
 
-HTTP `/event` 与 WebSocket `/ws` 共享同一 `inbound_token`、会话排序和有界接纳队列。启用任一 Inbound Listener 时，请设置非空 `inbound_token`。
+HTTP `/event` 与 WebSocket `/ws` 共享同一 `inbound_token`、会话排序和有界接纳队列。
+启用任一 Inbound Listener 时，请设置非空 `inbound_token`。
 
-同时开启 OneBot HTTP API，用 `onebot_http_base` 和 `secrets.onebot_token` 配置回复通道。标准上报收到 `{}` 确认，消息通过 action API 实际发送。`secret`/`X-Signature` 单独配置会收到 401；此服务的 HTTP 上报使用 Bearer 请求头。开发矩阵通过 `X-XiaoQing-Response-Mode: actions` 显式选择动作列表响应。
+同时开启 OneBot HTTP API，用 `onebot_http_base` 和 `secrets.onebot_token` 配置回复通道。
+标准上报收到 `{}` 确认，消息通过 action API 实际发送。
+`secret`/`X-Signature` 单独配置会收到 401。
+此服务的 HTTP 上报使用 Bearer 请求头。
+开发矩阵通过 `X-XiaoQing-Response-Mode: actions` 显式选择动作列表响应。
 
 ### 主动 WebSocket
 
@@ -169,11 +186,14 @@ HTTP `/event` 与 WebSocket `/ws` 共享同一 `inbound_token`、会话排序和
 }
 ```
 
-OneBot 服务启用 Bearer 鉴权时，在 `config/secrets.json` 顶层配置 `onebot_token`。有效 secrets 快照中的空字符串表示双方约定的匿名连接模式。
+OneBot 服务启用 Bearer 鉴权时，在 `config/secrets.json` 顶层配置 `onebot_token`。
+有效 secrets 快照中的空字符串表示双方约定的匿名连接模式。
 
 ### 网络边界
 
-Inbound 默认绑定 loopback。公网部署使用 Nginx 或 Caddy 终止 HTTPS/WSS，并把流量转发到 loopback。受控跨容器网络可结合防火墙设置 `inbound_trusted_tls_proxy: true`。
+Inbound 默认绑定 loopback。
+公网部署使用 Nginx 或 Caddy 终止 HTTPS/WSS，并把流量转发到 loopback。
+受控跨容器网络可结合防火墙设置 `inbound_trusted_tls_proxy: true`。
 
 ---
 
@@ -210,7 +230,10 @@ Windows 生产环境重启流程：
 2. 等待监控器、Bot 与 NapCat 已停止的完成提示。
 3. 双击 `scripts/run-bot.vbs` 启动新进程。
 
-停服入口使用仓库级互斥量和绝对命令路径识别当前部署，只收口该仓库的 PowerShell 监控器、Python 日志泵、`main.py` 与指定 NapCat 进程树。重复双击会返回同一完成结果。监控器由提升权限的 SSH、计划任务或管理员终端启动时，停服入口在身份读取连续失败后显示一次 UAC；提升后的进程重新完成全部身份校验再收口进程树。
+停服入口使用仓库级互斥量和绝对命令路径识别当前部署，只收口该仓库的 PowerShell 监控器、Python 日志泵、`main.py` 与指定 NapCat 进程树。
+重复双击返回同一完成结果。
+监控器由提升权限的 SSH、计划任务或管理员终端启动时，停服入口在身份读取连续失败后显示一次 UAC。
+提升后的进程重新完成全部身份校验再收口进程树。
 
 ---
 
@@ -271,7 +294,8 @@ UAT 用当前环境的解释器启动真实 `python main.py`，把插件数据�
 | `diff` | `git diff --check` |
 | `chat-quality` | 真实模型聊天质量探针，需要 `--include-chat-quality` 显式开启 |
 
-报告位于 `test_reports/runs/project/full-uat-*/reports/FULL_UAT_REPORT.md`。常用选项：
+报告位于 `test_reports/runs/project/full-uat-*/reports/FULL_UAT_REPORT.md`。
+常用选项：
 
 | 选项 | 作用 |
 |---|---|

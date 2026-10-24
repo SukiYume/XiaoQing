@@ -2,6 +2,8 @@
 
 # 🌿 XiaoQingBot
 
+[English](README.en.md)
+
 **基于 OneBot v11 和 Python asyncio 的插件化 QQ 助手**
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
@@ -17,11 +19,11 @@
 
 ## ✨ 项目简介
 
-XiaoQingBot 面向长期运行的私人 QQ 助手场景。Core 负责 OneBot 接入、命令路由、会话、调度、配置、插件生命周期和运行指标；插件提供聊天、个人管理、天文工具、远程操作、内容解析与娱乐功能。
+XiaoQingBot 为私人 QQ 助手提供长期运行能力。Core 负责 OneBot 接入、命令路由、会话、调度、配置、插件生命周期和运行指标。插件提供聊天、个人管理、天文工具、远程操作、内容解析与娱乐功能。
 
 两个核心插件覆盖主要日常场景：
 
-- `xiaoqing_chat`：多模态拟人聊天，支持群聊参与、私聊、图片、表情、引用、长期记忆、行为规划和表达学习。开启 `xiaoqing_agent` 后，叫小青做事时她会按你的权限用工具真正动手完成。
+- `xiaoqing_chat`：支持群聊、私聊、图片、表情、引用、长期记忆、行为规划和表达学习。开启 `xiaoqing_agent` 后，工具执行遵循发起人的权限。
 - `pendo`：个人时间与信息管理，支持日程、待办、笔记、日记、账本、提醒、搜索、统计、Web 控制台和 iPhone Scriptable 小组件。
 
 XiaoQing 面向回环地址、可信内网或严格反向代理保护的私人服务。插件采用受信任代码模型，与 Bot 共享 Python 进程和操作系统权限。请安装经过审查的第一方插件或可信插件。
@@ -119,9 +121,11 @@ Authorization: Bearer your-secret-token
 Content-Type: application/json
 ```
 
-服务端使用 Bearer 认证。OneBot 的 `secret` / `X-Signature` 属于 HMAC 签名机制，单独配置该字段会收到 401。上报端需要支持自定义 Authorization 请求头；也可选用下方 WebSocket 接入。
+服务端使用 Bearer 认证。OneBot 的 `secret` / `X-Signature` 实现 HMAC 签名。上报端仅配置该字段时，服务端返回 401。HTTP 上报端需要支持自定义 `Authorization` 请求头。WebSocket 提供另一种接入方式。
 
-标准 HTTP 上报的回复通过 `onebot_http_base` 对应的 OneBot action API 发送，成功回执后才提交插件投递状态；事件响应为 `{}`。需要开启 NapCat 的 HTTP API，并在 XiaoQing 中配置匹配的 OneBot 凭据。开发验收客户端可显式发送 `X-XiaoQing-Response-Mode: actions`，接收自定义 `{"actions": [...]}` 正文并自行负责执行动作。该模式用于本地命令矩阵。
+标准 HTTP 上报通过 `onebot_http_base` 对应的 OneBot action API 发送回复。插件投递状态在成功回执后提交。事件响应为 `{}`。部署者需要开启 NapCat 的 HTTP API，并在 XiaoQing 中配置匹配的 OneBot 凭据。
+
+开发验收客户端可发送 `X-XiaoQing-Response-Mode: actions`。客户端接收自定义 `{"actions": [...]}` 正文，并负责执行其中的动作。本地命令矩阵使用此模式。
 
 主动 WebSocket 模式由 XiaoQing 连接 OneBot：
 
@@ -196,7 +200,9 @@ python main.py
 
 ### xiaoqing_agent
 
-`xiaoqing_agent` 在有人叫小青做事时接手：判断是否需要动手，然后按发起人自己的权限真实执行（已有 XiaoQing 命令按各自权限可用；Python、Shell、QingSSH 和 Codex 跟随 `/shell`、`/ssh`、`/codex` 的声明，这几条命令只给 Bot 管理员），做完以小青的口吻回复，长任务在后台完成后主动发回。默认关闭，在 `config.plugins.xiaoqing_agent.enabled` 开启；关闭时 `xiaoqing_chat` 行为不变。
+用户请求小青执行任务时，`xiaoqing_agent` 判断是否需要调用工具。工具执行使用发起人的权限。已有 XiaoQing 命令保留各自权限。Python、Shell、QingSSH 和 Codex 遵循 `/shell`、`/ssh`、`/codex` 的声明。这些命令限定 Bot 管理员使用。
+
+任务完成后，插件以小青的口吻回复。长任务在后台执行，并主动发送结果。插件默认关闭，通过 `config.plugins.xiaoqing_agent.enabled` 开启。插件关闭时，`xiaoqing_chat` 保持原有行为。
 
 - [使用说明](plugins/xiaoqing_agent/README.md)
 
@@ -264,9 +270,15 @@ XiaoQing/
 /reload
 ```
 
-普通配置采用 last-known-good 快照，敏感配置采用 fail-closed 快照。运行中的管理员可通过 `/set_secret` 更新 `secrets.json` 已有路径；Core 在同一事务中保存文件并发布新 revision。外部工具保存完整、有效的 `secrets.json` 且 `config.json` 与当前已确认版本一致时，watcher 暂存新候选，当前管理员、网络连接和插件凭据继续使用已确认快照；Core 私聊管理员报告文件有效性以及新增、删除、修改的字段路径，通知内容仅包含路径。管理员核对后发送 `/reload` 确认并应用候选。`config.json` 变更或两个来源一起替换安排在停服窗口内，独立受保护的 Inbound 也可用于执行 `/reload`。
+普通配置使用最近一次有效快照（last-known-good）。敏感配置采用故障关闭策略（fail-closed）。运行中的管理员可通过 `/set_secret` 更新 `secrets.json` 已有路径。Core 在同一事务中保存文件并发布新 revision。
 
-Windows 生产启动链为 `scripts/run-bot.vbs → scripts/run-bot-monitor.ps1 → scripts/run_process_with_rotating_logs.py`。双击 `scripts/stop-bot.vbs` 可安全停止同一仓库的监控器、Bot 与 NapCat；由提升权限的 SSH、计划任务或管理员终端启动进程时，停服入口会显示一次 UAC 确认。完成提示出现后可再次双击 `scripts/run-bot.vbs` 启动。同步脚本、启动参数和生产目录说明位于 `scripts/` 对应文件的注释与帮助输出中。
+外部工具可保存完整、有效的 `secrets.json`。此时，`config.json` 需要与当前已确认版本一致。watcher 暂存新的敏感配置候选。当前管理员、网络连接和插件凭据继续使用已确认快照。
+
+Core 私聊管理员，报告文件有效性及新增、删除、修改的字段路径。通知中的配置内容仅包含路径。管理员核对后发送 `/reload`，确认并应用候选。
+
+`config.json` 变更或两个来源一起替换需要安排在停服窗口内。独立受保护的 Inbound 也可用于执行 `/reload`。
+
+Windows 生产启动链为 `scripts/run-bot.vbs → scripts/run-bot-monitor.ps1 → scripts/run_process_with_rotating_logs.py`。双击 `scripts/stop-bot.vbs` 会停止同一仓库的监控器、Bot 与 NapCat。进程由提升权限的 SSH、计划任务或管理员终端启动时，停服入口显示一次 UAC 确认。完成提示出现后，双击 `scripts/run-bot.vbs` 可再次启动。`scripts/` 中对应文件的注释与帮助输出说明同步脚本、启动参数和生产目录。
 
 ---
 

@@ -502,14 +502,7 @@ def _show_help(context: ShellContext) -> str:
     terminal_status  = _terminal_label(terminal)
     if terminal.error:
         terminal_status = f"配置错误（{terminal.error}）"
-    if terminal.backend == _TERMINAL_GIT_BASH:
-        examples = (
-            "   /shell ls -la\n"
-            "   /shell pwd\n"
-            "   /shell python --version\n"
-            "   /shell ping -c 3 127.0.0.1\n"
-        )
-    elif sys.platform == "win32":
+    if terminal.backend != _TERMINAL_GIT_BASH and sys.platform == "win32":
         examples = (
             "   /shell cmd /c dir\n"
             "   /shell cmd /c cd\n"

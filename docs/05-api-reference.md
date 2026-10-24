@@ -1,6 +1,9 @@
 # 🔌 05 - API 参考
 
-本章汇总插件开发常用的公开类型、函数和入口签名。开发流程见 [插件开发指南](03-plugin-development.md)，实现所有权见 [Core 模块](04-core-modules.md)。
+中文 | [English](05-api-reference.en.md)
+
+本章汇总插件开发常用的公开类型、函数和入口签名。
+开发流程见 [插件开发指南](03-plugin-development.md)，实现所有权见 [Core 模块](04-core-modules.md)。
 
 ---
 
@@ -60,7 +63,8 @@ build_action(
 ) -> dict[str, Any] | None
 ```
 
-`group_id` 存在时生成 `send_group_msg`，其余用户作用域生成 `send_private_msg`。空消息段返回空 Action。
+`group_id` 存在时生成 `send_group_msg`，其余用户作用域生成 `send_private_msg`。
+空消息段返回空 Action。
 
 ### 文本边界
 
@@ -97,7 +101,8 @@ head_tail_preview(text: str, max_chars: int, *, marker: str) -> str
 file_uri_to_path(value: str) -> Path | None
 ```
 
-把消息段里的 `file://` URI 还原成本地路径（兼容 `file:///C:/x`、`file://C:/x`、`file://localhost/x` 和 UNC），不是 file URI 时返回 `None`；`image()`、`record()` 生成 URI 的方向由 Core 处理。
+此函数将消息段中的 `file://` URI 转换为本地路径。它兼容 `file:///C:/x`、`file://C:/x`、`file://localhost/x` 和 UNC。其他 URI 类型返回 `None`。
+`image()`、`record()` 生成 URI 的方向由 Core 处理。
 
 ### 外部命令
 
@@ -107,7 +112,9 @@ from core.process_tree import ProcessResult, run_process
 result = await run_process(argv, timeout=30, cwd=workdir, max_capture_bytes=64 * 1024)
 ```
 
-命令在独立进程树里执行（Windows 用 Job 对象，POSIX 用进程组）；stdout 与 stderr 共用捕获预算，超时、超出预算或调用方取消时整树回收，命令自己退出后留下的后台子进程也会收掉，不会借收尾多跑。`ProcessResult` 含 `exit_code`（被终止时为 `None`）、`stdout`、`stderr`、`timed_out`、`output_limited`。
+命令在独立进程树里执行（Windows 用 Job 对象，POSIX 用进程组）。
+stdout 与 stderr 共用捕获预算，超时、超出预算或调用方取消时整树回收，命令自己退出后留下的后台子进程也会收掉，不会借收尾多跑。
+`ProcessResult` 含 `exit_code`（被终止时为 `None`）、`stdout`、`stderr`、`timed_out`、`output_limited`。
 
 ### 异步工具
 
@@ -115,7 +122,7 @@ result = await run_process(argv, timeout=30, cwd=workdir, max_capture_bytes=64 *
 await run_sync(func, *args, **kwargs)
 ```
 
-将同步函数提交到当前插件的执行 bulkhead。
+`run_sync()` 将同步函数提交到当前插件的执行 bulkhead。
 
 ```python
 await gather_bounded(awaitables, *, limit: int)
@@ -133,7 +140,10 @@ load_json(path: Path, default=None, *, raise_on_error=False)
 write_json(path: Path, data: Any) -> None
 ```
 
-`atomic_write_bytes()` 通过同目录临时文件、`fsync` 和原子替换提交字节；`atomic_write_text()` 使用 UTF-8 编码调用同一原语。`load_json()` 与 `write_json()` 使用 `AtomicJsonStore`。持久数据路径以 `context.data_dir` 为根。
+`atomic_write_bytes()` 通过同目录临时文件、`fsync` 和原子替换提交字节。
+`atomic_write_text()` 使用 UTF-8 编码调用同一原语。
+`load_json()` 与 `write_json()` 使用 `AtomicJsonStore`。
+持久数据路径以 `context.data_dir` 为根。
 
 ### 长消息拆分
 
@@ -159,11 +169,11 @@ split_message_segments(
 | `plugin_name` | `str` | 当前插件规范名 |
 | `plugin_dir` | `Path` | 当前插件源码根目录 |
 | `data_dir` | `Path` | 当前插件持久数据目录 |
-| `current_user_id` | `int | None` | 当前用户 |
-| `current_group_id` | `int | None` | 当前群 |
-| `request_id` | `str | None` | 当前请求追踪 ID |
+| `current_user_id` | `int \| None` | 当前用户 |
+| `current_group_id` | `int \| None` | 当前群 |
+| `request_id` | `str \| None` | 当前请求追踪 ID |
 | `principal` | `PluginPrincipal` | 当前调用身份 |
-| `command_invocation` | `CommandInvocation | None` | Core 解析后的命令节点 |
+| `command_invocation` | `CommandInvocation \| None` | Core 解析后的命令节点 |
 | `state` | `dict[str, Any]` | 当前插件代共享内存状态 |
 
 ### 共享服务属性
@@ -171,18 +181,20 @@ split_message_segments(
 | 属性 | 类型 | 说明 |
 |---|---|---|
 | `logger` | logger adapter | 自动附加 request ID 的插件日志器 |
-| `http_session` | `aiohttp.ClientSession | None` | 应用拥有的共享 HTTP Session |
+| `http_session` | `aiohttp.ClientSession \| None` | 应用拥有的共享 HTTP Session |
 | `send_action` | async callable | 主动发送 OneBot Action，并返回投递结果 |
-| `metrics` | `MetricsCollector | None` | 运行指标 |
+| `metrics` | `MetricsCollector \| None` | 运行指标 |
 | `capabilities` | `PluginCapabilities` | Manifest 与身份共同签发的能力 |
 
-共享 HTTP Session 由应用生命周期统一管理。插件在请求作用域内复用该对象。
+共享 HTTP Session 由应用生命周期统一管理。
+插件在请求作用域内复用该对象。
 
 ```python
 await context.send_action(action: dict[str, Any]) -> bool | None
 ```
 
-返回 `True` 表示拆分后的全部 Action 已确认交给投递边界，`False` 表示至少一个 Action 已确认失败，`None` 表示传输端可能已经提交 Action 且最终结果未知。结果未知时由业务层保留待确认状态，避免自动重试造成重复消息。
+返回 `True` 表示拆分后的全部 Action 已确认交给投递边界，`False` 表示至少一个 Action 已确认失败，`None` 表示传输端可能已经提交 Action 且最终结果未知。
+结果未知时由业务层保留待确认状态，避免自动重试造成重复消息。
 
 携带登录码、Token 等凭据的消息在发送前设置敏感标记：
 
@@ -194,7 +206,8 @@ action[SENSITIVE_ACTION_KEY] = True
 await context.send_action(action)
 ```
 
-带标记的 Action 不会交给 `core.observe_outgoing_action` 观察者（例如聊天插件的上下文记录），投递层在序列化前移除该标记和内部收据字段。Pendo 的 Web 登录码与 Widget Token 使用该标记。
+带标记的 Action 不会交给 `core.observe_outgoing_action` 观察者（例如聊天插件的上下文记录），投递层在序列化前移除该标记和内部收据字段。
+Pendo 的 Web 登录码与 Widget Token 使用该标记。
 
 ### 配置方法
 
@@ -206,7 +219,8 @@ context.now() -> datetime
 context.default_groups() -> list[int]
 ```
 
-`get_config()` 与 `get_secret()` 接受当前插件命名空间内的点路径。`get_settings_snapshot()` 返回同一 revision 的只读配置与 secret 视图。
+`get_config()` 与 `get_secret()` 接受当前插件命名空间内的点路径。
+`get_settings_snapshot()` 返回同一 revision 的只读配置与 secret 视图。
 
 ### `PluginSettingsSnapshot`
 
@@ -220,22 +234,24 @@ context.default_groups() -> list[int]
 | `plugin_config(plugin_name)` | `Mapping[str, Any]` | 指定插件的公开命名空间 |
 | `plugin_secrets(plugin_name)` | `Mapping[str, Any]` | 指定插件的敏感命名空间 |
 
-Context 返回的快照已限定到当前插件可见范围。插件在一次业务事务中复用同一对象，可以保证公开配置与凭据来自同一 revision。
+Context 返回的快照已限定到当前插件可见范围。
+插件在一次业务事务中复用同一对象，可以保证公开配置与凭据来自同一 revision。
 
 ### `PluginPrincipal`
 
 | 属性 | 类型 | 说明 |
 |---|---|---|
 | `kind` | `Literal["user", "scheduled_system", "lifecycle"]` | 调用主体类型 |
-| `user_id` | `int | None` | 用户主体的 QQ 号 |
-| `group_id` | `int | None` | 用户主体所在群 |
+| `user_id` | `int \| None` | 用户主体的 QQ 号 |
+| `group_id` | `int \| None` | 用户主体所在群 |
 | `is_bot_admin` | `bool` | 签发时的 Bot 管理员状态 |
 | `is_private` | `bool` | 用户主体来自私聊 |
 | `group_role` | `Literal["owner", "admin", "member", "unknown"]` | 当前群角色 |
 | `delivery_targets` | `tuple[DeliveryTarget, ...]` | Core 校验后的主动投递目标 |
-| `schedule_delivery` | `ScheduleDeliveryMode | None` | 调度主体的 Core 投递模式 |
+| `schedule_delivery` | `ScheduleDeliveryMode \| None` | 调度主体的 Core 投递模式 |
 
-`DeliveryTarget.kind` 为 `private` 或 `group`，`target_id` 为正整数。`principal.is_system` 标识调度主体，`principal.can_manage_group(group_id)` 校验当前用户是否可管理指定群。
+`DeliveryTarget.kind` 为 `private` 或 `group`，`target_id` 为正整数。
+`principal.is_system` 标识调度主体，`principal.can_manage_group(group_id)` 校验当前用户是否可管理指定群。
 
 ### 静音方法
 
@@ -257,7 +273,9 @@ context.get_command_catalog() -> tuple[CommandCatalogNode, ...]
 context.list_plugins() -> list[str]
 ```
 
-这些方法属于受信任插件的进程内 API，已加载插件可直接调用。Bot Core 的用户命令按 Manifest 声明，由 Dispatcher 在调用前用 `command_access` 校验 Bot 管理员与私聊场景；部署者通过插件来源审查保护代码调用边界。
+这些方法属于受信任插件的进程内 API，已加载插件可直接调用。
+Bot Core 的用户命令按 Manifest 声明，由 Dispatcher 在调用前用 `command_access` 校验 Bot 管理员与私聊场景。
+部署者通过插件来源审查保护代码调用边界。
 
 ---
 
@@ -267,22 +285,25 @@ context.list_plugins() -> list[str]
 
 | 属性 | 用途 |
 |---|---|
-| `is_bot_admin` | 当前 principal 的 Bot 管理员状态；只用于对象层面的规则，命令权限由 Manifest 声明、Core 判断 |
+| `is_bot_admin` | 当前 principal 的 Bot 管理员状态。只用于对象层面的规则，命令权限由 Manifest 声明、Core 判断 |
 | `is_system` | 调度调用状态 |
 | `secret_admin` | Bot Core 的敏感配置管理（跟随 `/set_secret` 的声明，每次调用复核） |
 | `onebot_media` | XiaoQing Chat 的 OneBot 媒体查询 |
 | `config_subscription` | Pendo 的配置 revision 订阅 |
-| `codex_arxiv_summary` | arXiv Filter 到 Codex 摘要服务（定时任务可用；用户触发时跟随 `/codex` 的声明） |
+| `codex_arxiv_summary` | arXiv Filter 到 Codex 摘要服务（定时任务可用。用户触发时跟随 `/codex` 的声明） |
 | `voice_synthesis` | Smalltalk 到 Voice 合成服务 |
 | `chat_reply` | Smalltalk 到 Chat 回复服务 |
-| `agent_turn` | XiaoQing Chat 到 XiaoQing Agent 的一轮交接（用户消息；可分判断与执行两步），并回报当轮回复是否发出 |
+| `agent_turn` | XiaoQing Chat 到 XiaoQing Agent 的一轮交接（用户消息。可分判断与执行两步），并回报当轮回复是否发出 |
 | `codex_agent` | XiaoQing Agent 到 Codex 的同步任务（跟随 `/codex` 的声明，每次调用复核） |
 | `ssh_agent` | XiaoQing Agent 到 QingSSH 的服务器列表与一次性命令（跟随 `/ssh` 的声明，每次调用复核） |
-| `command_runner` | XiaoQing Agent 以发起人身份执行已发布命令，权限与场景检查同本人直接发送；`run(text, *, sender_name, operation_id)` 原样返回命令的 `DeliverySegments`，由调用方结算回执 |
+| `command_runner` | XiaoQing Agent 以发起人身份执行已发布命令，权限与场景检查同本人直接发送。`run(text, *, sender_name, operation_id)` 原样返回命令的 `DeliverySegments`，由调用方结算回执 |
 | `local_tools` | XiaoQing Agent 在本机执行代码、读写文件前的授权确认（跟随 `/shell` 的声明，每次调用复核） |
 | `ai` | 当前插件的统一 AI route |
 
-`is_bot_admin` 与 `is_system` 始终提供布尔值。应用签发的 Context 始终提供 `ai` 服务，具体调用由当前插件的 route、provider、model 和凭据配置决定。其余可选服务根据 Manifest 的 `capabilities`、`uses_services`、服务绑定和当前 principal 签发，条件未满足时属性值为 `None`。协议将服务属性声明为可选值，便于最小 Context 实现和测试替身表达不可用状态。
+`is_bot_admin` 与 `is_system` 始终提供布尔值。
+应用签发的 Context 始终提供 `ai` 服务，具体调用由当前插件的 route、provider、model 和凭据配置决定。
+其余可选服务根据 Manifest 的 `capabilities`、`uses_services`、服务绑定和当前 principal 签发，条件未满足时属性值为 `None`。
+协议将服务属性声明为可选值，便于最小 Context 实现和测试替身表达不可用状态。
 
 ### AI Capability
 
@@ -335,7 +356,8 @@ context.capabilities.ai.list_models(
 | `attempts` | `int` | 当前模型链的请求尝试总数 |
 | `content` | `str` | 常见 Chat Completions 文本内容 |
 
-复杂响应可读取 `response`；纯文本调用优先读取 `content`。
+复杂响应可读取 `response`。
+纯文本调用优先读取 `content`。
 
 ---
 
@@ -367,7 +389,9 @@ node.resolve_child(token: str) -> CommandCatalogNode | None
 node.to_dict() -> dict[str, Any]
 ```
 
-`walk()` 按目录顺序返回自身与全部后代；`resolve_child()` 按规范名或别名解析直接子节点；`to_dict()` 返回可直接 JSON 序列化的公开目录。
+`walk()` 按目录顺序返回自身与全部后代。
+`resolve_child()` 按规范名或别名解析直接子节点。
+`to_dict()` 返回可直接 JSON 序列化的公开目录。
 
 ### `CommandInvocation`
 
@@ -388,7 +412,11 @@ from core.router import command_access
 command_access(node, principal, *, is_bot_admin=None) -> str | None
 ```
 
-全项目唯一的命令权限判断：按节点的 `permission` 与 `contexts` 判断此人能否在当前私聊或群里使用。能用时返回 `None`，否则返回 `"bot_admin"`、`"group_admin"`（没有权限）或 `"context"`（有权限但当前场景不能用）。先判断权限再判断场景。`is_bot_admin` 给出时代替签发时的快照，供长任务按当前配置复核。命令执行、会话继续、Core 签发的派生能力和 agent 的命令清单都调用它。
+全项目唯一的命令权限判断：按节点的 `permission` 与 `contexts` 判断此人能否在当前私聊或群里使用。
+能用时返回 `None`，否则返回 `"bot_admin"`、`"group_admin"`（没有权限）或 `"context"`（有权限但当前场景不能用）。
+先判断权限再判断场景。
+`is_bot_admin` 给出时代替签发时的快照，供长任务按当前配置复核。
+命令执行、会话继续、Core 签发的派生能力和 agent 的命令清单都调用它。
 
 ---
 
@@ -396,11 +424,11 @@ command_access(node, principal, *, is_bot_admin=None) -> str | None
 
 | 接口 | 说明 |
 |---|---|
-| `DeliveryReceipt(expected_actions, commit, rollback, unknown)` | 一个逻辑回复的回执；全部物理消息确认后调用 `commit`，明确失败调用 `rollback`，结果未知调用 `unknown`，至多结算一次 |
+| `DeliveryReceipt(expected_actions, commit, rollback, unknown)` | 一个逻辑回复的回执。全部物理消息确认后调用 `commit`，明确失败调用 `rollback`，结果未知调用 `unknown`，至多结算一次 |
 | `receipt.record(delivered)` | 记录一次传输结果：`True`、`False` 或 `None`（未知） |
-| `receipt.message_ids` | 已确认发出的各条物理消息 ID，按发送顺序；长回复被拆成几条时每条都有，提交回调里读取 |
+| `receipt.message_ids` | 已确认发出的各条物理消息 ID，按发送顺序。长回复被拆成几条时每条都有，提交回调里读取 |
 | `receipt.resolved` / `committed` / `outcome` | 是否已结算、提交回调是否成功、最终三态结果 |
-| `DeliverySegments(values, receipt)` | 带回执的消息段；插件入口返回它，Core 随实际投递结算 |
+| `DeliverySegments(values, receipt)` | 带回执的消息段。插件入口返回它，Core 随实际投递结算 |
 | `send_with_receipt(send_action, action, receipt)` | 主动发送一条带回执的 Action，并确保结果恰好结算一次 |
 
 ---
@@ -423,16 +451,20 @@ await context.end_session() -> bool
 await context.has_session() -> bool
 ```
 
-`get_session()` 返回隔离快照，并刷新空闲超时。`update_session()` 为 callback 提供私有工作副本；成功返回会提交副本，异常与取消会回滚该次事务。`has_session()` 查询活动状态。
+`get_session()` 返回隔离快照，并刷新空闲超时。
+`update_session()` 为 callback 提供私有工作副本。
+成功返回会提交副本，异常与取消会回滚该次事务。
+`has_session()` 查询活动状态。
 
-Session 到期后结束。后续插件可再次调用 `create_session()` 建立新会话。
+Session 到期后结束。
+后续插件可再次调用 `create_session()` 建立新会话。
 
 ### `Session` 属性
 
 | 属性 | 类型 | 说明 |
 |---|---|---|
 | `user_id` | `int` | 用户 ID |
-| `group_id` | `int | None` | 群 ID |
+| `group_id` | `int \| None` | 群 ID |
 | `plugin_name` | `str` | 会话插件 |
 | `session_id` | `str` | 唯一会话 ID |
 | `state` | `str` | 业务状态 |
@@ -491,7 +523,9 @@ parse_int(text, *, minimum=None, maximum=None) -> int | None
 
 ## ⌨️ 插件入口签名
 
-以下示例采用推荐的异步定义。Core 同时接受相同参数签名的同步 `def` 回调；同步回调进入当前插件的同步 bulkhead，回调返回 awaitable 时 Core 继续等待其完成。
+以下示例采用推荐的异步定义。
+Core 同时接受相同参数签名的同步 `def` 回调。
+同步回调进入当前插件的同步 bulkhead，回调返回 awaitable 时 Core 继续等待其完成。
 
 ### 命令
 
@@ -554,7 +588,8 @@ async def scheduled_handler(
 ) -> Segments | ScheduledDelivery | list[ScheduledDelivery] | str | None: ...
 ```
 
-返回类型由 Manifest 的 `delivery` 决定：`broadcast` 使用普通消息段或字符串，`targeted` 使用一个或多个 `ScheduledDelivery`，`silent` 返回 `None`。Core 负责目标校验、OneBot Action 构建与最终发送。
+返回类型由 Manifest 的 `delivery` 决定：`broadcast` 使用普通消息段或字符串，`targeted` 使用一个或多个 `ScheduledDelivery`，`silent` 返回 `None`。
+Core 负责目标校验、OneBot Action 构建与最终发送。
 
 `targeted` 处理器通过 Core 类型构造目标消息：
 
@@ -563,7 +598,9 @@ ScheduledDelivery.group(group_id, message_segments, receipt=None)
 ScheduledDelivery.private(user_id, message_segments, receipt=None)
 ```
 
-群目标必须属于当前 schedule 经 Core 解析后的 `group_ids`；私聊目标必须是正整数 QQ 号。`receipt` 可选，用于在 OneBot 投递结果确定后提交业务状态。
+群目标必须属于当前 schedule 经 Core 解析后的 `group_ids`。
+私聊目标必须是正整数 QQ 号。
+`receipt` 可选，用于在 OneBot 投递结果确定后提交业务状态。
 
 ---
 
@@ -582,7 +619,9 @@ event.get("raw_message")
 event.get("sender")
 ```
 
-`event["message"]` 在 Core 入口完成消息段标准化。插件可结合 `core.message` 工具提取文本和媒体段；`sender_display_name(event["sender"])` 取发送者显示名（群名片、昵称、名称依次取第一个非空的）。
+`event["message"]` 在 Core 入口完成消息段标准化。
+插件可结合 `core.message` 工具提取文本和媒体段。
+`sender_display_name(event["sender"])` 取发送者显示名（群名片、昵称、名称依次取第一个非空的）。
 
 ---
 
@@ -608,9 +647,11 @@ event.get("sender")
 
 ### `GET /metrics`
 
-返回消息、插件、错误、延迟和队列指标。指标提供器未配置时返回 `501`，指标生成失败时返回 `500`。
+返回消息、插件、错误、延迟和队列指标。
+指标提供器未配置时返回 `501`，指标生成失败时返回 `500`。
 
-`/health`、`/metrics`、`POST /event` 与 WebSocket 握手共享同一 Bearer token。Listener 启用时使用非空 `inbound_token`。
+`/health`、`/metrics`、`POST /event` 与 WebSocket 握手共享同一 Bearer token。
+Listener 启用时使用非空 `inbound_token`。
 
 ---
 

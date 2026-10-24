@@ -101,7 +101,6 @@ class ADSClient:
             token: ADS API token
             session: Shared aiohttp ClientSession for connection pooling
         """
-        self.token    = token
         self.session  = session
         self.context  = context
         self.base_url = "https://api.adsabs.harvard.edu/v1"

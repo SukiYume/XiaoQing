@@ -73,7 +73,6 @@ def _stats_source_for_test() -> str:
     isRecord,
     isValidDateInput,
     noteCadenceSubtitle,
-    pad2,
     records as safeRecords,
 } from '../utils/format.js';""",
             r"""const safeArray = (value) => Array.isArray(value) ? value : [];
@@ -98,7 +97,6 @@ const isValidDateInput = (value) => {
     const date = new Date(`${value}T00:00:00Z`);
     return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 };
-const pad2 = (value) => String(value).padStart(2, '0');
 const noteCadenceSubtitle = (granularity, rangeLabel) => {
     if (granularity === 'year') return `按${rangeLabel}查看每年新增笔记数量。`;
     if (granularity === 'month') return `按${rangeLabel}查看每月新增笔记数量。`;

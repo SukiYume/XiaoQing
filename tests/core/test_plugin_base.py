@@ -3,6 +3,7 @@ plugin_base 工具函数单元测试
 """
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
@@ -321,6 +322,28 @@ class TestJsonUtils:
 
         result = load_json(json_path)
         assert result == {}
+
+    @pytest.mark.parametrize("payload", [b"{", b"\xff"])
+    @pytest.mark.parametrize("with_backup", [False, True])
+    def test_load_json_strict_error_and_recovery(
+        self, tmp_path: Path, payload: bytes, with_backup: bool
+    ) -> None:
+        path = tmp_path / "state.json"
+        path.write_bytes(payload)
+        recovered = {"version": 1}
+        if with_backup:
+            path.with_suffix(".json.bak").write_text(json.dumps(recovered), encoding="utf-8")
+
+        with pytest.raises((json.JSONDecodeError, UnicodeDecodeError)):
+            load_json(path, raise_on_error=True)
+        assert path.read_bytes() == payload
+
+        fallback = {"missing": True}
+        assert load_json(path, fallback) == (recovered if with_backup else fallback)
+        if with_backup:
+            assert json.loads(path.read_text(encoding="utf-8")) == recovered
+        else:
+            assert path.read_bytes() == payload
 
 
 # ============================================================

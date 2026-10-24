@@ -76,8 +76,8 @@ class AdjustableSemaphore:
     """Event-loop-owned capacity limiter whose identity survives config reloads.
 
     Lowering ``capacity`` never revokes holders already inside the dispatcher.
-    New work remains blocked until the holder count falls below the new limit,
-    so an old and a new limiter generation cannot accidentally add their slots.
+    New work waits until the holder count is below the new limit.
+    This keeps the old and new limiter generations within one capacity limit.
     """
 
     def __init__(self, capacity: int) -> None:

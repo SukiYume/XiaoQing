@@ -231,7 +231,7 @@ def test_app_recomputes_admin_capability_after_revocation(temp_app_root: Path):
     assert before.capabilities.is_bot_admin is True
     assert before.capabilities.secret_admin is not None
 
-    app._admin_set.clear()
+    app.identity_service.load_admins({})
     after = _plugin_context_for(
         app,
         "bot_core",
@@ -578,7 +578,7 @@ async def test_declared_voice_service_preserves_signed_principal_and_target_scop
     assert set(first.config["plugins"]) == {"voice"}
     assert first.state is app.plugin_manager._plugin_states["voice"]
 
-    app._admin_set.clear()
+    app.identity_service.load_admins({})
     assert await service.synthesize_text("second") == [
         {"type": "text", "data": {"text": "second"}},
     ]
@@ -669,7 +669,7 @@ async def test_arxiv_codex_capability_uses_real_target_context_and_rechecks_admi
     assert set(target.secrets["plugins"]) == {"codex"}
     assert kwargs["user_id"] == 12345
 
-    app._admin_set.clear()
+    app.identity_service.load_admins({})
     with pytest.raises(PermissionError, match="no longer authorized"):
         await service.enqueue_or_replay(
             date  = "2026-07-11",

@@ -50,16 +50,12 @@ def split_chat_reply(text: str) -> list[str]:
                 current_message.append(line)
             continue
 
-        if in_code_block:
+        if in_code_block or stripped:
             current_message.append(line)
-        else:
+        elif current_message:
             # 普通文本，遇到空行则拆分
-            if not stripped:
-                if current_message:
-                    messages.append("\n".join(current_message).strip())
-                    current_message = []
-            else:
-                current_message.append(line)
+            messages.append("\n".join(current_message).strip())
+            current_message = []
 
     # 处理未闭合的代码块或普通最后一段
     if current_message:

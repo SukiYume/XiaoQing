@@ -1,4 +1,4 @@
-# PyPI source distributions contain only the files needed to build XiaoQing.
+# PyPI source distributions contain only the files necessary to build XiaoQing.
 include LICENSE
 include README.md
 include pyproject.toml
@@ -14,7 +14,7 @@ recursive-include plugins/pendo/web/services/assets *.zip
 include plugins/xiaoqing_chat/config/xiaoqing_config.json
 include plugins/xiaoqing_chat/media/qq_face_builtin_catalog.json
 
-# Repository-only training, migration, experiment, test, and development tooling.
+# Repository tools for training, migration, experiments, tests, and development.
 prune plugins/arxiv_filter/train_model
 prune plugins/pendo/scripts
 prune plugins/pendo/web/migrations

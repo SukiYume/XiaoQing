@@ -151,7 +151,7 @@ const FONTS = {
     section: (size) => Font.semiboldSystemFont(size),
 };
 // 布局参数：像素值基于 iPhone 14 系列尺寸估算。
-// leadWidth = 日程时间列宽度；markerWidth = 面板标记列宽度。
+// leadWidth = 日程时间列宽度。markerWidth = 面板标记列宽度。
 const LAYOUTS = {
     small: {
         padding: [11, 12, 11, 12],
@@ -657,7 +657,7 @@ function panelItemMarker(section, item) {
     return { icon: 'circle', color: COLORS.subtext };
 }
 
-// 统一面板列表渲染器，覆盖 tasks / ledger / notes；差异仅在标记样式、标题截断和尾部文字。
+// 统一面板列表渲染器，覆盖 tasks / ledger / notes。差异仅在标记样式、标题截断和尾部文字。
 function renderPanelList(stack, panel, data, opts = {}) {
     const {
         limit = 5,
@@ -983,7 +983,7 @@ function computeNextRefresh(data, currentTime = new Date()) {
     for (const item of data?.agenda?.items || []) {
         const start = parseItemStartDate(item);
         if (start && start > now) {
-            // 提前 5 分钟刷新；若事件已在 5 分钟内，则尽快（1 分钟后）刷新
+            // 提前 5 分钟刷新。若事件已在 5 分钟内，则尽快（1 分钟后）刷新
             const preAlert = new Date(start.getTime() - 5 * 60 * 1000);
             candidates.push(preAlert > earliest ? preAlert : earliest);
         }
@@ -998,8 +998,8 @@ function computeNextRefresh(data, currentTime = new Date()) {
 }
 
 // ---------- 日历同步 ----------
-// 仅在 app 内直接运行脚本时触发；widget 渲染时不执行同步。
-// Keychain 游标记录“上次成功运行日”。每次至少回看 30 天并覆盖未来 30 天；
+// 仅在 app 内直接运行脚本时触发。widget 渲染时不执行同步。
+// Keychain 游标记录“上次成功运行日”。每次至少回看 30 天并覆盖未来 30 天。
 // 游标更早时从游标续传，既补齐间隔，也重新对账近期修改和删除。
 // 每次只查询一次这个完整窗口，不遍历或删除窗口外的日历事件。
 function localDateKey(value) {
@@ -1026,7 +1026,7 @@ function buildCalendarSyncWindow(currentTime = new Date(), referenceDay = '') {
         if (!lastSuccess) Keychain.remove(CALENDAR_SYNC_CURSOR_KEY);
     }
 
-    // 始终回看最近一段时间，确保已同步日程的修改和删除也能被重新对账；
+    // 始终回看最近一段时间，确保已同步日程的修改和删除也能被重新对账。
     // 若上次成功运行更早，则仍从旧游标开始补齐完整缺口。
     const storedIsLater  = lastSuccess && lastSuccess.date > today;
     const initialStart   = addLocalDays(today, -CALENDAR_SYNC_INITIAL_LOOKBACK_DAYS);
@@ -1266,7 +1266,7 @@ async function reconcileCalendarItem(item, index, targetCalendar, retainedEvents
         return 'unchanged';
     }
 
-    // 不接管用户自行创建的事件；同名同刻只消费一个旧式匹配，其他 Pendo ID
+    // 不接管用户自行创建的事件。同名同刻只消费一个旧式匹配，其他 Pendo ID
     // 仍分别写入，避免把不同条目错误合并。
     if (takeIndexedCalendarEvent(index.unmanagedByLegacyKey, legacyKey)) return 'skipped';
 
@@ -1395,7 +1395,7 @@ try {
     widget = createErrorWidget(error);
 }
 
-// 在 Scriptable App 内直接运行时（而非 Widget 渲染），自动执行日历同步
+// 在 Scriptable App 内直接运行脚本时，脚本自动同步日历。Widget 渲染仅更新展示。
 if (!config.runsInWidget && widgetData) {
     try {
         const result = await syncCalendarFromServer(widgetToken, new Date(), widgetData.generated_at.slice(0, 10));

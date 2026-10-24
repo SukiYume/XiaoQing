@@ -10,16 +10,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from plugins.flickr import client as flickr_client
+from tests.helpers.http import AiohttpBodyStream, QueuedAiohttpSession
 from tests.helpers.settings_snapshot import with_settings_reader
-
-
-class _AsyncContent:
-    def __init__(self, body: bytes) -> None:
-        self.body = body
-
-    async def iter_chunked(self, size: int):
-        for offset in range(0, len(self.body), max(1, size)):
-            yield self.body[offset : offset + size]
 
 
 class _Response:
@@ -34,7 +26,7 @@ class _Response:
         self.url            = flickr_client.API_ENDPOINT
         self.headers        = {"Content-Type": content_type}
         self.content_length = None
-        self.content        = _AsyncContent(json.dumps(payload).encode("utf-8"))
+        self.content        = AiohttpBodyStream(json.dumps(payload).encode("utf-8"))
         self.closed         = False
 
     async def __aenter__(self):
@@ -45,16 +37,6 @@ class _Response:
 
     def close(self) -> None:
         self.closed = True
-
-
-class _Session:
-    def __init__(self, *responses: _Response) -> None:
-        self.responses                          = list(responses)
-        self.calls: list[tuple[str, str, dict]] = []
-
-    def request(self, method: str, url: str, **kwargs):
-        self.calls.append((method, url, kwargs))
-        return self.responses.pop(0)
 
 
 def _photo_item(**updates: object) -> dict[str, object]:
@@ -117,7 +99,7 @@ def test_api_key_is_required_and_bounded(context: SimpleNamespace, secrets: dict
 async def test_interesting_uses_fixed_bounded_endpoint_and_parses_photo(
     context: SimpleNamespace,
 ) -> None:
-    context.http_session = _Session(_Response(_page_payload(_photo_item())))
+    context.http_session = QueuedAiohttpSession(_Response(_page_payload(_photo_item())))
     client               = flickr_client.FlickrClient(context)
 
     page = await client.interesting()
@@ -129,7 +111,7 @@ async def test_interesting_uses_fixed_bounded_endpoint_and_parses_photo(
     assert photo.owner_name == "Astro Photographer"
     assert photo.license_id == "4"
     assert photo.media_url.startswith("https://live.staticflickr.com/")
-    method, url, options = context.http_session.calls[0]
+    method, url, options = context.http_session.requests[0]
     assert (method, url) == ("GET", flickr_client.API_ENDPOINT)
     assert options["allow_redirects"] is False
     assert options["auto_decompress"] is False
@@ -142,7 +124,7 @@ async def test_interesting_uses_fixed_bounded_endpoint_and_parses_photo(
 async def test_search_omits_license_for_any_and_passes_explicit_filters(
     context: SimpleNamespace,
 ) -> None:
-    context.http_session = _Session(
+    context.http_session = QueuedAiohttpSession(
         _Response(_page_payload()),
         _Response(_page_payload()),
     )
@@ -156,7 +138,7 @@ async def test_search_omits_license_for_any_and_passes_explicit_filters(
         min_taken_date = "2026-08-01 00:00:00",
         max_taken_date = "2026-08-31 23:59:59",
     )
-    first = context.http_session.calls[0][2]["params"]
+    first = context.http_session.requests[0][2]["params"]
     assert "license" not in first
     assert first["text"] == "aurora"
     assert first["tags"] == "sky,night"
@@ -172,7 +154,7 @@ async def test_search_omits_license_for_any_and_passes_explicit_filters(
         max_taken_date = None,
         commons_only   = True,
     )
-    second = context.http_session.calls[1][2]["params"]
+    second = context.http_session.requests[1][2]["params"]
     assert second["license"] == "1,2,3,4,5,6,9,10"
     assert second["is_commons"] == 1
 
@@ -188,7 +170,7 @@ async def test_commons_sized_response_fits_json_string_budget(
         )
         for index in range(1, 101)
     ]
-    context.http_session = _Session(_Response(_page_payload(*items)))
+    context.http_session = QueuedAiohttpSession(_Response(_page_payload(*items)))
     client               = flickr_client.FlickrClient(context)
 
     page = await client.search(
@@ -208,7 +190,7 @@ async def test_commons_sized_response_fits_json_string_budget(
 async def test_api_failure_is_typed_without_remote_message_or_key(
     context: SimpleNamespace,
 ) -> None:
-    context.http_session = _Session(
+    context.http_session = QueuedAiohttpSession(
         _Response(
             {
                 "stat": "fail",
@@ -232,15 +214,15 @@ async def test_wrong_mime_http_error_and_malformed_json_fail_closed(
     context: SimpleNamespace,
 ) -> None:
     client = flickr_client.FlickrClient(context)
-    context.http_session = _Session(_Response({"stat": "ok"}, content_type="text/html"))
+    context.http_session = QueuedAiohttpSession(_Response({"stat": "ok"}, content_type="text/html"))
     with pytest.raises(flickr_client.FlickrTransportError):
         await client.interesting()
 
-    context.http_session = _Session(_Response({"stat": "ok"}, status=429))
+    context.http_session = QueuedAiohttpSession(_Response({"stat": "ok"}, status=429))
     with pytest.raises(flickr_client.FlickrTransportError):
         await client.interesting()
 
-    context.http_session = _Session(_Response({"photos": {}}))
+    context.http_session = QueuedAiohttpSession(_Response({"photos": {}}))
     with pytest.raises(flickr_client.FlickrProtocolError):
         await client.interesting()
 

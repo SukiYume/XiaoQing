@@ -6,7 +6,6 @@ import {
     formatAmount,
     formatMoneyCompact,
     isRecord,
-    isoDate,
     nonNegativeInteger,
     pad2,
     parseDate,
@@ -698,7 +697,7 @@ function buildDashboardMarkup(payload) {
 /**
  * 拉取并刷新看板。
  *
- * 每次请求持有独立版本；路由销毁或后续刷新会让旧响应失效，避免慢响应覆盖新页面。
+ * 每次请求持有独立版本。路由销毁或后续刷新会让旧响应失效，避免慢响应覆盖新页面。
  */
 async function loadAndRender() {
     const container = _container;

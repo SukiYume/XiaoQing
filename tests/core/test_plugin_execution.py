@@ -1077,7 +1077,7 @@ def test_stopped_open_owner_loop_cannot_strand_detached_delivery() -> None:
         loop.run_until_complete(_detach_running_callback(gate, late_fatal, started))
         # The owner loop is open but stopped here.  call_soon_threadsafe would
         # accept a callback that loop.close() can later discard without ever
-        # running; detached completion must therefore finalize in the worker.
+        # running. Detached completion must therefore finalize in the worker.
         release.set()
         assert finished.wait(timeout=1)
         deadline = time.monotonic() + 1

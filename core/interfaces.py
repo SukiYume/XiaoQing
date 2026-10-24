@@ -417,8 +417,8 @@ class PluginContextProtocol(PluginConfig, PluginRuntime, SessionAccess, Protocol
     metrics: Any
     request_id: str | None
     command_invocation: CommandInvocation | None
-    # One dictionary is shared by events for the current plugin generation;
-    # unload/reload or process restart discards it.
+    # One dictionary is shared by events for the current plugin generation.
+    # Unload/reload or process restart discards it.
     state: dict[str, Any]
     principal: PluginPrincipal
     capabilities: PluginCapabilities

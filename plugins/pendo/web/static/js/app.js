@@ -261,7 +261,7 @@ function initBackToTop() {
 }
 
 async function showApp() {
-    // 两个独立布局组件并行加载；加载失败前仍保留可操作的登录界面。
+    // 两个独立布局组件并行加载。加载失败前仍保留可操作的登录界面。
     const [{ renderSidebar }, { renderHeader }] = await Promise.all([
         import('./components/sidebar.js'),
         import('./components/header.js'),

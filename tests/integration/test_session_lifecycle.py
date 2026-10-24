@@ -30,7 +30,7 @@ class TestSessionLifecycle:
         assert retrieved is not None
         assert retrieved.data["step"] == 1
 
-        # Update through the transaction boundary; retrieved is a snapshot.
+        # Update through the transaction boundary. Retrieved is a snapshot.
         def update_values(working):
             working.data["step"]  = 2
             working.data["value"] = "test"
@@ -383,7 +383,7 @@ class TestSessionDataOperations:
             },
         )
 
-        # Modify nested values transactionally; create() returned a snapshot.
+        # Modify nested values transactionally. Create() returned a snapshot.
         def mutate_nested(working):
             working.data["list"].append(4)
             working.data["dict"]["new_key"] = "new_value"

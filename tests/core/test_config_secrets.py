@@ -328,8 +328,8 @@ class TestConfigManagerSecretTransactions:
             if interference == "replace":
                 replacement = secrets_file.with_suffix(".replacement")
                 replacement.write_bytes(external_payload)
-                # Closing the pinned handle makes this deterministic on Windows;
-                # the production post-write identity check must still reject it.
+                # Closing the pinned handle makes this deterministic on Windows.
+                # The production post-write identity check must still reject it.
                 handle.close()
                 os.replace(replacement, secrets_file)
             elif interference == "delete":

@@ -1,5 +1,7 @@
 # 🎙️ Azure Voice
 
+中文 | [English](README.en.md)
+
 `voice` 通过 Azure Speech 提供所有人可用的文字转语音命令，并向 Manifest 授权的插件发布 `voice.synthesize_text` 服务。
 
 ---
@@ -59,12 +61,12 @@ Core 根据服务调用者白名单签发能力，调用方收到与命令相同
 
 ## 🔄 合成流程
 
-1. 规范化文本并读取原子 secret 快照；
-2. 以文本、区域和全部音色设置计算缓存身份；
-3. 命中有效 MP3 缓存时直接返回；
-4. 生成经过 XML 转义的 SSML；
-5. 请求 Azure Speech MP3 输出；
-6. 校验响应并原子写入缓存；
+1. 规范化文本并读取原子 secret 快照。
+2. 以文本、区域和全部音色设置计算缓存身份。
+3. 命中有效 MP3 缓存时直接返回。
+4. 生成经过 XML 转义的 SSML。
+5. 请求 Azure Speech MP3 输出。
+6. 校验响应并原子写入缓存。
 7. 返回 OneBot 语音消息段。
 
 同一缓存身份由 keyed lock 合并并发生成，Azure 请求最多同时执行 2 个。

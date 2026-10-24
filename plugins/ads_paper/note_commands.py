@@ -1,23 +1,12 @@
 """个人论文笔记、写作灵感、研究主题与截稿日期命令。"""
 
 import asyncio
-from collections.abc import Callable
 from datetime import datetime
-from typing import ParamSpec, TypeVar
 
 from core.plugin_base import Segments, segments
 
 from .constants import DATE_FORMAT
 from .storage import PaperStorage
-
-P = ParamSpec("P")
-R = TypeVar("R")
-
-
-async def _run_storage(func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:
-    """把同步文件事务移出事件循环，并保留被调函数的参数与返回类型。"""
-
-    return await asyncio.to_thread(func, *args, **kwargs)
 
 
 async def cmd_note(storage: PaperStorage, args: str, user_id: int) -> Segments:
@@ -43,13 +32,13 @@ async def cmd_note(storage: PaperStorage, args: str, user_id: int) -> Segments:
         except ValueError:
             return segments("❌ 序号必须是数字")
 
-        if await _run_storage(storage.delete_paper_note, paper_id, index, user_id):
+        if await asyncio.to_thread(storage.delete_paper_note, paper_id, index, user_id):
             return segments(f"✅ 已删除论文 {paper_id} 的笔记")
         return segments("❌ 删除失败，请检查 ID 和序号")
 
     paper_id = parts[0]
     if len(parts) == 1:
-        notes = await _run_storage(storage.get_paper_notes, paper_id, user_id)
+        notes = await asyncio.to_thread(storage.get_paper_notes, paper_id, user_id)
         if not notes:
             return segments(f"📝 论文 {paper_id} 暂无笔记")
 
@@ -68,8 +57,8 @@ async def cmd_note(storage: PaperStorage, args: str, user_id: int) -> Segments:
     if not content.strip():
         return segments("❌ 笔记内容不能为空")
 
-    if await _run_storage(storage.add_paper_note, paper_id, content, user_id):
-        notes = await _run_storage(storage.get_paper_notes, paper_id, user_id)
+    if await asyncio.to_thread(storage.add_paper_note, paper_id, content, user_id):
+        notes = await asyncio.to_thread(storage.get_paper_notes, paper_id, user_id)
         return segments(f"✅ 已添加笔记到论文 {paper_id} (#{len(notes)})")
     return segments("❌ 添加笔记失败")
 
@@ -81,7 +70,7 @@ async def cmd_writing(storage: PaperStorage, args: str, user_id: int) -> Segment
     parts = raw_args.split(maxsplit=1)
 
     if not parts:
-        sections = await _run_storage(storage.list_writing_sections, user_id)
+        sections = await asyncio.to_thread(storage.list_writing_sections, user_id)
         if not sections:
             return segments(
                 "💡 写作灵感箱暂无内容\n\n提示: 使用 '/paper writing <章节> <想法>' 添加灵感"
@@ -89,7 +78,7 @@ async def cmd_writing(storage: PaperStorage, args: str, user_id: int) -> Segment
 
         lines = ["💡 写作灵感箱:\n"]
         for section in sections:
-            ideas = await _run_storage(storage.get_writing_ideas, section, user_id)
+            ideas = await asyncio.to_thread(storage.get_writing_ideas, section, user_id)
             lines.append(f"  • {section} ({len(ideas)} 条)")
 
         return segments("\n".join(lines))
@@ -106,13 +95,13 @@ async def cmd_writing(storage: PaperStorage, args: str, user_id: int) -> Segment
         except ValueError:
             return segments("❌ 序号必须是数字")
 
-        if await _run_storage(storage.delete_writing_idea, section, index, user_id):
+        if await asyncio.to_thread(storage.delete_writing_idea, section, index, user_id):
             return segments(f"✅ 已删除「{section}」中的灵感")
         return segments("❌ 删除失败，请检查章节和序号")
 
     section = parts[0]
     if len(parts) == 1:
-        ideas = await _run_storage(storage.get_writing_ideas, section, user_id)
+        ideas = await asyncio.to_thread(storage.get_writing_ideas, section, user_id)
         if not ideas:
             return segments(f"💡 「{section}」暂无灵感")
 
@@ -131,8 +120,8 @@ async def cmd_writing(storage: PaperStorage, args: str, user_id: int) -> Segment
     if not content.strip():
         return segments("❌ 灵感内容不能为空")
 
-    if await _run_storage(storage.add_writing_idea, section, content, user_id):
-        ideas = await _run_storage(storage.get_writing_ideas, section, user_id)
+    if await asyncio.to_thread(storage.add_writing_idea, section, content, user_id):
+        ideas = await asyncio.to_thread(storage.get_writing_ideas, section, user_id)
         return segments(f"💡 已添加到「{section}」灵感箱 (#{len(ideas)})")
     return segments("❌ 添加灵感失败")
 
@@ -147,7 +136,7 @@ async def cmd_topics(
     parts = args.strip().split(maxsplit=1)
 
     if not parts:
-        topics = await _run_storage(storage.get_topics, user_id)
+        topics = await asyncio.to_thread(storage.get_topics, user_id)
         if not topics:
             return segments("🏷️ 暂无研究兴趣关键词\n\n提示: 使用 '/paper topics add <关键词>' 添加")
 
@@ -163,7 +152,7 @@ async def cmd_topics(
         if len(parts) < 2:
             return segments("❌ 用法: /paper topics add <关键词>")
         keyword = parts[1]
-        if await _run_storage(storage.add_topic, keyword, user_id):
+        if await asyncio.to_thread(storage.add_topic, keyword, user_id):
             return segments(f"✅ 已添加关键词: {keyword}")
         return segments(f"⚠️ 关键词 '{keyword}' 已存在")
 
@@ -171,14 +160,14 @@ async def cmd_topics(
         if len(parts) < 2:
             return segments("❌ 用法: /paper topics remove <关键词>")
         keyword = parts[1]
-        if await _run_storage(storage.remove_topic, keyword, user_id):
+        if await asyncio.to_thread(storage.remove_topic, keyword, user_id):
             return segments(f"✅ 已删除关键词: {keyword}")
         return segments(f"❌ 关键词 '{keyword}' 不存在")
 
     if first in {"clear", "清空"}:
         if len(parts) != 1:
             return segments("❌ 用法: /paper topics clear")
-        if await _run_storage(storage.clear_topics, user_id):
+        if await asyncio.to_thread(storage.clear_topics, user_id):
             return segments("✅ 已清空所有关键词")
         return segments("❌ 清空失败")
 
@@ -191,7 +180,7 @@ async def cmd_deadline(storage: PaperStorage, args: str, user_id: int) -> Segmen
     parts = args.strip().split(maxsplit=1)
 
     if not parts:
-        deadlines = await _run_storage(storage.get_deadlines, user_id)
+        deadlines = await asyncio.to_thread(storage.get_deadlines, user_id)
         if not deadlines:
             return segments(
                 "📅 暂无截稿日期\n\n提示: 使用 '/paper deadline add <名称> <日期>' 添加"
@@ -221,7 +210,7 @@ async def cmd_deadline(storage: PaperStorage, args: str, user_id: int) -> Segmen
         except ValueError:
             return segments("❌ 日期格式错误，请使用 YYYY-MM-DD 格式（如：2026-03-15）")
 
-        if await _run_storage(storage.add_deadline, name, date, user_id):
+        if await asyncio.to_thread(storage.add_deadline, name, date, user_id):
             return segments(f"✅ 已添加截稿日期: {name} - {date}")
         return segments("❌ 添加失败")
 
@@ -233,7 +222,7 @@ async def cmd_deadline(storage: PaperStorage, args: str, user_id: int) -> Segmen
         except ValueError:
             return segments("❌ 序号必须是数字")
 
-        if await _run_storage(storage.delete_deadline, index, user_id):
+        if await asyncio.to_thread(storage.delete_deadline, index, user_id):
             return segments("✅ 已删除截稿日期")
         return segments("❌ 删除失败，请检查序号")
 

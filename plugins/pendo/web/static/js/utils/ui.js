@@ -62,7 +62,7 @@ export function subscribeDataChanges(expectedType, refresh) {
     let active    = true;
     const handler = (event) => {
         const changedType = event?.detail?.type;
-        // 省略 type 表示全局失效；带 type 时只刷新对应页面。
+        // 省略 type 表示全局失效。带 type 时只刷新对应页面。
         if (expectedType && changedType && changedType !== expectedType) return;
         return refresh(event);
     };

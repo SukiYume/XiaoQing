@@ -1,5 +1,7 @@
 # 🔭 ADS Paper
 
+[English](README.en.md)
+
 ADS Paper 将 NASA ADS 论文检索与个人科研资料管理整合到 `/paper` 命令。搜索、引用网络和相关论文支持群聊与私聊；笔记、灵感、主题、截稿日期、每日推荐和文献库使用私聊用户作用域。
 
 ---
@@ -88,7 +90,9 @@ Provider 地址位于项目级 `config.ai.providers`，模型 profile 位于 `co
 | `deadlines.json` | 截稿日期 |
 | `references_<user_id>.bib` | 个人 BibTeX 文献库 |
 
-JSON 使用原子写入。解析异常会保留源文件，并生成带内容摘要的 `.corrupt-*` 隔离副本；写入路径进入保护状态，数据恢复后继续服务。BibTeX 使用结构化条目扫描处理邮箱、URL、注释和字段值中的 `@`。
+JSON 使用原子写入。解析异常时，插件保留源文件，并生成 `.corrupt-*` 隔离副本。副本名称包含内容摘要。写入路径进入保护状态。数据恢复后，服务继续运行。
+
+BibTeX 扫描器按条目结构解析内容。扫描器处理邮箱、URL、注释和字段值中的 `@`。
 
 `/paper daily` 依据 ADS `entdate` 选择 UTC 当天记录，并按 `entdate` 降序、bibcode 升序排列。
 

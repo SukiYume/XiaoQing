@@ -1,12 +1,16 @@
 # 🧭 00 - 项目概览
 
-本章介绍 XiaoQingBot 的定位、能力范围、核心概念和项目目录。完成阅读后，可进入 [快速开始](01-getting-started.md) 部署服务。
+中文 | [English](00-overview.en.md)
+
+本章介绍 XiaoQingBot 的定位、能力范围、核心概念和项目目录。
+完成阅读后，可进入 [快速开始](01-getting-started.md) 部署服务。
 
 ---
 
 ## ✨ 项目定位
 
-XiaoQingBot 是基于 Python asyncio 和 OneBot v11 的插件化 QQ 助手。项目同时包含两部分：
+XiaoQingBot 是基于 Python asyncio 和 OneBot v11 的插件化 QQ 助手。
+项目同时包含两部分：
 
 - `core/`：负责 OneBot 接入、事件解析、命令路由、会话、调度、配置、插件生命周期、执行治理和运行指标。
 - `plugins/`：提供聊天、个人管理、科研工具、远程操作、内容解析、外部服务和娱乐功能。
@@ -19,7 +23,8 @@ QQ ↔ OneBot 实现 ↔ XiaoQing Core ↔ 插件
 
 项目适合运行在个人电脑、家庭服务器、NAS、可信内网服务或受反向代理保护的私人服务器。
 
-运行环境要求 Python 3.11 及以上版本。维护者使用统一代码格式器和行为回归检查，具体约定见 [代码与验证约定](03-plugin-development.md#代码与验证约定)。
+运行环境要求 Python 3.11 及以上版本。
+维护者使用统一代码格式器和行为回归检查，具体约定见 [代码与验证约定](03-plugin-development.md#代码与验证约定)。
 
 ---
 
@@ -35,7 +40,8 @@ QQ ↔ OneBot 实现 ↔ XiaoQing Core ↔ 插件
 | 内容与服务 | `url_parser`, `github`, `earthquake`, `flickr`, `twitter`, `signin`, `adnmb` | 链接解析、趋势、快讯、公共摄影、媒体提取、签到、社区浏览 |
 | 工具与娱乐 | `choice`, `color`, `wolframalpha`, `guess_number`, `qingpet`, `echo` | 随机选择、颜色、计算、游戏、宠物、回显 |
 
-以上共 31 个插件。[插件使用手册](09-plugins.md) 介绍每个插件的命令、配置和数据，并提供全部命令入口速查与定时任务总表。
+以上共 31 个插件。
+[插件使用手册](09-plugins.md) 介绍每个插件的命令、配置和数据，并提供全部命令入口速查与定时任务总表。
 
 ---
 
@@ -43,7 +49,8 @@ QQ ↔ OneBot 实现 ↔ XiaoQing Core ↔ 插件
 
 ### OneBot
 
-[OneBot v11](https://onebot.dev/) 定义 QQ 事件、消息段、Action 和通信协议。XiaoQing 支持以下接入方向：
+[OneBot v11](https://onebot.dev/) 定义 QQ 事件、消息段、Action 和通信协议。
+XiaoQing 支持以下接入方向：
 
 - 被动 Inbound：OneBot 通过 HTTP `/event` 或 WebSocket `/ws` 推送事件。
 - 主动 WebSocket：XiaoQing 连接 OneBot 的 WebSocket 服务。
@@ -51,17 +58,22 @@ QQ ↔ OneBot 实现 ↔ XiaoQing Core ↔ 插件
 
 ### Core
 
-Core 将网络事件转换为统一消息上下文，依次执行处理门控、URL 解析、名字回应、会话、命令和闲聊流程。Core 还负责插件加载、配置快照、定时任务、主动投递和资源回收。
+Core 将网络事件转换为统一消息上下文，依次执行处理门控、URL 解析、名字回应、会话、命令和闲聊流程。
+Core 还负责插件加载、配置快照、定时任务、主动投递和资源回收。
 
 ### 插件
 
-插件目录包含 `plugin.json` 和 Python 入口。Manifest 声明插件元数据、命令树、权限、使用场景、调度任务、依赖和文件监视范围。Core 按确定顺序加载插件，并在启动阶段校验命令冲突和依赖声明。
+插件目录包含 `plugin.json` 和 Python 入口。
+Manifest 声明插件元数据、命令树、权限、使用场景、调度任务、依赖和文件监视范围。
+Core 按确定顺序加载插件，并在启动阶段校验命令冲突和依赖声明。
 
-插件采用受信任代码模型，与 Bot 共享 Python 进程和操作系统权限。插件作用域 Context 提供当前插件的配置、secret、数据目录、HTTP、AI、会话、指标和发送能力。
+插件采用受信任代码模型，与 Bot 共享 Python 进程和操作系统权限。
+插件作用域 Context 提供当前插件的配置、secret、数据目录、HTTP、AI、会话、指标和发送能力。
 
 ### 命令目录
 
-Manifest 中的命令树是运行时命令目录的权威来源。Core 由同一目录生成：
+Manifest 中的命令树是运行时命令目录的权威来源。
+Core 由同一目录生成：
 
 - 文本 `/help`
 - JSON 命令目录
@@ -69,7 +81,7 @@ Manifest 中的命令树是运行时命令目录的权威来源。Core 由同一
 - 权限与场景校验
 - 示例和错误示例测试
 
-谁能在哪里用哪条命令只在这里声明，由 Core 的 `command_access` 统一判断：命令执行、会话每次继续，以及 Core 签发的派生能力（如 agent 的本机工具、SSH、Codex 跟随 `/shell`、`/ssh`、`/codex`）用的是同一处判断，插件代码不自己判断管理员。
+Manifest 声明命令的使用者和使用场景。Core 的 `command_access` 统一检查这些声明。命令执行、每次会话继续和 Core 派生能力均调用此函数。agent 的本机工具、SSH 和 Codex 分别跟随 `/shell`、`/ssh` 和 `/codex` 的权限。插件代码将管理员检查交给 Core。
 
 帮助系统支持逐层浏览：
 
@@ -82,13 +94,18 @@ Manifest 中的命令树是运行时命令目录的权威来源。Core 由同一
 
 ### 消息段
 
-OneBot 消息由有序消息段组成。常见类型包括 `text`、`image`、`record`、`face`、`mface` 和 `reply`。插件通过 `core.plugin_base` 构造文本、图片、语音和组合回复。
+OneBot 消息由有序消息段组成。
+常见类型包括 `text`、`image`、`record`、`face`、`mface` 和 `reply`。
+插件通过 `core.plugin_base` 构造文本、图片、语音和组合回复。
 
 ### 会话与后台任务
 
-框架 Session 适合需要用户连续输入的短期交互，例如表单、猜数字、SSH 和 Jupyter REPL。Session 按会话键串行处理，并通过快照事务提交状态。
+框架 Session 适合需要用户连续输入的短期交互，例如表单、猜数字、SSH 和 Jupyter REPL。
+Session 按会话键串行处理，并通过快照事务提交状态。
 
-插件后台队列适合 Codex、XiaoQing Agent 任务等长任务。任务独立运行，完成后通过主动投递能力回传结果；需要“发出才算数”的业务状态通过发送回执在确认投递后提交。
+插件后台队列适合 Codex、XiaoQing Agent 任务等长任务。
+任务独立运行，完成后通过主动投递能力回传结果。
+依赖实际投递的业务状态，在发送回执确认后提交。
 
 ### 配置与数据
 
@@ -158,11 +175,14 @@ Core 的内部职责进一步分布在以下模块组：
 
 ### 受信任插件
 
-插件与 Bot 共享进程和系统权限。部署者负责插件代码审查与来源管理。Core 的命名空间、执行 gate 和代际管理负责能力组织、可用性与生命周期一致性。
+插件与 Bot 共享进程和系统权限。
+部署者负责插件代码审查与来源管理。
+Core 的命名空间、执行 gate 和代际管理负责能力组织、可用性与生命周期一致性。
 
 ### 有界资源
 
-网络请求、插件入口、同步任务、队列、缓存和关闭流程均采用明确预算。过载请求进入快速错误路径，资源回收按所有权逆序执行。
+网络请求、插件入口、同步任务、队列、缓存和关闭流程均采用明确预算。
+过载请求进入快速错误路径，资源回收按所有权逆序执行。
 
 ### 单一事实来源
 
@@ -174,7 +194,8 @@ Core 的内部职责进一步分布在以下模块组：
 
 ### 平台中立启动
 
-项目通过当前环境中的 `python main.py` 启动。依赖与 Python 环境由使用者准备，项目脚本直接调用 `PATH` 中的工具。
+项目通过当前环境中的 `python main.py` 启动。
+依赖与 Python 环境由使用者准备，项目脚本直接调用 `PATH` 中的工具。
 
 ---
 

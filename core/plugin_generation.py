@@ -63,7 +63,7 @@ class PluginGenerationMixin:
 
         Synchronous embedding remains synchronous.  During normal async startup,
         the serialized load joins the existing initialization barrier so callers
-        retain the established ``load_all(); await wait_inits()`` contract.
+        retain the established ``load_all(). Await wait_inits()`` contract.
         """
 
         try:
@@ -252,9 +252,9 @@ class PluginGenerationMixin:
     ) -> bool:
         """Bridge the synchronous loader to terminal async rollback.
 
-        Returns whether a fatal original error was deferred for ``wait_inits``
-        because immediately raising it through a running asyncio Task would
-        tear down the loop before the scheduled cleanup can finish.
+        Return whether ``wait_inits`` must raise the original fatal error later.
+        An immediate fatal error in an active asyncio Task can stop the event
+        loop before scheduled cleanup finishes.
         """
 
         try:
@@ -718,9 +718,9 @@ class PluginGenerationMixin:
             logger.error("Cannot prepare data directory for plugin %s: %s", definition.name, exc)
             return
         try:
-            # Build the complete transaction fingerprint before importing code:
-            # an import may start async initialization immediately, after which
-            # every exit path must have a pending transaction to finalize.
+            # Build the complete transaction fingerprint before importing code.
+            # An import can start async initialization immediately.
+            # Each subsequent exit path needs a pending transaction to finalize.
             mtime = self._authorize_plugin_snapshot(plugin_dir, definition)
         except (OSError, PluginPathError) as exc:
             logger.error("Cannot fingerprint plugin %s: %s", definition.name, exc)
@@ -1546,11 +1546,10 @@ class PluginGenerationMixin:
     ) -> None:
         """Keep a cleanly stopped old generation as a closed diagnostic tombstone."""
 
-        # A stopped generation must never be republished into the canonical
-        # import cache: callers could import the module and invoke its handler
-        # without passing through the closed execution gate.  Retain exact
-        # helper-module objects only as private diagnostic evidence while the
-        # aggregate namespace guard keeps every public import denied.
+        # Keep stopped generations outside the canonical import cache.
+        # A cached module would let callers bypass the closed execution gate.
+        # Retain helper-module objects as private diagnostic evidence.
+        # The aggregate namespace guard continues to reject public imports.
         with _PLUGIN_IMPORT_LOCK:
             self._private_plugin_modules[name] = dict(modules)
         state.clear()
@@ -1721,7 +1720,7 @@ class PluginGenerationMixin:
                 self._raise_preferred_lifecycle_error(restore_exc, cleanup_error)
             if not recovery_drain.drained:
                 # The recovery init may have resisted cancellation.  Keep its
-                # exact gate, state, modules and finder strongly owned; running
+                # exact gate, state, modules and finder strongly owned. Running
                 # shutdown or purge here would let the detached callback race
                 # with objects the manager has already forgotten.
                 self._restart_required_plugins.add(name)

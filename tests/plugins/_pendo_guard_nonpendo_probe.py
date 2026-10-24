@@ -1,5 +1,5 @@
 # 隔离子进程探针：验证非 Pendo 测试同样受到数据库资源保护。
-"""Explicit subprocess probe; the filename intentionally avoids test discovery."""
+"""Explicit subprocess probe. The filename intentionally avoids test discovery."""
 
 import sys
 

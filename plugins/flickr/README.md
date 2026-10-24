@@ -1,5 +1,7 @@
 # 📷 Flickr 公共摄影插件
 
+中文 | [English](README.en.md)
+
 > 在 QQ 中浏览 Flickr 精选、公共搜索、用户公开照片与公开相册，并保留作者、许可和原图页信息。
 
 ---
@@ -52,7 +54,7 @@ Flickr 插件通过官方 REST API 读取公开照片。默认入口展示今日
 /set_secret plugins.flickr.api_key <你的 API Key>
 ```
 
-运行实例需要新增 Flickr 路径时，可写入完整有效的 `config/secrets.json`。公开配置保持当前版本时，watcher 暂存候选并私聊管理员显示 `plugins.flickr.api_key` 已新增；核对后发送 `/reload` 应用。通知与日志仅记录字段路径，API Key 保留在 secrets 来源中。
+运行实例需要新增 Flickr 路径时，可写入完整有效的 `config/secrets.json`。公开配置保持当前版本时，watcher 暂存候选并私聊管理员显示 `plugins.flickr.api_key` 已新增。核对后发送 `/reload` 应用。通知与日志仅记录字段路径，API Key 保留在 secrets 来源中。
 
 ---
 

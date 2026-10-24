@@ -16,7 +16,6 @@ from typing import Any, Protocol, cast
 from core.args import parse
 from core.interfaces import PluginSettingsSnapshot
 from core.lifecycle import DeferredCancellation, await_owned_task
-from core.plugin_base import ensure_dir as _core_ensure_dir
 from core.plugin_base import load_json as _core_load_json
 from core.plugin_base import run_sync
 from core.plugin_base import segments as _core_segments
@@ -57,7 +56,6 @@ class Context(Protocol):
 
 
 segments               = cast(Callable[[object], MessageSegments], _core_segments)
-_ensure_dir            = cast(Callable[[Path], None], _core_ensure_dir)
 _load_json             = cast(Callable[[Path, object], object], _core_load_json)
 _write_json            = cast(Callable[[Path, object], None], _core_write_json)
 _public_error_response = cast(Callable[..., MessageSegments], _core_public_error_response)
@@ -265,11 +263,6 @@ def _read_qa_file(path: Path) -> dict[str, list[str]]:
     return _normalize_qa(_load_json(path, {}))
 
 
-def _write_qa_file(path: Path, data: Mapping[str, Sequence[str]]) -> None:
-    _ensure_dir(path.parent)
-    _write_json(path, data)
-
-
 def _read_audit_file(path: Path) -> list[dict[str, Any]]:
     payload     = _load_json(path, {})
     raw_entries = payload.get("entries") if isinstance(payload, Mapping) else None
@@ -397,7 +390,7 @@ async def _add_qa(context: Context, args: str) -> MessageSegments:
                 return segments("当前会话的问答库已达上限。")
             data[question] = [answer]
         await _commit_snapshot(
-            lambda: _write_qa_file(snapshot.path, data),
+            lambda: _write_json(snapshot.path, data),
             lambda: setattr(snapshot, "data", data),
         )
     await _record_qa_audit(context, "add", question)
@@ -450,7 +443,7 @@ async def _remove_qa(context: Context, args: str) -> MessageSegments:
             operation     = "remove_question"
             result        = segments(f"对话“{question}”及其 {removed_count} 个回答已删除。")
         await _commit_snapshot(
-            lambda: _write_qa_file(snapshot.path, data),
+            lambda: _write_json(snapshot.path, data),
             lambda: setattr(snapshot, "data", data),
         )
     await _record_qa_audit(context, operation, question)

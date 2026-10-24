@@ -997,10 +997,10 @@ def test_restore_blocks_absent_fast_path_import_until_old_objects_are_committed(
     class BlockingOwnedLedger(dict[str, dict[str, ModuleType]]):
         def __setitem__(self, key: str, value: dict[str, ModuleType]) -> None:
             if key == name and value:
-                # _restore_generation_modules writes this ledger only after it
-                # has populated sys.modules and parent attributes, but while it
-                # still owns every CPython module lock and marks specs as
-                # initializing.  Freeze exactly inside that commit window.
+                # _restore_generation_modules first fills sys.modules and parent
+                # attributes. It then writes this ledger with every CPython
+                # module lock held and each spec marked as initializing.
+                # Pause inside that commit window.
                 modules_inserted.set()
                 if not release_commit.wait(2):
                     raise RuntimeError("test did not release restore commit")

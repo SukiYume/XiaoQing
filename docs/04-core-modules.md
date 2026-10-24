@@ -1,6 +1,9 @@
 # ⚙️ 04 - Core 模块
 
-本章是 `core/` 的职责索引，帮助维护者从运行现象定位到代码所有者。组件关系见 [系统架构](02-architecture.md)，公开插件接口见 [API 参考](05-api-reference.md)。
+中文 | [English](04-core-modules.en.md)
+
+本章是 `core/` 的职责索引，帮助维护者从运行现象定位到代码所有者。
+组件关系见 [系统架构](02-architecture.md)，公开插件接口见 [API 参考](05-api-reference.md)。
 
 ---
 
@@ -20,7 +23,8 @@
 | `app_plugin_watch.py` | 插件 watcher 的启动、监督、退避和关闭 |
 | `lifecycle.py` | 通用资源栈、异步回收和关闭预算 |
 
-`XiaoQingApp` 负责所有权编排。具体业务逻辑位于对应服务模块，启动与关闭路径由 `app_lifecycle.py` 统一组织。
+`XiaoQingApp` 负责协调资源所有权。
+具体业务逻辑位于对应服务模块。`app_lifecycle.py` 统一组织启动与关闭路径。
 
 ---
 
@@ -29,14 +33,15 @@
 | 模块 | 职责 |
 |---|---|
 | `message.py` | OneBot 消息段标准化、文本提取、发送者显示名和消息属性解析 |
-| `dispatcher.py` | `MessageContext` 构建、A–G 流程、Session 与插件调用；`run_command_text` 是 agent 的命令执行器 |
-| `router.py` | Manifest 命令树、触发词索引、子命令解析和冲突检测；`command_access` 是全项目唯一的命令权限判断 |
+| `dispatcher.py` | `MessageContext` 构建、A–G 流程、Session 与插件调用。`run_command_text` 是 agent 的命令执行器 |
+| `router.py` | Manifest 命令树、触发词索引、子命令解析和冲突检测。`command_access` 是全项目唯一的命令权限判断 |
 | `args.py` | `ParsedArgs` token 与选项解析 |
 | `models.py` | OneBot、Manifest、命令、服务和配置数据模型 |
 | `auth.py` | Inbound Bearer 凭据解析与恒定时间比较 |
 | `public_errors.py` | 内部异常到公开错误码和 request ID 的映射 |
 
-Dispatcher 的固定流程为：处理门控、URL、Bot 名称、会话、命令、命令兜底、闲聊。Router 从已验证 Manifest 构建只读命令目录，并把解析结果放入插件 Context。
+Dispatcher 的固定流程为：处理门控、URL、Bot 名称、会话、命令、命令兜底、闲聊。
+Router 从已验证 Manifest 构建只读命令目录，并把解析结果放入插件 Context。
 
 ---
 
@@ -52,14 +57,16 @@ Dispatcher 的固定流程为：处理门控、URL、Bot 名称、会话、命�
 | `plugin_execution.py` | 按插件并发、队列、超时、熔断、同步 bulkhead 和公平调度 |
 | `plugin_data.py` | 项目级数据目录、布局升级和路径所有权 |
 
-插件加载按目录规范名排序。Watcher 构建稳定快照，Generation 负责原子发布，Runtime 负责调用边界，Execution 负责资源预算。
+插件加载按目录规范名排序。
+Watcher 构建稳定快照，Generation 负责原子发布，Runtime 负责调用边界，Execution 负责资源预算。
 
 Manifest `concurrency` 由 `plugin_execution.py` 落实：
 
 - `parallel` 使用插件配置的并发上限。
 - `sequential` 为插件入口提供单并发执行。
 
-Python 模块依赖在导入前验证。命令触发词冲突在发布命令目录前报告。
+Python 模块依赖在导入前验证。
+命令触发词冲突在发布命令目录前报告。
 
 ---
 
@@ -70,9 +77,11 @@ Python 模块依赖在导入前验证。命令触发词冲突在发布命令目�
 | `context.py` | `PluginContext` 实现、作用域视图和便捷方法 |
 | `interfaces.py` | Protocol、principal、capability 和跨模块接口 |
 | `capabilities.py` | Core 签发能力的具体实现，含 agent 的命令执行器、本机工具授权与 Codex、SSH 桥 |
-| `plugin_base.py` | 消息段、Action、同步任务、文件和拆分工具；`file://` URI 与本地路径互转 |
+| `plugin_base.py` | 消息段、Action、同步任务、文件和拆分工具。`file://` URI 与本地路径互转 |
 
-Context 由当前插件名、用户、群、request ID 和 principal 共同确定。普通插件获得当前命名空间的配置与 secret；Manifest capability 对应 Core 维护的窄特权对象。
+Context 由当前插件名、用户、群、request ID 和 principal 共同确定。
+普通插件获得当前命名空间的配置与 secret。
+Manifest capability 对应 Core 维护的窄特权对象。
 
 ---
 
@@ -87,7 +96,9 @@ Context 由当前插件名、用户、群、request ID 和 principal 共同确�
 | `durable_fanout.py` | 多目标通知的持久进度和恢复 |
 | `async_keyed_lock.py` | 按业务键串行的异步锁 |
 
-Session 管理用户驱动的多轮交互。Scheduler 管理时间驱动任务及其广播、目标化或静默投递模式。Delivery 与 Durable Fanout 管理业务状态提交和主动消息投递进度。
+Session 管理用户驱动的多轮交互。
+Scheduler 管理时间驱动任务及其广播、目标化或静默投递模式。
+Delivery 与 Durable Fanout 管理业务状态提交和主动消息投递进度。
 
 ---
 
@@ -102,7 +113,8 @@ Session 管理用户驱动的多轮交互。Scheduler 管理时间驱动任务�
 | `bounded_http.py` | 响应状态、内容类型、字节预算和流式读取 |
 | `image_validation.py` | 图片类型、尺寸、像素和解码预算 |
 
-Inbound HTTP 与 WebSocket 使用同一鉴权和会话排序。出站远程内容先经过 `safe_http.py` 解析目标，再由 `bounded_http.py` 执行有界读取。
+Inbound HTTP 与 WebSocket 使用同一鉴权和会话排序。
+出站远程内容先经过 `safe_http.py` 解析目标，再由 `bounded_http.py` 执行有界读取。
 
 ---
 
@@ -114,10 +126,12 @@ Inbound HTTP 与 WebSocket 使用同一鉴权和会话排序。出站远程内�
 | `ai.py` | Provider、模型 profile、插件 route、重试、fallback 和总预算 |
 | `sensitive_audit.py` | 敏感字段审计、摘要和脱敏 |
 | `atomic_store.py` | JSON 与字节数据的原子写入和恢复 |
-| `process_tree.py`、`windows_job.py` | 插件执行外部命令：独立进程树（Windows Job 对象 / POSIX 进程组）、stdout 与 stderr 共享输出预算、超时与取消时整树回收；`/shell` 和小青 agent 共用 |
+| `process_tree.py`、`windows_job.py` | 插件执行外部命令：独立进程树（Windows Job 对象 / POSIX 进程组）、stdout 与 stderr 共享输出预算、超时与取消时整树回收。`/shell` 和小青 agent 共用 |
 | `bounded_file_cache.py` | TTL、LRU、条目数和字节数受限的磁盘缓存 |
 
-配置分为公开配置和 secrets。应用层按 revision 发布快照。AI Service 从同一 revision 解析 provider、模型、插件 route 和凭据。
+配置分为公开配置和 secrets。
+应用层按 revision 发布快照。
+AI Service 从同一 revision 解析 provider、模型、插件 route 和凭据。
 
 ---
 
@@ -148,11 +162,17 @@ Inbound HTTP 与 WebSocket 使用同一鉴权和会话排序。出站远程内�
 | Config Watcher | `app_lifecycle.py` 调用 `ConfigManager.watch()` | `app_lifecycle.py` |
 | Plugin Watcher | `app_plugin_watch.py` | `app_plugin_watch.py` |
 
-资源创建和回收由同一所有权边界配对。应用关闭按依赖关系逆序执行。
+资源创建和回收由同一所有权边界配对。
+应用关闭按依赖关系逆序执行。
 
-`DeliveryReceipt` 跟踪一个逻辑回复所需的全部物理 Action。动作进入收集队列时保留待结算状态，实际传输的成功、失败和未知结果分别决定提交、回滚与未知处理。Core 接管的收据由传输层计数，插件发送帮助器保留同一结算权，避免拆分消息重复累计成功。每条物理消息确认发出后，传输层先登记它的消息 ID 再记下结果，提交回调从 `message_ids` 读到整条回复的全部 ID。标准 HTTP 上报完成真实 Action 投递后才返回事件确认。
+`DeliveryReceipt` 跟踪一个逻辑回复所需的全部物理 Action。
+动作进入收集队列时保留待结算状态，实际传输的成功、失败和未知结果分别决定提交、回滚与未知处理。
+Core 接管的收据由传输层计数，插件发送帮助器保留同一结算权，避免拆分消息重复累计成功。
+每条物理消息确认发出后，传输层先登记它的消息 ID 再记下结果，提交回调从 `message_ids` 读到整条回复的全部 ID。
+标准 HTTP 上报完成真实 Action 投递后才返回事件确认。
 
-主动 WebSocket 的连接通知与读循环并发运行，通知中的 Action 可以通过持续运行的读循环接收 echo。连接结束时统一回收通知任务与待响应请求。
+主动 WebSocket 的连接通知与读循环并发运行，通知中的 Action 可以通过持续运行的读循环接收 echo。
+连接结束时统一回收通知任务与待响应请求。
 
 ---
 

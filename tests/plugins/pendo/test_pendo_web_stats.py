@@ -970,28 +970,6 @@ def test_activity_heatmap_rejects_invalid_direct_year(db: Database) -> None:
     )
 
 
-@pytest.fixture
-def currency_db(tmp_path):
-    db = Database(str(tmp_path / "currency.db"))
-    for currency, amount in [("CNY", 100), ("USD", 200)]:
-        db.insert_item(
-            {
-                "id": currency,
-                "owner_id": "owner",
-                "type": "ledger",
-                "title": currency,
-                "currency": currency,
-                "amount": amount,
-                "amount_cents": amount * 100,
-                "transaction_type": "expense",
-                "ledger_category": "餐饮",
-                "ledger_date": "2026-03-01",
-            }
-        )
-    yield db
-    db.cleanup()
-
-
 def test_insights_keep_currency_trends_separate(currency_db):
     result = build_ledger_insights(
         currency_db, "owner", start_date="2026-03-01", end_date="2026-03-02", currency="USD"

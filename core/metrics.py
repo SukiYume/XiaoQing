@@ -103,7 +103,7 @@ class MetricsCollector:
         self._global_stats                             = ExecutionStats()
         self._start_time                               = time.time()
         # summary_snapshot() is intentionally synchronous, so this remains a
-        # threading lock. Keep protected sections in-memory only; never await
+        # threading lock. Keep protected sections in-memory only. Never await
         # or perform I/O while holding it.
         self._lock = threading.Lock()
 
@@ -217,26 +217,8 @@ def timed_async(collector: MetricsCollector, plugin_name: str, command_name: str
     def decorator(func: Callable):
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):
-            start        = time.perf_counter()
-            is_error     = False
-            is_cancelled = False
-            try:
+            async with ExecutionTimer(collector, plugin_name, command_name):
                 return await func(*args, **kwargs)
-            except asyncio.CancelledError:
-                is_cancelled = True
-                raise
-            except BaseException:
-                is_error = True
-                raise
-            finally:
-                duration = time.perf_counter() - start
-                await collector.record_plugin_execution(
-                    plugin_name,
-                    command_name,
-                    duration,
-                    is_error     = is_error,
-                    is_cancelled = is_cancelled,
-                )
 
         return wrapper
 
@@ -265,26 +247,23 @@ class ExecutionTimer:
         self.command_name      = command_name
         self.start_time: float = 0
         self.duration: float   = 0
-        self._is_error         = False
-        self._is_cancelled     = False
 
     async def __aenter__(self) -> "ExecutionTimer":
         self.start_time = time.perf_counter()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
-        self.duration      = time.perf_counter() - self.start_time
-        self._is_cancelled = exc_type is not None and issubclass(
+        self.duration = time.perf_counter() - self.start_time
+        is_cancelled  = exc_type is not None and issubclass(
             exc_type,
             asyncio.CancelledError,
         )
-        self._is_error = exc_type is not None and not self._is_cancelled
         await self.collector.record_plugin_execution(
             self.plugin_name,
             self.command_name,
             self.duration,
-            is_error     = self._is_error,
-            is_cancelled = self._is_cancelled,
+            is_error     = exc_type is not None and not is_cancelled,
+            is_cancelled = is_cancelled,
         )
 
 

@@ -935,8 +935,6 @@ def main(config: KNNConfig = CONFIG) -> None:
     _log("Embedding 就绪，开始训练…")
 
     # ── 初始化模型（不含 encoder，embedding 已外部提供）────────────────────
-    # 注意：KNNInterestModel.__init__ 会再次加载 encoder 用于推理时按需编码，
-    # 但训练过程中我们传入 precomputed_embeddings 跳过重复编码。
     model = KNNInterestModel(
         encoder_name    = config.encoder_name,
         k               = config.k,

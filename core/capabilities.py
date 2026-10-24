@@ -336,7 +336,7 @@ class CommandRunnerService:
 
 @dataclass(frozen=True)
 class VoiceSynthesisService:
-    """Fixed smalltalk-to-voice service; no callback name is caller-controlled."""
+    """Fixed smalltalk-to-voice service. No callback name is caller-controlled."""
 
     _invoke: Callable[[str], Awaitable[list[dict[str, Any]] | None]]
 

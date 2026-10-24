@@ -136,7 +136,7 @@ def _business_date(context: PluginContextProtocol) -> str:
 
 @dataclass(slots=True)
 class _QuotaReservation:
-    path: Path | None
+    path: Path
     window: str
     actor: str
     active: bool = True
@@ -146,9 +146,6 @@ class _QuotaReservation:
 
     async def rollback(self) -> None:
         if not self.active:
-            return
-        if self.path is None:
-            self.active = False
             return
         async with _QUOTA_LOCKS.hold(_QUOTA_LOCK_KEY):
             if not self.active:

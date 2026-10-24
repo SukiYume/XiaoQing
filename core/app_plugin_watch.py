@@ -73,7 +73,6 @@ class AppPluginWatchMixin:
     def _plugin_watch_can_restart(self) -> bool:
         return (
             self._plugin_watch_desired
-            and not self._stopping
             and self._watch_runtime_active()
             and not any(not item.done() for item in self._plugin_watch_tasks)
         )

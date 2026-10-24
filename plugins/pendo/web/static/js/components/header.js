@@ -42,7 +42,7 @@ export function renderHeader(container) {
 
     const titleElement = header.querySelector('.header-title');
     onRouteChange((path) => {
-        // 未知路径保留原值，便于识别路由配置缺口；textContent 不会执行路径内容。
+        // 未知路径保留原值，便于识别路由配置缺口。textContent 不会执行路径内容。
         titleElement.textContent = PAGE_TITLES[path] || path;
     });
 

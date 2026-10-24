@@ -110,7 +110,7 @@ def resolve_source_wall_time(
 ) -> datetime:
     """Attach a source zone only when a wall time maps to one real instant.
 
-    A naive value during a DST gap has no real instant; one during a fold has
+    A naive value during a DST gap has no real instant. One during a fold has
     two.  Silently choosing either case would make an irreversible migration
     guess, so both are rejected.
     """

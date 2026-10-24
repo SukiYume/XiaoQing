@@ -3,7 +3,6 @@ Pytest configuration and shared fixtures for XiaoQing tests
 """
 
 import asyncio
-import json
 import logging
 import os
 import re
@@ -20,7 +19,7 @@ except ImportError:
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, Mock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 
@@ -148,24 +147,6 @@ def project_root() -> Path:
     return ROOT
 
 
-@pytest.fixture
-def tests_dir() -> Path:
-    """Get the tests directory"""
-    return ROOT / "tests"
-
-
-@pytest.fixture
-def plugins_dir() -> Path:
-    """Get the plugins directory"""
-    return ROOT / "plugins"
-
-
-@pytest.fixture
-def config_dir() -> Path:
-    """Get the config directory"""
-    return ROOT / "config"
-
-
 @pytest.fixture(scope="session")
 def project_tmp_root() -> Iterator[Path]:
     """返回本次 pytest run 中仅属于当前 xdist worker 的项目内临时根。"""
@@ -226,59 +207,6 @@ def isolate_process_global_import_hooks() -> Iterator[None]:
 
 
 # ============================================================
-# Config Fixtures
-# ============================================================
-
-
-@pytest.fixture
-def sample_config() -> dict[str, Any]:
-    """Sample configuration data"""
-    return {
-        "bot_name": "小青",
-        "command_prefixes": ["/"],
-        "require_bot_name_in_group": True,
-        "enable_ws_client": False,
-        "enable_inbound_server": True,
-        "inbound_server_port": 8080,
-        "plugins": {
-            "smalltalk_provider": "smalltalk",
-            "echo": {"enabled": True},
-            "choice": {"enabled": True},
-        },
-    }
-
-
-@pytest.fixture
-def sample_secrets() -> dict[str, Any]:
-    """Sample secrets configuration"""
-    return {
-        "admin_user_ids": [12345, 67890],
-        "plugins": {
-            "echo": {},
-            "choice": {},
-        },
-    }
-
-
-@pytest.fixture
-def temp_config_file(temp_dir: Path, sample_config: dict[str, Any]) -> Path:
-    """Create a temporary config file"""
-    config_path = temp_dir / "config.json"
-    with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(sample_config, f, indent=2, ensure_ascii=False)
-    return config_path
-
-
-@pytest.fixture
-def temp_secrets_file(temp_dir: Path, sample_secrets: dict[str, Any]) -> Path:
-    """Create a temporary secrets file"""
-    secrets_path = temp_dir / "secrets.json"
-    with open(secrets_path, "w", encoding="utf-8") as f:
-        json.dump(sample_secrets, f, indent=2, ensure_ascii=False)
-    return secrets_path
-
-
-# ============================================================
 # Event Fixtures
 # ============================================================
 
@@ -336,46 +264,9 @@ def sample_private_event() -> dict[str, Any]:
     }
 
 
-@pytest.fixture
-def sample_at_event() -> dict[str, Any]:
-    """Sample event with @ mention"""
-    return {
-        "post_type": "message",
-        "message_type": "group",
-        "time": 1234567890,
-        "self_id": 11111,
-        "user_id": 12345,
-        "group_id": 67890,
-        "message": [
-            {"type": "at", "data": {"qq": "11111"}},
-            {"type": "text", "data": {"text": " 你好"}},
-        ],
-        "raw_message": "[@11111] 你好",
-        "sender": {
-            "user_id": 12345,
-            "nickname": "TestUser",
-        },
-    }
-
-
 # ============================================================
 # Mock Fixtures
 # ============================================================
-
-
-@pytest.fixture
-def mock_http_session():
-    """Mock HTTP session"""
-    session      = AsyncMock()
-    session.get  = AsyncMock()
-    session.post = AsyncMock()
-    return session
-
-
-@pytest.fixture
-def mock_send_action():
-    """Mock send_action function"""
-    return AsyncMock()
 
 
 @pytest.fixture
@@ -428,45 +319,6 @@ def mock_plugin_registry():
     mock = MagicMock()
     mock.get = Mock(return_value=None)
     return mock
-
-
-@pytest.fixture
-def mock_aiohttp_session():
-    """Mock aioresponses for HTTP testing"""
-    try:
-        from aioresponses import aioresponses
-
-        with aioresponses() as m:
-            yield m
-    except ImportError:
-        # 如果没有安装aioresponses，使用基本mock
-        from unittest.mock import AsyncMock, MagicMock
-
-        session        = MagicMock()
-        session.get    = AsyncMock()
-        session.post   = AsyncMock()
-        session.put    = AsyncMock()
-        session.delete = AsyncMock()
-        yield session
-
-
-@pytest.fixture
-def mock_websocket():
-    """Mock WebSocket connection"""
-    from unittest.mock import AsyncMock
-
-    ws       = AsyncMock()
-    ws.send  = AsyncMock()
-    ws.close = AsyncMock()
-    ws.recv = AsyncMock(return_value='{"data": {}}')
-    return ws
-
-
-@pytest.fixture
-def temp_db_file(temp_dir: Path) -> Path:
-    """创建临时数据库文件"""
-    db_path = temp_dir / "test.db"
-    return db_path
 
 
 # ============================================================
@@ -554,58 +406,6 @@ def session_manager():
     from core.session import SessionManager
 
     return SessionManager(default_timeout=300.0)
-
-
-# ============================================================
-# Plugin Manager Fixture
-# ============================================================
-
-
-@pytest.fixture
-def plugin_manager(plugins_dir: Path):
-    """Create a PluginManager for testing"""
-    from core.plugin_manager import PluginManager
-    from core.router import CommandRouter
-
-    router = CommandRouter()
-
-    def dummy_context_factory(*args, **kwargs):
-        return None
-
-    manager = PluginManager(plugins_dir, router, dummy_context_factory)
-    return manager
-
-
-# ============================================================
-# Scheduler Fixture
-# ============================================================
-
-
-@pytest.fixture
-def scheduler_manager():
-    """Create a SchedulerManager for testing"""
-    from core.scheduler import SchedulerManager
-
-    manager = SchedulerManager()
-    yield manager
-    # Cleanup
-    if manager.scheduler:
-        manager.scheduler.shutdown()
-
-
-# ============================================================
-# Utility Functions
-# ============================================================
-
-
-@pytest.fixture
-def async_wait():
-    """Helper to wait for async operations"""
-
-    async def _wait(seconds: float = 0.1):
-        await asyncio.sleep(seconds)
-
-    return _wait
 
 
 # ============================================================
