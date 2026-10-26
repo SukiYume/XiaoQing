@@ -125,6 +125,18 @@
         },
         "plugins": {
                 "smalltalk_provider": "xiaoqing_chat",
+                "xiaoai": {
+                        "ai": {
+                                "routes": {
+                                        "plan": {
+                                                "models": ["deepseek-flash"],
+                                                "timeout_seconds": 25,
+                                                "total_timeout_seconds": 28,
+                                                "max_retry": 0
+                                        }
+                                }
+                        }
+                },
                 "chat": {
                         "daily_user_limit": 20,
                         "daily_global_limit": 100

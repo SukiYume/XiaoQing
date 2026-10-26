@@ -31,6 +31,50 @@ mock_context = _fixture_support.mock_context
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url,enabled",
+    [
+        ("https://multimedia.nt.qq.com.cn/download?fileid=test", True),
+        ("https://MULTIMEDIA.NT.QQ.COM.CN/download", True),
+        ("http://multimedia.nt.qq.com.cn/download", False),
+        ("https://multimedia.nt.qq.com.cn.attacker.example/image", False),
+        ("https://example.com/image", False),
+        ("https://198.18.1.211/image", False),
+    ],
+)
+async def test_qq_media_fake_dns_is_scoped_to_https_host(url, enabled):
+    from plugins.xiaoqing_chat.media.sources import _download_url_bytes
+
+    response = SimpleNamespace(body=_PNG_BYTES, headers={"Content-Type": "image/png"})
+    with patch(
+        "plugins.xiaoqing_chat.media.sources.fetch_public_bytes",
+        new=AsyncMock(return_value=response),
+    ) as fetch:
+        payload, mime = await _download_url_bytes(url, max_bytes=1024)
+    assert payload == _PNG_BYTES and mime == "image/png"
+    kwargs = fetch.await_args.kwargs
+    assert kwargs["allow_transparent_proxy_fake_dns"] is enabled
+    assert kwargs["allowed_hosts"] == (frozenset({"multimedia.nt.qq.com.cn"}) if enabled else None)
+    assert kwargs["allowed_schemes"] == ({"https"} if enabled else None)
+
+
+@pytest.mark.asyncio
+async def test_media_download_error_survives_unsupported_file_id(mock_context):
+    from plugins.xiaoqing_chat.media.sources import _resolve_media_bytes
+
+    with patch(
+        "plugins.xiaoqing_chat.media.sources._download_url_bytes",
+        new=AsyncMock(side_effect=ValueError("DNS blocked")),
+    ):
+        with pytest.raises(ValueError, match="DNS blocked"):
+            await _resolve_media_bytes(
+                {"type": "image", "data": {"file": "opaque-id", "url": "https://example.com/img"}},
+                context   = mock_context,
+                max_bytes = 1024,
+            )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("recovery_source", ["message", "image_api", "public_url"])
 async def test_ordinary_image_recovers_adapter_identifier(mock_context, recovery_source):
     from plugins.xiaoqing_chat.media.sources import _resolve_media_bytes

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xiaoqing"
-version = "4.5.1"
+version = "4.6.0"
 description = "基于 OneBot 协议和 Python asyncio 的轻量级 QQ 机器人框架，内置向量记忆与行为规划"
 readme = "README.md"
 license = "MIT"
@@ -44,6 +44,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+xiaoai = ["miservice==3.0.1", "qrcode[pil]>=8.0,<9"]
+
 # 插件常用依赖
 plugins = [
     "requests>=2.28.0",
@@ -123,7 +125,7 @@ arxiv-ml = [
 
 # 完整运行时安装（不包含测试、审计、格式化等开发工具）
 all = [
-    "xiaoqing[plugins,ml,web,jupyter,arxiv-ml,astro,ssh]",
+    "xiaoqing[plugins,ml,web,jupyter,arxiv-ml,astro,ssh,xiaoai]",
 ]
 
 [project.urls]
@@ -185,6 +187,7 @@ packages = [
     "plugins.url_parser",
     "plugins.voice",
     "plugins.wolframalpha",
+    "plugins.xiaoai",
     "plugins.xiaoqing_agent",
     "plugins.xiaoqing_chat",
     "plugins.xiaoqing_chat.config",

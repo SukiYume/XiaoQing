@@ -28,7 +28,7 @@ def _is_plugin_document(path: Path) -> bool:
 
 
 def _tracked_plugin_assets() -> set[str]:
-    """列出 Git 中应随插件发行的非源码资源。"""
+    """列出已跟踪及新增的非忽略插件资源，使提交前检查覆盖新插件。"""
 
     return {
         path
@@ -37,6 +37,9 @@ def _tracked_plugin_assets() -> set[str]:
             "-c",
             "core.quotePath=false",
             "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
             "-z",
             "--",
             "plugins",
