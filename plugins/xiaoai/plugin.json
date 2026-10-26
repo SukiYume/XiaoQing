@@ -1,0 +1,31 @@
+{
+    "name": "xiaoai",
+    "version": "0.3.6",
+    "description": "自动整理米家及红外设备能力，支持自然语言查询、控制、天气和小爱静默转发",
+    "entry": "main.py",
+    "commands": [
+        {
+            "name": "xiaoai",
+            "triggers": ["xiaoai", "小爱", "米家"],
+            "admin_only": true,
+            "contexts": ["private"],
+            "help": "米家设备与红外空调灯泡自然语言查询控制、出粮、天气；用 /米家 <用户原话>。/米家 设备 自动发现；/米家 能力 <编号> 查看参数；/米家 帮助 获取结构化调用规则。",
+            "usage": "/米家 <自然语言|设备|刷新设备|能力 设备名|接口 设备名 [页码]|设置|调用 JSON|份量 [设备名] 克数|天气 [城市]|天气城市 城市|登录|选择 序号|续期|状态|检查|帮助>",
+            "examples": ["/米家 设备", "/米家 帮助", "/米家 家里温湿度是多少", "/米家 关灯泡，开台灯", "/米家 空调调成制冷26度", "/米家 天气 北京"],
+            "invalid_examples": ["/小爱 执行"]
+        }
+    ],
+    "schedule": [
+        {
+            "id": "xiaoai_auth_health",
+            "handler": "scheduled_auth",
+            "delivery": "targeted",
+            "cron": {"minute": "*/30"},
+            "description": "每半小时检查米家与小爱授权，自动续期并私聊提醒重新登录"
+        }
+    ],
+    "dependencies": [
+        {"name": "miservice", "required": false, "description": "小米云协议与终端登录；安装 xiaoqing[xiaoai] 后完成账号初始化"},
+        {"name": "qrcode", "required": false, "description": "消息扫码登录二维码生成；安装 xiaoqing[xiaoai]"}
+    ]
+}

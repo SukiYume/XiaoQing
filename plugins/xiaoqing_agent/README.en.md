@@ -145,6 +145,7 @@ With an explicit task ID, Bot administrators can use `status` and `stop` across 
 | `run_python` (Bot administrator) | Run Python in the workspace as a separate process. Matplotlib uses the Agg backend. |
 | `run_shell` (Bot administrator) | Run a shell command in the workspace. |
 | `read_file` / `write_file` (Bot administrator) | Read and write text files. |
+| `read_image` (Bot administrator) | Read local images through the configured vision route, with format, size and pixel validation. |
 | `update_plan` | Record a multi-step plan visible through `/agent status`. |
 | `send_message` | Send progress during long tasks. Maximum: 8 messages per task, at least 15 seconds apart. |
 | `wait` | Wait for polling. Maximum: 600 seconds per call. |
@@ -169,6 +170,8 @@ With an explicit task ID, Bot administrators can use `status` and `stop` across 
 - New requirements cancel tool calls in the current batch that have not started. The next step plans with the new requirements.
 - Context length includes text, reasoning, and tool arguments. At the limit, older outputs, arguments, and reasoning shrink to initial previews. Recent content remains complete. Execution transcripts keep full exchanges.
 - `read_file` reads ranges. Only the requested range enters memory.
+- `xiaoqing_commands` accepts space-separated search terms and a `page` parameter, with up to 40 entries per page.
+- Image recognition uses the existing vision route. Failed recognition requests text from the user. Dependency installation or upgrades require an explicit user request.
 - Classification model failure or an internal agent exception returns the turn to normal chat. A model failure after task start marks the task failed. The initiator receives an incomplete-task message.
 - Delivery failure leaves execution completed and marks delivery failed. This includes background delivery, current replies, direct `/agent run` results, and attachment uploads. `/agent history` marks the failure. `/agent result <任务ID>` sends the saved result again and records delivery status. Saved text and attachments keep the original result. Plugin reload and process shutdown stop executing tasks. Completed tasks that are delivering results receive a short completion window.
 

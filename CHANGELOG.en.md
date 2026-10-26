@@ -10,6 +10,19 @@ Validation results describe the recorded release work. They are separate from ch
 - `X.Y.Z — date` identifies a release. The version agrees with `pyproject.toml` for that release.
 - Date-only entries record changes before 4.1.0 and between versions.
 
+## 4.6.0 — 2026-10-26
+
+- Add an administrator-private Xiaomi Home and XiaoAi plugin with QR login, token renewal, capability discovery and natural-language queries and controls.
+- Support sensor properties, Open-Meteo weather, configurable feeding portions and infrared lights and air conditioners. Selected infrared features use silent speaker forwarding and report unconfirmed physical effects.
+- Add concise help, complete, grouped device and feature lists, and structured calls for the agent. Validate operations against device specifications, persist duplicate guards before submission and read available properties after writes.
+- Add the `xiaoqing[xiaoai]` installation extra, model route example and bilingual documentation covering model-service data flow and host-side restart requirements for configuration changes.
+- Add an authorized image-reading tool using the vision route, multi-keyword command search and pagination. Progress delivery accounts for the message and every attachment.
+- Clarify agent rules for reminder confirmation, default reminders, dates, verbatim notes and historical ledger categories. Routine tasks preserve the dependency environment.
+- Fix Pendo parsing for quoted titles and multiline bodies, preserving leading colons. Cover long prompt creation and editing with regression tests.
+- Support transparent-proxy fake DNS for the fixed HTTPS QQ media host while retaining address validation for other sources and preserving download errors.
+
+- Validation: 6681 tests passed and 1 skipped, with 82.17% coverage; Ruff, formatting checks for 853 files, and type checks for 416 source files passed.
+
 ## 4.5.1 — 2026-10-24
 
 - Add English versions of project instructions, development documents, and plugin manuals. Update the Chinese text and code comments.

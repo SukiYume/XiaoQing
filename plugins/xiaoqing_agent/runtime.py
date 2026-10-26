@@ -469,7 +469,7 @@ class AgentRuntime:
     ) -> bool:
         report = await deliver_outcome(context, task.chat, Outcome(text, files))
         await self._settle_report(task, report)
-        return report.message is not False
+        return report.delivered
 
     # ──────────────────── 查询与停止 ────────────────────
 

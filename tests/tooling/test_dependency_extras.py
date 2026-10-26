@@ -51,6 +51,7 @@ _OPTIONAL_PLUGIN_DEPENDENCIES = {
     "color": {"matplotlib", "numpy"},
     "jupyter": {"ipykernel", "jupyter_client"},
     "qingssh": {"paramiko"},
+    "xiaoai": {"miservice", "qrcode"},
     "xiaoqing_chat": {"PIL"},
 }
 
@@ -75,6 +76,8 @@ def test_default_on_pendo_web_dependencies_are_in_base_install() -> None:
 
 def test_feature_extras_cover_their_runtime_imports() -> None:
     extras = _project()["optional-dependencies"]
+
+    assert {"miservice", "qrcode"} <= _names(extras["xiaoai"])
 
     assert {"fastapi", "starlette", "uvicorn", "pyjwt"} <= _names(extras["web"])
     assert {"jupyter-client", "ipykernel"} <= _names(extras["jupyter"])

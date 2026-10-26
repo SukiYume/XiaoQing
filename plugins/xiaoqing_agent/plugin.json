@@ -1,6 +1,6 @@
 {
     "name": "xiaoqing_agent",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "小青 agent：有人叫小青做事时，按发起人自己的权限用已有命令动手完成；Bot 管理员还能用 Python、Shell、SSH 和 Codex",
     "author": "XiaoQing",
     "entry": "main.py",
