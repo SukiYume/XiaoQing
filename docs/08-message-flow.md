@@ -1,6 +1,6 @@
 # 🔄 08 - 消息处理流程
 
-中文 | [English](08-message-flow.en.md)
+中文 | [English](en/08-message-flow.md)
 
 本章跟踪 OneBot 事件从网络接入到消息投递的完整路径。维护者可据此排查连接、路由、会话、插件调用和回复投递问题。
 

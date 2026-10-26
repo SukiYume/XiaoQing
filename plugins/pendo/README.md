@@ -1,7 +1,5 @@
 # 📅 Pendo
 
-中文 | [English](README.en.md)
-
 Pendo 是 XiaoQing 的个人时间与信息管理插件，统一管理日程、待办、笔记、日记、账本、提醒、搜索和数据导入导出。聊天命令适合快速记录与查询，Web 控制台适合集中编辑、统计和批量传输，Scriptable 小组件适合展示 iPhone 主屏摘要。
 
 全部 Pendo 命令限定为私聊场景。

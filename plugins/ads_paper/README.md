@@ -1,7 +1,5 @@
 # 🔭 ADS Paper
 
-[English](README.en.md)
-
 ADS Paper 将 NASA ADS 论文检索与个人科研资料管理整合到 `/paper` 命令。搜索、引用网络和相关论文支持群聊与私聊；笔记、灵感、主题、截稿日期、每日推荐和文献库使用私聊用户作用域。
 
 ---

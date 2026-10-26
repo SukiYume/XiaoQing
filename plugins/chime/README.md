@@ -1,7 +1,5 @@
 # 📡 CHIME/FRB
 
-[English](README.en.md)
-
 `chime` 查询 CHIME/FRB 重复暴目录，并按本地通知基线发现新增重复暴和新脉冲。
 
 ---

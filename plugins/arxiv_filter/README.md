@@ -1,7 +1,5 @@
 # 📡 arXiv Filter
 
-中文 | [English](README.en.md)
-
 arXiv Filter 获取 `astro-ph/new` 源列表，使用本地兴趣模型筛选论文，发送推荐列表，并将 positive 论文交给 Codex `astro-ph` 会话生成中文 Markdown 摘要。
 
 ---

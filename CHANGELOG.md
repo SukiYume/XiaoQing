@@ -1,7 +1,5 @@
 # XiaoQingBot 更新记录
 
-中文 | [English](CHANGELOG.en.md)
-
 本文件按时间倒序记录 XiaoQingBot 的版本变化、影响模块和验证结果。日期采用北京时间与 `YYYY-MM-DD` 格式。
 
 - `下一版本`：已合入或正在开发、尚未发布的变化。

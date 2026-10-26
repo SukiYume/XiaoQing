@@ -1,7 +1,5 @@
 # 📓 Jupyter
 
-中文 | [English](README.en.md)
-
 `jupyter` 为 Bot 管理员提供 Python 执行、持久内核、REPL 代码缓冲和内核管理，支持私聊和群聊。同一用户在每个私聊或群里各有独立的内核所有者键。
 
 ---

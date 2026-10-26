@@ -1,7 +1,5 @@
 # 🔢 猜数字
 
-[English](README.en.md)
-
 `guess_number` 使用 Core Session 提供短会话猜数字游戏。每名用户在一个群聊或私聊作用域中最多拥有一个活动会话。
 
 ---

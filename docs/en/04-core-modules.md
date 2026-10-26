@@ -1,9 +1,9 @@
 # ⚙️ 04 - Core modules
 
-[中文](04-core-modules.md) | English
+[中文](../04-core-modules.md) | English
 
 This chapter indexes `core/` responsibilities. Maintainers can use runtime symptoms to find the responsible code.
-See [architecture](02-architecture.en.md) for component relationships and the [API reference](05-api-reference.en.md) for public plugin interfaces.
+See [architecture](02-architecture.md) for component relationships and the [API reference](05-api-reference.md) for public plugin interfaces.
 
 ## ⏰ Application assembly and lifecycle
 
@@ -181,6 +181,6 @@ When the connection ends, Core cleans up notification tasks and pending requests
 
 ## 🧭 Next steps
 
-- Public interface signatures: [API reference](05-api-reference.en.md)
-- Complete message stages: [message flow](08-message-flow.en.md)
-- Configuration fields: [configuration](06-configuration.en.md)
+- Public interface signatures: [API reference](05-api-reference.md)
+- Complete message stages: [message flow](08-message-flow.md)
+- Configuration fields: [configuration](06-configuration.md)

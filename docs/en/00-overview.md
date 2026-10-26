@@ -1,8 +1,8 @@
 # 🧭 00 - Overview
 
-[中文](00-overview.md) | English
+[中文](../00-overview.md) | English
 
-This chapter describes the purpose, capabilities, concepts, and directory structure of XiaoQingBot. Continue with [getting started](01-getting-started.en.md) to deploy the service.
+This chapter describes the purpose, capabilities, concepts, and directory structure of XiaoQingBot. Continue with [getting started](01-getting-started.md) to deploy the service.
 
 ## ✨ Project purpose
 
@@ -19,7 +19,7 @@ QQ ↔ OneBot implementation ↔ XiaoQing Core ↔ plugins
 
 You can run the project on a personal computer, home server, NAS, trusted private network, or private server with a reverse proxy.
 
-Python 3.11 or later is necessary. Maintainers use a common code formatter and behavior regression checks. See [code and verification conventions](03-plugin-development.en.md#code-and-verification-conventions).
+Python 3.11 or later is necessary. Maintainers use a common code formatter and behavior regression checks. See [code and verification conventions](03-plugin-development.md#code-and-verification-conventions).
 
 ## ✨ Capabilities
 
@@ -33,7 +33,7 @@ Python 3.11 or later is necessary. Maintainers use a common code formatter and b
 | Content and services | `url_parser`, `github`, `earthquake`, `flickr`, `twitter`, `signin`, `adnmb` | Link parsing, trends, alerts, public photography, media extraction, sign-in, community browsing |
 | Tools and entertainment | `choice`, `color`, `wolframalpha`, `guess_number`, `qingpet`, `echo` | Random selection, colors, calculations, games, pets, echo |
 
-The project has 31 plugins. The [plugin manual](09-plugins.en.md) describes their commands, configuration, and data. It also contains command and scheduled-task indexes.
+The project has 31 plugins. The [plugin manual](09-plugins.md) describes their commands, configuration, and data. It also contains command and scheduled-task indexes.
 
 ## ✨ Core concepts
 
@@ -118,7 +118,7 @@ OneBot event
   → HTTP or WebSocket Action
 ```
 
-See [message flow](08-message-flow.en.md) for processing stages and early-return conditions. See [architecture](02-architecture.en.md) for component ownership.
+See [message flow](08-message-flow.md) for processing stages and early-return conditions. See [architecture](02-architecture.md) for component ownership.
 
 ## 💾 Project directories
 
@@ -150,7 +150,7 @@ Core responsibilities belong to these module groups:
 | `context.py`, `interfaces.py`, `plugin_base.py` | Public plugin capabilities and utility functions |
 | `config.py`, `ai.py`, `metrics.py` | Configuration, model routing, runtime metrics |
 
-[Core modules](04-core-modules.en.md) supplies an index for each module.
+[Core modules](04-core-modules.md) supplies an index for each module.
 
 ## 🔐 Design boundaries
 
@@ -178,4 +178,4 @@ Start the project with `python main.py` in the current environment. Users prepar
 
 ## 🧭 Next step
 
-Follow [getting started](01-getting-started.en.md) to install, configure, and start the service.
+Follow [getting started](01-getting-started.md) to install, configure, and start the service.

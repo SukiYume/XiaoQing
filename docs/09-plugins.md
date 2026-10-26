@@ -1,6 +1,6 @@
 # 📦 09 - 插件使用手册
 
-中文 | [English](09-plugins.en.md)
+中文 | [English](en/09-plugins.md)
 
 本章介绍 XiaoQing 内置插件，覆盖用途、主要命令、权限、配置、数据和运行方式。
 运行时 `/help` 提供当前 Manifest 的递归命令目录，各插件 README 提供专项边界与维护细节。

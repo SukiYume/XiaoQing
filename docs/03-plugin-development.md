@@ -1,6 +1,6 @@
 # 🧩 03 - 插件开发指南
 
-中文 | [English](03-plugin-development.en.md)
+中文 | [English](en/03-plugin-development.md)
 
 本章说明 XiaoQing 插件的目录结构、Manifest、运行入口、Context、会话、调度、服务能力和验证流程。
 接口签名速查见 [API 参考](05-api-reference.md)。

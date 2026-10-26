@@ -1,6 +1,6 @@
 # 📱 Pendo Scriptable 小组件
 
-中文 | [English](pendo-scriptable-widget.en.md)
+中文 | [English](en/pendo-scriptable-widget.md)
 
 Pendo 提供 iPhone Scriptable 只读摘要，将近期日程、待办、财务或笔记显示在主屏。
 

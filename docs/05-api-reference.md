@@ -1,6 +1,6 @@
 # 🔌 05 - API 参考
 
-中文 | [English](05-api-reference.en.md)
+中文 | [English](en/05-api-reference.md)
 
 本章汇总插件开发常用的公开类型、函数和入口签名。
 开发流程见 [插件开发指南](03-plugin-development.md)，实现所有权见 [Core 模块](04-core-modules.md)。

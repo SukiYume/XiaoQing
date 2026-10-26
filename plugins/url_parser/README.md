@@ -1,7 +1,5 @@
 # 🔗 URL Parser
 
-中文 | [English](README.en.md)
-
 `url_parser` 为完整的单 URL 消息生成网页标题、描述和可选预览图。插件通过 Dispatcher URL 入口工作，Manifest 命令列表为空。
 
 ---

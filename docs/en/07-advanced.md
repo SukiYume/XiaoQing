@@ -1,9 +1,9 @@
 # 🧠 07 - Advanced topics
 
-[中文](07-advanced.md) | English
+[中文](../07-advanced.md) | English
 
 This chapter covers permissions, long tasks, scheduling, declared services, embedded Web services, caches, concurrency, and production operation.
-See [plugin development](03-plugin-development.en.md) for basic procedures.
+See [plugin development](03-plugin-development.md) for basic procedures.
 
 ## ⚙️ Private API register
 
@@ -236,7 +236,7 @@ plugin/
 
 The plugin lifecycle owns the Web server. The database layer owns transactions.
 The authentication layer owns credentials and sessions. The routing layer validates requests and formats responses.
-Pendo [architecture](../plugins/pendo/ARCHITECTURE.en.md) supplies a complete example.
+Pendo [architecture (Chinese)](../../plugins/pendo/ARCHITECTURE.md) supplies a complete example.
 
 ## 🌐 URL processing extensions
 
@@ -425,6 +425,6 @@ Production uses a dedicated Bot user, minimum file permissions, explicit network
 
 ## 🧭 Next steps
 
-- Component ownership: [architecture](02-architecture.en.md)
-- Configuration budgets: [configuration](06-configuration.en.md)
-- Plugin implementations: [plugin manual](09-plugins.en.md)
+- Component ownership: [architecture](02-architecture.md)
+- Configuration budgets: [configuration](06-configuration.md)
+- Plugin implementations: [plugin manual](09-plugins.md)
