@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import sys
 import time
 from pathlib import Path
@@ -30,6 +31,114 @@ from tests.helpers.xiaoqing_agent_test_support import ADMIN_ID, GROUP_ID, FakeAg
 PNG_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
 )
+
+
+@pytest.mark.asyncio
+async def test_catalog_combines_keywords_and_paginates(tmp_path):
+    context = FakeAgentContext(
+        tmp_path / "data", catalog=_catalog(), command_runner=SimpleNamespace(run=AsyncMock())
+    )
+    env    = _env(tmp_path, context)
+    result = await execute_tool(_tools(env), env, "xiaoqing_commands", {"query": "pendo 待办"})
+    assert "/pendo todo" in result.content
+    assert "/pendo event" not in result.content
+    nodes = tuple(
+        build_command_catalog_node(
+            "demo",
+            {
+                "name": f"item{i}",
+                "triggers": [f"item{i}"],
+                "usage": f"/item{i}",
+                "help": "demo",
+            },
+            root=True,
+        )
+        for i in range(45)
+    )
+    env.context._catalog = nodes
+    first = await execute_tool(_tools(env), env, "xiaoqing_commands", {"query": "demo"})
+    second = await execute_tool(_tools(env), env, "xiaoqing_commands", {"query": "demo", "page": 2})
+    assert "page=2" in first.content and "/item40" not in first.content
+    assert "/item40" in second.content and "/item44" in second.content
+
+
+@pytest.mark.asyncio
+async def test_read_image_uses_vision_and_rejects_invalid_input(tmp_path):
+    from PIL import Image
+
+    from tests.helpers.xiaoqing_agent_test_support import FakeAI
+
+    ai = FakeAI([{"choices": [{"message": {"content": "截止日期：11月13日"}}]}])
+    env = _env(tmp_path, FakeAgentContext(tmp_path / "data", ai=ai))
+    path = env.workspace / "notice.png"
+    Image.new("RGB", (4, 4)).save(path)
+    result = await execute_tool(_tools(env), env, "read_image", {"path": str(path)})
+    assert "11月13日" in result.content
+    route, messages, _ = ai.calls[0]
+    assert route == "vision"
+    assert messages[1]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
+    path.write_bytes(b"invalid image")
+    result = await execute_tool(_tools(env), env, "read_image", {"path": str(path)})
+    assert result.content.startswith("错误") and len(ai.calls) == 1
+    member = _env(
+        tmp_path / "member", FakeAgentContext(tmp_path / "member-data", is_admin=False), admin=False
+    )
+    assert "read_image" not in _tools(member)
+
+
+@pytest.mark.asyncio
+async def test_read_image_failure_preserves_environment(tmp_path):
+    from PIL import Image
+
+    from core.ai import AIError
+    from tests.helpers.xiaoqing_agent_test_support import FakeAI
+
+    env = _env(tmp_path, FakeAgentContext(tmp_path / "data", ai=FakeAI([AIError("offline")])))
+    path = env.workspace / "notice.png"
+    Image.new("RGB", (4, 4)).save(path)
+    result = await execute_tool(_tools(env), env, "read_image", {"path": str(path)})
+    assert "补充文字" in result.content and "保留当前运行环境" in result.content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "admin,group,available", [(True, None, True), (False, None, False), (True, GROUP_ID, False)]
+)
+async def test_xiaoai_structured_tools_use_command_permissions_and_original_request(
+    tmp_path, admin, group, available
+):
+    node = build_command_catalog_node(
+        "xiaoai",
+        {
+            "name": "xiaoai",
+            "triggers": ["米家"],
+            "help": "米家设备",
+            "permission": "bot_admin",
+            "contexts": ["private"],
+        },
+        root=True,
+    )
+    runner = SimpleNamespace(run=AsyncMock(return_value=[{"type": "text", "data": {"text": "ok"}}]))
+    context = FakeAgentContext(
+        tmp_path / "data", catalog=(node,), command_runner=runner, is_admin=admin, group_id=group
+    )
+    env                   = _env(tmp_path, context)
+    env.task.request_text = "出两份粮"
+    env.task.goal         = "模型改写后的任务"
+    tools = build_tools(env, loaded_plugins=frozenset({"xiaoqing_agent", "xiaoai"}))
+    assert ("xiaoai_execute" in tools) == available
+    if not available:
+        return
+    await execute_tool(tools, env, "xiaoai_devices", {})
+    await execute_tool(tools, env, "xiaoai_capabilities", {"device": "d1", "page": 2})
+    ops = [{"device": "d1", "capability": "a2.1", "op": "action", "args": [20]}]
+    await execute_tool(tools, env, "xiaoai_execute", {"operations": ops})
+    calls = runner.run.await_args_list
+    assert calls[0].args[0] == "/米家 数据"
+    assert calls[1].args[0] == "/米家 接口 d1 2"
+    payload = json.loads(calls[2].args[0].removeprefix("/米家 调用 "))
+    assert payload == {"operations": ops, "original_request": "出两份粮"}
+    assert calls[2].kwargs["operation_id"] == "abc123-3"
 
 
 def _env(
@@ -328,6 +437,7 @@ def test_optional_tools_follow_capabilities_and_loaded_plugins(tmp_path: Path) -
         "run_python",
         "run_shell",
         "read_file",
+        "read_image",
         "write_file",
         "update_plan",
         "send_message",

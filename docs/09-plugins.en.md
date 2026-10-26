@@ -2,7 +2,7 @@
 
 [中文](09-plugins.md) | English
 
-This chapter covers all 31 built-in plugins: purpose, main commands, permissions, configuration, data, and operation.
+This chapter covers built-in plugins: purpose, main commands, permissions, configuration, data, and operation.
 Runtime `/help` supplies the current recursive manifest command catalog.
 Plugin READMEs describe specialized boundaries and maintenance details.
 Command examples keep actual Chinese triggers, placeholders, and sample content.
@@ -36,6 +36,12 @@ Public settings are under `config.plugins.<plugin_name>`. Credentials are under 
 AI routes are under `config.plugins.<plugin_name>.ai.routes`.
 
 ## 📌 Core and personal management
+
+### `xiaoai`: Xiaomi Home and XiaoAi bridge
+
+Administrator private chats support `/米家 <natural language>` for device queries and controls. The plugin discovers MIoT properties, actions and events, and publishes device, capability and structured-call commands for the XiaoQing agent. Sensor queries read cloud properties; weather uses Open-Meteo. Infrared bulbs expose power; air conditioners expose mode, temperature, fan and swing, with selected extensions using silent speaker forwarding and an unconfirmed status.
+
+Install `python -m pip install -e ".[xiaoai]"`, use `/小爱 登录` for QR authorization and `/小爱 选择 1` to bind. Configure `plugins.xiaoai.ai.routes.plan` for natural language. Set the weather city with `/米家 天气城市 北京` and portion grams with `/米家 份量 <ID> 10`. Automatic renewal and reauthorization alerts remain available. See the [plugin guide](../plugins/xiaoai/README.en.md).
 
 ### `bot_core`: Core management
 

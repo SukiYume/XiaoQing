@@ -43,7 +43,9 @@ _ITEM_TYPE_LABELS: Final = {
     "ledger": "账目",
 }
 _QUOTED_OR_TOKEN_PATTERN: Final = r"""(?:"[^"]*"|'[^']*'|“[^”]*”|\S+)"""
-_TITLE_CONTENT_RE: Final = re.compile(r"^([^\n]+?)\s+content[\s:]+(.*)$", re.IGNORECASE | re.DOTALL)
+_TITLE_CONTENT_RE: Final        = re.compile(
+    r"^([^\n]+?)\s+content(?::\s*|\s+)(.*)$", re.IGNORECASE | re.DOTALL
+)
 _INLINE_TITLE_RE: Final = re.compile(
     rf"(^|\s)(title:{_QUOTED_OR_TOKEN_PATTERN})(?=\s|$)", re.IGNORECASE
 )
@@ -55,8 +57,8 @@ _METADATA_SUFFIX_RE: Final  = re.compile(
 _NOTE_TIME_RANGE_RE: Final = re.compile(
     r"last\d+d|\d{4}(?:-\d{2}(?:-\d{2})?)?(?:\.\.\d{4}-\d{2}-\d{2})?"
 )
-_CONTENT_MARKER_RE: Final            = re.compile(r"content(?:[\s:]+(.*))?", re.IGNORECASE)
-_EMPTY_INLINE_TITLE_RE: Final        = re.compile(r"(^|\s)title:(?=\s|$)", re.IGNORECASE)
+_CONTENT_MARKER_RE: Final = re.compile(r"content(?:(?::\s*|\s+)(.*))?", re.IGNORECASE | re.DOTALL)
+_EMPTY_INLINE_TITLE_RE: Final = re.compile(r"(^|\s)title:(?=\s|$)", re.IGNORECASE)
 _MALFORMED_METADATA_SUFFIX_RE: Final = re.compile(
     r"""(?:^|\s)(cat|ref):(?:["'“].*)?\s*$""", re.IGNORECASE
 )

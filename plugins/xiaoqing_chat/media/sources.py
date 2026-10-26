@@ -37,15 +37,25 @@ from .models import (
 )
 from .settings import MEDIA_DOWNLOAD_TIMEOUT, figures_inbox_dir
 
+_QQ_MEDIA_FAKE_DNS_HOSTS = frozenset({"multimedia.nt.qq.com.cn"})
+
 
 async def _download_url_bytes(url: str, *, max_bytes: int) -> tuple[bytes, str]:
     """通过 SSRF 防护下载公开图片，并限制响应字节数。"""
+    parsed   = urlparse(url)
+    fake_dns = (
+        parsed.scheme.casefold() == "https"
+        and (parsed.hostname or "").rstrip(".").casefold() in _QQ_MEDIA_FAKE_DNS_HOSTS
+    )
     try:
         response = await fetch_public_bytes(
             url,
-            timeout_seconds               = float(MEDIA_DOWNLOAD_TIMEOUT.total),
-            max_bytes                     = max(1, int(max_bytes)),
-            allowed_content_type_prefixes = ("image/", "application/octet-stream"),
+            timeout_seconds                  = float(MEDIA_DOWNLOAD_TIMEOUT.total or 20),
+            max_bytes                        = max(1, int(max_bytes)),
+            allowed_content_type_prefixes    = ("image/", "application/octet-stream"),
+            allowed_hosts                    = _QQ_MEDIA_FAKE_DNS_HOSTS if fake_dns else None,
+            allowed_schemes                  = {"https"} if fake_dns else None,
+            allow_transparent_proxy_fake_dns = fake_dns,
         )
     except SafeHttpError as exc:
         raise ValueError(str(exc)) from exc
@@ -488,7 +498,8 @@ async def _resolve_media_bytes(
                     suffix = _guess_suffix_from_mime(content_type)
                 return payload, source_name or Path(urlparse(source_value).path).stem, suffix
 
-            raise FileNotFoundError(f"unsupported media source: {source_key}")
+            if last_error is None:
+                last_error = FileNotFoundError(f"unsupported media source: {source_key}")
         except Exception as exc:
             last_error = exc
             continue

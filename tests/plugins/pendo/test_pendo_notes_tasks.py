@@ -364,6 +364,39 @@ def test_note_create_and_view_timestamps_use_user_clock(
         db.cleanup()
 
 
+def test_note_preserves_multiline_prompt_with_explicit_title(tmp_path: Path) -> None:
+    db       = Database(str(tmp_path / "prompt-note.db"))
+    owner_id = "prompt-note"
+    try:
+        handler  = NoteHandler(db)
+        original = (
+            "::OBJECTIVE{site_design|pri:OVERRIDE_ALL}\n  target: 页面\n\n"
+            + "::CHECK{typography|standard:award_tier}\n" * 12
+            + "  [IF] 无差距 => [Ω]"
+        )
+        created = asyncio.run(
+            handler.create_note(
+                owner_id, 'title:"AI 网站设计 prompt" content ' + original, SimpleNamespace()
+            )
+        )
+        assert created["status"] == "success"
+        saved = db.get_item(created["item_id"], owner_id)
+        assert saved.title == "AI 网站设计 prompt"
+        assert saved.content == original
+        assert handler._parse_note_text("title:AI content " + original)["content"] == original
+        edited = asyncio.run(
+            handler.edit_note(
+                owner_id,
+                f'{created["item_id"]} title:"新标题" content ' + original,
+                SimpleNamespace(),
+            )
+        )
+        assert edited["status"] == "success"
+        assert db.get_item(created["item_id"], owner_id).content == original
+    finally:
+        db.cleanup()
+
+
 def test_note_parser_supports_quoted_fields_and_rejects_malformed_metadata(tmp_path: Path) -> None:
     db       = Database(str(tmp_path / "pendo-note-parser.db"))
     owner_id = "note-parser"
