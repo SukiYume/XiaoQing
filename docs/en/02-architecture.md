@@ -1,9 +1,9 @@
 # 🏗️ 02 - Architecture
 
-[中文](02-architecture.md) | English
+[中文](../02-architecture.md) | English
 
 This chapter describes XiaoQing Core runtime components, ownership, lifecycle, and main data flows.
-See the [API reference](05-api-reference.en.md) for public plugin interfaces and [Core modules](04-core-modules.en.md) for the module index.
+See the [API reference](05-api-reference.md) for public plugin interfaces and [Core modules](04-core-modules.md) for the module index.
 
 ## 🏗️ Architecture overview
 
@@ -145,7 +145,7 @@ Session continuation checks, Core-issued capabilities, and the agent's model-vis
 Plugin code delegates administrator checks to Core.
 Startup detects trigger conflicts at the same priority and reports errors.
 
-[Message flow](08-message-flow.en.md) describes the input, early-return conditions, and observation points for each stage.
+[Message flow](08-message-flow.md) describes the input, early-return conditions, and observation points for each stage.
 
 ## 🧩 Plugin runtime
 
@@ -307,6 +307,6 @@ Explicit data ownership permits independent code synchronization, production-dat
 
 ## 🧭 Next steps
 
-- Module responsibilities: [Core modules](04-core-modules.en.md)
-- Event stages: [message flow](08-message-flow.en.md)
-- Plugin contracts: [plugin development](03-plugin-development.en.md)
+- Module responsibilities: [Core modules](04-core-modules.md)
+- Event stages: [message flow](08-message-flow.md)
+- Plugin contracts: [plugin development](03-plugin-development.md)

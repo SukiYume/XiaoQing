@@ -1,7 +1,5 @@
 # 🏗️ xiaoqing_chat 架构
 
-中文 | [English](ARCHITECTURE.en.md)
-
 本文面向插件维护者，说明 `xiaoqing_chat` 的模块划分、单轮数据流、回复审查、状态提交和持久化规则。功能、命令和配置字段见 [README.md](README.md)，测试与验收见 [xiaoqing_chat测试.md](xiaoqing_chat%E6%B5%8B%E8%AF%95.md)。
 
 ---

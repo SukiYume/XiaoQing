@@ -1,7 +1,5 @@
 # 🛠️ QingPet 维护约定
 
-中文 | [English](AGENTS.en.md)
-
 本文件适用于 `plugins/qingpet/` 下的代码、测试和文档修改。功能现状见 [README.md](README.md)，首次部署验收见 [QUICKSTART.md](QUICKSTART.md)。
 
 ---

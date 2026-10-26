@@ -1,7 +1,5 @@
 # ⛏️ Minecraft
 
-中文 | [English](README.en.md)
-
 `minecraft` 让 Bot 管理员在 QQ 私聊或群里连接 Minecraft Java Edition RCON，并把本机可读的服务器日志事件转发到这个私聊或群。连上之后，群里所有人都能和游戏里的玩家聊天。Java 服务进程由部署工具负责管理。
 
 ---

@@ -1,9 +1,9 @@
 # 🔌 05 - API reference
 
-[中文](05-api-reference.md) | English
+[中文](../05-api-reference.md) | English
 
 This chapter lists public types, functions, and entry signatures used in plugin development.
-See [plugin development](03-plugin-development.en.md) for procedures and [Core modules](04-core-modules.en.md) for implementation ownership.
+See [plugin development](03-plugin-development.md) for procedures and [Core modules](04-core-modules.md) for implementation ownership.
 
 ## 📌 Basic types
 
@@ -685,6 +685,6 @@ Private message:
 
 ## 🧭 Next steps
 
-- Manifest and development procedure: [plugin development](03-plugin-development.en.md)
-- Configuration fields: [configuration](06-configuration.en.md)
-- Runtime modes: [advanced topics](07-advanced.en.md)
+- Manifest and development procedure: [plugin development](03-plugin-development.md)
+- Configuration fields: [configuration](06-configuration.md)
+- Runtime modes: [advanced topics](07-advanced.md)

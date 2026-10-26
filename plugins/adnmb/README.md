@@ -1,7 +1,5 @@
 # 🏝️ ADNMB A 岛浏览
 
-[English](README.en.md)
-
 ADNMB 插件展示 A 岛公开时间线、板块、串、回复和匿名订阅列表。插件为每位 QQ 用户派生一个匿名 UUID。该 UUID 标识用户的订阅。
 
 ---

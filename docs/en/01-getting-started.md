@@ -1,6 +1,6 @@
 # 🚀 01 - Getting started
 
-[中文](01-getting-started.md) | English
+[中文](../01-getting-started.md) | English
 
 This chapter covers dependency installation, configuration, OneBot connection, startup, and initial checks from a fresh source directory.
 Command examples apply to Git Bash, macOS, and Linux.
@@ -132,7 +132,7 @@ Put the corresponding API key in `config/secrets.json`:
 }
 ```
 
-See [configuration](06-configuration.en.md) for all fields, model fallback, plugin configuration, and security boundaries.
+See [configuration](06-configuration.md) for all fields, model fallback, plugin configuration, and security boundaries.
 
 ## ⚙️ 3. Configure OneBot
 
@@ -339,6 +339,6 @@ Reports are in `test_reports/runs/project/full-uat-*/reports/FULL_UAT_REPORT.md`
 
 ## 🧭 Next steps
 
-- Production parameters and security: [configuration](06-configuration.en.md)
-- Plugin functions: [plugin manual](09-plugins.en.md)
-- Message troubleshooting: [message flow](08-message-flow.en.md)
+- Production parameters and security: [configuration](06-configuration.md)
+- Plugin functions: [plugin manual](09-plugins.md)
+- Message troubleshooting: [message flow](08-message-flow.md)

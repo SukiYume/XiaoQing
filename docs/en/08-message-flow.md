@@ -1,6 +1,6 @@
 # 🔄 08 - Message flow
 
-[中文](08-message-flow.md) | English
+[中文](../08-message-flow.md) | English
 
 This chapter follows one OneBot event from network input to message delivery.
 Use it to diagnose connection, routing, session, plugin-call, and reply-delivery problems.
@@ -361,6 +361,6 @@ Each event turn has a request ID. Check logs in this order:
 
 ## 🧭 Next steps
 
-- Component relationships: [architecture](02-architecture.en.md)
-- Configuration and network boundaries: [configuration](06-configuration.en.md)
-- Plugin entries: [plugin development](03-plugin-development.en.md)
+- Component relationships: [architecture](02-architecture.md)
+- Configuration and network boundaries: [configuration](06-configuration.md)
+- Plugin entries: [plugin development](03-plugin-development.md)

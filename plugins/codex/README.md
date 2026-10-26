@@ -1,7 +1,5 @@
 # 🤖 Codex
 
-中文 | [English](README.en.md)
-
 `codex` 通过 QQ 私聊或群聊管理本机 Codex CLI 后台任务，结果发回发起任务的私聊或群。每个会话标签保存独立的工作目录、Codex thread、任务队列和对话记录。同一标签串行执行，不同标签可并行执行。
 
 ---

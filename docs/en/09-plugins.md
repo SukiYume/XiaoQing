@@ -1,6 +1,6 @@
 # 📦 09 - Plugin manual
 
-[中文](09-plugins.md) | English
+[中文](../09-plugins.md) | English
 
 This chapter covers built-in plugins: purpose, main commands, permissions, configuration, data, and operation.
 Runtime `/help` supplies the current recursive manifest command catalog.
@@ -41,7 +41,7 @@ AI routes are under `config.plugins.<plugin_name>.ai.routes`.
 
 Administrator private chats support `/米家 <natural language>` for device queries and controls. The plugin discovers MIoT properties, actions and events, and publishes device, capability and structured-call commands for the XiaoQing agent. Sensor queries read cloud properties; weather uses Open-Meteo. Infrared bulbs expose power; air conditioners expose mode, temperature, fan and swing, with selected extensions using silent speaker forwarding and an unconfirmed status.
 
-Install `python -m pip install -e ".[xiaoai]"`, use `/小爱 登录` for QR authorization and `/小爱 选择 1` to bind. Configure `plugins.xiaoai.ai.routes.plan` for natural language. Set the weather city with `/米家 天气城市 北京` and portion grams with `/米家 份量 <ID> 10`. Automatic renewal and reauthorization alerts remain available. See the [plugin guide](../plugins/xiaoai/README.en.md).
+Install `python -m pip install -e ".[xiaoai]"`, use `/小爱 登录` for QR authorization and `/小爱 选择 1` to bind. Configure `plugins.xiaoai.ai.routes.plan` for natural language. Set the weather city with `/米家 天气城市 北京` and portion grams with `/米家 份量 <ID> 10`. Automatic renewal and reauthorization alerts remain available. See the [plugin guide (Chinese)](../../plugins/xiaoai/README.md).
 
 ### `bot_core`: Core management
 
@@ -73,7 +73,7 @@ Administrators check them and confirm with `/reload`.
 Core observation services supply runtime metrics.
 
 Core configuration, mute, metrics, and plugin-management services own data and lifecycle.
-[Bot Core README](../plugins/bot_core/README.en.md) supplies all aliases, secret-value rules, and reload procedures.
+[Bot Core README (Chinese)](../../plugins/bot_core/README.md) supplies all aliases, secret-value rules, and reload procedures.
 
 ### `pendo`: Personal time and information management
 
@@ -201,7 +201,7 @@ It adds, updates, and removes managed events in place by Pendo item ID.
 Reminders, daily briefings, journal prompts, task rollover, and financial summaries use Core `targeted` private delivery to owners.
 Operation-log and demo-data cleanup use `silent` mode.
 `scheduled_delivery_outbox` records delivery acknowledgements per target.
-See [Pendo README](../plugins/pendo/README.en.md), [architecture](../plugins/pendo/ARCHITECTURE.en.md), and [Scriptable guide](pendo-scriptable-widget.en.md) for complete time and field definitions.
+See [Pendo README (Chinese)](../../plugins/pendo/README.md), [architecture (Chinese)](../../plugins/pendo/ARCHITECTURE.md), and [Scriptable guide](pendo-scriptable-widget.md) for complete time and field definitions.
 
 ## 🎨 Intelligent chat and voice
 
@@ -288,9 +288,9 @@ Memory, planning state, and background learning commit or start after OneBot con
 | Behavior configuration | `plugins/xiaoqing_chat/config/xiaoqing_config.json`, merged with `config.plugins.xiaoqing_chat` |
 | Runtime data | `data/xiaoqing_chat/`: history, vector memories, profiles, goals, PFC, action history, expressions, jargon, reviews, media library, summary cache |
 
-The [user manual](../plugins/xiaoqing_chat/README.en.md) covers participation, all settings, and troubleshooting.
-[Architecture](../plugins/xiaoqing_chat/ARCHITECTURE.en.md) covers modules and data flow.
-The [acceptance guide](../plugins/xiaoqing_chat/xiaoqing_chat%E6%B5%8B%E8%AF%95.en.md) covers automated tests and real-model evaluations.
+The [user manual (Chinese)](../../plugins/xiaoqing_chat/README.md) covers participation, all settings, and troubleshooting.
+[Architecture (Chinese)](../../plugins/xiaoqing_chat/ARCHITECTURE.md) covers modules and data flow.
+The [acceptance guide (Chinese)](../../plugins/xiaoqing_chat/xiaoqing_chat%E6%B5%8B%E8%AF%95.md) covers automated tests and real-model evaluations.
 
 ### `xiaoqing_agent`: Task agent
 
@@ -353,7 +353,7 @@ Each handoff receives the same persona from `xiaoqing_chat`. Ordinary chat conti
 | Runtime boundaries | Independent subprocess trees. Timeout, output overflow, stop, and shutdown remove whole trees. Steps and total duration bound tasks. |
 | Runtime data | `data/xiaoqing_agent/`: conversation directories, task records, execution records |
 
-[XiaoQing Agent](../plugins/xiaoqing_agent/README.en.md) describes all settings, tools, and data directories.
+[XiaoQing Agent (Chinese)](../../plugins/xiaoqing_agent/README.md) describes all settings, tools, and data directories.
 
 ### `smalltalk`: Basic chat and scoped answers
 
@@ -391,7 +391,7 @@ The distributed example uses `0`. The runtime default for an absent field is `0.
 
 Data is in `data/smalltalk/QA_group_<group-ID>.json`, `QA_private_<user-ID>.json`, and `QA_audit.json`.
 Updates use locks and atomic writes.
-[Smalltalk README](../plugins/smalltalk/README.en.md) describes length, audit, and service-authorization rules.
+[Smalltalk README (Chinese)](../../plugins/smalltalk/README.md) describes length, audit, and service-authorization rules.
 
 ### `chat`: Coze single-turn conversation
 
@@ -413,7 +413,7 @@ A remote call creates a conversation, polls, and reads answers within one 30-sec
 The plugin permits at most 2 concurrent requests.
 It reserves quota before calling, commits successful answers, and releases quota on exceptions.
 State is in `data/chat/chat_quota.json`.
-[Chat README](../plugins/chat/README.en.md) describes Coze configuration and privacy boundaries.
+[Chat README (Chinese)](../../plugins/chat/README.md) describes Coze configuration and privacy boundaries.
 
 ### `voice`: Azure Speech synthesis
 
@@ -433,7 +433,7 @@ The plugin creates XML-escaped SSML and requests Azure MP3.
 It validates MIME, bytes, and file headers, then writes `data/voice/audio/`.
 The cache limits are 2048 entries, 256 MiB, and 7 days.
 Identical input and voice settings share a generation lock.
-[Voice README](../plugins/voice/README.en.md) describes voice defaults and resource budgets.
+[Voice README (Chinese)](../../plugins/voice/README.md) describes voice defaults and resource budgets.
 
 ## 🔭 Astronomy and research
 
@@ -458,7 +458,7 @@ Daily at 13:30, Core `broadcast` sends to schedule `group_ids`. Omission uses `d
 
 Pages, redirects, and media pass HTTPS, public-DNS, response-size, MIME, dimension, and pixel checks.
 The cache is in `data/apod/`.
-[APOD README](../plugins/apod/README.en.md) defines the complete network boundary.
+[APOD README (Chinese)](../../plugins/apod/README.md) defines the complete network boundary.
 
 ### `arxiv_filter`: arXiv selection and summaries
 
@@ -482,7 +482,7 @@ Delivery state is in `data/arxiv_filter/update_status.json`.
 Model-path priority is CLI `--model-path`, then `ARXIV_MODEL_PATH`, then configuration `model.path`.
 Backends support Transformers, KNN, and multi-interest.
 Production assets must include matching configuration, weights, and tokenizer.
-[arXiv Filter README](../plugins/arxiv_filter/README.en.md) supplies the inference CLI and asset list.
+[arXiv Filter README (Chinese)](../../plugins/arxiv_filter/README.md) supplies the inference CLI and asset list.
 
 ### `ads_paper`: ADS papers and research materials
 
@@ -511,7 +511,7 @@ Project providers and model profiles support the AI `summary` route.
 
 JSON data is in `data/ads_paper/`. Personal BibTeX files use `references_<user_id>.bib`.
 State writes use atomic files and isolation of damaged copies.
-[ADS Paper README](../plugins/ads_paper/README.en.md) lists data files and query rules.
+[ADS Paper README (Chinese)](../../plugins/ads_paper/README.md) lists data files and query rules.
 
 ### `astro_tools`: Astronomy calculations
 
@@ -541,7 +541,7 @@ Other names use SIMBAD.
 
 Constants cover light speed, gravitation, Planck, Boltzmann, Stefan–Boltzmann, electron and proton masses, solar mass/radius/luminosity, AU, parsec, light-year, and approximate Hubble constant.
 The plugin reuses Core timezone and HTTP session. It generates results immediately.
-[Astro Tools README](../plugins/astro_tools/README.en.md) supplies inputs and dependencies.
+[Astro Tools README (Chinese)](../../plugins/astro_tools/README.md) supplies inputs and dependencies.
 
 ### `dict`: Offline Chinese–English astronomy dictionary
 
@@ -571,7 +571,7 @@ Distributed assets are `astrodict_ec.txt`, `astrodict_ce.txt`, and `assets/manif
 The first query checks bytes, lines, SHA-256, UTF-8, columns, and duplicates.
 
 Later queries cache parsed results by file identity.
-[Dict README](../plugins/dict/README.en.md) supplies sources and use conventions.
+[Dict README (Chinese)](../../plugins/dict/README.md) supplies sources and use conventions.
 
 ### `chime`: CHIME/FRB repeater catalog
 
@@ -593,7 +593,7 @@ Checks run daily at 09:00 and 21:00, with individual acknowledgement for each sc
 `data/chime/chime_delivery.json` stores pending work and per-target state.
 Manual queries use a 5-minute cache. Scheduled checks fetch a new catalog.
 
-[CHIME README](../plugins/chime/README.en.md) describes the source and at-least-once delivery semantics.
+[CHIME README (Chinese)](../../plugins/chime/README.md) describes the source and at-least-once delivery semantics.
 
 ## 🧩 Execution, operations, and servers
 
@@ -622,7 +622,7 @@ One label executes serially. Different labels can execute concurrently.
 `data/codex/` contains `sessions.json`, per-session `conversation.jsonl`, task artifacts, images, output, and deleted-session archives.
 Paths, output, images, queues, processes, and disk have separate budgets.
 Unload and shutdown cancel process trees and save state.
-[Codex README](../plugins/codex/README.en.md) defines budgets and the arXiv service contract.
+[Codex README (Chinese)](../../plugins/codex/README.md) defines budgets and the arXiv service contract.
 
 ### `shell`: Local single-command execution
 
@@ -646,7 +646,7 @@ Standard output and standard error share one capture budget.
 QQ output uses head/tail previews.
 
 Timeout and cancellation remove the process tree.
-[Shell README](../plugins/shell/README.en.md) supplies path rules and examples.
+[Shell README (Chinese)](../../plugins/shell/README.md) supplies path rules and examples.
 
 ### `qingssh`: Remote SSH sessions
 
@@ -682,7 +682,7 @@ Profiles are in `data/qingssh/servers.json`. Passwords use Core secret reference
 Host keys use strict `known_hosts` validation.
 Single-hop `ProxyJump` and structured `ssh -W` are supported.
 Long output archives are in `data/qingssh/command_outputs/`.
-[QingSSH README](../plugins/qingssh/README.en.md) describes authentication, output, and lifecycle budgets.
+[QingSSH README (Chinese)](../../plugins/qingssh/README.md) describes authentication, output, and lifecycle budgets.
 
 ### `jupyter`: Persistent Python kernels
 
@@ -702,7 +702,7 @@ Budgets cover code size, buffer lines, text output, image count, image size, pix
 
 Kernels start on demand and pass readiness checks. An idle monitor removes idle kernels.
 Shutdown stops the monitor, then closes active kernels.
-[Jupyter README](../plugins/jupyter/README.en.md) describes installation extras and all budgets.
+[Jupyter README (Chinese)](../../plugins/jupyter/README.md) describes installation extras and all budgets.
 
 ### `minecraft`: Minecraft RCON and log forwarding
 
@@ -734,7 +734,7 @@ Other groups receive a command-only explanation at connection time.
 
 Cursors are in `data/minecraft/log_cursors/` and commit after delivery acknowledgement.
 RCON uses plaintext. Production connections should use loopback, SSH tunnels, or protected networks.
-[Minecraft README](../plugins/minecraft/README.en.md) defines protocol and forwarding budgets.
+[Minecraft README (Chinese)](../../plugins/minecraft/README.md) defines protocol and forwarding budgets.
 
 ## 🧩 Content and external services
 
@@ -757,7 +757,7 @@ HTML limit is 2 MiB. Image limits are 5 MiB, 20 million pixels, and 120 frames.
 At most 4 page previews run concurrently.
 
 `data/url_parser/url_previews/` has limits of 128 entries, 128 MiB, and 7 days.
-[URL Parser README](../plugins/url_parser/README.en.md) describes metadata priority and site adapters.
+[URL Parser README (Chinese)](../../plugins/url_parser/README.md) describes metadata priority and site adapters.
 
 ### `github`: GitHub Trending
 
@@ -780,7 +780,7 @@ Dated snapshots are in `data/github/history/`, retaining 90 per range.
 `secrets.plugins.github.proxy` can configure an HTTP/HTTPS proxy.
 Each command and scheduled task performs a complete fetch transaction.
 
-[GitHub README](../plugins/github/README.en.md) describes parsing and proxy boundaries.
+[GitHub README (Chinese)](../../plugins/github/README.md) describes parsing and proxy boundaries.
 
 ### `earthquake`: Earthquake alerts
 
@@ -804,7 +804,7 @@ Weibo responses, text, and images use bounded parsing.
 Alerts supply notifications.
 
 Use authoritative official information for emergency decisions.
-[Earthquake README](../plugins/earthquake/README.en.md) describes cursors and networking.
+[Earthquake README (Chinese)](../../plugins/earthquake/README.md) describes cursors and networking.
 
 ### `flickr`: Public photography browsing
 
@@ -833,7 +833,7 @@ Browse state is isolated by private user or group/user pair and lasts 15 minutes
 The API key is at `secrets.plugins.flickr.api_key`.
 Images download only from `live.staticflickr.com` and pass HTTPS-domain, MIME, byte, pixel, dimension, and frame checks.
 `data/flickr/images/` has limits of 256 entries, 256 MiB, and 1 hour.
-[Flickr README](../plugins/flickr/README.en.md) supplies commands, key application, licensing, and troubleshooting.
+[Flickr README (Chinese)](../../plugins/flickr/README.md) supplies commands, key application, licensing, and troubleshooting.
 
 ### `twitter`: X/Twitter image cache
 
@@ -858,7 +858,7 @@ At most 4 downloads run concurrently.
 
 Cache limits are 5000 entries, 2 GiB, and 90 days.
 Images are in `data/twitter/images/`. Confirmed cycle state is in `data/twitter/posted.txt`.
-[Twitter README](../plugins/twitter/README.en.md) defines authentication fields and media-domain budgets.
+[Twitter README (Chinese)](../../plugins/twitter/README.md) defines authentication fields and media-domain budgets.
 
 ### `signin`: Yingshijufeng remote sign-in
 
@@ -877,7 +877,7 @@ The plugin uses sequential concurrency. The shared account accesses the remote s
 
 The plugin accesses fixed origin `https://h5.youzan.com`.
 It obtains a sign-in ID, submits sign-in, then shows description, cumulative count, and rewards.
-[Signin README](../plugins/signin/README.en.md) defines credential hierarchy and response boundaries.
+[Signin README (Chinese)](../../plugins/signin/README.md) defines credential hierarchy and response boundaries.
 
 ### `adnmb`: Public A Island browsing and feeds
 
@@ -899,7 +899,7 @@ It derives an anonymous UUID for each QQ user.
 Default identity derives from the plugin data directory and QQ user.
 `data/adnmb/images/` has TTL, entry-count, and byte limits.
 Remote images pass MIME, dimension, and pixel checks.
-[ADNMB README](../plugins/adnmb/README.en.md) describes network and identity boundaries.
+[ADNMB README (Chinese)](../../plugins/adnmb/README.md) describes network and identity boundaries.
 
 ## 📌 Tools and entertainment
 
@@ -920,7 +920,7 @@ Default mode keeps duplicate weights. `-u`/`--unique` deduplicates by text first
 
 Candidate-position count is 2–50.
 The plugin uses the system random source and completes each selection in memory.
-[Choice README](../plugins/choice/README.en.md) defines all length limits.
+[Choice README (Chinese)](../../plugins/choice/README.md) defines all length limits.
 
 ### `color`: Traditional and stellar colors
 
@@ -956,7 +956,7 @@ Distributed assets are `color.json` and `stellar_colors.txt`.
 Loading checks counts, uniqueness, and fields.
 `data/color/images/` has limits of 256 entries, 32 MiB, and 30 days.
 
-[Color README](../plugins/color/README.en.md) supplies conversion formats and sources.
+[Color README (Chinese)](../../plugins/color/README.md) supplies conversion formats and sources.
 
 ### `wolframalpha`: Wolfram|Alpha calculations
 
@@ -975,7 +975,7 @@ Modes are default `simple`, XML step solutions `step`, and JSON Result pods `com
 
 Requests use the fixed Wolfram|Alpha HTTPS API, with a 30-second total timeout and at most 2 concurrent requests.
 Responses permit 1 MiB and 20 result items.
-[Wolfram|Alpha README](../plugins/wolframalpha/README.en.md) defines interface and response budgets.
+[Wolfram|Alpha README (Chinese)](../../plugins/wolframalpha/README.md) defines interface and response budgets.
 
 ### `guess_number`: Number-guessing sessions
 
@@ -1000,7 +1000,7 @@ Sessions expire after 3 idle minutes.
 
 Sessions store target, dynamic bounds, attempt count, history, and difficulty.
 Format errors keep the current attempt.
-[Guess Number README](../plugins/guess_number/README.en.md) defines session ownership and input boundaries.
+[Guess Number README (Chinese)](../../plugins/guess_number/README.md) defines session ownership and input boundaries.
 
 ### `qingpet`: QQ group pets
 
@@ -1058,7 +1058,7 @@ SQLite is at `data/qingpet/qingpet/qingpet.db`.
 Private chat automatically selects the group when the account has one pet.
 With pets in multiple groups, users can put the group ID before arguments.
 
-[QingPet README](../plugins/qingpet/README.en.md) and [quick start](../plugins/qingpet/QUICKSTART.en.md) describe growth thresholds, group settings, and deployment acceptance.
+[QingPet README (Chinese)](../../plugins/qingpet/README.md) and [quick start (Chinese)](../../plugins/qingpet/QUICKSTART.md) describe growth thresholds, group settings, and deployment acceptance.
 
 ### `echo`: Echo and greeting example
 
@@ -1077,7 +1077,7 @@ Other control characters cause argument errors.
 
 The plugin exports only `handle()`.
 Configuration, credentials, network calls, data files, and schedules are empty sets.
-[Echo README](../plugins/echo/README.en.md) supplies the minimal entry structure.
+[Echo README (Chinese)](../../plugins/echo/README.md) supplies the minimal entry structure.
 
 ## ⌨️ Command entry index
 
@@ -1149,7 +1149,7 @@ Subcommands can set stricter permissions.
 Times use `config.timezone`, default `Asia/Shanghai`.
 `broadcast` sends one result to schedule target groups. Omitted `group_ids` uses `default_group_ids`.
 `targeted` returns individual private or group targets. `silent` executes with zero message delivery.
-See [schedule fields](03-plugin-development.en.md#schedule-fields).
+See [schedule fields](03-plugin-development.md#schedule-fields).
 
 | Plugin | Handler | Time | Delivery | Function |
 |---|---|---|---|---|
@@ -1218,6 +1218,6 @@ UAT reports record command nodes, valid examples, invalid inputs, permissions, s
 
 Related documents:
 
-- [Plugin development](03-plugin-development.en.md)
-- [Configuration](06-configuration.en.md)
-- [Message flow](08-message-flow.en.md)
+- [Plugin development](03-plugin-development.md)
+- [Configuration](06-configuration.md)
+- [Message flow](08-message-flow.md)

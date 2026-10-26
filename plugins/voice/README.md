@@ -1,7 +1,5 @@
 # 🎙️ Azure Voice
 
-中文 | [English](README.en.md)
-
 `voice` 通过 Azure Speech 提供所有人可用的文字转语音命令，并向 Manifest 授权的插件发布 `voice.synthesize_text` 服务。
 
 ---

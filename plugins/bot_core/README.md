@@ -1,7 +1,5 @@
 # 🧭 Bot Core
 
-中文 | [English](README.en.md)
-
 Bot Core 提供命令帮助、运行时重载、插件列表、群静音、敏感配置管理和运行指标。
 
 ---

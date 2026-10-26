@@ -1,7 +1,5 @@
 # 🏗️ Pendo 架构
 
-中文 | [English](ARCHITECTURE.en.md)
-
 本文面向 Pendo 维护者，说明插件的运行时所有权、命令路由、业务服务、SQLite 存储、调度、Web API 和扩展流程。用户操作见 [README.md](README.md)。
 
 ---

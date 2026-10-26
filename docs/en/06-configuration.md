@@ -1,6 +1,6 @@
 # 🛠️ 06 - Configuration
 
-[中文](06-configuration.md) | English
+[中文](../06-configuration.md) | English
 
 This chapter describes Core public settings, secrets, the AI registry, plugin namespaces, network boundaries, and live-reload semantics.
 Plugin READMEs own plugin-specific fields.
@@ -363,7 +363,7 @@ context.get_settings_snapshot()
 Pendo publishes its five Web fields atomically by configuration revision.
 Listener address changes rebuild the plugin-owned Web server.
 Login codes and browser sessions have 7-day lifetimes. Widget tokens have 365-day lifetimes.
-See [Pendo Web](../plugins/pendo/README.en.md) for authentication, demo mode, and data directories.
+See [Pendo Web (Chinese)](../../plugins/pendo/README.md) for authentication, demo mode, and data directories.
 
 ### ADS Paper and XiaoQing Chat AI
 
@@ -381,7 +381,7 @@ Each of the four XiaoQing Chat routes has its own model order, request timeout, 
 The distributed `checker` route sets `request_defaults.thinking.type = "disabled"` to reduce review latency.
 Behavior, participation, memory, and expression parameters are in `plugins/xiaoqing_chat/config/xiaoqing_config.json`.
 They can also appear under `config.plugins.xiaoqing_chat`. File values take priority during merging.
-See [XiaoQing Chat configuration](../plugins/xiaoqing_chat/README.en.md) for field groups.
+See [XiaoQing Chat configuration (Chinese)](../../plugins/xiaoqing_chat/README.md) for field groups.
 
 ### XiaoQing Agent
 
@@ -406,7 +406,7 @@ Python, Shell, and file operations follow `/shell`. SSH follows `/ssh`.
 
 Codex follows `/codex`.
 `plugin.json` limits these three commands to Bot administrators.
-See [XiaoQing Agent](../plugins/xiaoqing_agent/README.en.md) for all fields, tools, and data directories.
+See [XiaoQing Agent (Chinese)](../../plugins/xiaoqing_agent/README.md) for all fields, tools, and data directories.
 
 ### QingSSH
 
@@ -423,7 +423,7 @@ Public budgets are under `plugins.qingssh`:
 
 Connection definitions, host keys, authentication material, and jump-host settings are under `secrets.plugins.qingssh`.
 Administrator commands such as `/ssh add` manage them.
-See [QingSSH configuration](../plugins/qingssh/README.en.md) for the connection schema.
+See [QingSSH configuration (Chinese)](../../plugins/qingssh/README.md) for the connection schema.
 
 ### Codex
 
@@ -441,7 +441,7 @@ Public job policies are under `plugins.codex`:
 | Approval | `approval_policy="never"` | `untrusted`, `on-failure`, `on-request`, `never` |
 | Repository | `skip_git_repo_check=true` | Codex CLI Git-repository check switch |
 
-See [Codex configuration](../plugins/codex/README.en.md) for working directories, allowed roots, retention, emergency disk thresholds, and arXiv summary sessions.
+See [Codex configuration (Chinese)](../../plugins/codex/README.md) for working directories, allowed roots, retention, emergency disk thresholds, and arXiv summary sessions.
 
 ### Shell and Smalltalk
 
@@ -452,8 +452,8 @@ See [Codex configuration](../plugins/codex/README.en.md) for working directories
 | `plugins.smalltalk.voice_probability` | `0` | Probability of converting plain-text smalltalk to audio, `0..1` |
 
 The Shell allowed-command list, working directory, and audit switch are under `secrets.plugins.shell`.
-See [Shell configuration](../plugins/shell/README.en.md) for both backends.
-The [plugin manual](09-plugins.en.md) lists configuration entry points and data locations for all 31 plugins.
+See [Shell configuration (Chinese)](../../plugins/shell/README.md) for both backends.
+The [plugin manual](09-plugins.md) lists configuration entry points and data locations for all 31 plugins.
 
 ## ⚙️ Secrets
 
@@ -566,6 +566,6 @@ Candidate listeners commit the new inbound generation. Only the committed genera
 
 ## 🧭 Next steps
 
-- First deployment: [getting started](01-getting-started.en.md)
-- Plugin fields: [plugin manual](09-plugins.en.md)
-- Network and message paths: [message flow](08-message-flow.en.md)
+- First deployment: [getting started](01-getting-started.md)
+- Plugin fields: [plugin manual](09-plugins.md)
+- Network and message paths: [message flow](08-message-flow.md)

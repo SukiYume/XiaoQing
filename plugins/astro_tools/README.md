@@ -1,7 +1,5 @@
 # 🔭 Astro Tools 天文工具箱
 
-[English](README.en.md)
-
 Astro Tools 通过 `/astro` 提供天文时间、坐标、单位、红移、公式、天体和常数查询。
 
 ---
