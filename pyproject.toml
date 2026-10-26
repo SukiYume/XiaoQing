@@ -77,6 +77,8 @@ ssh = [
 
 # 开发和测试依赖
 dev = [
+    # aioresponses 0.7.9 uses the pre-3.14 ClientResponse constructor.
+    "aiohttp>=3.8.0,<3.14",
     "build==1.5.1",
     "setuptools==83.0.0",
     "wheel==0.47.0",
