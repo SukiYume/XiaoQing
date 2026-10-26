@@ -1,6 +1,6 @@
 # ⚙️ 04 - Core 模块
 
-中文 | [English](04-core-modules.en.md)
+中文 | [English](en/04-core-modules.md)
 
 本章是 `core/` 的职责索引，帮助维护者从运行现象定位到代码所有者。
 组件关系见 [系统架构](02-architecture.md)，公开插件接口见 [API 参考](05-api-reference.md)。

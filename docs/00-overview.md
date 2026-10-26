@@ -1,6 +1,6 @@
 # 🧭 00 - 项目概览
 
-中文 | [English](00-overview.en.md)
+中文 | [English](en/00-overview.md)
 
 本章介绍 XiaoQingBot 的定位、能力范围、核心概念和项目目录。
 完成阅读后，可进入 [快速开始](01-getting-started.md) 部署服务。

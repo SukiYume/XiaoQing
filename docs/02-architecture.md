@@ -1,6 +1,6 @@
 # 🏗️ 02 - 系统架构
 
-中文 | [English](02-architecture.en.md)
+中文 | [English](en/02-architecture.md)
 
 本章说明 XiaoQing Core 的运行时组件、所有权、生命周期和主要数据流。
 公开插件接口见 [API 参考](05-api-reference.md)，逐模块索引见 [Core 模块](04-core-modules.md)。

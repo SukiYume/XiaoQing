@@ -1,7 +1,5 @@
 # 💬 Chat
 
-中文 | [English](README.en.md)
-
 `chat` 通过 Coze API v3 提供单轮 AI 对话。命令面向全部用户开放，花费由下文的每人与全局每日额度约束。插件同时发布 `chat.reply` 服务，供清单授权的 `smalltalk` 插件调用。
 
 ---

@@ -1,6 +1,6 @@
 # 📱 Pendo Scriptable widget
 
-[中文](pendo-scriptable-widget.md) | English
+[中文](../pendo-scriptable-widget.md) | English
 
 Pendo supplies a read-only iPhone Scriptable summary.
 It shows upcoming events, tasks, finances, or notes on the home screen.
@@ -164,4 +164,4 @@ A missing-calendar notification identifies the necessary calendar name.
 - After phone transfer, loss, or credential exposure, run `/pendo web widget-revoke`.
 - Check user, `jti`, expiry, and revocation results in Pendo logs.
 
-See the [plugin README](../plugins/pendo/README.en.md) and [architecture](../plugins/pendo/ARCHITECTURE.en.md) for complete Web authentication and data models.
+See the [plugin README (Chinese)](../../plugins/pendo/README.md) and [architecture (Chinese)](../../plugins/pendo/ARCHITECTURE.md) for complete Web authentication and data models.

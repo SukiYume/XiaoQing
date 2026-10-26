@@ -1,7 +1,5 @@
 # 💬 Smalltalk
 
-中文 | [English](README.en.md)
-
 `smalltalk` 提供机器人名字短回复、管理员维护的精确问答，以及通过 `chat.reply` 服务生成的基础闲聊。可选的 `voice.synthesize_text` 服务会按概率把纯文本回复转换为语音。
 
 ---

@@ -1,9 +1,9 @@
 # 🧩 03 - Plugin development
 
-[中文](03-plugin-development.md) | English
+[中文](../03-plugin-development.md) | English
 
 This chapter covers plugin directories, manifests, runtime entry points, contexts, sessions, schedules, service capabilities, and verification.
-See the [API reference](05-api-reference.en.md) for interface signatures.
+See the [API reference](05-api-reference.md) for interface signatures.
 
 ## 🔐 Plugin trust model
 
@@ -401,7 +401,7 @@ words = tokenize(args, strict=True)
 By default, `tokenize()` splits unclosed quotes on whitespace.
 Use `strict=True` when complete quotes are necessary for the command protocol.
 `parse_int()` accepts ASCII decimal integers. It returns a range-checked `int` or `None`.
-See [argument parsing](05-api-reference.en.md#argument-parsing) for the complete return structure.
+See [argument parsing](05-api-reference.md#argument-parsing) for the complete return structure.
 
 ### `handle_session()`
 
@@ -587,7 +587,7 @@ Manifest declarations and Core decide command access.
 
 Send proactive OneBot actions with `await context.send_action(action)`.
 Management plugins can call `context.reload_config()` or `context.reload_plugins()` under their command permissions.
-See [PluginContext](05-api-reference.en.md#plugincontext) for full signatures and capability properties.
+See [PluginContext](05-api-reference.md#plugincontext) for full signatures and capability properties.
 
 ## 💬 Sessions
 
@@ -965,6 +965,6 @@ Plugin tests cover at least these areas:
 
 ## 🧭 Next steps
 
-- Public signatures: [API reference](05-api-reference.en.md)
-- Advanced runtime modes: [advanced topics](07-advanced.en.md)
-- Complete plugin index: [plugin manual](09-plugins.en.md)
+- Public signatures: [API reference](05-api-reference.md)
+- Advanced runtime modes: [advanced topics](07-advanced.md)
+- Complete plugin index: [plugin manual](09-plugins.md)

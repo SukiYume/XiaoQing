@@ -1,7 +1,5 @@
 # 🌌 APOD 每日天文图
 
-[English](README.en.md)
-
 APOD 插件抓取 NASA Astronomy Picture of the Day 当前页面，返回图片或视频链接、标题、说明、日期、署名和原页面链接。
 
 ---

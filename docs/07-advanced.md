@@ -1,6 +1,6 @@
 # 🧠 07 - 高级主题
 
-中文 | [English](07-advanced.en.md)
+中文 | [English](en/07-advanced.md)
 
 本章面向需要扩展权限、长任务、调度、声明式服务、内嵌 Web、缓存、并发和生产运行方式的开发者。
 基础插件流程见 [插件开发指南](03-plugin-development.md)。

@@ -1,7 +1,5 @@
 # 🔐 QingSSH
 
-中文 | [English](README.en.md)
-
 QingSSH 为 Bot 管理员提供 SSH 远程控制（支持私聊和群聊），支持保存服务器、导入 `~/.ssh/config`、持久会话、流式命令输出、远端命令终止和图片查看。
 
 ---

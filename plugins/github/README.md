@@ -1,7 +1,5 @@
 # 🐙 GitHub Trending
 
-[English](README.en.md)
-
 `github` 读取 [GitHub 官方 Trending 页面](https://github.com/trending)，展示每日、每周和每月热门仓库。
 
 ---

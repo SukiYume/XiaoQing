@@ -1,7 +1,5 @@
 # 🐦 Twitter 图片
 
-中文 | [English](README.en.md)
-
 `twitter` 从指定 X/Twitter 账号抓取图片到有界本地缓存，并随机发送当前轮次尚待发送的一张图片。
 
 ---

@@ -1,6 +1,6 @@
 # 🛠️ 06 - 配置详解
 
-中文 | [English](06-configuration.en.md)
+中文 | [English](en/06-configuration.md)
 
 本章说明 XiaoQing Core 的公开配置、敏感配置、AI 注册表、插件命名空间、网络边界和热重载语义。
 插件专项字段由各插件 README 维护。

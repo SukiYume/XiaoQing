@@ -1,7 +1,5 @@
 # 🛠 XiaoQing Agent
 
-中文 | [English](README.en.md)
-
 XiaoQing Agent 让小青在有人叫她做事时真正动手：查日程待办、查论文和天象、算数、画图、跑代码和命令、查服务器、让 Codex 写程序，做完再用小青的口吻回复。普通聊天照旧由 `xiaoqing_chat` 处理。
 
 ---

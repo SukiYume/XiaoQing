@@ -1,7 +1,5 @@
 # 🚀 QingPet 快速开始
 
-中文 | [English](QUICKSTART.en.md)
-
 本指南面向首次部署者，用一组 QQ 群命令完成权限、数据库、养成、社交和定时任务的基础验收。完整玩法见 [README.md](README.md)。
 
 ---

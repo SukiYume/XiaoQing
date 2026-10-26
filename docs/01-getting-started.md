@@ -1,6 +1,6 @@
 # 🚀 01 - 快速开始
 
-中文 | [English](01-getting-started.en.md)
+中文 | [English](en/01-getting-started.md)
 
 本章从全新源码目录开始，完成依赖安装、配置创建、OneBot 接入、服务启动和首次验证。
 命令示例适用于 Git Bash、macOS 和 Linux。

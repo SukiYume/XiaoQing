@@ -1,7 +1,5 @@
 # ✅ xiaoqing_chat 上线验收指南
 
-中文 | [English](xiaoqing_chat测试.en.md)
-
 本文面向测试人员与发布维护者，提供一套可重复执行的 `xiaoqing_chat` 上线验收流程。验收覆盖自动化测试、OneBot 入口、命令参数、群聊参与、多模态、记忆、AI route、安全、并发和关闭生命周期。
 
 ---

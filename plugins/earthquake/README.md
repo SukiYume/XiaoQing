@@ -1,7 +1,5 @@
 # 🌍 Earthquake
 
-[English](README.en.md)
-
 `earthquake` 从[中国地震台网速报微博](https://www.weibo.com/ceic)读取近期地震快讯。手动命令查询最新记录。定时任务投递 4.0 级及以上的新快讯。Core 为该 schedule 解析目标群。
 
 ---

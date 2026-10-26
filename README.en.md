@@ -2,6 +2,8 @@
 
 [中文](README.md)
 
+The complete manual is available in [English](docs/en/README.md) and [Chinese](docs/README.md). Plugin guides, maintenance rules, and the changelog are maintained in Chinese; links to these documents are marked "Chinese".
+
 XiaoQingBot is a QQ assistant with plugins. It uses OneBot v11 and Python `asyncio`.
 
 [Python 3.11+](https://python.org) · [MIT License](LICENSE) · [OneBot v11](https://onebot.dev/) · [Online documentation](https://paris.escape.ac.cn/note/XiaoQing/)
@@ -43,7 +45,7 @@ Install reviewed first-party plugins or other trusted plugins.
 | Settings | Snapshots, secret protection, file watchers, and runtime reloads manage settings. |
 | Runtime observation | Logs, request IDs, plugin error codes, and `/metrics` supply runtime information. |
 
-See [Architecture](docs/02-architecture.en.md) and [Message flow](docs/08-message-flow.en.md).
+See [Architecture](docs/en/02-architecture.md) and [Message flow](docs/en/08-message-flow.md).
 
 ## First start
 
@@ -103,7 +105,7 @@ A minimal `config/secrets.json` example follows:
 
 Keep tokens, administrator QQ IDs, LLM API keys, and external-service keys in `config/secrets.json`.
 Git ignore rules cover the local production settings files.
-See [Configuration](docs/06-configuration.en.md) for fields, the AI model registry, and plugin settings.
+See [Configuration](docs/en/06-configuration.md) for fields, the AI model registry, and plugin settings.
 
 ### 4. Connect OneBot
 
@@ -144,7 +146,7 @@ Inbound binds to loopback by default.
 For HTTP or WebSocket Inbound, set a nonempty `inbound_token`.
 At a public entry point, Nginx or Caddy terminates TLS and forwards requests to loopback.
 Controlled networks between containers can use `inbound_trusted_tls_proxy` with a firewall.
-See [Configuration](docs/06-configuration.en.md) for the complete Inbound limits.
+See [Configuration](docs/en/06-configuration.md) for the complete Inbound limits.
 
 ### 5. Start and test
 
@@ -190,7 +192,7 @@ This structure keeps each page short for phone screens.
 | `/get_secret <path>` | Bot administrator, private | Show a redacted value or object keys. |
 | `/metrics` | Bot administrator | Show uptime, success rate, errors, and slow plugins. |
 
-The [plugin guide](docs/09-plugins.en.md) lists commands, aliases, permissions, and schedules.
+The [plugin guide](docs/en/09-plugins.md) lists commands, aliases, permissions, and schedules.
 
 ## Principal plugins
 
@@ -200,7 +202,7 @@ As the global `smalltalk_provider`, `xiaoqing_chat` observes group and private m
 Attention gates, rate control, action planning, the main model, and the reply checker select reply content and timing.
 The plugin supports text, images, QQ face, NapCat mface, quoted messages, local media, long-term memory, and expression learning.
 
-See the [user guide](plugins/xiaoqing_chat/README.en.md) and [architecture](plugins/xiaoqing_chat/ARCHITECTURE.en.md).
+See the [user guide (Chinese)](plugins/xiaoqing_chat/README.md) and [architecture (Chinese)](plugins/xiaoqing_chat/ARCHITECTURE.md).
 
 ### XiaoQing Agent
 
@@ -214,7 +216,7 @@ The plugin replies in XiaoQing's voice after completion.
 Long tasks run in the background and send results proactively.
 The plugin is disabled by default. `config.plugins.xiaoqing_agent.enabled` enables it.
 When it is disabled, `xiaoqing_chat` keeps its usual behavior.
-See the [user guide](plugins/xiaoqing_agent/README.en.md).
+See the [user guide (Chinese)](plugins/xiaoqing_agent/README.md).
 
 ### Pendo
 
@@ -225,8 +227,8 @@ Redemption creates a seven-day HttpOnly Cookie session.
 Scriptable widgets use read-only Bearer tokens with a default lifetime of 365 days.
 Both credential types use second-resolution expiry and digest storage.
 
-See the [user guide](plugins/pendo/README.en.md), [architecture](plugins/pendo/ARCHITECTURE.en.md),
-and [Scriptable guide](docs/pendo-scriptable-widget.en.md).
+See the [user guide (Chinese)](plugins/pendo/README.md), [architecture (Chinese)](plugins/pendo/ARCHITECTURE.md),
+and [Scriptable guide](docs/en/pendo-scriptable-widget.md).
 
 ### Codex and arXiv
 
@@ -239,7 +241,7 @@ Completed results return through proactive OneBot messages.
 Scheduled sends and callers with `/codex` permission can send positive papers to the Codex `astro-ph` session for summaries.
 The source-list date and normalized paper-link set identify a summary task.
 
-See [Codex](plugins/codex/README.en.md) and [arXiv Filter](plugins/arxiv_filter/README.en.md).
+See [Codex (Chinese)](plugins/codex/README.md) and [arXiv Filter (Chinese)](plugins/arxiv_filter/README.md).
 
 ### Flickr
 
@@ -247,7 +249,7 @@ See [Codex](plugins/codex/README.en.md) and [arXiv Filter](plugins/arxiv_filter/
 Search filters include license, order, and date taken.
 Replies keep the author, license conditions, and Flickr photo page.
 `/flickr more` continues the same query.
-See the [Flickr guide](plugins/flickr/README.en.md).
+See the [Flickr guide (Chinese)](plugins/flickr/README.md).
 
 ## Plugin and data directories
 
@@ -271,7 +273,7 @@ Deployment scripts can synchronize code and keep production data.
 Each `plugin.json` describes entry points, commands, permissions, chat scopes, dependencies, watched files, and schedules.
 Plugin names are lowercase ASCII Python identifiers.
 Entry points are canonical POSIX `.py` paths relative to the plugin directory.
-See [Plugin development](docs/03-plugin-development.en.md) and [API reference](docs/05-api-reference.en.md).
+See [Plugin development](docs/en/03-plugin-development.md) and [API reference](docs/en/05-api-reference.md).
 
 ## Settings and maintenance
 
@@ -347,25 +349,25 @@ bash scripts/run_full_uat.sh --plan-only
 bash scripts/run_full_uat.sh
 ```
 
-See [First start](docs/01-getting-started.en.md) for UAT stages, report locations, and external-scenario options.
+See [First start](docs/en/01-getting-started.md) for UAT stages, report locations, and external-scenario options.
 
 ## Documentation
 
 | Document | Contents |
 | --- | --- |
 | [Online documentation](https://paris.escape.ac.cn/note/XiaoQing/) | Browser version of the project manual. |
-| [Documentation index](docs/README.en.md) | Reading routes and topic index. |
-| [Overview](docs/00-overview.en.md) | Functions, concepts, and directories. |
-| [First start](docs/01-getting-started.en.md) | Installation, settings, connections, and initial verification. |
-| [Architecture](docs/02-architecture.en.md) | Components, service boundaries, and data flow. |
-| [Plugin development](docs/03-plugin-development.en.md) | Manifests, entry points, sessions, schedules, and tests. |
-| [Core modules](docs/04-core-modules.en.md) | Responsibilities of `core/` modules. |
-| [API reference](docs/05-api-reference.en.md) | PluginContext, message segments, and public APIs. |
-| [Configuration](docs/06-configuration.en.md) | Settings, secrets, deployment, and reloads. |
-| [Advanced topics](docs/07-advanced.en.md) | Sessions, schedules, permissions, and Web plugins. |
-| [Message flow](docs/08-message-flow.en.md) | Event reception through reply delivery. |
-| [Plugins](docs/09-plugins.en.md) | Built-in commands and settings. |
-| [Changelog](CHANGELOG.en.md) | Version changes and upgrade effects. |
+| [Documentation index](docs/en/README.md) | Reading routes and topic index. |
+| [Overview](docs/en/00-overview.md) | Functions, concepts, and directories. |
+| [First start](docs/en/01-getting-started.md) | Installation, settings, connections, and initial verification. |
+| [Architecture](docs/en/02-architecture.md) | Components, service boundaries, and data flow. |
+| [Plugin development](docs/en/03-plugin-development.md) | Manifests, entry points, sessions, schedules, and tests. |
+| [Core modules](docs/en/04-core-modules.md) | Responsibilities of `core/` modules. |
+| [API reference](docs/en/05-api-reference.md) | PluginContext, message segments, and public APIs. |
+| [Configuration](docs/en/06-configuration.md) | Settings, secrets, deployment, and reloads. |
+| [Advanced topics](docs/en/07-advanced.md) | Sessions, schedules, permissions, and Web plugins. |
+| [Message flow](docs/en/08-message-flow.md) | Event reception through reply delivery. |
+| [Plugins](docs/en/09-plugins.md) | Built-in commands and settings. |
+| [Changelog (Chinese)](CHANGELOG.md) | Version changes and upgrade effects. |
 
 ## Fault isolation
 

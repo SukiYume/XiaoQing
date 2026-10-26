@@ -1,7 +1,5 @@
 # 🧮 Wolfram|Alpha
 
-中文 | [English](README.en.md)
-
 `wolframalpha` 通过固定 Wolfram|Alpha HTTPS API 执行数学、物理、化学、单位换算和公开数据查询。所有人都可以在私聊和群聊里使用。
 
 ---
