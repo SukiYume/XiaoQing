@@ -292,6 +292,115 @@ async def test_private_turns_reach_the_agent_even_without_a_forced_summon(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text",
+    ["我这周有什么事件", "看看本周的安排", "这星期还有什么事", "记一笔午饭 25"],
+    ids=["week-events", "week-plans", "week-tasks", "ledger"],
+)
+@pytest.mark.parametrize(
+    ("idle_seconds", "followup_delay", "interleaved"),
+    [(30, 13, False), (2800, 13, False), (2800, 13, True), (2800, 61, False)],
+    ids=["active", "idle", "idle-with-other-speaker", "expired"],
+)
+async def test_bot_name_followup_routes_after_idle_cleanup(
+    tmp_path, quiet_side_effects, monkeypatch, text, idle_seconds, followup_delay, interleaved
+):
+    from dataclasses import replace
+
+    from plugins.xiaoqing_chat.runtime_state import get_state
+    from plugins.xiaoqing_chat.store_binding import bind_all_stores
+
+    reply = [{"type": "text", "data": {"text": "任务结果"}}]
+    agent = SimpleNamespace(
+        handle_turn=AsyncMock(
+            side_effect=[
+                {"handled": True, "decision": {"action": "task", "task_id": ""}},
+                {"handled": True, "segments": reply, "reply_text": "任务结果", "task_id": "task1"},
+            ]
+        )
+    )
+    hctx, context = _hctx(tmp_path, agent)
+    state = get_state()
+    bind_all_stores(state, tmp_path)
+    hctx = replace(hctx, state=state)
+    hctx.runtime.cfg.goal.enable_goal                        = False
+    hctx.runtime.cfg.reflection.enable_expression_reflection = False
+    hctx.runtime.cfg.personality.state_probability           = 0.0
+    context.current_user_id                                  = 12345
+    context.current_group_id                                 = 67890
+    clock                                                    = [handlers.time.time()]
+    monkeypatch.setattr(handlers.time, "time", lambda: clock[0])
+    state.memory_store.append(
+        hctx.chat_id,
+        role     = "user",
+        name     = "群友",
+        content  = "旧话题",
+        ts       = clock[0] - idle_seconds,
+        local_id = "old",
+    )
+    state.set_continuous_reply_count(hctx.chat_id, 3)
+
+    with (
+        patch.object(handlers, "load_runtime", return_value=hctx.runtime),
+        patch.object(handlers, "decide_reply", AsyncMock(return_value=False)),
+        patch.object(handlers, "_reply_with_chat", AsyncMock(return_value=[])),
+    ):
+        assert await handlers.call_bot_name_only(context)
+        if interleaved:
+            clock[0] += 5
+            other = {
+                **_event(),
+                "user_id": 54321,
+                "message_id": 98,
+                "message": [{"type": "text", "data": {"text": "今天好冷"}}],
+                "_xc_user_recorded_local_id": "other",
+            }
+            state.memory_store.append(
+                hctx.chat_id,
+                role       = "user",
+                name       = "群友",
+                content    = "今天好冷",
+                ts         = clock[0],
+                local_id   = "other",
+                user_id    = 54321,
+                message_id = 98,
+            )
+            assert (
+                await handlers._maybe_reply_smalltalk("今天好冷", other, context, hctx=hctx) == []
+            )
+            agent.handle_turn.assert_not_awaited()
+            clock[0] -= 5
+        clock[0] += followup_delay
+        event = {
+            **_event(),
+            "message": [{"type": "text", "data": {"text": text}}],
+            "_xc_user_recorded_local_id": "current",
+        }
+        state.memory_store.append(
+            hctx.chat_id,
+            role       = "user",
+            name       = "主人",
+            content    = text,
+            ts         = clock[0],
+            local_id   = "current",
+            user_id    = 12345,
+            message_id = 99,
+        )
+        result = await handlers._maybe_reply_smalltalk(text, event, context, hctx=hctx)
+
+    assert state.get_continuous_reply_count(hctx.chat_id) == (0 if idle_seconds > 1800 else 3)
+    if followup_delay > 60:
+        assert result == []
+        agent.handle_turn.assert_not_awaited()
+    else:
+        assert result == reply
+        turns = [call.args[0] for call in agent.handle_turn.await_args_list]
+        assert [turn["phase"] for turn in turns] == ["decide", "act"]
+        assert all(turn["text"] == text and turn["user_id"] == 12345 for turn in turns)
+    assert not state.consume_pending_bot_name_call(hctx.chat_id, 12345)
+
+
+@pytest.mark.asyncio
 async def test_stuck_agent_is_abandoned_after_the_bridge_timeout(tmp_path, quiet_side_effects):
     async def never(_turn):
         await asyncio.Event().wait()
