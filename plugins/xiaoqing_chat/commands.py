@@ -57,14 +57,14 @@ async def reset_chat_session(state, chat_id: str, data_dir: Path) -> None:
 
 
 async def reset_transient_conversation_state(state, chat_id: str, data_dir: Path) -> None:
-    """长空档后清掉旧话题的短期状态，但保留可显式检索的完整聊天历史。"""
+    """长空档后清理旧话题状态，保留完整聊天历史及独立计时的召唤标记。"""
 
     await _clear_stores(
         chat_id, state.goal_store, state.heartflow, state.action_history, state.pfc_state_store
     )
     await asyncio.to_thread(clear_thinking_back_records, data_dir=data_dir, chat_id=chat_id)
     await asyncio.to_thread(clear_topic_summary_entries, data_dir, chat_id)
-    state.clear_transient_chat_state(chat_id)
+    state.clear_transient_chat_state(chat_id, clear_pending_call=False)
 
 
 def _visible_jargons(jargons: Mapping[Any, Any], chat_id: str) -> list[Any]:

@@ -129,6 +129,6 @@ async def test_idle_boundary_clears_transient_state_once_without_clearing_memory
     state.heartflow.clear.assert_called_once_with("g1")
     state.action_history.clear.assert_called_once_with("g1")
     state.pfc_state_store.clear.assert_called_once_with("g1")
-    state.clear_transient_chat_state.assert_called_once_with("g1")
+    state.clear_transient_chat_state.assert_called_once_with("g1", clear_pending_call=False)
     memory_store.clear.assert_not_called()
     memory_store.get_recent_async.assert_awaited_once_with("g1", max_items=2)
