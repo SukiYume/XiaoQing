@@ -14,14 +14,14 @@ PLUGIN_NAME = "xiaoqing_agent"
 class AgentConfig:
     # 总开关；关闭时 xiaoqing_chat 完全保持原有聊天行为。
     enabled: bool = False
-    # 单个任务最多调用模型的轮数。
+    # 单个任务执行阶段最多调用模型的轮数；命令结果交付另有正文生成与范围筛选。
     max_steps: int = 40
     # 单个任务从开始到交付的总时长上限。
     task_timeout_seconds: float = 1800.0
     # 工具未指定超时时的默认值，以及模型可以申请的上限。
     tool_timeout_seconds: float     = 120.0
     max_tool_timeout_seconds: float = 900.0
-    # 收到任务后最多等这么久；做完就直接作为这一轮的回复，否则先回一句再后台继续。
+    # 收到任务后最多等这么久；做完直接回复，超时转入后台，执行阶段按需提供进度。
     # 上限 25 秒：加上判断的 20 秒仍短于聊天侧 50 秒的等待和插件 60 秒的执行预算。
     inline_wait_seconds: float = 12.0
     # 名额分两份：Bot 管理员的任务和其他人的任务各算各的，别人再多也挤不掉管理员。

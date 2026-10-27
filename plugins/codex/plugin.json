@@ -28,7 +28,7 @@
             "triggers": [
                 "codex"
             ],
-            "help": "Codex 会话队列 | /codex help",
+            "help": "管理后台编程会话。create 建会话，/codex 会话名 任务 排队执行，status 查进度；提交回执表示已排队，最终结果随后发送。Agent 编程任务使用 codex_run 取得最终结果。",
             "admin_only": true,
             "usage": "/codex <会话名> <任务> | /codex <子命令>",
             "examples": ["/codex research 检查当前测试失败"],
@@ -37,9 +37,9 @@
                 {
                     "name": "create",
                     "aliases": ["new", "创建"],
-                    "help": "创建一个有界后台会话",
+                    "help": "创建后台会话；cwd 默认插件配置目录，指定时用允许范围内的绝对路径，Windows路径推荐/斜杠；含空格路径加引号。",
                     "usage": "/codex create <name> [cwd:<path>]",
-                    "examples": ["/codex create review cwd:C:/workspace/project"],
+                    "examples": ["/codex create review", "/codex create review cwd:\"C:/workspace/my project\""],
                     "invalid_examples": ["/codex create"]
                 },
                 {
@@ -62,7 +62,7 @@
                 {
                     "name": "cancel",
                     "aliases": ["stop", "取消", "停止"],
-                    "help": "取消运行中任务或移除排队任务",
+                    "help": "省略 job_id 取消指定会话当前任务；指定 job_id 取消对应运行中或排队任务，编号取自 status。",
                     "usage": "/codex cancel <name> [job_id]",
                     "examples": ["/codex cancel review"],
                     "invalid_examples": ["/codex cancel"]
@@ -70,7 +70,7 @@
                 {
                     "name": "clear",
                     "aliases": ["清空"],
-                    "help": "清空指定会话的排队任务",
+                    "help": "清空指定会话的排队任务，正在运行的任务继续执行；停止当前任务用 cancel。",
                     "usage": "/codex clear <name>",
                     "examples": ["/codex clear review"],
                     "invalid_examples": ["/codex clear"]
@@ -78,7 +78,7 @@
                 {
                     "name": "delete",
                     "aliases": ["del", "remove", "rm", "删除"],
-                    "help": "删除会话并归档历史",
+                    "help": "删除会话并归档历史；--force 允许终止活动任务，--protected 允许删除保护会话。两个选项都是无值标志。",
                     "usage": "/codex delete <name> [--force] [--protected]",
                     "examples": ["/codex delete review"],
                     "invalid_examples": ["/codex delete"]

@@ -5,20 +5,21 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import json
 import os
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from core.ai import AIError
-from core.delivery import DeliveryReceipt
+from core.delivery import CommandOutcome, DeliverySegments
 from core.image_validation import ImageValidationLimits, validate_image_bytes
 from core.plugin_base import file_uri_to_path, head_tail_preview
 from core.process_tree import ProcessResult, run_process
-from core.router import command_access
+from core.router import CommandCatalogNode, command_access, resolve_catalog_invocation
 
 from . import receipts
 from .config import PLUGIN_NAME, AgentConfig
@@ -46,7 +47,10 @@ _CODEX_SESSION_PREFIX = "agent-"
 @dataclass(slots=True)
 class ToolResult:
     content: str
-    final: Outcome | None = None
+    final: Outcome | None                                = None
+    state: Literal["ok", "error", "accepted", "blocked"] = "ok"
+    progress: bool                                       = True
+    command_outcome: CommandOutcome | None               = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +89,10 @@ class ToolEnv:
     command_counter: int = 0
     # 本次命令返回的本地文件；发起人不能读写本机文件时，只能发出这些和产出目录里的文件。
     command_files: set[Path] = field(default_factory=set)
+    observations: dict[str, dict[str, int]] = field(default_factory=dict)
+    closed_scopes: dict[str, str] = field(default_factory=dict)
+    wait_blocked_reason: str = ""
+    user_updates: list[str] = field(default_factory=list)
 
     def remaining(self) -> float:
         return self.deadline - time.monotonic()
@@ -242,11 +250,16 @@ def _process_env() -> dict[str, str]:
     return env
 
 
-async def _run_in_workspace(env: ToolEnv, argv: list[str], timeout: float) -> str:
+async def _run_in_workspace(env: ToolEnv, argv: list[str], timeout: float) -> ToolResult:
     before = await asyncio.to_thread(_snapshot, env.workspace)
     result = await run_process(argv, cwd=env.workspace, timeout=timeout, env=_process_env())
-    after = await asyncio.to_thread(_snapshot, env.workspace)
-    return _format_process(result, env.config.max_tool_output_chars, _changed(before, after))
+    after  = await asyncio.to_thread(_snapshot, env.workspace)
+    failed = result.timed_out or result.output_limited or result.exit_code != 0
+    return ToolResult(
+        _format_process(result, env.config.max_tool_output_chars, _changed(before, after)),
+        state    = "error" if failed else "ok",
+        progress = not failed,
+    )
 
 
 # ──────────────────── 基础工具 ────────────────────
@@ -263,9 +276,7 @@ async def _run_python(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
     await asyncio.to_thread(script.parent.mkdir, parents=True, exist_ok=True)
     await asyncio.to_thread(script.write_text, code, encoding="utf-8")
     env.task.activity = "运行 Python"
-    return ToolResult(
-        await _run_in_workspace(env, [env.python, "-X", "utf8", str(script)], timeout)
-    )
+    return await _run_in_workspace(env, [env.python, "-X", "utf8", str(script)], timeout)
 
 
 async def _run_shell(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
@@ -273,7 +284,7 @@ async def _run_shell(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
     command           = _string_arg(args, "command")
     timeout           = _timeout(env, args.get("timeout_seconds"))
     env.task.activity = "运行命令"
-    return ToolResult(await _run_in_workspace(env, env.shell.argv(command), timeout))
+    return await _run_in_workspace(env, env.shell.argv(command), timeout)
 
 
 def _read_text(path: Path, offset: int, limit: int) -> str:
@@ -383,6 +394,8 @@ async def _send_message(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
     message = _string_arg(args, "text").strip()
     files   = [str(path) for path in _outgoing_files(env, _files_arg(args))]
     task    = env.task
+    if task.inline_waiter is not None and not files:
+        return ToolResult("当轮正在等待结果；请继续执行，完成后通过 final_answer 一次交付。")
     if task.progress_sent >= _MAX_PROGRESS:
         return ToolResult("进度消息已达上限，未发送；最终结果请用 final_answer。")
     if time.monotonic() - task.last_progress_at < _PROGRESS_INTERVAL and not files:
@@ -416,6 +429,13 @@ async def _update_plan(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
 
 
 async def _wait(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
+    if env.wait_blocked_reason or env.task.command_results:
+        return ToolResult(
+            env.wait_blocked_reason
+            or "当前命令没有提供可轮询入口，等待无法取得新的执行状态。请交付已有结果，或继续其他独立操作。",
+            state    = "blocked",
+            progress = False,
+        )
     seconds = args.get("seconds")
     if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or seconds <= 0:
         raise ToolError("seconds 必须是正数")
@@ -428,8 +448,8 @@ async def _wait(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
 
 
 async def _final_answer(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
-    answer  = _string_arg(args, "text").strip()
-    files   = _outgoing_files(env, _files_arg(args))
+    answer = _string_arg(args, "text").strip()
+    files = _outgoing_files(env, _files_arg(args)) if "files" in args else sorted(env.command_files)
     missing = [str(path) for path in files if not path.is_file()]
     if missing:
         raise ToolError("这些文件不存在，请检查路径后再交付: " + ", ".join(missing))
@@ -439,32 +459,69 @@ async def _final_answer(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
 # ──────────────────── XiaoQing 命令 ────────────────────
 
 
-def _catalog_lines(context: Any, query: str) -> list[str]:
-    roots            = tuple(context.get_command_catalog())
-    principal        = getattr(context, "principal", None)
-    needle           = query.strip().casefold()
-    terms            = needle.split()
+def _catalog_lines(context: Any, query: str, *, include_unavailable: bool = False) -> list[str]:
+    roots = tuple(
+        root
+        for root in context.get_command_catalog()
+        if root.plugin not in {PLUGIN_NAME, "xiaoqing_chat"}
+    )
+    principal       = getattr(context, "principal", None)
+    needle          = " ".join(query.strip().lstrip("/").casefold().split())
+    terms           = needle.split()
+    exact: set[str] = set()
+    if terms:
+        named_roots = tuple(
+            root
+            for root in roots
+            if terms[0] in {root.name.casefold(), *(alias.casefold() for alias in root.aliases)}
+        )
+        if named_roots:
+            roots = named_roots
+        for root in roots:
+            if terms[0] in {root.name.casefold(), *(alias.casefold() for alias in root.aliases)}:
+                invocation = resolve_catalog_invocation(root, " ".join(terms[1:]))
+                if not invocation.arguments:
+                    exact.update(node.code for node in invocation.node.walk())
+            for node in root.walk():
+                if needle == node.code.casefold():
+                    exact.update(child.code for child in node.walk())
     lines: list[str] = []
     for root in roots:
-        if root.plugin == PLUGIN_NAME:
-            continue
-        nodes = root.walk() if needle else (root,)
+        nodes                                                = root.walk() if needle else (root,)
+        ancestors: dict[tuple[str, ...], CommandCatalogNode] = {}
         for node in nodes:
-            if not command_allowed(node, principal):
+            ancestors[node.path] = node
+            if not include_unavailable and not command_allowed(node, principal):
                 continue
+            parents  = [ancestors[node.path[:depth]] for depth in range(1, len(node.path))]
             haystack = " ".join(
-                (node.code, node.name, *node.aliases, node.help_text, node.usage, *node.examples)
+                (
+                    node.code,
+                    node.name,
+                    *node.aliases,
+                    node.help_text,
+                    node.usage,
+                    *node.examples,
+                    *(f"{parent.name} {' '.join(parent.aliases)}" for parent in parents),
+                )
             ).casefold()
-            if terms and not all(term in haystack for term in terms):
+            if exact and node.code not in exact:
                 continue
-            line = f"{node.usage} — {node.help_text[:80]}"
+            if not exact and terms and not all(term in haystack for term in terms):
+                continue
+            line = f"{node.usage} — {node.help_text}"
+            if needle and parents:
+                line += "\n上级用途：" + "；".join(
+                    f"{parent.name}：{parent.help_text}" for parent in parents
+                )
             if tuple(node.contexts) == ("private",):
                 line += "（仅私聊）"
             elif tuple(node.contexts) == ("group",):
                 line += "（仅群聊）"
             if needle and node.examples:
-                # 用法里的占位符说不清参数写法（比如带空格的时间），样例最直接。
-                line += "；例：" + " | ".join(node.examples[:2])
+                line += "\n例：" + "\n".join(node.examples)
+            if needle:
+                line += f"\n命令码：{node.code}；权限：{node.permission}"
             lines.append(line)
     return lines
 
@@ -474,16 +531,59 @@ async def _xiaoqing_commands(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
     page = args.get("page", 1)
     if type(page) is not int or page < 1:
         raise ToolError("page 必须是正整数")
-    lines = _catalog_lines(env.context, query)
+    lines   = _catalog_lines(env.context, query)
+    heading = ""
+    if not lines and query.strip() and _catalog_lines(env.context, query, include_unavailable=True):
+        reason = "匹配的功能需要当前身份未获授的权限。这项请求需交代权限阻碍，其他功能的数据保持原样；发起人明确指定的其他独立事项可继续。"
+        env.closed_scopes["unavailable_catalog"] = reason
+        return ToolResult(reason, state="blocked", progress=False)
+    if not lines and query.strip():
+        terms = query.strip().lstrip("/").casefold().split()
+        for root in env.context.get_command_catalog():
+            if terms[0] in {
+                root.plugin.casefold(),
+                root.name.casefold(),
+                root.code.casefold(),
+                *(alias.casefold() for alias in root.aliases),
+            } and not command_allowed(root, env.context.principal):
+                reason = "当前身份没有使用该插件的权限。这项请求需交代权限阻碍，其他功能的数据保持原样；发起人明确指定的其他独立事项可继续。"
+                env.closed_scopes[root.plugin] = reason
+                return ToolResult(reason, state="blocked", progress=False)
+            if terms[0] in {root.name.casefold(), *(alias.casefold() for alias in root.aliases)}:
+                branch     = resolve_catalog_invocation(root, " ".join(terms[1:])).node
+                candidates = [
+                    node
+                    for node in branch.walk()
+                    if terms[-1]
+                    in {node.name.casefold(), *(alias.casefold() for alias in node.aliases)}
+                ]
+                for node in candidates or branch.children or (branch,):
+                    lines.extend(_catalog_lines(env.context, node.code))
+                heading = "完整路径未匹配，以下为该入口的相关命令；按列出的用法选择：\n\n"
+                break
     if not lines:
-        return ToolResult("没有匹配的命令；换个关键词，或不带 query 查看全部顶层命令。")
-    suffix = "" if query else "\n（用 query 查某个插件的子命令，例如 query=pendo）"
-    start  = (page - 1) * _MAX_CATALOG_LINES
-    if start >= len(lines):
-        return ToolResult(f"没有第 {page} 页；共 {(len(lines) - 1) // _MAX_CATALOG_LINES + 1} 页。")
-    if start + _MAX_CATALOG_LINES < len(lines):
+        return ToolResult(
+            "当前可用目录没有匹配的命令。可查询顶层目录确认能力范围。",
+            state    = "error",
+            progress = False,
+        )
+    suffix                 = "" if query else "\n（用 query 查某个插件的子命令，例如 query=pendo）"
+    pages: list[list[str]] = [[]]
+    size                   = 0
+    for line in lines:
+        if pages[-1] and (
+            len(pages[-1]) >= _MAX_CATALOG_LINES
+            or size + len(line) > env.config.max_tool_output_chars - 200
+        ):
+            pages.append([])
+            size = 0
+        pages[-1].append(line)
+        size += len(line) + 2
+    if page > len(pages):
+        return ToolResult(f"没有第 {page} 页；共 {len(pages)} 页。")
+    if page < len(pages):
         suffix += f"\n（共 {len(lines)} 条；继续使用相同 query，page={page + 1}）"
-    return ToolResult("\n".join(lines[start : start + _MAX_CATALOG_LINES]) + suffix)
+    return ToolResult(heading + "\n\n".join(pages[page - 1]) + suffix)
 
 
 _MEDIA_LABELS = {
@@ -512,6 +612,7 @@ def _save_base64_media(path: Path, payload: str) -> str:
 async def _segments_to_text(
     env: ToolEnv,
     segments: list[dict[str, Any]],
+    result_text: str,
 ) -> tuple[str, list[str]]:
     """把命令回复段转成模型可读文本；图片、语音、视频和文件给出本地路径，可以放进 final_answer.files。
 
@@ -549,11 +650,12 @@ async def _segments_to_text(
             try:
                 saved = await asyncio.to_thread(_save_base64_media, target, source[9:])
                 media.setdefault(label, []).append(saved)
+                env.command_files.add(Path(saved).resolve())
             except (binascii.Error, ValueError, OSError):
                 texts.append(f"[{label}无法保存]")
         elif source:
             texts.append(f"[{label} {source[:200]}]")
-    body = "".join(texts).strip() or "（命令没有返回文字）"
+    body = result_text or "".join(texts).strip() or "（命令没有返回文字）"
     for label, paths in media.items():
         body += f"\n命令返回的{label}（可放进 final_answer.files 发出去）: " + ", ".join(paths)
     files = [path for paths in media.values() for path in paths]
@@ -561,8 +663,96 @@ async def _segments_to_text(
 
 
 async def _xiaoqing_command(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
-    command = _string_arg(args, "command").strip()
-    runner  = getattr(env.context.capabilities, "command_runner", None)
+    """按调用时声明的交付方式执行；完整列表沿插件提供的导航取齐。"""
+
+    command  = _string_arg(args, "command").strip()
+    delivery = _string_arg(args, "delivery")
+    if delivery not in ("continue", "reply", "all_pages"):
+        raise ToolError("delivery 需要为 continue、reply 或 all_pages。")
+    visited: set[str]  = set()
+    outputs: list[str] = []
+    while True:
+        visited.add(command)
+        result       = await _run_xiaoqing_command(env, command)
+        next_command = result.command_outcome.next_command if result.command_outcome else ""
+        outputs.append(result.content)
+        if delivery != "all_pages" or result.state != "ok" or not next_command or env.task.notes:
+            break
+        if next_command in visited or len(visited) >= env.config.max_steps or env.remaining() <= 5:
+            return ToolResult(
+                "\n\n".join(outputs)
+                + f"\n分页尚未取齐，本次自动翻页已停止。待取页面：{next_command}",
+                state    = "blocked",
+                progress = False,
+            )
+        command = next_command
+    result.content = "\n\n".join(outputs)
+    if delivery == "all_pages" and result.state == "ok" and not next_command:
+        result.content += "\n结果范围：分页已取齐，本次完整清单可直接交付。"
+    if delivery != "continue" and result.state in {"ok", "accepted"} and not env.task.notes:
+        result.final = Outcome(result.content, [str(path) for path in sorted(env.command_files)])
+    elif (
+        delivery != "continue"
+        and result.command_outcome is not None
+        and result.command_outcome.state == "error"
+    ):
+        result.final = Outcome(
+            result.content, [str(path) for path in sorted(env.command_files)], status="failed"
+        )
+    return result
+
+
+async def _run_xiaoqing_command(env: ToolEnv, command: str) -> ToolResult:
+    tokens = command.lstrip("/").split(maxsplit=1)
+    scope       = tokens[0].casefold()
+    command_key = scope
+    is_help     = False
+    for root in env.context.get_command_catalog():
+        if scope in {root.name.casefold(), *(alias.casefold() for alias in root.aliases)}:
+            scope       = root.plugin
+            invocation  = resolve_catalog_invocation(root, tokens[1] if len(tokens) > 1 else "")
+            command_key = invocation.node.code
+            is_help     = invocation.node.name == "help" or root.name == "help"
+            denied      = command_access(invocation.node, env.context.principal)
+            if denied:
+                reason = "当前身份或会话场景无法使用这条命令。这项请求需交代所需条件，其他功能的数据保持原样；发起人明确指定的其他独立事项可继续。"
+                env.closed_scopes[command_key] = reason
+                return ToolResult(reason, state="blocked", progress=False)
+            if (
+                scope == "pendo"
+                and len(invocation.node.path) >= 3
+                and invocation.node.path[-2:]
+                in {("ledger", "add"), ("ledger", "quick"), ("ledger", "record")}
+            ):
+                from plugins.pendo.handlers.ledger import LedgerHandler
+
+                if invocation.node.name == "record":
+                    fields = parse_arguments(invocation.arguments)
+                else:
+                    data, error = LedgerHandler._parse_quick_ledger_data(invocation.arguments)
+                    if error:
+                        raise ToolError(error)
+                    fields = {
+                        "amount_cents": data["amount_cents"],
+                        "title": data["title"],
+                        "transaction_type": data["transaction_type"],
+                        "category": data.get("ledger_category") or "",
+                        "account": data.get("account_name") or "",
+                        "to_account": data.get("counter_account_name") or "",
+                        "merchant": data.get("merchant") or "",
+                        "date": data.get("ledger_date") or "",
+                        "currency": data.get("currency") or "CNY",
+                        "remark": data.get("remark") or "",
+                    }
+                fields["source_text"] = "\n".join(
+                    [env.task.request_text or env.task.goal, *env.user_updates]
+                )
+                command = "/pendo ledger record " + json.dumps(fields, ensure_ascii=False)
+            break
+    closed = env.closed_scopes.get(scope) or env.closed_scopes.get(command_key)
+    if closed and not is_help:
+        return ToolResult(closed, state="blocked", progress=False)
+    runner = getattr(env.context.capabilities, "command_runner", None)
     if runner is None:
         raise ToolError("命令能力不可用")
     env.task.activity = f"执行 {command.split()[0][:30]}"
@@ -573,20 +763,81 @@ async def _xiaoqing_command(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
         sender_name  = env.task.sender,
         operation_id = f"{env.task.task_id}-{env.command_counter}",
     )
-    receipt = getattr(result, "delivery_receipt", None)
+    receipt, outcome = (
+        (result.delivery_receipt, result.command_outcome)
+        if isinstance(result, DeliverySegments)
+        else (None, None)
+    )
     try:
-        body, files = await _segments_to_text(env, result)
+        body, files = await _segments_to_text(env, result, outcome.result_text if outcome else "")
     except BaseException:
-        if isinstance(receipt, DeliveryReceipt):
+        if receipt is not None:
             await asyncio.shield(receipt.record(False))
         raise
-    if isinstance(receipt, DeliveryReceipt):
+    if receipt is not None:
         await receipts.hold(env.task.held_receipts, receipt, files)
-    return ToolResult(body)
+    env.task.command_results.append(truncate(f"{command}\n{body}", 1200))
+    env.task.command_results = env.task.command_results[-4:]
+    if is_help:
+        return ToolResult(body, progress=False)
+    if outcome is not None and outcome.state == "accepted":
+        reason                         = "后台任务已接收。当前命令没有轮询接口，本轮交付接收状态；其他独立事项可继续。"
+        env.closed_scopes[command_key] = reason
+        env.wait_blocked_reason        = reason
+        body += "\n执行状态：accepted；" + reason
+        return ToolResult(body, state="accepted")
+    fingerprint = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    observed = env.observations.setdefault(scope, {})
+    observed[fingerprint] = observed.get(fingerprint, 0) + 1
+    failed = (outcome is not None and outcome.state in {"error", "incomplete"}) or body.startswith(
+        "❌"
+    )
+    if failed:
+        env.wait_blocked_reason = (
+            "当前命令返回失败或不完整结果。可根据帮助修正参数；等待本身无法取得新结果。"
+        )
+    elif not env.closed_scopes:
+        env.wait_blocked_reason = ""
+    if outcome is not None and outcome.state == "error" and observed[fingerprint] >= 2:
+        reason                         = "该命令已重复返回相同失败，本轮停止重试；交付已取得的结果与未完成范围。"
+        env.closed_scopes[command_key] = reason
+        env.wait_blocked_reason        = reason
+        return ToolResult(
+            body + "\n" + reason, state="blocked", progress=False, command_outcome=outcome
+        )
+    if observed[fingerprint] >= 3:
+        reason                   = "该服务已连续多次返回相同内容，重复查询没有取得新信息。本轮停止这一路径，交付已有结果与缺口；其他独立事项可继续。"
+        env.closed_scopes[scope] = reason
+        env.wait_blocked_reason  = reason
+        final                    = (
+            Outcome(body, [str(path) for path in sorted(env.command_files)])
+            if outcome is not None and outcome.state == "completed"
+            else None
+        )
+        return ToolResult(body + "\n" + reason, state="blocked", progress=False, final=final)
+    if observed[fingerprint] == 2:
+        body += (
+            "\n本次结果与此前相同，未取得新信息。请根据已有结果交付；继续查询需要明确尚缺的内容。"
+        )
+    if outcome is not None:
+        body += f"\n执行状态：{outcome.state}"
+        body += f"；下一页：{outcome.next_command}" if outcome.next_command else "；后续分页：无"
+    return ToolResult(
+        body,
+        state           = "error" if failed else "ok",
+        progress        = observed[fingerprint] == 1 and not failed,
+        command_outcome = outcome,
+    )
+
+
+async def _pendo_ledger_add(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
+    return await _run_xiaoqing_command(
+        env, "/pendo ledger record " + json.dumps(args, ensure_ascii=False)
+    )
 
 
 async def _xiaoai_devices(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
-    return await _xiaoqing_command(env, {"command": "/米家 数据"})
+    return await _run_xiaoqing_command(env, "/米家 数据")
 
 
 async def _xiaoai_capabilities(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
@@ -594,7 +845,7 @@ async def _xiaoai_capabilities(env: ToolEnv, args: dict[str, Any]) -> ToolResult
     page   = args.get("page", 1)
     if type(page) is not int or page < 1:
         raise ToolError("page 需要为正整数。")
-    return await _xiaoqing_command(env, {"command": f"/米家 接口 {device} {page}"})
+    return await _run_xiaoqing_command(env, f"/米家 接口 {device} {page}")
 
 
 async def _xiaoai_execute(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
@@ -606,7 +857,7 @@ async def _xiaoai_execute(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
         ensure_ascii = False,
         separators   = (",", ":"),
     )
-    return await _xiaoqing_command(env, {"command": "/米家 调用 " + payload})
+    return await _run_xiaoqing_command(env, "/米家 调用 " + payload)
 
 
 # ──────────────────── SSH 与 Codex ────────────────────
@@ -640,7 +891,12 @@ async def _ssh_run(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
     output = str(result.get("output") or "").rstrip() or "（没有输出）"
     if result.get("truncated"):
         output += "\n…（输出过长已截断）"
-    return ToolResult(f"{status}\n{truncate(output, env.config.max_tool_output_chars)}")
+    failed = bool(result.get("timed_out")) or result.get("exit_code") != 0
+    return ToolResult(
+        f"{status}\n{truncate(output, env.config.max_tool_output_chars)}",
+        state    = "error" if failed else "ok",
+        progress = not failed,
+    )
 
 
 def codex_session_label(task: AgentTask) -> str:
@@ -785,8 +1041,9 @@ def build_tools(env: ToolEnv, *, loaded_plugins: frozenset[str]) -> dict[str, To
         ),
         Tool(
             "final_answer",
-            "交付最终结果并结束任务。text 是发到 QQ 的回复：纯文本、口语、简洁，"
-            "不用 Markdown；files 填要发送的图片或文件路径。",
+            "交付最终结果并结束任务。text 按共享人设表达，包含所需结果和关键事实；"
+            "清单、代码和文稿按用户请求完整提供。省略 files 自动附上本次命令返回的文件；"
+            "指定 files 时使用工具返回的原始路径，空数组表示只交付文字。",
             _object({"text": {"type": "string"}, "files": _FILES_PROPERTY}, ["text"]),
             _final_answer,
         ),
@@ -797,7 +1054,9 @@ def build_tools(env: ToolEnv, *, loaded_plugins: frozenset[str]) -> dict[str, To
             Tool(
                 "xiaoqing_commands",
                 "查询 XiaoQing 已有命令及用法（日程待办 pendo、论文、天文等）。"
-                "不带 query 列出顶层命令，带 query 搜索子命令。",
+                "不带 query 列顶层命令；query 可填完整路径、别名或空格分隔关键词。"
+                "例如 pendo ledger add 直接给出该命令的完整参数、默认值和全部示例；"
+                "pendo 记账 搜索相关命令。按 page 翻页，帮助可复用。",
                 _object({"query": {"type": "string"}, "page": {"type": "integer", "minimum": 1}}),
                 _xiaoqing_commands,
             ),
@@ -805,14 +1064,38 @@ def build_tools(env: ToolEnv, *, loaded_plugins: frozenset[str]) -> dict[str, To
                 "xiaoqing_command",
                 "以发起人的身份执行一条 XiaoQing 命令并返回回复，例如 '/pendo todo list'；"
                 "权限和场景限制与发起人本人直接发送时相同。"
-                "先用 xiaoqing_commands 确认用法；不支持会进入多轮交互的命令。"
-                "需要 @ 某人时写 [CQ:at,qq=QQ号]。Python、Shell、SSH、Codex 请用对应的专门工具，"
-                "不要通过这里调 /py、/shell、/ssh、/codex。",
-                _object({"command": {"type": "string"}}, ["command"]),
+                "按已有说明填写参数，用法不明时通过 xiaoqing_commands 查询；支持单次调用的命令。"
+                "需要 @ 某人时写 [CQ:at,qq=QQ号]。代码执行、远端命令和编程任务优先使用本轮提供的专用工具；"
+                "插件的会话列表、配置、历史等管理功能通过对应命令查询。",
+                _object(
+                    {
+                        "command": {"type": "string"},
+                        "delivery": {
+                            "type": "string",
+                            "enum": ["reply", "all_pages", "continue"],
+                            "description": "交付方式：当前结果足够时选 reply；需要完整分页列表时选 all_pages，程序自动沿下一页取齐。以上方式在本批调用后结束执行并交付文字和附件，整理、解释和用户要求的建议也由交付阶段完成。原请求中还有其他独立操作需要调用工具时选 continue。",
+                        },
+                    },
+                    ["command", "delivery"],
+                ),
                 _xiaoqing_command,
             ),
         ]
         principal = getattr(env.context, "principal", None)
+        if "pendo" in loaded_plugins:
+            from plugins.pendo.models.ledger_record import LedgerRecord
+
+            schema = LedgerRecord.model_json_schema()
+            schema["properties"].pop("source_text")
+            tools.append(
+                Tool(
+                    "pendo_ledger_add",
+                    "一次写入一笔账，金额、描述、分类、账户分别传入。此工具已提供完整参数，可直接调用。"
+                    "分类与账户按用户原话填写；省略字段采用声明的默认值。返回完整已保存字段和记录ID。",
+                    schema,
+                    _pendo_ledger_add,
+                )
+            )
         if (
             "xiaoai" in loaded_plugins
             and principal is not None
@@ -821,6 +1104,7 @@ def build_tools(env: ToolEnv, *, loaded_plugins: frozenset[str]) -> dict[str, To
                 for node in env.context.get_command_catalog()
             )
         ):
+            target = {"device": {"type": "string"}, "capability": {"type": "string"}}
             tools += [
                 Tool(
                     "xiaoai_devices",
@@ -841,8 +1125,9 @@ def build_tools(env: ToolEnv, *, loaded_plugins: frozenset[str]) -> dict[str, To
                 Tool(
                     "xiaoai_execute",
                     "直接提交米家结构化操作，由插件校验执行，省去插件模型解析。先读取设备能力。"
-                    "查询用read，设置用set和value，动作用action和args。出粮参数为估算克数，"
+                    "查询用read，设置用set和value，动作用action和args数组（无参数可省略或传[]）。出粮参数为估算克数，"
                     "一份乘以grams_per_portion；严格保留任务数量，整份转换由插件完成。"
+                    "动作成功码表示云端已接收；完成状态按属性回读或设备事件判断，待确认时按已提交交代。"
                     "复杂字符串协议或含义不明时向用户确认。设备任务统一使用这三个专用工具。",
                     _object(
                         {
@@ -851,16 +1136,33 @@ def build_tools(env: ToolEnv, *, loaded_plugins: frozenset[str]) -> dict[str, To
                                 "minItems": 1,
                                 "maxItems": 12,
                                 "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "device": {"type": "string"},
-                                        "capability": {"type": "string"},
-                                        "op": {"type": "string", "enum": ["read", "set", "action"]},
-                                        "value": {},
-                                        "args": {"type": "array", "items": {}},
-                                    },
-                                    "required": ["device", "capability", "op"],
-                                    "additionalProperties": False,
+                                    "anyOf": [
+                                        _object(
+                                            {**target, "op": {"type": "string", "enum": ["read"]}},
+                                            ["device", "capability", "op"],
+                                        ),
+                                        _object(
+                                            {
+                                                **target,
+                                                "op": {"type": "string", "enum": ["set"]},
+                                                "value": {},
+                                            },
+                                            ["device", "capability", "op", "value"],
+                                        ),
+                                        _object(
+                                            {
+                                                **target,
+                                                "op": {"type": "string", "enum": ["action"]},
+                                                "args": {
+                                                    "type": "array",
+                                                    "items": {},
+                                                    "default": [],
+                                                    "description": "按能力 inputs 顺序填写；零参数动作默认 []",
+                                                },
+                                            },
+                                            ["device", "capability", "op"],
+                                        ),
+                                    ]
                                 },
                             }
                         },
@@ -940,10 +1242,42 @@ async def execute_tool(
 
     tool = tools.get(name)
     if tool is None:
-        return ToolResult(f"错误：没有名为 {name} 的工具。可用: {', '.join(tools)}")
+        return ToolResult(
+            f"错误：没有名为 {name} 的工具。可用: {', '.join(tools)}", state="error", progress=False
+        )
     try:
-        return await tool.handler(env, parse_arguments(raw_arguments))
+        result = await tool.handler(env, parse_arguments(raw_arguments))
     except ToolError as exc:
-        return ToolResult(f"错误：{exc}")
+        result = ToolResult(f"错误：{exc}", state="error", progress=False)
     except (OSError, ValueError, TypeError, RuntimeError, PermissionError) as exc:
-        return ToolResult(f"错误：{type(exc).__name__}: {str(exc)[:500]}")
+        result = ToolResult(
+            f"错误：{type(exc).__name__}: {str(exc)[:500]}", state="error", progress=False
+        )
+    if name == "xiaoqing_commands" and result.state == "ok":
+        fingerprint           = hashlib.sha256(result.content.encode("utf-8")).hexdigest()
+        observed              = env.observations.setdefault("tool:xiaoqing_commands", {})
+        observed[fingerprint] = observed.get(fingerprint, 0) + 1
+        if observed[fingerprint] >= 3:
+            result = ToolResult(
+                result.content + "\n这份帮助已重复取得，用法保持不变。请按已有信息执行或交付阻碍。",
+                state    = "blocked",
+                progress = False,
+            )
+        elif observed[fingerprint] == 2:
+            result = ToolResult(
+                result.content + "\n这份帮助与此前相同，可复用已有用法。", progress=False
+            )
+    if result.state == "error" and name not in {
+        "wait",
+        "send_message",
+        "update_plan",
+        "final_answer",
+    }:
+        env.wait_blocked_reason = "工具已返回错误，可根据回报修正输入。当前回报没有提供可轮询状态。"
+    elif (
+        result.progress
+        and not env.closed_scopes
+        and name not in {"wait", "send_message", "update_plan", "xiaoqing_commands"}
+    ):
+        env.wait_blocked_reason = ""
+    return result

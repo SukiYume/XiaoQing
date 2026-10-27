@@ -20,7 +20,7 @@ from core.public_errors import public_error_response
 from core.router import resolve_context_command_invocation
 
 from .config import AgentConfig, load_agent_config
-from .prompts import configured_bot_name
+from .prompts import configured_bot_name, configured_persona
 from .runtime import AgentRuntime
 from .tasks import Actor, AgentTask, ChatRef
 from .triage import TRIAGE_ACTIONS, TriageDecision, triage_turn
@@ -32,8 +32,6 @@ _ROOT_CODE         = "xiaoqing_agent.agent"
 _MAX_HISTORY       = 20
 _MAX_PERSONA_CHARS = 12000
 _MAX_IMAGES        = 6
-_DEFAULT_ACK       = "好，我去弄，弄好了发你。"
-_COMMAND_ACK       = "任务已开始，做完会发到这里；用 /agent status 看进度。"
 _DISABLED_TIP      = "agent 没有开启：把 config.plugins.xiaoqing_agent.enabled 设为 true 后再试。"
 
 HELP_TEXT = """🛠 小青 agent
@@ -124,7 +122,6 @@ async def _start_and_wait(
     goal: str,
     request_text: str,
     source: str,
-    ack: str,
     sender: str                          = "",
     history: list[dict[str, Any]] | None = None,
     images: list[str] | None             = None,
@@ -132,7 +129,7 @@ async def _start_and_wait(
     quoted_text: str                     = "",
     persona: str                         = "",
 ) -> tuple[list[dict[str, Any]], AgentTask | None]:
-    """启动任务并在当轮等一会儿；没做完时回 ``ack``，结果之后由任务主动发送。"""
+    """启动并等待当轮结果；后台任务由执行阶段发送实际进度和最终结果。"""
 
     started = runtime.start(
         context,
@@ -147,14 +144,14 @@ async def _start_and_wait(
         images       = images or [],
         image_files  = image_files or [],
         quoted_text  = quoted_text,
-        persona      = persona,
+        persona      = persona or configured_persona(context),
     )
     if isinstance(started, str):
         return segments(started), None
     outcome = await runtime.wait_inline(context, started, config.inline_wait_seconds)
     if outcome is not None:
         return await runtime.inline_reply(context, started, outcome), started
-    return segments(ack or _DEFAULT_ACK), started
+    return [], started
 
 
 def _reply_text(message: list[dict[str, Any]]) -> str:
@@ -174,13 +171,11 @@ def _decision_from(raw: Any) -> TriageDecision | None:
     if not isinstance(raw, dict):
         return None
     action = str(raw.get("action") or "")
-    if action not in TRIAGE_ACTIONS or action == "chat":
+    if action not in TRIAGE_ACTIONS or action == "conversation":
         return None
     return TriageDecision(
         action,
-        goal    = str(raw.get("goal") or "")[:2000],
-        reply   = str(raw.get("reply") or "")[:200],
-        task_id = str(raw.get("task_id") or "")[:32],
+        task_id=str(raw.get("task_id") or "")[:32],
     )
 
 
@@ -205,10 +200,8 @@ async def handle_turn(
         runtime = get_runtime(context)
         if not runtime.accepting:
             return None
-        # 聊天插件交来的人设（人设卡的人物事实和〔办事〕各节）；agent 不另存一份。
-        persona = turn.get("persona")
-        if isinstance(persona, str) and persona.strip():
-            runtime.persona = persona.strip()[:_MAX_PERSONA_CHARS]
+        persona  = turn.get("persona")
+        persona  = persona.strip()[:_MAX_PERSONA_CHARS] if isinstance(persona, str) else ""
         phase    = str(turn.get("phase") or "")
         history  = _history(turn.get("history"))
         decision = _decision_from(turn.get("decision")) if phase == "act" else None
@@ -216,11 +209,11 @@ async def handle_turn(
             if phase == "act":
                 return None
             decision = await _triage(context, config, runtime, chat, turn, text, history)
-            if decision.action == "chat":
+            if decision.action == "conversation":
                 return None
             if phase == "decide":
                 return {"handled": True, "decision": asdict(decision)}
-        return await _act(context, config, runtime, chat, turn, text, history, decision)
+        return await _act(context, config, runtime, chat, turn, text, history, decision, persona)
     except Exception as exc:
         logger.warning("xiaoqing_agent turn fell back to chat error_type=%s", type(exc).__name__)
         return None
@@ -247,8 +240,7 @@ async def _triage(
         quoted   = str(turn.get("quoted_text") or ""),
         images   = len(_string_list(turn.get("images"), _MAX_IMAGES))
         + len(_string_list(turn.get("image_files"), _MAX_IMAGES)),
-        initiator = chat.user_id,
-        persona   = runtime.persona,
+        initiator=chat.user_id,
     )
     logger.info(
         "xiaoqing_agent triage chat=%s action=%s running=%d elapsed=%.2fs",
@@ -269,6 +261,7 @@ async def _act(
     text: str,
     history: list[dict[str, Any]],
     decision: TriageDecision,
+    persona: str,
 ) -> dict[str, Any]:
     actor  = _actor(context, chat)
     sender = str(turn.get("sender_name") or "")
@@ -284,7 +277,7 @@ async def _act(
         )
         return {"handled": True, "segments": message, "reply_text": _reply_text(message)}
     if decision.action == "update":
-        message = segments(runtime.add_note(chat, decision.task_id, decision.goal, actor, sender))
+        message = segments(runtime.add_note(chat, decision.task_id, text[:2000], actor, sender))
         return {"handled": True, "segments": message, "reply_text": _reply_text(message)}
 
     message, task = await _start_and_wait(
@@ -292,16 +285,15 @@ async def _act(
         config,
         runtime,
         chat,
-        goal         = decision.goal,
+        goal         = text[:2000],
         request_text = text,
         source       = "chat",
-        ack          = decision.reply,
         sender       = sender,
         history      = history,
         images       = _string_list(turn.get("images"), _MAX_IMAGES),
         image_files  = _string_list(turn.get("image_files"), _MAX_IMAGES),
         quoted_text  = str(turn.get("quoted_text") or ""),
-        persona      = runtime.persona,
+        persona      = persona,
     )
     return {
         "handled": True,
@@ -378,7 +370,6 @@ async def handle(
                 goal         = rest,
                 request_text = rest,
                 source       = "command",
-                ack          = _COMMAND_ACK,
                 sender       = sender_display_name(event.get("sender")),
             )
             return runtime.command_reply(task, message) if task is not None else message

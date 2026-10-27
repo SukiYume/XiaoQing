@@ -209,6 +209,38 @@ def test_help_plugin_and_stable_code_queries_cover_the_same_catalog() -> None:
             assert [item.code for item in exact] == [item.code for item in node.walk()]
 
 
+@pytest.mark.parametrize(
+    "query,code",
+    [
+        ("pendo 记账 add", "pendo.pendo.ledger.add"),
+        ("米家 接口", "xiaoai.xiaoai.接口"),
+        ("/米家/调用", "xiaoai.xiaoai.调用"),
+    ],
+)
+def test_help_resolves_aliases_at_every_level(query: str, code: str) -> None:
+    from plugins.bot_core.main import _find_exact_catalog_nodes
+
+    nodes = _find_exact_catalog_nodes(_load_catalog().roots, query)
+    assert [node.code for node in nodes] == [code]
+
+
+def test_agent_exact_help_preserves_every_published_parameter_and_example() -> None:
+    from plugins.xiaoqing_agent.tools import _catalog_lines
+
+    fixture = _load_catalog()
+    context = SimpleNamespace(get_command_catalog=lambda: fixture.roots, principal=None)
+    for root in fixture.roots:
+        if root.plugin in {"xiaoqing_agent", "xiaoqing_chat"}:
+            continue
+        for node in root.walk():
+            text = "\n".join(_catalog_lines(context, " ".join(node.path)))
+            assert node.usage in text and node.help_text in text, node.code
+            assert all(example in text for example in node.examples), node.code
+    text = "\n".join(_catalog_lines(context, "pendo 记账 add"))
+    assert "currency:" in text and "remark:" in text and "cat:" in text
+    assert "pendo.pendo.ledger.edit" not in text
+
+
 def test_mobile_help_progressively_discloses_real_pendo_catalog() -> None:
     """人类帮助只显示当前层；叶节点详情和 JSON 仍保留完整契约。"""
 

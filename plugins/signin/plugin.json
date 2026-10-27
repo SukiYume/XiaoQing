@@ -10,7 +10,7 @@
                 "signin",
                 "签到"
             ],
-            "help": "📝 影视飓风远端签到 | /signin help 查看说明",
+            "help": "为已配置账号执行影视飓风签到。使用 /signin yingshi（简写 y），结果包含远端签到状态；凭据来自 plugins.signin.yingshijufeng。",
             "admin_only": true,
             "usage": "/signin yingshi",
             "examples": ["/signin yingshi"],

@@ -111,11 +111,16 @@ class PersonaCard:
         )
 
     def _render(self, wanted: Callable[[PersonaSection], bool], name: str) -> str:
-        blocks = [
-            (f"## {section.title}\n{section.body}" if section.title else section.body)
-            for section in self.sections
-            if SCOPE_MOODS not in section.scopes and wanted(section)
-        ]
+        blocks: list[str] = []
+        for section in self.sections:
+            if SCOPE_MOODS in section.scopes or not wanted(section):
+                continue
+            if not section.title:
+                blocks.append(section.body)
+                continue
+            title = section.title.rstrip()
+            label = title if ("：" in title or ":" in title) else f"{title}："
+            blocks.append(f"{label}\n{section.body}")
         return "\n\n".join(blocks).replace(_NAME_SLOT, name)
 
 

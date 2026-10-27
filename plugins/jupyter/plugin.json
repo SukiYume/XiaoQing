@@ -12,7 +12,7 @@
                 "py",
                 "python"
             ],
-            "help": "执行 Python 代码或启动 REPL | /py <代码> | /py repl",
+            "help": "在按用户和会话隔离的持久内核执行Python。-t 设0.1–600秒超时，代码限16000字/32KiB；repl 启动10分钟真人输入会话，空闲内核约5分钟关闭。Agent 运行代码使用 run_python。",
             "admin_only": true,
             "priority": 10,
             "usage": "/py [-t 0.1-600] <Python代码> | /py repl",

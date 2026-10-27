@@ -11,7 +11,7 @@
                 "gh",
                 "trending"
             ],
-            "help": "GitHub Trending | /gh [daily|weekly|monthly]",
+            "help": "读取 GitHub Trending；默认 daily，weekly/monthly 分别取周榜/月榜。每次返回当前榜单，参数为这三种周期。",
             "admin_only": false,
             "usage": "/github [daily|weekly|monthly]",
             "examples": ["/github"],

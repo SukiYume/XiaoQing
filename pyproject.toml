@@ -215,7 +215,7 @@ packages = [
     "static/js/*/*.js",
 ]
 "plugins.pendo.web.services" = ["assets/*.zip"]
-"plugins.xiaoqing_chat.config" = ["xiaoqing_config.json", "persona.md"]
+"plugins.xiaoqing_chat.config" = ["xiaoqing_config.json", "persona.md", "agent.md"]
 "plugins.xiaoqing_chat.media" = ["qq_face_builtin_catalog.json"]
 
 # ============================================================

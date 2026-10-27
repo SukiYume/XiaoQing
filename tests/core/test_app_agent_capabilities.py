@@ -810,7 +810,7 @@ async def test_command_runner_keeps_the_receipt_and_separates_each_call(
 ) -> None:
     """命令的发送回执原样交回调用方；每次调用的请求 ID 不同，同一次调用的重试相同。"""
 
-    from core.delivery import DeliveryReceipt, DeliverySegments
+    from core.delivery import CommandOutcome, DeliveryReceipt, DeliverySegments
 
     app      = XiaoQingApp(temp_app_root)
     requests = []
@@ -823,7 +823,11 @@ async def test_command_runner_keeps_the_receipt_and_separates_each_call(
 
     async def pick(_command, _args, _event, context):
         requests.append(context.request_id)
-        return DeliverySegments([{"type": "text", "data": {"text": "图"}}], receipt)
+        return DeliverySegments(
+            [{"type": "text", "data": {"text": "图"}}],
+            receipt,
+            outcome=CommandOutcome("accepted"),
+        )
 
     _register_command(app, "twitter", "twimg", pick)
     runner = _plugin_context_for(
@@ -836,6 +840,7 @@ async def test_command_runner_keeps_the_receipt_and_separates_each_call(
 
     first = await runner.run("/twimg", operation_id="task1-1")
     assert isinstance(first, DeliverySegments) and first.delivery_receipt is receipt
+    assert first.command_outcome == CommandOutcome("accepted")
     await runner.run("/twimg", operation_id="task1-2")
     await runner.run("/twimg", operation_id="task1-2")
     await runner.run("/twimg")

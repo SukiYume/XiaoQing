@@ -586,7 +586,10 @@ async def run_real_experiment(
                     reply_segments = await xiaoqing_chat.handle_smalltalk(
                         clean_text, event, context
                     )
-                    if isinstance(reply_segments, DeliverySegments):
+                    if (
+                        isinstance(reply_segments, DeliverySegments)
+                        and reply_segments.delivery_receipt is not None
+                    ):
                         await reply_segments.delivery_receipt.record(True)
                     prior_segments = [
                         segment

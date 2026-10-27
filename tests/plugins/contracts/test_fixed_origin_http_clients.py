@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 
 import pytest
 
-from core.bounded_http import ResponseFormatError, ResponseLimitError
+from core.bounded_http import HttpStatusError, ResponseFormatError, ResponseLimitError
 from plugins.adnmb import adapi
 from plugins.adnmb.adapi import AdnmbClient
 from plugins.ads_paper.ads_client import ADSClient
@@ -125,9 +125,8 @@ async def test_ads_rejects_wrong_mime_before_reading_body() -> None:
         url          = "https://api.adsabs.harvard.edu/v1/search/query",
     )
 
-    result = await ADSClient("token", _Session(response)).search_papers("frb")
-
-    assert result == []
+    with pytest.raises(ResponseFormatError):
+        await ADSClient("token", _Session(response)).search_papers("frb")
     assert response.content.iterations == 0
 
 
@@ -140,9 +139,8 @@ async def test_ads_huge_error_body_is_closed_without_being_read() -> None:
         url            = "https://api.adsabs.harvard.edu/v1/search/query",
     )
 
-    result = await ADSClient("token", _Session(response)).search_papers("frb")
-
-    assert result == []
+    with pytest.raises(HttpStatusError):
+        await ADSClient("token", _Session(response)).search_papers("frb")
     assert response.content.iterations == 0
     assert response.close_calls >= 1
 

@@ -28,7 +28,11 @@ HELP = """🏠 小爱 · 家庭助手
   小爱 设备
   小爱 能力 台灯（也可以直接发“小爱 台灯”）
 
-⚙ 登录与偏好：小爱 设置"""
+⚙ 登录与偏好：小爱 设置
+
+完整参数：/help 米家 接口 或 /help 米家 调用
+结构化操作：先取“数据”，再查“接口 <设备> [页码]”，按返回规格“调用 <JSON>”。
+read 使用 device/capability/op；set 加 value；action 用 args 数组，零参数动作默认 []。"""
 
 SETTINGS_HELP = """⚙ 小爱 · 设置
 ━━━━━━━━━━━━
@@ -156,6 +160,22 @@ async def handle(
     text = args.strip()
     if not text or text in {"help", "帮助"}:
         return segments(HELP)
+    verb, _, argument = text.partition(" ")
+    if argument and verb in {
+        "设备",
+        "数据",
+        "刷新设备",
+        "设置",
+        "续期",
+        "状态",
+        "检查",
+        "帮助",
+        "help",
+        "取消登录",
+    }:
+        return segments(f"用法：/米家 {verb}\n完整帮助：/help 米家 {verb}")
+    if text in {"接口", "调用", "天气城市", "份量"}:
+        return segments(f"请补全参数，完整用法：/help 米家 {text}")
     if text == "设置":
         summary = home.preference_summary(context)
         return segments(SETTINGS_HELP + ("\n\n已保存\n" + summary if summary else ""))

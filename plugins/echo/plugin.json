@@ -10,7 +10,7 @@
                 "echo",
                 "回显"
             ],
-            "help": "回显最多 3000 字的文本 | /echo <文本>",
+            "help": "原样回显去除首尾空白后的文本，最多3000字符；支持换行和制表符。",
             "admin_only": false,
             "usage": "/echo <文本>",
             "examples": ["/echo hello world"],
@@ -22,7 +22,7 @@
                 "hello",
                 "你好"
             ],
-            "help": "使用当前 QQ 号打招呼 | /hello",
+            "help": "无参数，按当前 QQ 号打招呼；带参数时返回 /hello 用法。",
             "admin_only": false,
             "usage": "/hello",
             "examples": ["/hello"],

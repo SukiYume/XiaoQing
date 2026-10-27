@@ -12,7 +12,7 @@
                 "twitter",
                 "推特"
             ],
-            "help": "🎨 随机推特美图 | /twimg help 查看详细帮助",
+            "help": "从本地推特图片缓存随机取一张图。直接 /twimg；缓存为空时由管理员 /tw_fetch 后台抓取，完成后再次取图。",
             "admin_only": false,
             "usage": "/twimg",
             "examples": ["/twimg"],
@@ -35,7 +35,7 @@
                 "tw_fetch",
                 "抓取推特"
             ],
-            "help": "🔄 后台抓取新图 | /tw_fetch help 查看详细帮助",
+            "help": "管理员启动配置账号的新图片后台抓取；立即回复接收状态，完成后另行通知。完成通知确认后可用 /twimg 取图。",
             "admin_only": true,
             "usage": "/tw_fetch",
             "examples": ["/tw_fetch"],

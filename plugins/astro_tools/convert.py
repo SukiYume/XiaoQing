@@ -13,7 +13,7 @@ def _handle_convert_sync(args: str, context: PluginContextProtocol) -> str:
     args = args.strip()
     if not args:
         return (
-            "请提供转换参数\n示例: /astro convert 3 Jy mJy\n\n"
+            "❌ 请提供转换参数\n示例: /astro convert 3 Jy mJy\n\n"
             "支持的单位:\n"
             "- 流量密度: Jy, mJy, μJy\n"
             "- 长度: pc, kpc, Mpc, ly, AU, m, km\n"
@@ -28,15 +28,17 @@ def _handle_convert_sync(args: str, context: PluginContextProtocol) -> str:
 
         parts = args.split()
         if len(parts) != 3:
-            return "格式: /astro convert <数值> <源单位> <目标单位>\n示例: /astro convert 3 Jy mJy"
+            return (
+                "❌ 格式: /astro convert <数值> <源单位> <目标单位>\n示例: /astro convert 3 Jy mJy"
+            )
 
         # 在交给 Astropy 前先拒绝非有限值，避免把 nan/inf 当成有效科学结果。
         try:
             value = float(parts[0])
         except (ValueError, OverflowError):
-            return f"无效的数值: {parts[0]}\n请提供有效的数字"
+            return f"❌ 无效的数值: {parts[0]}\n请提供有效的数字"
         if not math.isfinite(value):
-            return "数值必须是有限数字"
+            return "❌ 数值必须是有限数字"
 
         from_unit_str = parts[1]
         to_unit_str   = parts[2]
@@ -87,7 +89,7 @@ def _handle_convert_sync(args: str, context: PluginContextProtocol) -> str:
             from_u = unit_map.get(from_unit_str.lower())
             if from_u is None:
                 return (
-                    f"不支持的源单位: {from_unit_str}\n\n"
+                    f"❌ 不支持的源单位: {from_unit_str}\n\n"
                     f"支持标准单位符号 (如 m, s, kg) 及 astropy 单位字符串"
                 )
 
@@ -97,14 +99,14 @@ def _handle_convert_sync(args: str, context: PluginContextProtocol) -> str:
             to_u = unit_map.get(to_unit_str.lower())
             if to_u is None:
                 return (
-                    f"不支持的目标单位: {to_unit_str}\n\n"
+                    f"❌ 不支持的目标单位: {to_unit_str}\n\n"
                     f"支持标准单位符号 (如 m, s, kg) 及 astropy 单位字符串"
                 )
 
         try:
             result = (value * from_u).to(to_u)
             if not math.isfinite(float(result.value)):
-                return "转换结果超出可表示范围"
+                return "❌ 转换结果超出可表示范围"
             # 智能格式化输出
             if abs(result.value) < 0.001 or abs(result.value) > 1e6:
                 result_str = f"{result.value:.6e}"
@@ -113,7 +115,9 @@ def _handle_convert_sync(args: str, context: PluginContextProtocol) -> str:
 
             return f"📐 单位转换\n{value} {from_unit_str} = {result_str} {to_unit_str}"
         except u.UnitConversionError:
-            return f"无法在 {from_unit_str} 和 {to_unit_str} 之间转换\n这两个单位的物理量纲不兼容"
+            return (
+                f"❌ 无法在 {from_unit_str} 和 {to_unit_str} 之间转换\n这两个单位的物理量纲不兼容"
+            )
     except Exception as exc:
         return public_error_message(
             context, exc, logger=context.logger, component="astro_tools.convert"

@@ -668,11 +668,18 @@ async def _run_scheduled_task(
 def _format_result(result: Any) -> list[dict[str, Any]]:
     """把命令层返回值统一转换为消息段。"""
 
+    from core.delivery import CommandOutcome, DeliverySegments
+
     if isinstance(result, dict):
         message = result.get("message", "")
     else:
         message = str(result)
-    return segments(message)
+    outcome = (
+        CommandOutcome("error")
+        if isinstance(result, dict) and result.get("status") == "error"
+        else CommandOutcome("completed")
+    )
+    return DeliverySegments(segments(message), outcome=outcome)
 
 
 def _success_message(message: str) -> dict[str, Any]:
@@ -1000,9 +1007,9 @@ HELP_MAP = {
         "💰 记账 (Ledger)",
         "  - 别名: bill, finance, 记账, 账单",
         "• /pendo ledger add - 交互式记账；金额和描述手动输入，类型/账户/分类可选编号",
-        "• /pendo ledger add <金额> <描述> [cat:分类] [in|out|transfer|type:expense/income/transfer] [account:账户] [to:账户] [merchant:商户] [date:YYYY-MM-DD] [remark:备注] - 快捷记账",
-        "• /pendo ledger quick <金额> <描述> [cat:分类] [in|out|transfer|type:expense/income/transfer] [account:账户] [to:账户] [merchant:商户] [date:YYYY-MM-DD] [remark:备注] - 快速记账",
-        "  - 默认支出；in 标记收入，out/expense 标记支出，transfer 标记账户间转账",
+        "• /pendo ledger add <金额> <描述> [cat:分类] [in|out|transfer|type:expense/income/transfer] [account:账户] [to:账户] [merchant:商户] [date:YYYY-MM-DD] [remark:备注] [currency:币种] - 快捷记账",
+        "• /pendo ledger quick <金额> <描述> [cat:分类] [in|out|transfer|type:expense/income/transfer] [account:账户] [to:账户] [merchant:商户] [date:YYYY-MM-DD] [remark:备注] [currency:币种] - 快速记账",
+        "  - 默认支出、分类其他、账户现金、币种CNY、日期为用户时区今天；in 标记收入，out/expense 标记支出，transfer 标记账户间转账",
         "  - account/from 表示账户，to/counter 表示转入账户，merchant/payee 表示商户",
         '  - 带空格的值可加英文双引号，例如 merchant:"星巴克 人民广场店"',
         "  - 例: /pendo ledger quick 35.5 午饭 cat:餐饮 account:微信 merchant:食堂",
@@ -1015,7 +1022,7 @@ HELP_MAP = {
         "  - 例: /pendo ledger list month account:微信 page:2",
         "• /pendo ledger view <id> - 查看账目详情",
         "• /pendo ledger edit <id> <字段:值> ... - 编辑账目",
-        "  - 字段: amount: title: cat/category: type: account/from: to/counter: merchant/payee: date: remark:",
+        "  - 字段: amount: title: cat/category: type: account/from: to/counter: merchant/payee: date: remark: currency:",
         "  - 例: /pendo ledger edit abc123 amount:50 cat:交通 account:微信",
         "• /pendo ledger delete <id> - 删除账目",
         "• /pendo ledger summary [范围] - 收支汇总统计",
@@ -1118,6 +1125,10 @@ def _show_help(subcommand: str = "") -> str:
         subcommand: 子命令名称，如果提供则显示特定部分的帮助
     """
     subcommand = subcommand.lower().strip() if subcommand else ""
+    invocation = resolve_catalog_invocation(_local_catalog_root(), subcommand)
+    if len(invocation.chain) > 2 and not invocation.arguments:
+        node = invocation.node
+        return "\n".join((node.usage, node.help_text, "", "示例：", *node.examples))
 
     # 别名映射
     aliases = {
@@ -1139,7 +1150,7 @@ def _show_help(subcommand: str = "") -> str:
         parts: list[str] = [
             str(HELP_MAP["header"]),
             "",
-            "🧭 输入 /pendo 查看完整总览，输入 /pendo help <模块> 查看对应帮助",
+            "🧭 /pendo 查看总览；/pendo help <模块> 查看模块；/pendo help <模块> <操作> 查看完整参数",
             "",
         ]
         parts.extend(_render_help_section(target_key))

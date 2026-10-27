@@ -465,7 +465,11 @@ def public_error_response(
         logger    = logger,
         component = component,
     )
-    return [{"type": "text", "data": {"text": message}}]
+    from .delivery import CommandOutcome, DeliverySegments
+
+    return DeliverySegments(
+        [{"type": "text", "data": {"text": message}}], outcome=CommandOutcome("error")
+    )
 
 
 __all__ = [

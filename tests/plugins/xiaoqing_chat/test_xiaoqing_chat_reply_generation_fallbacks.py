@@ -277,9 +277,9 @@ _NOTICE_MARKER = (
     "readable,text,expected",
     [
         # 只发了图：图上文字里的“什么”不算用户在提问，读出来了就说看到了。
-        (True, _NOTICE_MARKER, "看到啦"),
+        (True, _NOTICE_MARKER, "看到了"),
         (True, f"小青 这个几号截止？{_NOTICE_MARKER}", "这个我不敢打包票，先不乱说"),
-        (False, "[图片：图片内容读取失败]", "图我这边没刷出来诶"),
+        (False, "[图片：图片内容读取失败]", "图我这边没刷出来"),
     ],
     ids=["shared", "asked", "unreadable"],
 )
@@ -347,4 +347,4 @@ def test_context_rejection_on_a_read_image_does_not_claim_losing_the_thread(mock
     draft = finish_rejected_candidate(plan, rejected)
 
     assert draft is not None
-    assert draft.text == "看到啦"
+    assert draft.text == "看到了"

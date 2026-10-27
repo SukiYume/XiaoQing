@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from core.args import FLAG_VALUE, ParsedArgs, parse, parse_int, quote_token, tokenize
+from core.delivery import CommandOutcome, DeliverySegments
 from core.interfaces import PluginContextProtocol
 from core.plugin_base import has_control_characters, image, segments, text
 from core.public_errors import public_error_response
@@ -402,7 +403,10 @@ def _format_color_page(
 ) -> Messages:
     total = len(colors)
     if total == 0:
-        return segments(f"❌ {title}：没有结果\n可用 /color list 浏览全部颜色")
+        body = f"{title}：没有结果"
+        return DeliverySegments(
+            segments(body), outcome=CommandOutcome("completed", result_text=body)
+        )
     total_pages = (total + LIST_PAGE_SIZE - 1) // LIST_PAGE_SIZE
     if page > total_pages:
         return segments(f"❌ 第 {page} 页超出范围（共 {total_pages} 页）")
@@ -411,12 +415,22 @@ def _format_color_page(
     lines     = [f"🎨 {title}", ""]
     lines.extend(_color_row(color, start + offset) for offset, color in enumerate(displayed, 1))
     lines.extend(("", f"第 {page}/{total_pages} 页｜共 {total} 种"))
+    result_text = "\n".join(lines)
     if page > 1:
         lines.append(f"上一页：{page_command(page - 1)}")
     if page < total_pages:
         lines.append(f"下一页：{page_command(page + 1)}")
+    else:
+        lines.append("本次查询已到末页。")
     lines.append("查看详情：/color <名称>")
-    return segments("\n".join(lines))
+    return DeliverySegments(
+        segments("\n".join(lines)),
+        outcome=CommandOutcome(
+            "completed",
+            next_command = page_command(page + 1) if page < total_pages else "",
+            result_text  = result_text,
+        ),
+    )
 
 
 def _handle_catalog(request: ColorRequest, colors: Sequence[ColorRecord]) -> Messages:
@@ -463,7 +477,9 @@ async def _handle_name(
                 page         = 1,
                 page_command = lambda page: f"/color search {quoted} --page {page}",
             )
-        return segments(f"❌ 没有收录名称“{request.value}”\n可用 /color list 浏览全部颜色")
+        return DeliverySegments(
+            segments(f"没有收录名称“{request.value}”"), outcome=CommandOutcome("completed")
+        )
     return await _found_color_response(color, picture=request.picture, context=context)
 
 
@@ -602,7 +618,7 @@ async def _handle_auto(
         len(matches),
     )
     if not matches:
-        return segments(f"❌ 没有找到“{value}”\n可用 /color list 浏览全部颜色")
+        return DeliverySegments(segments(f"没有找到“{value}”"), outcome=CommandOutcome("completed"))
     if len(matches) == 1:
         if request.page > 1:
             return segments("❌ 查询结果只有 1 页")

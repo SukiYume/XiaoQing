@@ -258,7 +258,7 @@ def format_recurring_event_created(
         f"🔄 共 {instance_count} 个实例",
     ]
     if remind_count:
-        lines.append(f"⏰ 每项已设置 {remind_count} 个提醒")
+        lines.append(f"⏰ 每项已设置 {remind_count} 个提醒（含默认准点提醒）")
     lines.append(f"\n{display_id}")
     lines.append(f"\n💡 用 /pendo event reminders {display_id} 查看所有实例提醒")
     return "\n".join(lines)
@@ -291,7 +291,7 @@ def format_milestone_event_created(event: dict[str, Any]) -> str:
     if event.get("notes"):
         lines.append(f"📝 {event['notes']}")
     if remind_count:
-        lines.append(f"🔔 已设置 {remind_count} 个提醒")
+        lines.append(f"🔔 已设置 {remind_count} 个提醒（各节点含默认准点提醒）")
 
     display_id = public_id(event["id"])
     lines.append(f"\n{display_id}")
@@ -300,9 +300,8 @@ def format_milestone_event_created(event: dict[str, Any]) -> str:
 
 
 def format_event_created(event: dict[str, Any]) -> str:
-    start_time = ItemFormatter.format_datetime(
-        event["start_time"], tz=event_display_timezone(event)
-    )
+    display_timezone = event_display_timezone(event)
+    start_time = ItemFormatter.format_datetime(event["start_time"], tz=display_timezone)
     remind_count = len(event.get("remind_times", []))
 
     lines = [
@@ -318,6 +317,10 @@ def format_event_created(event: dict[str, Any]) -> str:
         lines.append(f"📝 {event['notes']}")
     if remind_count:
         lines.append(f"🔔 已设置 {remind_count} 个提醒")
+        for remind_time in event["remind_times"]:
+            time_str = ItemFormatter.format_datetime(remind_time, tz=display_timezone)
+            label = "（准点，默认）" if has_time([remind_time], event["start_time"]) else ""
+            lines.append(f"  ⏰ {time_str}{label}")
     display_id = public_id(event["id"])
     lines.append(f"\n{display_id}")
     lines.append(f"\n💡 用 /pendo event reminders {display_id} 查看提醒")
