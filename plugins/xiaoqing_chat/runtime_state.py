@@ -314,7 +314,7 @@ class ChatRuntimeState:
     def pop_persist_task(self, chat_id: str) -> asyncio.Task[Any] | None:
         return self._per_chat.persist_tasks.pop(chat_id, None)
 
-    def clear_transient_chat_state(self, chat_id: str) -> None:
+    def clear_transient_chat_state(self, chat_id: str, *, clear_pending_call: bool = True) -> None:
         """移除一次会话重置后不应继续生效的纯内存状态。"""
         pc = self._per_chat
         for values in (
@@ -325,10 +325,11 @@ class ChatRuntimeState:
             pc.continuous_cooldown_until,
             pc.next_local_id,
             pc.mood_state,
-            pc.pending_bot_name_call,
             pc.reply_gate_decision,
         ):
             values.pop(chat_id, None)
+        if clear_pending_call:
+            pc.pending_bot_name_call.pop(chat_id, None)
 
     def start_accepting_background_tasks(self) -> None:
         self._accepting_background_tasks = True
