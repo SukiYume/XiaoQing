@@ -36,8 +36,8 @@ _PERSONA_INTRO_QUERY_TAIL = (
 # 只在明确点名且重生成仍无法安全回答未知履历时使用。这些表达不补造人物事实，
 # 也不反问用户为什么问，避免把正常聊天推回机械的审讯式承接。
 PERSONA_GROUNDING_FALLBACKS = (
-    "这个嘛……我也说不好诶",
-    "唔，这题我先跳过",
+    "这个嘛……我也说不好",
+    "这个先跳过",
     "这个我真说不上来",
 )
 
@@ -59,13 +59,13 @@ _PUBLIC_IDENTITY_FALLBACK_MAX_CHARS = 120
 
 # 兜底只在重生成耗尽时出现，仍保持人物口吻，不暴露审查、配置或重试流程。
 NOT_READY_FALLBACK = "等我一下，脑子突然卡壳了"
-PRESENCE_FALLBACK  = "在呢在呢"
+PRESENCE_FALLBACK  = "我在"
 UNSURE_FALLBACK    = "这个我真拿不准，不瞎说了"
 UNSURE_ALTERNATE   = "这个我还是说不准，先不乱讲"
 # 图确实没读出来才说加载问题。读出来了就不能再说没看清：只是发图就说看到了，
 # 被问到具体内容又答不稳时，只承认这一点不敢肯定。
-MEDIA_UNREADABLE_FALLBACKS = ("图我这边没刷出来诶", "图好像裂了，我这边打不开")
-MEDIA_SEEN_FALLBACKS       = ("看到啦", "嗯嗯，看到了")
+MEDIA_UNREADABLE_FALLBACKS = ("图我这边没刷出来", "图好像裂了，我这边打不开")
+MEDIA_SEEN_FALLBACKS       = ("看到了", "嗯，看到了")
 MEDIA_UNSURE_FALLBACKS     = ("这个我不敢打包票，先不乱说", "这点我说不准，先不乱讲")
 
 # 质量评估据此识别“审查耗尽后才发出”的回复。
@@ -208,13 +208,13 @@ def _persona_fallback_texts(plan: ReplyGenerationPlan) -> tuple[str, ...]:
     if bot_name and _KNOWN_NAME_QUERY_RE.search(text):
         return (f"我叫{bot_name}。",)
     if requires_configured_profile_boundary(text, plan.effective_identity, bot_name=bot_name):
-        return ("学校城市这些就不在群里报啦，保密～",)
+        return ("这个就不说了", "秘密", "不告诉你")
     if _is_persona_intro_query(text, bot_name=bot_name):
         public_identity = _concise_public_identity(plan.effective_identity.strip().rstrip("。"))
         return (
-            f"{public_identity}。别的慢慢聊就知道啦"
+            f"{public_identity}。别的慢慢聊就知道了"
             if public_identity
-            else "这个嘛，慢慢聊就知道啦",
+            else "这个嘛，慢慢聊就知道了",
         )
     # 按请求稳定轮换起点，连续几轮被拦时不会反复说同一句。
     count = len(PERSONA_GROUNDING_FALLBACKS)
@@ -235,7 +235,7 @@ def _forced_fallback_texts(
     current_image = isinstance(plan.event, dict) and event_has_current_image(plan.event)
     # 这轮发了图时，接不上上下文的兜底（“没跟上你们说的是哪件事”）同样会和读出来的图对不上。
     if failure_code == "media_grounding" or (failure_code == "context_grounding" and current_image):
-        # 刚用过的兜底会被复读检查拦下，每组都备一句，连续几轮时不退化成“在呢在呢”。
+        # 刚用过的兜底会被复读检查拦下，每组都备一句，连续几轮时不退化成“我在”。
         if current_image and event_media_all_unreadable(plan.event):
             texts = MEDIA_UNREADABLE_FALLBACKS
         elif _asks_question(plan):

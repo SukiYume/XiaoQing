@@ -335,6 +335,7 @@ class TestReloadCommand:
             assert result is not None
             assert len(result) > 0
             assert "插件正在后台重载" in str(result)
+            assert result.command_outcome.state == "accepted"
             assert not pending_reload.done()
             mock_context.reload_config.assert_called_once_with()
             mock_context.reload_plugins.assert_called_once_with()

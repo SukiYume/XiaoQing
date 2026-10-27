@@ -7,7 +7,7 @@ import logging
 import threading
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from .interfaces import DeliveryTarget
 from .message import validate_message_segments
@@ -166,12 +166,28 @@ class DeliveryReceipt:
                     self._committed = True
 
 
+@dataclass(frozen=True, slots=True)
+class CommandOutcome:
+    """执行状态、机器可读结果与下一页命令；后台任务由原插件通知完成。"""
+
+    state: Literal["completed", "accepted", "error", "incomplete"]
+    next_command: str = ""
+    result_text: str  = ""
+
+
 class DeliverySegments(list[dict[str, Any]]):
     """Message segments carrying an in-process receipt through the dispatcher."""
 
-    def __init__(self, values: Sequence[dict[str, Any]], receipt: DeliveryReceipt) -> None:
+    def __init__(
+        self,
+        values: Sequence[dict[str, Any]],
+        receipt: DeliveryReceipt | None = None,
+        *,
+        outcome: CommandOutcome | None = None,
+    ) -> None:
         super().__init__(values)
         self.delivery_receipt = receipt
+        self.command_outcome  = outcome
 
 
 @dataclass(frozen=True, slots=True)

@@ -198,13 +198,13 @@ class TestAstroToolsConvert:
     async def test_convert_rejects_non_finite_values(self, mock_context, value):
         result = await astro_convert.handle_convert(f"{value} pc ly", mock_context)
 
-        assert result == "数值必须是有限数字"
+        assert result == "❌ 数值必须是有限数字"
 
     @pytest.mark.asyncio
     async def test_convert_rejects_ignored_trailing_arguments(self, mock_context):
         result = await astro_convert.handle_convert("1 pc ly ignored", mock_context)
 
-        assert result.startswith("格式:")
+        assert result.startswith("❌ 格式:")
 
 
 class TestAstroToolsRedshift:

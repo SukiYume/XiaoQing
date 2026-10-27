@@ -43,7 +43,7 @@ def test_custom_name_is_injected_into_planner_and_generation_prompt() -> None:
     )
     system_prompt = messages[0].content
 
-    assert persona_text == "你的名字是阿澄。\n\n## 你是谁\n- 住校的理工科学生。"
+    assert persona_text == "你的名字是阿澄。\n\n你是谁：\n- 住校的理工科学生。"
     assert persona_text in system_prompt
     assert "小青" not in system_prompt
 
@@ -102,7 +102,7 @@ def test_history_uses_current_name_and_keeps_assistant_role_after_rename() -> No
 def test_persona_card_uses_only_current_name() -> None:
     card = PersonaCard.parse("## 回复示例〔聊天〕\n群友：{{name}}在吗\n可以：在")
 
-    assert card.scoped(SCOPE_CHAT, "阿澄") == "## 回复示例\n群友：阿澄在吗\n可以：在"
+    assert card.scoped(SCOPE_CHAT, "阿澄") == "回复示例：\n群友：阿澄在吗\n可以：在"
 
 
 def test_plugin_help_uses_current_name() -> None:

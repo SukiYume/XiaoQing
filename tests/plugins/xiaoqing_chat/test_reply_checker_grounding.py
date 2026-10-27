@@ -426,6 +426,7 @@ async def test_checker_allows_bounded_persona_story_but_rejects_persona_overreac
     assert overreach.suitable is False
     assert overreach.failure_code == "persona_grounding"
     assert "低风险日常创作" in captured_prompts[0]
+    assert "模糊的当下感受" in captured_prompts[0]
     assert "精确身份、持续关系和现实承诺仍需依据" in captured_prompts[0]
 
 
@@ -1274,7 +1275,7 @@ async def test_checker_preserves_generator_context_and_uses_general_evidence_rul
 async def test_ai_identity_uses_persona_card_facts_as_evidence(monkeypatch):
     reply    = "我是AI，用小青这个角色在群里聊天。"
     facts    = bundled_persona_card().facts("小青")
-    evidence = "坚持自己是真人"
+    evidence = "活生生的真人"
     assert evidence in facts
     remote = AsyncMock(
         return_value=(

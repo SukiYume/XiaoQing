@@ -10,7 +10,7 @@
                 "earthquake",
                 "地震"
             ],
-            "help": "查询最近地震快讯；定时任务推送 4.0 级及以上新快讯",
+            "help": "获取中国地震台网速报最近一条地震快讯。无参数或 latest；手动查询不限震级，定时通知筛选4.0级及以上。支持的查询范围为最近一条。",
             "admin_only": false,
             "usage": "/earthquake [latest]",
             "examples": ["/earthquake"],

@@ -3,6 +3,7 @@
 import logging
 from collections.abc import Sequence
 from typing import Any, Literal
+from urllib.parse import quote
 
 import aiohttp
 
@@ -135,7 +136,6 @@ class ADSClient:
         fields: Sequence[str],
         max_results: int,
         sort: str,
-        component: str,
     ) -> list[dict[str, Any]]:
         """执行统一 ADS 搜索，并只返回结构正确的论文对象。"""
 
@@ -147,29 +147,17 @@ class ADSClient:
             "rows": max_results,
             "sort": sort,
         }
-        try:
-            data = await self._request_json(
-                "GET",
-                f"{self.base_url}/search/query",
-                request_kwargs={"params": params},
-            )
-            if not isinstance(data, dict):
-                return []
-            response = data.get("response", {})
-            if not isinstance(response, dict):
-                return []
-            docs = response.get("docs", [])
-            if not isinstance(docs, list):
-                return []
-            return [doc for doc in docs if isinstance(doc, dict)]
-        except Exception as exc:
-            public_error_message(
-                self.context,
-                exc,
-                logger    = logger,
-                component = component,
-            )
-            return []
+        data = await self._request_json(
+            "GET",
+            f"{self.base_url}/search/query",
+            request_kwargs={"params": params},
+        )
+        if not isinstance(data, dict) or not isinstance(data.get("response"), dict):
+            raise ValueError("ADS search response is missing response data")
+        docs = data["response"].get("docs")
+        if not isinstance(docs, list):
+            raise ValueError("ADS search response is missing the document list")
+        return [doc for doc in docs if isinstance(doc, dict)]
 
     async def search_papers(
         self,
@@ -207,7 +195,6 @@ class ADSClient:
             fields      = fields,
             max_results = max_results,
             sort        = sort,
-            component   = "ads_paper.search",
         )
 
     async def get_bibtex(self, bibcode: str) -> str | None:
@@ -257,7 +244,6 @@ class ADSClient:
             ],
             max_results = 1,
             sort        = "citation_count desc",
-            component   = "ads_paper.get_paper",
         )
         return docs[0] if docs else None
 
@@ -276,7 +262,6 @@ class ADSClient:
             fields      = _RELATION_FIELDS,
             max_results = max_results,
             sort        = "citation_count desc",
-            component   = f"ads_paper.{relation}",
         )
 
     async def get_citations(
@@ -367,13 +352,19 @@ class ADSClient:
         title     = paper_title(paper)
         authors   = ADSClient.format_authors(paper.get("author", []))
         year      = paper.get("year", "N/A")
-        citations = paper.get("citation_count", 0)
+        citations = paper.get("citation_count")
         bibcode   = paper.get("bibcode", "")
         arxiv_id  = ADSClient.extract_arxiv_id(bibcode)
 
-        lines = [f"📄 {title}", f"   👤 {authors}", f"   📅 {year}", f"   📊 Cited: {citations}"]
+        lines = [f"📄 {title}", f"   👤 {authors}", f"   📅 {year}"]
+        if citations is not None:
+            lines.append(f"   📊 Cited: {citations}")
         if arxiv_id:
             lines.append(f"   🔗 arXiv: {arxiv_id}")
         lines.append(f"   📎 Bibcode: {bibcode}")
+        if bibcode:
+            lines.append(
+                f"   🔗 https://ui.adsabs.harvard.edu/abs/{quote(bibcode, safe='')}/abstract"
+            )
 
         return "\n".join(lines)

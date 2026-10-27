@@ -11,7 +11,7 @@
                 "mc",
                 "minecraft"
             ],
-            "help": "Minecraft 服务器聊天与 RCON | /mc help 查看详细帮助",
+            "help": "连接已配置的 Minecraft 服务器并通过 RCON 查询或操作。status 看连接、list 查玩家，say 发全服消息，tell 私信玩家，run 执行服务器命令；先用 connect 配置名 建立当前会话连接。",
             "usage": "/mc <help|say|tell|list|status|run|connect|disconnect> [参数]",
             "examples": [
                 "/mc status",

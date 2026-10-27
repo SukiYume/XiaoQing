@@ -15,7 +15,7 @@
         {
             "name": "ssh",
             "triggers": ["ssh", "SSH", "远程", "ssh连接", "sshconnect"],
-            "help": "SSH 连接、showimg 远端图片与服务器管理；showimg 和 Shell 输入在连接会话内使用",
+            "help": "SSH 服务器管理与真人终端会话。list/config 查询已存服务器；/ssh 名称 连接后可发Shell或showimg命令。Agent 远端操作使用 ssh_servers 和 ssh_run，每次执行一条可自行结束的命令。",
             "admin_only": true,
             "usage": "/ssh [help|list|add|remove|import|config|status|disconnect|服务器名] [参数]",
             "examples": ["/ssh", "/ssh server-name", "/ssh root@server-name"],
@@ -42,7 +42,7 @@
                 {
                     "name": "add",
                     "aliases": ["添加"],
-                    "help": "无参数时引导添加；有参数时快速添加服务器",
+                    "help": "无参数时引导添加；带名称和主机时快速添加，端口默认22，用户名默认root。指定用户名时同时填写端口；名称、主机和用户名各占一个参数。快速模式使用SSH Agent/本机密钥，密码认证通过管理员私聊中的无参引导设置。",
                     "usage": "/ssh add [名称 主机 [端口] [用户名]]",
                     "examples": ["/ssh add", "/ssh add work host.example 22 root"],
                     "invalid_examples": ["/ssh add only-name", "/ssh add work host 22 root extra"]

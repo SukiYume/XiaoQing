@@ -11,7 +11,7 @@
         "chime",
         "frb"
       ],
-      "help": "查询 CHIME/FRB 重复暴目录，或检查上次成功通知后的更新",
+      "help": "查询CHIME/FRB重复暴天体源与脉冲数据，论文检索用paper search。无参数预览上次成功通知后的更新；list 列最近更新的5个源；完整 FRB 名称查单源资料。手动查询保持通知游标。",
       "admin_only": false,
       "usage": "/chime [list|FRB名称]",
       "examples": ["/chime", "/chime FRB20180916B"],

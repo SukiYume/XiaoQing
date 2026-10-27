@@ -93,7 +93,7 @@ class TestPendoConfig:
 
         help_text = _show_help("event")
 
-        assert "🧭 输入 /pendo 查看完整总览" in help_text
+        assert "🧭 /pendo 查看总览" in help_text
         assert "/pendo help <模块>" in help_text
         assert "━━ 🗓️ 日程管理 (Event)" in help_text
         assert "先用 view 集合ID 查看节点ID，再编辑具体节点" in help_text
@@ -103,6 +103,16 @@ class TestPendoConfig:
         assert "多节点事件可直接写“节点名 + 改成/改到 + 新时间”" not in help_text
         assert "/pendo event reminders delete <id> <all|today|future|提醒时间>" in help_text
         assert "━━ ✅ 待办事项 (Todo)" not in help_text
+
+    def test_leaf_help_reuses_complete_catalog_and_accepts_chinese_alias(self):
+        from core.router import resolve_catalog_invocation
+        from plugins.pendo.main import _local_catalog_root, _show_help
+
+        for query in ("ledger add", "记账 add", "ledger edit", "event reminders set"):
+            node = resolve_catalog_invocation(_local_catalog_root(), query).node
+            text = _show_help(query)
+            assert node.usage in text and node.help_text in text
+            assert all(example in text for example in node.examples)
 
     def test_command_router_help_uses_detailed_provider_for_subcommands(self):
         """测试 /pendo help event 复用 main.py 的详细帮助，而不是旧路由摘要。"""

@@ -2,6 +2,7 @@
 
 from typing import Any
 
+from core.delivery import CommandOutcome, DeliverySegments
 from core.plugin_base import Segments, segments
 
 from .ads_client import ADSClient, _validate_bibcode, paper_title
@@ -73,13 +74,15 @@ async def cmd_search(client: ADSClient, args: str) -> Segments:
     papers = await client.search_papers(args, max_results=5)
 
     if not papers:
-        return segments(f"🔍 未找到与 '{args}' 相关的论文")
+        return DeliverySegments(
+            segments(f"🔍 未找到与 '{args}' 相关的论文"), outcome=CommandOutcome("completed")
+        )
 
     lines = [f"📚 论文搜索结果 ({len(papers)} 条):\n"]
     for i, paper in enumerate(papers, 1):
         lines.append(f"{i}. {client.format_paper_info(paper)}\n")
 
-    return segments("\n".join(lines))
+    return DeliverySegments(segments("\n".join(lines)), outcome=CommandOutcome("completed"))
 
 
 async def cmd_author(client: ADSClient, args: str) -> Segments:
@@ -89,13 +92,15 @@ async def cmd_author(client: ADSClient, args: str) -> Segments:
     papers = await client.search_by_author(args, max_results=5)
 
     if not papers:
-        return segments(f"🔍 未找到作者 '{args}' 的论文")
+        return DeliverySegments(
+            segments(f"🔍 未找到作者 '{args}' 的论文"), outcome=CommandOutcome("completed")
+        )
 
     lines = [f"👤 作者 '{args}' 的最新论文 ({len(papers)} 条):\n"]
     for i, paper in enumerate(papers, 1):
         lines.append(f"{i}. {client.format_paper_info(paper)}\n")
 
-    return segments("\n".join(lines))
+    return DeliverySegments(segments("\n".join(lines)), outcome=CommandOutcome("completed"))
 
 
 async def cmd_cite(client: ADSClient, args: str) -> Segments:

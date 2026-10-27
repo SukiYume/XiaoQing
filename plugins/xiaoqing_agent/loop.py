@@ -208,6 +208,7 @@ async def _complete(
         messages,
         tools       = [tool.schema() for tool in tools.values()] if tools else None,
         tool_choice = "auto" if tools else None,
+        temperature = 0.2,
     )
     return response_message(result.response)
 
@@ -218,7 +219,14 @@ async def _wrap_up(
     transcript: list[dict[str, Any]] | None,
     reason: str,
 ) -> Outcome:
-    _append(messages, transcript, {"role": "user", "content": _WRAP_UP_PROMPT})
+    prompt = (
+        _WRAP_UP_PROMPT
+        if reason.startswith("超出")
+        else (
+            f"（系统提示）执行已停止：{reason}。根据已有工具回报直接交付结果，明确已完成、后台已接收与尚未完成的部分。"
+        )
+    )
+    _append(messages, transcript, {"role": "user", "content": prompt})
     try:
         reply = await _complete(env, messages, None)
         _append(messages, transcript, _assistant_message(reply, []))
@@ -226,7 +234,12 @@ async def _wrap_up(
     except (AIError, RuntimeError):
         text = ""
     env.task.error = reason
-    return Outcome(text or "这件事没能在预算内做完，目前没有可以交付的结果。", status="failed")
+    fallback       = (
+        "这件事没能在预算内做完，最后的结果还没整理出来。"
+        if reason.startswith("超出")
+        else "我先停在这里，最后的结果还没整理出来。已执行的操作保存在任务记录里。"
+    )
+    return Outcome(text or fallback, status="failed")
 
 
 async def run_agent_loop(
@@ -241,8 +254,11 @@ async def run_agent_loop(
     ``transcript`` 收到每一条新消息的原样副本，压缩只影响发给模型的 ``messages``。
     """
 
-    task          = env.task
-    empty_replies = 0
+    task             = env.task
+    empty_replies    = 0
+    failures         = 0
+    blocked_attempts = 0
+    stalled_rounds   = 0
     while True:
         if task.steps >= env.config.max_steps:
             return await _wrap_up(env, messages, transcript, "超出步数预算")
@@ -251,11 +267,19 @@ async def run_agent_loop(
         notes = _take_notes(task)
         if notes:
             _append(messages, transcript, {"role": "user", "content": notes})
+            env.user_updates.append(notes)
+            env.closed_scopes.clear()
+            env.observations.clear()
+            env.wait_blocked_reason = ""
+            failures = blocked_attempts = stalled_rounds = 0
         compact_messages(messages)
         task.steps += 1
         task.activity = "思考下一步"
         try:
-            message = await _complete(env, messages, tools)
+            available = tools
+            if env.wait_blocked_reason or env.task.command_results:
+                available = {name: tool for name, tool in tools.items() if name != "wait"}
+            message = await _complete(env, messages, available)
         except (AIError, RuntimeError) as exc:
             logger.warning(
                 "xiaoqing_agent model call failed task=%s error_type=%s",
@@ -281,16 +305,43 @@ async def run_agent_loop(
             continue
 
         final: Outcome | None = None
-        for call in calls:
+        stop_reason           = ""
+        progressed            = False
+        for index, call in enumerate(calls):
             if final is not None:
                 content = "已交付，忽略后续调用"
             elif task.notes:
                 # 这一批调用是按旧要求排的：补充一到，还没开始的都先不做，交给模型重排。
                 content = _SKIPPED_FOR_NOTES
+            elif stop_reason:
+                content = "执行已停止，后续调用已跳过：" + stop_reason
             else:
                 result  = await execute_tool(tools, env, call.name, call.arguments)
                 content = result.content
                 final   = result.final
+                if (
+                    final is not None
+                    and result.state != "blocked"
+                    and call.name == "xiaoqing_command"
+                    and index < len(calls) - 1
+                ):
+                    # delivery 收尾发生在当前调用批次结束；后面已经安排的请求仍需处理。
+                    final = None
+                if result.state == "blocked":
+                    blocked_attempts += 1
+                    failures += 1
+                elif result.state == "error":
+                    failures += 1
+                elif result.progress and call.name not in {
+                    "wait",
+                    "send_message",
+                    "update_plan",
+                    "xiaoqing_commands",
+                }:
+                    failures = blocked_attempts = 0
+                    progressed = True
+                if blocked_attempts >= 2 or failures >= 3:
+                    stop_reason = "工具回报重复或连续失败，当前路径已停止"
                 if final is not None and task.notes:
                     # 交付前发起人又补充了要求：先不交付，下一步把补充交给模型。
                     content = _FINAL_DEFERRED
@@ -307,3 +358,8 @@ async def run_agent_loop(
             )
         if final is not None:
             return final
+        stalled_rounds = stalled_rounds + 1 if env.closed_scopes and not progressed else 0
+        if stalled_rounds >= 2:
+            stop_reason = "已停止的路径没有取得新进展"
+        if stop_reason:
+            return await _wrap_up(env, messages, transcript, stop_reason)

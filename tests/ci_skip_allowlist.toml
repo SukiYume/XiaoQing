@@ -105,7 +105,7 @@ reason = "WSL 启动器只存在于 Windows"
 platforms = ["posix"]
 
 [[allow]]
-nodeid = "tests/plugins/codex/test_codex_process_tree.py::test_real_windows_parent_child_and_grandchild_are_reaped"
+nodeid = "tests/plugins/codex/test_codex_process_tree.py::test_real_windows_parent_child_and_grandchild_are_reaped[[]*]"
 reason = "Windows process-tree integration test"
 platforms = ["posix"]
 

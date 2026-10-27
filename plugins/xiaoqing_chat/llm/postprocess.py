@@ -66,6 +66,9 @@ def split_chat_reply(text: str) -> list[str]:
 
 def _strip_prefix(text: str, bot_name: str) -> str:
     s = text.strip()
+    # 示例标签偶尔会被带入单条回复；完整对话稿保留各人的标签。
+    if s.startswith(("你：", "你:")) and not re.search(r"\n\s*[^\n:：]{1,20}[:：]", s):
+        return s[2:].strip()
     if bot_name:
         for sep in (":", "：", "-", "—"):
             prefix = f"{bot_name}{sep}"

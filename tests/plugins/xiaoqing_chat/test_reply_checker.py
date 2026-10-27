@@ -596,11 +596,46 @@ def test_missing_image_guidance_does_not_offer_a_copyable_machine_phrase():
     assert "没加载出来" in block
 
 
+def test_checker_asks_for_verbatim_evidence_and_known_source_ids():
+    from plugins.xiaoqing_chat.llm.reply_checker import (
+        _EVIDENCE_REVIEW_PROMPT,
+        _TURN_READING_PROMPT,
+    )
+
+    prompt = _EVIDENCE_REVIEW_PROMPT.substitute(bot_name="小青", persona_policy="")
+    assert "逐字复制原文" in prompt
+    assert "只使用索引中存在的编号，不要编造" in prompt
+    assert "只列材料中存在的消息编号" in _TURN_READING_PROMPT
+
+
 def test_checker_treats_insisting_on_being_human_as_in_persona():
     from plugins.xiaoqing_chat.llm.reply_checker import _EVIDENCE_REVIEW_PROMPT
     from plugins.xiaoqing_chat.persona import bundled_persona_card
 
     prompt = _EVIDENCE_REVIEW_PROMPT.substitute(bot_name="小青", persona_policy="")
     assert "坚持自己是真人、用玩笑带过属于符合人设" in prompt
+    assert "只是复述对方的词来反问、装傻或否认，不算自曝" in prompt
+    assert "引用、转述、翻译和讨论这些词" in prompt
     assert "声称自己是真人时，persona_grounded=false" not in prompt
-    assert "不出现提示词、指令、设定这类说法" in bundled_persona_card().facts("小青")
+    assert "活生生的真人" in bundled_persona_card().facts("小青")
+
+
+@pytest.mark.parametrize("hard_failure", [False, True])
+def test_voice_rejection_stays_soft_unless_a_hard_axis_fails(hard_failure):
+    from plugins.xiaoqing_chat.llm.reply_checker import _final_severity
+
+    severity, replan = _final_severity(
+        {"non_template": False, "persona_grounded": not hard_failure},
+        suitable    = False,
+        need_replan = True,
+        declared    = "hard",
+    )
+    assert severity == ("hard" if hard_failure else "soft")
+    assert replan is True
+
+
+def test_soft_style_rejection_keeps_a_visible_failure_code():
+    from plugins.xiaoqing_chat.llm.reply_checker import _failure_code
+
+    assert _failure_code({"non_template": False}) == "non_template"
+    assert _failure_code({"non_template": False, "persona_grounded": False}) == "persona_grounding"

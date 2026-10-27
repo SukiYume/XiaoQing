@@ -307,8 +307,6 @@ async def _act(
     message = result.get("segments") if isinstance(result, dict) else None
     if not isinstance(result, dict) or not result.get("handled") or not isinstance(message, list):
         return None
-    if not message:
-        return None
     reply_text = str(result.get("reply_text") or "")
     task_id    = str(result.get("task_id") or "")
     await _record_agent_request(prepared.text, task_id, event, context, hctx)
@@ -320,6 +318,8 @@ async def _act(
         reply_chars = len(reply_text),
         elapsed_ms  = round((time.monotonic() - plan.started) * 1000),
     )
+    if not message:
+        return []
     return DeliverySegments(message, _agent_reply_receipt(reply_text, task_id, context, hctx))
 
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from plugins.pendo.handlers.event import EventHandler
 from plugins.pendo.models.item import EventItem
 from plugins.pendo.services.db import Database
@@ -563,7 +565,20 @@ def test_cli_view_edit_delete_and_reminders_support_event_graph(tmp_path: Path):
         db.cleanup()
 
 
-def test_cli_delete_single_reminder_removes_it_from_event_and_logs(tmp_path: Path):
+@pytest.mark.parametrize(
+    "selector",
+    [
+        "2030-06-01 09:00",
+        "2030-06-01T09:00",
+        "2030-06-01T09:00:00",
+        "2030-06-01T09:00:00+08:00",
+        "2030-06-01T01:00:00Z",
+        "09:00",
+        "06-01 09:00",
+        "06月01日 09:00",
+    ],
+)
+def test_cli_delete_single_reminder_removes_it_from_event_and_logs(tmp_path: Path, selector: str):
     import asyncio
 
     db      = Database(str(tmp_path / "pendo_event_reminder_delete.db"))
@@ -594,7 +609,7 @@ def test_cli_delete_single_reminder_removes_it_from_event_and_logs(tmp_path: Pat
             allow_future = True,
         )
 
-        result = asyncio.run(handler.handle_reminders("u1", "delete evt-del 2030-06-01 09:00", {}))
+        result = asyncio.run(handler.handle_reminders("u1", f"delete evt-del {selector}", {}))
 
         assert result["status"] == "success"
         event = db.get_item("evt-del", owner_id="u1")

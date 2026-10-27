@@ -5,11 +5,15 @@ from __future__ import annotations
 import json
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from core.ai import AIRequestError
+from core.delivery import CommandOutcome, DeliverySegments
 from plugins.xiaoqing_agent.config import AgentConfig
 from plugins.xiaoqing_agent.loop import (
     AGENT_ROUTE,
@@ -53,6 +57,208 @@ def _setup(tmp_path: Path, script: list, *, config: AgentConfig | None = None):
     tools = build_tools(env, loaded_plugins=frozenset())
     messages = [{"role": "system", "content": "sys"}, {"role": "user", "content": "做事"}]
     return ai, env, tools, messages
+
+
+@pytest.mark.asyncio
+async def test_result_delivery_ends_before_another_model_round(tmp_path):
+    ai, env, _, messages = _setup(
+        tmp_path,
+        [
+            ai_response(
+                "",
+                [
+                    tool_call(
+                        "xiaoqing_command",
+                        {"command": "/search topic", "delivery": "reply"},
+                        "search",
+                    ),
+                ],
+            )
+        ],
+    )
+    runner = AsyncMock(return_value=[{"type": "text", "data": {"text": "五篇论文及链接"}}])
+    env.context.capabilities = replace(
+        env.context.capabilities, command_runner=SimpleNamespace(run=runner)
+    )
+    result = await run_agent_loop(env, build_tools(env, loaded_plugins=frozenset()), messages)
+    assert result.text == "五篇论文及链接"
+    assert runner.await_count == len(ai.calls) == 1
+    assert messages[-1]["content"] == "五篇论文及链接"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("same_batch", [False, True])
+async def test_continued_result_keeps_explicit_combined_task_available(tmp_path, same_batch):
+    ai, env, _, messages = _setup(
+        tmp_path,
+        [
+            ai_response(
+                "",
+                [
+                    tool_call(
+                        "xiaoqing_command", {"command": "/search topic", "delivery": "continue"}
+                    )
+                ],
+            ),
+            ai_response(
+                "",
+                [
+                    tool_call(
+                        "xiaoqing_command", {"command": "/other requested", "delivery": "reply"}
+                    )
+                ],
+            ),
+        ],
+    )
+    if same_batch:
+        first                          = ai.script[0]["choices"][0]["message"]["tool_calls"][0]
+        first["function"]["arguments"] = json.dumps(
+            {"command": "/search topic", "delivery": "reply"}
+        )
+        first_batch = ai.script[0]["choices"][0]["message"]["tool_calls"]
+        first_batch.extend(ai.script.pop()["choices"][0]["message"]["tool_calls"])
+    runner = AsyncMock(
+        side_effect=[
+            [{"type": "text", "data": {"text": "五篇论文"}}],
+            [{"type": "text", "data": {"text": "用户另外要求的目录"}}],
+        ]
+    )
+    env.context.capabilities = replace(
+        env.context.capabilities, command_runner=SimpleNamespace(run=runner)
+    )
+    outcome = await run_agent_loop(env, build_tools(env, loaded_plugins=frozenset()), messages)
+    assert runner.await_count == 2
+    assert len(ai.calls) == (1 if same_batch else 2)
+    assert "目录" in outcome.text
+
+
+@pytest.mark.asyncio
+async def test_repeated_completed_results_end_before_remaining_batch_queries(tmp_path):
+    ai, env, _, messages = _setup(
+        tmp_path,
+        [
+            ai_response(
+                "",
+                [
+                    tool_call(
+                        "xiaoqing_command",
+                        {"command": f"/paper search {term}", "delivery": "continue"},
+                        str(index),
+                    )
+                    for index, term in enumerate(("FRB", "repeater", "review", "host"))
+                ],
+            )
+        ],
+    )
+    runner = AsyncMock(
+        return_value=DeliverySegments(
+            [{"type": "text", "data": {"text": "五篇论文及链接"}}],
+            outcome=CommandOutcome("completed"),
+        )
+    )
+    env.context.capabilities = replace(
+        env.context.capabilities, command_runner=SimpleNamespace(run=runner)
+    )
+    result = await run_agent_loop(env, build_tools(env, loaded_plugins=frozenset()), messages)
+    assert result.status == "done"
+    assert runner.await_count == 3 and len(ai.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_repeated_results_stop_across_query_changes_and_wait(tmp_path):
+    script = [
+        ai_response(
+            "",
+            [
+                tool_call(
+                    "xiaoqing_command",
+                    {"delivery": "continue", "command": f"/paper search {query}"},
+                )
+            ],
+        )
+        for query in ["FRB", "fast radio burst", "repeater"]
+    ]
+    script += [
+        ai_response("", [tool_call("wait", {"seconds": 600})]),
+        ai_response("返回内容一直没变，只拿到了这两条。"),
+    ]
+    ai, env, _, messages = _setup(tmp_path, script)
+    runner = AsyncMock(return_value=[{"type": "text", "data": {"text": "固定的两条结果"}}])
+    env.context.capabilities = replace(
+        env.context.capabilities, command_runner=SimpleNamespace(run=runner)
+    )
+    outcome = await run_agent_loop(env, build_tools(env, loaded_plugins=frozenset()), messages)
+    assert runner.await_count == 3
+    assert outcome.status == "failed"
+    assert "一直没变" in outcome.text
+    assert ai.calls[-1][2]["tools"] is None
+    assert env.task.steps == 4
+
+
+@pytest.mark.asyncio
+async def test_accepted_background_job_cannot_sleep_and_other_work_continues(tmp_path):
+    script = [
+        ai_response(
+            "", [tool_call("xiaoqing_command", {"delivery": "continue", "command": "/tw_fetch"})]
+        ),
+        ai_response("", [tool_call("wait", {"seconds": 600})]),
+        ai_response(
+            "",
+            [
+                tool_call(
+                    "xiaoqing_command", {"delivery": "continue", "command": "/pendo todo list"}
+                )
+            ],
+        ),
+        ai_response("抓图已经开始，完成后会通知；今天有一项待办。"),
+    ]
+    ai, env, _, messages = _setup(tmp_path, script)
+    runner = AsyncMock(
+        side_effect=[
+            DeliverySegments(
+                [{"type": "text", "data": {"text": "后台已接收，完成后通知"}}],
+                outcome=CommandOutcome("accepted"),
+            ),
+            [{"type": "text", "data": {"text": "今天有一项待办"}}],
+        ]
+    )
+    env.context.capabilities = replace(
+        env.context.capabilities, command_runner=SimpleNamespace(run=runner)
+    )
+    outcome = await run_agent_loop(env, build_tools(env, loaded_plugins=frozenset()), messages)
+    assert outcome.status == "done" and runner.await_count == 2
+    assert all(tool["function"]["name"] != "wait" for tool in ai.calls[1][2]["tools"])
+    assert "今天有一项" in outcome.text
+
+
+@pytest.mark.asyncio
+async def test_new_pages_keep_advancing(tmp_path):
+    script = [
+        *[
+            ai_response(
+                "",
+                [
+                    tool_call(
+                        "xiaoqing_command", {"delivery": "continue", "command": f"/job page {i}"}
+                    )
+                ],
+            )
+            for i in range(4)
+        ],
+        ai_response("四页都查到了。"),
+    ]
+    _, env, _, messages = _setup(tmp_path, script)
+    runner = AsyncMock(
+        side_effect=[
+            *[[{"type": "text", "data": {"text": f"第{i}页"}}] for i in range(4)],
+        ]
+    )
+    env.context.capabilities = replace(
+        env.context.capabilities, command_runner=SimpleNamespace(run=runner)
+    )
+    outcome = await run_agent_loop(env, build_tools(env, loaded_plugins=frozenset()), messages)
+    assert outcome.status == "done" and runner.await_count == 4
+    assert env.closed_scopes == {}
 
 
 @pytest.mark.asyncio
@@ -183,6 +389,17 @@ async def test_time_budget_wraps_up_even_if_the_summary_call_fails(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_error_wrap_up_failure_keeps_the_real_stop_reason(tmp_path):
+    script = [ai_response("", [tool_call("unknown_tool", {})]) for _ in range(3)] + [
+        AIRequestError("timeout")
+    ]
+    _, env, tools, messages = _setup(tmp_path, script)
+    outcome = await run_agent_loop(env, tools, messages)
+    assert outcome.status == "failed" and "连续失败" in env.task.error
+    assert "预算" not in outcome.text and "操作保存在任务记录" in outcome.text
+
+
+@pytest.mark.asyncio
 async def test_model_failure_ends_the_task_with_a_plain_message(tmp_path: Path) -> None:
     _ai, env, tools, messages = _setup(tmp_path, [AIRequestError("server_error", status=500)])
     outcome = await run_agent_loop(env, tools, messages)
@@ -270,8 +487,15 @@ def test_compaction_counts_tool_arguments_and_reasoning() -> None:
 @pytest.mark.asyncio
 async def test_transcript_keeps_full_messages_while_the_model_sees_compacted_ones(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
-    big   = "y" * 15_000
+    big = "y" * 15_000
+
+    async def output(_env, _argv, _timeout):
+        return ToolResult(big)
+
+    # 本例验证上下文压缩；真实子进程由使用 Proactor 循环的工具测试覆盖。
+    monkeypatch.setattr("plugins.xiaoqing_agent.tools._run_in_workspace", output)
     steps = [
         ai_response("", [tool_call("run_python", {"code": f"print('{big}')"}, f"c{index}")])
         for index in range(6)

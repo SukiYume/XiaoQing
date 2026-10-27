@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -135,7 +136,7 @@ async def test_handled_turn_returns_agent_reply_and_records_both_sides(
     card = hctx.runtime.cfg.personality.card
     assert turn["persona"] == card.for_agent("小青")
     assert turn["persona"].startswith("你的名字是小青。")
-    assert "记了，打车 32" in turn["persona"]
+    assert "记好了，打车 32" in turn["persona"]
     assert "又喝，明早有你受的" not in turn["persona"]
 
     quiet_side_effects["ensure_user_message_recorded"].assert_awaited_once()
@@ -184,7 +185,6 @@ async def test_reply_receipt_reports_the_delivery_back_to_the_agent(
     [
         None,
         {"handled": False},
-        {"handled": True, "segments": []},
         {"handled": True, "segments": "not a list"},
         RuntimeError("plugin service is unavailable"),
         PermissionError("agent capability requires a current Bot admin"),
@@ -200,6 +200,72 @@ async def test_any_non_handled_outcome_falls_back_to_chat(tmp_path, quiet_side_e
     assert await _delegate(_prepared(), _event(), context, hctx) is None
     quiet_side_effects["ensure_user_message_recorded"].assert_not_awaited()
     hctx.state.memory_store.append.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_wait_boundary_delivers_once_and_followup_uses_the_finished_task(
+    tmp_path,
+    quiet_side_effects,
+):
+    from plugins.xiaoqing_agent import main as agent_main
+    from tests.helpers.xiaoqing_agent_test_support import (
+        FakeAgentContext,
+        ai_response,
+        sent_texts,
+        tool_call,
+    )
+
+    release = asyncio.Event()
+
+    async def finish(_route, _messages, _kwargs):
+        await release.wait()
+        return ai_response("", [tool_call("final_answer", {"text": "记好了，98，走的支付宝"})])
+
+    agent_context = FakeAgentContext(
+        tmp_path / "agent",
+        user_id      = 12345,
+        group_id     = 67890,
+        agent_config = {"inline_wait_seconds": 0.02},
+    )
+    agent_context.ai.script = [
+        ai_response(json.dumps({"action": "task", "goal": "记录订阅费98元", "reply": "记了"})),
+        finish,
+    ]
+
+    async def handle_turn(turn):
+        return await agent_main.handle_turn(turn, agent_context)
+
+    agent = SimpleNamespace(handle_turn=handle_turn, report_delivery=AsyncMock())
+    hctx, context = _hctx(tmp_path / "chat", agent)
+    chat = AsyncMock(return_value=[{"type": "text", "data": {"text": "普通聊天回复"}}])
+    prepared = _prepared(text="帮我记一下，订阅费98，支付宝")
+    reply = await agent_bridge.answer_with_agent_or_chat(prepared, _event(), context, hctx, chat)
+    assert reply == [] and sent_texts(agent_context) == []
+    assert chat.await_count <= 1
+    quiet_side_effects["ensure_user_message_recorded"].assert_awaited_once()
+    hctx.state.memory_store.append.assert_not_called()
+
+    runtime = agent_main.get_runtime(agent_context)
+    task    = next(iter(runtime.running.values()))
+    release.set()
+    assert task.runner is not None
+    await task.runner
+    assert [text.strip() for text in sent_texts(agent_context)] == ["记好了，98，走的支付宝"]
+    records = await runtime.store.recent("g67890", 5)
+    assert len(records) == 1 and records[0]["delivery"] == "sent"
+
+    agent_context.agent_config["inline_wait_seconds"] = 1
+    agent_context.ai.script                           = [
+        ai_response(json.dumps({"action": "task", "goal": "把刚才订阅费的账户改为微信"})),
+        ai_response("", [tool_call("final_answer", {"text": "改好了，走的微信"})]),
+    ]
+    reply = await _delegate(_prepared(text="刚才那笔改成微信"), _event(), context, hctx)
+    assert isinstance(reply, DeliverySegments)
+    assert reply[0]["data"]["text"] == "改好了，走的微信"
+    assert "记好了，98，走的支付宝" in agent_context.ai.calls[-1][1][1]["content"]
+    await reply.delivery_receipt.record(True)
+    hctx.state.memory_store.append.assert_called_once()
+    await agent_main.shutdown(agent_context)
 
 
 @pytest.mark.asyncio

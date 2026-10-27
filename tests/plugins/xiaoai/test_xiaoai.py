@@ -12,6 +12,29 @@ from plugins.xiaoai import client, main
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "command_text",
+    [
+        "设备 extra",
+        "数据 extra",
+        "刷新设备 extra",
+        "续期 extra",
+        "状态 extra",
+        "检查 extra",
+        "帮助 extra",
+        "取消登录 extra",
+        "接口",
+        "调用",
+        "天气城市",
+        "份量",
+    ],
+)
+async def test_explicit_command_mistakes_return_help_before_cloud_or_planner(command_text):
+    reply = await main.handle("xiaoai", command_text, {}, SimpleNamespace())
+    assert "/help 米家 " + command_text.split()[0] in reply[0]["data"]["text"]
+
+
+@pytest.mark.asyncio
 async def test_shared_spec_fetch_reuses_index_and_selects_latest(monkeypatch):
     request = AsyncMock(return_value={"services": []})
     monkeypatch.setattr(client, "request_json", request)

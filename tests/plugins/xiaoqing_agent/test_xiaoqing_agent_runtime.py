@@ -10,7 +10,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from core.delivery import DeliveryReceipt, DeliverySegments
+from core.ai import AIError
+from core.delivery import CommandOutcome, DeliveryReceipt, DeliverySegments
 from core.interfaces import ACTION_BYPASS_SINK_KEY
 from plugins.xiaoqing_agent.config import AgentConfig
 from plugins.xiaoqing_agent.runtime import AgentRuntime
@@ -55,6 +56,78 @@ def _records(data_dir: Path, chat: ChatRef = CHAT) -> list[dict]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "pending,failed", [("买2个苹果", False), ("查CHIME目录", False), ("买2个苹果", True)]
+)
+async def test_delivery_repairs_only_unfinished_original_request_once(tmp_path, pending, failed):
+    first = DeliverySegments(
+        [
+            {
+                "type": "text",
+                "data": {"text": "商店：苹果10金币一个" if not failed else "商店连接超时"},
+            }
+        ],
+        outcome=CommandOutcome("error" if failed else "completed"),
+    )
+    runner = SimpleNamespace(
+        run=AsyncMock(
+            side_effect=[first, [{"type": "text", "data": {"text": "购买成功：苹果2个"}}]]
+        )
+    )
+    script = [
+        ai_response("", [tool_call("xiaoqing_command", {"command": "/shop", "delivery": "reply"})]),
+        ai_response(
+            json.dumps(
+                {"reply": "只查到了商店，购买还没完成。", "unfinished_request": pending},
+                ensure_ascii=False,
+            )
+        ),
+    ]
+    repaired = pending == "买2个苹果" and not failed
+    if repaired:
+        script.extend(
+            [
+                ai_response(
+                    "",
+                    [
+                        tool_call(
+                            "xiaoqing_command", {"command": "/buy apple 2", "delivery": "reply"}
+                        )
+                    ],
+                ),
+                # 再次声称未完成也只能结束本轮，避免核对器造成循环购买。
+                ai_response(
+                    json.dumps(
+                        {"reply": "买好了，2个苹果。", "unfinished_request": pending},
+                        ensure_ascii=False,
+                    )
+                ),
+            ]
+        )
+    script.append(ai_response('{"remove":[]}'))
+    context = FakeAgentContext(tmp_path, ai=FakeAI(script), command_runner=runner)
+    runtime = AgentRuntime(tmp_path)
+    task    = runtime.start(
+        context,
+        CONFIG,
+        CHAT,
+        goal         = "给宠物买2个苹果",
+        request_text = "给宠物买2个苹果",
+        source       = "chat",
+        admin        = True,
+    )
+    outcome = await runtime.wait_inline(context, task, 5)
+    assert outcome is not None
+    await wait_until(lambda: task.runner.done())
+    assert runner.run.await_count == (2 if repaired else 1)
+    assert all("CHIME" not in call.args[0] for call in runner.run.await_args_list)
+    if repaired:
+        assert outcome.text == "买好了，2个苹果。"
+    if failed:
+        assert outcome.status == "failed"
+
+
+@pytest.mark.asyncio
 async def test_fast_task_is_handed_to_the_waiting_turn(tmp_path: Path) -> None:
     context = FakeAgentContext(
         tmp_path, ai=FakeAI([_final("2 的 100 次方是 1267650600228229401496703205376")])
@@ -76,6 +149,189 @@ async def test_fast_task_is_handed_to_the_waiting_turn(tmp_path: Path) -> None:
     transcript = json.loads((tmp_path / "transcripts" / f"{task.task_id}.json").read_text("utf-8"))
     assert transcript["messages"][0]["role"] == "system"
     assert "算 2^100" in transcript["messages"][1]["content"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "review",
+    [
+        ai_response(
+            json.dumps(
+                {"reply": "指令发过去了，设备还没确认灯的状态。要我再帮你调亮度就说。"},
+                ensure_ascii=False,
+            )
+        ),
+        ai_response(),
+        AIError("offline"),
+    ],
+)
+async def test_delivery_review_uses_tool_facts_and_preserves_files_without_repeating_writes(
+    tmp_path: Path,
+    review,
+) -> None:
+    work = tmp_path / "workspaces" / CHAT.key
+    work.mkdir(parents=True)
+    evidence = work / "device.txt"
+    evidence.write_text("已接收，状态待确认", encoding="utf-8")
+    tool_reply = (
+        "已接收；状态待确认。" + "设备回报。" * 300 + "中段事实仍需核对" + "设备回报。" * 300
+    )
+    runner = SimpleNamespace(
+        run=AsyncMock(return_value=[{"type": "text", "data": {"text": tool_reply}}])
+    )
+    ai = FakeAI(
+        [
+            ai_response(
+                "",
+                [
+                    tool_call(
+                        "xiaoqing_command", {"delivery": "continue", "command": "/米家 调用 {}"}
+                    )
+                ],
+            ),
+            _final("灯关了", ["device.txt"]),
+            review,
+            ai_response(json.dumps({"remove": ["要我再帮你调亮度就说。"]})),
+        ]
+    )
+    context = FakeAgentContext(tmp_path, ai=ai, command_runner=runner)
+    runtime = AgentRuntime(tmp_path)
+    task    = runtime.start(
+        context,
+        CONFIG,
+        CHAT,
+        goal         = "关灯",
+        request_text = "关灯",
+        source       = "chat",
+        admin        = True,
+        persona      = "你是小青，说话自然、直接。",
+    )
+    outcome = await runtime.wait_inline(context, task, 5)
+    assert outcome is not None
+    await task.runner
+
+    assert "灯关了" not in outcome.text
+    assert "确认" in outcome.text
+    assert "要我再帮你" not in outcome.text
+    assert outcome.files == [str(evidence.resolve())]
+    valid_review = isinstance(review, dict) and bool(review["choices"][0]["message"]["content"])
+    assert outcome.status == "done" and task.steps == (4 if valid_review else 3)
+    runner.run.assert_awaited_once()
+    assert context.actions == []
+    _, messages, kwargs = ai.calls[-2 if valid_review else -1]
+    assert kwargs.get("tools") is None and kwargs["temperature"] == 0.1
+    assert "你是小青" in messages[0]["content"]
+    assert any("中段事实仍需核对" in str(message.get("content")) for message in messages)
+    assert "中段事实仍需核对" not in task.command_results[0]
+    assert kwargs["extra_payload"]["response_format"] == {"type": "json_object"}
+    assert len(messages) == 2
+    assert "发起人原话：关灯" in messages[-1]["content"]
+    assert "灯关了" not in messages[-1]["content"]
+    assert "待发送正文" not in messages[-1]["content"]
+    await runtime.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_stopped_task_reviews_unsupported_claims_without_retrying_commands(tmp_path):
+    runner = SimpleNamespace(
+        run=AsyncMock(
+            return_value=[
+                {"type": "text", "data": {"text": "检索结果只有占位内容，缺少真实标题和链接"}}
+            ]
+        )
+    )
+    ai = FakeAI(
+        [
+            *[
+                ai_response(
+                    "",
+                    [
+                        tool_call(
+                            "xiaoqing_command",
+                            {"delivery": "continue", "command": f"/paper search {q}"},
+                        )
+                    ],
+                )
+                for q in ["FRB", "repeater", "review"]
+            ],
+            ai_response("", [tool_call("wait", {"seconds": 600})]),
+            ai_response("没查到，不过另一条查询通道肯定可用，还有一篇我凭记忆补充的论文。"),
+            ai_response(
+                json.dumps(
+                    {
+                        "reply": "这次没拿到真实的论文标题和链接，返回内容一直没变，我就停了。",
+                    },
+                    ensure_ascii=False,
+                )
+            ),
+            ai_response('{"remove": []}'),
+        ]
+    )
+    context = FakeAgentContext(tmp_path, ai=ai, command_runner=runner)
+    runtime = AgentRuntime(tmp_path)
+    task    = runtime.start(
+        context, CONFIG, CHAT, goal="找论文", request_text="找论文", source="chat", admin=True
+    )
+    outcome = await runtime.wait_inline(context, task, 5)
+    assert outcome is not None
+    await task.runner
+    assert outcome.status == "failed" and task.status == "failed"
+    assert "真实的论文标题和链接" in outcome.text and "肯定可用" not in outcome.text
+    assert runner.run.await_count == 3 and len(ai.calls) == 7
+    assert ai.calls[-1][2].get("tools") is None
+    assert "缺少真实标题和链接" in str(ai.calls[-1][1])
+    assert "肯定可用" not in str(ai.calls[-1][1])
+    assert "执行状态：failed" in str(ai.calls[-1][1])
+    await runtime.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "screened",
+    [
+        ai_response('{"remove": []}'),
+        ai_response('{"remove": ["this text is absent"]}'),
+        ai_response('{"remove": "wrong type"}'),
+        AIError("offline"),
+    ],
+)
+async def test_delivery_filter_preserves_required_questions_and_falls_back_to_full_facts(
+    tmp_path, screened
+):
+    question = "查到了两个同名记录，你要改哪一个？"
+    facts    = "记录 A：" + "甲" * 1400 + "；记录 B：" + "乙" * 1400 + "末尾完整事实"
+    runner   = SimpleNamespace(
+        run=AsyncMock(return_value=[{"type": "text", "data": {"text": facts}}])
+    )
+    ai = FakeAI(
+        [
+            ai_response(
+                "", [tool_call("xiaoqing_command", {"command": "/records", "delivery": "reply"})]
+            ),
+            ai_response(json.dumps({"reply": question})),
+            screened,
+        ]
+    )
+    context = FakeAgentContext(tmp_path, ai=ai, command_runner=runner)
+    runtime = AgentRuntime(tmp_path)
+    task    = runtime.start(
+        context,
+        CONFIG,
+        CHAT,
+        goal         = "改同名记录",
+        request_text = "改同名记录",
+        source       = "chat",
+        admin        = True,
+    )
+    outcome = await runtime.wait_inline(context, task, 5)
+    await task.runner
+    assert runner.run.await_count == 1
+    if screened == ai_response('{"remove": []}'):
+        assert outcome.text == question
+    else:
+        assert facts in outcome.text and "末尾完整事实" in outcome.text
+    assert "筛选候选回复" in ai.calls[-1][1][1]["content"]
+    await runtime.shutdown()
 
 
 @pytest.mark.asyncio
@@ -678,9 +934,14 @@ def _command_runner(tmp_path: Path, receipts: _ReceiptLog) -> tuple[SimpleNamesp
 
 def _command_steps(files: list[str]) -> list[dict]:
     return [
-        ai_response("", [tool_call("xiaoqing_command", {"command": "/arxiv"})]),
-        ai_response("", [tool_call("xiaoqing_command", {"command": "/twimg"})]),
+        ai_response(
+            "", [tool_call("xiaoqing_command", {"delivery": "continue", "command": "/arxiv"})]
+        ),
+        ai_response(
+            "", [tool_call("xiaoqing_command", {"delivery": "continue", "command": "/twimg"})]
+        ),
         _final("图来了", files),
+        ai_response("图来了"),
     ]
 
 

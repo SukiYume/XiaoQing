@@ -32,7 +32,7 @@ from pydantic import ValidationError
 
 from . import constants
 from .clock import IClock, IRandom, SystemClock, SystemRandom
-from .delivery import DeliveryReceipt, DeliverySegments
+from .delivery import CommandOutcome, DeliveryReceipt, DeliverySegments
 from .interfaces import (
     COMMAND_RUNNER_EVENT_KEY,
     AdminCheck,
@@ -914,10 +914,10 @@ class Dispatcher:
                 },
             }
             receipt = getattr(result, "delivery_receipt", None)
-            result  = (
-                DeliverySegments([*result, note], receipt)
-                if isinstance(receipt, DeliveryReceipt)
-                else [*result, note]
+            result  = DeliverySegments(
+                [*result, note],
+                receipt if isinstance(receipt, DeliveryReceipt) else None,
+                outcome=CommandOutcome("incomplete"),
             )
         return result
 

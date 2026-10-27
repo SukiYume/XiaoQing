@@ -316,6 +316,8 @@ class CommandRunnerCapability(Protocol):
 
         ``sender_name`` 是发起人在原消息里的显示名，只用于命令里显示是谁，不参与权限判断；
         ``operation_id`` 标识这一次调用，插件据此区分独立的两次调用和同一次调用的重试。
+        ``DeliverySegments.command_outcome`` 原样保留执行状态；accepted 表示后台已接收，
+        后续完成通知由原插件负责。next_command 指向下一页结果。
         """
 
 

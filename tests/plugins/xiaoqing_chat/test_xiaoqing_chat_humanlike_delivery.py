@@ -76,6 +76,23 @@ def test_sentence_split_keeps_repeated_marks_with_their_sentence():
     assert parts == ["恭喜阿杰！！！", "四级过了真的稳。", "真的假的？！"]
 
 
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("你：想得美", "想得美"),
+        ("你: 想得美", "想得美"),
+        ("阿青：想得美", "想得美"),
+        ("你说：想得美", "你说：想得美"),
+        ("你：先走\n我：等一下", "你：先走\n我：等一下"),
+        ("```text\n你：先走\n```", "```text\n你：先走\n```"),
+    ],
+)
+def test_example_prefix_cleanup_preserves_dialogue_and_code(raw, expected):
+    assert process_llm_response(
+        raw, ResponsePostProcessConfig(), bot_name="阿青", enable_splitter=False
+    ) == [expected]
+
+
 def test_outbound_bubbles_drop_lone_full_stops_but_keep_tone_and_code():
     assert _text_batches("治不了。\n它已经赢了。") == ["治不了\n它已经赢了"]
     assert _text_batches("嗯。。。") == ["嗯。。。"]
@@ -206,6 +223,7 @@ def test_exhausted_fallbacks_stay_in_character():
     )
     for text in fallbacks:
         assert not any(word in text for word in ("稍后再试", "人设", "配置", "无法确认", "审查"))
+        assert not any(particle in text for particle in ("～", "啦", "哦", "呢", "呀", "诶"))
 
 
 @pytest.mark.parametrize(
