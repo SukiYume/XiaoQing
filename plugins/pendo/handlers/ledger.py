@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from pydantic import ValidationError
+
 from core.plugin_base import run_sync
 
 from ..config import (
@@ -17,6 +19,7 @@ from ..config import (
 from ..core.exceptions import MissingRequiredFieldException
 from ..core.types import CommandMessage, PendoContext, SessionData
 from ..models.item import ItemType, LedgerItem
+from ..models.ledger_record import LedgerRecord
 from ..utils.currency import currency_code, currency_label, group_by_currency
 from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import handle_command_errors
@@ -268,6 +271,43 @@ class LedgerHandler(DbOpsMixin):
             return await self.start_add_session(user_id, context, group_id)
         if command == "quick":
             return await self.quick_add(user_id, rest, context, group_id)
+        if command == "record":
+            try:
+                record = LedgerRecord.model_validate_json(rest)
+            except ValidationError as exc:
+                details = "；".join(
+                    f"{'.'.join(map(str, error['loc']))}: {error['msg']}"
+                    for error in exc.errors(include_input=False, include_url=False)
+                )
+                return {"status": "error", "message": "❌ 记账字段校验失败：" + details}
+            for source_id, field_name, attribute in (
+                (record.category_from, "category", "ledger_category"),
+                (record.account_from, "account", "account_name"),
+            ):
+                if source_id:
+                    source, error = await self._db_get_typed_item_or_message(
+                        source_id, user_id, ItemType.LEDGER.value, "账目"
+                    )
+                    if error:
+                        return error
+                    source = cast(LedgerItem, source)
+                    setattr(record, field_name, getattr(source, attribute))
+            return await self._save_ledger_item(
+                user_id,
+                {
+                    "amount_cents": record.amount_cents,
+                    "title": record.title,
+                    "transaction_type": record.transaction_type,
+                    "ledger_category": record.category or None,
+                    "account_name": record.account or None,
+                    "counter_account_name": record.to_account or None,
+                    "merchant": record.merchant,
+                    "ledger_date": record.date,
+                    "currency": record.currency,
+                    "remark": record.remark,
+                },
+                group_id,
+            )
         if command == "list":
             return await self.list_ledger(user_id, rest, context)
         if command == "view":
@@ -287,7 +327,7 @@ class LedgerHandler(DbOpsMixin):
             "管理账目、查看收支和做快速记录。\n\n"
             "可用命令:\n"
             "• /pendo ledger add - 交互式记账\n"
-            "• /pendo ledger add <金额> <描述> [cat:分类] [in|out|transfer] [account:账户] [to:账户] [merchant:商户] - 快捷记账\n"
+            "• /pendo ledger add <金额> <描述> [cat:分类] [in|out|transfer] [account:账户] [to:账户] [merchant:商户] [date:日期] [remark:备注] [currency:CNY] - 快捷记账\n"
             "• /pendo ledger quick <金额> <描述> [cat:分类] [type:类型] [account:账户] [to:账户] [merchant:商户] [date:日期] [remark:备注] [currency:CNY] - 快速记账\n"
             "• /pendo ledger list [范围] [type:expense/income/transfer] [account:账户] [cat:分类] [amount:N或N..M] [ex] - 查看账目\n"
             "  范围: today/week/month/year/last7d/2026-03/start..end\n"
@@ -296,7 +336,8 @@ class LedgerHandler(DbOpsMixin):
             "• /pendo ledger edit <id> <字段:值> ... - 编辑\n"
             "  字段: amount: title: cat: type: account: to: merchant: date: remark: currency:\n"
             "• /pendo ledger delete <id> - 删除\n"
-            "• /pendo ledger summary [范围] - 收支汇总"
+            "• /pendo ledger summary [范围] - 收支汇总\n"
+            "完整参数和示例：/pendo help ledger add、/pendo help ledger edit"
         )
 
     # 交互式记账
@@ -680,7 +721,7 @@ class LedgerHandler(DbOpsMixin):
         tokens                      = text.split()
         remaining_tokens: list[str] = []
         for token in tokens:
-            parsed_type = parse_ledger_transaction_type(token)
+            parsed_type = parse_ledger_transaction_type(token) if raw_type is None else None
             if parsed_type is not None:
                 transaction_type = parsed_type
             else:
@@ -698,6 +739,8 @@ class LedgerHandler(DbOpsMixin):
             return {}, f"❌ 无法识别金额: {parts[0]}"
 
         title = parts[1].strip() if len(parts) > 1 else ""
+        if len(title) >= 2 and (title[0], title[-1]) in {('"', '"'), ("“", "”")}:
+            title = title[1:-1].strip()
         if not title:
             return {}, "❌ 请提供账目描述"
 

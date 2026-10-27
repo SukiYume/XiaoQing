@@ -7,7 +7,7 @@
         {
             "name": "astro",
             "triggers": ["astro"],
-            "help": "天文工具箱：时间、坐标、单位、红移、公式、天体和常数",
+            "help": "天文计算：time 转时间，coord 转坐标，convert <数值> <源单位> <目标单位> 转单位（如 convert 3 Jy mJy，数值与单位分别填入），redshift 算宇宙学距离，formula 查公式，obj 查天体，const 查常数。完整格式见各子命令帮助。",
             "admin_only": false,
             "usage": "/astro <time|coord|convert|redshift|formula|obj|const> [参数]",
             "examples": ["/astro time now", "/astro convert 3 Jy mJy"],
@@ -15,9 +15,9 @@
             "subcommands": [
                 {
                     "name": "time",
-                    "help": "转换 ISO、JD、MJD、Unix 时间，空参数表示当前时间",
+                    "help": "空参数/now 取当前时间；ISO时间按UTC解释。数值建议明确jd/mjd/unix以确定格式；Unix单位秒。输出UTC、JD、MJD和Unix。",
                     "usage": "/astro time [now|jd <值>|mjd <值>|unix <值>|时间值]",
-                    "examples": ["/astro time", "/astro time 2026-01-30T12:00:00"],
+                    "examples": ["/astro time 2026-10-27T12:00:00", "/astro time mjd 60419.5", "/astro time unix 1706616000"],
                     "invalid_examples": ["/astro time not-a-time"],
                     "subcommands": [
                         {
@@ -44,7 +44,7 @@
                         },
                         {
                             "name": "unix",
-                            "help": "把 Unix 时间戳转换为天文时间",
+                            "help": "把以秒为单位的Unix时间戳转换为UTC和天文时间，可带小数。",
                             "usage": "/astro time unix <时间戳>",
                             "examples": ["/astro time unix 1706616000"],
                             "invalid_examples": ["/astro time unix nope"]
@@ -62,21 +62,21 @@
                 },
                 {
                     "name": "coord",
-                    "help": "转换 ICRS、银道和黄道坐标",
+                    "help": "输入两个坐标值。RA含冒号或h/m/s时按时角，纯数字按度；Dec按度或度分秒。galactic/ecliptic 的经纬均为度。返回ICRS、银道或黄道转换结果。",
                     "usage": "/astro coord <RA> <Dec> | /astro coord <galactic|ecliptic> <经度> <纬度>",
-                    "examples": ["/astro coord 12:34:56 +12:34:56"],
+                    "examples": ["/astro coord 12:34:56 +12:34:56", "/astro coord 188.7333 12.5822", "/astro coord galactic 120 30"],
                     "invalid_examples": ["/astro coord 12:34:56"],
                     "subcommands": [
                         {
                             "name": "galactic",
-                            "help": "把银道坐标转换为 ICRS",
+                            "help": "输入银经、银纬，单位为度；转换为ICRS赤道坐标。",
                             "usage": "/astro coord galactic <银经> <银纬>",
                             "examples": ["/astro coord galactic 120 30"],
                             "invalid_examples": ["/astro coord galactic 120"]
                         },
                         {
                             "name": "ecliptic",
-                            "help": "把黄道坐标转换为 ICRS",
+                            "help": "输入黄经、黄纬，单位为度；转换为ICRS赤道坐标。",
                             "usage": "/astro coord ecliptic <黄经> <黄纬>",
                             "examples": ["/astro coord ecliptic 90 23.5"],
                             "invalid_examples": ["/astro coord ecliptic 90"]
@@ -94,7 +94,7 @@
                 },
                 {
                     "name": "convert",
-                    "help": "转换 Astropy 支持的物理单位",
+                    "help": "严格三个参数：有限数值、源单位、目标单位；复合单位写km/s、erg/s等无空格形式。支持Jy/mJy、pc/kpc/Mpc、Hz/GHz、K、eV/erg等Astropy兼容单位；源和目标须量纲兼容。",
                     "usage": "/astro convert <数值> <源单位> <目标单位>",
                     "examples": ["/astro convert 3 Jy mJy"],
                     "invalid_examples": ["/astro convert 3 Jy"],
@@ -112,7 +112,7 @@
                 },
                 {
                     "name": "redshift",
-                    "help": "按 Planck 2018 宇宙学参数计算红移距离和年龄",
+                    "help": "输入0–1100的无量纲红移值，按Planck2018模型返回光度距离、角直径距离、共动距离、回溯时间和宇宙年龄。",
                     "usage": "/astro redshift <0-1100>",
                     "examples": ["/astro redshift 0.5"],
                     "invalid_examples": ["/astro redshift -1"],

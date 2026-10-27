@@ -107,6 +107,31 @@ def test_ledger_list_filters_use_cents_and_validate_boundaries() -> None:
     assert parsed["title"] == "购买资料 https://example.com"
 
 
+@pytest.mark.parametrize("description", ['"年度 订阅"', "“年度 订阅”", "年度 订阅"])
+def test_ledger_quick_preserves_description_and_explicit_custom_fields(description: str) -> None:
+    from plugins.pendo.handlers.ledger import LedgerHandler
+
+    parsed, error = LedgerHandler._parse_quick_ledger_data(
+        f"99.47 {description} cat:服务 account:信用卡"
+    )
+    assert error is None
+    assert parsed["title"] == "年度 订阅"
+    assert parsed["ledger_category"] == "服务"
+    assert parsed["account_name"] == "信用卡"
+
+
+def test_ledger_explicit_type_preserves_a_description_named_transfer() -> None:
+    from plugins.pendo.handlers.ledger import LedgerHandler
+
+    parsed, error = LedgerHandler._parse_quick_ledger_data(
+        "500 转账 type:transfer account:银行卡 to:微信"
+    )
+    assert error is None
+    assert parsed["title"] == "转账"
+    assert parsed["transaction_type"] == "transfer"
+    assert parsed["counter_account_name"] == "微信"
+
+
 @pytest.mark.asyncio
 async def test_ledger_session_uses_scoped_identity_and_rejects_corrupt_state(
     monkeypatch: pytest.MonkeyPatch,

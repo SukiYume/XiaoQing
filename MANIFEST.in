@@ -12,6 +12,7 @@ recursive-include plugins/pendo/web/scriptable *.js
 recursive-include plugins/pendo/web/static *.html *.svg *.css *.js
 recursive-include plugins/pendo/web/services/assets *.zip
 include plugins/xiaoqing_chat/config/xiaoqing_config.json
+recursive-include plugins/xiaoqing_chat/config *.md
 include plugins/xiaoqing_chat/media/qq_face_builtin_catalog.json
 
 # Repository tools for training, migration, experiments, tests, and development.

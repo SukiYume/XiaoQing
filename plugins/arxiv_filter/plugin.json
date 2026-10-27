@@ -11,7 +11,7 @@
 				"arxiv",
 				"论文"
 			],
-			"help": "今日 arXiv 论文推荐 (AI筛选)",
+			"help": "获取当前模型与研究兴趣筛选的今日 arXiv 推荐。直接 /arxiv；关键词搜索使用 /paper search，推荐兴趣由插件配置决定。",
 			"admin_only": false,
 			"usage": "/arxiv",
 			"examples": ["/arxiv"],

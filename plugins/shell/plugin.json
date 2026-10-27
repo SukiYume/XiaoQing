@@ -12,7 +12,7 @@
                 "sh",
                 "exec"
             ],
-            "help": "💻 执行本地命令 | /shell help 查看权限边界和使用说明",
+            "help": "在 Bot 主机执行已启用命令。list 查看入口，help 查看实际终端、默认超时与路径边界。命令需要自行结束；Agent 本机任务使用 run_shell，工作目录由任务环境提供。",
             "admin_only": true,
             "priority": 20,
             "usage": "/shell <启用的本地命令>",

@@ -7,7 +7,7 @@
         {
             "name": "dict",
             "triggers": ["dict", "词典", "字典"],
-            "help": "天文学中英词典 | /dict <词汇> [--exact] [--page 页码] [--size 每页条数]",
+            "help": "查询天文学中英词典，自动判断方向；多词查询按全部关键词匹配。--exact 完整匹配，--page 从1开始，--size 1–100，默认每页10条。翻页命令保留查询与选项。",
             "admin_only": false,
             "usage": "/dict <词汇> [--exact] [--page 页码] [--size 1-100]",
             "examples": [

@@ -275,6 +275,9 @@ class TestMilestoneEventHandler:
         result = asyncio.run(run())
         assert result["status"] == "success"
         assert "会议室在3楼" in result["message"]
+        assert "2 个提醒" in result["message"]
+        assert "2030-04-05 09:00" in result["message"]
+        assert "2030-04-06 09:00（准点，默认）" in result["message"]
 
 
 class TestMilestoneReminderMessage:

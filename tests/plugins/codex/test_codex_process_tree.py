@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from plugins.codex import runner
+from tests.helpers.asyncio_tools import run_with_subprocess_loop
 
 
 class _FakeProcess:
@@ -188,16 +189,12 @@ async def test_windows_treats_missing_reaped_target_as_already_terminated(monkey
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows process-tree integration test")
-def test_real_windows_parent_child_and_grandchild_are_reaped():
-    policy = asyncio.WindowsProactorEventLoopPolicy()
-    loop   = policy.new_event_loop()
-    try:
-        loop.run_until_complete(_exercise_real_windows_process_tree())
-    finally:
-        loop.close()
+@pytest.mark.parametrize("pause_stderr", [False, True])
+def test_real_windows_parent_child_and_grandchild_are_reaped(pause_stderr):
+    run_with_subprocess_loop(lambda: _exercise_real_windows_process_tree(pause_stderr))
 
 
-async def _exercise_real_windows_process_tree() -> None:
+async def _exercise_real_windows_process_tree(pause_stderr: bool) -> None:
     import ctypes
     import subprocess
 
@@ -245,6 +242,12 @@ async def _exercise_real_windows_process_tree() -> None:
         int,
         (await asyncio.wait_for(process.stdout.readline(), timeout=5)).split(),
     )
+    pipes = [process._transport.get_pipe_transport(fd) for fd in (1, 2)]
+    if pause_stderr:
+        # 缓冲区背压会暂停读取，进程退出时仍可能留有未收尾的输出管道。
+        assert process.stderr is not None
+        process.stderr.feed_data(b"x" * (256 * 1024))
+        assert not pipes[1].is_reading()
 
     try:
         result = await runner.terminate_process_tree(
@@ -272,6 +275,8 @@ async def _exercise_real_windows_process_tree() -> None:
                     check          = False,
                     capture_output = True,
                 )
+        await runner._drain_process_after_termination(process)
+    assert all(pipe.is_closing() for pipe in pipes)
 
 
 @pytest.mark.asyncio

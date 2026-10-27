@@ -1420,24 +1420,22 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         normalized = cls._normalize_remind_time(remind_time, reference)
         if normalized is None:
             return False
-        reminder_candidates = {remind_time, remind_time.replace("T", " ")}
-        reminder_without_seconds = normalized.replace(second=0, microsecond=0).isoformat(
-            timespec="minutes"
-        )
-        reminder_candidates.add(reminder_without_seconds)
-        reminder_candidates.add(reminder_without_seconds.replace("T", " "))
-        if selector in reminder_candidates:
-            return True
+        requested = cls._normalize_remind_time(selector, reference)
+        if requested is not None:
+            return requested.replace(second=0, microsecond=0) == normalized.replace(
+                second=0, microsecond=0
+            )
 
-        formats = ("%Y-%m-%d %H:%M", "%m-%d %H:%M", "%m月%d日 %H:%M")
+        formats = ("%m-%d %H:%M", "%m月%d日 %H:%M", "%H:%M")
         for fmt in formats:
             try:
                 parsed = datetime.strptime(selector, fmt)
             except ValueError:
                 continue
 
-            if fmt.startswith("%m"):
-                parsed = parsed.replace(year=normalized.year)
+            parsed = parsed.replace(year=normalized.year)
+            if fmt == "%H:%M":
+                parsed = parsed.replace(month=normalized.month, day=normalized.day)
             normalized_wall_time = normalized.replace(tzinfo=None, second=0, microsecond=0)
             return parsed == normalized_wall_time
         return False
@@ -1495,7 +1493,10 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             expected_version = event.version,
         )
 
-        lines            = [f"✅ 已更新提醒: {event.title or '无标题'}", f"🔔 共 {len(remind_times)} 个提醒"]
+        lines = [
+            f"✅ 已更新提醒: {event.title or '无标题'}",
+            f"🔔 共 {len(remind_times)} 个提醒（含默认准点提醒）",
+        ]
         display_timezone = event_display_timezone(event)
         for t in remind_times:
             lines.append(

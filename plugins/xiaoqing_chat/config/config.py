@@ -58,7 +58,7 @@ def _validated_regex_pattern(value: str) -> str:
     return pattern
 
 
-DEFAULT_BOT_NAME_ONLY_REPLIES = ("在呢", "嗯？", "怎么啦", "我在", "有事吗")
+DEFAULT_BOT_NAME_ONLY_REPLIES = ("在", "嗯？", "怎么了", "我在", "有事吗")
 
 
 class DebugConfig(BaseModel):
@@ -116,11 +116,11 @@ class PersonalityConfig(BaseModel):
     persona_file: str = ""
     # 加载配置时读入的人设卡，不来自配置文件。
     card: PersonaCard = Field(default_factory=bundled_persona_card, exclude=True)
-    # 允许角色为闲聊补充普通、低风险且与稳定人设一致的日常片段。
-    # 真实用户、第三方、外部事实和现实承诺仍由回复检查器按证据约束。
+    # 允许角色为闲聊补充模糊的当下感受和一次性小事。
+    # 可核对的具体人名、地点、时长和需要兑现的承诺仍由回复检查器按证据约束。
     allow_low_stakes_persona_fiction: bool = True
     # 人设卡〔心境〕里的随机心境：抽中的概率与持续时间。
-    state_probability: Probability = 0.30
+    state_probability: Probability = 0.18
     # 选中一个 state 后，持续多久才考虑重摇。最小/最大之间随机取一个值。
     state_min_duration_seconds: PositiveDurationSeconds = 7200.0  # 2h
     state_max_duration_seconds: PositiveDurationSeconds = 21600.0  # 6h
@@ -366,12 +366,12 @@ class XiaoQingChatConfig(BaseModel):
     pfc_followup_action_window_seconds: NonNegativeSeconds = 120.0
     temperature: float = Field(default=0.8, ge=0.0, le=2.0, allow_inf_nan=False)
     top_p: float = Field(default=0.9, gt=0.0, le=1.0, allow_inf_nan=False)
-    max_tokens: int = Field(default=512, ge=1, le=32_768)
+    max_tokens: int = Field(default=768, ge=1, le=32_768)
     ban_words: list[str] = Field(default_factory=list, max_length=1000)
     ban_regex: list[str] = Field(default_factory=list, max_length=100)
     noisy_external_source_plugins: list[str] = Field(default_factory=list, max_length=100)
     fallback_idle_replies: list[str] = Field(
-        default_factory=lambda: ["我在听", "你接着说", "我想一下"]
+        default_factory=lambda: ["我在听", "接着说", "我想一下"]
     )
     bot_name_only_replies: list[str] = Field(
         default_factory=lambda: list(DEFAULT_BOT_NAME_ONLY_REPLIES)

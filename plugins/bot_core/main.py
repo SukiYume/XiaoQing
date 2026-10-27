@@ -14,6 +14,7 @@ from collections.abc import Mapping
 from typing import Any, NoReturn, cast
 
 from core.args import parse_int
+from core.delivery import CommandOutcome, DeliverySegments
 from core.interfaces import (
     ACTION_BYPASS_SINK_KEY,
     PluginContextProtocol,
@@ -21,7 +22,7 @@ from core.interfaces import (
 )
 from core.plugin_base import build_action, run_sync, segments
 from core.public_errors import public_error_response
-from core.router import CommandCatalogNode
+from core.router import CommandCatalogNode, resolve_catalog_invocation
 
 logger = logging.getLogger(__name__)
 
@@ -491,6 +492,12 @@ def _find_exact_catalog_nodes(
     normalized = _normalized_help_query(query)
     if not normalized:
         return ()
+    tokens = normalized.replace("/", " ").split()
+    for root in catalog:
+        if tokens[0] in {root.name.casefold(), *(alias.casefold() for alias in root.aliases)}:
+            invocation = resolve_catalog_invocation(root, " ".join(tokens[1:]))
+            if not invocation.arguments:
+                return (invocation.node,)
     return tuple(
         node for node in _flatten_catalog(catalog) if normalized in _catalog_exact_terms(node)
     )
@@ -925,7 +932,10 @@ async def _handle_reload(context: PluginContextProtocol) -> list[dict[str, Any]]
         reload_task = context.reload_plugins()
         if reload_task is None:
             logger.warning("配置已重载，但插件后台重载未启动")
-            return segments("⚠️ 配置已重载，但插件重载未启动")
+            return DeliverySegments(
+                segments("⚠️ 配置已重载，但插件重载未启动"),
+                outcome=CommandOutcome("incomplete"),
+            )
 
         notification_ready = _register_reload_completion_notification(
             reload_task,
@@ -934,10 +944,16 @@ async def _handle_reload(context: PluginContextProtocol) -> list[dict[str, Any]]
         )
         if not notification_ready:
             logger.warning("配置已重载，但插件重载完成通知未登记")
-            return segments("⚠️ 配置已重载，插件正在后台重载，但完成通知不可用")
+            return DeliverySegments(
+                segments("⚠️ 配置已重载，插件正在后台重载，但完成通知不可用"),
+                outcome=CommandOutcome("accepted"),
+            )
 
         logger.info("配置已重载，插件后台重载已启动")
-        return segments("✅ 配置已重载，插件正在后台重载")
+        return DeliverySegments(
+            segments("✅ 配置已重载，插件正在后台重载，完成后通知"),
+            outcome=CommandOutcome("accepted"),
+        )
     except Exception as exc:
         return public_error_response(
             context,

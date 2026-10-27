@@ -9,10 +9,10 @@
     {
       "name": "help",
       "triggers": ["help", "h", "帮助", "commands", "命令目录", "catalog"],
-      "help": "用适合手机阅读的分层目录查看插件、命令路径或结构化目录",
+      "help": "查询命令帮助：完整路径或命令码直达详情，关键词搜索；page N 翻页，json 导出结构化目录。/help 无参数列插件总览。",
       "admin_only": false,
       "usage": "/help [插件名|命令路径|命令码|关键词] [page N]",
-      "examples": ["/help", "/help pendo", "/help pendo todo add"],
+      "examples": ["/help", "/help pendo ledger add", "/help json pendo ledger add", "/help 宠物 page 2"],
       "invalid_examples": ["/help page 0"],
       "subcommands": [
         {

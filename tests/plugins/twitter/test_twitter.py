@@ -953,13 +953,15 @@ async def test_manual_fetch_returns_immediately_and_notifies_on_completion(
     result = await twitter.handle("tw_fetch", "", {}, context)
 
     assert "已开始后台抓取" in result[0]["data"]["text"]
+    assert result.command_outcome.state == "accepted"
     await asyncio.wait_for(started.wait(), timeout=1.0)
     notification = twitter._MANUAL_NOTIFICATION_TASK
     assert notification is not None and not notification.done()
 
     duplicate = await twitter.handle("tw_fetch", "", {}, context)
     assert "正在后台抓取" in duplicate[0]["data"]["text"]
-    assert "/twimg" in duplicate[0]["data"]["text"]
+    assert "完成后会通知" in duplicate[0]["data"]["text"]
+    assert duplicate.command_outcome.state == "accepted"
     assert calls == 1
 
     release.set()

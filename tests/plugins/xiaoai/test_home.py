@@ -113,6 +113,37 @@ async def test_entire_plan_validates_before_any_action(env):
 
 
 @pytest.mark.asyncio
+async def test_zero_input_action_defaults_to_empty_args_and_keeps_duplicate_identity(env):
+    ctx, io, cat, _, _ = env
+    request = plan("action", "a2.2")
+    result  = await operations.execute_plan(ctx, io, cat, request, {"message_id": 1})
+    assert "指令已提交" in result and "设备状态：待确认" in result
+    io.miot_action.assert_awaited_once_with("123", (2, 2), [])
+    assert "args" not in request["operations"][0]
+    repeated = await operations.execute_plan(
+        ctx,
+        io,
+        cat,
+        plan("action", "a2.2", args=[]),
+        {"message_id": 2},
+    )
+    assert "重复保护" in repeated
+    io.miot_action.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_missing_required_action_args_prevents_every_write(env):
+    ctx, io, cat, _, _ = env
+    request = plan(value=30)
+    request["operations"].extend(plan("action", "a2.1")["operations"])
+    with pytest.raises(client.BridgeError):
+        await operations.execute_plan(ctx, io, cat, request, {})
+    io.miot_set_props.assert_not_awaited()
+    io.miot_action.assert_not_awaited()
+    assert not (ctx.data_dir / "device-requests.json").exists()
+
+
+@pytest.mark.asyncio
 async def test_set_and_readback(env):
     ctx, io, cat, _, _ = env
     text = await operations.execute_plan(ctx, io, cat, plan(value=100), {"message_id": 1})

@@ -391,6 +391,22 @@ class TestColorDataManager:
 
 class TestColorHandleFixes:
     @pytest.mark.asyncio
+    async def test_search_exposes_machine_pagination_separately_from_ui_hints(self, tmp_path):
+        context = self._context(tmp_path)
+        first   = await color_main.handle("color", "search 红", {}, context)
+        assert first.command_outcome.next_command == "/color search 红 --page 2"
+        assert "查看详情" in text_segments_text(first)
+        assert "查看详情" not in first.command_outcome.result_text
+        last = await color_main.handle("color", "search 红 --page 7", {}, context)
+        assert last.command_outcome.state == "completed" and last.command_outcome.next_command == ""
+        assert "第 7/7 页" in last.command_outcome.result_text
+        empty = await color_main.handle("color", "search 绝不匹配的颜色", {}, context)
+        assert (
+            empty.command_outcome.state == "completed" and empty.command_outcome.next_command == ""
+        )
+        assert "没有结果" in empty.command_outcome.result_text
+
+    @pytest.mark.asyncio
     async def test_color_bare_spectype_flag_lists_all_types(self, monkeypatch):
         context            = MagicMock()
         context.plugin_dir = ROOT / "plugins" / "color"

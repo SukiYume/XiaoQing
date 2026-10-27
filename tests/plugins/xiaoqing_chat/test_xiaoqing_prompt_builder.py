@@ -67,14 +67,14 @@ def test_default_persona_card_moods_only_describe_current_conversation_style() -
         for mood in moods
         for marker in ("曾经", "上次", "去年", "最近", "刚刚", "已经")
     )
-    assert cfg.fallback_idle_replies == ["我在听", "你接着说", "我想一下"]
+    assert cfg.fallback_idle_replies == ["我在听", "接着说", "我想一下"]
     assert cfg.personality.allow_low_stakes_persona_fiction is True
     facts = cfg.personality.card.facts("小青")
     assert "女生" in facts and "大二" in facts and "物理" in facts
     assert "动画" in facts and "天文" in facts
     chat = cfg.personality.card.scoped(SCOPE_CHAT, "小青")
-    assert "接梗往前推一步" in chat and "真想知道才问" in chat
-    assert "不为了显得深入而升华" in cfg.personality.card.scoped(SCOPE_DEEP, "小青")
+    assert "接梗往前推一步" in chat and "追问留给确实缺的信息" in chat
+    assert "追问服务于交流推进" in cfg.personality.card.scoped(SCOPE_DEEP, "小青")
     assert cfg.memory.conversation_idle_gap_seconds == 1800.0
 
 
@@ -130,6 +130,31 @@ def test_prompt_builder_can_disable_persona_story_creation() -> None:
     system_prompt = msgs[0].content
     assert "日常创作许可" not in system_prompt
     assert "没有明确写出的具体往事" in system_prompt
+
+
+def test_prompt_builder_limits_story_creation_to_vague_daily_details() -> None:
+    personality = PersonalityConfig(
+        card                             = _CARD,
+        allow_low_stakes_persona_fiction = True,
+    )
+
+    msgs = build_prompt_messages(
+        is_private    = False,
+        bot_name      = "小青",
+        sender_name   = "测试用户",
+        think_level   = 0,
+        history       = [],
+        current_text  = "大家讲个近况",
+        personality   = personality,
+        keyword_rules = [],
+        regex_rules   = [],
+        request_id    = "loose-persona",
+    )
+
+    system_prompt = msgs[0].content
+    assert "日常创作许可" in system_prompt
+    assert "模糊的当下感受" in system_prompt
+    assert "可核对的具体人名" in system_prompt
 
 
 def test_brain_chat_keeps_base_persona_and_adds_mode_rules() -> None:

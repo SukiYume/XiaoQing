@@ -9,7 +9,7 @@
         {
             "name": "flickr",
             "triggers": ["flickr", "flicker", "弗里克"],
-            "help": "📷 Flickr 公共摄影精选、搜索、用户与相册浏览",
+            "help": "搜索Flickr照片：关键词检索用 search <关键词>；标签检索用 search --tags <标签>，多标签逗号连接。许可 --license cc（CC）或 public-domain（公共领域），默认any。排序 --sort relevance/interesting/new/old。返回首张，more [1–5] 继续；info 查详情。无参数取今日精选。",
             "admin_only": false,
             "usage": "/flickr [search|commons|user|album|more|info|help]",
             "examples": ["/flickr"],
@@ -18,16 +18,16 @@
                 {
                     "name": "search",
                     "aliases": ["搜索"],
-                    "help": "按关键词、标签、排序、许可和拍摄日期搜索公开照片",
-                    "usage": "/flickr search <关键词> [--tags a,b] [--sort relevance|interesting|new|old] [--license any|cc|public-domain] [--date YYYY-MM|YYYY-MM-DD]",
-                    "examples": ["/flickr search aurora --sort interesting", "/flickr 搜索 星云 --license any"],
+                    "help": "关键词可含空格，也可仅指定--tags；多个标签用逗号连接且共同匹配。默认--sort relevance、--license any；--date按拍摄日期筛选（YYYY-MM或YYYY-MM-DD）。返回首张，more 继续。",
+                    "usage": "/flickr search [关键词] [--tags a,b] [--sort relevance|interesting|new|old] [--license any|cc|public-domain] [--date YYYY-MM|YYYY-MM-DD]",
+                    "examples": ["/flickr search Milky Way --sort interesting", "/flickr search --tags nebula,telescope --license cc"],
                     "invalid_examples": ["/flickr search", "/flickr search aurora --sort random"]
                 },
                 {
                     "name": "commons",
                     "aliases": ["典藏", "公共典藏"],
-                    "help": "搜索 Flickr Commons 公共典藏",
-                    "usage": "/flickr commons <关键词> [搜索选项]",
+                    "help": "仅搜索Flickr Commons，参数与search相同，可仅给--tags；默认相关度排序、全部公开许可。",
+                    "usage": "/flickr commons [关键词] [搜索选项]",
                     "examples": ["/flickr commons astronomy"],
                     "invalid_examples": ["/flickr commons"]
                 },
@@ -50,7 +50,7 @@
                 {
                     "name": "more",
                     "aliases": ["更多", "下一张"],
-                    "help": "继续当前 Flickr 结果，可一次发送 1 到 5 张",
+                    "help": "继续同一用户、同一会话的上次查询，15分钟有效；数量1–5，默认1。过期时重新执行search/user/album或精选查询。",
                     "usage": "/flickr more [1-5]",
                     "examples": ["/flickr more", "/flickr more 3"],
                     "invalid_examples": ["/flickr more 0", "/flickr more 6"]

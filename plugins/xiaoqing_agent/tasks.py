@@ -98,6 +98,8 @@ class AgentTask:
     held_receipts: list[HeldReceipt] = field(default_factory=list, repr=False)
     # 当轮回复里内嵌的图片，等聊天侧回报发没发出去时一起结算。
     inline_files: list[str] = field(default_factory=list, repr=False)
+    # 保留有界命令回报供追问定位记录；用户回复按人设自然表达。
+    command_results: list[str] = field(default_factory=list, repr=False)
 
     @property
     def elapsed(self) -> float:
@@ -124,6 +126,7 @@ class AgentTask:
             "files": list(outcome.files) if outcome is not None else [],
             "error": self.error[:500],
             "delivery": self.delivery,
+            "command_results": list(self.command_results),
         }
 
 

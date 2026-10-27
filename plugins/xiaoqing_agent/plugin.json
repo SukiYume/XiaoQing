@@ -23,7 +23,7 @@
         {
             "name": "agent",
             "triggers": ["agent"],
-            "help": "小青 agent：直接执行任务、查看进度、停止任务和查看记录",
+            "help": "执行任务并交付结果，status 查运行状态，stop 停止任务，history 查记录，result 补发结果。短任务当轮交付，耗时任务后台继续并按实际进展反馈；任务权限跟随发起人。",
             "usage": "/agent <run|status|stop|history|result|help> [参数]",
             "contexts": ["private", "group"],
             "examples": ["/agent status"],

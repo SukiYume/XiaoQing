@@ -21,6 +21,63 @@ from tests.helpers.settings_snapshot import with_settings_reader
 ROOT = REPOSITORY_ROOT
 
 
+@pytest.mark.asyncio
+async def test_search_delivers_titles_and_links_promised_by_command_help() -> None:
+    client = SimpleNamespace(
+        search_papers=AsyncMock(
+            return_value=[
+                {
+                    "title": ["A repeating fast radio burst"],
+                    "author": ["Spitler, L."],
+                    "year": "2016",
+                    "bibcode": "2016Natur.531..202S",
+                }
+            ]
+        ),
+        format_paper_info=ADSClient.format_paper_info,
+    )
+    result  = await paper_commands.cmd_search(cast(ADSClient, client), "fast radio burst")
+    message = text_segments_text(result)
+    assert "A repeating fast radio burst" in message
+    assert "Cited:" not in message
+    assert "Cited: 0" in ADSClient.format_paper_info(
+        {"title": "Zero citations", "citation_count": 0}
+    )
+    assert result.command_outcome.state == "completed"
+    assert "https://ui.adsabs.harvard.edu/abs/2016Natur.531..202S/abstract" in message
+    client.search_papers.assert_awaited_once_with("fast radio burst", max_results=5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload", [None, {"error": "upstream error"}, {"response": {"docs": None}}]
+)
+async def test_search_rejects_invalid_service_payload_instead_of_empty_results(
+    monkeypatch, payload
+):
+    client = ADSClient("token", object())
+    monkeypatch.setattr(client, "_request_json", AsyncMock(return_value=payload))
+    with pytest.raises(ValueError, match="ADS search response"):
+        await client.search_papers("FRB")
+
+
+@pytest.mark.asyncio
+async def test_search_timeout_reaches_command_error_boundary(tmp_path, monkeypatch):
+    context = with_settings_reader(
+        SimpleNamespace(
+            secrets      = {"plugins": {"ads_paper": {"ads_token": "test-token"}}},
+            state        = {},
+            data_dir     = tmp_path,
+            http_session = object(),
+            request_id   = "search-timeout",
+        )
+    )
+    monkeypatch.setattr(ADSClient, "_request_json", AsyncMock(side_effect=TimeoutError()))
+    result = await ads_main.handle("paper", "search FRB", {"user_id": 1}, context)
+    assert result.command_outcome.state == "error"
+    assert "未找到" not in text_segments_text(result)
+
+
 # ============================================================
 # Tests
 # ============================================================

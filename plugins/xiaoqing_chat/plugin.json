@@ -21,7 +21,7 @@
     {
       "name": "xc",
       "triggers": ["xc"],
-      "help": "拟人聊天、会话状态、长期记忆、表达学习、模型和审查管理",
+      "help": "拟人聊天与会话管理。/xc 后直接写聊天内容，stats 查状态，memory 关键词 检索本会话记忆，model 查询模型。此入口处理真人消息，Agent 通过共享人设直接表达结果。",
       "admin_only": false,
       "priority": 5,
       "usage": "/xc <聊天内容> | /xc <子命令> [参数]",

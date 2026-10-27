@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -13,6 +15,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from core.delivery import CommandOutcome, DeliverySegments
 from core.router import build_command_catalog_node
 from plugins.xiaoqing_agent.config import AgentConfig
 from plugins.xiaoqing_agent.shells import resolve_shell
@@ -31,6 +34,316 @@ from tests.helpers.xiaoqing_agent_test_support import ADMIN_ID, GROUP_ID, FakeAg
 PNG_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delivery", [None, "unknown", 1])
+async def test_command_requires_valid_delivery_before_execution(tmp_path, delivery):
+    runner = SimpleNamespace(run=AsyncMock())
+    env = _env(tmp_path, FakeAgentContext(tmp_path / "data", command_runner=runner))
+    args = {"command": "/catalog"}
+    if delivery is not None:
+        args["delivery"] = delivery
+    result = await execute_tool(_tools(env), env, "xiaoqing_command", args)
+    assert result.state == "error" and "delivery" in result.content
+    runner.run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "delivery,expected_calls", [("reply", 1), ("all_pages", 2), ("continue", 1)]
+)
+async def test_command_delivery_uses_explicit_pages_and_result_text(
+    tmp_path, delivery, expected_calls
+):
+    runner = SimpleNamespace(
+        run=AsyncMock(
+            side_effect=[
+                DeliverySegments(
+                    [{"type": "text", "data": {"text": "第一项。查看详情：/catalog detail"}}],
+                    outcome=CommandOutcome(
+                        "completed", next_command="/catalog page 2", result_text="第一项"
+                    ),
+                ),
+                DeliverySegments(
+                    [{"type": "text", "data": {"text": "第二项。继续试试其他功能"}}],
+                    outcome=CommandOutcome("completed", result_text="第二项"),
+                ),
+            ]
+        )
+    )
+    env = _env(tmp_path, FakeAgentContext(tmp_path / "data", command_runner=runner))
+    result = await execute_tool(
+        _tools(env), env, "xiaoqing_command", {"command": "/catalog", "delivery": delivery}
+    )
+    assert runner.run.await_count == expected_calls
+    assert "查看详情" not in result.content and "试试其他功能" not in result.content
+    assert (result.final is None) == (delivery == "continue")
+    if delivery == "all_pages":
+        assert "第一项" in result.final.text and "第二项" in result.final.text
+        assert "后续分页：无" in result.final.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["error", "cycle", "budget", "update"])
+async def test_pagination_preserves_partial_results_and_stops_on_failure_or_update(
+    tmp_path, failure
+):
+    env   = _env(tmp_path, FakeAgentContext(tmp_path / "data"))
+    calls = []
+
+    async def command(value, **_kwargs):
+        calls.append(value)
+        if len(calls) == 2:
+            if failure == "update":
+                env.task.notes.append("只需要第一项")
+            if failure == "budget":
+                env.deadline = time.monotonic()
+        state        = "error" if failure == "error" and len(calls) == 2 else "completed"
+        next_command = "/catalog" if failure == "cycle" else f"/catalog page {len(calls) + 1}"
+        return DeliverySegments(
+            [{"type": "text", "data": {"text": f"第{len(calls)}次：{state}"}}],
+            outcome=CommandOutcome(state, next_command=next_command),
+        )
+
+    env.context.capabilities = replace(
+        env.context.capabilities, command_runner=SimpleNamespace(run=command)
+    )
+    result = await execute_tool(
+        _tools(env), env, "xiaoqing_command", {"command": "/catalog", "delivery": "all_pages"}
+    )
+    assert len(calls) <= 2
+    assert (result.final is not None) == (failure == "error")
+    assert "第1次" in result.content
+    if failure in {"cycle", "budget"}:
+        assert result.state == "blocked" and "尚未取齐" in result.content
+    elif failure == "error":
+        assert result.state == "error"
+        assert result.final.status == "failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delivery", ["reply", "continue"])
+async def test_delivery_preserves_command_attachment_without_copying_path(tmp_path, delivery):
+    runner = SimpleNamespace(
+        run=AsyncMock(
+            return_value=[
+                {
+                    "type": "image",
+                    "data": {"file": "base64://" + base64.b64encode(PNG_BYTES).decode()},
+                },
+            ]
+        )
+    )
+    env = _env(tmp_path, FakeAgentContext(tmp_path / "data", command_runner=runner))
+    result = await execute_tool(
+        _tools(env), env, "xiaoqing_command", {"command": "/picture", "delivery": delivery}
+    )
+    if delivery == "continue":
+        assert result.final is None
+        result = await execute_tool(_tools(env), env, "final_answer", {"text": "图片给你了"})
+    assert result.final is not None and len(result.final.files) == 1
+    assert Path(result.final.files[0]).read_bytes() == PNG_BYTES
+    text_only = await execute_tool(
+        _tools(env), env, "final_answer", {"text": "只发文字", "files": []}
+    )
+    assert text_only.final.files == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("completed", [False, True])
+async def test_unchanged_result_reports_no_progress_before_stopping(tmp_path, completed):
+    from tests.core.test_command_catalog import _load_catalog
+
+    runner = SimpleNamespace(
+        run=AsyncMock(
+            return_value=DeliverySegments(
+                [{"type": "text", "data": {"text": "两篇论文及链接"}}],
+                outcome=CommandOutcome("completed") if completed else None,
+            )
+        )
+    )
+    context = FakeAgentContext(
+        tmp_path / "data", catalog=_load_catalog().roots, command_runner=runner
+    )
+    env   = _env(tmp_path, context)
+    tools = _tools(env)
+    first = await execute_tool(
+        tools, env, "xiaoqing_command", {"delivery": "continue", "command": "/paper search FRB"}
+    )
+    second = await execute_tool(
+        tools,
+        env,
+        "xiaoqing_command",
+        {"delivery": "continue", "command": "/paper search fast radio burst"},
+    )
+    third = await execute_tool(
+        tools,
+        env,
+        "xiaoqing_command",
+        {"delivery": "continue", "command": "/paper search repeater"},
+    )
+    assert first.progress and first.content.startswith("两篇论文及链接")
+    assert not second.progress and "未取得新信息" in second.content
+    assert second.state == "ok" and third.state == "blocked"
+    assert (third.final is not None) == completed
+    if completed:
+        assert third.final.status == "done"
+
+
+@pytest.mark.asyncio
+async def test_repeated_service_failure_closes_same_command_across_page_changes(tmp_path):
+    from tests.core.test_command_catalog import _load_catalog
+
+    runner = SimpleNamespace(
+        run=AsyncMock(
+            return_value=DeliverySegments(
+                [{"type": "text", "data": {"text": "连接超时"}}], outcome=CommandOutcome("error")
+            )
+        )
+    )
+    env = _env(
+        tmp_path,
+        FakeAgentContext(tmp_path / "data", catalog=_load_catalog().roots, command_runner=runner),
+    )
+    for page in (2, 2, 3):
+        result = await execute_tool(
+            _tools(env),
+            env,
+            "xiaoqing_command",
+            {"command": f"/color search 红 --page {page}", "delivery": "continue"},
+        )
+    assert result.state == "blocked"
+    assert runner.run.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_denied_catalog_and_command_report_blocked_without_running(tmp_path):
+    from tests.core.test_command_catalog import _load_catalog
+
+    runner = SimpleNamespace(run=AsyncMock())
+    context = FakeAgentContext(
+        tmp_path / "data", catalog=_load_catalog().roots, command_runner=runner, is_admin=False
+    )
+    env   = _env(tmp_path, context)
+    tools = _tools(env)
+    for query in ("ssh", "qingssh", "shell", "codex", "问答库"):
+        result = await execute_tool(tools, env, "xiaoqing_commands", {"query": query})
+        assert result.state == "blocked" and "权限" in result.content
+    denied = await execute_tool(
+        tools, env, "xiaoqing_command", {"delivery": "continue", "command": "/ssh list"}
+    )
+    assert denied.state == "blocked"
+    runner.run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unchanged_help_is_bounded_and_new_queries_remain_available(tmp_path):
+    from tests.core.test_command_catalog import _load_catalog
+
+    env = _env(
+        tmp_path,
+        FakeAgentContext(
+            tmp_path / "data",
+            catalog=_load_catalog().roots,
+            command_runner=SimpleNamespace(run=AsyncMock()),
+        ),
+    )
+    tools   = _tools(env)
+    results = [
+        await execute_tool(tools, env, "xiaoqing_commands", {"query": "github"}) for _ in range(3)
+    ]
+    assert [result.state for result in results] == ["ok", "ok", "blocked"]
+    assert results[0].progress and not results[1].progress
+    new_query = await execute_tool(tools, env, "xiaoqing_commands", {"query": "color"})
+    assert new_query.state == "ok" and new_query.progress
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["completed", "error", "incomplete"])
+async def test_command_outcome_is_visible_to_model_without_text_prefix(tmp_path, state):
+    from core.delivery import CommandOutcome, DeliverySegments
+
+    runner = SimpleNamespace(
+        run=AsyncMock(
+            return_value=DeliverySegments(
+                [{"type": "text", "data": {"text": "服务返回的说明"}}],
+                outcome=CommandOutcome(state),
+            )
+        )
+    )
+    env = _env(tmp_path, FakeAgentContext(tmp_path / "data", command_runner=runner))
+    result = await execute_tool(
+        _tools(env), env, "xiaoqing_command", {"delivery": "continue", "command": "/demo"}
+    )
+    assert f"执行状态：{state}" in result.content
+    assert result.state == ("ok" if state == "completed" else "error")
+
+
+@pytest.mark.asyncio
+async def test_background_acceptance_closes_only_its_command(tmp_path):
+    from core.delivery import CommandOutcome, DeliverySegments
+    from tests.core.test_command_catalog import _load_catalog
+
+    runner = SimpleNamespace(
+        run=AsyncMock(
+            side_effect=[
+                DeliverySegments([], outcome=CommandOutcome("accepted")),
+                [{"type": "text", "data": {"text": "已有缓存图片"}}],
+            ]
+        )
+    )
+    context = FakeAgentContext(
+        tmp_path / "data", catalog=_load_catalog().roots, command_runner=runner
+    )
+    env     = _env(tmp_path, context)
+    tools   = _tools(env)
+    started = await execute_tool(
+        tools, env, "xiaoqing_command", {"delivery": "continue", "command": "/tw_fetch"}
+    )
+    repeated = await execute_tool(
+        tools, env, "xiaoqing_command", {"delivery": "continue", "command": "/tw_fetch"}
+    )
+    cached = await execute_tool(
+        tools, env, "xiaoqing_command", {"delivery": "continue", "command": "/twimg"}
+    )
+    assert started.state == "accepted" and repeated.state == "blocked"
+    assert cached.content == "已有缓存图片" and cached.state == "ok"
+    assert runner.run.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_ledger_tool_and_legacy_command_always_attach_initiator_source(tmp_path):
+    from tests.core.test_command_catalog import _load_catalog
+
+    runner = SimpleNamespace(
+        run=AsyncMock(return_value=[{"type": "text", "data": {"text": "记账成功"}}])
+    )
+    context = FakeAgentContext(
+        tmp_path / "data", catalog=_load_catalog().roots, command_runner=runner
+    )
+    env                   = _env(tmp_path, context)
+    env.task.request_text = "记账 会员99.47 服务 信用卡"
+    tools = build_tools(env, loaded_plugins=frozenset({"pendo"}))
+    assert "source_text" not in tools["pendo_ledger_add"].parameters["properties"]
+    await execute_tool(
+        tools,
+        env,
+        "pendo_ledger_add",
+        {"amount_cents": 9947, "title": "会员", "source_text": "伪造来源"},
+    )
+    await execute_tool(
+        tools,
+        env,
+        "xiaoqing_command",
+        {"delivery": "continue", "command": "/pendo ledger add 99.47 会员 cat:服务 account:信用卡"},
+    )
+    for call in runner.run.await_args_list:
+        command = call.args[0]
+        assert command.startswith("/pendo ledger record ")
+        payload = json.loads(command.removeprefix("/pendo ledger record "))
+        assert payload["source_text"] == env.task.request_text
+        assert payload["amount_cents"] == 9947
 
 
 @pytest.mark.asyncio
@@ -60,6 +373,91 @@ async def test_catalog_combines_keywords_and_paginates(tmp_path):
     second = await execute_tool(_tools(env), env, "xiaoqing_commands", {"query": "demo", "page": 2})
     assert "page=2" in first.content and "/item40" not in first.content
     assert "/item40" in second.content and "/item44" in second.content
+
+
+@pytest.mark.asyncio
+async def test_unknown_middle_word_returns_complete_candidate_commands(tmp_path):
+    from plugins.pendo.main import _local_catalog_root
+
+    context = FakeAgentContext(
+        tmp_path / "data",
+        catalog        = (_local_catalog_root(),),
+        command_runner = SimpleNamespace(),
+    )
+    env    = _env(tmp_path, context)
+    result = await execute_tool(
+        _tools(env), env, "xiaoqing_commands", {"query": "pendo schedule add"}
+    )
+    assert "完整路径未匹配" in result.content
+    assert "/pendo event add" in result.content and "准点提醒" in result.content
+    assert "/pendo ledger add" in result.content and "currency:" in result.content
+    result = await execute_tool(
+        _tools(env),
+        env,
+        "xiaoqing_commands",
+        {"query": "pendo event reminders ack 确认"},
+    )
+    assert "/pendo event reminders confirm" in result.content and "标记为已确认" in result.content
+    assert "pendo.pendo.confirm" not in result.content
+
+
+@pytest.mark.asyncio
+async def test_catalog_keeps_named_plugin_scope_and_parent_purpose(tmp_path):
+    from tests.core.test_command_catalog import _load_catalog
+
+    context = FakeAgentContext(
+        tmp_path / "data", catalog=_load_catalog().roots, command_runner=SimpleNamespace()
+    )
+    env    = _env(tmp_path, context)
+    result = await execute_tool(_tools(env), env, "xiaoqing_commands", {"query": "pendo todo show"})
+    assert "/pendo todo view" in result.content
+    assert "bot_core.help.search" not in result.content
+    result = await execute_tool(_tools(env), env, "xiaoqing_commands", {"query": "pendo todo add"})
+    assert "日历预约使用 event" in result.content
+
+
+@pytest.mark.asyncio
+async def test_catalog_pages_keep_each_command_contract_whole(tmp_path):
+    help_text = "参数说明" * 180 + " 最后一个参数也完整保留"
+    nodes     = tuple(
+        build_command_catalog_node(
+            "demo",
+            {
+                "name": f"entry{i}",
+                "triggers": [f"entry{i}"],
+                "usage": f"/entry{i}",
+                "help": help_text,
+                "examples": [f"/entry{i} one", f"/entry{i} two", f"/entry{i} three"],
+            },
+            root=True,
+        )
+        for i in range(2)
+    )
+    context = FakeAgentContext(tmp_path / "data", catalog=nodes, command_runner=SimpleNamespace())
+    env = _env(tmp_path, context)
+    env.config = AgentConfig(max_tool_output_chars=1000)
+    tools = _tools(env)
+    for i in range(2):
+        result = await execute_tool(
+            tools, env, "xiaoqing_commands", {"query": "demo", "page": i + 1}
+        )
+        assert help_text in result.content
+        assert f"/entry{i} three" in result.content
+        assert f"/entry{1 - i}" not in result.content
+
+
+@pytest.mark.asyncio
+async def test_inline_progress_is_held_and_background_progress_can_be_sent(tmp_path):
+    env                    = _env(tmp_path)
+    tools                  = _tools(env)
+    env.task.inline_waiter = asyncio.get_running_loop().create_future()
+    held                   = await execute_tool(tools, env, "send_message", {"text": "数据读完了，正在计算"})
+    assert "当轮正在等待" in held.content and env.task.progress_sent == 0
+    assert env.send_progress.sent == []
+    env.task.inline_waiter = None
+    sent                   = await execute_tool(tools, env, "send_message", {"text": "计算完了，正在导出图片"})
+    assert sent.content == "已发送" and env.task.progress_sent == 1
+    assert env.send_progress.sent == [("计算完了，正在导出图片", [])]
 
 
 @pytest.mark.asyncio
@@ -197,6 +595,7 @@ def test_python_tool_computes_and_reports_new_files(tmp_path: Path) -> None:
 
         failed = await execute_tool(tools, env, "run_python", {"code": "raise SystemExit('boom')"})
         assert "exit_code=1" in failed.content and "boom" in failed.content
+        assert failed.state == "error" and not failed.progress
         assert env.script_counter == 2
 
     run_with_subprocess_loop(scenario)
@@ -412,7 +811,9 @@ async def test_xiaoqing_command_tools_search_catalog_and_convert_replies(tmp_pat
     none = await execute_tool(tools, env, "xiaoqing_commands", {"query": "不存在的东西"})
     assert "没有匹配" in none.content
 
-    reply = await execute_tool(tools, env, "xiaoqing_command", {"command": "/pendo todo list"})
+    reply = await execute_tool(
+        tools, env, "xiaoqing_command", {"delivery": "continue", "command": "/pendo todo list"}
+    )
     runner.run.assert_awaited_once_with("/pendo todo list", sender_name="", operation_id="abc123-1")
     assert reply.content.startswith("今天 2 个待办")
     assert "[图片 https://example.com/x.png]" in reply.content and "[face]" in reply.content
@@ -425,7 +826,9 @@ async def test_xiaoqing_command_tools_search_catalog_and_convert_replies(tmp_pat
     runner.run.return_value = [
         {"type": "image", "data": {"file": "base64://" + base64.b64encode(other_png).decode()}},
     ]
-    again  = await execute_tool(tools, env, "xiaoqing_command", {"command": "/pendo todo list"})
+    again = await execute_tool(
+        tools, env, "xiaoqing_command", {"delivery": "continue", "command": "/pendo todo list"}
+    )
     second = env.out_dir / "command-image-2.png"
     assert str(second) in again.content
     assert saved.read_bytes() == PNG_BYTES and second.read_bytes() == other_png
@@ -552,7 +955,9 @@ async def test_command_voice_video_and_files_are_exposed_as_local_paths(tmp_path
     )
     context = FakeAgentContext(tmp_path / "data", command_runner=runner)
     env   = _env(tmp_path, context)
-    reply = await execute_tool(_tools(env), env, "xiaoqing_command", {"command": "/语音 晚安"})
+    reply = await execute_tool(
+        _tools(env), env, "xiaoqing_command", {"delivery": "continue", "command": "/语音 晚安"}
+    )
     assert f"命令返回的语音（可放进 final_answer.files 发出去）: {voice}" in reply.content
     saved = env.out_dir / "command-video-1.mp4"
     assert saved.read_bytes() == b"mp4" and str(saved) in reply.content
@@ -660,7 +1065,9 @@ async def test_members_get_command_tools_only_and_send_only_what_commands_return
         assert refused.final is None and "不是这次命令返回的文件" in refused.content
     assert env.send_progress.sent == []  # type: ignore[attr-defined]
 
-    reply = await execute_tool(tools, env, "xiaoqing_command", {"command": "/apod"})
+    reply = await execute_tool(
+        tools, env, "xiaoqing_command", {"delivery": "continue", "command": "/apod"}
+    )
     assert str(picture) in reply.content
     sent = await execute_tool(
         tools, env, "final_answer", {"text": "今天的图", "files": [str(picture)]}
@@ -692,7 +1099,8 @@ async def test_command_list_only_shows_what_the_requester_may_run(tmp_path: Path
     top, pet, summary = await listing(is_admin=False, group_id=GROUP_ID)
     assert "/apod" in top and "/宠物" in top and "/shell" not in top
     assert "/宠物 feed" in pet and "/宠物 admin" not in pet
-    assert "/shell" not in summary and "/apod" in summary
+    assert "/shell" in summary and "/apod" in summary
+    assert "当前身份无权使用" in summary
 
     _top, pet, _summary = await listing(is_admin=False, group_id=GROUP_ID, group_role="admin")
     assert "/宠物 admin" in pet

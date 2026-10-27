@@ -75,7 +75,8 @@ def validate_plan(catalog: dict[str, Any], plan: Any) -> list[dict[str, Any]]:
             validate_value(cap, op.get("value"))
         elif kind == "action" and cap["kind"] == "action" and cap["supported"]:
             allowed.add("args")
-            args = op.get("args")
+            args = op.get("args", [])
+            op   = op | {"args": args}
             if ":execute-text-directive:" in cap.get("type", "") and isinstance(args, list):
                 for arg in args:
                     if isinstance(arg, str):
@@ -190,7 +191,7 @@ async def execute_plan(
             if not success:
                 lines.append(f"{title}：设备返回失败，后续操作已停止。")
                 break
-            submitted = f"✓ {title}：指令已提交。"
+            submitted = f"• {title}：指令已提交。"
             if item["wire_args"] is not None:
                 submitted = f"✓ {device['name']}：已提交 {item['wire_args'][0]} 份，按设置估算约 {op['args'][0]} 克。"
             lines.append(submitted)
@@ -213,7 +214,9 @@ async def execute_plan(
                     lines.append("提交后的状态读取未完成，后续操作已停止。")
                     break
             elif op["op"] == "action":
-                lines.append("动作完成情况需设备事件或现场确认。")
+                lines.append(
+                    "设备状态：待确认；当前回报仅确认已接收指令，动作完成情况需设备事件或现场确认。"
+                )
         except Exception:
             lines.append(f"{title}：本次结果待确认，后续操作已停止；动作保持单次提交。")
             break

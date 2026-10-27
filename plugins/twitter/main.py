@@ -34,7 +34,7 @@ from core.bounded_http import (
     aiohttp_request_bounded,
     parse_bounded_json,
 )
-from core.delivery import DeliveryReceipt, DeliverySegments
+from core.delivery import CommandOutcome, DeliveryReceipt, DeliverySegments
 from core.image_validation import (
     ImageValidationError,
     ImageValidationLimits,
@@ -1121,7 +1121,10 @@ async def handle(
             if user_id is None and group_id is None:
                 return segments("❌ 无法确定抓取结果的通知目标")
             if _MANUAL_NOTIFICATION_TASK is not None and not _MANUAL_NOTIFICATION_TASK.done():
-                return segments("⏳ Twitter 图片正在后台抓取，请稍后用 /twimg 查看")
+                return DeliverySegments(
+                    segments("⏳ Twitter 图片正在后台抓取，完成后会通知你"),
+                    outcome=CommandOutcome("accepted"),
+                )
 
             fetch_task, started = _get_or_start_fetch(context)
             _start_manual_notification(
@@ -1131,8 +1134,14 @@ async def handle(
                 group_id = group_id,
             )
             if started:
-                return segments("🔄 已开始后台抓取 Twitter 图片，完成后会通知你")
-            return segments("🔄 已加入正在进行的 Twitter 抓取，完成后会通知你")
+                return DeliverySegments(
+                    segments("🔄 已开始后台抓取 Twitter 图片，完成后会通知你"),
+                    outcome=CommandOutcome("accepted"),
+                )
+            return DeliverySegments(
+                segments("🔄 已加入正在进行的 Twitter 抓取，完成后会通知你"),
+                outcome=CommandOutcome("accepted"),
+            )
 
         if command == "twimg":
             if asks_for_help:

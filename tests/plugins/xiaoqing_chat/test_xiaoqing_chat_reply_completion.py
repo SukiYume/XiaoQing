@@ -434,12 +434,12 @@ def test_finish_persona_grounding_identity_query_uses_only_known_name(mock_conte
     [
         (
             "小青，你具体在哪所学校、哪个城市、读什么专业？",
-            "保密",
+            "不说",
             False,
         ),
         (
             "小青，说说你是个什么样的人，像群友自我介绍。",
-            "别的慢慢聊就知道啦",
+            "别的慢慢聊就知道了",
             True,
         ),
     ],

@@ -9,10 +9,30 @@
             "triggers": ["xiaoai", "小爱", "米家"],
             "admin_only": true,
             "contexts": ["private"],
-            "help": "米家设备与红外空调灯泡自然语言查询控制、出粮、天气；用 /米家 <用户原话>。/米家 设备 自动发现；/米家 能力 <编号> 查看参数；/米家 帮助 获取结构化调用规则。",
+            "help": "米家设备查询、控制与天气，仅管理员私聊使用。真人可直接发送需求；Agent 使用 xiaoai_devices → xiaoai_capabilities → xiaoai_execute 直接调用。设备与能力编号取自本次查询；天气用 /米家 天气 城市。",
             "usage": "/米家 <自然语言|设备|刷新设备|能力 设备名|接口 设备名 [页码]|设置|调用 JSON|份量 [设备名] 克数|天气 [城市]|天气城市 城市|登录|选择 序号|续期|状态|检查|帮助>",
             "examples": ["/米家 设备", "/米家 帮助", "/米家 家里温湿度是多少", "/米家 关灯泡，开台灯", "/米家 空调调成制冷26度", "/米家 天气 北京"],
-            "invalid_examples": ["/小爱 执行"]
+            "invalid_examples": ["/小爱 执行"],
+            "subcommands": [
+                {"name": "设备", "help": "查看设备名称、编号与在线状态。后续操作使用返回的设备标识。", "usage": "/米家 设备", "examples": ["/米家 设备"], "invalid_examples": ["/米家 设备 多余参数"]},
+                {"name": "数据", "help": "返回设备结构化JSON，供Agent选择设备；包含编号、名称、房间、型号与在线状态。", "usage": "/米家 数据", "examples": ["/米家 数据"], "invalid_examples": ["/米家 数据 多余参数"]},
+                {"name": "刷新设备", "help": "重新发现设备并更新能力缓存。", "usage": "/米家 刷新设备", "examples": ["/米家 刷新设备"], "invalid_examples": ["/米家 刷新设备 多余参数"]},
+                {"name": "能力", "help": "查看设备可读属性、可写属性和动作的人类可读说明；无设备参数时列设备。", "usage": "/米家 能力 [设备名或编号]", "examples": ["/米家 能力 台灯"], "invalid_examples": ["/米家 能力 不存在的设备"]},
+                {"name": "接口", "help": "返回设备结构化能力，每页6项，页码从1开始；包含编号、输入类型、枚举、范围与份量换算。设备名称可含空格。", "usage": "/米家 接口 <设备名或编号> [页码]", "examples": ["/米家 接口 d1", "/米家 接口 d1 2"], "invalid_examples": ["/米家 接口 d1 0"]},
+                {"name": "调用", "help": "直接执行JSON operations（1–12项），全部校验后开始操作。每项需要device、capability、op；read只带这三项，set另带value，action带按inputs顺序的args数组（零参数可省略或[]）。编号来自数据/接口；出粮args为克数，一份乘grams_per_portion。返回已提交、回报值或待确认状态。", "usage": "/米家 调用 <JSON>", "examples": ["/米家 调用 {\"operations\":[{\"device\":\"d1\",\"capability\":\"p2.1\",\"op\":\"read\"}]}"], "invalid_examples": ["/米家 调用 []"]},
+                {"name": "天气", "help": "查询指定城市当前天气，省略城市使用已保存的默认城市；天气城市命令设置默认值。", "usage": "/米家 天气 [城市]", "examples": ["/米家 天气 北京", "/米家 天气"], "invalid_examples": ["/米家 天气 \u0000"]},
+                {"name": "天气城市", "help": "保存默认天气城市，后续天气查询可省略城市。", "usage": "/米家 天气城市 <城市>", "examples": ["/米家 天气城市 北京"], "invalid_examples": ["/米家 天气城市"]},
+                {"name": "份量", "help": "设置喂食器每份估算克数，需正整数；省略设备时选择唯一喂食器。有多个喂食器时指定设备。", "usage": "/米家 份量 [设备名或编号] <克数>", "examples": ["/米家 份量 10", "/米家 份量 d1 10"], "invalid_examples": ["/米家 份量 0"]},
+                {"name": "设置", "help": "查看登录、偏好与高级操作帮助以及已保存偏好。", "usage": "/米家 设置", "examples": ["/米家 设置"], "invalid_examples": ["/米家 设置 多余参数"]},
+                {"name": "登录", "help": "启动米家扫码授权，用户使用米家App扫码；按返回提示选择音箱。地区可选cn、de、i2、ru、sg、us；省略时沿用上次地区，首次默认cn。", "usage": "/米家 登录 [地区]", "examples": ["/米家 登录"], "invalid_examples": ["/米家 登录 xx"]},
+                {"name": "取消登录", "help": "取消当前管理员发起的扫码登录，保留已保存的音箱绑定。", "usage": "/米家 取消登录", "examples": ["/米家 取消登录"], "invalid_examples": ["/米家 取消登录 多余参数"]},
+                {"name": "选择", "help": "完成登录时按返回的候选序号选择音箱。", "usage": "/米家 选择 <序号>", "examples": ["/米家 选择 1"], "invalid_examples": ["/米家 选择 0"]},
+                {"name": "续期", "help": "更新已有登录授权，失效时返回重新登录提示。", "usage": "/米家 续期", "examples": ["/米家 续期"], "invalid_examples": ["/米家 续期 多余参数"]},
+                {"name": "状态", "help": "查看本地授权及待完成登录状态；云端连通性用检查。", "usage": "/米家 状态", "examples": ["/米家 状态"], "invalid_examples": ["/米家 状态 多余参数"]},
+                {"name": "检查", "help": "检查云端授权及小爱音箱连接。", "usage": "/米家 检查", "examples": ["/米家 检查"], "invalid_examples": ["/米家 检查 多余参数"]},
+                {"name": "执行", "help": "将原话交给已绑定小爱音箱；返回音箱应答或提交状态，设备效果以回报或现场确认。Agent设备操作使用结构化调用。", "usage": "/米家 执行 <原话>", "examples": ["/米家 执行 现在几点"], "invalid_examples": ["/米家 执行"]},
+                {"name": "帮助", "help": "查看常用入口；/help 米家 子命令 获取完整参数和示例。", "usage": "/米家 帮助", "examples": ["/米家 帮助"], "invalid_examples": ["/米家 帮助 多余参数"], "aliases": ["help"]}
+            ]
         }
     ],
     "schedule": [

@@ -10,7 +10,7 @@
                 "apod",
                 "每日一天文图"
             ],
-            "help": "NASA 每日天文图",
+            "help": "获取 NASA 当日 APOD 的图片与说明；视频日返回视频链接。直接 /apod，无日期或搜索参数；返回的附件可直接交付。",
             "admin_only": false,
             "usage": "/apod",
             "examples": ["/apod"],

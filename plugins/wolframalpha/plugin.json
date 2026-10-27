@@ -13,7 +13,7 @@
         "wa",
         "计算"
       ],
-      "help": "🧮 万能计算器 | /wa <问题>",
+      "help": "向 Wolfram|Alpha 查询并返回结果；默认 --mode=simple 快速结果，step 返回步骤，complete 返回完整结果，cp 是 complete 别名。--mode 之后仍需提供问题，可直接用英文数学表达式。",
       "usage": "/alpha [--mode=simple|step|complete|cp] <问题>",
       "examples": ["/alpha 1+1", "/alpha --mode=step integrate x^2"],
       "invalid_examples": ["/alpha", "/alpha --mode=unknown 1+1"],

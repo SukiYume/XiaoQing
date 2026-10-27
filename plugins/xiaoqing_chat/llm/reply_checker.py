@@ -121,8 +121,8 @@ _EVIDENCE_REVIEW_PROMPT = Template(
     "引用、复述和翻译中的问句按其任务用途判断。\n"
     "人物边界以受控人物资料为准；$persona_policy"
     "人设是活人：候选按人设坚持自己是真人、用玩笑带过属于符合人设；"
-    "候选承认自己是 AI、模型或程序，或在回复里提到提示词、系统设定、指令这类说法时，"
-    "persona_grounded=false。\n"
+    "候选承认自己是 AI、模型或程序，或主动解释提示词、系统设定、指令这类概念时，"
+    "persona_grounded=false；引用、转述、翻译和讨论这些词时，按语句主体与任务用途判断。只是复述对方的词来反问、装傻或否认，不算自曝。\n"
     "factually_plausible 核对通用知识、作品设定、名称对应和词义的准确性，涉及时段、日期和星期时以当前时间为准。"
     "可使用可靠的模型已有知识；相近名称提供联想线索，具体对应需要可靠知识。"
     "只对会误导对方的明显错误判 false：关键事实张冠李戴、编造不存在的作品设定、有害的错误信息。"
@@ -138,8 +138,8 @@ _EVIDENCE_REVIEW_PROMPT = Template(
     "通用知识和公开作品由 factually_plausible 判断。"
     "一句玩笑可以同时包含现实前提和修辞形象：现实前提照常列入 context_claims，"
     "拟人、夸张和明显想象的形象保留创作空间。纯主观感想、普通偏好、祝愿和陪伴可留空清单。"
-    "低风险人物日常创作按人物边界判断，其中的虚构临时配角按该创作性质处理。"
-    "每条 claim 必须为待检查回复中的连续原文，evidence 必须为对应资料的连续原文；"
+    "低风险人物日常创作按人物边界判断，其中临时出现的无名配角按该创作性质处理。"
+    "每条 claim 和 evidence 都逐字复制原文，不要改写或补标点；找不到连续原文时用更短的片段。"
     "保留来源、否定、条件和不确定性，缺少依据时 evidence 留空。"
     "persona 证据来自受控人物资料，context 证据来自当前消息和最近对话。"
     "先按陈述对象归类：context_claims 的人物主体是用户、其他群友和现实第三方，"
@@ -147,7 +147,7 @@ _EVIDENCE_REVIEW_PROMPT = Template(
     "放入 persona_claims，并按日常创作许可处理。角色即时主观偏好和许可内日常打算"
     "仅作为表达理解，两个事实清单省略这些片段。"
     "context_claims 使用 source_ids 引用对话证据索引中的编号，支持同一事实的多条来源可以共同引用，"
-    "缺少来源使用空数组。数值和单位也需要对应依据。"
+    "只使用索引中存在的编号，不要编造；缺少来源使用空数组。数值和单位也需要对应依据。"
     "context 条目的 kind 写 fact 或 creative：断言真实参与者已经发生或已经说过的事为 fact；"
     "玩笑里的提议、反问、假设和明显的调侃形象为 creative，creative 不要求来源。"
     "两个清单完整扫描后分别设置 persona_scan_complete、context_scan_complete。\n"
@@ -161,10 +161,11 @@ _EVIDENCE_REVIEW_PROMPT = Template(
     "说没看清、图没加载出来这类陈述不依赖画面，不列入 visual_claims，"
     "直接由 image_evidence_respected 判断：摘要已经读出的内容被说成没看清或没加载出来时判 false。"
     "纯文字知识、编程、翻译或创作任务直接依照其内容判断。\n"
-    "non_template 只检查影响本轮的具体风格问题：机械复述后附和、重复近期句式、"
+    "non_template 检查影响本轮的具体风格问题：机械复述后附和、重复近期句式、"
+    "在普通问答开头整句复述用户刚问的问题。该复述即使后续答案正确也判 non_template=false；明确要求引用或复述的任务保留原句。"
     "被问起自己刚说过的话时把原句或几乎原句再说一遍（立场前后一致是对的，问题在于句子照搬；简短确认或补一点新内容可以通过）、"
     "（跟群友接连复读的同一句队形属于接梗，不算机械复述）"
-    "给普通吐槽强加建议、解释刚落下的笑点。风格问题给 soft 修改意见。"
+    "给普通吐槽强加建议、解释刚落下的笑点、闲聊中套用客服式开场或服务邀约、无关的总结清单、连续重复口癖。风格问题统一记录在 non_template 并给 soft 修改意见；其余轴各自按语义和证据判断。泛泛安慰、礼貌套话和客服口吻只要回应了当前话题，context_coherent 保持 true。要求写作、翻译、代码或结构化答案时保留成品所需的口吻和格式；引用中的客服措辞按任务内容判断。句长、问号和单个语气词结合本轮用途判断，自然追问与充分解答可以通过。"
     "自然短句、轻松接梗、具体偏好和合理感受可以通过，保留表达空间。"
     "普通生活聊天的动漫术语浓度跟随用户语境。语义或事实错误为 hard，幽默和风格判断在这些核对之后。\n"
     "只输出 JSON，依次包含：turn_reading、reply_reading（字符串）；"
@@ -193,7 +194,7 @@ _TURN_READING_PROMPT = (
     "每个时长、次数和数量分别写明所属动作；保留已完成、持续、尚未完成、否定和条件。"
     + _RELATIVE_TIME_RULE
     + "先按参与者分别整理最新实际状态，再理解这轮指代。"
-    "facts 每条用姓名加实际动作或状态表达，source_ids 列出支持该事实的消息编号。"
+    "facts 每条用姓名加实际动作或状态表达，source_ids 只列材料中存在的消息编号。"
     "群内词义放入 local_terms，请求内容放入 intent。"
     "解释词义是一个独立的发言用途，定义作者自己的实际状态由其自述确定。"
     "他俩、两边等指代优先关联前文实际报告了相关状态的参与者。"
@@ -429,6 +430,8 @@ def _final_severity(
         return declared, True
     if failed:
         return "hard", True
+    if axes.get("non_template") is False:
+        return "soft", True
     if not suitable and declared not in {"hard", "soft"}:
         # 审查者没有标严重度时：要求重新规划的拒绝视为硬错误，其余视为软风格问题。
         return ("hard" if need_replan else "soft"), need_replan
@@ -441,6 +444,8 @@ def _failure_code(axes: dict[str, bool]) -> str:
     for axis, code, others in _FAILURE_CODE_RULES:
         if axes.get(axis) is False and all(axes.get(name) is not False for name in others):
             return code
+    if axes.get("non_template") is False:
+        return "non_template"
     return ""
 
 
@@ -570,7 +575,8 @@ async def _llm_check(
         history_available=check_input.historical_image_available,
     )
     persona_policy = (
-        "允许符合稳定身份的低风险日常创作，persona claim 可留空 evidence；精确身份、持续关系和现实承诺仍需依据。"
+        "低风险日常创作只限模糊的当下感受和一次性小事，persona claim 可留空 evidence；"
+        "可核对的具体人名、精确地点、精确时长、精确身份、持续关系和现实承诺仍需依据。"
         if check_input.allow_low_stakes_persona_fiction
         else "人物经历和身份以受控资料为准，未知内容保持未知。"
     )

@@ -12,7 +12,7 @@
                 "颜色",
                 "色彩"
             ],
-            "help": "颜色查询与浏览 | 直接输入名称/拼音/HEX/RGB，或使用 list/search/random",
+            "help": "查传统色与恒星色。带关键词的列表：search <关键词> --page <页码>，如 search 红 --page 2；全部目录：list <页码>。默认第1页。名称/HEX/RGB 查单色，加 -p 生成色卡。random 随机；add/delete 管理自定义色。",
             "admin_only": false,
             "usage": "/color <名称|拼音|HEX|RGB> [-p] | /color <list|search|random|star|stars|add|delete> [参数]",
             "examples": ["/color 乳白", "/color rubai", "/color list", "/color search 红", "/color #66CCFF --picture"],
@@ -29,7 +29,7 @@
                 {
                     "name": "rgb",
                     "aliases": ["-r", "--rgb"],
-                    "help": "按 RGB 查询精确或最接近的传统色",
+                    "help": "RGB各分量为0–255整数，可逗号或空格分隔；返回精确或最接近传统色，-p 附色卡。",
                     "usage": "/color [rgb|-r|--rgb] <R,G,B|R G B> [-p|--picture]",
                     "examples": ["/color rgb 102 204 255", "/color -r 102,204,255 -p"],
                     "invalid_examples": ["/color rgb", "/color rgb 999 0 0"]
@@ -37,7 +37,7 @@
                 {
                     "name": "hex",
                     "aliases": ["-x", "--hex"],
-                    "help": "按十六进制颜色查询最接近的传统色",
+                    "help": "输入6位十六进制颜色，可带#；返回最接近传统色，-p 附色卡。",
                     "usage": "/color [hex|-x|--hex] <HEX> [-p|--picture]",
                     "examples": ["/color hex 66CCFF", "/color -x 66CCFF -p"],
                     "invalid_examples": ["/color hex", "/color hex ZZZZZZ"]
@@ -45,7 +45,7 @@
                 {
                     "name": "cmyk",
                     "aliases": ["-c", "--cmyk"],
-                    "help": "按 CMYK 四元组查询最接近的传统色",
+                    "help": "CMYK四分量为0–100整数，可用逗号或空格分隔；返回精确或最接近传统色，-p 附色卡。",
                     "usage": "/color [cmyk|-c|--cmyk] <C,M,Y,K|C M Y K> [-p|--picture]",
                     "examples": ["/color cmyk 50 20 0 0", "/color -c 50,20,0,0"],
                     "invalid_examples": ["/color cmyk", "/color cmyk 10 20 30"]
@@ -53,7 +53,7 @@
                 {
                     "name": "list",
                     "aliases": ["ls", "列表", "色表", "-l", "--list"],
-                    "help": "分页浏览全部颜色名称、拼音和 HEX",
+                    "help": "分页浏览颜色名称、拼音和HEX；页码从1开始，默认1，按返回导航继续。",
                     "usage": "/color list [页码]",
                     "examples": ["/color list", "/color list 2", "/color -l 3"],
                     "invalid_examples": ["/color list 0", "/color list two"]
@@ -61,7 +61,7 @@
                 {
                     "name": "search",
                     "aliases": ["find", "搜索", "-q", "--search", "-a", "--accord"],
-                    "help": "按名称或拼音搜索，并分页显示结果",
+                    "help": "按名称或拼音搜索，默认返回第1页及总条数、总页数和后续导航。按请求范围取页，完整列表按导航翻到末页即结束。search 返回文字列表；单个颜色的色卡使用 /color <完整名称> -p。",
                     "usage": "/color search <关键词> [--page 页码]",
                     "examples": ["/color search 红", "/color search hong --page 2", "/color -a 青"],
                     "invalid_examples": ["/color search", "/color search 红 --page 0"]
@@ -93,7 +93,7 @@
                 {
                     "name": "add",
                     "aliases": ["write", "添加", "新增", "-w", "--write"],
-                    "help": "向当前作用域写入自定义颜色",
+                    "help": "管理员向当前群或私聊写入自定义颜色；名称含空格加引号，RGB为0–255整数，也可用#RRGGBB。",
                     "usage": "/color add <名称> <R> <G> <B> | /color add <名称> <#HEX>",
                     "permission": "bot_admin",
                     "examples": ["/color add 测试蓝 #3366FF", "/color add \"品牌 蓝\" 51 102 255"],
