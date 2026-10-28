@@ -173,6 +173,9 @@ class CommandOutcome:
     state: Literal["completed", "accepted", "error", "incomplete"]
     next_command: str = ""
     result_text: str  = ""
+    # None 表示插件尚未提供分页完整性证据；False 表示已到查询末页。
+    has_more: bool | None = None
+    page: int | None      = None
 
 
 class DeliverySegments(list[dict[str, Any]]):
