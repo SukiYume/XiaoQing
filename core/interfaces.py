@@ -317,7 +317,8 @@ class CommandRunnerCapability(Protocol):
         ``sender_name`` 是发起人在原消息里的显示名，只用于命令里显示是谁，不参与权限判断；
         ``operation_id`` 标识这一次调用，插件据此区分独立的两次调用和同一次调用的重试。
         ``DeliverySegments.command_outcome`` 原样保留执行状态；accepted 表示后台已接收，
-        后续完成通知由原插件负责。next_command 指向下一页结果。
+        后续完成通知由原插件负责。next_command 携带原查询条件并指向下一页结果。
+        has_more 为 None 表示分页完整性未知，False 明确标记末页；page 标记当前页码。
         """
 
 

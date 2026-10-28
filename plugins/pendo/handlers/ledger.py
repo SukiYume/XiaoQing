@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from pydantic import ValidationError
 
+from core.delivery import CommandOutcome
 from core.plugin_base import run_sync
 
 from ..config import (
@@ -995,6 +996,7 @@ class LedgerHandler(DbOpsMixin):
             return {
                 "status": "success",
                 "message": f"💰 {range_label}账目{filter_suffix}\n\n暂无记录",
+                "outcome": CommandOutcome("completed", has_more=False, page=1),
             }
 
         items.sort(
@@ -1032,12 +1034,32 @@ class LedgerHandler(DbOpsMixin):
             f"{formatted_items}\n"
         )
 
+        next_command = ""
         if has_more:
-            message += f"... (使用 'all' 显示全部或 'page:{filters.page + 1}' 查看下一页)\n"
+            # 保留原字段及其引号，替换页码，并固定本次解析出的日期范围。
+            field_args = " ".join(
+                match.group(0)
+                for match in _FIELD_RE.finditer(filter_str)
+                if match.group("key").lower() != "page"
+            )
+            next_command = (
+                f"/pendo ledger list {start_date}..{end_date} {field_args} "
+                f"{'ex ' if filters.show_extra else ''}page:{filters.page + 1}"
+            )
+            message += f"下一页：{next_command}\n"
         if filters.show_extra:
             message += f"\n{self._format_category_maxima(items)}\n"
 
-        return {"status": "success", "message": message}
+        return {
+            "status": "success",
+            "message": message,
+            "outcome": CommandOutcome(
+                "completed",
+                next_command = next_command,
+                has_more     = has_more,
+                page         = 1 if filters.show_all else filters.page,
+            ),
+        }
 
     # 查看详情
 

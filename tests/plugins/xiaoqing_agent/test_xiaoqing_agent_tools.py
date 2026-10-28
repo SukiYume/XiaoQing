@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import re
 import sys
 import time
 from dataclasses import replace
@@ -62,12 +63,12 @@ async def test_command_delivery_uses_explicit_pages_and_result_text(
                 DeliverySegments(
                     [{"type": "text", "data": {"text": "第一项。查看详情：/catalog detail"}}],
                     outcome=CommandOutcome(
-                        "completed", next_command="/catalog page 2", result_text="第一项"
+                        "completed", next_command="/catalog page 2", result_text="第一项", page=1
                     ),
                 ),
                 DeliverySegments(
                     [{"type": "text", "data": {"text": "第二项。继续试试其他功能"}}],
-                    outcome=CommandOutcome("completed", result_text="第二项"),
+                    outcome=CommandOutcome("completed", result_text="第二项", has_more=False),
                 ),
             ]
         )
@@ -82,6 +83,224 @@ async def test_command_delivery_uses_explicit_pages_and_result_text(
     if delivery == "all_pages":
         assert "第一项" in result.final.text and "第二项" in result.final.text
         assert "后续分页：无" in result.final.text
+
+
+@pytest.fixture
+def ledger_pages(tmp_path, request):
+    from plugins.pendo.handlers.ledger import LedgerHandler
+    from plugins.pendo.services.db import Database
+
+    db   = Database(str(tmp_path / "pagination.db"))
+    base = {
+        "owner_id": "pagination-user",
+        "type": "ledger",
+        "amount": 25,
+        "amount_cents": 2500,
+        "transaction_type": "transfer",
+        "currency": "CNY",
+        "ledger_category": "测试 分类",
+        "ledger_date": "2026-03-15",
+        "account_name": "测试 账户",
+        "counter_account_name": "目标 账户",
+        "merchant": "测试 商户",
+        "created_at": "2026-03-15T12:00:00",
+        "updated_at": "2026-03-15T12:00:00",
+    }
+    for index in range(getattr(request, "param", 21)):
+        db.insert_item({**base, "id": f"entry{index:03d}", "title": f"记录{index:03d}"})
+    for index, overrides in enumerate(
+        [
+            {"owner_id": "other-user"},
+            {"ledger_date": "2026-04-01"},
+            {"transaction_type": "expense"},
+            {"ledger_category": "其他"},
+            {"account_name": "其他"},
+            {"counter_account_name": "其他"},
+            {"merchant": "其他"},
+            {"amount_cents": 1000, "amount": 10},
+            {"amount_cents": 10000, "amount": 100},
+        ]
+    ):
+        db.insert_item({**base, **overrides, "id": f"excluded{index}", "title": f"排除{index}"})
+    yield LedgerHandler(db)
+    db.cleanup()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ledger_pages", [11, 21], indirect=True)
+@pytest.mark.parametrize("delivery", ["all_pages", "reply", "continue"])
+async def test_real_pendo_filtered_pagination(tmp_path, ledger_pages, delivery):
+    from plugins.pendo.main import _format_result
+
+    calls     = []
+    responses = []
+
+    async def run(command, **_kwargs):
+        calls.append(command)
+        response = await ledger_pages.handle(
+            "pagination-user", command.removeprefix("/pendo ledger "), SimpleNamespace()
+        )
+        responses.append(response)
+        return _format_result(response)
+
+    env = _env(
+        tmp_path, FakeAgentContext(tmp_path / "data", command_runner=SimpleNamespace(run=run))
+    )
+    filters = '2026-03 type:transfer account:"测试 账户" to:“目标 账户” merchant:"测试 商户" cat:"测试 分类" amount:20..30 page:1'
+    result = await execute_tool(
+        _tools(env),
+        env,
+        "xiaoqing_command",
+        {
+            "command": "/pendo ledger list " + filters,
+            "delivery": delivery,
+        },
+    )
+    total = sum(
+        item.title.startswith("记录") for item in ledger_pages.db.get_all_items("pagination-user")
+    )
+    assert len(calls) == ((total + 9) // 10 if delivery == "all_pages" else 1)
+    expected = range(total) if delivery == "all_pages" else range(total - 10, total)
+    for index in expected:
+        assert result.content.count(f"记录{index:03d}") == 1
+    assert "排除" not in result.content
+    assert (result.final is None) == (delivery == "continue")
+    assert ("分页已取齐" in result.content) == (delivery == "all_pages")
+    original = ledger_pages._parse_list_filters(filters)
+    for page, command in enumerate(calls[1:], 2):
+        parsed = ledger_pages._parse_list_filters(command.removeprefix("/pendo ledger list "))
+        assert parsed == replace(original, page=page, range_text="2026-03-01..2026-03-31")
+        assert responses[page - 2]["outcome"].next_command == command
+    assert responses[-1]["outcome"].has_more == (delivery != "all_pages")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query,expected,complete",
+    [
+        ("2026-04", 1, True),
+        ("2026-05", 0, True),
+        ("2026-03 page:3", 8, False),
+        ("2026-03 all", 28, True),
+    ],
+)
+async def test_real_pendo_single_empty_all_and_middle_page(
+    tmp_path, ledger_pages, query, expected, complete
+):
+    from plugins.pendo.main import _format_result
+
+    async def run(command, **_kwargs):
+        return _format_result(
+            await ledger_pages.handle(
+                "pagination-user", command.removeprefix("/pendo ledger "), SimpleNamespace()
+            )
+        )
+
+    env = _env(
+        tmp_path, FakeAgentContext(tmp_path / "data", command_runner=SimpleNamespace(run=run))
+    )
+    result = await execute_tool(
+        _tools(env),
+        env,
+        "xiaoqing_command",
+        {
+            "command": "/pendo ledger list " + query,
+            "delivery": "all_pages",
+        },
+    )
+    assert len(re.findall(r"记录\d{3}|排除\d", result.content)) == expected
+    assert ("分页已取齐" in result.content) == complete
+    if not complete:
+        assert "前序页尚未取齐" in result.content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["error", "exception", "budget", "steps", "truncated"])
+async def test_real_pendo_partial_results_survive_stop(tmp_path, ledger_pages, failure):
+    from plugins.pendo.main import _format_result
+
+    calls = []
+
+    async def run(command, **_kwargs):
+        calls.append(command)
+        if len(calls) == 2 and failure == "exception":
+            raise OSError("offline executor failed")
+        args = command.removeprefix("/pendo ledger ")
+        if len(calls) == 2 and failure == "error":
+            args = "list page:invalid"
+        response = await ledger_pages.handle("pagination-user", args, SimpleNamespace())
+        if failure == "budget":
+            env.deadline = time.monotonic()
+        return _format_result(response)
+
+    env = _env(
+        tmp_path, FakeAgentContext(tmp_path / "data", command_runner=SimpleNamespace(run=run))
+    )
+    if failure == "steps":
+        env.config = replace(env.config, max_steps=1)
+    if failure == "truncated":
+        env.config = replace(env.config, max_tool_output_chars=300)
+    result = await execute_tool(
+        _tools(env),
+        env,
+        "xiaoqing_command",
+        {
+            "command": "/pendo ledger list 2026-03",
+            "delivery": "all_pages",
+        },
+    )
+    assert "尚未取齐" in result.content and "分页已取齐" not in result.content
+    if failure == "truncated":
+        assert "截断" in result.content
+    else:
+        assert "记录020" in result.content
+        assert len(calls) == (2 if failure in {"error", "exception"} else 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("has_more", [None, True, False])
+async def test_missing_navigation_never_implies_complete(tmp_path, has_more):
+    from plugins.pendo.main import _format_result
+
+    response = {"status": "success", "message": "本页成功"}
+    if has_more is not None:
+        response["outcome"] = CommandOutcome("completed", has_more=has_more)
+    runner = SimpleNamespace(run=AsyncMock(return_value=_format_result(response)))
+    env = _env(tmp_path, FakeAgentContext(tmp_path / "data", command_runner=runner))
+    result = await execute_tool(
+        _tools(env),
+        env,
+        "xiaoqing_command",
+        {
+            "command": "/catalog",
+            "delivery": "all_pages",
+        },
+    )
+    assert "分页已取齐" not in result.content
+    if has_more is not False:
+        assert "后续分页：无" not in result.content
+    assert ("尚未取齐" if has_more is True else "完整性未知") in result.content
+
+
+@pytest.mark.asyncio
+async def test_real_pendo_navigation_preserves_extra_and_resolves_relative_dates(ledger_pages):
+    from plugins.pendo.main import _format_result
+    from plugins.pendo.utils.time_utils import get_user_local_wall_time
+
+    now = await get_user_local_wall_time("pagination-user", ledger_pages.db)
+    for item in ledger_pages.db.get_all_items("pagination-user"):
+        ledger_pages.db.update_item(
+            item.id, {"ledger_date": now.strftime("%Y-%m-%d")}, owner_id="pagination-user"
+        )
+    response = await ledger_pages.handle(
+        "pagination-user", "list today ex page:1", SimpleNamespace()
+    )
+    outcome = _format_result(response).command_outcome
+    assert outcome.has_more is True
+    args   = outcome.next_command.removeprefix("/pendo ledger list ")
+    parsed = ledger_pages._parse_list_filters(args)
+    assert parsed.show_extra and parsed.page == 2
+    assert parsed.range_text == f"{now:%Y-%m-%d}..{now:%Y-%m-%d}"
 
 
 @pytest.mark.asyncio
