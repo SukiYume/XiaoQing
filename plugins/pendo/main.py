@@ -679,6 +679,10 @@ def _format_result(result: Any) -> list[dict[str, Any]]:
         if isinstance(result, dict) and result.get("status") == "error"
         else CommandOutcome("completed")
     )
+    if isinstance(result, dict) and result.get("status") == "success":
+        explicit_outcome = result.get("outcome")
+        if isinstance(explicit_outcome, CommandOutcome):
+            outcome = explicit_outcome
     return DeliverySegments(segments(message), outcome=outcome)
 
 

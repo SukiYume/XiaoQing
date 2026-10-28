@@ -51,6 +51,7 @@ class ToolResult:
     state: Literal["ok", "error", "accepted", "blocked"] = "ok"
     progress: bool                                       = True
     command_outcome: CommandOutcome | None               = None
+    truncated: bool                                      = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -669,11 +670,21 @@ async def _xiaoqing_command(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
     delivery = _string_arg(args, "delivery")
     if delivery not in ("continue", "reply", "all_pages"):
         raise ToolError("delivery 需要为 continue、reply 或 all_pages。")
-    visited: set[str]  = set()
-    outputs: list[str] = []
+    visited: set[str]      = set()
+    outputs: list[str]     = []
+    first_page: int | None = None
+    truncated              = False
     while True:
         visited.add(command)
-        result       = await _run_xiaoqing_command(env, command)
+        try:
+            result = await _run_xiaoqing_command(env, command)
+        except (ToolError, OSError, ValueError, TypeError, RuntimeError) as exc:
+            result = ToolResult(
+                f"错误：{type(exc).__name__}: {str(exc)[:500]}", state="error", progress=False
+            )
+        if not outputs and result.command_outcome is not None:
+            first_page = result.command_outcome.page
+        truncated    = truncated or result.truncated
         next_command = result.command_outcome.next_command if result.command_outcome else ""
         outputs.append(result.content)
         if delivery != "all_pages" or result.state != "ok" or not next_command or env.task.notes:
@@ -687,15 +698,27 @@ async def _xiaoqing_command(env: ToolEnv, args: dict[str, Any]) -> ToolResult:
             )
         command = next_command
     result.content = "\n\n".join(outputs)
-    if delivery == "all_pages" and result.state == "ok" and not next_command:
-        result.content += "\n结果范围：分页已取齐，本次完整清单可直接交付。"
+    if delivery == "all_pages":
+        if result.state != "ok" or next_command or env.task.notes or truncated:
+            result.content += f"\n结果范围：分页尚未取齐，已保留本次取得的结果。待核对命令：{next_command or command}"
+            if truncated:
+                result.content += "\n部分页面正文因输出预算被截断。"
+        elif result.command_outcome is not None and result.command_outcome.has_more is True:
+            result.content += "\n结果范围：分页尚未取齐，插件报告存在后续页，续页命令缺失。"
+        elif result.command_outcome is not None and result.command_outcome.has_more is False:
+            if first_page is not None and first_page > 1:
+                result.content += (
+                    f"\n结果范围：已取至末页；本次从第 {first_page} 页开始，前序页尚未取齐。"
+                )
+            elif first_page == 1:
+                result.content += "\n结果范围：分页已取齐，本次查询范围内的清单可交付。"
+            else:
+                result.content += "\n结果范围：已确认末页；本次起始页未知，完整性未知。"
+        else:
+            result.content += "\n结果范围：本次查询成功；完整性未知，插件尚未提供可验证的分页终点。"
     if delivery != "continue" and result.state in {"ok", "accepted"} and not env.task.notes:
         result.final = Outcome(result.content, [str(path) for path in sorted(env.command_files)])
-    elif (
-        delivery != "continue"
-        and result.command_outcome is not None
-        and result.command_outcome.state == "error"
-    ):
+    elif delivery != "continue" and result.state == "error":
         result.final = Outcome(
             result.content, [str(path) for path in sorted(env.command_files)], status="failed"
         )
@@ -821,12 +844,20 @@ async def _run_xiaoqing_command(env: ToolEnv, command: str) -> ToolResult:
         )
     if outcome is not None:
         body += f"\n执行状态：{outcome.state}"
-        body += f"；下一页：{outcome.next_command}" if outcome.next_command else "；后续分页：无"
+        if outcome.next_command:
+            body += f"；下一页：{outcome.next_command}"
+        elif outcome.has_more is False:
+            body += "；后续分页：无（插件已确认末页）"
+        elif outcome.has_more is True:
+            body += "；后续分页：存在，续页命令缺失"
+        else:
+            body += "；分页完整性：未知"
     return ToolResult(
         body,
         state           = "error" if failed else "ok",
         progress        = observed[fingerprint] == 1 and not failed,
         command_outcome = outcome,
+        truncated       = _TRUNCATION_MARKER in body,
     )
 
 
@@ -1073,7 +1104,7 @@ def build_tools(env: ToolEnv, *, loaded_plugins: frozenset[str]) -> dict[str, To
                         "delivery": {
                             "type": "string",
                             "enum": ["reply", "all_pages", "continue"],
-                            "description": "交付方式：当前结果足够时选 reply；需要完整分页列表时选 all_pages，程序自动沿下一页取齐。以上方式在本批调用后结束执行并交付文字和附件，整理、解释和用户要求的建议也由交付阶段完成。原请求中还有其他独立操作需要调用工具时选 continue。",
+                            "description": "交付方式：当前结果足够时选 reply；需要完整分页列表时选 all_pages，程序自动沿下一页继续，并依据插件元数据报告完整性。以上方式在本批调用后结束执行并交付文字和附件，整理、解释和用户要求的建议也由交付阶段完成。原请求中还有其他独立操作需要调用工具时选 continue。",
                         },
                     },
                     ["command", "delivery"],
