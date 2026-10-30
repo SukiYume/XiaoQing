@@ -1,7 +1,20 @@
-# mypy: disable-error-code=attr-defined
 """Plugin directory discovery, authorization snapshots, and watcher reconciliation."""
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable
+
+    from .interfaces import PluginContextProtocol, PluginPrincipal
+    from .plugin_manager_support import (
+        _PLUGIN_IMPORT_DRAIN_TIMEOUT_SECONDS,
+        LoadedPlugin,
+        LoadedPluginService,
+        _LifecycleTaskOutcome,
+        _ReloadCandidateGeneration,
+    )
 
 import asyncio
 import hashlib
@@ -78,10 +91,164 @@ class _ManifestRejection:
 
 
 class PluginWatcherMixin:
+    # 由组合类实际提供的成员；这里只为类型检查声明契约，运行时不存在。
+    if TYPE_CHECKING:
+
+        def _activate_source_finder(
+            self,
+            plugin_name: str,
+            plugin_root: Path,
+            sources: Mapping[str, bytes],
+        ) -> _SourceOnlyPluginFinder:
+            raise NotImplementedError
+
+        @staticmethod
+        def _bind_declared_services(
+            definition: PluginDefinition,
+            module: ModuleType,
+        ) -> Mapping[str, LoadedPluginService]:
+            raise NotImplementedError
+
+        @staticmethod
+        async def _capture_lifecycle(awaitable: Awaitable[Any]) -> _LifecycleTaskOutcome:
+            raise NotImplementedError
+
+        def _claim_plugin_namespace(self, plugin_name: str) -> bool:
+            raise NotImplementedError
+
+        def _create_reload_candidate(
+            self,
+            name: str,
+            authorization: _ReloadAuthorization,
+        ) -> _ReloadCandidateGeneration:
+            raise NotImplementedError
+
+        def _ensure_plugin_data_dir(self, plugin_name: str, *, force: bool = False) -> Path:
+            raise NotImplementedError
+
+        def _execution_gate_for(self, definition: PluginDefinition) -> PluginExecutionGate:
+            raise NotImplementedError
+
+        _execution_gates: dict[str, PluginExecutionGate]
+
+        _init_task_plugins: dict[asyncio.Task[Any], str]
+
+        _init_tasks: list[asyncio.Task[Any]]
+
+        @staticmethod
+        def _is_fatal_base_exception(exc: BaseException) -> bool:
+            raise NotImplementedError
+
+        _lifecycle_lock: Any
+
+        async def _load_and_publish_reload_candidate(
+            self,
+            authorization: _ReloadAuthorization,
+            candidate: _ReloadCandidateGeneration,
+        ) -> None:
+            raise NotImplementedError
+
+        _pending_finalizers: dict[str, asyncio.Task[Any]]
+
+        _pending_plugins: dict[asyncio.Task[Any], tuple[PluginDefinition, ModuleType, float]]
+
+        def _plugin_module_aliases(self, plugin_dir: Path, name: str) -> list[str]:
+            raise NotImplementedError
+
+        _plugin_states: dict[str, dict[str, Any]]
+
+        _plugins: dict[str, LoadedPlugin]
+
+        _quarantined_plugins: set[str]
+
+        @classmethod
+        def _raise_preferred_lifecycle_error(
+            cls,
+            primary: BaseException,
+            cleanup: BaseException,
+        ) -> None:
+            raise NotImplementedError
+
+        def _record_private_module(
+            self,
+            plugin_name: str,
+            module_name: str,
+            module: ModuleType,
+        ) -> None:
+            raise NotImplementedError
+
+        def _release_plugin_namespace(self, plugin_name: str) -> None:
+            raise NotImplementedError
+
+        async def _reload_plugin_once(
+            self,
+            name: str,
+            *,
+            authorization: _ReloadAuthorization | None = None,
+        ) -> None:
+            raise NotImplementedError
+
+        def _require_hot_reload(self) -> None:
+            raise NotImplementedError
+
+        _restart_required_plugins: set[str]
+
+        async def _rollback_reload_candidate(
+            self,
+            name: str,
+            authorization: _ReloadAuthorization,
+            candidate: _ReloadCandidateGeneration,
+            original_error: BaseException,
+        ) -> bool:
+            raise NotImplementedError
+
+        _services: dict[str, LoadedPluginService]
+
+        _source_finders: dict[str, _SourceOnlyPluginFinder]
+
+        async def _unload_plugin_once(
+            self,
+            name: str,
+            *,
+            shutdown_deadline: float | None = None,
+        ) -> None:
+            raise NotImplementedError
+
+        @staticmethod
+        def _wait_for_module_import_barriers(
+            module_names: tuple[str, ...] | list[str] | set[str],
+            *,
+            timeout: float = _PLUGIN_IMPORT_DRAIN_TIMEOUT_SECONDS,
+        ) -> None:
+            raise NotImplementedError
+
+        _watch_error_next_log_at: dict[str, float]
+
+        _watch_error_suppressed: dict[str, int]
+
+        _watch_waiters_lock: Any
+
+        def build_context(
+            self,
+            plugin_name: str,
+            user_id: int | None               = None,
+            group_id: int | None              = None,
+            request_id: str | None            = None,
+            principal: PluginPrincipal | None = None,
+        ) -> PluginContextProtocol:
+            raise NotImplementedError
+
+        plugins_dir: Any
+
+        router: Any
+
+        async def wait_inits(self) -> None:
+            raise NotImplementedError
+
     _next_watch_waiter_id: int
-    _poll_interval: float
-    _poll_revision: int
-    _watch_waiters: dict[
+    _poll_interval       : float
+    _poll_revision       : int
+    _watch_waiters       : dict[
         int,
         tuple[asyncio.AbstractEventLoop, asyncio.Event],
     ]
@@ -274,11 +441,11 @@ class PluginWatcherMixin:
     def _scan_plugin_directories(self) -> _PluginDirectoryScan:
         """Return a deletion-safe best-effort snapshot of plugin directories."""
 
-        directories: list[Path]                   = []
-        uncertain_names: set[str]                 = set()
-        errors: list[tuple[Path | None, OSError]] = []
-        error_count                               = 0
-        complete                                  = True
+        directories    : list[Path]                        = []
+        uncertain_names: set[str]                          = set()
+        errors         : list[tuple[Path | None, OSError]] = []
+        error_count                                        = 0
+        complete                                           = True
 
         try:
             iterator = iter(self.plugins_dir.iterdir())
@@ -422,6 +589,9 @@ class PluginWatcherMixin:
             return
         try:
             definition = await asyncio.to_thread(self._load_definition_for_watch, plugin_dir)
+        except asyncio.CancelledError:
+            # 读取被取消不是候选失效的证据：保留健康的旧代际，原样传播取消。
+            raise
         except BaseException as exc:
             if self._has_plugin_runtime(directory_name):
                 try:
@@ -918,7 +1088,7 @@ class PluginWatcherMixin:
             return True
 
         search_path: list[str] | None = None
-        qualified: list[str]          = []
+        qualified  : list[str]        = []
         for index, part in enumerate(parts):
             qualified.append(part)
             spec = importlib.machinery.PathFinder.find_spec(".".join(qualified), search_path)
@@ -1395,8 +1565,8 @@ class PluginWatcherMixin:
         digest.update(b"XIAOQING_PLUGIN_SNAPSHOT_V2\0")
         digest.update(len(paths).to_bytes(8, "big"))
         opened_identities: dict[Path, tuple[int, int, int, int]] = {}
-        sources: dict[str, bytes]                                = {}
-        manifest_payload: bytes | None                           = None
+        sources          : dict[str, bytes]                      = {}
+        manifest_payload : bytes | None                          = None
         source_total                                             = 0
         snapshot_total                                           = 0
         for path in paths:

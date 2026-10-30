@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
 import tests.helpers.onebot_test_support as _fixture_support
 from tests.helpers.onebot_test_support import (
-    AsyncMock,
-    MagicMock,
     OneBotHttpSender,
     _normalize_action_for_onebot,
-    asyncio,
-    json,
-    patch,
-    pytest,
 )
 
 bounded_transport_adapter = _fixture_support.bounded_transport_adapter
@@ -177,7 +177,7 @@ class TestOneBotHttpSender:
             "action": "send_group_msg",
             "params": {
                 "group_id": 12345,
-                "message": [{"type": "text", "data": {"text": "hello"}}],
+                "message" : [{"type": "text", "data": {"text": "hello"}}],
             },
         }
 
@@ -211,7 +211,7 @@ class TestOneBotHttpSender:
             "action": "send_group_msg",
             "params": {
                 "group_id": 12345,
-                "message": [{"type": "emoji", "data": {"file": "emoji.png", "summary": "无语"}}],
+                "message" : [{"type": "emoji", "data": {"file": "emoji.png", "summary": "无语"}}],
             },
         }
 
@@ -234,7 +234,7 @@ class TestOneBotHttpSender:
             "action": "send_group_msg",
             "params": {
                 "group_id": 12345,
-                "message": [{"type": "text", "data": {"text": 123}}],
+                "message" : [{"type": "text", "data": {"text": 123}}],
             },
         }
 

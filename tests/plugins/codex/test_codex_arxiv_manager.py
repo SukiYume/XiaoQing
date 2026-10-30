@@ -2,30 +2,32 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock
+
+import pytest
+
 import tests.helpers.codex_test_support as _fixture_support
 from tests.helpers.codex_test_support import (
-    Any,
-    AsyncMock,
     CodexQueueManager,
     CodexRunResult,
     DeliveryTarget,
     FakeContext,
     FakeRunner,
-    Path,
     PluginCapabilities,
     PluginPrincipal,
     PluginSettingsSnapshot,
-    SimpleNamespace,
     _arxiv_addon,
     _install_fake_manager,
     _valid_arxiv_summary,
     _wait_manager_idle,
     _wait_until,
-    asyncio,
     codex_arxiv_summary,
     codex_main,
-    json,
-    pytest,
 )
 
 reset_codex_manager = _fixture_support.reset_codex_manager
@@ -341,10 +343,10 @@ async def test_cached_codex_manager_reads_live_private_override_rotation_and_del
             {
                 "plugins": {
                     "codex": {
-                        "default_cwd": str(default_cwd),
+                        "default_cwd"      : str(default_cwd),
                         "allowed_cwd_roots": [str(tmp_path)],
                         "max_parallel_jobs": 1,
-                        "approval_policy": "never",
+                        "approval_policy"  : "never",
                     }
                 }
             }
@@ -357,7 +359,7 @@ async def test_cached_codex_manager_reads_live_private_override_rotation_and_del
                 "plugins": {
                     "codex": {
                         "max_parallel_jobs": 2,
-                        "approval_policy": "on-request",
+                        "approval_policy"  : "on-request",
                     }
                 }
             }
@@ -419,10 +421,10 @@ async def test_codex_get_manager_reads_settings_inside_publication_lock(tmp_path
         config={
             "plugins": {
                 "codex": {
-                    "default_cwd": str(default_cwd),
+                    "default_cwd"      : str(default_cwd),
                     "allowed_cwd_roots": [str(tmp_path)],
                     "max_parallel_jobs": 1,
-                    "sandbox": "workspace-write",
+                    "sandbox"          : "workspace-write",
                 }
             }
         },
@@ -433,10 +435,10 @@ async def test_codex_get_manager_reads_settings_inside_publication_lock(tmp_path
         config={
             "plugins": {
                 "codex": {
-                    "default_cwd": str(default_cwd),
+                    "default_cwd"      : str(default_cwd),
                     "allowed_cwd_roots": [str(tmp_path)],
                     "max_parallel_jobs": 2,
-                    "sandbox": "read-only",
+                    "sandbox"          : "read-only",
                 }
             }
         },
@@ -578,10 +580,10 @@ async def test_queued_codex_job_refreshes_public_policy_without_new_message(
                 raise AssertionError("job was unexpectedly cancelled before prompt")
             calls.append(
                 {
-                    "prompt": prompt,
-                    "runner": self,
-                    "sandbox": self.config.sandbox,
-                    "approval_policy": self.config.approval_policy,
+                    "prompt"           : prompt,
+                    "runner"           : self,
+                    "sandbox"          : self.config.sandbox,
+                    "approval_policy"  : self.config.approval_policy,
                     "allowed_cwd_roots": self.config.allowed_cwd_roots,
                 }
             )
@@ -610,20 +612,20 @@ async def test_queued_codex_job_refreshes_public_policy_without_new_message(
         config_path.write_text(
             json.dumps(
                 {
-                    "bot_name": "test-bot",
-                    "command_prefixes": ["/"],
-                    "enable_ws_client": False,
+                    "bot_name"             : "test-bot",
+                    "command_prefixes"     : ["/"],
+                    "enable_ws_client"     : False,
                     "enable_inbound_server": False,
                     "enable_plugin_watcher": False,
-                    "timezone": "Asia/Shanghai",
-                    "default_group_ids": [],
-                    "plugins": {
+                    "timezone"             : "Asia/Shanghai",
+                    "default_group_ids"    : [],
+                    "plugins"              : {
                         "codex": {
-                            "default_cwd": str(default_cwd),
+                            "default_cwd"      : str(default_cwd),
                             "allowed_cwd_roots": [str(allowed_root)],
                             "max_parallel_jobs": 1,
-                            "sandbox": sandbox,
-                            "approval_policy": approval_policy,
+                            "sandbox"          : sandbox,
+                            "approval_policy"  : approval_policy,
                         }
                     },
                 }
@@ -721,7 +723,7 @@ async def test_codex_limit_shrink_requeues_old_limit_permit_before_start(tmp_pat
                 "codex": {
                     **old_plugin_config,
                     "max_parallel_jobs": 1,
-                    "sandbox": "read-only",
+                    "sandbox"          : "read-only",
                 }
             }
         },

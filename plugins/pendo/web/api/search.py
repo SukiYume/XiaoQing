@@ -162,11 +162,11 @@ def search_items(
         total = db.count_items(owner_id, filters=filters)
 
     return {
-        "ok": True,
+        "ok"  : True,
         "data": {
-            "items": _serialize_results(db, owner_id, results),
-            "total": total,
-            "page": page,
+            "items"    : _serialize_results(db, owner_id, results),
+            "total"    : total,
+            "page"     : page,
             "page_size": page_size,
         },
         "message": "",

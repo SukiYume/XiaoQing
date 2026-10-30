@@ -8,17 +8,17 @@ from .database import Database
 class GroupStats(TypedDict):
     """管理命令展示所需的稳定群统计字段。"""
 
-    total_pets: int
-    total_coins: int
-    total_experience: int
-    total_intimacy: int
-    avg_care_score: float
-    active_today: int
-    coins_per_pet: float
-    ledger_status: str
-    ledger_consistent: bool
+    total_pets           : int
+    total_coins          : int
+    total_experience     : int
+    total_intimacy       : int
+    avg_care_score       : float
+    active_today         : int
+    coins_per_pet        : float
+    ledger_status        : str
+    ledger_consistent    : bool
     ledger_expected_coins: int
-    ledger_difference: int
+    ledger_difference    : int
 
 
 class EconomyService:
@@ -32,19 +32,19 @@ class EconomyService:
         snapshot, reconciliation = self.db.get_group_economy_snapshot(group_id)
 
         return {
-            "total_pets": snapshot.total_pets,
-            "total_coins": snapshot.total_coins,
+            "total_pets"      : snapshot.total_pets,
+            "total_coins"     : snapshot.total_coins,
             "total_experience": snapshot.total_experience,
-            "total_intimacy": snapshot.total_intimacy,
-            "avg_care_score": round(snapshot.average_care_score, 1),
-            "active_today": snapshot.active_today,
+            "total_intimacy"  : snapshot.total_intimacy,
+            "avg_care_score"  : round(snapshot.average_care_score, 1),
+            "active_today"    : snapshot.active_today,
             "coins_per_pet": (
                 round(snapshot.total_coins / snapshot.total_pets, 1) if snapshot.total_pets else 0.0
             ),
-            "ledger_status": reconciliation.status,
-            "ledger_consistent": reconciliation.consistent,
+            "ledger_status"        : reconciliation.status,
+            "ledger_consistent"    : reconciliation.consistent,
             "ledger_expected_coins": reconciliation.expected_balance,
-            "ledger_difference": reconciliation.difference,
+            "ledger_difference"    : reconciliation.difference,
         }
 
     def format_stats(self, group_id: int) -> str:
@@ -61,7 +61,9 @@ class EconomyService:
             f"💕 亲密总量: {stats['total_intimacy']}",
             f"🌟 平均照顾评分: {stats['avg_care_score']}%",
         ]
-        if stats["ledger_consistent"]:
+        if stats["ledger_status"] == "unavailable":
+            lines.append("⚠️ 金币账本: 查询失败，请稍后重试")
+        elif stats["ledger_consistent"]:
             label = "已建立基线" if stats["ledger_status"] == "baseline_created" else "一致"
             lines.append(f"📒 金币账本: {label}")
         else:

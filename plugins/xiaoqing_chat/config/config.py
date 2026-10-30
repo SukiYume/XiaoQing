@@ -6,10 +6,13 @@ import json
 import re
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Annotated, Any, Literal, Self, cast
+from typing import Annotated, Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
+from core.ai import resolve_route_config
+
+from ..llm.llm_config import LLMCallConfig
 from ..persona import PersonaCard, bundled_persona_card, load_persona_card, persona_card_path
 
 Probability = Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]
@@ -63,13 +66,13 @@ DEFAULT_BOT_NAME_ONLY_REPLIES = ("在", "嗯？", "怎么了", "我在", "有事
 
 class DebugConfig(BaseModel):
     show_reply_prompt: bool = False
-    log_latency: bool       = False
-    log_steps: bool         = True
+    log_latency      : bool = False
+    log_steps        : bool = True
 
 
 class ResponseSplitterConfig(BaseModel):
-    enable: bool = True
-    max_length: int = Field(default=256, ge=1, le=4000)
+    enable          : bool = True
+    max_length      : int = Field(default=256, ge=1, le=4000)
     max_sentence_num: int = Field(default=3, ge=1, le=50)
 
 
@@ -85,9 +88,9 @@ class HumanizeConfig(BaseModel):
     """
 
     enable_typing_delay: bool = True
-    apply_to_forced: bool     = False
+    apply_to_forced    : bool = False
     # 读消息：常数 + 用户输入字符数 * 系数
-    read_base_seconds: float = Field(default=0.4, ge=0.0, le=60.0, allow_inf_nan=False)
+    read_base_seconds    : float = Field(default=0.4, ge=0.0, le=60.0, allow_inf_nan=False)
     read_per_char_seconds: float = Field(default=0.04, ge=0.0, le=1.0, allow_inf_nan=False)
     # 打字：bot 输出字符数 * 系数
     type_per_char_seconds: float = Field(default=0.05, ge=0.0, le=1.0, allow_inf_nan=False)
@@ -138,7 +141,7 @@ class PersonalityConfig(BaseModel):
 
 class PlannerConfig(BaseModel):
     enable_planner: bool = True
-    think_mode: str      = "dynamic"
+    think_mode    : str  = "dynamic"
 
     @field_validator("think_mode")
     @classmethod
@@ -170,14 +173,14 @@ class PlannerConfig(BaseModel):
 
 
 class KeywordRule(BaseModel):
-    keyword: str = Field(min_length=1, max_length=256)
-    prompt: str = Field(min_length=1, max_length=4000)
+    keyword    : str = Field(min_length=1, max_length=256)
+    prompt     : str = Field(min_length=1, max_length=4000)
     probability: Probability = 1.0
 
 
 class RegexRule(BaseModel):
-    pattern: str = Field(min_length=1, max_length=_MAX_REGEX_LENGTH)
-    prompt: str = Field(min_length=1, max_length=4000)
+    pattern    : str = Field(min_length=1, max_length=_MAX_REGEX_LENGTH)
+    prompt     : str = Field(min_length=1, max_length=4000)
     probability: Probability = 1.0
 
     _validate_pattern = field_validator("pattern")(_validated_regex_pattern)
@@ -185,52 +188,48 @@ class RegexRule(BaseModel):
 
 class KeywordReactionConfig(BaseModel):
     keyword_rules: list[KeywordRule] = Field(default_factory=list, max_length=100)
-    regex_rules: list[RegexRule] = Field(default_factory=list, max_length=100)
+    regex_rules  : list[RegexRule] = Field(default_factory=list, max_length=100)
 
 
 class MemoryConfig(BaseModel):
     enable_memory_retrieval: bool = True
-    planner_question: bool        = True
+    planner_question       : bool = True
     # 两条相邻消息超过这个间隔时，生成与规划只使用空档后的当前会话片段。
     # 原始历史仍完整保留，用户明确回忆旧事时仍可通过记忆检索取回。
     conversation_idle_gap_seconds: NonNegativeSeconds = 1800.0
     # 直接向量检索未命中时，只在消息明确回指既往信息时启动昂贵的 LLM 工具代理。
     agent_on_direct_miss_requires_reference: bool = True
-    max_agent_iterations: int = Field(default=5, ge=1, le=20)
-    agent_timeout_seconds: PositiveTimeoutSeconds = 120.0
-    top_k: int = Field(default=3, ge=1, le=100)
-    min_score: UnitWeight = 0.12
-    max_block_chars: int = Field(default=1200, ge=1, le=20_000)
-    enable_thinking_back_cache: bool                 = True
-    thinking_back_window_seconds: NonNegativeSeconds = 1800.0
-    thinking_back_max_entries: int = Field(default=200, ge=1, le=10_000)
+    max_agent_iterations                   : int = Field(default=5, ge=1, le=20)
+    agent_timeout_seconds                  : PositiveTimeoutSeconds = 120.0
+    top_k                                  : int = Field(default=3, ge=1, le=100)
+    min_score                              : UnitWeight = 0.12
+    max_block_chars                        : int = Field(default=1200, ge=1, le=20_000)
+    enable_thinking_back_cache             : bool               = True
+    thinking_back_window_seconds           : NonNegativeSeconds = 1800.0
+    thinking_back_max_entries              : int = Field(default=200, ge=1, le=10_000)
 
 
 class ReplyCheckConfig(BaseModel):
-    enable_reply_checker: bool    = True
-    enable_llm_checker: bool      = True
+    enable_reply_checker   : bool = True
+    enable_llm_checker     : bool = True
     enable_semantic_checker: bool = True
     # 默认逐条审查明确的交流要求；risk 可由部署者选择以减少远程检查。
-    llm_checker_mode: Literal["always", "risk"] = "always"
-    # 远程质量检查是附加门禁，必须明显短于整次插件回调预算。
-    timeout_seconds: PositiveTimeoutSeconds = 30.0
-    # 思考模型与证据清单共用输出预算，避免推理结束前被截断。
-    max_tokens: int = Field(default=8192, ge=1, le=8192)
-    max_repeat_compare: int = Field(default=2, ge=1, le=100)
+    llm_checker_mode    : Literal["always", "risk"] = "always"
+    max_repeat_compare  : int = Field(default=2, ge=1, le=100)
     similarity_threshold: Probability = 0.9
     max_assistant_in_row: int = Field(default=3, ge=1, le=100)
-    max_regen: RetryCount  = 1
-    max_replan: RetryCount = 1
+    max_regen           : RetryCount = 1
+    max_replan          : RetryCount = 1
 
 
 class HeartflowConfig(BaseModel):
-    enable_heartflow: bool             = False
-    base_score: Probability            = 0.35
-    weight_question: UnitWeight        = 0.12
-    weight_goal_match: UnitWeight      = 0.06
-    weight_short_text: UnitWeight      = -0.08
-    weight_no_reply_streak: UnitWeight = 0.05
-    weight_long_silence: UnitWeight    = 0.08
+    enable_heartflow      : bool        = False
+    base_score            : Probability = 0.35
+    weight_question       : UnitWeight  = 0.12
+    weight_goal_match     : UnitWeight  = 0.06
+    weight_short_text     : UnitWeight  = -0.08
+    weight_no_reply_streak: UnitWeight  = 0.05
+    weight_long_silence   : UnitWeight  = 0.08
 
 
 class GoalConfig(BaseModel):
@@ -238,19 +237,19 @@ class GoalConfig(BaseModel):
 
 
 class ReflectionConfig(BaseModel):
-    enable_expression_reflection: bool   = False
+    enable_expression_reflection  : bool = False
     require_approval_for_injection: bool = True
-    operator_user_id: int = Field(default=0, ge=0)
-    operator_group_id: int = Field(default=0, ge=0)
-    min_interval_seconds: NonNegativeSeconds = 3600.0
-    max_pending: int = Field(default=10, ge=1, le=1000)
-    ask_per_check: int = Field(default=1, ge=1, le=100)
-    enable_review_sessions: bool                     = False
-    session_timeout_seconds: PositiveDurationSeconds = 7200.0
-    resend_interval_seconds: PositiveDurationSeconds = 1800.0
-    session_cooldown_seconds: NonNegativeSeconds     = 3600.0
-    goal_lock_seconds: NonNegativeSeconds            = 3600.0
-    max_avoid_patterns: int = Field(default=30, ge=1, le=1000)
+    operator_user_id              : int = Field(default=0, ge=0)
+    operator_group_id             : int = Field(default=0, ge=0)
+    min_interval_seconds          : NonNegativeSeconds = 3600.0
+    max_pending                   : int = Field(default=10, ge=1, le=1000)
+    ask_per_check                 : int = Field(default=1, ge=1, le=100)
+    enable_review_sessions        : bool                    = False
+    session_timeout_seconds       : PositiveDurationSeconds = 7200.0
+    resend_interval_seconds       : PositiveDurationSeconds = 1800.0
+    session_cooldown_seconds      : NonNegativeSeconds      = 3600.0
+    goal_lock_seconds             : NonNegativeSeconds      = 3600.0
+    max_avoid_patterns            : int = Field(default=30, ge=1, le=1000)
 
     @model_validator(mode="after")
     def _validate_review_batch_size(self) -> Self:
@@ -268,8 +267,6 @@ class BrainChatConfig(BaseModel):
     brain_think_level: int = Field(default=2, ge=0, le=3)
     # 深度对话最大上下文
     brain_max_context_size: int = Field(default=30, ge=1, le=200)
-    # 深度对话温度参数 (更低的温度 = 更理性的思考)
-    brain_temperature: float = Field(default=0.7, ge=0.0, le=2.0, allow_inf_nan=False)
     # 深度对话提示词前缀 (显示在对话开始)
     brain_mode_indicator: str = "🧠 深度对话模式"
     # 是否在回复中显示模式标识
@@ -279,47 +276,44 @@ class BrainChatConfig(BaseModel):
 class SummarizerConfig(BaseModel):
     enable_topic_summarizer: bool = True
     min_messages_per_update: int = Field(default=12, ge=1, le=1000)
-    max_cache_topics: int = Field(default=20, ge=1, le=1000)
+    max_cache_topics       : int = Field(default=20, ge=1, le=1000)
 
 
 class ExpressionConfig(BaseModel):
     enable_expression_learning: bool = True
     # 审核通过的表达按当前话题筛选，每轮至多注入一条。
     enable_expression_selector: bool = True
-    max_injected: int = Field(default=1, ge=1, le=20)
-    max_store: int = Field(default=200, ge=1, le=10_000)
+    max_injected              : int = Field(default=1, ge=1, le=20)
+    max_store                 : int = Field(default=200, ge=1, le=10_000)
 
 
 class KnowledgeConfig(BaseModel):
     enable_knowledge: bool = False
-    files: list[str] = Field(default_factory=list, max_length=100)
-    top_k: int = Field(default=3, ge=1, le=100)
+    files           : list[str] = Field(default_factory=list, max_length=100)
+    top_k           : int = Field(default=3, ge=1, le=100)
 
 
 class MediaConfig(BaseModel):
-    enable_inbound_media_context: bool         = True
-    enable_auto_collect_inbound_emoji: bool    = True
-    emoji_auto_collect_requires_approval: bool = False
-    emoji_auto_collect_max_entries: int = Field(default=200, ge=1, le=10_000)
+    enable_inbound_media_context           : bool = True
+    enable_auto_collect_inbound_emoji      : bool = True
+    emoji_auto_collect_requires_approval   : bool = False
+    emoji_auto_collect_max_entries         : int = Field(default=200, ge=1, le=10_000)
     emoji_auto_collect_similarity_threshold: int = Field(default=4, ge=0, le=64)
-    max_media_per_message: int = Field(default=1, ge=1, le=20)
-    max_image_pixels: int = Field(default=16_000_000, ge=1, le=100_000_000)
-    max_animation_frames: int = Field(default=120, ge=1, le=1000)
-    inbox_disk_quota_bytes: int = Field(
+    max_media_per_message                  : int = Field(default=1, ge=1, le=20)
+    max_image_pixels                       : int = Field(default=16_000_000, ge=1, le=100_000_000)
+    max_animation_frames                   : int = Field(default=120, ge=1, le=1000)
+    inbox_disk_quota_bytes                 : int = Field(
         default = 256 * 1024 * 1024,
         ge      = 1,
         le      = 10 * 1024 * 1024 * 1024,
     )
-    inbox_ttl_seconds: NonNegativeSeconds                = 7 * 86400.0
-    enable_emoji_refine_background: bool                 = True
-    emoji_refine_timeout_seconds: PositiveTimeoutSeconds = 2.0
-    max_analyze_bytes: int = Field(default=4 * 1024 * 1024, ge=1, le=64 * 1024 * 1024)
-    vision_timeout_seconds: PositiveTimeoutSeconds   = 20.0
-    vision_max_retry: RetryCount                     = 1
-    vision_retry_interval_seconds: ShortDelaySeconds = 1.0
+    inbox_ttl_seconds             : NonNegativeSeconds     = 7 * 86400.0
+    enable_emoji_refine_background: bool                   = True
+    emoji_refine_timeout_seconds  : PositiveTimeoutSeconds = 2.0
+    max_analyze_bytes             : int = Field(default=4 * 1024 * 1024, ge=1, le=64 * 1024 * 1024)
     # 对识别为表情包/梗图、且含有清晰文字的图，做一次额外的 LLM 调用提取梗背景。
     # 模型不知道时返回空，不强行猜。每张梗图额外一次 LLM 调用，量受到表情包出现频率限制。
-    enable_meme_cultural_hint: bool                            = True
+    enable_meme_cultural_hint         : bool                   = True
     meme_cultural_hint_timeout_seconds: PositiveTimeoutSeconds = 8.0
 
 
@@ -329,69 +323,105 @@ class MediaConfig(BaseModel):
 
 
 class XiaoQingChatConfig(BaseModel):
-    enable_smalltalk: bool                                       = True
-    reply_probability_base: Probability                          = 0.55
-    participation_cue_reply_probability: Probability             = 0.9
-    active_topic_reply_probability: Probability                  = 0.72
-    active_topic_question_reply_probability: Probability         = 0.9
-    min_reply_interval_seconds: NonNegativeSeconds               = 12.0
-    active_topic_min_reply_interval: NonNegativeSeconds          = 3.0
+    # 主配置路由的运行时快照；行为文件无法覆盖此私有属性。
+    _llm_configs: dict[str, LLMCallConfig] = PrivateAttr(
+        default_factory=lambda: {
+            route: LLMCallConfig() for route in ("chat", "reasoning", "checker", "vision")
+        }
+    )
+
+    def llm_config(self, route: str) -> LLMCallConfig:
+        """取得指定路由的已解析请求参数。"""
+        return self._llm_configs[route]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_retired_ai_parameters(cls, value: object) -> object:
+        if isinstance(value, Mapping):
+            retired = {
+                "": {
+                    "timeout_seconds",
+                    "foreground_timeout_seconds",
+                    "foreground_max_retry",
+                    "foreground_retry_interval_seconds",
+                    "background_timeout_seconds",
+                    "background_max_retry",
+                    "background_retry_interval_seconds",
+                    "pfc_planner_timeout_seconds",
+                    "temperature",
+                    "top_p",
+                    "max_tokens",
+                },
+                "reply_check": {"timeout_seconds", "max_tokens"},
+                "brain_chat" : {"brain_temperature"},
+                "media"      : {
+                    "vision_timeout_seconds",
+                    "vision_max_retry",
+                    "vision_retry_interval_seconds",
+                },
+            }
+            for section, keys in retired.items():
+                source = value.get(section, {}) if section else value
+                if isinstance(source, Mapping) and keys.intersection(source):
+                    names = ", ".join(sorted(keys.intersection(source)))
+                    raise ValueError(
+                        f"AI parameters {section or 'xiaoqing_chat'}: {names} moved to "
+                        "config.plugins.xiaoqing_chat.ai.routes"
+                    )
+        return value
+
+    enable_smalltalk                        : bool               = True
+    reply_probability_base                  : Probability        = 0.55
+    participation_cue_reply_probability     : Probability        = 0.9
+    active_topic_reply_probability          : Probability        = 0.72
+    active_topic_question_reply_probability : Probability        = 0.9
+    min_reply_interval_seconds              : NonNegativeSeconds = 12.0
+    active_topic_min_reply_interval         : NonNegativeSeconds = 3.0
     active_topic_question_min_reply_interval: NonNegativeSeconds = 2.0
-    max_replies_per_minute: int = Field(default=6, ge=0, le=600)
-    max_generation_inflight_global: int = Field(default=4, ge=1, le=1000)
-    max_generation_inflight_per_chat: int = Field(default=1, ge=1, le=1000)
-    max_generation_inflight_per_user: int = Field(default=1, ge=1, le=1000)
-    max_generation_calls_per_user_per_day: int = Field(default=200, ge=1, le=1_000_000)
-    continuous_reply_limit: int = Field(default=3, ge=1, le=100)
-    continuous_cooldown_seconds: NonNegativeSeconds = 25.0
-    max_context_size: int = Field(default=30, ge=1, le=200)
-    timeout_seconds: PositiveTimeoutSeconds              = 15.0
-    foreground_timeout_seconds: PositiveTimeoutSeconds   = 12.0
-    foreground_max_retry: RetryCount                     = 1
-    foreground_retry_interval_seconds: ShortDelaySeconds = 1.0
-    background_timeout_seconds: PositiveTimeoutSeconds   = 15.0
-    background_max_retry: RetryCount                     = 2
-    background_retry_interval_seconds: ShortDelaySeconds = 10.0
-    io_persist_debounce_seconds: ShortDelaySeconds       = 0.8
-    memory_db_save_debounce_seconds: float               = Field(
+    max_replies_per_minute                  : int = Field(default=6, ge=0, le=600)
+    max_generation_inflight_global          : int = Field(default=4, ge=1, le=1000)
+    max_generation_inflight_per_chat        : int = Field(default=1, ge=1, le=1000)
+    max_generation_inflight_per_user        : int = Field(default=1, ge=1, le=1000)
+    max_generation_calls_per_user_per_day   : int = Field(default=200, ge=1, le=1_000_000)
+    continuous_reply_limit                  : int = Field(default=3, ge=1, le=100)
+    continuous_cooldown_seconds             : NonNegativeSeconds = 25.0
+    max_context_size                        : int = Field(default=30, ge=1, le=200)
+    io_persist_debounce_seconds             : ShortDelaySeconds = 0.8
+    memory_db_save_debounce_seconds         : float             = Field(
         default       = 20.0,
         ge            = 0.0,
         le            = 3600.0,
         allow_inf_nan = False,
     )
-    pfc_planner_timeout_seconds: PositiveTimeoutSeconds     = 10.0
-    pfc_planner_fail_window_seconds: PositiveTimeoutSeconds = 60.0
-    pfc_planner_fail_threshold: int = Field(default=2, ge=1, le=100)
-    pfc_planner_backoff_seconds: NonNegativeSeconds        = 120.0
+    pfc_planner_fail_window_seconds   : PositiveTimeoutSeconds = 60.0
+    pfc_planner_fail_threshold        : int = Field(default=2, ge=1, le=100)
+    pfc_planner_backoff_seconds       : NonNegativeSeconds = 120.0
     pfc_followup_action_window_seconds: NonNegativeSeconds = 120.0
-    temperature: float = Field(default=0.8, ge=0.0, le=2.0, allow_inf_nan=False)
-    top_p: float = Field(default=0.9, gt=0.0, le=1.0, allow_inf_nan=False)
-    max_tokens: int = Field(default=768, ge=1, le=32_768)
-    ban_words: list[str] = Field(default_factory=list, max_length=1000)
-    ban_regex: list[str] = Field(default_factory=list, max_length=100)
-    noisy_external_source_plugins: list[str] = Field(default_factory=list, max_length=100)
-    fallback_idle_replies: list[str] = Field(
+    ban_words                         : list[str] = Field(default_factory=list, max_length=1000)
+    ban_regex                         : list[str] = Field(default_factory=list, max_length=100)
+    noisy_external_source_plugins     : list[str] = Field(default_factory=list, max_length=100)
+    fallback_idle_replies             : list[str] = Field(
         default_factory=lambda: ["我在听", "接着说", "我想一下"]
     )
     bot_name_only_replies: list[str] = Field(
         default_factory=lambda: list(DEFAULT_BOT_NAME_ONLY_REPLIES)
     )
-    personality: PersonalityConfig = Field(default_factory=PersonalityConfig)
-    planner: PlannerConfig = Field(default_factory=PlannerConfig)
+    personality     : PersonalityConfig = Field(default_factory=PersonalityConfig)
+    planner         : PlannerConfig = Field(default_factory=PlannerConfig)
     keyword_reaction: KeywordReactionConfig = Field(default_factory=KeywordReactionConfig)
-    memory: MemoryConfig = Field(default_factory=MemoryConfig)
-    reply_check: ReplyCheckConfig = Field(default_factory=ReplyCheckConfig)
-    heartflow: HeartflowConfig = Field(default_factory=HeartflowConfig)
-    goal: GoalConfig = Field(default_factory=GoalConfig)
-    reflection: ReflectionConfig = Field(default_factory=ReflectionConfig)
-    brain_chat: BrainChatConfig = Field(default_factory=BrainChatConfig)
-    summarizer: SummarizerConfig = Field(default_factory=SummarizerConfig)
-    expression: ExpressionConfig = Field(default_factory=ExpressionConfig)
-    knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
-    media: MediaConfig = Field(default_factory=MediaConfig)
-    postprocess: ResponsePostProcessConfig = Field(default_factory=ResponsePostProcessConfig)
-    humanize: HumanizeConfig = Field(default_factory=HumanizeConfig)
-    debug: DebugConfig = Field(default_factory=DebugConfig)
+    memory          : MemoryConfig = Field(default_factory=MemoryConfig)
+    reply_check     : ReplyCheckConfig = Field(default_factory=ReplyCheckConfig)
+    heartflow       : HeartflowConfig = Field(default_factory=HeartflowConfig)
+    goal            : GoalConfig = Field(default_factory=GoalConfig)
+    reflection      : ReflectionConfig = Field(default_factory=ReflectionConfig)
+    brain_chat      : BrainChatConfig = Field(default_factory=BrainChatConfig)
+    summarizer      : SummarizerConfig = Field(default_factory=SummarizerConfig)
+    expression      : ExpressionConfig = Field(default_factory=ExpressionConfig)
+    knowledge       : KnowledgeConfig = Field(default_factory=KnowledgeConfig)
+    media           : MediaConfig = Field(default_factory=MediaConfig)
+    postprocess     : ResponsePostProcessConfig = Field(default_factory=ResponsePostProcessConfig)
+    humanize        : HumanizeConfig = Field(default_factory=HumanizeConfig)
+    debug           : DebugConfig = Field(default_factory=DebugConfig)
 
     @field_validator("ban_regex")
     @classmethod
@@ -408,8 +438,6 @@ class XiaoQingChatConfig(BaseModel):
             raise ValueError(
                 "max_generation_inflight_per_user must not exceed max_generation_inflight_global"
             )
-        if self.pfc_planner_timeout_seconds > self.timeout_seconds:
-            raise ValueError("pfc_planner_timeout_seconds must not exceed timeout_seconds")
         return self
 
 
@@ -482,10 +510,12 @@ def load_xiaoqing_chat_config(
 
     file_path        = plugin_dir / filename
     config_file_path = plugin_dir / "config" / filename
-    if config_file_path.exists():
-        data = _merge_config_mappings(data, _read_json(config_file_path))
-    elif file_path.exists():
-        data = _merge_config_mappings(data, _read_json(file_path))
+    behavior_path    = config_file_path if config_file_path.exists() else file_path
+    if behavior_path.exists():
+        behavior = _read_json(behavior_path)
+        if "ai" in behavior:
+            raise ValueError("AI routes belong in config.plugins.xiaoqing_chat.ai")
+        data = _merge_config_mappings(data, behavior)
 
     retired = _retired_persona_keys(data)
     if retired and logger is not None:
@@ -494,8 +524,32 @@ def load_xiaoqing_chat_config(
             "这些配置不再生效：%s",
             "、".join(retired),
         )
-    personality         = dict(data.get("personality") or {})
-    persona_file        = str(personality.get("persona_file") or "")
-    personality["card"] = load_persona_card(persona_card_path(plugin_dir, persona_file))
-    data["personality"] = personality
-    return cast(XiaoQingChatConfig, XiaoQingChatConfig.model_validate(data))
+    personality             = dict(data.get("personality") or {})
+    persona_file            = str(personality.get("persona_file") or "")
+    personality["card"]     = load_persona_card(persona_card_path(plugin_dir, persona_file))
+    data["personality"]     = personality
+    cfg: XiaoQingChatConfig = XiaoQingChatConfig.model_validate(data)
+    # AI 参数始终从主配置解析，插件行为文件中的 ai 对象不参与模型调用。
+    if context_config is not None:
+        # 使用上面读取的主配置插件对象，避免行为文件覆盖路由。
+        plugins     = context_config.get("plugins", {})
+        main_plugin = plugins.get("xiaoqing_chat", {}) if isinstance(plugins, Mapping) else {}
+        plugin_ai   = main_plugin.get("ai", {}) if isinstance(main_plugin, Mapping) else {}
+        routes      = plugin_ai.get("routes", {}) if isinstance(plugin_ai, Mapping) else {}
+        for name in routes:
+            if name not in cfg._llm_configs:
+                continue
+            route                  = resolve_route_config(context_config, "xiaoqing_chat", name)
+            defaults               = LLMCallConfig()
+            cfg._llm_configs[name] = LLMCallConfig(
+                timeout_seconds        = route.timeout_seconds,
+                total_timeout_seconds  = route.total_timeout_seconds,
+                max_retry              = route.max_retry,
+                retry_interval_seconds = route.retry_interval_seconds,
+                temperature            = defaults.temperature
+                if route.temperature is None
+                else route.temperature,
+                top_p      = defaults.top_p if route.top_p is None else route.top_p,
+                max_tokens = defaults.max_tokens if route.max_tokens is None else route.max_tokens,
+            )
+    return cfg

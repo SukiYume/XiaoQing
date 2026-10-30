@@ -2,28 +2,30 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+import os
+import time
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
 from tests.helpers.codex_test_support import (
     PNG_BYTES,
-    Any,
     CallbackStreamingProcess,
     CodexRunner,
     FakeContext,
     FakeRunner,
-    Path,
-    SimpleNamespace,
     _arxiv_addon,
     _install_fake_manager,
     _persisted_session,
     _valid_arxiv_summary,
     _wait_manager_idle,
     _wait_until,
-    asyncio,
     codex_main,
-    json,
     load_plugin_config,
-    os,
-    pytest,
-    time,
 )
 
 
@@ -362,7 +364,7 @@ def test_session_state_recovers_truncated_primary_from_valid_backup(tmp_path: Pa
     context.data_dir.mkdir(parents=True)
     state = {
         "schema_version": 1,
-        "sessions": {"safe": _persisted_session("safe", context.default_cwd)},
+        "sessions"      : {"safe": _persisted_session("safe", context.default_cwd)},
     }
     sessions_path = context.data_dir / "sessions.json"
     sessions_path.write_text('{"schema_version": 1,', encoding="utf-8")
@@ -392,8 +394,8 @@ def test_session_state_keeps_valid_records_and_quarantines_invalid_fields(tmp_pa
         json.dumps(
             {
                 "schema_version": 1,
-                "sessions": {
-                    "valid": _persisted_session("valid", context.default_cwd),
+                "sessions"      : {
+                    "valid"  : _persisted_session("valid", context.default_cwd),
                     "invalid": invalid,
                 },
             }

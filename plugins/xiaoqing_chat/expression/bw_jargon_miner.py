@@ -8,6 +8,8 @@ import time
 from collections.abc import Sequence
 from typing import Any
 
+from core.lifecycle import to_thread_owned
+
 from ..llm.gateway import (
     LLMError,
     chat_completions_raw_with_fallback_paths,
@@ -127,9 +129,10 @@ async def _extract_candidates(
     )
     try:
         resp, _path = await chat_completions_raw_with_fallback_paths(
-            secrets=secrets,
+            route   = "reasoning",
+            secrets = secrets,
             messages=[{"role": "user", "content": _EXTRACT_PROMPT.format(dialogue=dialogue)}],
-            **llm.bounded(max_temperature=0.4, max_tokens=700, min_tokens=400).as_kwargs(),
+            **llm.as_kwargs(),
         )
     except LLMError as exc:
         _log_jargon_step(
@@ -217,23 +220,24 @@ async def _infer_pending_meanings(
         contexts = "\n---\n".join(rec.raw_content[-6:]).strip() or "（无）"
         try:
             resp, _path = await chat_completions_raw_with_fallback_paths(
+                route    = "reasoning",
                 secrets  = secrets,
                 messages = [
                     {
-                        "role": "user",
+                        "role"   : "user",
                         "content": _INFER_PROMPT.format(term=rec.content, contexts=contexts),
                     }
                 ],
-                **llm.bounded(max_temperature=0.2, max_tokens=300).as_kwargs(),
+                **llm.as_kwargs(),
             )
         except LLMError as exc:
             _log_jargon_step(
                 "jargon.infer.fail",
                 chat_id = chat_id,
                 fields  = {
-                    "term": rec.content,
+                    "term"      : rec.content,
                     "error_type": type(exc).__name__,
-                    "elapsed_s": round(time.monotonic() - t0, 3),
+                    "elapsed_s" : round(time.monotonic() - t0, 3),
                 },
                 warning=True,
             )
@@ -270,7 +274,11 @@ async def mine_jargon(
 ) -> int:
     """抽取一批黑话并返回实际变更数；AI 不可用时保持原库不变。"""
 
-    generation = store.generation(chat_id) if expected_generation is None else expected_generation
+    generation = (
+        await to_thread_owned(store.generation, chat_id)
+        if expected_generation is None
+        else expected_generation
+    )
     if "_ai" in secrets and secrets.get("_ai") is None:
         return 0
     dialogue = render_dialogue(messages, bot_name=bot_name)
@@ -280,7 +288,7 @@ async def mine_jargon(
     if candidates is None:
         return 0
 
-    db              = store.load()
+    db              = await to_thread_owned(store.load)
     now             = time.time()
     context_text    = "\n".join(dialogue.splitlines()[-6:]).strip()
     source_messages = [render_stored_message(m) for m in messages if m.role == "user"]
@@ -299,8 +307,12 @@ async def mine_jargon(
     changed += await _infer_pending_meanings(
         secrets, db, llm, chat_id=chat_id, infer_threshold=infer_threshold
     )
-    with store.generation_guard(chat_id, generation) as current:
-        if not current:
-            return 0
-        store.save(db)
-    return changed
+
+    def commit() -> int:
+        with store.generation_guard(chat_id, generation) as current:
+            if not current:
+                return 0
+            store.save(db)
+        return changed
+
+    return await to_thread_owned(commit)

@@ -2,21 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
-
-from tests.helpers.pendo_test_support import (
-    ROOT,
-    SimpleNamespace,
-    asyncio,
-)
 
 
 class TestDiaryViewRegression:
     def test_view_diary_by_id_returns_full_entry(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.diary import DiaryHandler
         from plugins.pendo.models.item import DiaryItem
@@ -46,10 +39,7 @@ class TestDiaryViewRegression:
             db.cleanup()
 
     def test_view_event_with_diary_id_returns_hint_instead_of_crashing(self, tmp_path):
-        import sys
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import DiaryItem
@@ -79,9 +69,6 @@ class TestDiaryViewRegression:
             db.cleanup()
 
     def test_view_diary_with_event_id_returns_hint(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.diary import DiaryHandler
         from plugins.pendo.models.item import EventItem
@@ -109,9 +96,6 @@ class TestDiaryViewRegression:
             db.cleanup()
 
     def test_delete_diary_by_id_deletes_entry(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.diary import DiaryHandler
         from plugins.pendo.models.item import DiaryItem
@@ -140,9 +124,6 @@ class TestDiaryViewRegression:
             db.cleanup()
 
     def test_delete_diary_with_event_id_returns_hint(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.diary import DiaryHandler
         from plugins.pendo.models.item import EventItem
@@ -172,9 +153,6 @@ class TestDiaryViewRegression:
 
 class TestDiaryMoodAIRegression:
     def test_create_diary_uses_ai_mood_analysis(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.diary import DiaryHandler
         from plugins.pendo.services.db import Database
@@ -209,9 +187,6 @@ class TestDiaryMoodAIRegression:
             db.cleanup()
 
     def test_add_diary_creates_separate_entry_with_ai_mood(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.diary import DiaryHandler
         from plugins.pendo.models.item import DiaryItem
@@ -272,9 +247,6 @@ class TestDiaryMoodAIRegression:
             db.cleanup()
 
     def test_add_diary_backfill_date_keeps_entry_time_on_diary_date(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.diary import DiaryHandler
         from plugins.pendo.services.db import Database
@@ -311,9 +283,6 @@ class TestDiaryMoodAIRegression:
             db.cleanup()
 
     def test_add_diary_rejects_score_without_mood_when_out_of_range(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.diary import DiaryHandler
         from plugins.pendo.services.db import Database
@@ -343,9 +312,6 @@ class TestDiaryMoodAIRegression:
             db.cleanup()
 
     def test_create_diary_rejects_invalid_new_structure_fields(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.diary import DiaryHandler
         from plugins.pendo.services.db import Database
@@ -359,9 +325,9 @@ class TestDiaryMoodAIRegression:
                     "u1",
                     "2026-03-28",
                     {
-                        "content": "今天记录一下。",
-                        "mood": "happy",
-                        "mood_score": 99,
+                        "content"         : "今天记录一下。",
+                        "mood"            : "happy",
+                        "mood_score"      : 99,
                         "template_answers": "legacy text",
                     },
                     SimpleNamespace(),
@@ -376,9 +342,9 @@ class TestDiaryMoodAIRegression:
                     "u1",
                     "2026-03-28",
                     {
-                        "content": "今天记录一下。",
-                        "mood": "happy",
-                        "mood_score": 8,
+                        "content"         : "今天记录一下。",
+                        "mood"            : "happy",
+                        "mood_score"      : 8,
                         "template_answers": "legacy text",
                     },
                     SimpleNamespace(),

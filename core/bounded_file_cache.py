@@ -17,7 +17,7 @@ _SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 @dataclass(frozen=True, slots=True)
 class FileCacheLimits:
     max_entries: int
-    max_bytes: int
+    max_bytes  : int
     ttl_seconds: float
 
     def __post_init__(self) -> None:

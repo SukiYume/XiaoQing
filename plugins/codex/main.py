@@ -24,6 +24,7 @@ HELP_TEXT = """Codex 会话队列:
 
 路径建议统一输入 / 斜杠，例如 C:/workspace/project。插件会按 bot 所在系统解析。"""
 
+_HELP_WORDS  = frozenset({"help", "帮助", "?"})
 _SUBCOMMANDS = {
     **dict.fromkeys(("create", "new", "创建"), "create"),
     **dict.fromkeys(("list", "ls", "列表"), "list"),
@@ -182,6 +183,9 @@ async def _handle_create(
     cwd, error = _cwd_from_args(parsed)
     if error:
         return f"{error}\n用法: /codex create <name> [cwd:<path>]"
+    if parsed.second.casefold() in _SUBCOMMANDS or parsed.second.casefold() in _HELP_WORDS:
+        # 任务入口优先把这些词解析为管理命令，用它们命名的会话之后无法提交任务。
+        return f"会话名 {parsed.second} 是 /codex 的管理命令，请换一个名字。"
     return await manager.create_session(
         parsed.second,
         cwd,
@@ -244,7 +248,7 @@ async def handle(
     # 未预期异常统一交给 Dispatcher 生成脱敏公开错误，插件入口不重复包装。
     del command
     raw = (args or "").strip()
-    if not raw or raw.lower() in {"help", "帮助", "?"}:
+    if not raw or raw.lower() in _HELP_WORDS:
         return _message(HELP_TEXT)
 
     parsed     = parse(raw)

@@ -215,29 +215,29 @@ def isolate_process_global_import_hooks() -> Iterator[None]:
 def sample_group_event() -> dict[str, Any]:
     """Sample group message event"""
     return {
-        "post_type": "message",
+        "post_type"   : "message",
         "message_type": "group",
-        "time": 1234567890,
-        "self_id": 11111,
-        "user_id": 12345,
-        "group_id": 67890,
-        "message": [
+        "time"        : 1234567890,
+        "self_id"     : 11111,
+        "user_id"     : 12345,
+        "group_id"    : 67890,
+        "message"     : [
             {"type": "text", "data": {"text": "/echo hello"}},
         ],
         "raw_message": "/echo hello",
-        "font": 0,
-        "sender": {
-            "user_id": 12345,
+        "font"       : 0,
+        "sender"     : {
+            "user_id" : 12345,
             "nickname": "TestUser",
-            "card": "",
-            "sex": "unknown",
-            "age": 0,
-            "area": "",
-            "level": "",
-            "role": "member",
-            "title": "",
+            "card"    : "",
+            "sex"     : "unknown",
+            "age"     : 0,
+            "area"    : "",
+            "level"   : "",
+            "role"    : "member",
+            "title"   : "",
         },
-        "message_id": 1,
+        "message_id" : 1,
         "message_seq": 1,
     }
 
@@ -246,19 +246,19 @@ def sample_group_event() -> dict[str, Any]:
 def sample_private_event() -> dict[str, Any]:
     """Sample private message event"""
     return {
-        "post_type": "message",
+        "post_type"   : "message",
         "message_type": "private",
-        "time": 1234567890,
-        "self_id": 11111,
-        "user_id": 12345,
-        "message": "你好",
-        "raw_message": "你好",
-        "font": 0,
-        "sender": {
-            "user_id": 12345,
+        "time"        : 1234567890,
+        "self_id"     : 11111,
+        "user_id"     : 12345,
+        "message"     : "你好",
+        "raw_message" : "你好",
+        "font"        : 0,
+        "sender"      : {
+            "user_id" : 12345,
             "nickname": "TestUser",
-            "sex": "unknown",
-            "age": 0,
+            "sex"     : "unknown",
+            "age"     : 0,
         },
         "message_id": 1,
     }

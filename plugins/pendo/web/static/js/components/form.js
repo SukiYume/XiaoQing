@@ -151,6 +151,68 @@ export function getFormData(container) {
     return data;
 }
 
+/**
+ * 记下编辑表单当前的全部输入（含尚未保存的草稿），供关闭弹窗后原样恢复。
+ * 删除确认会替换掉编辑弹窗；取消删除或删除失败时用它回到用户离开时的状态。
+ */
+export function captureFormDraft(container) {
+    const draft = { fields: [], groups: [] };
+    if (!container?.querySelectorAll) return draft;
+    container.querySelectorAll('.form-input').forEach((element) => {
+        if (!element.name) return;
+        draft.fields.push({ name: element.name, value: element.value, checked: element.checked });
+    });
+    container.querySelectorAll('.priority-selector, .mood-selector').forEach((group) => {
+        const active = group.querySelector('.active');
+        draft.groups.push({ name: group.dataset?.name, value: active?.dataset?.value ?? null });
+    });
+    return draft;
+}
+
+export function restoreFormDraft(container, draft) {
+    if (!container?.querySelectorAll || !draft) return;
+    const pending = new Map();
+    for (const field of draft.fields || []) {
+        if (!pending.has(field.name)) pending.set(field.name, []);
+        pending.get(field.name).push(field);
+    }
+    container.querySelectorAll('.form-input').forEach((element) => {
+        const field = pending.get(element.name)?.shift();
+        if (!field) return;
+        if (element.type === 'checkbox') element.checked = Boolean(field.checked);
+        else element.value = field.value;
+        const select = element.closest?.('.pselect');
+        if (!select) return;
+        // 自定义选择框的可见标签与选中态跟随恢复的值。
+        select.dataset.value = field.value;
+        select.querySelectorAll('.pselect-option').forEach((option) => {
+            const selected = (option.dataset.value ?? '') === field.value;
+            option.classList.toggle('pselect-selected', selected);
+            option.setAttribute('aria-selected', selected ? 'true' : 'false');
+            if (selected) {
+                const label = select.querySelector('.pselect-label');
+                if (label) label.textContent = String(option.textContent ?? '').trim();
+            }
+        });
+    });
+    for (const group of draft.groups || []) {
+        const element = [...container.querySelectorAll('.priority-selector, .mood-selector')]
+            .find((candidate) => candidate.dataset?.name === group.name);
+        element?.querySelectorAll('[data-value]').forEach((button) => {
+            const active = group.value !== null && button.dataset.value === group.value;
+            button.classList.toggle('active', active);
+            button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+    }
+}
+
+/** 重新打开编辑弹窗，并把之前记下的草稿填回去。 */
+export async function reopenWithDraft(open, draft, formSelector) {
+    await open();
+    const form = document.getElementById('modal-content')?.querySelector(formSelector);
+    restoreFormDraft(form, draft);
+}
+
 // 优先级与心情都属于单选按钮组，共用同一套状态同步逻辑。
 function initExclusiveButtonGroups(container, groupSelector, buttonSelector) {
     container.querySelectorAll(groupSelector).forEach((group) => {

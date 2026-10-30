@@ -56,8 +56,6 @@ from .render_cache import write_render_cache_entry
 from .settings import MEDIA_ANALYSIS_PROMPT_VERSION, media_config, media_log
 
 # 文字为主的截图要逐句转写，输出预算按一千字上下的转写留足；被截断的输出整份作废重试。
-_MEDIA_DETAIL_BASE_MAX_TOKENS            = 800
-_MEDIA_DETAIL_TRUNCATED_RETRY_MAX_TOKENS = 1600
 # 提示词里给转写定的篇幅，低于摘要上限，留出画面描述的位置。
 _VISIBLE_TEXT_PROMPT_CHARS  = 800
 _MEDIA_SEMANTIC_RETRY_LIMIT = 1
@@ -67,30 +65,22 @@ _VISION_REFUSAL_RE          = re.compile(
 )
 
 
-def _media_llm_max_tokens(secrets: Mapping[str, Any], base_max_tokens: int) -> int:
-    base  = max(1, int(base_max_tokens))
-    model = str(secrets.get("model", "") or "").strip().lower()
-    if "thinking" not in model:
-        return base
-    return max(base * 4, 800 if base >= 200 else 480)
-
-
-def _media_detail_base_max_tokens_for_reason(reason: str) -> int:
+def _media_detail_base_max_tokens_for_reason(reason: str, max_tokens: int) -> int:
     normalized = str(reason or "").strip().lower()
     if normalized.endswith("length_truncated"):
-        return _MEDIA_DETAIL_TRUNCATED_RETRY_MAX_TOKENS
-    return _MEDIA_DETAIL_BASE_MAX_TOKENS
+        return max_tokens * 2
+    return max_tokens
 
 
 @dataclass(frozen=True)
 class MediaLLMCallResult:
     """清洗后的结果，以及审计日志所需的服务商元数据。"""
 
-    text: str
-    used_secrets: dict[str, Any]
-    used_path: str
+    text         : str
+    used_secrets : dict[str, Any]
+    used_path    : str
     finish_reason: str
-    raw_chars: int
+    raw_chars    : int
 
 
 @dataclass(frozen=True)
@@ -101,17 +91,17 @@ class _PreparedMediaAnalysisRequest:
 
 @dataclass(frozen=True)
 class _MediaAnalysisAttempt:
-    llm_result: MediaLLMCallResult
-    detail: MediaAnalysisDraft
-    rendered: RenderedMedia
+    llm_result           : MediaLLMCallResult
+    detail               : MediaAnalysisDraft
+    rendered             : RenderedMedia
     used_summary_fallback: bool
-    quality: str
+    quality              : str
 
 
 @dataclass(frozen=True)
 class _MediaProviderOutcome:
-    rendered: RenderedMedia | None = None
-    fallback_reason: str           = ""
+    rendered       : RenderedMedia | None = None
+    fallback_reason: str                  = ""
 
 
 def _media_request_failure_reason(exc: Exception) -> str:
@@ -144,10 +134,10 @@ def _log_media_provider_fallback(
         step   = "media.analyze.provider_fallback",
         fields = {
             "from_provider": from_provider.get("_provider_name", ""),
-            "to_provider": to_provider.get("_provider_name", ""),
-            "to_model": to_provider.get("model", ""),
-            "to_max_tokens": _media_llm_max_tokens(to_provider, max_tokens),
-            "reason": reason or "request_failed",
+            "to_provider"  : to_provider.get("_provider_name", ""),
+            "to_model"     : to_provider.get("model", ""),
+            "to_max_tokens": max_tokens,
+            "reason"       : reason or "request_failed",
         },
         level="warning",
     )
@@ -161,11 +151,11 @@ def _resolve_media_llm_secret_candidates(context) -> list[dict[str, Any]]:
     """从 core route 解析只含公开元数据的有序视觉模型链。"""
 
     empty: dict[str, Any] = {
-        "model": "",
-        "_ai": None,
-        "_route": "vision",
-        "_pinned_model": None,
-        "_provider_name": "",
+        "model"          : "",
+        "_ai"            : None,
+        "_route"         : "vision",
+        "_pinned_model"  : None,
+        "_provider_name" : "",
         "_provider_scope": "none",
         "_vision_enabled": False,
     }
@@ -181,15 +171,15 @@ def _resolve_media_llm_secret_candidates(context) -> list[dict[str, Any]]:
         return [empty]
     candidates = [
         {
-            "model": item.model,
-            "_ai": ai_service,
-            "_route": "vision",
-            "_pinned_model": item.name,
-            "_profile": item.name,
-            "_provider_name": item.name,
+            "model"            : item.model,
+            "_ai"              : ai_service,
+            "_route"           : "vision",
+            "_pinned_model"    : item.name,
+            "_profile"         : item.name,
+            "_provider_name"   : item.name,
             "_backend_provider": item.provider,
-            "_provider_scope": "vision_route" if index == 0 else "vision_fallback",
-            "_vision_enabled": True,
+            "_provider_scope"  : "vision_route" if index == 0 else "vision_fallback",
+            "_vision_enabled"  : True,
         }
         for index, item in enumerate(models)
     ]
@@ -250,6 +240,18 @@ def should_refresh_cached_render(
     )
 
 
+# 服务商直接支持的静态格式原样发送；其他格式才转码，转码时限制尺寸并校验最终载荷。
+_PASSTHROUGH_IMAGE_MIMES = frozenset({"image/jpeg", "image/png", "image/webp"})
+_TRANSCODE_MAX_SIDE      = 2048
+_MAX_PREPARED_BYTES      = 8 * 1024 * 1024
+
+
+def _checked_prepared(prepared: PreparedMediaForLLM) -> PreparedMediaForLLM:
+    if len(prepared.payload) > _MAX_PREPARED_BYTES:
+        raise ValueError("prepared media payload exceeds the request budget")
+    return prepared
+
+
 def _prepare_media_for_llm(
     resolved: ResolvedMedia,
     payload: bytes | None = None,
@@ -274,18 +276,41 @@ def _prepare_media_for_llm(
         .lower()
         or "image/png"
     )
+    if not resolved.is_animated and source_mime in _PASSTHROUGH_IMAGE_MIMES:
+        # 静态 JPEG/PNG/WebP 不再一律转 PNG：转码会把小体积 JPEG 放大十几倍。
+        # 原样发送前仍用解码器确认结构完整，无法解码的原始字节绝不发出。
+        try:
+            from PIL import Image
+
+            with Image.open(io.BytesIO(payload)) as image:
+                image.verify()
+        except Exception as exc:
+            raise ValueError("image decode failed") from exc
+        return _checked_prepared(
+            PreparedMediaForLLM(
+                payload          = payload,
+                mime_type        = source_mime,
+                transcoded       = False,
+                source_mime_type = source_mime,
+                is_animated      = False,
+                frame_strategy   = "original",
+                frame_count      = 1,
+            )
+        )
     if source_mime.startswith("image/") and source_mime not in {"image/svg+xml"}:
         try:
             if resolved.is_animated:
                 contact_sheet_payload, frame_count = render_animation_contact_sheet(payload)
-                return PreparedMediaForLLM(
-                    payload          = contact_sheet_payload,
-                    mime_type        = "image/png",
-                    transcoded       = True,
-                    source_mime_type = source_mime,
-                    is_animated      = True,
-                    frame_strategy   = "animation_contact_sheet",
-                    frame_count      = frame_count,
+                return _checked_prepared(
+                    PreparedMediaForLLM(
+                        payload          = contact_sheet_payload,
+                        mime_type        = "image/png",
+                        transcoded       = True,
+                        source_mime_type = source_mime,
+                        is_animated      = True,
+                        frame_strategy   = "animation_contact_sheet",
+                        frame_count      = frame_count,
+                    )
                 )
 
             from PIL import Image
@@ -293,9 +318,11 @@ def _prepare_media_for_llm(
             with Image.open(io.BytesIO(payload)) as image:
                 if getattr(image, "mode", "") not in {"RGB", "RGBA"}:
                     image = image.convert("RGBA")
+                if max(image.size) > _TRANSCODE_MAX_SIDE:
+                    image.thumbnail((_TRANSCODE_MAX_SIDE, _TRANSCODE_MAX_SIDE))
                 buffer = io.BytesIO()
-                image.save(buffer, format="PNG")
-            return PreparedMediaForLLM(
+                image.save(buffer, format="PNG", optimize=True)
+            prepared = PreparedMediaForLLM(
                 payload          = buffer.getvalue(),
                 mime_type        = "image/png",
                 transcoded       = True,
@@ -306,6 +333,7 @@ def _prepare_media_for_llm(
             )
         except Exception as exc:
             raise ValueError("image decode or transcode failed") from exc
+        return _checked_prepared(prepared)
     return PreparedMediaForLLM(
         payload          = payload,
         mime_type        = source_mime,
@@ -346,8 +374,6 @@ async def _call_media_llm(
     context,
     runtime,
     messages: list[dict[str, Any]],
-    temperature: float,
-    top_p: float,
     max_tokens: int,
 ) -> tuple[str, dict[str, Any]]:
     """调用统一视觉 route；传输错误的有序 fallback 由 core 完成。"""
@@ -359,12 +385,10 @@ async def _call_media_llm(
     route_context                  = dict(candidates[0])
     route_context["_pinned_model"] = None
     result                         = await _call_media_llm_once(
-        runtime     = runtime,
-        secrets     = route_context,
-        messages    = messages,
-        temperature = temperature,
-        top_p       = top_p,
-        max_tokens  = max_tokens,
+        runtime    = runtime,
+        secrets    = route_context,
+        messages   = messages,
+        max_tokens = max_tokens,
     )
     return result.text, result.used_secrets
 
@@ -374,27 +398,23 @@ async def _call_media_llm_once(
     runtime,
     secrets: Mapping[str, Any],
     messages: list[dict[str, Any]],
-    temperature: float,
-    top_p: float,
     max_tokens: int,
 ) -> MediaLLMCallResult:
     """发起一次有界视觉请求，只保留可安全脱敏的元数据。"""
 
-    cfg                                   = media_config(runtime)
-    effective_max_tokens                  = _media_llm_max_tokens(secrets, max_tokens)
+    llm                                   = runtime.cfg.llm_config("vision")
+    effective_max_tokens                  = max_tokens
     used_secrets                          = dict(secrets)
     used_secrets["_effective_max_tokens"] = effective_max_tokens
     response_data, used_profile = await chat_completions_raw_with_fallback_paths(
-        secrets                = secrets,
-        route                  = "vision",
-        required_modalities    = ("text", "image"),
-        messages               = messages,
-        temperature            = temperature,
-        top_p                  = top_p,
-        max_tokens             = effective_max_tokens,
-        timeout_seconds        = float(cfg.vision_timeout_seconds),
-        max_retry              = int(cfg.vision_max_retry),
-        retry_interval_seconds = float(cfg.vision_retry_interval_seconds),
+        secrets             = secrets,
+        route               = "vision",
+        required_modalities = ("text", "image"),
+        messages            = messages,
+        max_tokens          = effective_max_tokens,
+        temperature         = llm.temperature,
+        top_p               = llm.top_p,
+        **llm.request_controls(),
     )
     text = extract_response_content(response_data)
     try:
@@ -408,9 +428,9 @@ async def _call_media_llm_once(
     if matched is not None:
         used_secrets.update(
             {
-                "model": matched.model,
-                "_profile": matched.name,
-                "_provider_name": matched.name,
+                "model"            : matched.model,
+                "_profile"         : matched.name,
+                "_provider_name"   : matched.name,
                 "_backend_provider": matched.provider,
             }
         )
@@ -583,24 +603,22 @@ async def _refine_emoji_analysis_with_llm(
     )
     detail_block = {
         "detailed_description": draft.description,
-        "visible_text": draft.visible_text,
-        "emotion_tags": list(draft.emotion_tags),
-        "source_hint": resolved.source_name,
+        "visible_text"        : draft.visible_text,
+        "emotion_tags"        : list(draft.emotion_tags),
+        "source_hint"         : resolved.source_name,
     }
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": "你是表情包标签提炼器，只输出 JSON。"},
         {
-            "role": "user",
+            "role"   : "user",
             "content": prompt + "\n输入数据：" + json.dumps(detail_block, ensure_ascii=False),
         },
     ]
     output, used_secrets = await _call_media_llm(
-        context     = context,
-        runtime     = runtime,
-        messages    = messages,
-        temperature = 0.2,
-        top_p       = 0.9,
-        max_tokens  = 120,
+        context    = context,
+        runtime    = runtime,
+        messages   = messages,
+        max_tokens = runtime.cfg.llm_config("vision").max_tokens,
     )
     data        = parse_first_json_object(output) or {}
     description = _extract_first_text_value(data, "description", "label", "summary")
@@ -627,11 +645,11 @@ async def _refine_emoji_analysis_with_llm(
 def _rendered_quality(rendered: RenderedMedia) -> float:
     return quality_score(
         {
-            "kind": rendered.kind,
-            "description": rendered.description,
-            "marker": rendered.marker,
+            "kind"        : rendered.kind,
+            "description" : rendered.description,
+            "marker"      : rendered.marker,
             "emotion_tags": rendered.emotion_tags,
-            "file_path": str(rendered.cached_path or ""),
+            "file_path"   : str(rendered.cached_path or ""),
         }
     )
 
@@ -711,13 +729,13 @@ async def _refine_committed_emoji(
     log(
         "ok",
         {
-            "provider": provider.get("_provider_name", ""),
-            "model": provider.get("model", ""),
-            "max_tokens": provider.get("_effective_max_tokens", ""),
-            "description": refined_rendered.description,
+            "provider"    : provider.get("_provider_name", ""),
+            "model"       : provider.get("model", ""),
+            "max_tokens"  : provider.get("_effective_max_tokens", ""),
+            "description" : refined_rendered.description,
             "emotion_tags": "，".join(refined_rendered.emotion_tags),
-            "marker": refined_rendered.marker,
-            "quality": quality,
+            "marker"      : refined_rendered.marker,
+            "quality"     : quality,
         },
     )
 
@@ -772,8 +790,8 @@ def _resolve_media_analysis_candidates(
             runtime,
             step   = "media.analyze.skip",
             fields = {
-                "reason": "vision_not_configured",
-                "media_hash": resolved.media_hash[:12],
+                "reason"      : "vision_not_configured",
+                "media_hash"  : resolved.media_hash[:12],
                 "segment_type": resolved.segment_type,
             },
         )
@@ -788,10 +806,10 @@ def _resolve_media_analysis_candidates(
         runtime,
         step   = "media.analyze.skip",
         fields = {
-            "reason": "vision_route_unavailable",
-            "provider": primary_secrets.get("_provider_name", ""),
+            "reason"        : "vision_route_unavailable",
+            "provider"      : primary_secrets.get("_provider_name", ""),
             "provider_scope": primary_secrets.get("_provider_scope", ""),
-            "media_hash": resolved.media_hash[:12],
+            "media_hash"    : resolved.media_hash[:12],
         },
         level="warning",
     )
@@ -861,9 +879,9 @@ async def _prepare_media_analysis_request(
             runtime,
             step   = "media.analyze.skip",
             fields = {
-                "reason": "media_too_large",
-                "bytes": payload_size,
-                "limit": int(cfg.max_analyze_bytes),
+                "reason"    : "media_too_large",
+                "bytes"     : payload_size,
+                "limit"     : int(cfg.max_analyze_bytes),
                 "media_hash": resolved.media_hash[:12],
             },
             level="warning",
@@ -874,11 +892,11 @@ async def _prepare_media_analysis_request(
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": "你是聊天图片解析器，只输出 JSON。"},
         {
-            "role": "user",
+            "role"   : "user",
             "content": [
                 {"type": "text", "text": prompt},
                 {
-                    "type": "image_url",
+                    "type"     : "image_url",
                     "image_url": {"url": f"data:{prepared.mime_type};base64,{image_b64}"},
                 },
             ],
@@ -905,23 +923,20 @@ def _log_media_analysis_start(
         runtime,
         step   = "media.analyze.start",
         fields = {
-            "provider": provider_secrets.get("_provider_name", ""),
-            "provider_scope": provider_secrets.get("_provider_scope", ""),
-            "model": provider_secrets.get("model", ""),
-            "max_tokens": _media_llm_max_tokens(
-                provider_secrets,
-                attempt_base_max_tokens,
-            ),
-            "media_hash": resolved.media_hash[:12],
-            "segment_type": resolved.segment_type,
-            "source_mime": prepared.source_mime_type,
-            "llm_mime": prepared.mime_type,
-            "transcoded": prepared.transcoded,
-            "animated": prepared.is_animated,
-            "frame_strategy": prepared.frame_strategy,
-            "frame_count": prepared.frame_count,
-            "prefer_emoji": prefer_emoji,
-            "semantic_attempt": semantic_attempt,
+            "provider"            : provider_secrets.get("_provider_name", ""),
+            "provider_scope"      : provider_secrets.get("_provider_scope", ""),
+            "model"               : provider_secrets.get("model", ""),
+            "max_tokens"          : attempt_base_max_tokens,
+            "media_hash"          : resolved.media_hash[:12],
+            "segment_type"        : resolved.segment_type,
+            "source_mime"         : prepared.source_mime_type,
+            "llm_mime"            : prepared.mime_type,
+            "transcoded"          : prepared.transcoded,
+            "animated"            : prepared.is_animated,
+            "frame_strategy"      : prepared.frame_strategy,
+            "frame_count"         : prepared.frame_count,
+            "prefer_emoji"        : prefer_emoji,
+            "semantic_attempt"    : semantic_attempt,
             "semantic_retry_limit": _MEDIA_SEMANTIC_RETRY_LIMIT,
         },
     )
@@ -942,8 +957,8 @@ def _log_media_analysis_exception(
         runtime,
         step   = "media.analyze.fail",
         fields = {
-            "provider": provider_secrets.get("_provider_name", ""),
-            "model": provider_secrets.get("model", ""),
+            "provider"  : provider_secrets.get("_provider_name", ""),
+            "model"     : provider_secrets.get("model", ""),
             "media_hash": resolved.media_hash[:12],
             "error_type": type(exc).__name__,
         },
@@ -975,12 +990,10 @@ async def _run_media_analysis_attempt(
         attempt_base_max_tokens = attempt_base_max_tokens,
     )
     llm_result = await _call_media_llm_once(
-        runtime     = runtime,
-        secrets     = provider_secrets,
-        messages    = request.messages,
-        temperature = 0.2,
-        top_p       = 0.9,
-        max_tokens  = attempt_base_max_tokens,
+        runtime    = runtime,
+        secrets    = provider_secrets,
+        messages   = request.messages,
+        max_tokens = attempt_base_max_tokens,
     )
     detail = _parse_detail_analysis_output(
         llm_result.text,
@@ -992,19 +1005,19 @@ async def _run_media_analysis_attempt(
         runtime,
         step   = "media.analyze.detail.ok",
         fields = {
-            "provider": llm_result.used_secrets.get("_provider_name", ""),
-            "model": llm_result.used_secrets.get("model", ""),
-            "max_tokens": llm_result.used_secrets.get("_effective_max_tokens", ""),
-            "used_path": llm_result.used_path,
+            "provider"     : llm_result.used_secrets.get("_provider_name", ""),
+            "model"        : llm_result.used_secrets.get("model", ""),
+            "max_tokens"   : llm_result.used_secrets.get("_effective_max_tokens", ""),
+            "used_path"    : llm_result.used_path,
             "finish_reason": llm_result.finish_reason,
-            "raw_chars": llm_result.raw_chars,
-            "media_hash": resolved.media_hash[:12],
-            "kind": detail.kind,
-            "description": detail.description,
-            "visible_text": detail.visible_text,
-            "emotion_tags": "，".join(detail.emotion_tags),
-            "parsed_json": detail.parsed_json,
-            "raw_output": detail.raw_output,
+            "raw_chars"    : llm_result.raw_chars,
+            "media_hash"   : resolved.media_hash[:12],
+            "kind"         : detail.kind,
+            "description"  : detail.description,
+            "visible_text" : detail.visible_text,
+            "emotion_tags" : "，".join(detail.emotion_tags),
+            "parsed_json"  : detail.parsed_json,
+            "raw_output"   : detail.raw_output,
         },
     )
     rendered, used_summary_fallback, quality = _finalize_media_analysis(
@@ -1034,14 +1047,14 @@ def _log_invalid_media_analysis(
     """记录语义拒绝，以及有界重试是否继续。"""
 
     fields = {
-        "provider": attempt.llm_result.used_secrets.get("_provider_name", ""),
-        "model": attempt.llm_result.used_secrets.get("model", ""),
-        "media_hash": resolved.media_hash[:12],
-        "reason_code": semantic_reason,
-        "semantic_attempt": semantic_attempt,
+        "provider"            : attempt.llm_result.used_secrets.get("_provider_name", ""),
+        "model"               : attempt.llm_result.used_secrets.get("model", ""),
+        "media_hash"          : resolved.media_hash[:12],
+        "reason_code"         : semantic_reason,
+        "semantic_attempt"    : semantic_attempt,
         "semantic_retry_limit": _MEDIA_SEMANTIC_RETRY_LIMIT,
-        "description": attempt.rendered.description,
-        "quality": attempt.quality,
+        "description"         : attempt.rendered.description,
+        "quality"             : attempt.quality,
     }
     media_log(
         context,
@@ -1077,10 +1090,10 @@ def _log_terminal_semantic_failure(
         runtime,
         step   = "media.analyze.fail",
         fields = {
-            "provider": attempt.llm_result.used_secrets.get("_provider_name", ""),
-            "model": attempt.llm_result.used_secrets.get("model", ""),
-            "media_hash": resolved.media_hash[:12],
-            "error_type": "semantic_validation_failed",
+            "provider"   : attempt.llm_result.used_secrets.get("_provider_name", ""),
+            "model"      : attempt.llm_result.used_secrets.get("model", ""),
+            "media_hash" : resolved.media_hash[:12],
+            "error_type" : "semantic_validation_failed",
             "reason_code": semantic_reason,
         },
         level="warning",
@@ -1124,22 +1137,22 @@ async def _commit_media_analysis_attempt(
         runtime,
         step   = "media.analyze.ok",
         fields = {
-            "provider": llm_result.used_secrets.get("_provider_name", ""),
-            "model": llm_result.used_secrets.get("model", ""),
-            "max_tokens": llm_result.used_secrets.get("_effective_max_tokens", ""),
-            "used_path": llm_result.used_path,
-            "finish_reason": llm_result.finish_reason,
-            "raw_chars": llm_result.raw_chars,
-            "media_hash": resolved.media_hash[:12],
-            "kind": rendered.kind,
-            "description": rendered.description,
-            "detail_description": attempt.detail.description,
-            "visible_text": attempt.detail.visible_text,
-            "refined_description": "",
+            "provider"             : llm_result.used_secrets.get("_provider_name", ""),
+            "model"                : llm_result.used_secrets.get("model", ""),
+            "max_tokens"           : llm_result.used_secrets.get("_effective_max_tokens", ""),
+            "used_path"            : llm_result.used_path,
+            "finish_reason"        : llm_result.finish_reason,
+            "raw_chars"            : llm_result.raw_chars,
+            "media_hash"           : resolved.media_hash[:12],
+            "kind"                 : rendered.kind,
+            "description"          : rendered.description,
+            "detail_description"   : attempt.detail.description,
+            "visible_text"         : attempt.detail.visible_text,
+            "refined_description"  : "",
             "used_summary_fallback": attempt.used_summary_fallback,
-            "marker": rendered.marker,
-            "cultural_hint": cultural_hint,
-            "quality": attempt.quality,
+            "marker"               : rendered.marker,
+            "cultural_hint"        : cultural_hint,
+            "quality"              : attempt.quality,
         },
     )
     return rendered
@@ -1161,7 +1174,7 @@ async def _analyze_media_with_provider(
     last_semantic_reason = ""
     for semantic_attempt in range(1, _MEDIA_SEMANTIC_RETRY_LIMIT + 2):
         attempt_base_max_tokens = _media_detail_base_max_tokens_for_reason(
-            last_semantic_reason or previous_reason
+            last_semantic_reason or previous_reason, runtime.cfg.llm_config("vision").max_tokens
         )
         try:
             attempt = await _run_media_analysis_attempt(
@@ -1267,8 +1280,10 @@ async def analyze_media_with_llm(
                 runtime       = runtime,
                 from_provider = previous_provider,
                 to_provider   = provider_secrets,
-                max_tokens    = _media_detail_base_max_tokens_for_reason(previous_reason),
-                reason        = previous_reason,
+                max_tokens    = _media_detail_base_max_tokens_for_reason(
+                    previous_reason, runtime.cfg.llm_config("vision").max_tokens
+                ),
+                reason=previous_reason,
             )
 
         outcome = await _analyze_media_with_provider(
@@ -1339,7 +1354,7 @@ async def _extract_cultural_hint(
     description  = str(rendered.description or "").strip()
 
     payload = {
-        "description": description,
+        "description" : description,
         "visible_text": visible_text,
         "emotion_tags": list(rendered.emotion_tags),
     }
@@ -1357,12 +1372,10 @@ async def _extract_cultural_hint(
     try:
         output, used_secrets = await asyncio.wait_for(
             _call_media_llm(
-                context     = context,
-                runtime     = runtime,
-                messages    = messages,
-                temperature = 0.2,
-                top_p       = 0.9,
-                max_tokens  = 80,
+                context    = context,
+                runtime    = runtime,
+                messages   = messages,
+                max_tokens = runtime.cfg.llm_config("vision").max_tokens,
             ),
             timeout=timeout,
         )
@@ -1372,7 +1385,7 @@ async def _extract_cultural_hint(
             runtime,
             step   = "media.cultural_hint.timeout",
             fields = {
-                "media_hash": resolved.media_hash[:12],
+                "media_hash"     : resolved.media_hash[:12],
                 "timeout_seconds": f"{timeout:.3f}",
             },
             level="warning",
@@ -1404,10 +1417,10 @@ async def _extract_cultural_hint(
         runtime,
         step   = "media.cultural_hint.ok",
         fields = {
-            "provider": used_secrets.get("_provider_name", ""),
-            "model": used_secrets.get("model", ""),
+            "provider"  : used_secrets.get("_provider_name", ""),
+            "model"     : used_secrets.get("model", ""),
             "media_hash": resolved.media_hash[:12],
-            "hint": hint,
+            "hint"      : hint,
         },
     )
     return hint

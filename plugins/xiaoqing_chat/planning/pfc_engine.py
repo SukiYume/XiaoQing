@@ -30,10 +30,10 @@ from .pfc_state import PFCConversationState, PFCStateStore
 class PFCRunResult:
     """单次 PFC（基于上下文规划）执行结果。"""
 
-    reply: str
-    action: str
-    reason: str
-    ended: bool
+    reply       : str
+    action      : str
+    reason      : str
+    ended       : bool
     wait_seconds: float = 0.0
 
 
@@ -111,24 +111,24 @@ def _recent_successful_reply_action(
 
 
 _ACTION_ALIASES: dict[str, str] = {
-    "reply": "direct_reply",
-    "directreply": "direct_reply",
-    "direct_reply": "direct_reply",
-    "send_new": "send_new_message",
-    "send_newmessage": "send_new_message",
-    "new_message": "send_new_message",
+    "reply"           : "direct_reply",
+    "directreply"     : "direct_reply",
+    "direct_reply"    : "direct_reply",
+    "send_new"        : "send_new_message",
+    "send_newmessage" : "send_new_message",
+    "new_message"     : "send_new_message",
     "send_new_message": "send_new_message",
-    "end": "end_conversation",
+    "end"             : "end_conversation",
     "end_conversation": "end_conversation",
-    "block": "block_and_ignore",
-    "ignore": "block_and_ignore",
+    "block"           : "block_and_ignore",
+    "ignore"          : "block_and_ignore",
     "block_and_ignore": "block_and_ignore",
-    "wait": "wait",
-    "listening": "listening",
-    "rethink": "rethink_goal",
-    "rethink_goal": "rethink_goal",
-    "fetch": "fetch_knowledge",
-    "fetch_knowledge": "fetch_knowledge",
+    "wait"            : "wait",
+    "listening"       : "listening",
+    "rethink"         : "rethink_goal",
+    "rethink_goal"    : "rethink_goal",
+    "fetch"           : "fetch_knowledge",
+    "fetch_knowledge" : "fetch_knowledge",
 }
 
 
@@ -152,38 +152,30 @@ def _wait_run_result(plan: PFCPlan, action: str) -> PFCRunResult:
 
 @dataclass
 class _PFCSession:
-    context: Any
-    runtime_cfg: XiaoQingChatConfig
-    secrets: dict[str, Any]
-    bot_name: str
-    is_private: bool
-    chat_id: str
-    current_text: str
-    memory_db: MemoryDB
-    state: PFCConversationState
-    generate_reply: GenerateReplyFn
-    history: Sequence[StoredMessage]
-    action_summary: str
+    context            : Any
+    runtime_cfg        : XiaoQingChatConfig
+    secrets            : dict[str, Any]
+    bot_name           : str
+    is_private         : bool
+    chat_id            : str
+    current_text       : str
+    memory_db          : MemoryDB
+    state              : PFCConversationState
+    generate_reply     : GenerateReplyFn
+    history            : Sequence[StoredMessage]
+    action_summary     : str
     last_action_context: str
-    timeout_context: str
+    timeout_context    : str
     recent_reply_action: str
-    planner_timeout: float
-    now: float
+    now                : float
 
     @property
     def planner_llm(self) -> LLMCallConfig:
-        """规划类调用不重试：规划失败直接走保守动作，比多等一轮更合适。"""
-        return LLMCallConfig(
-            temperature            = self.runtime_cfg.temperature,
-            top_p                  = self.runtime_cfg.top_p,
-            max_tokens             = self.runtime_cfg.max_tokens,
-            timeout_seconds        = self.planner_timeout,
-            max_retry              = 0,
-            retry_interval_seconds = 0.2,
-        )
+        """规划调用沿用 reasoning 路由的请求参数。"""
+        return self.runtime_cfg.llm_config("reasoning")
 
-    dirty: bool               = False
-    planner_goal_context: str = ""
+    dirty               : bool = False
+    planner_goal_context: str  = ""
 
 
 async def _prepare_pfc_session(
@@ -229,7 +221,6 @@ async def _prepare_pfc_session(
     ):
         state.last_successful_reply_action = ""
         dirty                              = True
-    planner_timeout = min(runtime_cfg.pfc_planner_timeout_seconds, runtime_cfg.timeout_seconds)
     return _PFCSession(
         context             = context,
         runtime_cfg         = runtime_cfg,
@@ -246,7 +237,6 @@ async def _prepare_pfc_session(
         last_action_context = last_action_context,
         timeout_context     = timeout_context,
         recent_reply_action = recent_reply_action,
-        planner_timeout     = planner_timeout,
         now                 = now,
         dirty               = dirty,
     )
@@ -254,17 +244,17 @@ async def _prepare_pfc_session(
 
 def _planner_kwargs(session: _PFCSession) -> dict[str, Any]:
     return {
-        "secrets": session.secrets,
-        "bot_name": session.bot_name,
-        "is_private": session.is_private,
-        "personality": session.runtime_cfg.personality,
-        "history": session.history,
-        "action_history_summary": session.action_summary,
-        "last_action_context": session.last_action_context,
-        "timeout_context": session.timeout_context,
+        "secrets"                     : session.secrets,
+        "bot_name"                    : session.bot_name,
+        "is_private"                  : session.is_private,
+        "personality"                 : session.runtime_cfg.personality,
+        "history"                     : session.history,
+        "action_history_summary"      : session.action_summary,
+        "last_action_context"         : session.last_action_context,
+        "timeout_context"             : session.timeout_context,
         "last_successful_reply_action": session.recent_reply_action,
-        "current_text": session.current_text,
-        "llm": session.planner_llm,
+        "current_text"                : session.current_text,
+        "llm"                         : session.planner_llm,
     }
 
 
@@ -288,10 +278,10 @@ async def _plan_pfc_action(session: _PFCSession) -> PFCPlan:
         chat_id = session.chat_id,
         step    = "pfc.plan.done",
         fields  = {
-            "elapsed_s": round(time.monotonic() - started_at, 3),
-            "action": plan.action,
-            "reason": plan.reason,
-            "thinking": plan.thinking[:100] if plan.thinking else "",
+            "elapsed_s"   : round(time.monotonic() - started_at, 3),
+            "action"      : plan.action,
+            "reason"      : plan.reason,
+            "thinking"    : plan.thinking[:100] if plan.thinking else "",
             "wait_seconds": plan.wait_seconds,
         },
     )
@@ -322,8 +312,8 @@ def _record_planner_health(session: _PFCSession, plan: PFCPlan) -> None:
                 chat_id = session.chat_id,
                 step    = "pfc.plan.backoff",
                 fields  = {
-                    "fails": len(failures),
-                    "window_s": window_seconds,
+                    "fails"    : len(failures),
+                    "window_s" : window_seconds,
                     "backoff_s": backoff_seconds,
                 },
             )
@@ -359,8 +349,8 @@ def _passive_pfc_result(
     if action not in ("wait", "listening"):
         return None
     fields: dict[str, Any] = {
-        "action": action,
-        "reason": plan.reason,
+        "action"      : action,
+        "reason"      : plan.reason,
         "wait_seconds": plan.wait_seconds if plan.wait_seconds > 0 else 0,
     }
     if after:
@@ -436,7 +426,7 @@ async def _fetch_pfc_knowledge(session: _PFCSession, plan: PFCPlan) -> PFCPlan:
         chat_id = session.chat_id,
         step    = "pfc.fetch_knowledge.done",
         fields  = {
-            "mem_chars": len(memory),
+            "mem_chars"      : len(memory),
             "knowledge_items": len(session.state.knowledge_list or []),
         },
     )

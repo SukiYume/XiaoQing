@@ -79,19 +79,19 @@ def test_shared_journal_enforces_capacity_including_message_identity(tmp_path):
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     profile = {
-        "name": "卧室音箱",
-        "model": "xiaomi.wifispeaker.lx06",
-        "region": "cn",
-        "did": "123",
-        "mina_id": "mina-123",
-        "silent": True,
+        "name"     : "卧室音箱",
+        "model"    : "xiaomi.wifispeaker.lx06",
+        "region"   : "cn",
+        "did"      : "123",
+        "mina_id"  : "mina-123",
+        "silent"   : True,
         "directive": {"siid": 5, "aiid": 5, "inputs": ["text", "silent"]},
     }
     client.write_json(tmp_path / "speaker.json", profile)
     client.write_json(
         tmp_path / "token.json",
         {
-            "userId": "secret",
+            "userId"       : "secret",
             "_refreshed_at": {"xiaomiio": time.time(), "micoapi": time.time()},
         },
     )
@@ -168,9 +168,9 @@ async def test_check_is_read_only_and_offline_blocks(env):
 def test_answers_require_new_id_time_and_matching_question():
     now     = int(time.time() * 1000)
     message = {
-        "request_id": "new",
+        "request_id"  : "new",
         "timestamp_ms": now,
-        "response": {
+        "response"    : {
             "answer": [
                 {"question": "家里温湿度是多少？", "content": "26 度，50%"},
             ]
@@ -186,25 +186,25 @@ def test_spec_uses_semantics_and_input_order():
     spec = {
         "services": [
             {
-                "iid": 5,
+                "iid"       : 5,
                 "properties": [
                     {
-                        "iid": 1,
-                        "type": "urn:miot-spec-v2:property:text-content:abc",
+                        "iid"   : 1,
+                        "type"  : "urn:miot-spec-v2:property:text-content:abc",
                         "format": "string",
                     },
                     {
-                        "iid": 2,
-                        "type": "urn:miot-spec-v2:property:silent-execution:abc",
+                        "iid"   : 2,
+                        "type"  : "urn:miot-spec-v2:property:silent-execution:abc",
                         "format": "bool",
                     },
                 ],
                 "actions": [
                     {"iid": 4, "type": "urn:miot-spec-v2:action:play-radio:abc", "in": []},
                     {
-                        "iid": 5,
+                        "iid" : 5,
                         "type": "urn:miot-spec-v2:action:execute-text-directive:abc",
-                        "in": [2, 1],
+                        "in"  : [2, 1],
                     },
                 ],
             }
@@ -268,10 +268,10 @@ async def test_real_library_protocol_uses_cloud_once():
             assert len(calls) == 1
             payload = json.loads(calls[0].kwargs["data"]["data"])
             assert payload["params"] == {
-                "did": "123",
+                "did" : "123",
                 "siid": 5,
                 "aiid": 5,
-                "in": ["打开台灯", True],
+                "in"  : ["打开台灯", True],
             }
             assert calls[0].kwargs["allow_redirects"] is False
 
@@ -283,9 +283,9 @@ async def test_polling_returns_only_current_answer(env, monkeypatch):
         [],
         [
             {
-                "request_id": "fresh",
+                "request_id"  : "fresh",
                 "timestamp_ms": int(time.time() * 1000) + 100,
-                "response": {"answer": [{"question": "温度多少", "content": "25度"}]},
+                "response"    : {"answer": [{"question": "温度多少", "content": "25度"}]},
             }
         ],
     ]

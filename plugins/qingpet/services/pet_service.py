@@ -32,10 +32,10 @@ from .item_service import ItemService
 from .user_service import UserService
 
 _ACTION_LABELS = {
-    "feed": "喂食",
-    "clean": "清洁",
-    "play": "玩耍",
-    "train": "训练",
+    "feed"   : "喂食",
+    "clean"  : "清洁",
+    "play"   : "玩耍",
+    "train"  : "训练",
     "explore": "探索",
 }
 _PET_PERSONALITIES = tuple(PetPersonality)
@@ -156,9 +156,9 @@ class PetService:
             return False, "宠物蛋还需要更多经验才能孵化，继续互动吧"
 
         candidate       = replace(pet)
-        candidate.stage = PetStage.YOUNG
+        candidate.stage = EVOLUTION_CONDITIONS[(PetStage.EGG, "hatched")][0]
         candidate.experience -= experience_cost
-        candidate.last_update = utc_now()
+        # 衰减时钟只由衰减结算推进；照料动作改写它会丢掉上次结算到现在的时间。
 
         if self._persist_pet_candidate(pet, candidate):
             return True, f"破壳啦！{pet.name}变成了{pet.stage.value}"
@@ -222,9 +222,8 @@ class PetService:
         pet.update_stat("mood", mood_gain)
         pet.experience += exp_gain
         pet.intimacy += intimacy_gain
-        now             = utc_now()
-        pet.last_feed   = now
-        pet.last_update = now
+        now           = utc_now()
+        pet.last_feed = now
 
         group_config = self.db.get_group_config(pet.group_id)
         # 经济奖励在提交原子事务前应用本次请求的反脚本衰减。
@@ -289,9 +288,8 @@ class PetService:
 
         pet.update_stat("clean", clean_gain)
         pet.update_stat("health", health_gain)
-        now             = utc_now()
-        pet.last_clean  = now
-        pet.last_update = now
+        now            = utc_now()
+        pet.last_clean = now
 
         group_config = self.db.get_group_config(pet.group_id)
         # 经济奖励在提交原子事务前应用本次请求的反脚本衰减。
@@ -345,9 +343,8 @@ class PetService:
         pet.update_stat("mood", mood_gain)
         pet.update_stat("energy", -energy_cost, min_val=0)
         pet.intimacy += intimacy_gain
-        now             = utc_now()
-        pet.last_play   = now
-        pet.last_update = now
+        now           = utc_now()
+        pet.last_play = now
 
         group_config    = self.db.get_group_config(pet.group_id)
         requested_coins = int(5 * group_config.economy_multiplier * spam_decay_factor)
@@ -407,9 +404,8 @@ class PetService:
 
         energy_cost = config["energy_cost"]
         pet.update_stat("energy", -energy_cost, min_val=0)
-        now             = utc_now()
-        pet.last_train  = now
-        pet.last_update = now
+        now            = utc_now()
+        pet.last_train = now
 
         if random.random() > success_rate:
             result = self.db.commit_pet_action(
@@ -551,7 +547,6 @@ class PetService:
         pet.experience += exp_gain
         now              = utc_now()
         pet.last_explore = now
-        pet.last_update  = now
 
         for stat in ("mood", "clean", "health"):
             if stat in chosen:
@@ -598,24 +593,29 @@ class PetService:
         if not pet.can_interact():
             return False, self._get_cannot_interact_msg(pet)
 
-        candidate             = replace(pet)
-        candidate.status      = PetStatus.SLEEPING
-        candidate.last_update = utc_now()
-        candidate.status_expire_time = candidate.last_update + timedelta(seconds=60)
-
-        if self._persist_pet_candidate(pet, candidate):
+        config = self.db.get_group_config(pet.group_id)
+        alert = self.apply_decay(pet, config.decay_multiplier, start_sleep=True)
+        if pet.status == PetStatus.SLEEPING:
             return True, f"{pet.name}开始睡觉了，Zzz..."
-        return False, "让宠物睡觉失败"
+        return False, alert or "让宠物睡觉失败"
 
     def wake_pet(self, pet: Pet) -> tuple[bool, str]:
         if pet.status != PetStatus.SLEEPING:
             return False, "宠物现在没有在睡觉"
         now = utc_now()
 
-        candidate                    = replace(pet)
+        # 与到期自动唤醒共用睡眠结算：按实际有效睡眠时长恢复精力，最多结算到原定醒来时刻。
+        expires_at = pet.status_expire_time or pet.last_update + timedelta(seconds=60)
+        slept_until      = min(now, max(expires_at, pet.last_update))
+        sleeping_minutes = max(0.0, (slept_until - pet.last_update).total_seconds() / 60.0)
+
+        candidate   = replace(pet)
+        energy_gain = int(2 * sleeping_minutes)
+        if energy_gain > 0:
+            candidate.update_stat("energy", energy_gain)
         candidate.status             = PetStatus.NORMAL
         candidate.status_expire_time = None
-        candidate.last_update        = now
+        candidate.last_update        = slept_until
 
         if self._persist_pet_candidate(pet, candidate):
             return True, f"{pet.name}睡醒了！睡眠期间已按实际时长恢复精力（立即唤醒不恢复）。"
@@ -652,7 +652,7 @@ class PetService:
         old_stage            = pet.stage.value
         candidate            = replace(pet)
         candidate.stage      = new_stage
-        candidate.form       = new_form
+        candidate.form       = new_form if new_form is not None else pet.form
         candidate.experience = 0
 
         if self._persist_pet_candidate(pet, candidate):
@@ -670,6 +670,7 @@ class PetService:
         decay_multiplier: float = 1.0,
         *,
         is_trustee_override: bool | None = None,
+        start_sleep: bool                = False,
     ) -> str | None:
         """应用状态衰减，并检查疾病概率。返回警报消息或None。"""
         now             = utc_now()
@@ -729,7 +730,7 @@ class PetService:
         if pet.status != PetStatus.NORMAL:
             return None
 
-        if elapsed_minutes < 1.0:
+        if elapsed_minutes < 1.0 and not start_sleep:
             if status_message is not None:
                 if self._persist_pet_candidate(target_pet, pet):
                     return status_message
@@ -742,7 +743,7 @@ class PetService:
             is_trustee = is_trustee_override
         actual_multiplier = decay_multiplier * (0.5 if is_trustee else 1.0)
 
-        changed    = status_message is not None
+        changed    = status_message is not None or start_sleep
         remainders = dict(pet.decay_remainders)
         for stat, rate in DECAY_RATES.items():
             accumulated = remainders.get(stat, 0.0) + rate * actual_multiplier * elapsed_minutes
@@ -790,6 +791,10 @@ class PetService:
                 f"或者使用 /宠物 召回 提前召回（需要{recall_coins}金币）"
             )
 
+        if start_sleep and pet.status == PetStatus.NORMAL:
+            # 睡前衰减与状态切换一起提交，分钟内的余量同样保留。
+            pet.status = PetStatus.SLEEPING
+            pet.status_expire_time = now + timedelta(seconds=60)
         pet.last_update = now
         if self._persist_pet_candidate(target_pet, pet):
             return status_message

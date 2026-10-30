@@ -94,16 +94,16 @@ class FlickrApiError(FlickrError):
 class FlickrPhoto:
     """一张可安全展示的 Flickr 公共照片。"""
 
-    photo_id: str
-    owner_id: str
-    owner_name: str
-    title: str
+    photo_id   : str
+    owner_id   : str
+    owner_name : str
+    title      : str
     description: str
-    license_id: str
-    taken_at: str
-    tags: tuple[str, ...]
-    media_url: str
-    page_url: str
+    license_id : str
+    taken_at   : str
+    tags       : tuple[str, ...]
+    media_url  : str
+    page_url   : str
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,9 +111,9 @@ class FlickrPage:
     """一个 Flickr 标准照片列表页面。"""
 
     photos: tuple[FlickrPhoto, ...]
-    page: int
-    pages: int
-    total: int
+    page  : int
+    pages : int
+    total : int
 
 
 def _plugin_api_key(context: PluginContextProtocol) -> str:
@@ -354,9 +354,9 @@ class FlickrClient:
         if session is None:
             raise FlickrTransportError("Flickr HTTP session is unavailable")
         query: dict[str, object] = {
-            "method": method,
-            "api_key": self.api_key,
-            "format": "json",
+            "method"        : method,
+            "api_key"       : self.api_key,
+            "format"        : "json",
             "nojsoncallback": "1",
             **parameters,
         }
@@ -390,12 +390,12 @@ class FlickrClient:
             raise FlickrProtocolError("Flickr response has no success status")
         return payload
 
-    async def interesting(self) -> FlickrPage:
+    async def interesting(self, *, page: int = 1) -> FlickrPage:
         payload = await self._call(
             "flickr.interestingness.getList",
             extras   = PHOTO_EXTRAS,
             per_page = MAX_RESULTS_PER_REQUEST,
-            page     = 1,
+            page     = page,
         )
         return _parse_photo_page(payload, container_name="photos")
 
@@ -409,17 +409,18 @@ class FlickrClient:
         min_taken_date: str | None,
         max_taken_date: str | None,
         commons_only: bool = False,
+        page: int          = 1,
     ) -> FlickrPage:
         parameters: dict[str, object] = {
-            "text": query,
-            "tags": tags,
-            "tag_mode": "all",
-            "sort": sort,
+            "text"       : query,
+            "tags"       : tags,
+            "tag_mode"   : "all",
+            "sort"       : sort,
             "safe_search": 1,
-            "media": "photos",
-            "extras": PHOTO_EXTRAS,
-            "per_page": MAX_RESULTS_PER_REQUEST,
-            "page": 1,
+            "media"      : "photos",
+            "extras"     : PHOTO_EXTRAS,
+            "per_page"   : MAX_RESULTS_PER_REQUEST,
+            "page"       : page,
         }
         if license_ids is not None:
             parameters["license"] = license_ids
@@ -467,14 +468,14 @@ class FlickrClient:
         payload = await self._call("flickr.people.findByUsername", username=candidate)
         return _user_id_from_payload(payload)
 
-    async def public_photos(self, user_id: str) -> FlickrPage:
+    async def public_photos(self, user_id: str, *, page: int = 1) -> FlickrPage:
         payload = await self._call(
             "flickr.people.getPublicPhotos",
             user_id     = user_id,
             safe_search = 1,
             extras      = PHOTO_EXTRAS,
             per_page    = MAX_RESULTS_PER_REQUEST,
-            page        = 1,
+            page        = page,
         )
         return _parse_photo_page(
             payload,
@@ -482,7 +483,7 @@ class FlickrClient:
             default_owner_id = user_id,
         )
 
-    async def album_photos(self, *, user_id: str, album_id: str) -> FlickrPage:
+    async def album_photos(self, *, user_id: str, album_id: str, page: int = 1) -> FlickrPage:
         payload = await self._call(
             "flickr.photosets.getPhotos",
             user_id     = user_id,
@@ -490,7 +491,7 @@ class FlickrClient:
             media       = "photos",
             extras      = PHOTOSET_EXTRAS,
             per_page    = MAX_RESULTS_PER_REQUEST,
-            page        = 1,
+            page        = page,
         )
         return _parse_photo_page(
             payload,

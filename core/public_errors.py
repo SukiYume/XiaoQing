@@ -90,11 +90,11 @@ def _collect_secret_strings(root: object) -> tuple[tuple[str, ...], bool]:
     if root is None:
         return (), True
 
-    values: set[str]                = set()
-    seen: set[int]                  = set()
-    stack: list[tuple[object, int]] = [(root, 0)]
-    complete                        = True
-    visited_values                  = 0
+    values: set[str]                 = set()
+    seen  : set[int]                 = set()
+    stack : list[tuple[object, int]] = [(root, 0)]
+    complete                         = True
+    visited_values                   = 0
 
     while stack:
         current, depth = stack.pop()
@@ -293,7 +293,7 @@ def _base_exception_attribute(exc: BaseException, name: str, default: Any = None
 def _traceback_frames(exc: BaseException, secrets: tuple[str, ...]) -> tuple[list[str], bool]:
     current           = _base_exception_attribute(exc, "__traceback__")
     frames: list[str] = []
-    seen: set[int]    = set()
+    seen  : set[int]  = set()
     truncated         = False
 
     while current is not None:
@@ -325,7 +325,7 @@ def _exception_chain(
     exc: BaseException, secrets: tuple[str, ...], *, include_messages: bool
 ) -> dict[str, Any]:
     current: BaseException | None = exc
-    seen: set[int]                = set()
+    seen   : set[int]             = set()
     entries: list[dict[str, Any]] = []
     relation                      = "root"
     chain_truncated               = False
@@ -356,10 +356,10 @@ def _exception_chain(
         frames, frames_truncated = _traceback_frames(current, secrets)
         entries.append(
             {
-                "relation": relation,
-                "type": _exception_type_name(current, secrets),
-                "message": safe_message,
-                "frames": frames,
+                "relation"        : relation,
+                "type"            : _exception_type_name(current, secrets),
+                "message"         : safe_message,
+                "frames"          : frames,
                 "frames_truncated": frames_truncated,
             }
         )
@@ -385,11 +385,11 @@ def _exception_chain(
         traceback_text  = f"{traceback_text[:_MAX_TRACEBACK_CHARS]}<truncated>"
         chain_truncated = True
     return {
-        "exception_type": root["type"],
+        "exception_type"   : root["type"],
         "exception_message": root["message"],
-        "exception_chain": entries,
-        "traceback": traceback_text,
-        "chain_truncated": chain_truncated,
+        "exception_chain"  : entries,
+        "traceback"        : traceback_text,
+        "chain_truncated"  : chain_truncated,
     }
 
 
@@ -439,10 +439,10 @@ def public_error_message(
         include_messages=secret_scan_complete,
     )
     payload: dict[str, Any] = {
-        "event": "public_error",
-        "error_code": PUBLIC_ERROR_CODE,
-        "request_id": request_id,
-        "component": safe_component,
+        "event"               : "public_error",
+        "error_code"          : PUBLIC_ERROR_CODE,
+        "request_id"          : request_id,
+        "component"           : safe_component,
         "secret_scan_complete": secret_scan_complete,
         **diagnostic,
     }

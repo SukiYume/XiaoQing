@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from core.args import parse
 from core.delivery import DeliveryReceipt, DeliverySegments
 from core.lifecycle import DeferredCancellation, await_owned_task
 from core.plugin_base import (
@@ -39,8 +38,8 @@ logger = logging.getLogger(__name__)
 
 InferenceFunction = Callable[..., str]
 
-_inference_func: InferenceFunction | None                         = None
-_FILTER_CACHE: dict[tuple[str, str, str, InferenceFunction], str] = {}
+_inference_func : InferenceFunction | None                           = None
+_FILTER_CACHE   : dict[tuple[str, str, str, InferenceFunction], str] = {}
 _FILTER_INFLIGHT: dict[
     tuple[str, str, str, InferenceFunction],
     asyncio.Task[str],
@@ -101,7 +100,7 @@ async def _cached_model_artifact_fingerprint(model_path: str) -> str:
     模型仍能最终使当日结果缓存和后端对象缓存失效。插件初始化或强制重载会立即清空。
     """
 
-    from .inference.shared import model_artifact_fingerprint, resolve_model_path
+    from .inference.shared import resolve_model_path, runtime_artifact_fingerprint
 
     resolved_path = str(Path(resolve_model_path(str(model_path))).resolve())
     now           = time.monotonic()
@@ -114,7 +113,7 @@ async def _cached_model_artifact_fingerprint(model_path: str) -> str:
         cached = _MODEL_FINGERPRINT_CACHE.get(resolved_path)
         if cached is not None and cached[0] > now:
             return cached[1]
-        fingerprint = await run_sync(model_artifact_fingerprint, resolved_path)
+        fingerprint = await run_sync(runtime_artifact_fingerprint, resolved_path)
         if not isinstance(fingerprint, str):
             raise TypeError("model artifact fingerprint must be text")
         expires_at = time.monotonic() + _MODEL_FINGERPRINT_REFRESH_SECONDS
@@ -167,7 +166,8 @@ async def _cached_inference(
         result = await asyncio.shield(task)
         if not isinstance(result, str):
             raise TypeError("arXiv inference must return text")
-        if not result.startswith("Error:"):
+        # 只缓存明确成功的结果；抓取失败的文本进了当日缓存会挡住网络恢复后的重试。
+        if _is_successful_inference(result):
             _FILTER_CACHE[key] = result
         return result
     finally:
@@ -175,6 +175,14 @@ async def _cached_inference(
             async with _FILTER_LOCK:
                 if _FILTER_INFLIGHT.get(key) is task:
                     _FILTER_INFLIGHT.pop(key, None)
+
+
+def _is_successful_inference(text: str) -> bool:
+    """推理结果的成功契约：给出了正例列表，或明确确认没有正例。"""
+
+    if text.startswith("Error:") or "No papers found" in text:
+        return False
+    return "----- Positive #" in text or "No positive predictions" in text
 
 
 def _normalize_source_date(value: Any) -> str | None:
@@ -293,14 +301,14 @@ async def handle(
     """命令处理入口"""
     del command
     try:
-        parsed = parse(args)
+        raw_args = args.strip()
 
-        # 解析子命令
-        if parsed and parsed.first:
-            if len(parsed) == 1 and parsed.first.lower() in {"help", "帮助"}:
+        # 只接受空参数或单独的 help；--date 这类未声明选项不能被当成空参数执行筛选。
+        if raw_args:
+            if raw_args.lower() in {"help", "帮助"}:
                 return segments(_show_help())
             unknown = bounded_external_text(
-                parsed.first,
+                raw_args,
                 max_chars = 32,
                 max_bytes = 128,
                 suffix    = "…",

@@ -131,7 +131,7 @@ def test_undo_rejects_unicode_digits_without_database_access(minutes: str) -> No
     result = asyncio.run(operations.handle_undo("owner-a", minutes, db))
 
     assert result == {
-        "status": "error",
+        "status" : "error",
         "message": f"分钟数必须是 1～{PendoConfig.UNDO_WINDOW_MINUTES} 的整数",
     }
     db.get_latest_undoable_operation.assert_not_called()
@@ -153,13 +153,13 @@ def test_undo_delete_reports_ledger_type() -> None:
     db.get_latest_undoable_operation.return_value = {"type": "delete"}
     db.undo_delete.return_value                   = {
         "status": "success",
-        "item": LedgerItem(id="ledger-a", title="午餐"),
+        "item"  : LedgerItem(id="ledger-a", title="午餐"),
     }
 
     result = asyncio.run(operations.handle_undo("owner-a", "3", db))
 
     assert result == {
-        "status": "success",
+        "status" : "success",
         "message": "✅ 已恢复账目: 午餐 (ledger-a)",
     }
     db.undo_delete.assert_called_once_with("owner-a", 3)

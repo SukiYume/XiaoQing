@@ -183,7 +183,7 @@ class TestSessionManager:
         before = session.updated_at
 
         assert await session_manager.exists(12345, None) is True
-        assert session.updated_at == before
+        assert (await session_manager.peek(12345, None)).updated_at == before
 
     @pytest.mark.asyncio
     async def test_peek_does_not_refresh_session_timeout(self, session_manager: SessionManager):
@@ -201,7 +201,7 @@ class TestSessionManager:
 
         assert peeked is not session
         assert peeked == session
-        assert session.updated_at == before
+        assert (await session_manager.peek(12345, None)).updated_at == before
 
     @pytest.mark.asyncio
     async def test_delete_nonexistent_session(self, session_manager: SessionManager):

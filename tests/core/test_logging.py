@@ -238,29 +238,77 @@ class TestLogManager:
         assert manager.level == logging.WARNING
 
     def test_rotation_type_size(self, tmp_path: Path):
-        """测试按大小轮转"""
+        """实际写入触发大小轮转，历史文件数量受配置约束。"""
+        from logging.handlers import RotatingFileHandler
+
         manager = LogManager(
             log_dir        = tmp_path / "logs",
             level          = "INFO",
             console_output = False,
             file_output    = True,
             rotation_type  = "size",
-            max_bytes      = 1024,  # 1KB 便于测试
+            max_bytes      = 256,
+            backup_count   = 2,
         )
-
-        assert manager.rotation_type == "size"
+        handler = next(
+            h
+            for h in logging.getLogger().handlers
+            if isinstance(h, RotatingFileHandler) and Path(h.baseFilename).name == "xiaoqing.log"
+        )
+        try:
+            for index in range(6):
+                handler.handle(
+                    logging.LogRecord(
+                        "rotation",
+                        logging.INFO,
+                        __file__,
+                        1,
+                        f"entry-{index}-" + "x" * 200,
+                        (),
+                        None,
+                    )
+                )
+            handler.flush()
+            assert len(list(manager.log_dir.glob("xiaoqing.log.*"))) == 2
+            assert "entry-5" in (manager.log_dir / "xiaoqing.log").read_text(encoding="utf-8")
+            assert "entry-3" in (manager.log_dir / "xiaoqing.log.2").read_text(encoding="utf-8")
+        finally:
+            logging.getLogger().removeHandler(handler)
+            handler.close()
 
     def test_rotation_type_time(self, tmp_path: Path):
-        """测试按时间轮转"""
+        """推进轮转截止点，验证按日期归档及历史保留数量。"""
+        import time
+        from logging.handlers import TimedRotatingFileHandler
+
         manager = LogManager(
             log_dir        = tmp_path / "logs",
             level          = "INFO",
             console_output = False,
             file_output    = True,
             rotation_type  = "time",
+            backup_count   = 2,
         )
-
-        assert manager.rotation_type == "time"
+        handler = next(
+            h for h in logging.getLogger().handlers if isinstance(h, TimedRotatingFileHandler)
+        )
+        try:
+            for index in range(4):
+                handler.rolloverAt = int(time.time()) - (5 - index) * 86400
+                handler.handle(
+                    logging.LogRecord(
+                        "rotation", logging.INFO, __file__, 1, f"day-{index}", (), None
+                    )
+                )
+            handler.flush()
+            archived = list(manager.log_dir.glob("xiaoqing.log.*"))
+            assert len(archived) == 2
+            text = "".join(path.read_text(encoding="utf-8") for path in archived)
+            assert "day-1" in text and "day-2" in text
+            assert "day-3" in (manager.log_dir / "xiaoqing.log").read_text(encoding="utf-8")
+        finally:
+            logging.getLogger().removeHandler(handler)
+            handler.close()
 
 
 # ============================================================
@@ -282,13 +330,13 @@ class TestSetupLogging:
     def test_setup_with_custom_config(self, tmp_path: Path):
         """测试使用自定义配置"""
         config = {
-            "log_level": "DEBUG",
-            "log_to_file": True,
-            "log_to_console": False,
-            "log_use_color": False,
-            "log_max_size_mb": 5,
+            "log_level"       : "DEBUG",
+            "log_to_file"     : True,
+            "log_to_console"  : False,
+            "log_use_color"   : False,
+            "log_max_size_mb" : 5,
             "log_backup_count": 3,
-            "log_rotation": "size",
+            "log_rotation"    : "size",
         }
         manager = setup_logging(config, log_dir=tmp_path / "logs")
 

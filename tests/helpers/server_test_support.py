@@ -3,6 +3,7 @@
 import asyncio
 import json
 import threading
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -10,12 +11,6 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 from aiohttp import ClientSession, WSServerHandshakeError, web
-
-try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - exercised on CPython 3.10
-    import tomli as tomllib
-
 
 from core.server import (
     VERSION,
@@ -62,11 +57,11 @@ def _make_request_without_auth(method: str, path: str) -> _MockRequest:
 
 def _onebot_message_payload(text: str = "/help") -> dict[str, Any]:
     return {
-        "post_type": "message",
+        "post_type"   : "message",
         "message_type": "private",
-        "user_id": 10001,
-        "raw_message": text,
-        "message": [{"type": "text", "data": {"text": text}}],
+        "user_id"     : 10001,
+        "raw_message" : text,
+        "message"     : [{"type": "text", "data": {"text": text}}],
     }
 
 

@@ -46,41 +46,41 @@ def _handle_convert_sync(args: str, context: PluginContextProtocol) -> str:
         # 扩展的单位映射
         unit_map = {
             # 流量密度
-            "jy": u.Jy,
+            "jy" : u.Jy,
             "mjy": u.mJy,
             "ujy": u.uJy,
             "μjy": u.uJy,
             "µjy": u.uJy,
             # 长度
-            "pc": u.pc,
+            "pc" : u.pc,
             "kpc": u.kpc,
             "mpc": u.Mpc,
-            "ly": u.lightyear,
-            "au": u.au,
-            "m": u.m,
-            "km": u.km,
-            "cm": u.cm,
+            "ly" : u.lightyear,
+            "au" : u.au,
+            "m"  : u.m,
+            "km" : u.km,
+            "cm" : u.cm,
             # 频率
-            "hz": u.Hz,
+            "hz" : u.Hz,
             "khz": u.kHz,
             "mhz": u.MHz,
             "ghz": u.GHz,
             "thz": u.THz,
             # 温度
-            "k": u.K,
+            "k" : u.K,
             "mk": u.mK,
             # 能量
-            "ev": u.eV,
+            "ev" : u.eV,
             "kev": u.keV,
             "mev": u.MeV,
             "gev": u.GeV,
             "tev": u.TeV,
-            "j": u.J,
+            "j"  : u.J,
             "erg": u.erg,
             # 质量
             "msun": u.Msun,
-            "kg": u.kg,
-            "g": u.g,
+            "kg"  : u.kg,
+            "g"   : u.g,
         }
 
         try:

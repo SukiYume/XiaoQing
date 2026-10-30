@@ -23,13 +23,13 @@ def _tool_response(name: str, arguments: dict, *, call_id: str = "call-1") -> di
         "choices": [
             {
                 "message": {
-                    "content": "",
+                    "content"   : "",
                     "tool_calls": [
                         {
-                            "id": call_id,
-                            "type": "function",
+                            "id"      : call_id,
+                            "type"    : "function",
                             "function": {
-                                "name": name,
+                                "name"     : name,
                                 "arguments": json.dumps(arguments, ensure_ascii=False),
                             },
                         }
@@ -42,13 +42,13 @@ def _tool_response(name: str, arguments: dict, *, call_id: str = "call-1") -> di
 
 def _react_kwargs(*, history: list[StoredMessage] | None = None) -> dict:
     return {
-        "secrets": {},
-        "cfg": MemoryConfig(max_agent_iterations=5, agent_timeout_seconds=10.0),
-        "history": history or [],
-        "chat_id": "g1",
-        "question": "她之前说喜欢什么？",
+        "secrets"  : {},
+        "cfg"      : MemoryConfig(max_agent_iterations=5, agent_timeout_seconds=10.0),
+        "history"  : history or [],
+        "chat_id"  : "g1",
+        "question" : "她之前说喜欢什么？",
         "memory_db": MagicMock(),
-        "llm": LLMCallConfig(
+        "llm"      : LLMCallConfig(
             temperature            = 0.5,
             top_p                  = 0.9,
             max_tokens             = 256,
@@ -66,11 +66,11 @@ def test_extract_tool_calls_normalizes_missing_and_duplicate_ids() -> None:
                 "message": {
                     "tool_calls": [
                         {
-                            "id": "same",
+                            "id"      : "same",
                             "function": {"name": "query_words", "arguments": '{"query":"x"}'},
                         },
                         {
-                            "id": "same",
+                            "id"      : "same",
                             "function": {"name": "query_knowledge", "arguments": "{}"},
                         },
                         {
@@ -121,8 +121,8 @@ def test_global_memory_tool_redacts_legacy_absolute_path_metadata() -> None:
             text   = "approved knowledge",
             score  = 0.9,
             meta   = {
-                "type": "knowledge",
-                "source": windows_path,
+                "type"       : "knowledge",
+                "source"     : windows_path,
                 "source_path": posix_path,
             },
         )
@@ -319,3 +319,28 @@ async def test_memory_direct_miss_keeps_agent_for_explicit_recall(
 
     assert "喜欢清淡口味" in block
     retrieve.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reasoning_tool_loop_preserves_reasoning_content(monkeypatch) -> None:
+    from plugins.xiaoqing_chat.memory import memory_retrieval
+
+    response = _tool_response("query_chat_history", {"query": "喜欢"})
+    response["choices"][0]["message"]["reasoning_content"] = "先查询聊天记录。"
+    captured = []
+
+    async def complete(**kwargs):
+        captured.append(deepcopy(kwargs))
+        if len(captured) == 1:
+            return response, "thinking-profile"
+        return _tool_response("not_enough_info", {}), "thinking-profile"
+
+    monkeypatch.setattr(memory_retrieval, "chat_completions_raw_with_fallback_paths", complete)
+    await react_retrieve(**_react_kwargs())
+    assert len(captured) == 2
+    assert all(call["route"] == "reasoning" for call in captured)
+    assistant = next(
+        message for message in captured[1]["messages"] if message["role"] == "assistant"
+    )
+    assert assistant["reasoning_content"] == "先查询聊天记录。"
+    assert assistant["tool_calls"][0]["id"] == "call-1"

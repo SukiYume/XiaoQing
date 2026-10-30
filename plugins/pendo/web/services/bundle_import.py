@@ -45,9 +45,9 @@ _COLLECTION_DATETIME_FIELDS: Final = (
     "start_time",
     "end_time",
 )
-_COLLECTION_KINDS: Final        = frozenset({"multi_node", "recurring"})
+_COLLECTION_KINDS       : Final = frozenset({"multi_node", "recurring"})
 _COLLECTION_VISIBILITIES: Final = frozenset({"private", "group_scope"})
-_DEFAULT_SOURCE_ZONE: Final     = ZoneInfo(PendoConfig.DEFAULT_TIMEZONE)
+_DEFAULT_SOURCE_ZONE    : Final = ZoneInfo(PendoConfig.DEFAULT_TIMEZONE)
 
 
 def _normalization_context(
@@ -147,10 +147,13 @@ def normalize_import_payload(
     if item_type == "task" and base.get("status") == "cancelled":
         base["cancelled_at"] = base.get("cancelled_at") or default_timestamp
 
-    context             = base.get("context")
-    attachments         = base.get("attachments")
-    ai_meta             = base.get("ai_meta")
-    base["context"]     = dict(context) if isinstance(context, dict) else {}
+    context         = base.get("context")
+    attachments     = base.get("attachments")
+    ai_meta         = base.get("ai_meta")
+    base["context"] = dict(context) if isinstance(context, dict) else {}
+    if "import" in base["context"] and not isinstance(base["context"]["import"], dict):
+        # 来源元数据只接受对象；其他形态是不受支持的历史值，预检阶段就丢弃，执行沿用同一结构。
+        base["context"].pop("import")
     base["attachments"] = list(attachments) if isinstance(attachments, list) else []
     base["ai_meta"]     = dict(ai_meta) if isinstance(ai_meta, dict) else {}
     base["deleted"]     = normalize_bool_flag(base.get("deleted", False))
@@ -214,12 +217,13 @@ def normalize_import_event_collection(
 
     start_time = normalized.get("start_time")
     end_time   = normalized.get("end_time")
+    # 集合投影是子节点的 MIN/MAX：同刻开始、没有结束时间的节点会得到相等边界，这是有效记录。
     if (
         start_time
         and end_time
-        and datetime.fromisoformat(end_time) <= datetime.fromisoformat(start_time)
+        and datetime.fromisoformat(end_time) < datetime.fromisoformat(start_time)
     ):
-        raise ValueError("event collection end_time must be after start_time")
+        raise ValueError("event collection end_time must not be before start_time")
 
     normalized["created_at"] = normalized.get("created_at") or default_timestamp
     normalized["updated_at"] = normalized.get("updated_at") or normalized["created_at"]
@@ -238,7 +242,7 @@ def inspect_bundle_bytes(
     source                                  = cast(dict[str, Any], parsed.manifest["source"])
     source_zone                             = ZoneInfo(cast(str, source["timezone"]))
     current                                 = datetime.now(UTC)
-    valid_records: list[dict[str, Any]]     = []
+    valid_records    : list[dict[str, Any]] = []
     valid_collections: list[dict[str, Any]] = []
     validation_errors: list[dict[str, Any]] = list(parsed.errors)
     for index, collection in enumerate(parsed.event_collections, start=1):
@@ -253,9 +257,9 @@ def inspect_bundle_bytes(
         except ValueError as exc:
             validation_errors.append(
                 {
-                    "path": EVENT_COLLECTION_FILE_NAME,
-                    "line": collection.get("_bundle_line", index),
-                    "type": "event_collection",
+                    "path"   : EVENT_COLLECTION_FILE_NAME,
+                    "line"   : collection.get("_bundle_line", index),
+                    "type"   : "event_collection",
                     "message": str(exc),
                 }
             )
@@ -271,9 +275,9 @@ def inspect_bundle_bytes(
             except ValueError as exc:
                 validation_errors.append(
                     {
-                        "path": TYPE_FILE_NAMES[item_type],
-                        "line": record.get("_bundle_line", index),
-                        "type": item_type,
+                        "path"   : TYPE_FILE_NAMES[item_type],
+                        "line"   : record.get("_bundle_line", index),
+                        "type"   : item_type,
                         "message": str(exc),
                     }
                 )

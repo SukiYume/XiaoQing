@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
+
 import tests.helpers.server_test_support as _fixture_support
 from core.app_delivery import AppDeliveryMixin
 from core.delivery import DeliveryReceipt
@@ -9,19 +17,11 @@ from core.models import OneBotEvent
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.server_test_support import (
     VERSION,
-    Any,
-    AsyncMock,
     BroadcastResult,
     InboundServer,
-    Mock,
-    SimpleNamespace,
     _make_request_with_auth,
     _make_request_without_auth,
     _onebot_message_payload,
-    asyncio,
-    json,
-    patch,
-    pytest,
     tomllib,
     web,
 )
@@ -217,13 +217,7 @@ async def test_server_health_authorized(sample_server):
     response = await sample_server.health(request)
     assert response.status == 200
 
-    # Patch json() method for testing
-    async def mock_json():
-        return {"status": "ok", "version": VERSION}
-
-    response.json = mock_json
-
-    data = await response.json()
+    data = json.loads(response.text)
     assert data["status"] == "ok"
     assert data["version"] == VERSION
 
@@ -242,9 +236,10 @@ async def test_server_health_with_status_providers(sample_server):
     response = await sample_server.health(request)
     assert response.status == 200
 
-    # Check response body exists
-    body = response.text
-    assert body is not None
+    body = json.loads(response.text)
+    assert body["plugins_loaded"] == 5
+    assert body["active_sessions"] == 10
+    assert body["pending_jobs"] == 2
 
 
 @pytest.mark.asyncio
@@ -283,7 +278,7 @@ async def test_server_metrics_not_configured(sample_server):
     assert response.status == 501
 
     # Check error response
-    assert "error" in response.text or response.status == 501
+    assert json.loads(response.text) == {"error": "Metrics not configured"}
 
 
 @pytest.mark.asyncio
@@ -293,7 +288,7 @@ async def test_server_metrics_with_provider(sample_server):
     sample_server._get_metrics = Mock(
         return_value={
             "total_calls": 100,
-            "avg_time": 0.5,
+            "avg_time"   : 0.5,
         }
     )
 
@@ -302,6 +297,8 @@ async def test_server_metrics_with_provider(sample_server):
     response = await sample_server.metrics(request)
 
     assert response.status == 200
+    assert json.loads(response.text) == {"total_calls": 100, "avg_time": 0.5}
+    sample_server._get_metrics.assert_called_once_with()
 
 
 @pytest.mark.asyncio

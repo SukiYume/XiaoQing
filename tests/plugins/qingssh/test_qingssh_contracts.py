@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from tests.helpers.qingssh_test_support import (
     ROOT,
-    json,
-    pytest,
     qingssh_main,
     ssh_manager_module,
     validate_command,
@@ -236,7 +238,14 @@ class TestQingsshPathResolver:
         """测试有 CWD 时的命令构建"""
         pr     = self._import_path_resolver()
         result = pr.build_command("ls", "/home/user/data")
-        assert result == "cd /home/user/data && ls"
+        assert result == "cd /home/user/data || exit\nls"
+        # 目录失效时整段脚本都不执行，分号后的命令也不会落到默认目录。
+        assert pr.build_command("printf FIRST; printf SECOND", "/missing") == (
+            "cd /missing || exit\nprintf FIRST; printf SECOND"
+        )
+        assert pr.is_cd_command('cd "/tmp/a;b"') is True
+        assert pr.is_cd_command("cd /tmp/a\\&b") is True
+        assert pr.is_cd_command("cd a;b") is False
 
     def test_build_command_cd_appends_pwd(self):
         """测试 cd 命令会附加隐藏的工作目录探针"""
@@ -251,14 +260,14 @@ class TestQingsshPathResolver:
         cwd    = "/home/user/low.iops.files"
         result = pr.build_command("cd FRB121102", cwd)
         assert result == (
-            f"cd {shlex.quote(cwd)} && cd FRB121102 && printf '%s%s\\n' '__XQ_CWD__' \"$(pwd -P)\""
+            f"cd {shlex.quote(cwd)} || exit\ncd FRB121102 && printf '%s%s\\n' '__XQ_CWD__' \"$(pwd -P)\""
         )
 
         # bare cd 有 CWD
         cwd2   = "/home/user/data"
         result = pr.build_command("cd", cwd2)
         assert result == (
-            f"cd {shlex.quote(cwd2)} && cd && printf '%s%s\\n' '__XQ_CWD__' \"$(pwd -P)\""
+            f"cd {shlex.quote(cwd2)} || exit\ncd && printf '%s%s\\n' '__XQ_CWD__' \"$(pwd -P)\""
         )
         assert "__XQ_CWD__" not in pr.build_command("cd /tmp && find / -name x")
 

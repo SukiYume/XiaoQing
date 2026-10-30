@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import pytest
+
 import tests.helpers.xiaoqing_chat_media_test_support as _fixture_support
 from tests.helpers.xiaoqing_chat_media_test_support import (
-    AsyncMock,
-    MagicMock,
-    Mock,
-    SimpleNamespace,
     _make_media_runtime,
     _reply_draft,
     _reply_draft_with_parts,
     _write_png,
-    asyncio,
     message_parts_to_legacy,
-    patch,
-    pytest,
 )
 from tests.helpers.xiaoqing_chat_test_support import complete_test_state, patch_turn
 
@@ -44,12 +43,12 @@ async def test_smalltalk_emoji_reply_returns_mixed_text_and_image_and_persists_m
     state.action_history.append           = Mock()
 
     event = {
-        "post_type": "message",
-        "message_type": "group",
-        "user_id": 12345,
-        "group_id": 67890,
-        "message_id": 1,
-        "message": [{"type": "text", "data": {"text": "你好"}}],
+        "post_type"         : "message",
+        "message_type"      : "group",
+        "user_id"           : 12345,
+        "group_id"          : 67890,
+        "message_id"        : 1,
+        "message"           : [{"type": "text", "data": {"text": "你好"}}],
         "_xc_command_forced": True,
     }
     hctx = SimpleNamespace(
@@ -72,10 +71,10 @@ async def test_smalltalk_emoji_reply_returns_mixed_text_and_image_and_persists_m
         (
             {"kind": "text", "text": "懂了"},
             {
-                "kind": "emoji",
-                "file_path": str(image_path),
+                "kind"      : "emoji",
+                "file_path" : str(image_path),
                 "media_hash": "hash-1",
-                "marker": "[表情包：无语]",
+                "marker"    : "[表情包：无语]",
             },
         ),
         media_marker=emoji_marker,
@@ -110,11 +109,11 @@ async def test_smalltalk_emoji_reply_returns_mixed_text_and_image_and_persists_m
         patch("plugins.xiaoqing_chat.handlers.log_step"),
     ):
         result = await _maybe_reply_smalltalk("你好", event, mock_context)
+        await result.delivery_receipt.record(True)
 
     assert mock_context.send_action.await_count == 0
     assert [segment["type"] for segment in result] == ["text", "emoji"]
     assert result[0]["data"]["text"] == "懂了"
-    await result.delivery_receipt.record(True)
     assistant_append = state.memory_store.append.call_args_list[-1]
     content, media_items = message_parts_to_legacy(assistant_append.kwargs["parts"])
     assert content == "懂了[[xc_media_1]]"
@@ -174,11 +173,11 @@ async def test_smalltalk_emoji_only_reply_returns_single_image_and_marker_memory
         "笑死",
         (
             {
-                "kind": "emoji",
-                "file_path": str(image_path),
+                "kind"      : "emoji",
+                "file_path" : str(image_path),
                 "media_hash": "hash-1",
-                "marker": "[表情包：无语]",
-                "mode": "emoji_only",
+                "marker"    : "[表情包：无语]",
+                "mode"      : "emoji_only",
             },
         ),
         media_marker=emoji_marker,
@@ -213,10 +212,10 @@ async def test_smalltalk_emoji_only_reply_returns_single_image_and_marker_memory
         patch("plugins.xiaoqing_chat.handlers.log_step"),
     ):
         result = await _maybe_reply_smalltalk("", event, mock_context)
+        await result.delivery_receipt.record(True)
 
     assert mock_context.send_action.await_count == 0
     assert result[0]["type"] == "emoji"
-    await result.delivery_receipt.record(True)
     assistant_append = state.memory_store.append.call_args_list[-1]
     content, media_items = message_parts_to_legacy(assistant_append.kwargs["parts"])
     assert content == "[[xc_media_1]]"
@@ -244,12 +243,12 @@ async def test_smalltalk_face_reply_returns_mixed_text_and_face_and_persists_mar
     state.action_history.append           = Mock()
 
     event = {
-        "post_type": "message",
-        "message_type": "group",
-        "user_id": 12345,
-        "group_id": 67890,
-        "message_id": 1,
-        "message": [{"type": "text", "data": {"text": "你好"}}],
+        "post_type"         : "message",
+        "message_type"      : "group",
+        "user_id"           : 12345,
+        "group_id"          : 67890,
+        "message_id"        : 1,
+        "message"           : [{"type": "text", "data": {"text": "你好"}}],
         "_xc_command_forced": True,
     }
     hctx = SimpleNamespace(
@@ -272,10 +271,10 @@ async def test_smalltalk_face_reply_returns_mixed_text_and_face_and_persists_mar
         (
             {"kind": "text", "text": "懂了"},
             {
-                "kind": "qq_face",
+                "kind"   : "qq_face",
                 "face_id": "277",
-                "marker": "[QQ表情：狗头]",
-                "mode": "text_with_face",
+                "marker" : "[QQ表情：狗头]",
+                "mode"   : "text_with_face",
             },
         ),
         media_marker=face_marker,
@@ -310,12 +309,12 @@ async def test_smalltalk_face_reply_returns_mixed_text_and_face_and_persists_mar
         patch("plugins.xiaoqing_chat.handlers.log_step"),
     ):
         result = await _maybe_reply_smalltalk("你好", event, mock_context)
+        await result.delivery_receipt.record(True)
 
     assert mock_context.send_action.await_count == 0
     assert [segment["type"] for segment in result] == ["text", "face"]
     assert result[0]["data"]["text"] == "懂了"
     assert result[1]["data"]["id"] == "277"
-    await result.delivery_receipt.record(True)
     assistant_append = state.memory_store.append.call_args_list[-1]
     content, media_items = message_parts_to_legacy(assistant_append.kwargs["parts"])
     assert content == "懂了[[xc_media_1]]"
@@ -347,12 +346,12 @@ async def test_smalltalk_reply_applies_only_one_outbound_media_plan(mock_context
     state.action_history.append           = Mock()
 
     event = {
-        "post_type": "message",
-        "message_type": "group",
-        "user_id": 12345,
-        "group_id": 67890,
-        "message_id": 1,
-        "message": [{"type": "text", "data": {"text": "你好"}}],
+        "post_type"         : "message",
+        "message_type"      : "group",
+        "user_id"           : 12345,
+        "group_id"          : 67890,
+        "message_id"        : 1,
+        "message"           : [{"type": "text", "data": {"text": "你好"}}],
         "_xc_command_forced": True,
     }
     hctx = SimpleNamespace(
@@ -380,13 +379,13 @@ async def test_smalltalk_reply_applies_only_one_outbound_media_plan(mock_context
         (
             {"kind": "text", "text": "懂了"},
             {
-                "kind": "emoji",
-                "file_path": str(image_path),
-                "media_hash": "hash-1",
-                "marker": "[表情包：无语]",
-                "description": "无语",
+                "kind"        : "emoji",
+                "file_path"   : str(image_path),
+                "media_hash"  : "hash-1",
+                "marker"      : "[表情包：无语]",
+                "description" : "无语",
                 "emotion_tags": ["无语"],
-                "mode": "text_with_emoji",
+                "mode"        : "text_with_emoji",
             },
             {"kind": "text", "text": "\n你看这个\n再说"},
         ),
@@ -423,12 +422,12 @@ async def test_smalltalk_reply_applies_only_one_outbound_media_plan(mock_context
         patch("plugins.xiaoqing_chat.handlers.log_step"),
     ):
         result = await _maybe_reply_smalltalk("你好", event, mock_context)
+        await result.delivery_receipt.record(True)
 
     assert mock_context.send_action.await_count == 0
     assert [segment["type"] for segment in result] == ["text", "emoji", "text"]
     assert result[0]["data"]["text"] == "懂了"
     assert result[2]["data"]["text"] == "你看这个\n再说"
-    await result.delivery_receipt.record(True)
     assistant_append = state.memory_store.append.call_args_list[-1]
     content, media_items = message_parts_to_legacy(assistant_append.kwargs["parts"])
     assert content == "懂了[[xc_media_1]]\n你看这个\n再说"
@@ -458,11 +457,11 @@ async def test_smalltalk_face_only_reply_returns_single_face_and_marker_memory(m
     state.action_history.append           = Mock()
 
     event = {
-        "post_type": "message",
-        "message_type": "private",
-        "user_id": 12345,
-        "message_id": 1,
-        "message": [{"type": "text", "data": {"text": "你好"}}],
+        "post_type"         : "message",
+        "message_type"      : "private",
+        "user_id"           : 12345,
+        "message_id"        : 1,
+        "message"           : [{"type": "text", "data": {"text": "你好"}}],
         "_xc_command_forced": True,
     }
     hctx = SimpleNamespace(
@@ -484,10 +483,10 @@ async def test_smalltalk_face_only_reply_returns_single_face_and_marker_memory(m
         "懂了",
         (
             {
-                "kind": "qq_face",
+                "kind"   : "qq_face",
                 "face_id": "14",
-                "marker": "[QQ表情：微笑]",
-                "mode": "face_only",
+                "marker" : "[QQ表情：微笑]",
+                "mode"   : "face_only",
             },
         ),
         media_marker=face_marker,
@@ -522,11 +521,11 @@ async def test_smalltalk_face_only_reply_returns_single_face_and_marker_memory(m
         patch("plugins.xiaoqing_chat.handlers.log_step"),
     ):
         result = await _maybe_reply_smalltalk("你好", event, mock_context)
+        await result.delivery_receipt.record(True)
 
     assert mock_context.send_action.await_count == 0
     assert result[0]["type"] == "face"
     assert result[0]["data"]["id"] == "14"
-    await result.delivery_receipt.record(True)
     assistant_append = state.memory_store.append.call_args_list[-1]
     content, media_items = message_parts_to_legacy(assistant_append.kwargs["parts"])
     assert content == "[[xc_media_1]]"

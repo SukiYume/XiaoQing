@@ -30,11 +30,11 @@ _MutationResult              = TypeVar("_MutationResult")
 
 
 class ColorRecord(TypedDict):
-    name: str
+    name  : str
     pinyin: str
-    RGB: list[int]
-    hex: str
-    CMYK: list[int]
+    RGB   : list[int]
+    hex   : str
+    CMYK  : list[int]
 
 
 def _positive_scope_id(value: Any, *, label: str) -> int | None:
@@ -99,11 +99,11 @@ def _normalize_color_record(value: Any) -> ColorRecord:
     if hex_to_rgb(normalized_hex) != rgb_value:
         raise ValueError("color record RGB and HEX disagree")
     return {
-        "name": name,
+        "name"  : name,
         "pinyin": pinyin,
-        "RGB": list(rgb_value),
-        "hex": normalized_hex,
-        "CMYK": list(cmyk_value),
+        "RGB"   : list(rgb_value),
+        "hex"   : normalized_hex,
+        "CMYK"  : list(cmyk_value),
     }
 
 

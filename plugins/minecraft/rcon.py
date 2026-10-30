@@ -40,25 +40,25 @@ class RconErrorKind(str, Enum):
 
 @dataclass(frozen=True, slots=True)
 class RconConnectResult:
-    success: bool
-    error_kind: RconErrorKind | None = None
-    error_message: str               = ""
+    success      : bool
+    error_kind   : RconErrorKind | None = None
+    error_message: str                  = ""
 
 
 @dataclass(frozen=True, slots=True)
 class RconCommandResult:
-    success: bool
-    response: str                    = ""
-    error_kind: RconErrorKind | None = None
-    error_message: str               = ""
-    truncated: bool                  = False
+    success      : bool
+    response     : str                  = ""
+    error_kind   : RconErrorKind | None = None
+    error_message: str                  = ""
+    truncated    : bool                 = False
 
 
 @dataclass(frozen=True, slots=True)
 class _CollectedResponse:
     """命令响应及其可选续包是否因短超时而结束。"""
 
-    payload: str
+    payload  : str
     truncated: bool = False
 
 
@@ -76,9 +76,9 @@ class RconResponseLimitError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class RconPacket:
-    request_id: int
+    request_id : int
     packet_type: int
-    payload: str
+    payload    : str
 
     def encode(self) -> bytes:
         """编码一个完整包，并拒绝会破坏双 NUL 边界的载荷。"""

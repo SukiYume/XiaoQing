@@ -26,50 +26,50 @@ _DRESS_SLOT_FIELDS = (
 class Pet:
     """保存宠物领域状态及从最近持久化版本产生的本地修改。"""
 
-    id: int
-    user_id: str
+    id      : int
+    user_id : str
     group_id: int
-    name: str
-    stage: PetStage
-    form: str = "普通"
+    name    : str
+    stage   : PetStage
+    form    : str = "普通"
 
     hunger: int = 100
-    mood: int   = 100
-    clean: int  = 100
+    mood  : int = 100
+    clean : int = 100
     energy: int = 100
     health: int = 100
 
-    age: int        = 0
+    age       : int = 0
     experience: int = 0
-    intimacy: int   = 0
+    intimacy  : int = 0
 
-    personality: PetPersonality = PetPersonality.LIVELY
-    favorite_food: str | None   = None
+    personality  : PetPersonality = PetPersonality.LIVELY
+    favorite_food: str | None     = None
 
-    status: PetStatus                   = PetStatus.NORMAL
+    status            : PetStatus       = PetStatus.NORMAL
     status_expire_time: datetime | None = None
 
     # 当前装备的装扮道具
-    dress_hat: str | None        = None
-    dress_clothes: str | None    = None
-    dress_accessory: str | None  = None
+    dress_hat       : str | None = None
+    dress_clothes   : str | None = None
+    dress_accessory : str | None = None
     dress_background: str | None = None
 
     last_update: datetime = field(default_factory=utc_now)
     # 每项衰减的小数余量随状态持久化，保证短周期与离线结算一致。
     decay_remainders: dict[str, float] = field(default_factory=dict)
-    last_feed: datetime | None    = None
-    last_clean: datetime | None   = None
-    last_play: datetime | None    = None
-    last_train: datetime | None   = None
-    last_explore: datetime | None = None
+    last_feed       : datetime | None = None
+    last_clean      : datetime | None = None
+    last_play       : datetime | None = None
+    last_train      : datetime | None = None
+    last_explore    : datetime | None = None
 
     likes: int = 0
 
     # 数据库乐观锁版本不参与业务属性增量。
     version: int = 0
 
-    created_at: datetime = field(default_factory=utc_now)
+    created_at      : datetime = field(default_factory=utc_now)
     _persisted_state: dict[str, object] = field(default_factory=dict, repr=False, compare=False)
 
     _DELTA_FIELDS: ClassVar[frozenset[str]] = frozenset(
@@ -101,6 +101,29 @@ class Pet:
     def mark_persisted(self) -> None:
         """记录当前业务字段，作为后续三方合并的共同基线。"""
         self._persisted_state = {name: getattr(self, name) for name in self._MERGE_FIELDS}
+
+    def conflicts_with(self, latest: "Pet") -> str | None:
+        """事务内对最新快照复核前置条件，返回冲突原因。
+
+        - 阶段转移以阶段为条件：旧快照判定可以孵化/进化，而最新记录已经被另一请求转移过，
+          这次转移不能再扣一次经验。
+        - 精力是动作成本：旧快照以为够用，但最新精力扣完会变成负数时，整次动作必须拒绝，
+          不能被钳制到 0 后照常发放奖励。
+        """
+        if not self._persisted_state:
+            return None
+        original_update = self._persisted_state.get("last_update")
+        if self.last_update != original_update and latest.last_update != original_update:
+            # 衰减和睡眠共同消费这段时间，旧快照只能结算一次。
+            return "state"
+        original_stage = self._persisted_state.get("stage")
+        if self.stage != original_stage and latest.stage != original_stage:
+            return "stale_stage"
+        original_energy = cast(int, self._persisted_state.get("energy", self.energy))
+        energy_delta    = cast(int, self.energy) - original_energy
+        if energy_delta < 0 and cast(int, latest.energy) + energy_delta < 0:
+            return "energy"
+        return None
 
     def merged_onto(self, latest: "Pet") -> "Pet":
         """把本地修改三方合并到数据库中的最新宠物快照。"""

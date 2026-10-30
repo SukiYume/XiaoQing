@@ -87,22 +87,22 @@ def test_build_diary_overview_tracks_fill_rate_streaks_and_moods(
     )
 
     assert result["summary"] == {
-        "entry_count": 3,
-        "range_start": "2026-03-01",
-        "range_end": "2026-03-31",
-        "range_days": 31,
-        "active_days": 3,
+        "entry_count"   : 3,
+        "range_start"   : "2026-03-01",
+        "range_end"     : "2026-03-31",
+        "range_days"    : 31,
+        "active_days"   : 3,
         "average_length": round(
             (len("今天写了很多很多字。") + len("今天继续写日记。") + len("这一天有些疲惫。")) / 3,
             1,
         ),
-        "fill_rate": 3 / 31,
-        "current_streak": 1,
-        "longest_streak": 2,
+        "fill_rate"            : 3 / 31,
+        "current_streak"       : 1,
+        "longest_streak"       : 2,
         "period_longest_streak": 2,
-        "total_words": len("今天写了很多很多字。今天继续写日记。这一天有些疲惫。"),
-        "busiest_day": {
-            "date": "2026-03-20",
+        "total_words"          : len("今天写了很多很多字。今天继续写日记。这一天有些疲惫。"),
+        "busiest_day"          : {
+            "date" : "2026-03-20",
             "count": 1,
             "words": len("今天写了很多很多字。"),
         },
@@ -170,7 +170,6 @@ def test_build_diary_overview_supports_cross_year_yearly_cadence(db: Database) -
     owner_id = "u-diary-year"
     for item_id, diary_date, content in (
         ("d1", "2024-03-08", "2024 年记录"),
-        ("d2", "2025-06-10", "2025 年记录更长一点"),
         ("d3", "2026-02-15", "2026 年记录"),
     ):
         _insert(
@@ -195,7 +194,7 @@ def test_build_diary_overview_supports_cross_year_yearly_cadence(db: Database) -
 
     assert result["cadence_granularity"] == "year"
     assert [item["label"] for item in result["cadence"]] == ["2024", "2025", "2026"]
-    assert [item["count"] for item in result["cadence"]] == [1, 1, 1]
+    assert [item["count"] for item in result["cadence"]] == [1, 0, 1]
 
 
 def test_build_diary_overview_uses_user_clock_when_today_is_omitted(

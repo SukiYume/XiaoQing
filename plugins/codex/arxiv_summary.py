@@ -70,7 +70,7 @@ def _normalize_arxiv_links(links: Any) -> tuple[list[str], str | None]:
         return [], f"单次 arXiv 总结最多接受 {MAX_ARXIV_LINKS} 个链接。"
 
     normalized: list[str] = []
-    seen: set[str]        = set()
+    seen      : set[str]  = set()
     for link in links:
         value = link.strip()
         if not value or len(value) > MAX_ARXIV_LINK_CHARS or any(ord(char) < 32 for char in value):
@@ -193,7 +193,7 @@ class ArxivSummaryAddon:
             date,
             len(normalized_links),
         )
-        replay_message: str | None   = None
+        replay_message  : str | None = None
         inflight_message: str | None = None
         disk_usage_bytes             = await self.manager._measure_disk_usage_bytes(
             max_bytes=self.manager.config.emergency_disk_bytes
@@ -232,10 +232,10 @@ class ArxivSummaryAddon:
                                 group_id = group_id,
                                 context  = context,
                                 metadata = {
-                                    "source": ARXIV_SUMMARY_SOURCE,
-                                    "kind": ARXIV_SUMMARY_INIT_KIND,
+                                    "source"           : ARXIV_SUMMARY_SOURCE,
+                                    "kind"             : ARXIV_SUMMARY_INIT_KIND,
                                     "suppress_delivery": True,
-                                    "queue_overhead": True,
+                                    "queue_overhead"   : True,
                                 },
                                 delivery_targets = explicit_targets,
                                 disk_usage_bytes = disk_usage_bytes,
@@ -247,10 +247,10 @@ class ArxivSummaryAddon:
                             group_id = group_id,
                             context  = context,
                             metadata = {
-                                "source": ARXIV_SUMMARY_SOURCE,
-                                "kind": ARXIV_SUMMARY_KIND,
-                                "date": date,
-                                "links": normalized_links,
+                                "source"       : ARXIV_SUMMARY_SOURCE,
+                                "kind"         : ARXIV_SUMMARY_KIND,
+                                "date"         : date,
+                                "links"        : normalized_links,
                                 "failure_title": f"{date} arXiv 总结",
                             },
                             delivery_targets = explicit_targets,
@@ -283,18 +283,22 @@ class ArxivSummaryAddon:
         existing_message = replay_message or inflight_message
         if existing_message is None:
             return "未执行 arXiv 总结任务。"
-        await self._send_text_to_target(
+        sent = await self._send_text_to_target(
             existing_message,
             user_id          = user_id,
             group_id         = group_id,
             context          = context,
             delivery_targets = explicit_targets,
         )
-        return (
-            f"已重发 {date} arXiv 历史总结。"
-            if replay_message is not None
-            else f"{date} arXiv 总结任务已在队列或运行中。"
-        )
+        if replay_message is None:
+            return f"{date} arXiv 总结任务已在队列或运行中。"
+        # 成功文案只对应实际回执：明确失败与结果未知分别如实说明。
+        if sent is False:
+            logger.warning("arXiv summary replay delivery failed: label=%s date=%s", label, date)
+            return f"{date} arXiv 历史总结重发失败，请稍后重试。"
+        if sent is None:
+            return f"{date} arXiv 历史总结已提交发送，是否送达未确认。"
+        return f"已重发 {date} arXiv 历史总结。"
 
     async def _send_text_to_target(
         self,
@@ -304,18 +308,27 @@ class ArxivSummaryAddon:
         group_id: int | None,
         context: PluginContextProtocol,
         delivery_targets: tuple[DeliveryTarget, ...] | None = None,
-    ) -> None:
+    ) -> bool | None:
+        """发给全部目标并汇总回执：任一分片失败为 False，全部确认为 True，其余为 None。"""
+
         targets = (
             delivery_targets
             if delivery_targets is not None
             else _targets_from_ids(user_id, group_id)
         )
+        outcome: bool | None = True
         for target in targets:
             for batch in split_message_segments(segments(content)):
                 action = build_action(batch, target.user_id, target.group_id)
-                if action and hasattr(context, "send_action"):
-                    action[ACTION_BYPASS_SINK_KEY] = True
-                    await context.send_action(action)
+                if not action or not hasattr(context, "send_action"):
+                    return False
+                action[ACTION_BYPASS_SINK_KEY] = True
+                sent                           = await context.send_action(action)
+                if sent is False:
+                    return False
+                if sent is not True:
+                    outcome = None
+        return outcome
 
     def _is_summary_job(self, job: RuntimeJob, date: str, links: list[str]) -> bool:
         metadata = job.metadata or {}

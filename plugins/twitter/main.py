@@ -61,9 +61,9 @@ TimelineEntry   = dict[str, Any]
 class Context(Protocol):
     """本插件实际使用的最小运行时上下文。"""
 
-    data_dir: Path
-    http_session: Any
-    current_user_id: int | None
+    data_dir        : Path
+    http_session    : Any
+    current_user_id : int | None
     current_group_id: int | None
 
     def get_settings_snapshot(self) -> PluginSettingsSnapshot: ...
@@ -114,8 +114,8 @@ class TwitterMediaFetchError(RuntimeError):
 class _FetchOutcome:
     """后台抓取结果；只保存可以直接发给用户的脱敏消息。"""
 
-    count: int
-    message: str
+    count    : int
+    message  : str
     succeeded: bool
 
 
@@ -216,37 +216,37 @@ _MEDIA_REDIRECT_POLICY = RedirectPolicy(
     same_origin_only = False,
 )
 _TIMELINE_FEATURES = {
-    "responsive_web_enhance_cards_enabled": True,
-    "rweb_video_screen_enabled": False,
-    "profile_label_improvements_pcf_label_in_post_enabled": False,
-    "rweb_tipjar_consumption_enabled": False,
-    "verified_phone_label_enabled": False,
-    "creator_subscriptions_tweet_preview_api_enabled": False,
-    "responsive_web_graphql_timeline_navigation_enabled": False,
-    "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
-    "premium_content_api_read_enabled": False,
-    "communities_web_enable_tweet_community_results_fetch": False,
-    "c9s_tweet_anatomy_moderator_badge_enabled": False,
-    "responsive_web_grok_analyze_button_fetch_trends_enabled": False,
-    "responsive_web_grok_analyze_post_followups_enabled": False,
-    "responsive_web_jetfuel_frame": False,
-    "responsive_web_grok_share_attachment_enabled": False,
-    "articles_preview_enabled": True,
-    "responsive_web_edit_tweet_api_enabled": True,
-    "graphql_is_translatable_rweb_tweet_is_translatable_enabled": True,
-    "view_counts_everywhere_api_enabled": True,
-    "longform_notetweets_consumption_enabled": True,
-    "responsive_web_twitter_article_tweet_consumption_enabled": True,
-    "tweet_awards_web_tipping_enabled": False,
-    "responsive_web_grok_show_grok_translated_post": False,
-    "responsive_web_grok_analysis_button_from_backend": False,
-    "creator_subscriptions_quote_tweet_preview_enabled": False,
-    "freedom_of_speech_not_reach_fetch_enabled": True,
-    "standardized_nudges_misinfo": True,
+    "responsive_web_enhance_cards_enabled"                                   : True,
+    "rweb_video_screen_enabled"                                              : False,
+    "profile_label_improvements_pcf_label_in_post_enabled"                   : False,
+    "rweb_tipjar_consumption_enabled"                                        : False,
+    "verified_phone_label_enabled"                                           : False,
+    "creator_subscriptions_tweet_preview_api_enabled"                        : False,
+    "responsive_web_graphql_timeline_navigation_enabled"                     : False,
+    "responsive_web_graphql_skip_user_profile_image_extensions_enabled"      : False,
+    "premium_content_api_read_enabled"                                       : False,
+    "communities_web_enable_tweet_community_results_fetch"                   : False,
+    "c9s_tweet_anatomy_moderator_badge_enabled"                              : False,
+    "responsive_web_grok_analyze_button_fetch_trends_enabled"                : False,
+    "responsive_web_grok_analyze_post_followups_enabled"                     : False,
+    "responsive_web_jetfuel_frame"                                           : False,
+    "responsive_web_grok_share_attachment_enabled"                           : False,
+    "articles_preview_enabled"                                               : True,
+    "responsive_web_edit_tweet_api_enabled"                                  : True,
+    "graphql_is_translatable_rweb_tweet_is_translatable_enabled"             : True,
+    "view_counts_everywhere_api_enabled"                                     : True,
+    "longform_notetweets_consumption_enabled"                                : True,
+    "responsive_web_twitter_article_tweet_consumption_enabled"               : True,
+    "tweet_awards_web_tipping_enabled"                                       : False,
+    "responsive_web_grok_show_grok_translated_post"                          : False,
+    "responsive_web_grok_analysis_button_from_backend"                       : False,
+    "creator_subscriptions_quote_tweet_preview_enabled"                      : False,
+    "freedom_of_speech_not_reach_fetch_enabled"                              : True,
+    "standardized_nudges_misinfo"                                            : True,
     "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": True,
-    "longform_notetweets_rich_text_read_enabled": True,
-    "longform_notetweets_inline_media_enabled": True,
-    "responsive_web_grok_image_annotation_enabled": False,
+    "longform_notetweets_rich_text_read_enabled"                             : True,
+    "longform_notetweets_inline_media_enabled"                               : True,
+    "responsive_web_grok_image_annotation_enabled"                           : False,
 }
 _TIMELINE_FIELD_TOGGLES = {"withArticlePlainText": False}
 
@@ -255,9 +255,11 @@ _POSTED_LOCK = asyncio.Lock()
 _FETCH_LOCK  = asyncio.Lock()
 # 这些句柄属于当前模块代次，不是用户数据：卸载代次前由 shutdown() 取消；
 # 只有普通插件事件需要共享或必须持久化的状态才应放入 context.state。
-_FETCH_TASK: asyncio.Task[_FetchOutcome] | None      = None
-_MANUAL_NOTIFICATION_TASK: asyncio.Task[None] | None = None
-_POSTED_RESERVATIONS: dict[str, set[str]]            = {}
+_FETCH_TASK              : asyncio.Task[_FetchOutcome] | None = None
+_MANUAL_NOTIFICATION_TASK: asyncio.Task[None] | None          = None
+# 共享抓取任务的去重订阅目标 (user_id, group_id)；完成后逐个通知。
+_MANUAL_SUBSCRIBERS : dict[tuple[int | None, int | None], None] = {}
+_POSTED_RESERVATIONS: dict[str, set[str]]                       = {}
 
 
 # ──────────────────── 生命周期与配置 ────────────────────
@@ -280,6 +282,7 @@ async def shutdown(context: Context | None = None) -> None:
         await asyncio.gather(*tasks, return_exceptions=True)
     _FETCH_TASK               = None
     _MANUAL_NOTIFICATION_TASK = None
+    _MANUAL_SUBSCRIBERS.clear()
     async with _POSTED_LOCK:
         _POSTED_RESERVATIONS.clear()
 
@@ -327,9 +330,9 @@ def _get_media_headers() -> dict[str, str]:
     """构造不含 API 凭据和 Cookie 的公共媒体请求头。"""
 
     return {
-        "Accept": "image/*",
+        "Accept"         : "image/*",
         "Accept-Encoding": "identity",
-        "User-Agent": _TWITTER_USER_AGENT,
+        "User-Agent"     : _TWITTER_USER_AGENT,
     }
 
 
@@ -487,17 +490,17 @@ async def _fetch_timeline(
     """获取一页用户时间线，并从不稳定的 GraphQL 结构中提取推文和游标。"""
 
     variables: dict[str, object] = {
-        "userId": _get_user_id(context),
-        "count": 100,
-        "includePromotedContent": False,
-        "withCommunity": False,
-        "withVoice": False,
-        "include_entities": True,
-        "include_user_entities": True,
+        "userId"                        : _get_user_id(context),
+        "count"                         : 100,
+        "includePromotedContent"        : False,
+        "withCommunity"                 : False,
+        "withVoice"                     : False,
+        "include_entities"              : True,
+        "include_user_entities"         : True,
         "include_ext_media_availability": True,
-        "include_ext_alt_text": True,
-        "include_cards": True,
-        "tweet_mode": "extended",
+        "include_ext_alt_text"          : True,
+        "include_cards"                 : True,
+        "tweet_mode"                    : "extended",
     }
     if (
         isinstance(cursor, str)
@@ -508,8 +511,8 @@ async def _fetch_timeline(
         variables["cursor"] = cursor
 
     params = {
-        "variables": json.dumps(variables, ensure_ascii=False, separators=(",", ":")),
-        "features": json.dumps(_TIMELINE_FEATURES, separators=(",", ":")),
+        "variables"   : json.dumps(variables, ensure_ascii=False, separators=(",", ":")),
+        "features"    : json.dumps(_TIMELINE_FEATURES, separators=(",", ":")),
         "fieldToggles": json.dumps(_TIMELINE_FIELD_TOGGLES, separators=(",", ":")),
     }
 
@@ -522,9 +525,9 @@ async def _fetch_timeline(
             mime_policy    = JSON_MIME_POLICY,
             headers        = _get_headers(context),
             request_kwargs = {
-                "params": params,
+                "params" : params,
                 "cookies": _get_cookies(context),
-                "proxy": _get_proxy(context),
+                "proxy"  : _get_proxy(context),
                 "timeout": REQUEST_TIMEOUT_SECONDS,
             },
         )
@@ -551,11 +554,14 @@ async def _fetch_timeline(
             if instruction.get("type") != "TimelineAddEntries":
                 continue
             candidate = instruction.get("entries", [])
-            entries   = candidate if isinstance(candidate, list) else []
+            if not isinstance(candidate, list):
+                # 已识别的指令结构畸形时明确失败：当作空时间线会写入全量回填完成标记。
+                raise ResponseFormatError("Twitter timeline entries must be a list")
+            entries = candidate
             break
 
-        tweets: list[TimelineEntry] = []
-        next_cursor: str | None     = None
+        tweets     : list[TimelineEntry] = []
+        next_cursor: str | None          = None
         for entry in entries:
             if not isinstance(entry, dict):
                 continue
@@ -681,7 +687,7 @@ async def _fetch_media_bytes(url: str, context: Context) -> bytes | None:
         redirect_policy = _MEDIA_REDIRECT_POLICY,
         headers         = _get_media_headers(),
         request_kwargs  = {
-            "proxy": proxy,
+            "proxy"  : proxy,
             "timeout": REQUEST_TIMEOUT_SECONDS,
         },
         accept_encoding="identity",
@@ -737,13 +743,13 @@ async def _fetch_twitter_images(context: Context) -> int:
         incremental    = await asyncio.to_thread(_backfill_is_complete, backfill_state, user_id)
         logger.info("Twitter: 开始%s抓取", "增量" if incremental else "首次全量")
 
-        cursor: str | None     = None
-        seen_cursors: set[str] = set()
-        seen_urls: set[str]    = set()
-        total_new              = 0
-        total_attempted        = 0
-        total_failed           = 0
-        consecutive_empty      = 0
+        cursor      : str | None = None
+        seen_cursors: set[str]   = set()
+        seen_urls   : set[str]   = set()
+        total_new                = 0
+        total_attempted          = 0
+        total_failed             = 0
+        consecutive_empty        = 0
 
         for page_number in range(1, _get_max_pages(context) + 1):
             logger.info("Twitter: 检查第 %s 页", page_number)
@@ -767,7 +773,11 @@ async def _fetch_twitter_images(context: Context) -> int:
             total_failed += failed_count
             new_count = sum(outcome is True for outcome in outcomes)
             total_new += new_count
-            consecutive_empty = 0 if new_count else consecutive_empty + 1
+            # 只有确认本页没有新图片（全部已缓存）才推进停止计数；下载失败的页还不知道有没有新图。
+            if new_count:
+                consecutive_empty = 0
+            elif not failed_count:
+                consecutive_empty += 1
 
             if incremental and consecutive_empty >= MAX_PAGES_WITHOUT_NEW_IMAGES:
                 logger.info("连续 %s 页没有新图片，停止抓取", consecutive_empty)
@@ -879,13 +889,23 @@ async def _notify_manual_fetch(
     fetch_task: asyncio.Task[_FetchOutcome],
     *,
     context: Context,
+) -> None:
+    """等待后台抓取完成，再向每个订阅了这次抓取的会话各发送一次结果。"""
+
+    outcome = await fetch_task
+    targets = list(_MANUAL_SUBSCRIBERS)
+    _MANUAL_SUBSCRIBERS.clear()
+    for user_id, group_id in targets:
+        await _send_manual_result(context, outcome, user_id, group_id)
+
+
+async def _send_manual_result(
+    context: Context,
+    outcome: _FetchOutcome,
     user_id: int | None,
     group_id: int | None,
 ) -> None:
-    """等待后台抓取完成，再向发起命令的会话发送一次结果。"""
-
-    outcome = await fetch_task
-    action  = build_action(segments(outcome.message), user_id, group_id)
+    action = build_action(segments(outcome.message), user_id, group_id)
     if action is None:
         return
     try:
@@ -926,13 +946,9 @@ def _start_manual_notification(
     group_id: int | None,
 ) -> None:
     global _MANUAL_NOTIFICATION_TASK
-    task = asyncio.create_task(
-        _notify_manual_fetch(
-            fetch_task,
-            context  = context,
-            user_id  = user_id,
-            group_id = group_id,
-        ),
+    _MANUAL_SUBSCRIBERS[(user_id, group_id)] = None
+    task                                     = asyncio.create_task(
+        _notify_manual_fetch(fetch_task, context=context),
         name="twitter-manual-fetch-notification",
     )
     _MANUAL_NOTIFICATION_TASK = task
@@ -1121,6 +1137,8 @@ async def handle(
             if user_id is None and group_id is None:
                 return segments("❌ 无法确定抓取结果的通知目标")
             if _MANUAL_NOTIFICATION_TASK is not None and not _MANUAL_NOTIFICATION_TASK.done():
+                # 其他会话的请求加入同一次抓取的通知列表，不能只回复“会通知你”却不登记。
+                _MANUAL_SUBSCRIBERS[(user_id, group_id)] = None
                 return DeliverySegments(
                     segments("⏳ Twitter 图片正在后台抓取，完成后会通知你"),
                     outcome=CommandOutcome("accepted"),

@@ -34,13 +34,13 @@ def validate_action_list(value: object, *, source: str) -> ActionList:
 class HandlerContext:
     """入口处一次性解析出的不可变请求上下文。"""
 
-    chat_id: str
-    runtime: ChatRuntime
-    state: ChatRuntimeState
-    secrets: dict[str, Any]
+    chat_id : str
+    runtime : ChatRuntime
+    state   : ChatRuntimeState
+    secrets : dict[str, Any]
     data_dir: Path
     bot_name: str
-    context: Any  # 插件框架上下文没有稳定的静态类型。
+    context : Any  # 插件框架上下文没有稳定的静态类型。
 
     @classmethod
     def from_event(

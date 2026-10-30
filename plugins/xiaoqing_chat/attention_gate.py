@@ -27,11 +27,11 @@ _COREFERENCE_ATTENTION_PATTERNS = tuple(
 
 @dataclass(frozen=True)
 class AttentionDecision:
-    mentioned: bool
-    forced: bool
-    force_reason: str           = ""
-    direct_mentioned: bool      = False
-    reply_to_bot: bool          = False
+    mentioned            : bool
+    forced               : bool
+    force_reason         : str  = ""
+    direct_mentioned     : bool = False
+    reply_to_bot         : bool = False
     coreference_mentioned: bool = False
 
 

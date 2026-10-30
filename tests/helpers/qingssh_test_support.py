@@ -106,7 +106,7 @@ class _TransactionalContext:
             "plugins": {
                 "qingssh": {
                     "qq_send_interval_seconds": 0,
-                    "qq_send_timeout_seconds": 0.2,
+                    "qq_send_timeout_seconds" : 0.2,
                 }
             }
         }
@@ -192,12 +192,12 @@ class _CommandGateManager:
 def _connected_session() -> _SessionStub:
     return _SessionStub(
         {
-            SessionKeys.STATE: "connected",
-            SessionKeys.SERVER_NAME: "srv1",
+            SessionKeys.STATE        : "connected",
+            SessionKeys.SERVER_NAME  : "srv1",
             SessionKeys.COMMAND_COUNT: 0,
-            SessionKeys.CWD: "/initial",
-            SessionKeys.ENV_VARS: {},
-            SessionKeys.HISTORY: [],
+            SessionKeys.CWD          : "/initial",
+            SessionKeys.ENV_VARS     : {},
+            SessionKeys.HISTORY      : [],
         }
     )
 

@@ -6,6 +6,7 @@
 """
 
 import asyncio
+import inspect
 import json
 import logging
 import math
@@ -284,12 +285,23 @@ async def gather_bounded(
         raise ValueError("limit must be a positive integer")
 
     semaphore = asyncio.Semaphore(limit)
+    pending   = list(awaitables)
 
     async def bounded(awaitable: Awaitable[T]) -> T:
         async with semaphore:
             return await awaitable
 
-    results = await asyncio.gather(*(bounded(awaitable) for awaitable in awaitables))
+    try:
+        results = await asyncio.gather(*(bounded(awaitable) for awaitable in pending))
+    except BaseException:
+        # 输入协程归本函数所有：取消或失败时还在排队、从未启动的协程直接关闭，
+        # 避免 "coroutine was never awaited" 警告和闭包引用被长期保留。
+        for awaitable in pending:
+            if inspect.iscoroutine(awaitable) and (
+                inspect.getcoroutinestate(awaitable) == inspect.CORO_CREATED
+            ):
+                awaitable.close()
+        raise
     return list(results)
 
 
@@ -381,9 +393,9 @@ def split_message_segments(
     if total_len <= max_length:
         return [segs]
 
-    chunks: list[Segments] = []
-    current: Segments      = []
-    current_text_length    = 0
+    chunks : list[Segments] = []
+    current: Segments       = []
+    current_text_length     = 0
 
     def flush() -> None:
         nonlocal current, current_text_length

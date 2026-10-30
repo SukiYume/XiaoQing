@@ -71,7 +71,7 @@ def coerce_json_bool(value: Any, *, default: bool) -> bool:
 class LockedDirtyStateMixin:
     """为带同步锁和 ``_dirty`` 标志的存储提供唯一的线程安全读取实现。"""
 
-    _lock: AbstractContextManager[Any]
+    _lock : AbstractContextManager[Any]
     _dirty: bool
 
     def is_dirty(self) -> bool:

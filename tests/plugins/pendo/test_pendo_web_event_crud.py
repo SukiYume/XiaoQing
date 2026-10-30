@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import shutil
+import uuid
+
+import pytest
 from fastapi import HTTPException
 
 from plugins.pendo.web.api.items import ItemCreate, create_item
@@ -10,9 +14,6 @@ from tests.helpers.pendo_web_items_test_support import (
     Database,
     items_api,
     normalize_event_fields,
-    pytest,
-    shutil,
-    uuid,
 )
 
 
@@ -41,10 +42,10 @@ def test_nonexistent_local_event_time_returns_validation_error_for_create_and_ed
 def test_event_validation_rejects_invalid_merged_update_values():
     existing = normalize_event_fields(
         {
-            "title": "好事件",
-            "category": "会议",
-            "start_time": "2026-03-26T10:00:00",
-            "end_time": "2026-03-26T11:00:00",
+            "title"       : "好事件",
+            "category"    : "会议",
+            "start_time"  : "2026-03-26T10:00:00",
+            "end_time"    : "2026-03-26T11:00:00",
             "remind_times": ["2026-03-26T09:00:00"],
         },
         partial=False,
@@ -105,12 +106,12 @@ def test_item_update_event_explicit_times_replace_existing_rules():
         db.insert_item(
             normalize_event_fields(
                 {
-                    "id": "ev-rules",
-                    "owner_id": owner_id,
-                    "type": "event",
-                    "title": "移动时间",
-                    "category": "会议",
-                    "start_time": "2030-01-02T09:00:00",
+                    "id"            : "ev-rules",
+                    "owner_id"      : owner_id,
+                    "type"          : "event",
+                    "title"         : "移动时间",
+                    "category"      : "会议",
+                    "start_time"    : "2030-01-02T09:00:00",
                     "reminder_rules": [{"offset_seconds": 3600}, {"offset_seconds": 0}],
                 },
                 partial=False,
@@ -152,13 +153,13 @@ def test_item_update_event_start_time_preserves_duration_when_end_time_omitted()
         db.insert_item(
             normalize_event_fields(
                 {
-                    "id": "ev-duration",
-                    "owner_id": owner_id,
-                    "type": "event",
-                    "title": "移动含结束时间事件",
-                    "category": "会议",
-                    "start_time": "2030-01-02T09:00:00",
-                    "end_time": "2030-01-02T11:30:00",
+                    "id"            : "ev-duration",
+                    "owner_id"      : owner_id,
+                    "type"          : "event",
+                    "title"         : "移动含结束时间事件",
+                    "category"      : "会议",
+                    "start_time"    : "2030-01-02T09:00:00",
+                    "end_time"      : "2030-01-02T11:30:00",
                     "reminder_rules": [{"offset_seconds": 3600}, {"offset_seconds": 0}],
                 },
                 partial=False,
@@ -191,13 +192,13 @@ def test_event_reminder_log_sync_preserves_sent_history_but_excludes_removed_rem
     try:
         db.insert_item(
             {
-                "id": "ev1",
-                "owner_id": owner_id,
-                "type": "event",
-                "title": "提醒同步",
-                "category": "会议",
-                "start_time": "2026-03-26T10:00:00",
-                "end_time": "2026-03-26T11:00:00",
+                "id"          : "ev1",
+                "owner_id"    : owner_id,
+                "type"        : "event",
+                "title"       : "提醒同步",
+                "category"    : "会议",
+                "start_time"  : "2026-03-26T10:00:00",
+                "end_time"    : "2026-03-26T11:00:00",
                 "remind_times": ["2026-03-26T09:00:00", "2026-03-26T09:30:00"],
             }
         )

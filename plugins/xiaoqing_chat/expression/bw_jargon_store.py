@@ -43,19 +43,19 @@ def _chat_count_list(value: Any) -> list[list[Any]]:
 class JargonRecord:
     """一个黑话条目及其按会话累计的观察统计。"""
 
-    content: str
-    scope_chat_id: str = ""
-    meaning: str       = ""
-    raw_content: list[str] = field(default_factory=list)
-    chat_id_counts: list[list[Any]] = field(default_factory=list)
-    is_global: bool           = False
-    count: int                = 0
-    is_complete: bool         = False
-    last_inference_count: int = 0
-    updated_at: float = field(default_factory=lambda: time.time())
-    usage: str  = ""
-    tone: str   = ""
-    source: str = ""
+    content             : str
+    scope_chat_id       : str = ""
+    meaning             : str = ""
+    raw_content         : list[str] = field(default_factory=list)
+    chat_id_counts      : list[list[Any]] = field(default_factory=list)
+    is_global           : bool = False
+    count               : int  = 0
+    is_complete         : bool = False
+    last_inference_count: int  = 0
+    updated_at          : float = field(default_factory=lambda: time.time())
+    usage               : str = ""
+    tone                : str = ""
+    source              : str = ""
 
 
 class JargonSnapshot(dict[str, JargonRecord]):
@@ -71,7 +71,6 @@ class JargonStore(StoreBase):
 
     def __init__(self) -> None:
         super().__init__()
-        self._cache: dict[str, JargonRecord] | None                        = None
         self._baseline_context: ContextVar[dict[str, JargonRecord] | None] = ContextVar(
             "snapshot_baseline", default=None
         )
@@ -90,7 +89,6 @@ class JargonStore(StoreBase):
         if self._data_dir == data_dir:
             return
         super().bind(data_dir)
-        self._cache    = None
         self._baseline = {}
 
     def _path(self) -> Path | None:
@@ -143,9 +141,9 @@ class JargonStore(StoreBase):
         if path is None:
             return {}
         with keyed_path_lock(path):
-            self._cache    = self._read_records()
-            self._baseline = deepcopy(self._cache)
-            return JargonSnapshot(self._cache)
+            records        = self._read_records()
+            self._baseline = deepcopy(records)
+            return JargonSnapshot(records)
 
     def clear(self, chat_id: str) -> None:
         """删除一个会话的黑话记录及其全局统计，保留全局定义与其它会话。"""
@@ -171,7 +169,6 @@ class JargonStore(StoreBase):
                     self.key_for(kept.content, "" if kept.is_global else kept.scope_chat_id)
                 ] = kept
             AtomicJsonStore(path).write_with_backup([asdict(item) for item in remaining.values()])
-            self._cache    = deepcopy(remaining)
             self._baseline = deepcopy(remaining)
 
     @staticmethod
@@ -283,7 +280,6 @@ class JargonStore(StoreBase):
             payload         = [asdict(item) for item in merged_items]
             if not self._save_json_to_path_parts("bw_learner", "jargon.json", data=payload):
                 return
-            self._cache    = deepcopy(merged)
             self._baseline = deepcopy(merged)
             if isinstance(items, JargonSnapshot):
                 items.baseline = deepcopy(desired)

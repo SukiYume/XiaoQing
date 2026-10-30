@@ -32,10 +32,10 @@ PendoContext: TypeAlias = PendoContextProtocol
 class SessionData(Protocol):
     """Mutable transaction-local view supplied by ``SessionManager.update``."""
 
-    user_id: int
-    group_id: int | None
+    user_id    : int
+    group_id   : int | None
     plugin_name: str
-    session_id: str
+    session_id : str
 
     def get(self, key: str, default: Any = None) -> Any: ...
 
@@ -52,14 +52,14 @@ CommandMessage: TypeAlias = dict[str, Any]
 class PendoServices(TypedDict):
     """同一插件上下文中共享且生命周期一致的服务集合。"""
 
-    db: Database
-    ai_parser: AIParser
+    db              : Database
+    ai_parser       : AIParser
     reminder_service: ReminderService
-    exporter: ExporterService
-    event_handler: EventHandler
-    task_handler: TaskHandler
-    note_handler: NoteHandler
-    diary_handler: DiaryHandler
-    search_handler: SearchHandler
-    ledger_handler: LedgerHandler
-    web_handler: WebHandler
+    exporter        : ExporterService
+    event_handler   : EventHandler
+    task_handler    : TaskHandler
+    note_handler    : NoteHandler
+    diary_handler   : DiaryHandler
+    search_handler  : SearchHandler
+    ledger_handler  : LedgerHandler
+    web_handler     : WebHandler

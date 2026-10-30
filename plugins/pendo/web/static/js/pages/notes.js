@@ -2,6 +2,7 @@ import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
 import { showModal, closeModal, showConfirmModal, safeHtml } from '../components/modal.js';
 import { buildFormHTML, getFormData, initFormInteractions } from '../components/form.js';
+import { captureFormDraft, reopenWithDraft } from '../components/form.js';
 import { renderPagination } from '../components/pagination.js';
 import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
 import {
@@ -194,7 +195,7 @@ function refsToString(note) {
 }
 
 function noteWordCount(note) {
-    return textValue(note?.content).trim().length;
+    return Array.from(note.content.trim()).length;
 }
 
 // 只支持页面需要的 Markdown 子集。先转义原文，再添加受控标签，避免正文注入 HTML。
@@ -329,9 +330,6 @@ async function resolveActiveRange() {
     return fetchItemRangeBounds(api, {
         type: 'note',
         filters: { ...sharedFilterParams(), ...(_filters.keyword ? { keyword: _filters.keyword } : {}) },
-        sortField: 'created_at',
-        startField: 'created_at',
-        endField: 'created_at',
         fallbackEnd: range.end,
     });
 }
@@ -1308,8 +1306,11 @@ function openNoteFormModal(existing = null) {
         deleteButton.onclick = async () => {
             if (deleteButton.disabled) return;
             deleteButton.disabled = true;
+            // 删除确认会替换编辑弹窗：先记下草稿，取消或删除失败时带着草稿回到编辑。
+            const draft = captureFormDraft(form);
             closeModal(content);
-            await confirmAndDeleteNote(note, '返回编辑', () => openNoteFormModal(note));
+            await confirmAndDeleteNote(note, '返回编辑', () =>
+                reopenWithDraft(() => openNoteFormModal(note), draft, '#note-form'));
         };
     }
 

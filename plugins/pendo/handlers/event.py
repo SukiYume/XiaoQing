@@ -64,12 +64,31 @@ TIME_RANGE_RE       = re.compile(r"^(last\d+d|\d{4}|\d{4}-\d{2}|\d{4}-\d{2}-\d{2
 FORCE_FLAG_RE       = re.compile(r"(?:^|\s)--force(?=\s|$)")
 
 
-def _split_force_flag(text: str) -> tuple[str, bool]:
-    """拆出独立的 ``--force`` 标记；它只在调用方已经知道冲突时跳过确认。"""
+_QUOTED_TEXT_RE = re.compile(r"\"[^\"]*\"|“[^”]*”|'[^']*'")
 
-    if not FORCE_FLAG_RE.search(text or ""):
+
+def _split_force_flag(text: str) -> tuple[str, bool]:
+    """拆出引号外独立的 ``--force`` 标记；它只在调用方已经知道冲突时跳过确认。
+
+    引号里的 ``--force``（例如 ``"git push --force 用法"``）属于正文，原样交给解析器。
+    """
+
+    source = text or ""
+    quoted = [match.span() for match in _QUOTED_TEXT_RE.finditer(source)]
+    flags  = [
+        match
+        for match in FORCE_FLAG_RE.finditer(source)
+        if not any(start <= match.start() < end for start, end in quoted)
+    ]
+    if not flags:
         return text, False
-    return " ".join(FORCE_FLAG_RE.sub(" ", text).split()), True
+    parts: list[str] = []
+    cursor           = 0
+    for match in flags:
+        parts.append(source[cursor : match.start()])
+        cursor = match.end()
+    parts.append(source[cursor:])
+    return " ".join(" ".join(parts).split()), True
 
 
 class EventAIParserProtocol(Protocol):
@@ -98,8 +117,8 @@ class ReminderServiceProtocol(Protocol):
 class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
     """日程处理器"""
 
-    db: "Database"
-    ai_parser: EventAIParserProtocol
+    db              : "Database"
+    ai_parser       : EventAIParserProtocol
     reminder_service: ReminderServiceProtocol
 
     def __init__(
@@ -151,15 +170,18 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         command = parts[0].lower()
         rest    = parts[1] if len(parts) > 1 else ""
 
-        dispatched = await self._dispatch_known_command(
-            command,
-            user_id,
-            rest,
-            context,
-            group_id,
-        )
-        if dispatched is not None:
-            return dispatched
+        if command == "add":
+            return await self.add_event(user_id, rest, context, group_id)
+        if command == "view":
+            return await self.view_event(user_id, rest, context)
+        if command == "edit":
+            return await self.edit_event(user_id, rest, context)
+        if command == "delete":
+            return await self.delete_event(user_id, rest, context)
+        if command == "list":
+            return await self.list_events(user_id, rest or "today", context)
+        if command == "reminders":
+            return await self.handle_reminders(user_id, rest, context)
 
         # 常见拼写错误
         if command == "reminder":
@@ -178,29 +200,6 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             f"❌ 未知子命令: event {command}\n\n可用命令: add, list, view, edit, delete, reminders"
         )
 
-    async def _dispatch_known_command(
-        self,
-        command: str,
-        user_id: str,
-        rest: str,
-        context: PendoContext,
-        group_id: int | None,
-    ) -> CommandMessage | None:
-        """分发已知日程子命令；未匹配时交回上层生成纠错提示。"""
-        if command == "add":
-            return await self.add_event(user_id, rest, context, group_id)
-        if command == "view":
-            return await self.view_event(user_id, rest, context)
-        if command == "edit":
-            return await self.edit_event(user_id, rest, context)
-        if command == "delete":
-            return await self.delete_event(user_id, rest, context)
-        if command == "list":
-            return await self.list_events(user_id, rest or "today", context)
-        if command == "reminders":
-            return await self.handle_reminders(user_id, rest, context)
-        return None
-
     # ==================== 添加日程 ====================
 
     async def add_event(
@@ -210,7 +209,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         text, force = _split_force_flag(text)
         if not text:
             return {
-                "status": "error",
+                "status" : "error",
                 "message": "❌ 请提供日程内容\n例如: /pendo event add 明天9点开会",
             }
 
@@ -226,10 +225,10 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             await safe_create_session(
                 context,
                 initial_data={
-                    "type": PendoConfig.SESSION_TYPE_EVENT_INFO,
+                    "type"    : PendoConfig.SESSION_TYPE_EVENT_INFO,
                     "owner_id": user_id,
                     "group_id": group_id,
-                    "data": result.get("data", parsed),
+                    "data"    : result.get("data", parsed),
                 },
                 timeout=PendoConfig.SESSION_TIMEOUT_SECONDS,
             )
@@ -237,10 +236,10 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             await safe_create_session(
                 context,
                 initial_data={
-                    "type": PendoConfig.SESSION_TYPE_EVENT_CONFLICT,
+                    "type"    : PendoConfig.SESSION_TYPE_EVENT_CONFLICT,
                     "owner_id": user_id,
                     "group_id": group_id,
-                    "data": result.get("data", parsed),
+                    "data"    : result.get("data", parsed),
                 },
                 timeout=PendoConfig.SESSION_TIMEOUT_SECONDS,
             )
@@ -254,9 +253,10 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         allow_conflict: bool = False,
     ) -> CommandMessage:
         """创建日程"""
+        # 设置仓储读取走同步执行边界，数据库加锁等待不占住 Bot 事件循环。
         parsed_data["timezone"] = (
             str(parsed_data.get("timezone") or "").strip()
-            or TimezoneHelper.get_user_timezone(user_id, self.db).key
+            or (await run_sync(TimezoneHelper.get_user_timezone, user_id, self.db)).key
         )
         milestones, milestone_error = self._normalize_milestones(parsed_data.get("milestones"))
         if milestone_error:
@@ -270,15 +270,15 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
                 parsed_data["start_time"] = milestones[0].get("time")
             if not parsed_data.get("start_time"):
                 return {
-                    "status": "need_info",
-                    "message": "❌ 请问日程的开始时间是？(例如: 明天9点)",
+                    "status"        : "need_info",
+                    "message"       : "❌ 请问日程的开始时间是？(例如: 明天9点)",
                     "pending_action": "create_event",
                     "missing_fields": ["start_time"],
-                    "data": parsed_data,
+                    "data"          : parsed_data,
                 }
 
         if not str(parsed_data.get("category") or "").strip():
-            parsed_data["category"] = resolve_default_category(self.db, user_id)
+            parsed_data["category"] = await run_sync(resolve_default_category, self.db, user_id)
 
         # 确保有提醒时间
         remind_times = ensure_event_reminders(
@@ -316,7 +316,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             return [], "❌ 多时间节点格式无效，请重新描述各节点时间"
 
         milestones: list[dict[str, Any]] = []
-        awareness: set[bool]             = set()
+        awareness : set[bool]            = set()
         for index, raw_milestone in enumerate(raw_milestones, 1):
             milestone, error = EventHandler._normalize_milestone(raw_milestone, index)
             if error or milestone is None:
@@ -375,10 +375,10 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         )
         if isinstance(conflicts, list) and conflicts:
             return {
-                "status": "need_confirm",
-                "message": format_conflicts(conflicts, parsed_data),
+                "status"        : "need_confirm",
+                "message"       : format_conflicts(conflicts, parsed_data),
                 "pending_action": "create_event_with_conflict",
-                "data": parsed_data,
+                "data"          : parsed_data,
             }
         return None
 
@@ -423,7 +423,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         event_item.id = item_id
 
         return {
-            "status": "success",
+            "status" : "success",
             "message": format_event_created(event_item.to_dict()),
             "item_id": item_id,
         }
@@ -436,7 +436,11 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         allow_conflict: bool = False,
     ) -> CommandMessage:
         """创建重复日程"""
-        parsed_data.setdefault("timezone", TimezoneHelper.get_user_timezone(user_id, self.db).key)
+        # setdefault 的默认表达式即使字段存在也会求值；只在缺失时读取设置。
+        if not parsed_data.get("timezone"):
+            parsed_data["timezone"] = (
+                await run_sync(TimezoneHelper.get_user_timezone, user_id, self.db)
+            ).key
         try:
             event_timezone = ZoneInfo(parsed_data["timezone"])
             start_dt       = self._recurrence_local_time(parsed_data["start_time"], event_timezone)
@@ -482,20 +486,20 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
 
         collection_id      = new_internal_id()
         collection_payload = {
-            "id": collection_id,
-            "owner_id": user_id,
-            "kind": "recurring",
-            "title": parsed_data.get("title", "无标题日程"),
-            "content": parsed_data.get("content", ""),
-            "category": parsed_data.get("category", "未分类"),
-            "location": parsed_data.get("location", ""),
-            "tags": parsed_data.get("tags", []),
-            "notes": parsed_data.get("notes", ""),
-            "context": parsed_data.get("context", {}),
-            "timezone": parsed_data.get("timezone", "Asia/Shanghai"),
-            "rrule": parsed_data["rrule"],
+            "id"            : collection_id,
+            "owner_id"      : user_id,
+            "kind"          : "recurring",
+            "title"         : parsed_data.get("title", "无标题日程"),
+            "content"       : parsed_data.get("content", ""),
+            "category"      : parsed_data.get("category", "未分类"),
+            "location"      : parsed_data.get("location", ""),
+            "tags"          : parsed_data.get("tags", []),
+            "notes"         : parsed_data.get("notes", ""),
+            "context"       : parsed_data.get("context", {}),
+            "timezone"      : parsed_data.get("timezone", "Asia/Shanghai"),
+            "rrule"         : parsed_data["rrule"],
             "reminder_rules": reminder_rules,
-            "start_time": instances[0].isoformat(),
+            "start_time"    : instances[0].isoformat(),
             "end_time": (
                 (instances[-1] + duration).isoformat() if duration else instances[-1].isoformat()
             ),
@@ -554,7 +558,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
                 f"\n单次最多生成 {PendoConfig.EVENT_MAX_RRULE_COUNT} 条，后续日期请另行添加重复日程。"
             )
         return {
-            "status": "success",
+            "status" : "success",
             "message": message,
             "item_id": collection_id,
         }
@@ -635,25 +639,25 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
 
         collection_id      = new_internal_id()
         collection_payload = {
-            "id": collection_id,
-            "owner_id": user_id,
-            "kind": "multi_node",
-            "title": parsed_data.get("title", "无标题日程"),
-            "content": parsed_data.get("content", ""),
-            "category": parsed_data.get("category", "未分类"),
-            "location": parsed_data.get("location", ""),
-            "tags": parsed_data.get("tags", []),
-            "notes": parsed_data.get("notes", ""),
-            "context": parsed_data.get("context", {}),
-            "timezone": parsed_data.get("timezone", "Asia/Shanghai"),
+            "id"            : collection_id,
+            "owner_id"      : user_id,
+            "kind"          : "multi_node",
+            "title"         : parsed_data.get("title", "无标题日程"),
+            "content"       : parsed_data.get("content", ""),
+            "category"      : parsed_data.get("category", "未分类"),
+            "location"      : parsed_data.get("location", ""),
+            "tags"          : parsed_data.get("tags", []),
+            "notes"         : parsed_data.get("notes", ""),
+            "context"       : parsed_data.get("context", {}),
+            "timezone"      : parsed_data.get("timezone", "Asia/Shanghai"),
             "reminder_rules": reminder_rules,
-            "start_time": start_time,
-            "end_time": end_time,
+            "start_time"    : start_time,
+            "end_time"      : end_time,
         }
 
-        children: list[tuple[str, EventItem]] = []
-        all_reminders: set[str]               = set()
-        created_at                            = utc_now_iso()
+        children     : list[tuple[str, EventItem]] = []
+        all_reminders: set[str]                    = set()
+        created_at                                 = utc_now_iso()
         for index, milestone in enumerate(milestones, 1):
             node_time      = milestone["time"]
             node_key       = f"m{index:02d}"
@@ -694,14 +698,14 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
 
         event_payload = {
             **parsed_data,
-            "id": collection_id,
-            "start_time": start_time,
-            "end_time": end_time,
+            "id"          : collection_id,
+            "start_time"  : start_time,
+            "end_time"    : end_time,
             "remind_times": sorted(all_reminders),
         }
 
         return {
-            "status": "success",
+            "status" : "success",
             "message": format_milestone_event_created(event_payload),
             "item_id": collection_id,
         }
@@ -715,7 +719,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         event_id = (event_id or "").strip()
         if not event_id:
             return {
-                "status": "error",
+                "status" : "error",
                 "message": "❌ 请指定事件ID\n例如: /pendo event view abc12345",
             }
         if error := self._single_token_error(
@@ -738,16 +742,16 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         )
 
     _RANGE_LABELS: ClassVar[dict[str, str]] = {
-        "today": "今日",
-        "今天": "今日",
+        "today"   : "今日",
+        "今天"      : "今日",
         "tomorrow": "明日",
-        "明天": "明日",
-        "week": "本周",
-        "本周": "本周",
-        "month": "本月",
-        "本月": "本月",
-        "year": "本年",
-        "今年": "本年",
+        "明天"      : "明日",
+        "week"    : "本周",
+        "本周"      : "本周",
+        "month"   : "本月",
+        "本月"      : "本月",
+        "year"    : "本年",
+        "今年"      : "本年",
     }
 
     @classmethod
@@ -820,9 +824,9 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         raw_query: str,
     ) -> tuple[str, str | None, str | None, CommandMessage | None]:
         """拆分时间范围、分类和标签过滤条件。"""
-        category: str | None   = None
-        tag: str | None        = None
-        range_parts: list[str] = []
+        category   : str | None = None
+        tag        : str | None = None
+        range_parts: list[str]  = []
         for part in raw_query.split():
             if part.startswith("cat:"):
                 category = part[4:]
@@ -832,7 +836,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
                         None,
                         None,
                         {
-                            "status": "error",
+                            "status" : "error",
                             "message": "❌ cat: 后面需要分类名",
                         },
                     )
@@ -966,7 +970,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
 
         if not events:
             return {
-                "status": "success",
+                "status" : "success",
                 "message": f"🗓️ {title}{filter_suffix} 没有日程安排\n\n💡 用 /pendo event add <内容> 添加日程",
             }
 
@@ -1052,11 +1056,11 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             user_id,
             expected_version = int(collection["version"]),
             operation_log    = {
-                "user_id": user_id,
-                "action": "edit_event_collection",
+                "user_id"  : user_id,
+                "action"   : "edit_event_collection",
                 "item_type": "event",
-                "item_id": collection["id"],
-                "details": {"updates": collection_updates},
+                "item_id"  : collection["id"],
+                "details"  : {"updates": collection_updates},
             },
         )
         if not success:
@@ -1104,7 +1108,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         updated_event = cast(EventItem, await self._db_get_and_check(instance_id, user_id))
 
         return {
-            "status": "success",
+            "status" : "success",
             "message": format_event_updated(event, updated_event, changed_fields),
         }
 
@@ -1144,11 +1148,11 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             user_id,
             cascade       = True,
             operation_log = {
-                "user_id": user_id,
-                "action": "delete_event_collection",
+                "user_id"  : user_id,
+                "action"   : "delete_event_collection",
                 "item_type": "event",
-                "item_id": collection["id"],
-                "details": {"child_ids": [child.id for child in family.children]},
+                "item_id"  : collection["id"],
+                "details"  : {"child_ids": [child.id for child in family.children]},
             },
         )
         if not deleted:
@@ -1165,7 +1169,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             return {"status": "error", "message": f"❌ 找不到日程 {instance_id}"}
         event_title, _collection_deleted = deleted
         return {
-            "status": "success",
+            "status" : "success",
             "message": f"🗑️ 已删除日程: {event_title or '无标题'}\n{PendoConfig.UNDO_HINT}",
         }
 
@@ -1193,7 +1197,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             item_id    = parts[1].split()[0] if len(parts) > 1 else "<id>"
             display_id = public_id(item_id)
             return {
-                "status": "error",
+                "status" : "error",
                 "message": f"❌ 正确用法:\n\n/pendo snooze {display_id} <时间>",
             }
         return await self.list_reminders(user_id, args, context)
@@ -1222,14 +1226,26 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         if not events:
             return {"status": "error", "message": f"❌ 找不到日程 {query_id}"}
 
-        now = now_in_timezone(user_id, self.db)
+        now = await run_sync(now_in_timezone, user_id, self.db)
         deleted_count = 0
         pending_updates: dict[str, tuple[list[str], list[dict[str, int]]]] = {}
         event_versions = {str(event.id): event.version for event in events}
         updated_rules: list[list[dict[str, int]]] = []
+        selections = {
+            str(event.id): self._select_reminders_for_confirmation(event, selector, now)
+            for event in events
+        }
+        ambiguous = self._ambiguous_selection(
+            selector,
+            [(event, time) for event in events for time in selections[str(event.id)]],
+            now,
+            "删除",
+        )
+        if ambiguous is not None:
+            return ambiguous
         for event in events:
             current_times = parse_remind_times(event.remind_times)
-            selected      = set(self._select_reminders_for_confirmation(event, selector, now))
+            selected      = set(selections[str(event.id)])
             if not selected:
                 updated_rules.append(list(event.reminder_rules or []))
                 continue
@@ -1248,7 +1264,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
 
         if deleted_count == 0:
             return {
-                "status": "warning",
+                "status" : "warning",
                 "message": f"⚠️ 没有找到匹配 {selector} 的提醒",
             }
 
@@ -1307,7 +1323,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         if not events:
             return {"status": "error", "message": f"❌ 找不到日程 {query_id}"}
 
-        now                                  = now_in_timezone(user_id, self.db)
+        now                                  = await run_sync(now_in_timezone, user_id, self.db)
         matched: list[tuple[EventItem, str]] = []
         for event in events:
             for remind_time in self._select_reminders_for_confirmation(event, selector, now):
@@ -1315,17 +1331,22 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
 
         if not matched:
             return {
-                "status": "warning",
+                "status" : "warning",
                 "message": f"⚠️ 没有找到匹配 {selector} 的提醒",
             }
+        ambiguous = self._ambiguous_selection(selector, matched, now, "确认")
+        if ambiguous is not None:
+            return ambiguous
 
         confirmed_count = 0
+        parsed_count    = 0
         for event, remind_time in matched:
             remind_dt = self._normalize_remind_time(remind_time, now)
             if remind_dt is None:
                 continue
+            parsed_count += 1
             user_action = "preconfirmed" if remind_dt > now else "confirmed"
-            await run_sync(
+            result      = await run_sync(
                 self.db.confirm_reminder,
                 event.id,
                 user_action,
@@ -1333,10 +1354,13 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
                 remind_time  = remind_time,
                 allow_future = True,
             )
-            confirmed_count += 1
+            # 只累计数据库本次实际确认的数量，重复确认不算新增。
+            confirmed_count += int(result.get("confirmed", 0)) if isinstance(result, dict) else 0
 
-        if confirmed_count == 0:
+        if parsed_count == 0:
             return {"status": "warning", "message": "⚠️ 匹配到的提醒时间均无法解析"}
+        if confirmed_count == 0:
+            return {"status": "info", "message": "ℹ️ 匹配到的提醒都已经确认过了"}
 
         subject           = events[0].title or "无标题"
         scope             = "系列" if len(events) > 1 else "日程"
@@ -1401,6 +1425,25 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
         ]
         return matched
 
+    @classmethod
+    def _ambiguous_selection(
+        cls,
+        selector: str,
+        matches: list[tuple[EventItem, str]],
+        now: datetime,
+        action: str,
+    ) -> CommandMessage | None:
+        """单点时间选中多条提醒时先列出候选，不能一次删除或确认多个时刻。"""
+
+        if (selector or "").strip().lower() in {"all", "future", "today"} or len(matches) <= 1:
+            return None
+        lines = [f"⚠️ {selector} 匹配到 {len(matches)} 个提醒，请写出完整的日期时间再{action}："]
+        for event, remind_time in matches[:10]:
+            parsed = cls._normalize_remind_time(remind_time, now)
+            shown  = parsed.strftime("%Y-%m-%d %H:%M:%S %z") if parsed else remind_time
+            lines.append(f"• {event.title or '无标题'}：{shown}")
+        return {"status": "need_info", "message": "\n".join(lines)}
+
     @staticmethod
     def _normalize_remind_time(remind_time: str, reference: datetime) -> datetime | None:
         """把提醒时间统一到当前用户时区。"""
@@ -1422,9 +1465,11 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             return False
         requested = cls._normalize_remind_time(selector, reference)
         if requested is not None:
-            return requested.replace(second=0, microsecond=0) == normalized.replace(
-                second=0, microsecond=0
-            )
+            # 在 UTC 时间轴上比较：夏令时回拨时两个 fold 的墙钟相同，真实时刻相差一小时。
+            # 输入写了秒就精确到秒，否则精确到分钟。
+            if re.search(r"\d{1,2}:\d{2}:\d{2}", selector):
+                return int(requested.timestamp()) == int(normalized.timestamp())
+            return int(requested.timestamp()) // 60 == int(normalized.timestamp()) // 60
 
         formats = ("%m-%d %H:%M", "%m月%d日 %H:%M", "%H:%M")
         for fmt in formats:
@@ -1480,7 +1525,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
 
         if not reminder_rules:
             return {
-                "status": "error",
+                "status" : "error",
                 "message": '❌ 未能从描述中解析出提醒时间，请尝试: "提前1天" "提前2小时30分钟" 等',
             }
 
@@ -1524,7 +1569,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
 
         if not reminder_rules:
             return {
-                "status": "error",
+                "status" : "error",
                 "message": '❌ 未能从描述中解析出提醒时间，请尝试: "提前1天" "提前2小时30分钟" 等',
             }
 
@@ -1592,7 +1637,7 @@ class EventHandler(EventEditingMixin, EventDetailViewMixin, DbOpsMixin):
             )
         except ValueError:
             return {
-                "status": "error",
+                "status" : "error",
                 "message": "❌ 无法解析提醒时间范围",
             }
         start_dt, end_dt = datetime.fromisoformat(start_date), datetime.fromisoformat(end_date)

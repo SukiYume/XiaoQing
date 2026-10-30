@@ -16,16 +16,16 @@ from ..store_base import StoreBase, coerce_finite_float, coerce_int, coerce_json
 
 @dataclass
 class ExpressionRecord:
-    expression_id: str
-    chat_id: str
-    situation: str
-    style: str
-    content_list: list[str] = field(default_factory=list)
-    count: int = 1
+    expression_id   : str
+    chat_id         : str
+    situation       : str
+    style           : str
+    content_list    : list[str] = field(default_factory=list)
+    count           : int = 1
     last_active_time: float = field(default_factory=lambda: time.time())
-    checked: bool    = False
-    rejected: bool   = False
-    modified_by: str = "ai"
+    checked         : bool = False
+    rejected        : bool = False
+    modified_by     : str  = "ai"
 
 
 class ExpressionSnapshot(list[ExpressionRecord]):
@@ -39,7 +39,6 @@ class ExpressionSnapshot(list[ExpressionRecord]):
 class ExpressionStore(StoreBase):
     def __init__(self) -> None:
         super().__init__()
-        self._cache: list[ExpressionRecord] | None                        = None
         self._baseline_context: ContextVar[list[ExpressionRecord] | None] = ContextVar(
             "snapshot_baseline", default=None
         )
@@ -58,7 +57,6 @@ class ExpressionStore(StoreBase):
         if self._data_dir == data_dir:
             return
         super().bind(data_dir)
-        self._cache    = None
         self._baseline = []
 
     def _path(self) -> Path | None:
@@ -113,9 +111,9 @@ class ExpressionStore(StoreBase):
             return []
         # 使用 core 的规范路径锁，模块热重载前后的类实例也共享同一把锁。
         with keyed_path_lock(path):
-            self._cache    = self._read_records()
-            self._baseline = deepcopy(self._cache)
-            return ExpressionSnapshot(self._cache)
+            records        = self._read_records()
+            self._baseline = deepcopy(records)
+            return ExpressionSnapshot(records)
 
     def clear(self, chat_id: str) -> None:
         """删除一个会话的表达学习记录，并保留其它会话的记录。"""
@@ -128,7 +126,6 @@ class ExpressionStore(StoreBase):
             latest    = self._read_records()
             remaining = [item for item in latest if item.chat_id != target]
             AtomicJsonStore(path).write_with_backup([asdict(item) for item in remaining])
-            self._cache    = deepcopy(remaining)
             self._baseline = deepcopy(remaining)
 
     @staticmethod
@@ -202,7 +199,6 @@ class ExpressionStore(StoreBase):
             payload      = [asdict(item) for item in merged_items]
             if not self._save_json_to_path_parts("bw_learner", "expressions.json", data=payload):
                 return
-            self._cache    = deepcopy(merged_items)
             self._baseline = deepcopy(merged_items)
             if isinstance(items, ExpressionSnapshot):
                 items.baseline = deepcopy(desired_items)

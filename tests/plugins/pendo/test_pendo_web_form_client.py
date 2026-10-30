@@ -7,7 +7,7 @@ from typing import Final
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT: Final        = REPOSITORY_ROOT
+ROOT       : Final = REPOSITORY_ROOT
 FORM_CLIENT: Final = ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "components" / "form.js"
 
 FORM_SETUP: Final = r"""

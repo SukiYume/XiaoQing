@@ -27,25 +27,25 @@ SUPPORTED_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", 
 
 @dataclass(frozen=True)
 class ResolvedMedia:
-    media_hash: str
+    media_hash  : str
     segment_type: str
-    source_name: str
-    mime_type: str
-    cached_path: Path
-    width: int        = 0
-    height: int       = 0
-    is_animated: bool = False
+    source_name : str
+    mime_type   : str
+    cached_path : Path
+    width       : int  = 0
+    height      : int  = 0
+    is_animated : bool = False
 
 
 @dataclass(frozen=True)
 class RenderedMedia:
-    media_hash: str
-    kind: str
-    description: str
+    media_hash  : str
+    kind        : str
+    description : str
     emotion_tags: tuple[str, ...]
-    marker: str
-    cached_path: Path | None = None
-    face_id: str             = ""
+    marker      : str
+    cached_path : Path | None = None
+    face_id     : str         = ""
     # 二次分析得到的梗背景/语境说明；不知道就为空字符串，
     # 与 description 分开存放，便于将来重生成 marker。
     cultural_hint: str = ""
@@ -53,31 +53,31 @@ class RenderedMedia:
 
 @dataclass(frozen=True)
 class PreparedMediaForLLM:
-    payload: bytes
-    mime_type: str
-    transcoded: bool
+    payload         : bytes
+    mime_type       : str
+    transcoded      : bool
     source_mime_type: str
-    is_animated: bool   = False
-    frame_strategy: str = "original"
-    frame_count: int    = 1
+    is_animated     : bool = False
+    frame_strategy  : str  = "original"
+    frame_count     : int  = 1
 
 
 @dataclass(frozen=True)
 class MediaAnalysisDraft:
-    kind: str
-    description: str
-    visible_text: str
-    emotion_tags: tuple[str, ...]
-    raw_output: str    = ""
-    parsed_json: bool  = False
-    cultural_hint: str = ""
+    kind         : str
+    description  : str
+    visible_text : str
+    emotion_tags : tuple[str, ...]
+    raw_output   : str  = ""
+    parsed_json  : bool = False
+    cultural_hint: str  = ""
 
 
 @dataclass(frozen=True, slots=True)
 class ImagePayloadInfo:
-    mime_type: str
-    suffix: str
-    width: int
-    height: int
+    mime_type  : str
+    suffix     : str
+    width      : int
+    height     : int
     is_animated: bool
     frame_count: int

@@ -40,9 +40,9 @@ def resolve_bot_name(value: object) -> str:
 
 @dataclass(frozen=True, slots=True)
 class PersonaSection:
-    title: str
+    title : str
     scopes: frozenset[str]
-    body: str
+    body  : str
 
 
 @dataclass(frozen=True, slots=True)

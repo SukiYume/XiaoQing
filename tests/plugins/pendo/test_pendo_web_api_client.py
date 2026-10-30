@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import subprocess
-from pathlib import Path
 from typing import Final
 
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT: Final       = REPOSITORY_ROOT
+ROOT      : Final = REPOSITORY_ROOT
 API_CLIENT: Final = ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "api.js"
 
 
@@ -276,20 +274,28 @@ def test_login_exchange_demo_and_download_keep_their_public_contracts() -> None:
     )
 
 
-def test_browser_upload_unicode_and_logout_retry(tmp_path):
-    source = Path("plugins/pendo/web/static/js/api.js").read_text(encoding="utf-8")
-    script = tmp_path / "api.mjs"
-    script.write_text(
-        source
-        + "\nimport assert from 'node:assert/strict';\nlet calls=[];\nlet offline=true;\nglobalThis.fetch=async(path, options)=>{\n calls.push(options.headers);\n if(path.endsWith('/session')) return {ok:true,status:200,json:async()=>({ok:true,data:{owner_id:'u',csrf_token:'token'}})};\n if(path.includes('/transfer') || !offline) return {ok:true,status:200,json:async()=>({ok:true})};\n throw new Error('offline');\n};\nawait getSession();\nfor(const filename of ['备份.pendo.zip','📦.zip','a%20b.zip']) {\n await apiUpload('/transfer/inspect',new Uint8Array(),{'X-Transfer-Filename':filename});\n assert.equal(decodeURIComponent(calls.at(-1).get('X-Transfer-Filename')),filename);\n}\nawait assert.rejects(logout());\nawait assert.rejects(logout());\nassert.equal(calls.at(-1).get('X-CSRF-Token'),'token');\noffline=false;\nawait logout();\nawait apiUpload('/transfer/inspect',new Uint8Array());\nassert.equal(calls.at(-1).get('X-CSRF-Token'),null);\n",
-        encoding="utf-8",
+def test_browser_upload_unicode_and_logout_retry():
+    _run_api_client(
+        r"""
+        let calls = [];
+        let offline = true;
+        globalThis.fetch = async (path, options) => {
+            calls.push(options.headers);
+            if (path.endsWith('/session')) return {ok:true,status:200,json:async()=>({ok:true,data:{owner_id:'u',csrf_token:'token'}})};
+            if (path.includes('/transfer') || !offline) return {ok:true,status:200,json:async()=>({ok:true})};
+            throw new Error('offline');
+        };
+        await client.getSession();
+        for (const filename of ['备份.pendo.zip', '📦.zip', 'a%20b.zip']) {
+            await client.apiUpload('/transfer/inspect', new Uint8Array(), {'X-Transfer-Filename':filename});
+            assert.equal(decodeURIComponent(calls.at(-1).get('X-Transfer-Filename')), filename);
+        }
+        await assert.rejects(client.logout());
+        await assert.rejects(client.logout());
+        assert.equal(calls.at(-1).get('X-CSRF-Token'), 'token');
+        offline = false;
+        await client.logout();
+        await client.apiUpload('/transfer/inspect', new Uint8Array());
+        assert.equal(calls.at(-1).get('X-CSRF-Token'), null);
+        """
     )
-    result = subprocess.run(
-        ["node", str(script)],
-        capture_output = True,
-        text           = True,
-        encoding       = "utf-8",
-        errors         = "replace",
-        timeout        = 15,
-    )
-    assert result.returncode == 0, result.stderr

@@ -83,16 +83,16 @@ def _action_texts(actions: list[dict[str, Any]]) -> list[str]:
 
 def _fast_policy(**overrides: Any) -> SSHOutputPolicy:
     values = {
-        "command_timeout_seconds": 0.0,
-        "qq_max_actions": 6,
-        "qq_max_text_chars": 10_000,
-        "qq_max_message_chars": 1_800,
-        "qq_head_chars": 6_000,
-        "qq_tail_chars": 2_000,
+        "command_timeout_seconds" : 0.0,
+        "qq_max_actions"          : 6,
+        "qq_max_text_chars"       : 10_000,
+        "qq_max_message_chars"    : 1_800,
+        "qq_head_chars"           : 6_000,
+        "qq_tail_chars"           : 2_000,
         "qq_send_interval_seconds": 0.0,
-        "qq_send_timeout_seconds": 0.2,
-        "archive_max_bytes": 8 * 1024 * 1024,
-        "archive_tail_bytes": 64 * 1024,
+        "qq_send_timeout_seconds" : 0.2,
+        "archive_max_bytes"       : 8 * 1024 * 1024,
+        "archive_tail_bytes"      : 64 * 1024,
     }
     values.update(overrides)
     return SSHOutputPolicy(**values)
@@ -125,16 +125,16 @@ def test_policy_reads_plugin_namespace_and_allows_explicit_unlimited_command() -
             config={
                 "plugins": {
                     "qingssh": {
-                        "command_timeout_seconds": 0,
-                        "qq_max_actions": 4,
-                        "qq_max_text_chars": 4096,
-                        "qq_max_message_chars": 1024,
-                        "qq_head_chars": 2048,
-                        "qq_tail_chars": 512,
+                        "command_timeout_seconds" : 0,
+                        "qq_max_actions"          : 4,
+                        "qq_max_text_chars"       : 4096,
+                        "qq_max_message_chars"    : 1024,
+                        "qq_head_chars"           : 2048,
+                        "qq_tail_chars"           : 512,
                         "qq_send_interval_seconds": 0,
-                        "qq_send_timeout_seconds": 2,
-                        "archive_max_bytes": 2 * 1024 * 1024,
-                        "archive_tail_bytes": 64 * 1024,
+                        "qq_send_timeout_seconds" : 2,
+                        "archive_max_bytes"       : 2 * 1024 * 1024,
+                        "archive_tail_bytes"      : 64 * 1024,
                     }
                 }
             }
@@ -167,7 +167,7 @@ def test_policy_rejects_unsafe_or_nonfunctional_bounds(name: str, value: Any) ->
 
 @pytest.mark.asyncio
 async def test_normal_output_is_complete_and_creates_no_archive(tmp_path: Path) -> None:
-    actions: list[dict[str, Any]]         = []
+    actions     : list[dict[str, Any]]    = []
     command_seen: list[tuple[str, float]] = []
 
     class Manager:
@@ -395,8 +395,10 @@ async def test_cancellation_reclaims_remote_and_removes_relay_artifacts(tmp_path
                 remote_cancelled.set()
                 raise
 
+    sent_actions: list[dict[str, Any]] = []
+
     async def send_action(_action: dict[str, Any]) -> None:
-        raise AssertionError("partial output must not escape after cancellation")
+        sent_actions.append(_action)
 
     session = _Session()
     task    = _start_background_job(
@@ -413,6 +415,7 @@ async def test_cancellation_reclaims_remote_and_removes_relay_artifacts(tmp_path
         await asyncio.wait_for(task, timeout=1)
 
     assert remote_cancelled.is_set()
+    assert sent_actions == []
     assert not (tmp_path / "command_outputs").exists()
     assert session.get(SessionKeys.STATE) == "connected"
     assert session.get(SessionKeys.CURRENT_TASK) is None

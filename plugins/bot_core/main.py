@@ -45,9 +45,9 @@ MAX_HELP_MENU_SUMMARY_LENGTH       = 32
 HELP_MOBILE_LINE_WIDTH             = 34
 _RELOAD_NOTIFICATION_MARKER        = "_xiaoqing_bot_core_reload_notification_registered"
 _NO_ARGUMENT_USAGE                 = {
-    "reload": "/reload",
+    "reload" : "/reload",
     "plugins": "/plugins",
-    "说话": "/说话",
+    "说话"     : "/说话",
     "metrics": "/metrics",
 }
 
@@ -714,8 +714,8 @@ def _format_branch_menu(node: CommandCatalogNode, *, page: int) -> str:
 
 def _permission_label(permission: str) -> str:
     return {
-        "public": "公开",
-        "bot_admin": "Bot 管理员",
+        "public"     : "公开",
+        "bot_admin"  : "Bot 管理员",
         "group_admin": "群管理员",
     }.get(permission, permission)
 
@@ -770,9 +770,10 @@ def _format_search_results(
         *_format_menu_entries(nodes),
         "",
     ]
+    # 搜索翻页保留显式 search：查询词是 list、page、json 这类帮助语法词时也能继续翻页。
     _append_text_page_navigation(
         lines,
-        query       = query,
+        query       = f"search {query}",
         page        = page,
         total_pages = total_pages,
     )
@@ -794,10 +795,10 @@ def _format_catalog_json(
         record["subcommands"] = [child.code for child in node.children]
         records.append(record)
     payload = {
-        "query": query or None,
-        "page": page,
+        "query"      : query or None,
+        "page"       : page,
         "total_pages": total_pages,
-        "commands": records,
+        "commands"   : records,
     }
     return json.dumps(payload, ensure_ascii=False, indent=2)
 

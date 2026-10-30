@@ -76,12 +76,12 @@ def build_event_schedule(
     end_resolved = _resolve_datetime(event.end_time, timezone_info, is_end=True)
     if start_resolved is None:
         return {
-            "kind": kind,
-            "display_days": [],
-            "day_entries": {},
-            "time_summary": "未设置时间",
+            "kind"          : kind,
+            "display_days"  : [],
+            "day_entries"   : {},
+            "time_summary"  : "未设置时间",
             "start_epoch_ms": None,
-            "end_epoch_ms": None,
+            "end_epoch_ms"  : None,
         }
     start_dt, start_epoch_ms = start_resolved
     end_dt, end_epoch_ms = end_resolved if end_resolved is not None else (None, None)
@@ -110,26 +110,26 @@ def build_event_schedule(
             time_label = "跨天"
         day_entries[day] = [
             {
-                "day": day,
-                "kind": kind,
-                "title": event.title or "无标题",
-                "subtitle": time_summary,
-                "time": row_time,
-                "time_label": time_label,
-                "start_time": start_time,
-                "end_time": end_time,
+                "day"           : day,
+                "kind"          : kind,
+                "title"         : event.title or "无标题",
+                "subtitle"      : time_summary,
+                "time"          : row_time,
+                "time_label"    : time_label,
+                "start_time"    : start_time,
+                "end_time"      : end_time,
                 "start_epoch_ms": start_epoch_ms,
-                "end_epoch_ms": end_epoch_ms,
-                "location": event.location or "",
-                "category": event.category or "",
+                "end_epoch_ms"  : end_epoch_ms,
+                "location"      : event.location or "",
+                "category"      : event.category or "",
             }
         ]
 
     return {
-        "kind": kind,
-        "display_days": display_days,
-        "day_entries": day_entries,
-        "time_summary": time_summary,
+        "kind"          : kind,
+        "display_days"  : display_days,
+        "day_entries"   : day_entries,
+        "time_summary"  : time_summary,
         "start_epoch_ms": start_epoch_ms,
-        "end_epoch_ms": end_epoch_ms,
+        "end_epoch_ms"  : end_epoch_ms,
     }

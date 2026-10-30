@@ -1141,6 +1141,7 @@ Subcommands can set stricter permissions.
 | `url_parser` | Automatic single-URL trigger | Public | Private, Group |
 | `voice` | `/语音`, `/念`, `/tts` | Public | Private, Group |
 | `wolframalpha` | `/alpha`, `/wolfram`, `/wa`, `/计算` | Public | Private, Group |
+| `xiaoai` | `/米家`, `/小爱`, `/xiaoai` | Bot administrator | Private |
 | `xiaoqing_agent` | `/agent` | Public (tools follow initiator permissions) | Private, Group |
 | `xiaoqing_chat` | `/xc` | Public | Private, Group |
 

@@ -520,12 +520,10 @@ async def test_execution_timer_with_error():
     """Test ExecutionTimer tracks errors"""
     collector = MetricsCollector()
 
-    try:
+    with pytest.raises(ValueError, match="Test error"):
         async with ExecutionTimer(collector, "test_plugin", "test_cmd"):
             await asyncio.sleep(0.05)
             raise ValueError("Test error")
-    except ValueError:
-        pass
 
     stats = await collector.get_plugin_stats("test_plugin")
     assert stats["total_calls"] == 1

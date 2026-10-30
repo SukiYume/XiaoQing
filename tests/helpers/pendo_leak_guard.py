@@ -18,8 +18,8 @@ class PendoDatabaseRecord:
     """Strongly retain one Database and the test source that constructed it."""
 
     database: Any
-    db_path: str
-    origin: str
+    db_path : str
+    origin  : str
 
 
 def pendo_test_origin() -> str:
@@ -48,7 +48,7 @@ def _connection_thread_ids(database: Any) -> tuple[int, ...]:
 def enforce_pendo_database_cleanup(records: list[PendoDatabaseRecord]) -> None:
     """Raise a leak failure and emergency-clean without masking that failure."""
     leaked: list[tuple[PendoDatabaseRecord, tuple[int, ...], str | None]] = []
-    seen: set[int]                                                        = set()
+    seen  : set[int]                                                      = set()
     for record in records:
         identity = id(record.database)
         if identity in seen:

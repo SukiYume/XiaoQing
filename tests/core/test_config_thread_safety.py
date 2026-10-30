@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+import threading
+import time
+from pathlib import Path
+from typing import Any
+
+import pytest
+
 import tests.helpers.config_test_support as _fixture_support
 from tests.helpers.config_test_support import (
-    Any,
     ConfigManager,
     ConfigSnapshot,
-    Path,
     _last_notified_revision,
-    asyncio,
-    json,
-    pytest,
-    threading,
-    time,
 )
 
 config_file     = _fixture_support.config_file
@@ -273,7 +275,7 @@ class TestConfigManagerThreadSafety:
         self,
         config_manager: ConfigManager,
     ):
-        revisions: list[int]               = []
+        revisions    : list[int]           = []
         nested_errors: list[BaseException] = []
 
         def callback(snapshot: ConfigSnapshot) -> None:

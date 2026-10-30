@@ -55,8 +55,8 @@ async def test_review_commands_reuse_real_session_ids_and_reject_invalid_mutatio
     context = SimpleNamespace(logger=MagicMock())
     event = {
         "message_type": "group",
-        "group_id": 880_721_010,
-        "user_id": 880_721_011,
+        "group_id"    : 880_721_010,
+        "user_id"     : 880_721_011,
     }
 
     monkeypatch.setattr(

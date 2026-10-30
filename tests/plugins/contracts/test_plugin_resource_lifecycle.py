@@ -31,9 +31,9 @@ def _chat_context(
         SimpleNamespace(
             config={
                 "timezone": "Asia/Shanghai",
-                "plugins": {
+                "plugins" : {
                     "chat": {
-                        "daily_user_limit": user_limit,
+                        "daily_user_limit"  : user_limit,
                         "daily_global_limit": global_limit,
                     }
                 },
@@ -44,7 +44,7 @@ def _chat_context(
             secrets      = {
                 "plugins": {
                     "chat": {
-                        "token": "token",
+                        "token" : "token",
                         "bot_id": "bot",
                     }
                 }
@@ -79,8 +79,8 @@ async def test_chat_quota_resets_at_business_date_boundary(monkeypatch, tmp_path
     assert calls == 2
     assert chat_main.AtomicJsonStore(tmp_path / "chat_quota.json").read(None) == {
         "window": "2026-07-15",
-        "users": {"7": 1},
-        "total": 1,
+        "users" : {"7": 1},
+        "total" : 1,
     }
 
 
@@ -99,8 +99,8 @@ async def test_chat_failed_remote_call_rolls_back_reserved_quota(monkeypatch, tm
     assert "对话失败" in text_segments_text(failed)
     assert chat_main.AtomicJsonStore(tmp_path / "chat_quota.json").read(None) == {
         "window": "2026-07-14",
-        "users": {},
-        "total": 0,
+        "users" : {},
+        "total" : 0,
     }
 
     retried = await chat_main.handle("chat", "retry", {"user_id": 8}, context)

@@ -65,10 +65,10 @@ _HELP_ALIASES                       = frozenset({"help", "帮助"})
 _EXACT_HELP_ARGUMENTS               = frozenset({*_HELP_ALIASES, "-h", "--help"})
 _SUPPORTED_OPTIONS                  = frozenset({"h", "help", "mode"})
 _MODE_ALIASES: dict[str, QueryMode] = {
-    "simple": "simple",
-    "step": "step",
+    "simple"  : "simple",
+    "step"    : "step",
     "complete": "complete",
-    "cp": "complete",
+    "cp"      : "complete",
 }
 _HELP_TEXT = """🧮 Wolfram|Alpha
 用法：/alpha [模式] <问题>
@@ -222,10 +222,10 @@ async def _query_step(question: str, appid: str, session: Any) -> str:
         session,
         WA_QUERY_URL,
         params={
-            "appid": appid,
-            "input": question,
+            "appid"   : appid,
+            "input"   : question,
             "podstate": "Result__Step-by-step solution",
-            "format": "plaintext",
+            "format"  : "plaintext",
         },
         mime_policy=XML_MIME_POLICY,
     )
@@ -251,11 +251,11 @@ async def _query_complete(question: str, appid: str, session: Any) -> str:
         session,
         WA_QUERY_URL,
         params={
-            "appid": appid,
-            "input": question,
+            "appid"       : appid,
+            "input"       : question,
             "includepodid": "Result",
-            "format": "plaintext",
-            "output": "json",
+            "format"      : "plaintext",
+            "output"      : "json",
         },
         mime_policy=JSON_MIME_POLICY,
     )
@@ -320,7 +320,7 @@ async def handle(
     event: OneBotEvent,
     context: Context,
 ) -> MessageSegments:
-    """解析管理员查询命令并选择显式查询模式。"""
+    """解析查询命令并选择显式查询模式。"""
 
     del event
     try:

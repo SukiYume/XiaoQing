@@ -14,12 +14,12 @@ _TRUNCATION_SUFFIX = "\n…（输出已截断）"
 class ExecutionResult:
     """一次内核执行的内存结果；图片必须是已验证 PNG 字节。"""
 
-    success: bool = True
-    stdout: str   = ""
-    stderr: str   = ""
-    result: str   = ""
-    images: list[bytes] = field(default_factory=list)
-    error: str            = ""
+    success       : bool = True
+    stdout        : str  = ""
+    stderr        : str  = ""
+    result        : str  = ""
+    images        : list[bytes] = field(default_factory=list)
+    error         : str   = ""
     execution_time: float = 0.0
 
     def format_output(self) -> str:

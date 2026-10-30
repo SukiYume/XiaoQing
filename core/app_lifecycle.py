@@ -1,4 +1,3 @@
-# mypy: disable-error-code=attr-defined
 """主应用启动、停止与资源回收的单一生命周期边界。"""
 
 from __future__ import annotations
@@ -43,45 +42,107 @@ from .onebot import OneBotHttpSender
 from .server import InboundManager
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from .dispatcher import Dispatcher
     from .onebot import OneBotWsClient
     from .plugin_manager import PluginManager
-
+    from .scheduler import SchedulerManager
+    from .session import SessionManager
 logger = logging.getLogger(__name__)
 
 
 class AppLifecycleMixin:
     """串行管理启动所有权、控制面任务和逆序资源回收。"""
 
+    # 由组合类实际提供的成员；这里只为类型检查声明契约，运行时不存在。
+    if TYPE_CHECKING:
+
+        def _configure_plugin_watch(
+            self,
+            config: Mapping[str, Any] | None = None,
+            *,
+            poll_interval: float | None = None,
+        ) -> None:
+            raise NotImplementedError
+
+        _inbound_cleanup_quarantine: dict[int, BaseException]
+
+        _inbound_reconcile_lock: Any
+
+        _lifecycle_lock: Any
+
+        def _owns_config_apply(self, owner: _ConfigApplyOwner | None) -> bool:
+            raise NotImplementedError
+
+        def _owns_config_apply_locked(self, owner: _ConfigApplyOwner | None) -> bool:
+            raise NotImplementedError
+
+        def _parse_ws_queue_size(self, config: Mapping[str, Any]) -> int:
+            raise NotImplementedError
+
+        async def _reconcile_inbound_manager(
+            self,
+            config: Mapping[str, Any],
+            secrets: Mapping[str, Any],
+            *,
+            owner: _ConfigApplyOwner | None = None,
+        ) -> None:
+            raise NotImplementedError
+
+        async def _reconcile_ws_client(
+            self,
+            *,
+            enable_ws: bool,
+            ws_uri: str,
+            token: str,
+            queue_size: int,
+            credentials_trusted: bool       = True,
+            owner: _ConfigApplyOwner | None = None,
+        ) -> None:
+            raise NotImplementedError
+
+        def _reschedule(self, plugin_name: str) -> None:
+            raise NotImplementedError
+
+        _runtime_auth_lock: Any
+
+        dispatcher: Dispatcher
+
+        scheduler: SchedulerManager
+
+        session_manager: SessionManager
+
     _background_task_stop_timeout_seconds: float
-    _config_apply_owner: _ConfigApplyOwner | None
-    _config_apply_generation: int
-    _config_apply_revision: int
-    _config_apply_task: asyncio.Task[None] | None
-    _config_apply_tasks: set[asyncio.Task[None]]
-    _config_watch_task: asyncio.Task[None] | None
-    _defer_plugin_schedule_updates: bool
-    _inbound_cleanup_pending: list[InboundManager]
-    _last_shutdown_errors: tuple[str, ...]
-    _lifecycle_state: _AppLifecycleState
-    _plugin_watch_desired: bool
-    _plugin_watch_restart_failures: int
-    _plugin_watch_restart_pending: bool
-    _plugin_watch_restart_task: asyncio.Task[None] | None
-    _plugin_watch_task: asyncio.Task[None] | None
-    _plugin_watch_tasks: set[asyncio.Task[None]]
-    _session_cleanup_task: asyncio.Task[None] | None
-    _security_generation: int
-    _security_snapshot: ConfigSnapshot | None
-    _shutdown_task: asyncio.Task[None] | None
-    _stopping: bool
-    _ws_client_auth_quarantine: OneBotWsClient | None
-    _ws_client_stop_task: asyncio.Task[Any] | None
-    http_sender: OneBotHttpSender | None
-    http_session: aiohttp.ClientSession | None
-    inbound_manager: InboundManager | None
-    config_manager: ConfigManager
-    plugin_manager: PluginManager
-    ws_client: OneBotWsClient | None
+    _config_apply_owner                  : _ConfigApplyOwner | None
+    _config_apply_generation             : int
+    _config_apply_revision               : int
+    _config_apply_task                   : asyncio.Task[None] | None
+    _config_apply_tasks                  : set[asyncio.Task[None]]
+    _config_watch_task                   : asyncio.Task[None] | None
+    _defer_plugin_schedule_updates       : bool
+    _inbound_cleanup_pending             : list[InboundManager]
+    _last_shutdown_errors                : tuple[str, ...]
+    _lifecycle_state                     : _AppLifecycleState
+    _plugin_watch_desired                : bool
+    _plugin_watch_restart_failures       : int
+    _plugin_watch_restart_pending        : bool
+    _plugin_watch_restart_task           : asyncio.Task[None] | None
+    _plugin_watch_task                   : asyncio.Task[None] | None
+    _plugin_watch_tasks                  : set[asyncio.Task[None]]
+    _session_cleanup_task                : asyncio.Task[None] | None
+    _security_generation                 : int
+    _security_snapshot                   : ConfigSnapshot | None
+    _shutdown_task                       : asyncio.Task[None] | None
+    _stopping                            : bool
+    _ws_client_auth_quarantine           : OneBotWsClient | None
+    _ws_client_stop_task                 : asyncio.Task[Any] | None
+    http_sender                          : OneBotHttpSender | None
+    http_session                         : aiohttp.ClientSession | None
+    inbound_manager                      : InboundManager | None
+    config_manager                       : ConfigManager
+    plugin_manager                       : PluginManager
+    ws_client                            : OneBotWsClient | None
 
     @property
     def shutdown_errors(self) -> tuple[str, ...]:

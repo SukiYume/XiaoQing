@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import shutil
+import uuid
+
+import pytest
 from fastapi import HTTPException
 
 from plugins.pendo.web.api.items import ItemUpdate, update_item
@@ -14,9 +18,6 @@ from tests.helpers.pendo_web_items_test_support import (
     normalize_ledger_fields,
     normalize_note_fields,
     normalize_task_fields,
-    pytest,
-    shutil,
-    uuid,
 )
 
 
@@ -30,26 +31,26 @@ def test_items_api_and_database_use_the_ledger_category_column():
     try:
         db.insert_item(
             {
-                "id": "l1",
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "午饭",
-                "amount": 22.5,
+                "id"              : "l1",
+                "owner_id"        : owner_id,
+                "type"            : "ledger",
+                "title"           : "午饭",
+                "amount"          : 22.5,
                 "transaction_type": "expense",
-                "ledger_category": "餐饮",
-                "ledger_date": "2026-03-25",
+                "ledger_category" : "餐饮",
+                "ledger_date"     : "2026-03-25",
             }
         )
         db.insert_item(
             {
-                "id": "l2",
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "地铁",
-                "amount": 4,
+                "id"              : "l2",
+                "owner_id"        : owner_id,
+                "type"            : "ledger",
+                "title"           : "地铁",
+                "amount"          : 4,
                 "transaction_type": "expense",
-                "ledger_category": "交通",
-                "ledger_date": "2026-03-25",
+                "ledger_category" : "交通",
+                "ledger_date"     : "2026-03-25",
             }
         )
 
@@ -83,36 +84,36 @@ def test_items_list_applies_priority_before_pagination_and_total_count():
     try:
         db.insert_item(
             {
-                "id": "task_nonmatch",
-                "owner_id": owner_id,
-                "type": "task",
-                "title": "普通优先级",
-                "priority": 3,
-                "status": "open",
+                "id"        : "task_nonmatch",
+                "owner_id"  : owner_id,
+                "type"      : "task",
+                "title"     : "普通优先级",
+                "priority"  : 3,
+                "status"    : "open",
                 "created_at": "2026-03-03T09:00:00",
                 "updated_at": "2026-03-03T09:00:00",
             }
         )
         db.insert_item(
             {
-                "id": "task_match_1",
-                "owner_id": owner_id,
-                "type": "task",
-                "title": "高优先级一",
-                "priority": 1,
-                "status": "open",
+                "id"        : "task_match_1",
+                "owner_id"  : owner_id,
+                "type"      : "task",
+                "title"     : "高优先级一",
+                "priority"  : 1,
+                "status"    : "open",
                 "created_at": "2026-03-02T09:00:00",
                 "updated_at": "2026-03-02T09:00:00",
             }
         )
         db.insert_item(
             {
-                "id": "task_match_2",
-                "owner_id": owner_id,
-                "type": "task",
-                "title": "高优先级二",
-                "priority": 1,
-                "status": "open",
+                "id"        : "task_match_2",
+                "owner_id"  : owner_id,
+                "type"      : "task",
+                "title"     : "高优先级二",
+                "priority"  : 1,
+                "status"    : "open",
                 "created_at": "2026-03-01T09:00:00",
                 "updated_at": "2026-03-01T09:00:00",
             }
@@ -169,11 +170,11 @@ def test_database_get_items_supports_diary_date_sort_field():
     try:
         db.insert_item(
             {
-                "id": "d2",
-                "owner_id": owner_id,
-                "type": "diary",
-                "title": "后一天",
-                "content": "第二篇",
+                "id"        : "d2",
+                "owner_id"  : owner_id,
+                "type"      : "diary",
+                "title"     : "后一天",
+                "content"   : "第二篇",
                 "diary_date": "2026-03-20",
                 "entry_time": "2026-03-20T22:00:00",
                 "created_at": "2026-03-18T20:00:00",
@@ -182,11 +183,11 @@ def test_database_get_items_supports_diary_date_sort_field():
         )
         db.insert_item(
             {
-                "id": "d3",
-                "owner_id": owner_id,
-                "type": "diary",
-                "title": "同一天早些",
-                "content": "第三篇",
+                "id"        : "d3",
+                "owner_id"  : owner_id,
+                "type"      : "diary",
+                "title"     : "同一天早些",
+                "content"   : "第三篇",
                 "diary_date": "2026-03-20",
                 "entry_time": "2026-03-20T08:00:00",
                 "created_at": "2026-03-20T08:00:00",
@@ -195,11 +196,11 @@ def test_database_get_items_supports_diary_date_sort_field():
         )
         db.insert_item(
             {
-                "id": "d1",
-                "owner_id": owner_id,
-                "type": "diary",
-                "title": "前一天",
-                "content": "第一篇",
+                "id"        : "d1",
+                "owner_id"  : owner_id,
+                "type"      : "diary",
+                "title"     : "前一天",
+                "content"   : "第一篇",
                 "diary_date": "2026-03-19",
                 "entry_time": "2026-03-19T20:00:00",
                 "created_at": "2026-03-21T20:00:00",
@@ -263,19 +264,19 @@ def test_update_ledger_item_recomputes_amount_cents_when_amount_changes():
     try:
         db.insert_item(
             {
-                "id": "ledger_amount",
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "午饭",
-                "amount": 12.34,
-                "amount_cents": 1234,
+                "id"              : "ledger_amount",
+                "owner_id"        : owner_id,
+                "type"            : "ledger",
+                "title"           : "午饭",
+                "amount"          : 12.34,
+                "amount_cents"    : 1234,
                 "transaction_type": "expense",
-                "currency": "CNY",
-                "ledger_category": "餐饮",
-                "ledger_date": "2026-04-29",
-                "account_name": "现金",
-                "created_at": "2026-04-29T12:00:00",
-                "updated_at": "2026-04-29T12:00:00",
+                "currency"        : "CNY",
+                "ledger_category" : "餐饮",
+                "ledger_date"     : "2026-04-29",
+                "account_name"    : "现金",
+                "created_at"      : "2026-04-29T12:00:00",
+                "updated_at"      : "2026-04-29T12:00:00",
             }
         )
 
@@ -333,12 +334,12 @@ def test_database_row_to_item_does_not_mask_incomplete_ledger_rows():
 def test_normalize_ledger_fields_handles_transfer_and_rejects_invalid_update_values():
     result = normalize_ledger_fields(
         {
-            "title": "信用卡还款",
-            "amount_cents": 120000,
-            "transaction_type": "transfer",
-            "account_name": "招行储蓄卡",
+            "title"               : "信用卡还款",
+            "amount_cents"        : 120000,
+            "transaction_type"    : "transfer",
+            "account_name"        : "招行储蓄卡",
             "counter_account_name": "招行信用卡",
-            "ledger_category": "",
+            "ledger_category"     : "",
         },
         partial=False,
     )
@@ -355,10 +356,10 @@ def test_normalize_ledger_fields_handles_transfer_and_rejects_invalid_update_val
     with pytest.raises(ValueError, match="different"):
         normalize_ledger_fields(
             {
-                "title": "坏转账",
-                "amount": 10,
-                "transaction_type": "transfer",
-                "account_name": "微信",
+                "title"               : "坏转账",
+                "amount"              : 10,
+                "transaction_type"    : "transfer",
+                "account_name"        : "微信",
                 "counter_account_name": "微信",
             },
             partial=False,
@@ -378,39 +379,39 @@ def test_ledger_aggregate_tracks_transfer_separately_and_lists_accounts():
     try:
         for record in [
             {
-                "id": "expense_1",
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "午饭",
-                "amount_cents": 3250,
+                "id"              : "expense_1",
+                "owner_id"        : owner_id,
+                "type"            : "ledger",
+                "title"           : "午饭",
+                "amount_cents"    : 3250,
                 "transaction_type": "expense",
-                "ledger_category": "餐饮",
-                "ledger_date": "2026-03-18",
-                "account_name": "微信",
-                "merchant": "食堂",
+                "ledger_category" : "餐饮",
+                "ledger_date"     : "2026-03-18",
+                "account_name"    : "微信",
+                "merchant"        : "食堂",
             },
             {
-                "id": "income_1",
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "工资",
-                "amount_cents": 500000,
+                "id"              : "income_1",
+                "owner_id"        : owner_id,
+                "type"            : "ledger",
+                "title"           : "工资",
+                "amount_cents"    : 500000,
                 "transaction_type": "income",
-                "ledger_category": "工资",
-                "ledger_date": "2026-03-18",
-                "account_name": "招行",
-                "merchant": "公司",
+                "ledger_category" : "工资",
+                "ledger_date"     : "2026-03-18",
+                "account_name"    : "招行",
+                "merchant"        : "公司",
             },
             {
-                "id": "transfer_1",
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "信用卡还款",
-                "amount_cents": 120000,
-                "transaction_type": "transfer",
-                "ledger_category": "转账",
-                "ledger_date": "2026-03-18",
-                "account_name": "微信",
+                "id"                  : "transfer_1",
+                "owner_id"            : owner_id,
+                "type"                : "ledger",
+                "title"               : "信用卡还款",
+                "amount_cents"        : 120000,
+                "transaction_type"    : "transfer",
+                "ledger_category"     : "转账",
+                "ledger_date"         : "2026-03-18",
+                "account_name"        : "微信",
                 "counter_account_name": "招行信用卡",
             },
         ]:
@@ -436,21 +437,21 @@ def test_ledger_aggregate_tracks_transfer_separately_and_lists_accounts():
         assert_cny_aggregate(
             aggregate,
             {
-                "income": 5000,
-                "expense": 32.5,
+                "income"  : 5000,
+                "expense" : 32.5,
                 "transfer": 1200,
-                "balance": 4967.5,
-                "count": 3,
+                "balance" : 4967.5,
+                "count"   : 3,
             },
         )
         assert_cny_aggregate(
             transfer_account,
             {
-                "income": 0,
-                "expense": 0,
+                "income"  : 0,
+                "expense" : 0,
                 "transfer": 1200,
-                "balance": 0,
-                "count": 1,
+                "balance" : 0,
+                "count"   : 1,
             },
         )
         assert accounts == ["微信", "招行", "招行信用卡"]
@@ -462,13 +463,13 @@ def test_ledger_aggregate_tracks_transfer_separately_and_lists_accounts():
 def test_normalize_event_fields_normalizes_event_graph_fields_and_deduplicates_reminders():
     result = normalize_event_fields(
         {
-            "title": "  发布准备  ",
-            "category": "项目",
-            "location": "  A1  ",
-            "notes": "  备注  ",
-            "start_time": "2026-03-13T18:00",
-            "end_time": "2026-03-14T10:00",
-            "event_role": "single",
+            "title"       : "  发布准备  ",
+            "category"    : "项目",
+            "location"    : "  A1  ",
+            "notes"       : "  备注  ",
+            "start_time"  : "2026-03-13T18:00",
+            "end_time"    : "2026-03-14T10:00",
+            "event_role"  : "single",
             "remind_times": [
                 "2026-03-13T17:00",
                 "2026-03-13T17:00",
@@ -489,9 +490,9 @@ def test_normalize_event_fields_normalizes_event_graph_fields_and_deduplicates_r
     with pytest.raises(ValueError, match="after start_time"):
         normalize_event_fields(
             {
-                "title": "坏事件",
+                "title"     : "坏事件",
                 "start_time": "2026-03-14T10:00",
-                "end_time": "2026-03-13T10:00",
+                "end_time"  : "2026-03-13T10:00",
             },
             partial=False,
         )
@@ -499,7 +500,7 @@ def test_normalize_event_fields_normalizes_event_graph_fields_and_deduplicates_r
     with pytest.raises(ValueError, match="Invalid event_role"):
         normalize_event_fields(
             {
-                "title": "坏事件",
+                "title"     : "坏事件",
                 "start_time": "2026-03-14T10:00",
                 "event_role": "collection",
             },
@@ -510,9 +511,9 @@ def test_normalize_event_fields_normalizes_event_graph_fields_and_deduplicates_r
 def test_normalize_event_fields_compares_timezone_offsets_by_absolute_time():
     result = normalize_event_fields(
         {
-            "title": "跨时区会议",
+            "title"     : "跨时区会议",
             "start_time": "2026-03-14T10:00:00+08:00",
-            "end_time": "2026-03-14T03:30:00+00:00",
+            "end_time"  : "2026-03-14T03:30:00+00:00",
         },
         partial=False,
     )
@@ -522,9 +523,9 @@ def test_normalize_event_fields_compares_timezone_offsets_by_absolute_time():
     with pytest.raises(ValueError, match="after start_time"):
         normalize_event_fields(
             {
-                "title": "绝对时间倒序",
+                "title"     : "绝对时间倒序",
                 "start_time": "2026-03-14T10:00:00+00:00",
-                "end_time": "2026-03-14T17:00:00+08:00",
+                "end_time"  : "2026-03-14T17:00:00+08:00",
             },
             partial=False,
         )
@@ -532,9 +533,9 @@ def test_normalize_event_fields_compares_timezone_offsets_by_absolute_time():
     with pytest.raises(ValueError, match="matching timezone forms"):
         normalize_event_fields(
             {
-                "title": "时区形式混用",
+                "title"     : "时区形式混用",
                 "start_time": "2026-03-14T10:00:00",
-                "end_time": "2026-03-14T11:00:00+08:00",
+                "end_time"  : "2026-03-14T11:00:00+08:00",
             },
             partial=False,
         )
@@ -553,15 +554,15 @@ def test_event_update_route_preserves_event_notes_when_title_changes():
         db.insert_item(
             normalize_event_fields(
                 {
-                    "id": "ev-note",
-                    "owner_id": owner_id,
-                    "type": "event",
-                    "title": "学术会议",
-                    "category": "会议",
-                    "start_time": "2026-04-22T12:43:00",
-                    "end_time": "2026-04-26T12:00:00",
+                    "id"          : "ev-note",
+                    "owner_id"    : owner_id,
+                    "type"        : "event",
+                    "title"       : "学术会议",
+                    "category"    : "会议",
+                    "start_time"  : "2026-04-22T12:43:00",
+                    "end_time"    : "2026-04-26T12:00:00",
                     "remind_times": ["2026-04-21T12:43:00", "2026-04-25T12:00:00"],
-                    "notes": "全局备注",
+                    "notes"       : "全局备注",
                 },
                 partial=False,
             )
@@ -591,11 +592,11 @@ def test_event_update_route_preserves_event_notes_when_title_changes():
 def test_normalize_task_fields_accepts_priority_five_and_manages_completed_at():
     task = normalize_task_fields(
         {
-            "title": "收尾任务",
-            "category": "工作",
-            "priority": 5,
-            "status": "done",
-            "plan_date": "2026-03-26",
+            "title"      : "收尾任务",
+            "category"   : "工作",
+            "priority"   : 5,
+            "status"     : "done",
+            "plan_date"  : "2026-03-26",
             "deadline_at": "2026-03-26T18:00",
         },
         partial=False,
@@ -644,15 +645,15 @@ def test_task_update_route_preserves_explicit_nulls_for_clearing_fields(tmp_path
     db.insert_item(
         normalize_task_fields(
             {
-                "id": "task-clear-fields",
-                "owner_id": owner_id,
-                "type": "task",
-                "title": "清空字段",
-                "content": "旧备注",
-                "category": "工作",
-                "status": "open",
-                "priority": 2,
-                "plan_date": "2026-03-26",
+                "id"         : "task-clear-fields",
+                "owner_id"   : owner_id,
+                "type"       : "task",
+                "title"      : "清空字段",
+                "content"    : "旧备注",
+                "category"   : "工作",
+                "status"     : "open",
+                "priority"   : 2,
+                "plan_date"  : "2026-03-26",
                 "deadline_at": "2026-03-26T18:00:00",
             },
             partial=False,
@@ -683,10 +684,10 @@ def test_task_update_route_preserves_explicit_nulls_for_clearing_fields(tmp_path
 def test_normalize_note_fields_sets_defaults_and_deduplicates_tags():
     note = normalize_note_fields(
         {
-            "title": "  读书摘录  ",
-            "content": "  很长的正文  ",
+            "title"   : "  读书摘录  ",
+            "content" : "  很长的正文  ",
             "category": "",
-            "tags": ["学习", "学习", " 阅读 ", ""],
+            "tags"    : ["学习", "学习", " 阅读 ", ""],
         },
         partial=False,
     )
@@ -700,8 +701,8 @@ def test_normalize_note_fields_sets_defaults_and_deduplicates_tags():
 def test_normalize_note_fields_normalizes_references_and_related_items():
     note = normalize_note_fields(
         {
-            "title": "引用笔记",
-            "content": "正文",
+            "title"     : "引用笔记",
+            "content"   : "正文",
             "references": [
                 {"kind": "item", "id": " task_1 ", "type": "task", "title": " 待办标题 "},
                 {"kind": "item", "id": "task_1", "type": "task", "title": "重复"},
@@ -731,12 +732,12 @@ def test_database_get_items_filters_note_tags_exactly_and_keyword():
         db.insert_item(
             normalize_note_fields(
                 {
-                    "id": "note_work",
-                    "owner_id": owner_id,
-                    "type": "note",
-                    "title": "工作笔记",
-                    "content": "普通内容",
-                    "tags": ["工作"],
+                    "id"        : "note_work",
+                    "owner_id"  : owner_id,
+                    "type"      : "note",
+                    "title"     : "工作笔记",
+                    "content"   : "普通内容",
+                    "tags"      : ["工作"],
                     "created_at": "2026-04-01T10:00:00",
                     "updated_at": "2026-04-01T10:00:00",
                 },
@@ -746,12 +747,12 @@ def test_database_get_items_filters_note_tags_exactly_and_keyword():
         db.insert_item(
             normalize_note_fields(
                 {
-                    "id": "note_workflow",
-                    "owner_id": owner_id,
-                    "type": "note",
-                    "title": "流程笔记",
-                    "content": "深度流程内容",
-                    "tags": ["工作流"],
+                    "id"        : "note_workflow",
+                    "owner_id"  : owner_id,
+                    "type"      : "note",
+                    "title"     : "流程笔记",
+                    "content"   : "深度流程内容",
+                    "tags"      : ["工作流"],
                     "created_at": "2026-04-02T10:00:00",
                     "updated_at": "2026-04-02T10:00:00",
                 },
@@ -786,32 +787,32 @@ def test_items_list_keyword_matches_extended_fields_and_total_count():
     try:
         db.insert_item(
             {
-                "id": "ledger_merchant",
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "午饭",
-                "amount": 42,
+                "id"              : "ledger_merchant",
+                "owner_id"        : owner_id,
+                "type"            : "ledger",
+                "title"           : "午饭",
+                "amount"          : 42,
                 "transaction_type": "expense",
-                "ledger_category": "餐饮",
-                "ledger_date": "2026-05-03",
-                "account_name": "微信",
-                "merchant": "窗口商户",
-                "remark": "楼下小店",
-                "created_at": "2026-05-03T10:00:00",
-                "updated_at": "2026-05-03T10:00:00",
+                "ledger_category" : "餐饮",
+                "ledger_date"     : "2026-05-03",
+                "account_name"    : "微信",
+                "merchant"        : "窗口商户",
+                "remark"          : "楼下小店",
+                "created_at"      : "2026-05-03T10:00:00",
+                "updated_at"      : "2026-05-03T10:00:00",
             }
         )
         db.insert_item(
             {
-                "id": "event_location",
-                "owner_id": owner_id,
-                "type": "event",
-                "title": "项目会",
-                "category": "工作",
-                "location": "南楼会议室",
-                "notes": "季度复盘",
+                "id"        : "event_location",
+                "owner_id"  : owner_id,
+                "type"      : "event",
+                "title"     : "项目会",
+                "category"  : "工作",
+                "location"  : "南楼会议室",
+                "notes"     : "季度复盘",
                 "start_time": "2026-05-03T09:00:00",
-                "end_time": "2026-05-03T10:00:00",
+                "end_time"  : "2026-05-03T10:00:00",
                 "created_at": "2026-05-03T09:00:00",
                 "updated_at": "2026-05-03T09:00:00",
             }
@@ -849,10 +850,10 @@ def test_explicit_reminders_replace_rules(db, kind, times):
     clock = "deadline_at" if kind == "task" else "start_time"
     iid   = db.insert_item(
         {
-            "owner_id": "u",
-            "type": kind,
-            "title": "reminder",
-            clock: "2030-01-01T10:00:00+00:00",
+            "owner_id"      : "u",
+            "type"          : kind,
+            "title"         : "reminder",
+            clock           : "2030-01-01T10:00:00+00:00",
             "reminder_rules": [{"offset_seconds": 3600}],
         }
     )

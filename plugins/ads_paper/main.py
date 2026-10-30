@@ -89,9 +89,9 @@ async def handle(
             return await ai_commands.cmd_refs(storage, context, user_id)
 
         local_commands: dict[str, Callable[[], Awaitable[Segments]]] = {
-            "note": lambda: note_commands.cmd_note(storage, subcommand_args, user_id),
-            "writing": lambda: note_commands.cmd_writing(storage, subcommand_args, user_id),
-            "topics": lambda: note_commands.cmd_topics(storage, subcommand_args, user_id),
+            "note"    : lambda: note_commands.cmd_note(storage, subcommand_args, user_id),
+            "writing" : lambda: note_commands.cmd_writing(storage, subcommand_args, user_id),
+            "topics"  : lambda: note_commands.cmd_topics(storage, subcommand_args, user_id),
             "deadline": lambda: note_commands.cmd_deadline(storage, subcommand_args, user_id),
         }
         local_handler = local_commands.get(subcommand)
@@ -124,14 +124,14 @@ async def handle(
         # 只有远程子命令才创建 ADS 客户端，并复用核心提供的共享 HTTP 会话。
         client = ADSClient(token, context.http_session, context)
         remote_handlers: dict[str, Callable[[], Awaitable[Segments]]] = {
-            "search": lambda: paper_commands.cmd_search(client, subcommand_args),
-            "author": lambda: paper_commands.cmd_author(client, subcommand_args),
-            "cite": lambda: paper_commands.cmd_cite(client, subcommand_args),
+            "search"      : lambda: paper_commands.cmd_search(client, subcommand_args),
+            "author"      : lambda: paper_commands.cmd_author(client, subcommand_args),
+            "cite"        : lambda: paper_commands.cmd_cite(client, subcommand_args),
             "cite-network": lambda: paper_commands.cmd_cite_network(client, subcommand_args),
-            "related": lambda: paper_commands.cmd_related(client, subcommand_args),
-            "summarize": lambda: ai_commands.cmd_summarize(client, subcommand_args, context),
-            "daily": lambda: ai_commands.cmd_daily(client, storage, user_id),
-            "ref_add": lambda: ai_commands.cmd_ref_add(
+            "related"     : lambda: paper_commands.cmd_related(client, subcommand_args),
+            "summarize"   : lambda: ai_commands.cmd_summarize(client, subcommand_args, context),
+            "daily"       : lambda: ai_commands.cmd_daily(client, storage, user_id),
+            "ref_add"     : lambda: ai_commands.cmd_ref_add(
                 client,
                 subcommand_args,
                 storage,

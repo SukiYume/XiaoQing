@@ -22,27 +22,27 @@ CommandResult = JsonObject
 ResultBuilder = Callable[[str], CommandResult]
 
 # 依赖模块在局部严格 Mypy 中按边界处理；一次标注后避免每个返回点重复 cast。
-_error_result: Final[ResultBuilder]   = cast(ResultBuilder, error_result)
+_error_result  : Final[ResultBuilder] = cast(ResultBuilder, error_result)
 _success_result: Final[ResultBuilder] = cast(ResultBuilder, success_result)
 
 _CONFIRM_ICONS: Final = {
     "event": "🗓️",
-    "task": "📝",
-    "note": "📒",
+    "task" : "📝",
+    "note" : "📒",
     "diary": "📔",
 }
 _ITEM_TYPE_NAMES: Final = {
-    "event": "日程",
-    "task": "待办",
-    "note": "笔记",
-    "diary": "日记",
+    "event" : "日程",
+    "task"  : "待办",
+    "note"  : "笔记",
+    "diary" : "日记",
     "ledger": "账目",
 }
 _EDIT_ACTION_NAMES: Final = {
-    "edit_event": "日程",
-    "edit_task": "待办",
-    "edit_note": "笔记",
-    "edit_diary": "日记",
+    "edit_event" : "日程",
+    "edit_task"  : "待办",
+    "edit_note"  : "笔记",
+    "edit_diary" : "日记",
     "edit_ledger": "账目",
 }
 

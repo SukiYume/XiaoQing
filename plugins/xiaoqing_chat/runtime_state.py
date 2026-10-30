@@ -28,7 +28,7 @@ from .planning.pfc_state import PFCStateStore
 
 @dataclass
 class ChatRuntime:
-    cfg: XiaoQingChatConfig
+    cfg               : XiaoQingChatConfig
     compiled_ban_regex: list[re.Pattern[str]]
 
 
@@ -49,7 +49,7 @@ class _PerChatState:
     mood_state: dict[str, tuple[str, float]] = field(default_factory=dict)
     # chat_id ->（调用者用户 ID，过期时间戳）
     pending_bot_name_call: dict[str, tuple[int | None, float]] = field(default_factory=dict)
-    reply_gate_decision: dict[str, Any] = field(default_factory=dict)
+    reply_gate_decision  : dict[str, Any] = field(default_factory=dict)
 
 
 class ChatRuntimeState:

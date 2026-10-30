@@ -88,7 +88,7 @@ async def get_user_settings_bundle_map(
     settings_map = await run_sync(db.get_user_settings_batch, user_ids)
     return {
         user_id: {
-            "settings": settings,
+            "settings"       : settings,
             "custom_settings": parse_custom_settings(settings),
         }
         for user_id, settings in settings_map.items()
@@ -98,12 +98,12 @@ async def get_user_settings_bundle_map(
 class DbOpsMixin:
     """依赖 ``self.db``，统一桥接同步数据库调用、异常和审计日志。"""
 
-    db: Database
+    db               : Database
     _ITEM_TYPE_LABELS: ClassVar[dict[str, str]] = {
-        ItemType.EVENT.value: "日程",
-        ItemType.TASK.value: "待办",
-        ItemType.NOTE.value: "笔记",
-        ItemType.DIARY.value: "日记",
+        ItemType.EVENT.value : "日程",
+        ItemType.TASK.value  : "待办",
+        ItemType.NOTE.value  : "笔记",
+        ItemType.DIARY.value : "日记",
         ItemType.LEDGER.value: "账目",
     }
 
@@ -257,9 +257,9 @@ class DbOpsMixin:
             return f"/pendo diary view {item_id}"
 
         commands = {
-            ItemType.EVENT.value: f"/pendo event view {item_id}",
-            ItemType.TASK.value: f"/pendo todo view {item_id}",
-            ItemType.NOTE.value: f"/pendo note view {item_id}",
+            ItemType.EVENT.value : f"/pendo event view {item_id}",
+            ItemType.TASK.value  : f"/pendo todo view {item_id}",
+            ItemType.NOTE.value  : f"/pendo note view {item_id}",
             ItemType.LEDGER.value: f"/pendo ledger view {item_id}",
         }
         return commands.get(item_type, f"/pendo search {item_id}")
@@ -272,7 +272,7 @@ class DbOpsMixin:
         type_label = cls._item_type_label(item_type)
         command    = cls._build_view_hint_for_item(item)
         return {
-            "status": "success",
+            "status" : "success",
             "message": f"💡 {query_id} 不是{expected_label}ID，它属于{type_label}\n\n请使用 {command}",
         }
 
@@ -334,11 +334,11 @@ class DbOpsMixin:
             owner_id,
             expected_version = expected_version,
             operation_log    = {
-                "user_id": owner_id,
-                "action": action,
+                "user_id"  : owner_id,
+                "action"   : action,
                 "item_type": item_type,
-                "item_id": item_id,
-                "details": log_details,
+                "item_id"  : item_id,
+                "details"  : log_details,
             },
         )
 
@@ -365,11 +365,11 @@ class DbOpsMixin:
             soft          = True,
             owner_id      = owner_id,
             operation_log = {
-                "user_id": owner_id,
-                "action": "delete",
+                "user_id"  : owner_id,
+                "action"   : "delete",
                 "item_type": item_type,
-                "item_id": item_id,
-                "details": {"soft_delete": True},
+                "item_id"  : item_id,
+                "details"  : {"soft_delete": True},
             },
         )
 
@@ -429,10 +429,10 @@ class DbOpsMixin:
             item_data,
             custom_id,
             operation_log={
-                "user_id": owner_id,
-                "action": action,
+                "user_id"  : owner_id,
+                "action"   : action,
                 "item_type": item_type,
-                "details": {"item_data": log_data},
+                "details"  : {"item_data": log_data},
             },
         )
 

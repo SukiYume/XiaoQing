@@ -50,10 +50,18 @@ async def run_media_blocking(
 ) -> Any:
     """在事件循环外执行媒体磁盘或编解码工作，并施加插件级背压。"""
 
-    loop = asyncio.get_running_loop()
-    async with _media_blocking_limiter(loop):
-        operation = functools.partial(callback, *args, **kwargs)
-        return await asyncio.to_thread(operation)
+    loop      = asyncio.get_running_loop()
+    limiter   = _media_blocking_limiter(loop)
+    operation = functools.partial(callback, *args, **kwargs)
+    await limiter.acquire()
+    try:
+        task = asyncio.ensure_future(asyncio.to_thread(operation))
+    except BaseException:
+        limiter.release()
+        raise
+    # 额度跟随线程的真实生命周期：等待方被取消时线程仍在解码，线程结束后才归还额度。
+    task.add_done_callback(lambda _done: limiter.release())
+    return await asyncio.shield(task)
 
 
 def read_file_bounded(path: Path, *, max_bytes: int) -> bytes:

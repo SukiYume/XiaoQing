@@ -36,6 +36,7 @@
     "url_parser": {"risk": "read_only", "dependency": "external", "sensitive": false},
     "voice": {"risk": "read_only", "dependency": "external", "sensitive": false},
     "wolframalpha": {"risk": "read_only", "dependency": "external", "sensitive": false},
+    "xiaoai": {"risk": "privileged", "dependency": "external", "sensitive": true},
     "xiaoqing_agent": {"risk": "privileged", "dependency": "local", "sensitive": true},
     "xiaoqing_chat": {"risk": "isolated_state", "dependency": "external", "sensitive": false}
   },

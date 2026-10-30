@@ -21,6 +21,7 @@ Step 3: 构建最终训练数据集
 
 import importlib
 import json
+import os
 import re
 import sys
 import time
@@ -132,8 +133,8 @@ def compute_positive_coverage(df_output: pd.DataFrame, positive_ids: set[str]) -
     covered_positive_ids = len(dataset_ids & positive_ids)
     missing_positive_ids = len(positive_ids - dataset_ids)
     return {
-        "covered_positive_ids": covered_positive_ids,
-        "missing_positive_ids": missing_positive_ids,
+        "covered_positive_ids" : covered_positive_ids,
+        "missing_positive_ids" : missing_positive_ids,
         "dataset_positive_rows": int((df_output["label"] == 1).sum()),
         "expected_positive_ids": len(positive_ids),
     }
@@ -160,7 +161,13 @@ def _write_final_dataset(df_output: pd.DataFrame, output_path: Path) -> int:
         missing = ", ".join(sorted(missing_columns))
         raise ValueError(f"最终训练数据集缺少列: {missing}")
 
-    df_output.to_csv(output_path, index=False)
+    # 同目录临时文件写完再原子替换：写盘失败或进程中断都不会截断已有训练数据。
+    temporary = output_path.with_name(f".{output_path.name}.{os.getpid()}.tmp")
+    try:
+        df_output.to_csv(temporary, index=False)
+        os.replace(temporary, output_path)
+    finally:
+        temporary.unlink(missing_ok=True)
     return total
 
 
@@ -188,7 +195,7 @@ def fetch_abstracts_batch(arxiv_ids: list[str]) -> dict[str, dict[str, str]]:
     """通过 arXiv API 批量获取论文标题和摘要"""
     url    = "https://export.arxiv.org/api/query"
     params = {
-        "id_list": ",".join(arxiv_ids),
+        "id_list"    : ",".join(arxiv_ids),
         "max_results": len(arxiv_ids),
     }
 
@@ -371,9 +378,9 @@ def main() -> None:
                 supplementary.append(
                     {
                         "arxiv_id": aid,
-                        "title": info["title"],
+                        "title"   : info["title"],
                         "abstract": info["abstract"],
-                        "label": 1,
+                        "label"   : 1,
                     }
                 )
 
@@ -395,7 +402,7 @@ def main() -> None:
     df_output = df_all.rename(
         columns={
             "arxiv_id": "arXiv ID",
-            "title": "Title",
+            "title"   : "Title",
             "abstract": "Abstract",
         }
     )

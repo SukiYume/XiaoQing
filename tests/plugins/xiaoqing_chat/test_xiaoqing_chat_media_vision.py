@@ -2,46 +2,50 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+import pytest
+import pytest_asyncio
+
 import tests.helpers.xiaoqing_chat_media_test_support as _fixture_support
 from tests.helpers.xiaoqing_chat_media_test_support import (
     _PNG_BYTES,
-    AsyncMock,
     MediaAnalysisDraft,
     RenderedMedia,
     ResolvedMedia,
     _make_media_runtime,
     _raw_media_response,
     _semantic_retry_reason,
-    asyncio,
-    json,
-    patch,
-    pytest,
     render_event_media_text,
 )
 
 mock_context = _fixture_support.mock_context
 
 
+@pytest_asyncio.fixture
+async def refine_tasks(monkeypatch):
+    tasks = []
+
+    def spawn(_context, coroutine, **_kwargs):
+        task = asyncio.create_task(coroutine)
+        tasks.append(task)
+        return task
+
+    monkeypatch.setattr("plugins.xiaoqing_chat.media.event_media_analysis.spawn_bg_task", spawn)
+    try:
+        yield tasks
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 @pytest.mark.asyncio
 async def test_render_event_media_text_retries_same_provider_once_on_semantic_failure(mock_context):
-    runtime             = _make_media_runtime()
-    vision              = mock_context.secrets["plugins"]["xiaoqing_chat"]["vision"]
-    vision["default"]   = "glm-4.6v-flash"
-    vision["fallbacks"] = ["glm-4v-flash"]
-    vision["providers"] = {
-        "glm-4.6v-flash": {
-            "api_base": "https://open.bigmodel.cn/api/paas/v4",
-            "api_key": "vision-key",
-            "model": "glm-4.6v-flash",
-            "endpoint_path": "/chat/completions",
-        },
-        "glm-4v-flash": {
-            "api_base": "https://open.bigmodel.cn/api/paas/v4",
-            "api_key": "vision-key",
-            "model": "glm-4v-flash",
-            "endpoint_path": "/chat/completions",
-        },
-    }
+    runtime = _make_media_runtime()
     event = {"message": [{"type": "image", "data": {"url": "https://example.com/cat_photo.png"}}]}
     used_models: list[str] = []
     call_count = 0
@@ -91,7 +95,7 @@ async def test_render_event_media_text_logs_raw_response_metadata(mock_context):
             {
                 "choices": [
                     {
-                        "message": {"content": raw_content},
+                        "message"      : {"content": raw_content},
                         "finish_reason": "stop",
                     }
                 ]
@@ -139,8 +143,8 @@ async def test_render_event_media_text_preserves_visible_text_for_text_heavy_scr
         return _raw_media_response(
             json.dumps(
                 {
-                    "kind": "image",
-                    "description": "新闻截图，福岛陆上自卫队射击训练误燃干草引发山火，灭火后下山又遭熊袭击",
+                    "kind"        : "image",
+                    "description" : "新闻截图，福岛陆上自卫队射击训练误燃干草引发山火，灭火后下山又遭熊袭击",
                     "visible_text": "22日福岛县陆上自卫队射击训练误燃干草，花5小时扑灭山火，下山时遭熊袭击导致队员受伤",
                     "emotion_tags": ["离谱", "惊险"],
                 },
@@ -192,8 +196,8 @@ async def test_render_event_media_text_retries_when_finish_reason_length(mock_co
             return _raw_media_response(
                 json.dumps(
                     {
-                        "kind": "image",
-                        "description": "新闻截图",
+                        "kind"        : "image",
+                        "description" : "新闻截图",
                         "visible_text": "陆上自卫队演习引发山火",
                     },
                     ensure_ascii=False,
@@ -203,8 +207,8 @@ async def test_render_event_media_text_retries_when_finish_reason_length(mock_co
         return _raw_media_response(
             json.dumps(
                 {
-                    "kind": "image",
-                    "description": "新闻截图，福岛陆上自卫队灭火后下山时遭熊袭击，队员受伤",
+                    "kind"        : "image",
+                    "description" : "新闻截图，福岛陆上自卫队灭火后下山时遭熊袭击，队员受伤",
                     "visible_text": "自卫队训练引发山火，花5小时灭火后遇熊袭击",
                     "emotion_tags": ["意外"],
                 },
@@ -249,8 +253,8 @@ async def test_text_on_the_image_is_not_mistaken_for_a_vision_refusal(mock_conte
         return _raw_media_response(
             json.dumps(
                 {
-                    "kind": "image",
-                    "description": "网页通知截图，蓝色标题栏。",
+                    "kind"        : "image",
+                    "description" : "网页通知截图，蓝色标题栏。",
                     "visible_text": "系统维护通知\n10月25日 0:00-6:00 图书馆数据库无法访问，"
                     "https://lib.example.edu/download?appid=lib 同步停用",
                     "emotion_tags": [],
@@ -295,24 +299,7 @@ def test_merged_summary_stays_one_bounded_marker():
 
 @pytest.mark.asyncio
 async def test_render_event_media_text_falls_back_after_semantic_retry_exhausted(mock_context):
-    runtime             = _make_media_runtime()
-    vision              = mock_context.secrets["plugins"]["xiaoqing_chat"]["vision"]
-    vision["default"]   = "glm-4.6v-flash"
-    vision["fallbacks"] = ["glm-4v-flash"]
-    vision["providers"] = {
-        "glm-4.6v-flash": {
-            "api_base": "https://open.bigmodel.cn/api/paas/v4",
-            "api_key": "vision-key",
-            "model": "glm-4.6v-flash",
-            "endpoint_path": "/chat/completions",
-        },
-        "glm-4v-flash": {
-            "api_base": "https://open.bigmodel.cn/api/paas/v4",
-            "api_key": "vision-key",
-            "model": "glm-4v-flash",
-            "endpoint_path": "/chat/completions",
-        },
-    }
+    runtime = _make_media_runtime()
     event = {"message": [{"type": "image", "data": {"url": "https://example.com/cat_photo.png"}}]}
     used_models: list[str] = []
 
@@ -350,24 +337,7 @@ async def test_render_event_media_text_falls_back_after_semantic_retry_exhausted
 
 @pytest.mark.asyncio
 async def test_render_event_media_text_falls_back_immediately_on_request_timeout(mock_context):
-    runtime             = _make_media_runtime()
-    vision              = mock_context.secrets["plugins"]["xiaoqing_chat"]["vision"]
-    vision["default"]   = "glm-4.6v-flash"
-    vision["fallbacks"] = ["glm-4v-flash"]
-    vision["providers"] = {
-        "glm-4.6v-flash": {
-            "api_base": "https://open.bigmodel.cn/api/paas/v4",
-            "api_key": "vision-key",
-            "model": "glm-4.6v-flash",
-            "endpoint_path": "/chat/completions",
-        },
-        "glm-4v-flash": {
-            "api_base": "https://open.bigmodel.cn/api/paas/v4",
-            "api_key": "vision-key",
-            "model": "glm-4v-flash",
-            "endpoint_path": "/chat/completions",
-        },
-    }
+    runtime = _make_media_runtime()
     event = {"message": [{"type": "image", "data": {"url": "https://example.com/cat_photo.png"}}]}
     used_models: list[str] = []
 
@@ -375,7 +345,7 @@ async def test_render_event_media_text_falls_back_immediately_on_request_timeout
         model = secrets["_pinned_model"]
         used_models.append(model)
         if model == "glm-4.6v-flash":
-            raise asyncio.TimeoutError()
+            raise TimeoutError()
         return _raw_media_response(
             json.dumps({"kind": "image", "description": "草地小狗"}, ensure_ascii=False)
         )
@@ -410,9 +380,9 @@ async def test_render_event_media_text_uses_detail_when_emoji_refine_is_generic(
             {
                 "type": "image",
                 "data": {
-                    "url": "https://example.com/store_emoji.jpg",
+                    "url"             : "https://example.com/store_emoji.jpg",
                     "emoji_package_id": 1001,
-                    "summary": "[动画表情]",
+                    "summary"         : "[动画表情]",
                 },
             }
         ]
@@ -424,10 +394,10 @@ async def test_render_event_media_text_uses_detail_when_emoji_refine_is_generic(
             return _raw_media_response(
                 json.dumps(
                     {
-                        "kind": "emoji",
+                        "kind"                : "emoji",
                         "detailed_description": "一只猫皱着脸，配字是苦鲁西",
-                        "visible_text": "苦鲁西",
-                        "emotion_tags": ["委屈", "难受"],
+                        "visible_text"        : "苦鲁西",
+                        "emotion_tags"        : ["委屈", "难受"],
                     },
                     ensure_ascii=False,
                 )
@@ -452,7 +422,9 @@ async def test_render_event_media_text_uses_detail_when_emoji_refine_is_generic(
 
 
 @pytest.mark.asyncio
-async def test_render_event_media_text_defers_slow_emoji_refine_and_uses_detail(mock_context):
+async def test_render_event_media_text_defers_slow_emoji_refine_and_uses_detail(
+    mock_context, refine_tasks
+):
     runtime = _make_media_runtime(
         enable_emoji_refine_background = True,
         emoji_refine_timeout_seconds   = 0.01,
@@ -462,9 +434,9 @@ async def test_render_event_media_text_defers_slow_emoji_refine_and_uses_detail(
             {
                 "type": "image",
                 "data": {
-                    "url": "https://example.com/store_emoji.jpg",
+                    "url"             : "https://example.com/store_emoji.jpg",
                     "emoji_package_id": 1001,
-                    "summary": "[动画表情]",
+                    "summary"         : "[动画表情]",
                 },
             }
         ]
@@ -476,8 +448,8 @@ async def test_render_event_media_text_defers_slow_emoji_refine_and_uses_detail(
             return _raw_media_response(
                 json.dumps(
                     {
-                        "kind": "emoji",
-                        "description": "一只黑色猫咪，眼睛瞪得很大",
+                        "kind"        : "emoji",
+                        "description" : "一只黑色猫咪，眼睛瞪得很大",
                         "emotion_tags": ["惊讶", "警觉"],
                     },
                     ensure_ascii=False,
@@ -496,7 +468,8 @@ async def test_render_event_media_text_defers_slow_emoji_refine_and_uses_detail(
         ),
     ):
         text = await render_event_media_text(event, context=mock_context, runtime=runtime)
-        await asyncio.sleep(0.05)
+        assert refine_tasks
+        await asyncio.wait_for(asyncio.gather(*refine_tasks), timeout=5)
 
     assert text == "[表情包：惊讶，警觉]"
     warning_lines = "\n".join(
@@ -507,7 +480,7 @@ async def test_render_event_media_text_defers_slow_emoji_refine_and_uses_detail(
 
 
 @pytest.mark.asyncio
-async def test_render_event_media_background_refine_updates_cache(mock_context):
+async def test_render_event_media_background_refine_updates_cache(mock_context, refine_tasks):
     runtime = _make_media_runtime(
         enable_emoji_refine_background = True,
         emoji_refine_timeout_seconds   = 1.0,
@@ -517,9 +490,9 @@ async def test_render_event_media_background_refine_updates_cache(mock_context):
             {
                 "type": "image",
                 "data": {
-                    "url": "https://example.com/store_emoji.jpg",
+                    "url"             : "https://example.com/store_emoji.jpg",
                     "emoji_package_id": 1001,
-                    "summary": "[动画表情]",
+                    "summary"         : "[动画表情]",
                 },
             }
         ]
@@ -531,8 +504,8 @@ async def test_render_event_media_background_refine_updates_cache(mock_context):
             return _raw_media_response(
                 json.dumps(
                     {
-                        "kind": "emoji",
-                        "description": "一只黑色猫咪，眼睛瞪得很大",
+                        "kind"        : "emoji",
+                        "description" : "一只黑色猫咪，眼睛瞪得很大",
                         "emotion_tags": ["惊讶", "警觉"],
                     },
                     ensure_ascii=False,
@@ -541,7 +514,7 @@ async def test_render_event_media_background_refine_updates_cache(mock_context):
         return _raw_media_response(
             json.dumps(
                 {
-                    "description": "黑猫瞪大双眼",
+                    "description" : "黑猫瞪大双眼",
                     "emotion_tags": ["惊讶", "警觉", "震惊"],
                 },
                 ensure_ascii=False,
@@ -559,17 +532,13 @@ async def test_render_event_media_background_refine_updates_cache(mock_context):
         ),
     ):
         text = await render_event_media_text(event, context=mock_context, runtime=runtime)
-        await asyncio.sleep(0.05)
+        assert refine_tasks
+        await asyncio.wait_for(asyncio.gather(*refine_tasks), timeout=5)
 
     assert text == "[表情包：惊讶，警觉]"
     cache_path = mock_context.data_dir / "media" / "render_cache.json"
-    item       = {}
-    for _ in range(20):
-        cache = json.loads(cache_path.read_text(encoding="utf-8"))
-        item = next(iter(cache["items"].values()))
-        if item.get("description") == "黑猫瞪大双眼":
-            break
-        await asyncio.sleep(0.01)
+    cache = json.loads(cache_path.read_text(encoding="utf-8"))
+    item = next(iter(cache["items"].values()))
     assert item["description"] == "黑猫瞪大双眼"
     assert item["marker"] == "[表情包：惊讶，警觉]"
 
@@ -645,9 +614,9 @@ async def test_render_event_media_text_retries_and_then_falls_back_when_detail_e
             {
                 "type": "image",
                 "data": {
-                    "url": "https://example.com/store_emoji.jpg",
+                    "url"             : "https://example.com/store_emoji.jpg",
                     "emoji_package_id": 1001,
-                    "summary": "[动画表情]",
+                    "summary"         : "[动画表情]",
                 },
             }
         ]
@@ -789,3 +758,41 @@ async def test_render_event_media_text_resolves_remote_url_into_cache(mock_conte
     cached_files = list((mock_context.data_dir / "media" / "inbox").glob("*"))
     assert text.startswith("[图片：")
     assert cached_files
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["glm-4.6v-flash", "glm-4.1v-thinking-flash"])
+async def test_vision_request_preserves_configured_budget_and_controls(monkeypatch, model):
+    from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
+    from plugins.xiaoqing_chat.media import event_media_analysis as analysis
+
+    runtime = _make_media_runtime()
+    llm     = LLMCallConfig(
+        temperature            = 0.35,
+        top_p                  = 0.75,
+        max_tokens             = 317,
+        timeout_seconds        = 4,
+        total_timeout_seconds  = 11,
+        max_retry              = 2,
+        retry_interval_seconds = 0.3,
+    )
+    runtime.cfg._llm_configs["vision"] = llm
+    complete                           = AsyncMock(
+        return_value=(
+            {"choices": [{"message": {"content": "description"}, "finish_reason": "stop"}]},
+            "vision-test",
+        )
+    )
+    monkeypatch.setattr(analysis, "chat_completions_raw_with_fallback_paths", complete)
+    service = SimpleNamespace(list_models=lambda *args, **kwargs: ())
+    result = await analysis._call_media_llm_once(
+        runtime    = runtime,
+        secrets    = {"_ai": service, "model": model},
+        messages   = [{"role": "user", "content": "image"}],
+        max_tokens = llm.max_tokens,
+    )
+    kwargs = complete.await_args.kwargs
+    assert {key: kwargs[key] for key in llm.as_kwargs()} == llm.as_kwargs()
+    assert kwargs["route"] == "vision"
+    assert result.used_secrets["_effective_max_tokens"] == 317
+    assert analysis._media_detail_base_max_tokens_for_reason("length_truncated", 317) == 634

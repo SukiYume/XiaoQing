@@ -26,7 +26,7 @@ def _valid_png(width: int = 1, height: int = 1) -> bytes:
     """构造结构和 CRC 完整的最小 RGBA PNG，避免把残缺文件当作测试夹具。"""
 
     header   = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
-    scanline = b"\x00" + b"\x00\x00\x00\x00" * max(1, min(width * height, 1))
+    scanline = (b"\x00" + b"\x00\x00\x00\x00" * width) * height
     return (
         b"\x89PNG\r\n\x1a\n"
         + _png_chunk(b"IHDR", header)
@@ -46,10 +46,6 @@ def _response_text(response: list[dict[str, object]]) -> str:
 # ============================================================
 # Test Module Structure
 # ============================================================
-
-
-class TestJupyterPluginJson:
-    """测试 Jupyter plugin.json 配置"""
 
 
 # ============================================================
@@ -258,8 +254,8 @@ class TestJupyterCodeReviewFixes:
 
             def get_iopub_msg(self, _timeout):
                 return {
-                    "msg_type": "status",
-                    "content": {"execution_state": "idle"},
+                    "msg_type"     : "status",
+                    "content"      : {"execution_state": "idle"},
                     "parent_header": {"msg_id": "msg-cancel"},
                 }
 
@@ -327,13 +323,13 @@ class TestJupyterCodeReviewFixes:
                         read_entered.set()
                         assert release_read.wait(timeout=2)
                         return {
-                            "msg_type": "stream",
-                            "content": {"name": "stdout", "text": "partial"},
+                            "msg_type"     : "stream",
+                            "content"      : {"name": "stdout", "text": "partial"},
                             "parent_header": {"msg_id": "msg-cancel"},
                         }
                     return {
-                        "msg_type": "status",
-                        "content": {"execution_state": "idle"},
+                        "msg_type"     : "status",
+                        "content"      : {"execution_state": "idle"},
                         "parent_header": {"msg_id": "msg-cancel"},
                     }
                 finally:
@@ -380,18 +376,18 @@ class TestJupyterCodeReviewFixes:
             def __init__(self):
                 self.messages = [
                     {
-                        "msg_type": "stream",
-                        "content": {"name": "stdout", "text": "ignored"},
+                        "msg_type"     : "stream",
+                        "content"      : {"name": "stdout", "text": "ignored"},
                         "parent_header": {"msg_id": "other-msg"},
                     },
                     {
-                        "msg_type": "stream",
-                        "content": {"name": "stdout", "text": "kept"},
+                        "msg_type"     : "stream",
+                        "content"      : {"name": "stdout", "text": "kept"},
                         "parent_header": {"msg_id": "msg-1"},
                     },
                     {
-                        "msg_type": "status",
-                        "content": {"execution_state": "idle"},
+                        "msg_type"     : "status",
+                        "content"      : {"execution_state": "idle"},
                         "parent_header": {"msg_id": "msg-1"},
                     },
                 ]
@@ -433,13 +429,13 @@ class TestJupyterCodeReviewFixes:
             def __init__(self):
                 self.messages = [
                     {
-                        "msg_type": "stream",
-                        "content": {"name": "stdout", "text": "x" * (MAX_OUTPUT_BYTES + 1)},
+                        "msg_type"     : "stream",
+                        "content"      : {"name": "stdout", "text": "x" * (MAX_OUTPUT_BYTES + 1)},
                         "parent_header": {"msg_id": "msg-1"},
                     },
                     {
-                        "msg_type": "status",
-                        "content": {"execution_state": "idle"},
+                        "msg_type"     : "status",
+                        "content"      : {"execution_state": "idle"},
                         "parent_header": {"msg_id": "msg-1"},
                     },
                 ]
@@ -473,13 +469,13 @@ class TestJupyterCodeReviewFixes:
         )
         messages = [
             {
-                "msg_type": "error",
-                "content": {"traceback": ["secret" * MAX_OUTPUT_BYTES]},
+                "msg_type"     : "error",
+                "content"      : {"traceback": ["secret" * MAX_OUTPUT_BYTES]},
                 "parent_header": {"msg_id": "msg-1"},
             },
             {
-                "msg_type": "status",
-                "content": {"execution_state": "idle"},
+                "msg_type"     : "status",
+                "content"      : {"execution_state": "idle"},
                 "parent_header": {"msg_id": "msg-1"},
             },
         ]
@@ -528,15 +524,18 @@ class TestJupyterCodeReviewFixes:
         assert len(result.images) == 2
         assert "图片输出超过" in result.error
 
-    def test_image_decode_rejects_size_and_pixel_bombs(self, tmp_path):
-        from plugins.jupyter.jupyter_config import MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS
+    def test_image_decode_rejects_size_and_pixel_bombs(self, tmp_path, monkeypatch):
+        from plugins.jupyter.jupyter_config import MAX_IMAGE_BYTES
         from plugins.jupyter.jupyter_manager import JupyterKernelManager
 
         manager   = JupyterKernelManager(tmp_path / "jupyter")
         oversized = "A" * ((((MAX_IMAGE_BYTES + 2) // 3) * 4) + 4)
         assert manager._decode_image(oversized) is None
 
-        encoded = base64.b64encode(_valid_png(MAX_IMAGE_PIXELS + 1, 1)).decode("ascii")
+        png     = _valid_png(3, 2)
+        encoded = base64.b64encode(png).decode("ascii")
+        assert manager._decode_image(encoded) == png
+        monkeypatch.setattr("plugins.jupyter.jupyter_manager.MAX_IMAGE_PIXELS", 4)
         assert manager._decode_image(encoded) is None
 
     def test_valid_image_decode_is_in_memory_only(self, tmp_path):

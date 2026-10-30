@@ -13,22 +13,22 @@ from plugins.xiaoai import catalog, client, home, main, operations, planner, wea
 
 def prop(iid, name, fmt="uint8", access=None, **kwargs):
     return {
-        "iid": iid,
-        "type": f"urn:miot-spec-v2:property:{name}:0000:test:1",
+        "iid"        : iid,
+        "type"       : f"urn:miot-spec-v2:property:{name}:0000:test:1",
         "description": name,
-        "format": fmt,
-        "access": access if access is not None else ["read", "write"],
+        "format"     : fmt,
+        "access"     : access if access is not None else ["read", "write"],
         **kwargs,
     }
 
 
 def action(iid, name, inputs=None):
     return {
-        "iid": iid,
-        "type": f"urn:miot-spec-v2:action:{name}:0000:test:1",
+        "iid"        : iid,
+        "type"       : f"urn:miot-spec-v2:action:{name}:0000:test:1",
         "description": name,
-        "in": inputs or [],
-        "out": [],
+        "in"         : inputs or [],
+        "out"        : [],
     }
 
 
@@ -37,16 +37,16 @@ def env(tmp_path, monkeypatch):
     spec = {
         "services": [
             {
-                "iid": 2,
-                "type": "urn:miot-spec-v2:service:light:0000:test:1",
+                "iid"        : 2,
+                "type"       : "urn:miot-spec-v2:service:light:0000:test:1",
                 "description": "light",
-                "properties": [
+                "properties" : [
                     prop(1, "on", "bool"),
                     prop(2, "brightness", **{"value-range": [1, 100, 1]}),
                     prop(8, "feeding-measure", access=[], **{"value-range": [0, 150, 1]}),
                 ],
                 "actions": [action(1, "pet-food-out", [8]), action(2, "turn-off")],
-                "events": [{"iid": 1, "description": "finished", "arguments": [8]}],
+                "events" : [{"iid": 1, "description": "finished", "arguments": [8]}],
             }
         ]
     }
@@ -54,12 +54,14 @@ def env(tmp_path, monkeypatch):
     device = {"did": "123", "name": "台灯", "model": model, "online": True, "room": ""}
     cat    = {
         "devices": {"d1": device},
-        "specs": {model: {"capabilities": catalog.normalize_spec(spec)}},
+        "specs"  : {model: {"capabilities": catalog.normalize_spec(spec)}},
     }
     io = SimpleNamespace(
         miot_set_props=AsyncMock(return_value=[0]),
         miot_action=AsyncMock(return_value=0),
-        miot_request=AsyncMock(return_value=[{"siid": 2, "piid": 2, "value": 100, "code": 0}]),
+        miot_request=AsyncMock(
+            return_value=[{"did": "123", "siid": 2, "piid": 2, "value": 100, "code": 0}]
+        ),
         device_list=AsyncMock(
             return_value=[{"did": "123", "name": "台灯", "model": model, "isOnline": True}]
         ),
@@ -268,8 +270,8 @@ async def test_ir_swing_forces_silent_and_reports_unverified(env):
     cat["devices"]["d1"]["model"]          = "miir.aircondition.ir02"
     cat["specs"]["miir.aircondition.ir02"] = {"capabilities": {}}
     profile                                = {
-        "did": "speaker",
-        "silent": False,
+        "did"      : "speaker",
+        "silent"   : False,
         "directive": {"siid": 5, "aiid": 5, "inputs": ["text", "silent"]},
     }
     output = await operations.execute_plan(
@@ -385,11 +387,11 @@ async def test_weather_location_and_forecast(env, monkeypatch):
             },
             {
                 "timezone": "Asia/Shanghai",
-                "daily": {
-                    "time": ["2026-10-26"],
-                    "weather_code": [0],
-                    "temperature_2m_min": [10],
-                    "temperature_2m_max": [20],
+                "daily"   : {
+                    "time"                         : ["2026-10-26"],
+                    "weather_code"                 : [0],
+                    "temperature_2m_min"           : [10],
+                    "temperature_2m_max"           : [20],
                     "precipitation_probability_max": [0],
                 },
             },
@@ -465,7 +467,7 @@ def test_complete_inventory_and_capabilities_preserve_all_entries(env):
 )
 def test_enum_labels_are_human_readable_without_guessing(name, comment, description, expected):
     schema = {
-        "name": name,
+        "name"  : name,
         "values": [{"value": 0, "comment": comment, "description": description}],
     }
     assert expected in catalog.value_hint(schema)
@@ -626,13 +628,13 @@ def test_old_feeder_cache_is_adapted_without_mutating_source(env):
         "type": "urn:miot-spec-v2:property:target-feeding-measure:0000:xiaomi-pi2001:1"
     }
     caps["a5.1"] = {
-        "kind": "action",
-        "type": "urn:xiaomi-spec:action:feeder-schedule:0000:test:1",
+        "kind"     : "action",
+        "type"     : "urn:xiaomi-spec:action:feeder-schedule:0000:test:1",
         "supported": True,
-        "inputs": [
+        "inputs"   : [
             {
-                "name": "schedule",
-                "type": "urn:xiaomi-spec:property:feeder-schedule:0000:test:1",
+                "name"  : "schedule",
+                "type"  : "urn:xiaomi-spec:property:feeder-schedule:0000:test:1",
                 "format": "string",
             }
         ],

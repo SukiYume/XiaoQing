@@ -38,8 +38,8 @@ _SKIPPED_FOR_NOTES  = (
 
 @dataclass(frozen=True, slots=True)
 class ToolCall:
-    call_id: str
-    name: str
+    call_id  : str
+    name     : str
     arguments: Any
 
 
@@ -71,7 +71,7 @@ def parse_tool_calls(message: dict[str, Any]) -> list[ToolCall]:
     if not isinstance(raw_calls, list):
         return []
     calls: list[ToolCall] = []
-    used: set[str]        = set()
+    used : set[str]       = set()
     for index, raw in enumerate(raw_calls):
         if not isinstance(raw, dict) or not isinstance(raw.get("function"), dict):
             continue
@@ -92,8 +92,8 @@ def _assistant_message(message: dict[str, Any], calls: list[ToolCall]) -> dict[s
     if calls:
         entry["tool_calls"] = [
             {
-                "id": call.call_id,
-                "type": "function",
+                "id"      : call.call_id,
+                "type"    : "function",
                 "function": {
                     "name": call.name,
                     "arguments": (
@@ -208,7 +208,6 @@ async def _complete(
         messages,
         tools       = [tool.schema() for tool in tools.values()] if tools else None,
         tool_choice = "auto" if tools else None,
-        temperature = 0.2,
     )
     return response_message(result.response)
 
@@ -350,10 +349,10 @@ async def run_agent_loop(
                 messages,
                 transcript,
                 {
-                    "role": "tool",
+                    "role"        : "tool",
                     "tool_call_id": call.call_id,
-                    "name": call.name,
-                    "content": content,
+                    "name"        : call.name,
+                    "content"     : content,
                 },
             )
         if final is not None:

@@ -145,9 +145,9 @@ async def refresh_service(session: Any, token: dict[str, Any], sid: str) -> dict
         ACCOUNT + "/pass/serviceLogin",
         params  = {"sid": sid, "_json": "true"},
         cookies = {
-            "userId": str(token["userId"]),
-            "passToken": token["passToken"],
-            "deviceId": token["deviceId"],
+            "userId"    : str(token["userId"]),
+            "passToken" : token["passToken"],
+            "deviceId"  : token["deviceId"],
             "sdkVersion": "3.9",
         },
     )
@@ -229,8 +229,8 @@ class QRFlow:
                 await asyncio.sleep(1)
                 continue
             token = {
-                "deviceId": self.device_id,
-                "userId": str(result["userId"]),
+                "deviceId" : self.device_id,
+                "userId"   : str(result["userId"]),
                 "passToken": result["passToken"],
             }
             token["xiaomiio"]      = await exchange(self.session, result, "xiaomiio")
@@ -271,8 +271,8 @@ class TokenManager:
         write_json(
             self.directory / "auth-state.json",
             {
-                "identity": identity,
-                "event_id": secrets.token_hex(16),
+                "identity"   : identity,
+                "event_id"   : secrets.token_hex(16),
                 "needs_login": True,
                 "notified_at": 0,
             },

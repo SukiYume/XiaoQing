@@ -136,9 +136,9 @@ def _business_date(context: PluginContextProtocol) -> str:
 
 @dataclass(slots=True)
 class _QuotaReservation:
-    path: Path
+    path  : Path
     window: str
-    actor: str
+    actor : str
     active: bool = True
 
     def commit(self) -> None:
@@ -403,7 +403,7 @@ async def _cancel_chat(
                 request_kwargs = {
                     **request_kwargs,
                     "timeout": _CANCEL_TIMEOUT_SECONDS,
-                    "params": {"conversation_id": conversation_id, "chat_id": chat_id},
+                    "params" : {"conversation_id": conversation_id, "chat_id": chat_id},
                 },
             ),
             timeout=_CANCEL_TIMEOUT_SECONDS,
@@ -508,16 +508,16 @@ async def call_coze_api(
 
     headers = {
         "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
+        "Content-Type" : "application/json",
+        "Accept"       : "application/json",
     }
     payload = {
-        "bot_id": bot_id,
+        "bot_id" : bot_id,
         "user_id": user_id,
-        "stream": False,
+        "stream" : False,
         # Coze v3 的非流式轮询和消息列表接口要求保存本轮历史；不传
         # conversation_id，因此各条 /chat 命令仍是彼此隔离的单轮对话。
-        "auto_save_history": True,
+        "auto_save_history"  : True,
         "additional_messages": [
             {"role": "user", "content": query, "content_type": "text"},
         ],
@@ -586,6 +586,19 @@ async def call_coze_api(
                 request_kwargs  = base_request_kwargs,
             )
         return None
+    except asyncio.CancelledError:
+        # 外层超时、重载或停机取消本地等待：远端已经创建的任务也要有界清理，再继续传播取消。
+        if state is not None and state[2] in _PENDING_CHAT_STATUSES:
+            await asyncio.shield(
+                _cancel_chat(
+                    context,
+                    chat_id         = state[0],
+                    conversation_id = state[1],
+                    headers         = headers,
+                    request_kwargs  = base_request_kwargs,
+                )
+            )
+        raise
     except Exception as exc:
         public_error_message(
             context,

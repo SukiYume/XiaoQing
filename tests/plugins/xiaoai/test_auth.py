@@ -22,11 +22,11 @@ POLL     = "https://ak.lp.account.xiaomi.com/lp/s?ticket=private"
 
 def credentials():
     return {
-        "userId": "42",
-        "passToken": "private-pass",
-        "deviceId": "device",
-        "xiaomiio": ["a2V5", "old-io"],
-        "micoapi": ["a2V5", "old-mina"],
+        "userId"       : "42",
+        "passToken"    : "private-pass",
+        "deviceId"     : "device",
+        "xiaomiio"     : ["a2V5", "old-io"],
+        "micoapi"      : ["a2V5", "old-mina"],
         "_refreshed_at": {"xiaomiio": 0, "micoapi": 0},
     }
 
@@ -34,12 +34,12 @@ def credentials():
 def login_response(sid="xiaomiio"):
     host = "sts.api.io.mi.com" if sid == "xiaomiio" else "api2.mina.mi.com"
     return {
-        "code": 0,
-        "userId": "42",
+        "code"     : 0,
+        "userId"   : "42",
         "passToken": "rotated-pass",
         "ssecurity": "a2V5",
-        "nonce": "1",
-        "location": f"https://{host}/sts?ticket=private",
+        "nonce"    : "1",
+        "location" : f"https://{host}/sts?ticket=private",
     }
 
 
@@ -56,10 +56,10 @@ async def test_qr_protocol_isolated_cookies_and_both_services():
             body="&&&START&&&"
             + json.dumps(
                 {
-                    "code": 0,
+                    "code"    : 0,
                     "loginUrl": "https://ak.account.xiaomi.com/longPolling/login?ticket=qr",
-                    "lp": POLL,
-                    "timeout": 300,
+                    "lp"      : POLL,
+                    "timeout" : 300,
                 }
             ),
         )

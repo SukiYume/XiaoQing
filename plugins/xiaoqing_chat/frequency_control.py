@@ -22,31 +22,31 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class ReplyGateDecision:
-    should_reply: bool
-    reason: str
-    probability: float | None       = None
-    roll: float | None              = None
-    seconds_since_last_reply: float = 0.0
-    min_interval_seconds: float     = 0.0
-    replies_last_minute: int        = 0
-    max_replies_per_minute: int     = 0
-    cooldown_left_seconds: float    = 0.0
-    no_reply_streak: int            = 0
-    heartflow_score: float | None   = None
-    active_topic: bool              = False
-    participation_cue: str          = ""
+    should_reply            : bool
+    reason                  : str
+    probability             : float | None = None
+    roll                    : float | None = None
+    seconds_since_last_reply: float        = 0.0
+    min_interval_seconds    : float        = 0.0
+    replies_last_minute     : int          = 0
+    max_replies_per_minute  : int          = 0
+    cooldown_left_seconds   : float        = 0.0
+    no_reply_streak         : int          = 0
+    heartflow_score         : float | None = None
+    active_topic            : bool         = False
+    participation_cue       : str          = ""
 
     def as_log_fields(self) -> dict[str, object]:
         fields: dict[str, object] = {
-            "reason": self.reason,
+            "reason"                  : self.reason,
             "seconds_since_last_reply": round(self.seconds_since_last_reply, 3),
-            "min_interval_seconds": round(self.min_interval_seconds, 3),
-            "replies_last_minute": self.replies_last_minute,
-            "max_replies_per_minute": self.max_replies_per_minute,
-            "cooldown_left_seconds": round(self.cooldown_left_seconds, 3),
-            "no_reply_streak": self.no_reply_streak,
-            "active_topic": self.active_topic,
-            "participation_cue": self.participation_cue,
+            "min_interval_seconds"    : round(self.min_interval_seconds, 3),
+            "replies_last_minute"     : self.replies_last_minute,
+            "max_replies_per_minute"  : self.max_replies_per_minute,
+            "cooldown_left_seconds"   : round(self.cooldown_left_seconds, 3),
+            "no_reply_streak"         : self.no_reply_streak,
+            "active_topic"            : self.active_topic,
+            "participation_cue"       : self.participation_cue,
         }
         if self.probability is not None:
             fields["probability"] = round(self.probability, 4)

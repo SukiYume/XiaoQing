@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import pytest
+
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
 from plugins.xiaoqing_chat.persona import PersonaCard
+from plugins.xiaoqing_chat.reply_payload import build_reply_payload_from_parts
 from tests.helpers.xiaoqing_chat_test_support import (
-    Any,
-    AsyncMock,
-    MagicMock,
-    Mock,
-    SimpleNamespace,
     _complete_test_runtime_config,
-    cast,
-    patch,
-    pytest,
 )
 
 mock_context       = _fixture_support.mock_context
@@ -121,9 +120,6 @@ async def test_generate_reply_prefers_planner_goal_over_review_override_goal_sto
         )
         stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_max_context", return_value=10)
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_temperature", return_value=0.7)
         )
         stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_plan.persona_reply_style", return_value="")
@@ -306,9 +302,6 @@ async def test_generate_reply_rebuilds_memory_context_after_request_too_large(mo
             patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_max_context", return_value=4)
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_temperature", return_value=0.7)
-        )
-        stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_plan.persona_reply_style", return_value="")
         )
         stack.enter_context(
@@ -464,9 +457,6 @@ async def test_generate_reply_prefers_plan_reasoning_goal_when_action_reasoning_
             patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_max_context", return_value=10)
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_temperature", return_value=0.7)
-        )
-        stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_plan.persona_reply_style", return_value="")
         )
         stack.enter_context(
@@ -620,9 +610,6 @@ async def test_generate_reply_draft_exposes_canonical_text_parts(mock_context):
             patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_max_context", return_value=10)
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_temperature", return_value=0.7)
-        )
-        stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_plan.persona_reply_style", return_value="")
         )
         stack.enter_context(
@@ -655,8 +642,8 @@ async def test_generate_reply_draft_exposes_canonical_text_parts(mock_context):
         )
 
     assert draft is not None
-    assert draft.text == "第一句。\n第二句"
+    # 分段之间以空行分隔，最终发送按空行拆成与分段结果一致的两个气泡。
+    assert draft.text == "第一句。\n\n第二句"
     assert draft.text_parts == ("第一句。", "第二句")
-    assert [part["kind"] for part in draft.parts] == ["text", "text"]
-    assert draft.parts[0]["text"] == "第一句。\n"
-    assert draft.parts[1]["text"] == "第二句"
+    payload = build_reply_payload_from_parts(draft.parts)
+    assert len(payload.outbound_batches) == 2

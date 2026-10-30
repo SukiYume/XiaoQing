@@ -48,13 +48,6 @@ def get_brain_chat_max_context(runtime: ChatRuntime, is_brain_chat: bool) -> int
     return int(runtime.cfg.max_context_size)
 
 
-def get_brain_chat_temperature(runtime: ChatRuntime, is_brain_chat: bool) -> float:
-    """按当前对话模式返回生成温度。"""
-    if is_brain_chat:
-        return float(runtime.cfg.brain_chat.brain_temperature)
-    return float(runtime.cfg.temperature)
-
-
 def maybe_add_mode_indicator(reply: str, runtime: ChatRuntime) -> str:
     """按配置给非空回复添加深度模式标识。"""
 

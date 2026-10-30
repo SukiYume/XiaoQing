@@ -11,7 +11,7 @@ from .database_actions import AtomicActionRepositoryMixin
 from .database_community import CommunityRepositoryMixin
 from .database_identity import IdentityRepositoryMixin
 from .database_scheduler import SchedulerRepositoryMixin
-from .database_schema import initialize_schema
+from .database_schema import CURRENT_SCHEMA_VERSION, initialize_schema
 from .database_support import (
     _DAILY_COIN_LIMIT,
 )
@@ -71,8 +71,12 @@ class Database(
         self._all_connections: dict[int, tuple[int, sqlite3.Connection]] = {}
         path                                                             = Path(db_path)
         if path.exists() and path.stat().st_size > 0:
-            backup = path.with_suffix(path.suffix + ".pre-migration.bak")
-            if not backup.exists():
+            # 备份与实际 schema 升级绑定：每次从某个旧版本迁移前都保存该版本的快照，
+            # 普通启动（已是当前版本）不做无意义的备份。
+            with closing(sqlite3.connect(path)) as probe:
+                stored_version = int(probe.execute("PRAGMA user_version").fetchone()[0])
+            backup = path.with_suffix(path.suffix + f".pre-migration-v{stored_version}.bak")
+            if stored_version < CURRENT_SCHEMA_VERSION and not backup.exists():
                 # SQLite 在线备份同时读取已提交的 WAL，发布前先完成一致快照。
                 temporary = backup.with_suffix(backup.suffix + f".{uuid.uuid4().hex}.tmp")
                 try:

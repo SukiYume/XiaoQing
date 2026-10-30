@@ -365,8 +365,8 @@ def test_prepared_card_keeps_text_but_drops_untrusted_figure_url() -> None:
     ):
         prepared = earthquake._prepare_mblog(
             {
-                "id": "42",
-                "text": EARTHQUAKE_TEXT,
+                "id"          : "42",
+                "text"        : EARTHQUAKE_TEXT,
                 "original_pic": figure_url,
             }
         )
@@ -687,9 +687,9 @@ async def test_download_uses_pinned_public_fetch_minimal_headers_and_worker(cont
     }
     assert kwargs["allowed_schemes"] == ("https",)
     assert kwargs["headers"] == {
-        "User-Agent": earthquake._WEIBO_USER_AGENT,
-        "Referer": "https://m.weibo.cn/",
-        "Accept": "image/*",
+        "User-Agent"     : earthquake._WEIBO_USER_AGENT,
+        "Referer"        : "https://m.weibo.cn/",
+        "Accept"         : "image/*",
         "Accept-Encoding": "identity",
     }
     assert not {"Authorization", "Cookie"} & kwargs["headers"].keys()

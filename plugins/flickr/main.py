@@ -8,8 +8,10 @@ import hashlib
 import logging
 import re
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date
+from functools import partial
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -59,43 +61,43 @@ _IMAGE_CACHE_LIMITS = FileCacheLimits(
 )
 
 _SORTS = {
-    "relevance": "relevance",
+    "relevance"  : "relevance",
     "interesting": "interestingness-desc",
-    "new": "date-posted-desc",
-    "old": "date-posted-asc",
+    "new"        : "date-posted-desc",
+    "old"        : "date-posted-asc",
 }
 _LICENSE_FILTERS: dict[str, str | None] = {
-    "any": None,
-    "cc": "1,2,3,4,5,6,9,10",
+    "any"          : None,
+    "cc"           : "1,2,3,4,5,6,9,10",
     "public-domain": "7,8,9,10",
 }
 _LICENSES: dict[str, tuple[str, str]] = {
-    "0": ("All Rights Reserved", ""),
-    "1": ("CC BY-NC-SA 2.0", "https://creativecommons.org/licenses/by-nc-sa/2.0/"),
-    "2": ("CC BY-NC 2.0", "https://creativecommons.org/licenses/by-nc/2.0/"),
-    "3": ("CC BY-NC-ND 2.0", "https://creativecommons.org/licenses/by-nc-nd/2.0/"),
-    "4": ("CC BY 2.0", "https://creativecommons.org/licenses/by/2.0/"),
-    "5": ("CC BY-SA 2.0", "https://creativecommons.org/licenses/by-sa/2.0/"),
-    "6": ("CC BY-ND 2.0", "https://creativecommons.org/licenses/by-nd/2.0/"),
-    "7": ("No known copyright restrictions", "https://www.flickr.com/commons/usage/"),
-    "8": ("United States Government Work", "https://www.usa.gov/government-copyright"),
-    "9": ("CC0 1.0", "https://creativecommons.org/publicdomain/zero/1.0/"),
+    "0" : ("All Rights Reserved", ""),
+    "1" : ("CC BY-NC-SA 2.0", "https://creativecommons.org/licenses/by-nc-sa/2.0/"),
+    "2" : ("CC BY-NC 2.0", "https://creativecommons.org/licenses/by-nc/2.0/"),
+    "3" : ("CC BY-NC-ND 2.0", "https://creativecommons.org/licenses/by-nc-nd/2.0/"),
+    "4" : ("CC BY 2.0", "https://creativecommons.org/licenses/by/2.0/"),
+    "5" : ("CC BY-SA 2.0", "https://creativecommons.org/licenses/by-sa/2.0/"),
+    "6" : ("CC BY-ND 2.0", "https://creativecommons.org/licenses/by-nd/2.0/"),
+    "7" : ("No known copyright restrictions", "https://www.flickr.com/commons/usage/"),
+    "8" : ("United States Government Work", "https://www.usa.gov/government-copyright"),
+    "9" : ("CC0 1.0", "https://creativecommons.org/publicdomain/zero/1.0/"),
     "10": ("Public Domain Mark 1.0", "https://creativecommons.org/publicdomain/mark/1.0/"),
 }
 
 _COMMAND_ALIASES = {
-    "搜索": "search",
-    "典藏": "commons",
+    "搜索"  : "search",
+    "典藏"  : "commons",
     "公共典藏": "commons",
-    "作者": "user",
-    "用户": "user",
-    "相册": "album",
-    "更多": "more",
-    "下一张": "more",
-    "详情": "info",
-    "信息": "info",
-    "帮助": "help",
-    "?": "help",
+    "作者"  : "user",
+    "用户"  : "user",
+    "相册"  : "album",
+    "更多"  : "more",
+    "下一张" : "more",
+    "详情"  : "info",
+    "信息"  : "info",
+    "帮助"  : "help",
+    "?"   : "help",
 }
 
 HELP_TEXT = """📷 Flickr 公共摄影
@@ -126,19 +128,24 @@ class FlickrUsageError(ValueError):
 
 @dataclass(slots=True)
 class _BrowseSession:
-    photos: tuple[FlickrPhoto, ...]
+    photos    : tuple[FlickrPhoto, ...]
     next_index: int
     last_index: int
-    summary: str
+    summary   : str
     expires_at: float
+    # 远端分页状态：当前页耗尽后按需请求下一页，完成提示依据远端页数。
+    fetch_page: Callable[[int], Awaitable[FlickrPage]] | None = None
+    page      : int                                           = 1
+    pages     : int                                           = 1
+    total     : int                                           = 0
 
 
 @dataclass(frozen=True, slots=True)
 class _SearchRequest:
-    query: str
-    tags: str
-    sort: str
-    license_ids: str | None
+    query         : str
+    tags          : str
+    sort          : str
+    license_ids   : str | None
     min_taken_date: str | None
     max_taken_date: str | None
 
@@ -472,6 +479,7 @@ async def _open_page(
     summary: str,
     event: dict[str, Any],
     context: PluginContextProtocol,
+    fetch_page: Callable[[int], Awaitable[FlickrPage]] | None = None,
 ) -> Segments:
     if not page.photos:
         return [text("🔍 没有找到可发送的 Flickr 公共照片")]
@@ -491,13 +499,17 @@ async def _open_page(
                 max_bytes = 400,
                 default   = "当前 Flickr 结果",
             ),
-            expires_at=now + SESSION_TTL_SECONDS,
+            expires_at = now + SESSION_TTL_SECONDS,
+            fetch_page = fetch_page,
+            page       = page.page,
+            pages      = page.pages,
+            total      = page.total,
         )
         return await _render_photo(
             page.photos[0],
             context,
             index = 0,
-            total = len(page.photos),
+            total = max(len(page.photos), page.total),
         )
 
 
@@ -517,6 +529,17 @@ async def _more(
         if not isinstance(session, _BrowseSession) or session.expires_at <= now:
             runtime["sessions"].pop(key, None)
             return [text("⏳ 当前没有可继续的 Flickr 结果，请先搜索或浏览精选")]
+        while (
+            session.next_index + count > len(session.photos)
+            and session.fetch_page is not None
+            and session.page < session.pages
+        ):
+            following      = await session.fetch_page(session.page + 1)
+            session.page   = following.page
+            session.pages  = following.pages
+            session.photos = (*session.photos, *following.photos)
+            if not following.photos:
+                break
         if session.next_index >= len(session.photos):
             return [text(f"✅ {session.summary}已经浏览完")]
         end             = min(session.next_index + count, len(session.photos))
@@ -527,7 +550,7 @@ async def _more(
                     session.photos[index],
                     context,
                     index = index,
-                    total = len(session.photos),
+                    total = max(len(session.photos), session.total),
                 )
             )
         session.last_index = end - 1
@@ -569,12 +592,19 @@ async def _dispatch(
             raise FlickrUsageError("用法：/flickr")
         client = FlickrClient(context)
         page   = await client.interesting()
-        return await _open_page(page, summary="今日精选", event=event, context=context)
+        return await _open_page(
+            page,
+            summary = "今日精选",
+            event   = event,
+            context = context,
+            fetch_page=lambda number: client.interesting(page=number),
+        )
 
     if action in {"search", "commons"}:
         request = _parse_search(parsed, token_start=1)
         client = FlickrClient(context)
-        page   = await client.search(
+        search = partial(
+            client.search,
             query          = request.query,
             tags           = request.tags,
             sort           = request.sort,
@@ -583,8 +613,15 @@ async def _dispatch(
             max_taken_date = request.max_taken_date,
             commons_only   = action == "commons",
         )
+        page    = await search()
         summary = "Flickr Commons" if action == "commons" else "Flickr 搜索"
-        return await _open_page(page, summary=summary, event=event, context=context)
+        return await _open_page(
+            page,
+            summary = summary,
+            event   = event,
+            context = context,
+            fetch_page=lambda number: search(page=number),
+        )
 
     if action == "user":
         _require_option_values(parsed, set())
@@ -594,7 +631,13 @@ async def _dispatch(
         client  = FlickrClient(context)
         user_id = await client.resolve_user(reference)
         page    = await client.public_photos(user_id)
-        return await _open_page(page, summary=f"用户 {reference}", event=event, context=context)
+        return await _open_page(
+            page,
+            summary = f"用户 {reference}",
+            event   = event,
+            context = context,
+            fetch_page=lambda number: client.public_photos(user_id, page=number),
+        )
 
     if action == "album":
         _require_option_values(parsed, set())
@@ -602,7 +645,15 @@ async def _dispatch(
         client  = FlickrClient(context)
         user_id = await client.resolve_user(owner_reference)
         page = await client.album_photos(user_id=user_id, album_id=album_id)
-        return await _open_page(page, summary=f"相册 {album_id}", event=event, context=context)
+        return await _open_page(
+            page,
+            summary    = f"相册 {album_id}",
+            event      = event,
+            context    = context,
+            fetch_page = lambda number: client.album_photos(
+                user_id=user_id, album_id=album_id, page=number
+            ),
+        )
 
     if action == "more":
         _require_option_values(parsed, set())

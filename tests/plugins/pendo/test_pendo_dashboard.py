@@ -51,15 +51,15 @@ def test_build_dashboard_overview_uses_month_events_and_mixed_task_buckets(
     )
     db.create_event_collection(
         {
-            "id": "ev4col",
-            "owner_id": owner_id,
-            "kind": "multi_node",
-            "title": "FRB2026会议",
-            "content": "",
-            "category": "学术",
-            "location": "",
+            "id"        : "ev4col",
+            "owner_id"  : owner_id,
+            "kind"      : "multi_node",
+            "title"     : "FRB2026会议",
+            "content"   : "",
+            "category"  : "学术",
+            "location"  : "",
             "start_time": "2026-02-20T00:00:00",
-            "end_time": "2026-04-02T12:00:00",
+            "end_time"  : "2026-04-02T12:00:00",
         }
     )
     for item_id, title, start_time, index in (
@@ -146,10 +146,10 @@ def test_build_dashboard_overview_uses_month_events_and_mixed_task_buckets(
         diary_date = "2026-03-05",
     )
 
-    range_calls: list[tuple[str, str, str]] = []
-    collection_batches: list[list[str]]     = []
-    get_events_for_range                    = db.get_events_for_range
-    get_event_collections_by_ids            = db.get_event_collections_by_ids
+    range_calls       : list[tuple[str, str, str]] = []
+    collection_batches: list[list[str]]            = []
+    get_events_for_range                           = db.get_events_for_range
+    get_event_collections_by_ids                   = db.get_event_collections_by_ids
 
     def track_range(user_id: str, start: str, end: str) -> list[Any]:
         range_calls.append((user_id, start, end))
@@ -176,11 +176,11 @@ def test_build_dashboard_overview_uses_month_events_and_mixed_task_buckets(
     assert range_calls == [(owner_id, "2026-03-01T00:00:00", "2026-04-15T23:59:59")]
     assert collection_batches == [["ev4col"]]
     assert result["summary"] == {
-        "events_month": 3,
-        "tasks_pending": 2,
-        "tasks_done_recent": 1,
+        "events_month"        : 3,
+        "tasks_pending"       : 2,
+        "tasks_done_recent"   : 1,
         "ledger_month_expense": 25.5,
-        "diary_month": 1,
+        "diary_month"         : 1,
     }
     assert len(result["events_month"]) == 3
     assert result["events_month"][0]["title"] == "FRB2026会议"

@@ -22,7 +22,7 @@ from pygments.token import Operator, Text
 
 ROOT            = Path(__file__).resolve().parents[1]
 LINE_LENGTH     = 100
-SOURCE_SUFFIXES = {".py", ".js", ".html", ".css", ".ps1", ".sh", ".vbs"}
+SOURCE_SUFFIXES = {".py", ".js", ".ps1"}
 
 
 def align_assignments(source: str) -> str:
@@ -45,7 +45,37 @@ def align_assignments(source: str) -> str:
     return _align_lines(source, assignments)
 
 
-def _align_lines(source: str, assignments: list[tuple[int, int]]) -> str:
+def align_colons(source: str) -> str:
+    """对齐连续字典项及类型字段声明；切片、控制语句和函数签名保持原样。"""
+    lines = source.splitlines(keepends=True)
+    rows: dict[int, int] = {}
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values, strict=True):
+                if key is not None and key.lineno == key.end_lineno == value.lineno:
+                    prefix = lines[key.lineno - 1].encode("utf-8")[: key.col_offset]
+                    if not prefix.strip():
+                        rows[key.lineno] = len(
+                            lines[key.lineno - 1]
+                            .encode("utf-8")[: key.end_col_offset]
+                            .decode("utf-8")
+                        )
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            rows[node.lineno] = node.target.end_col_offset
+    positions: dict[int, int] = {}
+    for token in tokenize.generate_tokens(io.StringIO(source).readline):
+        row, column = token.start
+        if (
+            token.type == tokenize.OP
+            and token.string == ":"
+            and row in rows
+            and column >= rows[row]
+        ):
+            positions.setdefault(row - 1, column)
+    return _align_lines(source, sorted(positions.items()), separator=": ")
+
+
+def _align_lines(source: str, assignments: list[tuple[int, int]], separator: str = " = ") -> str:
     """各语言共用局部对齐算法；候选位置由各自词法规则提供。"""
     lines = source.splitlines(keepends=True)
     groups: list[list[tuple[int, int]]] = []
@@ -64,7 +94,7 @@ def _align_lines(source: str, assignments: list[tuple[int, int]]) -> str:
         width        = max(len(lines[row][:column].rstrip()) for row, column in group)
         replacements = {
             row: lines[row][:column].rstrip().ljust(width)
-            + " = "
+            + separator
             + lines[row][column + 1 :].lstrip()
             for row, column in group
         }
@@ -130,7 +160,7 @@ def format_source(source: str, path: Path) -> str:
         capture_output = True,
         check          = True,
     )
-    result = align_assignments(process.stdout)
+    result = align_assignments(align_colons(process.stdout))
     if ast.dump(ast.parse(source)) != ast.dump(ast.parse(result)):
         raise ValueError(f"格式化改变了语法树：{path}")
     return result

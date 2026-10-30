@@ -21,7 +21,7 @@ from core.atomic_store import keyed_path_lock
 from .media.markers import emoji_summary_marker, is_generic_media_label, split_visible_text
 from .store_base import LockedDirtyStateMixin, StoreBase
 
-_MEDIA_MARKER_RE            = re.compile(r"\[(?:图片|表情包|QQ表情)：[^\]\n]{0,400}\]")
+_MEDIA_MARKER_RE            = re.compile(r"\[(?:图片|表情包|QQ表情)：[^\]\n]{0,1000}\]")
 MEDIA_PLACEHOLDER_RE        = re.compile(r"\[\[xc_media_(\d+)\]\]")
 _MEDIA_PLACEHOLDER_TEMPLATE = "[[xc_media_{index}]]"
 

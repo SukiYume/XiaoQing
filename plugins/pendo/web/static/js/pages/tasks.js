@@ -2,11 +2,13 @@ import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
 import { showModal, closeModal, showConfirmModal, safeHtml } from '../components/modal.js';
 import { buildFormHTML, getFormData, initFormInteractions } from '../components/form.js';
+import { captureFormDraft, reopenWithDraft } from '../components/form.js';
 import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
 import {
     errorMessage,
     isRecord,
     pad2,
+    isoDate,
     parseDate,
     trimmedTextValue as textValue,
 } from '../utils/format.js';
@@ -18,6 +20,7 @@ import {
     zonedDateTimeToInput,
     zonedInputToUtcIso,
 } from '../utils/timezone.js';
+import { createInstantMemory } from '../utils/timezone.js';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss, subscribeDataChanges } from '../utils/ui.js';
 
 const CSS_ID             = 'pendo-tasks-redesign-styles';
@@ -108,11 +111,6 @@ function startOfDay(value) {
     return day;
 }
 
-function dateKey(value) {
-    const day = parseDate(value);
-    if (!day) return '';
-    return `${day.getFullYear()}-${pad2(day.getMonth() + 1)}-${pad2(day.getDate())}`;
-}
 
 function firstDayOfWeek(value = TODAY()) {
     const day = startOfDay(value) || startOfDay(TODAY());
@@ -140,7 +138,7 @@ function parseIsoDate(value) {
     const text = textValue(value);
     if (!ISO_DATE_RE.test(text)) return null;
     const date = parseDate(text);
-    return date && dateKey(date) === text ? date : null;
+    return date && isoDate(date) === text ? date : null;
 }
 
 function isIsoDate(value) {
@@ -159,7 +157,7 @@ function taskPlanDateKey(task) {
 }
 
 function taskPrimaryStatus(task) {
-    return TASK_STATUSES.has(task?.status) ? task.status : 'open';
+    return task.status;
 }
 
 function taskStatusBucket(task) {
@@ -172,7 +170,7 @@ function formatPlanDate(value) {
     return `${date.getMonth() + 1}/${date.getDate()}`;
 }
 
-function describePlanDate(value, todayKey = dateKey(TODAY())) {
+function describePlanDate(value, todayKey = isoDate(TODAY())) {
     if (!value) return '未安排日期';
     if (value === todayKey) return `今天 · ${formatPlanDate(value)}`;
     if (value < todayKey) return `已滞后 · ${formatPlanDate(value)}`;
@@ -188,12 +186,12 @@ function normalizePlanRange(start, end) {
 
 function defaultCustomPlanRange() {
     return {
-        start: dateKey(firstDayOfMonth(TODAY())),
-        end: dateKey(lastDayOfMonth(TODAY())),
+        start: isoDate(firstDayOfMonth(TODAY())),
+        end: isoDate(lastDayOfMonth(TODAY())),
     };
 }
 
-function planDateMatches(task, filterValue, todayKey = dateKey(TODAY()), customStart = '', customEnd = '') {
+function planDateMatches(task, filterValue, todayKey = isoDate(TODAY()), customStart = '', customEnd = '') {
     if (!filterValue) return true;
     if (!PLAN_FILTER_VALUES.has(filterValue)) return false;
 
@@ -202,11 +200,11 @@ function planDateMatches(task, filterValue, todayKey = dateKey(TODAY()), customS
     if (!planKey) return false;
 
     const anchor     = parseIsoDate(todayKey) || startOfDay(TODAY());
-    const anchorKey  = dateKey(anchor);
-    const weekStart  = dateKey(firstDayOfWeek(anchor));
-    const weekEnd    = dateKey(lastDayOfWeek(anchor));
-    const monthStart = dateKey(firstDayOfMonth(anchor));
-    const monthEnd   = dateKey(lastDayOfMonth(anchor));
+    const anchorKey  = isoDate(anchor);
+    const weekStart  = isoDate(firstDayOfWeek(anchor));
+    const weekEnd    = isoDate(lastDayOfWeek(anchor));
+    const monthStart = isoDate(firstDayOfMonth(anchor));
+    const monthEnd   = isoDate(lastDayOfMonth(anchor));
     if (filterValue === 'today') return planKey === anchorKey;
     if (filterValue === 'week') return planKey >= weekStart && planKey <= weekEnd;
     if (filterValue === 'month') return planKey >= monthStart && planKey <= monthEnd;
@@ -231,17 +229,19 @@ function defaultTaskPlanDateValue(now = new Date()) {
     if ((parts?.hour ?? 0) >= 20) {
         target.setDate(target.getDate() + 1);
     }
-    return dateKey(target);
+    return isoDate(target);
 }
 
-function normalizeTaskPayload(formData, userTimeZone) {
+function normalizeTaskPayload(formData, userTimeZone, instants = null) {
     const source   = isRecord(formData) ? formData : {};
     const priority = Number(source.priority);
     const status   = textValue(source.status);
     const planDate = textValue(source.plan_date);
     if (planDate && !isIsoDate(planDate)) throw new RangeError('请输入有效的计划日期，格式为 YYYY-MM-DD');
     const deadline           = textValue(source.deadline_at);
-    const normalizedDeadline = deadline ? zonedInputToUtcIso(deadline, userTimeZone) : '';
+    const normalizedDeadline = deadline
+        ? (instants ? instants.resolve(deadline, userTimeZone) : zonedInputToUtcIso(deadline, userTimeZone))
+        : '';
     if (deadline && !normalizedDeadline) throw new RangeError('请输入有效的截止时间');
 
     return {
@@ -313,28 +313,26 @@ function isOverdue(task, today = startOfDay(TODAY())) {
 }
 
 function taskSortKey(task) {
-    const rawPriority = Number(task?.priority);
-    const priority = Number.isInteger(rawPriority) && rawPriority >= 1 && rawPriority <= 5 ? rawPriority : 99;
-    const plan = taskPlanDateKey(task) || '9999-12-31';
+    const plan     = taskPlanDateKey(task) || '9999-12-31';
     const deadline = textValue(task?.deadline_at) || '9999-12-31T99:99:99';
-    return [priority, plan, deadline, textValue(task?.created_at)];
+    return [task.priority, plan, deadline, task.created_at];
 }
 
 function sortTasks(tasks) {
-    const source = Array.isArray(tasks) ? tasks.filter(isRecord) : [];
-    return [...source].sort((a, b) => {
-        const ak = taskSortKey(a);
-        const bk = taskSortKey(b);
-        for (let i = 0; i < ak.length; i += 1) {
-            if (ak[i] < bk[i]) return -1;
-            if (ak[i] > bk[i]) return 1;
+    const source = tasks;
+    const keyed  = source.map((task) => ({ task, key: taskSortKey(task) }));
+    keyed.sort((a, b) => {
+        for (let i = 0; i < a.key.length; i += 1) {
+            if (a.key[i] < b.key[i]) return -1;
+            if (a.key[i] > b.key[i]) return 1;
         }
         return 0;
     });
+    return keyed.map(({ task }) => task);
 }
 
 function sortDone(tasks) {
-    const source = Array.isArray(tasks) ? tasks.filter(isRecord) : [];
+    const source = tasks;
     return [...source].sort((a, b) => {
         const at = textValue(a.completed_at) || textValue(a.cancelled_at) || textValue(a.updated_at);
         const bt = textValue(b.completed_at) || textValue(b.cancelled_at) || textValue(b.updated_at);
@@ -345,7 +343,7 @@ function sortDone(tasks) {
 function filteredTasks() {
     const tasks         = Array.isArray(_overview?.all_tasks) ? _overview.all_tasks : [];
     const keyword       = textValue(_filters.search).toLowerCase();
-    const todayKey      = dateKey(TODAY());
+    const todayKey      = isoDate(TODAY());
     const usePlanFilter = Boolean(_filters.plan);
     return tasks.filter((task) => {
         if (usePlanFilter) {
@@ -372,12 +370,12 @@ function filteredTasks() {
 
 // 筛选后在客户端重新分桶，保证列表、看板和概览数字使用同一份任务集合。
 function deriveDisplayModel(tasks) {
-    const source   = Array.isArray(tasks) ? tasks.filter(isRecord) : [];
+    const source   = tasks;
     const today    = startOfDay(TODAY());
-    const todayKey = dateKey(today);
+    const todayKey = isoDate(today);
     const next7End = new Date(today);
     next7End.setDate(next7End.getDate() + 7);
-    const next7EndKey  = dateKey(next7End);
+    const next7EndKey  = isoDate(next7End);
     const active       = source.filter((task) => taskStatusBucket(task) === 'open');
     const done         = source.filter((task) => taskPrimaryStatus(task) === 'done');
     const cancelled    = source.filter((task) => taskPrimaryStatus(task) === 'cancelled');
@@ -414,7 +412,7 @@ function deriveDisplayModel(tasks) {
     const completionDays = Array.from({ length: 7 }, (_, index) => {
         const day = new Date(today);
         day.setDate(day.getDate() - (6 - index));
-        const key = dateKey(day);
+        const key = isoDate(day);
         const count = done.filter((task) => zonedDateKey(task.completed_at || task.updated_at) === key).length;
         return { date: key, label: `${day.getMonth() + 1}/${day.getDate()}`, count };
     });
@@ -720,7 +718,7 @@ function ensureStyles() {
 }
 
 async function fetchOverview() {
-    const res = await api.get('/stats/tasks/overview', { today: dateKey(TODAY()) });
+    const res = await api.get('/stats/tasks/overview', { today: isoDate(TODAY()) });
     return normalizeOverview(res?.data);
 }
 
@@ -1111,9 +1109,10 @@ export async function openTaskModal(existing = null) {
         return;
     }
     ensureStyles();
-    const task = normalizeTask(existing);
-    const isEdit = Boolean(task);
-    const deadlineValue = task?.deadline_at ? zonedDateTimeToInput(task.deadline_at, userTimeZone) : '';
+    const task          = normalizeTask(existing);
+    const isEdit        = Boolean(task);
+    const instants      = createInstantMemory();
+    const deadlineValue = task?.deadline_at ? instants.display(task.deadline_at, userTimeZone) : '';
     if (task?.deadline_at && !deadlineValue) {
         showToast('截止时间格式无效，已阻止编辑以免覆盖原值', 'error');
         return;
@@ -1151,6 +1150,8 @@ export async function openTaskModal(existing = null) {
         content.querySelector('#task-delete')?.addEventListener('click', async () => {
             if (submitting) return;
             submitting = true;
+            const draft  = captureFormDraft(content.querySelector('#task-form'));
+            const reopen = () => reopenWithDraft(() => openTaskModal(task), draft, '#task-form');
             closeModal(content);
             const confirmed = await showConfirmModal({
                 title: '删除任务',
@@ -1160,7 +1161,7 @@ export async function openTaskModal(existing = null) {
                 tone: 'danger',
             });
             if (!confirmed) {
-                openTaskModal(task);
+                await reopen();
                 return;
             }
             try {
@@ -1169,6 +1170,7 @@ export async function openTaskModal(existing = null) {
                 emitTaskChanged();
             } catch (error) {
                 showToast(`删除失败：${errorMessage(error)}`, 'error');
+                await reopen();
             } finally {
                 submitting = false;
             }
@@ -1181,7 +1183,7 @@ export async function openTaskModal(existing = null) {
         const form = content.querySelector('#task-form');
         let payload;
         try {
-            payload = normalizeTaskPayload(getFormData(form), userTimeZone);
+            payload = normalizeTaskPayload(getFormData(form), userTimeZone, instants);
         } catch (error) {
             showToast(errorMessage(error), 'warning');
             return;

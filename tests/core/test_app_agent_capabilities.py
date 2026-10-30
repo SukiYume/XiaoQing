@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
+
+import pytest
 
 import tests.helpers.app_test_support as _fixture_support
 from core.models import PluginManifest
@@ -11,13 +14,11 @@ from core.router import CommandSpec, build_command_catalog_node
 from core.session import Session
 from tests.helpers.app_test_support import (
     ModuleType,
-    Path,
     PluginDefinition,
     PluginServiceDefinition,
     XiaoQingApp,
     _plugin_context_for,
     _register_test_loaded_plugin,
-    pytest,
 )
 
 temp_app_root = _fixture_support.temp_app_root
@@ -281,13 +282,13 @@ def _register_command(
     root = build_command_catalog_node(
         plugin,
         {
-            "name": trigger,
-            "triggers": [trigger],
-            "help": "测试命令",
-            "usage": f"/{trigger} [参数]",
-            "contexts": list(contexts),
-            "permission": permission,
-            "examples": [f"/{trigger}"],
+            "name"            : trigger,
+            "triggers"        : [trigger],
+            "help"            : "测试命令",
+            "usage"           : f"/{trigger} [参数]",
+            "contexts"        : list(contexts),
+            "permission"      : permission,
+            "examples"        : [f"/{trigger}"],
             "invalid_examples": [f"/{trigger} bad"],
         },
         root=True,
@@ -641,9 +642,9 @@ def test_agent_manifest_contracts_are_closed_over_the_agent_plugins() -> None:
             uses_services = ["codex.agent_task", "qingssh.agent_command"],
             services      = [
                 {
-                    "name": "agent.handle_turn",
+                    "name"    : "agent.handle_turn",
                     "callback": "handle_turn",
-                    "callers": ["xiaoqing_chat"],
+                    "callers" : ["xiaoqing_chat"],
                 }
             ],
         )
@@ -657,9 +658,9 @@ def test_agent_manifest_contracts_are_closed_over_the_agent_plugins() -> None:
             "shell",
             services=[
                 {
-                    "name": "agent.handle_turn",
+                    "name"    : "agent.handle_turn",
                     "callback": "handle_turn",
-                    "callers": ["xiaoqing_chat"],
+                    "callers" : ["xiaoqing_chat"],
                 }
             ],
         ),

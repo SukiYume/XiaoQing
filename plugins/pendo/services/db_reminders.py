@@ -460,7 +460,8 @@ class ReminderRepositoryMixin:
                 """,
                 params,
             )
-            row_ids = [r["id"] for r in cursor.fetchall()]
+            row_ids   = [r["id"] for r in cursor.fetchall()]
+            confirmed = len(row_ids)
 
             if row_ids:
                 placeholders = ",".join(["?" for _ in row_ids])
@@ -473,7 +474,7 @@ class ReminderRepositoryMixin:
                 )
             else:
                 # 无已发送记录可确认（如静默时间未发出），补插一条已确认的记录
-                self._insert_confirm_for_unsent(
+                confirmed = self._insert_confirm_for_unsent(
                     cursor,
                     item_id,
                     owner_id,
@@ -483,7 +484,8 @@ class ReminderRepositoryMixin:
                     allow_future=allow_future,
                 )
 
-        return {"status": "success", "message": f"已记录: {user_action}"}
+        # confirmed 是本次实际新确认的数量；已经确认过的提醒不再计入。
+        return {"status": "success", "message": f"已记录: {user_action}", "confirmed": confirmed}
 
     def set_future_reminder_confirmation(
         self,
@@ -595,7 +597,7 @@ class ReminderRepositoryMixin:
             return None
         return {
             "outcome": "updated",
-            "time": str(updated["remind_time"]),
+            "time"   : str(updated["remind_time"]),
             "status": (
                 "confirmed"
                 if updated["confirmed_at"]
@@ -603,7 +605,7 @@ class ReminderRepositoryMixin:
                 if updated["sent_at"]
                 else "pending"
             ),
-            "sent_at": updated["sent_at"],
+            "sent_at"     : updated["sent_at"],
             "confirmed_at": updated["confirmed_at"],
             "repeat_count": int(updated["repeat_count"] or 0),
         }
@@ -618,8 +620,8 @@ class ReminderRepositoryMixin:
         user_action: str,
         *,
         allow_future: bool = False,
-    ) -> None:
-        """为未发送但用户手动确认的提醒补插一条记录"""
+    ) -> int:
+        """为未发送但用户手动确认的提醒补插一条记录，返回实际确认的行数。"""
         item_where             = ["id = ?", "deleted = 0"]
         item_params: list[Any] = [item_id]
         if owner_id is not None:
@@ -632,13 +634,13 @@ class ReminderRepositoryMixin:
         )
         row = cursor.fetchone()
         if not row or not row["remind_times"]:
-            return
+            return 0
         try:
             remind_times = json.loads(row["remind_times"])
         except (json.JSONDecodeError, TypeError, ValueError):
-            return
+            return 0
         if not isinstance(remind_times, list):
-            return
+            return 0
 
         user_id       = str(row["owner_id"])
         user_timezone = TimezoneHelper.get_user_timezone(user_id, self)
@@ -657,7 +659,7 @@ class ReminderRepositoryMixin:
             timezone_info  = timezone_info,
         )
         if target_time is None:
-            return
+            return 0
         target_time = normalize_datetime_for_storage(
             target_time,
             "remind_time",
@@ -678,9 +680,11 @@ class ReminderRepositoryMixin:
                 claim_token = NULL,
                 claim_expires_at = NULL,
                 next_attempt_at = NULL
+            WHERE reminder_logs.confirmed_at IS NULL
             """,
             (item_id, target_time, now, user_action),
         )
+        return max(0, cursor.rowcount)
 
     @staticmethod
     def _latest_confirmable_time(

@@ -142,7 +142,7 @@ def _build_cadence(
     """按指定粒度补齐范围内的空桶并汇总篇数和字数。"""
 
     resolved = _resolve_cadence_granularity(start, end, cadence_granularity)
-    buckets: dict[str, dict[str, Any]] = {}
+    buckets     : dict[str, dict[str, Any]] = {}
     ordered_keys: list[str] = []
 
     for offset in range((end - start).days + 1):
@@ -169,10 +169,10 @@ def _build_cadence(
         if bucket_key not in buckets:
             buckets[bucket_key] = {
                 "bucket": bucket_key,
-                "date": date_key,
-                "label": label,
-                "count": 0,
-                "words": 0,
+                "date"  : date_key,
+                "label" : label,
+                "count" : 0,
+                "words" : 0,
             }
             ordered_keys.append(bucket_key)
         buckets[bucket_key]["count"] += day_counts.get(date_key, 0)
@@ -216,11 +216,11 @@ def build_diary_overview(
     )
     user_timezone = TimezoneHelper.get_user_timezone(owner_id, db)
 
-    day_counts: dict[str, int]      = {}
-    day_words: dict[str, int]       = {}
-    mood_counts: dict[str, int]     = {}
+    day_counts     : dict[str, int] = {}
+    day_words      : dict[str, int] = {}
+    mood_counts    : dict[str, int] = {}
     template_counts: dict[str, int] = {}
-    period_days: set[date]          = set()
+    period_days    : set[date]      = set()
     total_words                     = 0
 
     for item in window_items:
@@ -260,7 +260,7 @@ def build_diary_overview(
 
     mood_breakdown = [
         {
-            "mood": mood,
+            "mood" : mood,
             "count": count,
             "share": count / len(window_items) if window_items else 0,
         }
@@ -274,20 +274,20 @@ def build_diary_overview(
     ]
     recent_entries = [
         {
-            "id": item.id,
-            "display_id": public_id(item.id),
-            "title": item.title,
-            "diary_date": item.diary_date,
-            "entry_time": item.entry_time,
-            "created_at": item.created_at,
-            "updated_at": item.updated_at,
-            "entry_label": _entry_label(item, user_timezone),
-            "mood": item.mood,
-            "mood_score": item.mood_score,
-            "weather": item.weather,
-            "is_favorite": item.is_favorite,
+            "id"             : item.id,
+            "display_id"     : public_id(item.id),
+            "title"          : item.title,
+            "diary_date"     : item.diary_date,
+            "entry_time"     : item.entry_time,
+            "created_at"     : item.created_at,
+            "updated_at"     : item.updated_at,
+            "entry_label"    : _entry_label(item, user_timezone),
+            "mood"           : item.mood,
+            "mood_score"     : item.mood_score,
+            "weather"        : item.weather,
+            "is_favorite"    : item.is_favorite,
             "content_preview": item.content.strip()[:80],
-            "word_count": len(item.content.strip()),
+            "word_count"     : len(item.content.strip()),
         }
         for item in window_items[:6]
     ]
@@ -300,7 +300,7 @@ def build_diary_overview(
             key=lambda day: (day_words[day], day_counts.get(day, 0), day),
         )
         busiest_day = {
-            "date": busiest_date,
+            "date" : busiest_date,
             "count": day_counts.get(busiest_date, 0),
             "words": day_words[busiest_date],
         }
@@ -321,8 +321,8 @@ def build_diary_overview(
             "busiest_day": busiest_day,
         },
         "cadence_granularity": resolved_cadence_granularity,
-        "mood_breakdown": mood_breakdown,
-        "cadence": cadence,
-        "template_usage": template_usage,
-        "recent_entries": recent_entries,
+        "mood_breakdown"     : mood_breakdown,
+        "cadence"            : cadence,
+        "template_usage"     : template_usage,
+        "recent_entries"     : recent_entries,
     }

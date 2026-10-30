@@ -363,12 +363,29 @@ function renderPage() {
 }
 
 // 表单读取先于重渲染。缺失控件回退到当前值，避免意外清空设置。
+// 只提交与页面加载时不同的字段：其他入口在此期间写入的设置（例如撤回 AI 授权）
+// 不会被这份旧快照改回去，界面没有展示的扩展开关也不会被回传。
 function collectFormData(container = _container) {
+    const current = normalizeSettings(_settings);
+    const form    = readFormData(container, current);
+    const patch   = {};
+    for (const [key, value] of Object.entries(form)) {
+        if (key !== 'settings_json' && value !== current[key]) patch[key] = value;
+    }
+    const custom        = normalizeToggleSettings(current.settings_json);
+    const changedCustom = {};
+    for (const [key, value] of Object.entries(form.settings_json)) {
+        if (value !== custom[key]) changedCustom[key] = value;
+    }
+    if (Object.keys(changedCustom).length) patch.settings_json = changedCustom;
+    return patch;
+}
+
+function readFormData(container, current) {
     if (!container || typeof container.querySelector !== 'function') {
         throw new TypeError('设置页面尚未挂载');
     }
 
-    const current = normalizeSettings(_settings);
     const custom = normalizeToggleSettings(current.settings_json);
     const readText = (id, fallback) => textValue(container.querySelector(`#${id}`)?.value, fallback);
     const readChecked = (id, fallback) => {
@@ -384,7 +401,6 @@ function collectFormData(container = _container) {
         diary_remind_time: readText('setting-diary-remind-time', current.diary_remind_time),
         default_category: readText('setting-default-category', DEFAULT_SETTINGS.default_category),
         settings_json: {
-            ...custom,
             reminder_enabled: readChecked('toggle-reminder-enabled', custom.reminder_enabled),
             daily_briefing_enabled: readChecked('toggle-daily-report-enabled', custom.daily_briefing_enabled),
         },

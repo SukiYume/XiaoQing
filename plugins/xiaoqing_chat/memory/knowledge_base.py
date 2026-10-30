@@ -25,10 +25,10 @@ class KnowledgeIndexError(ValueError):
 
 @dataclass(frozen=True)
 class _KnowledgeSource:
-    path: Path
-    label: str
+    path    : Path
+    label   : str
     identity: tuple[int, int, int, int]
-    size: int
+    size    : int
 
 
 def _hash_id(value: str) -> str:
@@ -79,7 +79,7 @@ def _resolve_sources(*, files: Sequence[str], plugin_dir: Path) -> list[_Knowled
         raise KnowledgeIndexError("plugin directory could not be resolved") from exc
 
     sources: list[_KnowledgeSource] = []
-    seen: set[Path]                 = set()
+    seen   : set[Path]              = set()
     declared_bytes                  = 0
     for raw_path in files:
         if type(raw_path) is not str or not raw_path.strip():
@@ -174,9 +174,9 @@ def _prepare_documents(*, files: Sequence[str], plugin_dir: Path) -> list[Vector
                 doc_id = f"kb:{base}:{index}",
                 text   = chunk,
                 meta   = {
-                    "type": "knowledge",
-                    "source": source.label,
-                    "chunk": index,
+                    "type"           : "knowledge",
+                    "source"         : source.label,
+                    "chunk"          : index,
                     "knowledge_index": "configured_files",
                     "global_approved": True,
                 },

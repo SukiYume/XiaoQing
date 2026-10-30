@@ -4,19 +4,16 @@ from __future__ import annotations
 
 import dataclasses
 from contextlib import ExitStack
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import pytest
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
 from plugins.xiaoqing_chat.persona import PersonaCard
 from tests.helpers.xiaoqing_chat_test_support import (
-    AsyncMock,
-    MagicMock,
-    Mock,
-    SimpleNamespace,
     _complete_test_runtime_config,
-    asyncio,
-    patch,
-    pytest,
     reply_plan,
 )
 
@@ -62,6 +59,7 @@ async def test_checker_infrastructure_failure_respects_review_mode(monkeypatch, 
     monkeypatch.setattr(generator, "log_step", Mock())
     draft    = generator.build_reply_draft(("未经审查的候选。",))
     rejected = await generator._check_candidate_draft(plan, draft, [], "")
+    remote.assert_awaited_once()
     if mode == "risk":
         assert rejected is None
         return
@@ -74,7 +72,6 @@ async def test_checker_infrastructure_failure_respects_review_mode(monkeypatch, 
     assert generator.finish_rejected_candidate(plan, rejected).text == "等我一下，脑子突然卡壳了"
     plan = dataclasses.replace(plan, forced=False)
     assert generator.finish_rejected_candidate(plan, rejected) is None
-    remote.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -189,7 +186,7 @@ async def test_generate_reply_checker_timeout_allows_non_forced_reply(mock_conte
         stack.enter_context(
             patch(
                 "plugins.xiaoqing_chat.reply_generator.check_reply",
-                new=AsyncMock(side_effect=asyncio.TimeoutError()),
+                new=AsyncMock(side_effect=TimeoutError()),
             )
         )
 
@@ -297,10 +294,10 @@ def test_media_rejection_fallback_never_contradicts_the_reading(
         context = mock_context,
         runtime=SimpleNamespace(cfg=XiaoQingChatConfig()),
         event={
-            "message": [{"type": "image", "data": {}}],
+            "message"                 : [{"type": "image", "data": {}}],
             "_xc_effective_user_parts": [
                 {
-                    "kind": "image",
+                    "kind"       : "image",
                     "description": "国家天文台博士后评聘通知" if readable else "图片内容读取失败",
                 }
             ],
@@ -333,7 +330,7 @@ def test_context_rejection_on_a_read_image_does_not_claim_losing_the_thread(mock
         context = mock_context,
         runtime=SimpleNamespace(cfg=XiaoQingChatConfig()),
         event={
-            "message": [{"type": "image", "data": {}}],
+            "message"                 : [{"type": "image", "data": {}}],
             "_xc_effective_user_parts": [{"kind": "image", "description": "研究生助教招聘通知"}],
         },
     )

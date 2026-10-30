@@ -71,10 +71,10 @@ class MatrixError(RuntimeError):
 class PolicyDecision:
     """一个命令节点的自动执行边界。"""
 
-    risk: str
-    dependency: str
-    sensitive: bool
-    reason: str
+    risk              : str
+    dependency        : str
+    sensitive         : bool
+    reason            : str
     invalid_expect_any: tuple[str, ...]
     invalid_reject_any: tuple[str, ...]
 
@@ -83,22 +83,22 @@ class PolicyDecision:
 class MatrixCase:
     """一条稳定、可序列化的运行态测试用例。"""
 
-    case_id: str
-    plugin: str
-    code: str
-    kind: str
-    example_index: int
-    message: str
-    scope: str
-    actor: str
-    permission: str
-    risk: str
-    dependency: str
-    sensitive: bool
-    policy_reason: str
+    case_id             : str
+    plugin              : str
+    code                : str
+    kind                : str
+    example_index       : int
+    message             : str
+    scope               : str
+    actor               : str
+    permission          : str
+    risk                : str
+    dependency          : str
+    sensitive           : bool
+    policy_reason       : str
     semantic_expectation: str
-    invalid_expect_any: tuple[str, ...] = ()
-    invalid_reject_any: tuple[str, ...] = ()
+    invalid_expect_any  : tuple[str, ...] = ()
+    invalid_reject_any  : tuple[str, ...] = ()
 
     def public_dict(self) -> dict[str, Any]:
         """敏感命令只保留稳定标识，不写入报告。"""
@@ -113,9 +113,9 @@ class MatrixCase:
 class EventResponse:
     """一次 HTTP 或 WebSocket 入站请求的最小观测面。"""
 
-    status: int | None
-    payload: Any
-    duration_ms: float
+    status         : int | None
+    payload        : Any
+    duration_ms    : float
     transport_error: str | None = None
 
 
@@ -123,25 +123,25 @@ class EventResponse:
 class ScenarioStep:
     """动态业务场景中的一次真实 ``/event`` 请求。"""
 
-    step_id: str
-    code: str
-    message: str
+    step_id   : str
+    code      : str
+    message   : str
     expect_all: tuple[str, ...]
     expect_any: tuple[str, ...]
     reject_any: tuple[str, ...]
-    captures: tuple[tuple[str, str], ...]
-    cleanup: bool = False
+    captures  : tuple[tuple[str, str], ...]
+    cleanup   : bool = False
 
     def public_dict(self, *, sensitive: bool) -> dict[str, Any]:
         return {
-            "step_id": self.step_id,
-            "code": self.code,
-            "message": "<REDACTED_SENSITIVE_COMMAND>" if sensitive else self.message,
-            "expect_all": list(self.expect_all),
-            "expect_any": list(self.expect_any),
-            "reject_any": list(self.reject_any),
+            "step_id"      : self.step_id,
+            "code"         : self.code,
+            "message"      : "<REDACTED_SENSITIVE_COMMAND>" if sensitive else self.message,
+            "expect_all"   : list(self.expect_all),
+            "expect_any"   : list(self.expect_any),
+            "reject_any"   : list(self.reject_any),
             "capture_names": [name for name, _pattern in self.captures],
-            "cleanup": self.cleanup,
+            "cleanup"      : self.cleanup,
         }
 
 
@@ -149,18 +149,18 @@ class ScenarioStep:
 class BusinessScenario:
     """带动态变量、严格回复断言和清理步骤的插件业务闭环。"""
 
-    scenario_id: str
-    plugin: str
-    description: str
-    risk: str
-    dependency: str
-    scope: str
-    actor: str
-    sensitive: bool
+    scenario_id      : str
+    plugin           : str
+    description      : str
+    risk             : str
+    dependency       : str
+    scope            : str
+    actor            : str
+    sensitive        : bool
     required_fixtures: tuple[str, ...]
-    covers: tuple[str, ...]
-    steps: tuple[ScenarioStep, ...]
-    step_delay_ms: int = 0
+    covers           : tuple[str, ...]
+    steps            : tuple[ScenarioStep, ...]
+    step_delay_ms    : int = 0
 
     def public_dict(self) -> dict[str, Any]:
         return {
@@ -585,8 +585,8 @@ def build_business_scenarios(
         payload, records, expected_plugins=expected_plugins
     )
     code_to_plugin = {str(record["code"]): str(record["plugin"]) for record in records}
-    scenarios: list[BusinessScenario] = []
-    identifiers: set[str] = set()
+    scenarios     : list[BusinessScenario] = []
+    identifiers   : set[str] = set()
     scenario_codes: dict[str, set[str]] = {plugin: set() for plugin in payload["plugins"]}
 
     for raw in payload["scenarios"]:
@@ -777,20 +777,20 @@ class EventClient:
         user_id               = self.admin_id if actor == "bot_admin" else self.user_id
         role                  = "owner" if actor in {"bot_admin", "group_owner"} else "member"
         event: dict[str, Any] = {
-            "time": int(time.time()),
-            "post_type": "message",
+            "time"        : int(time.time()),
+            "post_type"   : "message",
             "message_type": scope,
-            "sub_type": "normal" if scope == "group" else "friend",
-            "message_id": self._message_seed + self._sequence,
-            "user_id": user_id,
-            "message": message,
-            "raw_message": message,
-            "font": 0,
-            "sender": {
-                "user_id": user_id,
+            "sub_type"    : "normal" if scope == "group" else "friend",
+            "message_id"  : self._message_seed + self._sequence,
+            "user_id"     : user_id,
+            "message"     : message,
+            "raw_message" : message,
+            "font"        : 0,
+            "sender"      : {
+                "user_id" : user_id,
                 "nickname": "XiaoQingMatrix",
-                "card": "XiaoQingMatrix",
-                "role": role,
+                "card"    : "XiaoQingMatrix",
+                "role"    : role,
             },
         }
         if scope == "group":
@@ -803,8 +803,8 @@ class EventClient:
             self.endpoint,
             data=json.dumps(event, ensure_ascii=False).encode("utf-8"),
             headers={
-                "Authorization": f"Bearer {self.token}",
-                "Content-Type": "application/json; charset=utf-8",
+                "Authorization"           : f"Bearer {self.token}",
+                "Content-Type"            : "application/json; charset=utf-8",
                 "X-XiaoQing-Response-Mode": "actions",
             },
             method="POST",
@@ -1194,14 +1194,14 @@ def evaluate_response(
     )
     return {
         **case.public_dict(),
-        "execution_status": "failed" if failure else "passed_runtime_contract",
-        "failure": failure,
-        "http_status": response.status,
-        "duration_ms": round(response.duration_ms, 2),
-        "action_count": len(actions) if isinstance(actions, list) else 0,
+        "execution_status" : "failed" if failure else "passed_runtime_contract",
+        "failure"          : failure,
+        "http_status"      : response.status,
+        "duration_ms"      : round(response.duration_ms, 2),
+        "action_count"     : len(actions) if isinstance(actions, list) else 0,
         "semantic_strength": semantic_strength,
-        "response_text": persisted_text,
-        "transport_error": _sanitize_text(response.transport_error or "", redactions) or None,
+        "response_text"    : persisted_text,
+        "transport_error"  : _sanitize_text(response.transport_error or "", redactions) or None,
     }
 
 
@@ -1249,8 +1249,8 @@ def execute_matrix(
             results.append(
                 {
                     **case.public_dict(),
-                    "execution_status": "not_executed",
-                    "skip_reason": skip_reason,
+                    "execution_status" : "not_executed",
+                    "skip_reason"      : skip_reason,
                     "semantic_strength": "none",
                 }
             )
@@ -1294,13 +1294,16 @@ def _scenario_step_result(
 
     text = response_text(response.payload)
     actions = response.payload.get("actions") if isinstance(response.payload, dict) else None
-    failure: str | None = None
-    details: list[str] = []
+    failure : str | None = None
+    details : list[str] = []
     captured: dict[str, str] = {}
     if response.transport_error:
         failure = "transport_error"
     elif response.status != 200:
         failure = "unexpected_http_status"
+    elif isinstance(response.payload, dict) and response.payload.get("ws_error"):
+        # 与通用矩阵共用传输成功边界：已有部分 action 后出现协议错误也算失败。
+        failure = "websocket_error"
     elif not isinstance(actions, list):
         failure = "invalid_onebot_response"
     elif not actions:
@@ -1332,7 +1335,9 @@ def _scenario_step_result(
         if details:
             failure = "business_semantic_assertion_failed"
 
-    if failure is None:
+    if failure is None or failure == "business_semantic_assertion_failed":
+        # 通过校验的捕获值（例如新建资源的编号）在文案断言失败时也要保留，
+        # 后续清理步骤才能定位并删除资源；普通业务步骤仍因失败而停止。
         values.update(captured)
     persisted_text = (
         "<REDACTED_SENSITIVE_RESPONSE>" if scenario.sensitive else _sanitize_text(text, redactions)
@@ -1344,18 +1349,18 @@ def _scenario_step_result(
     )
     return {
         "scenario_id": scenario.scenario_id,
-        "plugin": scenario.plugin,
+        "plugin"     : scenario.plugin,
         "description": scenario.description,
-        "step_id": step.step_id,
-        "code": step.code,
-        "kind": "business_scenario",
-        "scope": scenario.scope,
-        "actor": scenario.actor,
-        "risk": scenario.risk,
-        "dependency": scenario.dependency,
-        "sensitive": scenario.sensitive,
-        "cleanup": step.cleanup,
-        "message": persisted_message,
+        "step_id"    : step.step_id,
+        "code"       : step.code,
+        "kind"       : "business_scenario",
+        "scope"      : scenario.scope,
+        "actor"      : scenario.actor,
+        "risk"       : scenario.risk,
+        "dependency" : scenario.dependency,
+        "sensitive"  : scenario.sensitive,
+        "cleanup"    : step.cleanup,
+        "message"    : persisted_message,
         "execution_status": (
             "failed"
             if failure
@@ -1363,15 +1368,15 @@ def _scenario_step_result(
             if step.cleanup
             else "passed_business_semantics"
         ),
-        "failure": failure,
-        "failure_details": details,
-        "http_status": response.status,
-        "duration_ms": round(response.duration_ms, 2),
-        "action_count": len(actions) if isinstance(actions, list) else 0,
+        "failure"          : failure,
+        "failure_details"  : details,
+        "http_status"      : response.status,
+        "duration_ms"      : round(response.duration_ms, 2),
+        "action_count"     : len(actions) if isinstance(actions, list) else 0,
         "semantic_strength": "strict_business_reply",
-        "captured_names": sorted(captured),
-        "response_text": persisted_text,
-        "transport_error": _sanitize_text(response.transport_error or "", redactions) or None,
+        "captured_names"   : sorted(captured),
+        "response_text"    : persisted_text,
+        "transport_error"  : _sanitize_text(response.transport_error or "", redactions) or None,
     }
 
 
@@ -1415,83 +1420,94 @@ def execute_business_scenarios(
         elif missing_fixtures:
             skip_reason = "missing_fixture:" + ",".join(missing_fixtures)
 
-        values          = {"run_id": run_id, **(runtime_values or {}), **fixture_values}
+        values = {"run_id": run_id, **(runtime_values or {}), **fixture_values}
         scenario_failed = False
+        interrupted: BaseException | None = None
         for step in scenario.steps:
-            position += 1
-            base = {
-                "scenario_id": scenario.scenario_id,
-                "plugin": scenario.plugin,
-                "description": scenario.description,
-                "step_id": step.step_id,
-                "code": step.code,
-                "kind": "business_scenario",
-                "scope": scenario.scope,
-                "actor": scenario.actor,
-                "risk": scenario.risk,
-                "dependency": scenario.dependency,
-                "sensitive": scenario.sensitive,
-                "cleanup": step.cleanup,
-                "semantic_strength": "none",
-            }
-            effective_skip = skip_reason
-            if effective_skip is None and scenario_failed and not step.cleanup:
-                effective_skip = "prior_scenario_step_failed"
-            if effective_skip is not None:
-                results.append(
-                    {
+            try:
+                position += 1
+                base = {
+                    "scenario_id"      : scenario.scenario_id,
+                    "plugin"           : scenario.plugin,
+                    "description"      : scenario.description,
+                    "step_id"          : step.step_id,
+                    "code"             : step.code,
+                    "kind"             : "business_scenario",
+                    "scope"            : scenario.scope,
+                    "actor"            : scenario.actor,
+                    "risk"             : scenario.risk,
+                    "dependency"       : scenario.dependency,
+                    "sensitive"        : scenario.sensitive,
+                    "cleanup"          : step.cleanup,
+                    "semantic_strength": "none",
+                }
+                effective_skip = skip_reason
+                if effective_skip is None and scenario_failed and not step.cleanup:
+                    effective_skip = "prior_scenario_step_failed"
+                if effective_skip is not None:
+                    results.append(
+                        {
+                            **base,
+                            "message": (
+                                "<REDACTED_SENSITIVE_COMMAND>"
+                                if scenario.sensitive
+                                else step.message
+                            ),
+                            "execution_status": "not_executed",
+                            "skip_reason"     : effective_skip,
+                        }
+                    )
+                    continue
+
+                try:
+                    rendered_message = _render_scenario_template(step.message, values)
+                except MatrixError as exc:
+                    row = {
                         **base,
                         "message": (
                             "<REDACTED_SENSITIVE_COMMAND>" if scenario.sensitive else step.message
                         ),
-                        "execution_status": "not_executed",
-                        "skip_reason": effective_skip,
+                        "execution_status": "failed",
+                        "failure"         : "unresolved_scenario_variable",
+                        "failure_details" : [str(exc)],
                     }
+                    results.append(row)
+                    if not step.cleanup:
+                        scenario_failed = True
+                    continue
+
+                response = client.send(
+                    rendered_message,
+                    scope = scenario.scope,
+                    actor = scenario.actor,
                 )
-                continue
-
-            try:
-                rendered_message = _render_scenario_template(step.message, values)
-            except MatrixError as exc:
-                row = {
-                    **base,
-                    "message": (
-                        "<REDACTED_SENSITIVE_COMMAND>" if scenario.sensitive else step.message
-                    ),
-                    "execution_status": "failed",
-                    "failure": "unresolved_scenario_variable",
-                    "failure_details": [str(exc)],
-                }
+                row = _scenario_step_result(
+                    scenario,
+                    step,
+                    response,
+                    rendered_message = rendered_message,
+                    values           = values,
+                    redactions       = redactions,
+                )
                 results.append(row)
-                if not step.cleanup:
+                if row["execution_status"] == "failed" and not step.cleanup:
                     scenario_failed = True
-                continue
-
-            response = client.send(
-                rendered_message,
-                scope = scenario.scope,
-                actor = scenario.actor,
-            )
-            row = _scenario_step_result(
-                scenario,
-                step,
-                response,
-                rendered_message = rendered_message,
-                values           = values,
-                redactions       = redactions,
-            )
-            results.append(row)
-            if row["execution_status"] == "failed" and not step.cleanup:
+                print(
+                    f"[scenario {position:04d}/{total_steps:04d}] "
+                    f"{scenario.scenario_id}.{step.step_id} {row['execution_status']} "
+                    f"{row.get('duration_ms', 0):.2f}ms",
+                    flush=True,
+                )
+                effective_delay_ms = max(delay_ms, scenario.step_delay_ms)
+                if effective_delay_ms:
+                    time.sleep(effective_delay_ms / 1_000)
+            except BaseException as exc:
+                # 中断后继续执行本场景清理，随后传播首次异常。
+                if interrupted is None:
+                    interrupted = exc
                 scenario_failed = True
-            print(
-                f"[scenario {position:04d}/{total_steps:04d}] "
-                f"{scenario.scenario_id}.{step.step_id} {row['execution_status']} "
-                f"{row.get('duration_ms', 0):.2f}ms",
-                flush=True,
-            )
-            effective_delay_ms = max(delay_ms, scenario.step_delay_ms)
-            if effective_delay_ms:
-                time.sleep(effective_delay_ms / 1_000)
+        if interrupted is not None:
+            raise interrupted
     return results
 
 
@@ -1505,6 +1521,7 @@ def load_scenario_fixtures(path: Path | None) -> dict[str, str]:
     for key, value in payload.items():
         if (
             not isinstance(key, str)
+            or key in SCENARIO_BUILTIN_VALUES
             or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", key)
             or not isinstance(value, str)
             or not value.strip()
@@ -1532,15 +1549,15 @@ def _probe_health(endpoint: str, token: str, *, timeout: float) -> dict[str, Any
         except (UnicodeDecodeError, json.JSONDecodeError):
             payload = {"raw": raw.decode("utf-8", errors="replace")}
         return {
-            "status": response.status,
+            "status"     : response.status,
             "duration_ms": round((time.perf_counter() - started) * 1_000, 2),
-            "payload": payload,
+            "payload"    : payload,
         }
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
         return {
-            "status": None,
+            "status"     : None,
             "duration_ms": round((time.perf_counter() - started) * 1_000, 2),
-            "error": f"{type(exc).__name__}: {exc}",
+            "error"      : f"{type(exc).__name__}: {exc}",
         }
 
 
@@ -1604,10 +1621,10 @@ def build_summary(
     runtime_catalog_sha256 = catalog_hash(records)
     return {
         "schema_version": 1,
-        "transport": transport,
-        "started_at": started_at,
-        "finished_at": finished_at,
-        "catalog": {
+        "transport"     : transport,
+        "started_at"    : started_at,
+        "finished_at"   : finished_at,
+        "catalog"       : {
             "sha256": runtime_catalog_sha256,
             "source_sha256": source_catalog_sha256,
             "matches_source": runtime_catalog_sha256 == source_catalog_sha256,
@@ -1617,13 +1634,13 @@ def build_summary(
             "invalid_examples": sum(len(record.get("invalid_examples", [])) for record in records),
         },
         "planned_coverage": {
-            "cases": len(cases),
-            "nodes_with_normal_cases": len(normal_nodes),
-            "nodes_with_invalid_cases": len(invalid_nodes),
+            "cases"                            : len(cases),
+            "nodes_with_normal_cases"          : len(normal_nodes),
+            "nodes_with_invalid_cases"         : len(invalid_nodes),
             "all_nodes_have_normal_and_invalid": normal_nodes == invalid_nodes == node_codes,
-            "by_kind": dict(Counter(case.kind for case in cases)),
-            "by_risk": dict(Counter(case.risk for case in cases)),
-            "by_dependency": dict(Counter(case.dependency for case in cases)),
+            "by_kind"                          : dict(Counter(case.kind for case in cases)),
+            "by_risk"                          : dict(Counter(case.risk for case in cases)),
+            "by_dependency"                    : dict(Counter(case.dependency for case in cases)),
         },
         "business_scenarios": {
             "planned_scenarios": len(scenarios),
@@ -1644,23 +1661,23 @@ def build_summary(
             "failed_cases": [
                 {
                     "scenario_id": row["scenario_id"],
-                    "step_id": row["step_id"],
-                    "plugin": row["plugin"],
-                    "code": row["code"],
-                    "failure": row.get("failure"),
+                    "step_id"    : row["step_id"],
+                    "plugin"     : row["plugin"],
+                    "code"       : row["code"],
+                    "failure"    : row.get("failure"),
                 }
                 for row in scenario_failed
             ],
         },
         "execution": {
-            "executed": len(executed),
-            "passed_runtime_contract": len(passed),
-            "failed_runtime_contract": len(failed),
-            "strict_core_assertions_passed": len(strict),
+            "executed"                        : len(executed),
+            "passed_runtime_contract"         : len(passed),
+            "failed_runtime_contract"         : len(failed),
+            "strict_core_assertions_passed"   : len(strict),
             "strict_invalid_assertions_passed": len(strict_invalid),
-            "observable_reply_only": len(observable),
-            "not_executed": len(results) - len(executed),
-            "skip_reasons": dict(
+            "observable_reply_only"           : len(observable),
+            "not_executed"                    : len(results) - len(executed),
+            "skip_reasons"                    : dict(
                 Counter(
                     str(row.get("skip_reason"))
                     for row in results
@@ -1677,21 +1694,21 @@ def build_summary(
                 for kind in sorted({str(row.get("kind")) for row in executed})
             },
             "executed_plugins": len({str(row["plugin"]) for row in executed}),
-            "failed_cases": [
+            "failed_cases"    : [
                 {
                     "case_id": row["case_id"],
-                    "plugin": row["plugin"],
-                    "code": row["code"],
-                    "kind": row["kind"],
-                    "scope": row["scope"],
+                    "plugin" : row["plugin"],
+                    "code"   : row["code"],
+                    "kind"   : row["kind"],
+                    "scope"  : row["scope"],
                     "failure": row.get("failure"),
                 }
                 for row in failed
             ],
         },
         "cleanup": {
-            "required": cleanup_required,
-            "command_steps": len(cleanup_steps),
+            "required"            : cleanup_required,
+            "command_steps"       : len(cleanup_steps),
             "command_steps_passed": sum(
                 row["execution_status"] == "passed_cleanup_contract" for row in cleanup_steps
             ),
@@ -1709,8 +1726,8 @@ def build_summary(
         },
         "health": {
             "gate_passed": health_gate_passed,
-            "before": health_before,
-            "after": health_after,
+            "before"     : health_before,
+            "after"      : health_after,
         },
     }
 
@@ -1943,6 +1960,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
+    output_dir = args.output
+    if output_dir is None:
+        stamp      = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
+        output_dir = PROJECT_ROOT / "test_reports" / "runs" / "project" / f"command-matrix-{stamp}"
+    output_dir = output_dir.resolve()
+    if output_dir.exists():
+        raise MatrixError(f"输出目录已存在: {output_dir}")
     risks = _parse_csv_set(args.risks, RISKS, label="risks")
     dependencies = _parse_csv_set(args.dependencies, DEPENDENCIES, label="dependencies")
     kinds = _parse_csv_set(args.kinds, CASE_KINDS, label="kinds")
@@ -2015,9 +2039,15 @@ def run(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
         records,
         expected_plugins=frozenset(policy["plugins"]),
     )
-    plugins       = frozenset(item.strip() for item in args.plugins.split(",") if item.strip())
-    code_prefixes = tuple(item.strip() for item in args.codes.split(",") if item.strip())
-    redactions    = (
+    plugins         = frozenset(item.strip() for item in args.plugins.split(",") if item.strip())
+    code_prefixes   = tuple(item.strip() for item in args.codes.split(",") if item.strip())
+    unknown_plugins = plugins - {record["plugin"] for record in records}
+    if unknown_plugins:
+        raise MatrixError(f"未知插件筛选: {sorted(unknown_plugins)}")
+    for prefix in code_prefixes:
+        if not any(case.code == prefix or case.code.startswith(prefix + ".") for case in cases):
+            raise MatrixError(f"未知命令筛选: {prefix}")
+    redactions = (
         token,
         str(admin_id),
         *(str(value) for value in all_admins),
@@ -2049,7 +2079,7 @@ def run(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
         fixture_values = fixture_values,
         run_id         = hashlib.sha256(started_at.encode("utf-8")).hexdigest()[:10],
         runtime_values = {
-            "test_user_id": str(scenario_user_id),
+            "test_user_id" : str(scenario_user_id),
             "test_group_id": str(scenario_group_id),
         },
     )
@@ -2068,11 +2098,6 @@ def run(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
         source_catalog_sha256 = source_sha256,
         transport             = args.transport,
     )
-    output_dir = args.output
-    if output_dir is None:
-        stamp      = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
-        output_dir = PROJECT_ROOT / "test_reports" / "runs" / "project" / f"command-matrix-{stamp}"
-    output_dir = output_dir.resolve()
     write_artifacts(
         output_dir,
         records,

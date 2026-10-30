@@ -35,8 +35,8 @@ class TestMessageFlow:
         with open(config_file, "w") as f:
             json.dump(
                 {
-                    "bot_name": "TestBot",
-                    "command_prefixes": ["/"],
+                    "bot_name"                 : "TestBot",
+                    "command_prefixes"         : ["/"],
                     "require_bot_name_in_group": False,
                 },
                 f,
@@ -96,12 +96,12 @@ class TestMessageFlow:
         dispatcher, _ = test_dispatcher
 
         event = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "private",
-            "user_id": 12345,
-            "message": [{"type": "text", "data": {"text": "/echo hello"}}],
-            "raw_message": "/echo hello",
-            "self_id": 11111,
+            "user_id"     : 12345,
+            "message"     : [{"type": "text", "data": {"text": "/echo hello"}}],
+            "raw_message" : "/echo hello",
+            "self_id"     : 11111,
         }
 
         responses = await dispatcher.handle_event(event)
@@ -115,17 +115,17 @@ class TestMessageFlow:
         dispatcher, _ = test_dispatcher
 
         event = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "private",
-            "user_id": 12345,
-            "message": [{"type": "text", "data": {"text": "/unknown_cmd"}}],
-            "raw_message": "/unknown_cmd",
-            "self_id": 11111,
+            "user_id"     : 12345,
+            "message"     : [{"type": "text", "data": {"text": "/unknown_cmd"}}],
+            "raw_message" : "/unknown_cmd",
+            "self_id"     : 11111,
         }
 
         responses = await dispatcher.handle_event(event)
-        # Unknown command with prefix returns error message
-        assert responses is not None
+        assert responses
+        assert "未知命令" in str(responses)
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -134,12 +134,12 @@ class TestMessageFlow:
         dispatcher, _ = test_dispatcher
 
         event = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "group",
-            "user_id": 12345,
-            "group_id": 50001,
-            "self_id": 11111,
-            "message": [
+            "user_id"     : 12345,
+            "group_id"    : 50001,
+            "self_id"     : 11111,
+            "message"     : [
                 {"type": "at", "data": {"qq": "11111"}},
                 {"type": "text", "data": {"text": " echo hello"}},
             ],
@@ -147,8 +147,8 @@ class TestMessageFlow:
         }
 
         responses = await dispatcher.handle_event(event)
-        # Should handle because of @ mention
-        assert responses is not None
+        assert responses
+        assert "hello" in str(responses)
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -157,15 +157,17 @@ class TestMessageFlow:
         dispatcher, _ = test_dispatcher
 
         event = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "group",
-            "user_id": 11111,  # Same as self_id
-            "group_id": 50001,
-            "self_id": 11111,
-            "message": [{"type": "text", "data": {"text": "hello"}}],
-            "raw_message": "hello",
+            "user_id"     : 11111,  # Same as self_id
+            "group_id"    : 50001,
+            "self_id"     : 11111,
+            "message"     : [{"type": "text", "data": {"text": "/echo hello"}}],
+            "raw_message" : "/echo hello",
         }
 
+        baseline = await dispatcher.handle_event({**event, "user_id": 12345})
+        assert baseline and "hello" in str(baseline)
         responses = await dispatcher.handle_event(event)
         assert len(responses) == 0
 
@@ -176,10 +178,10 @@ class TestMessageFlow:
         dispatcher, _ = test_dispatcher
 
         event = {
-            "post_type": "notice",
+            "post_type"  : "notice",
             "notice_type": "group_increase",
-            "user_id": 12345,
-            "group_id": 50001,
+            "user_id"    : 12345,
+            "group_id"   : 50001,
         }
 
         responses = await dispatcher.handle_event(event)
@@ -192,12 +194,12 @@ class TestMessageFlow:
         dispatcher, _ = test_dispatcher
 
         event = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "private",
-            "user_id": 12345,
-            "message": [{"type": "text", "data": {"text": "/echo test"}}],
-            "raw_message": "/echo test",
-            "self_id": 11111,
+            "user_id"     : 12345,
+            "message"     : [{"type": "text", "data": {"text": "/echo test"}}],
+            "raw_message" : "/echo test",
+            "self_id"     : 11111,
         }
 
         responses = await dispatcher.handle_event(event)
@@ -220,20 +222,28 @@ class TestMessageFlow:
         # Verify session exists
         assert await session_manager.exists(12345, 50001)
 
-        # Message from user with active session should be processed
+        handler = AsyncMock(
+            return_value=[{"type": "text", "data": {"text": "session acknowledged"}}]
+        )
+        dispatcher.plugin_registry.get.side_effect = lambda name: (
+            SimpleNamespace(module=SimpleNamespace(handle_session=handler))
+            if name == "test"
+            else None
+        )
+        # 活动会话交给其所属插件。
         event = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "group",
-            "user_id": 12345,
-            "group_id": 50001,
-            "message": [{"type": "text", "data": {"text": "continue"}}],
-            "raw_message": "continue",
-            "self_id": 11111,
+            "user_id"     : 12345,
+            "group_id"    : 50001,
+            "message"     : [{"type": "text", "data": {"text": "continue"}}],
+            "raw_message" : "continue",
+            "self_id"     : 11111,
         }
 
         responses = await dispatcher.handle_event(event)
-        # The plugin returns an empty or exit message for the existing session.
-        assert responses is not None
+        assert responses and "session acknowledged" in str(responses)
+        handler.assert_awaited_once()
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -258,13 +268,13 @@ class TestMessageFlow:
             loaded if name == "stateful" else None
         )
         event = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "group",
-            "user_id": 12345,
-            "group_id": 50001,
-            "message": [{"type": "text", "data": {"text": "continue"}}],
-            "raw_message": "continue",
-            "self_id": 11111,
+            "user_id"     : 12345,
+            "group_id"    : 50001,
+            "message"     : [{"type": "text", "data": {"text": "continue"}}],
+            "raw_message" : "continue",
+            "self_id"     : 11111,
         }
 
         await asyncio.gather(dispatcher.handle_event(event), dispatcher.handle_event(event))
@@ -299,7 +309,7 @@ class TestMessageFlow:
         async def close_session(_event, _context, session):
             close_snapshots.append(
                 {
-                    "step": session.get("step"),
+                    "step" : session.get("step"),
                     "items": list(session.get("nested")["items"]),
                 }
             )
@@ -315,13 +325,13 @@ class TestMessageFlow:
             loaded if name == "stateful" else None
         )
         event = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "group",
-            "user_id": 12345,
-            "group_id": 50001,
-            "message": [{"type": "text", "data": {"text": "continue"}}],
-            "raw_message": "continue",
-            "self_id": 11111,
+            "user_id"     : 12345,
+            "group_id"    : 50001,
+            "message"     : [{"type": "text", "data": {"text": "continue"}}],
+            "raw_message" : "continue",
+            "self_id"     : 11111,
         }
 
         response = await dispatcher.handle_event(event)
@@ -579,12 +589,12 @@ class TestDispatcherIntegration:
         dispatcher, _ = dispatcher_with_router
 
         event = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "private",
-            "user_id": 12345,
-            "message": [{"type": "text", "data": {"text": "/echo test message"}}],
-            "raw_message": "/echo test message",
-            "self_id": 11111,
+            "user_id"     : 12345,
+            "message"     : [{"type": "text", "data": {"text": "/echo test message"}}],
+            "raw_message" : "/echo test message",
+            "self_id"     : 11111,
         }
 
         responses = await dispatcher.handle_event(event)
@@ -598,13 +608,13 @@ class TestDispatcherIntegration:
 
         # With require_bot_name_in_group=True, message without prefix/bot name should be ignored
         event = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "group",
-            "user_id": 12345,
-            "group_id": 50001,
-            "message": [{"type": "text", "data": {"text": "random message"}}],
-            "raw_message": "random message",
-            "self_id": 11111,
+            "user_id"     : 12345,
+            "group_id"    : 50001,
+            "message"     : [{"type": "text", "data": {"text": "random message"}}],
+            "raw_message" : "random message",
+            "self_id"     : 11111,
         }
 
         responses = await dispatcher.handle_event(event)
@@ -617,13 +627,13 @@ class TestDispatcherIntegration:
         dispatcher, _ = dispatcher_with_router
 
         event = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "group",
-            "user_id": 12345,
-            "group_id": 50001,
-            "message": [{"type": "text", "data": {"text": "/echo hello"}}],
-            "raw_message": "/echo hello",
-            "self_id": 11111,
+            "user_id"     : 12345,
+            "group_id"    : 50001,
+            "message"     : [{"type": "text", "data": {"text": "/echo hello"}}],
+            "raw_message" : "/echo hello",
+            "self_id"     : 11111,
         }
 
         responses = await dispatcher.handle_event(event)
@@ -642,9 +652,9 @@ async def test_standard_http_event_reaches_real_action_api(retcode, expected_sta
         assert request.headers["Authorization"] == "Bearer outgoing"
         return web.json_response(
             {
-                "status": "ok" if retcode == 0 else "failed",
+                "status" : "ok" if retcode == 0 else "failed",
                 "retcode": retcode,
-                "data": {"message_id": 42},
+                "data"   : {"message_id": 42},
             }
         )
 
@@ -681,11 +691,11 @@ async def test_standard_http_event_reaches_real_action_api(retcode, expected_sta
                     "/event",
                     headers = {"Authorization": "Bearer incoming"},
                     json    = {
-                        "post_type": "message",
+                        "post_type"   : "message",
                         "message_type": "private",
-                        "user_id": 123,
-                        "message": "/echo review",
-                        "message_id": 1,
+                        "user_id"     : 123,
+                        "message"     : "/echo review",
+                        "message_id"  : 1,
                     },
                 )
                 assert response.status == expected_status

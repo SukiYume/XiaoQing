@@ -8,7 +8,7 @@ from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.pendo_client_source import replace_js_source
 
-ROOT: Final          = REPOSITORY_ROOT
+ROOT         : Final = REPOSITORY_ROOT
 LEDGER_CLIENT: Final = ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "ledger.js"
 FORMAT_CLIENT: Final = ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "utils" / "format.js"
 
@@ -76,6 +76,11 @@ const {{ finiteNumber, formatAmount: baseFormatAmount, isValidDateInput, nonNega
 const closeModal = () => { globalThis.__closeModalCount += 1; };
 const showConfirmModal = async () => globalThis.__confirmResult;
 const safeHtml = (value) => value;""",
+        ),
+        (
+            "import { captureFormDraft, reopenWithDraft } from '../components/form.js';",
+            """const captureFormDraft = () => ({ fields: [], groups: [] });
+const reopenWithDraft = async (open) => { await open(); };""",
         ),
         (
             "import { buildFormHTML, getFormData, initFormInteractions } "
@@ -583,7 +588,7 @@ def test_ledger_edit_delete_encode_ids_block_duplicates_and_dispatch_once() -> N
             return new Promise((resolve) => { resolvePut = resolve; });
         };
         client.__openEditModal({
-            id: 'ledger/a b', title: '旧记录', amount: 10,
+            id: 'ledger/a b', title: '旧记录', amount: 10, version: 9,
             transaction_type: 'transfer', ledger_date: '2026-03-01',
             account_name: '现金', counter_account_name: '银行卡',
         });
@@ -596,6 +601,7 @@ def test_ledger_edit_delete_encode_ids_block_duplicates_and_dispatch_once() -> N
         await Promise.all([first, duplicate]);
         assert.equal(putCalls[0][0], '/items/ledger%2Fa%20b');
         assert.equal(putCalls[0][1].currency, 'CNY');
+        assert.equal(putCalls[0][1].version, 9);
         assert.equal(putCalls[0][1].account_name, '现金');
         assert.equal(putCalls[0][1].counter_account_name, '');
         assert.equal(saveButton.disabled, false);

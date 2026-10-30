@@ -14,7 +14,7 @@ import logging
 import re
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +27,7 @@ from ..utils.json_parsing import parse_first_json_object
 from ..utils.text import clip_text
 from .memory import StoredMessage
 from .memory_db import MemoryDB, RetrievedItem
+from .person_profile import get_profile_generation
 from .thinking_back import append_record, get_cached_answer
 
 _logger                   = logging.getLogger("plugin.xiaoqing_chat")
@@ -46,8 +47,8 @@ _PATH_META_KEYS           = frozenset(
 
 @dataclass(frozen=True)
 class ToolCall:
-    call_id: str
-    name: str
+    call_id  : str
+    name     : str
     arguments: dict[str, Any]
 
 
@@ -99,24 +100,24 @@ def _public_retrieved_item(item: RetrievedItem) -> dict[str, Any]:
         doc_id = _opaque_local_reference(doc_id)
     return {
         "doc_id": doc_id,
-        "score": item.score,
-        "text": item.text,
-        "meta": _public_memory_meta(item.meta),
+        "score" : item.score,
+        "text"  : item.text,
+        "meta"  : _public_memory_meta(item.meta),
     }
 
 
 def _tools_schema() -> list[dict[str, Any]]:
     return [
         {
-            "type": "function",
+            "type"    : "function",
             "function": {
-                "name": "query_chat_history",
+                "name"       : "query_chat_history",
                 "description": "在最近聊天记录里按语义/关键词找相关片段。",
-                "parameters": {
-                    "type": "object",
+                "parameters" : {
+                    "type"      : "object",
                     "properties": {
-                        "query": {"type": "string"},
-                        "limit": {"type": "integer", "minimum": 1, "maximum": 10},
+                        "query"  : {"type": "string"},
+                        "limit"  : {"type": "integer", "minimum": 1, "maximum": 10},
                         "user_id": {"type": "integer", "minimum": 1},
                     },
                     "required": ["query"],
@@ -124,12 +125,12 @@ def _tools_schema() -> list[dict[str, Any]]:
             },
         },
         {
-            "type": "function",
+            "type"    : "function",
             "function": {
-                "name": "query_topic_summaries",
+                "name"       : "query_topic_summaries",
                 "description": "在话题摘要（长期记忆）里检索相关信息。",
-                "parameters": {
-                    "type": "object",
+                "parameters" : {
+                    "type"      : "object",
                     "properties": {
                         "query": {"type": "string"},
                         "top_k": {"type": "integer", "minimum": 1, "maximum": 10},
@@ -139,15 +140,15 @@ def _tools_schema() -> list[dict[str, Any]]:
             },
         },
         {
-            "type": "function",
+            "type"    : "function",
             "function": {
-                "name": "query_person_info",
+                "name"       : "query_person_info",
                 "description": "检索与指定人物直接相关的事实记忆和对话约定。",
-                "parameters": {
-                    "type": "object",
+                "parameters" : {
+                    "type"      : "object",
                     "properties": {
-                        "query": {"type": "string"},
-                        "top_k": {"type": "integer", "minimum": 1, "maximum": 10},
+                        "query"     : {"type": "string"},
+                        "top_k"     : {"type": "integer", "minimum": 1, "maximum": 10},
                         "subject_id": {"type": "integer", "minimum": 1},
                     },
                     "required": ["query"],
@@ -155,24 +156,24 @@ def _tools_schema() -> list[dict[str, Any]]:
             },
         },
         {
-            "type": "function",
+            "type"    : "function",
             "function": {
-                "name": "query_person_profile",
+                "name"       : "query_person_profile",
                 "description": "获取某个人的画像摘要（按 subject_id）。",
-                "parameters": {
-                    "type": "object",
+                "parameters" : {
+                    "type"      : "object",
                     "properties": {"subject_id": {"type": "integer", "minimum": 1}},
-                    "required": ["subject_id"],
+                    "required"  : ["subject_id"],
                 },
             },
         },
         {
-            "type": "function",
+            "type"    : "function",
             "function": {
-                "name": "query_words",
+                "name"       : "query_words",
                 "description": "查询黑话/缩写/词语解释。",
-                "parameters": {
-                    "type": "object",
+                "parameters" : {
+                    "type"      : "object",
                     "properties": {
                         "query": {"type": "string"},
                         "top_k": {"type": "integer", "minimum": 1, "maximum": 10},
@@ -182,12 +183,12 @@ def _tools_schema() -> list[dict[str, Any]]:
             },
         },
         {
-            "type": "function",
+            "type"    : "function",
             "function": {
-                "name": "query_knowledge",
+                "name"       : "query_knowledge",
                 "description": "查询本地知识库片段（如果有配置）。",
-                "parameters": {
-                    "type": "object",
+                "parameters" : {
+                    "type"      : "object",
                     "properties": {
                         "query": {"type": "string"},
                         "top_k": {"type": "integer", "minimum": 1, "maximum": 10},
@@ -197,26 +198,26 @@ def _tools_schema() -> list[dict[str, Any]]:
             },
         },
         {
-            "type": "function",
+            "type"    : "function",
             "function": {
-                "name": "found_answer",
+                "name"       : "found_answer",
                 "description": "当你已能回答问题时调用，给出最终答案。",
-                "parameters": {
-                    "type": "object",
+                "parameters" : {
+                    "type"      : "object",
                     "properties": {"answer": {"type": "string"}},
-                    "required": ["answer"],
+                    "required"  : ["answer"],
                 },
             },
         },
         {
-            "type": "function",
+            "type"    : "function",
             "function": {
-                "name": "not_enough_info",
+                "name"       : "not_enough_info",
                 "description": "信息不足时调用，说明原因。",
-                "parameters": {
-                    "type": "object",
+                "parameters" : {
+                    "type"      : "object",
                     "properties": {"reason": {"type": "string"}},
-                    "required": ["reason"],
+                    "required"  : ["reason"],
                 },
             },
         },
@@ -285,8 +286,8 @@ def _extract_tool_calls(resp: dict[str, Any]) -> list[ToolCall]:
     tool_calls = msg.get("tool_calls") or []
     if not isinstance(tool_calls, list):
         return []
-    out: list[ToolCall]     = []
-    used_call_ids: set[str] = set()
+    out          : list[ToolCall] = []
+    used_call_ids: set[str]       = set()
     for index, call in enumerate(tool_calls):
         if not isinstance(call, dict):
             continue
@@ -485,14 +486,14 @@ def _format_memory_items(items: Sequence[RetrievedItem], cfg: MemoryConfig) -> s
 
 def _assistant_tool_call_message(tool_calls: Sequence[Any]) -> dict[str, Any]:
     return {
-        "role": "assistant",
-        "content": "",
+        "role"      : "assistant",
+        "content"   : "",
         "tool_calls": [
             {
-                "id": call.call_id,
-                "type": "function",
+                "id"      : call.call_id,
+                "type"    : "function",
                 "function": {
-                    "name": call.name,
+                    "name"     : call.name,
                     "arguments": json.dumps(call.arguments, ensure_ascii=False),
                 },
             }
@@ -537,7 +538,7 @@ async def react_retrieve(
         return ""
 
     tool_impl: dict[str, ToolFunc] = {
-        "query_chat_history": lambda a: _tool_query_chat_history(history, a),
+        "query_chat_history"   : lambda a: _tool_query_chat_history(history, a),
         "query_topic_summaries": lambda a: _tool_query_db(
             memory_db, a, type_filter="topic_summary", chat_id=chat_id
         ),
@@ -567,17 +568,23 @@ async def react_retrieve(
             break
         api_call_count += 1
         resp, _ = await chat_completions_raw_with_fallback_paths(
+            route       = "reasoning",
             secrets     = secrets,
             messages    = messages,
             tools       = _tools_schema(),
             tool_choice = "auto",
-            **llm.bounded(max_temperature=0.4, max_tokens=768).as_kwargs(),
+            **llm.as_kwargs(),
         )
         tool_calls = _extract_tool_calls(resp)
         if not tool_calls:
             return extract_response_content(resp).strip() if has_evidence else ""
 
-        messages.append(_assistant_tool_call_message(tool_calls))
+        assistant_message = _assistant_tool_call_message(tool_calls)
+        # reasoning 路由的思考模型在工具结果返回时需要同轮推理内容。
+        reasoning = resp["choices"][0]["message"].get("reasoning_content")
+        if isinstance(reasoning, str) and reasoning:
+            assistant_message["reasoning_content"] = reasoning
+        messages.append(assistant_message)
         final: str | None = None
         for call in tool_calls:
             result = await _run_memory_tool_call(call, tool_impl, has_evidence=has_evidence)
@@ -586,10 +593,10 @@ async def react_retrieve(
                 final = result["final"]
             messages.append(
                 {
-                    "role": "tool",
+                    "role"        : "tool",
                     "tool_call_id": call.call_id,
-                    "name": call.name,
-                    "content": json.dumps(result, ensure_ascii=False),
+                    "name"        : call.name,
+                    "content"     : json.dumps(result, ensure_ascii=False),
                 }
             )
         if final is not None:
@@ -657,15 +664,11 @@ async def _retrieval_question(
         try:
             raw, _ = await asyncio.wait_for(
                 chat_completions_raw_with_fallback_paths(
+                    route         = "reasoning",
                     secrets       = secrets,
                     messages      = [{"role": m.role, "content": m.content} for m in msgs],
                     extra_payload = {"response_format": {"type": "json_object"}},
-                    **replace(
-                        llm.bounded(max_temperature=0.5, max_tokens=256),
-                        timeout_seconds        = min(3.0, float(llm.timeout_seconds)),
-                        max_retry              = 0,
-                        retry_interval_seconds = 0.2,
-                    ).as_kwargs(),
+                    **llm.as_kwargs(),
                 ),
                 timeout=min(2.0, _MEMORY_SOFT_BUDGET),
             )
@@ -676,17 +679,29 @@ async def _retrieval_question(
 
 
 async def _remember_answer(
-    data_dir: Path, chat_id: str, question: str, answer: str, cfg: MemoryConfig
+    data_dir: Path,
+    chat_id: str,
+    question: str,
+    answer: str,
+    cfg: MemoryConfig,
+    *,
+    generation: str | None = None,
 ) -> str:
     if cfg.enable_thinking_back_cache:
-        await asyncio.to_thread(
-            append_record,
-            data_dir    = data_dir,
-            chat_id     = chat_id,
-            question    = question,
-            answer      = answer,
-            max_entries = int(cfg.thinking_back_max_entries or 200),
-        )
+
+        def write() -> None:
+            # 检索在会话锁外进行：期间发生过重置时，旧答案不能重新写回回想缓存。
+            if generation is not None and get_profile_generation(data_dir, chat_id) != generation:
+                return
+            append_record(
+                data_dir    = data_dir,
+                chat_id     = chat_id,
+                question    = question,
+                answer      = answer,
+                max_entries = int(cfg.thinking_back_max_entries or 200),
+            )
+
+        await asyncio.to_thread(write)
     return f"{_MEMORY_PREFIX}{answer}\n"
 
 
@@ -707,7 +722,8 @@ async def build_memory_block(
 
     if not cfg.enable_memory_retrieval:
         return ""
-    question = await _retrieval_question(
+    generation = await asyncio.to_thread(get_profile_generation, data_dir, chat_id)
+    question   = await _retrieval_question(
         secrets          = secrets,
         cfg              = cfg,
         bot_name         = bot_name,
@@ -735,7 +751,9 @@ async def build_memory_block(
     )
     direct_answer = _format_memory_items(direct_items, cfg)
     if direct_answer:
-        return await _remember_answer(data_dir, chat_id, question, direct_answer, cfg)
+        return await _remember_answer(
+            data_dir, chat_id, question, direct_answer, cfg, generation=generation
+        )
 
     if (
         cfg.agent_on_direct_miss_requires_reference
@@ -752,12 +770,7 @@ async def build_memory_block(
                 chat_id   = chat_id,
                 question  = question,
                 memory_db = memory_db,
-                llm       = replace(
-                    llm,
-                    timeout_seconds        = min(4.0, float(llm.timeout_seconds)),
-                    max_retry              = 0,
-                    retry_interval_seconds = 0.2,
-                ),
+                llm       = llm,
             ),
             timeout=_MEMORY_SOFT_BUDGET,
         )
@@ -767,5 +780,10 @@ async def build_memory_block(
     if not answer:
         return ""
     return await _remember_answer(
-        data_dir, chat_id, question, _bounded_memory_text(answer, cfg), cfg
+        data_dir,
+        chat_id,
+        question,
+        _bounded_memory_text(answer, cfg),
+        cfg,
+        generation=generation,
     )

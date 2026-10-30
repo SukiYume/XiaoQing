@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import pytest
+
 import tests.helpers.app_test_support as _fixture_support
 from tests.helpers.app_test_support import (
-    Any,
-    AsyncMock,
     InboundManager,
-    MagicMock,
-    Mock,
-    Path,
-    SimpleNamespace,
     XiaoQingApp,
     _onebot_credentials,
-    asyncio,
-    json,
-    patch,
-    pytest,
 )
 from tests.helpers.config_test_support import _last_notified_revision
 
@@ -37,15 +36,15 @@ async def test_valid_external_plugin_secret_change_keeps_control_channel_until_r
     config.update(
         {
             "enable_ws_client": True,
-            "onebot_ws_uri": "ws://127.0.0.1:6700",
+            "onebot_ws_uri"   : "ws://127.0.0.1:6700",
         }
     )
     config_path.write_text(json.dumps(config), encoding="utf-8")
     active_secrets = {
         "admin_user_ids": [12345, 67890],
-        "onebot_token": "stable-onebot",
-        "inbound_token": "",
-        "plugins": {"demo": {"api_key": "old-plugin-secret"}},
+        "onebot_token"  : "stable-onebot",
+        "inbound_token" : "",
+        "plugins"       : {"demo": {"api_key": "old-plugin-secret"}},
     }
     secrets_path.write_text(json.dumps(active_secrets), encoding="utf-8")
 
@@ -111,8 +110,8 @@ async def test_failed_reload_revokes_auth_and_admin_before_blocked_callbacks(
         json.dumps(
             {
                 "admin_user_ids": [12345],
-                "onebot_token": "old-onebot",
-                "inbound_token": "old-inbound",
+                "onebot_token"  : "old-onebot",
+                "inbound_token" : "old-inbound",
             }
         ),
         encoding="utf-8",
@@ -189,7 +188,7 @@ async def test_real_failed_reload_stops_old_ws_and_valid_recovery_restarts_trust
         {
             "onebot_http_base": "http://127.0.0.1:5700",
             "enable_ws_client": True,
-            "onebot_ws_uri": "ws://127.0.0.1:6700",
+            "onebot_ws_uri"   : "ws://127.0.0.1:6700",
         }
     )
     config_path.write_text(json.dumps(config), encoding="utf-8")
@@ -329,7 +328,7 @@ def test_nonvalid_secret_source_revokes_even_an_explicitly_empty_onebot_token(
         {
             "onebot_http_base": "http://127.0.0.1:5700",
             "enable_ws_client": True,
-            "onebot_ws_uri": "ws://127.0.0.1:6700",
+            "onebot_ws_uri"   : "ws://127.0.0.1:6700",
         }
     )
     app.http_sender   = OneBotHttpSender("http://127.0.0.1:5700", "", MagicMock())
@@ -403,8 +402,8 @@ def test_nonvalid_secret_sources_revoke_inbound_and_admin_holders_even_with_valu
     config.update(
         {
             "enable_inbound_server": True,
-            "inbound_http_base": "http://127.0.0.1:12000",
-            "inbound_ws_uri": "",
+            "inbound_http_base"    : "http://127.0.0.1:12000",
+            "inbound_ws_uri"       : "",
         }
     )
     current = InboundManager(
@@ -462,8 +461,8 @@ def test_valid_secret_source_rejects_non_exact_inbound_token_types(temp_app_root
     config.update(
         {
             "enable_inbound_server": True,
-            "inbound_http_base": "http://127.0.0.1:12000",
-            "inbound_ws_uri": "",
+            "inbound_http_base"    : "http://127.0.0.1:12000",
+            "inbound_ws_uri"       : "",
         }
     )
     current = InboundManager(
@@ -503,7 +502,7 @@ async def test_holder_update_failure_quarantines_every_onebot_network_path(
         {
             "onebot_http_base": "http://127.0.0.1:5700",
             "enable_ws_client": True,
-            "onebot_ws_uri": "ws://127.0.0.1:6700",
+            "onebot_ws_uri"   : "ws://127.0.0.1:6700",
         }
     )
     http_request = AsyncMock(return_value={"status": "ok"})
@@ -622,7 +621,7 @@ async def test_noop_holder_update_fails_postcondition_and_cannot_keep_old_author
         {
             "onebot_http_base": "http://new.example",
             "enable_ws_client": True,
-            "onebot_ws_uri": "ws://new.example",
+            "onebot_ws_uri"   : "ws://new.example",
         }
     )
 
@@ -801,7 +800,7 @@ def test_valid_secret_recovery_reenables_empty_or_bearer_credentials(temp_app_ro
         {
             "onebot_http_base": "http://127.0.0.1:5700",
             "enable_ws_client": True,
-            "onebot_ws_uri": "ws://127.0.0.1:6700",
+            "onebot_ws_uri"   : "ws://127.0.0.1:6700",
         }
     )
     app.http_sender = OneBotHttpSender("http://127.0.0.1:5700", "old", MagicMock())
@@ -889,12 +888,12 @@ def test_endpoint_rotation_revokes_old_holders_without_pairing_them_with_new_tok
     config              = app.config_manager.snapshot().mutable_config()
     config.update(
         {
-            "onebot_http_base": "http://127.0.0.1:5701",
-            "enable_ws_client": True,
-            "onebot_ws_uri": "ws://127.0.0.1:6701",
+            "onebot_http_base"     : "http://127.0.0.1:5701",
+            "enable_ws_client"     : True,
+            "onebot_ws_uri"        : "ws://127.0.0.1:6701",
             "enable_inbound_server": True,
-            "inbound_http_base": "http://127.0.0.1:12001",
-            "inbound_ws_uri": "",
+            "inbound_http_base"    : "http://127.0.0.1:12001",
+            "inbound_ws_uri"       : "",
         }
     )
     snapshot = ConfigSnapshot(
@@ -957,8 +956,8 @@ async def test_new_revision_revokes_cancellation_resistant_provisional_inbound_c
     config.update(
         {
             "enable_inbound_server": True,
-            "inbound_http_base": "http://127.0.0.1:12000",
-            "inbound_ws_uri": "",
+            "inbound_http_base"    : "http://127.0.0.1:12000",
+            "inbound_ws_uri"       : "",
         }
     )
     first_snapshot = ConfigSnapshot(
@@ -1058,7 +1057,7 @@ async def test_stale_config_task_that_swallows_cancel_cannot_reauthorize_old_sec
         {
             "onebot_http_base": "http://127.0.0.1:5700",
             "enable_ws_client": True,
-            "onebot_ws_uri": "ws://127.0.0.1:6700",
+            "onebot_ws_uri"   : "ws://127.0.0.1:6700",
         }
     )
     old_snapshot = ConfigSnapshot(

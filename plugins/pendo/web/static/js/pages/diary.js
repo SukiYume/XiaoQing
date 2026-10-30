@@ -2,6 +2,7 @@ import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
 import { showModal, closeModal, showConfirmModal, safeHtml } from '../components/modal.js';
 import { buildFormHTML, getFormData, initFormInteractions } from '../components/form.js';
+import { captureFormDraft, reopenWithDraft } from '../components/form.js';
 import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
 import {
     errorMessage,
@@ -22,6 +23,7 @@ import {
     zonedDateTimeToInput,
     zonedInputToUtcIso,
 } from '../utils/timezone.js';
+import { createInstantMemory } from '../utils/timezone.js';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss, subscribeDataChanges } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-diary-redesign-styles';
@@ -1184,13 +1186,14 @@ async function openDiaryFormModal(existing = null, presetDate = null) {
         const diary    = isRecord(existing) ? existing : null;
         const isEdit   = diary !== null;
         const formDate = diary?.diary_date || presetDate || _selectedDate || todayInUserTimeZone();
+        const instants = createInstantMemory();
         const fields   = DIARY_FIELDS.map((field) => {
             let value = '';
             if (diary) value = diary[field.name] ?? '';
             else if (field.name === 'diary_date') value = formDate;
             else if (field.name === 'entry_time') value = defaultEntryTime(formDate, userTimeZone);
             if (field.name === 'entry_time') {
-                const inputValue = zonedDateTimeToInput(value, userTimeZone);
+                const inputValue = diary ? instants.display(value, userTimeZone) : zonedDateTimeToInput(value, userTimeZone);
                 if (value && !inputValue) throw new Error('记录时间格式无效，已阻止编辑以免覆盖原值');
                 value = inputValue;
             }
@@ -1263,8 +1266,10 @@ async function openDiaryFormModal(existing = null, presetDate = null) {
 
         if (isEdit) {
             content.querySelector('#diary-modal-delete').onclick = async () => {
+                const draft  = captureFormDraft(content.querySelector('#diary-form'));
+                const reopen = () => reopenWithDraft(() => openDiaryFormModal(diary), draft, '#diary-form');
                 closeModal(content);
-                await deleteDiary(diary, () => openDiaryFormModal(diary));
+                await deleteDiary(diary, reopen, reopen);
             };
         }
 
@@ -1305,8 +1310,10 @@ async function openDiaryFormModal(existing = null, presetDate = null) {
                 return;
             }
             const wallTime = `${diaryDate}T${timeMatch[1]}:${timeMatch[2] || '00'}`;
+            const shownKey = `${diaryDate}T${timeMatch[1]}${timeMatch[2] ? `:${timeMatch[2]}` : ''}`;
             try {
-                data.entry_time = zonedInputToUtcIso(wallTime, userTimeZone);
+                // 记录时间与日期都没改时沿用原来的绝对时刻（保留秒数，避开回拨歧义）。
+                data.entry_time = instants.resolve(shownKey, userTimeZone) || zonedInputToUtcIso(wallTime, userTimeZone);
             } catch (error) {
                 showToast(errorMessage(error), 'warning');
                 return;
@@ -1338,7 +1345,7 @@ async function openDiaryFormModal(existing = null, presetDate = null) {
     }
 }
 
-async function deleteDiary(item, onCancel = null) {
+async function deleteDiary(item, onCancel = null, onFailure = null) {
     if (!isRecord(item)) return;
     const confirmed = await showConfirmModal({
         title: '删除日记',
@@ -1359,6 +1366,7 @@ async function deleteDiary(item, onCancel = null) {
         dispatchDiaryChange();
     } catch (error) {
         showToast(`删除失败：${errorMessage(error)}`, 'error');
+        if (typeof onFailure === 'function') await onFailure();
     }
 }
 

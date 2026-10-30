@@ -1,9 +1,6 @@
 """Regression tests for the redesigned Pendo web events page."""
 
-import importlib
 import shutil
-import sys
-import types
 import uuid
 from zoneinfo import ZoneInfo
 
@@ -18,63 +15,6 @@ from tests.helpers.paths import REPOSITORY_ROOT
 ROOT = REPOSITORY_ROOT
 
 
-def _load_events_module():
-    fastapi = types.ModuleType("fastapi")
-
-    class _Router:
-        def _decorator(self, *_args, **_kwargs):
-            def decorator(fn):
-                return fn
-
-            return decorator
-
-        def get(self, *_args, **_kwargs):
-            return self._decorator(*_args, **_kwargs)
-
-        def post(self, *_args, **_kwargs):
-            return self._decorator(*_args, **_kwargs)
-
-        def put(self, *_args, **_kwargs):
-            return self._decorator(*_args, **_kwargs)
-
-        def delete(self, *_args, **_kwargs):
-            return self._decorator(*_args, **_kwargs)
-
-    class _HTTPException(Exception):
-        def __init__(self, status_code: int, detail: str):
-            super().__init__(detail)
-            self.status_code = status_code
-            self.detail      = detail
-
-    fastapi.APIRouter = _Router
-    fastapi.Depends = lambda dep=None: dep
-    fastapi.HTTPException = _HTTPException
-    fastapi.Header = lambda default=None, **_kwargs: default
-    fastapi.Query = lambda default=None, **_kwargs: default
-    fastapi.Request  = type("Request", (), {})
-    fastapi.Response = type("Response", (), {})
-
-    responses          = types.ModuleType("fastapi.responses")
-    responses.Response = fastapi.Response
-
-    _orig_fastapi                    = sys.modules.get("fastapi")
-    _orig_responses                  = sys.modules.get("fastapi.responses")
-    sys.modules["fastapi"]           = fastapi
-    sys.modules["fastapi.responses"] = responses
-    sys.modules.pop("plugins.pendo.web.api.events", None)
-    try:
-        return importlib.import_module("plugins.pendo.web.api.events")
-    finally:
-        if _orig_fastapi is not None:
-            sys.modules["fastapi"] = _orig_fastapi
-        else:
-            sys.modules.pop("fastapi", None)
-        if _orig_responses is not None:
-            sys.modules["fastapi.responses"] = _orig_responses
-        else:
-            sys.modules.pop("fastapi.responses", None)
-
-
 def test_build_events_overview_supports_multi_node_recurring_and_reminder_filters():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_events_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
@@ -84,76 +24,76 @@ def test_build_events_overview_supports_multi_node_recurring_and_reminder_filter
     try:
         db.insert_item(
             {
-                "id": "ev1",
-                "owner_id": owner_id,
-                "type": "event",
-                "title": "产品评审",
-                "category": "会议",
-                "start_time": "2026-03-10T09:00:00",
-                "end_time": "2026-03-10T10:00:00",
-                "location": "A1",
+                "id"          : "ev1",
+                "owner_id"    : owner_id,
+                "type"        : "event",
+                "title"       : "产品评审",
+                "category"    : "会议",
+                "start_time"  : "2026-03-10T09:00:00",
+                "end_time"    : "2026-03-10T10:00:00",
+                "location"    : "A1",
                 "remind_times": ["2026-03-10T08:00:00", "2026-03-10T09:00:00"],
             }
         )
         db.create_event_collection(
             {
-                "id": "ev2col",
-                "owner_id": owner_id,
-                "kind": "multi_node",
-                "title": "发布准备",
-                "content": "",
-                "category": "项目",
-                "location": "",
-                "notes": "跨三天推进",
+                "id"        : "ev2col",
+                "owner_id"  : owner_id,
+                "kind"      : "multi_node",
+                "title"     : "发布准备",
+                "content"   : "",
+                "category"  : "项目",
+                "location"  : "",
+                "notes"     : "跨三天推进",
                 "start_time": "2026-03-12T09:00:00",
-                "end_time": "2026-03-14T20:00:00",
+                "end_time"  : "2026-03-14T20:00:00",
             }
         )
         db.insert_item(
             {
-                "id": "ev2col_m01",
-                "owner_id": owner_id,
-                "type": "event",
-                "title": "提审",
-                "category": "项目",
-                "start_time": "2026-03-13T18:00:00",
-                "remind_times": ["2026-03-13T17:00:00"],
-                "notes": "节点备注",
-                "event_role": "multi_node_child",
-                "event_collection_id": "ev2col",
+                "id"                   : "ev2col_m01",
+                "owner_id"             : owner_id,
+                "type"                 : "event",
+                "title"                : "提审",
+                "category"             : "项目",
+                "start_time"           : "2026-03-13T18:00:00",
+                "remind_times"         : ["2026-03-13T17:00:00"],
+                "notes"                : "节点备注",
+                "event_role"           : "multi_node_child",
+                "event_collection_id"  : "ev2col",
                 "event_collection_kind": "multi_node",
-                "event_index": 1,
-                "event_node_key": "m01",
+                "event_index"          : 1,
+                "event_node_key"       : "m01",
             }
         )
         db.create_event_collection(
             {
-                "id": "series",
-                "owner_id": owner_id,
-                "kind": "recurring",
-                "title": "周会",
-                "content": "",
-                "category": "会议",
-                "rrule": "FREQ=WEEKLY",
+                "id"        : "series",
+                "owner_id"  : owner_id,
+                "kind"      : "recurring",
+                "title"     : "周会",
+                "content"   : "",
+                "category"  : "会议",
+                "rrule"     : "FREQ=WEEKLY",
                 "start_time": "2026-03-18T10:00:00",
-                "end_time": "2026-03-18T11:00:00",
+                "end_time"  : "2026-03-18T11:00:00",
             }
         )
         db.insert_item(
             {
-                "id": "series_20260318",
-                "owner_id": owner_id,
-                "type": "event",
-                "title": "周会",
-                "category": "会议",
-                "start_time": "2026-03-18T10:00:00",
-                "end_time": "2026-03-18T11:00:00",
-                "remind_times": ["2026-03-18T09:30:00"],
-                "event_role": "recurring_occurrence",
-                "event_collection_id": "series",
+                "id"                   : "series_20260318",
+                "owner_id"             : owner_id,
+                "type"                 : "event",
+                "title"                : "周会",
+                "category"             : "会议",
+                "start_time"           : "2026-03-18T10:00:00",
+                "end_time"             : "2026-03-18T11:00:00",
+                "remind_times"         : ["2026-03-18T09:30:00"],
+                "event_role"           : "recurring_occurrence",
+                "event_collection_id"  : "series",
                 "event_collection_kind": "recurring",
-                "event_index": 1,
-                "event_node_key": "20260318",
+                "event_index"          : 1,
+                "event_node_key"       : "20260318",
             }
         )
 
@@ -211,13 +151,13 @@ def test_build_events_overview_includes_each_day_for_multi_day_events():
     try:
         db.insert_item(
             {
-                "id": "ev_multiday",
-                "owner_id": owner_id,
-                "type": "event",
-                "title": "跨天出差",
-                "category": "工作",
+                "id"        : "ev_multiday",
+                "owner_id"  : owner_id,
+                "type"      : "event",
+                "title"     : "跨天出差",
+                "category"  : "工作",
                 "start_time": "2026-03-10T22:00:00",
-                "end_time": "2026-03-12T03:00:00",
+                "end_time"  : "2026-03-12T03:00:00",
             }
         )
 
@@ -257,49 +197,49 @@ def test_build_event_detail_includes_reminder_logs_and_related_instances():
     try:
         db.create_event_collection(
             {
-                "id": "series",
-                "owner_id": owner_id,
-                "kind": "recurring",
-                "title": "周会",
-                "content": "",
-                "category": "会议",
-                "rrule": "FREQ=WEEKLY",
+                "id"        : "series",
+                "owner_id"  : owner_id,
+                "kind"      : "recurring",
+                "title"     : "周会",
+                "content"   : "",
+                "category"  : "会议",
+                "rrule"     : "FREQ=WEEKLY",
                 "start_time": "2026-03-18T10:00:00",
-                "end_time": "2026-03-25T11:00:00",
+                "end_time"  : "2026-03-25T11:00:00",
             }
         )
         db.insert_item(
             {
-                "id": "series_20260318",
-                "owner_id": owner_id,
-                "type": "event",
-                "title": "周会",
-                "category": "会议",
-                "start_time": "2026-03-18T10:00:00",
-                "end_time": "2026-03-18T11:00:00",
-                "remind_times": ["2026-03-18T09:30:00"],
-                "event_role": "recurring_occurrence",
-                "event_collection_id": "series",
+                "id"                   : "series_20260318",
+                "owner_id"             : owner_id,
+                "type"                 : "event",
+                "title"                : "周会",
+                "category"             : "会议",
+                "start_time"           : "2026-03-18T10:00:00",
+                "end_time"             : "2026-03-18T11:00:00",
+                "remind_times"         : ["2026-03-18T09:30:00"],
+                "event_role"           : "recurring_occurrence",
+                "event_collection_id"  : "series",
                 "event_collection_kind": "recurring",
-                "event_index": 1,
-                "event_node_key": "20260318",
+                "event_index"          : 1,
+                "event_node_key"       : "20260318",
             }
         )
         db.insert_item(
             {
-                "id": "series_20260325",
-                "owner_id": owner_id,
-                "type": "event",
-                "title": "周会",
-                "category": "会议",
-                "start_time": "2026-03-25T10:00:00",
-                "end_time": "2026-03-25T11:00:00",
-                "remind_times": ["2026-03-25T09:30:00"],
-                "event_role": "recurring_occurrence",
-                "event_collection_id": "series",
+                "id"                   : "series_20260325",
+                "owner_id"             : owner_id,
+                "type"                 : "event",
+                "title"                : "周会",
+                "category"             : "会议",
+                "start_time"           : "2026-03-25T10:00:00",
+                "end_time"             : "2026-03-25T11:00:00",
+                "remind_times"         : ["2026-03-25T09:30:00"],
+                "event_role"           : "recurring_occurrence",
+                "event_collection_id"  : "series",
                 "event_collection_kind": "recurring",
-                "event_index": 2,
-                "event_node_key": "20260325",
+                "event_index"          : 2,
+                "event_node_key"       : "20260325",
             }
         )
         db.log_reminder(
@@ -331,32 +271,32 @@ def test_build_event_detail_preserves_multi_node_leaf_notes():
     try:
         db.create_event_collection(
             {
-                "id": "milestone-detail",
-                "owner_id": owner_id,
-                "kind": "multi_node",
-                "title": "线下会议",
-                "content": "",
-                "category": "会议",
-                "notes": "全局备注",
+                "id"        : "milestone-detail",
+                "owner_id"  : owner_id,
+                "kind"      : "multi_node",
+                "title"     : "线下会议",
+                "content"   : "",
+                "category"  : "会议",
+                "notes"     : "全局备注",
                 "start_time": "2026-04-22T12:43:00",
-                "end_time": "2026-04-26T12:00:00",
+                "end_time"  : "2026-04-26T12:00:00",
             }
         )
         db.insert_item(
             {
-                "id": "milestone-detail_m01",
-                "owner_id": owner_id,
-                "type": "event",
-                "title": "会议开始",
-                "category": "会议",
-                "start_time": "2026-04-22T12:43:00",
-                "notes": "北京南 G823，7车5F 坐",
-                "remind_times": ["2026-04-21T12:43:00", "2026-04-25T12:00:00"],
-                "event_role": "multi_node_child",
-                "event_collection_id": "milestone-detail",
+                "id"                   : "milestone-detail_m01",
+                "owner_id"             : owner_id,
+                "type"                 : "event",
+                "title"                : "会议开始",
+                "category"             : "会议",
+                "start_time"           : "2026-04-22T12:43:00",
+                "notes"                : "北京南 G823，7车5F 坐",
+                "remind_times"         : ["2026-04-21T12:43:00", "2026-04-25T12:00:00"],
+                "event_role"           : "multi_node_child",
+                "event_collection_id"  : "milestone-detail",
                 "event_collection_kind": "multi_node",
-                "event_index": 1,
-                "event_node_key": "m01",
+                "event_index"          : 1,
+                "event_node_key"       : "m01",
             }
         )
 
@@ -379,45 +319,45 @@ def test_events_overview_and_detail_return_collection_context_for_leaf_events():
     try:
         collection_id = db.create_event_collection(
             {
-                "id": "colgraph",
-                "owner_id": owner_id,
-                "kind": "multi_node",
-                "title": "发布项目",
-                "category": "项目",
+                "id"        : "colgraph",
+                "owner_id"  : owner_id,
+                "kind"      : "multi_node",
+                "title"     : "发布项目",
+                "category"  : "项目",
                 "start_time": "2030-05-01T10:00:00",
-                "end_time": "2030-05-02T18:00:00",
+                "end_time"  : "2030-05-02T18:00:00",
             }
         )
         db.insert_item(
             {
-                "id": "colgraph_m01",
-                "owner_id": owner_id,
-                "type": "event",
-                "title": "提审",
-                "category": "项目",
-                "start_time": "2030-05-01T10:00:00",
-                "reminder_rules": [{"offset_seconds": 0}],
-                "remind_times": ["2030-05-01T10:00:00"],
-                "event_role": "multi_node_child",
-                "event_collection_id": collection_id,
+                "id"                   : "colgraph_m01",
+                "owner_id"             : owner_id,
+                "type"                 : "event",
+                "title"                : "提审",
+                "category"             : "项目",
+                "start_time"           : "2030-05-01T10:00:00",
+                "reminder_rules"       : [{"offset_seconds": 0}],
+                "remind_times"         : ["2030-05-01T10:00:00"],
+                "event_role"           : "multi_node_child",
+                "event_collection_id"  : collection_id,
                 "event_collection_kind": "multi_node",
-                "event_index": 1,
+                "event_index"          : 1,
             }
         )
         db.insert_item(
             {
-                "id": "colgraph_m02",
-                "owner_id": owner_id,
-                "type": "event",
-                "title": "上线",
-                "category": "项目",
-                "start_time": "2030-05-02T18:00:00",
-                "reminder_rules": [{"offset_seconds": 0}],
-                "remind_times": ["2030-05-02T18:00:00"],
-                "event_role": "multi_node_child",
-                "event_collection_id": collection_id,
+                "id"                   : "colgraph_m02",
+                "owner_id"             : owner_id,
+                "type"                 : "event",
+                "title"                : "上线",
+                "category"             : "项目",
+                "start_time"           : "2030-05-02T18:00:00",
+                "reminder_rules"       : [{"offset_seconds": 0}],
+                "remind_times"         : ["2030-05-02T18:00:00"],
+                "event_role"           : "multi_node_child",
+                "event_collection_id"  : collection_id,
                 "event_collection_kind": "multi_node",
-                "event_index": 2,
+                "event_index"          : 2,
             }
         )
 
@@ -454,9 +394,9 @@ def test_events_overview_and_detail_return_collection_context_for_leaf_events():
 def test_events_collection_api_creates_updates_and_deletes_graph():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_event_graph_api_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db         = Database(str(temp_dir / "pendo.db"))
-    owner_id   = "u-web-event-graph-api"
-    events_api = _load_events_module()
+    db       = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-web-event-graph-api"
+    from plugins.pendo.web.api import events as events_api
 
     try:
         created = events_api.create_event_collection(
@@ -520,9 +460,9 @@ def test_events_collection_api_rejects_invalid_child_without_partial_writes():
         ROOT / ".pytest_cache" / "tmp" / f"pendo_web_event_graph_invalid_child_{uuid.uuid4().hex}"
     )
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db         = Database(str(temp_dir / "pendo.db"))
-    owner_id   = "u-web-event-graph-invalid-child"
-    events_api = _load_events_module()
+    db       = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-web-event-graph-invalid-child"
+    from plugins.pendo.web.api import events as events_api
 
     try:
         with pytest.raises(events_api.HTTPException) as exc_info:
@@ -574,9 +514,9 @@ def test_events_collection_update_rejects_invalid_reminder_rules():
         ROOT / ".pytest_cache" / "tmp" / f"pendo_web_event_graph_invalid_rules_{uuid.uuid4().hex}"
     )
     temp_dir.mkdir(parents=True, exist_ok=True)
-    db         = Database(str(temp_dir / "pendo.db"))
-    owner_id   = "u-web-event-graph-invalid-rules"
-    events_api = _load_events_module()
+    db       = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-web-event-graph-invalid-rules"
+    from plugins.pendo.web.api import events as events_api
 
     try:
         created = events_api.create_event_collection(
@@ -629,13 +569,13 @@ def test_build_events_overview_batches_reminder_log_reads(monkeypatch):
             end_time = start_time.replace("09:00:00", "10:00:00")
             db.insert_item(
                 {
-                    "id": event_id,
-                    "owner_id": owner_id,
-                    "type": "event",
-                    "title": event_id,
-                    "category": "会议",
-                    "start_time": start_time,
-                    "end_time": end_time,
+                    "id"          : event_id,
+                    "owner_id"    : owner_id,
+                    "type"        : "event",
+                    "title"       : event_id,
+                    "category"    : "会议",
+                    "start_time"  : start_time,
+                    "end_time"    : end_time,
                     "remind_times": [start_time.replace("09:00:00", "08:00:00")],
                 }
             )
@@ -689,49 +629,49 @@ def test_build_events_overview_counts_only_visible_nodes_and_in_range_reminders(
     try:
         db.create_event_collection(
             {
-                "id": "visible_nodes",
-                "owner_id": owner_id,
-                "kind": "multi_node",
-                "title": "五月节点",
-                "content": "",
-                "category": "项目",
+                "id"        : "visible_nodes",
+                "owner_id"  : owner_id,
+                "kind"      : "multi_node",
+                "title"     : "五月节点",
+                "content"   : "",
+                "category"  : "项目",
                 "start_time": "2026-04-29T09:00:00",
-                "end_time": "2026-05-20T10:00:00",
+                "end_time"  : "2026-05-20T10:00:00",
             }
         )
         db.insert_item(
             {
-                "id": "visible_nodes_m01",
-                "owner_id": owner_id,
-                "type": "event",
-                "title": "前置",
-                "category": "项目",
-                "start_time": "2026-04-29T09:00:00",
-                "remind_times": ["2026-05-01T08:00:00"],
-                "event_role": "multi_node_child",
-                "event_collection_id": "visible_nodes",
+                "id"                   : "visible_nodes_m01",
+                "owner_id"             : owner_id,
+                "type"                 : "event",
+                "title"                : "前置",
+                "category"             : "项目",
+                "start_time"           : "2026-04-29T09:00:00",
+                "remind_times"         : ["2026-05-01T08:00:00"],
+                "event_role"           : "multi_node_child",
+                "event_collection_id"  : "visible_nodes",
                 "event_collection_kind": "multi_node",
-                "event_index": 1,
-                "event_node_key": "m01",
+                "event_index"          : 1,
+                "event_node_key"       : "m01",
             }
         )
         db.insert_item(
             {
-                "id": "visible_nodes_m02",
-                "owner_id": owner_id,
-                "type": "event",
-                "title": "发布",
-                "category": "项目",
-                "start_time": "2026-05-20T10:00:00",
+                "id"          : "visible_nodes_m02",
+                "owner_id"    : owner_id,
+                "type"        : "event",
+                "title"       : "发布",
+                "category"    : "项目",
+                "start_time"  : "2026-05-20T10:00:00",
                 "remind_times": [
                     "2026-04-29T08:00:00",
                     "2026-05-20T09:00:00",
                 ],
-                "event_role": "multi_node_child",
-                "event_collection_id": "visible_nodes",
+                "event_role"           : "multi_node_child",
+                "event_collection_id"  : "visible_nodes",
                 "event_collection_kind": "multi_node",
-                "event_index": 2,
-                "event_node_key": "m02",
+                "event_index"          : 2,
+                "event_node_key"       : "m02",
             }
         )
 
@@ -761,17 +701,17 @@ def test_build_events_overview_accepts_offset_aware_imported_events():
     try:
         db.insert_item(
             {
-                "id": "aware_event",
-                "owner_id": owner_id,
-                "type": "event",
-                "title": "带时区的导入日程",
-                "category": "导入",
-                "start_time": "2026-01-21T22:27:00+08:00",
-                "end_time": "2026-01-21T23:00:00+08:00",
-                "timezone": "Asia/Shanghai",
+                "id"          : "aware_event",
+                "owner_id"    : owner_id,
+                "type"        : "event",
+                "title"       : "带时区的导入日程",
+                "category"    : "导入",
+                "start_time"  : "2026-01-21T22:27:00+08:00",
+                "end_time"    : "2026-01-21T23:00:00+08:00",
+                "timezone"    : "Asia/Shanghai",
                 "remind_times": ["2026-01-21T22:27:00+08:00"],
-                "created_at": "2026-01-21T22:27:00+08:00",
-                "updated_at": "2026-01-21T22:27:00+08:00",
+                "created_at"  : "2026-01-21T22:27:00+08:00",
+                "updated_at"  : "2026-01-21T22:27:00+08:00",
             }
         )
 

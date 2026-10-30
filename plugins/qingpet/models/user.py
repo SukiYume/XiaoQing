@@ -25,51 +25,51 @@ _TOTAL_COUNTER_FIELDS = tuple(f"total_{action}_count" for action in _ACTION_NAME
 class User:
     """保存单个用户在一个群内的资产、限额计数和管理状态。"""
 
-    user_id: str
+    user_id : str
     group_id: int
 
-    coins: int             = 100
+    coins            : int = 100
     friendship_points: int = 0
 
     # 每日计数
-    today_coins_earned: int    = 0
-    today_feed_count: int      = 0
-    today_clean_count: int     = 0
-    today_play_count: int      = 0
-    today_train_count: int     = 0
-    today_explore_count: int   = 0
-    today_visit_count: int     = 0
-    today_gift_count: int      = 0
+    today_coins_earned   : int = 0
+    today_feed_count     : int = 0
+    today_clean_count    : int = 0
+    today_play_count     : int = 0
+    today_train_count    : int = 0
+    today_explore_count  : int = 0
+    today_visit_count    : int = 0
+    today_gift_count     : int = 0
     today_free_feed_count: int = 0
-    today_message_count: int   = 0
+    today_message_count  : int = 0
 
     # 累计计数（用于称号系统）
-    total_feed_count: int      = 0
-    total_clean_count: int     = 0
-    total_play_count: int      = 0
-    total_train_count: int     = 0
-    total_explore_count: int   = 0
-    total_visit_count: int     = 0
-    total_gift_count: int      = 0
+    total_feed_count     : int = 0
+    total_clean_count    : int = 0
+    total_play_count     : int = 0
+    total_train_count    : int = 0
+    total_explore_count  : int = 0
+    total_visit_count    : int = 0
+    total_gift_count     : int = 0
     total_free_feed_count: int = 0
-    total_message_count: int   = 0
+    total_message_count  : int = 0
 
     # 称号列表
     titles: list[str] = field(default_factory=list)
 
     last_visit_time: datetime | None = None
-    last_gift_time: datetime | None  = None
+    last_gift_time : datetime | None = None
 
     trustee_until: datetime | None = None
 
     is_banned: bool            = False
     ban_until: datetime | None = None
 
-    created_at: datetime = field(default_factory=utc_now)
+    created_at : datetime = field(default_factory=utc_now)
     last_active: datetime = field(default_factory=utc_now)
 
     # 数据库乐观锁版本不参与业务计数增量。
-    version: int = 0
+    version         : int = 0
     _persisted_state: dict[str, object] = field(default_factory=dict, repr=False, compare=False)
 
     _DELTA_FIELDS: ClassVar[frozenset[str]] = frozenset(

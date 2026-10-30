@@ -143,15 +143,14 @@ async def test_action_history_get_recent_async_does_not_overwrite_concurrent_app
         gate.set()
         records = await pending
 
-    assert len(records) == 1
-    assert records[0].reasoning == "new-record"
+    # 加载期间追加的记录与磁盘历史合并：两条都保留，顺序为旧记录在前。
+    assert [record.reasoning for record in records] == ["persisted", "new-record"]
     store.flush(chat_id)
 
     reloaded = ActionHistoryStore()
     reloaded.bind(tmp_path)
     persisted = await reloaded.get_recent_async(chat_id, max_items=10)
-    assert len(persisted) == 1
-    assert persisted[0].reasoning == "new-record"
+    assert [record.reasoning for record in persisted] == ["persisted", "new-record"]
 
 
 @pytest.mark.asyncio

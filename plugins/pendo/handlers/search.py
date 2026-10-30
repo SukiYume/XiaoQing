@@ -20,6 +20,7 @@ from ..models.item import (
     TaskItem,
     get_item_type_value,
 )
+from ..utils.currency import currency_label
 from ..utils.error_handlers import handle_command_errors
 from ..utils.formatters import (
     PRIORITY_ICONS,
@@ -45,40 +46,40 @@ if TYPE_CHECKING:
 SearchItem    = EventItem | TaskItem | DiaryItem | NoteItem | LedgerItem
 SearchFilters = dict[str, Any]
 
-_ALLOWED_SEARCH_TYPES: Final      = frozenset({"event", "task", "note", "diary", "ledger"})
-_ALLOWED_TASK_STATUS: Final       = frozenset({"open", "done", "cancelled"})
+_ALLOWED_SEARCH_TYPES     : Final = frozenset({"event", "task", "note", "diary", "ledger"})
+_ALLOWED_TASK_STATUS      : Final = frozenset({"open", "done", "cancelled"})
 _ALLOWED_TRANSACTION_TYPES: Final = frozenset({"income", "expense", "transfer"})
-_SEARCH_TYPE_ORDER: Final         = ("event", "task", "ledger", "diary", "note")
-_SEARCH_RESULT_LIMIT: Final       = 15
-_SEARCH_INPUT_MAX_CHARS: Final    = 2_000
-_SEARCH_QUERY_MAX_CHARS: Final    = 100
-_SEARCH_TITLE_MAX_CHARS: Final    = 60
-_FILTER_TOKEN_RE: Final           = re.compile(
+_SEARCH_TYPE_ORDER        : Final = ("event", "task", "ledger", "diary", "note")
+_SEARCH_RESULT_LIMIT      : Final = 15
+_SEARCH_INPUT_MAX_CHARS   : Final = 2_000
+_SEARCH_QUERY_MAX_CHARS   : Final = 100
+_SEARCH_TITLE_MAX_CHARS   : Final = 60
+_FILTER_TOKEN_RE          : Final = re.compile(
     r"^(type|status|category|transaction_type|account|merchant|tag|tags|range)[=:](.*)$",
     re.IGNORECASE,
 )
 _FILTER_KEY_ALIASES: Final = {
     "account": "account_name",
-    "tag": "tags",
+    "tag"    : "tags",
 }
 _LEDGER_FILTER_KEYS: Final = frozenset({"transaction_type", "account_name", "merchant"})
 _DATE_FIELD_BY_TYPE: Final = {
-    "event": "start_time",
-    "task": "plan_date",
-    "diary": "diary_date",
+    "event" : "start_time",
+    "task"  : "plan_date",
+    "diary" : "diary_date",
     "ledger": "ledger_date",
-    "note": "created_at",
+    "note"  : "created_at",
 }
-_DATE_ONLY_SEARCH_FIELDS: Final           = frozenset({"plan_date", "diary_date", "ledger_date"})
-_TYPE_ACTION_HINTS: Final[dict[str, str]] = {
-    "event": "/pendo event view <id>",
-    "task": "/pendo todo view <id>",
-    "note": "/pendo note view <id>",
-    "diary": "/pendo diary view <日期或ID>",
+_DATE_ONLY_SEARCH_FIELDS: Final = frozenset({"plan_date", "diary_date", "ledger_date"})
+_TYPE_ACTION_HINTS      : Final[dict[str, str]] = {
+    "event" : "/pendo event view <id>",
+    "task"  : "/pendo todo view <id>",
+    "note"  : "/pendo note view <id>",
+    "diary" : "/pendo diary view <日期或ID>",
     "ledger": "/pendo ledger view <id>",
 }
 _TRANSACTION_LABELS: Final = {"income": "收入", "expense": "支出", "transfer": "转账"}
-_TRANSACTION_SIGNS: Final  = {"income": "+", "expense": "-", "transfer": "↔"}
+_TRANSACTION_SIGNS : Final = {"income": "+", "expense": "-", "transfer": "↔"}
 
 
 class SearchHandler:
@@ -129,7 +130,7 @@ class SearchHandler:
         if not results:
             filter_hint = "\n💡 试试去掉筛选条件扩大搜索范围" if filters else ""
             return {
-                "status": "success",
+                "status" : "success",
                 "message": f'🔍 没有找到包含 "{query}" 的结果{filter_hint}',
             }
 
@@ -180,8 +181,8 @@ class SearchHandler:
         except ValueError as exc:
             raise ValueError("搜索参数中的引号未闭合") from exc
 
-        query_tokens: list[str]     = []
-        raw_filters: dict[str, str] = {}
+        query_tokens: list[str]      = []
+        raw_filters : dict[str, str] = {}
         for token in tokens:
             parsed = cls._parse_filter_token(token)
             if parsed is None:
@@ -406,7 +407,7 @@ class SearchHandler:
         main_line = f"• {icon} {title}"
         if isinstance(item, LedgerItem):
             sign = _TRANSACTION_SIGNS.get(item.transaction_type, "-")
-            main_line += f"  {sign}¥{ledger_amount_yuan(item):.2f}"
+            main_line += f"  {sign}{currency_label(item.currency)}{ledger_amount_yuan(item):.2f}"
         elif isinstance(item, TaskItem):
             status_icon = STATUS_ICONS.get(item.status.value, "⬜")
             main_line += f" {status_icon}"

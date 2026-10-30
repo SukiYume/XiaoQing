@@ -6,6 +6,7 @@ import re
 import sqlite3
 import threading
 import time
+import uuid
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
@@ -52,6 +53,14 @@ logger                = logging.getLogger(__name__)
 _CACHE_MISS           = object()
 _SQLITE_ID_BATCH_SIZE = 500
 _SQL_IDENTIFIER       = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+
+def _is_iso_date(value: str) -> bool:
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
 
 
 class DuplicateBundleImportError(RuntimeError):
@@ -488,7 +497,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             update_dict["updated_at"] = utc_now_iso()
         normalization_context = {
             "owner_id": current_owner,
-            "type": str(current_row["type"] or ""),
+            "type"    : str(current_row["type"] or ""),
             "timezone": str(current_row["timezone"] or user_timezone.key),
             **update_dict,
         }
@@ -582,7 +591,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         operations: list[tuple[str, dict[str, Any]]],
         owner_id: str,
     ) -> tuple[list[tuple[str, str, str | None]], list[str]]:
-        results: list[tuple[str, str, str | None]] = []
+        results           : list[tuple[str, str, str | None]] = []
         refreshed_item_ids: list[str] = []
         user_timezone = TimezoneHelper.get_user_timezone(owner_id, self)
         for action, raw_payload in operations:
@@ -881,12 +890,17 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 cursor.execute(f"DELETE FROM items_fts WHERE id IN ({placeholders})", batch)
 
             if operation_action:
+                # 每次删除操作有自己的批次标识：同一秒内的两次独立删除不会被一次撤销一起恢复。
+                batch_id = uuid.uuid4().hex
                 for item_id in deleted_ids:
-                    details = (
-                        details_factory(item_id)
-                        if details_factory is not None
-                        else {"soft_delete": True}
-                    )
+                    details = {
+                        **(
+                            details_factory(item_id)
+                            if details_factory is not None
+                            else {"soft_delete": True}
+                        ),
+                        "delete_batch_id": batch_id,
+                    }
                     self._log_operation_with_cursor(
                         cursor,
                         user_id    = owner_id,
@@ -1479,7 +1493,11 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         resolved   = dict(filters or {})
         date_field = str(resolved.get("date_field") or "")
         sort_field = str(resolved.get("sort_field") or "created_at")
-        if date_field in self._TIMESTAMP_FIELDS or sort_field in self._TIMESTAMP_FIELDS:
+        if (
+            date_field in self._TIMESTAMP_FIELDS
+            or sort_field in self._TIMESTAMP_FIELDS
+            or resolved.get("overdue_date")
+        ):
             resolved["_user_timezone"] = TimezoneHelper.get_user_timezone(owner_id, self).key
         return resolved
 
@@ -1505,6 +1523,20 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             if cached is not _CACHE_MISS:
                 return cast(list[Item], cached)
 
+        items, _raw_count = self._read_items_page(owner_id, resolved_filters, limit, offset)
+        if cache_key is not None:
+            self._cache_set(cache_key, items)
+        return items
+
+    def _read_items_page(
+        self,
+        owner_id: str,
+        resolved_filters: dict[str, Any],
+        limit: int,
+        offset: int,
+    ) -> tuple[list[Item], int]:
+        """读取一页并返回 (可解码条目, 数据库原始行数)；分页推进依据原始行数。"""
+
         conn   = self.get_connection()
         cursor = conn.cursor()
 
@@ -1517,15 +1549,19 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         )
         cursor.execute(sql, params + sort_params + [limit, offset])
 
+        rows              = cursor.fetchall()
         items: list[Item] = []
-        for row in cursor.fetchall():
+        for row in rows:
             item = self._row_to_item(row)
             if item:
                 items.append(item)
-
-        if cache_key is not None:
-            self._cache_set(cache_key, items)
-        return items
+        if len(items) < len(rows):
+            logger.warning(
+                "Pendo skipped undecodable items owner=%s skipped=%d",
+                owner_id,
+                len(rows) - len(items),
+            )
+        return items, len(rows)
 
     def get_item_date_bounds(
         self,
@@ -1537,10 +1573,10 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
     ) -> dict[str, str]:
         """按用户时区独立聚合有效条目的最早日期与最晚日期。"""
         fields_by_type = {
-            "event": ("start_time", "COALESCE(NULLIF(end_time, ''), start_time)"),
-            "task": ("plan_date", "created_at", "completed_at", "cancelled_at", "deadline_at"),
-            "note": ("created_at",),
-            "diary": ("diary_date",),
+            "event" : ("start_time", "COALESCE(NULLIF(end_time, ''), start_time)"),
+            "task"  : ("plan_date", "created_at", "completed_at", "cancelled_at", "deadline_at"),
+            "note"  : ("created_at",),
+            "diary" : ("diary_date",),
             "ledger": ("ledger_date",),
         }
         fields = fields_by_type.get(item_type)
@@ -1580,6 +1616,120 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             params,
         )
         return [str(row["id"]) for row in rows.fetchall()]
+
+    def get_task_command_list(
+        self,
+        owner_id: str,
+        filters: dict[str, object],
+        *,
+        limit: int | None,
+        offset: int,
+        group_by_category: bool,
+        overview: bool                               = False,
+        time_range: tuple[datetime, datetime] | None = None,
+        shortcut: str | None                         = None,
+        now: datetime | None                         = None,
+        priority: int | None                         = None,
+    ) -> tuple[list[Item], int, dict[str, dict[str, int]]]:
+        """数据库完成待办筛选、计数和分页；完整对象仅为展示页解码。"""
+        where, params = self._item_list_conditions(owner_id, {**filters, "type": "task"})
+        if priority is not None:
+            where.append("priority = ?")
+            params.append(priority)
+        zone = TimezoneHelper.get_user_timezone(owner_id, self).key
+        if time_range is not None:
+            start, end = time_range
+            where.append(
+                "(substr(plan_date, 1, 10) BETWEEN ? AND ? OR pendo_local_wall(deadline_at, ?) BETWEEN ? AND ?)"
+            )
+            params.extend(
+                (
+                    start.date().isoformat(),
+                    end.date().isoformat(),
+                    zone,
+                    start.isoformat(timespec="microseconds"),
+                    end.isoformat(timespec="microseconds"),
+                )
+            )
+        elif shortcut in {"overdue", "upcoming"}:
+            if now is None:
+                raise ValueError("task time filter requires current local time")
+            operator = "<" if shortcut == "overdue" else ">"
+            where.append(
+                f"((COALESCE(plan_date, '') != '' AND substr(plan_date, 1, 10) {operator} ?) OR (pendo_local_wall(deadline_at, ?) != '' AND pendo_local_wall(deadline_at, ?) {operator} ?))"
+            )
+            params.extend(
+                (now.date().isoformat(), zone, zone, now.isoformat(timespec="microseconds"))
+            )
+        elif shortcut == "inbox":
+            where.append("COALESCE(plan_date, '') = ''")
+        condition                             = " AND ".join(where)
+        conn                                  = self.get_connection()
+        categories: dict[str, dict[str, int]] = {}
+        # 分类在写入边界规范为单行；空分类沿用命令端的展示名称。
+        category_sql = "COALESCE(NULLIF(TRIM(category), ''), '未分类')"
+        for row in conn.execute(
+            f"SELECT {category_sql} AS category, COALESCE(status, 'open') AS status, COUNT(*) AS count FROM items WHERE {condition} GROUP BY {category_sql}, status",
+            params,
+        ):
+            counts = categories.setdefault(
+                str(row["category"]), {"open": 0, "done": 0, "cancelled": 0}
+            )
+            bucket = row["status"] if row["status"] in {"done", "cancelled"} else "open"
+            counts[bucket] += int(row["count"])
+        total = sum(sum(counts.values()) for counts in categories.values())
+        if overview:
+            return [], total, categories
+        order = (category_sql + ", ") if group_by_category else ""
+        order += "COALESCE(NULLIF(priority, 0), 3), COALESCE(NULLIF(TRIM(plan_date), ''), '9999-12-31'), COALESCE(NULLIF(TRIM(deadline_at), ''), '9999-12-31T99:99:99'), COALESCE(created_at, ''), id"
+        sql = f"SELECT * FROM items WHERE {condition} ORDER BY {order}"
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params.extend((limit, offset))
+        tasks = []
+        for row in conn.execute(sql, params):
+            item = self._row_to_item(row)
+            if item is not None:
+                tasks.append(item)
+        return tasks, total, categories
+
+    def get_note_command_list(
+        self,
+        owner_id: str,
+        filters: dict[str, object],
+        *,
+        limit: int | None,
+        offset: int,
+        overview: bool,
+    ) -> tuple[list[Item], int, dict[str, tuple[int, set[str]]]]:
+        """笔记命令分别读取计数、分类摘要和当前页，保留原始文本排序。"""
+        where, params = self._item_list_conditions(owner_id, {**filters, "type": "note"})
+        condition = " AND ".join(where)
+        conn      = self.get_connection()
+        total     = int(
+            conn.execute(f"SELECT COUNT(*) FROM items WHERE {condition}", params).fetchone()[0]
+        )
+        categories: dict[str, tuple[int, set[str]]] = {}
+        if overview:
+            for row in conn.execute(f"SELECT category, tags FROM items WHERE {condition}", params):
+                category = str(row["category"] or "未分类")
+                count, tags = categories.get(category, (0, set()))
+                tags.update(self._decode_json_field("tags", row["tags"]) or [])
+                categories[category] = (count + 1, tags)
+            return [], total, categories
+        sql = (
+            f"SELECT * FROM items WHERE {condition} "
+            "ORDER BY COALESCE(updated_at, '') DESC, COALESCE(created_at, '') DESC, id DESC"
+        )
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params.extend((limit, offset))
+        notes = []
+        for row in conn.execute(sql, params):
+            item = self._row_to_item(row)
+            if item is not None:
+                notes.append(item)
+        return notes, total, categories
 
     def get_note_backlinks(
         self,
@@ -1844,18 +1994,14 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             raise ValueError("page_size must be positive")
         results: list[Item] = []
         offset              = 0
+        resolved_filters    = self._resolve_item_filters(owner_id, filters)
         while True:
-            page = self.get_items(
-                owner_id,
-                filters   = filters,
-                limit     = page_size,
-                offset    = offset,
-                use_cache = False,
-            )
+            # 末页判断与偏移都按数据库原始行数：某页里有坏记录被跳过时，不能提前结束而漏掉后续数据。
+            page, raw_count = self._read_items_page(owner_id, resolved_filters, page_size, offset)
             results.extend(page)
-            if len(page) < page_size:
+            if raw_count < page_size:
                 return results
-            offset += len(page)
+            offset += raw_count
 
     def get_active_user_ids(self) -> list[str]:
         """返回至少有一条未删除数据的去重用户 ID。"""
@@ -1897,18 +2043,24 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                         raw_settings = decoded
                 except (TypeError, json.JSONDecodeError, ValueError):
                     raw_settings = {}
-            if raw_settings.get("last_todo_migrate_date") == target_date:
+            last_target = raw_settings.get("last_todo_migrate_date")
+            if last_target == target_date:
                 return 0
+            # 停机跨过几天时，上次迁移目标日到昨天之间仍未完成的计划待办一并顺延；
+            # 从未迁移过的用户只处理昨天，不会把很久以前的计划突然搬到今天。
+            lower_bound = source_date
+            if isinstance(last_target, str) and _is_iso_date(last_target):
+                lower_bound = min(last_target, source_date)
 
             rows = cursor.execute(
                 """
-                SELECT id, version
+                SELECT id, version, plan_date
                 FROM items
-                WHERE owner_id = ? AND type = ? AND plan_date = ?
+                WHERE owner_id = ? AND type = ? AND plan_date >= ? AND plan_date <= ?
                   AND status = 'open' AND deleted = 0
                 ORDER BY id
                 """,
-                (user_id, ItemType.TASK.value, source_date),
+                (user_id, ItemType.TASK.value, lower_bound, source_date),
             ).fetchall()
             for row in rows:
                 cursor.execute(
@@ -1925,7 +2077,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                         row["id"],
                         user_id,
                         ItemType.TASK.value,
-                        source_date,
+                        row["plan_date"],
                         row["version"],
                     ),
                 )
@@ -1941,8 +2093,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                     details   = {
                         "source_date": source_date,
                         "target_date": target_date,
-                        "item_ids": migrated_ids,
-                        "count": len(migrated_ids),
+                        "item_ids"   : migrated_ids,
+                        "count"      : len(migrated_ids),
                     },
                 )
 
@@ -2551,8 +2703,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             item_type = item_type,
             item_id   = item_id,
             details   = {
-                "source_log_ids": unique_ids,
-                "source_action": source_action,
+                "source_log_ids"   : unique_ids,
+                "source_action"    : source_action,
                 "restored_item_ids": list(dict.fromkeys(restored_item_ids)),
             },
             created_at=timestamp,
@@ -2629,25 +2781,35 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             self.cache_clear()
             if collection_affected or item_affected:
                 return {
-                    "status": "success",
-                    "message": f"已恢复日程集合和 {item_affected} 个日程",
-                    "item": None,
-                    "affected": collection_affected + item_affected,
-                    "item_ids": restored_ids,
+                    "status"       : "success",
+                    "message"      : f"已恢复日程集合和 {item_affected} 个日程",
+                    "item"         : None,
+                    "affected"     : collection_affected + item_affected,
+                    "item_ids"     : restored_ids,
                     "collection_id": item_id,
                 }
             return {"status": "error", "message": "该删除操作没有可恢复的数据"}
 
         if action in {"delete_task", "delete_note"}:
-            params: list[Any] = [owner_id, action, log_row["created_at"]]
-            item_type_clause  = ""
+            batch_id = details.get("delete_batch_id")
+            if isinstance(batch_id, str) and batch_id:
+                # 按操作身份选取同批记录。
+                params: list[Any] = [owner_id, action, batch_id]
+                batch_clause      = "json_extract(details, '$.delete_batch_id') = ?"
+            else:
+                # 旧记录没有批次标识，只能沿用同一时间戳的分组。
+                params       = [owner_id, action, log_row["created_at"]]
+                batch_clause = (
+                    "created_at = ? AND json_extract(details, '$.delete_batch_id') IS NULL"
+                )
+            item_type_clause = ""
             if log_row["item_type"] is not None:
                 item_type_clause = " AND item_type = ?"
                 params.append(log_row["item_type"])
             batch_rows = cursor.execute(
                 f"""
                 SELECT id, item_id FROM operation_logs
-                WHERE user_id = ? AND action = ? AND created_at = ?
+                WHERE user_id = ? AND action = ? AND {batch_clause}
                     AND undone_at IS NULL{item_type_clause}
                 ORDER BY id
                 """,
@@ -2673,9 +2835,9 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             if affected:
                 type_name = "待办" if action == "delete_task" else "笔记"
                 return {
-                    "status": "success",
-                    "message": f"已恢复 {affected} 个{type_name}",
-                    "item": None,
+                    "status"  : "success",
+                    "message" : f"已恢复 {affected} 个{type_name}",
+                    "item"    : None,
                     "affected": affected,
                     "item_ids": restored_ids,
                 }
@@ -2725,8 +2887,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                     item_type = item.type.value,
                     item_id   = item.id,
                     details   = {
-                        "source_log_ids": [],
-                        "source_action": "unlogged_delete",
+                        "source_log_ids"   : [],
+                        "source_action"    : "unlogged_delete",
                         "restored_item_ids": [item.id],
                     },
                 )
@@ -2734,9 +2896,9 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         self.cache_clear()
         if affected and restored_item:
             return {
-                "status": "success",
-                "message": "已恢复",
-                "item": restored_item,
+                "status"  : "success",
+                "message" : "已恢复",
+                "item"    : restored_item,
                 "affected": affected,
             }
         return {"status": "error", "message": "该删除操作没有可恢复的数据"}
@@ -2843,10 +3005,10 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             return {"status": "error", "message": "条目已有后续修改，请先处理最新操作"}
 
         return {
-            "status": "success",
-            "item_id": item_id,
-            "action": action,
-            "affected": affected,
+            "status"        : "success",
+            "item_id"       : item_id,
+            "action"        : action,
+            "affected"      : affected,
             "instance_count": len(restorable_ids),
         }
 
@@ -2875,7 +3037,7 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             raise ItemNotFoundException(item_ids[0])
         user_timezone         = TimezoneHelper.get_user_timezone(owner_id, self)
         normalization_context = {
-            "type": str(current_row["type"] or item_type or ""),
+            "type"    : str(current_row["type"] or item_type or ""),
             "timezone": str(current_row["timezone"] or user_timezone.key),
             **restore_values,
         }
@@ -3196,10 +3358,10 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         filters = self._resolve_item_filters(
             user_id,
             {
-                "type": item_type,
+                "type"      : item_type,
                 "date_field": date_field,
                 "start_date": start_date,
-                "end_date": end_date,
+                "end_date"  : end_date,
                 "sort_field": date_field,
                 "sort_order": "DESC",
             },
@@ -3240,8 +3402,8 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         if not unique_user_ids:
             return {}
 
-        results: dict[str, dict[str, Any]] = {}
-        missing_user_ids: list[str]        = []
+        results         : dict[str, dict[str, Any]] = {}
+        missing_user_ids: list[str]                 = []
         for user_id in unique_user_ids:
             cached = self._cache_get_or_miss(self._cache_key("settings", user_id))
             if cached is not _CACHE_MISS:
@@ -3271,14 +3433,14 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
 
     def _default_user_settings(self, user_id: str) -> dict[str, Any]:
         return {
-            "user_id": user_id,
-            "timezone": PendoConfig.DEFAULT_TIMEZONE,
+            "user_id"          : user_id,
+            "timezone"         : PendoConfig.DEFAULT_TIMEZONE,
             "quiet_hours_start": PendoConfig.DEFAULT_QUIET_HOURS_START,
-            "quiet_hours_end": PendoConfig.DEFAULT_QUIET_HOURS_END,
+            "quiet_hours_end"  : PendoConfig.DEFAULT_QUIET_HOURS_END,
             "daily_report_time": PendoConfig.DEFAULT_DAILY_REPORT_TIME,
             "diary_remind_time": PendoConfig.DEFAULT_DIARY_REMIND_TIME,
-            "default_category": PendoConfig.DEFAULT_CATEGORY,
-            "settings_json": normalize_settings_json({}),
+            "default_category" : PendoConfig.DEFAULT_CATEGORY,
+            "settings_json"    : normalize_settings_json({}),
         }
 
     def _hydrate_user_settings_row(self, settings: dict[str, Any]) -> dict[str, Any]:
@@ -3636,9 +3798,9 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
             self._update_fts(
                 item_id,
                 {
-                    "title": row[0] or "",
-                    "content": row[1] or "",
-                    "tags": self._decode_json_field("tags", row[2]),
+                    "title"   : row[0] or "",
+                    "content" : row[1] or "",
+                    "tags"    : self._decode_json_field("tags", row[2]),
                     "category": row[3] or "",
                 },
                 conn,
@@ -3710,9 +3872,9 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
                 self._update_fts(
                     row["id"],
                     {
-                        "title": row["title"] or "",
-                        "content": row["content"] or "",
-                        "tags": tags,
+                        "title"   : row["title"] or "",
+                        "content" : row["content"] or "",
+                        "tags"    : tags,
                         "category": row["category"] or "",
                     },
                     conn,
@@ -3721,6 +3883,6 @@ class Database(WebAuthRepositoryMixin, ReminderRepositoryMixin):
         self.cache_clear()
         return {
             "owner_id": owner_id,
-            "indexed": len(rows),
-            "scope": "owner" if owner_id else "all",
+            "indexed" : len(rows),
+            "scope"   : "owner" if owner_id else "all",
         }

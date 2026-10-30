@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import pytest
+
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from plugins.xiaoqing_chat.config.config import PersonalityConfig
 from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
@@ -9,20 +17,11 @@ from plugins.xiaoqing_chat.planning.goal_state import GoalState
 from plugins.xiaoqing_chat.planning.pfc_engine import PFCRunResult
 from plugins.xiaoqing_chat.planning.pfc_state import PFCConversationState
 from tests.helpers.xiaoqing_chat_test_support import (
-    AsyncMock,
-    MagicMock,
-    Mock,
-    Path,
-    SimpleNamespace,
     _ack_reply_delivery,
     _make_hctx,
     _reply_draft,
     _set_context_principal,
-    asyncio,
-    json,
-    patch,
     patch_turn,
-    pytest,
 )
 
 mock_context       = _fixture_support.mock_context
@@ -505,9 +504,9 @@ async def test_planner_directly_joins_fresh_open_group_turn(monkeypatch):
                         "message": {
                             "content": json.dumps(
                                 {
-                                    "thinking": "没人点名，先不插话",
-                                    "action": "wait",
-                                    "reason": "没有直接叫我",
+                                    "thinking"    : "没人点名，先不插话",
+                                    "action"      : "wait",
+                                    "reason"      : "没有直接叫我",
                                     "wait_seconds": 20,
                                 },
                                 ensure_ascii=False,
@@ -598,9 +597,9 @@ async def test_planner_preserves_wait_for_message_directed_to_someone_else(monke
                         "message": {
                             "content": json.dumps(
                                 {
-                                    "thinking": "这是在问阿泽",
-                                    "action": "wait",
-                                    "reason": "消息定向给其他人",
+                                    "thinking"    : "这是在问阿泽",
+                                    "action"      : "wait",
+                                    "reason"      : "消息定向给其他人",
                                     "wait_seconds": 10,
                                 },
                                 ensure_ascii=False,
@@ -650,17 +649,17 @@ async def test_planner_unavailable_fails_closed_in_group_but_replies_in_private(
     from plugins.xiaoqing_chat.planning.pfc_action_planner import plan_next_action
 
     kwargs = {
-        "secrets": {"_ai": None},
-        "bot_name": "小青",
-        "personality": PersonalityConfig(),
-        "history": [],
-        "goal_list": [],
-        "knowledge_list": [],
-        "action_history_summary": "",
-        "last_action_context": "",
-        "timeout_context": "",
+        "secrets"                     : {"_ai": None},
+        "bot_name"                    : "小青",
+        "personality"                 : PersonalityConfig(),
+        "history"                     : [],
+        "goal_list"                   : [],
+        "knowledge_list"              : [],
+        "action_history_summary"      : "",
+        "last_action_context"         : "",
+        "timeout_context"             : "",
         "last_successful_reply_action": None,
-        "llm": LLMCallConfig(
+        "llm"                         : LLMCallConfig(
             temperature            = 0.7,
             top_p                  = 0.9,
             max_tokens             = 256,
@@ -677,7 +676,7 @@ async def test_planner_unavailable_fails_closed_in_group_but_replies_in_private(
     assert private_plan.action == "direct_reply"
 
     async def _raise_timeout(*_args, **_kwargs):
-        raise asyncio.TimeoutError
+        raise TimeoutError
 
     monkeypatch.setattr(
         pfc_action_planner,
@@ -852,14 +851,14 @@ async def test_topic_summarizer_does_not_repeat_when_capped_length_divides_inter
     )
     memory_db = MagicMock()
     common    = {
-        "data_dir": tmp_path,
-        "memory_db": memory_db,
-        "secrets": {"api_base": "http://test", "api_key": "k", "model": "m"},
-        "bot_name": "小青",
-        "chat_id": chat_id,
+        "data_dir"               : tmp_path,
+        "memory_db"              : memory_db,
+        "secrets"                : {"api_base": "http://test", "api_key": "k", "model": "m"},
+        "bot_name"               : "小青",
+        "chat_id"                : chat_id,
         "min_messages_per_update": 20,
-        "max_cache_topics": 5,
-        "llm": LLMCallConfig(
+        "max_cache_topics"       : 5,
+        "llm"                    : LLMCallConfig(
             temperature            = 0.6,
             top_p                  = 0.9,
             max_tokens             = 256,
@@ -1217,9 +1216,9 @@ async def test_planner_preserves_optional_wait(monkeypatch, seconds, expected):
     from plugins.xiaoqing_chat.planning import pfc_action_planner as planner
 
     response = {
-        "action": "wait",
-        "reason": "wait",
-        "thinking": "user typing",
+        "action"      : "wait",
+        "reason"      : "wait",
+        "thinking"    : "user typing",
         "wait_seconds": seconds,
     }
     fake = AsyncMock(

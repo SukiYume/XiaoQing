@@ -76,7 +76,7 @@ def test_user_commands_reject_unicode_integer_tokens_before_database_access(
 
     assert success is False
     assert expected in message
-    db.assert_not_called()
+    assert db.mock_calls == []
 
 
 @pytest.mark.parametrize(

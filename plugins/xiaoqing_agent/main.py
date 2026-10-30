@@ -296,10 +296,10 @@ async def _act(
         persona      = persona,
     )
     return {
-        "handled": True,
-        "segments": message,
+        "handled"   : True,
+        "segments"  : message,
         "reply_text": _reply_text(message),
-        "task_id": task.task_id if task is not None else "",
+        "task_id"   : task.task_id if task is not None else "",
     }
 
 

@@ -50,13 +50,13 @@ def _final(text: str) -> dict:
 
 def _turn(text: str, **extra) -> dict:
     return {
-        "text": text,
-        "user_id": ADMIN_ID,
-        "group_id": None,
-        "bot_name": "小青",
+        "text"       : text,
+        "user_id"    : ADMIN_ID,
+        "group_id"   : None,
+        "bot_name"   : "小青",
         "sender_name": "主人",
-        "history": [{"role": "user", "name": "主人", "text": "之前聊的"}],
-        "images": [],
+        "history"    : [{"role": "user", "name": "主人", "text": "之前聊的"}],
+        "images"     : [],
         **extra,
     }
 
@@ -97,10 +97,10 @@ async def test_a_member_gets_a_task_limited_to_their_own_commands(tmp_path: Path
         build_command_catalog_node(
             "shell",
             {
-                "name": "shell",
-                "triggers": ["shell"],
-                "help": "在本机执行命令",
-                "usage": "/shell <命令>",
+                "name"      : "shell",
+                "triggers"  : ["shell"],
+                "help"      : "在本机执行命令",
+                "usage"     : "/shell <命令>",
                 "permission": "bot_admin",
             },
             root=True,
@@ -108,10 +108,10 @@ async def test_a_member_gets_a_task_limited_to_their_own_commands(tmp_path: Path
         build_command_catalog_node(
             "earthquake",
             {
-                "name": "earthquake",
+                "name"    : "earthquake",
                 "triggers": ["earthquake"],
-                "help": "最近地震",
-                "usage": "/earthquake",
+                "help"    : "最近地震",
+                "usage"   : "/earthquake",
             },
             root=True,
         ),
@@ -215,7 +215,7 @@ async def test_chat_decision_and_triage_failure_fall_back_to_chat(
         assert await agent_main.handle_turn(_turn("今天好累"), context) is None
     route, messages, kwargs = context.ai.calls[0]
     assert route == "agent"
-    assert kwargs["total_timeout_seconds"] == 20.0
+    assert "total_timeout_seconds" not in kwargs
     assert "说话人现在说：今天好累" in messages[1]["content"]
     assert "主人: 之前聊的" in messages[1]["content"]
 
@@ -241,7 +241,7 @@ async def test_fast_task_answers_in_the_same_turn(context: FakeAgentContext) -> 
     assert result["reply_text"] == "是 1267650600228229401496703205376"
     assert len(result["task_id"]) == 6
     task_prompt = context.ai.calls[1][1]
-    assert context.ai.calls[1][2]["temperature"] == 0.2
+    assert "temperature" not in context.ai.calls[1][2]
     assert "任务：小青，2 的 100 次方是多少" in task_prompt[1]["content"]
     assert "主人" in task_prompt[0]["content"]
     assert "QQ" in task_prompt[0]["content"]
@@ -362,7 +362,7 @@ async def test_help_to_ledger_write_and_followup_edit_preserves_one_row(
                         "xiaoqing_command",
                         {
                             "delivery": "continue",
-                            "command": f"/pendo ledger edit {item_id} {edit_args}",
+                            "command" : f"/pendo ledger edit {item_id} {edit_args}",
                         },
                     )
                 ],
@@ -708,18 +708,18 @@ def test_agent_config_defaults_and_clamps() -> None:
     assert AgentConfig().enabled is False
     config = parse_agent_config(
         {
-            "enabled": "yes",
-            "max_steps": 0,
-            "task_timeout_seconds": 10,
-            "tool_timeout_seconds": 5000,
+            "enabled"                 : "yes",
+            "max_steps"               : 0,
+            "task_timeout_seconds"    : 10,
+            "tool_timeout_seconds"    : 5000,
             "max_tool_timeout_seconds": 600,
-            "inline_wait_seconds": 999,
-            "max_admin_tasks": True,
-            "max_member_tasks": -3,
-            "max_tool_output_chars": 10,
-            "history_tasks": 50,
-            "python": "  C:/py/python.exe ",
-            "shell": 5,
+            "inline_wait_seconds"     : 999,
+            "max_admin_tasks"         : True,
+            "max_member_tasks"        : -3,
+            "max_tool_output_chars"   : 10,
+            "history_tasks"           : 50,
+            "python"                  : "  C:/py/python.exe ",
+            "shell"                   : 5,
         }
     )
     assert config.enabled is False
@@ -772,10 +772,10 @@ def test_capability_summary_lists_real_commands_and_hides_chat_and_agent() -> No
         build_command_catalog_node(
             "jupyter",
             {
-                "name": "jupyter",
+                "name"    : "jupyter",
                 "triggers": ["py"],
-                "help": "执行 Python 代码；更多说明",
-                "usage": "/py <代码>",
+                "help"    : "执行 Python 代码；更多说明",
+                "usage"   : "/py <代码>",
                 "contexts": ["private"],
             },
             root=True,
@@ -788,10 +788,10 @@ def test_capability_summary_lists_real_commands_and_hides_chat_and_agent() -> No
         build_command_catalog_node(
             "qingpet",
             {
-                "name": "qingpet",
+                "name"    : "qingpet",
                 "triggers": ["宠物"],
-                "help": "宠物养成",
-                "usage": "/宠物 <子命令>",
+                "help"    : "宠物养成",
+                "usage"   : "/宠物 <子命令>",
             },
             root=True,
         ),
@@ -902,7 +902,7 @@ async def test_decide_then_act_judges_once(context: FakeAgentContext) -> None:
     context.ai.script = [_triage("task"), _final("1024")]
     decided = await agent_main.handle_turn({**_turn("2 的 10 次方"), "phase": "decide"}, context)
     assert decided == {
-        "handled": True,
+        "handled" : True,
         "decision": {"action": "task", "task_id": ""},
     }
     assert len(context.ai.calls) == 1 and agent_main.get_runtime(context).running == {}

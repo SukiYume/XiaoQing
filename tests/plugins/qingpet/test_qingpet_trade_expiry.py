@@ -90,9 +90,9 @@ def _asset_state(database: Database, listing_id: int) -> dict:
     )
     return {
         "seller_coins": seller.coins,
-        "buyer_coins": buyer.coins,
+        "buyer_coins" : buyer.coins,
         "seller_items": database.get_or_create_inventory(SELLER_ID, GROUP_ID).items,
-        "buyer_items": database.get_or_create_inventory(BUYER_ID, GROUP_ID).items,
+        "buyer_items" : database.get_or_create_inventory(BUYER_ID, GROUP_ID).items,
         "ledger_count": ledger_count,
     }
 
@@ -108,9 +108,9 @@ def test_saved_listing_id_cannot_purchase_at_expiry_and_refunds_once(trade_db):
     assert _raw_listing(database, listing_id)["status"] == "expired"
     assert _asset_state(database, listing_id) == {
         "seller_coins": 100,
-        "buyer_coins": 200,
+        "buyer_coins" : 200,
         "seller_items": {"apple": 3},
-        "buyer_items": {},
+        "buyer_items" : {},
         "ledger_count": 1,
     }
     assert database.settle_expired_trade_listings(GROUP_ID) == 0
@@ -159,9 +159,9 @@ def test_exact_expiry_purchase_cancel_and_settlement_have_one_terminal_state(tra
     assert listing["status"] == "expired"
     assert _asset_state(database, listing_id) == {
         "seller_coins": 100,
-        "buyer_coins": 200,
+        "buyer_coins" : 200,
         "seller_items": {"apple": 3},
-        "buyer_items": {},
+        "buyer_items" : {},
         "ledger_count": 1,
     }
 
@@ -198,18 +198,18 @@ def test_unexpired_purchase_and_cancel_claim_only_one_terminal_state(trade_db):
     if listing["status"] == "purchased":
         assert state == {
             "seller_coins": 186,
-            "buyer_coins": 110,
+            "buyer_coins" : 110,
             "seller_items": {},
-            "buyer_items": {"apple": 3},
+            "buyer_items" : {"apple": 3},
             "ledger_count": 0,
         }
     else:
         assert listing["status"] == "cancelled"
         assert state == {
             "seller_coins": 100,
-            "buyer_coins": 200,
+            "buyer_coins" : 200,
             "seller_items": {"apple": 3},
-            "buyer_items": {},
+            "buyer_items" : {},
             "ledger_count": 0,
         }
 

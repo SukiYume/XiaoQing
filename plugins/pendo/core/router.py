@@ -16,8 +16,8 @@ CommandHandler = Callable[[str, str, Any], Awaitable[CommandMessage]]
 # 用户误把顶层操作写进业务子模块时，返回唯一正确入口。
 TOP_LEVEL_REDIRECTS: Final[dict[str, str]] = {
     "confirm": "/pendo confirm <id>",
-    "snooze": "/pendo snooze <id> <时间>",
-    "undo": "/pendo undo",
+    "snooze" : "/pendo snooze <id> <时间>",
+    "undo"   : "/pendo undo",
 }
 
 
@@ -25,11 +25,11 @@ TOP_LEVEL_REDIRECTS: Final[dict[str, str]] = {
 class CommandInfo:
     """一个已经验证并可直接调用的顶层命令。"""
 
-    name: str
-    handler: CommandHandler
-    aliases: tuple[str, ...]
+    name       : str
+    handler    : CommandHandler
+    aliases    : tuple[str, ...]
     description: str
-    usage: str
+    usage      : str
 
 
 class CommandRouter:
@@ -95,8 +95,8 @@ class CommandRouter:
         if command_name is None:
             logger.info("Unknown command: %s", subcommand)
             return {
-                "status": "error",
-                "message": f"❓ 未知命令: {subcommand}\n\n请使用 /pendo help 查看所有可用命令",
+                "status"    : "error",
+                "message"   : f"❓ 未知命令: {subcommand}\n\n请使用 /pendo help 查看所有可用命令",
                 "error_code": None,
             }
         logger.info("Routing command: %s for user %s", command_name, user_id)
@@ -110,10 +110,10 @@ class CommandRouter:
     ) -> CommandMessage:
         """把 help 也作为普通命令返回统一消息结构。"""
         return {
-            "status": "success",
+            "status" : "success",
             "message": self.get_help_message(args.strip()),
             "item_id": None,
-            "data": None,
+            "data"   : None,
         }
 
     def get_help_message(self, args: str = "") -> str:

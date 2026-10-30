@@ -2,21 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+import shutil
+import threading
+from datetime import datetime
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
 from tests.helpers.pendo_review_test_support import (
-    AsyncMock,
     Database,
-    Path,
-    SimpleNamespace,
     TaskHandler,
     ThreadPoolExecutor,
     ZoneInfo,
     _make_temp_db,
-    asyncio,
-    datetime,
-    json,
-    pytest,
-    shutil,
-    threading,
 )
 
 
@@ -29,19 +31,19 @@ def test_ledger_cli_edit_recomputes_amount_cents_when_amount_changes():
     try:
         db.insert_item(
             {
-                "id": "ledger_amount",
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "午饭",
-                "amount": 12.34,
-                "amount_cents": 1234,
+                "id"              : "ledger_amount",
+                "owner_id"        : owner_id,
+                "type"            : "ledger",
+                "title"           : "午饭",
+                "amount"          : 12.34,
+                "amount_cents"    : 1234,
                 "transaction_type": "expense",
-                "currency": "CNY",
-                "ledger_category": "餐饮",
-                "ledger_date": "2026-04-29",
-                "account_name": "现金",
-                "created_at": "2026-04-29T12:00:00",
-                "updated_at": "2026-04-29T12:00:00",
+                "currency"        : "CNY",
+                "ledger_category" : "餐饮",
+                "ledger_date"     : "2026-04-29",
+                "account_name"    : "现金",
+                "created_at"      : "2026-04-29T12:00:00",
+                "updated_at"      : "2026-04-29T12:00:00",
             }
         )
 
@@ -159,15 +161,15 @@ async def test_ledger_session_uses_scoped_identity_and_rejects_corrupt_state(
     context = _Context()
     session = _Session(
         {
-            "step": "merchant",
+            "step"    : "merchant",
             "group_id": 42,
-            "data": {
-                "owner_id": "u-spoofed",
-                "amount": 12,
-                "title": "午饭",
+            "data"    : {
+                "owner_id"        : "u-spoofed",
+                "amount"          : 12,
+                "title"           : "午饭",
                 "transaction_type": "expense",
-                "account_name": "现金",
-                "ledger_category": "餐饮",
+                "account_name"    : "现金",
+                "ledger_category" : "餐饮",
             },
         }
     )
@@ -207,18 +209,18 @@ async def test_ledger_month_ranges_use_user_clock_and_integer_cents(
         ):
             db.insert_item(
                 {
-                    "id": item_id,
-                    "owner_id": owner_id,
-                    "type": "ledger",
-                    "title": title,
-                    "amount_cents": cents,
-                    "transaction_type": transaction_type,
-                    "ledger_category": "转账" if transaction_type == "transfer" else "其他",
-                    "ledger_date": ledger_date,
-                    "account_name": "现金",
+                    "id"                  : item_id,
+                    "owner_id"            : owner_id,
+                    "type"                : "ledger",
+                    "title"               : title,
+                    "amount_cents"        : cents,
+                    "transaction_type"    : transaction_type,
+                    "ledger_category"     : "转账" if transaction_type == "transfer" else "其他",
+                    "ledger_date"         : ledger_date,
+                    "account_name"        : "现金",
                     "counter_account_name": "银行卡" if transaction_type == "transfer" else "",
-                    "created_at": f"{ledger_date}T12:00:00",
-                    "updated_at": f"{ledger_date}T12:00:00",
+                    "created_at"          : f"{ledger_date}T12:00:00",
+                    "updated_at"          : f"{ledger_date}T12:00:00",
                 }
             )
 
@@ -258,19 +260,19 @@ def test_ledger_type_switch_clears_transfer_fields_and_rejects_ambiguous_edits()
     try:
         db.insert_item(
             {
-                "id": item_id,
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "账户调拨",
-                "amount_cents": 5000,
-                "transaction_type": "transfer",
-                "currency": "CNY",
-                "ledger_category": "转账",
-                "ledger_date": "2030-01-01",
-                "account_name": "微信",
+                "id"                  : item_id,
+                "owner_id"            : owner_id,
+                "type"                : "ledger",
+                "title"               : "账户调拨",
+                "amount_cents"        : 5000,
+                "transaction_type"    : "transfer",
+                "currency"            : "CNY",
+                "ledger_category"     : "转账",
+                "ledger_date"         : "2030-01-01",
+                "account_name"        : "微信",
                 "counter_account_name": "银行卡",
-                "created_at": "2030-01-01T12:00:00",
-                "updated_at": "2030-01-01T12:00:00",
+                "created_at"          : "2030-01-01T12:00:00",
+                "updated_at"          : "2030-01-01T12:00:00",
             }
         )
         handler = LedgerHandler(db)
@@ -316,32 +318,32 @@ def test_daily_briefing_orders_urgent_tasks_first():
     try:
         db.insert_item(
             {
-                "id": "task-urgent",
-                "owner_id": owner_id,
-                "type": "task",
-                "title": "Fix incident",
-                "category": "工作",
-                "status": "open",
-                "priority": 1,
-                "plan_date": "2026-04-23",
+                "id"         : "task-urgent",
+                "owner_id"   : owner_id,
+                "type"       : "task",
+                "title"      : "Fix incident",
+                "category"   : "工作",
+                "status"     : "open",
+                "priority"   : 1,
+                "plan_date"  : "2026-04-23",
                 "deadline_at": "2026-04-23T18:00:00",
-                "created_at": "2026-04-23T09:00:00",
-                "updated_at": "2026-04-23T09:00:00",
+                "created_at" : "2026-04-23T09:00:00",
+                "updated_at" : "2026-04-23T09:00:00",
             }
         )
         db.insert_item(
             {
-                "id": "task-later",
-                "owner_id": owner_id,
-                "type": "task",
-                "title": "Tidy backlog",
-                "category": "工作",
-                "status": "open",
-                "priority": 4,
-                "plan_date": "2026-04-23",
+                "id"         : "task-later",
+                "owner_id"   : owner_id,
+                "type"       : "task",
+                "title"      : "Tidy backlog",
+                "category"   : "工作",
+                "status"     : "open",
+                "priority"   : 4,
+                "plan_date"  : "2026-04-23",
                 "deadline_at": "2026-04-23T18:00:00",
-                "created_at": "2026-04-23T09:05:00",
-                "updated_at": "2026-04-23T09:05:00",
+                "created_at" : "2026-04-23T09:05:00",
+                "updated_at" : "2026-04-23T09:05:00",
             }
         )
 
@@ -365,20 +367,20 @@ def test_daily_briefing_resolves_mixed_iso_values_in_user_timezone():
         db.update_user_settings(owner_id, {"timezone": "Asia/Shanghai"})
         db.insert_item(
             {
-                "id": "event-after-local-midnight",
-                "owner_id": owner_id,
-                "type": "event",
-                "title": "UTC 前一天、上海今天",
+                "id"        : "event-after-local-midnight",
+                "owner_id"  : owner_id,
+                "type"      : "event",
+                "title"     : "UTC 前一天、上海今天",
                 "start_time": "2026-04-22T16:30:00+00:00",
             }
         )
         db.insert_item(
             {
-                "id": "task-after-local-midnight",
-                "owner_id": owner_id,
-                "type": "task",
-                "title": "上海今天截止",
-                "status": "open",
+                "id"         : "task-after-local-midnight",
+                "owner_id"   : owner_id,
+                "type"       : "task",
+                "title"      : "上海今天截止",
+                "status"     : "open",
                 "deadline_at": "2026-04-22T17:00:00+00:00",
             }
         )
@@ -404,30 +406,30 @@ def test_daily_briefing_excludes_cancelled_tasks():
     try:
         db.insert_item(
             {
-                "id": "task-cancelled-today",
-                "owner_id": owner_id,
-                "type": "task",
-                "title": "Cancelled today",
-                "category": "工作",
-                "status": "cancelled",
-                "priority": 1,
-                "plan_date": "2026-04-23",
-                "deadline_at": "2026-04-22T18:00:00",
+                "id"          : "task-cancelled-today",
+                "owner_id"    : owner_id,
+                "type"        : "task",
+                "title"       : "Cancelled today",
+                "category"    : "工作",
+                "status"      : "cancelled",
+                "priority"    : 1,
+                "plan_date"   : "2026-04-23",
+                "deadline_at" : "2026-04-22T18:00:00",
                 "cancelled_at": "2026-04-22T09:00:00",
-                "created_at": "2026-04-22T08:00:00",
-                "updated_at": "2026-04-22T09:00:00",
+                "created_at"  : "2026-04-22T08:00:00",
+                "updated_at"  : "2026-04-22T09:00:00",
             }
         )
         db.insert_item(
             {
-                "id": "task-open-today",
-                "owner_id": owner_id,
-                "type": "task",
-                "title": "Open today",
-                "category": "工作",
-                "status": "open",
-                "priority": 3,
-                "plan_date": "2026-04-23",
+                "id"        : "task-open-today",
+                "owner_id"  : owner_id,
+                "type"      : "task",
+                "title"     : "Open today",
+                "category"  : "工作",
+                "status"    : "open",
+                "priority"  : 3,
+                "plan_date" : "2026-04-23",
                 "created_at": "2026-04-23T09:00:00",
                 "updated_at": "2026-04-23T09:00:00",
             }
@@ -453,14 +455,14 @@ def test_daily_migration_updates_plan_date_and_invalidates_task_cache():
     try:
         db.insert_item(
             {
-                "id": "task-yesterday",
-                "owner_id": owner_id,
-                "type": "task",
-                "title": "Move me",
-                "category": "工作",
-                "status": "open",
-                "priority": 3,
-                "plan_date": "2026-04-28",
+                "id"        : "task-yesterday",
+                "owner_id"  : owner_id,
+                "type"      : "task",
+                "title"     : "Move me",
+                "category"  : "工作",
+                "status"    : "open",
+                "priority"  : 3,
+                "plan_date" : "2026-04-28",
                 "created_at": "2026-04-28T08:00:00",
                 "updated_at": "2026-04-28T08:00:00",
             }
@@ -522,13 +524,13 @@ def test_daily_migration_rechecks_business_state_and_rolls_back_marker_with_audi
         ):
             db.insert_item(
                 {
-                    "id": item_id,
-                    "owner_id": owner_id,
-                    "type": "task",
-                    "title": item_id,
-                    "status": status,
-                    "plan_date": plan_date,
-                    "deleted": deleted,
+                    "id"        : item_id,
+                    "owner_id"  : owner_id,
+                    "type"      : "task",
+                    "title"     : item_id,
+                    "status"    : status,
+                    "plan_date" : plan_date,
+                    "deleted"   : deleted,
                     "created_at": "2026-05-01T00:00:00",
                     "updated_at": "2026-05-01T00:00:00",
                 }
@@ -568,11 +570,11 @@ def test_daily_migration_is_atomic_across_database_instances():
     try:
         db1.insert_item(
             {
-                "id": "move-once",
-                "owner_id": owner_id,
-                "type": "task",
-                "title": "Move once",
-                "status": "open",
+                "id"       : "move-once",
+                "owner_id" : owner_id,
+                "type"     : "task",
+                "title"    : "Move once",
+                "status"   : "open",
                 "plan_date": "2026-05-03",
             }
         )
@@ -636,61 +638,30 @@ def test_task_parser_uses_user_timezone_for_default_plan_date(monkeypatch):
     assert parsed["plan_date"] == "2030-01-02"
 
 
-def test_task_today_shortcut_uses_user_timezone(monkeypatch):
+def test_task_today_shortcut_uses_user_timezone(monkeypatch, db):
     from plugins.pendo.handlers import task as task_module
 
-    class _ServerDatetime(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            base = cls(2030, 1, 2, 13, 0, 0)
-            return base if tz is None else base.replace(tzinfo=tz)
-
-    class _ItemsRepo:
-        def __init__(self):
-            self.captured_filters = None
-
-        def get_items(self, owner_id, filters, limit):
-            self.captured_filters = filters
-            return [
-                SimpleNamespace(
-                    id          = "la",
-                    title       = "LA today",
-                    status      = "open",
-                    priority    = 3,
-                    plan_date   = "2030-01-01",
-                    deadline_at = None,
-                    category    = "工作",
-                    created_at  = "2030-01-01T08:00:00",
-                ),
-                SimpleNamespace(
-                    id          = "server",
-                    title       = "Server tomorrow",
-                    status      = "open",
-                    priority    = 3,
-                    plan_date   = "2030-01-02",
-                    deadline_at = None,
-                    category    = "工作",
-                    created_at  = "2030-01-02T08:00:00",
-                ),
-            ]
-
-        def get_all_items(self, owner_id, filters):
-            return self.get_items(owner_id, filters, limit=None)
-
-    items_repo = _ItemsRepo()
-    handler = TaskHandler(db=items_repo)
-
-    monkeypatch.setattr(task_module, "datetime", _ServerDatetime)
+    db.update_user_settings("u-la", {"timezone": "America/Los_Angeles"})
+    for key, title, day in [
+        ("la", "LA today", "2030-01-01"),
+        ("server", "Server tomorrow", "2030-01-02"),
+    ]:
+        db.insert_item(
+            {
+                "id"       : key,
+                "owner_id" : "u-la",
+                "type"     : "task",
+                "title"    : title,
+                "status"   : "open",
+                "plan_date": day,
+            }
+        )
     monkeypatch.setattr(
         task_module,
         "now_in_timezone",
-        lambda user_id, db: datetime(2030, 1, 1, 23, 30, 0, tzinfo=ZoneInfo("America/Los_Angeles")),
+        lambda user_id, db: datetime(2030, 1, 1, 23, 30, tzinfo=ZoneInfo("America/Los_Angeles")),
     )
-
-    result = asyncio.run(handler.list_tasks("u-la", "today", SimpleNamespace()))
-
-    assert items_repo.captured_filters is not None
-    assert items_repo.captured_filters["status"] == "open"
+    result = asyncio.run(TaskHandler(db).list_tasks("u-la", "today", SimpleNamespace()))
     assert "LA today" in result["message"]
     assert "Server tomorrow" not in result["message"]
 
@@ -702,17 +673,17 @@ def test_todo_edit_only_updates_explicit_fields_and_accepts_24_hour_deadline():
     try:
         db.insert_item(
             {
-                "id": "todo-edit",
-                "owner_id": owner_id,
-                "type": "task",
-                "title": "写项目周报",
-                "category": "工作",
-                "plan_date": "2026-05-01",
+                "id"         : "todo-edit",
+                "owner_id"   : owner_id,
+                "type"       : "task",
+                "title"      : "写项目周报",
+                "category"   : "工作",
+                "plan_date"  : "2026-05-01",
                 "deadline_at": "2026-05-01T18:00:00",
-                "priority": 3,
-                "status": "open",
-                "created_at": "2026-05-01T09:00:00",
-                "updated_at": "2026-05-01T09:00:00",
+                "priority"   : 3,
+                "status"     : "open",
+                "created_at" : "2026-05-01T09:00:00",
+                "updated_at" : "2026-05-01T09:00:00",
             }
         )
 
@@ -742,17 +713,17 @@ def test_todo_edit_title_phrase_updates_title_only():
     try:
         db.insert_item(
             {
-                "id": "todo-title",
-                "owner_id": owner_id,
-                "type": "task",
-                "title": "旧待办",
-                "category": "工作",
-                "plan_date": "2026-05-01",
+                "id"         : "todo-title",
+                "owner_id"   : owner_id,
+                "type"       : "task",
+                "title"      : "旧待办",
+                "category"   : "工作",
+                "plan_date"  : "2026-05-01",
                 "deadline_at": "2026-05-01T18:00:00",
-                "priority": 2,
-                "status": "open",
-                "created_at": "2026-05-01T09:00:00",
-                "updated_at": "2026-05-01T09:00:00",
+                "priority"   : 2,
+                "status"     : "open",
+                "created_at" : "2026-05-01T09:00:00",
+                "updated_at" : "2026-05-01T09:00:00",
             }
         )
 
@@ -783,13 +754,13 @@ def test_todo_edit_quoted_title_keeps_hash_literal_before_metadata():
     try:
         db.insert_item(
             {
-                "id": "todo-quoted-title",
-                "owner_id": owner_id,
-                "type": "task",
-                "title": "旧标题",
-                "category": "原分类",
-                "priority": 3,
-                "status": "open",
+                "id"        : "todo-quoted-title",
+                "owner_id"  : owner_id,
+                "type"      : "task",
+                "title"     : "旧标题",
+                "category"  : "原分类",
+                "priority"  : 3,
+                "status"    : "open",
                 "created_at": "2026-05-01T09:00:00",
                 "updated_at": "2026-05-01T09:00:00",
             }
@@ -820,17 +791,17 @@ def test_todo_edit_plain_text_and_metadata_update_only_mentioned_fields():
     def insert_task(item_id: str):
         db.insert_item(
             {
-                "id": item_id,
-                "owner_id": owner_id,
-                "type": "task",
-                "title": "原标题",
-                "category": "原分类",
-                "plan_date": "2026-05-01",
+                "id"         : item_id,
+                "owner_id"   : owner_id,
+                "type"       : "task",
+                "title"      : "原标题",
+                "category"   : "原分类",
+                "plan_date"  : "2026-05-01",
                 "deadline_at": "2026-05-01T18:00:00",
-                "priority": 2,
-                "status": "open",
-                "created_at": "2026-05-01T09:00:00",
-                "updated_at": "2026-05-01T09:00:00",
+                "priority"   : 2,
+                "status"     : "open",
+                "created_at" : "2026-05-01T09:00:00",
+                "updated_at" : "2026-05-01T09:00:00",
             }
         )
 
@@ -867,18 +838,18 @@ def test_todo_edit_keeps_title_when_only_reminder_changes():
     try:
         db.insert_item(
             {
-                "id": "todo-reminder",
-                "owner_id": owner_id,
-                "type": "task",
-                "title": "提交材料",
-                "category": "行政",
-                "plan_date": "2026-05-01",
-                "deadline_at": "2026-05-02T10:00:00",
-                "priority": 3,
-                "status": "open",
+                "id"          : "todo-reminder",
+                "owner_id"    : owner_id,
+                "type"        : "task",
+                "title"       : "提交材料",
+                "category"    : "行政",
+                "plan_date"   : "2026-05-01",
+                "deadline_at" : "2026-05-02T10:00:00",
+                "priority"    : 3,
+                "status"      : "open",
                 "remind_times": [],
-                "created_at": "2026-05-01T09:00:00",
-                "updated_at": "2026-05-01T09:00:00",
+                "created_at"  : "2026-05-01T09:00:00",
+                "updated_at"  : "2026-05-01T09:00:00",
             }
         )
 

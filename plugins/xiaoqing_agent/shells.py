@@ -19,7 +19,7 @@ _WSL_LAUNCHER_DIRS = ("\\windowsapps\\", "\\system32\\")
 class ShellSpec:
     """一个可执行 shell 及其“执行一段命令文本”的参数写法。"""
 
-    label: str
+    label      : str
     argv_prefix: tuple[str, ...]
 
     def argv(self, command: str) -> list[str]:

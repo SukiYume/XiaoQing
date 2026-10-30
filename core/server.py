@@ -131,7 +131,7 @@ async def _start_inbound_lifecycle(owner: _InboundLifecycleOwner, *, accept_even
 class _InboundAuthState:
     """One atomically replaceable inbound credential generation."""
 
-    token: str
+    token     : str
     generation: int = 0
 
 
@@ -140,14 +140,14 @@ class _InboundBroadcastCommit:
     """Linearization token for a send admitted before inbound auth rotation."""
 
     auth_state: _InboundAuthState
-    ws: Any
+    ws        : Any
 
 
 @dataclass(frozen=True, slots=True)
 class BroadcastResult:
     """Delivery counts for one logical WebSocket broadcast."""
 
-    target_count: int  = 0
+    target_count : int = 0
     success_count: int = 0
     failure_count: int = 0
     timeout_count: int = 0
@@ -208,13 +208,13 @@ class _InboundHandlerFatalError(_FatalErrorCarrier, RuntimeError):
 class _InboundEventTicket:
     """One event admitted at a precise dispatcher sequence number."""
 
-    sequence: int
-    key: str
-    payload: dict[str, Any]
-    result: asyncio.Future[list[dict[str, Any]]]
-    auth_guard: Callable[[], bool] | None                         = None
-    started: bool                                                 = False
-    finished: bool                                                = False
+    sequence      : int
+    key           : str
+    payload       : dict[str, Any]
+    result        : asyncio.Future[list[dict[str, Any]]]
+    auth_guard    : Callable[[], bool] | None                     = None
+    started       : bool                                          = False
+    finished      : bool                                          = False
     operation_task: "asyncio.Task[_InboundHandlerOutcome] | None" = None
 
 
@@ -224,15 +224,15 @@ class _InboundEventLane:
 
     pending: deque[_InboundEventTicket] = field(default_factory=deque)
     running: _InboundEventTicket | None = None
-    ready: bool                         = False
+    ready  : bool                       = False
 
 
 @dataclass(frozen=True, slots=True)
 class _InboundHandlerOutcome:
     """A task-safe handler result. Raw BaseException never escapes its child task."""
 
-    actions: Any                = None
-    error: BaseException | None = None
+    actions: Any                  = None
+    error  : BaseException | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,6 +283,17 @@ class _InboundEventDispatcher:
         self._accepting                              = False
         self._started_once                           = False
         self._stopping                               = False
+        # 被丢弃的已完成结果仍带着回执；结算任务由调度器持有，关闭时一并等待。
+        self._settlements: set[asyncio.Task[Any]] = set()
+
+    def _settle_dropped(self, actions: list[dict[str, Any]]) -> None:
+        if not actions:
+            return
+        task = asyncio.get_running_loop().create_task(
+            _resolve_delivery_actions(actions, delivered=False)
+        )
+        self._settlements.add(task)
+        task.add_done_callback(self._settlements.discard)
 
     @property
     def is_stopped(self) -> bool:
@@ -417,11 +428,14 @@ class _InboundEventDispatcher:
         self.cancel(ticket)
         if ticket.result.done() and not ticket.result.cancelled():
             try:
-                ticket.result.exception()
+                error = ticket.result.exception()
             except BaseException:
                 # Retrieving is sufficient. The transport intentionally drops
                 # a revoked/stopped result and must not re-raise it.
-                pass
+                return
+            if error is None:
+                # 处理器已经完成、结果不会再发出：回滚这些动作带着的业务预留。
+                self._settle_dropped(ticket.result.result())
 
     def _cancel_if_result_cancelled(
         self,
@@ -560,6 +574,9 @@ class _InboundEventDispatcher:
                 return
             if not ticket.result.done():
                 ticket.result.set_result(actions)
+            else:
+                # 处理器吞掉取消后仍返回了动作：结果已被取消，没有人会发送它们。
+                self._settle_dropped(actions)
         finally:
             ticket.operation_task = None
             ticket.finished       = True
@@ -664,6 +681,8 @@ class _InboundEventDispatcher:
                 raise RuntimeError(
                     f"{len(pending)} inbound dispatcher worker(s) ignored cancellation"
                 )
+        if self._settlements:
+            await asyncio.wait(set(self._settlements), timeout=self._drain_timeout_seconds)
         self._finalize_stop()
 
     def _abort_pending(self) -> None:
@@ -1102,11 +1121,11 @@ class InboundServer:
         uptime = time.time() - self._start_time
 
         response = {
-            "status": "ok",
-            "version": VERSION,
+            "status"        : "ok",
+            "version"       : VERSION,
             "uptime_seconds": round(uptime, 1),
-            "uptime_human": self._format_uptime(uptime),
-            "request_count": self._request_count,
+            "uptime_human"  : self._format_uptime(uptime),
+            "request_count" : self._request_count,
             "ws_connections": self._get_ws_connections(),
         }
 
@@ -1526,12 +1545,24 @@ class InboundServer:
             if not self._auth_is_current(auth_generation):
                 await _resolve_delivery_actions(actions, delivered=False)
                 return
-            for index, action in enumerate(actions):
-                sent = await self._send_ws_json_bounded(ws, strip_receipt(action))
-                await asyncio.shield(resolve_action_handoff(action, delivered=sent))
-                if not sent:
-                    await _resolve_delivery_actions(actions[index + 1 :], delivered=False)
-                    return
+            unresolved = 0
+            try:
+                for index, action in enumerate(actions):
+                    sent = await self._send_ws_json_bounded(ws, strip_receipt(action))
+                    await asyncio.shield(resolve_action_handoff(action, delivered=sent))
+                    unresolved = index + 1
+                    if not sent:
+                        await _resolve_delivery_actions(actions[index + 1 :], delivered=False)
+                        return
+            except BaseException as exc:
+                if unresolved < len(actions):
+                    # 正在发送的动作被取消时可能已写出：记为未知；序列化等失败确定没发。
+                    current = None if isinstance(exc, asyncio.CancelledError) else False
+                    await asyncio.shield(
+                        resolve_action_handoff(actions[unresolved], delivered=current)
+                    )
+                    await _resolve_delivery_actions(actions[unresolved + 1 :], delivered=False)
+                raise
         except asyncio.CancelledError:
             raise
         except InboundEventRevoked:
@@ -1801,11 +1832,11 @@ class InboundServer:
 
     async def _stop_locked(self) -> None:
         """停止入站服务器，并在单个清理步骤失败时继续收敛其余资源。"""
-        self._accepting_events                       = False
-        self._running                                = False
-        errors: list[tuple[str, BaseException]]      = []
-        caller_cancel: asyncio.CancelledError | None = None
-        cancelled_steps: set[str]                    = set()
+        self._accepting_events                           = False
+        self._running                                    = False
+        errors         : list[tuple[str, BaseException]] = []
+        caller_cancel  : asyncio.CancelledError | None   = None
+        cancelled_steps: set[str]                        = set()
 
         async def cleanup_step(name: str, operation: Callable[[], Awaitable[None]]) -> None:
             nonlocal caller_cancel
@@ -1945,12 +1976,12 @@ def _parse_positive_float(value: Any, *, default: float) -> float:
 
 @dataclass(frozen=True, slots=True)
 class _InboundManagerSpec:
-    inbound_http_base: str
-    inbound_ws_uri: str
-    ws_max_workers: int
-    ws_queue_size: int
+    inbound_http_base           : str
+    inbound_ws_uri              : str
+    ws_max_workers              : int
+    ws_queue_size               : int
     ws_broadcast_timeout_seconds: float
-    trusted_tls_proxy: bool
+    trusted_tls_proxy           : bool
 
     @property
     def config_key(self) -> tuple[str, str, int, int, float, bool]:
@@ -2079,10 +2110,10 @@ class InboundManager:
         self._running                                                = False
         self._lifecycle_lock                                         = _LazyAsyncLock()
         self._status_providers: dict[str, Callable[..., Any] | None] = {
-            "plugins_count": None,
+            "plugins_count" : None,
             "sessions_count": None,
-            "pending_jobs": None,
-            "metrics": None,
+            "pending_jobs"  : None,
+            "metrics"       : None,
         }
         if trusted_tls_proxy:
             logger.warning(
@@ -2260,10 +2291,10 @@ class InboundManager:
         metrics: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self._status_providers = {
-            "plugins_count": plugins_count,
+            "plugins_count" : plugins_count,
             "sessions_count": sessions_count,
-            "pending_jobs": pending_jobs,
-            "metrics": metrics,
+            "pending_jobs"  : pending_jobs,
+            "metrics"       : metrics,
         }
         for server in {self.http_server, self.ws_server}:
             if server:
@@ -2446,7 +2477,7 @@ class InboundManager:
             if server is not None and all(server is not current for current in servers):
                 servers.append(server)
         self._running                                = False
-        errors: list[BaseException]                  = []
+        errors        : list[BaseException]          = []
         failed_servers: list[InboundServer]          = []
         dispatcher_failed                            = False
         caller_cancel: asyncio.CancelledError | None = None

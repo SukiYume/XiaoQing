@@ -4,17 +4,12 @@
 from __future__ import annotations
 
 import sys
+import tomllib
 
 import pytest
 
-from tests.helpers.paths import REPOSITORY_ROOT
-
-try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - Python 3.10 CI
-    import tomli as tomllib
-
 import main as main_module
+from tests.helpers.paths import REPOSITORY_ROOT
 
 ROOT = REPOSITORY_ROOT
 

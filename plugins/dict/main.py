@@ -69,8 +69,8 @@ class DictionaryDataError(RuntimeError):
 class DictionaryEntry(NamedTuple):
     """保存原始词条及用于不区分大小写查询的源词。"""
 
-    source: str
-    destination: str
+    source       : str
+    destination  : str
     source_folded: str
 
 
@@ -78,9 +78,9 @@ class DictionaryEntry(NamedTuple):
 class ResourceSpec:
     """清单中一份词典资源的完整校验约束。"""
 
-    filename: str
-    sha256: str
-    byte_count: int
+    filename   : str
+    sha256     : str
+    byte_count : int
     entry_count: int
 
 
@@ -88,11 +88,11 @@ class ResourceSpec:
 class DictionaryRequest:
     """一次已经消除选项歧义的词典请求。"""
 
-    action: Literal["help", "query"]
-    query: str        = ""
+    action     : Literal["help", "query"]
+    query      : str  = ""
     exact_match: bool = False
     max_results: int  = DEFAULT_RESULTS
-    page: int         = 1
+    page       : int  = 1
 
 
 def _clean_query(value: object) -> str:
@@ -309,8 +309,8 @@ def _load_dictionary(
     if len(lines) != spec.entry_count:
         raise DictionaryDataError(f"天文学词典数据校验失败: {spec.filename}")
 
-    entries: list[DictionaryEntry]   = []
-    seen_pairs: set[tuple[str, str]] = set()
+    entries   : list[DictionaryEntry] = []
+    seen_pairs: set[tuple[str, str]]  = set()
     for line in lines:
         if not line or len(line) > MAX_DICTIONARY_LINE_CHARS:
             raise DictionaryDataError(f"天文学词典数据校验失败: {spec.filename}")

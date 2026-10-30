@@ -1233,6 +1233,11 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
             if latest_pet.user_id != pet.user_id or latest_pet.group_id != pet.group_id:
                 conn.rollback()
                 return PetActionAtomicResult(False, reason="missing_pet")
+            conflict = pet.conflicts_with(latest_pet)
+            if conflict is not None:
+                # 前置条件按事务内的最新状态复核；拒绝时奖励、库存与计数都保持原样。
+                conn.rollback()
+                return PetActionAtomicResult(False, reason=conflict)
             pet_to_persist = pet.merged_onto(latest_pet)
 
             user_row = conn.execute(
@@ -1242,12 +1247,12 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
             if user_row is None:
                 conn.rollback()
                 return PetActionAtomicResult(False, reason="missing_user")
-            current_user                                  = self._row_to_user(user_row)
-            user_to_persist                               = user.merged_onto(current_user)
-            granted_coins                                 = 0
-            inventory_items: dict[str, int] | None        = None
-            merged_inventory_items: dict[str, int] | None = None
-            merged_inventory_version: int | None          = None
+            current_user                                    = self._row_to_user(user_row)
+            user_to_persist                                 = user.merged_onto(current_user)
+            granted_coins                                   = 0
+            inventory_items         : dict[str, int] | None = None
+            merged_inventory_items  : dict[str, int] | None = None
+            merged_inventory_version: int | None            = None
             if quota_action is not None:
                 today_counter, _total_counter = _PET_ACTION_COUNTERS[quota_action]
                 if getattr(current_user, today_counter) >= max(0, int(quota_daily_limit)):
@@ -1317,7 +1322,11 @@ class AtomicActionRepositoryMixin(DatabaseRepositorySupport):
                     (inventory.user_id, inventory.group_id),
                 ).fetchone()
                 latest_items = json.loads(inventory_row["items"] or "{}") if inventory_row else {}
-                merged_inventory_items = inventory.merged_onto(latest_items)
+                if inventory.shortfall(latest_items):
+                    # 并发请求已用掉同一件道具（例如托管券）：库存不足时整次回滚。
+                    conn.rollback()
+                    return PetActionAtomicResult(False, reason="inventory")
+                merged_inventory_items   = inventory.merged_onto(latest_items)
                 merged_inventory_version = int(inventory_row["version"]) + 1 if inventory_row else 0
 
             pet_written  = self._write_pet_in_transaction(conn, pet_to_persist)

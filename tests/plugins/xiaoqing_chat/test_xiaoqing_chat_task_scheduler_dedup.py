@@ -1,132 +1,52 @@
-# 验证聊天调度器抑制同一逻辑任务的重复执行。
-from unittest.mock import AsyncMock, MagicMock, patch
+"""防抖刷盘只执行最后一次请求，并统一回收失败路径中的任务。"""
+
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
-from plugins.xiaoqing_chat.task_scheduler import (
-    _action_flush_tasks,
-    _pfc_state_flush_tasks,
-    schedule_action_history_flush,
-    schedule_media_registry_flush,
-    schedule_pfc_state_flush,
+from plugins.xiaoqing_chat import task_scheduler as scheduler
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kind, store_name, method",
+    [
+        ("action_history", "action_history", "flush"),
+        ("pfc_state", "pfc_state_store", "save"),
+        ("media_registry", "media_store", "flush"),
+    ],
 )
-
-
-@pytest.fixture
-def mock_context():
-    context        = MagicMock()
-    context.logger = MagicMock()
-    return context
-
-
-@pytest.mark.asyncio
-async def test_schedule_action_history_flush_behavior(mock_context):
-    runtime                                 = MagicMock()
-    runtime.cfg.io_persist_debounce_seconds = 0.01
-    state                                   = MagicMock()
-
-    async def fake_to_thread(func, *args, **kwargs):
-        return func(*args, **kwargs)
-
-    with (
-        patch("plugins.xiaoqing_chat.task_scheduler._state", return_value=state),
-        patch("plugins.xiaoqing_chat.task_scheduler._track_bg_task"),
-        patch(
-            "plugins.xiaoqing_chat.task_scheduler.asyncio.to_thread",
-            new=AsyncMock(side_effect=fake_to_thread),
-        ) as mock_to_thread,
-    ):
-        # First call
-        schedule_action_history_flush(mock_context, runtime, chat_id="g1")
-        task1 = _action_flush_tasks.get("g1")
-        assert task1 is not None
-
-        # Second call should cancel first
-        schedule_action_history_flush(mock_context, runtime, chat_id="g1")
-        task2 = _action_flush_tasks.get("g1")
-        assert task2 is not None
-        assert task2 is not task1
-        # In asyncio, task.cancel() marks it as cancelling, but cancelled() might be False until it yields
-        assert task1.cancelling() > 0
-
-        await task2
-
-        assert mock_to_thread.await_count == 1
-        state.action_history.flush.assert_called_once_with("g1")
-
-        # Verify registry cleanup
-        assert "g1" not in _action_flush_tasks
-
-
-@pytest.mark.asyncio
-async def test_schedule_pfc_state_flush_behavior(mock_context):
-    runtime                                 = MagicMock()
-    runtime.cfg.io_persist_debounce_seconds = 0.01
-    state                                   = MagicMock()
-
-    async def fake_to_thread(func, *args, **kwargs):
-        return func(*args, **kwargs)
-
-    with (
-        patch("plugins.xiaoqing_chat.task_scheduler._state", return_value=state),
-        patch("plugins.xiaoqing_chat.task_scheduler._track_bg_task"),
-        patch(
-            "plugins.xiaoqing_chat.task_scheduler.asyncio.to_thread",
-            new=AsyncMock(side_effect=fake_to_thread),
-        ) as mock_to_thread,
-    ):
-        # First call
-        schedule_pfc_state_flush(mock_context, runtime, chat_id="g1")
-        task1 = _pfc_state_flush_tasks.get("g1")
-        assert task1 is not None
-
-        # Second call should cancel first
-        schedule_pfc_state_flush(mock_context, runtime, chat_id="g1")
-        task2 = _pfc_state_flush_tasks.get("g1")
-        assert task2 is not None
-        assert task2 is not task1
-        # In asyncio, task.cancel() marks it as cancelling, but cancelled() might be False until it yields
-        assert task1.cancelling() > 0
-
-        await task2
-
-        assert mock_to_thread.await_count == 1
-        state.pfc_state_store.save.assert_called_once_with("g1")
-
-        # Verify registry cleanup
-        assert "g1" not in _pfc_state_flush_tasks
-
-
-@pytest.mark.asyncio
-async def test_schedule_media_registry_flush_behavior(mock_context):
-    from plugins.xiaoqing_chat import task_scheduler as task_scheduler_module
-
-    runtime                                 = MagicMock()
-    runtime.cfg.io_persist_debounce_seconds = 0.01
-    state                                   = MagicMock()
-
-    async def fake_to_thread(func, *args, **kwargs):
-        return func(*args, **kwargs)
-
-    with (
-        patch("plugins.xiaoqing_chat.task_scheduler._state", return_value=state),
-        patch("plugins.xiaoqing_chat.task_scheduler._track_bg_task"),
-        patch(
-            "plugins.xiaoqing_chat.task_scheduler.asyncio.to_thread",
-            new=AsyncMock(side_effect=fake_to_thread),
-        ) as mock_to_thread,
-    ):
-        schedule_media_registry_flush(mock_context, runtime)
-        task1 = task_scheduler_module._media_registry_flush_task
-        assert task1 is not None
-
-        schedule_media_registry_flush(mock_context, runtime)
-        task2 = task_scheduler_module._media_registry_flush_task
-        assert task2 is not None
-        assert task2 is not task1
-        assert task1.cancelling() > 0
-
-        await task2
-
-        assert mock_to_thread.await_count == 1
-        state.media_store.flush.assert_called_once_with()
+async def test_debounced_flush_replaces_pending_task(monkeypatch, kind, store_name, method):
+    state   = MagicMock()
+    context = MagicMock()
+    runtime = SimpleNamespace(cfg=SimpleNamespace(io_persist_debounce_seconds=0.01))
+    tasks = []
+    monkeypatch.setattr(scheduler, "_state", lambda: state)
+    monkeypatch.setattr(
+        scheduler, "_track_bg_task", lambda _context, task, **kwargs: tasks.append(task)
+    )
+    schedule = getattr(scheduler, f"schedule_{kind}_flush")
+    kwargs   = {} if kind == "media_registry" else {"chat_id": "g1"}
+    try:
+        schedule(context, runtime, **kwargs)
+        schedule(context, runtime, **kwargs)
+        assert len(tasks) == 2
+        assert tasks[0] is not tasks[1]
+        assert tasks[0].cancelling() > 0
+        await asyncio.wait_for(tasks[1], timeout=5)
+        flush = getattr(getattr(state, store_name), method)
+        flush.assert_called_once_with(*(() if kind == "media_registry" else ("g1",)))
+        if kind == "media_registry":
+            assert scheduler._media_registry_flush_task is None
+        else:
+            registry = getattr(
+                scheduler,
+                "_action_flush_tasks" if kind == "action_history" else "_pfc_state_flush_tasks",
+            )
+            assert "g1" not in registry
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)

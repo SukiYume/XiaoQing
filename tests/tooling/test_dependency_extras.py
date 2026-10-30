@@ -4,32 +4,27 @@ from __future__ import annotations
 
 import asyncio
 import json
+import tomllib
 from types import SimpleNamespace
 
 import pytest
 
 from tests.helpers.paths import REPOSITORY_ROOT
 
-try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - Python 3.10 CI
-    import tomli as tomllib
-
-
 ROOT = REPOSITORY_ROOT
 
 _REQUIRED_PLUGIN_DEPENDENCIES = {
-    "adnmb": {"PIL", "aiohttp"},
-    "ads_paper": {"aiohttp"},
-    "apod": {"PIL", "bs4"},
-    "earthquake": {"PIL", "bs4", "requests"},
-    "flickr": {"PIL"},
-    "github": {"bs4"},
-    "pendo": {"dateutil", "fastapi", "jwt", "pydantic", "starlette", "uvicorn"},
-    "twitter": {"PIL"},
-    "url_parser": {"PIL", "bs4"},
-    "voice": {"aiohttp"},
-    "wolframalpha": {"aiohttp"},
+    "adnmb"        : {"PIL", "aiohttp"},
+    "ads_paper"    : {"aiohttp"},
+    "apod"         : {"PIL", "bs4"},
+    "earthquake"   : {"PIL", "bs4", "requests"},
+    "flickr"       : {"PIL"},
+    "github"       : {"bs4"},
+    "pendo"        : {"dateutil", "fastapi", "jwt", "pydantic", "starlette", "uvicorn"},
+    "twitter"      : {"PIL"},
+    "url_parser"   : {"PIL", "bs4"},
+    "voice"        : {"aiohttp"},
+    "wolframalpha" : {"aiohttp"},
     "xiaoqing_chat": {"aiohttp", "numpy", "pydantic"},
 }
 
@@ -46,12 +41,12 @@ _OPTIONAL_PLUGIN_DEPENDENCIES = {
         "transformers",
         "urllib3",
     },
-    "astro_tools": {"astropy", "scipy"},
-    "codex": {"PIL"},
-    "color": {"matplotlib", "numpy"},
-    "jupyter": {"ipykernel", "jupyter_client"},
-    "qingssh": {"paramiko"},
-    "xiaoai": {"miservice", "qrcode"},
+    "astro_tools"  : {"astropy", "scipy"},
+    "codex"        : {"PIL"},
+    "color"        : {"matplotlib", "numpy"},
+    "jupyter"      : {"ipykernel", "jupyter_client"},
+    "qingssh"      : {"paramiko"},
+    "xiaoai"       : {"miservice", "qrcode"},
     "xiaoqing_chat": {"PIL"},
 }
 

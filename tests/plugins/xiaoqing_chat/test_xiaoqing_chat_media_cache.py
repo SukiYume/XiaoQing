@@ -2,31 +2,33 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import json
+import threading
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
 import tests.helpers.xiaoqing_chat_media_test_support as _fixture_support
 from tests.helpers.xiaoqing_chat_media_test_support import (
     _PNG_BYTES,
-    AsyncMock,
     LLMError,
     MediaPayloadTooLarge,
-    Path,
     PluginCapabilities,
     RenderedMedia,
     ResolvedMedia,
-    SimpleNamespace,
     _load_and_prepare_media_for_llm,
     _make_media_runtime,
     _raw_media_response,
     _write_png,
-    asyncio,
     find_candidate_by_hint,
-    hashlib,
-    json,
     load_emoji_library,
     load_qq_face_catalog,
     marker_media_part,
     parse_marker,
-    patch,
-    pytest,
     read_file_bounded,
     render_event_media_text,
     render_local_media_file,
@@ -34,7 +36,6 @@ from tests.helpers.xiaoqing_chat_media_test_support import (
     run_media_blocking,
     strip_outbound_marker_residue,
     text_without_outbound_marker,
-    threading,
 )
 
 mock_context = _fixture_support.mock_context
@@ -414,10 +415,10 @@ async def test_render_local_media_file_refreshes_old_fallback_cache_with_explici
             {
                 "items": {
                     media_hash: {
-                        "kind": "image",
-                        "description": cached_description,
+                        "kind"        : "image",
+                        "description" : cached_description,
                         "emotion_tags": [],
-                        "marker": f"[图片：{cached_description}]",
+                        "marker"      : f"[图片：{cached_description}]",
                     }
                 }
             },
@@ -466,10 +467,10 @@ async def test_render_local_media_file_keeps_old_fallback_cache_without_explicit
             {
                 "items": {
                     media_hash: {
-                        "kind": "image",
-                        "description": cached_description,
+                        "kind"        : "image",
+                        "description" : cached_description,
                         "emotion_tags": [],
-                        "marker": f"[图片：{cached_description}]",
+                        "marker"      : f"[图片：{cached_description}]",
                     }
                 }
             },
@@ -503,10 +504,10 @@ async def test_render_local_media_file_refreshes_generic_llm_cache_after_prompt_
             {
                 "items": {
                     media_hash: {
-                        "kind": "emoji",
-                        "description": "动画表情",
-                        "emotion_tags": [],
-                        "marker": "[表情包：动画表情]",
+                        "kind"           : "emoji",
+                        "description"    : "动画表情",
+                        "emotion_tags"   : [],
+                        "marker"         : "[表情包：动画表情]",
                         "analysis_source": "llm",
                     }
                 }
@@ -580,13 +581,13 @@ async def test_resolve_marker_matches_emoji_hint_and_builds_media_part(mock_cont
             {
                 "entries": {
                     media_hash: {
-                        "file_path": "media/library/wuyu.png",
-                        "description": "猫猫无语摊手",
+                        "file_path"   : "media/library/wuyu.png",
+                        "description" : "猫猫无语摊手",
                         "emotion_tags": ["无语", "摊手"],
-                        "usage_count": 0,
+                        "usage_count" : 0,
                         "last_used_ts": 0.0,
-                        "marker": "[表情包：猫猫无语摊手]",
-                        "status": "active",
+                        "marker"      : "[表情包：猫猫无语摊手]",
+                        "status"      : "active",
                     }
                 }
             },
@@ -653,10 +654,10 @@ async def test_resolve_image_marker_rejects_history_path_outside_data_root(tmp_p
             role  = "assistant",
             parts = (
                 {
-                    "kind": "image",
-                    "file_path": str(outside_path),
+                    "kind"       : "image",
+                    "file_path"  : str(outside_path),
                     "description": "outside",
-                    "marker": "[图片：outside]",
+                    "marker"     : "[图片：outside]",
                 },
             ),
         )
@@ -703,15 +704,15 @@ async def test_load_emoji_library_uses_mtime_cache(mock_context):
             {
                 "entries": {
                     media_hash: {
-                        "file_path": "media/library/cached.png",
-                        "description": "缓存猫猫",
-                        "emotion_tags": ["缓存"],
-                        "usage_count": 0,
-                        "last_used_ts": 0.0,
-                        "marker": "[表情包：缓存猫猫]",
-                        "status": "active",
-                        "source": "manual",
-                        "visibility": "global",
+                        "file_path"      : "media/library/cached.png",
+                        "description"    : "缓存猫猫",
+                        "emotion_tags"   : ["缓存"],
+                        "usage_count"    : 0,
+                        "last_used_ts"   : 0.0,
+                        "marker"         : "[表情包：缓存猫猫]",
+                        "status"         : "active",
+                        "source"         : "manual",
+                        "visibility"     : "global",
                         "global_approved": True,
                     }
                 }
@@ -745,16 +746,16 @@ async def test_emoji_library_reuses_file_fingerprints_after_index_only_update(mo
             {
                 "entries": {
                     media_hash: {
-                        "media_hash": media_hash,
-                        "file_path": "media/library/indexed.png",
-                        "description": "索引猫猫",
-                        "emotion_tags": ["开心"],
-                        "usage_count": 0,
-                        "last_used_ts": 0.0,
-                        "marker": "[表情包：索引猫猫]",
-                        "status": "active",
-                        "source": "manual",
-                        "visibility": "global",
+                        "media_hash"     : media_hash,
+                        "file_path"      : "media/library/indexed.png",
+                        "description"    : "索引猫猫",
+                        "emotion_tags"   : ["开心"],
+                        "usage_count"    : 0,
+                        "last_used_ts"   : 0.0,
+                        "marker"         : "[表情包：索引猫猫]",
+                        "status"         : "active",
+                        "source"         : "manual",
+                        "visibility"     : "global",
                         "global_approved": True,
                     }
                 }
@@ -903,27 +904,27 @@ async def test_render_event_media_text_falls_back_in_configured_provider_order(m
     vision["fallbacks"] = ["glm-4.6v", "glm-4v-flash", "glm-4.1v-thinking-flash"]
     vision["providers"] = {
         "glm-4.6v-flash": {
-            "api_base": "https://open.bigmodel.cn/api/paas/v4",
-            "api_key": "vision-key",
-            "model": "glm-4.6v-flash",
+            "api_base"     : "https://open.bigmodel.cn/api/paas/v4",
+            "api_key"      : "vision-key",
+            "model"        : "glm-4.6v-flash",
             "endpoint_path": "/chat/completions",
         },
         "glm-4.6v": {
-            "api_base": "https://open.bigmodel.cn/api/paas/v4",
-            "api_key": "vision-key",
-            "model": "glm-4.6v",
+            "api_base"     : "https://open.bigmodel.cn/api/paas/v4",
+            "api_key"      : "vision-key",
+            "model"        : "glm-4.6v",
             "endpoint_path": "/chat/completions",
         },
         "glm-4v-flash": {
-            "api_base": "https://open.bigmodel.cn/api/paas/v4",
-            "api_key": "vision-key",
-            "model": "glm-4v-flash",
+            "api_base"     : "https://open.bigmodel.cn/api/paas/v4",
+            "api_key"      : "vision-key",
+            "model"        : "glm-4v-flash",
             "endpoint_path": "/chat/completions",
         },
         "glm-4.1v-thinking-flash": {
-            "api_base": "https://open.bigmodel.cn/api/paas/v4",
-            "api_key": "vision-key",
-            "model": "glm-4.1v-thinking-flash",
+            "api_base"     : "https://open.bigmodel.cn/api/paas/v4",
+            "api_key"      : "vision-key",
+            "model"        : "glm-4.1v-thinking-flash",
             "endpoint_path": "/chat/completions",
         },
     }
@@ -932,9 +933,9 @@ async def test_render_event_media_text_falls_back_in_configured_provider_order(m
             {
                 "type": "image",
                 "data": {
-                    "url": "https://example.com/store_emoji.jpg",
+                    "url"             : "https://example.com/store_emoji.jpg",
                     "emoji_package_id": 1001,
-                    "summary": "[动画表情]",
+                    "summary"         : "[动画表情]",
                 },
             }
         ]
@@ -952,10 +953,10 @@ async def test_render_event_media_text_falls_back_in_configured_provider_order(m
             return _raw_media_response(
                 json.dumps(
                     {
-                        "kind": "emoji",
+                        "kind"                : "emoji",
                         "detailed_description": "一只猫皱着脸，配字是苦鲁西",
-                        "visible_text": "苦鲁西",
-                        "emotion_tags": ["委屈", "难受"],
+                        "visible_text"        : "苦鲁西",
+                        "emotion_tags"        : ["委屈", "难受"],
                     },
                     ensure_ascii=False,
                 )

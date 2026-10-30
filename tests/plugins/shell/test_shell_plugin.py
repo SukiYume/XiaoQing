@@ -27,7 +27,7 @@ def mock_context():
         "plugins": {
             "shell": {
                 "whitelist": ["ls", "pwd", "echo"],
-                "timeout": 30,
+                "timeout"  : 30,
             }
         }
     }
@@ -39,9 +39,9 @@ def mock_context():
 def mock_event():
     """模拟事件"""
     return {
-        "user_id": 12345,
+        "user_id"     : 12345,
         "message_type": "group",
-        "group_id": 67890,
+        "group_id"    : 67890,
     }
 
 
@@ -56,9 +56,9 @@ class TestShellConfig:
             secrets = {
                 "plugins": {
                     "shell": {
-                        "whitelist": ["echo", "pwd"],
+                        "whitelist"     : ["echo", "pwd"],
                         "whitelist_mode": "replace",
-                        "timeout": 17,
+                        "timeout"       : 17,
                     }
                 }
             },
@@ -75,7 +75,7 @@ class TestShellConfig:
             "plugins": {
                 "shell": {
                     "terminal": {
-                        "backend": "git-bash",
+                        "backend"   : "git-bash",
                         "executable": "C:/Program Files/Git/bin/bash.exe",
                     }
                 }
@@ -113,7 +113,7 @@ class TestShellConfig:
 
     def test_explicit_empty_replace_list_fails_closed(self, mock_context):
         mock_context.secrets["plugins"]["shell"] = {
-            "whitelist": [],
+            "whitelist"     : [],
             "whitelist_mode": "replace",
         }
 
@@ -121,7 +121,7 @@ class TestShellConfig:
 
     def test_invalid_whitelist_is_not_split_into_characters(self, mock_context):
         mock_context.secrets["plugins"]["shell"] = {
-            "whitelist": "python",
+            "whitelist"     : "python",
             "whitelist_mode": "replace",
         }
 
@@ -129,7 +129,7 @@ class TestShellConfig:
 
     def test_extend_normalizes_entries_and_filters_shell_builtins(self, mock_context):
         mock_context.secrets["plugins"]["shell"] = {
-            "whitelist": [" Custom-Tool ", "CD", None],
+            "whitelist"     : [" Custom-Tool ", "CD", None],
             "whitelist_mode": "extend",
         }
 
@@ -361,7 +361,7 @@ class TestShellHandle:
             "plugins": {
                 "shell": {
                     "terminal": {
-                        "backend": "git-bash",
+                        "backend"   : "git-bash",
                         "executable": "C:/Program Files/Git/bin/bash.exe",
                     }
                 }
@@ -412,7 +412,7 @@ class TestShellHandle:
             "plugins": {
                 "shell": {
                     "terminal": {
-                        "backend": "git-bash",
+                        "backend"   : "git-bash",
                         "executable": "C:/Program Files/Git/bin/bash.exe",
                     }
                 }
@@ -490,7 +490,7 @@ class TestShellHandle:
             "plugins": {
                 "shell": {
                     "terminal": {
-                        "backend": "git-bash",
+                        "backend"   : "git-bash",
                         "executable": "C:/Program Files/Git/bin/bash.exe",
                     }
                 }
@@ -518,7 +518,7 @@ class TestShellHandle:
             "plugins": {
                 "shell": {
                     "terminal": {
-                        "backend": "git-bash",
+                        "backend"   : "git-bash",
                         "executable": "C:/missing/bash.exe",
                     }
                 }

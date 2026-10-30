@@ -206,16 +206,16 @@ def _new_session_id() -> str:
 class Session:
     """A mutable session value or detached session snapshot."""
 
-    user_id: int
-    group_id: int | None
+    user_id    : int
+    group_id   : int | None
     plugin_name: str
-    session_id: str = field(default_factory=_new_session_id)
-    state: str = "active"
-    data: dict[str, Any] = field(default_factory=dict)
-    created_at: float = field(default_factory=time.time)
-    updated_at: float = field(default_factory=time.time)
-    timeout: float = 300.0
-    version: int   = 0
+    session_id : str = field(default_factory=_new_session_id)
+    state      : str = "active"
+    data       : dict[str, Any] = field(default_factory=dict)
+    created_at : float = field(default_factory=time.time)
+    updated_at : float = field(default_factory=time.time)
+    timeout    : float = 300.0
+    version    : int   = 0
 
     def __post_init__(self) -> None:
         self.user_id = int(_normalize_id(self.user_id, field_name="user_id"))
@@ -288,7 +288,7 @@ class _SessionTransaction:
     """One task-owned staged view for a single session key."""
 
     original: Session
-    working: Session | None
+    working : Session | None
     replaced: bool = False
 
 

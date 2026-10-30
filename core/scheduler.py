@@ -31,33 +31,33 @@ _REAL_ASYNCIO_SCHEDULER = AsyncIOScheduler
 class ScheduledJobSpec:
     """用于事务式替换的一份完整 Cron 任务声明。"""
 
-    job_id: str
-    func: Callable[..., Any]
-    cron: Mapping[str, Any]
+    job_id     : str
+    func       : Callable[..., Any]
+    cron       : Mapping[str, Any]
     description: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class _PreparedJob:
-    job_id: str
-    func: Callable[..., Any]
-    trigger: CronTrigger
+    job_id     : str
+    func       : Callable[..., Any]
+    trigger    : CronTrigger
     description: str | None
 
 
 @dataclass(frozen=True, slots=True)
 class _JobSnapshot:
-    job_id: str
-    func: Callable[..., Any]
-    trigger: Any
-    args: tuple[Any, ...]
-    kwargs: dict[str, Any]
-    name: str
+    job_id            : str
+    func              : Callable[..., Any]
+    trigger           : Any
+    args              : tuple[Any, ...]
+    kwargs            : dict[str, Any]
+    name              : str
     misfire_grace_time: int | None
-    coalesce: bool
-    max_instances: int
-    next_run_time: Any
-    executor: str
+    coalesce          : bool
+    max_instances     : int
+    next_run_time     : Any
+    executor          : str
 
 
 class SchedulerManager:

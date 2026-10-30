@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import pytest
+
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
 from plugins.xiaoqing_chat.persona import PersonaCard
 from tests.helpers.xiaoqing_chat_test_support import (
-    AsyncMock,
-    MagicMock,
-    Mock,
-    SimpleNamespace,
     _complete_test_runtime_config,
     _make_hctx,
     _set_context_principal,
-    asyncio,
-    patch,
-    pytest,
 )
 
 mock_context       = _fixture_support.mock_context
@@ -119,9 +118,6 @@ async def test_generate_reply_checker_unexpected_error_logs_error_not_timeout(mo
         )
         stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_max_context", return_value=10)
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_plan.get_brain_chat_temperature", return_value=0.7)
         )
         stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_plan.persona_reply_style", return_value="")

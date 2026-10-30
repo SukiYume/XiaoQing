@@ -16,11 +16,11 @@ def environment(tmp_path, monkeypatch):
     scanned      = asyncio.Event()
     choices_sent = asyncio.Event()
     token        = {
-        "userId": "42",
-        "passToken": "private-token",
-        "deviceId": "device",
-        "xiaomiio": ["key", "io"],
-        "micoapi": ["key", "mina"],
+        "userId"       : "42",
+        "passToken"    : "private-token",
+        "deviceId"     : "device",
+        "xiaomiio"     : ["key", "io"],
+        "micoapi"      : ["key", "mina"],
         "_refreshed_at": {sid: time.time() for sid in auth.SERVICES},
     }
     instances = []
@@ -227,9 +227,9 @@ async def test_schedule_rejects_partial_account_rebinding(environment, monkeypat
     client.write_json(
         env.context.data_dir / "speaker.json",
         {
-            "region": "cn",
+            "region"        : "cn",
             "notify_user_id": 200,
-            "account_id": "other-account",
+            "account_id"    : "other-account",
         },
     )
     manager = login.runtime(env.context).manager
@@ -267,9 +267,9 @@ async def test_cloud_rejection_reminds_only_when_account_renewal_requires_login(
     client.write_json(
         env.context.data_dir / "speaker.json",
         {
-            "region": "cn",
+            "region"        : "cn",
             "notify_user_id": 100,
-            "account_id": "42",
+            "account_id"    : "42",
         },
     )
     monkeypatch.setattr(client, "request_json", AsyncMock(return_value={"code": 401}))

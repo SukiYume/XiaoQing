@@ -51,20 +51,21 @@
 
 | Route | 用途 | 发行配置的模型链 | 单次 / 总超时 |
 |---|---|---|---|
-| `chat` | 日常回复 | `deepseek-flash → glm-5.2` | 15 s / 60 s，重试 2 次 |
+| `chat` | 日常回复 | `chatgpt → deepseek-flash → glm-5.2` | 15 s / 60 s，重试 2 次 |
 | `reasoning` | PFC 规划、目标分析、摘要、人物事实提取、表达学习等后台任务 | `deepseek-flash-thinking → deepseek-pro → glm-5.2` | 15 s / 45 s，重试 1 次 |
-| `checker` | 独立回复审查 | `deepseek-flash-thinking → deepseek-pro → glm-5.2`，路由级关闭思考 | 8 s / 20 s，不重试 |
+| `checker` | 独立回复审查 | `deepseek-flash-thinking → deepseek-pro → glm-5.2`，路由级关闭思考 | 8 s / 30 s，不重试 |
 | `vision` | 图片与表情包理解 | `glm-4.6v-flash → glm-4.1v-thinking-flash → glm-4v-flash → glm-4.6v` | 20 s / 70 s，重试 1 次 |
 
 模型 profile 和 provider 定义在项目级 `config.ai`，API Key 在 `config/secrets.json` 的 `ai.providers.<provider>.api_key`。`vision` 链里的 profile 必须声明 `image` 模态。完整字段见 [配置详解的 AI 注册表](../../docs/06-configuration.md#aivlm-注册表)。
 
+日常回复优先使用 OpenAI 的 `chat-latest`（profile/别名为 `chatgpt`），通过 `https://api.openai.com/v1/chat/completions` 调用。请先在 `config/secrets.json` 的 `ai.providers.openai.api_key` 填入 OpenAI API 密钥；空密钥会使该模型自动跳过；整条链均缺密钥时会报配置错误。补齐后执行管理员 `/reload` 或重启。`chat-latest` 随 ChatGPT Instant 更新，说明见 [OpenAI 模型文档](https://developers.openai.com/api/docs/models/chat-latest)。
+
 `checker` 路由通过 `request_defaults.thinking.type = "disabled"` 关闭思考，换取更短的审查延迟。其他路由沿用各自 profile 的默认值。
 
-`plugins.xiaoqing_chat.ai` 还有两个字段供 `/xc model` 使用：
+`plugins.xiaoqing_chat.ai.model_aliases` 为 `/xc model` 提供可选短名称。默认模型自动取聊天路由中的第一个可用 profile：
 
 ```json
 {
-  "default_model_alias": "deepseek",
   "model_aliases": {
     "deepseek": "deepseek-flash",
     "glm": "glm-5.2"
@@ -349,7 +350,7 @@ python main.py
 | 图片证据 | 视觉描述有摘要或用户文字支持，不假装看过没读出的图，也不把已经读出来的图说成没看清。审查模型引用的图上依据由本地逐段核对：可以分几段引用、调换先后，每段都必须是同一条消息里的原文 |
 | 不套模板 | 使用符合当前上下文的自然表达 |
 
-开启 `enable_semantic_checker` 时，另有一次“只读原话”的独立阅读，与候选比较动作主体、时间归属、完成状态、新词含义和双方立场。两路候选审查并行，共用 `reply_check.timeout_seconds`（默认 30 秒）。独立阅读使用原始对话材料，`always` 模式下与候选生成并行执行，重写时复用材料相同的阅读结果。语义审查拿到阅读结果后继续比较候选。
+开启 `enable_semantic_checker` 时，另有一次“只读原话”的独立阅读，与候选比较动作主体、时间归属、完成状态、新词含义和双方立场。两路候选审查并行，共用主配置 `ai.routes.checker.total_timeout_seconds`（发行值 30 秒）。独立阅读使用原始对话材料，`always` 模式下与候选生成并行执行，重写时复用材料相同的阅读结果。语义审查拿到阅读结果后继续比较候选。
 
 **审查结果**：问题分为 hard（事实、来源、人设、图片证据等硬错误）和 soft（语气、节奏、措辞）。确认的问题按原因生成定向重写提示，最多重写 `max_regen` 次。普通参与还可以让规划器重新规划 `max_replan` 次。重写次数用完后：
 
@@ -403,15 +404,14 @@ python main.py
 
 ### 生成与规划
 
+模型请求参数统一配置在主配置的 `plugins.xiaoqing_chat.ai.routes`：`chat` 管主回复，`reasoning` 管规划与后台任务，`checker` 管审查，`vision` 管视觉。每条路由拥有 `temperature`、`top_p`、`max_tokens`、`timeout_seconds`、`total_timeout_seconds`、`max_retry` 和 `retry_interval_seconds`。深度模式沿用聊天采样参数；明确的长文请求和图像截断重试可以调整当前调用预算。业务频控、后台工作时限和参与策略保留在本行为文件。
+
+旧的前后台请求参数、规划请求超时、审查和视觉请求参数已移除。旧字段会给出指向主配置的迁移错误。默认模型由 `chat.models` 的可用顺序决定，`default_model_alias` 已移除。
+
 | 字段 | 发行值 | 说明 |
 |---|---|---|
-| `temperature` / `top_p` / `max_tokens` | `0.8` / `0.9` / `768` | 主回复与规划的采样参数 |
-| `foreground_timeout_seconds` / `foreground_max_retry` / `foreground_retry_interval_seconds` | `12` / `1` / `1` | 回复生成和记忆检索这类前台调用的插件侧预算 |
-| `background_timeout_seconds` / `background_max_retry` / `background_retry_interval_seconds` | `15` / `2` / `10` | 摘要、事实提取、表达学习、反思这类后台调用的插件侧预算 |
 | `planner.enable_planner` | `true` | PFC 规划开关 |
 | `planner.think_mode` | `dynamic` | 规划与回复的思考等级：`dynamic` 按历史长度取 0（不足 10 条）、1（10～19 条）、2（20 条以上），或固定 `0`～`3` |
-| `timeout_seconds` | `15` | 规划超时的上限，`pfc_planner_timeout_seconds` 不能超过它 |
-| `pfc_planner_timeout_seconds` | `10.0` | 单次规划超时 |
 | `pfc_planner_fail_window_seconds` / `fail_threshold` / `backoff_seconds` | `60` / `2` / `120` | 规划失败退避 |
 | `pfc_followup_action_window_seconds` | `120.0` | 规划器跟进上一动作的时间窗 |
 | `heartflow.enable_heartflow` / `base_score` | `true` / `0.2` | Heartflow 软加分 |
@@ -442,7 +442,6 @@ python main.py
 | `reply_check.enable_llm_checker` | `true` | 语义审查（`checker` 路由） |
 | `reply_check.enable_semantic_checker` | `true` | 独立原话阅读与语义比较 |
 | `reply_check.llm_checker_mode` | `always` | `always` 或 `risk` |
-| `reply_check.timeout_seconds` / `max_tokens` | `30.0` / `8192` | 审查总时限与输出预算 |
 | `reply_check.max_repeat_compare` / `similarity_threshold` | `2` / `0.9` | 复读比较范围与阈值 |
 | `reply_check.max_assistant_in_row` | `3` | 连续自说自话上限 |
 | `reply_check.max_regen` / `max_replan` | `1` / `1` | 重写与重新规划次数 |
@@ -455,7 +454,6 @@ python main.py
 | `media.max_media_per_message` | `1` | 每条消息最多分析的媒体数 |
 | `media.max_analyze_bytes` | 4 MiB | 单个媒体的分析字节上限 |
 | `media.max_image_pixels` / `max_animation_frames` | 1600 万 / 120 | 像素与动图帧数上限 |
-| `media.vision_timeout_seconds` / `vision_max_retry` | `20.0` / `1` | 视觉调用预算 |
 | `media.inbox_disk_quota_bytes` / `inbox_ttl_seconds` | 256 MiB / 7 天 | 下载暂存区配额与保留期 |
 | `media.enable_auto_collect_inbound_emoji` | `true` | 自动收集群友的表情包，最多 200 个 |
 | `media.enable_emoji_refine_background` | `true` | 后台补全表情描述 |
@@ -564,3 +562,5 @@ python scripts/run_xiaoqing_chat_live_eval.py             # 真实模型多人�
 - [配置详解](../../docs/06-configuration.md)
 - [消息处理流程](../../docs/08-message-flow.md)
 - [插件使用手册](../../docs/09-plugins.md)
+
+人工反思提示可以投递到 `operator_user_id` / `operator_group_id` 配置的接收目标。`/xc 审查` 修改策略会话时校验原聊天归属，操作需要在产生该审查会话的聊天中提交。

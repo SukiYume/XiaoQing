@@ -159,11 +159,11 @@ def test_bulk_reminder_edit_checks_the_complete_child_snapshot(db, change):
     else:
         db.insert_item(
             {
-                "owner_id": owner,
-                "type": "event",
-                "title": "新增节点",
-                "start_time": "2030-05-03T10:00:00+08:00",
-                "event_collection_id": collection_id,
+                "owner_id"             : owner,
+                "type"                 : "event",
+                "title"                : "新增节点",
+                "start_time"           : "2030-05-03T10:00:00+08:00",
+                "event_collection_id"  : collection_id,
                 "event_collection_kind": "multi_node",
             }
         )
@@ -185,7 +185,7 @@ def test_moving_deleting_and_restoring_leaf_refreshes_collection_bounds(db):
         children[1],
         {
             "start_time": "2030-07-05T10:00:00+00:00",
-            "end_time": "2030-07-05T12:00:00+00:00",
+            "end_time"  : "2030-07-05T12:00:00+00:00",
         },
         owner,
     )
@@ -249,11 +249,11 @@ def test_event_reminder_confirmation_route_toggles_only_owned_future_reminder(
     remind_time = "2099-01-01T08:00:00+00:00"
     db.insert_item(
         {
-            "id": event_id,
-            "owner_id": owner_id,
-            "type": "event",
-            "title": "未来提醒",
-            "start_time": "2099-01-01T09:00:00+00:00",
+            "id"          : event_id,
+            "owner_id"    : owner_id,
+            "type"        : "event",
+            "title"       : "未来提醒",
+            "start_time"  : "2099-01-01T09:00:00+00:00",
             "remind_times": [remind_time],
         }
     )
@@ -311,11 +311,11 @@ def test_event_reminder_confirmation_route_rejects_expired_or_invalid_time(
     remind_time = "2000-01-01T08:00:00+00:00"
     db.insert_item(
         {
-            "id": event_id,
-            "owner_id": owner_id,
-            "type": "event",
-            "title": "已到期提醒",
-            "start_time": "2000-01-01T09:00:00+00:00",
+            "id"          : event_id,
+            "owner_id"    : owner_id,
+            "type"        : "event",
+            "title"       : "已到期提醒",
+            "start_time"  : "2000-01-01T09:00:00+00:00",
             "remind_times": [remind_time],
         }
     )
@@ -382,11 +382,11 @@ def test_category_endpoint_reads_scoped_categories_without_building_an_overview(
     ):
         db.insert_item(
             {
-                "id": item_id,
-                "owner_id": owner_id,
-                "type": "event",
-                "title": item_id,
-                "category": category,
+                "id"        : item_id,
+                "owner_id"  : owner_id,
+                "type"      : "event",
+                "title"     : item_id,
+                "category"  : category,
                 "start_time": "2030-01-01T10:00:00",
             }
         )
@@ -407,8 +407,8 @@ def test_category_endpoint_reads_scoped_categories_without_building_an_overview(
     response = events_api.get_event_categories(owner_id="owner-a", db=db)
 
     assert response == {
-        "ok": True,
-        "data": {"categories": ["工作", "未分类", "生活"]},
+        "ok"     : True,
+        "data"   : {"categories": ["工作", "未分类", "生活"]},
         "message": "",
     }
 
@@ -800,8 +800,8 @@ def test_detail_endpoints_return_builder_data_and_translate_missing_records(
     monkeypatch.setattr(events_api, "build_event_detail", event_builder)
 
     assert events_api.get_collection_detail("collection-a", owner_id="owner", db=db) == {
-        "ok": True,
-        "data": collection_detail,
+        "ok"     : True,
+        "data"   : collection_detail,
         "message": "",
     }
     with pytest.raises(HTTPException) as collection_error:
@@ -809,8 +809,8 @@ def test_detail_endpoints_return_builder_data_and_translate_missing_records(
     assert collection_error.value.status_code == 404
 
     assert events_api.get_event_detail("event-a", owner_id="owner", db=db) == {
-        "ok": True,
-        "data": event_detail,
+        "ok"     : True,
+        "data"   : event_detail,
         "message": "",
     }
     with pytest.raises(HTTPException) as event_error:
@@ -876,10 +876,10 @@ def test_update_without_collection_start_uses_validation_anchor(db: Database) ->
     collection_id = "collection-without-start"
     db.create_event_collection(
         {
-            "id": collection_id,
+            "id"      : collection_id,
             "owner_id": owner_id,
-            "kind": "multi_node",
-            "title": "旧集合",
+            "kind"    : "multi_node",
+            "title"   : "旧集合",
         }
     )
 

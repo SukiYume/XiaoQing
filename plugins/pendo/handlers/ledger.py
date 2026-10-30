@@ -49,15 +49,16 @@ _CATEGORY_ICONS: Final = {
     for category in LEDGER_EXPENSE_CATEGORIES + LEDGER_INCOME_CATEGORIES
 }
 _TRANSACTION_TYPE_LABELS: Final = {
-    "income": "收入",
-    "expense": "支出",
+    "income"  : "收入",
+    "expense" : "支出",
     "transfer": "转账",
 }
 _TRANSACTION_TYPE_ICONS: Final = {
-    "income": "💰",
-    "expense": "💸",
+    "income"  : "💰",
+    "expense" : "💸",
     "transfer": "🔁",
 }
+_MAX_ACCOUNT_CHARS: Final = 80
 _COMMON_LEDGER_ACCOUNTS: Final = ("现金", "微信", "支付宝", "银行卡", "信用卡")
 _FIELD_RE: Final = re.compile(r'(?<!\S)(?P<key>[A-Za-z_]{2,}):(?!//)(?P<value>"[^"]*"|“[^”]*”|\S+)')
 _QUICK_LEDGER_FIELDS: Final = frozenset(
@@ -88,42 +89,42 @@ _LIST_LEDGER_FIELDS: Final = frozenset(
     }
 )
 _EDIT_LEDGER_FIELD_MAP: Final = {
-    "amount": "amount",
-    "title": "title",
-    "cat": "ledger_category",
+    "amount"  : "amount",
+    "title"   : "title",
+    "cat"     : "ledger_category",
     "category": "ledger_category",
-    "date": "ledger_date",
-    "account": "account_name",
-    "from": "account_name",
-    "to": "counter_account_name",
-    "counter": "counter_account_name",
+    "date"    : "ledger_date",
+    "account" : "account_name",
+    "from"    : "account_name",
+    "to"      : "counter_account_name",
+    "counter" : "counter_account_name",
     "merchant": "merchant",
-    "payee": "merchant",
-    "remark": "remark",
+    "payee"   : "merchant",
+    "remark"  : "remark",
     "currency": "currency",
 }
-_EDIT_LEDGER_FIELDS: Final   = frozenset(_EDIT_LEDGER_FIELD_MAP) | {"type"}
+_EDIT_LEDGER_FIELDS  : Final = frozenset(_EDIT_LEDGER_FIELD_MAP) | {"type"}
 _NONEMPTY_EDIT_FIELDS: Final = frozenset(
     {"amount", "cat", "category", "date", "account", "from", "currency", "type"}
 )
 _EDIT_LEDGER_LABELS: Final = {
-    "title": "摘要",
-    "ledger_category": "分类",
-    "ledger_date": "日期",
-    "account_name": "账户",
+    "title"               : "摘要",
+    "ledger_category"     : "分类",
+    "ledger_date"         : "日期",
+    "account_name"        : "账户",
     "counter_account_name": "转入",
-    "merchant": "商户",
-    "remark": "备注",
-    "currency": "币种",
+    "merchant"            : "商户",
+    "remark"              : "备注",
+    "currency"            : "币种",
 }
 _SESSION_REQUIRED_FIELDS: Final = {
-    "amount": frozenset(),
-    "description": frozenset({"amount"}),
+    "amount"          : frozenset(),
+    "description"     : frozenset({"amount"}),
     "transaction_type": frozenset({"amount", "title"}),
-    "account": frozenset({"amount", "title", "transaction_type"}),
-    "counter_account": frozenset({"amount", "title", "transaction_type", "account_name"}),
-    "category": frozenset({"amount", "title", "transaction_type", "account_name"}),
-    "merchant": frozenset(
+    "account"         : frozenset({"amount", "title", "transaction_type"}),
+    "counter_account" : frozenset({"amount", "title", "transaction_type", "account_name"}),
+    "category"        : frozenset({"amount", "title", "transaction_type", "account_name"}),
+    "merchant"        : frozenset(
         {"amount", "title", "transaction_type", "account_name", "ledger_category"}
     ),
 }
@@ -133,15 +134,15 @@ _SESSION_REQUIRED_FIELDS: Final = {
 class LedgerListFilters:
     """命令行账目列表筛选条件。金额统一保存为分。"""
 
-    range_text: str              = ""
-    show_all: bool               = False
-    show_extra: bool             = False
-    page: int                    = 1
+    range_text      : str        = ""
+    show_all        : bool       = False
+    show_extra      : bool       = False
+    page            : int        = 1
     transaction_type: str | None = None
-    category: str | None         = None
-    account: str | None          = None
-    counter_account: str | None  = None
-    merchant: str | None         = None
+    category        : str | None = None
+    account         : str | None = None
+    counter_account : str | None = None
+    merchant        : str | None = None
     amount_min_cents: int | None = None
     amount_max_cents: int | None = None
 
@@ -150,10 +151,10 @@ class LedgerListFilters:
 class LedgerTotals:
     """账目汇总；所有计算使用整数分，避免浮点累计误差。"""
 
-    income_cents: int   = 0
-    expense_cents: int  = 0
-    transfer_cents: int = 0
-    income_by_category: dict[str, int] = field(default_factory=dict)
+    income_cents       : int = 0
+    expense_cents      : int = 0
+    transfer_cents     : int = 0
+    income_by_category : dict[str, int] = field(default_factory=dict)
     expense_by_category: dict[str, int] = field(default_factory=dict)
 
 
@@ -170,8 +171,8 @@ def _transaction_type_icon(transaction_type: str) -> str:
 
 
 def _extract_field_args(text: str) -> tuple[str, dict[str, str]]:
-    fields: dict[str, str]       = {}
-    spans: list[tuple[int, int]] = []
+    fields: dict[str, str]        = {}
+    spans : list[tuple[int, int]] = []
     for match in _FIELD_RE.finditer(text):
         key   = match.group("key").lower()
         value = match.group("value").strip()
@@ -193,6 +194,60 @@ def _extract_field_args(text: str) -> tuple[str, dict[str, str]]:
         last = end
     parts.append(text[last:])
     return " ".join("".join(parts).split()), fields
+
+
+_QUOTED_RE      : Final = re.compile(r'"[^"]*"|“[^”]*”')
+_FIELD_PREFIX_RE: Final = re.compile(r"(?<!\S)[A-Za-z_]{2,}:$")
+
+
+def _quoted_description_spans(text: str) -> list[tuple[int, int]]:
+    """引号括起的描述片段；紧跟在 ``key:`` 后面的引号是字段值，不算描述。"""
+
+    return [
+        match.span()
+        for match in _QUOTED_RE.finditer(text)
+        if _FIELD_PREFIX_RE.search(text[: match.start()]) is None
+    ]
+
+
+def _tokenize_outside_quotes(text: str) -> tuple[list[tuple[str, bool]], dict[str, str]]:
+    """按引号边界切分快速记账输入，返回 (词, 是否来自引号) 序列与引号外的字段参数。
+
+    字段参数和交易类型词只在引号外识别：``30 "Dinner in Paris"`` 的描述原样保留，
+    引号里的 ``account:cash``、``--`` 这类文本也不会被当成参数。
+    """
+
+    quoted = _quoted_description_spans(text)
+
+    def inside_quote(position: int) -> bool:
+        return any(start <= position < end for start, end in quoted)
+
+    fields : dict[str, str]        = {}
+    removed: list[tuple[int, int]] = []
+    for match in _FIELD_RE.finditer(text):
+        if inside_quote(match.start()):
+            continue
+        key   = match.group("key").lower()
+        value = match.group("value").strip()
+        if key in fields:
+            raise ValueError(f"字段不能重复: {key}")
+        if len(value) >= 2 and (value[0], value[-1]) in {('"', '"'), ("“", "”")}:
+            value = value[1:-1]
+        fields[key] = value.strip()
+        removed.append(match.span())
+
+    tokens: list[tuple[str, bool]] = []
+    cuts                           = sorted(
+        [(start, end, False) for start, end in removed] + [(s, e, True) for s, e in quoted]
+    )
+    cursor = 0
+    for start, end, is_quote in cuts:
+        tokens.extend((word, False) for word in text[cursor:start].split())
+        if is_quote:
+            tokens.append((text[start + 1 : end - 1].strip(), True))
+        cursor = end
+    tokens.extend((word, False) for word in text[cursor:].split())
+    return [token for token in tokens if token[0]], fields
 
 
 def _parse_positive_amount(value: str) -> tuple[float, int]:
@@ -296,16 +351,16 @@ class LedgerHandler(DbOpsMixin):
             return await self._save_ledger_item(
                 user_id,
                 {
-                    "amount_cents": record.amount_cents,
-                    "title": record.title,
-                    "transaction_type": record.transaction_type,
-                    "ledger_category": record.category or None,
-                    "account_name": record.account or None,
+                    "amount_cents"        : record.amount_cents,
+                    "title"               : record.title,
+                    "transaction_type"    : record.transaction_type,
+                    "ledger_category"     : record.category or None,
+                    "account_name"        : record.account or None,
                     "counter_account_name": record.to_account or None,
-                    "merchant": record.merchant,
-                    "ledger_date": record.date,
-                    "currency": record.currency,
-                    "remark": record.remark,
+                    "merchant"            : record.merchant,
+                    "ledger_date"         : record.date,
+                    "currency"            : record.currency,
+                    "remark"              : record.remark,
                 },
                 group_id,
             )
@@ -350,10 +405,10 @@ class LedgerHandler(DbOpsMixin):
         created = await safe_create_session(
             context,
             initial_data={
-                "type": PendoConfig.SESSION_TYPE_LEDGER_ADD,
+                "type"    : PendoConfig.SESSION_TYPE_LEDGER_ADD,
                 "group_id": group_id,
-                "step": "amount",
-                "data": {},
+                "step"    : "amount",
+                "data"    : {},
             },
             timeout=PendoConfig.SESSION_TIMEOUT_SECONDS,
         )
@@ -448,7 +503,7 @@ class LedgerHandler(DbOpsMixin):
         if data.get("transaction_type") == "transfer":
             session.set("step", "counter_account")
             return {
-                "status": "success",
+                "status" : "success",
                 "message": self._build_account_prompt(
                     default_allowed = False,
                     title           = "➡️ 请选择转入账户（必须和转出账户不同）：",
@@ -457,7 +512,7 @@ class LedgerHandler(DbOpsMixin):
 
         session.set("step", "category")
         return {
-            "status": "success",
+            "status" : "success",
             "message": self._build_category_prompt(data["transaction_type"]),
         }
 
@@ -475,7 +530,7 @@ class LedgerHandler(DbOpsMixin):
         session.set("data", data)
         session.set("step", "merchant")
         return {
-            "status": "success",
+            "status" : "success",
             "message": "🏷️ 请输入商户/对方（可输入 0 或 跳过）：",
         }
 
@@ -522,7 +577,7 @@ class LedgerHandler(DbOpsMixin):
         session.set("data", data)
         session.set("step", "merchant")
         return {
-            "status": "success",
+            "status" : "success",
             "message": "🏷️ 请输入商户/对方（可输入 0 或 跳过）：",
         }
 
@@ -538,8 +593,19 @@ class LedgerHandler(DbOpsMixin):
         merchant = text.strip()
         if merchant and merchant not in {"0", "跳过", "默认", "无", "-"}:
             data["merchant"] = merchant
-        await safe_end_session(context)
-        return await self._save_ledger_item(user_id, data, group_id)
+        # 先校验并持久化，成功后再结束会话：校验或保存失败时草稿保留，用户只需改有问题的字段。
+        result = await self._save_ledger_item(user_id, data, group_id)
+        if result.get("status") == "success":
+            await safe_end_session(context)
+        else:
+            result = {
+                **result,
+                "message": (
+                    f"{result.get('message', '')}\n\n"
+                    '草稿已保留，可以重新输入商户；输入"退出"放弃本次记账。'
+                ),
+            }
+        return result
 
     def _step_description(
         self,
@@ -605,6 +671,9 @@ class LedgerHandler(DbOpsMixin):
         try:
             index = int(value)
         except ValueError:
+            # 在账户这一步就校验长度：到最后一步才失败会让用户重填全部字段。
+            if len(value) > _MAX_ACCOUNT_CHARS:
+                return "", f"❌ 账户名不能超过 {_MAX_ACCOUNT_CHARS} 个字符，请重新输入："
             return value, None
 
         if 1 <= index <= len(_COMMON_LEDGER_ACCOUNTS):
@@ -617,22 +686,22 @@ class LedgerHandler(DbOpsMixin):
         """保存记账条目"""
         now       = await get_user_local_wall_time(user_id, self.db)
         item_data = {
-            "owner_id": user_id,
-            "title": data.get("title", ""),
-            "content": data.get("remark", ""),
-            "amount": data.get("amount"),
-            "amount_cents": data.get("amount_cents"),
-            "currency": data.get("currency"),
-            "transaction_type": data.get("transaction_type"),
-            "ledger_category": data.get("ledger_category"),
-            "ledger_date": data.get("ledger_date") or now.strftime("%Y-%m-%d"),
-            "account_name": data.get("account_name"),
+            "owner_id"            : user_id,
+            "title"               : data.get("title", ""),
+            "content"             : data.get("remark", ""),
+            "amount"              : data.get("amount"),
+            "amount_cents"        : data.get("amount_cents"),
+            "currency"            : data.get("currency"),
+            "transaction_type"    : data.get("transaction_type"),
+            "ledger_category"     : data.get("ledger_category"),
+            "ledger_date"         : data.get("ledger_date") or now.strftime("%Y-%m-%d"),
+            "account_name"        : data.get("account_name"),
             "counter_account_name": data.get("counter_account_name"),
-            "merchant": data.get("merchant"),
-            "remark": data.get("remark", ""),
-            "context": {"group_id": group_id} if group_id is not None else {},
-            "created_at": now.isoformat(),
-            "updated_at": now.isoformat(),
+            "merchant"            : data.get("merchant"),
+            "remark"              : data.get("remark", ""),
+            "context"             : {"group_id": group_id} if group_id is not None else {},
+            "created_at"          : now.isoformat(),
+            "updated_at"          : now.isoformat(),
         }
         try:
             normalized = normalize_ledger_fields(item_data, partial=False)
@@ -706,7 +775,7 @@ class LedgerHandler(DbOpsMixin):
             )
 
         try:
-            text, fields = _extract_field_args(text)
+            tokens, fields = _tokenize_outside_quotes(text)
         except ValueError as exc:
             return {}, f"❌ {exc}"
         unknown_fields = sorted(fields.keys() - _QUICK_LEDGER_FIELDS)
@@ -719,44 +788,47 @@ class LedgerHandler(DbOpsMixin):
         )
         if transaction_type is None:
             return {}, f"❌ 无效交易类型: {raw_type or '(空)'}"
-        tokens                      = text.split()
         remaining_tokens: list[str] = []
-        for token in tokens:
-            parsed_type = parse_ledger_transaction_type(token) if raw_type is None else None
+        bare_types      : set[str]  = set()
+        for token, quoted in tokens:
+            # 类型词只在引号外识别；引号内的 in/out/transfer/收入 属于描述。
+            parsed_type = (
+                parse_ledger_transaction_type(token) if raw_type is None and not quoted else None
+            )
             if parsed_type is not None:
-                transaction_type = parsed_type
+                bare_types.add(parsed_type)
             else:
                 remaining_tokens.append(token)
-        text = " ".join(remaining_tokens)
+        if len(bare_types) > 1:
+            return {}, "❌ 交易类型冲突，请只写一个类型（或使用 type:xxx）"
+        if bare_types:
+            transaction_type = bare_types.pop()
 
         # 解析金额和描述
-        parts = text.split(maxsplit=1)
-        if not parts:
+        if not remaining_tokens:
             return {}, "❌ 请提供金额"
 
         try:
-            amount, amount_cents = _parse_positive_amount(parts[0])
+            amount, amount_cents = _parse_positive_amount(remaining_tokens[0])
         except (ArithmeticError, ValueError):
-            return {}, f"❌ 无法识别金额: {parts[0]}"
+            return {}, f"❌ 无法识别金额: {remaining_tokens[0]}"
 
-        title = parts[1].strip() if len(parts) > 1 else ""
-        if len(title) >= 2 and (title[0], title[-1]) in {('"', '"'), ("“", "”")}:
-            title = title[1:-1].strip()
+        title = " ".join(remaining_tokens[1:]).strip()
         if not title:
             return {}, "❌ 请提供账目描述"
 
         data = {
-            "amount": amount,
-            "amount_cents": amount_cents,
-            "transaction_type": transaction_type,
-            "ledger_category": fields.get("cat") or fields.get("category"),
-            "ledger_date": fields.get("date"),
-            "account_name": fields.get("account") or fields.get("from"),
+            "amount"              : amount,
+            "amount_cents"        : amount_cents,
+            "transaction_type"    : transaction_type,
+            "ledger_category"     : fields.get("cat") or fields.get("category"),
+            "ledger_date"         : fields.get("date"),
+            "account_name"        : fields.get("account") or fields.get("from"),
             "counter_account_name": fields.get("to") or fields.get("counter"),
-            "merchant": fields.get("merchant") or fields.get("payee"),
-            "currency": fields.get("currency"),
-            "title": title,
-            "remark": fields.get("remark", ""),
+            "merchant"            : fields.get("merchant") or fields.get("payee"),
+            "currency"            : fields.get("currency"),
+            "title"               : title,
+            "remark"              : fields.get("remark", ""),
         }
 
         return data, None
@@ -994,7 +1066,7 @@ class LedgerHandler(DbOpsMixin):
 
         if not items:
             return {
-                "status": "success",
+                "status" : "success",
                 "message": f"💰 {range_label}账目{filter_suffix}\n\n暂无记录",
                 "outcome": CommandOutcome("completed", has_more=False, page=1),
             }
@@ -1051,7 +1123,7 @@ class LedgerHandler(DbOpsMixin):
             message += f"\n{self._format_category_maxima(items)}\n"
 
         return {
-            "status": "success",
+            "status" : "success",
             "message": message,
             "outcome": CommandOutcome(
                 "completed",
@@ -1376,6 +1448,8 @@ class LedgerHandler(DbOpsMixin):
             label = f"{now.year}年{now.month}月"
         elif rl in ("today", "今天"):
             label = "今日"
+        elif rl in ("tomorrow", "明天"):
+            label = "明日"
         elif rl in ("week", "本周"):
             label = "本周"
         elif rl in ("year", "今年"):

@@ -33,8 +33,8 @@ async def test_handle_smalltalk_hides_internal_exception_details() -> None:
 
     event = {
         "message_type": "private",
-        "user_id": 123,
-        "message_id": 456,
+        "user_id"     : 123,
+        "message_id"  : 456,
     }
 
     with pytest.MonkeyPatch.context() as mp:
@@ -273,8 +273,9 @@ def test_llm_call_config_contains_only_runtime_controls() -> None:
     config = LLMCallConfig(timeout_seconds=3.0, max_retry=0, retry_interval_seconds=0.2)
 
     assert config.request_controls() == {
-        "timeout_seconds": 3.0,
-        "max_retry": 0,
+        "timeout_seconds"       : 3.0,
+        "total_timeout_seconds" : 60.0,
+        "max_retry"             : 0,
         "retry_interval_seconds": 0.2,
     }
 
@@ -369,14 +370,14 @@ async def test_gateway_forwards_extra_payload_without_streaming() -> None:
         max_retry              = 0,
         retry_interval_seconds = 0.5,
         extra_payload          = {
-            "thinking": {"type": "enabled"},
+            "thinking"        : {"type": "enabled"},
             "reasoning_effort": "high",
         },
     )
 
     kwargs = service.complete.await_args.kwargs
     assert kwargs["extra_payload"] == {
-        "thinking": {"type": "enabled"},
+        "thinking"        : {"type": "enabled"},
         "reasoning_effort": "high",
     }
     assert service.complete.await_args.args[1] == messages
@@ -397,9 +398,8 @@ async def test_xiaoqing_uses_safe_core_model_metadata(tmp_path) -> None:
         config = {
             "plugins": {
                 "xiaoqing_chat": {
-                    "timeout_seconds": 23,
                     "ai": {
-                        "default_model_alias": "deepseek",
+                        "routes": {"chat": {"models": ["deepseek-flash"], "timeout_seconds": 23}},
                         "model_aliases": {"deepseek": "deepseek-flash"},
                     },
                 }
@@ -437,4 +437,24 @@ async def test_xiaoqing_uses_safe_core_model_metadata(tmp_path) -> None:
     assert secrets["_profile"] == "deepseek-flash"
     assert secrets["_pinned_model"] is None
     assert "api_key" not in secrets and "api_base" not in secrets
-    assert loaded.timeout_seconds == 23
+    assert loaded.llm_config("chat").timeout_seconds == 23
+
+
+@pytest.mark.asyncio
+async def test_explicit_reasoning_route_ignores_chat_pin():
+    from plugins.xiaoqing_chat.llm.gateway import complete_raw
+
+    service = SimpleNamespace(complete=AsyncMock())
+    await complete_raw(
+        secrets  = {"_ai": service, "_route": "chat", "_pinned_model": "chatgpt"},
+        route    = "reasoning",
+        messages = [{"role": "user", "content": "plan"}],
+    )
+    assert service.complete.await_args.args[0] == "reasoning"
+    assert service.complete.await_args.kwargs["pinned_model"] is None
+    await complete_raw(
+        secrets  = {"_ai": service, "_route": "chat", "_pinned_model": "chatgpt"},
+        messages = [{"role": "user", "content": "chat"}],
+    )
+    assert service.complete.await_args.args[0] == "chat"
+    assert service.complete.await_args.kwargs["pinned_model"] == "chatgpt"

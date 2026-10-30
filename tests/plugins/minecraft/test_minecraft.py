@@ -113,8 +113,8 @@ def _write_config(tmp_path: Path, server: dict[str, Any], *, profile: str = "def
 
 def _server_config(**overrides: Any) -> dict[str, Any]:
     server: dict[str, Any] = {
-        "host": "127.0.0.1",
-        "port": 25575,
+        "host"    : "127.0.0.1",
+        "port"    : 25575,
         "log_file": "",
     }
     server.update(overrides)
@@ -485,9 +485,9 @@ class TestMinecraftCommands:
         await reset_minecraft_runtime.replace_connection(_connection(GROUP_TARGET, client=client))
         member = _context(tmp_path)
         event  = {
-            "user_id": 30001,
+            "user_id" : 30001,
             "group_id": GROUP_TARGET.target_id,
-            "sender": {"card": "阿青", "nickname": "qing"},
+            "sender"  : {"card": "阿青", "nickname": "qing"},
         }
 
         said = await mc_main.handle("mc", 'say 大家好 @e\n/op me "引号"', event, member)

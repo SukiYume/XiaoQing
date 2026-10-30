@@ -58,8 +58,8 @@ async def test_qingssh_command_and_response_stay_admin_visible_but_not_in_logs(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    actions: list[dict[str, Any]] = []
-    command_seen: list[str]       = []
+    actions     : list[dict[str, Any]] = []
+    command_seen: list[str]            = []
 
     class _Manager:
         data_dir = tmp_path

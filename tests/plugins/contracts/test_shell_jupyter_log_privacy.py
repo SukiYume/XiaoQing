@@ -91,7 +91,7 @@ async def test_shell_exception_body_stays_out_of_logs_and_public_response(
         SimpleNamespace(
             request_id = "req-shell-error",
             secrets    = {
-                "plugins": {"shell": {"timeout": 3}},
+                "plugins"                 : {"shell": {"timeout": 3}},
                 "private_exception_canary": ERROR_CANARY,
             },
         )

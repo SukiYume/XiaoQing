@@ -17,32 +17,32 @@ from typing import Any, Final, NoReturn, cast
 from PIL import Image, UnidentifiedImageError
 
 DEFAULT_IMAGE_FORMAT_EXTENSIONS: Final[Mapping[str, str]] = {
-    "BMP": ".bmp",
-    "GIF": ".gif",
+    "BMP" : ".bmp",
+    "GIF" : ".gif",
     "JPEG": ".jpg",
-    "PNG": ".png",
+    "PNG" : ".png",
     "WEBP": ".webp",
 }
 DEFAULT_IMAGE_FORMAT_SUFFIXES: Final[Mapping[str, frozenset[str]]] = {
-    "BMP": frozenset({".bmp"}),
-    "GIF": frozenset({".gif"}),
+    "BMP" : frozenset({".bmp"}),
+    "GIF" : frozenset({".gif"}),
     "JPEG": frozenset({".jpeg", ".jpg"}),
-    "PNG": frozenset({".png"}),
+    "PNG" : frozenset({".png"}),
     "WEBP": frozenset({".webp"}),
 }
 
-_PNG_TRAILER: Final                             = b"\x00\x00\x00\x00IEND\xaeB`\x82"
-_PNG_SIGNATURE: Final                           = b"\x89PNG\r\n\x1a\n"
-_MAX_PNG_CHUNKS: Final                          = 4_096
+_PNG_TRAILER         : Final                    = b"\x00\x00\x00\x00IEND\xaeB`\x82"
+_PNG_SIGNATURE       : Final                    = b"\x89PNG\r\n\x1a\n"
+_MAX_PNG_CHUNKS      : Final                    = 4_096
 _MODE_BYTES_PER_PIXEL: Final[Mapping[str, int]] = {
-    "1": 1,
-    "L": 1,
-    "P": 1,
-    "LA": 2,
-    "RGB": 3,
+    "1"    : 1,
+    "L"    : 1,
+    "P"    : 1,
+    "LA"   : 2,
+    "RGB"  : 3,
     "YCbCr": 3,
-    "RGBA": 4,
-    "CMYK": 4,
+    "RGBA" : 4,
+    "CMYK" : 4,
 }
 
 
@@ -58,10 +58,10 @@ class ImageValidationError(ValueError):
 class ImageValidationLimits:
     """Resource budgets applied before and during image decoding."""
 
-    max_bytes: int
-    max_pixels: int
-    max_frames: int               = 120
-    max_dimension: int | None     = None
+    max_bytes        : int
+    max_pixels       : int
+    max_frames       : int        = 120
+    max_dimension    : int | None = None
     max_decoded_bytes: int | None = None
 
     def __post_init__(self) -> None:
@@ -81,12 +81,12 @@ class ImageValidationLimits:
 class ValidatedImage:
     """Metadata derived from fully decoded image content, never from its name."""
 
-    format: str
+    format   : str
     extension: str
-    width: int
-    height: int
-    frames: int
-    mode: str
+    width    : int
+    height   : int
+    frames   : int
+    mode     : str
 
 
 def _reject(reason: str, message: str) -> NoReturn:
@@ -283,7 +283,8 @@ def validate_image_bytes(
             "decompression_bomb",
             "image decompression-bomb limit exceeded",
         ) from exc
-    except (UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:
+    # Pillow PNG verify can raise IndexError when a malformed container has no image tile.
+    except (UnidentifiedImageError, OSError, SyntaxError, ValueError, IndexError) as exc:
         raise ImageValidationError("invalid_image", "image is invalid or undecodable") from exc
 
     return ValidatedImage(

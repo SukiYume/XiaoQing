@@ -2,20 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
+from types import SimpleNamespace
+from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import pytest
+
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from tests.helpers.xiaoqing_chat_test_support import (
-    Any,
-    AsyncMock,
-    MagicMock,
-    Mock,
-    SimpleNamespace,
     _build_xiaoqing_catalog,
     _make_hctx,
-    asyncio,
-    cast,
-    patch,
-    pytest,
-    time,
     xiaoqing_chat,
 )
 
@@ -201,7 +199,11 @@ async def test_xiaoqing_chat_handle_exception(mock_context, sample_group_event):
         )
 
         # Should return error message
-        assert len(result) > 0
+        from core.public_errors import PUBLIC_ERROR_CODE
+
+        assert result.command_outcome.state == "error"
+        assert PUBLIC_ERROR_CODE in result[0]["data"]["text"]
+        assert "Test error" not in result[0]["data"]["text"]
 
 
 @pytest.mark.plugin
@@ -315,7 +317,7 @@ async def test_call_bot_name_only_uses_configured_replies(mock_context):
 
     mock_context.config = {
         "bot_name": "小青",
-        "plugins": {"xiaoqing_chat": {"bot_name_only_replies": ["收到"]}},
+        "plugins" : {"xiaoqing_chat": {"bot_name_only_replies": ["收到"]}},
     }
 
     result = await call_bot_name_only(mock_context)
@@ -326,17 +328,20 @@ async def test_call_bot_name_only_uses_configured_replies(mock_context):
 @pytest.mark.plugin
 @pytest.mark.asyncio
 async def test_call_bot_name_only_varies_response(mock_context):
-    """Test call_bot_name_only can return different responses"""
+    """配置候选交给随机选择器，选择结果原样返回。"""
     from plugins.xiaoqing_chat.main import call_bot_name_only
 
-    responses = set()
-    for _ in range(20):
-        result = await call_bot_name_only(mock_context)
-        if result:
-            responses.add(result[0]["data"]["text"])
-
-    # Should have at least some variety
-    assert len(responses) > 0
+    mock_context.config = {
+        "bot_name": "小青",
+        "plugins" : {"xiaoqing_chat": {"bot_name_only_replies": ["收到", "我在"]}},
+    }
+    with patch(
+        "plugins.xiaoqing_chat.handlers.random.choice", side_effect=["收到", "我在"]
+    ) as choose:
+        responses = [await call_bot_name_only(mock_context) for _ in range(2)]
+    assert [result[0]["data"]["text"] for result in responses] == ["收到", "我在"]
+    assert choose.call_count == 2
+    assert all(call.args == (["收到", "我在"],) for call in choose.call_args_list)
 
 
 @pytest.mark.plugin
@@ -691,9 +696,8 @@ async def test_action_history_flush_task_entry_removed_after_task_done():
             ),
         ):
             schedule_action_history_flush(context, runtime, chat_id="g1")
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
+            task = _action_flush_tasks["g1"]
+            await asyncio.wait_for(task, timeout=5)
 
         assert "g1" not in _action_flush_tasks
     finally:

@@ -27,20 +27,20 @@ _CONST_HELP = (
 )
 
 _CONST_ALIASES = {
-    "speed": "c",
-    "light": "c",
-    "gravity": "g",
-    "planck": "h",
-    "boltzmann": "k",
-    "stefan": "sigma",
-    "electron": "me",
-    "proton": "mp",
-    "sun_mass": "m_sun",
-    "sun_radius": "r_sun",
+    "speed"         : "c",
+    "light"         : "c",
+    "gravity"       : "g",
+    "planck"        : "h",
+    "boltzmann"     : "k",
+    "stefan"        : "sigma",
+    "electron"      : "me",
+    "proton"        : "mp",
+    "sun_mass"      : "m_sun",
+    "sun_radius"    : "r_sun",
     "sun_luminosity": "l_sun",
-    "parsec": "pc",
-    "light_year": "ly",
-    "hubble": "h0",
+    "parsec"        : "pc",
+    "light_year"    : "ly",
+    "hubble"        : "h0",
 }
 
 
@@ -57,13 +57,13 @@ def _handle_const_sync(args: str, context: PluginContextProtocol) -> str:
         # 这里只保存规范名；别名先归一化，避免同一个常数对象重复登记。
         const_map = {
             # 基本物理常数
-            "c": ("光速", const.c),
-            "g": ("引力常数", const.G),
-            "h": ("普朗克常数", const.h),
-            "k": ("玻尔兹曼常数", const.k_B),
+            "c"    : ("光速", const.c),
+            "g"    : ("引力常数", const.G),
+            "h"    : ("普朗克常数", const.h),
+            "k"    : ("玻尔兹曼常数", const.k_B),
             "sigma": ("斯特藩-玻尔兹曼常数", const.sigma_sb),
-            "me": ("电子质量", const.m_e),
-            "mp": ("质子质量", const.m_p),
+            "me"   : ("电子质量", const.m_e),
+            "mp"   : ("质子质量", const.m_p),
             # 天文常数 - 太阳
             "m_sun": ("太阳质量", const.M_sun),
             "r_sun": ("太阳半径", const.R_sun),

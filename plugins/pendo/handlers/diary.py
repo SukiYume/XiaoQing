@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 class DiaryTemplate(TypedDict):
     """运行时使用的日记模板结构。"""
 
-    name: str
+    name   : str
     prompts: list[str]
 
 
@@ -50,8 +50,9 @@ class DiaryMoodAnalyzer(Protocol):
 _DIARY_USAGE_MESSAGE: Final = (
     "❌ 请提供日记内容\n\n用法: /pendo diary add [日期] <内容> [weather:xxx] [location:xxx]"
 )
+# 元数据参数必须是独立的参数：前面是开头或空白，正文里 highscore:8 和网址路径中的 location:x 不算。
 _DIARY_METADATA_RE: Final = re.compile(
-    r"(?P<key>weather|location|mood|score|tags|tag|favorite|fav):"
+    r"(?<!\S)(?P<key>weather|location|mood|score|tags|tag|favorite|fav):"
     r"(?P<value>\"[^\"]*\"|'[^']*'|\S+)",
     re.IGNORECASE,
 )
@@ -59,9 +60,9 @@ _DIARY_LIST_FILTER_RE: Final = re.compile(
     r"(?<!\S)(?P<key>mood|cat):(?P<value>\"[^\"]*\"|'[^']*'|\S+)",
     re.IGNORECASE,
 )
-_TRUE_METADATA_VALUES: Final        = frozenset({"1", "true", "yes", "y", "on", "是", "收藏"})
-_FALSE_METADATA_VALUES: Final       = frozenset({"0", "false", "no", "n", "off", "否", "不收藏"})
-_MOOD_EMOJIS: Final[dict[str, str]] = cast(
+_TRUE_METADATA_VALUES : Final = frozenset({"1", "true", "yes", "y", "on", "是", "收藏"})
+_FALSE_METADATA_VALUES: Final = frozenset({"0", "false", "no", "n", "off", "否", "不收藏"})
+_MOOD_EMOJIS          : Final[dict[str, str]] = cast(
     dict[str, str], MOOD_ANALYSIS_CONFIG.get("mood_emojis", {})
 )
 
@@ -71,9 +72,9 @@ class DiaryListFilters:
     """日记列表命令中分离出的范围和元数据筛选。"""
 
     time_range: str
-    mood: str | None
-    category: str | None
-    tag: str | None
+    mood      : str | None
+    category  : str | None
+    tag       : str | None
 
 
 class DiaryHandler(DbOpsMixin):
@@ -234,23 +235,23 @@ class DiaryHandler(DbOpsMixin):
             user_now, diary_date
         )
         item_data = {
-            "owner_id": user_id,
-            "title": str(parsed.get("title") or "").strip(),
-            "content": content,
-            "diary_date": diary_date,
-            "entry_time": entry_time,
-            "mood": mood,
-            "mood_score": mood_score,
-            "weather": parsed.get("weather") or "",
-            "location": parsed.get("location") or "",
-            "template_id": parsed.get("template_id") or template_id,
+            "owner_id"        : user_id,
+            "title"           : str(parsed.get("title") or "").strip(),
+            "content"         : content,
+            "diary_date"      : diary_date,
+            "entry_time"      : entry_time,
+            "mood"            : mood,
+            "mood_score"      : mood_score,
+            "weather"         : parsed.get("weather") or "",
+            "location"        : parsed.get("location") or "",
+            "template_id"     : parsed.get("template_id") or template_id,
             "template_answers": parsed.get("template_answers") or [],
-            "is_favorite": parsed.get("is_favorite", False),
-            "tags": parsed.get("tags") or [],
-            "category": "日记",
-            "context": {"group_id": group_id} if group_id else {},
-            "created_at": user_now.isoformat(timespec="seconds"),
-            "updated_at": user_now.isoformat(timespec="seconds"),
+            "is_favorite"     : parsed.get("is_favorite", False),
+            "tags"            : parsed.get("tags") or [],
+            "category"        : "日记",
+            "context"         : {"group_id": group_id} if group_id else {},
+            "created_at"      : user_now.isoformat(timespec="seconds"),
+            "updated_at"      : user_now.isoformat(timespec="seconds"),
         }
         try:
             item_data = normalize_diary_fields(item_data, partial=False)
@@ -469,7 +470,7 @@ class DiaryHandler(DbOpsMixin):
                 dated_diary.id, user_id, item_type=ItemType.DIARY.value
             )
             return {
-                "status": "success",
+                "status" : "success",
                 "message": f"🗑️ 已删除 {query_date} 的日记条目\n\n{PendoConfig.UNDO_HINT}",
             }
 
@@ -485,7 +486,7 @@ class DiaryHandler(DbOpsMixin):
 
         diary_date = diary.diary_date or query
         return {
-            "status": "success",
+            "status" : "success",
             "message": f"🗑️ 已删除 {diary_date} 的日记条目\n\n{PendoConfig.UNDO_HINT}",
         }
 
@@ -507,13 +508,13 @@ class DiaryHandler(DbOpsMixin):
         if await safe_create_session(
             context,
             initial_data={
-                "type": PendoConfig.SESSION_TYPE_DIARY_TEMPLATE,
+                "type"       : PendoConfig.SESSION_TYPE_DIARY_TEMPLATE,
                 "template_id": template_id,
-                "diary_date": diary_date,
-                "group_id": group_id,
-                "prompts": prompts,
-                "step": 0,
-                "answers": [],
+                "diary_date" : diary_date,
+                "group_id"   : group_id,
+                "prompts"    : prompts,
+                "step"       : 0,
+                "answers"    : [],
             },
             timeout=PendoConfig.SESSION_TIMEOUT_SECONDS,
         ):
@@ -654,7 +655,7 @@ class DiaryHandler(DbOpsMixin):
             return await self.start_template_session(user_id, arg, context, group_id)
 
         return {
-            "status": "error",
+            "status" : "error",
             "message": f"❌ 未找到模板: {arg}\n\n{self._show_template_list()['message']}",
         }
 
@@ -763,12 +764,12 @@ class DiaryHandler(DbOpsMixin):
         - 内容 mood:happy score:8 tags:工作,复盘 favorite:true
         """
         result: dict[str, Any] = {
-            "content": "",
-            "weather": None,
-            "location": None,
-            "mood": None,
-            "mood_score": None,
-            "tags": [],
+            "content"    : "",
+            "weather"    : None,
+            "location"   : None,
+            "mood"       : None,
+            "mood_score" : None,
+            "tags"       : [],
             "is_favorite": False,
         }
 

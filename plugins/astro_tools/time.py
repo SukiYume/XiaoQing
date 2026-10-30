@@ -13,8 +13,8 @@ UNIX_TIMESTAMP_MIN_ABS = 100_000_000
 _JD_MIN_ABS            = 2_400_000
 _NUMERIC_TIME          = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\Z")
 _EXPLICIT_TIME_FORMATS = {
-    "jd": ("JD", "儒略日数值", "2460419.5"),
-    "mjd": ("MJD", "修正儒略日数值", "60419.5"),
+    "jd"  : ("JD", "儒略日数值", "2460419.5"),
+    "mjd" : ("MJD", "修正儒略日数值", "60419.5"),
     "unix": ("Unix", " Unix 时间戳", "1706616000"),
 }
 

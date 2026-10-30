@@ -142,8 +142,8 @@ class ADSClient:
         if type(max_results) is not int or max_results <= 0:
             raise ValueError("max_results must be a positive integer")
         params = {
-            "q": query,
-            "fl": ",".join(fields),
+            "q"   : query,
+            "fl"  : ",".join(fields),
             "rows": max_results,
             "sort": sort,
         }

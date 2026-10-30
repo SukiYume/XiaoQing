@@ -41,10 +41,10 @@ def test_item_producer_guard_catches_a_skipped_normalizer_and_rolls_back(
 ) -> None:
     db.insert_item(
         {
-            "id": "guarded-event",
-            "owner_id": "guard-owner",
-            "type": "event",
-            "title": "原始时间",
+            "id"        : "guarded-event",
+            "owner_id"  : "guard-owner",
+            "type"      : "event",
+            "title"     : "原始时间",
             "start_time": "2030-01-01T09:00:00",
         }
     )
@@ -79,10 +79,10 @@ def test_collection_producer_guards_reject_headers_and_children_before_commit(
     with pytest.raises(ValueError, match="start_time must use UTC"):
         db.create_event_collection(
             {
-                "id": "guarded-header",
-                "owner_id": "guard-owner",
-                "kind": "multi_node",
-                "title": "集合头",
+                "id"        : "guarded-header",
+                "owner_id"  : "guard-owner",
+                "kind"      : "multi_node",
+                "title"     : "集合头",
                 "start_time": "2030-01-01T09:00:00",
             }
         )
@@ -103,16 +103,16 @@ def test_collection_producer_guards_reject_headers_and_children_before_commit(
         lambda payload, _timezone: dict(payload),
     )
     child: dict[str, Any] = {
-        "title": "节点",
+        "title"     : "节点",
         "start_time": "2030-01-01T09:00:00",
     }
     with pytest.raises(ValueError, match="start_time must use UTC"):
         db.create_event_collection(
             {
-                "id": "guarded-family",
+                "id"      : "guarded-family",
                 "owner_id": "guard-owner",
-                "kind": "multi_node",
-                "title": "整组",
+                "kind"    : "multi_node",
+                "title"   : "整组",
             },
             [("guarded-family_m01", child)],
         )
@@ -127,18 +127,18 @@ def test_direct_event_reminder_update_rejects_a_skipped_normalizer(
 ) -> None:
     db.create_event_collection(
         {
-            "id": "guarded-update-family",
+            "id"      : "guarded-update-family",
             "owner_id": "guard-owner",
-            "kind": "multi_node",
-            "title": "整组",
+            "kind"    : "multi_node",
+            "title"   : "整组",
             "timezone": "Asia/Shanghai",
         },
         [
             (
                 "guarded-update-family_m01",
                 {
-                    "title": "节点",
-                    "start_time": "2030-01-01T09:00:00",
+                    "title"       : "节点",
+                    "start_time"  : "2030-01-01T09:00:00",
                     "remind_times": ["2030-01-01T08:00:00"],
                 },
             )
@@ -192,11 +192,11 @@ def test_undo_normalizes_legacy_wall_time_snapshot_before_writing(db: Database) 
     item_id  = "guarded-undo-event"
     db.insert_item(
         {
-            "id": item_id,
-            "owner_id": owner_id,
-            "type": "event",
-            "title": "当前值",
-            "timezone": "America/Los_Angeles",
+            "id"        : item_id,
+            "owner_id"  : owner_id,
+            "type"      : "event",
+            "title"     : "当前值",
+            "timezone"  : "America/Los_Angeles",
             "start_time": "2030-01-02T09:00:00",
         }
     )
@@ -218,12 +218,12 @@ def test_unsent_confirmation_normalizes_a_legacy_reminder_key(db: Database) -> N
     item_id  = "guarded-confirm-event"
     db.insert_item(
         {
-            "id": item_id,
-            "owner_id": owner_id,
-            "type": "event",
-            "title": "旧提醒",
-            "timezone": "America/Los_Angeles",
-            "start_time": "2020-01-02T09:00:00",
+            "id"          : item_id,
+            "owner_id"    : owner_id,
+            "type"        : "event",
+            "title"       : "旧提醒",
+            "timezone"    : "America/Los_Angeles",
+            "start_time"  : "2020-01-02T09:00:00",
             "remind_times": ["2020-01-01T09:00:00"],
         }
     )
@@ -244,11 +244,11 @@ def test_reminder_and_outbox_lifecycle_timestamps_use_canonical_precision(db: Da
     item_id  = "guarded-lifecycle-event"
     db.insert_item(
         {
-            "id": item_id,
-            "owner_id": owner_id,
-            "type": "event",
-            "title": "租约精度",
-            "start_time": "2030-01-01T10:00:00",
+            "id"          : item_id,
+            "owner_id"    : owner_id,
+            "type"        : "event",
+            "title"       : "租约精度",
+            "start_time"  : "2030-01-01T10:00:00",
             "remind_times": ["2030-01-01T09:00:00"],
         }
     )

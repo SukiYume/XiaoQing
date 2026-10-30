@@ -141,11 +141,11 @@ async def test_identical_person_fact_has_independent_chat_scoped_ids_and_deletio
     db = MemoryDB()
     db.bind(tmp_path)
     common = {
-        "data_dir": tmp_path,
-        "secrets": {"api_base": "https://example.com", "api_key": "k", "model": "m"},
+        "data_dir" : tmp_path,
+        "secrets"  : {"api_base": "https://example.com", "api_key": "k", "model": "m"},
         "memory_db": db,
-        "history": history,
-        "llm": LLMCallConfig(
+        "history"  : history,
+        "llm"      : LLMCallConfig(
             temperature            = 0.5,
             top_p                  = 0.9,
             max_tokens             = 256,
@@ -194,9 +194,9 @@ def test_legacy_person_fact_migration_rekeys_valid_scope_and_quarantines_invalid
         doc_id = "person:42:1234",
         text   = "Alice<42>：喜欢喝茶\n证据：Alice 说她喜欢喝茶",
         meta   = {
-            "type": "person_info",
-            "chat_id": "chat-a",
-            "subject_id": 42,
+            "type"        : "person_info",
+            "chat_id"     : "chat-a",
+            "subject_id"  : 42,
             "subject_name": "Alice",
         },
     )

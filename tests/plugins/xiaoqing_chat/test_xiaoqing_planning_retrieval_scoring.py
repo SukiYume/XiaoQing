@@ -35,12 +35,12 @@ async def test_heartflow_uses_only_current_explicit_score_contract() -> None:
     assert score == pytest.approx(0.51)
     assert not hasattr(engine, "score")
     obsolete_call = {
-        "chat_id": "g1",
-        "text": "问题？",
-        "goal": "",
+        "chat_id"                 : "g1",
+        "text"                    : "问题？",
+        "goal"                    : "",
         "seconds_since_last_reply": 0.0,
-        "base": 0.2,
-        "threshold": 0.5,
+        "base"                    : 0.2,
+        "threshold"               : 0.5,
     }
     with pytest.raises(TypeError, match="threshold"):
         await engine.score_async(**obsolete_call)
@@ -67,11 +67,11 @@ async def test_compact_planner_prompt_keeps_all_computed_context(
     )
     await plan_next_action(
         secrets={
-            "api_base": "https://example.test",
-            "api_key": "k",
-            "model": "m",
+            "api_base"  : "https://example.test",
+            "api_key"   : "k",
+            "model"     : "m",
             "_providers": {
-                "fast": {"profile": "fast-profile"},
+                "fast"  : {"profile": "fast-profile"},
                 "steady": {"profile": "steady-profile"},
             },
         },
@@ -90,6 +90,7 @@ async def test_compact_planner_prompt_keeps_all_computed_context(
             top_p                  = 0.9,
             max_tokens             = 300,
             timeout_seconds        = 1.0,
+            total_timeout_seconds  = 7.0,
             max_retry              = 0,
             retry_interval_seconds = 0.0,
         ),
@@ -98,7 +99,7 @@ async def test_compact_planner_prompt_keeps_all_computed_context(
     prompt = captured["messages"][0]["content"]
     for sentinel in ("目标哨兵", "知识哨兵", "行动概要哨兵", "上次行动哨兵", "超时哨兵"):
         assert sentinel in prompt
-    assert captured["total_timeout_seconds"] == pytest.approx(2.3)
+    assert captured["total_timeout_seconds"] == pytest.approx(7.0)
 
 
 def test_direct_memory_query_strictly_reranks_and_limits_top_k() -> None:
@@ -174,8 +175,8 @@ def _turn(*, expected_action: str = "reply", with_input_image: bool = False) -> 
     if with_input_image:
         segments.append({"type": "image", "data": {"file": "input.png"}})
     return {
-        "expected_action": expected_action,
-        "rubric_tags": [],
+        "expected_action" : expected_action,
+        "rubric_tags"     : [],
         "message_segments": segments,
     }
 

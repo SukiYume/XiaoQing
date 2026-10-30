@@ -141,7 +141,7 @@ async def handle_internal(
             f"- 更大的上下文窗口 ({runtime.cfg.brain_chat.brain_max_context_size} 条)\n"
             f"- 更强的思考能力 (think_level={runtime.cfg.brain_chat.brain_think_level})\n"
             f"- 专门的对话人格和风格\n"
-            f"- 更理性的回复温度 ({runtime.cfg.brain_chat.brain_temperature})\n\n"
+            f"- 采样参数沿用聊天路由\n\n"
             f"提示: 修改 config/xiaoqing_config.json 中的 brain_chat.enable_private_brain_chat 来启用此模式。"
         )
         return segments(mode_desc)
@@ -162,8 +162,8 @@ async def handle_config(_args: str, event: dict[str, Any], context) -> list[dict
         f"• 最小回复间隔: {cfg.min_reply_interval_seconds} 秒",
         f"• 每分钟最大回复数: {cfg.max_replies_per_minute}",
         f"• 最大上下文大小: {cfg.max_context_size} 条",
-        f"• LLM 温度: {cfg.temperature}",
-        f"• 最大 token 数: {cfg.max_tokens}",
+        f"• LLM 温度: {cfg.llm_config('chat').temperature}",
+        f"• 最大 token 数: {cfg.llm_config('chat').max_tokens}",
     ]
 
     lines.append("\n记忆系统:")

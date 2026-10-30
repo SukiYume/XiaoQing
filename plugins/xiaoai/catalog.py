@@ -9,6 +9,9 @@ import time
 from copy import deepcopy
 from typing import Any
 
+from core.atomic_store import keyed_path_lock
+from core.lifecycle import to_thread_owned
+
 from .client import SPEC_ROOT, BridgeError, fetch_spec, request_json, write_json
 from .feeding import adapt
 from .infrared import extensions
@@ -42,34 +45,34 @@ def normalize_spec(spec: dict[str, Any]) -> dict[str, dict[str, Any]]:
                 continue
             key         = f"p{siid}.{prop['iid']}"
             result[key] = _property(prop) | {
-                "kind": "property",
-                "siid": siid,
-                "iid": prop["iid"],
+                "kind"   : "property",
+                "siid"   : siid,
+                "iid"    : prop["iid"],
                 "service": label(service),
             }
         for action in service.get("actions", []):
             inputs = [_property(properties[i]) for i in action.get("in", []) if i in properties]
             key = f"a{siid}.{action['iid']}"
             result[key] = {
-                "kind": "action",
-                "siid": siid,
-                "iid": action["iid"],
-                "name": label(action),
-                "type": action.get("type", ""),
-                "service": label(service),
-                "inputs": inputs,
+                "kind"     : "action",
+                "siid"     : siid,
+                "iid"      : action["iid"],
+                "name"     : label(action),
+                "type"     : action.get("type", ""),
+                "service"  : label(service),
+                "inputs"   : inputs,
                 "supported": len(inputs) == len(action.get("in", [])),
-                "outputs": [
+                "outputs"  : [
                     _property(properties[i]) for i in action.get("out", []) if i in properties
                 ],
             }
         for event in service.get("events", []):
             result[f"e{siid}.{event['iid']}"] = {
-                "kind": "event",
-                "siid": siid,
-                "iid": event["iid"],
-                "name": label(event),
-                "service": label(service),
+                "kind"     : "event",
+                "siid"     : siid,
+                "iid"      : event["iid"],
+                "name"     : label(event),
+                "service"  : label(service),
                 "arguments": [
                     _property(properties[i]) for i in event.get("arguments", []) if i in properties
                 ],
@@ -79,12 +82,12 @@ def normalize_spec(spec: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 def _property(prop: dict[str, Any]) -> dict[str, Any]:
     return {
-        "name": label(prop),
-        "type": prop.get("type", ""),
+        "name"  : label(prop),
+        "type"  : prop.get("type", ""),
         "format": prop.get("format"),
         "access": prop.get("access", []),
-        "unit": prop.get("unit"),
-        "range": prop.get("value-range"),
+        "unit"  : prop.get("unit"),
+        "range" : prop.get("value-range"),
         "values": prop.get("value-list"),
     }
 
@@ -97,19 +100,9 @@ async def discover(
     context: Any, io: Any, account_id: str, region: str, *, refresh: bool = False
 ) -> dict[str, Any]:
     """Refresh live membership each time; reuse account-scoped specifications for one day."""
-    path                  = context.data_dir / "capabilities.json"
-    cache: dict[str, Any] = {}
-    if path.exists() and path.stat().st_size <= MAX_CACHE_BYTES:
-        try:
-            value = json.loads(path.read_text(encoding="utf-8"))
-            if (
-                isinstance(value, dict)
-                and value.get("account_id") == account_id
-                and value.get("region") == region
-            ):
-                cache = value
-        except (ValueError, OSError):
-            pass
+    path = context.data_dir / "capabilities.json"
+    # 缓存读写都在工作线程里持有路径锁完成，慢盘不会暂停共享事件循环。
+    cache   = await to_thread_owned(_read_cache, path, account_id, region)
     devices = await io.device_list("full")
     if not isinstance(devices, list) or len(devices) > 500:
         raise BridgeError("设备列表异常或超过 500 台，请检查账号。")
@@ -145,23 +138,46 @@ async def discover(
             continue
         did                     = str(d["did"])
         output[device_key(did)] = {
-            "did": did,
-            "name": str(d.get("name") or d["model"])[:120],
-            "model": d["model"],
+            "did"   : did,
+            "name"  : str(d.get("name") or d["model"])[:120],
+            "model" : d["model"],
             "online": d.get("isOnline"),
-            "room": str(d.get("room_name") or "")[:80],
+            "room"  : str(d.get("room_name") or "")[:80],
         }
     result = {
         "account_id": account_id,
-        "region": region,
+        "region"    : region,
         "updated_at": time.time() if missing or refresh else cache.get("updated_at", time.time()),
-        "devices": output,
-        "specs": {m: specs[m] for m in models},
+        "devices"   : output,
+        "specs"     : {m: specs[m] for m in models},
     }
     if len(json.dumps(result, ensure_ascii=False).encode()) > MAX_CACHE_BYTES:
         raise BridgeError("设备能力清单超过大小限制。")
-    write_json(path, result)
+    if result != cache:
+        await to_thread_owned(_write_cache, path, result)
     return result
+
+
+def _read_cache(path: Any, account_id: str, region: str) -> dict[str, Any]:
+    with keyed_path_lock(path):
+        try:
+            if path.stat().st_size > MAX_CACHE_BYTES:
+                return {}
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            return {}
+    if (
+        isinstance(value, dict)
+        and value.get("account_id") == account_id
+        and value.get("region") == region
+    ):
+        return value
+    return {}
+
+
+def _write_cache(path: Any, value: dict[str, Any]) -> None:
+    with keyed_path_lock(path):
+        write_json(path, value)
 
 
 def resolve_device(catalog: dict[str, Any], query: str) -> tuple[str, dict[str, Any]]:

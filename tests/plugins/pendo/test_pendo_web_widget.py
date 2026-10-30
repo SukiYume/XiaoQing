@@ -15,7 +15,9 @@ from tests.helpers.paths import REPOSITORY_ROOT
 
 try:
     from plugins.pendo.web.auth import generate_widget_token
-except ModuleNotFoundError:
+except ModuleNotFoundError as exc:
+    if exc.name != "jwt":
+        raise
     pytest.skip("pendo web widget requires PyJWT", allow_module_level=True)
 from plugins.pendo.web.api import widget as widget_api
 
@@ -27,93 +29,93 @@ def _seed_widget_data(db: Database, owner_id: str) -> None:
 
     for item in [
         {
-            "id": "event_today",
-            "owner_id": owner_id,
-            "type": "event",
-            "title": "今天会议",
+            "id"        : "event_today",
+            "owner_id"  : owner_id,
+            "type"      : "event",
+            "title"     : "今天会议",
             "start_time": "2026-03-25T10:00:00",
-            "end_time": "2026-03-25T11:00:00",
-            "location": "A1",
+            "end_time"  : "2026-03-25T11:00:00",
+            "location"  : "A1",
         },
         {
-            "id": "event_tomorrow",
-            "owner_id": owner_id,
-            "type": "event",
-            "title": "明天复盘",
+            "id"        : "event_tomorrow",
+            "owner_id"  : owner_id,
+            "type"      : "event",
+            "title"     : "明天复盘",
             "start_time": "2026-03-26T14:00:00",
-            "end_time": "2026-03-26T15:00:00",
-            "location": "线上",
+            "end_time"  : "2026-03-26T15:00:00",
+            "location"  : "线上",
         },
         {
-            "id": "event_later",
-            "owner_id": owner_id,
-            "type": "event",
-            "title": "周末活动",
+            "id"        : "event_later",
+            "owner_id"  : owner_id,
+            "type"      : "event",
+            "title"     : "周末活动",
             "start_time": "2026-03-28T09:00:00",
-            "end_time": "2026-03-28T10:30:00",
+            "end_time"  : "2026-03-28T10:30:00",
         },
         {
-            "id": "task_focus",
-            "owner_id": owner_id,
-            "type": "task",
-            "title": "处理周报",
-            "status": "open",
-            "priority": 1,
-            "plan_date": "2026-03-25",
+            "id"         : "task_focus",
+            "owner_id"   : owner_id,
+            "type"       : "task",
+            "title"      : "处理周报",
+            "status"     : "open",
+            "priority"   : 1,
+            "plan_date"  : "2026-03-25",
             "deadline_at": "2026-03-25T18:00:00",
-            "created_at": "2026-03-24T08:00:00",
-            "updated_at": "2026-03-25T08:30:00",
+            "created_at" : "2026-03-24T08:00:00",
+            "updated_at" : "2026-03-25T08:30:00",
         },
         {
-            "id": "task_next",
-            "owner_id": owner_id,
-            "type": "task",
-            "title": "整理收据",
-            "status": "open",
-            "priority": 2,
-            "plan_date": "2026-03-27",
+            "id"         : "task_next",
+            "owner_id"   : owner_id,
+            "type"       : "task",
+            "title"      : "整理收据",
+            "status"     : "open",
+            "priority"   : 2,
+            "plan_date"  : "2026-03-27",
             "deadline_at": "2026-03-27T18:00:00",
-            "created_at": "2026-03-24T08:00:00",
-            "updated_at": "2026-03-24T08:00:00",
+            "created_at" : "2026-03-24T08:00:00",
+            "updated_at" : "2026-03-24T08:00:00",
         },
         {
-            "id": "ledger_expense",
-            "owner_id": owner_id,
-            "type": "ledger",
-            "title": "午饭",
-            "amount": 35.5,
+            "id"              : "ledger_expense",
+            "owner_id"        : owner_id,
+            "type"            : "ledger",
+            "title"           : "午饭",
+            "amount"          : 35.5,
             "transaction_type": "expense",
-            "ledger_category": "餐饮",
-            "ledger_date": "2026-03-20",
+            "ledger_category" : "餐饮",
+            "ledger_date"     : "2026-03-20",
         },
         {
-            "id": "ledger_income",
-            "owner_id": owner_id,
-            "type": "ledger",
-            "title": "工资",
-            "amount": 5000,
+            "id"              : "ledger_income",
+            "owner_id"        : owner_id,
+            "type"            : "ledger",
+            "title"           : "工资",
+            "amount"          : 5000,
             "transaction_type": "income",
-            "ledger_category": "工资",
-            "ledger_date": "2026-03-21",
+            "ledger_category" : "工资",
+            "ledger_date"     : "2026-03-21",
         },
         {
-            "id": "note_recent",
-            "owner_id": owner_id,
-            "type": "note",
-            "title": "Radcliffe Wave 线索",
-            "content": "整理近几天的观测想法和参考资料。",
-            "category": "科研",
+            "id"        : "note_recent",
+            "owner_id"  : owner_id,
+            "type"      : "note",
+            "title"     : "Radcliffe Wave 线索",
+            "content"   : "整理近几天的观测想法和参考资料。",
+            "category"  : "科研",
             "created_at": "2026-03-24T21:00:00",
             "updated_at": "2026-03-25T08:00:00",
-            "tags": ["paper"],
+            "tags"      : ["paper"],
         },
         {
-            "id": "note_older",
-            "owner_id": owner_id,
-            "type": "note",
-            "title": "SED 拆解",
-            "content": "把滤光片组合和拟合过程记一下。",
-            "category": "科研",
+            "id"        : "note_older",
+            "owner_id"  : owner_id,
+            "type"      : "note",
+            "title"     : "SED 拆解",
+            "content"   : "把滤光片组合和拟合过程记一下。",
+            "category"  : "科研",
             "created_at": "2026-03-20T21:00:00",
             "updated_at": "2026-03-21T08:00:00",
         },
@@ -175,29 +177,29 @@ def test_widget_calendar_sync_returns_gap_and_full_unbounded_item_list(
     ):
         temp_db.insert_item(
             {
-                "id": f"calendar-gap-{index}",
-                "owner_id": owner_id,
-                "type": "event",
-                "title": f"补齐日程 {index}",
+                "id"        : f"calendar-gap-{index}",
+                "owner_id"  : owner_id,
+                "type"      : "event",
+                "title"     : f"补齐日程 {index}",
                 "start_time": f"{day}T10:00:00",
-                "end_time": f"{day}T11:00:00",
+                "end_time"  : f"{day}T11:00:00",
             }
         )
     temp_db.insert_item(
         {
-            "id": "calendar-outside",
-            "owner_id": owner_id,
-            "type": "event",
-            "title": "窗口外日程",
+            "id"        : "calendar-outside",
+            "owner_id"  : owner_id,
+            "type"      : "event",
+            "title"     : "窗口外日程",
             "start_time": "2026-09-16T10:00:00",
         }
     )
     temp_db.insert_item(
         {
-            "id": "calendar-other-owner",
-            "owner_id": "u-widget-calendar-other",
-            "type": "event",
-            "title": "其他用户日程",
+            "id"        : "calendar-other-owner",
+            "owner_id"  : "u-widget-calendar-other",
+            "type"      : "event",
+            "title"     : "其他用户日程",
             "start_time": "2026-08-05T12:00:00",
         }
     )
@@ -259,23 +261,23 @@ def test_widget_calendar_sync_uses_item_identity_instead_of_title_and_time(
     for event_id, location in (("same-time-a", "A 楼"), ("same-time-b", "B 楼")):
         temp_db.insert_item(
             {
-                "id": event_id,
-                "owner_id": owner_id,
-                "type": "event",
-                "title": "同步会议",
+                "id"        : event_id,
+                "owner_id"  : owner_id,
+                "type"      : "event",
+                "title"     : "同步会议",
                 "start_time": "2026-08-10T10:00:00",
-                "end_time": "2026-08-10T11:00:00",
-                "location": location,
+                "end_time"  : "2026-08-10T11:00:00",
+                "location"  : location,
             }
         )
     temp_db.insert_item(
         {
-            "id": "cross-day",
-            "owner_id": owner_id,
-            "type": "event",
-            "title": "跨天出差",
+            "id"        : "cross-day",
+            "owner_id"  : owner_id,
+            "type"      : "event",
+            "title"     : "跨天出差",
             "start_time": "2026-08-11T10:00:00",
-            "end_time": "2026-08-13T18:00:00",
+            "end_time"  : "2026-08-13T18:00:00",
         }
     )
 
@@ -403,11 +405,11 @@ def test_widget_all_section_includes_every_panel_and_overdue_summary(
     _seed_widget_data(temp_db, owner_id)
     temp_db.insert_item(
         {
-            "id": "task-overdue",
-            "owner_id": owner_id,
-            "type": "task",
-            "title": "逾期任务",
-            "status": "open",
+            "id"       : "task-overdue",
+            "owner_id" : owner_id,
+            "type"     : "task",
+            "title"    : "逾期任务",
+            "status"   : "open",
             "plan_date": "2026-03-24",
         }
     )
@@ -462,28 +464,28 @@ def test_build_widget_summary_batches_collection_titles_for_agenda(
     ]:
         temp_db.create_event_collection(
             {
-                "id": collection_id,
-                "owner_id": owner_id,
-                "kind": "multi_node",
-                "title": collection_title,
-                "category": "学术",
+                "id"        : collection_id,
+                "owner_id"  : owner_id,
+                "kind"      : "multi_node",
+                "title"     : collection_title,
+                "category"  : "学术",
                 "start_time": start_time,
-                "end_time": "2026-03-26T10:00:00",
+                "end_time"  : "2026-03-26T10:00:00",
             }
         )
         temp_db.insert_item(
             {
-                "id": f"{collection_id}_m01",
-                "owner_id": owner_id,
-                "type": "event",
-                "title": event_title,
-                "category": "学术",
-                "start_time": start_time,
-                "event_role": "multi_node_child",
-                "event_collection_id": collection_id,
+                "id"                   : f"{collection_id}_m01",
+                "owner_id"             : owner_id,
+                "type"                 : "event",
+                "title"                : event_title,
+                "category"             : "学术",
+                "start_time"           : start_time,
+                "event_role"           : "multi_node_child",
+                "event_collection_id"  : collection_id,
                 "event_collection_kind": "multi_node",
-                "event_index": 1,
-                "event_node_key": "m01",
+                "event_index"          : 1,
+                "event_node_key"       : "m01",
             }
         )
 
@@ -585,15 +587,15 @@ def test_widget_ledger_panel_marks_transfer_transactions(temp_db: Database) -> N
     _seed_widget_data(temp_db, owner_id)
     temp_db.insert_item(
         {
-            "id": "ledger_transfer",
-            "owner_id": owner_id,
-            "type": "ledger",
-            "title": "转到储蓄卡",
-            "amount": 1200,
-            "transaction_type": "transfer",
-            "ledger_category": "转账",
-            "ledger_date": "2026-03-22",
-            "account_name": "现金",
+            "id"                  : "ledger_transfer",
+            "owner_id"            : owner_id,
+            "type"                : "ledger",
+            "title"               : "转到储蓄卡",
+            "amount"              : 1200,
+            "transaction_type"    : "transfer",
+            "ledger_category"     : "转账",
+            "ledger_date"         : "2026-03-22",
+            "account_name"        : "现金",
             "counter_account_name": "储蓄卡",
         }
     )
@@ -633,8 +635,10 @@ def test_build_widget_summary_auto_rotates_by_hour(temp_db: Database) -> None:
     )
 
 
+@pytest.mark.parametrize("extra_count", [0, 4])
 def test_build_widget_summary_limits_agenda_to_five_items_within_thirty_days(
     temp_db: Database,
+    extra_count: int,
 ) -> None:
     """议程最多五项，且不读取三十天窗口外事件。"""
 
@@ -647,28 +651,28 @@ def test_build_widget_summary_limits_agenda_to_five_items_within_thirty_days(
             "2026-04-03T09:00:00",
             "2026-04-10T09:00:00",
             "2026-04-20T09:00:00",
-        ],
+        ][:extra_count],
         start=1,
     ):
         temp_db.insert_item(
             {
-                "id": f"event_extra_{index}",
-                "owner_id": owner_id,
-                "type": "event",
-                "title": f"额外安排 {index}",
+                "id"        : f"event_extra_{index}",
+                "owner_id"  : owner_id,
+                "type"      : "event",
+                "title"     : f"额外安排 {index}",
                 "start_time": start,
-                "end_time": start.replace("09:00:00", "10:00:00"),
+                "end_time"  : start.replace("09:00:00", "10:00:00"),
             }
         )
 
     temp_db.insert_item(
         {
-            "id": "event_outside_30d",
-            "owner_id": owner_id,
-            "type": "event",
-            "title": "三十天外安排",
+            "id"        : "event_outside_30d",
+            "owner_id"  : owner_id,
+            "type"      : "event",
+            "title"     : "三十天外安排",
             "start_time": "2026-04-26T09:00:00",
-            "end_time": "2026-04-26T10:00:00",
+            "end_time"  : "2026-04-26T10:00:00",
         }
     )
 
@@ -677,8 +681,9 @@ def test_build_widget_summary_limits_agenda_to_five_items_within_thirty_days(
     )
     titles = [item["title"] for item in data["agenda"]["items"]]
 
-    assert len(titles) == 5
-    assert titles == ["今天会议", "明天复盘", "周末活动", "额外安排 1", "额外安排 2"]
+    assert titles == ["今天会议", "明天复盘", "周末活动"] + (
+        ["额外安排 1", "额外安排 2"] if extra_count else []
+    )
     assert "三十天外安排" not in titles
 
 
@@ -701,12 +706,12 @@ def test_build_widget_summary_limits_notes_panel_to_five_items(
     ):
         temp_db.insert_item(
             {
-                "id": f"note_extra_{index}",
-                "owner_id": owner_id,
-                "type": "note",
-                "title": f"额外笔记 {index}",
-                "content": f"这是第 {index} 条额外笔记。",
-                "category": "测试",
+                "id"        : f"note_extra_{index}",
+                "owner_id"  : owner_id,
+                "type"      : "note",
+                "title"     : f"额外笔记 {index}",
+                "content"   : f"这是第 {index} 条额外笔记。",
+                "category"  : "测试",
                 "created_at": created_at,
                 "updated_at": created_at,
             }

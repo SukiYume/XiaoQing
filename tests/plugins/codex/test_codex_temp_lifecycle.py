@@ -32,14 +32,14 @@ def config(tmp_path: Path) -> CodexPluginConfig:
         config   = {
             "plugins": {
                 "codex": {
-                    "default_cwd": str(tmp_path),
-                    "allowed_cwd_roots": [str(tmp_path)],
-                    "job_timeout_seconds": 30,
-                    "max_stdout_bytes": 64 * 1024,
-                    "max_stderr_bytes": 64 * 1024,
-                    "max_json_line_bytes": 16 * 1024,
+                    "default_cwd"           : str(tmp_path),
+                    "allowed_cwd_roots"     : [str(tmp_path)],
+                    "job_timeout_seconds"   : 30,
+                    "max_stdout_bytes"      : 64 * 1024,
+                    "max_stderr_bytes"      : 64 * 1024,
+                    "max_json_line_bytes"   : 16 * 1024,
                     "max_final_output_bytes": 64 * 1024,
-                    "max_qq_text_chars": 2_000,
+                    "max_qq_text_chars"     : 2_000,
                 }
             }
         },
@@ -115,7 +115,7 @@ class _BlockingReader:
         self._never = asyncio.Event()
 
     async def read(self, _size: int) -> bytes:
-        await self._never.wait()
+        await asyncio.wait_for(self._never.wait(), timeout=10)
         return b""
 
 
@@ -130,7 +130,7 @@ class _StreamingProcess:
         self._never                 = asyncio.Event()
 
     async def wait(self) -> int:
-        await self._never.wait()
+        await asyncio.wait_for(self._never.wait(), timeout=10)
         return int(self.returncode or 0)
 
     def kill(self) -> None:
@@ -151,7 +151,7 @@ class _BlockingStreamingProcess:
 
     async def wait(self) -> int:
         self.wait_entered.set()
-        await self._never.wait()
+        await asyncio.wait_for(self._never.wait(), timeout=10)
         return int(self.returncode or 0)
 
     def kill(self) -> None:
@@ -213,7 +213,7 @@ async def test_spawn_failure_timeout_and_cancellation_remove_raw_output(
     never = asyncio.Event()
 
     async def stuck_spawn(*_args: Any, **_kwargs: Any) -> Any:
-        await never.wait()
+        await asyncio.wait_for(never.wait(), timeout=10)
 
     monkeypatch.setattr(codex_runner.asyncio, "create_subprocess_exec", stuck_spawn)
     timeout_runner = CodexRunner(replace(config, spawn_timeout_seconds=0.01), output_dir)
@@ -225,11 +225,11 @@ async def test_spawn_failure_timeout_and_cancellation_remove_raw_output(
 
     async def cancellable_spawn(*_args: Any, **_kwargs: Any) -> Any:
         spawn_entered.set()
-        await never.wait()
+        await asyncio.wait_for(never.wait(), timeout=10)
 
     monkeypatch.setattr(codex_runner.asyncio, "create_subprocess_exec", cancellable_spawn)
     task = asyncio.create_task(runner.run(cwd=tmp_path, prompt="body", thread_id=None, job=_job()))
-    await spawn_entered.wait()
+    await asyncio.wait_for(spawn_entered.wait(), timeout=10)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -288,7 +288,7 @@ async def test_stream_cancel_preserves_cancel_when_first_tree_cleanup_fails(
             job       = _job(),
         )
     )
-    await process.wait_entered.wait()
+    await asyncio.wait_for(process.wait_entered.wait(), timeout=10)
 
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -432,7 +432,7 @@ async def test_cancel_during_final_cleanup_preserves_cancel_and_cleans_all_resou
     async def blocked_cleanup(_process: Any):
         nonlocal cleanup_finished
         cleanup_entered.set()
-        await cleanup_release.wait()
+        await asyncio.wait_for(cleanup_release.wait(), timeout=10)
         cleanup_finished = True
         return _confirmed_termination(), b"", b""
 
@@ -445,7 +445,7 @@ async def test_cancel_during_final_cleanup_preserves_cancel_and_cleans_all_resou
             job       = _job(),
         )
     )
-    await cleanup_entered.wait()
+    await asyncio.wait_for(cleanup_entered.wait(), timeout=10)
     task.cancel()
     await asyncio.sleep(0.05)
     assert not task.done()
@@ -487,7 +487,7 @@ async def test_cancel_during_final_unlink_does_not_return_normal_result(
 
     async def blocked_remove(path: Path, **_kwargs: Any) -> bool:
         unlink_entered.set()
-        await unlink_release.wait()
+        await asyncio.wait_for(unlink_release.wait(), timeout=10)
         path.unlink(missing_ok=True)
         return True
 
@@ -502,7 +502,7 @@ async def test_cancel_during_final_unlink_does_not_return_normal_result(
             job       = _job(),
         )
     )
-    await unlink_entered.wait()
+    await asyncio.wait_for(unlink_entered.wait(), timeout=10)
     task.cancel()
     await asyncio.sleep(0.05)
     assert not task.done()

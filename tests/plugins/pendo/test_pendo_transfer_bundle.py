@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import threading
+from typing import Any
+
+import pytest
+
 import tests.helpers.pendo_web_transfer_test_support as _fixture_support
 from plugins.pendo.web.api.transfer import ExportSelection, _build_bundle_bytes
 from plugins.pendo.web.services.bundle_import import inspect_bundle_bytes
 from tests.helpers.pendo_web_transfer_test_support import (
     OWNER_ID,
-    Any,
     BundleValidationError,
     Database,
     DiaryItem,
@@ -21,17 +27,11 @@ from tests.helpers.pendo_web_transfer_test_support import (
     _ImportRequest,
     _seed_items,
     _simple_task_bundle,
-    asyncio,
     build_manifest,
-    hashlib,
     io,
-    json,
-    pytest,
     read_bundle,
     serialize_event_collection,
     serialize_item,
-    threading,
-    time,
     transfer_api,
     transfer_bundle_module,
     write_bundle,
@@ -58,83 +58,45 @@ def test_web_validation_errors_use_safe_response_shape(client: Any, auth_headers
 
 
 @pytest.mark.asyncio
-async def test_import_inspect_parsing_does_not_block_event_loop(
-    temp_db: Database,
-    monkeypatch,
-):
+async def test_import_inspect_parsing_does_not_block_event_loop(temp_db: Database, monkeypatch):
     bundle       = _simple_task_bundle("inspect-offloop")
     real_inspect = transfer_api._inspect_bundle_data
-    release      = threading.Event()
-    heartbeat    = asyncio.Event()
-    loop         = asyncio.get_running_loop()
-    entered_at   = 0.0
+    threads      = []
+    event_thread = threading.get_ident()
 
-    def slow_inspect(payload: bytes):
-        nonlocal entered_at
-        entered_at = time.monotonic()
-        loop.call_soon_threadsafe(heartbeat.set)
-        release.wait(timeout=1)
+    def inspect(payload):
+        threads.append(threading.get_ident())
         return real_inspect(payload)
 
-    monkeypatch.setattr(transfer_api, "_inspect_bundle_data", slow_inspect)
-    fallback_release = threading.Timer(0.5, release.set)
-    fallback_release.start()
-    try:
-        task = asyncio.create_task(
-            transfer_api.inspect_import(_ImportRequest(bundle), owner_id=OWNER_ID, db=temp_db)
-        )
-        await asyncio.wait_for(heartbeat.wait(), timeout=0.75)
-        heartbeat_delay = time.monotonic() - entered_at
-        release.set()
-        result = await asyncio.wait_for(task, timeout=1)
-    finally:
-        release.set()
-        fallback_release.cancel()
-
-    assert heartbeat_delay < 0.2
+    monkeypatch.setattr(transfer_api, "_inspect_bundle_data", inspect)
+    result = await transfer_api.inspect_import(
+        _ImportRequest(bundle), owner_id=OWNER_ID, db=temp_db
+    )
+    assert threads and all(thread != event_thread for thread in threads)
     assert result["data"]["counts"]["valid"] == 1
 
 
 @pytest.mark.asyncio
 async def test_import_planning_and_transaction_do_not_block_event_loop(
-    temp_db: Database,
-    monkeypatch,
+    temp_db: Database, monkeypatch
 ):
     bundle       = _simple_task_bundle("execute-offloop")
     real_execute = temp_db.execute_import_bundle
-    release      = threading.Event()
-    heartbeat    = asyncio.Event()
-    loop         = asyncio.get_running_loop()
-    entered_at   = 0.0
+    threads      = []
+    event_thread = threading.get_ident()
 
-    def slow_execute(**kwargs):
-        nonlocal entered_at
-        entered_at = time.monotonic()
-        loop.call_soon_threadsafe(heartbeat.set)
-        release.wait(timeout=1)
+    def execute(**kwargs):
+        threads.append(threading.get_ident())
         return real_execute(**kwargs)
 
-    monkeypatch.setattr(temp_db, "execute_import_bundle", slow_execute)
-    fallback_release = threading.Timer(0.5, release.set)
-    fallback_release.start()
-    try:
-        task = asyncio.create_task(
-            transfer_api.execute_import(
-                _ImportRequest(bundle),
-                x_transfer_options = json.dumps({"types": ["task"]}),
-                owner_id           = OWNER_ID,
-                db                 = temp_db,
-            )
-        )
-        await asyncio.wait_for(heartbeat.wait(), timeout=0.75)
-        heartbeat_delay = time.monotonic() - entered_at
-        release.set()
-        result = await asyncio.wait_for(task, timeout=1)
-    finally:
-        release.set()
-        fallback_release.cancel()
-
-    assert heartbeat_delay < 0.2
+    monkeypatch.setattr(temp_db, "execute_import_bundle", execute)
+    result = await transfer_api.execute_import(
+        _ImportRequest(bundle),
+        x_transfer_options = json.dumps({"types": ["task"]}),
+        owner_id           = OWNER_ID,
+        db                 = temp_db,
+    )
+    assert threads and all(thread != event_thread for thread in threads)
     assert result["data"]["results"]["inserted"] == 1
 
 
@@ -192,14 +154,14 @@ def test_build_manifest_and_serialize_item_preserve_type_fields():
     )
     collection_record = serialize_event_collection(
         {
-            "id": "col_1",
-            "owner_id": OWNER_ID,
-            "kind": "multi_node",
-            "title": "发布会整体",
-            "category": "工作",
-            "notes": "整体备注",
+            "id"        : "col_1",
+            "owner_id"  : OWNER_ID,
+            "kind"      : "multi_node",
+            "title"     : "发布会整体",
+            "category"  : "工作",
+            "notes"     : "整体备注",
             "start_time": "2026-03-20T09:00:00+08:00",
-            "end_time": "2026-03-20T10:00:00+08:00",
+            "end_time"  : "2026-03-20T10:00:00+08:00",
         }
     )
     task_record = serialize_item(
@@ -434,8 +396,8 @@ def test_read_bundle_infers_file_type_when_manifest_entry_omits_it():
         {"types": ["task"], "preset": "all", "start": None, "end": None},
         [
             {
-                "path": "data/tasks.ndjson",
-                "count": 1,
+                "path"  : "data/tasks.ndjson",
+                "count" : 1,
                 "sha256": hashlib.sha256(content).hexdigest(),
             }
         ],
@@ -454,8 +416,8 @@ def test_read_bundle_enforces_runtime_record_limit_without_declared_count(monkey
         {"types": ["task"], "preset": "all", "start": None, "end": None},
         [
             {
-                "path": "data/tasks.ndjson",
-                "type": "task",
+                "path"  : "data/tasks.ndjson",
+                "type"  : "task",
                 "sha256": hashlib.sha256(content).hexdigest(),
             }
         ],
@@ -686,9 +648,9 @@ def test_write_bundle_rejects_manifest_record_layout_mismatch(
     files   = (
         [
             {
-                "path": "data/tasks.ndjson",
-                "type": "task",
-                "count": 0,
+                "path"  : "data/tasks.ndjson",
+                "type"  : "task",
+                "count" : 0,
                 "sha256": hashlib.sha256(content).hexdigest(),
             }
         ]
@@ -758,15 +720,15 @@ def test_read_bundle_counts_all_declared_members_in_uncompressed_limit(monkeypat
         {"types": ["task", "note"], "preset": "all", "start": None, "end": None},
         [
             {
-                "path": "data/tasks.ndjson",
-                "type": "task",
-                "count": 1,
+                "path"  : "data/tasks.ndjson",
+                "type"  : "task",
+                "count" : 1,
                 "sha256": hashlib.sha256(task_content).hexdigest(),
             },
             {
-                "path": "data/notes.ndjson",
-                "type": "note",
-                "count": 1,
+                "path"  : "data/notes.ndjson",
+                "type"  : "note",
+                "count" : 1,
                 "sha256": hashlib.sha256(note_content).hexdigest(),
             },
         ],
@@ -791,10 +753,10 @@ def test_read_bundle_counts_all_declared_members_in_uncompressed_limit(monkeypat
 def test_read_bundle_rejects_member_above_uncompressed_limit(monkeypatch):
     monkeypatch.setattr(transfer_bundle_module, "MAX_BUNDLE_MEMBER_BYTES", 16)
     record = {
-        "_type": "note",
+        "_type"  : "note",
         "_schema": 2,
-        "id": "note_big",
-        "title": "大文件",
+        "id"     : "note_big",
+        "title"  : "大文件",
         "content": "x" * 64,
     }
     content = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
@@ -802,9 +764,9 @@ def test_read_bundle_rejects_member_above_uncompressed_limit(monkeypatch):
         {"types": ["note"], "preset": "all", "start": None, "end": None},
         [
             {
-                "path": "data/notes.ndjson",
-                "type": "note",
-                "count": 1,
+                "path"  : "data/notes.ndjson",
+                "type"  : "note",
+                "count" : 1,
                 "sha256": hashlib.sha256(content).hexdigest(),
             }
         ],
@@ -832,9 +794,9 @@ def test_read_bundle_rejects_record_count_above_limit(monkeypatch):
         {"types": ["note"], "preset": "all", "start": None, "end": None},
         [
             {
-                "path": "data/notes.ndjson",
-                "type": "note",
-                "count": 2,
+                "path"  : "data/notes.ndjson",
+                "type"  : "note",
+                "count" : 2,
                 "sha256": hashlib.sha256(content).hexdigest(),
             }
         ],
@@ -853,13 +815,20 @@ def test_read_bundle_rejects_record_count_above_limit(monkeypatch):
 
 def test_read_bundle_rejects_unknown_file_type():
     manifest = {
-        "format": "pendo-bundle",
-        "version": 2,
-        "bundle_id": "test123",
+        "format"     : "pendo-bundle",
+        "version"    : 2,
+        "bundle_id"  : "test123",
         "exported_at": "2026-03-29T12:00:00+08:00",
-        "source": {"app": "pendo-web", "timezone": "Asia/Shanghai"},
-        "selection": {"types": ["unknown"], "preset": "all", "start": None, "end": None},
-        "files": [{"path": "data/unknown.ndjson", "type": "unknown", "count": 1, "sha256": "abc"}],
+        "source"     : {"app": "pendo-web", "timezone": "Asia/Shanghai"},
+        "selection"  : {"types": ["note"], "preset": "all", "start": None, "end": None},
+        "files"      : [
+            {
+                "path"  : "data/unknown.ndjson",
+                "type"  : "unknown",
+                "count" : 1,
+                "sha256": hashlib.sha256(b'{"_type":"unknown","_schema":2}\n').hexdigest(),
+            }
+        ],
         "attachments_mode": "metadata_only",
     }
     buf = io.BytesIO()
@@ -874,10 +843,10 @@ def test_read_bundle_rejects_unknown_file_type():
 
 def test_read_bundle_rejects_legacy_item_fields():
     record = {
-        "_type": "event",
-        "_schema": 2,
-        "id": "event_legacy",
-        "title": "旧多节点",
+        "_type"     : "event",
+        "_schema"   : 2,
+        "id"        : "event_legacy",
+        "title"     : "旧多节点",
         "start_time": "2026-03-20T09:00:00",
         "milestones": [{"name": "旧节点", "time": "2026-03-20T09:00:00"}],
     }
@@ -886,9 +855,9 @@ def test_read_bundle_rejects_legacy_item_fields():
         {"types": ["event"], "preset": "all", "start": None, "end": None},
         [
             {
-                "path": "data/events.ndjson",
-                "type": "event",
-                "count": 1,
+                "path"  : "data/events.ndjson",
+                "type"  : "event",
+                "count" : 1,
                 "sha256": hashlib.sha256(content).hexdigest(),
             }
         ],
@@ -911,14 +880,14 @@ def test_read_bundle_accepts_tasks_ndjson():
         {
             "task": [
                 {
-                    "_type": "task",
-                    "_schema": 2,
-                    "id": "task_1",
-                    "title": "导入任务",
-                    "content": "正文",
-                    "category": "工作",
-                    "priority": 3,
-                    "status": "open",
+                    "_type"     : "task",
+                    "_schema"   : 2,
+                    "id"        : "task_1",
+                    "title"     : "导入任务",
+                    "content"   : "正文",
+                    "category"  : "工作",
+                    "priority"  : 3,
+                    "status"    : "open",
                     "created_at": "2026-03-21T09:00:00+08:00",
                     "updated_at": "2026-03-21T09:00:00+08:00",
                 }
@@ -965,10 +934,10 @@ def test_export_preview_accepts_supported_presets(
 def test_bundle_unicode_and_large_export_round_trip():
     records = [
         {
-            "_type": "note",
+            "_type"  : "note",
             "_schema": 2,
-            "id": str(i),
-            "title": "n",
+            "id"     : str(i),
+            "title"  : "n",
             "content": "a\u2028b\u2029c\x85d",
         }
         for i in range(20001)

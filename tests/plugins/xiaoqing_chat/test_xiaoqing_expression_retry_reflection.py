@@ -41,14 +41,14 @@ def _expression(expression_id: str, *, count: int = 1) -> ExpressionRecord:
 
 
 @pytest.mark.asyncio
-async def test_expression_learning_filters_bot_lines_and_bounds_llm_output(
+async def test_expression_learning_filters_bot_lines_and_preserves_route_parameters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict = {}
     payload        = [
         {
             "situation": "情境" * 50,
-            "style": f"风格-{index}",
+            "style"    : f"风格-{index}",
             "source_id": "m2",
         }
         for index in range(15)
@@ -76,7 +76,7 @@ async def test_expression_learning_filters_bot_lines_and_bounds_llm_output(
         secrets  = {"api_base": "https://example.test", "api_key": "k", "model": "m"},
         messages = messages,
         llm      = LLMCallConfig(
-            temperature            = 9.0,
+            temperature            = 0.35,
             top_p                  = 0.9,
             max_tokens             = 100,
             timeout_seconds        = 1,
@@ -91,8 +91,8 @@ async def test_expression_learning_filters_bot_lines_and_bounds_llm_output(
     prompt = captured["messages"][0]["content"]
     assert "USER_VISIBLE" in prompt
     assert "BOT_ONLY" not in prompt
-    assert captured["temperature"] == 0.7
-    assert captured["max_tokens"] == 500
+    assert captured["temperature"] == 0.35
+    assert captured["max_tokens"] == 100
 
 
 @pytest.mark.asyncio
@@ -361,14 +361,14 @@ async def test_llm_retry_count_is_exact(monkeypatch: pytest.MonkeyPatch, max_ret
         "ai": {
             "providers": {
                 "test": {
-                    "api_base": "https://example.com",
+                    "api_base"     : "https://example.com",
                     "endpoint_path": "/chat/completions",
                 }
             },
             "models": {
                 "test-model": {
-                    "provider": "test",
-                    "model": "model",
+                    "provider"  : "test",
+                    "model"     : "model",
                     "modalities": ["text"],
                 }
             },
@@ -378,8 +378,8 @@ async def test_llm_retry_count_is_exact(monkeypatch: pytest.MonkeyPatch, max_ret
                 "ai": {
                     "routes": {
                         "chat": {
-                            "models": ["test-model"],
-                            "max_retry": max_retry,
+                            "models"                : ["test-model"],
+                            "max_retry"             : max_retry,
                             "retry_interval_seconds": 0.0,
                         }
                     }
@@ -501,14 +501,14 @@ async def test_reflection_reply_is_consumed_by_only_one_pending_question(
         approve,
     )
     request = {
-        "operator_chat_id": "g1",
-        "memory_store": memory_store,
-        "expr_store": expression_store,
-        "tracker_store": tracker_store,
-        "secrets": {"api_base": "https://example.com", "api_key": "k", "model": "m"},
-        "bot_name": "小青",
-        "timeout_seconds": 1.0,
-        "max_retry": 0,
+        "operator_chat_id"      : "g1",
+        "memory_store"          : memory_store,
+        "expr_store"            : expression_store,
+        "tracker_store"         : tracker_store,
+        "secrets"               : {"api_base": "https://example.com", "api_key": "k", "model": "m"},
+        "bot_name"              : "小青",
+        "timeout_seconds"       : 1.0,
+        "max_retry"             : 0,
         "retry_interval_seconds": 0.0,
     }
 
@@ -563,11 +563,11 @@ async def test_expression_review_allows_empty_modifications(monkeypatch, rejecte
     from plugins.xiaoqing_chat.expression import bw_expression_learner as learner
 
     response = {
-        "checked": True,
-        "rejected": rejected,
-        "reason": "reviewed",
+        "checked"           : True,
+        "rejected"          : rejected,
+        "reason"            : "reviewed",
         "modified_situation": modified,
-        "modified_style": "",
+        "modified_style"    : "",
     }
     monkeypatch.setattr(
         learner,

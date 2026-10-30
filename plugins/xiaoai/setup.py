@@ -57,12 +57,12 @@ async def setup(directory: Path, region: str, audible: bool) -> None:
         speaker, device = candidates[int(selected) - 1]
         directive = directive_spec(await fetch_spec(session, device["model"]))
         profile   = {
-            "name": device["name"],
-            "model": device["model"],
-            "did": str(device["did"]),
-            "mina_id": speaker["deviceID"],
-            "region": region,
-            "silent": not audible,
+            "name"     : device["name"],
+            "model"    : device["model"],
+            "did"      : str(device["did"]),
+            "mina_id"  : speaker["deviceID"],
+            "region"   : region,
+            "silent"   : not audible,
             "directive": directive,
         }
         protect_directory(directory)

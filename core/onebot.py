@@ -47,11 +47,18 @@ class OneBotActionOutcomeUnknown(RuntimeError):
         super().__init__(f"OneBot WebSocket action outcome is unknown: {action_name}")
 
 
+class OneBotActionCancelledAfterCommit(asyncio.CancelledError):
+    """调用方在动作已写入 WebSocket、尚未收到回执时取消；动作可能已经执行。
+
+    仍是 ``CancelledError``，取消照常传播；投递层据此把回执记为未知而不是确定失败。
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class _EndpointAuthState:
-    endpoint: str
-    token: str
-    generation: int           = 0
+    endpoint           : str
+    token              : str
+    generation         : int  = 0
     credentials_trusted: bool = True
 
     def __post_init__(self) -> None:
@@ -68,14 +75,14 @@ class _ConnectionAttemptResult:
     """Connected lifetime plus the reason the listening phase ended."""
 
     connected_seconds: float
-    error: Exception | None = None
+    error            : Exception | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class _QueuedOneBotEvent:
     """One event together with the connection generation that admitted it."""
 
-    event: dict[str, Any]
+    event     : dict[str, Any]
     auth_state: _EndpointAuthState
 
 
@@ -91,8 +98,8 @@ class _OneBotActionCommit:
     """Linearization token for one action committed to a specific connection."""
 
     auth_state: _EndpointAuthState
-    ws: Any
-    echo: str
+    ws        : Any
+    echo      : str
 
 
 _ONEBOT_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=DEFAULT_ONEBOT_HTTP_TIMEOUT_SECONDS)
@@ -117,8 +124,17 @@ _ONEBOT_SUCCESS_STATUSES = range(200, 300)
 _SENSITIVE_KEYS = {"token", "appid", "api_key", "secret", "password", "authorization"}
 
 # 预编译敏感信息匹配模式（避免每次调用都重新编译）
+# 认证头整体遮盖：“Authorization: Bearer xxx” 的凭据在认证类型之后，只遮第一个片段会漏掉令牌。
 _SENSITIVE_PATTERNS = [
-    re.compile(rf"({key}\s*[:=]\s*)([^\s,;]+)", re.IGNORECASE) for key in _SENSITIVE_KEYS
+    re.compile(
+        r"(authorization\s*[:=]\s*)((?:bearer|basic|token|digest)\s+[^\s,;\"']+|[^\s,;\"']+)",
+        re.IGNORECASE,
+    ),
+    re.compile(r"(\bbearer\s+)([^\s,;\"']+)", re.IGNORECASE),
+    *(
+        re.compile(rf"({key}\s*[:=]\s*)([^\s,;]+)", re.IGNORECASE)
+        for key in _SENSITIVE_KEYS - {"authorization"}
+    ),
 ]
 _CONNECT_SIGNATURE_CACHE: dict[Any, tuple[Any, frozenset[str]]] = {}
 _ONEBOT_WS_SHUTDOWN_TIMEOUT_SECONDS                             = 5.0
@@ -851,7 +867,8 @@ class OneBotWsClient:
             return None
         candidate_ws, candidate_auth_state = connected_target
         response_future: asyncio.Future[dict[str, Any]] = current_loop.create_future()
-        commit: _OneBotActionCommit | None              = None
+        commit         : _OneBotActionCommit | None     = None
+        committed                                       = False
         try:
             # Token creation is the action's linearization point.  No external
             # WebSocket code runs while this threading lock is held: rotation
@@ -879,12 +896,15 @@ class OneBotWsClient:
                 return None
 
             await commit.ws.send(payload)
-            response = await asyncio.wait_for(
+            committed = True
+            response  = await asyncio.wait_for(
                 asyncio.shield(response_future),
                 timeout=self._action_response_timeout_seconds,
             )
             return response if isinstance(response, dict) else None
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as exc:
+            if committed and not isinstance(exc, OneBotActionCancelledAfterCommit):
+                raise OneBotActionCancelledAfterCommit(*exc.args) from exc
             raise
         except TimeoutError as exc:
             logger.warning(
@@ -1077,8 +1097,8 @@ class OneBotWsClient:
             await self._wait_for_reconnect(_ONEBOT_WS_RECONNECT_INITIAL_SECONDS)
             return retry_base
 
-        connected_duration: float | None = None
-        failure: Exception | None        = None
+        connected_duration: float | None     = None
+        failure           : Exception | None = None
         try:
             attempt = await self._await_connection_attempt(handler, reconnect_wakeup)
             if isinstance(attempt, _ConnectionAttemptResult):

@@ -20,10 +20,10 @@ if TYPE_CHECKING:
 class EventFamily:
     """一个事件叶节点或集合及其完整子节点。"""
 
-    kind: str
+    kind      : str
     collection: dict[str, Any] | None = None
-    leaf: EventItem | None            = None
-    children: list[EventItem] = field(default_factory=list)
+    leaf      : EventItem | None      = None
+    children  : list[EventItem] = field(default_factory=list)
 
 
 class EventGraphService:

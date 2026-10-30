@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from core.delivery import DeliveryReceipt, send_with_receipt
+from core.lifecycle import to_thread_owned
 from core.plugin_base import build_action, load_json, segments, text, write_json
 
 from .bw_expression_store import ExpressionRecord, ExpressionStore
@@ -68,7 +69,7 @@ async def maybe_ask_for_reflection(
     if not operator_user_id and not operator_group_id:
         return 0
     data_dir: Path = context.data_dir
-    st             = _load_state(data_dir)
+    st             = await to_thread_owned(_load_state, data_dir)
     last_sent      = float(st.get("last_sent_ts", 0.0) or 0.0)
     now            = time.time()
     if min_interval_seconds > 0 and now - last_sent < float(min_interval_seconds):
@@ -77,7 +78,7 @@ async def maybe_ask_for_reflection(
     expr_store.bind(data_dir)
     tracker_store.bind(data_dir)
 
-    items = expr_store.load()
+    items = await to_thread_owned(expr_store.load)
     picks = _pick_candidates(items, max_pick=int(ask_per_check or 1))
     if not picks:
         return 0
@@ -102,7 +103,9 @@ async def maybe_ask_for_reflection(
             group_id = int(operator_group_id) if operator_group_id else None,
         )
         if action:
-            confirm = partial(tracker_store.set_tracker, op_chat_id, ex.expression_id)
+            confirm = partial(
+                to_thread_owned, tracker_store.set_tracker, op_chat_id, ex.expression_id
+            )
             receipt = DeliveryReceipt(
                 expected_actions = 1,
                 commit           = confirm,
@@ -119,5 +122,5 @@ async def maybe_ask_for_reflection(
 
     if sent:
         st["last_sent_ts"] = now
-        _save_state(data_dir, st)
+        await to_thread_owned(_save_state, data_dir, st)
     return sent

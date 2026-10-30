@@ -37,7 +37,7 @@ class _Reader:
 
 class _TimeoutReader:
     async def readexactly(self, _size: int) -> bytes:
-        await asyncio.Event().wait()
+        await asyncio.wait_for(asyncio.Event().wait(), timeout=10)
         raise AssertionError("unreachable")
 
 
@@ -45,7 +45,7 @@ class _PayloadThenTimeoutReader(_Reader):
     async def readexactly(self, size: int) -> bytes:
         if self.payload:
             return await super().readexactly(size)
-        await asyncio.Event().wait()
+        await asyncio.wait_for(asyncio.Event().wait(), timeout=10)
         raise AssertionError("unreachable")
 
 
@@ -260,7 +260,7 @@ class TestRconConnection:
     @pytest.mark.asyncio
     async def test_connect_timeout_is_typed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         async def hang(_host: str, _port: int) -> tuple[Any, Any]:
-            await asyncio.Event().wait()
+            await asyncio.wait_for(asyncio.Event().wait(), timeout=10)
             raise AssertionError("unreachable")
 
         monkeypatch.setattr(rcon_module.asyncio, "open_connection", hang)
@@ -550,9 +550,9 @@ async def test_real_loopback_tcp_auth_and_split_command_round_trip() -> None:
         ]
     finally:
         await client.disconnect()
-        await asyncio.wait_for(handler_done.wait(), timeout=1.0)
         server.close()
         await server.wait_closed()
+        await asyncio.wait_for(handler_done.wait(), timeout=1.0)
 
 
 def test_internal_response_limit_exception_remains_specific() -> None:
@@ -573,13 +573,13 @@ async def test_cancelled_connect_cleans_state_and_propagates(
 
     async def hang(_host: str, _port: int) -> tuple[Any, Any]:
         entered.set()
-        await asyncio.Event().wait()
+        await asyncio.wait_for(asyncio.Event().wait(), timeout=10)
         raise AssertionError("unreachable")
 
     monkeypatch.setattr(rcon_module.asyncio, "open_connection", hang)
     client = RconClient("127.0.0.1", 25575, "secret")
     task   = asyncio.create_task(client.connect())
-    await entered.wait()
+    await asyncio.wait_for(entered.wait(), timeout=10)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -591,7 +591,7 @@ async def test_cancelled_connect_cleans_state_and_propagates(
 async def test_cancelled_disconnect_clears_references_and_propagates() -> None:
     class HangingCloseWriter(_Writer):
         async def wait_closed(self) -> None:
-            await asyncio.Event().wait()
+            await asyncio.wait_for(asyncio.Event().wait(), timeout=10)
 
     client, writer = _connected_client(b"", writer=HangingCloseWriter())
     task = asyncio.create_task(client.disconnect())

@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_SETTINGS_JSON: Final[dict[str, bool]] = {
-    "reminder_enabled": True,
-    "daily_briefing_enabled": True,
+    "reminder_enabled"         : True,
+    "daily_briefing_enabled"   : True,
     "ai_sensitive_data_consent": False,
 }
 
@@ -42,23 +42,29 @@ _TRUTHY = frozenset({"on", "true", "1", "yes", "是", "开启", "开"})
 _FALSY  = frozenset({"off", "false", "0", "no", "否", "关闭", "关"})
 
 
-def _coerce_setting_bool(value: Any, default: bool) -> bool:
-    """把持久化设置转为布尔值，避免把字符串 ``false`` 误判为真。"""
+def _coerce_setting_bool(value: Any, default: bool, *, strict: bool = False) -> bool:
+    """把设置值转为布尔值，只接受布尔、0/1 和明确的开关别名。
+
+    未知值（拼错的 ``flase``、对象等）不能按 ``bool(value)`` 当成开启：输入边界
+    （``strict``）直接报字段错误，读取历史数据时回退默认值。
+    """
     if value is None:
         return default
     if isinstance(value, bool):
         return value
-    if isinstance(value, (int, float)):
+    if isinstance(value, (int, float)) and value in (0, 1):
         return bool(value)
     if isinstance(value, str):
         normalized = value.strip().lower()
-        if not normalized:
+        if not normalized and not strict:
             return default
         if normalized in _TRUTHY:
             return True
         if normalized in _FALSY:
             return False
-    return bool(value)
+    if strict:
+        raise ValueError("setting toggle must be on/off, true/false or 1/0")
+    return default
 
 
 def normalize_settings_json(settings_json: Any, *, partial: bool = False) -> dict[str, Any]:
@@ -68,9 +74,11 @@ def normalize_settings_json(settings_json: Any, *, partial: bool = False) -> dic
 
     for key in ("reminder_enabled", "ai_sensitive_data_consent"):
         if key in normalized or not partial:
+            # 部分更新来自输入边界，未知值必须报错；完整规范化读取历史数据，回退默认值。
             normalized[key] = _coerce_setting_bool(
                 normalized.get(key),
                 DEFAULT_SETTINGS_JSON[key],
+                strict=partial and key in normalized,
             )
 
     briefing_present = (
@@ -86,6 +94,7 @@ def normalize_settings_json(settings_json: Any, *, partial: bool = False) -> dic
         normalized["daily_briefing_enabled"] = _coerce_setting_bool(
             briefing_enabled,
             DEFAULT_SETTINGS_JSON["daily_briefing_enabled"],
+            strict=partial and briefing_present,
         )
 
     normalized.pop("daily_report_enabled", None)

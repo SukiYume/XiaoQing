@@ -85,11 +85,11 @@ _SSH_OPTIONS_WITH_ARG = {
 class CommandTerminationResult:
     """一次远端命令终止及本地资源回收的结果。"""
 
-    found: bool
-    local_cleaned: bool
+    found           : bool
+    local_cleaned   : bool
     remote_confirmed: bool
-    signal_attempted: bool = False
-    error: str | None      = None
+    signal_attempted: bool       = False
+    error           : str | None = None
 
     @property
     def remote_unknown(self) -> bool:
@@ -108,21 +108,36 @@ class SSHConfigurationError(ValueError):
 class _ConnectionResources:
     """连接建立完成前由当前协程独占的资源。"""
 
-    client: Any      = None
-    jump_client: Any = None
-    proxy_sock: Any  = None
-    installed: bool  = False
+    client     : Any  = None
+    jump_client: Any  = None
+    proxy_sock : Any  = None
+    installed  : bool = False
 
 
 class _ActiveCommand(TypedDict):
     """活跃命令通道及其远端进程组首进程。"""
 
-    channel: Any
+    channel   : Any
     remote_pid: int | None
 
 
 OutputCallback = Callable[[str], Awaitable[Any]]
 _T             = TypeVar("_T")
+
+
+# SFTP 通道默认 timeout=None：网络半断时 stat/get/listdir 会无限等待，取消也只能干等线程。
+_SFTP_IO_TIMEOUT_SECONDS = 30.0
+
+
+def _open_sftp_bounded(client: Any) -> Any:
+    """打开 SFTP 会话并给底层通道设置读写超时，阻塞读取到期即抛错，线程得以结束。"""
+
+    sftp        = client.open_sftp()
+    get_channel = getattr(sftp, "get_channel", None)
+    channel     = get_channel() if callable(get_channel) else None
+    if channel is not None:
+        channel.settimeout(_SFTP_IO_TIMEOUT_SECONDS)
+    return sftp
 
 
 async def _finish_blocking_call(
@@ -360,9 +375,11 @@ class SSHManager:
     def __init__(self, data_dir: Path, context: Any | None = None) -> None:
         self.data_dir = data_dir
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.servers_file                                = data_dir / "servers.json"
-        self._base_context                               = context
-        self.servers: dict[str, dict[str, Any]]          = {}
+        self.servers_file                       = data_dir / "servers.json"
+        self._base_context                      = context
+        self.servers: dict[str, dict[str, Any]] = {}
+        # servers.json 加载失败后为 True：内存里的空快照不能再写回磁盘覆盖原文件。
+        self._servers_load_failed                        = False
         self.connections: dict[str, Any]                 = {}
         self.active_channels: dict[str, object]          = {}
         self._ssh_config: Any | None                     = None
@@ -491,6 +508,10 @@ class SSHManager:
     async def _save_server_snapshot(self, snapshot: Mapping[str, Mapping[str, Any]]) -> bool:
         """原子写入快照，返回写入期间是否收到过取消请求。"""
 
+        if self._servers_load_failed:
+            raise RuntimeError(
+                "SSH 服务器配置加载失败，已阻止写入以免覆盖原文件；修复 servers.json 后重新加载插件"
+            )
         payload = json.dumps(snapshot, ensure_ascii=False, indent=4)
         _, cancellation_requested = await _finish_blocking_call(
             atomic_write_text,
@@ -522,7 +543,8 @@ class SSHManager:
 
         async with self._config_lock:
             if not self.servers_file.exists():
-                self.servers = {}
+                self.servers              = {}
+                self._servers_load_failed = False
                 return
 
             created_refs: list[str] = []
@@ -556,7 +578,8 @@ class SSHManager:
                         raise asyncio.CancelledError
                     server["password_ref"] = password_ref
 
-                cancellation_requested = False
+                cancellation_requested    = False
+                self._servers_load_failed = False
                 if migrated:
                     cancellation_requested = await self._save_server_snapshot(candidate)
                 self.servers = candidate
@@ -574,7 +597,8 @@ class SSHManager:
                     "error",
                     f"SSH server config load status=failed error_type={audit_error_type(exc)}",
                 )
-                self.servers = {}
+                self.servers              = {}
+                self._servers_load_failed = True
 
     async def reload_ssh_config(self) -> None:
         """重新读取 ``~/.ssh/config``；文件消失或解析失败时清空旧缓存。"""
@@ -639,12 +663,12 @@ class SSHManager:
             if not isinstance(identityfile, list):
                 identityfile = []
             return {
-                "hostname": hostname,
-                "port": port,
-                "user": username,
+                "hostname"    : hostname,
+                "port"        : port,
+                "user"        : username,
                 "identityfile": [item for item in identityfile if isinstance(item, str)],
                 "proxycommand": proxycommand,
-                "proxyjump": proxyjump,
+                "proxyjump"   : proxyjump,
             }
         except Exception as exc:
             self._log_sensitive(
@@ -671,10 +695,10 @@ class SSHManager:
             key_path = Path(os.path.expanduser(config["identityfile"][0])).as_posix()
 
         server_config: dict[str, Any] = {
-            "host": config["hostname"],
-            "port": config["port"],
-            "username": config["user"],
-            "auth_type": "key" if key_path else "agent",
+            "host"           : config["hostname"],
+            "port"           : config["port"],
+            "username"       : config["user"],
+            "auth_type"      : "key" if key_path else "agent",
             "from_ssh_config": True,
             "ssh_config_host": host_name,
         }
@@ -783,9 +807,9 @@ class SSHManager:
                         raise asyncio.CancelledError
 
                 server: dict[str, Any] = {
-                    "host": host,
-                    "port": port,
-                    "username": username,
+                    "host"     : host,
+                    "port"     : port,
+                    "username" : username,
                     "auth_type": auth_type,
                 }
                 if key_path:
@@ -964,9 +988,9 @@ class SSHManager:
             ssh_config = self.get_ssh_config_for_host(name)
             if ssh_config:
                 server = {
-                    "host": ssh_config["hostname"],
-                    "port": ssh_config["port"],
-                    "username": ssh_config["user"],
+                    "host"     : ssh_config["hostname"],
+                    "port"     : ssh_config["port"],
+                    "username" : ssh_config["user"],
                     "auth_type": "key" if ssh_config.get("identityfile") else "agent",
                     "key_path": (
                         os.path.expanduser(ssh_config["identityfile"][0])
@@ -1009,12 +1033,12 @@ class SSHManager:
             raise SSHConfigurationError("缺少 SSH 用户名")
 
         connect_kwargs: dict[str, Any] = {
-            "hostname": host,
-            "port": port,
-            "username": username,
-            "timeout": CONNECT_TIMEOUT,
-            "banner_timeout": CONNECT_TIMEOUT,
-            "auth_timeout": CONNECT_TIMEOUT,
+            "hostname"       : host,
+            "port"           : port,
+            "username"       : username,
+            "timeout"        : CONNECT_TIMEOUT,
+            "banner_timeout" : CONNECT_TIMEOUT,
+            "auth_timeout"   : CONNECT_TIMEOUT,
             "channel_timeout": CONNECT_TIMEOUT,
         }
         auth_type = server.get("auth_type", "agent")
@@ -1071,17 +1095,17 @@ class SSHManager:
 
         jump_host_name = jump_target["jump_host"]
         jump_conf      = self.get_ssh_config_for_host(jump_host_name) or {
-            "hostname": jump_host_name,
-            "port": 22,
-            "user": "root",
+            "hostname"    : jump_host_name,
+            "port"        : 22,
+            "user"        : "root",
             "identityfile": [],
         }
         jump_kwargs: dict[str, Any] = {
-            "hostname": jump_conf.get("hostname", jump_host_name),
-            "port": jump_target["jump_port"] or jump_conf.get("port", 22),
-            "username": jump_target["jump_user"] or jump_conf.get("user", "root"),
-            "timeout": CONNECT_TIMEOUT,
-            "allow_agent": True,
+            "hostname"     : jump_conf.get("hostname", jump_host_name),
+            "port"         : jump_target["jump_port"] or jump_conf.get("port", 22),
+            "username"     : jump_target["jump_user"] or jump_conf.get("user", "root"),
+            "timeout"      : CONNECT_TIMEOUT,
+            "allow_agent"  : True,
             "look_for_keys": True,
         }
         if jump_conf.get("identityfile"):
@@ -1595,11 +1619,13 @@ class SSHManager:
 
             while not channel.exit_status_ready():
                 if channel.recv_ready():
-                    data = await asyncio.to_thread(channel.recv, 4096)
+                    # 有数据就持续排空，只让出一次事件循环；固定节流会让大输出被 SSH 窗口反压到超时。
+                    data = await asyncio.to_thread(channel.recv, 65536)
                     if data:
                         await emit_data(data)
-
-                await asyncio.sleep(0.05)
+                    await asyncio.sleep(0)
+                else:
+                    await asyncio.sleep(0.05)
 
                 if self.active_channels.get(key) is not active_record:
                     return int(EXIT_CODE_INTERRUPTED)
@@ -1693,9 +1719,9 @@ class SSHManager:
         for name, config in sorted(self.servers.items()):
             summaries.append(
                 {
-                    "name": name,
-                    "host": str(config.get("host", "") or ""),
-                    "port": config.get("port"),
+                    "name"    : name,
+                    "host"    : str(config.get("host", "") or ""),
+                    "port"    : config.get("port"),
                     "username": str(config.get("username", "") or ""),
                     "via_jump": bool(config.get("proxycommand") or config.get("proxyjump")),
                 }
@@ -1760,9 +1786,9 @@ class SSHManager:
                 timeout=timeout,
             )
             return {
-                "ok": exit_code == 0,
+                "ok"       : exit_code == 0,
                 "exit_code": exit_code,
-                "output": "".join(chunks),
+                "output"   : "".join(chunks),
                 "truncated": truncated,
                 "timed_out": exit_code == EXIT_CODE_TIMEOUT,
             }
@@ -1798,7 +1824,7 @@ class SSHManager:
         temporary_path   = target_path.with_name(f".{target_path.name}.{uuid.uuid4().hex}.part")
         sftp: Any | None = None
         try:
-            sftp, cancelled = await _finish_blocking_call(client.open_sftp)
+            sftp, cancelled = await _finish_blocking_call(_open_sftp_bounded, client)
             if cancelled:
                 raise asyncio.CancelledError
             if sftp is None:
@@ -1861,7 +1887,7 @@ class SSHManager:
 
         sftp: Any | None = None
         try:
-            sftp, cancelled = await _finish_blocking_call(client.open_sftp)
+            sftp, cancelled = await _finish_blocking_call(_open_sftp_bounded, client)
             if cancelled:
                 raise asyncio.CancelledError
             if sftp is None:

@@ -79,13 +79,13 @@ def _game_data(
     max_attempts: int         = 7,
 ) -> dict[str, Any]:
     return {
-        "target": target,
-        "min": minimum,
-        "max": maximum,
-        "attempts": attempts,
+        "target"      : target,
+        "min"         : minimum,
+        "max"         : maximum,
+        "attempts"    : attempts,
         "max_attempts": max_attempts,
-        "history": list(history or []),
-        "difficulty": difficulty,
+        "history"     : list(history or []),
+        "difficulty"  : difficulty,
     }
 
 

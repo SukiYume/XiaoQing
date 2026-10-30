@@ -24,12 +24,12 @@ _NOTE_TAGS_SQL        = "CASE WHEN json_valid(i.tags) THEN i.tags ELSE '[]' END"
 class _NotePeriod:
     """请求范围及其实际统计尾端。"""
 
-    today: date
-    range_start: date | None
-    range_end: date | None
+    today        : date
+    range_start  : date | None
+    range_end    : date | None
     cadence_start: date
-    cadence_end: date
-    granularity: CadenceGranularity
+    cadence_end  : date
+    granularity  : CadenceGranularity
 
 
 def _parse_argument_day(value: str | None, field_name: str) -> date | None:
@@ -133,9 +133,9 @@ def _cadence_slots(
                 (
                     key,
                     {
-                        "date": key,
+                        "date" : key,
                         "label": f"{cursor.month}/{cursor.day}",
-                        "week": f"{iso.year}-W{iso.week:02d}",
+                        "week" : f"{iso.year}-W{iso.week:02d}",
                     },
                 )
             )
@@ -249,8 +249,8 @@ def build_notes_overview(
     categories = [
         {
             "category": str(row["category_name"]),
-            "count": int(row["item_count"]),
-            "share": int(row["item_count"]) / total_count if total_count else 0,
+            "count"   : int(row["item_count"]),
+            "share"   : int(row["item_count"]) / total_count if total_count else 0,
         }
         for row in category_rows
     ]
@@ -283,7 +283,7 @@ def build_notes_overview(
         {
             **params,
             "cadence_start": period.cadence_start.isoformat(),
-            "cadence_end": period.cadence_end.isoformat(),
+            "cadence_end"  : period.cadence_end.isoformat(),
         },
     ).fetchall()
     cadence_counter: Counter[str] = Counter()
@@ -330,19 +330,19 @@ def build_notes_overview(
 
     return {
         "summary": {
-            "total_count": total_count,
+            "total_count"   : total_count,
             "week_new_count": int(summary["week_new_count"] or 0),
             "average_length": round(total_length / total_count, 1) if total_count else 0,
-            "tagged_rate": round(tagged_count / total_count, 4) if total_count else 0,
-            "range_start": period.range_start.isoformat() if period.range_start else None,
-            "range_end": period.range_end.isoformat() if period.range_end else None,
+            "tagged_rate"   : round(tagged_count / total_count, 4) if total_count else 0,
+            "range_start"   : period.range_start.isoformat() if period.range_start else None,
+            "range_end"     : period.range_end.isoformat() if period.range_end else None,
         },
-        "categories": categories,
-        "hot_tags": hot_tags,
-        "cadence": cadence,
+        "categories"         : categories,
+        "hot_tags"           : hot_tags,
+        "cadence"            : cadence,
         "cadence_granularity": period.granularity,
-        "recent_notes": recent_notes,
-        "all_categories": all_categories,
+        "recent_notes"       : recent_notes,
+        "all_categories"     : all_categories,
     }
 
 
@@ -371,9 +371,9 @@ def build_notes_widget_overview(
         """,
         {
             "week_start": week_start.isoformat(),
-            "today": period.today.isoformat(),
-            "owner_id": owner_id,
-            "timezone": timezone_name,
+            "today"     : period.today.isoformat(),
+            "owner_id"  : owner_id,
+            "timezone"  : timezone_name,
         },
     ).fetchone()
     recent_notes = [
@@ -394,7 +394,7 @@ def build_notes_widget_overview(
     ]
     return {
         "summary": {
-            "total_count": int(summary["total_count"] or 0),
+            "total_count"   : int(summary["total_count"] or 0),
             "week_new_count": int(summary["week_new_count"] or 0),
         },
         "recent_notes": recent_notes,

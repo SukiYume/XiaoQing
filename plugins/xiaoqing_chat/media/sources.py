@@ -100,7 +100,7 @@ def _matching_segments_from_message(
         return direct_matches
     if not segment_prefers_emoji(original_segment):
         return media_segments if len(media_segments) == 1 else []
-    matches: list[dict[str, Any]]   = []
+    matches  : list[dict[str, Any]] = []
     fallbacks: list[dict[str, Any]] = []
 
     for seg in message_segments:
@@ -125,7 +125,7 @@ def _get_image_request_candidates(
 
     data                             = segment.get("data", {}) or {}
     candidates: list[dict[str, str]] = []
-    seen: set[tuple[str, str]]       = set()
+    seen      : set[tuple[str, str]] = set()
 
     def _push(key: str, value: Any) -> None:
         cleaned = str(value or "").strip()
@@ -163,7 +163,7 @@ async def _resolve_onebot_image_result(
     """让适配器结果经过常规字节上限和来源策略门控后再解码。"""
 
     synthetic_data: dict[str, Any] = {
-        "name": str(data.get("file_name", "") or summary_hint or "").strip(),
+        "name"   : str(data.get("file_name", "") or summary_hint or "").strip(),
         "summary": summary_hint,
     }
     file_value   = str(data.get("file", "") or "").strip()
@@ -212,7 +212,7 @@ async def _recover_media_via_onebot(
     message_id                               = event.get("message_id")
     summary_hint                             = segment_summary_hint(segment)
     candidate_requests: list[dict[str, str]] = []
-    seen_requests: set[tuple[str, str]]      = set()
+    seen_requests     : set[tuple[str, str]] = set()
 
     def _extend_requests(items: list[dict[str, str]]) -> None:
         for item in items:
@@ -414,7 +414,7 @@ def _resolve_media_sources(
     data                                        = segment.get("data", {}) or {}
     key_order                                   = {"path": 0, "file": 1, "url": 2}
     sources: list[tuple[str, str, Path | None]] = []
-    seen: set[str]                              = set()
+    seen   : set[str]                           = set()
     for key in ("path", "file", "url"):
         value = str(data.get(key, "") or "").strip()
         if not value or value in seen:
@@ -569,7 +569,13 @@ def _materialize_resolved_media(
     哈希则直接复用。
     """
 
-    info = inspect_image_payload_details(payload, fallback_suffix=suffix)
+    # 当前配置直接交给唯一的解码校验边界：降低预算时在完整解码前拒绝，提高上限后也能处理。
+    info = inspect_image_payload_details(
+        payload,
+        fallback_suffix = suffix,
+        max_pixels      = max_pixels,
+        max_frames      = max_frames,
+    )
     validate_image_resource_limits(
         width       = info.width,
         height      = info.height,

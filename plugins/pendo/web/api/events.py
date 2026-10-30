@@ -34,46 +34,46 @@ router = APIRouter()
 class EventCollectionChildCreate(BaseModel):  # type: ignore[misc]
     """创建多节点集合时提交的一个叶子日程。"""
 
-    title: str
+    title     : str
     start_time: str
-    end_time: str | None = None
-    notes: str | None    = ""
+    end_time  : str | None = None
+    notes     : str | None = ""
 
 
 class EventCollectionCreate(BaseModel):  # type: ignore[misc]
     """创建多节点日程集合的请求体。"""
 
-    kind: str = "multi_node"
-    title: str
-    content: str | None  = ""
-    category: str | None = None
-    location: str | None = ""
-    tags: list[str] = Field(default_factory=list)
-    notes: str | None                           = ""
-    timezone: str | None                        = None
+    kind          : str = "multi_node"
+    title         : str
+    content       : str | None = ""
+    category      : str | None = None
+    location      : str | None = ""
+    tags          : list[str] = Field(default_factory=list)
+    notes         : str | None                  = ""
+    timezone      : str | None                  = None
     reminder_rules: list[dict[str, Any]] | None = None
-    children: list[EventCollectionChildCreate]
+    children      : list[EventCollectionChildCreate]
 
 
 class EventCollectionUpdate(BaseModel):  # type: ignore[misc]
     """部分更新日程集合的请求体；显式空值用于清空可选字段。"""
 
-    title: str | None                           = None
-    content: str | None                         = None
-    category: str | None                        = None
-    location: str | None                        = None
-    tags: list[str] | None                      = None
-    notes: str | None                           = None
-    timezone: str | None                        = None
+    title         : str | None                  = None
+    content       : str | None                  = None
+    category      : str | None                  = None
+    location      : str | None                  = None
+    tags          : list[str] | None            = None
+    notes         : str | None                  = None
+    timezone      : str | None                  = None
     reminder_rules: list[dict[str, Any]] | None = None
-    version: int | None = Field(default=None, ge=0)
+    version       : int | None = Field(default=None, ge=0)
 
 
 class EventReminderConfirmationUpdate(BaseModel):  # type: ignore[misc]
     """切换单条未来日程提醒确认状态的请求体。"""
 
     remind_time: str = Field(min_length=1)
-    confirmed: bool
+    confirmed  : bool
 
 
 @router.get("/events/overview")
@@ -103,8 +103,8 @@ def get_events_overview(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {
-        "ok": True,
-        "data": overview,
+        "ok"     : True,
+        "data"   : overview,
         "message": "",
     }
 
@@ -117,8 +117,8 @@ def get_event_categories(
     """只读取日程分类，避免为分类下拉框构造跨 130 年的完整概览。"""
 
     return {
-        "ok": True,
-        "data": {"categories": list_event_categories(db, owner_id)},
+        "ok"     : True,
+        "data"   : {"categories": list_event_categories(db, owner_id)},
         "message": "",
     }
 
@@ -198,25 +198,25 @@ def create_event_collection(
             node_key   = f"m{index:02d}"
             normalized = normalize_event_fields(
                 {
-                    "owner_id": owner_id,
-                    "type": "event",
-                    "title": child.title,
-                    "content": body.content or "",
-                    "category": category,
-                    "start_time": child.start_time,
-                    "end_time": child.end_time,
-                    "location": body.location or "",
-                    "tags": body.tags,
-                    "notes": child.notes or "",
-                    "timezone": timezone_name,
-                    "reminder_rules": rules,
-                    "event_role": "multi_node_child",
-                    "event_collection_id": collection_id,
+                    "owner_id"             : owner_id,
+                    "type"                 : "event",
+                    "title"                : child.title,
+                    "content"              : body.content or "",
+                    "category"             : category,
+                    "start_time"           : child.start_time,
+                    "end_time"             : child.end_time,
+                    "location"             : body.location or "",
+                    "tags"                 : body.tags,
+                    "notes"                : child.notes or "",
+                    "timezone"             : timezone_name,
+                    "reminder_rules"       : rules,
+                    "event_role"           : "multi_node_child",
+                    "event_collection_id"  : collection_id,
                     "event_collection_kind": "multi_node",
-                    "event_index": index,
-                    "event_node_key": node_key,
-                    "created_at": now,
-                    "updated_at": now,
+                    "event_index"          : index,
+                    "event_node_key"       : node_key,
+                    "created_at"           : now,
+                    "updated_at"           : now,
                 },
                 partial=False,
             )
@@ -236,21 +236,21 @@ def create_event_collection(
 
         db.create_event_collection(
             {
-                "id": collection_id,
-                "owner_id": owner_id,
-                "kind": "multi_node",
-                "title": collection_title,
-                "content": shared_fields["content"],
-                "category": shared_fields["category"],
-                "location": shared_fields["location"],
-                "tags": list(shared_fields["tags"]),
-                "notes": collection_notes,
-                "timezone": shared_fields["timezone"],
+                "id"            : collection_id,
+                "owner_id"      : owner_id,
+                "kind"          : "multi_node",
+                "title"         : collection_title,
+                "content"       : shared_fields["content"],
+                "category"      : shared_fields["category"],
+                "location"      : shared_fields["location"],
+                "tags"          : list(shared_fields["tags"]),
+                "notes"         : collection_notes,
+                "timezone"      : shared_fields["timezone"],
                 "reminder_rules": list(shared_fields["reminder_rules"]),
-                "start_time": start_time,
-                "end_time": end_time,
-                "created_at": now,
-                "updated_at": now,
+                "start_time"    : start_time,
+                "end_time"      : end_time,
+                "created_at"    : now,
+                "updated_at"    : now,
             },
             child_rows,
             operation_action="create_event_collection",
@@ -260,11 +260,11 @@ def create_event_collection(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return {
-        "ok": True,
+        "ok"  : True,
         "data": {
-            "id": collection_id,
-            "display_id": public_id(collection_id),
-            "child_ids": child_ids,
+            "id"               : collection_id,
+            "display_id"       : public_id(collection_id),
+            "child_ids"        : child_ids,
             "child_display_ids": [public_id(child_id) for child_id in child_ids],
         },
         "message": "创建成功",
@@ -316,11 +316,11 @@ def update_collection(
         )
         audit_updates = dict(updates)
         operation_log = {
-            "user_id": owner_id,
-            "action": "update_event_collection",
+            "user_id"  : owner_id,
+            "action"   : "update_event_collection",
             "item_type": "event",
-            "item_id": str(collection["id"]),
-            "details": {"updates": audit_updates},
+            "item_id"  : str(collection["id"]),
+            "details"  : {"updates": audit_updates},
         }
 
         if "reminder_rules" in updates:
@@ -364,11 +364,11 @@ def update_collection(
         )
         raise HTTPException(status_code=status_code, detail=detail) from exc
     return {
-        "ok": True,
+        "ok"  : True,
         "data": {
-            "id": str(collection["id"]),
+            "id"        : str(collection["id"]),
             "display_id": public_id(collection["id"]),
-            "version": (db.get_event_collection(str(collection["id"]), owner_id) or {}).get(
+            "version"   : (db.get_event_collection(str(collection["id"]), owner_id) or {}).get(
                 "version"
             ),
         },
@@ -394,19 +394,19 @@ def delete_collection(
         owner_id,
         cascade       = True,
         operation_log = {
-            "user_id": owner_id,
-            "action": "delete_event_collection",
+            "user_id"  : owner_id,
+            "action"   : "delete_event_collection",
             "item_type": "event",
-            "item_id": resolved_collection_id,
-            "details": {"child_ids": child_ids},
+            "item_id"  : resolved_collection_id,
+            "details"  : {"child_ids": child_ids},
         },
     )
     if not success:
         raise HTTPException(status_code=404, detail="Event collection not found")
     return {
-        "ok": True,
+        "ok"  : True,
         "data": {
-            "id": resolved_collection_id,
+            "id"        : resolved_collection_id,
             "display_id": public_id(resolved_collection_id),
         },
         "message": "已删除",
@@ -452,7 +452,7 @@ def set_event_reminder_confirmation(
         raise HTTPException(status_code=409, detail="提醒时间已到，不能再修改确认状态")
 
     return {
-        "ok": True,
-        "data": {"reminder": reminder},
+        "ok"     : True,
+        "data"   : {"reminder": reminder},
         "message": "提醒已提前确认" if body.confirmed else "提醒已重新开启",
     }

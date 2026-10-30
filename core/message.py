@@ -49,9 +49,9 @@ def validate_message_segments(message: list[Any]) -> list[dict[str, Any]]:
 class MessageScan:
     """Single-pass summary of a OneBot message payload."""
 
-    text: str
+    text     : str
     has_media: bool
-    is_at_me: bool
+    is_at_me : bool
 
 
 def normalize_inbound_message(event: dict[str, Any]) -> dict[str, Any]:
@@ -221,13 +221,13 @@ def is_clean_text_url_only(clean_text: str) -> bool:
 class TextCommandContext:
     """Result of parsing a single text message for routing signals."""
 
-    clean_text: str
-    is_at_me: bool
-    has_bot_name: bool
+    clean_text        : str
+    is_at_me          : bool
+    has_bot_name      : bool
     has_command_prefix: bool  # text.startswith(any configured command prefix)
-    has_prefix: bool  # has_command_prefix OR has_bot_name OR is_at_me
-    is_only_bot_name: bool
-    is_url_only: bool
+    has_prefix        : bool  # has_command_prefix OR has_bot_name OR is_at_me
+    is_only_bot_name  : bool
+    is_url_only       : bool
 
 
 def parse_text_command_context(

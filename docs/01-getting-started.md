@@ -283,7 +283,8 @@ bash scripts/run_full_uat.sh --plan-only
 bash scripts/run_full_uat.sh
 ```
 
-UAT 用当前环境的解释器启动真实 `python main.py`，把插件数据重定向到本次报告目录，按顺序执行以下阶段，最后优雅停机并逐字节恢复 `config/config.json`：
+UAT 用当前环境的解释器启动真实 `python main.py`，把插件数据重定向到本次报告目录，按顺序执行以下阶段，最后优雅停机并逐字节恢复 `config/config.json`。
+运行期间的临时配置关闭插件定时任务（`enable_plugin_schedules=false`）、主动 HTTP 投递（`onebot_http_base` 置空）和默认通知群，测试服务不会调用真实账号或向生产群发送消息；`--include-external` 只控制命令矩阵里的外部场景。服务启动等待期间被中断时，runner 先回收整棵测试服务进程树，再恢复真实配置：
 
 | 阶段 | 内容 |
 |---|---|

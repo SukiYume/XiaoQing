@@ -17,6 +17,7 @@ from .context_builder import (
     retrieve_memory_context,
 )
 from .llm.check_result import ReplyCheckResult, ReplyRejected, checker_unavailable
+from .llm.communication_constraints import requested_char_count
 from .llm.gateway import LLMError, chat_completions_with_fallback_paths
 from .llm.local_checks import (
     heuristic_check,
@@ -232,7 +233,7 @@ async def _request_reply_candidate(
     request_secrets = plan.secrets
     route_name      = str(plan.secrets.get("_route") or "chat")
     # 计划里的输出预算会为明确要求的长文放宽（见 reply_plan），不低于配置值。
-    request_max_tokens = max(int(plan.runtime.cfg.max_tokens), int(foreground.max_tokens))
+    request_max_tokens = foreground.max_tokens
     if (
         plan.secrets.get("_ai") is not None
         and not plan.secrets.get("_pinned_model")
@@ -242,20 +243,22 @@ async def _request_reply_candidate(
         request_secrets["_route"]        = "reasoning"
         request_secrets["_pinned_model"] = None
         route_name                       = "reasoning"
-        # DeepSeek 的 max_tokens 同时覆盖隐藏思考和最终回答。普通聊天无需放大，
-        # 科学推理若仍用 512，可能只得到 reasoning_content 而没有可发送正文。
-        request_max_tokens = max(request_max_tokens, 2048)
+        foreground                       = plan.runtime.cfg.llm_config("reasoning")
+        length                           = requested_char_count(plan.text)
+        if length is not None and length.mode != "at_most":
+            foreground = foreground.with_room_for(length.count)
+        request_max_tokens = foreground.max_tokens
     log_step(
         plan.context,
         plan.runtime,
         chat_id = plan.chat_id,
         step    = "reply.llm.start",
         fields  = {
-            "model": plan.model,
-            "route": route_name,
-            "messages": len(payload_messages),
-            "timeout_s": foreground.timeout_seconds,
-            "max_retry": foreground.max_retry,
+            "model"     : plan.model,
+            "route"     : route_name,
+            "messages"  : len(payload_messages),
+            "timeout_s" : foreground.timeout_seconds,
+            "max_retry" : foreground.max_retry,
             "max_tokens": request_max_tokens,
         },
     )
@@ -263,8 +266,8 @@ async def _request_reply_candidate(
     raw, used_profile = await chat_completions_with_fallback_paths(
         secrets     = request_secrets,
         messages    = payload_messages,
-        temperature = plan.chat_temperature,
-        top_p       = plan.runtime.cfg.top_p,
+        temperature = foreground.temperature,
+        top_p       = foreground.top_p,
         max_tokens  = request_max_tokens,
         **foreground.request_controls(),
     )
@@ -284,9 +287,9 @@ async def _request_reply_candidate(
         chat_id = plan.chat_id,
         step    = "reply.llm.ok",
         fields  = {
-            "elapsed_s": round(time.monotonic() - started_at, 3),
+            "elapsed_s"   : round(time.monotonic() - started_at, 3),
             "used_profile": used_profile,
-            "raw_chars": len(raw or ""),
+            "raw_chars"   : len(raw or ""),
         },
     )
     return raw
@@ -365,8 +368,8 @@ async def _resolve_candidate_draft(
                 chat_id = plan.chat_id,
                 step    = "reply.marker.miss",
                 fields  = {
-                    "kind": parsed_marker.kind,
-                    "hint": parsed_marker.hint,
+                    "kind"  : parsed_marker.kind,
+                    "hint"  : parsed_marker.hint,
                     "reason": type(exc).__name__,
                 },
             )
@@ -377,8 +380,8 @@ async def _resolve_candidate_draft(
                 chat_id = plan.chat_id,
                 step    = "reply.marker.miss",
                 fields  = {
-                    "kind": parsed_marker.kind,
-                    "hint": parsed_marker.hint,
+                    "kind"  : parsed_marker.kind,
+                    "hint"  : parsed_marker.hint,
                     "reason": "candidate_not_found",
                 },
             )
@@ -394,8 +397,8 @@ async def _resolve_candidate_draft(
                 chat_id = plan.chat_id,
                 step    = "reply.marker.resolved",
                 fields  = {
-                    "kind": resolved_marker.kind,
-                    "hint": resolved_marker.hint,
+                    "kind"    : resolved_marker.kind,
+                    "hint"    : resolved_marker.hint,
                     "entry_id": entry_id,
                 },
             )
@@ -461,7 +464,8 @@ async def _run_checker(
     check_reply_text, heuristic_reply_text = reply_checker_inputs(draft)
     # 结构性检查已在 check_reply() 的远程调用之前完成。远程审查只占用一个短预算；
     # 超时或协议故障属于基础设施问题，不能触发多轮重生成并拖垮整个插件回调。
-    timeout = max(0.1, cfg.timeout_seconds)
+    checker_llm = plan.runtime.cfg.llm_config("checker")
+    timeout     = checker_llm.total_timeout_seconds
     try:
         return await asyncio.wait_for(
             check_reply(
@@ -483,10 +487,10 @@ async def _run_checker(
                 max_repeat_compare=cfg.max_repeat_compare,
                 similarity_threshold=cfg.similarity_threshold,
                 max_assistant_in_row=cfg.max_assistant_in_row,
-                max_tokens=cfg.max_tokens,
+                max_tokens=checker_llm.max_tokens,
                 timeout_seconds=timeout,
-                max_retry=0,
-                retry_interval_seconds=0.2,
+                max_retry=checker_llm.max_retry,
+                retry_interval_seconds=checker_llm.retry_interval_seconds,
                 llm_checker_mode=cfg.llm_checker_mode,
                 check_omitted_persona_episode=not plan.forced,
                 allow_low_stakes_persona_fiction=allows_low_stakes_persona_fiction(plan.runtime),
@@ -564,13 +568,13 @@ async def _check_candidate_draft(
         chat_id = plan.chat_id,
         step    = "reply.check.result",
         fields  = {
-            "suitable": bool(check.suitable),
-            "need_replan": bool(check.need_replan),
-            "severity": check.severity,
-            "failure_code": check.failure_code,
+            "suitable"           : bool(check.suitable),
+            "need_replan"        : bool(check.need_replan),
+            "severity"           : check.severity,
+            "failure_code"       : check.failure_code,
             "persona_claim_count": check.persona_claim_count,
             "context_claim_count": check.context_claim_count,
-            "reason": check.reason,
+            "reason"             : check.reason,
         },
     )
     if check.suitable:
@@ -634,15 +638,18 @@ def _prefetch_turn_reading(
     cfg = plan.runtime.cfg.reply_check
     if attempt.turn_reading is None or cfg.llm_checker_mode.strip().lower() != "always":
         return
+    checker_llm = plan.runtime.cfg.llm_config("checker")
     attempt.turn_reading.prefetch(
-        secrets            = plan.secrets,
-        bot_name           = plan.bot_name,
-        current_text       = plan.text,
-        current_sender     = event_sender_name(plan.event),
-        chat_history_text  = _checker_history_text(plan, trimmed_history),
-        jargon_explanation = plan.jargon_explanation,
-        max_tokens         = cfg.max_tokens,
-        timeout_seconds    = max(0.1, cfg.timeout_seconds),
+        secrets                = plan.secrets,
+        bot_name               = plan.bot_name,
+        current_text           = plan.text,
+        current_sender         = event_sender_name(plan.event),
+        chat_history_text      = _checker_history_text(plan, trimmed_history),
+        jargon_explanation     = plan.jargon_explanation,
+        max_tokens             = checker_llm.max_tokens,
+        timeout_seconds        = checker_llm.total_timeout_seconds,
+        max_retry              = checker_llm.max_retry,
+        retry_interval_seconds = checker_llm.retry_interval_seconds,
     )
 
 
@@ -738,7 +745,7 @@ async def _generate_checked_draft(
                     chat_id = plan.chat_id,
                     step    = "reply.generate.done",
                     fields  = {
-                        "elapsed_s": round(time.monotonic() - plan.started_at, 3),
+                        "elapsed_s"  : round(time.monotonic() - plan.started_at, 3),
                         "reply_chars": len(draft.text),
                     },
                 )

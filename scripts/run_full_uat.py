@@ -47,13 +47,14 @@ SECRETS_PATH          = PROJECT_ROOT / "config" / "secrets.json"
 DEFAULT_REPORT_PARENT = PROJECT_ROOT / "test_reports" / "runs" / "project"
 LOCK_PATH             = DEFAULT_REPORT_PARENT / ".full-uat.lock"
 DEFAULT_ENDPOINT      = "http://127.0.0.1:12000/event"
-PYTHON_COMMAND        = "python"
+PYTHON_COMMAND        = sys.executable
 DEFAULT_PHASES        = (
     "ws-matrix",
     "http-matrix",
     "core-pressure",
     "compileall",
     "ruff",
+    "format",
     "mypy",
     "pytest",
     "diff",
@@ -68,33 +69,33 @@ class UATError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class PhaseSpec:
-    name: str
-    command: tuple[str, ...]
+    name            : str
+    command         : tuple[str, ...]
     requires_service: bool
-    description: str
+    description     : str
 
 
 @dataclass(frozen=True, slots=True)
 class PhaseResult:
-    name: str
-    status: str
-    exit_code: int | None
+    name            : str
+    status          : str
+    exit_code       : int | None
     duration_seconds: float
-    log_path: str | None
-    command: str
-    detail: str = ""
+    log_path        : str | None
+    command         : str
+    detail          : str = ""
 
 
 @dataclass(frozen=True, slots=True)
 class LifecycleResult:
-    generation: int
-    action: str
-    status: str
-    exit_code: int | None
+    generation      : int
+    action          : str
+    status          : str
+    exit_code       : int | None
     duration_seconds: float
-    stdout_log: str
-    stderr_log: str
-    detail: str = ""
+    stdout_log      : str
+    stderr_log      : str
+    detail          : str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -375,6 +376,15 @@ def _build_phase_specs(args: argparse.Namespace, output_dir: Path) -> tuple[Phas
                     "生产 Python 源码编译检查",
                 )
             )
+        elif phase == "format":
+            specs.append(
+                PhaseSpec(
+                    "format",
+                    (PYTHON_COMMAND, "scripts/format_code.py", "--check"),
+                    False,
+                    "项目格式门禁",
+                )
+            )
         elif phase == "ruff":
             specs.append(
                 PhaseSpec(
@@ -547,8 +557,8 @@ def _legacy_moves_from_lock(lock: dict[str, Any]) -> tuple[_LegacyDataMove, ...]
     except OSError as exc:
         raise UATError("无法解析当前插件目录") from exc
 
-    moves: list[_LegacyDataMove] = []
-    seen_sources: set[Path]      = set()
+    moves       : list[_LegacyDataMove] = []
+    seen_sources: set[Path]             = set()
     for raw in raw_moves:
         if not isinstance(raw, dict):
             raise UATError("UAT 恢复锁含无效旧数据移动记录")
@@ -599,13 +609,13 @@ class RuntimeIsolation:
         move_token             = f"{os.getpid()}-{time.time_ns()}"
         self.legacy_data_moves = _discover_legacy_data_moves(move_token)
         lock_payload           = {
-            "schema_version": 2,
-            "pid": os.getpid(),
-            "created_at": _now_iso(),
-            "project_root": str(PROJECT_ROOT),
-            "config_path": str(CONFIG_PATH),
-            "backup_path": str(self.backup_path),
-            "original_sha256": self.original_hash,
+            "schema_version"   : 2,
+            "pid"              : os.getpid(),
+            "created_at"       : _now_iso(),
+            "project_root"     : str(PROJECT_ROOT),
+            "config_path"      : str(CONFIG_PATH),
+            "backup_path"      : str(self.backup_path),
+            "original_sha256"  : self.original_hash,
             "legacy_data_moves": [
                 {"source": str(move.source), "hidden": str(move.hidden)}
                 for move in self.legacy_data_moves
@@ -641,6 +651,11 @@ class RuntimeIsolation:
             config["enable_inbound_server"] = True
             config["enable_ws_client"]      = False
             config["enable_plugin_watcher"] = False
+            # 后台工作不经过命令矩阵：关闭插件定时任务、主动 HTTP 投递和默认通知群，
+            # 跨过计划时间也不会调用真实账号或向生产群发送消息。
+            config["enable_plugin_schedules"] = False
+            config["onebot_http_base"]        = ""
+            config["default_group_ids"]       = []
             temporary = (json.dumps(config, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
             _atomic_write(CONFIG_PATH, temporary)
         # Ctrl+C/SystemExit 也不能跳过真实数据和配置回位。
@@ -713,7 +728,50 @@ def _recover_interrupted_run(endpoint: str) -> int:
     return 0
 
 
+# Windows 上主进程先退出后，taskkill /T 已找不到它的后代；用作业对象持有整棵进程树，
+# 主进程退出与否都能一并回收继承了输出管道的子孙进程。
+_WINDOWS_JOBS: dict[int, int] = {}
+
+
+def _attach_windows_job(process: subprocess.Popen[Any]) -> None:
+    if os.name != "nt":
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.OpenProcess.restype      = wintypes.HANDLE
+    job                               = kernel32.CreateJobObjectW(None, None)
+    if not job:
+        return
+    process_all_access = 0x1F0FFF
+    handle             = kernel32.OpenProcess(process_all_access, False, process.pid)
+    if handle and kernel32.AssignProcessToJobObject(wintypes.HANDLE(job), wintypes.HANDLE(handle)):
+        _WINDOWS_JOBS[process.pid] = job
+    else:
+        kernel32.CloseHandle(wintypes.HANDLE(job))
+    if handle:
+        kernel32.CloseHandle(wintypes.HANDLE(handle))
+
+
+def _terminate_windows_job(process: subprocess.Popen[Any]) -> bool:
+    job = _WINDOWS_JOBS.pop(process.pid, None)
+    if job is None:
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    try:
+        return bool(kernel32.TerminateJobObject(wintypes.HANDLE(job), 1))
+    finally:
+        kernel32.CloseHandle(wintypes.HANDLE(job))
+
+
 def _terminate_process_tree(process: subprocess.Popen[Any]) -> None:
+    if os.name == "nt" and _terminate_windows_job(process):
+        return
     if process.poll() is not None:
         return
     if os.name == "nt":
@@ -768,6 +826,7 @@ def _run_logged_phase(spec: PhaseSpec, output_dir: Path, *, timeout: float) -> P
             env    = environment,
             **_popen_flags(),
         )
+        _attach_windows_job(process)
         try:
             exit_code = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -859,6 +918,7 @@ class ServiceController:
             env    = {**os.environ, "PYTHONUTF8": "1"},
             **_popen_flags(),
         )
+        _attach_windows_job(self.process)
         deadline = time.monotonic() + self.start_timeout
         detail   = "health timeout"
         while time.monotonic() < deadline:
@@ -977,8 +1037,8 @@ def _write_repo_snapshot(output_dir: Path) -> dict[str, Any]:
     )
     (output_dir / "git-status-before.txt").write_text(status.stdout, encoding="utf-8")
     return {
-        "head": head.stdout.strip() if head.returncode == 0 else None,
-        "dirty_entries": len(status.stdout.splitlines()),
+        "head"            : head.stdout.strip() if head.returncode == 0 else None,
+        "dirty_entries"   : len(status.stdout.splitlines()),
         "status_exit_code": status.returncode,
     }
 
@@ -1030,15 +1090,17 @@ def _execute_service_phases(
     *,
     phase_timeout: float,
 ) -> tuple[list[PhaseResult], list[LifecycleResult]]:
-    phases: list[PhaseResult]        = []
+    phases   : list[PhaseResult]     = []
     lifecycle: list[LifecycleResult] = []
-    started                          = controller.start()
-    lifecycle.append(started)
-    if started.status != "passed":
-        phases.extend(_mark_skipped(spec, "服务启动失败") for spec in specs)
-        return phases, lifecycle
-
+    # 回收范围从创建服务进程开始：启动等待期间的中断或异常同样要先停服，
+    # 外层再恢复生产配置，否则测试服务会带着恢复后的真实配置继续运行。
     try:
+        started = controller.start()
+        lifecycle.append(started)
+        if started.status != "passed":
+            phases.extend(_mark_skipped(spec, "服务启动失败") for spec in specs)
+            return phases, lifecycle
+
         for index, spec in enumerate(specs):
             if controller.process is None or controller.process.poll() is not None:
                 phases.extend(_mark_skipped(item, "服务在阶段前意外退出") for item in specs[index:])
@@ -1161,19 +1223,19 @@ def _write_final_report(output_dir: Path, report: dict[str, Any]) -> None:
 
 def _plan_only(specs: tuple[PhaseSpec, ...], args: argparse.Namespace, output_dir: Path) -> int:
     plan = {
-        "output": str(output_dir),
-        "python": PYTHON_COMMAND,
-        "environment_policy": "use-current-python",
-        "python_version_gate": False,
-        "isolated_data_root": str(output_dir / "data"),
-        "include_external": args.include_external,
+        "output"              : str(output_dir),
+        "python"              : PYTHON_COMMAND,
+        "environment_policy"  : "use-current-python",
+        "python_version_gate" : False,
+        "isolated_data_root"  : str(output_dir / "data"),
+        "include_external"    : args.include_external,
         "include_chat_quality": any(spec.name == "chat-quality" for spec in specs),
-        "phases": [
+        "phases"              : [
             {
-                "name": spec.name,
+                "name"            : spec.name,
                 "requires_service": spec.requires_service,
-                "description": spec.description,
-                "command": _command_text(spec.command),
+                "description"     : spec.description,
+                "command"         : _command_text(spec.command),
             }
             for spec in specs
         ],
@@ -1225,9 +1287,9 @@ def _execute(args: argparse.Namespace) -> int:
     repository = _write_repo_snapshot(output_dir)
     secrets_before = _sha256_file(SECRETS_PATH)
     config_before = _sha256_file(CONFIG_PATH)
-    phase_results: list[PhaseResult] = []
+    phase_results    : list[PhaseResult] = []
     lifecycle_results: list[LifecycleResult] = []
-    fatal_errors: list[str] = []
+    fatal_errors     : list[str] = []
     service_specs = tuple(spec for spec in specs if spec.requires_service)
     static_specs = tuple(spec for spec in specs if not spec.requires_service)
     isolation: RuntimeIsolation | None = None
@@ -1294,14 +1356,14 @@ def _execute(args: argparse.Namespace) -> int:
 
     host, port = _endpoint_host_port(args.endpoint)
     integrity = {
-        "isolated_data": bool(service_specs),
-        "config_restored": config_restored,
-        "secrets_unchanged": _sha256_file(SECRETS_PATH) == secrets_before,
+        "isolated_data"        : bool(service_specs),
+        "config_restored"      : config_restored,
+        "secrets_unchanged"    : _sha256_file(SECRETS_PATH) == secrets_before,
         "inbound_port_released": not service_specs or not _port_is_open(host, port),
-        "config_sha256_before": config_before,
-        "config_sha256_after": _sha256_file(CONFIG_PATH),
+        "config_sha256_before" : config_before,
+        "config_sha256_after"  : _sha256_file(CONFIG_PATH),
         "secrets_sha256_before": secrets_before,
-        "secrets_sha256_after": _sha256_file(SECRETS_PATH),
+        "secrets_sha256_after" : _sha256_file(SECRETS_PATH),
     }
     all_phases_passed    = all(row.status == "passed" for row in phase_results)
     all_lifecycle_passed = all(row.status == "passed" for row in lifecycle_results)
@@ -1315,20 +1377,20 @@ def _execute(args: argparse.Namespace) -> int:
     )
     report = {
         "schema_version": 1,
-        "started_at": started_at,
-        "finished_at": _now_iso(),
-        "gate_passed": gate_passed,
-        "output_dir": str(output_dir),
-        "python": {
-            "command": PYTHON_COMMAND,
-            "version": sys.version,
+        "started_at"    : started_at,
+        "finished_at"   : _now_iso(),
+        "gate_passed"   : gate_passed,
+        "output_dir"    : str(output_dir),
+        "python"        : {
+            "command"     : PYTHON_COMMAND,
+            "version"     : sys.version,
             "version_gate": False,
         },
-        "repository": repository,
-        "phases": [asdict(row) for row in phase_results],
-        "lifecycle": [asdict(row) for row in lifecycle_results],
-        "integrity": integrity,
-        "fatal_errors": fatal_errors,
+        "repository"       : repository,
+        "phases"           : [asdict(row) for row in phase_results],
+        "lifecycle"        : [asdict(row) for row in lifecycle_results],
+        "integrity"        : integrity,
+        "fatal_errors"     : fatal_errors,
         "coverage_boundary": {
             "external": "included" if args.include_external else "not executed (opt-in)",
             "chat_quality": (

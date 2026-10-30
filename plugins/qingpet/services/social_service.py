@@ -17,12 +17,12 @@ from ..utils.validators import validate_item_amount, validate_sensitive_content
 from .database import Database, MinigameAtomicResult, MinigameOutcome
 
 _RPS_CHOICES = {
-    "石头": "rock",
-    "剪刀": "scissors",
-    "布": "paper",
-    "rock": "rock",
+    "石头"      : "rock",
+    "剪刀"      : "scissors",
+    "布"       : "paper",
+    "rock"    : "rock",
     "scissors": "scissors",
-    "paper": "paper",
+    "paper"   : "paper",
 }
 _RPS_NAMES = {"rock": "石头", "scissors": "剪刀", "paper": "布"}
 
@@ -268,8 +268,8 @@ class SocialService:
                 experience      = exp,
                 payload         = {
                     "player_choice": normalized,
-                    "npc_choice": npc_choice,
-                    "result": outcome_text,
+                    "npc_choice"   : npc_choice,
+                    "result"       : outcome_text,
                     "offered_coins": coins > 0,
                 },
             )
@@ -332,9 +332,9 @@ class SocialService:
                 requested_coins = coins,
                 experience      = exp,
                 payload         = {
-                    "player_dice": player_dice,
-                    "pet_dice": pet_dice,
-                    "result": outcome_text,
+                    "player_dice"  : player_dice,
+                    "pet_dice"     : pet_dice,
+                    "result"       : outcome_text,
                     "offered_coins": coins > 0,
                 },
             )
@@ -407,7 +407,7 @@ class SocialService:
                 experience      = exp,
                 energy_cost     = energy_cost,
                 payload         = {
-                    "result": outcome_key,
+                    "result"       : outcome_key,
                     "offered_coins": coins > 0,
                 },
             )

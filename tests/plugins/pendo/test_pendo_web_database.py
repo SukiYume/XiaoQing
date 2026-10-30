@@ -2,22 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import shutil
+from datetime import datetime
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from tests.helpers.pendo_review_test_support import (
     Database,
     EventHandler,
     NoteHandler,
-    Path,
-    SimpleNamespace,
     TaskHandler,
     ZoneInfo,
     _make_temp_db,
     _seed_event_batch_fixture,
-    asyncio,
-    datetime,
-    pytest,
-    shutil,
     sqlite3,
 )
 
@@ -107,11 +108,11 @@ def test_undo_edit_marks_source_and_appends_audit_record(tmp_path: Path) -> None
     try:
         db.insert_item(
             {
-                "id": item_id,
+                "id"      : item_id,
                 "owner_id": owner_id,
-                "type": "note",
-                "title": "旧标题",
-                "content": "正文",
+                "type"    : "note",
+                "title"   : "旧标题",
+                "content" : "正文",
             }
         )
         assert db.update_item(
@@ -120,11 +121,11 @@ def test_undo_edit_marks_source_and_appends_audit_record(tmp_path: Path) -> None
             owner_id,
             item_type     = "note",
             operation_log = {
-                "user_id": owner_id,
-                "action": "edit_note",
+                "user_id"  : owner_id,
+                "action"   : "edit_note",
                 "item_type": "note",
-                "item_id": item_id,
-                "details": {"old_values": {"title": "旧标题"}},
+                "item_id"  : item_id,
+                "details"  : {"old_values": {"title": "旧标题"}},
             },
         )
 
@@ -164,11 +165,11 @@ def test_undo_edit_marks_source_and_appends_audit_record(tmp_path: Path) -> None
         (
             "ledger",
             {
-                "amount": 1,
-                "amount_cents": 100,
+                "amount"          : 1,
+                "amount_cents"    : 100,
                 "transaction_type": "expense",
-                "ledger_date": "2030-01-01",
-                "ledger_category": "餐饮",
+                "ledger_date"     : "2030-01-01",
+                "ledger_category" : "餐饮",
             },
         ),
     ],
@@ -183,8 +184,8 @@ def test_cross_client_edits_undo_in_order_with_versions(db, kind, fields):
         {"title": "聊天修改"},
         owner,
         operation_log={
-            "user_id": owner,
-            "action": f"edit_{kind}",
+            "user_id"  : owner,
+            "action"   : f"edit_{kind}",
             "item_type": kind,
         },
     )
@@ -204,8 +205,8 @@ def test_undo_preserves_a_later_write_without_an_edit_log(db):
         {"title": "聊天修改"},
         owner,
         operation_log={
-            "user_id": owner,
-            "action": "edit_note",
+            "user_id"  : owner,
+            "action"   : "edit_note",
             "item_type": "note",
         },
     )
@@ -355,13 +356,13 @@ def test_undo_delete_restores_logged_task_and_note_batches():
         for item_id, title in (("task-a", "A"), ("task-b", "B")):
             db.insert_item(
                 {
-                    "id": item_id,
-                    "owner_id": owner_id,
-                    "type": "task",
-                    "title": title,
-                    "category": "工作",
-                    "status": "open",
-                    "priority": 3,
+                    "id"        : item_id,
+                    "owner_id"  : owner_id,
+                    "type"      : "task",
+                    "title"     : title,
+                    "category"  : "工作",
+                    "status"    : "open",
+                    "priority"  : 3,
                     "created_at": "2026-04-30T09:00:00",
                     "updated_at": "2026-04-30T09:00:00",
                 }
@@ -400,12 +401,12 @@ def test_undo_delete_restores_logged_task_and_note_batches():
         for item_id, title in (("note-a", "NA"), ("note-b", "NB")):
             db.insert_item(
                 {
-                    "id": item_id,
-                    "owner_id": owner_id,
-                    "type": "note",
-                    "title": title,
-                    "content": "body",
-                    "category": "知识",
+                    "id"        : item_id,
+                    "owner_id"  : owner_id,
+                    "type"      : "note",
+                    "title"     : title,
+                    "content"   : "body",
+                    "category"  : "知识",
                     "created_at": "2026-04-30T10:00:00",
                     "updated_at": "2026-04-30T10:00:00",
                 }
@@ -435,13 +436,13 @@ def test_undo_delete_restores_event_collection_and_children_from_log():
     try:
         db.create_event_collection(
             {
-                "id": "coll-undo",
-                "owner_id": owner_id,
-                "kind": "multi_node",
-                "title": "项目发布",
-                "category": "项目",
+                "id"        : "coll-undo",
+                "owner_id"  : owner_id,
+                "kind"      : "multi_node",
+                "title"     : "项目发布",
+                "category"  : "项目",
                 "start_time": "2030-05-01T10:00:00",
-                "end_time": "2030-05-02T18:00:00",
+                "end_time"  : "2030-05-02T18:00:00",
                 "created_at": "2026-04-30T09:00:00",
                 "updated_at": "2026-04-30T09:00:00",
             }
@@ -452,18 +453,18 @@ def test_undo_delete_restores_event_collection_and_children_from_log():
         ):
             db.insert_item(
                 {
-                    "id": item_id,
-                    "owner_id": owner_id,
-                    "type": "event",
-                    "title": title,
-                    "category": "项目",
-                    "start_time": start_time,
-                    "event_role": "multi_node_child",
-                    "event_collection_id": "coll-undo",
+                    "id"                   : item_id,
+                    "owner_id"             : owner_id,
+                    "type"                 : "event",
+                    "title"                : title,
+                    "category"             : "项目",
+                    "start_time"           : start_time,
+                    "event_role"           : "multi_node_child",
+                    "event_collection_id"  : "coll-undo",
                     "event_collection_kind": "multi_node",
-                    "event_index": index,
-                    "created_at": "2026-04-30T09:00:00",
-                    "updated_at": "2026-04-30T09:00:00",
+                    "event_index"          : index,
+                    "created_at"           : "2026-04-30T09:00:00",
+                    "updated_at"           : "2026-04-30T09:00:00",
                 }
             )
 
@@ -492,24 +493,24 @@ def test_rebuild_fts_index_repairs_missing_and_stale_rows():
     try:
         db.insert_item(
             {
-                "id": "note-live",
-                "owner_id": owner_id,
-                "type": "note",
-                "title": "全文索引修复",
-                "content": "可搜索正文",
-                "category": "研究",
+                "id"        : "note-live",
+                "owner_id"  : owner_id,
+                "type"      : "note",
+                "title"     : "全文索引修复",
+                "content"   : "可搜索正文",
+                "category"  : "研究",
                 "created_at": "2026-04-30T09:00:00",
                 "updated_at": "2026-04-30T09:00:00",
             }
         )
         db.insert_item(
             {
-                "id": "note-deleted",
-                "owner_id": owner_id,
-                "type": "note",
-                "title": "应删除索引",
-                "content": "旧正文",
-                "category": "研究",
+                "id"        : "note-deleted",
+                "owner_id"  : owner_id,
+                "type"      : "note",
+                "title"     : "应删除索引",
+                "content"   : "旧正文",
+                "category"  : "研究",
                 "created_at": "2026-04-30T09:00:00",
                 "updated_at": "2026-04-30T09:00:00",
             }

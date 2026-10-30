@@ -123,11 +123,11 @@ class TestOneBotEvent:
     def test_model_validate_dict(self):
         """测试从字典验证"""
         data = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "group",
-            "user_id": 12345,
-            "group_id": 67890,
-            "message": "test",
+            "user_id"     : 12345,
+            "group_id"    : 67890,
+            "message"     : "test",
         }
         event = OneBotEvent.model_validate(data)
         assert event.post_type == "message"
@@ -136,8 +136,8 @@ class TestOneBotEvent:
     def test_extra_fields_allowed(self):
         """测试允许额外字段"""
         data = {
-            "post_type": "message",
-            "custom_field": "custom_value",
+            "post_type"    : "message",
+            "custom_field" : "custom_value",
             "another_field": 123,
         }
         event = OneBotEvent.model_validate(data)
@@ -361,13 +361,13 @@ class TestPluginManifest:
     def test_model_validate_from_dict(self):
         """测试从字典验证"""
         data = {
-            "name": "test",
-            "version": "2.0.0",
+            "name"    : "test",
+            "version" : "2.0.0",
             "commands": [
                 {
-                    "name": "hello",
+                    "name"    : "hello",
                     "triggers": ["hello"],
-                    "help": "Say hello",
+                    "help"    : "Say hello",
                 }
             ],
         }
@@ -382,7 +382,7 @@ class TestPluginManifest:
         with pytest.raises(ValidationError, match="duplicate stable names"):
             PluginManifest.model_validate(
                 {
-                    "name": "test",
+                    "name"    : "test",
                     "commands": [command, {**command, "triggers": ["two"]}],
                 }
             )
@@ -391,20 +391,20 @@ class TestPluginManifest:
         child = {"name": "level9", "help": "level 9", "usage": "/deep"}
         for depth in range(8, 1, -1):
             child = {
-                "name": f"level{depth}",
-                "help": f"level {depth}",
-                "usage": "/deep",
+                "name"       : f"level{depth}",
+                "help"       : f"level {depth}",
+                "usage"      : "/deep",
                 "subcommands": [child],
             }
         with pytest.raises(ValidationError, match="8 levels"):
             PluginManifest.model_validate(
                 {
-                    "name": "test",
+                    "name"    : "test",
                     "commands": [
                         {
-                            "name": "deep",
-                            "triggers": ["deep"],
-                            "help": "deep",
+                            "name"       : "deep",
+                            "triggers"   : ["deep"],
+                            "help"       : "deep",
                             "subcommands": [child],
                         }
                     ],
@@ -416,13 +416,13 @@ class TestPluginManifest:
         for root_index in range(5):
             commands.append(
                 {
-                    "name": f"root{root_index}",
-                    "triggers": [f"root{root_index}"],
-                    "help": "root",
+                    "name"       : f"root{root_index}",
+                    "triggers"   : [f"root{root_index}"],
+                    "help"       : "root",
                     "subcommands": [
                         {
-                            "name": f"child{child_index}",
-                            "help": "child",
+                            "name" : f"child{child_index}",
+                            "help" : "child",
                             "usage": "/root child",
                         }
                         for child_index in range(128)
@@ -443,19 +443,19 @@ class TestPluginManifest:
 
         invalid_services = [
             {
-                "name": "voice.synthesize_text",
+                "name"    : "voice.synthesize_text",
                 "callback": "_private",
-                "callers": ["smalltalk"],
+                "callers" : ["smalltalk"],
             },
             {
-                "name": "voice.synthesize_text",
+                "name"    : "voice.synthesize_text",
                 "callback": "convert_text_to_voice",
-                "callers": ["shell"],
+                "callers" : ["shell"],
             },
             {
-                "name": "shell.handle",
+                "name"    : "shell.handle",
                 "callback": "handle",
-                "callers": ["smalltalk"],
+                "callers" : ["smalltalk"],
             },
         ]
         for raw_service in invalid_services:
@@ -473,9 +473,9 @@ class TestPluginManifest:
 
     def test_codex_service_requires_exact_capability_and_caller(self):
         valid = {
-            "name": "codex.enqueue_arxiv_summary",
-            "callback": "enqueue_arxiv_summary_service",
-            "callers": ["arxiv_filter"],
+            "name"               : "codex.enqueue_arxiv_summary",
+            "callback"           : "enqueue_arxiv_summary_service",
+            "callers"            : ["arxiv_filter"],
             "required_capability": "codex_arxiv_summary",
         }
         assert PluginManifest(name="codex", services=[valid]).services
@@ -503,7 +503,7 @@ class TestPluginManifest:
             {"name": "other", "capabilities": ["secret_admin"]},
             {"name": "qingssh", "capabilities": ["secret_admin"]},
             {
-                "name": "bot_core",
+                "name"        : "bot_core",
                 "capabilities": ["secret_admin", "secret_admin"],
             },
         ):
@@ -517,16 +517,16 @@ class TestPluginManifest:
         )
         assert smalltalk.uses_services == ["chat.reply", "voice.synthesize_text"]
         observer = {
-            "name": "core.observe_outgoing_action",
+            "name"    : "core.observe_outgoing_action",
             "callback": "observe_outgoing_action",
-            "callers": ["core"],
+            "callers" : ["core"],
         }
         assert PluginManifest(name="xiaoqing_chat", services=[observer]).services
 
         for payload in (
             {"name": "shell", "uses_services": ["chat.reply"]},
             {
-                "name": "smalltalk",
+                "name"         : "smalltalk",
                 "uses_services": ["chat.reply", "chat.reply"],
             },
             {"name": "other", "services": [observer]},

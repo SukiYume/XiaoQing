@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
+from pathlib import Path
+from unittest.mock import AsyncMock, Mock
+
+import pytest
+
 import tests.helpers.plugin_manager_test_support as _fixture_support
 from tests.helpers.plugin_manager_test_support import (
-    AsyncMock,
     ConcurrentFuture,
     LoadedPlugin,
-    Mock,
     ModuleType,
-    Path,
     PluginExecutionGate,
     PluginExecutionPolicy,
     PluginLifecycleFatalError,
@@ -18,11 +22,8 @@ from tests.helpers.plugin_manager_test_support import (
     _build_manager,
     _FatalLifecycleError,
     _write_runtime_manifest,
-    asyncio,
     call_plugin_callback,
-    pytest,
     textwrap,
-    threading,
 )
 
 _isolate_process_global_plugin_import_state = (
@@ -188,7 +189,7 @@ def test_purge_uses_exact_raw_parent_bindings_without_module_hooks(tmp_path: Pat
     sys.modules[module_a.__name__]                  = module_a
     sys.modules[module_b.__name__]                  = module_b
     manager._private_plugin_modules["atomic_probe"] = {
-        package.__name__: package,
+        package.__name__ : package,
         module_a.__name__: module_a,
         module_b.__name__: module_b,
     }
@@ -807,7 +808,7 @@ async def test_wait_inits_logs_timeout_from_async_init(tmp_path: Path, caplog):
     manager = _build_manager(tmp_path)
 
     async def timeout():
-        raise asyncio.TimeoutError()
+        raise TimeoutError()
 
     task = asyncio.create_task(timeout())
     manager._init_tasks.append(task)
@@ -947,7 +948,7 @@ async def test_late_fatal_after_init_timeout_outranks_timeout_after_cleanup(
     manager = _build_manager(tmp_path)
     manager.configure_execution(
         {
-            "timeout_seconds": 0.01,
+            "timeout_seconds"      : 0.01,
             "drain_timeout_seconds": 0.2,
         }
     )

@@ -114,9 +114,16 @@ async def read_property(io: Any, device: dict[str, Any], cap: dict[str, Any]) ->
     if not isinstance(result, list) or len(result) != 1 or not isinstance(result[0], dict):
         raise BridgeError("设备属性响应格式异常。")
     item = result[0]
-    if item.get("code") != 0 or "value" not in item:
+    code = item.get("code")
+    if type(code) is not int or code != 0 or "value" not in item:
         raise BridgeError(f"{device['name']} 的 {cap['name']} 暂时读取失败。")
-    if item.get("siid", cap["siid"]) != cap["siid"] or item.get("piid", cap["iid"]) != cap["iid"]:
+    # 回报必须属于请求的那台设备和那个属性：其他设备的同编号属性不能当作目标状态，
+    # 设置后回读也据此决定是否继续后续动作。
+    if (
+        str(item.get("did", "")) != str(device["did"])
+        or item.get("siid", cap["siid"]) != cap["siid"]
+        or item.get("piid", cap["iid"]) != cap["iid"]
+    ):
         raise BridgeError("设备属性响应身份不匹配。")
     return {"value": item["value"], "updated_at": item.get("updateTime")}
 
@@ -143,13 +150,18 @@ async def execute_plan(
     event: dict[str, Any],
     profile: dict[str, Any] | None = None,
     *,
-    original_request: str | None = None,
+    original_request: str | list[str] | None = None,
 ) -> str:
     items = validate_plan(catalog, plan)
     if original_request is not None:
-        if not isinstance(original_request, str) or not original_request.strip():
+        texts = [original_request] if isinstance(original_request, str) else original_request
+        if (
+            not isinstance(texts, list)
+            or not texts
+            or not all(isinstance(item, str) and item.strip() for item in texts)
+        ):
             raise BridgeError("original_request 需要包含本次任务要求。")
-        check_requested_amount(original_request, items, catalog)
+        check_requested_amount(texts, items, catalog)
     if any(item["cap"].get("transport") == "speaker_silent" for item in items):
         if not profile or profile.get("directive", {}).get("inputs", []).count("silent") != 1:
             raise BridgeError("红外扩展需要绑定支持静默文字执行的小爱音箱。")

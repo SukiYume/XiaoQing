@@ -670,17 +670,25 @@ def commit() -> None:
     mark_sent(receipt.message_ids)  # IDs for all delivered messages, including each part of a split reply
 
 
+def unknown() -> None:
+    # Handed to the transport without an acknowledgement: it may or may not have been
+    # delivered, and message_ids may be empty. Do not treat it as confirmed delivery,
+    # and do not roll back to a re-claimable state, or the content may be sent twice.
+    mark_delivery_unknown()
+
+
 receipt = DeliveryReceipt(
     expected_actions = 1,
     commit           = commit,
     rollback         = release_reservation,
-    unknown          = commit,
+    unknown          = unknown,
 )
 return DeliverySegments(reply, receipt)
 ```
 
 Core calls `commit` after all physical messages receive acknowledgement.
 It calls `rollback` on definite failure and `unknown` on an unknown result.
+The plugin decides what an unknown result means: announcements may treat it as done (at-most-once) to avoid duplicates, while reliable deliveries should keep a queryable "unknown" state. State the chosen policy in the help text and README.
 Each callback executes at most once.
 Proactive delivery uses `send_with_receipt(context.send_action, action, receipt)`.
 

@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import pytest
+
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
-from tests.helpers.xiaoqing_chat_test_support import (
-    AsyncMock,
-    MagicMock,
-    Mock,
-    SimpleNamespace,
-    asyncio,
-    patch,
-    pytest,
-    time,
-)
 
 mock_context       = _fixture_support.mock_context
 sample_group_event = _fixture_support.sample_group_event

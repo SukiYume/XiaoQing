@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+from typing import Any
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
 import tests.helpers.onebot_test_support as _fixture_support
 from tests.helpers.onebot_test_support import (
-    Any,
-    AsyncMock,
     OneBotWsClient,
     _QueuedOneBotEvent,
-    asyncio,
-    patch,
-    pytest,
 )
 
 bounded_transport_adapter = _fixture_support.bounded_transport_adapter
@@ -90,7 +91,7 @@ class TestOneBotWebSocketQueues:
                         auth_state = client._endpoint_auth,
                     )
                 )
-                raise asyncio.TimeoutError()
+                raise TimeoutError()
             return await real_get()
 
         task                     = asyncio.create_task(client._drain_queue(key, handler))

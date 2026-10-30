@@ -19,10 +19,10 @@ MEMBER_ID = 30003
 
 def tool_call(name: str, arguments: dict[str, Any] | str, call_id: str = "") -> dict[str, Any]:
     return {
-        "id": call_id or f"call-{name}",
-        "type": "function",
+        "id"      : call_id or f"call-{name}",
+        "type"    : "function",
         "function": {
-            "name": name,
+            "name"     : name,
             "arguments": arguments if isinstance(arguments, str) else json.dumps(arguments),
         },
     }
@@ -134,10 +134,10 @@ class FakeAgentContext:
         plugin = {**self.agent_config, **self.extra_config}
         return PluginSettingsSnapshot(
             config={
-                "bot_name": "小青",
-                "timezone": "Asia/Shanghai",
+                "bot_name"        : "小青",
+                "timezone"        : "Asia/Shanghai",
                 "command_prefixes": ["/"],
-                "plugins": {"xiaoqing_agent": plugin},
+                "plugins"         : {"xiaoqing_agent": plugin},
             },
             secrets  = {},
             revision = 0,

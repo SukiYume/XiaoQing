@@ -60,162 +60,162 @@ def _seed_items(db: Database) -> None:
 
     db.insert_item(
         {
-            "id": "event_in",
-            "owner_id": OWNER_ID,
-            "type": "event",
-            "title": "月内会议",
-            "category": "工作",
-            "start_time": "2026-03-04T10:00:00+08:00",
-            "end_time": "2026-03-04T11:00:00+08:00",
-            "timezone": "Asia/Shanghai",
-            "location": "会议室",
+            "id"          : "event_in",
+            "owner_id"    : OWNER_ID,
+            "type"        : "event",
+            "title"       : "月内会议",
+            "category"    : "工作",
+            "start_time"  : "2026-03-04T10:00:00+08:00",
+            "end_time"    : "2026-03-04T11:00:00+08:00",
+            "timezone"    : "Asia/Shanghai",
+            "location"    : "会议室",
             "participants": ["A", "B"],
             "remind_times": ["2026-03-04T09:30:00+08:00"],
-            "notes": "带纪要",
-            "created_at": "2026-03-01T09:00:00+08:00",
-            "updated_at": "2026-03-01T09:00:00+08:00",
+            "notes"       : "带纪要",
+            "created_at"  : "2026-03-01T09:00:00+08:00",
+            "updated_at"  : "2026-03-01T09:00:00+08:00",
         }
     )
     db.insert_item(
         {
-            "id": "event_out",
-            "owner_id": OWNER_ID,
-            "type": "event",
-            "title": "月外会议",
-            "category": "工作",
+            "id"        : "event_out",
+            "owner_id"  : OWNER_ID,
+            "type"      : "event",
+            "title"     : "月外会议",
+            "category"  : "工作",
             "start_time": "2026-02-26T10:00:00+08:00",
-            "end_time": "2026-02-26T11:00:00+08:00",
+            "end_time"  : "2026-02-26T11:00:00+08:00",
             "created_at": "2026-02-25T09:00:00+08:00",
             "updated_at": "2026-02-25T09:00:00+08:00",
         }
     )
     db.insert_item(
         {
-            "id": "task_due_in",
-            "owner_id": OWNER_ID,
-            "type": "task",
-            "title": "月内待办",
-            "content": "有截止时间",
-            "category": "工作",
-            "plan_date": "2026-03-11",
-            "deadline_at": "2026-03-11T18:00:00+08:00",
-            "priority": 2,
-            "status": "open",
+            "id"          : "task_due_in",
+            "owner_id"    : OWNER_ID,
+            "type"        : "task",
+            "title"       : "月内待办",
+            "content"     : "有截止时间",
+            "category"    : "工作",
+            "plan_date"   : "2026-03-11",
+            "deadline_at" : "2026-03-11T18:00:00+08:00",
+            "priority"    : 2,
+            "status"      : "open",
             "remind_times": ["2026-03-11T09:00:00+08:00"],
-            "created_at": "2026-03-02T09:00:00+08:00",
-            "updated_at": "2026-03-02T09:00:00+08:00",
+            "created_at"  : "2026-03-02T09:00:00+08:00",
+            "updated_at"  : "2026-03-02T09:00:00+08:00",
         }
     )
     db.insert_item(
         {
-            "id": "task_fallback_created",
-            "owner_id": OWNER_ID,
-            "type": "task",
-            "title": "无截止待办",
-            "content": "靠创建时间命中",
-            "category": "个人",
-            "priority": 3,
-            "status": "open",
+            "id"        : "task_fallback_created",
+            "owner_id"  : OWNER_ID,
+            "type"      : "task",
+            "title"     : "无截止待办",
+            "content"   : "靠创建时间命中",
+            "category"  : "个人",
+            "priority"  : 3,
+            "status"    : "open",
             "created_at": "2026-03-12T09:00:00+08:00",
             "updated_at": "2026-03-12T09:00:00+08:00",
         }
     )
     db.insert_item(
         {
-            "id": "task_out",
-            "owner_id": OWNER_ID,
-            "type": "task",
-            "title": "月外待办",
-            "content": "不应导出",
-            "category": "个人",
-            "plan_date": "2026-02-10",
+            "id"         : "task_out",
+            "owner_id"   : OWNER_ID,
+            "type"       : "task",
+            "title"      : "月外待办",
+            "content"    : "不应导出",
+            "category"   : "个人",
+            "plan_date"  : "2026-02-10",
             "deadline_at": "2026-02-10T18:00:00+08:00",
-            "priority": 3,
-            "status": "open",
-            "created_at": "2026-02-02T09:00:00+08:00",
-            "updated_at": "2026-02-02T09:00:00+08:00",
+            "priority"   : 3,
+            "status"     : "open",
+            "created_at" : "2026-02-02T09:00:00+08:00",
+            "updated_at" : "2026-02-02T09:00:00+08:00",
         }
     )
     db.insert_item(
         {
-            "id": "ledger_in",
-            "owner_id": OWNER_ID,
-            "type": "ledger",
-            "title": "午饭",
-            "amount": 23.5,
+            "id"              : "ledger_in",
+            "owner_id"        : OWNER_ID,
+            "type"            : "ledger",
+            "title"           : "午饭",
+            "amount"          : 23.5,
             "transaction_type": "expense",
-            "ledger_category": "餐饮",
-            "ledger_date": "2026-03-08",
-            "remark": "食堂",
-            "created_at": "2026-03-08T12:00:00+08:00",
-            "updated_at": "2026-03-08T12:00:00+08:00",
+            "ledger_category" : "餐饮",
+            "ledger_date"     : "2026-03-08",
+            "remark"          : "食堂",
+            "created_at"      : "2026-03-08T12:00:00+08:00",
+            "updated_at"      : "2026-03-08T12:00:00+08:00",
         }
     )
     db.insert_item(
         {
-            "id": "ledger_out",
-            "owner_id": OWNER_ID,
-            "type": "ledger",
-            "title": "旧账单",
-            "amount": 12,
+            "id"              : "ledger_out",
+            "owner_id"        : OWNER_ID,
+            "type"            : "ledger",
+            "title"           : "旧账单",
+            "amount"          : 12,
             "transaction_type": "expense",
-            "ledger_category": "交通",
-            "ledger_date": "2026-02-08",
-            "created_at": "2026-02-08T12:00:00+08:00",
-            "updated_at": "2026-02-08T12:00:00+08:00",
+            "ledger_category" : "交通",
+            "ledger_date"     : "2026-02-08",
+            "created_at"      : "2026-02-08T12:00:00+08:00",
+            "updated_at"      : "2026-02-08T12:00:00+08:00",
         }
     )
     db.insert_item(
         {
-            "id": "note_in",
-            "owner_id": OWNER_ID,
-            "type": "note",
-            "title": "月内笔记",
-            "content": "笔记正文",
-            "category": "知识",
-            "tags": ["学习", "导入"],
-            "references": [{"kind": "item", "id": "task_due_in"}],
+            "id"           : "note_in",
+            "owner_id"     : OWNER_ID,
+            "type"         : "note",
+            "title"        : "月内笔记",
+            "content"      : "笔记正文",
+            "category"     : "知识",
+            "tags"         : ["学习", "导入"],
+            "references"   : [{"kind": "item", "id": "task_due_in"}],
             "related_items": ["event_in"],
-            "created_at": "2026-03-09T20:00:00+08:00",
-            "updated_at": "2026-03-09T20:00:00+08:00",
+            "created_at"   : "2026-03-09T20:00:00+08:00",
+            "updated_at"   : "2026-03-09T20:00:00+08:00",
         }
     )
     db.insert_item(
         {
-            "id": "note_out",
-            "owner_id": OWNER_ID,
-            "type": "note",
-            "title": "旧笔记",
-            "content": "过期",
-            "category": "知识",
+            "id"        : "note_out",
+            "owner_id"  : OWNER_ID,
+            "type"      : "note",
+            "title"     : "旧笔记",
+            "content"   : "过期",
+            "category"  : "知识",
             "created_at": "2026-02-09T20:00:00+08:00",
             "updated_at": "2026-02-09T20:00:00+08:00",
         }
     )
     db.insert_item(
         {
-            "id": "diary_in",
-            "owner_id": OWNER_ID,
-            "type": "diary",
-            "title": "月内日记",
-            "content": "今天很顺利",
-            "diary_date": "2026-03-15",
-            "mood": "happy",
-            "mood_score": 8,
-            "weather": "sunny",
-            "location": "上海",
+            "id"         : "diary_in",
+            "owner_id"   : OWNER_ID,
+            "type"       : "diary",
+            "title"      : "月内日记",
+            "content"    : "今天很顺利",
+            "diary_date" : "2026-03-15",
+            "mood"       : "happy",
+            "mood_score" : 8,
+            "weather"    : "sunny",
+            "location"   : "上海",
             "template_id": "tpl-1",
-            "created_at": "2026-03-15T22:00:00+08:00",
-            "updated_at": "2026-03-15T22:00:00+08:00",
+            "created_at" : "2026-03-15T22:00:00+08:00",
+            "updated_at" : "2026-03-15T22:00:00+08:00",
         }
     )
     db.insert_item(
         {
-            "id": "diary_out",
-            "owner_id": OWNER_ID,
-            "type": "diary",
-            "title": "旧日记",
-            "content": "不在范围内",
+            "id"        : "diary_out",
+            "owner_id"  : OWNER_ID,
+            "type"      : "diary",
+            "title"     : "旧日记",
+            "content"   : "不在范围内",
             "diary_date": "2026-02-15",
             "created_at": "2026-02-15T22:00:00+08:00",
             "updated_at": "2026-02-15T22:00:00+08:00",
@@ -231,11 +231,11 @@ def _build_sample_bundle_bytes(
 ) -> bytes:
     files = []
     paths = {
-        "event": "data/events.ndjson",
-        "task": "data/tasks.ndjson",
-        "note": "data/notes.ndjson",
-        "ledger": "data/ledger.ndjson",
-        "diary": "data/diary.ndjson",
+        "event"           : "data/events.ndjson",
+        "task"            : "data/tasks.ndjson",
+        "note"            : "data/notes.ndjson",
+        "ledger"          : "data/ledger.ndjson",
+        "diary"           : "data/diary.ndjson",
         "event_collection": "data/event_collections.ndjson",
     }
     for item_type, rows in records_by_type.items():
@@ -244,9 +244,9 @@ def _build_sample_bundle_bytes(
         )
         files.append(
             {
-                "path": paths[item_type],
-                "type": item_type,
-                "count": len(rows),
+                "path"  : paths[item_type],
+                "type"  : item_type,
+                "count" : len(rows),
                 "sha256": hashlib.sha256(content).hexdigest(),
             }
         )
@@ -288,9 +288,9 @@ def _build_single_member_manifest(
         {"types": [item_type], "preset": "all", "start": None, "end": None},
         [
             {
-                "path": transfer_bundle_module.TYPE_FILE_NAMES[item_type],
-                "type": item_type,
-                "count": count,
+                "path"  : transfer_bundle_module.TYPE_FILE_NAMES[item_type],
+                "type"  : item_type,
+                "count" : count,
                 "sha256": hashlib.sha256(content).hexdigest(),
             }
         ],
@@ -301,12 +301,24 @@ def _build_single_member_manifest(
 class _ImportRequest:
     """满足传输 API 直接调用所需最小接口的请求替身。"""
 
-    def __init__(self, body: bytes, headers: dict[str, Any] | None = None) -> None:
-        self._body   = body
-        self.headers = headers or {}
+    def __init__(
+        self,
+        body: bytes,
+        headers: dict[str, Any] | None = None,
+        *,
+        chunk_size: int = 16,
+    ) -> None:
+        self._body      = body
+        self.headers    = headers or {}
+        self.chunk_size = chunk_size
+        self.consumed   = 0
 
-    async def body(self) -> bytes:
-        return self._body
+    async def stream(self):
+        # 与 Starlette 一样分块交出请求体，并记录实际被消费的字节数。
+        for start in range(0, len(self._body), self.chunk_size):
+            chunk = self._body[start : start + self.chunk_size]
+            self.consumed += len(chunk)
+            yield chunk
 
 
 def _simple_task_bundle(source_id: str) -> bytes:
@@ -316,11 +328,11 @@ def _simple_task_bundle(source_id: str) -> bytes:
         {
             "task": [
                 {
-                    "_type": "task",
+                    "_type"  : "task",
                     "_schema": 2,
-                    "id": source_id,
-                    "title": "线程响应性测试",
-                    "status": "open",
+                    "id"     : source_id,
+                    "title"  : "线程响应性测试",
+                    "status" : "open",
                 }
             ]
         }

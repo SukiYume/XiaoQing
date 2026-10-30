@@ -170,12 +170,12 @@ class DeliveryReceipt:
 class CommandOutcome:
     """执行状态、机器可读结果与下一页命令；后台任务由原插件通知完成。"""
 
-    state: Literal["completed", "accepted", "error", "incomplete"]
+    state       : Literal["completed", "accepted", "error", "incomplete"]
     next_command: str = ""
-    result_text: str  = ""
+    result_text : str = ""
     # None 表示插件尚未提供分页完整性证据；False 表示已到查询末页。
     has_more: bool | None = None
-    page: int | None      = None
+    page    : int | None  = None
 
 
 class DeliverySegments(list[dict[str, Any]]):
@@ -197,7 +197,7 @@ class DeliverySegments(list[dict[str, Any]]):
 class ScheduledDelivery:
     """One target-specific scheduled message that Core validates and sends."""
 
-    target: DeliveryTarget
+    target : DeliveryTarget
     message: tuple[dict[str, Any], ...]
     receipt: DeliveryReceipt | None = None
 
@@ -272,7 +272,9 @@ def strip_receipt(action: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def resolve_action_handoff(action: dict[str, Any], *, delivered: bool) -> dict[str, Any]:
+async def resolve_action_handoff(
+    action: dict[str, Any], *, delivered: bool | None
+) -> dict[str, Any]:
     """移除内部状态并记录一次真实 transport 结果。"""
     clean   = strip_receipt(action)
     receipt = receipt_from_action(action)

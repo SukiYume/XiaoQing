@@ -36,9 +36,9 @@ _PLUGIN_PUBLIC_CONFIG_KEYS = (
 class _ScopedPluginView(Mapping[str, Any]):
     """Immutable mapping carrying the scope that produced its frozen view."""
 
-    value: Mapping[str, Any]
+    value      : Mapping[str, Any]
     plugin_name: str
-    kind: Literal["config", "secrets"]
+    kind       : Literal["config", "secrets"]
 
     def __getitem__(self, key: str) -> Any:
         return self.value[key]
@@ -143,42 +143,42 @@ class _RequestLogger:
 
 @dataclass
 class PluginContext:
-    config: Mapping[str, Any]
-    secrets: Mapping[str, Any]
-    plugin_name: str
-    plugin_dir: Path
-    data_dir: Path
-    http_session: aiohttp.ClientSession | None
-    send_action: SendAction
-    reload_config: Callable[[], Any]
-    reload_plugins: Callable[[], Any]
+    config             : Mapping[str, Any]
+    secrets            : Mapping[str, Any]
+    plugin_name        : str
+    plugin_dir         : Path
+    data_dir           : Path
+    http_session       : aiohttp.ClientSession | None
+    send_action        : SendAction
+    reload_config      : Callable[[], Any]
+    reload_plugins     : Callable[[], Any]
     get_command_catalog: Callable[[], tuple["CommandCatalogNode", ...]]
-    list_plugins: Callable[[], list[str]]
-    metrics: "MetricsCollector | None" = None
+    list_plugins       : Callable[[], list[str]]
+    metrics            : "MetricsCollector | None" = None
     # 会话管理器（用于多轮对话）
     session_manager: "SessionManager | None" = None
     # 当前事件的 user_id 和 group_id（由 dispatcher 注入）
-    current_user_id: int | None  = None
+    current_user_id : int | None = None
     current_group_id: int | None = None
     # 静音控制接口
     mute_control: MuteControl | None = None
     # ConfigManager 引用（用于更新配置）
-    config_manager: ConfigManagerLike | None                     = None
+    config_manager : ConfigManagerLike | None                    = None
     settings_reader: Callable[[], PluginSettingsSnapshot] | None = field(
         default = None,
         repr    = False,
     )
-    secret_reader: Callable[[str], Any] | None = field(default=None, repr=False)
-    secret_writer: Callable[[str, Any], None] | None = field(default=None, repr=False)
+    secret_reader : Callable[[str], Any] | None = field(default=None, repr=False)
+    secret_writer : Callable[[str, Any], None] | None = field(default=None, repr=False)
     secret_deleter: Callable[[str], bool] | None = field(default=None, repr=False)
-    principal: PluginPrincipal = field(
+    principal     : PluginPrincipal = field(
         default_factory=lambda: PluginPrincipal(kind="lifecycle"),
     )
-    capabilities: PluginCapabilities = field(default_factory=PluginCapabilities)
-    request_id: str | None                         = None
+    capabilities      : PluginCapabilities = field(default_factory=PluginCapabilities)
+    request_id        : str | None                 = None
     command_invocation: "CommandInvocation | None" = None
-    state: dict[str, Any] = field(default_factory=dict)
-    logger: Any = field(init=False, repr=False)
+    state             : dict[str, Any] = field(default_factory=dict)
+    logger            : Any = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         # Enforce the least-privilege view even for extension/test factories that

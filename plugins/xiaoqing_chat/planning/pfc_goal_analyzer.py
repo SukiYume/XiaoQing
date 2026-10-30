@@ -10,6 +10,7 @@ from ..llm.gateway import chat_completions_raw_with_fallback_paths, extract_resp
 from ..llm.llm_config import LLMCallConfig
 from ..llm.prompt_builder import build_dialogue_prompt
 from ..memory.memory import StoredMessage
+from ..utils.json_parsing import parse_first_json_value
 from .pfc_utils import get_items_from_json
 
 
@@ -71,13 +72,18 @@ async def analyze_goals(
 
     try:
         resp, _path = await chat_completions_raw_with_fallback_paths(
+            route    = "reasoning",
             secrets  = secrets,
             messages = [{"role": "user", "content": prompt}],
-            **llm.bounded(max_temperature=0.7, max_tokens=1200, min_tokens=700).as_kwargs(),
+            **llm.as_kwargs(),
         )
     except Exception:
         return list(current_goal_list)
     content = extract_response_content(resp)
+    # 合法的空数组表示“所有目标都已完成或失效”，必须能清掉最后一个目标；
+    # 格式错误或条目全部无效时才保留旧目标。
+    if parse_first_json_value(str(content or "").strip()) == []:
+        return []
     ok, result = get_items_from_json(
         str(content),
         "goal",

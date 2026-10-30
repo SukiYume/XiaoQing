@@ -377,8 +377,8 @@ class TestSessionDataOperations:
             group_id     = 50001,
             plugin_name  = "test",
             initial_data = {
-                "list": [1, 2, 3],
-                "dict": {"nested": "value"},
+                "list"      : [1, 2, 3],
+                "dict"      : {"nested": "value"},
                 "empty_list": [],
             },
         )
