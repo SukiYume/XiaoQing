@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
 
 from tests.helpers.pendo_test_support import (
-    Path,
     PluginCapabilities,
-    SimpleNamespace,
-    _build_task,
-    _FakeDb,
     _StubCaptureHandler,
     _StubExporter,
     _StubSimpleHandler,
     _StubTaskHandler,
-    asyncio,
     reset_pendo_runtime_config,
 )
 
@@ -50,11 +49,11 @@ class TestPendoRuntimeBoundaries:
         )
         assert PendoConfig.configure(
             {
-                "web_enabled": expected.web_enabled,
-                "web_host": expected.web_host,
-                "web_port": expected.web_port,
+                "web_enabled"              : expected.web_enabled,
+                "web_host"                 : expected.web_host,
+                "web_port"                 : expected.web_port,
                 "web_session_cookie_secure": expected.web_session_cookie_secure,
-                "web_demo_enabled": expected.web_demo_enabled,
+                "web_demo_enabled"         : expected.web_demo_enabled,
             },
             settings_revision=10,
         )
@@ -126,7 +125,7 @@ class TestPendoRuntimeBoundaries:
             config={
                 "plugins": {
                     "pendo": {
-                        "web_enabled": False,
+                        "web_enabled"     : False,
                         "web_demo_enabled": True,
                     }
                 }
@@ -163,9 +162,9 @@ class TestPendoRuntimeBoundaries:
             config={
                 "plugins": {
                     "pendo": {
-                        "web_enabled": True,
-                        "web_host": "localhost",
-                        "web_port": 12003,
+                        "web_enabled"     : True,
+                        "web_host"        : "localhost",
+                        "web_port"        : 12003,
                         "web_demo_enabled": False,
                     }
                 }
@@ -201,16 +200,16 @@ class TestPendoRuntimeBoundaries:
 
         task_handler = _StubTaskHandler()
         services     = {
-            "db": object(),
+            "db"              : object(),
             "reminder_service": object(),
-            "exporter": _StubExporter(),
-            "event_handler": _StubSimpleHandler(),
-            "task_handler": task_handler,
-            "note_handler": _StubSimpleHandler(),
-            "diary_handler": _StubSimpleHandler(),
-            "search_handler": _StubSimpleHandler(),
-            "ledger_handler": _StubSimpleHandler(),
-            "web_handler": _StubSimpleHandler(),
+            "exporter"        : _StubExporter(),
+            "event_handler"   : _StubSimpleHandler(),
+            "task_handler"    : task_handler,
+            "note_handler"    : _StubSimpleHandler(),
+            "diary_handler"   : _StubSimpleHandler(),
+            "search_handler"  : _StubSimpleHandler(),
+            "ledger_handler"  : _StubSimpleHandler(),
+            "web_handler"     : _StubSimpleHandler(),
         }
 
         monkeypatch.setattr(pendo_main, "_get_services", lambda context: services)
@@ -232,16 +231,16 @@ class TestPendoRuntimeBoundaries:
         from plugins.pendo import main as pendo_main
 
         services = {
-            "db": object(),
+            "db"              : object(),
             "reminder_service": object(),
-            "exporter": _StubExporter(),
-            "event_handler": _StubSimpleHandler(),
-            "task_handler": _StubSimpleHandler(),
-            "note_handler": _StubSimpleHandler(),
-            "diary_handler": _StubSimpleHandler(),
-            "search_handler": _StubSimpleHandler(),
-            "ledger_handler": _StubSimpleHandler(),
-            "web_handler": _StubSimpleHandler(),
+            "exporter"        : _StubExporter(),
+            "event_handler"   : _StubSimpleHandler(),
+            "task_handler"    : _StubSimpleHandler(),
+            "note_handler"    : _StubSimpleHandler(),
+            "diary_handler"   : _StubSimpleHandler(),
+            "search_handler"  : _StubSimpleHandler(),
+            "ledger_handler"  : _StubSimpleHandler(),
+            "web_handler"     : _StubSimpleHandler(),
         }
 
         monkeypatch.setattr(pendo_main, "_get_services", lambda context: services)
@@ -266,16 +265,16 @@ class TestPendoRuntimeBoundaries:
         event_handler = _StubCaptureHandler()
         diary_handler = _StubCaptureHandler()
         services      = {
-            "db": object(),
+            "db"              : object(),
             "reminder_service": object(),
-            "exporter": _StubExporter(),
-            "event_handler": event_handler,
-            "task_handler": task_handler,
-            "note_handler": _StubSimpleHandler(),
-            "diary_handler": diary_handler,
-            "search_handler": _StubSimpleHandler(),
-            "ledger_handler": _StubSimpleHandler(),
-            "web_handler": _StubSimpleHandler(),
+            "exporter"        : _StubExporter(),
+            "event_handler"   : event_handler,
+            "task_handler"    : task_handler,
+            "note_handler"    : _StubSimpleHandler(),
+            "diary_handler"   : diary_handler,
+            "search_handler"  : _StubSimpleHandler(),
+            "ledger_handler"  : _StubSimpleHandler(),
+            "web_handler"     : _StubSimpleHandler(),
         }
 
         monkeypatch.setattr(pendo_main, "_get_services", lambda context: services)
@@ -294,16 +293,16 @@ class TestPendoRuntimeBoundaries:
 
         note_handler = _StubCaptureHandler()
         services     = {
-            "db": object(),
+            "db"              : object(),
             "reminder_service": object(),
-            "exporter": _StubExporter(),
-            "event_handler": _StubSimpleHandler(),
-            "task_handler": _StubSimpleHandler(),
-            "note_handler": note_handler,
-            "diary_handler": _StubSimpleHandler(),
-            "search_handler": _StubSimpleHandler(),
-            "ledger_handler": _StubSimpleHandler(),
-            "web_handler": _StubSimpleHandler(),
+            "exporter"        : _StubExporter(),
+            "event_handler"   : _StubSimpleHandler(),
+            "task_handler"    : _StubSimpleHandler(),
+            "note_handler"    : note_handler,
+            "diary_handler"   : _StubSimpleHandler(),
+            "search_handler"  : _StubSimpleHandler(),
+            "ledger_handler"  : _StubSimpleHandler(),
+            "web_handler"     : _StubSimpleHandler(),
         }
 
         monkeypatch.setattr(pendo_main, "_get_services", lambda context: services)
@@ -332,16 +331,16 @@ class TestPendoRuntimeBoundaries:
             return True
 
         services = {
-            "db": object(),
+            "db"              : object(),
             "reminder_service": object(),
-            "exporter": _StubExporter(),
-            "event_handler": _StubSimpleHandler(),
-            "task_handler": _StubSimpleHandler(),
-            "note_handler": _StubSimpleHandler(),
-            "diary_handler": _StubSimpleHandler(),
-            "search_handler": _StubSimpleHandler(),
-            "ledger_handler": _StubSimpleHandler(),
-            "web_handler": _StubSimpleHandler(),
+            "exporter"        : _StubExporter(),
+            "event_handler"   : _StubSimpleHandler(),
+            "task_handler"    : _StubSimpleHandler(),
+            "note_handler"    : _StubSimpleHandler(),
+            "diary_handler"   : _StubSimpleHandler(),
+            "search_handler"  : _StubSimpleHandler(),
+            "ledger_handler"  : _StubSimpleHandler(),
+            "web_handler"     : _StubSimpleHandler(),
         }
 
         monkeypatch.setattr(pendo_main, "_get_services", lambda context: services)
@@ -379,71 +378,71 @@ class TestPendoRuntimeBoundaries:
         owner = "u-export-ranges"
         rows  = [
             {
-                "id": "ld_may1",
-                "owner_id": owner,
-                "type": "ledger",
-                "title": "五月一日账目",
-                "ledger_category": "餐饮",
+                "id"              : "ld_may1",
+                "owner_id"        : owner,
+                "type"            : "ledger",
+                "title"           : "五月一日账目",
+                "ledger_category" : "餐饮",
                 "transaction_type": "expense",
-                "amount": 10,
-                "amount_cents": 1000,
-                "ledger_date": "2026-05-01",
-                "created_at": "2026-05-01T12:00:00",
-                "updated_at": "2026-05-01T12:00:00",
+                "amount"          : 10,
+                "amount_cents"    : 1000,
+                "ledger_date"     : "2026-05-01",
+                "created_at"      : "2026-05-01T12:00:00",
+                "updated_at"      : "2026-05-01T12:00:00",
             },
             {
-                "id": "ld_may3",
-                "owner_id": owner,
-                "type": "ledger",
-                "title": "五月三日账目",
-                "ledger_category": "交通",
+                "id"              : "ld_may3",
+                "owner_id"        : owner,
+                "type"            : "ledger",
+                "title"           : "五月三日账目",
+                "ledger_category" : "交通",
                 "transaction_type": "expense",
-                "amount": 20,
-                "amount_cents": 2000,
-                "ledger_date": "2026-05-03",
-                "created_at": "2026-05-03T12:00:00",
-                "updated_at": "2026-05-03T12:00:00",
+                "amount"          : 20,
+                "amount_cents"    : 2000,
+                "ledger_date"     : "2026-05-03",
+                "created_at"      : "2026-05-03T12:00:00",
+                "updated_at"      : "2026-05-03T12:00:00",
             },
             {
-                "id": "ld_may4",
-                "owner_id": owner,
-                "type": "ledger",
-                "title": "五月四日账目",
-                "ledger_category": "交通",
+                "id"              : "ld_may4",
+                "owner_id"        : owner,
+                "type"            : "ledger",
+                "title"           : "五月四日账目",
+                "ledger_category" : "交通",
                 "transaction_type": "expense",
-                "amount": 30,
-                "amount_cents": 3000,
-                "ledger_date": "2026-05-04",
-                "created_at": "2026-05-04T12:00:00",
-                "updated_at": "2026-05-04T12:00:00",
+                "amount"          : 30,
+                "amount_cents"    : 3000,
+                "ledger_date"     : "2026-05-04",
+                "created_at"      : "2026-05-04T12:00:00",
+                "updated_at"      : "2026-05-04T12:00:00",
             },
             {
-                "id": "ev_may1",
-                "owner_id": owner,
-                "type": "event",
-                "title": "五月一日日程",
+                "id"        : "ev_may1",
+                "owner_id"  : owner,
+                "type"      : "event",
+                "title"     : "五月一日日程",
                 "start_time": "2026-05-01T09:00:00",
-                "end_time": "2026-05-01T10:00:00",
+                "end_time"  : "2026-05-01T10:00:00",
                 "created_at": "2026-05-01T08:00:00",
                 "updated_at": "2026-05-01T08:00:00",
             },
             {
-                "id": "tk_may3",
-                "owner_id": owner,
-                "type": "task",
-                "title": "五月三日待办",
-                "status": "open",
-                "priority": 1,
-                "plan_date": "2026-05-03",
+                "id"        : "tk_may3",
+                "owner_id"  : owner,
+                "type"      : "task",
+                "title"     : "五月三日待办",
+                "status"    : "open",
+                "priority"  : 1,
+                "plan_date" : "2026-05-03",
                 "created_at": "2026-05-03T09:00:00",
                 "updated_at": "2026-05-03T09:00:00",
             },
             {
-                "id": "note_may",
-                "owner_id": owner,
-                "type": "note",
-                "title": "五月笔记",
-                "content": "note",
+                "id"        : "note_may",
+                "owner_id"  : owner,
+                "type"      : "note",
+                "title"     : "五月笔记",
+                "content"   : "note",
                 "created_at": "2026-05-02T10:00:00",
                 "updated_at": "2026-05-02T10:00:00",
             },
@@ -660,8 +659,8 @@ class TestPendoRuntimeBoundaries:
         context = SimpleNamespace(
             state={
                 "pendo_runtime": {
-                    "services": {"x": 1},
-                    "router": object(),
+                    "services"         : {"x": 1},
+                    "router"           : object(),
                     "lifecycle_service": runtime_service,
                 }
             },
@@ -744,15 +743,23 @@ class TestPendoRuntimeBoundaries:
         assert metrics[0][2] is False
         assert any("cancelled during shutdown" in message for message in log_messages)
 
-    def test_task_status_pagination_page_two_spans_categories(self):
+    def test_task_status_pagination_page_two_spans_categories(self, db):
         from plugins.pendo.handlers.task import TaskHandler
 
-        date_tasks = [
-            _build_task(f"d{i}", "2026-02-10", f"2026-02-10T08:00:0{i}") for i in range(1, 9)
-        ]
-        work_tasks = [_build_task(f"w{i}", "work", f"2026-02-10T09:00:0{i}") for i in range(1, 8)]
-        db         = _FakeDb(date_tasks + work_tasks)
-        handler    = TaskHandler(db)
+        for category, prefix, count in [("2026-02-10", "d", 8), ("work", "w", 7)]:
+            for index in range(1, count + 1):
+                db.insert_item(
+                    {
+                        "id"        : f"{prefix}{index}",
+                        "owner_id"  : "u1",
+                        "type"      : "task",
+                        "title"     : f"{prefix}{index}",
+                        "category"  : category,
+                        "status"    : "done",
+                        "created_at": f"2026-02-10T08:00:0{index}",
+                    }
+                )
+        handler = TaskHandler(db)
 
         result = asyncio.run(handler.list_tasks("u1", "done page:2", {}))
 

@@ -16,10 +16,10 @@ from ..store_base import AsyncKeyedStore, delete_json_artifacts
 class HeartflowState:
     """一个会话用于调节回复频率的最小持久状态。"""
 
-    last_user_ts: float  = 0.0
-    last_bot_ts: float   = 0.0
-    reply_streak: int    = 0
-    no_reply_streak: int = 0
+    last_user_ts   : float = 0.0
+    last_bot_ts    : float = 0.0
+    reply_streak   : int   = 0
+    no_reply_streak: int   = 0
 
 
 class HeartflowEngine(AsyncKeyedStore[HeartflowState]):
@@ -55,9 +55,9 @@ class HeartflowEngine(AsyncKeyedStore[HeartflowState]):
         if not st:
             return
         payload = {
-            "last_user_ts": st.last_user_ts,
-            "last_bot_ts": st.last_bot_ts,
-            "reply_streak": st.reply_streak,
+            "last_user_ts"   : st.last_user_ts,
+            "last_bot_ts"    : st.last_bot_ts,
+            "reply_streak"   : st.reply_streak,
             "no_reply_streak": st.no_reply_streak,
         }
         self._save_json(path, payload)

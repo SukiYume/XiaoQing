@@ -39,13 +39,15 @@ XiaoQing Agent 让小青在有人叫她做事时真正动手：查日程待办�
       "ai": {
         "routes": {
           "agent": {
-            "models": ["deepseek-pro", "deepseek-flash"],
+            "models": ["chatgpt", "deepseek-pro", "deepseek-flash"],
+            "temperature": 0.2,
             "timeout_seconds": 180,
             "total_timeout_seconds": 400,
             "max_retry": 1
           },
           "triage": {
-            "models": ["deepseek-flash"],
+            "models": ["chatgpt", "deepseek-flash", "glm-5.2"],
+            "temperature": 0.1,
             "timeout_seconds": 15,
             "total_timeout_seconds": 20
           }
@@ -57,7 +59,9 @@ XiaoQing Agent 让小青在有人叫她做事时真正动手：查日程待办�
 ```
 
 - `enabled` 默认 `false`。关闭时 `xiaoqing_chat` 的行为与没有安装 agent 时完全一致。改完配置后下一条消息即生效。
-- `agent` 路由负责执行，必须支持 OpenAI 兼容的 `tools` 调用。执行阶段使用 temperature=0.2 保持参数选择和事实表达稳定，聊天模型的采样设置独立。思考模式模型（如 DeepSeek 思考版）可直接使用。
+- 模型链自动跳过缺少密钥的供应商，整条链均不可用时报告配置错误。
+- `chatgpt` profile 使用 OpenAI `chat-latest`，执行和分流均优先选择它，密钥配置在 `config/secrets.json` 的 `ai.providers.openai.api_key`。
+- `agent` 路由负责执行，必须支持 OpenAI 兼容的 `tools` 调用。执行与交付检查的温度由 `agent.temperature` 配置，发行值为 `0.2`；分流使用 `triage.temperature`，发行值为 `0.1`。单次与总超时、重试均沿用对应路由。思考模式模型（如 DeepSeek 思考版）可直接使用。
 - `triage` 路由只做“聊天还是做事”的判断，建议配一条快速、关闭思考的模型。省略时复用 `agent` 路由。
 - 删除整个 `plugins/xiaoqing_agent/` 目录同样安全：`xiaoqing_chat` 调不到服务时自动回到普通聊天。
 

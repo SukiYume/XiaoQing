@@ -27,8 +27,8 @@ class VectorDoc:
     """向量索引中的稳定文档记录。"""
 
     doc_id: str
-    text: str
-    meta: dict[str, Any]
+    text  : str
+    meta  : dict[str, Any]
 
 
 def _docs_content_digest(docs: Sequence[VectorDoc]) -> str:
@@ -71,6 +71,8 @@ class VectorStore:
         self._docs: list[VectorDoc]     = []
         self._matrix: FloatArray | None = None
         self._id_to_idx: dict[str, int] = {}
+        # 每篇文档的归一化向量缓存：更新一条只重算这一条，矩阵按行重新拼接，不重新嵌入全库。
+        self._rows: list[FloatArray | None] = []
 
     @property
     def dim(self) -> int:
@@ -81,8 +83,13 @@ class VectorStore:
         if idx is None:
             self._id_to_idx[doc.doc_id] = len(self._docs)
             self._docs.append(doc)
+            self._rows.append(None)
         else:
+            unchanged       = self._docs[idx].text == doc.text
             self._docs[idx] = doc
+            if unchanged:
+                return
+            self._rows[idx] = None
         self._matrix = None
 
     def delete(self, doc_id: str) -> None:
@@ -90,6 +97,7 @@ class VectorStore:
         if idx is None:
             return
         self._docs.pop(idx)
+        self._rows.pop(idx)
         self._reindex()
         self._matrix = None
 
@@ -110,11 +118,12 @@ class VectorStore:
         if not self._docs:
             self._matrix = np.zeros((0, self._dim), dtype=np.float32)
             return
-        mat: FloatArray = np.zeros((len(self._docs), self._dim), dtype=np.float32)
+        if len(self._rows) != len(self._docs):
+            self._rows = [None] * len(self._docs)
         for i, d in enumerate(self._docs):
-            mat[i, :] = _embed(d.text, dim=self._dim)
-        mat          = _l2_normalize(mat)
-        self._matrix = mat
+            if self._rows[i] is None:
+                self._rows[i] = _l2_normalize(_embed(d.text, dim=self._dim).reshape(1, -1))[0]
+        self._matrix = cast(FloatArray, np.vstack(cast(list[FloatArray], self._rows)))
 
     def query(
         self,
@@ -130,25 +139,22 @@ class VectorStore:
         if self._matrix is None or self._matrix.shape[0] == 0:
             return []
         q: FloatArray = _embed(text, dim=self._dim)
-        q      = _l2_normalize(q.reshape(1, -1))[0]
-        scores = self._matrix @ q
-        if scores.size == 0:
-            return []
+        q = _l2_normalize(q.reshape(1, -1))[0]
+        # 先按会话等条件缩小候选，再只对候选行计算分数。
         candidate_idxs: NDArray[np.int64] = np.asarray(
             [index for index, doc in enumerate(self._docs) if predicate is None or predicate(doc)],
             dtype=np.int64,
         )
         if candidate_idxs.size == 0:
             return []
-        candidate_scores                   = scores[candidate_idxs]
+        candidate_scores                   = self._matrix[candidate_idxs] @ q
         ranked                             = np.argsort(candidate_scores)[::-1][:top_k]
-        idxs                               = candidate_idxs[ranked]
         out: list[tuple[VectorDoc, float]] = []
-        for idx in idxs.tolist():
-            score = float(scores[idx])
+        for position in ranked.tolist():
+            score = float(candidate_scores[position])
             if score < min_score:
                 continue
-            out.append((self._docs[idx], score))
+            out.append((self._docs[int(candidate_idxs[position])], score))
         return out
 
     def save(self, dir_path: Path, *, name: str) -> None:
@@ -166,6 +172,7 @@ class VectorStore:
         self._docs      = []
         self._id_to_idx = {}
         self._matrix    = None
+        self._rows      = []
 
         if docs_path.exists():
             try:
@@ -192,6 +199,7 @@ class VectorStore:
                 # 文档加载失败时没有可用数据。
                 self._docs      = []
                 self._id_to_idx = {}
+                self._rows      = []
 
         # 仅在已有文档时尝试加载向量缓存。
         if self._docs and npz_path.exists():
@@ -215,6 +223,8 @@ class VectorStore:
                         expected_rows = len(self._docs),
                         expected_dim  = self._dim,
                     )
+                    if self._matrix is not None:
+                        self._rows = [row.copy() for row in self._matrix]
             except (
                 OSError,
                 EOFError,
@@ -259,7 +269,7 @@ def _tokenize(text: str) -> list[str]:
     if not s:
         return []
     tokens: list[str] = []
-    buf: list[str]    = []
+    buf   : list[str] = []
     for ch in s:
         if "\u4e00" <= ch <= "\u9fff":
             if buf:
@@ -279,19 +289,6 @@ def _tokenize(text: str) -> list[str]:
     return out
 
 
-def _char_ngrams(tokens: Sequence[str]) -> list[str]:
-    out: list[str] = []
-    for t in tokens:
-        if len(t) == 1:
-            out.append(t)
-            continue
-        if all("\u4e00" <= c <= "\u9fff" for c in t) and len(t) >= 2:
-            out.extend(t[i : i + 2] for i in range(len(t) - 1))
-        else:
-            out.append(t)
-    return out
-
-
 def _hash32(s: str) -> int:
     h = 2166136261
     for ch in s:
@@ -301,7 +298,7 @@ def _hash32(s: str) -> int:
 
 
 def _embed(text: str, *, dim: int) -> FloatArray:
-    tokens = _char_ngrams(_tokenize(text))
+    tokens = _tokenize(text)
     vec: FloatArray = np.zeros((dim,), dtype=np.float32)
     if not tokens:
         return vec

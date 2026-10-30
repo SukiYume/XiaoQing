@@ -57,16 +57,18 @@ def _fill_test_config_defaults(target, defaults) -> None:
 def _complete_test_runtime_config(runtime):
     cfg = runtime.cfg
     if not isinstance(cfg, XiaoQingChatConfig):
-        _fill_test_config_defaults(cfg, XiaoQingChatConfig())
+        defaults = XiaoQingChatConfig()
+        _fill_test_config_defaults(cfg, defaults)
+        cfg.llm_config = defaults.llm_config
     return runtime
 
 
 _STATE_ASYNC_METHODS = {
-    "heartflow": ("on_user_message_async", "on_no_reply_async", "on_bot_reply_async"),
-    "memory_store": ("get_async", "get_recent_async"),
-    "goal_store": ("set_async", "get_async"),
+    "heartflow"      : ("on_user_message_async", "on_no_reply_async", "on_bot_reply_async"),
+    "memory_store"   : ("get_async", "get_recent_async"),
+    "goal_store"     : ("set_async", "get_async"),
     "pfc_state_store": ("get_async",),
-    "action_history": ("get_recent_async",),
+    "action_history" : ("get_recent_async",),
 }
 
 
@@ -89,11 +91,11 @@ def complete_test_state(state):
                 setattr(store, method, AsyncMock(return_value=default))
     neutral = {
         "consume_pending_bot_name_call": False,
-        "get_reply_gate_decision": None,
-        "get_last_observe_ts": 0.0,
-        "get_last_reply_ts": 0.0,
-        "get_mood_state": "",
-        "pop_persist_task": None,
+        "get_reply_gate_decision"      : None,
+        "get_last_observe_ts"          : 0.0,
+        "get_last_reply_ts"            : 0.0,
+        "get_mood_state"               : "",
+        "pop_persist_task"             : None,
     }
     for name, value in neutral.items():
         if _explicit_test_attribute(state, name) is _MISSING_TEST_CONFIG:
@@ -156,9 +158,9 @@ def _set_context_principal(
             "xiaoqing_chat": {
                 "ai": {
                     "default_model_alias": "deepseek",
-                    "model_aliases": {
+                    "model_aliases"      : {
                         "deepseek": "deepseek-flash",
-                        "glm": "glm-5.2",
+                        "glm"     : "glm-5.2",
                     },
                 }
             }
@@ -206,7 +208,7 @@ def mock_context(tmp_path: Path):
     context.config  = {"bot_name": "小青"}
     context.secrets = {
         "openai_api_key": "test_key",
-        "plugins": {
+        "plugins"       : {
             "xiaoqing_chat": {"api_key": "test", "api_base": "http://test", "model": "test-model"}
         },
     }
@@ -233,27 +235,27 @@ def mock_context(tmp_path: Path):
 def sample_group_event():
     """Create a sample group message event"""
     return {
-        "post_type": "message",
+        "post_type"   : "message",
         "message_type": "group",
-        "time": 1234567890,
-        "self_id": 11111,
-        "user_id": 12345,
-        "group_id": 67890,
-        "message": [{"type": "text", "data": {"text": "/xc 你好"}}],
-        "raw_message": "/xc 你好",
-        "font": 0,
-        "sender": {
-            "user_id": 12345,
+        "time"        : 1234567890,
+        "self_id"     : 11111,
+        "user_id"     : 12345,
+        "group_id"    : 67890,
+        "message"     : [{"type": "text", "data": {"text": "/xc 你好"}}],
+        "raw_message" : "/xc 你好",
+        "font"        : 0,
+        "sender"      : {
+            "user_id" : 12345,
             "nickname": "TestUser",
-            "card": "",
-            "sex": "unknown",
-            "age": 0,
-            "area": "",
-            "level": "",
-            "role": "member",
-            "title": "",
+            "card"    : "",
+            "sex"     : "unknown",
+            "age"     : 0,
+            "area"    : "",
+            "level"   : "",
+            "role"    : "member",
+            "title"   : "",
         },
-        "message_id": 1,
+        "message_id" : 1,
         "message_seq": 1,
     }
 
@@ -307,38 +309,37 @@ def reply_plan(**overrides):
     overrides              = {key: value for key, value in overrides.items() if value is not None}
     runtime                = overrides.pop("runtime", None) or ChatRuntime(XiaoQingChatConfig(), [])
     values: dict[str, Any] = {
-        "text": "",
-        "event": {},
-        "context": MagicMock(),
-        "runtime": _complete_test_runtime_config(runtime),
-        "state": MagicMock(),
-        "forced": False,
-        "action": PlannedAction("reply", 0, "", "", []),
-        "bot_name": "小青",
-        "chat_id": "g1",
-        "is_private": False,
-        "history": [],
-        "earlier_history": (),
-        "max_context_size": 10,
-        "chat_temperature": 0.7,
-        "secrets": {},
-        "model": "",
-        "foreground": None,
-        "request_id": "",
-        "profile_block": "",
-        "policy_block": "",
-        "knowledge_block": "",
-        "expression_block": "",
+        "text"              : "",
+        "event"             : {},
+        "context"           : MagicMock(),
+        "runtime"           : _complete_test_runtime_config(runtime),
+        "state"             : MagicMock(),
+        "forced"            : False,
+        "action"            : PlannedAction("reply", 0, "", "", []),
+        "bot_name"          : "小青",
+        "chat_id"           : "g1",
+        "is_private"        : False,
+        "history"           : [],
+        "earlier_history"   : (),
+        "max_context_size"  : 10,
+        "secrets"           : {},
+        "model"             : "",
+        "foreground"        : None,
+        "request_id"        : "",
+        "profile_block"     : "",
+        "policy_block"      : "",
+        "knowledge_block"   : "",
+        "expression_block"  : "",
         "jargon_explanation": "",
-        "keyword_rules": (),
-        "regex_rules": (),
-        "merged_reasoning": "",
-        "effective_goal": "",
-        "tool_info_block": "",
+        "keyword_rules"     : (),
+        "regex_rules"       : (),
+        "merged_reasoning"  : "",
+        "effective_goal"    : "",
+        "tool_info_block"   : "",
         "effective_identity": "",
-        "effective_style": "",
-        "state_text": "",
-        "started_at": 0.0,
+        "effective_style"   : "",
+        "state_text"        : "",
+        "started_at"        : 0.0,
     }
     unknown = set(overrides) - set(values) - {"media_candidates"}
     if unknown:

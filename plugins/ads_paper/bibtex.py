@@ -12,9 +12,9 @@ class BibTeXParseError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class BibTeXEntry:
-    entry_type: str
+    entry_type  : str
     citation_key: str
-    text: str
+    text        : str
 
     @property
     def title(self) -> str:
@@ -134,8 +134,9 @@ def _value_end(text: str, start: int) -> int:
             elif char == '"':
                 return index + 1
         raise BibTeXParseError("unterminated quoted BibTeX field")
-    comma = text.find(",", start)
-    return len(text) if comma < 0 else comma
+    # 裸值（数字、宏名）到逗号或条目结束括号为止。
+    ends = [index for index in (text.find(char, start) for char in ",})") if index >= 0]
+    return min(ends) if ends else len(text)
 
 
 def extract_bibtex_field(entry_text: str, field_name: str) -> str:
@@ -144,15 +145,29 @@ def extract_bibtex_field(entry_text: str, field_name: str) -> str:
     target = str(field_name or "").strip().lower()
     if not target:
         return ""
-    for match in _FIELD_START.finditer(entry_text):
-        if match.group(1).lower() != target:
-            continue
+    # 只在顶层字段边界上顺序扫描，并整体跳过每个字段值：abstract={... title={x} ...}
+    # 里出现的同名文本不会被当成顶层标题。
+    opening = entry_text.find("{")
+    if opening < 0:
+        opening = entry_text.find("(")
+    key_end  = entry_text.find(",", opening + 1) if opening >= 0 else -1
+    position = key_end + 1 if key_end >= 0 else 0
+    while position < len(entry_text):
+        while position < len(entry_text) and (
+            entry_text[position].isspace() or entry_text[position] == ","
+        ):
+            position += 1
+        match = _FIELD_START.match(entry_text, position)
+        if match is None:
+            return ""
         start = match.end()
         end   = _value_end(entry_text, start)
-        value = entry_text[start:end].strip()
-        if len(value) >= 2 and (
-            (value[0] == "{" and value[-1] == "}") or (value[0] == '"' and value[-1] == '"')
-        ):
-            value = value[1:-1]
-        return " ".join(value.split())
+        if match.group(1).lower() == target:
+            value = entry_text[start:end].strip()
+            if len(value) >= 2 and (
+                (value[0] == "{" and value[-1] == "}") or (value[0] == '"' and value[-1] == '"')
+            ):
+                value = value[1:-1]
+            return " ".join(value.split())
+        position = max(end, start + 1)
     return ""

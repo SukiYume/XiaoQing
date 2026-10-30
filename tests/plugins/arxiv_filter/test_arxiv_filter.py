@@ -287,7 +287,7 @@ class TestHandle:
 
         assert mock_run.await_args.kwargs == {
             "allow_codex_sidecar": True,
-            "source_date": "2026-08-06",
+            "source_date"        : "2026-08-06",
         }
 
         mock_context.capabilities = PluginCapabilities(is_bot_admin=True)
@@ -439,7 +439,10 @@ Probability: 0.8000
     async def test_run_filter_generic_exception(self, mock_context, mock_event):
         """测试通用异常"""
 
-        async def raise_generic_error():
+        raised = []
+
+        async def raise_generic_error(*args, **kwargs):
+            raised.append(True)
             raise RuntimeError("Unexpected error")
 
         with patch.object(arxiv_filter, "_load_inference", return_value=lambda **kwargs: "result"):
@@ -450,6 +453,7 @@ Probability: 0.8000
                 assert result is not None
                 result_text = str(result)
                 assert "XQ-PLUGIN-UNEXPECTED" in result_text
+                assert raised == [True]
 
 
 # ============================================================
@@ -705,11 +709,8 @@ Probability: 0.7500
             result = await arxiv_filter._run_filter(mock_context)
             assert result is not None
             result_text = str(result)
-            assert (
-                "First Paper Title" in result_text
-                or "Second Paper Title" in result_text
-                or "论文" in result_text
-            )
+            assert "First Paper Title" in result_text
+            assert "Second Paper Title" in result_text
 
     def test_extract_arxiv_links_normalizes_and_dedupes(self):
         text = """

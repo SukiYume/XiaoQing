@@ -105,13 +105,13 @@ def ai_route_context(context: Any, *, chat_id: str | None = None) -> dict[str, A
     ai_service = context.capabilities.ai
     if ai_service is None:
         return {
-            "model": "",
-            "_ai": None,
-            "_route": "chat",
-            "_pinned_model": None,
+            "model"         : "",
+            "_ai"           : None,
+            "_route"        : "chat",
+            "_pinned_model" : None,
             "_provider_name": "",
-            "_providers": {},
-            "_default": "",
+            "_providers"    : {},
+            "_default"      : "",
         }
 
     model_infos = ai_service.list_models("chat")
@@ -136,24 +136,17 @@ def ai_route_context(context: Any, *, chat_id: str | None = None) -> dict[str, A
 
     providers = {
         alias: {
-            "profile": profile,
-            "provider": by_profile[profile].provider,
-            "model": by_profile[profile].model,
+            "profile"   : profile,
+            "provider"  : by_profile[profile].provider,
+            "model"     : by_profile[profile].model,
             "modalities": list(by_profile[profile].modalities),
         }
         for alias, profile in aliases.items()
     }
-    configured_default = (
-        str(ai_config.get("default_model_alias", "") or "").strip()
-        if isinstance(ai_config, Mapping)
-        else ""
+    primary_profile    = model_infos[0].name if model_infos else ""
+    configured_default = next(
+        (alias for alias, profile in aliases.items() if profile == primary_profile), ""
     )
-    if configured_default not in providers:
-        primary_profile    = model_infos[0].name if model_infos else ""
-        configured_default = next(
-            (alias for alias, profile in aliases.items() if profile == primary_profile),
-            "",
-        )
 
     state                = _state()
     active               = state.resolve_provider_name(chat_id, list(providers), configured_default)
@@ -163,14 +156,14 @@ def ai_route_context(context: Any, *, chat_id: str | None = None) -> dict[str, A
     is_explicit_override = active in {local_override, global_override}
 
     return {
-        "model": active_config.get("model", ""),
-        "_ai": ai_service,
-        "_route": "chat",
-        "_pinned_model": active_config.get("profile") if is_explicit_override else None,
-        "_profile": active_config.get("profile", ""),
+        "model"         : active_config.get("model", ""),
+        "_ai"           : ai_service,
+        "_route"        : "chat",
+        "_pinned_model" : active_config.get("profile") if is_explicit_override else None,
+        "_profile"      : active_config.get("profile", ""),
         "_provider_name": active,
-        "_providers": providers,
-        "_default": configured_default,
+        "_providers"    : providers,
+        "_default"      : configured_default,
     }
 
 
@@ -179,23 +172,8 @@ def llm_call_config(
     *,
     foreground: bool = False,
 ) -> LLMCallConfig:
-    """解析插件行为配置中的超时、重试和生成参数。"""
-    if foreground:
-        timeout        = cfg.foreground_timeout_seconds
-        max_retry      = cfg.foreground_max_retry
-        retry_interval = cfg.foreground_retry_interval_seconds
-    else:
-        timeout        = cfg.background_timeout_seconds
-        max_retry      = cfg.background_max_retry
-        retry_interval = cfg.background_retry_interval_seconds
-    return LLMCallConfig(
-        timeout_seconds        = timeout,
-        max_retry              = max_retry,
-        retry_interval_seconds = retry_interval,
-        temperature            = float(cfg.temperature),
-        top_p                  = float(cfg.top_p),
-        max_tokens             = int(cfg.max_tokens),
-    )
+    """从主配置选取前台聊天或后台推理路由的请求参数。"""
+    return cfg.llm_config("chat" if foreground else "reasoning")
 
 
 def is_ignored_text(text: str, runtime: ChatRuntime) -> bool:

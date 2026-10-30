@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import errno
+import os
+import time
+from contextlib import nullcontext
+from pathlib import Path
+from unittest.mock import Mock
+
+import pytest
 
 import tests.helpers.plugin_manager_test_support as _fixture_support
 from core.plugin_watcher import _ManifestRejection
 from tests.helpers.plugin_manager_test_support import (
     LoadedPlugin,
-    Mock,
     ModuleType,
-    Path,
     PluginDefinition,
     PluginExecutionGate,
     PluginLoadError,
@@ -19,10 +25,6 @@ from tests.helpers.plugin_manager_test_support import (
     _build_manager,
     _runtime_symlink_or_skip,
     _write_runtime_manifest,
-    asyncio,
-    os,
-    pytest,
-    time,
 )
 
 _isolate_process_global_plugin_import_state = (
@@ -586,12 +588,13 @@ def test_fingerprint_explicitly_includes_entry_when_walk_snapshot_omits_it(
     _write_runtime_manifest(plugin_dir, name)
     definition = _build_definition(name)
 
-    monkeypatch.setattr(
-        "core.plugin_manager.os.walk",
-        lambda *_args, **_kwargs: [(str(plugin_dir.resolve()), [], ["plugin.json"])],
-    )
+    with os.scandir(plugin_dir) as entries:
+        snapshot = [item for item in entries if item.name != "main.py"]
+    scanner = Mock(return_value=nullcontext(snapshot))
+    monkeypatch.setattr("core.plugin_watcher.os.scandir", scanner)
 
     files = manager._iter_watch_files(plugin_dir, definition)
+    scanner.assert_called_once()
     assert entry.resolve() in files
     assert (plugin_dir / "plugin.json").resolve() in files
 

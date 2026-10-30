@@ -11,7 +11,7 @@ from plugins.pendo.web.api.widget import build_widget_calendar
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT: Final            = REPOSITORY_ROOT
+ROOT           : Final = REPOSITORY_ROOT
 TIMEZONE_CLIENT: Final = (
     ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "utils" / "timezone.js"
 )
@@ -106,9 +106,9 @@ def test_export_and_widget_preserve_instant(db, tmp_path):
     db.update_user_settings("u", {"timezone": "Asia/Shanghai"})
     db.insert_item(
         {
-            "owner_id": "u",
-            "type": "event",
-            "title": "凌晨",
+            "owner_id"  : "u",
+            "type"      : "event",
+            "title"     : "凌晨",
             "start_time": "2030-01-02T01:00:00+08:00",
         }
     )
@@ -132,12 +132,12 @@ def test_widget_preserves_each_dst_overlap_instant(db, offset):
     end   = f"2026-11-01T01:45:00{offset}"
     db.insert_item(
         {
-            "owner_id": "u",
-            "type": "event",
-            "title": "重复墙钟",
-            "timezone": "America/Los_Angeles",
+            "owner_id"  : "u",
+            "type"      : "event",
+            "title"     : "重复墙钟",
+            "timezone"  : "America/Los_Angeles",
             "start_time": start,
-            "end_time": end,
+            "end_time"  : end,
         }
     )
     item = build_widget_calendar(db, "u", start_date="2026-11-01", end_date="2026-11-01")["items"][

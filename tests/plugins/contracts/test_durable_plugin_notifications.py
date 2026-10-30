@@ -28,10 +28,10 @@ def _chime_payload(timestamp: str = "2026-07-14T00:00:00") -> dict:
         "FRB20260714A": {
             "260714": {
                 "timestamp": {"value": timestamp},
-                "dm": {"value": "123.4"},
-                "snr": {"value": "18.0"},
+                "dm"       : {"value": "123.4"},
+                "snr"      : {"value": "18.0"},
             },
-            "ra": {"value": "12:34:56"},
+            "ra" : {"value": "12:34:56"},
             "dec": {"value": "+01:02:03"},
         }
     }

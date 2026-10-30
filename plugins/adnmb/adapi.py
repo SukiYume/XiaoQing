@@ -52,9 +52,9 @@ IMAGE_CACHE_LIMITS        = FileCacheLimits(
     ttl_seconds = 7 * 24 * 60 * 60,
 )
 _IMAGE_MIME_FORMATS = {
-    "image/gif": "GIF",
+    "image/gif" : "GIF",
     "image/jpeg": "JPEG",
-    "image/png": "PNG",
+    "image/png" : "PNG",
     "image/webp": "WEBP",
 }
 _IMAGE_FORMAT_EXTENSIONS = {"GIF": ".gif", "JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
@@ -72,13 +72,13 @@ _ADNMB_JSON_LIMITS = JsonLimits(
 # API 端点
 ENDPOINTS = {
     "forum_list": "/Api/getForumList",
-    "timeline": "/Api/timeline",
-    "forum": "/Api/showf",
-    "thread": "/Api/thread",
-    "ref": "/Api/ref",
-    "feed": "/Api/feed",
-    "add_feed": "/Api/addFeed",
-    "del_feed": "/Api/delFeed",
+    "timeline"  : "/Api/timeline",
+    "forum"     : "/Api/showf",
+    "thread"    : "/Api/thread",
+    "ref"       : "/Api/ref",
+    "feed"      : "/Api/feed",
+    "add_feed"  : "/Api/addFeed",
+    "del_feed"  : "/Api/delFeed",
 }
 
 # ============================================================
@@ -90,11 +90,11 @@ ENDPOINTS = {
 class Post:
     """帖子/回复数据结构"""
 
-    id: str
-    time: str
+    id     : str
+    time   : str
     user_id: str
     content: str
-    img: str = ""
+    img    : str = ""
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> "Post":
@@ -126,7 +126,7 @@ class Thread:
     """串数据结构（包含主帖和回复）"""
 
     main_post: Post
-    replies: list[Post]
+    replies  : list[Post]
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> "Thread":
@@ -195,7 +195,7 @@ class AdnmbClient:
             limits         = _ADNMB_BODY_LIMITS,
             mime_policy    = JSON_MIME_POLICY,
             request_kwargs = {
-                "params": request_params,
+                "params" : request_params,
                 "timeout": REQUEST_TIMEOUT,
             },
         )

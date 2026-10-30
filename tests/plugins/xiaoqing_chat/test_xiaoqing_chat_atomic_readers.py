@@ -52,8 +52,8 @@ def test_person_profile_recovers_valid_atomic_backup(tmp_path: Path) -> None:
         tmp_path / "person_profiles" / "chat-1" / "7.json",
         {
             "subject_name": "Alice",
-            "facts": ["likes tea"],
-            "updated_at": 2.0,
+            "facts"       : ["likes tea"],
+            "updated_at"  : 2.0,
         },
     )
 
@@ -71,10 +71,10 @@ def test_topic_summary_recovers_valid_atomic_backup(tmp_path: Path) -> None:
         tmp_path / "hippo_memorizer" / "chat-1.json",
         [
             {
-                "topic_id": "topic-1",
-                "topic": "tea",
-                "summary": "restored",
-                "keywords": ["tea"],
+                "topic_id"  : "topic-1",
+                "topic"     : "tea",
+                "summary"   : "restored",
+                "keywords"  : ["tea"],
                 "key_points": ["green"],
                 "updated_at": 3.0,
             }
@@ -94,12 +94,12 @@ async def test_action_history_recovers_valid_atomic_backup(tmp_path: Path) -> No
         tmp_path / "action_history" / "chat-1.json",
         [
             {
-                "ts": 4.0,
+                "ts"          : 4.0,
                 "local_target": "Alice",
-                "action": "reply",
-                "reasoning": "restored",
-                "detail": {},
-                "executed": True,
+                "action"      : "reply",
+                "reasoning"   : "restored",
+                "detail"      : {},
+                "executed"    : True,
             }
         ],
     )
@@ -121,12 +121,12 @@ async def test_persisted_scalar_types_are_strictly_normalized(tmp_path: Path) ->
         json.dumps(
             [
                 {
-                    "role": "user",
-                    "name": "Alice",
-                    "content": "hello",
-                    "user_id": True,
+                    "role"      : "user",
+                    "name"      : "Alice",
+                    "content"   : "hello",
+                    "user_id"   : True,
                     "message_id": "12",
-                    "ts": "nan",
+                    "ts"        : "nan",
                 }
             ]
         ),
@@ -138,10 +138,10 @@ async def test_persisted_scalar_types_are_strictly_normalized(tmp_path: Path) ->
         json.dumps(
             [
                 {
-                    "ts": "nan",
-                    "action": "reply",
+                    "ts"       : "nan",
+                    "action"   : "reply",
                     "reasoning": "loaded",
-                    "executed": "false",
+                    "executed" : "false",
                 }
             ]
         ),

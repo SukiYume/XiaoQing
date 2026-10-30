@@ -78,7 +78,7 @@ def test_default_persona_card_moods_only_describe_current_conversation_style() -
     assert cfg.memory.conversation_idle_gap_seconds == 1800.0
 
 
-def test_prompt_builder_discourages_repetitive_clarifying_questions() -> None:
+def test_prompt_builder_separates_persona_and_current_user_message() -> None:
     personality = PersonalityConfig(
         polite_guardrail  = True,
         card              = _CARD,
@@ -243,11 +243,11 @@ def test_prompt_builder_rehydrates_media_marker_from_registry(tmp_path) -> None:
     state.media_store.upsert_media_items(
         [
             {
-                "kind": "emoji",
-                "media_hash": "hash-emoji-1",
-                "description": "猫猫翻白眼",
+                "kind"        : "emoji",
+                "media_hash"  : "hash-emoji-1",
+                "description" : "猫猫翻白眼",
                 "emotion_tags": ["无语", "嫌弃"],
-                "marker": "[表情包：猫猫翻白眼]",
+                "marker"      : "[表情包：猫猫翻白眼]",
             }
         ]
     )
@@ -264,9 +264,9 @@ def test_prompt_builder_rehydrates_media_marker_from_registry(tmp_path) -> None:
                 content     = "[[xc_media_1]]",
                 media_items = (
                     {
-                        "kind": "emoji",
+                        "kind"      : "emoji",
                         "media_hash": "hash-emoji-1",
-                        "marker": "[表情包：一张表情包]",
+                        "marker"    : "[表情包：一张表情包]",
                     },
                 ),
                 ts=1700000001.0,
@@ -307,18 +307,18 @@ def test_prompt_builder_prefers_canonical_parts_when_legacy_fields_are_stale(tmp
                 content     = "[[xc_media_1]]",
                 media_items = (
                     {
-                        "kind": "emoji",
+                        "kind"      : "emoji",
                         "media_hash": "hash-emoji-1",
-                        "marker": "[表情包：一张表情包]",
+                        "marker"    : "[表情包：一张表情包]",
                     },
                 ),
                 parts=(
                     {"kind": "text", "text": "先看这个"},
                     {
-                        "kind": "emoji",
-                        "media_hash": "hash-emoji-1",
-                        "marker": "[表情包：猫猫翻白眼]",
-                        "description": "猫猫翻白眼",
+                        "kind"        : "emoji",
+                        "media_hash"  : "hash-emoji-1",
+                        "marker"      : "[表情包：猫猫翻白眼]",
+                        "description" : "猫猫翻白眼",
                         "emotion_tags": ["无语"],
                     },
                     {"kind": "text", "text": "就知道了"},
@@ -358,8 +358,8 @@ def test_prompt_builder_uses_media_only_reply_target_block_for_current_parts() -
         regex_rules   = [],
         current_parts = (
             {
-                "kind": "image",
-                "marker": "[图片：海边落日]",
+                "kind"       : "image",
+                "marker"     : "[图片：海边落日]",
                 "description": "海边落日",
             },
         ),
@@ -390,8 +390,8 @@ def test_prompt_builder_treats_media_only_emoji_text_as_user_speech() -> None:
         regex_rules   = [],
         current_parts = (
             {
-                "kind": "emoji",
-                "marker": "[表情包：佩服，调侃；写着“不愧是你 我佩服得鹉体投地”]",
+                "kind"       : "emoji",
+                "marker"     : "[表情包：佩服，调侃；写着“不愧是你 我佩服得鹉体投地”]",
                 "description": "佩服，调侃",
             },
         ),
@@ -423,9 +423,9 @@ def test_prompt_builder_treats_media_only_qq_face_as_tone() -> None:
         regex_rules   = [],
         current_parts = (
             {
-                "kind": "qq_face",
+                "kind"  : "qq_face",
                 "marker": "[QQ表情：菜汪]",
-                "label": "菜汪",
+                "label" : "菜汪",
             },
         ),
         request_id="req-test-qq-face-tone",
@@ -456,8 +456,8 @@ def test_prompt_builder_uses_mixed_reply_target_block_for_current_parts() -> Non
         current_parts = (
             {"kind": "text", "text": "你看这个"},
             {
-                "kind": "emoji",
-                "marker": "[表情包：无语]",
+                "kind"       : "emoji",
+                "marker"     : "[表情包：无语]",
                 "description": "无语猫猫",
             },
         ),
@@ -481,8 +481,8 @@ def test_prompt_builder_does_not_duplicate_current_turn_when_history_already_con
     current_parts = (
         {"kind": "text", "text": "你看这个"},
         {
-            "kind": "image",
-            "marker": "[图片：海边落日]",
+            "kind"       : "image",
+            "marker"     : "[图片：海边落日]",
             "description": "海边落日",
         },
     )
@@ -529,9 +529,9 @@ def test_text_followup_keeps_previous_image_evidence():
             ts    = 1700000000.0,
             parts = (
                 {
-                    "kind": "image",
+                    "kind"       : "image",
                     "description": "街边树木和写着大洗美术馆的招牌",
-                    "marker": "[图片：街边树木和写着大洗美术馆的招牌]",
+                    "marker"     : "[图片：街边树木和写着大洗美术馆的招牌]",
                 },
             ),
         ),

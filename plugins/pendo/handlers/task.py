@@ -18,7 +18,7 @@ from ..core.types import CommandMessage, PendoContext, SessionData
 from ..models.item import ItemType, TaskItem, TaskStatus
 from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import handle_command_errors
-from ..utils.formatters import UNSAFE_CONTROL_RE, ItemFormatter, paginate, single_line_text
+from ..utils.formatters import UNSAFE_CONTROL_RE, ItemFormatter, single_line_text
 from ..utils.identifiers import public_id
 from ..utils.session_utils import safe_create_session, safe_end_session
 from ..utils.time_utils import (
@@ -42,24 +42,24 @@ if TYPE_CHECKING:
 class _ExplicitTaskFields(TypedDict):
     """记录命令中实际出现的字段，避免编辑时覆盖未提及内容。"""
 
-    plan_date: bool
-    deadline_at: bool
+    plan_date   : bool
+    deadline_at : bool
     remind_times: bool
-    category: bool
-    priority: bool
-    tags: bool
+    category    : bool
+    priority    : bool
+    tags        : bool
 
 
 class _ParsedTask(TypedDict):
     """规则解析后的待办字段。"""
 
-    title: str
-    category: str
-    plan_date: str | None
-    deadline_at: str | None
-    priority: int
-    tags: list[str]
-    remind_times: list[str]
+    title           : str
+    category        : str
+    plan_date       : str | None
+    deadline_at     : str | None
+    priority        : int
+    tags            : list[str]
+    remind_times    : list[str]
     _explicit_fields: _ExplicitTaskFields
 
 
@@ -67,14 +67,14 @@ class _ParsedTask(TypedDict):
 class _TaskListOptions:
     """一次待办列表查询的规范化选项。"""
 
-    status: str | None      = None
-    priority: int | None    = None
-    show_all: bool          = False
-    page: int               = 1
-    category: str | None    = None
-    tag: str | None         = None
+    status     : str | None = None
+    priority   : int | None = None
+    show_all   : bool       = False
+    page       : int        = 1
+    category   : str | None = None
+    tag        : str | None = None
     range_token: str | None = None
-    shortcut: str | None    = None
+    shortcut   : str | None = None
 
     @property
     def is_status_only(self) -> bool:
@@ -84,9 +84,9 @@ class _TaskListOptions:
         )
 
 
-_WORD_APOSTROPHE_RE: Final       = re.compile(r"(?<=\w)'(?=\w)")
+_WORD_APOSTROPHE_RE      : Final = re.compile(r"(?<=\w)'(?=\w)")
 _WORD_APOSTROPHE_SENTINEL: Final = "\ufdd0"
-_TASK_TIME_KEYWORDS: Final       = frozenset(
+_TASK_TIME_KEYWORDS      : Final = frozenset(
     {
         "today",
         "tomorrow",
@@ -101,25 +101,25 @@ _TASK_TIME_KEYWORDS: Final       = frozenset(
     }
 )
 _TASK_STATUS_ALIASES: Final = {
-    "done": TaskStatus.DONE.value,
-    "已完成": TaskStatus.DONE.value,
+    "done"     : TaskStatus.DONE.value,
+    "已完成"      : TaskStatus.DONE.value,
     "cancelled": TaskStatus.CANCELLED.value,
-    "已取消": TaskStatus.CANCELLED.value,
-    "open": TaskStatus.OPEN.value,
-    "undone": TaskStatus.OPEN.value,
-    "未完成": TaskStatus.OPEN.value,
-    "todo": TaskStatus.OPEN.value,
+    "已取消"      : TaskStatus.CANCELLED.value,
+    "open"     : TaskStatus.OPEN.value,
+    "undone"   : TaskStatus.OPEN.value,
+    "未完成"      : TaskStatus.OPEN.value,
+    "todo"     : TaskStatus.OPEN.value,
 }
-_TASK_LIST_SHORTCUTS: Final  = frozenset({"overdue", "upcoming", "inbox"})
+_TASK_LIST_SHORTCUTS : Final = frozenset({"overdue", "upcoming", "inbox"})
 _INLINE_FIELD_ALIASES: Final = {
-    "plan": "plan_date",
-    "date": "plan_date",
+    "plan"    : "plan_date",
+    "date"    : "plan_date",
     "deadline": "deadline_at",
-    "due": "deadline_at",
-    "remind": "remind_times",
+    "due"     : "deadline_at",
+    "remind"  : "remind_times",
     "reminder": "remind_times",
-    "cat": "category",
-    "p": "priority",
+    "cat"     : "category",
+    "p"       : "priority",
 }
 _TITLE_QUOTE_PAIRS: Final = {
     '"': '"',
@@ -129,38 +129,15 @@ _TITLE_QUOTE_PAIRS: Final = {
     "「": "」",
     "『": "』",
 }
-_DEFAULT_INPUTS: Final         = frozenset({"0", "默认", "跳过", "skip", "-"})
-_NONE_INPUTS: Final            = frozenset({"无", "不安排", "none", "null", "no", "不要", "清空"})
-_INLINE_NONE_INPUTS: Final     = frozenset({"none", "null", "clear", "unset", "无", "清空", "不安排"})
+_DEFAULT_INPUTS        : Final = frozenset({"0", "默认", "跳过", "skip", "-"})
+_NONE_INPUTS           : Final = frozenset({"无", "不安排", "none", "null", "no", "不要", "清空"})
+_INLINE_NONE_INPUTS    : Final = frozenset({"none", "null", "clear", "unset", "无", "清空", "不安排"})
 _TASK_COMMAND_MAX_CHARS: Final = 5_000
 
 
 def _task_category_label(task: TaskItem) -> str:
     """返回适合展示的单行分类名。"""
     return single_line_text(task.category) or "未分类"
-
-
-def _parse_date_text(value: str | None, local_timezone: tzinfo | None = None) -> datetime | None:
-    """解析数据库日期，并把带时区的旧值归一为本地朴素时间。"""
-    if not value:
-        return None
-    try:
-        text = str(value)
-        if len(text) == 10:
-            return datetime.fromisoformat(f"{text}T00:00:00")
-        parsed = datetime.fromisoformat(text)
-        if parsed.tzinfo is not None:
-            parsed = parsed.astimezone(local_timezone or TimezoneHelper.DEFAULT_TZ)
-        return parsed.replace(tzinfo=None)
-    except ValueError:
-        return None
-
-
-def _task_sort_key(task: TaskItem) -> tuple[int, str, str, str, str]:
-    """生成优先级靠前且同值时仍稳定的待办排序键。"""
-    plan     = str(task.plan_date or "").strip() or "9999-12-31"
-    deadline = str(task.deadline_at or "").strip() or "9999-12-31T99:99:99"
-    return (task.priority or 3, plan, deadline, task.created_at or "", task.id or "")
 
 
 def _task_status_value(task: TaskItem) -> str:
@@ -264,32 +241,6 @@ def _find_inline_metadata_boundary(text: str) -> int | None:
     return None
 
 
-def _task_matches_range(
-    task: TaskItem, start: datetime, end: datetime, local_timezone: tzinfo | None = None
-) -> bool:
-    """计划日期或截止时间落入范围时视为命中。"""
-    plan     = _parse_date_text(task.plan_date)
-    deadline = _parse_date_text(task.deadline_at, local_timezone)
-    return bool(
-        (plan and start.date() <= plan.date() <= end.date())
-        or (deadline and start <= deadline <= end)
-    )
-
-
-def _task_is_overdue(task: TaskItem, now: datetime, local_timezone: tzinfo | None = None) -> bool:
-    """兼容仅有计划日期或仅有截止时间的待办。"""
-    plan     = _parse_date_text(task.plan_date)
-    deadline = _parse_date_text(task.deadline_at, local_timezone)
-    return bool((deadline and deadline < now) or (plan and plan.date() < now.date()))
-
-
-def _task_is_upcoming(task: TaskItem, now: datetime, local_timezone: tzinfo | None = None) -> bool:
-    """计划日期或截止时间在未来时视为未来待办。"""
-    plan     = _parse_date_text(task.plan_date)
-    deadline = _parse_date_text(task.deadline_at, local_timezone)
-    return bool((plan and plan.date() > now.date()) or (deadline and deadline > now))
-
-
 class TaskHandler(DbOpsMixin):
     """以确定性规则管理待办，不依赖 AI 解析。"""
 
@@ -301,6 +252,10 @@ class TaskHandler(DbOpsMixin):
         """读取用户墙钟，并统一成内部比较使用的朴素时间。"""
         current = now_in_timezone(user_id, self.db)
         return current.replace(tzinfo=None) if current.tzinfo else current
+
+    async def _user_local_now_async(self, user_id: str) -> datetime:
+        """异步入口使用：设置读取在同步执行边界完成。"""
+        return await run_sync(self._user_local_now, user_id)
 
     @handle_command_errors
     async def handle(
@@ -335,13 +290,13 @@ class TaskHandler(DbOpsMixin):
             str,
             Callable[[str, str, PendoContext], Awaitable[CommandMessage]],
         ] = {
-            "list": self.list_tasks,
-            "view": self.view_task,
-            "done": self.mark_done,
+            "list"  : self.list_tasks,
+            "view"  : self.view_task,
+            "done"  : self.mark_done,
             "cancel": self.mark_cancelled,
             "undone": self.mark_undone,
             "delete": self.delete_task,
-            "edit": self.edit_task,
+            "edit"  : self.edit_task,
         }
         if handler := handlers.get(command):
             return await handler(user_id, rest, context)
@@ -394,11 +349,11 @@ class TaskHandler(DbOpsMixin):
         await safe_create_session(
             context,
             initial_data={
-                "type": PendoConfig.SESSION_TYPE_TASK_ADD,
+                "type"    : PendoConfig.SESSION_TYPE_TASK_ADD,
                 "owner_id": user_id,
                 "group_id": group_id,
-                "step": "title",
-                "data": {},
+                "step"    : "title",
+                "data"    : {},
             },
             timeout=PendoConfig.SESSION_TIMEOUT_SECONDS,
         )
@@ -455,7 +410,7 @@ class TaskHandler(DbOpsMixin):
             }
 
         try:
-            local_now = self._user_local_now(user_id)
+            local_now = await self._user_local_now_async(user_id)
             parsed = self._parse_task_text(text, user_id, default_now=local_now)
             return await self._create_task_from_parsed(user_id, parsed, group_id, local_now)
         except ValueError as exc:
@@ -471,19 +426,19 @@ class TaskHandler(DbOpsMixin):
         """规范化并持久化待办，再生成与实际存储值一致的回执。"""
         task_payload = normalize_task_fields(
             {
-                "owner_id": user_id,
-                "title": parsed["title"],
-                "content": "",
-                "category": parsed["category"],
-                "plan_date": parsed["plan_date"],
-                "deadline_at": parsed["deadline_at"],
-                "priority": parsed["priority"],
-                "status": TaskStatus.OPEN.value,
-                "tags": parsed["tags"],
+                "owner_id"    : user_id,
+                "title"       : parsed["title"],
+                "content"     : "",
+                "category"    : parsed["category"],
+                "plan_date"   : parsed["plan_date"],
+                "deadline_at" : parsed["deadline_at"],
+                "priority"    : parsed["priority"],
+                "status"      : TaskStatus.OPEN.value,
+                "tags"        : parsed["tags"],
                 "remind_times": parsed["remind_times"],
-                "context": {"group_id": group_id} if group_id else {},
-                "created_at": local_now.isoformat(),
-                "updated_at": local_now.isoformat(),
+                "context"     : {"group_id": group_id} if group_id else {},
+                "created_at"  : local_now.isoformat(),
+                "updated_at"  : local_now.isoformat(),
             }
         )
         task_item = TaskItem(**task_payload)
@@ -541,7 +496,7 @@ class TaskHandler(DbOpsMixin):
 
         session.set("data", data)
         session.set("step", "plan_date")
-        default_plan = default_task_plan_date(self._user_local_now(user_id))
+        default_plan = default_task_plan_date(await self._user_local_now_async(user_id))
         return {
             "status": "success",
             "message": (
@@ -561,7 +516,7 @@ class TaskHandler(DbOpsMixin):
         group_id: int | None,
     ) -> CommandMessage:
         """解析计划日期，创建待办并结束轻量新增会话。"""
-        local_now = self._user_local_now(user_id)
+        local_now = await self._user_local_now_async(user_id)
         if self._is_default_input(text):
             plan_date = default_task_plan_date(local_now)
         elif self._is_none_input(text):
@@ -570,32 +525,32 @@ class TaskHandler(DbOpsMixin):
             plan_date = parse_date_optional(text, local_now)
             if not plan_date:
                 return {
-                    "status": "info",
+                    "status" : "info",
                     "message": "❌ 无法解析计划日期，请输入 today / 明天 / 2026-05-01，或输入 0 使用默认值：",
                 }
 
         parsed: _ParsedTask = {
-            "title": str(data.get("title") or ""),
-            "category": "未分类",
-            "plan_date": plan_date,
-            "deadline_at": None,
-            "priority": 3,
-            "tags": [],
-            "remind_times": [],
+            "title"           : str(data.get("title") or ""),
+            "category"        : "未分类",
+            "plan_date"       : plan_date,
+            "deadline_at"     : None,
+            "priority"        : 3,
+            "tags"            : [],
+            "remind_times"    : [],
             "_explicit_fields": {
-                "plan_date": True,
-                "deadline_at": False,
+                "plan_date"   : True,
+                "deadline_at" : False,
                 "remind_times": False,
-                "category": False,
-                "priority": False,
-                "tags": False,
+                "category"    : False,
+                "priority"    : False,
+                "tags"        : False,
             },
         }
         try:
             result = await self._create_task_from_parsed(user_id, parsed, group_id, local_now)
         except ValueError as exc:
             return {
-                "status": "info",
+                "status" : "info",
                 "message": f"❌ {exc}，请重新输入计划日期或输入 0 使用默认值：",
             }
 
@@ -649,10 +604,10 @@ class TaskHandler(DbOpsMixin):
         cls, tokens: list[str]
     ) -> tuple[list[str], dict[str, str], list[str]]:
         """一次遍历收集标题、字段和标签，并拒绝重复字段。"""
-        title_tokens: list[str]    = []
-        raw_fields: dict[str, str] = {}
-        tags: list[str]            = []
-        seen: set[str]             = set()
+        title_tokens: list[str]      = []
+        raw_fields  : dict[str, str] = {}
+        tags        : list[str]      = []
+        seen        : set[str]       = set()
         for token in tokens:
             field, value = cls._parse_inline_task_token(token)
             if field == "title":
@@ -734,9 +689,7 @@ class TaskHandler(DbOpsMixin):
         )
 
         priority_raw = raw_fields.get("priority")
-        if priority_raw is not None and not re.fullmatch(r"[1-5]", priority_raw):
-            raise ValueError("优先级必须在1-5之间")
-        priority = int(priority_raw) if priority_raw is not None else 3
+        priority     = _parse_task_priority(priority_raw) if priority_raw is not None else 3
         plan_date, deadline_at, remind_times = self._parse_task_schedule_fields(
             raw_fields,
             user_id,
@@ -745,20 +698,20 @@ class TaskHandler(DbOpsMixin):
         )
 
         return {
-            "title": title,
-            "category": category,
-            "plan_date": plan_date,
-            "deadline_at": deadline_at,
-            "priority": priority,
-            "tags": tags,
-            "remind_times": remind_times,
+            "title"           : title,
+            "category"        : category,
+            "plan_date"       : plan_date,
+            "deadline_at"     : deadline_at,
+            "priority"        : priority,
+            "tags"            : tags,
+            "remind_times"    : remind_times,
             "_explicit_fields": {
-                "plan_date": "plan_date" in raw_fields,
-                "deadline_at": "deadline_at" in raw_fields,
+                "plan_date"   : "plan_date" in raw_fields,
+                "deadline_at" : "deadline_at" in raw_fields,
                 "remind_times": "remind_times" in raw_fields,
-                "category": "category" in raw_fields,
-                "priority": "priority" in raw_fields,
-                "tags": bool(tags),
+                "category"    : "category" in raw_fields,
+                "priority"    : "priority" in raw_fields,
+                "tags"        : bool(tags),
             },
         }
 
@@ -788,26 +741,21 @@ class TaskHandler(DbOpsMixin):
 
     async def list_all_categories(self, user_id: str) -> CommandMessage:
         """汇总当前用户各分类的待办状态。"""
-        tasks = cast(
-            list[TaskItem],
-            await run_sync(self.db.get_all_items, user_id, {"type": ItemType.TASK.value}),
+        _, total, categories = await run_sync(
+            self.db.get_task_command_list,
+            user_id,
+            {},
+            limit             = 0,
+            offset            = 0,
+            group_by_category = True,
+            overview          = True,
         )
 
-        if not tasks:
+        if not total:
             return {
                 "status": "success",
                 "message": "📝 待办列表\n\n暂无待办事项\n\n💡 用 /pendo todo add 交互式添加，或用 /pendo todo add <内容> 快捷添加",
             }
-
-        categories: dict[str, dict[str, int]] = {}
-        for task in tasks:
-            category = _task_category_label(task)
-            stats    = categories.setdefault(category, {"done": 0, "open": 0, "cancelled": 0})
-            status   = _task_status_value(task)
-            bucket   = (
-                status if status in {TaskStatus.DONE.value, TaskStatus.CANCELLED.value} else "open"
-            )
-            stats[bucket] += 1
 
         lines = ["📝 待办分类列表", ""]
         for cat in sorted(categories):
@@ -889,36 +837,6 @@ class TaskHandler(DbOpsMixin):
             raise ValueError("时间范围与 overdue/upcoming/inbox 不能同时使用")
         return options
 
-    def _filter_task_list_by_time(
-        self,
-        tasks: list[TaskItem],
-        options: _TaskListOptions,
-        user_id: str,
-    ) -> tuple[list[TaskItem], str | None]:
-        """在用户本地时间中执行范围和快捷筛选。"""
-        if not options.range_token and not options.shortcut:
-            return tasks, None
-
-        user_now       = self._user_local_now(user_id)
-        local_timezone = TimezoneHelper.get_user_timezone(user_id, self.db)
-        if options.range_token:
-            start, end = _parse_time_range_core(options.range_token, user_now, strict=True)
-            label = {"today": "今天", "tomorrow": "明天"}.get(
-                options.range_token.casefold(), options.range_token
-            )
-            return [
-                task for task in tasks if _task_matches_range(task, start, end, local_timezone)
-            ], label
-        if options.shortcut == "overdue":
-            return [
-                task for task in tasks if _task_is_overdue(task, user_now, local_timezone)
-            ], "已滞后"
-        if options.shortcut == "upcoming":
-            return [
-                task for task in tasks if _task_is_upcoming(task, user_now, local_timezone)
-            ], "未来"
-        return [task for task in tasks if not task.plan_date], "收件箱"
-
     @classmethod
     def _task_list_label(cls, options: _TaskListOptions, time_label: str | None) -> str:
         """把生效的列表筛选条件组合为可读标题。"""
@@ -962,27 +880,39 @@ class TaskHandler(DbOpsMixin):
         except ValueError as exc:
             return {"status": "error", "message": f"❌ {exc}"}
 
-        tasks = cast(
-            list[TaskItem],
-            await run_sync(
-                self.db.get_all_items,
-                user_id,
-                self._build_task_list_filters(options),
-            ),
+        user_now   = await self._user_local_now_async(user_id)
+        time_range = None
+        time_label = {"overdue": "已滞后", "upcoming": "未来", "inbox": "收件箱"}.get(
+            options.shortcut or ""
         )
-        try:
-            tasks, time_label = self._filter_task_list_by_time(tasks, options, user_id)
-        except ValueError as exc:
-            return {"status": "error", "message": f"❌ {exc}"}
-        if options.priority is not None:
-            tasks = [task for task in tasks if task.priority == options.priority]
+        if options.range_token:
+            try:
+                time_range = _parse_time_range_core(options.range_token, user_now, strict=True)
+            except ValueError as exc:
+                return {"status": "error", "message": f"❌ {exc}"}
+            time_label = {"today": "今天", "tomorrow": "明天"}.get(
+                options.range_token.casefold(), options.range_token
+            )
+        rows, total, categories = await run_sync(
+            self.db.get_task_command_list,
+            user_id,
+            self._build_task_list_filters(options),
+            limit             = None if options.show_all else PendoConfig.LIST_PAGE_SIZE,
+            offset            = (options.page - 1) * PendoConfig.LIST_PAGE_SIZE,
+            group_by_category = options.is_status_only,
+            time_range        = time_range,
+            shortcut          = options.shortcut,
+            now               = user_now,
+            priority          = options.priority,
+        )
+        tasks = cast(list[TaskItem], rows)
 
         label = self._task_list_label(options, time_label)
-        if not tasks:
+        if not total:
             return {"status": "success", "message": f"📝 {label} 的待办\n\n暂无待办事项"}
 
         page_size = PendoConfig.LIST_PAGE_SIZE
-        if not options.show_all and (options.page - 1) * page_size >= len(tasks):
+        if not options.show_all and (options.page - 1) * page_size >= total:
             return {"status": "error", "message": f"❌ 第 {options.page} 页超出范围"}
 
         display_timezone = await run_sync(
@@ -991,9 +921,10 @@ class TaskHandler(DbOpsMixin):
             self.db,
         )
         if options.is_status_only:
-            return self._format_status_task_list(tasks, options, display_timezone)
-        tasks.sort(key=_task_sort_key)
-        return self._format_flat_task_list(tasks, options, label, display_timezone)
+            return self._format_status_task_list(
+                tasks, options, display_timezone, total, categories
+            )
+        return self._format_flat_task_list(tasks, options, label, display_timezone, total)
 
     @staticmethod
     def _task_list_entry_lines(
@@ -1029,12 +960,19 @@ class TaskHandler(DbOpsMixin):
         options: _TaskListOptions,
         label: str,
         display_timezone: tzinfo,
+        total: int,
     ) -> CommandMessage:
         """格式化普通列表，并显示精确总数和下一页提示。"""
         page_size = PendoConfig.LIST_PAGE_SIZE
-        display, page_info, has_more = paginate(tasks, options.page, page_size, options.show_all)
-        lines = [f"📝 {label} 的待办 (共{len(tasks)}项){page_info}", ""]
-        start = 0 if options.show_all else (options.page - 1) * page_size
+        display   = tasks
+        page_info = (
+            " (全部显示)"
+            if options.show_all
+            else (f" (第{options.page}页)" if options.page > 1 else "")
+        )
+        has_more = not options.show_all and options.page * page_size < total
+        lines    = [f"📝 {label} 的待办 (共{total}项){page_info}", ""]
+        start    = 0 if options.show_all else (options.page - 1) * page_size
         for index, task in enumerate(display, start + 1):
             lines.extend(
                 self._task_list_entry_lines(
@@ -1054,30 +992,27 @@ class TaskHandler(DbOpsMixin):
         tasks: list[TaskItem],
         options: _TaskListOptions,
         display_timezone: tzinfo,
+        total: int,
+        category_counts: dict[str, dict[str, int]],
     ) -> CommandMessage:
         """按分类展示单一状态结果，并让分页跨分类稳定生效。"""
-        categories: dict[str, list[TaskItem]] = {}
-        for task in tasks:
-            categories.setdefault(_task_category_label(task), []).append(task)
-
-        ordered_rows: list[tuple[str, TaskItem]] = []
-        for category in sorted(categories):
-            categories[category].sort(key=_task_sort_key)
-            ordered_rows.extend((category, task) for task in categories[category])
-
+        display   = [(_task_category_label(task), task) for task in tasks]
         page_size = PendoConfig.LIST_PAGE_SIZE
-        display, page_info, has_more = paginate(
-            ordered_rows, options.page, page_size, options.show_all
+        page_info = (
+            " (全部显示)"
+            if options.show_all
+            else (f" (第{options.page}页)" if options.page > 1 else "")
         )
+        has_more                     = not options.show_all and options.page * page_size < total
         status_text                  = self._status_text(options.status or TaskStatus.OPEN.value)
-        lines                        = [f"📝 所有分类的{status_text}待办 (共{len(tasks)}项){page_info}", ""]
+        lines                        = [f"📝 所有分类的{status_text}待办 (共{total}项){page_info}", ""]
         current_category: str | None = None
         start                        = 0 if options.show_all else (options.page - 1) * page_size
         for index, (category, task) in enumerate(display, start + 1):
             if category != current_category:
                 if current_category is not None:
                     lines.append("")
-                lines.append(f"📂 {category} ({len(categories[category])}项)")
+                lines.append(f"📂 {category} ({sum(category_counts[category].values())}项)")
                 current_category = category
             lines.extend(
                 self._task_list_entry_lines(
@@ -1090,7 +1025,7 @@ class TaskHandler(DbOpsMixin):
             )
 
         if has_more:
-            remaining = len(tasks) - (start + len(display))
+            remaining = total - (start + len(display))
             lines.extend(
                 (
                     "",
@@ -1168,7 +1103,7 @@ class TaskHandler(DbOpsMixin):
             self.db,
         )
         return {
-            "status": "success",
+            "status" : "success",
             "message": self._format_task_detail(task, task_id, display_timezone),
         }
 
@@ -1201,19 +1136,21 @@ class TaskHandler(DbOpsMixin):
                 task_id,
                 task,
                 {
-                    "status": "success",
+                    "status" : "success",
                     "message": f"ℹ️ 待办已是{status_text}状态: {title}",
                 },
             )
 
         updates: dict[str, Any] = {
-            "status": target_status,
+            "status"      : target_status,
             "completed_at": None,
             "cancelled_at": None,
-            "type": ItemType.TASK.value,
+            "type"        : ItemType.TASK.value,
         }
         if target_status in {TaskStatus.DONE.value, TaskStatus.CANCELLED.value}:
-            timestamp       = TimezoneHelper.format_for_storage(now_in_timezone(user_id, self.db))
+            timestamp = TimezoneHelper.format_for_storage(
+                await run_sync(now_in_timezone, user_id, self.db)
+            )
             timestamp_field = (
                 "completed_at" if target_status == TaskStatus.DONE.value else "cancelled_at"
             )
@@ -1285,7 +1222,7 @@ class TaskHandler(DbOpsMixin):
             return {"status": "error", "message": f"❌ {exc}"}
         if len(tokens) != 1:
             return {
-                "status": "error",
+                "status" : "error",
                 "message": "❌ 删除操作只接受一个待办ID或一个 cat:分类 参数",
             }
 
@@ -1293,11 +1230,7 @@ class TaskHandler(DbOpsMixin):
         if not target:
             raise MissingRequiredFieldException("id或cat:xxx")
         if target.casefold().startswith("cat:"):
-            try:
-                category = _validate_task_category(target.partition(":")[2])
-            except ValueError as exc:
-                return {"status": "error", "message": f"❌ {exc}"}
-            return await self._delete_category_tasks(user_id, category)
+            return await self._delete_category_tasks(user_id, target.partition(":")[2])
 
         task_id = target
         task, wrong_type = await self._db_get_typed_item_or_message(
@@ -1427,6 +1360,6 @@ class TaskHandler(DbOpsMixin):
     def _status_text(status: str) -> str:
         """把内部待办状态转换为中文显示文本。"""
         return {
-            TaskStatus.DONE.value: "已完成",
+            TaskStatus.DONE.value     : "已完成",
             TaskStatus.CANCELLED.value: "已取消",
         }.get(status, "未完成")

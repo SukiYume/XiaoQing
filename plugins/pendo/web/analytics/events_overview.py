@@ -20,8 +20,8 @@ JsonObject          = dict[str, Any]
 ReminderStatus      = Literal["pending", "sent", "confirmed"]
 EventWithCollection = tuple[EventItem, JsonObject | None]
 
-_EVENT_KINDS: Final       = frozenset({"", "all", "single", "multi_node", "recurring"})
-_REMINDER_FILTERS: Final  = frozenset({"", "all", "with", "none", "pending", "sent", "confirmed"})
+_EVENT_KINDS      : Final = frozenset({"", "all", "single", "multi_node", "recurring"})
+_REMINDER_FILTERS : Final = frozenset({"", "all", "with", "none", "pending", "sent", "confirmed"})
 _SQLITE_BATCH_SIZE: Final = 500
 
 
@@ -29,9 +29,9 @@ _SQLITE_BATCH_SIZE: Final = 500
 class _EventFilters:
     """已规范化并通过白名单校验的概览筛选条件。"""
 
-    keyword: str
+    keyword : str
     category: str
-    kind: str
+    kind    : str
     reminder: str
 
 
@@ -39,9 +39,9 @@ class _EventFilters:
 class _ReminderSummary:
     """提醒状态计数；仅在服务端筛选和汇总时使用。"""
 
-    total: int
-    pending: int
-    sent: int
+    total    : int
+    pending  : int
+    sent     : int
     confirmed: int
 
 
@@ -49,13 +49,13 @@ class _ReminderSummary:
 class _OverviewEvent:
     """概览构造过程中的内部事件，避免把计算字段泄漏到 API。"""
 
-    id: str
-    title: str
-    category: str
-    kind: str
-    collection: JsonObject | None
-    display_days: list[str]
-    day_entries: dict[str, list[JsonObject]]
+    id              : str
+    title           : str
+    category        : str
+    kind            : str
+    collection      : JsonObject | None
+    display_days    : list[str]
+    day_entries     : dict[str, list[JsonObject]]
     reminder_summary: _ReminderSummary
 
 
@@ -173,9 +173,9 @@ def _build_reminder_rows(event: EventItem, reminder_logs: list[JsonObject]) -> l
             status = "sent"
         rows.append(
             {
-                "time": remind_time,
-                "status": status,
-                "sent_at": log.get("sent_at") if log else None,
+                "time"        : remind_time,
+                "status"      : status,
+                "sent_at"     : log.get("sent_at") if log else None,
                 "confirmed_at": log.get("confirmed_at") if log else None,
                 "repeat_count": int(log.get("repeat_count") or 0) if log else 0,
             }
@@ -223,8 +223,8 @@ def _event_matches_reminder(summary: _ReminderSummary, reminder: str) -> bool:
     if reminder == "none":
         return summary.total == 0
     return {
-        "pending": summary.pending,
-        "sent": summary.sent,
+        "pending"  : summary.pending,
+        "sent"     : summary.sent,
         "confirmed": summary.confirmed,
     }.get(reminder, 0) > 0
 
@@ -326,24 +326,24 @@ def _build_calendar_views(
                 items.append(
                     {
                         "event_id": event.id,
-                        "kind": event.kind,
-                        "label": event.title or "无标题",
+                        "kind"    : event.kind,
+                        "label"   : event.title or "无标题",
                     }
                 )
             timeline_days[day].extend(
                 {
-                    "event_id": event.id,
+                    "event_id"        : event.id,
                     "event_display_id": public_id(event.id),
-                    "collection": event.collection,
-                    "kind": row["kind"],
-                    "day": day,
-                    "time": row["time"],
-                    "time_label": row["time_label"],
-                    "title": row["title"],
-                    "subtitle": row["subtitle"],
-                    "location": row["location"],
-                    "category": row["category"],
-                    "reminder_total": event.reminder_summary.total,
+                    "collection"      : event.collection,
+                    "kind"            : row["kind"],
+                    "day"             : day,
+                    "time"            : row["time"],
+                    "time_label"      : row["time_label"],
+                    "title"           : row["title"],
+                    "subtitle"        : row["subtitle"],
+                    "location"        : row["location"],
+                    "category"        : row["category"],
+                    "reminder_total"  : event.reminder_summary.total,
                 }
                 for row in event.day_entries.get(day, [])
             )
@@ -400,21 +400,21 @@ def build_events_overview(  # noqa: PLR0913 - 参数对应稳定的 HTTP 查询�
 
     return {
         "summary": {
-            "event_count": len(events),
+            "event_count"     : len(events),
             "multi_node_count": sum(event.kind == "multi_node" for event in events),
-            "reminder_count": sum(event.reminder_summary.total for event in events),
+            "reminder_count"  : sum(event.reminder_summary.total for event in events),
         },
-        "categories": list_event_categories(db, owner_id),
+        "categories"   : list_event_categories(db, owner_id),
         "calendar_days": calendar_days,
         "timeline_days": timeline_days,
         # 页面只用这些字段补全时间线卡片；详情按需从独立端点读取。
         "events": [
             {
-                "id": event.id,
+                "id"        : event.id,
                 "display_id": public_id(event.id),
-                "title": event.title,
-                "category": event.category,
-                "kind": event.kind,
+                "title"     : event.title,
+                "category"  : event.category,
+                "kind"      : event.kind,
                 "collection": event.collection,
             }
             for event in events
@@ -441,11 +441,11 @@ def build_event_detail(db: Database, owner_id: str, event_id: str) -> JsonObject
     if collection is not None:
         related_instances = [
             {
-                "id": child.id,
+                "id"        : child.id,
                 "display_id": child.display_id,
-                "title": child.title,
+                "title"     : child.title,
                 "start_time": child.start_time,
-                "end_time": child.end_time,
+                "end_time"  : child.end_time,
             }
             for child in db.get_collection_events(str(collection["id"]), owner_id)
             if child.id != event.id
@@ -453,21 +453,21 @@ def build_event_detail(db: Database, owner_id: str, event_id: str) -> JsonObject
     return {
         # 详情只公开展示与单条编辑器实际使用的叶子字段。
         "event": {
-            "id": event.id,
-            "version": event.version,
-            "display_id": event.display_id,
-            "title": event.title or "",
-            "category": event.category or "",
-            "start_time": event.start_time,
-            "end_time": event.end_time,
-            "location": event.location or "",
-            "notes": event.notes or "",
-            "event_role": event.event_role,
+            "id"                   : event.id,
+            "version"              : event.version,
+            "display_id"           : event.display_id,
+            "title"                : event.title or "",
+            "category"             : event.category or "",
+            "start_time"           : event.start_time,
+            "end_time"             : event.end_time,
+            "location"             : event.location or "",
+            "notes"                : event.notes or "",
+            "event_role"           : event.event_role,
             "event_collection_kind": event.event_collection_kind,
-            "kind": event_kind(event),
-            "collection": collection_payload(collection),
-            "reminders": _build_reminder_rows(event, db.get_reminder_logs(event.id)),
-            "series_id": event.event_collection_id or None,
+            "kind"                 : event_kind(event),
+            "collection"           : collection_payload(collection),
+            "reminders"            : _build_reminder_rows(event, db.get_reminder_logs(event.id)),
+            "series_id"            : event.event_collection_id or None,
         },
         "related_instances": related_instances,
     }
@@ -486,11 +486,11 @@ def build_event_collection_detail(
     children = db.get_collection_events(collection_id, owner_id)
     return {
         "collection": collection_payload(collection),
-        "children": [
+        "children"  : [
             {
-                "id": child.id,
+                "id"        : child.id,
                 "display_id": child.display_id,
-                "title": child.title,
+                "title"     : child.title,
                 "start_time": child.start_time,
             }
             for child in children

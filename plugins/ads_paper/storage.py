@@ -13,13 +13,23 @@ from weakref import WeakValueDictionary
 from core.plugin_base import atomic_write_bytes, atomic_write_text
 
 from .bibtex import BibTeXParseError, citation_entries
-from .constants import DATETIME_FORMAT
+from .constants import DATE_FORMAT, DATETIME_FORMAT
 
 logger = logging.getLogger(__name__)
 
 
 def _reject_json_constant(value: str) -> None:
     raise ValueError(f"invalid JSON constant: {value}")
+
+
+def _deadline_sort_key(deadline: dict[str, Any]) -> tuple[int, str]:
+    """按日期值排序；旧记录里的 2026-2-1 这类写法同样按真实日期排列。"""
+
+    raw = str(deadline.get("date", ""))
+    try:
+        return 0, datetime.strptime(raw, DATE_FORMAT).date().isoformat()
+    except ValueError:
+        return 1, raw
 
 
 def _owned_by(record: Any, user_id: int) -> bool:
@@ -44,8 +54,8 @@ class PaperStorageCorruptionError(RuntimeError):
 
 class PaperStorage:
     # 同一数据目录的多个临时实例必须共用锁，否则读改写会彼此覆盖。
-    _locks_guard: ClassVar[Any]                     = threading.Lock()
-    _locks: ClassVar[WeakValueDictionary[str, Any]] = WeakValueDictionary()
+    _locks_guard: ClassVar[Any]                           = threading.Lock()
+    _locks      : ClassVar[WeakValueDictionary[str, Any]] = WeakValueDictionary()
 
     def __init__(self, data_dir: Path) -> None:
         self.data_dir       = data_dir
@@ -120,7 +130,8 @@ class PaperStorage:
         """原子保存 JSON 对象。
 
         Returns:
-            成功时返回 ``True``；编码或落盘失败时记录错误并返回 ``False``。
+            成功时返回 ``True``。编码或落盘失败时记录错误后原样抛出：``False`` 只表示
+            业务上没有变化（重复、未找到），不能和磁盘写入失败混在一起。
         """
         with self._lock:
             try:
@@ -132,7 +143,7 @@ class PaperStorage:
                     "Paper storage save failed: error_type=%s",
                     type(exc).__name__,
                 )
-                return False
+                raise
 
     def _add_text_record(self, path: Path, key: str, content: str, user_id: int) -> bool:
         """在同一锁内追加带作者和时间的文本记录。"""
@@ -140,8 +151,8 @@ class PaperStorage:
             data   = self._load_json(path)
             record = {
                 "content": content.strip(),
-                "time": datetime.now().strftime(DATETIME_FORMAT),
-                "user": user_id,
+                "time"   : datetime.now().strftime(DATETIME_FORMAT),
+                "user"   : user_id,
             }
             data.setdefault(key, []).append(record)
             return self._save_json(path, data)
@@ -190,6 +201,17 @@ class PaperStorage:
             for section, ideas in data.items()
             if any(_owned_by(idea, user_id) for idea in ideas)
         ]
+
+    def writing_section_counts(self, user_id: int) -> dict[str, int]:
+        """一次读取统计当前用户各章节的灵感数量。"""
+
+        data   = self._load_json(self.writing_file)
+        counts = {
+            section: sum(1 for idea in ideas if _owned_by(idea, user_id))
+            for section, ideas in data.items()
+            if isinstance(ideas, list)
+        }
+        return {section: count for section, count in counts.items() if count}
 
     def delete_writing_idea(self, section: str, index: int, user_id: int) -> bool:
         return self._delete_text_record(self.writing_file, section, index, user_id)
@@ -289,9 +311,9 @@ class PaperStorage:
                 data["deadlines"] = []
 
             deadline = {
-                "name": name.strip(),
-                "date": date.strip(),
-                "user": user_id,
+                "name"   : name.strip(),
+                "date"   : date.strip(),
+                "user"   : user_id,
                 "created": datetime.now().strftime(DATETIME_FORMAT),
             }
             data["deadlines"].append(deadline)
@@ -301,7 +323,7 @@ class PaperStorage:
         data      = self._load_json(self.deadlines_file)
         deadlines = data.get("deadlines", [])
         deadlines = [deadline for deadline in deadlines if _owned_by(deadline, user_id)]
-        return sorted(deadlines, key=lambda x: x.get("date", ""))
+        return sorted(deadlines, key=_deadline_sort_key)
 
     def delete_deadline(self, index: int, user_id: int) -> bool:
         with self._lock:
@@ -315,7 +337,7 @@ class PaperStorage:
                 for i, deadline in enumerate(deadlines)
                 if _owned_by(deadline, user_id)
             ]
-            ordered.sort(key=lambda item: item[1].get("date", ""))
+            ordered.sort(key=lambda item: _deadline_sort_key(item[1]))
             if index < 0 or index >= len(ordered):
                 return False
 

@@ -95,9 +95,9 @@ class AIRequestError(AIError):
 class AIModelInfo:
     """可安全暴露给插件和管理命令的模型元数据。"""
 
-    name: str
-    provider: str
-    model: str
+    name      : str
+    provider  : str
+    model     : str
     modalities: tuple[str, ...]
 
 
@@ -105,12 +105,12 @@ class AIModelInfo:
 class AICompletionResult:
     """一次成功补全的响应及其脱敏路由元数据。"""
 
-    response: dict[str, Any]
-    profile: str
-    provider: str
-    model: str
+    response     : dict[str, Any]
+    profile      : str
+    provider     : str
+    model        : str
     finish_reason: str
-    attempts: int
+    attempts     : int
 
     @property
     def content(self) -> str:
@@ -121,14 +121,14 @@ class AICompletionResult:
 
 @dataclass(frozen=True, slots=True)
 class _AIModelTarget:
-    name: str
-    provider: str
-    model: str
-    api_base: str
-    api_key: str
-    endpoint_path: str
-    proxy: str
-    modalities: tuple[str, ...]
+    name            : str
+    provider        : str
+    model           : str
+    api_base        : str
+    api_key         : str
+    endpoint_path   : str
+    proxy           : str
+    modalities      : tuple[str, ...]
     request_defaults: dict[str, Any]
 
     @property
@@ -137,19 +137,21 @@ class _AIModelTarget:
 
 
 @dataclass(frozen=True, slots=True)
-class _AIRoute:
-    plugin: str
-    name: str
-    model_names: tuple[str, ...]
-    temperature: float | None
-    top_p: float | None
-    max_tokens: int | None
-    timeout_seconds: float
-    total_timeout_seconds: float
-    max_retry: int
+class AIRouteConfig:
+    """经过校验的任务路由及请求默认参数。"""
+
+    plugin                : str
+    name                  : str
+    model_names           : tuple[str, ...]
+    temperature           : float | None
+    top_p                 : float | None
+    max_tokens            : int | None
+    timeout_seconds       : float
+    total_timeout_seconds : float
+    max_retry             : int
     retry_interval_seconds: float
-    fallback_on: frozenset[str]
-    request_defaults: dict[str, Any]
+    fallback_on           : frozenset[str]
+    request_defaults      : dict[str, Any]
 
 
 def _mapping(value: Any, label: str) -> Mapping[str, Any]:
@@ -287,11 +289,12 @@ def _proxy_url(value: str, label: str) -> str:
     return value
 
 
-def _route_config(
+def resolve_route_config(
     config: Mapping[str, Any],
     plugin_name: str,
     route_name: str,
-) -> _AIRoute:
+) -> AIRouteConfig:
+    """从主配置解析路由，供请求执行和插件预算使用。"""
     plugins       = _mapping(config.get("plugins", {}), "config.plugins")
     plugin_config = _mapping(plugins.get(plugin_name, {}), f"config.plugins.{plugin_name}")
     ai_config     = _mapping(plugin_config.get("ai", {}), f"config.plugins.{plugin_name}.ai")
@@ -335,7 +338,7 @@ def _route_config(
         maximum = 60.0,
     )
     assert retry_interval is not None
-    return _AIRoute(
+    return AIRouteConfig(
         plugin      = plugin_name,
         name        = route_name,
         model_names = _model_names(route.get("models"), f"{label}.models"),
@@ -375,7 +378,7 @@ def _route_config(
 def _model_targets(
     config: Mapping[str, Any],
     secrets: Mapping[str, Any],
-    route: _AIRoute,
+    route: AIRouteConfig,
     *,
     pinned_model: str | None,
     required_modalities: tuple[str, ...],
@@ -409,7 +412,7 @@ def _model_targets(
         provider_label  = f"config.ai.providers.{provider_name}"
         provider_config = _mapping(providers.get(provider_name), provider_label)
         provider_secret = _mapping(
-            secret_providers.get(provider_name),
+            secret_providers.get(provider_name, {}),
             f"secrets.ai.providers.{provider_name}",
         )
         model_modalities = _modalities(model_config.get("modalities"), f"{label}.modalities")
@@ -425,36 +428,47 @@ def _model_targets(
         )
         if not endpoint_path.startswith("/") or "?" in endpoint_path or "#" in endpoint_path:
             raise AIConfigError(f"{provider_label}.endpoint_path must be an absolute URL path")
-        targets.append(
-            _AIModelTarget(
-                name     = profile_name,
-                provider = provider_name,
-                model    = _required_string(model_config, "model", label),
-                api_base = _absolute_http_base(
-                    _required_string(provider_config, "api_base", provider_label),
-                    f"{provider_label}.api_base",
+        target = _AIModelTarget(
+            name     = profile_name,
+            provider = provider_name,
+            model    = _required_string(model_config, "model", label),
+            api_base = _absolute_http_base(
+                _required_string(provider_config, "api_base", provider_label),
+                f"{provider_label}.api_base",
+            ),
+            api_key=_optional_string(
+                provider_secret,
+                "api_key",
+                label=f"secrets.ai.providers.{provider_name}",
+            ),
+            endpoint_path = endpoint_path,
+            proxy         = _proxy_url(
+                _optional_string(
+                    provider_config,
+                    "proxy",
+                    label=provider_label,
                 ),
-                api_key=_required_string(
-                    provider_secret,
-                    "api_key",
-                    f"secrets.ai.providers.{provider_name}",
-                ),
-                endpoint_path = endpoint_path,
-                proxy         = _proxy_url(
-                    _optional_string(
-                        provider_config,
-                        "proxy",
-                        label=provider_label,
-                    ),
-                    f"{provider_label}.proxy",
-                ),
-                modalities       = model_modalities,
-                request_defaults = _payload_mapping(
-                    model_config.get("request_defaults"),
-                    f"{label}.request_defaults",
-                ),
-            )
+                f"{provider_label}.proxy",
+            ),
+            modalities       = model_modalities,
+            request_defaults = _payload_mapping(
+                model_config.get("request_defaults"),
+                f"{label}.request_defaults",
+            ),
         )
+        if not target.api_key:
+            if pinned_model is not None:
+                raise AIConfigError(f"pinned model {profile_name} is unavailable: missing API key")
+            logger.debug(
+                "AI model skipped plugin=%s route=%s profile=%s reason=missing_api_key",
+                route.plugin,
+                route.name,
+                profile_name,
+            )
+            continue
+        targets.append(target)
+    if not targets:
+        raise AIConfigError(f"AI route {route.plugin}.{route.name} has no models with an API key")
     return tuple(targets)
 
 
@@ -468,7 +482,7 @@ def list_configured_models(
 ) -> tuple[AIModelInfo, ...]:
     """解析并验证 route，返回不含凭据的有序模型列表。"""
 
-    route   = _route_config(config, plugin_name, route_name)
+    route   = resolve_route_config(config, plugin_name, route_name)
     targets = _model_targets(
         config,
         secrets,
@@ -581,7 +595,7 @@ def _retry_delay(base_seconds: float, retry_index: int) -> float:
 
 def _request_payload(
     target: _AIModelTarget,
-    route: _AIRoute,
+    route: AIRouteConfig,
     messages: list[dict[str, Any]],
     *,
     temperature: float | None,
@@ -592,9 +606,9 @@ def _request_payload(
     extra_payload: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "model": target.model,
+        "model"   : target.model,
         "messages": materialize_snapshot_value(messages),
-        "stream": False,
+        "stream"  : False,
     }
     payload.update(target.request_defaults)
     payload.update(route.request_defaults)
@@ -613,6 +627,13 @@ def _request_payload(
         payload["tool_choice"] = materialize_snapshot_value(tool_choice)
     if extra_payload is not None:
         payload.update(_payload_mapping(extra_payload, "AI request extra_payload"))
+    if target.model in {"chat-latest", "gpt-6-luna"}:
+        if "max_tokens" in payload:
+            payload["max_completion_tokens"] = payload.pop("max_tokens")
+    if target.model == "chat-latest":
+        # This model uses fixed sampling defaults.
+        payload.pop("temperature", None)
+        payload.pop("top_p", None)
     return payload
 
 
@@ -620,7 +641,7 @@ async def _request_target(
     *,
     session: aiohttp.ClientSession,
     target: _AIModelTarget,
-    route: _AIRoute,
+    route: AIRouteConfig,
     messages: list[dict[str, Any]],
     temperature: float | None,
     top_p: float | None,
@@ -635,7 +656,7 @@ async def _request_target(
 ) -> dict[str, Any]:
     headers = {
         "Authorization": f"Bearer {target.api_key}",
-        "Content-Type": "application/json",
+        "Content-Type" : "application/json",
     }
     payload = _request_payload(
         target,
@@ -648,10 +669,23 @@ async def _request_target(
         tool_choice   = tool_choice,
         extra_payload = extra_payload,
     )
+    logger.debug(
+        "AI request settings plugin=%s route=%s profile=%s temperature=%s top_p=%s "
+        "max_tokens=%s timeout_seconds=%s max_retry=%s retry_interval_seconds=%s",
+        route.plugin,
+        route.name,
+        target.name,
+        payload.get("temperature"),
+        payload.get("top_p"),
+        payload.get("max_completion_tokens", payload.get("max_tokens")),
+        timeout_seconds,
+        max_retry,
+        retry_interval_seconds,
+    )
     for retry_index in range(max_retry + 1):
         attempt_counter[0] += 1
         request_kwargs: dict[str, Any] = {
-            "json": payload,
+            "json"   : payload,
             "timeout": aiohttp.ClientTimeout(total=timeout_seconds),
         }
         if target.proxy:
@@ -694,7 +728,7 @@ async def _request_target(
 async def _complete_route(
     *,
     session: aiohttp.ClientSession,
-    route: _AIRoute,
+    route: AIRouteConfig,
     targets: tuple[_AIModelTarget, ...],
     messages: list[dict[str, Any]],
     temperature: float | None,
@@ -778,7 +812,7 @@ async def complete_configured_route(
         raise AIConfigError("messages must be a non-empty list")
     if any(not isinstance(message, dict) for message in messages):
         raise AIConfigError("each message must be an object")
-    route   = _route_config(config, plugin_name, route_name)
+    route   = resolve_route_config(config, plugin_name, route_name)
     targets = _model_targets(
         config,
         secrets,
@@ -839,6 +873,12 @@ async def complete_configured_route(
     assert effective_total_timeout is not None
     assert effective_retry is not None
     assert effective_retry_interval is not None
+    logger.debug(
+        "AI route budget plugin=%s route=%s total_timeout_seconds=%s",
+        route.plugin,
+        route.name,
+        effective_total_timeout,
+    )
     try:
         return await asyncio.wait_for(
             _complete_route(

@@ -2,27 +2,22 @@
 
 from __future__ import annotations
 
-from tests.helpers.pendo_test_support import (
-    ROOT,
-    SimpleNamespace,
-    asyncio,
-    datetime,
-)
+import asyncio
+from datetime import datetime
+from types import SimpleNamespace
 
 
 class TestPendoWebHandler:
     """测试 pendo web 命令格式化与发送行为"""
 
     def test_web_token_sends_raw_code_as_separate_private_message(self, monkeypatch):
-        import importlib
-        import sys
         import types
 
-        monkeypatch.syspath_prepend(str(ROOT))
-        monkeypatch.delitem(sys.modules, "plugins.pendo.handlers.web", raising=False)
-        monkeypatch.setitem(
-            sys.modules,
-            "plugins.pendo.web.server",
+        from plugins.pendo.handlers import web as web_module
+
+        monkeypatch.setattr(
+            web_module,
+            "web_server",
             types.SimpleNamespace(
                 get_url    = lambda: "http://127.0.0.1:8765",
                 is_running = lambda: True,
@@ -30,8 +25,6 @@ class TestPendoWebHandler:
                 stop       = lambda: True,
             ),
         )
-
-        web_module = importlib.import_module("plugins.pendo.handlers.web")
 
         issuance = {}
 
@@ -60,9 +53,9 @@ class TestPendoWebHandler:
         assert "浏览器会话保持 7 天" in result["message"]
         assert "mock-code" not in result["message"]
         assert issuance == {
-            "owner_id": "1001",
+            "owner_id"       : "1001",
             "expires_seconds": 7 * 24 * 60 * 60,
-            "db": None,
+            "db"             : None,
         }
         assert len(actions) == 1
         assert actions[0]["action"] == "send_private_msg"
@@ -73,15 +66,13 @@ class TestPendoWebHandler:
         assert "https://" not in token_text
 
     def test_web_token_fails_closed_when_private_delivery_is_unavailable(self, monkeypatch):
-        import importlib
-        import sys
         import types
 
-        monkeypatch.syspath_prepend(str(ROOT))
-        monkeypatch.delitem(sys.modules, "plugins.pendo.handlers.web", raising=False)
-        monkeypatch.setitem(
-            sys.modules,
-            "plugins.pendo.web.server",
+        from plugins.pendo.handlers import web as web_module
+
+        monkeypatch.setattr(
+            web_module,
+            "web_server",
             types.SimpleNamespace(
                 get_url    = lambda: "http://127.0.0.1:8765",
                 is_running = lambda: False,
@@ -89,8 +80,6 @@ class TestPendoWebHandler:
                 stop       = lambda: True,
             ),
         )
-
-        web_module = importlib.import_module("plugins.pendo.handlers.web")
 
         monkeypatch.setattr(web_module, "issue_login_code", lambda *_args, **_kwargs: "mock-code")
         monkeypatch.setattr(web_module.web_server, "get_url", lambda: "http://127.0.0.1:8765")
@@ -132,15 +121,13 @@ class TestPendoWebHandler:
         assert "secret-token" not in result["message"]
 
     def test_web_start_surfaces_last_start_error(self, monkeypatch):
-        import importlib
-        import sys
         import types
 
-        monkeypatch.syspath_prepend(str(ROOT))
-        monkeypatch.delitem(sys.modules, "plugins.pendo.handlers.web", raising=False)
-        monkeypatch.setitem(
-            sys.modules,
-            "plugins.pendo.web.server",
+        from plugins.pendo.handlers import web as web_module
+
+        monkeypatch.setattr(
+            web_module,
+            "web_server",
             types.SimpleNamespace(
                 get_url        = lambda: "http://127.0.0.1:8765",
                 is_running     = lambda: False,
@@ -149,8 +136,6 @@ class TestPendoWebHandler:
                 get_last_error = lambda: "无法绑定到 127.0.0.1:8765，端口可能已被占用。",
             ),
         )
-
-        web_module = importlib.import_module("plugins.pendo.handlers.web")
 
         handler = web_module.WebHandler(db=None)
         result = asyncio.run(handler.handle("1001", "start", context=types.SimpleNamespace()))
@@ -161,15 +146,13 @@ class TestPendoWebHandler:
         assert "plugins.pendo.web_port" in result["message"]
 
     def test_web_stop_reports_external_running_server_without_failing(self, monkeypatch):
-        import importlib
-        import sys
         import types
 
-        monkeypatch.syspath_prepend(str(ROOT))
-        monkeypatch.delitem(sys.modules, "plugins.pendo.handlers.web", raising=False)
-        monkeypatch.setitem(
-            sys.modules,
-            "plugins.pendo.web.server",
+        from plugins.pendo.handlers import web as web_module
+
+        monkeypatch.setattr(
+            web_module,
+            "web_server",
             types.SimpleNamespace(
                 get_url            = lambda: "http://127.0.0.1:8765",
                 is_running         = lambda: True,
@@ -179,8 +162,6 @@ class TestPendoWebHandler:
             ),
         )
 
-        web_module = importlib.import_module("plugins.pendo.handlers.web")
-
         handler = web_module.WebHandler(db=None)
         result = asyncio.run(handler.handle("1001", "stop", context=types.SimpleNamespace()))
 
@@ -188,15 +169,13 @@ class TestPendoWebHandler:
         assert "外部服务" in result["message"]
 
     def test_web_widget_token_sends_token_as_separate_private_message(self, monkeypatch):
-        import importlib
-        import sys
         import types
 
-        monkeypatch.syspath_prepend(str(ROOT))
-        monkeypatch.delitem(sys.modules, "plugins.pendo.handlers.web", raising=False)
-        monkeypatch.setitem(
-            sys.modules,
-            "plugins.pendo.web.server",
+        from plugins.pendo.handlers import web as web_module
+
+        monkeypatch.setattr(
+            web_module,
+            "web_server",
             types.SimpleNamespace(
                 get_url    = lambda: "http://127.0.0.1:8765",
                 is_running = lambda: True,
@@ -205,8 +184,7 @@ class TestPendoWebHandler:
             ),
         )
 
-        web_module = importlib.import_module("plugins.pendo.handlers.web")
-        issuance   = {}
+        issuance = {}
 
         def issue_widget(owner_id, *, expires_seconds, db):
             issuance.update(owner_id=owner_id, expires_seconds=expires_seconds, db=db)
@@ -230,9 +208,9 @@ class TestPendoWebHandler:
         assert "365 天" in result["message"]
         assert "widget-token" not in result["message"]
         assert issuance == {
-            "owner_id": "1001",
+            "owner_id"       : "1001",
             "expires_seconds": 365 * 24 * 60 * 60,
-            "db": None,
+            "db"             : None,
         }
         assert len(actions) == 1
         token_text = actions[0]["params"]["message"][0]["data"]["text"]
@@ -240,11 +218,10 @@ class TestPendoWebHandler:
         assert "widget-token" in token_text
 
     def test_web_widget_revoke_revokes_only_callers_registered_tokens(self, monkeypatch):
-        import importlib
+        from plugins.pendo.handlers import web as web_module
 
-        web_module = importlib.import_module("plugins.pendo.handlers.web")
-        calls      = []
-        db         = SimpleNamespace(
+        calls = []
+        db    = SimpleNamespace(
             revoke_widget_tokens=lambda owner_id: calls.append(owner_id) or 2,
         )
         handler = web_module.WebHandler(db=db)
@@ -252,7 +229,7 @@ class TestPendoWebHandler:
         result = asyncio.run(handler.handle("1001", "widget-revoke", context=None))
 
         assert result == {
-            "status": "success",
+            "status" : "success",
             "message": "✅ 已吊销 2 个 Widget Token；请重新生成并录入 Keychain",
         }
         assert calls == ["1001"]
@@ -260,9 +237,6 @@ class TestPendoWebHandler:
 
 class TestPendoSearchAndImportRegression:
     def test_search_handler_applies_date_field_for_range_filters(self, monkeypatch):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.search import SearchHandler
 
@@ -292,9 +266,6 @@ class TestPendoSearchAndImportRegression:
         assert "end_date" in calls[0][2]
 
     def test_batch_insert_or_update_refreshes_fts_rows(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.services.db import Database
 
@@ -305,12 +276,12 @@ class TestPendoSearchAndImportRegression:
                     (
                         "insert",
                         {
-                            "id": "note-1",
-                            "type": "note",
-                            "title": "脉冲星速记",
-                            "content": "第一次导入内容",
+                            "id"      : "note-1",
+                            "type"    : "note",
+                            "title"   : "脉冲星速记",
+                            "content" : "第一次导入内容",
                             "category": "研究",
-                            "tags": ["memo"],
+                            "tags"    : ["memo"],
                         },
                     )
                 ],
@@ -329,12 +300,12 @@ class TestPendoSearchAndImportRegression:
                     (
                         "update",
                         {
-                            "id": "note-1",
-                            "type": "note",
-                            "title": "脉冲星速记",
-                            "content": "更新后的导入内容",
+                            "id"      : "note-1",
+                            "type"    : "note",
+                            "title"   : "脉冲星速记",
+                            "content" : "更新后的导入内容",
                             "category": "研究",
-                            "tags": ["memo"],
+                            "tags"    : ["memo"],
                         },
                     )
                 ],
@@ -352,9 +323,6 @@ class TestPendoSearchAndImportRegression:
 
 class TestPendoRedesignRegression:
     def test_widget_ledger_panel_prefers_amount_cents(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.services.db import Database
         from plugins.pendo.web.api.widget import build_widget_summary
@@ -364,16 +332,16 @@ class TestPendoRedesignRegression:
         try:
             db.insert_item(
                 {
-                    "id": "widget-ledger-expense",
-                    "owner_id": owner_id,
-                    "type": "ledger",
-                    "title": "TEST_SCRIPTABLE 午饭",
-                    "amount": 0,
-                    "amount_cents": 12345,
+                    "id"              : "widget-ledger-expense",
+                    "owner_id"        : owner_id,
+                    "type"            : "ledger",
+                    "title"           : "TEST_SCRIPTABLE 午饭",
+                    "amount"          : 0,
+                    "amount_cents"    : 12345,
                     "transaction_type": "expense",
-                    "ledger_category": "餐饮",
-                    "ledger_date": "2026-04-30",
-                    "account_name": "微信",
+                    "ledger_category" : "餐饮",
+                    "ledger_date"     : "2026-04-30",
+                    "account_name"    : "微信",
                 }
             )
 
@@ -390,10 +358,7 @@ class TestPendoRedesignRegression:
             db.cleanup()
 
     def test_export_range_includes_event_spanning_into_window(self):
-        import sys
         from datetime import date
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.web.api.transfer import item_matches_range
 
@@ -410,9 +375,6 @@ class TestPendoRedesignRegression:
         assert not item_matches_range(before_event, "event", date(2026, 4, 30), date(2026, 4, 30))
 
     def test_collection_category_search_uses_collection_fallback(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.services.db import Database
 
@@ -421,26 +383,26 @@ class TestPendoRedesignRegression:
         try:
             collection_id = db.create_event_collection(
                 {
-                    "id": "test_collection_category",
+                    "id"      : "test_collection_category",
                     "owner_id": owner_id,
-                    "kind": "multi_node",
-                    "title": "TEST_STATS 学术会议",
+                    "kind"    : "multi_node",
+                    "title"   : "TEST_STATS 学术会议",
                     "category": "工作",
                     "location": "上海",
                 }
             )
             db.insert_item(
                 {
-                    "id": "test_collection_node",
-                    "owner_id": owner_id,
-                    "type": "event",
-                    "title": "摘要截止",
-                    "category": "",
-                    "start_time": "2026-05-10T09:00:00",
-                    "event_role": "multi_node_child",
-                    "event_collection_id": collection_id,
+                    "id"                   : "test_collection_node",
+                    "owner_id"             : owner_id,
+                    "type"                 : "event",
+                    "title"                : "摘要截止",
+                    "category"             : "",
+                    "start_time"           : "2026-05-10T09:00:00",
+                    "event_role"           : "multi_node_child",
+                    "event_collection_id"  : collection_id,
                     "event_collection_kind": "multi_node",
-                    "event_index": 1,
+                    "event_index"          : 1,
                 }
             )
 

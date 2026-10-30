@@ -2,20 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
-
-from tests.helpers.pendo_test_support import (
-    ROOT,
-    SimpleNamespace,
-    asyncio,
-)
+from types import SimpleNamespace
 
 
 class TestCrossTypeCommandRegression:
     def test_note_view_with_event_id_returns_hint(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.note import NoteHandler
         from plugins.pendo.models.item import EventItem
@@ -43,9 +36,6 @@ class TestCrossTypeCommandRegression:
             db.cleanup()
 
     def test_note_delete_with_event_id_returns_hint_without_deleting_event(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.note import NoteHandler
         from plugins.pendo.models.item import EventItem, ItemType
@@ -76,9 +66,6 @@ class TestCrossTypeCommandRegression:
             db.cleanup()
 
     def test_note_add_multiline_title_parses_category_and_tags(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.note import NoteHandler
         from plugins.pendo.services.db import Database
@@ -106,9 +93,6 @@ class TestCrossTypeCommandRegression:
             db.cleanup()
 
     def test_note_add_explicit_content_syntax_still_works(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.note import NoteHandler
         from plugins.pendo.services.db import Database
@@ -136,9 +120,6 @@ class TestCrossTypeCommandRegression:
             db.cleanup()
 
     def test_note_add_title_token_keeps_body_separate(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.note import NoteHandler
         from plugins.pendo.services.db import Database
@@ -166,9 +147,6 @@ class TestCrossTypeCommandRegression:
             db.cleanup()
 
     def test_note_add_title_token_can_be_extracted_from_middle(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.note import NoteHandler
         from plugins.pendo.services.db import Database
@@ -196,9 +174,6 @@ class TestCrossTypeCommandRegression:
             db.cleanup()
 
     def test_note_add_preserves_markdown_heading_in_body(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.note import NoteHandler
         from plugins.pendo.services.db import Database
@@ -226,9 +201,6 @@ class TestCrossTypeCommandRegression:
             db.cleanup()
 
     def test_note_add_parses_references_and_view_shows_linked_item(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.note import NoteHandler
         from plugins.pendo.models.item import EventItem
@@ -272,9 +244,6 @@ class TestCrossTypeCommandRegression:
             db.cleanup()
 
     def test_note_append_tag_untag_link_and_backlink_flow(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.note import NoteHandler
         from plugins.pendo.models.item import NoteItem
@@ -330,9 +299,6 @@ class TestCrossTypeCommandRegression:
             db.cleanup()
 
     def test_ledger_view_with_diary_id_returns_hint(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.ledger import LedgerHandler
         from plugins.pendo.models.item import DiaryItem
@@ -361,9 +327,6 @@ class TestCrossTypeCommandRegression:
             db.cleanup()
 
     def test_ledger_edit_with_note_id_returns_hint_without_mutation(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.ledger import LedgerHandler
         from plugins.pendo.models.item import ItemType, NoteItem
@@ -396,10 +359,7 @@ class TestCrossTypeCommandRegression:
             db.cleanup()
 
     def test_ledger_add_session_starts_with_amount_then_numeric_options(self):
-        import sys
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.ledger import LedgerHandler
 
@@ -419,10 +379,7 @@ class TestCrossTypeCommandRegression:
         assert "owner_id" not in create_calls[0][0]
 
     def test_ledger_add_session_collects_typed_front_fields_then_numeric_options(self):
-        import sys
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.ledger import LedgerHandler
 
@@ -495,8 +452,8 @@ class TestCrossTypeCommandRegression:
         context = _Context()
         session = _Session(
             {
-                "step": "transaction_type",
-                "data": {"amount": 1000, "title": "还款", "owner_id": "u-spoofed"},
+                "step"    : "transaction_type",
+                "data"    : {"amount": 1000, "title": "还款", "owner_id": "u-spoofed"},
                 "group_id": None,
             }
         )
@@ -525,10 +482,7 @@ class TestCrossTypeCommandRegression:
         assert "owner_id" not in captured["data"]
 
     def test_ledger_add_inline_uses_compact_entry_parser(self):
-        import sys
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.ledger import LedgerHandler
 
@@ -560,10 +514,7 @@ class TestCrossTypeCommandRegression:
         assert captured["data"]["account_name"] == "微信"
 
     def test_ledger_add_inline_uses_defaults_without_empty_messages(self, tmp_path):
-        import sys
         from types import SimpleNamespace
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.ledger import LedgerHandler
         from plugins.pendo.services.db import Database
@@ -587,10 +538,7 @@ class TestCrossTypeCommandRegression:
             db.cleanup()
 
     def test_todo_add_without_args_starts_interactive_session(self):
-        import sys
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.config import PendoConfig
         from plugins.pendo.handlers.task import TaskHandler
@@ -613,9 +561,6 @@ class TestCrossTypeCommandRegression:
         assert create_calls[0][0]["group_id"] == 42
 
     def test_todo_add_inline_still_uses_quick_parser(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.task import TaskHandler
         from plugins.pendo.services.db import Database
@@ -656,9 +601,6 @@ class TestCrossTypeCommandRegression:
     def test_todo_add_session_collects_content_then_finishes_after_plan_date(
         self, tmp_path, monkeypatch
     ):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.task import TaskHandler
         from plugins.pendo.services.db import Database
@@ -710,10 +652,7 @@ class TestCrossTypeCommandRegression:
             db.cleanup()
 
     def test_todo_add_session_reprompts_invalid_plan_date(self):
-        import sys
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.task import TaskHandler
 
@@ -732,9 +671,6 @@ class TestCrossTypeCommandRegression:
         assert session["step"] == "plan_date"
 
     def test_todo_view_returns_detail(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.task import TaskHandler
         from plugins.pendo.models.item import TaskItem, TaskStatus
@@ -766,9 +702,6 @@ class TestCrossTypeCommandRegression:
             db.cleanup()
 
     def test_todo_done_with_note_id_returns_hint_without_mutating_note(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.task import TaskHandler
         from plugins.pendo.models.item import ItemType, NoteItem
@@ -786,6 +719,7 @@ class TestCrossTypeCommandRegression:
             )
             db.insert_item(note, "not12345")
 
+            before = db.get_item("not12345", "u1").to_dict()
             handler = TaskHandler(db=db)
             result    = asyncio.run(handler.mark_done("u1", "not12345", SimpleNamespace()))
             preserved = db.get_item("not12345", "u1")
@@ -794,13 +728,11 @@ class TestCrossTypeCommandRegression:
             assert "不是待办ID" in result["message"]
             assert preserved is not None
             assert preserved.type == ItemType.NOTE
+            assert preserved.to_dict() == before
         finally:
             db.cleanup()
 
     def test_todo_unknown_command_returns_error_instead_of_silent_list(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.task import TaskHandler
         from plugins.pendo.services.db import Database
@@ -824,9 +756,6 @@ class TestCrossTypeCommandRegression:
         assert result == {"status": "error", "message": "❌ 正确用法:\n\n/pendo undo"}
 
     def test_todo_category_shortcut_still_routes_to_list(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.task import TaskHandler
         from plugins.pendo.models.item import TaskItem, TaskStatus
@@ -855,10 +784,7 @@ class TestCrossTypeCommandRegression:
             db.cleanup()
 
     def test_event_edit_with_diary_id_returns_hint_without_mutation(self, tmp_path):
-        import sys
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import DiaryItem, ItemType
@@ -893,10 +819,7 @@ class TestCrossTypeCommandRegression:
             db.cleanup()
 
     def test_event_reminders_view_with_diary_id_returns_hint(self, tmp_path):
-        import sys
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import DiaryItem
@@ -925,10 +848,7 @@ class TestCrossTypeCommandRegression:
             db.cleanup()
 
     def test_event_reminders_set_with_note_id_returns_hint_without_mutation(self, tmp_path):
-        import sys
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import ItemType, NoteItem
@@ -961,10 +881,7 @@ class TestCrossTypeCommandRegression:
             db.cleanup()
 
     def test_event_delete_with_note_id_returns_hint_without_mutation(self, tmp_path):
-        import sys
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import ItemType, NoteItem

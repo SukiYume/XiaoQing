@@ -48,15 +48,15 @@ def test_expression_store_keeps_record_with_malformed_scalar_fields(tmp_path):
         json.dumps(
             [
                 {
-                    "expression_id": "exp-bad-fields",
-                    "chat_id": "chat-1",
-                    "situation": "situation",
-                    "style": "style",
-                    "content_list": ["example"],
-                    "count": "not-an-int",
+                    "expression_id"   : "exp-bad-fields",
+                    "chat_id"         : "chat-1",
+                    "situation"       : "situation",
+                    "style"           : "style",
+                    "content_list"    : ["example"],
+                    "count"           : "not-an-int",
                     "last_active_time": "nan",
-                    "checked": "false",
-                    "rejected": 1,
+                    "checked"         : "false",
+                    "rejected"        : 1,
                 }
             ]
         ),
@@ -113,15 +113,15 @@ def test_jargon_store_normalizes_malformed_record_fields(tmp_path):
         json.dumps(
             [
                 {
-                    "content": "坏字段也保留条目",
-                    "raw_content": "不能拆成字符",
-                    "chat_id_counts": ["bad", ["chat-1", "2"], ["", 9]],
-                    "is_global": "false",
-                    "count": "not-an-int",
-                    "is_jargon": "false",
-                    "is_complete": 1,
+                    "content"             : "坏字段也保留条目",
+                    "raw_content"         : "不能拆成字符",
+                    "chat_id_counts"      : ["bad", ["chat-1", "2"], ["", 9]],
+                    "is_global"           : "false",
+                    "count"               : "not-an-int",
+                    "is_jargon"           : "false",
+                    "is_complete"         : 1,
                     "last_inference_count": -3,
-                    "updated_at": "not-a-time",
+                    "updated_at"          : "not-a-time",
                 }
             ],
             ensure_ascii=False,
@@ -269,10 +269,10 @@ def test_message_recorder_repairs_invalid_timestamp_values(tmp_path):
         json.dumps(
             {
                 "last_extraction_time": {
-                    "nan": "NaN",
+                    "nan"     : "NaN",
                     "infinite": "Infinity",
                     "negative": -1,
-                    "valid": 9.5,
+                    "valid"   : 9.5,
                 }
             }
         ),

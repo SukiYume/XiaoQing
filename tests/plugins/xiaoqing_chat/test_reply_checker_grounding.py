@@ -140,9 +140,9 @@ def test_confirmed_hard_rejection_survives_incomplete_visual_protocol(missing_fi
 
 def test_explicit_local_definitions_preserve_original_state_and_latest_correction():
     records = {
-        "h1": "10:20, 阿梨：我们把标题写好、正文没写，叫空箱发货。",
-        "h2": "10:21, 阿夏：我空箱发货二十分钟了。",
-        "h3": "10:22, 阿白：我们管把任务改名三次叫任务进化。",
+        "h1"     : "10:20, 阿梨：我们把标题写好、正文没写，叫空箱发货。",
+        "h2"     : "10:21, 阿夏：我空箱发货二十分钟了。",
+        "h3"     : "10:22, 阿白：我们管把任务改名三次叫任务进化。",
         "current": "我们把标题写好、正文没写、尚未发送，叫空箱发货。",
     }
     definitions = {item["term"]: item for item in checker._explicit_term_definitions(records)}
@@ -295,17 +295,17 @@ async def test_checker_requires_direct_grounding_for_each_persona_claim(
         lambda _resp: outputs.pop(0),
     )
     common = {
-        "secrets": {"_ai": object()},
-        "bot_name": "小青",
-        "goal": "自然聊天",
-        "policy_text": "",
-        "history": [],
-        "enable_llm_checker": True,
-        "max_repeat_compare": 3,
-        "similarity_threshold": 0.9,
-        "max_assistant_in_row": 5,
-        "timeout_seconds": 1.0,
-        "max_retry": 0,
+        "secrets"               : {"_ai": object()},
+        "bot_name"              : "小青",
+        "goal"                  : "自然聊天",
+        "policy_text"           : "",
+        "history"               : [],
+        "enable_llm_checker"    : True,
+        "max_repeat_compare"    : 3,
+        "similarity_threshold"  : 0.9,
+        "max_assistant_in_row"  : 5,
+        "timeout_seconds"       : 1.0,
+        "max_retry"             : 0,
         "retry_interval_seconds": 0.0,
     }
 
@@ -390,20 +390,20 @@ async def test_checker_allows_bounded_persona_story_but_rejects_persona_overreac
         lambda _resp: outputs.pop(0),
     )
     common = {
-        "secrets": {"_ai": object()},
-        "bot_name": "小青",
-        "goal": "自然聊天",
-        "policy_text": "",
-        "grounding_text": "小青是住校的大二理工科女生。",
-        "history": [],
-        "enable_llm_checker": True,
-        "max_repeat_compare": 3,
-        "similarity_threshold": 0.9,
-        "max_assistant_in_row": 5,
-        "timeout_seconds": 1.0,
-        "max_retry": 0,
-        "retry_interval_seconds": 0.0,
-        "llm_checker_mode": "risk",
+        "secrets"                         : {"_ai": object()},
+        "bot_name"                        : "小青",
+        "goal"                            : "自然聊天",
+        "policy_text"                     : "",
+        "grounding_text"                  : "小青是住校的大二理工科女生。",
+        "history"                         : [],
+        "enable_llm_checker"              : True,
+        "max_repeat_compare"              : 3,
+        "similarity_threshold"            : 0.9,
+        "max_assistant_in_row"            : 5,
+        "timeout_seconds"                 : 1.0,
+        "max_retry"                       : 0,
+        "retry_interval_seconds"          : 0.0,
+        "llm_checker_mode"                : "risk",
         "allow_low_stakes_persona_fiction": True,
     }
 
@@ -468,21 +468,21 @@ async def test_checker_rejects_story_address_that_conflicts_with_stable_gender()
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
     common = {
-        "secrets": {"_ai": None},
-        "bot_name": "小青",
-        "goal": "分享日常",
-        "current_text": "大家今天遇到什么离谱事了？",
-        "policy_text": "",
-        "grounding_text": XiaoQingChatConfig().personality.card.facts("小青"),
-        "history": [],
-        "chat_history_text": "Alice: 大家今天遇到什么离谱事了？",
-        "enable_llm_checker": False,
-        "max_repeat_compare": 3,
-        "similarity_threshold": 0.9,
-        "max_assistant_in_row": 5,
-        "timeout_seconds": 1.0,
-        "max_retry": 0,
-        "retry_interval_seconds": 0.0,
+        "secrets"                         : {"_ai": None},
+        "bot_name"                        : "小青",
+        "goal"                            : "分享日常",
+        "current_text"                    : "大家今天遇到什么离谱事了？",
+        "policy_text"                     : "",
+        "grounding_text"                  : XiaoQingChatConfig().personality.card.facts("小青"),
+        "history"                         : [],
+        "chat_history_text"               : "Alice: 大家今天遇到什么离谱事了？",
+        "enable_llm_checker"              : False,
+        "max_repeat_compare"              : 3,
+        "similarity_threshold"            : 0.9,
+        "max_assistant_in_row"            : 5,
+        "timeout_seconds"                 : 1.0,
+        "max_retry"                       : 0,
+        "retry_interval_seconds"          : 0.0,
         "allow_low_stakes_persona_fiction": True,
     }
 
@@ -593,18 +593,18 @@ async def test_checker_requires_direct_dialogue_evidence_for_context_claims(
         lambda _resp: outputs.pop(0),
     )
     common = {
-        "secrets": {"_ai": object()},
-        "bot_name": "小青",
-        "goal": "自然聊天",
-        "policy_text": "",
-        "grounding_text": "",
-        "history": [],
-        "enable_llm_checker": True,
-        "max_repeat_compare": 3,
-        "similarity_threshold": 0.9,
-        "max_assistant_in_row": 5,
-        "timeout_seconds": 1.0,
-        "max_retry": 0,
+        "secrets"               : {"_ai": object()},
+        "bot_name"              : "小青",
+        "goal"                  : "自然聊天",
+        "policy_text"           : "",
+        "grounding_text"        : "",
+        "history"               : [],
+        "enable_llm_checker"    : True,
+        "max_repeat_compare"    : 3,
+        "similarity_threshold"  : 0.9,
+        "max_assistant_in_row"  : 5,
+        "timeout_seconds"       : 1.0,
+        "max_retry"             : 0,
         "retry_interval_seconds": 0.0,
     }
 
@@ -738,15 +738,15 @@ def test_context_evidence_allows_natural_paraphrase_and_obeys_semantic_axis(sema
 
     reply   = "那这封邮件总算收工了。"
     payload = {
-        "suitable": True,
-        "need_replan": False,
-        "reason": "语义支持判断",
-        "severity": "soft",
+        "suitable"             : True,
+        "need_replan"          : False,
+        "reason"               : "语义支持判断",
+        "severity"             : "soft",
         "persona_scan_complete": True,
-        "persona_claims": [],
+        "persona_claims"       : [],
         "context_scan_complete": True,
-        "context_claims": [{"claim": reply, "evidence": "刚把客户邮件发出去了"}],
-        "context_coherent": semantic_supported,
+        "context_claims"       : [{"claim": reply, "evidence": "刚把客户邮件发出去了"}],
+        "context_coherent"     : semantic_supported,
     }
     result = _interpret_checker_response(
         content                          = json.dumps(payload),
@@ -765,23 +765,23 @@ def test_context_evidence_allows_natural_paraphrase_and_obeys_semantic_axis(sema
 
 def _response(**changes):
     payload = {
-        "suitable": True,
-        "reason": "符合输入",
-        "need_replan": False,
-        "severity": "soft",
-        "context_coherent": True,
-        "speaker_correct": True,
-        "instruction_followed": True,
-        "persona_grounded": True,
-        "factually_plausible": True,
-        "non_template": True,
+        "suitable"                : True,
+        "reason"                  : "符合输入",
+        "need_replan"             : False,
+        "severity"                : "soft",
+        "context_coherent"        : True,
+        "speaker_correct"         : True,
+        "instruction_followed"    : True,
+        "persona_grounded"        : True,
+        "factually_plausible"     : True,
+        "non_template"            : True,
         "image_evidence_respected": True,
-        "persona_scan_complete": True,
-        "persona_claims": [],
-        "context_scan_complete": True,
-        "context_claims": [],
-        "visual_scan_complete": True,
-        "visual_claims": [],
+        "persona_scan_complete"   : True,
+        "persona_claims"          : [],
+        "context_scan_complete"   : True,
+        "context_claims"          : [],
+        "visual_scan_complete"    : True,
+        "visual_claims"           : [],
     }
     payload.update(changes)
     return json.dumps(payload, ensure_ascii=False)
@@ -789,20 +789,20 @@ def _response(**changes):
 
 def _options(**changes):
     values = {
-        "secrets": {},
-        "bot_name": "小青",
-        "goal": "回答当前问题",
-        "history": [],
-        "chat_history_text": "",
-        "enable_llm_checker": True,
-        "max_repeat_compare": 3,
-        "similarity_threshold": 0.9,
-        "max_assistant_in_row": 5,
-        "timeout_seconds": 1,
-        "max_retry": 0,
+        "secrets"               : {},
+        "bot_name"              : "小青",
+        "goal"                  : "回答当前问题",
+        "history"               : [],
+        "chat_history_text"     : "",
+        "enable_llm_checker"    : True,
+        "max_repeat_compare"    : 3,
+        "similarity_threshold"  : 0.9,
+        "max_assistant_in_row"  : 5,
+        "timeout_seconds"       : 1,
+        "max_retry"             : 0,
         "retry_interval_seconds": 0,
         "current_image_attached": False,
-        "llm_checker_mode": "risk",
+        "llm_checker_mode"      : "risk",
     }
     values.update(changes)
     return values
@@ -837,13 +837,13 @@ async def test_semantic_check_blocks_stance_reversal_when_general_review_passes(
     monkeypatch.setattr(checker, "_llm_check", general)
     semantic_payload = json.dumps(
         {
-            "context_coherent": False,
-            "speaker_correct": True,
+            "context_coherent"    : False,
+            "speaker_correct"     : True,
             "instruction_followed": True,
-            "reason": "前一轮选择与候选反转",
-            "scan_complete": True,
-            "premise_checks": [],
-            "quantity_checks": [],
+            "reason"              : "前一轮选择与候选反转",
+            "scan_complete"       : True,
+            "premise_checks"      : [],
+            "quantity_checks"     : [],
         }
     )
     remote = AsyncMock(
@@ -881,12 +881,12 @@ def _remote_json(payload):
 
 def _turn_reading(**changes):
     payload = {
-        "meaning": "用户选择与角色相反的口味",
-        "intent": "表达自己的选择",
-        "bot_stance": "甜味",
-        "facts": [],
+        "meaning"    : "用户选择与角色相反的口味",
+        "intent"     : "表达自己的选择",
+        "bot_stance" : "甜味",
+        "facts"      : [],
         "local_terms": [],
-        "unresolved": [],
+        "unresolved" : [],
     }
     payload.update(changes)
     return payload
@@ -955,17 +955,17 @@ async def test_semantic_premise_rejection_overrides_all_true_summary(
         local_terms = [{"term": "隐身入库", "meaning": "一收好就找不到", "source_ids": ["h1"]}],
     )
     verdict = {
-        "scan_complete": True,
+        "scan_complete" : True,
         "premise_checks": [
             {
-                "fragment": "七分钟才入库",
-                "literal": "收好U盘花了七分钟",
-                "supported": supported,
+                "fragment"  : "七分钟才入库",
+                "literal"   : "收好U盘花了七分钟",
+                "supported" : supported,
                 "consistent": consistent,
             }
         ],
-        "context_coherent": True,
-        "speaker_correct": True,
+        "context_coherent"    : True,
+        "speaker_correct"     : True,
         "instruction_followed": True,
     }
     remote = AsyncMock(side_effect=[_remote_json(reading), _remote_json(verdict)])
@@ -1023,18 +1023,18 @@ async def test_semantic_premise_kind_scopes_the_support_requirement(
         local_terms = [],
     )
     premise = {
-        "fragment": "这两周是去异世界转生了吗",
-        "literal": "猜测阿杰这两周去异世界转生",
-        "supported": supported,
+        "fragment"  : "这两周是去异世界转生了吗",
+        "literal"   : "猜测阿杰这两周去异世界转生",
+        "supported" : supported,
         "consistent": consistent,
     }
     if kind:
         premise["kind"] = kind
     verdict = {
-        "scan_complete": True,
-        "premise_checks": [premise],
-        "context_coherent": True,
-        "speaker_correct": True,
+        "scan_complete"       : True,
+        "premise_checks"      : [premise],
+        "context_coherent"    : True,
+        "speaker_correct"     : True,
         "instruction_followed": True,
     }
     remote = AsyncMock(side_effect=[_remote_json(reading), _remote_json(verdict)])
@@ -1095,10 +1095,10 @@ async def test_semantic_reading_requires_original_sources_before_comparing(monke
 )
 async def test_semantic_premise_protocol_errors_remain_infrastructure_failures(monkeypatch, check):
     verdict = {
-        "scan_complete": True,
-        "premise_checks": [check],
-        "context_coherent": True,
-        "speaker_correct": True,
+        "scan_complete"       : True,
+        "premise_checks"      : [check],
+        "context_coherent"    : True,
+        "speaker_correct"     : True,
         "instruction_followed": True,
     }
     remote = AsyncMock(side_effect=[_remote_json(_turn_reading()), _remote_json(verdict)])
@@ -1130,7 +1130,7 @@ async def test_semantic_cancellation_reaches_either_request_stage(monkeypatch, b
             return _remote_json(_turn_reading())
         entered.set()
         try:
-            await asyncio.Event().wait()
+            await asyncio.wait_for(asyncio.Event().wait(), timeout=10)
         finally:
             cancelled.append(stage)
 
@@ -1144,7 +1144,7 @@ async def test_semantic_cancellation_reaches_either_request_stage(monkeypatch, b
             request_policy=checker._LLMRequestPolicy(1024, 2, 0, 0),
         )
     )
-    await entered.wait()
+    await asyncio.wait_for(entered.wait(), timeout=10)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -1175,7 +1175,7 @@ async def test_parallel_checker_cancellation_stops_both_requests(monkeypatch):
     async def pending(index, **_kwargs):
         started[index].set()
         try:
-            await asyncio.Event().wait()
+            await asyncio.wait_for(asyncio.Event().wait(), timeout=10)
         finally:
             cancelled.append(index)
 

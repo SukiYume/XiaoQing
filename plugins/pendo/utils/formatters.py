@@ -49,28 +49,28 @@ PRIORITY_LABELS = {
 
 # 任务状态图标
 STATUS_ICONS = {
-    "open": "⬜",
-    "done": "✅",
+    "open"     : "⬜",
+    "done"     : "✅",
     "cancelled": "❌",
 }
 
 # 条目类型图标
 TYPE_ICONS = {
-    "event": "🗓️",
-    "task": "✅",
-    "note": "📝",
-    "diary": "📔",
-    "idea": "💡",
+    "event" : "🗓️",
+    "task"  : "✅",
+    "note"  : "📝",
+    "diary" : "📔",
+    "idea"  : "💡",
     "ledger": "💰",
 }
 
 # 条目类型名称
 TYPE_NAMES = {
-    "event": "🗓️ 日程",
-    "task": "✅ 待办",
-    "note": "📝 笔记",
-    "idea": "💡 想法",
-    "diary": "📔 日记",
+    "event" : "🗓️ 日程",
+    "task"  : "✅ 待办",
+    "note"  : "📝 笔记",
+    "idea"  : "💡 想法",
+    "diary" : "📔 日记",
     "ledger": "💰 记账",
 }
 

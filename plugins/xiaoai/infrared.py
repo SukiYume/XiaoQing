@@ -9,11 +9,11 @@ def extensions(model: str) -> dict[str, Any]:
     if model != "miir.aircondition.ir02":
         return {}
     common = {
-        "kind": "action",
-        "supported": True,
-        "outputs": [],
-        "service": "红外空调扩展",
-        "transport": "speaker_silent",
+        "kind"        : "action",
+        "supported"   : True,
+        "outputs"     : [],
+        "service"     : "红外空调扩展",
+        "transport"   : "speaker_silent",
         "verification": "静默语义转发；实际红外效果待确认",
     }
     return {
@@ -21,11 +21,11 @@ def extensions(model: str) -> dict[str, Any]:
         | {"name": "扫风开关", "voice": "swing", "inputs": [{"name": "扫风", "format": "bool"}]},
         "x.fan": common
         | {
-            "name": "绝对风速",
-            "voice": "fan",
+            "name"  : "绝对风速",
+            "voice" : "fan",
             "inputs": [
                 {
-                    "name": "风速",
+                    "name"  : "风速",
                     "format": "string",
                     "values": [{"value": x} for x in ("自动", "低", "中", "高")],
                 }

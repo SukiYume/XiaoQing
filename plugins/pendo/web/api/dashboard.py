@@ -17,7 +17,7 @@ def get_dashboard(
     """在当前所有者范围内构建并返回看板概览。"""
 
     return {
-        "ok": True,
-        "data": build_dashboard_overview(db=db, owner_id=owner_id),
+        "ok"     : True,
+        "data"   : build_dashboard_overview(db=db, owner_id=owner_id),
         "message": "",
     }

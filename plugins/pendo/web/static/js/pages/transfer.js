@@ -181,6 +181,7 @@ function normalizeInspect(value) {
             total_samples: nonNegativeInteger(counts.total_samples),
         },
         bundle_id: textValue(value.bundle_id),
+        preview_token: textValue(value.preview_token),
         already_imported: value.already_imported === true,
         warnings: normalizeMessages(value.warnings),
         errors: normalizeValidationErrors(value.errors),
@@ -582,7 +583,7 @@ function renderExportTab() {
                         <button type="button" class="transfer-btn primary" id="btn-transfer-download" ${busy ? 'disabled' : ''} aria-busy="${state.downloading}">${state.downloading ? '生成中...' : '下载备份'}</button>
                     </div>
                 </div>
-                ${renderExportPreview(state.preview)}
+                <div id="transfer-export-preview">${renderExportPreview(state.preview)}</div>
             </div>
             <aside class="transfer-sidecard">
                 <h3>格式说明</h3>
@@ -1109,7 +1110,7 @@ function renderHistoryTab() {
     return `
         <div class="transfer-card">
             <h3>操作记录</h3>
-            <p>所有导入和导出操作的审计日志。</p>
+            <p>最近 50 条导入和导出操作记录。</p>
             <div class="transfer-section">
                 <div class="transfer-list">
                     ${state.logs.map(renderLogRow).join('')}
@@ -1190,6 +1191,7 @@ function attachExportListeners() {
             )
                 return;
             _state.export.preset = preset;
+            _state.export.preview = null;
             if (preset !== 'custom') {
                 _state.export.start = '';
                 _state.export.end = '';
@@ -1201,12 +1203,22 @@ function attachExportListeners() {
     const endInput   = _container.querySelector('#transfer-export-end');
     if (startInput) {
         startInput.oninput = () => {
-            if (!_state.export.loading && !_state.export.downloading) _state.export.start = startInput.value;
+            if (!_state.export.loading && !_state.export.downloading) {
+                _state.export.start = startInput.value;
+                _state.export.preview = null;
+                const preview = _container.querySelector('#transfer-export-preview');
+                if (preview) preview.innerHTML = renderExportPreview(null);
+            }
         };
     }
     if (endInput) {
         endInput.oninput = () => {
-            if (!_state.export.loading && !_state.export.downloading) _state.export.end = endInput.value;
+            if (!_state.export.loading && !_state.export.downloading) {
+                _state.export.end = endInput.value;
+                _state.export.preview = null;
+                const preview = _container.querySelector('#transfer-export-preview');
+                if (preview) preview.innerHTML = renderExportPreview(null);
+            }
         };
     }
     _container.querySelector('#btn-transfer-preview')?.addEventListener('click', previewExport);
@@ -1302,6 +1314,7 @@ function toggleExportType(type) {
     } else {
         _state.export.selectedTypes = [...selected, type];
     }
+    _state.export.preview = null;
     renderPage();
 }
 
@@ -1365,6 +1378,7 @@ async function downloadExport() {
             anchor?.remove();
             URL.revokeObjectURL(url);
         }
+        state.history.loaded = false;
         showToast('备份已开始下载', 'success');
         return true;
     } catch (error) {
@@ -1502,12 +1516,31 @@ async function loadSamplePage(page) {
     state.import.samplePage = nextPage;
     renderPage();
     try {
-        const response = await apiUpload('/transfer/import/samples', file, {
-            'Content-Type': 'application/zip',
-            'X-Transfer-Filename': transferFilename(file),
+        // 有预检令牌时只请求这一页，不重新上传整个备份；令牌过期再回退到上传文件。
+        const token       = state.import.inspect.preview_token;
+        const pageHeaders = {
             'X-Transfer-Page': String(nextPage),
             'X-Transfer-Page-Size': String(pageSize),
+        };
+        const uploadSamples = () => apiUpload('/transfer/import/samples', file, {
+            'Content-Type': 'application/zip',
+            'X-Transfer-Filename': transferFilename(file),
+            ...pageHeaders,
         });
+        let response;
+        if (token) {
+            try {
+                response = await apiUpload('/transfer/import/samples', '', {
+                    ...pageHeaders,
+                    'X-Transfer-Preview-Token': token,
+                });
+            } catch {
+                state.import.inspect.preview_token = '';
+                response = await uploadSamples();
+            }
+        } else {
+            response = await uploadSamples();
+        }
         if (!isCurrentState(state) || state.import.file !== file || state.import.generation !== generation)
             return false;
         const samplePage = normalizeSamplePage(response?.data);

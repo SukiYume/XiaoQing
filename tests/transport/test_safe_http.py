@@ -490,7 +490,7 @@ async def test_redirects_are_manual_and_timeout_is_bounded(monkeypatch):
         _Response(307, headers={"Location": "/next"}),
         _Response(200, chunks=[b"<html><title>ok</title></html>"]),
     ]
-    requested_urls: list[str]   = []
+    requested_urls : list[str]  = []
     session_options: list[dict] = []
 
     async def validate(url):
@@ -631,7 +631,7 @@ async def test_cross_origin_redirect_strips_caller_secrets(monkeypatch):
         _Response(302, headers={"Location": "https://cdn.example.com/final"}),
         _Response(200, headers={"Content-Type": "text/html"}, chunks=[b"<html/>"]),
     ]
-    requested_urls: list[str]               = []
+    requested_urls   : list[str]            = []
     requested_headers: list[dict[str, str]] = []
 
     async def validate(url):
@@ -653,10 +653,10 @@ async def test_cross_origin_redirect_strips_caller_secrets(monkeypatch):
         "https://example.com/start",
         headers={
             "Author" + "ization": "Bearer cross-origin-canary",
-            "Coo" + "kie": "session=cross-origin-canary",
-            "X-API-Key": "cross-origin-canary",
-            "User-Agent": "safe-agent",
-            "Accept": "text/html",
+            "Coo" + "kie"       : "session=cross-origin-canary",
+            "X-API-Key"         : "cross-origin-canary",
+            "User-Agent"        : "safe-agent",
+            "Accept"            : "text/html",
         },
         allowed_hosts={"example.com", "cdn.example.com"},
     )
@@ -664,7 +664,7 @@ async def test_cross_origin_redirect_strips_caller_secrets(monkeypatch):
     assert result is not None and result.body == b"<html/>"
     assert requested_headers[0]["Authorization"] == "Bearer cross-origin-canary"
     assert requested_headers[1] == {
-        "User-Agent": "safe-agent",
-        "Accept": "text/html",
+        "User-Agent"     : "safe-agent",
+        "Accept"         : "text/html",
         "Accept-Encoding": "gzip, deflate",
     }

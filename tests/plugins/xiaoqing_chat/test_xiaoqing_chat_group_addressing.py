@@ -29,12 +29,12 @@ OTHER_ID = "3632293749"
 
 def _group_event(*segments: dict) -> dict:
     return {
-        "self_id": BOT_ID,
-        "group_id": 187217751,
-        "user_id": 503906146,
+        "self_id"   : BOT_ID,
+        "group_id"  : 187217751,
+        "user_id"   : 503906146,
         "message_id": 9,
-        "message": list(segments),
-        "sender": {"card": "PulsEternal"},
+        "message"   : list(segments),
+        "sender"    : {"card": "PulsEternal"},
     }
 
 
@@ -282,7 +282,7 @@ def _admit(limiter: GenerationLimiter, chat_id: str, user_id: str, *, wait: floa
 async def _hold_slot(limiter: GenerationLimiter, entered: asyncio.Event, release: asyncio.Event):
     async with _admit(limiter, "g1", "u1"):
         entered.set()
-        await release.wait()
+        await asyncio.wait_for(release.wait(), timeout=10)
 
 
 @pytest.mark.asyncio
@@ -290,22 +290,32 @@ async def test_newer_turn_waits_for_chat_slot_instead_of_being_rejected():
     limiter = GenerationLimiter()
     entered, release = asyncio.Event(), asyncio.Event()
     holder = asyncio.create_task(_hold_slot(limiter, entered, release))
-    await entered.wait()
+    owned  = [holder]
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=10)
 
-    admitted = asyncio.Event()
+        admitted = asyncio.Event()
 
-    async def newer():
-        async with _admit(limiter, "g1", "u2"):
-            admitted.set()
+        async def newer():
+            async with _admit(limiter, "g1", "u2"):
+                admitted.set()
 
-    waiter = asyncio.create_task(newer())
-    await asyncio.sleep(0.01)
-    assert not admitted.is_set()
+        waiter = asyncio.create_task(newer())
+        owned.append(waiter)
+        async with asyncio.timeout(5):
+            while "g1" not in limiter._chat_waiters:
+                await asyncio.sleep(0)
+        assert not admitted.is_set()
 
-    release.set()
-    await asyncio.wait_for(waiter, 1)
-    await holder
-    assert admitted.is_set()
+        release.set()
+        await asyncio.wait_for(waiter, 1)
+        await holder
+        assert admitted.is_set()
+    finally:
+        release.set()
+        for task in owned:
+            task.cancel()
+        await asyncio.gather(*owned, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -313,21 +323,32 @@ async def test_queued_turn_is_superseded_by_a_newer_one():
     limiter = GenerationLimiter()
     entered, release = asyncio.Event(), asyncio.Event()
     holder = asyncio.create_task(_hold_slot(limiter, entered, release))
-    await entered.wait()
+    owned  = [holder]
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=10)
 
-    async def queued(user_id: str):
-        async with _admit(limiter, "g1", user_id):
-            return user_id
+        async def queued(user_id: str):
+            async with _admit(limiter, "g1", user_id):
+                return user_id
 
-    older = asyncio.create_task(queued("u2"))
-    await asyncio.sleep(0.01)
-    newer = asyncio.create_task(queued("u3"))
+        older = asyncio.create_task(queued("u2"))
+        owned.append(older)
+        async with asyncio.timeout(5):
+            while "g1" not in limiter._chat_waiters:
+                await asyncio.sleep(0)
+        newer = asyncio.create_task(queued("u3"))
+        owned.append(newer)
 
-    with pytest.raises(GenerationLimitExceeded, match=CHAT_SUPERSEDED):
-        await asyncio.wait_for(older, 1)
-    release.set()
-    assert await asyncio.wait_for(newer, 1) == "u3"
-    await holder
+        with pytest.raises(GenerationLimitExceeded, match=CHAT_SUPERSEDED):
+            await asyncio.wait_for(older, 1)
+        release.set()
+        assert await asyncio.wait_for(newer, 1) == "u3"
+        await holder
+    finally:
+        release.set()
+        for task in owned:
+            task.cancel()
+        await asyncio.gather(*owned, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -335,19 +356,26 @@ async def test_chat_slot_wait_is_bounded_and_other_chats_are_unaffected():
     limiter = GenerationLimiter()
     entered, release = asyncio.Event(), asyncio.Event()
     holder = asyncio.create_task(_hold_slot(limiter, entered, release))
-    await entered.wait()
+    owned  = [holder]
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=10)
 
-    with pytest.raises(GenerationLimitExceeded, match="chat_inflight"):
-        async with _admit(limiter, "g1", "u2", wait=0.05):
+        with pytest.raises(GenerationLimitExceeded, match="chat_inflight"):
+            async with _admit(limiter, "g1", "u2", wait=0.05):
+                pass
+        with pytest.raises(GenerationLimitExceeded, match="chat_inflight"):
+            async with _admit(limiter, "g1", "u2", wait=0):
+                pass
+        async with _admit(limiter, "g2", "u3", wait=0):
             pass
-    with pytest.raises(GenerationLimitExceeded, match="chat_inflight"):
-        async with _admit(limiter, "g1", "u2", wait=0):
-            pass
-    async with _admit(limiter, "g2", "u3", wait=0):
-        pass
 
-    release.set()
-    await holder
+        release.set()
+        await holder
+    finally:
+        release.set()
+        for task in owned:
+            task.cancel()
+        await asyncio.gather(*owned, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -419,7 +447,9 @@ async def test_planner_wait_ends_turn_without_sleeping(tmp_path):
             run_pfc_once=AsyncMock(return_value=waiting),
             log_step=Mock(),
         ),
-        patch.object(turn_generation.asyncio, "sleep", sleep),
+        patch.object(
+            turn_generation, "asyncio", SimpleNamespace(**{**vars(asyncio), "sleep": sleep})
+        ),
     ):
         generated = await turn_generation.generate_smalltalk_turn(
             prepared, {"group_id": 1, "user_id": 2}, context, hctx

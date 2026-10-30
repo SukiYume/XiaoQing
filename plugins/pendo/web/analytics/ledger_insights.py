@@ -21,9 +21,9 @@ BucketMode      = Literal["day", "month"]
 _TRANSACTION_TYPES = frozenset({"expense", "income", "transfer"})
 _COMPARE_MODES = frozenset({"previous_period", "previous_year_to_date", "none"})
 _DELTA_LABELS: dict[CompareMode, str] = {
-    "previous_period": "较上一周期",
+    "previous_period"      : "较上一周期",
     "previous_year_to_date": "较去年同期",
-    "none": "无对比周期",
+    "none"                 : "无对比周期",
 }
 _LEDGER_AMOUNT_EXPR       = Database._LEDGER_AMOUNT_CENTS_EXPR
 _LEDGER_AMOUNT_TOTAL_EXPR = f"ROUND(COALESCE(SUM({_LEDGER_AMOUNT_EXPR}), 0) / 100.0, 2)"
@@ -33,15 +33,15 @@ _LEDGER_AMOUNT_TOTAL_EXPR = f"ROUND(COALESCE(SUM({_LEDGER_AMOUNT_EXPR}), 0) / 10
 class _LedgerFilters:
     """一次账本洞察查询使用的完整筛选条件。"""
 
-    owner_id: str
-    currency: str                            = "CNY"
+    owner_id        : str
+    currency        : str                    = "CNY"
     transaction_type: TransactionType | None = None
-    category: str | None                     = None
-    account_name: str | None                 = None
-    start_date: str | None                   = None
-    end_date: str | None                     = None
-    amount_min: float | None                 = None
-    amount_max: float | None                 = None
+    category        : str | None             = None
+    account_name    : str | None             = None
+    start_date      : str | None             = None
+    end_date        : str | None             = None
+    amount_min      : float | None           = None
+    amount_max      : float | None           = None
 
 
 def _parse_date(value: str) -> date:
@@ -152,11 +152,15 @@ def _build_period_delta(
     filters: _LedgerFilters,
     current_total: float,
     compare_mode: CompareMode,
-) -> float | None:
-    """按上一等长周期或去年同期计算金额变化比例。"""
+) -> tuple[float | None, bool]:
+    """按上一等长周期或去年同期计算金额变化比例，并单独返回是否首次发生。
+
+    比例保留数学含义：上期 100、本期 200 时是 1.0（+100%）。上一周期为零时没有比例，
+    用首次发生标记表达，不能也写成 1.0 和正常翻倍混在一起。
+    """
 
     if compare_mode == "none" or not filters.start_date or not filters.end_date:
-        return None
+        return None, False
 
     start = _parse_date(filters.start_date)
     end   = _parse_date(filters.end_date)
@@ -180,8 +184,8 @@ def _build_period_delta(
         previous_params,
     )
     if previous_total == 0:
-        return None if current_total == 0 else 1.0
-    return (current_total - previous_total) / previous_total
+        return None, current_total != 0
+    return (current_total - previous_total) / previous_total, False
 
 
 def _build_focus_details(
@@ -213,7 +217,7 @@ def _build_focus_details(
 
     bucket_totals: defaultdict[str, float] = defaultdict(float)
     bucket_counts: defaultdict[str, int]   = defaultdict(int)
-    candle_map: dict[str, JsonObject]      = {}
+    candle_map   : dict[str, JsonObject]   = {}
     for ledger_date, amount, _created_at, _item_id in trend_rows:
         ledger_day = _parse_date(str(ledger_date))
         key = ledger_day.isoformat() if bucket_mode == "day" else ledger_day.strftime("%Y-%m")
@@ -224,12 +228,12 @@ def _build_focus_details(
         candle = candle_map.get(key)
         if candle is None:
             candle_map[key] = {
-                "key": key,
+                "key"  : key,
                 "label": _bucket_label(key, bucket_mode),
-                "open": numeric_amount,
+                "open" : numeric_amount,
                 "close": numeric_amount,
-                "high": numeric_amount,
-                "low": numeric_amount,
+                "high" : numeric_amount,
+                "low"  : numeric_amount,
                 "total": numeric_amount,
                 "count": 1,
             }
@@ -242,7 +246,7 @@ def _build_focus_details(
 
     trend: list[JsonObject] = [
         {
-            "key": key,
+            "key"  : key,
             "label": _bucket_label(key, bucket_mode),
             "total": round(bucket_totals.get(key, 0), 2),
             "count": bucket_counts.get(key, 0),
@@ -251,12 +255,12 @@ def _build_focus_details(
     ]
     candles: list[JsonObject] = [
         {
-            "key": key,
+            "key"  : key,
             "label": candle["label"],
-            "open": round(candle["open"], 2),
+            "open" : round(candle["open"], 2),
             "close": round(candle["close"], 2),
-            "high": round(candle["high"], 2),
-            "low": round(candle["low"], 2),
+            "high" : round(candle["high"], 2),
+            "low"  : round(candle["low"], 2),
             "total": round(candle["total"], 2),
             "count": candle["count"],
         }
@@ -279,9 +283,9 @@ def _build_focus_details(
     categories: list[JsonObject] = [
         {
             "category": str(row[0] or "未分类").strip() or "未分类",
-            "total": round(float(row[1] or 0), 2),
-            "count": int(row[2] or 0),
-            "share": round(float(row[1] or 0) / focus_total, 4) if focus_total else 0,
+            "total"   : round(float(row[1] or 0), 2),
+            "count"   : int(row[2] or 0),
+            "share"   : round(float(row[1] or 0) / focus_total, 4) if focus_total else 0,
         }
         for row in category_rows
     ]
@@ -358,7 +362,7 @@ def build_ledger_insights(
         focus_filters,
         focus_total,
     )
-    delta = _build_period_delta(
+    delta, first_occurrence = _build_period_delta(
         conn,
         focus_filters,
         focus_total,
@@ -374,36 +378,37 @@ def build_ledger_insights(
     income_total    = round(totals_by_type.get("income", 0.0), 2)
     transfer_total  = round(totals_by_type.get("transfer", 0.0), 2)
     grouped_filters = {
-        "type": "ledger",
-        "date_field": "ledger_date",
-        "start_date": normalized_start,
-        "end_date": normalized_end,
+        "type"            : "ledger",
+        "date_field"      : "ledger_date",
+        "start_date"      : normalized_start,
+        "end_date"        : normalized_end,
         "transaction_type": normalized_transaction_type,
-        "category": category,
-        "account_name": account_name,
-        "amount_min": amount_min,
-        "amount_max": amount_max,
+        "category"        : category,
+        "account_name"    : account_name,
+        "amount_min"      : amount_min,
+        "amount_max"      : amount_max,
     }
     return {
-        "currency": filters.currency,
+        "currency"   : filters.currency,
         "by_currency": db.aggregate_ledger_by_currency(owner_id, grouped_filters),
-        "summary": {
-            "currency": filters.currency,
-            "expense_total": expense_total,
-            "income_total": income_total,
-            "transfer_total": transfer_total,
+        "summary"    : {
+            "currency"              : filters.currency,
+            "expense_total"         : expense_total,
+            "income_total"          : income_total,
+            "transfer_total"        : transfer_total,
             "focus_transaction_type": focus_transaction_type,
-            "focus_total": focus_total,
-            "focus_count": focus_count,
-            "average_focus_amount": round(focus_total / focus_count, 2) if focus_count else 0,
-            "bucket_mode": bucket_mode,
-            "peak_bucket_label": peak_bucket["label"] if peak_bucket else "",
-            "peak_bucket_total": peak_bucket["total"] if peak_bucket else 0,
-            "delta_label": _DELTA_LABELS[normalized_compare_mode],
-            "delta_vs_previous": round(delta, 4) if delta is not None else None,
+            "focus_total"           : focus_total,
+            "focus_count"           : focus_count,
+            "average_focus_amount"  : round(focus_total / focus_count, 2) if focus_count else 0,
+            "bucket_mode"           : bucket_mode,
+            "peak_bucket_label"     : peak_bucket["label"] if peak_bucket else "",
+            "peak_bucket_total"     : peak_bucket["total"] if peak_bucket else 0,
+            "delta_label"           : _DELTA_LABELS[normalized_compare_mode],
+            "delta_vs_previous"     : round(delta, 4) if delta is not None else None,
+            "first_occurrence"      : first_occurrence,
         },
-        "expense_timeline": trend,
+        "expense_timeline"  : trend,
         "expense_categories": categories,
-        "expense_hotspots": categories[:5],
-        "expense_candles": candles,
+        "expense_hotspots"  : categories[:5],
+        "expense_candles"   : candles,
     }

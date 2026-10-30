@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import pytest
 
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from core.router import build_command_catalog_node, command_access
@@ -11,20 +17,12 @@ from plugins.xiaoqing_chat.planning.pfc_state import PFCConversationState
 from tests.helpers.paths import REPOSITORY_ROOT
 from tests.helpers.settings_snapshot import with_settings_reader
 from tests.helpers.xiaoqing_chat_test_support import (
-    Any,
-    AsyncMock,
-    MagicMock,
-    Mock,
     PluginCapabilities,
     PluginPrincipal,
-    SimpleNamespace,
     _make_hctx,
     _provider_test_ai,
     _set_context_principal,
-    asyncio,
-    patch,
     patch_turn,
-    pytest,
 )
 
 mock_context       = _fixture_support.mock_context
@@ -175,9 +173,9 @@ async def test_handle_provider_concurrent_groups_do_not_overwrite_each_other():
             "xiaoqing_chat": {
                 "ai": {
                     "default_model_alias": "deepseek",
-                    "model_aliases": {
+                    "model_aliases"      : {
                         "deepseek": "deepseek-flash",
-                        "glm": "glm-5.2",
+                        "glm"     : "glm-5.2",
                     },
                 }
             }
@@ -236,8 +234,8 @@ def test_provider_resolution_prunes_removed_provider_overrides() -> None:
     assert state.get_chat_provider("g2") == "still-present"
 
 
-def test_next_local_id_atomic():
-    """fetch_and_increment_local_id should be atomic read-and-bump."""
+def test_next_local_id_increments_in_event_loop_order():
+    """同步编号分配按事件循环调用顺序递增。"""
     from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
     state  = ChatRuntimeState()
@@ -341,3 +339,41 @@ async def test_smalltalk_new_user_turn_clears_sticky_pfc_ended_before_planner_ru
 
     assert result == []
     assert captured["state_override"].ended is False
+
+
+def test_default_model_tracks_available_route_order_without_a_separate_default():
+    from core.ai import AIModelInfo
+    from plugins.xiaoqing_chat.chat_runtime import ai_route_context
+    from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
+
+    models = [
+        AIModelInfo("chatgpt", "openai", "chat-latest", ("text",)),
+        AIModelInfo("deepseek-flash", "deepseek", "deepseek-flash", ("text",)),
+    ]
+    context = with_settings_reader(
+        SimpleNamespace(
+            config={
+                "plugins": {
+                    "xiaoqing_chat": {
+                        "ai": {
+                            "model_aliases": {"deepseek": "deepseek-flash"},
+                        }
+                    }
+                }
+            },
+            secrets      = {},
+            capabilities = PluginCapabilities(
+                ai=SimpleNamespace(
+                    list_models=lambda *args, **kwargs: tuple(models),
+                )
+            ),
+        )
+    )
+    with patch("plugins.xiaoqing_chat.chat_runtime._state", return_value=ChatRuntimeState()):
+        assert ai_route_context(context)["_default"] == "chatgpt"
+        # Core omits the first entry while its provider has no key.
+        models.pop(0)
+        resolved = ai_route_context(context)
+        assert resolved["_default"] == "deepseek"
+        assert resolved["_profile"] == "deepseek-flash"
+        assert resolved["_pinned_model"] is None

@@ -263,9 +263,9 @@ def test_private_backpack_uses_real_group_scope_and_private_rate_bucket():
     qingpet_main._router      = None
 
     event = {
-        "user_id": "private_owner",
+        "user_id"     : "private_owner",
         "message_type": "private",
-        "message": [{"type": "text", "data": {"text": "/宠物 背包"}}],
+        "message"     : [{"type": "text", "data": {"text": "/宠物 背包"}}],
     }
 
     try:
@@ -309,9 +309,9 @@ def test_private_view_auto_scopes_to_single_pet_group():
     qingpet_main._router      = None
 
     event = {
-        "user_id": "viewer_private",
+        "user_id"     : "viewer_private",
         "message_type": "private",
-        "message": [{"type": "text", "data": {"text": "/宠物 查看 10086"}}],
+        "message"     : [{"type": "text", "data": {"text": "/宠物 查看 10086"}}],
     }
 
     try:
@@ -470,9 +470,9 @@ def test_qingpet_handle_view_uses_event_at_when_args_missing_target():
     qingpet_main._router      = None
 
     event = {
-        "user_id": "viewer3",
+        "user_id" : "viewer3",
         "group_id": 60003,
-        "message": [
+        "message" : [
             {"type": "text", "data": {"text": "/pet 查看 "}},
             {"type": "at", "data": {"qq": "10011"}},
         ],
@@ -713,9 +713,9 @@ def test_qingpet_handle_visit_uses_event_at_when_args_missing_target():
     qingpet_main._router      = None
 
     event = {
-        "user_id": "visitor",
+        "user_id" : "visitor",
         "group_id": 70004,
-        "message": [
+        "message" : [
             {"type": "text", "data": {"text": "/pet 互访 "}},
             {"type": "at", "data": {"qq": "20001"}},
         ],
@@ -746,9 +746,9 @@ def test_qingpet_handle_message_uses_event_at_with_trailing_text():
     qingpet_main._router      = None
 
     event = {
-        "user_id": "writer",
+        "user_id" : "writer",
         "group_id": 70005,
-        "message": [
+        "message" : [
             {"type": "text", "data": {"text": "/pet 留言 "}},
             {"type": "at", "data": {"qq": "20002"}},
             {"type": "text", "data": {"text": " 你好呀"}},

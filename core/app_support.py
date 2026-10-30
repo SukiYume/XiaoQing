@@ -197,8 +197,8 @@ class _AppLifecycleState(Enum):
 class _ConfigApplyOwner:
     """Identity of the only runtime-config task allowed to publish side effects."""
 
-    generation: int
-    revision: int
+    generation         : int
+    revision           : int
     security_generation: int
 
 

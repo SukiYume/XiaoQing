@@ -33,10 +33,10 @@ async def test_task_timezone_and_deadline_reschedule(db, monkeypatch):
     db.update_user_settings("u", {"timezone": "Asia/Shanghai"})
     iid = db.insert_item(
         {
-            "owner_id": "u",
-            "type": "task",
-            "title": "future",
-            "deadline_at": "2030-01-01T12:00:00+08:00",
+            "owner_id"      : "u",
+            "type"          : "task",
+            "title"         : "future",
+            "deadline_at"   : "2030-01-01T12:00:00+08:00",
             "reminder_rules": [{"offset_seconds": 3600}],
         }
     )

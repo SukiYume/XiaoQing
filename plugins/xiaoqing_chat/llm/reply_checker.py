@@ -69,27 +69,27 @@ _log = _logging.getLogger(__name__)
 class _LLMCheckInput:
     """一次语义审查的不可变内容，避免把提示词字段误当成 transport 配置。"""
 
-    bot_name: str
-    reply: str
-    goal: str
-    current_text: str
-    policy_text: str
-    grounding_text: str
-    history_text: str
+    bot_name                        : str
+    reply                           : str
+    goal                            : str
+    current_text                    : str
+    policy_text                     : str
+    grounding_text                  : str
+    history_text                    : str
     allow_low_stakes_persona_fiction: bool
-    current_image_attached: bool | None = None
-    historical_image_available: bool    = False
-    current_sender: str                 = ""
-    jargon_explanation: str             = ""
+    current_image_attached          : bool | None = None
+    historical_image_available      : bool        = False
+    current_sender                  : str         = ""
+    jargon_explanation              : str         = ""
 
 
 @dataclass(frozen=True)
 class _LLMRequestPolicy:
     """远端检查器的预算与重试策略；不参与内容证据判定。"""
 
-    max_tokens: int
-    timeout_seconds: float
-    max_retry: int
+    max_tokens            : int
+    timeout_seconds       : float
+    max_retry             : int
     retry_interval_seconds: float
 
 
@@ -279,9 +279,7 @@ async def _request_checker_completion(
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": materials or "审查材料为空。"},
                 ],
-                temperature = 0.0,
-                top_p       = 0.8,
-                max_tokens  = max(256, int(request_policy.max_tokens)),
+                max_tokens=request_policy.max_tokens,
                 # 路由掌握单模型限时；插件总预算覆盖模型切换与兼容回退。
                 timeout_seconds=None if checker_secrets.get("_ai") is not None else timeout_seconds,
                 total_timeout_seconds=timeout_seconds,
@@ -589,20 +587,20 @@ async def _llm_check(
     prompt += definition_source_instruction(source_records)
     materials = json.dumps(
         {
-            "候选回复作者": check_input.bot_name,
-            "目标": check_input.goal,
-            "策略": check_input.policy_text,
-            "受控人物资料": _grounding,
-            "最近对话": _hist,
-            "对话证据索引": source_records,
-            "明示群内词义": _explicit_term_definitions(source_records),
+            "候选回复作者"  : check_input.bot_name,
+            "目标"      : check_input.goal,
+            "策略"      : check_input.policy_text,
+            "受控人物资料"  : _grounding,
+            "最近对话"    : _hist,
+            "对话证据索引"  : source_records,
+            "明示群内词义"  : _explicit_term_definitions(source_records),
             "当前最新用户消息": _current,
-            "显式交付量词": explicit_output_allocation(_current),
-            "当前发言者": check_input.current_sender,
-            "当前时间": describe_now(),
-            "本群用语参考": check_input.jargon_explanation,
-            "图像可用状态": visual_policy,
-            "待检查回复": check_input.reply,
+            "显式交付量词"  : explicit_output_allocation(_current),
+            "当前发言者"   : check_input.current_sender,
+            "当前时间"    : describe_now(),
+            "本群用语参考"  : check_input.jargon_explanation,
+            "图像可用状态"  : visual_policy,
+            "待检查回复"   : check_input.reply,
         },
         ensure_ascii=False,
     )
@@ -710,12 +708,12 @@ async def _read_turn_meaning(
     prompt += definition_source_instruction(source_records)
     sources = {
         "角色本人标记": f"{check_input.bot_name}(你)",
-        "当前发言者": check_input.current_sender,
-        "消息原文": source_records,
+        "当前发言者" : check_input.current_sender,
+        "消息原文"  : source_records,
         "明示群内词义": _explicit_term_definitions(source_records),
         "显式交付量词": explicit_output_allocation(check_input.current_text),
-        "当前时间": describe_now(),
-        "来源说明": "h 开头为历史消息，current 是本轮用户原话，jargon 是本群已学习的用语参考。",
+        "当前时间"  : describe_now(),
+        "来源说明"  : "h 开头为历史消息，current 是本轮用户原话，jargon 是本群已学习的用语参考。",
     }
     response, _ = await _request_checker_completion(
         checker_secrets = checker_secrets,
@@ -780,6 +778,8 @@ class TurnReadingCache:
         jargon_explanation: str,
         max_tokens: int,
         timeout_seconds: float,
+        max_retry: int                = 0,
+        retry_interval_seconds: float = 0.5,
     ) -> None:
         """按审查将使用的同一份材料提前发起阅读；材料未变时保留进行中的阅读。"""
         if "_ai" in secrets and secrets.get("_ai") is None:
@@ -801,8 +801,8 @@ class TurnReadingCache:
             request_policy=_LLMRequestPolicy(
                 max_tokens             = max_tokens,
                 timeout_seconds        = timeout_seconds,
-                max_retry              = 0,
-                retry_interval_seconds = 0.2,
+                max_retry              = max_retry,
+                retry_interval_seconds = retry_interval_seconds,
             ),
         )
 
@@ -904,19 +904,19 @@ async def _semantic_turn_check(
     prompt += definition_source_instruction(source_records)
     materials = json.dumps(
         {
-            "候选作者": check_input.bot_name,
-            "历史中角色本人标记": f"{check_input.bot_name}(你)",
-            "最近对话": check_input.history_text,
-            "当前发言者": check_input.current_sender,
-            "最新用户原话": check_input.current_text,
-            "显式交付量词": explicit_output_allocation(check_input.current_text),
-            "本群用语参考": check_input.jargon_explanation,
-            "明示群内词义": _explicit_term_definitions(source_records),
-            "独立阅读结果": reading,
-            "当前时间": describe_now(),
-            "受控人物资料": check_input.grounding_text,
+            "候选作者"       : check_input.bot_name,
+            "历史中角色本人标记"  : f"{check_input.bot_name}(你)",
+            "最近对话"       : check_input.history_text,
+            "当前发言者"      : check_input.current_sender,
+            "最新用户原话"     : check_input.current_text,
+            "显式交付量词"     : explicit_output_allocation(check_input.current_text),
+            "本群用语参考"     : check_input.jargon_explanation,
+            "明示群内词义"     : _explicit_term_definitions(source_records),
+            "独立阅读结果"     : reading,
+            "当前时间"       : describe_now(),
+            "受控人物资料"     : check_input.grounding_text,
             "允许低风险角色日常创作": check_input.allow_low_stakes_persona_fiction,
-            "候选回复": check_input.reply,
+            "候选回复"       : check_input.reply,
         },
         ensure_ascii=False,
     )

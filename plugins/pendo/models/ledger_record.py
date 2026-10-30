@@ -22,22 +22,22 @@ class LedgerRecord(BaseModel):
         description = "交易对象或用途，保留原词；分类、账户分别填写独立字段。",
     )
     transaction_type: Literal["expense", "income", "transfer"] = "expense"
-    category: str                                              = Field(
+    category        : str                                      = Field(
         default     = "",
         description = "用户给出的分类名称；收支类型单独用transaction_type填写。未指定时留空，采用其他。",
     )
-    account: str = Field(default="", description="用户给出的账户名称。未指定时留空，采用现金。")
+    account      : str = Field(default="", description="用户给出的账户名称。未指定时留空，采用现金。")
     category_from: str = Field(
         default="", description="用户要求沿用历史分类时填写已查询到的账目ID，category留空。"
     )
     account_from: str = Field(
         default="", description="用户要求沿用历史账户时填写已查询到的账目ID，account留空。"
     )
-    to_account: str = Field(default="", description="转账的转入账户，转账时必填。")
-    merchant: str = Field(default="", description="明确提供的商户，可留空。")
-    date: str = Field(default="", description="YYYY-MM-DD，留空采用用户当地今天。")
-    currency: str = Field(default="CNY", description="币种代码，例如CNY、USD。")
-    remark: str      = ""
+    to_account : str = Field(default="", description="转账的转入账户，转账时必填。")
+    merchant   : str = Field(default="", description="明确提供的商户，可留空。")
+    date       : str = Field(default="", description="YYYY-MM-DD，留空采用用户当地今天。")
+    currency   : str = Field(default="CNY", description="币种代码，例如CNY、USD。")
+    remark     : str = ""
     source_text: str = Field(
         default="", exclude=True, description="执行器传入的发起人原话，用于校验字段来源。"
     )

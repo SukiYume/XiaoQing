@@ -214,15 +214,20 @@ async def test_chime_reads_bounded_json(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_chime_rejects_chunked_body_over_limit(tmp_path: Path) -> None:
+async def test_chime_rejects_chunked_body_over_limit(tmp_path: Path, monkeypatch) -> None:
     response = _Response(
-        b"{" + b" " * (4 * 1024 * 1024),
+        b"{" + b" " * (4 * 1024 * 1024) + b"}",
         url=chime.CHIME_API_URL,
     )
 
+    from unittest.mock import Mock
+
+    parser = Mock(wraps=chime.parse_bounded_json)
+    monkeypatch.setattr(chime, "parse_bounded_json", parser)
     result = await chime.fetch_chime_repeaters(_context(tmp_path, _Session(response)))
 
     assert result is None
+    parser.assert_not_called()
     assert response.content.iterations == 1
 
 

@@ -19,9 +19,9 @@ logger = logging.getLogger(__name__)
 class McConnection:
     """一个 QQ 投递目标当前使用的 Minecraft 连接。"""
 
-    host: str
-    port: int
-    target: DeliveryTarget
+    host       : str
+    port       : int
+    target     : DeliveryTarget
     rcon_client: RconClient | None = None
     log_monitor: LogMonitor | None = None
 

@@ -14,9 +14,9 @@ from ..utils.constants import DEFAULT_DRESS_ITEMS, PET_SHOW_CONFIG, TRADE_CONFIG
 from .basic_commands import resolve_pet_for_self_command
 
 _DRESS_SLOT_FIELDS = {
-    DressSlot.HAT: "dress_hat",
-    DressSlot.CLOTHES: "dress_clothes",
-    DressSlot.ACCESSORY: "dress_accessory",
+    DressSlot.HAT       : "dress_hat",
+    DressSlot.CLOTHES   : "dress_clothes",
+    DressSlot.ACCESSORY : "dress_accessory",
     DressSlot.BACKGROUND: "dress_background",
 }
 _DRESS_SLOT_NAMES = {slot.value: field_name for slot, field_name in _DRESS_SLOT_FIELDS.items()}
@@ -48,7 +48,14 @@ def handle_recall(user_id: str, group_id: int, args: str, db: Database) -> tuple
 def handle_dress(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     """分发装扮查看、购买、穿戴和卸下操作。"""
     if not args.strip():
-        return _show_dress_help()
+        return True, (
+            "👗 装扮系统\n\n"
+            "• /宠物 装扮 查看 - 查看当前装扮\n"
+            "• /宠物 装扮 商店 - 查看装扮商店\n"
+            "• /宠物 装扮 购买 <装扮ID> - 购买装扮\n"
+            "• /宠物 装扮 穿戴 <装扮ID> - 穿戴装扮\n"
+            "• /宠物 装扮 卸下 <槽位> - 卸下装扮"
+        )
 
     parts = args.strip().split(maxsplit=1)
     action = parts[0]
@@ -69,17 +76,6 @@ def handle_dress(user_id: str, group_id: int, args: str, db: Database) -> tuple[
     if action in {"卸下", "unequip", "脱"}:
         return _dress_unequip(user_id, group_id, rest, db)
     return False, "未知装扮命令\n用法: /宠物 装扮 <查看|商店|购买|穿戴|卸下>"
-
-
-def _show_dress_help() -> tuple[bool, str]:
-    return True, (
-        "👗 装扮系统\n\n"
-        "• /宠物 装扮 查看 - 查看当前装扮\n"
-        "• /宠物 装扮 商店 - 查看装扮商店\n"
-        "• /宠物 装扮 购买 <装扮ID> - 购买装扮\n"
-        "• /宠物 装扮 穿戴 <装扮ID> - 穿戴装扮\n"
-        "• /宠物 装扮 卸下 <槽位> - 卸下装扮"
-    )
 
 
 def _dress_view(user_id: str, group_id: int, db: Database) -> tuple[bool, str]:

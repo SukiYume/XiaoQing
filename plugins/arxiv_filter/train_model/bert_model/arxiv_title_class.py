@@ -63,25 +63,25 @@ _PLUGIN_DIR = Path(__file__).resolve().parents[2]
 
 @dataclass(frozen=True, slots=True)
 class TrainingConfig:
-    data_path: Path          = _PLUGIN_DIR / "train_model" / "arxiv_papers_with_abstract.csv"
-    model_name: str          = "bert-base-cased"
-    max_len: int             = 64
-    batch_size: int          = 256
-    num_epochs: int          = 20
-    learning_rate: float     = 2e-5
-    warmup_proportion: float = 0.1
-    validation_size: float   = 0.1
-    random_seed: int         = 42
-    num_workers: int | None  = None
-    output_dir: Path = field(default_factory=lambda: _PLUGIN_DIR / "best_model_title")
+    data_path        : Path       = _PLUGIN_DIR / "train_model" / "arxiv_papers_with_abstract.csv"
+    model_name       : str        = "bert-base-cased"
+    max_len          : int        = 64
+    batch_size       : int        = 256
+    num_epochs       : int        = 20
+    learning_rate    : float      = 2e-5
+    warmup_proportion: float      = 0.1
+    validation_size  : float      = 0.1
+    random_seed      : int        = 42
+    num_workers      : int | None = None
+    output_dir       : Path = field(default_factory=lambda: _PLUGIN_DIR / "best_model_title")
 
 
 @dataclass(frozen=True, slots=True)
 class ValidationMetrics:
-    accuracy: float
+    accuracy    : float
     average_loss: float
-    report: str
-    cm: np.ndarray
+    report      : str
+    cm          : np.ndarray
 
 
 # 全局配置实例
@@ -144,9 +144,9 @@ class TitleDataset(Dataset[dict[str, Any]]):
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
         return {
-            "input_ids": self.input_ids[idx],
+            "input_ids"     : self.input_ids[idx],
             "attention_mask": self.attention_mask[idx],
-            "labels": self.labels[idx],
+            "labels"        : self.labels[idx],
         }
 
 
@@ -200,10 +200,10 @@ def eval_model(
     amp_dtype: torch.dtype = torch.float32,
 ):
     model.eval()
-    losses: list[float]   = []
-    all_labels: list[int] = []
-    all_preds: list[int]  = []
-    loss_fn               = torch.nn.CrossEntropyLoss()
+    losses    : list[float] = []
+    all_labels: list[int]   = []
+    all_preds : list[int]   = []
+    loss_fn                 = torch.nn.CrossEntropyLoss()
 
     with torch.no_grad():
         for batch in tqdm(data_loader, desc="Validation", ascii=True):
@@ -249,10 +249,13 @@ def save_training_config(
     best_accuracy: float,
 ) -> None:
     payload = {
-        "model_name": config.model_name,
-        "max_len": config.max_len,
+        "model_name"              : config.model_name,
+        "max_len"                 : config.max_len,
         "best_validation_accuracy": float(best_accuracy),
-        "input_mode": "title_only",
+        "input_mode"              : "title_only",
+        # 验证与选模按 argmax 判定，二分类下等价于正类概率 0.5；随产物保存，
+        # 部署时的正例集合才与报告的验证混淆矩阵一致。插件阈值只在缺少该字段时兜底。
+        "optimal_threshold": 0.5,
     }
     with output_dir.joinpath("training_config.json").open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)

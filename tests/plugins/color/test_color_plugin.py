@@ -17,9 +17,7 @@ from core.bounded_file_cache import FileCacheLimits
 from core.router import build_command_catalog_node
 from plugins.color import convert as color_convert
 from plugins.color import data_manager as color_data
-from plugins.color import data_manager as color_data_manager
 from plugins.color import image_gen as color_image_gen
-from plugins.color import image_gen as color_images
 from plugins.color import main as color_main
 from plugins.color import query as color_query
 from plugins.color import stellar as color_stellar
@@ -188,18 +186,18 @@ class TestColorQuery:
     def test_keyword_search_supports_pinyin_and_relevance_order(self):
         colors = [
             {
-                "name": "中灰",
+                "name"  : "中灰",
                 "pinyin": "zhonghui",
-                "RGB": [1, 1, 1],
-                "CMYK": [0, 0, 0, 99],
-                "hex": "#010101",
+                "RGB"   : [1, 1, 1],
+                "CMYK"  : [0, 0, 0, 99],
+                "hex"   : "#010101",
             },
             {
-                "name": "红汞红",
+                "name"  : "红汞红",
                 "pinyin": "honggonghong",
-                "RGB": [2, 2, 2],
-                "CMYK": [0, 0, 0, 98],
-                "hex": "#020202",
+                "RGB"   : [2, 2, 2],
+                "CMYK"  : [0, 0, 0, 98],
+                "hex"   : "#020202",
             },
         ]
 
@@ -209,28 +207,16 @@ class TestColorQuery:
         ]
 
     def test_nearest_rgb_uses_perceptual_distance_and_stable_ties(self):
+        # 第二项的 RGB 距离更大，CIE76 距离更小；同值副本验证稳定顺序。
         colors = [
-            {
-                "name": "黑",
-                "pinyin": "hei",
-                "RGB": [0, 0, 0],
-                "CMYK": [0, 0, 0, 100],
-                "hex": "#000000",
-            },
-            {
-                "name": "白",
-                "pinyin": "bai",
-                "RGB": [255, 255, 255],
-                "CMYK": [0, 0, 0, 0],
-                "hex": "#ffffff",
-            },
+            {"name": "green_shift", "RGB": [128, 110, 128]},
+            {"name": "red_shift", "RGB": [148, 128, 128]},
+            {"name": "same_red", "RGB": [148, 128, 128]},
         ]
-
-        match = color_query.find_nearest_by_rgb(colors, [10, 10, 10])
-
+        match = color_query.find_nearest_by_rgb(colors, [128, 128, 128])
         assert match is not None
-        assert match[0]["name"] == "黑"
-        assert match[1] > 0
+        assert match[0]["name"] == "red_shift"
+        assert match[1] == pytest.approx(8.3281490011)
 
 
 # ============================================================
@@ -245,11 +231,11 @@ class TestColorDataManager:
         """测试格式化颜色信息"""
         color = {
             "name": "胭脂",
-            "RGB": [213, 69, 71],
+            "RGB" : [213, 69, 71],
             "CMYK": [15, 85, 75, 0],
-            "hex": "#D54547",
+            "hex" : "#D54547",
         }
-        result = color_data_manager.format_color_info(color)
+        result = color_data.format_color_info(color)
         assert "胭脂" in result
         assert "#D54547" in result or "213, 69, 71" in result
 
@@ -269,20 +255,20 @@ class TestColorDataManager:
                 calls["builtin"] += 1
                 return [
                     {
-                        "name": "胭脂",
+                        "name"  : "胭脂",
                         "pinyin": "yanzhi",
-                        "RGB": [213, 69, 71],
-                        "CMYK": [15, 85, 75, 0],
-                        "hex": "#d54547",
+                        "RGB"   : [213, 69, 71],
+                        "CMYK"  : [15, 85, 75, 0],
+                        "hex"   : "#d54547",
                     }
                 ]
             return default
 
-        monkeypatch.setattr(color_data_manager, "load_json", _fake_load_json)
+        monkeypatch.setattr(color_data, "load_json", _fake_load_json)
         context = MagicMock(plugin_dir=plugin_dir, data_dir=data_dir, logger=MagicMock())
 
-        color_data_manager.load_colors(context)
-        color_data_manager.load_colors(context)
+        color_data.load_colors(context)
+        color_data.load_colors(context)
 
         assert calls["builtin"] == 1
 
@@ -295,7 +281,7 @@ class TestColorDataManager:
             logger           = MagicMock(),
         )
 
-        colors = color_data_manager.load_colors(context)
+        colors = color_data.load_colors(context)
 
         assert len(colors) == 526
         assert len({color["name"] for color in colors}) == 526
@@ -314,22 +300,22 @@ class TestColorDataManager:
         custom = MagicMock(
             return_value=[
                 {
-                    "name": "自定义色",
+                    "name"  : "自定义色",
                     "pinyin": "",
-                    "RGB": [1, 2, 3],
-                    "hex": "#010203",
-                    "CMYK": [67, 33, 0, 99],
+                    "RGB"   : [1, 2, 3],
+                    "hex"   : "#010203",
+                    "CMYK"  : [67, 33, 0, 99],
                 }
             ]
         )
         monkeypatch.setattr(
-            color_data_manager,
+            color_data,
             "_load_builtin_colors",
             MagicMock(side_effect=ValueError("broken builtin")),
         )
-        monkeypatch.setattr(color_data_manager, "load_custom_colors", custom)
+        monkeypatch.setattr(color_data, "load_custom_colors", custom)
 
-        assert color_data_manager.load_colors(context) == []
+        assert color_data.load_colors(context) == []
         custom.assert_not_called()
 
     def test_custom_scope_fails_closed_without_authenticated_identity(self, tmp_path):
@@ -340,7 +326,7 @@ class TestColorDataManager:
         )
 
         with pytest.raises(ValueError, match="requires a group or user scope"):
-            color_data_manager.load_custom_colors(context)
+            color_data.load_custom_colors(context)
 
     def test_noop_mutation_does_not_create_or_rewrite_scope_file(self, tmp_path):
         context = SimpleNamespace(
@@ -348,9 +334,9 @@ class TestColorDataManager:
             current_group_id = 1001,
             current_user_id  = 42,
         )
-        custom_file = color_data_manager._custom_file(context)
+        custom_file = color_data._custom_file(context)
 
-        assert color_data_manager.mutate_custom_colors(context, lambda _colors: False) is False
+        assert color_data.mutate_custom_colors(context, lambda _colors: False) is False
         assert not custom_file.exists()
 
     def test_mutation_rejects_invalid_record_without_overwriting_file(self, tmp_path):
@@ -359,29 +345,29 @@ class TestColorDataManager:
             current_group_id = 1001,
             current_user_id  = 42,
         )
-        custom_file = color_data_manager._custom_file(context)
+        custom_file = color_data._custom_file(context)
         custom_file.parent.mkdir(parents=True, exist_ok=True)
         original = [
             {
-                "name": "合法色",
+                "name"  : "合法色",
                 "pinyin": "",
-                "RGB": [1, 2, 3],
-                "hex": "#010203",
-                "CMYK": [67, 33, 0, 99],
+                "RGB"   : [1, 2, 3],
+                "hex"   : "#010203",
+                "CMYK"  : [67, 33, 0, 99],
             }
         ]
         custom_file.write_text(json.dumps(original, ensure_ascii=False), encoding="utf-8")
 
         with pytest.raises(ValueError, match="RGB and HEX disagree"):
-            color_data_manager.mutate_custom_colors(
+            color_data.mutate_custom_colors(
                 context,
                 lambda colors: colors.append(
                     {
-                        "name": "坏色",
+                        "name"  : "坏色",
                         "pinyin": "",
-                        "RGB": [1, 2, 3],
-                        "hex": "#ffffff",
-                        "CMYK": [0, 0, 0, 0],
+                        "RGB"   : [1, 2, 3],
+                        "hex"   : "#ffffff",
+                        "CMYK"  : [0, 0, 0, 0],
                     }
                 ),
             )
@@ -517,7 +503,7 @@ class TestColorHandleFixes:
         )
 
         assert "已经定义" in text_segments_text(result)
-        assert not color_data_manager._custom_file(context).exists()
+        assert not color_data._custom_file(context).exists()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -632,7 +618,7 @@ class TestColorHandleFixes:
         assert "添加成功" in text_segments_text(added)
         assert "#010203" in text_segments_text(queried)
         assert "已删除" in text_segments_text(deleted)
-        assert color_data_manager.load_custom_colors(context) == []
+        assert color_data.load_custom_colors(context) == []
 
     @pytest.mark.asyncio
     async def test_readable_admin_commands_support_quoted_multiword_names(
@@ -672,10 +658,10 @@ class TestColorHandleFixes:
             AsyncMock(return_value=None),
         )
         event_loop_thread        = threading.get_ident()
-        read_threads: list[int]  = []
+        read_threads : list[int] = []
         write_threads: list[int] = []
-        original_read            = color_data_manager._read_custom_colors
-        original_write           = color_data_manager.write_json
+        original_read            = color_data._read_custom_colors
+        original_write           = color_data.write_json
 
         def tracked_read(*args, **kwargs):
             read_threads.append(threading.get_ident())
@@ -685,8 +671,8 @@ class TestColorHandleFixes:
             write_threads.append(threading.get_ident())
             return original_write(*args, **kwargs)
 
-        monkeypatch.setattr(color_data_manager, "_read_custom_colors", tracked_read)
-        monkeypatch.setattr(color_data_manager, "write_json", tracked_write)
+        monkeypatch.setattr(color_data, "_read_custom_colors", tracked_read)
+        monkeypatch.setattr(color_data, "write_json", tracked_write)
 
         result = await color_main.handle(
             "color",
@@ -867,20 +853,22 @@ async def test_color_image_cache_is_content_addressed_and_lru_bounded(monkeypatc
     async def inline(func, *args, **kwargs):
         return func(*args, **kwargs)
 
-    monkeypatch.setattr(color_images, "MATPLOTLIB_AVAILABLE", True)
-    monkeypatch.setattr(color_images, "_render_color_image", fake_render)
-    monkeypatch.setattr(color_images, "run_sync", inline)
+    monkeypatch.setattr(color_image_gen, "MATPLOTLIB_AVAILABLE", True)
+    monkeypatch.setattr(color_image_gen, "_render_color_image", fake_render)
+    monkeypatch.setattr(color_image_gen, "run_sync", inline)
     monkeypatch.setattr(
-        color_images,
+        color_image_gen,
         "IMAGE_CACHE_LIMITS",
         FileCacheLimits(max_entries=2, max_bytes=100, ttl_seconds=60),
     )
     context = SimpleNamespace(logger=MagicMock())
     output_dir = tmp_path / "images"
-    first      = await color_images.generate_color_image("first", [1, 2, 3], output_dir, context)
-    await color_images.generate_color_image("second", [4, 5, 6], output_dir, context)
-    assert await color_images.generate_color_image("first", [1, 2, 3], output_dir, context) == first
-    await color_images.generate_color_image("third", [7, 8, 9], output_dir, context)
+    first      = await color_image_gen.generate_color_image("first", [1, 2, 3], output_dir, context)
+    await color_image_gen.generate_color_image("second", [4, 5, 6], output_dir, context)
+    assert (
+        await color_image_gen.generate_color_image("first", [1, 2, 3], output_dir, context) == first
+    )
+    await color_image_gen.generate_color_image("third", [7, 8, 9], output_dir, context)
     assert calls == ["first", "second", "third"]
     assert len(list(output_dir.glob("*.png"))) == 2
     assert Path(first).is_file()

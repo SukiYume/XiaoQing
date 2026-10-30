@@ -479,7 +479,7 @@ def test_qingpet_backup_contains_committed_wal(tmp_path):
     source.commit()
     database = Database(str(path))
     try:
-        backup = sqlite3.connect(str(path) + ".pre-migration.bak")
+        backup = sqlite3.connect(str(path) + ".pre-migration-v0.bak")
         try:
             assert backup.execute("SELECT value FROM review_marker").fetchall() == [(42,)]
         finally:

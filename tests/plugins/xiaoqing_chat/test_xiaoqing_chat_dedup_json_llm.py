@@ -100,7 +100,7 @@ def test_llm_content_extractor_preserves_untrusted_think_prefix() -> None:
             {
                 "message": {
                     "reasoning_content": "这里不应该参与解析",
-                    "content": '<think>内部思考</think>\n{"answer":"最终"}',
+                    "content"          : '<think>内部思考</think>\n{"answer":"最终"}',
                 }
             }
         ]
@@ -294,16 +294,18 @@ async def test_person_fact_extract_throttle_survives_capped_history(
 
     def history(start: int, stop: int) -> list[StoredMessage]:
         return [
-            StoredMessage(role="user", name="User", content=f"消息 {index}", ts=float(index))
+            StoredMessage(
+                role="user", name="User", content=f"消息 {index}", ts=float(index), user_id=10001
+            )
             for index in range(start, stop)
         ]
 
     common = {
-        "data_dir": tmp_path,
-        "secrets": {"api_base": "https://example.com", "api_key": "k", "model": "m"},
+        "data_dir" : tmp_path,
+        "secrets"  : {"api_base": "https://example.com", "api_key": "k", "model": "m"},
         "memory_db": MagicMock(),
-        "chat_id": "g-capped",
-        "llm": LLMCallConfig(
+        "chat_id"  : "g-capped",
+        "llm"      : LLMCallConfig(
             temperature            = 0.8,
             top_p                  = 0.9,
             max_tokens             = 512,
@@ -313,8 +315,14 @@ async def test_person_fact_extract_throttle_survives_capped_history(
         ),
     }
 
+    from plugins.xiaoqing_chat.memory.fact_extraction_checkpoint import load_last_observed_ts
+
+    # 每批最多送入 50 条：水位只推进到实际送入模型的最后一条，积压的消息留给后续轮次。
     await maybe_extract_person_facts(history=history(1, 201), **common)
+    assert load_last_observed_ts(tmp_path, "g-capped") == 50.0
     await maybe_extract_person_facts(history=history(2, 202), **common)
-    await maybe_extract_person_facts(history=history(21, 221), **common)
+    assert load_last_observed_ts(tmp_path, "g-capped") == 100.0
+    # 新消息不足 20 条时节流仍然生效。
+    await maybe_extract_person_facts(history=history(2, 110), **common)
 
     assert complete.await_count == 2

@@ -2,20 +2,22 @@
 
 from __future__ import annotations
 
+import json
+import shutil
+import uuid
+from datetime import datetime
+
+import pytest
+
 from tests.helpers.pendo_web_items_test_support import (
     ROOT,
     Database,
-    datetime,
     items_api,
-    json,
     normalize_diary_fields,
     normalize_item_fields,
     normalize_note_fields,
     normalize_task_fields,
-    pytest,
-    shutil,
     sqlite3,
-    uuid,
 )
 
 
@@ -83,15 +85,15 @@ def test_database_migration_adds_note_reference_columns_to_old_items_table(tmp_p
         item_id = db.insert_item(
             normalize_note_fields(
                 {
-                    "id": "note_ref_migrated",
-                    "owner_id": "u-note-migration",
-                    "type": "note",
-                    "title": "迁移后引用",
-                    "content": "正文",
-                    "references": [{"kind": "item", "id": "task_1"}],
+                    "id"           : "note_ref_migrated",
+                    "owner_id"     : "u-note-migration",
+                    "type"         : "note",
+                    "title"        : "迁移后引用",
+                    "content"      : "正文",
+                    "references"   : [{"kind": "item", "id": "task_1"}],
                     "related_items": ["task_1"],
-                    "created_at": "2026-04-01T10:00:00",
-                    "updated_at": "2026-04-01T10:00:00",
+                    "created_at"   : "2026-04-01T10:00:00",
+                    "updated_at"   : "2026-04-01T10:00:00",
                 },
                 partial=False,
             )
@@ -115,13 +117,13 @@ def test_item_update_note_logs_edit_details_for_web_undo():
         db.insert_item(
             normalize_note_fields(
                 {
-                    "id": "note_edit",
-                    "owner_id": owner_id,
-                    "type": "note",
-                    "title": "旧标题",
-                    "content": "旧正文",
-                    "category": "工作",
-                    "tags": ["旧"],
+                    "id"        : "note_edit",
+                    "owner_id"  : owner_id,
+                    "type"      : "note",
+                    "title"     : "旧标题",
+                    "content"   : "旧正文",
+                    "category"  : "工作",
+                    "tags"      : ["旧"],
                     "created_at": "2026-04-01T10:00:00",
                     "updated_at": "2026-04-01T10:00:00",
                 },
@@ -131,13 +133,13 @@ def test_item_update_note_logs_edit_details_for_web_undo():
         db.insert_item(
             normalize_task_fields(
                 {
-                    "id": "task_1",
-                    "owner_id": owner_id,
-                    "type": "task",
-                    "title": "关联待办",
-                    "content": "",
-                    "status": "open",
-                    "priority": 3,
+                    "id"        : "task_1",
+                    "owner_id"  : owner_id,
+                    "type"      : "task",
+                    "title"     : "关联待办",
+                    "content"   : "",
+                    "status"    : "open",
+                    "priority"  : 3,
                     "created_at": "2026-04-01T11:00:00",
                     "updated_at": "2026-04-01T11:00:00",
                 },
@@ -229,23 +231,23 @@ def test_item_update_note_preserves_unchanged_missing_reference_for_web_edit():
         db.insert_item(
             normalize_note_fields(
                 {
-                    "id": "note_dangling_ref",
-                    "owner_id": owner_id,
-                    "type": "note",
-                    "title": "旧标题",
-                    "content": "旧正文",
-                    "category": "工作",
+                    "id"        : "note_dangling_ref",
+                    "owner_id"  : owner_id,
+                    "type"      : "note",
+                    "title"     : "旧标题",
+                    "content"   : "旧正文",
+                    "category"  : "工作",
                     "references": [
                         {
-                            "kind": "item",
-                            "id": "deleted_task",
-                            "type": "task",
+                            "kind" : "item",
+                            "id"   : "deleted_task",
+                            "type" : "task",
                             "title": "已删除待办",
                         }
                     ],
                     "related_items": ["deleted_task"],
-                    "created_at": "2026-04-01T10:00:00",
-                    "updated_at": "2026-04-01T10:00:00",
+                    "created_at"   : "2026-04-01T10:00:00",
+                    "updated_at"   : "2026-04-01T10:00:00",
                 },
                 partial=False,
             )
@@ -285,12 +287,12 @@ def test_item_update_note_rejects_new_missing_reference():
         db.insert_item(
             normalize_note_fields(
                 {
-                    "id": "note_without_ref",
-                    "owner_id": owner_id,
-                    "type": "note",
-                    "title": "旧标题",
-                    "content": "旧正文",
-                    "category": "工作",
+                    "id"        : "note_without_ref",
+                    "owner_id"  : owner_id,
+                    "type"      : "note",
+                    "title"     : "旧标题",
+                    "content"   : "旧正文",
+                    "category"  : "工作",
                     "created_at": "2026-04-01T10:00:00",
                     "updated_at": "2026-04-01T10:00:00",
                 },
@@ -319,17 +321,17 @@ def test_item_update_note_rejects_new_missing_reference():
 def test_normalize_diary_fields_requires_content_and_clears_optional_values():
     diary = normalize_diary_fields(
         {
-            "diary_date": "2026-03-26",
-            "title": "  夜晚散步  ",
-            "content": "  今天散步很舒服。  ",
-            "location": "  江边  ",
-            "mood": "😊",
-            "weather": "☀️ 晴",
-            "mood_score": "8",
-            "template_id": "",
-            "entry_time": "2026-03-26T21:30:00",
+            "diary_date"      : "2026-03-26",
+            "title"           : "  夜晚散步  ",
+            "content"         : "  今天散步很舒服。  ",
+            "location"        : "  江边  ",
+            "mood"            : "😊",
+            "weather"         : "☀️ 晴",
+            "mood_score"      : "8",
+            "template_id"     : "",
+            "entry_time"      : "2026-03-26T21:30:00",
             "template_answers": [{"prompt": "今天做了什么", "answer": "散步"}],
-            "is_favorite": "true",
+            "is_favorite"     : "true",
         },
         partial=False,
     )
@@ -349,12 +351,12 @@ def test_normalize_diary_fields_requires_content_and_clears_optional_values():
     cleared = normalize_diary_fields(
         {
             **diary,
-            "title": "",
-            "location": None,
-            "weather": "",
-            "mood_score": "",
+            "title"           : "",
+            "location"        : None,
+            "weather"         : "",
+            "mood_score"      : "",
             "template_answers": "",
-            "is_favorite": "",
+            "is_favorite"     : "",
         },
         partial=False,
     )
@@ -368,8 +370,8 @@ def test_normalize_diary_fields_requires_content_and_clears_optional_values():
     assert (
         normalize_diary_fields(
             {
-                "diary_date": "2026-03-26",
-                "content": "正文",
+                "diary_date" : "2026-03-26",
+                "content"    : "正文",
                 "is_favorite": "false",
             },
             partial=False,
@@ -393,8 +395,8 @@ def test_normalize_item_fields_rejects_legacy_event_and_task_fields():
     with pytest.raises(ValueError, match="Unsupported event field: milestones"):
         normalize_item_fields(
             {
-                "type": "event",
-                "title": "旧事件",
+                "type"      : "event",
+                "title"     : "旧事件",
                 "start_time": "2026-03-26T10:00:00",
                 "milestones": [],
             },
@@ -404,8 +406,8 @@ def test_normalize_item_fields_rejects_legacy_event_and_task_fields():
     with pytest.raises(ValueError, match="Unsupported task field: due_time"):
         normalize_item_fields(
             {
-                "type": "task",
-                "title": "旧待办",
+                "type"    : "task",
+                "title"   : "旧待办",
                 "due_time": "2026-03-26T18:00:00",
             },
             partial=False,
@@ -459,11 +461,11 @@ def test_web_item_crud_rolls_back_when_operation_log_write_fails(monkeypatch, tm
     owner_id = "u-crud-audit-atomic"
     db.insert_item(
         {
-            "id": "existing-note",
+            "id"      : "existing-note",
             "owner_id": owner_id,
-            "type": "note",
-            "title": "原始标题",
-            "content": "原始正文",
+            "type"    : "note",
+            "title"   : "原始标题",
+            "content" : "原始正文",
             "category": "工作",
         }
     )
@@ -569,20 +571,20 @@ def test_note_reference_resolution_uses_one_owner_scoped_query(tmp_path, request
     for item_id in ids:
         db.insert_item(
             {
-                "id": item_id,
+                "id"      : item_id,
                 "owner_id": owner_id,
-                "type": "task",
-                "title": item_id,
-                "status": "open",
+                "type"    : "task",
+                "title"   : item_id,
+                "status"  : "open",
             }
         )
     db.insert_item(
         {
-            "id": ids[0] + "-other-owner",
+            "id"      : ids[0] + "-other-owner",
             "owner_id": "other-owner",
-            "type": "task",
-            "title": "not visible",
-            "status": "open",
+            "type"    : "task",
+            "title"   : "not visible",
+            "status"  : "open",
         }
     )
 

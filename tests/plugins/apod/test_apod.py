@@ -353,7 +353,7 @@ class TestConfig:
                 self.config   = {
                     "plugins": {
                         "apod": {
-                            "url": "https://apod.nasa.gov/apod/astropix.html",
+                            "url"          : "https://apod.nasa.gov/apod/astropix.html",
                             "allowed_hosts": ["apod.nasa.gov"],
                         }
                     }
@@ -364,7 +364,7 @@ class TestConfig:
         context = with_settings_reader(MockContext(temp_data_dir))
         config  = apod._get_config(context)
         assert config == {
-            "url": "https://apod.nasa.gov/apod/astropix.html",
+            "url"          : "https://apod.nasa.gov/apod/astropix.html",
             "allowed_hosts": ["apod.nasa.gov"],
         }
 
@@ -401,7 +401,7 @@ class TestTitleExtraction:
 
         soup  = BeautifulSoup(SAMPLE_APOD_HTML_NO_TITLE, "html.parser")
         title = apod._extract_title(soup, MagicMock())
-        assert title == "Page Title" or title == apod.DEFAULT_FALLBACK_TITLE
+        assert title == "Page Title"
 
     def test_extract_title_fallback(self):
         """测试标题提取失败时使用默认值"""
@@ -916,55 +916,34 @@ class TestHelp:
 # ============================================================
 
 
-class TestImagePathConstruction:
-    """测试图片路径构造"""
-
-    @pytest.mark.parametrize(
-        "image_url",
-        [
-            pytest.param("image/test.jpg", id="relative"),
-            pytest.param("https://example.com/image/test.jpg", id="absolute"),
-        ],
+@pytest.mark.parametrize(
+    ("image_url", "expected_url"),
+    [
+        ("image/test.jpg", "https://apod.nasa.gov/apod/image/test.jpg"),
+        ("https://apod.nasa.gov/apod/image/test.jpg", "https://apod.nasa.gov/apod/image/test.jpg"),
+        ("https://example.com/image/test.jpg", None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_image_url_resolution_and_host_policy(
+    mock_context, monkeypatch, image_url, expected_url
+):
+    download = AsyncMock(return_value=mock_context.data_dir / "apod.png")
+    monkeypatch.setattr(apod, "_safe_download_image", download)
+    result = await apod._render_page(
+        BeautifulSoup(f'<center><b>Test</b></center><img src="{image_url}">', "html.parser"),
+        base_url      = "https://apod.nasa.gov/apod/",
+        page_url      = "https://apod.nasa.gov/apod/astropix.html",
+        images_dir    = mock_context.data_dir,
+        allowed_hosts = {"apod.nasa.gov"},
+        context       = mock_context,
     )
-    @pytest.mark.asyncio
-    async def test_image_url(self, mock_context, mock_event, image_url):
-        """相对与绝对图片 URL 均能进入统一下载流程。"""
-        html = f"""
-            <!DOCTYPE html>
-            <html>
-            <body>
-                <center><b>Test</b></center>
-                <img src="{image_url}">
-            </body>
-            </html>
-            """
-
-        class MockResponse:
-            status = 200
-
-            async def text(self):
-                return html
-
-            async def read(self):
-                if not hasattr(self, "count"):
-                    self.count = 0
-                self.count += 1
-                if self.count == 1:
-                    return html.encode("utf-8")
-                return b"data"
-
-        class MockGetContextManager:
-            async def __aenter__(self):
-                return MockResponse()
-
-            async def __aexit__(self, *args):
-                pass
-
-        class MockSession:
-            def get(self, *args, **kwargs):
-                return MockGetContextManager()
-
-        mock_context.http_session = MockSession()
-
-        result = await apod.handle("apod", "", mock_event, mock_context)
-        assert result is not None
+    if expected_url:
+        assert download.await_args.args[0] == expected_url
+        assert download.await_count == 1
+        assert result[0]["type"] == "image"
+        assert "Test" in result[1]["data"]["text"]
+    else:
+        download.assert_not_awaited()
+        assert all(segment["type"] == "text" for segment in result)
+        assert "格式不支持" in result[0]["data"]["text"]

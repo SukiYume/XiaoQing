@@ -276,18 +276,30 @@ function diaryCadenceSubtitle(granularity) {
 }
 
 // 轻量图表原语全部生成原生 HTML/SVG，不依赖外部图表运行时。
-function sparklinePath(values, width = 440, height = 168, padding = 18) {
+// 数据图形的长度与面积按数值比例：零值保持空基线，小值不被最小尺寸放大。
+function proportionalPercent(value, max) {
+    const amount = nonNegativeNumber(value);
+    return amount > 0 && max > 0 ? Math.min(100, (amount / max) * 100) : 0;
+}
+
+function sparklinePath(values, width = 440, height = 168, padding = 18, positions = null, span = 0) {
     const normalized = safeArray(values).map(nonNegativeNumber);
     if (!normalized.length) return { line: '', area: '', points: [] };
     const max    = Math.max(...normalized, 1);
-    const step   = normalized.length > 1 ? (width - padding * 2) / (normalized.length - 1) : 0;
+    const usable = width - padding * 2;
+    // 压缩后的点保留原始横坐标：长序列抽点时时间距离不会被重排成等距。
+    const xAt = (index) => {
+        if (positions && span > 1) return padding + (positions[index] / (span - 1)) * usable;
+        return normalized.length > 1 ? padding + (usable / (normalized.length - 1)) * index : padding;
+    };
     const points = normalized.map((value, index) => {
-        const x = padding + step * index;
+        const x = xAt(index);
         const y = height - padding - (value / max) * (height - padding * 2);
         return [x, y];
     });
-    const line = points.map(([x, y], index) => `${index === 0 ? 'M' : 'L'}${x},${y}`).join(' ');
-    const area = `${line} L ${padding + step * (normalized.length - 1)},${height - padding} L ${padding},${height - padding} Z`;
+    const line  = points.map(([x, y], index) => `${index === 0 ? 'M' : 'L'}${x},${y}`).join(' ');
+    const lastX = points.at(-1)[0];
+    const area  = `${line} L ${lastX},${height - padding} L ${points[0][0]},${height - padding} Z`;
     return { line, area, points };
 }
 
@@ -295,12 +307,17 @@ function compressSeries(labels, values, maxPoints = 26) {
     const safeLabels = safeArray(labels);
     const safeValues = safeArray(values).map(nonNegativeNumber);
     const limit      = Math.max(1, Math.floor(finiteNumber(maxPoints, 26)));
-    if (safeValues.length <= limit) return { labels: safeLabels, values: safeValues };
-    if (limit === 1) return { labels: [safeLabels[0]], values: [safeValues[0]] };
+    const span       = safeValues.length;
+    if (safeValues.length <= limit) {
+        return { labels: safeLabels, values: safeValues, positions: safeValues.map((_, index) => index), span };
+    }
+    if (limit === 1) return { labels: [safeLabels[0]], values: [safeValues[0]], positions: [0], span };
     if (limit === 2) {
         return {
             labels: [safeLabels[0], safeLabels.at(-1)],
             values: [safeValues[0], safeValues.at(-1)],
+            positions: [0, span - 1],
+            span,
         };
     }
     const innerSlots = limit - 2;
@@ -325,6 +342,8 @@ function compressSeries(labels, values, maxPoints = 26) {
     return {
         labels: unique.map((index) => safeLabels[index]),
         values: unique.map((index) => safeValues[index]),
+        positions: unique,
+        span,
     };
 }
 
@@ -332,7 +351,9 @@ function renderSparkline(labels, values, color, formatter) {
     const compressed = compressSeries(labels, values, 28);
     if (!compressed.values.length) return '<div class="stats-empty-card">暂无数据</div>';
     const gradId = `stats-grad-${color.replace(/[^a-zA-Z0-9]/g, '')}-${++_chartSequence}`;
-    const { line, area, points } = sparklinePath(compressed.values);
+    const { line, area, points } = sparklinePath(
+        compressed.values, 440, 168, 18, compressed.positions, compressed.span,
+    );
     const max                 = Math.max(...compressed.values, 1);
     const footerLabels        = buildAxisTickLabels(compressed.labels, 6);
     const visiblePointIndexes = sampleIndexes(compressed.values.length, 14);
@@ -383,7 +404,7 @@ function renderColumnChart(items, valueKey, labelKey, color, formatter) {
             ${rows
                 .map((item) => {
                     const value  = nonNegativeNumber(item[valueKey]);
-                    const height = Math.max(8, Math.round((value / max) * 100));
+                    const height = proportionalPercent(value, max);
                     return `
                     <div class="stats-column-item" title="${escapeHtml(item[labelKey])} · ${escapeHtml(formatter(value))}">
                         <div class="stats-column-stage">
@@ -415,7 +436,7 @@ function renderBarRows(items, valueKey, labelKey, color, formatter) {
                             <span class="stats-bar-value">${escapeHtml(formatter(value))}</span>
                         </div>
                         <div class="stats-bar-track">
-                            <span class="stats-bar-fill" style="width:${Math.max(8, Math.round((value / max) * 100))}%; background:${color};"></span>
+                            <span class="stats-bar-fill" style="width:${proportionalPercent(value, max)}%; background:${color};"></span>
                         </div>
                     </div>
                 `;
@@ -438,10 +459,10 @@ function renderTreemap(items, valueKey, labelKey, colors, formatter) {
             ${sorted
                 .map((item, index) => {
                     const ratio = item.__value / max;
-                    const span  = ratio > 0.72 ? 2 : 1;
                     const shade = (0.14 + ratio * 0.2).toFixed(2);
+                    // 等大的卡片里，色块面积按与最大类的比例填充，体量对比保持数值比例。
                     return `
-                    <div class="stats-treemap-tile" style="grid-column: span ${span}; background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(255,255,255,0.7)), rgba(255,255,255,0.88); border-color: rgba(255,255,255,0.55); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.28);">
+                    <div class="stats-treemap-tile" style="--stats-treemap-fill:${(ratio * 100).toFixed(2)}%; background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(255,255,255,0.7)), rgba(255,255,255,0.88); border-color: rgba(255,255,255,0.55); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.28);">
                         <span class="stats-treemap-glow" style="background:${colors[index % colors.length]}; opacity:${shade};"></span>
                         <div class="stats-treemap-label">${escapeHtml(item[labelKey])}</div>
                         <div class="stats-treemap-value">${escapeHtml(formatter(item.__value))}</div>
@@ -466,7 +487,7 @@ function renderStackedColumns(items, labelKey, segments, formatter) {
         <div class="stats-stacked-columns">
             ${normalized
                 .map((item) => {
-                    const height = Math.max(12, Math.round((item.__total / max) * 100));
+                    const height = proportionalPercent(item.__total, max);
                     return `
                     <div class="stats-stacked-item" title="${escapeHtml(item[labelKey])} · ${escapeHtml(formatter(item.__total))}">
                         <div class="stats-stacked-stage">
@@ -499,7 +520,7 @@ function renderHistogram(items, valueKey, labelKey, color, formatter) {
             ${rows
                 .map((item) => {
                     const value  = nonNegativeNumber(item[valueKey]);
-                    const height = Math.max(value ? 14 : 6, Math.round((value / max) * 100));
+                    const height = proportionalPercent(value, max);
                     return `
                     <div class="stats-histogram-bin" title="${escapeHtml(item[labelKey])} · ${escapeHtml(formatter(value))}">
                         <div class="stats-histogram-stage">
@@ -590,10 +611,22 @@ function donutCenterValueClass(value) {
     return 'stats-donut-center-value';
 }
 
+const DONUT_MAX_SLICES = 6;
+
 function renderDonut(items, valueKey, labelKey, colors, centerValue, centerLabel, formatter) {
-    const normalized = safeRecords(items)
+    const positive = safeRecords(items)
         .map((item) => ({ ...item, value: nonNegativeNumber(item[valueKey]) }))
         .filter((item) => item.value > 0);
+    // 分类过多时合并尾部为“其他”，分母始终是完整总量：环图、图例和中心数字保持一致。
+    let normalized = positive;
+    if (positive.length > DONUT_MAX_SLICES) {
+        const ranked = [...positive].sort((a, b) => b.value - a.value);
+        const rest   = ranked.slice(DONUT_MAX_SLICES - 1);
+        normalized   = [
+            ...ranked.slice(0, DONUT_MAX_SLICES - 1),
+            { [labelKey]: `其他（${rest.length} 项）`, value: rest.reduce((sum, item) => sum + item.value, 0) },
+        ];
+    }
     const total = normalized.reduce((sum, item) => sum + item.value, 0);
     if (!total) return '<div class="stats-empty-card">暂无数据</div>';
     const providedColors = safeArray(colors).filter((color) => typeof color === 'string' && color);
@@ -788,9 +821,9 @@ function renderActivityHeatmap(days, highlightStart, highlightEnd) {
 }
 
 function renderComparisonMetric(label, value, maxExpense, color) {
-    const amount = nonNegativeNumber(value);
+    const amount  = nonNegativeNumber(value);
     const maximum = Math.max(1, nonNegativeNumber(maxExpense, 1));
-    const width = amount > 0 ? Math.min(100, Math.max(6, Math.round((amount / maximum) * 100))) : 0;
+    const width   = proportionalPercent(amount, maximum);
     return `
         <div class="stats-comparison-metric" title="${escapeHtml(label)} ${formatAmount(amount)}">
             <div class="stats-comparison-metric-head">
@@ -1174,7 +1207,7 @@ function ensureStyles() {
         .stats-column-stage, .stats-histogram-stage, .stats-stacked-stage { position: relative; width: 100%; height: 124px; }
         .stats-column-bar {
             position: absolute; left: 50%; bottom: 0; transform: translateX(-50%);
-            display: block; width: 100%; max-width: 26px; min-height: 8px; border-radius: 999px 999px 8px 8px;
+            display: block; width: 100%; max-width: 26px; min-height: 0; border-radius: 999px 999px 8px 8px;
             box-shadow: inset 0 1px 0 rgba(255,255,255,0.25);
         }
         .stats-column-value {
@@ -1200,7 +1233,7 @@ function ensureStyles() {
             border: 1px solid rgba(226,232,240,0.72);
         }
         .stats-treemap-glow {
-            position: absolute; inset: auto -20px -22px auto; width: 90px; height: 90px; border-radius: 28px; filter: blur(12px);
+            position: absolute; left: 0; right: 0; bottom: 0; height: var(--stats-treemap-fill, 0%);
         }
         .stats-treemap-label, .stats-treemap-value { position: relative; z-index: 1; }
         .stats-treemap-label { font-size: 12px; font-weight: 800; color: #475569; line-height: 1.5; }
@@ -1211,7 +1244,7 @@ function ensureStyles() {
         .stats-stacked-item { min-width: 0; display: grid; gap: 8px; justify-items: center; align-items: end; }
         .stats-stacked-track {
             position: absolute; left: 50%; bottom: 0; transform: translateX(-50%);
-            width: 100%; max-width: 28px; min-height: 12px; display: flex; flex-direction: column-reverse;
+            width: 100%; max-width: 28px; min-height: 0; display: flex; flex-direction: column-reverse;
             border-radius: 999px; overflow: hidden; background: rgba(226,232,240,0.7);
         }
         .stats-stacked-segment { display: block; width: 100%; }
@@ -1223,7 +1256,7 @@ function ensureStyles() {
         .stats-histogram-bin { min-width: 0; display: grid; gap: 8px; justify-items: center; align-items: end; }
         .stats-histogram-bar {
             position: absolute; left: 50%; bottom: 0; transform: translateX(-50%);
-            display: block; width: 100%; max-width: 52px; min-height: 6px; border-radius: 12px 12px 4px 4px;
+            display: block; width: 100%; max-width: 52px; min-height: 0; border-radius: 12px 12px 4px 4px;
             box-shadow: inset 0 1px 0 rgba(255,255,255,0.25);
         }
         .stats-histogram-value { font-size: 10px; font-weight: 800; color: #0f172a; }
@@ -1378,7 +1411,7 @@ function ensureStyles() {
     );
 }
 
-// 数据请求：固定本次范围快照，全部时间的三个边界查询并行执行。
+// 数据请求：固定本次范围快照，全部时间的五个边界查询并行执行。
 async function fetchAllData({ rangeKey, range, today, currency }) {
     const rangeParam  = buildRequestRangeValue(rangeKey, range);
     const heatmapYear = resolveHeatmapYear(range);
@@ -1388,23 +1421,14 @@ async function fetchAllData({ rangeKey, range, today, currency }) {
                   fetchItemRangeBounds(api, {
                       type: 'ledger',
                       currency,
-                      sortField: 'ledger_date',
-                      startField: 'ledger_date',
-                      endField: 'ledger_date',
                       fallbackEnd: range.end,
                   }),
                   fetchItemRangeBounds(api, {
                       type: 'note',
-                      sortField: 'created_at',
-                      startField: 'created_at',
-                      endField: 'created_at',
                       fallbackEnd: range.end,
                   }),
                   fetchItemRangeBounds(api, {
                       type: 'diary',
-                      sortField: 'diary_date',
-                      startField: 'diary_date',
-                      endField: 'diary_date',
                       fallbackEnd: range.end,
                   }),
                   fetchItemRangeBounds(api, { type: 'task', fallbackEnd: today }),
@@ -1511,7 +1535,7 @@ function financeCards() {
             title: '支出分类',
             subtitle: `按${rangeLabel()}统计支出主要流向。`,
             body: renderDonut(
-                expenseByCategory.slice(0, 6),
+                expenseByCategory,
                 'total',
                 'category',
                 ['#ef4444', '#f97316', '#f59e0b', '#fb7185', '#f43f5e', '#fdba74'],
@@ -1673,7 +1697,7 @@ function eventCards() {
     const events        = _data?.events || {};
     const weekly        = safeRecords(events.weekly);
     const totalEvents   = sumBy(weekly, 'count');
-    const slotLabels    = ['06-09', '09-12', '12-14', '14-18', '18-21', '21-24'];
+    const slotLabels    = ['00-06', '06-09', '09-12', '12-14', '14-18', '18-21', '21-24'];
     const weekdayLabels = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
     return [
         renderCard({
@@ -1719,7 +1743,6 @@ function eventCards() {
             subtitle: `按${rangeLabel()}统计日程主题分布。`,
             body: renderDonut(
                 safeRecords(events.by_category)
-                    .slice(0, 6)
                     .map((item) => ({ ...item, category: item.category || '未分类' })),
                 'count',
                 'category',
@@ -1796,7 +1819,6 @@ function diaryCards() {
         template_label: item.template_id || '手写',
     }));
     const moodItems = safeRecords(diary.mood_breakdown)
-        .slice(0, 6)
         .map((item) => ({ ...item, label: formatMoodLabel(item.mood) }));
     const densityBody =
         cadenceGranularity === 'day'

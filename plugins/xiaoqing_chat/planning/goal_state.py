@@ -16,9 +16,9 @@ from ..store_base import AsyncKeyedStore, delete_json_artifacts
 
 @dataclass
 class GoalState:
-    ts: float   = 0.0
-    goal: str   = ""
-    source: str = ""
+    ts    : float = 0.0
+    goal  : str   = ""
+    source: str   = ""
 
 
 class GoalStore(AsyncKeyedStore[GoalState]):

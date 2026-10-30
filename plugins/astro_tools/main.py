@@ -25,23 +25,23 @@ logger = logging.getLogger(__name__)
 AstroHandler = Callable[[str, PluginContextProtocol], Awaitable[str]]
 
 _COMMAND_HANDLERS: dict[str, AstroHandler] = {
-    "time": astro_time.handle_time,
-    "coord": coord.handle_coord,
-    "convert": convert.handle_convert,
+    "time"    : astro_time.handle_time,
+    "coord"   : coord.handle_coord,
+    "convert" : convert.handle_convert,
     "redshift": redshift.handle_redshift,
-    "formula": formula.handle_formula,
-    "obj": obj.handle_obj,
-    "const": const.handle_const,
+    "formula" : formula.handle_formula,
+    "obj"     : obj.handle_obj,
+    "const"   : const.handle_const,
 }
 
 _SUBCOMMAND_HELP = {
-    "time": "用法: /astro time [now|jd <值>|mjd <值>|unix <值>|时间值]",
-    "coord": ("用法: /astro coord <RA> <Dec>\n或: /astro coord <galactic|ecliptic> <经度> <纬度>"),
-    "convert": "用法: /astro convert <数值> <源单位> <目标单位>",
+    "time"    : "用法: /astro time [now|jd <值>|mjd <值>|unix <值>|时间值]",
+    "coord"   : ("用法: /astro coord <RA> <Dec>\n或: /astro coord <galactic|ecliptic> <经度> <纬度>"),
+    "convert" : "用法: /astro convert <数值> <源单位> <目标单位>",
     "redshift": "用法: /astro redshift <红移值>（范围 0 到 1100）",
-    "formula": "用法: /astro formula [公式名|list|calc <类型> <质量>]",
-    "obj": "用法: /astro obj <天体名称>（也支持 sun/moon/earth 等固定对象）",
-    "const": "用法: /astro const [常数名]",
+    "formula" : "用法: /astro formula [公式名|list|calc <类型> <质量>]",
+    "obj"     : "用法: /astro obj <天体名称>（也支持 sun/moon/earth 等固定对象）",
+    "const"   : "用法: /astro const [常数名]",
 }
 
 
@@ -60,7 +60,9 @@ async def handle(
         if not parsed:
             return segments(_show_help())
 
-        subcommand = parsed.first.lower()
+        # 子命令拿到完整的原始参数，由各自的解析边界决定语法；通用解析会静默丢掉选项。
+        raw_parts = args.strip().split(maxsplit=1)
+        subcommand = raw_parts[0].lower()
 
         if len(parsed) == 1 and not parsed.options and subcommand in {"help", "帮助"}:
             return segments(_show_help())
@@ -74,7 +76,7 @@ async def handle(
                 suffix    = "…",
             )
             return segments(f"未知命令: {safe_subcommand}\n输入 /astro help 查看帮助")
-        subcommand_args = parsed.rest(1)
+        subcommand_args = raw_parts[1] if len(raw_parts) > 1 else ""
         if subcommand_args.strip().casefold() in {"help", "帮助"}:
             return segments(_show_help(subcommand))
         return segments(await handler(subcommand_args, context))

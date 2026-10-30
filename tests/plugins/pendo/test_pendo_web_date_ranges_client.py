@@ -7,7 +7,7 @@ from typing import Final
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT: Final               = REPOSITORY_ROOT
+ROOT              : Final = REPOSITORY_ROOT
 DATE_RANGES_CLIENT: Final = (
     ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "utils" / "date_ranges.js"
 )
@@ -134,9 +134,6 @@ def test_item_range_bounds_normalize_responses_and_never_reverse_the_range() -> 
 
         assert.deepEqual(await client.fetchItemRangeBounds(api, {
             type: 'event',
-            sortField: 'start_time',
-            startField: 'start_time',
-            endField: 'end_time',
             fallbackEnd: 'invalid',
             minimumEnd: '2025-01-01',
         }), { start: '2022-05-01', end: '2025-01-01' });
@@ -150,12 +147,12 @@ def test_item_range_bounds_normalize_responses_and_never_reverse_the_range() -> 
             async get() { return { data: { start: '2030-01-01', end: 42 } }; },
         };
         assert.deepEqual(await client.fetchItemRangeBounds(corruptApi, {
-            type: 'note', sortField: 'created_at', fallbackEnd: 'bad',
+            type: 'note', fallbackEnd: 'bad',
         }), { start: '2030-01-01', end: '2030-01-01' });
 
         const emptyApi = { async get() { return { data: { items: [] } }; } };
         assert.deepEqual(await client.fetchItemRangeBounds(emptyApi, {
-            type: 'diary', sortField: 'diary_date', fallbackEnd: '',
+            type: 'diary', fallbackEnd: '',
         }), { start: '2024-02-29', end: '2024-02-29' });
         """
     )

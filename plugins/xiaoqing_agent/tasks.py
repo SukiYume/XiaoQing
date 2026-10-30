@@ -4,16 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import secrets
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
+from core.atomic_store import keyed_path_lock
+from core.lifecycle import to_thread_owned
 from core.plugin_base import atomic_write_text
 
 from .receipts import HeldReceipt
+
+_logger = logging.getLogger(__name__)
+_T      = TypeVar("_T")
 
 # 每个会话保留的任务记录数，以及全局保留的完整执行记录数。
 MAX_RECORDS_PER_CHAT = 30
@@ -31,7 +38,7 @@ class ChatRef:
     运行中的任务群里都能查看；``user_id`` 是发起人，只有发起人和 Bot 管理员能停止或补充。
     """
 
-    user_id: int
+    user_id : int
     group_id: int | None
 
     @property
@@ -48,7 +55,7 @@ class Actor:
     """发出这条请求的人。运行中的任务只有发起人和 Bot 管理员能停止或补充。"""
 
     user_id: int
-    admin: bool = False
+    admin  : bool = False
 
     def manages(self, task: AgentTask) -> bool:
         return self.admin or task.chat.user_id == self.user_id
@@ -58,34 +65,34 @@ class Actor:
 class Outcome:
     """一次任务交付给发起人的内容。"""
 
-    text: str
-    files: list[str] = field(default_factory=list)
+    text  : str
+    files : list[str] = field(default_factory=list)
     status: str = "done"
 
 
 @dataclass(eq=False)
 class AgentTask:
-    task_id: str
-    chat: ChatRef
-    goal: str
-    request_text: str
-    source: str
-    created_at: float = field(default_factory=time.time)
-    status: str   = "running"
-    steps: int    = 0
-    activity: str = "准备中"
-    plan: list[dict[str, str]] = field(default_factory=list)
-    finished_at: float | None = None
-    outcome: Outcome | None   = None
-    error: str                = ""
-    runner: asyncio.Task[None] | None = field(default=None, repr=False)
-    inline_waiter: asyncio.Future[Outcome] | None = field(default=None, repr=False)
-    progress_sent: int      = 0
+    task_id         : str
+    chat            : ChatRef
+    goal            : str
+    request_text    : str
+    source          : str
+    created_at      : float = field(default_factory=time.time)
+    status          : str = "running"
+    steps           : int = 0
+    activity        : str = "准备中"
+    plan            : list[dict[str, str]] = field(default_factory=list)
+    finished_at     : float | None   = None
+    outcome         : Outcome | None = None
+    error           : str            = ""
+    runner          : asyncio.Task[None] | None = field(default=None, repr=False)
+    inline_waiter   : asyncio.Future[Outcome] | None = field(default=None, repr=False)
+    progress_sent   : int   = 0
     last_progress_at: float = 0.0
     # 发起这条任务的消息附带的引用文字与已下载到本地的图片。
     quoted_text: str = ""
     image_files: list[str] = field(default_factory=list)
-    sender: str = ""
+    sender     : str = ""
     # 聊天插件交来的人设与说话方式，只用于写回复的口吻，不写入任务记录。
     persona: str = field(default="", repr=False)
     # 任务开始时发起人是不是 Bot 管理员：决定占哪份名额、提示词怎么写；本机工具另由 Core 每次复核。
@@ -98,6 +105,23 @@ class AgentTask:
     held_receipts: list[HeldReceipt] = field(default_factory=list, repr=False)
     # 当轮回复里内嵌的图片，等聊天侧回报发没发出去时一起结算。
     inline_files: list[str] = field(default_factory=list, repr=False)
+    # 当轮交付各部分的发送结果（"message" 为回复正文，"file:<路径>" 为随后上传的附件）；
+    # 正文回报与附件上传先后不定，全部到齐后才汇总成 sent / failed / unknown。
+    inline_parts   : dict[str, bool | None] = field(default_factory=dict, repr=False)
+    inline_expected: int = 0
+
+    def inline_delivery(self) -> str | None:
+        """汇总当轮交付：任一部分失败为 failed；全部确认为 sent；其余全部到齐时为 unknown。"""
+
+        parts = self.inline_parts
+        if any(sent is False for sent in parts.values()):
+            return "failed"
+        if len(parts) < self.inline_expected:
+            return None
+        if all(sent is True for sent in parts.values()):
+            return "sent"
+        return "unknown"
+
     # 保留有界命令回报供追问定位记录；用户回复按人设自然表达。
     command_results: list[str] = field(default_factory=list, repr=False)
 
@@ -109,23 +133,23 @@ class AgentTask:
     def record(self) -> dict[str, Any]:
         outcome = self.outcome
         return {
-            "task_id": self.task_id,
-            "chat": self.chat.key,
-            "user_id": self.chat.user_id,
-            "group_id": self.chat.group_id,
-            "sender": self.sender,
-            "goal": self.goal,
+            "task_id"     : self.task_id,
+            "chat"        : self.chat.key,
+            "user_id"     : self.chat.user_id,
+            "group_id"    : self.chat.group_id,
+            "sender"      : self.sender,
+            "goal"        : self.goal,
             "request_text": self.request_text[:500],
-            "source": self.source,
-            "status": self.status,
-            "created_at": self.created_at,
-            "finished_at": self.finished_at,
-            "steps": self.steps,
+            "source"      : self.source,
+            "status"      : self.status,
+            "created_at"  : self.created_at,
+            "finished_at" : self.finished_at,
+            "steps"       : self.steps,
             # 结果原样保存：/agent result 补发的必须和当时要发的完全一样。
-            "result": outcome.text if outcome is not None else "",
-            "files": list(outcome.files) if outcome is not None else [],
-            "error": self.error[:500],
-            "delivery": self.delivery,
+            "result"         : outcome.text if outcome is not None else "",
+            "files"          : list(outcome.files) if outcome is not None else [],
+            "error"          : self.error[:500],
+            "delivery"       : self.delivery,
             "command_results": list(self.command_results),
         }
 
@@ -157,6 +181,8 @@ def describe_record(
     status = str(record.get("status") or "?")
     if record.get("delivery") == "failed":
         status += "（结果没发出去）"
+    elif record.get("delivery") == "unknown":
+        status += "（结果是否送达未确认）"
     goal      = str(record.get("goal") or "").strip().replace("\n", " ")
     result    = str(record.get("result") or record.get("error") or "").strip().replace("\n", " ")
     initiator = record_initiator(record)
@@ -188,14 +214,38 @@ class TaskStore:
 
     @staticmethod
     def _read(path: Path) -> list[dict[str, Any]]:
+        """读取一份任务记录；文件缺失算新会话，读盘失败原样抛出。
+
+        内容损坏时先把原文件改名保留，再按空记录继续，避免后续保存直接覆盖仅存的历史。
+        """
+
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            payload = path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return []
-        except (OSError, ValueError):
+        try:
+            data = json.loads(payload)
+        except ValueError as exc:
+            TaskStore._quarantine(path, exc)
             return []
         records = data.get("tasks") if isinstance(data, dict) else None
-        return [item for item in records or [] if isinstance(item, dict)]
+        if not isinstance(records, list):
+            TaskStore._quarantine(path, ValueError("tasks is not a list"))
+            return []
+        return [item for item in records if isinstance(item, dict)]
+
+    @staticmethod
+    def _quarantine(path: Path, error: BaseException) -> None:
+        target = path.with_name(f"{path.name}.corrupt-{time.time_ns()}")
+        try:
+            path.rename(target)
+        except FileNotFoundError:
+            return
+        _logger.error(
+            "agent 任务记录损坏，已隔离为 %s error_type=%s",
+            target.name,
+            type(error).__name__,
+        )
 
     @staticmethod
     def _write(path: Path, records: list[dict[str, Any]]) -> None:
@@ -203,12 +253,21 @@ class TaskStore:
         payload = {"version": 1, "tasks": records[-MAX_RECORDS_PER_CHAT:]}
         atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
 
+    async def _run_locked(self, path: Path, work: Callable[[], _T]) -> _T:
+        """同一路径的读改写在线程里持有路径锁，等待方被取消也等线程写完。"""
+
+        def locked() -> _T:
+            with keyed_path_lock(path):
+                return work()
+
+        async with self._lock:
+            return await to_thread_owned(locked)
+
     async def recent(self, chat_key: str, limit: int) -> list[dict[str, Any]]:
         if limit <= 0:
             return []
-        path = self._path(chat_key)
-        async with self._lock:
-            records = await asyncio.to_thread(self._read, path)
+        path    = self._path(chat_key)
+        records = await self._run_locked(path, lambda: self._read(path))
         return records[-limit:]
 
     async def save(self, task: AgentTask) -> None:
@@ -220,8 +279,7 @@ class TaskStore:
             records.append(record)
             self._write(path, records)
 
-        async with self._lock:
-            await asyncio.to_thread(update)
+        await self._run_locked(path, update)
 
     async def update_delivery(self, chat_key: str, task_id: str, delivery: str) -> bool:
         """改写一条已结束任务的交付状态（补发、当轮回复的回执）；找不到记录时返回 False。"""
@@ -237,8 +295,7 @@ class TaskStore:
                     return True
             return False
 
-        async with self._lock:
-            return await asyncio.to_thread(update)
+        return await self._run_locked(path, update)
 
     async def mark_interrupted(self) -> int:
         """进程重启后，上一代没有收尾的任务一律记为中断。"""
@@ -248,20 +305,21 @@ class TaskStore:
                 return 0
             changed = 0
             for path in sorted(self.root.glob("*.json")):
-                records = self._read(path)
-                dirty   = False
-                for record in records:
-                    if record.get("status") not in TERMINAL_STATUSES:
-                        record["status"] = "interrupted"
-                        record["error"]  = "进程重启时任务尚未完成"
-                        dirty            = True
-                        changed += 1
-                if dirty:
-                    self._write(path, records)
+                with keyed_path_lock(path):
+                    records = self._read(path)
+                    dirty   = False
+                    for record in records:
+                        if record.get("status") not in TERMINAL_STATUSES:
+                            record["status"] = "interrupted"
+                            record["error"]  = "进程重启时任务尚未完成"
+                            dirty            = True
+                            changed += 1
+                    if dirty:
+                        self._write(path, records)
             return changed
 
         async with self._lock:
-            return await asyncio.to_thread(sweep)
+            return await to_thread_owned(sweep)
 
     async def save_transcript(self, task: AgentTask, messages: list[dict[str, Any]]) -> None:
         payload = {"task": task.record(), "messages": messages}

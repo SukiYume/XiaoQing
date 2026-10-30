@@ -34,10 +34,10 @@ def _session_payload(session: WebSession) -> dict[str, object]:
     """序列化会话启动所需的非秘密字段。"""
 
     return {
-        "owner_id": session.owner_id,
+        "owner_id"  : session.owner_id,
         "expires_at": int(session.expires_at),
         "csrf_token": session.csrf_token,
-        "demo": session.demo,
+        "demo"      : session.demo,
     }
 
 
@@ -45,10 +45,10 @@ def _device_payload(session: WebSessionInfo, current_session: WebSession) -> dic
     """序列化设备列表项，并标记当前浏览器会话。"""
 
     return {
-        "device_id": session.device_id,
+        "device_id" : session.device_id,
         "created_at": int(session.created_at),
         "expires_at": int(session.expires_at),
-        "current": session.device_id == current_session.device_id,
+        "current"   : session.device_id == current_session.device_id,
     }
 
 
@@ -157,8 +157,8 @@ def get_auth_sessions(
 
     sessions = list_web_sessions(session.owner_id)
     return {
-        "ok": True,
-        "data": {"sessions": [_device_payload(item, session) for item in sessions]},
+        "ok"     : True,
+        "data"   : {"sessions": [_device_payload(item, session) for item in sessions]},
         "message": "",
     }
 

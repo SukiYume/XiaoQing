@@ -2,21 +2,23 @@
 
 from __future__ import annotations
 
+import json
+import sqlite3
+from datetime import UTC, datetime
+from typing import Any
+
+import pytest
+
 import tests.helpers.pendo_web_transfer_test_support as _fixture_support
 from tests.helpers.pendo_web_transfer_test_support import (
     OWNER_ID,
-    Any,
     Database,
     DuplicateBundleImportError,
     ZoneInfo,
     _build_sample_bundle_bytes,
     _simple_task_bundle,
-    datetime,
     io,
-    json,
-    pytest,
     read_bundle,
-    timezone,
     transfer_api,
 )
 
@@ -48,12 +50,12 @@ def test_import_source_timezone_normalizes_naive_and_aware_datetimes_to_utc():
         {
             "event": [
                 {
-                    "_type": "event",
-                    "_schema": 2,
-                    "id": "tz-event",
-                    "title": "DST transition",
+                    "_type"     : "event",
+                    "_schema"   : 2,
+                    "id"        : "tz-event",
+                    "title"     : "DST transition",
                     "start_time": "2026-03-08T01:30:00",
-                    "end_time": "2026-03-08T03:30:00",
+                    "end_time"  : "2026-03-08T03:30:00",
                     "created_at": "2026-03-07T20:00:00-08:00",
                     "updated_at": "2026-03-08T04:00:00",
                 }
@@ -88,10 +90,10 @@ def test_import_source_timezone_rejects_unrepresentable_dst_wall_times(
         {
             "event": [
                 {
-                    "_type": "event",
-                    "_schema": 2,
-                    "id": "bad-dst",
-                    "title": "bad DST",
+                    "_type"     : "event",
+                    "_schema"   : 2,
+                    "id"        : "bad-dst",
+                    "title"     : "bad DST",
                     "start_time": local_time,
                 }
             ]
@@ -109,7 +111,7 @@ def test_import_source_timezone_rejects_unrepresentable_dst_wall_times(
 def test_import_missing_timestamps_use_utc_clock_not_host_local_time():
     from plugins.pendo.web.services.bundle_import import normalize_import_payload
 
-    fixed = datetime(2030, 1, 1, 12, 0, tzinfo=timezone.utc)
+    fixed = datetime(2030, 1, 1, 12, 0, tzinfo=UTC)
     normalized = normalize_import_payload(
         {"type": "task", "title": "done", "status": "done"},
         source_zone = ZoneInfo("Pacific/Auckland"),
@@ -174,11 +176,11 @@ def test_import_conflict_policies_have_distinct_persistent_results(
             {
                 "task": [
                     {
-                        "_type": "task",
+                        "_type"  : "task",
                         "_schema": 2,
-                        "id": "policy-source",
-                        "title": title,
-                        "status": "open",
+                        "id"     : "policy-source",
+                        "title"  : title,
+                        "status" : "open",
                     }
                 ]
             }
@@ -200,9 +202,9 @@ def test_import_conflict_policies_have_distinct_persistent_results(
 
     assert first.json()["data"]["results"] == {
         "inserted": 1,
-        "updated": 0,
-        "skipped": 0,
-        "failed": 0,
+        "updated" : 0,
+        "skipped" : 0,
+        "failed"  : 0,
     }
     assert skipped.json()["data"]["results"]["skipped"] == 1
     assert overwritten.json()["data"]["results"]["updated"] == 1
@@ -232,20 +234,20 @@ def test_event_collection_overwrite_reuses_imported_collection_and_event_ids(
             {
                 "event_collection": [
                     {
-                        "_type": "event_collection",
+                        "_type"  : "event_collection",
                         "_schema": 2,
-                        "id": "source-collection",
-                        "kind": "multi_node",
-                        "title": collection_title,
+                        "id"     : "source-collection",
+                        "kind"   : "multi_node",
+                        "title"  : collection_title,
                     }
                 ],
                 "event": [
                     {
-                        "_type": "event",
-                        "_schema": 2,
-                        "id": "source-event",
-                        "title": event_title,
-                        "start_time": "2030-01-01T09:00:00",
+                        "_type"              : "event",
+                        "_schema"            : 2,
+                        "id"                 : "source-event",
+                        "title"              : event_title,
+                        "start_time"         : "2030-01-01T09:00:00",
                         "event_collection_id": "source-collection",
                     }
                 ],
@@ -297,29 +299,29 @@ def test_item_identity_generation_and_source_index_ignore_unsafe_metadata(
     assert transfer_api._get_item_identity(temp_db, None) is None
     collision_id  = "a" * 32
     task_contexts = {
-        collision_id: {"import": {"source_id": "source-valid", "policy": "skip"}},
-        "item-isolated": {"import": {"source_id": "source-isolated", "policy": "isolate"}},
-        "item-no-source": {"import": {"policy": "skip"}},
+        collision_id     : {"import": {"source_id": "source-valid", "policy": "skip"}},
+        "item-isolated"  : {"import": {"source_id": "source-isolated", "policy": "isolate"}},
+        "item-no-source" : {"import": {"policy": "skip"}},
         "item-bad-import": {"import": "not-an-object"},
     }
     for item_id, context in task_contexts.items():
         temp_db.insert_item(
             {
-                "id": item_id,
+                "id"      : item_id,
                 "owner_id": OWNER_ID,
-                "type": "task",
-                "title": item_id,
-                "status": "open",
-                "context": context,
+                "type"    : "task",
+                "title"   : item_id,
+                "status"  : "open",
+                "context" : context,
             }
         )
 
     identity = transfer_api._get_item_identity(temp_db, collision_id)
     assert identity == {
-        "id": collision_id,
+        "id"      : collision_id,
         "owner_id": OWNER_ID,
-        "type": "task",
-        "deleted": 0,
+        "type"    : "task",
+        "deleted" : 0,
     }
     assert transfer_api._decode_import_context({"key": "value"}) == {"key": "value"}
     assert transfer_api._decode_import_context("{broken") == {}
@@ -342,30 +344,30 @@ def test_collection_identity_generation_and_source_index_ignore_unsafe_metadata(
     assert transfer_api._get_event_collection_identity(temp_db, None) is None
     collision_id        = "c" * 32
     collection_contexts = {
-        collision_id: {"import": {"source_id": "collection-source", "policy": "skip"}},
+        collision_id         : {"import": {"source_id": "collection-source", "policy": "skip"}},
         "collection-isolated": {
             "import": {"source_id": "collection-isolated-source", "policy": "isolate"}
         },
-        "collection-no-source": {"import": {"policy": "skip"}},
+        "collection-no-source" : {"import": {"policy": "skip"}},
         "collection-bad-import": {"import": "not-an-object"},
     }
     for collection_id, context in collection_contexts.items():
         temp_db.create_event_collection(
             {
-                "id": collection_id,
+                "id"      : collection_id,
                 "owner_id": OWNER_ID,
-                "kind": "multi_node",
-                "title": collection_id,
-                "context": context,
+                "kind"    : "multi_node",
+                "title"   : collection_id,
+                "context" : context,
             }
         )
 
     identity = transfer_api._get_event_collection_identity(temp_db, collision_id)
     assert identity == {
-        "id": collision_id,
+        "id"      : collision_id,
         "owner_id": OWNER_ID,
-        "kind": "multi_node",
-        "deleted": 0,
+        "kind"    : "multi_node",
+        "deleted" : 0,
     }
     assert transfer_api._index_imported_collection_sources(temp_db, OWNER_ID) == {
         "collection-source": collision_id
@@ -383,11 +385,11 @@ def test_collection_import_planner_skips_existing_source_and_rejects_duplicates(
 
     temp_db.create_event_collection(
         {
-            "id": "existing-collection",
+            "id"      : "existing-collection",
             "owner_id": OWNER_ID,
-            "kind": "multi_node",
-            "title": "现有集合",
-            "context": {"import": {"source_id": "source-collection", "policy": "skip"}},
+            "kind"    : "multi_node",
+            "title"   : "现有集合",
+            "context" : {"import": {"source_id": "source-collection", "policy": "skip"}},
         }
     )
     operations, id_map, decisions = transfer_api._prepare_collection_import_operations(
@@ -421,8 +423,8 @@ def test_relationship_helpers_drop_unresolved_or_malformed_external_links() -> N
 
     item_id_map = {"source": "internal"}
     assert transfer_api._result_entry({"type": "task", "id": "one"}) == {
-        "type": "task",
-        "id": "one",
+        "type" : "task",
+        "id"   : "one",
         "title": "无标题",
     }
     assert transfer_api._remap_note_references("invalid", item_id_map) == []
@@ -529,16 +531,15 @@ def test_import_commit_maps_duplicate_bundle_and_unique_constraint_errors(
     assert "private sqlite detail" not in str(unique_error.value.detail)
 
 
-def test_unique_constraint_detection_has_a_bounded_exception_chain() -> None:
-    """异常链遍历设硬上限，防止恶意或损坏链条导致无界工作。"""
-
-    error: BaseException = RuntimeError("root")
-    for index in range(10):
+@pytest.mark.parametrize(("depth", "expected"), [(7, True), (8, False)])
+def test_unique_constraint_detection_has_a_bounded_exception_chain(depth, expected) -> None:
+    error                  = sqlite3.IntegrityError("unique")
+    error.sqlite_errorcode = sqlite3.SQLITE_CONSTRAINT_UNIQUE
+    for index in range(depth):
         wrapper           = RuntimeError(f"wrapper-{index}")
         wrapper.__cause__ = error
         error             = wrapper
-
-    assert transfer_api._is_unique_constraint_failure(error) is False
+    assert transfer_api._is_unique_constraint_failure(error) is expected
 
 
 def test_import_samples_invalid_pagination_headers_fall_back_to_defaults(
@@ -550,7 +551,7 @@ def test_import_samples_invalid_pagination_headers_fall_back_to_defaults(
         "/api/transfer/import/samples",
         headers={
             **auth_headers,
-            "X-Transfer-Page": "invalid",
+            "X-Transfer-Page"     : "invalid",
             "X-Transfer-Page-Size": "invalid",
         },
         content=_simple_task_bundle("sample-defaults"),
@@ -587,27 +588,19 @@ def test_transfer_logs_http_query_constraints_return_422(
     assert response.status_code == 422
 
 
-def test_query_items_for_types_paginates_full_export():
+def test_query_items_for_types_uses_the_full_read_contract():
+    """导出复用数据库的完整分页读取，而不是另写一套按解码后数量终止的分页。"""
+
     class FakeDB:
         def __init__(self):
             self.calls = []
 
-        def get_items(self, owner_id, filters=None, limit=100, offset=0, *, use_cache=True):
-            assert use_cache is False
-            self.calls.append((owner_id, filters, limit, offset))
-            total = 2505
-            if offset >= total:
-                return []
-            remaining = total - offset
-            size      = min(limit, remaining)
-            return [{"id": f"task_{offset + idx}"} for idx in range(size)]
+        def get_all_items(self, owner_id, filters=None, *, page_size=200):
+            self.calls.append((owner_id, filters, page_size))
+            return [{"id": f"task_{idx}"} for idx in range(2505)]
 
     db     = FakeDB()
     result = transfer_api.query_items_for_types(db, OWNER_ID, ["task"])
 
     assert len(result["task"]) == 2505
-    assert db.calls[:3] == [
-        (OWNER_ID, {"type": "task"}, 1000, 0),
-        (OWNER_ID, {"type": "task"}, 1000, 1000),
-        (OWNER_ID, {"type": "task"}, 1000, 2000),
-    ]
+    assert db.calls == [(OWNER_ID, {"type": "task"}, 1000)]

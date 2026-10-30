@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+import re
+from typing import Any
+
+import pytest
+
 import tests.helpers.pendo_web_transfer_test_support as _fixture_support
 from tests.helpers.pendo_web_transfer_test_support import (
     OWNER_ID,
-    Any,
     Database,
     DuplicateBundleImportError,
     _build_sample_bundle_bytes,
     _ImportRequest,
-    asyncio,
-    json,
-    pytest,
-    re,
     transfer_api,
 )
 
@@ -25,14 +27,14 @@ def test_import_execute_isolates_external_ids_and_selected_types(
 ):
     temp_db.insert_item(
         {
-            "id": "task_existing",
-            "owner_id": OWNER_ID,
-            "type": "task",
-            "title": "旧任务",
-            "content": "旧内容",
-            "category": "旧分类",
-            "priority": 2,
-            "status": "open",
+            "id"        : "task_existing",
+            "owner_id"  : OWNER_ID,
+            "type"      : "task",
+            "title"     : "旧任务",
+            "content"   : "旧内容",
+            "category"  : "旧分类",
+            "priority"  : 2,
+            "status"    : "open",
             "created_at": "2026-03-01T09:00:00+08:00",
             "updated_at": "2026-03-01T09:00:00+08:00",
         }
@@ -42,26 +44,26 @@ def test_import_execute_isolates_external_ids_and_selected_types(
         {
             "task": [
                 {
-                    "_type": "task",
-                    "_schema": 2,
-                    "id": "task_existing",
-                    "title": "新任务标题",
-                    "content": "新内容",
-                    "category": "工作",
-                    "priority": 4,
-                    "status": "done",
+                    "_type"     : "task",
+                    "_schema"   : 2,
+                    "id"        : "task_existing",
+                    "title"     : "新任务标题",
+                    "content"   : "新内容",
+                    "category"  : "工作",
+                    "priority"  : 4,
+                    "status"    : "done",
                     "created_at": "2026-03-20T09:00:00+08:00",
                     "updated_at": "2026-03-20T09:00:00+08:00",
                 }
             ],
             "note": [
                 {
-                    "_type": "note",
-                    "_schema": 2,
-                    "id": "note_subset",
-                    "title": "不会导入",
-                    "content": "因为没选中",
-                    "category": "知识",
+                    "_type"     : "note",
+                    "_schema"   : 2,
+                    "id"        : "note_subset",
+                    "title"     : "不会导入",
+                    "content"   : "因为没选中",
+                    "category"  : "知识",
                     "created_at": "2026-03-20T09:00:00+08:00",
                     "updated_at": "2026-03-20T09:00:00+08:00",
                 }
@@ -92,14 +94,14 @@ def test_import_execute_isolates_external_ids_and_selected_types(
         {
             "task": [
                 {
-                    "_type": "task",
-                    "_schema": 2,
-                    "id": "task_existing",
-                    "title": "新任务标题",
-                    "content": "新内容",
-                    "category": "工作",
-                    "priority": 4,
-                    "status": "done",
+                    "_type"     : "task",
+                    "_schema"   : 2,
+                    "id"        : "task_existing",
+                    "title"     : "新任务标题",
+                    "content"   : "新内容",
+                    "category"  : "工作",
+                    "priority"  : 4,
+                    "status"    : "done",
                     "created_at": "2026-03-20T09:00:00+08:00",
                     "updated_at": "2026-03-20T09:00:00+08:00",
                 }
@@ -135,14 +137,14 @@ def test_import_execute_isolates_external_ids_and_selected_types(
         {
             "task": [
                 {
-                    "_type": "task",
-                    "_schema": 2,
-                    "id": "task_existing",
-                    "title": "新任务标题",
-                    "content": "新内容",
-                    "category": "工作",
-                    "priority": 4,
-                    "status": "done",
+                    "_type"     : "task",
+                    "_schema"   : 2,
+                    "id"        : "task_existing",
+                    "title"     : "新任务标题",
+                    "content"   : "新内容",
+                    "category"  : "工作",
+                    "priority"  : 4,
+                    "status"    : "done",
                     "created_at": "2026-03-20T09:00:00+08:00",
                     "updated_at": "2026-03-20T09:00:00+08:00",
                 }
@@ -179,11 +181,11 @@ def test_import_execute_hides_internal_transaction_errors(
         {
             "task": [
                 {
-                    "_type": "task",
+                    "_type"  : "task",
                     "_schema": 2,
-                    "id": "task_internal_error",
-                    "title": "触发事务错误",
-                    "status": "open",
+                    "id"     : "task_internal_error",
+                    "title"  : "触发事务错误",
+                    "status" : "open",
                 }
             ],
         }
@@ -221,12 +223,12 @@ def test_import_reassigns_hostile_external_id_and_preserves_only_source_metadata
         {
             "note": [
                 {
-                    "_type": "note",
-                    "_schema": 2,
-                    "id": hostile_id,
-                    "title": "hostile id regression",
-                    "content": "literal text",
-                    "category": "test",
+                    "_type"     : "note",
+                    "_schema"   : 2,
+                    "id"        : hostile_id,
+                    "title"     : "hostile id regression",
+                    "content"   : "literal text",
+                    "category"  : "test",
                     "created_at": "2026-03-20T09:00:00+08:00",
                     "updated_at": "2026-03-20T09:00:00+08:00",
                 }
@@ -251,14 +253,14 @@ def test_import_execute_isolates_cross_owner_source_ids(temp_db: Database):
     other_owner = "u-transfer-other"
     temp_db.insert_item(
         {
-            "id": "task_shared_global",
-            "owner_id": other_owner,
-            "type": "task",
-            "title": "其他用户任务",
-            "content": "不能被覆盖",
-            "category": "工作",
-            "priority": 3,
-            "status": "open",
+            "id"        : "task_shared_global",
+            "owner_id"  : other_owner,
+            "type"      : "task",
+            "title"     : "其他用户任务",
+            "content"   : "不能被覆盖",
+            "category"  : "工作",
+            "priority"  : 3,
+            "status"    : "open",
             "created_at": "2026-03-01T09:00:00+08:00",
             "updated_at": "2026-03-01T09:00:00+08:00",
         }
@@ -269,14 +271,14 @@ def test_import_execute_isolates_cross_owner_source_ids(temp_db: Database):
             {
                 "task": [
                     {
-                        "_type": "task",
-                        "_schema": 2,
-                        "id": "task_shared_global",
-                        "title": title,
-                        "content": "导入内容",
-                        "category": "工作",
-                        "priority": 4,
-                        "status": "open",
+                        "_type"     : "task",
+                        "_schema"   : 2,
+                        "id"        : "task_shared_global",
+                        "title"     : title,
+                        "content"   : "导入内容",
+                        "category"  : "工作",
+                        "priority"  : 4,
+                        "status"    : "open",
                         "created_at": "2026-03-20T09:00:00+08:00",
                         "updated_at": "2026-03-20T09:00:00+08:00",
                     }
@@ -336,13 +338,13 @@ def test_import_execute_isolates_cross_owner_source_ids(temp_db: Database):
 def test_import_execute_handles_soft_deleted_global_id_conflict(temp_db: Database):
     temp_db.insert_item(
         {
-            "id": "task_deleted_global",
-            "owner_id": OWNER_ID,
-            "type": "task",
-            "title": "已删任务",
-            "category": "工作",
-            "priority": 3,
-            "status": "open",
+            "id"        : "task_deleted_global",
+            "owner_id"  : OWNER_ID,
+            "type"      : "task",
+            "title"     : "已删任务",
+            "category"  : "工作",
+            "priority"  : 3,
+            "status"    : "open",
             "created_at": "2026-03-01T09:00:00+08:00",
             "updated_at": "2026-03-01T09:00:00+08:00",
         }
@@ -352,13 +354,13 @@ def test_import_execute_handles_soft_deleted_global_id_conflict(temp_db: Databas
         {
             "task": [
                 {
-                    "_type": "task",
-                    "_schema": 2,
-                    "id": "task_deleted_global",
-                    "title": "重新导入",
-                    "category": "工作",
-                    "priority": 3,
-                    "status": "open",
+                    "_type"     : "task",
+                    "_schema"   : 2,
+                    "id"        : "task_deleted_global",
+                    "title"     : "重新导入",
+                    "category"  : "工作",
+                    "priority"  : 3,
+                    "status"    : "open",
                     "created_at": "2026-03-20T09:00:00+08:00",
                     "updated_at": "2026-03-20T09:00:00+08:00",
                 }
@@ -392,30 +394,30 @@ def test_import_execute_duplicate_rewrites_note_relationships_to_duplicated_item
 ):
     temp_db.insert_item(
         {
-            "id": "task_existing",
-            "owner_id": OWNER_ID,
-            "type": "task",
-            "title": "旧任务",
-            "priority": 3,
-            "status": "open",
+            "id"        : "task_existing",
+            "owner_id"  : OWNER_ID,
+            "type"      : "task",
+            "title"     : "旧任务",
+            "priority"  : 3,
+            "status"    : "open",
             "created_at": "2026-03-01T09:00:00+08:00",
             "updated_at": "2026-03-01T09:00:00+08:00",
         }
     )
     temp_db.insert_item(
         {
-            "id": "note_existing",
-            "owner_id": OWNER_ID,
-            "type": "note",
-            "title": "旧笔记",
-            "content": "旧内容",
-            "category": "知识",
+            "id"        : "note_existing",
+            "owner_id"  : OWNER_ID,
+            "type"      : "note",
+            "title"     : "旧笔记",
+            "content"   : "旧内容",
+            "category"  : "知识",
             "references": [
                 {"kind": "item", "id": "task_existing", "type": "task", "title": "旧任务"}
             ],
             "related_items": ["task_existing"],
-            "created_at": "2026-03-01T09:00:00+08:00",
-            "updated_at": "2026-03-01T09:00:00+08:00",
+            "created_at"   : "2026-03-01T09:00:00+08:00",
+            "updated_at"   : "2026-03-01T09:00:00+08:00",
         }
     )
 
@@ -423,30 +425,30 @@ def test_import_execute_duplicate_rewrites_note_relationships_to_duplicated_item
         {
             "task": [
                 {
-                    "_type": "task",
-                    "_schema": 2,
-                    "id": "task_existing",
-                    "title": "导入任务",
-                    "priority": 2,
-                    "status": "open",
+                    "_type"     : "task",
+                    "_schema"   : 2,
+                    "id"        : "task_existing",
+                    "title"     : "导入任务",
+                    "priority"  : 2,
+                    "status"    : "open",
                     "created_at": "2026-03-20T09:00:00+08:00",
                     "updated_at": "2026-03-20T09:00:00+08:00",
                 }
             ],
             "note": [
                 {
-                    "_type": "note",
-                    "_schema": 2,
-                    "id": "note_existing",
-                    "title": "导入笔记",
-                    "content": "引用导入任务",
-                    "category": "知识",
+                    "_type"     : "note",
+                    "_schema"   : 2,
+                    "id"        : "note_existing",
+                    "title"     : "导入笔记",
+                    "content"   : "引用导入任务",
+                    "category"  : "知识",
                     "references": [
                         {"kind": "item", "id": "task_existing", "type": "task", "title": "导入任务"}
                     ],
                     "related_items": ["task_existing"],
-                    "created_at": "2026-03-20T09:00:00+08:00",
-                    "updated_at": "2026-03-20T09:00:00+08:00",
+                    "created_at"   : "2026-03-20T09:00:00+08:00",
+                    "updated_at"   : "2026-03-20T09:00:00+08:00",
                 }
             ],
         }
@@ -481,8 +483,8 @@ def test_import_execute_duplicate_rewrites_note_relationships_to_duplicated_item
 
 def test_import_relationship_rewrite_remaps_note_links_and_event_source_ids():
     note_payload = {
-        "type": "note",
-        "id": "note_new",
+        "type"      : "note",
+        "id"        : "note_new",
         "references": [
             {"kind": "item", "id": "task_old", "type": "task", "title": "任务"},
             {"kind": "item", "id": "event_keep", "type": "event", "title": "日程"},
@@ -490,8 +492,8 @@ def test_import_relationship_rewrite_remaps_note_links_and_event_source_ids():
         "related_items": ["task_old", "event_keep"],
     }
     event_payload = {
-        "type": "event",
-        "id": "event_new",
+        "type"          : "event",
+        "id"            : "event_new",
         "source_item_id": "event_old",
     }
 
@@ -517,30 +519,30 @@ def test_import_execute_restores_event_collection_before_leaf_events(
         {
             "event_collection": [
                 {
-                    "_type": "event_collection",
-                    "_schema": 2,
-                    "id": "bundle_conf",
-                    "kind": "multi_node",
-                    "title": "导入会议",
-                    "category": "学术",
-                    "notes": "整体备注",
+                    "_type"     : "event_collection",
+                    "_schema"   : 2,
+                    "id"        : "bundle_conf",
+                    "kind"      : "multi_node",
+                    "title"     : "导入会议",
+                    "category"  : "学术",
+                    "notes"     : "整体备注",
                     "start_time": "2026-03-05T09:00:00",
-                    "end_time": "2026-04-01T10:00:00",
+                    "end_time"  : "2026-04-01T10:00:00",
                 }
             ],
             "event": [
                 {
-                    "_type": "event",
-                    "_schema": 2,
-                    "id": "bundle_conf_m01",
-                    "title": "摘要截止",
-                    "category": "学术",
-                    "start_time": "2026-03-05T09:00:00",
-                    "event_role": "multi_node_child",
-                    "event_collection_id": "bundle_conf",
+                    "_type"                : "event",
+                    "_schema"              : 2,
+                    "id"                   : "bundle_conf_m01",
+                    "title"                : "摘要截止",
+                    "category"             : "学术",
+                    "start_time"           : "2026-03-05T09:00:00",
+                    "event_role"           : "multi_node_child",
+                    "event_collection_id"  : "bundle_conf",
                     "event_collection_kind": "multi_node",
-                    "event_index": 1,
-                    "event_node_key": "m01",
+                    "event_index"          : 1,
+                    "event_node_key"       : "m01",
                 }
             ],
         }
@@ -591,14 +593,14 @@ def test_import_execute_idempotency_blocks_duplicate_bundle(
         {
             "task": [
                 {
-                    "_type": "task",
-                    "_schema": 2,
-                    "id": "task_idem_block",
-                    "title": "幂等阻断",
-                    "content": "正文",
-                    "category": "工作",
-                    "priority": 3,
-                    "status": "open",
+                    "_type"     : "task",
+                    "_schema"   : 2,
+                    "id"        : "task_idem_block",
+                    "title"     : "幂等阻断",
+                    "content"   : "正文",
+                    "category"  : "工作",
+                    "priority"  : 3,
+                    "status"    : "open",
                     "created_at": "2026-03-20T09:00:00+08:00",
                     "updated_at": "2026-03-20T09:00:00+08:00",
                 }
@@ -647,13 +649,13 @@ def test_execute_import_bundle_uses_db_level_bundle_guard(temp_db: Database):
         (
             "insert",
             {
-                "id": "bundle_guard_task",
-                "type": "task",
-                "title": "bundle guard",
-                "content": "first import",
-                "category": "工作",
-                "priority": 3,
-                "status": "open",
+                "id"        : "bundle_guard_task",
+                "type"      : "task",
+                "title"     : "bundle guard",
+                "content"   : "first import",
+                "category"  : "工作",
+                "priority"  : 3,
+                "status"    : "open",
                 "created_at": "2026-03-20T09:00:00+08:00",
                 "updated_at": "2026-03-20T09:00:00+08:00",
             },
@@ -687,49 +689,57 @@ def test_execute_import_bundle_uses_db_level_bundle_guard(temp_db: Database):
     assert len(logs) == 1
 
 
-def test_import_execute_transaction_atomicity(client: Any, temp_db: Database, auth_headers: dict):
+def test_import_execute_transaction_atomicity(
+    client: Any, temp_db: Database, auth_headers: dict, monkeypatch
+):
     """如果导入事务中有记录失败，整体应该回滚"""
     # 插入一条已存在的记录用于 overwrite
     temp_db.insert_item(
         {
-            "id": "task_atom_exist",
-            "owner_id": OWNER_ID,
-            "type": "task",
-            "title": "旧任务",
-            "content": "旧",
-            "category": "工作",
-            "priority": 2,
-            "status": "open",
+            "id"        : "task_atom_exist",
+            "owner_id"  : OWNER_ID,
+            "type"      : "task",
+            "title"     : "旧任务",
+            "content"   : "旧",
+            "category"  : "工作",
+            "priority"  : 2,
+            "status"    : "open",
             "created_at": "2026-03-01T09:00:00+08:00",
             "updated_at": "2026-03-01T09:00:00+08:00",
         }
     )
 
-    # 测试正常的批量插入是原子的
+    from unittest.mock import Mock
+
+    def fail_audit(*args, **kwargs):
+        raise RuntimeError("injected audit failure")
+
+    audit = Mock(side_effect=fail_audit)
+    monkeypatch.setattr(temp_db, "_log_transfer_with_cursor", audit)
     bundle_bytes = _build_sample_bundle_bytes(
         {
             "task": [
                 {
-                    "_type": "task",
-                    "_schema": 2,
-                    "id": "task_atom_new_1",
-                    "title": "原子新1",
-                    "content": "OK",
-                    "category": "工作",
-                    "priority": 3,
-                    "status": "open",
+                    "_type"     : "task",
+                    "_schema"   : 2,
+                    "id"        : "task_atom_new_1",
+                    "title"     : "原子新1",
+                    "content"   : "OK",
+                    "category"  : "工作",
+                    "priority"  : 3,
+                    "status"    : "open",
                     "created_at": "2026-03-20T09:00:00+08:00",
                     "updated_at": "2026-03-20T09:00:00+08:00",
                 },
                 {
-                    "_type": "task",
-                    "_schema": 2,
-                    "id": "task_atom_new_2",
-                    "title": "原子新2",
-                    "content": "OK",
-                    "category": "工作",
-                    "priority": 3,
-                    "status": "open",
+                    "_type"     : "task",
+                    "_schema"   : 2,
+                    "id"        : "task_atom_new_2",
+                    "title"     : "原子新2",
+                    "content"   : "OK",
+                    "category"  : "工作",
+                    "priority"  : 3,
+                    "status"    : "open",
                     "created_at": "2026-03-20T09:00:00+08:00",
                     "updated_at": "2026-03-20T09:00:00+08:00",
                 },
@@ -745,19 +755,11 @@ def test_import_execute_transaction_atomicity(client: Any, temp_db: Database, au
         },
         content=bundle_bytes,
     )
-    assert resp.status_code == 200
-    assert resp.json()["data"]["results"]["inserted"] == 2
-
-    # 两条记录都应该存在
-    imported = [
-        item
-        for item in temp_db.get_items(OWNER_ID, filters={"type": "task"}, limit=20)
-        if item.title in {"原子新1", "原子新2"}
-    ]
-    assert {item.context["import"]["source_id"] for item in imported} == {
-        "task_atom_new_1",
-        "task_atom_new_2",
-    }
+    assert resp.status_code == 500
+    assert audit.call_count == 1
+    items = temp_db.get_all_items(OWNER_ID, {"type": "task"})
+    assert [(item.id, item.title) for item in items] == [("task_atom_exist", "旧任务")]
+    assert temp_db.get_transfer_logs(OWNER_ID) == []
 
 
 def test_import_execute_rejects_empty_selected_types(client: Any, auth_headers: dict):
@@ -765,14 +767,14 @@ def test_import_execute_rejects_empty_selected_types(client: Any, auth_headers: 
         {
             "task": [
                 {
-                    "_type": "task",
-                    "_schema": 2,
-                    "id": "task_only",
-                    "title": "只有任务",
-                    "content": "正文",
-                    "category": "工作",
-                    "priority": 3,
-                    "status": "open",
+                    "_type"     : "task",
+                    "_schema"   : 2,
+                    "id"        : "task_only",
+                    "title"     : "只有任务",
+                    "content"   : "正文",
+                    "category"  : "工作",
+                    "priority"  : 3,
+                    "status"    : "open",
                     "created_at": "2026-03-20T09:00:00+08:00",
                     "updated_at": "2026-03-20T09:00:00+08:00",
                 }
@@ -798,14 +800,14 @@ def test_import_execute_creates_audit_log(client: Any, temp_db: Database, auth_h
         {
             "task": [
                 {
-                    "_type": "task",
-                    "_schema": 2,
-                    "id": "task_audit_log",
-                    "title": "审计日志测试",
-                    "content": "正文",
-                    "category": "工作",
-                    "priority": 3,
-                    "status": "open",
+                    "_type"     : "task",
+                    "_schema"   : 2,
+                    "id"        : "task_audit_log",
+                    "title"     : "审计日志测试",
+                    "content"   : "正文",
+                    "category"  : "工作",
+                    "priority"  : 3,
+                    "status"    : "open",
                     "created_at": "2026-03-20T09:00:00+08:00",
                     "updated_at": "2026-03-20T09:00:00+08:00",
                 }
@@ -826,7 +828,12 @@ def test_import_execute_creates_audit_log(client: Any, temp_db: Database, auth_h
     import_logs = [log for log in logs if log["action"] == "import"]
     assert len(import_logs) >= 1
     assert import_logs[0]["record_count"] >= 1
-    assert "bundle_id" in import_logs[0] or import_logs[0].get("bundle_id")
+    import io
+    import zipfile
+
+    with zipfile.ZipFile(io.BytesIO(bundle_bytes)) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+    assert import_logs[0]["bundle_id"] == manifest["bundle_id"]
 
 
 def test_import_rejects_oversized_body(client: Any, auth_headers: dict):
@@ -846,14 +853,14 @@ def test_import_samples_pagination(client: Any, auth_headers: dict):
     for i in range(10):
         tasks.append(
             {
-                "_type": "task",
-                "_schema": 2,
-                "id": f"task_page_{i}",
-                "title": f"分页任务{i}",
-                "content": "正文",
-                "category": "工作",
-                "priority": 3,
-                "status": "open",
+                "_type"     : "task",
+                "_schema"   : 2,
+                "id"        : f"task_page_{i}",
+                "title"     : f"分页任务{i}",
+                "content"   : "正文",
+                "category"  : "工作",
+                "priority"  : 3,
+                "status"    : "open",
                 "created_at": "2026-03-20T09:00:00+08:00",
                 "updated_at": "2026-03-20T09:00:00+08:00",
             }
@@ -865,7 +872,7 @@ def test_import_samples_pagination(client: Any, auth_headers: dict):
         "/api/transfer/import/samples",
         headers={
             **auth_headers,
-            "X-Transfer-Page": "1",
+            "X-Transfer-Page"     : "1",
             "X-Transfer-Page-Size": "5",
         },
         content=bundle_bytes,
@@ -881,7 +888,7 @@ def test_import_samples_pagination(client: Any, auth_headers: dict):
         "/api/transfer/import/samples",
         headers={
             **auth_headers,
-            "X-Transfer-Page": "2",
+            "X-Transfer-Page"     : "2",
             "X-Transfer-Page-Size": "5",
         },
         content=bundle_bytes,
@@ -889,3 +896,7 @@ def test_import_samples_pagination(client: Any, auth_headers: dict):
     body2 = response2.json()["data"]
     assert body2["page"] == 2
     assert len(body2["samples"]) == 5
+    first_ids  = {item["id"] for item in body["samples"]}
+    second_ids = {item["id"] for item in body2["samples"]}
+    assert first_ids.isdisjoint(second_ids)
+    assert first_ids | second_ids == {f"task_page_{i}" for i in range(10)}

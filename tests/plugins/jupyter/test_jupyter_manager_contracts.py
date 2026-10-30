@@ -53,9 +53,9 @@ def isolated_manager_globals(monkeypatch: pytest.MonkeyPatch):
 
 def _alive_kernel(**extra: Any) -> SimpleNamespace:
     values = {
-        "is_alive": lambda: True,
+        "is_alive"        : lambda: True,
         "interrupt_kernel": lambda: None,
-        "kernel_name": "python3",
+        "kernel_name"     : "python3",
         **extra,
     }
     return SimpleNamespace(**values)
@@ -327,8 +327,8 @@ def test_stale_resources_are_cleaned_before_new_kernel(tmp_path: Path, monkeypat
 
         def get_iopub_msg(self, timeout: float) -> dict[str, object]:
             return {
-                "msg_type": "status",
-                "content": {"execution_state": "idle"},
+                "msg_type"     : "status",
+                "content"      : {"execution_state": "idle"},
                 "parent_header": {"msg_id": "init"},
             }
 
@@ -468,8 +468,8 @@ async def test_tracked_thread_and_pending_helpers_clear_failures(tmp_path: Path)
 async def test_cancel_cleanup_handles_finished_idle_and_failed_recovery(tmp_path: Path) -> None:
     manager      = JupyterKernelManager(tmp_path)
     idle_message = {
-        "msg_type": "status",
-        "content": {"execution_state": "idle"},
+        "msg_type"     : "status",
+        "content"      : {"execution_state": "idle"},
         "parent_header": {"msg_id": "msg"},
     }
     idle_task = asyncio.create_task(asyncio.sleep(0, result=idle_message))
@@ -512,9 +512,9 @@ def test_message_helpers_cover_malformed_stderr_and_multiple_results(tmp_path: P
     result = ExecutionResult()
     action, _ = manager._process_iopub_message(
         {
-            "msg_type": "stream",
+            "msg_type"     : "stream",
             "parent_header": {"msg_id": "msg"},
-            "content": {"name": "stderr", "text": "\x1b[31mwarn\x1b[0m"},
+            "content"      : {"name": "stderr", "text": "\x1b[31mwarn\x1b[0m"},
         },
         "msg",
         result,
@@ -527,9 +527,9 @@ def test_message_helpers_cover_malformed_stderr_and_multiple_results(tmp_path: P
     for text in ("one", "two"):
         manager._process_iopub_message(
             {
-                "msg_type": "execute_result",
+                "msg_type"     : "execute_result",
                 "parent_header": {"msg_id": "msg"},
-                "content": {"data": {"text/plain": text}},
+                "content"      : {"data": {"text/plain": text}},
             },
             "msg",
             result,
@@ -641,9 +641,8 @@ def test_shared_png_validator_rejects_malformed_boundaries() -> None:
     duplicate_header = png[:-12] + _png_chunk(b"IHDR", png[16:29]) + _png_chunk(b"IEND", b"")
     assert validate_png_bytes(duplicate_header) is False
 
-    invalid_type      = bytearray(_png_chunk(b"IDAT", b"x"))
-    invalid_type[4:8] = b"ID1T"
-    assert validate_png_bytes(bytes(invalid_type)) is False
+    invalid_type = png[:33] + _png_chunk(b"ID1T", png[41:-16]) + png[-12:]
+    assert validate_png_bytes(invalid_type) is False
     assert JupyterKernelManager._decode_image("not base64!") is None
     assert JupyterKernelManager._decode_image("A" * (((MAX_IMAGE_BYTES + 2) // 3) * 4 + 1)) is None
 

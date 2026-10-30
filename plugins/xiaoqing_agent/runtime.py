@@ -19,7 +19,6 @@ from core.delivery import DeliveryReceipt, DeliverySegments
 from . import receipts
 from .config import AgentConfig
 from .delivery import (
-    SendReport,
     classify_files,
     deliver_outcome,
     outcome_message,
@@ -63,9 +62,9 @@ _MAX_AWAITING_REPORTS       = 200
 class _Resend:
     """补发一次结果的交付状态：文字确认发出且附件都没失败才算 ``sent``。"""
 
-    store: TaskStore
-    chat_key: str
-    task_id: str
+    store        : TaskStore
+    chat_key     : str
+    task_id      : str
     upload_failed: bool = False
 
     async def sent(self) -> None:
@@ -259,7 +258,7 @@ class AgentRuntime:
         history: list[dict[str, Any]],
         images: list[str],
     ) -> None:
-        outcome: Outcome | None          = None
+        outcome   : Outcome | None       = None
         transcript: list[dict[str, Any]] = []
         try:
             await self.store.save(task)
@@ -306,8 +305,7 @@ class AgentRuntime:
                                 result = await context.capabilities.ai.complete(
                                     "agent",
                                     review,
-                                    temperature   = 0.1,
-                                    extra_payload = {"response_format": {"type": "json_object"}},
+                                    extra_payload={"response_format": {"type": "json_object"}},
                                 )
                             content = response_message(result.response).get("content")
                             payload = json.loads(
@@ -327,7 +325,7 @@ class AgentRuntime:
                                     and env.remaining() > 5
                                 ):
                                     correction = {
-                                        "role": "user",
+                                        "role"   : "user",
                                         "content": f"交付核对：原请求中的“{pending}”尚未完成。依据已有回报完成这一部分，再交付。",
                                     }
                                     transcript.extend(
@@ -348,7 +346,6 @@ class AgentRuntime:
                                     screened = await context.capabilities.ai.complete(
                                         "agent",
                                         filtering,
-                                        temperature=0.0,
                                         extra_payload={"response_format": {"type": "json_object"}},
                                     )
                                 raw   = response_message(screened.response).get("content")
@@ -464,22 +461,23 @@ class AgentRuntime:
         await self._deliver(context, task, outcome)
 
     async def _deliver(self, context: Any, task: AgentTask, outcome: Outcome) -> None:
-        # 群里结果可能隔很久才到、中间还有别人的任务：@ 发起人，说清是给谁的。
-        report = await deliver_outcome(context, task.chat, outcome, mention=True)
-        await self._settle_report(task, report)
-        await receipts.release(task.held_receipts)
-        task.delivery = "sent" if report.delivered else "failed"
-        if not report.delivered:
+        try:
+            # 群里结果可能隔很久才到、中间还有别人的任务：@ 发起人，说清是给谁的。
+            report = await deliver_outcome(
+                context,
+                task.chat,
+                outcome,
+                mention   = True,
+                on_result = partial(receipts.settle, task.held_receipts),
+            )
+        finally:
+            # 发送中途取消或出错时，没轮到的附件不会再发，它们的回执在这里收尾。
+            await asyncio.shield(receipts.release(task.held_receipts))
+        result        = report.result
+        task.delivery = {True: "sent", False: "failed", None: "unknown"}[result]
+        if result is False:
             logger.warning("xiaoqing_agent result delivery failed task=%s", task.task_id)
         await self._persist(task, [])
-
-    @staticmethod
-    async def _settle_report(task: AgentTask, report: SendReport) -> None:
-        """附件按各自那次发送的结果结算命令回执：内嵌图片随文字消息，其余附件各自一份。"""
-
-        await receipts.settle(task.held_receipts, report.images, report.message)
-        for path, sent in report.uploads:
-            await receipts.settle(task.held_receipts, [path], sent)
 
     def _track(self, coroutine: Coroutine[Any, Any, None]) -> None:
         delivery = asyncio.create_task(coroutine)
@@ -487,14 +485,37 @@ class AgentRuntime:
         delivery.add_done_callback(self._deliveries.discard)
 
     async def _finish_inline(self, context: Any, task: AgentTask, uploads: list[Path]) -> None:
-        if uploads:
-            # 当轮回复由调用方返回后才发出；稍等一下再上传，文件才会排在说明文字后面。
-            await asyncio.sleep(_UPLOAD_AFTER_REPLY_SECONDS)
-            for path, sent in await upload_each(context, task.chat, uploads):
-                await receipts.settle(task.held_receipts, [path], sent)
-                if sent is False:
-                    task.delivery = "failed"
-        await self._persist(task, [])
+        attempted: set[Path] = set()
+
+        async def settled(paths: list[Path], sent: bool | None) -> None:
+            attempted.update(paths)
+            for path in paths:
+                task.inline_parts[f"file:{path}"] = sent
+            await receipts.settle(task.held_receipts, paths, sent)
+
+        try:
+            if uploads:
+                # 当轮回复由调用方返回后才发出；稍等一下再上传，文件才会排在说明文字后面。
+                await asyncio.sleep(_UPLOAD_AFTER_REPLY_SECONDS)
+                await upload_each(context, task.chat, uploads, on_result=settled)
+        finally:
+            # 中途停下时还没轮到的附件确定没有发出。
+            skipped = [path for path in uploads if path not in attempted]
+            for path in skipped:
+                task.inline_parts[f"file:{path}"] = False
+            if skipped:
+                await asyncio.shield(receipts.settle(task.held_receipts, skipped, False))
+            # 取消继续传播前，汇总正文和附件结果并保存最终交付状态。
+            self._apply_inline_delivery(task)
+            await self._persist(task, [])
+
+    @staticmethod
+    def _apply_inline_delivery(task: AgentTask) -> None:
+        """正文与附件的结果谁先到都一样：到齐或出现失败时才改写交付状态。"""
+
+        combined = task.inline_delivery()
+        if combined is not None and task.delivery in {"inline", "sent", "unknown"}:
+            task.delivery = combined
 
     async def wait_inline(self, context: Any, task: AgentTask, seconds: float) -> Outcome | None:
         """最多等 ``seconds`` 秒；做完就把结果交给调用方，否则之后由任务自己发送。"""
@@ -533,8 +554,10 @@ class AgentRuntime:
 
         message, uploads = outcome_message(outcome)
         images, _, _ = classify_files(outcome.files)
-        task.delivery     = "inline"
-        task.inline_files = [str(path) for path in images]
+        task.delivery        = "inline"
+        task.inline_files    = [str(path) for path in images]
+        task.inline_parts    = {}
+        task.inline_expected = 1 + len(uploads)
         # 不随这次回复发出的命令附件不会再发了，它们的回执现在就释放。
         await receipts.release(task.held_receipts, keep=[*images, *uploads])
         # 当轮回复由聊天侧发出，发没发出去要等它回报（report_delivery）。
@@ -542,6 +565,8 @@ class AgentRuntime:
         while len(self._awaiting_report) > _MAX_AWAITING_REPORTS:
             dropped = self._awaiting_report.pop(next(iter(self._awaiting_report)))
             await receipts.settle(dropped.held_receipts, dropped.inline_files, None)
+            dropped.inline_parts["message"] = None
+            self._apply_inline_delivery(dropped)
         self._track(self._finish_inline(context, task, uploads))
         return message
 
@@ -566,20 +591,17 @@ class AgentRuntime:
         )
 
     async def report_delivery(self, task_id: str, delivered: bool | None) -> None:
-        """当轮回复的发送结果（聊天侧回报或命令回复的回执）；结果未知时保持 ``inline``。"""
+        """当轮回复正文的发送结果（聊天侧回报或命令回复的回执），与附件结果一起汇总交付状态。"""
 
         task = self._awaiting_report.pop(task_id, None)
         if task is None:
             return
         # 回复里内嵌的命令图片和回复一起发出，按同一个结果结算。
         await receipts.settle(task.held_receipts, task.inline_files, delivered)
-        if delivered is None:
-            return
         if delivered is False:
             logger.warning("xiaoqing_agent inline reply was not delivered task=%s", task_id)
-            task.delivery = "failed"
-        elif task.delivery != "failed":
-            task.delivery = "sent"
+        task.inline_parts["message"] = delivered
+        self._apply_inline_delivery(task)
         await self._persist(task, [])
 
     async def _send_progress(
@@ -588,10 +610,14 @@ class AgentRuntime:
         task: AgentTask,
         text: str,
         files: list[str],
-    ) -> bool:
-        report = await deliver_outcome(context, task.chat, Outcome(text, files))
-        await self._settle_report(task, report)
-        return report.delivered
+    ) -> bool | None:
+        report = await deliver_outcome(
+            context,
+            task.chat,
+            Outcome(text, files),
+            on_result=partial(receipts.settle, task.held_receipts),
+        )
+        return report.result
 
     # ──────────────────── 查询与停止 ────────────────────
 
@@ -749,10 +775,29 @@ class AgentRuntime:
         for runner in runners:
             runner.cancel()
         pending = [*self._active, *self._deliveries]
-        if not pending:
-            return
-        _done, stuck = await asyncio.wait(pending, timeout=_STOP_WAIT_SECONDS)
-        for leftover in stuck:
-            leftover.cancel()
-        if stuck:
-            logger.warning("xiaoqing_agent shutdown left %d task(s) still unwinding", len(stuck))
+        if pending:
+            _done, stuck = await asyncio.wait(pending, timeout=_STOP_WAIT_SECONDS)
+            for leftover in stuck:
+                leftover.cancel()
+            if stuck:
+                # 被取消的发送在各自的 finally 里结算回执，给它们一次收尾的机会。
+                await asyncio.wait(stuck, timeout=_STOP_WAIT_SECONDS)
+                logger.warning(
+                    "xiaoqing_agent shutdown left %d task(s) still unwinding",
+                    sum(1 for item in stuck if not item.done()),
+                )
+        await self._abandon_reports()
+
+    async def _abandon_reports(self) -> None:
+        """关闭后聊天侧不会再回报：已交出去的当轮回复结果未知，其余附件确定不会再发。"""
+
+        while self._awaiting_report:
+            _task_id, task = self._awaiting_report.popitem()
+            await asyncio.shield(receipts.settle(task.held_receipts, task.inline_files, None))
+            await asyncio.shield(receipts.release(task.held_receipts))
+            task.inline_parts.setdefault("message", None)
+            self._apply_inline_delivery(task)
+            if task.delivery == "inline":
+                # 附件上传还没回报就关闭：已交出去的部分结果未知。
+                task.delivery = "unknown"
+            await self._persist(task, [])

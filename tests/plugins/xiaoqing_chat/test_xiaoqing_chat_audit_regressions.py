@@ -189,17 +189,19 @@ async def test_new_message_or_reset_prevents_old_reply_commit(tmp_path, change):
     output = SimpleNamespace(outbound_batches=[[{"type": "text", "data": {"text": "old reply"}}]])
     lock = asyncio.Lock()
 
-    async def newer_message():
-        await asyncio.sleep(0.01)
+    async def typing_pause(_delay):
         if change == "new_message":
             latest["id"] = "m2"
         elif change == "reset_during_typing":
             clear_profiles_and_memory(tmp_path, "g1", None)
 
-    update = asyncio.create_task(newer_message())
     record_reply = AsyncMock(return_value=[])
     with (
-        patch("plugins.xiaoqing_chat.turn_delivery._compute_typing_delay", return_value=0.05),
+        patch(
+            "plugins.xiaoqing_chat.turn_delivery.asyncio",
+            SimpleNamespace(**{**vars(asyncio), "sleep": typing_pause}),
+        ),
+        patch("plugins.xiaoqing_chat.turn_delivery._compute_typing_delay", return_value=1.0),
         patch.multiple(
             "plugins.xiaoqing_chat.turn_delivery",
             chat_lock                 = lambda _: lock,
@@ -223,7 +225,6 @@ async def test_new_message_or_reset_prevents_old_reply_commit(tmp_path, change):
             hctx,
             started_at=time.monotonic(),
         )
-    await update
     if change == "reset_before_ack":
         assert isinstance(result, DeliverySegments)
         clear_profiles_and_memory(tmp_path, "g1", None)
@@ -456,10 +457,10 @@ async def test_unverified_person_fact_is_rejected(tmp_path, evidence):
         {
             "facts": [
                 {
-                    "subject_id": 1,
+                    "subject_id"  : 1,
                     "subject_name": "Alice",
-                    "fact": "likes coffee",
-                    "evidence": evidence,
+                    "fact"        : "likes coffee",
+                    "evidence"    : evidence,
                 }
             ]
         }

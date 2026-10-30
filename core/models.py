@@ -98,16 +98,16 @@ def canonical_plugin_watch_file(raw: str) -> str:
 class OneBotEvent(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    time: int | None = Field(default=None, description="事件时间戳")
-    self_id: int | None = Field(default=None, description="机器人 QQ 号")
-    post_type: str | None = Field(default=None, description="事件类型")
-    message_type: str | None                   = None
-    sub_type: str | None                       = None
-    message_id: int | None                     = None
-    user_id: int | None                        = None
-    group_id: int | None                       = None
-    message: list[dict[str, Any]] | str | None = None
-    raw_message: str | None                    = None
+    time        : int | None = Field(default=None, description="事件时间戳")
+    self_id     : int | None = Field(default=None, description="机器人 QQ 号")
+    post_type   : str | None = Field(default=None, description="事件类型")
+    message_type: str | None                        = None
+    sub_type    : str | None                        = None
+    message_id  : int | None                        = None
+    user_id     : int | None                        = None
+    group_id    : int | None                        = None
+    message     : list[dict[str, Any]] | str | None = None
+    raw_message : str | None                        = None
 
     @field_validator("message", mode="before")
     @classmethod
@@ -203,11 +203,11 @@ class PluginCommandNodeManifest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str
+    name   : str
     aliases: list[str] = Field(default_factory=list, max_length=32)
-    help: str
-    usage: str
-    match: Literal["prefix", "exact"] = "prefix"
+    help   : str
+    usage  : str
+    match  : Literal["prefix", "exact"] = "prefix"
     # 省略时继承父命令；Core 发布目录时会展开为最终有效值。
     permission: CommandPermission | None  = None
     contexts: list[CommandContext] | None = None
@@ -272,17 +272,17 @@ class PluginCommandNodeManifest(BaseModel):
 class PluginCommandManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    name: str
-    triggers: list[str]
-    help: str
-    admin_only: bool              = False
-    priority: int                 = 0
-    usage: str | None             = None
-    permission: CommandPermission = "public"
-    contexts: list[CommandContext] = Field(default_factory=_default_command_contexts)
-    examples: list[str] = Field(default_factory=list, max_length=16)
+    name            : str
+    triggers        : list[str]
+    help            : str
+    admin_only      : bool              = False
+    priority        : int               = 0
+    usage           : str | None        = None
+    permission      : CommandPermission = "public"
+    contexts        : list[CommandContext] = Field(default_factory=_default_command_contexts)
+    examples        : list[str] = Field(default_factory=list, max_length=16)
     invalid_examples: list[str] = Field(default_factory=list, max_length=16)
-    subcommands: list[PluginCommandNodeManifest] = Field(default_factory=list, max_length=128)
+    subcommands     : list[PluginCommandNodeManifest] = Field(default_factory=list, max_length=128)
 
     @field_validator("name")
     @classmethod
@@ -346,13 +346,13 @@ class PluginCommandManifest(BaseModel):
 class PluginScheduleManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    handler: str
-    cron: dict[str, Any]
-    id: str | None                 = None
-    delivery: ScheduleDeliveryMode = "broadcast"
-    group_ids: list[int] | None    = None
-    description: str | None        = None
-    enabled: bool                  = True
+    handler    : str
+    cron       : dict[str, Any]
+    id         : str | None           = None
+    delivery   : ScheduleDeliveryMode = "broadcast"
+    group_ids  : list[int] | None     = None
+    description: str | None           = None
+    enabled    : bool                 = True
 
     @field_validator("group_ids", mode="before")
     @classmethod
@@ -384,8 +384,8 @@ class PluginDependencyManifest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str
-    required: bool          = True
+    name       : str
+    required   : bool       = True
     description: str | None = None
 
 
@@ -421,9 +421,9 @@ class PluginServiceManifest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: PluginServiceName
-    callback: str
-    callers: list[str]
+    name               : PluginServiceName
+    callback           : str
+    callers            : list[str]
     required_capability: Literal["codex_arxiv_summary"] | None = None
 
     @field_validator("callback")
@@ -449,8 +449,8 @@ _SERVICE_CONTRACTS: dict[
     PluginServiceName,
     tuple[str, frozenset[str], str | None],
 ] = {
-    "voice.synthesize_text": ("voice", frozenset({"smalltalk"}), None),
-    "chat.reply": ("chat", frozenset({"smalltalk"}), None),
+    "voice.synthesize_text"      : ("voice", frozenset({"smalltalk"}), None),
+    "chat.reply"                 : ("chat", frozenset({"smalltalk"}), None),
     "codex.enqueue_arxiv_summary": (
         "codex",
         frozenset({"arxiv_filter"}),
@@ -462,19 +462,19 @@ _SERVICE_CONTRACTS: dict[
         None,
     ),
     # 小青 agent 的桥：聊天把一轮交给 agent 并回报当轮回复是否发出，agent 再借用 Codex 与 SSH。
-    "agent.handle_turn": ("xiaoqing_agent", frozenset({"xiaoqing_chat"}), None),
+    "agent.handle_turn"    : ("xiaoqing_agent", frozenset({"xiaoqing_chat"}), None),
     "agent.report_delivery": ("xiaoqing_agent", frozenset({"xiaoqing_chat"}), None),
-    "codex.agent_task": ("codex", frozenset({"xiaoqing_agent"}), None),
+    "codex.agent_task"     : ("codex", frozenset({"xiaoqing_agent"}), None),
     "qingssh.agent_command": ("qingssh", frozenset({"xiaoqing_agent"}), None),
 }
 
 _CAPABILITY_CONTRACTS: dict[PluginCapabilityName, frozenset[str]] = {
-    "command_runner": frozenset({"xiaoqing_agent"}),
-    "config_subscription": frozenset({"pendo"}),
+    "command_runner"          : frozenset({"xiaoqing_agent"}),
+    "config_subscription"     : frozenset({"pendo"}),
     "execution_timeout_exempt": frozenset({"codex", "jupyter", "qingssh", "shell"}),
-    "local_tools": frozenset({"xiaoqing_agent"}),
-    "onebot_media": frozenset({"xiaoqing_chat"}),
-    "secret_admin": frozenset({"bot_core"}),
+    "local_tools"             : frozenset({"xiaoqing_agent"}),
+    "onebot_media"            : frozenset({"xiaoqing_chat"}),
+    "secret_admin"            : frozenset({"bot_core"}),
 }
 
 
@@ -487,21 +487,21 @@ class PluginManifest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str
+    name          : str
     schema_version: Literal[1] = 1
-    version: str               = "0.0.0"
-    description: str | None    = None
-    author: str | None         = None
-    entry: str                 = "main.py"
-    commands: list[PluginCommandManifest] = Field(default_factory=list, max_length=128)
-    schedule: list[PluginScheduleManifest] = Field(default_factory=list)
-    dependencies: list[PluginDependencyManifest] = Field(default_factory=list)
-    services: list[PluginServiceManifest] = Field(default_factory=list)
-    uses_services: list[PluginServiceName] = Field(default_factory=list)
-    capabilities: list[PluginCapabilityName] = Field(default_factory=list)
-    watch_files: list[str] = Field(default_factory=list, max_length=64)
-    concurrency: PluginConcurrency = "parallel"
-    enabled: bool                  = True
+    version       : str        = "0.0.0"
+    description   : str | None = None
+    author        : str | None = None
+    entry         : str        = "main.py"
+    commands      : list[PluginCommandManifest] = Field(default_factory=list, max_length=128)
+    schedule      : list[PluginScheduleManifest] = Field(default_factory=list)
+    dependencies  : list[PluginDependencyManifest] = Field(default_factory=list)
+    services      : list[PluginServiceManifest] = Field(default_factory=list)
+    uses_services : list[PluginServiceName] = Field(default_factory=list)
+    capabilities  : list[PluginCapabilityName] = Field(default_factory=list)
+    watch_files   : list[str] = Field(default_factory=list, max_length=64)
+    concurrency   : PluginConcurrency = "parallel"
+    enabled       : bool              = True
 
     @field_validator("name")
     @classmethod

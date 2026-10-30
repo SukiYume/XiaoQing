@@ -6,7 +6,7 @@ import importlib
 import math
 import re
 from collections.abc import Callable, Collection, Mapping, Sequence
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -25,6 +25,14 @@ def load_sentence_transformer_class():
     """Load the optional sentence-transformers dependency only when needed."""
 
     return importlib.import_module("sentence_transformers").SentenceTransformer
+
+
+def apply_max_len(encoder: Any, max_len: int | None) -> Any:
+    """在编码器创建边界统一应用输入截断长度；训练和推理使用同一规则。"""
+
+    if max_len is not None:
+        encoder.max_seq_length = int(max_len)
+    return encoder
 
 
 def resolve_columns(
@@ -147,6 +155,46 @@ def best_fbeta_threshold(
     return float(thresholds[best_index]), float(scores[best_index])
 
 
+def fbeta_at_threshold(
+    y_true: np.ndarray,
+    y_score: np.ndarray,
+    threshold: float,
+    beta: float = 1.0,
+) -> float:
+    """按实际部署阈值（score >= threshold 为正）计算 F-beta。"""
+
+    labels      = np.asarray(y_true).astype(int)
+    predicted   = (np.asarray(y_score) >= threshold).astype(int)
+    tp          = int(((predicted == 1) & (labels == 1)).sum())
+    fp          = int(((predicted == 1) & (labels == 0)).sum())
+    fn          = int(((predicted == 0) & (labels == 1)).sum())
+    beta_sq     = beta * beta
+    denominator = (1 + beta_sq) * tp + beta_sq * fn + fp
+    return 0.0 if denominator == 0 else (1 + beta_sq) * tp / denominator
+
+
+def topk_mean_similarity(
+    query: np.ndarray,
+    references: np.ndarray,
+    k: int,
+    *,
+    chunk_rows: int = 1024,
+) -> np.ndarray:
+    """每个查询与参考集最相似 k 项的平均相似度。
+
+    按查询分块计算，单块矩阵为 chunk_rows×S；用 ``np.partition`` 取 top-k，不对整行排序。
+    结果与整矩阵 ``np.sort(...)[:, -k:].mean(axis=1)`` 一致。
+    """
+
+    k = min(int(k), references.shape[0])
+    output: np.ndarray = np.empty(len(query), dtype=np.float64)
+    for start in range(0, len(query), chunk_rows):
+        sims = query[start : start + chunk_rows] @ references.T
+        top = np.partition(sims, sims.shape[1] - k, axis=1)[:, -k:]
+        output[start : start + chunk_rows] = top.mean(axis=1)
+    return output
+
+
 def precision_at_k(y_true: np.ndarray, y_score: np.ndarray, k: int) -> float:
     """Return precision among the highest-scoring ``k`` rows."""
 
@@ -202,7 +250,10 @@ def split_dataframe(
         if invalid_count and invalid_dates_message is not None:
             log(invalid_dates_message.format(count=invalid_count))
         working["_dt"] = datetimes
-        working = working.sort_values("_dt").reset_index(drop=True)
+        # 无法解析的日期排在最前面进入训练集，验证集只由已知最新时间的样本组成。
+        working = working.sort_values("_dt", na_position="first", kind="stable").reset_index(
+            drop=True
+        )
         validation_count = max(1, int(round(len(working) * val_size)))
         training_count   = len(working) - validation_count
         if training_count <= 0:

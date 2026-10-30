@@ -30,25 +30,25 @@ _MAX_EVENT_COUNTER   = 2**63 - 1
 
 @dataclass
 class CodexRunResult:
-    exit_code: int | None
-    thread_id: str | None
-    final_text: str
-    stdout_tail: str
-    stderr_tail: str
-    timed_out: bool         = False
-    cancelled: bool         = False
-    output_limited: bool    = False
-    output_path: str | None = None
-    image_paths: list[str] = field(default_factory=list)
-    usage: dict[str, int] = field(default_factory=dict)
+    exit_code     : int | None
+    thread_id     : str | None
+    final_text    : str
+    stdout_tail   : str
+    stderr_tail   : str
+    timed_out     : bool       = False
+    cancelled     : bool       = False
+    output_limited: bool       = False
+    output_path   : str | None = None
+    image_paths   : list[str] = field(default_factory=list)
+    usage         : dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class ProcessTreeTerminationResult:
     tree_confirmed: bool
-    parent_reaped: bool
-    forced: bool             = False
-    helper_error: str | None = None
+    parent_reaped : bool
+    forced        : bool       = False
+    helper_error  : str | None = None
 
 
 class OutputBudgetExceeded(RuntimeError):
@@ -132,9 +132,9 @@ def _valid_usage(value: Any) -> dict[str, int] | None:
 
 @dataclass(frozen=True)
 class _ParsedCodexEvent:
-    thread_id: str | None        = None
-    message: str | None          = None
-    usage: dict[str, int] | None = None
+    thread_id  : str | None            = None
+    message    : str | None            = None
+    usage      : dict[str, int] | None = None
     image_paths: list[str] = field(default_factory=list)
 
 
@@ -167,10 +167,10 @@ def _parse_codex_event(
 
 @dataclass
 class _EventSummary:
-    thread_id: str | None = None
-    last_message: str     = ""
-    usage: dict[str, int] = field(default_factory=dict)
-    image_paths: list[str] = field(default_factory=list)
+    thread_id       : str | None = None
+    last_message    : str        = ""
+    usage           : dict[str, int] = field(default_factory=dict)
+    image_paths     : list[str] = field(default_factory=list)
     seen_image_paths: set[str] = field(default_factory=set, repr=False)
 
     def apply(self, event: _ParsedCodexEvent) -> None:
@@ -181,7 +181,8 @@ class _EventSummary:
         if event.usage is not None:
             self.usage = event.usage
         for image_path in event.image_paths:
-            key = image_path.casefold()
+            # 路径身份遵循宿主文件系统：Windows 不区分大小写，Linux 上 A.png 与 a.png 是两张图。
+            key = os.path.normcase(image_path)
             if key not in self.seen_image_paths:
                 self.seen_image_paths.add(key)
                 self.image_paths.append(image_path)
@@ -288,49 +289,49 @@ class _StderrAccumulator:
 
 @dataclass(frozen=True)
 class _StreamIoOutcome:
-    timed_out: bool      = False
-    cancelled: bool      = False
+    timed_out     : bool = False
+    cancelled     : bool = False
     output_limited: bool = False
-    limit_reason: str    = ""
+    limit_reason  : str  = ""
 
 
 @dataclass(frozen=True)
 class _FinalOutputCapture:
-    text: str
+    text        : str
     archive_path: str | None = None
-    limited: bool            = False
-    reason: str              = ""
+    limited     : bool       = False
+    reason      : str        = ""
 
 
 @dataclass(frozen=True)
 class _OwnedTaskOutcome(Generic[_T]):
-    result: _T | None                           = None
-    error: BaseException | None                 = None
+    result      : _T | None                     = None
+    error       : BaseException | None          = None
     cancellation: asyncio.CancelledError | None = None
 
 
 @dataclass
 class _RunResources:
-    output_path: Path | None                   = None
-    process: asyncio.subprocess.Process | None = None
-    process_cleanup_required: bool             = False
-    result_committed: bool                     = False
-    orphan_archives: set[Path] = field(default_factory=set)
+    output_path             : Path | None                       = None
+    process                 : asyncio.subprocess.Process | None = None
+    process_cleanup_required: bool                              = False
+    result_committed        : bool                              = False
+    orphan_archives         : set[Path] = field(default_factory=set)
 
 
 @dataclass
 class _CodexExecution:
-    timed_out: bool       = False
-    cancelled: bool       = False
-    output_limited: bool  = False
-    limit_reason: str     = ""
-    thread_id: str | None = None
-    message_text: str     = ""
-    usage: dict[str, int] = field(default_factory=dict)
-    image_paths: list[str] = field(default_factory=list)
-    stdout_tail: str  = ""
-    stderr_tail: str  = ""
-    forced_stop: bool = False
+    timed_out     : bool       = False
+    cancelled     : bool       = False
+    output_limited: bool       = False
+    limit_reason  : str        = ""
+    thread_id     : str | None = None
+    message_text  : str        = ""
+    usage         : dict[str, int] = field(default_factory=dict)
+    image_paths   : list[str] = field(default_factory=list)
+    stdout_tail   : str  = ""
+    stderr_tail   : str  = ""
+    forced_stop   : bool = False
 
 
 async def _settle_owned_task(task: asyncio.Task[_T]) -> _OwnedTaskOutcome[_T]:
@@ -682,10 +683,10 @@ async def _terminate_windows_process_tree(
     helper_timeout_seconds: float,
     kill_timeout_seconds: float,
 ) -> ProcessTreeTerminationResult:
-    helper_error: str | None                  = None
-    helper_succeeded                          = False
-    helper_code: int | None                   = None
-    helper: asyncio.subprocess.Process | None = None
+    helper_error: str | None                       = None
+    helper_succeeded                               = False
+    helper_code: int | None                        = None
+    helper     : asyncio.subprocess.Process | None = None
     try:
         helper = await asyncio.wait_for(
             asyncio.create_subprocess_exec(
@@ -1109,7 +1110,7 @@ async def _run_streaming_io(
             _write_process_stdin(stdin, prompt_payload),
             name="codex-stdin-writer",
         ),
-        "wait": asyncio.create_task(process.wait(), name="codex-process-wait"),
+        "wait"   : asyncio.create_task(process.wait(), name="codex-process-wait"),
         "monitor": asyncio.create_task(
             _monitor_output_file(output_path, config.max_final_output_bytes),
             name="codex-output-monitor",

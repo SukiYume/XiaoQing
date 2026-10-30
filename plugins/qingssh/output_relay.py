@@ -53,17 +53,17 @@ def _float_option(options: Mapping[str, Any], name: str, default: float) -> floa
 class SSHOutputPolicy:
     """单条命令的消息与归档预算，不限制远端命令本身。"""
 
-    command_timeout_seconds: float  = 30.0
-    qq_max_actions: int             = 6
-    qq_max_text_chars: int          = 10_000
-    qq_max_message_chars: int       = 1_800
-    qq_head_chars: int              = 6_000
-    qq_tail_chars: int              = 2_000
+    command_timeout_seconds : float = 30.0
+    qq_max_actions          : int   = 6
+    qq_max_text_chars       : int   = 10_000
+    qq_max_message_chars    : int   = 1_800
+    qq_head_chars           : int   = 6_000
+    qq_tail_chars           : int   = 2_000
     qq_send_interval_seconds: float = 0.35
-    qq_send_timeout_seconds: float  = 5.0
-    archive_max_bytes: int          = 64 * 1024 * 1024
-    archive_tail_bytes: int         = 1024 * 1024
-    archive_retention_files: int    = 20
+    qq_send_timeout_seconds : float = 5.0
+    archive_max_bytes       : int   = 64 * 1024 * 1024
+    archive_tail_bytes      : int   = 1024 * 1024
+    archive_retention_files : int   = 20
 
     @classmethod
     def from_context(cls, context: Any) -> SSHOutputPolicy:
@@ -151,14 +151,14 @@ class SSHOutputPolicy:
 class SSHOutputSummary:
     """命令输出结束后可安全记录的传输统计。"""
 
-    total_chars: int
-    total_bytes: int
-    qq_truncated: bool
-    archive_path: Path | None
-    archive_truncated: bool
-    actions_attempted: int
+    total_chars         : int
+    total_bytes         : int
+    qq_truncated        : bool
+    archive_path        : Path | None
+    archive_truncated   : bool
+    actions_attempted   : int
     text_chars_attempted: int
-    delivery_errors: int
+    delivery_errors     : int
 
 
 class SSHOutputRelay:

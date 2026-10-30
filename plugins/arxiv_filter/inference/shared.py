@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from ..utils import load_plugin_config
@@ -38,12 +39,12 @@ _NON_RUNTIME_ARTIFACT_DIRS  = {"emb_cache", "__pycache__"}
 
 @dataclass(frozen=True, slots=True)
 class InferenceParams:
-    model_path: str
-    threshold: float
-    batch_size: int
-    max_len: int
-    input_mode: str                  = "title_abstract"  # "title_only" | "title_abstract"
-    model_type: str                  = "transformers"  # "transformers" | "multi_interest" | "knn"
+    model_path          : str
+    threshold           : float
+    batch_size          : int
+    max_len             : int
+    input_mode          : str        = "title_abstract"  # "title_only" | "title_abstract"
+    model_type          : str        = "transformers"  # "transformers" | "multi_interest" | "knn"
     artifact_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
@@ -143,6 +144,50 @@ def model_artifact_fingerprint(model_path: str) -> str:
                 for chunk in iter(lambda: stream.read(128 * 1024), b""):
                     digest.update(chunk)
     return digest.hexdigest()
+
+
+def runtime_artifact_fingerprint(model_path: str) -> str:
+    """覆盖实际运行资产的指纹：training_config 指到模型目录之外时，外置目录也参与散列。
+
+    只扫描配置目录时，外置资产更新、外层配置不变，当日结果缓存和已加载模型都会继续复用旧版本。
+    """
+
+    outer = model_artifact_fingerprint(model_path)
+    try:
+        runtime = resolve_multi_interest_model_path(model_path, load_training_config(model_path))
+    except (OSError, ValueError):
+        return outer
+    root   = Path(model_path).resolve()
+    target = Path(runtime).resolve()
+    if target == root or root in target.parents:
+        return outer
+    digest = hashlib.sha256()
+    digest.update(outer.encode())
+    digest.update(b"\0runtime\0")
+    digest.update(model_artifact_fingerprint(str(target)).encode())
+    return digest.hexdigest()
+
+
+def topk_mean_similarity(
+    query: np.ndarray,
+    references: np.ndarray,
+    k: int,
+    *,
+    chunk_rows: int = 1024,
+) -> np.ndarray:
+    """每个查询与参考集最相似 k 项的平均相似度。
+
+    按查询分块计算，单块矩阵为 chunk_rows×S；用 ``np.partition`` 取 top-k，不对整行排序。
+    结果与整矩阵 ``np.sort(...)[:, -k:].mean(axis=1)`` 一致。
+    """
+
+    k = min(int(k), references.shape[0])
+    output: np.ndarray = np.empty(len(query), dtype=np.float64)
+    for start in range(0, len(query), chunk_rows):
+        sims = query[start : start + chunk_rows] @ references.T
+        top = np.partition(sims, sims.shape[1] - k, axis=1)[:, -k:]
+        output[start : start + chunk_rows] = top.mean(axis=1)
+    return output
 
 
 def resolve_artifact_fingerprint(

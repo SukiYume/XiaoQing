@@ -21,38 +21,38 @@ APPROVAL_POLICY_VALUES = frozenset({"untrusted", "on-failure", "on-request", "ne
 
 @dataclass(frozen=True)
 class CodexPluginConfig:
-    codex_bin: str
-    default_cwd: str
-    allowed_cwd_roots: tuple[str, ...]
-    max_parallel_jobs: int
-    per_session_queue_limit: int
-    max_prompt_chars: int
-    spawn_timeout_seconds: int
-    job_timeout_seconds: int
-    max_stdout_bytes: int
-    max_stderr_bytes: int
-    max_json_line_bytes: int
-    max_final_output_bytes: int
-    max_qq_text_chars: int
+    codex_bin                : str
+    default_cwd              : str
+    allowed_cwd_roots        : tuple[str, ...]
+    max_parallel_jobs        : int
+    per_session_queue_limit  : int
+    max_prompt_chars         : int
+    spawn_timeout_seconds    : int
+    job_timeout_seconds      : int
+    max_stdout_bytes         : int
+    max_stderr_bytes         : int
+    max_json_line_bytes      : int
+    max_final_output_bytes   : int
+    max_qq_text_chars        : int
     artifact_scan_max_entries: int
-    artifact_scan_max_depth: int
-    max_image_artifacts: int
-    max_image_bytes: int
-    max_image_total_bytes: int
-    max_image_pixels: int
-    max_image_frames: int
-    max_qq_images: int
-    sandbox: str
-    approval_policy: str
-    skip_git_repo_check: bool
-    protected_sessions: tuple[str, ...]
-    arxiv_summary_label: str
-    arxiv_summary_cwd: str
+    artifact_scan_max_depth  : int
+    max_image_artifacts      : int
+    max_image_bytes          : int
+    max_image_total_bytes    : int
+    max_image_pixels         : int
+    max_image_frames         : int
+    max_qq_images            : int
+    sandbox                  : str
+    approval_policy          : str
+    skip_git_repo_check      : bool
+    protected_sessions       : tuple[str, ...]
+    arxiv_summary_label      : str
+    arxiv_summary_cwd        : str
     arxiv_summary_methodology: str
-    session_ttl_days: int
-    artifact_retention_days: int
-    emergency_disk_bytes: int
-    emergency_queue_limit: int
+    session_ttl_days         : int
+    artifact_retention_days  : int
+    emergency_disk_bytes     : int
+    emergency_queue_limit    : int
 
 
 def _merged_plugin_config(settings: PluginSettingsSnapshot) -> dict[str, Any]:
@@ -94,7 +94,7 @@ def _string_tuple(value: Any, *, max_items: int = MAX_ALLOWED_ROOTS) -> tuple[st
         return ()
 
     cleaned: list[str] = []
-    seen: set[str]     = set()
+    seen   : set[str]  = set()
     for item in items[:max_items]:
         text = _clean_string(item, "")
         if not text or text in seen:

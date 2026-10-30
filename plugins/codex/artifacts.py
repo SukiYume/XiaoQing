@@ -29,16 +29,16 @@ MAX_REFERENCED_PATH_CHARS = 32_768
 
 @dataclass(frozen=True)
 class CodexImageArtifact:
-    path: str
+    path         : str
     absolute_path: str
-    source: str
+    source       : str
     original_path: str
 
     def as_record(self) -> dict[str, str]:
         return {
-            "path": self.path,
+            "path"         : self.path,
             "absolute_path": self.absolute_path,
-            "source": self.source,
+            "source"       : self.source,
             "original_path": self.original_path,
         }
 
@@ -52,12 +52,12 @@ class ArtifactLimits:
     """
 
     scan_max_entries: int = 512
-    scan_max_depth: int   = 8
-    max_artifacts: int    = 16
+    scan_max_depth  : int = 8
+    max_artifacts   : int = 16
     max_single_bytes: int = 16 * 1024 * 1024
-    max_total_bytes: int  = 64 * 1024 * 1024
-    max_pixels: int       = 40_000_000
-    max_frames: int       = 120
+    max_total_bytes : int = 64 * 1024 * 1024
+    max_pixels      : int = 40_000_000
+    max_frames      : int = 120
 
     def __post_init__(self) -> None:
         for name, value in self.__dict__.items():
@@ -69,29 +69,29 @@ class ArtifactLimits:
 class ArtifactCollectionResult:
     """已归档图片和有界丢弃诊断；调用方必须显式读取 ``artifacts``。"""
 
-    artifacts: list[CodexImageArtifact] = field(default_factory=list)
-    dropped_count: int = 0
-    reasons: dict[str, int] = field(default_factory=dict)
+    artifacts     : list[CodexImageArtifact] = field(default_factory=list)
+    dropped_count : int = 0
+    reasons       : dict[str, int] = field(default_factory=dict)
     scan_truncated: bool = False
 
 
 @dataclass(frozen=True)
 class _ScannedEntry:
-    name: str
-    path: Path
-    is_symlink: bool
-    is_directory: bool
-    is_file: bool
-    identity: tuple[int, int, int, int, int] | None = None
-    metadata_error: bool                            = False
+    name          : str
+    path          : Path
+    is_symlink    : bool
+    is_directory  : bool
+    is_file       : bool
+    identity      : tuple[int, int, int, int, int] | None = None
+    metadata_error: bool                                  = False
 
 
 @dataclass
 class _ArtifactScanResult:
-    paths: list[Path] = field(default_factory=list)
+    paths          : list[Path] = field(default_factory=list)
     dropped_reasons: Counter[str] = field(default_factory=Counter)
-    scan_reasons: Counter[str] = field(default_factory=Counter)
-    truncated: bool = False
+    scan_reasons   : Counter[str] = field(default_factory=Counter)
+    truncated      : bool = False
 
 
 class _ArtifactRejected(Exception):
@@ -439,7 +439,7 @@ def _copy_validated_image(
     committed_bytes: int,
 ) -> tuple[int | None, str | None]:
     source_fd: int | None  = None
-    temp_fd: int | None    = None
+    temp_fd  : int | None  = None
     temp_path: Path | None = None
     try:
         source_fd, initial = _safe_open_source(source_path)
@@ -540,8 +540,8 @@ def _discover_candidates(
     limits: ArtifactLimits,
 ) -> tuple[list[tuple[Path, str, str]], Counter[str], int, bool]:
     candidates: list[tuple[Path, str, str]] = []
-    seen: set[str]                          = set()
-    reasons: Counter[str]                   = Counter()
+    seen      : set[str]                    = set()
+    reasons   : Counter[str]                = Counter()
     dropped_count                           = 0
 
     reference_values = chain(referenced_paths or (), _referenced_image_values(final_text))

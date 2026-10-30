@@ -2,33 +2,31 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
+import pytest
 from PIL import Image
 
 import tests.helpers.xiaoqing_chat_media_test_support as _fixture_support
 from plugins.xiaoqing_chat.media import emoji_library
 from tests.helpers.xiaoqing_chat_media_test_support import (
     _PNG_BYTES,
-    AsyncMock,
-    Path,
     PluginCapabilities,
     RenderedMedia,
-    SimpleNamespace,
     _download_url_bytes,
     _make_media_runtime,
-    _media_llm_max_tokens,
     _raw_media_response,
     _resolve_media_llm_secret_candidates,
     _write_png,
     collect_emoji_candidate,
-    hashlib,
-    json,
     load_emoji_library,
     looks_like_structured_media_text,
-    patch,
-    pytest,
     render_event_media_text,
 )
 
@@ -47,13 +45,13 @@ async def test_load_emoji_library_rebuilds_bad_existing_metadata(mock_context):
             {
                 "entries": {
                     media_hash: {
-                        "media_hash": media_hash,
-                        "file_path": "media/library/坏条目.png",
-                        "description": 'json\n{"kind":"emoji","description":"坏输出"',
+                        "media_hash"  : media_hash,
+                        "file_path"   : "media/library/坏条目.png",
+                        "description" : 'json\n{"kind":"emoji","description":"坏输出"',
                         "emotion_tags": ["json", "kind"],
-                        "usage_count": 0,
+                        "usage_count" : 0,
                         "last_used_ts": 0.0,
-                        "marker": "[表情包：json，kind]",
+                        "marker"      : "[表情包：json，kind]",
                     }
                 }
             },
@@ -99,14 +97,14 @@ async def test_load_emoji_library_rejects_invalid_indexed_image(mock_context):
             {
                 "entries": {
                     media_hash: {
-                        "media_hash": media_hash,
-                        "file_path": "media/library/损坏.png",
-                        "description": "看起来正常的旧索引",
+                        "media_hash"  : media_hash,
+                        "file_path"   : "media/library/损坏.png",
+                        "description" : "看起来正常的旧索引",
                         "emotion_tags": ["旧"],
-                        "usage_count": 0,
+                        "usage_count" : 0,
                         "last_used_ts": 0.0,
-                        "marker": "[表情包：看起来正常的旧索引]",
-                        "status": "active",
+                        "marker"      : "[表情包：看起来正常的旧索引]",
+                        "status"      : "active",
                     }
                 }
             },
@@ -133,13 +131,13 @@ async def test_load_emoji_library_schedules_background_repair_without_blocking(m
             {
                 "entries": {
                     media_hash: {
-                        "media_hash": media_hash,
-                        "file_path": "media/library/坏条目.png",
-                        "description": 'json\n{"kind":"emoji","description":"坏输出"',
+                        "media_hash"  : media_hash,
+                        "file_path"   : "media/library/坏条目.png",
+                        "description" : 'json\n{"kind":"emoji","description":"坏输出"',
                         "emotion_tags": ["json", "kind"],
-                        "usage_count": 0,
+                        "usage_count" : 0,
                         "last_used_ts": 0.0,
-                        "marker": "[表情包：json，kind]",
+                        "marker"      : "[表情包：json，kind]",
                     }
                 }
             },
@@ -183,9 +181,9 @@ async def test_load_emoji_library_clears_stale_index_when_library_empty(mock_con
             {
                 "entries": {
                     "stale-hash": {
-                        "file_path": "media/library/missing.png",
+                        "file_path"  : "media/library/missing.png",
                         "description": "旧条目",
-                        "marker": "[表情包：旧条目]",
+                        "marker"     : "[表情包：旧条目]",
                     }
                 }
             },
@@ -236,14 +234,14 @@ def test_collect_emoji_candidate_rehomes_outside_library_target_path(mock_contex
             {
                 "entries": {
                     "hash-safe": {
-                        "file_path": "../outside.png",
-                        "description": "旧无语猫猫",
+                        "file_path"   : "../outside.png",
+                        "description" : "旧无语猫猫",
                         "emotion_tags": ["无语"],
-                        "usage_count": 2,
+                        "usage_count" : 2,
                         "last_used_ts": 1.0,
-                        "marker": "[表情包：无语]",
-                        "status": "active",
-                        "source": "auto",
+                        "marker"      : "[表情包：无语]",
+                        "status"      : "active",
+                        "source"      : "auto",
                     }
                 }
             },
@@ -396,12 +394,6 @@ def test_structured_media_text_detector_flags_think_and_json_noise():
     assert not looks_like_structured_media_text("一只黑色小鸟站着，眼神疑惑")
 
 
-def test_media_llm_max_tokens_expands_for_thinking_models():
-    assert _media_llm_max_tokens({"model": "glm-4.6v-flash"}, 200) == 200
-    assert _media_llm_max_tokens({"model": "glm-4.1v-thinking-flash"}, 200) == 800
-    assert _media_llm_max_tokens({"model": "glm-4.1v-thinking-flash"}, 120) == 480
-
-
 def test_media_candidates_follow_core_vision_route_order(mock_context):
     candidates = _resolve_media_llm_secret_candidates(mock_context)
 
@@ -423,8 +415,8 @@ def test_vision_candidates_never_materialize_plugin_credentials(mock_context):
                     "providers": {
                         "legacy": {
                             "api_base": "https://legacy.invalid",
-                            "api_key": "<LEGACY_API_KEY>",
-                            "model": "legacy-model",
+                            "api_key" : "<LEGACY_API_KEY>",
+                            "model"   : "legacy-model",
                         }
                     }
                 }

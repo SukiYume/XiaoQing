@@ -57,19 +57,19 @@ def resolve_apod_root() -> Path:
 
 def extract_from_file(filepath: Path, apod_root: Path) -> tuple[list[dict[str, str]], list[str]]:
     """从单个 md 文件中提取 arXiv ID 和日期"""
-    ids: list[dict[str, str]] = []
-    dates: list[str]          = []
+    ids  : list[dict[str, str]] = []
+    dates: list[str]            = []
 
     try:
         text = filepath.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
-        print(f"  [WARN] 无法读取 {filepath}: {exc}")
-        return ids, dates
+        # 任一笔记读不出来都不能发布缩减的正样本集合：集合外的论文会被标成负样本。
+        raise RuntimeError(f"无法读取笔记 {filepath}: {exc}") from exc
 
     for match in ARXIV_PATTERN.finditer(text):
         ids.append(
             {
-                "arXiv ID": match.group(1),
+                "arXiv ID"   : match.group(1),
                 "source_file": str(filepath.relative_to(apod_root)),
             }
         )
@@ -94,12 +94,22 @@ def main() -> None:
     all_ids   = []
     all_dates = []
 
+    failures: list[str] = []
     for f in md_files:
-        ids, dates = extract_from_file(f, apod_root)
+        try:
+            ids, dates = extract_from_file(f, apod_root)
+        except RuntimeError as exc:
+            failures.append(str(exc))
+            continue
         if ids:
             print(f"  {f.relative_to(apod_root)}: {len(ids)} 篇论文, {len(dates)} 个日期")
         all_ids.extend(ids)
         all_dates.extend(dates)
+
+    if failures:
+        for failure in failures:
+            print(f"  [ERROR] {failure}")
+        raise RuntimeError(f"{len(failures)} 个笔记读取失败，保留已有正样本产物，本轮不发布")
 
     # 去重 ID（同一篇论文可能在多个地方被引用）
     seen       = set()

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import pytest
+
 import tests.helpers.onebot_test_support as _fixture_support
 from tests.helpers.onebot_test_support import (
     _extract_message_preview,
     _mask_sensitive_text,
     _onebot_action_succeeded,
     _summarize_event,
-    pytest,
     verify_bearer_token,
 )
 
@@ -66,11 +67,15 @@ class TestMaskSensitiveText:
 
     def test_mask_token(self):
         """测试屏蔽 token"""
-        text   = "Authorization: Bearer secret_token_123"
-        result = _mask_sensitive_text(text)
-        # Bearer 关键字被掩码，token 值仍存在（这是当前实现的行为）
-        assert "Bearer" not in result or result == "Authorization: ******** secret_token_123"
-        assert "********" in result
+        for text in (
+            "Authorization: Bearer secret_token_123",
+            "authorization:bearer   secret_token_123",
+            "AUTHORIZATION = Basic secret_token_123",
+            "header Bearer secret_token_123",
+        ):
+            result = _mask_sensitive_text(text)
+            assert "secret_token_123" not in result
+            assert "********" in result
 
     def test_mask_authorization_header(self):
         """测试屏蔽直接提供的 authorization 值"""
@@ -188,11 +193,11 @@ class TestSummarizeEvent:
     def test_full_event(self):
         """测试完整事件"""
         event = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "group",
-            "user_id": 12345,
-            "group_id": 67890,
-            "message": [{"type": "text", "data": {"text": "hi"}}],
+            "user_id"     : 12345,
+            "group_id"    : 67890,
+            "message"     : [{"type": "text", "data": {"text": "hi"}}],
         }
         result = _summarize_event(event)
         assert "post_type=message" in result
@@ -210,7 +215,7 @@ class TestSummarizeEvent:
         """测试消息长度"""
         event = {
             "post_type": "message",
-            "message": [{"type": "text"}, {"type": "image"}],
+            "message"  : [{"type": "text"}, {"type": "image"}],
         }
         result = _summarize_event(event)
         assert "message_len=2" in result
@@ -219,7 +224,7 @@ class TestSummarizeEvent:
         """测试字符串消息"""
         event = {
             "post_type": "message",
-            "message": "hello",
+            "message"  : "hello",
         }
         result = _summarize_event(event)
         assert "message_kind=str" in result

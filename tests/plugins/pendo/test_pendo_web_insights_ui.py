@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import shutil
+import uuid
+
+import pytest
+
 from tests.helpers.pendo_web_items_test_support import (
     ROOT,
     Database,
     build_ledger_insights,
-    pytest,
-    shutil,
-    uuid,
 )
 
 
@@ -21,54 +23,54 @@ def test_build_ledger_insights_uses_filtered_ledger_category_and_builds_svg_data
     try:
         db.insert_item(
             {
-                "id": "e1",
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "早餐",
-                "amount": 12,
+                "id"              : "e1",
+                "owner_id"        : owner_id,
+                "type"            : "ledger",
+                "title"           : "早餐",
+                "amount"          : 12,
                 "transaction_type": "expense",
-                "ledger_category": "餐饮",
-                "ledger_date": "2026-03-20",
-                "created_at": "2026-03-20T08:00:00",
+                "ledger_category" : "餐饮",
+                "ledger_date"     : "2026-03-20",
+                "created_at"      : "2026-03-20T08:00:00",
             }
         )
         db.insert_item(
             {
-                "id": "e2",
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "午餐",
-                "amount": 24,
+                "id"              : "e2",
+                "owner_id"        : owner_id,
+                "type"            : "ledger",
+                "title"           : "午餐",
+                "amount"          : 24,
                 "transaction_type": "expense",
-                "ledger_category": "餐饮",
-                "ledger_date": "2026-03-20",
-                "created_at": "2026-03-20T12:00:00",
+                "ledger_category" : "餐饮",
+                "ledger_date"     : "2026-03-20",
+                "created_at"      : "2026-03-20T12:00:00",
             }
         )
         db.insert_item(
             {
-                "id": "e3",
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "地铁",
-                "amount": 6,
+                "id"              : "e3",
+                "owner_id"        : owner_id,
+                "type"            : "ledger",
+                "title"           : "地铁",
+                "amount"          : 6,
                 "transaction_type": "expense",
-                "ledger_category": "交通",
-                "ledger_date": "2026-03-21",
-                "created_at": "2026-03-21T09:00:00",
+                "ledger_category" : "交通",
+                "ledger_date"     : "2026-03-21",
+                "created_at"      : "2026-03-21T09:00:00",
             }
         )
         db.insert_item(
             {
-                "id": "i1",
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "工资",
-                "amount": 5000,
+                "id"              : "i1",
+                "owner_id"        : owner_id,
+                "type"            : "ledger",
+                "title"           : "工资",
+                "amount"          : 5000,
                 "transaction_type": "income",
-                "ledger_category": "工资",
-                "ledger_date": "2026-03-21",
-                "created_at": "2026-03-21T10:00:00",
+                "ledger_category" : "工资",
+                "ledger_date"     : "2026-03-21",
+                "created_at"      : "2026-03-21T10:00:00",
             }
         )
 
@@ -107,37 +109,37 @@ def test_build_ledger_insights_switches_focus_with_income_filter():
     try:
         for item in [
             {
-                "id": "income-1",
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "稿费",
-                "amount": 500,
+                "id"              : "income-1",
+                "owner_id"        : owner_id,
+                "type"            : "ledger",
+                "title"           : "稿费",
+                "amount"          : 500,
                 "transaction_type": "income",
-                "ledger_category": "副业",
-                "ledger_date": "2026-03-02",
-                "created_at": "2026-03-02T09:00:00",
+                "ledger_category" : "副业",
+                "ledger_date"     : "2026-03-02",
+                "created_at"      : "2026-03-02T09:00:00",
             },
             {
-                "id": "income-2",
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "奖金",
-                "amount": 800,
+                "id"              : "income-2",
+                "owner_id"        : owner_id,
+                "type"            : "ledger",
+                "title"           : "奖金",
+                "amount"          : 800,
                 "transaction_type": "income",
-                "ledger_category": "奖金",
-                "ledger_date": "2026-03-18",
-                "created_at": "2026-03-18T09:00:00",
+                "ledger_category" : "奖金",
+                "ledger_date"     : "2026-03-18",
+                "created_at"      : "2026-03-18T09:00:00",
             },
             {
-                "id": "expense-1",
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "午饭",
-                "amount": 30,
+                "id"              : "expense-1",
+                "owner_id"        : owner_id,
+                "type"            : "ledger",
+                "title"           : "午饭",
+                "amount"          : 30,
                 "transaction_type": "expense",
-                "ledger_category": "餐饮",
-                "ledger_date": "2026-03-10",
-                "created_at": "2026-03-10T12:00:00",
+                "ledger_category" : "餐饮",
+                "ledger_date"     : "2026-03-10",
+                "created_at"      : "2026-03-10T12:00:00",
             },
         ]:
             db.insert_item(item)
@@ -175,54 +177,54 @@ def test_build_ledger_insights_year_mode_compares_against_last_year_to_date():
     try:
         db.insert_item(
             {
-                "id": "cy1",
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "今年一月",
-                "amount": 100,
+                "id"              : "cy1",
+                "owner_id"        : owner_id,
+                "type"            : "ledger",
+                "title"           : "今年一月",
+                "amount"          : 100,
                 "transaction_type": "expense",
-                "ledger_category": "餐饮",
-                "ledger_date": "2026-01-10",
-                "created_at": "2026-01-10T10:00:00",
+                "ledger_category" : "餐饮",
+                "ledger_date"     : "2026-01-10",
+                "created_at"      : "2026-01-10T10:00:00",
             }
         )
         db.insert_item(
             {
-                "id": "cy2",
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "今年三月",
-                "amount": 50,
+                "id"              : "cy2",
+                "owner_id"        : owner_id,
+                "type"            : "ledger",
+                "title"           : "今年三月",
+                "amount"          : 50,
                 "transaction_type": "expense",
-                "ledger_category": "交通",
-                "ledger_date": "2026-03-10",
-                "created_at": "2026-03-10T10:00:00",
+                "ledger_category" : "交通",
+                "ledger_date"     : "2026-03-10",
+                "created_at"      : "2026-03-10T10:00:00",
             }
         )
         db.insert_item(
             {
-                "id": "py1",
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "去年同期",
-                "amount": 100,
+                "id"              : "py1",
+                "owner_id"        : owner_id,
+                "type"            : "ledger",
+                "title"           : "去年同期",
+                "amount"          : 100,
                 "transaction_type": "expense",
-                "ledger_category": "餐饮",
-                "ledger_date": "2025-02-10",
-                "created_at": "2025-02-10T10:00:00",
+                "ledger_category" : "餐饮",
+                "ledger_date"     : "2025-02-10",
+                "created_at"      : "2025-02-10T10:00:00",
             }
         )
         db.insert_item(
             {
-                "id": "pp1",
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "上一周期高支出",
-                "amount": 500,
+                "id"              : "pp1",
+                "owner_id"        : owner_id,
+                "type"            : "ledger",
+                "title"           : "上一周期高支出",
+                "amount"          : 500,
                 "transaction_type": "expense",
-                "ledger_category": "服务",
-                "ledger_date": "2025-11-10",
-                "created_at": "2025-11-10T10:00:00",
+                "ledger_category" : "服务",
+                "ledger_date"     : "2025-11-10",
+                "created_at"      : "2025-11-10T10:00:00",
             }
         )
 
@@ -251,37 +253,37 @@ def test_build_ledger_insights_month_bucket_orders_candles_by_ledger_date_not_cr
     try:
         for item in [
             {
-                "id": "m-backfill",
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "月初补录",
-                "amount": 10,
+                "id"              : "m-backfill",
+                "owner_id"        : owner_id,
+                "type"            : "ledger",
+                "title"           : "月初补录",
+                "amount"          : 10,
                 "transaction_type": "expense",
-                "ledger_category": "餐饮",
-                "ledger_date": "2026-03-01",
-                "created_at": "2026-04-01T09:00:00",
+                "ledger_category" : "餐饮",
+                "ledger_date"     : "2026-03-01",
+                "created_at"      : "2026-04-01T09:00:00",
             },
             {
-                "id": "m-mid",
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "月中消费",
-                "amount": 25,
+                "id"              : "m-mid",
+                "owner_id"        : owner_id,
+                "type"            : "ledger",
+                "title"           : "月中消费",
+                "amount"          : 25,
                 "transaction_type": "expense",
-                "ledger_category": "餐饮",
-                "ledger_date": "2026-03-05",
-                "created_at": "2026-03-05T09:00:00",
+                "ledger_category" : "餐饮",
+                "ledger_date"     : "2026-03-05",
+                "created_at"      : "2026-03-05T09:00:00",
             },
             {
-                "id": "m-end",
-                "owner_id": owner_id,
-                "type": "ledger",
-                "title": "月底消费",
-                "amount": 40,
+                "id"              : "m-end",
+                "owner_id"        : owner_id,
+                "type"            : "ledger",
+                "title"           : "月底消费",
+                "amount"          : 40,
                 "transaction_type": "expense",
-                "ledger_category": "交通",
-                "ledger_date": "2026-03-28",
-                "created_at": "2026-03-28T09:00:00",
+                "ledger_category" : "交通",
+                "ledger_date"     : "2026-03-28",
+                "created_at"      : "2026-03-28T09:00:00",
             },
         ]:
             db.insert_item(item)
@@ -312,26 +314,26 @@ def test_build_ledger_insights_preserves_the_complete_selected_period(db: Databa
 
     for item in [
         {
-            "id": "apr-1",
-            "owner_id": owner_id,
-            "type": "ledger",
-            "title": "月初消费",
-            "amount": 48,
+            "id"              : "apr-1",
+            "owner_id"        : owner_id,
+            "type"            : "ledger",
+            "title"           : "月初消费",
+            "amount"          : 48,
             "transaction_type": "expense",
-            "ledger_category": "餐饮",
-            "ledger_date": "2026-04-01",
-            "created_at": "2026-04-01T09:00:00",
+            "ledger_category" : "餐饮",
+            "ledger_date"     : "2026-04-01",
+            "created_at"      : "2026-04-01T09:00:00",
         },
         {
-            "id": "apr-8",
-            "owner_id": owner_id,
-            "type": "ledger",
-            "title": "今天消费",
-            "amount": 28,
+            "id"              : "apr-8",
+            "owner_id"        : owner_id,
+            "type"            : "ledger",
+            "title"           : "今天消费",
+            "amount"          : 28,
             "transaction_type": "expense",
-            "ledger_category": "交通",
-            "ledger_date": "2026-04-08",
-            "created_at": "2026-04-08T09:00:00",
+            "ledger_category" : "交通",
+            "ledger_date"     : "2026-04-08",
+            "created_at"      : "2026-04-08T09:00:00",
         },
     ]:
         db.insert_item(item)

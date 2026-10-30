@@ -2,21 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
+from datetime import datetime
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from tests.helpers.pendo_review_test_support import (
-    Any,
-    AsyncMock,
     Database,
     EventHandler,
-    Path,
-    SimpleNamespace,
     _seed_event_batch_fixture,
-    asyncio,
-    datetime,
-    pytest,
-    threading,
 )
 
 
@@ -100,9 +101,9 @@ def test_recurrence_limit_is_visible_in_created_message(db, monkeypatch):
         handler.create_event(
             "1001",
             {
-                "title": "每日会议",
+                "title"     : "每日会议",
                 "start_time": "2030-01-01T09:00:00",
-                "rrule": "FREQ=DAILY;COUNT=4",
+                "rrule"     : "FREQ=DAILY;COUNT=4",
             },
             {},
             allow_conflict=True,
@@ -195,10 +196,10 @@ def test_event_collection_reminder_update_rolls_back_every_child(
     try:
         db.create_event_collection(
             {
-                "id": collection_id,
-                "owner_id": owner_id,
-                "kind": "multi_node",
-                "title": "原子提醒",
+                "id"            : collection_id,
+                "owner_id"      : owner_id,
+                "kind"          : "multi_node",
+                "title"         : "原子提醒",
                 "reminder_rules": old_rules,
             }
         )
@@ -206,15 +207,15 @@ def test_event_collection_reminder_update_rolls_back_every_child(
             start_time = f"2030-01-0{index}T10:00:00"
             db.insert_item(
                 {
-                    "id": child_id,
-                    "owner_id": owner_id,
-                    "type": "event",
-                    "title": f"节点 {index}",
-                    "start_time": start_time,
-                    "remind_times": [start_time],
-                    "reminder_rules": old_rules,
-                    "event_role": "multi_node_child",
-                    "event_collection_id": collection_id,
+                    "id"                   : child_id,
+                    "owner_id"             : owner_id,
+                    "type"                 : "event",
+                    "title"                : f"节点 {index}",
+                    "start_time"           : start_time,
+                    "remind_times"         : [start_time],
+                    "reminder_rules"       : old_rules,
+                    "event_role"           : "multi_node_child",
+                    "event_collection_id"  : collection_id,
                     "event_collection_kind": "multi_node",
                 }
             )
@@ -259,21 +260,21 @@ def test_delete_last_multi_node_child_and_undo_restores_whole_family(tmp_path: P
     try:
         db.create_event_collection(
             {
-                "id": collection_id,
+                "id"      : collection_id,
                 "owner_id": owner_id,
-                "kind": "multi_node",
-                "title": "只有一个节点",
+                "kind"    : "multi_node",
+                "title"   : "只有一个节点",
             }
         )
         db.insert_item(
             {
-                "id": child_id,
-                "owner_id": owner_id,
-                "type": "event",
-                "title": "唯一节点",
-                "start_time": "2030-01-01T09:00:00",
-                "event_role": "multi_node_child",
-                "event_collection_id": collection_id,
+                "id"                   : child_id,
+                "owner_id"             : owner_id,
+                "type"                 : "event",
+                "title"                : "唯一节点",
+                "start_time"           : "2030-01-01T09:00:00",
+                "event_role"           : "multi_node_child",
+                "event_collection_id"  : collection_id,
                 "event_collection_kind": "multi_node",
             }
         )
@@ -298,22 +299,22 @@ def test_event_range_uses_user_timezone_and_two_day_offset_prefilter(tmp_path: P
         db.update_user_settings(owner_id, {"timezone": "Etc/GMT+12"})
         db.insert_item(
             {
-                "id": "extreme-offset-event",
+                "id"      : "extreme-offset-event",
                 "owner_id": owner_id,
-                "type": "event",
-                "title": "跨 26 小时时区",
+                "type"    : "event",
+                "title"   : "跨 26 小时时区",
                 # +14 的 1 月 3 日 00:30，在 UTC-12 仍是 1 月 1 日 22:30。
                 "start_time": "2030-01-03T00:30:00+14:00",
             }
         )
         db.insert_item(
             {
-                "id": "spanning-event",
-                "owner_id": owner_id,
-                "type": "event",
-                "title": "跨午夜日程",
+                "id"        : "spanning-event",
+                "owner_id"  : owner_id,
+                "type"      : "event",
+                "title"     : "跨午夜日程",
                 "start_time": "2030-01-01T23:30:00-12:00",
-                "end_time": "2030-01-02T01:00:00-12:00",
+                "end_time"  : "2030-01-02T01:00:00-12:00",
             }
         )
 
@@ -399,22 +400,22 @@ async def test_far_future_event_reminder_and_corrupt_time_are_handled_safely(
         with pytest.raises(ValueError, match="Invalid remind_times"):
             db.insert_item(
                 {
-                    "id": "rejected-corrupt-reminder",
-                    "owner_id": owner_id,
-                    "type": "event",
-                    "title": "损坏提醒必须被写入端拒绝",
-                    "start_time": "2030-12-31T10:00:00+08:00",
+                    "id"          : "rejected-corrupt-reminder",
+                    "owner_id"    : owner_id,
+                    "type"        : "event",
+                    "title"       : "损坏提醒必须被写入端拒绝",
+                    "start_time"  : "2030-12-31T10:00:00+08:00",
                     "remind_times": ["损坏时间"],
                 }
             )
         db.insert_item(
             {
-                "id": "far-reminder-event",
-                "owner_id": owner_id,
-                "type": "event",
-                "title": "很久以后的日程",
-                "start_time": "2030-12-31T10:00:00+08:00",
-                "remind_times": ["2030-01-01T09:00:00+08:00"],
+                "id"            : "far-reminder-event",
+                "owner_id"      : owner_id,
+                "type"          : "event",
+                "title"         : "很久以后的日程",
+                "start_time"    : "2030-12-31T10:00:00+08:00",
+                "remind_times"  : ["2030-01-01T09:00:00+08:00"],
                 "reminder_rules": [{"offset_seconds": 0}],
             }
         )
@@ -477,6 +478,7 @@ async def test_diary_relative_dates_and_today_range_use_user_clock(
     )
     db = Database(str(tmp_path / "pendo-diary-user-clock.db"))
     try:
+        db.update_user_settings("u-diary-clock", {"timezone": "Etc/GMT+12"})
         handler = DiaryHandler(db)
         created = await handler.add_diary(
             "u-diary-clock",
@@ -485,11 +487,11 @@ async def test_diary_relative_dates_and_today_range_use_user_clock(
         )
         db.insert_item(
             {
-                "id": "server-day-diary",
-                "owner_id": "u-diary-clock",
-                "type": "diary",
-                "title": "本机日期日记",
-                "content": "不应出现在用户今天",
+                "id"        : "server-day-diary",
+                "owner_id"  : "u-diary-clock",
+                "type"      : "diary",
+                "title"     : "本机日期日记",
+                "content"   : "不应出现在用户今天",
                 "diary_date": "2026-07-14",
                 "entry_time": "2026-07-14T10:00:00",
             }
@@ -509,7 +511,7 @@ async def test_diary_relative_dates_and_today_range_use_user_clock(
         saved = db.get_item(created["item_id"], "u-diary-clock")
         assert created["status"] == "success"
         assert saved.diary_date == "2030-01-01"
-        assert saved.entry_time == "2029-12-31T16:30:00+00:00"
+        assert saved.entry_time == "2030-01-01T12:30:00+00:00"
         assert "时区边界日记" in listed["message"]
         assert "不应出现在用户今天" not in listed["message"]
         assert invalid_mood["status"] == "error"
@@ -527,12 +529,12 @@ def test_diary_metadata_parser_is_case_insensitive_and_accumulates_tags() -> Non
     )
 
     assert parsed == {
-        "content": "今天完成整理。",
-        "weather": "多云 转晴",
-        "location": None,
-        "mood": None,
-        "mood_score": None,
-        "tags": ["工作", "复盘", "生活"],
+        "content"    : "今天完成整理。",
+        "weather"    : "多云 转晴",
+        "location"   : None,
+        "mood"       : None,
+        "mood_score" : None,
+        "tags"       : ["工作", "复盘", "生活"],
         "is_favorite": True,
     }
 
@@ -546,7 +548,7 @@ async def test_diary_template_session_rejects_corrupt_progress() -> None:
             self.data = {
                 "prompts": ["第一题", "第二题"],
                 "answers": [],
-                "step": 1,
+                "step"   : 1,
             }
 
         def get(self, key, default=None):
@@ -583,13 +585,13 @@ async def test_diary_template_session_uses_scoped_user_identity(
     class _Session:
         def __init__(self) -> None:
             self.data = {
-                "owner_id": "u-spoofed",
+                "owner_id"   : "u-spoofed",
                 "template_id": "review",
-                "diary_date": "2030-01-01",
-                "group_id": None,
-                "prompts": ["今天做了什么？"],
-                "answers": [],
-                "step": 0,
+                "diary_date" : "2030-01-01",
+                "group_id"   : None,
+                "prompts"    : ["今天做了什么？"],
+                "answers"    : [],
+                "step"       : 0,
             }
 
         def get(self, key, default=None):
@@ -644,11 +646,11 @@ async def test_diary_entries_on_same_day_have_deterministic_latest_first_order(
         ):
             db.insert_item(
                 {
-                    "id": item_id,
-                    "owner_id": owner_id,
-                    "type": "diary",
-                    "title": content,
-                    "content": content,
+                    "id"        : item_id,
+                    "owner_id"  : owner_id,
+                    "type"      : "diary",
+                    "title"     : content,
+                    "content"   : content,
                     "diary_date": "2030-01-01",
                     "entry_time": entry_time,
                 }
@@ -854,21 +856,23 @@ async def test_web_handler_offloads_blocking_runtime_calls(
         stop               = stop,
     )
     monkeypatch.setattr(web_module, "web_server", server)
-    monkeypatch.setattr(
-        web_module,
-        "issue_login_code",
-        lambda *_args, **_kwargs: "unused-login-code",
-    )
+
+    def issue_login(*_args, **_kwargs):
+        call_threads["issue_login"] = threading.get_ident()
+        return "offloaded-login-code"
+
+    monkeypatch.setattr(web_module, "issue_login_code", issue_login)
     monkeypatch.setattr(web_module, "generate_widget_token", generate_widget)
     handler = web_module.WebHandler(db=None)
     context = SimpleNamespace(send_action=send_action)
 
     assert (await handler.handle("1001", "start", context=context))["status"] == "success"
+    assert (await handler.handle("1001", "token", context=context))["status"] == "success"
     assert (await handler.handle("1001", "widget-token", context=context))["status"] == "success"
     assert (await handler.handle("1001", "status", context=context))["status"] == "success"
     assert (await handler.handle("1001", "stop", context=context))["status"] == "success"
 
-    assert call_threads.keys() == {"is_running", "start", "generate_widget", "stop"}
+    assert call_threads.keys() == {"is_running", "start", "generate_widget", "issue_login", "stop"}
     assert all(thread_id != event_loop_thread for thread_id in call_threads.values())
 
 
@@ -907,33 +911,33 @@ def test_web_data_helpers_normalize_public_shapes(caplog: pytest.LogCaptureFixtu
     from plugins.pendo.web.utils import collection_payload, item_to_dict
 
     collection = {
-        "id": "collection-1",
-        "kind": "multi_node",
-        "title": "会议",
+        "id"      : "collection-1",
+        "kind"    : "multi_node",
+        "title"   : "会议",
         "category": "工作",
         "location": "线上",
-        "notes": "备注",
+        "notes"   : "备注",
         "owner_id": "private-owner",
     }
     assert collection_payload(collection) == {
-        "id": "collection-1",
-        "kind": "multi_node",
-        "title": "会议",
-        "category": "工作",
-        "location": "线上",
-        "notes": "备注",
+        "id"        : "collection-1",
+        "kind"      : "multi_node",
+        "title"     : "会议",
+        "category"  : "工作",
+        "location"  : "线上",
+        "notes"     : "备注",
         "display_id": "collection-1",
-        "version": None,
+        "version"   : None,
     }
 
     source = {"id": "item-1", 2: "numeric-key"}
     assert item_to_dict(source) == {
-        "id": "item-1",
-        "2": "numeric-key",
+        "id"        : "item-1",
+        "2"         : "numeric-key",
         "display_id": "item-1",
     }
     assert item_to_dict(SimpleNamespace(to_dict=lambda: {"id": "item-2"})) == {
-        "id": "item-2",
+        "id"        : "item-2",
         "display_id": "item-2",
     }
     assert item_to_dict(SimpleNamespace(to_dict="not-callable")) == {}

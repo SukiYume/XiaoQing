@@ -112,18 +112,18 @@ async def test_other_problems_win_over_length(monkeypatch):
     monkeypatch.setattr(checker, "_llm_check", AsyncMock(return_value=hard))
     passed = ReplyCheckResult(True, "", False, "soft")
     kwargs = {
-        "secrets": {},
-        "bot_name": "小青",
-        "goal": "写检讨",
-        "current_text": "写个800字的检讨",
-        "history": [],
-        "chat_history_text": "",
-        "enable_llm_checker": True,
-        "max_repeat_compare": 2,
-        "similarity_threshold": 0.9,
-        "max_assistant_in_row": 5,
-        "timeout_seconds": 1.0,
-        "max_retry": 0,
+        "secrets"               : {},
+        "bot_name"              : "小青",
+        "goal"                  : "写检讨",
+        "current_text"          : "写个800字的检讨",
+        "history"               : [],
+        "chat_history_text"     : "",
+        "enable_llm_checker"    : True,
+        "max_repeat_compare"    : 2,
+        "similarity_threshold"  : 0.9,
+        "max_assistant_in_row"  : 5,
+        "timeout_seconds"       : 1.0,
+        "max_retry"             : 0,
         "retry_interval_seconds": 0.0,
     }
 
@@ -181,7 +181,8 @@ async def test_the_raised_budget_reaches_the_generation_request(monkeypatch):
     from plugins.xiaoqing_chat.reply_plan import foreground_call_config
     from plugins.xiaoqing_chat.runtime_state import ChatRuntime
 
-    runtime = ChatRuntime(XiaoQingChatConfig(max_tokens=512), [])
+    runtime = ChatRuntime(XiaoQingChatConfig(), [])
+    runtime.cfg._llm_configs["chat"] = LLMCallConfig(max_tokens=512)
     assert foreground_call_config(runtime, "随便聊聊").max_tokens == 512
     assert foreground_call_config(runtime, "不超过100字说说").max_tokens == 512
     foreground = foreground_call_config(runtime, "小青，帮我写个800字的检讨书")

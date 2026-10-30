@@ -176,9 +176,9 @@ MONTHLY_DIR = CACHE_DIR / "monthly"
 
 @dataclass(frozen=True, slots=True)
 class FetchResult:
-    papers: list[dict[str, str]]
-    completed: bool
-    next_offset: int
+    papers       : list[dict[str, str]]
+    completed    : bool
+    next_offset  : int
     total_results: int | None
 
 
@@ -213,9 +213,9 @@ def save_cache(
         cache_file,
         json.dumps(
             {
-                "papers": papers,
+                "papers"     : papers,
                 "query_range": [api_start, api_end],
-                "completed": True,
+                "completed"  : True,
             },
             ensure_ascii=False,
         ),
@@ -267,11 +267,11 @@ def save_checkpoint(
         path,
         json.dumps(
             {
-                "query_range": [api_start, api_end],
-                "papers": result.papers,
-                "next_offset": result.next_offset,
+                "query_range"  : [api_start, api_end],
+                "papers"       : result.papers,
+                "next_offset"  : result.next_offset,
                 "total_results": result.total_results,
-                "completed": result.completed,
+                "completed"    : result.completed,
             },
             ensure_ascii=False,
         ),
@@ -332,10 +332,10 @@ def fetch_month(
         search_query = f"astrophysics AND submittedDate:[{api_start} TO {api_end}]"
         params       = {
             "search_query": search_query,
-            "start": offset,
-            "max_results": MAX_RESULTS,
-            "sortBy": "submittedDate",
-            "sortOrder": "ascending",
+            "start"       : offset,
+            "max_results" : MAX_RESULTS,
+            "sortBy"      : "submittedDate",
+            "sortOrder"   : "ascending",
         }
 
         # 带重试的请求
@@ -381,7 +381,7 @@ def fetch_month(
             batch.append(
                 {
                     "arxiv_id": arxiv_id,
-                    "title": title,
+                    "title"   : title,
                     "abstract": abstract,
                 }
             )

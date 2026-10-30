@@ -10,11 +10,11 @@ from typing import Any, ClassVar
 class PendoRuntimeSettings:
     """Atomically published settings that may change while the plugin is loaded."""
 
-    web_enabled: bool               = True
-    web_host: str                   = "127.0.0.1"
-    web_port: int                   = 12001
+    web_enabled              : bool = True
+    web_host                 : str  = "127.0.0.1"
+    web_port                 : int  = 12001
     web_session_cookie_secure: bool = False
-    web_demo_enabled: bool          = False
+    web_demo_enabled         : bool = False
 
 
 class PendoConfig:
@@ -98,7 +98,7 @@ class PendoConfig:
     _RUNTIME_DEFAULTS: ClassVar[PendoRuntimeSettings] = PendoRuntimeSettings()
     _runtime_settings: ClassVar[PendoRuntimeSettings] = _RUNTIME_DEFAULTS
     _runtime_revision: ClassVar[int | None]           = None
-    _runtime_lock: ClassVar[Lock]                     = Lock()
+    _runtime_lock    : ClassVar[Lock]                 = Lock()
 
     @classmethod
     def validate(cls) -> None:
@@ -212,15 +212,15 @@ class PendoConfig:
 # 日记模板配置
 DIARY_TEMPLATES = {
     "three_good": {
-        "name": "三件好事",
+        "name"   : "三件好事",
         "prompts": ["今天发生的第一件好事:", "今天发生的第二件好事:", "今天发生的第三件好事:"],
     },
     "summary": {
-        "name": "今日总结",
+        "name"   : "今日总结",
         "prompts": ["今天做了什么:", "今天学到了什么:", "有什么可以改进:", "明天最重要的事:"],
     },
     "mood": {
-        "name": "情绪记录",
+        "name"   : "情绪记录",
         "prompts": ["今天的心情 (1-10):", "为什么会有这样的心情:", "有什么让你开心/难过的事:"],
     },
 }
@@ -277,27 +277,27 @@ MOOD_ANALYSIS_CONFIG = {
         "崩溃",
         "无助",
     ],
-    "calm_words": ["平静", "安宁", "放松", "舒适", "还行", "一般", "平常", "普通", "淡定", "冷静"],
-    "excited_words": ["激动", "兴奋", "期待", "迫不及待", "热血沸腾"],
-    "angry_words": ["生气", "愤怒", "恼火", "不爽", "讨厌", "烦"],
-    "tired_words": ["疲惫", "疲劳", "困", "没精神", "累瘫"],
-    "anxious_words": ["焦虑", "担心", "紧张", "不安", "慌"],
+    "calm_words"    : ["平静", "安宁", "放松", "舒适", "还行", "一般", "平常", "普通", "淡定", "冷静"],
+    "excited_words" : ["激动", "兴奋", "期待", "迫不及待", "热血沸腾"],
+    "angry_words"   : ["生气", "愤怒", "恼火", "不爽", "讨厌", "烦"],
+    "tired_words"   : ["疲惫", "疲劳", "困", "没精神", "累瘫"],
+    "anxious_words" : ["焦虑", "担心", "紧张", "不安", "慌"],
     "grateful_words": ["感恩", "感谢", "珍惜", "幸运", "被照顾"],
     # 情绪类型到emoji的映射
-    "mood_emojis": {row["id"]: row["emoji"] for row in DIARY_MOODS},
-    "mood_labels": {row["id"]: row["label"] for row in DIARY_MOODS},
+    "mood_emojis"  : {row["id"]: row["emoji"] for row in DIARY_MOODS},
+    "mood_labels"  : {row["id"]: row["label"] for row in DIARY_MOODS},
     "allowed_moods": [row["id"] for row in DIARY_MOODS],
     # 基础分数配置
     "base_scores": {
-        "happy": 6,
-        "sad": 5,
-        "calm": 5,
-        "excited": 8,
-        "angry": 3,
-        "tired": 4,
-        "anxious": 3,
+        "happy"   : 6,
+        "sad"     : 5,
+        "calm"    : 5,
+        "excited" : 8,
+        "angry"   : 3,
+        "tired"   : 4,
+        "anxious" : 3,
         "grateful": 7,
-        "neutral": 5,
+        "neutral" : 5,
     },
     # 每个匹配词的分值增量
     "score_increment": 1,

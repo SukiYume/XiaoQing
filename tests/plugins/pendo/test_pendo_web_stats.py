@@ -156,13 +156,13 @@ def test_ledger_stats_returns_expense_amount_histogram(db: Database) -> None:
     ):
         db.insert_item(
             {
-                "type": "ledger",
-                "owner_id": owner_id,
-                "title": title,
-                "amount": amount,
+                "type"            : "ledger",
+                "owner_id"        : owner_id,
+                "title"           : title,
+                "amount"          : amount,
                 "transaction_type": transaction_type,
-                "ledger_category": category,
-                "ledger_date": ledger_date,
+                "ledger_category" : category,
+                "ledger_date"     : ledger_date,
             }
         )
 
@@ -189,51 +189,51 @@ def test_ledger_stats_respects_range_for_totals_categories_and_trend_data(
     owner_id = "u-ledger-range"
     for item in (
         {
-            "type": "ledger",
-            "owner_id": owner_id,
-            "title": "早餐",
-            "amount": 18,
+            "type"            : "ledger",
+            "owner_id"        : owner_id,
+            "title"           : "早餐",
+            "amount"          : 18,
             "transaction_type": "expense",
-            "ledger_category": " 餐饮 ",
-            "ledger_date": "2026-03-02",
+            "ledger_category" : " 餐饮 ",
+            "ledger_date"     : "2026-03-02",
         },
         {
-            "type": "ledger",
-            "owner_id": owner_id,
-            "title": "兼职",
-            "amount": 300,
+            "type"            : "ledger",
+            "owner_id"        : owner_id,
+            "title"           : "兼职",
+            "amount"          : 300,
             "transaction_type": "income",
-            "ledger_category": "副业",
-            "ledger_date": "2026-03-03",
+            "ledger_category" : "副业",
+            "ledger_date"     : "2026-03-03",
         },
         {
-            "type": "ledger",
-            "owner_id": owner_id,
-            "title": "转账",
-            "amount": 50,
-            "transaction_type": "transfer",
-            "ledger_category": "",
-            "account_name": "现金",
+            "type"                : "ledger",
+            "owner_id"            : owner_id,
+            "title"               : "转账",
+            "amount"              : 50,
+            "transaction_type"    : "transfer",
+            "ledger_category"     : "",
+            "account_name"        : "现金",
             "counter_account_name": "银行卡",
-            "ledger_date": "2026-03-04",
+            "ledger_date"         : "2026-03-04",
         },
         {
-            "type": "ledger",
-            "owner_id": owner_id,
-            "title": "遗留类型",
-            "amount": 5,
+            "type"            : "ledger",
+            "owner_id"        : owner_id,
+            "title"           : "遗留类型",
+            "amount"          : 5,
             "transaction_type": "expense",
-            "ledger_category": "遗留",
-            "ledger_date": "2026-03-05",
+            "ledger_category" : "遗留",
+            "ledger_date"     : "2026-03-05",
         },
         {
-            "type": "ledger",
-            "owner_id": owner_id,
-            "title": "范围外支出",
-            "amount": 66,
+            "type"            : "ledger",
+            "owner_id"        : owner_id,
+            "title"           : "范围外支出",
+            "amount"          : 66,
             "transaction_type": "expense",
-            "ledger_category": "交通",
-            "ledger_date": "2026-04-03",
+            "ledger_category" : "交通",
+            "ledger_date"     : "2026-04-03",
         },
     ):
         db.insert_item(item)
@@ -286,13 +286,13 @@ def test_ledger_stats_all_range_includes_future_entries(
     ):
         db.insert_item(
             {
-                "type": "ledger",
-                "owner_id": owner_id,
-                "title": title,
-                "amount": amount,
+                "type"            : "ledger",
+                "owner_id"        : owner_id,
+                "title"           : title,
+                "amount"          : amount,
                 "transaction_type": "expense",
-                "ledger_category": category,
-                "ledger_date": ledger_date,
+                "ledger_category" : category,
+                "ledger_date"     : ledger_date,
             }
         )
 
@@ -323,11 +323,11 @@ def test_item_date_bounds_use_local_dates_and_independent_event_end(
     ]:
         db.insert_item(
             {
-                "id": identifier,
-                "type": "event",
-                "owner_id": owner,
+                "id"        : identifier,
+                "type"      : "event",
+                "owner_id"  : owner,
                 "start_time": start,
-                "end_time": end,
+                "end_time"  : end,
             }
         )
     app = FastAPI()
@@ -361,13 +361,13 @@ def test_ledger_list_aggregate_insights_share_future_and_currency_bounds(db: Dat
     for currency, amount, day in [("CNY", 10, start), ("CNY", 20, end), ("USD", 80, end)]:
         db.insert_item(
             {
-                "type": "ledger",
-                "owner_id": owner,
-                "title": currency,
-                "amount": amount,
-                "currency": currency,
+                "type"            : "ledger",
+                "owner_id"        : owner,
+                "title"           : currency,
+                "amount"          : amount,
+                "currency"        : currency,
                 "transaction_type": "expense",
-                "ledger_date": day,
+                "ledger_date"     : day,
             }
         )
     app = FastAPI()
@@ -403,12 +403,12 @@ def test_event_stats_filters_range_and_builds_weekday_slot_matrix(db: Database) 
     ):
         db.insert_item(
             {
-                "type": "event",
-                "owner_id": owner_id,
-                "title": title,
-                "category": category,
+                "type"      : "event",
+                "owner_id"  : owner_id,
+                "title"     : title,
+                "category"  : category,
                 "start_time": start_time,
-                "end_time": end_time,
+                "end_time"  : end_time,
             }
         )
 
@@ -432,22 +432,22 @@ def test_timestamp_stats_group_aware_values_in_user_timezone(db: Database) -> No
     db.update_user_settings(owner_id, {"timezone": "Asia/Shanghai"})
     for payload in (
         {
-            "id": "aware-event",
-            "type": "event",
-            "title": "上海早会",
+            "id"        : "aware-event",
+            "type"      : "event",
+            "title"     : "上海早会",
             "start_time": "2026-03-30T23:30:00+00:00",
         },
         {
-            "id": "aware-task",
-            "type": "task",
-            "title": "上海当天任务",
-            "status": "open",
+            "id"        : "aware-task",
+            "type"      : "task",
+            "title"     : "上海当天任务",
+            "status"    : "open",
             "created_at": "2026-03-30T23:30:00+00:00",
         },
         {
-            "id": "aware-note",
-            "type": "note",
-            "title": "上海当天笔记",
+            "id"        : "aware-note",
+            "type"      : "note",
+            "title"     : "上海当天笔记",
             "created_at": "2026-03-30T23:30:00+00:00",
         },
     ):
@@ -481,13 +481,13 @@ def test_event_stats_counts_graph_leaves_and_uses_trimmed_collection_category(
     owner_id = "u-event-stats-graph"
     db.create_event_collection(
         {
-            "id": "stat-conf",
-            "owner_id": owner_id,
-            "kind": "multi_node",
-            "title": "统计会议",
-            "category": " 学术 ",
+            "id"        : "stat-conf",
+            "owner_id"  : owner_id,
+            "kind"      : "multi_node",
+            "title"     : "统计会议",
+            "category"  : " 学术 ",
             "start_time": "2026-03-05T09:00:00",
-            "end_time": "2026-03-06T10:00:00",
+            "end_time"  : "2026-03-06T10:00:00",
         }
     )
     for item_id, title, start_time in (
@@ -496,14 +496,14 @@ def test_event_stats_counts_graph_leaves_and_uses_trimmed_collection_category(
     ):
         db.insert_item(
             {
-                "id": item_id,
-                "type": "event",
-                "owner_id": owner_id,
-                "title": title,
-                "category": " 未分类 ",
-                "start_time": start_time,
-                "event_role": "multi_node_child",
-                "event_collection_id": "stat-conf",
+                "id"                   : item_id,
+                "type"                 : "event",
+                "owner_id"             : owner_id,
+                "title"                : title,
+                "category"             : " 未分类 ",
+                "start_time"           : start_time,
+                "event_role"           : "multi_node_child",
+                "event_collection_id"  : "stat-conf",
                 "event_collection_kind": "multi_node",
             }
         )
@@ -524,52 +524,52 @@ def test_task_stats_separates_created_done_and_cancelled_weeks(db: Database) -> 
     owner_id = "u-task-stats"
     for item in (
         {
-            "type": "task",
-            "owner_id": owner_id,
-            "title": "已完成任务",
-            "status": "done",
-            "category": "工作",
-            "priority": 5,
-            "created_at": "2026-03-03T09:00:00",
+            "type"        : "task",
+            "owner_id"    : owner_id,
+            "title"       : "已完成任务",
+            "status"      : "done",
+            "category"    : "工作",
+            "priority"    : 5,
+            "created_at"  : "2026-03-03T09:00:00",
             "completed_at": "2026-03-10T10:00:00",
         },
         {
-            "type": "task",
-            "owner_id": owner_id,
-            "title": "计划任务",
-            "status": "open",
-            "category": "生活",
-            "priority": 3,
-            "plan_date": "2026-03-20",
+            "type"      : "task",
+            "owner_id"  : owner_id,
+            "title"     : "计划任务",
+            "status"    : "open",
+            "category"  : "生活",
+            "priority"  : 3,
+            "plan_date" : "2026-03-20",
             "created_at": "2026-03-17T09:00:00",
         },
         {
-            "type": "task",
-            "owner_id": owner_id,
-            "title": "仅截止日任务",
-            "status": "open",
-            "category": " 未分类 ",
-            "priority": 1,
+            "type"       : "task",
+            "owner_id"   : owner_id,
+            "title"      : "仅截止日任务",
+            "status"     : "open",
+            "category"   : " 未分类 ",
+            "priority"   : 1,
             "deadline_at": "2026-03-25T18:00:00",
-            "created_at": "2026-03-18T09:00:00",
+            "created_at" : "2026-03-18T09:00:00",
         },
         {
-            "type": "task",
-            "owner_id": owner_id,
-            "title": "无日期计划任务",
-            "status": "open",
-            "category": "工作",
-            "priority": 2,
+            "type"      : "task",
+            "owner_id"  : owner_id,
+            "title"     : "无日期计划任务",
+            "status"    : "open",
+            "category"  : "工作",
+            "priority"  : 2,
             "created_at": "2026-03-19T09:00:00",
         },
         {
-            "type": "task",
-            "owner_id": owner_id,
-            "title": "已取消任务",
-            "status": "cancelled",
-            "category": "归档",
-            "priority": 1,
-            "created_at": "2026-02-01T09:00:00",
+            "type"        : "task",
+            "owner_id"    : owner_id,
+            "title"       : "已取消任务",
+            "status"      : "cancelled",
+            "category"    : "归档",
+            "priority"    : 1,
+            "created_at"  : "2026-02-01T09:00:00",
             "cancelled_at": "2026-03-12T10:00:00",
         },
     ):
@@ -615,13 +615,13 @@ def test_diary_overview_accepts_explicit_range_and_auto_cadence(db: Database) ->
     ):
         db.insert_item(
             {
-                "id": item_id,
-                "type": "diary",
-                "owner_id": owner_id,
-                "title": item_id,
-                "content": content,
+                "id"        : item_id,
+                "type"      : "diary",
+                "owner_id"  : owner_id,
+                "title"     : item_id,
+                "content"   : content,
                 "diary_date": diary_date,
-                "mood": mood,
+                "mood"      : mood,
                 "created_at": f"{diary_date}T20:00:00",
                 "updated_at": f"{diary_date}T20:00:00",
             }
@@ -670,13 +670,13 @@ def test_notes_overview_accepts_explicit_range_and_trims_filters(db: Database) -
     ):
         db.insert_item(
             {
-                "id": item_id,
-                "owner_id": owner_id,
-                "type": "note",
-                "title": title,
-                "content": f"{title} 内容",
-                "category": category,
-                "tags": ["alpha", "beta"] if item_id != "n-out" else ["legacy"],
+                "id"        : item_id,
+                "owner_id"  : owner_id,
+                "type"      : "note",
+                "title"     : title,
+                "content"   : f"{title} 内容",
+                "category"  : category,
+                "tags"      : ["alpha", "beta"] if item_id != "n-out" else ["legacy"],
                 "created_at": created_at,
                 "updated_at": created_at,
             }
@@ -723,13 +723,13 @@ def test_ledger_stats_explicit_bounds_override_range_preset(db: Database) -> Non
     ):
         db.insert_item(
             {
-                "type": "ledger",
-                "owner_id": owner_id,
-                "title": title,
-                "amount": amount,
+                "type"            : "ledger",
+                "owner_id"        : owner_id,
+                "title"           : title,
+                "amount"          : amount,
                 "transaction_type": "expense",
-                "ledger_category": "测试",
-                "ledger_date": ledger_date,
+                "ledger_category" : "测试",
+                "ledger_date"     : ledger_date,
             }
         )
 
@@ -756,12 +756,12 @@ def test_notes_overview_uses_yearly_cadence_for_cross_year_ranges(db: Database) 
     ):
         db.insert_item(
             {
-                "id": item_id,
-                "owner_id": owner_id,
-                "type": "note",
-                "title": item_id,
-                "content": f"{item_id} 内容",
-                "category": "工作",
+                "id"        : item_id,
+                "owner_id"  : owner_id,
+                "type"      : "note",
+                "title"     : item_id,
+                "content"   : f"{item_id} 内容",
+                "category"  : "工作",
                 "created_at": created_at,
                 "updated_at": created_at,
             }
@@ -859,15 +859,15 @@ def test_ledger_comparison_fills_gaps_and_keeps_mom_and_yoy_baselines(
     ):
         db.insert_item(
             {
-                "type": "ledger",
-                "owner_id": owner_id,
-                "title": title,
-                "amount": amount,
-                "transaction_type": transaction_type,
-                "ledger_category": "餐饮",
-                "account_name": "现金",
+                "type"                : "ledger",
+                "owner_id"            : owner_id,
+                "title"               : title,
+                "amount"              : amount,
+                "transaction_type"    : transaction_type,
+                "ledger_category"     : "餐饮",
+                "account_name"        : "现金",
                 "counter_account_name": "银行卡" if transaction_type == "transfer" else None,
-                "ledger_date": ledger_date,
+                "ledger_date"         : ledger_date,
             }
         )
 
@@ -906,41 +906,41 @@ def test_activity_heatmap_counts_all_item_types_and_leap_day(db: Database) -> No
     owner_id = "u-heatmap"
     for item in (
         {
-            "type": "ledger",
-            "owner_id": owner_id,
-            "title": "支出",
-            "amount": 1,
+            "type"            : "ledger",
+            "owner_id"        : owner_id,
+            "title"           : "支出",
+            "amount"          : 1,
             "transaction_type": "expense",
-            "ledger_date": "2024-02-29",
+            "ledger_date"     : "2024-02-29",
         },
         {
-            "type": "task",
-            "owner_id": owner_id,
-            "title": "任务",
+            "type"      : "task",
+            "owner_id"  : owner_id,
+            "title"     : "任务",
             "created_at": "2024-02-29T08:00:00",
         },
         {
-            "type": "event",
-            "owner_id": owner_id,
-            "title": "日程",
+            "type"      : "event",
+            "owner_id"  : owner_id,
+            "title"     : "日程",
             "start_time": "2024-02-29T09:00:00",
         },
         {
-            "type": "note",
-            "owner_id": owner_id,
-            "title": "笔记",
+            "type"      : "note",
+            "owner_id"  : owner_id,
+            "title"     : "笔记",
             "created_at": "2024-02-29T10:00:00",
         },
         {
-            "type": "diary",
-            "owner_id": owner_id,
-            "title": "日记",
+            "type"      : "diary",
+            "owner_id"  : owner_id,
+            "title"     : "日记",
             "diary_date": "2024-02-29",
         },
         {
-            "type": "task",
-            "owner_id": "other-owner",
-            "title": "他人任务",
+            "type"      : "task",
+            "owner_id"  : "other-owner",
+            "title"     : "他人任务",
             "created_at": "2024-02-29T08:00:00",
         },
     ):
@@ -951,13 +951,13 @@ def test_activity_heatmap_counts_all_item_types_and_leap_day(db: Database) -> No
 
     assert len(data["days"]) == 366
     assert leap_day == {
-        "date": "2024-02-29",
-        "count": 5,
+        "date"  : "2024-02-29",
+        "count" : 5,
         "ledger": 1,
-        "task": 1,
-        "event": 1,
-        "note": 1,
-        "diary": 1,
+        "task"  : 1,
+        "event" : 1,
+        "note"  : 1,
+        "diary" : 1,
     }
 
 

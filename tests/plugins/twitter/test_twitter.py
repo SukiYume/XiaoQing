@@ -100,10 +100,10 @@ def context(tmp_path: Path) -> SimpleNamespace:
             secrets  = {
                 "plugins": {
                     "twitter": {
-                        "user_id": "123456789",
-                        "headers": {"authorization": "Bearer test-token"},
-                        "cookies": {"ct0": "csrf-token"},
-                        "proxy": "http://proxy.example.com:8080",
+                        "user_id"  : "123456789",
+                        "headers"  : {"authorization": "Bearer test-token"},
+                        "cookies"  : {"ct0": "csrf-token"},
+                        "proxy"    : "http://proxy.example.com:8080",
                         "max_pages": 50,
                     }
                 }
@@ -146,20 +146,20 @@ def test_malformed_config_layers_fall_back_to_empty(
 def test_api_headers_keep_only_safe_explicit_string_values(context: SimpleNamespace) -> None:
     context.secrets["plugins"]["twitter"]["headers"] = {
         "Authorization": "  Bearer dummy-secret  ",
-        "user-agent": "Custom Agent",
-        "Host": "attacker.example",
-        "Bad Header": "value",
-        "X-Number": 7,
-        "X-Newline": "first\r\nsecond",
-        "X-Empty": "  ",
+        "user-agent"   : "Custom Agent",
+        "Host"         : "attacker.example",
+        "Bad Header"   : "value",
+        "X-Number"     : 7,
+        "X-Newline"    : "first\r\nsecond",
+        "X-Empty"      : "  ",
     }
 
     headers = twitter._get_headers(context)
 
     folded = {key.casefold(): value for key, value in headers.items()}
     assert folded == {
-        "accept": "application/json",
-        "user-agent": "Custom Agent",
+        "accept"       : "application/json",
+        "user-agent"   : "Custom Agent",
         "authorization": "Bearer dummy-secret",
     }
 
@@ -198,9 +198,9 @@ def test_proxy_configuration_is_strict(
 
 def test_cookies_keep_only_bounded_string_pairs(context: SimpleNamespace) -> None:
     context.secrets["plugins"]["twitter"]["cookies"] = {
-        "ct0": " csrf ",
-        "nested": {"secret": "value"},
-        "empty": "",
+        "ct0"      : " csrf ",
+        "nested"   : {"secret": "value"},
+        "empty"    : "",
         "bad\nname": "value",
         "bad-value": "one\rtwo",
     }
@@ -312,7 +312,7 @@ async def test_timeline_request_uses_bounded_get_and_extracts_entries(
 
 
 @pytest.mark.asyncio
-async def test_timeline_ignores_invalid_cursor_and_malformed_instructions(
+async def test_timeline_ignores_invalid_cursor_and_rejects_malformed_entries(
     context: SimpleNamespace,
 ) -> None:
     payload = {
@@ -335,7 +335,9 @@ async def test_timeline_ignores_invalid_cursor_and_malformed_instructions(
     session              = QueuedAiohttpSession(_json_response(payload))
     context.http_session = session
 
-    assert await twitter._fetch_timeline(context, "bad\ncursor") == ([], None, False)
+    # 已识别的 TimelineAddEntries 结构畸形时明确失败，不能当成空时间线标记回填完成。
+    with pytest.raises(twitter.TwitterFetchError):
+        await twitter._fetch_timeline(context, "bad\ncursor")
     variables = json.loads(session.requests[0][2]["params"]["variables"])
     assert "cursor" not in variables
 
@@ -567,7 +569,7 @@ async def test_fetch_paginates_and_deduplicates_urls(
     first  = "https://pbs.twimg.com/media/a.jpg"
     second = "https://pbs.twimg.com/media/b.jpg"
     pages  = {
-        None: ([_tweet(first, first)], "cursor-1", True),
+        None      : ([_tweet(first, first)], "cursor-1", True),
         "cursor-1": ([_tweet(first, second)], None, False),
     }
 

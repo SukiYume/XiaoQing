@@ -216,6 +216,30 @@ export function zonedDateTimeToInput(value, timeZone = '') {
 }
 
 /**
+ * 编辑表单的原始时刻记忆：表单只显示到分钟，未改动的字段原样提交原来的绝对时刻。
+ * 这样修改标题不会把截止时间的秒数抹掉，也不会因夏令时回拨的重复墙钟而无法保存；
+ * 真正改动过的字段仍按严格墙钟规则转换。
+ */
+export function createInstantMemory() {
+    const memory = new Map();
+    return {
+        display(value, timeZone = '') {
+            const input = zonedDateTimeToInput(value, timeZone);
+            const text  = String(value ?? '').trim();
+            // 只记住带明确偏移的绝对时刻；旧的朴素墙钟值仍按当前时区转换成 UTC。
+            if (input && AWARE_SUFFIX_PATTERN.test(text)) memory.set(input, text);
+            return input;
+        },
+        resolve(value, timeZone = '') {
+            const key = String(value ?? '').trim();
+            if (!key) return '';
+            if (memory.has(key)) return memory.get(key);
+            return zonedInputToUtcIso(key, timeZone);
+        },
+    };
+}
+
+/**
  * 把指定 IANA 时区中的墙钟解析为唯一 UTC 时刻。
  * DST 跳时和回拨重叠都拒绝，避免浏览器自行猜测造成静默改时。
  */

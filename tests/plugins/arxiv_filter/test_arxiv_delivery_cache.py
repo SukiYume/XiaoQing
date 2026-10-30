@@ -502,11 +502,10 @@ def test_arxiv_cache_requires_matching_range(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("stale", [False, True])
 def test_arxiv_dataset_enforces_current_range(tmp_path, monkeypatch, stale):
-    with monkeypatch.context() as scoped:
-        scoped.setitem(sys.modules, "feedparser", SimpleNamespace())
-        module = importlib.import_module(
-            "plugins.arxiv_filter.train_model.data_prep.step3_build_dataset"
-        )
+    monkeypatch.setitem(sys.modules, "feedparser", SimpleNamespace())
+    module = importlib.import_module(
+        "plugins.arxiv_filter.train_model.data_prep.step3_build_dataset"
+    )
     monkeypatch.setattr(module, "CACHE_DIR", tmp_path)
     monkeypatch.setattr(module, "POSITIVE_IDS_CSV", tmp_path / "positive_ids.csv")
     monkeypatch.setattr(module, "OUTPUT_CSV", tmp_path / "output.csv")
@@ -519,12 +518,12 @@ def test_arxiv_dataset_enforces_current_range(tmp_path, monkeypatch, stale):
     (monthly / "2401.json").write_text(
         json.dumps(
             {
-                "completed": True,
+                "completed"  : True,
                 "query_range": ["202401010000", "202401102359" if stale else "202401312359"],
-                "papers": [
+                "papers"     : [
                     {
                         "arxiv_id": "2401.00001",
-                        "title": "Review sample",
+                        "title"   : "Review sample",
                         "abstract": "An isolated astronomy abstract.",
                     }
                 ],

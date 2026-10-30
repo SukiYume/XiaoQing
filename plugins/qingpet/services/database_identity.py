@@ -4,6 +4,7 @@ import json
 import math
 import sqlite3
 from datetime import datetime
+from typing import Any
 
 from ..models import GroupConfig, GroupConfigReadError, Inventory, Pet, User
 from ..utils.constants import PetPersonality, PetStage, PetStatus
@@ -479,6 +480,9 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
             if latest.user_id != pet.user_id or latest.group_id != pet.group_id:
                 conn.rollback()
                 return False
+            if pet.conflicts_with(latest) is not None:
+                conn.rollback()
+                return False
             merged = pet.merged_onto(latest)
             if not self._write_pet_in_transaction(conn, merged):
                 conn.rollback()
@@ -683,6 +687,62 @@ class IdentityRepositoryMixin(DatabaseRepositorySupport):
             activity_enabled        = boolean_values["activity_enabled"],
             sensitive_words         = sensitive_words,
         )
+
+    _GROUP_CONFIG_COLUMNS = frozenset(
+        {
+            "enabled",
+            "economy_multiplier",
+            "decay_multiplier",
+            "trade_enabled",
+            "natural_trigger_enabled",
+            "activity_enabled",
+        }
+    )
+
+    def update_group_config_field(self, group_id: int, field: str, value: Any) -> bool:
+        """在一个事务内只更新一个配置列；缺少配置行时先按默认值补齐。"""
+
+        if field not in self._GROUP_CONFIG_COLUMNS:
+            raise ValueError(f"unsupported group config field: {field}")
+        conn: sqlite3.Connection | None = None
+        try:
+            conn = self._get_connection()
+            conn.execute("BEGIN IMMEDIATE")
+            exists = conn.execute(
+                "SELECT 1 FROM group_configs WHERE group_id = ?", (group_id,)
+            ).fetchone()
+            if exists is None:
+                default = GroupConfig(group_id=group_id)
+                conn.execute(
+                    """
+                    INSERT INTO group_configs
+                    (group_id, enabled, economy_multiplier, decay_multiplier,
+                     trade_enabled, natural_trigger_enabled, activity_enabled, sensitive_words)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        group_id,
+                        int(default.enabled),
+                        default.economy_multiplier,
+                        default.decay_multiplier,
+                        int(default.trade_enabled),
+                        int(default.natural_trigger_enabled),
+                        int(default.activity_enabled),
+                        json.dumps(default.sensitive_words),
+                    ),
+                )
+            stored = int(value) if isinstance(value, bool) else value
+            conn.execute(
+                f"UPDATE group_configs SET {field} = ? WHERE group_id = ?",
+                (stored, group_id),
+            )
+            conn.commit()
+            return True
+        except Exception as exc:
+            if conn is not None:
+                conn.rollback()
+            _log_database_failure("update_group_config_field", exc)
+            return False
 
     def update_group_config(self, config: GroupConfig) -> bool:
         conn: sqlite3.Connection | None = None

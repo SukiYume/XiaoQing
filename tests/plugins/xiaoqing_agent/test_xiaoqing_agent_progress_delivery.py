@@ -83,7 +83,13 @@ async def test_progress_feedback_and_receipts_follow_each_send(
     assert "太近" in limited.content
     assert len(context.actions) == 3
     assert task.progress_sent == 1
-    expected_feedback = "发送失败" if False in (message_sent, first_sent, second_sent) else "已发送"
+    outcomes = (message_sent, first_sent, second_sent)
+    if False in outcomes:
+        expected_feedback = "发送失败"
+    elif None in outcomes:
+        expected_feedback = "已交给发送通道，是否送达未确认。"
+    else:
+        expected_feedback = "已发送"
     assert result.content == expected_feedback
 
     # Attachments bypass the interval; the total progress limit still applies.

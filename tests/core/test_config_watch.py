@@ -2,20 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+import os
+import threading
+import time
+from pathlib import Path
+from typing import Any
+
+import pytest
+
 import tests.helpers.config_test_support as _fixture_support
 from tests.helpers.config_test_support import (
-    Any,
     ConfigManager,
     ConfigSnapshot,
     ConfigSourceStatus,
-    Path,
     PendingSecretsChange,
-    asyncio,
-    json,
-    os,
-    pytest,
-    threading,
-    time,
 )
 
 config_file     = _fixture_support.config_file
@@ -328,8 +330,8 @@ class TestConfigManagerWatch:
         config_manager: ConfigManager,
         secrets_file: Path,
     ):
-        snapshots: asyncio.Queue[ConfigSnapshot]    = asyncio.Queue()
-        pending_notices: list[PendingSecretsChange] = []
+        snapshots      : asyncio.Queue[ConfigSnapshot] = asyncio.Queue()
+        pending_notices: list[PendingSecretsChange]    = []
         config_manager.on_reload(snapshots.put_nowait)
         config_manager.on_pending_secrets_change(pending_notices.append)
         watch_task = asyncio.create_task(config_manager.watch(interval=0.01))
@@ -344,7 +346,7 @@ class TestConfigManagerWatch:
 
             recovered_payload = {
                 "admin_user_ids": [],
-                "plugins": {"echo": {"api_key": "recovered"}},
+                "plugins"       : {"echo": {"api_key": "recovered"}},
             }
             secrets_file.write_text(json.dumps(recovered_payload), encoding="utf-8")
             recovered = await asyncio.wait_for(snapshots.get(), timeout=2)
@@ -408,7 +410,7 @@ class TestConfigManagerWatch:
         original_read_sources = config_manager._read_sources
         rotated               = {
             "admin_user_ids": [],
-            "plugins": {"echo": {"api_key": "must-never-authorize"}},
+            "plugins"       : {"echo": {"api_key": "must-never-authorize"}},
         }
         calls                           = 0
         snapshots: list[ConfigSnapshot] = []
@@ -524,10 +526,10 @@ class TestConfigManagerWatch:
         config_manager: ConfigManager,
         secrets_file: Path,
     ):
-        original                                    = config_manager.snapshot()
-        original_identity                           = config_manager._secrets_source.identity
-        security_publications: list[ConfigSnapshot] = []
-        pending_notices: list[PendingSecretsChange] = []
+        original                                          = config_manager.snapshot()
+        original_identity                                 = config_manager._secrets_source.identity
+        security_publications: list[ConfigSnapshot]       = []
+        pending_notices      : list[PendingSecretsChange] = []
         config_manager.on_security_update(security_publications.append)
         config_manager.on_pending_secrets_change(pending_notices.append)
         replacement = secrets_file.with_name("replacement-secrets.json")
@@ -573,7 +575,7 @@ class TestConfigManagerWatch:
     ):
         rotated = {
             "admin_user_ids": [9090],
-            "plugins": {"echo": {"api_key": "explicitly-confirmed-only"}},
+            "plugins"       : {"echo": {"api_key": "explicitly-confirmed-only"}},
         }
         original                                    = config_manager.snapshot()
         security_publications: list[ConfigSnapshot] = []
@@ -618,8 +620,8 @@ class TestConfigManagerWatch:
         config_manager.on_pending_secrets_change(notices.append)
         candidate = {
             "admin_user_ids": [12345],
-            "plugins": {
-                "echo": {"api_key": "must-never-appear-in-notice"},
+            "plugins"       : {
+                "echo"      : {"api_key": "must-never-appear-in-notice"},
                 "new_plugin": {"token": "also-secret"},
             },
         }

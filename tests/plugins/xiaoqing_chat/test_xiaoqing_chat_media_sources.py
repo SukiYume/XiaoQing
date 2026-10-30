@@ -2,27 +2,27 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+from io import BytesIO
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
 import tests.helpers.xiaoqing_chat_media_test_support as _fixture_support
 from tests.helpers.xiaoqing_chat_media_test_support import (
     _PNG_BYTES,
-    AsyncMock,
-    BytesIO,
-    Mock,
-    Path,
     PluginCapabilities,
     RenderedMedia,
-    SimpleNamespace,
     _animated_gif_bytes,
     _make_media_runtime,
     _prepare_media_for_llm,
     _raw_media_response,
     _write_png,
-    base64,
     build_effective_user_text,
-    hashlib,
     load_emoji_library,
-    patch,
-    pytest,
     render_event_media,
     render_event_media_text,
 )
@@ -192,15 +192,22 @@ async def test_render_event_media_blocks_private_image_url_without_download(mock
         "message": [
             {
                 "type": "image",
-                "data": {"url": "http://127.0.0.1:5700/private.png"},
+                "data": {"url": "http://127.0.0.1/private.png"},
             }
         ]
     }
-    mock_context.http_session.get = Mock(side_effect=AssertionError("unsafe URL fetched"))
+    from core.safe_http import validate_public_url
+    from plugins.xiaoqing_chat.media.sources import _download_url_bytes
 
-    rendered = await render_event_media(event, context=mock_context, runtime=runtime)
-
-    mock_context.http_session.get.assert_not_called()
+    with (
+        patch("core.safe_http.validate_public_url", wraps=validate_public_url) as validate,
+        patch("core.safe_http.aiohttp.ClientSession") as network,
+    ):
+        with pytest.raises(ValueError, match="non-public"):
+            await _download_url_bytes("http://127.0.0.1/private.png", max_bytes=1024)
+        rendered = await render_event_media(event, context=mock_context, runtime=runtime)
+    assert validate.call_count >= 2
+    network.assert_not_called()
     assert len(rendered) == 1
     assert rendered[0].marker.startswith("[图片：")
 
@@ -238,10 +245,10 @@ async def test_render_event_media_text_marks_napcat_store_emoji_image(mock_conte
             {
                 "type": "image",
                 "data": {
-                    "url": "https://example.com/store_emoji.bin",
+                    "url"             : "https://example.com/store_emoji.bin",
                     "emoji_package_id": 1001,
-                    "emoji_id": "emo-1",
-                    "key": "pkg_123",
+                    "emoji_id"        : "emo-1",
+                    "key"             : "pkg_123",
                 },
             }
         ]
@@ -272,10 +279,10 @@ async def test_render_event_media_text_transcodes_octet_stream_sticker_for_visio
             {
                 "type": "image",
                 "data": {
-                    "url": "https://example.com/store_emoji.bin",
+                    "url"             : "https://example.com/store_emoji.bin",
                     "emoji_package_id": 1001,
-                    "emoji_id": "emo-1",
-                    "summary": "[动画表情]",
+                    "emoji_id"        : "emo-1",
+                    "summary"         : "[动画表情]",
                 },
             }
         ]
@@ -355,7 +362,7 @@ async def test_render_event_media_text_supports_face_segment(mock_context):
             {
                 "type": "face",
                 "data": {
-                    "id": "14",
+                    "id" : "14",
                     "raw": {"text": "微笑"},
                 },
             }
@@ -378,7 +385,7 @@ async def test_event_media_items_for_memory_preserves_qq_face_identity(mock_cont
             {
                 "type": "face",
                 "data": {
-                    "id": "14",
+                    "id" : "14",
                     "raw": {"text": "微笑"},
                 },
             }
@@ -389,12 +396,12 @@ async def test_event_media_items_for_memory_preserves_qq_face_identity(mock_cont
 
     assert items == [
         {
-            "kind": "qq_face",
-            "media_hash": "qq_face:14",
-            "face_id": "14",
-            "marker": "[QQ表情：微笑]",
-            "description": "微笑",
-            "label": "微笑",
+            "kind"        : "qq_face",
+            "media_hash"  : "qq_face:14",
+            "face_id"     : "14",
+            "marker"      : "[QQ表情：微笑]",
+            "description" : "微笑",
+            "label"       : "微笑",
             "emotion_tags": ["微笑"],
         }
     ]
@@ -537,7 +544,7 @@ async def test_render_event_media_text_strips_face_brackets(mock_context):
             {
                 "type": "face",
                 "data": {
-                    "id": "1",
+                    "id" : "1",
                     "raw": {"text": "[狂笑]"},
                 },
             }
@@ -554,14 +561,14 @@ async def test_render_event_media_text_fetches_mface_image_via_onebot_apis(mock_
     runtime = _make_media_runtime()
     event   = {
         "message_id": 42,
-        "message": [
+        "message"   : [
             {
                 "type": "mface",
                 "data": {
                     "emoji_package_id": 1001,
-                    "emoji_id": "emo-1",
-                    "key": "pkg_123",
-                    "summary": "无语",
+                    "emoji_id"        : "emo-1",
+                    "key"             : "pkg_123",
+                    "summary"         : "无语",
                 },
             }
         ],
@@ -583,7 +590,7 @@ async def test_render_event_media_text_fetches_mface_image_via_onebot_apis(mock_
         ),
         get_image=AsyncMock(
             return_value={
-                "base64": base64.b64encode(_PNG_BYTES).decode("ascii"),
+                "base64"   : base64.b64encode(_PNG_BYTES).decode("ascii"),
                 "file_name": "sticker.png",
             }
         ),
@@ -612,10 +619,10 @@ async def test_render_event_media_text_falls_back_to_store_emoji_summary_when_do
             {
                 "type": "image",
                 "data": {
-                    "url": "https://example.com/store_emoji.bin",
+                    "url"             : "https://example.com/store_emoji.bin",
                     "emoji_package_id": 1001,
-                    "emoji_id": "emo-1",
-                    "key": "pkg_123",
+                    "emoji_id"        : "emo-1",
+                    "key"             : "pkg_123",
                 },
             }
         ]

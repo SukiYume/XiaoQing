@@ -53,7 +53,7 @@ CLIENT_IDLE_TTL_SECONDS = 60 * 60
 
 @dataclass
 class _ClientEntry:
-    client: AdnmbClient
+    client   : AdnmbClient
     last_used: float
 
 
@@ -243,8 +243,9 @@ async def format_posts(
 async def format_threads(
     threads: list[Thread],
     client: AdnmbClient,
-    max_items: int     = 10,
-    show_replies: bool = True,
+    max_items: int                 = 10,
+    show_replies: bool             = True,
+    replies_per_thread: int | None = 3,
 ) -> Segments:
     """
     将串列表格式化为消息段
@@ -254,6 +255,7 @@ async def format_threads(
         client: API 客户端
         max_items: 最大显示数量
         show_replies: 是否显示回复
+        replies_per_thread: 每串显示的回复数；None 表示显示本页全部回复（串详情）
 
     返回:
         消息段列表
@@ -266,7 +268,13 @@ async def format_threads(
     for thread in threads[:max_items]:
         all_posts.append(thread.main_post)
         if show_replies:
-            all_posts.extend(thread.replies[:3])  # 每串最多显示 3 条回复
+            # 列表预览每串只看前几条；串详情要显示本页全部回复，否则 -p 翻页永远看不到其余回复。
+            replies = (
+                thread.replies
+                if replies_per_thread is None
+                else thread.replies[:replies_per_thread]
+            )
+            all_posts.extend(replies)
 
     return await format_posts(all_posts, client, max_items=len(all_posts))
 
@@ -507,7 +515,9 @@ async def handle(
                 logger.warning("串 %s 不存在", thread_id)
                 return segments("该串不存在")
             logger.info("获取到串，回复数: %s", len(thread.replies))
-            return await format_threads([thread], client, show_replies=True)
+            return await format_threads(
+                [thread], client, show_replies=True, replies_per_thread=None
+            )
 
         # 单条回复
         if selected_action == "r":

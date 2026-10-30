@@ -2,21 +2,15 @@
 
 from __future__ import annotations
 
-from tests.helpers.pendo_test_support import (
-    ROOT,
-    SimpleNamespace,
-    asyncio,
-)
+import asyncio
+from types import SimpleNamespace
 
 
 class TestReminderBackfillRegression:
     def test_event_list_includes_day_delta_for_each_event(self, monkeypatch, tmp_path):
-        import sys
         from datetime import datetime
         from typing import Any, cast
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers import event as event_module
         from plugins.pendo.handlers.event import EventHandler
@@ -72,11 +66,8 @@ class TestReminderBackfillRegression:
             db.cleanup()
 
     def test_event_list_handles_timezone_aware_event_start_time(self, tmp_path):
-        import sys
         from typing import Any, cast
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import EventItem
@@ -105,10 +96,7 @@ class TestReminderBackfillRegression:
             db.cleanup()
 
     def test_confirm_requires_item_ownership(self):
-        import sys
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.commands.operations import handle_confirm
 
@@ -124,9 +112,6 @@ class TestReminderBackfillRegression:
         reminder_service.confirm_reminder.assert_not_called()
 
     def test_confirm_only_marks_latest_unconfirmed_log(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.commands.operations import handle_confirm
         from plugins.pendo.models.item import EventItem
@@ -189,9 +174,6 @@ class TestReminderBackfillRegression:
             db.cleanup()
 
     def test_confirm_future_remind_time_with_allow_future_creates_preconfirmed_log(self, tmp_path):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.models.item import EventItem
         from plugins.pendo.services.db import Database
@@ -232,11 +214,8 @@ class TestReminderBackfillRegression:
     def test_event_reminders_confirm_today_preconfirms_all_matching_reminders(
         self, tmp_path, monkeypatch
     ):
-        import sys
         from datetime import datetime
         from unittest.mock import MagicMock
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers import event as event_module
         from plugins.pendo.handlers.event import EventHandler
@@ -285,10 +264,7 @@ class TestReminderBackfillRegression:
             db.cleanup()
 
     def test_reminder_disabled_user_does_not_receive_scheduled_reminder(self, monkeypatch):
-        import sys
         from datetime import datetime
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.services import reminder as reminder_module
         from plugins.pendo.services.reminder import ReminderService
@@ -335,8 +311,8 @@ class TestReminderBackfillRegression:
             def get_user_settings(self, user_id):
                 return {
                     "quiet_hours_start": "23:00",
-                    "quiet_hours_end": "07:00",
-                    "settings_json": {"reminder_enabled": False},
+                    "quiet_hours_end"  : "07:00",
+                    "settings_json"    : {"reminder_enabled": False},
                 }
 
             def get_unconfirmed_sent_reminders(self):
@@ -354,10 +330,7 @@ class TestReminderBackfillRegression:
         assert service.db.logged == []
 
     def test_preconfirmed_future_reminder_is_not_sent_by_scheduler(self, monkeypatch):
-        import sys
         from datetime import datetime
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.services import reminder as reminder_module
         from plugins.pendo.services.reminder import ReminderService
@@ -402,10 +375,10 @@ class TestReminderBackfillRegression:
                 assert item_id == "evt123"
                 return [
                     {
-                        "remind_time": "2030-01-01T09:00:00",
-                        "sent_at": None,
+                        "remind_time" : "2030-01-01T09:00:00",
+                        "sent_at"     : None,
                         "confirmed_at": "2030-01-01T08:00:00",
-                        "user_action": "preconfirmed",
+                        "user_action" : "preconfirmed",
                         "repeat_count": 0,
                         "last_sent_at": None,
                     }
@@ -417,8 +390,8 @@ class TestReminderBackfillRegression:
             def get_user_settings(self, user_id):
                 return {
                     "quiet_hours_start": "23:00",
-                    "quiet_hours_end": "07:00",
-                    "settings_json": {"reminder_enabled": True},
+                    "quiet_hours_end"  : "07:00",
+                    "settings_json"    : {"reminder_enabled": True},
                 }
 
             def get_unconfirmed_sent_reminders(self):
@@ -436,10 +409,7 @@ class TestReminderBackfillRegression:
         assert service.db.logged == []
 
     def test_stale_unconfirmed_send_auto_confirms_after_one_day(self, monkeypatch):
-        import sys
         from datetime import datetime
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.services import reminder as reminder_module
         from plugins.pendo.services.reminder import ReminderService
@@ -475,9 +445,9 @@ class TestReminderBackfillRegression:
             def get_unconfirmed_sent_reminders(self):
                 return [
                     {
-                        "id": 4,
-                        "item_id": "evt123",
-                        "remind_time": remind_time,
+                        "id"          : 4,
+                        "item_id"     : "evt123",
+                        "remind_time" : remind_time,
                         "repeat_count": 1,
                         "last_sent_at": "2029-12-31T09:00:00",
                     }
@@ -490,8 +460,8 @@ class TestReminderBackfillRegression:
             def get_user_settings(self, user_id):
                 return {
                     "quiet_hours_start": "23:00",
-                    "quiet_hours_end": "07:00",
-                    "settings_json": {"reminder_enabled": True},
+                    "quiet_hours_end"  : "07:00",
+                    "settings_json"    : {"reminder_enabled": True},
                 }
 
             def confirm_reminder(
@@ -499,9 +469,9 @@ class TestReminderBackfillRegression:
             ):
                 self.confirm_calls.append(
                     {
-                        "item_id": item_id,
+                        "item_id"    : item_id,
                         "user_action": user_action,
-                        "owner_id": owner_id,
+                        "owner_id"   : owner_id,
                         "remind_time": remind_time,
                     }
                 )
@@ -514,9 +484,9 @@ class TestReminderBackfillRegression:
         assert result == []
         assert service.db.confirm_calls == [
             {
-                "item_id": "evt123",
+                "item_id"    : "evt123",
                 "user_action": "auto_confirmed",
-                "owner_id": None,
+                "owner_id"   : None,
                 "remind_time": remind_time,
             }
         ]

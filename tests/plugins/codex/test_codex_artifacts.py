@@ -191,7 +191,7 @@ def test_scan_entry_and_depth_limits_are_bounded_and_reported(tmp_path: Path) ->
     assert depth_result.reasons["scan_max_depth"] == 1
 
 
-def test_rejects_symlinks_and_hardlinks(tmp_path: Path) -> None:
+def test_rejects_symlinks(tmp_path: Path) -> None:
     symlink_base = tmp_path / "symlink"
     symlink_cwd, _, symlink_artifacts, _ = _paths(symlink_base)
     symlink_target = symlink_cwd / "target.png"
@@ -207,6 +207,8 @@ def test_rejects_symlinks_and_hardlinks(tmp_path: Path) -> None:
     assert symlink_result.dropped_count == 1
     assert symlink_result.reasons["symlink"] == 1
 
+
+def test_rejects_hardlinks(tmp_path: Path) -> None:
     hardlink_base = tmp_path / "hardlink"
     hardlink_cwd, _, hardlink_artifacts, _ = _paths(hardlink_base)
     hardlink_target = hardlink_cwd / "target.png"

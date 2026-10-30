@@ -1,7 +1,15 @@
-# mypy: disable-error-code=attr-defined
 """Plugin lifecycle transactions, generation publication, and rollback."""
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections import OrderedDict
+
+    from .plugin_execution import PluginConcurrency, PluginExecutionDrainResult
+    from .plugin_manager_support import LoadedPluginService, _PluginDataDirectory
+    from .plugin_watcher import _ManifestRejection
 
 import asyncio
 import importlib
@@ -53,10 +61,310 @@ logger = logging.getLogger(__name__)
 
 
 class PluginGenerationMixin:
-    _execution_gates: dict[str, PluginExecutionGate]
-    _init_wait_task: asyncio.Task[Any] | None
+    # 由组合类实际提供的成员；这里只为类型检查声明契约，运行时不存在。
+    if TYPE_CHECKING:
+
+        def _abort_source_generation_publication(
+            self,
+            plugin_name: str,
+            finder: _SourceOnlyPluginFinder | None,
+            execution_gate: PluginExecutionGate,
+        ) -> None:
+            raise NotImplementedError
+
+        def _authorize_plugin_snapshot(
+            self,
+            plugin_dir: Path,
+            definition: PluginDefinition,
+        ) -> _PluginContentFingerprint:
+            raise NotImplementedError
+
+        async def _await_uncancellable_thread_transaction(
+            self,
+            callback: Callable[..., Any],
+            /,
+            *args: Any,
+            **kwargs: Any,
+        ) -> Any:
+            raise NotImplementedError
+
+        @staticmethod
+        def _bind_declared_services(
+            definition: PluginDefinition,
+            module: ModuleType,
+        ) -> Mapping[str, LoadedPluginService]:
+            raise NotImplementedError
+
+        def _build_command_specs(
+            self,
+            definition: PluginDefinition,
+            module: ModuleType,
+            execution_gate: PluginExecutionGate | None = None,
+        ) -> list[CommandSpec]:
+            raise NotImplementedError
+
+        async def _capture_plugin_snapshot_async(
+            self,
+            plugin_dir: Path,
+            definition: PluginDefinition,
+            *,
+            previous: int | float | None = None,
+        ) -> _PluginContentFingerprint:
+            raise NotImplementedError
+
+        def _claim_plugin_namespace(self, plugin_name: str) -> bool:
+            raise NotImplementedError
+
+        async def _close_generation_gate(
+            self,
+            name: str,
+            plugin: LoadedPlugin | None,
+            gate: PluginExecutionGate,
+            *,
+            phase: str,
+            discard_registered_plugin: bool = False,
+            shutdown_deadline: float | None = None,
+        ) -> PluginExecutionDrainResult:
+            raise NotImplementedError
+
+        _data_directories: dict[str, _PluginDataDirectory]
+
+        _deferred_lifecycle_errors: dict[str, list[BaseException]]
+
+        def _definition_is_current(
+            self,
+            plugin_dir: Path,
+            definition: PluginDefinition,
+            mtime: int | float,
+            *,
+            module: ModuleType | None                  = None,
+            authorized_entry: Path | None              = None,
+            transaction: _PluginLoadTransaction | None = None,
+        ) -> bool:
+            raise NotImplementedError
+
+        async def _definition_is_current_async(
+            self,
+            plugin_dir: Path,
+            definition: PluginDefinition,
+            mtime: int | float,
+            *,
+            module: ModuleType | None                  = None,
+            authorized_entry: Path | None              = None,
+            transaction: _PluginLoadTransaction | None = None,
+        ) -> bool:
+            raise NotImplementedError
+
+        def _ensure_plugin_data_dir(self, plugin_name: str, *, force: bool = False) -> Path:
+            raise NotImplementedError
+
+        def _freeze_source_generation(self, plugin_name: str) -> None:
+            raise NotImplementedError
+
+        async def _freeze_source_generation_async(self, plugin_name: str) -> None:
+            raise NotImplementedError
+
+        def _has_plugin_runtime(self, name: str) -> bool:
+            raise NotImplementedError
+
+        _init_task_plugins: dict[asyncio.Task[Any], str]
+
+        _init_tasks: list[asyncio.Task[Any]]
+
+        def _is_plugin_dir(self, path: Path) -> bool:
+            raise NotImplementedError
+
+        _lifecycle_lock: Any
+
+        def _load_definition(self, plugin_dir: Path) -> PluginDefinition | _ManifestRejection:
+            raise NotImplementedError
+
+        def _load_module(
+            self,
+            plugin_dir: Path,
+            definition: PluginDefinition,
+            *,
+            transaction: _PluginLoadTransaction | None              = None,
+            prepared: tuple[Path, Path, Mapping[str, bytes]] | None = None,
+        ) -> tuple[ModuleType | None, asyncio.Task[Any] | None]:
+            raise NotImplementedError
+
+        def _mark_source_finder_compromised(self, plugin_name: str, reason: str) -> None:
+            raise NotImplementedError
+
+        _module_origin_cache: OrderedDict[
+            tuple[str, int, str, tuple[int, int, int, int]], Path | None
+        ]
+
+        _namespace_owner_token: Any
+
+        def _new_execution_gate(
+            self,
+            mode: PluginConcurrency,
+            plugin_name: str,
+            capabilities: frozenset[str] = frozenset(),
+        ) -> PluginExecutionGate:
+            raise NotImplementedError
+
+        def _notify_change(self, name: str) -> None:
+            raise NotImplementedError
+
+        _owned_plugin_modules: dict[str, dict[str, ModuleType]]
+
+        def _owns_plugin_namespace(self, plugin_name: str) -> bool:
+            raise NotImplementedError
+
+        _pending_plugins: dict[asyncio.Task[Any], tuple[PluginDefinition, ModuleType, float]]
+
+        _pending_transactions: dict[asyncio.Task[Any], _PluginLoadTransaction]
+
+        def _plugin_runtime_names(self) -> set[str]:
+            raise NotImplementedError
+
+        _plugin_states: dict[str, dict[str, Any]]
+
+        _plugins: dict[str, LoadedPlugin]
+
+        def _prepare_inactive_source_finder(
+            self,
+            plugin_name: str,
+            plugin_root: Path,
+            sources: Mapping[str, bytes],
+        ) -> _SourceOnlyPluginFinder:
+            raise NotImplementedError
+
+        def _prepare_module_load(
+            self,
+            plugin_dir: Path,
+            definition: PluginDefinition,
+            transaction: _PluginLoadTransaction | None,
+            *,
+            fingerprint: _PluginContentFingerprint | None = None,
+        ) -> tuple[Path, Path, Mapping[str, bytes]]:
+            raise NotImplementedError
+
+        _private_plugin_modules: dict[str, dict[str, ModuleType]]
+
+        def _purge_generation_modules(
+            self,
+            name: str,
+            plugin: LoadedPlugin | None,
+            gate: PluginExecutionGate,
+            *,
+            phase: str,
+        ) -> dict[str, ModuleType]:
+            raise NotImplementedError
+
+        async def _purge_generation_modules_async(
+            self,
+            name: str,
+            plugin: LoadedPlugin | None,
+            gate: PluginExecutionGate,
+            *,
+            phase: str,
+        ) -> dict[str, ModuleType]:
+            raise NotImplementedError
+
+        def _quarantine_closed_plugin(
+            self,
+            name: str,
+            plugin: LoadedPlugin,
+            gate: PluginExecutionGate,
+            *,
+            phase: str,
+            reason: str,
+        ) -> None:
+            raise NotImplementedError
+
+        def _quarantine_gate_without_module(
+            self,
+            name: str,
+            gate: PluginExecutionGate,
+            *,
+            phase: str,
+            reason: str,
+        ) -> None:
+            raise NotImplementedError
+
+        _quarantined_plugins: set[str]
+
+        def _quiesce_source_generation_for_publication(
+            self,
+            plugin_name: str,
+        ) -> _SourceOnlyPluginFinder | None:
+            raise NotImplementedError
+
+        async def _reconcile_plugins_once(self) -> None:
+            raise NotImplementedError
+
+        def _release_plugin_namespace(self, plugin_name: str) -> None:
+            raise NotImplementedError
+
+        def _require_hot_reload(self) -> None:
+            raise NotImplementedError
+
+        _restart_required_plugins: set[str]
+
+        def _resume_source_generation_after_publication(
+            self,
+            plugin_name: str,
+            finder: _SourceOnlyPluginFinder | None,
+            execution_gate: PluginExecutionGate,
+            publication_token: object,
+        ) -> None:
+            raise NotImplementedError
+
+        _services: dict[str, LoadedPluginService]
+
+        def _shutdown_data_dir(self, name: str, plugin: LoadedPlugin) -> Path | None:
+            raise NotImplementedError
+
+        _source_finders: dict[str, _SourceOnlyPluginFinder]
+
+        def _unregister_services_owned_by(self, plugin_name: str) -> None:
+            raise NotImplementedError
+
+        @classmethod
+        def _validate_entry_module(
+            cls,
+            module: ModuleType,
+            module_name: str,
+            authorized_entry: Path,
+        ) -> None:
+            raise NotImplementedError
+
+        def _validate_owned_namespace(
+            self,
+            plugin_name: str,
+            entry_module_name: str,
+            entry_module: ModuleType,
+        ) -> None:
+            raise NotImplementedError
+
+        @staticmethod
+        def _wait_for_module_import_barriers(
+            module_names: tuple[str, ...] | list[str] | set[str],
+            *,
+            timeout: float = _PLUGIN_IMPORT_DRAIN_TIMEOUT_SECONDS,
+        ) -> None:
+            raise NotImplementedError
+
+        @staticmethod
+        def _watch_file_identity(metadata: os.stat_result) -> tuple[int, int, int, int]:
+            raise NotImplementedError
+
+        context_factory: Any
+
+        def list_plugins(self) -> list[str]:
+            raise NotImplementedError
+
+        plugins_dir: Any
+
+        router: Any
+    _execution_gates   : dict[str, PluginExecutionGate]
+    _init_wait_task    : asyncio.Task[Any] | None
     _pending_finalizers: dict[str, asyncio.Task[Any]]
-    _plugins_package: ModuleType
+    _plugins_package   : ModuleType
 
     def load_all(self) -> None:
         """Load every plugin without blocking a running event loop on snapshots.
@@ -436,9 +744,9 @@ class PluginGenerationMixin:
     async def _wait_for_pending_finalizers(self) -> None:
         """Wait until every already-claimed pending generation reaches a terminal state."""
 
-        fatal_error: BaseException | None        = None
+        fatal_error       : BaseException | None = None
         interruption_error: BaseException | None = None
-        ordinary_error: BaseException | None     = None
+        ordinary_error    : BaseException | None = None
         while self._pending_finalizers:
             finalizers = tuple(dict.fromkeys(self._pending_finalizers.values()))
             for finalizer in finalizers:
@@ -557,12 +865,12 @@ class PluginGenerationMixin:
     ) -> None:
         """Atomically claim each result without hiding later work from unload."""
 
-        fatal_error: BaseException | None        = None
+        fatal_error       : BaseException | None = None
         interruption_error: BaseException | None = None
         for task, result in zip(tasks, results, strict=True):
-            finalizer: asyncio.Task[bool] | None = None
-            plugin_name: str | None              = None
-            publish_error: BaseException | None  = None
+            finalizer    : asyncio.Task[bool] | None = None
+            plugin_name  : str | None                = None
+            publish_error: BaseException | None      = None
             async with self._lifecycle_lock.get():
                 while task in self._init_tasks:
                     self._init_tasks.remove(task)
@@ -928,7 +1236,7 @@ class PluginGenerationMixin:
             for task, (definition, _module, _mtime) in self._pending_plugins.items()
             if definition.name == name
         )
-        finalizers: set[asyncio.Task[Any]]     = set()
+        finalizers  : set[asyncio.Task[Any]]   = set()
         orphan_tasks: list[asyncio.Task[None]] = []
         for task in tasks_to_cancel:
             self._init_task_plugins.pop(task, None)
@@ -1135,6 +1443,9 @@ class PluginGenerationMixin:
         plugin_dir = self.plugins_dir / name
         try:
             definition = await asyncio.to_thread(self._load_definition, plugin_dir)
+        except asyncio.CancelledError:
+            # 读取被取消不是候选失效的证据：保留健康的旧代际，原样传播取消。
+            raise
         except BaseException as exc:
             try:
                 await self._unload_plugin_once(name)
@@ -1172,6 +1483,9 @@ class PluginGenerationMixin:
                 plugin_dir,
                 definition,
             )
+        except asyncio.CancelledError:
+            # 读取被取消不是候选失效的证据：保留健康的旧代际，原样传播取消。
+            raise
         except BaseException as exc:
             if self._is_fatal_base_exception(exc):
                 try:
@@ -2279,7 +2593,7 @@ class PluginGenerationMixin:
     ) -> None:
         """按子到父顺序删除模块；任一身份校验失败时恢复全部已删对象。"""
 
-        removed_modules: dict[str, ModuleType]                              = {}
+        removed_modules          : dict[str, ModuleType]                    = {}
         removed_parent_attributes: list[tuple[ModuleType, str, ModuleType]] = []
         try:
             for module_name, expected in sorted(
@@ -2445,9 +2759,9 @@ class PluginGenerationMixin:
     ]:
         """验证待恢复模块的父链，并记录真正需要写入的空槽位。"""
 
-        parent_bindings: dict[str, tuple[dict[str, Any], str] | None] = {}
-        missing_module_slots: set[str]                                = set()
-        missing_parent_slots: set[str]                                = set()
+        parent_bindings     : dict[str, tuple[dict[str, Any], str] | None] = {}
+        missing_module_slots: set[str]                                     = set()
+        missing_parent_slots: set[str]                                     = set()
         for module_name, module in ordered:
             current = sys.modules.get(module_name, missing)
             if current is not missing and current is not module:

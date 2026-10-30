@@ -174,18 +174,18 @@ def test_custom_colors_are_scoped_and_atomic(tmp_path: Path) -> None:
     first = _ScopedContext(tmp_path, group_id=101)
     second = _ScopedContext(tmp_path, group_id=202)
     first_color = {
-        "name": "甲",
+        "name"  : "甲",
         "pinyin": "",
-        "RGB": [1, 2, 3],
-        "hex": "#010203",
-        "CMYK": [67, 33, 0, 99],
+        "RGB"   : [1, 2, 3],
+        "hex"   : "#010203",
+        "CMYK"  : [67, 33, 0, 99],
     }
     second_color = {
-        "name": "乙",
+        "name"  : "乙",
         "pinyin": "",
-        "RGB": [4, 5, 6],
-        "hex": "#040506",
-        "CMYK": [33, 17, 0, 98],
+        "RGB"   : [4, 5, 6],
+        "hex"   : "#040506",
+        "CMYK"  : [33, 17, 0, 98],
     }
 
     color_data.mutate_custom_colors(first, lambda colors: colors.append(first_color))

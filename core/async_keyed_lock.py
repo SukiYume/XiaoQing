@@ -13,7 +13,7 @@ from typing import Any
 
 @dataclass
 class _Entry:
-    lock: asyncio.Lock
+    lock : asyncio.Lock
     users: int                      = 0
     owner: asyncio.Task[Any] | None = None
     depth: int                      = 0

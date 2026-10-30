@@ -110,23 +110,23 @@ def _non_negative_int(value: Any, *, field_name: str) -> int:
 
 @dataclass
 class ReviewPolicy:
-    goal_override: str     = ""
+    goal_override  : str   = ""
     goal_lock_until: float = 0.0
-    strategy_note: str     = ""
-    avoid_patterns: list[str] = field(default_factory=list)
+    strategy_note  : str   = ""
+    avoid_patterns : list[str] = field(default_factory=list)
 
 
 @dataclass
 class ReviewSession:
-    session_id: str
-    kind: str
-    chat_id: str
-    created_at: float
-    expires_at: float
-    step: int           = 0
+    session_id  : str
+    kind        : str
+    chat_id     : str
+    created_at  : float
+    expires_at  : float
+    step        : int   = 0
     last_push_ts: float = 0.0
-    payload: dict[str, Any] = field(default_factory=dict)
-    answers: list[str] = field(default_factory=list)
+    payload     : dict[str, Any] = field(default_factory=dict)
+    answers     : list[str] = field(default_factory=list)
 
 
 def _normalize_sessions_state(raw: Any) -> tuple[dict[str, Any], bool]:
@@ -194,10 +194,10 @@ def _normalize_policy_document(raw: Any) -> tuple[dict[str, Any], bool]:
         field_name="goal_lock_until",
     )
     normalized = {
-        "goal_override": goal_override.strip(),
+        "goal_override"  : goal_override.strip(),
         "goal_lock_until": goal_lock_until,
-        "strategy_note": strategy_note.strip(),
-        "avoid_patterns": normalized_patterns,
+        "strategy_note"  : strategy_note.strip(),
+        "avoid_patterns" : normalized_patterns,
     }
     return normalized, normalized != raw
 
@@ -284,10 +284,10 @@ class ReviewStore(StoreBase):
         with self._lock:
             payload, _repaired = _normalize_policy_document(
                 {
-                    "goal_override": pol.goal_override,
+                    "goal_override"  : pol.goal_override,
                     "goal_lock_until": pol.goal_lock_until,
-                    "strategy_note": pol.strategy_note,
-                    "avoid_patterns": list(pol.avoid_patterns),
+                    "strategy_note"  : pol.strategy_note,
+                    "avoid_patterns" : list(pol.avoid_patterns),
                 }
             )
             path = self._policy_path(chat_id)
@@ -357,8 +357,10 @@ class ReviewStore(StoreBase):
                             st["last_closed"]                = last_closed
                     active.pop(sid, None)
                     removed += 1
-            st["active"] = active
-            self._save_sessions_state(st)
+            # 只在状态真的变化时落盘：这条路径每条聊天消息都会经过，空清理不能反复重写文件。
+            if removed:
+                st["active"] = active
+                self._save_sessions_state(st)
             return removed
 
     def get_session(self, session_id: str) -> ReviewSession | None:
@@ -372,6 +374,10 @@ class ReviewStore(StoreBase):
                 return None
             obj = active.get(sid)
             if not isinstance(obj, dict):
+                return None
+            # 过期会话在存储边界统一拒绝：清理任务尚未运行时也不能再提交答案或修改策略。
+            exp = float(obj.get("expires_at", 0.0) or 0.0)
+            if exp and time.time() >= exp:
                 return None
             return _decode_session(sid, obj)
 
@@ -463,6 +469,8 @@ class ReviewStore(StoreBase):
                 return
             if sess.session_id not in active:
                 return
+            if sess.expires_at and time.time() >= sess.expires_at:
+                return
             active[sess.session_id] = _encode_session(sess)
             st["active"]            = active
             self._save_sessions_state(st)
@@ -470,14 +478,14 @@ class ReviewStore(StoreBase):
 
 def _encode_session(sess: ReviewSession) -> dict[str, Any]:
     return {
-        "kind": sess.kind,
-        "chat_id": sess.chat_id,
-        "created_at": sess.created_at,
-        "expires_at": sess.expires_at,
-        "step": sess.step,
+        "kind"        : sess.kind,
+        "chat_id"     : sess.chat_id,
+        "created_at"  : sess.created_at,
+        "expires_at"  : sess.expires_at,
+        "step"        : sess.step,
         "last_push_ts": sess.last_push_ts,
-        "payload": sess.payload,
-        "answers": list(sess.answers),
+        "payload"     : sess.payload,
+        "answers"     : list(sess.answers),
     }
 
 
@@ -564,6 +572,9 @@ async def maybe_push_session(
     if not operator_user_id and not operator_group_id:
         return False
     now = time.time()
+    if sess.expires_at and now >= sess.expires_at:
+        # 超时的会话不再推送；它会在下一次清理时关闭。
+        return False
     if (
         resend_interval_seconds > 0
         and sess.last_push_ts
@@ -606,6 +617,9 @@ def apply_review_answer(
 ) -> tuple[ReviewSession, str | None]:
     a = (answer or "").strip()
     if not a:
+        return sess, None
+    if sess.expires_at and time.time() >= sess.expires_at:
+        # 审查超时后的答案不再修改目标、策略备注或长期规避模式。
         return sess, None
     pol     = store.get_policy(sess.chat_id)
     applied = None

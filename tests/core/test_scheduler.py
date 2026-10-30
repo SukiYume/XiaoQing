@@ -622,6 +622,7 @@ class TestAddJob:
 
         # 只有第二个任务应该执行
         assert len(count2) > 0
+        assert count1 == []
 
     @pytest.mark.asyncio
     async def test_invalid_replacement_keeps_existing_job(self, scheduler: SchedulerManager):

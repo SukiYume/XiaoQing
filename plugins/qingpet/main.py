@@ -12,7 +12,7 @@ import logging
 import math
 import re
 import secrets
-from functools import lru_cache
+from functools import lru_cache, partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -90,7 +90,7 @@ from .utils.time import business_date, business_week
 
 _db_instance: Database | None = None
 
-_pet_service: PetService | None       = None
+_pet_service   : PetService | None    = None
 _social_service: SocialService | None = None
 
 _router: CommandRouter | None = None
@@ -138,15 +138,15 @@ _SPAM_DECAY_COMMANDS = frozenset({"feed", "clean", "play", "train", "explore"})
 _MESSAGE_ID_COMMANDS = frozenset({"visit", "game"})
 _SHOW_MEDALS         = ("🥇", "🥈", "🥉")
 _ADMIN_HANDLERS      = {
-    "enable": handle_manage_enable,
-    "disable": handle_manage_disable,
-    "config": handle_manage_config,
-    "reset": handle_manage_reset,
-    "delete": handle_manage_delete,
-    "ban": handle_manage_ban,
-    "unban": handle_manage_unban,
-    "log": handle_manage_log,
-    "stats": handle_manage_stats,
+    "enable"  : handle_manage_enable,
+    "disable" : handle_manage_disable,
+    "config"  : handle_manage_config,
+    "reset"   : handle_manage_reset,
+    "delete"  : handle_manage_delete,
+    "ban"     : handle_manage_ban,
+    "unban"   : handle_manage_unban,
+    "log"     : handle_manage_log,
+    "stats"   : handle_manage_stats,
     "announce": handle_manage_announce,
     "activity": handle_manage_activity,
 }
@@ -242,6 +242,22 @@ def _has_leading_qq_target(text: str) -> bool:
 # ──────────────────── 初始化与清理 ────────────────────
 
 
+async def _open_database_owned(db_path: str) -> Database:
+    """在线程中打开数据库；调用方取消时，迟到的构造结果会被关闭而不是泄漏连接。"""
+
+    task = asyncio.create_task(asyncio.to_thread(Database, db_path))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+
+        def close_late(done: asyncio.Task[Database]) -> None:
+            if not done.cancelled() and done.exception() is None:
+                done.result().cleanup()
+
+        task.add_done_callback(close_late)
+        raise
+
+
 async def init(context) -> None:
     global _db_instance, _pet_service, _social_service, _router
 
@@ -255,7 +271,7 @@ async def init(context) -> None:
         data_dir = context.data_dir if hasattr(context, "data_dir") else "data"
         db_path  = Path(data_dir) / "qingpet" / "qingpet.db"
 
-        database = await asyncio.to_thread(Database, str(db_path))
+        database = await _open_database_owned(str(db_path))
 
         # 定时任务跨调用复用这两个无请求状态的服务对象。
         pet_service    = PetService(database)
@@ -265,6 +281,17 @@ async def init(context) -> None:
         _pet_service    = pet_service
         _social_service = social_service
         _router         = None
+
+        # 进程跨午夜停机时午夜任务不会补跑：启动时按业务日期补一次每日结算。
+        try:
+            await asyncio.to_thread(partial(_settle_daily_reset, database, log, scheduled=False))
+        except Exception as exc:
+            public_error_message(
+                context,
+                exc,
+                logger    = log,
+                component = "qingpet.init.daily_reset",
+            )
 
         log.info("Qingpet plugin initialized successfully")
     except Exception as exc:
@@ -467,43 +494,43 @@ def _get_router(context: Any = None) -> CommandRouter:
         return wrapper
 
     handlers = {
-        "adopt": handle_adopt,
-        "status": handle_status,
-        "feed": handle_feed,
-        "clean": handle_clean,
-        "play": handle_play,
-        "sleep": handle_sleep,
-        "wake": handle_wake,
-        "train": handle_train,
-        "explore": handle_explore,
-        "treat": handle_treat,
-        "rename": handle_rename,
-        "recall": handle_recall,
-        "backpack": handle_backpack,
-        "shop": handle_shop,
-        "buy": handle_buy,
-        "use": handle_use,
-        "gift": handle_gift,
-        "dress": handle_dress,
-        "visit": handle_visit,
-        "view": handle_view_pet,
-        "like": handle_like,
-        "message": handle_message,
-        "ranking": handle_ranking,
-        "trade": handle_trade,
-        "show": handle_show,
-        "game": handle_minigame,
-        "task": handle_task,
+        "adopt"     : handle_adopt,
+        "status"    : handle_status,
+        "feed"      : handle_feed,
+        "clean"     : handle_clean,
+        "play"      : handle_play,
+        "sleep"     : handle_sleep,
+        "wake"      : handle_wake,
+        "train"     : handle_train,
+        "explore"   : handle_explore,
+        "treat"     : handle_treat,
+        "rename"    : handle_rename,
+        "recall"    : handle_recall,
+        "backpack"  : handle_backpack,
+        "shop"      : handle_shop,
+        "buy"       : handle_buy,
+        "use"       : handle_use,
+        "gift"      : handle_gift,
+        "dress"     : handle_dress,
+        "visit"     : handle_visit,
+        "view"      : handle_view_pet,
+        "like"      : handle_like,
+        "message"   : handle_message,
+        "ranking"   : handle_ranking,
+        "trade"     : handle_trade,
+        "show"      : handle_show,
+        "game"      : handle_minigame,
+        "task"      : handle_task,
         "group_task": handle_group_task,
-        "title": handle_title,
-        "activity": handle_activity,
-        "admin": _handle_admin_command,
-        "help": _wrap_help(),
-        "basic": _wrap_help("basic"),
-        "advanced": _wrap_help("advanced"),
-        "item": _wrap_help("item"),
-        "social": _wrap_help("social"),
-        "gameplay": _wrap_help("gameplay"),
+        "title"     : handle_title,
+        "activity"  : handle_activity,
+        "admin"     : _handle_admin_command,
+        "help"      : _wrap_help(),
+        "basic"     : _wrap_help("basic"),
+        "advanced"  : _wrap_help("advanced"),
+        "item"      : _wrap_help("item"),
+        "social"    : _wrap_help("social"),
+        "gameplay"  : _wrap_help("gameplay"),
         "management": _wrap_help("management"),
     }
     _router = CommandRouter(root, handlers)
@@ -517,7 +544,7 @@ def _parse_requested_action(
     args: str,
     context: Any,
 ) -> tuple[str, str, CommandInvocation] | None:
-    """由 Core 目录解析子命令，并兼容重复写一次根命令别名。"""
+    """由 Core 目录解析子命令；执行的节点必须与 Core 授权的节点一致。"""
 
     root       = _catalog_root(context)
     invocation = resolve_context_command_invocation(context, root.code, args)
@@ -526,18 +553,12 @@ def _parse_requested_action(
     if len(invocation.chain) > 1:
         return invocation.chain[1].name, invocation.remainder_after(1), invocation
 
+    # 不再把重复写的根命令剥掉重新解析：Core 只按它解析到的节点授权，
+    # 插件自行解析出的更深节点（例如管理命令）没有经过授权检查。
     parsed = _split_command(args)
     if parsed is None:
         return None
     action, rest_args = parsed
-    if action.casefold() in {root.name.casefold(), *(alias.casefold() for alias in root.aliases)}:
-        invocation = resolve_catalog_invocation(root, rest_args)
-        if len(invocation.chain) > 1:
-            return invocation.chain[1].name, invocation.remainder_after(1), invocation
-        reparsed = _split_command(rest_args)
-        if reparsed is None:
-            return None
-        action, rest_args = reparsed
     return action.casefold(), rest_args, invocation
 
 
@@ -902,7 +923,8 @@ async def scheduled_trade_expiry(context) -> None:
             logger    = log,
             component = "qingpet.schedule.trade_expiry",
         )
-    return
+        # 存储失败交给调度器记录为失败，不能当作“本轮没有过期交易”。
+        raise
 
 
 async def scheduled_pet_show_settlement(context) -> list[ScheduledDelivery]:
@@ -933,6 +955,32 @@ async def scheduled_pet_show_settlement(context) -> list[ScheduledDelivery]:
         return []
 
 
+def _settle_daily_reset(db: Database, log: Any, *, scheduled: bool = True) -> None:
+    """按业务日期结算每日重置；午夜任务和启动补结算共用，同一天只结算一次。
+
+    启动补结算只处理已有结算记录的群：从未结算过的群没有可比较的日期，等午夜任务。
+    """
+
+    period      = business_date()
+    reset_count = 0
+    age_count   = 0
+    for group_id in db.get_enabled_group_ids():
+        days = db.missed_daily_reset_days(group_id, period)
+        if days is None:
+            days = 1 if scheduled else 0
+        if days <= 0:
+            continue
+        result = db.run_daily_reset_atomic(f"{period}:{group_id}", group_id, age_days=days)
+        if result is None:
+            continue
+        reset_count += result.users_reset
+        age_count += result.pets_aged
+    log.info("Daily reset completed users=%s pets=%s", reset_count, age_count)
+
+    db.cleanup_expired_titles()
+    log.info("Expired titles cleaned up")
+
+
 async def scheduled_daily_reset(context) -> None:
     """
     每日重置（每天00:00）。
@@ -944,23 +992,8 @@ async def scheduled_daily_reset(context) -> None:
         return
     db = _db_instance
 
-    def _run_job() -> None:
-        period      = business_date()
-        reset_count = 0
-        age_count   = 0
-        for group_id in db.get_enabled_group_ids():
-            result = db.run_daily_reset_atomic(f"{period}:{group_id}", group_id)
-            if result is None:
-                continue
-            reset_count += result.users_reset
-            age_count += result.pets_aged
-        log.info("Daily reset completed users=%s pets=%s", reset_count, age_count)
-
-        db.cleanup_expired_titles()
-        log.info("Expired titles cleaned up")
-
     try:
-        await asyncio.to_thread(_run_job)
+        await asyncio.to_thread(_settle_daily_reset, db, log)
     except Exception as exc:
         public_error_message(
             context,

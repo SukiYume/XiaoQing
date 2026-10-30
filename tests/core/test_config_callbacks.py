@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
+
+import pytest
+
 import tests.helpers.config_test_support as _fixture_support
 from tests.helpers.config_test_support import (
     ConfigManager,
     ConfigSnapshot,
     _last_notified_revision,
-    asyncio,
-    pytest,
-    threading,
 )
 
 config_file     = _fixture_support.config_file
@@ -53,9 +55,9 @@ class TestConfigManagerOnReload:
         self,
         config_manager: ConfigManager,
     ):
-        callback_snapshots: list[ConfigSnapshot]         = []
-        mutation_errors: list[BaseException]             = []
-        observed: list[tuple[str, tuple[int, ...], int]] = []
+        callback_snapshots: list[ConfigSnapshot]                   = []
+        mutation_errors   : list[BaseException]                    = []
+        observed          : list[tuple[str, tuple[int, ...], int]] = []
 
         def malicious(snapshot: ConfigSnapshot) -> None:
             callback_snapshots.append(snapshot)
@@ -100,7 +102,7 @@ class TestConfigManagerOnReload:
         class FatalCallback(BaseException):
             pass
 
-        fatal_revisions: list[int]    = []
+        fatal_revisions   : list[int] = []
         observed_revisions: list[int] = []
 
         def fatal(snapshot: ConfigSnapshot) -> None:
@@ -126,8 +128,8 @@ class TestConfigManagerOnReload:
         class FatalCallback(BaseException):
             pass
 
-        fatal_revisions: list[int]   = []
-        observed: asyncio.Queue[int] = asyncio.Queue()
+        fatal_revisions: list[int]          = []
+        observed       : asyncio.Queue[int] = asyncio.Queue()
 
         async def fatal(snapshot: ConfigSnapshot) -> None:
             await asyncio.sleep(0)
@@ -250,7 +252,7 @@ class TestConfigManagerSecurityUpdates:
         class FatalSecurityCallback(BaseException):
             pass
 
-        fatal_revisions: list[int]    = []
+        fatal_revisions   : list[int] = []
         security_revisions: list[int] = []
         ordinary_entered              = threading.Event()
         release_ordinary              = threading.Event()

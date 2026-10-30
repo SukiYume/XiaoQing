@@ -80,7 +80,7 @@ def dynamic_pad_collate(batch: list[dict[str, list[int]]], pad_id: int = 0) -> d
         if has_tti:
             tti.append(b["token_type_ids"] + [0] * pad)
     result = {
-        "input_ids": torch.tensor(input_ids, dtype=torch.long),
+        "input_ids"     : torch.tensor(input_ids, dtype=torch.long),
         "attention_mask": torch.tensor(attn, dtype=torch.long),
     }
     if has_tti:

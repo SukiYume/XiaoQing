@@ -27,8 +27,8 @@ from core.session import SessionManager
 def sample_context(tmp_path: Path) -> PluginContext:
     """创建示例 PluginContext"""
     calls: dict[str, Any] = {
-        "send_action": [],
-        "reload_config": 0,
+        "send_action"   : [],
+        "reload_config" : 0,
         "reload_plugins": 0,
     }
 
@@ -73,7 +73,7 @@ def sample_context(tmp_path: Path) -> PluginContext:
         config  = {"bot_name": "测试机器人", "command_prefixes": ["/"]},
         secrets = {
             "admin_user_ids": [12345],
-            "plugins": {"echo": {"api_key": "plugin-key"}, "other": {"hidden": True}},
+            "plugins"       : {"echo": {"api_key": "plugin-key"}, "other": {"hidden": True}},
         },
         plugin_name         = "echo",
         plugin_dir          = tmp_path / "plugins" / "echo",

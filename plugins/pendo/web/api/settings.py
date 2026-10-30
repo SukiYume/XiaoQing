@@ -22,13 +22,13 @@ class SettingsUpdate(BaseModel):  # type: ignore[misc]
 
     model_config = ConfigDict(extra="forbid")
 
-    timezone: str | None                 = None
-    quiet_hours_start: str | None        = None
-    quiet_hours_end: str | None          = None
-    daily_report_time: str | None        = None
-    diary_remind_time: str | None        = None
-    default_category: str | None         = None
-    settings_json: dict[str, Any] | None = None
+    timezone         : str | None            = None
+    quiet_hours_start: str | None            = None
+    quiet_hours_end  : str | None            = None
+    daily_report_time: str | None            = None
+    diary_remind_time: str | None            = None
+    default_category : str | None            = None
+    settings_json    : dict[str, Any] | None = None
 
 
 def _normalize_time_text(value: str, field_name: str) -> str:

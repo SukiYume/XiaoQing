@@ -41,18 +41,18 @@ class _Response:
 
 def _photo_item(**updates: object) -> dict[str, object]:
     item: dict[str, object] = {
-        "id": "123456789",
-        "owner": "98765432@N01",
-        "ownername": "Astro Photographer",
-        "secret": "abcdef1234",
-        "server": "65535",
-        "title": "Night Sky",
+        "id"         : "123456789",
+        "owner"      : "98765432@N01",
+        "ownername"  : "Astro Photographer",
+        "secret"     : "abcdef1234",
+        "server"     : "65535",
+        "title"      : "Night Sky",
         "description": {"_content": "A quiet night."},
-        "license": "4",
-        "datetaken": "2026-08-18 03:04:05",
-        "tags": "night sky telescope",
-        "media": "photo",
-        "url_c": "https://live.staticflickr.com/65535/123456789_abcdef1234_c.jpg",
+        "license"    : "4",
+        "datetaken"  : "2026-08-18 03:04:05",
+        "tags"       : "night sky telescope",
+        "media"      : "photo",
+        "url_c"      : "https://live.staticflickr.com/65535/123456789_abcdef1234_c.jpg",
     }
     item.update(updates)
     return item
@@ -60,7 +60,7 @@ def _photo_item(**updates: object) -> dict[str, object]:
 
 def _page_payload(*items: object, container: str = "photos") -> dict[str, object]:
     return {
-        "stat": "ok",
+        "stat"   : "ok",
         container: {"page": 1, "pages": 2, "total": "3", "photo": list(items)},
     }
 
@@ -193,8 +193,8 @@ async def test_api_failure_is_typed_without_remote_message_or_key(
     context.http_session = QueuedAiohttpSession(
         _Response(
             {
-                "stat": "fail",
-                "code": 100,
+                "stat"   : "fail",
+                "code"   : 100,
                 "message": "private upstream detail test-api-key",
             }
         )
@@ -268,20 +268,20 @@ async def test_public_photos_album_and_info_use_expected_contracts(
 ) -> None:
     client       = flickr_client.FlickrClient(context)
     info_payload = {
-        "stat": "ok",
+        "stat" : "ok",
         "photo": {
-            "id": "123456789",
-            "server": "65535",
-            "secret": "abcdef1234",
+            "id"     : "123456789",
+            "server" : "65535",
+            "secret" : "abcdef1234",
             "license": "4",
-            "owner": {
-                "nsid": "98765432@N01",
+            "owner"  : {
+                "nsid"    : "98765432@N01",
                 "username": "Astro Photographer",
             },
-            "title": {"_content": "Night Sky"},
+            "title"      : {"_content": "Night Sky"},
             "description": {"_content": "Long description"},
-            "dates": {"taken": "2026-08-18 03:04:05"},
-            "tags": {"tag": [{"raw": "night"}, {"raw": "sky"}]},
+            "dates"      : {"taken": "2026-08-18 03:04:05"},
+            "tags"       : {"tag": [{"raw": "night"}, {"raw": "sky"}]},
         },
     }
     client._call = AsyncMock(

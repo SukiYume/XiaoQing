@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import re
 import threading
 import time
 import weakref
@@ -19,17 +20,29 @@ from ..store_base import coerce_finite_float, coerce_optional_int, delete_json_a
 MAX_CACHED_MESSAGES_PER_CHAT = 200
 
 
+def _local_id_order(local_id: Any) -> tuple[int, int, str]:
+    """本地消息编号的排序键：数值部分按数值比较，无编号排在同秒消息的原有位置。"""
+
+    text  = str(local_id or "")
+    match = re.search(r"(\d+)$", text)
+    if not text:
+        return (0, 0, "")
+    if match is None:
+        return (1, 0, text)
+    return (1, int(match.group(1)), text[: match.start()])
+
+
 @dataclass(frozen=True)
 class StoredMessage:
-    role: str
-    name: str
-    ts: float
-    user_id: int | None    = None
-    message_id: int | None = None
-    local_id: str          = ""
-    parts: tuple[dict[str, Any], ...] = field(default_factory=tuple)
-    content: str = ""
-    media_items: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    role         : str
+    name         : str
+    ts           : float
+    user_id      : int | None = None
+    message_id   : int | None = None
+    local_id     : str        = ""
+    parts        : tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    content      : str = ""
+    media_items  : tuple[dict[str, Any], ...] = field(default_factory=tuple)
     source_plugin: str = ""
     # 长回复拆成几条发出时，除 ``message_id``（第一条）外其余各条的 QQ 消息 ID。
     extra_message_ids: tuple[int, ...] = ()
@@ -169,10 +182,10 @@ def _normalize_media_items(values: Any) -> tuple[dict[str, Any], ...]:
 def _serialize_message(message: StoredMessage) -> dict[str, Any]:
     parts                   = normalize_message_parts(message.parts)
     payload: dict[str, Any] = {
-        "role": str(message.role or ""),
-        "name": str(message.name or ""),
+        "role" : str(message.role or ""),
+        "name" : str(message.name or ""),
         "parts": [dict(part) for part in parts],
-        "ts": float(message.ts),
+        "ts"   : float(message.ts),
     }
     if message.user_id is not None:
         payload["user_id"] = int(message.user_id)
@@ -259,15 +272,17 @@ class MemoryStore:
     def _merge_history(
         cls, loaded: list[StoredMessage], current: list[StoredMessage]
     ) -> list[StoredMessage]:
-        merged: list[StoredMessage] = []
-        seen: set[tuple[Any, ...]]  = set()
+        merged: list[StoredMessage]  = []
+        seen  : set[tuple[Any, ...]] = set()
         for message in [*loaded, *current]:
             identity = cls._message_identity(message)
             if identity in seen:
                 continue
             seen.add(identity)
             merged.append(message)
-        merged.sort(key=lambda message: (message.ts, message.local_id))
+        # OneBot 时间只有秒级精度：同秒消息按编号的数值排序（m8 < m10），
+        # 没有编号的旧记录保持原有先后（sort 是稳定的）。
+        merged.sort(key=lambda message: (message.ts, _local_id_order(message.local_id)))
         return cls._trim_history(merged)
 
     def append(

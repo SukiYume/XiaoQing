@@ -86,7 +86,7 @@ xiaoqing_chat
 | 模块 | 职责 |
 |---|---|
 | `gateway.py` | 到 Core AI capability 的薄适配：路由、固定模型、响应提取 |
-| `llm_config.py` | `LLMCallConfig`：超时、重试与采样参数。`bounded()` 收紧温度和输出预算，`as_kwargs()` 传给网关 |
+| `llm_config.py` | `LLMCallConfig`：超时、重试与采样参数。从主配置路由生成参数快照，`as_kwargs()` 传给网关，长文请求按字数提高预算 |
 | `prompt_builder.py` | 按人物边界、对话历史和当前媒体构建回复提示 |
 | `postprocess.py` | 保留回复内容，按自然边界组织气泡 |
 | `communication_constraints.py` | 原话中的交流要求（停聊、句数、条目数、篇幅字数）与群内定义 |
@@ -278,7 +278,7 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 | `end_conversation` | 结束话题，状态置为 ended |
 | `block_and_ignore` | 忽略本轮 |
 
-规划器解析失败时，私聊回退为 `direct_reply`，群聊回退为 `wait`。规划超时取 `pfc_planner_timeout_seconds` 与 `timeout_seconds` 的较小值，连续失败进入退避。
+规划器解析失败时，私聊回退为 `direct_reply`，群聊回退为 `wait`。规划请求的单次与总超时取主配置 `reasoning` 路由，连续失败进入退避。
 
 起草由 `reply_plan.py` 与 `reply_generator.py` 完成：
 
@@ -288,7 +288,7 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 4. `llm/reply_checker.py` 审查。被拒后由 `reply_fallbacks.py` 选择下一步。
 5. 上游返回 `request_too_large` 时把历史减半并作废已取的记忆，再试一次。
 
-后台任务统一使用 `llm_call_config(cfg, foreground=False)` 生成的 `LLMCallConfig`，单个任务用 `bounded(max_temperature, max_tokens, min_tokens)` 收紧采样与输出预算。凭据、HTTP、超时、重试和 profile 回退都在 Core AI capability 内完成。
+后台任务统一使用 `llm_call_config(cfg, foreground=False)` 取得主配置 `reasoning` 路由的 `LLMCallConfig`，网关调用显式选择 `reasoning`。凭据、HTTP、超时、重试和 profile 回退都在 Core AI capability 内完成。
 
 ---
 
@@ -314,7 +314,7 @@ PFC（`planning/pfc_engine.py`）每轮执行一次 `run_pfc_once`：读取会�
 | 图片证据 | `image_evidence_respected`、`visual_claims` |
 | 模板化 | `non_template` |
 
-`llm/evidence.py` 按原文核对每条陈述的出处、主体与语气。`llm/arithmetic.py` 核对数值推导。`enable_semantic_checker` 开启时，另有一次只接收原话的独立阅读，再与候选比较立场、主体、时间和完成状态。两路候选审查并行执行，共用 `reply_check.timeout_seconds`。独立阅读的超时复用与任务回收由 `TurnReadingCache` 管理。任一路确认的硬错误都会生效，`json_object` 外层封装的结论同样解析。
+`llm/evidence.py` 按原文核对每条陈述的出处、主体与语气。`llm/arithmetic.py` 核对数值推导。`enable_semantic_checker` 开启时，另有一次只接收原话的独立阅读，再与候选比较立场、主体、时间和完成状态。两路候选审查并行执行，共用主配置 `ai.routes.checker.total_timeout_seconds`。独立阅读的超时复用与任务回收由 `TurnReadingCache` 管理。任一路确认的硬错误都会生效，`json_object` 外层封装的结论同样解析。
 
 独立阅读使用对话原文、当前消息、发言者、本群用语和角色名。候选内容独立于这些材料。`TurnReadingCache` 按材料缓存一份阅读。`always` 模式下，`reply_generator` 在请求候选前启动预读。语义审查等待阅读结果，再比较候选。重写时材料相同则复用。上下文缩减或材料变化时重新阅读。审查超时取消本次等待，进行中的阅读留给下一次尝试。阅读失败或无效时，当前审查记为不可用并清空缓存。下一次尝试重新阅读。生成结束时取消并回收剩余阅读任务。`risk` 模式在需要远程审查时启动阅读，重写时复用。
 

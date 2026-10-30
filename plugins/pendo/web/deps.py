@@ -11,11 +11,11 @@ from ..services.db import Database
 from ..utils.db_ops import set_database_singleton
 from .auth import AuthError, WebSession, configure_auth_database, get_web_session, verify_token
 
-SESSION_COOKIE_NAME: Final    = "pendo_web_session"
-CSRF_HEADER_NAME: Final       = "X-CSRF-Token"
-_WIDGET_KIND: Final           = "widget"
-_WIDGET_SCOPE: Final          = "widget:read"
-_SAFE_METHODS: Final          = frozenset({"GET", "HEAD", "OPTIONS"})
+SESSION_COOKIE_NAME   : Final = "pendo_web_session"
+CSRF_HEADER_NAME      : Final = "X-CSRF-Token"
+_WIDGET_KIND          : Final = "widget"
+_WIDGET_SCOPE         : Final = "widget:read"
+_SAFE_METHODS         : Final = frozenset({"GET", "HEAD", "OPTIONS"})
 _REQUEST_SESSION_STATE: Final = "_pendo_web_session"
 
 # ``server.create_app`` 在开始接收请求前设置此引用。

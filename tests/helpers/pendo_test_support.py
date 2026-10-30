@@ -43,9 +43,9 @@ class _ReminderMessageService:
         return {
             "messages": [
                 {
-                    "user_id": "1001",
-                    "message": "提醒消息",
-                    "item_id": "evt123",
+                    "user_id"    : "1001",
+                    "message"    : "提醒消息",
+                    "item_id"    : "evt123",
                     "remind_time": "2030-01-01T09:00:00",
                 }
             ]
@@ -56,7 +56,7 @@ async def _single_user_shanghai_settings(user_ids, _db):
     """为财务摘要测试返回固定的单用户时区设置。"""
     return {
         user_ids[0]: {
-            "settings": {"timezone": "Asia/Shanghai"},
+            "settings"       : {"timezone": "Asia/Shanghai"},
             "custom_settings": {},
         }
     }
@@ -68,7 +68,7 @@ def _with_scheduled_delivery_contract(db: Any) -> Any:
     def claim(task_name, owner_id, period_key, *, now, lease_seconds):
         del now, lease_seconds
         return {
-            "claim_token": f"lease:{task_name}:{owner_id}:{period_key}",
+            "claim_token" : f"lease:{task_name}:{owner_id}:{period_key}",
             "delivery_key": f"delivery:{task_name}:{owner_id}:{period_key}",
         }
 
@@ -132,8 +132,8 @@ class _StubCaptureHandler:
 class _StubExporter:
     def export_markdown(self, user_id, args, options):
         return {
-            "status": "success",
-            "message": "exported",
+            "status"   : "success",
+            "message"  : "exported",
             "file_path": "C:/tmp/pendo-export.md",
             "file_name": "pendo-export.md",
         }

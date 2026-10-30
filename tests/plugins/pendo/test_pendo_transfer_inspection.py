@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from typing import Any
+
+import pytest
+
 import tests.helpers.pendo_web_transfer_test_support as _fixture_support
 from plugins.pendo.web.api.transfer import ExportSelection, _build_bundle_bytes
 from tests.helpers.pendo_web_transfer_test_support import (
-    Any,
     Database,
     _build_sample_bundle_bytes,
     build_manifest,
-    hashlib,
     io,
-    json,
-    pytest,
     transfer_api,
     zipfile,
 )
@@ -36,10 +38,10 @@ def test_import_inspection_rejects_oversized_content_without_truncating(client, 
         {
             "note": [
                 {
-                    "_type": "note",
+                    "_type"  : "note",
                     "_schema": 2,
-                    "id": "long-note",
-                    "title": "长正文",
+                    "id"     : "long-note",
+                    "title"  : "长正文",
                     "content": "长" * 50001,
                 }
             ]
@@ -67,23 +69,24 @@ def test_execute_import_rejects_oversized_options_header(
 
     response = client.post(
         "/api/transfer/import/execute",
-        headers = {**auth_headers, "X-Transfer-Options": "x" * 4097},
+        headers = {**auth_headers, "X-Transfer-Options": '{"mode":"skip"}' + " " * 4097},
         content = b"unused",
     )
 
     assert response.status_code == 422
+    assert any(error["type"] == "string_too_long" for error in response.json()["errors"])
 
 
 def test_import_inspect_returns_summary_and_row_errors(client: Any, auth_headers: dict):
     valid_task = {
-        "_type": "task",
-        "_schema": 2,
-        "id": "task_bundle_1",
-        "title": "导入任务",
-        "content": "来自备份",
-        "category": "工作",
-        "priority": 3,
-        "status": "open",
+        "_type"     : "task",
+        "_schema"   : 2,
+        "id"        : "task_bundle_1",
+        "title"     : "导入任务",
+        "content"   : "来自备份",
+        "category"  : "工作",
+        "priority"  : 3,
+        "status"    : "open",
         "created_at": "2026-03-20T09:00:00+08:00",
         "updated_at": "2026-03-20T09:00:00+08:00",
     }
@@ -94,9 +97,9 @@ def test_import_inspect_returns_summary_and_row_errors(client: Any, auth_headers
         {"types": ["task"], "preset": "all", "start": None, "end": None},
         [
             {
-                "path": "data/tasks.ndjson",
-                "type": "task",
-                "count": len(records),
+                "path"  : "data/tasks.ndjson",
+                "type"  : "task",
+                "count" : len(records),
                 "sha256": hashlib.sha256(content).hexdigest(),
             }
         ],
@@ -133,14 +136,14 @@ def test_import_inspect_detects_already_imported_bundle(
         {
             "task": [
                 {
-                    "_type": "task",
-                    "_schema": 2,
-                    "id": "task_idem_1",
-                    "title": "幂等测试",
-                    "content": "正文",
-                    "category": "工作",
-                    "priority": 3,
-                    "status": "open",
+                    "_type"     : "task",
+                    "_schema"   : 2,
+                    "id"        : "task_idem_1",
+                    "title"     : "幂等测试",
+                    "content"   : "正文",
+                    "category"  : "工作",
+                    "priority"  : 3,
+                    "status"    : "open",
                     "created_at": "2026-03-20T09:00:00+08:00",
                     "updated_at": "2026-03-20T09:00:00+08:00",
                 }
@@ -175,9 +178,9 @@ def test_import_inspect_preserves_original_line_number_for_normalization_errors(
         '{"_type":"task","_schema":2,"id":"broken-json"',
         json.dumps(
             {
-                "_type": "task",
-                "_schema": 2,
-                "id": "task_bad_line",
+                "_type"     : "task",
+                "_schema"   : 2,
+                "id"        : "task_bad_line",
                 "created_at": "2026-03-20T09:00:00+08:00",
                 "updated_at": "2026-03-20T09:00:00+08:00",
             },
@@ -189,9 +192,9 @@ def test_import_inspect_preserves_original_line_number_for_normalization_errors(
         {"types": ["task"], "preset": "all", "start": None, "end": None},
         [
             {
-                "path": "data/tasks.ndjson",
-                "type": "task",
-                "count": 2,
+                "path"  : "data/tasks.ndjson",
+                "type"  : "task",
+                "count" : 2,
                 "sha256": hashlib.sha256(content).hexdigest(),
             }
         ],
@@ -236,9 +239,9 @@ async def test_transfer_decodes_uploaded_filename_into_audit(db, filename):
 
     request = Request(
         {
-            "type": "http",
-            "method": "POST",
-            "path": "/api/transfer/import/execute",
+            "type"   : "http",
+            "method" : "POST",
+            "path"   : "/api/transfer/import/execute",
             "headers": [(b"x-transfer-filename", quote(filename, safe="").encode("ascii"))],
         },
         receive,

@@ -1,4 +1,4 @@
-"""读取 ``config.plugins.xiaoqing_agent``；越界或类型错误的字段回退到默认值。"""
+"""读取 ``config.plugins.xiaoqing_agent``；数值越界时钳制到边界，类型错误时回退到默认值。"""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ class AgentConfig:
     # 单个任务从开始到交付的总时长上限。
     task_timeout_seconds: float = 1800.0
     # 工具未指定超时时的默认值，以及模型可以申请的上限。
-    tool_timeout_seconds: float     = 120.0
+    tool_timeout_seconds    : float = 120.0
     max_tool_timeout_seconds: float = 900.0
     # 收到任务后最多等这么久；做完直接回复，超时转入后台，执行阶段按需提供进度。
     # 上限 25 秒：加上判断的 20 秒仍短于聊天侧 50 秒的等待和插件 60 秒的执行预算。
@@ -28,7 +28,7 @@ class AgentConfig:
     # Bot 管理员同时运行的任务数。
     max_admin_tasks: int = 3
     # 其他人合计同时运行的任务数，以及每个人同时运行的任务数（不同会话合计）。
-    max_member_tasks: int     = 4
+    max_member_tasks    : int = 4
     max_tasks_per_member: int = 1
     # 每次工具输出交给模型前的字符上限。
     max_tool_output_chars: int = 12000
@@ -36,7 +36,7 @@ class AgentConfig:
     history_tasks: int = 5
     # 留空时：Python 用 Bot 自身解释器；Shell 在 Windows 优先 Git Bash，否则 PowerShell。
     python: str = ""
-    shell: str  = ""
+    shell : str = ""
 
 
 def _bool(value: Any, default: bool) -> bool:

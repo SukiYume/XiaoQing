@@ -11,23 +11,24 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
 from plugins.xiaoqing_chat.llm import reply_checker as checker
 from plugins.xiaoqing_chat.llm.check_result import ReplyCheckResult
 from plugins.xiaoqing_chat.reply_draft import RejectedCandidate
 
 _READING = {
-    "meaning": "阿夏问大家这季追了什么番",
-    "intent": "想听群友分享",
-    "bot_stance": "",
-    "facts": [],
+    "meaning"    : "阿夏问大家这季追了什么番",
+    "intent"     : "想听群友分享",
+    "bot_stance" : "",
+    "facts"      : [],
     "local_terms": [],
-    "unresolved": [],
+    "unresolved" : [],
 }
 _VERDICT = {
-    "scan_complete": True,
-    "premise_checks": [],
-    "context_coherent": True,
-    "speaker_correct": True,
+    "scan_complete"       : True,
+    "premise_checks"      : [],
+    "context_coherent"    : True,
+    "speaker_correct"     : True,
     "instruction_followed": True,
 }
 
@@ -213,7 +214,8 @@ def _generation_plan(mode: str = "always") -> SimpleNamespace:
         started_at         = time.monotonic(),
         runtime            = SimpleNamespace(
             cfg=SimpleNamespace(
-                reply_check=SimpleNamespace(
+                llm_config  = XiaoQingChatConfig().llm_config,
+                reply_check = SimpleNamespace(
                     enable_reply_checker    = True,
                     enable_llm_checker      = True,
                     enable_semantic_checker = True,
@@ -316,7 +318,12 @@ async def test_risk_mode_does_not_prefetch_reading(monkeypatch):
 def _finalization(started_at: float) -> Any:
     from plugins.xiaoqing_chat.turn_delivery import _SmalltalkFinalization
 
-    runtime = SimpleNamespace(cfg=SimpleNamespace(humanize=SimpleNamespace(apply_to_forced=False)))
+    runtime = SimpleNamespace(
+        cfg=SimpleNamespace(
+            llm_config=XiaoQingChatConfig().llm_config,
+            humanize=SimpleNamespace(apply_to_forced=False),
+        )
+    )
     return _SmalltalkFinalization(
         prepared=SimpleNamespace(forced=False, text="这季新番你们追了啥"),
         generated = SimpleNamespace(),

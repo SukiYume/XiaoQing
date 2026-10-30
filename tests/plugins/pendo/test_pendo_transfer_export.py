@@ -2,20 +2,21 @@
 
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime
+from typing import Any
+
+import pytest
+
 import tests.helpers.pendo_web_transfer_test_support as _fixture_support
 from tests.helpers.pendo_web_transfer_test_support import (
     OWNER_ID,
-    Any,
     Database,
     ZoneInfo,
     _build_sample_bundle_bytes,
     _ImportRequest,
     _seed_items,
-    datetime,
     io,
-    json,
-    pytest,
-    timezone,
     transfer_api,
     zipfile,
 )
@@ -29,10 +30,10 @@ def test_export_preview_rejects_reversed_custom_range(client: Any, auth_headers:
         headers = auth_headers,
         json    = {
             "selection": {
-                "types": ["task"],
+                "types" : ["task"],
                 "preset": "custom",
-                "start": "2026-03-31",
-                "end": "2026-03-01",
+                "start" : "2026-03-31",
+                "end"   : "2026-03-01",
             }
         },
     )
@@ -96,7 +97,7 @@ def test_resolve_range_rejects_unsupported_or_malformed_ranges(
     with pytest.raises(transfer_api.HTTPException) as exc_info:
         transfer_api.resolve_range(
             transfer_api.ExportSelection(types=["task"], **selection),
-            now=datetime(2026, 3, 30, 9, 0, tzinfo=timezone.utc),
+            now=datetime(2026, 3, 30, 9, 0, tzinfo=UTC),
         )
 
     assert exc_info.value.status_code == 422
@@ -178,10 +179,10 @@ def test_export_preview_returns_counts_by_type_and_filters_by_time_field(
         headers = auth_headers,
         json    = {
             "selection": {
-                "types": ["event", "task", "ledger", "note", "diary"],
+                "types" : ["event", "task", "ledger", "note", "diary"],
                 "preset": "custom",
-                "start": "2026-03-01",
-                "end": "2026-03-31",
+                "start" : "2026-03-01",
+                "end"   : "2026-03-31",
             }
         },
     )
@@ -217,10 +218,10 @@ def test_export_download_returns_bundle_with_manifest(
         headers = auth_headers,
         json    = {
             "selection": {
-                "types": ["task", "note"],
+                "types" : ["task", "note"],
                 "preset": "custom",
-                "start": "2026-03-01",
-                "end": "2026-03-31",
+                "start" : "2026-03-01",
+                "end"   : "2026-03-31",
             }
         },
     )
@@ -244,29 +245,29 @@ def test_export_download_includes_event_collections_for_event_graph(
 ):
     temp_db.create_event_collection(
         {
-            "id": "conf_2026",
-            "owner_id": OWNER_ID,
-            "kind": "multi_node",
-            "title": "FRB2026会议",
-            "category": "学术",
-            "notes": "整体会议",
+            "id"        : "conf_2026",
+            "owner_id"  : OWNER_ID,
+            "kind"      : "multi_node",
+            "title"     : "FRB2026会议",
+            "category"  : "学术",
+            "notes"     : "整体会议",
             "start_time": "2026-03-05T09:00:00",
-            "end_time": "2026-04-01T10:00:00",
+            "end_time"  : "2026-04-01T10:00:00",
         }
     )
     temp_db.insert_item(
         {
-            "id": "conf_2026_m01",
-            "owner_id": OWNER_ID,
-            "type": "event",
-            "title": "摘要截止",
-            "category": "学术",
-            "start_time": "2026-03-05T09:00:00",
-            "event_role": "multi_node_child",
-            "event_collection_id": "conf_2026",
+            "id"                   : "conf_2026_m01",
+            "owner_id"             : OWNER_ID,
+            "type"                 : "event",
+            "title"                : "摘要截止",
+            "category"             : "学术",
+            "start_time"           : "2026-03-05T09:00:00",
+            "event_role"           : "multi_node_child",
+            "event_collection_id"  : "conf_2026",
             "event_collection_kind": "multi_node",
-            "event_index": 1,
-            "event_node_key": "m01",
+            "event_index"          : 1,
+            "event_node_key"       : "m01",
         }
     )
 
@@ -275,10 +276,10 @@ def test_export_download_includes_event_collections_for_event_graph(
         headers = auth_headers,
         json    = {
             "selection": {
-                "types": ["event"],
+                "types" : ["event"],
                 "preset": "custom",
-                "start": "2026-03-01",
-                "end": "2026-03-31",
+                "start" : "2026-03-01",
+                "end"   : "2026-03-31",
             }
         },
     )
@@ -358,10 +359,10 @@ def test_event_collection_export_uses_one_batch_lookup_and_warns_for_missing_hea
 
     temp_db.create_event_collection(
         {
-            "id": "collection-present",
+            "id"      : "collection-present",
             "owner_id": OWNER_ID,
-            "kind": "multi_node",
-            "title": "存在的集合",
+            "kind"    : "multi_node",
+            "title"   : "存在的集合",
         }
     )
     real_lookup                        = temp_db.get_event_collections_by_ids
@@ -500,3 +501,11 @@ async def test_upload_body_rejects_empty_and_actual_oversized_payloads(
     with pytest.raises(transfer_api.HTTPException) as size_error:
         await transfer_api._read_upload_body(_ImportRequest(b"four"))
     assert size_error.value.status_code == 413
+
+    # 缺少 Content-Length 的流式上传：越界后立即停止读取，不会先整体读入内存。
+    monkeypatch.setattr(transfer_api, "MAX_UPLOAD_SIZE", 32)
+    streamed = _ImportRequest(b"x" * 64, chunk_size=16)
+    with pytest.raises(transfer_api.HTTPException) as stream_error:
+        await transfer_api._read_upload_body(streamed)
+    assert stream_error.value.status_code == 413
+    assert streamed.consumed == 48

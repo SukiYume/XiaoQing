@@ -10,11 +10,11 @@ from ..utils.time import utc_now
 class OperationLog:
     """记录操作主体、目标、参数摘要、结果和发生时间。"""
 
-    id: int
-    group_id: int
-    user_id: str
+    id            : int
+    group_id      : int
+    user_id       : str
     target_user_id: str | None = None
     operation_type: str        = ""
-    params: str                = ""
-    result: str                = "success"
-    created_at: datetime = field(default_factory=utc_now)
+    params        : str        = ""
+    result        : str        = "success"
+    created_at    : datetime = field(default_factory=utc_now)

@@ -1,6 +1,7 @@
 import asyncio
 import sqlite3
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -90,10 +91,10 @@ def test_claimed_reminder_survives_initial_window_and_reaches_delivery(db, monke
     db.update_user_settings(owner, {"timezone": "UTC"})
     item_id = db.insert_item(
         {
-            "owner_id": owner,
-            "type": "event",
-            "title": "恢复领取中的提醒",
-            "start_time": fire.isoformat(),
+            "owner_id"    : owner,
+            "type"        : "event",
+            "title"       : "恢复领取中的提醒",
+            "start_time"  : fire.isoformat(),
             "remind_times": [fire.isoformat()],
         }
     )
@@ -116,10 +117,10 @@ def test_abandoned_claim_expires_after_recovery_retention(db):
     fire = datetime(2030, 1, 1, 9, tzinfo=UTC)
     item_id = db.insert_item(
         {
-            "owner_id": "1001",
-            "type": "event",
-            "title": "过期恢复",
-            "start_time": fire.isoformat(),
+            "owner_id"    : "1001",
+            "type"        : "event",
+            "title"       : "过期恢复",
+            "start_time"  : fire.isoformat(),
             "remind_times": [fire.isoformat()],
         }
     )
@@ -136,10 +137,10 @@ def test_abandoned_claim_expires_after_recovery_retention(db):
 def test_database_update_does_not_mutate_caller_mapping(db):
     item_id = db.insert_item(
         {
-            "type": "note",
+            "type"    : "note",
             "owner_id": "u-input",
-            "title": "before",
-            "content": "before",
+            "title"   : "before",
+            "content" : "before",
         }
     )
     single_update = {"title": "after"}
@@ -152,11 +153,11 @@ def test_database_update_does_not_mutate_caller_mapping(db):
 def test_owner_mismatch_cannot_delete_item_auxiliary_rows(db):
     item_id = db.insert_item(
         {
-            "id": "owner-isolation-event",
-            "type": "event",
-            "owner_id": "u-owner",
-            "title": "所有者隔离测试",
-            "start_time": "2030-01-01T10:00:00+00:00",
+            "id"          : "owner-isolation-event",
+            "type"        : "event",
+            "owner_id"    : "u-owner",
+            "title"       : "所有者隔离测试",
+            "start_time"  : "2030-01-01T10:00:00+00:00",
             "remind_times": ["2030-01-01T09:00:00+00:00"],
         }
     )
@@ -175,14 +176,14 @@ def test_owner_mismatch_cannot_delete_item_auxiliary_rows(db):
 def test_row_decoder_restores_declared_json_containers_and_task_status(db):
     item_id = db.insert_item(
         {
-            "id": "container-shape-task",
-            "type": "task",
-            "owner_id": "u-shape",
-            "title": "容器类型",
-            "status": "open",
-            "context": {},
+            "id"         : "container-shape-task",
+            "type"       : "task",
+            "owner_id"   : "u-shape",
+            "title"      : "容器类型",
+            "status"     : "open",
+            "context"    : {},
             "attachments": [],
-            "ai_meta": {},
+            "ai_meta"    : {},
         }
     )
     conn = db.get_connection()
@@ -215,7 +216,13 @@ def test_get_items_by_ids_batches_above_sqlite_parameter_limit(db):
     )
     conn.commit()
 
-    loaded = db.get_items_by_ids("u-bulk", item_ids)
+    import sqlite3
+
+    previous_limit = conn.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 501)
+    try:
+        loaded = db.get_items_by_ids("u-bulk", item_ids)
+    finally:
+        conn.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, previous_limit)
 
     assert len(loaded) == len(item_ids)
     assert set(loaded) == set(item_ids)
@@ -231,11 +238,11 @@ def test_literal_search_and_tag_filters_do_not_expand_like_wildcards(db):
     for item_id, title, tags in records:
         db.insert_item(
             {
-                "id": item_id,
-                "type": "note",
+                "id"      : item_id,
+                "type"    : "note",
                 "owner_id": "u-like-literal",
-                "title": title,
-                "tags": tags,
+                "title"   : title,
+                "tags"    : tags,
             }
         )
 
@@ -254,18 +261,18 @@ def test_batch_soft_delete_logs_and_cleans_only_actual_matches(db):
     for item_id in ("matched-a", "matched-b"):
         db.insert_item(
             {
-                "id": item_id,
-                "type": "note",
+                "id"      : item_id,
+                "type"    : "note",
                 "owner_id": "u-batch-delete",
-                "title": item_id,
+                "title"   : item_id,
             }
         )
     db.insert_item(
         {
-            "id": "wrong-type",
-            "type": "task",
+            "id"      : "wrong-type",
+            "type"    : "task",
             "owner_id": "u-batch-delete",
-            "title": "不应删除",
+            "title"   : "不应删除",
         }
     )
     db.log_reminder("matched-a", "2030-01-01T00:00:00+00:00")
@@ -304,7 +311,7 @@ def test_batch_soft_delete_logs_and_cleans_only_actual_matches(db):
 def test_user_settings_hydration_accepts_dict_payload(db):
     hydrated = db._hydrate_user_settings_row(
         {
-            "user_id": "u-settings-dict",
+            "user_id"      : "u-settings-dict",
             "settings_json": {"reminder_enabled": False, "custom_flag": True},
         }
     )
@@ -316,11 +323,11 @@ def test_user_settings_hydration_accepts_dict_payload(db):
 def test_far_future_event_with_due_reminder_is_not_dropped(db):
     db.insert_item(
         {
-            "id": "far-future-reminder",
-            "type": "event",
-            "owner_id": "u-far-future",
-            "title": "远期日程",
-            "start_time": "2099-01-01T09:00:00+00:00",
+            "id"          : "far-future-reminder",
+            "type"        : "event",
+            "owner_id"    : "u-far-future",
+            "title"       : "远期日程",
+            "start_time"  : "2099-01-01T09:00:00+00:00",
             "remind_times": ["2020-01-01T09:00:00+00:00"],
         }
     )
@@ -350,10 +357,10 @@ def test_latest_confirmable_reminder_uses_absolute_time_order():
 def test_confirm_unsent_reminder_creates_confirmed_state(db):
     item_id = db.insert_item(
         {
-            "id": "unsent-confirmation",
-            "type": "event",
-            "owner_id": "u-unsent-confirmation",
-            "title": "静默时段提醒",
+            "id"          : "unsent-confirmation",
+            "type"        : "event",
+            "owner_id"    : "u-unsent-confirmation",
+            "title"       : "静默时段提醒",
             "remind_times": ["2020-01-01T09:00:00+00:00"],
         }
     )
@@ -385,11 +392,11 @@ def test_future_reminder_confirmation_can_be_reopened_until_target_time(db):
     remind_time = "2030-01-01T12:00:00+00:00"
     item_id     = db.insert_item(
         {
-            "id": "future-confirmation-toggle",
-            "type": "event",
-            "owner_id": "u-future-confirmation-toggle",
-            "title": "未来提醒",
-            "start_time": "2030-01-01T13:00:00+00:00",
+            "id"          : "future-confirmation-toggle",
+            "type"        : "event",
+            "owner_id"    : "u-future-confirmation-toggle",
+            "title"       : "未来提醒",
+            "start_time"  : "2030-01-01T13:00:00+00:00",
             "remind_times": [remind_time, "2030-01-01T12:30:00+00:00"],
         }
     )
@@ -479,10 +486,10 @@ def test_repeat_release_respects_next_attempt_time(db):
     now = datetime(2030, 1, 1, tzinfo=UTC)
     item_id = db.insert_item(
         {
-            "type": "event",
-            "owner_id": "1001",
-            "title": "repeat retry",
-            "start_time": now.isoformat(),
+            "type"        : "event",
+            "owner_id"    : "1001",
+            "title"       : "repeat retry",
+            "start_time"  : now.isoformat(),
             "remind_times": [now.isoformat()],
         }
     )
@@ -513,12 +520,14 @@ def test_repeat_release_respects_next_attempt_time(db):
     )
 
 
-def test_scheduled_delivery_outbox_is_cross_instance_atomic_and_recoverable(tmp_path):
-    path      = str(tmp_path / "shared.db")
-    first_db  = Database(path)
+def test_scheduled_delivery_outbox_is_cross_instance_atomic_and_recoverable(tmp_path, request):
+    path     = str(tmp_path / "shared.db")
+    first_db = Database(path)
+    request.addfinalizer(first_db.cleanup)
     second_db = Database(path)
+    request.addfinalizer(second_db.cleanup)
     now = datetime(2030, 1, 1, tzinfo=UTC)
-    start                               = threading.Barrier(2)
+    start = threading.Barrier(2, timeout=5)
     claims: list[dict[str, str] | None] = []
 
     def claim(database: Database) -> None:
@@ -533,12 +542,11 @@ def test_scheduled_delivery_outbox_is_cross_instance_atomic_and_recoverable(tmp_
             )
         )
 
-    left = threading.Thread(target=claim, args=(first_db,))
-    right = threading.Thread(target=claim, args=(second_db,))
-    left.start()
-    right.start()
-    left.join()
-    right.join()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(claim, database) for database in (first_db, second_db)]
+        for future in futures:
+            future.result(timeout=10)
+    assert len(claims) == 2
 
     winner = next(value for value in claims if value is not None)
     assert sum(value is not None for value in claims) == 1
@@ -566,9 +574,6 @@ def test_scheduled_delivery_outbox_is_cross_instance_atomic_and_recoverable(tmp_
     assert row["state"] == "sent"
     assert row["failure_count"] == 1
 
-    first_db.cleanup()
-    second_db.cleanup()
-
 
 def test_scheduled_delivery_reclaims_expired_lease_with_same_key(db):
     now = datetime(2030, 1, 1, tzinfo=UTC)
@@ -595,17 +600,19 @@ def test_scheduled_delivery_reclaims_expired_lease_with_same_key(db):
     assert recovered["delivery_key"] == first["delivery_key"]
 
 
-def test_unconfirmed_repeat_is_leased_once_across_database_instances(tmp_path):
-    path        = str(tmp_path / "repeat.db")
-    first_db    = Database(path)
-    second_db   = Database(path)
+def test_unconfirmed_repeat_is_leased_once_across_database_instances(tmp_path, request):
+    path     = str(tmp_path / "repeat.db")
+    first_db = Database(path)
+    request.addfinalizer(first_db.cleanup)
+    second_db = Database(path)
+    request.addfinalizer(second_db.cleanup)
     remind_time = "2030-01-01T12:00:00+00:00"
     item_id     = first_db.insert_item(
         {
-            "type": "event",
-            "owner_id": "1001",
-            "title": "leased repeat",
-            "start_time": remind_time,
+            "type"        : "event",
+            "owner_id"    : "1001",
+            "title"       : "leased repeat",
+            "start_time"  : remind_time,
             "remind_times": [remind_time],
         }
     )
@@ -619,19 +626,18 @@ def test_unconfirmed_repeat_is_leased_once_across_database_instances(tmp_path):
     )
     first_db.get_connection().commit()
 
-    start                                  = threading.Barrier(2)
+    start = threading.Barrier(2, timeout=5)
     results: list[list[dict[str, object]]] = []
 
     def check(database: Database) -> None:
         start.wait()
         results.append(ReminderService(database)._check_unconfirmed_repeats(current))
 
-    left = threading.Thread(target=check, args=(first_db,))
-    right = threading.Thread(target=check, args=(second_db,))
-    left.start()
-    right.start()
-    left.join()
-    right.join()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(check, database) for database in (first_db, second_db)]
+        for future in futures:
+            future.result(timeout=10)
+    assert len(results) == 2
 
     messages = [message for batch in results for message in batch]
     assert len(messages) == 1
@@ -647,9 +653,6 @@ def test_unconfirmed_repeat_is_leased_once_across_database_instances(tmp_path):
     )
     log = first_db.get_reminder_logs(item_id)[0]
     assert log["repeat_count"] == 2
-
-    first_db.cleanup()
-    second_db.cleanup()
 
 
 def test_daily_briefing_outbox_prevents_duplicate_after_marker_failure(tmp_path, monkeypatch):
@@ -671,7 +674,7 @@ def test_daily_briefing_outbox_prevents_duplicate_after_marker_failure(tmp_path,
     async def settings(user_ids, _db):
         return {
             user_ids[0]: {
-                "settings": {"timezone": "Asia/Shanghai", "daily_report_time": "08:00"},
+                "settings"       : {"timezone": "Asia/Shanghai", "daily_report_time": "08:00"},
                 "custom_settings": {"daily_briefing_enabled": True},
             }
         }
@@ -787,7 +790,7 @@ def test_scheduled_retry_preserves_original_period_across_boundary(
         return {
             "1001": {
                 "settings": {
-                    "timezone": "UTC",
+                    "timezone"         : "UTC",
                     "daily_report_time": "23:59",
                     "diary_remind_time": "23:59",
                 },
@@ -1017,22 +1020,22 @@ def test_reminder_queue_materializes_utc_and_uses_partial_indexes(db):
     future_time = "2030-01-02T09:00:00"
     db.insert_item(
         {
-            "id": "due-reminder",
-            "type": "event",
-            "owner_id": owner_id,
-            "title": "due",
-            "content": "large field must not drive the queue" * 100,
-            "start_time": "2030-01-01T10:00:00",
+            "id"          : "due-reminder",
+            "type"        : "event",
+            "owner_id"    : owner_id,
+            "title"       : "due",
+            "content"     : "large field must not drive the queue" * 100,
+            "start_time"  : "2030-01-01T10:00:00",
             "remind_times": [due_time],
         }
     )
     db.insert_item(
         {
-            "id": "future-reminder",
-            "type": "event",
-            "owner_id": owner_id,
-            "title": "future",
-            "start_time": "2030-01-02T10:00:00",
+            "id"          : "future-reminder",
+            "type"        : "event",
+            "owner_id"    : owner_id,
+            "title"       : "future",
+            "start_time"  : "2030-01-02T10:00:00",
             "remind_times": [future_time],
         }
     )
@@ -1085,10 +1088,10 @@ def test_timezone_change_preserves_canonical_pending_reminder_instant(db):
     owner_id = "u-reminder-timezone-change"
     db.insert_item(
         {
-            "id": "timezone-reminder",
-            "type": "task",
-            "owner_id": owner_id,
-            "title": "timezone",
+            "id"          : "timezone-reminder",
+            "type"        : "task",
+            "owner_id"    : owner_id,
+            "title"       : "timezone",
             "remind_times": ["2030-01-01T09:00:00"],
         }
     )
@@ -1113,10 +1116,10 @@ def test_timezone_change_preserves_canonical_pending_reminder_instant(db):
 def test_prune_reminder_logs_removes_only_expired_confirmed_history(db):
     db.insert_item(
         {
-            "id": "retention-reminder",
-            "type": "event",
-            "owner_id": "u-retention",
-            "title": "retention",
+            "id"          : "retention-reminder",
+            "type"        : "event",
+            "owner_id"    : "u-retention",
+            "title"       : "retention",
             "remind_times": ["2030-01-01T09:00:00", "2030-01-02T09:00:00"],
         }
     )

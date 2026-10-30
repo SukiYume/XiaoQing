@@ -20,15 +20,15 @@ CHAT_SUPERSEDED = "chat_superseded"
 
 @dataclass
 class GenerationLimiter:
-    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    _global_inflight: int = 0
-    _chat_inflight: dict[str, int] = field(default_factory=dict)
-    _user_inflight: dict[str, int] = field(default_factory=dict)
-    _user_calls: dict[str, deque[float]] = field(default_factory=dict)
-    _chat_waiters: dict[str, object] = field(default_factory=dict)
-    max_tracked_users: int        = 10_000
+    _lock                 : asyncio.Lock = field(default_factory=asyncio.Lock)
+    _global_inflight      : int = 0
+    _chat_inflight        : dict[str, int] = field(default_factory=dict)
+    _user_inflight        : dict[str, int] = field(default_factory=dict)
+    _user_calls           : dict[str, deque[float]] = field(default_factory=dict)
+    _chat_waiters         : dict[str, object] = field(default_factory=dict)
+    max_tracked_users     : int   = 10_000
     sweep_interval_seconds: float = 300.0
-    _last_sweep_at: float         = 0.0
+    _last_sweep_at        : float = 0.0
 
     def __post_init__(self) -> None:
         self._slot_released = asyncio.Condition(self._lock)

@@ -5,19 +5,19 @@ from .constants import DEFAULT_DRESS_ITEMS, MAX_STAT_VALUE, PetStage, PetStatus
 from .time import utc_now
 
 _STAGE_EMOJI = {
-    PetStage.EGG: "🥚",
-    PetStage.YOUNG: "🐣",
+    PetStage.EGG   : "🥚",
+    PetStage.YOUNG : "🐣",
     PetStage.GROWTH: "🐥",
     PetStage.MATURE: "🐔",
-    PetStage.OLD: "🐦",
+    PetStage.OLD   : "🐦",
 }
 
 _STATUS_EMOJI = {
-    PetStatus.NORMAL: "✅",
-    PetStatus.SICK: "🤒",
-    PetStatus.SLEEPING: "😴",
+    PetStatus.NORMAL   : "✅",
+    PetStatus.SICK     : "🤒",
+    PetStatus.SLEEPING : "😴",
     PetStatus.TRAVELING: "✈️",
-    PetStatus.DEAD: "💀",
+    PetStatus.DEAD     : "💀",
 }
 
 _DRESS_SLOT_EMOJI = {
@@ -29,9 +29,9 @@ _DRESS_SLOT_EMOJI = {
 
 _RANKING_FORMAT = {
     "care_score": ("🏆 照顾评分排行", "%"),
-    "intimacy": ("💕 亲密度排行", ""),
+    "intimacy"  : ("💕 亲密度排行", ""),
     "experience": ("🎯 经验值排行", ""),
-    "coins": ("💰 金币排行", "💰"),
+    "coins"     : ("💰 金币排行", "💰"),
 }
 
 

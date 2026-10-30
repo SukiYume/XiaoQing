@@ -1,5 +1,4 @@
 # 接入重配事务：候选连接通过验证后发布，旧连接排空后回收。
-# mypy: disable-error-code=attr-defined
 """Transactional OneBot WebSocket and inbound server reconciliation."""
 
 from __future__ import annotations
@@ -7,7 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Mapping
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from .app_support import (
     ApplicationLifecycleFatalError,
@@ -44,21 +43,66 @@ logger = logging.getLogger(__name__)
 
 
 class AppIngressMixin:
-    inbound_manager: InboundManager | None
-    metrics: MetricsCollector
-    plugin_manager: PluginManager
-    scheduler: SchedulerManager
-    session_manager: SessionManager
-    ws_client: OneBotWsClient | None
-    _inbound_cleanup_pending: list[InboundManager]
+    # 由组合类实际提供的成员；这里只为类型检查声明契约，运行时不存在。
+    if TYPE_CHECKING:
+
+        async def _cancel_task(self, attr_name: str) -> None:
+            raise NotImplementedError
+
+        async def _handle_inbound_event(self, event: dict[str, Any]) -> list[dict[str, Any]]:
+            raise NotImplementedError
+
+        async def _handle_upstream_event(
+            self,
+            event: dict[str, Any],
+            *,
+            source_client: OneBotWsClient | None = None,
+        ) -> None:
+            raise NotImplementedError
+
+        _inbound_candidates_active: set[InboundManager]
+
+        _inbound_candidates_lock: Any
+
+        _inbound_reconcile_lock: Any
+
+        def _latest_safe_inbound_token(self, manager: InboundManager) -> str:
+            raise NotImplementedError
+
+        _lifecycle_state: Any
+
+        async def _on_ws_connected(self) -> None:
+            raise NotImplementedError
+
+        def _owns_config_apply(self, owner: _ConfigApplyOwner | None) -> bool:
+            raise NotImplementedError
+
+        def _owns_config_apply_locked(self, owner: _ConfigApplyOwner | None) -> bool:
+            raise NotImplementedError
+
+        _runtime_auth_lock: Any
+
+        async def _stop_ws_client(self, *, owner: _ConfigApplyOwner | None = None) -> None:
+            raise NotImplementedError
+
+        def _unregister_inbound_candidate(self, manager: InboundManager) -> None:
+            raise NotImplementedError
+
+    inbound_manager            : InboundManager | None
+    metrics                    : MetricsCollector
+    plugin_manager             : PluginManager
+    scheduler                  : SchedulerManager
+    session_manager            : SessionManager
+    ws_client                  : OneBotWsClient | None
+    _inbound_cleanup_pending   : list[InboundManager]
     _inbound_cleanup_quarantine: dict[int, BaseException]
-    _onebot_auth_generation: int
-    _runtime_inbound_key: tuple[Any, ...] | None
-    _runtime_inbound_token: str
-    _stopping: bool
-    _ws_client_auth_generation: int
-    _ws_client_task: asyncio.Task[None] | None
-    _ws_client_auth_quarantine: OneBotWsClient | None
+    _onebot_auth_generation    : int
+    _runtime_inbound_key       : tuple[Any, ...] | None
+    _runtime_inbound_token     : str
+    _stopping                  : bool
+    _ws_client_auth_generation : int
+    _ws_client_task            : asyncio.Task[None] | None
+    _ws_client_auth_quarantine : OneBotWsClient | None
 
     def _parse_ws_queue_size(self, config: Mapping[str, Any]) -> int:
         ws_queue_size_raw = config.get("ws_queue_size", DEFAULT_INBOUND_WS_QUEUE_SIZE)

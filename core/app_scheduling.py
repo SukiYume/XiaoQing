@@ -1,7 +1,15 @@
-# mypy: disable-error-code=attr-defined
 """Plugin schedule publication and callback execution."""
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from .app_identity import AppIdentityService
+    from .plugin_manager import PluginManager
+    from .scheduler import SchedulerManager
 
 import asyncio
 import functools
@@ -34,6 +42,33 @@ logger = logging.getLogger(__name__)
 
 
 class AppSchedulingMixin:
+    # 由组合类实际提供的成员；这里只为类型检查声明契约，运行时不存在。
+    if TYPE_CHECKING:
+        _defer_plugin_schedule_updates: bool
+
+        async def _send_action(
+            self,
+            action: dict[str, Any],
+            wait_ws_seconds: float = 0.0,
+        ) -> bool | None:
+            raise NotImplementedError
+
+        _stopping: bool
+
+        @staticmethod
+        def _tag_action_source(action: dict[str, Any], plugin_name: str) -> dict[str, Any]:
+            raise NotImplementedError
+
+        @property
+        def config(self) -> Mapping[str, Any]:
+            raise NotImplementedError
+
+        identity_service: AppIdentityService
+
+        plugin_manager: PluginManager
+
+        scheduler: SchedulerManager
+
     def _reschedule(self, plugin_name: str) -> None:
         """Validate and transactionally replace plugin schedules."""
         if self._stopping:
@@ -49,6 +84,10 @@ class AppSchedulingMixin:
             prefix         = f"plugin.{plugin_name}."
             loaded         = self.plugin_manager.get(plugin_name)
             target_plugins = [loaded] if loaded else []
+        if self.config.get("enable_plugin_schedules", True) is False:
+            # 隔离运行（例如 UAT）关闭全部插件定时任务：不触达真实账号，也不向生产群投递。
+            logger.info("Plugin schedules disabled by config: %s", plugin_name)
+            target_plugins = []
 
         jobs: list[ScheduledJobSpec] = []
         try:
@@ -219,25 +258,36 @@ class AppSchedulingMixin:
         allowed_groups = {
             target.target_id for target in principal.delivery_targets if target.kind == "group"
         }
-        for delivery in deliveries:
-            if delivery.target.kind == "group" and delivery.target.target_id not in allowed_groups:
-                logger.warning(
-                    "Targeted schedule group rejected by manifest policy: plugin=%s",
-                    plugin_name,
+        attempted = 0
+        try:
+            for delivery in deliveries:
+                attempted += 1
+                if (
+                    delivery.target.kind == "group"
+                    and delivery.target.target_id not in allowed_groups
+                ):
+                    logger.warning(
+                        "Targeted schedule group rejected by manifest policy: plugin=%s",
+                        plugin_name,
+                    )
+                    if delivery.receipt is not None:
+                        await delivery.receipt.record(False)
+                    continue
+                action = build_action(
+                    list(delivery.message),
+                    delivery.target.user_id,
+                    delivery.target.group_id,
                 )
+                if action is None:
+                    if delivery.receipt is not None:
+                        await delivery.receipt.record(False)
+                    continue
+                action = self._tag_action_source(action, plugin_name)
                 if delivery.receipt is not None:
-                    await delivery.receipt.record(False)
-                continue
-            action = build_action(
-                list(delivery.message),
-                delivery.target.user_id,
-                delivery.target.group_id,
-            )
-            if action is None:
-                if delivery.receipt is not None:
-                    await delivery.receipt.record(False)
-                continue
-            action = self._tag_action_source(action, plugin_name)
-            if delivery.receipt is not None:
-                action = attach_receipt(action, delivery.receipt)
-            await self._send_action(action)
+                    action = attach_receipt(action, delivery.receipt)
+                await self._send_action(action)
+        finally:
+            # 当前目标发送异常或取消时，后续目标确定没有尝试：逐个失败结算它们的回执。
+            for skipped in deliveries[attempted:]:
+                if skipped.receipt is not None:
+                    await asyncio.shield(skipped.receipt.record(False))

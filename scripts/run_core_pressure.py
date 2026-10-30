@@ -26,18 +26,18 @@ EXPECTED_EVENT_STATUSES = {200, 503}
 class RequestResult:
     """单次请求的最小压测观测结果。"""
 
-    status: int | None
+    status    : int | None
     latency_ms: float
-    error: str | None = None
+    error     : str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class Stage:
     """一个固定规模和并发度的压测阶段。"""
 
-    name: str
-    requests: int
-    concurrency: int
+    name        : str
+    requests    : int
+    concurrency : int
     same_session: bool
 
 
@@ -82,21 +82,21 @@ def _event(message_id: int, identity_index: int, *, same_session: bool) -> dict[
         group_id = 973_200_000 + identity_index
     message = f"/echo core-pressure-{message_id}"
     return {
-        "time": int(time.time()),
-        "post_type": "message",
+        "time"        : int(time.time()),
+        "post_type"   : "message",
         "message_type": "group",
-        "sub_type": "normal",
-        "message_id": message_id,
-        "user_id": user_id,
-        "group_id": group_id,
-        "message": message,
-        "raw_message": message,
-        "font": 0,
-        "sender": {
-            "user_id": user_id,
+        "sub_type"    : "normal",
+        "message_id"  : message_id,
+        "user_id"     : user_id,
+        "group_id"    : group_id,
+        "message"     : message,
+        "raw_message" : message,
+        "font"        : 0,
+        "sender"      : {
+            "user_id" : user_id,
             "nickname": "CorePressure",
-            "card": "CorePressure",
-            "role": "member",
+            "card"    : "CorePressure",
+            "role"    : "member",
         },
     }
 
@@ -113,7 +113,7 @@ async def _post_event(
             endpoint,
             json    = payload,
             headers = {
-                "Authorization": f"Bearer {token}",
+                "Authorization"           : f"Bearer {token}",
                 "X-XiaoQing-Response-Mode": "actions",
             },
         ) as response:
@@ -164,14 +164,14 @@ async def _run_stage(
         asdict(result) for result in results if result.status not in EXPECTED_EVENT_STATUSES
     ][:20]
     return {
-        "name": stage.name,
-        "requests": stage.requests,
-        "concurrency": stage.concurrency,
-        "same_session": stage.same_session,
+        "name"            : stage.name,
+        "requests"        : stage.requests,
+        "concurrency"     : stage.concurrency,
+        "same_session"    : stage.same_session,
         "duration_seconds": round(duration, 3),
-        "throughput_rps": round(stage.requests / duration, 2) if duration else None,
-        "status_counts": dict(sorted(statuses.items())),
-        "latency_ms": {
+        "throughput_rps"  : round(stage.requests / duration, 2) if duration else None,
+        "status_counts"   : dict(sorted(statuses.items())),
+        "latency_ms"      : {
             "p50": _percentile(latencies, 0.50),
             "p95": _percentile(latencies, 0.95),
             "p99": _percentile(latencies, 0.99),
@@ -196,17 +196,17 @@ async def _get_health(
             payload = await response.json(content_type=None)
             error = None if isinstance(payload, dict) else "health JSON 根节点不是对象"
             return {
-                "status": response.status,
-                "payload": payload if isinstance(payload, dict) else None,
+                "status"    : response.status,
+                "payload"   : payload if isinstance(payload, dict) else None,
                 "latency_ms": round((time.perf_counter() - started) * 1_000, 2),
-                "error": error,
+                "error"     : error,
             }
     except (aiohttp.ClientError, TimeoutError, OSError, ValueError) as exc:
         return {
-            "status": None,
-            "payload": None,
+            "status"    : None,
+            "payload"   : None,
             "latency_ms": round((time.perf_counter() - started) * 1_000, 2),
-            "error": f"{type(exc).__name__}: {exc}",
+            "error"     : f"{type(exc).__name__}: {exc}",
         }
 
 
@@ -218,7 +218,7 @@ async def _protocol_probes(
     """独立探测鉴权和 JSON 错误；传输失败保留到报告而不吞掉。"""
 
     statuses: dict[str, int | None] = {"missing_auth": None, "malformed_json": None}
-    errors: dict[str, str]          = {}
+    errors  : dict[str, str]        = {}
     try:
         async with session.post(endpoint, json={}) as response:
             statuses["missing_auth"] = response.status
@@ -231,8 +231,8 @@ async def _protocol_probes(
             endpoint,
             data    = b"{broken-json",
             headers = {
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
+                "Authorization"           : f"Bearer {token}",
+                "Content-Type"            : "application/json",
                 "X-XiaoQing-Response-Mode": "actions",
             },
         ) as response:
@@ -258,15 +258,15 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     token      = _load_token(args.secrets.resolve())
     timeout = aiohttp.ClientTimeout(total=args.timeout)
     connector = aiohttp.TCPConnector(limit=max(stage.concurrency for stage in args.stages))
-    stages: list[dict[str, Any]]  = []
-    probes: dict[str, int | None] = {"missing_auth": None, "malformed_json": None}
-    probe_errors: dict[str, str]  = {}
-    recovery                      = RequestResult(None, 0.0, "health preflight failed")
-    health_after: dict[str, Any]  = {
-        "status": None,
-        "payload": None,
+    stages      : list[dict[str, Any]]  = []
+    probes      : dict[str, int | None] = {"missing_auth": None, "malformed_json": None}
+    probe_errors: dict[str, str]        = {}
+    recovery                            = RequestResult(None, 0.0, "health preflight failed")
+    health_after: dict[str, Any]        = {
+        "status"    : None,
+        "payload"   : None,
         "latency_ms": 0.0,
-        "error": "pressure stages not started",
+        "error"     : "pressure stages not started",
     }
     abort_reason: str | None = None
     async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
@@ -315,20 +315,20 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         and all(int(stage["status_counts"].get("200", 0)) > 0 for stage in stages)
     )
     return {
-        "schema_version": 2,
-        "started_at": started_at,
-        "finished_at": datetime.now(UTC).isoformat(),
-        "endpoint": args.endpoint,
-        "timeout_seconds": args.timeout,
-        "message_id_seed": args.message_id_seed,
-        "abort_reason": abort_reason,
-        "stages": stages,
-        "protocol_probes": probes,
+        "schema_version"       : 2,
+        "started_at"           : started_at,
+        "finished_at"          : datetime.now(UTC).isoformat(),
+        "endpoint"             : args.endpoint,
+        "timeout_seconds"      : args.timeout,
+        "message_id_seed"      : args.message_id_seed,
+        "abort_reason"         : abort_reason,
+        "stages"               : stages,
+        "protocol_probes"      : probes,
         "protocol_probe_errors": probe_errors,
-        "recovery_probe": asdict(recovery),
-        "health_before": health_before,
-        "health_after": health_after,
-        "gate_passed": gate_passed,
+        "recovery_probe"       : asdict(recovery),
+        "health_before"        : health_before,
+        "health_after"         : health_after,
+        "gate_passed"          : gate_passed,
     }
 
 

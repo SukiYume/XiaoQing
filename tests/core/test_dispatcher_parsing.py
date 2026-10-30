@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock, Mock
+
+import pytest
+
 import tests.helpers.dispatcher_test_support as _fixture_support
 from tests.helpers.dispatcher_test_support import (
-    AsyncMock,
     CommandSpec,
     Dispatcher,
-    MagicMock,
     MessageParser,
-    Mock,
-    pytest,
 )
 
 dispatcher             = _fixture_support.dispatcher
@@ -39,9 +39,9 @@ class TestMessageParser:
             def __init__(self):
                 self.reads   = 0
                 self.payload = {
-                    "bot_name": "小青",
+                    "bot_name"        : "小青",
                     "command_prefixes": ["/"],
-                    "plugins": {},
+                    "plugins"         : {},
                 }
 
             @property
@@ -52,12 +52,12 @@ class TestMessageParser:
         provider = CountingConfigProvider()
         parser   = MessageParser(provider)
         event    = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "group",
-            "user_id": 12345,
-            "group_id": 67890,
-            "self_id": 11111,
-            "message": "/help",
+            "user_id"     : 12345,
+            "group_id"    : 67890,
+            "self_id"     : 11111,
+            "message"     : "/help",
         }
 
         assert provider.reads == 1
@@ -77,12 +77,12 @@ class TestMessageParser:
         """测试解析群消息"""
         parser = MessageParser(mock_config_provider)
         event  = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "group",
-            "user_id": 12345,
-            "group_id": 67890,
-            "self_id": 11111,
-            "message": "/echo hello",
+            "user_id"     : 12345,
+            "group_id"    : 67890,
+            "self_id"     : 11111,
+            "message"     : "/echo hello",
         }
 
         ctx = parser.parse(event)
@@ -96,11 +96,11 @@ class TestMessageParser:
         """测试解析私聊消息"""
         parser = MessageParser(mock_config_provider)
         event  = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "private",
-            "user_id": 12345,
-            "self_id": 11111,
-            "message": "你好",
+            "user_id"     : 12345,
+            "self_id"     : 11111,
+            "message"     : "你好",
         }
 
         ctx = parser.parse(event)
@@ -114,12 +114,12 @@ class TestMessageParser:
         """测试解析自己的消息返回 None"""
         parser = MessageParser(mock_config_provider)
         event  = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "group",
-            "user_id": 11111,  # 和 self_id 相同
-            "self_id": 11111,
-            "group_id": 67890,
-            "message": "test",
+            "user_id"     : 11111,  # 和 self_id 相同
+            "self_id"     : 11111,
+            "group_id"    : 67890,
+            "message"     : "test",
         }
 
         ctx = parser.parse(event)
@@ -129,11 +129,11 @@ class TestMessageParser:
         """测试解析空消息返回 None"""
         parser = MessageParser(mock_config_provider)
         event  = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "group",
-            "user_id": 12345,
-            "group_id": 67890,
-            "message": "",
+            "user_id"     : 12345,
+            "group_id"    : 67890,
+            "message"     : "",
         }
 
         ctx = parser.parse(event)
@@ -144,10 +144,10 @@ class TestMessageParser:
     ):
         parser = MessageParser(mock_config_provider)
         event  = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "private",
-            "user_id": 12345,
-            "message": " ",
+            "user_id"     : 12345,
+            "message"     : " ",
         }
 
         ctx = parser.parse(event, allow_empty_session_input=True)
@@ -160,12 +160,12 @@ class TestMessageParser:
         """测试纯图片消息不会被 parser 丢弃"""
         parser = MessageParser(mock_config_provider)
         event  = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "group",
-            "user_id": 12345,
-            "group_id": 67890,
-            "self_id": 11111,
-            "message": [{"type": "image", "data": {"file": "file:///tmp/test.png"}}],
+            "user_id"     : 12345,
+            "group_id"    : 67890,
+            "self_id"     : 11111,
+            "message"     : [{"type": "image", "data": {"file": "file:///tmp/test.png"}}],
         }
 
         ctx = parser.parse(event)
@@ -180,12 +180,12 @@ class TestMessageParser:
         """测试纯 QQ 表情消息不会被 parser 丢弃"""
         parser = MessageParser(mock_config_provider)
         event  = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "group",
-            "user_id": 12345,
-            "group_id": 67890,
-            "self_id": 11111,
-            "message": [{"type": "face", "data": {"id": "14"}}],
+            "user_id"     : 12345,
+            "group_id"    : 67890,
+            "self_id"     : 11111,
+            "message"     : [{"type": "face", "data": {"id": "14"}}],
         }
 
         ctx = parser.parse(event)
@@ -200,12 +200,12 @@ class TestMessageParser:
         """测试只 @ 机器人等同于只喊机器人名字"""
         parser = MessageParser(mock_config_provider)
         event  = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "group",
-            "user_id": 12345,
-            "group_id": 67890,
-            "self_id": 11111,
-            "message": [{"type": "at", "data": {"qq": "11111"}}],
+            "user_id"     : 12345,
+            "group_id"    : 67890,
+            "self_id"     : 11111,
+            "message"     : [{"type": "at", "data": {"qq": "11111"}}],
         }
 
         ctx = parser.parse(event)
@@ -221,12 +221,12 @@ class TestMessageParser:
         parser = MessageParser(mock_config_provider)
         ctx    = parser.parse(
             {
-                "post_type": "message",
+                "post_type"   : "message",
                 "message_type": "group",
-                "user_id": 12345,
-                "group_id": 67890,
-                "self_id": 11111,
-                "message": "/help",
+                "user_id"     : 12345,
+                "group_id"    : 67890,
+                "self_id"     : 11111,
+                "message"     : "/help",
             }
         )
         assert ctx is not None
@@ -238,12 +238,12 @@ class TestMessageParser:
         parser = MessageParser(mock_config_provider)
         ctx    = parser.parse(
             {
-                "post_type": "message",
+                "post_type"   : "message",
                 "message_type": "group",
-                "user_id": 12345,
-                "group_id": 67890,
-                "self_id": 11111,
-                "message": "你好啊小青",
+                "user_id"     : 12345,
+                "group_id"    : 67890,
+                "self_id"     : 11111,
+                "message"     : "你好啊小青",
             }
         )
         assert ctx is not None
@@ -255,12 +255,12 @@ class TestMessageParser:
         parser = MessageParser(mock_config_provider)
         ctx    = parser.parse(
             {
-                "post_type": "message",
+                "post_type"   : "message",
                 "message_type": "group",
-                "user_id": 12345,
-                "group_id": 67890,
-                "self_id": 11111,
-                "message": "小青 https://example.com",
+                "user_id"     : 12345,
+                "group_id"    : 67890,
+                "self_id"     : 11111,
+                "message"     : "小青 https://example.com",
             }
         )
         assert ctx is not None
@@ -271,12 +271,12 @@ class TestMessageParser:
         parser = MessageParser(mock_config_provider)
         ctx    = parser.parse(
             {
-                "post_type": "message",
+                "post_type"   : "message",
                 "message_type": "group",
-                "user_id": 12345,
-                "group_id": 67890,
-                "self_id": 11111,
-                "message": "看看 https://example.com",
+                "user_id"     : 12345,
+                "group_id"    : 67890,
+                "self_id"     : 11111,
+                "message"     : "看看 https://example.com",
             }
         )
         assert ctx is not None
@@ -287,12 +287,12 @@ class TestMessageParser:
         parser = MessageParser(mock_config_provider)
         ctx    = parser.parse(
             {
-                "post_type": "message",
+                "post_type"   : "message",
                 "message_type": "group",
-                "user_id": 12345,
-                "group_id": 67890,
-                "self_id": 11111,
-                "message": [
+                "user_id"     : 12345,
+                "group_id"    : 67890,
+                "self_id"     : 11111,
+                "message"     : [
                     {"type": "at", "data": {"qq": "11111"}},
                     {"type": "face", "data": {"id": "14"}},
                 ],
@@ -313,12 +313,12 @@ class TestDispatcherHandleEvent:
     async def test_handles_message_event(self, dispatcher: Dispatcher):
         """测试处理消息事件"""
         event = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "group",
-            "user_id": 12345,
-            "group_id": 67890,
-            "self_id": 11111,
-            "message": "test",
+            "user_id"     : 12345,
+            "group_id"    : 67890,
+            "self_id"     : 11111,
+            "message"     : "test",
         }
 
         result = await dispatcher.handle_event(event)
@@ -328,7 +328,7 @@ class TestDispatcherHandleEvent:
     async def test_ignores_non_message_event(self, dispatcher: Dispatcher):
         """测试忽略非消息事件"""
         event = {
-            "post_type": "notice",
+            "post_type"  : "notice",
             "notice_type": "group_increase",
         }
 
@@ -366,14 +366,14 @@ class TestDispatcherHandleEvent:
 
         signed_url = "https://example.com/file?token=super-secret#private-fragment"
         event      = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "group",
-            "user_id": 12345,
-            "group_id": 67890,
-            "self_id": 11111,
-            "message": signed_url,
-            "raw_message": signed_url,
-            "message_id": 88,
+            "user_id"     : 12345,
+            "group_id"    : 67890,
+            "self_id"     : 11111,
+            "message"     : signed_url,
+            "raw_message" : signed_url,
+            "message_id"  : 88,
         }
 
         with caplog.at_level("INFO"):
@@ -420,14 +420,14 @@ class TestDispatcherHandleEvent:
         mock_router.resolve = Mock(return_value=(spec, "hello"))
 
         event = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "group",
-            "user_id": 12345,
-            "group_id": 67890,
-            "self_id": 11111,
-            "message": "/echo hello",
-            "raw_message": "/echo hello",
-            "message_id": 99,
+            "user_id"     : 12345,
+            "group_id"    : 67890,
+            "self_id"     : 11111,
+            "message"     : "/echo hello",
+            "raw_message" : "/echo hello",
+            "message_id"  : 99,
         }
 
         result = await dispatcher.handle_event(event)
@@ -463,12 +463,12 @@ class TestDispatcherHandleEvent:
         )
         mock_router.resolve.return_value = (spec, "authorization=Bearer-canary")
         event                            = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "private",
-            "user_id": 12345,
-            "self_id": 11111,
-            "message": "/shell authorization=Bearer-canary",
-            "raw_message": "/shell authorization=Bearer-canary",
+            "user_id"     : 12345,
+            "self_id"     : 11111,
+            "message"     : "/shell authorization=Bearer-canary",
+            "raw_message" : "/shell authorization=Bearer-canary",
         }
 
         result = await dispatcher.handle_event(event)
@@ -493,13 +493,13 @@ class TestDispatcherHandleEvent:
             xq_plugin if name == "xiaoqing_chat" else None
         )
         event = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "group",
-            "user_id": 12345,
-            "group_id": 67890,
-            "self_id": 11111,
-            "message": "/unknown authorization=Bearer-canary",
-            "raw_message": "/unknown authorization=Bearer-canary",
+            "user_id"     : 12345,
+            "group_id"    : 67890,
+            "self_id"     : 11111,
+            "message"     : "/unknown authorization=Bearer-canary",
+            "raw_message" : "/unknown authorization=Bearer-canary",
         }
 
         result = await dispatcher.handle_event(event)
@@ -530,15 +530,15 @@ class TestDispatcherHandleEvent:
         )
         mock_plugin_registry.get.side_effect = lambda name: {
             "xiaoqing_chat": xq_plugin,
-            "qingssh": ssh_plugin,
+            "qingssh"      : ssh_plugin,
         }.get(name)
         event = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "private",
-            "user_id": 12345,
-            "self_id": 11111,
-            "message": "ssh-password-canary",
-            "raw_message": "ssh-password-canary",
+            "user_id"     : 12345,
+            "self_id"     : 11111,
+            "message"     : "ssh-password-canary",
+            "raw_message" : "ssh-password-canary",
         }
 
         result = await dispatcher.handle_event(event)
@@ -566,13 +566,13 @@ class TestDispatcherHandleEvent:
             xq_plugin if name == "xiaoqing_chat" else None
         )
         event = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "group",
-            "user_id": 12345,
-            "group_id": 67890,
-            "self_id": 11111,
-            "message": "普通群聊内容",
-            "raw_message": "普通群聊内容",
+            "user_id"     : 12345,
+            "group_id"    : 67890,
+            "self_id"     : 11111,
+            "message"     : "普通群聊内容",
+            "raw_message" : "普通群聊内容",
         }
 
         await dispatcher.handle_event(event)
@@ -602,11 +602,11 @@ class TestDispatcherHandleEvent:
             )
         )
         event = {
-            "post_type": "message",
+            "post_type"   : "message",
             "message_type": "private",
-            "user_id": 12345,
-            "self_id": 11111,
-            "raw_message": "/echo hello",
+            "user_id"     : 12345,
+            "self_id"     : 11111,
+            "raw_message" : "/echo hello",
         }
 
         result = await dispatcher.handle_event(event)

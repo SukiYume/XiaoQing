@@ -12,25 +12,27 @@ from collections.abc import Mapping
 
 _ENV_NAME_RE          = re.compile(r"[A-Za-z_][A-Za-z0-9_]*", re.ASCII)
 _CWD_MARKER           = "__XQ_CWD__"
-_SHELL_CONTROL_TOKENS = frozenset({"&&", "||", ";", "&", "|", ">", ">>", "<", "<<"})
+_SHELL_OPERATOR_CHARS = frozenset("();<>|&")
 
 
 def is_cd_command(text: str) -> bool:
-    """判断输入是否为独立的 `cd` 命令。"""
+    """判断输入是否为独立的 `cd` 命令。
+
+    只把引号外的运算符当作 Shell 语法；``cd "/tmp/a;b"`` 这类路径里的字符属于目录名。
+    """
 
     if "\n" in text or "\r" in text:
         return False
     try:
-        tokens = shlex.split(text, comments=False, posix=True)
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens                 = list(lexer)
     except ValueError:
         return False
     if not tokens or tokens[0] != "cd":
         return False
-    return not any(
-        token in _SHELL_CONTROL_TOKENS
-        or any(operator in token for operator in _SHELL_CONTROL_TOKENS)
-        for token in tokens[1:]
-    )
+    # punctuation_chars 只会把引号外的运算符拆成独立 token。
+    return not any(token and set(token) <= _SHELL_OPERATOR_CHARS for token in tokens[1:])
 
 
 def build_command(
@@ -38,26 +40,29 @@ def build_command(
     cwd: str | None                    = None,
     env_vars: Mapping[str, str] | None = None,
 ) -> str:
-    """构造应用当前目录和环境变量的完整远端 shell 命令。"""
+    """构造应用当前目录和环境变量的完整远端 shell 命令。
 
-    parts: list[str] = []
+    目录和环境初始化各占一行，失败时 ``exit`` 结束整个远端 Shell：用户脚本里的分号、换行
+    和条件语句不会在错误目录里继续执行，用户脚本本身保持原样和原有退出码。
+    """
+
+    prelude: list[str] = []
 
     if cwd:
-        parts.append(f"cd {shlex.quote(cwd)}")
+        prelude.append(f"cd {shlex.quote(cwd)} || exit")
 
     if env_vars:
         invalid_names = [name for name in env_vars if _ENV_NAME_RE.fullmatch(name) is None]
         if invalid_names:
             raise ValueError("environment variable name is invalid")
         env_exports = " ".join(f"{k}={shlex.quote(v)}" for k, v in env_vars.items())
-        parts.append(f"export {env_exports}")
+        prelude.append(f"export {env_exports} || exit")
 
-    parts.append(text.strip())
-
+    command = text.strip()
     if is_cd_command(text):
-        parts.append(f"printf '%s%s\\n' '{_CWD_MARKER}' \"$(pwd -P)\"")
+        command += f" && printf '%s%s\\n' '{_CWD_MARKER}' \"$(pwd -P)\""
 
-    return " && ".join(parts)
+    return "\n".join([*prelude, command])
 
 
 def extract_cwd_from_output(accumulated_output: str | None) -> str | None:

@@ -13,14 +13,14 @@ def test_build_reply_payload_supports_placeholder_hybrid_flow() -> None:
             "先看这个[[xc_media_1]]再说一句[[xc_media_2]]收尾",
             [
                 {
-                    "kind": "emoji",
+                    "kind"     : "emoji",
                     "file_path": "/tmp/emoji.png",
-                    "marker": "[表情包：无语]",
+                    "marker"   : "[表情包：无语]",
                 },
                 {
-                    "kind": "qq_face",
+                    "kind"   : "qq_face",
                     "face_id": "14",
-                    "marker": "[QQ表情：微笑]",
+                    "marker" : "[QQ表情：微笑]",
                 },
             ],
         )
@@ -51,14 +51,14 @@ def test_build_reply_payload_from_parts_keeps_append_behavior_without_placeholde
             "懂了",
             [
                 {
-                    "kind": "emoji",
+                    "kind"     : "emoji",
                     "file_path": "/tmp/emoji.png",
-                    "marker": "[表情包：无语]",
+                    "marker"   : "[表情包：无语]",
                 },
                 {
-                    "kind": "qq_face",
+                    "kind"   : "qq_face",
                     "face_id": "277",
-                    "marker": "[QQ表情：狗头]",
+                    "marker" : "[QQ表情：狗头]",
                 },
             ],
         )
@@ -90,20 +90,20 @@ def test_merge_reply_media_updates_matching_stable_identity() -> None:
         [{"kind": "emoji", "media_hash": "same", "marker": "[表情包：旧]"}],
         [
             {
-                "kind": "emoji",
+                "kind"      : "emoji",
                 "media_hash": "same",
-                "marker": "[表情包：新]",
-                "file_path": "/tmp/new.png",
+                "marker"    : "[表情包：新]",
+                "file_path" : "/tmp/new.png",
             }
         ],
     )
 
     assert parts == (
         {
-            "kind": "emoji",
+            "kind"      : "emoji",
             "media_hash": "same",
-            "marker": "[表情包：新]",
-            "file_path": "/tmp/new.png",
+            "marker"    : "[表情包：新]",
+            "file_path" : "/tmp/new.png",
         },
     )
 
@@ -113,15 +113,15 @@ def test_build_reply_payload_from_parts_preserves_interleaved_media_order() -> N
         [
             {"kind": "text", "text": "第一句"},
             {
-                "kind": "emoji",
+                "kind"     : "emoji",
                 "file_path": "/tmp/emoji.png",
-                "marker": "[表情包：无语]",
+                "marker"   : "[表情包：无语]",
             },
             {"kind": "text", "text": "\n第二句"},
             {
-                "kind": "qq_face",
+                "kind"   : "qq_face",
                 "face_id": "277",
-                "marker": "[QQ表情：狗头]",
+                "marker" : "[QQ表情：狗头]",
             },
             {"kind": "text", "text": "\n收尾"},
         ]
@@ -151,9 +151,9 @@ def test_build_message_parts_from_template_keeps_lossless_media_fields_without_s
         "先看这个[[xc_media_1]]",
         [
             {
-                "kind": "emoji",
+                "kind"     : "emoji",
                 "file_path": "/tmp/emoji.png",
-                "marker": "[表情包：无语]",
+                "marker"   : "[表情包：无语]",
             }
         ],
     )
@@ -167,9 +167,9 @@ def test_build_reply_payload_from_parts_supports_outbound_image_parts() -> None:
         [
             {"kind": "text", "text": "这是原图"},
             {
-                "kind": "image",
-                "file_path": "/tmp/photo.png",
-                "marker": "[图片：原图]",
+                "kind"       : "image",
+                "file_path"  : "/tmp/photo.png",
+                "marker"     : "[图片：原图]",
                 "description": "原图",
             },
         ]

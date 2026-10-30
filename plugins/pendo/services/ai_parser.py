@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from .db import Database
 
 logger                  = logging.getLogger(__name__)
-WEEKDAY_NAMES: Final    = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+WEEKDAY_NAMES   : Final = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 MOOD_WORD_GROUPS: Final = (
     "positive",
     "negative",
@@ -56,23 +56,23 @@ CHINESE_DIGITS: Final = {
     "九": 9,
 }
 OFFSET_NUMBER_PATTERN: Final = r"[0-9]+(?:\.[0-9]+)?|[零一二两三四五六七八九十百半]+"
-OFFSET_UNIT_PATTERN: Final   = r"分钟|min|m|小时|hour|h|天|day|d|周|week|w"
-OFFSET_TOKEN_RE: Final       = re.compile(
+OFFSET_UNIT_PATTERN  : Final = r"分钟|min|m|小时|hour|h|天|day|d|周|week|w"
+OFFSET_TOKEN_RE      : Final = re.compile(
     rf"({OFFSET_NUMBER_PATTERN})\s*(?:个)?\s*({OFFSET_UNIT_PATTERN})"
 )
 OFFSET_UNIT_SECONDS: Final = {
-    "分钟": 60,
-    "min": 60,
-    "m": 60,
-    "小时": 3600,
+    "分钟"  : 60,
+    "min" : 60,
+    "m"   : 60,
+    "小时"  : 3600,
     "hour": 3600,
-    "h": 3600,
-    "天": 86400,
-    "day": 86400,
-    "d": 86400,
-    "周": 604800,
+    "h"   : 3600,
+    "天"   : 86400,
+    "day" : 86400,
+    "d"   : 86400,
+    "周"   : 604800,
     "week": 604800,
-    "w": 604800,
+    "w"   : 604800,
 }
 
 
@@ -280,9 +280,7 @@ class AIParser:
             self._record_degraded_error(exc, component="pendo.ai_parser.consent")
             return False
 
-    async def _call_llm(
-        self, messages: list[dict[str, str]], temperature: float = 0.3
-    ) -> str | None:
+    async def _call_llm(self, messages: list[dict[str, str]]) -> str | None:
         """通过 core 的 pendo.parse route 调用模型。"""
 
         try:
@@ -292,7 +290,6 @@ class AIParser:
             result = await ai.complete(
                 "parse",
                 messages,
-                temperature=temperature,
             )
             return result.content or None
         except Exception as exc:
@@ -306,6 +303,12 @@ class AIParser:
         parsed["timezone"]     = user_timezone.key
         parsed["parse_source"] = "rule"
         parsed["type"]         = "event"
+        # 规则层把“截止/提交”识别成待办时间；日程入口按事件契约把它映射为开始时间，不能丢掉。
+        if parsed.get("deadline_at") and not parsed.get("start_time"):
+            parsed["start_time"] = parsed.pop("deadline_at")
+            parsed.pop("plan_date", None)
+            if "start_time" in parsed.get("needs_confirmation", []):
+                parsed["needs_confirmation"].remove("start_time")
         return parsed
 
     def _prompt_time_context(self, user_id: str) -> tuple[str, str]:
@@ -362,7 +365,7 @@ class AIParser:
                 {"role": "user", "content": prompt},
             ]
 
-            response = await self._call_llm(messages, temperature=0.0)
+            response = await self._call_llm(messages)
             if not response:
                 return self._fallback_event_result(source_text, user_id, partial=partial)
 
@@ -405,7 +408,7 @@ class AIParser:
                 {"role": "system", "content": "你是日记情绪分析助手，只返回JSON。"},
                 {"role": "user", "content": prompt},
             ]
-            response = await self._call_llm(messages, temperature=0.1)
+            response = await self._call_llm(messages)
             if not response:
                 return analyze_diary_mood_rule(text)
 
@@ -477,8 +480,8 @@ class AIParser:
     ) -> dict[str, Any]:
         """构造事件身份字段及完整/局部解析各自的文本字段。"""
         result: dict[str, Any] = {
-            "type": "event",
-            "owner_id": user_id,
+            "type"        : "event",
+            "owner_id"    : user_id,
             "parse_source": parsed.get("parse_source", "ai"),
         }
         if partial:
@@ -496,8 +499,8 @@ class AIParser:
         else:
             result.update(
                 {
-                    "title": parsed.get("title", source_text[:50]) or source_text[:50],
-                    "content": source_text,
+                    "title"   : parsed.get("title", source_text[:50]) or source_text[:50],
+                    "content" : source_text,
                     "category": parsed.get("category") or "未分类",
                 }
             )

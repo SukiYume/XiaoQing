@@ -92,19 +92,19 @@ def ledger_pages(tmp_path, request):
 
     db   = Database(str(tmp_path / "pagination.db"))
     base = {
-        "owner_id": "pagination-user",
-        "type": "ledger",
-        "amount": 25,
-        "amount_cents": 2500,
-        "transaction_type": "transfer",
-        "currency": "CNY",
-        "ledger_category": "测试 分类",
-        "ledger_date": "2026-03-15",
-        "account_name": "测试 账户",
+        "owner_id"            : "pagination-user",
+        "type"                : "ledger",
+        "amount"              : 25,
+        "amount_cents"        : 2500,
+        "transaction_type"    : "transfer",
+        "currency"            : "CNY",
+        "ledger_category"     : "测试 分类",
+        "ledger_date"         : "2026-03-15",
+        "account_name"        : "测试 账户",
         "counter_account_name": "目标 账户",
-        "merchant": "测试 商户",
-        "created_at": "2026-03-15T12:00:00",
-        "updated_at": "2026-03-15T12:00:00",
+        "merchant"            : "测试 商户",
+        "created_at"          : "2026-03-15T12:00:00",
+        "updated_at"          : "2026-03-15T12:00:00",
     }
     for index in range(getattr(request, "param", 21)):
         db.insert_item({**base, "id": f"entry{index:03d}", "title": f"记录{index:03d}"})
@@ -152,7 +152,7 @@ async def test_real_pendo_filtered_pagination(tmp_path, ledger_pages, delivery):
         env,
         "xiaoqing_command",
         {
-            "command": "/pendo ledger list " + filters,
+            "command" : "/pendo ledger list " + filters,
             "delivery": delivery,
         },
     )
@@ -204,7 +204,7 @@ async def test_real_pendo_single_empty_all_and_middle_page(
         env,
         "xiaoqing_command",
         {
-            "command": "/pendo ledger list " + query,
+            "command" : "/pendo ledger list " + query,
             "delivery": "all_pages",
         },
     )
@@ -245,7 +245,7 @@ async def test_real_pendo_partial_results_survive_stop(tmp_path, ledger_pages, f
         env,
         "xiaoqing_command",
         {
-            "command": "/pendo ledger list 2026-03",
+            "command" : "/pendo ledger list 2026-03",
             "delivery": "all_pages",
         },
     )
@@ -272,7 +272,7 @@ async def test_missing_navigation_never_implies_complete(tmp_path, has_more):
         env,
         "xiaoqing_command",
         {
-            "command": "/catalog",
+            "command" : "/catalog",
             "delivery": "all_pages",
         },
     )
@@ -557,6 +557,7 @@ async def test_ledger_tool_and_legacy_command_always_attach_initiator_source(tmp
         "xiaoqing_command",
         {"delivery": "continue", "command": "/pendo ledger add 99.47 会员 cat:服务 account:信用卡"},
     )
+    assert runner.run.await_count == 2
     for call in runner.run.await_args_list:
         command = call.args[0]
         assert command.startswith("/pendo ledger record ")
@@ -578,10 +579,10 @@ async def test_catalog_combines_keywords_and_paginates(tmp_path):
         build_command_catalog_node(
             "demo",
             {
-                "name": f"item{i}",
+                "name"    : f"item{i}",
                 "triggers": [f"item{i}"],
-                "usage": f"/item{i}",
-                "help": "demo",
+                "usage"   : f"/item{i}",
+                "help"    : "demo",
             },
             root=True,
         )
@@ -642,10 +643,10 @@ async def test_catalog_pages_keep_each_command_contract_whole(tmp_path):
         build_command_catalog_node(
             "demo",
             {
-                "name": f"entry{i}",
+                "name"    : f"entry{i}",
                 "triggers": [f"entry{i}"],
-                "usage": f"/entry{i}",
-                "help": help_text,
+                "usage"   : f"/entry{i}",
+                "help"    : help_text,
                 "examples": [f"/entry{i} one", f"/entry{i} two", f"/entry{i} three"],
             },
             root=True,
@@ -727,11 +728,11 @@ async def test_xiaoai_structured_tools_use_command_permissions_and_original_requ
     node = build_command_catalog_node(
         "xiaoai",
         {
-            "name": "xiaoai",
-            "triggers": ["米家"],
-            "help": "米家设备",
+            "name"      : "xiaoai",
+            "triggers"  : ["米家"],
+            "help"      : "米家设备",
             "permission": "bot_admin",
-            "contexts": ["private"],
+            "contexts"  : ["private"],
         },
         root=True,
     )
@@ -971,16 +972,16 @@ def _catalog() -> tuple[Any, ...]:
     pendo = build_command_catalog_node(
         "pendo",
         {
-            "name": "pendo",
-            "triggers": ["pendo"],
-            "help": "个人时间与信息管理",
-            "usage": "/pendo <subcommand>",
-            "contexts": ["private"],
+            "name"       : "pendo",
+            "triggers"   : ["pendo"],
+            "help"       : "个人时间与信息管理",
+            "usage"      : "/pendo <subcommand>",
+            "contexts"   : ["private"],
             "subcommands": [
                 {
-                    "name": "todo",
-                    "help": "待办",
-                    "usage": "/pendo todo <add|list>",
+                    "name"    : "todo",
+                    "help"    : "待办",
+                    "usage"   : "/pendo todo <add|list>",
                     "examples": ["/pendo todo add 写周报 plan:2026-08-01"],
                 },
                 {"name": "event", "help": "日程", "usage": "/pendo event <add|list>"},
@@ -1091,9 +1092,9 @@ async def test_ssh_tools_format_remote_results(tmp_path: Path) -> None:
             side_effect=[
                 {"ok": True, "exit_code": 0, "output": "up 3 days", "timed_out": False},
                 {
-                    "ok": False,
+                    "ok"       : False,
                     "exit_code": None,
-                    "output": "",
+                    "output"   : "",
                     "timed_out": True,
                     "truncated": True,
                 },
@@ -1123,11 +1124,11 @@ async def test_codex_tool_uses_a_per_chat_session_and_returns_images(tmp_path: P
         run_task=AsyncMock(
             side_effect=[
                 {
-                    "status": "done",
-                    "exit_code": 0,
-                    "cwd": "C:/work",
+                    "status"    : "done",
+                    "exit_code" : 0,
+                    "cwd"       : "C:/work",
                     "final_text": "脚本写好了",
-                    "images": ["C:/codex/img.png"],
+                    "images"    : ["C:/codex/img.png"],
                 },
                 {"status": "error", "error": "会话名不合法"},
             ]
@@ -1220,10 +1221,10 @@ def _catalog_for_permissions() -> tuple:
         build_command_catalog_node(
             "shell",
             {
-                "name": "shell",
-                "triggers": ["shell"],
-                "help": "在本机执行命令",
-                "usage": "/shell <命令>",
+                "name"      : "shell",
+                "triggers"  : ["shell"],
+                "help"      : "在本机执行命令",
+                "usage"     : "/shell <命令>",
                 "permission": "bot_admin",
             },
             root=True,
@@ -1231,16 +1232,16 @@ def _catalog_for_permissions() -> tuple:
         build_command_catalog_node(
             "qingpet",
             {
-                "name": "qingpet",
-                "triggers": ["宠物"],
-                "help": "宠物养成",
-                "usage": "/宠物 <子命令>",
+                "name"       : "qingpet",
+                "triggers"   : ["宠物"],
+                "help"       : "宠物养成",
+                "usage"      : "/宠物 <子命令>",
                 "subcommands": [
                     {"name": "feed", "help": "喂食宠物", "usage": "/宠物 feed"},
                     {
-                        "name": "admin",
-                        "help": "宠物群管理",
-                        "usage": "/宠物 admin",
+                        "name"      : "admin",
+                        "help"      : "宠物群管理",
+                        "usage"     : "/宠物 admin",
                         "permission": "group_admin",
                     },
                 ],

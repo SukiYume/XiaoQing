@@ -292,8 +292,9 @@ async def test_image_only_metadata_returns_an_image_segment(
     )
 
     result = await url_parser.handle_url("https://example.com", {}, context)
-    assert len(result) == 1
-    assert result[0]["type"] == "image"
+    assert len(result) == 2
+    assert "网页预览" in result[0]["data"]["text"]
+    assert result[1]["type"] == "image"
 
 
 @pytest.mark.asyncio
@@ -309,8 +310,11 @@ async def test_empty_and_oversized_pages_return_no_preview(
     assert await url_parser.handle_url("https://example.com", {}, context) == []
 
     monkeypatch.setattr(url_parser, "MAX_HTML_BYTES", 3)
-    network.page.return_value = _html_response(b"1234")
+    network.page.return_value = _html_response("<title>Valid preview</title>")
+    decoder = MagicMock(wraps=url_parser._decode_html)
+    monkeypatch.setattr(url_parser, "_decode_html", decoder)
     assert await url_parser.handle_url("https://example.com", {}, context) == []
+    decoder.assert_not_called()
 
 
 @pytest.mark.asyncio

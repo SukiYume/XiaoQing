@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from core.plugin_base import emoji, face, image, segments
+from core.plugin_base import emoji, face, image, segments, text
 
 from .llm.postprocess import split_chat_reply
 from .media_registry import MEDIA_PLACEHOLDER_RE, rebuild_message_content
@@ -22,10 +22,10 @@ _LONE_FULL_STOP_RE = re.compile(r"(?<![。.…])。$", re.MULTILINE)
 
 @dataclass(frozen=True)
 class ReplyPayload:
-    display_text: str
+    display_text    : str
     outbound_batches: list[list[dict[str, Any]]]
-    media_items: list[dict[str, Any]]
-    parts: tuple[dict[str, Any], ...] = ()
+    media_items     : list[dict[str, Any]]
+    parts           : tuple[dict[str, Any], ...] = ()
 
 
 def _media_segment(spec: dict[str, Any]) -> dict[str, Any] | None:
@@ -43,8 +43,11 @@ def _media_segment(spec: dict[str, Any]) -> dict[str, Any] | None:
         return None
     if kind == "qq_face":
         face_id = str(spec.get("face_id", "") or "").strip()
-        if face_id:
+        if face_id.isdigit():
             return face(face_id)
+        if face_id:
+            # 目录里混有 Unicode emoji（🚀）：OneBot face 段只接受 QQ 表情编号，Unicode 用文字段发送。
+            return text(face_id)
         return None
     return None
 
@@ -56,9 +59,9 @@ def _build_batch_segments(
     if not batch:
         return [], []
 
-    built: list[dict[str, Any]] = []
-    consumed_indexes: list[int] = []
-    cursor                      = 0
+    built           : list[dict[str, Any]] = []
+    consumed_indexes: list[int]            = []
+    cursor                                 = 0
     for match in MEDIA_PLACEHOLDER_RE.finditer(batch):
         text_prefix = batch[cursor : match.start()].strip("\r\n")
         if text_prefix.strip():

@@ -66,8 +66,8 @@ def _event_media_log_fields(event: dict[str, Any] | None) -> dict[str, Any]:
         return {}
     return {
         "message_id": event.get("message_id"),
-        "group_id": event.get("group_id"),
-        "user_id": event.get("user_id"),
+        "group_id"  : event.get("group_id"),
+        "user_id"   : event.get("user_id"),
     }
 
 
@@ -77,14 +77,14 @@ def _log_resolved_media(
     fields = _event_media_log_fields(event)
     fields.update(
         {
-            "media_hash": resolved.media_hash[:12],
+            "media_hash"  : resolved.media_hash[:12],
             "segment_type": resolved.segment_type,
-            "source_name": resolved.source_name,
-            "mime_type": resolved.mime_type,
-            "animated": resolved.is_animated,
-            "width": resolved.width,
-            "height": resolved.height,
-            "cached_path": resolved.cached_path,
+            "source_name" : resolved.source_name,
+            "mime_type"   : resolved.mime_type,
+            "animated"    : resolved.is_animated,
+            "width"       : resolved.width,
+            "height"      : resolved.height,
+            "cached_path" : resolved.cached_path,
         }
     )
     media_log(context, runtime, step="media.resolve.ok", fields=fields)
@@ -146,11 +146,11 @@ def _reusable_cached_render(
             runtime,
             step   = "media.cache.hit",
             fields = {
-                "media_hash": resolved.media_hash[:12],
-                "analysis_source": source or "unknown",
-                "analysis_quality": quality,
+                "media_hash"             : resolved.media_hash[:12],
+                "analysis_source"        : source or "unknown",
+                "analysis_quality"       : quality,
                 "analysis_prompt_version": prompt_version,
-                "marker": cached_rendered.marker,
+                "marker"                 : cached_rendered.marker,
             },
         )
         return cached_rendered
@@ -159,12 +159,12 @@ def _reusable_cached_render(
         runtime,
         step   = "media.cache.refresh",
         fields = {
-            "media_hash": resolved.media_hash[:12],
-            "cached_source": source or "unknown",
-            "cached_quality": quality,
+            "media_hash"           : resolved.media_hash[:12],
+            "cached_source"        : source or "unknown",
+            "cached_quality"       : quality,
             "cached_prompt_version": prompt_version,
-            "cached_marker": cached_rendered.marker,
-            "summary_hint": summary_hint,
+            "cached_marker"        : cached_rendered.marker,
+            "summary_hint"         : summary_hint,
         },
     )
     return None
@@ -223,10 +223,10 @@ async def _render_resolved_media_locked(
             runtime,
             step   = "media.render.fallback",
             fields = {
-                "media_hash": resolved.media_hash[:12],
+                "media_hash"  : resolved.media_hash[:12],
                 "segment_type": resolved.segment_type,
                 "summary_hint": summary_hint,
-                "marker": rendered.marker,
+                "marker"      : rendered.marker,
             },
             level="warning",
         )
@@ -300,7 +300,12 @@ def _resolved_local_media(
     max_frames: int,
 ) -> ResolvedMedia:
     payload = read_file_bounded(path, max_bytes=max_bytes)
-    info = inspect_image_payload_details(payload, fallback_suffix=path.suffix or ".png")
+    info = inspect_image_payload_details(
+        payload,
+        fallback_suffix = path.suffix or ".png",
+        max_pixels      = max_pixels,
+        max_frames      = max_frames,
+    )
     validate_image_resource_limits(
         width       = info.width,
         height      = info.height,
@@ -407,11 +412,11 @@ def _upgrade_rendered_media_from_registry(
     refs: list[dict[str, Any]] = []
     for item in rendered_items:
         ref: dict[str, Any] = {
-            "kind": str(item.kind or ""),
-            "media_hash": str(item.media_hash or ""),
-            "face_id": str(item.face_id or ""),
-            "marker": str(item.marker or ""),
-            "description": str(item.description or ""),
+            "kind"        : str(item.kind or ""),
+            "media_hash"  : str(item.media_hash or ""),
+            "face_id"     : str(item.face_id or ""),
+            "marker"      : str(item.marker or ""),
+            "description" : str(item.description or ""),
             "emotion_tags": [str(tag) for tag in item.emotion_tags if str(tag).strip()],
         }
         if item.cached_path is not None:
@@ -540,11 +545,15 @@ def _compose_effective_user_text(
 def _rendered_media_to_message_part(rendered: RenderedMedia) -> dict[str, Any]:
     """只序列化模型安全的媒体元数据，排除来源字节和凭据。"""
 
+    # 标记与旧文本渲染一致地带上梗背景：结构化消息、提示词和持久化历史都保留这段分析。
     payload: dict[str, Any] = {
-        "kind": str(rendered.kind or "").strip(),
+        "kind"      : str(rendered.kind or "").strip(),
         "media_hash": str(rendered.media_hash or "").strip(),
-        "marker": str(rendered.marker or "").strip(),
+        "marker"    : build_context_marker(rendered) or str(rendered.marker or "").strip(),
     }
+    cultural_hint = str(rendered.cultural_hint or "").strip()
+    if cultural_hint:
+        payload["cultural_hint"] = cultural_hint
     description = str(rendered.description or "").strip()
     if description:
         payload["description"] = description
@@ -707,9 +716,9 @@ async def render_event_media(event: dict[str, Any], *, context, runtime) -> list
     if not cfg.enable_inbound_media_context:
         return []
 
-    rendered_items: list[RenderedMedia] = []
-    new_emoji_markers: list[str]        = []
-    max_media                           = max(0, cfg.max_media_per_message)
+    rendered_items   : list[RenderedMedia] = []
+    new_emoji_markers: list[str]           = []
+    max_media                              = max(0, cfg.max_media_per_message)
     for segment in iter_message_segments(event):
         segment_type = str(segment.get("type", "") or "")
         if segment_type not in SUPPORTED_MEDIA_TYPES:
@@ -727,7 +736,9 @@ async def render_event_media(event: dict[str, Any], *, context, runtime) -> list
         media_log(context, runtime, step="media.segment", fields=log_fields)
         if segment_type == "face":
             rendered_items.append(
-                _render_face_with_observation(segment, context=context, runtime=runtime)
+                await run_media_blocking(
+                    _render_face_with_observation, segment, context=context, runtime=runtime
+                )
             )
             continue
         try:

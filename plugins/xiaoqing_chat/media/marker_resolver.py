@@ -34,37 +34,37 @@ _OUTBOUND_MARKER_RESIDUE_RE = re.compile(r"\[想发[^\]\n]*(?:\]|$)")
 _RENDERED_OUTBOUND_MARKER_RE = re.compile(r"\[(表情包|QQ表情|图片)[:：]([^\]\n]{1,80})\]")
 _TOKEN_PATTERN = r"[\u4e00-\u9fff]{1,4}|[a-z0-9_]+"
 _MARKER_KIND_BY_LABEL: dict[str, MediaMarkerKind] = {
-    "表情": "emoji",
-    "表情包": "emoji",
+    "表情"  : "emoji",
+    "表情包" : "emoji",
     "QQ表情": "qq_face",
-    "图片": "image",
+    "图片"  : "image",
 }
 
 
 @dataclass(frozen=True)
 class ParsedMarker:
-    kind: MediaMarkerKind
-    hint: str
+    kind    : MediaMarkerKind
+    hint    : str
     raw_span: tuple[int, int]
 
 
 @dataclass(frozen=True)
 class ImageLibraryEntry:
-    media_key: str
-    media_hash: str
-    file_path: Path
+    media_key  : str
+    media_hash : str
+    file_path  : Path
     description: str
-    marker: str
+    marker     : str
 
 
 @dataclass(frozen=True)
 class ResolvedMarker:
-    kind: MediaMarkerKind
-    hint: str
+    kind    : MediaMarkerKind
+    hint    : str
     raw_span: tuple[int, int]
-    entry: EmojiLibraryEntry | QQFaceEntry | ImageLibraryEntry
-    marker: str
-    mode: str = "text_with_media"
+    entry   : EmojiLibraryEntry | QQFaceEntry | ImageLibraryEntry
+    marker  : str
+    mode    : str = "text_with_media"
 
 
 def parse_marker(text: str) -> ParsedMarker | None:
@@ -257,8 +257,8 @@ def _collect_library_image_entries(
     entries: list[ImageLibraryEntry] = []
     for file_path in files:
         media_ref = {
-            "kind": "image",
-            "file_path": str(file_path),
+            "kind"       : "image",
+            "file_path"  : str(file_path),
             "description": file_path.stem.replace("_", " "),
         }
         resolved = resolve_registered_media_items([media_ref], store=media_store)[0]
@@ -276,8 +276,8 @@ def _collect_history_image_entries(
     data_root: Path,
     media_store: MediaRegistryStore | None,
 ) -> list[ImageLibraryEntry]:
-    seen_keys: set[str]              = set()
-    entries: list[ImageLibraryEntry] = []
+    seen_keys: set[str]                = set()
+    entries  : list[ImageLibraryEntry] = []
     for message in reversed(history or ()):
         if message.role != "assistant":
             continue
@@ -301,8 +301,8 @@ def _collect_history_image_entries(
 
 
 def _merge_candidate_entries(*entry_groups: Sequence[ImageLibraryEntry]) -> list[ImageLibraryEntry]:
-    seen_keys: set[str]             = set()
-    merged: list[ImageLibraryEntry] = []
+    seen_keys: set[str]                = set()
+    merged   : list[ImageLibraryEntry] = []
     for group in entry_groups:
         for entry in group:
             dedupe_key = _image_entry_key(entry)
@@ -447,24 +447,24 @@ def marker_media_part(context, resolved: ResolvedMarker) -> dict[str, Any] | Non
         if not raw_file_path:
             return None
         return {
-            "kind": "emoji",
-            "media_hash": entry.media_hash,
-            "marker": resolved.marker,
-            "description": entry.description,
+            "kind"        : "emoji",
+            "media_hash"  : entry.media_hash,
+            "marker"      : resolved.marker,
+            "description" : entry.description,
             "emotion_tags": [tag for tag in entry.emotion_tags if str(tag).strip()],
-            "file_path": str(resolve_emoji_file_path(context, raw_file_path)),
-            "mode": resolved.mode,
+            "file_path"   : str(resolve_emoji_file_path(context, raw_file_path)),
+            "mode"        : resolved.mode,
         }
     if resolved.kind == "qq_face":
         if not isinstance(entry, QQFaceEntry):
             return None
         return {
-            "kind": "qq_face",
+            "kind"   : "qq_face",
             "face_id": entry.face_id,
-            "marker": resolved.marker,
-            "label": entry.label,
+            "marker" : resolved.marker,
+            "label"  : entry.label,
             "aliases": [alias for alias in entry.aliases if str(alias).strip()],
-            "mode": resolved.mode,
+            "mode"   : resolved.mode,
         }
     if resolved.kind == "image":
         if not isinstance(entry, ImageLibraryEntry):
@@ -473,13 +473,13 @@ def marker_media_part(context, resolved: ResolvedMarker) -> dict[str, Any] | Non
         if file_path is None:
             return None
         return {
-            "kind": "image",
-            "media_key": entry.media_key,
-            "media_hash": entry.media_hash,
-            "marker": resolved.marker,
+            "kind"       : "image",
+            "media_key"  : entry.media_key,
+            "media_hash" : entry.media_hash,
+            "marker"     : resolved.marker,
             "description": entry.description,
-            "file_path": str(file_path),
-            "mode": resolved.mode,
+            "file_path"  : str(file_path),
+            "mode"       : resolved.mode,
         }
     return None
 

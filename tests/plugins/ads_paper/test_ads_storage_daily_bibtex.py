@@ -84,9 +84,9 @@ async def test_daily_uses_utc_entry_date_window_and_deterministic_order(
                 {"bibcode": "OLD", "title": ["Old"], "entdate": "2026-07-12"},
                 {
                     "bibcode": "A",
-                    "title": ["Today A"],
+                    "title"  : ["Today A"],
                     "entdate": "2026-07-13",
-                    "date": "2021-01-01T00:00:00.000Z",
+                    "date"   : "2021-01-01T00:00:00.000Z",
                 },
                 {"bibcode": "UNKNOWN", "title": ["Missing date"]},
             ]

@@ -2,21 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
+from unittest.mock import AsyncMock, Mock
+
+import pytest
+
 import tests.helpers.plugin_manager_test_support as _fixture_support
 from core.plugin_watcher import _ManifestRejection
 from tests.helpers.plugin_manager_test_support import (
-    AsyncMock,
     LoadedPlugin,
-    Mock,
     ModuleType,
-    Path,
     PluginExecutionClosed,
     PluginExecutionGate,
     _AsyncConcurrencyProbe,
     _build_definition,
     _build_manager,
-    asyncio,
-    pytest,
     textwrap,
 )
 
@@ -59,9 +60,9 @@ async def test_reload_retires_old_policy_when_replacement_fingerprint_fails(
     changed_definition          = _build_definition()
     changed_definition.commands = [
         {
-            "name": "demo",
-            "triggers": ["demo"],
-            "help": "demo",
+            "name"      : "demo",
+            "triggers"  : ["demo"],
+            "help"      : "demo",
             "admin_only": True,
         }
     ]

@@ -23,10 +23,10 @@ def mock_config_provider():
     """模拟配置提供者"""
     mock        = MagicMock()
     mock.config = {
-        "bot_name": "小青",
-        "command_prefixes": ["/"],
+        "bot_name"                 : "小青",
+        "command_prefixes"         : ["/"],
         "require_bot_name_in_group": True,
-        "plugins": {
+        "plugins"                  : {
             "smalltalk_provider": "smalltalk",
         },
     }

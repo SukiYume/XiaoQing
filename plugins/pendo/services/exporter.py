@@ -93,37 +93,37 @@ class ExporterService:
     """Pendo 导出服务。"""
 
     _EXPORT_TYPE_MAP: ClassVar[dict[str, str]] = {
-        "event": "event",
-        "todo": "task",
-        "task": "task",
-        "note": "note",
+        "event" : "event",
+        "todo"  : "task",
+        "task"  : "task",
+        "note"  : "note",
         "ledger": "ledger",
-        "diary": "diary",
-        "all": "all",
-        "全部": "all",
-        "*": "all",
+        "diary" : "diary",
+        "all"   : "all",
+        "全部"    : "all",
+        "*"     : "all",
     }
-    _TYPE_ORDER: ClassVar[tuple[str, ...]] = ("event", "task", "note", "ledger", "diary")
-    _TYPE_LABELS: ClassVar[dict[str, str]] = {
-        "event": "日程",
-        "task": "待办",
-        "note": "笔记",
+    _TYPE_ORDER : ClassVar[tuple[str, ...]] = ("event", "task", "note", "ledger", "diary")
+    _TYPE_LABELS: ClassVar[dict[str, str]]  = {
+        "event" : "日程",
+        "task"  : "待办",
+        "note"  : "笔记",
         "ledger": "记账",
-        "diary": "日记",
+        "diary" : "日记",
     }
     _TYPE_EXPORT_NAMES: ClassVar[dict[str, str]] = {
-        "event": "event",
-        "task": "todo",
-        "note": "note",
+        "event" : "event",
+        "task"  : "todo",
+        "note"  : "note",
         "ledger": "ledger",
-        "diary": "diary",
+        "diary" : "diary",
     }
     _TYPE_SUMMARY_HINTS: ClassVar[dict[str, str]] = {
-        "event": "按开始时间归档，保留地点、提醒、日程集合与节点上下文。",
-        "task": "按计划日期、截止时间或创建时间排序，保留优先级、提醒与完成状态。",
-        "note": "按创建时间归档，保留分类、标签与关联条目信息。",
+        "event" : "按开始时间归档，保留地点、提醒、日程集合与节点上下文。",
+        "task"  : "按计划日期、截止时间或创建时间排序，保留优先级、提醒与完成状态。",
+        "note"  : "按创建时间归档，保留分类、标签与关联条目信息。",
         "ledger": "按记账日期归档，突出收支方向、金额与分类。",
-        "diary": "按日记日期归档，保留天气、地点、心情等记录。",
+        "diary" : "按日记日期归档，保留天气、地点、心情等记录。",
     }
 
     def __init__(self, db: _ExportDatabase, export_root: Path) -> None:
@@ -216,13 +216,13 @@ class ExporterService:
             return type_info
 
         return {
-            "status": "success",
-            "filename": filename,
-            "start_date": range_info["start_date"],
-            "end_date": range_info["end_date"],
+            "status"     : "success",
+            "filename"   : filename,
+            "start_date" : range_info["start_date"],
+            "end_date"   : range_info["end_date"],
             "range_label": range_info["label"],
-            "types": type_info["types"],
-            "type_label": type_info["label"],
+            "types"      : type_info["types"],
+            "type_label" : type_info["label"],
         }
 
     def _tokenize_args(self, args: str) -> list[str]:
@@ -269,10 +269,10 @@ class ExporterService:
         normalized = (token or "").strip()
         if not normalized or normalized.lower() in {"all", "*"} or normalized == "全部":
             return {
-                "status": "success",
+                "status"    : "success",
                 "start_date": None,
-                "end_date": None,
-                "label": "全部时间",
+                "end_date"  : None,
+                "label"     : "全部时间",
             }
 
         start_date, end_date = parse_search_date_range(
@@ -294,8 +294,8 @@ class ExporterService:
             types = list(self._TYPE_ORDER)
             return {
                 "status": "success",
-                "types": types,
-                "label": "全部类型",
+                "types" : types,
+                "label" : "全部类型",
             }
 
         parts = [part.strip().lower() for part in re.split(r"[,，+/|]", normalized) if part.strip()]
@@ -321,8 +321,8 @@ class ExporterService:
         label   = "、".join(self._TYPE_LABELS[item_type] for item_type in ordered)
         return {
             "status": "success",
-            "types": ordered,
-            "label": label,
+            "types" : ordered,
+            "label" : label,
         }
 
     def _collect_items(
@@ -333,46 +333,17 @@ class ExporterService:
         end_date: str | None,
     ) -> list[Any]:
         items: list[Any] = []
+        start_dt         = self._parse_datetime(start_date)
+        end_dt           = self._parse_datetime(end_date)
         for item_type in selected_types:
-            # 正式数据库按页读完，避免旧版 10000 条上限造成静默截断；轻量测试
-            # 仓储仍可只实现 get_items。
-            if hasattr(self.db, "get_all_items"):
-                type_items = self.db.get_all_items(
-                    user_id,
-                    filters   = {"type": item_type},
-                    page_size = 500,
-                )
-            else:
-                type_items = self.db.get_items(
-                    user_id,
-                    filters   = {"type": item_type},
-                    limit     = 10000,
-                    use_cache = False,
-                )
+            type_items = self.db.get_all_items(user_id, filters={"type": item_type}, page_size=500)
             for item in type_items:
-                if self._item_matches_range(item, item_type, start_date, end_date):
-                    items.append(item)
+                if start_dt is not None and end_dt is not None:
+                    item_dt = self._get_sort_datetime(item, item_type)
+                    if item_dt is None or not start_dt <= item_dt <= end_dt:
+                        continue
+                items.append(item)
         return items
-
-    def _item_matches_range(
-        self,
-        item: Any,
-        item_type: str,
-        start_date: str | None,
-        end_date: str | None,
-    ) -> bool:
-        if not start_date or not end_date:
-            return True
-
-        item_dt = self._get_sort_datetime(item, item_type)
-        if item_dt is None:
-            return False
-
-        start_dt = self._parse_datetime(start_date)
-        end_dt   = self._parse_datetime(end_date)
-        if start_dt is None or end_dt is None:
-            return True
-        return start_dt <= item_dt <= end_dt
 
     def _get_sort_datetime(self, item: Any, item_type: str) -> datetime | None:
         candidates: list[str | None] = []
@@ -776,15 +747,15 @@ class ExporterService:
         if not isinstance(references, list):
             return []
         labels = {
-            "event": "日程",
-            "task": "待办",
-            "note": "笔记",
-            "diary": "日记",
+            "event" : "日程",
+            "task"  : "待办",
+            "note"  : "笔记",
+            "diary" : "日记",
             "ledger": "账目",
-            "item": "条目",
+            "item"  : "条目",
         }
         lines: list[str] = []
-        seen: set[str]   = set()
+        seen : set[str]  = set()
         for ref in references:
             if not isinstance(ref, dict):
                 continue
@@ -828,8 +799,8 @@ class ExporterService:
 
     def _format_task_status(self, value: Any) -> str:
         mapping = {
-            "open": "待处理",
-            "done": "已完成",
+            "open"     : "待处理",
+            "done"     : "已完成",
             "cancelled": "已取消",
         }
         raw = getattr(value, "value", value)
@@ -837,8 +808,8 @@ class ExporterService:
 
     def _format_transaction_type(self, value: Any) -> str:
         mapping = {
-            "income": "收入",
-            "expense": "支出",
+            "income"  : "收入",
+            "expense" : "支出",
             "transfer": "转账",
         }
         return mapping.get(str(value), self._value_or_dash(value))
@@ -900,10 +871,10 @@ class ExporterService:
                 types=[self._TYPE_EXPORT_NAMES[item_type] for item_type in params["types"]],
                 record_count=len(items),
                 result_summary={
-                    "range": params["range_label"],
+                    "range"     : params["range_label"],
                     "type_label": params["type_label"],
-                    "counts": counts,
-                    "path": str(file_path.resolve()),
+                    "counts"    : counts,
+                    "path"      : str(file_path.resolve()),
                 },
             )
         except Exception as exc:

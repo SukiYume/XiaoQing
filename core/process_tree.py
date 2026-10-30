@@ -29,10 +29,10 @@ _WINDOWS_JOB_SCRIPT   = Path(__file__).with_name("windows_job.py")
 class ProcessResult:
     """命令的结局；超时或输出超限被终止时 ``exit_code`` 为 ``None``，已读到的输出照样保留。"""
 
-    exit_code: int | None
-    stdout: str
-    stderr: str
-    timed_out: bool      = False
+    exit_code     : int | None
+    stdout        : str
+    stderr        : str
+    timed_out     : bool = False
     output_limited: bool = False
 
 
@@ -189,7 +189,8 @@ async def run_process(
             if remaining > 0:
                 buffers[name].append(chunk[:remaining])
                 captured += min(len(chunk), remaining)
-            if len(chunk) > remaining or captured >= max_capture_bytes:
+            # 只有真的读到超出预算的字节才算超限；恰好等于预算的输出正常结束。
+            if len(chunk) > remaining:
                 overflow.set()
 
     async def wait_exit() -> None:

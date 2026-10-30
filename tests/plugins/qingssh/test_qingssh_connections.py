@@ -2,26 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import threading
+from pathlib import Path
 from types import SimpleNamespace
-from typing import ClassVar
+from typing import Any, ClassVar, cast
+from unittest.mock import AsyncMock, MagicMock, Mock
+
+import pytest
 
 from tests.helpers.qingssh_test_support import (
     EXIT_CODE_TIMEOUT,
-    Any,
-    AsyncMock,
-    MagicMock,
-    Mock,
-    Path,
     SessionKeys,
     _connected_session,
     _FakeChannel,
     _FakeClient,
     _SessionStub,
-    asyncio,
-    cast,
-    json,
-    pytest,
     ssh_manager_module,
     ssh_session_handlers,
 )
@@ -118,16 +115,16 @@ async def test_connect_closes_jump_host_when_target_connection_fails(monkeypatch
     manager = ssh_manager_module.SSHManager(tmp_path, context=context)
     manager._ssh_config                    = MagicMock()
     manager._ssh_config.lookup.side_effect = lambda host: {
-        "hostname": host,
-        "port": "22",
-        "user": "root",
+        "hostname"    : host,
+        "port"        : "22",
+        "user"        : "root",
         "identityfile": [],
-        "proxyjump": "jump-host" if host == "srv" else None,
+        "proxyjump"   : "jump-host" if host == "srv" else None,
     }
     manager.servers["srv"] = {
-        "host": "srv.internal",
-        "port": 22,
-        "username": "root",
+        "host"     : "srv.internal",
+        "port"     : 22,
+        "username" : "root",
         "proxyjump": "jump-host",
     }
 
@@ -182,8 +179,8 @@ def test_authentication_failure_never_exposes_private_key_path(tmp_path):
 
     message = manager._authentication_failure_message(
         {
-            "host": "example.com",
-            "port": 22,
+            "host"    : "example.com",
+            "port"    : 22,
             "username": "root",
             "key_path": private_key,
         }
@@ -259,14 +256,14 @@ async def test_connect_reserves_capacity_across_concurrent_dials(monkeypatch, tm
     async def controlled_to_thread(func, *args, **kwargs):
         if getattr(func, "__name__", "") == "connect":
             dial_started.set()
-            await release_dial.wait()
+            await asyncio.wait_for(release_dial.wait(), timeout=10)
         return func(*args, **kwargs)
 
     context = with_settings_reader(Mock(config={"plugins": {"qingssh": {"max_connections": 1}}}))
     manager = ssh_manager_module.SSHManager(tmp_path, context=context)
     manager.servers.update(
         {
-            "first": {"host": "first.internal", "port": 22, "username": "root"},
+            "first" : {"host": "first.internal", "port": 22, "username": "root"},
             "second": {"host": "second.internal", "port": 22, "username": "root"},
         }
     )
@@ -276,7 +273,7 @@ async def test_connect_reserves_capacity_across_concurrent_dials(monkeypatch, tm
     monkeypatch.setattr(ssh_manager_module.asyncio, "to_thread", controlled_to_thread)
 
     first_task = asyncio.create_task(manager.connect("u1", "g1", "first"))
-    await dial_started.wait()
+    await asyncio.wait_for(dial_started.wait(), timeout=10)
     second_result = await manager.connect("u2", "g1", "second")
     release_dial.set()
     first_result = await first_task
@@ -316,8 +313,8 @@ async def test_connect_prunes_stale_clients_before_enforcing_capacity(monkeypatc
     context = Mock(config={"plugins": {"qingssh": {"max_connections": 1}}})
     manager = ssh_manager_module.SSHManager(tmp_path, context=context)
     manager.servers["new"] = {
-        "host": "new.internal",
-        "port": 22,
+        "host"    : "new.internal",
+        "port"    : 22,
         "username": "root",
     }
     stale                          = _StaleClient()
@@ -367,9 +364,9 @@ async def test_connect_closes_jump_client_when_channel_open_fails(monkeypatch, t
     context.secrets    = {}
     manager = ssh_manager_module.SSHManager(tmp_path, context=context)
     manager.servers["srv"] = {
-        "host": "srv.internal",
-        "port": 22,
-        "username": "root",
+        "host"        : "srv.internal",
+        "port"        : 22,
+        "username"    : "root",
         "proxycommand": "ssh -W %h:%p jump-host",
     }
     monkeypatch.setattr(ssh_manager_module, "PARAMIKO_AVAILABLE", True)
@@ -379,9 +376,9 @@ async def test_connect_closes_jump_client_when_channel_open_fails(monkeypatch, t
         manager,
         "get_ssh_config_for_host",
         lambda host: {
-            "hostname": host,
-            "port": 22,
-            "user": "root",
+            "hostname"    : host,
+            "port"        : 22,
+            "user"        : "root",
             "identityfile": [],
         },
     )
@@ -419,7 +416,7 @@ async def test_cancelled_connect_closes_client_and_releases_reservation(monkeypa
     async def blocked_to_thread(func, *args, **kwargs):
         if getattr(func, "__name__", "") == "connect":
             dial_started.set()
-            await release_dial.wait()
+            await asyncio.wait_for(release_dial.wait(), timeout=10)
         return func(*args, **kwargs)
 
     manager                = ssh_manager_module.SSHManager(tmp_path)
@@ -430,7 +427,7 @@ async def test_cancelled_connect_closes_client_and_releases_reservation(monkeypa
     monkeypatch.setattr(ssh_manager_module.asyncio, "to_thread", blocked_to_thread)
 
     task = asyncio.create_task(manager.connect("u1", "g1", "srv"))
-    await dial_started.wait()
+    await asyncio.wait_for(dial_started.wait(), timeout=10)
     task.cancel()
     await asyncio.sleep(0)
     assert not task.done()
@@ -476,11 +473,11 @@ async def test_password_setup_is_rejected_in_group_chat():
     context.end_session = AsyncMock()
     session             = _SessionStub(
         {
-            SessionKeys.STEP: "auth_type",
+            SessionKeys.STEP         : "auth_type",
             SessionKeys.SERVER_CONFIG: {
-                "name": "srv",
-                "host": "example.com",
-                "port": 22,
+                "name"    : "srv",
+                "host"    : "example.com",
+                "port"    : 22,
                 "username": "root",
             },
         }
@@ -506,12 +503,12 @@ async def test_private_password_setup_keeps_plaintext_out_of_session_state():
     manager.add_server = AsyncMock(return_value=True)
     session = _SessionStub(
         {
-            SessionKeys.STEP: "password",
+            SessionKeys.STEP         : "password",
             SessionKeys.SERVER_CONFIG: {
-                "name": "srv",
-                "host": "example.com",
-                "port": 22,
-                "username": "root",
+                "name"     : "srv",
+                "host"     : "example.com",
+                "port"     : 22,
+                "username" : "root",
                 "auth_type": "password",
             },
         }
@@ -531,7 +528,7 @@ async def test_corrupt_add_session_is_ended_instead_of_raising():
     context.end_session = AsyncMock()
     session             = _SessionStub(
         {
-            SessionKeys.STEP: "password",
+            SessionKeys.STEP         : "password",
             SessionKeys.SERVER_CONFIG: {},
         }
     )
@@ -555,11 +552,11 @@ async def test_agent_add_failure_does_not_report_success_or_end_session():
     manager.add_server = AsyncMock(return_value=False)
     session = _SessionStub(
         {
-            SessionKeys.STEP: "auth_type",
+            SessionKeys.STEP         : "auth_type",
             SessionKeys.SERVER_CONFIG: {
-                "name": "srv",
-                "host": "example.com",
-                "port": 22,
+                "name"    : "srv",
+                "host"    : "example.com",
+                "port"    : 22,
                 "username": "root",
             },
         }
@@ -575,8 +572,8 @@ def test_session_without_plugin_identity_cannot_own_qingssh_job():
     class AnonymousSession:
         def get(self, key, default=None):
             values = {
-                SessionKeys.SERVER_NAME: "srv",
-                SessionKeys.STATE: "executing",
+                SessionKeys.SERVER_NAME : "srv",
+                SessionKeys.STATE       : "executing",
                 SessionKeys.CURRENT_TASK: "job",
             }
             return values.get(key, default)
@@ -594,8 +591,8 @@ async def test_connected_session_rejects_overlong_command_before_starting_job():
     context.end_session = AsyncMock()
     session             = _SessionStub(
         {
-            SessionKeys.SERVER_NAME: "srv",
-            SessionKeys.STATE: "connected",
+            SessionKeys.SERVER_NAME  : "srv",
+            SessionKeys.STATE        : "connected",
             SessionKeys.COMMAND_COUNT: 0,
         }
     )
@@ -809,7 +806,7 @@ async def test_showimg_path_wildcard_sends_requested_page_with_global_positions(
     session             = _SessionStub(
         {
             SessionKeys.SERVER_NAME: "srv",
-            SessionKeys.CWD: "/remote",
+            SessionKeys.CWD        : "/remote",
         }
     )
     manager                           = MagicMock()
@@ -885,7 +882,7 @@ async def test_showimg_rejects_page_beyond_matching_images_before_download(tmp_p
     session             = _SessionStub(
         {
             SessionKeys.SERVER_NAME: "srv",
-            SessionKeys.CWD: "/remote",
+            SessionKeys.CWD        : "/remote",
         }
     )
     manager                           = MagicMock()
@@ -919,7 +916,7 @@ async def test_showimg_send_failure_still_removes_downloaded_temp_file(tmp_path:
     session = _SessionStub(
         {
             SessionKeys.SERVER_NAME: "srv",
-            SessionKeys.CWD: "/remote",
+            SessionKeys.CWD        : "/remote",
         }
     )
     manager                           = MagicMock()

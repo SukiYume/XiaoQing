@@ -122,6 +122,11 @@ const showConfirmModal = async () => globalThis.__confirmResult;
 const safeHtml = (value) => value;""",
         ),
         (
+            "import { captureFormDraft, reopenWithDraft } from '../components/form.js';",
+            """const captureFormDraft = () => ({ fields: [], groups: [] });
+const reopenWithDraft = async (open) => { await open(); };""",
+        ),
+        (
             "import { buildFormHTML, getFormData, initFormInteractions } "
             "from '../components/form.js';",
             """const buildFormHTML = (fields) => {
@@ -688,10 +693,11 @@ def test_note_form_validates_payload_and_prevents_duplicate_create_or_edit() -> 
         };
         const putCalls = [];
         __api.put = async (...args) => { putCalls.push(args); return { data: {} }; };
-        client.__openNoteFormModal({ id: 'note/a b?', title: '旧标题' });
+        client.__openNoteFormModal({ id: 'note/a b?', title: '旧标题', version: 7 });
         await nodes.get('#note-modal-save').onclick();
         assert.equal(putCalls[0][0], '/items/note%2Fa%20b%3F');
         assert.equal(putCalls[0][1].title, '更新后');
+        assert.equal(putCalls[0][1].version, 7);
         assert.equal(__dispatchedEvents.length, 2);
         """
     )

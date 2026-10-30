@@ -48,6 +48,7 @@ from core.image_validation import (
     ImageValidationLimits,
     validate_image_bytes,
 )
+from core.lifecycle import to_thread_owned
 from core.plugin_base import (
     Segments,
     bounded_external_text,
@@ -98,13 +99,13 @@ _IMAGE_HOSTS = frozenset(
 )
 _IMAGE_MIME_FORMATS = {
     "image/jpeg": ("JPEG", ".jpg"),
-    "image/png": ("PNG", ".png"),
+    "image/png" : ("PNG", ".png"),
     "image/webp": ("WEBP", ".webp"),
 }
 _IMAGE_FORMAT_EXTENSIONS = dict(_IMAGE_MIME_FORMATS.values())
 _IMAGE_FORMAT_MODES      = {
     "JPEG": frozenset({"L", "RGB", "CMYK", "YCbCr"}),
-    "PNG": frozenset({"1", "L", "LA", "P", "RGB", "RGBA"}),
+    "PNG" : frozenset({"1", "L", "LA", "P", "RGB", "RGBA"}),
     "WEBP": frozenset({"RGB", "RGBA"}),
 }
 _IMAGE_CACHE_LIMITS = FileCacheLimits(
@@ -170,9 +171,9 @@ _BOOTSTRAP_FAILURE_ESCALATION = 3
 _WEIBO_SESSION_TTL_SECONDS    = 15 * 60
 _WEIBO_SESSION_STATE_KEY      = "earthquake_weibo_session"
 _IMAGE_HEADERS                = {
-    "User-Agent": _WEIBO_USER_AGENT,
-    "Referer": "https://m.weibo.cn/",
-    "Accept": "image/*",
+    "User-Agent"     : _WEIBO_USER_AGENT,
+    "Referer"        : "https://m.weibo.cn/",
+    "Accept"         : "image/*",
     "Accept-Encoding": "identity",
 }
 
@@ -199,8 +200,8 @@ HELP_TEXT = """🌏 地震快讯
 class _EarthquakeContext(Protocol):
     """本插件实际使用的最小上下文接口。"""
 
-    data_dir: Path
-    state: dict[str, Any]
+    data_dir   : Path
+    state      : dict[str, Any]
     send_action: Callable[[dict[str, Any]], Awaitable[Any]]
 
     def default_groups(self) -> list[int]: ...
@@ -211,16 +212,16 @@ class _PreparedCard:
     """一条已经消毒、可以直接渲染的地震快讯。"""
 
     clean_text: str
-    magnitude: float | None
+    magnitude : float | None
     figure_url: str | None
-    event_id: str = ""
+    event_id  : str = ""
 
 
 @dataclass(frozen=True, slots=True)
 class _FetchBatch:
     """一次扫描结果，以及扫描完成后才允许提交的游标。"""
 
-    cards: tuple[_PreparedCard, ...]
+    cards         : tuple[_PreparedCard, ...]
     newest_seen_id: str
 
     @property
@@ -331,7 +332,8 @@ def _restore_from_checkpoint(
             _save_since(context, "0")
             return "0"
         raise EarthquakeStateCorruptionError(
-            "earthquake cursor is corrupt and no checkpoint is available"
+            "earthquake cursor is corrupt and no checkpoint is available; "
+            "restore the checkpoint or delete the recovery-required marker to rebuild"
         ) from exc
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError, OSError, TypeError) as exc:
         raise EarthquakeStateCorruptionError("earthquake checkpoint is invalid") from exc
@@ -339,19 +341,34 @@ def _restore_from_checkpoint(
     return recovered
 
 
-def _load_since(context: _EarthquakeContext) -> str:
-    """读取活动游标；损坏时隔离原件并从检查点恢复。"""
+def _recovery_marker(path: Path) -> Path:
+    return path.with_name(f"{path.name}.recovery-required")
 
-    path = _since_path(context)
+
+def _load_since(context: _EarthquakeContext) -> str:
+    """读取活动游标；损坏时隔离原件并从检查点恢复。
+
+    损坏后若没有可用检查点，持久留下“待恢复”标记：下一次轮询看到活动文件缺失时不会按
+    全新安装写入零游标重推旧消息。检查点恢复成功，或管理员删除标记明确重建后才继续。
+    """
+
+    path   = _since_path(context)
+    marker = _recovery_marker(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         return _read_since_file(path)
     except FileNotFoundError:
-        return _restore_from_checkpoint(context, path, initialize_when_absent=True)
+        recovering = marker.exists()
+        recovered = _restore_from_checkpoint(context, path, initialize_when_absent=not recovering)
+        marker.unlink(missing_ok=True)
+        return recovered
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError, OSError, TypeError) as exc:
         public_error_message(context, exc, logger=logger, component="earthquake.load_state")
+        write_json(marker, {"reason": "active cursor corrupt"})
         _quarantine_corrupt_state(path)
-        return _restore_from_checkpoint(context, path, initialize_when_absent=False)
+        recovered = _restore_from_checkpoint(context, path, initialize_when_absent=False)
+        marker.unlink(missing_ok=True)
+        return recovered
 
 
 def _save_since(context: _EarthquakeContext, since_id: str | int) -> None:
@@ -398,8 +415,8 @@ def _get_cached_session(context: _EarthquakeContext) -> tuple[requests.Session, 
 
     session                                 = _create_session()
     context.state[_WEIBO_SESSION_STATE_KEY] = {
-        "session": session,
-        "expires_at": now + _WEIBO_SESSION_TTL_SECONDS,
+        "session"     : session,
+        "expires_at"  : now + _WEIBO_SESSION_TTL_SECONDS,
         "bootstrapped": False,
     }
     return session, True
@@ -504,13 +521,13 @@ def _bootstrap_session(
 
     visitor_url  = "https://visitor.passport.weibo.cn/visitor/genvisitor2"
     visitor_data = {
-        "cb": "visitor_gray_callback",
-        "ver": _WEIBO_VISITOR_VERSION,
+        "cb"        : "visitor_gray_callback",
+        "ver"       : _WEIBO_VISITOR_VERSION,
         "request_id": uuid.uuid4().hex,
-        "tid": "",
-        "from": "weibo",
-        "webdriver": "false",
-        "rid": _WEIBO_VISITOR_RID,
+        "tid"       : "",
+        "from"      : "weibo",
+        "webdriver" : "false",
+        "rid"       : _WEIBO_VISITOR_RID,
         "return_url": f"https://m.weibo.cn/u/{WEIBO_UID}",
     }
     headers   = _weibo_headers()
@@ -580,7 +597,7 @@ def _fetch_weibo(session: requests.Session) -> list[dict[str, Any]]:
         mime_policy     = JSON_MIME_POLICY,
         redirect_policy = NO_REDIRECTS,
         request_kwargs  = {
-            "params": {"type": "uid", "value": WEIBO_UID, "containerid": CONTAINER_ID},
+            "params" : {"type": "uid", "value": WEIBO_UID, "containerid": CONTAINER_ID},
             "timeout": (5.0, 15.0),
         },
         total_timeout_seconds=20.0,
@@ -915,7 +932,7 @@ async def _record_scan_progress(
     if batch.newest_seen_id == previous_since_id:
         return
     if advance_cursor or not batch.cards:
-        await asyncio.to_thread(_save_since, context, batch.newest_seen_id)
+        await to_thread_owned(_save_since, context, batch.newest_seen_id)
         return
     context.state[_PENDING_CURSOR_KEY]    = batch.newest_seen_id
     context.state[_PENDING_EVENT_IDS_KEY] = list(batch.event_ids)
@@ -974,7 +991,7 @@ def _notification_id(since_id: str, event_ids: object) -> str:
     normalized_since = _validate_since_payload({"since_id": since_id})
     material         = json.dumps(
         {
-            "since_id": normalized_since,
+            "since_id" : normalized_since,
             "event_ids": _normalize_notification_event_ids(event_ids),
         },
         sort_keys  = True,
@@ -995,7 +1012,7 @@ async def _deliver_pending(context: _EarthquakeContext, pending: PendingFanout) 
             logger.error("Earthquake fanout could not build target action")
             continue
 
-        confirm_target = partial(asyncio.to_thread, mark_delivered, path, pending, target)
+        confirm_target = partial(to_thread_owned, mark_delivered, path, pending, target)
 
         receipt = DeliveryReceipt(
             expected_actions = 1,
@@ -1027,8 +1044,9 @@ async def _deliver_pending(context: _EarthquakeContext, pending: PendingFanout) 
     if not pending.complete:
         return False
     since_id = _validate_since_payload({"since_id": pending.commit.get("since_id")})
-    await asyncio.to_thread(_save_since, context, since_id)
-    await asyncio.to_thread(clear_pending, path)
+    # 等待范围覆盖线程真实写完：被取消的旧写入不能在锁释放后覆盖更新的游标。
+    await to_thread_owned(_save_since, context, since_id)
+    await to_thread_owned(clear_pending, path)
     return True
 
 

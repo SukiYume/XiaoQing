@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
 import tests.helpers.onebot_test_support as _fixture_support
 from tests.helpers.onebot_test_support import (
     _CONNECT_SIGNATURE_CACHE,
-    Any,
-    AsyncMock,
-    MagicMock,
     OneBotWsClient,
     _get_connect_signature,
-    asyncio,
     inspect,
-    patch,
-    pytest,
-    threading,
 )
 
 bounded_transport_adapter = _fixture_support.bounded_transport_adapter
@@ -178,7 +178,7 @@ class TestOneBotWebSocketConfiguration:
             assert await client._connect_once(AsyncMock()) == 1.25
 
         assert captured == {
-            "uri": "ws://localhost:3000",
+            "uri"   : "ws://localhost:3000",
             "kwargs": {
                 header_parameter: {"Authorization": "Bearer secret-token"},
             },
@@ -357,7 +357,7 @@ class TestOneBotWebSocketConfiguration:
         assert errors == []
         assert not worker.is_alive()
         assert captured == {
-            "uri": "ws://old.example/ws",
+            "uri"    : "ws://old.example/ws",
             "headers": {"Authorization": "Bearer old-token"},
         }
         assert (client.ws_uri, client.auth_token) == (

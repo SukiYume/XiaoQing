@@ -17,24 +17,24 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from ...models.item import Item, get_item_type_value
 from ...utils.validators import COMMON_ITEM_FIELDS, SUPPORTED_ITEM_TYPES, TYPE_SPECIFIC_ITEM_FIELDS
 
-TRANSFER_FORMAT: Final                    = "pendo-bundle"
-TRANSFER_VERSION: Final                   = 2
-MAX_BUNDLE_MANIFEST_BYTES: Final          = 1 * 1024 * 1024
-MAX_BUNDLE_MEMBER_BYTES: Final            = 50 * 1024 * 1024
-MAX_BUNDLE_UNCOMPRESSED_BYTES: Final      = 100 * 1024 * 1024
-MAX_BUNDLE_RECORDS: Final                 = 100_000
-MAX_IMPORT_RECORDS: Final                 = MAX_BUNDLE_RECORDS * (len(SUPPORTED_ITEM_TYPES) + 1)
-SUPPORTED_TYPES: Final[frozenset[str]]    = frozenset(SUPPORTED_ITEM_TYPES)
-TYPE_FILE_NAMES: Final[Mapping[str, str]] = MappingProxyType(
+TRANSFER_FORMAT              : Final = "pendo-bundle"
+TRANSFER_VERSION             : Final = 2
+MAX_BUNDLE_MANIFEST_BYTES    : Final = 1 * 1024 * 1024
+MAX_BUNDLE_MEMBER_BYTES      : Final = 50 * 1024 * 1024
+MAX_BUNDLE_UNCOMPRESSED_BYTES: Final = 100 * 1024 * 1024
+MAX_BUNDLE_RECORDS           : Final = 100_000
+MAX_IMPORT_RECORDS           : Final = MAX_BUNDLE_RECORDS * (len(SUPPORTED_ITEM_TYPES) + 1)
+SUPPORTED_TYPES              : Final[frozenset[str]] = frozenset(SUPPORTED_ITEM_TYPES)
+TYPE_FILE_NAMES              : Final[Mapping[str, str]] = MappingProxyType(
     {
-        "event": "data/events.ndjson",
-        "task": "data/tasks.ndjson",
+        "event" : "data/events.ndjson",
+        "task"  : "data/tasks.ndjson",
         "ledger": "data/ledger.ndjson",
-        "note": "data/notes.ndjson",
-        "diary": "data/diary.ndjson",
+        "note"  : "data/notes.ndjson",
+        "diary" : "data/diary.ndjson",
     }
 )
-EVENT_COLLECTION_TYPE: Final      = "event_collection"
+EVENT_COLLECTION_TYPE     : Final = "event_collection"
 EVENT_COLLECTION_FILE_NAME: Final = "data/event_collections.ndjson"
 # v2 只允许一个清单、五类普通数据文件和一个日程集合文件。
 MAX_ARCHIVE_MEMBERS: Final = len(TYPE_FILE_NAMES) + 2
@@ -47,11 +47,11 @@ FILE_NAME_TO_TYPE: Final[Mapping[str, str]] = MappingProxyType(
 )
 TIME_FIELD_BY_TYPE: Final[Mapping[str, str]] = MappingProxyType(
     {
-        "event": "start_time",
-        "task": "plan_date",
+        "event" : "start_time",
+        "task"  : "plan_date",
         "ledger": "ledger_date",
-        "note": "created_at",
-        "diary": "diary_date",
+        "note"  : "created_at",
+        "diary" : "diary_date",
     }
 )
 COMMON_FIELDS: Final[frozenset[str]] = frozenset(COMMON_ITEM_FIELDS) - {
@@ -103,12 +103,12 @@ class BundleRecordLimitError(BundleValidationError):
 class ParsedBundle:
     """已解析的传输包及逐行校验结果。"""
 
-    manifest: dict[str, Any]
-    records_by_type: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    manifest         : dict[str, Any]
+    records_by_type  : dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     event_collections: list[dict[str, Any]] = field(default_factory=list)
-    file_summaries: list[dict[str, Any]] = field(default_factory=list)
-    errors: list[dict[str, Any]] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
+    file_summaries   : list[dict[str, Any]] = field(default_factory=list)
+    errors           : list[dict[str, Any]] = field(default_factory=list)
+    warnings         : list[str] = field(default_factory=list)
 
 
 def compute_sha256(bytes_: bytes) -> str:
@@ -140,18 +140,18 @@ def build_manifest(
         timespec="seconds"
     )
     manifest = {
-        "format": TRANSFER_FORMAT,
-        "version": TRANSFER_VERSION,
-        "bundle_id": selection.get("bundle_id") or uuid.uuid4().hex,
+        "format"     : TRANSFER_FORMAT,
+        "version"    : TRANSFER_VERSION,
+        "bundle_id"  : selection.get("bundle_id") or uuid.uuid4().hex,
         "exported_at": exported_at,
-        "source": {"app": "pendo-web", "timezone": timezone},
-        "selection": {
-            "types": normalized_types,
+        "source"     : {"app": "pendo-web", "timezone": timezone},
+        "selection"  : {
+            "types" : normalized_types,
             "preset": selection.get("preset", "all"),
-            "start": selection.get("start"),
-            "end": selection.get("end"),
+            "start" : selection.get("start"),
+            "end"   : selection.get("end"),
         },
-        "files": [entry.copy() for entry in files],
+        "files"           : [entry.copy() for entry in files],
         "attachments_mode": selection.get("attachments_mode", "metadata_only"),
     }
     _validate_manifest(manifest)
@@ -242,7 +242,7 @@ def _prepare_bundle_members(
     """把分类型记录编码为规范文件名及 UTF-8 NDJSON。"""
 
     prepared_members: dict[str, bytes] = {}
-    record_counts: dict[str, int]      = {}
+    record_counts   : dict[str, int]   = {}
     for item_type, records in typed_records.items():
         if item_type == EVENT_COLLECTION_TYPE:
             path = EVENT_COLLECTION_FILE_NAME
@@ -338,9 +338,9 @@ def read_bundle(fileobj: BinaryIO) -> ParsedBundle:
                 item_type: [] for item_type in TYPE_FILE_NAMES
             }
             event_collections: list[dict[str, Any]] = []
-            file_summaries: list[dict[str, Any]]    = []
-            errors: list[dict[str, Any]]            = []
-            warnings: list[str]                     = []
+            file_summaries   : list[dict[str, Any]] = []
+            errors           : list[dict[str, Any]] = []
+            warnings         : list[str]            = []
             total_record_count                      = 0
 
             entries = cast(list[dict[str, Any]], manifest["files"])
@@ -362,8 +362,8 @@ def read_bundle(fileobj: BinaryIO) -> ParsedBundle:
                 warnings.extend(member_warnings)
                 file_summaries.append(
                     {
-                        "path": path,
-                        "type": item_type,
+                        "path" : path,
+                        "type" : item_type,
                         "count": line_count,
                         "valid": len(records),
                     }
@@ -640,7 +640,7 @@ def _read_record_member(
         raise BundleValidationError(f"{path} is not valid UTF-8") from exc
 
     records: list[dict[str, Any]] = []
-    errors: list[dict[str, Any]]  = []
+    errors : list[dict[str, Any]] = []
     line_count                    = 0
     for line_number, line in enumerate(file_lines, start=1):
         if not line.strip():
@@ -660,9 +660,9 @@ def _read_record_member(
         except ValueError as exc:
             errors.append(
                 {
-                    "path": path,
-                    "line": line_number,
-                    "type": item_type,
+                    "path"   : path,
+                    "line"   : line_number,
+                    "type"   : item_type,
                     "message": str(exc),
                 }
             )

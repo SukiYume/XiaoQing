@@ -154,9 +154,9 @@ PROMPT_END_DECISION = """{persona_text}。刚刚你决定结束一场 QQ {channe
 
 @dataclass(frozen=True)
 class PFCPlan:
-    action: str
-    reason: str
-    thinking: str     = ""
+    action      : str
+    reason      : str
+    thinking    : str = ""
     wait_seconds: int = 0
 
 
@@ -166,7 +166,8 @@ def _goals_to_text(goal_list: Sequence[dict[str, Any]]) -> str:
         if not isinstance(item, dict):
             continue
         g = str(item.get("goal", "") or "").strip()
-        r = str(item.get("reason", "") or "").strip()
+        # 目标分析器写入 reasoning；旧持久化记录可能仍是 reason。
+        r = str(item.get("reasoning", "") or item.get("reason", "") or "").strip()
         if not g:
             continue
         if r:
@@ -216,27 +217,6 @@ def _follows_another_speaker(history: Sequence[StoredMessage]) -> bool:
     return 0.0 <= float(current.ts) - float(previous.ts) <= _EXCHANGE_FOLLOWUP_SECONDS
 
 
-def _planner_total_timeout_seconds(secrets: dict[str, Any], timeout_seconds: float) -> float:
-    """给 route 中每个候选模型保留一次完整请求预算。"""
-
-    if secrets.get("_pinned_model"):
-        profile_count = 1
-    else:
-        providers = secrets.get("_providers")
-        profiles  = (
-            {
-                str(item.get("profile") or "").strip()
-                for item in providers.values()
-                if isinstance(item, dict)
-            }
-            if isinstance(providers, dict)
-            else set()
-        )
-        profiles.discard("")
-        profile_count = max(1, len(profiles))
-    return min(1800.0, max(0.1, float(timeout_seconds)) * profile_count + 0.3)
-
-
 def _parse_plan(content: str, fallback_action: str) -> PFCPlan:
     """解析规划器输出；结构不合法或动作不在白名单时退回保守动作。"""
     ok, obj = get_items_from_json(
@@ -245,9 +225,9 @@ def _parse_plan(content: str, fallback_action: str) -> PFCPlan:
         "reason",
         optional_items = ("thinking", "wait_seconds"),
         default_values = {
-            "action": fallback_action,
-            "reason": "",
-            "thinking": "",
+            "action"      : fallback_action,
+            "reason"      : "",
+            "thinking"    : "",
             "wait_seconds": 0,
         },
         required_types = {"action": str, "reason": str},
@@ -335,26 +315,26 @@ async def plan_next_action(
     try:
         t0 = time.monotonic()
         resp, _path = await chat_completions_raw_with_fallback_paths(
+            route    = "reasoning",
             secrets  = secrets,
             messages = [{"role": "user", "content": prompt}],
-            **llm.bounded(max_temperature=0.7, max_tokens=400, min_tokens=200).as_kwargs(),
-            total_timeout_seconds=_planner_total_timeout_seconds(secrets, llm.timeout_seconds),
+            **llm.as_kwargs(),
         )
         _log_planner_step(
             {
-                "step": "pfc.planner.ok",
-                "elapsed_s": round(time.monotonic() - t0, 3),
-                "model": model,
-                "endpoint": _path,
+                "step"        : "pfc.planner.ok",
+                "elapsed_s"   : round(time.monotonic() - t0, 3),
+                "model"       : model,
+                "endpoint"    : _path,
                 "prompt_chars": len(prompt),
             }
         )
     except TimeoutError:
         _log_planner_step(
             {
-                "step": "pfc.planner.timeout",
-                "timeout_s": float(llm.timeout_seconds),
-                "model": model,
+                "step"        : "pfc.planner.timeout",
+                "timeout_s"   : float(llm.timeout_seconds),
+                "model"       : model,
                 "prompt_chars": len(prompt),
             }
         )
@@ -362,10 +342,10 @@ async def plan_next_action(
     except Exception as exc:
         _log_planner_step(
             {
-                "step": "pfc.planner.error",
+                "step"      : "pfc.planner.error",
                 "error_type": type(exc).__name__,
-                "timeout_s": float(llm.timeout_seconds),
-                "model": model,
+                "timeout_s" : float(llm.timeout_seconds),
+                "model"     : model,
             }
         )
         return PFCPlan(action=fallback_action, reason="planner_failed")
@@ -395,9 +375,10 @@ async def decide_say_bye(
 
     try:
         resp, _ = await chat_completions_raw_with_fallback_paths(
+            route    = "reasoning",
             secrets  = secrets,
             messages = [{"role": "user", "content": prompt}],
-            **llm.bounded(max_temperature=0.4, max_tokens=400).as_kwargs(),
+            **llm.as_kwargs(),
         )
     except Exception:
         return False, ""

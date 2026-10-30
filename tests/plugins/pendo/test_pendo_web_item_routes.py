@@ -20,18 +20,18 @@ def _normalized_item(owner_id: str, item_type: str, **overrides: Any) -> dict[st
     """构造经过生产规范化器校验的最小条目。"""
 
     payload: dict[str, Any] = {
-        "owner_id": owner_id,
-        "type": item_type,
-        "title": f"{item_type} 条目",
+        "owner_id"  : owner_id,
+        "type"      : item_type,
+        "title"     : f"{item_type} 条目",
         "created_at": "2030-01-01T08:00:00",
         "updated_at": "2030-01-01T08:00:00",
     }
     payload.update(
         {
-            "event": {"start_time": "2030-01-01T09:00:00"},
-            "task": {"plan_date": "2030-01-01"},
-            "note": {},
-            "diary": {"content": "日记正文", "diary_date": "2030-01-01"},
+            "event" : {"start_time": "2030-01-01T09:00:00"},
+            "task"  : {"plan_date": "2030-01-01"},
+            "note"  : {},
+            "diary" : {"content": "日记正文", "diary_date": "2030-01-01"},
             "ledger": {"amount": 1, "ledger_date": "2030-01-01"},
         }[item_type]
     )
@@ -95,7 +95,7 @@ def test_small_item_helpers_cover_empty_and_legacy_inputs(db: Database) -> None:
     assert items_api._entry_time_for_diary_date("short", "2030-01-02") == ("2030-01-02T00:00:00")
     assert items_api._collect_note_reference_ids(
         {
-            "references": [None, {}, {"id": "same"}, {"id": "same"}],
+            "references"   : [None, {}, {"id": "same"}, {"id": "same"}],
             "related_items": ["", "same", "second", "second"],
         }
     ) == ["same", "second"]
@@ -309,11 +309,11 @@ def test_amount_filters_use_integer_cents_for_list_total_and_aggregate(db: Datab
     assert_cny_aggregate(
         cast(dict[str, Any], summary["data"]),
         {
-            "income": 1.23,
-            "expense": 0.01,
+            "income"  : 1.23,
+            "expense" : 0.01,
             "transfer": 0.0,
-            "balance": 1.22,
-            "count": 2,
+            "balance" : 1.22,
+            "count"   : 2,
         },
     )
 
@@ -409,11 +409,11 @@ def test_aggregate_applies_category_and_counts_unknown_legacy_kinds(db: Database
     assert_cny_aggregate(
         cast(dict[str, Any], legacy_summary["data"]),
         {
-            "income": 0.0,
-            "expense": 0.0,
+            "income"  : 0.0,
+            "expense" : 0.0,
             "transfer": 0.0,
-            "balance": 0.0,
-            "count": 1,
+            "balance" : 0.0,
+            "count"   : 1,
         },
     )
 
@@ -485,7 +485,7 @@ def test_date_only_event_range_expands_to_the_whole_day(db: Database) -> None:
     assert items_api._resolve_date_filters("diary", None, "2030-05-01", "2030-05-01") == {
         "date_field": "diary_date",
         "start_date": "2030-05-01",
-        "end_date": "2030-05-01",
+        "end_date"  : "2030-05-01",
     }
     assert items_api._resolve_date_filters(
         "event",
@@ -495,7 +495,7 @@ def test_date_only_event_range_expands_to_the_whole_day(db: Database) -> None:
     ) == {
         "date_field": "start_time",
         "start_date": "2030-05-01T08:00:00",
-        "end_date": "2030-05-01T09:00:00",
+        "end_date"  : "2030-05-01T09:00:00",
     }
 
 
@@ -506,7 +506,7 @@ def test_date_only_event_range_expands_to_the_whole_day(db: Database) -> None:
         {
             "date_range": "2030-01-01..2030-01-02",
             "start_date": "2030-01-01",
-            "end_date": "2030-01-02",
+            "end_date"  : "2030-01-02",
         },
         {"start_date": "2030-01-01"},
         {"start_date": "2030-01-02", "end_date": "2030-01-01"},
@@ -691,9 +691,9 @@ def test_create_preserves_explicit_diary_time_and_resolves_note_references(db: D
     assert note is not None and note.related_items == [target_id]
     assert note.references == [
         {
-            "kind": "item",
-            "id": target_id,
-            "type": "task",
+            "kind" : "item",
+            "id"   : target_id,
+            "type" : "task",
             "title": "被引用待办",
         }
     ]
@@ -949,10 +949,10 @@ def test_generic_event_delete_removes_empty_multi_node_collection(db: Database) 
     owner_id      = "owner-generic-event-delete"
     collection_id = db.create_event_collection(
         {
-            "id": "generic-collection",
+            "id"      : "generic-collection",
             "owner_id": owner_id,
-            "kind": "multi_node",
-            "title": "两节点集合",
+            "kind"    : "multi_node",
+            "title"   : "两节点集合",
         },
         [
             (

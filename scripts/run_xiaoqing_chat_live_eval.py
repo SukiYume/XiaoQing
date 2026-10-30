@@ -59,16 +59,16 @@ def turn(
 ) -> dict[str, Any]:
     return {
         "speaker": speaker,
-        "text": text,
-        "pace": pace,
-        "expect": expect,
-        "media": media,
-        "kind": kind,
-        "face": face,
-        "at": at,
-        "quote": quote,
-        "tag": tag,
-        "note": note,
+        "text"   : text,
+        "pace"   : pace,
+        "expect" : expect,
+        "media"  : media,
+        "kind"   : kind,
+        "face"   : face,
+        "at"     : at,
+        "quote"  : quote,
+        "tag"    : tag,
+        "note"   : note,
     }
 
 
@@ -742,7 +742,7 @@ MEDIA_TRUTH = {
     "g03.png": "表情包：一个得意的圆脸表情，上方文字“你说得对”，下方文字“但是我不听”。",
     "g04.png": "下周安排表：周一 组会10:00；周三 晚8点 团建 KTV；周五 交周报。",
     "m03.png": "表情包：橙色卡通猫瘫坐在蓝色垫子上；文字为我只是坐一下、一坐就是半小时。",
-    "broken": "损坏的图片，无法显示",
+    "broken" : "损坏的图片，无法显示",
 }
 
 
@@ -755,7 +755,9 @@ def prepare_fixtures(directory: Path) -> None:
     directory.mkdir(parents=True, exist_ok=True)
 
     def font(size: int):
-        return ImageFont.truetype("C:/Windows/Fonts/msyh.ttc", size)
+        return ImageFont.truetype(
+            os.environ.get("XIAOQING_EVAL_FONT", "C:/Windows/Fonts/msyh.ttc"), size
+        )
 
     image = Image.new("RGB", (900, 700), "#1d1b33")
     d     = ImageDraw.Draw(image)
@@ -948,6 +950,7 @@ async def run_suite(suite: str, seed: int, out_dir: Path) -> Path:
     random.seed(seed)
     run_name = f"{suite}-{seed}"
     output   = out_dir / f"{run_name}.jsonl"
+    output.touch(exist_ok=False)
     data_dir = out_dir / "isolated" / run_name
     data_dir.mkdir(parents=True, exist_ok=False)
     config = json.loads(DEFAULT_CONFIG.read_text(encoding="utf-8"))
@@ -966,11 +969,11 @@ async def run_suite(suite: str, seed: int, out_dir: Path) -> Path:
             row["checks"].append({"candidate": kwargs.get("reply", ""), "result": asdict(result)})
         return result
 
-    reply_generator.check_reply = capture_check
-    rows: list[dict[str, Any]]  = []
-    contexts: list[Any]         = []
-    group                       = 978000 + (seed % 1000)
-    last_bot_id: int | None     = None
+    reply_generator.check_reply    = capture_check
+    rows    : list[dict[str, Any]] = []
+    contexts: list[Any]            = []
+    group                          = 978000 + (seed % 1000)
+    last_bot_id: int | None        = None
     async with aiohttp.ClientSession() as session:
         try:
             for index, probe in enumerate(SCENARIOS[suite], 1):
@@ -982,26 +985,26 @@ async def run_suite(suite: str, seed: int, out_dir: Path) -> Path:
                 at_name    = BOT_NAME if probe["at"] == "bot" else probe["at"]
                 raw        = (f"@{at_name} " if at_name else "") + probe["text"]
                 event      = {
-                    "post_type": "message",
+                    "post_type"   : "message",
                     "message_type": "group",
-                    "sub_type": "normal",
-                    "time": int(time.time()),
-                    "self_id": BOT_ID,
-                    "user_id": uid,
-                    "group_id": group,
-                    "message_id": message_id,
-                    "message_seq": index,
-                    "message": parts,
-                    "raw_message": raw,
-                    "sender": {
-                        "user_id": uid,
+                    "sub_type"    : "normal",
+                    "time"        : int(time.time()),
+                    "self_id"     : BOT_ID,
+                    "user_id"     : uid,
+                    "group_id"    : group,
+                    "message_id"  : message_id,
+                    "message_seq" : index,
+                    "message"     : parts,
+                    "raw_message" : raw,
+                    "sender"      : {
+                        "user_id" : uid,
                         "nickname": probe["speaker"],
-                        "card": probe["speaker"],
-                        "role": "member",
+                        "card"    : probe["speaker"],
+                        "role"    : "member",
                     },
                 }
                 row: dict[str, Any] = {
-                    "run": run_name,
+                    "run"  : run_name,
                     "suite": suite,
                     "index": index,
                     **{
@@ -1019,11 +1022,11 @@ async def run_suite(suite: str, seed: int, out_dir: Path) -> Path:
                         )
                     },
                     "started_utc": datetime.now(UTC).isoformat(),
-                    "checks": [],
-                    "calls": [],
-                    "steps": [],
-                    "emissions": [],
-                    "errors": [],
+                    "checks"     : [],
+                    "calls"      : [],
+                    "steps"      : [],
+                    "emissions"  : [],
+                    "errors"     : [],
                 }
                 token   = current_row.set(row)
                 context = make_experiment_context(
@@ -1048,16 +1051,16 @@ async def run_suite(suite: str, seed: int, out_dir: Path) -> Path:
                     except Exception as exc:
                         _row["calls"].append(
                             {
-                                "route": route_name,
+                                "route"  : route_name,
                                 "seconds": round(time.monotonic() - start, 3),
-                                "error": type(exc).__name__,
+                                "error"  : type(exc).__name__,
                             }
                         )
                         raise
                     _row["calls"].append(
                         {
-                            "route": route_name,
-                            "model": result.model,
+                            "route"  : route_name,
+                            "model"  : result.model,
                             "seconds": round(time.monotonic() - start, 3),
                             "content": redact_secrets(result.content),
                         }
@@ -1080,7 +1083,7 @@ async def run_suite(suite: str, seed: int, out_dir: Path) -> Path:
                     _row["emissions"].append(
                         {
                             "at_seconds": round(time.monotonic() - _start, 3),
-                            "segments": action.get("params", {}).get("message", []),
+                            "segments"  : action.get("params", {}).get("message", []),
                         }
                     )
                     return await _send(action)
@@ -1094,7 +1097,7 @@ async def run_suite(suite: str, seed: int, out_dir: Path) -> Path:
                         row["emissions"].append(
                             {
                                 "at_seconds": round(time.monotonic() - started, 3),
-                                "segments": list(result),
+                                "segments"  : list(result),
                             }
                         )
                     # 模拟发送成功：消息 ID 随回执交给聊天侧，和真实发送链路一样记进聊天记录。
@@ -1110,7 +1113,7 @@ async def run_suite(suite: str, seed: int, out_dir: Path) -> Path:
                     row["reply_segments"] = sent
                 except Exception as exc:
                     row["exception"] = {
-                        "type": type(exc).__name__,
+                        "type"   : type(exc).__name__,
                         "message": redact_secrets(str(exc))[:1000],
                     }
                     row["reply_segments"] = []
@@ -1120,13 +1123,15 @@ async def run_suite(suite: str, seed: int, out_dir: Path) -> Path:
                     asdict(gate) if gate is not None and gate is not previous_gate else None
                 )
                 rows.append(row)
+                with output.open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
                 current_row.reset(token)
                 print(
                     json.dumps(
                         {
                             "case": f"{run_name}.{index:02d}",
-                            "in": probe["text"][:30],
-                            "out": render_bot(row["reply_segments"])[:60],
+                            "in"  : probe["text"][:30],
+                            "out" : render_bot(row["reply_segments"])[:60],
                         },
                         ensure_ascii=False,
                     ),
@@ -1136,10 +1141,6 @@ async def run_suite(suite: str, seed: int, out_dir: Path) -> Path:
             if contexts:
                 await chat.shutdown(contexts[-1])
             reply_generator.check_reply = original_check
-    output.write_text(
-        "".join(json.dumps(r, ensure_ascii=False, default=str) + "\n" for r in rows),
-        encoding="utf-8",
-    )
     return output
 
 
@@ -1189,7 +1190,7 @@ def render_bot(segments: list[dict[str, Any]]) -> str:
     return "".join(out).strip()
 
 
-def _user_line(row: dict[str, Any]) -> str:
+def _user_line(row: dict[str, Any], media_truth: dict[str, str] = MEDIA_TRUTH) -> str:
     bits = [
         "[引用了小青上一条]" if row["quote"] else "",
         f"@{row['at']} " if row["at"] else "",
@@ -1197,7 +1198,7 @@ def _user_line(row: dict[str, Any]) -> str:
     ]
     if row["media"]:
         label = "表情包" if row["kind"] == "mface" else "图片"
-        bits.append(f"[{label}：{MEDIA_TRUTH.get(row['media'], '')}]")
+        bits.append(f"[{label}：{media_truth.get(row['media'], '')}]")
     if row["face"]:
         bits.append(f"[QQ表情#{row['face']}]")
     return "".join(bits)
@@ -1205,7 +1206,7 @@ def _user_line(row: dict[str, Any]) -> str:
 
 def rule_findings(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
-    said: list[str]                = []
+    said    : list[str]            = []
 
     def add(row: dict[str, Any], kind: str, detail: Any) -> None:
         findings.append({"turn": f"T{row['index']:02d}", "kind": kind, "detail": detail})
@@ -1233,8 +1234,9 @@ def rule_findings(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if row.get("exception"):
             add(row, "exception", row["exception"])
         results = [check.get("result") or {} for check in row.get("checks", [])]
-        if any(result.get("category") == "infra" for result in results):
-            add(row, "checker_infra", sum(result.get("category") == "infra" for result in results))
+        # ReplyCheckResult 用 severity 标记基础设施失败；category 是审查维度，不是失败类型。
+        if any(result.get("severity") == "infra" for result in results):
+            add(row, "checker_infra", sum(result.get("severity") == "infra" for result in results))
         rejected = [
             (check["candidate"][:60], (check.get("result") or {}).get("reason", "")[:80])
             for check in row.get("checks", [])
@@ -1268,21 +1270,23 @@ def style_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if not count:
         return {"replies": 0}
     return {
-        "replies": count,
+        "replies"    : count,
         "echo_opener": sum(bool(_ECHO_OPENER_RE.match(text)) for text in texts),
-        "with_emoji": sum(
+        "with_emoji" : sum(
             any(segment.get("type") in _MEDIA_SEGMENTS for segment in segments)
             for segments in replies
         ),
         "question_ending": sum(text.rstrip().endswith(("？", "?")) for text in texts),
-        "avg_chars": round(sum(len(text) for text in texts) / count, 1),
+        "avg_chars"      : round(sum(len(text) for text in texts) / count, 1),
     }
 
 
-def transcript(rows: list[dict[str, Any]], notes: list[str]) -> str:
+def transcript(
+    rows: list[dict[str, Any]], notes: list[str], media_truth: dict[str, str] = MEDIA_TRUTH
+) -> str:
     lines: list[str] = []
     for row, note in zip(rows, notes, strict=False):
-        lines.append(f"T{row['index']:02d} {row['speaker']}：{_user_line(row)}")
+        lines.append(f"T{row['index']:02d} {row['speaker']}：{_user_line(row, media_truth)}")
         lines.append(f"      〔预期：{row['expect']}；{note or '无特别要求'}〕")
         reply = render_bot(row.get("reply_segments", []))
         lines.append(f"      小青：{reply}" if reply else "      小青：（沉默）")
@@ -1348,26 +1352,29 @@ def judge_run(path: Path, *, use_judge: bool = True) -> dict[str, Any]:
     rows = [
         json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
     ]
+    if not rows:
+        raise ValueError(f"No completed evaluation rows: {path}")
     suite = rows[0]["suite"]
-    notes = [probe["note"] for probe in SCENARIOS[suite]]
-    text  = transcript(rows, notes)
+    manifest = json.loads((path.parent / "manifest.json").read_text(encoding="utf-8"))
+    notes = [probe["note"] for probe in manifest["scenarios"][suite]]
+    text  = transcript(rows, notes, manifest["media_truth"])
     verdict, model = asyncio.run(judge_transcript(text)) if use_judge else ({}, "")
     record = {
-        "run": path.stem,
-        "suite": suite,
-        "style": style_metrics(rows),
-        "turns": len(rows),
-        "bot_replies": sum(bool(row.get("reply_segments")) for row in rows),
+        "run"                    : path.stem,
+        "suite"                  : suite,
+        "style"                  : style_metrics(rows),
+        "turns"                  : len(rows),
+        "bot_replies"            : sum(bool(row.get("reply_segments")) for row in rows),
         "expected_replies_missed": sum(
             row["expect"] == "reply" and not row.get("reply_segments") for row in rows
         ),
         "intrusions": sum(
             row["expect"] == "silence" and bool(row.get("reply_segments")) for row in rows
         ),
-        "rules": rule_findings(rows),
-        "judge": verdict,
+        "rules"      : rule_findings(rows),
+        "judge"      : verdict,
         "judge_model": model,
-        "transcript": text,
+        "transcript" : text,
     }
     path.with_name(f"judged-{path.stem}.json").write_text(
         json.dumps(record, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
@@ -1382,9 +1389,9 @@ def write_report(out_dir: Path, records: list[dict[str, Any]]) -> None:
             for key in ("suite", "turns", "bot_replies", "expected_replies_missed", "intrusions")
         }
         | {
-            "style": record.get("style"),
-            "scores": record["judge"].get("scores"),
-            "top_issues": record["judge"].get("top_issues"),
+            "style"        : record.get("style"),
+            "scores"       : record["judge"].get("scores"),
+            "top_issues"   : record["judge"].get("top_issues"),
             "rule_findings": [f"{f['turn']} {f['kind']}" for f in record["rules"]],
         }
         for record in records
@@ -1478,15 +1485,15 @@ def main(argv: list[str] | None = None) -> int:
         asyncio.run(run_suite(suites[0], args.seed, out_dir))
         return 0
 
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=False)
     prepare_fixtures(out_dir / "fixtures")
     (out_dir / "manifest.json").write_text(
         json.dumps(
             {
                 "created_utc": datetime.now(UTC).isoformat(),
-                "suites": suites,
-                "seed": args.seed,
-                "scenarios": {s: SCENARIOS[s] for s in suites},
+                "suites"     : suites,
+                "seed"       : args.seed,
+                "scenarios"  : {s: SCENARIOS[s] for s in suites},
                 "media_truth": MEDIA_TRUTH,
             },
             ensure_ascii = False,
@@ -1495,26 +1502,41 @@ def main(argv: list[str] | None = None) -> int:
         encoding="utf-8",
     )
     # 每个剧本一个进程：插件运行时状态是进程级单例，并行跑必须隔离。
-    workers = [
-        subprocess.Popen(
-            [
-                sys.executable,
-                __file__,
-                "--worker",
-                "--suite",
-                suite,
-                "--seed",
-                str(args.seed + offset),
-                "--out-dir",
-                str(out_dir),
-            ],
-            stdout=(out_dir / f"{suite}.log").open("w", encoding="utf-8"),
-            stderr = subprocess.STDOUT,
-            env    = {**os.environ, "PYTHONIOENCODING": "utf-8"},
-        )
-        for offset, suite in enumerate(suites, 1)
-    ]
-    failed = [suite for suite, worker in zip(suites, workers, strict=True) if worker.wait() != 0]
+    workers: list[subprocess.Popen] = []
+    failed : list[str]              = []
+    try:
+        for offset, suite in enumerate(suites, 1):
+            with (out_dir / f"{suite}.log").open("w", encoding="utf-8") as log:
+                worker = subprocess.Popen(
+                    [
+                        sys.executable,
+                        __file__,
+                        "--worker",
+                        "--suite",
+                        suite,
+                        "--seed",
+                        str(args.seed + offset),
+                        "--out-dir",
+                        str(out_dir),
+                    ],
+                    stdout = log,
+                    stderr = subprocess.STDOUT,
+                    env    = {**os.environ, "PYTHONIOENCODING": "utf-8"},
+                )
+            workers.append(worker)
+        failed = [
+            suite for suite, worker in zip(suites, workers, strict=True) if worker.wait() != 0
+        ]
+    finally:
+        for worker in workers:
+            if worker.poll() is None:
+                worker.terminate()
+        for worker in workers:
+            try:
+                worker.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                worker.kill()
+                worker.wait(timeout=10)
     if failed:
         print(f"剧本运行失败：{failed}，见 {out_dir}/<suite>.log")
     paths = sorted(out_dir.glob("*.jsonl"))

@@ -33,10 +33,10 @@ REPEAT_KEYWORDS: Final[tuple[tuple[str, str], ...]] = (
     ("每个月", "MONTHLY"),
     ("每月", "MONTHLY"),
 )
-NOTE_KEYWORDS: Final            = ("想法", "灵感", "点子", "记录", "笔记", "idea")
-EVENT_KEYWORDS: Final           = ("会议", "开会", "约", "见面", "活动", "聚会", "上课")
-TASK_KEYWORDS: Final            = ("待办", "任务", "完成", "提交", "截止", "deadline", "todo")
-DEADLINE_HINTS: Final           = ("到", "截止", "之前", "前")
+NOTE_KEYWORDS           : Final = ("想法", "灵感", "点子", "记录", "笔记", "idea")
+EVENT_KEYWORDS          : Final = ("会议", "开会", "约", "见面", "活动", "聚会", "上课")
+TASK_KEYWORDS           : Final = ("待办", "任务", "完成", "提交", "截止", "deadline", "todo")
+DEADLINE_HINTS          : Final = ("到", "截止", "之前", "前")
 TIME_EXPRESSION_PATTERNS: Final = (
     r"\d{1,2}[点:：]",
     r"今天|明天|后天",
@@ -47,8 +47,8 @@ LOCATION_PATTERNS: Final = (
     r"在([^，,。.！!？?]+?)(开会|见面|会议)",
     r"地点[：:]\s*([^，,。.！!？?]+)",
 )
-REMINDER_UNIT_SECONDS: Final                      = {"分钟": 60, "小时": 3600, "天": 86400}
-WEEKDAY_CODES: Final[tuple[tuple[str, str], ...]] = (
+REMINDER_UNIT_SECONDS: Final                              = {"分钟": 60, "小时": 3600, "天": 86400}
+WEEKDAY_CODES        : Final[tuple[tuple[str, str], ...]] = (
     ("周一", "MO"),
     ("周二", "TU"),
     ("周三", "WE"),
@@ -57,6 +57,13 @@ WEEKDAY_CODES: Final[tuple[tuple[str, str], ...]] = (
     ("周六", "SA"),
     ("周日", "SU"),
 )
+# 自然周：这周/下周/下下周后面跟具体星期时，按周一起算的自然周落到那一天。
+_WEEK_OFFSETS   : Final = {"这周": 0, "本周": 0, "下周": 1, "下下周": 2}
+_WEEKDAY_PATTERN: Final = re.compile(
+    r"(下下周|下周|这周|本周)\s*(?:周|星期|礼拜)?([一二三四五六日天])"
+)
+_WEEKDAY_INDEX   : Final = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6, "天": 6}
+_NEGATED_REMINDER: Final = re.compile(r"(?:不|别|取消|无需|不用|不要)\s*$")
 CATEGORY_KEYWORDS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("健康", ("体检", "锻炼", "跑步", "健身", "运动", "医院")),
     ("工作", ("工作", "会议", "项目", "报告", "开会", "邮件", "周报")),
@@ -73,12 +80,12 @@ class RuleParser:
         """解析自然语言，返回结构化数据"""
         item_type              = self._detect_type(text)
         result: dict[str, Any] = {
-            "type": item_type,
-            "title": text[:50],
-            "content": text,
-            "tags": extract_tags(text),
-            "category": self._extract_category(text) or "未分类",
-            "owner_id": user_id,
+            "type"              : item_type,
+            "title"             : text[:50],
+            "content"           : text,
+            "tags"              : extract_tags(text),
+            "category"          : self._extract_category(text) or "未分类",
+            "owner_id"          : user_id,
             "needs_confirmation": [],
         }
 
@@ -86,6 +93,9 @@ class RuleParser:
         if current_time.tzinfo is None:
             raise ValueError("rule-parser now must be timezone-aware")
         time_info = self._extract_time(text, current_time)
+        if time_info and time_info.pop("invalid_time", None):
+            # “25点”这类非法钟点不能悄悄换成 09:00：保留为缺少时间，进入补充信息流程。
+            result["invalid_time"] = True
         self._apply_time_fields(result, item_type, time_info)
         self._apply_type_metadata(result, item_type, text)
 
@@ -157,6 +167,8 @@ class RuleParser:
     def _extract_time(self, text: str, now: datetime) -> dict[str, str] | None:
         """提取时间信息"""
         result = self._extract_relative_time(text, now)
+        if result.get("invalid_time"):
+            return result
         if absolute_start := self._extract_absolute_start(text, now):
             result["start_time"] = absolute_start
 
@@ -171,10 +183,17 @@ class RuleParser:
             if keyword not in text:
                 continue
             target_date = now + timedelta(days=days_offset)
+            if weekday := _WEEKDAY_PATTERN.search(text):
+                monday = now - timedelta(days=now.weekday())
+                target_date = monday + timedelta(
+                    weeks = _WEEK_OFFSETS[weekday.group(1)],
+                    days  = _WEEKDAY_INDEX[weekday.group(2)],
+                )
             start_match = re.search(r"(\d{1,2})[点:：](\d{1,2})?", text)
-            start_time  = self._clock_on_date(target_date, start_match) or target_date.replace(
-                hour=9, minute=0, second=0, microsecond=0
-            )
+            clock       = self._clock_on_date(target_date, start_match)
+            if start_match is not None and clock is None:
+                return {"invalid_time": "1"}
+            start_time = clock or target_date.replace(hour=9, minute=0, second=0, microsecond=0)
             result    = {"start_time": start_time.isoformat()}
             end_match = re.search(
                 r"到\s*(?:凌晨|早上|上午|中午|下午|傍晚|晚上)?\s*(\d{1,2})[点:：](\d{1,2})?", text
@@ -195,7 +214,10 @@ class RuleParser:
         except ValueError:
             return None
         time_match = re.search(r"(\d{1,2})[点:：](\d{1,2})?", text)
-        return (self._clock_on_date(target_date, time_match) or target_date).isoformat()
+        clock      = self._clock_on_date(target_date, time_match)
+        if time_match is not None and clock is None:
+            return None
+        return (clock or target_date).isoformat()
 
     @staticmethod
     def _clock_on_date(base: datetime, match: re.Match[str] | None) -> datetime | None:
@@ -281,6 +303,9 @@ class RuleParser:
 
         for pattern in patterns:
             for match in re.finditer(pattern, text):
+                # “不要提前1小时提醒”是否定子句，与 AI 路径的偏移提取保持同一取舍。
+                if _NEGATED_REMINDER.search(text[max(0, match.start() - 8) : match.start()]):
+                    continue
                 num  = int(match.group(1))
                 unit = match.group(2)
 

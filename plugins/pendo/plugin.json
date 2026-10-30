@@ -636,10 +636,9 @@
             "handler": "scheduled_migrate_todos",
             "delivery": "targeted",
             "cron": {
-                "hour": 0,
                 "minute": 5
             },
-            "description": "每天 00:05 顺延昨日仍未完成的计划待办"
+            "description": "每小时检查一次，用户本地日期跨天后顺延昨日仍未完成的计划待办（按日幂等）"
         },
         {
             "id": "pendo_prune_operation_logs",

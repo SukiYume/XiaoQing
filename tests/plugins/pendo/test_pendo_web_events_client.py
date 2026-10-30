@@ -131,6 +131,7 @@ const todayRangeKey = () => '2026-03-15';""",
 } from '../utils/timezone.js';""",
             timezone_runtime,
         ),
+        ("import { createInstantMemory } from '../utils/timezone.js';", ""),
         (
             """import {
     bindEnterAction,

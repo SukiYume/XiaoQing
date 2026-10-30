@@ -39,10 +39,10 @@ def _payload(
         name: {
             pulse_key: {
                 "timestamp": {"value": timestamp},
-                "dm": {"value": "123.4"},
-                "snr": {"value": "18.0"},
+                "dm"       : {"value": "123.4"},
+                "snr"      : {"value": "18.0"},
             },
-            "ra": {"value": "12:34:56"},
+            "ra" : {"value": "12:34:56"},
             "dec": {"value": "+01:02:03"},
         }
     }
@@ -65,10 +65,10 @@ class TestChimeRuntimeContract:
     def test_pulse_key_requires_a_complete_six_digit_match(self) -> None:
         info = {
             "260713-extra": {"timestamp": {"value": "2099-01-01T00:00:00"}},
-            "991332": {"timestamp": {"value": "2099-01-01T00:00:00"}},
-            "991231": {"timestamp": {"value": "1999-12-31T00:00:00"}},
-            "000101": {"timestamp": {"value": "2000-01-01T00:00:00"}},
-            "260714": {"timestamp": {"value": "2026-07-14T00:00:00"}},
+            "991332"      : {"timestamp": {"value": "2099-01-01T00:00:00"}},
+            "991231"      : {"timestamp": {"value": "1999-12-31T00:00:00"}},
+            "000101"      : {"timestamp": {"value": "2000-01-01T00:00:00"}},
+            "260714"      : {"timestamp": {"value": "2026-07-14T00:00:00"}},
         }
         frb = chime.FRBData("frb20260714a", info)
 
@@ -226,8 +226,8 @@ class TestChimeParsingAndHistory:
         chime_context: SimpleNamespace,
     ) -> None:
         old = {
-            "FRB-A": "2026-07-14T00:00:00",
-            "FRB-B": "2026-07-14T00:00:00",
+            "FRB-A"      : "2026-07-14T00:00:00",
+            "FRB-B"      : "2026-07-14T00:00:00",
             "FRB-MISSING": "2026-07-10T00:00:00",
         }
         current = [
@@ -242,10 +242,10 @@ class TestChimeParsingAndHistory:
         assert [item.name for item in new_repeaters] == ["FRB-NEW"]
         assert [item.name for item in new_pulses] == ["FRB-A"]
         assert merged == {
-            "FRB-A": "2026-07-15T00:00:00",
-            "FRB-B": "2026-07-14T00:00:00",
+            "FRB-A"      : "2026-07-15T00:00:00",
+            "FRB-B"      : "2026-07-14T00:00:00",
             "FRB-MISSING": "2026-07-10T00:00:00",
-            "FRB-NEW": "2026-07-14T12:00:00",
+            "FRB-NEW"    : "2026-07-14T12:00:00",
         }
 
     def test_equivalent_timestamp_forms_do_not_trigger_an_update(

@@ -40,8 +40,8 @@ class FakeClient:
     def get_iopub_msg(self, timeout: float) -> dict[str, Any]:
         del timeout
         return {
-            "msg_type": "status",
-            "content": {"execution_state": "idle"},
+            "msg_type"     : "status",
+            "content"      : {"execution_state": "idle"},
             "parent_header": {"msg_id": "init-message"},
         }
 
@@ -99,15 +99,28 @@ class FakeKernel:
 @pytest.fixture(autouse=True)
 def isolated_registry(monkeypatch: pytest.MonkeyPatch):
     with JupyterKernelManager._instances_lock:  # noqa: SLF001 - lifecycle isolation.
+        previous_instances   = dict(JupyterKernelManager._instances)
+        previous_quarantined = set(JupyterKernelManager._quarantined_instances)
         JupyterKernelManager._instances.clear()  # noqa: SLF001
         JupyterKernelManager._quarantined_instances.clear()  # noqa: SLF001
     monkeypatch.setattr(manager_module, "JUPYTER_AVAILABLE", True)
     monkeypatch.setattr(manager_module, "IMPORT_ERROR", None)
     monkeypatch.setattr(manager_module, "lazy_import_jupyter", lambda: None)
     yield
-    with JupyterKernelManager._instances_lock:  # noqa: SLF001
-        JupyterKernelManager._instances.clear()  # noqa: SLF001
-        JupyterKernelManager._quarantined_instances.clear()  # noqa: SLF001
+    with JupyterKernelManager._instances_lock:
+        owned = (
+            set(JupyterKernelManager._instances.values())
+            | JupyterKernelManager._quarantined_instances
+        )
+    try:
+        for instance in owned:
+            instance.shutdown_kernel()
+    finally:
+        with JupyterKernelManager._instances_lock:
+            JupyterKernelManager._instances.clear()
+            JupyterKernelManager._instances.update(previous_instances)
+            JupyterKernelManager._quarantined_instances.clear()
+            JupyterKernelManager._quarantined_instances.update(previous_quarantined)
 
 
 @pytest.mark.parametrize(
@@ -365,14 +378,18 @@ def test_unconfirmed_orphan_marks_instance_broken_and_evicts_registry(
     manager._km         = kernel  # noqa: SLF001
     manager._kc         = kernel.client_instance  # noqa: SLF001
 
-    with pytest.raises(RuntimeError, match="无法确认"):
-        manager.shutdown_kernel()
+    try:
+        with pytest.raises(RuntimeError, match="无法确认"):
+            manager.shutdown_kernel()
 
-    assert manager.broken is True
-    assert manager in JupyterKernelManager._quarantined_instances  # noqa: SLF001
-    replacement = JupyterKernelManager.get_instance(tmp_path, owner)
-    assert replacement is not manager
-    assert replacement.broken is False
+        assert manager.broken is True
+        assert manager in JupyterKernelManager._quarantined_instances  # noqa: SLF001
+        replacement = JupyterKernelManager.get_instance(tmp_path, owner)
+        assert replacement is not manager
+        assert replacement.broken is False
+    finally:
+        kernel.fail_shutdown = False
+        manager.shutdown_kernel()
 
 
 def test_shutdown_waits_for_inflight_start_then_leaves_no_kernel(

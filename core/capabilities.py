@@ -25,8 +25,8 @@ def _secret_path_parts(path: str) -> list[str]:
 @dataclass(frozen=True)
 class SecretAdminService:
     _authorized: Callable[[], bool]
-    _snapshot: Callable[[], Mapping[str, Any]]
-    _writer: Callable[[str, Any], None]
+    _snapshot  : Callable[[], Mapping[str, Any]]
+    _writer    : Callable[[str, Any], None]
 
     def _ensure_authorized(self) -> None:
         if not self._authorized():
@@ -110,7 +110,7 @@ class CodexArxivSummaryService:
     """A fixed Codex operation with authorization rechecked on every call."""
 
     _authorized: Callable[[], bool]
-    _enqueue: Callable[..., Awaitable[str]]
+    _enqueue   : Callable[..., Awaitable[str]]
 
     async def enqueue_or_replay(
         self,
@@ -205,8 +205,8 @@ class AgentTurnService:
     """xiaoqing_chat → xiaoqing_agent 的固定桥；返回 ``None`` 表示本轮照常聊天。"""
 
     _authorized: Callable[[], bool]
-    _invoke: Callable[[dict[str, Any]], Awaitable[Any]]
-    _report: Callable[[dict[str, Any]], Awaitable[Any]] | None = None
+    _invoke    : Callable[[dict[str, Any]], Awaitable[Any]]
+    _report    : Callable[[dict[str, Any]], Awaitable[Any]] | None = None
 
     async def handle_turn(self, turn: dict[str, Any]) -> dict[str, Any] | None:
         _require(self._authorized)
@@ -235,7 +235,7 @@ class CodexAgentTaskService:
     """xiaoqing_agent → codex：提交一个任务并等到它结束。"""
 
     _authorized: Callable[[], bool]
-    _invoke: Callable[[dict[str, Any]], Awaitable[Any]]
+    _invoke    : Callable[[dict[str, Any]], Awaitable[Any]]
 
     async def run_task(
         self,
@@ -251,9 +251,9 @@ class CodexAgentTaskService:
         result = await _invoke_settled(
             self._invoke,
             {
-                "session": _required_text(session, "Codex session"),
-                "prompt": _required_text(prompt, "Codex prompt"),
-                "cwd": (cwd.strip() or None) if isinstance(cwd, str) else None,
+                "session"        : _required_text(session, "Codex session"),
+                "prompt"         : _required_text(prompt, "Codex prompt"),
+                "cwd"            : (cwd.strip() or None) if isinstance(cwd, str) else None,
                 "timeout_seconds": _agent_timeout(timeout_seconds),
             },
         )
@@ -267,7 +267,7 @@ class SSHAgentCommandService:
     """xiaoqing_agent → qingssh：列出服务器或执行一次性远端命令。"""
 
     _authorized: Callable[[], bool]
-    _invoke: Callable[[dict[str, Any]], Awaitable[Any]]
+    _invoke    : Callable[[dict[str, Any]], Awaitable[Any]]
 
     async def list_servers(self) -> list[dict[str, Any]]:
         _require(self._authorized)
@@ -287,9 +287,9 @@ class SSHAgentCommandService:
         result = await _invoke_settled(
             self._invoke,
             {
-                "op": "run",
-                "server": _required_text(server, "SSH server"),
-                "command": _required_text(command, "SSH command"),
+                "op"             : "run",
+                "server"         : _required_text(server, "SSH server"),
+                "command"        : _required_text(command, "SSH command"),
                 "timeout_seconds": _agent_timeout(timeout_seconds),
             },
         )
@@ -313,7 +313,7 @@ class CommandRunnerService:
     """以发起人身份执行一条已发布命令，权限与场景和本人直接发送时相同；不经过会话、闲聊和 URL 阶段。"""
 
     _authorized: Callable[[], bool]
-    _run: Callable[..., Awaitable[list[dict[str, Any]]]]
+    _run       : Callable[..., Awaitable[list[dict[str, Any]]]]
 
     async def run(
         self,
@@ -370,7 +370,7 @@ class ChatReplyService:
 class AIService:
     """只允许插件通过自己的命名 route 使用全局模型注册表。"""
 
-    _complete: Callable[..., Awaitable[AICompletionResult]]
+    _complete   : Callable[..., Awaitable[AICompletionResult]]
     _list_models: Callable[..., tuple[AIModelInfo, ...]]
 
     async def complete(

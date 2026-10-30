@@ -7,7 +7,7 @@ from typing import Final
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT: Final       = REPOSITORY_ROOT
+ROOT      : Final = REPOSITORY_ROOT
 APP_CLIENT: Final = ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "app.js"
 
 APP_SETUP: Final = r"""
@@ -63,6 +63,8 @@ APP_SETUP: Final = r"""
             this.onclick = null;
             this.onkeydown = null;
         }
+        set innerHTML(value) { this.html = value; this.controls = {}; }
+        get innerHTML() { return this.html; }
         addEventListener(type, callback) { this.listeners[type] = callback; }
         focus() { this.focusCount += 1; }
         setAttribute(name, value) { this.attributes[name] = value; }
@@ -182,7 +184,8 @@ def _run_app_client(script: str) -> None:
 def test_session_recovery_preserves_draft_and_recovers_same_account() -> None:
     _run_app_client(
         r"""
-        const draft = __elements.get('content');
+        const content = __elements.get('content');
+        const draft = content.querySelector('textarea');
         draft.value = '尚未保存的正文';
         const expired = window.listeners['pendo-session-expired'];
         expired({ detail: { ownerId: 'owner-a' } });
@@ -193,10 +196,12 @@ def test_session_recovery_preserves_draft_and_recovers_same_account() -> None:
         __state.exchangeBehavior = async () => ({ ok: false, message: '登录码过期' });
         await panel.querySelector('button').onclick();
         assert.equal(panel.querySelector('.session-recovery-error').textContent, '登录码过期');
+        assert.equal(content.querySelector('textarea'), draft);
         assert.equal(draft.value, '尚未保存的正文');
         __state.exchangeBehavior = async () => ({ ok: true, ownerId: 'owner-a' });
         await panel.querySelector('button').onclick();
         assert.equal(__elements.has('session-recovery'), false);
+        assert.equal(content.querySelector('textarea'), draft);
         assert.equal(draft.value, '尚未保存的正文');
         assert.equal(__state.reloads || 0, 0);
         expired({ detail: { ownerId: 'owner-a' } });

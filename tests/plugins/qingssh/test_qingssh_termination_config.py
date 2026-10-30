@@ -2,24 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+import threading
+from pathlib import Path
+from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock, Mock
+
+import pytest
+
 from tests.helpers.qingssh_test_support import (
-    Any,
-    AsyncMock,
-    MagicMock,
-    Mock,
-    Path,
     SessionKeys,
     _FakeChannel,
     _FakeClient,
     _SessionStub,
-    asyncio,
-    cast,
-    json,
-    pytest,
     qingssh_main,
     ssh_manager_module,
     ssh_session_handlers,
-    threading,
 )
 
 
@@ -124,7 +123,7 @@ async def test_channel_close_failure_is_reported_but_registry_is_still_cleared(t
     manager                      = ssh_manager_module.SSHManager(tmp_path)
     key                          = manager.build_connection_key("1", "2", "srv")
     manager.active_channels[key] = {
-        "channel": BrokenChannel(),
+        "channel"   : BrokenChannel(),
         "remote_pid": None,
     }
 
@@ -235,10 +234,10 @@ async def test_concurrent_termination_keeps_one_lock_until_all_waiters_finish(
         try:
             if ordinal == 1:
                 first_entered.set()
-                await release_first.wait()
+                await asyncio.wait_for(release_first.wait(), timeout=10)
             elif ordinal == 2:
                 second_entered.set()
-                await release_second.wait()
+                await asyncio.wait_for(release_second.wait(), timeout=10)
             else:
                 third_entered.set()
             return ssh_manager_module.CommandTerminationResult(
@@ -252,11 +251,11 @@ async def test_concurrent_termination_keeps_one_lock_until_all_waiters_finish(
     monkeypatch.setattr(manager, "_terminate_active_command_locked", controlled_termination)
 
     first = asyncio.create_task(manager._terminate_active_command(key))
-    await first_entered.wait()
+    await asyncio.wait_for(first_entered.wait(), timeout=10)
     second = asyncio.create_task(manager._terminate_active_command(key))
     await asyncio.sleep(0)
     release_first.set()
-    await second_entered.wait()
+    await asyncio.wait_for(second_entered.wait(), timeout=10)
 
     third = asyncio.create_task(manager._terminate_active_command(key))
     await asyncio.sleep(0)
@@ -284,13 +283,13 @@ async def test_stream_task_cancellation_before_pid_marker_leaves_no_active_chann
     async def fake_impl(*_args, **_kwargs):
         manager.active_channels[key] = {"channel": channel, "remote_pid": None}
         registered.set()
-        await asyncio.Event().wait()
+        await asyncio.wait_for(asyncio.Event().wait(), timeout=10)
 
     monkeypatch.setattr(manager, "_execute_command_stream_impl", fake_impl)
     task = asyncio.create_task(
         manager.execute_command_stream("1", "2", "srv", "sleep 1", AsyncMock())
     )
-    await registered.wait()
+    await asyncio.wait_for(registered.wait(), timeout=10)
 
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -334,10 +333,10 @@ async def test_add_server_does_not_overwrite_an_existing_name(tmp_path):
 async def test_add_server_rolls_back_secret_when_config_write_fails(monkeypatch, tmp_path):
     """配置未落盘时不能留下不可达的孤立密码。"""
 
-    stored: dict[str, str] = {}
-    deleted: list[str]     = []
-    context                = Mock()
-    context.set_secret     = lambda key, value: stored.__setitem__(key, value)
+    stored : dict[str, str] = {}
+    deleted: list[str]      = []
+    context                 = Mock()
+    context.set_secret      = lambda key, value: stored.__setitem__(key, value)
 
     def delete_secret(key):
         deleted.append(key)
@@ -369,8 +368,8 @@ async def test_remove_server_preserves_state_when_config_write_fails(monkeypatch
     context.delete_secret = lambda ref: deleted.append(ref) or True
     manager = ssh_manager_module.SSHManager(tmp_path, context=context)
     manager.servers["srv"] = {
-        "host": "example.com",
-        "port": 22,
+        "host"        : "example.com",
+        "port"        : 22,
         "password_ref": "passwords.ref",
     }
     client                         = _FakeClient()
@@ -400,11 +399,11 @@ async def test_legacy_password_migration_rolls_back_secret_on_save_failure(
         json.dumps(
             {
                 "srv": {
-                    "host": "example.com",
-                    "port": 22,
-                    "username": "root",
+                    "host"     : "example.com",
+                    "port"     : 22,
+                    "username" : "root",
                     "auth_type": "password",
-                    "password": "dummy-secret",
+                    "password" : "dummy-secret",
                 }
             }
         ),
@@ -579,7 +578,7 @@ async def test_guided_add_rejects_unsafe_username_without_advancing():
     context.end_session = AsyncMock()
     session             = _SessionStub(
         {
-            SessionKeys.STEP: "username",
+            SessionKeys.STEP         : "username",
             SessionKeys.SERVER_CONFIG: {
                 "name": "srv",
                 "host": "example.com",
@@ -642,9 +641,9 @@ async def test_import_all_uses_one_atomic_snapshot(monkeypatch, tmp_path):
         lambda host: (
             {"hostname": f"{host}.example", "port": 22},
             {
-                "host": f"{host}.example",
-                "port": 22,
-                "username": "root",
+                "host"     : f"{host}.example",
+                "port"     : 22,
+                "username" : "root",
                 "auth_type": "agent",
             },
         ),

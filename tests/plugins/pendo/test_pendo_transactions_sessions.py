@@ -2,26 +2,28 @@
 
 from __future__ import annotations
 
+import logging
+import shutil
+from datetime import datetime
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock
+
+import pytest
+
 from tests.helpers.pendo_review_test_support import (
     AIParser,
-    Any,
-    AsyncMock,
     Database,
     DbOpsMixin,
     ItemType,
-    Path,
     ReminderService,
     SessionManager,
-    SimpleNamespace,
     TaskStatus,
     ZoneInfo,
     _make_temp_db,
     _pendo_session_services,
     _PendoSessionTestContext,
-    datetime,
-    logging,
-    pytest,
-    shutil,
 )
 
 
@@ -37,11 +39,11 @@ async def test_qq_crud_and_operation_log_share_one_transaction(
     ops.db   = db
     owner_id = "qq-transaction-user"
     seed     = {
-        "id": "qq-transaction-item",
+        "id"      : "qq-transaction-item",
         "owner_id": owner_id,
-        "type": "note",
-        "title": "before",
-        "content": "before",
+        "type"    : "note",
+        "title"   : "before",
+        "content" : "before",
     }
     if operation != "create":
         db.insert_item(dict(seed))
@@ -91,11 +93,11 @@ async def test_chat_update_rejects_a_stale_item_version(tmp_path: Path) -> None:
     item_id  = "chat-cas-note"
     db.insert_item(
         {
-            "id": item_id,
+            "id"      : item_id,
             "owner_id": owner_id,
-            "type": "note",
-            "title": "original",
-            "content": "original",
+            "type"    : "note",
+            "title"   : "original",
+            "content" : "original",
         }
     )
     stale = db.get_item(item_id, owner_id)
@@ -136,10 +138,10 @@ def test_event_collection_change_and_operation_log_share_one_transaction(
     child_id      = "collection-transaction-child"
     db.create_event_collection(
         {
-            "id": collection_id,
+            "id"      : collection_id,
             "owner_id": owner_id,
-            "kind": "multi_node",
-            "title": "修改前",
+            "kind"    : "multi_node",
+            "title"   : "修改前",
         },
         [
             (
@@ -160,7 +162,7 @@ def test_event_collection_change_and_operation_log_share_one_transaction(
     monkeypatch.setattr(db, "_log_operation_with_cursor", fail_log)
     operation_log = {
         "user_id": owner_id,
-        "action": f"{operation}_event_collection",
+        "action" : f"{operation}_event_collection",
     }
     with pytest.raises(RuntimeError, match="注入集合审计失败"):
         if operation == "update":
@@ -307,7 +309,7 @@ def test_event_reminders_parse_json_list_instead_of_string_characters() -> None:
 
     reminders = ensure_event_reminders(
         {
-            "start_time": "2030-01-01T10:00:00+08:00",
+            "start_time"  : "2030-01-01T10:00:00+08:00",
             "remind_times": '["2030-01-01T09:00:00+08:00"]',
         }
     )
@@ -350,9 +352,9 @@ async def test_pendo_handle_session_uses_transaction_argument_and_atomically_rep
     assert current.session_id != original.session_id
     assert current.get("type") == PendoConfig.SESSION_TYPE_EVENT_CONFLICT
     assert current.get("data") == {
-        "title": "组会",
+        "title"     : "组会",
         "start_time": "2030-01-01T10:00:00",
-        "type": "event",
+        "type"      : "event",
     }
 
 
@@ -600,7 +602,7 @@ def test_rate_limiter_removes_expired_user_buckets(monkeypatch: pytest.MonkeyPat
     assert limiter.call_history == {"active": [80.0], "new-user": [100.0]}
 
 
-def test_rule_parser_prefers_longest_week_keyword_and_tolerates_invalid_clock():
+def test_rule_parser_prefers_longest_week_keyword_and_flags_invalid_clock():
     from plugins.pendo.services.rule_parser import RuleParser
 
     parser = RuleParser()
@@ -609,8 +611,15 @@ def test_rule_parser_prefers_longest_week_keyword_and_tolerates_invalid_clock():
     parsed = parser.parse("下下周10点开会", "u-rule", now=now)
     assert parsed["start_time"] == "2026-05-15T10:00:00+08:00"
 
+    # 非法钟点不能被换成默认 09:00，而是留空并要求补充时间。
     invalid_clock = parser.parse("明天25点开会", "u-rule", now=now)
-    assert invalid_clock["start_time"] == "2026-05-02T09:00:00+08:00"
+    assert "start_time" not in invalid_clock
+    assert invalid_clock["invalid_time"] is True
+    assert "start_time" in invalid_clock["needs_confirmation"]
+
+    # 2026-05-01 是周五：下周一按自然周落在 05-04。
+    weekday = parser.parse("下周一9点开会", "u-rule", now=now)
+    assert weekday["start_time"] == "2026-05-04T09:00:00+08:00"
 
 
 def test_search_items_applies_date_range_filters():
@@ -620,22 +629,22 @@ def test_search_items_applies_date_range_filters():
     try:
         db.insert_item(
             {
-                "id": "note_april",
-                "owner_id": owner_id,
-                "type": "note",
-                "title": "会议纪要",
-                "content": "四月版本",
+                "id"        : "note_april",
+                "owner_id"  : owner_id,
+                "type"      : "note",
+                "title"     : "会议纪要",
+                "content"   : "四月版本",
                 "created_at": "2026-04-10T09:00:00",
                 "updated_at": "2026-04-10T09:00:00",
             }
         )
         db.insert_item(
             {
-                "id": "note_january",
-                "owner_id": owner_id,
-                "type": "note",
-                "title": "会议纪要",
-                "content": "一月版本",
+                "id"        : "note_january",
+                "owner_id"  : owner_id,
+                "type"      : "note",
+                "title"     : "会议纪要",
+                "content"   : "一月版本",
                 "created_at": "2026-01-10T09:00:00",
                 "updated_at": "2026-01-10T09:00:00",
             }
@@ -645,10 +654,10 @@ def test_search_items_applies_date_range_filters():
             owner_id,
             "会议",
             filters={
-                "type": "note",
+                "type"      : "note",
                 "date_field": "created_at",
                 "start_date": "2026-04-01T00:00:00",
-                "end_date": "2026-04-30T23:59:59",
+                "end_date"  : "2026-04-30T23:59:59",
             },
             limit=10,
         )
@@ -766,7 +775,7 @@ def test_ai_invalid_offsets_do_not_emit_empty_rules():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("partial", [False, True])
-async def test_ai_event_prompt_separates_modes_and_uses_low_temperature(monkeypatch, partial):
+async def test_ai_event_prompt_separates_modes_and_inherits_route_settings(monkeypatch, partial):
     parser = AIParser()
     llm = AsyncMock(return_value='{"location": "会议室"}')
     monkeypatch.setattr(parser, "_call_llm", llm)
@@ -778,7 +787,7 @@ async def test_ai_event_prompt_separates_modes_and_uses_low_temperature(monkeypa
     assert "局部模式：省略所有未提及的字段" in prompt if partial else "解析模式: 创建模式" in prompt
     assert "提前1小时" in prompt
     assert "BYDAY" in prompt
-    assert kwargs["temperature"] == 0.0
+    assert "temperature" not in kwargs
     assert result["location"] == "会议室"
     assert "start_time" not in result
     assert "reminder_rules" not in result
@@ -792,10 +801,10 @@ async def test_ai_parser_rule_fallback_preserves_absolute_reminder_times(monkeyp
         parser.rule_parser,
         "parse",
         lambda _text, user_id, **_kwargs: {
-            "type": "event",
-            "owner_id": user_id,
-            "title": "规则日程",
-            "start_time": "2030-01-02T10:00:00",
+            "type"        : "event",
+            "owner_id"    : user_id,
+            "title"       : "规则日程",
+            "start_time"  : "2030-01-02T10:00:00",
             "remind_times": ["2030-01-02T09:00:00"],
         },
     )
@@ -806,7 +815,7 @@ async def test_ai_parser_rule_fallback_preserves_absolute_reminder_times(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_ai_parser_uses_core_route_and_forwards_task_temperature():
+async def test_ai_parser_uses_core_route_without_overriding_parameters():
     captured: dict[str, object] = {}
 
     class AI:
@@ -818,14 +827,12 @@ async def test_ai_parser_uses_core_route_and_forwards_task_temperature():
 
     result = await AIParser(context=context)._call_llm(
         [{"role": "user", "content": "hello"}],
-        temperature=0.25,
     )
 
     assert result == "ok"
     assert captured == {
-        "route": "parse",
+        "route"   : "parse",
         "messages": [{"role": "user", "content": "hello"}],
-        "temperature": 0.25,
     }
 
 
@@ -835,7 +842,7 @@ async def test_cached_pendo_ai_parser_uses_live_core_capability(monkeypatch):
 
     temp_dir, db = _make_temp_db("pendo_live_secret_rotation")
     outcomes: list[object] = ["old", "new", RuntimeError("route removed")]
-    routes: list[str]      = []
+    routes  : list[str]    = []
 
     class AI:
         async def complete(self, route, _messages, **_kwargs):
@@ -933,10 +940,10 @@ def test_reminder_dispatch_uses_owner_timezone(monkeypatch):
         def get_user_settings(self, user_id):
             assert user_id == "u-la"
             return {
-                "timezone": "America/Los_Angeles",
+                "timezone"         : "America/Los_Angeles",
                 "quiet_hours_start": "23:00",
-                "quiet_hours_end": "07:00",
-                "settings_json": {"reminder_enabled": True},
+                "quiet_hours_end"  : "07:00",
+                "settings_json"    : {"reminder_enabled": True},
             }
 
         def get_reminder_logs(self, item_id):
@@ -996,10 +1003,10 @@ def test_reminder_conflict_compares_absolute_time_across_offsets():
 
     assert conflicts == [
         {
-            "id": "evt-shanghai",
-            "title": "跨时区会议",
+            "id"        : "evt-shanghai",
+            "title"     : "跨时区会议",
             "start_time": "2030-01-02T10:00:00+08:00",
-            "end_time": "2030-01-02T11:00:00+08:00",
+            "end_time"  : "2030-01-02T11:00:00+08:00",
         }
     ]
     assert adjacent == []
@@ -1011,100 +1018,47 @@ def test_reminder_accepts_open_task_status_enum():
     assert ReminderService._is_active_reminder_item(task)
 
 
-def test_reminder_service_skips_closed_tasks():
-    done_task = SimpleNamespace(
-        id           = "task-done",
-        owner_id     = "u-task",
-        type         = "task",
-        status       = "done",
-        title        = "已完成任务",
-        remind_times = ["2030-01-01T09:00:00"],
-        context      = {},
+@pytest.mark.parametrize("repeat", [False, True])
+@pytest.mark.parametrize(
+    ("status", "enabled"), [("open", True), ("done", True), ("cancelled", True), ("open", False)]
+)
+def test_reminder_filters_task_state_and_settings(db, monkeypatch, repeat, status, enabled):
+    from unittest.mock import Mock
+
+    fire  = datetime.fromisoformat("2030-01-01T09:00:00+00:00")
+    owner = "1001"
+    db.update_user_settings(
+        owner, {"timezone": "UTC", "settings_json": {"reminder_enabled": enabled}}
     )
-
-    class _FakeDb:
-        def get_due_reminder_items(self, *, now):
-            return [done_task]
-
-        def prune_reminder_logs(self, *, before):
-            return 0
-
-        def get_user_settings(self, user_id):
-            raise AssertionError("closed task should not load reminder settings")
-
-        def get_unconfirmed_sent_reminders(self):
-            return []
-
-    result = ReminderService(db=_FakeDb()).check_and_send_reminders()
-
-    assert result["sent"] == 0
-    assert result["messages"] == []
-
-
-def test_reminder_repeats_skip_closed_tasks():
-    cancelled_task = SimpleNamespace(
-        id           = "task-cancelled",
-        owner_id     = "u-task",
-        type         = "task",
-        status       = "cancelled",
-        title        = "已取消任务",
-        remind_times = ["2030-01-01T09:00:00"],
-        context      = {},
+    item_id = db.insert_item(
+        {
+            "owner_id"    : owner,
+            "type"        : "task",
+            "title"       : "提醒验证",
+            "status"      : status,
+            "remind_times": [fire.isoformat()],
+        }
     )
-
-    class _FakeDb:
-        def get_unconfirmed_sent_reminders(self):
-            return [
-                {
-                    "item_id": "task-cancelled",
-                    "remind_time": "2030-01-01T09:00:00",
-                    "repeat_count": 1,
-                    "last_sent_at": "2030-01-01T09:00:00",
-                }
-            ]
-
-        def get_item(self, item_id):
-            return cancelled_task
-
-    messages = ReminderService(db=_FakeDb())._check_unconfirmed_repeats(
-        current_time=datetime(2030, 1, 1, 9, 10, 0),
-    )
-
-    assert messages == []
-
-
-def test_reminder_repeats_respect_disabled_setting():
-    item = SimpleNamespace(
-        id       = "evt-disabled",
-        owner_id = "u-disabled",
-        type     = "event",
-        title    = "已关闭提醒的日程",
-    )
-
-    class _FakeDb:
-        def get_unconfirmed_sent_reminders(self):
-            return [
-                {
-                    "item_id": item.id,
-                    "remind_time": "2030-01-01T09:00:00+00:00",
-                    "repeat_count": 1,
-                    "last_sent_at": "2030-01-01T09:00:00+00:00",
-                }
-            ]
-
-        def get_item(self, item_id):
-            assert item_id == item.id
-            return item
-
-        def get_user_settings(self, user_id):
-            assert user_id == item.owner_id
-            return {"settings_json": {"reminder_enabled": False}}
-
-        def claim_reminder_repeat(self, *_args, **_kwargs):
-            raise AssertionError("disabled reminders must not acquire a repeat lease")
-
-    messages = ReminderService(db=_FakeDb())._check_unconfirmed_repeats(
-        current_time=datetime.fromisoformat("2030-01-01T09:10:00+00:00")
-    )
-
-    assert messages == []
+    service = ReminderService(db)
+    monkeypatch.setattr(service, "_current_user_time", lambda _owner: fire)
+    claim_name = "claim_reminder_repeat" if repeat else "claim_reminder"
+    claim = Mock(wraps=getattr(db, claim_name))
+    monkeypatch.setattr(db, claim_name, claim)
+    if repeat:
+        db.log_reminder(item_id, fire.isoformat())
+        with db.get_connection() as conn:
+            conn.execute(
+                "UPDATE reminder_logs SET last_sent_at = ? WHERE item_id = ?",
+                (fire.isoformat(), item_id),
+            )
+        messages = service._check_unconfirmed_repeats(
+            datetime.fromisoformat("2030-01-01T09:10:00+00:00")
+        )
+    else:
+        messages = service._collect_item_reminders(db.get_item(item_id, owner_id=owner))
+    expected = int(status == "open" and enabled)
+    assert len(messages) == expected
+    assert claim.call_count == expected
+    if expected:
+        assert messages[0]["item_id"] == item_id
+        assert messages[0]["claim_token"]

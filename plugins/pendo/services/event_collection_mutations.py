@@ -90,9 +90,9 @@ def update_collection(
             require_canonical_utc_storage(normalized_child)
             child_changes              = {key: normalized_child[key] for key in child_changes}
             changed_children[child_id] = {
-                "old_values": {key: old_child.get(key) for key in child_changes},
+                "old_values"    : {key: old_child.get(key) for key in child_changes},
                 "before_version": child.version,
-                "after_version": child.version + 1,
+                "after_version" : child.version + 1,
             }
             data        = db._prepare_data({**child_changes, "updated_at": now})
             assignments = ", ".join(f"{db._quote_col(key)} = ?" for key in data)
@@ -119,12 +119,12 @@ def update_collection(
         log = dict(operation_log or {"user_id": owner_id, "action": "edit_event_collection"})
         log["details"] = {
             **(log.get("details") or {}),
-            "target_kind": "event_collection",
-            "updates": clean,
-            "old_values": {key: current.get(key) for key in clean},
+            "target_kind"   : "event_collection",
+            "updates"       : clean,
+            "old_values"    : {key: current.get(key) for key in clean},
             "before_version": before_version,
-            "after_version": after_version,
-            "children": changed_children,
+            "after_version" : after_version,
+            "children"      : changed_children,
         }
         db._log_operation_from_spec(
             cursor,
@@ -224,9 +224,9 @@ def restore_collection_edit(
     db.cache_invalidate(collection_id)
     db.cache_invalidate(f"items|{owner_id}")
     return {
-        "status": "success",
-        "item_id": collection_id,
-        "action": source_action,
-        "affected": 1 + len(snapshots),
+        "status"        : "success",
+        "item_id"       : collection_id,
+        "action"        : source_action,
+        "affected"      : 1 + len(snapshots),
         "instance_count": len(snapshots),
     }

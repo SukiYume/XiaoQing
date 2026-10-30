@@ -28,10 +28,10 @@ def get_categories() -> dict[str, object]:
     """返回与进程级配置隔离的记账收支分类。"""
 
     return {
-        "ok": True,
+        "ok"  : True,
         "data": {
             "ledger_expense": [dict(category) for category in LEDGER_EXPENSE_CATEGORIES],
-            "ledger_income": [dict(category) for category in LEDGER_INCOME_CATEGORIES],
+            "ledger_income" : [dict(category) for category in LEDGER_INCOME_CATEGORIES],
         },
         "message": "",
     }
@@ -44,8 +44,8 @@ def get_diary_templates() -> dict[str, object]:
 
     templates = [
         {
-            "id": template_id,
-            "name": template_data.get("name", template_id),
+            "id"     : template_id,
+            "name"   : template_data.get("name", template_id),
             "prompts": list(template_data.get("prompts", [])),
         }
         for template_id, template_data in DIARY_TEMPLATES.items()
@@ -58,11 +58,11 @@ def get_diary_moods() -> dict[str, object]:
     """返回相互一致且不会反向修改配置的情绪标签、表情和选项。"""
 
     return {
-        "ok": True,
+        "ok"  : True,
         "data": {
             "mood_emojis": _copy_text_mapping(MOOD_ANALYSIS_CONFIG.get("mood_emojis")),
             "mood_labels": _copy_text_mapping(MOOD_ANALYSIS_CONFIG.get("mood_labels")),
-            "moods": [dict(mood) for mood in DIARY_MOODS],
+            "moods"      : [dict(mood) for mood in DIARY_MOODS],
         },
         "message": "",
     }

@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import pytest
+
 import tests.helpers.server_test_support as _fixture_support
 from tests.helpers.server_test_support import (
-    Any,
-    AsyncMock,
     BroadcastResult,
     InboundManager,
     InboundServer,
-    MagicMock,
-    Mock,
     _parse_http_base,
-    asyncio,
-    patch,
-    pytest,
 )
 
 mock_handler  = _fixture_support.mock_handler
@@ -43,8 +42,8 @@ def test_inbound_manager_from_config_no_urls():
     """Test InboundManager.from_config with no URLs configured"""
     config = {
         "enable_inbound_server": True,
-        "inbound_http_base": "",
-        "inbound_ws_uri": "",
+        "inbound_http_base"    : "",
+        "inbound_ws_uri"       : "",
     }
 
     async def handler(event):
@@ -72,8 +71,8 @@ def test_configured_loopback_listener_requires_non_empty_token(http_base, ws_uri
         InboundManager.from_config(
             config={
                 "enable_inbound_server": True,
-                "inbound_http_base": http_base,
-                "inbound_ws_uri": ws_uri,
+                "inbound_http_base"    : http_base,
+                "inbound_ws_uri"       : ws_uri,
             },
             token="",
             handler=AsyncMock(return_value=[]),
@@ -88,8 +87,8 @@ def test_inbound_manager_from_config_http_only():
     config = ConfigSnapshot(
         config={
             "enable_inbound_server": True,
-            "inbound_http_base": "http://localhost:8080",
-            "inbound_ws_uri": "",
+            "inbound_http_base"    : "http://localhost:8080",
+            "inbound_ws_uri"       : "",
         },
         secrets={},
     ).config
@@ -112,8 +111,8 @@ def test_inbound_manager_from_config_ws_only():
     """Test InboundManager.from_config with WS only"""
     config = {
         "enable_inbound_server": True,
-        "inbound_http_base": "",
-        "inbound_ws_uri": "ws://localhost:8080/ws",
+        "inbound_http_base"    : "",
+        "inbound_ws_uri"       : "ws://localhost:8080/ws",
     }
 
     async def handler(event):
@@ -133,9 +132,9 @@ def test_inbound_manager_from_config_ws_only():
 def test_inbound_manager_from_config_applies_broadcast_timeout():
     manager = InboundManager.from_config(
         config={
-            "enable_inbound_server": True,
-            "inbound_http_base": "",
-            "inbound_ws_uri": "ws://localhost:8080/ws",
+            "enable_inbound_server"               : True,
+            "inbound_http_base"                   : "",
+            "inbound_ws_uri"                      : "ws://localhost:8080/ws",
             "inbound_ws_broadcast_timeout_seconds": 2.25,
         },
         token="test_token",
@@ -153,13 +152,13 @@ def test_inbound_manager_from_config_applies_broadcast_timeout():
     [
         {
             "enable_inbound_server": True,
-            "inbound_http_base": "https://127.0.0.1:8443",
-            "inbound_ws_uri": "",
+            "inbound_http_base"    : "https://127.0.0.1:8443",
+            "inbound_ws_uri"       : "",
         },
         {
             "enable_inbound_server": True,
-            "inbound_http_base": "",
-            "inbound_ws_uri": "wss://127.0.0.1:8443/ws",
+            "inbound_http_base"    : "",
+            "inbound_ws_uri"       : "wss://127.0.0.1:8443/ws",
         },
     ],
 )
@@ -187,9 +186,9 @@ def test_inbound_manager_rejects_plaintext_non_loopback_without_proxy_acknowledg
 def test_inbound_manager_accepts_non_loopback_with_trusted_tls_proxy_acknowledgement():
     manager = InboundManager.from_config(
         config={
-            "enable_inbound_server": True,
-            "inbound_http_base": "http://0.0.0.0:8080",
-            "inbound_ws_uri": "ws://0.0.0.0:8080/ws",
+            "enable_inbound_server"    : True,
+            "inbound_http_base"        : "http://0.0.0.0:8080",
+            "inbound_ws_uri"           : "ws://0.0.0.0:8080/ws",
             "inbound_trusted_tls_proxy": True,
         },
         token="test_token",
@@ -235,8 +234,8 @@ def test_inbound_runtime_rejects_non_boolean_proxy_flags(invalid_flag):
     with pytest.raises(ValueError, match="must be a boolean"):
         InboundManager.from_config(
             config={
-                "enable_inbound_server": True,
-                "inbound_http_base": "http://127.0.0.1:8080",
+                "enable_inbound_server"    : True,
+                "inbound_http_base"        : "http://127.0.0.1:8080",
                 "inbound_trusted_tls_proxy": invalid_flag,
             },
             token="test_token",

@@ -2,22 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
+from pathlib import Path
+from unittest.mock import AsyncMock, Mock
+
+import pytest
+
 import tests.helpers.plugin_manager_test_support as _fixture_support
 from tests.helpers.plugin_manager_test_support import (
-    AsyncMock,
     LoadedPlugin,
-    Mock,
     ModuleType,
-    Path,
     PluginDefinition,
     PluginExecutionGate,
     PluginLifecycleFatalError,
     _build_definition,
     _build_manager,
     _FatalLifecycleError,
-    asyncio,
-    os,
-    pytest,
 )
 
 _isolate_process_global_plugin_import_state = (
@@ -567,9 +568,9 @@ def test_capture_plugin_snapshot_rejects_atomic_replace_after_open(
             "ReplacementMetadata",
             (),
             {
-                "st_dev": metadata.st_dev,
-                "st_ino": metadata.st_ino + 1,
-                "st_size": metadata.st_size,
+                "st_dev"     : metadata.st_dev,
+                "st_ino"     : metadata.st_ino + 1,
+                "st_size"    : metadata.st_size,
                 "st_mtime_ns": metadata.st_mtime_ns,
             },
         )()

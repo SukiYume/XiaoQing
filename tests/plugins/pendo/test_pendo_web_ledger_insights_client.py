@@ -7,7 +7,7 @@ from typing import Final
 from tests.helpers.node_esm import assert_node_esm_contract
 from tests.helpers.paths import REPOSITORY_ROOT
 
-ROOT: Final                   = REPOSITORY_ROOT
+ROOT                  : Final = REPOSITORY_ROOT
 LEDGER_INSIGHTS_CLIENT: Final = (
     ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "components" / "ledger_insights.js"
 )
@@ -181,12 +181,24 @@ def test_ledger_insights_handles_focus_copy_first_spend_and_complete_ring_geomet
             ...base,
             summary: {
                 focus_transaction_type: 'income', focus_total: 20,
-                delta_vs_previous: 1, delta_label: '较上一周期', bucket_mode: 'month',
+                delta_vs_previous: null, first_occurrence: true,
+                delta_label: '较上一周期', bucket_mode: 'month',
             },
         });
         assert.ok(income.includes('收入脉搏'));
         assert.ok(income.includes('入账节奏'));
         assert.ok(income.includes('首次有收入'));
+        // 前期非零、本期翻倍是 +100%，不能显示成首次发生。
+        const doubled = client.renderLedgerInsightsPanel({
+            ...base,
+            summary: {
+                focus_transaction_type: 'income', focus_total: 20,
+                delta_vs_previous: 1, first_occurrence: false,
+                delta_label: '较上一周期', bucket_mode: 'month',
+            },
+        });
+        assert.ok(doubled.includes('+100%'));
+        assert.ok(!doubled.includes('首次有收入'));
         assert.ok(income.includes('>按月</span>'));
         assert.ok(income.includes('A 84 84 0 1 1'));
 

@@ -1,5 +1,4 @@
 # 插件监控监督器：统一管理重启、退避和取消期间的任务所有权。
-# mypy: disable-error-code=attr-defined
 """Application-owned plugin watcher supervision."""
 
 from __future__ import annotations
@@ -7,7 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .app_support import (
     _AppLifecycleState,
@@ -20,18 +19,25 @@ logger = logging.getLogger(__name__)
 
 
 class AppPluginWatchMixin:
-    plugin_manager: PluginManager
-    _lifecycle_state: _AppLifecycleState
-    _plugin_watch_desired: bool
+    # 由组合类实际提供的成员；这里只为类型检查声明契约，运行时不存在。
+    if TYPE_CHECKING:
+
+        @property
+        def config(self) -> Mapping[str, Any]:
+            raise NotImplementedError
+
+    plugin_manager                          : PluginManager
+    _lifecycle_state                        : _AppLifecycleState
+    _plugin_watch_desired                   : bool
     _plugin_watch_restart_base_delay_seconds: float
-    _plugin_watch_restart_failures: int
-    _plugin_watch_restart_max_delay_seconds: float
-    _plugin_watch_restart_pending: bool
-    _plugin_watch_restart_task: asyncio.Task[None] | None
-    _plugin_watch_stable_reset_seconds: float
-    _plugin_watch_task: asyncio.Task[None] | None
-    _plugin_watch_tasks: set[asyncio.Task[None]]
-    _stopping: bool
+    _plugin_watch_restart_failures          : int
+    _plugin_watch_restart_max_delay_seconds : float
+    _plugin_watch_restart_pending           : bool
+    _plugin_watch_restart_task              : asyncio.Task[None] | None
+    _plugin_watch_stable_reset_seconds      : float
+    _plugin_watch_task                      : asyncio.Task[None] | None
+    _plugin_watch_tasks                     : set[asyncio.Task[None]]
+    _stopping                               : bool
 
     def _configure_plugin_execution(self, config: Mapping[str, Any]) -> None:
         configure = getattr(self.plugin_manager, "configure_execution", None)

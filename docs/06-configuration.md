@@ -104,6 +104,7 @@ XiaoQing Listener 负责明文 HTTP/WS 协议，TLS 终止由外层代理或网�
 | `max_concurrency` | integer | `5`，`1..1024` | 热重载 | Dispatcher 全局活动消息上限 |
 | `data_root` | path string | `"data"` | 重启 | 插件运行数据根目录 |
 | `enable_plugin_watcher` | boolean | `false` | 热重载 | 插件文件 watcher 开关 |
+| `enable_plugin_schedules` | boolean | `true` | 重新加载 | 插件定时任务总开关；隔离运行（如全量 UAT）设为 `false`，跨过计划时间也不会调用外部账号或投递消息 |
 | `plugin_poll_interval` | number | `3600`，`0.01..86400` | 热重载 | 插件文件轮询秒数 |
 | `session_timeout` | number | `300`，`0 < value <= 604800` | 热重载 | Session 默认空闲秒数 |
 | `timezone` | IANA timezone | `"Asia/Shanghai"` | 热重载 | Scheduler 与业务时钟时区 |
@@ -270,7 +271,7 @@ Core 与插件记录 token、Cookie、授权头和密钥字段时使用摘要或
       "ai": {
         "routes": {
           "chat": {
-            "models": ["deepseek-flash", "glm-5.2"],
+            "models": ["chatgpt", "deepseek-flash", "glm-5.2"],
             "temperature": 0.8,
             "max_tokens": 2000,
             "timeout_seconds": 30,
@@ -296,6 +297,20 @@ Core 与插件记录 token、Cookie、授权头和密钥字段时使用摘要或
 | `fallback_on` | Core 默认错误集合 | 触发下一 profile 的错误类别 |
 | `request_defaults` | `{}` | route 级附加请求字段 |
 
+### AI 参数的唯一配置入口
+
+`chat-latest` 使用固定采样默认值。Core 为该模型省略 `temperature` 和 `top_p`，并将统一的 `max_tokens` 输出预算转换为上游的 `max_completion_tokens`。其他模型沿用路由采样参数。
+
+`gpt-6-luna` 同样使用 `max_completion_tokens`。通过当前 Chat Completions 接口调用工具时，在模型的 `request_defaults` 中设置 `"reasoning_effort": "none"`；该模式保留路由的 `temperature` 和 `top_p`。
+
+常规采样参数、输出预算、单次超时、总超时和重试统一放在 `config.plugins.<plugin>.ai.routes.<route>`。供应商连接信息放在 `config.ai.providers`，模型定义放在 `config.ai.models`，密钥放在 `secrets.ai.providers`。可选的 `model_aliases` 提供命令短名称。`/xc model default` 自动选择 `routes.chat.models` 中第一个可用的 profile。
+
+XiaoQing Chat 从这些路由生成类型化的运行时参数快照。日常回复使用 `chat`；规划、记忆检索、摘要和表达学习使用 `reasoning`；回复审查使用 `checker`；图片理解使用 `vision`。Agent 的执行与交付检查使用 `agent`，任务分流使用 `triage`。常规插件调用沿用路由参数。明确要求长文时会提高输出预算和超时；图片分析被截断时会提高输出预算。可选工作和整项 Agent 任务仍受各自的业务时限约束。
+
+`plugins/xiaoqing_chat/config/xiaoqing_config.json` 管理人设、记忆和参与行为。旧 AI 字段会触发迁移提示并指出主配置位置：将 `temperature`、`top_p`、`max_tokens`、前后台超时与重试、规划请求超时、回复审查预算、视觉请求参数移到对应路由。深度聊天的采样参数沿用聊天路由。删除 `default_model_alias`，默认模型由路由顺序决定。行为文件中的 `ai` 注册表会触发明确错误。
+
+DEBUG 日志记录最终采用的路由、模型 profile、采样值、输出预算、请求超时和重试策略。记录内容限定为调用参数元数据，密钥和消息正文保持私密。
+
 ### Provider secret
 
 ```json
@@ -313,10 +328,12 @@ Core 与插件记录 token、Cookie、授权头和密钥字段时使用摘要或
 每个 Provider 在 `secrets.ai.providers.<provider_name>.api_key` 保存 API Key。
 模型级 `request_defaults` 先合入请求，route 级默认值随后覆盖，调用参数最后覆盖采样与预算字段。
 
-AI Service 先调用 route 首个 profile，并对 transport、timeout、rate limit、server error、model unavailable、invalid response 和 empty response 执行有界重试与顺序 fallback。
+AI Service 先调用 route 中首个具备密钥的 profile，并对 transport、timeout、rate limit、server error、model unavailable、invalid response 和 empty response 执行有界重试与顺序 fallback。
 `fallback_on` 还可选择 `request_timeout` 与 `conflict`。
 认证、权限、请求参数和配置错误由当前调用插件处理。
 `total_timeout_seconds` 覆盖整条模型链。
+
+供应商凭据块缺失、`api_key` 缺失、空字符串和纯空白字符串都会使对应模型暂时不可用。Core 在请求前按顺序跳过这些条目，可选模型列表只包含可用项。显式固定到缺密钥模型、整条路由缺少可用密钥时会报配置错误。无效地址、未知模型引用和错误密钥类型仍会触发校验。上游返回认证失败时沿用原有错误处理规则。
 
 ---
 
@@ -374,7 +391,6 @@ Pendo 的五个 Web 字段按配置 revision 原子发布，监听地址变化�
 | `plugins.xiaoqing_chat.ai.routes.checker` | 回复检查 route |
 | `plugins.xiaoqing_chat.ai.routes.reasoning` | 规划与推理 route |
 | `plugins.xiaoqing_chat.ai.routes.vision` | 图片理解 route，profile 需要 `image` modality |
-| `plugins.xiaoqing_chat.ai.default_model_alias` | `/xc model default` 使用的别名 |
 | `plugins.xiaoqing_chat.ai.model_aliases` | 用户别名到 route profile 的映射 |
 
 四条 XiaoQing Chat route 分别拥有模型顺序、单次超时、总超时和重试策略。
@@ -414,7 +430,17 @@ agent 使用发起人的命令权限。每条命令分别检查自身权限。Py
 | 投递 | `qq_send_interval_seconds=0.35`、`qq_send_timeout_seconds=5` | action 间隔与单次等待预算 |
 | 归档 | `archive_max_bytes=67108864`、`archive_tail_bytes=1048576`、`archive_retention_files=20` | 命令归档大小、尾部与数量预算 |
 
-连接定义、Host Key、认证材料和跳板设置位于 `secrets.plugins.qingssh`，由 `/ssh add` 等管理员命令管理。
+其余资料分别保存在下列位置，备份时需要一并覆盖：
+
+| 资料 | 位置 | 管理方式 |
+|---|---|---|
+| 服务器索引（主机、端口、用户名、认证类型、私钥路径） | `data/qingssh/servers.json` | `/ssh add`、`/ssh remove` 等管理员命令 |
+| 密码 | 插件密钥存储，服务器索引只记录 `password_ref` 引用 | `/ssh add` 写入，删除服务器时回收 |
+| 私钥 | 服务器索引中 `key_path` 指向的本机文件 | 部署者自行管理 |
+| Host Key | 当前系统用户的 `~/.ssh/known_hosts` | 首次连接确认后写入 |
+| `~/.ssh/config` 中的主机与跳板设置 | 当前系统用户的 `~/.ssh/config` | `/ssh import`、`/sshconfig` 读取 |
+
+`servers.json` 读取失败时插件会阻止后续写入，避免空快照覆盖原文件；修复文件后重新加载插件即可。
 [QingSSH 配置](../plugins/qingssh/README.md#服务器配置) 提供连接 schema。
 
 ### Codex
@@ -445,7 +471,7 @@ agent 使用发起人的命令权限。每条命令分别检查自身权限。Py
 
 Shell 命令启用列表、工作目录与审计开关位于 `secrets.plugins.shell`。
 [Shell 配置](../plugins/shell/README.md#终端配置) 说明两种后端。
-[插件使用手册](09-plugins.md) 说明全部 31 个插件的配置入口与数据位置。
+[插件使用手册](09-plugins.md) 说明全部 32 个插件的配置入口与数据位置。
 
 ---
 

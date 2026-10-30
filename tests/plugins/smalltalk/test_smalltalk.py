@@ -181,13 +181,13 @@ def test_qa_scope_prefers_group_then_private_and_rejects_missing_actor(tmp_path:
 
 def test_qa_normalization_removes_invalid_duplicates_and_oversized_values() -> None:
     raw = {
-        1: ["invalid key"],
-        " ": ["invalid question"],
-        "问题": [None, " ", " 回答一 ", "回答一", "回答二"],
-        " 问题 ": ["回答一", "回答三"],
+        1                                        : ["invalid key"],
+        " "                                      : ["invalid question"],
+        "问题"                                     : [None, " ", " 回答一 ", "回答一", "回答二"],
+        " 问题 "                                   : ["回答一", "回答三"],
         "超" * (smalltalk.MAX_QUESTION_LENGTH + 1): ["invalid"],
-        "坏回答": ["x" * (smalltalk.MAX_ANSWER_LENGTH + 1)],
-        "坏容器": "answer",
+        "坏回答"                                    : ["x" * (smalltalk.MAX_ANSWER_LENGTH + 1)],
+        "坏容器"                                    : "answer",
     }
 
     assert smalltalk._normalize_qa(raw) == {"问题": ["回答一", "回答二", "回答三"]}
@@ -378,15 +378,15 @@ async def test_help_aliases(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("alias", ["help", "HELP", "帮助", "?"])
-async def test_help_with_extra_text_runs_the_domain_command(
+async def test_help_with_extra_text_rejects_reserved_question(
     alias: str,
     context: _Context,
     event: dict[str, object],
 ) -> None:
     result = await smalltalk.handle("qa", f"{alias} extra", event, context)
 
-    assert text_segments_text(result) == "对话添加成功了！"
-    assert await smalltalk._load_qa(context) == {alias: ["extra"]}
+    assert "帮助保留词" in text_segments_text(result)
+    assert await smalltalk._load_qa(context) == {}
 
 
 @pytest.mark.asyncio
@@ -426,11 +426,11 @@ async def test_audit_is_bounded(
     assert audit["entries"] == [
         {"old": 2},
         {
-            "at": audit["entries"][1]["at"],
+            "at"       : audit["entries"][1]["at"],
             "operation": "add",
-            "scope": "private_123",
-            "owner": 123,
-            "question": "问题",
+            "scope"    : "private_123",
+            "owner"    : 123,
+            "question" : "问题",
         },
     ]
 
@@ -535,7 +535,7 @@ async def test_qa_hot_path_caches_snapshot_and_offloads_json_io(
 ) -> None:
     _write_json(smalltalk._qa_file(context), {"缓存问题": ["缓存回答"]})
     event_loop_thread        = threading.get_ident()
-    load_threads: list[int]  = []
+    load_threads : list[int] = []
     write_threads: list[int] = []
     original_load            = smalltalk._load_json
     original_write           = smalltalk._write_json
@@ -796,7 +796,7 @@ async def test_smalltalk_cancel_preserves_committed_snapshot(tmp_path, monkeypat
         monkeypatch.setattr(main, "_write_json", original)
         await main._add_qa(context, "second answer")
         assert json.loads(main._qa_file(context).read_text()) == {
-            "first": ["answer"],
+            "first" : ["answer"],
             "second": ["answer"],
         }
     finally:

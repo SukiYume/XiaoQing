@@ -159,9 +159,9 @@ def schedule_memory_db_save(context: Any, runtime: ChatRuntime) -> None:
     _track_bg_task(context, task, name="memory_db_save")
 
 
-_action_flush_tasks: dict[str, asyncio.Task[Any]]    = {}
-_pfc_state_flush_tasks: dict[str, asyncio.Task[Any]] = {}
-_media_registry_flush_task: asyncio.Task[Any] | None = None
+_action_flush_tasks       : dict[str, asyncio.Task[Any]] = {}
+_pfc_state_flush_tasks    : dict[str, asyncio.Task[Any]] = {}
+_media_registry_flush_task: asyncio.Task[Any] | None     = None
 
 
 def _schedule_debounced_flush(

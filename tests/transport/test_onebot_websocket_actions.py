@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+import threading
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
 import tests.helpers.onebot_test_support as _fixture_support
 from tests.helpers.onebot_test_support import (
-    Any,
-    AsyncMock,
-    MagicMock,
     OneBotActionOutcomeUnknown,
     OneBotWsClient,
     _drain_owned_ws_closes,
     _normalize_action_for_onebot,
     _wait_for_ws_action_request,
-    asyncio,
-    json,
-    patch,
-    pytest,
-    threading,
 )
 
 bounded_transport_adapter = _fixture_support.bounded_transport_adapter
@@ -237,8 +237,8 @@ class TestOneBotWebSocketActions:
 
         assert client._resolve_action_response(
             {
-                "echo": "missing-generation",
-                "status": "ok",
+                "echo"   : "missing-generation",
+                "status" : "ok",
                 "retcode": 0,
             }
         )
@@ -313,7 +313,7 @@ class TestOneBotWebSocketActions:
             "action": "send_group_msg",
             "params": {
                 "group_id": 12345,
-                "message": [{"type": "emoji", "data": {"file": "emoji.png"}}],
+                "message" : [{"type": "emoji", "data": {"file": "emoji.png"}}],
             },
         }
 
@@ -339,7 +339,7 @@ class TestOneBotWebSocketActions:
             "action": "send_group_msg",
             "params": {
                 "group_id": 12345,
-                "message": [{"type": "text", "data": {"text": 123}}],
+                "message" : [{"type": "text", "data": {"text": 123}}],
             },
         }
 
@@ -464,8 +464,8 @@ class TestOneBotWebSocketActions:
         await client._listen(ResponseOnlyWebSocket(), handler)
 
         assert response_future.result() == {
-            "echo": "request-echo",
-            "status": "ok",
+            "echo"   : "request-echo",
+            "status" : "ok",
             "retcode": 0,
         }
         handler.assert_not_awaited()

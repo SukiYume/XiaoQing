@@ -48,16 +48,16 @@ def currency_db(db):
     for currency, amount in [("CNY", 100), ("USD", 200)]:
         db.insert_item(
             {
-                "id": currency,
-                "owner_id": "owner",
-                "type": "ledger",
-                "title": currency,
-                "currency": currency,
-                "amount": amount,
-                "amount_cents": amount * 100,
+                "id"              : currency,
+                "owner_id"        : "owner",
+                "type"            : "ledger",
+                "title"           : currency,
+                "currency"        : currency,
+                "amount"          : amount,
+                "amount_cents"    : amount * 100,
                 "transaction_type": "expense",
-                "ledger_category": "餐饮",
-                "ledger_date": "2026-03-01",
+                "ledger_category" : "餐饮",
+                "ledger_date"     : "2026-03-01",
             }
         )
     return db
@@ -83,8 +83,10 @@ def client(temp_db):
 
     try:
         test_client_class, create_app = _pendo_web_test_dependencies()
-    except ModuleNotFoundError:
-        pytest.skip("fastapi is not installed in this environment")
+    except ModuleNotFoundError as exc:
+        if exc.name not in {"fastapi", "httpx"}:
+            raise
+        pytest.skip(f"{exc.name} is not installed in this environment")
     except RuntimeError as exc:
         if "requires the httpx package" not in str(exc):
             raise

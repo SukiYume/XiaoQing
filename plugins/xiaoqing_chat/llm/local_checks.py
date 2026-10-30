@@ -37,7 +37,7 @@ def _repeat_key(text: str) -> str:
     return re.sub(r"[^0-9A-Za-z一-鿿]+", "", str(text or ""))
 
 
-_BRACKET_MARKER_RE = re.compile(r"\[[^\]\n]*\]")
+_BRACKET_MARKER_RE = re.compile(r"\[(?:表情包|QQ表情|图片|语音|视频|文件)[:：][^\]\n]*\]")
 # 去掉表情标记和标点后仍有这么高的重合，说明只是把旧句子改了几个字。
 _NEAR_COPY_RATIO     = 0.75
 _NEAR_COPY_MIN_CHARS = 12
@@ -442,26 +442,50 @@ _FEMALE_PERSONA_RE = re.compile(r"(?:女生|女性|女孩|女大学生)")
 _MALE_PERSONA_RE = re.compile(r"(?:男生|男性|男孩|男大学生)")
 
 
+# 断言极性：自称与判断词之间不能出现否定词，“我才不是男生”是否认，不是冲突自称。
+_ASSERTION_GAP = r"(?:(?!不|没|非|别|并非|哪)[^，。！？；;\n]){0,10}"
+
+
 _MALE_SELF_ASSERTION_RE = re.compile(
-    r"(?:^|[，。！？；;\n])\s*(?:我|本人)[^，。！？；;\n]{0,10}"
+    rf"(?:^|[，。！？；;\n])\s*(?:我|本人){_ASSERTION_GAP}"
     r"(?:是|算|这个)(?:男生|男人|男的|男大学生)"
 )
 
 
 _FEMALE_SELF_ASSERTION_RE = re.compile(
-    r"(?:^|[，。！？；;\n])\s*(?:我|本人)[^，。！？；;\n]{0,10}"
+    rf"(?:^|[，。！？；;\n])\s*(?:我|本人){_ASSERTION_GAP}"
     r"(?:是|算|这个)(?:女生|女人|女的|女大学生)"
 )
 
 
+# 受称：别人在“我”的经历里对我说出的称呼（“他喊我小伙子”“阿姨说‘小伙子吃这个’”）。
+# 说话人是“我”自己时（“我跟他说：‘兄弟，慢点’”）是在称呼别人，不算身份冲突。
 _MALE_ADDRESS_IN_SELF_STORY_RE = re.compile(
-    r"我[^。！？；;\n]{0,120}(?:说|喊|叫|来一句)[：:]?[“\"]"
+    r"(?:(?:喊|叫|称呼|管)我[^。！？；;\n]{0,4}[“\"]?"
+    r"|我[^。！？；;\n]{0,120}?(?:说|喊|叫|来一句)[：:]?[“\"])"
     r"(?:小伙子|哥们|兄弟|帅哥|先生)"
+)
+_SELF_SPEAKER_RE = re.compile(
+    r"我(?:[^，。！？；;\n“\"]{0,6}(?:跟|对|和|冲|朝)[^，。！？；;\n“\"]{0,8})?"
+    r"(?:说|喊|叫|来一句)[：:]?[“\"][^”\"]*$"
 )
 
 
+def _addressed_as(pattern: re.Pattern[str], text: str) -> bool:
+    """存在一处称呼，且说话人不是“我”自己。"""
+
+    for match in pattern.finditer(text):
+        speech = match.group(0)
+        head   = speech[: speech.rfind("“") + 1 if "“" in speech else speech.rfind('"') + 1]
+        if head and _SELF_SPEAKER_RE.search(head[-40:]):
+            continue
+        return True
+    return False
+
+
 _FEMALE_ADDRESS_IN_SELF_STORY_RE = re.compile(
-    r"我[^。！？；;\n]{0,120}(?:说|喊|叫|来一句)[：:]?[“\"]"
+    r"(?:(?:喊|叫|称呼|管)我[^。！？；;\n]{0,4}[“\"]?"
+    r"|我[^。！？；;\n]{0,120}?(?:说|喊|叫|来一句)[：:]?[“\"])"
     r"(?:姑娘|妹子|姐妹|美女|女士)"
 )
 
@@ -534,12 +558,12 @@ def persona_identity_consistency_check(
     grounding = str(grounding_text or "")
     if _FEMALE_PERSONA_RE.search(grounding) and (
         _MALE_SELF_ASSERTION_RE.search(candidate)
-        or _MALE_ADDRESS_IN_SELF_STORY_RE.search(candidate)
+        or _addressed_as(_MALE_ADDRESS_IN_SELF_STORY_RE, candidate)
     ):
         return persona_contract_rejection("回复中的自称或他人称呼与已设定的女性身份冲突")
     if _MALE_PERSONA_RE.search(grounding) and (
         _FEMALE_SELF_ASSERTION_RE.search(candidate)
-        or _FEMALE_ADDRESS_IN_SELF_STORY_RE.search(candidate)
+        or _addressed_as(_FEMALE_ADDRESS_IN_SELF_STORY_RE, candidate)
     ):
         return persona_contract_rejection("回复中的自称或他人称呼与已设定的男性身份冲突")
     return None

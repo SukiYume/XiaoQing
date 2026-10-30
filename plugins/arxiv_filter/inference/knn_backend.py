@@ -29,11 +29,12 @@ from .shared import (
     resolve_artifact_fingerprint,
     resolve_dataframe_column,
     resolve_multi_interest_model_path,
+    topk_mean_similarity,
 )
 
 logger = logging.getLogger(__name__)
 
-_MODEL_CACHE: dict[tuple[str, str, int], "KNNInferenceModel"] = {}
+_MODEL_CACHE: dict[tuple[str, str, int, int], "KNNInferenceModel"] = {}
 
 
 def _load_embedding_matrix(
@@ -70,7 +71,7 @@ class KNNInferenceModel:
       training_config.json  — 与推理层约定的元数据
     """
 
-    def __init__(self, model_dir: str, batch_size: int = 256):
+    def __init__(self, model_dir: str, batch_size: int = 256, max_len: int | None = None):
         self.model_dir = Path(model_dir)
         if type(batch_size) is not int or batch_size <= 0:
             raise ValueError("batch_size must be a positive integer")
@@ -154,6 +155,9 @@ class KNNInferenceModel:
         self._fp16           = torch.cuda.is_available()
         sentence_transformer = importlib.import_module("sentence_transformers").SentenceTransformer
         self.encoder         = sentence_transformer(self.encoder_name)
+        if max_len is not None:
+            # 与训练相同的截断长度；training_config 中的 max_len 才真正控制编码输入。
+            self.encoder.max_seq_length = int(max_len)
 
     # ------------------------------------------------------------------
     # Encoding
@@ -163,9 +167,9 @@ class KNNInferenceModel:
         if not texts:
             return np.zeros((0, self.embed_dim), dtype=np.float32)
         kw: dict[str, Any] = {
-            "batch_size": self.batch_size,
-            "show_progress_bar": False,
-            "convert_to_numpy": True,
+            "batch_size"          : self.batch_size,
+            "show_progress_bar"   : False,
+            "convert_to_numpy"    : True,
             "normalize_embeddings": True,
         }
         if self._fp16:
@@ -195,16 +199,12 @@ class KNNInferenceModel:
         if len(query) == 0:
             return cast(np.ndarray, np.array([], dtype=np.float32))
 
-        # 正样本相似度
-        pos_sims = query @ self.pos_embeddings.T  # (n, n_pos)
-        k        = min(self.k, pos_sims.shape[1])
-        top_k_pos = np.sort(pos_sims, axis=1)[:, -k:].mean(axis=1)  # (n,)
+        # 正样本相似度（分块计算，避免一次构造完整的查询×样本矩阵）
+        top_k_pos = topk_mean_similarity(query, self.pos_embeddings, self.k)
 
         # 负样本惩罚（可选）
         if self.neg_embeddings is not None and self.neg_k > 0 and self.neg_weight > 0:
-            neg_sims = query @ self.neg_embeddings.T  # (n, n_neg)
-            nk       = min(self.neg_k, neg_sims.shape[1])
-            top_k_neg = np.sort(neg_sims, axis=1)[:, -nk:].mean(axis=1)
+            top_k_neg = topk_mean_similarity(query, self.neg_embeddings, self.neg_k)
             return cast(
                 np.ndarray,
                 (top_k_pos - self.neg_weight * top_k_neg).astype(np.float32),
@@ -257,10 +257,13 @@ def run_knn_inference(
         resolved_path,
         resolve_artifact_fingerprint(params, resolved_path),
         int(params.batch_size),
+        int(params.max_len),
     )
     model = _MODEL_CACHE.get(cache_key)
     if model is None:
-        model = KNNInferenceModel(runtime_path, batch_size=params.batch_size)
+        model = KNNInferenceModel(
+            runtime_path, batch_size=params.batch_size, max_len=params.max_len
+        )
         for stale_key in [key for key in _MODEL_CACHE if key[0] == resolved_path]:
             _MODEL_CACHE.pop(stale_key, None)
         _MODEL_CACHE[cache_key] = model

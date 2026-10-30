@@ -149,10 +149,10 @@ def test_same_reference_replays_original_outcome_without_new_random_or_assets(tm
         )
 
     kwargs = {
-        "reference_id": "game:same",
+        "reference_id"    : "game:same",
         "daily_coin_limit": 500,
         "cooldown_seconds": 120,
-        "outcome_factory": make_outcome,
+        "outcome_factory" : make_outcome,
     }
     first  = db.settle_minigame_atomic("player", GROUP, "dice", **kwargs)
     second = db.settle_minigame_atomic("player", GROUP, "dice", **kwargs)

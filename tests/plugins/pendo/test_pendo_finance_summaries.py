@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,19 +14,14 @@ from plugins.pendo.services.exporter import ExporterService
 from plugins.pendo.web.api.items import aggregate_items, list_items
 from tests.helpers.pendo_test_support import (
     ROOT,
-    SimpleNamespace,
     _single_user_shanghai_settings,
     _with_scheduled_delivery_contract,
-    asyncio,
 )
 
 
 class TestPendoFinanceSummaries:
     def test_weekly_finance_summary_sends_on_sunday_evening(self, monkeypatch):
-        import sys
         from datetime import datetime
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.commands import scheduled as scheduled_module
 
@@ -87,10 +84,7 @@ class TestPendoFinanceSummaries:
         ]
 
     def test_month_end_finance_summary_sends_on_last_day_evening(self, monkeypatch):
-        import sys
         from datetime import datetime
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.commands import scheduled as scheduled_module
 
@@ -154,10 +148,7 @@ class TestPendoFinanceSummaries:
 
     def test_finance_summary_uses_amount_cents_and_ledger_date_range(self):
         import shutil
-        import sys
         import uuid
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.commands import scheduled as scheduled_module
         from plugins.pendo.services.db import Database
@@ -170,55 +161,55 @@ class TestPendoFinanceSummaries:
         try:
             db.insert_item(
                 {
-                    "id": "sum_expense",
-                    "owner_id": owner_id,
-                    "type": "ledger",
-                    "title": "午饭",
-                    "amount_cents": 12345,
+                    "id"              : "sum_expense",
+                    "owner_id"        : owner_id,
+                    "type"            : "ledger",
+                    "title"           : "午饭",
+                    "amount_cents"    : 12345,
                     "transaction_type": "expense",
-                    "ledger_category": "餐饮",
-                    "ledger_date": "2026-05-02",
-                    "account_name": "微信",
+                    "ledger_category" : "餐饮",
+                    "ledger_date"     : "2026-05-02",
+                    "account_name"    : "微信",
                 }
             )
             db.insert_item(
                 {
-                    "id": "sum_income",
-                    "owner_id": owner_id,
-                    "type": "ledger",
-                    "title": "工资",
-                    "amount_cents": 500000,
+                    "id"              : "sum_income",
+                    "owner_id"        : owner_id,
+                    "type"            : "ledger",
+                    "title"           : "工资",
+                    "amount_cents"    : 500000,
                     "transaction_type": "income",
-                    "ledger_category": "工资",
-                    "ledger_date": "2026-05-03",
-                    "account_name": "招商银行卡",
+                    "ledger_category" : "工资",
+                    "ledger_date"     : "2026-05-03",
+                    "account_name"    : "招商银行卡",
                 }
             )
             db.insert_item(
                 {
-                    "id": "sum_transfer",
-                    "owner_id": owner_id,
-                    "type": "ledger",
-                    "title": "转入储蓄",
-                    "amount_cents": 20000,
-                    "transaction_type": "transfer",
-                    "ledger_category": "转账",
-                    "ledger_date": "2026-05-04",
-                    "account_name": "招商银行卡",
+                    "id"                  : "sum_transfer",
+                    "owner_id"            : owner_id,
+                    "type"                : "ledger",
+                    "title"               : "转入储蓄",
+                    "amount_cents"        : 20000,
+                    "transaction_type"    : "transfer",
+                    "ledger_category"     : "转账",
+                    "ledger_date"         : "2026-05-04",
+                    "account_name"        : "招商银行卡",
                     "counter_account_name": "储蓄卡",
                 }
             )
             db.insert_item(
                 {
-                    "id": "sum_outside",
-                    "owner_id": owner_id,
-                    "type": "ledger",
-                    "title": "范围外支出",
-                    "amount_cents": 999999,
+                    "id"              : "sum_outside",
+                    "owner_id"        : owner_id,
+                    "type"            : "ledger",
+                    "title"           : "范围外支出",
+                    "amount_cents"    : 999999,
                     "transaction_type": "expense",
-                    "ledger_category": "测试",
-                    "ledger_date": "2026-06-01",
-                    "account_name": "微信",
+                    "ledger_category" : "测试",
+                    "ledger_date"     : "2026-06-01",
+                    "account_name"    : "微信",
                 }
             )
             conn = db.get_connection()
@@ -262,9 +253,6 @@ class TestPendoFinanceSummaries:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     def test_finance_metrics_ignore_non_ledger_models(self):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.commands import scheduled as scheduled_module
         from plugins.pendo.models.item import Item, ItemType, LedgerItem
@@ -286,9 +274,6 @@ class TestPendoFinanceSummaries:
         assert metrics.top_expense.title == "有效支出"
 
     def test_scheduled_private_send_skips_non_numeric_owner_ids(self):
-        import sys
-
-        sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.commands import scheduled as scheduled_module
 
@@ -309,29 +294,29 @@ class TestPendoFinanceSummaries:
 def test_currency_aggregation_keeps_independent_totals(tmp_path):
     db = Database(str(tmp_path / "currency.db"))
     try:
-        for code in ("CNY", "USD"):
+        for code, amount in [("CNY", 100), ("USD", 230)]:
             db.insert_item(
                 {
-                    "owner_id": "review",
-                    "type": "ledger",
-                    "title": code,
-                    "amount": 100,
-                    "currency": code,
+                    "owner_id"        : "review",
+                    "type"            : "ledger",
+                    "title"           : code,
+                    "amount"          : amount,
+                    "currency"        : code,
                     "transaction_type": "expense",
-                    "ledger_date": "2030-01-01",
+                    "ledger_date"     : "2030-01-01",
                 }
             )
         data = aggregate_items(owner_id="review", db=db)["data"]
         assert data["expense"] == 100
         assert data["by_currency"]["CNY"]["expense"] == 100
-        assert data["by_currency"]["USD"]["expense"] == 100
-        assert aggregate_items(owner_id="review", db=db, currency="usd")["data"]["expense"] == 100
+        assert data["by_currency"]["USD"]["expense"] == 230
+        assert aggregate_items(owner_id="review", db=db, currency="usd")["data"]["expense"] == 230
         page = list_items(type="ledger", currency="USD", owner_id="review", db=db)["data"]
         assert page["total"] == 1
         assert page["items"][0]["currency"] == "USD"
         assert db.aggregate_ledger_amounts_by_day("review", {"type": "ledger"}, currency="USD")[
             "2030-01-01"
-        ] == (10000, 0)
+        ] == (23000, 0)
     finally:
         db.close_all_connections()
 
@@ -348,14 +333,14 @@ async def test_currency_statistics_keep_independent_amounts(db, tmp_path):
     for code in ["CNY", "USD"]:
         db.insert_item(
             {
-                "owner_id": "u",
-                "type": "ledger",
-                "title": code,
-                "currency": code,
-                "amount_cents": 10000,
+                "owner_id"        : "u",
+                "type"            : "ledger",
+                "title"           : code,
+                "currency"        : code,
+                "amount_cents"    : 10000,
                 "transaction_type": "expense",
-                "ledger_date": "2030-01-01",
-                "ledger_category": "餐饮",
+                "ledger_date"     : "2030-01-01",
+                "ledger_category" : "餐饮",
             }
         )
     items   = db.get_items("u")

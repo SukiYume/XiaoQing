@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
+
 import tests.helpers.app_test_support as _fixture_support
 from tests.helpers.app_test_support import (
     ApplicationLifecycleFatalError,
-    AsyncMock,
     ClientSession,
     InboundManager,
     InboundReconcileError,
-    Mock,
-    Path,
     XiaoQingApp,
-    asyncio,
-    patch,
-    pytest,
 )
 
 mock_dependencies = _fixture_support.mock_dependencies
@@ -186,8 +186,8 @@ async def test_disjoint_occupied_port_switch_keeps_old_health_endpoint_live(
             await app._reconcile_inbound_manager(
                 {
                     "enable_inbound_server": True,
-                    "inbound_http_base": f"http://127.0.0.1:{occupied_port}",
-                    "inbound_ws_uri": "",
+                    "inbound_http_base"    : f"http://127.0.0.1:{occupied_port}",
+                    "inbound_ws_uri"       : "",
                 },
                 {"inbound_token": "token"},
             )

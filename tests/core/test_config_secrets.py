@@ -2,20 +2,22 @@
 
 from __future__ import annotations
 
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+import pytest
+
 import tests.helpers.config_test_support as _fixture_support
 from tests.helpers.config_test_support import (
     _MAX_CONFIG_SOURCE_BYTES,
     _MAX_CONFIG_TREE_DEPTH,
     _MAX_CONFIG_TREE_NODES,
-    Any,
     ConfigLoadError,
     ConfigManager,
     ConfigSnapshot,
     ConfigSourceStatus,
-    Path,
-    json,
-    os,
-    pytest,
 )
 
 config_file     = _fixture_support.config_file
@@ -169,8 +171,8 @@ class TestConfigManagerSecretTransactions:
     ):
         external = {
             "admin_user_ids": [],
-            "plugins": {
-                "echo": {"api_key": "rotated"},
+            "plugins"       : {
+                "echo"    : {"api_key": "rotated"},
                 "external": {"preserve": True},
             },
         }
@@ -319,7 +321,7 @@ class TestConfigManagerSecretTransactions:
         real_write = config_module._write_secret_payload
         external   = {
             "admin_user_ids": [7070],
-            "plugins": {"external": {"interference": interference}},
+            "plugins"       : {"external": {"interference": interference}},
         }
         external_payload = json.dumps(external).encode("utf-8")
         before           = config_manager.snapshot()

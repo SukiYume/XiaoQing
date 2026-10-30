@@ -61,7 +61,7 @@ class TestMessageSegments:
         assert seg == {
             "type": "emoji",
             "data": {
-                "file": expected_uri,
+                "file"   : expected_uri,
                 "summary": "无语",
             },
         }
@@ -431,8 +431,8 @@ class TestSplitMessageSegments:
 
     def test_split_preserves_text_metadata_without_mutating_input(self):
         segment = {
-            "type": "text",
-            "data": {"text": "abcdef", "style": "emphasis"},
+            "type"  : "text",
+            "data"  : {"text": "abcdef", "style": "emphasis"},
             "source": "plugin",
         }
 
@@ -441,22 +441,22 @@ class TestSplitMessageSegments:
         assert result == [
             [
                 {
-                    "type": "text",
-                    "data": {"text": "abc", "style": "emphasis"},
+                    "type"  : "text",
+                    "data"  : {"text": "abc", "style": "emphasis"},
                     "source": "plugin",
                 }
             ],
             [
                 {
-                    "type": "text",
-                    "data": {"text": "def", "style": "emphasis"},
+                    "type"  : "text",
+                    "data"  : {"text": "def", "style": "emphasis"},
                     "source": "plugin",
                 }
             ],
         ]
         assert segment == {
-            "type": "text",
-            "data": {"text": "abcdef", "style": "emphasis"},
+            "type"  : "text",
+            "data"  : {"text": "abcdef", "style": "emphasis"},
             "source": "plugin",
         }
 

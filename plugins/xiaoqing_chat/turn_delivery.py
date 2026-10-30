@@ -42,7 +42,7 @@ from .turn_generation import commit_planner_snapshot
 
 if TYPE_CHECKING:
     from .handler_context import HandlerContext
-    from .runtime_state import ChatRuntime, ChatRuntimeState
+    from .runtime_state import ChatRuntime
     from .smalltalk_models import PreparedSmalltalkTurn
 
 
@@ -109,28 +109,12 @@ def _batch_text_length(batch: Any) -> int:
 class _SmalltalkFinalization:
     """单次收尾生命周期使用的输入。"""
 
-    prepared: PreparedSmalltalkTurn
-    generated: GeneratedSmalltalkTurn
-    event: dict[str, Any]
-    context: Any
-    hctx: HandlerContext
+    prepared  : PreparedSmalltalkTurn
+    generated : GeneratedSmalltalkTurn
+    event     : dict[str, Any]
+    context   : Any
+    hctx      : HandlerContext
     started_at: float
-
-    @property
-    def runtime(self) -> ChatRuntime:
-        return self.hctx.runtime
-
-    @property
-    def state(self) -> ChatRuntimeState:
-        return self.hctx.state
-
-    @property
-    def chat_id(self) -> str:
-        return str(self.hctx.chat_id)
-
-    @property
-    def bot_name(self) -> str:
-        return str(self.hctx.bot_name)
 
 
 async def _record_bot_reply(
@@ -218,9 +202,11 @@ def _drop_stale_generated_turn(
     """取消并审计在会话内竞争中失效的生成轮次。"""
 
     generated          = finalization.generated
-    latest_local_id    = most_recent_user_local_id(finalization.chat_id)
-    current_generation = get_profile_generation(finalization.context.data_dir, finalization.chat_id)
-    same_generation    = (
+    latest_local_id    = most_recent_user_local_id(finalization.hctx.chat_id)
+    current_generation = get_profile_generation(
+        finalization.context.data_dir, finalization.hctx.chat_id
+    )
+    same_generation = (
         generated.session_generation is None or generated.session_generation == current_generation
     )
     if same_generation and latest_local_id == generated.local_id:
@@ -228,12 +214,12 @@ def _drop_stale_generated_turn(
     generated.cancel_speculative_memory()
     log_step(
         finalization.context,
-        finalization.runtime,
-        chat_id = finalization.chat_id,
+        finalization.hctx.runtime,
+        chat_id = finalization.hctx.chat_id,
         step    = "smalltalk.stale.drop",
         fields  = {
-            "phase": phase,
-            "local_id": generated.local_id,
+            "phase"          : phase,
+            "local_id"       : generated.local_id,
             "latest_local_id": latest_local_id,
         },
     )
@@ -247,7 +233,7 @@ def _prepare_smalltalk_reply_output(finalization: _SmalltalkFinalization):
     if generated.reply:
         reply_display_parts     = normalize_message_parts(generated.reply_parts)
         generated.reply_payload = _build_reply_payload(
-            finalization.runtime,
+            finalization.hctx.runtime,
             generated,
             brain_chat_active = finalization.prepared.brain_chat_active,
             display_parts     = reply_display_parts,
@@ -256,10 +242,10 @@ def _prepare_smalltalk_reply_output(finalization: _SmalltalkFinalization):
         reply_display_parts     = ()
         generated.reply_payload = None
     reply_parts = sync_message_parts_to_registry(
-        finalization.state,
+        finalization.hctx.state,
         reply_display_parts,
         context = finalization.context,
-        runtime = finalization.runtime,
+        runtime = finalization.hctx.runtime,
     )
     generated.reply_parts = reply_parts
     return reply_parts
@@ -271,9 +257,9 @@ async def _apply_generated_pfc_state(finalization: _SmalltalkFinalization) -> bo
     if finalization.prepared.forced or finalization.generated.pfc_state_snapshot is None:
         return False
     await commit_planner_snapshot(
-        finalization.state,
-        finalization.runtime,
-        finalization.chat_id,
+        finalization.hctx.state,
+        finalization.hctx.runtime,
+        finalization.hctx.chat_id,
         finalization.generated.pfc_state_snapshot,
     )
     return True
@@ -285,31 +271,33 @@ async def _finalize_no_reply_turn(finalization: _SmalltalkFinalization) -> list[
     generated        = finalization.generated
     should_flush_pfc = False
     try:
-        async with chat_lock(finalization.chat_id):
+        async with chat_lock(finalization.hctx.chat_id):
             if _drop_stale_generated_turn(finalization, phase="commit"):
                 return []
             should_flush_pfc = await _apply_generated_pfc_state(finalization)
             assert generated.pfc_result is not None
             generated.cancel_speculative_memory()
-            await finalization.state.heartflow.on_no_reply_async(chat_id=finalization.chat_id)
+            await finalization.hctx.state.heartflow.on_no_reply_async(
+                chat_id=finalization.hctx.chat_id
+            )
             action = str(generated.pfc_result.action or "no_reply").strip() or "no_reply"
             log_step(
                 finalization.context,
-                finalization.runtime,
-                chat_id = finalization.chat_id,
+                finalization.hctx.runtime,
+                chat_id = finalization.hctx.chat_id,
                 step    = "smalltalk.no_reply",
                 fields  = {
-                    "reason": "pfc_no_reply",
-                    "action": action,
+                    "reason"    : "pfc_no_reply",
+                    "action"    : action,
                     "pfc_reason": generated.pfc_result.reason,
-                    "source": generated.reply_source,
+                    "source"    : generated.reply_source,
                 },
             )
             reasoning = str(generated.pfc_result.action or "").strip()
             if generated.pfc_result.reason:
                 reasoning += f":{generated.pfc_result.reason}"
-            finalization.state.action_history.append(
-                finalization.chat_id,
+            finalization.hctx.state.action_history.append(
+                finalization.hctx.chat_id,
                 ActionRecord(
                     ts           = time.time(),
                     local_target = generated.local_id,
@@ -321,15 +309,15 @@ async def _finalize_no_reply_turn(finalization: _SmalltalkFinalization) -> list[
             )
             schedule_action_history_flush(
                 finalization.context,
-                finalization.runtime,
-                chat_id=finalization.chat_id,
+                finalization.hctx.runtime,
+                chat_id=finalization.hctx.chat_id,
             )
     finally:
         if should_flush_pfc:
             schedule_pfc_state_flush(
                 finalization.context,
-                finalization.runtime,
-                chat_id=finalization.chat_id,
+                finalization.hctx.runtime,
+                chat_id=finalization.hctx.chat_id,
             )
     return []
 
@@ -357,10 +345,10 @@ async def _record_delivered_reply(
     generated   = finalization.generated
     common_args = (
         finalization.context,
-        finalization.runtime,
-        finalization.state,
-        finalization.chat_id,
-        finalization.bot_name,
+        finalization.hctx.runtime,
+        finalization.hctx.state,
+        finalization.hctx.chat_id,
+        finalization.hctx.bot_name,
         generated.local_id,
     )
     if prepared.forced:
@@ -368,7 +356,7 @@ async def _record_delivered_reply(
         action_str = "reply"
         reasoning  = f"forced_direct:{prepared.force_reason or 'forced'}"
         detail     = {
-            "source": "forced",
+            "source"      : "forced",
             "force_reason": prepared.force_reason,
             **media_action_detail(generated.media_marker, reply_parts),
         }
@@ -405,15 +393,15 @@ async def _commit_smalltalk_delivery(
     should_flush_pfc            = False
     history_snapshot: list[Any] = []
     try:
-        async with chat_lock(finalization.chat_id):
+        async with chat_lock(finalization.hctx.chat_id):
             expected = finalization.generated.session_generation
             if (
                 expected is not None
-                and get_profile_generation(finalization.context.data_dir, finalization.chat_id)
+                and get_profile_generation(finalization.context.data_dir, finalization.hctx.chat_id)
                 != expected
             ):
                 return
-            latest_local_id = most_recent_user_local_id(finalization.chat_id)
+            latest_local_id = most_recent_user_local_id(finalization.hctx.chat_id)
             if latest_local_id == finalization.generated.local_id:
                 should_flush_pfc = await _apply_generated_pfc_state(finalization)
             history_snapshot = await _record_delivered_reply(
@@ -425,8 +413,8 @@ async def _commit_smalltalk_delivery(
         if should_flush_pfc:
             schedule_pfc_state_flush(
                 finalization.context,
-                finalization.runtime,
-                chat_id=finalization.chat_id,
+                finalization.hctx.runtime,
+                chat_id=finalization.hctx.chat_id,
             )
 
     spawn_bg_task(
@@ -436,7 +424,7 @@ async def _commit_smalltalk_delivery(
             history_snapshot,
             finalization.event,
         ),
-        name=f"post_reply:{finalization.chat_id}",
+        name=f"post_reply:{finalization.hctx.chat_id}",
     )
     spawn_bg_task(
         finalization.context,
@@ -445,25 +433,25 @@ async def _commit_smalltalk_delivery(
             finalization.context,
             finalization.generated,
         ),
-        name=f"reply_media_used:{finalization.chat_id}",
+        name=f"reply_media_used:{finalization.hctx.chat_id}",
     )
-    if finalization.runtime.cfg.debug.log_latency:
+    if finalization.hctx.runtime.cfg.debug.log_latency:
         log_step(
             finalization.context,
-            finalization.runtime,
-            chat_id = finalization.chat_id,
+            finalization.hctx.runtime,
+            chat_id = finalization.hctx.chat_id,
             step    = "smalltalk.latency",
             fields  = {"latency_s": round(time.monotonic() - finalization.started_at, 3)},
         )
     log_step(
         finalization.context,
-        finalization.runtime,
-        chat_id = finalization.chat_id,
+        finalization.hctx.runtime,
+        chat_id = finalization.hctx.chat_id,
         step    = "smalltalk.done",
         fields  = {
-            "elapsed_s": round(time.monotonic() - finalization.started_at, 3),
+            "elapsed_s"  : round(time.monotonic() - finalization.started_at, 3),
             "reply_chars": len(display_reply_text(finalization.generated)),
-            "reply": display_reply_text(finalization.generated),
+            "reply"      : display_reply_text(finalization.generated),
         },
     )
 
@@ -476,8 +464,8 @@ async def _rollback_smalltalk_delivery(
     finalization.generated.cancel_speculative_memory()
     log_step(
         finalization.context,
-        finalization.runtime,
-        chat_id = finalization.chat_id,
+        finalization.hctx.runtime,
+        chat_id = finalization.hctx.chat_id,
         step    = "smalltalk.delivery.rollback",
         fields  = {"local_id": finalization.generated.local_id, "batches": batch_count},
     )
@@ -512,12 +500,12 @@ async def _apply_smalltalk_presend_delay(
     has_outbound_batches: bool,
 ) -> bool:
     apply_humanize = (
-        not finalization.prepared.forced or finalization.runtime.cfg.humanize.apply_to_forced
+        not finalization.prepared.forced or finalization.hctx.runtime.cfg.humanize.apply_to_forced
     )
     if not apply_humanize or not has_outbound_batches:
         return apply_humanize
     target = _compute_typing_delay(
-        finalization.runtime,
+        finalization.hctx.runtime,
         input_text  = finalization.prepared.text,
         output_text = display_reply_text(finalization.generated),
     )
@@ -527,13 +515,13 @@ async def _apply_smalltalk_presend_delay(
     if delay > 0:
         log_step(
             finalization.context,
-            finalization.runtime,
-            chat_id = finalization.chat_id,
+            finalization.hctx.runtime,
+            chat_id = finalization.hctx.chat_id,
             step    = "smalltalk.humanize.delay",
             fields  = {
-                "phase": "pre_send",
-                "delay_s": round(delay, 3),
-                "target_s": round(target, 3),
+                "phase"    : "pre_send",
+                "delay_s"  : round(delay, 3),
+                "target_s" : round(target, 3),
                 "elapsed_s": round(elapsed, 3),
             },
         )
@@ -562,7 +550,7 @@ async def _send_smalltalk_intermediate_batches(
     user_id  = finalization.event.get("user_id")
     group_id = finalization.event.get("group_id")
     for batch in outbound_batches[:-1]:
-        async with chat_lock(finalization.chat_id):
+        async with chat_lock(finalization.hctx.chat_id):
             stale = _drop_stale_generated_turn(finalization, phase="between_batches")
         if stale:
             await receipt.record(False)
@@ -581,7 +569,7 @@ async def _send_smalltalk_intermediate_batches(
                 await receipt.record(False)
             return False
         if apply_humanize:
-            gap = _smalltalk_interbubble_delay(finalization.runtime, batch)
+            gap = _smalltalk_interbubble_delay(finalization.hctx.runtime, batch)
             if gap > 0:
                 await asyncio.sleep(gap)
     return True
@@ -607,7 +595,7 @@ async def finalize_smalltalk_turn(
         started_at = started_at,
     )
 
-    async with chat_lock(finalization.chat_id):
+    async with chat_lock(finalization.hctx.chat_id):
         if _drop_stale_generated_turn(finalization, phase="before_commit"):
             return []
 
@@ -629,7 +617,7 @@ async def finalize_smalltalk_turn(
         finalization,
         has_outbound_batches=bool(outbound_batches),
     )
-    async with chat_lock(finalization.chat_id):
+    async with chat_lock(finalization.hctx.chat_id):
         if _drop_stale_generated_turn(finalization, phase="after_presend_delay"):
             return []
     if len(outbound_batches) > 1:
@@ -641,7 +629,7 @@ async def finalize_smalltalk_turn(
         )
         if not sent:
             return []
-        async with chat_lock(finalization.chat_id):
+        async with chat_lock(finalization.hctx.chat_id):
             stale = _drop_stale_generated_turn(finalization, phase="before_last_batch")
         if stale:
             await receipt.record(False)

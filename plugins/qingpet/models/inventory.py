@@ -7,19 +7,29 @@ from dataclasses import dataclass, field
 class Inventory:
     """保存背包数量，并记录最近一次持久化快照以合并并发增量。"""
 
-    user_id: str
+    user_id : str
     group_id: int
-    items: dict[str, int] = field(default_factory=dict)
+    items   : dict[str, int] = field(default_factory=dict)
 
     # ``version`` 由数据库乐观锁维护；私有快照只参与当前进程内的增量合并。
-    version: int = 0
-    _persisted_items: dict[str, int] = field(default_factory=dict, repr=False, compare=False)
+    version             : int = 0
+    _persisted_items    : dict[str, int] = field(default_factory=dict, repr=False, compare=False)
     _has_persisted_state: bool = field(default=False, repr=False, compare=False)
 
     def mark_persisted(self) -> None:
         """把当前背包记为下一次并发合并的持久化基线。"""
         self._persisted_items     = dict(self.items)
         self._has_persisted_state = True
+
+    def shortfall(self, latest_items: dict[str, int]) -> bool:
+        """本地扣减的数量在最新背包里不够时返回 True（并发请求已经用掉了同一件道具）。"""
+        if not self._has_persisted_state:
+            return False
+        for item_id in set(self._persisted_items) | set(self.items):
+            delta = int(self.items.get(item_id, 0)) - int(self._persisted_items.get(item_id, 0))
+            if delta < 0 and int(latest_items.get(item_id, 0)) + delta < 0:
+                return True
+        return False
 
     def merged_onto(self, latest_items: dict[str, int]) -> dict[str, int]:
         """把本地相对基线的数量增量叠加到数据库最新背包。"""

@@ -358,15 +358,15 @@ async def test_single_event_same_id_covers_fields_reminders_invalid_edit_and_del
     created = await handler.create_event(
         owner,
         {
-            "title": "单次会议",
-            "content": "初始议程",
-            "category": "工作",
-            "start_time": "2035-05-01T09:00:00",
-            "end_time": "2035-05-01T10:30:00",
-            "location": "一号会议室",
-            "tags": ["项目", "会议"],
-            "notes": "带电脑",
-            "context": {"group_id": 71005},
+            "title"         : "单次会议",
+            "content"       : "初始议程",
+            "category"      : "工作",
+            "start_time"    : "2035-05-01T09:00:00",
+            "end_time"      : "2035-05-01T10:30:00",
+            "location"      : "一号会议室",
+            "tags"          : ["项目", "会议"],
+            "notes"         : "带电脑",
+            "context"       : {"group_id": 71005},
             "reminder_rules": [{"offset_seconds": 3600}, {"offset_seconds": 0}],
         },
         {},
@@ -397,14 +397,14 @@ async def test_single_event_same_id_covers_fields_reminders_invalid_edit_and_del
     await _set_event_updates(
         handler,
         {
-            "title": "单次会议已改",
-            "content": "新议程",
-            "category": "发布",
+            "title"     : "单次会议已改",
+            "content"   : "新议程",
+            "category"  : "发布",
             "start_time": "2035-05-02T11:00:00",
-            "end_time": "2035-05-02T12:00:00",
-            "location": "二号会议室",
-            "tags": ["已改"],
-            "notes": "线上同步",
+            "end_time"  : "2035-05-02T12:00:00",
+            "location"  : "二号会议室",
+            "tags"      : ["已改"],
+            "notes"     : "线上同步",
         },
     )
     edited = await handler.edit_event(owner, f"{event_id} 修改全部字段", {})
@@ -456,16 +456,16 @@ async def test_single_event_same_id_covers_fields_reminders_invalid_edit_and_del
         (
             "recurring",
             {
-                "title": "重复晨会",
-                "content": "每日同步",
-                "category": "工作",
-                "start_time": "2035-06-01T09:00:00",
-                "end_time": "2035-06-01T09:30:00",
-                "location": "线上",
-                "tags": ["重复"],
-                "notes": "三次",
-                "context": {"group_id": 71006},
-                "rrule": "FREQ=DAILY;COUNT=3",
+                "title"         : "重复晨会",
+                "content"       : "每日同步",
+                "category"      : "工作",
+                "start_time"    : "2035-06-01T09:00:00",
+                "end_time"      : "2035-06-01T09:30:00",
+                "location"      : "线上",
+                "tags"          : ["重复"],
+                "notes"         : "三次",
+                "context"       : {"group_id": 71006},
+                "rrule"         : "FREQ=DAILY;COUNT=3",
                 "reminder_rules": [{"offset_seconds": 1800}, {"offset_seconds": 0}],
             },
             ("20350601", "20350602", "20350603"),
@@ -473,13 +473,13 @@ async def test_single_event_same_id_covers_fields_reminders_invalid_edit_and_del
         (
             "multi_node",
             {
-                "title": "发布流程",
-                "content": "完整发布",
-                "category": "工作",
-                "location": "总部",
-                "tags": ["多节点"],
-                "notes": "按顺序执行",
-                "context": {"group_id": 71007},
+                "title"     : "发布流程",
+                "content"   : "完整发布",
+                "category"  : "工作",
+                "location"  : "总部",
+                "tags"      : ["多节点"],
+                "notes"     : "按顺序执行",
+                "context"   : {"group_id": 71007},
                 "milestones": [
                     {"name": "提审", "time": "2035-07-01T09:00:00", "notes": "先提审"},
                     {"name": "灰度", "time": "2035-07-02T12:00:00", "notes": "观察"},
@@ -554,12 +554,12 @@ async def test_event_collection_types_cover_collection_and_child_crud(
     await _set_event_updates(
         handler,
         {
-            "title": "集合标题已改",
-            "content": "集合内容已改",
-            "category": "发布",
-            "location": "新地点",
-            "tags": ["集合标签"],
-            "notes": "集合备注已改",
+            "title"     : "集合标题已改",
+            "content"   : "集合内容已改",
+            "category"  : "发布",
+            "location"  : "新地点",
+            "tags"      : ["集合标签"],
+            "notes"     : "集合备注已改",
             "start_time": "2035-12-31T23:59:00",
         },
     )
@@ -570,12 +570,12 @@ async def test_event_collection_types_cover_collection_and_child_crud(
         field: collection[field]
         for field in ("title", "content", "category", "location", "tags", "notes")
     } == {
-        "title": "集合标题已改",
-        "content": "集合内容已改",
+        "title"   : "集合标题已改",
+        "content" : "集合内容已改",
         "category": "发布",
         "location": "新地点",
-        "tags": ["集合标签"],
-        "notes": "集合备注已改",
+        "tags"    : ["集合标签"],
+        "notes"   : "集合备注已改",
     }
     assert collection["start_time"] == collection_before["start_time"], (
         "集合编辑不得把单节点时间误写到集合时间"
@@ -585,14 +585,14 @@ async def test_event_collection_types_cover_collection_and_child_crud(
     await _set_event_updates(
         handler,
         {
-            "title": "中间节点已改",
-            "content": "节点内容",
-            "category": "节点分类",
-            "location": "节点地点",
-            "tags": ["节点标签"],
-            "notes": "节点备注",
+            "title"     : "中间节点已改",
+            "content"   : "节点内容",
+            "category"  : "节点分类",
+            "location"  : "节点地点",
+            "tags"      : ["节点标签"],
+            "notes"     : "节点备注",
             "start_time": "2035-08-02T15:00:00",
-            "end_time": "2035-08-02T16:00:00",
+            "end_time"  : "2035-08-02T16:00:00",
         },
     )
     leaf_edit = await handler.edit_event(owner, f"{child_ids[1]} 修改节点", {})

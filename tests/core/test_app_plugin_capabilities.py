@@ -2,28 +2,29 @@
 
 from __future__ import annotations
 
+import copy
+import json
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
 import tests.helpers.app_test_support as _fixture_support
 from core.router import build_command_catalog_node, command_access
 from tests.helpers.app_test_support import (
-    Any,
-    AsyncMock,
     DeliveryTarget,
     ModuleType,
     OneBotActionOutcomeUnknown,
-    Path,
     PluginDefinition,
     PluginPrincipal,
     PluginServiceDefinition,
-    SimpleNamespace,
     XiaoQingApp,
     _plugin_context_for,
     _publish_command,
     _register_test_loaded_plugin,
     _set_app_config,
-    copy,
-    json,
-    patch,
-    pytest,
 )
 from tests.helpers.paths import REPOSITORY_ROOT
 
@@ -36,11 +37,11 @@ def test_app_grants_only_plugin_scoped_capabilities(temp_app_root: Path):
     app     = XiaoQingApp(temp_app_root)
     secrets = {
         "admin_user_ids": [12345],
-        "onebot_token": "top-level-token",
-        "inbound_token": "inbound-token",
-        "plugins": {
-            "bot_core": {"own_key": "own-value"},
-            "other": {"hidden_key": "hidden-value"},
+        "onebot_token"  : "top-level-token",
+        "inbound_token" : "inbound-token",
+        "plugins"       : {
+            "bot_core"     : {"own_key": "own-value"},
+            "other"        : {"hidden_key": "hidden-value"},
             "xiaoqing_chat": {"chat_key": "chat-value"},
         },
     }
@@ -124,14 +125,14 @@ async def test_ai_capability_reads_one_fresh_snapshot_per_call(temp_app_root: Pa
         config["ai"] = {
             "providers": {
                 "test": {
-                    "api_base": "https://llm.example/v1",
+                    "api_base"     : "https://llm.example/v1",
                     "endpoint_path": "/chat/completions",
                 }
             },
             "models": {
                 "profile": {
-                    "provider": "test",
-                    "model": model,
+                    "provider"  : "test",
+                    "model"     : model,
                     "modalities": ["text"],
                 }
             },
@@ -312,9 +313,9 @@ async def test_bot_core_secret_admin_works_with_production_context(temp_app_root
     app     = XiaoQingApp(temp_app_root)
     secrets = {
         "admin_user_ids": [12345],
-        "onebot_token": "",
-        "inbound_token": "",
-        "plugins": {"bot_core": {"managed": "before", "values": [1, 2]}},
+        "onebot_token"  : "",
+        "inbound_token" : "",
+        "plugins"       : {"bot_core": {"managed": "before", "values": [1, 2]}},
     }
     app.config_manager.secrets_path.write_text(json.dumps(secrets), encoding="utf-8")
     app.config_manager.reload()
@@ -480,19 +481,19 @@ async def test_declared_voice_service_preserves_signed_principal_and_target_scop
     app     = XiaoQingApp(temp_app_root)
     secrets = {
         "admin_user_ids": [12345],
-        "onebot_token": "",
-        "inbound_token": "",
-        "plugins": {
+        "onebot_token"  : "",
+        "inbound_token" : "",
+        "plugins"       : {
             "smalltalk": {"source_key": "s"},
-            "voice": {"target_key": "t"},
-            "chat": {"chat_key": "c"},
+            "voice"    : {"target_key": "t"},
+            "chat"     : {"chat_key": "c"},
         },
     }
     config            = app.config_manager.snapshot().mutable_config()
     config["plugins"] = {
         "smalltalk": {"source_option": 1},
-        "voice": {"target_option": 2},
-        "chat": {"chat_option": 3},
+        "voice"    : {"target_option": 2},
+        "chat"     : {"chat_option": 3},
     }
     app.config_manager._replace_snapshot(config, secrets)
     app._load_admins(secrets)
@@ -593,9 +594,9 @@ async def test_arxiv_codex_capability_uses_real_target_context_and_rechecks_admi
     app     = XiaoQingApp(temp_app_root)
     secrets = {
         "admin_user_ids": [12345],
-        "onebot_token": "",
-        "inbound_token": "",
-        "plugins": {"arxiv_filter": {"source": "s"}, "codex": {"target": "t"}},
+        "onebot_token"  : "",
+        "inbound_token" : "",
+        "plugins"       : {"arxiv_filter": {"source": "s"}, "codex": {"target": "t"}},
     }
     config            = app.config_manager.snapshot().mutable_config()
     config["plugins"] = {"arxiv_filter": {"source_option": 1}, "codex": {"target_option": 2}}
@@ -614,9 +615,9 @@ async def test_arxiv_codex_capability_uses_real_target_context_and_rechecks_admi
             (
                 context,
                 {
-                    "date": date,
-                    "links": links,
-                    "user_id": user_id,
+                    "date"    : date,
+                    "links"   : links,
+                    "user_id" : user_id,
                     "group_id": group_id,
                 },
             )
@@ -838,23 +839,23 @@ async def test_xiaoqing_provider_scope_uses_production_principal_capabilities(
     config["ai"] = {
         "providers": {
             "deepseek": {
-                "api_base": "https://a.example",
+                "api_base"     : "https://a.example",
                 "endpoint_path": "/chat/completions",
             },
             "zhipu": {
-                "api_base": "https://b.example",
+                "api_base"     : "https://b.example",
                 "endpoint_path": "/chat/completions",
             },
         },
         "models": {
             "deepseek-flash": {
-                "provider": "deepseek",
-                "model": "deepseek-chat",
+                "provider"  : "deepseek",
+                "model"     : "deepseek-chat",
                 "modalities": ["text"],
             },
             "glm-5.2": {
-                "provider": "zhipu",
-                "model": "glm-5.2",
+                "provider"  : "zhipu",
+                "model"     : "glm-5.2",
                 "modalities": ["text"],
             },
         },
@@ -863,9 +864,9 @@ async def test_xiaoqing_provider_scope_uses_production_principal_capabilities(
         "xiaoqing_chat": {
             "ai": {
                 "default_model_alias": "deepseek",
-                "model_aliases": {
+                "model_aliases"      : {
                     "deepseek": "deepseek-flash",
-                    "glm": "glm-5.2",
+                    "glm"     : "glm-5.2",
                 },
                 "routes": {"chat": {"models": ["deepseek-flash", "glm-5.2"]}},
             }
@@ -875,15 +876,15 @@ async def test_xiaoqing_provider_scope_uses_production_principal_capabilities(
     secrets["ai"] = {
         "providers": {
             "deepseek": {"api_key": "<DEEPSEEK_API_KEY>"},
-            "zhipu": {"api_key": "<ZHIPU_API_KEY>"},
+            "zhipu"   : {"api_key": "<ZHIPU_API_KEY>"},
         }
     }
     app.config_manager._replace_snapshot(config, secrets)
     app._load_admins(secrets)
     group_admin_event = {
-        "user_id": 777,
+        "user_id" : 777,
         "group_id": 100,
-        "sender": {"user_id": 777, "role": "admin"},
+        "sender"  : {"user_id": 777, "role": "admin"},
     }
     group_admin = app.issue_user_principal(
         group_admin_event,
@@ -909,9 +910,9 @@ async def test_xiaoqing_provider_scope_uses_production_principal_capabilities(
         group_b = ai_route_context(group_context, chat_id="g200")
 
         bot_admin_event = {
-            "user_id": 12345,
+            "user_id" : 12345,
             "group_id": 200,
-            "sender": {"user_id": 12345, "role": "member"},
+            "sender"  : {"user_id": 12345, "role": "member"},
         }
         bot_admin = app.issue_user_principal(
             bot_admin_event,

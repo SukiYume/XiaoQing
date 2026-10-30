@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import pytest
+
 import tests.helpers.server_test_support as _fixture_support
 from tests.helpers.server_test_support import (
-    Any,
-    AsyncMock,
     InboundManager,
     InboundServer,
-    MagicMock,
-    Mock,
-    SimpleNamespace,
     _InboundEventDispatcher,
     _inflight_count,
     _lane_count,
@@ -18,10 +21,6 @@ from tests.helpers.server_test_support import (
     _MockRequest,
     _onebot_message_payload,
     _pending_for_key,
-    asyncio,
-    json,
-    patch,
-    pytest,
     web,
 )
 
@@ -58,7 +57,7 @@ async def test_http_admission_capacity_and_queued_cancellation_are_bounded():
         return result
 
     first = asyncio.create_task(server.post_event(request("first")))
-    await entered.wait()
+    await asyncio.wait_for(entered.wait(), 5)
     queued = asyncio.create_task(server.post_event(request("queued")))
     for _ in range(20):
         if _pending_for_key(server._event_dispatcher, "user:10001") == 2:
@@ -98,7 +97,7 @@ async def test_queued_cancellation_storm_returns_dispatcher_to_exact_baseline():
     dispatcher = _InboundEventDispatcher(handler, max_workers=1, queue_size=64)
     await dispatcher.start()
     running = asyncio.create_task(dispatcher.dispatch({"user_id": 1, "marker": "running"}))
-    await entered.wait()
+    await asyncio.wait_for(entered.wait(), 5)
     queued = [
         asyncio.create_task(dispatcher.dispatch({"user_id": 1, "marker": f"queued-{index}"}))
         for index in range(50)
@@ -149,7 +148,7 @@ async def test_queued_and_running_old_auth_events_fail_closed_without_poisoning_
         return result
 
     running = asyncio.create_task(server.post_event(request("running")))
-    await entered.wait()
+    await asyncio.wait_for(entered.wait(), 5)
     queued = asyncio.create_task(server.post_event(request("queued")))
     for _ in range(20):
         if _inflight_count(server._event_dispatcher) == 2:
@@ -182,8 +181,8 @@ async def test_handler_failures_are_task_safe_and_next_same_key_runs(failure_kin
         return {"not": "a list"}
 
     handlers = {
-        "fatal": fatal_handler,
-        "sync": sync_handler,
+        "fatal"  : fatal_handler,
+        "sync"   : sync_handler,
         "invalid": invalid_handler,
     }
     server  = InboundServer("127.0.0.1", 8765, "token", handlers[failure_kind])
@@ -392,24 +391,25 @@ async def test_dispatcher_stop_timeout_and_retry_leave_no_event_wait_tasks():
     )
     await dispatcher.start()
     waiter = asyncio.create_task(dispatcher.dispatch({"user_id": 1}))
-    await entered.wait()
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
 
-    with pytest.raises(RuntimeError, match="ignored cancellation"):
+        with pytest.raises(RuntimeError, match="ignored cancellation"):
+            await dispatcher.stop()
+        assert not [
+            task
+            for task in asyncio.all_tasks()
+            if task is not asyncio.current_task()
+            and getattr(task.get_coro(), "__qualname__", "") == "Event.wait"
+        ]
+    finally:
+        release.set()
+        await asyncio.gather(waiter, return_exceptions=True)
+        for _ in range(20):
+            if _inflight_count(dispatcher) == 0:
+                break
+            await asyncio.sleep(0)
         await dispatcher.stop()
-    assert not [
-        task
-        for task in asyncio.all_tasks()
-        if task is not asyncio.current_task()
-        and getattr(task.get_coro(), "__qualname__", "") == "Event.wait"
-    ]
-
-    release.set()
-    await asyncio.gather(waiter, return_exceptions=True)
-    for _ in range(20):
-        if _inflight_count(dispatcher) == 0:
-            break
-        await asyncio.sleep(0)
-    await dispatcher.stop()
 
 
 @pytest.mark.asyncio
@@ -431,7 +431,7 @@ async def test_cancelled_dispatcher_stop_leaves_no_anonymous_drain_waiter():
     )
     await dispatcher.start()
     event_task = asyncio.create_task(dispatcher.dispatch({"user_id": 1}))
-    await entered.wait()
+    await asyncio.wait_for(entered.wait(), 5)
     stop_task = asyncio.create_task(dispatcher.stop())
     await asyncio.sleep(0)
     stop_task.cancel()

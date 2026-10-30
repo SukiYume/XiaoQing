@@ -203,7 +203,7 @@ async def _maybe_reset_idle_conversation(
         chat_id = chat_id,
         step    = "smalltalk.context.reset_idle",
         fields  = {
-            "idle_seconds": round(idle_gap, 3),
+            "idle_seconds"     : round(idle_gap, 3),
             "threshold_seconds": round(threshold, 3),
         },
     )
@@ -542,20 +542,20 @@ async def _resolve_attention(text: str, event: dict[str, Any], context, hctx: Ha
         chat_id = chat_id,
         step    = "smalltalk.recv",
         fields  = {
-            "is_private": is_private,
-            "mentioned": attention.mentioned,
-            "direct_mentioned": direct_mentioned,
+            "is_private"           : is_private,
+            "mentioned"            : attention.mentioned,
+            "direct_mentioned"     : direct_mentioned,
             "coreference_mentioned": attention.coreference_mentioned,
-            "reply_to_bot": attention.reply_to_bot,
-            "forced": attention.forced,
-            "force_reason": attention.force_reason,
-            "pending_bot_name": pending_bot_name_forced,
-            "brain_chat_enabled": brain_chat_enabled,
-            "msg_id": event.get("message_id"),
-            "user_id": event.get("user_id"),
-            "group_id": event.get("group_id"),
-            "text": text,
-            "new_emoji_count": max(0, int(event.get("_xc_new_emoji_count", 0) or 0)),
+            "reply_to_bot"         : attention.reply_to_bot,
+            "forced"               : attention.forced,
+            "force_reason"         : attention.force_reason,
+            "pending_bot_name"     : pending_bot_name_forced,
+            "brain_chat_enabled"   : brain_chat_enabled,
+            "msg_id"               : event.get("message_id"),
+            "user_id"              : event.get("user_id"),
+            "group_id"             : event.get("group_id"),
+            "text"                 : text,
+            "new_emoji_count"      : max(0, int(event.get("_xc_new_emoji_count", 0) or 0)),
         },
     )
     return attention, is_private
@@ -808,7 +808,7 @@ async def call_bot_name_only(context) -> list[dict[str, Any]]:
             chat_id = chat_id,
             step    = "smalltalk.bot_name_only",
             fields  = {
-                "user_id": user_id,
+                "user_id"       : user_id,
                 "followup_ttl_s": _BOT_NAME_ONLY_FOLLOWUP_TTL_SECONDS,
             },
         )

@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib
+import os
+import sys
+import threading
+from pathlib import Path
+from unittest.mock import AsyncMock, Mock
+
+import pytest
 
 import tests.helpers.plugin_manager_test_support as _fixture_support
 from tests.helpers.plugin_manager_test_support import (
     _PROCESS_IMPORT_PATH_LEASES,
-    AsyncMock,
     CommandRouter,
     ConcurrentFuture,
     LoadedPlugin,
-    Mock,
     ModuleType,
-    Path,
     PluginExecutionGate,
     PluginExecutionPolicy,
     PluginLoadError,
@@ -23,13 +28,8 @@ from tests.helpers.plugin_manager_test_support import (
     _build_manager,
     _register_test_command,
     _write_runtime_manifest,
-    asyncio,
     call_plugin_callback,
-    os,
-    pytest,
-    sys,
     textwrap,
-    threading,
 )
 
 _isolate_process_global_plugin_import_state = (
@@ -939,7 +939,7 @@ async def test_recovery_init_that_resists_cancellation_keeps_exact_generation_ow
     manager                   = _build_manager(tmp_path)
     manager._execution_policy = PluginExecutionPolicy.from_mapping(
         {
-            "timeout_seconds": 0.02,
+            "timeout_seconds"      : 0.02,
             "drain_timeout_seconds": 0.02,
         },
         fallback=manager._execution_policy,

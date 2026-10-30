@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from core.interfaces import PluginContextProtocol
+from core.lifecycle import to_thread_owned
 from core.plugin_base import Segments, has_control_characters, image_url, segments, text
 from core.session import Session
 
@@ -36,7 +37,8 @@ from .jupyter_models import ExecutionResult
 # 保留稳定的测试/扩展接缝；依赖可用状态始终从模块属性实时读取。
 JupyterKernelManager = jupyter_manager.JupyterKernelManager
 
-logger = logging.getLogger(__name__)
+logger         = logging.getLogger(__name__)
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 PLUGIN_NAME               = "jupyter"
 MAX_KERNEL_ARGUMENT_CHARS = 64
@@ -124,7 +126,7 @@ class InvalidReplState(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class ReplState:
-    lines: tuple[str, ...]
+    lines          : tuple[str, ...]
     execution_count: int
 
     @property
@@ -268,9 +270,10 @@ def _build_result_segments(
     response.append(text(result.format_output()))
 
     total_image_bytes = 0
+    # 图片在执行结果组装时已经完整校验过；这里只核对 PNG 签名和总字节预算，不再重复完整解码。
     for image_data in result.images[:MAX_IMAGES]:
         if (
-            not jupyter_manager.validate_png_bytes(image_data)
+            not image_data.startswith(_PNG_SIGNATURE)
             or total_image_bytes + len(image_data) > MAX_TOTAL_IMAGE_BYTES
         ):
             continue
@@ -342,16 +345,18 @@ async def _handle_kernel(action: KernelAction, context: PluginContextProtocol) -
             job_id     = job_id,
             status     = "started",
         )
-        if action == "start":
-            await asyncio.to_thread(manager.start_kernel)
-            manager.ensure_idle_monitor()
-            success_text = "🟢 内核已启动"
-        elif action == "restart":
-            await asyncio.to_thread(manager.restart_kernel)
-            manager.ensure_idle_monitor()
-            success_text = "🔄 内核已重启"
+        if action in {"start", "restart"}:
+            try:
+                # 取消时也等启动线程收敛：内核起来了就必须有空闲监视器，不能留下无人回收的内核。
+                await to_thread_owned(
+                    manager.start_kernel if action == "start" else manager.restart_kernel
+                )
+            finally:
+                # 监视器发现内核没在运行会自行结束，所以启动失败时登记也是安全的。
+                manager.ensure_idle_monitor()
+            success_text = "🟢 内核已启动" if action == "start" else "🔄 内核已重启"
         else:
-            await asyncio.to_thread(manager.shutdown_kernel)
+            await to_thread_owned(manager.shutdown_kernel)
             success_text = "⚫ 内核已关闭"
         log_sensitive_audit(
             logger,

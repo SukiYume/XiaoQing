@@ -26,10 +26,10 @@ class _Context:
         self.http_session = self.raw_session if with_http else None
         platform_config   = (
             {
-                "app_id": "test_app_id",
-                "kdt_id": "test_kdt_id",
+                "app_id"      : "test_app_id",
+                "kdt_id"      : "test_kdt_id",
                 "access_token": "test_access_token",
-                "sid": "test_sid",
+                "sid"         : "test_sid",
             }
             if configured
             else {}
@@ -154,8 +154,8 @@ async def test_success_formats_only_valid_reward_records(
             {"isSuccess": True, "times": "第 5 天", "infos": "invalid"},
             {
                 "isSuccess": True,
-                "times": "第 6 天",
-                "infos": {"title": "积分", "desc": "+10"},
+                "times"    : "第 6 天",
+                "infos"    : {"title": "积分", "desc": "+10"},
             },
         ],
     )
@@ -173,10 +173,10 @@ async def test_success_formats_only_valid_reward_records(
 async def test_missing_or_invalid_credentials_fail_before_http(event: dict[str, object]) -> None:
     context = _Context(configured=False)
     context.secrets["plugins"]["signin"]["yingshijufeng"] = {
-        "app_id": "app",
-        "kdt_id": "kdt",
+        "app_id"      : "app",
+        "kdt_id"      : "kdt",
         "access_token": {"nested": "invalid"},
-        "sid": "sid",
+        "sid"         : "sid",
     }
 
     result = await signin.handle("signin", "yingshi", event, context)
@@ -312,14 +312,14 @@ async def test_provider_fields_and_rewards_are_bounded(context: _Context) -> Non
         None,
         {
             "isSuccess": True,
-            "times": " ",
-            "infos": {"title": "", "desc": ""},
+            "times"    : " ",
+            "infos"    : {"title": "", "desc": ""},
         },
         *[
             {
                 "isSuccess": True,
-                "times": index,
-                "infos": {"title": long_text, "desc": long_text},
+                "times"    : index,
+                "infos"    : {"title": long_text, "desc": long_text},
             }
             for index in range(30)
         ],
@@ -468,9 +468,9 @@ def test_manifest_resolves_runtime_handlers_and_authorization() -> None:
     assert set(command["triggers"]) == {"signin", "签到"}
     assert manifest["concurrency"] == "sequential"
     assert schedule == {
-        "id": "yingshi",
-        "handler": "scheduled_yingshi",
-        "cron": {"hour": 0, "minute": 30},
+        "id"      : "yingshi",
+        "handler" : "scheduled_yingshi",
+        "cron"    : {"hour": 0, "minute": 30},
         "delivery": "broadcast",
     }
     assert callable(getattr(signin, schedule["handler"]))

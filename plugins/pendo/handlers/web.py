@@ -68,8 +68,8 @@ class _WebServer(Protocol):
         ...
 
 
-_WebComponents: TypeAlias         = tuple[_LoginCodeIssuer, _WidgetTokenGenerator, _WebServer]
-_OPTIONAL_WEB_IMPORT_ROOTS: Final = frozenset(
+_WebComponents            : TypeAlias = tuple[_LoginCodeIssuer, _WidgetTokenGenerator, _WebServer]
+_OPTIONAL_WEB_IMPORT_ROOTS: Final     = frozenset(
     {"anyio", "fastapi", "jwt", "multipart", "pydantic", "starlette", "uvicorn"}
 )
 
@@ -97,9 +97,9 @@ def _load_web_components() -> _WebComponents | None:
 
 
 _loaded_components = _load_web_components()
-issue_login_code: _LoginCodeIssuer | None
+issue_login_code     : _LoginCodeIssuer | None
 generate_widget_token: _WidgetTokenGenerator | None
-web_server: _WebServer | None
+web_server           : _WebServer | None
 if _loaded_components is None:
     issue_login_code      = None
     generate_widget_token = None
@@ -118,8 +118,8 @@ class WebHandler:
 
     @staticmethod
     async def _is_managed_running(server: _WebServer) -> bool:
-        """判断服务是否由当前插件线程托管。"""
-        return bool(server.is_managed_running())
+        """判断服务是否由当前插件线程托管；启动/停止持锁期间不在事件循环里等待。"""
+        return bool(await run_sync(server.is_managed_running))
 
     @handle_command_errors
     async def handle(
@@ -159,7 +159,7 @@ class WebHandler:
             return await self._status(server)
         help_result = self._help()
         return {
-            "status": "error",
+            "status" : "error",
             "message": f"❌ 未知 Web 子命令: {args.strip()}\n\n{help_result['message']}",
         }
 
@@ -170,7 +170,9 @@ class WebHandler:
         issuer: _LoginCodeIssuer,
     ) -> CommandMessage:
         """生成一次性登录码，并只在私聊中发送原始 Code。"""
-        code = issuer(
+        # 签发要绑定认证仓储并提交登录码：放进同步执行边界，数据库变慢时不占住 Bot 事件循环。
+        code = await run_sync(
+            issuer,
             user_id,
             expires_seconds = PendoConfig.WEB_LOGIN_CODE_EXPIRE_SECONDS,
             db              = self.db,
@@ -303,13 +305,13 @@ class WebHandler:
                     ),
                 }
             return {
-                "status": "success",
+                "status" : "success",
                 "message": "🌐 Pendo Web\nℹ️ 服务当前未在运行",
             }
         stopped = await run_sync(server.stop)
         if stopped:
             return {
-                "status": "success",
+                "status" : "success",
                 "message": "🌐 Pendo Web\n🛑 服务已停止",
             }
         return {"status": "error", "message": "❌ Web UI 停止失败"}
@@ -415,6 +417,6 @@ class WebHandler:
                 ]
             )
         return {
-            "status": "success" if token_sent is not False else "error",
+            "status" : "success" if token_sent is not False else "error",
             "message": "\n".join(lines),
         }

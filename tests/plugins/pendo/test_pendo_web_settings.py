@@ -39,30 +39,30 @@ def test_settings_payload_normalizes_all_public_fields_without_mutating_input() 
     """时区、时间、分类和扩展设置应统一规范化，原补丁保持不变。"""
 
     raw: dict[str, Any] = {
-        "timezone": " Asia/Shanghai ",
+        "timezone"         : " Asia/Shanghai ",
         "quiet_hours_start": " 9:05 ",
-        "quiet_hours_end": "23:00",
+        "quiet_hours_end"  : "23:00",
         "daily_report_time": "8:30",
         "diary_remind_time": "21:07",
-        "default_category": " 工作手稿 ",
-        "settings_json": {
+        "default_category" : " 工作手稿 ",
+        "settings_json"    : {
             "daily_report_enabled": "off",
-            "extension_flag": "保留",
+            "extension_flag"      : "保留",
         },
     }
 
     normalized = settings_api._normalize_settings_payload(raw)
 
     assert normalized == {
-        "timezone": "Asia/Shanghai",
+        "timezone"         : "Asia/Shanghai",
         "quiet_hours_start": "09:05",
-        "quiet_hours_end": "23:00",
+        "quiet_hours_end"  : "23:00",
         "daily_report_time": "08:30",
         "diary_remind_time": "21:07",
-        "default_category": "工作手稿",
-        "settings_json": {
+        "default_category" : "工作手稿",
+        "settings_json"    : {
             "daily_briefing_enabled": False,
-            "extension_flag": "保留",
+            "extension_flag"        : "保留",
         },
     }
     assert raw["timezone"] == " Asia/Shanghai "
@@ -113,7 +113,7 @@ def test_settings_update_rejects_empty_and_skips_normalized_noop(
     assert db.update_user_settings(
         owner_id,
         {
-            "timezone": "Asia/Shanghai",
+            "timezone"     : "Asia/Shanghai",
             "settings_json": {"reminder_enabled": True},
         },
     )
@@ -223,9 +223,9 @@ def test_user_settings_round_trip_parses_and_merges_settings_json(db: Database) 
     assert db.update_user_settings(
         owner_id,
         {
-            "timezone": "Asia/Shanghai",
+            "timezone"     : "Asia/Shanghai",
             "settings_json": {
-                "reminder_enabled": False,
+                "reminder_enabled"      : False,
                 "daily_briefing_enabled": True,
             },
         },
@@ -256,7 +256,7 @@ def test_parse_custom_settings_reads_dict_payload() -> None:
     custom = parse_custom_settings(
         {
             "settings_json": {
-                "reminder_enabled": False,
+                "reminder_enabled"         : False,
                 "ai_sensitive_data_consent": True,
             },
         }
@@ -271,8 +271,8 @@ def test_normalize_settings_json_preserves_unknown_keys_and_legacy_alias() -> No
     """扩展键应保留，旧日报键应迁移到当前简报键。"""
     custom = normalize_settings_json(
         {
-            "daily_report_enabled": False,
-            "privacy_mode": False,
+            "daily_report_enabled" : False,
+            "privacy_mode"         : False,
             "weekly_report_enabled": True,
         }
     )
@@ -287,8 +287,8 @@ def test_normalize_settings_json_coerces_string_booleans_safely() -> None:
     """字符串形式的关闭值不能被 Python 真值规则误判为开启。"""
     custom = normalize_settings_json(
         {
-            "reminder_enabled": "false",
-            "daily_briefing_enabled": "off",
+            "reminder_enabled"         : "false",
+            "daily_briefing_enabled"   : "off",
             "ai_sensitive_data_consent": "0",
         }
     )
@@ -376,14 +376,14 @@ def test_web_saved_settings_reflect_in_plugin_settings_output(db: Database) -> N
     assert db.update_user_settings(
         owner_id,
         {
-            "timezone": "Asia/Shanghai",
+            "timezone"         : "Asia/Shanghai",
             "quiet_hours_start": "23:00",
-            "quiet_hours_end": "07:00",
+            "quiet_hours_end"  : "07:00",
             "daily_report_time": "08:00",
             "diary_remind_time": "21:30",
-            "settings_json": {
-                "reminder_enabled": False,
-                "daily_briefing_enabled": False,
+            "settings_json"    : {
+                "reminder_enabled"         : False,
+                "daily_briefing_enabled"   : False,
                 "ai_sensitive_data_consent": True,
             },
         },

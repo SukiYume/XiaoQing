@@ -97,7 +97,7 @@ def split_sentences(text: str) -> list[str]:
     quote_pairs            = {"“": "”", "‘": "’", "「": "」", "『": "』"}
     closing_quotes         = set(quote_pairs.values())
     quote_stack: list[str] = []
-    out: list[str]         = []
+    out        : list[str] = []
     start                  = 0
     index                  = 0
     while index < len(s):
@@ -185,6 +185,25 @@ def process_llm_response(
     return [text]
 
 
+def _without_blank_lines(part: str) -> str:
+    """去掉代码块外的空行：气泡边界只由分段结果决定，不由正文里的空行决定。"""
+
+    kept: list[str] = []
+    in_code_block   = False
+    for line in part.split("\n"):
+        if line.strip().startswith("```"):
+            in_code_block = not in_code_block
+        if in_code_block or line.strip() or line.strip().startswith("```"):
+            kept.append(line)
+    return "\n".join(kept).strip()
+
+
 def join_reply(parts: Sequence[str]) -> str:
-    cleaned = [p.strip() for p in parts if p and p.strip()]
-    return "\n".join(cleaned).strip()
+    """把分段结果合成一段文本，段与段之间用空行分隔。
+
+    最终发送按空行（并保护代码块）拆成气泡，所以分段边界必须是空行、段内不能再有空行：
+    关闭分段时整段回复仍是一个气泡，开启分句时每句各成一个气泡。
+    """
+
+    cleaned = [_without_blank_lines(p) for p in parts if p and p.strip()]
+    return "\n\n".join(part for part in cleaned if part).strip()

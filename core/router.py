@@ -43,19 +43,19 @@ class CommandConflictError(ValueError):
 class CommandCatalogNode:
     """Core 持有的不可变命令目录节点；帮助、导出和测试共享该快照。"""
 
-    code: str
-    plugin: str
-    path: tuple[str, ...]
-    name: str
-    aliases: tuple[str, ...]
-    help_text: str
-    usage: str
-    match_mode: str                          = "prefix"
-    permission: str                          = "public"
-    contexts: tuple[str, ...]                = ("private", "group")
-    examples: tuple[str, ...]                = ()
-    invalid_examples: tuple[str, ...]        = ()
-    children: tuple[CommandCatalogNode, ...] = ()
+    code            : str
+    plugin          : str
+    path            : tuple[str, ...]
+    name            : str
+    aliases         : tuple[str, ...]
+    help_text       : str
+    usage           : str
+    match_mode      : str                            = "prefix"
+    permission      : str                            = "public"
+    contexts        : tuple[str, ...]                = ("private", "group")
+    examples        : tuple[str, ...]                = ()
+    invalid_examples: tuple[str, ...]                = ()
+    children        : tuple[CommandCatalogNode, ...] = ()
 
     def walk(self) -> tuple[CommandCatalogNode, ...]:
         """按目录顺序展平自身及全部后代。"""
@@ -78,19 +78,19 @@ class CommandCatalogNode:
         """返回无处理器、可直接 JSON 序列化的公开目录。"""
 
         return {
-            "code": self.code,
-            "plugin": self.plugin,
-            "path": list(self.path),
-            "name": self.name,
-            "aliases": list(self.aliases),
-            "help": self.help_text,
-            "usage": self.usage,
-            "match": self.match_mode,
-            "permission": self.permission,
-            "contexts": list(self.contexts),
-            "examples": list(self.examples),
+            "code"            : self.code,
+            "plugin"          : self.plugin,
+            "path"            : list(self.path),
+            "name"            : self.name,
+            "aliases"         : list(self.aliases),
+            "help"            : self.help_text,
+            "usage"           : self.usage,
+            "match"           : self.match_mode,
+            "permission"      : self.permission,
+            "contexts"        : list(self.contexts),
+            "examples"        : list(self.examples),
             "invalid_examples": list(self.invalid_examples),
-            "subcommands": [child.to_dict() for child in self.children],
+            "subcommands"     : [child.to_dict() for child in self.children],
         }
 
 
@@ -125,8 +125,8 @@ def format_command_catalog(
 class CommandInvocation:
     """Core 对一条输入做出的目录路径解析结果。"""
 
-    root: CommandCatalogNode
-    chain: tuple[CommandCatalogNode, ...]
+    root      : CommandCatalogNode
+    chain     : tuple[CommandCatalogNode, ...]
     remainders: tuple[str, ...]
 
     @property
@@ -302,15 +302,15 @@ def resolve_context_command_invocation(
 
 @dataclass
 class CommandSpec:
-    plugin: str
-    name: str
-    triggers: list[str]
-    help_text: str
+    plugin    : str
+    name      : str
+    triggers  : list[str]
+    help_text : str
     admin_only: bool
-    handler: Handler
-    priority: int     = 0  # 优先级，数字越大越先匹配
-    usage: str | None = None
-    catalog: CommandCatalogNode | None = field(default=None, repr=False, compare=False)
+    handler   : Handler
+    priority  : int        = 0  # 优先级，数字越大越先匹配
+    usage     : str | None = None
+    catalog   : CommandCatalogNode | None = field(default=None, repr=False, compare=False)
     # 执行门既控制并发，也标识插件加载代数；已解析命令不能迁移到新代数的执行门。
     execution_gate: PluginExecutionGate | None = field(
         default = None,

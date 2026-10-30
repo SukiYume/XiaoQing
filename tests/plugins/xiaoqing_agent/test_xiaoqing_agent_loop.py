@@ -294,10 +294,10 @@ async def test_loop_runs_tools_until_final_answer(tmp_path: Path) -> None:
     assert assistant["tool_calls"][0]["function"]["name"] == "write_file"
     tool_message = second_request[3]
     assert tool_message == {
-        "role": "tool",
+        "role"        : "tool",
         "tool_call_id": "c1",
-        "name": "write_file",
-        "content": tool_message["content"],
+        "name"        : "write_file",
+        "content"     : tool_message["content"],
     }
     assert "已写入" in tool_message["content"]
 
@@ -449,15 +449,15 @@ def test_compaction_counts_tool_arguments_and_reasoning() -> None:
     for index in range(10):
         messages.append(
             {
-                "role": "assistant",
-                "content": "",
+                "role"             : "assistant",
+                "content"          : "",
                 "reasoning_content": "想" * 5000,
-                "tool_calls": [
+                "tool_calls"       : [
                     {
-                        "id": str(index),
-                        "type": "function",
+                        "id"      : str(index),
+                        "type"    : "function",
                         "function": {
-                            "name": "run_python",
+                            "name"     : "run_python",
                             "arguments": json.dumps({"code": script}),
                         },
                     }
@@ -564,7 +564,7 @@ async def test_a_follow_up_during_a_batch_stops_the_calls_that_have_not_started(
     empty = {"type": "object", "properties": {}}
     tools = {
         **tools,
-        "query": Tool("query", "查询", empty, query),
+        "query" : Tool("query", "查询", empty, query),
         "modify": Tool("modify", "修改", empty, modify),
     }
     ai.script = [

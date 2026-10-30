@@ -1,6 +1,7 @@
 """宠物交互、训练、探索、召回和状态展示测试。"""
 
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
 import pytest
 
@@ -9,6 +10,7 @@ from plugins.qingpet.services.economy_service import EconomyService
 from plugins.qingpet.services.pet_service import PetService
 from plugins.qingpet.services.user_service import UserService
 from plugins.qingpet.utils.constants import (
+    DECAY_RATES,
     EXPLORE_LOCATIONS,
     TRAINING_CONFIG,
     TRAINING_MESSAGES,
@@ -18,6 +20,7 @@ from plugins.qingpet.utils.constants import (
     PetStatus,
 )
 from plugins.qingpet.utils.formatters import format_pet_card
+from plugins.qingpet.utils.time import utc_now
 
 
 @pytest.fixture
@@ -57,7 +60,7 @@ def test_cannot_interact_msg_sick(pet_and_user, qingpet_db):
 def test_cannot_interact_msg_traveling(pet_and_user, qingpet_db):
     pet, user = pet_and_user
     pet.status = PetStatus.TRAVELING
-    pet.status_expire_time = datetime.now() + timedelta(hours=12)
+    pet.status_expire_time = utc_now() + timedelta(hours=12)
     qingpet_db.update_pet(pet)
     pet_service = PetService(qingpet_db)
     success, msg, _ = pet_service.feed_pet(pet, user)
@@ -69,7 +72,7 @@ def test_recall_requires_only_coins(pet_and_user, qingpet_db):
     """召回只需金币，无友情点要求"""
     pet, user = pet_and_user
     pet.status = PetStatus.TRAVELING
-    pet.status_expire_time = datetime.now() + timedelta(hours=12)
+    pet.status_expire_time = utc_now() + timedelta(hours=12)
     qingpet_db.update_pet(pet)
 
     user.coins             = 50
@@ -103,7 +106,7 @@ def test_recall_success_message_no_friendship(pet_and_user, qingpet_db):
     """召回成功消息不包含友情点字样"""
     pet, user = pet_and_user
     pet.status = PetStatus.TRAVELING
-    pet.status_expire_time = datetime.now() + timedelta(hours=1)
+    pet.status_expire_time = utc_now() + timedelta(hours=1)
     qingpet_db.update_pet(pet)
     user.coins             = 100
     user.friendship_points = 0
@@ -116,7 +119,7 @@ def test_recall_success_message_no_friendship(pet_and_user, qingpet_db):
     assert "金币" in msg
 
 
-def test_apply_decay_travel_message_no_friendship(pet_and_user, qingpet_db):
+def test_apply_decay_travel_message_no_friendship(pet_and_user, qingpet_db, monkeypatch):
     """apply_decay 触发旅行的消息不包含友情点"""
     pet, _ = pet_and_user
     pet.hunger = 0
@@ -125,13 +128,34 @@ def test_apply_decay_travel_message_no_friendship(pet_and_user, qingpet_db):
     pet.energy = 0
     pet.health = 0
     pet.status = PetStatus.NORMAL
-    pet.last_update = datetime.now() - timedelta(minutes=5)
+    pet.last_update = utc_now() - timedelta(minutes=5)
+    monkeypatch.setattr(pet_service_module.random, "random", lambda: 1.0)
     qingpet_db.update_pet(pet)
 
     pet_service = PetService(qingpet_db)
     result      = pet_service.apply_decay(pet)
-    if result and "旅行" in result:
-        assert "友情" not in result
+    assert result and "旅行" in result
+    assert "友情" not in result
+    assert qingpet_db.get_pet(pet.user_id, pet.group_id).status == PetStatus.TRAVELING
+
+
+@pytest.mark.parametrize("minutes", [0.5, 120])
+def test_sleep_settles_pending_decay(pet_and_user, qingpet_db, monkeypatch, minutes):
+    pet, _ = pet_and_user
+    now = utc_now()
+    pet.last_update = now - timedelta(minutes=minutes)
+    qingpet_db.update_pet(pet)
+    monkeypatch.setattr(pet_service_module, "utc_now", lambda: now)
+    monkeypatch.setattr(pet_service_module.random, "random", lambda: 1.0)
+    initial_hunger = pet.hunger
+    success, _message = PetService(qingpet_db).sleep_pet(pet)
+    assert success
+    stored      = qingpet_db.get_pet(pet.user_id, pet.group_id)
+    accumulated = DECAY_RATES["hunger"] * minutes
+    assert stored.hunger == max(0, initial_hunger - int(accumulated + 1e-9))
+    assert stored.decay_remainders["hunger"] == pytest.approx(accumulated % 1)
+    assert stored.last_update == now
+    assert stored.status == PetStatus.SLEEPING
 
 
 @pytest.mark.parametrize("expiry_case", ["valid", "missing", "overlong"])
@@ -151,7 +175,9 @@ def test_sleep_expiry_wakes_pet_and_limits_energy_recovery(
     pet.health = 80
     assert qingpet_db.update_pet(pet)
 
-    current_time = {"value": datetime(2035, 1, 2, 3, 4, 5)}
+    current_time    = {"value": datetime(2035, 1, 2, 3, 4, 5)}
+    pet.last_update = current_time["value"]
+    assert qingpet_db.update_pet(pet)
     monkeypatch.setattr(
         pet_service_module,
         "utc_now",
@@ -216,19 +242,26 @@ def test_training_special_events_structure():
 
 
 def test_train_default_type_strength(pet_and_user, qingpet_db):
-    """默认训练类型为体力"""
     pet, user = pet_and_user
     pet_service = PetService(qingpet_db)
-    success, msg, _coins = pet_service.train_pet(pet, user)
-    assert isinstance(success, bool)
-    assert isinstance(msg, str)
+    before_energy, before_exp = pet.energy, pet.experience
+    with patch(
+        "plugins.qingpet.services.pet_service.random.random",
+        side_effect=[0.0] + [1.0] * len(TRAINING_SPECIAL_EVENTS),
+    ):
+        success, _message, _coins = pet_service.train_pet(pet, user)
+    assert success
+    assert pet.energy == before_energy - TRAINING_CONFIG["strength"]["energy_cost"]
+    factor = 1.1 if pet.personality == PetPersonality.SMART else 1
+    assert pet.experience == before_exp + int(TRAINING_CONFIG["strength"]["exp_gain"] * factor)
+    assert qingpet_db.get_pet("test_user", 123456).energy == pet.energy
 
 
-def test_train_agility_boosts_mood(pet_and_user, qingpet_db):
+def test_train_agility_boosts_mood(pet_and_user, qingpet_db, monkeypatch):
     """敏捷训练成功时提升心情（多次重试排除随机失败）"""
     import random
 
-    random.seed(42)
+    monkeypatch.setattr("plugins.qingpet.services.pet_service.random", random.Random(42))
     pet_service    = PetService(qingpet_db)
     mood_increased = False
     for _ in range(20):
@@ -254,8 +287,17 @@ def test_train_intellect_higher_exp(pet_and_user, qingpet_db):
 def test_train_invalid_type_falls_back(pet_and_user, qingpet_db):
     pet, user = pet_and_user
     pet_service = PetService(qingpet_db)
-    _success, msg, _ = pet_service.train_pet(pet, user, training_type="unknown_type")
-    assert isinstance(msg, str)
+    before_energy, before_exp = pet.energy, pet.experience
+    with patch(
+        "plugins.qingpet.services.pet_service.random.random",
+        side_effect=[0.0] + [1.0] * len(TRAINING_SPECIAL_EVENTS),
+    ):
+        success, _message, _coins = pet_service.train_pet(pet, user, training_type="unknown_type")
+    assert success
+    assert pet.energy == before_energy - TRAINING_CONFIG["strength"]["energy_cost"]
+    factor = 1.1 if pet.personality == PetPersonality.SMART else 1
+    assert pet.experience == before_exp + int(TRAINING_CONFIG["strength"]["exp_gain"] * factor)
+    assert qingpet_db.get_pet("test_user", 123456).energy == pet.energy
 
 
 def test_train_message_contains_pet_name(pet_and_user, qingpet_db):
@@ -266,11 +308,21 @@ def test_train_message_contains_pet_name(pet_and_user, qingpet_db):
 
 
 def test_train_smart_personality_exp_stacking(pet_and_user, qingpet_db):
-    pet, _user = pet_and_user
+    pet, user = pet_and_user
     pet.personality = PetPersonality.SMART
     qingpet_db.update_pet(pet)
-    base_exp = TRAINING_CONFIG["intellect"]["exp_gain"]
-    assert int(base_exp * 1.1) > base_exp
+    before = pet.experience
+    with patch(
+        "plugins.qingpet.services.pet_service.random.random",
+        side_effect=[0.0] + [1.0] * len(TRAINING_SPECIAL_EVENTS),
+    ):
+        success, _message, _coins = PetService(qingpet_db).train_pet(
+            pet, user, training_type="intellect"
+        )
+    assert success
+    expected = before + int(TRAINING_CONFIG["intellect"]["exp_gain"] * 1.1)
+    assert pet.experience == expected
+    assert qingpet_db.get_pet("test_user", 123456).experience == expected
 
 
 # ── Explore service tests ──
@@ -278,10 +330,12 @@ def test_train_smart_personality_exp_stacking(pet_and_user, qingpet_db):
 
 def test_explore_default_location_forest(pet_and_user, qingpet_db):
     pet, user = pet_and_user
-    pet_service = PetService(qingpet_db)
+    pet_service   = PetService(qingpet_db)
+    before_energy = pet.energy
     success, msg, _ = pet_service.explore(pet, user)
-    assert isinstance(success, bool)
-    assert isinstance(msg, str)
+    assert success
+    assert EXPLORE_LOCATIONS["forest"]["name"] in msg
+    assert pet.energy == before_energy - EXPLORE_LOCATIONS["forest"]["energy_cost"]
 
 
 def test_explore_cave_blocked_on_low_health(pet_and_user, qingpet_db):
@@ -308,23 +362,28 @@ def test_explore_cave_allowed_with_enough_health(pet_and_user, qingpet_db):
     pet, user = pet_and_user
     pet.health = 80
     qingpet_db.update_pet(pet)
-    pet_service = PetService(qingpet_db)
+    pet_service   = PetService(qingpet_db)
+    before_energy = pet.energy
     success, msg, _ = pet_service.explore(pet, user, location="cave")
-    if not success:
-        assert "健康" not in msg
+    assert success
+    assert EXPLORE_LOCATIONS["cave"]["name"] in msg
+    assert pet.energy == before_energy - EXPLORE_LOCATIONS["cave"]["energy_cost"]
 
 
 def test_explore_invalid_location_falls_back_to_forest(pet_and_user, qingpet_db):
     pet, user = pet_and_user
-    pet_service = PetService(qingpet_db)
-    _success, msg, _ = pet_service.explore(pet, user, location="unknown")
-    assert isinstance(msg, str)
+    pet_service   = PetService(qingpet_db)
+    before_energy = pet.energy
+    success, msg, _ = pet_service.explore(pet, user, location="unknown")
+    assert success
+    assert EXPLORE_LOCATIONS["forest"]["name"] in msg
+    assert pet.energy == before_energy - EXPLORE_LOCATIONS["forest"]["energy_cost"]
 
 
-def test_explore_shy_personality_accepted_by_service(pet_and_user, qingpet_db):
+def test_explore_shy_personality_accepted_by_service(pet_and_user, qingpet_db, monkeypatch):
     import random
 
-    random.seed(7)
+    monkeypatch.setattr("plugins.qingpet.services.pet_service.random", random.Random(7))
     pet, user = pet_and_user
     pet.personality = PetPersonality.SHY
     pet.health      = 80
@@ -334,10 +393,10 @@ def test_explore_shy_personality_accepted_by_service(pet_and_user, qingpet_db):
     assert isinstance(msg, str)
 
 
-def test_explore_smart_personality_accepted_by_service(pet_and_user, qingpet_db):
+def test_explore_smart_personality_accepted_by_service(pet_and_user, qingpet_db, monkeypatch):
     import random
 
-    random.seed(99)
+    monkeypatch.setattr("plugins.qingpet.services.pet_service.random", random.Random(99))
     pet, user = pet_and_user
     pet.personality = PetPersonality.SMART
     pet.health      = 80
@@ -365,7 +424,7 @@ def test_format_pet_card_shows_travel_time(pet_and_user, qingpet_db):
     """旅行中的宠物卡片显示剩余时间"""
     pet, user = pet_and_user
     pet.status = PetStatus.TRAVELING
-    pet.status_expire_time = datetime.now() + timedelta(hours=5, minutes=30)
+    pet.status_expire_time = utc_now() + timedelta(hours=5, minutes=30)
     card = format_pet_card(pet, user)
     assert "旅行剩余" in card
 

@@ -39,7 +39,7 @@ OneBotEvent     = dict[str, Any]
 class Context(Protocol):
     """本插件实际读取的最小运行时上下文。"""
 
-    data_dir: Path
+    data_dir    : Path
     http_session: Any
 
     def get_settings_snapshot(self) -> PluginSettingsSnapshot: ...
@@ -90,11 +90,11 @@ class _VoiceSettings:
     """经过收窄的 Azure Speech 配置，避免原始 secret 值进入 URL 或 SSML。"""
 
     subscription_key: str
-    region: str
-    voice_name: str
-    style: str
-    role: str
-    proxy: str | None
+    region          : str
+    voice_name      : str
+    style           : str
+    role            : str
+    proxy           : str | None
 
 
 # ---------------------------------------------------------------------------
@@ -279,9 +279,9 @@ async def text_to_speech(text: str, context: Context) -> str | None:
         url     = f"https://{settings.region}.tts.speech.microsoft.com/cognitiveservices/v1"
         headers = {
             "Ocp-Apim-Subscription-Key": settings.subscription_key,
-            "X-Microsoft-OutputFormat": "audio-24khz-96kbitrate-mono-mp3",
-            "Content-Type": "application/ssml+xml",
-            "User-Agent": "XiaoQing/1.0",
+            "X-Microsoft-OutputFormat" : "audio-24khz-96kbitrate-mono-mp3",
+            "Content-Type"             : "application/ssml+xml",
+            "User-Agent"               : "XiaoQing/1.0",
         }
 
         async with _TTS_LOCKS.hold(cache_key):
@@ -291,7 +291,7 @@ async def text_to_speech(text: str, context: Context) -> str | None:
                 return str(output_file.resolve())
 
             request_kwargs: dict[str, Any] = {
-                "data": ssml.encode("utf-8"),
+                "data"   : ssml.encode("utf-8"),
                 "timeout": _AZURE_API_TIMEOUT,
             }
             if settings.proxy is not None:
@@ -342,7 +342,7 @@ async def handle(
     event: OneBotEvent,
     context: Context,
 ) -> MessageSegments:
-    """处理管理员 TTS 命令；命令别名已由插件清单统一解析。"""
+    """处理 TTS 命令；命令别名已由插件清单统一解析。"""
 
     del event
     try:

@@ -21,7 +21,7 @@ class DurableFanoutStateError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class FanoutTarget:
-    kind: str
+    kind     : str
     target_id: int
 
     def __post_init__(self) -> None:
@@ -50,7 +50,7 @@ def default_group_targets(context: object) -> tuple[FanoutTarget, ...]:
 
     raw_targets = list(context.default_groups()) if hasattr(context, "default_groups") else []
     target_ids: list[int] = []
-    seen: set[int] = set()
+    seen      : set[int] = set()
     for value in raw_targets:
         if type(value) is int:
             target_id = value
@@ -66,10 +66,10 @@ def default_group_targets(context: object) -> tuple[FanoutTarget, ...]:
 
 @dataclass(slots=True)
 class PendingFanout:
-    event_id: str
-    payload: list[dict[str, Any]]
-    targets: tuple[FanoutTarget, ...]
-    commit: dict[str, Any]
+    event_id : str
+    payload  : list[dict[str, Any]]
+    targets  : tuple[FanoutTarget, ...]
+    commit   : dict[str, Any]
     delivered: set[str] = field(default_factory=set)
 
     @property
@@ -81,11 +81,11 @@ class PendingFanout:
 
     def as_json(self) -> dict[str, Any]:
         return {
-            "event_id": self.event_id,
-            "payload": self.payload,
-            "targets": [target.as_json() for target in self.targets],
+            "event_id" : self.event_id,
+            "payload"  : self.payload,
+            "targets"  : [target.as_json() for target in self.targets],
             "delivered": sorted(self.delivered),
-            "commit": self.commit,
+            "commit"   : self.commit,
         }
 
 

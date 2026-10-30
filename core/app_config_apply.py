@@ -1,4 +1,3 @@
-# mypy: disable-error-code=attr-defined
 """应用配置快照的安全发布与运行时热更新边界。"""
 
 from __future__ import annotations
@@ -24,12 +23,16 @@ from .onebot import OneBotHttpSender
 from .server import InboundManager
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    import aiohttp
+
+    from .app_identity import AppIdentityService
     from .config import ConfigManager
     from .dispatcher import Dispatcher
     from .onebot import OneBotWsClient
     from .scheduler import SchedulerManager
     from .session import SessionManager
-
 logger = logging.getLogger(__name__)
 
 
@@ -67,34 +70,98 @@ def _format_pending_secrets_notice(change: PendingSecretsChange) -> str:
 class AppConfigApplyMixin:
     """按配置代际串行发布认证、传输、调度与插件运行参数。"""
 
+    # 由组合类实际提供的成员；这里只为类型检查声明契约，运行时不存在。
+    if TYPE_CHECKING:
+
+        def _active_inbound_candidates(self) -> tuple[InboundManager, ...]:
+            raise NotImplementedError
+
+        def _configure_plugin_execution(self, config: Mapping[str, Any]) -> None:
+            raise NotImplementedError
+
+        def _configure_plugin_watch(
+            self,
+            config: Mapping[str, Any] | None = None,
+            *,
+            poll_interval: float | None = None,
+        ) -> None:
+            raise NotImplementedError
+
+        @staticmethod
+        def _inbound_manager_key(manager: InboundManager | None) -> tuple[Any, ...] | None:
+            raise NotImplementedError
+
+        def _load_admins(self, secrets: Mapping[str, Any] | None = None) -> None:
+            raise NotImplementedError
+
+        def _parse_ws_queue_size(self, config: Mapping[str, Any]) -> int:
+            raise NotImplementedError
+
+        async def _reconcile_inbound_manager(
+            self,
+            config: Mapping[str, Any],
+            secrets: Mapping[str, Any],
+            *,
+            owner: _ConfigApplyOwner | None = None,
+        ) -> None:
+            raise NotImplementedError
+
+        async def _reconcile_ws_client(
+            self,
+            *,
+            enable_ws: bool,
+            ws_uri: str,
+            token: str,
+            queue_size: int,
+            credentials_trusted: bool       = True,
+            owner: _ConfigApplyOwner | None = None,
+        ) -> None:
+            raise NotImplementedError
+
+        def _reschedule(self, plugin_name: str) -> None:
+            raise NotImplementedError
+
+        _runtime_auth_lock: Any
+
+        async def _send_action(
+            self,
+            action: dict[str, Any],
+            wait_ws_seconds: float = 0.0,
+        ) -> bool | None:
+            raise NotImplementedError
+
+        http_session: aiohttp.ClientSession | None
+
+        identity_service: AppIdentityService
+
     # 这些字段由 XiaoQingApp.__init__ 创建；在边界模块中显式声明联合类型，避免
     # Mypy 根据某一条热更新分支的首次赋值把可空生命周期字段错误收窄。
-    config_manager: ConfigManager
-    dispatcher: Dispatcher
-    scheduler: SchedulerManager
-    session_manager: SessionManager
-    http_sender: OneBotHttpSender | None
-    inbound_manager: InboundManager | None
-    ws_client: OneBotWsClient | None
-    _ws_client_task: asyncio.Task[None] | None
-    _ws_client_auth_quarantine: OneBotWsClient | None
-    _config_apply_task: asyncio.Task[None] | None
-    _config_apply_tasks: set[asyncio.Task[None]]
-    _config_apply_owner: _ConfigApplyOwner | None
-    _config_apply_generation: int
-    _config_apply_revision: int
-    _security_snapshot: ConfigSnapshot | None
-    _security_conflict_revision: int | None
-    _security_generation: int
-    _security_revision: int
-    _runtime_onebot_token: str
+    config_manager                     : ConfigManager
+    dispatcher                         : Dispatcher
+    scheduler                          : SchedulerManager
+    session_manager                    : SessionManager
+    http_sender                        : OneBotHttpSender | None
+    inbound_manager                    : InboundManager | None
+    ws_client                          : OneBotWsClient | None
+    _ws_client_task                    : asyncio.Task[None] | None
+    _ws_client_auth_quarantine         : OneBotWsClient | None
+    _config_apply_task                 : asyncio.Task[None] | None
+    _config_apply_tasks                : set[asyncio.Task[None]]
+    _config_apply_owner                : _ConfigApplyOwner | None
+    _config_apply_generation           : int
+    _config_apply_revision             : int
+    _security_snapshot                 : ConfigSnapshot | None
+    _security_conflict_revision        : int | None
+    _security_generation               : int
+    _security_revision                 : int
+    _runtime_onebot_token              : str
     _runtime_onebot_credentials_trusted: bool
-    _runtime_inbound_token: str
-    _runtime_inbound_key: tuple[Any, ...] | None
-    _onebot_auth_generation: int
-    _dispatcher_concurrency: int
-    _inbound_cleanup_pending: list[InboundManager]
-    _stopping: bool
+    _runtime_inbound_token             : str
+    _runtime_inbound_key               : tuple[Any, ...] | None
+    _onebot_auth_generation            : int
+    _dispatcher_concurrency            : int
+    _inbound_cleanup_pending           : list[InboundManager]
+    _stopping                          : bool
 
     async def _notify_pending_secrets_change(self, change: PendingSecretsChange) -> None:
         """使用当前可信 OneBot 通道把外部候选摘要私聊给管理员。"""
@@ -106,8 +173,8 @@ class AppConfigApplyMixin:
         message = [{"type": "text", "data": {"text": _format_pending_secrets_notice(change)}}]
         for admin_id in admin_ids:
             action = {
-                "action": "send_private_msg",
-                "params": {"user_id": admin_id, "message": message},
+                "action"              : "send_private_msg",
+                "params"              : {"user_id": admin_id, "message": message},
                 ACTION_BYPASS_SINK_KEY: True,
             }
             try:

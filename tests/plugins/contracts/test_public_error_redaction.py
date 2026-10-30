@@ -59,9 +59,9 @@ SENSITIVE_ERROR = (
 class _PublicContext:
     request_id: str
     plugin_dir: Path
-    data_dir: Path
-    secrets: dict
-    logger: logging.Logger
+    data_dir  : Path
+    secrets   : dict
+    logger    : logging.Logger
 
     def get_settings_snapshot(self):
         return SimpleNamespace(
@@ -75,8 +75,8 @@ class _PublicContext:
     ("module", "patch_name"),
     [
         pytest.param(adnmb, "parse", id="adnmb"),
-        pytest.param(apod, "parse", id="apod"),
-        pytest.param(arxiv_filter, "parse", id="arxiv"),
+        pytest.param(apod, "bounded_external_text", id="apod"),
+        pytest.param(arxiv_filter, "bounded_external_text", id="arxiv"),
         pytest.param(astro_tools, "parse", id="astro"),
         pytest.param(chime, "parse", id="chime"),
         pytest.param(choice, "parse_choice_args", id="choice"),
@@ -370,8 +370,8 @@ async def test_pendo_ai_and_llm_degradation_never_logs_raw_exception(
             "plugins": {
                 "pendo": {
                     "api_base": "https://example.test",
-                    "api_key": CANARY,
-                    "model": "test-model",
+                    "api_key" : CANARY,
+                    "model"   : "test-model",
                 }
             }
         },

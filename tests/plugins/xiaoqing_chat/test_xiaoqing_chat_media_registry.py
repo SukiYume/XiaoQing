@@ -2,29 +2,28 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import json
 import threading
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 import tests.helpers.xiaoqing_chat_media_test_support as _fixture_support
 from tests.helpers.xiaoqing_chat_media_test_support import (
     _PNG_BYTES,
-    AsyncMock,
-    MagicMock,
     RenderedMedia,
     ResolvedMedia,
     _download_url_bytes,
     _make_media_runtime,
     _resolve_media_llm_secret_candidates,
     _write_png,
-    asyncio,
     build_effective_user_text,
     compact_message_content,
     get_state,
-    hashlib,
-    json,
     load_qq_face_catalog,
     nullcontext,
-    patch,
-    pytest,
     render_event_media,
     render_event_media_text,
     render_local_media_file,
@@ -63,21 +62,21 @@ def test_media_registry_dedup_keeps_latest_better_description(tmp_path):
     first = state.media_store.upsert_media_items(
         [
             {
-                "kind": "emoji",
-                "media_hash": "same-hash",
+                "kind"       : "emoji",
+                "media_hash" : "same-hash",
                 "description": "一张表情包",
-                "marker": "[表情包：一张表情包]",
+                "marker"     : "[表情包：一张表情包]",
             }
         ]
     )
     upgraded = state.media_store.upsert_media_items(
         [
             {
-                "kind": "emoji",
-                "media_hash": "same-hash",
-                "description": "猫猫无语摊手",
+                "kind"        : "emoji",
+                "media_hash"  : "same-hash",
+                "description" : "猫猫无语摊手",
                 "emotion_tags": ["无语", "摊手"],
-                "marker": "[表情包：猫猫无语摊手]",
+                "marker"      : "[表情包：猫猫无语摊手]",
             }
         ]
     )
@@ -99,11 +98,11 @@ def test_registry_upgrade_preserves_cultural_hint():
         cultural_hint = "常用于表示无语",
     )
     resolved = {
-        "media_hash": "same-hash",
-        "kind": "emoji",
-        "description": "猫猫摊手",
+        "media_hash"  : "same-hash",
+        "kind"        : "emoji",
+        "description" : "猫猫摊手",
         "emotion_tags": ["无语"],
-        "marker": "[表情包：无语]",
+        "marker"      : "[表情包：无语]",
     }
 
     with patch(
@@ -126,11 +125,11 @@ def test_media_registry_defers_disk_write_but_keeps_current_process_resolution(t
     store.upsert_media_items(
         [
             {
-                "kind": "emoji",
-                "media_hash": "same-hash",
-                "description": "猫猫无语摊手",
+                "kind"        : "emoji",
+                "media_hash"  : "same-hash",
+                "description" : "猫猫无语摊手",
                 "emotion_tags": ["无语", "摊手"],
-                "marker": "[表情包：猫猫无语摊手]",
+                "marker"      : "[表情包：猫猫无语摊手]",
             }
         ]
     )
@@ -139,9 +138,9 @@ def test_media_registry_defers_disk_write_but_keeps_current_process_resolution(t
         "[[xc_media_1]]",
         [
             {
-                "kind": "emoji",
+                "kind"      : "emoji",
                 "media_hash": "same-hash",
-                "marker": "[表情包：一张表情包]",
+                "marker"    : "[表情包：一张表情包]",
             }
         ],
         store=store,
@@ -167,10 +166,10 @@ def test_media_registry_flush_keeps_dirty_when_save_fails(tmp_path):
     store.upsert_media_items(
         [
             {
-                "kind": "image",
-                "media_hash": "hash-fail",
+                "kind"       : "image",
+                "media_hash" : "hash-fail",
                 "description": "测试图片",
-                "marker": "[图片：测试图片]",
+                "marker"     : "[图片：测试图片]",
             }
         ]
     )
@@ -189,10 +188,10 @@ def test_media_registry_load_is_explicit_and_rehydrates_persisted_entries(tmp_pa
     first.upsert_media_items(
         [
             {
-                "kind": "image",
-                "media_hash": "persisted-hash",
+                "kind"       : "image",
+                "media_hash" : "persisted-hash",
                 "description": "持久化图片",
-                "marker": "[图片：持久化图片]",
+                "marker"     : "[图片：持久化图片]",
             }
         ]
     )
@@ -292,17 +291,17 @@ async def test_plugin_init_loads_media_registry_off_event_loop(mock_context):
 def test_media_registry_compacts_and_rehydrates_message_content() -> None:
     media_items = [
         {
-            "kind": "emoji",
-            "media_hash": "hash-1",
-            "marker": "[表情包：一张表情包]",
-            "description": "猫猫翻白眼",
+            "kind"        : "emoji",
+            "media_hash"  : "hash-1",
+            "marker"      : "[表情包：一张表情包]",
+            "description" : "猫猫翻白眼",
             "emotion_tags": ["无语"],
         },
         {
-            "kind": "qq_face",
+            "kind"   : "qq_face",
             "face_id": "14",
-            "marker": "[QQ表情：微笑]",
-            "label": "微笑",
+            "marker" : "[QQ表情：微笑]",
+            "label"  : "微笑",
         },
     ]
 
@@ -316,10 +315,10 @@ def test_media_registry_compacts_and_rehydrates_message_content() -> None:
 def test_media_registry_emoji_marker_surfaces_visible_text_in_quotes() -> None:
     media_items = [
         {
-            "kind": "emoji",
-            "media_hash": "hash-vt",
-            "marker": "[表情包：疑惑，调侃]",
-            "description": "一个猫耳动漫女孩露出惊讶表情，配文字表达疑惑或调侃。，文字内容是“那咋整啊”",
+            "kind"        : "emoji",
+            "media_hash"  : "hash-vt",
+            "marker"      : "[表情包：疑惑，调侃]",
+            "description" : "一个猫耳动漫女孩露出惊讶表情，配文字表达疑惑或调侃。，文字内容是“那咋整啊”",
             "emotion_tags": ["疑惑", "调侃"],
         }
     ]
@@ -367,7 +366,7 @@ async def test_render_event_media_does_not_treat_failed_image_filename_as_visual
             {
                 "type": "image",
                 "data": {
-                    "url": "https://example.com/unavailable.png",
+                    "url" : "https://example.com/unavailable.png",
                     "name": "test-placeholder.png",
                 },
             }
@@ -416,11 +415,11 @@ async def test_build_effective_user_text_reuses_upgraded_registry_marker(mock_co
     state.media_store.upsert_media_items(
         [
             {
-                "kind": "emoji",
-                "media_hash": "known-hash",
-                "description": "猫猫翻白眼",
+                "kind"        : "emoji",
+                "media_hash"  : "known-hash",
+                "description" : "猫猫翻白眼",
                 "emotion_tags": ["无语"],
-                "marker": "[表情包：猫猫翻白眼]",
+                "marker"      : "[表情包：猫猫翻白眼]",
             }
         ]
     )
@@ -537,7 +536,7 @@ async def test_load_qq_face_catalog_merges_builtin_and_observed_labels(mock_cont
             {
                 "type": "face",
                 "data": {
-                    "id": "1",
+                    "id" : "1",
                     "raw": {"text": "狂笑"},
                 },
             }
@@ -571,8 +570,8 @@ async def test_load_qq_face_catalog_keeps_placeholder_for_unlabeled_face(mock_co
             {
                 "entries": {
                     "999": {
-                        "labels": ["id=999"],
-                        "usage_count": 0,
+                        "labels"      : ["id=999"],
+                        "usage_count" : 0,
                         "last_used_ts": 0.0,
                     }
                 }
@@ -599,8 +598,8 @@ async def test_load_qq_face_catalog_repairs_invalid_usage_metadata(mock_context)
             {
                 "entries": {
                     "999": {
-                        "labels": ["自定义表情"],
-                        "usage_count": "broken",
+                        "labels"      : ["自定义表情"],
+                        "usage_count" : "broken",
                         "last_used_ts": float("inf"),
                     }
                 }
@@ -625,12 +624,12 @@ async def test_render_local_media_file_merges_latest_cache_before_save(mock_cont
 
     other_hash  = "other-media-hash"
     other_entry = {
-        "kind": "emoji",
-        "description": "另一条缓存",
-        "emotion_tags": ["无语"],
-        "marker": "[表情包：另一条缓存]",
-        "analysis_source": "llm",
-        "analysis_quality": "detailed",
+        "kind"                   : "emoji",
+        "description"            : "另一条缓存",
+        "emotion_tags"           : ["无语"],
+        "marker"                 : "[表情包：另一条缓存]",
+        "analysis_source"        : "llm",
+        "analysis_quality"       : "detailed",
         "analysis_prompt_version": 2,
     }
 
@@ -670,9 +669,9 @@ async def test_observe_message_records_image_only_marker(mock_context):
     runtime = _make_media_runtime()
     state   = MagicMock()
     event   = {
-        "user_id": 12345,
+        "user_id" : 12345,
         "group_id": 67890,
-        "message": [{"type": "image", "data": {"file": "file:///tmp/test.png"}}],
+        "message" : [{"type": "image", "data": {"file": "file:///tmp/test.png"}}],
     }
 
     with (

@@ -85,14 +85,14 @@ def _bounded_html(html: str) -> BoundedHttpResponse:
 
 def _repository(index: int = 1, *, description: str = "description") -> dict[str, str]:
     return {
-        "owner": "owner",
-        "name": f"repo-{index}",
-        "full_name": f"owner/repo-{index}",
-        "url": f"https://github.com/owner/repo-{index}",
-        "description": description,
-        "language": "Python",
-        "stars": "100",
-        "forks": "10",
+        "owner"       : "owner",
+        "name"        : f"repo-{index}",
+        "full_name"   : f"owner/repo-{index}",
+        "url"         : f"https://github.com/owner/repo-{index}",
+        "description" : description,
+        "language"    : "Python",
+        "stars"       : "100",
+        "forks"       : "10",
         "stars_gained": "5 stars today",
     }
 
@@ -178,8 +178,8 @@ async def test_proxy_fetch_uses_exact_bounded_transport(context: SimpleNamespace
     endpoint = urlsplit(args[2])
     assert (endpoint.scheme, endpoint.path, endpoint.query) == ("https", "/trending", "since=daily")
     assert kwargs["request_kwargs"] == {
-        "proxy": "http://proxy.example:8080",
-        "timeout": 15,
+        "proxy"         : "http://proxy.example:8080",
+        "timeout"       : 15,
         "max_field_size": 32 * 1024,
     }
     assert kwargs["limits"].max_decoded_bytes == github.MAX_HTML_BYTES
@@ -314,14 +314,14 @@ def test_parse_current_shape_and_period_stats() -> None:
     repositories = github._parse_trending_html(SAMPLE_TRENDING_HTML)
     assert len(repositories) == 2
     assert repositories[0] == {
-        "owner": "octocat",
-        "name": "Hello-World",
-        "full_name": "octocat/Hello-World",
-        "url": "https://github.com/octocat/Hello-World",
-        "description": "A sample repository for testing",
-        "language": "Python",
-        "stars": "1234",
-        "forks": "56",
+        "owner"       : "octocat",
+        "name"        : "Hello-World",
+        "full_name"   : "octocat/Hello-World",
+        "url"         : "https://github.com/octocat/Hello-World",
+        "description" : "A sample repository for testing",
+        "language"    : "Python",
+        "stars"       : "1234",
+        "forks"       : "56",
         "stars_gained": "78 stars today",
     }
     assert repositories[1]["stars"] == "150k"

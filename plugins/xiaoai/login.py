@@ -49,8 +49,8 @@ async def send_private(context: Any, recipient: int, message: list[dict[str, Any
     try:
         result = await context.send_action(
             {
-                "action": "send_private_msg",
-                "params": {"user_id": recipient, "message": message},
+                "action"            : "send_private_msg",
+                "params"            : {"user_id": recipient, "message": message},
                 SENSITIVE_ACTION_KEY: True,
             }
         )
@@ -74,15 +74,15 @@ def qr_image(url: str) -> dict[str, Any]:
 
 @dataclass
 class PendingLogin:
-    owner: int
-    region: str
-    flow: QRFlow
+    owner     : int
+    region    : str
+    flow      : QRFlow
     expires_at: float
-    task: asyncio.Task[Any] | None = None
-    token: dict[str, Any] | None   = None
+    task      : asyncio.Task[Any] | None = None
+    token     : dict[str, Any] | None    = None
     candidates: list[tuple[dict[str, Any], dict[str, Any]]] = field(default_factory=list)
-    done: asyncio.Event = field(default_factory=asyncio.Event)
-    silent: bool = True
+    done      : asyncio.Event = field(default_factory=asyncio.Event)
+    silent    : bool = True
 
     def choices(self) -> str:
         lines = ["扫码授权已完成，请在 5 分钟内选择音箱："]
@@ -218,13 +218,13 @@ class LoginRuntime:
             if self.pending is not pending or pending.expires_at <= time.monotonic():
                 return "本次登录流程已过期，请重新发送 /小爱 登录。"
             profile = {
-                "name": device["name"],
-                "model": device["model"],
-                "did": str(device["did"]),
-                "mina_id": speaker["deviceID"],
-                "region": pending.region,
-                "silent": pending.silent,
-                "directive": directive,
+                "name"          : device["name"],
+                "model"         : device["model"],
+                "did"           : str(device["did"]),
+                "mina_id"       : speaker["deviceID"],
+                "region"        : pending.region,
+                "silent"        : pending.silent,
+                "directive"     : directive,
                 "notify_user_id": owner,
             }
             save_binding(context.data_dir, token, profile)

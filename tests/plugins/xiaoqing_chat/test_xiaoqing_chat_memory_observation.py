@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import pytest
+
 import tests.helpers.xiaoqing_chat_test_support as _fixture_support
 from plugins.xiaoqing_chat.llm.llm_config import LLMCallConfig
 from plugins.xiaoqing_chat.planning.pfc_state import PFCConversationState
 from tests.helpers.xiaoqing_chat_test_support import (
-    AsyncMock,
-    MagicMock,
-    Mock,
-    SimpleNamespace,
     _complete_test_runtime_config,
     _make_hctx,
-    asyncio,
     message_parts_to_legacy,
-    patch,
     patch_turn,
-    pytest,
     xiaoqing_chat,
 )
 
@@ -140,9 +139,9 @@ def test_memory_store_persists_media_items(tmp_path):
         content     = "[图片：猫猫在发呆]",
         media_items = [
             {
-                "kind": "image",
-                "media_hash": "hash-cat",
-                "marker": "[图片：猫猫在发呆]",
+                "kind"        : "image",
+                "media_hash"  : "hash-cat",
+                "marker"      : "[图片：猫猫在发呆]",
                 "emotion_tags": ["发呆"],
             }
         ],
@@ -173,9 +172,9 @@ def test_memory_store_keeps_media_only_messages_on_reload(tmp_path):
         content     = "[[xc_media_1]]",
         media_items = [
             {
-                "kind": "qq_face",
+                "kind"   : "qq_face",
                 "face_id": "14",
-                "marker": "[QQ表情：微笑]",
+                "marker" : "[QQ表情：微笑]",
             }
         ],
     )
@@ -201,18 +200,18 @@ def test_memory_store_persists_message_parts_round_trip(tmp_path):
         parts   = [
             {"kind": "text", "text": "先看这个"},
             {
-                "kind": "emoji",
-                "media_hash": "hash-emoji-1",
-                "marker": "[表情包：猫猫翻白眼]",
-                "description": "猫猫翻白眼",
+                "kind"        : "emoji",
+                "media_hash"  : "hash-emoji-1",
+                "marker"      : "[表情包：猫猫翻白眼]",
+                "description" : "猫猫翻白眼",
                 "emotion_tags": ["无语"],
             },
             {"kind": "text", "text": "再说"},
             {
-                "kind": "qq_face",
+                "kind"   : "qq_face",
                 "face_id": "277",
-                "marker": "[QQ表情：狗头]",
-                "label": "狗头",
+                "marker" : "[QQ表情：狗头]",
+                "label"  : "狗头",
             },
         ],
     )
@@ -239,18 +238,18 @@ def test_memory_store_append_prefers_canonical_parts_over_stale_legacy_fields():
         content     = "旧内容[[xc_media_1]]",
         media_items = [
             {
-                "kind": "qq_face",
+                "kind"   : "qq_face",
                 "face_id": "14",
-                "marker": "[QQ表情：微笑]",
+                "marker" : "[QQ表情：微笑]",
             }
         ],
         parts=[
             {"kind": "text", "text": "先看这个"},
             {
-                "kind": "emoji",
-                "media_hash": "hash-emoji-1",
-                "marker": "[表情包：猫猫翻白眼]",
-                "description": "猫猫翻白眼",
+                "kind"        : "emoji",
+                "media_hash"  : "hash-emoji-1",
+                "marker"      : "[表情包：猫猫翻白眼]",
+                "description" : "猫猫翻白眼",
                 "emotion_tags": ["无语"],
             },
             {"kind": "text", "text": "再说"},
@@ -275,23 +274,23 @@ def test_memory_store_load_prefers_canonical_parts_over_stale_legacy_fields(tmp_
         json.dumps(
             [
                 {
-                    "role": "assistant",
-                    "name": "小青",
-                    "content": "旧内容[[xc_media_1]]",
+                    "role"       : "assistant",
+                    "name"       : "小青",
+                    "content"    : "旧内容[[xc_media_1]]",
                     "media_items": [
                         {
-                            "kind": "qq_face",
+                            "kind"   : "qq_face",
                             "face_id": "14",
-                            "marker": "[QQ表情：微笑]",
+                            "marker" : "[QQ表情：微笑]",
                         }
                     ],
                     "parts": [
                         {"kind": "text", "text": "先看这个"},
                         {
-                            "kind": "emoji",
-                            "media_hash": "hash-emoji-1",
-                            "marker": "[表情包：猫猫翻白眼]",
-                            "description": "猫猫翻白眼",
+                            "kind"        : "emoji",
+                            "media_hash"  : "hash-emoji-1",
+                            "marker"      : "[表情包：猫猫翻白眼]",
+                            "description" : "猫猫翻白眼",
                             "emotion_tags": ["无语"],
                         },
                         {"kind": "text", "text": "再说"},
@@ -648,7 +647,21 @@ async def test_action_history_get_recent_async_loads_via_to_thread(tmp_path):
         encoding="utf-8",
     )
 
-    items = await store.get_recent_async(chat_id, max_items=10)
+    import threading
+    from unittest.mock import patch
+
+    caller_thread  = threading.get_ident()
+    loader_threads = []
+    load           = store._load
+
+    def tracked_load(key):
+        loader_threads.append(threading.get_ident())
+        return load(key)
+
+    with patch.object(store, "_load", side_effect=tracked_load):
+        items = await store.get_recent_async(chat_id, max_items=10)
+    assert len(loader_threads) == 1
+    assert loader_threads[0] != caller_thread
 
     assert len(items) == 1
     assert items[0].action == "reply"
@@ -746,7 +759,7 @@ async def test_observe_outgoing_action_records_external_plugin_text_only(mock_co
         "action": "send_group_msg",
         "params": {
             "group_id": 67890,
-            "message": [
+            "message" : [
                 {
                     "type": "text",
                     "data": {
@@ -805,7 +818,7 @@ async def test_long_agent_results_are_kept_shortened_but_other_long_output_is_sk
             "action": "send_group_msg",
             "params": {
                 "group_id": 67890,
-                "message": [
+                "message" : [
                     {"type": "at", "data": {"qq": "30003"}},
                     {"type": "text", "data": {"text": " "}},
                     {"type": "text", "data": {"text": "结果" * 800}},
@@ -892,7 +905,7 @@ async def test_observe_outgoing_action_skips_xiaoqing_source(mock_context):
         "action": "send_group_msg",
         "params": {
             "group_id": 67890,
-            "message": [{"type": "text", "data": {"text": "这是小青自己回复的内容"}}],
+            "message" : [{"type": "text", "data": {"text": "这是小青自己回复的内容"}}],
         },
     }
 
@@ -922,13 +935,13 @@ async def test_ensure_user_message_recorded_persists_rendered_media_items(
     state.media_store.upsert_media_items  = Mock(
         return_value=[
             {
-                "kind": "image",
-                "media_hash": "hash-cat",
-                "media_key": "media:hash-cat",
-                "marker": "[图片：猫猫在发呆]",
-                "description": "猫猫在发呆",
+                "kind"        : "image",
+                "media_hash"  : "hash-cat",
+                "media_key"   : "media:hash-cat",
+                "marker"      : "[图片：猫猫在发呆]",
+                "description" : "猫猫在发呆",
                 "emotion_tags": ["发呆"],
-                "file_path": str(mock_context.data_dir / "cat.png"),
+                "file_path"   : str(mock_context.data_dir / "cat.png"),
             }
         ]
     )
@@ -984,23 +997,23 @@ async def test_ensure_user_message_recorded_reuses_cached_effective_parts(mock_c
     state.media_store.upsert_media_items  = Mock(
         return_value=[
             {
-                "kind": "image",
-                "media_hash": "hash-cat",
-                "media_key": "media:hash-cat",
-                "marker": "[图片：猫猫在发呆]",
+                "kind"       : "image",
+                "media_hash" : "hash-cat",
+                "media_key"  : "media:hash-cat",
+                "marker"     : "[图片：猫猫在发呆]",
                 "description": "猫猫在发呆",
-                "file_path": str(mock_context.data_dir / "cat.png"),
+                "file_path"  : str(mock_context.data_dir / "cat.png"),
             }
         ]
     )
     state.media_store.is_dirty.return_value = False
     event                                   = {
-        "post_type": "message",
+        "post_type"   : "message",
         "message_type": "group",
-        "user_id": 12345,
-        "group_id": 67890,
-        "message_id": 1,
-        "message": [
+        "user_id"     : 12345,
+        "group_id"    : 67890,
+        "message_id"  : 1,
+        "message"     : [
             {"type": "text", "data": {"text": "看这个"}},
             {"type": "image", "data": {"url": "https://example.com/cat.png"}},
             {"type": "text", "data": {"text": "笑死"}},
